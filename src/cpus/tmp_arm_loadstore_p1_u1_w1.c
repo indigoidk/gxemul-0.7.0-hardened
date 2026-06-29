@@ -1,0 +1,1484 @@
+
+/*  AUTOMATICALLY GENERATED! Do not edit.  */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include "cpu.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+#define DYNTRANS_PC_TO_POINTERS arm_pc_to_pointers
+#include "quick_pc_to_pointers.h"
+#define reg(x) (*((uint32_t *)(x)))
+extern void arm_instr_nop(struct cpu *, struct arm_instr_call *);
+extern void arm_instr_nothing(struct cpu *, struct arm_instr_call *);
+extern void arm_instr_invalid(struct cpu *, struct arm_instr_call *);
+extern void arm_pc_to_pointers(struct cpu *);
+#define A__NAME__general arm_instr_store_w1_word_u1_p1_imm__general
+#define A__NAME arm_instr_store_w1_word_u1_p1_imm
+#define A__NAME__eq arm_instr_store_w1_word_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_store_w1_word_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_store_w1_word_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_store_w1_word_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_store_w1_word_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_store_w1_word_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_store_w1_word_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_store_w1_word_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_store_w1_word_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_store_w1_word_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_store_w1_word_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_store_w1_word_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_store_w1_word_u1_p1_imm__gt
+#define A__NAME__le arm_instr_store_w1_word_u1_p1_imm__le
+#define A__NAME_PC arm_instr_store_w1_word_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_store_w1_word_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_word_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_word_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_word_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_word_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_word_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_word_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_word_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_word_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_word_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_word_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_word_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_word_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_word_u1_p1_imm_pc__le
+#define A__W
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_word_u1_p1_imm__general
+#define A__NAME arm_instr_load_w1_word_u1_p1_imm
+#define A__NAME__eq arm_instr_load_w1_word_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_load_w1_word_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_load_w1_word_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_load_w1_word_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_load_w1_word_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_load_w1_word_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_load_w1_word_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_load_w1_word_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_load_w1_word_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_load_w1_word_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_load_w1_word_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_load_w1_word_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_load_w1_word_u1_p1_imm__gt
+#define A__NAME__le arm_instr_load_w1_word_u1_p1_imm__le
+#define A__NAME_PC arm_instr_load_w1_word_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_load_w1_word_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_word_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_word_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_word_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_word_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_word_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_word_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_word_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_word_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_word_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_word_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_word_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_word_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_word_u1_p1_imm_pc__le
+#define A__L
+#define A__W
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_byte_u1_p1_imm__general
+#define A__NAME arm_instr_store_w1_byte_u1_p1_imm
+#define A__NAME__eq arm_instr_store_w1_byte_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_store_w1_byte_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_store_w1_byte_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_store_w1_byte_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_store_w1_byte_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_store_w1_byte_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_store_w1_byte_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_store_w1_byte_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_store_w1_byte_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_store_w1_byte_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_store_w1_byte_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_store_w1_byte_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_store_w1_byte_u1_p1_imm__gt
+#define A__NAME__le arm_instr_store_w1_byte_u1_p1_imm__le
+#define A__NAME_PC arm_instr_store_w1_byte_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_store_w1_byte_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_byte_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_byte_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_byte_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_byte_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_byte_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_byte_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_byte_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_byte_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_byte_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_byte_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_byte_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_byte_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_byte_u1_p1_imm_pc__le
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_byte_u1_p1_imm__general
+#define A__NAME arm_instr_load_w1_byte_u1_p1_imm
+#define A__NAME__eq arm_instr_load_w1_byte_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_load_w1_byte_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_load_w1_byte_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_load_w1_byte_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_load_w1_byte_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_load_w1_byte_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_load_w1_byte_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_load_w1_byte_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_load_w1_byte_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_load_w1_byte_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_load_w1_byte_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_load_w1_byte_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_load_w1_byte_u1_p1_imm__gt
+#define A__NAME__le arm_instr_load_w1_byte_u1_p1_imm__le
+#define A__NAME_PC arm_instr_load_w1_byte_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_load_w1_byte_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_byte_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_byte_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_byte_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_byte_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_byte_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_byte_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_byte_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_byte_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_byte_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_byte_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_byte_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_byte_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_byte_u1_p1_imm_pc__le
+#define A__L
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_word_u1_p1_reg__general
+#define A__NAME arm_instr_store_w1_word_u1_p1_reg
+#define A__NAME__eq arm_instr_store_w1_word_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_store_w1_word_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_store_w1_word_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_store_w1_word_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_store_w1_word_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_store_w1_word_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_store_w1_word_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_store_w1_word_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_store_w1_word_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_store_w1_word_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_store_w1_word_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_store_w1_word_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_store_w1_word_u1_p1_reg__gt
+#define A__NAME__le arm_instr_store_w1_word_u1_p1_reg__le
+#define A__NAME_PC arm_instr_store_w1_word_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_store_w1_word_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_word_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_word_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_word_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_word_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_word_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_word_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_word_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_word_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_word_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_word_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_word_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_word_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_word_u1_p1_reg_pc__le
+#define A__W
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_word_u1_p1_reg__general
+#define A__NAME arm_instr_load_w1_word_u1_p1_reg
+#define A__NAME__eq arm_instr_load_w1_word_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_load_w1_word_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_load_w1_word_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_load_w1_word_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_load_w1_word_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_load_w1_word_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_load_w1_word_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_load_w1_word_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_load_w1_word_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_load_w1_word_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_load_w1_word_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_load_w1_word_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_load_w1_word_u1_p1_reg__gt
+#define A__NAME__le arm_instr_load_w1_word_u1_p1_reg__le
+#define A__NAME_PC arm_instr_load_w1_word_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_load_w1_word_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_word_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_word_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_word_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_word_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_word_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_word_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_word_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_word_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_word_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_word_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_word_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_word_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_word_u1_p1_reg_pc__le
+#define A__L
+#define A__W
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_byte_u1_p1_reg__general
+#define A__NAME arm_instr_store_w1_byte_u1_p1_reg
+#define A__NAME__eq arm_instr_store_w1_byte_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_store_w1_byte_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_store_w1_byte_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_store_w1_byte_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_store_w1_byte_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_store_w1_byte_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_store_w1_byte_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_store_w1_byte_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_store_w1_byte_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_store_w1_byte_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_store_w1_byte_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_store_w1_byte_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_store_w1_byte_u1_p1_reg__gt
+#define A__NAME__le arm_instr_store_w1_byte_u1_p1_reg__le
+#define A__NAME_PC arm_instr_store_w1_byte_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_store_w1_byte_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_byte_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_byte_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_byte_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_byte_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_byte_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_byte_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_byte_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_byte_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_byte_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_byte_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_byte_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_byte_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_byte_u1_p1_reg_pc__le
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_byte_u1_p1_reg__general
+#define A__NAME arm_instr_load_w1_byte_u1_p1_reg
+#define A__NAME__eq arm_instr_load_w1_byte_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_load_w1_byte_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_load_w1_byte_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_load_w1_byte_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_load_w1_byte_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_load_w1_byte_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_load_w1_byte_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_load_w1_byte_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_load_w1_byte_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_load_w1_byte_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_load_w1_byte_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_load_w1_byte_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_load_w1_byte_u1_p1_reg__gt
+#define A__NAME__le arm_instr_load_w1_byte_u1_p1_reg__le
+#define A__NAME_PC arm_instr_load_w1_byte_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_load_w1_byte_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_byte_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_byte_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_byte_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_byte_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_byte_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_byte_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_byte_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_byte_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_byte_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_byte_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_byte_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_byte_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_byte_u1_p1_reg_pc__le
+#define A__L
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_signed_byte_u1_p1_imm__general
+#define A__NAME arm_instr_store_w1_signed_byte_u1_p1_imm
+#define A__NAME__eq arm_instr_store_w1_signed_byte_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_store_w1_signed_byte_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_store_w1_signed_byte_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_store_w1_signed_byte_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_store_w1_signed_byte_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_store_w1_signed_byte_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_store_w1_signed_byte_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_store_w1_signed_byte_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_store_w1_signed_byte_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_store_w1_signed_byte_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_store_w1_signed_byte_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_store_w1_signed_byte_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_store_w1_signed_byte_u1_p1_imm__gt
+#define A__NAME__le arm_instr_store_w1_signed_byte_u1_p1_imm__le
+#define A__NAME_PC arm_instr_store_w1_signed_byte_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_store_w1_signed_byte_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_signed_byte_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_signed_byte_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_signed_byte_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_signed_byte_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_signed_byte_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_signed_byte_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_signed_byte_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_signed_byte_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_signed_byte_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_signed_byte_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_signed_byte_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_signed_byte_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_signed_byte_u1_p1_imm_pc__le
+#define A__SIGNED
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_signed_byte_u1_p1_imm__general
+#define A__NAME arm_instr_load_w1_signed_byte_u1_p1_imm
+#define A__NAME__eq arm_instr_load_w1_signed_byte_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_load_w1_signed_byte_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_load_w1_signed_byte_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_load_w1_signed_byte_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_load_w1_signed_byte_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_load_w1_signed_byte_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_load_w1_signed_byte_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_load_w1_signed_byte_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_load_w1_signed_byte_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_load_w1_signed_byte_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_load_w1_signed_byte_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_load_w1_signed_byte_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_load_w1_signed_byte_u1_p1_imm__gt
+#define A__NAME__le arm_instr_load_w1_signed_byte_u1_p1_imm__le
+#define A__NAME_PC arm_instr_load_w1_signed_byte_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_load_w1_signed_byte_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_signed_byte_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_signed_byte_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_signed_byte_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_signed_byte_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_signed_byte_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_signed_byte_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_signed_byte_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_signed_byte_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_signed_byte_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_signed_byte_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_signed_byte_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_signed_byte_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_signed_byte_u1_p1_imm_pc__le
+#define A__SIGNED
+#define A__L
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__L
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_unsigned_halfword_u1_p1_imm__general
+#define A__NAME arm_instr_store_w1_unsigned_halfword_u1_p1_imm
+#define A__NAME__eq arm_instr_store_w1_unsigned_halfword_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_store_w1_unsigned_halfword_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_store_w1_unsigned_halfword_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_store_w1_unsigned_halfword_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_store_w1_unsigned_halfword_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_store_w1_unsigned_halfword_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_store_w1_unsigned_halfword_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_store_w1_unsigned_halfword_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_store_w1_unsigned_halfword_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_store_w1_unsigned_halfword_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_store_w1_unsigned_halfword_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_store_w1_unsigned_halfword_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_store_w1_unsigned_halfword_u1_p1_imm__gt
+#define A__NAME__le arm_instr_store_w1_unsigned_halfword_u1_p1_imm__le
+#define A__NAME_PC arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_unsigned_halfword_u1_p1_imm_pc__le
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_unsigned_halfword_u1_p1_imm__general
+#define A__NAME arm_instr_load_w1_unsigned_halfword_u1_p1_imm
+#define A__NAME__eq arm_instr_load_w1_unsigned_halfword_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_load_w1_unsigned_halfword_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_load_w1_unsigned_halfword_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_load_w1_unsigned_halfword_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_load_w1_unsigned_halfword_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_load_w1_unsigned_halfword_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_load_w1_unsigned_halfword_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_load_w1_unsigned_halfword_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_load_w1_unsigned_halfword_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_load_w1_unsigned_halfword_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_load_w1_unsigned_halfword_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_load_w1_unsigned_halfword_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_load_w1_unsigned_halfword_u1_p1_imm__gt
+#define A__NAME__le arm_instr_load_w1_unsigned_halfword_u1_p1_imm__le
+#define A__NAME_PC arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_unsigned_halfword_u1_p1_imm_pc__le
+#define A__L
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_signed_halfword_u1_p1_imm__general
+#define A__NAME arm_instr_store_w1_signed_halfword_u1_p1_imm
+#define A__NAME__eq arm_instr_store_w1_signed_halfword_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_store_w1_signed_halfword_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_store_w1_signed_halfword_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_store_w1_signed_halfword_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_store_w1_signed_halfword_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_store_w1_signed_halfword_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_store_w1_signed_halfword_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_store_w1_signed_halfword_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_store_w1_signed_halfword_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_store_w1_signed_halfword_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_store_w1_signed_halfword_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_store_w1_signed_halfword_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_store_w1_signed_halfword_u1_p1_imm__gt
+#define A__NAME__le arm_instr_store_w1_signed_halfword_u1_p1_imm__le
+#define A__NAME_PC arm_instr_store_w1_signed_halfword_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_signed_halfword_u1_p1_imm_pc__le
+#define A__SIGNED
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_signed_halfword_u1_p1_imm__general
+#define A__NAME arm_instr_load_w1_signed_halfword_u1_p1_imm
+#define A__NAME__eq arm_instr_load_w1_signed_halfword_u1_p1_imm__eq
+#define A__NAME__ne arm_instr_load_w1_signed_halfword_u1_p1_imm__ne
+#define A__NAME__cs arm_instr_load_w1_signed_halfword_u1_p1_imm__cs
+#define A__NAME__cc arm_instr_load_w1_signed_halfword_u1_p1_imm__cc
+#define A__NAME__mi arm_instr_load_w1_signed_halfword_u1_p1_imm__mi
+#define A__NAME__pl arm_instr_load_w1_signed_halfword_u1_p1_imm__pl
+#define A__NAME__vs arm_instr_load_w1_signed_halfword_u1_p1_imm__vs
+#define A__NAME__vc arm_instr_load_w1_signed_halfword_u1_p1_imm__vc
+#define A__NAME__hi arm_instr_load_w1_signed_halfword_u1_p1_imm__hi
+#define A__NAME__ls arm_instr_load_w1_signed_halfword_u1_p1_imm__ls
+#define A__NAME__ge arm_instr_load_w1_signed_halfword_u1_p1_imm__ge
+#define A__NAME__lt arm_instr_load_w1_signed_halfword_u1_p1_imm__lt
+#define A__NAME__gt arm_instr_load_w1_signed_halfword_u1_p1_imm__gt
+#define A__NAME__le arm_instr_load_w1_signed_halfword_u1_p1_imm__le
+#define A__NAME_PC arm_instr_load_w1_signed_halfword_u1_p1_imm_pc
+#define A__NAME_PC__eq arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_signed_halfword_u1_p1_imm_pc__le
+#define A__SIGNED
+#define A__L
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__L
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_signed_byte_u1_p1_reg__general
+#define A__NAME arm_instr_store_w1_signed_byte_u1_p1_reg
+#define A__NAME__eq arm_instr_store_w1_signed_byte_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_store_w1_signed_byte_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_store_w1_signed_byte_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_store_w1_signed_byte_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_store_w1_signed_byte_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_store_w1_signed_byte_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_store_w1_signed_byte_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_store_w1_signed_byte_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_store_w1_signed_byte_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_store_w1_signed_byte_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_store_w1_signed_byte_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_store_w1_signed_byte_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_store_w1_signed_byte_u1_p1_reg__gt
+#define A__NAME__le arm_instr_store_w1_signed_byte_u1_p1_reg__le
+#define A__NAME_PC arm_instr_store_w1_signed_byte_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_store_w1_signed_byte_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_signed_byte_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_signed_byte_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_signed_byte_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_signed_byte_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_signed_byte_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_signed_byte_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_signed_byte_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_signed_byte_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_signed_byte_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_signed_byte_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_signed_byte_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_signed_byte_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_signed_byte_u1_p1_reg_pc__le
+#define A__SIGNED
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_signed_byte_u1_p1_reg__general
+#define A__NAME arm_instr_load_w1_signed_byte_u1_p1_reg
+#define A__NAME__eq arm_instr_load_w1_signed_byte_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_load_w1_signed_byte_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_load_w1_signed_byte_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_load_w1_signed_byte_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_load_w1_signed_byte_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_load_w1_signed_byte_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_load_w1_signed_byte_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_load_w1_signed_byte_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_load_w1_signed_byte_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_load_w1_signed_byte_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_load_w1_signed_byte_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_load_w1_signed_byte_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_load_w1_signed_byte_u1_p1_reg__gt
+#define A__NAME__le arm_instr_load_w1_signed_byte_u1_p1_reg__le
+#define A__NAME_PC arm_instr_load_w1_signed_byte_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_load_w1_signed_byte_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_signed_byte_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_signed_byte_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_signed_byte_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_signed_byte_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_signed_byte_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_signed_byte_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_signed_byte_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_signed_byte_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_signed_byte_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_signed_byte_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_signed_byte_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_signed_byte_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_signed_byte_u1_p1_reg_pc__le
+#define A__SIGNED
+#define A__L
+#define A__W
+#define A__B
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__L
+#undef A__W
+#undef A__B
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_unsigned_halfword_u1_p1_reg__general
+#define A__NAME arm_instr_store_w1_unsigned_halfword_u1_p1_reg
+#define A__NAME__eq arm_instr_store_w1_unsigned_halfword_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_store_w1_unsigned_halfword_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_store_w1_unsigned_halfword_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_store_w1_unsigned_halfword_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_store_w1_unsigned_halfword_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_store_w1_unsigned_halfword_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_store_w1_unsigned_halfword_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_store_w1_unsigned_halfword_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_store_w1_unsigned_halfword_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_store_w1_unsigned_halfword_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_store_w1_unsigned_halfword_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_store_w1_unsigned_halfword_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_store_w1_unsigned_halfword_u1_p1_reg__gt
+#define A__NAME__le arm_instr_store_w1_unsigned_halfword_u1_p1_reg__le
+#define A__NAME_PC arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_unsigned_halfword_u1_p1_reg_pc__le
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_unsigned_halfword_u1_p1_reg__general
+#define A__NAME arm_instr_load_w1_unsigned_halfword_u1_p1_reg
+#define A__NAME__eq arm_instr_load_w1_unsigned_halfword_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_load_w1_unsigned_halfword_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_load_w1_unsigned_halfword_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_load_w1_unsigned_halfword_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_load_w1_unsigned_halfword_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_load_w1_unsigned_halfword_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_load_w1_unsigned_halfword_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_load_w1_unsigned_halfword_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_load_w1_unsigned_halfword_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_load_w1_unsigned_halfword_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_load_w1_unsigned_halfword_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_load_w1_unsigned_halfword_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_load_w1_unsigned_halfword_u1_p1_reg__gt
+#define A__NAME__le arm_instr_load_w1_unsigned_halfword_u1_p1_reg__le
+#define A__NAME_PC arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_unsigned_halfword_u1_p1_reg_pc__le
+#define A__L
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__L
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_store_w1_signed_halfword_u1_p1_reg__general
+#define A__NAME arm_instr_store_w1_signed_halfword_u1_p1_reg
+#define A__NAME__eq arm_instr_store_w1_signed_halfword_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_store_w1_signed_halfword_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_store_w1_signed_halfword_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_store_w1_signed_halfword_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_store_w1_signed_halfword_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_store_w1_signed_halfword_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_store_w1_signed_halfword_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_store_w1_signed_halfword_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_store_w1_signed_halfword_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_store_w1_signed_halfword_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_store_w1_signed_halfword_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_store_w1_signed_halfword_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_store_w1_signed_halfword_u1_p1_reg__gt
+#define A__NAME__le arm_instr_store_w1_signed_halfword_u1_p1_reg__le
+#define A__NAME_PC arm_instr_store_w1_signed_halfword_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_store_w1_signed_halfword_u1_p1_reg_pc__le
+#define A__SIGNED
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
+#define A__NAME__general arm_instr_load_w1_signed_halfword_u1_p1_reg__general
+#define A__NAME arm_instr_load_w1_signed_halfword_u1_p1_reg
+#define A__NAME__eq arm_instr_load_w1_signed_halfword_u1_p1_reg__eq
+#define A__NAME__ne arm_instr_load_w1_signed_halfword_u1_p1_reg__ne
+#define A__NAME__cs arm_instr_load_w1_signed_halfword_u1_p1_reg__cs
+#define A__NAME__cc arm_instr_load_w1_signed_halfword_u1_p1_reg__cc
+#define A__NAME__mi arm_instr_load_w1_signed_halfword_u1_p1_reg__mi
+#define A__NAME__pl arm_instr_load_w1_signed_halfword_u1_p1_reg__pl
+#define A__NAME__vs arm_instr_load_w1_signed_halfword_u1_p1_reg__vs
+#define A__NAME__vc arm_instr_load_w1_signed_halfword_u1_p1_reg__vc
+#define A__NAME__hi arm_instr_load_w1_signed_halfword_u1_p1_reg__hi
+#define A__NAME__ls arm_instr_load_w1_signed_halfword_u1_p1_reg__ls
+#define A__NAME__ge arm_instr_load_w1_signed_halfword_u1_p1_reg__ge
+#define A__NAME__lt arm_instr_load_w1_signed_halfword_u1_p1_reg__lt
+#define A__NAME__gt arm_instr_load_w1_signed_halfword_u1_p1_reg__gt
+#define A__NAME__le arm_instr_load_w1_signed_halfword_u1_p1_reg__le
+#define A__NAME_PC arm_instr_load_w1_signed_halfword_u1_p1_reg_pc
+#define A__NAME_PC__eq arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__eq
+#define A__NAME_PC__ne arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__ne
+#define A__NAME_PC__cs arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__cs
+#define A__NAME_PC__cc arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__cc
+#define A__NAME_PC__mi arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__mi
+#define A__NAME_PC__pl arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__pl
+#define A__NAME_PC__vs arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__vs
+#define A__NAME_PC__vc arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__vc
+#define A__NAME_PC__hi arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__hi
+#define A__NAME_PC__ls arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__ls
+#define A__NAME_PC__ge arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__ge
+#define A__NAME_PC__lt arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__lt
+#define A__NAME_PC__gt arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__gt
+#define A__NAME_PC__le arm_instr_load_w1_signed_halfword_u1_p1_reg_pc__le
+#define A__SIGNED
+#define A__L
+#define A__W
+#define A__H
+#define A__U
+#define A__P
+#define A__REG
+#include "cpu_arm_instr_loadstore.c"
+#undef A__SIGNED
+#undef A__L
+#undef A__W
+#undef A__H
+#undef A__U
+#undef A__P
+#undef A__REG
+#undef A__NAME__eq
+#undef A__NAME__ne
+#undef A__NAME__cs
+#undef A__NAME__cc
+#undef A__NAME__mi
+#undef A__NAME__pl
+#undef A__NAME__vs
+#undef A__NAME__vc
+#undef A__NAME__hi
+#undef A__NAME__ls
+#undef A__NAME__ge
+#undef A__NAME__lt
+#undef A__NAME__gt
+#undef A__NAME__le
+#undef A__NAME_PC__eq
+#undef A__NAME_PC__ne
+#undef A__NAME_PC__cs
+#undef A__NAME_PC__cc
+#undef A__NAME_PC__mi
+#undef A__NAME_PC__pl
+#undef A__NAME_PC__vs
+#undef A__NAME_PC__vc
+#undef A__NAME_PC__hi
+#undef A__NAME_PC__ls
+#undef A__NAME_PC__ge
+#undef A__NAME_PC__lt
+#undef A__NAME_PC__gt
+#undef A__NAME_PC__le
+#undef A__NAME__general
+#undef A__NAME_PC
+#undef A__NAME
