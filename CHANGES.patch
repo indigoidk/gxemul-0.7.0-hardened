@@ -1,0 +1,4435 @@
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/core/emul.c est/src/core/emul.c
+--- src/core/emul.c	2021-04-22 13:04:13.000000000 -0500
++++ est/src/core/emul.c	2026-06-27 12:29:04.449047200 -0500
+@@ -36,6 +36,9 @@
+ #include <stdarg.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <sys/wait.h>
+ 
+ #include "arcbios.h"
+ #include "cpu.h"
+@@ -66,6 +69,62 @@
+ 
+ 
+ /*
++ *  decompress_gzip_to():
++ *
++ *  Decompresses the gzipped file 'src_name' into the already-open, already-
++ *  created temp file 'dst_fd' by running gunzip directly via fork()/exec(),
++ *  never through a shell. This avoids the shell command injection that a
++ *  system("gunzip ... <name> ...") call would allow when a file name contains
++ *  shell metacharacters; writing into the inherited fd (rather than reopening
++ *  the temp path by name) also avoids a same-user race on that path. Returns
++ *  0 on success, -1 on failure.
++ */
++static int decompress_gzip_to(const char *src_name, int dst_fd)
++{
++	pid_t pid = fork();
++
++	if (pid < 0) {
++		perror("fork");
++		return -1;
++	}
++
++	if (pid == 0) {
++		/*  Child: send stdout to the already-open temp fd, then exec
++		    gunzip -c.  Using the inherited fd instead of reopening the
++		    temp path by name avoids a same-user race on that path.  */
++		if (dup2(dst_fd, STDOUT_FILENO) < 0) {
++			perror("dup2");
++			_exit(127);
++		}
++		/*  Do not close stdout itself, in case dst_fd == fd 1.  */
++		if (dst_fd != STDOUT_FILENO)
++			close(dst_fd);
++		/*  Prefer absolute paths so a hostile PATH cannot substitute a
++		    malicious "gunzip"; fall back to a PATH search only if the
++		    usual locations are absent.  */
++		execl("/bin/gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
++		execl("/usr/bin/gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
++		execlp("gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
++		/*  Only reached if exec failed:  */
++		perror("gunzip");
++		_exit(127);
++	}
++
++	/*  Parent: wait for the child to finish.  */
++	int status = 0;
++	while (waitpid(pid, &status, 0) < 0) {
++		if (errno != EINTR)
++			return -1;
++	}
++
++	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
++		return 0;
++
++	return -1;
++}
++
++
++/*
+  *  add_breakpoints():
+  *
+  *  Take the strings breakpoint_string[] and convert to addresses
+@@ -206,7 +265,7 @@
+ struct machine *emul_add_machine(struct emul *e, char *name)
+ {
+ 	struct machine *m;
+-	char tmpstr[20];
++	char tmpstr[32];
+ 	int i;
+ 
+ 	m = machine_new(name, e, e->n_machines);
+@@ -500,8 +559,9 @@
+ 		}
+ 
+ 		/*
+-		 *  gzipped files are automagically gunzipped:
+-		 *  NOTE/TODO: This isn't secure. system() is used.
++		 *  gzipped files are automagically gunzipped, by running
++		 *  gunzip via fork()/exec() (never via a shell) into a fresh
++		 *  temporary file.
+ 		 */
+ 		tmp_f = fopen(name_to_load, "r");
+ 		if (tmp_f != NULL) {
+@@ -513,51 +573,45 @@
+ 
+ 			if (res == sizeof(buf) &&
+ 			    buf[0] == 0x1f && buf[1] == 0x8b) {
+-				size_t zzlen = strlen(name_to_load)*2 + 100;
+-				char *zz;
++				int tmpfile_handle;
++				char *new_temp_name;
++				const char *tmpdir = getenv("TMPDIR");
++
++				if (tmpdir == NULL)
++					tmpdir = DEFAULT_TMP_DIR;
+ 
+-				CHECK_ALLOCATION(zz = (char*) malloc(zzlen));
+ 				debug("gunziping %s\n", name_to_load);
+ 
+-				/*
+-				 *  gzip header found.  If this was a file
+-				 *  extracted from, say, a CDROM image, then it
+-				 *  already has a temporary name. Otherwise we
+-				 *  have to gunzip into a temporary file.
+-				 */
+-				if (remove_after_load) {
+-					snprintf(zz, zzlen, "mv %s %s.gz",
+-					    name_to_load, name_to_load);
+-					if (system(zz) != 0)
+-						perror(zz);
+-					snprintf(zz, zzlen, "gunzip %s.gz",
++				CHECK_ALLOCATION(new_temp_name =
++				    (char*) malloc(300));
++				snprintf(new_temp_name, 300,
++				    "%s/gxemul.XXXXXXXXXXXX", tmpdir);
++
++				tmpfile_handle = mkstemp(new_temp_name);
++				if (tmpfile_handle < 0) {
++					perror(new_temp_name);
++					exit(1);
++				}
++
++				/*  Pass the open fd to the child (which dup2()s it
++				    to stdout) instead of reopening new_temp_name by
++				    name, closing the same-user temp race.  */
++				if (decompress_gzip_to(name_to_load,
++				    tmpfile_handle) != 0) {
++					fatal("failed to gunzip '%s'\n",
+ 					    name_to_load);
+-					if (system(zz) != 0)
+-						perror(zz);
+-				} else {
+-					/*  gunzip into new temp file:  */
+-					int tmpfile_handle;
+-					char *new_temp_name;
+-					const char *tmpdir = getenv("TMPDIR");
+-
+-					if (tmpdir == NULL)
+-						tmpdir = DEFAULT_TMP_DIR;
+-
+-					CHECK_ALLOCATION(new_temp_name =
+-					    (char*) malloc(300));
+-					snprintf(new_temp_name, 300,
+-					    "%s/gxemul.XXXXXXXXXXXX", tmpdir);
+-
+-					tmpfile_handle = mkstemp(new_temp_name);
+-					close(tmpfile_handle);
+-					snprintf(zz, zzlen, "gunzip -c '%s' > "
+-					    "%s", name_to_load, new_temp_name);
+-					if (system(zz) != 0)
+-						perror(zz);
+-					name_to_load = new_temp_name;
+-					remove_after_load = 1;
++					exit(1);
+ 				}
+-				free(zz);
++				close(tmpfile_handle);
++
++				/*  If the source was itself a temporary file
++				    (e.g. extracted from a CDROM image), remove
++				    it now that we have the decompressed copy.  */
++				if (remove_after_load)
++					unlink(name_to_load);
++
++				name_to_load = new_temp_name;
++				remove_after_load = 1;
+ 			}
+ 			fclose(tmp_f);
+ 		}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/core/emul_parse.c est/src/core/emul_parse.c
+--- src/core/emul_parse.c	2021-04-22 13:04:13.000000000 -0500
++++ est/src/core/emul_parse.c	2026-06-25 23:41:38.350581500 -0500
+@@ -236,7 +236,7 @@
+ static int cur_machine_n_disk;
+ #define	MAX_N_DEVICE		20
+ #define	MAX_DEVICE_LEN		400
+-static char *cur_machine_device[MAX_N_DISK];
++static char *cur_machine_device[MAX_N_DEVICE];
+ static int cur_machine_n_device;
+ #define	MAX_N_X11_DISP		5
+ #define	MAX_X11_DISP_LEN	1000
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/core/misc.c est/src/core/misc.c
+--- src/core/misc.c	2021-04-22 13:04:13.000000000 -0500
++++ est/src/core/misc.c	2026-06-26 09:42:24.478610100 -0500
+@@ -35,6 +35,7 @@
+ #include <string.h>
+ #include <fcntl.h>
+ #include <unistd.h>
++#include <errno.h>
+ 
+ #include "cpu.h"
+ #include "misc.h"
+@@ -200,22 +201,58 @@
+ /*
+  *  mymkstemp():
+  *
+- *  mkstemp() replacement for systems that lack that function. This is NOT
+- *  really safe, but should at least allow the emulator to build and run.
++ *  mkstemp() replacement for systems that lack that function. The trailing run
++ *  of 'X' characters in the template is filled with random alphanumeric
++ *  characters, and the file is created with O_CREAT | O_EXCL so an existing
++ *  file is never clobbered (defeating the classic symlink race). On collision
++ *  the substitution is retried with fresh characters. Returns an open fd, or
++ *  -1 on error (with errno set).
+  */
+ int mymkstemp(char *templ)
+ {
+-	int h = 0;
+-	char *p = templ;
++	static const char chars[] =
++	    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
++	size_t len = strlen(templ);
++	size_t start = len;
++	int attempt;
++	int urandom_fd;
++
++	/*  Locate the trailing run of 'X' characters to substitute.  */
++	while (start > 0 && templ[start - 1] == 'X')
++		start--;
++
++	/*  Draw the random suffix from the kernel CSPRNG so the names are not
++	    predictable (random() may be unseeded). Fall back to random() per
++	    byte only if /dev/urandom cannot be opened/read.  */
++	urandom_fd = open("/dev/urandom", O_RDONLY);
++
++	for (attempt = 0; attempt < 256; attempt++) {
++		size_t i;
++		int h;
++
++		for (i = start; i < len; i++) {
++			unsigned char rb;
++			if (urandom_fd < 0 || read(urandom_fd, &rb, 1) != 1)
++				rb = (unsigned char) random();
++			templ[i] = chars[rb % (sizeof(chars) - 1)];
++		}
+ 
+-	while (*p) {
+-		if (*p == 'X')
+-			*p = 48 + random() % 10;
+-		p++;
++		h = open(templ, O_RDWR | O_CREAT | O_EXCL, 0600);
++		if (h >= 0) {
++			if (urandom_fd >= 0)
++				close(urandom_fd);
++			return h;
++		}
++		if (errno != EEXIST) {
++			if (urandom_fd >= 0)
++				close(urandom_fd);
++			return -1;
++		}
+ 	}
+ 
+-	h = open(templ, O_RDWR | O_CREAT | O_EXCL, 0600);
+-	return h;
++	if (urandom_fd >= 0)
++		close(urandom_fd);
++	return -1;
+ }
+ 
+ 
+@@ -223,27 +260,56 @@
+ /*
+  *  mystrlcpy():
+  *
+- *  Quick hack strlcpy() replacement for systems that lack that function.
+- *  NOTE: No length checking is done.
++ *  strlcpy() replacement for systems that lack that function. Copies at most
++ *  size-1 bytes from src to dst and always NUL-terminates dst (when size > 0).
++ *  Returns strlen(src), i.e. the length of the string it tried to create, so
++ *  that truncation can be detected (retval >= size). Uses only strlen()/memcpy()
++ *  so it has no dependency on other possibly-missing libc functions.
+  */
+ size_t mystrlcpy(char *dst, const char *src, size_t size)
+ {
+-	strcpy(dst, src);
+-	return strlen(src);
++	size_t src_len = strlen(src);
++
++	if (size != 0) {
++		size_t copy_len = (src_len >= size) ? size - 1 : src_len;
++		memcpy(dst, src, copy_len);
++		dst[copy_len] = '\0';
++	}
++
++	return src_len;
+ }
+ 
+ 
+ /*
+  *  mystrlcat():
+  *
+- *  Quick hack strlcat() replacement for systems that lack that function.
+- *  NOTE: No length checking is done.
++ *  strlcat() replacement for systems that lack that function. Appends src to
++ *  dst, writing at most size-1 bytes total and always NUL-terminating (when
++ *  there is room). Returns the length of the string it tried to create, i.e.
++ *  the initial length of dst plus strlen(src). The length of dst is measured
++ *  with a bounded scan so that an unterminated buffer is never over-read.
+  */
+ size_t mystrlcat(char *dst, const char *src, size_t size)
+ {
+-	size_t orig_dst_len = strlen(dst);
+-	strcat(dst, src);
+-	return strlen(src) + orig_dst_len;
++	size_t dst_len = 0;
++	size_t src_len = strlen(src);
++
++	/*  Bounded strlen of dst: never read past 'size' bytes.  */
++	while (dst_len < size && dst[dst_len] != '\0')
++		dst_len++;
++
++	/*  dst has no NUL within size: nothing can be appended.  */
++	if (dst_len == size)
++		return size + src_len;
++
++	if (src_len < size - dst_len) {
++		memcpy(dst + dst_len, src, src_len + 1);
++	} else {
++		memcpy(dst + dst_len, src, size - dst_len - 1);
++		dst[size - 1] = '\0';
++	}
++
++	return dst_len + src_len;
+ }
+ #endif
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_alpha.c est/src/cpus/cpu_alpha.c
+--- src/cpus/cpu_alpha.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_alpha.c	2026-06-26 12:36:28.202400500 -0500
+@@ -280,7 +280,7 @@
+ 
+ 	debug("%016" PRIx64":  ", (uint64_t) dumpaddr);
+ 
+-	iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++	iw = READ_WORD_LE(ib);
+ 	debug("%08x", (int)iw);
+ 
+ 	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_arm.c est/src/cpus/cpu_arm.c
+--- src/cpus/cpu_arm.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_arm.c	2026-06-26 12:36:28.219632200 -0500
+@@ -1729,9 +1729,9 @@
+ 		return arm_cpu_disassemble_instr_thumb(cpu, ib, running, dumpaddr);
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++		iw = READ_WORD_LE(ib);
+ 	else
+-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
++		iw = READ_WORD_BE(ib);
+ 	debug("%08x", (int)iw);
+ 
+ 	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_arm_instr.c est/src/cpus/cpu_arm_instr.c
+--- src/cpus/cpu_arm_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_arm_instr.c	2026-06-26 12:36:28.236989900 -0500
+@@ -3007,9 +3007,9 @@
+ 	}
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+-		iword = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++		iword = READ_WORD_LE(ib);
+ 	else
+-		iword = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
++		iword = READ_WORD_BE(ib);
+ 
+ 
+ #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_dyntrans.c est/src/cpus/cpu_dyntrans.c
+--- src/cpus/cpu_dyntrans.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_dyntrans.c	2026-06-25 23:26:42.362713200 -0500
+@@ -1698,7 +1698,7 @@
+ 		index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+ 		cpu->cd.DYNTRANS_ARCH.phys_page[index] = NULL;
+ #ifdef DYNTRANS_ARM
+-		cpu->cd.DYNTRANS_ARCH.is_userpage[index>>5] &= ~(1<<(index&31));
++		cpu->cd.DYNTRANS_ARCH.is_userpage[index>>5] &= ~((uint32_t)1<<(index&31));
+ 		if (useraccess)
+ 			cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5]
+ 			    |= 1 << (index & 31);
+@@ -1833,7 +1833,7 @@
+ 		x /= addr_per_translation_range;
+ 
+ 		cpu->cd.DYNTRANS_ARCH.cur_physpage->
+-		    translations_bitmap |= (1 << x);
++		    translations_bitmap |= ((uint32_t)1 << x);
+ 	}
+ 
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_i960.c est/src/cpus/cpu_i960.c
+--- src/cpus/cpu_i960.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_i960.c	2026-06-26 12:36:28.250511500 -0500
+@@ -406,9 +406,9 @@
+ 	uint32_t iw;
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++		iw = READ_WORD_LE(ib);
+ 	else
+-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
++		iw = READ_WORD_BE(ib);
+ 
+ 	const int opcode = iw >> 24;
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_i960_instr.c est/src/cpus/cpu_i960_instr.c
+--- src/cpus/cpu_i960_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_i960_instr.c	2026-06-26 12:36:28.261099800 -0500
+@@ -179,9 +179,9 @@
+ 	uint32_t iw;
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++		iw = READ_WORD_LE(ib);
+ 	else
+-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
++		iw = READ_WORD_BE(ib);
+ 
+ 	const int opcode = iw >> 24;
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_m88k.c est/src/cpus/cpu_m88k.c
+--- src/cpus/cpu_m88k.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_m88k.c	2026-06-26 08:49:34.497081000 -0500
+@@ -937,9 +937,9 @@
+ 	    (uint32_t) dumpaddr);
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
++		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + ((uint32_t)ib[3]<<24);
+ 	else
+-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
++		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + ((uint32_t)ib[0]<<24);
+ 
+ 	debug("%08" PRIx32, (uint32_t) iw);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_m88k_instr.c est/src/cpus/cpu_m88k_instr.c
+--- src/cpus/cpu_m88k_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_m88k_instr.c	2026-06-26 12:30:43.540602900 -0500
+@@ -458,11 +458,14 @@
+ }
+ static void m88k_ext(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+ {
+-	int32_t x = reg(ic->arg[1]);
+-	x >>= o;	/*  signed (arithmetic) shift  */
++	uint32_t src = reg(ic->arg[1]), x = src >> o;
+ 	if (w != 0) {
+-		x <<= (32-w);
+-		x >>= (32-w);
++		uint32_t signbit = (uint32_t)1 << (w - 1);
++		x &= ((uint32_t)1 << w) - 1;
++		if (x & signbit)
++			x |= ~(((uint32_t)1 << w) - 1);
++	} else if (o != 0 && (src & 0x80000000)) {
++		x |= ~(0xffffffffU >> o);
+ 	}
+ 	reg(ic->arg[0]) = x;
+ }
+@@ -2575,7 +2578,7 @@
+ 		}
+ 
+ 		ic->arg[0] = (size_t) &cpu->cd.m88k.r[s1];
+-		ic->arg[1] = (uint32_t) (1 << d);
++		ic->arg[1] = (uint32_t) (1U << d);
+ 
+ 		offset = (addr & 0xffc) + d16;
+ 		ic->arg[2] = offset;
+@@ -2939,4 +2942,3 @@
+ #include "cpu_dyntrans.c" 
+ #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
+ }
+-
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_mips_instr.c est/src/cpus/cpu_mips_instr.c
+--- src/cpus/cpu_mips_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_mips_instr.c	2026-06-28 01:17:21.151085600 -0500
+@@ -179,6 +179,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs == rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -199,6 +208,15 @@
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs == rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -214,6 +232,13 @@
+ X(beq_samepage_addiu)
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  Fused branch in another branch's delay slot: don't run the
++		    fused op or apply the branch (corrupts next_ic); flag the
++		    outer branch and let the main loop re-run this afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->n_translated_instrs ++;
+ 	reg(ic[1].arg[1]) = (int32_t)
+ 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
+@@ -225,6 +250,13 @@
+ X(beq_samepage_nop)
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  Fused branch in another branch's delay slot: don't run the
++		    fused op or apply the branch (corrupts next_ic); flag the
++		    outer branch and let the main loop re-run this afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->n_translated_instrs ++;
+ 	if (rs == rt)
+ 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
+@@ -236,6 +268,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs != rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -256,6 +297,15 @@
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs != rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -271,6 +321,13 @@
+ X(bne_samepage_addiu)
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  Fused branch in another branch's delay slot: don't run the
++		    fused op or apply the branch (corrupts next_ic); flag the
++		    outer branch and let the main loop re-run this afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->n_translated_instrs ++;
+ 	reg(ic[1].arg[1]) = (int32_t)
+ 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
+@@ -282,6 +339,13 @@
+ X(bne_samepage_nop)
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  Fused branch in another branch's delay slot: don't run the
++		    fused op or apply the branch (corrupts next_ic); flag the
++		    outer branch and let the main loop re-run this afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->n_translated_instrs ++;
+ 	if (rs != rt)
+ 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
+@@ -291,6 +355,15 @@
+ X(b)
+ {
+ 	MODE_int_t old_pc = cpu->pc;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -306,6 +379,15 @@
+ }
+ X(b_samepage)
+ {
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -328,6 +410,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs == rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -349,6 +440,15 @@
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs == rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -367,6 +467,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs != rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -388,6 +497,15 @@
+ {
+ 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+ 	int x = rs != rt;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -415,6 +533,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs <= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -435,6 +562,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs <= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -452,6 +588,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs <= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -473,6 +618,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs <= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -500,6 +654,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -520,6 +683,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -537,6 +709,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -558,6 +739,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -585,6 +775,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -605,6 +804,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -622,6 +830,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -643,6 +860,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -671,6 +897,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -699,6 +934,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -724,6 +968,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -753,6 +1006,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs >= 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -788,6 +1050,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -816,6 +1087,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -841,6 +1121,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -870,6 +1159,15 @@
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs < 0), low_pc;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+ 	    / sizeof(struct mips_instr_call);
+@@ -904,6 +1202,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs > 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -924,6 +1231,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs > 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -941,6 +1257,15 @@
+ 	MODE_int_t old_pc = cpu->pc;
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs > 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -962,6 +1287,15 @@
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
+ 	int x = (rs > 0);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x)
+ 		ic[1].f(cpu, ic+1);
+@@ -987,6 +1321,15 @@
+ X(jr)
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1001,6 +1344,15 @@
+ X(jr_ra)
+ {
+ 	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1025,6 +1377,15 @@
+ X(jr_ra_trace)
+ {
+ 	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1040,6 +1401,15 @@
+ X(jalr)
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]), rd;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
+ 	    MIPS_INSTR_ALIGNMENT_SHIFT);
+@@ -1058,6 +1428,15 @@
+ X(jalr_trace)
+ {
+ 	MODE_int_t rs = reg(ic->arg[0]), rd;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
+ 	    MIPS_INSTR_ALIGNMENT_SHIFT);
+@@ -1085,6 +1464,15 @@
+ X(j)
+ {
+ 	MODE_int_t old_pc = cpu->pc;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1100,6 +1488,15 @@
+ X(jal)
+ {
+ 	MODE_int_t old_pc = cpu->pc;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
+ 	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
+@@ -1117,6 +1514,15 @@
+ X(jal_trace)
+ {
+ 	MODE_int_t old_pc = cpu->pc;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
+ 	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
+@@ -2060,6 +2466,15 @@
+ 		x ^= 1;
+ 
+ 	/*  Execute the delay slot (except if it is nullified):  */
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on MIPS). Don't run it as a
++		    nested branch -- that corrupts next_ic; flag the outer branch
++		    so it does not apply its branch, and let the main loop re-run
++		    this instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	if (x || !(ic->arg[1] & 2))
+ 		ic[1].f(cpu, ic+1);
+@@ -3111,6 +3526,13 @@
+  */
+ X(b_samepage_addiu)
+ {
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  Fused branch in another branch's delay slot: don't run the
++		    fused op or apply the branch (corrupts next_ic); flag the
++		    outer branch and let the main loop re-run this afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	reg(ic[1].arg[1]) = (int32_t)
+ 	    ( (int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2] );
+ 	cpu->n_translated_instrs ++;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_ppc.c est/src/cpus/cpu_ppc.c
+--- src/cpus/cpu_ppc.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_ppc.c	2026-06-28 11:54:49.743834400 -0500
+@@ -624,7 +624,7 @@
+ 		debug("%016" PRIx64, (uint64_t) dumpaddr);
+ 
+ 	/*  NOTE: Fixed to big-endian.  */
+-	iword = (instr[0] << 24) + (instr[1] << 16) + (instr[2] << 8)
++	iword = ((uint32_t)instr[0] << 24) + (instr[1] << 16) + (instr[2] << 8)
+ 	    + instr[3];
+ 
+ 	debug(": %08" PRIx32, iword);
+@@ -1782,7 +1782,8 @@
+ 	case SPR_DBSR:
+ 	case SPR_PIR:
+ 		break;
+-	default:if (spr >= SPR_IBAT0U && spr <= SPR_DBAT3L) {
++	default:if ((spr >= SPR_IBAT0U && spr <= SPR_DBAT3L) ||
++		    (spr >= SPR_IBAT4U && spr <= SPR_DBAT7L)) {	/* #116: extended BATs (7445/7455) */
+ 			break;
+ 		} else
+ 			fatal("[ using UNIMPLEMENTED spr %i (%s), pc = "
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_ppc_instr.c est/src/cpus/cpu_ppc_instr.c
+--- src/cpus/cpu_ppc_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_ppc_instr.c	2026-06-26 12:30:17.065728500 -0500
+@@ -610,8 +610,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -634,8 +634,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -658,8 +658,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -682,8 +682,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -706,8 +706,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ X(cmpw_cr0)
+ {
+@@ -743,8 +743,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -767,8 +767,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ X(cmpwi_cr0)
+ {
+@@ -804,8 +804,8 @@
+ 		c = 2;
+ 	/*  SO bit, copied from XER  */
+ 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= (c << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+ }
+ 
+ 
+@@ -950,8 +950,8 @@
+ 			c = 2;
+ 	}
+ 	/*  TODO: Signaling vs Quiet NaN  */
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+-	cpu->cd.ppc.cr |= ((c&0xe) << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
++	cpu->cd.ppc.cr |= ((uint32_t)(c&0xe) << bf_shift);
+ 	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+ 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
+ }
+@@ -1506,7 +1506,7 @@
+ 	int rb = (iword >> 11) & 31;
+ 	int sh = cpu->cd.ppc.gpr[rb] & 0x1f;
+ 	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
+-	tmp = (tmp << sh) | (tmp >> (32-sh));
++	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+ 	tmp &= (uint32_t)ic->arg[1];
+ 	reg(ic->arg[0]) = tmp;
+ }
+@@ -1526,7 +1526,7 @@
+ 	int rs = (iword >> 21) & 31;
+ 	int sh = (iword >> 11) & 31;
+ 	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
+-	tmp = (tmp << sh) | (tmp >> (32-sh));
++	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+ 	tmp &= (uint32_t)ic->arg[1];
+ 	reg(ic->arg[0]) = tmp;
+ }
+@@ -1549,7 +1549,7 @@
+ 	int me = (iword >> 1) & 31;   
+ 	int rc = iword & 1;
+ 
+-	tmp = (tmp << sh) | (tmp >> (32-sh));
++	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+ 
+ 	for (;;) {
+ 		uint64_t mask;
+@@ -1606,7 +1606,7 @@
+ {
+ 	int bf_shift = ic->arg[0], bfa_shift = ic->arg[1];
+ 	uint32_t tmp = (cpu->cd.ppc.cr >> bfa_shift) & 0xf;
+-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
++	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+ 	cpu->cd.ppc.cr |= (tmp << bf_shift);
+ }
+ 
+@@ -3900,4 +3900,3 @@
+ #include "cpu_dyntrans.c"
+ #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
+ }
+-
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/cpu_sh_instr.c est/src/cpus/cpu_sh_instr.c
+--- src/cpus/cpu_sh_instr.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/cpu_sh_instr.c	2026-06-26 13:23:43.261329000 -0500
+@@ -1878,7 +1878,7 @@
+ 	int sa = rm & 0x1f;
+ 
+ 	if (rm >= 0)
+-		rn <<= sa;
++		rn = (int32_t)((uint32_t)rn << sa);
+ 	else if (sa != 0)
+ 		rn >>= (32 - sa);
+ 	else if (rn < 0)
+@@ -1895,7 +1895,7 @@
+ 	int sa = rm & 0x1f;
+ 
+ 	if (rm >= 0)
+-		rn <<= sa;
++		rn = (int32_t)((uint32_t)rn << sa);
+ 	else if (sa != 0)
+ 		rn >>= (32 - sa);
+ 	else
+@@ -1920,6 +1920,15 @@
+ 	MODE_int_t target = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+ 	target += ic->arg[0];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1932,6 +1941,15 @@
+ }
+ X(bra_samepage)
+ {
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1947,6 +1965,15 @@
+ 	SYNCH_PC;
+ 	old_pc = cpu->pc;
+ 	target += ic->arg[0];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1966,6 +1993,15 @@
+ 	SYNCH_PC;
+ 	old_pc = cpu->pc;
+ 	target += ic->arg[0];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1983,6 +2019,15 @@
+ 	uint32_t old_pc;
+ 	SYNCH_PC;
+ 	old_pc = cpu->pc;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -1997,6 +2042,15 @@
+ 	MODE_int_t target = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+ 	target += ic->arg[0] + reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2015,6 +2069,15 @@
+ 	SYNCH_PC;
+ 	old_pc = cpu->pc;
+ 	target += ic->arg[0] + reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2034,6 +2097,15 @@
+ 	SYNCH_PC;
+ 	old_pc = cpu->pc;
+ 	target += ic->arg[0] + reg(ic->arg[1]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2091,6 +2163,15 @@
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+ 	int cond = cpu->cd.sh.sr & SH_SR_T;
+ 	target += ic->arg[0];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2110,6 +2191,15 @@
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+ 	int cond = !(cpu->cd.sh.sr & SH_SR_T);
+ 	target += ic->arg[0];
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2126,6 +2216,15 @@
+ X(bt_s_samepage)
+ {
+ 	int cond = cpu->cd.sh.sr & SH_SR_T;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2142,6 +2241,15 @@
+ X(bf_s_samepage)
+ {
+ 	int cond = !(cpu->cd.sh.sr & SH_SR_T);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2166,6 +2274,15 @@
+ X(jmp_rn)
+ {
+ 	MODE_int_t target = reg(ic->arg[0]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2179,6 +2296,15 @@
+ X(jmp_rn_trace)
+ {
+ 	MODE_int_t target = reg(ic->arg[0]);
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2198,6 +2324,15 @@
+ X(jsr_rn)
+ {
+ 	MODE_int_t target = reg(ic->arg[0]), retaddr;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	retaddr = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+@@ -2214,6 +2349,15 @@
+ X(jsr_rn_trace)
+ {
+ 	MODE_int_t target = reg(ic->arg[0]), retaddr;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	retaddr = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
+ 	    SH_INSTR_ALIGNMENT_SHIFT);
+@@ -2236,6 +2380,15 @@
+ X(rts)
+ {
+ 	MODE_int_t target = cpu->cd.sh.pr;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2249,6 +2402,15 @@
+ X(rts_trace)
+ {
+ 	MODE_int_t target = cpu->cd.sh.pr;
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+@@ -2269,6 +2431,15 @@
+ {
+ 	RES_INST_IF_NOT_MD;
+ 
++	if (cpu->delay_slot & TO_BE_DELAYED) {
++		/*  This (delayed) branch is itself in another branch's delay slot
++		    (architecturally unpredictable on SH). Don't run it as a nested
++		    branch -- that corrupts next_ic; flag the outer branch so it
++		    does not apply its branch, and let the main loop re-run this
++		    instruction normally afterwards.  */
++		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
++		return;
++	}
+ 	cpu->delay_slot = TO_BE_DELAYED;
+ 	ic[1].f(cpu, ic+1);
+ 	cpu->n_translated_instrs ++;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/grep.exe.stackdump est/src/cpus/grep.exe.stackdump
+--- src/cpus/grep.exe.stackdump	2026-06-28 00:58:16.374018700 -0500
++++ est/src/cpus/grep.exe.stackdump	2026-06-28 11:25:26.528775900 -0500
+@@ -1,14 +1,14 @@
+ Stack trace:
+ Frame         Function      Args
+-0007FFFFBD00  000210060304 (000000000002, 0007FFFFCE00, 000000000000, 0007FFFFDC10) msys-2.0.dll+0x20304
+-FFFFFFFFFFFEFEDF  00021006237D (0007FFFFC6B0, 000000000000, 0000000001F4, 000000000000) msys-2.0.dll+0x2237D
+-0007FFFFC410  0002100C1394 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x81394
++0007FFFFBD20  000210060304 (000000000002, 0007FFFFCE00, 000000000000, 0007FFFFDC10) msys-2.0.dll+0x20304
++FFFFFFFFFFFEFEDF  00021006237D (0007FFFFC6D0, 000000000000, 0000000001F4, 000000000000) msys-2.0.dll+0x2237D
++0007FFFFC430  0002100C1394 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x81394
+ 000000000006  0002100BCE39 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x7CE39
+-0007FFFFC7C8  0002100BD23A (0007FFFFC7D8, 000A00000000, 0000000000B5, 0000000000B5) msys-2.0.dll+0x7D23A
+-0007FFFFC7C8  0002102130B8 (000000000000, 000A00000030, 000000000000, 000000000000) msys-2.0.dll+0x1D30B8
+-0007FFFFC7C8  00010042A1E5 (000000000008, 0007FFFFC848, 000A000026E0, 000000000001) grep.exe+0x2A1E5
+-0007FFFFCB00  000100404B7C (000000000017, 000000000000, 000000000000, 000000000000) grep.exe+0x4B7C
+-0007FFFFCB00  000100429678 (000000000000, 0007FFFFCE00, 0000100455E0, 000700000000) grep.exe+0x29678
++0007FFFFC7E8  0002100BD23A (0007FFFFC7F8, 000A00000000, 0000000000B5, 0000000000B5) msys-2.0.dll+0x7D23A
++0007FFFFC7E8  0002102130B8 (000000000000, 000A00000030, 000000000000, 000000000000) msys-2.0.dll+0x1D30B8
++0007FFFFC7E8  00010042A1E5 (000000000008, 0007FFFFC868, 000A000026E0, 000000000001) grep.exe+0x2A1E5
++0007FFFFCB20  000100404B7C (000000000004, 000000000000, 000000000000, 000000000000) grep.exe+0x4B7C
++0007FFFFCB20  000100429678 (000000000000, 000000000000, 0000007B951C, 000700000000) grep.exe+0x29678
+ 0007FFFFCD30  000210047F01 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x7F01
+ 000000000000  000210045AC3 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x5AC3
+ 0007FFFFFFF0  000210045B74 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x5B74
+@@ -20,8 +20,8 @@
+ 7FFF816B0000 KERNELBASE.dll
+ 0005603F0000 msys-iconv-2.dll
+ 000430B30000 msys-intl-8.dll
+-0004C36D0000 msys-pcre-1.dll
+ 000210040000 msys-2.0.dll
++0004C36D0000 msys-pcre-1.dll
+ 7FFF82E80000 advapi32.dll
+ 7FFF821E0000 msvcrt.dll
+ 7FFF81D40000 sechost.dll
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/memory_ppc.c est/src/cpus/memory_ppc.c
+--- src/cpus/memory_ppc.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/memory_ppc.c	2026-06-28 12:22:55.278078000 -0500
+@@ -35,28 +35,18 @@
+  *  BAT translation. Returns -1 if there was no BAT hit, >= 0 for a hit.
+  *  (0 for access denied, 1 for read-only, and 2 for read-write access allowed.)
+  */
+-int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
+-	int user)
+-{
+-	int i, istart = 0, iend = 8, pp;
+-
+-	if (flags & FLAG_INSTR)
+-		iend = 4;
+-	else
+-		istart = 4;
++/*  #116: MPC7445/7455 HID0[HIGH_BAT_EN] (MSB-0 bit 8) enables IBAT4-7/DBAT4-7.  */
++#define	HID0_HIGH_BAT_EN	0x00800000
+ 
+-	if (cpu->cd.ppc.bits != 32) {
+-		fatal("TODO: ppc_bat() for non-32-bit\n");
+-		exit(1);
+-	}
+-	if (cpu->cd.ppc.cpu_type.flags & PPC_601) {
+-		fatal("TODO: ppc_bat() for PPC 601\n");
+-		exit(1);
+-	}
++/*  #116: scan one 4-pair BAT block (base_spr = SPR_IBAT0U or SPR_IBAT4U).
++    The body is the original ppc_bat() loop, unchanged.  */
++static int ppc_bat_block(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr,
++	int flags, int user, int istart, int iend, int base_spr)
++{
++	int i, pp;
+ 
+-	/*  Scan either the 4 instruction BATs or the 4 data BATs:  */
+ 	for (i=istart; i<iend; i++) {
+-		int regnr = SPR_IBAT0U + i * 2;
++		int regnr = base_spr + i * 2;
+ 		uint32_t upper = cpu->cd.ppc.spr[regnr];
+ 		uint32_t lower = cpu->cd.ppc.spr[regnr + 1];
+ 		uint32_t phys = lower & BAT_RPN, ebs = upper & BAT_EPI;
+@@ -88,6 +78,42 @@
+ 
+ 	return -1;
+ }
++
++int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
++	int user)
++{
++	int istart = 0, iend = 8, r;
++
++	if (flags & FLAG_INSTR)
++		iend = 4;
++	else
++		istart = 4;
++
++	if (cpu->cd.ppc.bits != 32) {
++		fatal("TODO: ppc_bat() for non-32-bit\n");
++		exit(1);
++	}
++	if (cpu->cd.ppc.cpu_type.flags & PPC_601) {
++		fatal("TODO: ppc_bat() for PPC 601\n");
++		exit(1);
++	}
++
++	/*  Base BATs 0-3 (the 4 instruction or the 4 data BATs):  */
++	r = ppc_bat_block(cpu, vaddr, return_paddr, flags, user,
++	    istart, iend, SPR_IBAT0U);
++	if (r != -1)
++		return r;
++
++	/*  #116: extended BATs 4-7 (MPC7445/7455), identical layout at 0x230,
++	    but ONLY when the guest has enabled them via HID0[HIGH_BAT_EN].  This
++	    keeps the aliased DC_ADR/DC_DAT/DC_CST (0x231/0x232/0x238) cache-debug
++	    SPRs from spoofing a BAT on a non-745x guest (Codex+agy consensus).  */
++	if (cpu->cd.ppc.spr[SPR_HID0] & HID0_HIGH_BAT_EN)
++		return ppc_bat_block(cpu, vaddr, return_paddr, flags, user,
++		    istart, iend, SPR_IBAT4U);
++
++	return -1;
++}
+ 
+ 
+ /*
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/cpus/memory_rw.c est/src/cpus/memory_rw.c
+--- src/cpus/memory_rw.c	2021-04-22 13:04:18.000000000 -0500
++++ est/src/cpus/memory_rw.c	2026-06-28 01:45:20.344192500 -0500
+@@ -284,6 +284,15 @@
+ 				/*  Found a device, let's access it:  */
+ 				mem->last_accessed_device = i;
+ 
++				/*  #95: zero the caller's buffer up front on a read
++				    so a device handler that fills only part of it --
++				    or whose access is len-clamped just below -- can
++				    never hand back uninitialised host memory to the
++				    guest.  Root-cause fix for the uninit-read class
++				    (cf. per-device #91/#93/#94).  */
++				if (writeflag == MEM_READ)
++					memset(data, 0, len);
++
+ 				paddr -= mem->devices[i].baseaddr;
+ 				if (paddr + len > mem->devices[i].length)
+ 					len = mem->devices[i].length - paddr;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_8253.c est/src/devices/dev_8253.c
+--- src/devices/dev_8253.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_8253.c	2026-06-25 23:55:33.161687800 -0500
+@@ -176,7 +176,7 @@
+ 		if (writeflag == MEM_WRITE) {
+ 			d->mode_byte = idata;
+ 
+-			d->counter_select = idata >> 6;
++			d->counter_select = (idata >> 6) & 3;
+ 			if (d->counter_select > 2) {
+ 				debug("[ 8253: attempt to select counter 3,"
+ 				    " which doesn't exist. ]\n");
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_adb.c est/src/devices/dev_adb.c
+--- src/devices/dev_adb.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_adb.c	2026-06-27 22:26:14.121485600 -0500
+@@ -302,7 +302,8 @@
+ 		debug("output 0x%02x", c);
+ 		d->reg[vIFR >> VIA_REG_SHIFT] |= IFR_ANY | IFR_SR;
+ 		d->reg[vBufB >> VIA_REG_SHIFT] |= BUFB_nINTR;
+-		d->output_buf[d->cur_output_offset ++] = c;
++		if (d->cur_output_offset < MAX_BUF)	/* OB-6: bound 100-byte output_buf */
++			d->output_buf[d->cur_output_offset ++] = c;
+ 		break;
+ 	}
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_asc.c est/src/devices/dev_asc.c
+--- src/devices/dev_asc.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_asc.c	2026-06-28 02:41:52.884904600 -0500
+@@ -290,7 +290,8 @@
+ 				    d->reg_wo[NCR_TCM] * 256;
+ 
+ 				len--;
+-				ch = d->incoming_data[d->incoming_data_addr];
++				ch = (d->incoming_data == NULL) ? 0 :	/* #105: incoming_data is never allocated -> avoid NULL deref */
++				    d->incoming_data[d->incoming_data_addr];
+ 				debug(" %02x", ch);
+ 
+ 				d->incoming_data_addr ++;
+@@ -329,8 +330,11 @@
+ 					    (ASC_DMA_SIZE-1));
+ 
+ 				if (lenIn2 > lenIn) {
++					/*  Zero only what fits in d->dma (lenIn is
++					    already clamped to the buffer); lenIn2 is
++					    the un-clamped guest transfer count.  */
+ 					memset(d->dma + (d->dma_address_reg &
+-					    (ASC_DMA_SIZE-1)), 0, lenIn2);
++					    (ASC_DMA_SIZE-1)), 0, lenIn);
+ 					lenIn2 = lenIn;
+ 				}
+ 
+@@ -423,6 +427,14 @@
+ 				    d->xferp->data_out_offset;
+ 			}
+ 
++				/*  Bound len2 to the source d->dma buffer (the DMA offset
++				    is guest-controlled) to avoid an OOB read past ASC_DMA_SIZE.  */
++				{
++					size_t dma_off = d->dma_address_reg & (ASC_DMA_SIZE - 1);
++					if (dma_off + (size_t)len2 > ASC_DMA_SIZE)
++						len2 = ASC_DMA_SIZE - dma_off;
++				}
++
+ 			/*
+ 			 *  Are we using an external DMA controller? Then use
+ 			 *  it. Otherwise place the data in the DECstation
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_bebox.c est/src/devices/dev_bebox.c
+--- src/devices/dev_bebox.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_bebox.c	2026-06-25 21:06:08.771508400 -0500
+@@ -229,7 +229,7 @@
+ 		snprintf(n, sizeof(n), "%s.bebox.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = n;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = bebox_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_cpc700.c est/src/devices/dev_cpc700.c
+--- src/devices/dev_cpc700.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_cpc700.c	2026-06-25 21:06:10.745540000 -0500
+@@ -200,7 +200,7 @@
+ 		snprintf(n, sizeof(n), "%s.cpc700.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = n;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = cpc700_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_dec21143.c est/src/devices/dev_dec21143.c
+--- src/devices/dev_dec21143.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_dec21143.c	2026-06-27 22:53:50.936301200 -0500
+@@ -749,6 +749,10 @@
+ 			/*  First segment. Let's allocate a new buffer:  */
+ 			/*  fatal("new frame }\n");  */
+ 
++			if (bufsize < 0)	/* OB-17: cap TX frame */
++				bufsize = 0;
++			if (bufsize > 65536)
++				bufsize = 65536;
+ 			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *) malloc(bufsize));
+ 			d->cur_tx_buf_len = 0;
+ 		} else {
+@@ -760,6 +764,10 @@
+ 				fatal("[ dec21143: WARNING! tx: middle "
+ 				    "segment, but no first segment?! ]\n");
+ 
++			if (bufsize < 0)	/* OB-17: cap TX frame */
++				bufsize = 0;
++			if (bufsize > 65536 - d->cur_tx_buf_len)
++				bufsize = 65536 - d->cur_tx_buf_len;
+ 			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *) realloc(d->cur_tx_buf,
+ 			    d->cur_tx_buf_len + bufsize));
+ 		}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_disk.c est/src/devices/dev_disk.c
+--- src/devices/dev_disk.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_disk.c	2026-06-28 16:29:09.629152900 -0500
+@@ -56,17 +56,48 @@
+ 	int		command;
+ 	int		status;
+ 	unsigned char	*buf;
++	size_t		buf_len;
+ };
+ 
+ 
+ DEVICE_ACCESS(disk_buf)
+ {
+ 	struct disk_data *d = (struct disk_data *) extra;
++	size_t safe = len;
+ 
+-	if (writeflag == MEM_WRITE)
+-		memcpy(d->buf + relative_addr, data, len);
+-	else
+-		memcpy(data, d->buf + relative_addr, len);
++	/*
++	 *  Bound the access to the buffer: a guest must not be able to make
++	 *  this memcpy read or (worse) write past d->buf via a misaligned or
++	 *  end-spanning access to the data-buffer region.
++	 */
++	if (relative_addr >= d->buf_len) {
++		static int warned = 0;	/* #119: loud-once (course-correction) */
++		if (!warned) {
++			fatal("[ dev_disk: access at 0x%x beyond buffer 0x%x; "
++			    "ignored ]\n", (int)relative_addr, (int)d->buf_len);
++			warned = 1;
++		}
++		if (writeflag != MEM_WRITE)
++			memset(data, 0, len);
++		return 1;
++	}
++	if (relative_addr + len > d->buf_len) {
++		static int warned2 = 0;	/* #119: loud-once on the end-span clamp */
++		if (!warned2) {
++			fatal("[ dev_disk: end-spanning access at 0x%x+%i clamped "
++			    "to buffer 0x%x ]\n", (int)relative_addr, (int)len,
++			    (int)d->buf_len);
++			warned2 = 1;
++		}
++		safe = d->buf_len - relative_addr;
++	}
++
++	if (writeflag == MEM_WRITE) {
++		memcpy(d->buf + relative_addr, data, safe);
++	} else {
++		memset(data, 0, len);
++		memcpy(data, d->buf + relative_addr, safe);
++	}
+ 
+ 	return 1;
+ }
+@@ -177,6 +208,7 @@
+ 
+ 	CHECK_ALLOCATION(d->buf = (unsigned char *) malloc(devinit->machine->arch_pagesize));
+ 	memset(d->buf, 0, devinit->machine->arch_pagesize);
++	d->buf_len = devinit->machine->arch_pagesize;
+ 
+ 	snprintf(n1, nlen, "%s [control]", devinit->name);
+ 	snprintf(n2, nlen, "%s [data buffer]", devinit->name);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_dreamcast_g2.c est/src/devices/dev_dreamcast_g2.c
+--- src/devices/dev_dreamcast_g2.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_dreamcast_g2.c	2026-06-27 22:53:51.103655700 -0500
+@@ -45,10 +45,12 @@
+ 
+ 
+ #define	NREGS_EXT_DMA		(0x80/sizeof(uint32_t))
++#define	NREGS_EXT_DMA_HIGH	(0x80/sizeof(uint32_t))	/* OB-21 */
+ #define	NREGS_MISC		(0x80/sizeof(uint32_t))
+ 
+ struct dreamcast_g2_data {
+ 	uint32_t	extdma_reg[NREGS_EXT_DMA];
++	uint32_t	extdma_high_reg[NREGS_EXT_DMA_HIGH];	/* OB-21 */
+ 	uint32_t	misc_reg[NREGS_MISC];
+ };
+ 
+@@ -85,13 +87,16 @@
+ 	struct dreamcast_g2_data *d = (struct dreamcast_g2_data *) extra;
+ 	uint64_t idata = 0, odata = 0;
+ 	int reg = relative_addr, channel = 0;
++	int reg_index = (relative_addr & 0x7f) / sizeof(uint32_t);	/* OB-21 */
++	uint32_t *reg_array = relative_addr < 0x80 ?
++	    d->extdma_reg : d->extdma_high_reg;
+ 
+ 	if (writeflag == MEM_WRITE)
+ 		idata = memory_readmax64(cpu, data, len);
+ 
+ 	/*  Default read:  */
+ 	if (writeflag == MEM_READ)
+-		odata = d->extdma_reg[relative_addr / sizeof(uint32_t)];
++		odata = reg_array[reg_index];	/* OB-21 */
+ 
+ 	/*
+ 	 *  0x5f7800 .. 1f = DMA channel 0
+@@ -225,7 +230,7 @@
+ 
+ 	/*  Default write:  */
+ 	if (writeflag == MEM_WRITE)
+-		d->extdma_reg[relative_addr / sizeof(uint32_t)] = idata;
++		reg_array[reg_index] = idata;	/* OB-21 */
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_dreamcast_gdrom.c est/src/devices/dev_dreamcast_gdrom.c
+--- src/devices/dev_dreamcast_gdrom.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_dreamcast_gdrom.c	2026-06-27 22:53:51.024436700 -0500
+@@ -49,6 +49,7 @@
+ // #define debug fatal
+ 
+ #define	NREGS_GDROM_DMA		(0x100/sizeof(uint32_t))
++#define	GDROM_MAX_TRANSFER_BYTES	(64 * 1024)	/* OB-20 */
+ 
+ struct dreamcast_gdrom_data {
+ 	// 0x005f7000: GDROM control registers
+@@ -180,13 +181,20 @@
+ 		// which means len = 0x3800. It also sets up DMA to
+ 		// transfer 0x3800 bytes, so I'm assuming that the
+ 		// sector count is to be trusted more than the length.
++		if (sector_count <= 0 ||	/* OB-20 */
++		    sector_count > GDROM_MAX_TRANSFER_BYTES / 2048) {
++			fatal("GDROM: rejecting sector_count=%i\n",
++			    (int)sector_count);
++			break;
++		}
++
+ 		if (d->cnt == 0)
+-			d->cnt = 2048 * sector_count;
++			d->cnt = 2048 * (int)sector_count;
+ 
+ 		if (sector_count * 2048 != d->cnt) {
+ 			fatal("Huh? GDROM data_len=0x%x, but sector_count"
+ 			    "=0x%x\n", (int)d->cnt, (int)sector_count);
+-			exit(1);
++			break;	/* OB-20: was exit(1) */
+ 		}
+ 
+ 		alloc_data(d);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_dreamcast_maple.c est/src/devices/dev_dreamcast_maple.c
+--- src/devices/dev_dreamcast_maple.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_dreamcast_maple.c	2026-06-27 11:36:58.872374000 -0500
+@@ -469,7 +469,8 @@
+ 		switch (cmd) {
+ 
+ 		case MAPLE_COMMAND_DEVINFO:
+-			if (d->device[port] == NULL || unit != 0) {
++			if (port < 0 || port >= N_MAPLE_PORTS ||
++			    d->device[port] == NULL || unit != 0) {
+ 				/*  No device present: Timeout.  */
+ 				/*  debug("[ dreamcast_maple: response="
+ 				    "timeout ]\n");  */
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_fb.c est/src/devices/dev_fb.c
+--- src/devices/dev_fb.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_fb.c	2026-06-28 10:39:07.795438700 -0500
+@@ -254,6 +254,16 @@
+ 	if (x2 < 0)		x2 = 0;
+ 	if (x2 >= d->xsize)	x2 = d->xsize-1;
+ 
++	/*
++	 *  Nothing to do if the clipped horizontal span is empty. Without
++	 *  this guard, (x2 - x1 + 1) can be <= 0 and, since 'linelen' is a
++	 *  size_t, it would wrap to a huge value -- turning the memset()/copy
++	 *  below into an out-of-bounds write past the framebuffer. (These
++	 *  coordinates can come from the emulated guest.)
++	 */
++	if (x2 < x1)
++		return;
++
+ 	dest_ofs = d->bytes_per_line * y1 + (d->bit_depth/8) * x1;
+ 	linelen = (x2-x1 + 1) * (d->bit_depth/8);
+ 	/*  NOTE: linelen is nr of bytes, not pixels  */
+@@ -265,14 +275,20 @@
+ 				    d->framebuffer + dest_ofs;
+ 
+ 				if (d->bit_depth == 24) {
+-					for (x=0; x<(ssize_t)linelen && x <
+-					    (int) sizeof(buf); x += 3) {
++					/*  Fill the whole line: 'buf' is a
++					    pointer, so the old "x < sizeof(buf)"
++					    bound only painted 8 bytes/line.  */
++					for (x=0; x+2 < (ssize_t)linelen; x += 3) {
+ 						buf[x] = fill_r;
+ 						buf[x+1] = fill_g;
+ 						buf[x+2] = fill_b;
+ 					}
+ 				} else if (d->bit_depth == 8) {
+-					memset(buf, fill_r, linelen);
++					/*  For 8-bit, linelen == (x2-x1+1).
++					    Use the bounded expression so the
++					    size is provably non-negative.  */
++					memset(buf, fill_r,
++					    (size_t)(x2 - x1 + 1));
+ 				} else {
+ 					fatal("Unimplemented bit-depth (%i)"
+ 					    " for fb fill\n", d->bit_depth);
+@@ -283,6 +299,15 @@
+ 			dest_ofs += d->bytes_per_line;
+ 		}
+ 	} else {
++		/*  #106: clip the (guest-derived) source column too -- dst x1/x2
++		    were clipped above but from_x was not, so the memmove source
++		    could run past the framebuffer even for a valid from_y.  */
++		if (from_x < 0)
++			from_x = 0;
++		if (from_x + (x2 - x1 + 1) > d->xsize)
++			from_x = d->xsize - (x2 - x1 + 1);
++		if (from_x < 0)
++			from_x = 0;
+ 		from_ofs = d->bytes_per_line * from_y +
+ 		    (d->bit_depth/8) * from_x;
+ 		for (y=y1; y<=y2; y++) {
+@@ -627,7 +652,8 @@
+ 	}
+ #endif
+ 
+-	if (relative_addr >= d->framebuffer_size)
++	if (relative_addr >= d->framebuffer_size ||
++	    len > (uint64_t)d->framebuffer_size - relative_addr)	/* OB-1: end-span */
+ 		return 0;
+ 
+ 	/*  See if a write actually modifies the framebuffer contents:  */
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_footbridge.c est/src/devices/dev_footbridge.c
+--- src/devices/dev_footbridge.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_footbridge.c	2026-06-25 21:06:12.386034600 -0500
+@@ -544,7 +544,7 @@
+ 		char tmpstr[600];
+ 
+ 		memset(&interrupt_template, 0, sizeof(interrupt_template));
+-		interrupt_template.line = 1 << i;
++		interrupt_template.line = (uint32_t)1 << i;
+ 		snprintf(tmpstr, sizeof(tmpstr), "%s.%i", irq_path, i);
+ 		interrupt_template.name = tmpstr;
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_gc.c est/src/devices/dev_gc.c
+--- src/devices/dev_gc.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_gc.c	2026-06-25 21:03:03.055965400 -0500
+@@ -226,7 +226,7 @@
+ 		snprintf(n, sizeof(n), "%s.gc.lo.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = n;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = gc_lo_interrupt_assert;
+@@ -236,7 +236,7 @@
+ 		snprintf(n, sizeof(n), "%s.gc.hi.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = n;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = gc_hi_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_i80321.c est/src/devices/dev_i80321.c
+--- src/devices/dev_i80321.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_i80321.c	2026-06-25 21:06:14.055827900 -0500
+@@ -425,7 +425,7 @@
+ 		snprintf(tmpstr2, sizeof(tmpstr2), "%s.i80321.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = tmpstr2;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = i80321_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_igsfb.c est/src/devices/dev_igsfb.c
+--- src/devices/dev_igsfb.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_igsfb.c	2026-06-27 22:26:14.150072400 -0500
+@@ -167,7 +167,7 @@
+ 		switch (relative_addr - 0x3c0) {
+ 		case VGA_DAC_ADDR_WRITE:		/*  0x08  */
+ 			if (writeflag == MEM_WRITE) {
+-				d->palette_write_index = idata;
++				d->palette_write_index = idata & 0xff;	/* OB-7: 256-entry palette */
+ 				d->palette_write_subindex = 0;
+ 			} else {
+ 				fatal("[ igsdb: WARNING: Read from "
+@@ -195,7 +195,7 @@
+ 				}
+ 				d->palette_write_subindex ++;
+ 				if (d->palette_write_subindex == 3) {
+-					d->palette_write_index ++;
++					d->palette_write_index = (d->palette_write_index + 1) & 0xff;	/* OB-7 */
+ 					d->palette_write_subindex = 0;
+ 				}
+ 			}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_irqc.c est/src/devices/dev_irqc.c
+--- src/devices/dev_irqc.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_irqc.c	2026-06-25 21:06:15.528886400 -0500
+@@ -172,7 +172,7 @@
+ 		    devinit->interrupt_path, i);
+ 
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;		/*  Note: line contains the
++		templ.line = (uint32_t)1 << i;	/*  Note: line contains the
+ 						    _mask_, not line number.  */
+ 		templ.name = n;
+ 		templ.extra = d;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_jazz.c est/src/devices/dev_jazz.c
+--- src/devices/dev_jazz.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_jazz.c	2026-06-27 20:48:54.770787500 -0500
+@@ -61,6 +61,7 @@
+ #define	DEV_JAZZ_LENGTH			0x280
+ #define	DEV_JAZZ_TICKSHIFT		14
+ #define	PICA_TIMER_IRQ			15
++#define	PICA_TIMER_IRQ_MASK		(1 << PICA_TIMER_IRQ)
+ 
+ struct jazz_data {
+ 	struct interrupt mips_irq_3;
+@@ -115,9 +116,9 @@
+ 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
+ 	d->int_asserted |= (1 << interrupt->line);
+ 
+-	if (d->int_asserted & 0x7fff)
++	if (d->int_asserted & d->int_enable_mask & 0x7fff)
+ 		INTERRUPT_ASSERT(d->mips_irq_3);
+-	if (d->int_asserted & 0x8000)
++	if (d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK)
+ 		INTERRUPT_ASSERT(d->mips_irq_6);
+ }
+ void jazz_interrupt_deassert(struct interrupt *interrupt)
+@@ -125,9 +126,9 @@
+ 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
+ 	d->int_asserted &= ~(1 << interrupt->line);
+ 
+-	if (!(d->int_asserted & 0x7fff))
++	if (!(d->int_asserted & d->int_enable_mask & 0x7fff))
+ 		INTERRUPT_DEASSERT(d->mips_irq_3);
+-	if (!(d->int_asserted & 0x8000))
++	if (!(d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK))
+ 		INTERRUPT_DEASSERT(d->mips_irq_6);
+ }
+ void jazz_isa_interrupt_assert(struct interrupt *interrupt)
+@@ -236,7 +237,7 @@
+ 
+ 	/*  Used by NetBSD/arc and OpenBSD/arc:  */
+ 	if (d->interval_start > 0 && d->interval > 0
+-	    && (d->int_enable_mask & 2) /* Hm? */ ) {
++	    && (d->int_enable_mask & PICA_TIMER_IRQ_MASK) ) {
+ 		d->interval -= 2;
+ 		if (d->interval <= 0) {
+ 			/*  debug("[ jazz: interval timer interrupt ]\n");
+@@ -258,7 +259,7 @@
+ 
+ 		/*  New timer system:  */
+ 		if (d->pending_timer_interrupts > 0)
+-			INTERRUPT_ASSERT(d->mips_irq_6);
++			INTERRUPT_ASSERT(d->jazz_timer_irq);
+ 	}
+ }
+ 
+@@ -375,7 +376,7 @@
+ 		if (writeflag == MEM_WRITE) {
+ 			int old_assert_3 = (0x7fff &
+ 			    d->int_asserted & d->int_enable_mask);
+-			int old_assert_6 = (0x8000 &
++			int old_assert_6 = (PICA_TIMER_IRQ_MASK &
+ 			    d->int_asserted & d->int_enable_mask);
+ 			int new_assert_3, new_assert_6;
+ 
+@@ -384,7 +385,7 @@
+ 			new_assert_3 =
+ 			    d->int_asserted & d->int_enable_mask & 0x7fff;
+ 			new_assert_6 =
+-			    d->int_asserted & d->int_enable_mask & 0x8000;
++			    d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK;
+ 
+ 			if (old_assert_3 && !new_assert_3)
+ 				INTERRUPT_DEASSERT(d->mips_irq_3);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_kn01.c est/src/devices/dev_kn01.c
+--- src/devices/dev_kn01.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_kn01.c	2026-06-28 02:17:09.715257400 -0500
+@@ -161,7 +161,7 @@
+ 		break;
+ 	case DEV_VDAC_OVERWA:
+ 		if (writeflag == MEM_WRITE) {
+-			d->cur_write_addr_overlay = data[0];
++			d->cur_write_addr_overlay = data[0] & 15;	/* OB-8: 16-entry overlay palette */
+ 			d->sub_color_overlay = 0;
+ 		} else {
+ 			debug("[ vdac: read from OVERWA ]\n");
+@@ -203,7 +203,7 @@
+ 		break;
+ 	case DEV_VDAC_OVERRA:
+ 		if (writeflag == MEM_WRITE) {
+-			d->cur_read_addr_overlay = data[0];
++			d->cur_read_addr_overlay = data[0] & 15;	/* OB-8b: 16-entry overlay palette (read addr; cf #75) */
+ 			d->sub_color_overlay = 0;
+ 		} else {
+ 			debug("[ vdac: read from OVERRA ]\n");
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_kn02.c est/src/devices/dev_kn02.c
+--- src/devices/dev_kn02.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_kn02.c	2026-06-25 21:06:17.430405900 -0500
+@@ -163,7 +163,7 @@
+ 		snprintf(tmpstr, sizeof(tmpstr), "%s.kn02.%i",
+ 		    devinit->interrupt_path, i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = tmpstr;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = kn02_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_kn02ba.c est/src/devices/dev_kn02ba.c
+--- src/devices/dev_kn02ba.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_kn02ba.c	2026-06-25 21:06:19.457309500 -0500
+@@ -183,7 +183,7 @@
+ 		    devinit->interrupt_path, 1 << i);
+ 		// printf("registering '%s'\n", tmpstr);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = tmpstr;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = kn02ba_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_kn230.c est/src/devices/dev_kn230.c
+--- src/devices/dev_kn230.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_kn230.c	2026-06-25 21:06:20.671181600 -0500
+@@ -155,7 +155,7 @@
+ 		snprintf(tmpstr2, sizeof(tmpstr2), "%s.kn230.0x%x",
+ 		    devinit->interrupt_path, 1 << i);
+ 		memset(&templ, 0, sizeof(templ));
+-		templ.line = 1 << i;
++		templ.line = (uint32_t)1 << i;
+ 		templ.name = tmpstr2;
+ 		templ.extra = d;
+                 templ.interrupt_assert = kn230_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_luna88k.c est/src/devices/dev_luna88k.c
+--- src/devices/dev_luna88k.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_luna88k.c	2026-06-25 21:18:36.851582400 -0500
+@@ -1014,8 +1014,8 @@
+ 	const char *enaddr = "ENADDR=00000A102030";
+ 	size_t i = 0;
+ 	while (enaddr[i]) {
+-		d->fuse_rom[i*2+0] = (enaddr[i] & 0xf0) << 24;
+-		d->fuse_rom[i*2+1] = (enaddr[i] & 0x0f) << 28;
++		d->fuse_rom[i*2+0] = (uint32_t)(enaddr[i] & 0xf0) << 24;
++		d->fuse_rom[i*2+1] = (uint32_t)(enaddr[i] & 0x0f) << 28;
+ 		++i;
+ 	}
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_mb8696x.c est/src/devices/dev_mb8696x.c
+--- src/devices/dev_mb8696x.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_mb8696x.c	2026-06-27 11:37:01.204529400 -0500
+@@ -180,6 +180,11 @@
+ 					if (d->eeprom_bit_count == 8) {
+ 						int addr = (d->eeprom_command
+ 						    & 0x7f) << 1;
++						/*  addr is a guest-derived index;
++						    bound it to the 32-byte EEPROM
++						    so eeprom[addr]/[addr+1] below
++						    can't read past the array.  */
++						addr &= (FE_EEPROM_SIZE - 2);
+ 						/*  printf("COMMAND=%08x\n",
+ 						    d->eeprom_command);  */
+ 						if (!(d->eeprom_command&0x80)) {
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_mp.c est/src/devices/dev_mp.c
+--- src/devices/dev_mp.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_mp.c	2026-06-25 23:50:15.067934600 -0500
+@@ -91,6 +91,10 @@
+ 
+ 	case DEV_MP_STARTUPCPU:
+ 		which_cpu = idata;
++		/*  The CPU index comes from the guest; reject out-of-range
++		    values instead of indexing d->cpus[] out of bounds.  */
++		if (which_cpu < 0 || which_cpu >= cpu->machine->ncpus)
++			break;
+ 		d->cpus[which_cpu]->pc = d->startup_addr;
+ 		switch (cpu->cpu_family->arch) {
+ 		case ARCH_MIPS:
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_osiop.c est/src/devices/dev_osiop.c
+--- src/devices/dev_osiop.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_osiop.c	2026-06-28 16:49:29.110408200 -0500
+@@ -86,6 +86,7 @@
+ 	/*  Cached emulated physical RAM page lookup:  */
+ 	uint32_t		last_phys_page;
+ 	uint8_t			*last_host_page;
++	int			hostpage_fault_warned;	/* #118: warn once */
+ 
+ 	/*  ALU:  */
+ 	int			carry;
+@@ -193,6 +194,25 @@
+ }
+ 
+ 
++/*
++ *  #118: A guest can point the SCSI SCRIPTS engine at unmapped physical RAM;
++ *  memory_paddr_to_hostaddr() then returns NULL. Warn once (the author's
++ *  loud-but-continue style) and stop THIS controller's script engine, instead of
++ *  dereferencing NULL (a host crash) or fabricating a transfer. The emulator
++ *  keeps running; only this script halts. (Codex+agy course-correction consensus.)
++ */
++static void osiop_hostpage_fault(struct osiop_data *d)
++{
++	if (!d->hostpage_fault_warned) {
++		fatal("[ osiop: SCSI SCRIPTS referenced unmapped physical page "
++		    "0x%08x; stopping script (would have been a host NULL deref) ]\n",
++		    (int) d->last_phys_page);
++		d->hostpage_fault_warned = 1;
++	}
++	d->scripts_running = 0;
++}
++
++
+ /*  Helper: returns a word in host order, from emulated physical RAM.  */
+ static uint32_t read_word(struct osiop_data *d, struct cpu *cpu, uint32_t addr)
+ {
+@@ -205,6 +225,11 @@
+ 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 0);
+ 	}
+ 
++	if (d->last_host_page == NULL) {	/* #118 */
++		osiop_hostpage_fault(d);
++		return 0;
++	}
++
+ 	word = *((uint32_t *) (d->last_host_page + (addr & 0xffc)));
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+@@ -226,6 +251,11 @@
+ 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 0);
+ 	}
+ 
++	if (d->last_host_page == NULL) {	/* #118 */
++		osiop_hostpage_fault(d);
++		return 0;
++	}
++
+ 	return d->last_host_page[addr & 0xfff];
+ }
+ static void write_byte(struct osiop_data *d, struct cpu *cpu, uint32_t addr, uint8_t byte)
+@@ -237,6 +267,11 @@
+ 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 1);
+ 	}
+ 
++	if (d->last_host_page == NULL) {	/* #118 */
++		osiop_hostpage_fault(d);
++		return;
++	}
++
+ 	d->last_host_page[addr & 0xfff] = byte;
+ }
+ 
+@@ -310,6 +345,11 @@
+ 	 *  into the TEMP register.
+ 	 */
+ 
++	if (!d->scripts_running) {	/* #118: host-page fault during SCRIPTS fetch above */
++		*dspp = dspOrig;	/* leave DSP at the faulting instr; don't fake progress */
++		return 0;
++	}
++
+ 	dcmd = d->reg[OSIOP_DCMD] = instr1 >> 24;
+ 	dbc = *dbcp = instr1 & 0x00ffffff;
+ 	*dspsp = instr2;
+@@ -383,6 +423,29 @@
+ 			xfer_byte_count = read_word(d, cpu, addr) & 0x00ffffff;
+ 			xfer_addr = read_word(d, cpu, addr+4);
+ 
++			if (!d->scripts_running)	/* #118: host-page fault reading the MOVE descriptor */
++				return 1;
++
++			/*  A guest can drive the controller into a data phase
++			    without a selection having set up a transfer; guard
++			    the dereferences of d->xferp below.  */
++			if (d->xferp == NULL) {
++				/*  #114 (refined, Codex+agy course-correction): a guest
++				    drove a data phase with no active transfer. Warn
++				    loudly-once and STOP this controller's script -- do NOT
++				    fall through to the "Transfer complete" register updates
++				    below (which would fake a successful move), and do NOT
++				    exit the emulator.  */
++				static int warned = 0;
++				if (!warned) {
++					fatal("[ osiop: SCSI data phase with no active "
++					    "transfer; stopping script (no fake "
++					    "completion) ]\n");
++					warned = 1;
++				}
++				d->scripts_running = 0;
++				return 1;
++			} else
+ 			switch (phase) {
+ 
+ 			case MSG_OUT_PHASE:
+@@ -399,6 +462,9 @@
+ 					xfer_byte_count --;
+ 				}
+ 				
++				if (!d->scripts_running)	/* #118: host-page fault during msg-out phase */
++					return 1;
++
+ 				osiop_set_scsi_phase(d, COMMAND_PHASE);
+ 				break;
+ 
+@@ -416,11 +482,17 @@
+ 					xfer_byte_count --;
+ 				}
+ 
++				if (!d->scripts_running)	/* #118: fault while reading the command */
++					return 1;
++
+ 				res = diskimage_scsicommand(cpu,
+ 				    d->selected_id, DISKIMAGE_SCSI, d->xferp);
+ 				if (res == 0) {
+-					fatal("osiop TODO: error\n");
+-					exit(1);
++					static int warned = 0;	/* #118/#119: was exit(1) */
++					if (!warned) { fatal("[ osiop: SCSI command "
++					    "failed; stopping script ]\n"); warned = 1; }
++					d->scripts_running = 0;
++					return 1;
+ 				}
+ 
+ 				d->data_offset = 0;
+@@ -438,7 +510,9 @@
+ 					scsi_transfer_allocbuf(&d->xferp->data_out_len,
+ 					    &d->xferp->data_out, d->xferp->data_out_len, 0);
+ 
+-				while (xfer_byte_count > 0) {
++				while (xfer_byte_count > 0 &&
++				    d->xferp->data_out_offset <
++				    d->xferp->data_out_len) {
+ 					uint8_t byte = read_byte(d, cpu, xfer_addr);
+ 					/*  debug("  reading data_out byte @ 0x%08x = 0x%02x\n",
+ 					    xfer_addr, byte);  */
+@@ -447,12 +521,18 @@
+ 					xfer_byte_count --;
+ 				}
+ 
++				if (!d->scripts_running)	/* #118: fault while reading data-out */
++					return 1;
++
+ 				/*  Rerun the command to actually write out the data:  */
+ 				res = diskimage_scsicommand(cpu,
+ 				    d->selected_id, DISKIMAGE_SCSI, d->xferp);
+ 				if (res == 0) {
+-					fatal("osiop TODO: error on rerun\n");
+-					exit(1);
++					static int warned = 0;	/* #118/#119: was exit(1) */
++					if (!warned) { fatal("[ osiop: SCSI data-out "
++					    "command failed; stopping script ]\n"); warned = 1; }
++					d->scripts_running = 0;
++					return 1;
+ 				} else if (res == 2) {
+ 					/*  Stay at data out phase.  */
+ 				} else {
+@@ -472,6 +552,9 @@
+ 					xfer_byte_count --;
+ 				}
+ 
++				if (!d->scripts_running)	/* #118: host-page fault during data-in phase */
++					return 1;
++
+ 				d->data_offset += i;
+ 				if (d->data_offset >= d->xferp->data_in_len)
+ 					osiop_set_scsi_phase(d, STATUS_PHASE);
+@@ -488,6 +571,9 @@
+ 					xfer_byte_count --;
+ 				}
+ 
++				if (!d->scripts_running)	/* #118: host-page fault during status phase */
++					return 1;
++
+ 				osiop_set_scsi_phase(d, MSG_IN_PHASE);
+ 				break;
+ 
+@@ -502,6 +588,9 @@
+ 					xfer_byte_count --;
+ 				}
+ 
++				if (!d->scripts_running)	/* #118: host-page fault during msg-in phase */
++					return 1;
++
+ 				/*  Done.  */
+ 				osiop_free_xfer(d);
+ 				break;
+@@ -511,6 +600,9 @@
+ 				exit(1);
+ 			}
+ 
++			if (!d->scripts_running)	/* #118: host-page fault during the data phase above */
++				return 1;	/* stop; do NOT fake transfer-complete */
++
+ 			/*  Transfer complete.  */
+ 			*dnadp = xfer_addr;
+ 			*dbcp = xfer_byte_count;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_pcc2.c est/src/devices/dev_pcc2.c
+--- src/devices/dev_pcc2.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_pcc2.c	2026-06-28 16:28:45.873907500 -0500
+@@ -330,8 +330,20 @@
+ 	if (writeflag == MEM_WRITE)
+ 		idata = memory_readmax64(cpu, data, len);
+ 
+-	if (writeflag == MEM_READ)
+-		memcpy(data, d->pcctwo_reg + relative_addr, len);
++	if (writeflag == MEM_READ) {
++		if (relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
++			memcpy(data, d->pcctwo_reg + relative_addr, len);
++		else {
++			static int warned = 0;	/* #119: loud-once (course-correction) */
++			if (!warned) {
++				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
++				    "zero-filled ]\n", (int)relative_addr, (int)len,
++				    (int)PCC2_SIZE);
++				warned = 1;
++			}
++			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
++		}
++	}
+ 
+ 	switch (relative_addr) {
+ 
+@@ -373,7 +385,8 @@
+ 	case PCCTWO_T2CMP:
+ 	case PCCTWO_T1COUNT:
+ 	case PCCTWO_T2COUNT:
+-		if (writeflag == MEM_WRITE)
++		if (writeflag == MEM_WRITE &&
++		    relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+ 			memcpy(d->pcctwo_reg + relative_addr, data, len);
+ 		break;
+ 
+@@ -528,26 +541,30 @@
+ 
+ 	case PCCTWO_IPL:
+ 		if (len != 1) {
+-			fatal("TODO: pcc2: non-byte reads and writes of "
+-			    "PCCTWO_IPL\n");
+-			exit(1);
++			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
++			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_IPL; "
++			    "ignored ]\n"); w = 1; }
++			break;
+ 		}
+ 		if (writeflag == MEM_WRITE) {
+-			fatal("[ pcc2: HUH? Write attempt to PCCTWO_IPL. ]\n");
+-			exit(1);
++			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
++			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
++			    "ignored ]\n"); w = 1; }
+ 		} else {
+ 			if (d->pcctwo_reg[PCCTWO_IPL] == 0) {
+-				fatal("pcc2: IPL == 0 on read!\n");
+-				exit(1);
++				static int w = 0;	/* #119: was exit(1) */
++				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
++				    w = 1; }
+ 			}
+ 		}
+ 		break;
+ 
+ 	case PCCTWO_MASK:
+ 		if (len != 1) {
+-			fatal("TODO: pcc2: non-byte reads and writes of "
+-			    "PCCTWO_MASK\n");
+-			exit(1);
++			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
++			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_MASK; "
++			    "ignored ]\n"); w = 1; }
++			break;
+ 		}
+ 		if (writeflag == MEM_WRITE) {
+ 			d->pcctwo_reg[relative_addr] = idata;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_pmagja.c est/src/devices/dev_pmagja.c
+--- src/devices/dev_pmagja.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_pmagja.c	2026-06-28 15:47:22.426567200 -0500
+@@ -104,6 +104,12 @@
+ 				int ofs = relative_addr - 0x200000 + i;
+ 				int x, y;
+ 				unsigned char newdata[3];
++					if (ofs < 0 || ofs >= XSIZE * YSIZE) {	/* OB-12: window > pixeldata */
++						{ static int wd = 0; if (!wd) { fatal("[ pmagja: pixel ofs %i outside %ix%i; ignored ]\n", ofs, XSIZE, YSIZE); wd = 1; } }	/* #119 loud-once */
++						if (!writeflag)		/* OB-12b: don't leak uninit data[] */
++							data[i] = 0;
++						continue;
++					}
+ 				y = ofs / XSIZE;
+ 				x = ofs - y*XSIZE;
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_ps2_gif.c est/src/devices/dev_ps2_gif.c
+--- src/devices/dev_ps2_gif.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_ps2_gif.c	2026-06-28 10:43:59.610963200 -0500
+@@ -267,6 +267,8 @@
+ 				    * d->bytes_per_pixel;
+ 				int addr = (24 + y*xsize) * 4;
+ 				for (x=0; x<xsize; x++) {
++					if (addr < 0 || (size_t)addr + 3 > len)	/* #108: don't read past data[] */
++						break;
+ 					/*  There are three bytes (r,g,b) at
+ 					    data[addr + 0] .. [addr + 2].
+ 					    TODO: This should be translated to a
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_ps2_gs.c est/src/devices/dev_ps2_gs.c
+--- src/devices/dev_ps2_gs.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_ps2_gs.c	2026-06-28 16:21:31.616864800 -0500
+@@ -92,6 +92,17 @@
+ 		idata = memory_readmax64(cpu, data, len);
+ 
+ 	regnr = relative_addr / 16;
++	if (regnr < 0 || regnr >= N_GS_REGS) {	/* #99: guest offset can exceed reg[] */
++		static int warned = 0;	/* #119: loud-once (course-correction; was debug) */
++		if (!warned) {
++			fatal("[ gs: register access out of range (addr 0x%x); "
++			    "ignored ]\n", (int)relative_addr);
++			warned = 1;
++		}
++		if (writeflag == MEM_READ)
++			memory_writemax64(cpu, data, len, 0);
++		return 1;
++	}
+ 	if (relative_addr & 0xf) {
+ 		debug("[ gs unaligned access, addr 0x%x ]\n",
+ 		    (int)relative_addr);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_pvr.c est/src/devices/dev_pvr.c
+--- src/devices/dev_pvr.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_pvr.c	2026-06-28 15:50:14.113698200 -0500
+@@ -578,8 +578,10 @@
+ 			return;
+ 	}
+ 
+-	/*  Scrap Z buffer if we have one.  */
+-	if (d->vram_z == NULL) {
++	/*  Scrap the Z buffer if we have one — it is sized to the OLD geometry,
++	    so it must be freed and reallocated at the new xsize*ysize; otherwise
++	    pvr_render() reuses an undersized buffer and overflows it.  */
++	if (d->vram_z != NULL) {
+ 		free(d->vram_z);
+ 		d->vram_z = NULL;
+ 	}
+@@ -770,6 +772,11 @@
+ 
+ 				int addr = texture + textureofs;
+ 				addr = ((addr & 4) << 20) | (addr & 3) | ((addr & 0x7ffff8) >> 1);
++				/*  Bound so vram[addr] / vram[addr+1] below stay
++				    inside the VRAM_SIZE buffer (texture coords are
++				    guest data and can reach addr==VRAM_SIZE-1).  */
++				if (addr > (int)VRAM_SIZE - 2)
++					addr = (int)VRAM_SIZE - 2;
+ 
+ 				int a = 255, r = 64, g = 64, b = 64;
+ 				switch (texture_pixelformat)
+@@ -1091,7 +1098,10 @@
+ 	uint32_t textureAddr = 0;
+ 
+ 	int vertex_index = 0;
+-	int wf_x[4], wf_y[4]; double wf_z[4], wf_u[4], wf_v[4];
++	/*  Zero-initialized: a vertex strip may slide values into slots 0/1
++	    (see below) before every component has been written.  */
++	int wf_x[4] = { 0 }, wf_y[4] = { 0 };
++	double wf_z[4] = { 0 }, wf_u[4] = { 0 }, wf_v[4] = { 0 };
+ 	int wf_r[4], wf_g[4], wf_b[4];
+ 
+ 	double baseRed = 0.0, baseGreen = 0.0, baseBlue = 0.0;
+@@ -1106,11 +1116,30 @@
+ 	 *  TODO: What background color to use? See KOS' pvr_misc.c for
+ 	 *  how KOS sets the background.
+ 	 */
+-	memset(d->vram + fb_base, 0x00, d->xsize * d->ysize * d->bytes_per_pixel);
++	{
++		uint64_t frame_bytes = (uint64_t) d->xsize * d->ysize *
++		    d->bytes_per_pixel;
++		/*  fb_base and the frame size are guest-register-controlled;
++		    bound the whole frame against VRAM so a high or sign-flipped
++		    value cannot memset (or render, below) outside the host VRAM
++		    allocation.  */
++		if (fb_base < 0 || frame_bytes > VRAM_SIZE ||
++		    (uint64_t) fb_base > VRAM_SIZE - frame_bytes) {
++			static int warned = 0;	/* #119: rate-limit (course-correction) */
++			if (!warned) {
++				fatal("[ pvr_render: fb_base 0x%x + frame outside "
++				    "VRAM; skipping render ]\n", fb_base);
++				warned = 1;
++			}
++			return;
++		}
++		memset(d->vram + fb_base, 0x00, frame_bytes);
++	}
+ 
+ 	/*  Clear Z as well:  */
+ 	if (d->vram_z == NULL) {
+-		d->vram_z = (double*) malloc(sizeof(double) * d->xsize * d->ysize);
++		CHECK_ALLOCATION(d->vram_z = (double*) malloc(
++		    sizeof(double) * d->xsize * d->ysize));
+ 	}
+ 
+ 	uint32_t bgplaneZ = REG(PVRREG_BGPLANE_Z);
+@@ -1470,13 +1499,15 @@
+ 
+ 	if (d->ta_commands == NULL) {
+ 		d->allocated_ta_commands = 2048;
+-		d->ta_commands = (uint32_t *) malloc(64 * d->allocated_ta_commands);
++		CHECK_ALLOCATION(d->ta_commands = (uint32_t *)
++		    malloc(64 * d->allocated_ta_commands));
+ 		d->n_ta_commands = 0;
+ 	}
+ 
+ 	if (d->n_ta_commands + 1 >= d->allocated_ta_commands) {
+ 		d->allocated_ta_commands *= 2;
+-		d->ta_commands = (uint32_t *) realloc(d->ta_commands, 64 * d->allocated_ta_commands);
++		CHECK_ALLOCATION(d->ta_commands = (uint32_t *)
++		    realloc(d->ta_commands, 64 * d->allocated_ta_commands));
+ 	}
+ 
+ 	// Hack: I don't understand yet what separates a 32-byte transfer
+@@ -2407,8 +2438,15 @@
+ 		{
+ 			int y;
+ 			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
+-				/*  TODO: Reverse colors, like in the 32-bit case?  */
+-				memcpy(fb+fb_ofs, vram+(vram_ofs%VRAM_SIZE), 3*pixels_to_copy);
++				/*  #107: wrap the start AND bound the span to
++				    VRAM_SIZE (other pixelmodes wrap each access;
++				    this bulk memcpy did not).  */
++				size_t vo = (size_t)vram_ofs % VRAM_SIZE;
++				size_t n = pixels_to_copy > 0 ?
++				    (size_t)3 * pixels_to_copy : 0;
++				if (n > VRAM_SIZE - vo)
++					n = VRAM_SIZE - vo;
++				memcpy(fb+fb_ofs, vram + vo, n);
+ 				vram_ofs += bytes_per_line;
+ 				fb_ofs += d->fb->bytes_per_line;
+ 			}
+@@ -2483,15 +2521,31 @@
+ 	 *  Convert writes to alternative VRAM, into normal writes:
+ 	 */
+ 
++	uint64_t upd_lo[2] = { VRAM_SIZE, VRAM_SIZE }, upd_hi[2] = { 0, 0 };
+ 	for (i=0; i<len; i++) {
+ 		int addr = relative_addr + i;
++		int bank;
+ 		addr = ((addr & 4) << 20) | (addr & 3) | ((addr & 0x7ffff8) >> 1);
+ 		// printf("  %08x => alt addr %08x: %02x\n", (int)(relative_addr + i), (int)addr, data[i]);
+ 		d->vram[addr % VRAM_SIZE] = data[i];
++		/*  The twiddle splits the writes across two 4 MB VRAM banks
++		    (bit 22); track each bank's touched range separately.  */
++		bank = (addr & (1 << 22)) ? 1 : 0;
++		if ((uint64_t) addr < upd_lo[bank]) upd_lo[bank] = addr;
++		if ((uint64_t) addr > upd_hi[bank]) upd_hi[bank] = addr;
++	}
+ 
+-		// TODO: This is probably ultra-slow. (Should not be called
+-		// for every _byte_.)
+-		pvr_extend_update_region(d, addr, addr);
++	/*  Extend the dirty region once per bank instead of once per byte — far
++	    fewer calls than the original, and without dirtying the whole 4 MB
++	    gap between the banks when a write touches both.  fb_update_y1/y2 is a
++	    line range, so within a bank this matches the per-byte result except
++	    for writes straddling the visible-FB edge (a few extra lines, redrawn
++	    identically).  */
++	{
++		int b;
++		for (b = 0; b < 2; b++)
++			if (upd_lo[b] <= upd_hi[b])	/*  bank b was written  */
++				pvr_extend_update_region(d, upd_lo[b], upd_hi[b]);
+ 	}
+ 
+ 	return 1;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_px.c est/src/devices/dev_px.c
+--- src/devices/dev_px.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_px.c	2026-06-28 01:15:03.872202300 -0500
+@@ -312,6 +312,7 @@
+ 			/*  debug("  span %i: len=%i src=%i dst=%i\n",
+ 			    spannr, span_len, span_src, span_dst);  */
+ 
++			if (span_dst < (uint32_t)PX_YSIZE && span_src < (uint32_t)PX_YSIZE)	/* OB-3: span row bound */
+ 			memmove(d->vfb_data->framebuffer + span_dst *
+ 			    PX_XSIZE * bytesperpixel, d->vfb_data->framebuffer
+ 			    + span_src * PX_XSIZE * bytesperpixel, span_len *
+@@ -386,6 +387,10 @@
+ 
+ 		lw = (lw + 1) >> 2;
+ 
++		/*  OB-3b: a guest can drive x2 < x; clamp so the memset()/
++		    memcpy() of (x2 - x) below is never a negative width.  */
++		if (x2 < x)
++			x2 = x;
+ 		if (x2 - x > PX_XSIZE)
+ 			x2 = PX_XSIZE;
+ 
+@@ -411,6 +416,7 @@
+ 			d->vfb_data->update_x2 = x2;
+ 
+ 		for (fb_y=y; fb_y < y2 + lw; fb_y ++) {
++			if (fb_y >= 0 && fb_y < PX_YSIZE && x >= 0 && x2 <= PX_XSIZE && x2 >= x)	/* OB-3 */
+ 			memcpy(d->vfb_data->framebuffer + (fb_y * PX_XSIZE + x)
+ 			    * bytesperpixel, pixels, (x2-x)*bytesperpixel);
+ 
+@@ -528,7 +534,8 @@
+ 					}
+ 				}
+ 
+-				memcpy(d->vfb_data->framebuffer + ((y+suby)
++				if (y + suby >= 0 && y + suby < PX_YSIZE && x >= 0 && pixels_len >= 0 && pixels_len <= 16 && x + pixels_len <= PX_XSIZE)	/* OB-3 */
++					memcpy(d->vfb_data->framebuffer + ((y+suby)
+ 				    * PX_XSIZE + x) * bytesperpixel,
+ 				    pixels, pixels_len * bytesperpixel);
+ 
+@@ -605,7 +612,8 @@
+ 
+ 		if (writeflag == MEM_WRITE) {
+ 			for (i=0; i<len; i++)
+-				d->sram[relative_addr - 0x200000 + i] = data[i];
++				{ size_t o = (size_t)(relative_addr - 0x200000) + i;	/* OB-2: 512KiB window vs 128KiB sram */
++					if (o < sizeof(d->sram)) d->sram[o] = data[i]; }
+ 			/*  NOTE:  this return here supresses debug output
+ 			    (which would be printed if we continue)  */
+ 			return 1;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_scc.c est/src/devices/dev_scc.c
+--- src/devices/dev_scc.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_scc.c	2026-06-28 15:43:26.835282700 -0500
+@@ -341,6 +341,22 @@
+ 
+ 	port = relative_addr / 8;
+ 	relative_addr &= 7;
++	if (port >= N_SCC_PORTS) {
++		/*  #101 (refined, Codex+agy course-correction): a guest can address
++		    beyond the real SCC ports within the 0x1000 window. The earlier
++		    "% N_SCC_PORTS" was host-safe but ALIASED out-of-range offsets onto a
++		    valid port (wrong hardware). Ignore the access instead -- loud once,
++		    no aliasing, still no OOB into scc_register_r[].  */
++		static int scc_oob_warned = 0;
++		if (!scc_oob_warned) {
++			fatal("[ scc: out-of-range port %i (beyond %i) ignored; "
++			    "not aliased ]\n", port, N_SCC_PORTS);
++			scc_oob_warned = 1;
++		}
++		if (writeflag == MEM_READ)
++			memory_writemax64(cpu, data, len, 0);
++		return 1;
++	}
+ 
+ 	dev_scc_tick(cpu, extra);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_sgi_gbe.c est/src/devices/dev_sgi_gbe.c
+--- src/devices/dev_sgi_gbe.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_sgi_gbe.c	2026-06-27 22:32:45.241291300 -0500
+@@ -254,6 +254,8 @@
+ 				
+ 				// Read one line of up to 512 bytes from the tile.
+ 				int len = tilex < width_in_tiles ? 512 : (partial_pixels * bytes_per_pixel);
++				if (len > 512)	/* OB-14: fb_buf is 512 bytes/line */
++					len = 512;
+ 
+ 				cpu->memory_rw(cpu, cpu->mem, base + 512 * line,
+ 				    buf, len, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+@@ -703,7 +705,7 @@
+ 				int cmap = color_index >> 8;
+ 				d->palette[color_index] = idata;
+ 				if (cmap == d->cmap_select)
+-					d->selected_palette[color_index] = idata;
++					d->selected_palette[color_index & 0xff] = idata;	/* OB-13: 256-entry cache */
+ 			} else {
+ 				odata = d->palette[color_index];
+ 			}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_sgi_ip32.c est/src/devices/dev_sgi_ip32.c
+--- src/devices/dev_sgi_ip32.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_sgi_ip32.c	2026-06-25 21:18:33.307938800 -0500
+@@ -414,9 +414,9 @@
+ 	for (i=0; i<32; i++) {
+ 		struct interrupt templ;
+ 		char name[400];
+-		snprintf(name, sizeof(name), "%s.crime.0x%x", irq_path, 1 << i);
++		snprintf(name, sizeof(name), "%s.crime.0x%x", irq_path, (uint32_t)1 << i);
+ 		memset(&templ, 0, sizeof(templ));
+-                templ.line = 1 << i;
++                templ.line = (uint32_t)1 << i;
+ 		templ.name = name;
+ 		templ.extra = d;
+ 		templ.interrupt_assert = crime_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_sgi_mardigras.c est/src/devices/dev_sgi_mardigras.c
+--- src/devices/dev_sgi_mardigras.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_sgi_mardigras.c	2026-06-27 22:22:26.813231000 -0500
+@@ -218,7 +218,8 @@
+ 
+ 	/*  Accessing the microcode_ram works like ordinary ram:  */
+ 	if (relative_addr >= MICROCODE_START &&
+-	    relative_addr <  MICROCODE_END) {
++	    relative_addr <  MICROCODE_END &&
++	    len <= (uint64_t)MICROCODE_END - relative_addr) {	/* OB-9: end-span */
+ 		relative_addr -= MICROCODE_START;
+ 		if (writeflag == MEM_WRITE)
+ 			memcpy(d->microcode_ram + relative_addr, data, len);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_sgi_mec.c est/src/devices/dev_sgi_mec.c
+--- src/devices/dev_sgi_mec.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_sgi_mec.c	2026-06-27 11:35:38.730938100 -0500
+@@ -343,6 +343,12 @@
+ 	if (j < len)
+ 		fatal("[ mec_try_tx: not enough data? ]\n");
+ 
++	/*  Transmit only the bytes actually copied into cur_tx_packet: len is
++	    guest-controlled and may exceed MAX_TX_PACKET_LEN, but the fill loops
++	    above stop at MAX_TX_PACKET_LEN, so use j (not len) as the length to
++	    avoid net_ethernet_tx reading past cur_tx_packet.  */
++	d->cur_tx_packet_len = j;
++
+ 	net_ethernet_tx(cpu->machine->emul->net, &d->nic,
+ 	    d->cur_tx_packet, d->cur_tx_packet_len);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_sgi_re.c est/src/devices/dev_sgi_re.c
+--- src/devices/dev_sgi_re.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_sgi_re.c	2026-06-28 02:17:24.176040300 -0500
+@@ -118,6 +118,11 @@
+ 
+ 	uint32_t tileptr = 0;
+ 
++	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
++	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
++	if (tlb_mode <= 2 && tile_nr >= 256)
++		return;
++
+ 	switch (tlb_mode) {
+ 	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+ 		break;
+@@ -150,7 +155,7 @@
+ 	
+ 	tileptr &= ~0x80000000;
+ 
+-	uint8_t buf[4];
++	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+ 	if (put) {
+ 		switch (color_mode) {
+ 		case DE_MODE_TYPE_CI:
+@@ -1125,7 +1130,7 @@
+ 			}
+ 
+ 			fill_addr += fill_len;
+-			dstlen -= sizeof(zerobuf);
++			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+ 		}
+ 		break;
+ 	default:
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/dev_vga.c est/src/devices/dev_vga.c
+--- src/devices/dev_vga.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/dev_vga.c	2026-06-28 15:46:07.714574600 -0500
+@@ -258,6 +258,13 @@
+ 	char s[50];
+ 	int i, oldcolor = -1, printed_last = 0;
+ 
++	if (base < 0 || start < 0 || end < start)	/* OB-16 */
++		return;
++	if ((size_t)base + 1 >= d->charcells_size)
++		return;
++	if ((size_t)base + (size_t)end + 1 >= d->charcells_size)
++		end = (int)(d->charcells_size - (size_t)base) - 2;
++
+ 	for (i=start; i<=end; i+=2) {
+ 		unsigned char ch = d->charcells[base+i];
+ 		int fg = d->charcells[base+i+1] & 15;
+@@ -342,13 +349,16 @@
+ 			int addr = (y * d->max_x + x) * d->bits_per_pixel;
+ 			switch (d->bits_per_pixel) {
+ 			case 8:	addr >>= 3;
+-				c = d->gfx_mem[addr];
++				c = (addr >= 0 && (size_t)addr < d->gfx_mem_size) ?
++				    d->gfx_mem[addr] : 0;	/* #98: bound OOB redraw read */
+ 				pixel[0] = d->fb->rgb_palette[c*3+0];
+ 				pixel[1] = d->fb->rgb_palette[c*3+1];
+ 				pixel[2] = d->fb->rgb_palette[c*3+2];
+ 				break;
+ 			case 4:	addr >>= 2;
+-				if (addr & 1)
++				if (addr < 0 || (size_t)(addr >> 1) >= d->gfx_mem_size)
++					c = 0;			/* #98: bound OOB redraw read */
++				else if (addr & 1)
+ 					c = d->gfx_mem[addr >> 1] >> 4;
+ 				else
+ 					c = d->gfx_mem[addr >> 1] & 0xf;
+@@ -405,6 +415,13 @@
+ 	base = ((d->crtc_reg[VGA_CRTC_START_ADDR_HIGH] << 8)
+ 	    + d->crtc_reg[VGA_CRTC_START_ADDR_LOW]) * 2;
+ 
++	if (base + 1 >= d->charcells_size)	/* OB-16: guest CRTC start */
++		return;
++	if (base + end + 1 >= d->charcells_size)
++		end = d->charcells_size - base - 2;
++	if (start > end)
++		return;
++
+ 	if (!machine->x11_md.in_use)
+ 		vga_update_textmode(machine, d, base, start, end);
+ 
+@@ -604,10 +621,32 @@
+ 		x2 = (relative_addr+len-1) % d->max_x;
+ 
+ 		if (writeflag == MEM_WRITE) {
+-			memcpy(d->gfx_mem + relative_addr, data, len);
+-			modified = 1;
+-		} else
+-			memcpy(data, d->gfx_mem + relative_addr, len);
++			if (relative_addr + len <= (uint64_t)d->gfx_mem_size) {	/* OB-15 */
++				memcpy(d->gfx_mem + relative_addr, data, len);
++				modified = 1;	/* OB-15b: only mark dirty when copied */
++			} else {
++				static int w_warned = 0;	/* #119: loud-once */
++				if (!w_warned) {
++					fatal("[ vga: gfx write 0x%x+%i beyond 0x%x; "
++					    "ignored ]\n", (int)relative_addr, (int)len,
++					    (int)d->gfx_mem_size);
++					w_warned = 1;
++				}
++			}
++		} else {
++			if (relative_addr + len <= (uint64_t)d->gfx_mem_size)	/* OB-15 */
++				memcpy(data, d->gfx_mem + relative_addr, len);
++			else {
++				static int r_warned = 0;	/* #119: loud-once */
++				if (!r_warned) {
++					fatal("[ vga: gfx read 0x%x+%i beyond 0x%x; "
++					    "zero-filled ]\n", (int)relative_addr, (int)len,
++					    (int)d->gfx_mem_size);
++					r_warned = 1;
++				}
++				memset(data, 0, len);	/* OB-15c: don't leak uninit host memory */
++			}
++		}
+ 		break;
+ 	case GRAPHICS_MODE_4BIT:
+ 		y = relative_addr * 8 / d->max_x;
+Binary files src/devices/fonts/Xconv_raw_to_c and est/src/devices/fonts/Xconv_raw_to_c differ
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/grep.exe.stackdump est/src/devices/grep.exe.stackdump
+--- src/devices/grep.exe.stackdump	2026-06-28 16:47:19.877341000 -0500
++++ est/src/devices/grep.exe.stackdump	2026-06-28 16:20:36.751022100 -0500
+@@ -1,14 +1,14 @@
+ Stack trace:
+ Frame         Function      Args
+ 0007FFFFBD20  000210060304 (000000000002, 0007FFFFCE00, 000000000000, 0007FFFFDC10) msys-2.0.dll+0x20304
+-FFFFFFFFFFFEFEDF  00021006237D (0007FFFFC6D0, 000000000000, 0000000001F8, 000000000000) msys-2.0.dll+0x2237D
++FFFFFFFFFFFEFEDF  00021006237D (0007FFFFC6D0, 000000000000, 0000000001E8, 000000000000) msys-2.0.dll+0x2237D
+ 0007FFFFC430  0002100C1394 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x81394
+ 000000000006  0002100BCE39 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x7CE39
+ 0007FFFFC7E8  0002100BD23A (0007FFFFC7F8, 000A00000000, 0000000000B5, 0000000000B5) msys-2.0.dll+0x7D23A
+ 0007FFFFC7E8  0002102130B8 (000000000000, 000A00000030, 000000000000, 000000000000) msys-2.0.dll+0x1D30B8
+-0007FFFFC7E8  00010042A1E5 (000000000008, 0007FFFFC868, 000A000026E0, 000000000001) grep.exe+0x2A1E5
+-0007FFFFCB20  000100404B7C (000000000006, 000000000000, 000000000000, 000000000000) grep.exe+0x4B7C
+-0007FFFFCB20  000100429678 (000000000000, 000000000000, 00000068951C, 000700000000) grep.exe+0x29678
++0007FFFFC7E8  00010042A1E5 (000000000008, 0007FFFFC868, 000A000026F0, 000000000001) grep.exe+0x2A1E5
++0007FFFFCB20  000100404B7C (000000000005, 000000000000, 000000000000, 000000000000) grep.exe+0x4B7C
++0007FFFFCB20  000100429678 (000000000000, 000000000000, 00000069952C, 000700000000) grep.exe+0x29678
+ 0007FFFFCD30  000210047F01 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x7F01
+ 000000000000  000210045AC3 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x5AC3
+ 0007FFFFFFF0  000210045B74 (000000000000, 000000000000, 000000000000, 000000000000) msys-2.0.dll+0x5B74
+@@ -18,9 +18,9 @@
+ 7FFF83F80000 ntdll.dll
+ 7FFF832B0000 KERNEL32.DLL
+ 7FFF816B0000 KERNELBASE.dll
++0005603F0000 msys-iconv-2.dll
+ 000430B30000 msys-intl-8.dll
+ 000210040000 msys-2.0.dll
+-0005603F0000 msys-iconv-2.dll
+ 0004C36D0000 msys-pcre-1.dll
+ 7FFF82E80000 advapi32.dll
+ 7FFF821E0000 msvcrt.dll
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/devices/makeautodev.sh est/src/devices/makeautodev.sh
+--- src/devices/makeautodev.sh	2021-04-22 13:04:20.000000000 -0500
++++ est/src/devices/makeautodev.sh	2026-06-27 12:25:08.855011600 -0500
+@@ -29,11 +29,18 @@
+ 
+ printf "Generating autodev.c... "
+ 
+-rm -f autodev.c
++#  Build into a PID-unique temp file and atomically rename it into place at
++#  the end.  The recursive-make rules (all -> objs -> autodev.o) can invoke
++#  this script concurrently; appending directly to autodev.c then lets two
++#  runs interleave their writes and drop a line's first printf, corrupting a
++#  random device_register/pci_register entry (an intermittent build failure).
++#  A unique temp file + atomic mv makes the output correct regardless.
++AD="autodev.c.new.$$"
++rm -f "$AD"
+ 
+-printf "/*\n *  DO NOT EDIT. AUTOMATICALLY CREATED\n */\n\n" >> autodev.c
++printf "/*\n *  DO NOT EDIT. AUTOMATICALLY CREATED\n */\n\n" >> "$AD"
+ 
+-cat autodev_head.c >> autodev.c
++cat autodev_head.c >> "$AD"
+ 
+ printf "5"
+ rm -f .index
+@@ -51,7 +58,7 @@
+ 	if [ z"$B" != z ]; then
+ 		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+ 		for B in $C; do
+-			printf "int devinit_$B(struct devinit *);\n" >> autodev.c
++			printf "int devinit_$B(struct devinit *);\n" >> "$AD"
+ 		done
+ 	fi
+ done
+@@ -62,13 +69,13 @@
+ 	if [ z"$B" != z ]; then
+ 		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+ 		for B in $C; do
+-			printf "void pciinit_$B(struct machine *, " >> autodev.c
+-			printf "struct memory *, struct pci_device *);\n" >> autodev.c
++			printf "void pciinit_$B(struct machine *, " >> "$AD"
++			printf "struct memory *, struct pci_device *);\n" >> "$AD"
+ 		done
+ 	fi
+ done
+ 
+-cat autodev_middle.c >> autodev.c
++cat autodev_middle.c >> "$AD"
+ 
+ printf "2"
+ for a in dev_*.c; do
+@@ -76,8 +83,8 @@
+ 	if [ z"$B" != z ]; then
+ 		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+ 		for B in $C; do
+-			printf "\tdevice_register(\""$B"\"," >> autodev.c
+-			printf " devinit_$B);\n" >> autodev.c
++			printf "\tdevice_register(\""$B"\"," >> "$AD"
++			printf " devinit_$B);\n" >> "$AD"
+ 		done
+ 	fi
+ done
+@@ -88,12 +95,15 @@
+ 	if [ z"$B" != z ]; then
+ 		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+ 		for B in $C; do
+-			printf "\tpci_register(\""$B"\"," >> autodev.c
+-			printf " pciinit_$B);\n" >> autodev.c
++			printf "\tpci_register(\""$B"\"," >> "$AD"
++			printf " pciinit_$B);\n" >> "$AD"
+ 		done
+ 	fi
+ done
+ 
+-cat autodev_tail.c >> autodev.c
++cat autodev_tail.c >> "$AD"
++
++#  Atomically replace autodev.c (see the temp-file note above).
++mv -f "$AD" autodev.c
+ 
+ printf " done\n"
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/disk/bootblock.c est/src/disk/bootblock.c
+--- src/disk/bootblock.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/disk/bootblock.c	2026-06-28 10:44:22.084896100 -0500
+@@ -284,7 +284,7 @@
+ 			bootblock_offset = (minibuf[4] + (minibuf[5] << 8) +
+ 			  (minibuf[6]<<16) + ((uint64_t)minibuf[7]<<24)) * 512;
+ 
+-			if (n_blocks < 1)
++			if (n_blocks < 1 || n_blocks > 128)	/* #111: bound disk-controlled count (fatal() doesn't exit; 128*512=64K) */
+ 				break;
+ 
+ 			debug(readofs == 0x18? "%i" : " + %i", n_blocks);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/disk/bootblock_apple.c est/src/disk/bootblock_apple.c
+--- src/disk/bootblock_apple.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/disk/bootblock_apple.c	2026-06-28 02:17:13.061025900 -0500
+@@ -67,6 +67,8 @@
+ 	do {
+ 		int start, length;
+ 		int ofs = 0x200 * (partnr + 1);
++		if (ofs + 0x40 > (int)sizeof(buf))	/* #97: bound guest n_partitions (buf[0x207]) */
++			break;
+ 		if (partnr == 0)
+ 			n_partitions = buf[ofs + 7];
+ 		start = ((uint64_t)buf[ofs + 8] << 24) + (buf[ofs + 9] << 16) +
+@@ -74,7 +76,7 @@
+ 		length = ((uint64_t)buf[ofs+12] << 24) + (buf[ofs + 13] << 16) +
+ 		    (buf[ofs + 14] << 8) + buf[ofs + 15];
+ 
+-		debug("partition %i: '%s', type '%s', start %i, length %i\n",
++		debug("partition %i: '%.32s', type '%.32s', start %i, length %i\n",
+ 		    partnr, buf + ofs + 0x10, buf + ofs + 0x30,
+ 		    start, length);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/disk/bootblock_iso9660.c est/src/disk/bootblock_iso9660.c
+--- src/disk/bootblock_iso9660.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/disk/bootblock_iso9660.c	2026-06-28 10:42:52.597638000 -0500
+@@ -186,13 +186,20 @@
+ 	dp = dirbuf; filenr = 1;
+ 	p = NULL;
+ 	while (dp < dirbuf + dirlen) {
+-		size_t i, nlen = dp[0];
+-		int x = dp[2] + (dp[3] << 8) + (dp[4] << 16) +
+-		    ((uint64_t)dp[5] << 24);
+-		int y = dp[6] + (dp[7] << 8);
++		size_t i, nlen;
++		int x, y;
+ 		char direntry[65];
+ 
++		if (dp + 8 > dirbuf + dirlen)	/* #109: need the 8-byte record header */
++			break;
++		nlen = dp[0];
++		x = dp[2] + (dp[3] << 8) + (dp[4] << 16) +
++		    ((uint64_t)dp[5] << 24);
++		y = dp[6] + (dp[7] << 8);
++
+ 		dp += 8;
++		if (nlen > (size_t)(dirbuf + dirlen - dp))	/* #109: bound the name field */
++			nlen = dirbuf + dirlen - dp;
+ 
+ 		/*
+ 		 *  As long as there is an \ or / in the filename, then we
+@@ -306,7 +313,7 @@
+ #endif
+ 
+ 		for (i=32; i<len; i++) {
+-			if (i < len - strlen(filename))
++			if (i + strlen(filename) <= len)	/* #110: avoid size_t underflow when strlen(filename) > len */
+ 				if (strncmp(filename, (char *)dp + i,
+ 				    strlen(filename)) == 0) {
+ 					/*  The filename was found somewhere
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/disk/diskimage.c est/src/disk/diskimage.c
+--- src/disk/diskimage.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/disk/diskimage.c	2026-06-28 11:03:01.241532700 -0500
+@@ -144,6 +144,7 @@
+ 			unlink(bitmap_name);
+ 		}
+ 
++		free(overlay.overlay_basename);
+ 		free(bitmap_name);
+ 		return false;
+ 	}
+@@ -159,6 +160,7 @@
+ 			unlink(bitmap_name);
+ 		}
+ 
++		free(overlay.overlay_basename);
+ 		free(bitmap_name);
+ 		return false;
+ 	}
+@@ -316,7 +318,7 @@
+ 		d = d->next;
+ 	}
+ 
+-	fatal("diskimage_set_baseoffset(): disk id %i (type %i) not found?\n",
++	fatal("diskimage_set_baseoffset(): disk id %i (type %s) not found?\n",
+ 	    id, diskimage_types[type]);
+ 	exit(1);
+ }
+@@ -341,7 +343,7 @@
+ 		}
+ 		d = d->next;
+ 	}
+-	fatal("diskimage_getchs(): disk id %i (type %i) not found?\n",
++	fatal("diskimage_getchs(): disk id %i (type %s) not found?\n",
+ 	    id, diskimage_types[type]);
+ 	exit(1);
+ }
+@@ -1103,20 +1105,37 @@
+ 		
+ 		int old_umask = umask(077);
+ 
+-		// TODO: Not secure. Both the .img and the .img.map file
+-		// need to be created by the process itself to avoid a race.
+-		// NOTE/TODO: Ideally fopen mode "x" (from C11) for exclusive open.
+-		snprintf(tmpname, sizeof(tmpname), "%s/gxemul.%i.temp-diskimage-overlay.%i.img.map",
+-		    tmpdir, d->id, getpid());
+-
+-		FILE* f_img_map = fopen(tmpname, "w");
+-		fclose(f_img_map);
+-
+-		snprintf(tmpname, sizeof(tmpname), "%s/gxemul.%i.temp-diskimage-overlay.%i.img",
+-		    tmpdir, d->id, getpid());
++		/*  #115 (OB-25): create the overlay data file with an
++		    UNPREDICTABLE name via mymkstemp() (random suffix from
++		    /dev/urandom, atomic O_CREAT|O_EXCL create), then create its
++		    ".map" exclusively.  A guessable name let a local attacker
++		    pre-plant a symlink at the path before diskimage_add_overlay()
++		    reopens the files by name (TOCTOU).  */
++		snprintf(tmpname, sizeof(tmpname),
++		    "%s/gxemul.%i.overlay.XXXXXXXX", tmpdir, d->id);
++		{
++			int ovfd = mymkstemp(tmpname);
++			if (ovfd < 0) {
++				perror(tmpname);
++				umask(old_umask);
++				return -1;
++			}
++			close(ovfd);
++		}
+ 
+-		FILE* f_img = fopen(tmpname, "w");
+-		fclose(f_img);
++		{
++			char mapname[1040];
++			FILE* f_img_map;
++			snprintf(mapname, sizeof(mapname), "%s.map", tmpname);
++			f_img_map = fopen(mapname, "wx");
++			if (f_img_map == NULL) {
++				perror(mapname);
++				unlink(tmpname);
++				umask(old_umask);
++				return -1;
++			}
++			fclose(f_img_map);
++		}
+ 
+ 		umask(old_umask);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/disk/diskimage_scsicmd.c est/src/disk/diskimage_scsicmd.c
+--- src/disk/diskimage_scsicmd.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/disk/diskimage_scsicmd.c	2026-06-28 10:45:15.705747500 -0500
+@@ -255,6 +255,20 @@
+ 		return 0;
+ 	}
+ 
++	{
++		/*  #113: validate cmd_len against the CDB group length so the
++		    per-opcode handlers below can't read past the controller-
++		    sized cmd[] buffer on a short CDB.  */
++		static const int cdb_group_len[8] = { 6,10,10,6,16,12,6,6 };
++		int need = cdb_group_len[(xferp->cmd[0] >> 5) & 7];
++		if (xferp->cmd_len < (size_t)need) {
++			debugmsg_cpu(cpu, SUBSYS_DISK, "scsi", VERBOSITY_ERROR,
++			    "short CDB: cmd_len %i < %i (op 0x%02x)",
++			    xferp->cmd_len, need, xferp->cmd[0]);
++			return 0;
++		}
++	}
++
+ 	if (d == NULL) {
+ 		debugmsg_cpu(cpu, SUBSYS_DISK, "scsi",
+ 		    VERBOSITY_INFO, "%s id %i not connected!",
+@@ -961,9 +975,12 @@
+ 		retlen = xferp->cmd[7] * 256 + xferp->cmd[8];
+ 		debug("allocation_len=%i)\n", retlen);
+ 
+-		/*  Return data:  */
++		/*  #104: the fixed header writes below touch data_in[0..7];
++		    allocate at least that many bytes even if the guest's
++		    allocation length is smaller, then report only retlen.  */
+ 		scsi_transfer_allocbuf(&xferp->data_in_len,
+-		    &xferp->data_in, retlen, 1);
++		    &xferp->data_in, retlen < 12 ? 12 : retlen, 1);
++		xferp->data_in_len = retlen;
+ 
+ 		xferp->data_in[0] = 0;
+ 		xferp->data_in[1] = 10;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file.c est/src/file/file.c
+--- src/file/file.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file.c	2026-06-25 22:10:49.247715900 -0500
+@@ -66,24 +66,30 @@
+ 
+ #include "thirdparty/exec_elf.h"		/*  Ugly; needed for ELFDATA2LSB etc.  */
+ 
++/*
++ *  Accumulate in an unsigned 64-bit temporary: the previous version sign-
++ *  extended by doing "var = -1; var <<= 8", i.e. left-shifting a negative int,
++ *  which is undefined behaviour. Shifting the unsigned Wuns is well defined and
++ *  produces the identical (sign-extended) result once assigned back to var.
++ */
+ #define	unencode(var,dataptr,typ)	{				\
+ 		int Wi;  unsigned char Wb;				\
+ 		unsigned char *Wp = (unsigned char *) dataptr;		\
+ 		int Wlen = sizeof(typ);					\
+-		var = 0;						\
++		uint64_t Wuns = 0;					\
+ 		for (Wi=0; Wi<Wlen; Wi++) {				\
+ 			if (encoding == ELFDATA2LSB)			\
+ 				Wb = Wp[Wlen-1 - Wi];			\
+ 			else						\
+ 				Wb = Wp[Wi];				\
+-			if (Wi == 0 && (Wb & 0x80)) {			\
+-				var --;	/*  set var to -1 :-)  */	\
+-				var <<= 8;				\
+-			}						\
+-			var |= Wb;					\
+-			if (Wi < Wlen-1)				\
+-				var <<= 8;				\
++			if (Wi == 0 && (Wb & 0x80))			\
++				Wuns = (uint64_t) -1;	/*  sign-extend  */ \
++			Wuns = (Wuns << 8) | Wb;			\
+ 		}							\
++		var = Wuns;						\
++		(void) var;	/*  some callers decode fields they	\
++				never read; keep "used" like the old	\
++				read-modify-write macro did  */		\
+ 	}
+ 
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_android.c est/src/file/file_android.c
+--- src/file/file_android.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_android.c	2026-06-27 22:46:50.335297600 -0500
+@@ -96,6 +96,12 @@
+ 	}
+ 
+ 	unencode(page_size, &android_header.page_size, uint32_t);
++	if (page_size < 2048 || page_size > 65536 ||	/* OB-18 */
++	    (page_size & (page_size - 1)) != 0) {
++		fprintf(stderr, "%s: invalid Android boot.img page size 0x%x\n",
++		    filename, (unsigned) page_size);
++		exit(1);
++	}
+ 	debug("Android boot.img format, page size 0x%x\n", page_size);
+ 
+ 	unencode(kernel_size, &android_header.kernel_size, uint32_t);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_aout.c est/src/file/file_aout.c
+--- src/file/file_aout.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_aout.c	2026-06-28 01:16:34.618720900 -0500
+@@ -70,7 +70,7 @@
+ 	int len;
+ 	int encoding = ELFDATA2LSB;
+ 	uint32_t entry, datasize, textsize;
+-	int32_t symbsize = 0;
++	uint32_t symbsize = 0;
+ 	uint32_t vaddr, total_len;
+ 	unsigned char buf[65536];
+ 	unsigned char *syms;
+@@ -196,10 +196,23 @@
+ 		char *string_symbols;
+ 		off_t oldpos;
+ 
+-		debug("symbols: %i bytes @ 0x%x\n", symbsize, (int)ftello(f));
++		debug("symbols: %i bytes @ 0x%x\n", (int)symbsize, (int)ftello(f));
++		/*  Sanity: the symbol table cannot be larger than the file;
++		    reject a bogus (e.g. fuzzed) size before allocating.  */
++		{
++			off_t cur = ftello(f);
++			fseek(f, 0, SEEK_END);
++			if ((off_t) symbsize > ftello(f) - cur) {
++				fprintf(stderr, "%s: bogus symbol table size\n",
++				    filename);
++				exit(1);
++			}
++			fseek(f, cur, SEEK_SET);
++		}
++
+ 		CHECK_ALLOCATION(syms = (unsigned char *) malloc(symbsize));
+ 		len = fread(syms, 1, symbsize, f);
+-		if (len != symbsize) {
++		if ((uint32_t)len != symbsize) {
+ 			fprintf(stderr, "error reading symbols from %s\n",
+ 			    filename);
+ 			exit(1);
+@@ -210,12 +223,15 @@
+ 		strings_len = ftello(f) - oldpos;
+ 		fseek(f, oldpos, SEEK_SET);
+ 		debug("strings: %i bytes @ 0x%x\n", strings_len,(int)ftello(f));
+-		CHECK_ALLOCATION(string_symbols = (char *) malloc(strings_len));
++		CHECK_ALLOCATION(string_symbols = (char *) malloc((size_t)strings_len + 1));
+ 		if (fread(string_symbols, 1, strings_len, f) != strings_len) {
+ 			fprintf(stderr, "Could not read symbols from %s?\n", filename);
+ 			perror("fread");
+ 			exit(1);
+ 		}
++		/*  NUL-terminate, so a string near the end of the table can't
++		    be over-read by add_symbol_name() below.  */
++		string_symbols[strings_len] = '\0';
+ 
+ 		aout_symbol_ptr = (struct aout_symbol *) (void*) syms;
+ 		n_symbols = symbsize / sizeof(struct aout_symbol);
+@@ -229,7 +245,9 @@
+ 			/*  debug("symbol type 0x%04x @ 0x%08x: %s\n",
+ 			    type, addr, string_symbols + str_index);  */
+ 
+-			if (type != 0 && addr != 0)
++			/*  str_index comes from the file; reject out-of-range
++			    offsets so we never read past the string table.  */
++			if (type != 0 && addr != 0 && str_index < strings_len)
+ 				add_symbol_name(&m->symbol_context,
+ 				    addr, 0, string_symbols + str_index, 0, -1);
+ 			i++;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_ecoff.c est/src/file/file_ecoff.c
+--- src/file/file_ecoff.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_ecoff.c	2026-06-27 13:10:37.171530900 -0500
+@@ -273,6 +273,7 @@
+ 		off_t cbRfdOffset, cbExtOffset, cbSsExtOffset, cbSsOffset;
+ 		char *symbol_data;
+ 		int sym_nr;
++		off_t file_size;
+ 
+ 		fseek(f, f_symptr, SEEK_SET);
+ 
+@@ -293,6 +294,15 @@
+ 		unencode(iextMax,       &symhdr.iextMax,       uint32_t);
+ 		unencode(cbExtOffset,   &symhdr.cbExtOffset,   uint32_t);
+ 
++		/*  All the offsets/counts below come from the file; bound them
++		    against the real file size so a malformed symbol header cannot
++		    drive malloc/fread to huge sizes (OOM) or read past EOF.  */
++		{
++			off_t cur = ftell(f);
++			fseek(f, 0, SEEK_END); file_size = ftell(f);
++			fseek(f, cur, SEEK_SET);
++		}
++
+ 		if (sym_magic != MIPS_MAGIC_SYM) {
+ 			unsigned char *ms_sym_buf;
+ 			struct ms_sym *sym;
+@@ -306,11 +316,26 @@
+ 			 *    mat%20Specification.txt
+ 			 *  for more details.
+ 			 */
++			/*  f_nsyms/f_symptr are file-controlled; require the whole
++			    symbol table to lie within the file before allocating
++			    and reading it.  */
++			if (f_nsyms < 0 || (uint64_t) f_symptr +
++			    (uint64_t) sizeof(struct ms_sym) * (uint32_t) f_nsyms
++			    > (uint64_t) file_size ||
++			    (uint64_t) sizeof(struct ms_sym) * (uint32_t) f_nsyms
++			    > LOADER_MAX_TABLE_BYTES) {
++				fatal("[ ECOFF: bogus f_nsyms/f_symptr ]\n");
++				goto skip_normal_coff_symbols;
++			}
+ 			CHECK_ALLOCATION(ms_sym_buf = (unsigned char *)
+ 			    malloc(sizeof(struct ms_sym) * f_nsyms));
+ 			fseek(f, f_symptr, SEEK_SET);
+-			len = fread(ms_sym_buf, 1,
+-			    sizeof(struct ms_sym) * f_nsyms, f);
++			if (fread(ms_sym_buf, 1, sizeof(struct ms_sym) * f_nsyms, f)
++			    != sizeof(struct ms_sym) * (size_t) f_nsyms) {
++				fprintf(stderr, "error reading symbols from %s\n",
++				    filename);
++				exit(1);
++			}
+ 			sym = (struct ms_sym *) ms_sym_buf;
+ 			for (sym_nr=0; sym_nr<f_nsyms; sym_nr++) {
+ 				char name[300];
+@@ -338,17 +363,20 @@
+ 					off_t ofs;
+ 					ofs = f_symptr + altname +
+ 					    sizeof(struct ms_sym) * f_nsyms;
+-					fseek(f, ofs, SEEK_SET);
+-					if (fread(name, 1, sizeof(name), f) != sizeof(name)) {
+-						fprintf(stderr, "error reading symbol from %s\n", filename);
+-						exit(1);
++					/*  altname/ofs are file-controlled; only read the
++					    long name if it lies within the file, and skip
++					    (don't hard-exit) otherwise.  */
++					if (ofs >= 0 && (uint64_t) ofs + sizeof(name) <=
++					    (uint64_t) file_size &&
++					    fseek(f, ofs, SEEK_SET) == 0 &&
++					    fread(name, 1, sizeof(name), f) == sizeof(name)) {
++						name[sizeof(name)-1] = '\0';
++						/*  debug(" [altname=0x%x '%s']",
++						    altname, name);  */
++						add_symbol_name(&m->symbol_context,
++						    v, 0, name, 0, -1);
++						n_real_symbols ++;
+ 					}
+-					name[sizeof(name)-1] = '\0';
+-					/*  debug(" [altname=0x%x '%s']",
+-					    altname, name);  */
+-					add_symbol_name(&m->symbol_context,
+-					    v, 0, name, 0, -1);
+-					n_real_symbols ++;
+ 				}
+ 
+ 
+@@ -379,6 +407,22 @@
+ 		debug("%i symbols @ 0x%08x (strings @ 0x%08x)\n",
+ 		    iextMax, cbExtOffset, cbSsExtOffset);
+ 
++		/*  issExtMax/iextMax/cbSsExtOffset/cbExtOffset are file-controlled;
++		    require both tables to lie within the file before allocating and
++		    reading them (otherwise a malformed header drives a huge malloc
++		    -> OOM, or an over-read).  */
++		if (issExtMax < 0 || iextMax < 0 ||
++		    (uint64_t) cbSsExtOffset + (uint64_t) issExtMax + 1
++		        > (uint64_t) file_size ||
++		    (uint64_t) cbExtOffset + (uint64_t) iextMax *
++		        sizeof(struct ecoff_extsym) > (uint64_t) file_size ||
++		    (uint64_t) issExtMax + 1 > LOADER_MAX_TABLE_BYTES ||
++		    (uint64_t) iextMax * sizeof(struct ecoff_extsym)
++		        > LOADER_MAX_TABLE_BYTES) {
++			fatal("[ ECOFF: bogus symbol-table sizes ]\n");
++			goto skip_normal_coff_symbols;
++		}
++
+ 		CHECK_ALLOCATION(symbol_data = (char *) malloc(issExtMax + 2));
+ 		memset(symbol_data, 0, issExtMax + 2);
+ 		fseek(f, cbSsExtOffset, SEEK_SET);
+@@ -416,6 +460,12 @@
+ 			    sym_nr, (int)extsyms[sym_nr].es_value,
+ 			    symbol_data + extsyms[sym_nr].es_strindex);  */
+ 
++			/*  es_strindex is file-controlled; skip out-of-range
++			    offsets so we never read past symbol_data.  */
++			if ((uint32_t) extsyms[sym_nr].es_strindex >
++			    (uint32_t) issExtMax)
++				continue;
++
+ 			add_symbol_name(&m->symbol_context,
+ 			    extsyms[sym_nr].es_value, 0,
+ 			    symbol_data + extsyms[sym_nr].es_strindex, 0, -1);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_elf.c est/src/file/file_elf.c
+--- src/file/file_elf.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_elf.c	2026-06-27 22:53:50.979844100 -0500
+@@ -91,7 +91,7 @@
+ 	Elf64_Shdr shdr64;
+ 	Elf32_Sym sym32;
+ 	Elf64_Sym sym64;
+-	int ofs;
++	uint64_t ofs;
+ 	int chunk_len = 1024, align_len;
+ 	char *symbol_strings = NULL;
+ 	size_t symbol_length = 0;
+@@ -447,7 +447,7 @@
+ 			if ((p_vaddr & 0x3fff)==0)	align_len = 0x4000;
+ 			if ((p_vaddr & 0xffff)==0)	align_len = 0x10000;
+ 			ofs = 0;  len = chunk_len = align_len;
+-			while (ofs < (int64_t)p_filesz && len==chunk_len) {
++			while (ofs < p_filesz && len==chunk_len) {	/* OB-19 */
+ 				unsigned char *ch;
+ 
+ 				CHECK_ALLOCATION(ch = (unsigned char *) malloc(chunk_len));
+@@ -468,8 +468,8 @@
+ 				}
+ 
+ 				len = fread(&ch[0], 1, chunk_len, f);
+-				if (ofs + len > (int64_t)p_filesz)
+-					len = p_filesz - ofs;
++				if ((uint64_t)len > p_filesz - ofs)	/* OB-19 */
++					len = (int)(p_filesz - ofs);
+ 
+ 				int j = 0;
+ 				while (j < len) {
+@@ -493,6 +493,12 @@
+ 	 *  symbol (for MIPS):
+ 	 */
+ 
++	/*  File size, used to reject bogus (huge) section sizes from a malformed
++	    header before allocating: a section cannot be larger than the file.  */
++	off_t elf_filesize;
++	fseek(f, 0, SEEK_END);
++	elf_filesize = ftello(f);
++
+ 	for (i=0; i<eshnum; i++) {
+ 		int sh_name, sh_type, sh_flags, sh_link, sh_info, sh_entsize;
+ 		uint64_t sh_addr, sh_size, sh_addralign;
+@@ -550,7 +556,11 @@
+ 		else
+ 			sh_entsize = sizeof(Elf32_Sym);
+ 
+-		if (sh_type == SHT_SYMTAB) {
++		if (sh_type == SHT_SYMTAB && sh_offset >= 0 &&
++		    (uint64_t)sh_offset <= (uint64_t)elf_filesize &&
++		    sh_size <= (uint64_t)elf_filesize - (uint64_t)sh_offset &&
++		    sh_size <= (uint64_t)LOADER_MAX_TABLE_BYTES &&
++		    sh_entsize > 0 && (sh_size % sh_entsize) == 0) {
+ 			size_t len2;
+ 			n_entries = sh_size / sh_entsize;
+ 
+@@ -596,7 +606,10 @@
+ 		 *  table is the one to use seems to be good enough.
+ 		 */
+ 
+-		if (sh_type == SHT_STRTAB && sh_size > symbol_length) {
++		if (sh_type == SHT_STRTAB && sh_size > symbol_length &&
++		    sh_offset >= 0 && (uint64_t)sh_offset <= (uint64_t)elf_filesize &&
++		    sh_size <= (uint64_t)elf_filesize - (uint64_t)sh_offset &&
++		    sh_size <= (uint64_t)LOADER_MAX_TABLE_BYTES) {
+ 			if (symbol_strings != NULL)
+ 				free(symbol_strings);
+ 
+@@ -640,6 +653,13 @@
+ 				unencode(size,    &sym32.st_size, Elf32_Word);
+ 			}
+ 
++			/*  st_name is a file-controlled offset into the string
++			    table; skip symbols whose name is out of range, so we
++			    never read past symbol_strings (NUL-terminated at
++			    symbol_length).  */
++			if (st_name >= symbol_length)
++				continue;
++
+ 			/*  debug("symbol info=0x%02x addr=0x%016" PRIx64
+ 			    " (%i) '%s'\n", st_info, (uint64_t) addr,
+ 			    st_name, symbol_strings + st_name);  */
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_macho.c est/src/file/file_macho.c
+--- src/file/file_macho.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_macho.c	2026-06-27 14:15:29.906868600 -0500
+@@ -54,7 +54,7 @@
+ 	uint64_t entry = 0;
+ 	int entry_set = 0;
+ 	int encoding = ELFDATA2MSB;
+-	unsigned char buf[65536];
++	unsigned char buf[65536] = {0};
+ 	char *symbols, *strings;
+ 	uint32_t cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags;
+ 	uint64_t vmaddr, vmsize, fileoff, filesize;
+@@ -133,10 +133,37 @@
+ 	pos = is_64bit? 32 : 28;
+ 	cmd_type = 0;
+ 	do {
++		/*  Bounds (all from the file, so untrusted): the 8-byte command
++		    header must lie within the data we actually read and buf[].  */
++		if (pos + 8 > len || pos + 8 > sizeof(buf))
++			break;
++
+ 		/*  Read command type and length:  */
+ 		unencode(cmd_type, &buf[pos], uint32_t);
+ 		unencode(cmd_len,  &buf[pos+4], uint32_t);
+ 
++		/*  Reject a command smaller than its header (also prevents a
++		    cmd_len == 0 infinite loop) or one extending past the data.  */
++		if (cmd_len < 8 || pos + cmd_len > len)
++			break;
++
++		/*  Each handled command reads fixed offsets past the 8-byte
++		    header; require exactly those bytes (within the data read and
++		    buf[]) instead of a blanket 256, which would reject a valid
++		    compact command near EOF (a minimal PPC LC_UNIXTHREAD needs
++		    only pos+176).  */
++		{
++			size_t need = 8;
++			switch (cmd_type) {
++			case 1:  need = 8 + 16 + 16;  break;  /*  LC_SEGMENT  */
++			case 2:  need = 24;           break;  /*  LC_SYMTAB  */
++			case 5:  need = 16 + 40 * 4;  break;  /*  LC_UNIXTHREAD  */
++			}
++			if ((size_t) cmd_len < need ||
++			    pos + need > len || pos + need > sizeof(buf))
++				break;
++		}
++
+ #if 0
+ 		debug("cmd %i, len=%i\n", cmd_type, cmd_len);
+ 		for (i=8; i<cmd_len; i++) {
+@@ -213,19 +240,43 @@
+ 			unencode(nsyms,   &buf[pos+12], uint32_t);
+ 			unencode(stroff,  &buf[pos+16], uint32_t);
+ 			unencode(strsize, &buf[pos+20], uint32_t);
++
++			/*  symoff/nsyms/stroff/strsize are file-controlled; bound the
++			    whole symbol table and string table (offset + size) against
++			    the real file size so the malloc/calloc stay bounded and the
++			    fread below cannot short-read into a fatal exit or read past
++			    EOF.  uint64 math avoids overflow on hostile values.  */
++			{
++				long cur_off = ftell(f), file_sz;
++				uint64_t so, ns, sto, ss;
++				fseek(f, 0, SEEK_END); file_sz = ftell(f);
++				fseek(f, cur_off, SEEK_SET);
++				so  = (uint32_t) symoff;  ns = (uint32_t) nsyms;
++				sto = (uint32_t) stroff;  ss = (uint32_t) strsize;
++				if (file_sz < 0 ||
++				    so  + 12 * ns > (uint64_t) file_sz ||
++				    sto + ss      > (uint64_t) file_sz ||
++				    12 * ns > LOADER_MAX_TABLE_BYTES ||
++				    ss      > LOADER_MAX_TABLE_BYTES) {
++					fatal("[ Mach-O: bogus LC_SYMTAB sizes ]\n");
++					break;
++				}
++			}
+ 			debug("symtable: %i symbols @ 0x%x (strings at "
+ 			    "0x%x)\n", nsyms, symoff, stroff);
+ 
+-			CHECK_ALLOCATION(symbols = (char *) malloc(12 * nsyms));
+-			fseek(f, symoff, SEEK_SET);
+-			if (fread(symbols, 1, 12 * nsyms, f) != (size_t) 12*nsyms) {
++			CHECK_ALLOCATION(symbols = (char *) malloc((size_t) nsyms * 12));
++			fseek(f, (long)(uint32_t) symoff, SEEK_SET);
++			if (fread(symbols, 1, (size_t) nsyms * 12, f) != (size_t) nsyms * 12) {
+ 				fprintf(stderr, "could not read symbols from %s\n", filename);
+ 				exit(1);
+ 			}
+ 
+-			CHECK_ALLOCATION(strings = (char *) malloc(strsize));
+-			fseek(f, stroff, SEEK_SET);
+-			if (fread(strings, 1, strsize, f) != (size_t) strsize) {
++			/*  calloc(+1) zeroes the buffer, so it is always NUL-terminated and a
++			    string near the end cannot be over-read.  */
++				CHECK_ALLOCATION(strings = (char *) calloc((size_t) strsize + 1, 1));
++			fseek(f, (long)(uint32_t) stroff, SEEK_SET);
++			if (fread(strings, 1, (size_t) strsize, f) != (size_t) strsize) {
+ 				fprintf(stderr, "could not read symbol strings from %s\n", filename);
+ 				exit(1);
+ 			}
+@@ -242,7 +293,10 @@
+ 				    " value=0x%x\n", i, n_strx, n_type,
+ 				    n_sect, n_desc, n_value);  */
+ 				add_symbol_name(&m->symbol_context,
+-				    n_value, 0, strings + n_strx, 0, -1);
++				    n_value, 0, strings + (n_strx >= 0 &&
++				    (uint32_t) n_strx < (uint32_t) strsize ?
++				    (uint32_t) n_strx : (uint32_t) strsize),
++				    0, -1);
+ 			}
+ 
+ 			free(symbols);
+@@ -286,7 +340,7 @@
+ 		}
+ 
+ 		pos += cmd_len;
+-	} while (pos < sizeofcmds && cmd_type != 0);
++	} while (pos < (uint32_t)(is_64bit? 32 : 28) + sizeofcmds && cmd_type != 0);
+ 
+ 	fclose(f);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/file/file_srec.c est/src/file/file_srec.c
+--- src/file/file_srec.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/file/file_srec.c	2026-06-25 17:18:46.922403800 -0500
+@@ -91,6 +91,15 @@
+ 		 *  TODO: actually check the checksum
+ 		 */
+ 
++		/*
++		 *  bytes[] must be cleared before each record: a malformed
++		 *  record may declare a 'count' larger than the data actually
++		 *  present on the line, and the type switch below would
++		 *  otherwise read uninitialized stack memory (leaking it into
++		 *  emulated RAM, the load address, or the entry point).
++		 */
++		memset(bytes, 0, sizeof(bytes));
++
+ 		j = 0;
+ 		for (i=1; i<buf_len; i++) {
+ 			if (buf[i]>='a' && buf[i]<='f')
+@@ -144,10 +153,14 @@
+ 				vaddr = ((uint64_t)bytes[0] << 24) +
+ 				    (bytes[1] << 16) + (bytes[2]<<8) + bytes[3];
+ 			}
+-			m->cpus[0]->memory_rw(m->cpus[0], mem, vaddr,
+-			    &bytes[data_start], count - 1 - data_start,
+-			    MEM_WRITE, NO_EXCEPTIONS);
+-			total_bytes_loaded += count - 1 - data_start;
++			/*  Guard against a malformed/short count: a negative
++			    length would be passed as a huge size_t.  */
++			if (count - 1 - data_start > 0) {
++				m->cpus[0]->memory_rw(m->cpus[0], mem, vaddr,
++				    &bytes[data_start], count - 1 - data_start,
++				    MEM_WRITE, NO_EXCEPTIONS);
++				total_bytes_loaded += count - 1 - data_start;
++			}
+ 			break;
+ 		case 7:
+ 		case 8:
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/cpu_ppc.h est/src/include/cpu_ppc.h
+--- src/include/cpu_ppc.h	2021-04-22 13:04:15.000000000 -0500
++++ est/src/include/cpu_ppc.h	2026-06-28 12:13:09.564797600 -0500
+@@ -78,6 +78,7 @@
+ 	{ "PPC604",	0x00040304, 32, 0, 15,5,4, 15,5,4, 0,0,0, 0 },	\
+ 	{ "PPC620",	0x00140000, 64, 0, 15,5,4, 15,5,4, 0,0,0, 0 },	\
+ 	{ "MPC7400",	0x000c0000, 32, 0, 15,5,2, 15,5,2, 19,5,1, 1 },	\
++	{ "MPC7455",	0x80010000, 32, 0, 15,5,8, 15,5,8, 18,5,8, 1 },	\
+ 	{ "PPC750",	0x00084202, 32, 0, 15,5,2, 15,5,2, 20,5,1, 0 },	\
+ 	{ "G4e",	0,          32, 0, 15,5,8, 15,5,8, 18,5,8, 1 },	\
+ 	{ "PPC970",	0x00390000, 64, 0, 16,7,1, 15,7,2, 19,7,1, 1 },	\
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/machine.h est/src/include/machine.h
+--- src/include/machine.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/machine.h	2026-06-28 12:13:25.840098300 -0500
+@@ -314,6 +314,7 @@
+ #define	MACHINE_MACPPC_G3		1
+ #define	MACHINE_MACPPC_G4		2
+ #define	MACHINE_MACPPC_G5		3
++#define	MACHINE_MACPPC_G4PLUS		4	/*  OB-35: MPC7455, extended BATs (#116)  */
+ 
+ /*  MVMEPPC  */
+ #define	MACHINE_MVMEPPC_1600		1
+Binary files src/include/make_ppc_spr_strings and est/src/include/make_ppc_spr_strings differ
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/misc.h est/src/include/misc.h
+--- src/include/misc.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/misc.h	2026-06-27 13:06:55.773644300 -0500
+@@ -193,6 +193,30 @@
+ 	}
+ 
+ 
++/*
++ *  READ_WORD_LE / READ_WORD_BE:
++ *
++ *  Assemble a 32-bit word from a 4-byte buffer without signed-shift UB: each
++ *  byte is promoted to uint32_t before shifting, so byte<<24 is always defined.
++ *  Used for instruction fetches in the CPU disassemblers/decoders.
++ */
++#define	READ_WORD_LE(p)	( (uint32_t)(p)[0]         | ((uint32_t)(p)[1] <<  8) | \
++			  ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24) )
++#define	READ_WORD_BE(p)	( (uint32_t)(p)[3]         | ((uint32_t)(p)[2] <<  8) | \
++			  ((uint32_t)(p)[1] << 16) | ((uint32_t)(p)[0] << 24) )
++
++/*
++ *  LOADER_MAX_TABLE_BYTES:
++ *
++ *  Sanity cap for file-controlled symbol/string-table allocations in the file
++ *  loaders (ELF / Mach-O / ECOFF).  The per-loader checks already require a table
++ *  to lie within the file, but a sparse or oversized file can still report a
++ *  multi-GB size and drive a (file-bounded) malloc to OOM.  256 MB is far larger
++ *  than any real symbol/string table, so this only rejects absurd input.
++ */
++#define	LOADER_MAX_TABLE_BYTES	(256 * 1024 * 1024)
++
++
+ /*  bootblock.c:  */
+ int load_bootblock(struct machine *m, struct cpu *cpu,
+ 	int *n_loadp, char ***load_namesp);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/thirdparty/bootblock.h est/src/include/thirdparty/bootblock.h
+--- src/include/thirdparty/bootblock.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/thirdparty/bootblock.h	2026-06-25 18:50:24.770723500 -0500
+@@ -129,8 +129,10 @@
+ #undef __noreturn__
+ #endif
+ 
+-#define __attribute__(x)  /*  */
+-#define __noreturn__  /*  */
++/*  Removed historic "#define __attribute__(x) / __noreturn__" neutering:
++    on modern glibc it stripped __attribute__((__gnu_inline__)) from system
++    headers (multiple-definition link errors) and silently discarded
++    __attribute__((packed)) on the structs below.  */
+ 
+ #if !defined(__ASSEMBLER__)
+ #if defined(_KERNEL) || defined(_STANDALONE)
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/thirdparty/dp83932reg.h est/src/include/thirdparty/dp83932reg.h
+--- src/include/thirdparty/dp83932reg.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/thirdparty/dp83932reg.h	2026-06-25 18:50:50.058203800 -0500
+@@ -12,8 +12,10 @@
+ #undef __noreturn__
+ #endif
+ 
+-#define __attribute__(x)  /*  */
+-#define __noreturn__  /*  */
++/*  Removed historic "#define __attribute__(x) / __noreturn__" neutering:
++    on modern glibc it stripped __attribute__((__gnu_inline__)) from system
++    headers (multiple-definition link errors) and silently discarded
++    __attribute__((packed)) on the structs below.  */
+ 
+ /*-
+  * Copyright (c) 2001 The NetBSD Foundation, Inc.
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/thirdparty/pcireg.h est/src/include/thirdparty/pcireg.h
+--- src/include/thirdparty/pcireg.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/thirdparty/pcireg.h	2026-06-25 18:50:51.957301100 -0500
+@@ -12,8 +12,10 @@
+ #undef __noreturn__
+ #endif
+ 
+-#define __attribute__(x)  /*  */
+-#define __noreturn__  /*  */
++/*  Removed historic "#define __attribute__(x) / __noreturn__" neutering:
++    on modern glibc it stripped __attribute__((__gnu_inline__)) from system
++    headers (multiple-definition link errors) and silently discarded
++    __attribute__((packed)) on the structs below.  */
+ 
+ /*
+  * Copyright (c) 1995, 1996, 1999, 2000
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/include/thirdparty/sgi_arcbios.h est/src/include/thirdparty/sgi_arcbios.h
+--- src/include/thirdparty/sgi_arcbios.h	2021-04-22 13:04:14.000000000 -0500
++++ est/src/include/thirdparty/sgi_arcbios.h	2026-06-25 18:50:53.972754300 -0500
+@@ -14,8 +14,10 @@
+ #undef __noreturn__
+ #endif
+ 
+-#define	__attribute__(x)  /*  */
+-#define	__noreturn__  /*  */
++/*  Removed historic "#define __attribute__(x) / __noreturn__" neutering:
++    on modern glibc it stripped __attribute__((__gnu_inline__)) from system
++    headers (multiple-definition link errors) and silently discarded
++    __attribute__((packed)) on the structs below.  */
+ 
+ /*	$NetBSD: arcbios.h,v 1.3 2001/12/06 14:59:02 rafal Exp $	*/
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/machines/machine_macppc.c est/src/machines/machine_macppc.c
+--- src/machines/machine_macppc.c	2021-04-22 13:04:20.000000000 -0500
++++ est/src/machines/machine_macppc.c	2026-06-28 12:13:13.625085200 -0500
+@@ -113,7 +113,15 @@
+ 	cpu->cd.ppc.gpr[3] = a;
+ 	store_16bit_word(cpu, a + 0x0000, 1);	/*  revision  */
+ 	store_16bit_word(cpu, a + 0x0002, 2);	/*  version  */
+-	store_buf(cpu, a + 0x0004, machine->boot_string_argument, 256);
++	{
++		/*  boot_string_argument is usually far shorter than the
++		    256-byte field; copy only its bytes (capped) so store_buf
++		    does not read past the string.  */
++		size_t blen = strlen(machine->boot_string_argument) + 1;
++		if (blen > 256)
++			blen = 256;
++		store_buf(cpu, a + 0x0004, machine->boot_string_argument, blen);
++	}
+ 	/*  26 dram banks; "long base; long size"  */
+ 	store_32bit_word(cpu, a + 0x0104, 0);	/*  base  */
+ 	store_32bit_word(cpu, a + 0x0108, machine->physical_ram_in_mb
+@@ -168,6 +176,9 @@
+ 	case MACHINE_MACPPC_G4:
+ 		machine->cpu_name = strdup("MPC7400");
+ 		break;
++	case MACHINE_MACPPC_G4PLUS:
++		machine->cpu_name = strdup("MPC7455");
++		break;
+ 	case MACHINE_MACPPC_G5:
+ 		machine->cpu_name = strdup("PPC970");
+ 		break;
+@@ -193,6 +204,9 @@
+ 	machine_entry_add_subtype(me, "MacPPC G4", MACHINE_MACPPC_G4,
+ 	    "g4", NULL);
+ 
++	machine_entry_add_subtype(me, "MacPPC G4plus (MPC7455)",
++	    MACHINE_MACPPC_G4PLUS, "g4plus", NULL);
++
+ 	machine_entry_add_subtype(me, "MacPPC G5", MACHINE_MACPPC_G5,
+ 	    "g5", NULL);
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/net/net.c est/src/net/net.c
+--- src/net/net.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/net/net.c	2026-06-28 15:51:11.101212700 -0500
+@@ -162,7 +162,8 @@
+ 
+ 			/*  Copy the old packet first:  */
+ 			memset(lp->data, 0, 60 + 14);
+-			memcpy(lp->data + 14, packet, len);
++			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
++			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
+ 
+ 			/*  Add ethernet ARP header:  */
+ 			memcpy(lp->data + 0, lp->data + 8 + 14, 6);
+@@ -187,7 +188,8 @@
+ 
+ 			/*  Copy the old packet first:  */
+ 			memset(lp->data, 0, 60 + 14);
+-			memcpy(lp->data + 14, packet, len);
++			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
++			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
+ 
+ 			/*  Add ethernet RARP header:  */
+ 			memcpy(lp->data + 0, packet + 8, 6);
+@@ -631,7 +633,7 @@
+ 	uint32_t x;
+ 	int xl;
+ 
+-	x = (p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
++	x = ((uint32_t)p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
+ 	xl = 32 - net->netmask_ipv4_len;
+ 	if (xl > 8)
+ 		xl = 8;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/net/net_ip.c est/src/net/net_ip.c
+--- src/net/net_ip.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/net/net_ip.c	2026-06-28 02:39:34.243229600 -0500
+@@ -399,9 +399,9 @@
+ 	srcport = (packet[34] << 8) + packet[35];
+ 	dstport = (packet[36] << 8) + packet[37];
+ 
+-	seqnr   = (packet[38] << 24) + (packet[39] << 16)
++	seqnr   = ((uint32_t)packet[38] << 24) + (packet[39] << 16)
+ 		+ (packet[40] << 8) + packet[41];
+-	acknr   = (packet[42] << 24) + (packet[43] << 16)
++	acknr   = ((uint32_t)packet[42] << 24) + (packet[43] << 16)
+ 		+ (packet[44] << 8) + packet[45];
+ 
+ 	if (net_ip_debug)
+@@ -645,7 +645,7 @@
+ 	/*  TODO: This is hardcoded for a specific NetBSD packet:  */
+ 	if (packet[34 + 30] == 0x08 && packet[34 + 31] == 0x0a)
+ 		net->tcp_connections[con_id].inside_timestamp =
+-		    (packet[34 + 32 + 0] << 24) +
++		    ((uint32_t)packet[34 + 32 + 0] << 24) +
+ 		    (packet[34 + 32 + 1] << 16) +
+ 		    (packet[34 + 32 + 2] <<  8) +
+ 		    (packet[34 + 32 + 3] <<  0);
+@@ -914,8 +914,18 @@
+ 	if (len > 14 + packet[16]*256 + packet[17])
+ 		len = 14 + packet[16]*256 + packet[17];
+ 
++	if (len < 34)				/* #103: no complete IPv4 header */
++		return;
++
+ 	if (packet[14] == 0x45) {
+ 		/*  IPv4:  */
++		/*  #103: reject too-short packets so the handlers below can't
++		    underflow a length (UDP sendto len-42) or write past the
++		    reply buffer (ICMP checksum offsets).  */
++		if ((packet[23] == 1 && len < 42) ||	/* ICMP */
++		    (packet[23] == 6 && len < 54) ||	/* TCP */
++		    (packet[23] == 17 && len < 42))	/* UDP */
++			return;
+ 		switch (packet[23]) {
+ 		case 1:	/*  ICMP  */
+ 			net_ip_icmp(net, nic, packet, len);
+@@ -1181,10 +1191,10 @@
+ 
+ 	/*  Check for 10.0.0.255 first, maybe some guest OSes think that
+ 	    it's a /24 network, regardless of what it actually is.  */
+-	y = (packet[30] << 24) + (packet[31] << 16) +
++	y = ((uint32_t)packet[30] << 24) + (packet[31] << 16) +
+ 	    (packet[32] << 8) + packet[33];
+ 
+-	x = (p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
++	x = ((uint32_t)p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
+ 	/*  Example: x = 10.0.0.0  */
+ 	x |= 255;
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/promemul/arcbios.c est/src/promemul/arcbios.c
+--- src/promemul/arcbios.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/promemul/arcbios.c	2026-06-26 09:45:14.737635300 -0500
+@@ -577,7 +577,7 @@
+ 			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
+ 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
+ 		}
+-		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
++		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint32_t)buf[3]<<24);
+ 
+ 		cpu->memory_rw(cpu, cpu->mem, peeraddr + 2 *
+ 		    machine->md.arc->wordlen,
+@@ -1622,7 +1622,8 @@
+ 	case 0x60:		/*  Close(uint32_t handle)  */
+ 		debugmsg(SUBSYS_PROMEMUL, "arcbios", VERBOSITY_DEBUG, "Close(%i)",
+ 		    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
+-		if (!machine->md.arc->file_handle_in_use[cpu->cd.mips.gpr[
++		if (cpu->cd.mips.gpr[MIPS_GPR_A0] >= ARC_MAX_HANDLES ||
++		    !machine->md.arc->file_handle_in_use[cpu->cd.mips.gpr[
+ 		    MIPS_GPR_A0]]) {
+ 			fatal("ARCBIOS Close(%i): bad handle\n",
+ 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
+@@ -1701,6 +1702,10 @@
+ 			    nread? ARCBIOS_ESUCCESS: ARCBIOS_EAGAIN;
+ 		} else {
+ 			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
++			if (handleTmp < 0 || handleTmp >= ARC_MAX_HANDLES) {
++				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
++				break;
++			}
+ 			int disk_type = 0;
+ 			int disk_id = arcbios_handle_to_disk_id_and_type(
+ 			    machine, handleTmp, &disk_type);
+@@ -1770,6 +1775,10 @@
+ 			 *  TODO: this is just a test
+ 			 */
+ 			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
++			if (handleTmp < 0 || handleTmp >= ARC_MAX_HANDLES) {
++				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
++				break;
++			}
+ 			int disk_type = 0;
+ 			int disk_id = arcbios_handle_to_disk_id_and_type(
+ 			    machine, handleTmp, &disk_type);
+@@ -1833,6 +1842,13 @@
+ 		    (uint64_t)cpu->cd.mips.gpr[MIPS_GPR_A1],
+ 		    (int) cpu->cd.mips.gpr[MIPS_GPR_A2]);
+ 
++		/*  The handle comes from the guest; reject out-of-range values
++		    before indexing current_seek_offset[] (OOB write otherwise).  */
++		if (cpu->cd.mips.gpr[MIPS_GPR_A0] >= ARC_MAX_HANDLES) {
++			cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
++			break;
++		}
++
+ 		if (cpu->cd.mips.gpr[MIPS_GPR_A2] != 0) {
+ 			fatal("[ ARCBIOS Seek(%i,0x%08" PRIx64",%i): "
+ 			    "UNIMPLEMENTED whence=%i ]\n",
+@@ -2305,8 +2321,9 @@
+ 		env->value[found] = strdup(value);
+ 	} else {
+ 		if (env->n == 0) {
+-			env->name = malloc(0);
+-			env->value = malloc(0);
++			/*  realloc(NULL, ...) below behaves like malloc().  */
++			env->name = NULL;
++			env->value = NULL;
+ 		}
+ 
+ 		env->n ++;
+@@ -2338,6 +2355,7 @@
+ 		len_with_value += strlen(env->value[found]);
+ 
+ 	char* s = malloc(len_with_value + 1);
++	CHECK_ALLOCATION(s);
+ 
+ 	if (name_and_value) {
+ 		if (found < 0)
+@@ -2370,6 +2388,7 @@
+ 	const char *primary_ether_addr)
+ {
+ 	struct envstrings* env = malloc(sizeof(struct envstrings));
++	CHECK_ALLOCATION(env);
+ 	memset(env, 0, sizeof(struct envstrings));
+ 
+ 	uint64_t addr, addr2;
+@@ -2407,11 +2426,13 @@
+ 		if (diskimage_is_a_cdrom(machine, machine->bootdev_id, machine->bootdev_type)) {
+ 			size_t len = strlen(boot_device) + 50;
+ 			char* cdrom = malloc(len);
++			CHECK_ALLOCATION(cdrom);
+ 			snprintf(cdrom, len, "%sscsi(0)cdrom(%i)", boot_device, machine->bootdev_id);
+ 			boot_device = cdrom;
+ 		} else {
+ 			size_t len = strlen(boot_device) + 50;
+ 			char* disk = malloc(len);
++			CHECK_ALLOCATION(disk);
+ 			snprintf(disk, len, "%sscsi(0)disk(%i)rdisk(0)", boot_device, machine->bootdev_id);
+ 			boot_device = disk;
+ 		}
+@@ -2423,11 +2444,11 @@
+ 				partition = 8;
+ 
+ 			size_t len = strlen(boot_device) + 50;
+-			systempartition = malloc(len);
++			CHECK_ALLOCATION(systempartition = malloc(len));
+ 			snprintf(systempartition, len, "%spartition(%i)", boot_device, partition);
+ 		} else {
+ 			size_t len = strlen(boot_device) + 50;
+-			systempartition = malloc(len);
++			CHECK_ALLOCATION(systempartition = malloc(len));
+ 			snprintf(systempartition, len, "%sfdisk(0)", boot_device);
+ 		}
+ 
+@@ -2440,11 +2461,11 @@
+ 				partition = 0;
+ 
+ 			size_t len = strlen(boot_device) + 50;
+-			osloadpartition = malloc(len);
++			CHECK_ALLOCATION(osloadpartition = malloc(len));
+ 			snprintf(osloadpartition, len, "%spartition(%i)", boot_device, partition);
+ 		} else {
+ 			size_t len = strlen(boot_device) + 50;
+-			osloadpartition = malloc(len);
++			CHECK_ALLOCATION(osloadpartition = malloc(len));
+ 			snprintf(osloadpartition, len, "%sfdisk(0)", boot_device);
+ 		}
+ 
+@@ -2462,6 +2483,7 @@
+ 	if (machine->boot_kernel_filename[0] != '\0') {
+ 		size_t len = strlen(machine->boot_kernel_filename) + 10;
+ 		char* s = malloc(len);
++		CHECK_ALLOCATION(s);
+ 		snprintf(s, len, "/%s", machine->boot_kernel_filename);
+ 		set_env(env, "OSLoadFilename", s);
+ 	}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/promemul/of.c est/src/promemul/of.c
+--- src/promemul/of.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/promemul/of.c	2026-06-27 11:13:54.196855400 -0500
+@@ -173,7 +173,10 @@
+ 		unsigned char rgb[3];
+ 		cpu->memory_rw(cpu, cpu->mem, ptr, rgb, 3, MEM_READ,
+ 		    CACHE_DATA | NO_EXCEPTIONS);
+-		if (v != NULL) {
++		/*  color is a guest-supplied index into the fixed 256-entry
++		    rgb_palette[256*3]; reject out-of-range to avoid a
++		    guest->host OOB write.  */
++		if (v != NULL && color >= 0 && color < 256) {
+ 			memcpy(v->rgb_palette + 3 * color, rgb, 3);
+ 			v->update_x1 = v->update_y1 = 0;
+ 			v->update_x2 = v->xsize - 1;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h src/symbol/symbol.c est/src/symbol/symbol.c
+--- src/symbol/symbol.c	2021-04-22 13:04:21.000000000 -0500
++++ est/src/symbol/symbol.c	2026-06-25 20:37:25.559244300 -0500
+@@ -307,15 +307,15 @@
+ 		memset(b2, 0, sizeof(b2));
+ 		memset(b3, 0, sizeof(b3));
+ 		memset(b4, 0, sizeof(b4));
+-		if (fscanf(f, "%s %s\n", b1,b2) != 2)
++		if (fscanf(f, "%79s %79s\n", b1,b2) != 2)
+ 			fprintf(stderr, "warning: symbol file parse error\n");
+ 		if (strlen(b2) < 2 && !(b2[0]>='0' && b2[0]<='9')) {
+ 			strlcpy(b3, b2, sizeof(b3));
+ 			strlcpy(b2, "0", sizeof(b2));
+-			if (fscanf(f, "%s\n", b4) != 1)
++			if (fscanf(f, "%79s\n", b4) != 1)
+ 				fprintf(stderr, "warning: symbol file parse error\n");
+ 		} else {
+-			if (fscanf(f, "%s %s\n", b3,b4) != 2)
++			if (fscanf(f, "%79s %79s\n", b3,b4) != 2)
+ 				fprintf(stderr, "warning: symbol file parse error\n");
+ 		}
+ 
