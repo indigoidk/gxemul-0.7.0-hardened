@@ -236,7 +236,7 @@ static char *cur_machine_disk[MAX_N_DISK];
 static int cur_machine_n_disk;
 #define	MAX_N_DEVICE		20
 #define	MAX_DEVICE_LEN		400
-static char *cur_machine_device[MAX_N_DISK];
+static char *cur_machine_device[MAX_N_DEVICE];
 static int cur_machine_n_device;
 #define	MAX_N_X11_DISP		5
 #define	MAX_X11_DISP_LEN	1000

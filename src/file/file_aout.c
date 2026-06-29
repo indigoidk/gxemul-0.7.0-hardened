@@ -70,7 +70,7 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 	int len;
 	int encoding = ELFDATA2LSB;
 	uint32_t entry, datasize, textsize;
-	int32_t symbsize = 0;
+	uint32_t symbsize = 0;
 	uint32_t vaddr, total_len;
 	unsigned char buf[65536];
 	unsigned char *syms;
@@ -196,10 +196,23 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 		char *string_symbols;
 		off_t oldpos;
 
-		debug("symbols: %i bytes @ 0x%x\n", symbsize, (int)ftello(f));
+		debug("symbols: %i bytes @ 0x%x\n", (int)symbsize, (int)ftello(f));
+		/*  Sanity: the symbol table cannot be larger than the file;
+		    reject a bogus (e.g. fuzzed) size before allocating.  */
+		{
+			off_t cur = ftello(f);
+			fseek(f, 0, SEEK_END);
+			if ((off_t) symbsize > ftello(f) - cur) {
+				fprintf(stderr, "%s: bogus symbol table size\n",
+				    filename);
+				exit(1);
+			}
+			fseek(f, cur, SEEK_SET);
+		}
+
 		CHECK_ALLOCATION(syms = (unsigned char *) malloc(symbsize));
 		len = fread(syms, 1, symbsize, f);
-		if (len != symbsize) {
+		if ((uint32_t)len != symbsize) {
 			fprintf(stderr, "error reading symbols from %s\n",
 			    filename);
 			exit(1);
@@ -210,12 +223,15 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 		strings_len = ftello(f) - oldpos;
 		fseek(f, oldpos, SEEK_SET);
 		debug("strings: %i bytes @ 0x%x\n", strings_len,(int)ftello(f));
-		CHECK_ALLOCATION(string_symbols = (char *) malloc(strings_len));
+		CHECK_ALLOCATION(string_symbols = (char *) malloc((size_t)strings_len + 1));
 		if (fread(string_symbols, 1, strings_len, f) != strings_len) {
 			fprintf(stderr, "Could not read symbols from %s?\n", filename);
 			perror("fread");
 			exit(1);
 		}
+		/*  NUL-terminate, so a string near the end of the table can't
+		    be over-read by add_symbol_name() below.  */
+		string_symbols[strings_len] = '\0';
 
 		aout_symbol_ptr = (struct aout_symbol *) (void*) syms;
 		n_symbols = symbsize / sizeof(struct aout_symbol);
@@ -229,7 +245,9 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 			/*  debug("symbol type 0x%04x @ 0x%08x: %s\n",
 			    type, addr, string_symbols + str_index);  */
 
-			if (type != 0 && addr != 0)
+			/*  str_index comes from the file; reject out-of-range
+			    offsets so we never read past the string table.  */
+			if (type != 0 && addr != 0 && str_index < strings_len)
 				add_symbol_name(&m->symbol_context,
 				    addr, 0, string_symbols + str_index, 0, -1);
 			i++;

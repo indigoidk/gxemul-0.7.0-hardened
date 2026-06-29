@@ -226,7 +226,7 @@ DEVINIT(gc)
 		snprintf(n, sizeof(n), "%s.gc.lo.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = n;
 		templ.extra = d;
 		templ.interrupt_assert = gc_lo_interrupt_assert;
@@ -236,7 +236,7 @@ DEVINIT(gc)
 		snprintf(n, sizeof(n), "%s.gc.hi.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = n;
 		templ.extra = d;
 		templ.interrupt_assert = gc_hi_interrupt_assert;

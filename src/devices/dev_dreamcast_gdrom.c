@@ -49,6 +49,7 @@
 // #define debug fatal
 
 #define	NREGS_GDROM_DMA		(0x100/sizeof(uint32_t))
+#define	GDROM_MAX_TRANSFER_BYTES	(64 * 1024)	/* OB-20 */
 
 struct dreamcast_gdrom_data {
 	// 0x005f7000: GDROM control registers
@@ -180,13 +181,20 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		// which means len = 0x3800. It also sets up DMA to
 		// transfer 0x3800 bytes, so I'm assuming that the
 		// sector count is to be trusted more than the length.
+		if (sector_count <= 0 ||	/* OB-20 */
+		    sector_count > GDROM_MAX_TRANSFER_BYTES / 2048) {
+			fatal("GDROM: rejecting sector_count=%i\n",
+			    (int)sector_count);
+			break;
+		}
+
 		if (d->cnt == 0)
-			d->cnt = 2048 * sector_count;
+			d->cnt = 2048 * (int)sector_count;
 
 		if (sector_count * 2048 != d->cnt) {
 			fatal("Huh? GDROM data_len=0x%x, but sector_count"
 			    "=0x%x\n", (int)d->cnt, (int)sector_count);
-			exit(1);
+			break;	/* OB-20: was exit(1) */
 		}
 
 		alloc_data(d);

@@ -469,7 +469,8 @@ void maple_do_dma_xfer(struct cpu *cpu, struct dreamcast_maple_data *d)
 		switch (cmd) {
 
 		case MAPLE_COMMAND_DEVINFO:
-			if (d->device[port] == NULL || unit != 0) {
+			if (port < 0 || port >= N_MAPLE_PORTS ||
+			    d->device[port] == NULL || unit != 0) {
 				/*  No device present: Timeout.  */
 				/*  debug("[ dreamcast_maple: response="
 				    "timeout ]\n");  */

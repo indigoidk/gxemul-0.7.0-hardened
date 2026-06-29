@@ -96,6 +96,12 @@ static void file_load_android(struct machine *m, struct memory *mem,
 	}
 
 	unencode(page_size, &android_header.page_size, uint32_t);
+	if (page_size < 2048 || page_size > 65536 ||	/* OB-18 */
+	    (page_size & (page_size - 1)) != 0) {
+		fprintf(stderr, "%s: invalid Android boot.img page size 0x%x\n",
+		    filename, (unsigned) page_size);
+		exit(1);
+	}
 	debug("Android boot.img format, page size 0x%x\n", page_size);
 
 	unencode(kernel_size, &android_header.kernel_size, uint32_t);

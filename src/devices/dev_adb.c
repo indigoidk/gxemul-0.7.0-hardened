@@ -302,7 +302,8 @@ static void adb_transfer(struct cpu *cpu, struct adb_data *d, int state_change)
 		debug("output 0x%02x", c);
 		d->reg[vIFR >> VIA_REG_SHIFT] |= IFR_ANY | IFR_SR;
 		d->reg[vBufB >> VIA_REG_SHIFT] |= BUFB_nINTR;
-		d->output_buf[d->cur_output_offset ++] = c;
+		if (d->cur_output_offset < MAX_BUF)	/* OB-6: bound 100-byte output_buf */
+			d->output_buf[d->cur_output_offset ++] = c;
 		break;
 	}
 

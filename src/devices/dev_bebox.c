@@ -229,7 +229,7 @@ DEVINIT(bebox)
 		snprintf(n, sizeof(n), "%s.bebox.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = n;
 		templ.extra = d;
 		templ.interrupt_assert = bebox_interrupt_assert;

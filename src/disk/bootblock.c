@@ -284,7 +284,7 @@ int load_bootblock(struct machine *m, struct cpu *cpu,
 			bootblock_offset = (minibuf[4] + (minibuf[5] << 8) +
 			  (minibuf[6]<<16) + ((uint64_t)minibuf[7]<<24)) * 512;
 
-			if (n_blocks < 1)
+			if (n_blocks < 1 || n_blocks > 128)	/* #111: bound disk-controlled count (fatal() doesn't exit; 128*512=64K) */
 				break;
 
 			debug(readofs == 0x18? "%i" : " + %i", n_blocks);

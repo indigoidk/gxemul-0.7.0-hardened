@@ -343,6 +343,12 @@ static int mec_try_tx(struct cpu *cpu, struct sgi_mec_data *d)
 	if (j < len)
 		fatal("[ mec_try_tx: not enough data? ]\n");
 
+	/*  Transmit only the bytes actually copied into cur_tx_packet: len is
+	    guest-controlled and may exceed MAX_TX_PACKET_LEN, but the fill loops
+	    above stop at MAX_TX_PACKET_LEN, so use j (not len) as the length to
+	    avoid net_ethernet_tx reading past cur_tx_packet.  */
+	d->cur_tx_packet_len = j;
+
 	net_ethernet_tx(cpu->machine->emul->net, &d->nic,
 	    d->cur_tx_packet, d->cur_tx_packet_len);
 

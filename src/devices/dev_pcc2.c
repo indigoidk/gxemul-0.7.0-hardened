@@ -330,8 +330,20 @@ DEVICE_ACCESS(pcc2)
 	if (writeflag == MEM_WRITE)
 		idata = memory_readmax64(cpu, data, len);
 
-	if (writeflag == MEM_READ)
-		memcpy(data, d->pcctwo_reg + relative_addr, len);
+	if (writeflag == MEM_READ) {
+		if (relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+			memcpy(data, d->pcctwo_reg + relative_addr, len);
+		else {
+			static int warned = 0;	/* #119: loud-once (course-correction) */
+			if (!warned) {
+				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
+				    "zero-filled ]\n", (int)relative_addr, (int)len,
+				    (int)PCC2_SIZE);
+				warned = 1;
+			}
+			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+		}
+	}
 
 	switch (relative_addr) {
 
@@ -373,7 +385,8 @@ DEVICE_ACCESS(pcc2)
 	case PCCTWO_T2CMP:
 	case PCCTWO_T1COUNT:
 	case PCCTWO_T2COUNT:
-		if (writeflag == MEM_WRITE)
+		if (writeflag == MEM_WRITE &&
+		    relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
 			memcpy(d->pcctwo_reg + relative_addr, data, len);
 		break;
 
@@ -528,26 +541,30 @@ DEVICE_ACCESS(pcc2)
 
 	case PCCTWO_IPL:
 		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_IPL\n");
-			exit(1);
+			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_IPL; "
+			    "ignored ]\n"); w = 1; }
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
-			fatal("[ pcc2: HUH? Write attempt to PCCTWO_IPL. ]\n");
-			exit(1);
+			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
+			    "ignored ]\n"); w = 1; }
 		} else {
 			if (d->pcctwo_reg[PCCTWO_IPL] == 0) {
-				fatal("pcc2: IPL == 0 on read!\n");
-				exit(1);
+				static int w = 0;	/* #119: was exit(1) */
+				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
+				    w = 1; }
 			}
 		}
 		break;
 
 	case PCCTWO_MASK:
 		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_MASK\n");
-			exit(1);
+			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_MASK; "
+			    "ignored ]\n"); w = 1; }
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata;

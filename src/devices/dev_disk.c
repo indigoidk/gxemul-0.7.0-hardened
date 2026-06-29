@@ -56,17 +56,48 @@ struct disk_data {
 	int		command;
 	int		status;
 	unsigned char	*buf;
+	size_t		buf_len;
 };
 
 
 DEVICE_ACCESS(disk_buf)
 {
 	struct disk_data *d = (struct disk_data *) extra;
+	size_t safe = len;
 
-	if (writeflag == MEM_WRITE)
-		memcpy(d->buf + relative_addr, data, len);
-	else
-		memcpy(data, d->buf + relative_addr, len);
+	/*
+	 *  Bound the access to the buffer: a guest must not be able to make
+	 *  this memcpy read or (worse) write past d->buf via a misaligned or
+	 *  end-spanning access to the data-buffer region.
+	 */
+	if (relative_addr >= d->buf_len) {
+		static int warned = 0;	/* #119: loud-once (course-correction) */
+		if (!warned) {
+			fatal("[ dev_disk: access at 0x%x beyond buffer 0x%x; "
+			    "ignored ]\n", (int)relative_addr, (int)d->buf_len);
+			warned = 1;
+		}
+		if (writeflag != MEM_WRITE)
+			memset(data, 0, len);
+		return 1;
+	}
+	if (relative_addr + len > d->buf_len) {
+		static int warned2 = 0;	/* #119: loud-once on the end-span clamp */
+		if (!warned2) {
+			fatal("[ dev_disk: end-spanning access at 0x%x+%i clamped "
+			    "to buffer 0x%x ]\n", (int)relative_addr, (int)len,
+			    (int)d->buf_len);
+			warned2 = 1;
+		}
+		safe = d->buf_len - relative_addr;
+	}
+
+	if (writeflag == MEM_WRITE) {
+		memcpy(d->buf + relative_addr, data, safe);
+	} else {
+		memset(data, 0, len);
+		memcpy(data, d->buf + relative_addr, safe);
+	}
 
 	return 1;
 }
@@ -177,6 +208,7 @@ DEVINIT(disk)
 
 	CHECK_ALLOCATION(d->buf = (unsigned char *) malloc(devinit->machine->arch_pagesize));
 	memset(d->buf, 0, devinit->machine->arch_pagesize);
+	d->buf_len = devinit->machine->arch_pagesize;
 
 	snprintf(n1, nlen, "%s [control]", devinit->name);
 	snprintf(n2, nlen, "%s [data buffer]", devinit->name);

@@ -29,11 +29,18 @@
 
 printf "Generating autodev.c... "
 
-rm -f autodev.c
+#  Build into a PID-unique temp file and atomically rename it into place at
+#  the end.  The recursive-make rules (all -> objs -> autodev.o) can invoke
+#  this script concurrently; appending directly to autodev.c then lets two
+#  runs interleave their writes and drop a line's first printf, corrupting a
+#  random device_register/pci_register entry (an intermittent build failure).
+#  A unique temp file + atomic mv makes the output correct regardless.
+AD="autodev.c.new.$$"
+rm -f "$AD"
 
-printf "/*\n *  DO NOT EDIT. AUTOMATICALLY CREATED\n */\n\n" >> autodev.c
+printf "/*\n *  DO NOT EDIT. AUTOMATICALLY CREATED\n */\n\n" >> "$AD"
 
-cat autodev_head.c >> autodev.c
+cat autodev_head.c >> "$AD"
 
 printf "5"
 rm -f .index
@@ -51,7 +58,7 @@ for a in dev_*.c; do
 	if [ z"$B" != z ]; then
 		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
 		for B in $C; do
-			printf "int devinit_$B(struct devinit *);\n" >> autodev.c
+			printf "int devinit_$B(struct devinit *);\n" >> "$AD"
 		done
 	fi
 done
@@ -62,13 +69,13 @@ for a in bus_pci.c; do
 	if [ z"$B" != z ]; then
 		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
 		for B in $C; do
-			printf "void pciinit_$B(struct machine *, " >> autodev.c
-			printf "struct memory *, struct pci_device *);\n" >> autodev.c
+			printf "void pciinit_$B(struct machine *, " >> "$AD"
+			printf "struct memory *, struct pci_device *);\n" >> "$AD"
 		done
 	fi
 done
 
-cat autodev_middle.c >> autodev.c
+cat autodev_middle.c >> "$AD"
 
 printf "2"
 for a in dev_*.c; do
@@ -76,8 +83,8 @@ for a in dev_*.c; do
 	if [ z"$B" != z ]; then
 		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
 		for B in $C; do
-			printf "\tdevice_register(\""$B"\"," >> autodev.c
-			printf " devinit_$B);\n" >> autodev.c
+			printf "\tdevice_register(\""$B"\"," >> "$AD"
+			printf " devinit_$B);\n" >> "$AD"
 		done
 	fi
 done
@@ -88,12 +95,15 @@ for a in bus_pci.c; do
 	if [ z"$B" != z ]; then
 		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
 		for B in $C; do
-			printf "\tpci_register(\""$B"\"," >> autodev.c
-			printf " pciinit_$B);\n" >> autodev.c
+			printf "\tpci_register(\""$B"\"," >> "$AD"
+			printf " pciinit_$B);\n" >> "$AD"
 		done
 	fi
 done
 
-cat autodev_tail.c >> autodev.c
+cat autodev_tail.c >> "$AD"
+
+#  Atomically replace autodev.c (see the temp-file note above).
+mv -f "$AD" autodev.c
 
 printf " done\n"

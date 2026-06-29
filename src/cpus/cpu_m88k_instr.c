@@ -458,11 +458,14 @@ static void m88k_extu(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
 }
 static void m88k_ext(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
 {
-	int32_t x = reg(ic->arg[1]);
-	x >>= o;	/*  signed (arithmetic) shift  */
+	uint32_t src = reg(ic->arg[1]), x = src >> o;
 	if (w != 0) {
-		x <<= (32-w);
-		x >>= (32-w);
+		uint32_t signbit = (uint32_t)1 << (w - 1);
+		x &= ((uint32_t)1 << w) - 1;
+		if (x & signbit)
+			x |= ~(((uint32_t)1 << w) - 1);
+	} else if (o != 0 && (src & 0x80000000)) {
+		x |= ~(0xffffffffU >> o);
 	}
 	reg(ic->arg[0]) = x;
 }
@@ -2575,7 +2578,7 @@ X(to_be_translated)
 		}
 
 		ic->arg[0] = (size_t) &cpu->cd.m88k.r[s1];
-		ic->arg[1] = (uint32_t) (1 << d);
+		ic->arg[1] = (uint32_t) (1U << d);
 
 		offset = (addr & 0xffc) + d16;
 		ic->arg[2] = offset;
@@ -2939,4 +2942,3 @@ X(to_be_translated)
 #include "cpu_dyntrans.c" 
 #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
 }
-

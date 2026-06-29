@@ -749,6 +749,10 @@ int dec21143_tx(struct cpu *cpu, struct dec21143_data *d)
 			/*  First segment. Let's allocate a new buffer:  */
 			/*  fatal("new frame }\n");  */
 
+			if (bufsize < 0)	/* OB-17: cap TX frame */
+				bufsize = 0;
+			if (bufsize > 65536)
+				bufsize = 65536;
 			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *) malloc(bufsize));
 			d->cur_tx_buf_len = 0;
 		} else {
@@ -760,6 +764,10 @@ int dec21143_tx(struct cpu *cpu, struct dec21143_data *d)
 				fatal("[ dec21143: WARNING! tx: middle "
 				    "segment, but no first segment?! ]\n");
 
+			if (bufsize < 0)	/* OB-17: cap TX frame */
+				bufsize = 0;
+			if (bufsize > 65536 - d->cur_tx_buf_len)
+				bufsize = 65536 - d->cur_tx_buf_len;
 			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *) realloc(d->cur_tx_buf,
 			    d->cur_tx_buf_len + bufsize));
 		}

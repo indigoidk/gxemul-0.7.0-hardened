@@ -624,7 +624,7 @@ int ppc_cpu_disassemble_instr(struct cpu *cpu, unsigned char *instr,
 		debug("%016" PRIx64, (uint64_t) dumpaddr);
 
 	/*  NOTE: Fixed to big-endian.  */
-	iword = (instr[0] << 24) + (instr[1] << 16) + (instr[2] << 8)
+	iword = ((uint32_t)instr[0] << 24) + (instr[1] << 16) + (instr[2] << 8)
 	    + instr[3];
 
 	debug(": %08" PRIx32, iword);
@@ -1782,7 +1782,8 @@ static void debug_spr_usage(uint64_t pc, int spr)
 	case SPR_DBSR:
 	case SPR_PIR:
 		break;
-	default:if (spr >= SPR_IBAT0U && spr <= SPR_DBAT3L) {
+	default:if ((spr >= SPR_IBAT0U && spr <= SPR_DBAT3L) ||
+		    (spr >= SPR_IBAT4U && spr <= SPR_DBAT7L)) {	/* #116: extended BATs (7445/7455) */
 			break;
 		} else
 			fatal("[ using UNIMPLEMENTED spr %i (%s), pc = "

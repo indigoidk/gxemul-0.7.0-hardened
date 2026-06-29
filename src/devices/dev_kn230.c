@@ -155,7 +155,7 @@ DEVINIT(kn230)
 		snprintf(tmpstr2, sizeof(tmpstr2), "%s.kn230.0x%x",
 		    devinit->interrupt_path, 1 << i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = tmpstr2;
 		templ.extra = d;
                 templ.interrupt_assert = kn230_interrupt_assert;

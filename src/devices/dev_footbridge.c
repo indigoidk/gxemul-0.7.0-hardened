@@ -544,7 +544,7 @@ DEVINIT(footbridge)
 		char tmpstr[600];
 
 		memset(&interrupt_template, 0, sizeof(interrupt_template));
-		interrupt_template.line = 1 << i;
+		interrupt_template.line = (uint32_t)1 << i;
 		snprintf(tmpstr, sizeof(tmpstr), "%s.%i", irq_path, i);
 		interrupt_template.name = tmpstr;
 

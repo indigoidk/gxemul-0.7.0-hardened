@@ -163,7 +163,7 @@ DEVINIT(kn02)
 		snprintf(tmpstr, sizeof(tmpstr), "%s.kn02.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = tmpstr;
 		templ.extra = d;
 		templ.interrupt_assert = kn02_interrupt_assert;

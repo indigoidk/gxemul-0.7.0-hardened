@@ -254,6 +254,8 @@ DEVICE_TICK(sgi_gbe)
 				
 				// Read one line of up to 512 bytes from the tile.
 				int len = tilex < width_in_tiles ? 512 : (partial_pixels * bytes_per_pixel);
+				if (len > 512)	/* OB-14: fb_buf is 512 bytes/line */
+					len = 512;
 
 				cpu->memory_rw(cpu, cpu->mem, base + 512 * line,
 				    buf, len, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
@@ -703,7 +705,7 @@ DEVICE_ACCESS(sgi_gbe)
 				int cmap = color_index >> 8;
 				d->palette[color_index] = idata;
 				if (cmap == d->cmap_select)
-					d->selected_palette[color_index] = idata;
+					d->selected_palette[color_index & 0xff] = idata;	/* OB-13: 256-entry cache */
 			} else {
 				odata = d->palette[color_index];
 			}

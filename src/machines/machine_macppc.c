@@ -113,7 +113,15 @@ MACHINE_SETUP(macppc)
 	cpu->cd.ppc.gpr[3] = a;
 	store_16bit_word(cpu, a + 0x0000, 1);	/*  revision  */
 	store_16bit_word(cpu, a + 0x0002, 2);	/*  version  */
-	store_buf(cpu, a + 0x0004, machine->boot_string_argument, 256);
+	{
+		/*  boot_string_argument is usually far shorter than the
+		    256-byte field; copy only its bytes (capped) so store_buf
+		    does not read past the string.  */
+		size_t blen = strlen(machine->boot_string_argument) + 1;
+		if (blen > 256)
+			blen = 256;
+		store_buf(cpu, a + 0x0004, machine->boot_string_argument, blen);
+	}
 	/*  26 dram banks; "long base; long size"  */
 	store_32bit_word(cpu, a + 0x0104, 0);	/*  base  */
 	store_32bit_word(cpu, a + 0x0108, machine->physical_ram_in_mb
@@ -168,6 +176,9 @@ MACHINE_DEFAULT_CPU(macppc)
 	case MACHINE_MACPPC_G4:
 		machine->cpu_name = strdup("MPC7400");
 		break;
+	case MACHINE_MACPPC_G4PLUS:
+		machine->cpu_name = strdup("MPC7455");
+		break;
 	case MACHINE_MACPPC_G5:
 		machine->cpu_name = strdup("PPC970");
 		break;
@@ -192,6 +203,9 @@ MACHINE_REGISTER(macppc)
 
 	machine_entry_add_subtype(me, "MacPPC G4", MACHINE_MACPPC_G4,
 	    "g4", NULL);
+
+	machine_entry_add_subtype(me, "MacPPC G4plus (MPC7455)",
+	    MACHINE_MACPPC_G4PLUS, "g4plus", NULL);
 
 	machine_entry_add_subtype(me, "MacPPC G5", MACHINE_MACPPC_G5,
 	    "g5", NULL);

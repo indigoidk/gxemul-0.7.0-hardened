@@ -425,7 +425,7 @@ DEVINIT(i80321)
 		snprintf(tmpstr2, sizeof(tmpstr2), "%s.i80321.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = tmpstr2;
 		templ.extra = d;
 		templ.interrupt_assert = i80321_interrupt_assert;

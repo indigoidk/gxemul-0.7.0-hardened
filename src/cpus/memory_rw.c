@@ -284,6 +284,15 @@ not just the device in question.
 				/*  Found a device, let's access it:  */
 				mem->last_accessed_device = i;
 
+				/*  #95: zero the caller's buffer up front on a read
+				    so a device handler that fills only part of it --
+				    or whose access is len-clamped just below -- can
+				    never hand back uninitialised host memory to the
+				    guest.  Root-cause fix for the uninit-read class
+				    (cf. per-device #91/#93/#94).  */
+				if (writeflag == MEM_READ)
+					memset(data, 0, len);
+
 				paddr -= mem->devices[i].baseaddr;
 				if (paddr + len > mem->devices[i].length)
 					len = mem->devices[i].length - paddr;

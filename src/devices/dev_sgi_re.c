@@ -118,6 +118,11 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 
 	uint32_t tileptr = 0;
 
+	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+	if (tlb_mode <= 2 && tile_nr >= 256)
+		return;
+
 	switch (tlb_mode) {
 	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
 		break;
@@ -150,7 +155,7 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 	
 	tileptr &= ~0x80000000;
 
-	uint8_t buf[4];
+	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
 	if (put) {
 		switch (color_mode) {
 		case DE_MODE_TYPE_CI:
@@ -1125,7 +1130,7 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 			}
 
 			fill_addr += fill_len;
-			dstlen -= sizeof(zerobuf);
+			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
 		}
 		break;
 	default:

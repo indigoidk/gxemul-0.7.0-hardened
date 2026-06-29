@@ -91,6 +91,10 @@ DEVICE_ACCESS(mp)
 
 	case DEV_MP_STARTUPCPU:
 		which_cpu = idata;
+		/*  The CPU index comes from the guest; reject out-of-range
+		    values instead of indexing d->cpus[] out of bounds.  */
+		if (which_cpu < 0 || which_cpu >= cpu->machine->ncpus)
+			break;
 		d->cpus[which_cpu]->pc = d->startup_addr;
 		switch (cpu->cpu_family->arch) {
 		case ARCH_MIPS:

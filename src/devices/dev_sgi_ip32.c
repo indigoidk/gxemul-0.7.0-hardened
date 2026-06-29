@@ -414,9 +414,9 @@ void dev_crime_init(struct machine *machine, struct memory *mem,
 	for (i=0; i<32; i++) {
 		struct interrupt templ;
 		char name[400];
-		snprintf(name, sizeof(name), "%s.crime.0x%x", irq_path, 1 << i);
+		snprintf(name, sizeof(name), "%s.crime.0x%x", irq_path, (uint32_t)1 << i);
 		memset(&templ, 0, sizeof(templ));
-                templ.line = 1 << i;
+                templ.line = (uint32_t)1 << i;
 		templ.name = name;
 		templ.extra = d;
 		templ.interrupt_assert = crime_interrupt_assert;

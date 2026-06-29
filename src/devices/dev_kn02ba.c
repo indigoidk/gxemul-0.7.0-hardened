@@ -183,7 +183,7 @@ DEVINIT(kn02ba)
 		    devinit->interrupt_path, 1 << i);
 		// printf("registering '%s'\n", tmpstr);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = tmpstr;
 		templ.extra = d;
 		templ.interrupt_assert = kn02ba_interrupt_assert;

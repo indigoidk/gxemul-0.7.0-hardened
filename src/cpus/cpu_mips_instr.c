@@ -179,6 +179,15 @@ X(beq)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs == rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -199,6 +208,15 @@ X(beq_samepage)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs == rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -214,6 +232,13 @@ X(beq_samepage)
 X(beq_samepage_addiu)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Fused branch in another branch's delay slot: don't run the
+		    fused op or apply the branch (corrupts next_ic); flag the
+		    outer branch and let the main loop re-run this afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->n_translated_instrs ++;
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
@@ -225,6 +250,13 @@ X(beq_samepage_addiu)
 X(beq_samepage_nop)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Fused branch in another branch's delay slot: don't run the
+		    fused op or apply the branch (corrupts next_ic); flag the
+		    outer branch and let the main loop re-run this afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->n_translated_instrs ++;
 	if (rs == rt)
 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
@@ -236,6 +268,15 @@ X(bne)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs != rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -256,6 +297,15 @@ X(bne_samepage)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs != rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -271,6 +321,13 @@ X(bne_samepage)
 X(bne_samepage_addiu)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Fused branch in another branch's delay slot: don't run the
+		    fused op or apply the branch (corrupts next_ic); flag the
+		    outer branch and let the main loop re-run this afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->n_translated_instrs ++;
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
@@ -282,6 +339,13 @@ X(bne_samepage_addiu)
 X(bne_samepage_nop)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Fused branch in another branch's delay slot: don't run the
+		    fused op or apply the branch (corrupts next_ic); flag the
+		    outer branch and let the main loop re-run this afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->n_translated_instrs ++;
 	if (rs != rt)
 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
@@ -291,6 +355,15 @@ X(bne_samepage_nop)
 X(b)
 {
 	MODE_int_t old_pc = cpu->pc;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -306,6 +379,15 @@ X(b)
 }
 X(b_samepage)
 {
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -328,6 +410,15 @@ X(beql)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs == rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -349,6 +440,15 @@ X(beql_samepage)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs == rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -367,6 +467,15 @@ X(bnel)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs != rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -388,6 +497,15 @@ X(bnel_samepage)
 {
 	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
 	int x = rs != rt;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -415,6 +533,15 @@ X(blez)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs <= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -435,6 +562,15 @@ X(blez_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs <= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -452,6 +588,15 @@ X(blezl)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs <= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -473,6 +618,15 @@ X(blezl_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs <= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -500,6 +654,15 @@ X(bltz)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -520,6 +683,15 @@ X(bltz_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -537,6 +709,15 @@ X(bltzl)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -558,6 +739,15 @@ X(bltzl_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -585,6 +775,15 @@ X(bgez)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -605,6 +804,15 @@ X(bgez_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -622,6 +830,15 @@ X(bgezl)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -643,6 +860,15 @@ X(bgezl_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -671,6 +897,15 @@ X(bgezal)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -699,6 +934,15 @@ X(bgezal_samepage)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -724,6 +968,15 @@ X(bgezall)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -753,6 +1006,15 @@ X(bgezall_samepage)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs >= 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -788,6 +1050,15 @@ X(bltzal)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -816,6 +1087,15 @@ X(bltzal_samepage)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -841,6 +1121,15 @@ X(bltzall)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -870,6 +1159,15 @@ X(bltzall_samepage)
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs < 0), low_pc;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
 	    / sizeof(struct mips_instr_call);
@@ -904,6 +1202,15 @@ X(bgtz)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs > 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -924,6 +1231,15 @@ X(bgtz_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs > 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -941,6 +1257,15 @@ X(bgtzl)
 	MODE_int_t old_pc = cpu->pc;
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs > 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -962,6 +1287,15 @@ X(bgtzl_samepage)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
 	int x = (rs > 0);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x)
 		ic[1].f(cpu, ic+1);
@@ -987,6 +1321,15 @@ X(bgtzl_samepage)
 X(jr)
 {
 	MODE_int_t rs = reg(ic->arg[0]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1001,6 +1344,15 @@ X(jr)
 X(jr_ra)
 {
 	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1025,6 +1377,15 @@ X(jr_ra_addiu)
 X(jr_ra_trace)
 {
 	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1040,6 +1401,15 @@ X(jr_ra_trace)
 X(jalr)
 {
 	MODE_int_t rs = reg(ic->arg[0]), rd;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
 	    MIPS_INSTR_ALIGNMENT_SHIFT);
@@ -1058,6 +1428,15 @@ X(jalr)
 X(jalr_trace)
 {
 	MODE_int_t rs = reg(ic->arg[0]), rd;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
 	    MIPS_INSTR_ALIGNMENT_SHIFT);
@@ -1085,6 +1464,15 @@ X(jalr_trace)
 X(j)
 {
 	MODE_int_t old_pc = cpu->pc;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1100,6 +1488,15 @@ X(j)
 X(jal)
 {
 	MODE_int_t old_pc = cpu->pc;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
 	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
@@ -1117,6 +1514,15 @@ X(jal)
 X(jal_trace)
 {
 	MODE_int_t old_pc = cpu->pc;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
 	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
@@ -2060,6 +2466,15 @@ X(cop1_bc)
 		x ^= 1;
 
 	/*  Execute the delay slot (except if it is nullified):  */
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on MIPS). Don't run it as a
+		    nested branch -- that corrupts next_ic; flag the outer branch
+		    so it does not apply its branch, and let the main loop re-run
+		    this instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	if (x || !(ic->arg[1] & 2))
 		ic[1].f(cpu, ic+1);
@@ -3111,6 +3526,13 @@ X(lui_addiu)
  */
 X(b_samepage_addiu)
 {
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Fused branch in another branch's delay slot: don't run the
+		    fused op or apply the branch (corrupts next_ic); flag the
+		    outer branch and let the main loop re-run this afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	reg(ic[1].arg[1]) = (int32_t)
 	    ( (int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2] );
 	cpu->n_translated_instrs ++;

@@ -341,6 +341,22 @@ DEVICE_ACCESS(scc)
 
 	port = relative_addr / 8;
 	relative_addr &= 7;
+	if (port >= N_SCC_PORTS) {
+		/*  #101 (refined, Codex+agy course-correction): a guest can address
+		    beyond the real SCC ports within the 0x1000 window. The earlier
+		    "% N_SCC_PORTS" was host-safe but ALIASED out-of-range offsets onto a
+		    valid port (wrong hardware). Ignore the access instead -- loud once,
+		    no aliasing, still no OOB into scc_register_r[].  */
+		static int scc_oob_warned = 0;
+		if (!scc_oob_warned) {
+			fatal("[ scc: out-of-range port %i (beyond %i) ignored; "
+			    "not aliased ]\n", port, N_SCC_PORTS);
+			scc_oob_warned = 1;
+		}
+		if (writeflag == MEM_READ)
+			memory_writemax64(cpu, data, len, 0);
+		return 1;
+	}
 
 	dev_scc_tick(cpu, extra);
 

@@ -67,6 +67,8 @@ int apple_load_bootblock(struct machine *m, struct cpu *cpu,
 	do {
 		int start, length;
 		int ofs = 0x200 * (partnr + 1);
+		if (ofs + 0x40 > (int)sizeof(buf))	/* #97: bound guest n_partitions (buf[0x207]) */
+			break;
 		if (partnr == 0)
 			n_partitions = buf[ofs + 7];
 		start = ((uint64_t)buf[ofs + 8] << 24) + (buf[ofs + 9] << 16) +
@@ -74,7 +76,7 @@ int apple_load_bootblock(struct machine *m, struct cpu *cpu,
 		length = ((uint64_t)buf[ofs+12] << 24) + (buf[ofs + 13] << 16) +
 		    (buf[ofs + 14] << 8) + buf[ofs + 15];
 
-		debug("partition %i: '%s', type '%s', start %i, length %i\n",
+		debug("partition %i: '%.32s', type '%.32s', start %i, length %i\n",
 		    partnr, buf + ofs + 0x10, buf + ofs + 0x30,
 		    start, length);
 

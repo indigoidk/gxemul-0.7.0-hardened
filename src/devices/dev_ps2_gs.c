@@ -92,6 +92,17 @@ DEVICE_ACCESS(ps2_gs)
 		idata = memory_readmax64(cpu, data, len);
 
 	regnr = relative_addr / 16;
+	if (regnr < 0 || regnr >= N_GS_REGS) {	/* #99: guest offset can exceed reg[] */
+		static int warned = 0;	/* #119: loud-once (course-correction; was debug) */
+		if (!warned) {
+			fatal("[ gs: register access out of range (addr 0x%x); "
+			    "ignored ]\n", (int)relative_addr);
+			warned = 1;
+		}
+		if (writeflag == MEM_READ)
+			memory_writemax64(cpu, data, len, 0);
+		return 1;
+	}
 	if (relative_addr & 0xf) {
 		debug("[ gs unaligned access, addr 0x%x ]\n",
 		    (int)relative_addr);

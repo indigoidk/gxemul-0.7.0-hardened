@@ -307,15 +307,15 @@ void symbol_readfile(struct symbol_context *sc, char *fname)
 		memset(b2, 0, sizeof(b2));
 		memset(b3, 0, sizeof(b3));
 		memset(b4, 0, sizeof(b4));
-		if (fscanf(f, "%s %s\n", b1,b2) != 2)
+		if (fscanf(f, "%79s %79s\n", b1,b2) != 2)
 			fprintf(stderr, "warning: symbol file parse error\n");
 		if (strlen(b2) < 2 && !(b2[0]>='0' && b2[0]<='9')) {
 			strlcpy(b3, b2, sizeof(b3));
 			strlcpy(b2, "0", sizeof(b2));
-			if (fscanf(f, "%s\n", b4) != 1)
+			if (fscanf(f, "%79s\n", b4) != 1)
 				fprintf(stderr, "warning: symbol file parse error\n");
 		} else {
-			if (fscanf(f, "%s %s\n", b3,b4) != 2)
+			if (fscanf(f, "%79s %79s\n", b3,b4) != 2)
 				fprintf(stderr, "warning: symbol file parse error\n");
 		}
 

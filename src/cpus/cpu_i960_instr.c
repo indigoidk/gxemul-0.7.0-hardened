@@ -179,9 +179,9 @@ X(to_be_translated)
 	uint32_t iw;
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
+		iw = READ_WORD_LE(ib);
 	else
-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
+		iw = READ_WORD_BE(ib);
 
 	const int opcode = iw >> 24;
 

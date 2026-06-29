@@ -254,6 +254,16 @@ void framebuffer_blockcopyfill(struct vfb_data *d, int fillflag, int fill_r,
 	if (x2 < 0)		x2 = 0;
 	if (x2 >= d->xsize)	x2 = d->xsize-1;
 
+	/*
+	 *  Nothing to do if the clipped horizontal span is empty. Without
+	 *  this guard, (x2 - x1 + 1) can be <= 0 and, since 'linelen' is a
+	 *  size_t, it would wrap to a huge value -- turning the memset()/copy
+	 *  below into an out-of-bounds write past the framebuffer. (These
+	 *  coordinates can come from the emulated guest.)
+	 */
+	if (x2 < x1)
+		return;
+
 	dest_ofs = d->bytes_per_line * y1 + (d->bit_depth/8) * x1;
 	linelen = (x2-x1 + 1) * (d->bit_depth/8);
 	/*  NOTE: linelen is nr of bytes, not pixels  */
@@ -265,14 +275,20 @@ void framebuffer_blockcopyfill(struct vfb_data *d, int fillflag, int fill_r,
 				    d->framebuffer + dest_ofs;
 
 				if (d->bit_depth == 24) {
-					for (x=0; x<(ssize_t)linelen && x <
-					    (int) sizeof(buf); x += 3) {
+					/*  Fill the whole line: 'buf' is a
+					    pointer, so the old "x < sizeof(buf)"
+					    bound only painted 8 bytes/line.  */
+					for (x=0; x+2 < (ssize_t)linelen; x += 3) {
 						buf[x] = fill_r;
 						buf[x+1] = fill_g;
 						buf[x+2] = fill_b;
 					}
 				} else if (d->bit_depth == 8) {
-					memset(buf, fill_r, linelen);
+					/*  For 8-bit, linelen == (x2-x1+1).
+					    Use the bounded expression so the
+					    size is provably non-negative.  */
+					memset(buf, fill_r,
+					    (size_t)(x2 - x1 + 1));
 				} else {
 					fatal("Unimplemented bit-depth (%i)"
 					    " for fb fill\n", d->bit_depth);
@@ -283,6 +299,15 @@ void framebuffer_blockcopyfill(struct vfb_data *d, int fillflag, int fill_r,
 			dest_ofs += d->bytes_per_line;
 		}
 	} else {
+		/*  #106: clip the (guest-derived) source column too -- dst x1/x2
+		    were clipped above but from_x was not, so the memmove source
+		    could run past the framebuffer even for a valid from_y.  */
+		if (from_x < 0)
+			from_x = 0;
+		if (from_x + (x2 - x1 + 1) > d->xsize)
+			from_x = d->xsize - (x2 - x1 + 1);
+		if (from_x < 0)
+			from_x = 0;
 		from_ofs = d->bytes_per_line * from_y +
 		    (d->bit_depth/8) * from_x;
 		for (y=y1; y<=y2; y++) {
@@ -627,7 +652,8 @@ DEVICE_ACCESS(fb)
 	}
 #endif
 
-	if (relative_addr >= d->framebuffer_size)
+	if (relative_addr >= d->framebuffer_size ||
+	    len > (uint64_t)d->framebuffer_size - relative_addr)	/* OB-1: end-span */
 		return 0;
 
 	/*  See if a write actually modifies the framebuffer contents:  */

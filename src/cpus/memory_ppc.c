@@ -35,28 +35,18 @@
  *  BAT translation. Returns -1 if there was no BAT hit, >= 0 for a hit.
  *  (0 for access denied, 1 for read-only, and 2 for read-write access allowed.)
  */
-int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
-	int user)
+/*  #116: MPC7445/7455 HID0[HIGH_BAT_EN] (MSB-0 bit 8) enables IBAT4-7/DBAT4-7.  */
+#define	HID0_HIGH_BAT_EN	0x00800000
+
+/*  #116: scan one 4-pair BAT block (base_spr = SPR_IBAT0U or SPR_IBAT4U).
+    The body is the original ppc_bat() loop, unchanged.  */
+static int ppc_bat_block(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr,
+	int flags, int user, int istart, int iend, int base_spr)
 {
-	int i, istart = 0, iend = 8, pp;
+	int i, pp;
 
-	if (flags & FLAG_INSTR)
-		iend = 4;
-	else
-		istart = 4;
-
-	if (cpu->cd.ppc.bits != 32) {
-		fatal("TODO: ppc_bat() for non-32-bit\n");
-		exit(1);
-	}
-	if (cpu->cd.ppc.cpu_type.flags & PPC_601) {
-		fatal("TODO: ppc_bat() for PPC 601\n");
-		exit(1);
-	}
-
-	/*  Scan either the 4 instruction BATs or the 4 data BATs:  */
 	for (i=istart; i<iend; i++) {
-		int regnr = SPR_IBAT0U + i * 2;
+		int regnr = base_spr + i * 2;
 		uint32_t upper = cpu->cd.ppc.spr[regnr];
 		uint32_t lower = cpu->cd.ppc.spr[regnr + 1];
 		uint32_t phys = lower & BAT_RPN, ebs = upper & BAT_EPI;
@@ -85,6 +75,42 @@ int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
 			return 2;
 		}
 	}
+
+	return -1;
+}
+
+int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
+	int user)
+{
+	int istart = 0, iend = 8, r;
+
+	if (flags & FLAG_INSTR)
+		iend = 4;
+	else
+		istart = 4;
+
+	if (cpu->cd.ppc.bits != 32) {
+		fatal("TODO: ppc_bat() for non-32-bit\n");
+		exit(1);
+	}
+	if (cpu->cd.ppc.cpu_type.flags & PPC_601) {
+		fatal("TODO: ppc_bat() for PPC 601\n");
+		exit(1);
+	}
+
+	/*  Base BATs 0-3 (the 4 instruction or the 4 data BATs):  */
+	r = ppc_bat_block(cpu, vaddr, return_paddr, flags, user,
+	    istart, iend, SPR_IBAT0U);
+	if (r != -1)
+		return r;
+
+	/*  #116: extended BATs 4-7 (MPC7445/7455), identical layout at 0x230,
+	    but ONLY when the guest has enabled them via HID0[HIGH_BAT_EN].  This
+	    keeps the aliased DC_ADR/DC_DAT/DC_CST (0x231/0x232/0x238) cache-debug
+	    SPRs from spoofing a BAT on a non-745x guest (Codex+agy consensus).  */
+	if (cpu->cd.ppc.spr[SPR_HID0] & HID0_HIGH_BAT_EN)
+		return ppc_bat_block(cpu, vaddr, return_paddr, flags, user,
+		    istart, iend, SPR_IBAT4U);
 
 	return -1;
 }

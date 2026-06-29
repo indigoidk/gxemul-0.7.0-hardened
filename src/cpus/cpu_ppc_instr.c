@@ -610,8 +610,8 @@ X(cmpd)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -634,8 +634,8 @@ X(cmpld)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -658,8 +658,8 @@ X(cmpdi)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -682,8 +682,8 @@ X(cmpldi)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -706,8 +706,8 @@ X(cmpw)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 X(cmpw_cr0)
 {
@@ -743,8 +743,8 @@ X(cmplw)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -767,8 +767,8 @@ X(cmpwi)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 X(cmpwi_cr0)
 {
@@ -804,8 +804,8 @@ X(cmplwi)
 		c = 2;
 	/*  SO bit, copied from XER  */
 	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= (c << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
 }
 
 
@@ -950,8 +950,8 @@ X(fcmpu)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
-	cpu->cd.ppc.cr |= ((c&0xe) << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
+	cpu->cd.ppc.cr |= ((uint32_t)(c&0xe) << bf_shift);
 	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 }
@@ -1506,7 +1506,7 @@ X(rlwnm)
 	int rb = (iword >> 11) & 31;
 	int sh = cpu->cd.ppc.gpr[rb] & 0x1f;
 	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
-	tmp = (tmp << sh) | (tmp >> (32-sh));
+	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
 	tmp &= (uint32_t)ic->arg[1];
 	reg(ic->arg[0]) = tmp;
 }
@@ -1526,7 +1526,7 @@ X(rlwinm)
 	int rs = (iword >> 21) & 31;
 	int sh = (iword >> 11) & 31;
 	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
-	tmp = (tmp << sh) | (tmp >> (32-sh));
+	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
 	tmp &= (uint32_t)ic->arg[1];
 	reg(ic->arg[0]) = tmp;
 }
@@ -1549,7 +1549,7 @@ X(rlwimi)
 	int me = (iword >> 1) & 31;   
 	int rc = iword & 1;
 
-	tmp = (tmp << sh) | (tmp >> (32-sh));
+	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
 
 	for (;;) {
 		uint64_t mask;
@@ -1606,7 +1606,7 @@ X(mcrf)
 {
 	int bf_shift = ic->arg[0], bfa_shift = ic->arg[1];
 	uint32_t tmp = (cpu->cd.ppc.cr >> bfa_shift) & 0xf;
-	cpu->cd.ppc.cr &= ~(0xf << bf_shift);
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
 	cpu->cd.ppc.cr |= (tmp << bf_shift);
 }
 
@@ -3900,4 +3900,3 @@ X(to_be_translated)
 #include "cpu_dyntrans.c"
 #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
 }
-

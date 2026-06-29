@@ -267,6 +267,8 @@ DEVICE_ACCESS(ps2_gif)
 				    * d->bytes_per_pixel;
 				int addr = (24 + y*xsize) * 4;
 				for (x=0; x<xsize; x++) {
+					if (addr < 0 || (size_t)addr + 3 > len)	/* #108: don't read past data[] */
+						break;
 					/*  There are three bytes (r,g,b) at
 					    data[addr + 0] .. [addr + 2].
 					    TODO: This should be translated to a

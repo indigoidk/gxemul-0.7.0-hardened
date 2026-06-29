@@ -173,7 +173,10 @@ OF_SERVICE(call_method_5_2)
 		unsigned char rgb[3];
 		cpu->memory_rw(cpu, cpu->mem, ptr, rgb, 3, MEM_READ,
 		    CACHE_DATA | NO_EXCEPTIONS);
-		if (v != NULL) {
+		/*  color is a guest-supplied index into the fixed 256-entry
+		    rgb_palette[256*3]; reject out-of-range to avoid a
+		    guest->host OOB write.  */
+		if (v != NULL && color >= 0 && color < 256) {
 			memcpy(v->rgb_palette + 3 * color, rgb, 3);
 			v->update_x1 = v->update_y1 = 0;
 			v->update_x2 = v->xsize - 1;

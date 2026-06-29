@@ -36,6 +36,9 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/wait.h>
 
 #include "arcbios.h"
 #include "cpu.h"
@@ -63,6 +66,62 @@ extern bool about_to_enter_single_step;
 
 bool emul_executing = false;
 bool emul_shutdown = false;
+
+
+/*
+ *  decompress_gzip_to():
+ *
+ *  Decompresses the gzipped file 'src_name' into the already-open, already-
+ *  created temp file 'dst_fd' by running gunzip directly via fork()/exec(),
+ *  never through a shell. This avoids the shell command injection that a
+ *  system("gunzip ... <name> ...") call would allow when a file name contains
+ *  shell metacharacters; writing into the inherited fd (rather than reopening
+ *  the temp path by name) also avoids a same-user race on that path. Returns
+ *  0 on success, -1 on failure.
+ */
+static int decompress_gzip_to(const char *src_name, int dst_fd)
+{
+	pid_t pid = fork();
+
+	if (pid < 0) {
+		perror("fork");
+		return -1;
+	}
+
+	if (pid == 0) {
+		/*  Child: send stdout to the already-open temp fd, then exec
+		    gunzip -c.  Using the inherited fd instead of reopening the
+		    temp path by name avoids a same-user race on that path.  */
+		if (dup2(dst_fd, STDOUT_FILENO) < 0) {
+			perror("dup2");
+			_exit(127);
+		}
+		/*  Do not close stdout itself, in case dst_fd == fd 1.  */
+		if (dst_fd != STDOUT_FILENO)
+			close(dst_fd);
+		/*  Prefer absolute paths so a hostile PATH cannot substitute a
+		    malicious "gunzip"; fall back to a PATH search only if the
+		    usual locations are absent.  */
+		execl("/bin/gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
+		execl("/usr/bin/gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
+		execlp("gunzip", "gunzip", "-c", "--", src_name, (char *) NULL);
+		/*  Only reached if exec failed:  */
+		perror("gunzip");
+		_exit(127);
+	}
+
+	/*  Parent: wait for the child to finish.  */
+	int status = 0;
+	while (waitpid(pid, &status, 0) < 0) {
+		if (errno != EINTR)
+			return -1;
+	}
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+		return 0;
+
+	return -1;
+}
 
 
 /*
@@ -206,7 +265,7 @@ void emul_destroy(struct emul *emul)
 struct machine *emul_add_machine(struct emul *e, char *name)
 {
 	struct machine *m;
-	char tmpstr[20];
+	char tmpstr[32];
 	int i;
 
 	m = machine_new(name, e, e->n_machines);
@@ -500,8 +559,9 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 		}
 
 		/*
-		 *  gzipped files are automagically gunzipped:
-		 *  NOTE/TODO: This isn't secure. system() is used.
+		 *  gzipped files are automagically gunzipped, by running
+		 *  gunzip via fork()/exec() (never via a shell) into a fresh
+		 *  temporary file.
 		 */
 		tmp_f = fopen(name_to_load, "r");
 		if (tmp_f != NULL) {
@@ -513,51 +573,45 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 
 			if (res == sizeof(buf) &&
 			    buf[0] == 0x1f && buf[1] == 0x8b) {
-				size_t zzlen = strlen(name_to_load)*2 + 100;
-				char *zz;
+				int tmpfile_handle;
+				char *new_temp_name;
+				const char *tmpdir = getenv("TMPDIR");
 
-				CHECK_ALLOCATION(zz = (char*) malloc(zzlen));
+				if (tmpdir == NULL)
+					tmpdir = DEFAULT_TMP_DIR;
+
 				debug("gunziping %s\n", name_to_load);
 
-				/*
-				 *  gzip header found.  If this was a file
-				 *  extracted from, say, a CDROM image, then it
-				 *  already has a temporary name. Otherwise we
-				 *  have to gunzip into a temporary file.
-				 */
-				if (remove_after_load) {
-					snprintf(zz, zzlen, "mv %s %s.gz",
-					    name_to_load, name_to_load);
-					if (system(zz) != 0)
-						perror(zz);
-					snprintf(zz, zzlen, "gunzip %s.gz",
-					    name_to_load);
-					if (system(zz) != 0)
-						perror(zz);
-				} else {
-					/*  gunzip into new temp file:  */
-					int tmpfile_handle;
-					char *new_temp_name;
-					const char *tmpdir = getenv("TMPDIR");
+				CHECK_ALLOCATION(new_temp_name =
+				    (char*) malloc(300));
+				snprintf(new_temp_name, 300,
+				    "%s/gxemul.XXXXXXXXXXXX", tmpdir);
 
-					if (tmpdir == NULL)
-						tmpdir = DEFAULT_TMP_DIR;
-
-					CHECK_ALLOCATION(new_temp_name =
-					    (char*) malloc(300));
-					snprintf(new_temp_name, 300,
-					    "%s/gxemul.XXXXXXXXXXXX", tmpdir);
-
-					tmpfile_handle = mkstemp(new_temp_name);
-					close(tmpfile_handle);
-					snprintf(zz, zzlen, "gunzip -c '%s' > "
-					    "%s", name_to_load, new_temp_name);
-					if (system(zz) != 0)
-						perror(zz);
-					name_to_load = new_temp_name;
-					remove_after_load = 1;
+				tmpfile_handle = mkstemp(new_temp_name);
+				if (tmpfile_handle < 0) {
+					perror(new_temp_name);
+					exit(1);
 				}
-				free(zz);
+
+				/*  Pass the open fd to the child (which dup2()s it
+				    to stdout) instead of reopening new_temp_name by
+				    name, closing the same-user temp race.  */
+				if (decompress_gzip_to(name_to_load,
+				    tmpfile_handle) != 0) {
+					fatal("failed to gunzip '%s'\n",
+					    name_to_load);
+					exit(1);
+				}
+				close(tmpfile_handle);
+
+				/*  If the source was itself a temporary file
+				    (e.g. extracted from a CDROM image), remove
+				    it now that we have the decompressed copy.  */
+				if (remove_after_load)
+					unlink(name_to_load);
+
+				name_to_load = new_temp_name;
+				remove_after_load = 1;
 			}
 			fclose(tmp_f);
 		}

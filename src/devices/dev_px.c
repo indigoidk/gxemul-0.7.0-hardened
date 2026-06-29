@@ -312,6 +312,7 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 			/*  debug("  span %i: len=%i src=%i dst=%i\n",
 			    spannr, span_len, span_src, span_dst);  */
 
+			if (span_dst < (uint32_t)PX_YSIZE && span_src < (uint32_t)PX_YSIZE)	/* OB-3: span row bound */
 			memmove(d->vfb_data->framebuffer + span_dst *
 			    PX_XSIZE * bytesperpixel, d->vfb_data->framebuffer
 			    + span_src * PX_XSIZE * bytesperpixel, span_len *
@@ -386,6 +387,10 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 
 		lw = (lw + 1) >> 2;
 
+		/*  OB-3b: a guest can drive x2 < x; clamp so the memset()/
+		    memcpy() of (x2 - x) below is never a negative width.  */
+		if (x2 < x)
+			x2 = x;
 		if (x2 - x > PX_XSIZE)
 			x2 = PX_XSIZE;
 
@@ -411,6 +416,7 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 			d->vfb_data->update_x2 = x2;
 
 		for (fb_y=y; fb_y < y2 + lw; fb_y ++) {
+			if (fb_y >= 0 && fb_y < PX_YSIZE && x >= 0 && x2 <= PX_XSIZE && x2 >= x)	/* OB-3 */
 			memcpy(d->vfb_data->framebuffer + (fb_y * PX_XSIZE + x)
 			    * bytesperpixel, pixels, (x2-x)*bytesperpixel);
 
@@ -528,7 +534,8 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 					}
 				}
 
-				memcpy(d->vfb_data->framebuffer + ((y+suby)
+				if (y + suby >= 0 && y + suby < PX_YSIZE && x >= 0 && pixels_len >= 0 && pixels_len <= 16 && x + pixels_len <= PX_XSIZE)	/* OB-3 */
+					memcpy(d->vfb_data->framebuffer + ((y+suby)
 				    * PX_XSIZE + x) * bytesperpixel,
 				    pixels, pixels_len * bytesperpixel);
 
@@ -605,7 +612,8 @@ DEVICE_ACCESS(px)
 
 		if (writeflag == MEM_WRITE) {
 			for (i=0; i<len; i++)
-				d->sram[relative_addr - 0x200000 + i] = data[i];
+				{ size_t o = (size_t)(relative_addr - 0x200000) + i;	/* OB-2: 512KiB window vs 128KiB sram */
+					if (o < sizeof(d->sram)) d->sram[o] = data[i]; }
 			/*  NOTE:  this return here supresses debug output
 			    (which would be printed if we continue)  */
 			return 1;

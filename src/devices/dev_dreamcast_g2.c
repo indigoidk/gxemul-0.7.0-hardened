@@ -45,10 +45,12 @@
 
 
 #define	NREGS_EXT_DMA		(0x80/sizeof(uint32_t))
+#define	NREGS_EXT_DMA_HIGH	(0x80/sizeof(uint32_t))	/* OB-21 */
 #define	NREGS_MISC		(0x80/sizeof(uint32_t))
 
 struct dreamcast_g2_data {
 	uint32_t	extdma_reg[NREGS_EXT_DMA];
+	uint32_t	extdma_high_reg[NREGS_EXT_DMA_HIGH];	/* OB-21 */
 	uint32_t	misc_reg[NREGS_MISC];
 };
 
@@ -85,13 +87,16 @@ DEVICE_ACCESS(dreamcast_g2_extdma)
 	struct dreamcast_g2_data *d = (struct dreamcast_g2_data *) extra;
 	uint64_t idata = 0, odata = 0;
 	int reg = relative_addr, channel = 0;
+	int reg_index = (relative_addr & 0x7f) / sizeof(uint32_t);	/* OB-21 */
+	uint32_t *reg_array = relative_addr < 0x80 ?
+	    d->extdma_reg : d->extdma_high_reg;
 
 	if (writeflag == MEM_WRITE)
 		idata = memory_readmax64(cpu, data, len);
 
 	/*  Default read:  */
 	if (writeflag == MEM_READ)
-		odata = d->extdma_reg[relative_addr / sizeof(uint32_t)];
+		odata = reg_array[reg_index];	/* OB-21 */
 
 	/*
 	 *  0x5f7800 .. 1f = DMA channel 0
@@ -225,7 +230,7 @@ DEVICE_ACCESS(dreamcast_g2_extdma)
 
 	/*  Default write:  */
 	if (writeflag == MEM_WRITE)
-		d->extdma_reg[relative_addr / sizeof(uint32_t)] = idata;
+		reg_array[reg_index] = idata;	/* OB-21 */
 
 	if (writeflag == MEM_READ)
 		memory_writemax64(cpu, data, len, odata);

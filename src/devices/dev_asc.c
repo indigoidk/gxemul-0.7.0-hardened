@@ -290,7 +290,8 @@ fatal("TODO..............\n");
 				    d->reg_wo[NCR_TCM] * 256;
 
 				len--;
-				ch = d->incoming_data[d->incoming_data_addr];
+				ch = (d->incoming_data == NULL) ? 0 :	/* #105: incoming_data is never allocated -> avoid NULL deref */
+				    d->incoming_data[d->incoming_data_addr];
 				debug(" %02x", ch);
 
 				d->incoming_data_addr ++;
@@ -329,8 +330,11 @@ fatal("TODO..............\n");
 					    (ASC_DMA_SIZE-1));
 
 				if (lenIn2 > lenIn) {
+					/*  Zero only what fits in d->dma (lenIn is
+					    already clamped to the buffer); lenIn2 is
+					    the un-clamped guest transfer count.  */
 					memset(d->dma + (d->dma_address_reg &
-					    (ASC_DMA_SIZE-1)), 0, lenIn2);
+					    (ASC_DMA_SIZE-1)), 0, lenIn);
 					lenIn2 = lenIn;
 				}
 
@@ -422,6 +426,14 @@ fatal("TODO.......asdgasin\n");
 				len2 = d->xferp->data_out_len -
 				    d->xferp->data_out_offset;
 			}
+
+				/*  Bound len2 to the source d->dma buffer (the DMA offset
+				    is guest-controlled) to avoid an OOB read past ASC_DMA_SIZE.  */
+				{
+					size_t dma_off = d->dma_address_reg & (ASC_DMA_SIZE - 1);
+					if (dma_off + (size_t)len2 > ASC_DMA_SIZE)
+						len2 = ASC_DMA_SIZE - dma_off;
+				}
 
 			/*
 			 *  Are we using an external DMA controller? Then use

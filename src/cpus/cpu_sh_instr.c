@@ -1878,7 +1878,7 @@ X(shad)
 	int sa = rm & 0x1f;
 
 	if (rm >= 0)
-		rn <<= sa;
+		rn = (int32_t)((uint32_t)rn << sa);
 	else if (sa != 0)
 		rn >>= (32 - sa);
 	else if (rn < 0)
@@ -1895,7 +1895,7 @@ X(shld)
 	int sa = rm & 0x1f;
 
 	if (rm >= 0)
-		rn <<= sa;
+		rn = (int32_t)((uint32_t)rn << sa);
 	else if (sa != 0)
 		rn >>= (32 - sa);
 	else
@@ -1920,6 +1920,15 @@ X(bra)
 	MODE_int_t target = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
 	    SH_INSTR_ALIGNMENT_SHIFT);
 	target += ic->arg[0];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1932,6 +1941,15 @@ X(bra)
 }
 X(bra_samepage)
 {
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1947,6 +1965,15 @@ X(bsr)
 	SYNCH_PC;
 	old_pc = cpu->pc;
 	target += ic->arg[0];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1966,6 +1993,15 @@ X(bsr_trace)
 	SYNCH_PC;
 	old_pc = cpu->pc;
 	target += ic->arg[0];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1983,6 +2019,15 @@ X(bsr_samepage)
 	uint32_t old_pc;
 	SYNCH_PC;
 	old_pc = cpu->pc;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -1997,6 +2042,15 @@ X(braf_rn)
 	MODE_int_t target = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
 	    SH_INSTR_ALIGNMENT_SHIFT);
 	target += ic->arg[0] + reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2015,6 +2069,15 @@ X(bsrf_rn)
 	SYNCH_PC;
 	old_pc = cpu->pc;
 	target += ic->arg[0] + reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2034,6 +2097,15 @@ X(bsrf_rn_trace)
 	SYNCH_PC;
 	old_pc = cpu->pc;
 	target += ic->arg[0] + reg(ic->arg[1]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2091,6 +2163,15 @@ X(bt_s)
 	    SH_INSTR_ALIGNMENT_SHIFT);
 	int cond = cpu->cd.sh.sr & SH_SR_T;
 	target += ic->arg[0];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2110,6 +2191,15 @@ X(bf_s)
 	    SH_INSTR_ALIGNMENT_SHIFT);
 	int cond = !(cpu->cd.sh.sr & SH_SR_T);
 	target += ic->arg[0];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2126,6 +2216,15 @@ X(bf_s)
 X(bt_s_samepage)
 {
 	int cond = cpu->cd.sh.sr & SH_SR_T;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2142,6 +2241,15 @@ X(bt_s_samepage)
 X(bf_s_samepage)
 {
 	int cond = !(cpu->cd.sh.sr & SH_SR_T);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2166,6 +2274,15 @@ X(bf_s_samepage)
 X(jmp_rn)
 {
 	MODE_int_t target = reg(ic->arg[0]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2179,6 +2296,15 @@ X(jmp_rn)
 X(jmp_rn_trace)
 {
 	MODE_int_t target = reg(ic->arg[0]);
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2198,6 +2324,15 @@ X(jmp_rn_trace)
 X(jsr_rn)
 {
 	MODE_int_t target = reg(ic->arg[0]), retaddr;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	retaddr = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
 	    SH_INSTR_ALIGNMENT_SHIFT);
@@ -2214,6 +2349,15 @@ X(jsr_rn)
 X(jsr_rn_trace)
 {
 	MODE_int_t target = reg(ic->arg[0]), retaddr;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	retaddr = cpu->pc & ~((SH_IC_ENTRIES_PER_PAGE-1) <<
 	    SH_INSTR_ALIGNMENT_SHIFT);
@@ -2236,6 +2380,15 @@ X(jsr_rn_trace)
 X(rts)
 {
 	MODE_int_t target = cpu->cd.sh.pr;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2249,6 +2402,15 @@ X(rts)
 X(rts_trace)
 {
 	MODE_int_t target = cpu->cd.sh.pr;
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;
@@ -2269,6 +2431,15 @@ X(rte)
 {
 	RES_INST_IF_NOT_MD;
 
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  This (delayed) branch is itself in another branch's delay slot
+		    (architecturally unpredictable on SH). Don't run it as a nested
+		    branch -- that corrupts next_ic; flag the outer branch so it
+		    does not apply its branch, and let the main loop re-run this
+		    instruction normally afterwards.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	cpu->delay_slot = TO_BE_DELAYED;
 	ic[1].f(cpu, ic+1);
 	cpu->n_translated_instrs ++;

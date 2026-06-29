@@ -186,13 +186,20 @@ int iso_load_bootblock(struct machine *m, struct cpu *cpu,
 	dp = dirbuf; filenr = 1;
 	p = NULL;
 	while (dp < dirbuf + dirlen) {
-		size_t i, nlen = dp[0];
-		int x = dp[2] + (dp[3] << 8) + (dp[4] << 16) +
-		    ((uint64_t)dp[5] << 24);
-		int y = dp[6] + (dp[7] << 8);
+		size_t i, nlen;
+		int x, y;
 		char direntry[65];
 
+		if (dp + 8 > dirbuf + dirlen)	/* #109: need the 8-byte record header */
+			break;
+		nlen = dp[0];
+		x = dp[2] + (dp[3] << 8) + (dp[4] << 16) +
+		    ((uint64_t)dp[5] << 24);
+		y = dp[6] + (dp[7] << 8);
+
 		dp += 8;
+		if (nlen > (size_t)(dirbuf + dirlen - dp))	/* #109: bound the name field */
+			nlen = dirbuf + dirlen - dp;
 
 		/*
 		 *  As long as there is an \ or / in the filename, then we
@@ -306,7 +313,7 @@ printf("\n");
 #endif
 
 		for (i=32; i<len; i++) {
-			if (i < len - strlen(filename))
+			if (i + strlen(filename) <= len)	/* #110: avoid size_t underflow when strlen(filename) > len */
 				if (strncmp(filename, (char *)dp + i,
 				    strlen(filename)) == 0) {
 					/*  The filename was found somewhere

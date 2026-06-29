@@ -104,6 +104,12 @@ for (i=0; i<len; i++)
 				int ofs = relative_addr - 0x200000 + i;
 				int x, y;
 				unsigned char newdata[3];
+					if (ofs < 0 || ofs >= XSIZE * YSIZE) {	/* OB-12: window > pixeldata */
+						{ static int wd = 0; if (!wd) { fatal("[ pmagja: pixel ofs %i outside %ix%i; ignored ]\n", ofs, XSIZE, YSIZE); wd = 1; } }	/* #119 loud-once */
+						if (!writeflag)		/* OB-12b: don't leak uninit data[] */
+							data[i] = 0;
+						continue;
+					}
 				y = ofs / XSIZE;
 				x = ofs - y*XSIZE;
 

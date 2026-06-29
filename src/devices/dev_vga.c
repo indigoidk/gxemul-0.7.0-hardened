@@ -258,6 +258,13 @@ static void vga_update_textmode(struct machine *machine,
 	char s[50];
 	int i, oldcolor = -1, printed_last = 0;
 
+	if (base < 0 || start < 0 || end < start)	/* OB-16 */
+		return;
+	if ((size_t)base + 1 >= d->charcells_size)
+		return;
+	if ((size_t)base + (size_t)end + 1 >= d->charcells_size)
+		end = (int)(d->charcells_size - (size_t)base) - 2;
+
 	for (i=start; i<=end; i+=2) {
 		unsigned char ch = d->charcells[base+i];
 		int fg = d->charcells[base+i+1] & 15;
@@ -342,13 +349,16 @@ static void vga_update_graphics(struct machine *machine, struct vga_data *d,
 			int addr = (y * d->max_x + x) * d->bits_per_pixel;
 			switch (d->bits_per_pixel) {
 			case 8:	addr >>= 3;
-				c = d->gfx_mem[addr];
+				c = (addr >= 0 && (size_t)addr < d->gfx_mem_size) ?
+				    d->gfx_mem[addr] : 0;	/* #98: bound OOB redraw read */
 				pixel[0] = d->fb->rgb_palette[c*3+0];
 				pixel[1] = d->fb->rgb_palette[c*3+1];
 				pixel[2] = d->fb->rgb_palette[c*3+2];
 				break;
 			case 4:	addr >>= 2;
-				if (addr & 1)
+				if (addr < 0 || (size_t)(addr >> 1) >= d->gfx_mem_size)
+					c = 0;			/* #98: bound OOB redraw read */
+				else if (addr & 1)
 					c = d->gfx_mem[addr >> 1] >> 4;
 				else
 					c = d->gfx_mem[addr >> 1] & 0xf;
@@ -404,6 +414,13 @@ static void vga_update_text(struct machine *machine, struct vga_data *d,
 
 	base = ((d->crtc_reg[VGA_CRTC_START_ADDR_HIGH] << 8)
 	    + d->crtc_reg[VGA_CRTC_START_ADDR_LOW]) * 2;
+
+	if (base + 1 >= d->charcells_size)	/* OB-16: guest CRTC start */
+		return;
+	if (base + end + 1 >= d->charcells_size)
+		end = d->charcells_size - base - 2;
+	if (start > end)
+		return;
 
 	if (!machine->x11_md.in_use)
 		vga_update_textmode(machine, d, base, start, end);
@@ -604,10 +621,32 @@ DEVICE_ACCESS(vga_graphics)
 		x2 = (relative_addr+len-1) % d->max_x;
 
 		if (writeflag == MEM_WRITE) {
-			memcpy(d->gfx_mem + relative_addr, data, len);
-			modified = 1;
-		} else
-			memcpy(data, d->gfx_mem + relative_addr, len);
+			if (relative_addr + len <= (uint64_t)d->gfx_mem_size) {	/* OB-15 */
+				memcpy(d->gfx_mem + relative_addr, data, len);
+				modified = 1;	/* OB-15b: only mark dirty when copied */
+			} else {
+				static int w_warned = 0;	/* #119: loud-once */
+				if (!w_warned) {
+					fatal("[ vga: gfx write 0x%x+%i beyond 0x%x; "
+					    "ignored ]\n", (int)relative_addr, (int)len,
+					    (int)d->gfx_mem_size);
+					w_warned = 1;
+				}
+			}
+		} else {
+			if (relative_addr + len <= (uint64_t)d->gfx_mem_size)	/* OB-15 */
+				memcpy(data, d->gfx_mem + relative_addr, len);
+			else {
+				static int r_warned = 0;	/* #119: loud-once */
+				if (!r_warned) {
+					fatal("[ vga: gfx read 0x%x+%i beyond 0x%x; "
+					    "zero-filled ]\n", (int)relative_addr, (int)len,
+					    (int)d->gfx_mem_size);
+					r_warned = 1;
+				}
+				memset(data, 0, len);	/* OB-15c: don't leak uninit host memory */
+			}
+		}
 		break;
 	case GRAPHICS_MODE_4BIT:
 		y = relative_addr * 8 / d->max_x;

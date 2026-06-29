@@ -273,6 +273,7 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 		off_t cbRfdOffset, cbExtOffset, cbSsExtOffset, cbSsOffset;
 		char *symbol_data;
 		int sym_nr;
+		off_t file_size;
 
 		fseek(f, f_symptr, SEEK_SET);
 
@@ -293,6 +294,15 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 		unencode(iextMax,       &symhdr.iextMax,       uint32_t);
 		unencode(cbExtOffset,   &symhdr.cbExtOffset,   uint32_t);
 
+		/*  All the offsets/counts below come from the file; bound them
+		    against the real file size so a malformed symbol header cannot
+		    drive malloc/fread to huge sizes (OOM) or read past EOF.  */
+		{
+			off_t cur = ftell(f);
+			fseek(f, 0, SEEK_END); file_size = ftell(f);
+			fseek(f, cur, SEEK_SET);
+		}
+
 		if (sym_magic != MIPS_MAGIC_SYM) {
 			unsigned char *ms_sym_buf;
 			struct ms_sym *sym;
@@ -306,11 +316,26 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 			 *    mat%20Specification.txt
 			 *  for more details.
 			 */
+			/*  f_nsyms/f_symptr are file-controlled; require the whole
+			    symbol table to lie within the file before allocating
+			    and reading it.  */
+			if (f_nsyms < 0 || (uint64_t) f_symptr +
+			    (uint64_t) sizeof(struct ms_sym) * (uint32_t) f_nsyms
+			    > (uint64_t) file_size ||
+			    (uint64_t) sizeof(struct ms_sym) * (uint32_t) f_nsyms
+			    > LOADER_MAX_TABLE_BYTES) {
+				fatal("[ ECOFF: bogus f_nsyms/f_symptr ]\n");
+				goto skip_normal_coff_symbols;
+			}
 			CHECK_ALLOCATION(ms_sym_buf = (unsigned char *)
 			    malloc(sizeof(struct ms_sym) * f_nsyms));
 			fseek(f, f_symptr, SEEK_SET);
-			len = fread(ms_sym_buf, 1,
-			    sizeof(struct ms_sym) * f_nsyms, f);
+			if (fread(ms_sym_buf, 1, sizeof(struct ms_sym) * f_nsyms, f)
+			    != sizeof(struct ms_sym) * (size_t) f_nsyms) {
+				fprintf(stderr, "error reading symbols from %s\n",
+				    filename);
+				exit(1);
+			}
 			sym = (struct ms_sym *) ms_sym_buf;
 			for (sym_nr=0; sym_nr<f_nsyms; sym_nr++) {
 				char name[300];
@@ -338,17 +363,20 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 					off_t ofs;
 					ofs = f_symptr + altname +
 					    sizeof(struct ms_sym) * f_nsyms;
-					fseek(f, ofs, SEEK_SET);
-					if (fread(name, 1, sizeof(name), f) != sizeof(name)) {
-						fprintf(stderr, "error reading symbol from %s\n", filename);
-						exit(1);
+					/*  altname/ofs are file-controlled; only read the
+					    long name if it lies within the file, and skip
+					    (don't hard-exit) otherwise.  */
+					if (ofs >= 0 && (uint64_t) ofs + sizeof(name) <=
+					    (uint64_t) file_size &&
+					    fseek(f, ofs, SEEK_SET) == 0 &&
+					    fread(name, 1, sizeof(name), f) == sizeof(name)) {
+						name[sizeof(name)-1] = '\0';
+						/*  debug(" [altname=0x%x '%s']",
+						    altname, name);  */
+						add_symbol_name(&m->symbol_context,
+						    v, 0, name, 0, -1);
+						n_real_symbols ++;
 					}
-					name[sizeof(name)-1] = '\0';
-					/*  debug(" [altname=0x%x '%s']",
-					    altname, name);  */
-					add_symbol_name(&m->symbol_context,
-					    v, 0, name, 0, -1);
-					n_real_symbols ++;
 				}
 
 
@@ -378,6 +406,22 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 
 		debug("%i symbols @ 0x%08x (strings @ 0x%08x)\n",
 		    iextMax, cbExtOffset, cbSsExtOffset);
+
+		/*  issExtMax/iextMax/cbSsExtOffset/cbExtOffset are file-controlled;
+		    require both tables to lie within the file before allocating and
+		    reading them (otherwise a malformed header drives a huge malloc
+		    -> OOM, or an over-read).  */
+		if (issExtMax < 0 || iextMax < 0 ||
+		    (uint64_t) cbSsExtOffset + (uint64_t) issExtMax + 1
+		        > (uint64_t) file_size ||
+		    (uint64_t) cbExtOffset + (uint64_t) iextMax *
+		        sizeof(struct ecoff_extsym) > (uint64_t) file_size ||
+		    (uint64_t) issExtMax + 1 > LOADER_MAX_TABLE_BYTES ||
+		    (uint64_t) iextMax * sizeof(struct ecoff_extsym)
+		        > LOADER_MAX_TABLE_BYTES) {
+			fatal("[ ECOFF: bogus symbol-table sizes ]\n");
+			goto skip_normal_coff_symbols;
+		}
 
 		CHECK_ALLOCATION(symbol_data = (char *) malloc(issExtMax + 2));
 		memset(symbol_data, 0, issExtMax + 2);
@@ -415,6 +459,12 @@ static void file_load_ecoff(struct machine *m, struct memory *mem,
 			/*  debug("symbol%6i: 0x%08x = %s\n",
 			    sym_nr, (int)extsyms[sym_nr].es_value,
 			    symbol_data + extsyms[sym_nr].es_strindex);  */
+
+			/*  es_strindex is file-controlled; skip out-of-range
+			    offsets so we never read past symbol_data.  */
+			if ((uint32_t) extsyms[sym_nr].es_strindex >
+			    (uint32_t) issExtMax)
+				continue;
 
 			add_symbol_name(&m->symbol_context,
 			    extsyms[sym_nr].es_value, 0,

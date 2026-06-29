@@ -1698,7 +1698,7 @@ void DYNTRANS_UPDATE_TRANSLATION_TABLE(struct cpu *cpu, uint64_t vaddr_page,
 		index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
 		cpu->cd.DYNTRANS_ARCH.phys_page[index] = NULL;
 #ifdef DYNTRANS_ARM
-		cpu->cd.DYNTRANS_ARCH.is_userpage[index>>5] &= ~(1<<(index&31));
+		cpu->cd.DYNTRANS_ARCH.is_userpage[index>>5] &= ~((uint32_t)1<<(index&31));
 		if (useraccess)
 			cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5]
 			    |= 1 << (index & 31);
@@ -1833,7 +1833,7 @@ cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid);
 		x /= addr_per_translation_range;
 
 		cpu->cd.DYNTRANS_ARCH.cur_physpage->
-		    translations_bitmap |= (1 << x);
+		    translations_bitmap |= ((uint32_t)1 << x);
 	}
 
 

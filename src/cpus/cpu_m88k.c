@@ -937,9 +937,9 @@ int m88k_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 	    (uint32_t) dumpaddr);
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
+		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + ((uint32_t)ib[3]<<24);
 	else
-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
+		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + ((uint32_t)ib[0]<<24);
 
 	debug("%08" PRIx32, (uint32_t) iw);
 

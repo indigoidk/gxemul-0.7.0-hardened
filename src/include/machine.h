@@ -314,6 +314,7 @@ struct machine {
 #define	MACHINE_MACPPC_G3		1
 #define	MACHINE_MACPPC_G4		2
 #define	MACHINE_MACPPC_G5		3
+#define	MACHINE_MACPPC_G4PLUS		4	/*  OB-35: MPC7455, extended BATs (#116)  */
 
 /*  MVMEPPC  */
 #define	MACHINE_MVMEPPC_1600		1

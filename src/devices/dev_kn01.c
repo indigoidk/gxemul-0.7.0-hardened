@@ -161,7 +161,7 @@ DEVICE_ACCESS(vdac)
 		break;
 	case DEV_VDAC_OVERWA:
 		if (writeflag == MEM_WRITE) {
-			d->cur_write_addr_overlay = data[0];
+			d->cur_write_addr_overlay = data[0] & 15;	/* OB-8: 16-entry overlay palette */
 			d->sub_color_overlay = 0;
 		} else {
 			debug("[ vdac: read from OVERWA ]\n");
@@ -203,7 +203,7 @@ DEVICE_ACCESS(vdac)
 		break;
 	case DEV_VDAC_OVERRA:
 		if (writeflag == MEM_WRITE) {
-			d->cur_read_addr_overlay = data[0];
+			d->cur_read_addr_overlay = data[0] & 15;	/* OB-8b: 16-entry overlay palette (read addr; cf #75) */
 			d->sub_color_overlay = 0;
 		} else {
 			debug("[ vdac: read from OVERRA ]\n");

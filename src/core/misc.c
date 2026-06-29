@@ -35,6 +35,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "cpu.h"
 #include "misc.h"
@@ -200,22 +201,58 @@ unsigned long long mystrtoull(const char *s, char **endp, int base)
 /*
  *  mymkstemp():
  *
- *  mkstemp() replacement for systems that lack that function. This is NOT
- *  really safe, but should at least allow the emulator to build and run.
+ *  mkstemp() replacement for systems that lack that function. The trailing run
+ *  of 'X' characters in the template is filled with random alphanumeric
+ *  characters, and the file is created with O_CREAT | O_EXCL so an existing
+ *  file is never clobbered (defeating the classic symlink race). On collision
+ *  the substitution is retried with fresh characters. Returns an open fd, or
+ *  -1 on error (with errno set).
  */
 int mymkstemp(char *templ)
 {
-	int h = 0;
-	char *p = templ;
+	static const char chars[] =
+	    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+	size_t len = strlen(templ);
+	size_t start = len;
+	int attempt;
+	int urandom_fd;
 
-	while (*p) {
-		if (*p == 'X')
-			*p = 48 + random() % 10;
-		p++;
+	/*  Locate the trailing run of 'X' characters to substitute.  */
+	while (start > 0 && templ[start - 1] == 'X')
+		start--;
+
+	/*  Draw the random suffix from the kernel CSPRNG so the names are not
+	    predictable (random() may be unseeded). Fall back to random() per
+	    byte only if /dev/urandom cannot be opened/read.  */
+	urandom_fd = open("/dev/urandom", O_RDONLY);
+
+	for (attempt = 0; attempt < 256; attempt++) {
+		size_t i;
+		int h;
+
+		for (i = start; i < len; i++) {
+			unsigned char rb;
+			if (urandom_fd < 0 || read(urandom_fd, &rb, 1) != 1)
+				rb = (unsigned char) random();
+			templ[i] = chars[rb % (sizeof(chars) - 1)];
+		}
+
+		h = open(templ, O_RDWR | O_CREAT | O_EXCL, 0600);
+		if (h >= 0) {
+			if (urandom_fd >= 0)
+				close(urandom_fd);
+			return h;
+		}
+		if (errno != EEXIST) {
+			if (urandom_fd >= 0)
+				close(urandom_fd);
+			return -1;
+		}
 	}
 
-	h = open(templ, O_RDWR | O_CREAT | O_EXCL, 0600);
-	return h;
+	if (urandom_fd >= 0)
+		close(urandom_fd);
+	return -1;
 }
 
 
@@ -223,27 +260,56 @@ int mymkstemp(char *templ)
 /*
  *  mystrlcpy():
  *
- *  Quick hack strlcpy() replacement for systems that lack that function.
- *  NOTE: No length checking is done.
+ *  strlcpy() replacement for systems that lack that function. Copies at most
+ *  size-1 bytes from src to dst and always NUL-terminates dst (when size > 0).
+ *  Returns strlen(src), i.e. the length of the string it tried to create, so
+ *  that truncation can be detected (retval >= size). Uses only strlen()/memcpy()
+ *  so it has no dependency on other possibly-missing libc functions.
  */
 size_t mystrlcpy(char *dst, const char *src, size_t size)
 {
-	strcpy(dst, src);
-	return strlen(src);
+	size_t src_len = strlen(src);
+
+	if (size != 0) {
+		size_t copy_len = (src_len >= size) ? size - 1 : src_len;
+		memcpy(dst, src, copy_len);
+		dst[copy_len] = '\0';
+	}
+
+	return src_len;
 }
 
 
 /*
  *  mystrlcat():
  *
- *  Quick hack strlcat() replacement for systems that lack that function.
- *  NOTE: No length checking is done.
+ *  strlcat() replacement for systems that lack that function. Appends src to
+ *  dst, writing at most size-1 bytes total and always NUL-terminating (when
+ *  there is room). Returns the length of the string it tried to create, i.e.
+ *  the initial length of dst plus strlen(src). The length of dst is measured
+ *  with a bounded scan so that an unterminated buffer is never over-read.
  */
 size_t mystrlcat(char *dst, const char *src, size_t size)
 {
-	size_t orig_dst_len = strlen(dst);
-	strcat(dst, src);
-	return strlen(src) + orig_dst_len;
+	size_t dst_len = 0;
+	size_t src_len = strlen(src);
+
+	/*  Bounded strlen of dst: never read past 'size' bytes.  */
+	while (dst_len < size && dst[dst_len] != '\0')
+		dst_len++;
+
+	/*  dst has no NUL within size: nothing can be appended.  */
+	if (dst_len == size)
+		return size + src_len;
+
+	if (src_len < size - dst_len) {
+		memcpy(dst + dst_len, src, src_len + 1);
+	} else {
+		memcpy(dst + dst_len, src, size - dst_len - 1);
+		dst[size - 1] = '\0';
+	}
+
+	return dst_len + src_len;
 }
 #endif
 

@@ -162,7 +162,8 @@ static void net_arp(struct net *net, struct nic_data *nic,
 
 			/*  Copy the old packet first:  */
 			memset(lp->data, 0, 60 + 14);
-			memcpy(lp->data + 14, packet, len);
+			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
+			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
 
 			/*  Add ethernet ARP header:  */
 			memcpy(lp->data + 0, lp->data + 8 + 14, 6);
@@ -187,7 +188,8 @@ static void net_arp(struct net *net, struct nic_data *nic,
 
 			/*  Copy the old packet first:  */
 			memset(lp->data, 0, 60 + 14);
-			memcpy(lp->data + 14, packet, len);
+			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
+			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
 
 			/*  Add ethernet RARP header:  */
 			memcpy(lp->data + 0, packet + 8, 6);
@@ -631,7 +633,7 @@ static void net_gateway_init(struct net *net)
 	uint32_t x;
 	int xl;
 
-	x = (p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
+	x = ((uint32_t)p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
 	xl = 32 - net->netmask_ipv4_len;
 	if (xl > 8)
 		xl = 8;

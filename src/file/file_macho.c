@@ -54,7 +54,7 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 	uint64_t entry = 0;
 	int entry_set = 0;
 	int encoding = ELFDATA2MSB;
-	unsigned char buf[65536];
+	unsigned char buf[65536] = {0};
 	char *symbols, *strings;
 	uint32_t cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags;
 	uint64_t vmaddr, vmsize, fileoff, filesize;
@@ -133,9 +133,36 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 	pos = is_64bit? 32 : 28;
 	cmd_type = 0;
 	do {
+		/*  Bounds (all from the file, so untrusted): the 8-byte command
+		    header must lie within the data we actually read and buf[].  */
+		if (pos + 8 > len || pos + 8 > sizeof(buf))
+			break;
+
 		/*  Read command type and length:  */
 		unencode(cmd_type, &buf[pos], uint32_t);
 		unencode(cmd_len,  &buf[pos+4], uint32_t);
+
+		/*  Reject a command smaller than its header (also prevents a
+		    cmd_len == 0 infinite loop) or one extending past the data.  */
+		if (cmd_len < 8 || pos + cmd_len > len)
+			break;
+
+		/*  Each handled command reads fixed offsets past the 8-byte
+		    header; require exactly those bytes (within the data read and
+		    buf[]) instead of a blanket 256, which would reject a valid
+		    compact command near EOF (a minimal PPC LC_UNIXTHREAD needs
+		    only pos+176).  */
+		{
+			size_t need = 8;
+			switch (cmd_type) {
+			case 1:  need = 8 + 16 + 16;  break;  /*  LC_SEGMENT  */
+			case 2:  need = 24;           break;  /*  LC_SYMTAB  */
+			case 5:  need = 16 + 40 * 4;  break;  /*  LC_UNIXTHREAD  */
+			}
+			if ((size_t) cmd_len < need ||
+			    pos + need > len || pos + need > sizeof(buf))
+				break;
+		}
 
 #if 0
 		debug("cmd %i, len=%i\n", cmd_type, cmd_len);
@@ -213,19 +240,43 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 			unencode(nsyms,   &buf[pos+12], uint32_t);
 			unencode(stroff,  &buf[pos+16], uint32_t);
 			unencode(strsize, &buf[pos+20], uint32_t);
+
+			/*  symoff/nsyms/stroff/strsize are file-controlled; bound the
+			    whole symbol table and string table (offset + size) against
+			    the real file size so the malloc/calloc stay bounded and the
+			    fread below cannot short-read into a fatal exit or read past
+			    EOF.  uint64 math avoids overflow on hostile values.  */
+			{
+				long cur_off = ftell(f), file_sz;
+				uint64_t so, ns, sto, ss;
+				fseek(f, 0, SEEK_END); file_sz = ftell(f);
+				fseek(f, cur_off, SEEK_SET);
+				so  = (uint32_t) symoff;  ns = (uint32_t) nsyms;
+				sto = (uint32_t) stroff;  ss = (uint32_t) strsize;
+				if (file_sz < 0 ||
+				    so  + 12 * ns > (uint64_t) file_sz ||
+				    sto + ss      > (uint64_t) file_sz ||
+				    12 * ns > LOADER_MAX_TABLE_BYTES ||
+				    ss      > LOADER_MAX_TABLE_BYTES) {
+					fatal("[ Mach-O: bogus LC_SYMTAB sizes ]\n");
+					break;
+				}
+			}
 			debug("symtable: %i symbols @ 0x%x (strings at "
 			    "0x%x)\n", nsyms, symoff, stroff);
 
-			CHECK_ALLOCATION(symbols = (char *) malloc(12 * nsyms));
-			fseek(f, symoff, SEEK_SET);
-			if (fread(symbols, 1, 12 * nsyms, f) != (size_t) 12*nsyms) {
+			CHECK_ALLOCATION(symbols = (char *) malloc((size_t) nsyms * 12));
+			fseek(f, (long)(uint32_t) symoff, SEEK_SET);
+			if (fread(symbols, 1, (size_t) nsyms * 12, f) != (size_t) nsyms * 12) {
 				fprintf(stderr, "could not read symbols from %s\n", filename);
 				exit(1);
 			}
 
-			CHECK_ALLOCATION(strings = (char *) malloc(strsize));
-			fseek(f, stroff, SEEK_SET);
-			if (fread(strings, 1, strsize, f) != (size_t) strsize) {
+			/*  calloc(+1) zeroes the buffer, so it is always NUL-terminated and a
+			    string near the end cannot be over-read.  */
+				CHECK_ALLOCATION(strings = (char *) calloc((size_t) strsize + 1, 1));
+			fseek(f, (long)(uint32_t) stroff, SEEK_SET);
+			if (fread(strings, 1, (size_t) strsize, f) != (size_t) strsize) {
 				fprintf(stderr, "could not read symbol strings from %s\n", filename);
 				exit(1);
 			}
@@ -242,7 +293,10 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 				    " value=0x%x\n", i, n_strx, n_type,
 				    n_sect, n_desc, n_value);  */
 				add_symbol_name(&m->symbol_context,
-				    n_value, 0, strings + n_strx, 0, -1);
+				    n_value, 0, strings + (n_strx >= 0 &&
+				    (uint32_t) n_strx < (uint32_t) strsize ?
+				    (uint32_t) n_strx : (uint32_t) strsize),
+				    0, -1);
 			}
 
 			free(symbols);
@@ -286,7 +340,7 @@ static void file_load_macho(struct machine *m, struct memory *mem,
 		}
 
 		pos += cmd_len;
-	} while (pos < sizeofcmds && cmd_type != 0);
+	} while (pos < (uint32_t)(is_64bit? 32 : 28) + sizeofcmds && cmd_type != 0);
 
 	fclose(f);
 

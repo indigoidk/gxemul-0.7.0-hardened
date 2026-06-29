@@ -61,6 +61,7 @@
 #define	DEV_JAZZ_LENGTH			0x280
 #define	DEV_JAZZ_TICKSHIFT		14
 #define	PICA_TIMER_IRQ			15
+#define	PICA_TIMER_IRQ_MASK		(1 << PICA_TIMER_IRQ)
 
 struct jazz_data {
 	struct interrupt mips_irq_3;
@@ -115,9 +116,9 @@ void jazz_interrupt_assert(struct interrupt *interrupt)
 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
 	d->int_asserted |= (1 << interrupt->line);
 
-	if (d->int_asserted & 0x7fff)
+	if (d->int_asserted & d->int_enable_mask & 0x7fff)
 		INTERRUPT_ASSERT(d->mips_irq_3);
-	if (d->int_asserted & 0x8000)
+	if (d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK)
 		INTERRUPT_ASSERT(d->mips_irq_6);
 }
 void jazz_interrupt_deassert(struct interrupt *interrupt)
@@ -125,9 +126,9 @@ void jazz_interrupt_deassert(struct interrupt *interrupt)
 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
 	d->int_asserted &= ~(1 << interrupt->line);
 
-	if (!(d->int_asserted & 0x7fff))
+	if (!(d->int_asserted & d->int_enable_mask & 0x7fff))
 		INTERRUPT_DEASSERT(d->mips_irq_3);
-	if (!(d->int_asserted & 0x8000))
+	if (!(d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK))
 		INTERRUPT_DEASSERT(d->mips_irq_6);
 }
 void jazz_isa_interrupt_assert(struct interrupt *interrupt)
@@ -236,7 +237,7 @@ DEVICE_TICK(jazz)
 
 	/*  Used by NetBSD/arc and OpenBSD/arc:  */
 	if (d->interval_start > 0 && d->interval > 0
-	    && (d->int_enable_mask & 2) /* Hm? */ ) {
+	    && (d->int_enable_mask & PICA_TIMER_IRQ_MASK) ) {
 		d->interval -= 2;
 		if (d->interval <= 0) {
 			/*  debug("[ jazz: interval timer interrupt ]\n");
@@ -258,7 +259,7 @@ DEVICE_TICK(jazz)
 
 		/*  New timer system:  */
 		if (d->pending_timer_interrupts > 0)
-			INTERRUPT_ASSERT(d->mips_irq_6);
+			INTERRUPT_ASSERT(d->jazz_timer_irq);
 	}
 }
 
@@ -375,7 +376,7 @@ printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
 		if (writeflag == MEM_WRITE) {
 			int old_assert_3 = (0x7fff &
 			    d->int_asserted & d->int_enable_mask);
-			int old_assert_6 = (0x8000 &
+			int old_assert_6 = (PICA_TIMER_IRQ_MASK &
 			    d->int_asserted & d->int_enable_mask);
 			int new_assert_3, new_assert_6;
 
@@ -384,7 +385,7 @@ printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
 			new_assert_3 =
 			    d->int_asserted & d->int_enable_mask & 0x7fff;
 			new_assert_6 =
-			    d->int_asserted & d->int_enable_mask & 0x8000;
+			    d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK;
 
 			if (old_assert_3 && !new_assert_3)
 				INTERRUPT_DEASSERT(d->mips_irq_3);

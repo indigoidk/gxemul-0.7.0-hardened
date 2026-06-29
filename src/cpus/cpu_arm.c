@@ -1729,9 +1729,9 @@ int arm_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 		return arm_cpu_disassemble_instr_thumb(cpu, ib, running, dumpaddr);
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
-		iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
+		iw = READ_WORD_LE(ib);
 	else
-		iw = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
+		iw = READ_WORD_BE(ib);
 	debug("%08x", (int)iw);
 
 	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);

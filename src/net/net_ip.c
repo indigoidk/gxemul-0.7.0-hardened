@@ -399,9 +399,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	srcport = (packet[34] << 8) + packet[35];
 	dstport = (packet[36] << 8) + packet[37];
 
-	seqnr   = (packet[38] << 24) + (packet[39] << 16)
+	seqnr   = ((uint32_t)packet[38] << 24) + (packet[39] << 16)
 		+ (packet[40] << 8) + packet[41];
-	acknr   = (packet[42] << 24) + (packet[43] << 16)
+	acknr   = ((uint32_t)packet[42] << 24) + (packet[43] << 16)
 		+ (packet[44] << 8) + packet[45];
 
 	if (net_ip_debug)
@@ -645,7 +645,7 @@ debug("  all acked\n");
 	/*  TODO: This is hardcoded for a specific NetBSD packet:  */
 	if (packet[34 + 30] == 0x08 && packet[34 + 31] == 0x0a)
 		net->tcp_connections[con_id].inside_timestamp =
-		    (packet[34 + 32 + 0] << 24) +
+		    ((uint32_t)packet[34 + 32 + 0] << 24) +
 		    (packet[34 + 32 + 1] << 16) +
 		    (packet[34 + 32 + 2] <<  8) +
 		    (packet[34 + 32 + 3] <<  0);
@@ -914,8 +914,18 @@ void net_ip(struct net *net, struct nic_data *nic, unsigned char *packet,
 	if (len > 14 + packet[16]*256 + packet[17])
 		len = 14 + packet[16]*256 + packet[17];
 
+	if (len < 34)				/* #103: no complete IPv4 header */
+		return;
+
 	if (packet[14] == 0x45) {
 		/*  IPv4:  */
+		/*  #103: reject too-short packets so the handlers below can't
+		    underflow a length (UDP sendto len-42) or write past the
+		    reply buffer (ICMP checksum offsets).  */
+		if ((packet[23] == 1 && len < 42) ||	/* ICMP */
+		    (packet[23] == 6 && len < 54) ||	/* TCP */
+		    (packet[23] == 17 && len < 42))	/* UDP */
+			return;
 		switch (packet[23]) {
 		case 1:	/*  ICMP  */
 			net_ip_icmp(net, nic, packet, len);
@@ -1181,10 +1191,10 @@ void net_ip_broadcast(struct net *net, struct nic_data *nic,
 
 	/*  Check for 10.0.0.255 first, maybe some guest OSes think that
 	    it's a /24 network, regardless of what it actually is.  */
-	y = (packet[30] << 24) + (packet[31] << 16) +
+	y = ((uint32_t)packet[30] << 24) + (packet[31] << 16) +
 	    (packet[32] << 8) + packet[33];
 
-	x = (p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
+	x = ((uint32_t)p[0] << 24) + (p[1] << 16) + (p[2] << 8) + p[3];
 	/*  Example: x = 10.0.0.0  */
 	x |= 255;
 

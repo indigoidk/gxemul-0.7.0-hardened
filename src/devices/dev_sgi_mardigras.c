@@ -218,7 +218,8 @@ DEVICE_ACCESS(sgi_mardigras)
 
 	/*  Accessing the microcode_ram works like ordinary ram:  */
 	if (relative_addr >= MICROCODE_START &&
-	    relative_addr <  MICROCODE_END) {
+	    relative_addr <  MICROCODE_END &&
+	    len <= (uint64_t)MICROCODE_END - relative_addr) {	/* OB-9: end-span */
 		relative_addr -= MICROCODE_START;
 		if (writeflag == MEM_WRITE)
 			memcpy(d->microcode_ram + relative_addr, data, len);

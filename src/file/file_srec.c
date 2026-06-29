@@ -91,6 +91,15 @@ static void file_load_srec(struct machine *m, struct memory *mem,
 		 *  TODO: actually check the checksum
 		 */
 
+		/*
+		 *  bytes[] must be cleared before each record: a malformed
+		 *  record may declare a 'count' larger than the data actually
+		 *  present on the line, and the type switch below would
+		 *  otherwise read uninitialized stack memory (leaking it into
+		 *  emulated RAM, the load address, or the entry point).
+		 */
+		memset(bytes, 0, sizeof(bytes));
+
 		j = 0;
 		for (i=1; i<buf_len; i++) {
 			if (buf[i]>='a' && buf[i]<='f')
@@ -144,10 +153,14 @@ static void file_load_srec(struct machine *m, struct memory *mem,
 				vaddr = ((uint64_t)bytes[0] << 24) +
 				    (bytes[1] << 16) + (bytes[2]<<8) + bytes[3];
 			}
-			m->cpus[0]->memory_rw(m->cpus[0], mem, vaddr,
-			    &bytes[data_start], count - 1 - data_start,
-			    MEM_WRITE, NO_EXCEPTIONS);
-			total_bytes_loaded += count - 1 - data_start;
+			/*  Guard against a malformed/short count: a negative
+			    length would be passed as a huge size_t.  */
+			if (count - 1 - data_start > 0) {
+				m->cpus[0]->memory_rw(m->cpus[0], mem, vaddr,
+				    &bytes[data_start], count - 1 - data_start,
+				    MEM_WRITE, NO_EXCEPTIONS);
+				total_bytes_loaded += count - 1 - data_start;
+			}
 			break;
 		case 7:
 		case 8:

@@ -91,7 +91,7 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 	Elf64_Shdr shdr64;
 	Elf32_Sym sym32;
 	Elf64_Sym sym64;
-	int ofs;
+	uint64_t ofs;
 	int chunk_len = 1024, align_len;
 	char *symbol_strings = NULL;
 	size_t symbol_length = 0;
@@ -447,7 +447,7 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 			if ((p_vaddr & 0x3fff)==0)	align_len = 0x4000;
 			if ((p_vaddr & 0xffff)==0)	align_len = 0x10000;
 			ofs = 0;  len = chunk_len = align_len;
-			while (ofs < (int64_t)p_filesz && len==chunk_len) {
+			while (ofs < p_filesz && len==chunk_len) {	/* OB-19 */
 				unsigned char *ch;
 
 				CHECK_ALLOCATION(ch = (unsigned char *) malloc(chunk_len));
@@ -468,8 +468,8 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 				}
 
 				len = fread(&ch[0], 1, chunk_len, f);
-				if (ofs + len > (int64_t)p_filesz)
-					len = p_filesz - ofs;
+				if ((uint64_t)len > p_filesz - ofs)	/* OB-19 */
+					len = (int)(p_filesz - ofs);
 
 				int j = 0;
 				while (j < len) {
@@ -492,6 +492,12 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 	 *  Read the section headers to find the address of the _gp
 	 *  symbol (for MIPS):
 	 */
+
+	/*  File size, used to reject bogus (huge) section sizes from a malformed
+	    header before allocating: a section cannot be larger than the file.  */
+	off_t elf_filesize;
+	fseek(f, 0, SEEK_END);
+	elf_filesize = ftello(f);
 
 	for (i=0; i<eshnum; i++) {
 		int sh_name, sh_type, sh_flags, sh_link, sh_info, sh_entsize;
@@ -550,7 +556,11 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 		else
 			sh_entsize = sizeof(Elf32_Sym);
 
-		if (sh_type == SHT_SYMTAB) {
+		if (sh_type == SHT_SYMTAB && sh_offset >= 0 &&
+		    (uint64_t)sh_offset <= (uint64_t)elf_filesize &&
+		    sh_size <= (uint64_t)elf_filesize - (uint64_t)sh_offset &&
+		    sh_size <= (uint64_t)LOADER_MAX_TABLE_BYTES &&
+		    sh_entsize > 0 && (sh_size % sh_entsize) == 0) {
 			size_t len2;
 			n_entries = sh_size / sh_entsize;
 
@@ -596,7 +606,10 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 		 *  table is the one to use seems to be good enough.
 		 */
 
-		if (sh_type == SHT_STRTAB && sh_size > symbol_length) {
+		if (sh_type == SHT_STRTAB && sh_size > symbol_length &&
+		    sh_offset >= 0 && (uint64_t)sh_offset <= (uint64_t)elf_filesize &&
+		    sh_size <= (uint64_t)elf_filesize - (uint64_t)sh_offset &&
+		    sh_size <= (uint64_t)LOADER_MAX_TABLE_BYTES) {
 			if (symbol_strings != NULL)
 				free(symbol_strings);
 
@@ -639,6 +652,13 @@ static void file_load_elf(struct machine *m, struct memory *mem,
 				unencode(addr,    &sym32.st_value, Elf32_Word);
 				unencode(size,    &sym32.st_size, Elf32_Word);
 			}
+
+			/*  st_name is a file-controlled offset into the string
+			    table; skip symbols whose name is out of range, so we
+			    never read past symbol_strings (NUL-terminated at
+			    symbol_length).  */
+			if (st_name >= symbol_length)
+				continue;
 
 			/*  debug("symbol info=0x%02x addr=0x%016" PRIx64
 			    " (%i) '%s'\n", st_info, (uint64_t) addr,

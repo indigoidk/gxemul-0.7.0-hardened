@@ -255,6 +255,20 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 		return 0;
 	}
 
+	{
+		/*  #113: validate cmd_len against the CDB group length so the
+		    per-opcode handlers below can't read past the controller-
+		    sized cmd[] buffer on a short CDB.  */
+		static const int cdb_group_len[8] = { 6,10,10,6,16,12,6,6 };
+		int need = cdb_group_len[(xferp->cmd[0] >> 5) & 7];
+		if (xferp->cmd_len < (size_t)need) {
+			debugmsg_cpu(cpu, SUBSYS_DISK, "scsi", VERBOSITY_ERROR,
+			    "short CDB: cmd_len %i < %i (op 0x%02x)",
+			    xferp->cmd_len, need, xferp->cmd[0]);
+			return 0;
+		}
+	}
+
 	if (d == NULL) {
 		debugmsg_cpu(cpu, SUBSYS_DISK, "scsi",
 		    VERBOSITY_INFO, "%s id %i not connected!",
@@ -961,9 +975,12 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		retlen = xferp->cmd[7] * 256 + xferp->cmd[8];
 		debug("allocation_len=%i)\n", retlen);
 
-		/*  Return data:  */
+		/*  #104: the fixed header writes below touch data_in[0..7];
+		    allocate at least that many bytes even if the guest's
+		    allocation length is smaller, then report only retlen.  */
 		scsi_transfer_allocbuf(&xferp->data_in_len,
-		    &xferp->data_in, retlen, 1);
+		    &xferp->data_in, retlen < 12 ? 12 : retlen, 1);
+		xferp->data_in_len = retlen;
 
 		xferp->data_in[0] = 0;
 		xferp->data_in[1] = 10;

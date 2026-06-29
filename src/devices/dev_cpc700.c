@@ -200,7 +200,7 @@ DEVINIT(cpc700)
 		snprintf(n, sizeof(n), "%s.cpc700.%i",
 		    devinit->interrupt_path, i);
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;
+		templ.line = (uint32_t)1 << i;
 		templ.name = n;
 		templ.extra = d;
 		templ.interrupt_assert = cpc700_interrupt_assert;

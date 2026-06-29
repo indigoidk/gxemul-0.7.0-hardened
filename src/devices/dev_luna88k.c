@@ -1014,8 +1014,8 @@ DEVINIT(luna88k)
 	const char *enaddr = "ENADDR=00000A102030";
 	size_t i = 0;
 	while (enaddr[i]) {
-		d->fuse_rom[i*2+0] = (enaddr[i] & 0xf0) << 24;
-		d->fuse_rom[i*2+1] = (enaddr[i] & 0x0f) << 28;
+		d->fuse_rom[i*2+0] = (uint32_t)(enaddr[i] & 0xf0) << 24;
+		d->fuse_rom[i*2+1] = (uint32_t)(enaddr[i] & 0x0f) << 28;
 		++i;
 	}
 

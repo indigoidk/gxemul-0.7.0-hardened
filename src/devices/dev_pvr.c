@@ -578,8 +578,10 @@ void pvr_geometry_updated(struct pvr_data *d)
 			return;
 	}
 
-	/*  Scrap Z buffer if we have one.  */
-	if (d->vram_z == NULL) {
+	/*  Scrap the Z buffer if we have one — it is sized to the OLD geometry,
+	    so it must be freed and reallocated at the new xsize*ysize; otherwise
+	    pvr_render() reuses an undersized buffer and overflows it.  */
+	if (d->vram_z != NULL) {
 		free(d->vram_z);
 		d->vram_z = NULL;
 	}
@@ -770,6 +772,11 @@ static void texturedline(struct pvr_data *d,
 
 				int addr = texture + textureofs;
 				addr = ((addr & 4) << 20) | (addr & 3) | ((addr & 0x7ffff8) >> 1);
+				/*  Bound so vram[addr] / vram[addr+1] below stay
+				    inside the VRAM_SIZE buffer (texture coords are
+				    guest data and can reach addr==VRAM_SIZE-1).  */
+				if (addr > (int)VRAM_SIZE - 2)
+					addr = (int)VRAM_SIZE - 2;
 
 				int a = 255, r = 64, g = 64, b = 64;
 				switch (texture_pixelformat)
@@ -1091,7 +1098,10 @@ void pvr_render(struct cpu *cpu, struct pvr_data *d)
 	uint32_t textureAddr = 0;
 
 	int vertex_index = 0;
-	int wf_x[4], wf_y[4]; double wf_z[4], wf_u[4], wf_v[4];
+	/*  Zero-initialized: a vertex strip may slide values into slots 0/1
+	    (see below) before every component has been written.  */
+	int wf_x[4] = { 0 }, wf_y[4] = { 0 };
+	double wf_z[4] = { 0 }, wf_u[4] = { 0 }, wf_v[4] = { 0 };
 	int wf_r[4], wf_g[4], wf_b[4];
 
 	double baseRed = 0.0, baseGreen = 0.0, baseBlue = 0.0;
@@ -1106,11 +1116,30 @@ void pvr_render(struct cpu *cpu, struct pvr_data *d)
 	 *  TODO: What background color to use? See KOS' pvr_misc.c for
 	 *  how KOS sets the background.
 	 */
-	memset(d->vram + fb_base, 0x00, d->xsize * d->ysize * d->bytes_per_pixel);
+	{
+		uint64_t frame_bytes = (uint64_t) d->xsize * d->ysize *
+		    d->bytes_per_pixel;
+		/*  fb_base and the frame size are guest-register-controlled;
+		    bound the whole frame against VRAM so a high or sign-flipped
+		    value cannot memset (or render, below) outside the host VRAM
+		    allocation.  */
+		if (fb_base < 0 || frame_bytes > VRAM_SIZE ||
+		    (uint64_t) fb_base > VRAM_SIZE - frame_bytes) {
+			static int warned = 0;	/* #119: rate-limit (course-correction) */
+			if (!warned) {
+				fatal("[ pvr_render: fb_base 0x%x + frame outside "
+				    "VRAM; skipping render ]\n", fb_base);
+				warned = 1;
+			}
+			return;
+		}
+		memset(d->vram + fb_base, 0x00, frame_bytes);
+	}
 
 	/*  Clear Z as well:  */
 	if (d->vram_z == NULL) {
-		d->vram_z = (double*) malloc(sizeof(double) * d->xsize * d->ysize);
+		CHECK_ALLOCATION(d->vram_z = (double*) malloc(
+		    sizeof(double) * d->xsize * d->ysize));
 	}
 
 	uint32_t bgplaneZ = REG(PVRREG_BGPLANE_Z);
@@ -1470,13 +1499,15 @@ static void pvr_ta_command(struct cpu *cpu, struct pvr_data *d, int list_ofs)
 
 	if (d->ta_commands == NULL) {
 		d->allocated_ta_commands = 2048;
-		d->ta_commands = (uint32_t *) malloc(64 * d->allocated_ta_commands);
+		CHECK_ALLOCATION(d->ta_commands = (uint32_t *)
+		    malloc(64 * d->allocated_ta_commands));
 		d->n_ta_commands = 0;
 	}
 
 	if (d->n_ta_commands + 1 >= d->allocated_ta_commands) {
 		d->allocated_ta_commands *= 2;
-		d->ta_commands = (uint32_t *) realloc(d->ta_commands, 64 * d->allocated_ta_commands);
+		CHECK_ALLOCATION(d->ta_commands = (uint32_t *)
+		    realloc(d->ta_commands, 64 * d->allocated_ta_commands));
 	}
 
 	// Hack: I don't understand yet what separates a 32-byte transfer
@@ -2407,8 +2438,15 @@ DEVICE_TICK(pvr_fb)
 		{
 			int y;
 			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
-				/*  TODO: Reverse colors, like in the 32-bit case?  */
-				memcpy(fb+fb_ofs, vram+(vram_ofs%VRAM_SIZE), 3*pixels_to_copy);
+				/*  #107: wrap the start AND bound the span to
+				    VRAM_SIZE (other pixelmodes wrap each access;
+				    this bulk memcpy did not).  */
+				size_t vo = (size_t)vram_ofs % VRAM_SIZE;
+				size_t n = pixels_to_copy > 0 ?
+				    (size_t)3 * pixels_to_copy : 0;
+				if (n > VRAM_SIZE - vo)
+					n = VRAM_SIZE - vo;
+				memcpy(fb+fb_ofs, vram + vo, n);
 				vram_ofs += bytes_per_line;
 				fb_ofs += d->fb->bytes_per_line;
 			}
@@ -2483,15 +2521,31 @@ DEVICE_ACCESS(pvr_vram_alt)
 	 *  Convert writes to alternative VRAM, into normal writes:
 	 */
 
+	uint64_t upd_lo[2] = { VRAM_SIZE, VRAM_SIZE }, upd_hi[2] = { 0, 0 };
 	for (i=0; i<len; i++) {
 		int addr = relative_addr + i;
+		int bank;
 		addr = ((addr & 4) << 20) | (addr & 3) | ((addr & 0x7ffff8) >> 1);
 		// printf("  %08x => alt addr %08x: %02x\n", (int)(relative_addr + i), (int)addr, data[i]);
 		d->vram[addr % VRAM_SIZE] = data[i];
+		/*  The twiddle splits the writes across two 4 MB VRAM banks
+		    (bit 22); track each bank's touched range separately.  */
+		bank = (addr & (1 << 22)) ? 1 : 0;
+		if ((uint64_t) addr < upd_lo[bank]) upd_lo[bank] = addr;
+		if ((uint64_t) addr > upd_hi[bank]) upd_hi[bank] = addr;
+	}
 
-		// TODO: This is probably ultra-slow. (Should not be called
-		// for every _byte_.)
-		pvr_extend_update_region(d, addr, addr);
+	/*  Extend the dirty region once per bank instead of once per byte — far
+	    fewer calls than the original, and without dirtying the whole 4 MB
+	    gap between the banks when a write touches both.  fb_update_y1/y2 is a
+	    line range, so within a bank this matches the per-byte result except
+	    for writes straddling the visible-FB edge (a few extra lines, redrawn
+	    identically).  */
+	{
+		int b;
+		for (b = 0; b < 2; b++)
+			if (upd_lo[b] <= upd_hi[b])	/*  bank b was written  */
+				pvr_extend_update_region(d, upd_lo[b], upd_hi[b]);
 	}
 
 	return 1;

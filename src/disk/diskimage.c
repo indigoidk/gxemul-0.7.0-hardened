@@ -144,6 +144,7 @@ bool diskimage_add_overlay(struct diskimage *d, char *overlay_basename, bool rem
 			unlink(bitmap_name);
 		}
 
+		free(overlay.overlay_basename);
 		free(bitmap_name);
 		return false;
 	}
@@ -159,6 +160,7 @@ bool diskimage_add_overlay(struct diskimage *d, char *overlay_basename, bool rem
 			unlink(bitmap_name);
 		}
 
+		free(overlay.overlay_basename);
 		free(bitmap_name);
 		return false;
 	}
@@ -316,7 +318,7 @@ void diskimage_set_baseoffset(struct machine *machine, int id, int type, int64_t
 		d = d->next;
 	}
 
-	fatal("diskimage_set_baseoffset(): disk id %i (type %i) not found?\n",
+	fatal("diskimage_set_baseoffset(): disk id %i (type %s) not found?\n",
 	    id, diskimage_types[type]);
 	exit(1);
 }
@@ -341,7 +343,7 @@ void diskimage_getchs(struct machine *machine, int id, int type,
 		}
 		d = d->next;
 	}
-	fatal("diskimage_getchs(): disk id %i (type %i) not found?\n",
+	fatal("diskimage_getchs(): disk id %i (type %s) not found?\n",
 	    id, diskimage_types[type]);
 	exit(1);
 }
@@ -1103,20 +1105,37 @@ int diskimage_add(struct machine *machine, char *fname)
 		
 		int old_umask = umask(077);
 
-		// TODO: Not secure. Both the .img and the .img.map file
-		// need to be created by the process itself to avoid a race.
-		// NOTE/TODO: Ideally fopen mode "x" (from C11) for exclusive open.
-		snprintf(tmpname, sizeof(tmpname), "%s/gxemul.%i.temp-diskimage-overlay.%i.img.map",
-		    tmpdir, d->id, getpid());
+		/*  #115 (OB-25): create the overlay data file with an
+		    UNPREDICTABLE name via mymkstemp() (random suffix from
+		    /dev/urandom, atomic O_CREAT|O_EXCL create), then create its
+		    ".map" exclusively.  A guessable name let a local attacker
+		    pre-plant a symlink at the path before diskimage_add_overlay()
+		    reopens the files by name (TOCTOU).  */
+		snprintf(tmpname, sizeof(tmpname),
+		    "%s/gxemul.%i.overlay.XXXXXXXX", tmpdir, d->id);
+		{
+			int ovfd = mymkstemp(tmpname);
+			if (ovfd < 0) {
+				perror(tmpname);
+				umask(old_umask);
+				return -1;
+			}
+			close(ovfd);
+		}
 
-		FILE* f_img_map = fopen(tmpname, "w");
-		fclose(f_img_map);
-
-		snprintf(tmpname, sizeof(tmpname), "%s/gxemul.%i.temp-diskimage-overlay.%i.img",
-		    tmpdir, d->id, getpid());
-
-		FILE* f_img = fopen(tmpname, "w");
-		fclose(f_img);
+		{
+			char mapname[1040];
+			FILE* f_img_map;
+			snprintf(mapname, sizeof(mapname), "%s.map", tmpname);
+			f_img_map = fopen(mapname, "wx");
+			if (f_img_map == NULL) {
+				perror(mapname);
+				unlink(tmpname);
+				umask(old_umask);
+				return -1;
+			}
+			fclose(f_img_map);
+		}
 
 		umask(old_umask);
 

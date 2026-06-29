@@ -172,7 +172,7 @@ DEVINIT(irqc)
 		    devinit->interrupt_path, i);
 
 		memset(&templ, 0, sizeof(templ));
-		templ.line = 1 << i;		/*  Note: line contains the
+		templ.line = (uint32_t)1 << i;	/*  Note: line contains the
 						    _mask_, not line number.  */
 		templ.name = n;
 		templ.extra = d;

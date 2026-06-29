@@ -3007,9 +3007,9 @@ X(to_be_translated)
 	}
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
-		iword = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
+		iword = READ_WORD_LE(ib);
 	else
-		iword = ib[3] + (ib[2]<<8) + (ib[1]<<16) + (ib[0]<<24);
+		iword = READ_WORD_BE(ib);
 
 
 #define DYNTRANS_TO_BE_TRANSLATED_HEAD

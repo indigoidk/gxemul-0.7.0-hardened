@@ -129,8 +129,10 @@
 #undef __noreturn__
 #endif
 
-#define __attribute__(x)  /*  */
-#define __noreturn__  /*  */
+/*  Removed historic "#define __attribute__(x) / __noreturn__" neutering:
+    on modern glibc it stripped __attribute__((__gnu_inline__)) from system
+    headers (multiple-definition link errors) and silently discarded
+    __attribute__((packed)) on the structs below.  */
 
 #if !defined(__ASSEMBLER__)
 #if defined(_KERNEL) || defined(_STANDALONE)

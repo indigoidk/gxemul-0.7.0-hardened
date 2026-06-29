@@ -176,7 +176,7 @@ DEVICE_ACCESS(8253)
 		if (writeflag == MEM_WRITE) {
 			d->mode_byte = idata;
 
-			d->counter_select = idata >> 6;
+			d->counter_select = (idata >> 6) & 3;
 			if (d->counter_select > 2) {
 				debug("[ 8253: attempt to select counter 3,"
 				    " which doesn't exist. ]\n");

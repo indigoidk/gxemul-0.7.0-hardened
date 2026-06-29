@@ -280,7 +280,7 @@ int alpha_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 
 	debug("%016" PRIx64":  ", (uint64_t) dumpaddr);
 
-	iw = ib[0] + (ib[1]<<8) + (ib[2]<<16) + (ib[3]<<24);
+	iw = READ_WORD_LE(ib);
 	debug("%08x", (int)iw);
 
 	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);

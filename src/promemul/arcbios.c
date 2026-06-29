@@ -577,7 +577,7 @@ static uint64_t arcbios_addchild(struct cpu *cpu,
 			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
 		}
-		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
+		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint32_t)buf[3]<<24);
 
 		cpu->memory_rw(cpu, cpu->mem, peeraddr + 2 *
 		    machine->md.arc->wordlen,
@@ -1622,7 +1622,8 @@ int arcbios_emul(struct cpu *cpu)
 	case 0x60:		/*  Close(uint32_t handle)  */
 		debugmsg(SUBSYS_PROMEMUL, "arcbios", VERBOSITY_DEBUG, "Close(%i)",
 		    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
-		if (!machine->md.arc->file_handle_in_use[cpu->cd.mips.gpr[
+		if (cpu->cd.mips.gpr[MIPS_GPR_A0] >= ARC_MAX_HANDLES ||
+		    !machine->md.arc->file_handle_in_use[cpu->cd.mips.gpr[
 		    MIPS_GPR_A0]]) {
 			fatal("ARCBIOS Close(%i): bad handle\n",
 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
@@ -1701,6 +1702,10 @@ int arcbios_emul(struct cpu *cpu)
 			    nread? ARCBIOS_ESUCCESS: ARCBIOS_EAGAIN;
 		} else {
 			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
+			if (handleTmp < 0 || handleTmp >= ARC_MAX_HANDLES) {
+				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
+				break;
+			}
 			int disk_type = 0;
 			int disk_id = arcbios_handle_to_disk_id_and_type(
 			    machine, handleTmp, &disk_type);
@@ -1770,6 +1775,10 @@ int arcbios_emul(struct cpu *cpu)
 			 *  TODO: this is just a test
 			 */
 			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
+			if (handleTmp < 0 || handleTmp >= ARC_MAX_HANDLES) {
+				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
+				break;
+			}
 			int disk_type = 0;
 			int disk_id = arcbios_handle_to_disk_id_and_type(
 			    machine, handleTmp, &disk_type);
@@ -1832,6 +1841,13 @@ int arcbios_emul(struct cpu *cpu)
 		    (int) cpu->cd.mips.gpr[MIPS_GPR_A0],
 		    (uint64_t)cpu->cd.mips.gpr[MIPS_GPR_A1],
 		    (int) cpu->cd.mips.gpr[MIPS_GPR_A2]);
+
+		/*  The handle comes from the guest; reject out-of-range values
+		    before indexing current_seek_offset[] (OOB write otherwise).  */
+		if (cpu->cd.mips.gpr[MIPS_GPR_A0] >= ARC_MAX_HANDLES) {
+			cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EBADF;
+			break;
+		}
 
 		if (cpu->cd.mips.gpr[MIPS_GPR_A2] != 0) {
 			fatal("[ ARCBIOS Seek(%i,0x%08" PRIx64",%i): "
@@ -2305,8 +2321,9 @@ void set_env(struct envstrings* env, const char* name, const char* value)
 		env->value[found] = strdup(value);
 	} else {
 		if (env->n == 0) {
-			env->name = malloc(0);
-			env->value = malloc(0);
+			/*  realloc(NULL, ...) below behaves like malloc().  */
+			env->name = NULL;
+			env->value = NULL;
 		}
 
 		env->n ++;
@@ -2338,6 +2355,7 @@ static char* environment_string(struct machine *machine, struct envstrings* env,
 		len_with_value += strlen(env->value[found]);
 
 	char* s = malloc(len_with_value + 1);
+	CHECK_ALLOCATION(s);
 
 	if (name_and_value) {
 		if (found < 0)
@@ -2370,6 +2388,7 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 	const char *primary_ether_addr)
 {
 	struct envstrings* env = malloc(sizeof(struct envstrings));
+	CHECK_ALLOCATION(env);
 	memset(env, 0, sizeof(struct envstrings));
 
 	uint64_t addr, addr2;
@@ -2407,11 +2426,13 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 		if (diskimage_is_a_cdrom(machine, machine->bootdev_id, machine->bootdev_type)) {
 			size_t len = strlen(boot_device) + 50;
 			char* cdrom = malloc(len);
+			CHECK_ALLOCATION(cdrom);
 			snprintf(cdrom, len, "%sscsi(0)cdrom(%i)", boot_device, machine->bootdev_id);
 			boot_device = cdrom;
 		} else {
 			size_t len = strlen(boot_device) + 50;
 			char* disk = malloc(len);
+			CHECK_ALLOCATION(disk);
 			snprintf(disk, len, "%sscsi(0)disk(%i)rdisk(0)", boot_device, machine->bootdev_id);
 			boot_device = disk;
 		}
@@ -2423,11 +2444,11 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 				partition = 8;
 
 			size_t len = strlen(boot_device) + 50;
-			systempartition = malloc(len);
+			CHECK_ALLOCATION(systempartition = malloc(len));
 			snprintf(systempartition, len, "%spartition(%i)", boot_device, partition);
 		} else {
 			size_t len = strlen(boot_device) + 50;
-			systempartition = malloc(len);
+			CHECK_ALLOCATION(systempartition = malloc(len));
 			snprintf(systempartition, len, "%sfdisk(0)", boot_device);
 		}
 
@@ -2440,11 +2461,11 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 				partition = 0;
 
 			size_t len = strlen(boot_device) + 50;
-			osloadpartition = malloc(len);
+			CHECK_ALLOCATION(osloadpartition = malloc(len));
 			snprintf(osloadpartition, len, "%spartition(%i)", boot_device, partition);
 		} else {
 			size_t len = strlen(boot_device) + 50;
-			osloadpartition = malloc(len);
+			CHECK_ALLOCATION(osloadpartition = malloc(len));
 			snprintf(osloadpartition, len, "%sfdisk(0)", boot_device);
 		}
 
@@ -2462,6 +2483,7 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 	if (machine->boot_kernel_filename[0] != '\0') {
 		size_t len = strlen(machine->boot_kernel_filename) + 10;
 		char* s = malloc(len);
+		CHECK_ALLOCATION(s);
 		snprintf(s, len, "/%s", machine->boot_kernel_filename);
 		set_env(env, "OSLoadFilename", s);
 	}

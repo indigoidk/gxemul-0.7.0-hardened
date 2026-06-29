@@ -167,7 +167,7 @@ DEVICE_ACCESS(igsfb)
 		switch (relative_addr - 0x3c0) {
 		case VGA_DAC_ADDR_WRITE:		/*  0x08  */
 			if (writeflag == MEM_WRITE) {
-				d->palette_write_index = idata;
+				d->palette_write_index = idata & 0xff;	/* OB-7: 256-entry palette */
 				d->palette_write_subindex = 0;
 			} else {
 				fatal("[ igsdb: WARNING: Read from "
@@ -195,7 +195,7 @@ DEVICE_ACCESS(igsfb)
 				}
 				d->palette_write_subindex ++;
 				if (d->palette_write_subindex == 3) {
-					d->palette_write_index ++;
+					d->palette_write_index = (d->palette_write_index + 1) & 0xff;	/* OB-7 */
 					d->palette_write_subindex = 0;
 				}
 			}

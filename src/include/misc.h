@@ -193,6 +193,30 @@ enum Endianness
 	}
 
 
+/*
+ *  READ_WORD_LE / READ_WORD_BE:
+ *
+ *  Assemble a 32-bit word from a 4-byte buffer without signed-shift UB: each
+ *  byte is promoted to uint32_t before shifting, so byte<<24 is always defined.
+ *  Used for instruction fetches in the CPU disassemblers/decoders.
+ */
+#define	READ_WORD_LE(p)	( (uint32_t)(p)[0]         | ((uint32_t)(p)[1] <<  8) | \
+			  ((uint32_t)(p)[2] << 16) | ((uint32_t)(p)[3] << 24) )
+#define	READ_WORD_BE(p)	( (uint32_t)(p)[3]         | ((uint32_t)(p)[2] <<  8) | \
+			  ((uint32_t)(p)[1] << 16) | ((uint32_t)(p)[0] << 24) )
+
+/*
+ *  LOADER_MAX_TABLE_BYTES:
+ *
+ *  Sanity cap for file-controlled symbol/string-table allocations in the file
+ *  loaders (ELF / Mach-O / ECOFF).  The per-loader checks already require a table
+ *  to lie within the file, but a sparse or oversized file can still report a
+ *  multi-GB size and drive a (file-bounded) malloc to OOM.  256 MB is far larger
+ *  than any real symbol/string table, so this only rejects absurd input.
+ */
+#define	LOADER_MAX_TABLE_BYTES	(256 * 1024 * 1024)
+
+
 /*  bootblock.c:  */
 int load_bootblock(struct machine *m, struct cpu *cpu,
 	int *n_loadp, char ***load_namesp);

@@ -66,24 +66,30 @@ static int n_executables_loaded = 0;
 
 #include "thirdparty/exec_elf.h"		/*  Ugly; needed for ELFDATA2LSB etc.  */
 
+/*
+ *  Accumulate in an unsigned 64-bit temporary: the previous version sign-
+ *  extended by doing "var = -1; var <<= 8", i.e. left-shifting a negative int,
+ *  which is undefined behaviour. Shifting the unsigned Wuns is well defined and
+ *  produces the identical (sign-extended) result once assigned back to var.
+ */
 #define	unencode(var,dataptr,typ)	{				\
 		int Wi;  unsigned char Wb;				\
 		unsigned char *Wp = (unsigned char *) dataptr;		\
 		int Wlen = sizeof(typ);					\
-		var = 0;						\
+		uint64_t Wuns = 0;					\
 		for (Wi=0; Wi<Wlen; Wi++) {				\
 			if (encoding == ELFDATA2LSB)			\
 				Wb = Wp[Wlen-1 - Wi];			\
 			else						\
 				Wb = Wp[Wi];				\
-			if (Wi == 0 && (Wb & 0x80)) {			\
-				var --;	/*  set var to -1 :-)  */	\
-				var <<= 8;				\
-			}						\
-			var |= Wb;					\
-			if (Wi < Wlen-1)				\
-				var <<= 8;				\
+			if (Wi == 0 && (Wb & 0x80))			\
+				Wuns = (uint64_t) -1;	/*  sign-extend  */ \
+			Wuns = (Wuns << 8) | Wb;			\
 		}							\
+		var = Wuns;						\
+		(void) var;	/*  some callers decode fields they	\
+				never read; keep "used" like the old	\
+				read-modify-write macro did  */		\
 	}
 
 

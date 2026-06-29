@@ -180,6 +180,11 @@ DEVICE_ACCESS(mb8696x)
 					if (d->eeprom_bit_count == 8) {
 						int addr = (d->eeprom_command
 						    & 0x7f) << 1;
+						/*  addr is a guest-derived index;
+						    bound it to the 32-byte EEPROM
+						    so eeprom[addr]/[addr+1] below
+						    can't read past the array.  */
+						addr &= (FE_EEPROM_SIZE - 2);
 						/*  printf("COMMAND=%08x\n",
 						    d->eeprom_command);  */
 						if (!(d->eeprom_command&0x80)) {

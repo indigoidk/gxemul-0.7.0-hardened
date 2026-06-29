@@ -86,6 +86,7 @@ struct osiop_data {
 	/*  Cached emulated physical RAM page lookup:  */
 	uint32_t		last_phys_page;
 	uint8_t			*last_host_page;
+	int			hostpage_fault_warned;	/* #118: warn once */
 
 	/*  ALU:  */
 	int			carry;
@@ -193,6 +194,25 @@ static void osiop_reassert_interrupts(struct osiop_data *d)
 }
 
 
+/*
+ *  #118: A guest can point the SCSI SCRIPTS engine at unmapped physical RAM;
+ *  memory_paddr_to_hostaddr() then returns NULL. Warn once (the author's
+ *  loud-but-continue style) and stop THIS controller's script engine, instead of
+ *  dereferencing NULL (a host crash) or fabricating a transfer. The emulator
+ *  keeps running; only this script halts. (Codex+agy course-correction consensus.)
+ */
+static void osiop_hostpage_fault(struct osiop_data *d)
+{
+	if (!d->hostpage_fault_warned) {
+		fatal("[ osiop: SCSI SCRIPTS referenced unmapped physical page "
+		    "0x%08x; stopping script (would have been a host NULL deref) ]\n",
+		    (int) d->last_phys_page);
+		d->hostpage_fault_warned = 1;
+	}
+	d->scripts_running = 0;
+}
+
+
 /*  Helper: returns a word in host order, from emulated physical RAM.  */
 static uint32_t read_word(struct osiop_data *d, struct cpu *cpu, uint32_t addr)
 {
@@ -203,6 +223,11 @@ static uint32_t read_word(struct osiop_data *d, struct cpu *cpu, uint32_t addr)
 		d->last_phys_page = addr & 0xfffff000;
 		d->last_host_page =
 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 0);
+	}
+
+	if (d->last_host_page == NULL) {	/* #118 */
+		osiop_hostpage_fault(d);
+		return 0;
 	}
 
 	word = *((uint32_t *) (d->last_host_page + (addr & 0xffc)));
@@ -226,6 +251,11 @@ static uint8_t read_byte(struct osiop_data *d, struct cpu *cpu, uint32_t addr)
 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 0);
 	}
 
+	if (d->last_host_page == NULL) {	/* #118 */
+		osiop_hostpage_fault(d);
+		return 0;
+	}
+
 	return d->last_host_page[addr & 0xfff];
 }
 static void write_byte(struct osiop_data *d, struct cpu *cpu, uint32_t addr, uint8_t byte)
@@ -235,6 +265,11 @@ static void write_byte(struct osiop_data *d, struct cpu *cpu, uint32_t addr, uin
 		d->last_phys_page = addr & 0xfffff000;
 		d->last_host_page =
 		    memory_paddr_to_hostaddr(cpu->mem, d->last_phys_page, 1);
+	}
+
+	if (d->last_host_page == NULL) {	/* #118 */
+		osiop_hostpage_fault(d);
+		return;
 	}
 
 	d->last_host_page[addr & 0xfff] = byte;
@@ -310,6 +345,11 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 	 *  into the TEMP register.
 	 */
 
+	if (!d->scripts_running) {	/* #118: host-page fault during SCRIPTS fetch above */
+		*dspp = dspOrig;	/* leave DSP at the faulting instr; don't fake progress */
+		return 0;
+	}
+
 	dcmd = d->reg[OSIOP_DCMD] = instr1 >> 24;
 	dbc = *dbcp = instr1 & 0x00ffffff;
 	*dspsp = instr2;
@@ -383,6 +423,29 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 			xfer_byte_count = read_word(d, cpu, addr) & 0x00ffffff;
 			xfer_addr = read_word(d, cpu, addr+4);
 
+			if (!d->scripts_running)	/* #118: host-page fault reading the MOVE descriptor */
+				return 1;
+
+			/*  A guest can drive the controller into a data phase
+			    without a selection having set up a transfer; guard
+			    the dereferences of d->xferp below.  */
+			if (d->xferp == NULL) {
+				/*  #114 (refined, Codex+agy course-correction): a guest
+				    drove a data phase with no active transfer. Warn
+				    loudly-once and STOP this controller's script -- do NOT
+				    fall through to the "Transfer complete" register updates
+				    below (which would fake a successful move), and do NOT
+				    exit the emulator.  */
+				static int warned = 0;
+				if (!warned) {
+					fatal("[ osiop: SCSI data phase with no active "
+					    "transfer; stopping script (no fake "
+					    "completion) ]\n");
+					warned = 1;
+				}
+				d->scripts_running = 0;
+				return 1;
+			} else
 			switch (phase) {
 
 			case MSG_OUT_PHASE:
@@ -399,6 +462,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 				
+				if (!d->scripts_running)	/* #118: host-page fault during msg-out phase */
+					return 1;
+
 				osiop_set_scsi_phase(d, COMMAND_PHASE);
 				break;
 
@@ -416,11 +482,17 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 
+				if (!d->scripts_running)	/* #118: fault while reading the command */
+					return 1;
+
 				res = diskimage_scsicommand(cpu,
 				    d->selected_id, DISKIMAGE_SCSI, d->xferp);
 				if (res == 0) {
-					fatal("osiop TODO: error\n");
-					exit(1);
+					static int warned = 0;	/* #118/#119: was exit(1) */
+					if (!warned) { fatal("[ osiop: SCSI command "
+					    "failed; stopping script ]\n"); warned = 1; }
+					d->scripts_running = 0;
+					return 1;
 				}
 
 				d->data_offset = 0;
@@ -438,7 +510,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					scsi_transfer_allocbuf(&d->xferp->data_out_len,
 					    &d->xferp->data_out, d->xferp->data_out_len, 0);
 
-				while (xfer_byte_count > 0) {
+				while (xfer_byte_count > 0 &&
+				    d->xferp->data_out_offset <
+				    d->xferp->data_out_len) {
 					uint8_t byte = read_byte(d, cpu, xfer_addr);
 					/*  debug("  reading data_out byte @ 0x%08x = 0x%02x\n",
 					    xfer_addr, byte);  */
@@ -447,12 +521,18 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 
+				if (!d->scripts_running)	/* #118: fault while reading data-out */
+					return 1;
+
 				/*  Rerun the command to actually write out the data:  */
 				res = diskimage_scsicommand(cpu,
 				    d->selected_id, DISKIMAGE_SCSI, d->xferp);
 				if (res == 0) {
-					fatal("osiop TODO: error on rerun\n");
-					exit(1);
+					static int warned = 0;	/* #118/#119: was exit(1) */
+					if (!warned) { fatal("[ osiop: SCSI data-out "
+					    "command failed; stopping script ]\n"); warned = 1; }
+					d->scripts_running = 0;
+					return 1;
 				} else if (res == 2) {
 					/*  Stay at data out phase.  */
 				} else {
@@ -472,6 +552,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 
+				if (!d->scripts_running)	/* #118: host-page fault during data-in phase */
+					return 1;
+
 				d->data_offset += i;
 				if (d->data_offset >= d->xferp->data_in_len)
 					osiop_set_scsi_phase(d, STATUS_PHASE);
@@ -488,6 +571,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 
+				if (!d->scripts_running)	/* #118: host-page fault during status phase */
+					return 1;
+
 				osiop_set_scsi_phase(d, MSG_IN_PHASE);
 				break;
 
@@ -502,6 +588,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 					xfer_byte_count --;
 				}
 
+				if (!d->scripts_running)	/* #118: host-page fault during msg-in phase */
+					return 1;
+
 				/*  Done.  */
 				osiop_free_xfer(d);
 				break;
@@ -510,6 +599,9 @@ int osiop_execute_scripts_instr(struct cpu *cpu, struct osiop_data *d)
 				    "phase=%i\n", phase);
 				exit(1);
 			}
+
+			if (!d->scripts_running)	/* #118: host-page fault during the data phase above */
+				return 1;	/* stop; do NOT fake transfer-complete */
 
 			/*  Transfer complete.  */
 			*dnadp = xfer_addr;
