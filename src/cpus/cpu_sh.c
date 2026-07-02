@@ -743,6 +743,14 @@ void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
 	case EXPEVT_FPU_DISABLE:
 		break;
 
+	case EXPEVT_ADDR_ERR_LD:
+	case EXPEVT_ADDR_ERR_ST:
+		/*  CPU address error (misaligned access). Sets TEA to
+		    the faulting address; uses the general exception
+		    vector (VBR + 0x100) already set above.  */
+		cpu->cd.sh.tea = vaddr;
+		break;
+
 	default:fatal("sh_exception(): exception 0x%x is not yet "
 		    "implemented.\n", expevt);
 		exit(1);

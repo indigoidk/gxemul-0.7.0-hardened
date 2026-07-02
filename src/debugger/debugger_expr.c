@@ -374,9 +374,19 @@ int debugger_parse_expression(struct machine *m, char *expr, int writeflag,
 					(*valuep) = left * right;
 					break;
 				case '/':
+					if (right == 0) {
+						printf("Division by zero.\n");
+						res = PARSE_NOMATCH;
+						goto return_failure;
+					}
 					(*valuep) = left / right;
 					break;
 				case '%':
+					if (right == 0) {
+						printf("Modulo by zero.\n");
+						res = PARSE_NOMATCH;
+						goto return_failure;
+					}
 					(*valuep) = left % right;
 					break;
 				}

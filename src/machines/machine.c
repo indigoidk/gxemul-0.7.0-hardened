@@ -192,6 +192,23 @@ int machine_name_to_type(char *stype, char *ssubtype,
 				if (!ssubtype[0])
 					fatal("(Maybe you forgot the -e"
 					    " command line option?)\n");
+
+				/*  List the available subtypes, instead of
+				    just complaining (see the TODO list):  */
+				fatal("\nAvailable subtypes for '%s' are:\n",
+				    stype);
+				for (j=0; j<me->n_subtypes; j++) {
+					struct machine_entry_subtype *mes =
+					    me->subtype[j];
+					fatal("  %s (", mes->name);
+					for (k=0; k<mes->n_aliases; k++)
+						fatal("%s\"%s\"", k? ", " : "",
+						    mes->aliases[k]);
+					fatal(")\n");
+				}
+				fatal("\nUse an alias when selecting a "
+				    "subtype, e.g.:  -e %s\n",
+				    me->subtype[0]->aliases[0]);
 				exit(1);
 			}
 

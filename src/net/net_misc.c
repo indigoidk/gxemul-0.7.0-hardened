@@ -28,6 +28,7 @@
  *  Misc. helper functions.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,34 +44,43 @@
 
 
 /*
- *  net_debugaddr():
+ *  net_addr_to_string():
  *
- *  Print an address using debug().
+ *  Format an address as a string, e.g. for use in debugmsg() output.
  */
-void net_debugaddr(void *addr, int type)
+void net_addr_to_string(char *buf, size_t buflen, void *addr, int type)
 {
 	int i;
 	unsigned char *p = (unsigned char *) addr;
+
+	if (buflen == 0)
+		return;
+
+	buf[0] = '\0';
 
 	switch (type) {
 
 	case NET_ADDR_IPV4:
 		for (i=0; i<4; i++)
-			debug("%s%i", i? "." : "", p[i]);
+			snprintf(buf+strlen(buf), buflen-strlen(buf),
+			    "%s%i", i? "." : "", p[i]);
 		break;
 
 	case NET_ADDR_IPV6:
 		for (i=0; i<16; i+=2)
-			debug("%s%4x", i? ":" : "", p[i] * 256 + p[i+1]);
+			snprintf(buf+strlen(buf), buflen-strlen(buf),
+			    "%s%4x", i? ":" : "", p[i] * 256 + p[i+1]);
 		break;
 
 	case NET_ADDR_ETHERNET:
 		for (i=0; i<6; i++)
-			debug("%s%02x", i? ":" : "", p[i]);
+			snprintf(buf+strlen(buf), buflen-strlen(buf),
+			    "%s%02x", i? ":" : "", p[i]);
 		break;
 
 	default:
-		fatal("net_debugaddr(): UNIMPLEMTED type %i\n", type);
+		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+		    "net_addr_to_string(): UNIMPLEMENTED type %i", type);
 		exit(1);
 	}
 }
@@ -88,7 +98,8 @@ void net_debugaddr(void *addr, int type)
 void net_generate_unique_mac(struct machine *machine, unsigned char *macbuf)
 {
 	if (macbuf == NULL || machine == NULL) {
-		fatal("**\n**  net_generate_unique_mac(): NULL ptr\n**\n");
+		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+		    "net_generate_unique_mac(): NULL ptr");
 		return;
 	}
 
@@ -103,7 +114,8 @@ void net_generate_unique_mac(struct machine *machine, unsigned char *macbuf)
 	macbuf[5] = (machine->serial_nr << 4) + (machine->nr_of_nics << 1);
 
 	if (macbuf[0] & 1 || macbuf[5] & 1) {
-		fatal("Internal error in net_generate_unique_mac().\n");
+		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+		    "Internal error in net_generate_unique_mac().");
 		exit(1);
 	}
 
@@ -125,7 +137,8 @@ void send_udp(struct in_addr *addrp, int portnr, unsigned char *packet, size_t l
 
 	s = socket(AF_INET, SOCK_DGRAM, 0);
 	if (s < 0) {
-		perror("send_udp(): socket");
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_ERROR,
+		    "send_udp(): socket: %s", strerror(errno));
 		return;
 	}
 
@@ -137,7 +150,8 @@ void send_udp(struct in_addr *addrp, int portnr, unsigned char *packet, size_t l
 
 	if (sendto(s, packet, len, 0, (struct sockaddr *)&si,
 	    sizeof(si)) != (ssize_t)len) {
-		perror("send_udp(): sendto");
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_ERROR,
+		    "send_udp(): sendto: %s", strerror(errno));
 	}
 
 	close(s);

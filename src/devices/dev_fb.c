@@ -255,13 +255,31 @@ void framebuffer_blockcopyfill(struct vfb_data *d, int fillflag, int fill_r,
 	if (x2 >= d->xsize)	x2 = d->xsize-1;
 
 	/*
-	 *  Nothing to do if the clipped horizontal span is empty. Without
-	 *  this guard, (x2 - x1 + 1) can be <= 0 and, since 'linelen' is a
-	 *  size_t, it would wrap to a huge value -- turning the memset()/copy
-	 *  below into an out-of-bounds write past the framebuffer. (These
-	 *  coordinates can come from the emulated guest.)
+	 *  Clip y, mirroring the x clip above: the loops below only WRITE
+	 *  rows inside [0, d->ysize-1] (per-iteration guard), but without
+	 *  this clamp a huge caller-supplied y range (these coordinates can
+	 *  come from the emulated guest) makes them spin up to ~2^31
+	 *  iterations doing nothing. When clipping the top in copy mode,
+	 *  advance the source row equally so the copy stays aligned
+	 *  (saturate to d->ysize: any source row >= d->ysize just selects
+	 *  the "source outside fb => fill with zeroes" case, as before).
 	 */
-	if (x2 < x1)
+	if (y1 < 0) {
+		int64_t new_from_y = (int64_t) from_y - y1;
+		from_y = new_from_y > d->ysize ? d->ysize : (int) new_from_y;
+		y1 = 0;
+	}
+	if (y2 >= d->ysize)
+		y2 = d->ysize-1;
+
+	/*
+	 *  Nothing to do if the clipped horizontal or vertical span is empty.
+	 *  Without this guard, (x2 - x1 + 1) can be <= 0 and, since 'linelen'
+	 *  is a size_t, it would wrap to a huge value -- turning the
+	 *  memset()/copy below into an out-of-bounds write past the
+	 *  framebuffer. (These coordinates can come from the emulated guest.)
+	 */
+	if (x2 < x1 || y2 < y1)
 		return;
 
 	dest_ofs = d->bytes_per_line * y1 + (d->bit_depth/8) * x1;

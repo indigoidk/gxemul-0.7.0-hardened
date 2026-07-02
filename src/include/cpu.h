@@ -412,6 +412,16 @@ struct cpu {
 	int		trace_tree_depth;
 
 	/*
+	 *  Set to non-zero by cpu_functioncall_trace() and
+	 *  cpu_functioncall_trace_return() whenever a function call or
+	 *  return is traced (these are only called when show_trace_tree
+	 *  is enabled). Checked and reset by the debugger's "step call"
+	 *  command. (Starts out as zero, since the cpu struct is
+	 *  zero-allocated in cpu_new().)
+	 */
+	int		last_was_function_transition;
+
+	/*
 	 *  If wants_to_idle is true, then N_DYNTRANS_IDLE_BREAK is assumed
 	 *  to have been added to n_translated_instructions and should
 	 *  thus be subtracted when the dyntrans loop exits. An attempt is

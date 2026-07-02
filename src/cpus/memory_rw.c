@@ -294,8 +294,36 @@ not just the device in question.
 					memset(data, 0, len);
 
 				paddr -= mem->devices[i].baseaddr;
-				if (paddr + len > mem->devices[i].length)
+				if (paddr + len > mem->devices[i].length) {
+					/*  Note the truncation per the
+					    warn-loudly ethos, but only at
+					    debug verbosity (-v) and at most
+					    8 times (single-threaded), since
+					    probing at the end of a device's
+					    mapped range is common and benign
+					    (cf. the unwarned zero-fill in
+					    #95/#119 above).  */
+					static int n_trunc_msgs = 0;
+					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+					    VERBOSITY_DEBUG) &&
+					    n_trunc_msgs < 8) {
+						n_trunc_msgs ++;
+						debugmsg_cpu(cpu,
+						    SUBSYS_MEMORY,
+						    mem->devices[i].name,
+						    VERBOSITY_DEBUG,
+						    "%s truncated at end of"
+						    " device: offset 0x%llx,"
+						    " len %i -> %i",
+						    writeflag == MEM_WRITE ?
+						    "write" : "read",
+						    (long long) paddr,
+						    (int) len,
+						    (int) (mem->devices[i].
+						    length - paddr));
+					}
 					len = mem->devices[i].length - paddr;
+				}
 
 				if (cpu->update_translation_table != NULL &&
 				    !(ok & MEMORY_NOT_FULL_PAGE) &&

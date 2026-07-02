@@ -43,11 +43,6 @@
 #include "net.h"
 
 
-/*  #define debug fatal  */
-static int net_ip_debug = 0;	// replace by debugmsg(....)
-
-
-
 /*
  *  net_ip_checksum():
  *
@@ -62,7 +57,11 @@ void net_ip_checksum(unsigned char *ip_header, int chksumoffset, int len)
 
 	for (i=0; i<len; i+=2)
 		if (i != chksumoffset) {
-			uint16_t w = (ip_header[i] << 8) + ip_header[i+1];
+			/*  #131: pad an odd len with 0 instead of reading
+			    ip_header[i+1] one byte past the buffer (mirrors
+			    net_ip_tcp_checksum's odd-length handling).  */
+			uint16_t w = (ip_header[i] << 8) +
+			    (i+1 < len ? ip_header[i+1] : 0);
 			sum += w;
 			while (sum > 65535) {
 				int to_add = sum >> 16;
@@ -343,11 +342,19 @@ void net_ip_tcp_connectionreply(struct net *net, struct nic_data *nic,
 	net_ip_tcp_checksum(lp->data + 34, 16, tcp_length,
 	    lp->data + 26, lp->data + 30, 0);
 
-	if (net_ip_debug) {
-		fatal("[ net_ip_tcp_connectionreply(%i): ", connecting);
-		for (int i=0; i<ip_len+14; i++)
-			fatal("%02x", lp->data[i]);
-		fatal(" ]\n");
+	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
+		char s[2000];
+		s[0] = '\0';
+
+		snprintf(s, sizeof(s), "connectionreply(%i): ", connecting);
+		for (int i=0; i<ip_len+14; i++) {
+			if (strlen(s) > sizeof(s) - 5)
+				break;
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    lp->data[i]);
+		}
+
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG, "%s", s);
 	}
 
 	if (connecting)
@@ -389,13 +396,6 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	struct timeval tv;
 	int send_ofs;
 
-	if (net_ip_debug) {
-		fatal("[ net: TCP: ");
-		for (i=0; i<26; i++)
-			fatal("%02x", packet[i]);
-		fatal(" ");
-	}
-
 	srcport = (packet[34] << 8) + packet[35];
 	dstport = (packet[36] << 8) + packet[37];
 
@@ -403,12 +403,6 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 		+ (packet[40] << 8) + packet[41];
 	acknr   = ((uint32_t)packet[42] << 24) + (packet[43] << 16)
 		+ (packet[44] << 8) + packet[45];
-
-	if (net_ip_debug)
-		fatal("%i.%i.%i.%i:%i -> %i.%i.%i.%i:%i, seqnr=%lli acknr=%lli ",
-		    packet[26], packet[27], packet[28], packet[29], srcport,
-		    packet[30], packet[31], packet[32], packet[33], dstport,
-		    (long long)seqnr, (long long)acknr);
 
 	data_offset = (packet[46] >> 4) * 4 + 34;
 	/*  data_offset is now data offset within packet :-)  */
@@ -423,32 +417,54 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	checksum = (packet[50] << 8) + packet[51];
 	urgptr   = (packet[52] << 8) + packet[53];
 
-	if (net_ip_debug) {
-		fatal(urg? "URG " : "");
-		fatal(ack? "ACK " : "");
-		fatal(psh? "PSH " : "");
-		fatal(rst? "RST " : "");
-		fatal(syn? "SYN " : "");
-		fatal(fin? "FIN " : "");
+	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
+		char s[2000];
+		s[0] = '\0';
 
-		fatal("window=0x%04x checksum=0x%04x urgptr=0x%04x ", window, checksum, urgptr);
+		for (i=0; i<26; i++)
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
 
-		fatal("options=");
-		for (i=34+20; i<data_offset; i++)
-			fatal("%02x", packet[i]);
+		snprintf(s+strlen(s), sizeof(s)-strlen(s),
+		    " %i.%i.%i.%i:%i -> %i.%i.%i.%i:%i,"
+		    " seqnr=%lli acknr=%lli ",
+		    packet[26], packet[27], packet[28], packet[29], srcport,
+		    packet[30], packet[31], packet[32], packet[33], dstport,
+		    (long long)seqnr, (long long)acknr);
 
-		fatal(" data=");
-		for (i=data_offset; i<len; i++)
-			fatal("%02x", packet[i]);
+		snprintf(s+strlen(s), sizeof(s)-strlen(s), "%s%s%s%s%s%s",
+		    urg? "URG " : "", ack? "ACK " : "", psh? "PSH " : "",
+		    rst? "RST " : "", syn? "SYN " : "", fin? "FIN " : "");
 
-		fatal(" ]\n");
+		snprintf(s+strlen(s), sizeof(s)-strlen(s),
+		    "window=0x%04x checksum=0x%04x urgptr=0x%04x options=",
+		    window, checksum, urgptr);
+
+		for (i=34+20; i<data_offset; i++) {
+			if (strlen(s) > sizeof(s) - 5)
+				break;
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+		}
+
+		snprintf(s+strlen(s), sizeof(s)-strlen(s), " data=");
+
+		for (i=data_offset; i<len; i++) {
+			if (strlen(s) > sizeof(s) - 5)
+				break;
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+		}
+
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG, "%s", s);
 	}
 
 	net_ip_tcp_checksum(packet + 34, 16, len - 34,
 		packet + 26, packet + 30, 0);
 	if (packet[50] * 256 + packet[51] != checksum) {
-		debug("TCP: dropping packet because of checksum mismatch "
-		    "(0x%04x != 0x%04x)\n", packet[50] * 256 + packet[51],
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "dropping packet because of checksum mismatch "
+		    "(0x%04x != 0x%04x)", packet[50] * 256 + packet[51],
 		    checksum);
 
 		return;
@@ -476,8 +492,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	 *  TODO:  Send back RST?
 	 */
 	if (con_id < 0 && !syn) {
-		debug("[ net: TCP: dropping packet from unknown connection,"
-		    " %i.%i.%i.%i:%i -> %i.%i.%i.%i:%i %s%s%s%s%s]\n",
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "dropping packet from unknown connection,"
+		    " %i.%i.%i.%i:%i -> %i.%i.%i.%i:%i %s%s%s%s%s",
 		    packet[26], packet[27], packet[28], packet[29], srcport,
 		    packet[30], packet[31], packet[32], packet[33], dstport,
 		    fin? "FIN ": "", syn? "SYN ": "", ack? "ACK ": "",
@@ -487,8 +504,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 
 	/*  Known connection, and SYN? Then ignore the packet.  */
 	if (con_id >= 0 && syn) {
-		debug("[ net: TCP: ignoring redundant SYN packet from known"
-		    " connection, %i.%i.%i.%i:%i -> %i.%i.%i.%i:%i ]\n",
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "ignoring redundant SYN packet from known"
+		    " connection, %i.%i.%i.%i:%i -> %i.%i.%i.%i:%i",
 		    packet[26], packet[27], packet[28], packet[29], srcport,
 		    packet[30], packet[31], packet[32], packet[33], dstport);
 		return;
@@ -498,8 +516,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	 *  A new outgoing connection?
 	 */
 	if (con_id < 0 && syn) {
-		debug("[ net: TCP: new outgoing connection, %i.%i.%i.%i:%i"
-		    " -> %i.%i.%i.%i:%i ]\n",
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "new outgoing connection, %i.%i.%i.%i:%i"
+		    " -> %i.%i.%i.%i:%i",
 		    packet[26], packet[27], packet[28], packet[29], srcport,
 		    packet[30], packet[31], packet[32], packet[33], dstport);
 
@@ -510,8 +529,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 			 *  TODO:  Reuse the oldest one currently in use, or
 			 *  just drop the new connection attempt? Drop for now.
 			 */
-			fatal("[ TOO MANY TCP CONNECTIONS IN USE! "
-			    "Increase MAX_TCP_CONNECTIONS! ]\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_WARNING,
+			    "TOO MANY TCP CONNECTIONS IN USE! "
+			    "Increase MAX_TCP_CONNECTIONS!");
 			return;
 #else
 			int i;
@@ -519,7 +539,8 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 			    tcp_connections[0].last_used_timestamp;
 			free_con_id = 0;
 
-			fatal("[ NO FREE TCP SLOTS, REUSING OLDEST ONE ]\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_WARNING,
+			    "NO FREE TCP SLOTS, REUSING OLDEST ONE");
 			for (i=0; i<MAX_TCP_CONNECTIONS; i++)
 				if (net->tcp_connections[i].
 				    last_used_timestamp < oldest) {
@@ -547,12 +568,14 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 		net->tcp_connections[con_id].socket =
 		    socket(AF_INET, SOCK_STREAM, 0);
 		if (net->tcp_connections[con_id].socket < 0) {
-			fatal("[ net: TCP: socket() returned %i ]\n",
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_ERROR,
+			    "socket() returned %i",
 			    net->tcp_connections[con_id].socket);
 			return;
 		}
 
-		debug("[ new tcp outgoing socket=%i ]\n",
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "new tcp outgoing socket=%i",
 		    net->tcp_connections[con_id].socket);
 
 		net->tcp_connections[con_id].in_use = 1;
@@ -583,7 +606,8 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	}
 
 	if (rst) {
-		debug("[ 'rst': disconnecting TCP connection %i ]\n", con_id);
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "'rst': disconnecting TCP connection %i", con_id);
 		net_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 1);
 		tcp_closeconnection(net, con_id);
 		return;
@@ -591,8 +615,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 
 	if (ack && net->tcp_connections[con_id].state
 	    == TCP_OUTSIDE_DISCONNECTED2) {
-		debug("[ 'ack': guestOS's final termination of TCP "
-		    "connection %i ]\n", con_id);
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "'ack': guestOS's final termination of TCP "
+		    "connection %i", con_id);
 
 		/*  Send an RST?  (TODO, this is wrong...)  */
 		net_ip_tcp_connectionreply(net, nic, con_id, 0, NULL, 0, 1);
@@ -604,8 +629,9 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 
 	if (fin && net->tcp_connections[con_id].state
 	    == TCP_OUTSIDE_DISCONNECTED) {
-		debug("[ 'fin': response to outside's disconnection of "
-		    "TCP connection %i ]\n", con_id);
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "'fin': response to outside's disconnection of "
+		    "TCP connection %i", con_id);
 
 		/*  Send an ACK:  */
 		net->tcp_connections[con_id].state = TCP_OUTSIDE_CONNECTED;
@@ -615,7 +641,8 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	}
 
 	if (fin) {
-		debug("[ 'fin': guestOS disconnecting TCP connection %i ]\n",
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "'fin': guestOS disconnecting TCP connection %i",
 		    con_id);
 
 		/*  Send ACK:  */
@@ -627,15 +654,17 @@ static void net_ip_tcp(struct net *net, struct nic_data *nic,
 	}
 
 	if (ack) {
-debug("ACK %i bytes, inside_acknr=%u outside_seqnr=%u\n",
- net->tcp_connections[con_id].incoming_buf_len,
- net->tcp_connections[con_id].inside_acknr,
- net->tcp_connections[con_id].outside_seqnr);
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "ACK %i bytes, inside_acknr=%u outside_seqnr=%u",
+		    net->tcp_connections[con_id].incoming_buf_len,
+		    net->tcp_connections[con_id].inside_acknr,
+		    net->tcp_connections[con_id].outside_seqnr);
 		net->tcp_connections[con_id].inside_acknr = acknr;
 		if (net->tcp_connections[con_id].inside_acknr ==
 		    net->tcp_connections[con_id].outside_seqnr &&
 		    net->tcp_connections[con_id].incoming_buf_len != 0) {
-debug("  all acked\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "  all acked");
 			net->tcp_connections[con_id].incoming_buf_len = 0;
 		}
 	}
@@ -643,7 +672,11 @@ debug("  all acked\n");
 	net->tcp_connections[con_id].inside_seqnr = seqnr;
 
 	/*  TODO: This is hardcoded for a specific NetBSD packet:  */
-	if (packet[34 + 30] == 0x08 && packet[34 + 31] == 0x0a)
+	/*  #130: the caller's gate (#103) only guarantees len >= 54, but
+	    this reads packet[64..69]; only look for the timestamp option
+	    when those bytes actually exist, so that a short guest SYN can't
+	    over-read heap data which is then echoed back in the SYN-ACK.  */
+	if (len >= 70 && packet[34 + 30] == 0x08 && packet[34 + 31] == 0x0a)
 		net->tcp_connections[con_id].inside_timestamp =
 		    ((uint32_t)packet[34 + 32 + 0] << 24) +
 		    (packet[34 + 32 + 1] << 16) +
@@ -656,7 +689,8 @@ debug("  all acked\n");
 
 
 	if (net->tcp_connections[con_id].state != TCP_OUTSIDE_CONNECTED) {
-		debug("[ not connected to outside ]\n");
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "not connected to outside");
 		return;
 	}
 
@@ -673,18 +707,19 @@ debug("  all acked\n");
 	send_ofs = data_offset;
 	send_ofs += ((int32_t)net->tcp_connections[con_id].outside_acknr
 	    - (int32_t)seqnr);
-#if 1
-	debug("[ %i bytes of tcp data to be sent, beginning at seqnr %u, ",
-	    len - data_offset, seqnr);
-	debug("outside is at acknr %u ==> %i actual bytes to be sent ]\n",
+
+	debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+	    "%i bytes of tcp data to be sent, beginning at seqnr %u, "
+	    "outside is at acknr %u ==> %i actual bytes to be sent",
+	    len - data_offset, seqnr,
 	    net->tcp_connections[con_id].outside_acknr, len - send_ofs);
-#endif
 
 	/*  Drop outgoing packet if the guest OS' seqnr is not
 	    the same as we have acked. (We have missed something, perhaps.)  */
 	if (seqnr != net->tcp_connections[con_id].outside_acknr) {
-		debug("!! outgoing TCP packet dropped (seqnr = %u, "
-		    "outside_acknr = %u)\n", seqnr,
+		debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+		    "!! outgoing TCP packet dropped (seqnr = %u, "
+		    "outside_acknr = %u)", seqnr,
 		    net->tcp_connections[con_id].outside_acknr);
 		goto ret;
 	}
@@ -700,7 +735,8 @@ debug("  all acked\n");
 		if (res < 1) {
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			debug("[ TCP: disconnect on select for writing ]\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "disconnect on select for writing");
 			goto ret;
 		}
 
@@ -713,11 +749,13 @@ debug("  all acked\n");
 			/*  Just ignore this attempt.  */
 			return;
 		} else {
-			debug("[ error writing %i bytes to TCP connection %i:"
-			    " errno = %i ]\n", len - send_ofs, con_id, errno);
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "error writing %i bytes to TCP connection %i:"
+			    " errno = %i", len - send_ofs, con_id, errno);
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			debug("[ TCP: disconnect on write() ]\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "disconnect on write()");
 			goto ret;
 		}
 	}
@@ -752,9 +790,12 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 	ssize_t res;
 	struct sockaddr_in remote_ip;
 
+	char constatus[200];
+	constatus[0] = '\0';
+
 	if ((packet[20] & 0x3f) != 0) {
-		fatal("[ net_ip_udp(): WARNING! fragmented UDP "
-		    "packet, TODO ]\n");
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_WARNING,
+		    "fragmented UDP packet, TODO");
 		return;
 	}
 
@@ -763,15 +804,24 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 	udp_len = (packet[38] << 8) + packet[39];
 	/*  chksum at offset 40 and 41  */
 
-	debug("[ net: UDP: ");
-	debug("srcport=%i dstport=%i len=%i ", srcport, dstport, udp_len);
-	for (i=42; i<len; i++) {
-		if (packet[i] >= ' ' && packet[i] < 127)
-			debug("%c", packet[i]);
-		else
-			debug("[%02x]", packet[i]);
+	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
+		char s[2000];
+
+		snprintf(s, sizeof(s), "srcport=%i dstport=%i len=%i ",
+		    srcport, dstport, udp_len);
+		for (i=42; i<len; i++) {
+			if (strlen(s) > sizeof(s) - 8)
+				break;
+			if (packet[i] >= ' ' && packet[i] < 127)
+				snprintf(s+strlen(s), sizeof(s)-strlen(s),
+				    "%c", packet[i]);
+			else
+				snprintf(s+strlen(s), sizeof(s)-strlen(s),
+				    "[%02x]", packet[i]);
+		}
+
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_DEBUG, "%s", s);
 	}
-	debug(" ]\n");
 
 	/*  Is this "connection" new, or a currently ongoing one?  */
 	con_id = free_con_id = -1;
@@ -790,17 +840,18 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 		}
 	}
 
-	debug("&& UDP connection is ");
 	if (con_id >= 0)
-		debug("ONGOING");
+		snprintf(constatus, sizeof(constatus), "ONGOING");
 	else {
-		debug("NEW");
+		snprintf(constatus, sizeof(constatus), "NEW");
 		if (free_con_id < 0) {
 			int64_t oldest = net->
 			    udp_connections[0].last_used_timestamp;
 			free_con_id = 0;
 
-			debug(", NO FREE SLOTS, REUSING OLDEST ONE");
+			snprintf(constatus+strlen(constatus),
+			    sizeof(constatus)-strlen(constatus),
+			    ", NO FREE SLOTS, REUSING OLDEST ONE");
 			for (int j=0; j<MAX_UDP_CONNECTIONS; j++)
 				if (net->udp_connections[j].last_used_timestamp < oldest) {
 					oldest = net->udp_connections[j].last_used_timestamp;
@@ -825,12 +876,15 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 		net->udp_connections[con_id].socket = socket(AF_INET,
 		    SOCK_DGRAM, 0);
 		if (net->udp_connections[con_id].socket < 0) {
-			fatal("[ net: UDP: socket() returned %i ]\n",
+			debugmsg(SUBSYS_NET, "UDP", VERBOSITY_ERROR,
+			    "socket() returned %i",
 			    net->udp_connections[con_id].socket);
 			return;
 		}
 
-		debug(" {socket=%i}", net->udp_connections[con_id].socket);
+		snprintf(constatus+strlen(constatus),
+		    sizeof(constatus)-strlen(constatus),
+		    " {socket=%i}", net->udp_connections[con_id].socket);
 
 		net->udp_connections[con_id].in_use = 1;
 
@@ -840,7 +894,8 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 		    res | O_NONBLOCK);
 	}
 
-	debug(", connection id %i\n", con_id);
+	debugmsg(SUBSYS_NET, "UDP", VERBOSITY_DEBUG,
+	    "connection is %s, connection id %i", constatus, con_id);
 
 	net->timestamp ++;
 	net->udp_connections[con_id].last_used_timestamp = net->timestamp;
@@ -870,9 +925,10 @@ static void net_ip_udp(struct net *net, struct nic_data *nic,
 	    sizeof(remote_ip));
 
 	if (res != len-42)
-		debug("[ net: UDP: unable to send %i bytes ]\n", len-42);
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_DEBUG,
+		    "unable to send %i bytes", len-42);
 	else
-		debug("[ net: UDP: OK!!! ]\n");
+		debugmsg(SUBSYS_NET, "UDP", VERBOSITY_DEBUG, "OK!!!");
 }
 
 
@@ -998,33 +1054,6 @@ static void net_ip_broadcast_dhcp(struct net *net, struct nic_data *nic,
 	 *  data = 01010600d116d276000000000000000000000000000000
 	 *         0000000000102030405060...0000...638253633501...000
 	 */
-
-#if 0
-	fatal("op=%02x ", packet[42]);
-	fatal("htype=%02x ", packet[43]);
-	fatal("hlen=%02x ", packet[44]);
-	fatal("hops=%02x ", packet[45]);
-	fatal("xid=%02x%02x%02x%02x ", packet[46], packet[47],
-	    packet[48], packet[49]);
-	fatal("secs=%02x%02x ", packet[50], packet[51]);
-	fatal("flags=%02x%02x ", packet[52], packet[53]);
-	fatal("ciaddr=%02x%02x%02x%02x ", packet[54], packet[55],
-	    packet[56], packet[57]);
-	fatal("yiaddr=%02x%02x%02x%02x ", packet[58], packet[59],
-	    packet[60], packet[61]);
-	fatal("siaddr=%02x%02x%02x%02x ", packet[62], packet[63],
-	    packet[64], packet[65]);
-	fatal("giaddr=%02x%02x%02x%02x ", packet[66], packet[67],
-	    packet[68], packet[69]);
-	fatal("chaddr=");
-	for (i=70; i<70+16; i++)
-		fatal("%02x", packet[i]);
-	/*
-	   |                          sname   (64)                         |
-	   |                          file    (128)                        |
-	 */
-	fatal(" ]\n");
-#endif
 
         reply_len = 307;
         lp = net_allocate_ethernet_packet_link(net, nic, reply_len);
@@ -1213,9 +1242,9 @@ void net_ip_broadcast(struct net *net, struct nic_data *nic,
 		match = 1;
 
 	if (warning)
-		fatal("[ net_ip_broadcast(): warning: broadcast to "
-		    "0x%08x, expecting broadcast to 0x%08x or "
-		    "0xffffffff ]\n", y, x);
+		debugmsg(SUBSYS_NET, "ip BROADCAST", VERBOSITY_WARNING,
+		    "broadcast to 0x%08x, expecting broadcast to 0x%08x or "
+		    "0xffffffff", y, x);
 
 	/*  Cut off overflowing tail data:  */
 	if (len > 14 + packet[16]*256 + packet[17])
@@ -1298,8 +1327,8 @@ void net_udp_rx_avail(struct net *net, struct nic_data *nic)
 			continue;
 
 		if (net->udp_connections[con_id].socket < 0) {
-			fatal("INTERNAL ERROR in net.c, udp socket < 0 "
-			    "but in use?\n");
+			debugmsg(SUBSYS_NET, "UDP", VERBOSITY_ERROR,
+			    "INTERNAL ERROR, udp socket < 0 but in use?");
 			continue;
 		}
 
@@ -1450,8 +1479,8 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 			continue;
 
 		if (net->tcp_connections[con_id].socket < 0) {
-			fatal("INTERNAL ERROR in net.c, tcp socket < 0"
-			    " but in use?\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_ERROR,
+			    "INTERNAL ERROR, tcp socket < 0 but in use?");
 			continue;
 		}
 
@@ -1472,21 +1501,21 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 		    NULL, &rfds, NULL, &tv);
 
 		if (errno == ECONNREFUSED) {
-			fatal("[ ECONNREFUSED: TODO ]\n");
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			fatal("CHANGING TO TCP_OUTSIDE_DISCONNECTED "
-			    "(refused connection)\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_WARNING,
+			    "ECONNREFUSED (TODO): CHANGING TO "
+			    "TCP_OUTSIDE_DISCONNECTED (refused connection)");
 			continue;
 		}
 
 		if (errno == ETIMEDOUT) {
-			fatal("[ ETIMEDOUT: TODO ]\n");
 			/*  TODO  */
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			fatal("CHANGING TO TCP_OUTSIDE_DISCONNECTED "
-			    "(timeout)\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_WARNING,
+			    "ETIMEDOUT (TODO): CHANGING TO "
+			    "TCP_OUTSIDE_DISCONNECTED (timeout)");
 			continue;
 		}
 
@@ -1494,7 +1523,8 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 		    TCP_OUTSIDE_TRYINGTOCONNECT && res > 0) {
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_CONNECTED;
-			debug("CHANGING TO TCP_OUTSIDE_CONNECTED\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "CHANGING TO TCP_OUTSIDE_CONNECTED");
 			net_ip_tcp_connectionreply(net, nic, con_id, 1,
 			    NULL, 0, 0);
 		}
@@ -1513,8 +1543,9 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 			net->tcp_connections[con_id].incoming_buf_rounds ++;
 			if (net->tcp_connections[con_id].incoming_buf_rounds >
 			    10000) {
-				debug("  at seqnr %u but backing back to %u,"
-				    " resending %i bytes\n",
+				debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+				    "  at seqnr %u but backing back to %u,"
+				    " resending %i bytes",
 				    net->tcp_connections[con_id].outside_seqnr,
 				    net->tcp_connections[con_id].
 				    incoming_buf_seqnr,
@@ -1563,8 +1594,9 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 			net->tcp_connections[con_id].incoming_buf_rounds = 0;
 			net->tcp_connections[con_id].incoming_buf_seqnr = 
 			    net->tcp_connections[con_id].outside_seqnr;
-			debug("  putting %i bytes (seqnr %u) in the incoming "
-			    "buf\n", res, net->tcp_connections[con_id].
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "  putting %i bytes (seqnr %u) in the incoming "
+			    "buf", res, net->tcp_connections[con_id].
 			    incoming_buf_seqnr);
 			memcpy(net->tcp_connections[con_id].incoming_buf,
 			    buf, res);
@@ -1574,15 +1606,17 @@ void net_tcp_rx_avail(struct net *net, struct nic_data *nic)
 		} else if (res == 0) {
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			debug("CHANGING TO TCP_OUTSIDE_DISCONNECTED, read"
-			    " res=0\n");
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_DEBUG,
+			    "CHANGING TO TCP_OUTSIDE_DISCONNECTED, read"
+			    " res=0");
 			net_ip_tcp_connectionreply(net, nic, con_id, 0,
 			    NULL, 0, 0);
 		} else {
 			net->tcp_connections[con_id].state =
 			    TCP_OUTSIDE_DISCONNECTED;
-			fatal("CHANGING TO TCP_OUTSIDE_DISCONNECTED, "
-			    "read res<=0, errno = %i\n", errno);
+			debugmsg(SUBSYS_NET, "TCP", VERBOSITY_WARNING,
+			    "CHANGING TO TCP_OUTSIDE_DISCONNECTED, "
+			    "read res<=0, errno = %i", errno);
 			net_ip_tcp_connectionreply(net, nic, con_id, 0,
 			    NULL, 0, 0);
 		}

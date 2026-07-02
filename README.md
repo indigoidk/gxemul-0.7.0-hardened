@@ -16,6 +16,42 @@ these are robustness/hardening fixes, not a sandbox‑escape disclosure. The fir
 commit is the unmodified upstream 0.7.0 baseline; the diff against it *is* the
 hardening.
 
+## What's new — 2026 review rounds (#120–#154)
+
+Two further rounds since the initial hardening publication:
+
+**🔒 Security — a whole‑codebase multi‑model review (#130–#154).** A fresh review of the
+*entire* core — the four CPU instruction cores, the dynamic‑translation engine, the
+guest→host memory boundary, the file loaders, network, disk, debugger, and the
+highest‑risk devices — using parallel Claude review agents, cross‑checked by three
+independent cloud models (**GLM, DeepSeek‑V3, Qwen3‑Coder**), then adjudicated against
+the source. **~23 confirmed fixes, every one pre‑existing in the baseline** (the earlier
+pass simply had not reached them):
+- **CRITICAL — MIPS `memset` combiner (#137).** A guest‑controlled `bzero`/`memset` loop
+  with *end < start* underflowed an unsigned length **and** wrapped the page‑boundary
+  clamp, driving a multi‑gigabyte `memset` straight into the host heap. Reachable from any
+  MIPS guest (e.g. pmax). Fixed with a fall‑back to the safe path.
+- **HIGH — PVR framebuffer (#145).** Oversized guest display geometry let the framebuffer
+  refresh write past the fixed host framebuffer allocation — a guest→host heap overwrite.
+  Now clamped to the host framebuffer.
+- **HIGH — S‑record loader (#149).** A malformed `count` field drove a ~4 KB over‑read of
+  the host stack into guest‑visible memory. Now clamped to the parsed record length.
+- …plus a medium/low tail: an unbounded guest‑set SCSI transfer size (OOM‑exit DoS), a TCP
+  timestamp‑option over‑read, several guest‑reachable `exit(1)` paths converted to
+  warn‑and‑continue, `free()` on an `mmap`‑backed allocation, integer/format‑string
+  hardening, and undefined‑behaviour cleanups. The dynamic‑translation engine, the memory
+  boundary, and the prior loader hardening were **re‑confirmed sound** (no OOB).
+
+**✨ Features (#120–#129).** SuperH unaligned‑access exceptions + 64‑bit `fmov` alignment;
+multi‑track CUE/BIN CD‑image support; testmips RAM above 256 MB; subsystem‑level debug
+breakpoints; and several debugger conveniences (step‑into‑call, expression fixes,
+dump/disassemble spacing).
+
+Every fix is regression‑gated — a multi‑architecture boot sweep plus the full OpenBSD/pmax
+rig (boot, root shell, NAT, disk, clean halt) — and the tree still builds at **0 errors /
+0 warnings.** Per‑fix detail: [`CHANGELOG.md`](CHANGELOG.md) ·
+[`REVIEW_FINDINGS.md`](REVIEW_FINDINGS.md) · [`CHANGES.patch`](CHANGES.patch).
+
 ## Highlights
 
 **🔒 Security — guest→host memory safety (most critical)**

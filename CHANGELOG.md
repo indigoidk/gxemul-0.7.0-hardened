@@ -158,6 +158,59 @@ Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hosti
 **clang 21 0/0 in all changed files**; full sweep + pmax deep (osiop/disk/net) + arc clean, 0 spurious
 warnings in normal operation.
 
+## #120–#129 — feature round (TODO items) + SuperH alignment
+Additive capability work drawn from upstream's `doc/TODO.html`, each regression‑gated:
+- **SuperH unaligned‑access exceptions (#124)** and **64‑bit `fmov` 8‑byte alignment (#129)** — the SH4
+  now raises the correct address‑error exception for misaligned loads/stores (parity with the other cores).
+- **Multi‑track CUE/BIN CD images (#127)** — real per‑track sector mapping (MODE1/MODE2, 2048/2352/2336),
+  read‑only, with per‑sector raw‑header stripping.
+- **testmips RAM above 256 MB (#120)** — a 32‑bit guest can use up to ~3 GB via a high‑RAM/mirror map.
+- **Subsystem debug breakpoints (#128)** — `debugmsg` can drop into the debugger when a chosen subsystem
+  emits at/above a verbosity level.
+- **Debugger conveniences (#122/#125/#126)** — step‑into‑call, `find`/`put`, expression‑parser and
+  dump/disassemble‑range fixes.
+
+## #130–#154 — full‑project multi‑model review + remediation
+A whole‑codebase (not just recent‑changes) adversarial review of the core‑critical subset — the four CPU
+instruction cores, the shared dynamic‑translation engine, the guest→host memory boundary + main loop, the
+file loaders, network, disk, debugger, and the highest‑risk devices — explicitly weighing the original
+author's *warn‑loudly / never‑silently‑mask / never‑crash‑on‑untrusted‑guest* ethos and the `doc/TODO.html`
+wishlist. **Method:** parallel per‑subsystem Claude review agents → three independent cloud models
+(GLM / DeepSeek‑V3 / Qwen3‑Coder) cross‑checking the top findings against the code → a Claude adjudicator
+ruling every finding against the actual source and the pristine baseline. **~23 confirmed fixes; no false
+positives survived; every confirmed bug is pre‑existing in the baseline** (the ~119‑item pass had not
+reached them). The cores it *had* hardened — the dyntrans engine, the `memory_rw` boundary, and the
+ELF/ECOFF/Mach‑O/a.out loaders — were re‑confirmed sound.
+
+- **#137 (CRITICAL) — `cpus/cpu_mips_instr.c` `memset_addiu_bne_sw`.** `bytes_to_write = rY - rX` (unsigned)
+  underflowed when a guest set *end < start*, and the page‑boundary clamp `(rX&0xfff)+bytes_to_write > 0x1000`
+  itself wrapped mod 2^N → a **direct multi‑gigabyte `memset` into the host page** (bypassing the `memory_rw`
+  clamp). Guest‑triggerable on pmax. **Fix:** fall back to the slow path when `rY < rX`.
+- **#145 (HIGH) — `devices/dev_pvr.c`.** The framebuffer‑refresh copy was clamped to guest DIWSIZE geometry
+  but not to the fixed 672×512 host framebuffer → guest→host heap **write**. **Fix:** also clamp to the host
+  framebuffer's inner drawable area (proven bound).
+- **#149 (HIGH) — `file/file_srec.c`.** A non‑hex byte survives (the loader warns but continues), so a record
+  `count` reached 4335 against a 270‑byte buffer → ~4 KB host‑stack **over‑read** into guest RAM. **Fix:**
+  clamp `count` to the actual parsed length (the parse loop is provably bounded).
+- **Medium:** `#133` guest‑set SCSI `logical_block_size` overflow → OOM‑`exit(1)` (validate + 64‑bit math);
+  `#130` TCP timestamp‑option over‑read echoed to the guest (length‑gate); `#141` PPC Time‑Base‑Upper never
+  incremented (mask like DEC); `#146` five recoverable `dev_osiop` `exit(1)`s → warn‑once + stop the local
+  engine; `#150` `free()` on an `mmap`‑backed `cpu` → `munmap`; `#136` uncapped boot‑image sizes → capped.
+- **Low / hardening:** a `%s`‑with‑no‑argument trace format; two more small guest→host over‑reads (odd‑length
+  ICMP checksum, short ARP); a NULL‑deref idle path; two missing nested‑delay‑slot guards; the inverted SH4
+  store‑queue privilege test; SH FDIV‑by‑zero now yields the IEEE result; a debugger divide‑by‑zero guard;
+  `strtoll`+range validation for numeric CLI options; a gzip temp‑file leak; residual signed‑shift UB casts;
+  and a rate‑limited note on the device length‑clamp.
+
+**Deferred (confirmed, but neither is a host‑safety issue and each fix's risk outweighs its low severity):**
+a double‑precision op on an *odd* FP register (stays within the FP register union — not a host OOB), and the
+nested‑delay‑slot guard being silent (already host‑safe; raising the architectural slot‑exception would be a
+guest‑visible behaviour change across ~18 hot handlers).
+
+**Verification:** build 0 errors / 0 warnings; a 9‑machine multi‑architecture boot sweep (all boot, no
+regressions); the OpenBSD/pmax rig (full boot + root shell + NAT ping + clean halt); and a positive test
+showing the S‑record loader now clamps the crafted over‑long record while a valid record still loads cleanly.
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

@@ -1266,7 +1266,7 @@ X(swp)
 		fatal("swp: load failed\n");
 		return;
 	}
-	data = d[0] + (d[1] << 8) + (d[2] << 16) + (d[3] << 24);
+	data = d[0] + (d[1] << 8) + (d[2] << 16) + ((uint32_t)d[3] << 24);
 	data2 = reg(ic->arg[1]);
 	d[0] = data2; d[1] = data2 >> 8; d[2] = data2 >> 16; d[3] = data2 >> 24;
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_WRITE,
@@ -1409,11 +1409,11 @@ void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int
 			if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
 				value = data[0] +
 				    (data[1] << 8) + (data[2] << 16)
-				    + (data[3] << 24);
+				    + ((uint32_t)data[3] << 24);
 			} else {
 				value = data[3] +
 				    (data[2] << 8) + (data[1] << 16)
-				    + (data[0] << 24);
+				    + ((uint32_t)data[0] << 24);
 			}
 		}
 
@@ -1717,10 +1717,10 @@ X(ldrex)
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
 		reg(ic->arg[0]) = word[0] + (word[1] << 8)
-		    + (word[2] << 16) + (word[3] << 24);
+		    + (word[2] << 16) + ((uint32_t)word[3] << 24);
 	else
 		reg(ic->arg[0]) = word[3] + (word[2] << 8)
-		    + (word[1] << 16) + (word[0] << 24);
+		    + (word[1] << 16) + ((uint32_t)word[0] << 24);
 }
 Y(ldrex)
 /*

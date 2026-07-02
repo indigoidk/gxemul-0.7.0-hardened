@@ -551,6 +551,7 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 		FILE *tmp_f;
 		char *name_to_load = *load_names;
 		int remove_after_load = 0;
+		char *gunzip_temp_name = NULL;
 
 		/*  Special hack for removing temporary files:  */
 		if (name_to_load[0] == 8) {
@@ -600,6 +601,9 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 				    tmpfile_handle) != 0) {
 					fatal("failed to gunzip '%s'\n",
 					    name_to_load);
+					/*  Don't leave the just-created
+					    temp file behind:  */
+					unlink(new_temp_name);
 					exit(1);
 				}
 				close(tmpfile_handle);
@@ -611,6 +615,7 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 					unlink(name_to_load);
 
 				name_to_load = new_temp_name;
+				gunzip_temp_name = new_temp_name;
 				remove_after_load = 1;
 			}
 			fclose(tmp_f);
@@ -628,6 +633,11 @@ bool emul_machine_setup(struct machine *m, int n_load, char **load_names,
 			debug("removing %s\n", name_to_load);
 			unlink(name_to_load);
 		}
+
+		/*  Free the name buffer allocated by the gunzip step, if
+		    any. (name_to_load also pointed into it; neither is
+		    used beyond this point.)  */
+		free(gunzip_temp_name);
 
 		if (byte_order != NO_BYTE_ORDER_OVERRIDE)
 			cpu->byte_order = byte_order;

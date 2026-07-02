@@ -2385,6 +2385,43 @@ DEVICE_TICK(pvr_fb)
 	if (d->fb_update_y2 >= d->ysize)
 		d->fb_update_y2 = d->ysize - 1;
 
+	/*  ...and ALSO clamp the DESTINATION to the host framebuffer:
+	    d->fb is allocated ONCE (at device-init time) as
+	    (640 + 2*PVR_MARGIN) x (480 + 2*PVR_MARGIN) and never resized,
+	    while d->xsize/d->ysize follow guest-controlled DIWSIZE geometry
+	    (up to ~2048 x 1024), so the guest-geometry clamp above is NOT
+	    enough: fb_ofs below starts PVR_MARGIN pixels/lines in, and the
+	    per-line writes would otherwise run past the end of
+	    d->fb->framebuffer (guest-triggerable host heap corruption).
+	    The usable inner drawable area is thus
+	    (d->fb->xsize - 2*PVR_MARGIN) x (d->fb->ysize - 2*PVR_MARGIN).  */
+	if (d->fb_update_x2 >= d->fb->xsize - 2*PVR_MARGIN ||
+	    d->fb_update_y2 >= d->fb->ysize - 2*PVR_MARGIN) {
+		static int warned = 0;
+		if (!warned) {
+			fatal("[ pvr: guest framebuffer geometry %i x %i "
+			    "exceeds the emulated display's %i x %i; "
+			    "clipping. ]\n", d->xsize, d->ysize,
+			    d->fb->xsize - 2*PVR_MARGIN,
+			    d->fb->ysize - 2*PVR_MARGIN);
+			warned = 1;
+		}
+		if (d->fb_update_x2 >= d->fb->xsize - 2*PVR_MARGIN)
+			d->fb_update_x2 = d->fb->xsize - 2*PVR_MARGIN - 1;
+		if (d->fb_update_y2 >= d->fb->ysize - 2*PVR_MARGIN)
+			d->fb_update_y2 = d->fb->ysize - 2*PVR_MARGIN - 1;
+	}
+
+	/*  Nothing left to draw (e.g. the update region lies entirely below
+	    the host framebuffer's drawable area)?  Then don't push an
+	    inverted region to the fb device; just clear and wait.  */
+	if (d->fb_update_x2 < d->fb_update_x1 ||
+	    d->fb_update_y2 < d->fb_update_y1) {
+		d->fb_update_x1 = d->fb_update_x2 =
+		    d->fb_update_y1 = d->fb_update_y2 = -1;
+		return;
+	}
+
 	vram_ofs += d->fb_update_y1 * bytes_per_line;
 	vram_ofs += d->fb_update_x1 * d->bytes_per_pixel;
 	pixels_to_copy = (d->fb_update_x2 - d->fb_update_x1 + 1);

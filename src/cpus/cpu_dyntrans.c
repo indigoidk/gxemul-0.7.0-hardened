@@ -453,7 +453,7 @@ int DYNTRANS_RUN_INSTR_DEF(struct cpu *cpu)
 		    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
 			cpu->cd.ppc.dec_intr_pending = 1;
 		old = cpu->cd.ppc.spr[SPR_TBL];
-		cpu->cd.ppc.spr[SPR_TBL] += n_instrs;
+		cpu->cd.ppc.spr[SPR_TBL] = (uint32_t) (old + n_instrs);
 		if ((old >> 31) == 1 && (cpu->cd.ppc.spr[SPR_TBL] >> 31) == 0)
 			cpu->cd.ppc.spr[SPR_TBU] ++;
 	}
@@ -1016,7 +1016,7 @@ static void DYNTRANS_INVALIDATE_TLB_ENTRY(struct cpu *cpu,
 	uint32_t index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
 
 #ifdef DYNTRANS_ARM
-	cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5] &= ~(1 << (index & 31));
+	cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5] &= ~((uint32_t)1 << (index & 31));
 #endif
 
 	if (flags & JUST_MARK_AS_NON_WRITABLE) {
@@ -1600,7 +1600,7 @@ void DYNTRANS_UPDATE_TRANSLATION_TABLE(struct cpu *cpu, uint64_t vaddr_page,
 #ifdef DYNTRANS_ARM
 		if (useraccess)
 			cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5]
-			    |= 1 << (index & 31);
+			    |= (uint32_t)1 << (index & 31);
 #endif
 #else	/* !MODE32  */
 		l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
@@ -1701,7 +1701,7 @@ void DYNTRANS_UPDATE_TRANSLATION_TABLE(struct cpu *cpu, uint64_t vaddr_page,
 		cpu->cd.DYNTRANS_ARCH.is_userpage[index>>5] &= ~((uint32_t)1<<(index&31));
 		if (useraccess)
 			cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5]
-			    |= 1 << (index & 31);
+			    |= (uint32_t)1 << (index & 31);
 #endif
 		if (cpu->cd.DYNTRANS_ARCH.phys_addr[index] == paddr_page) {
 			if (writeflag & MEM_WRITE)

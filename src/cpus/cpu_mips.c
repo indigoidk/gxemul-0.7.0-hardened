@@ -1181,7 +1181,7 @@ int mips_cpu_disassemble_instr(struct cpu *cpu, unsigned char *originstr,
 			    rt, imm, regnames[rs]);
 
 			if (running) {
-				debug("\t[0x%016" PRIx64" = %s]",
+				debug("\t[0x%016" PRIx64,
 				    (uint64_t)(cpu->cd.mips.gpr[rs] + imm));
 				if (symbol != NULL)
 					debug(" = %s", symbol);

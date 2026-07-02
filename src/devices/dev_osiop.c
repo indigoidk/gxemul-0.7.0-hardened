@@ -294,9 +294,19 @@ uint32_t osiop_get_next_scripts_word(struct cpu *cpu, struct osiop_data *d)
 	uint32_t instr;
 
 	if (dsp & 3) {
-		fatal("osiop_get_next_scripts_word: unaligned DSP 0x%08x\n",
-		    dsp);
-		exit(1);
+		/*  Guest-reachable via an ordinary (unaligned) DSP register
+		    write, and recoverable: warn once and stop this script
+		    engine (the #118 pattern) instead of exit(1). The caller
+		    checks scripts_running right after the fetch and leaves
+		    DSP at the faulting instruction.  */
+		static int warned = 0;
+		if (!warned) {
+			fatal("[ osiop: unaligned DSP 0x%08x; "
+			    "stopping script ]\n", dsp);
+			warned = 1;
+		}
+		d->scripts_running = 0;
+		return 0;
 	}
 
 	instr = read_word(d, cpu, dsp);
@@ -971,9 +981,24 @@ DEVICE_ACCESS(osiop)
 		break;
 
 	case OSIOP_SCID:
-		if (idata != oldreg) {
-			fatal("osiop TODO: attempt to change SCID?\n");
-			exit(1);
+		if (writeflag == MEM_WRITE && idata != oldreg) {
+			/*  Guest-reachable via an ordinary register write,
+			    and recoverable: warn once, ignore the ID change
+			    and stop the script engine (the #118 pattern)
+			    instead of exit(1). (Write-gated: on MEM_READ,
+			    idata is not meaningful here.)  */
+			static int warned = 0;
+			if (!warned) {
+				fatal("[ osiop: TODO: attempt to change SCID "
+				    "(0x%02x -> 0x%02x); ignoring, stopping "
+				    "script ]\n", (int) oldreg, (int) idata);
+				warned = 1;
+			}
+			/*  Undo the generic byte store above (which only
+			    happens for the non-32-bit access path):  */
+			if (len != sizeof(uint32_t))
+				d->reg[relative_addr] = oldreg;
+			d->scripts_running = 0;
 		}
 		break;
 
@@ -1038,8 +1063,21 @@ DEVICE_ACCESS(osiop)
 	case OSIOP_ISTAT:
 		if (writeflag == MEM_WRITE) {
 			if ((idata & 0x3f) != 0x00) {
-				fatal("osiop TODO: istat 0x%x\n", (int) idata);
-				exit(1);
+				/*  Unimplemented low ISTAT bits, reachable
+				    via an ordinary register write and
+				    recoverable: warn once, drop the
+				    unimplemented bits and stop the script
+				    engine (the #118 pattern) instead of
+				    exit(1).  */
+				static int warned = 0;
+				if (!warned) {
+					fatal("[ osiop: TODO: istat 0x%x; "
+					    "ignoring unimplemented low bits, "
+					    "stopping script ]\n", (int) idata);
+					warned = 1;
+				}
+				d->scripts_running = 0;
+				idata &= ~0x3f;
 			}
 
 			d->reg[relative_addr] = idata &
@@ -1082,19 +1120,23 @@ DEVICE_ACCESS(osiop)
 		break;
 
 	case OSIOP_DCNTL:
-		if (writeflag == MEM_WRITE) {
-			if (idata & OSIOP_DCNTL_SSM) {
-				fatal("osiop TODO: SSM\n");
-				exit(1);
+		if (writeflag == MEM_WRITE &&
+		    (idata & (OSIOP_DCNTL_SSM | OSIOP_DCNTL_LLM |
+		    OSIOP_DCNTL_STD))) {
+			/*  Unimplemented DCNTL modes (single-step, low-level,
+			    manual start-DMA), reachable via an ordinary
+			    register write and recoverable: warn once and stop
+			    the script engine (the #118 pattern) instead of
+			    exit(1). The message includes the value, so the
+			    specific bit (SSM/LLM/STD) is identifiable.  */
+			static int warned = 0;
+			if (!warned) {
+				fatal("[ osiop: TODO: DCNTL 0x%02x (SSM/LLM/"
+				    "STD unimplemented); stopping script ]\n",
+				    (int) idata);
+				warned = 1;
 			}
-			if (idata & OSIOP_DCNTL_LLM) {
-				fatal("osiop TODO: LLM\n");
-				exit(1);
-			}
-			if (idata & OSIOP_DCNTL_STD) {
-				fatal("osiop TODO: STD\n");
-				exit(1);
-			}
+			d->scripts_running = 0;
 		}
 		break;
 
@@ -1111,9 +1153,17 @@ DEVICE_ACCESS(osiop)
 	}
 
 	if (len != 1 && !non1lenOk) {
-		fatal("[ osiop: TODO: len != 1, addr 0x%0x ]\n",
-		    (int)relative_addr);
-		exit(1);
+		/*  Unusual access width from the guest, on a register where
+		    only byte access is implemented: recoverable, so warn once
+		    and stop the script engine (the #118 pattern), completing
+		    the access instead of exit(1).  */
+		static int warned = 0;
+		if (!warned) {
+			fatal("[ osiop: TODO: len != 1, addr 0x%0x; "
+			    "stopping script ]\n", (int)relative_addr);
+			warned = 1;
+		}
+		d->scripts_running = 0;
 	}
 
 	if (writeflag == MEM_READ)

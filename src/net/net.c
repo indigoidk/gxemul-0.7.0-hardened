@@ -119,30 +119,42 @@ static void net_arp(struct net *net, struct nic_data *nic,
 	int q;
 	int i;
 
+	/*  #132: a full ARP/RARP body is 28 bytes, and everything below
+	    (including the debug dump) reads up to packet[27], but the
+	    caller only guarantees len >= 20. Reject shorter frames.  */
+	if (len < 28) {
+		debugmsg(SUBSYS_NET, reverse? "RARP" : "ARP",
+		    VERBOSITY_WARNING,
+		    "too short %i-byte ARP/RARP frame ignored", len);
+		return;
+	}
+
 	/*  TODO: This debug dump assumes ethernet->IPv4 translation:  */
-	if (reverse)
-		debug("[ net: RARP: ");
-	else
-		debug("[ net: ARP: ");
-	for (i=0; i<2; i++)
-		debug("%02x", packet[i]);
-	debug(" ");
-	for (i=2; i<4; i++)
-		debug("%02x", packet[i]);
-	debug(" ");
-	debug("%02x", packet[4]);
-	debug(" ");
-	debug("%02x", packet[5]);
-	debug(" req=");
-	debug("%02x", packet[6]);	/*  Request type  */
-	debug("%02x", packet[7]);
-	debug(" from=");
-	for (i=8; i<18; i++)
-		debug("%02x", packet[i]);
-	debug(" to=");
-	for (i=18; i<28; i++)
-		debug("%02x", packet[i]);
-	debug(" ]\n");
+	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
+		char s[300];
+		s[0] = '\0';
+
+		for (i=0; i<2; i++)
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+		snprintf(s+strlen(s), sizeof(s)-strlen(s), " ");
+		for (i=2; i<4; i++)
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+		snprintf(s+strlen(s), sizeof(s)-strlen(s),
+		    " %02x %02x req=%02x%02x from=",
+		    packet[4], packet[5], packet[6], packet[7]);
+		for (i=8; i<18; i++)
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+		snprintf(s+strlen(s), sizeof(s)-strlen(s), " to=");
+		for (i=18; i<28; i++)
+			snprintf(s+strlen(s), sizeof(s)-strlen(s), "%02x",
+			    packet[i]);
+
+		debugmsg(SUBSYS_NET, reverse? "RARP" : "ARP",
+		    VERBOSITY_DEBUG, "%s", s);
+	}
 
 	if (packet[0] == 0x00 && packet[1] == 0x01 &&
 	    packet[2] == 0x08 && packet[3] == 0x00 &&
@@ -162,7 +174,7 @@ static void net_arp(struct net *net, struct nic_data *nic,
 
 			/*  Copy the old packet first:  */
 			memset(lp->data, 0, 60 + 14);
-			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
+			if (len > 60) { static int w = 0; if (!w) { debugmsg(SUBSYS_NET, "ARP", VERBOSITY_WARNING, "oversized %i-byte ARP/RARP frame capped to 60", len); w = 1; } }	/* #119 */
 			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
 
 			/*  Add ethernet ARP header:  */
@@ -188,7 +200,7 @@ static void net_arp(struct net *net, struct nic_data *nic,
 
 			/*  Copy the old packet first:  */
 			memset(lp->data, 0, 60 + 14);
-			if (len > 60) { static int w = 0; if (!w) { fatal("[ net: oversized %i-byte ARP/RARP frame capped to 60 ]\n", len); w = 1; } }	/* #119 */
+			if (len > 60) { static int w = 0; if (!w) { debugmsg(SUBSYS_NET, "ARP", VERBOSITY_WARNING, "oversized %i-byte ARP/RARP frame capped to 60", len); w = 1; } }	/* #119 */
 			memcpy(lp->data + 14, packet, len < 0 ? 0 : (len > 60 ? 60 : len));	/* #102: lp->data is 74 B; cap copy to the 60-B body */
 
 			/*  Add ethernet RARP header:  */
@@ -679,35 +691,45 @@ void net_dumpinfo(struct net *net)
 
 	debug_indentation(iadd);
 
-	net_debugaddr(&net->netmask_ipv4, NET_ADDR_IPV4);
-	debug("/%i", net->netmask_ipv4_len);
+	char addr1[100], addr2[100];
 
-	debug(" (max outgoing: TCP=%i, UDP=%i)\n",
+	net_addr_to_string(addr1, sizeof(addr1), &net->netmask_ipv4,
+	    NET_ADDR_IPV4);
+	debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+	    "%s/%i (max outgoing: TCP=%i, UDP=%i)",
+	    addr1, net->netmask_ipv4_len,
 	    MAX_TCP_CONNECTIONS, MAX_UDP_CONNECTIONS);
 
-	debug("gateway+nameserver: ");
-	net_debugaddr(&net->gateway_ipv4_addr, NET_ADDR_IPV4);
-	debug(" (");
-	net_debugaddr(&net->gateway_ethernet_addr, NET_ADDR_ETHERNET);
-	debug(")\n");
+	net_addr_to_string(addr1, sizeof(addr1), &net->gateway_ipv4_addr,
+	    NET_ADDR_IPV4);
+	net_addr_to_string(addr2, sizeof(addr2), &net->gateway_ethernet_addr,
+	    NET_ADDR_ETHERNET);
+	debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+	    "gateway+nameserver: %s (%s)", addr1, addr2);
 
 	if (!net->nameserver_known) {
-		debug("(could not determine real nameserver from /etc/resolv.conf)\n");
+		debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+		    "(could not determine real nameserver from"
+		    " /etc/resolv.conf)");
 	} else {
-		debug("nameserver uses real nameserver ");
-		net_debugaddr(&net->nameserver_ipv4, NET_ADDR_IPV4);
-		debug("\n");
+		net_addr_to_string(addr1, sizeof(addr1),
+		    &net->nameserver_ipv4, NET_ADDR_IPV4);
+		debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+		    "nameserver uses real nameserver %s", addr1);
 	}
 
 	rnp = net->remote_nets;
 	if (net->local_port != 0)
-		debug("distributed network: local port = %i\n",
+		debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+		    "distributed network: local port = %i",
 		    net->local_port);
 	debug_indentation(iadd);
 	while (rnp != NULL) {
-		debug("remote \"%s\": ", rnp->name);
-		net_debugaddr(&rnp->ipv4_addr, NET_ADDR_IPV4);
-		debug(" port %i\n", rnp->portnr);
+		net_addr_to_string(addr1, sizeof(addr1), &rnp->ipv4_addr,
+		    NET_ADDR_IPV4);
+		debugmsg(SUBSYS_NET, "", VERBOSITY_INFO,
+		    "remote \"%s\": %s port %i", rnp->name, addr1,
+		    rnp->portnr);
 		rnp = rnp->next;
 	}
 	debug_indentation(-iadd);
@@ -798,7 +820,8 @@ struct net *net_init(struct emul *emul, int init_flags,
 		net->local_port = local_port;
 		net->local_port_socket = socket(AF_INET, SOCK_DGRAM, 0);
 		if (net->local_port_socket < 0) {
-			perror("socket");
+			debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+			    "socket: %s", strerror(errno));
 			free(net);
 			return NULL;
 		}
@@ -809,7 +832,8 @@ struct net *net_init(struct emul *emul, int init_flags,
 		si_self.sin_addr.s_addr = htonl(INADDR_ANY);
 		if (bind(net->local_port_socket, (struct sockaddr *)&si_self,
 		    sizeof(si_self)) < 0) {
-			perror("bind");
+			debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+			    "bind: %s", strerror(errno));
 			free(net);
 			return NULL;
 		}

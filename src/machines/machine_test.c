@@ -324,6 +324,53 @@ MACHINE_SETUP(testmips)
 	    "cpu[%i].4", (uint64_t) DEV_RTC_ADDRESS, machine->path,
 	    machine->bootstrap_cpu);
 	device_add(machine, tmpstr);
+
+	/*
+	 *  Support for more than 256 MB RAM, as suggested in doc/TODO.html:
+	 *
+	 *	"testmips: Add support for more than 256 MB ram, e.g. by
+	 *	 adding 'actual RAM' at the 1 GB offset. A 32 bit machine
+	 *	 can thus use 3 GB, no limit on 64 bit machines. Low 256 MB
+	 *	 can be considered a mirror of first 256 MB of RAM."
+	 *
+	 *  The machine's base RAM is created generically (emul.c) at
+	 *  physical address 0, so with -M larger than 256 it would grow
+	 *  into the experimental devices at 0x10000000 and up. Instead,
+	 *  when more than 256 MB is requested, the full amount is made
+	 *  visible as one contiguous block of "actual RAM" at the 1 GB
+	 *  offset (0x40000000): the first 256 MB of that block is a
+	 *  mirror of the low 256 MB (which is the base RAM, exactly as
+	 *  before), and the remainder is real RAM at 0x50000000. The
+	 *  mirror forwards both reads and writes, so the low 256 MB and
+	 *  the first 256 MB at 0x40000000 always contain the same bytes,
+	 *  which is precisely the TODO entry's layout (just with the
+	 *  backing store in the low region; guest-invisible). Registered
+	 *  devices take precedence over base RAM in memory_rw(), so the
+	 *  devices at 0x10000000..0x1fffffff remain accessible, and with
+	 *  -M larger than 1024 the mirror + high RAM simply shadow the
+	 *  base RAM that would otherwise overlap them. This is the same
+	 *  scheme the SGI O2 emulation uses (machine_sgi.c), with the
+	 *  window at 1 GB.
+	 *
+	 *  With -M 256 or less (including the default), nothing is added
+	 *  here and the machine behaves exactly as it always has.
+	 */
+	if (machine->physical_ram_in_mb > 256) {
+		debugmsg(SUBSYS_MACHINE, "testmips high RAM", VERBOSITY_INFO,
+		    "%i MB at 0x40000000 (low 256 MB mirrors its first 256 MB)",
+		    machine->physical_ram_in_mb);
+
+		/*  Mirror of the low 256 MB of RAM, at the 1 GB offset:  */
+		dev_ram_init(machine, 0x40000000ULL, 0x10000000ULL,
+		    DEV_RAM_MIRROR, 0x0, "ram_mirror");
+
+		/*  The rest of the "actual RAM", directly above the mirror
+		    (i.e. at 1 GB + 256 MB), making 0x40000000 .. 0x40000000
+		    + physical_ram_in_mb one contiguous RAM block:  */
+		dev_ram_init(machine, 0x50000000ULL,
+		    ((uint64_t) machine->physical_ram_in_mb - 256) * 1048576,
+		    DEV_RAM_RAM, 0x0, "ram_high");
+	}
 }
 
 

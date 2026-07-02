@@ -125,6 +125,21 @@ static void file_load_srec(struct machine *m, struct memory *mem,
 		/*  debug("count=%i j=%i\n", count, j);  */
 		/*  count is j - 1.  */
 
+		/*
+		 *  A malformed record can declare a count larger than the
+		 *  data actually present on the line (e.g. a non-hex char
+		 *  in the count field survives the fatal() above, which
+		 *  prints but does not exit). Clamp count to the number of
+		 *  byte pairs actually parsed (j), so that the type switch
+		 *  below can never read past the end of bytes[]. For valid
+		 *  records count <= j, so this never triggers.
+		 */
+		if (count > j) {
+			fatal("S-record count %i exceeds actual data "
+			    "length %i; clamping\n", count, j);
+			count = j;
+		}
+
 		switch (buf[1]) {
 		case 0:
 			debug("SREC \"");

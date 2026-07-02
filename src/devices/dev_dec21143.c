@@ -753,7 +753,24 @@ int dec21143_tx(struct cpu *cpu, struct dec21143_data *d)
 				bufsize = 0;
 			if (bufsize > 65536)
 				bufsize = 65536;
-			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *) malloc(bufsize));
+			/*  A first segment while another frame is still in
+			    progress (repeated Tx_FS without Tx_LS) would leak
+			    the old buffer; warn and discard it:  */
+			if (d->cur_tx_buf != NULL) {
+				static int warn_fs = 0;
+				if (!warn_fs) {
+					fatal("[ dec21143: WARNING! tx: first "
+					    "segment, but a frame was already "
+					    "in progress; discarding it ]\n");
+					warn_fs = 1;
+				}
+				free(d->cur_tx_buf);
+				d->cur_tx_buf = NULL;
+			}
+			/*  (malloc(0) may return NULL, which would trip
+			    CHECK_ALLOCATION; allocate at least 1 byte.)  */
+			CHECK_ALLOCATION(d->cur_tx_buf = (unsigned char *)
+			    malloc(bufsize == 0 ? 1 : bufsize));
 			d->cur_tx_buf_len = 0;
 		} else {
 			/*  Not first segment. Increase the length of

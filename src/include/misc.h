@@ -267,6 +267,8 @@ void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta);
 void debugmsg_set_verbosity_level(int subsystem, int verbosity);
 void debugmsg(int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
 void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
+int debugmsg_set_breakpoint(const char *subsystem_name, int level);
+void debugmsg_print_breakpoints(void);
 
 
 /*  dreamcast.c:  */

@@ -65,6 +65,27 @@
 		return;							\
 	}
 
+/*
+ *  SH_ALIGN_CHECK_LD / _ST:
+ *
+ *  SuperH requires naturally-aligned memory access. A misaligned load or
+ *  store raises a CPU address-error exception (EXPEVT_ADDR_ERR_LD / _ST),
+ *  with TEA set to the faulting address. amask is 1 for 16-bit accesses
+ *  and 3 for 32-bit accesses. (8-bit accesses are always aligned.)
+ */
+#define SH_ALIGN_CHECK_LD(vaddr, amask)					\
+	if ((vaddr) & (amask)) {					\
+		SYNCH_PC;						\
+		sh_exception(cpu, EXPEVT_ADDR_ERR_LD, 0, (vaddr));	\
+		return;							\
+	}
+#define SH_ALIGN_CHECK_ST(vaddr, amask)					\
+	if ((vaddr) & (amask)) {					\
+		SYNCH_PC;						\
+		sh_exception(cpu, EXPEVT_ADDR_ERR_ST, 0, (vaddr));	\
+		return;							\
+	}
+
 
 /*
  *  nop: Nothing
@@ -326,6 +347,7 @@ X(mov_b_rm_predec_rn)
 X(mov_w_rm_predec_rn)
 {
 	uint32_t addr = reg(ic->arg[1]) - sizeof(uint16_t);
+	SH_ALIGN_CHECK_ST(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint16_t data = reg(ic->arg[0]);
 
@@ -353,6 +375,7 @@ X(mov_w_rm_predec_rn)
 X(mov_l_rm_predec_rn)
 {
 	uint32_t addr = reg(ic->arg[1]) - sizeof(uint32_t);
+	SH_ALIGN_CHECK_ST(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint32_t data = reg(ic->arg[0]);
 
@@ -384,6 +407,8 @@ X(stc_l_rm_predec_rn_md)
 	uint32_t data = reg(ic->arg[0]);
 
 	RES_INST_IF_NOT_MD;
+
+	SH_ALIGN_CHECK_ST(addr, 3);
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
 		data = LE32_TO_HOST(data);
@@ -538,6 +563,7 @@ X(load_b_rm_rn)
 X(load_w_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[0]);
+	SH_ALIGN_CHECK_LD(addr, 1);
 	int16_t *p = (int16_t *) cpu->cd.sh.host_load[addr >> 12];
 	int16_t data;
 
@@ -562,6 +588,7 @@ X(load_w_rm_rn)
 X(load_l_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[0]);
+	SH_ALIGN_CHECK_LD(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint32_t data;
 
@@ -591,6 +618,9 @@ X(fmov_rm_frn)
 	uint32_t data;
 
 	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (register pair) is a 64-bit access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_LD(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
 
 	uint32_t data2 = 0;
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
@@ -656,6 +686,8 @@ X(fmov_r0_rm_frn)
 
 	FLOATING_POINT_AVAILABLE_CHECK;
 
+	SH_ALIGN_CHECK_LD(addr, 3);
+
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
 		fatal("fmov_r0_rm_frn: sz=1 (register pair): TODO\n");
 		ABORT_EXECUTION;
@@ -697,6 +729,9 @@ X(fmov_rm_postinc_frn)
 	}
 
 	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (d) is a 64-bit register-pair access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
 
 	if (p != NULL) {
 		data = p[(addr & 0xfff) >> 2];
@@ -759,6 +794,7 @@ X(mov_b_disp_gbr_r0)
 X(mov_w_disp_gbr_r0)
 {
 	uint32_t addr = cpu->cd.sh.gbr + ic->arg[1];
+	SH_ALIGN_CHECK_LD(addr, 1);
 	int16_t *p = (int16_t *) cpu->cd.sh.host_load[addr >> 12];
 	int16_t data;
 	if (p != NULL) {
@@ -782,6 +818,7 @@ X(mov_w_disp_gbr_r0)
 X(mov_l_disp_gbr_r0)
 {
 	uint32_t addr = cpu->cd.sh.gbr + ic->arg[1];
+	SH_ALIGN_CHECK_LD(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint32_t data;
 	if (p != NULL) {
@@ -826,6 +863,7 @@ X(mov_b_arg1_postinc_to_arg0)
 X(mov_w_arg1_postinc_to_arg0)
 {
 	uint32_t addr = reg(ic->arg[1]);
+	SH_ALIGN_CHECK_LD(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint16_t data;
 
@@ -852,6 +890,7 @@ X(mov_w_arg1_postinc_to_arg0)
 X(mov_l_arg1_postinc_to_arg0)
 {
 	uint32_t addr = reg(ic->arg[1]);
+	SH_ALIGN_CHECK_LD(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint32_t data;
 
@@ -882,6 +921,8 @@ X(mov_l_arg1_postinc_to_arg0_md)
 	uint32_t data;
 
 	RES_INST_IF_NOT_MD;
+
+	SH_ALIGN_CHECK_LD(addr, 3);
 
 	if (p != NULL) {
 		data = p[(addr & 0xfff) >> 2];
@@ -915,6 +956,8 @@ X(mov_l_arg1_postinc_to_arg0_fp)
 	uint32_t data;
 
 	FLOATING_POINT_AVAILABLE_CHECK;
+
+	SH_ALIGN_CHECK_LD(addr, 3);
 
 	if (p != NULL) {
 		data = p[(addr & 0xfff) >> 2];
@@ -965,6 +1008,7 @@ X(mov_b_r0_rm_rn)
 X(mov_w_r0_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[0]) + cpu->cd.sh.r[0];
+	SH_ALIGN_CHECK_LD(addr, 1);
 	int16_t *p = (int16_t *) cpu->cd.sh.host_load[addr >> 12];
 	int16_t data;
 
@@ -990,6 +1034,7 @@ X(mov_w_r0_rm_rn)
 X(mov_l_r0_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[0]) + cpu->cd.sh.r[0];
+	SH_ALIGN_CHECK_LD(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint32_t data;
 
@@ -1016,6 +1061,7 @@ X(mov_l_disp_rm_rn)
 {
 	uint32_t addr = cpu->cd.sh.r[ic->arg[0] & 0xf] +
 	    ((ic->arg[0] >> 4) << 2);
+	SH_ALIGN_CHECK_LD(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint32_t data;
 
@@ -1062,6 +1108,7 @@ X(mov_b_disp_rn_r0)
 X(mov_w_disp_rn_r0)
 {
 	uint32_t addr = reg(ic->arg[0]) + ic->arg[1];
+	SH_ALIGN_CHECK_LD(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_load[addr >> 12];
 	uint16_t data;
 
@@ -1129,6 +1176,7 @@ X(mov_b_store_rm_rn)
 X(mov_w_store_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[1]);
+	SH_ALIGN_CHECK_ST(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint16_t data = reg(ic->arg[0]);
 
@@ -1153,6 +1201,7 @@ X(mov_w_store_rm_rn)
 X(mov_l_store_rm_rn)
 {
 	uint32_t addr = reg(ic->arg[1]);
+	SH_ALIGN_CHECK_ST(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint32_t data = reg(ic->arg[0]);
 
@@ -1181,6 +1230,9 @@ X(fmov_frm_rn)
 	uint32_t data = reg(ic->arg[0]);
 
 	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (register pair) is a 64-bit access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_ST(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
 
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
 		// Register pair. Store second word first, then fallback
@@ -1235,6 +1287,8 @@ X(fmov_frm_r0_rn)
 
 	FLOATING_POINT_AVAILABLE_CHECK;
 
+	SH_ALIGN_CHECK_ST(addr, 3);
+
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
 		fatal("fmov_frm_r0_rn: sz=1 (register pair): TODO\n");
 		ABORT_EXECUTION;
@@ -1276,6 +1330,9 @@ X(fmov_frm_predec_rn)
 	data = reg(r0);
 
 	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (d) is a 64-bit register-pair access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_ST(addr, d ? 7 : 3);
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
 		data = LE32_TO_HOST(data);
@@ -1334,6 +1391,7 @@ X(mov_b_rm_r0_rn)
 X(mov_w_rm_r0_rn)
 {
 	uint32_t addr = reg(ic->arg[1]) + cpu->cd.sh.r[0];
+	SH_ALIGN_CHECK_ST(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint16_t data = reg(ic->arg[0]);
 
@@ -1358,6 +1416,7 @@ X(mov_w_rm_r0_rn)
 X(mov_l_rm_r0_rn)
 {
 	uint32_t addr = reg(ic->arg[1]) + cpu->cd.sh.r[0];
+	SH_ALIGN_CHECK_ST(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint32_t data = reg(ic->arg[0]);
 
@@ -1400,6 +1459,7 @@ X(mov_b_r0_disp_gbr)
 X(mov_w_r0_disp_gbr)
 {
 	uint32_t addr = cpu->cd.sh.gbr + ic->arg[1];
+	SH_ALIGN_CHECK_ST(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint16_t data = cpu->cd.sh.r[0];
 
@@ -1424,6 +1484,7 @@ X(mov_w_r0_disp_gbr)
 X(mov_l_r0_disp_gbr)
 {
 	uint32_t addr = cpu->cd.sh.gbr + ic->arg[1];
+	SH_ALIGN_CHECK_ST(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint32_t data = cpu->cd.sh.r[0];
 
@@ -1449,6 +1510,7 @@ X(mov_l_rm_disp_rn)
 {
 	uint32_t addr = cpu->cd.sh.r[ic->arg[1] & 0xf] +
 	    ((ic->arg[1] >> 4) << 2);
+	SH_ALIGN_CHECK_ST(addr, 3);
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint32_t data = reg(ic->arg[0]);
 
@@ -1492,6 +1554,7 @@ X(mov_b_r0_disp_rn)
 X(mov_w_r0_disp_rn)
 {
 	uint32_t addr = reg(ic->arg[0]) + ic->arg[1];
+	SH_ALIGN_CHECK_ST(addr, 1);
 	uint16_t *p = (uint16_t *) cpu->cd.sh.host_store[addr >> 12];
 	uint16_t data = cpu->cd.sh.r[0];
 
@@ -3009,10 +3072,13 @@ X(fdiv_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_D);
 
-		if (op1.f != 0.0)
-			result = op2.f / op1.f;
-		else
-			result = 0.0;
+		/*
+		 *  IEEE division by zero yields +/-Inf (or NaN for 0/0); C
+		 *  floating-point division does not trap, so compute it
+		 *  directly instead of silently returning 0.0. FPSCR
+		 *  exception-enable (DIV0 trap) handling remains a TODO.
+		 */
+		result = op2.f / op1.f;
 
 		ieee = ieee_store_float_value(result, IEEE_FMT_D);
 
@@ -3028,10 +3094,13 @@ X(fdiv_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
 
-		if (op1.f != 0.0)
-			result = op2.f / op1.f;
-		else
-			result = 0.0;
+		/*
+		 *  IEEE division by zero yields +/-Inf (or NaN for 0/0); C
+		 *  floating-point division does not trap, so compute it
+		 *  directly instead of silently returning 0.0. FPSCR
+		 *  exception-enable (DIV0 trap) handling remains a TODO.
+		 */
+		result = op2.f / op1.f;
 
 		ieee = ieee_store_float_value(result, IEEE_FMT_S);
 
@@ -3165,8 +3234,9 @@ X(pref_rn)
 		// When the SQMD bit in MMUCR is set, user access is prohibited
 		// if the MMU is enabled.
 		if (cpu->cd.sh.mmucr & SH4_MMUCR_SQMD) {
-			// In user mode? Then cause exception.
-			if (cpu->cd.sh.sr & SH_SR_MD) {
+			// In user mode (MD=0)? Then cause exception.
+			// (SH_SR_MD set = privileged; SQMD prohibits USER access.)
+			if (!(cpu->cd.sh.sr & SH_SR_MD)) {
 				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
 				return;
 			}
@@ -3280,10 +3350,13 @@ X(bt_samepage_wait_for_variable)
 	}
 
 	// mov_l_disp_gbr_r0:
-	// Bail out quickly if the memory is not on a readable page.
+	// Bail out quickly if the memory is not on a readable page, or if the
+	// address is misaligned (fall back to the unfused mov_l_disp_gbr_r0,
+	// which raises the EXPEVT_ADDR_ERR_LD address error -- this fused loop
+	// must not silently read a truncated address past the alignment check).
 	uint32_t addr = cpu->cd.sh.gbr + ic->arg[1];
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
-	if (p == NULL) {
+	if (p == NULL || (addr & 3)) {
 		instr(mov_l_disp_gbr_r0)(cpu, ic);
 		return;
 	}

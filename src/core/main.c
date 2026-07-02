@@ -165,6 +165,9 @@ static void usage(bool longusage)
 	printf("                t      tape\n");
 	printf("                V      add an overlay (also requires explicit ID)\n");
 	printf("                0-7    use a specific ID\n");
+	printf("  -f        force an fsync on each disk image write (reduces"
+	    " the risk of data\n            loss if the emulator is killed,"
+	    " at the cost of write performance)\n");
 	printf("  -I hz     set the main cpu frequency to hz (not used by "
 	    "all combinations\n            of machines and guest OSes)\n");
 	printf("  -i        display each instruction as it is executed\n");
@@ -262,6 +265,29 @@ static void usage(bool longusage)
 
 
 /*
+ *  parse_int_option():
+ *
+ *  Helper for numeric command line options: parses a decimal integer using
+ *  strtoll() (atoi() overflows silently and accepts trailing garbage), and
+ *  checks it against a sane range. Exits with a clear message on bad input.
+ */
+static long long parse_int_option(char opt, const char *arg,
+	long long minval, long long maxval)
+{
+	char *endp = NULL;
+	long long v = strtoll(arg, &endp, 10);
+
+	if (endp == arg || *endp != '\0' || v < minval || v > maxval) {
+		fprintf(stderr, "Bad -%c argument '%s': must be an integer"
+		    " between %lli and %lli.\n", opt, arg, minval, maxval);
+		exit(1);
+	}
+
+	return v;
+}
+
+
+/*
  *  get_cmd_args():
  *
  *  Reads command line arguments.
@@ -280,7 +306,7 @@ int get_cmd_args(int argc, char *argv[], struct emul *emul,
 	struct machine *m = emul_add_machine(emul, NULL);
 
 	const char *opts =
-	    "AC:c:Dd:E:e:GHhI:iJj:k:KL:M:Nn:Oo:p:QqRrSs:TtVvW:"
+	    "AC:c:Dd:E:e:fGHhI:iJj:k:KL:M:Nn:Oo:p:QqRrSs:TtVvW:"
 #ifdef WITH_X11
 	    "XxY:"
 #endif
@@ -333,6 +359,10 @@ int get_cmd_args(int argc, char *argv[], struct emul *emul,
 			subtype = optarg;
 			machine_specific_options_used = true;
 			break;
+		case 'f':
+			/*  Force an fsync on every disk image write:  */
+			do_fsync = 1;
+			break;
 		case 'G':
 			enable_colorized_output = true;
 			break;
@@ -359,21 +389,31 @@ int get_cmd_args(int argc, char *argv[], struct emul *emul,
 			machine_specific_options_used = true;
 			break;
 		case 'k':
-			dyntrans_cache_size = atoi(optarg) * 1048576;
-			if (dyntrans_cache_size < 1) {
-				fprintf(stderr, "The dyntrans cache size must"
-				    " be at least 1 MB.\n");
-				exit(1);
+			{
+				/*  atoi() overflowed int before the old
+				    "< 1" check ran; the value is multiplied
+				    by 1 MB, so bound it by what fits in a
+				    size_t (and 1 TB as a sanity cap).  */
+				long long max_mb =
+				    (long long) (SIZE_MAX / 1048576);
+				if (max_mb > 1048576)
+					max_mb = 1048576;
+				dyntrans_cache_size = (size_t)
+				    parse_int_option('k', optarg, 1, max_mb)
+				    * 1048576;
 			}
 			break;
 		case 'K':
 			debugger_enter_at_end_of_run = true;
 			break;
 		case 'L':
-			*tap_devname = strdup(optarg);
+			CHECK_ALLOCATION(*tap_devname = strdup(optarg));
 			break;
 		case 'M':
-			m->physical_ram_in_mb = atoi(optarg);
+			/*  atoi() let negative/overflowed values through
+			    to the uint32_t field.  */
+			m->physical_ram_in_mb = (uint32_t)
+			    parse_int_option('M', optarg, 1, 1048576);
 			machine_specific_options_used = true;
 			break;
 		case 'N':
@@ -381,7 +421,10 @@ int get_cmd_args(int argc, char *argv[], struct emul *emul,
 			machine_specific_options_used = true;
 			break;
 		case 'n':
-			m->ncpus = atoi(optarg);
+			/*  atoi() accepted negative counts, which later
+			    feed malloc()/memset() size calculations.  */
+			m->ncpus = (int)
+			    parse_int_option('n', optarg, 1, 256);
 			machine_specific_options_used = true;
 			break;
 		case 'O':

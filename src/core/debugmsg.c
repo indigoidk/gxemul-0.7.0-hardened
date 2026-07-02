@@ -52,7 +52,6 @@
  *  TODO:
  *	New debugger commands:
  *		command for showing debug output in new xterms?
- *		command for enabling breakpoints for subsystem output?
  *
  *	Convert existing debug() and fatal() calls to the new debugmsg() call.
  *
@@ -83,6 +82,17 @@ extern bool about_to_enter_single_step;
 size_t debugmsg_nr_of_subsystems = 0;
 static const char **debugmsg_subsystem_name = NULL;
 int *debugmsg_current_verbosity = NULL;
+
+/*
+ *  Breakpoints on subsystem messages: for each subsystem, the verbosity
+ *  level at which messages trigger entry into the interactive debugger,
+ *  or -1 when no breakpoint is set for that subsystem. (Lower value =
+ *  more severe, so a message triggers when verbosity <= the level.)
+ *  debugmsg_n_breakpoints counts subsystems with a breakpoint set, so
+ *  that the common case (no breakpoints at all) is a single comparison.
+ */
+static int *debugmsg_breakpoint_level = NULL;
+static int debugmsg_n_breakpoints = 0;
 
 static const int default_verbosity = VERBOSITY_INFO;
 
@@ -129,7 +139,31 @@ static void va_debug(va_list argp, const char *fmt)
 static void debugmsg_va(struct cpu* cpu, int subsystem,
 	const char *name, int verbosity, va_list argp, const char *fmt)
 {
-	if (!single_step && !ENOUGH_VERBOSITY(subsystem, verbosity))
+	bool subsystem_breakpoint = false;
+
+	if (debugmsg_n_breakpoints > 0 &&
+	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+	    verbosity <= debugmsg_breakpoint_level[subsystem]) {
+		/*
+		 *  This message triggers a breakpoint on subsystem messages:
+		 *  make sure the message itself is shown (even if the current
+		 *  verbosity setting would have suppressed it), and request
+		 *  entry into the interactive debugger. The debugger is
+		 *  entered after the current instruction batch, using the
+		 *  same mechanism as normal breakpoints.
+		 */
+		subsystem_breakpoint = true;
+
+		if (!single_step && !about_to_enter_single_step) {
+			fatal("[ subsystem breakpoint: %s ]\n",
+			    debugmsg_subsystem_name[subsystem][0] != '\0'
+			    ? debugmsg_subsystem_name[subsystem] : "(startup)");
+			about_to_enter_single_step = true;
+		}
+	}
+
+	if (!subsystem_breakpoint && !single_step &&
+	    !ENOUGH_VERBOSITY(subsystem, verbosity))
 		return;
 
 	char buf[DEBUG_BUFSIZE];
@@ -390,8 +424,11 @@ int debugmsg_register_subsystem(const char* name)
 	    sizeof(char*) * debugmsg_nr_of_subsystems);
 	debugmsg_current_verbosity = realloc(debugmsg_current_verbosity,
 	    sizeof(int) * debugmsg_nr_of_subsystems);;
+	debugmsg_breakpoint_level = realloc(debugmsg_breakpoint_level,
+	    sizeof(int) * debugmsg_nr_of_subsystems);
 
 	debugmsg_subsystem_name[subsys] = strdup(name);
+	debugmsg_breakpoint_level[subsys] = -1;
 	debugmsg_set_verbosity_level(subsys, default_verbosity);
 
 	return subsys;
@@ -499,6 +536,96 @@ void debugmsg_print_settings(const char *subsystem_name)
 
 
 /*
+ *  debugmsg_set_breakpoint():
+ *
+ *  Sets (level = VERBOSITY_ERROR .. VERBOSITY_DEBUG) or clears (level < 0)
+ *  a breakpoint on messages from a subsystem. When a message which is at
+ *  least as severe as the given level is printed for that subsystem, the
+ *  emulator enters the interactive debugger. E.g. level = VERBOSITY_WARNING
+ *  breaks on warnings and errors, but not on info/debug messages.
+ *
+ *  The subsystem name "ALL" (case insensitive) affects all subsystems.
+ *
+ *  Returns 1 if the subsystem name matched, 0 otherwise.
+ */
+int debugmsg_set_breakpoint(const char *subsystem_name, int level)
+{
+	int n = 0;
+
+	if (level < 0)
+		level = -1;
+
+	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+		if (strcasecmp("ALL", subsystem_name) != 0) {
+			if (strcmp(subsystem_name, debugmsg_subsystem_name[i]) != 0)
+				continue;
+		}
+
+		if (debugmsg_breakpoint_level[i] < 0 && level >= 0)
+			debugmsg_n_breakpoints ++;
+		if (debugmsg_breakpoint_level[i] >= 0 && level < 0)
+			debugmsg_n_breakpoints --;
+
+		debugmsg_breakpoint_level[i] = level;
+
+		++n;
+	}
+
+	return n > 0;
+}
+
+
+/*
+ *  debugmsg_print_breakpoints():
+ *
+ *  Prints all subsystems which have a breakpoint on messages set.
+ */
+void debugmsg_print_breakpoints(void)
+{
+	int n = 0;
+
+	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
+		if (debugmsg_breakpoint_level[i] < 0)
+			continue;
+
+		const char* name = debugmsg_subsystem_name[i];
+		if (i == SUBSYS_STARTUP)
+			name = "(startup related)";
+
+		char buf[100];
+		switch (debugmsg_breakpoint_level[i]) {
+		case VERBOSITY_ERROR:
+			snprintf(buf, sizeof(buf), "0: ERROR");
+			break;
+		case VERBOSITY_WARNING:
+			snprintf(buf, sizeof(buf), "1: WARNING");
+			break;
+		case VERBOSITY_INFO:
+			snprintf(buf, sizeof(buf), "2: INFO");
+			break;
+		case VERBOSITY_DEBUG:
+			snprintf(buf, sizeof(buf), "3: DEBUG");
+			break;
+		default:
+			snprintf(buf, sizeof(buf), "%i",
+			    debugmsg_breakpoint_level[i]);
+			break;
+		}
+
+		if (n == 0)
+			printf("Subsystem:          Break on messages at level:\n");
+
+		printf("%17s   %s\n", name, buf);
+
+		++n;
+	}
+
+	if (n == 0)
+		printf("No breakpoints on subsystem messages set.\n");
+}
+
+
+/*
  *  debugmsg_init():
  *
  *  Initializes the debugmsg functionality.
@@ -508,6 +635,11 @@ void debugmsg_init()
 	debugmsg_nr_of_subsystems = 11;
 	debugmsg_subsystem_name = malloc(sizeof(char*) * debugmsg_nr_of_subsystems);
 	debugmsg_current_verbosity = malloc(sizeof(int) * debugmsg_nr_of_subsystems);;
+	debugmsg_breakpoint_level = malloc(sizeof(int) * debugmsg_nr_of_subsystems);
+
+	// No breakpoints on subsystem messages initially.
+	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+		debugmsg_breakpoint_level[i] = -1;
 
 	debugmsg_subsystem_name[SUBSYS_STARTUP]   = "";
 	debugmsg_subsystem_name[SUBSYS_EMUL]      = "emul";

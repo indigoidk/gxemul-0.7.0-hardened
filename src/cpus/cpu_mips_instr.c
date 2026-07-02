@@ -1368,6 +1368,12 @@ X(jr_ra_addiu)
 {
 	/*  jr ra, followed by an addiu  */
 	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Nested delay slot (see beq): abandon the outer branch and
+		    let the main loop re-run this instruction normally.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
 	cpu->pc = rs;
@@ -3177,6 +3183,18 @@ X(memset_addiu_bne_sw)
 
 	rY = reg(rYp);
 
+	/*
+	 *  Guard against a degenerate/hostile loop where the end (rY) is
+	 *  below the start (rX): rY-rX would underflow (unsigned), and the
+	 *  page clamp below ALSO wraps mod 2^N and fails to trigger, causing
+	 *  memset() to zero a multi-gigabyte range of the host page. Fall
+	 *  back to the plain addiu in that case.
+	 */
+	if (rY < rX) {
+		instr(addiu)(cpu, ic);
+		return;
+	}
+
 	bytes_to_write = rY - rX;
 	if ((rX & 0xfff) + bytes_to_write > 0x1000) {
 		bytes_to_write = 0x1000 - (rX & 0xfff);
@@ -3315,7 +3333,8 @@ X(linux_pmax_idle)
 	page2 = (int32_t *) cpu->cd.mips.host_load[pageindex2];
 
 	/*  Fallback:  */
-	if (cpu->delay_slot || page == NULL || page[i] != 0 || page2[i2] != 0)
+	if (cpu->delay_slot || page == NULL || page2 == NULL ||
+	    page[i] != 0 || page2[i2] != 0)
 		return;
 
 	instr(idle)(cpu, ic);
@@ -3547,6 +3566,12 @@ X(b_samepage_addiu)
  */
 X(b_samepage_daddiu)
 {
+	if (cpu->delay_slot & TO_BE_DELAYED) {
+		/*  Nested delay slot (see beq): abandon the outer branch and
+		    let the main loop re-run this instruction normally.  */
+		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
+		return;
+	}
 	*(uint64_t *)ic[1].arg[1] = *(uint64_t *)ic[1].arg[0] +
 	    (int32_t)ic[1].arg[2];
 	cpu->n_translated_instrs ++;

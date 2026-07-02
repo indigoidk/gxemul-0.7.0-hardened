@@ -29,8 +29,6 @@
  *
  *  TODO:  diskimage_remove()? This would be useful for floppies in PC-style
  *	   machines, where disks may need to be swapped during boot etc.
- *
- *  TODO:  expose do_fsync as a command line option?
  */
 
 #include <errno.h>
@@ -47,11 +45,15 @@
 #include "misc.h"
 
 
+/*  Set by the -f command line option; see main.c.  */
 int do_fsync = 0;
 
 /*  #define debug fatal  */
 
 static const char *diskimage_types[] = DISKIMAGE_TYPES;
+
+/*  Bytes of user data per CD-ROM sector, as seen by the guest:  */
+#define	CDROM_SECTOR_SIZE	2048
 
 
 /**************************************************************************/
@@ -198,24 +200,37 @@ bool diskimage_recalc_size(struct diskimage *d)
 	int res;
 	int64_t size = 0;
 
-	res = stat(d->fname, &st);
-	if (res)
-		return false;
+	if (d->nr_of_tracks > 0) {
+		/*
+		 *  Multi-track (CUE/BIN) image: the file named by d->fname
+		 *  is only the small cue sheet text file, so its size is
+		 *  meaningless here.  The logical size spans from the start
+		 *  of the first data track to the end of the disc, as
+		 *  computed when the cue sheet was parsed.
+		 */
+		size = (d->total_disc_sectors - d->first_data_track_lba)
+		    * CDROM_SECTOR_SIZE;
+	} else {
+		res = stat(d->fname, &st);
+		if (res)
+			return false;
 
-	size = st.st_size;
+		size = st.st_size;
 
-	/*
-	 *  TODO:  CD-ROM devices, such as /dev/cd0c, how can one
-	 *  check how much data is on that cd-rom without reading it?
-	 *  For now, assume some large number, hopefully it will be
-	 *  enough to hold any cd-rom image.
-	 */
-	if (d->is_a_cdrom && size == 0)
-		size = 762048000;
+		/*
+		 *  TODO:  CD-ROM devices, such as /dev/cd0c, how can one
+		 *  check how much data is on that cd-rom without reading it?
+		 *  For now, assume some large number, hopefully it will be
+		 *  enough to hold any cd-rom image.
+		 */
+		if (d->is_a_cdrom && size == 0)
+			size = 762048000;
+	}
 
 	d->total_size = size;
 
-	if ((d->total_size == 720*1024 || d->total_size == 1474560
+	if (d->nr_of_tracks == 0 &&
+	    (d->total_size == 720*1024 || d->total_size == 1474560
 	    || d->total_size == 2949120 || d->total_size == 1228800)
 	    && d->type == DISKIMAGE_UNKNOWN)
 		d->type = DISKIMAGE_FLOPPY;
@@ -364,7 +379,6 @@ void diskimage_getchs(struct machine *machine, int id, int type,
  *  NOTE:  Returns the number of bytes read, 0 if nothing was successfully
  *  read. (These are not the same as diskimage_access()).
  */
-#define	CDROM_SECTOR_SIZE	2048
 static size_t diskimage_access__cdrom(struct diskimage *d, off_t offset,
 	unsigned char *buf, size_t len)
 {
@@ -398,6 +412,666 @@ static size_t diskimage_access__cdrom(struct diskimage *d, off_t offset,
 
 	return total_copied;
 }
+
+
+/**************************************************************************/
+
+/*
+ *  Multi-track CD-ROM (CUE/BIN) image support:
+ *
+ *  A cue sheet (".cue" file) is a small text file which describes the track
+ *  layout of a CD, and refers to one or more "bin" files containing the
+ *  actual sector data.  This makes it possible to use CD images which
+ *  contain a mixture of data and audio tracks (e.g. Dreamcast or live-CD
+ *  images), instead of only flat single-track .iso images.
+ *
+ *  When a cue sheet has been parsed successfully, d->nr_of_tracks is set to
+ *  the number of tracks (>= 1), and all reads are translated using the
+ *  track table (see diskimage_access__cue() below).  Logical byte offset 0
+ *  of the disk image corresponds to the first sector of the FIRST DATA
+ *  TRACK, so booting from an ISO9660 filesystem path boots from the first
+ *  data track by default, exactly as if a flat .iso image of that track had
+ *  been supplied.  (A consequence is that tracks _before_ the first data
+ *  track, e.g. leading audio tracks, are not reachable via the logical
+ *  offset space; tracks after it are.)
+ *
+ *  For all other (non-cue) images, nr_of_tracks remains 0, and the flat
+ *  file code paths are used, completely unchanged.
+ */
+
+#define	CUE_MAX_TRACKS		99
+#define	CUE_MAX_FILES		99
+#define	CUE_MAX_LINE_LEN	512
+
+/*  Temporary per-track data while parsing a cue sheet:  */
+struct cue_parse_track {
+	int	track_nr;
+	int	is_data;
+	int	file_index;
+	int	sector_size;
+	int	data_offset;
+	int64_t	index01_frame;		/*  -1 = no INDEX 01 seen (yet)  */
+};
+
+
+/*
+ *  diskimage__cue_get_token():
+ *
+ *  Copies the next whitespace-separated (or double-quoted) token from *pp
+ *  into buf, advancing *pp past it.  Returns false if the rest of the line
+ *  is empty.  Over-long tokens are silently truncated.
+ */
+static bool diskimage__cue_get_token(char **pp, char *buf, size_t buflen)
+{
+	char *p = *pp;
+	size_t n = 0;
+
+	while (*p == ' ' || *p == '\t')
+		p ++;
+
+	if (*p == '\0' || *p == '\r' || *p == '\n')
+		return false;
+
+	if (*p == '"') {
+		p ++;
+		while (*p != '\0' && *p != '"' && *p != '\r' && *p != '\n') {
+			if (n < buflen - 1)
+				buf[n ++] = *p;
+			p ++;
+		}
+		if (*p == '"')
+			p ++;
+	} else {
+		while (*p != '\0' && *p != ' ' && *p != '\t' &&
+		    *p != '\r' && *p != '\n') {
+			if (n < buflen - 1)
+				buf[n ++] = *p;
+			p ++;
+		}
+	}
+
+	buf[n] = '\0';
+	*pp = p;
+	return true;
+}
+
+
+/*
+ *  diskimage__cue_resolve_path():
+ *
+ *  Returns a newly allocated string with the host path of a bin file
+ *  referenced from a cue sheet.  Relative names are resolved against the
+ *  directory containing the cue sheet itself.
+ */
+static char *diskimage__cue_resolve_path(const char *cuename,
+	const char *binname)
+{
+	const char *slash = strrchr(cuename, '/');
+	const char *backslash = strrchr(cuename, '\\');
+	char *result;
+	size_t dirlen;
+
+	if (backslash != NULL && (slash == NULL || backslash > slash))
+		slash = backslash;
+
+	if (binname[0] == '/' || binname[0] == '\\' || slash == NULL) {
+		CHECK_ALLOCATION(result = strdup(binname));
+		return result;
+	}
+
+	dirlen = slash - cuename + 1;
+	CHECK_ALLOCATION(result = (char *) malloc(dirlen + strlen(binname) + 1));
+	memcpy(result, cuename, dirlen);
+	strcpy(result + dirlen, binname);
+	return result;
+}
+
+
+/*
+ *  diskimage__looks_like_cue():
+ *
+ *  Content sniffing, for CD-ROM images supplied without a ".cue" filename
+ *  extension: returns true if the file begins (possibly after a UTF-8 BOM
+ *  and whitespace) with a well-known cue sheet keyword.
+ */
+static bool diskimage__looks_like_cue(const char *fname)
+{
+	static const char *cue_keywords[] = { "REM", "FILE", "CATALOG",
+	    "CDTEXTFILE", "TITLE", "PERFORMER", "SONGWRITER", "TRACK", NULL };
+	char buf[64];
+	char *p = buf;
+	FILE *f = fopen(fname, "r");
+	size_t n;
+	int i;
+
+	if (f == NULL)
+		return false;
+
+	n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+
+	if (n >= 3 && (unsigned char)p[0] == 0xef &&
+	    (unsigned char)p[1] == 0xbb && (unsigned char)p[2] == 0xbf)
+		p += 3;
+	while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+		p ++;
+
+	for (i = 0; cue_keywords[i] != NULL; i ++) {
+		size_t l = strlen(cue_keywords[i]);
+		if (strncasecmp(p, cue_keywords[i], l) == 0 &&
+		    (p[l] == ' ' || p[l] == '\t'))
+			return true;
+	}
+
+	return false;
+}
+
+
+/*
+ *  diskimage__parse_cue():
+ *
+ *  Parses d->fname as a cue sheet, opens the bin file(s) it refers to, and
+ *  fills in the track table (d->track etc).  Understands at least:
+ *
+ *	FILE "name.bin" BINARY
+ *	TRACK nn AUDIO | MODE1/2048 | MODE1/2352 | MODE2/2336 | MODE2/2352
+ *	INDEX 01 mm:ss:ff
+ *
+ *  Comments (REM), CD-TEXT commands, FLAGS, ISRC etc. are skipped.  Both
+ *  the common single-bin multi-track layout and multiple FILE lines are
+ *  handled; with multiple files, each file's tracks are laid out
+ *  sequentially on the disc.  (PREGAP/POSTGAP commands, i.e. gaps which are
+ *  not stored in any bin file, are ignored with a warning.)
+ *
+ *  Returns true if the cue sheet was parsed successfully.  On failure a
+ *  warning is printed and false is returned, with d completely unmodified,
+ *  so that the caller can fall back to treating the file as a flat image.
+ */
+static bool diskimage__parse_cue(struct diskimage *d)
+{
+	FILE *cue;
+	char line[CUE_MAX_LINE_LEN];
+	char *file_name[CUE_MAX_FILES];
+	FILE *bin_file[CUE_MAX_FILES];
+	char *bin_name[CUE_MAX_FILES];
+	int64_t bin_size[CUE_MAX_FILES];
+	struct cue_parse_track pt[CUE_MAX_TRACKS];
+	struct diskimage_track *tt = NULL;
+	int nr_of_files = 0, nr_of_pt = 0, nr_open = 0;
+	int lineno = 0, i, cur_file;
+	int64_t disc_cursor, file_base_lba, first_data_lba;
+	bool warned_gap = false;
+
+	cue = fopen(d->fname, "r");
+	if (cue == NULL) {
+		debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+		    "%s: could not open cue sheet: %s",
+		    d->fname, strerror(errno));
+		return false;
+	}
+
+	while (fgets(line, sizeof(line), cue) != NULL) {
+		char keyword[64];
+		char *p = line;
+
+		lineno ++;
+
+		if (!diskimage__cue_get_token(&p, keyword, sizeof(keyword)))
+			continue;	/*  blank line  */
+
+		if (strcasecmp(keyword, "REM") == 0 ||
+		    strcasecmp(keyword, "CATALOG") == 0 ||
+		    strcasecmp(keyword, "CDTEXTFILE") == 0 ||
+		    strcasecmp(keyword, "TITLE") == 0 ||
+		    strcasecmp(keyword, "PERFORMER") == 0 ||
+		    strcasecmp(keyword, "SONGWRITER") == 0 ||
+		    strcasecmp(keyword, "FLAGS") == 0 ||
+		    strcasecmp(keyword, "ISRC") == 0)
+			continue;
+
+		if (strcasecmp(keyword, "PREGAP") == 0 ||
+		    strcasecmp(keyword, "POSTGAP") == 0) {
+			if (!warned_gap)
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: PREGAP/"
+				    "POSTGAP ignored (unstored gaps are not"
+				    " supported; track positions may be off"
+				    " for absolutely-addressed filesystems)",
+				    d->fname, lineno);
+			warned_gap = true;
+			continue;
+		}
+
+		if (strcasecmp(keyword, "FILE") == 0) {
+			char fname_token[CUE_MAX_LINE_LEN];
+			char type_token[64];
+
+			if (!diskimage__cue_get_token(&p, fname_token,
+			    sizeof(fname_token)) ||
+			    !diskimage__cue_get_token(&p, type_token,
+			    sizeof(type_token))) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i:"
+				    " malformed FILE command",
+				    d->fname, lineno);
+				goto fail;
+			}
+
+			if (strcasecmp(type_token, "BINARY") != 0) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i:"
+				    " unsupported FILE type \"%s\" (only"
+				    " BINARY is supported)",
+				    d->fname, lineno, type_token);
+				goto fail;
+			}
+
+			if (nr_of_files >= CUE_MAX_FILES) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: too"
+				    " many FILE commands", d->fname, lineno);
+				goto fail;
+			}
+
+			CHECK_ALLOCATION(file_name[nr_of_files] =
+			    strdup(fname_token));
+			nr_of_files ++;
+			continue;
+		}
+
+		if (strcasecmp(keyword, "TRACK") == 0) {
+			char nr_token[64], mode_token[64];
+			struct cue_parse_track *t;
+
+			if (!diskimage__cue_get_token(&p, nr_token,
+			    sizeof(nr_token)) ||
+			    !diskimage__cue_get_token(&p, mode_token,
+			    sizeof(mode_token))) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i:"
+				    " malformed TRACK command",
+				    d->fname, lineno);
+				goto fail;
+			}
+
+			if (nr_of_files == 0) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: TRACK"
+				    " command before any FILE command",
+				    d->fname, lineno);
+				goto fail;
+			}
+
+			if (nr_of_pt >= CUE_MAX_TRACKS) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: too"
+				    " many TRACK commands", d->fname, lineno);
+				goto fail;
+			}
+
+			t = &pt[nr_of_pt];
+			memset(t, 0, sizeof(*t));
+			t->track_nr = atoi(nr_token);
+			t->file_index = nr_of_files - 1;
+			t->index01_frame = -1;
+
+			if (strcasecmp(mode_token, "AUDIO") == 0) {
+				t->is_data = 0;
+				t->sector_size = 2352;
+				t->data_offset = 0;
+			} else if (strcasecmp(mode_token, "MODE1/2048") == 0) {
+				/*  Cooked sectors; user data only:  */
+				t->is_data = 1;
+				t->sector_size = 2048;
+				t->data_offset = 0;
+			} else if (strcasecmp(mode_token, "MODE1/2352") == 0) {
+				/*  Raw sectors; 12 sync + 4 header bytes
+				    before the 2048 user data bytes:  */
+				t->is_data = 1;
+				t->sector_size = 2352;
+				t->data_offset = 16;
+			} else if (strcasecmp(mode_token, "MODE2/2352") == 0) {
+				/*  Raw XA sectors; assume Form 1: 16 header
+				    + 8 subheader bytes before user data:  */
+				t->is_data = 1;
+				t->sector_size = 2352;
+				t->data_offset = 24;
+			} else if (strcasecmp(mode_token, "MODE2/2336") == 0) {
+				/*  XA sectors without sync/header; assume
+				    Form 1: 8 subheader bytes first:  */
+				t->is_data = 1;
+				t->sector_size = 2336;
+				t->data_offset = 8;
+			} else {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i:"
+				    " unsupported TRACK mode \"%s\"",
+				    d->fname, lineno, mode_token);
+				goto fail;
+			}
+
+			nr_of_pt ++;
+			continue;
+		}
+
+		if (strcasecmp(keyword, "INDEX") == 0) {
+			char nr_token[64], msf_token[64];
+			int mm, ss, ff;
+
+			if (!diskimage__cue_get_token(&p, nr_token,
+			    sizeof(nr_token)) ||
+			    !diskimage__cue_get_token(&p, msf_token,
+			    sizeof(msf_token))) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i:"
+				    " malformed INDEX command",
+				    d->fname, lineno);
+				goto fail;
+			}
+
+			if (nr_of_pt == 0) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: INDEX"
+				    " command before any TRACK command",
+				    d->fname, lineno);
+				goto fail;
+			}
+
+			if (sscanf(msf_token, "%d:%d:%d", &mm, &ss, &ff) != 3
+			    || mm < 0 || ss < 0 || ss > 59 || ff < 0 ||
+			    ff > 74) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: line %i: bad"
+				    " INDEX time \"%s\" (expected mm:ss:ff)",
+				    d->fname, lineno, msf_token);
+				goto fail;
+			}
+
+			/*  Only INDEX 01 (the track start) is used; INDEX 00
+			    (pregap start) and higher indices are ignored:  */
+			if (atoi(nr_token) == 1)
+				pt[nr_of_pt - 1].index01_frame =
+				    ((int64_t)mm * 60 + ss) * 75 + ff;
+			continue;
+		}
+
+		/*  Unknown keywords are ignored, for robustness.  */
+	}
+
+	fclose(cue);
+	cue = NULL;
+
+	if (nr_of_pt == 0) {
+		debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+		    "%s: no TRACK commands found", d->fname);
+		goto fail;
+	}
+
+	for (i = 0; i < nr_of_pt; i ++) {
+		if (pt[i].index01_frame < 0) {
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+			    "%s: track %i has no INDEX 01",
+			    d->fname, pt[i].track_nr);
+			goto fail;
+		}
+	}
+
+	/*  Open the bin file(s):  */
+	for (i = 0; i < nr_of_files; i ++) {
+		struct stat st;
+		char *resolved = diskimage__cue_resolve_path(d->fname,
+		    file_name[i]);
+		FILE *bf = fopen(resolved, "r");
+
+		if (bf == NULL) {
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+			    "%s: could not open bin file \"%s\": %s",
+			    d->fname, resolved, strerror(errno));
+			free(resolved);
+			goto fail;
+		}
+
+		if (fstat(fileno(bf), &st) != 0) {
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+			    "%s: could not stat bin file \"%s\": %s",
+			    d->fname, resolved, strerror(errno));
+			fclose(bf);
+			free(resolved);
+			goto fail;
+		}
+
+		bin_file[i] = bf;
+		bin_name[i] = resolved;
+		bin_size[i] = st.st_size;
+		nr_open ++;
+	}
+
+	/*
+	 *  Lay out the tracks on the disc, and compute each track's byte
+	 *  offset within its bin file.  Within one file, INDEX 01 times are
+	 *  frame offsets from the start of that file, so the byte offset
+	 *  advances by (frame delta) * (previous track's sector size).
+	 *  Multiple files are laid out sequentially on the disc.
+	 */
+	CHECK_ALLOCATION(tt = (struct diskimage_track *)
+	    malloc(sizeof(struct diskimage_track) * nr_of_pt));
+
+	disc_cursor = 0;
+	file_base_lba = 0;
+	cur_file = -1;
+
+	for (i = 0; i < nr_of_pt; i ++) {
+		struct cue_parse_track *ct = &pt[i];
+		int64_t byte_off, nr_sectors;
+
+		if (ct->file_index != cur_file) {
+			cur_file = ct->file_index;
+			file_base_lba = disc_cursor;
+			byte_off = ct->index01_frame * ct->sector_size;
+		} else {
+			if (ct->index01_frame < pt[i-1].index01_frame) {
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: track %i:"
+				    " INDEX 01 goes backwards",
+				    d->fname, ct->track_nr);
+				goto fail;
+			}
+			byte_off = tt[i-1].file_byte_offset +
+			    (ct->index01_frame - pt[i-1].index01_frame) *
+			    pt[i-1].sector_size;
+		}
+
+		if (byte_off > bin_size[cur_file]) {
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+			    "%s: track %i starts beyond the end of \"%s\"",
+			    d->fname, ct->track_nr, bin_name[cur_file]);
+			goto fail;
+		}
+
+		if (i+1 < nr_of_pt && pt[i+1].file_index == cur_file) {
+			/*  Frame deltas within one file are sector counts: */
+			nr_sectors = pt[i+1].index01_frame -
+			    ct->index01_frame;
+		} else {
+			int64_t bytes_left = bin_size[cur_file] - byte_off;
+			nr_sectors = bytes_left / ct->sector_size;
+			if (bytes_left % ct->sector_size != 0)
+				debugmsg(SUBSYS_DISK, "cue",
+				    VERBOSITY_WARNING, "%s: \"%s\" does not"
+				    " contain a whole number of %i-byte"
+				    " sectors for track %i; %i trailing"
+				    " bytes ignored", d->fname,
+				    bin_name[cur_file], ct->sector_size,
+				    ct->track_nr,
+				    (int) (bytes_left % ct->sector_size));
+		}
+
+		if (nr_sectors == 0)
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+			    "%s: track %i is empty",
+			    d->fname, ct->track_nr);
+
+		tt[i].track_nr = ct->track_nr;
+		tt[i].is_data = ct->is_data;
+		tt[i].file_index = cur_file;
+		tt[i].file_byte_offset = byte_off;
+		tt[i].start_lba = file_base_lba + ct->index01_frame;
+		tt[i].nr_of_sectors = nr_sectors;
+		tt[i].sector_size = ct->sector_size;
+		tt[i].data_offset = ct->data_offset;
+
+		disc_cursor = tt[i].start_lba + nr_sectors;
+	}
+
+	/*  Logical offset 0 shall map to the first data track:  */
+	first_data_lba = -1;
+	for (i = 0; i < nr_of_pt; i ++) {
+		if (tt[i].is_data) {
+			first_data_lba = tt[i].start_lba;
+			break;
+		}
+	}
+	if (first_data_lba < 0) {
+		debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+		    "%s: no data track found; using track %i as the boot"
+		    " origin", d->fname, tt[0].track_nr);
+		first_data_lba = tt[0].start_lba;
+	}
+
+	if (disc_cursor <= first_data_lba) {
+		debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+		    "%s: no readable sectors at/after the first data track",
+		    d->fname);
+		goto fail;
+	}
+
+	/*  Success. Move everything into the diskimage struct:  */
+	CHECK_ALLOCATION(d->track_file = (FILE **)
+	    malloc(sizeof(FILE *) * nr_of_files));
+	CHECK_ALLOCATION(d->track_file_name = (char **)
+	    malloc(sizeof(char *) * nr_of_files));
+	for (i = 0; i < nr_of_files; i ++) {
+		d->track_file[i] = bin_file[i];
+		d->track_file_name[i] = bin_name[i];
+		free(file_name[i]);
+	}
+	d->nr_of_track_files = nr_of_files;
+	d->track = tt;
+	d->nr_of_tracks = nr_of_pt;
+	d->first_data_track_lba = first_data_lba;
+	d->total_disc_sectors = disc_cursor;
+
+	return true;
+
+fail:
+	if (cue != NULL)
+		fclose(cue);
+	for (i = 0; i < nr_open; i ++) {
+		fclose(bin_file[i]);
+		free(bin_name[i]);
+	}
+	for (i = 0; i < nr_of_files; i ++)
+		free(file_name[i]);
+	free(tt);
+
+	debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
+	    "%s: cue sheet could not be used; treating the file as a flat"
+	    " image", d->fname);
+
+	return false;
+}
+
+
+/*
+ *  diskimage_access__cue():
+ *
+ *  Read handler for multi-track (CUE/BIN) CD-ROM images; only used when
+ *  d->nr_of_tracks > 0.  Logical byte offsets are translated so that
+ *  logical sector 0 is the first sector of the first data track; the
+ *  matching track's bin file is then read at
+ *
+ *	file_byte_offset + (sector - start_lba) * sector_size
+ *	                 + data_offset + intra-sector offset
+ *
+ *  so that raw (2352-byte) data sectors have their 2048 user data bytes
+ *  extracted, and the guest always sees clean 2048-byte logical sectors.
+ *  For audio tracks, the first 2048 bytes of each raw 2352-byte sector are
+ *  returned.  Sectors inside a gap covered by no track (e.g. a pregap
+ *  before the first track's INDEX 01) read as zero-filled.
+ *
+ *  NOTE:  Returns the number of bytes read; reads beyond the end of the
+ *  disc stop short, and the caller zero-fills the rest of the buffer (the
+ *  same behavior as reading beyond the end of a flat image).
+ */
+static size_t diskimage_access__cue(struct diskimage *d, off_t offset,
+	unsigned char *buf, size_t len)
+{
+	size_t total_copied = 0;
+
+	if (offset < 0)
+		return 0;
+
+	while (len != 0) {
+		int64_t sector = d->first_data_track_lba +
+		    offset / CDROM_SECTOR_SIZE;
+		int intra = (int) (offset % CDROM_SECTOR_SIZE);
+		size_t chunk = CDROM_SECTOR_SIZE - intra;
+		struct diskimage_track *t = NULL;
+		int i;
+
+		if (chunk > len)
+			chunk = len;
+
+		if (sector >= d->total_disc_sectors)
+			break;
+
+		for (i = 0; i < d->nr_of_tracks; i ++) {
+			if (sector >= d->track[i].start_lba &&
+			    sector < d->track[i].start_lba +
+			    d->track[i].nr_of_sectors) {
+				t = &d->track[i];
+				break;
+			}
+		}
+
+		if (t == NULL) {
+			/*  Sector belongs to no track:  */
+			memset(buf + total_copied, 0, chunk);
+		} else {
+			FILE *f = d->track_file[t->file_index];
+			off_t file_ofs = t->file_byte_offset +
+			    (sector - t->start_lba) *
+			    (int64_t) t->sector_size + t->data_offset + intra;
+			size_t bytes_read;
+
+			if (my_fseek(f, file_ofs, SEEK_SET) != 0) {
+				fatal("[ diskimage_access__cue(): fseek()"
+				    " failed on disk id %i ]\n", d->id);
+				break;
+			}
+
+			bytes_read = fread(buf + total_copied, 1, chunk, f);
+			if (bytes_read != chunk) {
+				fatal("[ diskimage_access__cue(): short read"
+				    " on disk id %i, track %i, file offset"
+				    " %lli ]\n", d->id, t->track_nr,
+				    (long long) file_ofs);
+				total_copied += bytes_read;
+				break;
+			}
+		}
+
+		total_copied += chunk;
+		offset += chunk;
+		len -= chunk;
+	}
+
+	return total_copied;
+}
+
+
+/**************************************************************************/
 
 
 /*  Helper function.  */
@@ -440,8 +1114,12 @@ static void overlay_set_block_in_use(struct diskimage *d,
 		exit(1);
 	}
 	
-	if (do_fsync)
+	if (do_fsync) {
+		/*  fflush first: fsync only flushes kernel buffers, not
+		    stdio's userspace buffer.  */
+		fflush(d->overlays[overlay_nr].f_bitmap);
 		fsync(fileno(d->overlays[overlay_nr].f_bitmap));
+	}
 }
 
 
@@ -492,8 +1170,10 @@ static size_t fwrite_helper(off_t offset, unsigned char *buf,
 
 		size_t written = fwrite(buf, 1, len, d->f);
 
-		if (do_fsync)
+		if (do_fsync) {
+			fflush(d->f);
 			fsync(fileno(d->f));
+		}
 
 		return written;
 	}
@@ -534,8 +1214,10 @@ static size_t fwrite_helper(off_t offset, unsigned char *buf,
 
 		buf += OVERLAY_BLOCK_SIZE;
 
-		if (do_fsync)
+		if (do_fsync) {
+			fflush(d->overlays[overlay_nr].f_data);
 			fsync(fileno(d->overlays[overlay_nr].f_data));
+		}
 
 		/*  Mark this block in the last overlay as in use:  */
 		overlay_set_block_in_use(d, overlay_nr, curofs);
@@ -648,11 +1330,19 @@ int diskimage__internal_access(struct diskimage *d, int writeflag,
 		lendone = fwrite_helper(offset, buf, len, d);
 	} else {
 		/*
+		 *  Multi-track (CUE/BIN) CD-ROM images use the parsed track
+		 *  table to map logical offsets to the right bin file and
+		 *  sector; all other (flat file) images use the unchanged
+		 *  code paths below.
+		 */
+		/*
 		 *  Special case for CD-ROMs. Actually, this is not needed
 		 *  for .iso images, only for physical CDROMS on some OSes,
 		 *  such as FreeBSD.
 		 */
-		if (d->is_a_cdrom)
+		if (d->nr_of_tracks > 0)
+			lendone = diskimage_access__cue(d, offset, buf, len);
+		else if (d->is_a_cdrom)
 			lendone = diskimage_access__cdrom(d, offset, buf, len);
 		else
 			lendone = fread_helper(offset, buf, len, d);
@@ -984,6 +1674,34 @@ int diskimage_add(struct machine *machine, char *fname)
 		}
 	}
 
+	/*
+	 *  Multi-track CD-ROM image in CUE/BIN format?
+	 *
+	 *  Detected by a ".cue" filename extension, or, for files explicitly
+	 *  marked as CD-ROM using the 'c' prefix, by the file contents
+	 *  beginning with a cue sheet keyword.  On successful parsing, reads
+	 *  are mapped through the parsed track table (see
+	 *  diskimage_access__cue()), and logical offset 0 corresponds to the
+	 *  first data track, so ISO9660 booting uses that track by default.
+	 *  On failure, a warning has already been printed, nr_of_tracks
+	 *  remains 0, and the file is treated as a flat image, as before.
+	 */
+	if (!d->is_a_tape) {
+		bool looks_like_cue = strlen(d->fname) > 4 &&
+		    strcasecmp(d->fname + strlen(d->fname) - 4, ".cue") == 0;
+
+		if (!looks_like_cue && prefix_c)
+			looks_like_cue = diskimage__looks_like_cue(d->fname);
+
+		if (looks_like_cue && diskimage__parse_cue(d)) {
+			d->is_a_cdrom = 1;
+
+			/*  Same logical block size as for other CD-ROM
+			    images; see the comment above:  */
+			d->logical_block_size = 512;
+		}
+	}
+
 	if (prefix_g) {
 		d->chs_override = 1;
 		d->heads = override_heads;
@@ -1308,6 +2026,27 @@ void diskimage_dump_info(struct machine *machine)
 		for (int i=0; i<d->nr_of_overlays; i++) {
 			debug("overlay %i: %s\n",
 			    i, d->overlays[i].overlay_basename);
+		}
+
+		if (d->nr_of_tracks > 0) {
+			debug("%i track(s); first data track at disc sector"
+			    " %lli = logical offset 0:\n",
+			    d->nr_of_tracks,
+			    (long long) d->first_data_track_lba);
+
+			for (int i=0; i<d->nr_of_tracks; i++) {
+				struct diskimage_track *t = &d->track[i];
+				debug("track %2i: %s, disc sectors %lli-%lli,"
+				    " %i bytes/sector, \"%s\" @ 0x%llx\n",
+				    t->track_nr,
+				    t->is_data? "DATA " : "AUDIO",
+				    (long long) t->start_lba,
+				    (long long) (t->start_lba +
+					t->nr_of_sectors - 1),
+				    t->sector_size,
+				    d->track_file_name[t->file_index],
+				    (long long) t->file_byte_offset);
+			}
 		}
 
 		debug_indentation(-2);

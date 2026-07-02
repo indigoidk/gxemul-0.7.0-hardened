@@ -109,7 +109,9 @@ struct cpu *cpu_new(struct memory *mem, struct machine *machine,
 	if (fp == NULL) {
 		debugmsg(SUBSYS_CPU, "", VERBOSITY_ERROR,
 		    "unknown cpu type '%s'", cpu_type_name);
-		free(cpu);
+		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+		munmap((void *)cpu, sizeof(struct cpu));
 		return NULL;
 	}
 
@@ -118,7 +120,9 @@ struct cpu *cpu_new(struct memory *mem, struct machine *machine,
 	if (cpu->memory_rw == NULL) {
 		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
 		    "memory_rw == NULL");
-		free(cpu);
+		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+		munmap((void *)cpu, sizeof(struct cpu));
 		return NULL;
 	}
 
@@ -127,7 +131,9 @@ struct cpu *cpu_new(struct memory *mem, struct machine *machine,
 	if (cpu->byte_order == EMUL_UNDEFINED_ENDIAN) {
 		debugmsg_cpu(cpu, SUBSYS_CPU, "endianness", VERBOSITY_ERROR,
 		    "Internal bug: Endianness not set!");
-		free(cpu);
+		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+		munmap((void *)cpu, sizeof(struct cpu));
 		return NULL;
 	}
 	
@@ -237,6 +243,10 @@ void cpu_functioncall_trace(struct cpu *cpu, uint64_t f)
 	char *symbol;
 	uint64_t offset;
 
+	/*  Let the debugger's "step call" command know that a function
+	    call has just been traced:  */
+	cpu->last_was_function_transition = 1;
+
 	/*  Special hack for M88K userspace:  */
 	if (cpu->cpu_family->arch == ARCH_M88K &&
 	    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE))
@@ -283,6 +293,10 @@ void cpu_functioncall_trace(struct cpu *cpu, uint64_t f)
  */
 void cpu_functioncall_trace_return(struct cpu *cpu)
 {
+	/*  Let the debugger's "step call" command know that a function
+	    return has just been traced:  */
+	cpu->last_was_function_transition = 1;
+
 	cpu->trace_tree_depth --;
 	if (cpu->trace_tree_depth < 0)
 		cpu->trace_tree_depth = 0;

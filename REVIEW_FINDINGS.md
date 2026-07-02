@@ -562,6 +562,47 @@ converting *every* guest-reachable `exit(1)` emulator-wide would be a separate, 
 
 ---
 
+## Thirteenth round (#120–#129): feature additions + SuperH alignment
+Additive `doc/TODO.html` work, each regression-gated: SuperH unaligned-access exceptions (#124) and 64-bit
+`fmov` 8-byte alignment (#129); multi-track CUE/BIN CD images (#127); testmips RAM above 256 MB (#120);
+subsystem-level `debugmsg` breakpoints (#128); and debugger conveniences — step-into-call, `find`/`put`,
+expression and dump/disassemble-range fixes (#122/#125/#126). No memory-safety regressions; full boot sweep
+and the pmax rig clean after each.
+
+## Fourteenth round (#130–#154): full-project multi-model review + remediation
+A whole-codebase (not just recent-changes) adversarial review of the **core-critical subset** — the four CPU
+instruction cores, the shared dynamic-translation engine, the guest→host memory boundary + main loop, the
+file loaders, network, disk, debugger, and the highest-risk devices — explicitly weighing the author's
+warn-loudly / never-silently-mask ethos and the TODO wishlist. **Pipeline:** parallel per-subsystem Claude
+review agents (each told to skip the ~119 already-fixed items and diff against the pristine baseline) → three
+independent cloud models (GLM / DeepSeek-V3 / Qwen3-Coder) cross-checking the top findings against extracted
+code → a Claude adjudicator ruling each finding *confirmed-real / already-handled / false-positive* against
+the actual source. **Outcome: ~23 confirmed fixes (#130–#154), no surviving false positives, every one
+pre-existing in the pristine baseline** (the prior hardening simply had not reached them).
+
+**Headlines — 1 CRITICAL, 2 HIGH:**
+- **#137 (CRITICAL) — MIPS `memset` instruction combiner (`cpus/cpu_mips_instr.c`).** An unsigned
+  `end - start` underflow whose value *also* wrapped the page-boundary clamp → a direct multi-gigabyte
+  `memset` into the host heap, bypassing the `memory_rw` length clamp; guest-triggerable on pmax. Fixed by
+  falling back to the per-instruction path when `end < start` (which then faults safely on unmapped memory).
+- **#145 (HIGH) — PVR framebuffer (`devices/dev_pvr.c`).** A guest→host heap **write**: the refresh copy was
+  bounded to guest display geometry but not to the fixed host framebuffer allocation. Now clamped to both.
+- **#149 (HIGH) — S-record loader (`file/file_srec.c`).** A host-stack **over-read** (~4 KB) into guest RAM
+  from an over-long `count` field (a non-hex byte survives the warn-and-continue path). Clamped to the parsed
+  record length; the parse loop itself proven un-overflowable.
+
+**Medium/low tail:** an unbounded guest-set SCSI transfer size (OOM-exit DoS), a TCP timestamp-option
+over-read echoed to the guest, a PPC Time-Base-Upper that never incremented, several recoverable
+`dev_osiop` `exit(1)`s converted to warn-and-stop, `free()` on an `mmap`-backed allocation, plus format-string,
+odd-length-checksum, NULL-deref, delay-slot-guard, FDIV-by-zero, divide-by-zero, CLI-argument, and
+signed-shift-UB hardening. **Re-confirmed sound (no OOB):** the dyntrans engine, the `memory_rw` boundary,
+and the ELF/ECOFF/Mach-O/a.out loaders. **Deferred** (confirmed, not host-safety, disproportionate fix risk):
+a double-precision op on an odd FP register (stays within the FP register union) and the silent — but already
+host-safe — nested-delay-slot guard. **Verification:** build 0/0; 9-machine multi-arch boot sweep; OpenBSD/pmax
+full-boot + NAT rig; and a positive S-record over-read test (crafted record clamps; valid record loads clean).
+
+---
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

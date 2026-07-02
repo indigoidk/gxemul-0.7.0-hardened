@@ -360,6 +360,15 @@ printf("\n");
 	/*  debug("filelen=%llx fileofs=%llx\n", (long long)filelen,
 	    (long long)fileofs);  */
 
+	/*  #136: filelen comes straight from the (untrusted) image (up to
+	    4 GB) and is used as a malloc size below; cap it to something
+	    sane instead.  */
+	if (filelen < 0 || filelen > LOADER_MAX_TABLE_BYTES) {
+		fatal("bogus iso9660 file length %lli for '%s'; aborting"
+		    " the load\n", (long long)filelen, filename);
+		goto ret;
+	}
+
 	CHECK_ALLOCATION(filebuf = (unsigned char *) malloc(filelen));
 
 	CHECK_ALLOCATION(tmpfname = (char *) malloc(300));

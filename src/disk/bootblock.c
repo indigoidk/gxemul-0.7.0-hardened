@@ -401,6 +401,15 @@ int load_bootblock(struct machine *m, struct cpu *cpu,
 			fatal("OSLoader \"%s\" (or \"%s\") NOT found in SGI voldir\n", osloaderA, osloaderB);
 			return 0;
 		}
+		/* #136: voldir 'bytes' comes from the (untrusted) image and is
+		   used as a malloc size below; cap it BEFORE the 512-round-up
+		   (which itself could overflow int32 near INT32_MAX). */
+		if (found_osloader_bytes > LOADER_MAX_TABLE_BYTES) {
+			fatal("bogus OSLoader \"%s\" size %i bytes in SGI "
+			    "voldir; aborting the load\n",
+			    found_osloader, found_osloader_bytes);
+			return 0;
+		}
 		if (found_osloader_bytes & 511) {
 			found_osloader_bytes |= 511;
 			found_osloader_bytes++;
@@ -421,7 +430,7 @@ int load_bootblock(struct machine *m, struct cpu *cpu,
 		debug_indentation(-1);
 
 		// Read OSLoader binary into emulated RAM. (Typically "sash.")
-		uint64_t diskoffset = found_osloader_block * 512;
+		uint64_t diskoffset = (uint64_t)found_osloader_block * 512;	/* #136: 64-bit multiply; block index can be up to 2^31-1 */
 		debug("Loading voldir entry \"%s\", 0x%x bytes from disk offset 0x%x\n",
 			found_osloader, found_osloader_bytes, diskoffset);
 

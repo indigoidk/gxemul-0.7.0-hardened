@@ -653,7 +653,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 				retlen = (xferp->cmd[7] << 8) + xferp->cmd[8];
 			}
 
-			size = retlen * d->logical_block_size;
+			size = (uint64_t)retlen * d->logical_block_size;	/*  #133: 64-bit multiply; no signed-int overflow  */
 			ofs *= d->logical_block_size;
 		}
 
@@ -731,7 +731,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			retlen = (xferp->cmd[7] << 8) + xferp->cmd[8];
 		}
 
-		size = retlen * d->logical_block_size;
+		size = (uint64_t)retlen * d->logical_block_size;	/*  #133: 64-bit multiply; no signed-int overflow  */
 		ofs *= d->logical_block_size;
 
 		if (xferp->data_out_offset != size) {
@@ -761,7 +761,10 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		/*  TODO: Move to diskimage.cc and make sure that both
 			d->f is fsynced AND any overlays and overlay bitmap
 			files are fsynced too!  */
-		fsync(fileno(d->f));
+		if (d->f != NULL)	/*  #134: d->f can be NULL after a failed (tape) reopen  */
+			fsync(fileno(d->f));
+		else
+			fatal("[ SYNCHRONIZE_CACHE: no open file to sync! ]\n");
 
 		diskimage__return_default_status_and_message(xferp);
 		break;
@@ -808,8 +811,6 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			xferp->data_in[2] = 0x80;
 		}
 		debug(": [2]=0x%02x ", xferp->data_in[2]);
-
-		printf(" XXX(!) \n");
 
 		/*  TODO  */
 		xferp->data_in[7] = retlen - 7;	/*  additional sense length  */
@@ -1098,12 +1099,22 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		    xferp->data_out[1] == 0x05 &&
 		    xferp->data_out[2] == 0x00 &&
 		    xferp->data_out[3] == 0x08) {
-			d->logical_block_size =
+			/*  #133: guest-controlled; only accept a sane block
+			    size, since READ/WRITE transfer sizes are computed
+			    from it.  */
+			int new_block_size =
 			    (xferp->data_out[9] << 16) +
 			    (xferp->data_out[10] << 8) +
 			    xferp->data_out[11];
-			debug("[ setting logical_block_size to %i ]\n",
-			    d->logical_block_size);
+			if (new_block_size < 256 || new_block_size > 8192) {
+				fatal("[ MODE_SELECT: bogus logical_block_size"
+				    " %i ignored, keeping %i ]\n",
+				    new_block_size, d->logical_block_size);
+			} else {
+				d->logical_block_size = new_block_size;
+				debug("[ setting logical_block_size to %i ]\n",
+				    d->logical_block_size);
+			}
 		} else {
 			int j;
 			fatal("[ unknown MODE_SELECT: cmd =");

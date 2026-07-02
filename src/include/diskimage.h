@@ -49,10 +49,31 @@
 /*  512 bytes per overlay block. Don't change this.  */
 #define	OVERLAY_BLOCK_SIZE	512
 
+/*  Set to non-zero (by the -f command line option) to force an fsync
+    on every disk image write:  */
+extern int do_fsync;
+
 struct diskimage_overlay {
 	char		*overlay_basename;
 	FILE		*f_data;
 	FILE		*f_bitmap;
+};
+
+/*
+ *  One track of a multi-track (CUE/BIN) CD-ROM image.  See the comment
+ *  about cue sheets in diskimage.c for details.  All sector numbers are
+ *  "disc LBAs", i.e. absolute 1x-CD frame numbers as used in the cue sheet.
+ */
+struct diskimage_track {
+	int		track_nr;	/*  track number from the cue sheet  */
+	int		is_data;	/*  1 = data track, 0 = audio track  */
+	int		file_index;	/*  index into diskimage::track_file  */
+	int64_t		file_byte_offset;/*  where the track's sectors begin  */
+	int64_t		start_lba;	/*  disc LBA of the track's INDEX 01  */
+	int64_t		nr_of_sectors;
+	int		sector_size;	/*  stored bytes/sector: 2048/2336/2352  */
+	int		data_offset;	/*  offset of the 2048 user data bytes
+					    within each stored sector  */
 };
 
 struct diskimage {
@@ -84,6 +105,19 @@ struct diskimage {
 	int		writable;
 	int		is_a_cdrom;
 	int		is_boot_device;
+
+	/*  Multi-track CD-ROM (CUE/BIN) support.  nr_of_tracks is 0 for all
+	    non-cue images, which use the flat single-file code paths (with
+	    the fields below unused).  For parsed cue sheets, reads are mapped
+	    through the track table, and logical offset 0 corresponds to the
+	    start of the first data track.  */
+	int		nr_of_tracks;
+	struct diskimage_track *track;
+	int		nr_of_track_files;
+	FILE		**track_file;	/*  the opened bin file(s)  */
+	char		**track_file_name;
+	int64_t		first_data_track_lba;	/*  disc LBA at logical offset 0  */
+	int64_t		total_disc_sectors;	/*  disc end LBA (exclusive)  */
 
 	int		is_a_tape;
 	uint64_t	tape_offset;

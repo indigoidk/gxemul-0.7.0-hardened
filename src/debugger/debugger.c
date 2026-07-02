@@ -80,6 +80,17 @@ static int debugger_n_steps_left_before_interaction = 0;
 static volatile bool exit_debugger;
 static volatile bool exit_debugger_to_continue_single_stepping;
 
+/*
+ *  State for the "step call" command: when non-zero, the debugger keeps
+ *  single-stepping without user interaction until one of the cpus in the
+ *  focused machine traces a function call or function return (see
+ *  cpu_functioncall_trace() and cpu_functioncall_trace_return() in
+ *  src/cpus/cpu.c), or until CTRL-C is pressed. show_trace_tree is
+ *  implicitly enabled while stepping, and restored afterwards.
+ */
+static int debugger_stepping_until_function_transition = 0;
+static int debugger_old_show_trace_tree = 0;
+
 
 /*
  *  Private (global) debugger variables:
@@ -697,6 +708,27 @@ static char *debugger_readline(void)
 
 
 /*
+ *  debugger_stop_step_call():
+ *
+ *  Ends "step call" mode: restores the show_trace_tree setting and clears
+ *  the per-cpu function call/return transition flags.
+ */
+static void debugger_stop_step_call(void)
+{
+	int i;
+
+	if (!debugger_stepping_until_function_transition)
+		return;
+
+	debugger_stepping_until_function_transition = 0;
+	debugger_machine->show_trace_tree = debugger_old_show_trace_tree;
+
+	for (i=0; i<debugger_machine->ncpus; i++)
+		debugger_machine->cpus[i]->last_was_function_transition = 0;
+}
+
+
+/*
  *  debugger():
  *
  *  This is a loop, which reads a command from the terminal, and executes it.
@@ -705,6 +737,23 @@ void debugger(void)
 {
 	int i, cmd_len;
 	char *cmd;
+
+	/*  "step call": continue single-stepping, without interaction,
+	    until a function call or return has been traced (or the user
+	    has pressed CTRL-C):  */
+	if (debugger_stepping_until_function_transition) {
+		int transition = ctrl_c != 0;
+
+		for (i=0; i<debugger_machine->ncpus; i++)
+			if (debugger_machine->cpus[i]->
+			    last_was_function_transition)
+				transition = 1;
+
+		if (!transition)
+			return;
+
+		debugger_stop_step_call();
+	}
 
 	if (debugger_n_steps_left_before_interaction > 0) {
 		debugger_n_steps_left_before_interaction --;
@@ -790,6 +839,7 @@ void debugger(void)
 void debugger_reset(void)
 {
 	debugger_n_steps_left_before_interaction = 0;
+	debugger_stop_step_call();
 }
 
 

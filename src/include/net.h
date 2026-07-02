@@ -177,7 +177,7 @@ int net_ether_multicast(const uint8_t *a);
 uint32_t net_ether_crc32_le(const uint8_t *buf, size_t len);
 
 /*  net_misc.c:  */
-void net_debugaddr(void *addr, int type);
+void net_addr_to_string(char *buf, size_t buflen, void *addr, int type);
 void net_generate_unique_mac(struct machine *, unsigned char *macbuf);
 void send_udp(struct in_addr *addrp, int portnr, unsigned char *packet,
 	size_t len);
