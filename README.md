@@ -16,6 +16,37 @@ these are robustness/hardening fixes, not a sandbox‑escape disclosure. The fir
 commit is the unmodified upstream 0.7.0 baseline; the diff against it *is* the
 hardening.
 
+## What's new — OpenBSD 2.2/arc: headless bring‑up + NE2000 networking
+
+Stock **OpenBSD 2.2/arc** (Acer PICA‑61, "Microsoft Jazz", MIPS R4000) now installs and
+runs **fully headless, with networking**, on this fork — previously it hung during init
+and had no usable network card. Five source changes (new `dev_ne2000.c` + four touched
+files), reviewed for correctness against the guest driver and for guest→host safety:
+
+- **R4030 interrupt routing** (`dev_jazz.c`) — the Jazz `EXT_IMASK` register is now routed
+  as CPU‑IP‑level interrupt enables (local‑bus → IP3, ISA bridge → IP4, interval‑timer →
+  IP6) instead of being ANDed against Jazz device line numbers. That bit‑space mismatch
+  left the hardclock and keyboard interrupts undelivered, hanging init in its idle loop.
+- **Headless VGA text console** (`machine_arc.c`) — the PICA's on‑board S3 VGA console is
+  always wired; without X11 it mirrors the 80×25 text screen to stdout and reads the PC
+  keyboard from stdin, so the machine is fully drivable headless. The `-X` path is unchanged.
+- **ARC firmware fixes** (`arcbios.c`) — advertise the video/keyboard console when headless,
+  and emit the kernel boot path (`argv[0]`) in the value‑only, lowercase form OpenBSD's
+  `makebootdev` expects, so the root device auto‑detects instead of dropping to a prompt.
+- **NE2000 network card** (new `dev_ne2000.c`, attached on the ISA bus at port 0x280 / irq
+  9) — a DP8390 / NE2000 (16‑bit) NIC that OpenBSD/arc's stock `ed0` driver drives. It is
+  pure programmed‑I/O against a host‑private 16 KB ring buffer (no bus‑master DMA into guest
+  RAM), and **every on‑card memory access is bounds‑clamped**, so guest‑programmable indices
+  (remote‑DMA pointer, ring page pointers, transmit length) cannot escape the device's own
+  buffer — consistent with this fork's guest→host safety charter. Result: `ed0` probes as
+  NE2000, `ifconfig` brings it up, and it pings the emulated NAT gateway at **0% packet loss.**
+
+The review found and fixed two real defects before merge: an RX ring page‑count off‑by‑one
+(the received‑length reconstruction fails for certain frame sizes without reserving the
+trailing FCS) and a lost‑interrupt race (the ISA bridge's EOI can clear a still‑pending
+level, so the interrupt line is re‑asserted while the level is high rather than only on its
+edge). Both are covered by a packet‑size ping sweep in the regression run.
+
 ## What's new — 2026 review rounds (#120–#154)
 
 Two further rounds since the initial hardening publication:
