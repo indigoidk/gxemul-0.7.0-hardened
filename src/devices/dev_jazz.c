@@ -63,6 +63,21 @@
 #define	PICA_TIMER_IRQ			15
 #define	PICA_TIMER_IRQ_MASK		(1 << PICA_TIMER_IRQ)
 
+/*
+ *  The R4030 EXT_IMASK register (stored in int_enable_mask) enables
+ *  interrupts at the MIPS CPU IP level, NOT per jazz local-bus line.
+ *  OpenBSD/arc builds it as cpu_int_mask = (CPU IM bits >> 10) (see
+ *  arch/arc/arc/trap.c), so: bit 1 = IP3 (all local-bus devices funnel
+ *  to MIPS irq 3), bit 2 = IP4 (ISA bridge, MIPS irq 4), bit 4 = IP6
+ *  (the R4030 interval timer, MIPS irq 6).  int_asserted, in contrast,
+ *  holds the pending jazz LINE numbers (0-14 local-bus, 15 = timer), so
+ *  the two must be tested against the matching CPU-level enable bit
+ *  rather than ANDed directly.
+ */
+#define	R4030_EXT_IP3			0x02	/* local-bus -> MIPS irq 3  */
+#define	R4030_EXT_IP4			0x04	/* ISA bridge -> MIPS irq 4 */
+#define	R4030_EXT_IP6			0x10	/* interval timer -> MIPS irq 6 */
+
 struct jazz_data {
 	struct interrupt mips_irq_3;
 	struct interrupt mips_irq_4;
@@ -71,7 +86,8 @@ struct jazz_data {
 	struct cpu	*cpu;
 
 	/*  Jazz stuff:  */
-	uint32_t	int_enable_mask;	/*  TODO!  */
+	uint32_t	int_enable_mask;	/*  = R4030 EXT_IMASK: CPU-IP-level
+						    enables, see R4030_EXT_IP* above  */
 	uint32_t	int_asserted;
 
 	/*  ISA stuff:  */
@@ -104,7 +120,14 @@ struct jazz_data {
 
 void reassert_isa_interrupts(struct jazz_data *d)
 {
-	if (d->isa_int_asserted & d->isa_int_enable_mask)
+	/*  The R4030 EXT_IMASK IP4 bit is the CPU-IP-level enable for the ISA
+	    interrupt bridge (mips_irq_4).  Gate the ISA funnel on it, the same
+	    way the local-bus (IP3) and interval-timer (IP6) paths are gated in
+	    jazz_interrupt_assert()/deassert().  Without this gate an ISA device
+	    interrupt (e.g. the NE2000/ed0 at irq 9) would be delivered to the
+	    CPU while the guest has masked IP4 via spl(), causing re-entrancy.  */
+	if ((d->isa_int_asserted & d->isa_int_enable_mask)
+	    && (d->int_enable_mask & R4030_EXT_IP4))
 		INTERRUPT_ASSERT(d->mips_irq_4);
 	else
 		INTERRUPT_DEASSERT(d->mips_irq_4);
@@ -116,9 +139,9 @@ void jazz_interrupt_assert(struct interrupt *interrupt)
 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
 	d->int_asserted |= (1 << interrupt->line);
 
-	if (d->int_asserted & d->int_enable_mask & 0x7fff)
+	if ((d->int_asserted & 0x7fff) && (d->int_enable_mask & R4030_EXT_IP3))
 		INTERRUPT_ASSERT(d->mips_irq_3);
-	if (d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK)
+	if ((d->int_asserted & PICA_TIMER_IRQ_MASK) && (d->int_enable_mask & R4030_EXT_IP6))
 		INTERRUPT_ASSERT(d->mips_irq_6);
 }
 void jazz_interrupt_deassert(struct interrupt *interrupt)
@@ -126,9 +149,9 @@ void jazz_interrupt_deassert(struct interrupt *interrupt)
 	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
 	d->int_asserted &= ~(1 << interrupt->line);
 
-	if (!(d->int_asserted & d->int_enable_mask & 0x7fff))
+	if (!((d->int_asserted & 0x7fff) && (d->int_enable_mask & R4030_EXT_IP3)))
 		INTERRUPT_DEASSERT(d->mips_irq_3);
-	if (!(d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK))
+	if (!((d->int_asserted & PICA_TIMER_IRQ_MASK) && (d->int_enable_mask & R4030_EXT_IP6)))
 		INTERRUPT_DEASSERT(d->mips_irq_6);
 }
 void jazz_isa_interrupt_assert(struct interrupt *interrupt)
@@ -236,15 +259,15 @@ DEVICE_TICK(jazz)
 	struct jazz_data *d = (struct jazz_data *) extra;
 
 	/*  Used by NetBSD/arc and OpenBSD/arc:  */
-	if (d->interval_start > 0 && d->interval > 0
-	    && (d->int_enable_mask & PICA_TIMER_IRQ_MASK) ) {
-		d->interval -= 2;
-		if (d->interval <= 0) {
-			/*  debug("[ jazz: interval timer interrupt ]\n");
-			  INTERRUPT_ASSERT(d->jazz_timer_irq);  */
-		}
+	if (d->interval_start > 0) {
+		if (d->interval > 0)
+			d->interval -= 2;
 
-		/*  New timer system:  */
+		/*  New timer system: deliver queued interval-timer ticks as
+		    long as the timer is programmed (interval_start > 0),
+		    independent of the vestigial soft countdown, so steady-state
+		    100 Hz delivery does not depend on the guest re-arming the
+		    countdown via IT_STAT/IT_VALUE reads.  */
 		if (d->pending_timer_interrupts > 0)
 			INTERRUPT_ASSERT(d->jazz_timer_irq);
 	}
@@ -338,8 +361,11 @@ DEVICE_ACCESS(jazz)
 		}
 		break;
 	case R4030_SYS_ISA_VECTOR:
-		/*  ?  */
-printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
+		/*  ISA interrupt vector (lowest pending+enabled ISA line).
+		    Use debug() rather than printf() so it does not corrupt the
+		    headless VGA-text console stream that is mirrored to stdout.  */
+		debug("[ jazz: R4030_SYS_ISA_VECTOR read (writeflag=%i) ]\n",
+		    writeflag);
 		{
 			uint32_t x = d->isa_int_asserted
 			    & d->isa_int_enable_mask;
@@ -357,6 +383,9 @@ printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
 		if (writeflag == MEM_WRITE) {
 			d->interval_start = idata;
 			d->interval = d->interval_start;
+			/*  Clean start: drop any interval-timer backlog that
+			    accrued before the guest programmed the timer.  */
+			d->pending_timer_interrupts = 0;
 		} else
 			odata = d->interval_start;
 		break;
@@ -374,18 +403,18 @@ printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
 		break;
 	case R4030_SYS_EXT_IMASK:
 		if (writeflag == MEM_WRITE) {
-			int old_assert_3 = (0x7fff &
-			    d->int_asserted & d->int_enable_mask);
-			int old_assert_6 = (PICA_TIMER_IRQ_MASK &
-			    d->int_asserted & d->int_enable_mask);
+			int old_assert_3 = ((d->int_asserted & 0x7fff) &&
+			    (d->int_enable_mask & R4030_EXT_IP3));
+			int old_assert_6 = ((d->int_asserted & PICA_TIMER_IRQ_MASK) &&
+			    (d->int_enable_mask & R4030_EXT_IP6));
 			int new_assert_3, new_assert_6;
 
 			d->int_enable_mask = idata;
 
-			new_assert_3 =
-			    d->int_asserted & d->int_enable_mask & 0x7fff;
-			new_assert_6 =
-			    d->int_asserted & d->int_enable_mask & PICA_TIMER_IRQ_MASK;
+			new_assert_3 = ((d->int_asserted & 0x7fff) &&
+			    (d->int_enable_mask & R4030_EXT_IP3));
+			new_assert_6 = ((d->int_asserted & PICA_TIMER_IRQ_MASK) &&
+			    (d->int_enable_mask & R4030_EXT_IP6));
 
 			if (old_assert_3 && !new_assert_3)
 				INTERRUPT_DEASSERT(d->mips_irq_3);
@@ -396,6 +425,12 @@ printf("R4030_SYS_ISA_VECTOR: w=%i\n", writeflag);
 				INTERRUPT_DEASSERT(d->mips_irq_6);
 			else if (!old_assert_6 && new_assert_6)
 				INTERRUPT_ASSERT(d->mips_irq_6);
+
+			/*  Re-evaluate the ISA/IP4 funnel with the new EXT_IMASK:
+			    if this write unmasks IP4 while an ISA line is already
+			    latched+enabled, deliver it now rather than waiting for
+			    the next device edge (which could hang the guest).  */
+			reassert_isa_interrupts(d);
 		} else
 			odata = d->int_enable_mask;
 		break;

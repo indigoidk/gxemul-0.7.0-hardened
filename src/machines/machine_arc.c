@@ -49,7 +49,7 @@ MACHINE_SETUP(arc)
 	struct memory *mem = machine->memory;
 	char tmpstr[1000];
 	char tmpstr2[1000];
-	int i, j;
+	int i, j, fb_console;
 	const char *eaddr_string = "10:20:30:40:50:60";		/*  bogus  */
 	unsigned char macaddr[6];
 	char *machineName;
@@ -127,6 +127,19 @@ MACHINE_SETUP(arc)
 
 		jazz_data = device_add(machine, "jazz addr=0x80000000");
 
+		/*
+		 *  PICA uses its built-in S3 VGA adapter as the console;
+		 *  OpenBSD/arc and NetBSD/arc have no serial console on PICA.
+		 *  Treat the framebuffer as the console unconditionally for
+		 *  PICA so that a headless run still works: when X11 is not in
+		 *  use, dev_vga mirrors the 80x25 text screen to stdout and
+		 *  dev_pckbc reads the PC keyboard from stdin, giving a fully
+		 *  headless text console.  MAGNUM keeps the X11-gated behavior.
+		 */
+		fb_console = machine->x11_md.in_use;
+		if (machine->machine_subtype == MACHINE_ARC_JAZZ_PICA)
+			fb_console = 1;
+
 		/*  Keyboard IRQ is jazz.6, mouse is jazz.7  */
 		snprintf(tmpstr, sizeof(tmpstr),
 		    "%s.cpu[%i].jazz.6", machine->path,
@@ -136,13 +149,13 @@ MACHINE_SETUP(arc)
 		    machine->bootstrap_cpu);
 		i = dev_pckbc_init(machine, mem, 0x80005000ULL,
 		    PCKBC_JAZZ, tmpstr, tmpstr2,
-		    machine->x11_md.in_use, 0);
+		    fb_console, 0);
 
 		/*  Serial controllers at JAZZ irq 8 and 9:  */
 		snprintf(tmpstr, sizeof(tmpstr),
 		    "ns16550 irq=%s.cpu[%i].jazz.8 addr=0x80006000"
 		    " in_use=%i name2=tty0", machine->path,
-		    machine->bootstrap_cpu, machine->x11_md.in_use? 0 : 1);
+		    machine->bootstrap_cpu, fb_console? 0 : 1);
 		j = (size_t)device_add(machine, tmpstr);
 		snprintf(tmpstr, sizeof(tmpstr),
 		    "ns16550 irq=%s.cpu[%i].jazz.9 addr=0x80007000"
@@ -150,14 +163,14 @@ MACHINE_SETUP(arc)
 		    machine->bootstrap_cpu);
 		device_add(machine, tmpstr);
 
-		if (machine->x11_md.in_use)
+		if (fb_console)
 			machine->main_console_handle = i;
 		else
 			machine->main_console_handle = j;
 
 		switch (machine->machine_subtype) {
 		case MACHINE_ARC_JAZZ_PICA:
-			if (machine->x11_md.in_use) {
+			if (fb_console) {
 				dev_vga_init(machine, mem, 0x400a0000ULL,
 				    0x600003c0ULL, machine->machine_name);
 				arcbios_console_init(machine,
@@ -180,6 +193,21 @@ MACHINE_SETUP(arc)
 		/*  SN at JAZZ irq 4  */
 		snprintf(tmpstr, sizeof(tmpstr),
 		    "sn addr=0x80001000 irq=%s.cpu[%i].jazz.4",
+		    machine->path, machine->bootstrap_cpu);
+		device_add(machine, tmpstr);
+
+		/*
+		 *  NE2000 on the ISA bus at port 0x280 / irq 9.  The on-board
+		 *  SONIC (sn0, above) is only a register stub, so OpenBSD/arc and
+		 *  NetBSD/arc get their working network interface from this
+		 *  NE2000, which their GENERIC kernels already probe as:
+		 *	ed0 at isa? port 0x280 iomem 0xd0000 irq 9
+		 *  ISA I/O space is at physical 0x90000000 (e.g. the wdc example
+		 *  at 0x900001f0 = ISA port 0x1f0), so port 0x280 => 0x90000280.
+		 *  ISA irq 9 funnels through the Jazz ISA bridge to MIPS IP4.
+		 */
+		snprintf(tmpstr, sizeof(tmpstr),
+		    "ne2000 addr=0x90000280 irq=%s.cpu[%i].jazz.isa.9",
 		    machine->path, machine->bootstrap_cpu);
 		device_add(machine, tmpstr);
 

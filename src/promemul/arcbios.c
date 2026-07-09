@@ -2098,7 +2098,7 @@ static void arcbios_add_other_components(struct machine *machine,
 			    0xffffffffe2000000ULL, 0x090000000ULL,
 			    0x091000000ULL, 1, 1, 1, 1, 1, 0, 2, 2);
 
-			if (machine->x11_md.in_use) {
+			if (machine->md.arc != NULL && machine->md.arc->vgaconsole) {
 				ali_s3 = arcbios_addchild_manual(cpu,
 				    COMPONENT_CLASS_ControllerClass,
 				    COMPONENT_TYPE_DisplayController,
@@ -2370,7 +2370,16 @@ static char* environment_string(struct machine *machine, struct envstrings* env,
 			snprintf(s, len_with_value + 1, "%s", env->value[found]);
 	}
 
-	if (machine->machine_type == MACHINE_ARC) {
+	/*
+	 *  ARC environment variable NAMES are conventionally upper-cased
+	 *  (e.g. "SYSTEMPARTITION").  Only do this when the name is actually
+	 *  included ("NAME=value"): for value-only requests the first `len`
+	 *  bytes are part of the VALUE (which must keep its real case, e.g.
+	 *  the lowercase "scsi(0)disk(0)..." boot path the kernel parses), and
+	 *  when the variable is unset s[] holds only a terminating '\0', so the
+	 *  loop would read uninitialized bytes.
+	 */
+	if (name_and_value && machine->machine_type == MACHINE_ARC) {
 		for (size_t i = 0; i < len; ++i)
 			s[i] = toupper(s[i]);
 	}
@@ -2556,7 +2565,8 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 		set_env(env, "debug_bigmem", "1");
 	} else {
 		//  General ARC:
-		if (machine->x11_md.in_use) {
+		if (machine->x11_md.in_use ||
+		    (machine->md.arc != NULL && machine->md.arc->vgaconsole)) {
 			set_env(env, "ConsoleIn", "multi()key()keyboard()console()");
 			set_env(env, "ConsoleOut", "multi()video()monitor()console()");
 		} else {
@@ -2571,13 +2581,38 @@ static void arc_environment_setup(struct machine *machine, int is64bit,
 	    or
 	    	OSLoadPartition + OSLoadFilename  (e.g. /unix)  */
 
-	char* s1 = environment_string(machine, env, "SystemPartition", true);
-	char* s2 = environment_string(machine, env, "OSLoader", true);
+	/*
+	 *  argv[0] is the boot path.  OpenBSD/arc's makebootdev() (per the ARC
+	 *  spec) expects the RAW device path, e.g.
+	 *  "scsi(0)disk(0)rdisk(0)partition(1)...", NOT a "NAME=value" string.
+	 *  Passing the name-prefixed form ("SYSTEMPARTITION=scsi(0)...") left
+	 *  the kernel's bootdev empty ("boot device: lookup '' failed") and
+	 *  forced the interactive "root device:" prompt.  Emit value-only for
+	 *  ARC so root is auto-detected; SGI keeps the previous behaviour.
+	 */
+	bool boot_name_and_value = machine->machine_type != MACHINE_ARC;
+	char* s1 = environment_string(machine, env, "SystemPartition", boot_name_and_value);
+	char* s2 = environment_string(machine, env, "OSLoader", boot_name_and_value);
 	size_t s3len = strlen(s1) + strlen(s2) + 100;
 	char* boot_string = malloc(s3len);
+	CHECK_ALLOCATION(boot_string);
 	snprintf(boot_string, s3len, "%s%s%s", s1, machine->machine_type == MACHINE_SGI ? "/" : "\\", s2);
 	free(s2);
 	free(s1);
+
+	/*
+	 *  OpenBSD/arc's makebootdev() matches the boot path case-sensitively
+	 *  against lowercase "scsi("/"multi("/"eisa(", but the ARC component
+	 *  path reaches argv[0] in mixed/upper case (e.g. "SCSI(0)DISK(0)
+	 *  Rdisk(0)partition(1)").  Lowercase argv[0] for ARC so the kernel
+	 *  recognizes the boot device and auto-detects the root partition
+	 *  instead of dropping to the interactive "root device:" prompt.
+	 */
+	if (machine->machine_type == MACHINE_ARC) {
+		for (char* p = boot_string; *p != '\0'; p++)
+			if (*p >= 'A' && *p <= 'Z')
+				*p += 'a' - 'A';
+	}
 
 	// boot_string = env["OSLoadPartition"] + env["OSLoadFilename"];
 
@@ -2751,7 +2786,14 @@ void arcbios_init(struct machine *machine, int is64bit, uint64_t sgi_ram_offset,
 		machine->md.arc->current_seek_offset[i] = 0;
 	}
 
-	if (!machine->x11_md.in_use)
+	/*
+	 *  vgaconsole is set by arcbios_console_init() for machines that use a
+	 *  VGA text adapter as their console.  On PICA this now also happens in
+	 *  headless mode (the text screen is mirrored to stdout by dev_vga), so
+	 *  only force it off for machines that never registered a VGA console
+	 *  (console_vram stays 0 for those).
+	 */
+	if (!machine->x11_md.in_use && machine->md.arc->console_vram == 0)
 		machine->md.arc->vgaconsole = 0;
 
 	if (machine->md.arc->vgaconsole) {
