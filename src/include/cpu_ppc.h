@@ -64,6 +64,9 @@ struct ppc_cpu_type_def {
 #define	PPC_601			2
 #define	PPC_603			4
 #define	PPC_NO_DEC		8	/*  No DEC (decrementer) SPR  */
+/*  #174: (Codex/Fable) capability flag for the extended BATs 4-7 of the
+    MPC7445/7455; see ppc_bat() in memory_ppc.c.  */
+#define	PPC_HIGH_BAT		16
 
 /*
  *  TODO: Most of these just bogus
@@ -78,7 +81,7 @@ struct ppc_cpu_type_def {
 	{ "PPC604",	0x00040304, 32, 0, 15,5,4, 15,5,4, 0,0,0, 0 },	\
 	{ "PPC620",	0x00140000, 64, 0, 15,5,4, 15,5,4, 0,0,0, 0 },	\
 	{ "MPC7400",	0x000c0000, 32, 0, 15,5,2, 15,5,2, 19,5,1, 1 },	\
-	{ "MPC7455",	0x80010000, 32, 0, 15,5,8, 15,5,8, 18,5,8, 1 },	\
+	{ "MPC7455",	0x80010000, 32, PPC_HIGH_BAT, 15,5,8, 15,5,8, 18,5,8, 1 },	\
 	{ "PPC750",	0x00084202, 32, 0, 15,5,2, 15,5,2, 20,5,1, 0 },	\
 	{ "G4e",	0,          32, 0, 15,5,8, 15,5,8, 18,5,8, 1 },	\
 	{ "PPC970",	0x00390000, 64, 0, 16,7,1, 15,7,2, 19,7,1, 1 },	\

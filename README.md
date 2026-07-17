@@ -105,6 +105,28 @@ support (HID0[HIGH_BAT_EN]‑gated). Purely additive — `-e g4`/g3/g5 untouched
 - **"Warn loudly, never silently mask, never crash"** — an emulator‑wide course‑correction so every security clamp is visible (rate‑limited `fatal()`), matching the author's error‑handling style while keeping all bounds
 - **arc/Jazz interrupt mask (#69)** — correctness fix that lets OpenBSD/arc boot
 
+## What's new — cross-model re-review (#182–#187): a framebuffer‑resize heap bug
+
+A whole‑tree adversarial re‑review — **Codex GPT‑5.6‑sol/ultra** plus a four‑reviewer **Claude Fable** panel, each
+finding source‑verified — turned up a **CRITICAL guest→host heap‑overwrite the earlier passes had missed:**
+
+- **CRITICAL — framebuffer resize left a stale device length (#182).** On a framebuffer *shrink* (e.g. an SGI O2
+  guest reprogramming the GBE resolution), `dev_fb_resize()` swapped the framebuffer pointer but left the
+  memory‑mapped device's registered *length* at the old, larger value — so the dyntrans fast‑map path (added in
+  #155) installed a writable host mapping past the end of the new, smaller allocation. Latent in pristine upstream.
+  Fixed by keeping the device length in sync on resize.
+- **HIGH — X11 image allocation overflow (#183).** On X11 builds a guest‑reachable resize could overflow the 32‑bit
+  `int` used to size the XImage buffer (within the existing 16384/axis cap), under‑allocating it and then
+  overrunning it on redraw. Widened to `size_t`.
+- **guest‑reachable `exit(1)` DoS conversions (#184 / #186 / #187)** — framebuffer, MB89352 SCSI, and eight PowerVR
+  MMIO register paths converted to log‑and‑continue, per this fork's #118/#119 ethos.
+
+This round is notable methodologically: the four‑reviewer panel (partitioned by subsystem) independently judged the
+memory‑safety surface clean, but #182 lives in the *seam* between two reviewers' areas — the holistic single‑context
+Codex pass is what caught it. Remaining Codex medium/low findings (a CUE symlink‑follow, a cross‑memblock
+invalidation gap, and others) are triaged in [`OUTSTANDING_BUGS.md`](OUTSTANDING_BUGS.md). Applied to both the `est/`
+and `GXEMUL-SEC/` trees; gcc 15.2.1 at 0 errors / 0 warnings.
+
 ## Provenance — how this was built
 
 Developed with an **agentic, multi‑model workflow.** Each change was drafted by

@@ -95,8 +95,45 @@ int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
 		 *  some way, then simply return without doing the memory
 		 *  access:
 		 */
-		if (!ok)
+		if (!ok) {
+			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+			    the caller's read buffer untouched; zero it so
+			    callers that ignore the return value (e.g. the DEC
+			    PROM string helpers) consume deterministic 0 bytes
+			    instead of uninitialised host stack. Same zero-fill
+			    ethos as the failed-device-read path (#95).  */
+			if (writeflag == MEM_READ)
+				memset(data, 0, len);
 			return MEMORY_ACCESS_FAILED;
+		}
+	}
+
+	/*
+	 *  #250: data write-watchpoint. Checked here, before the device /
+	 *  cache / RAM dispatch (several of which return early — notably the
+	 *  R3000 cached path via memory_cache_R3000()), so every store that
+	 *  reaches this slow path is covered. Watched pages are kept off the
+	 *  fast store table by update_translation_table(), and R3000 cached
+	 *  data already comes through here. Show the store (writer pc, target,
+	 *  width, value) and request entry into the debugger after the current
+	 *  instruction, via the same about_to_enter_single_step mechanism as
+	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+	 */
+	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+	    !single_step && !about_to_enter_single_step &&
+	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+		char valbuf[3 * 16 + 1];
+		size_t vi, vn = len < 16 ? len : 16;
+		valbuf[0] = '\0';
+		for (vi = 0; vi < vn; vi++)
+			snprintf(valbuf + strlen(valbuf),
+			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+			    vi ? " " : "", data[vi]);
+		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+		about_to_enter_single_step = true;
 	}
 
 #if 0
@@ -360,15 +397,26 @@ not just the device in question.
 						    memory_paddr_to_hostaddr(
 						    mem, p & ~offset_mask,
 						    MEM_WRITE);
-					} else {
+					} else if ((paddr | offset_mask) <
+					    mem->devices[i].length) {
 						host_addr = mem->devices[i].
 						    dyntrans_data +
 						    (paddr & ~offset_mask);
+					} else {
+						/*  #155: (Codex/Fable)
+						    don't install dyntrans
+						    fast-path access to a
+						    device page that is not
+						    fully backed; keep it on
+						    the bounded slow path.  */
+						host_addr = NULL;
 					}
 
-					cpu->update_translation_table(cpu,
-					    vaddr & ~offset_mask, host_addr,
-					    wf, orig_paddr & ~offset_mask);
+					if (host_addr != NULL)
+						cpu->update_translation_table(
+						    cpu, vaddr & ~offset_mask,
+						    host_addr, wf,
+						    orig_paddr & ~offset_mask);
 				}
 
 				res = 0;
@@ -551,8 +599,19 @@ not just the device in question.
 		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
 
 	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
-		printf("Write over memblock boundary?\n");
-		exit(1);
+		/*  #165: (Codex/Fable) split accesses that cross a memblock
+		    boundary (e.g. large DMA transfers) at the boundary,
+		    instead of exiting the whole emulator.  */
+		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+
+		if (writeflag == MEM_WRITE)
+			memcpy(memblock + offset, data, len_head);
+		else
+			memcpy(data, memblock + offset, len_head);
+
+		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+		    len - len_head, writeflag, misc_flags);
 	}
 
 	/*  And finally, read or write the data:  */

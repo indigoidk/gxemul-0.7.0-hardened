@@ -198,6 +198,9 @@ void dev_decxmi_init(struct memory *mem, uint64_t baseaddr);
 #define	VFB_REVERSE_START	0x10000
 struct vfb_data {
 	struct memory	*memory;
+	/*  #157: (Codex/Fable) machine handle, for all-CPU dyntrans
+	    invalidation when the framebuffer is resized  */
+	struct machine	*machine;
 	int		vfb_type;
 
 	int		vfb_scaledown;

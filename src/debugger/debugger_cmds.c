@@ -61,7 +61,8 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 	if (args[0] == '\0') {
 		printf("syntax: breakpoint subcmd [args...]\n");
 		printf("Available subcmds (and args) are:\n");
-		printf("  add addr      add a breakpoint for address addr\n");
+		printf("  add addr[, N] add a breakpoint for address addr"
+		    " (N = ignore first N hits)\n");
 		printf("  delete x      delete breakpoint nr x\n");
 		printf("  show          show current breakpoints\n");
 		printf("  subsystem [name error|warning|info|debug|off]\n");
@@ -136,6 +137,11 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 		for (i=x; i<m->breakpoints.n-1; i++) {
 			m->breakpoints.addr[i]   = m->breakpoints.addr[i+1];
 			m->breakpoints.string[i] = m->breakpoints.string[i+1];
+			/*  #248: keep hit accounting in lockstep.  */
+			m->breakpoints.hitcount[i]    =
+			    m->breakpoints.hitcount[i+1];
+			m->breakpoints.ignore_left[i] =
+			    m->breakpoints.ignore_left[i+1];
 		}
 		m->breakpoints.n --;
 
@@ -149,10 +155,25 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 	if (subcmd == SUBCMD_ADD) {
 		uint64_t tmp;
 		size_t breakpoint_buf_len;
+		int64_t ignore = 0;		/*  #248  */
+		char *comma;			/*  #248  */
 
 		if (rest[0] == '\0') {
-			printf("syntax: breakpoint add addr\n");
+			printf("syntax: breakpoint add addr[, ignorecount]\n");
 			return;
+		}
+
+		/*  #248: an optional ", N" tail means "run past the first N
+		    hits before breaking" (skip boot noise / stop on the Nth
+		    iteration). Address expressions never contain a comma.  */
+		comma = strchr(rest, ',');
+		if (comma != NULL) {
+			*comma = '\0';
+			ignore = strtoll(comma + 1, NULL, 0);
+			if (ignore < 0)
+				ignore = 0;
+			while (comma > rest && comma[-1] == ' ')
+				*(--comma) = '\0';
 		}
 
 		i = m->breakpoints.n;
@@ -169,6 +190,13 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 		CHECK_ALLOCATION(m->breakpoints.addr = (uint64_t *) realloc(
 		    m->breakpoints.addr, sizeof(uint64_t) *
 		   (m->breakpoints.n + 1)));
+		/*  #248: keep the hit-accounting arrays in lockstep.  */
+		CHECK_ALLOCATION(m->breakpoints.hitcount = (uint64_t *) realloc(
+		    m->breakpoints.hitcount, sizeof(uint64_t) *
+		   (m->breakpoints.n + 1)));
+		CHECK_ALLOCATION(m->breakpoints.ignore_left = (int64_t *)
+		    realloc(m->breakpoints.ignore_left, sizeof(int64_t) *
+		   (m->breakpoints.n + 1)));
 
 		breakpoint_buf_len = strlen(rest) + 1;
 
@@ -177,6 +205,8 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 		strlcpy(m->breakpoints.string[i], rest,
 		    breakpoint_buf_len);
 		m->breakpoints.addr[i] = tmp;
+		m->breakpoints.hitcount[i] = 0;		/*  #248  */
+		m->breakpoints.ignore_left[i] = ignore;	/*  #248  */
 
 		m->breakpoints.n ++;
 		show_breakpoint(m, i);
@@ -252,6 +282,199 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 		}
 
 		debugmsg_print_breakpoints();
+		return;
+	}
+}
+
+
+/*
+ *  debugger_cmd_watchpoint():
+ *
+ *  #250: manipulate data write-watchpoints. A watchpoint breaks into the
+ *  debugger when the guest writes to a watched (virtual) address range —
+ *  the missing primitive for tracking down who corrupts a heap/GOT/pointer
+ *  cell. Modelled on debugger_cmd_breakpoint().
+ */
+static void debugger_cmd_watchpoint(struct machine *m, char *args)
+{
+	static const char *subcmd_name[] = { "add", "delete", "show" };
+	const int SUBCMD_ADD = 0, SUBCMD_DELETE = 1, SUBCMD_SHOW = 2;
+	const int n_subcmds = 3;
+	int i, res, subcmd = -1, n_matches = 0;
+	size_t wordlen;
+	char *rest;
+
+	while (args[0] == ' ')
+		args ++;
+
+	if (args[0] == '\0') {
+		printf("syntax: watchpoint subcmd [args...]\n");
+		printf("Available subcmds (and args) are:\n");
+		printf("  add addr[, len]  break on a guest write to the len-byte"
+		    " range at addr\n");
+		printf("                   (len defaults to 4)\n");
+		printf("  delete x         delete watchpoint nr x\n");
+		printf("  show             show current watchpoints\n");
+		printf("Subcmds may be abbreviated to any unambiguous prefix.\n");
+		return;
+	}
+
+	wordlen = 0;
+	while (args[wordlen] != '\0' && args[wordlen] != ' ')
+		wordlen ++;
+
+	for (i=0; i<n_subcmds; i++)
+		if (strncasecmp(args, subcmd_name[i], wordlen) == 0) {
+			subcmd = i;
+			n_matches ++;
+		}
+
+	if (n_matches == 0) {
+		printf("Unknown watchpoint subcommand.\n");
+		return;
+	}
+	if (n_matches > 1) {
+		printf("Ambiguous watchpoint subcommand '%.*s'.\n",
+		    (int) wordlen, args);
+		return;
+	}
+
+	rest = args + wordlen;
+	while (rest[0] == ' ')
+		rest ++;
+
+	if (subcmd == SUBCMD_SHOW) {
+		if (m->watchpoints.n == 0)
+			printf("No watchpoints set.\n");
+		for (i=0; i<m->watchpoints.n; i++) {
+			printf("%3i: paddr 0x", i);
+			if (m->cpus[0]->is_32bit)
+				printf("%08" PRIx32,
+				    (uint32_t) m->watchpoints.addr[i]);
+			else
+				printf("%016" PRIx64,
+				    (uint64_t) m->watchpoints.addr[i]);
+			printf(", %" PRIi64 " byte(s)",
+			    (int64_t) m->watchpoints.len[i]);
+			if (m->watchpoints.string[i] != NULL)
+				printf(" (%s)", m->watchpoints.string[i]);
+			printf("\n");
+		}
+		return;
+	}
+
+	if (subcmd == SUBCMD_DELETE) {
+		int x;
+
+		if (rest[0] == '\0') {
+			printf("syntax: watchpoint delete x\n");
+			return;
+		}
+
+		x = atoi(rest);
+
+		if (m->watchpoints.n == 0) {
+			printf("No watchpoints set.\n");
+			return;
+		}
+		if (x < 0 || x >= m->watchpoints.n) {
+			printf("Invalid watchpoint nr %i. Use 'watchpoint "
+			    "show' to see the current watchpoints.\n", x);
+			return;
+		}
+
+		free(m->watchpoints.string[x]);
+
+		for (i=x; i<m->watchpoints.n-1; i++) {
+			m->watchpoints.addr[i]   = m->watchpoints.addr[i+1];
+			m->watchpoints.len[i]    = m->watchpoints.len[i+1];
+			m->watchpoints.string[i] = m->watchpoints.string[i+1];
+		}
+		m->watchpoints.n --;
+
+		/*  Invalidate ALL translations (incl. the host_store data map)
+		    so the fast-store suppression is recomputed on remap.  */
+		for (i=0; i<m->ncpus; i++)
+			if (m->cpus[i]->invalidate_translation_caches != NULL)
+				m->cpus[i]->invalidate_translation_caches(
+				    m->cpus[i], 0, INVALIDATE_ALL);
+		return;
+	}
+
+	if (subcmd == SUBCMD_ADD) {
+		uint64_t addr, paddr, len = 4;
+		size_t buflen;
+		char *comma;
+		struct cpu *c;
+
+		if (rest[0] == '\0') {
+			printf("syntax: watchpoint add addr[, len]\n");
+			return;
+		}
+
+		/*  Optional ", len" tail; expressions never contain a comma.  */
+		comma = strchr(rest, ',');
+		if (comma != NULL) {
+			*comma = '\0';
+			len = strtoull(comma + 1, NULL, 0);
+			if (len < 1)
+				len = 1;
+			while (comma > rest && comma[-1] == ' ')
+				*(--comma) = '\0';
+		}
+
+		res = debugger_parse_expression(m, rest, 0, &addr);
+		if (!res) {
+			printf("Couldn't parse '%s'\n", rest);
+			return;
+		}
+
+		/*
+		 *  #250: watchpoints are matched on PHYSICAL addresses, so a
+		 *  write via any virtual alias (e.g. cached kseg0 vs uncached
+		 *  kseg1 on MIPS) is caught and 32-bit sign-extension is a
+		 *  non-issue. Translate the (virtual) address the user typed to
+		 *  physical; if that fails (e.g. an unmapped mapped-segment
+		 *  address), assume the value was already physical.
+		 */
+		c = m->cpus[m->bootstrap_cpu];
+		paddr = addr;
+		if (c != NULL && c->translate_v2p != NULL &&
+		    !c->translate_v2p(c, addr, &paddr, FLAG_NOEXCEPTIONS)) {
+			printf("(warning: couldn't translate 0x%" PRIx64 " to a "
+			    "physical address; treating it as physical)\n",
+			    (uint64_t) addr);
+			paddr = addr;
+		}
+
+		i = m->watchpoints.n;
+
+		CHECK_ALLOCATION(m->watchpoints.string = (char **) realloc(
+		    m->watchpoints.string, sizeof(char *) * (i + 1)));
+		CHECK_ALLOCATION(m->watchpoints.addr = (uint64_t *) realloc(
+		    m->watchpoints.addr, sizeof(uint64_t) * (i + 1)));
+		CHECK_ALLOCATION(m->watchpoints.len = (uint64_t *) realloc(
+		    m->watchpoints.len, sizeof(uint64_t) * (i + 1)));
+
+		buflen = strlen(rest) + 1;
+		CHECK_ALLOCATION(m->watchpoints.string[i] = (char *)
+		    malloc(buflen));
+		strlcpy(m->watchpoints.string[i], rest, buflen);
+		m->watchpoints.addr[i] = paddr;
+		m->watchpoints.len[i] = len;
+		m->watchpoints.n ++;
+
+		/*  Invalidate ALL translations (incl. the host_store data map)
+		    so the newly-watched page leaves the fast-store map and every
+		    write to it now traps to memory_rw.  */
+		for (i=0; i<m->ncpus; i++)
+			if (m->cpus[i]->invalidate_translation_caches != NULL)
+				m->cpus[i]->invalidate_translation_caches(
+				    m->cpus[i], 0, INVALIDATE_ALL);
+
+		printf("watchpoint %i: paddr 0x%" PRIx64 ", %" PRIi64
+		    " byte(s) (%s)\n", m->watchpoints.n - 1, (uint64_t) paddr,
+		    (int64_t) len, m->watchpoints.string[m->watchpoints.n - 1]);
 		return;
 	}
 }
@@ -1860,6 +2083,9 @@ static struct cmd cmds[] = {
 
 	{ "version", "", 0, debugger_cmd_version,
 		"Print version information" },
+
+	{ "watchpoint", "...", 0, debugger_cmd_watchpoint,
+		"break on guest writes to an address range" },
 
 	/*  Note: NULL handler.  */
 	{ "x = expr", "", 0, NULL, "generic assignment" },

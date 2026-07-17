@@ -1853,7 +1853,13 @@ void mips_cpu_exception(struct cpu *cpu, int exccode, int tlb, uint64_t vaddr,
 		reg[COP0_BADVADDR] = vaddr;
 		if (cpu->is_32bit)
 			reg[COP0_BADVADDR] = (int32_t)reg[COP0_BADVADDR];
+	}
 
+	/*  #211: (Codex/Fable) only TLB exceptions (Mod/TLBL/TLBS) update
+	    Context/EntryHi/XContext; an Address Error (AdEL/AdES) or a VCE
+	    updates only BadVAddr on real R3000/R4000 silicon, so don't pollute
+	    the CP0 fault fingerprint an auditor snapshots.  */
+	if (exccode >= EXCEPTION_MOD && exccode <= EXCEPTION_TLBS) {
 		if (exc_model == EXC3K) {
 			reg[COP0_CONTEXT] &= ~R2K3K_CONTEXT_BADVPN_MASK;
 			reg[COP0_CONTEXT] |= ((vaddr_vpn2 <<
@@ -1940,6 +1946,18 @@ void mips_cpu_exception(struct cpu *cpu, int exccode, int tlb, uint64_t vaddr,
 		cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT;
 	else
 		cpu->delay_slot = NOT_DELAYED;
+
+	/*  #210: (Codex/Fable) emit the exception on the trappable
+	    SUBSYS_EXCEPTION channel (MIPS was the only major CPU not doing so)
+	    with the fault signature now fully set -- lets `break exception`
+	    stop inside the TLB-miss path that the -p PC breakpoint cannot
+	    reach. Cheap: debugmsg early-returns when nothing is armed.  */
+	debugmsg_cpu(cpu, SUBSYS_EXCEPTION, exception_names[exccode],
+	    (exccode == EXCEPTION_ADEL || exccode == EXCEPTION_ADES ||
+	     exccode == EXCEPTION_RI || exccode == EXCEPTION_CPU)?
+	    VERBOSITY_WARNING : VERBOSITY_DEBUG,
+	    "epc=0x%" PRIx64 " vaddr=0x%" PRIx64 " cause=0x%" PRIx64,
+	    (uint64_t)reg[COP0_EPC], (uint64_t)vaddr, (uint64_t)reg[COP0_CAUSE]);
 
 	/*  TODO: This is true for MIPS64, but how about others?  */
 	if (reg[COP0_STATUS] & STATUS_BEV)

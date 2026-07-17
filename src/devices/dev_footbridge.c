@@ -222,8 +222,9 @@ DEVICE_ACCESS(footbridge_reset)
 		idata = memory_readmax64(cpu, data, len);
 		if (idata & 0x40) {
 			debug("[ footbridge_reset: GP16: Halting. ]\n");
+			/*  #220: (Codex/Fable) cpu->running=0 already halts cleanly;
+			    the col-0 exit(1) was a debug hack that kills the host.  */
 			cpu->running = 0;
-exit(1);
 		}
 	}
 
@@ -252,7 +253,9 @@ DEVICE_ACCESS(footbridge_pci)
 	if (bus == 255) {
 		fatal("[ footbridge DEBUG ERROR: bus 255 unlikely,"
 		    " pc (might not be updated) = 0x%08x ]\n", (int)cpu->pc);
-		exit(1);
+		/*  #220: (Codex/Fable) don't exit() the host on a guest PCI
+		    access to the (unlikely) bus 255; treat it as handled.  */
+		return 1;
 	}
 
 	debug("[ footbridge pci: %s bus %i, device %i, function %i, register "

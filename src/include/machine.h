@@ -59,6 +59,31 @@ struct breakpoints {
 	/*  Arrays, with one element for each entry:  */
 	char		**string;
 	uint64_t	*addr;
+
+	/*  #248: per-breakpoint hit accounting. hitcount counts every time
+	    the PC reaches the breakpoint; ignore_left is decremented (instead
+	    of breaking) while > 0, so "breakpoint add addr N" runs past the
+	    first N hits before it starts breaking (skip boot noise / land on
+	    the Nth iteration of a fault or grooming loop).  */
+	uint64_t	*hitcount;
+	int64_t		*ignore_left;
+};
+
+/*
+ *  #250: data write-watchpoints. Break into the debugger when the guest
+ *  writes to a watched PHYSICAL address range (physical so a write via any
+ *  virtual alias — e.g. cached kseg0 vs uncached kseg1 on MIPS — is caught,
+ *  and 32-bit sign-extension of the vaddr is a non-issue). Opt-in; when
+ *  n == 0 the whole mechanism is a single compared-against-zero no-op on
+ *  the hot paths.
+ */
+struct watchpoints {
+	int		n;
+
+	/*  Arrays, one element per entry:  */
+	char		**string;	/*  the (virtual) expression typed  */
+	uint64_t	*addr;		/*  physical start address          */
+	uint64_t	*len;		/*  length in bytes                 */
 };
 
 struct statistics {
@@ -155,6 +180,9 @@ struct machine {
 
 	/*  Breakpoints:  */
 	struct breakpoints breakpoints;
+
+	/*  #250: data write-watchpoints:  */
+	struct watchpoints watchpoints;
 
 	int	halt_on_nonexistant_memaccess;
 	int	instruction_trace;
@@ -380,6 +408,8 @@ struct machine *machine_new(char *name, struct emul *emul, int id);
 void machine_destroy(struct machine *machine);
 int machine_name_to_type(char *stype, char *ssubtype, int *type, int *subtype);
 void machine_add_breakpoint_string(struct machine *machine, char *str);
+int machine_watchpoint_match(struct machine *machine, uint64_t addr,
+	uint64_t len);	/*  #250  */
 void machine_add_tickfunction(struct machine *machine,
 	void (*func)(struct cpu *, void *), void *extra, int clockshift);
 void machine_statistics_init(struct machine *, char *fname);

@@ -258,7 +258,10 @@ DEVICE_ACCESS(ps2)
 			/*  debug("[ ps2: dmac write to D2_CHCR, "
 			    "data 0x%016llx ]\n", (long long) idata);  */
 			if (idata & D_CHCR_STR) {
-				int length = d->dmac_reg[D2_QWC_REG/0x10] * 16;
+				/*  #198: (Codex/Fable) QWC is a 16-bit field; mask it
+				    before *16 so a guest can't force a multi-GB malloc()
+				    ->CHECK_ALLOCATION->exit() via the full register.  */
+				int length = (d->dmac_reg[D2_QWC_REG/0x10] & 0xffff) * 16;
 				uint64_t from_addr = d->dmac_reg[
 				    D2_MADR_REG/0x10];
 				uint64_t to_addr   = d->dmac_reg[

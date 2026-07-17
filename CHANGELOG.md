@@ -211,6 +211,405 @@ guest‑visible behaviour change across ~18 hot handlers).
 regressions); the OpenBSD/pmax rig (full boot + root shell + NAT ping + clean halt); and a positive test
 showing the S‑record loader now clamps the crafted over‑long record while a valid record still loads cleanly.
 
+## Fifteenth round (#155–#177) — Codex 5.6-Sol-Ultra review, Fable-verified (ported from est/)
+A whole-tree security review by **Codex CLI `gpt-5.6-sol`/ultra** (report
+`../harness/codex_sol_ultra_to_fable.md`) raised **21 findings**; **4 parallel Fable verifiers** independently
+confirmed **all 21 REAL, 0 false positives** against the real code + the pristine baseline; **4 Fable fixers**
+applied minimal, ethos-matched corrections, plus **2 same-class companions** (#176/#177). These were developed and
+build-verified in `est/` and **ported here byte-identically** — the full per-correction table is in
+`../est/CHANGELOG.md` (Fifteenth round). `Cdx.N` = finding N in the Codex report.
+
+Headlines — **3 CRITICAL:** #155 (`memory_rw.c`: a partial device page got a full-page dyntrans fast-mapping →
+guest OOB r/w, bypassing #70), #156 (`dev_fb.c`: `dev_fb_resize` int-overflow → undersized `malloc` then OOB
+write), #157 (`dev_fb.c`: fb realloc left stale dyntrans pointers → UAF; fixed centrally in `dev_fb_resize`).
+**2 HIGH:** #158 (CUE `FILE "../.."` → arbitrary host-file read, new authority from #127), #159 (tape READ
+uninitialized-heap disclosure to the guest). Then a MEDIUM tier (#160–#171, #176: PVR OOB read, short-IPv4
+over-read, uncapped SCSI alloc, overlay `abort()`, GD-ROM/PVR guest-`exit(1)`, SCSI-phase NULL deref, cyclic-EBR
+hang, fused-MIPS starvation, a.out/android loader OOM) and a LOW tail (#172/#174/#175/#177: PS2-GIF stack
+over-read, PPC extended-BAT fidelity gate — no host escape, `mmap` vs `MAP_FAILED`, DHCP debug over-read).
+Guest-reachable `exit(1)`/`abort()` were converted to log-and-continue per the #118/#119 ethos. **Deferred:** #173
+(overlay reopen-by-name TOCTOU) — assessed, not a cross-user hole.
+
+**Build & regression (this fork):** `GXEMUL-SEC/src` builds **0 errors / 0 warnings** (`make -j12`, WSL Gentoo /
+gcc 15.2.1, 2026-07-09); the rebuilt binary is installed as the **arc and pmax rigs' `gxsec-gxemul`**; the pmax
+OpenBSD-2.2 rig boots multiuser on it — root login, `le0` NAT ping 0% loss (3/3), clean halt — **no regression**.
+
+## Sixteenth round (#178–#181) — NE2000 / NAT hardening (Codex 5.6-Sol-Ultra NE2000 review, Fable-verified)
+Codex `gpt-5.6-sol`/ultra reviewed the new arc NE2000 NIC (`src/devices/dev_ne2000.c`, 662 lines) plus its NAT and
+Jazz-interrupt surface (report `../harness/codex_ne2000_to_fable.md`): 4 findings, **all confirmed REAL by a Fable
+verifier (0 false positives), 0 CRITICAL** — the device's earlier panel fixes (RX FCS page-count, lost-interrupt
+race, every card-memory access bounds-checked via `ne_mem_readb/writeb`) were re-confirmed sound.
+
+| # | ID | Sev | File — fix |
+|---|-----|-----|------------|
+| **#178** | Cdx-NE.1 | **HIGH** | `net/net.c`+`net/net.h`, `devices/dev_ne2000.c`: unbounded NAT reply queue — a guest whose NE2000 receiver is disabled (`STP` / `RCR.MON`) enqueues replies that never drain → host OOM / `exit(1)`. **Fix:** per-`net` queued-packet counter + `NET_MAX_QUEUED_PACKETS` (256) drop-oldest cap; **and** the NE2000 drains its queue per-tick while stopped/monitor and makes CR `STP` dominate `STA` (rejects TXP while stopped) — closing both trigger variants. |
+| **#179** | Cdx-NE.2 | MED | `devices/dev_jazz.c`: guest-reachable unconditional char-by-char `fatal()` on `R4030_SYS_CONFIG` / undefined offsets (host-output stall / log-fill DoS). **Fix:** ignore / return-0 + a once-only `debugmsg` (#119 idiom). |
+| **#180** | Cdx-NE.3 | LOW | `devices/dev_ne2000.c`: `TPSR=0xff` TX source span aliases (16-bit wrap) into the station PROM, emitting card-private bytes as a valid frame. **Fix:** wide-arithmetic span check (`NE_RAM_START..NE_RAM_END`, `len ≤ NE_MAX_TX`) → set `TXE`, clear `TXP`, do not transmit. |
+| **#181** | Cdx-NE.4 | LOW | `devices/dev_ne2000.c`: remote DMA kept accessing card RAM after `RBCR` reached 0 (a wide data-port access over-wrote past the count). **Fix:** early-out in `ne_dma_readb/writeb` when `rbcr==0` (no access, no `rsar++`; reads 0xff; RDC latch kept). |
+
+Severity note: #180/#181 are hardware-fidelity / hardening — **no host OOB** (the aliased bytes are the
+already-guest-readable PROM; the DMA over-write lands in RAM the guest already owns). **Build & regression:** builds
+**0 errors / 0 warnings** (gcc 15.2.1, 2026-07-10); the rebuilt binary is the rigs' `gxsec-gxemul`; **both rigs
+regression-pass** — pmax `le0` and arc NE2000 `ed0` each ping 0% loss + clean halt (the queue cap does not perturb
+normal networking).
+
+## Seventeenth round (#182–#187) — full-tree Codex 5.6-Sol-Ultra review + Fable panel (fb-resize CRITICAL)
+A whole-tree adversarial re-review: **Codex `gpt-5.6-sol`/ultra** returned 17 findings, cross-checked against a
+4-reviewer **Fable panel**, each finding source-verified by Fable. The panel had independently cleared the
+memory-safety surface, so the headline is a **seam bug the area-partitioned panel missed and the holistic Codex pass
+caught**: on a framebuffer *shrink*, `dev_fb_resize()` swaps the data pointer but leaves the device's registered
+`length` stale, so the #155 dyntrans fast-map gate maps past the new, smaller allocation. This round fixes the
+CRITICAL + the HIGH + the clean part of the guest-`exit(1)` cluster; the render-loop `exit(1)`s and the remaining
+Codex medium/lows are triaged in `OUTSTANDING_BUGS.md`.
+
+| # | ID | Sev | File — fix |
+|---|-----|-----|------------|
+| **#182** | Cdx.1 | **CRITICAL** | `core/memory.c`+`include/memory.h`, `devices/dev_fb.c`: `dev_fb_resize()` called `memory_device_update_data()` (swaps only the dyntrans data pointer) but never shrank the device's registered `length`; the #155 fast-map gate `(paddr|mask) < length` then trusted the OLD length and installed a writable host mapping past the end of the new, smaller framebuffer → guest-controlled OOB host write (e.g. SGI O2/GBE `HCMAP` shrink 1280→640, then touch offset 0x200000). Latent in pristine upstream. **Fix:** new `memory_device_update_length()` keeps `length`/`endaddr`/`mmap_dev_maxaddr` in sync on resize; the existing #157 cache-invalidate then drops stale fast-path pointers. |
+| **#183** | Cdx.2 | **HIGH** | `console/x11.c`: `x11_fb_resize()` computed the XImage allocation `new_xsize*new_ysize*alloc_depth/8` in 32-bit `int`; a guest-reachable resize within #156's 16384/axis cap (e.g. 12000×12000×32bpp) overflows `int`, under-allocates, then `XPutPixel` overruns the buffer → host heap corruption on X11 builds. **Fix:** widen the arithmetic to `size_t`. |
+| **#184** | Cdx.4 | MED | `devices/dev_fb.c`: the `dev_fb_resize()` too-small (`<10`) branch still did `exit(1)`; guest-reachable via GBE `HCMAP`/`VCMAP` written with a tiny/zero dimension → emulator-abort DoS. **Fix:** reject and keep the old framebuffer (return), matching the sibling `>16384` branch (#156 idiom). |
+| **#186** | Cdx.6 | MED | `devices/dev_mb89352.c`: a valid guest `SCMD_XFR` with an unimplemented `PCTL` phase (4/5/6) hit `exit(1)`. **Fix:** log + `break` (#119 idiom). |
+| **#187** | Cdx.7 | MED | `devices/dev_pvr.c`: eight guest-reachable PVR **MMIO register-write** `exit(1)`s (STARTRENDER read; OB_ADDR / TILEBUF_ADDR / TA_OPB_START / TA_OB_START unknown-bit; DIWCONF magic; TA access-len; and the default unhandled-register case). **Fix:** log-and-continue (mask-and-`DEFAULT_WRITE` / `break`), matching #166/#176. |
+
+Provenance/severity: **#182 CRITICAL** overturns the Fable-panel-only "memory-safety clean" read — a genuine
+guest→host heap-overwrite, latent in pristine upstream, exposed by any framebuffer that shrinks (SGI GBE, or
+`fbctrl`). **#183 HIGH** is X11-build-only. #184/#186/#187 are availability (`exit(1)`) DoS, converted per the fork's
+#118/#119 log-and-continue ethos. **Deferred (documented in `OUTSTANDING_BUGS.md`, not silently dropped):** the ASC
+`data_out_len==0` `exit(1)` (#185 — needs a structural transfer-skip), the four PVR render/texture-loop `exit(1)`s
+(dev_pvr.c 868/1084/1245/1419), and Codex's remaining medium/lows (CUE symlink-follow, cross-memblock invalidation,
+overlay silent-fail, Jazz LB_IE / dual-pending IRQ, ARC partition signed-`*512`, TCP-debug over-read, NE2000 TX
+log-flood, `dev_ram` MAP_FAILED). **Build:** incremental **0 errors / 0 warnings** (gcc 15.2.1, `-Wall -Wextra`);
+applied byte-identically to `est/` and `GXEMUL-SEC/`. Rig regression run (pmax/arc boot) pending.
+
+
+## Eighteenth round (#188–#209) — accuracy/debuggability pass: Codex 5.6-Sol-Ultra + Fable panel
+A fresh full-tree adversarial re-review (**Codex `gpt-5.6-sol`/ultra**, 17 findings, cross-checked by a
+4-reviewer **Fable panel** + this session's per-site source verification) against a narrowed brief: *not* new
+hardening for its own sake, but changes that make the emulator behave more like real silicon **and** stay
+debuggable, in the fork's `exit()`→graceful ethos. Every correction converts a guest-reachable
+`exit()`/`abort()`/host-crash on guest-controlled state into a hardware-plausible fault or a bound, or fixes a
+guest→host OOB. All 21 tags (#188–#208) + the #209 add/sub cleanup verified present+matched in **both** `est/` and `GXEMUL-SEC/`; the shared code is
+byte-identical, and the `arcbios.c`/`diskimage.c` edits land in the two trees' shared regions (the SEC
+ARC-enablement layer is untouched). **Build: incremental 0 errors / 0 warnings** (gcc 15.2.1, `-Wall -Wextra`).
+Cross-model convergence: the **ARC PROM `Read`/`Write` unbounded-`malloc` DoS (#192)** was found independently by
+Codex (F12), the Fable SEC-surface reviewer, and this session; the **R4000 PageMask host-exit** came from both
+sides — Codex's write-path root cause (#188) and Fable's translate-path (#189).
+
+### MIPS / CP0 + PROM (the pmax + arc audit path)
+| # | Sev | File — fix |
+|---|-----|------------|
+| **#188** | MED | `cpus/cpu_mips_coproc.c`: an invalid, non-contiguous `COP0_PAGEMASK` was only *warned* on write, then stored; `tlbwi` copied it into the TLB and the walker's mask `switch` hit `default: exit(1)` — guest-reachable host DoS. **Fix:** canonicalize the invalid mask to the minimum page size on write (real R4000 latches only defined mask bits). |
+| **#189** | MED | `cpus/memory_mips_v2p.c`: the same walker `default: exit(1)` on a non-standard mask (also reachable on R4100, which #188 does not canonicalize). **Fix:** `goto exception` → a normal TLB refill so the guest faults and the emulator stays alive/debuggable. |
+| **#190** | MED | `cpus/cpu_mips_coproc.c`: `TLBWR` computed `random() % (nr_of_tlbs - COP0_WIRED)`; guest-writable `WIRED >= nr_of_tlbs` → divide-by-zero (host SIGFPE). **Fix:** pin `Random` at the top entry like hardware when `WIRED` is out of range. |
+| **#191** | MED | `promemul/dec_prom.c`: DEC PROM `read()`/`bootread()` did `malloc(A2)` with a guest length checked only `> 0` → up to 2 GB → `CHECK_ALLOCATION`→`exit()`. **Fix:** cap at 64 MB. |
+| **#192** | MED | `promemul/arcbios.c`: ARC PROM `Read`/`Write` `malloc(A2)` unbounded (same class) → `exit()`; and `Write` unconditionally set `V0=0` at the end, clobbering the disk-path `ARCBIOS_EIO` (a failed disk write reported to the guest as success). **Fix:** cap `A2` at 64 MB + graceful `EIO`; move the success store into the STDOUT branch only. |
+
+### Other-arch fidelity (host-crash → guest fault)
+| # | Sev | File — fix |
+|---|-----|------------|
+| **#193** | MED | `cpus/memory_arm.c`: an L2 page-table page outside mapped RAM did a debug `printf` + `exit(1)`. **Fix:** `fs = FAULT_TRANS_P; goto exception_return;` (the file's own translation-fault idiom). |
+| **#194** | MED | `cpus/memory_alpha.c`: a failed 3-level page-table walk did `abort(); exit(1);`. **Fix:** `return 0` (no-translation) so the caller faults; keeps the fatal() for debugging. (Reachability low — Alpha MMU is incomplete scaffolding.) |
+| **#195** | MED | `cpus/cpu_m88k_instr.c`: signed `div` handled divide-by-zero but not `INT_MIN / -1` → C UB / host SIGFPE. **Fix:** special-case it to the wrapped 2's-complement result `0x80000000`. |
+| **#196** | MED | `devices/dev_sgi_gbe.c`: `get_rgb()` `exit(1)` on a guest-controlled unimplemented WID color mode (per-pixel, so also a fatal()-flood risk). **Fix:** render black + `break`. |
+
+### Guest→host DoS (unbounded alloc / counter)
+| # | Sev | File — fix |
+|---|-----|------------|
+| **#197** | MED | `devices/dev_asc.c`: reading an empty FIFO drove `n_bytes_in_fifo` below zero (and writes past full grew it); a later non-DMA selection turned the negative count into a huge `size_t` alloc → `exit()`. **Fix:** guard the read-underflow and write-overflow. |
+| **#198** | MED | `devices/dev_ps2_stuff.c`: the DMAC transfer length used the full guest-written QWC register, not its 16-bit field → multi-GB `malloc`. **Fix:** mask `& 0xffff` before `*16`. |
+| **#199** | MED | `devices/dev_le.c`: multi-fragment LANCE TX `realloc`-appended without an aggregate cap; a guest rearming a non-ENP descriptor grew host memory without bound. **Fix:** cap the aggregate at 64 KB. |
+| **#200** | MED | `devices/dev_pvr.c`: every completed TA command appended 64 bytes and doubled the buffer indefinitely if the guest withheld render/reset. **Fix:** cap queued commands at `VRAM_SIZE/64`. |
+| **#201** | MED | `promemul/of.c`: OpenFirmware used guest `nargs` as a signed loop bound (values above `OF_N_MAX_ARGS` only warned, then looped) → ~2^31 iterations / log flood. **Fix:** clamp `nargs` to `OF_N_MAX_ARGS`. |
+
+### Guest→host OOB (memory-safety; Codex HIGH)
+| # | Sev | File — fix |
+|---|-----|------------|
+| **#202** | HIGH | `devices/dev_sii.c`: the SII MMIO window is larger than the `SIIRegs` block that `d->regs` (a `uint16_t*`) points into; `regnr = relative_addr/2` then indexed `d->regs[]` out of range → guest OOB host read (and OOB write in the register switch). **Fix:** reject `relative_addr >= sizeof(d->siiregs)`. |
+| **#203** | HIGH | `devices/dev_sgi_mec.c`: the per-fragment "packet too large" `break` stopped only the inner copy; the outer DMA-fragment loop kept writing past `cur_tx_packet[MAX_TX_PACKET_LEN]` → host heap overflow. **Fix:** also break the outer loop when full. |
+| **#204** | HIGH | `disk/diskimage.c`: `diskimage_access__cdrom()` accepted a negative `offset` (a guest seeks an opened flat CD/ISO handle to 0xffffffff); `offset/SECTOR*SECTOR` truncates to 0 → `buf_ofs` negative → `cdrom_buf[-1]` OOB stack read. **Fix:** reject `offset < 0`. |
+| **#205** | HIGH | `disk/diskimage_scsicmd.c`: MODE SELECT read fixed offsets up to byte 11 after checking only that some DATA OUT occurred; a controller supplying a shorter buffer → heap over-read. **Fix:** require `data_out != NULL && data_out_len >= 12`. |
+| **#206** | MED | `disk/diskimage.c`: a legal zero-length access (SCSI WRITE(10) transfer length 0) arrives with `buf==NULL`, which the `buf==NULL` check `exit()`ed before the `len==0` no-op. **Fix:** the `len==0` no-op first. |
+| **#207** | HIGH | `devices/dev_px.c`: the PX/PXG `copyspans` re-read `memmove(dma_buf, &sram[sys_addr&0x1ffff], dma_len)` with a guest-forced `dma_len` up to 3080 and offset up to 0x1f800 → ~1 KB read past the 128 KiB `sram[]` into adjacent host heap. **Fix:** clamp the source span to the SRAM size. (Fable-found; the initial 224-byte read is provably in-bounds, left as-is.) |
+| **#208** | LOW | `devices/dev_ram.c`: `mmap()` failure was tested `== NULL` but returns `MAP_FAILED`; on failure it skipped the malloc fallback and registered RAM backed by `(void*)-1` (the #175 straggler). **Fix:** test `== MAP_FAILED`. |
+
+**#209 (`cpu_mips_instr.c`, MIPS integer add/sub — audit follow-up):** the MIPS Integer-Overflow *trap* turned out
+to be **already correctly implemented** — `add`/`addi`/`sub`/`dadd`/`daddi`/`dsub` raise `EXCEPTION_OV` on overflow
+(and OpenBSD boots with it). The audit's UBSan hit was the overflow-*detection* code itself computing `rs+rt` in
+signed types (UB on the very overflow it detects); #209 recomputes the sum (and the `sub`/`dsub` negation) in
+unsigned at all six sites — bit-identical 2's-complement result, trap behavior unchanged, UBSan signature cleared.
+Verified: build 0/0 + OpenBSD 2.2/pmax boots to multiuser.
+
+**Not changed (assessed, intentionally left):** the `dev_px` initial 224-byte SRAM read (line 155) is provably
+in-bounds. Codex's remaining items and prior deferrals stay in `OUTSTANDING_BUGS.md`.
+
+**Provenance:** Codex `gpt-5.6-sol`/ultra (holistic, 17 findings) + a 4-reviewer Fable panel (seam /
+framebuffer-DMA / storage-net-loaders / SEC-ARC-surface) + this session's per-site source verification and
+dual-tree 0/0 build. Corroborated by the audit's ASan cross-check (emulator memory-clean during the #54/#82
+fires). **pmax boot regression PASS** (OpenBSD 2.2/pmax to multiuser on the corrected binary; arc boot pending — needs a SEC rebuild).
+
+
+## Nineteenth round (#210–#223) — MIPS exception fidelity + debuggability + host-halt sweep (Codex 5.6-Sol-Ultra + Fable panel)
+A follow-up on the same accuracy/debuggability brief: a fresh Codex `gpt-5.6-sol`/ultra pass + a 2-agent Fable
+panel (remaining guest-reachable host-halts; MIPS exception fidelity). **14 corrections (#210–#223)** — mostly
+converting a guest-reachable `exit()`/`abort()` on guest-controlled state into a hardware-plausible fault or
+graceful return, plus one debuggability hook and one CP0-fingerprint fidelity fix. Applied to both trees (all
+tags matched); **build 0/0** (gcc 15.2.1); **OpenBSD 2.2/pmax boots to multiuser** with the MIPS exception-path
+changes live.
+
+### MIPS — the audit path (★)
+| # | File — change |
+|---|---------------|
+| **#210** | `cpus/cpu_mips.c`: emit every MIPS exception on the trappable `SUBSYS_EXCEPTION` channel (MIPS was the only major CPU not doing so) with the fault signature fully set. Lets `break exception` stop inside the TLB-miss path that the `-p` PC breakpoint structurally cannot reach — the key hook for tracing a controlled-PC-into-unmapped chain. Cheap when no breakpoint/verbosity is armed. |
+| **#211** | `cpus/cpu_mips.c`: an Address Error (AdEL/AdES) or VCE now updates **only BadVAddr**, not Context/EntryHi/XContext — real R3000/R4000 write those only on TLB Mod/Refill/Invalid. Stops the emulator polluting the CP0 fault fingerprint on the misalignment / kernel-touch faults an exploit hits. |
+| **#212** | `cpus/cpu_mips_instr.c`: unaligned `LL/LLD` raise AdEL and `SC/SCD` raise AdES (were `exit(1)`), matching silicon and keeping the emulator alive/debuggable on a guest RMW. |
+| **#213** | `cpus/cpu_mips_coproc.c`: `mfc0`/`mtc0` to an unimplemented CONFIG select (Config2..7) returns a defined 0 / ignores the write (was `exit(1)`) — any guest can reach it by probing. |
+| **#214** | `cpus/cpu_mips_coproc.c`: `mtc0 ENTRYLO1` on an R3000 (reg 3 undefined) warns and ignores instead of `exit(1)`. |
+
+### Other-arch host-crash → guest fault
+| # | File — change |
+|---|---------------|
+| **#215** | `cpus/cpu_alpha_instr_loadstore.c`: the generic load/store path `return`s on a failed `memory_rw()` (the translator already signalled the fault per #194) instead of `exit(1)` (was mislabeled "store failed"). |
+| **#216** | `cpus/cpu_ppc_instr.c`: `lwarx`/`stwcx.` to a faulting address let the raised DSI proceed instead of `exit(1)`. |
+| **#217** | `cpus/cpu_sh.c`: a guest reserved SuperH instruction takes the illegal-instruction exception (general vector already set above) instead of `exit(1)`. |
+
+### Guest-reachable device / PROM host-halts (the round-18 pattern, more sites)
+| # | File — change |
+|---|---------------|
+| **#218** | `promemul/of.c`: OF `getprop`/`read`/`write` copy to a **guest** buffer pointer via `memory_rw(NO_EXCEPTIONS)`; a bad pointer now stops the copy / returns instead of `exit(1)`. |
+| **#219** | `promemul/of.c`: an unknown guest OF service keeps the clean `cpu->running=0` halt but drops the `exit(1)` that defeated the debugger. |
+| **#220** | `devices/dev_footbridge.c`: the reset port's col-0 `exit(1)` debug hack removed (`cpu->running=0` already halts); a PCI-config access decoding to bus 255 reads as no-device instead of `exit(1)`. |
+| **#221** | `devices/dev_mp.c`: a guest `STARTUPCPU` on an arch without SP-init here starts the CPU anyway (warn) instead of `exit(1)`. |
+| **#222** | `devices/dev_kn02ba.c`: a guest MMIO access to an unimplemented DECstation 5000/1xx MER/MSR offset warns and ignores instead of `exit(1)`. |
+| **#223** | `devices/dev_8253.c`: five guest-writable i8253-timer paths (DMA-refresh TODO, latch-mode msb/lsb, BCD-mode, unimplemented offset) warn and continue instead of `exit(1)`. |
+
+**Fidelity baseline confirmed (not changed):** GXemul already raises AdEL/AdES (not TLBL) for unaligned *mapped*
+targets with correct ExcCode/CE/BadVAddr/EPC/Cause.BD — the general "exception-ordering" caveat is not a gap.
+Two document-only items: the R3000 BEV=1 bootstrap-vector base (`0xbfc00200` vs `0xbfc00100`; off the exploit
+window — OpenBSD clears BEV early) and `mtc0`-writable `BADVADDR` (Irix compat). The broad tail of remaining
+`fatal();exit(1)` in other device handlers (adb, clmpcc, igsfb, lca, m8820x, pcc2, …) is recorded in
+`OUTSTANDING_BUGS.md` for a future sweep.
+
+**Provenance:** Codex `gpt-5.6-sol`/ultra + a 2-agent Fable panel (host-halt sweep; MIPS exception fidelity) +
+per-site verification. Build **0/0** both trees; all #210–#223 tags matched; **pmax boot regression PASS**.
+Both **pmax (R3000) and arc (R4000) boot to multiuser** on the corrected binaries.
+
+
+## Twentieth round (#224–#226) — MIPS FPU memory-safety (Codex 5.6-Sol-Ultra)
+Three **HIGH guest→host memory-safety** bugs on the MIPS FPU path, from the Codex `gpt-5.6-sol`/ultra round-19
+pass, per-site verified. Applied to both trees; **build 0/0**; **pmax boots to multiuser**.
+- **#224** `cpus/cpu_mips_instr.c` (`ldc1`/`sdc1`): in FR=0, `ft=31` indexed `reg[32]` — one past the 32-entry
+  FPR file, into the adjacent `mips_coproc::tlbs` pointer (LDC1 corrupts it → wild pointer; SDC1 discloses it).
+  Odd `ft` is architecturally undefined → now raises RI before the OOB access.
+- **#225** `cpus/cpu_mips_instr.c` (`ldc1`): the 64-bit load target `fpr` was uninitialized; a **faulting** LDC1
+  then copied host-stack garbage into the guest FPR (info leak). Now seeded from the current register so a fault
+  leaves the FPR unchanged.
+- **#226** `cpus/cpu_mips_coproc.c`: the paired double/long-store **sign-extension** used raw `cp->reg[fd+1]`
+  (the write just above already masks `(fd+1)&31`), so `fd=31` sign-extended `reg[32]` — OOB into `tlbs`. Now
+  masked at both `FPU_OP` store and `FPU_OP_MOV`.
+
+**Remaining Codex round-19 backlog (22 items) is recorded in `OUTSTANDING_BUGS.md`** for future rounds —
+notably the fault-signature fidelity trio (misaligned `JR/JALR` silent round-down → should AdEL; `SWL/SWR`
+exception mislabel; `mtc0`-writable `BadVAddr`) and more guest-reachable host-halts (`goto bad`, `malloc(0)`,
+PPC/Thumb/m88k slow-path).
+
+
+## Twenty-first round (#227–#229) — fault-signature fidelity trio (multi-model panel)
+The three fault-signature-fidelity items promoted from the Codex round-19 backlog, taken through a **multi-model
+advisory panel**: Codex `gpt-5.6-sol`/ultra + agy `Gemini` + Fable (Ollama cloud was unavailable on this host).
+**Panel verdict: unanimous FIX-AS-PROPOSED on all three (3-0)**, with the Fable/Codex implementation corrections
+baked in. Applied to both trees; **build 0/0**; **pmax + arc boot**. These directly protect the integrity of a
+controlled-PC / BADVADDR finding.
+- **#227** `cpus/cpu_mips_instr_unaligned.c` (`SWL/SWR` store): the store path pre-reads with `MEM_READ` and then
+  *unconditionally* rewrote the fault as `TLBS`; an AdEL (user store to a kernel/misaligned address) or a DBE was
+  mislabeled. **Fix:** map only load-side codes to their store counterparts (`TLBL→TLBS`, `AdEL→AdES`), leaving
+  the rest (DBE is a shared load/store code; Mod can't arise from a read). Uses the full CP0 accessor (no local
+  `reg` alias exists there — Fable correction).
+- **#228** `cpus/cpu_mips_instr.c` (6 register-jump handlers): a **misaligned `jr`/`jalr` target** was silently
+  rounded down to the IC index instead of raising instruction-fetch AdEL — so a controlled-PC exploit that landed
+  an odd target mis-signaled (executed aligned-down rather than faulting). **Fix:** in each of
+  `jr`/`jr_ra`/`jr_ra_addiu`/`jr_ra_trace`/`jalr`/`jalr_trace`, after setting `pc` and clearing the delay state,
+  `if (pc & 3)` raise AdEL (BadVAddr=EPC=rs, BD=0) and return — *before* the trace hooks; `jr_ra_addiu` counts its
+  fused delay-slot addiu first (Codex correction). The panel rejected hoisting into the hotter
+  `quick_pc_to_pointers` (~40 already-aligned call sites) and a `return`-hiding macro (foreign pattern).
+- **#229** `cpus/cpu_mips_coproc.c` (`mtc0 $8`): `BadVAddr` was guest-**writable** (an old Irix-compat note), so a
+  payload could erase the fault address an auditor snapshots. **Fix:** `readonly=1` (ignore guest writes) —
+  read-only on R3000/R4000. The panel resolved the prior reviewer disagreement **3-0 to FIX**, and Codex
+  empirically confirmed OpenBSD 2.2 pmax/arc only `mfc0`-reads CP0 $8 (no `mtc0 $8` in its kernel source), so no
+  regression; the emulator sets BadVAddr directly, not via this write path.
+
+**Provenance:** multi-model advisory panel (Codex `gpt-5.6-sol` + agy Gemini + Fable), each verifying against the
+source; unanimous 3-0. Build **0/0** both trees; **pmax + arc boot regression PASS**. The remaining Codex
+round-19 backlog (~19 items) stays in `OUTSTANDING_BUGS.md` for #230+.
+
+
+## Twenty-second round (#230–#233) — MIPS fault-signature fidelity (full 4-model panel)
+Four more fault-signature-fidelity items from the Codex round-19 backlog, taken through a **full 4-model advisory
+panel**: Codex `gpt-5.6-sol`/ultra + agy `Gemini` + **Ollama** (`gpt-oss:20b`; the `qwen3-coder:480b-cloud` model
+returned HTTP 410 Gone) + Fable. Applied to both trees; **build 0/0**; **pmax + arc boot**.
+- **#230** `cpus/cpu_mips_instr.c` `X(rfe)`: R3000 RFE must pop the KU/IE stack (`bits[3:0]<-[5:2]`) and leave
+  `bits[5:4]` (KUo/IEo) **unchanged**; the old `~0x3f` cleared `[5:4]`, losing the outer privilege/interrupt level
+  across nested exceptions. **Fix:** `~0x0f`. (Panel 4-0 CONFIRM.)
+- **#231** `cpus/cpu_mips_instr.c` (ERET decode): ERET is MIPS-III+; on an R3000 (EXC3K) it is a reserved encoding
+  that must raise RI. **Fix:** decode-gate — `ic->f = (exc_model==EXC3K)? instr(reserved) : instr(eret)` (mirrors
+  the WAIT/STANDBY→reserved pattern; `X(reserved)` does the PC-sync). (4-0 FIX; decode-gate 3-1 over a runtime
+  guard.) arc (R4000) keeps ERET.
+- **#232** `cpus/cpu_mips_instr.c` `X(j)`/`X(jal)`/`X(jal_trace)`: the J/JAL target region used the *branch's*
+  page-base region and `~0x03ffffff` (which kept `[27:26]`, double-counting the 28-bit target). MIPS defines the
+  region as the **delay-slot PC's** top nibble `(branch+4)[31:28]`. **Fix:** `(page_base + arg[1] - 4)`
+  reconstructs branch+4 (`arg[1]=(addr&0xffc)+8`), masked `~0x0fffffff` (correct on 64-bit too). Live for kseg1
+  device code (`0xBC…`); the boot escapes it only because kernel text sits at `0x800xxxxx`. (4-0 FIX.)
+- **#233** `cpus/cpu_mips_instr.c` `X(mtc0)`/`X(dmtc0)`: the CP0 **write** handlers omitted
+  `cop0_availability_check`, so a user-mode `mtc0`/`dmtc0` with Status.CU0 clear silently mutated CP0 state
+  instead of raising CpU (a privilege / fault-signature divergence). **Fix:** add the check (writes only). The
+  panel **narrowed** this from the broader Codex/Ollama proposal — the mfc0 read fast-paths and the EXC3K
+  user-from-PC heuristic are **deferred** (that heuristic is load-bearing; an in-code comment notes forcing KUc
+  "crashes Linux").
+
+**Deferred by panel ruling (in `OUTSTANDING_BUGS.md`):** the **privilege-transition fast-map bleed** (Codex #17)
+— agy+Fable ruled DEFER (invalidating the fast map on every R3000 RFE/Status-write would hang the boot; the only
+correct fix is a structural fast-map privilege-tag refactor the ethos forbids); Codex+Ollama conceded HIGH risk.
+Plus the read-side / `$zero`-fold / EXC3K-KUc remainder of #233.
+
+**Provenance:** full 4-model advisory panel (Codex `gpt-5.6-sol` + agy Gemini + Ollama gpt-oss:20b + Fable),
+ruling on 3 fixes + 2 fix-or-defer items; Fable and Codex verified against source. Build **0/0** both trees;
+**pmax + arc boot regression PASS**.
+
+
+## Twenty-third round (#234–#244) — guest-reachable host-halt tail → hardware-plausible faults (Fable + agy panel)
+The remaining guest-reachable **host-halt** tail from the Codex round-19 backlog (~13 candidates — each a place a
+guest can drive GXemul into `exit(1)` / `cpu->running = 0` on guest-controlled state). A **Fable (source-verified)
++ agy** panel triaged them: **10 DO-NOW** — all on the MIPS / pmax(R3000) / arc(R4000) audit path — were converted
+to the hardware-plausible fault or graceful error-return; **3 off-path** (PPC/ARM/m88k) were deferred. This makes
+the instrument observable exactly where a controlled-PC / bad-descriptor probe used to freeze the rig. Applied to
+both trees; **build 0/0**; **pmax + arc boot**.
+- **#234** `cpus/cpu_mips_instr.c` `to_be_translated` ifetch: a failed instruction fetch already installs the MIPS
+  exception and redirects the PC to the vector (`mips_cpu_exception`→`pc_to_pointers`; also logged by #210), then
+  `goto bad` set `cpu->running = 0`. **Fix:** `return` (take the pending exception), matching the faulting-load
+  idiom. Trigger: jump to a VA whose ifetch bus/TLB-errors (e.g. a TLB entry mapping to a non-memory paddr).
+- **#235** `cpus/cpu_mips_instr.c` `SPECIAL_BREAK`: `break 0x30378` was treated as the GXemul reboot sentinel at
+  *any* PC. **Fix:** gate the reboot to the injected reset stub (`(addr & 0x1fffffff)==0x1fc00000`); a guest that
+  executes that encoding from ordinary RAM now takes a real **BP** exception, as on hardware.
+- **#236** `cpus/cpu_mips_instr.c` reserved COP0 function: an unimplemented `cop0` CO function did `goto bad`
+  (halt). **Fix:** `instr(reserved)` → **RI**.
+- **#237** `cpus/cpu_mips_instr.c` COP0 `STANDBY`/`SUSPEND`/`HIBERNATE`: HIBERNATE did `goto bad` (halt) and SUSPEND
+  did an unconditional reboot at any PC. **Fix:** fold all three onto the STANDBY idiom — idle (`wait`) on R4100,
+  **RI** on every other CPU (incl. the R3000/R4000 targets). (Fable folded in the HIBERNATE sibling.)
+- **#238** `cpus/memory_mips_v2p.c` (R4000+): a guest entering **supervisor** (KSU=1) or reserved KSU=3 fell through
+  to `exit(1)`. **Fix:** supervisor takes Status.SX and joins the normal (kernel-style) TLB walk; reserved KSU does
+  a best-effort 32-bit walk — both **fault** instead of halting. Not hit by normal kernel/user boots.
+- **#239** `cpus/cpu_mips_coproc.c` (R3000 `tlbw*` under Status.IsC): the architectural TLB entry was already
+  written, then `exit(1)` only because the host fast-map add is unsupported. **Fix:** `return` (skip just the
+  fast-map add), as the in-code TODO intended.
+- **#240** `devices/dev_asc.c` unimplemented SCSI command: set the illegal-command IRQ (`NCRSTAT_INT|NCRINTR_ILL`)
+  then `exit(1)`. **Fix:** drop the exit — `dev_asc_tick` delivers the illegal-command interrupt to the guest, as
+  on real hardware (distinct from the deferred #185 DATA_OUT).
+- **#241** `promemul/dec_prom.c` unsupported DEC-PROM services (2nd `open`, unimplemented jump-table vector, unknown
+  `rex()`, unimplemented callback vector): each `cpu->running = 0`. **Fix:** bounded diagnostic + `V0 = -1` +
+  return; the intentional halt/reboot services (`rex('h')`/`rex('b')`) are left untouched.
+- **#242** `promemul/arcbios.c` unsupported ARC services (non-SGI private call `exit(1)`; the `0x888` "exception,
+  no handler" and the unimplemented-vector default `cpu->running = 0`). **Fix:** dump state for debugging, then
+  `V0 = ARCBIOS_EINVAL` + return. (Fable flagged the `0x888` sibling; folded in here.)
+- **#243** `disk/diskimage_scsicmd.c` `scsi_transfer_allocbuf`: a legal zero-length transfer reached `malloc(0)`,
+  which C99 may return NULL → the out-of-memory `exit(1)`. **Fix:** `malloc(want_len ? want_len : 1)`.
+- **#244** `cpus/memory_rw.c` (whole class): a failed / `NO_EXCEPTIONS` translation returned `MEMORY_ACCESS_FAILED`
+  leaving the caller's read buffer untouched; callers that ignore the return (the DEC-PROM string helpers) consumed
+  uninitialised host stack — nondeterminism / unbounded string scans (backlog #22). **Fix:** zero-fill the read
+  buffer on failure (same ethos as the failed-device-read zero-fill #95).
+
+**Deferred (off the MIPS audit path; source + 2-model agreement):** #10 PPC/ARM slow-path ifetch `exit` (the data
+side is already #216), #11 PPC `MSR.IP` reboot hack, #12 m88k CMMU / `dev_mb89352` fatal errors. Also **not
+reachable** on pmax/arc: the SPECIAL3 **RDHWR** selector halt — Fable verified SPECIAL3 is ISA-gated to RI on
+R3000/R4000, so the halt only exists on emulated MIPS32r2 (off-path); the RDHWR `HWREna` gate is the same class.
+Logged for a future round.
+
+**Provenance:** Fable (source-verified — located every site, confirmed guest-reachability, wrote each minimal fix,
+and found the HIBERNATE→#237 and ARCBIOS-`0x888`→#242 siblings) + agy (independent DO-NOW/DEFER triage). Applied to
+both trees; **build 0/0**; **pmax + arc boot regression PASS** (pmax R3000 15/15 steps → `uid=0(root)`, OpenBSD 2.2,
+clean halt; arc R4000 13/13 → `uid=0(root)`, clean halt).
+
+
+## Twenty-fourth round (#245–#246) — debuggability logging + FPU denormal fidelity (5-model panel)
+The round-23 Part-B suggestions, taken through a **5-model panel** — Codex `gpt-5.6-sol` + Fable + agy `Gemini` +
+Ollama (`gpt-oss:120b-cloud`) + **Kimi** (`kimi-k2.5:cloud`). The panel **cleared all four hardware-accuracy
+candidates** (C1 R3000 IsC cache, C2 R4000 TLB-Shutdown, C3 FPU denormal-trap, C4 R3000 IE-hazard); on a follow-up
+physical-fidelity pass only **C3** survived as genuinely more-faithful, and **C5** (debuggability) was unanimous.
+Applied to both trees; **build 0/0**; **pmax + arc boot**.
+- **#245 (C5)** `devices/dev_asc.c`, `promemul/dec_prom.c`, `promemul/arcbios.c` — the guest-reachable
+  fault-conversion diagnostics from rounds 18–23 (`fatal()` on every guest MMIO / PROM / ARC invocation) now route
+  through the verbosity-gated `debugmsg` / `ENOUGH_VERBOSITY` channel at `VERBOSITY_DEBUG` (SUBSYS_DEVICE /
+  SUBSYS_PROMEMUL), so a guest or fuzzer hammering an unimplemented ASC command / PROM service can no longer flood
+  the host log; full state stays available at `-v` or `break device` / `break promemul`. No new machinery (reuses
+  the #210 channel). 8 sites; the 4 PROM/ARC vector sites' unconditional register-dump + a0-string scaffolding is
+  folded behind the same gate.
+- **#246 (C3)** `cpus/cpu_mips_coproc.c` (FPU denormals → real Unimplemented-Operation trap): the R3010/R4000 FPUs
+  do not compute denormalized (IEEE subnormal) values in hardware — they set FCSR cause bit **E** (which, unlike
+  V/Z/O/U/I, has **no enable bit** and always traps) and abort so the kernel softfloat completes the op. GXemul
+  instead produced **wrong values** (`float_emul.c` always adds the implicit 1-bit, misreading denormal operands,
+  and flushes denormal results to ±0 — "FP_SUBNORMAL: TODO"; a denormal divisor even hit the "DIV by zero" fatal).
+  Now a denormal S/D operand — or a denormal result with FCSR.FS clear — sets cause E and raises `EXCEPTION_FPE`
+  (ExcCode 15) with no result / condition-code written. **Gated to EXC4K+ (R4000/arc)**: MIPS-I (R3000/pmax) has
+  no ExcCode 15 (the R3010 signals via the unwired "irq5 fpu" pin), so EXC3K is **bit-identical to before** — pmax
+  boot risk **zero by construction**; arc risk negligible (no denormals in the boot path; real R4000 mandates
+  kernel softfloat completion if it ever fires). FCSR flag bits + CTC1-cause trapping remain pre-existing TODOs
+  (out of scope). Verified: arc boots to multiuser with the trap active and no spurious FP exception.
+
+**Assessed, intentionally left (panel ruling; #247 unconsumed):**
+- **C1 (R3000 IsC cache isolation) — already correct:** GXemul allocates real per-cache buffers
+  (`cpu_mips.c`: `cpu->cd.mips.cache[i] = malloc(...)`) and `memory_cache_R3000()` routes isolated-cache data
+  accesses to them — the "invisible cache stash" is already faithfully modeled. Not inaccurate.
+- **C2 (R4000 TLB-Shutdown on overlapping entries) — DO-NOT:** no machine-check delivery exists
+  (`EXCEPTION_MCHECK` is never raised; no `STATUS_TS`/DS state is modeled), R4000-true multiple-match is
+  architecturally **undefined** (a reset-latched wedge, not an exception), and a MIPS32-style ExcCode 24 would be
+  anachronistic + panic-prone on OpenBSD 2.2. Upstream's own duplicate detector is `#if 0`'d as unreliable.
+  First-match is a legitimate concretization of UNDEFINED that no correct guest can distinguish from silicon.
+- **C4 (R3000 delayed-IE / interrupt-in-delay-slot) — already correct where it matters:** the delay-slot
+  `Cause.BD` + `EPC=branch` fault signature is textbook (`cpu_mips.c`); only the 1–2-instruction IE cycle-timing
+  hazard is unmodeled, which no OpenBSD path depends on (a functional emulator has no cycle timing). Left.
+
+**Provenance:** 5-model panel (Codex + Fable + agy + Ollama gpt-oss:120b + Kimi-k2.5) on 5 candidates; Fable
+source-verified C1/C4 already-correct and designed the #246 patch + the C2 DO-NOT rationale. Build **0/0** both
+trees; **pmax + arc boot regression PASS** (pmax R3000 15/15 → `uid=0(root)`, OpenBSD 2.2, clean halt; arc R4000
+13/13 → `uid=0(root)`, clean halt, FPU trap active + no misfire).
+
+
+## Twenty-fifth round (#248, #250) — debugger QoL for the audit: breakpoint hit-counts + data write-watchpoints (4-model panel)
+A scoping pass over the author's own `doc/TODO.html`, filtered to items that improve **debuggability** for the
+OpenBSD 2.2 pmax/arc exploitation audit. Recon found the fork already implements most of the TODO debugger wishlist
+(`find`, `put s/z`, `step call`, `verbosity`, subsystem/`debugmsg` breakpoints, prefix-abbrev subcmds — the
+#120–#128 round) **and** the `-f` fsync option (so the panel's "C3 fsync CLI toggle" candidate, tentatively
+**#249**, was **already done — #249 is VOID / unconsumed**). A **4-model panel** (Codex `gpt-5.6-sol` + agy `Gemini`
++ Ollama `gpt-oss:120b-cloud` + Kimi `kimi-k2.5:cloud`; the Fable seat was down on credits) ranked the two
+remaining verified-undone items DO-NOW. Both are **opt-in and guest-invisible** — with none set, each is a single
+`n != 0` early-out, so a run without them is behaviourally identical (both boot regressions confirm this). Applied
+to both trees; **build 0/0**; **pmax + arc boot regression PASS**.
+- **#248** `include/machine.h`, `machines/machine.c`, `debugger/debugger_cmds.c`, `debugger/debugger.c`,
+  `cpus/cpu_dyntrans.c` (**breakpoint hit-counts + "run N then break"**): `struct breakpoints` gains parallel
+  `hitcount` / `ignore_left` arrays. The dyntrans breakpoint check (`TO_BE_TRANSLATED_HEAD`) counts every hit, and
+  while `ignore_left > 0` it decrements and **keeps running** instead of stopping — reusing the existing
+  `single_step_breakpoint` re-translation path so the check re-fires on the next hit (the instruction-combination
+  gate also now excludes `single_step_breakpoint`, so a merged predecessor can't bypass counting). Syntax:
+  `breakpoint add addr[, N]` = skip the first N hits; `breakpoint show` and CTRL-T display live hit counts. Verified:
+  ignore-5 on a 64-iteration TLB-init loop first stops at `hits=6`, next continue `hits=7`.
+- **#250** `include/machine.h`, `machines/machine.c`, `debugger/debugger_cmds.c`, `cpus/cpu_dyntrans.c`,
+  `cpus/memory_rw.c` (**data write-watchpoints**): `watchpoint add addr[, len]` breaks into the debugger on a guest
+  **store** into the range, reporting writer PC, width, value, and both vaddr/paddr. (a) `update_translation_table()`
+  keeps a watched page **out of the fast store table** (`host_store = NULL`) so its writes trap to `memory_rw`;
+  add/delete calls `invalidate_translation_caches(…, INVALIDATE_ALL)` (not `cpu_create_or_reset_tc`, which only
+  clears *code* translations) so the data fast-map is rebuilt. (b) The check sits **early in `memory_rw`, before the
+  device/cache/RAM dispatch** — before the R3000 `memory_cache_R3000()` early-return that would otherwise hide every
+  cached kseg0 store. Matching is on the **physical** address (typed vaddr → paddr via `translate_v2p` at add-time):
+  defeats 32-bit vaddr sign-extension and kseg0/kseg1 aliasing. Verified on pmax: `watchpoint add 0x80000000`
+  (→ paddr 0x0) caught the kernel installing exception vectors via `_bcopy`, reporting `pc=0x…80122c00` + the bytes.
+
+**Not consumed:** **#249 is VOID** (its candidate — a disk fsync-on-write CLI toggle — is already the shipped `-f`
+option). Panel DEFER/DO-NOT (documented in `OUTSTANDING_BUGS.md`): CTRL-T in the main run loop; PC/execution
+statistics.
+
+**Provenance:** 4-model panel (Codex + agy + Ollama gpt-oss:120b + Kimi-k2.5; Fable seat down on credits). Build
+**0/0** both trees; **pmax + arc boot regression PASS** (pmax R3000 → `uid=0(root)`, OpenBSD 2.2; arc R4000 →
+`uid=0(root)`, clean halt) — both with nothing set, confirming zero behavioural change; features then functionally
+verified live (C1 ignore-count, C6 watchpoint fire).
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

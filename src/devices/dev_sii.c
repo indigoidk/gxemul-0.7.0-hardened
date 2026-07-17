@@ -190,6 +190,13 @@ DEVICE_ACCESS(sii)
 	if (writeflag == MEM_WRITE)
 		idata = memory_readmax64(cpu, data, len);
 
+	/*  #202: (Codex/Fable) the SII MMIO window is larger than the SIIRegs
+	    block that d->regs points into; bound relative_addr so regnr =
+	    relative_addr/2 can't index d->regs[] out of range (guest OOB host
+	    read here, and OOB write in the switch below).  */
+	if (relative_addr >= sizeof(d->siiregs))
+		return 0;
+
 	regnr = relative_addr / 2;
 	odata = d->regs[regnr];
 

@@ -300,8 +300,16 @@ DEVICE_ACCESS(jazz)
 	switch (relative_addr) {
 	case R4030_SYS_CONFIG:
 		if (writeflag == MEM_WRITE) {
-			fatal("[ jazz: unimplemented write to R4030_SYS_CONFIG"
-			    ", data=0x%08x ]\n", (int)idata);
+			/*  #179: (Codex/Fable) guest-reachable; ignore the
+			    write instead of fatal()-flooding host stdout.  */
+			static int w = 0;
+			if (!w) {
+				debugmsg(SUBSYS_DEVICE, "jazz",
+				    VERBOSITY_WARNING, "write to "
+				    "R4030_SYS_CONFIG ignored (data=0x%08x)",
+				    (int)idata);
+				w = 1;
+			}
 		} else {
 			/*  Reading the config register should give
 			    0x0104 or 0x0410. Why? TODO  */
@@ -435,13 +443,19 @@ DEVICE_ACCESS(jazz)
 			odata = d->int_enable_mask;
 		break;
 	default:
-		if (writeflag == MEM_WRITE) {
-			fatal("[ jazz: unimplemented write to address 0x%x"
-			    ", data=0x%02x ]\n", (int)relative_addr,
-			    (int)idata);
-		} else {
-			fatal("[ jazz: unimplemented read from address 0x%x"
-			    " ]\n", (int)relative_addr);
+		/*  #179: (Codex/Fable) undefined offsets are guest-reachable:
+		    ignore writes and read as 0, with a once-only diagnostic
+		    instead of an unconditional fatal() flood.  */
+		{
+			static int w = 0;
+			if (!w) {
+				debugmsg(SUBSYS_DEVICE, "jazz",
+				    VERBOSITY_WARNING,
+				    "unimplemented %s of address 0x%x",
+				    writeflag == MEM_WRITE? "write" : "read",
+				    (int)relative_addr);
+				w = 1;
+			}
 		}
 	}
 

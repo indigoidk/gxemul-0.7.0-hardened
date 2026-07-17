@@ -216,10 +216,13 @@ DEVICE_ACCESS(ps2_gif)
 		debug("[ gif read from addr 0x%x, len=%i ]\n",
 		    (int)relative_addr, (int)len);
 	} else {
-		if (data[0] == 0x08 && data[1] == 0x80) {
+		/*  #172: (Codex/Fable) in all signature probes below, test
+		    len BEFORE reading data[n] (a 1-byte guest store gives
+		    len==1 and a 1-byte data buffer).  */
+		if (len >= 2 && data[0] == 0x08 && data[1] == 0x80) {
 			/*  Possibly "initialize 640x480 mode":  */
 			debug("[ gif: initialize video mode (?) ]\n");
-		} else if (data[0] == 0x04 && data[1] == 0x00 && len > 300) {
+		} else if (len > 300 && data[0] == 0x04 && data[1] == 0x00) {
 			/*  Possibly "output 8x16 character":  */
 			int xbase, ybase, xsize, ysize, x, y;
 
@@ -282,7 +285,7 @@ DEVICE_ACCESS(ps2_gif)
 					addr += 4;
 				}
 			}
-		} else if (data[0] == 0x04 && data[1] == 0x80 && len == 0x50) {
+		} else if (len == 0x50 && data[0] == 0x04 && data[1] == 0x80) {
 			/*  blockcopy  */
 			int y_source, y_dest, x_source, x_dest, x_size, y_size;
 			x_source = data[8*4 + 0] + ((data[8*4 + 1]) << 8);
@@ -299,7 +302,7 @@ DEVICE_ACCESS(ps2_gif)
 			framebuffer_blockcopyfill(d->vfb_data, 0, 0,0,0,
 			    x_dest, y_dest, x_dest + x_size - 1, y_dest +
 			    y_size - 1, x_source, y_source);
-		} else if (data[8] == 0x10 && data[9] == 0x55 && len == 48) {
+		} else if (len == 48 && data[8] == 0x10 && data[9] == 0x55) {
 			/*  Linux "clear":  This is used by linux to clear the
 			    lowest 16 pixels of the framebuffer.  */
 			int xbase, ybase, xend, yend;
@@ -314,7 +317,7 @@ DEVICE_ACCESS(ps2_gif)
 
 			framebuffer_blockcopyfill(d->vfb_data, 1, 0,0,0,
 			    xbase, ybase, xend - 1, yend - 1, 0,0);
-		} else if (data[0] == 0x07 && data[1] == 0x80 && len == 128) {
+		} else if (len == 128 && data[0] == 0x07 && data[1] == 0x80) {
 			/*  NetBSD "output cursor":  */
 			int xbase, ybase, xend, yend, x, y;
 
@@ -346,7 +349,7 @@ DEVICE_ACCESS(ps2_gif)
 					    fb_addr, pixels, sizeof(pixels),
 					    MEM_WRITE, d->vfb_data);
 				}
-		} else if (data[0] == 0x01 && data[1] == 0x00 && len == 80) {
+		} else if (len == 80 && data[0] == 0x01 && data[1] == 0x00) {
 			/*  Linux "output cursor":  */
 			int xbase, ybase, xend, yend, x, y;
 

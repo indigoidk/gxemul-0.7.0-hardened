@@ -189,8 +189,10 @@ void pvr_dma_transfer(struct cpu *cpu, struct pvr_data *d)
 
 	/*  DMAC not enabled?  */
 	if (!(chcr & CHCR_TD)) {
+		/*  #166: (Codex/Fable) guest-reachable via PVR_MODE write;
+		    log and skip the DMA, don't exit(1)  */
 		fatal("pvr_dma_transfer: SH4 dma not enabled?\n");
-		exit(1);
+		return;
 	}
 
 	/*  Transfer End already set? Then don't transfer again.  */
@@ -209,7 +211,9 @@ void pvr_dma_transfer(struct cpu *cpu, struct pvr_data *d)
 	case CHCR_TS_32BYTE: transmit_size = 32; break;
 	default: fatal("Unimplemented transmit size?! CHCR[%i] = 0x%08x\n",
 	    channel, chcr);
-	exit(1);
+	/*  #166: (Codex/Fable) guest-controlled CHCR; log and skip,
+	    don't exit(1)  */
+	return;
 	}
 
 	switch (chcr & CHCR_DM) {
@@ -218,7 +222,9 @@ void pvr_dma_transfer(struct cpu *cpu, struct pvr_data *d)
 	case CHCR_DM_DECREMENTED: dst_delta = -1; break;
 	default: fatal("Unimplemented destination delta?! CHCR[%i] = 0x%08x\n",
 	    channel, chcr);
-	exit(1);
+	/*  #166: (Codex/Fable) guest-controlled CHCR; log and skip,
+	    don't exit(1)  */
+	return;
 	}
 
 	switch (chcr & CHCR_SM) {
@@ -227,7 +233,9 @@ void pvr_dma_transfer(struct cpu *cpu, struct pvr_data *d)
 	case CHCR_SM_DECREMENTED: src_delta = -1; break;
 	default: fatal("Unimplemented source delta?! CHCR[%i] = 0x%08x\n",
 	    channel, chcr);
-	exit(1);
+	/*  #166: (Codex/Fable) guest-controlled CHCR; log and skip,
+	    don't exit(1)  */
+	return;
 	}
 
 	src_delta *= transmit_size;
@@ -303,12 +311,15 @@ void pvr_dma_transfer(struct cpu *cpu, struct pvr_data *d)
 	default:
 		fatal("Unimplemented SH4 RS DMAC: 0x%08x (PVR)\n",
 		    (int) (chcr & CHCR_RS));
-		exit(1);
+		/*  #166: (Codex/Fable) guest-controlled CHCR; log and skip,
+		    don't exit(1)  */
+		return;
 	}
 
 	if (cause_interrupt) {
+		/*  #166: (Codex/Fable) guest-controlled CHCR_IE; log,
+		    don't exit(1)  */
 		fatal("TODO: pvr sh4 dmac interrupt!\n");
-		exit(1);
 	}
 }
 
@@ -357,9 +368,10 @@ DEVICE_ACCESS(pvr_dma)
 	case 0x10:
 	case 0x14:
 		if (writeflag == MEM_WRITE && idata != 0x0cff0000) {
+			/*  #166: (Codex/Fable) guest-reachable write;
+			    log, don't exit(1)  */
 			fatal("[ pvr_dma: TODO: unknown_0x%02x set to "
 			    "0x%08x ]\n", (int) relative_addr, (int) idata);
-			exit(1);
 		}
 		break;
 
@@ -373,7 +385,8 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0) {
 			fatal("[ pvr_dma: TODO: unknown_0x%02x set to "
 			    "0x%08x ]\n", (int) relative_addr, (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
@@ -381,7 +394,8 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0) {
 			fatal("[ pvr_dma: TODO: LMMODE0 set to "
 			    "0x%08x ]\n", (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
@@ -389,14 +403,16 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0) {
 			fatal("[ pvr_dma: TODO: LMMODE1 set to "
 			    "0x%08x ]\n", (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
 	case 0x8c:
 		if (writeflag == MEM_WRITE) {
 			fatal("[ pvr_dma: write to 0x8c: TODO ]\n");
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		} else {
 			/*  0x20 means G2 DMA in progress?  */
 			/*  0x11 = mask which has to do with AICA  */
@@ -408,7 +424,8 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0) {
 			fatal("[ pvr_dma: TODO: unknown_0x%02x set to "
 			    "0x%08x ]\n", (int) relative_addr, (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
@@ -416,7 +433,8 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0x80000000) {
 			fatal("[ pvr_dma: TODO: unknown_0x%02x set to "
 			    "0x%08x ]\n", (int) relative_addr, (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
@@ -425,7 +443,8 @@ DEVICE_ACCESS(pvr_dma)
 		if (writeflag == MEM_WRITE && idata != 0) {
 			fatal("[ pvr_dma: TODO: unknown_0x%02x set to "
 			    "0x%08x ]\n", (int) relative_addr, (int) idata);
-			exit(1);
+			/*  #166: (Codex/Fable) guest-reachable; log,
+			    don't exit(1)  */
 		}
 		break;
 
@@ -437,7 +456,8 @@ DEVICE_ACCESS(pvr_dma)
 			    (int)relative_addr, (int)idata);
 		}
 
-		exit(1);
+		/*  #166: (Codex/Fable) guest-reachable MMIO; log,
+		    don't exit(1)  */
 	}
 
 	/*  Default write:  */
@@ -484,7 +504,8 @@ DEVICE_ACCESS(pvr_dma_more)
 			fatal("0x0c: %08x\n", d->dma_more_reg[0x0c/4]);
 			fatal("0x10: %08x\n", d->dma_more_reg[0x10/4]);
 			fatal("0x14: %08x\n", d->dma_more_reg[0x14/4]);
-			exit(1);
+			/*  #176: (Codex/Fable) guest-reachable; log,
+			    don't exit(1) (as #166)  */
 		}
 		break;
 
@@ -496,7 +517,8 @@ DEVICE_ACCESS(pvr_dma_more)
 			    (int)relative_addr, (int)idata);
 		}
 
-		exit(1);
+		/*  #176: (Codex/Fable) guest-reachable MMIO; log,
+		    don't exit(1) (as #166)  */
 	}
 
 	/*  Default write:  */
@@ -1497,6 +1519,11 @@ static void pvr_ta_command(struct cpu *cpu, struct pvr_data *d, int list_ofs)
 	// ob_ofs = REG(PVRREG_TA_OB_POS);
 	// REG(PVRREG_TA_OB_POS) = ob_ofs + sizeof(uint64_t);
 
+	/*  #200: (Codex/Fable) cap queued TA commands so a guest that never
+	    issues render/reset can't grow the host buffer without bound.  */
+	if (d->n_ta_commands >= (int) (VRAM_SIZE / 64))
+		return;
+
 	if (d->ta_commands == NULL) {
 		d->allocated_ta_commands = 2048;
 		CHECK_ALLOCATION(d->ta_commands = (uint32_t *)
@@ -1548,8 +1575,9 @@ DEVICE_ACCESS(pvr_ta)
 	uint64_t idata = 0, odata = 0;
 
 	if (len != sizeof(uint32_t)) {
+		/*  #187: (Codex/Fable) guest-reachable; the masked access below is
+		    bounded to the TA buffer, so log and continue, don't exit(1).  */
 		fatal("pvr_ta access len = %i: TODO\n", (int) len);
-		exit(1);
 	}
 
 	// Tile Accelerator commands can be sent to 0x10000000 through
@@ -1646,8 +1674,8 @@ DEVICE_ACCESS(pvr)
 			debug("[ pvr: STARTRENDER ]\n");
 			pvr_render(cpu, d);
 		} else {
+			/*  #187: (Codex/Fable) guest-reachable MMIO; log, don't exit(1).  */
 			fatal("[ pvr: huh? read from STARTRENDER ]\n");
-			exit(1);
 		}
 		break;
 
@@ -1656,10 +1684,11 @@ DEVICE_ACCESS(pvr)
 			debug("[ pvr: OB_ADDR set to 0x%08" PRIx32" ]\n",
 			    (uint32_t)(idata & PVR_OB_ADDR_MASK));
 			if (idata & ~PVR_OB_ADDR_MASK) {
-				fatal("[ pvr: OB_ADDR: Fatal error: Unknown"
+				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
+				    the unknown bits below, don't exit(1).  */
+				fatal("[ pvr: OB_ADDR: unknown"
 				    " bits set: 0x%08" PRIx32" ]\n",
 				    (uint32_t)(idata & ~PVR_OB_ADDR_MASK));
-				exit(1);
 			}
 			idata &= PVR_OB_ADDR_MASK;
 			DEFAULT_WRITE;
@@ -1671,10 +1700,11 @@ DEVICE_ACCESS(pvr)
 			debug("[ pvr: TILEBUF_ADDR set to 0x%08" PRIx32" ]\n",
 			    (uint32_t)(idata & PVR_TILEBUF_ADDR_MASK));
 			if (idata & ~PVR_TILEBUF_ADDR_MASK) {
-				fatal("[ pvr: TILEBUF_ADDR: Unknown"
+				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
+				    the unknown bits below, don't exit(1).  */
+				fatal("[ pvr: TILEBUF_ADDR: unknown"
 				    " bits set: 0x%08" PRIx32" ]\n",
 				    (uint32_t)(idata & ~PVR_TILEBUF_ADDR_MASK));
-				exit(1);
 			}
 			idata &= PVR_TILEBUF_ADDR_MASK;
 			DEFAULT_WRITE;
@@ -2065,9 +2095,9 @@ DEVICE_ACCESS(pvr)
 			if ((idata & DIWCONF_MAGIC_MASK) !=
 			    DIWCONF_MAGIC && (idata & DIWCONF_MAGIC_MASK)
 			    != 0) {
+				/*  #187: (Codex/Fable) guest-reachable MMIO; log, don't exit(1).  */
 				fatal("PVRREG_DIWCONF magic not set to "
 				    "Magic value. 0x%08x\n", (int)idata);
-				exit(1);
 			}
 			if (idata & DIWCONF_BLANK)
 				debug("[ pvr: PVRREG_DIWCONF: BLANK: TODO ]\n");
@@ -2140,9 +2170,10 @@ DEVICE_ACCESS(pvr)
 	case PVRREG_TA_OPB_START:
 		if (writeflag == MEM_WRITE) {
 			if (idata & ~TA_OPB_START_MASK) {
+				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
+				    below, don't exit(1).  */
 				fatal("[ pvr: UNEXPECTED bits in "
 				    "TA_OPB_START: 0x%08x ]\n", (int)idata);
-				exit(1);
 			}
 			idata &= TA_OPB_START_MASK;
 			debug("[ pvr: TA_OPB_START set to 0x%x ]\n",
@@ -2154,9 +2185,10 @@ DEVICE_ACCESS(pvr)
 	case PVRREG_TA_OB_START:
 		if (writeflag == MEM_WRITE) {
 			if (idata & ~TA_OB_START_MASK) {
+				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
+				    below, don't exit(1).  */
 				fatal("[ pvr: UNEXPECTED bits in "
 				    "TA_OB_START: 0x%08x ]\n", (int)idata);
-				exit(1);
 			}
 			idata &= TA_OB_START_MASK;
 			debug("[ pvr: TA_OB_START set to 0x%x ]\n",
@@ -2260,7 +2292,8 @@ DEVICE_ACCESS(pvr)
 			DEFAULT_WRITE;
 		}
 
-		exit(1);
+		/*  #187: (Codex/Fable) guest-reachable MMIO (default case for any
+		    unhandled PVR register); logged above, don't exit(1).  */
 	}
 
 return_ok:
@@ -2435,7 +2468,12 @@ DEVICE_TICK(pvr_fb)
 		{
 			int y;
 			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
-				int fo = fb_ofs, vo = vram_ofs;
+				int fo = fb_ofs;
+				/*  #161: (Codex/Fable) unsigned offset
+				    wrap, as in case RGB888; a signed vo
+				    turns negative for guest DIWADDRL >=
+				    0x80000000 and indexes below vram[].  */
+				size_t vo = (size_t)vram_ofs % VRAM_SIZE;
 				for (p=0; p<pixels_to_copy; p++) {
 					/*  0rrrrrgg(high) gggbbbbb(low)  */
 					fb[fo] = (vram[(vo+1)%VRAM_SIZE] << 1) & 0xf8;
@@ -2455,7 +2493,10 @@ DEVICE_TICK(pvr_fb)
 		{
 			int y;
 			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
-				int fo = fb_ofs, vo = vram_ofs;
+				int fo = fb_ofs;
+				/*  #161: (Codex/Fable) unsigned offset
+				    wrap, as in case RGB888  */
+				size_t vo = (size_t)vram_ofs % VRAM_SIZE;
 				for (p=0; p<pixels_to_copy; p++) {
 					/*  rrrrrggg(high) gggbbbbb(low)  */
 					fb[fo] = vram[(vo+1)%VRAM_SIZE] & 0xf8;
@@ -2494,7 +2535,10 @@ DEVICE_TICK(pvr_fb)
 		{
 			int y;
 			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
-				int fo = fb_ofs, vo = vram_ofs;
+				int fo = fb_ofs;
+				/*  #161: (Codex/Fable) unsigned offset
+				    wrap, as in case RGB888  */
+				size_t vo = (size_t)vram_ofs % VRAM_SIZE;
 				for (p=0; p<pixels_to_copy; p++) {
 					fb[fo] = vram[(vo+2)%VRAM_SIZE];
 					fb[fo+1] = vram[(vo+1)%VRAM_SIZE];

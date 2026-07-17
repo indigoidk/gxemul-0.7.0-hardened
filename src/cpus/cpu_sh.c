@@ -732,13 +732,10 @@ void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
 		 *  reserved instructions; during normal instruction execution,
 		 *  these are not very common.
 		 */
-#if 1
-		printf("\nRESERVED SuperH instruction at spc=%08" PRIx32"\n",
-		    cpu->cd.sh.spc);
-		exit(1);
-#else
+		/*  #217: (Codex/Fable) a guest reserved instruction must take the
+		    illegal-instruction exception (the general vector is set up
+		    above), not exit() the host.  */
 		break;
-#endif
 
 	case EXPEVT_FPU_DISABLE:
 		break;

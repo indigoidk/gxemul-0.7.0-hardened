@@ -278,8 +278,10 @@ OF_SERVICE(getprop)
 	for (i=0; i<len_returned; i++) {
 		if (!cpu->memory_rw(cpu, cpu->mem, buf + i, pr->data + i,
 		    1, MEM_WRITE, CACHE_DATA | NO_EXCEPTIONS)) {
-			fatal("[ of: getprop memory_rw() error ]\n");
-			exit(1);
+			/*  #218: (Codex/Fable) the getprop destination is a guest
+			    buffer pointer; a bad pointer must not exit() the host --
+			    stop copying (the partial length is returned below).  */
+			break;
 		}
 	}
 
@@ -425,8 +427,9 @@ OF_SERVICE(open)
 		unsigned char ch;
 		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
 		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
-			fatal("[ of: TODO: write: memory_rw() error ]\n");
-			exit(1);
+			/*  #218: (Codex/Fable) a bad guest buffer pointer must not
+			    exit() the host -- stop copying.  */
+			break;
 		}
 
 		if (ch == 0)
@@ -464,8 +467,9 @@ OF_SERVICE(read)
 	ch = c;
 	if (!cpu->memory_rw(cpu, cpu->mem, ptr, &ch, 1, MEM_WRITE,
 	    CACHE_DATA | NO_EXCEPTIONS)) {
-		fatal("[ of: TODO: read: memory_rw() error ]\n");
-		exit(1);
+		/*  #218: (Codex/Fable) a bad guest buffer pointer must not
+		    exit() the host.  */
+		return 0;
 	}
 
 	store_32bit_word(cpu, base + retofs, c == -1? 0 : 1);
@@ -485,8 +489,9 @@ OF_SERVICE(write)
 		unsigned char ch;
 		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
 		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
-			fatal("[ of: TODO: write: memory_rw() error ]\n");
-			exit(1);
+			/*  #218: (Codex/Fable) a bad guest buffer pointer must not
+			    exit() the host -- stop copying.  */
+			break;
 		}
 		if (ch != 7)
 			console_putchar(cpu->machine->main_console_handle, ch);
@@ -1120,6 +1125,12 @@ int of_emul(struct cpu *cpu)
 	nargs = load_32bit_word(cpu, base + 4);
 	nret  = load_32bit_word(cpu, base + 8);
 
+	/*  #201: (Codex/Fable) nargs is guest-controlled; clamp it so the
+	    arg loop below can't run up to ~2^31 times (log flood / host
+	    hang). Args past OF_N_MAX_ARGS are ignored anyway.  */
+	if (nargs > OF_N_MAX_ARGS)
+		nargs = OF_N_MAX_ARGS;
+
 	readstr(cpu, ptr, service, sizeof(service));
 
 	debug("[ of: %s(", service);
@@ -1170,8 +1181,9 @@ int of_emul(struct cpu *cpu)
 		printf("\n");
 		fatal("[ of: unimplemented service \"%s\" with %i input "
 		    "args and %i output values ]\n", service, nargs, nret);
+		/*  #219: (Codex/Fable) cpu->running=0 already halts cleanly for an
+		    unknown guest OF service; the exit(1) only defeats the debugger.  */
 		cpu->running = 0;
-		exit(1);
 	}
 
 	for (i=0; i<nargs; i++)

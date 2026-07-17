@@ -93,10 +93,20 @@ void mips_unaligned_loadstore(struct cpu *cpu, struct mips_instr_call *ic,
 		    &aligned_word[0], wlen, MEM_READ, CACHE_DATA);
 		if (!ok) {
 			if (cpu->pc != oldpc) {
-				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] &=
-				    ~CAUSE_EXCCODE_MASK;
-				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] |=
-				    (EXCEPTION_TLBS << CAUSE_EXCCODE_SHIFT);
+				/*  #227: (Codex/Fable/agy) the pre-read is a MEM_READ so it
+				    raised a LOAD-side exception; this is a store -> map only
+				    the load codes to their store counterparts (TLBL->TLBS,
+				    AdEL->AdES) and leave the rest (DBE is shared load/store;
+				    Mod can't come from a read).  */
+				int exc = (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+				    & CAUSE_EXCCODE_MASK) >> CAUSE_EXCCODE_SHIFT;
+				if (exc == EXCEPTION_TLBL)
+					exc = EXCEPTION_TLBS;
+				else if (exc == EXCEPTION_ADEL)
+					exc = EXCEPTION_ADES;
+				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] =
+				    (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
+				    & ~CAUSE_EXCCODE_MASK) | (exc << CAUSE_EXCCODE_SHIFT);
 			}
 			return;
 		}

@@ -1295,8 +1295,10 @@ X(llsc)
 		}
 		if (cpu->memory_rw(cpu, cpu->mem, addr, d, len,
 		    MEM_READ, CACHE_DATA) != MEMORY_ACCESS_OK) {
-			fatal("ll: error: TODO\n");
-			exit(1);
+			/*  #216: (Codex/Fable) memory_rw() raised a DSI on the
+			    faulting lwarx address; let it proceed instead of
+			    exit()ing the host.  */
+			return;
 		}
 
 		value = 0;
@@ -1341,8 +1343,10 @@ X(llsc)
 
 		if (cpu->memory_rw(cpu, cpu->mem, addr, d, len,
 		    MEM_WRITE, CACHE_DATA) != MEMORY_ACCESS_OK) {
-			fatal("sc: error: TODO\n");
-			exit(1);
+			/*  #216: (Codex/Fable) memory_rw() raised a DSI on the
+			    faulting stwcx. address; let it proceed instead of
+			    exit()ing the host.  */
+			return;
 		}
 
 		cpu->cd.ppc.cr &= 0x0fffffff;

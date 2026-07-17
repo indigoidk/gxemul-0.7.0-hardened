@@ -273,11 +273,43 @@ void machine_add_breakpoint_string(struct machine *machine, char *str)
 	    realloc(machine->breakpoints.string, n * sizeof(char *)));
 	CHECK_ALLOCATION(machine->breakpoints.addr = (uint64_t *)
 	    realloc(machine->breakpoints.addr, n * sizeof(uint64_t)));
+	/*  #248: keep the hit-accounting arrays in lockstep.  */
+	CHECK_ALLOCATION(machine->breakpoints.hitcount = (uint64_t *)
+	    realloc(machine->breakpoints.hitcount, n * sizeof(uint64_t)));
+	CHECK_ALLOCATION(machine->breakpoints.ignore_left = (int64_t *)
+	    realloc(machine->breakpoints.ignore_left, n * sizeof(int64_t)));
 	CHECK_ALLOCATION(machine->breakpoints.string[machine->breakpoints.n] =
 	    strdup(optarg));
 
 	machine->breakpoints.addr[machine->breakpoints.n] = 0;
+	machine->breakpoints.hitcount[machine->breakpoints.n] = 0;
+	machine->breakpoints.ignore_left[machine->breakpoints.n] = 0;
 	machine->breakpoints.n ++;
+}
+
+
+/*
+ *  machine_watchpoint_match():
+ *
+ *  #250: return (index + 1) of the first data write-watchpoint whose physical
+ *  range [addr, addr+len) overlaps the accessed range, or 0 for no match.
+ *  Callers guard with watchpoints.n != 0, so this is never called on the hot
+ *  paths unless the user has actually set a watchpoint.
+ */
+int machine_watchpoint_match(struct machine *machine, uint64_t addr,
+	uint64_t len)
+{
+	int i;
+
+	for (i = 0; i < machine->watchpoints.n; i++) {
+		uint64_t wa = machine->watchpoints.addr[i];
+		uint64_t wl = machine->watchpoints.len[i];
+
+		if (addr < wa + wl && wa < addr + len)
+			return i + 1;
+	}
+
+	return 0;
 }
 
 

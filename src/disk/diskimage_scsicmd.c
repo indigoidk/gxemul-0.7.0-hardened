@@ -52,6 +52,12 @@
 #include "misc.h"
 
 
+/*  #163: (Codex/Fable) upper bound for one guest-
+    requested SCSI data transfer. Guest-controlled sizes (e.g. a fixed-block
+    tape READ of 0xffffff blocks, or a large READ(10)/WRITE(10)) could
+    otherwise force multi-GB allocations -> OOM/exit(1).  */
+#define	SCSI_MAX_XFER_BYTES	(64*1024*1024)
+
 static const char *diskimage_types[] = DISKIMAGE_TYPES;
 static struct scsi_transfer *first_free_scsi_transfer_alloc = NULL;
 
@@ -139,7 +145,10 @@ void scsi_transfer_allocbuf(size_t *lenp, unsigned char **pp, size_t want_len,
 	}
 
 	(*lenp) = want_len;
-	if ((p = (unsigned char *) malloc(want_len)) == NULL) {
+	/*  #243: A legal zero-length SCSI transfer must not reach malloc(0),
+	    which C99 permits to return NULL and would trip the out-of-memory
+	    exit(1) below; always request at least one byte.  */
+	if ((p = (unsigned char *) malloc(want_len ? want_len : 1)) == NULL) {
 		debugmsg(SUBSYS_DISK, "scsi", VERBOSITY_ERROR,
 		    "scsi_transfer_allocbuf(): out of "
 		    "memory trying to allocate %li bytes", (long)want_len);
@@ -657,9 +666,24 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			ofs *= d->logical_block_size;
 		}
 
+		/*  #163: (Codex/Fable) cap guest-controlled
+		    transfer size (both the tape and disk size paths above);
+		    return CHECK CONDITION instead of a huge allocation.  */
+		if (size > SCSI_MAX_XFER_BYTES) {
+			fatal("[ SCSI READ: refusing oversized transfer, "
+			    "%lli bytes ]\n", (long long) size);
+			diskimage__return_default_status_and_message(xferp);
+			xferp->status[0] = 0x02;	/*  CHECK CONDITION  */
+			break;
+		}
+
 		/*  Return data:  */
+		/*  #159: (Codex/Fable) clearflag 1, so that
+		    uninitialized host heap is never DMA'd to the guest (e.g. on
+		    the tape filemark/feof branch below, which does not fill the
+		    buffer).  */
 		scsi_transfer_allocbuf(&xferp->data_in_len, &xferp->data_in,
-		    size, 0);
+		    size, 1);
 
 		debug(" READ  ofs=%lli size=%i\n", (long long)ofs, (int)size);
 
@@ -683,7 +707,13 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 			d->filemark = 1;
 		} else {
-			/* int result = */  diskimage__internal_access(d, 0, ofs, xferp->data_in, size);
+			int result = diskimage__internal_access(d, 0, ofs,
+			    xferp->data_in, size);
+			/*  #159: (Codex/Fable) on a failed
+			    read, make sure no stale buffer contents are
+			    presented to the guest.  */
+			if (!result)
+				memset(xferp->data_in, 0, size);
 		}
 
 		if (d->is_a_tape && d->f != NULL)
@@ -733,6 +763,17 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		size = (uint64_t)retlen * d->logical_block_size;	/*  #133: 64-bit multiply; no signed-int overflow  */
 		ofs *= d->logical_block_size;
+
+		/*  #163: (Codex/Fable) cap guest-controlled
+		    transfer size before requesting/using a data_out buffer of
+		    that size; return CHECK CONDITION instead.  */
+		if (size > SCSI_MAX_XFER_BYTES) {
+			fatal("[ SCSI WRITE: refusing oversized transfer, "
+			    "%lli bytes ]\n", (long long) size);
+			diskimage__return_default_status_and_message(xferp);
+			xferp->status[0] = 0x02;	/*  CHECK CONDITION  */
+			break;
+		}
 
 		if (xferp->data_out_offset != size) {
 			debug(", data_out == NULL, wanting %i bytes, \n\n",
@@ -1089,7 +1130,15 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			return 2;
 		}
 
-		debug("data_out!=NULL (OK), ");
+		/*  #205: (Codex/Fable) MODE SELECT reads fixed offsets up to byte 11;
+	    a controller can supply a shorter DATA OUT buffer, so verify it is
+	    present and >= 12 bytes before indexing it.  */
+	if (xferp->data_out == NULL || xferp->data_out_len < 12) {
+		diskimage__return_default_status_and_message(xferp);
+		break;
+	}
+
+	debug("data_out!=NULL (OK), ");
 
 		/*  TODO:  Care about cmd?  */
 

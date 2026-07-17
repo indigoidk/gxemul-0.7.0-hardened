@@ -76,9 +76,14 @@ static void file_load_android(struct machine *m, struct memory *mem,
 	FILE *f;
 	int encoding = ELFDATA2LSB;
 	uint32_t page_size;
-	uint32_t kernel_size, kernel_addr, kernel_pages;
-	uint32_t ramdisk_size, ramdisk_addr, ramdisk_pages;
-	uint32_t second_size, second_addr, second_pages;
+	uint32_t kernel_size, kernel_addr;
+	uint32_t ramdisk_size, ramdisk_addr;
+	uint32_t second_size, second_addr;
+	/*  #171: (Codex/Fable) page counts and file offsets are computed
+	    in 64 bits, to avoid uint32 wrap-around; each component is also
+	    validated against the file length.  */
+	uint64_t kernel_pages, ramdisk_pages, second_pages;
+	off_t file_len;
 	struct android_header android_header;
 	unsigned char buf[65536];
 
@@ -104,11 +109,27 @@ static void file_load_android(struct machine *m, struct memory *mem,
 	}
 	debug("Android boot.img format, page size 0x%x\n", page_size);
 
+	/*  #171: (Codex/Fable) get the actual file length, for the
+	    component range checks below.  */
+	fseek(f, 0, SEEK_END);
+	file_len = ftello(f);
+	if (file_len < 0) {
+		fprintf(stderr, "%s: could not determine the file length\n",
+		    filename);
+		exit(1);
+	}
+
 	unencode(kernel_size, &android_header.kernel_size, uint32_t);
 	unencode(kernel_addr, &android_header.kernel_addr, uint32_t);
-	kernel_pages = (kernel_size + (page_size - 1)) / page_size;
+	kernel_pages = ((uint64_t)kernel_size + (page_size - 1)) / page_size;
 	if (kernel_size > 0) {
-		debug("kernel: 0x%x bytes (%i pages) at addr 0x%08x\n", kernel_size, kernel_pages, kernel_addr);
+		debug("kernel: 0x%x bytes (%i pages) at addr 0x%08x\n", kernel_size, (int) kernel_pages, kernel_addr);
+
+		if ((uint64_t)page_size + kernel_size > (uint64_t)file_len) {
+			fprintf(stderr, "%s: kernel image outside of the "
+			    "file\n", filename);
+			exit(1);
+		}
 
 		fseek(f, page_size * 1, SEEK_SET);
 
@@ -149,11 +170,19 @@ static void file_load_android(struct machine *m, struct memory *mem,
 
 	unencode(ramdisk_size, &android_header.ramdisk_size, uint32_t);
 	unencode(ramdisk_addr, &android_header.ramdisk_addr, uint32_t);
-	ramdisk_pages = (ramdisk_size + (page_size - 1)) / page_size;
+	ramdisk_pages = ((uint64_t)ramdisk_size + (page_size - 1)) / page_size;
 	if (ramdisk_size > 0) {
-		debug("ramdisk: 0x%x bytes (%i pages) at addr 0x%08x\n", ramdisk_size, ramdisk_pages, ramdisk_addr);
+		uint64_t ofs = (uint64_t)page_size * (1 + kernel_pages);
 
-		fseek(f, page_size * (1 + kernel_pages), SEEK_SET);
+		debug("ramdisk: 0x%x bytes (%i pages) at addr 0x%08x\n", ramdisk_size, (int) ramdisk_pages, ramdisk_addr);
+
+		if (ofs + ramdisk_size > (uint64_t)file_len) {
+			fprintf(stderr, "%s: ramdisk image outside of the "
+			    "file\n", filename);
+			exit(1);
+		}
+
+		fseek(f, (long) ofs, SEEK_SET);
 
 		uint32_t len_to_load = ramdisk_size;
 		uint32_t vaddr = ramdisk_addr;
@@ -189,11 +218,20 @@ static void file_load_android(struct machine *m, struct memory *mem,
 
 	unencode(second_size, &android_header.second_size, uint32_t);
 	unencode(second_addr, &android_header.second_addr, uint32_t);
-	second_pages = (second_size + (page_size - 1)) / page_size;
+	second_pages = ((uint64_t)second_size + (page_size - 1)) / page_size;
 	if (second_size > 0) {
-		debug("second: 0x%x bytes (%i pages) at addr 0x%08x\n", second_size, second_pages, second_addr);
+		uint64_t ofs = (uint64_t)page_size *
+		    (1 + kernel_pages + ramdisk_pages);
 
-		fseek(f, page_size * (1 + kernel_pages + ramdisk_pages), SEEK_SET);
+		debug("second: 0x%x bytes (%i pages) at addr 0x%08x\n", second_size, (int) second_pages, second_addr);
+
+		if (ofs + second_size > (uint64_t)file_len) {
+			fprintf(stderr, "%s: second stage image outside of "
+			    "the file\n", filename);
+			exit(1);
+		}
+
+		fseek(f, (long) ofs, SEEK_SET);
 
 		uint32_t len_to_load = second_size;
 		uint32_t vaddr = second_addr;

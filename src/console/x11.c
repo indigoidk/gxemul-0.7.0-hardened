@@ -434,11 +434,16 @@ void x11_fb_resize(struct fb_window *win, int new_xsize, int new_ysize)
 	/*  Note: ximage_data seems to be freed by XDestroyImage below.  */
 	/*  if (win->ximage_data != NULL)
 		free(win->ximage_data);  */
+	/*  #183: (Codex/Fable) widen to size_t. new_xsize/new_ysize are
+	    guest-reachable through dev_fb_resize, and 'new_xsize*new_ysize*32'
+	    overflows 32-bit int well inside #156's 16384-per-axis cap, which
+	    under-allocates the image and then overflows it on redraw.  */
 	CHECK_ALLOCATION(win->ximage_data = (unsigned char *) malloc(
-	    new_xsize * new_ysize * alloc_depth / 8));
+	    (size_t)new_xsize * new_ysize * alloc_depth / 8));
 
 	/*  TODO: clear for non-truecolor modes  */
-	memset(win->ximage_data, 0, new_xsize * new_ysize * alloc_depth / 8);
+	/*  #183: (Codex/Fable) size_t to match the widened malloc above.  */
+	memset(win->ximage_data, 0, (size_t)new_xsize * new_ysize * alloc_depth / 8);
 
 	if (win->fb_ximage != NULL)
 		XDestroyImage(win->fb_ximage);

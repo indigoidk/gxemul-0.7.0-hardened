@@ -124,7 +124,7 @@ void dev_fb_resize(struct vfb_data *d, int new_xsize, int new_ysize)
 {
 	unsigned char *new_framebuffer;
 	int y, new_bytes_per_line;
-	size_t size;
+	size_t size, sz_bytes_per_line;
 
 	if (d == NULL) {
 		fatal("dev_fb_resize(): d == NULL\n");
@@ -132,12 +132,40 @@ void dev_fb_resize(struct vfb_data *d, int new_xsize, int new_ysize)
 	}
 
 	if (new_xsize < 10 || new_ysize < 10) {
-		fatal("dev_fb_resize(): size too small.\n");
-		exit(1);
+		/*  #184: (Codex/Fable) guest-reachable (e.g. SGI GBE HCMAP/VCMAP
+		    written with a tiny/zero dimension); reject and keep the old
+		    framebuffer intact instead of exit(1), matching the >16384
+		    branch below.  */
+		fatal("dev_fb_resize(): size too small (%i x %i); ignored.\n",
+		    new_xsize, new_ysize);
+		return;
 	}
 
-	new_bytes_per_line = new_xsize * d->bit_depth / 8;
-	size = new_ysize * new_bytes_per_line;
+	/*  #156: (Codex/Fable) compute the new size in size_t with overflow
+	    checks, and cap the guest-controlled dimensions; on failure
+	    return early, leaving the old framebuffer intact.  */
+	if (new_xsize > 16384 || new_ysize > 16384) {
+		fatal("dev_fb_resize(): size too large (%i x %i).\n",
+		    new_xsize, new_ysize);
+		return;
+	}
+
+	if (d->bit_depth < 1 ||
+	    (size_t) new_xsize > SIZE_MAX / (size_t) d->bit_depth) {
+		fatal("dev_fb_resize(): bytes_per_line overflow.\n");
+		return;
+	}
+
+	sz_bytes_per_line = (size_t) new_xsize * (size_t) d->bit_depth / 8;
+
+	if (sz_bytes_per_line < 1 ||
+	    (size_t) new_ysize > SIZE_MAX / sz_bytes_per_line) {
+		fatal("dev_fb_resize(): framebuffer size overflow.\n");
+		return;
+	}
+
+	new_bytes_per_line = (int) sz_bytes_per_line;
+	size = (size_t) new_ysize * sz_bytes_per_line;
 
 	CHECK_ALLOCATION(new_framebuffer = (unsigned char *) malloc(size));
 
@@ -175,6 +203,24 @@ void dev_fb_resize(struct vfb_data *d, int new_xsize, int new_ysize)
 	d->x11_ysize = d->ysize / d->vfb_scaledown;
 
 	memory_device_update_data(d->memory, d, d->framebuffer);
+
+	/*  #182: (Codex/Fable) also resize the device's mapped length so the
+	    dyntrans fast-map gate cannot install a host mapping past the new
+	    (possibly smaller) framebuffer allocation on a guest-driven shrink.
+	    The #157 invalidation below then drops any stale fast-path pointers
+	    so the next access re-derives against the new length.  */
+	memory_device_update_length(d->memory, d, size);
+
+	/*  #157: (Codex/Fable) the framebuffer memory was just freed and
+	    reallocated, so invalidate all CPUs' translation caches (same
+	    idiom as dev_fbctrl), otherwise dyntrans fast-path host pointers
+	    would still point into the freed old framebuffer.  */
+	if (d->machine != NULL) {
+		int i;
+		for (i = 0; i < d->machine->ncpus; i++)
+			d->machine->cpus[i]->invalidate_translation_caches(
+			    d->machine->cpus[i], 0, INVALIDATE_ALL);
+	}
 
 	set_title(d);
 
@@ -801,6 +847,9 @@ struct vfb_data *dev_fb_init(struct machine *machine, struct memory *mem,
 	}
 
 	d->memory = mem;
+	/*  #157: (Codex/Fable) keep a machine handle so dev_fb_resize()
+	    can invalidate all CPUs' translation caches  */
+	d->machine = machine;
 	d->vfb_type = vfb_type;
 
 	/*  Defaults:  */

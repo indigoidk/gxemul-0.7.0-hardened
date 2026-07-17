@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>	/*  #246: FLT_MIN  */
 
 #include "cop0.h"
 #include "cpu.h"
@@ -605,7 +606,10 @@ void coproc_register_read(struct cpu *cpu,
 				break;
 			default:fatal("coproc_register_read(): unimplemented"
 				    " config register select %i\n", select);
-				exit(1);
+				/*  #213: (Codex/Fable) guest-reachable via mfc0 Config2..7;
+				    return a defined 0 instead of exit()ing the host.  */
+				*ptr = 0;
+				break;
 			}
 			return;
 		}
@@ -698,14 +702,22 @@ void coproc_register_write(struct cpu *cpu,
 			}
 			break;
 		case COP0_BADVADDR:
-			/*  Hm. Irix writes to this register. (Why?)  */
+			/*  #229: (Codex/Fable/agy) BadVAddr is read-only on R3000/R4000;
+			    ignore guest mtc0 so a payload can't destroy the fault address
+			    an auditor reads. OpenBSD 2.2 pmax/arc only mfc0-reads it
+			    (verified: no mtc0 $8 in its kernel source), so no regression;
+			    the emulator sets BadVAddr directly, not via this path.  */
 			unimpl = 0;
+			readonly = 1;
 			break;
 		case COP0_ENTRYLO1:
 			unimpl = 0;
 			if (cpu->cd.mips.cpu_type.mmu_model == MMU3K) {
+				/*  #214: (Codex/Fable) reg 3 is undefined on R3000 but a
+				    guest can still mtc0 to it; warn and ignore instead of
+				    exit()ing the host.  */
 				fatal("Attempt to access ENTRYLO1 with MMU3K?\n");
-				exit(1);
+				break;
 			}
 			// Both MIPS III (such as R4000) and MIPS32/MIPS64 (?)
 			if (cpu->cd.mips.cpu_type.mmu_model != MMU3K) {
@@ -744,10 +756,17 @@ void coproc_register_write(struct cpu *cpu,
 				    tmp2 != 0x3ff &&
 				    tmp2 != 0xfff &&
 				    tmp2 != 0x3fff &&
-				    tmp2 != 0xffff)
+				    tmp2 != 0xffff) {
+					/*  #188: (Codex/Fable) canonicalize an invalid,
+					    non-contiguous PageMask to the minimum page size.
+					    Otherwise it survives into the TLB and later drives
+					    the page-table walker's mask switch to exit(1) --
+					    a guest-reachable host DoS.  */
 					fatal("[ cpu%i: trying to write an invalid"
 					    " pagemask 0x%08lx to COP0_PAGEMASK ]\n",
 					    cpu->cpu_id, (long)tmp);
+					tmp = 0;
+				}
 				// Actually just 0xfff << shift for R10000.
 				if (cpu->cd.mips.cpu_type.mmu_model == MMU10K) {
 					tmp &= 0x0fff << PAGEMASK_SHIFT;
@@ -881,7 +900,9 @@ void coproc_register_write(struct cpu *cpu,
 				default:fatal("[ coproc_register_write(): unimpl"
 					    "emented config register select "
 					    "%i ]\n", select);
-					exit(1);
+					/*  #213: (Codex/Fable) guest-reachable via mtc0
+					    Config2..7; ignore the write, don't exit().  */
+					break;
 				}
 				return;
 			}
@@ -1036,14 +1057,67 @@ static const char *ccname[16] = {
 
 
 /*
+ *  #246: (Fable) physical truth for denormals: the R3010/R4000 FPUs do not
+ *  implement denormalized (IEEE subnormal) values in hardware. An arithmetic
+ *  op with a denormal operand -- or a denormal result while FCSR.FS
+ *  (flush-to-zero) is clear -- aborts without writing a result, sets FCSR
+ *  cause bit E ("Unimplemented Operation"; unlike V/Z/O/U/I it has no enable
+ *  bit and always traps), and the kernel softfloat completes the instruction
+ *  (OpenBSD/NetBSD MachFPInterrupt). GXemul instead computed a wrong value
+ *  (float_emul.c always adds the implicit 1-bit, misreading denormal operands,
+ *  and flushes denormal results to +/-0: "FP_SUBNORMAL: TODO").
+ *
+ *  Gated to exception models with a precise FP exception (ExcCode 15, R4000
+ *  and newer). Plain R3000 has no ExcCode 15 -- the R3010 signals via an
+ *  external interrupt pin ("irq5 fpu" on DECstations) that the emulated
+ *  machines do not wire -- so EXC3K keeps the old complete-in-hardware
+ *  behaviour (bit-identical). CTC1-written cause bits stay non-trapping (see
+ *  the pre-existing TODO at the CTC1 handler).
+ */
+static int fpu_is_denormal(uint64_t x, int ieee_fmt)
+{
+	switch (ieee_fmt) {
+	case IEEE_FMT_S:
+		return (x & 0x7f800000ULL) == 0 && (x & 0x007fffffULL) != 0;
+	case IEEE_FMT_D:
+		return (x & 0x7ff0000000000000ULL) == 0 &&
+		    (x & 0x000fffffffffffffULL) != 0;
+	}
+	return 0;
+}
+
+static int fpu_unimpl_trap(struct cpu *cpu, struct mips_coproc *cp)
+{
+	if (cpu->cd.mips.cpu_type.exc_model == EXC3K)
+		return 0;
+	cp->fcr[MIPS_FPU_FCSR] = (cp->fcr[MIPS_FPU_FCSR] &
+	    ~MIPS_FPU_EXCEPTION_BITS) | MIPS_FPU_EXCEPTION_UNIMPL;
+	mips_cpu_exception(cpu, EXCEPTION_FPE, 0, 0, 1, 0, 0, 0);
+	return 1;
+}
+
+
+/*
  *  fpu_store_float_value():
  *
  *  Stores a float value (actually a double) in fmt format.
  */
-static void fpu_store_float_value(int fr_flag, struct mips_coproc *cp, int fd,
-	double nf, int fmt, int nan)
+static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
+	struct mips_coproc *cp, int fd, double nf, int fmt, int nan)
 {
 	int ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
+
+	/*  #246: a denormal result is not computable in hardware either
+	    (unless FCSR.FS asks for flush-to-zero): abort without writing fd
+	    so the kernel softfloat produces the exact value that
+	    ieee_store_float_value()'s "FP_SUBNORMAL: TODO" would flush.
+	    (NaN/Inf compare false here; W/L formats are integers.)  */
+	if (!(cp->fcr[MIPS_FPU_FCSR] & MIPS_FPU_FLUSH_BIT) &&
+	    ((ieee_fmt == IEEE_FMT_D && fpclassify(nf) == FP_SUBNORMAL) ||
+	    (ieee_fmt == IEEE_FMT_S && nf != 0.0 && fabs(nf) < FLT_MIN)) &&
+	    fpu_unimpl_trap(cpu, cp))
+		return;
+
 	uint64_t r = ieee_store_float_value(nf, ieee_fmt);
 
 	/*
@@ -1059,8 +1133,11 @@ static void fpu_store_float_value(int fr_flag, struct mips_coproc *cp, int fd,
 
 			if (cp->reg[fd] & 0x80000000ULL)
 				cp->reg[fd] |= 0xffffffff00000000ULL;
-			if (cp->reg[fd+1] & 0x80000000ULL)
-				cp->reg[fd+1] |= 0xffffffff00000000ULL;
+			/*  #226: (Codex/Fable) mask (fd+1)&31 here too (the paired
+			    store above already does) so fd=31 can't sign-extend
+			    reg[32] -- OOB into adjacent coproc state.  */
+			if (cp->reg[(fd+1) & 31] & 0x80000000ULL)
+				cp->reg[(fd+1) & 31] |= 0xffffffff00000000ULL;
 		}
 	} else {
 		cp->reg[fd] = r & 0xffffffffULL;
@@ -1086,6 +1163,7 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 	/*  Potentially two input registers, fs and ft  */
 	struct ieee_float_value float_value[2];
 	int unordered, nan, ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
+	int denormal = 0;	/*  #246: any denormal S/D operand?  */
 	uint64_t fs_v = 0;
 	double nf;
 	int fr = cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & STATUS_FR ? 1 : 0;
@@ -1101,6 +1179,7 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		}
 		// printf("    fs_v = 0x%016llx\n", (long long)fs_v);
 		ieee_interpret_float_value(fs_v, &float_value[0], ieee_fmt);
+		denormal |= fpu_is_denormal(fs_v, ieee_fmt);	/*  #246  */
 	}
 	if (ft >= 0) {
 		uint64_t v = cp->reg[ft];
@@ -1111,29 +1190,37 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		}
 		// printf("    ft_v = 0x%016llx\n", (long long)v);
 		ieee_interpret_float_value(v, &float_value[1], ieee_fmt);
+		denormal |= fpu_is_denormal(v, ieee_fmt);	/*  #246  */
 	}
 
+
+	/*  #246: like the real FPU, refuse to compute any arithmetic op on a
+	    denormal operand (MOV is the only non-arithmetic op here; it copies
+	    raw bits). No result and no condition code may be written; the guest
+	    kernel completes the instruction.  */
+	if (denormal && op != FPU_OP_MOV && fpu_unimpl_trap(cpu, cp))
+		return -1;
 
 	switch (op) {
 	case FPU_OP_ADD:
 		nf = float_value[0].f + float_value[1].f;
 		/*  debug("  add: %f + %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan);
 		break;
 	case FPU_OP_SUB:
 		nf = float_value[0].f - float_value[1].f;
 		/*  debug("  sub: %f - %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan);
 		break;
 	case FPU_OP_MUL:
 		nf = float_value[0].f * float_value[1].f;
 		/*  debug("  mul: %f * %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan);
 		break;
 	case FPU_OP_DIV:
@@ -1149,7 +1236,7 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		}
 		/*  debug("  div: %f / %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt, nan);
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
 		break;
 	case FPU_OP_SQRT:
 		nan = float_value[0].nan;
@@ -1162,24 +1249,24 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 			nan = 1;
 		}
 		/*  debug("  sqrt: %f => %f\n", float_value[0].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt, nan);
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
 		break;
 	case FPU_OP_ABS:
 		nf = fabs(float_value[0].f);
 		/*  debug("  abs: %f => %f\n", float_value[0].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan);
 		break;
 	case FPU_OP_NEG:
 		nf = - float_value[0].f;
 		/*  debug("  neg: %f => %f\n", float_value[0].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan);
 		break;
 	case FPU_OP_CVT:
 		nf = float_value[0].f;
 		/*  debug("  mov: %f => %f\n", float_value[0].f, nf);  */
-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan);
 		break;
 	case FPU_OP_MOV:
@@ -1196,8 +1283,11 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 				cp->reg[(fd+1) & 31] = (fs_v >> 32) & 0xffffffffULL;
 				if (cp->reg[fd] & 0x80000000ULL)
 					cp->reg[fd] |= 0xffffffff00000000ULL;
-				if (cp->reg[fd+1] & 0x80000000ULL)
-					cp->reg[fd+1] |= 0xffffffff00000000ULL;
+				/*  #226: (Codex/Fable) mask (fd+1)&31 (the paired store
+				    above already does) so fd=31 can't sign-extend reg[32]
+				    -- OOB into adjacent coproc state.  */
+				if (cp->reg[(fd+1) & 31] & 0x80000000ULL)
+					cp->reg[(fd+1) & 31] |= 0xffffffff00000000ULL;
 			}
 		} else {
 			cp->reg[fd] = fs_v & 0xffffffffULL;
@@ -1444,6 +1534,11 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		cond_true = fpu_op(cpu, cp, FPU_OP_C, fmt,
 		    ft, fs, -1, cond, fmt);
 
+		/*  #246: compare trapped on a denormal operand; the condition
+		    codes must remain untouched.  */
+		if (cond_true < 0)
+			return 1;
+
 		/*
 		 *  Both the FCCR and FCSR contain condition code bits:
 		 *	FCCR:  bits 7..0
@@ -1644,8 +1739,16 @@ void coproc_tlbwri(struct cpu *cpu, int randomflag)
 				index = cp->nr_of_tlbs - 1;
 			cp->reg[COP0_RANDOM] = index << R2K3K_RANDOM_SHIFT;
 		} else {
-			cp->reg[COP0_RANDOM] = cp->reg[COP0_WIRED] + (random()
-			    % (cp->nr_of_tlbs - cp->reg[COP0_WIRED]));
+			/*  #190: (Codex/Fable) COP0_WIRED is guest-writable; if it
+			    reaches or exceeds nr_of_tlbs the modulo below divides by
+			    zero (or the unsigned subtraction underflows) -> host SIGFPE.
+			    Pin Random at the top entry like hardware does on a bad
+			    WIRED instead of computing a random index.  */
+			if (cp->reg[COP0_WIRED] >= (uint64_t)cp->nr_of_tlbs)
+				cp->reg[COP0_RANDOM] = cp->nr_of_tlbs - 1;
+			else
+				cp->reg[COP0_RANDOM] = cp->reg[COP0_WIRED] + (random()
+				    % (cp->nr_of_tlbs - cp->reg[COP0_WIRED]));
 			index = cp->reg[COP0_RANDOM] & RANDOM_MASK;
 		}
 	} else {
@@ -1824,11 +1927,12 @@ void coproc_tlbwri(struct cpu *cpu, int randomflag)
 		cpu->cd.mips.last_written_tlb_index = index;
 
 		if (cp->reg[COP0_STATUS] & MIPS1_ISOL_CACHES) {
-			fatal("Wow! Interesting case; tlbw* while caches"
-			    " are isolated. TODO\n");
-			/*  Don't update the translation table in this
-			    case...  */
-			exit(1);
+			/*  #239: A guest that writes the TLB while caches are
+			    isolated must not halt the host. The architectural
+			    TLB entry was already written above; only skip the
+			    host fast-map optimisation and return, as the TODO
+			    comment intends, instead of exit(1).  */
+			return;
 		}
 
 		/*  If we have a memblock (host page) for the physical

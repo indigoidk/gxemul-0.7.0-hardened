@@ -729,6 +729,12 @@ X(div)
 	} else if (reg(ic->arg[2]) == 0) {
 		SYNCH_PC;
 		m88k_exception(cpu, M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE, 0);
+	} else if (reg(ic->arg[1]) == 0x80000000U &&
+	    reg(ic->arg[2]) == 0xffffffffU) {
+		/*  #195: (Codex/Fable) INT_MIN / -1 overflows and is C UB
+		    (host SIGFPE); the m88k ALU yields the wrapped 2's-complement
+		    result 0x80000000.  */
+		reg(ic->arg[0]) = 0x80000000U;
 	} else {
 		int32_t res = (int32_t) reg(ic->arg[1]) / (int32_t) reg(ic->arg[2]);
 		reg(ic->arg[0]) = res;

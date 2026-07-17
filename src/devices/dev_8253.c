@@ -140,7 +140,7 @@ DEVICE_ACCESS(8253)
 						    d->timer0, d->hz[0]);
 					break;
 				case 1:	fatal("TODO: DMA refresh?\n");
-					exit(1);
+					break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
 				case 2:	fatal("TODO: 8253 tone generation?\n");
 					break;
 				}
@@ -148,7 +148,7 @@ DEVICE_ACCESS(8253)
 			default:fatal("[ 8253: huh? writing to counter"
 				    " %i but neither from msb nor lsb? ]\n",
 				    relative_addr);
-				exit(1);
+				break;	/*  #223: (Codex/Fable) don't exit() the host  */
 			}
 		} else {
 			switch (d->mode_byte & 0x30) {
@@ -162,7 +162,7 @@ DEVICE_ACCESS(8253)
 			default:fatal("[ 8253: huh? reading from counter"
 				    " %i but neither from msb nor lsb? ]\n",
 				    relative_addr);
-				exit(1);
+				break;	/*  #223: (Codex/Fable) don't exit() the host  */
 			}
 		}
 
@@ -202,8 +202,9 @@ DEVICE_ACCESS(8253)
 			debug("]\n");
 
 			if (idata & I8253_TIMER_BCD) {
+				/*  #223: (Codex/Fable) warn+ignore BCD mode instead of
+				    exit()ing the host.  */
 				fatal("[ 8253: BCD not yet implemented ]\n");
-				exit(1);
 			}
 		} else {
 			debug("[ 8253: read; can this actually happen? ]\n");
@@ -218,7 +219,7 @@ DEVICE_ACCESS(8253)
 			fatal("[ 8253: unimplemented read from address 0x%x "
 			    "]\n", (int)relative_addr);
 		}
-		exit(1);
+		break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
 	}
 
 	if (writeflag == MEM_READ)

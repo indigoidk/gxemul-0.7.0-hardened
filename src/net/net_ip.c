@@ -942,6 +942,12 @@ void net_ip(struct net *net, struct nic_data *nic, unsigned char *packet,
 {
 	int i;
 
+	/*  #162: (Codex/Fable) the debug dump below reads fixed offsets up
+	    to packet[33], but the caller only guarantees len >= 20; drop
+	    short frames before any such read.  */
+	if (len < 34)
+		return;
+
 	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
 		char s[2000];
 		
@@ -1018,9 +1024,19 @@ static void net_ip_broadcast_dhcp(struct net *net, struct nic_data *nic,
 	struct ethernet_packet_link *lp;
         int i, reply_len;
 
+	/*  #177: (Codex/Fable) the debug dumps assume DHCP fields at fixed
+	    offsets up to packet[85], but the caller's tail-cut can pass len
+	    as low as 14; drop short frames before the first such read
+	    (as #162).  */
+	if (len < 86) {
+		debugmsg(SUBSYS_NET, "IPv4 DHCP", VERBOSITY_ERROR,
+		    "packet too short? len=%i", len);
+		return;
+	}
+
 	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
 		char s[4000];
-		
+
 		snprintf(s, sizeof(s), "ver=%02x ", packet[14]);
 		snprintf(s+strlen(s), sizeof(s)-strlen(s), "tos=%02x ", packet[15]);
 		snprintf(s+strlen(s), sizeof(s)-strlen(s), "len=%02x%02x ", packet[16], packet[17]);
@@ -1193,6 +1209,12 @@ void net_ip_broadcast(struct net *net, struct nic_data *nic,
 	unsigned char *p = (unsigned char *) &net->netmask_ipv4;
 	uint32_t x, y;
 	int i, xl, warning = 0, match = 0;
+
+	/*  #162: (Codex/Fable) this function reads fixed offsets up to
+	    packet[37] (dst address, UDP ports), but the caller only
+	    guarantees len >= 20; drop short frames before any such read.  */
+	if (len < 38)
+		return;
 
 	if (ENOUGH_VERBOSITY(SUBSYS_NET, VERBOSITY_DEBUG)) {
 		char s[4000];

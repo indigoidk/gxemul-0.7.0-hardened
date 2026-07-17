@@ -342,6 +342,15 @@ static void le_tx(struct net *net, struct le_data *d)
 			d->tx_packet_len = buflen;
 			CHECK_ALLOCATION(d->tx_packet = (unsigned char *) malloc(buflen));
 		} else {
+			/*  #199: (Codex/Fable) cap the aggregate multi-fragment TX
+			    packet so a guest rearming a non-ENP descriptor can't grow
+			    host memory without bound.  */
+			if ((size_t)d->tx_packet_len + buflen > 65536) {
+				free(d->tx_packet);
+				d->tx_packet = NULL;
+				d->tx_packet_len = 0;
+				return;
+			}
 			d->tx_packet_len += buflen;
 			CHECK_ALLOCATION(d->tx_packet = (unsigned char *)
 			    realloc(d->tx_packet, d->tx_packet_len));

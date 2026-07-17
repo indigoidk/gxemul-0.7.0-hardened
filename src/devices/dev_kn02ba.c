@@ -113,7 +113,10 @@ DEVICE_ACCESS(kn02ba_mer)
 			fatal("[ kn02ba_mer: write to offset 0x%08lx: 0x%08x ]\n",
 			    (long)relative_addr, (int)idata);
 		}
-		exit(1);
+		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
+		    kn02ba MER/MSR offset must not exit() the host; warn (above)
+		    and ignore.  */
+		break;
 	}
 
 	if (writeflag == MEM_READ)
@@ -154,7 +157,10 @@ DEVICE_ACCESS(kn02ba_msr)
 			fatal("[ kn02ba_msr: write to offset 0x%08lx: 0x%08x ]\n",
 			    (long)relative_addr, (int)idata);
 		}
-		exit(1);
+		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
+		    kn02ba MER/MSR offset must not exit() the host; warn (above)
+		    and ignore.  */
+		break;
 	}
 
 	if (writeflag == MEM_READ)

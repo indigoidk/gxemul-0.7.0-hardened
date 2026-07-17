@@ -172,9 +172,10 @@ if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
 
 not_found:
 	/*  No match.  */
+	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+	    abort()/exit() the host; report no-translation (0) so the caller
+	    raises the fault (keeps the emulator alive and debuggable).  */
 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
-abort();
-	exit(1);
 	return 0;
 }
 

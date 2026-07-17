@@ -1767,6 +1767,24 @@ cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid);
 
 #endif	/*  !MODE32  */
 	}
+
+	/*
+	 *  #250: if this page overlaps a data write-watchpoint, keep it out of
+	 *  the fast store table so every store to it traps to memory_rw, where
+	 *  the watchpoint is evaluated. NOP unless a watchpoint is set; only
+	 *  the watched page(s) are affected, so a run without watchpoints is
+	 *  behaviourally identical. index (MODE32) and l3/x3 (!MODE32) are
+	 *  valid here for both the new-mapping and update branches.
+	 */
+	if (cpu->machine->watchpoints.n != 0 &&
+	    machine_watchpoint_match(cpu->machine, paddr_page,
+	    DYNTRANS_PAGESIZE)) {
+#ifdef MODE32
+		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
+#else
+		l3->host_store[x3] = NULL;
+#endif
+	}
 }
 #endif	/*  DYNTRANS_UPDATE_TRANSLATION_TABLE  */
 
@@ -1784,6 +1802,27 @@ cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid);
 		for (i=0; i<cpu->machine->breakpoints.n; i++)
 			if (curpc == (MODE_uint_t)
 			    cpu->machine->breakpoints.addr[i]) {
+				/*
+				 *  #248: count every hit, and honor a
+				 *  per-breakpoint ignore-count so that
+				 *  "breakpoint add addr, N" runs past the
+				 *  first N hits before stopping. Setting
+				 *  single_step_breakpoint (without single_step)
+				 *  makes the TAIL execute this instruction once
+				 *  and mark it for re-translation, so the check
+				 *  fires again on the next hit.
+				 */
+				cpu->machine->breakpoints.hitcount[i] ++;
+				if (cpu->machine->breakpoints.ignore_left[i] > 0
+#ifdef DYNTRANS_DELAYSLOT
+				    && cpu->delay_slot == NOT_DELAYED
+#endif
+				    ) {
+					cpu->machine->breakpoints.
+					    ignore_left[i] --;
+					single_step_breakpoint = 1;
+					break;
+				}
 				if (!cpu->machine->instruction_trace) {
 					int tmp_old_quiet_mode = quiet_mode;
 					quiet_mode = 0;
@@ -1846,7 +1885,8 @@ cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid);
 	 *  we also ignore combinations if the delay slot is across a page
 	 *  boundary.
 	 */
-	if (!single_step && !cpu->machine->instruction_trace
+	if (!single_step && !single_step_breakpoint
+	    && !cpu->machine->instruction_trace
 #ifdef DYNTRANS_DELAYSLOT
 	    && !in_crosspage_delayslot
 #endif

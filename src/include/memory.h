@@ -153,6 +153,10 @@ void memory_device_dyntrans_access(struct cpu *, struct memory *mem,
 void memory_device_update_data(struct memory *mem, void *extra,
 	unsigned char *data);
 
+/*  #182: (Codex/Fable) resize a registered device's mapped length.  */
+void memory_device_update_length(struct memory *mem, void *extra,
+	uint64_t newlength);
+
 void memory_device_register(struct memory *mem, const char *,
 	uint64_t baseaddr, uint64_t len, int (*f)(struct cpu *,
 	    struct memory *,uint64_t,unsigned char *,size_t,int,void *),

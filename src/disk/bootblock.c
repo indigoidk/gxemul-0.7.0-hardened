@@ -143,14 +143,22 @@ int load_bootblock(struct machine *m, struct cpu *cpu,
 		/*  Remember the name of the file to boot (1ST_READ.BIN):  */
 		if (cpu->machine->boot_kernel_filename == NULL ||
 		    cpu->machine->boot_kernel_filename[0] == '\0') {
-			int i = 0x60;
-			while (i < 0x70) {
-				if (bootblock_buf[i] == ' ')
-					bootblock_buf[i] = 0;
+			/*  #160: (Codex/Fable) copy exactly
+			    the 16-byte IP.BIN name field into a NUL-terminated
+			    local buffer; a strdup() directly from bootblock_buf
+			    could scan past the field (and the allocation) when
+			    it contains no NUL/space.  */
+			char name[17];
+			int i = 0;
+			memcpy(name, bootblock_buf + 0x60, 16);
+			name[16] = '\0';
+			while (i < 16) {
+				if (name[i] == ' ')
+					name[i] = '\0';
 				i ++;
 			}
 			CHECK_ALLOCATION(cpu->machine->boot_kernel_filename =
-			    strdup((char *)bootblock_buf + 0x60));
+			    strdup(name));
 		}
 
 		debug("Dreamcast boot filename: %s (to be loaded to 0x8c010000)\n",

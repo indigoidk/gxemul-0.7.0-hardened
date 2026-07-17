@@ -185,7 +185,12 @@ static void show_breakpoint(struct machine *m, int i)
 		printf("%016" PRIx64, (uint64_t) m->breakpoints.addr[i]);
 	if (m->breakpoints.string[i] != NULL)
 		printf(" (%s)", m->breakpoints.string[i]);
-	printf("\n");
+	/*  #248: show hit accounting.  */
+	printf("  [hits=%" PRIi64, (int64_t) m->breakpoints.hitcount[i]);
+	if (m->breakpoints.ignore_left[i] > 0)
+		printf(", ignore %" PRIi64 " more",
+		    (int64_t) m->breakpoints.ignore_left[i]);
+	printf("]\n");
 }
 
 
@@ -519,6 +524,24 @@ static char *debugger_readline(void)
 				    ", stopped");
 
 			debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO, "%s", info);
+
+			/*  #248: also show breakpoint hit counts.  */
+			for (i = 0; i < debugger_machine->breakpoints.n; i++) {
+				char bpinfo[200];
+				snprintf(bpinfo, sizeof(bpinfo),
+				    "breakpoint %i: hits=%" PRIi64, i,
+				    (int64_t) debugger_machine->
+				    breakpoints.hitcount[i]);
+				if (debugger_machine->breakpoints.ignore_left[i]
+				    > 0)
+					snprintf(bpinfo + strlen(bpinfo),
+					    sizeof(bpinfo) - strlen(bpinfo),
+					    " (ignore %" PRIi64 " more)",
+					    (int64_t) debugger_machine->
+					    breakpoints.ignore_left[i]);
+				debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO,
+				    "%s", bpinfo);
+			}
 
 			color_prompt();
 			printf("GXemul> ");

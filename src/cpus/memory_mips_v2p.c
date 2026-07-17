@@ -175,13 +175,17 @@ int TRANSLATE_ADDRESS(struct cpu *cpu, uint64_t vaddr,
 		x_64 = status & STATUS_KX;
 		break;
 	case KSU_SUPERVISOR:
+		/*  #238: Supervisor mode is not fully modelled, but a guest
+		    that enters it must not halt the host emulator. Take the
+		    64-bit-addressing flag from Status.SX and fall through to
+		    the normal (kernel-style) TLB walk, which faults on any
+		    truly-invalid access instead of exit(1).  */
 		x_64 = status & STATUS_SX;
-		/*  FALLTHROUGH, since supervisor address spaces are not
-		    really implemented yet.  */
-		// fall through
-	default:fatal("memory_mips_v2p.c: ksu=%i not yet implemented yet\n",
-		    ksu);
-		exit(1);
+		break;
+	default:/*  #238: Reserved KSU value (only 3 on R4000): don't halt;
+		    do a best-effort 32-bit TLB walk so the guest just faults. */
+		x_64 = 0;
+		break;
 	}
 
 	n_tlbs = cpu->cd.mips.cpu_type.nr_of_tlb_entries;
@@ -295,8 +299,13 @@ int TRANSLATE_ADDRESS(struct cpu *cpu, uint64_t vaddr,
 				case 0x07fffff:	pageshift = 22; break;
 				case 0x1ffffff:	pageshift = 24; break;
 				case 0x7ffffff:	pageshift = 26; break;
+				/*  #189: (Codex/Fable) a non-standard, guest-controlled
+				    PageMask must not exit() the host -- treat the odd-sized
+				    TLB entry as a miss/refill so the guest faults and the
+				    emulator stays alive and debuggable (also covers R4100,
+				    which #188 does not canonicalize on write).  */
 				default:fatal("pmask=%08" PRIx32"\n", pmask);
-					exit(1);
+					goto exception;
 				}
 
 				entry_vpn2 = (cached_hi &

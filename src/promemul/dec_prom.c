@@ -95,7 +95,6 @@ static unsigned char mem_readchar(struct cpu *cpu, int regbase, int offset)
  */
 int dec_jumptable_func(struct cpu *cpu, int vector)
 {
-	int i;
 	static int file_opened = 0;
 	static int current_file_offset = 0;
 
@@ -119,16 +118,26 @@ int dec_jumptable_func(struct cpu *cpu, int vector)
 		 *  is ignored, and a file handle value of 1 is returned.
 		 */
 		if (file_opened) {
-			fatal("\ndec_jumptable_func(): opening more than one "
-			    "file isn't supported yet.\n");
-			cpu->running = 0;
+			/*  #241: Opening a second file is unsupported, but
+			    return an error to the guest (V0 = -1) instead of
+			    halting the host emulator.  */
+			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec",
+			    VERBOSITY_DEBUG,		/*  #245: gate  */
+			    "open() of a second file is not supported");
+			cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
+			break;
 		}
 		file_opened = 1;
 		cpu->cd.mips.gpr[MIPS_GPR_V0] = 1;
 		break;
 	case 0x38:	/*  read(handle, ptr, length)  */
 		cpu->cd.mips.gpr[MIPS_GPR_V0] = (uint64_t) -1;
-		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0) {
+		/*  #191: (Codex/Fable) A2 is a guest-supplied length; cap it so a
+		    huge value can't drive malloc()->CHECK_ALLOCATION->exit() (a
+		    guest-reachable host DoS/OOM). 64 MB is far above any real
+		    PROM disk read.  */
+		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0 &&
+		    cpu->cd.mips.gpr[MIPS_GPR_A2] <= 64*1024*1024) {
 			int disk_id = diskimage_bootdev(cpu->machine, NULL);
 			int res;
 			unsigned char *tmp_buf;
@@ -173,22 +182,15 @@ int dec_jumptable_func(struct cpu *cpu, int vector)
 	case 0x108:	/*  getenv2()  */
 		return 0x64;
 	default:
-		cpu_register_dump(cpu->machine, cpu, 1, 0x1);
-		printf("a0 points to: ");
-		for (i=0; i<40; i++) {
-			unsigned char ch = '\0';
-			cpu->memory_rw(cpu, cpu->mem,
-			    (int32_t)cpu->cd.mips.gpr[MIPS_GPR_A0] + i, &ch,
-			    sizeof(ch), MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
-			if (ch >= ' ' && ch < 126)
-				printf("%c", ch);
-			else
-				printf("[%02x]", ch);
-		}
-		printf("\n");
-		fatal("PROM emulation: unimplemented JUMP TABLE vector "
-		    "0x%x (decimal function %i)\n", vector, vector/8);
-		cpu->running = 0;
+		/*  #245: emit one verbosity-gated line instead of an
+		    unconditional register dump + a0 string scan, so a guest
+		    spamming bad jump-table vectors can't flood the host log
+		    (raise promemul verbosity / `break promemul` for full state). */
+		debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec", VERBOSITY_DEBUG,
+		    "unimplemented JUMP TABLE vector 0x%x (decimal function %i)",
+		    vector, vector/8);
+		/*  #241: return an error to the guest instead of halting.  */
+		cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
 	}
 
 	return 0;
@@ -449,7 +451,12 @@ int decstation_prom_emul(struct cpu *cpu)
 
 		cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;
 
-		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0) {
+		/*  #191: (Codex/Fable) A2 is a guest-supplied length; cap it so a
+		    huge value can't drive malloc()->CHECK_ALLOCATION->exit() (a
+		    guest-reachable host DoS/OOM). 64 MB is far above any real
+		    PROM disk read.  */
+		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0 &&
+		    cpu->cd.mips.gpr[MIPS_GPR_A2] <= 64*1024*1024) {
 			int disk_id = diskimage_bootdev(cpu->machine, NULL);
 			int res;
 			unsigned char *tmp_buf;
@@ -626,30 +633,25 @@ int decstation_prom_emul(struct cpu *cpu)
 			cpu->running = 0;
 			break;
 		default:
-			fatal("DEC prom emulation: unknown rex() a0=0x%" PRIx64
-			    " ('%c')\n",
+			/*  #241: unknown rex() subfunction — return an error to
+			    the guest instead of halting the host.  */
+			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec",
+			    VERBOSITY_DEBUG,		/*  #245: gate  */
+			    "unknown rex() a0=0x%" PRIx64 " ('%c')",
 			    (int64_t) cpu->cd.mips.gpr[MIPS_GPR_A0],
 			    (char) cpu->cd.mips.gpr[MIPS_GPR_A0]);
-			cpu->running = 0;
+			cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
 		}
 		break;
 	default:
-		cpu_register_dump(cpu->machine, cpu, 1, 0x1);
-		printf("a0 points to: ");
-		for (i=0; i<40; i++) {
-			unsigned char chTmp = '\0';
-			cpu->memory_rw(cpu, cpu->mem, (int32_t)
-			    cpu->cd.mips.gpr[MIPS_GPR_A0] + i, &chTmp,
-			    sizeof(chTmp), MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
-			if (chTmp >= ' ' && chTmp < 126)
-				printf("%c", chTmp);
-			else
-				printf("[%02x]", chTmp);
-		}
-		printf("\n");
-		fatal("PROM emulation: unimplemented callback vector 0x%x\n",
-		    vector);
-		cpu->running = 0;
+		/*  #245: emit one verbosity-gated line instead of an
+		    unconditional register dump + a0 string scan, so a guest
+		    spamming bad callback vectors can't flood the host log
+		    (raise promemul verbosity / `break promemul` for full state). */
+		debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec", VERBOSITY_DEBUG,
+		    "unimplemented callback vector 0x%x", vector);
+		/*  #241: return an error to the guest instead of halting.  */
+		cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
 	}
 
 	return 1;

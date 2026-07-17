@@ -168,8 +168,10 @@ int arm_translate_v2p_mmu(struct cpu *cpu, uint64_t vaddr64,
 
 		q = memory_paddr_to_hostaddr(cpu->mem, addr & 0x0fffffff, 0);
 		if (q == NULL) {
-			printf("arm memory blah blah adfh asfg asdgasdg\n");
-			exit(1);
+			/*  #193: (Codex/Fable) an L2 page-table page outside mapped
+			    RAM must fault the guest, not exit() the host.  */
+			fs = FAULT_TRANS_P;
+			goto exception_return;
 		}
 		d2 = *(uint32_t *)(q);
 #ifdef HOST_LITTLE_ENDIAN

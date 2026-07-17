@@ -108,7 +108,11 @@ int ppc_bat(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr, int flags,
 	    but ONLY when the guest has enabled them via HID0[HIGH_BAT_EN].  This
 	    keeps the aliased DC_ADR/DC_DAT/DC_CST (0x231/0x232/0x238) cache-debug
 	    SPRs from spoofing a BAT on a non-745x guest (Codex+agy consensus).  */
-	if (cpu->cd.ppc.spr[SPR_HID0] & HID0_HIGH_BAT_EN)
+	/*  #174: (Codex/Fable) also require the modeled CPU to actually
+	    have the extended BATs (PPC_HIGH_BAT capability), so that e.g.
+	    a 603/7400 guest cannot enable them via HID0.  */
+	if ((cpu->cd.ppc.cpu_type.flags & PPC_HIGH_BAT) &&
+	    (cpu->cd.ppc.spr[SPR_HID0] & HID0_HIGH_BAT_EN))
 		return ppc_bat_block(cpu, vaddr, return_paddr, flags, user,
 		    istart, iend, SPR_IBAT4U);
 

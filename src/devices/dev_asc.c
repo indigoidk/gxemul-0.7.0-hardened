@@ -213,8 +213,14 @@ static int dev_asc_fifo_read(struct asc_data *d)
 {
 	int res = d->fifo[d->fifo_out];
 
-	if (d->fifo_in == d->fifo_out)
+	if (d->fifo_in == d->fifo_out) {
+		/*  #197: (Codex/Fable) reading an empty FIFO must not drive
+		    n_bytes_in_fifo negative -- a later non-DMA selection turns
+		    the negative count into a huge size_t alloc -> exit(). Warn
+		    and return without underflowing.  */
 		fatal("dev_asc: WARNING! FIFO overrun!\n");
+		return res;
+	}
 
 	d->fifo_out = (d->fifo_out + 1) % ASC_FIFO_LEN;
 	d->n_bytes_in_fifo --;
@@ -230,6 +236,11 @@ static int dev_asc_fifo_read(struct asc_data *d)
  */
 static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
 {
+	/*  #197: (Codex/Fable) don't push the FIFO occupancy past its
+	    physical size; a bloated count later becomes a huge size_t alloc
+	    -> exit() (mirror of the read underflow guard).  */
+	if (d->n_bytes_in_fifo >= ASC_FIFO_LEN)
+		return;
 	d->fifo[d->fifo_in] = data;
 	d->fifo_in = (d->fifo_in + 1) % ASC_FIFO_LEN;
 	d->n_bytes_in_fifo ++;
@@ -273,6 +284,17 @@ static int dev_asc_transfer(struct cpu *cpu, struct asc_data *d, int dmaflag)
 {
 	int res = 1, all_done = 1;
 	int len, i, ch;
+
+	/*  #167: (Codex/Fable) a transfer command issued
+	    before any SELECT leaves d->xferp NULL (fresh state has cur_phase ==
+	    PHASE_DATA_OUT); returning failure here lets the callers report a
+	    disconnect (NCRINTR_DIS|NCRSTAT_INT) instead of dereferencing NULL
+	    in the phase branches below.  */
+	if (d->xferp == NULL) {
+		fatal("[ asc: transfer command with no transfer in"
+		    " progress (no SELECT)? ]\n");
+		return 0;
+	}
 
 	if (!quiet_mode)
 		debug(" { TRANSFER to/from id %i: ", d->reg_wo[NCR_SELID] & 7);
@@ -1178,14 +1200,19 @@ break;
 			break;
 
 		default:
-			fatal("(unimplemented asc cmd 0x%02x)", (int)idata);
+			/*  #240: An unimplemented/illegal ASC command must not
+			    halt the host. The illegal-command interrupt has
+			    been asserted (NCRSTAT_INT | NCRINTR_ILL) and
+			    dev_asc_tick() delivers it to the guest, exactly as
+			    real hardware reports an illegal command.  */
+			/*  #245: route the guest-spammable diagnostic through the
+			    verbosity-gated SUBSYS_DEVICE channel (suppressed by
+			    default, shown at -v or `break device`) so a guest
+			    hammering NCR_CMD can't flood the host log.  */
+			debugmsg_cpu(cpu, SUBSYS_DEVICE, "asc", VERBOSITY_DEBUG,
+			    "unimplemented command 0x%02x", (int)idata);
 			d->reg_ro[NCR_STAT] |= NCRSTAT_INT;
 			d->reg_ro[NCR_INTR] |= NCRINTR_ILL;
-			/*
-			 *  TODO:  exit or continue with Illegal command
-			 *  interrupt?
-			 */
-			exit(1);
 		}
 	}
 

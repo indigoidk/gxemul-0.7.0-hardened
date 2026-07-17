@@ -390,6 +390,12 @@ static size_t diskimage_access__cdrom(struct diskimage *d, off_t offset,
 	/*  printf("diskimage_access__cdrom(): offset=0x%llx size=%lli\n",
 	    (long long)offset, (long long)len);  */
 
+	/*  #204: (Codex/Fable) a negative offset (a guest can seek an opened
+	    flat CD/ISO handle to 0xffffffff) truncates toward zero, leaving
+	    buf_ofs negative below -> cdrom_buf[-1] OOB stack read.  */
+	if (offset < 0)
+		return 0;
+
 	aligned_offset = (offset / CDROM_SECTOR_SIZE) * CDROM_SECTOR_SIZE;
 	my_fseek(d->f, aligned_offset, SEEK_SET);
 
@@ -502,19 +508,47 @@ static bool diskimage__cue_get_token(char **pp, char *buf, size_t buflen)
  *  Returns a newly allocated string with the host path of a bin file
  *  referenced from a cue sheet.  Relative names are resolved against the
  *  directory containing the cue sheet itself.
+ *
+ *  Returns NULL if the referenced name is rejected (absolute path, drive
+ *  prefix, or a ".." path component); the cue sheet is untrusted input and
+ *  must not be able to name host files outside the cue sheet's directory.
  */
 static char *diskimage__cue_resolve_path(const char *cuename,
 	const char *binname)
 {
 	const char *slash = strrchr(cuename, '/');
 	const char *backslash = strrchr(cuename, '\\');
+	const char *p;
 	char *result;
 	size_t dirlen;
+
+	/*  #158: (Codex/Fable) default-deny path escape
+	    from cue sheets: reject absolute paths and drive prefixes...  */
+	if (binname[0] == '/' || binname[0] == '\\' ||
+	    (((binname[0] >= 'A' && binname[0] <= 'Z') ||
+	      (binname[0] >= 'a' && binname[0] <= 'z')) && binname[1] == ':')) {
+		debugmsg(SUBSYS_DISK, "cue", VERBOSITY_ERROR,
+		    "%s: refusing absolute FILE path \"%s\"",
+		    cuename, binname);
+		return NULL;
+	}
+
+	/*  ...and reject any ".." path component:  */
+	for (p = binname; *p != '\0'; p ++) {
+		if (p[0] == '.' && p[1] == '.' &&
+		    (p == binname || p[-1] == '/' || p[-1] == '\\') &&
+		    (p[2] == '\0' || p[2] == '/' || p[2] == '\\')) {
+			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_ERROR,
+			    "%s: refusing FILE path \"%s\" containing \"..\"",
+			    cuename, binname);
+			return NULL;
+		}
+	}
 
 	if (backslash != NULL && (slash == NULL || backslash > slash))
 		slash = backslash;
 
-	if (binname[0] == '/' || binname[0] == '\\' || slash == NULL) {
+	if (slash == NULL) {
 		CHECK_ALLOCATION(result = strdup(binname));
 		return result;
 	}
@@ -822,7 +856,14 @@ static bool diskimage__parse_cue(struct diskimage *d)
 		struct stat st;
 		char *resolved = diskimage__cue_resolve_path(d->fname,
 		    file_name[i]);
-		FILE *bf = fopen(resolved, "r");
+		FILE *bf;
+
+		/*  #158: (Codex/Fable) NULL means the
+		    FILE path was rejected (path escape attempt).  */
+		if (resolved == NULL)
+			goto fail;
+
+		bf = fopen(resolved, "r");
 
 		if (bf == NULL) {
 			debugmsg(SUBSYS_DISK, "cue", VERBOSITY_WARNING,
@@ -1182,12 +1223,15 @@ static size_t fwrite_helper(off_t offset, unsigned char *buf,
 		fatal("TODO: overlay access (write), len not multiple of "
 		    "overlay block size. not yet implemented.\n");
 		fatal("len = %lli\n", (long long) len);
-		abort();
+		/*  #164: (Codex/Fable) guest-controlled
+		    length must not abort() the emulator; fail the I/O.  */
+		return 0;
 	}
 	if ((offset & (OVERLAY_BLOCK_SIZE-1)) != 0) {
 		fatal("TODO: unaligned overlay access\n");
 		fatal("offset = %lli\n", (long long) offset);
-		abort();
+		/*  #164: (Codex/Fable) same as above.  */
+		return 0;
 	}
 
 	/*  Split the write into OVERLAY_BLOCK_SIZE writes:  */
@@ -1314,12 +1358,15 @@ int diskimage__internal_access(struct diskimage *d, int writeflag,
 {
 	ssize_t lendone;
 
+	/*  #206: (Codex/Fable) a legal zero-length access (e.g. SCSI WRITE(10)
+	    with transfer length 0) arrives with buf==NULL; treat it as a no-op
+	    before the NULL check so it can't exit() the host.  */
+	if (len == 0)
+		return 1;
 	if (buf == NULL) {
 		fprintf(stderr, "diskimage__internal_access(): buf = NULL\n");
 		exit(1);
 	}
-	if (len == 0)
-		return 1;
 	if (d->f == NULL)
 		return 0;
 

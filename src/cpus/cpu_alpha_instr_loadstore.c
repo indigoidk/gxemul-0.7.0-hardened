@@ -67,8 +67,10 @@ static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
 	/*  Load:  */
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
 	    MEM_READ, CACHE_DATA)) {
-		fatal("store failed: TODO\n");
-		exit(1);
+		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+		    already signalled a fault (cf. #194's no-translation return);
+		    abandon the access instead of exit()ing the host.  */
+		return;
 	}
 
 	data_x = data[0];
@@ -109,8 +111,10 @@ static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
 
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
 	    MEM_WRITE, CACHE_DATA)) {
-		fatal("store failed: TODO\n");
-		exit(1);
+		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+		    already signalled a fault (cf. #194's no-translation return);
+		    abandon the access instead of exit()ing the host.  */
+		return;
 	}
 
 #ifdef LS_LLSC

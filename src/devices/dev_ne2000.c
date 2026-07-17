@@ -189,10 +189,19 @@ static void ne_mem_writeb(struct ne2000_data *d, uint16_t addr, uint8_t val)
  */
 static uint8_t ne_dma_readb(struct ne2000_data *d)
 {
-	uint8_t v = ne_mem_readb(d, d->rsar);
+	uint8_t v;
+
+	/*  #181: (Codex/Fable) count exhausted: the trailing bytes of
+	    a wide data-port access must not touch card memory or advance
+	    RSAR; only the RDC latch is kept alive.  */
+	if (d->rbcr == 0) {
+		d->isr |= ED_ISR_RDC;
+		return 0xff;
+	}
+
+	v = ne_mem_readb(d, d->rsar);
 	d->rsar++;
-	if (d->rbcr > 0)
-		d->rbcr--;
+	d->rbcr--;
 	if (d->rbcr == 0)
 		d->isr |= ED_ISR_RDC;
 	return v;
@@ -200,10 +209,15 @@ static uint8_t ne_dma_readb(struct ne2000_data *d)
 
 static void ne_dma_writeb(struct ne2000_data *d, uint8_t v)
 {
+	/*  #181: (Codex/Fable) see ne_dma_readb().  */
+	if (d->rbcr == 0) {
+		d->isr |= ED_ISR_RDC;
+		return;
+	}
+
 	ne_mem_writeb(d, d->rsar, v);
 	d->rsar++;
-	if (d->rbcr > 0)
-		d->rbcr--;
+	d->rbcr--;
 	if (d->rbcr == 0)
 		d->isr |= ED_ISR_RDC;
 }
@@ -265,10 +279,18 @@ static void ne2000_do_tx(struct net *net, struct ne2000_data *d)
 	int i, len = d->tbcr;
 	uint32_t src = ((uint32_t)d->tpsr) << 8;
 
-	if (len > (int)sizeof(buf)) {
+	/*  #180: (Codex/Fable) the whole tx span must lie inside the RAM
+	    ring: the (uint16_t)(src+i) below otherwise wraps, so e.g.
+	    TPSR=0xff would alias the station PROM and emit card-private
+	    bytes.  Fail the transmit instead of clamping.  */
+	if (src < NE_RAM_START || src >= NE_RAM_END ||
+	    (uint32_t)len > NE_RAM_END - src || len > NE_MAX_TX) {
 		debugmsg(d->subsys, "tx", VERBOSITY_WARNING,
-		    "oversized tx length %i clamped to %i", len, (int)sizeof(buf));
-		len = sizeof(buf);
+		    "bogus tx span tpsr=0x%02x tbcr=%i; transmit error",
+		    d->tpsr, len);
+		d->isr |= ED_ISR_TXE;
+		d->cr &= ~ED_CR_TXP;
+		return;
 	}
 
 	for (i = 0; i < len; i++)
@@ -388,17 +410,20 @@ static void ne2000_cr_write(struct net *net, struct ne2000_data *d, uint8_t val)
 	uint8_t old = d->cr;
 	d->cr = val;
 
-	/*  RST is cleared by a START command and (re)set by STOP.  */
-	if (val & ED_CR_STA)
-		d->isr &= ~ED_ISR_RST;
-	else if (val & ED_CR_STP)
+	/*  RST is cleared by a START command and (re)set by STOP.
+	    #178: (Codex/Fable) STP dominates STA, so a STA|STP write
+	    stays stopped.  */
+	if (val & ED_CR_STP)
 		d->isr |= ED_ISR_RST;
+	else if (val & ED_CR_STA)
+		d->isr &= ~ED_ISR_RST;
 
 	/*  Transmit on the rising edge of TXP, but only when started: the real
 	    8390 ignores TXP in the stopped (reset) state.  RST is already updated
-	    above, so a single STA|TXP write (which if_ed uses) works.  */
+	    above, so a single STA|TXP write (which if_ed uses) works.
+	    #178: (Codex/Fable) also explicitly reject TXP while STP is set.  */
 	if ((val & ED_CR_TXP) && !(old & ED_CR_TXP)) {
-		if (!(d->isr & ED_ISR_RST))
+		if (!(d->isr & ED_ISR_RST) && !(val & ED_CR_STP))
 			ne2000_do_tx(net, d);
 		else
 			debugmsg(d->subsys, "tx", VERBOSITY_WARNING,
@@ -446,6 +471,18 @@ DEVICE_TICK(ne2000)
 			if (d->isr & ED_ISR_OVW)
 				break;
 		}
+	} else {
+		/*  #178: (Codex/Fable) receiver disabled (STP or monitor
+		    mode): drain and discard a bounded number of this nic's
+		    queued packets per tick, so the net layer's reply queue
+		    can not grow while the guest transmits with rx off.  */
+		int budget = 16;
+		unsigned char *pkt;
+		int pktlen;
+
+		while (budget-- > 0 &&
+		    net_ethernet_rx(net, &d->nic, &pkt, &pktlen))
+			free(pkt);
 	}
 
 	ne2000_update_irq(d);

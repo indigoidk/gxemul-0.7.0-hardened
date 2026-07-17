@@ -210,6 +210,14 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 			fseek(f, cur, SEEK_SET);
 		}
 
+		/*  #170: (Codex/Fable) bound the symbol table size, like the
+		    other file format loaders do.  */
+		if (symbsize > LOADER_MAX_TABLE_BYTES) {
+			fprintf(stderr, "%s: a.out symbol table too large\n",
+			    filename);
+			exit(1);
+		}
+
 		CHECK_ALLOCATION(syms = (unsigned char *) malloc(symbsize));
 		len = fread(syms, 1, symbsize, f);
 		if ((uint32_t)len != symbsize) {
@@ -223,6 +231,13 @@ static void file_load_aout(struct machine *m, struct memory *mem,
 		strings_len = ftello(f) - oldpos;
 		fseek(f, oldpos, SEEK_SET);
 		debug("strings: %i bytes @ 0x%x\n", strings_len,(int)ftello(f));
+		/*  #170: (Codex/Fable) bound the string table size, like the
+		    other file format loaders do.  */
+		if ((uint64_t) strings_len > LOADER_MAX_TABLE_BYTES) {
+			fprintf(stderr, "%s: a.out string table too large\n",
+			    filename);
+			exit(1);
+		}
 		CHECK_ALLOCATION(string_symbols = (char *) malloc((size_t)strings_len + 1));
 		if (fread(string_symbols, 1, strings_len, f) != strings_len) {
 			fprintf(stderr, "Could not read symbols from %s?\n", filename);

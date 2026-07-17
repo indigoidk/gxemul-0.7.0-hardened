@@ -130,8 +130,11 @@ void get_rgb(struct sgi_gbe_data *d, uint32_t color, uint8_t* r, uint8_t* g, uin
 		*g = color >> 16;
 		*b = color >>  8;
 		break;
-	default:fatal("sgi gbe get_rgb(): unimplemented mode %i\n", d->color_mode);
-		exit(1);
+	default:/*  #196: (Codex/Fable) d->color_mode is guest-controlled; an
+		    unimplemented WID mode must not exit() the host (get_rgb is
+		    per-pixel, so don't fatal()-flood either) -- render black.  */
+		*r = *g = *b = 0;
+		break;
 	}
 }
 

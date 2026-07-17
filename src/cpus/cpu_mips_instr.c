@@ -1337,6 +1337,13 @@ X(jr)
 		cpu->pc = rs;
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
+		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
+		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
+		    silently rounded down to the IC index by quick_pc_to_pointers.  */
+		if (cpu->pc & 3) {
+			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+			return;
+		}
 		quick_pc_to_pointers(cpu);
 	} else
 		cpu->delay_slot = NOT_DELAYED;
@@ -1360,6 +1367,13 @@ X(jr_ra)
 		cpu->pc = rs;
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
+		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
+		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
+		    silently rounded down to the IC index by quick_pc_to_pointers.  */
+		if (cpu->pc & 3) {
+			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+			return;
+		}
 		quick_pc_to_pointers(cpu);
 	} else
 		cpu->delay_slot = NOT_DELAYED;
@@ -1377,6 +1391,13 @@ X(jr_ra_addiu)
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
 	cpu->pc = rs;
+	/*  #228: (Codex/Fable/agy) misaligned jr target -> AdEL (BadVAddr=rs,
+	    BD=0); count the fused delay-slot addiu before the early return.  */
+	if (cpu->pc & 3) {
+		cpu->n_translated_instrs ++;
+		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+		return;
+	}
 	quick_pc_to_pointers(cpu);
 	cpu->n_translated_instrs ++;
 }
@@ -1397,6 +1418,14 @@ X(jr_ra_trace)
 	cpu->n_translated_instrs ++;
 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
 		cpu->pc = rs;
+		/*  #228: (Codex/Fable/agy) misaligned jr target -> AdEL before the
+		    trace hook (a faulting jump completed no return); set NOT_DELAYED
+		    first so BadVAddr=EPC=rs, BD=0.  */
+		if (cpu->pc & 3) {
+			cpu->delay_slot = NOT_DELAYED;
+			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+			return;
+		}
 		cpu_functioncall_trace_return(cpu);
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
@@ -1427,6 +1456,13 @@ X(jalr)
 		cpu->pc = rs;
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
+		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
+		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
+		    silently rounded down to the IC index by quick_pc_to_pointers.  */
+		if (cpu->pc & 3) {
+			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+			return;
+		}
 		quick_pc_to_pointers(cpu);
 	} else
 		cpu->delay_slot = NOT_DELAYED;
@@ -1452,6 +1488,13 @@ X(jalr_trace)
 	cpu->n_translated_instrs ++;
 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
 		cpu->pc = rs;
+		/*  #228: (Codex/Fable/agy) misaligned jalr target -> AdEL before the
+		    trace hook; set NOT_DELAYED first so BadVAddr=EPC=rs, BD=0.  */
+		if (cpu->pc & 3) {
+			cpu->delay_slot = NOT_DELAYED;
+			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
+			return;
+		}
 		cpu_functioncall_trace(cpu, cpu->pc);
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
@@ -1485,8 +1528,14 @@ X(j)
 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
-		old_pc &= ~0x03ffffff;
-		cpu->pc = old_pc | (uint32_t)ic->arg[0];
+		/*  #232: (panel) MIPS J/JAL region is (delay-slot PC)[31:28], not
+		    the branch page-base region; the old ~0x03ffffff also kept
+		    [27:26], double-counting the 28-bit target. arg[1]=(addr&0xffc)+8
+		    so (page_base + arg[1] - 4) = branch+4 (rolls across a 256MB
+		    boundary); mask 0x0fffffff keeps [31:28] (and [63:28] on 64-bit).  */
+		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
+		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
+		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (uint32_t)ic->arg[0];
 		quick_pc_to_pointers(cpu);
 	} else
 		cpu->delay_slot = NOT_DELAYED;
@@ -1511,8 +1560,10 @@ X(jal)
 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
-		old_pc &= ~0x03ffffff;
-		cpu->pc = old_pc | (int32_t)ic->arg[0];
+		/*  #232: (panel) region = (branch+4)[31:28], not page-base; see X(j).  */
+		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
+		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
+		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (int32_t)ic->arg[0];
 		quick_pc_to_pointers(cpu);
 	} else
 		cpu->delay_slot = NOT_DELAYED;
@@ -1537,8 +1588,10 @@ X(jal_trace)
 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
 		/*  Note: Must be non-delayed when jumping to the new pc:  */
 		cpu->delay_slot = NOT_DELAYED;
-		old_pc &= ~0x03ffffff;
-		cpu->pc = old_pc | (int32_t)ic->arg[0];
+		/*  #232: (panel) region = (branch+4)[31:28], not page-base; see X(j).  */
+		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
+		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
+		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (int32_t)ic->arg[0];
 		cpu_functioncall_trace(cpu, cpu->pc);
 		quick_pc_to_pointers(cpu);
 	} else
@@ -1992,7 +2045,9 @@ X(addu) { reg(ic->arg[2]) = (int32_t)(reg(ic->arg[0]) + reg(ic->arg[1])); }
 X(add)
 {
 	int32_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
-	int32_t rd = rs + rt;
+	/*  #209: (audit) unsigned wrap so the overflow case isn't signed-ovf UB
+	    (2's-complement result identical; the OV trap below is unchanged).  */
+	int32_t rd = (int32_t)((uint32_t)rs + (uint32_t)rt);
 
 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2009,7 +2064,8 @@ X(daddu){ reg(ic->arg[2]) = reg(ic->arg[0]) + reg(ic->arg[1]); }
 X(dadd)
 {
 	int64_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
-	int64_t rd = rs + rt;
+	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
+	int64_t rd = (int64_t)((uint64_t)rs + (uint64_t)rt);
 
 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2026,8 +2082,11 @@ X(subu) { reg(ic->arg[2]) = (int32_t)(reg(ic->arg[0]) - reg(ic->arg[1])); }
 X(sub)
 {
 	/*  NOTE: Negating rt and using addition. TODO: Is this correct?  */
-	int32_t rs = reg(ic->arg[0]), rt = - reg(ic->arg[1]);
-	int32_t rd = rs + rt;
+	int32_t rs = reg(ic->arg[0]);
+	/*  #209: (audit) unsigned negate + wrap so neither the negation nor the
+	    add is signed-overflow UB (2's-complement result identical).  */
+	int32_t rt = (int32_t)(- (uint32_t)reg(ic->arg[1]));
+	int32_t rd = (int32_t)((uint32_t)rs + (uint32_t)rt);
 
 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2044,8 +2103,10 @@ X(dsubu){ reg(ic->arg[2]) = reg(ic->arg[0]) - reg(ic->arg[1]); }
 X(dsub)
 {
 	/*  NOTE: Negating rt and using addition. TODO: Is this correct?  */
-	int64_t rs = reg(ic->arg[0]), rt = - reg(ic->arg[1]);
-	int64_t rd = rs + rt;
+	int64_t rs = reg(ic->arg[0]);
+	/*  #209: (audit) unsigned negate + wrap (no signed-overflow UB).  */
+	int64_t rt = (int64_t)(- (uint64_t)reg(ic->arg[1]));
+	int64_t rd = (int64_t)((uint64_t)rs + (uint64_t)rt);
 
 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2277,7 +2338,8 @@ X(dclo)
 X(addi)
 {
 	int32_t rs = reg(ic->arg[0]), imm = (int32_t)ic->arg[2];
-	int32_t rt = rs + imm;
+	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
+	int32_t rt = (int32_t)((uint32_t)rs + (uint32_t)imm);
 
 	if (unlikely((rs >= 0 && imm >= 0 && rt < 0) || (rs < 0 && imm < 0 && rt >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2298,7 +2360,8 @@ X(addiu)
 X(daddi)
 {
 	int64_t rs = reg(ic->arg[0]), imm = (int32_t)ic->arg[2];
-	int64_t rt = rs + imm;
+	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
+	int64_t rt = (int64_t)((uint64_t)rs + (uint64_t)imm);
 
 	if (unlikely((rs >= 0 && imm >= 0 && rt < 0) || (rs < 0 && imm < 0 && rt >= 0))) {
 		/*  Synch. PC and cause an exception:  */
@@ -2381,6 +2444,12 @@ X(mfc0_select0)
 }
 X(mtc0)
 {
+	/*  #233: (panel: Fable/agy) a user-mode mtc0 with Status.CU0 clear must
+	    raise CpU, not silently mutate CP0 state (privilege / fault-signature
+	    integrity). Writes only -- the side-effect-free mfc0 read fast-paths
+	    and the load-bearing EXC3K user-from-PC heuristic are deferred.  */
+	if (!cop0_availability_check(cpu, ic))
+		return;
 	int rd = ic->arg[1] & 31, select = ic->arg[1] >> 5;
 	uint64_t tmp = (int32_t) reg(ic->arg[0]);
 
@@ -2436,10 +2505,13 @@ X(dmfc0_select0)
 }
 X(dmtc0)
 {
+	/*  #233: (panel: Fable/agy) dmtc0 with Status.CU0 clear must raise CpU,
+	    not silently mutate CP0 state (see X(mtc0)).  */
+	if (!cop0_availability_check(cpu, ic))
+		return;
 	int rd = ic->arg[1] & 31, select = ic->arg[1] >> 5;
 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
 	cpu->pc |= ic->arg[2];
-	/*  TODO: cause exception if necessary  */
 	coproc_register_write(cpu, cpu->cd.mips.coproc[0], rd,
 	    (uint64_t *)ic->arg[0], 1, select);
 }
@@ -2657,8 +2729,12 @@ X(rfe)
 		return;
 
 	/*  Just rotate the interrupt/user bits:  */
+	/*  #230: (panel: Codex/Fable/agy/Ollama) R3000 RFE pops the KU/IE
+	    stack bits [3:0]<-[5:2] but leaves [5:4] (KUo/IEo) UNCHANGED; the
+	    old ~0x3f wrongly cleared [5:4], losing the outer privilege/interrupt
+	    level across nested exceptions.  */
 	cpu->cd.mips.coproc[0]->reg[COP0_STATUS] =
-	    (cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & ~0x3f) |
+	    (cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & ~0x0f) |
 	    ((cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & 0x3c) >> 2);
 
 	/*
@@ -2821,8 +2897,10 @@ X(ll)
 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
 
 	if (addr & (sizeof(word)-1)) {
-		fatal("TODO: load linked unaligned access: exception\n");
-		exit(1);
+		/*  #212: (Codex/Fable) an unaligned LL/LLD must raise AdEL, not
+		    exit() the host (PC already synced above).  */
+		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, addr, 0, 0, 0, 0);
+		return;
 	}
 
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
@@ -2859,8 +2937,10 @@ X(lld)
 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
 
 	if (addr & (sizeof(word)-1)) {
-		fatal("TODO: load linked unaligned access: exception\n");
-		exit(1);
+		/*  #212: (Codex/Fable) an unaligned LL/LLD must raise AdEL, not
+		    exit() the host (PC already synced above).  */
+		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, addr, 0, 0, 0, 0);
+		return;
 	}
 
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
@@ -2902,8 +2982,10 @@ X(sc)
 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
 
 	if (addr & (sizeof(word)-1)) {
-		fatal("TODO: sc unaligned access: exception\n");
-		exit(1);
+		/*  #212: (Codex/Fable) an unaligned SC/SCD must raise AdES, not
+		    exit() the host (PC already synced above).  */
+		mips_cpu_exception(cpu, EXCEPTION_ADES, 0, addr, 0, 0, 0, 0);
+		return;
 	}
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
@@ -2960,8 +3042,10 @@ X(scd)
 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
 
 	if (addr & (sizeof(word)-1)) {
-		fatal("TODO: sc unaligned access: exception\n");
-		exit(1);
+		/*  #212: (Codex/Fable) an unaligned SC/SCD must raise AdES, not
+		    exit() the host (PC already synced above).  */
+		mips_cpu_exception(cpu, EXCEPTION_ADES, 0, addr, 0, 0, 0, 0);
+		return;
 	}
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
@@ -3048,6 +3132,22 @@ X(ldc1)
 	COPROC_AVAILABILITY_CHECK(1);
 
 	backup_ptr = (uint64_t *) ic->arg[0];
+
+	/*  #224: (Codex/Fable) ft=31 in FR=0 would index reg[32], one past the
+	    FPR file and into adjacent coproc state; odd ft is architecturally
+	    undefined -> raise RI instead of an OOB host access.  */
+	if (use_fp_pairs && backup_ptr == &cpu->cd.mips.coproc[1]->reg[31]) {
+		instr(reserved)(cpu, ic);
+		return;
+	}
+
+	/*  #225: (Codex/Fable) seed fpr from the current register so a FAULTING
+	    load leaves it unchanged instead of copying uninitialized host stack
+	    into the guest FPR (info leak).  */
+	fpr = use_fp_pairs?
+	    ((uint32_t)backup_ptr[0] | ((uint64_t)(uint32_t)backup_ptr[1] << 32))
+	    : *backup_ptr;
+
 	ic->arg[0] = (size_t) &fpr;
 
 #ifdef MODE32
@@ -3076,6 +3176,14 @@ X(sdc1)
 	COPROC_AVAILABILITY_CHECK(1);
 
 	backup_ptr = (uint64_t *) ic->arg[0];
+
+	/*  #224: (Codex/Fable) ft=31 in FR=0 would index reg[32] (OOB into
+	    adjacent coproc state); odd ft is architecturally undefined -> RI.  */
+	if (use_fp_pairs && backup_ptr == &cpu->cd.mips.coproc[1]->reg[31]) {
+		instr(reserved)(cpu, ic);
+		return;
+	}
+
 	ic->arg[0] = (size_t) &fpr;
 
 	if (use_fp_pairs) {
@@ -3256,16 +3364,24 @@ X(multi_addu_3)
 X(netbsd_r3k_picache_do_inv)
 {
 	MODE_uint_t rx = reg(ic[3].arg[0]), ry = reg(ic[4].arg[1]);
+	/*  #169: (Codex/Fable) compute the fused instruction count in 64
+	    bits; rx/ry are guest-controlled and could otherwise drive the
+	    signed int n_translated_instrs negative, deferring the
+	    N_SAFE_DYNTRANS_LIMIT check.  */
+	uint64_t count = ((uint64_t)ry - rx + 4) / 4 * 3 + 4;
 
 	/*  Fallback if the environment isn't exactly right:  */
 	if (!(reg(ic[0].arg[0]) & MIPS1_ISOL_CACHES) ||
-	    (rx & 3) || (ry & 3) || cpu->delay_slot) {
+	    (rx & 3) || (ry & 3) || cpu->delay_slot ||
+	    ry < rx || cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT ||
+	    count > (uint64_t)(N_SAFE_DYNTRANS_LIMIT -
+	    cpu->n_translated_instrs)) {
 		instr(mtc0)(cpu, ic);
 		return;
         }
 
 	reg(ic[3].arg[0]) = ry;
-	cpu->n_translated_instrs += (ry - rx + 4) / 4 * 3 + 4;
+	cpu->n_translated_instrs += (int) count;
 
 	/*  Run the last mtc0 instruction:  */
 	cpu->cd.mips.next_ic = ic + 8;
@@ -3810,6 +3926,19 @@ void COMBINE(netbsd_r3k_cache_inv)(struct cpu *cpu,
 	if (n_back < 8)
 		return;
 
+	/*  #169: (Codex/Fable) require ic[-3] to really be the sb (store
+	    byte) instruction; previously only its args were checked, so an
+	    unrelated instruction could be fused away.  */
+#ifdef MODE32
+	if (ic[-3].f != mips32_loadstore[8] &&
+	    ic[-3].f != mips32_loadstore[8 + 16])
+		return;
+#else
+	if (ic[-3].f != mips_loadstore[8] &&
+	    ic[-3].f != mips_loadstore[8 + 16])
+		return;
+#endif
+
 	if (ic[-8].f == instr(mtc0) && ic[-8].arg[1] == COP0_STATUS &&
 	    ic[-7].f == instr(nop) && ic[-6].f == instr(nop) &&
 	    ic[-5].f == instr(addiu) && ic[-5].arg[0] == ic[-5].arg[1] &&
@@ -4108,8 +4237,14 @@ X(to_be_translated)
 		/*  fatal("TRANSLATION MISS!\n");  */
 		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
-			fatal("to_be_translated(): read failed: TODO\n");
-			goto bad;
+			/*  #234: A guest-reachable instruction-fetch bus/TLB
+			    error has already installed the MIPS exception and
+			    redirected the PC to the vector (via
+			    mips_cpu_exception -> pc_to_pointers; the exception
+			    is also logged by #210). Return so the CPU takes it,
+			    instead of "goto bad" which sets cpu->running = 0
+			    and halts the host emulator.  */
+			return;
 		}
 	}
 
@@ -4439,7 +4574,14 @@ X(to_be_translated)
 			break;
 
 		case SPECIAL_BREAK:
-			if (((iword >> 6) & 0xfffff) == 0x30378) {
+			/*  #235: Only treat "break 0x30378" as the GXemul reboot
+			    sentinel when executed from the injected reset stub
+			    (physical 0x1fc00000 = kseg0/1 0x9fc00000/0xbfc00000);
+			    a guest that executes this encoding from ordinary RAM
+			    must get a real Breakpoint exception, as on hardware,
+			    not a silent host reboot.  */
+			if (((iword >> 6) & 0xfffff) == 0x30378 &&
+			    (addr & 0x1fffffff) == 0x1fc00000) {
 				/*  "Magic trap" for REBOOT:  */
 				ic->f = instr(reboot);
 			} else {
@@ -4637,7 +4779,12 @@ X(to_be_translated)
 				ic->f = instr(rfe);
 				break;
 			case COP0_ERET:
-				ic->f = instr(eret);
+				/*  #231: (panel: Codex/Fable/agy/Ollama) ERET is
+				    MIPS-III+; on an R3000 (EXC3K) that encoding is
+				    Reserved -> RI. Decode-gate mirrors the WAIT/STANDBY
+				    pattern below; X(reserved) does the PC-sync + RI.  */
+				ic->f = cpu->cd.mips.cpu_type.exc_model == EXC3K?
+				    instr(reserved) : instr(eret);
 				break;
 			case COP0_DERET:
 				ic->f = instr(deret);
@@ -4660,6 +4807,16 @@ X(to_be_translated)
 				}
 				break;
 			case COP0_STANDBY:
+			case COP0_SUSPEND:
+			case COP0_HIBERNATE:
+				/*  #237: STANDBY/SUSPEND/HIBERNATE are VR41xx
+				    (R4100) power-management instructions. Treat
+				    them as idle ('wait') only on the R4100; on
+				    every other CPU (including the R3000/R4000
+				    audit targets) they are Reserved Instructions
+				    -> RI, not a host halt. Previously HIBERNATE
+				    did "goto bad" (running = 0) and SUSPEND did
+				    an unconditional reboot at any PC.  */
 				/*  NOTE: Reusing the 'wait' instruction:  */
 				ic->f = instr(wait);
 				if (cpu->cd.mips.cpu_type.rev != MIPS_R4100) {
@@ -4674,14 +4831,6 @@ X(to_be_translated)
 						warned = 1;
 					}
 				}
-				break;
-			case COP0_HIBERNATE:
-				/*  TODO  */
-				goto bad;
-			case COP0_SUSPEND:
-				/*  Used by NetBSD on HPCmips (VR41xx) to
-				    halt the machine.  */
-				ic->f = instr(reboot);
 				break;
 			case COP0_EI:
 				if (cpu->cd.mips.cpu_type.rev == MIPS_R5900) {
@@ -4698,7 +4847,12 @@ X(to_be_translated)
 			default:if (!cpu->translation_readahead)
 					fatal("UNIMPLEMENTED cop0 (func "
 					    "0x%02x)\n", iword & 0xff);
-				goto bad;
+				/*  #236: A reserved/unimplemented COP0 function
+				    is a Reserved Instruction on real MIPS, not a
+				    reason to halt the host; raise RI instead of
+				    "goto bad" (cpu->running = 0).  */
+				ic->f = instr(reserved);
+				break;
 			}
 			break;
 		}

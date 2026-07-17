@@ -105,9 +105,12 @@ DEVICE_ACCESS(mp)
 			d->cpus[which_cpu]->cd.ppc.gpr[1] = d->stack_addr;
 			break;
 		default:
+			/*  #221: (Codex/Fable) a guest STARTUPCPU on a test machine
+			    of an arch without SP-init here: warn and start the CPU
+			    anyway instead of exit()ing the host.  */
 			fatal("dev_mp(): DEV_MP_STARTUPCPU: not for this"
 			    " arch yet!\n");
-			exit(1);
+			break;
 		}
 		d->cpus[which_cpu]->running = true;
 		/*  debug("[ dev_mp: starting up cpu%i at 0x%llx ]\n", 

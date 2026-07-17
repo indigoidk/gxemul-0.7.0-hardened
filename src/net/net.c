@@ -71,6 +71,23 @@ struct ethernet_packet_link *net_allocate_ethernet_packet_link(
 {
 	struct ethernet_packet_link *lp;
 
+	/*  #178: (Codex/Fable) A nic which never dequeues (e.g. an NE2000
+	    left stopped or in monitor mode while the guest transmits) must
+	    not grow the queue without bound; at the cap, drop the oldest
+	    queued packet to make room.  */
+	while (net->n_queued_packets >= NET_MAX_QUEUED_PACKETS &&
+	    net->first_ethernet_packet != NULL) {
+		struct ethernet_packet_link *old = net->first_ethernet_packet;
+		net->first_ethernet_packet = old->next;
+		if (old->next != NULL)
+			old->next->prev = NULL;
+		else
+			net->last_ethernet_packet = NULL;
+		net->n_queued_packets --;
+		free(old->data);
+		free(old);
+	}
+
 	CHECK_ALLOCATION(lp = (struct ethernet_packet_link *)
 	    malloc(sizeof(struct ethernet_packet_link)));
 
@@ -87,6 +104,7 @@ struct ethernet_packet_link *net_allocate_ethernet_packet_link(
 	else
 		net->first_ethernet_packet = lp;
 	net->last_ethernet_packet = lp;
+	net->n_queued_packets ++;	/*  #178: (Codex/Fable)  */
 
 	return lp;
 }
@@ -370,6 +388,7 @@ int net_ethernet_rx(struct net *net, struct nic_data *nic,
 				lp->next->prev = prev;
 
 			free(lp);
+			net->n_queued_packets --;	/*  #178: (Codex/Fable)  */
 
 			/*  ... and return successfully:  */
 			return 1;
@@ -772,6 +791,7 @@ struct net *net_init(struct emul *emul, int init_flags,
 	/*  Sane defaults:  */
 	net->timestamp = 0;
 	net->first_ethernet_packet = net->last_ethernet_packet = NULL;
+	net->n_queued_packets = 0;	/*  #178: (Codex/Fable)  */
 	net->tapdev = NULL;
 	net->tap_fd = -1;
 

@@ -947,15 +947,29 @@ static void arcbios_get_msdos_partition_size(struct machine *machine,
 	unsigned char sector[512];
 	unsigned char buf[16];
 	uint64_t offset = 0, st;
+	/*  #168: (Codex/Fable) bound extended-partition (EBR) chain
+	    walking, to avoid infinite loops and out-of-range reads on
+	    crafted partition tables.  */
+	uint64_t disksize = diskimage_getsize(machine, disk_id, disk_type);
+	int ebr_chain_links = 0;
 
 	/*  Partition 0 is the entire disk image:  */
 	*start = 0;
-	*size = diskimage_getsize(machine, disk_id, disk_type);
+	*size = disksize;
 	if (partition_nr == 0)
 		return;
 
 ugly_goto:
 	*start = 0; *size = 0;
+
+	/*  #168: (Codex/Fable) never read a partition table sector from
+	    outside the disk image.  */
+	if (offset + sizeof(sector) > disksize) {
+		fatal("[ arcbios_get_msdos_partition_size(): partition table "
+		    "at offset 0x%" PRIx64" is outside the disk image ]\n",
+		    (uint64_t) offset);
+		return;
+	}
 
 	/*  printf("reading MSDOS partition from offset 0x%" PRIx64"\n",
 	    (uint64_t) offset);  */
@@ -1004,6 +1018,12 @@ ugly_goto:
 
 		/*  Extended DOS partition:  */
 		if (partition_type == 5) {
+			/*  #168: (Codex/Fable) reject zero/non-advancing
+			    EBR links, and cap the chain length, so that
+			    we cannot loop forever.  */
+			if (st == 0 || offset + st <= offset ||
+			    ++ebr_chain_links > 128)
+				break;
 			offset += st;
 			goto ugly_goto;
 		}
@@ -1251,8 +1271,12 @@ int arcbios_emul(struct cpu *cpu)
 		if (machine->machine_type == MACHINE_SGI)
 			arcbios_sgi_emul(cpu);
 		else {
-			fatal("[ ARCBIOS private call for non-SGI. ]\n");
-			exit(1);
+			/*  #242: A non-SGI ARC private call is unsupported;
+			    return an error to the guest instead of exit(1).
+			    #245: verbosity-gate the diagnostic.  */
+			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "arc", VERBOSITY_DEBUG,
+			    "private call on a non-SGI machine");
+			cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
 		}
 
 		return 1;
@@ -1723,6 +1747,14 @@ int arcbios_emul(struct cpu *cpu)
 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A2],
 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A3]);
 
+			/*  #192: (Codex/Fable) A2 is a guest-supplied length; cap it
+			    so a huge value can't drive malloc()->CHECK_ALLOCATION->
+			    exit() (a guest-reachable host DoS/OOM), matching the #191
+			    DEC-PROM cap.  */
+			if (cpu->cd.mips.gpr[MIPS_GPR_A2] > 64*1024*1024ULL) {
+				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EIO;
+				break;
+			}
 			CHECK_ALLOCATION(tmp_buf = (unsigned char *)
 			    malloc(cpu->cd.mips.gpr[MIPS_GPR_A2]));
 
@@ -1796,6 +1828,14 @@ int arcbios_emul(struct cpu *cpu)
 			    (int) cpu->cd.mips.gpr[MIPS_GPR_A2],
 			    (uint64_t) cpu->cd.mips.gpr[MIPS_GPR_A3]);
 
+			/*  #192: (Codex/Fable) A2 is a guest-supplied length; cap it
+			    so a huge value can't drive malloc()->CHECK_ALLOCATION->
+			    exit() (a guest-reachable host DoS/OOM), matching the #191
+			    DEC-PROM cap.  */
+			if (cpu->cd.mips.gpr[MIPS_GPR_A2] > 64*1024*1024ULL) {
+				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EIO;
+				break;
+			}
 			CHECK_ALLOCATION(tmp_buf = (unsigned char *)
 			    malloc(cpu->cd.mips.gpr[MIPS_GPR_A2]));
 
@@ -1830,10 +1870,14 @@ int arcbios_emul(struct cpu *cpu)
 
 				arcbios_putchar(cpu, ch);
 			}
+			/*  #192: (Codex/Fable) only the STDOUT path needs this
+			    trailing return-length + success store; running it
+			    unconditionally clobbered the disk path's V0, so a failed
+			    disk Write (ARCBIOS_EIO) was reported as success.  */
+			store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
+			    cpu->cd.mips.gpr[MIPS_GPR_A2]);
+			cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;	/*  Success.  */
 		}
-		store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
-		    cpu->cd.mips.gpr[MIPS_GPR_A2]);
-		cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;	/*  Success.  */
 		break;
 	case 0x70:	/*  Seek(uint32_t handle, int64_t *ofs,
 				 uint32_t whence): uint32_t  */
@@ -1965,21 +2009,33 @@ int arcbios_emul(struct cpu *cpu)
 		break;
 	case 0x888:
 		/*
-		 *  Magical crash if there is no exception handling code.
+		 *  #242: ARC "exception, but no handler installed" trap. Dump
+		 *  state for debugging, but return an error to the guest
+		 *  instead of halting the host emulator, so the guest's own
+		 *  (mis)behaviour can be observed rather than freezing the rig.
 		 */
-		fatal("EXCEPTION, but no exception handler installed yet.\n");
-		quiet_mode = 0;
-		cpu_register_dump(machine, cpu, 1, 0x1);
-		cpu->running = 0;
+		/*  #245: gate the guest-spammable diagnostic + register dump
+		    behind the promemul verbosity so it can't flood the log.  */
+		if (ENOUGH_VERBOSITY(SUBSYS_PROMEMUL, VERBOSITY_DEBUG)) {
+			fatal("EXCEPTION, but no exception handler installed yet.\n");
+			quiet_mode = 0;
+			cpu_register_dump(machine, cpu, 1, 0x1);
+		}
+		cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
 		break;
 	default:
-		quiet_mode = 0;
-		cpu_register_dump(machine, cpu, 1, 0x1);
-		debug("a0 points to: ");
-		dump_mem_string(cpu, cpu->cd.mips.gpr[MIPS_GPR_A0]);
-		debug("\n");
-		fatal("ARCBIOS: unimplemented vector 0x%x\n", vector);
-		cpu->running = 0;
+		/*  #245: gate the guest-spammable register dump + diagnostic
+		    behind the promemul verbosity; always return the error.  */
+		if (ENOUGH_VERBOSITY(SUBSYS_PROMEMUL, VERBOSITY_DEBUG)) {
+			quiet_mode = 0;
+			cpu_register_dump(machine, cpu, 1, 0x1);
+			debug("a0 points to: ");
+			dump_mem_string(cpu, cpu->cd.mips.gpr[MIPS_GPR_A0]);
+			debug("\n");
+			fatal("ARCBIOS: unimplemented vector 0x%x\n", vector);
+		}
+		/*  #242: return an error to the guest instead of halting.  */
+		cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
 	}
 
 	return 1;

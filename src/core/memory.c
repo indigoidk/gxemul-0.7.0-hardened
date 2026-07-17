@@ -120,7 +120,8 @@ void *zeroed_alloc(size_t s)
 	void *p = mmap(NULL, s, PROT_READ | PROT_WRITE,
 	    MAP_ANON | MAP_PRIVATE, -1, 0);
 
-	if (p == NULL) {
+	/*  #175: (Codex/Fable) mmap failure is MAP_FAILED, not NULL  */
+	if (p == MAP_FAILED) {
 #if 1
 		fprintf(stderr, "zeroed_alloc(): mmap() failed. This should"
 		    " not usually happen. If you can reproduce this, then"
@@ -169,7 +170,8 @@ struct memory *memory_new(uint64_t physical_max)
 
 	mem->pagetable = (unsigned char *) mmap(NULL, s,
 	    PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-	if (mem->pagetable == NULL) {
+	/*  #175: (Codex/Fable) mmap failure is MAP_FAILED, not NULL  */
+	if (mem->pagetable == MAP_FAILED) {
 		CHECK_ALLOCATION(mem->pagetable = malloc(s));
 		memset(mem->pagetable, 0, s);
 	}
@@ -327,6 +329,48 @@ void memory_device_update_data(struct memory *mem, void *extra,
 		mem->devices[i].dyntrans_data = data;
 		mem->devices[i].dyntrans_write_low = (uint64_t)-1;
 		mem->devices[i].dyntrans_write_high = 0;
+	}
+}
+
+
+/*
+ *  memory_device_update_length():
+ *
+ *  #182: (Codex/Fable) Update a memory-mapped device's registered length
+ *  (and endaddr) when its backing buffer is resized at runtime, e.g. a
+ *  guest-driven framebuffer shrink via dev_fb_resize().
+ *
+ *  memory_device_update_data() only swaps the data pointer. Without also
+ *  shrinking the registered length, the dyntrans fast-map gate in
+ *  memory_rw.c still trusts the ORIGINAL (larger) length and installs a
+ *  writable host mapping past the end of the new, smaller allocation -->
+ *  guest-controlled out-of-bounds host access (CRITICAL). This is latent in
+ *  pristine upstream GXemul too.
+ *
+ *  SUPER-IMPORTANT NOTE: like memory_device_update_data(), the caller must
+ *  invalidate all CPUs' address translation caches afterwards, otherwise
+ *  stale fast-path host pointers derived from the old length may survive.
+ */
+void memory_device_update_length(struct memory *mem, void *extra,
+	uint64_t newlength)
+{
+	int i;
+
+	for (i=0; i<mem->n_mmapped_devices; i++) {
+		uint64_t baseaddr;
+		if (mem->devices[i].extra != extra)
+			continue;
+
+		baseaddr = mem->devices[i].endaddr - mem->devices[i].length;
+		mem->devices[i].length = newlength;
+		mem->devices[i].endaddr = baseaddr + newlength;
+
+		/*  Mirror memory_device_register()'s fast-path bound update so
+		    that a grow stays reachable through the dyntrans window:  */
+		if (baseaddr + newlength > mem->mmap_dev_maxaddr)
+			mem->mmap_dev_maxaddr =
+			    (((baseaddr + newlength) - 1) |
+			    mem->dev_dyntrans_alignment) + 1;
 	}
 }
 
@@ -529,7 +573,8 @@ unsigned char *memory_paddr_to_hostaddr(struct memory *mem,
 		    try malloc + memset if mmap failed.  */
 		table[entry] = (void *) mmap(NULL, alloclen,
 		    PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-		if (table[entry] == NULL) {
+		/*  #175: (Codex/Fable) mmap failure is MAP_FAILED, not NULL  */
+		if (table[entry] == MAP_FAILED) {
 			CHECK_ALLOCATION(table[entry] = malloc(alloclen));
 			memset(table[entry], 0, alloclen);
 		}

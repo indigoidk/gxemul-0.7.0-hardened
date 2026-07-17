@@ -208,7 +208,10 @@ void dev_ram_init(struct machine *machine, uint64_t baseaddr, uint64_t length,
 		d->length = length;
 		d->data = (unsigned char *) mmap(NULL, length,
 		    PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-		if (d->data == NULL) {
+		/*  #208: (Codex/Fable) mmap failure is MAP_FAILED, not NULL (the
+		    #175 straggler); fall back to malloc instead of registering
+		    RAM backed by (void*)-1.  */
+		if (d->data == MAP_FAILED) {
 			CHECK_ALLOCATION(d->data = (unsigned char *) malloc(length));
 			memset(d->data, 0, length);
 		}

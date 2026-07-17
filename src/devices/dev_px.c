@@ -266,8 +266,16 @@ void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
 				    dma_buf, dma_len, MEM_READ,
 				    NO_EXCEPTIONS | PHYSICAL);
 			else
-				memmove(dma_buf, &d->sram[sys_addr & 0x1ffff],
-				    dma_len);	/*  TODO:  past end of sram?  */
+				{
+					/*  #207: (Codex/Fable) bound the SRAM source span
+					    so a guest-forced dma_len can't read past
+					    d->sram[] (128 KiB) into adjacent host heap.  */
+					size_t so = sys_addr & 0x1ffff;
+					size_t sl = so < sizeof(d->sram)?
+					    sizeof(d->sram) - so : 0;
+					memmove(dma_buf, &d->sram[so],
+					    dma_len < sl? dma_len : sl);
+				}
 		}
 
 		ofs = 4*5;

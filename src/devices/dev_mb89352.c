@@ -401,6 +401,20 @@ DEVICE_ACCESS(mb89352)
 			case SCMD_XFR | SCMD_PROG_XFR:
 			case SCMD_XFR | SCMD_PROG_XFR | SCMD_ICPT_XFR:
 				{
+					/*  #167: (Codex/Fable)
+					    a transfer command issued before any
+					    SCMD_SELECT leaves d->xferp NULL; treat
+					    it as an illegal command instead of
+					    dereferencing NULL below.  */
+					if (d->xferp == NULL) {
+						debugmsg_cpu(cpu, d->subsys, "",
+						    VERBOSITY_WARNING,
+						    "Transfer command with no"
+						    " selected target; ignored");
+						d->reg[INTS] |= INTS_CMD_DONE;
+						break;
+					}
+
 					d->reg[SSTS] |= SSTS_XFR;
 					d->phase = d->reg[PCTL] & 7;
 
@@ -432,7 +446,9 @@ DEVICE_ACCESS(mb89352)
 						    VERBOSITY_ERROR,
 					    	    "Transfer command: unimplemented phase %i",
 					    	    d->phase);
-				    		exit(1);
+						/*  #186: (Codex/Fable) guest-selectable PCTL phase via
+						    a valid SCMD_XFR; log and break, don't exit(1).  */
+						break;
 					}
 
 					if (!(d->phase & 1))

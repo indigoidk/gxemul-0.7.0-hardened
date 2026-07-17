@@ -306,6 +306,12 @@ static int mec_try_tx(struct cpu *cpu, struct sgi_mec_data *d)
 	if (j < len) {
 		/*  Continue with DMA:  */
 		for (;;) {
+			/*  #203: (Codex/Fable) the inner break on a full packet only
+			    stops one fragment; also stop the outer fragment loop, or
+			    the next fragment writes past cur_tx_packet[MAX_TX_PACKET_LEN]
+			    (host heap overflow).  */
+			if (j >= MAX_TX_PACKET_LEN)
+				break;
 			dma_ptr_nr ++;
 			if (dma_ptr_nr >= 4)
 				break;

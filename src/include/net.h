@@ -126,6 +126,10 @@ struct nic_data {
 #define	MAX_TCP_CONNECTIONS	100
 #define	MAX_UDP_CONNECTIONS	100
 
+/*  #178: (Codex/Fable) cap on queued packets per net; see
+    net_allocate_ethernet_packet_link() in net.c.  */
+#define	NET_MAX_QUEUED_PACKETS	256
+
 struct net {
 	/*  The emul struct which this net belong to:  */
 	struct emul	*emul;
@@ -154,6 +158,7 @@ struct net {
 
 	struct ethernet_packet_link *first_ethernet_packet;
 	struct ethernet_packet_link *last_ethernet_packet;
+	int		n_queued_packets;	/*  #178: (Codex/Fable)  */
 
 	struct udp_connection udp_connections[MAX_UDP_CONNECTIONS];
 	struct tcp_connection tcp_connections[MAX_TCP_CONNECTIONS];
