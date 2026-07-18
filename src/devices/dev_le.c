@@ -43,8 +43,8 @@
  *  by the turbochannel device, not this device.
  *
  *
- *  TODO:  Error conditions (such as when there are not enough receive
- *	   buffers) are not emulated yet.
+ *  TODO:  RX ring exhaustion is emulated as of #262: a dropped frame sets
+ *	   CSR0.MISS (first buffer) or descriptor ERR|BUFF+RINT (mid-frame).
  *
  *	   (Old bug, but probably still valid:  "UDP packets that are too 
  *	   large are not handled well by the Lance device.")
@@ -402,17 +402,18 @@ static void le_tx(struct net *net, struct le_data *d)
  *  le_rx():
  *
  *  This routine should only be called if RXON is enabled.
+ *  Returns non-zero if a frame was dropped because the ring was exhausted.
  */
-static void le_rx(struct net *net, struct le_data *d)
+static int le_rx(struct net *net, struct le_data *d)
 {
-	int start_rxp = d->rxp;
+	int start_rxp = d->rxp, rx_exhausted = 0;
 	size_t i;
 	uint16_t rx_descr[4];
 	uint32_t bufaddr, buflen;
 
 	do {
 		if (d->rx_packet == NULL)
-			return;
+			return 0;
 
 		/*  Load the 8 descriptor bytes:  */
 		rx_descr[0] = le_read_16bit(d, d->rdra + d->rxp*8 + 0);
@@ -428,13 +429,24 @@ static void le_rx(struct net *net, struct le_data *d)
 		 *  not ready to receive data yet.  Also check the '1111'
 		 *  mark, and make sure that byte-count is reasonable.
 		 */
-		if (!(rx_descr[1] & LE_OWN))
-			return;
+		if (!(rx_descr[1] & LE_OWN)) {
+			/*  #262: No chip-owned descriptor is available to
+			    start this frame.  Drop it and report MISS.  A
+			    chained-buffer shortage is detected below, before
+			    ownership of the current descriptor is released.  */
+			d->reg[0] |= LE_MISS;
+			free(d->rx_packet);
+			d->rx_packet = NULL;
+			d->rx_packet_len = 0;
+			d->rx_packet_offset = 0;
+			d->rx_middle_bit = 0;
+			return 1;
+		}
 		if ((rx_descr[2] & 0xf000) != 0xf000)
-			return;
+			return 0;
 		if (buflen < 12 || buflen > 1900) {
 			debugmsg(d->subsys, "rx", VERBOSITY_WARNING, "buflen = %i", buflen);
-			return;
+			return 0;
 		}
 
 		debugmsg(d->subsys, "rx", VERBOSITY_DEBUG,
@@ -489,6 +501,31 @@ static void le_rx(struct net *net, struct le_data *d)
 				d->rx_middle_bit = 1;
 		}
 
+		/*
+		 *  #262: If this frame continues, look ahead while the current
+		 *  descriptor is still chip-owned.  If the next descriptor is
+		 *  unavailable, terminate this descriptor with ERR|BUFF and
+		 *  no ENP.
+		 */
+		if (d->rx_packet != NULL) {
+			int next_rxp = d->rxp + 1;
+
+			if (next_rxp >= d->rlen)
+				next_rxp = 0;
+			if (next_rxp == d->rxp ||
+			    !(le_read_16bit(d,
+			    d->rdra + next_rxp*8 + 2) & LE_OWN)) {
+				rx_descr[1] |= LE_ERR | LE_RBUFF;
+				free(d->rx_packet);
+				d->rx_packet = NULL;
+				d->rx_packet_len = 0;
+				d->rx_packet_offset = 0;
+				d->rx_middle_bit = 0;
+				d->reg[0] |= LE_RINT;
+				rx_exhausted = 1;
+			}
+		}
+
 		/*  Clear the OWN bit:  */
 		rx_descr[1] &= ~LE_OWN;
 
@@ -501,10 +538,14 @@ static void le_rx(struct net *net, struct le_data *d)
 		d->rxp ++;
 		if (d->rxp >= d->rlen)
 			d->rxp = 0;
+
+		if (rx_exhausted)
+			return 1;
 	} while (d->rxp != start_rxp);
 
 	/*  We are here if all descriptors were taken care of.  */
 	debugmsg(d->subsys, "rx", VERBOSITY_WARNING, "all descriptors used up?");
+	return 0;
 }
 
 
@@ -580,9 +621,29 @@ static void le_register_fix(struct net *net, struct le_data *d)
 	 */
 	if (d->reg[0] & LE_RXON) {
 		do {
-			if (d->rx_packet != NULL)
+			if (d->rx_packet != NULL) {
 				/*  Try to receive the packet:  */
-				le_rx(net, d);
+				if (le_rx(net, d)) {
+					/*
+					 *  #262: Drop packets already queued for
+					 *  this NIC, but do not poll ingress again
+					 *  while the receive ring is exhausted.
+					 */
+					while (net_ethernet_rx(net, &d->nic,
+					    &d->rx_packet,
+					    &d->rx_packet_len)) {
+						if (le_rx_drop_packet(net, d))
+							continue;
+						d->reg[0] |= LE_MISS;
+						free(d->rx_packet);
+						d->rx_packet = NULL;
+						d->rx_packet_len = 0;
+						d->rx_packet_offset = 0;
+						d->rx_middle_bit = 0;
+					}
+					break;
+				}
+			}
 
 			if (d->rx_packet != NULL)
 				/*  If the packet wasn't fully received, 

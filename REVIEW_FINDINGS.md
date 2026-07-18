@@ -869,6 +869,15 @@ Items #8a/#8b/#7 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; 
 
 Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; all three inert on a normal boot.
 
+## Thirty-third round (#262) — LANCE RX-ring exhaustion (CSR0.MISS / descriptor BUFF)
+Item #4 of the 8-item TODO-triage batch. 4-model DESIGN review (Codex xhigh + agy + Fable + Ollama) + a DIFF review of Codex's patch (agy + Fable + Ollama). `le_rx()` used to hold an incoming frame in `d->rx_packet` forever when the chip reached a receive descriptor it did not own (ring full); the guest never saw the loss. Real Am7990 drops the frame. Two naive designs were rejected: writing BUFF to the *previous* (already-released) descriptor is a DMA-contract violation, and a simple re-poll drain is a livelock (`net_ethernet_rx_avail()` imports fresh TAP/UDP/TCP traffic every call).
+
+| # | file | Change |
+|---|------|--------|
+| 262 | `devices/dev_le.c` (both trees) | `le_rx()` void→int; drop the held frame on RX-ring exhaustion. First buffer → `CSR0.MISS`. Mid-frame chained → that descriptor's `ERR`+`BUFF` error bits plus `RINT` (no ENP), detected by looking ahead while it is still chip-owned. `le_register_fix()` drains only the already-resident queue on exhaustion (no ingress re-poll). Stale "not emulated yet" TODO updated. |
+
+Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; instrumented boot shows 0 exhaustion hits.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

@@ -743,6 +743,11 @@ Items #8a, #8b, #7 of the 8-item TODO-triage batch — three small, low-risk deb
 - **#261** `core/debugmsg.c` + `include/misc.h`: an **opt-in, default-OFF** global "break on any ERROR-level debugmsg" — a `debugmsg_break_on_error` flag checked in `debugmsg_va()` alongside the per-subsystem levels, toggled by `breakpoint subsystem all error` / `… all off`. (The panel rejected the TODO's literal "always break" as boot-fragile; the existing `all error` already covers registered subsystems, so this is a small robustness upgrade.) Default OFF = single false test = no-op.
 Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`** (all three inert on a normal boot).
 ---
+## Thirty-third round (#262) — LANCE RX-ring exhaustion (CSR0.MISS) (Codex + agy + Fable + Ollama)
+Item #4 of the 8-item TODO-triage batch — a fidelity correction to the emulated Am7990 (LANCE) receive path; the design was 4-model-panel-locked (a DESIGN review + a DIFF review of Codex's patch).
+- **#262** `devices/dev_le.c` (both trees): `le_rx()` previously **held an incoming frame in `d->rx_packet` indefinitely** when the chip reached a receive descriptor it did not own (ring full), so the guest never observed the loss. Real Am7990 hardware drops it: **first-buffer** exhaustion now sets **`CSR0.MISS`**; **mid-frame** (chained-buffer) exhaustion is detected by **looking ahead while the current descriptor is still chip-owned** and terminates that descriptor with **`ERR`+`BUFF`** error bits plus **`RINT`** (no ENP) — the correct ownership transition (writing the *previous*, already-released descriptor was rejected as a DMA-contract violation). `le_register_fix()` now **drains only the already-resident receive queue** on exhaustion instead of re-polling `net_ethernet_rx_avail()` (which imports TAP/UDP/TCP traffic and could livelock a tick under a flood). `le_rx()` becomes `int` (its only caller is `le_register_fix`; no prototype). The stale "not emulated yet" TODO is updated.
+Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`**; instrumented boot shows **0** exhaustion hits (branches inert on a normal console-login boot).
+---
 
 
 ## How findings were produced
