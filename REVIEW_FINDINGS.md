@@ -818,6 +818,18 @@ port → ICMP port-unreachable (reached the guest kernel with no prior NAT mappi
 pass (pmax 15/15 + arc 13/13 → `uid=0(root)`); build **0/0** both trees. arc cannot demo — its SONIC (`dev_sn.c`) is
 a register stub with no RX/TX; use the pmax LANCE (`dev_le.c`).
 
+## Twenty-eighth round (#254, #255) — MIPS FPU result-correctness (4-model panel)
+`fpu_op()` IEEE-754 result bugs on the MIPS FP path (item #1 of the 8-item TODO-triage batch), designed+reviewed by
+a 4-model panel (Codex `gpt-5.6-sol`/xhigh + agy + Fable + Ollama). Result-correctness only; FCSR flags/trap deferred.
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 254 | `cpus/cpu_mips_coproc.c` | `fpu_op()`: DIV mis-routed valid small/NaN divisors to a `fatal()`+stale-fd branch; `sqrt(neg)`→`fatal()`+0.0; c.olt/c.ole true for ANY ordered pair (`\|\| !unordered`) + nine compare conds `fatal()`'d/`#if 0`'d | host IEEE div (Inf/NaN), host sqrt (NaN), unified all-16-cond compare formula `((cond&4)&&less)\|\|((cond&2)&&equal)\|\|((cond&1)&&unordered)`; drop dead `nan` local |
+| 255 | `cpus/cpu_mips_coproc.c` | NaN arithmetic result stored as all-ones (a legacy-MIPS *signaling* NaN) not the hardware **quiet** NaN | canonicalize NaN result to `0x7fbfffff` (S) / `0x7ff7ffffffffffff` (D) in `fpu_store_float_value`; MOV/W/L unaffected |
+
+Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot** → `uid=0(root)`; 0 removed-`fatal()` hits in boot logs;
+FP microtest 11/11 (host-side logic validation — rig image lacks an in-guest compiler). 4/4 diff-review faithful+safe.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

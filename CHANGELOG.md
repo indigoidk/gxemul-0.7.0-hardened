@@ -692,6 +692,31 @@ whereas 3max LANCE (`dev_le.c`) is complete. Invocation: `-e 3max -L tap0` (the 
 NAT network isn't bridged to the LAN) — sufficient for the unsolicited-inbound proof.
 
 
+## Twenty-eighth round (#254, #255) — MIPS FPU result-correctness (4-model panel)
+Item #1 of an 8-item TODO-triage batch. `fpu_op()` (`cpus/cpu_mips_coproc.c`) had three verified IEEE-754 result
+bugs on the pmax (R3010) / arc (R4010) FP path. A full 4-model panel (Codex `gpt-5.6-sol`/xhigh + agy Gemini Pro +
+Fable + Ollama `gpt-oss:120b-cloud`) designed and reviewed the fix; scope kept to result-correctness (FCSR
+flag/trap machinery deferred — see `OUTSTANDING_BUGS.md`).
+- **#254** `cpus/cpu_mips_coproc.c` `fpu_op()`: (a) **DIV** — replace the `fabs(divisor) > 1e-11` hack (which sent
+  valid small divisors like 1e-12, and every NaN divisor, into a `fatal("DIV by zero")` branch that returned
+  WITHOUT writing fd → stale guest register) with unconditional host IEEE division (x/0→±Inf, 0/0→NaN; GXemul never
+  unmasks host FP exceptions). (b) **SQRT** — `sqrt(neg)` is a quiet NaN, not `fatal()`+0.0. (c) **COMPARE** —
+  replace the whole `switch(cond)` (which made c.olt/c.ole true for ANY ordered pair via `|| !unordered`, and
+  `fatal()`'d on nine `#if 0`'d conditions) with the unified truth-table formula
+  `((cond&4)&&less)||((cond&2)&&equal)||((cond&1)&&unordered)` — correct for all 16 c.cond.fmt predicates. Dropped
+  the now-dead `nan` local.
+- **#255** `cpus/cpu_mips_coproc.c` `fpu_store_float_value()`: canonicalize a NaN arithmetic result to the
+  legacy-MIPS **quiet** NaN (S `0x7fbfffff`, D `0x7ff7ffffffffffff`; fraction MSB clear) — `ieee_store_float_value`
+  emits all-ones, a *signaling* pattern. MOV copies raw bits and is unaffected; W/L integer formats untouched.
+
+Build **0/0** both trees (Fable compiled the TU clean under the exact flags); **pmax 15/15 + arc 13/13 boot →
+`uid=0(root)`**; the boot logs show **0 hits** of the removed `fatal()` strings (those paths were never exercised).
+FP microtest: the OpenBSD 2.2 rig image has no in-guest C compiler (broken dynamic linker), so the panel's
+16-condition / div / sqrt vectors were validated host-side against the exact new algorithm — **11/11 PASS** (incl.
+compare mask (2.0,1.0)=0x0000 vs the old 0x0050, 0/0→qNaN `0x7ff7…`, `sqrt(2.0)`=`0x3ff6a09e667f3bcd`). Diff
+4-seat-reviewed faithful + safe.
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

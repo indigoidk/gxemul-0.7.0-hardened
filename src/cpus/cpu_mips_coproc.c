@@ -1120,6 +1120,18 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
 
 	uint64_t r = ieee_store_float_value(nf, ieee_fmt);
 
+	/*  #255: canonicalize a NaN result to the legacy-MIPS QUIET NaN
+	    (fraction MSB clear). ieee_store_float_value() emits all-ones
+	    (0x7fffffff / 0x7fff...), which under the R3010/R4000 convention
+	    is a SIGNALING NaN; an arithmetic result must be quiet. (MOV does
+	    not pass through here, so a guest-constructed sNaN is preserved.)  */
+	if (fpclassify(nf) == FP_NAN) {
+		if (ieee_fmt == IEEE_FMT_S)
+			r = 0x7fbfffffULL;
+		else if (ieee_fmt == IEEE_FMT_D)
+			r = 0x7ff7ffffffffffffULL;
+	}
+
 	/*
 	 *  TODO: This is for 32-bit mode. It has to be updated later
 	 *        for 64-bit coprocessor functionality!
@@ -1162,7 +1174,7 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 {
 	/*  Potentially two input registers, fs and ft  */
 	struct ieee_float_value float_value[2];
-	int unordered, nan, ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
+	int unordered, ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
 	int denormal = 0;	/*  #246: any denormal S/D operand?  */
 	uint64_t fs_v = 0;
 	double nf;
@@ -1224,32 +1236,26 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		    float_value[0].nan || float_value[1].nan);
 		break;
 	case FPU_OP_DIV:
-		nan = float_value[0].nan || float_value[1].nan;
-		if (fabs(float_value[1].f) > 0.00000000001)
-			nf = float_value[0].f / float_value[1].f;
-		else {
-			fatal("DIV by zero !!!! TODO\n");
-			nf = 0.0;	/*  TODO  */
-			nan = 1;
-			// mips_cpu_exception(cpu, EXCEPTION_FPE, 0, 0, 1, 0, 0, 0);
-			return 0;
-		}
-		/*  debug("  div: %f / %f = %f\n",
-		    float_value[0].f, float_value[1].f, nf);  */
-		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
+		/*  #254: IEEE division, unconditionally. The old code sent any
+		    |divisor| <= 1e-11 -- including normal values like 1e-12,
+		    and every NaN divisor (fabs(NaN) > x is false) -- into a
+		    fatal() "DIV by zero" branch that returned WITHOUT writing
+		    fd, so the guest saw a stale register. The host FPU is
+		    IEEE-754 (x/0 -> +/-Inf, 0/0 -> NaN) and GXemul never unmasks
+		    host FP exceptions, so plain division is safe. A denormal
+		    operand already trapped above (#246, EXC4K+); FCSR Z/V
+		    cause/flag bits remain a documented TODO.  */
+		nf = float_value[0].f / float_value[1].f;
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+		    float_value[0].nan || float_value[1].nan);
 		break;
 	case FPU_OP_SQRT:
-		nan = float_value[0].nan;
-		if (float_value[0].f >= 0.0)
-			nf = sqrt(float_value[0].f);
-		else {
-			fatal("SQRT by less than zero, %f !!!!\n",
-			    float_value[0].f);
-			nf = 0.0;	/*  TODO  */
-			nan = 1;
-		}
-		/*  debug("  sqrt: %f => %f\n", float_value[0].f, nf);  */
-		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
+		/*  #254: sqrt of a negative is a quiet NaN, not fatal()+0.0.
+		    Host sqrt() gives NaN for negatives, -0.0 for -0.0 and
+		    +Inf for +Inf -- exactly as the R3010/R4010 do.  */
+		nf = sqrt(float_value[0].f);
+		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+		    float_value[0].nan);
 		break;
 	case FPU_OP_ABS:
 		nf = fabs(float_value[0].f);
@@ -1298,50 +1304,23 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 	case FPU_OP_C:
 		/*  debug("  c: cond=%i\n", cond);  */
 
-		unordered = 0;
-		if (float_value[0].nan || float_value[1].nan)
-			unordered = 1;
+		/*  #254: all 16 c.cond.fmt predicates decode directly from the
+		    cond bits (MIPS ISA): bit 2 = less, bit 1 = equal, bit 0 =
+		    unordered; bit 3 selects the signaling variant, which only
+		    affects the (still-TODO) Invalid exception, never the
+		    boolean result. The old switch made c.olt/c.ole (cond 4/6)
+		    true for ANY ordered pair ("|| !unordered") and fatal()'d on
+		    the nine #if-0'd conditions (several themselves wrong).  */
+		unordered = float_value[0].nan || float_value[1].nan;
+		{
+			int less = !unordered &&
+			    (float_value[0].f < float_value[1].f);
+			int equal = !unordered &&
+			    (float_value[0].f == float_value[1].f);
 
-		switch (cond) {
-		case 2:	/*  Equal  */
-			return (float_value[0].f == float_value[1].f);
-		case 4:	/*  Ordered or Less than  */
-			return (float_value[0].f < float_value[1].f)
-			    || !unordered;
-		case 5:	/*  Unordered or Less than  */
-			return (float_value[0].f < float_value[1].f)
-			    || unordered;
-		case 6:	/*  Ordered or Less than or Equal  */
-			return (float_value[0].f <= float_value[1].f)
-			    || !unordered;
-		case 7:	/*  Unordered or Less than or Equal  */
-			return (float_value[0].f <= float_value[1].f)
-			    || unordered;
-		case 12:/*  Less than  */
-			return (float_value[0].f < float_value[1].f);
-		case 14:/*  Less than or equal  */
-			return (float_value[0].f <= float_value[1].f);
-
-		/*  The following are not commonly used, so I'll move these out
-		    of the if-0 on a case-by-case basis.  */
-#if 0
-case 0:	return 0;					/*  False  */
-case 1:	return 0;					/*  Unordered  */
-case 3:	return (float_value[0].f == float_value[1].f);
-			/*  Unordered or Equal  */
-case 8:	return 0;				/*  Signaling false  */
-case 9:	return 0;	/*  Not Greater than or Less than or Equal  */
-case 10:return (float_value[0].f == float_value[1].f);	/*  Signaling Equal  */
-case 11:return (float_value[0].f == float_value[1].f);	/*  Not Greater
-		than or Less than  */
-case 13:return !(float_value[0].f >= float_value[1].f);	/*  Not greater
-		than or equal */
-case 15:return !(float_value[0].f > float_value[1].f);	/*  Not greater than  */
-#endif
-
-		default:
-			fatal("fpu_op(): unimplemented condition "
-			    "code %i. see cpu_mips_coproc.c\n", cond);
+			return ((cond & 4) && less) ||
+			    ((cond & 2) && equal) ||
+			    ((cond & 1) && unordered);
 		}
 		break;
 	default:
