@@ -463,8 +463,12 @@ fatal("TODO.......asdgasin\n");
 			 *  5000/200 built-in DMA region.
 			 */
 			if (d->xferp->data_out == NULL) {
+				/*  #263: zero the buffer so a short or wrong-direction
+				    DMA cannot disclose uninitialized host heap into the
+				    guest disk image (scsi_transfer_allocbuf only clears
+				    when clearflag != 0).  */
 				scsi_transfer_allocbuf(&d->xferp->data_out_len,
-				    &d->xferp->data_out, len, 0);
+				    &d->xferp->data_out, len, 1);
 
 				if (d->dma_controller != NULL)
 					d->dma_controller(

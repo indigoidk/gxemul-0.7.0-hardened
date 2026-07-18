@@ -878,6 +878,16 @@ Item #4 of the 8-item TODO-triage batch. 4-model DESIGN review (Codex xhigh + ag
 
 Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; instrumented boot shows 0 exhaustion hits.
 
+## Thirty-fourth round (#263) — ASC/R4030 DMA accounting (host-heap disclosure + count over-transfer)
+Item #3 of the 8-item TODO-triage batch — a deep ASC (NCR 53C94) + R4030 DMA-seam audit. 4-model DESIGN review (Codex 5.6-sol xhigh + agy Gemini Pro + Fable + Ollama), unanimous **scope (a): safety guards only**; the residual/TC-suppression fidelity (**A4**) is deferred to **#264**. Both bugs were found by the Codex xhigh audit (Fable's parallel audit missed them), adjudicated real against source, and tempered from Codex's CRITICAL to **HIGH** (guest-memory / host→guest-disk, not a host overrun).
+
+| # | file | Change |
+|---|------|--------|
+| 263 A2 | `devices/dev_jazz.c` (both trees) | `dev_jazz_dma_controller()` bounded its 1/15/255-byte copy quantum only by the ASC-requested `len`, never by the R4030 programmed byte count (`dma0_count`); a short R4030 count against a larger ASC length could over-read/over-write up to 254 bytes of **guest** memory. Now clamped to the remaining R4030 count, and the callback returns the **actual** bytes moved (`return (size_t) i`) instead of the requested `len`. `dma0_count = 0` left unchanged (panel-unanimous; residual is A4/#264). |
+| 263 A1 | `devices/dev_asc.c` (both trees) | the DATA_OUT first-transfer path allocated its buffer with `scsi_transfer_allocbuf(..., clearflag=0)` — uninitialized host heap — and (via the deferred A4) advanced the offset / set Terminal Count even when the DMA callback moved nothing (wrong-direction), so host heap could be written into the guest disk image. Now zero-filled (`clearflag=1`), neutralizing the disclosure regardless of the residual A4 offset/TC fidelity. |
+
+Both stay within the additive-guard envelope: on matched ASC/R4030 counts and correct direction (the arc/pmax SCSI-root boot path) the clamp never fires and the zero-fill is overwritten by real data, so behavior is byte-for-byte unchanged. Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; instrumented boot shows 0 clamp/short-DMA hits (guards dead on the happy path).
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

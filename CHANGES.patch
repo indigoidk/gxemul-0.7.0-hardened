@@ -5578,7 +5578,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_asc.c GXEMUL-SEC/src/devices/dev_asc.c
 --- src/devices/dev_asc.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-16 23:59:45.248306400 -0500
++++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-18 18:01:09.510475200 -0500
 @@ -213,8 +213,14 @@
  {
  	int res = d->fifo[d->fifo_out];
@@ -5648,7 +5648,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  					lenIn2 = lenIn;
  				}
  
-@@ -423,6 +449,14 @@
+@@ -423,14 +449,26 @@
  				    d->xferp->data_out_offset;
  			}
  
@@ -5663,7 +5663,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			/*
  			 *  Are we using an external DMA controller? Then use
  			 *  it. Otherwise place the data in the DECstation
-@@ -1166,14 +1200,19 @@
+ 			 *  5000/200 built-in DMA region.
+ 			 */
+ 			if (d->xferp->data_out == NULL) {
++				/*  #263: zero the buffer so a short or wrong-direction
++				    DMA cannot disclose uninitialized host heap into the
++				    guest disk image (scsi_transfer_allocbuf only clears
++				    when clearflag != 0).  */
+ 				scsi_transfer_allocbuf(&d->xferp->data_out_len,
+-				    &d->xferp->data_out, len, 0);
++				    &d->xferp->data_out, len, 1);
+ 
+ 				if (d->dma_controller != NULL)
+ 					d->dma_controller(
+@@ -1166,14 +1204,19 @@
  			break;
  
  		default:
@@ -6190,7 +6203,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		templ.extra = d;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_jazz.c GXEMUL-SEC/src/devices/dev_jazz.c
 --- src/devices/dev_jazz.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-18 14:33:53.887131600 -0500
++++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-18 18:01:09.488314500 -0500
 @@ -34,7 +34,8 @@
   *  TODO: Figure out how the int enable mask works; it seems to be shifted
   *  10 bits (?) according to NetBSD/arc sources.
@@ -6274,7 +6287,31 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		INTERRUPT_DEASSERT(d->mips_irq_6);
  }
  void jazz_isa_interrupt_assert(struct interrupt *interrupt)
-@@ -235,15 +260,15 @@
+@@ -209,6 +234,13 @@
+ 		if ((phys_addr & 255) == 0 && i + 255 <= (int32_t)len)
+ 			ncpy = 255;
+ 
++		/*  #263: never transfer past the R4030 programmed byte count
++		    (ncpy is otherwise bounded only by the ASC-requested len, so a
++		    short R4030 count could over-read/over-write guest memory; the
++		    while-guard guarantees at least one byte remains).  */
++		if (dma_addr + ncpy > d->dma0_addr + d->dma0_count)
++			ncpy = d->dma0_addr + d->dma0_count - dma_addr;
++
+ 		/* int res = */  cpu->memory_rw(cpu, cpu->mem, phys_addr,
+ 		    &data[i], ncpy, writeflag, PHYSICAL | NO_EXCEPTIONS);
+ 
+@@ -219,7 +251,8 @@
+ 	/*  TODO: Is this correct?  */
+ 	d->dma0_count = 0;
+ 
+-	return len;
++	/*  #263: report the number of bytes actually transferred.  */
++	return (size_t) i;
+ }
+ 
+ 
+@@ -235,15 +268,15 @@
  	struct jazz_data *d = (struct jazz_data *) extra;
  
  	/*  Used by NetBSD/arc and OpenBSD/arc:  */
@@ -6299,7 +6336,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (d->pending_timer_interrupts > 0)
  			INTERRUPT_ASSERT(d->jazz_timer_irq);
  	}
-@@ -258,7 +283,7 @@
+@@ -258,7 +291,7 @@
  
  		/*  New timer system:  */
  		if (d->pending_timer_interrupts > 0)
@@ -6308,7 +6345,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  }
  
-@@ -276,8 +301,16 @@
+@@ -276,8 +309,16 @@
  	switch (relative_addr) {
  	case R4030_SYS_CONFIG:
  		if (writeflag == MEM_WRITE) {
@@ -6327,7 +6364,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		} else {
  			/*  Reading the config register should give
  			    0x0104 or 0x0410. Why? TODO  */
-@@ -337,8 +370,11 @@
+@@ -337,8 +378,11 @@
  		}
  		break;
  	case R4030_SYS_ISA_VECTOR:
@@ -6341,7 +6378,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		{
  			uint32_t x = d->isa_int_asserted
  			    & d->isa_int_enable_mask;
-@@ -356,6 +392,21 @@
+@@ -356,6 +400,21 @@
  		if (writeflag == MEM_WRITE) {
  			d->interval_start = idata;
  			d->interval = d->interval_start;
@@ -6363,7 +6400,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		} else
  			odata = d->interval_start;
  		break;
-@@ -373,18 +424,18 @@
+@@ -373,18 +432,18 @@
  		break;
  	case R4030_SYS_EXT_IMASK:
  		if (writeflag == MEM_WRITE) {
@@ -6390,7 +6427,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  			if (old_assert_3 && !new_assert_3)
  				INTERRUPT_DEASSERT(d->mips_irq_3);
-@@ -395,17 +446,29 @@
+@@ -395,17 +454,29 @@
  				INTERRUPT_DEASSERT(d->mips_irq_6);
  			else if (!old_assert_6 && new_assert_6)
  				INTERRUPT_ASSERT(d->mips_irq_6);
@@ -6427,7 +6464,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  	}
  
-@@ -692,7 +755,8 @@
+@@ -692,7 +763,8 @@
  	    0xf0000000ULL, 4, dev_jazz_jazzio_access, (void *)d,
  	    DM_DEFAULT, NULL);
  

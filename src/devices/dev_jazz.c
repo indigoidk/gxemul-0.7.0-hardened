@@ -234,6 +234,13 @@ size_t dev_jazz_dma_controller(void *dma_controller_data,
 		if ((phys_addr & 255) == 0 && i + 255 <= (int32_t)len)
 			ncpy = 255;
 
+		/*  #263: never transfer past the R4030 programmed byte count
+		    (ncpy is otherwise bounded only by the ASC-requested len, so a
+		    short R4030 count could over-read/over-write guest memory; the
+		    while-guard guarantees at least one byte remains).  */
+		if (dma_addr + ncpy > d->dma0_addr + d->dma0_count)
+			ncpy = d->dma0_addr + d->dma0_count - dma_addr;
+
 		/* int res = */  cpu->memory_rw(cpu, cpu->mem, phys_addr,
 		    &data[i], ncpy, writeflag, PHYSICAL | NO_EXCEPTIONS);
 
@@ -244,7 +251,8 @@ size_t dev_jazz_dma_controller(void *dma_controller_data,
 	/*  TODO: Is this correct?  */
 	d->dma0_count = 0;
 
-	return len;
+	/*  #263: report the number of bytes actually transferred.  */
+	return (size_t) i;
 }
 
 
