@@ -1,5 +1,40 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-18 — Twenty-sixth round (#251, #252): console host-glue fidelity (3-view panel)
+> An OpenBSD 2.2 pmax/arc audit reported three "emulation-layer" bugs. A source-verified panel (Codex `gpt-5.6-sol`
+> high + Fable + reviewer holistic pass, each `diff`-checked vs pristine `src/`) **converged** that the audit
+> mis-attributed the subsystem in all three; the two real defects are in the shared host-console glue
+> (`console/console.c`, byte-identical to stock 0.7.0). **Applied (both trees, build 0/0, pmax 15/15 + arc 13/13
+> boot PASS, reproduced+fixed on the pmax rig):**
+> - **#251** `console_putchar` cleared the stdout flush-pending flag on `'\n'` assuming libc line-flush — false
+>   when stdout is a pipe/file (fully buffered), so newline-terminated bursts sit unflushed and are lost on
+>   kill/wedge (the audit's "L12 serial drops output"). Always mark pending → `console_flush()` drains it. Not the
+>   UART (DZ/ns16550 TX is lossless).
+> - **#252** `console_charavail` drain loop spins forever on stdin EOF (`select`→readable, `read`→0), *inside a
+>   device tick*, wedging the whole emulator (the audit's "L5 pty/forkpty hang"). `if (len < 1) break;`. Repro:
+>   `gxemul -e 3max -d 1:disk bsd.pmax < /dev/null` froze at 0 bytes; post-fix boots to `root device?` like an
+>   open-stdin control.
+>
+> **Triaged / DEFERRED / DO-NOT (documented — not applied):**
+> - **L13 inetd UDP `dgram/wait` — NOT an emulator/device bug.** The userspace NAT (`net/net_ip.c` `net_ip_udp` /
+>   `net_udp_rx_avail`) creates mappings only from guest-*outbound* traffic and has **no unsolicited-inbound path**;
+>   an `inetd dgram wait` service waits on purely unsolicited inbound → never delivered (once `inetd`'s `select()`
+>   is readable, the datagram is already in the guest socket buffer — nothing is lost in the fork+exec window). The
+>   real axis is *solicited vs unsolicited*, not inetd-vs-standalone. Resolutions: tap networking
+>   (`net/net_tap.c`, already implemented) or a one-datagram outbound "hole-punch" in the test — NOT a
+>   `dev_le`/`dev_sn`/`net.c` change. True inbound port-forwarding = a new feature with new state/options, out of
+>   the minimal-surgical ethos.
+> - **L12 UART model — not a bug** (lossless; the ready-always TX status is a fidelity simplification, not a
+>   data-loss source).
+> - **`dev_jazz.c` R4030 `EXT_IMASK` IP3/4/6 namespace gating** — real interrupt-model issue in the *est/* copy
+>   (ANDs CPU-IP funnel enables directly against Jazz device-line bits, arc-only). **SEC's `dev_jazz.c` already
+>   carries the corrected split** (the SEC-only jazz boot-enablement layer the arc rig runs), and pmax has no
+>   jazzio — so it affects neither rig and is not the L5 hang. Companion **OB-22** (`dev_jazz.c` vector-read
+>   blanket deassert) stays deferred (self-healing; would touch the verified arc boot).
+> - Minor `console/console.c` residual (not applied, low value): `d_avail()` retries *all* `select()` errors as if
+>   `EINTR` (incl. `EBADF`); could tighten to `errno==EINTR` only. #252's `break` already resolves the reachable
+>   (EOF) freeze.
+
 > ## 2026-07-17 — Twenty-fifth round (#248, #250): debugger QoL for the audit (4-model panel)
 > Scoped the author's `doc/TODO.html` for **debuggability** wins for the OpenBSD 2.2 pmax/arc audit. A **4-model
 > panel** (Codex `gpt-5.6-sol` + agy Gemini + Ollama `gpt-oss:120b-cloud` + Kimi `kimi-k2.5`; Fable seat down on

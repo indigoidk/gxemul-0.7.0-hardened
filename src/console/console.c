@@ -372,6 +372,12 @@ int console_charavail(int handle)
 
 		len = read(d, ch, sizeof(ch));
 
+		/*  #252: EOF (or error) on the input descriptor selects
+		    readable forever; without this the while() spins inside
+		    the console tick and wedges the whole emulator.  */
+		if (len < 1)
+			break;
+
 		for (i=0; i<len; i++) {
 			/*  printf("[ %i: %i ]\n", i, ch[i]);  */
 
@@ -468,11 +474,12 @@ void console_putchar(int handle, int ch)
 		/*  stdout:  */
 		putchar(ch);
 
-		/*  Assume flushes by OS or libc on newlines:  */
-		if (ch == '\n')
-			console_stdout_pending = 0;
-		else
-			console_stdout_pending = 1;
+		/*  #251: stdout to a pipe/file is fully buffered (the old
+		    "libc flushes on newline" assumption only holds for a
+		    tty), so always mark output pending — otherwise a
+		    newline-terminated burst sits unflushed and is lost if
+		    the emulator is killed or wedges before console_flush().  */
+		console_stdout_pending = 1;
 
 		return;
 	}

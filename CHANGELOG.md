@@ -610,6 +610,57 @@ statistics.
 verified live (C1 ignore-count, C6 watchpoint fire).
 
 
+## Twenty-sixth round (#251, #252) — console host-glue fidelity: output flush + input-EOF freeze (3-view panel)
+An OpenBSD 2.2 pmax/arc audit reported three "emulation-layer" defects: (L12) the serial console **drops**
+long/rapid multi-line output, (L5) any path behind a `forkpty()`/pty **hangs**, and (L13) an `inetd`-spawned
+UDP `dgram/wait` service never receives its datagram. A 3-view source-verified panel (Codex `gpt-5.6-sol`/high +
+Fable + this reviewer's holistic pass) traced each to root and **converged**: the audit mis-attributed the
+subsystem in every case. The two real, fixable emulator defects live in the shared **host-console glue**
+(`console/console.c`, byte-identical to pristine 0.7.0 — these are upstream-latent, not est/SEC regressions),
+*not* in the DZ/ns16550 UART, the NIC, or any "syscall timing". Both fixes are guest-invisible and change only
+host-side I/O behaviour; **build 0/0 both trees; pmax 15/15 + arc 13/13 boot regression PASS**.
+- **#251** `console/console.c` `console_putchar()` (**serial output loss — L12**): the newline branch cleared
+  `console_stdout_pending` on `'\n'` assuming libc line-flushes. That holds only for a **tty**; when GXemul's
+  stdout is a pipe/file (any scripted/headless capture) stdio is **fully buffered**, so `'\n'` does *not* flush
+  *and* the cleared flag makes the periodic `console_flush()` a no-op — a newline-terminated burst then sits in
+  the host stdio buffer and is lost outright if the process is killed or wedges before the next flush. Fix: drop
+  the newline special-case and **always** mark output pending (3 lines → 1). On a tty nothing changes; on a pipe
+  every burst now drains within the existing ≤2¹⁹-instruction `console_flush()` cadence. Not the UART — the DZ
+  (`dev_dc7085`) and ns16550 TX paths are lossless by construction (every byte reaches `console_putchar`).
+- **#252** `console/console.c` `console_charavail()` (**pty/console "hang" — L5**): the input-drain loop is
+  `while (console_stdin_avail(handle)) { … read() … }`. On stdin **EOF** (harness closes GXemul's stdin, or
+  stdin is `/dev/null`) `select()` reports the descriptor readable forever while `read()` returns 0, nothing
+  enters the FIFO, and the `while` never exits — an **infinite spin inside a device tick**, so `machine_run()`
+  never returns and the *entire emulator* freezes (no instructions, no IRQs, no flush; even CTRL-C is dead). A
+  real serial line has no EOF. Fix: `if (len < 1) break;` after the `read()` (one line). *Not* clearing
+  `in_use_for_input` — `console_putchar()` re-arms it on the next output char, silently undoing that variant.
+- **Reproduced + verified on the pmax rig (before → after):** `gxemul -e 3max -d 1:disk bsd.pmax < /dev/null`
+  (stdin at EOF) froze at **0 bytes** (killed at timeout); the *only* changed variable, an open stdin, booted
+  normally to `root device?`. After #251/#252 the same `< /dev/null` invocation boots to `root device?`
+  (979 bytes) identically to the open-stdin control — the freeze is gone and the output flushes.
+
+**Triaged but NOT changed (this round):**
+- **L13 inetd UDP `dgram/wait` — not an emulator/device bug.** GXemul's userspace NAT (`net/net_ip.c`
+  `net_ip_udp` / `net_udp_rx_avail`) creates mappings **only** from guest-*outbound* datagrams and has no
+  unsolicited-inbound path at all; an `inetd dgram wait` service waits on purely unsolicited inbound, so the
+  datagram never enters the guest (nothing is "lost during fork+exec" — once `inetd`'s `select()` is readable the
+  datagram is already in the guest socket buffer, past the NIC). The real axis is *solicited vs unsolicited*, not
+  inetd-vs-standalone. Resolutions are configuration (tap networking, `net/net_tap.c`, already implemented) or a
+  one-datagram outbound "hole-punch" in the test — **not** a `dev_le`/`dev_sn`/`net.c` change. True inbound
+  port-forwarding would be a new feature with new state/options, outside the minimal-surgical ethos.
+- **L12 UART model — not a bug** (lossless; see #251). The permanently-ready TX status is a fidelity
+  simplification, not a data-loss source; adding baud-rate timing is unwarranted.
+- **`dev_jazz.c` R4030 `EXT_IMASK` IP3/4/6 namespace gating** — the est/ copy ANDs CPU-IP funnel enables directly
+  against Jazz device-line bits (arc-only; suppresses com0/timer/ISA IRQs). Real, but **SEC's `dev_jazz.c`
+  already carries the corrected split** (this is the SEC-only jazz boot-enablement layer the arc rig runs), and
+  pmax uses no jazzio — so it affects neither rig and is not the L5 hang. Companion OB-22 (`dev_jazz.c` vector-read
+  blanket deassert) remains deferred (self-healing; touches the verified arc boot).
+
+**Provenance:** 3-view source-verified panel (Codex `gpt-5.6-sol` high-reasoning + Fable, each cross-checked
+against pristine `src/` by `diff`; + reviewer holistic pass). Build **0/0** both trees; **pmax + arc boot
+regression PASS** (pmax R3000 15/15 → `uid=0(root)`, OpenBSD 2.2; arc R4000 13/13 → `uid=0(root)`, clean halt).
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

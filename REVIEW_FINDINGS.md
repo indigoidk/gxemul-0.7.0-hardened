@@ -774,6 +774,33 @@ the TODO debugger wishlist (`find`, `put s/z`, `step call`, `verbosity`, subsyst
 statistics (DO-NOT). See `OUTSTANDING_BUGS.md`. **Build 0/0** both trees; **pmax + arc boot** → uid=0(root) with
 nothing set (zero behavioural change), features then verified live.
 
+## Twenty-sixth round (#251, #252) — console host-glue fidelity (3-view panel)
+An OpenBSD 2.2 pmax/arc audit reported three "emulation-layer" bugs; a source-verified panel (Codex `gpt-5.6-sol`
+high + Fable + reviewer holistic pass, each `diff`-checked against pristine `src/`) **converged** that the audit
+mis-attributed the subsystem in all three. The two real, fixable defects are in the shared host-console glue
+(`console/console.c`, byte-identical to stock 0.7.0 → upstream-latent), guest-invisible, host-I/O-only.
+- **#251 (`console/console.c` `console_putchar`, serial output loss / "L12"):** the `'\n'` branch cleared
+  `console_stdout_pending`, assuming libc flushes on newline — true only for a tty. With stdout a pipe/file
+  (fully buffered), a newline-terminated burst never flushes *and* the cleared flag no-ops `console_flush()`, so
+  the burst is lost if the process is killed/wedges. Fix: always mark pending (drop the newline special-case). The
+  DZ/ns16550 UART TX itself is lossless (every byte reaches `console_putchar`) — not the loss source.
+- **#252 (`console/console.c` `console_charavail`, console/pty "hang" / "L5"):** on stdin EOF, `select()` reports
+  the fd readable forever and `read()` returns 0, so the drain `while()` spins **inside a device tick** →
+  `machine_run()` never returns → the whole emulator freezes. Fix: `if (len < 1) break;` after the `read()` (not
+  clearing `in_use_for_input`, which `console_putchar` re-arms).
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 251 | `console/console.c` | `console_putchar` clears the flush-pending flag on `'\n'` (assumes libc line-flush); false for pipe/file stdout → newline-terminated bursts sit in the fully-buffered stdio buffer and are lost on kill/wedge (audit "L12 serial drops output") | Always set `console_stdout_pending = 1`; `console_flush()` then drains within its existing cadence. Tty behaviour unchanged |
+| 252 | `console/console.c` | `console_charavail` drain loop spins forever on stdin EOF (`select`→readable, `read`→0, FIFO never fills); inside a device tick it wedges the entire emulator (audit "L5 pty/forkpty hang") | `if (len < 1) break;` after `read()` — treat EOF/error as no input |
+
+**Reproduced (pmax rig, before→after):** `gxemul -e 3max -d 1:disk bsd.pmax < /dev/null` froze at **0 bytes**;
+the sole changed variable — an open stdin — booted to `root device?`. After #251/#252 the `< /dev/null` run boots
+to `root device?` (979 bytes) like the control. **Triaged, NOT changed:** L13 inetd UDP (NAT has no unsolicited-
+inbound path — config/tap or hole-punch, not a device bug); L12 UART model (lossless); est/ `dev_jazz.c`
+`EXT_IMASK` gating (real but SEC already carries the corrected split; pmax has no jazzio). **Build 0/0** both
+trees; **pmax 15/15 + arc 13/13 boot** → `uid=0(root)`.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
