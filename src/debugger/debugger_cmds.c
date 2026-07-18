@@ -184,6 +184,17 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 			return;
 		}
 
+		/*  #256: mirror add_breakpoints() (emul.c). The address is
+		    parsed with writeflag=0, so debugger_parse_name() skips its
+		    MIPS sign-extension. Un-extended, a kseg0/kseg1 breakpoint
+		    never equals the sign-extended pc on a 64-bit-mode MIPS core
+		    (R4000+/arc); 32-bit mode (R3000/pmax) masks it by truncating
+		    both sides of the compare, so it only bit the arc rig.  */
+		if (m->cpus[0]->cpu_family->arch == ARCH_MIPS) {
+			if ((tmp >> 32) == 0 && ((tmp >> 31) & 1))
+				tmp |= 0xffffffff00000000ULL;
+		}
+
 		CHECK_ALLOCATION(m->breakpoints.string = (char **) realloc(
 		    m->breakpoints.string, sizeof(char *) *
 		    (m->breakpoints.n + 1)));

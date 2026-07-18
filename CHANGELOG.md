@@ -717,6 +717,12 @@ compare mask (2.0,1.0)=0x0000 vs the old 0x0050, 0/0→qNaN `0x7ff7…`, `sqrt(2
 4-seat-reviewed faithful + safe.
 
 
+## Twenty-ninth round (#256) — interactive debugger MIPS breakpoint sign-extension (Codex + Fable + Ollama)
+Item #2 of the 8-item TODO-triage batch. `breakpoint add <kseg0 addr>` typed interactively never fired on the **arc rig (R4000)**: the add path (`debugger/debugger_cmds.c`) parses the address with `writeflag=0`, so `debugger_parse_name()` skips the MIPS 32→64-bit sign-extension, and the stored `0x0000000080…` never equals the sign-extended pc `0xffffffff80…` in the 64-bit dyntrans compare. R3000/pmax was unaffected — its `mips32` compare truncates both sides. Config-file breakpoints already applied the fixup (`core/emul.c add_breakpoints` ~170-173); symbol-derived addresses were already sign-extended at load (`symbol.c`). A 3-seat panel (Codex `gpt-5.6-sol`/xhigh + Fable + Ollama `gpt-oss:120b-cloud`; agy dropped on a headless file-read limit) gave the identical minimal fix.
+- **#256** `debugger/debugger_cmds.c` (`breakpoint add`): after the parse, mirror `emul.c`'s normalization verbatim — `if (arch==ARCH_MIPS && (tmp>>32)==0 && ((tmp>>31)&1)) tmp |= 0xffffffff00000000`. Guard is **ARCH_MIPS only** (an `is_32bit` guard would no-op it on R4000, the exact machine that needs it). Numeric input only; symbol breakpoints already worked.
+Build **0/0** both trees; verified on the arc rig — `breakpoint add 0x80100000` now shows `0xffffffff80100000` (was `0x0000000080100000`); pmax + arc boot regressions unaffected (15/15 + 13/13 → `uid=0(root)`).
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

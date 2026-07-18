@@ -830,6 +830,15 @@ a 4-model panel (Codex `gpt-5.6-sol`/xhigh + agy + Fable + Ollama). Result-corre
 Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot** → `uid=0(root)`; 0 removed-`fatal()` hits in boot logs;
 FP microtest 11/11 (host-side logic validation — rig image lacks an in-guest compiler). 4/4 diff-review faithful+safe.
 
+## Twenty-ninth round (#256) — interactive debugger MIPS breakpoint sign-extension
+Item #2 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama, unanimous).
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 256 | `debugger/debugger_cmds.c` | interactive `breakpoint add <kseg0 addr>` never fired on arc/R4000 — the add path parses with `writeflag=0` so the MIPS sign-extension is skipped; stored `0x00000000_80…` != sign-extended pc `0xffffffff_80…` (R3000/pmax masked by its 32-bit compare) | after the parse, mirror `emul.c add_breakpoints` verbatim: `if (arch==ARCH_MIPS && (tmp>>32)==0 && (tmp>>31)&1) tmp \|= 0xffffffff00000000`; ARCH_MIPS-only guard |
+
+Build 0/0 both trees; verified on arc (`breakpoint show` → `0xffffffff80100000`); pmax 15/15 + arc 13/13 boot unaffected.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
