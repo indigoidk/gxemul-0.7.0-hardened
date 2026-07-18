@@ -1,3 +1,59 @@
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/console/console.c GXEMUL-SEC/src/console/console.c
+--- src/console/console.c	2021-04-22 13:04:13.000000000 -0500
++++ GXEMUL-SEC/src/console/console.c	2026-07-18 11:00:52.165804100 -0500
+@@ -372,6 +372,12 @@
+ 
+ 		len = read(d, ch, sizeof(ch));
+ 
++		/*  #252: EOF (or error) on the input descriptor selects
++		    readable forever; without this the while() spins inside
++		    the console tick and wedges the whole emulator.  */
++		if (len < 1)
++			break;
++
+ 		for (i=0; i<len; i++) {
+ 			/*  printf("[ %i: %i ]\n", i, ch[i]);  */
+ 
+@@ -468,11 +474,12 @@
+ 		/*  stdout:  */
+ 		putchar(ch);
+ 
+-		/*  Assume flushes by OS or libc on newlines:  */
+-		if (ch == '\n')
+-			console_stdout_pending = 0;
+-		else
+-			console_stdout_pending = 1;
++		/*  #251: stdout to a pipe/file is fully buffered (the old
++		    "libc flushes on newline" assumption only holds for a
++		    tty), so always mark output pending — otherwise a
++		    newline-terminated burst sits unflushed and is lost if
++		    the emulator is killed or wedges before console_flush().  */
++		console_stdout_pending = 1;
+ 
+ 		return;
+ 	}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/console/x11.c GXEMUL-SEC/src/console/x11.c
+--- src/console/x11.c	2021-04-22 13:04:13.000000000 -0500
++++ GXEMUL-SEC/src/console/x11.c	2026-07-10 23:37:58.336005000 -0500
+@@ -434,11 +434,16 @@
+ 	/*  Note: ximage_data seems to be freed by XDestroyImage below.  */
+ 	/*  if (win->ximage_data != NULL)
+ 		free(win->ximage_data);  */
++	/*  #183: (Codex/Fable) widen to size_t. new_xsize/new_ysize are
++	    guest-reachable through dev_fb_resize, and 'new_xsize*new_ysize*32'
++	    overflows 32-bit int well inside #156's 16384-per-axis cap, which
++	    under-allocates the image and then overflows it on redraw.  */
+ 	CHECK_ALLOCATION(win->ximage_data = (unsigned char *) malloc(
+-	    new_xsize * new_ysize * alloc_depth / 8));
++	    (size_t)new_xsize * new_ysize * alloc_depth / 8));
+ 
+ 	/*  TODO: clear for non-truecolor modes  */
+-	memset(win->ximage_data, 0, new_xsize * new_ysize * alloc_depth / 8);
++	/*  #183: (Codex/Fable) size_t to match the widened malloc above.  */
++	memset(win->ximage_data, 0, (size_t)new_xsize * new_ysize * alloc_depth / 8);
+ 
+ 	if (win->fb_ximage != NULL)
+ 		XDestroyImage(win->fb_ximage);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/core/debugmsg.c GXEMUL-SEC/src/core/debugmsg.c
 --- src/core/debugmsg.c	2021-04-22 13:04:13.000000000 -0500
 +++ GXEMUL-SEC/src/core/debugmsg.c	2026-07-02 17:43:16.785368700 -0500
@@ -516,7 +572,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		case 'O':
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/core/memory.c GXEMUL-SEC/src/core/memory.c
 --- src/core/memory.c	2021-04-22 13:04:13.000000000 -0500
-+++ GXEMUL-SEC/src/core/memory.c	2026-07-09 23:36:07.339868500 -0500
++++ GXEMUL-SEC/src/core/memory.c	2026-07-10 23:37:43.732325800 -0500
 @@ -120,7 +120,8 @@
  	void *p = mmap(NULL, s, PROT_READ | PROT_WRITE,
  	    MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -537,7 +593,56 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		CHECK_ALLOCATION(mem->pagetable = malloc(s));
  		memset(mem->pagetable, 0, s);
  	}
-@@ -529,7 +531,8 @@
+@@ -332,6 +334,48 @@
+ 
+ 
+ /*
++ *  memory_device_update_length():
++ *
++ *  #182: (Codex/Fable) Update a memory-mapped device's registered length
++ *  (and endaddr) when its backing buffer is resized at runtime, e.g. a
++ *  guest-driven framebuffer shrink via dev_fb_resize().
++ *
++ *  memory_device_update_data() only swaps the data pointer. Without also
++ *  shrinking the registered length, the dyntrans fast-map gate in
++ *  memory_rw.c still trusts the ORIGINAL (larger) length and installs a
++ *  writable host mapping past the end of the new, smaller allocation -->
++ *  guest-controlled out-of-bounds host access (CRITICAL). This is latent in
++ *  pristine upstream GXemul too.
++ *
++ *  SUPER-IMPORTANT NOTE: like memory_device_update_data(), the caller must
++ *  invalidate all CPUs' address translation caches afterwards, otherwise
++ *  stale fast-path host pointers derived from the old length may survive.
++ */
++void memory_device_update_length(struct memory *mem, void *extra,
++	uint64_t newlength)
++{
++	int i;
++
++	for (i=0; i<mem->n_mmapped_devices; i++) {
++		uint64_t baseaddr;
++		if (mem->devices[i].extra != extra)
++			continue;
++
++		baseaddr = mem->devices[i].endaddr - mem->devices[i].length;
++		mem->devices[i].length = newlength;
++		mem->devices[i].endaddr = baseaddr + newlength;
++
++		/*  Mirror memory_device_register()'s fast-path bound update so
++		    that a grow stays reachable through the dyntrans window:  */
++		if (baseaddr + newlength > mem->mmap_dev_maxaddr)
++			mem->mmap_dev_maxaddr =
++			    (((baseaddr + newlength) - 1) |
++			    mem->dev_dyntrans_alignment) + 1;
++	}
++}
++
++
++/*
+  *  memory_device_register():
+  *
+  *  Register a memory mapped device.
+@@ -529,7 +573,8 @@
  		    try malloc + memset if mmap failed.  */
  		table[entry] = (void *) mmap(NULL, alloclen,
  		    PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -763,6 +868,35 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	debug("%08x", (int)iw);
  
  	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_alpha_instr_loadstore.c GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c
+--- src/cpus/cpu_alpha_instr_loadstore.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c	2026-07-16 20:13:14.466673600 -0500
+@@ -67,8 +67,10 @@
+ 	/*  Load:  */
+ 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+ 	    MEM_READ, CACHE_DATA)) {
+-		fatal("store failed: TODO\n");
+-		exit(1);
++		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
++		    already signalled a fault (cf. #194's no-translation return);
++		    abandon the access instead of exit()ing the host.  */
++		return;
+ 	}
+ 
+ 	data_x = data[0];
+@@ -109,8 +111,10 @@
+ 
+ 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+ 	    MEM_WRITE, CACHE_DATA)) {
+-		fatal("store failed: TODO\n");
+-		exit(1);
++		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
++		    already signalled a fault (cf. #194's no-translation return);
++		    abandon the access instead of exit()ing the host.  */
++		return;
+ 	}
+ 
+ #ifdef LS_LLSC
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_arm.c GXEMUL-SEC/src/cpus/cpu_arm.c
 --- src/cpus/cpu_arm.c	2021-04-22 13:04:18.000000000 -0500
 +++ GXEMUL-SEC/src/cpus/cpu_arm.c	2026-06-28 23:25:42.850350300 -0500
@@ -831,7 +965,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  #define DYNTRANS_TO_BE_TRANSLATED_HEAD
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_dyntrans.c GXEMUL-SEC/src/cpus/cpu_dyntrans.c
 --- src/cpus/cpu_dyntrans.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_dyntrans.c	2026-07-02 17:43:16.971368200 -0500
++++ GXEMUL-SEC/src/cpus/cpu_dyntrans.c	2026-07-17 14:59:22.741983200 -0500
 @@ -453,7 +453,7 @@
  		    && !(cpu->cd.ppc.cpu_type.flags & PPC_NO_DEC))
  			cpu->cd.ppc.dec_intr_pending = 1;
@@ -872,7 +1006,60 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  #endif
  		if (cpu->cd.DYNTRANS_ARCH.phys_addr[index] == paddr_page) {
  			if (writeflag & MEM_WRITE)
-@@ -1833,7 +1833,7 @@
+@@ -1767,6 +1767,24 @@
+ 
+ #endif	/*  !MODE32  */
+ 	}
++
++	/*
++	 *  #250: if this page overlaps a data write-watchpoint, keep it out of
++	 *  the fast store table so every store to it traps to memory_rw, where
++	 *  the watchpoint is evaluated. NOP unless a watchpoint is set; only
++	 *  the watched page(s) are affected, so a run without watchpoints is
++	 *  behaviourally identical. index (MODE32) and l3/x3 (!MODE32) are
++	 *  valid here for both the new-mapping and update branches.
++	 */
++	if (cpu->machine->watchpoints.n != 0 &&
++	    machine_watchpoint_match(cpu->machine, paddr_page,
++	    DYNTRANS_PAGESIZE)) {
++#ifdef MODE32
++		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
++#else
++		l3->host_store[x3] = NULL;
++#endif
++	}
+ }
+ #endif	/*  DYNTRANS_UPDATE_TRANSLATION_TABLE  */
+ 
+@@ -1784,6 +1802,27 @@
+ 		for (i=0; i<cpu->machine->breakpoints.n; i++)
+ 			if (curpc == (MODE_uint_t)
+ 			    cpu->machine->breakpoints.addr[i]) {
++				/*
++				 *  #248: count every hit, and honor a
++				 *  per-breakpoint ignore-count so that
++				 *  "breakpoint add addr, N" runs past the
++				 *  first N hits before stopping. Setting
++				 *  single_step_breakpoint (without single_step)
++				 *  makes the TAIL execute this instruction once
++				 *  and mark it for re-translation, so the check
++				 *  fires again on the next hit.
++				 */
++				cpu->machine->breakpoints.hitcount[i] ++;
++				if (cpu->machine->breakpoints.ignore_left[i] > 0
++#ifdef DYNTRANS_DELAYSLOT
++				    && cpu->delay_slot == NOT_DELAYED
++#endif
++				    ) {
++					cpu->machine->breakpoints.
++					    ignore_left[i] --;
++					single_step_breakpoint = 1;
++					break;
++				}
+ 				if (!cpu->machine->instruction_trace) {
+ 					int tmp_old_quiet_mode = quiet_mode;
+ 					quiet_mode = 0;
+@@ -1833,7 +1872,7 @@
  		x /= addr_per_translation_range;
  
  		cpu->cd.DYNTRANS_ARCH.cur_physpage->
@@ -881,6 +1068,16 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  
+@@ -1846,7 +1885,8 @@
+ 	 *  we also ignore combinations if the delay slot is across a page
+ 	 *  boundary.
+ 	 */
+-	if (!single_step && !cpu->machine->instruction_trace
++	if (!single_step && !single_step_breakpoint
++	    && !cpu->machine->instruction_trace
+ #ifdef DYNTRANS_DELAYSLOT
+ 	    && !in_crosspage_delayslot
+ #endif
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_i960.c GXEMUL-SEC/src/cpus/cpu_i960.c
 --- src/cpus/cpu_i960.c	2021-04-22 13:04:18.000000000 -0500
 +++ GXEMUL-SEC/src/cpus/cpu_i960.c	2026-06-28 23:25:42.888471900 -0500
@@ -928,7 +1125,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_m88k_instr.c GXEMUL-SEC/src/cpus/cpu_m88k_instr.c
 --- src/cpus/cpu_m88k_instr.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_m88k_instr.c	2026-06-28 23:25:42.927109200 -0500
++++ GXEMUL-SEC/src/cpus/cpu_m88k_instr.c	2026-07-16 19:10:05.341795900 -0500
 @@ -458,11 +458,14 @@
  }
  static void m88k_ext(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
@@ -948,7 +1145,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  	reg(ic->arg[0]) = x;
  }
-@@ -2575,7 +2578,7 @@
+@@ -726,6 +729,12 @@
+ 	} else if (reg(ic->arg[2]) == 0) {
+ 		SYNCH_PC;
+ 		m88k_exception(cpu, M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE, 0);
++	} else if (reg(ic->arg[1]) == 0x80000000U &&
++	    reg(ic->arg[2]) == 0xffffffffU) {
++		/*  #195: (Codex/Fable) INT_MIN / -1 overflows and is C UB
++		    (host SIGFPE); the m88k ALU yields the wrapped 2's-complement
++		    result 0x80000000.  */
++		reg(ic->arg[0]) = 0x80000000U;
+ 	} else {
+ 		int32_t res = (int32_t) reg(ic->arg[1]) / (int32_t) reg(ic->arg[2]);
+ 		reg(ic->arg[0]) = res;
+@@ -2575,7 +2584,7 @@
  		}
  
  		ic->arg[0] = (size_t) &cpu->cd.m88k.r[s1];
@@ -957,14 +1167,14 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		offset = (addr & 0xffc) + d16;
  		ic->arg[2] = offset;
-@@ -2939,4 +2942,3 @@
+@@ -2939,4 +2948,3 @@
  #include "cpu_dyntrans.c" 
  #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
  }
 -
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_mips.c GXEMUL-SEC/src/cpus/cpu_mips.c
 --- src/cpus/cpu_mips.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_mips.c	2026-07-02 17:43:17.007601200 -0500
++++ GXEMUL-SEC/src/cpus/cpu_mips.c	2026-07-16 20:13:14.218977900 -0500
 @@ -1181,7 +1181,7 @@
  			    rt, imm, regnames[rs]);
  
@@ -974,9 +1184,362 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				    (uint64_t)(cpu->cd.mips.gpr[rs] + imm));
  				if (symbol != NULL)
  					debug(" = %s", symbol);
+@@ -1853,7 +1853,13 @@
+ 		reg[COP0_BADVADDR] = vaddr;
+ 		if (cpu->is_32bit)
+ 			reg[COP0_BADVADDR] = (int32_t)reg[COP0_BADVADDR];
++	}
+ 
++	/*  #211: (Codex/Fable) only TLB exceptions (Mod/TLBL/TLBS) update
++	    Context/EntryHi/XContext; an Address Error (AdEL/AdES) or a VCE
++	    updates only BadVAddr on real R3000/R4000 silicon, so don't pollute
++	    the CP0 fault fingerprint an auditor snapshots.  */
++	if (exccode >= EXCEPTION_MOD && exccode <= EXCEPTION_TLBS) {
+ 		if (exc_model == EXC3K) {
+ 			reg[COP0_CONTEXT] &= ~R2K3K_CONTEXT_BADVPN_MASK;
+ 			reg[COP0_CONTEXT] |= ((vaddr_vpn2 <<
+@@ -1941,6 +1947,18 @@
+ 	else
+ 		cpu->delay_slot = NOT_DELAYED;
+ 
++	/*  #210: (Codex/Fable) emit the exception on the trappable
++	    SUBSYS_EXCEPTION channel (MIPS was the only major CPU not doing so)
++	    with the fault signature now fully set -- lets `break exception`
++	    stop inside the TLB-miss path that the -p PC breakpoint cannot
++	    reach. Cheap: debugmsg early-returns when nothing is armed.  */
++	debugmsg_cpu(cpu, SUBSYS_EXCEPTION, exception_names[exccode],
++	    (exccode == EXCEPTION_ADEL || exccode == EXCEPTION_ADES ||
++	     exccode == EXCEPTION_RI || exccode == EXCEPTION_CPU)?
++	    VERBOSITY_WARNING : VERBOSITY_DEBUG,
++	    "epc=0x%" PRIx64 " vaddr=0x%" PRIx64 " cause=0x%" PRIx64,
++	    (uint64_t)reg[COP0_EPC], (uint64_t)vaddr, (uint64_t)reg[COP0_CAUSE]);
++
+ 	/*  TODO: This is true for MIPS64, but how about others?  */
+ 	if (reg[COP0_STATUS] & STATUS_BEV)
+ 		base = 0xffffffffbfc00200ULL;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_mips_coproc.c GXEMUL-SEC/src/cpus/cpu_mips_coproc.c
+--- src/cpus/cpu_mips_coproc.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/cpu_mips_coproc.c	2026-07-16 23:59:45.222995300 -0500
+@@ -32,6 +32,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <math.h>
++#include <float.h>	/*  #246: FLT_MIN  */
+ 
+ #include "cop0.h"
+ #include "cpu.h"
+@@ -605,7 +606,10 @@
+ 				break;
+ 			default:fatal("coproc_register_read(): unimplemented"
+ 				    " config register select %i\n", select);
+-				exit(1);
++				/*  #213: (Codex/Fable) guest-reachable via mfc0 Config2..7;
++				    return a defined 0 instead of exit()ing the host.  */
++				*ptr = 0;
++				break;
+ 			}
+ 			return;
+ 		}
+@@ -698,14 +702,22 @@
+ 			}
+ 			break;
+ 		case COP0_BADVADDR:
+-			/*  Hm. Irix writes to this register. (Why?)  */
++			/*  #229: (Codex/Fable/agy) BadVAddr is read-only on R3000/R4000;
++			    ignore guest mtc0 so a payload can't destroy the fault address
++			    an auditor reads. OpenBSD 2.2 pmax/arc only mfc0-reads it
++			    (verified: no mtc0 $8 in its kernel source), so no regression;
++			    the emulator sets BadVAddr directly, not via this path.  */
+ 			unimpl = 0;
++			readonly = 1;
+ 			break;
+ 		case COP0_ENTRYLO1:
+ 			unimpl = 0;
+ 			if (cpu->cd.mips.cpu_type.mmu_model == MMU3K) {
++				/*  #214: (Codex/Fable) reg 3 is undefined on R3000 but a
++				    guest can still mtc0 to it; warn and ignore instead of
++				    exit()ing the host.  */
+ 				fatal("Attempt to access ENTRYLO1 with MMU3K?\n");
+-				exit(1);
++				break;
+ 			}
+ 			// Both MIPS III (such as R4000) and MIPS32/MIPS64 (?)
+ 			if (cpu->cd.mips.cpu_type.mmu_model != MMU3K) {
+@@ -744,10 +756,17 @@
+ 				    tmp2 != 0x3ff &&
+ 				    tmp2 != 0xfff &&
+ 				    tmp2 != 0x3fff &&
+-				    tmp2 != 0xffff)
++				    tmp2 != 0xffff) {
++					/*  #188: (Codex/Fable) canonicalize an invalid,
++					    non-contiguous PageMask to the minimum page size.
++					    Otherwise it survives into the TLB and later drives
++					    the page-table walker's mask switch to exit(1) --
++					    a guest-reachable host DoS.  */
+ 					fatal("[ cpu%i: trying to write an invalid"
+ 					    " pagemask 0x%08lx to COP0_PAGEMASK ]\n",
+ 					    cpu->cpu_id, (long)tmp);
++					tmp = 0;
++				}
+ 				// Actually just 0xfff << shift for R10000.
+ 				if (cpu->cd.mips.cpu_type.mmu_model == MMU10K) {
+ 					tmp &= 0x0fff << PAGEMASK_SHIFT;
+@@ -881,7 +900,9 @@
+ 				default:fatal("[ coproc_register_write(): unimpl"
+ 					    "emented config register select "
+ 					    "%i ]\n", select);
+-					exit(1);
++					/*  #213: (Codex/Fable) guest-reachable via mtc0
++					    Config2..7; ignore the write, don't exit().  */
++					break;
+ 				}
+ 				return;
+ 			}
+@@ -1036,14 +1057,67 @@
+ 
+ 
+ /*
++ *  #246: (Fable) physical truth for denormals: the R3010/R4000 FPUs do not
++ *  implement denormalized (IEEE subnormal) values in hardware. An arithmetic
++ *  op with a denormal operand -- or a denormal result while FCSR.FS
++ *  (flush-to-zero) is clear -- aborts without writing a result, sets FCSR
++ *  cause bit E ("Unimplemented Operation"; unlike V/Z/O/U/I it has no enable
++ *  bit and always traps), and the kernel softfloat completes the instruction
++ *  (OpenBSD/NetBSD MachFPInterrupt). GXemul instead computed a wrong value
++ *  (float_emul.c always adds the implicit 1-bit, misreading denormal operands,
++ *  and flushes denormal results to +/-0: "FP_SUBNORMAL: TODO").
++ *
++ *  Gated to exception models with a precise FP exception (ExcCode 15, R4000
++ *  and newer). Plain R3000 has no ExcCode 15 -- the R3010 signals via an
++ *  external interrupt pin ("irq5 fpu" on DECstations) that the emulated
++ *  machines do not wire -- so EXC3K keeps the old complete-in-hardware
++ *  behaviour (bit-identical). CTC1-written cause bits stay non-trapping (see
++ *  the pre-existing TODO at the CTC1 handler).
++ */
++static int fpu_is_denormal(uint64_t x, int ieee_fmt)
++{
++	switch (ieee_fmt) {
++	case IEEE_FMT_S:
++		return (x & 0x7f800000ULL) == 0 && (x & 0x007fffffULL) != 0;
++	case IEEE_FMT_D:
++		return (x & 0x7ff0000000000000ULL) == 0 &&
++		    (x & 0x000fffffffffffffULL) != 0;
++	}
++	return 0;
++}
++
++static int fpu_unimpl_trap(struct cpu *cpu, struct mips_coproc *cp)
++{
++	if (cpu->cd.mips.cpu_type.exc_model == EXC3K)
++		return 0;
++	cp->fcr[MIPS_FPU_FCSR] = (cp->fcr[MIPS_FPU_FCSR] &
++	    ~MIPS_FPU_EXCEPTION_BITS) | MIPS_FPU_EXCEPTION_UNIMPL;
++	mips_cpu_exception(cpu, EXCEPTION_FPE, 0, 0, 1, 0, 0, 0);
++	return 1;
++}
++
++
++/*
+  *  fpu_store_float_value():
+  *
+  *  Stores a float value (actually a double) in fmt format.
+  */
+-static void fpu_store_float_value(int fr_flag, struct mips_coproc *cp, int fd,
+-	double nf, int fmt, int nan)
++static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
++	struct mips_coproc *cp, int fd, double nf, int fmt, int nan)
+ {
+ 	int ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
++
++	/*  #246: a denormal result is not computable in hardware either
++	    (unless FCSR.FS asks for flush-to-zero): abort without writing fd
++	    so the kernel softfloat produces the exact value that
++	    ieee_store_float_value()'s "FP_SUBNORMAL: TODO" would flush.
++	    (NaN/Inf compare false here; W/L formats are integers.)  */
++	if (!(cp->fcr[MIPS_FPU_FCSR] & MIPS_FPU_FLUSH_BIT) &&
++	    ((ieee_fmt == IEEE_FMT_D && fpclassify(nf) == FP_SUBNORMAL) ||
++	    (ieee_fmt == IEEE_FMT_S && nf != 0.0 && fabs(nf) < FLT_MIN)) &&
++	    fpu_unimpl_trap(cpu, cp))
++		return;
++
+ 	uint64_t r = ieee_store_float_value(nf, ieee_fmt);
+ 
+ 	/*
+@@ -1059,8 +1133,11 @@
+ 
+ 			if (cp->reg[fd] & 0x80000000ULL)
+ 				cp->reg[fd] |= 0xffffffff00000000ULL;
+-			if (cp->reg[fd+1] & 0x80000000ULL)
+-				cp->reg[fd+1] |= 0xffffffff00000000ULL;
++			/*  #226: (Codex/Fable) mask (fd+1)&31 here too (the paired
++			    store above already does) so fd=31 can't sign-extend
++			    reg[32] -- OOB into adjacent coproc state.  */
++			if (cp->reg[(fd+1) & 31] & 0x80000000ULL)
++				cp->reg[(fd+1) & 31] |= 0xffffffff00000000ULL;
+ 		}
+ 	} else {
+ 		cp->reg[fd] = r & 0xffffffffULL;
+@@ -1086,6 +1163,7 @@
+ 	/*  Potentially two input registers, fs and ft  */
+ 	struct ieee_float_value float_value[2];
+ 	int unordered, nan, ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
++	int denormal = 0;	/*  #246: any denormal S/D operand?  */
+ 	uint64_t fs_v = 0;
+ 	double nf;
+ 	int fr = cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & STATUS_FR ? 1 : 0;
+@@ -1101,6 +1179,7 @@
+ 		}
+ 		// printf("    fs_v = 0x%016llx\n", (long long)fs_v);
+ 		ieee_interpret_float_value(fs_v, &float_value[0], ieee_fmt);
++		denormal |= fpu_is_denormal(fs_v, ieee_fmt);	/*  #246  */
+ 	}
+ 	if (ft >= 0) {
+ 		uint64_t v = cp->reg[ft];
+@@ -1111,29 +1190,37 @@
+ 		}
+ 		// printf("    ft_v = 0x%016llx\n", (long long)v);
+ 		ieee_interpret_float_value(v, &float_value[1], ieee_fmt);
++		denormal |= fpu_is_denormal(v, ieee_fmt);	/*  #246  */
+ 	}
+ 
+ 
++	/*  #246: like the real FPU, refuse to compute any arithmetic op on a
++	    denormal operand (MOV is the only non-arithmetic op here; it copies
++	    raw bits). No result and no condition code may be written; the guest
++	    kernel completes the instruction.  */
++	if (denormal && op != FPU_OP_MOV && fpu_unimpl_trap(cpu, cp))
++		return -1;
++
+ 	switch (op) {
+ 	case FPU_OP_ADD:
+ 		nf = float_value[0].f + float_value[1].f;
+ 		/*  debug("  add: %f + %f = %f\n",
+ 		    float_value[0].f, float_value[1].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan || float_value[1].nan);
+ 		break;
+ 	case FPU_OP_SUB:
+ 		nf = float_value[0].f - float_value[1].f;
+ 		/*  debug("  sub: %f - %f = %f\n",
+ 		    float_value[0].f, float_value[1].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan || float_value[1].nan);
+ 		break;
+ 	case FPU_OP_MUL:
+ 		nf = float_value[0].f * float_value[1].f;
+ 		/*  debug("  mul: %f * %f = %f\n",
+ 		    float_value[0].f, float_value[1].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan || float_value[1].nan);
+ 		break;
+ 	case FPU_OP_DIV:
+@@ -1149,7 +1236,7 @@
+ 		}
+ 		/*  debug("  div: %f / %f = %f\n",
+ 		    float_value[0].f, float_value[1].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt, nan);
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
+ 		break;
+ 	case FPU_OP_SQRT:
+ 		nan = float_value[0].nan;
+@@ -1162,24 +1249,24 @@
+ 			nan = 1;
+ 		}
+ 		/*  debug("  sqrt: %f => %f\n", float_value[0].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt, nan);
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt, nan);
+ 		break;
+ 	case FPU_OP_ABS:
+ 		nf = fabs(float_value[0].f);
+ 		/*  debug("  abs: %f => %f\n", float_value[0].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan);
+ 		break;
+ 	case FPU_OP_NEG:
+ 		nf = - float_value[0].f;
+ 		/*  debug("  neg: %f => %f\n", float_value[0].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan);
+ 		break;
+ 	case FPU_OP_CVT:
+ 		nf = float_value[0].f;
+ 		/*  debug("  mov: %f => %f\n", float_value[0].f, nf);  */
+-		fpu_store_float_value(fr, cp, fd, nf, output_fmt,
++		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
+ 		    float_value[0].nan);
+ 		break;
+ 	case FPU_OP_MOV:
+@@ -1196,8 +1283,11 @@
+ 				cp->reg[(fd+1) & 31] = (fs_v >> 32) & 0xffffffffULL;
+ 				if (cp->reg[fd] & 0x80000000ULL)
+ 					cp->reg[fd] |= 0xffffffff00000000ULL;
+-				if (cp->reg[fd+1] & 0x80000000ULL)
+-					cp->reg[fd+1] |= 0xffffffff00000000ULL;
++				/*  #226: (Codex/Fable) mask (fd+1)&31 (the paired store
++				    above already does) so fd=31 can't sign-extend reg[32]
++				    -- OOB into adjacent coproc state.  */
++				if (cp->reg[(fd+1) & 31] & 0x80000000ULL)
++					cp->reg[(fd+1) & 31] |= 0xffffffff00000000ULL;
+ 			}
+ 		} else {
+ 			cp->reg[fd] = fs_v & 0xffffffffULL;
+@@ -1444,6 +1534,11 @@
+ 		cond_true = fpu_op(cpu, cp, FPU_OP_C, fmt,
+ 		    ft, fs, -1, cond, fmt);
+ 
++		/*  #246: compare trapped on a denormal operand; the condition
++		    codes must remain untouched.  */
++		if (cond_true < 0)
++			return 1;
++
+ 		/*
+ 		 *  Both the FCCR and FCSR contain condition code bits:
+ 		 *	FCCR:  bits 7..0
+@@ -1644,8 +1739,16 @@
+ 				index = cp->nr_of_tlbs - 1;
+ 			cp->reg[COP0_RANDOM] = index << R2K3K_RANDOM_SHIFT;
+ 		} else {
+-			cp->reg[COP0_RANDOM] = cp->reg[COP0_WIRED] + (random()
+-			    % (cp->nr_of_tlbs - cp->reg[COP0_WIRED]));
++			/*  #190: (Codex/Fable) COP0_WIRED is guest-writable; if it
++			    reaches or exceeds nr_of_tlbs the modulo below divides by
++			    zero (or the unsigned subtraction underflows) -> host SIGFPE.
++			    Pin Random at the top entry like hardware does on a bad
++			    WIRED instead of computing a random index.  */
++			if (cp->reg[COP0_WIRED] >= (uint64_t)cp->nr_of_tlbs)
++				cp->reg[COP0_RANDOM] = cp->nr_of_tlbs - 1;
++			else
++				cp->reg[COP0_RANDOM] = cp->reg[COP0_WIRED] + (random()
++				    % (cp->nr_of_tlbs - cp->reg[COP0_WIRED]));
+ 			index = cp->reg[COP0_RANDOM] & RANDOM_MASK;
+ 		}
+ 	} else {
+@@ -1824,11 +1927,12 @@
+ 		cpu->cd.mips.last_written_tlb_index = index;
+ 
+ 		if (cp->reg[COP0_STATUS] & MIPS1_ISOL_CACHES) {
+-			fatal("Wow! Interesting case; tlbw* while caches"
+-			    " are isolated. TODO\n");
+-			/*  Don't update the translation table in this
+-			    case...  */
+-			exit(1);
++			/*  #239: A guest that writes the TLB while caches are
++			    isolated must not halt the host. The architectural
++			    TLB entry was already written above; only skip the
++			    host fast-map optimisation and return, as the TODO
++			    comment intends, instead of exit(1).  */
++			return;
+ 		}
+ 
+ 		/*  If we have a memblock (host page) for the physical
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_mips_instr.c GXEMUL-SEC/src/cpus/cpu_mips_instr.c
 --- src/cpus/cpu_mips_instr.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_mips_instr.c	2026-07-09 23:34:26.558363100 -0500
++++ GXEMUL-SEC/src/cpus/cpu_mips_instr.c	2026-07-16 22:44:38.359184600 -0500
 @@ -179,6 +179,15 @@
  	MODE_int_t old_pc = cpu->pc;
  	MODE_uint_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
@@ -1593,7 +2156,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	ic[1].f(cpu, ic+1);
  	cpu->n_translated_instrs ++;
-@@ -1001,6 +1344,15 @@
+@@ -994,6 +1337,13 @@
+ 		cpu->pc = rs;
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
++		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
++		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
++		    silently rounded down to the IC index by quick_pc_to_pointers.  */
++		if (cpu->pc & 3) {
++			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++			return;
++		}
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1001,6 +1351,15 @@
  X(jr_ra)
  {
  	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
@@ -1609,7 +2186,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	ic[1].f(cpu, ic+1);
  	cpu->n_translated_instrs ++;
-@@ -1016,6 +1368,12 @@
+@@ -1008,6 +1367,13 @@
+ 		cpu->pc = rs;
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
++		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
++		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
++		    silently rounded down to the IC index by quick_pc_to_pointers.  */
++		if (cpu->pc & 3) {
++			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++			return;
++		}
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1016,20 +1382,50 @@
  {
  	/*  jr ra, followed by an addiu  */
  	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
@@ -1622,7 +2213,16 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	reg(ic[1].arg[1]) = (int32_t)
  	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
  	cpu->pc = rs;
-@@ -1025,6 +1383,15 @@
++	/*  #228: (Codex/Fable/agy) misaligned jr target -> AdEL (BadVAddr=rs,
++	    BD=0); count the fused delay-slot addiu before the early return.  */
++	if (cpu->pc & 3) {
++		cpu->n_translated_instrs ++;
++		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++		return;
++	}
+ 	quick_pc_to_pointers(cpu);
+ 	cpu->n_translated_instrs ++;
+ }
  X(jr_ra_trace)
  {
  	MODE_int_t rs = cpu->cd.mips.gpr[MIPS_GPR_RA];
@@ -1638,7 +2238,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	ic[1].f(cpu, ic+1);
  	cpu->n_translated_instrs ++;
-@@ -1040,6 +1407,15 @@
+ 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
+ 		cpu->pc = rs;
++		/*  #228: (Codex/Fable/agy) misaligned jr target -> AdEL before the
++		    trace hook (a faulting jump completed no return); set NOT_DELAYED
++		    first so BadVAddr=EPC=rs, BD=0.  */
++		if (cpu->pc & 3) {
++			cpu->delay_slot = NOT_DELAYED;
++			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++			return;
++		}
+ 		cpu_functioncall_trace_return(cpu);
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1040,6 +1436,15 @@
  X(jalr)
  {
  	MODE_int_t rs = reg(ic->arg[0]), rd;
@@ -1654,7 +2267,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
  	    MIPS_INSTR_ALIGNMENT_SHIFT);
-@@ -1058,6 +1434,15 @@
+@@ -1051,6 +1456,13 @@
+ 		cpu->pc = rs;
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
++		/*  #228: (Codex/Fable/agy) a misaligned register-jump target must
++		    raise instruction-fetch AdEL (BadVAddr=EPC=rs, BD=0), not be
++		    silently rounded down to the IC index by quick_pc_to_pointers.  */
++		if (cpu->pc & 3) {
++			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++			return;
++		}
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1058,6 +1470,15 @@
  X(jalr_trace)
  {
  	MODE_int_t rs = reg(ic->arg[0]), rd;
@@ -1670,7 +2297,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	rd = cpu->pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1) <<
  	    MIPS_INSTR_ALIGNMENT_SHIFT);
-@@ -1085,6 +1470,15 @@
+@@ -1067,6 +1488,13 @@
+ 	cpu->n_translated_instrs ++;
+ 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
+ 		cpu->pc = rs;
++		/*  #228: (Codex/Fable/agy) misaligned jalr target -> AdEL before the
++		    trace hook; set NOT_DELAYED first so BadVAddr=EPC=rs, BD=0.  */
++		if (cpu->pc & 3) {
++			cpu->delay_slot = NOT_DELAYED;
++			mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, cpu->pc, 0, 0, 0, 0);
++			return;
++		}
+ 		cpu_functioncall_trace(cpu, cpu->pc);
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1085,14 +1513,29 @@
  X(j)
  {
  	MODE_int_t old_pc = cpu->pc;
@@ -1686,7 +2327,23 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	ic[1].f(cpu, ic+1);
  	cpu->n_translated_instrs ++;
-@@ -1100,6 +1494,15 @@
+ 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
+-		old_pc &= ~0x03ffffff;
+-		cpu->pc = old_pc | (uint32_t)ic->arg[0];
++		/*  #232: (panel) MIPS J/JAL region is (delay-slot PC)[31:28], not
++		    the branch page-base region; the old ~0x03ffffff also kept
++		    [27:26], double-counting the 28-bit target. arg[1]=(addr&0xffc)+8
++		    so (page_base + arg[1] - 4) = branch+4 (rolls across a 256MB
++		    boundary); mask 0x0fffffff keeps [31:28] (and [63:28] on 64-bit).  */
++		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
++		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
++		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (uint32_t)ic->arg[0];
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1100,6 +1543,15 @@
  X(jal)
  {
  	MODE_int_t old_pc = cpu->pc;
@@ -1702,7 +2359,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
  	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
-@@ -1117,6 +1520,15 @@
+@@ -1108,8 +1560,10 @@
+ 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
+-		old_pc &= ~0x03ffffff;
+-		cpu->pc = old_pc | (int32_t)ic->arg[0];
++		/*  #232: (panel) region = (branch+4)[31:28], not page-base; see X(j).  */
++		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
++		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
++		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (int32_t)ic->arg[0];
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+ 		cpu->delay_slot = NOT_DELAYED;
+@@ -1117,6 +1571,15 @@
  X(jal_trace)
  {
  	MODE_int_t old_pc = cpu->pc;
@@ -1718,7 +2388,116 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
  	cpu->cd.mips.gpr[31] = (MODE_int_t)cpu->pc + (int32_t)ic->arg[1];
-@@ -2060,6 +2472,15 @@
+@@ -1125,8 +1588,10 @@
+ 	if (likely(!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT))) {
+ 		/*  Note: Must be non-delayed when jumping to the new pc:  */
+ 		cpu->delay_slot = NOT_DELAYED;
+-		old_pc &= ~0x03ffffff;
+-		cpu->pc = old_pc | (int32_t)ic->arg[0];
++		/*  #232: (panel) region = (branch+4)[31:28], not page-base; see X(j).  */
++		old_pc = (old_pc & ~((MIPS_IC_ENTRIES_PER_PAGE-1)
++		    << MIPS_INSTR_ALIGNMENT_SHIFT)) + (int32_t)ic->arg[1] - 4;
++		cpu->pc = (old_pc & ~(MODE_int_t)0x0fffffff) | (int32_t)ic->arg[0];
+ 		cpu_functioncall_trace(cpu, cpu->pc);
+ 		quick_pc_to_pointers(cpu);
+ 	} else
+@@ -1580,7 +2045,9 @@
+ X(add)
+ {
+ 	int32_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+-	int32_t rd = rs + rt;
++	/*  #209: (audit) unsigned wrap so the overflow case isn't signed-ovf UB
++	    (2's-complement result identical; the OV trap below is unchanged).  */
++	int32_t rd = (int32_t)((uint32_t)rs + (uint32_t)rt);
+ 
+ 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1597,7 +2064,8 @@
+ X(dadd)
+ {
+ 	int64_t rs = reg(ic->arg[0]), rt = reg(ic->arg[1]);
+-	int64_t rd = rs + rt;
++	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
++	int64_t rd = (int64_t)((uint64_t)rs + (uint64_t)rt);
+ 
+ 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1614,8 +2082,11 @@
+ X(sub)
+ {
+ 	/*  NOTE: Negating rt and using addition. TODO: Is this correct?  */
+-	int32_t rs = reg(ic->arg[0]), rt = - reg(ic->arg[1]);
+-	int32_t rd = rs + rt;
++	int32_t rs = reg(ic->arg[0]);
++	/*  #209: (audit) unsigned negate + wrap so neither the negation nor the
++	    add is signed-overflow UB (2's-complement result identical).  */
++	int32_t rt = (int32_t)(- (uint32_t)reg(ic->arg[1]));
++	int32_t rd = (int32_t)((uint32_t)rs + (uint32_t)rt);
+ 
+ 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1632,8 +2103,10 @@
+ X(dsub)
+ {
+ 	/*  NOTE: Negating rt and using addition. TODO: Is this correct?  */
+-	int64_t rs = reg(ic->arg[0]), rt = - reg(ic->arg[1]);
+-	int64_t rd = rs + rt;
++	int64_t rs = reg(ic->arg[0]);
++	/*  #209: (audit) unsigned negate + wrap (no signed-overflow UB).  */
++	int64_t rt = (int64_t)(- (uint64_t)reg(ic->arg[1]));
++	int64_t rd = (int64_t)((uint64_t)rs + (uint64_t)rt);
+ 
+ 	if (unlikely((rs >= 0 && rt >= 0 && rd < 0) || (rs < 0 && rt < 0 && rd >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1865,7 +2338,8 @@
+ X(addi)
+ {
+ 	int32_t rs = reg(ic->arg[0]), imm = (int32_t)ic->arg[2];
+-	int32_t rt = rs + imm;
++	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
++	int32_t rt = (int32_t)((uint32_t)rs + (uint32_t)imm);
+ 
+ 	if (unlikely((rs >= 0 && imm >= 0 && rt < 0) || (rs < 0 && imm < 0 && rt >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1886,7 +2360,8 @@
+ X(daddi)
+ {
+ 	int64_t rs = reg(ic->arg[0]), imm = (int32_t)ic->arg[2];
+-	int64_t rt = rs + imm;
++	/*  #209: (audit) unsigned wrap (no signed-overflow UB).  */
++	int64_t rt = (int64_t)((uint64_t)rs + (uint64_t)imm);
+ 
+ 	if (unlikely((rs >= 0 && imm >= 0 && rt < 0) || (rs < 0 && imm < 0 && rt >= 0))) {
+ 		/*  Synch. PC and cause an exception:  */
+@@ -1969,6 +2444,12 @@
+ }
+ X(mtc0)
+ {
++	/*  #233: (panel: Fable/agy) a user-mode mtc0 with Status.CU0 clear must
++	    raise CpU, not silently mutate CP0 state (privilege / fault-signature
++	    integrity). Writes only -- the side-effect-free mfc0 read fast-paths
++	    and the load-bearing EXC3K user-from-PC heuristic are deferred.  */
++	if (!cop0_availability_check(cpu, ic))
++		return;
+ 	int rd = ic->arg[1] & 31, select = ic->arg[1] >> 5;
+ 	uint64_t tmp = (int32_t) reg(ic->arg[0]);
+ 
+@@ -2024,10 +2505,13 @@
+ }
+ X(dmtc0)
+ {
++	/*  #233: (panel: Fable/agy) dmtc0 with Status.CU0 clear must raise CpU,
++	    not silently mutate CP0 state (see X(mtc0)).  */
++	if (!cop0_availability_check(cpu, ic))
++		return;
+ 	int rd = ic->arg[1] & 31, select = ic->arg[1] >> 5;
+ 	cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)<<MIPS_INSTR_ALIGNMENT_SHIFT);
+ 	cpu->pc |= ic->arg[2];
+-	/*  TODO: cause exception if necessary  */
+ 	coproc_register_write(cpu, cpu->cd.mips.coproc[0], rd,
+ 	    (uint64_t *)ic->arg[0], 1, select);
+ }
+@@ -2060,6 +2544,15 @@
  		x ^= 1;
  
  	/*  Execute the delay slot (except if it is nullified):  */
@@ -1734,7 +2513,111 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->delay_slot = TO_BE_DELAYED;
  	if (x || !(ic->arg[1] & 2))
  		ic[1].f(cpu, ic+1);
-@@ -2762,6 +3183,18 @@
+@@ -2236,8 +2729,12 @@
+ 		return;
+ 
+ 	/*  Just rotate the interrupt/user bits:  */
++	/*  #230: (panel: Codex/Fable/agy/Ollama) R3000 RFE pops the KU/IE
++	    stack bits [3:0]<-[5:2] but leaves [5:4] (KUo/IEo) UNCHANGED; the
++	    old ~0x3f wrongly cleared [5:4], losing the outer privilege/interrupt
++	    level across nested exceptions.  */
+ 	cpu->cd.mips.coproc[0]->reg[COP0_STATUS] =
+-	    (cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & ~0x3f) |
++	    (cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & ~0x0f) |
+ 	    ((cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & 0x3c) >> 2);
+ 
+ 	/*
+@@ -2400,8 +2897,10 @@
+ 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+ 
+ 	if (addr & (sizeof(word)-1)) {
+-		fatal("TODO: load linked unaligned access: exception\n");
+-		exit(1);
++		/*  #212: (Codex/Fable) an unaligned LL/LLD must raise AdEL, not
++		    exit() the host (PC already synced above).  */
++		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, addr, 0, 0, 0, 0);
++		return;
+ 	}
+ 
+ 	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
+@@ -2438,8 +2937,10 @@
+ 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+ 
+ 	if (addr & (sizeof(word)-1)) {
+-		fatal("TODO: load linked unaligned access: exception\n");
+-		exit(1);
++		/*  #212: (Codex/Fable) an unaligned LL/LLD must raise AdEL, not
++		    exit() the host (PC already synced above).  */
++		mips_cpu_exception(cpu, EXCEPTION_ADEL, 0, addr, 0, 0, 0, 0);
++		return;
+ 	}
+ 
+ 	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
+@@ -2481,8 +2982,10 @@
+ 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+ 
+ 	if (addr & (sizeof(word)-1)) {
+-		fatal("TODO: sc unaligned access: exception\n");
+-		exit(1);
++		/*  #212: (Codex/Fable) an unaligned SC/SCD must raise AdES, not
++		    exit() the host (PC already synced above).  */
++		mips_cpu_exception(cpu, EXCEPTION_ADES, 0, addr, 0, 0, 0, 0);
++		return;
+ 	}
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+@@ -2539,8 +3042,10 @@
+ 	cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+ 
+ 	if (addr & (sizeof(word)-1)) {
+-		fatal("TODO: sc unaligned access: exception\n");
+-		exit(1);
++		/*  #212: (Codex/Fable) an unaligned SC/SCD must raise AdES, not
++		    exit() the host (PC already synced above).  */
++		mips_cpu_exception(cpu, EXCEPTION_ADES, 0, addr, 0, 0, 0, 0);
++		return;
+ 	}
+ 
+ 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+@@ -2627,6 +3132,22 @@
+ 	COPROC_AVAILABILITY_CHECK(1);
+ 
+ 	backup_ptr = (uint64_t *) ic->arg[0];
++
++	/*  #224: (Codex/Fable) ft=31 in FR=0 would index reg[32], one past the
++	    FPR file and into adjacent coproc state; odd ft is architecturally
++	    undefined -> raise RI instead of an OOB host access.  */
++	if (use_fp_pairs && backup_ptr == &cpu->cd.mips.coproc[1]->reg[31]) {
++		instr(reserved)(cpu, ic);
++		return;
++	}
++
++	/*  #225: (Codex/Fable) seed fpr from the current register so a FAULTING
++	    load leaves it unchanged instead of copying uninitialized host stack
++	    into the guest FPR (info leak).  */
++	fpr = use_fp_pairs?
++	    ((uint32_t)backup_ptr[0] | ((uint64_t)(uint32_t)backup_ptr[1] << 32))
++	    : *backup_ptr;
++
+ 	ic->arg[0] = (size_t) &fpr;
+ 
+ #ifdef MODE32
+@@ -2655,6 +3176,14 @@
+ 	COPROC_AVAILABILITY_CHECK(1);
+ 
+ 	backup_ptr = (uint64_t *) ic->arg[0];
++
++	/*  #224: (Codex/Fable) ft=31 in FR=0 would index reg[32] (OOB into
++	    adjacent coproc state); odd ft is architecturally undefined -> RI.  */
++	if (use_fp_pairs && backup_ptr == &cpu->cd.mips.coproc[1]->reg[31]) {
++		instr(reserved)(cpu, ic);
++		return;
++	}
++
+ 	ic->arg[0] = (size_t) &fpr;
+ 
+ 	if (use_fp_pairs) {
+@@ -2762,6 +3291,18 @@
  
  	rY = reg(rYp);
  
@@ -1753,7 +2636,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	bytes_to_write = rY - rX;
  	if ((rX & 0xfff) + bytes_to_write > 0x1000) {
  		bytes_to_write = 0x1000 - (rX & 0xfff);
-@@ -2823,16 +3256,24 @@
+@@ -2823,16 +3364,24 @@
  X(netbsd_r3k_picache_do_inv)
  {
  	MODE_uint_t rx = reg(ic[3].arg[0]), ry = reg(ic[4].arg[1]);
@@ -1780,7 +2663,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	/*  Run the last mtc0 instruction:  */
  	cpu->cd.mips.next_ic = ic + 8;
-@@ -2900,7 +3341,8 @@
+@@ -2900,7 +3449,8 @@
  	page2 = (int32_t *) cpu->cd.mips.host_load[pageindex2];
  
  	/*  Fallback:  */
@@ -1790,7 +2673,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		return;
  
  	instr(idle)(cpu, ic);
-@@ -3111,6 +3553,13 @@
+@@ -3111,6 +3661,13 @@
   */
  X(b_samepage_addiu)
  {
@@ -1804,7 +2687,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	reg(ic[1].arg[1]) = (int32_t)
  	    ( (int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2] );
  	cpu->n_translated_instrs ++;
-@@ -3125,6 +3574,12 @@
+@@ -3125,6 +3682,12 @@
   */
  X(b_samepage_daddiu)
  {
@@ -1817,7 +2700,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	*(uint64_t *)ic[1].arg[1] = *(uint64_t *)ic[1].arg[0] +
  	    (int32_t)ic[1].arg[2];
  	cpu->n_translated_instrs ++;
-@@ -3363,6 +3818,19 @@
+@@ -3363,6 +3926,19 @@
  	if (n_back < 8)
  		return;
  
@@ -1837,6 +2720,127 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (ic[-8].f == instr(mtc0) && ic[-8].arg[1] == COP0_STATUS &&
  	    ic[-7].f == instr(nop) && ic[-6].f == instr(nop) &&
  	    ic[-5].f == instr(addiu) && ic[-5].arg[0] == ic[-5].arg[1] &&
+@@ -3661,8 +4237,14 @@
+ 		/*  fatal("TRANSLATION MISS!\n");  */
+ 		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
+ 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+-			fatal("to_be_translated(): read failed: TODO\n");
+-			goto bad;
++			/*  #234: A guest-reachable instruction-fetch bus/TLB
++			    error has already installed the MIPS exception and
++			    redirected the PC to the vector (via
++			    mips_cpu_exception -> pc_to_pointers; the exception
++			    is also logged by #210). Return so the CPU takes it,
++			    instead of "goto bad" which sets cpu->running = 0
++			    and halts the host emulator.  */
++			return;
+ 		}
+ 	}
+ 
+@@ -3992,7 +4574,14 @@
+ 			break;
+ 
+ 		case SPECIAL_BREAK:
+-			if (((iword >> 6) & 0xfffff) == 0x30378) {
++			/*  #235: Only treat "break 0x30378" as the GXemul reboot
++			    sentinel when executed from the injected reset stub
++			    (physical 0x1fc00000 = kseg0/1 0x9fc00000/0xbfc00000);
++			    a guest that executes this encoding from ordinary RAM
++			    must get a real Breakpoint exception, as on hardware,
++			    not a silent host reboot.  */
++			if (((iword >> 6) & 0xfffff) == 0x30378 &&
++			    (addr & 0x1fffffff) == 0x1fc00000) {
+ 				/*  "Magic trap" for REBOOT:  */
+ 				ic->f = instr(reboot);
+ 			} else {
+@@ -4190,7 +4779,12 @@
+ 				ic->f = instr(rfe);
+ 				break;
+ 			case COP0_ERET:
+-				ic->f = instr(eret);
++				/*  #231: (panel: Codex/Fable/agy/Ollama) ERET is
++				    MIPS-III+; on an R3000 (EXC3K) that encoding is
++				    Reserved -> RI. Decode-gate mirrors the WAIT/STANDBY
++				    pattern below; X(reserved) does the PC-sync + RI.  */
++				ic->f = cpu->cd.mips.cpu_type.exc_model == EXC3K?
++				    instr(reserved) : instr(eret);
+ 				break;
+ 			case COP0_DERET:
+ 				ic->f = instr(deret);
+@@ -4213,6 +4807,16 @@
+ 				}
+ 				break;
+ 			case COP0_STANDBY:
++			case COP0_SUSPEND:
++			case COP0_HIBERNATE:
++				/*  #237: STANDBY/SUSPEND/HIBERNATE are VR41xx
++				    (R4100) power-management instructions. Treat
++				    them as idle ('wait') only on the R4100; on
++				    every other CPU (including the R3000/R4000
++				    audit targets) they are Reserved Instructions
++				    -> RI, not a host halt. Previously HIBERNATE
++				    did "goto bad" (running = 0) and SUSPEND did
++				    an unconditional reboot at any PC.  */
+ 				/*  NOTE: Reusing the 'wait' instruction:  */
+ 				ic->f = instr(wait);
+ 				if (cpu->cd.mips.cpu_type.rev != MIPS_R4100) {
+@@ -4228,14 +4832,6 @@
+ 					}
+ 				}
+ 				break;
+-			case COP0_HIBERNATE:
+-				/*  TODO  */
+-				goto bad;
+-			case COP0_SUSPEND:
+-				/*  Used by NetBSD on HPCmips (VR41xx) to
+-				    halt the machine.  */
+-				ic->f = instr(reboot);
+-				break;
+ 			case COP0_EI:
+ 				if (cpu->cd.mips.cpu_type.rev == MIPS_R5900) {
+ 					ic->f = instr(ei_r5900);
+@@ -4251,7 +4847,12 @@
+ 			default:if (!cpu->translation_readahead)
+ 					fatal("UNIMPLEMENTED cop0 (func "
+ 					    "0x%02x)\n", iword & 0xff);
+-				goto bad;
++				/*  #236: A reserved/unimplemented COP0 function
++				    is a Reserved Instruction on real MIPS, not a
++				    reason to halt the host; raise RI instead of
++				    "goto bad" (cpu->running = 0).  */
++				ic->f = instr(reserved);
++				break;
+ 			}
+ 			break;
+ 		}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_mips_instr_unaligned.c GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c
+--- src/cpus/cpu_mips_instr_unaligned.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c	2026-07-16 21:02:41.827303600 -0500
+@@ -93,10 +93,20 @@
+ 		    &aligned_word[0], wlen, MEM_READ, CACHE_DATA);
+ 		if (!ok) {
+ 			if (cpu->pc != oldpc) {
+-				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] &=
+-				    ~CAUSE_EXCCODE_MASK;
+-				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] |=
+-				    (EXCEPTION_TLBS << CAUSE_EXCCODE_SHIFT);
++				/*  #227: (Codex/Fable/agy) the pre-read is a MEM_READ so it
++				    raised a LOAD-side exception; this is a store -> map only
++				    the load codes to their store counterparts (TLBL->TLBS,
++				    AdEL->AdES) and leave the rest (DBE is shared load/store;
++				    Mod can't come from a read).  */
++				int exc = (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
++				    & CAUSE_EXCCODE_MASK) >> CAUSE_EXCCODE_SHIFT;
++				if (exc == EXCEPTION_TLBL)
++					exc = EXCEPTION_TLBS;
++				else if (exc == EXCEPTION_ADEL)
++					exc = EXCEPTION_ADES;
++				cpu->cd.mips.coproc[0]->reg[COP0_CAUSE] =
++				    (cpu->cd.mips.coproc[0]->reg[COP0_CAUSE]
++				    & ~CAUSE_EXCCODE_MASK) | (exc << CAUSE_EXCCODE_SHIFT);
+ 			}
+ 			return;
+ 		}
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_ppc.c GXEMUL-SEC/src/cpus/cpu_ppc.c
 --- src/cpus/cpu_ppc.c	2021-04-22 13:04:18.000000000 -0500
 +++ GXEMUL-SEC/src/cpus/cpu_ppc.c	2026-06-28 23:25:42.954127500 -0500
@@ -1861,7 +2865,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			fatal("[ using UNIMPLEMENTED spr %i (%s), pc = "
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_ppc_instr.c GXEMUL-SEC/src/cpus/cpu_ppc_instr.c
 --- src/cpus/cpu_ppc_instr.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_ppc_instr.c	2026-06-28 23:25:42.966905100 -0500
++++ GXEMUL-SEC/src/cpus/cpu_ppc_instr.c	2026-07-16 20:13:14.562180600 -0500
 @@ -610,8 +610,8 @@
  		c = 2;
  	/*  SO bit, copied from XER  */
@@ -1961,7 +2965,33 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
  	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
  }
-@@ -1506,7 +1506,7 @@
+@@ -1295,8 +1295,10 @@
+ 		}
+ 		if (cpu->memory_rw(cpu, cpu->mem, addr, d, len,
+ 		    MEM_READ, CACHE_DATA) != MEMORY_ACCESS_OK) {
+-			fatal("ll: error: TODO\n");
+-			exit(1);
++			/*  #216: (Codex/Fable) memory_rw() raised a DSI on the
++			    faulting lwarx address; let it proceed instead of
++			    exit()ing the host.  */
++			return;
+ 		}
+ 
+ 		value = 0;
+@@ -1341,8 +1343,10 @@
+ 
+ 		if (cpu->memory_rw(cpu, cpu->mem, addr, d, len,
+ 		    MEM_WRITE, CACHE_DATA) != MEMORY_ACCESS_OK) {
+-			fatal("sc: error: TODO\n");
+-			exit(1);
++			/*  #216: (Codex/Fable) memory_rw() raised a DSI on the
++			    faulting stwcx. address; let it proceed instead of
++			    exit()ing the host.  */
++			return;
+ 		}
+ 
+ 		cpu->cd.ppc.cr &= 0x0fffffff;
+@@ -1506,7 +1510,7 @@
  	int rb = (iword >> 11) & 31;
  	int sh = cpu->cd.ppc.gpr[rb] & 0x1f;
  	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
@@ -1970,7 +3000,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	tmp &= (uint32_t)ic->arg[1];
  	reg(ic->arg[0]) = tmp;
  }
-@@ -1526,7 +1526,7 @@
+@@ -1526,7 +1530,7 @@
  	int rs = (iword >> 21) & 31;
  	int sh = (iword >> 11) & 31;
  	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
@@ -1979,7 +3009,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	tmp &= (uint32_t)ic->arg[1];
  	reg(ic->arg[0]) = tmp;
  }
-@@ -1549,7 +1549,7 @@
+@@ -1549,7 +1553,7 @@
  	int me = (iword >> 1) & 31;   
  	int rc = iword & 1;
  
@@ -1988,7 +3018,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	for (;;) {
  		uint64_t mask;
-@@ -1606,7 +1606,7 @@
+@@ -1606,7 +1610,7 @@
  {
  	int bf_shift = ic->arg[0], bfa_shift = ic->arg[1];
  	uint32_t tmp = (cpu->cd.ppc.cr >> bfa_shift) & 0xf;
@@ -1997,15 +3027,29 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	cpu->cd.ppc.cr |= (tmp << bf_shift);
  }
  
-@@ -3900,4 +3900,3 @@
+@@ -3900,4 +3904,3 @@
  #include "cpu_dyntrans.c"
  #undef	DYNTRANS_TO_BE_TRANSLATED_TAIL
  }
 -
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/cpu_sh.c GXEMUL-SEC/src/cpus/cpu_sh.c
 --- src/cpus/cpu_sh.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/cpu_sh.c	2026-07-02 17:43:17.078600500 -0500
-@@ -743,6 +743,14 @@
++++ GXEMUL-SEC/src/cpus/cpu_sh.c	2026-07-16 20:13:14.666190000 -0500
+@@ -732,17 +732,22 @@
+ 		 *  reserved instructions; during normal instruction execution,
+ 		 *  these are not very common.
+ 		 */
+-#if 1
+-		printf("\nRESERVED SuperH instruction at spc=%08" PRIx32"\n",
+-		    cpu->cd.sh.spc);
+-		exit(1);
+-#else
++		/*  #217: (Codex/Fable) a guest reserved instruction must take the
++		    illegal-instruction exception (the general vector is set up
++		    above), not exit() the host.  */
+ 		break;
+-#endif
+ 
  	case EXPEVT_FPU_DISABLE:
  		break;
  
@@ -2682,6 +3726,80 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		instr(mov_l_disp_gbr_r0)(cpu, ic);
  		return;
  	}
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/memory_alpha.c GXEMUL-SEC/src/cpus/memory_alpha.c
+--- src/cpus/memory_alpha.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/memory_alpha.c	2026-07-16 19:10:05.228995500 -0500
+@@ -172,9 +172,10 @@
+ 
+ not_found:
+ 	/*  No match.  */
++	/*  #194: (Codex/Fable) a failed guest page-table walk must not
++	    abort()/exit() the host; report no-translation (0) so the caller
++	    raises the fault (keeps the emulator alive and debuggable).  */
+ 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+-abort();
+-	exit(1);
+ 	return 0;
+ }
+ 
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/memory_arm.c GXEMUL-SEC/src/cpus/memory_arm.c
+--- src/cpus/memory_arm.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/memory_arm.c	2026-07-16 19:10:05.132940100 -0500
+@@ -168,8 +168,10 @@
+ 
+ 		q = memory_paddr_to_hostaddr(cpu->mem, addr & 0x0fffffff, 0);
+ 		if (q == NULL) {
+-			printf("arm memory blah blah adfh asfg asdgasdg\n");
+-			exit(1);
++			/*  #193: (Codex/Fable) an L2 page-table page outside mapped
++			    RAM must fault the guest, not exit() the host.  */
++			fs = FAULT_TRANS_P;
++			goto exception_return;
+ 		}
+ 		d2 = *(uint32_t *)(q);
+ #ifdef HOST_LITTLE_ENDIAN
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/memory_mips_v2p.c GXEMUL-SEC/src/cpus/memory_mips_v2p.c
+--- src/cpus/memory_mips_v2p.c	2021-04-22 13:04:18.000000000 -0500
++++ GXEMUL-SEC/src/cpus/memory_mips_v2p.c	2026-07-16 22:44:38.387422600 -0500
+@@ -175,13 +175,17 @@
+ 		x_64 = status & STATUS_KX;
+ 		break;
+ 	case KSU_SUPERVISOR:
++		/*  #238: Supervisor mode is not fully modelled, but a guest
++		    that enters it must not halt the host emulator. Take the
++		    64-bit-addressing flag from Status.SX and fall through to
++		    the normal (kernel-style) TLB walk, which faults on any
++		    truly-invalid access instead of exit(1).  */
+ 		x_64 = status & STATUS_SX;
+-		/*  FALLTHROUGH, since supervisor address spaces are not
+-		    really implemented yet.  */
+-		// fall through
+-	default:fatal("memory_mips_v2p.c: ksu=%i not yet implemented yet\n",
+-		    ksu);
+-		exit(1);
++		break;
++	default:/*  #238: Reserved KSU value (only 3 on R4000): don't halt;
++		    do a best-effort 32-bit TLB walk so the guest just faults. */
++		x_64 = 0;
++		break;
+ 	}
+ 
+ 	n_tlbs = cpu->cd.mips.cpu_type.nr_of_tlb_entries;
+@@ -295,8 +299,13 @@
+ 				case 0x07fffff:	pageshift = 22; break;
+ 				case 0x1ffffff:	pageshift = 24; break;
+ 				case 0x7ffffff:	pageshift = 26; break;
++				/*  #189: (Codex/Fable) a non-standard, guest-controlled
++				    PageMask must not exit() the host -- treat the odd-sized
++				    TLB entry as a miss/refill so the guest faults and the
++				    emulator stays alive and debuggable (also covers R4100,
++				    which #188 does not canonicalize on write).  */
+ 				default:fatal("pmask=%08" PRIx32"\n", pmask);
+-					exit(1);
++					goto exception;
+ 				}
+ 
+ 				entry_vpn2 = (cached_hi &
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/memory_ppc.c GXEMUL-SEC/src/cpus/memory_ppc.c
 --- src/cpus/memory_ppc.c	2021-04-22 13:04:18.000000000 -0500
 +++ GXEMUL-SEC/src/cpus/memory_ppc.c	2026-07-09 23:37:13.759845600 -0500
@@ -2772,8 +3890,55 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  /*
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/cpus/memory_rw.c GXEMUL-SEC/src/cpus/memory_rw.c
 --- src/cpus/memory_rw.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/cpus/memory_rw.c	2026-07-09 23:33:36.612398600 -0500
-@@ -284,9 +284,46 @@
++++ GXEMUL-SEC/src/cpus/memory_rw.c	2026-07-17 14:59:22.786744300 -0500
+@@ -95,8 +95,45 @@
+ 		 *  some way, then simply return without doing the memory
+ 		 *  access:
+ 		 */
+-		if (!ok)
++		if (!ok) {
++			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
++			    the caller's read buffer untouched; zero it so
++			    callers that ignore the return value (e.g. the DEC
++			    PROM string helpers) consume deterministic 0 bytes
++			    instead of uninitialised host stack. Same zero-fill
++			    ethos as the failed-device-read path (#95).  */
++			if (writeflag == MEM_READ)
++				memset(data, 0, len);
+ 			return MEMORY_ACCESS_FAILED;
++		}
++	}
++
++	/*
++	 *  #250: data write-watchpoint. Checked here, before the device /
++	 *  cache / RAM dispatch (several of which return early — notably the
++	 *  R3000 cached path via memory_cache_R3000()), so every store that
++	 *  reaches this slow path is covered. Watched pages are kept off the
++	 *  fast store table by update_translation_table(), and R3000 cached
++	 *  data already comes through here. Show the store (writer pc, target,
++	 *  width, value) and request entry into the debugger after the current
++	 *  instruction, via the same about_to_enter_single_step mechanism as
++	 *  subsystem breakpoints. NOP unless a watchpoint is set.
++	 */
++	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
++	    !single_step && !about_to_enter_single_step &&
++	    machine_watchpoint_match(cpu->machine, paddr, len)) {
++		char valbuf[3 * 16 + 1];
++		size_t vi, vn = len < 16 ? len : 16;
++		valbuf[0] = '\0';
++		for (vi = 0; vi < vn; vi++)
++			snprintf(valbuf + strlen(valbuf),
++			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
++			    vi ? " " : "", data[vi]);
++		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
++		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
++		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
++		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
++		about_to_enter_single_step = true;
+ 	}
+ 
+ #if 0
+@@ -284,9 +321,46 @@
  				/*  Found a device, let's access it:  */
  				mem->last_accessed_device = i;
  
@@ -2821,7 +3986,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  				if (cpu->update_translation_table != NULL &&
  				    !(ok & MEMORY_NOT_FULL_PAGE) &&
-@@ -323,15 +360,26 @@
+@@ -323,15 +397,26 @@
  						    memory_paddr_to_hostaddr(
  						    mem, p & ~offset_mask,
  						    MEM_WRITE);
@@ -2852,7 +4017,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				}
  
  				res = 0;
-@@ -514,8 +562,19 @@
+@@ -514,8 +599,19 @@
  		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
  
  	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
@@ -2876,7 +4041,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	/*  And finally, read or write the data:  */
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/debugger/debugger.c GXEMUL-SEC/src/debugger/debugger.c
 --- src/debugger/debugger.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/debugger/debugger.c	2026-07-02 17:43:17.176521900 -0500
++++ GXEMUL-SEC/src/debugger/debugger.c	2026-07-17 14:59:22.661199800 -0500
 @@ -80,6 +80,17 @@
  static volatile bool exit_debugger;
  static volatile bool exit_debugger_to_continue_single_stepping;
@@ -2895,7 +4060,46 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  /*
   *  Private (global) debugger variables:
-@@ -697,6 +708,27 @@
+@@ -174,7 +185,12 @@
+ 		printf("%016" PRIx64, (uint64_t) m->breakpoints.addr[i]);
+ 	if (m->breakpoints.string[i] != NULL)
+ 		printf(" (%s)", m->breakpoints.string[i]);
+-	printf("\n");
++	/*  #248: show hit accounting.  */
++	printf("  [hits=%" PRIi64, (int64_t) m->breakpoints.hitcount[i]);
++	if (m->breakpoints.ignore_left[i] > 0)
++		printf(", ignore %" PRIi64 " more",
++		    (int64_t) m->breakpoints.ignore_left[i]);
++	printf("]\n");
+ }
+ 
+ 
+@@ -509,6 +525,24 @@
+ 
+ 			debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO, "%s", info);
+ 
++			/*  #248: also show breakpoint hit counts.  */
++			for (i = 0; i < debugger_machine->breakpoints.n; i++) {
++				char bpinfo[200];
++				snprintf(bpinfo, sizeof(bpinfo),
++				    "breakpoint %i: hits=%" PRIi64, i,
++				    (int64_t) debugger_machine->
++				    breakpoints.hitcount[i]);
++				if (debugger_machine->breakpoints.ignore_left[i]
++				    > 0)
++					snprintf(bpinfo + strlen(bpinfo),
++					    sizeof(bpinfo) - strlen(bpinfo),
++					    " (ignore %" PRIi64 " more)",
++					    (int64_t) debugger_machine->
++					    breakpoints.ignore_left[i]);
++				debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO,
++				    "%s", bpinfo);
++			}
++
+ 			color_prompt();
+ 			printf("GXemul> ");
+ 			color_normal();
+@@ -697,6 +731,27 @@
  
  
  /*
@@ -2923,7 +4127,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugger():
   *
   *  This is a loop, which reads a command from the terminal, and executes it.
-@@ -706,6 +738,23 @@
+@@ -706,6 +761,23 @@
  	int i, cmd_len;
  	char *cmd;
  
@@ -2947,7 +4151,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (debugger_n_steps_left_before_interaction > 0) {
  		debugger_n_steps_left_before_interaction --;
  		return;
-@@ -790,6 +839,7 @@
+@@ -790,6 +862,7 @@
  void debugger_reset(void)
  {
  	debugger_n_steps_left_before_interaction = 0;
@@ -2957,7 +4161,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/debugger/debugger_cmds.c GXEMUL-SEC/src/debugger/debugger_cmds.c
 --- src/debugger/debugger_cmds.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/debugger/debugger_cmds.c	2026-07-02 17:43:17.210165100 -0500
++++ GXEMUL-SEC/src/debugger/debugger_cmds.c	2026-07-17 14:59:22.700787500 -0500
 @@ -41,11 +41,19 @@
  /*
   *  debugger_cmd_breakpoint():
@@ -2980,8 +4184,13 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	while (args[0] != '\0' && args[0] == ' ')
  		args ++;
-@@ -56,10 +64,46 @@
- 		printf("  add addr      add a breakpoint for address addr\n");
+@@ -53,13 +61,50 @@
+ 	if (args[0] == '\0') {
+ 		printf("syntax: breakpoint subcmd [args...]\n");
+ 		printf("Available subcmds (and args) are:\n");
+-		printf("  add addr      add a breakpoint for address addr\n");
++		printf("  add addr[, N] add a breakpoint for address addr"
++		    " (N = ignore first N hits)\n");
  		printf("  delete x      delete breakpoint nr x\n");
  		printf("  show          show current breakpoints\n");
 +		printf("  subsystem [name error|warning|info|debug|off]\n");
@@ -3028,7 +4237,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (m->breakpoints.n == 0)
  			printf("No breakpoints set.\n");
  		for (i=0; i<m->breakpoints.n; i++)
-@@ -67,14 +111,21 @@
+@@ -67,14 +112,21 @@
  		return;
  	}
  
@@ -3053,7 +4262,19 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			printf("Invalid breakpoint nr %i. Use 'breakpoint "
  			    "show' to see the current breakpoints.\n", x);
  			return;
-@@ -95,15 +146,20 @@
+@@ -85,6 +137,11 @@
+ 		for (i=x; i<m->breakpoints.n-1; i++) {
+ 			m->breakpoints.addr[i]   = m->breakpoints.addr[i+1];
+ 			m->breakpoints.string[i] = m->breakpoints.string[i+1];
++			/*  #248: keep hit accounting in lockstep.  */
++			m->breakpoints.hitcount[i]    =
++			    m->breakpoints.hitcount[i+1];
++			m->breakpoints.ignore_left[i] =
++			    m->breakpoints.ignore_left[i+1];
+ 		}
+ 		m->breakpoints.n --;
+ 
+@@ -95,15 +152,35 @@
  		return;
  	}
  
@@ -3061,12 +4282,27 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +	if (subcmd == SUBCMD_ADD) {
  		uint64_t tmp;
  		size_t breakpoint_buf_len;
- 
++		int64_t ignore = 0;		/*  #248  */
++		char *comma;			/*  #248  */
++
 +		if (rest[0] == '\0') {
-+			printf("syntax: breakpoint add addr\n");
++			printf("syntax: breakpoint add addr[, ignorecount]\n");
 +			return;
 +		}
 +
++		/*  #248: an optional ", N" tail means "run past the first N
++		    hits before breaking" (skip boot noise / stop on the Nth
++		    iteration). Address expressions never contain a comma.  */
++		comma = strchr(rest, ',');
++		if (comma != NULL) {
++			*comma = '\0';
++			ignore = strtoll(comma + 1, NULL, 0);
++			if (ignore < 0)
++				ignore = 0;
++			while (comma > rest && comma[-1] == ' ')
++				*(--comma) = '\0';
++		}
+ 
  		i = m->breakpoints.n;
  
 -		res = debugger_parse_expression(m, args + 4, 0, &tmp);
@@ -3077,9 +4313,17 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			return;
  		}
  
-@@ -114,11 +170,11 @@
+@@ -113,14 +190,23 @@
+ 		CHECK_ALLOCATION(m->breakpoints.addr = (uint64_t *) realloc(
  		    m->breakpoints.addr, sizeof(uint64_t) *
  		   (m->breakpoints.n + 1)));
++		/*  #248: keep the hit-accounting arrays in lockstep.  */
++		CHECK_ALLOCATION(m->breakpoints.hitcount = (uint64_t *) realloc(
++		    m->breakpoints.hitcount, sizeof(uint64_t) *
++		   (m->breakpoints.n + 1)));
++		CHECK_ALLOCATION(m->breakpoints.ignore_left = (int64_t *)
++		    realloc(m->breakpoints.ignore_left, sizeof(int64_t) *
++		   (m->breakpoints.n + 1)));
  
 -		breakpoint_buf_len = strlen(args+4) + 1;
 +		breakpoint_buf_len = strlen(rest) + 1;
@@ -3090,8 +4334,12 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		strlcpy(m->breakpoints.string[i], rest,
  		    breakpoint_buf_len);
  		m->breakpoints.addr[i] = tmp;
++		m->breakpoints.hitcount[i] = 0;		/*  #248  */
++		m->breakpoints.ignore_left[i] = ignore;	/*  #248  */
  
-@@ -132,7 +188,72 @@
+ 		m->breakpoints.n ++;
+ 		show_breakpoint(m, i);
+@@ -132,7 +218,265 @@
  		return;
  	}
  
@@ -3162,10 +4410,203 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		debugmsg_print_breakpoints();
 +		return;
 +	}
++}
++
++
++/*
++ *  debugger_cmd_watchpoint():
++ *
++ *  #250: manipulate data write-watchpoints. A watchpoint breaks into the
++ *  debugger when the guest writes to a watched (virtual) address range —
++ *  the missing primitive for tracking down who corrupts a heap/GOT/pointer
++ *  cell. Modelled on debugger_cmd_breakpoint().
++ */
++static void debugger_cmd_watchpoint(struct machine *m, char *args)
++{
++	static const char *subcmd_name[] = { "add", "delete", "show" };
++	const int SUBCMD_ADD = 0, SUBCMD_DELETE = 1, SUBCMD_SHOW = 2;
++	const int n_subcmds = 3;
++	int i, res, subcmd = -1, n_matches = 0;
++	size_t wordlen;
++	char *rest;
++
++	while (args[0] == ' ')
++		args ++;
++
++	if (args[0] == '\0') {
++		printf("syntax: watchpoint subcmd [args...]\n");
++		printf("Available subcmds (and args) are:\n");
++		printf("  add addr[, len]  break on a guest write to the len-byte"
++		    " range at addr\n");
++		printf("                   (len defaults to 4)\n");
++		printf("  delete x         delete watchpoint nr x\n");
++		printf("  show             show current watchpoints\n");
++		printf("Subcmds may be abbreviated to any unambiguous prefix.\n");
++		return;
++	}
++
++	wordlen = 0;
++	while (args[wordlen] != '\0' && args[wordlen] != ' ')
++		wordlen ++;
++
++	for (i=0; i<n_subcmds; i++)
++		if (strncasecmp(args, subcmd_name[i], wordlen) == 0) {
++			subcmd = i;
++			n_matches ++;
++		}
++
++	if (n_matches == 0) {
++		printf("Unknown watchpoint subcommand.\n");
++		return;
++	}
++	if (n_matches > 1) {
++		printf("Ambiguous watchpoint subcommand '%.*s'.\n",
++		    (int) wordlen, args);
++		return;
++	}
++
++	rest = args + wordlen;
++	while (rest[0] == ' ')
++		rest ++;
++
++	if (subcmd == SUBCMD_SHOW) {
++		if (m->watchpoints.n == 0)
++			printf("No watchpoints set.\n");
++		for (i=0; i<m->watchpoints.n; i++) {
++			printf("%3i: paddr 0x", i);
++			if (m->cpus[0]->is_32bit)
++				printf("%08" PRIx32,
++				    (uint32_t) m->watchpoints.addr[i]);
++			else
++				printf("%016" PRIx64,
++				    (uint64_t) m->watchpoints.addr[i]);
++			printf(", %" PRIi64 " byte(s)",
++			    (int64_t) m->watchpoints.len[i]);
++			if (m->watchpoints.string[i] != NULL)
++				printf(" (%s)", m->watchpoints.string[i]);
++			printf("\n");
++		}
++		return;
++	}
++
++	if (subcmd == SUBCMD_DELETE) {
++		int x;
++
++		if (rest[0] == '\0') {
++			printf("syntax: watchpoint delete x\n");
++			return;
++		}
++
++		x = atoi(rest);
++
++		if (m->watchpoints.n == 0) {
++			printf("No watchpoints set.\n");
++			return;
++		}
++		if (x < 0 || x >= m->watchpoints.n) {
++			printf("Invalid watchpoint nr %i. Use 'watchpoint "
++			    "show' to see the current watchpoints.\n", x);
++			return;
++		}
++
++		free(m->watchpoints.string[x]);
++
++		for (i=x; i<m->watchpoints.n-1; i++) {
++			m->watchpoints.addr[i]   = m->watchpoints.addr[i+1];
++			m->watchpoints.len[i]    = m->watchpoints.len[i+1];
++			m->watchpoints.string[i] = m->watchpoints.string[i+1];
++		}
++		m->watchpoints.n --;
++
++		/*  Invalidate ALL translations (incl. the host_store data map)
++		    so the fast-store suppression is recomputed on remap.  */
++		for (i=0; i<m->ncpus; i++)
++			if (m->cpus[i]->invalidate_translation_caches != NULL)
++				m->cpus[i]->invalidate_translation_caches(
++				    m->cpus[i], 0, INVALIDATE_ALL);
++		return;
++	}
++
++	if (subcmd == SUBCMD_ADD) {
++		uint64_t addr, paddr, len = 4;
++		size_t buflen;
++		char *comma;
++		struct cpu *c;
++
++		if (rest[0] == '\0') {
++			printf("syntax: watchpoint add addr[, len]\n");
++			return;
++		}
++
++		/*  Optional ", len" tail; expressions never contain a comma.  */
++		comma = strchr(rest, ',');
++		if (comma != NULL) {
++			*comma = '\0';
++			len = strtoull(comma + 1, NULL, 0);
++			if (len < 1)
++				len = 1;
++			while (comma > rest && comma[-1] == ' ')
++				*(--comma) = '\0';
++		}
++
++		res = debugger_parse_expression(m, rest, 0, &addr);
++		if (!res) {
++			printf("Couldn't parse '%s'\n", rest);
++			return;
++		}
++
++		/*
++		 *  #250: watchpoints are matched on PHYSICAL addresses, so a
++		 *  write via any virtual alias (e.g. cached kseg0 vs uncached
++		 *  kseg1 on MIPS) is caught and 32-bit sign-extension is a
++		 *  non-issue. Translate the (virtual) address the user typed to
++		 *  physical; if that fails (e.g. an unmapped mapped-segment
++		 *  address), assume the value was already physical.
++		 */
++		c = m->cpus[m->bootstrap_cpu];
++		paddr = addr;
++		if (c != NULL && c->translate_v2p != NULL &&
++		    !c->translate_v2p(c, addr, &paddr, FLAG_NOEXCEPTIONS)) {
++			printf("(warning: couldn't translate 0x%" PRIx64 " to a "
++			    "physical address; treating it as physical)\n",
++			    (uint64_t) addr);
++			paddr = addr;
++		}
++
++		i = m->watchpoints.n;
++
++		CHECK_ALLOCATION(m->watchpoints.string = (char **) realloc(
++		    m->watchpoints.string, sizeof(char *) * (i + 1)));
++		CHECK_ALLOCATION(m->watchpoints.addr = (uint64_t *) realloc(
++		    m->watchpoints.addr, sizeof(uint64_t) * (i + 1)));
++		CHECK_ALLOCATION(m->watchpoints.len = (uint64_t *) realloc(
++		    m->watchpoints.len, sizeof(uint64_t) * (i + 1)));
++
++		buflen = strlen(rest) + 1;
++		CHECK_ALLOCATION(m->watchpoints.string[i] = (char *)
++		    malloc(buflen));
++		strlcpy(m->watchpoints.string[i], rest, buflen);
++		m->watchpoints.addr[i] = paddr;
++		m->watchpoints.len[i] = len;
++		m->watchpoints.n ++;
++
++		/*  Invalidate ALL translations (incl. the host_store data map)
++		    so the newly-watched page leaves the fast-store map and every
++		    write to it now traps to memory_rw.  */
++		for (i=0; i<m->ncpus; i++)
++			if (m->cpus[i]->invalidate_translation_caches != NULL)
++				m->cpus[i]->invalidate_translation_caches(
++				    m->cpus[i], 0, INVALIDATE_ALL);
++
++		printf("watchpoint %i: paddr 0x%" PRIx64 ", %" PRIi64
++		    " byte(s) (%s)\n", m->watchpoints.n - 1, (uint64_t) paddr,
++		    (int64_t) len, m->watchpoints.string[m->watchpoints.n - 1]);
++		return;
++	}
  }
  
  
-@@ -236,6 +357,45 @@
+@@ -236,6 +580,45 @@
  
  
  /*
@@ -3211,7 +4652,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugger_cmd_dump():
   *
   *  Dump emulated memory in hex and ASCII.
-@@ -256,10 +416,14 @@
+@@ -256,10 +639,14 @@
  
  		CHECK_ALLOCATION(tmps = strdup(args));
  
@@ -3229,7 +4670,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		r = debugger_parse_expression(m, tmps, 0, &tmp);
  		free(tmps);
  
-@@ -269,8 +433,6 @@
+@@ -269,8 +656,6 @@
  		} else {
  			last_dump_addr = tmp;
  		}
@@ -3238,7 +4679,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	if (m->cpus == NULL) {
-@@ -374,6 +536,299 @@
+@@ -374,6 +759,299 @@
  
  
  /*
@@ -3538,7 +4979,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugger_cmd_focus():
   *
   *  Changes focus to specific cpu, in a specific machine (in a specific
-@@ -696,12 +1151,14 @@
+@@ -696,12 +1374,14 @@
  	}
  
  	if (!syntax_ok) {
@@ -3554,7 +4995,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		return;
  	}
  
-@@ -729,6 +1186,50 @@
+@@ -729,6 +1409,50 @@
  		return;
  	}
  
@@ -3605,7 +5046,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	res = debugger_parse_expression(m, p, 0, &data);
  	switch (res) {
  	case PARSE_NOMATCH:
-@@ -932,11 +1433,54 @@
+@@ -932,11 +1656,54 @@
  
  /*
   *  debugger_cmd_step():
@@ -3660,7 +5101,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (args[0] != '\0') {
  		n = strtoull(args, NULL, 0);
  		if (n < 1) {
-@@ -1062,10 +1606,14 @@
+@@ -1062,10 +1829,14 @@
  
  		CHECK_ALLOCATION(tmps = strdup(args));
  
@@ -3678,7 +5119,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		r = debugger_parse_expression(m, tmps, 0, &tmp);
  		free(tmps);
  
-@@ -1075,8 +1623,6 @@
+@@ -1075,8 +1846,6 @@
  		} else {
  			last_unasm_addr = tmp;
  		}
@@ -3687,7 +5128,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	if (m->cpus == NULL) {
-@@ -1249,6 +1795,9 @@
+@@ -1249,6 +2018,9 @@
  	{ "emul", "", 0, debugger_cmd_emul,
  		"Print a summary of the current emulation" },
  
@@ -3697,7 +5138,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	{ "focus", "x[,y[,z]]", 0, debugger_cmd_focus,
  		"changes focus to cpu x, machine x, emul z" },
  
-@@ -1273,7 +1822,7 @@
+@@ -1273,7 +2045,7 @@
  	{ "print", "expr", 0, debugger_cmd_print,
  		"evaluate an expression without side-effects" },
  
@@ -3706,7 +5147,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		"modify emulated memory contents" },
  
  	{ "quiet", "[on|off]", 0, debugger_cmd_quiet,
-@@ -1291,8 +1840,8 @@
+@@ -1291,8 +2063,8 @@
  	/*  NOTE: Try to keep 's' down to only one command. Having 'step'
  	    available as a one-letter command is very convenient.  */
  
@@ -3717,6 +5158,16 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	{ "tlbdump", "[cpuid][,r]", 0, debugger_cmd_tlbdump,
  		"dump TLB contents (add ',r' for raw data)" },
+@@ -1312,6 +2084,9 @@
+ 	{ "version", "", 0, debugger_cmd_version,
+ 		"Print version information" },
+ 
++	{ "watchpoint", "...", 0, debugger_cmd_watchpoint,
++		"break on guest writes to an address range" },
++
+ 	/*  Note: NULL handler.  */
+ 	{ "x = expr", "", 0, NULL, "generic assignment" },
+ 
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/debugger/debugger_expr.c GXEMUL-SEC/src/debugger/debugger_expr.c
 --- src/debugger/debugger_expr.c	2021-04-22 13:04:18.000000000 -0500
 +++ GXEMUL-SEC/src/debugger/debugger_expr.c	2026-07-02 17:43:17.256168900 -0500
@@ -3754,7 +5205,34 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	dev_ps2_gs.o dev_ps2_spd.o dev_ps2_stuff.o dev_pvr.o dev_px.o \
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_8253.c GXEMUL-SEC/src/devices/dev_8253.c
 --- src/devices/dev_8253.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_8253.c	2026-06-28 23:25:43.034261700 -0500
++++ GXEMUL-SEC/src/devices/dev_8253.c	2026-07-16 20:13:15.121644900 -0500
+@@ -140,7 +140,7 @@
+ 						    d->timer0, d->hz[0]);
+ 					break;
+ 				case 1:	fatal("TODO: DMA refresh?\n");
+-					exit(1);
++					break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
+ 				case 2:	fatal("TODO: 8253 tone generation?\n");
+ 					break;
+ 				}
+@@ -148,7 +148,7 @@
+ 			default:fatal("[ 8253: huh? writing to counter"
+ 				    " %i but neither from msb nor lsb? ]\n",
+ 				    relative_addr);
+-				exit(1);
++				break;	/*  #223: (Codex/Fable) don't exit() the host  */
+ 			}
+ 		} else {
+ 			switch (d->mode_byte & 0x30) {
+@@ -162,7 +162,7 @@
+ 			default:fatal("[ 8253: huh? reading from counter"
+ 				    " %i but neither from msb nor lsb? ]\n",
+ 				    relative_addr);
+-				exit(1);
++				break;	/*  #223: (Codex/Fable) don't exit() the host  */
+ 			}
+ 		}
+ 
 @@ -176,7 +176,7 @@
  		if (writeflag == MEM_WRITE) {
  			d->mode_byte = idata;
@@ -3764,6 +5242,26 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			if (d->counter_select > 2) {
  				debug("[ 8253: attempt to select counter 3,"
  				    " which doesn't exist. ]\n");
+@@ -202,8 +202,9 @@
+ 			debug("]\n");
+ 
+ 			if (idata & I8253_TIMER_BCD) {
++				/*  #223: (Codex/Fable) warn+ignore BCD mode instead of
++				    exit()ing the host.  */
+ 				fatal("[ 8253: BCD not yet implemented ]\n");
+-				exit(1);
+ 			}
+ 		} else {
+ 			debug("[ 8253: read; can this actually happen? ]\n");
+@@ -218,7 +219,7 @@
+ 			fatal("[ 8253: unimplemented read from address 0x%x "
+ 			    "]\n", (int)relative_addr);
+ 		}
+-		exit(1);
++		break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_adb.c GXEMUL-SEC/src/devices/dev_adb.c
 --- src/devices/dev_adb.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_adb.c	2026-06-28 23:25:43.047006700 -0500
@@ -3779,8 +5277,36 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_asc.c GXEMUL-SEC/src/devices/dev_asc.c
 --- src/devices/dev_asc.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-09 23:34:26.624966600 -0500
-@@ -274,6 +274,17 @@
++++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-16 23:59:45.248306400 -0500
+@@ -213,8 +213,14 @@
+ {
+ 	int res = d->fifo[d->fifo_out];
+ 
+-	if (d->fifo_in == d->fifo_out)
++	if (d->fifo_in == d->fifo_out) {
++		/*  #197: (Codex/Fable) reading an empty FIFO must not drive
++		    n_bytes_in_fifo negative -- a later non-DMA selection turns
++		    the negative count into a huge size_t alloc -> exit(). Warn
++		    and return without underflowing.  */
+ 		fatal("dev_asc: WARNING! FIFO overrun!\n");
++		return res;
++	}
+ 
+ 	d->fifo_out = (d->fifo_out + 1) % ASC_FIFO_LEN;
+ 	d->n_bytes_in_fifo --;
+@@ -230,6 +236,11 @@
+  */
+ static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
+ {
++	/*  #197: (Codex/Fable) don't push the FIFO occupancy past its
++	    physical size; a bloated count later becomes a huge size_t alloc
++	    -> exit() (mirror of the read underflow guard).  */
++	if (d->n_bytes_in_fifo >= ASC_FIFO_LEN)
++		return;
+ 	d->fifo[d->fifo_in] = data;
+ 	d->fifo_in = (d->fifo_in + 1) % ASC_FIFO_LEN;
+ 	d->n_bytes_in_fifo ++;
+@@ -274,6 +285,17 @@
  	int res = 1, all_done = 1;
  	int len, i, ch;
  
@@ -3798,7 +5324,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (!quiet_mode)
  		debug(" { TRANSFER to/from id %i: ", d->reg_wo[NCR_SELID] & 7);
  
-@@ -290,7 +301,8 @@
+@@ -290,7 +312,8 @@
  				    d->reg_wo[NCR_TCM] * 256;
  
  				len--;
@@ -3808,7 +5334,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				debug(" %02x", ch);
  
  				d->incoming_data_addr ++;
-@@ -329,8 +341,11 @@
+@@ -329,8 +352,11 @@
  					    (ASC_DMA_SIZE-1));
  
  				if (lenIn2 > lenIn) {
@@ -3821,7 +5347,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  					lenIn2 = lenIn;
  				}
  
-@@ -423,6 +438,14 @@
+@@ -423,6 +449,14 @@
  				    d->xferp->data_out_offset;
  			}
  
@@ -3836,6 +5362,32 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			/*
  			 *  Are we using an external DMA controller? Then use
  			 *  it. Otherwise place the data in the DECstation
+@@ -1166,14 +1200,19 @@
+ 			break;
+ 
+ 		default:
+-			fatal("(unimplemented asc cmd 0x%02x)", (int)idata);
++			/*  #240: An unimplemented/illegal ASC command must not
++			    halt the host. The illegal-command interrupt has
++			    been asserted (NCRSTAT_INT | NCRINTR_ILL) and
++			    dev_asc_tick() delivers it to the guest, exactly as
++			    real hardware reports an illegal command.  */
++			/*  #245: route the guest-spammable diagnostic through the
++			    verbosity-gated SUBSYS_DEVICE channel (suppressed by
++			    default, shown at -v or `break device`) so a guest
++			    hammering NCR_CMD can't flood the host log.  */
++			debugmsg_cpu(cpu, SUBSYS_DEVICE, "asc", VERBOSITY_DEBUG,
++			    "unimplemented command 0x%02x", (int)idata);
+ 			d->reg_ro[NCR_STAT] |= NCRSTAT_INT;
+ 			d->reg_ro[NCR_INTR] |= NCRINTR_ILL;
+-			/*
+-			 *  TODO:  exit or continue with Illegal command
+-			 *  interrupt?
+-			 */
+-			exit(1);
+ 		}
+ 	}
+ 
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_bebox.c GXEMUL-SEC/src/devices/dev_bebox.c
 --- src/devices/dev_bebox.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_bebox.c	2026-06-28 23:25:43.073416900 -0500
@@ -4060,7 +5612,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				    "timeout ]\n");  */
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_fb.c GXEMUL-SEC/src/devices/dev_fb.c
 --- src/devices/dev_fb.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_fb.c	2026-07-09 23:35:17.360350800 -0500
++++ GXEMUL-SEC/src/devices/dev_fb.c	2026-07-10 23:37:52.725437900 -0500
 @@ -124,7 +124,7 @@
  {
  	unsigned char *new_framebuffer;
@@ -4070,12 +5622,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	if (d == NULL) {
  		fatal("dev_fb_resize(): d == NULL\n");
-@@ -136,8 +136,31 @@
- 		exit(1);
+@@ -132,12 +132,40 @@
  	}
  
--	new_bytes_per_line = new_xsize * d->bit_depth / 8;
--	size = new_ysize * new_bytes_per_line;
+ 	if (new_xsize < 10 || new_ysize < 10) {
+-		fatal("dev_fb_resize(): size too small.\n");
+-		exit(1);
++		/*  #184: (Codex/Fable) guest-reachable (e.g. SGI GBE HCMAP/VCMAP
++		    written with a tiny/zero dimension); reject and keep the old
++		    framebuffer intact instead of exit(1), matching the >16384
++		    branch below.  */
++		fatal("dev_fb_resize(): size too small (%i x %i); ignored.\n",
++		    new_xsize, new_ysize);
++		return;
++	}
++
 +	/*  #156: (Codex/Fable) compute the new size in size_t with overflow
 +	    checks, and cap the guest-controlled dimensions; on failure
 +	    return early, leaving the old framebuffer intact.  */
@@ -4097,17 +5658,26 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +	    (size_t) new_ysize > SIZE_MAX / sz_bytes_per_line) {
 +		fatal("dev_fb_resize(): framebuffer size overflow.\n");
 +		return;
-+	}
-+
+ 	}
+ 
+-	new_bytes_per_line = new_xsize * d->bit_depth / 8;
+-	size = new_ysize * new_bytes_per_line;
 +	new_bytes_per_line = (int) sz_bytes_per_line;
 +	size = (size_t) new_ysize * sz_bytes_per_line;
  
  	CHECK_ALLOCATION(new_framebuffer = (unsigned char *) malloc(size));
  
-@@ -176,6 +199,17 @@
+@@ -176,6 +204,24 @@
  
  	memory_device_update_data(d->memory, d, d->framebuffer);
  
++	/*  #182: (Codex/Fable) also resize the device's mapped length so the
++	    dyntrans fast-map gate cannot install a host mapping past the new
++	    (possibly smaller) framebuffer allocation on a guest-driven shrink.
++	    The #157 invalidation below then drops any stale fast-path pointers
++	    so the next access re-derives against the new length.  */
++	memory_device_update_length(d->memory, d, size);
++
 +	/*  #157: (Codex/Fable) the framebuffer memory was just freed and
 +	    reallocated, so invalidate all CPUs' translation caches (same
 +	    idiom as dev_fbctrl), otherwise dyntrans fast-path host pointers
@@ -4122,7 +5692,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	set_title(d);
  
  #ifdef WITH_X11
-@@ -254,6 +288,34 @@
+@@ -254,6 +300,34 @@
  	if (x2 < 0)		x2 = 0;
  	if (x2 >= d->xsize)	x2 = d->xsize-1;
  
@@ -4157,7 +5727,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	dest_ofs = d->bytes_per_line * y1 + (d->bit_depth/8) * x1;
  	linelen = (x2-x1 + 1) * (d->bit_depth/8);
  	/*  NOTE: linelen is nr of bytes, not pixels  */
-@@ -265,14 +327,20 @@
+@@ -265,14 +339,20 @@
  				    d->framebuffer + dest_ofs;
  
  				if (d->bit_depth == 24) {
@@ -4181,7 +5751,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				} else {
  					fatal("Unimplemented bit-depth (%i)"
  					    " for fb fill\n", d->bit_depth);
-@@ -283,6 +351,15 @@
+@@ -283,6 +363,15 @@
  			dest_ofs += d->bytes_per_line;
  		}
  	} else {
@@ -4197,7 +5767,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		from_ofs = d->bytes_per_line * from_y +
  		    (d->bit_depth/8) * from_x;
  		for (y=y1; y<=y2; y++) {
-@@ -627,7 +704,8 @@
+@@ -627,7 +716,8 @@
  	}
  #endif
  
@@ -4207,7 +5777,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		return 0;
  
  	/*  See if a write actually modifies the framebuffer contents:  */
-@@ -757,6 +835,9 @@
+@@ -757,6 +847,9 @@
  	}
  
  	d->memory = mem;
@@ -4219,8 +5789,30 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	/*  Defaults:  */
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_footbridge.c GXEMUL-SEC/src/devices/dev_footbridge.c
 --- src/devices/dev_footbridge.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_footbridge.c	2026-06-28 23:25:43.176325500 -0500
-@@ -544,7 +544,7 @@
++++ GXEMUL-SEC/src/devices/dev_footbridge.c	2026-07-16 20:13:14.851082200 -0500
+@@ -222,8 +222,9 @@
+ 		idata = memory_readmax64(cpu, data, len);
+ 		if (idata & 0x40) {
+ 			debug("[ footbridge_reset: GP16: Halting. ]\n");
++			/*  #220: (Codex/Fable) cpu->running=0 already halts cleanly;
++			    the col-0 exit(1) was a debug hack that kills the host.  */
+ 			cpu->running = 0;
+-exit(1);
+ 		}
+ 	}
+ 
+@@ -252,7 +253,9 @@
+ 	if (bus == 255) {
+ 		fatal("[ footbridge DEBUG ERROR: bus 255 unlikely,"
+ 		    " pc (might not be updated) = 0x%08x ]\n", (int)cpu->pc);
+-		exit(1);
++		/*  #220: (Codex/Fable) don't exit() the host on a guest PCI
++		    access to the (unlikely) bus 255; treat it as handled.  */
++		return 1;
+ 	}
+ 
+ 	debug("[ footbridge pci: %s bus %i, device %i, function %i, register "
+@@ -544,7 +547,7 @@
  		char tmpstr[600];
  
  		memset(&interrupt_template, 0, sizeof(interrupt_template));
@@ -4547,8 +6139,32 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		templ.interrupt_assert = kn02_interrupt_assert;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_kn02ba.c GXEMUL-SEC/src/devices/dev_kn02ba.c
 --- src/devices/dev_kn02ba.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_kn02ba.c	2026-06-28 23:25:43.304050400 -0500
-@@ -183,7 +183,7 @@
++++ GXEMUL-SEC/src/devices/dev_kn02ba.c	2026-07-16 20:13:15.037111000 -0500
+@@ -113,7 +113,10 @@
+ 			fatal("[ kn02ba_mer: write to offset 0x%08lx: 0x%08x ]\n",
+ 			    (long)relative_addr, (int)idata);
+ 		}
+-		exit(1);
++		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
++		    kn02ba MER/MSR offset must not exit() the host; warn (above)
++		    and ignore.  */
++		break;
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+@@ -154,7 +157,10 @@
+ 			fatal("[ kn02ba_msr: write to offset 0x%08lx: 0x%08x ]\n",
+ 			    (long)relative_addr, (int)idata);
+ 		}
+-		exit(1);
++		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
++		    kn02ba MER/MSR offset must not exit() the host; warn (above)
++		    and ignore.  */
++		break;
+ 	}
+ 
+ 	if (writeflag == MEM_READ)
+@@ -183,7 +189,7 @@
  		    devinit->interrupt_path, 1 << i);
  		// printf("registering '%s'\n", tmpstr);
  		memset(&templ, 0, sizeof(templ));
@@ -4569,6 +6185,25 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		templ.name = tmpstr2;
  		templ.extra = d;
                  templ.interrupt_assert = kn230_interrupt_assert;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_le.c GXEMUL-SEC/src/devices/dev_le.c
+--- src/devices/dev_le.c	2021-04-22 13:04:20.000000000 -0500
++++ GXEMUL-SEC/src/devices/dev_le.c	2026-07-16 19:10:05.920368000 -0500
+@@ -342,6 +342,15 @@
+ 			d->tx_packet_len = buflen;
+ 			CHECK_ALLOCATION(d->tx_packet = (unsigned char *) malloc(buflen));
+ 		} else {
++			/*  #199: (Codex/Fable) cap the aggregate multi-fragment TX
++			    packet so a guest rearming a non-ENP descriptor can't grow
++			    host memory without bound.  */
++			if ((size_t)d->tx_packet_len + buflen > 65536) {
++				free(d->tx_packet);
++				d->tx_packet = NULL;
++				d->tx_packet_len = 0;
++				return;
++			}
+ 			d->tx_packet_len += buflen;
+ 			CHECK_ALLOCATION(d->tx_packet = (unsigned char *)
+ 			    realloc(d->tx_packet, d->tx_packet_len));
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_luna88k.c GXEMUL-SEC/src/devices/dev_luna88k.c
 --- src/devices/dev_luna88k.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_luna88k.c	2026-06-28 23:25:43.328351100 -0500
@@ -4600,7 +6235,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  						if (!(d->eeprom_command&0x80)) {
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_mb89352.c GXEMUL-SEC/src/devices/dev_mb89352.c
 --- src/devices/dev_mb89352.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_mb89352.c	2026-07-09 23:34:30.532606000 -0500
++++ GXEMUL-SEC/src/devices/dev_mb89352.c	2026-07-10 23:41:59.627621500 -0500
 @@ -401,6 +401,20 @@
  			case SCMD_XFR | SCMD_PROG_XFR:
  			case SCMD_XFR | SCMD_PROG_XFR | SCMD_ICPT_XFR:
@@ -4622,9 +6257,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  					d->reg[SSTS] |= SSTS_XFR;
  					d->phase = d->reg[PCTL] & 7;
  
+@@ -432,7 +446,9 @@
+ 						    VERBOSITY_ERROR,
+ 					    	    "Transfer command: unimplemented phase %i",
+ 					    	    d->phase);
+-				    		exit(1);
++						/*  #186: (Codex/Fable) guest-selectable PCTL phase via
++						    a valid SCMD_XFR; log and break, don't exit(1).  */
++						break;
+ 					}
+ 
+ 					if (!(d->phase & 1))
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_mp.c GXEMUL-SEC/src/devices/dev_mp.c
 --- src/devices/dev_mp.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_mp.c	2026-06-28 23:25:43.355901500 -0500
++++ GXEMUL-SEC/src/devices/dev_mp.c	2026-07-16 20:13:14.939185100 -0500
 @@ -91,6 +91,10 @@
  
  	case DEV_MP_STARTUPCPU:
@@ -4636,6 +6282,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		d->cpus[which_cpu]->pc = d->startup_addr;
  		switch (cpu->cpu_family->arch) {
  		case ARCH_MIPS:
+@@ -101,9 +105,12 @@
+ 			d->cpus[which_cpu]->cd.ppc.gpr[1] = d->stack_addr;
+ 			break;
+ 		default:
++			/*  #221: (Codex/Fable) a guest STARTUPCPU on a test machine
++			    of an arch without SP-init here: warn and start the CPU
++			    anyway instead of exit()ing the host.  */
+ 			fatal("dev_mp(): DEV_MP_STARTUPCPU: not for this"
+ 			    " arch yet!\n");
+-			exit(1);
++			break;
+ 		}
+ 		d->cpus[which_cpu]->running = true;
+ 		/*  debug("[ dev_mp: starting up cpu%i at 0x%llx ]\n", 
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_ne2000.c GXEMUL-SEC/src/devices/dev_ne2000.c
 --- src/devices/dev_ne2000.c	1969-12-31 18:00:00.000000000 -0600
 +++ GXEMUL-SEC/src/devices/dev_ne2000.c	2026-07-10 00:35:59.324784600 -0500
@@ -5866,9 +7526,24 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (relative_addr & 0xf) {
  		debug("[ gs unaligned access, addr 0x%x ]\n",
  		    (int)relative_addr);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_ps2_stuff.c GXEMUL-SEC/src/devices/dev_ps2_stuff.c
+--- src/devices/dev_ps2_stuff.c	2021-04-22 13:04:20.000000000 -0500
++++ GXEMUL-SEC/src/devices/dev_ps2_stuff.c	2026-07-16 19:10:05.771802700 -0500
+@@ -258,7 +258,10 @@
+ 			/*  debug("[ ps2: dmac write to D2_CHCR, "
+ 			    "data 0x%016llx ]\n", (long long) idata);  */
+ 			if (idata & D_CHCR_STR) {
+-				int length = d->dmac_reg[D2_QWC_REG/0x10] * 16;
++				/*  #198: (Codex/Fable) QWC is a 16-bit field; mask it
++				    before *16 so a guest can't force a multi-GB malloc()
++				    ->CHECK_ALLOCATION->exit() via the full register.  */
++				int length = (d->dmac_reg[D2_QWC_REG/0x10] & 0xffff) * 16;
+ 				uint64_t from_addr = d->dmac_reg[
+ 				    D2_MADR_REG/0x10];
+ 				uint64_t to_addr   = d->dmac_reg[
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_pvr.c GXEMUL-SEC/src/devices/dev_pvr.c
 --- src/devices/dev_pvr.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_pvr.c	2026-07-09 23:39:59.646517600 -0500
++++ GXEMUL-SEC/src/devices/dev_pvr.c	2026-07-16 19:10:06.050597400 -0500
 @@ -189,8 +189,10 @@
  
  	/*  DMAC not enabled?  */
@@ -6113,8 +7788,15 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	uint32_t bgplaneZ = REG(PVRREG_BGPLANE_Z);
-@@ -1470,13 +1521,15 @@
+@@ -1468,15 +1519,22 @@
+ 	// ob_ofs = REG(PVRREG_TA_OB_POS);
+ 	// REG(PVRREG_TA_OB_POS) = ob_ofs + sizeof(uint64_t);
  
++	/*  #200: (Codex/Fable) cap queued TA commands so a guest that never
++	    issues render/reset can't grow the host buffer without bound.  */
++	if (d->n_ta_commands >= (int) (VRAM_SIZE / 64))
++		return;
++
  	if (d->ta_commands == NULL) {
  		d->allocated_ta_commands = 2048;
 -		d->ta_commands = (uint32_t *) malloc(64 * d->allocated_ta_commands);
@@ -6131,7 +7813,101 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	// Hack: I don't understand yet what separates a 32-byte transfer
-@@ -2354,6 +2407,43 @@
+@@ -1517,8 +1575,9 @@
+ 	uint64_t idata = 0, odata = 0;
+ 
+ 	if (len != sizeof(uint32_t)) {
++		/*  #187: (Codex/Fable) guest-reachable; the masked access below is
++		    bounded to the TA buffer, so log and continue, don't exit(1).  */
+ 		fatal("pvr_ta access len = %i: TODO\n", (int) len);
+-		exit(1);
+ 	}
+ 
+ 	// Tile Accelerator commands can be sent to 0x10000000 through
+@@ -1615,8 +1674,8 @@
+ 			debug("[ pvr: STARTRENDER ]\n");
+ 			pvr_render(cpu, d);
+ 		} else {
++			/*  #187: (Codex/Fable) guest-reachable MMIO; log, don't exit(1).  */
+ 			fatal("[ pvr: huh? read from STARTRENDER ]\n");
+-			exit(1);
+ 		}
+ 		break;
+ 
+@@ -1625,10 +1684,11 @@
+ 			debug("[ pvr: OB_ADDR set to 0x%08" PRIx32" ]\n",
+ 			    (uint32_t)(idata & PVR_OB_ADDR_MASK));
+ 			if (idata & ~PVR_OB_ADDR_MASK) {
+-				fatal("[ pvr: OB_ADDR: Fatal error: Unknown"
++				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
++				    the unknown bits below, don't exit(1).  */
++				fatal("[ pvr: OB_ADDR: unknown"
+ 				    " bits set: 0x%08" PRIx32" ]\n",
+ 				    (uint32_t)(idata & ~PVR_OB_ADDR_MASK));
+-				exit(1);
+ 			}
+ 			idata &= PVR_OB_ADDR_MASK;
+ 			DEFAULT_WRITE;
+@@ -1640,10 +1700,11 @@
+ 			debug("[ pvr: TILEBUF_ADDR set to 0x%08" PRIx32" ]\n",
+ 			    (uint32_t)(idata & PVR_TILEBUF_ADDR_MASK));
+ 			if (idata & ~PVR_TILEBUF_ADDR_MASK) {
+-				fatal("[ pvr: TILEBUF_ADDR: Unknown"
++				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
++				    the unknown bits below, don't exit(1).  */
++				fatal("[ pvr: TILEBUF_ADDR: unknown"
+ 				    " bits set: 0x%08" PRIx32" ]\n",
+ 				    (uint32_t)(idata & ~PVR_TILEBUF_ADDR_MASK));
+-				exit(1);
+ 			}
+ 			idata &= PVR_TILEBUF_ADDR_MASK;
+ 			DEFAULT_WRITE;
+@@ -2034,9 +2095,9 @@
+ 			if ((idata & DIWCONF_MAGIC_MASK) !=
+ 			    DIWCONF_MAGIC && (idata & DIWCONF_MAGIC_MASK)
+ 			    != 0) {
++				/*  #187: (Codex/Fable) guest-reachable MMIO; log, don't exit(1).  */
+ 				fatal("PVRREG_DIWCONF magic not set to "
+ 				    "Magic value. 0x%08x\n", (int)idata);
+-				exit(1);
+ 			}
+ 			if (idata & DIWCONF_BLANK)
+ 				debug("[ pvr: PVRREG_DIWCONF: BLANK: TODO ]\n");
+@@ -2109,9 +2170,10 @@
+ 	case PVRREG_TA_OPB_START:
+ 		if (writeflag == MEM_WRITE) {
+ 			if (idata & ~TA_OPB_START_MASK) {
++				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
++				    below, don't exit(1).  */
+ 				fatal("[ pvr: UNEXPECTED bits in "
+ 				    "TA_OPB_START: 0x%08x ]\n", (int)idata);
+-				exit(1);
+ 			}
+ 			idata &= TA_OPB_START_MASK;
+ 			debug("[ pvr: TA_OPB_START set to 0x%x ]\n",
+@@ -2123,9 +2185,10 @@
+ 	case PVRREG_TA_OB_START:
+ 		if (writeflag == MEM_WRITE) {
+ 			if (idata & ~TA_OB_START_MASK) {
++				/*  #187: (Codex/Fable) guest-reachable MMIO; log and mask
++				    below, don't exit(1).  */
+ 				fatal("[ pvr: UNEXPECTED bits in "
+ 				    "TA_OB_START: 0x%08x ]\n", (int)idata);
+-				exit(1);
+ 			}
+ 			idata &= TA_OB_START_MASK;
+ 			debug("[ pvr: TA_OB_START set to 0x%x ]\n",
+@@ -2229,7 +2292,8 @@
+ 			DEFAULT_WRITE;
+ 		}
+ 
+-		exit(1);
++		/*  #187: (Codex/Fable) guest-reachable MMIO (default case for any
++		    unhandled PVR register); logged above, don't exit(1).  */
+ 	}
+ 
+ return_ok:
+@@ -2354,6 +2418,43 @@
  	if (d->fb_update_y2 >= d->ysize)
  		d->fb_update_y2 = d->ysize - 1;
  
@@ -6175,7 +7951,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	vram_ofs += d->fb_update_y1 * bytes_per_line;
  	vram_ofs += d->fb_update_x1 * d->bytes_per_pixel;
  	pixels_to_copy = (d->fb_update_x2 - d->fb_update_x1 + 1);
-@@ -2367,7 +2457,12 @@
+@@ -2367,7 +2468,12 @@
  		{
  			int y;
  			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
@@ -6189,7 +7965,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				for (p=0; p<pixels_to_copy; p++) {
  					/*  0rrrrrgg(high) gggbbbbb(low)  */
  					fb[fo] = (vram[(vo+1)%VRAM_SIZE] << 1) & 0xf8;
-@@ -2387,7 +2482,10 @@
+@@ -2387,7 +2493,10 @@
  		{
  			int y;
  			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
@@ -6201,7 +7977,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				for (p=0; p<pixels_to_copy; p++) {
  					/*  rrrrrggg(high) gggbbbbb(low)  */
  					fb[fo] = vram[(vo+1)%VRAM_SIZE] & 0xf8;
-@@ -2407,8 +2505,15 @@
+@@ -2407,8 +2516,15 @@
  		{
  			int y;
  			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
@@ -6219,7 +7995,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				vram_ofs += bytes_per_line;
  				fb_ofs += d->fb->bytes_per_line;
  			}
-@@ -2419,7 +2524,10 @@
+@@ -2419,7 +2535,10 @@
  		{
  			int y;
  			for (y=d->fb_update_y1; y<=d->fb_update_y2; y++) {
@@ -6231,7 +8007,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				for (p=0; p<pixels_to_copy; p++) {
  					fb[fo] = vram[(vo+2)%VRAM_SIZE];
  					fb[fo+1] = vram[(vo+1)%VRAM_SIZE];
-@@ -2483,15 +2591,31 @@
+@@ -2483,15 +2602,31 @@
  	 *  Convert writes to alternative VRAM, into normal writes:
  	 */
  
@@ -6268,8 +8044,27 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	return 1;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_px.c GXEMUL-SEC/src/devices/dev_px.c
 --- src/devices/dev_px.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_px.c	2026-06-28 23:25:43.444205700 -0500
-@@ -312,6 +312,7 @@
++++ GXEMUL-SEC/src/devices/dev_px.c	2026-07-16 19:17:04.919725500 -0500
+@@ -266,8 +266,16 @@
+ 				    dma_buf, dma_len, MEM_READ,
+ 				    NO_EXCEPTIONS | PHYSICAL);
+ 			else
+-				memmove(dma_buf, &d->sram[sys_addr & 0x1ffff],
+-				    dma_len);	/*  TODO:  past end of sram?  */
++				{
++					/*  #207: (Codex/Fable) bound the SRAM source span
++					    so a guest-forced dma_len can't read past
++					    d->sram[] (128 KiB) into adjacent host heap.  */
++					size_t so = sys_addr & 0x1ffff;
++					size_t sl = so < sizeof(d->sram)?
++					    sizeof(d->sram) - so : 0;
++					memmove(dma_buf, &d->sram[so],
++					    dma_len < sl? dma_len : sl);
++				}
+ 		}
+ 
+ 		ofs = 4*5;
+@@ -312,6 +320,7 @@
  			/*  debug("  span %i: len=%i src=%i dst=%i\n",
  			    spannr, span_len, span_src, span_dst);  */
  
@@ -6277,7 +8072,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			memmove(d->vfb_data->framebuffer + span_dst *
  			    PX_XSIZE * bytesperpixel, d->vfb_data->framebuffer
  			    + span_src * PX_XSIZE * bytesperpixel, span_len *
-@@ -386,6 +387,10 @@
+@@ -386,6 +395,10 @@
  
  		lw = (lw + 1) >> 2;
  
@@ -6288,7 +8083,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (x2 - x > PX_XSIZE)
  			x2 = PX_XSIZE;
  
-@@ -411,6 +416,7 @@
+@@ -411,6 +424,7 @@
  			d->vfb_data->update_x2 = x2;
  
  		for (fb_y=y; fb_y < y2 + lw; fb_y ++) {
@@ -6296,7 +8091,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			memcpy(d->vfb_data->framebuffer + (fb_y * PX_XSIZE + x)
  			    * bytesperpixel, pixels, (x2-x)*bytesperpixel);
  
-@@ -528,7 +534,8 @@
+@@ -528,7 +542,8 @@
  					}
  				}
  
@@ -6306,7 +8101,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				    * PX_XSIZE + x) * bytesperpixel,
  				    pixels, pixels_len * bytesperpixel);
  
-@@ -605,7 +612,8 @@
+@@ -605,7 +620,8 @@
  
  		if (writeflag == MEM_WRITE) {
  			for (i=0; i<len; i++)
@@ -6316,6 +8111,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			/*  NOTE:  this return here supresses debug output
  			    (which would be printed if we continue)  */
  			return 1;
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_ram.c GXEMUL-SEC/src/devices/dev_ram.c
+--- src/devices/dev_ram.c	2021-04-22 13:04:20.000000000 -0500
++++ GXEMUL-SEC/src/devices/dev_ram.c	2026-07-16 19:17:05.017017400 -0500
+@@ -208,7 +208,10 @@
+ 		d->length = length;
+ 		d->data = (unsigned char *) mmap(NULL, length,
+ 		    PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+-		if (d->data == NULL) {
++		/*  #208: (Codex/Fable) mmap failure is MAP_FAILED, not NULL (the
++		    #175 straggler); fall back to malloc instead of registering
++		    RAM backed by (void*)-1.  */
++		if (d->data == MAP_FAILED) {
+ 			CHECK_ALLOCATION(d->data = (unsigned char *) malloc(length));
+ 			memset(d->data, 0, length);
+ 		}
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_scc.c GXEMUL-SEC/src/devices/dev_scc.c
 --- src/devices/dev_scc.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_scc.c	2026-06-28 23:25:43.457705300 -0500
@@ -6344,8 +8154,22 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_sgi_gbe.c GXEMUL-SEC/src/devices/dev_sgi_gbe.c
 --- src/devices/dev_sgi_gbe.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_sgi_gbe.c	2026-06-28 23:25:43.470580900 -0500
-@@ -254,6 +254,8 @@
++++ GXEMUL-SEC/src/devices/dev_sgi_gbe.c	2026-07-16 19:10:05.456775800 -0500
+@@ -130,8 +130,11 @@
+ 		*g = color >> 16;
+ 		*b = color >>  8;
+ 		break;
+-	default:fatal("sgi gbe get_rgb(): unimplemented mode %i\n", d->color_mode);
+-		exit(1);
++	default:/*  #196: (Codex/Fable) d->color_mode is guest-controlled; an
++		    unimplemented WID mode must not exit() the host (get_rgb is
++		    per-pixel, so don't fatal()-flood either) -- render black.  */
++		*r = *g = *b = 0;
++		break;
+ 	}
+ }
+ 
+@@ -254,6 +257,8 @@
  				
  				// Read one line of up to 512 bytes from the tile.
  				int len = tilex < width_in_tiles ? 512 : (partial_pixels * bytes_per_pixel);
@@ -6354,7 +8178,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  				cpu->memory_rw(cpu, cpu->mem, base + 512 * line,
  				    buf, len, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
-@@ -703,7 +705,7 @@
+@@ -703,7 +708,7 @@
  				int cmap = color_index >> 8;
  				d->palette[color_index] = idata;
  				if (cmap == d->cmap_select)
@@ -6393,8 +8217,21 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			memcpy(d->microcode_ram + relative_addr, data, len);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_sgi_mec.c GXEMUL-SEC/src/devices/dev_sgi_mec.c
 --- src/devices/dev_sgi_mec.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_sgi_mec.c	2026-06-28 23:25:43.510564500 -0500
-@@ -343,6 +343,12 @@
++++ GXEMUL-SEC/src/devices/dev_sgi_mec.c	2026-07-16 19:17:04.735344000 -0500
+@@ -306,6 +306,12 @@
+ 	if (j < len) {
+ 		/*  Continue with DMA:  */
+ 		for (;;) {
++			/*  #203: (Codex/Fable) the inner break on a full packet only
++			    stops one fragment; also stop the outer fragment loop, or
++			    the next fragment writes past cur_tx_packet[MAX_TX_PACKET_LEN]
++			    (host heap overflow).  */
++			if (j >= MAX_TX_PACKET_LEN)
++				break;
+ 			dma_ptr_nr ++;
+ 			if (dma_ptr_nr >= 4)
+ 				break;
+@@ -343,6 +349,12 @@
  	if (j < len)
  		fatal("[ mec_try_tx: not enough data? ]\n");
  
@@ -6440,6 +8277,23 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  		break;
  	default:
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_sii.c GXEMUL-SEC/src/devices/dev_sii.c
+--- src/devices/dev_sii.c	2021-04-22 13:04:20.000000000 -0500
++++ GXEMUL-SEC/src/devices/dev_sii.c	2026-07-16 19:17:04.634079600 -0500
+@@ -190,6 +190,13 @@
+ 	if (writeflag == MEM_WRITE)
+ 		idata = memory_readmax64(cpu, data, len);
+ 
++	/*  #202: (Codex/Fable) the SII MMIO window is larger than the SIIRegs
++	    block that d->regs points into; bound relative_addr so regnr =
++	    relative_addr/2 can't index d->regs[] out of range (guest OOB host
++	    read here, and OOB write in the switch below).  */
++	if (relative_addr >= sizeof(d->siiregs))
++		return 0;
++
+ 	regnr = relative_addr / 2;
+ 	odata = d->regs[regnr];
+ 
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_vga.c GXEMUL-SEC/src/devices/dev_vga.c
 --- src/devices/dev_vga.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_vga.c	2026-06-28 23:25:43.536717500 -0500
@@ -6749,7 +8603,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	CHECK_ALLOCATION(tmpfname = (char *) malloc(300));
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/disk/diskimage.c GXEMUL-SEC/src/disk/diskimage.c
 --- src/disk/diskimage.c	2021-04-22 13:04:21.000000000 -0500
-+++ GXEMUL-SEC/src/disk/diskimage.c	2026-07-09 23:32:55.127743300 -0500
++++ GXEMUL-SEC/src/disk/diskimage.c	2026-07-16 19:17:33.242442000 -0500
 @@ -29,8 +29,6 @@
   *
   *  TODO:  diskimage_remove()? This would be useful for floppies in PC-style
@@ -6869,7 +8723,20 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  static size_t diskimage_access__cdrom(struct diskimage *d, off_t offset,
  	unsigned char *buf, size_t len)
  {
-@@ -398,6 +414,701 @@
+@@ -374,6 +390,12 @@
+ 	/*  printf("diskimage_access__cdrom(): offset=0x%llx size=%lli\n",
+ 	    (long long)offset, (long long)len);  */
+ 
++	/*  #204: (Codex/Fable) a negative offset (a guest can seek an opened
++	    flat CD/ISO handle to 0xffffffff) truncates toward zero, leaving
++	    buf_ofs negative below -> cdrom_buf[-1] OOB stack read.  */
++	if (offset < 0)
++		return 0;
++
+ 	aligned_offset = (offset / CDROM_SECTOR_SIZE) * CDROM_SECTOR_SIZE;
+ 	my_fseek(d->f, aligned_offset, SEEK_SET);
+ 
+@@ -398,6 +420,701 @@
  }
  
  
@@ -7571,7 +9438,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  /*  Helper function.  */
  static void overlay_set_block_in_use(struct diskimage *d,
  	int overlay_nr, off_t ofs)
-@@ -438,8 +1149,12 @@
+@@ -438,8 +1155,12 @@
  		exit(1);
  	}
  	
@@ -7585,7 +9452,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  }
  
  
-@@ -490,8 +1205,10 @@
+@@ -490,8 +1211,10 @@
  
  		size_t written = fwrite(buf, 1, len, d->f);
  
@@ -7597,7 +9464,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		return written;
  	}
-@@ -500,12 +1217,15 @@
+@@ -500,12 +1223,15 @@
  		fatal("TODO: overlay access (write), len not multiple of "
  		    "overlay block size. not yet implemented.\n");
  		fatal("len = %lli\n", (long long) len);
@@ -7615,7 +9482,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	/*  Split the write into OVERLAY_BLOCK_SIZE writes:  */
-@@ -532,8 +1252,10 @@
+@@ -532,8 +1258,10 @@
  
  		buf += OVERLAY_BLOCK_SIZE;
  
@@ -7627,7 +9494,25 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		/*  Mark this block in the last overlay as in use:  */
  		overlay_set_block_in_use(d, overlay_nr, curofs);
-@@ -646,11 +1368,19 @@
+@@ -630,12 +1358,15 @@
+ {
+ 	ssize_t lendone;
+ 
++	/*  #206: (Codex/Fable) a legal zero-length access (e.g. SCSI WRITE(10)
++	    with transfer length 0) arrives with buf==NULL; treat it as a no-op
++	    before the NULL check so it can't exit() the host.  */
++	if (len == 0)
++		return 1;
+ 	if (buf == NULL) {
+ 		fprintf(stderr, "diskimage__internal_access(): buf = NULL\n");
+ 		exit(1);
+ 	}
+-	if (len == 0)
+-		return 1;
+ 	if (d->f == NULL)
+ 		return 0;
+ 
+@@ -646,11 +1377,19 @@
  		lendone = fwrite_helper(offset, buf, len, d);
  	} else {
  		/*
@@ -7648,7 +9533,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			lendone = diskimage_access__cdrom(d, offset, buf, len);
  		else
  			lendone = fread_helper(offset, buf, len, d);
-@@ -982,6 +1712,34 @@
+@@ -982,6 +1721,34 @@
  		}
  	}
  
@@ -7683,7 +9568,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (prefix_g) {
  		d->chs_override = 1;
  		d->heads = override_heads;
-@@ -1103,20 +1861,37 @@
+@@ -1103,20 +1870,37 @@
  		
  		int old_umask = umask(077);
  
@@ -7734,7 +9619,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		umask(old_umask);
  
-@@ -1291,6 +2066,27 @@
+@@ -1291,6 +2075,27 @@
  			    i, d->overlays[i].overlay_basename);
  		}
  
@@ -7764,7 +9649,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		d = d->next;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/disk/diskimage_scsicmd.c GXEMUL-SEC/src/disk/diskimage_scsicmd.c
 --- src/disk/diskimage_scsicmd.c	2021-04-22 13:04:21.000000000 -0500
-+++ GXEMUL-SEC/src/disk/diskimage_scsicmd.c	2026-07-09 23:33:28.290345400 -0500
++++ GXEMUL-SEC/src/disk/diskimage_scsicmd.c	2026-07-16 22:44:38.507973100 -0500
 @@ -52,6 +52,12 @@
  #include "misc.h"
  
@@ -7778,7 +9663,19 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  static const char *diskimage_types[] = DISKIMAGE_TYPES;
  static struct scsi_transfer *first_free_scsi_transfer_alloc = NULL;
  
-@@ -255,6 +261,20 @@
+@@ -139,7 +145,10 @@
+ 	}
+ 
+ 	(*lenp) = want_len;
+-	if ((p = (unsigned char *) malloc(want_len)) == NULL) {
++	/*  #243: A legal zero-length SCSI transfer must not reach malloc(0),
++	    which C99 permits to return NULL and would trip the out-of-memory
++	    exit(1) below; always request at least one byte.  */
++	if ((p = (unsigned char *) malloc(want_len ? want_len : 1)) == NULL) {
+ 		debugmsg(SUBSYS_DISK, "scsi", VERBOSITY_ERROR,
+ 		    "scsi_transfer_allocbuf(): out of "
+ 		    "memory trying to allocate %li bytes", (long)want_len);
+@@ -255,6 +264,20 @@
  		return 0;
  	}
  
@@ -7799,7 +9696,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (d == NULL) {
  		debugmsg_cpu(cpu, SUBSYS_DISK, "scsi",
  		    VERBOSITY_INFO, "%s id %i not connected!",
-@@ -639,13 +659,28 @@
+@@ -639,13 +662,28 @@
  				retlen = (xferp->cmd[7] << 8) + xferp->cmd[8];
  			}
  
@@ -7830,7 +9727,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		debug(" READ  ofs=%lli size=%i\n", (long long)ofs, (int)size);
  
-@@ -669,7 +704,13 @@
+@@ -669,7 +707,13 @@
  
  			d->filemark = 1;
  		} else {
@@ -7845,7 +9742,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  
  		if (d->is_a_tape && d->f != NULL)
-@@ -717,9 +758,20 @@
+@@ -717,9 +761,20 @@
  			retlen = (xferp->cmd[7] << 8) + xferp->cmd[8];
  		}
  
@@ -7867,7 +9764,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (xferp->data_out_offset != size) {
  			debug(", data_out == NULL, wanting %i bytes, \n\n",
  			    (int)size);
-@@ -747,7 +799,10 @@
+@@ -747,7 +802,10 @@
  		/*  TODO: Move to diskimage.cc and make sure that both
  			d->f is fsynced AND any overlays and overlay bitmap
  			files are fsynced too!  */
@@ -7879,7 +9776,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		diskimage__return_default_status_and_message(xferp);
  		break;
-@@ -795,8 +850,6 @@
+@@ -795,8 +853,6 @@
  		}
  		debug(": [2]=0x%02x ", xferp->data_in[2]);
  
@@ -7888,7 +9785,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		/*  TODO  */
  		xferp->data_in[7] = retlen - 7;	/*  additional sense length  */
  		/*  TODO  */
-@@ -961,9 +1014,12 @@
+@@ -961,9 +1017,12 @@
  		retlen = xferp->cmd[7] * 256 + xferp->cmd[8];
  		debug("allocation_len=%i)\n", retlen);
  
@@ -7903,7 +9800,24 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		xferp->data_in[0] = 0;
  		xferp->data_in[1] = 10;
-@@ -1081,12 +1137,22 @@
+@@ -1071,7 +1130,15 @@
+ 			return 2;
+ 		}
+ 
+-		debug("data_out!=NULL (OK), ");
++		/*  #205: (Codex/Fable) MODE SELECT reads fixed offsets up to byte 11;
++	    a controller can supply a shorter DATA OUT buffer, so verify it is
++	    present and >= 12 bytes before indexing it.  */
++	if (xferp->data_out == NULL || xferp->data_out_len < 12) {
++		diskimage__return_default_status_and_message(xferp);
++		break;
++	}
++
++	debug("data_out!=NULL (OK), ");
+ 
+ 		/*  TODO:  Care about cmd?  */
+ 
+@@ -1081,12 +1148,22 @@
  		    xferp->data_out[1] == 0x05 &&
  		    xferp->data_out[2] == 0x00 &&
  		    xferp->data_out[3] == 0x08) {
@@ -8659,8 +10573,50 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	int		tape_filenr;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/include/machine.h GXEMUL-SEC/src/include/machine.h
 --- src/include/machine.h	2021-04-22 13:04:14.000000000 -0500
-+++ GXEMUL-SEC/src/include/machine.h	2026-06-28 23:25:43.738884600 -0500
-@@ -314,6 +314,7 @@
++++ GXEMUL-SEC/src/include/machine.h	2026-07-17 14:59:22.572912700 -0500
+@@ -59,6 +59,31 @@
+ 	/*  Arrays, with one element for each entry:  */
+ 	char		**string;
+ 	uint64_t	*addr;
++
++	/*  #248: per-breakpoint hit accounting. hitcount counts every time
++	    the PC reaches the breakpoint; ignore_left is decremented (instead
++	    of breaking) while > 0, so "breakpoint add addr N" runs past the
++	    first N hits before it starts breaking (skip boot noise / land on
++	    the Nth iteration of a fault or grooming loop).  */
++	uint64_t	*hitcount;
++	int64_t		*ignore_left;
++};
++
++/*
++ *  #250: data write-watchpoints. Break into the debugger when the guest
++ *  writes to a watched PHYSICAL address range (physical so a write via any
++ *  virtual alias — e.g. cached kseg0 vs uncached kseg1 on MIPS — is caught,
++ *  and 32-bit sign-extension of the vaddr is a non-issue). Opt-in; when
++ *  n == 0 the whole mechanism is a single compared-against-zero no-op on
++ *  the hot paths.
++ */
++struct watchpoints {
++	int		n;
++
++	/*  Arrays, one element per entry:  */
++	char		**string;	/*  the (virtual) expression typed  */
++	uint64_t	*addr;		/*  physical start address          */
++	uint64_t	*len;		/*  length in bytes                 */
+ };
+ 
+ struct statistics {
+@@ -156,6 +181,9 @@
+ 	/*  Breakpoints:  */
+ 	struct breakpoints breakpoints;
+ 
++	/*  #250: data write-watchpoints:  */
++	struct watchpoints watchpoints;
++
+ 	int	halt_on_nonexistant_memaccess;
+ 	int	instruction_trace;
+ 	int	show_nr_of_instructions;
+@@ -314,6 +342,7 @@
  #define	MACHINE_MACPPC_G3		1
  #define	MACHINE_MACPPC_G4		2
  #define	MACHINE_MACPPC_G5		3
@@ -8668,6 +10624,29 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  /*  MVMEPPC  */
  #define	MACHINE_MVMEPPC_1600		1
+@@ -379,6 +408,8 @@
+ void machine_destroy(struct machine *machine);
+ int machine_name_to_type(char *stype, char *ssubtype, int *type, int *subtype);
+ void machine_add_breakpoint_string(struct machine *machine, char *str);
++int machine_watchpoint_match(struct machine *machine, uint64_t addr,
++	uint64_t len);	/*  #250  */
+ void machine_add_tickfunction(struct machine *machine,
+ 	void (*func)(struct cpu *, void *), void *extra, int clockshift);
+ void machine_statistics_init(struct machine *, char *fname);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/include/memory.h GXEMUL-SEC/src/include/memory.h
+--- src/include/memory.h	2021-04-22 13:04:15.000000000 -0500
++++ GXEMUL-SEC/src/include/memory.h	2026-07-10 23:37:46.280295300 -0500
+@@ -153,6 +153,10 @@
+ void memory_device_update_data(struct memory *mem, void *extra,
+ 	unsigned char *data);
+ 
++/*  #182: (Codex/Fable) resize a registered device's mapped length.  */
++void memory_device_update_length(struct memory *mem, void *extra,
++	uint64_t newlength);
++
+ void memory_device_register(struct memory *mem, const char *,
+ 	uint64_t baseaddr, uint64_t len, int (*f)(struct cpu *,
+ 	    struct memory *,uint64_t,unsigned char *,size_t,int,void *),
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/include/misc.h GXEMUL-SEC/src/include/misc.h
 --- src/include/misc.h	2021-04-22 13:04:14.000000000 -0500
 +++ GXEMUL-SEC/src/include/misc.h	2026-07-02 17:43:17.707276700 -0500
@@ -8808,7 +10787,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/machines/machine.c GXEMUL-SEC/src/machines/machine.c
 --- src/machines/machine.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/machines/machine.c	2026-07-02 17:43:17.789879100 -0500
++++ GXEMUL-SEC/src/machines/machine.c	2026-07-17 14:59:22.619877400 -0500
 @@ -192,6 +192,23 @@
  				if (!ssubtype[0])
  					fatal("(Maybe you forgot the -e"
@@ -8833,6 +10812,53 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				exit(1);
  			}
  
+@@ -256,14 +273,46 @@
+ 	    realloc(machine->breakpoints.string, n * sizeof(char *)));
+ 	CHECK_ALLOCATION(machine->breakpoints.addr = (uint64_t *)
+ 	    realloc(machine->breakpoints.addr, n * sizeof(uint64_t)));
++	/*  #248: keep the hit-accounting arrays in lockstep.  */
++	CHECK_ALLOCATION(machine->breakpoints.hitcount = (uint64_t *)
++	    realloc(machine->breakpoints.hitcount, n * sizeof(uint64_t)));
++	CHECK_ALLOCATION(machine->breakpoints.ignore_left = (int64_t *)
++	    realloc(machine->breakpoints.ignore_left, n * sizeof(int64_t)));
+ 	CHECK_ALLOCATION(machine->breakpoints.string[machine->breakpoints.n] =
+ 	    strdup(optarg));
+ 
+ 	machine->breakpoints.addr[machine->breakpoints.n] = 0;
++	machine->breakpoints.hitcount[machine->breakpoints.n] = 0;
++	machine->breakpoints.ignore_left[machine->breakpoints.n] = 0;
+ 	machine->breakpoints.n ++;
+ }
+ 
+ 
++/*
++ *  machine_watchpoint_match():
++ *
++ *  #250: return (index + 1) of the first data write-watchpoint whose physical
++ *  range [addr, addr+len) overlaps the accessed range, or 0 for no match.
++ *  Callers guard with watchpoints.n != 0, so this is never called on the hot
++ *  paths unless the user has actually set a watchpoint.
++ */
++int machine_watchpoint_match(struct machine *machine, uint64_t addr,
++	uint64_t len)
++{
++	int i;
++
++	for (i = 0; i < machine->watchpoints.n; i++) {
++		uint64_t wa = machine->watchpoints.addr[i];
++		uint64_t wl = machine->watchpoints.len[i];
++
++		if (addr < wa + wl && wa < addr + len)
++			return i + 1;
++	}
++
++	return 0;
++}
++
++
+ /*
+  *  machine_add_tickfunction():
+  *
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/machines/machine_arc.c GXEMUL-SEC/src/machines/machine_arc.c
 --- src/machines/machine_arc.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/machines/machine_arc.c	2026-07-09 14:45:31.305761400 -0500
@@ -10073,7 +12099,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	close(s);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/promemul/arcbios.c GXEMUL-SEC/src/promemul/arcbios.c
 --- src/promemul/arcbios.c	2021-04-22 13:04:21.000000000 -0500
-+++ GXEMUL-SEC/src/promemul/arcbios.c	2026-07-09 23:33:01.197735400 -0500
++++ GXEMUL-SEC/src/promemul/arcbios.c	2026-07-17 00:00:16.472233900 -0500
 @@ -577,7 +577,7 @@
  			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
  			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
@@ -10128,7 +12154,22 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			offset += st;
  			goto ugly_goto;
  		}
-@@ -1622,7 +1642,8 @@
+@@ -1251,8 +1271,12 @@
+ 		if (machine->machine_type == MACHINE_SGI)
+ 			arcbios_sgi_emul(cpu);
+ 		else {
+-			fatal("[ ARCBIOS private call for non-SGI. ]\n");
+-			exit(1);
++			/*  #242: A non-SGI ARC private call is unsupported;
++			    return an error to the guest instead of exit(1).
++			    #245: verbosity-gate the diagnostic.  */
++			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "arc", VERBOSITY_DEBUG,
++			    "private call on a non-SGI machine");
++			cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
+ 		}
+ 
+ 		return 1;
+@@ -1622,7 +1646,8 @@
  	case 0x60:		/*  Close(uint32_t handle)  */
  		debugmsg(SUBSYS_PROMEMUL, "arcbios", VERBOSITY_DEBUG, "Close(%i)",
  		    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
@@ -10138,7 +12179,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		    MIPS_GPR_A0]]) {
  			fatal("ARCBIOS Close(%i): bad handle\n",
  			    (int)cpu->cd.mips.gpr[MIPS_GPR_A0]);
-@@ -1701,6 +1722,10 @@
+@@ -1701,6 +1726,10 @@
  			    nread? ARCBIOS_ESUCCESS: ARCBIOS_EAGAIN;
  		} else {
  			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
@@ -10149,7 +12190,22 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			int disk_type = 0;
  			int disk_id = arcbios_handle_to_disk_id_and_type(
  			    machine, handleTmp, &disk_type);
-@@ -1770,6 +1795,10 @@
+@@ -1718,6 +1747,14 @@
+ 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A2],
+ 			    (int)cpu->cd.mips.gpr[MIPS_GPR_A3]);
+ 
++			/*  #192: (Codex/Fable) A2 is a guest-supplied length; cap it
++			    so a huge value can't drive malloc()->CHECK_ALLOCATION->
++			    exit() (a guest-reachable host DoS/OOM), matching the #191
++			    DEC-PROM cap.  */
++			if (cpu->cd.mips.gpr[MIPS_GPR_A2] > 64*1024*1024ULL) {
++				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EIO;
++				break;
++			}
+ 			CHECK_ALLOCATION(tmp_buf = (unsigned char *)
+ 			    malloc(cpu->cd.mips.gpr[MIPS_GPR_A2]));
+ 
+@@ -1770,6 +1807,10 @@
  			 *  TODO: this is just a test
  			 */
  			int handleTmp = cpu->cd.mips.gpr[MIPS_GPR_A0];
@@ -10160,7 +12216,40 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			int disk_type = 0;
  			int disk_id = arcbios_handle_to_disk_id_and_type(
  			    machine, handleTmp, &disk_type);
-@@ -1833,6 +1862,13 @@
+@@ -1787,6 +1828,14 @@
+ 			    (int) cpu->cd.mips.gpr[MIPS_GPR_A2],
+ 			    (uint64_t) cpu->cd.mips.gpr[MIPS_GPR_A3]);
+ 
++			/*  #192: (Codex/Fable) A2 is a guest-supplied length; cap it
++			    so a huge value can't drive malloc()->CHECK_ALLOCATION->
++			    exit() (a guest-reachable host DoS/OOM), matching the #191
++			    DEC-PROM cap.  */
++			if (cpu->cd.mips.gpr[MIPS_GPR_A2] > 64*1024*1024ULL) {
++				cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EIO;
++				break;
++			}
+ 			CHECK_ALLOCATION(tmp_buf = (unsigned char *)
+ 			    malloc(cpu->cd.mips.gpr[MIPS_GPR_A2]));
+ 
+@@ -1821,10 +1870,14 @@
+ 
+ 				arcbios_putchar(cpu, ch);
+ 			}
++			/*  #192: (Codex/Fable) only the STDOUT path needs this
++			    trailing return-length + success store; running it
++			    unconditionally clobbered the disk path's V0, so a failed
++			    disk Write (ARCBIOS_EIO) was reported as success.  */
++			store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
++			    cpu->cd.mips.gpr[MIPS_GPR_A2]);
++			cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;	/*  Success.  */
+ 		}
+-		store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
+-		    cpu->cd.mips.gpr[MIPS_GPR_A2]);
+-		cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;	/*  Success.  */
+ 		break;
+ 	case 0x70:	/*  Seek(uint32_t handle, int64_t *ofs,
+ 				 uint32_t whence): uint32_t  */
+@@ -1833,6 +1886,13 @@
  		    (uint64_t)cpu->cd.mips.gpr[MIPS_GPR_A1],
  		    (int) cpu->cd.mips.gpr[MIPS_GPR_A2]);
  
@@ -10174,7 +12263,53 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (cpu->cd.mips.gpr[MIPS_GPR_A2] != 0) {
  			fatal("[ ARCBIOS Seek(%i,0x%08" PRIx64",%i): "
  			    "UNIMPLEMENTED whence=%i ]\n",
-@@ -2082,7 +2118,7 @@
+@@ -1949,21 +2009,33 @@
+ 		break;
+ 	case 0x888:
+ 		/*
+-		 *  Magical crash if there is no exception handling code.
++		 *  #242: ARC "exception, but no handler installed" trap. Dump
++		 *  state for debugging, but return an error to the guest
++		 *  instead of halting the host emulator, so the guest's own
++		 *  (mis)behaviour can be observed rather than freezing the rig.
+ 		 */
+-		fatal("EXCEPTION, but no exception handler installed yet.\n");
+-		quiet_mode = 0;
+-		cpu_register_dump(machine, cpu, 1, 0x1);
+-		cpu->running = 0;
++		/*  #245: gate the guest-spammable diagnostic + register dump
++		    behind the promemul verbosity so it can't flood the log.  */
++		if (ENOUGH_VERBOSITY(SUBSYS_PROMEMUL, VERBOSITY_DEBUG)) {
++			fatal("EXCEPTION, but no exception handler installed yet.\n");
++			quiet_mode = 0;
++			cpu_register_dump(machine, cpu, 1, 0x1);
++		}
++		cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
+ 		break;
+ 	default:
+-		quiet_mode = 0;
+-		cpu_register_dump(machine, cpu, 1, 0x1);
+-		debug("a0 points to: ");
+-		dump_mem_string(cpu, cpu->cd.mips.gpr[MIPS_GPR_A0]);
+-		debug("\n");
+-		fatal("ARCBIOS: unimplemented vector 0x%x\n", vector);
+-		cpu->running = 0;
++		/*  #245: gate the guest-spammable register dump + diagnostic
++		    behind the promemul verbosity; always return the error.  */
++		if (ENOUGH_VERBOSITY(SUBSYS_PROMEMUL, VERBOSITY_DEBUG)) {
++			quiet_mode = 0;
++			cpu_register_dump(machine, cpu, 1, 0x1);
++			debug("a0 points to: ");
++			dump_mem_string(cpu, cpu->cd.mips.gpr[MIPS_GPR_A0]);
++			debug("\n");
++			fatal("ARCBIOS: unimplemented vector 0x%x\n", vector);
++		}
++		/*  #242: return an error to the guest instead of halting.  */
++		cpu->cd.mips.gpr[MIPS_GPR_V0] = ARCBIOS_EINVAL;
+ 	}
+ 
+ 	return 1;
+@@ -2082,7 +2154,7 @@
  			    0xffffffffe2000000ULL, 0x090000000ULL,
  			    0x091000000ULL, 1, 1, 1, 1, 1, 0, 2, 2);
  
@@ -10183,7 +12318,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				ali_s3 = arcbios_addchild_manual(cpu,
  				    COMPONENT_CLASS_ControllerClass,
  				    COMPONENT_TYPE_DisplayController,
-@@ -2305,8 +2341,9 @@
+@@ -2305,8 +2377,9 @@
  		env->value[found] = strdup(value);
  	} else {
  		if (env->n == 0) {
@@ -10195,7 +12330,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  
  		env->n ++;
-@@ -2338,6 +2375,7 @@
+@@ -2338,6 +2411,7 @@
  		len_with_value += strlen(env->value[found]);
  
  	char* s = malloc(len_with_value + 1);
@@ -10203,7 +12338,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	if (name_and_value) {
  		if (found < 0)
-@@ -2352,7 +2390,16 @@
+@@ -2352,7 +2426,16 @@
  			snprintf(s, len_with_value + 1, "%s", env->value[found]);
  	}
  
@@ -10221,7 +12356,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		for (size_t i = 0; i < len; ++i)
  			s[i] = toupper(s[i]);
  	}
-@@ -2370,6 +2417,7 @@
+@@ -2370,6 +2453,7 @@
  	const char *primary_ether_addr)
  {
  	struct envstrings* env = malloc(sizeof(struct envstrings));
@@ -10229,7 +12364,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	memset(env, 0, sizeof(struct envstrings));
  
  	uint64_t addr, addr2;
-@@ -2407,11 +2455,13 @@
+@@ -2407,11 +2491,13 @@
  		if (diskimage_is_a_cdrom(machine, machine->bootdev_id, machine->bootdev_type)) {
  			size_t len = strlen(boot_device) + 50;
  			char* cdrom = malloc(len);
@@ -10243,7 +12378,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			snprintf(disk, len, "%sscsi(0)disk(%i)rdisk(0)", boot_device, machine->bootdev_id);
  			boot_device = disk;
  		}
-@@ -2423,11 +2473,11 @@
+@@ -2423,11 +2509,11 @@
  				partition = 8;
  
  			size_t len = strlen(boot_device) + 50;
@@ -10257,7 +12392,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			snprintf(systempartition, len, "%sfdisk(0)", boot_device);
  		}
  
-@@ -2440,11 +2490,11 @@
+@@ -2440,11 +2526,11 @@
  				partition = 0;
  
  			size_t len = strlen(boot_device) + 50;
@@ -10271,7 +12406,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			snprintf(osloadpartition, len, "%sfdisk(0)", boot_device);
  		}
  
-@@ -2462,6 +2512,7 @@
+@@ -2462,6 +2548,7 @@
  	if (machine->boot_kernel_filename[0] != '\0') {
  		size_t len = strlen(machine->boot_kernel_filename) + 10;
  		char* s = malloc(len);
@@ -10279,7 +12414,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		snprintf(s, len, "/%s", machine->boot_kernel_filename);
  		set_env(env, "OSLoadFilename", s);
  	}
-@@ -2534,7 +2585,8 @@
+@@ -2534,7 +2621,8 @@
  		set_env(env, "debug_bigmem", "1");
  	} else {
  		//  General ARC:
@@ -10289,7 +12424,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			set_env(env, "ConsoleIn", "multi()key()keyboard()console()");
  			set_env(env, "ConsoleOut", "multi()video()monitor()console()");
  		} else {
-@@ -2549,14 +2601,39 @@
+@@ -2549,14 +2637,39 @@
  	    or
  	    	OSLoadPartition + OSLoadFilename  (e.g. /unix)  */
  
@@ -10331,7 +12466,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	// boot_string = env["OSLoadPartition"] + env["OSLoadFilename"];
  
  	/*  Boot args., eg "-a"  */
-@@ -2729,7 +2806,14 @@
+@@ -2729,7 +2842,14 @@
  		machine->md.arc->current_seek_offset[i] = 0;
  	}
  
@@ -10347,9 +12482,142 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		machine->md.arc->vgaconsole = 0;
  
  	if (machine->md.arc->vgaconsole) {
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/promemul/dec_prom.c GXEMUL-SEC/src/promemul/dec_prom.c
+--- src/promemul/dec_prom.c	2021-04-22 13:04:21.000000000 -0500
++++ GXEMUL-SEC/src/promemul/dec_prom.c	2026-07-16 23:59:45.272472200 -0500
+@@ -95,7 +95,6 @@
+  */
+ int dec_jumptable_func(struct cpu *cpu, int vector)
+ {
+-	int i;
+ 	static int file_opened = 0;
+ 	static int current_file_offset = 0;
+ 
+@@ -119,16 +118,26 @@
+ 		 *  is ignored, and a file handle value of 1 is returned.
+ 		 */
+ 		if (file_opened) {
+-			fatal("\ndec_jumptable_func(): opening more than one "
+-			    "file isn't supported yet.\n");
+-			cpu->running = 0;
++			/*  #241: Opening a second file is unsupported, but
++			    return an error to the guest (V0 = -1) instead of
++			    halting the host emulator.  */
++			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec",
++			    VERBOSITY_DEBUG,		/*  #245: gate  */
++			    "open() of a second file is not supported");
++			cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
++			break;
+ 		}
+ 		file_opened = 1;
+ 		cpu->cd.mips.gpr[MIPS_GPR_V0] = 1;
+ 		break;
+ 	case 0x38:	/*  read(handle, ptr, length)  */
+ 		cpu->cd.mips.gpr[MIPS_GPR_V0] = (uint64_t) -1;
+-		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0) {
++		/*  #191: (Codex/Fable) A2 is a guest-supplied length; cap it so a
++		    huge value can't drive malloc()->CHECK_ALLOCATION->exit() (a
++		    guest-reachable host DoS/OOM). 64 MB is far above any real
++		    PROM disk read.  */
++		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0 &&
++		    cpu->cd.mips.gpr[MIPS_GPR_A2] <= 64*1024*1024) {
+ 			int disk_id = diskimage_bootdev(cpu->machine, NULL);
+ 			int res;
+ 			unsigned char *tmp_buf;
+@@ -173,22 +182,15 @@
+ 	case 0x108:	/*  getenv2()  */
+ 		return 0x64;
+ 	default:
+-		cpu_register_dump(cpu->machine, cpu, 1, 0x1);
+-		printf("a0 points to: ");
+-		for (i=0; i<40; i++) {
+-			unsigned char ch = '\0';
+-			cpu->memory_rw(cpu, cpu->mem,
+-			    (int32_t)cpu->cd.mips.gpr[MIPS_GPR_A0] + i, &ch,
+-			    sizeof(ch), MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+-			if (ch >= ' ' && ch < 126)
+-				printf("%c", ch);
+-			else
+-				printf("[%02x]", ch);
+-		}
+-		printf("\n");
+-		fatal("PROM emulation: unimplemented JUMP TABLE vector "
+-		    "0x%x (decimal function %i)\n", vector, vector/8);
+-		cpu->running = 0;
++		/*  #245: emit one verbosity-gated line instead of an
++		    unconditional register dump + a0 string scan, so a guest
++		    spamming bad jump-table vectors can't flood the host log
++		    (raise promemul verbosity / `break promemul` for full state). */
++		debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec", VERBOSITY_DEBUG,
++		    "unimplemented JUMP TABLE vector 0x%x (decimal function %i)",
++		    vector, vector/8);
++		/*  #241: return an error to the guest instead of halting.  */
++		cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
+ 	}
+ 
+ 	return 0;
+@@ -449,7 +451,12 @@
+ 
+ 		cpu->cd.mips.gpr[MIPS_GPR_V0] = 0;
+ 
+-		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0) {
++		/*  #191: (Codex/Fable) A2 is a guest-supplied length; cap it so a
++		    huge value can't drive malloc()->CHECK_ALLOCATION->exit() (a
++		    guest-reachable host DoS/OOM). 64 MB is far above any real
++		    PROM disk read.  */
++		if ((int32_t)cpu->cd.mips.gpr[MIPS_GPR_A2] > 0 &&
++		    cpu->cd.mips.gpr[MIPS_GPR_A2] <= 64*1024*1024) {
+ 			int disk_id = diskimage_bootdev(cpu->machine, NULL);
+ 			int res;
+ 			unsigned char *tmp_buf;
+@@ -626,30 +633,25 @@
+ 			cpu->running = 0;
+ 			break;
+ 		default:
+-			fatal("DEC prom emulation: unknown rex() a0=0x%" PRIx64
+-			    " ('%c')\n",
++			/*  #241: unknown rex() subfunction — return an error to
++			    the guest instead of halting the host.  */
++			debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec",
++			    VERBOSITY_DEBUG,		/*  #245: gate  */
++			    "unknown rex() a0=0x%" PRIx64 " ('%c')",
+ 			    (int64_t) cpu->cd.mips.gpr[MIPS_GPR_A0],
+ 			    (char) cpu->cd.mips.gpr[MIPS_GPR_A0]);
+-			cpu->running = 0;
++			cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
+ 		}
+ 		break;
+ 	default:
+-		cpu_register_dump(cpu->machine, cpu, 1, 0x1);
+-		printf("a0 points to: ");
+-		for (i=0; i<40; i++) {
+-			unsigned char chTmp = '\0';
+-			cpu->memory_rw(cpu, cpu->mem, (int32_t)
+-			    cpu->cd.mips.gpr[MIPS_GPR_A0] + i, &chTmp,
+-			    sizeof(chTmp), MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+-			if (chTmp >= ' ' && chTmp < 126)
+-				printf("%c", chTmp);
+-			else
+-				printf("[%02x]", chTmp);
+-		}
+-		printf("\n");
+-		fatal("PROM emulation: unimplemented callback vector 0x%x\n",
+-		    vector);
+-		cpu->running = 0;
++		/*  #245: emit one verbosity-gated line instead of an
++		    unconditional register dump + a0 string scan, so a guest
++		    spamming bad callback vectors can't flood the host log
++		    (raise promemul verbosity / `break promemul` for full state). */
++		debugmsg_cpu(cpu, SUBSYS_PROMEMUL, "dec", VERBOSITY_DEBUG,
++		    "unimplemented callback vector 0x%x", vector);
++		/*  #241: return an error to the guest instead of halting.  */
++		cpu->cd.mips.gpr[MIPS_GPR_V0] = (int32_t) -1;
+ 	}
+ 
+ 	return 1;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/promemul/of.c GXEMUL-SEC/src/promemul/of.c
 --- src/promemul/of.c	2021-04-22 13:04:21.000000000 -0500
-+++ GXEMUL-SEC/src/promemul/of.c	2026-06-28 23:25:43.881712900 -0500
++++ GXEMUL-SEC/src/promemul/of.c	2026-07-16 20:13:14.754053300 -0500
 @@ -173,7 +173,10 @@
  		unsigned char rgb[3];
  		cpu->memory_rw(cpu, cpu->mem, ptr, rgb, 3, MEM_READ,
@@ -10362,6 +12630,79 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			memcpy(v->rgb_palette + 3 * color, rgb, 3);
  			v->update_x1 = v->update_y1 = 0;
  			v->update_x2 = v->xsize - 1;
+@@ -275,8 +278,10 @@
+ 	for (i=0; i<len_returned; i++) {
+ 		if (!cpu->memory_rw(cpu, cpu->mem, buf + i, pr->data + i,
+ 		    1, MEM_WRITE, CACHE_DATA | NO_EXCEPTIONS)) {
+-			fatal("[ of: getprop memory_rw() error ]\n");
+-			exit(1);
++			/*  #218: (Codex/Fable) the getprop destination is a guest
++			    buffer pointer; a bad pointer must not exit() the host --
++			    stop copying (the partial length is returned below).  */
++			break;
+ 		}
+ 	}
+ 
+@@ -422,8 +427,9 @@
+ 		unsigned char ch;
+ 		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
+ 		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
+-			fatal("[ of: TODO: write: memory_rw() error ]\n");
+-			exit(1);
++			/*  #218: (Codex/Fable) a bad guest buffer pointer must not
++			    exit() the host -- stop copying.  */
++			break;
+ 		}
+ 
+ 		if (ch == 0)
+@@ -461,8 +467,9 @@
+ 	ch = c;
+ 	if (!cpu->memory_rw(cpu, cpu->mem, ptr, &ch, 1, MEM_WRITE,
+ 	    CACHE_DATA | NO_EXCEPTIONS)) {
+-		fatal("[ of: TODO: read: memory_rw() error ]\n");
+-		exit(1);
++		/*  #218: (Codex/Fable) a bad guest buffer pointer must not
++		    exit() the host.  */
++		return 0;
+ 	}
+ 
+ 	store_32bit_word(cpu, base + retofs, c == -1? 0 : 1);
+@@ -482,8 +489,9 @@
+ 		unsigned char ch;
+ 		if (!cpu->memory_rw(cpu, cpu->mem, ptr + i, &ch,
+ 		    1, MEM_READ, CACHE_DATA | NO_EXCEPTIONS)) {
+-			fatal("[ of: TODO: write: memory_rw() error ]\n");
+-			exit(1);
++			/*  #218: (Codex/Fable) a bad guest buffer pointer must not
++			    exit() the host -- stop copying.  */
++			break;
+ 		}
+ 		if (ch != 7)
+ 			console_putchar(cpu->machine->main_console_handle, ch);
+@@ -1117,6 +1125,12 @@
+ 	nargs = load_32bit_word(cpu, base + 4);
+ 	nret  = load_32bit_word(cpu, base + 8);
+ 
++	/*  #201: (Codex/Fable) nargs is guest-controlled; clamp it so the
++	    arg loop below can't run up to ~2^31 times (log flood / host
++	    hang). Args past OF_N_MAX_ARGS are ignored anyway.  */
++	if (nargs > OF_N_MAX_ARGS)
++		nargs = OF_N_MAX_ARGS;
++
+ 	readstr(cpu, ptr, service, sizeof(service));
+ 
+ 	debug("[ of: %s(", service);
+@@ -1167,8 +1181,9 @@
+ 		printf("\n");
+ 		fatal("[ of: unimplemented service \"%s\" with %i input "
+ 		    "args and %i output values ]\n", service, nargs, nret);
++		/*  #219: (Codex/Fable) cpu->running=0 already halts cleanly for an
++		    unknown guest OF service; the exit(1) only defeats the debugger.  */
+ 		cpu->running = 0;
+-		exit(1);
+ 	}
+ 
+ 	for (i=0; i<nargs; i++)
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/symbol/symbol.c GXEMUL-SEC/src/symbol/symbol.c
 --- src/symbol/symbol.c	2021-04-22 13:04:21.000000000 -0500
 +++ GXEMUL-SEC/src/symbol/symbol.c	2026-06-28 23:25:43.892884200 -0500
