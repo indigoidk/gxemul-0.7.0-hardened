@@ -755,6 +755,11 @@ Item #3 of the 8-item TODO-triage batch — a deep ASC (NCR 53C94) + R4030 DMA-s
 On matched ASC/R4030 counts and correct direction (the arc/pmax SCSI-root boot path) the clamp never fires and the zero-fill is overwritten by real data → behavior byte-for-byte unchanged.
 Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`**; instrumented boot shows **0** clamp/short-DMA hits (guards inert on a normal SCSI-root boot).
 ---
+## Thirty-fifth round (#264) — ASC zero-length DATA_OUT host-abort → guest disconnect (Codex + agy + Fable + Ollama)
+Item #3 follow-up — the residual ASC (NCR 53C94) host-abort from the #263 ASC + R4030 DMA-seam audit. `dev_asc_transfer()` called `exit(1)` when a DATA_OUT transfer had a zero-length `data_out` buffer — a host abort reachable from guest register programming: the Transfer-Pad command (`NCRCMD_TRPAD`) allocates a fresh empty transfer via `dev_asc_newxfer()`, then runs a DATA_OUT transfer straight into the `exit`. The design was 4-model-panel-locked at **scope (a)**, unanimous.
+- **#264** `devices/dev_asc.c` (both trees): the zero-length DATA_OUT branch now logs a `fatal()` and **returns 0** instead of `exit(1)`, so the existing `NCRCMD_TRANS`/`NCRCMD_TRPAD` handler converts it into a guest-visible **disconnect** (`NCRINTR_DIS|NCRSTAT_INT`) — the same soft-fault used for absent-target selection and the #167 no-SELECT guard, and the established host-abort→guest-fault pattern (#167/#197/#240). **DISCONNECT** is the correct fault: a legal Transfer-Pad opcode in a legal DATA_OUT phase is not an illegal command (`NCRINTR_ILL` would misclassify it, and the gross-error path has no cleanup plumbing). The `return 0` leaks nothing (`data_out` is allocated later, still NULL here) and does not free locally (the caller frees `xferp`). A faithful Transfer-Pad (pad/discard against the current nexus, scope (b)) is deferred as riskier.
+Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`**; the new `fatal()` never fires on a healthy boot (0 hits in both pty logs).
+---
 
 
 ## How findings were produced

@@ -888,6 +888,13 @@ Item #3 of the 8-item TODO-triage batch — a deep ASC (NCR 53C94) + R4030 DMA-s
 
 Both stay within the additive-guard envelope: on matched ASC/R4030 counts and correct direction (the arc/pmax SCSI-root boot path) the clamp never fires and the zero-fill is overwritten by real data, so behavior is byte-for-byte unchanged. Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; instrumented boot shows 0 clamp/short-DMA hits (guards dead on the happy path).
 
+## Thirty-fifth round (#264) — ASC zero-length DATA_OUT host-abort → guest disconnect
+Item #3 follow-up — the residual ASC host-abort from the #263 ASC (NCR 53C94) + R4030 DMA-seam audit. 4-model DESIGN review (Codex 5.6-sol xhigh + agy Gemini Pro + Fable + Ollama), unanimous **scope (a)**: convert the abort to a guest fault; a faithful Transfer-Pad (pad/discard against the current nexus, **scope (b)**) is deferred as riskier.
+
+The `exit(1)` in `dev_asc_transfer()`'s DATA_OUT branch (`data_out_len == 0`) was a host abort **reachable from guest register programming**: the Transfer-Pad command (`NCRCMD_TRPAD`) allocates a fresh empty transfer via `dev_asc_newxfer()` and then runs a DATA_OUT transfer straight into the `exit`. It now logs a `fatal()` and **returns 0**, so the existing `NCRCMD_TRANS`/`NCRCMD_TRPAD` handler reports a guest-visible **disconnect** (`NCRINTR_DIS|NCRSTAT_INT`) — matching the #167/#240 host-abort→guest-fault pattern and the absent-target selection path. **DISCONNECT** was chosen over **ILLEGAL** (`NCRINTR_ILL`): a legal Transfer-Pad opcode in a legal DATA_OUT phase is not an illegal command, and the gross-error path has no cleanup plumbing. The `return 0` leaks nothing — `data_out` is allocated later and is still NULL here — and must not free locally (the caller frees `xferp`).
+
+Verified: build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`**; the new `fatal()` never fires on a healthy boot (0 hits in both pty logs — the branch is dead on the SCSI-root boot path).
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

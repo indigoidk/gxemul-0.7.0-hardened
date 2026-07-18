@@ -432,9 +432,16 @@ fatal("TODO.......asdgasin\n");
 				len2 = 65536;
 
 			if (len == 0) {
-				fprintf(stderr, "d->xferp->data_out_len == "
-				    "0 ?\n");
-				exit(1);
+				/*  #264: a DATA_OUT transfer with a zero-length
+				    data_out buffer (notably TRPAD, which allocates
+				    a fresh empty transfer via dev_asc_newxfer) must
+				    not exit() the host; fail the transfer so the
+				    TRANS/TRPAD caller reports a disconnect
+				    (NCRINTR_DIS|NCRSTAT_INT), matching the #167 guard
+				    and the nonexistent-target selection path.  */
+				fatal("[ asc: DATA_OUT transfer with "
+				    "data_out_len == 0 ]\n");
+				return 0;
 			}
 
 			/*  TODO: Make sure that len2 doesn't go outside
