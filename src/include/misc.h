@@ -256,6 +256,7 @@ int decstation_prom_emul(struct cpu *cpu);
 #define	VERBOSITY_DEBUG		3
 #define	ENOUGH_VERBOSITY(subsys,reqverb)	(debugmsg_current_verbosity[(subsys)] >= (reqverb))
 extern int *debugmsg_current_verbosity;
+extern int debugmsg_break_on_error;		/*  #261  */
 void debug_indentation(int diff);
 void debug(const char *fmt, ...);
 void fatal(const char *fmt, ...);

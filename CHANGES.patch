@@ -56,7 +56,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		XDestroyImage(win->fb_ximage);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/core/debugmsg.c GXEMUL-SEC/src/core/debugmsg.c
 --- src/core/debugmsg.c	2021-04-22 13:04:13.000000000 -0500
-+++ GXEMUL-SEC/src/core/debugmsg.c	2026-07-02 17:43:16.785368700 -0500
++++ GXEMUL-SEC/src/core/debugmsg.c	2026-07-18 15:31:22.429165800 -0500
 @@ -52,7 +52,6 @@
   *  TODO:
   *	New debugger commands:
@@ -65,7 +65,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *
   *	Convert existing debug() and fatal() calls to the new debugmsg() call.
   *
-@@ -84,6 +83,17 @@
+@@ -84,6 +83,24 @@
  static const char **debugmsg_subsystem_name = NULL;
  int *debugmsg_current_verbosity = NULL;
  
@@ -80,19 +80,35 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +static int *debugmsg_breakpoint_level = NULL;
 +static int debugmsg_n_breakpoints = 0;
 +
++/*
++ *  #261: opt-in, default-OFF global "break on any ERROR-level message".
++ *  Toggled by `breakpoint subsystem all error` / `... all off`, and checked
++ *  in debugmsg_va() alongside the per-subsystem levels. Default 0 = no-op.
++ */
++int debugmsg_break_on_error = 0;
++
  static const int default_verbosity = VERBOSITY_INFO;
  
  static size_t debug_indent = 0;
-@@ -129,7 +139,31 @@
+@@ -129,7 +146,40 @@
  static void debugmsg_va(struct cpu* cpu, int subsystem,
  	const char *name, int verbosity, va_list argp, const char *fmt)
  {
 -	if (!single_step && !ENOUGH_VERBOSITY(subsystem, verbosity))
 +	bool subsystem_breakpoint = false;
 +
-+	if (debugmsg_n_breakpoints > 0 &&
++	/*
++	 *  #261: opt-in global break on any ERROR-level message (covers every
++	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
++	 *  was set). Default off = single false test = no-op.
++	 */
++	bool do_bp = (debugmsg_n_breakpoints > 0 &&
 +	    debugmsg_breakpoint_level[subsystem] >= 0 &&
-+	    verbosity <= debugmsg_breakpoint_level[subsystem]) {
++	    verbosity <= debugmsg_breakpoint_level[subsystem]);
++	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
++		do_bp = true;
++
++	if (do_bp) {
 +		/*
 +		 *  This message triggers a breakpoint on subsystem messages:
 +		 *  make sure the message itself is shown (even if the current
@@ -116,7 +132,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		return;
  
  	char buf[DEBUG_BUFSIZE];
-@@ -390,8 +424,11 @@
+@@ -390,8 +440,11 @@
  	    sizeof(char*) * debugmsg_nr_of_subsystems);
  	debugmsg_current_verbosity = realloc(debugmsg_current_verbosity,
  	    sizeof(int) * debugmsg_nr_of_subsystems);;
@@ -128,7 +144,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	debugmsg_set_verbosity_level(subsys, default_verbosity);
  
  	return subsys;
-@@ -499,6 +536,96 @@
+@@ -499,6 +552,104 @@
  
  
  /*
@@ -150,6 +166,14 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +
 +	if (level < 0)
 +		level = -1;
++
++	/*
++	 *  #261: the "ALL" pseudo-subsystem also (dis)arms the global
++	 *  break-on-ERROR toggle: `... all error` arms it, `... all off`
++	 *  (level < 0) clears it. Only ERROR arms; warning/info/debug do not.
++	 */
++	if (strcasecmp("ALL", subsystem_name) == 0)
++		debugmsg_break_on_error = (level == VERBOSITY_ERROR) ? 1 : 0;
 +
 +	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
 +		if (strcasecmp("ALL", subsystem_name) != 0) {
@@ -225,7 +249,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugmsg_init():
   *
   *  Initializes the debugmsg functionality.
-@@ -508,6 +635,11 @@
+@@ -508,6 +659,11 @@
  	debugmsg_nr_of_subsystems = 11;
  	debugmsg_subsystem_name = malloc(sizeof(char*) * debugmsg_nr_of_subsystems);
  	debugmsg_current_verbosity = malloc(sizeof(int) * debugmsg_nr_of_subsystems);;
@@ -239,7 +263,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	debugmsg_subsystem_name[SUBSYS_EMUL]      = "emul";
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/core/emul.c GXEMUL-SEC/src/core/emul.c
 --- src/core/emul.c	2021-04-22 13:04:13.000000000 -0500
-+++ GXEMUL-SEC/src/core/emul.c	2026-07-02 17:43:16.820931200 -0500
++++ GXEMUL-SEC/src/core/emul.c	2026-07-18 15:30:49.514516700 -0500
 @@ -36,6 +36,9 @@
  #include <stdarg.h>
  #include <string.h>
@@ -313,7 +337,23 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  add_breakpoints():
   *
   *  Take the strings breakpoint_string[] and convert to addresses
-@@ -206,7 +265,7 @@
+@@ -120,6 +179,15 @@
+ 			debug(" (%s)", m->breakpoints.string[i]);
+ 		debug("\n");
+ 	}
++
++	/*
++	 *  #259: make -K (debugger_enter_at_end_of_run) implicit and sticky
++	 *  when any breakpoint is configured. Breakpoints already fire without
++	 *  -K; this only affects end-of-run (drop into the debugger at machine
++	 *  halt instead of exiting). Never cleared once set.
++	 */
++	if (m->breakpoints.n > 0)
++		debugger_enter_at_end_of_run = true;
+ }
+ 
+ 
+@@ -206,7 +274,7 @@
  struct machine *emul_add_machine(struct emul *e, char *name)
  {
  	struct machine *m;
@@ -322,7 +362,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	int i;
  
  	m = machine_new(name, e, e->n_machines);
-@@ -492,6 +551,7 @@
+@@ -492,6 +560,7 @@
  		FILE *tmp_f;
  		char *name_to_load = *load_names;
  		int remove_after_load = 0;
@@ -330,7 +370,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  		/*  Special hack for removing temporary files:  */
  		if (name_to_load[0] == 8) {
-@@ -500,8 +560,9 @@
+@@ -500,8 +569,9 @@
  		}
  
  		/*
@@ -342,7 +382,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		 */
  		tmp_f = fopen(name_to_load, "r");
  		if (tmp_f != NULL) {
-@@ -513,51 +574,49 @@
+@@ -513,51 +583,49 @@
  
  			if (res == sizeof(buf) &&
  			    buf[0] == 0x1f && buf[1] == 0x8b) {
@@ -432,7 +472,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			}
  			fclose(tmp_f);
  		}
-@@ -575,6 +634,11 @@
+@@ -575,6 +643,11 @@
  			unlink(name_to_load);
  		}
  
@@ -4399,7 +4439,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/debugger/debugger_cmds.c GXEMUL-SEC/src/debugger/debugger_cmds.c
 --- src/debugger/debugger_cmds.c	2021-04-22 13:04:18.000000000 -0500
-+++ GXEMUL-SEC/src/debugger/debugger_cmds.c	2026-07-18 14:02:22.192099400 -0500
++++ GXEMUL-SEC/src/debugger/debugger_cmds.c	2026-07-18 15:31:09.187431200 -0500
 @@ -41,11 +41,19 @@
  /*
   *  debugger_cmd_breakpoint():
@@ -4512,7 +4552,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  		m->breakpoints.n --;
  
-@@ -95,32 +152,72 @@
+@@ -95,34 +152,77 @@
  		return;
  	}
  
@@ -4589,8 +4629,13 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		m->breakpoints.ignore_left[i] = ignore;	/*  #248  */
  
  		m->breakpoints.n ++;
++		/*  #259: a configured breakpoint implies -K — drop into the
++		    debugger at machine halt instead of exiting. Sticky.  */
++		debugger_enter_at_end_of_run = true;
  		show_breakpoint(m, i);
-@@ -132,7 +229,265 @@
+ 
+ 		/*  Clear translations:  */
+@@ -132,7 +232,270 @@
  		return;
  	}
  
@@ -4657,6 +4702,11 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +			    "subsystems.\n", name);
 +			return;
 +		}
++
++		/*  #259: an armed subsystem breakpoint (level >= 0) also
++		    implies -K, so machine halt drops into the debugger.  */
++		if (level >= 0)
++			debugger_enter_at_end_of_run = true;
 +
 +		debugmsg_print_breakpoints();
 +		return;
@@ -4857,7 +4907,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  }
  
  
-@@ -236,6 +591,45 @@
+@@ -236,6 +599,45 @@
  
  
  /*
@@ -4903,7 +4953,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugger_cmd_dump():
   *
   *  Dump emulated memory in hex and ASCII.
-@@ -256,10 +650,14 @@
+@@ -256,10 +658,14 @@
  
  		CHECK_ALLOCATION(tmps = strdup(args));
  
@@ -4921,7 +4971,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		r = debugger_parse_expression(m, tmps, 0, &tmp);
  		free(tmps);
  
-@@ -269,8 +667,6 @@
+@@ -269,8 +675,6 @@
  		} else {
  			last_dump_addr = tmp;
  		}
@@ -4930,7 +4980,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	if (m->cpus == NULL) {
-@@ -374,6 +770,299 @@
+@@ -374,6 +778,299 @@
  
  
  /*
@@ -5230,7 +5280,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugger_cmd_focus():
   *
   *  Changes focus to specific cpu, in a specific machine (in a specific
-@@ -696,12 +1385,14 @@
+@@ -696,12 +1393,14 @@
  	}
  
  	if (!syntax_ok) {
@@ -5246,7 +5296,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		return;
  	}
  
-@@ -729,6 +1420,50 @@
+@@ -729,6 +1428,50 @@
  		return;
  	}
  
@@ -5297,7 +5347,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	res = debugger_parse_expression(m, p, 0, &data);
  	switch (res) {
  	case PARSE_NOMATCH:
-@@ -932,11 +1667,54 @@
+@@ -932,11 +1675,54 @@
  
  /*
   *  debugger_cmd_step():
@@ -5352,7 +5402,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (args[0] != '\0') {
  		n = strtoull(args, NULL, 0);
  		if (n < 1) {
-@@ -1062,10 +1840,14 @@
+@@ -1062,10 +1848,14 @@
  
  		CHECK_ALLOCATION(tmps = strdup(args));
  
@@ -5370,7 +5420,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		r = debugger_parse_expression(m, tmps, 0, &tmp);
  		free(tmps);
  
-@@ -1075,8 +1857,6 @@
+@@ -1075,8 +1865,6 @@
  		} else {
  			last_unasm_addr = tmp;
  		}
@@ -5379,7 +5429,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	if (m->cpus == NULL) {
-@@ -1249,6 +2029,9 @@
+@@ -1249,6 +2037,9 @@
  	{ "emul", "", 0, debugger_cmd_emul,
  		"Print a summary of the current emulation" },
  
@@ -5389,7 +5439,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	{ "focus", "x[,y[,z]]", 0, debugger_cmd_focus,
  		"changes focus to cpu x, machine x, emul z" },
  
-@@ -1273,7 +2056,7 @@
+@@ -1273,7 +2064,7 @@
  	{ "print", "expr", 0, debugger_cmd_print,
  		"evaluate an expression without side-effects" },
  
@@ -5398,7 +5448,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		"modify emulated memory contents" },
  
  	{ "quiet", "[on|off]", 0, debugger_cmd_quiet,
-@@ -1291,8 +2074,8 @@
+@@ -1291,8 +2082,8 @@
  	/*  NOTE: Try to keep 's' down to only one command. Having 'step'
  	    available as a one-letter command is very convenient.  */
  
@@ -5409,7 +5459,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  	{ "tlbdump", "[cpuid][,r]", 0, debugger_cmd_tlbdump,
  		"dump TLB contents (add ',r' for raw data)" },
-@@ -1312,6 +2095,9 @@
+@@ -1312,6 +2103,9 @@
  	{ "version", "", 0, debugger_cmd_version,
  		"Print version information" },
  
@@ -10932,7 +10982,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	    struct memory *,uint64_t,unsigned char *,size_t,int,void *),
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/include/misc.h GXEMUL-SEC/src/include/misc.h
 --- src/include/misc.h	2021-04-22 13:04:14.000000000 -0500
-+++ GXEMUL-SEC/src/include/misc.h	2026-07-02 17:43:17.707276700 -0500
++++ GXEMUL-SEC/src/include/misc.h	2026-07-18 15:30:59.237254200 -0500
 @@ -193,6 +193,30 @@
  	}
  
@@ -10964,7 +11014,15 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  /*  bootblock.c:  */
  int load_bootblock(struct machine *m, struct cpu *cpu,
  	int *n_loadp, char ***load_namesp);
-@@ -243,6 +267,8 @@
+@@ -232,6 +256,7 @@
+ #define	VERBOSITY_DEBUG		3
+ #define	ENOUGH_VERBOSITY(subsys,reqverb)	(debugmsg_current_verbosity[(subsys)] >= (reqverb))
+ extern int *debugmsg_current_verbosity;
++extern int debugmsg_break_on_error;		/*  #261  */
+ void debug_indentation(int diff);
+ void debug(const char *fmt, ...);
+ void fatal(const char *fmt, ...);
+@@ -243,6 +268,8 @@
  void debugmsg_set_verbosity_level(int subsystem, int verbosity);
  void debugmsg(int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
  void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
@@ -11328,7 +11386,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/net/net.c GXEMUL-SEC/src/net/net.c
 --- src/net/net.c	2021-04-22 13:04:21.000000000 -0500
-+++ GXEMUL-SEC/src/net/net.c	2026-07-10 00:35:13.391703800 -0500
++++ GXEMUL-SEC/src/net/net.c	2026-07-18 15:30:58.006180800 -0500
 @@ -71,6 +71,23 @@
  {
  	struct ethernet_packet_link *lp;
@@ -11534,6 +11592,26 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	net->tapdev = NULL;
  	net->tap_fd = -1;
  
+@@ -771,15 +815,15 @@
+ 	res = inet_aton(ipv4addr, &net->netmask_ipv4);
+ #endif
+ 	if (res < 1) {
+-		fprintf(stderr, "net_init(): could not parse IPv4 address"
+-		    " '%s'\n", ipv4addr);
++		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
++		    "could not parse IPv4 address '%s'", ipv4addr);
+ 		free(net);
+ 		return NULL;
+ 	}
+ 
+ 	if (netipv4len < 1 || netipv4len > 30) {
+-		fprintf(stderr, "net_init(): extremely weird ipv4 "
+-		    "network length (%i)\n", netipv4len);
++		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
++		    "extremely weird ipv4 network length (%i)", netipv4len);
+ 		free(net);
+ 		return NULL;
+ 	}
 @@ -796,7 +840,8 @@
  		net->local_port = local_port;
  		net->local_port_socket = socket(AF_INET, SOCK_DGRAM, 0);
@@ -11554,6 +11632,29 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			free(net);
  			return NULL;
  		}
+@@ -835,8 +881,8 @@
+ 
+ 			hp = gethostbyname(rnp->name);
+ 			if (hp == NULL) {
+-				fprintf(stderr, "could not resolve '%s'\n",
+-				    rnp->name);
++				debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
++				    "could not resolve '%s'", rnp->name);
+ 				free(net);
+ 				return NULL;
+ 			}
+@@ -847,8 +893,9 @@
+ 			/*  And again:  */
+ 			CHECK_ALLOCATION(rnp->name = strdup(remote[n_remote]));
+ 			if (strchr(rnp->name, ':') == NULL) {
+-				fprintf(stderr, "Remote network '%s' is not "
+-				    "'host:portnr'?\n", rnp->name);
++				debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
++				    "Remote network '%s' is not 'host:portnr'?",
++				    rnp->name);
+ 				free(net);
+ 				return NULL;
+ 			}
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/net/net_ip.c GXEMUL-SEC/src/net/net_ip.c
 --- src/net/net_ip.c	2021-04-22 13:04:21.000000000 -0500
 +++ GXEMUL-SEC/src/net/net_ip.c	2026-07-09 23:40:50.168797000 -0500

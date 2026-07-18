@@ -815,15 +815,15 @@ struct net *net_init(struct emul *emul, int init_flags,
 	res = inet_aton(ipv4addr, &net->netmask_ipv4);
 #endif
 	if (res < 1) {
-		fprintf(stderr, "net_init(): could not parse IPv4 address"
-		    " '%s'\n", ipv4addr);
+		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+		    "could not parse IPv4 address '%s'", ipv4addr);
 		free(net);
 		return NULL;
 	}
 
 	if (netipv4len < 1 || netipv4len > 30) {
-		fprintf(stderr, "net_init(): extremely weird ipv4 "
-		    "network length (%i)\n", netipv4len);
+		debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+		    "extremely weird ipv4 network length (%i)", netipv4len);
 		free(net);
 		return NULL;
 	}
@@ -881,8 +881,8 @@ struct net *net_init(struct emul *emul, int init_flags,
 
 			hp = gethostbyname(rnp->name);
 			if (hp == NULL) {
-				fprintf(stderr, "could not resolve '%s'\n",
-				    rnp->name);
+				debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+				    "could not resolve '%s'", rnp->name);
 				free(net);
 				return NULL;
 			}
@@ -893,8 +893,9 @@ struct net *net_init(struct emul *emul, int init_flags,
 			/*  And again:  */
 			CHECK_ALLOCATION(rnp->name = strdup(remote[n_remote]));
 			if (strchr(rnp->name, ':') == NULL) {
-				fprintf(stderr, "Remote network '%s' is not "
-				    "'host:portnr'?\n", rnp->name);
+				debugmsg(SUBSYS_NET, "", VERBOSITY_ERROR,
+				    "Remote network '%s' is not 'host:portnr'?",
+				    rnp->name);
 				free(net);
 				return NULL;
 			}

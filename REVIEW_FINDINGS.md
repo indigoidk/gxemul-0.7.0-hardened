@@ -857,6 +857,18 @@ Item #6 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; display-o
 
 Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; display-only, no behavior change.
 
+---
+## Thirty-second round (#259, #260, #261) — debugger/net QoL
+Items #8a/#8b/#7 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; all low-risk).
+
+| # | file | Change |
+|---|------|--------|
+| 259 | `core/emul.c`, `debugger/debugger_cmds.c` | `-K` (debugger-at-halt) implicit + sticky when any breakpoint is set (config/`-p`/interactive/subsystem) |
+| 260 | `net/net.c` | route the 4 `net_init()` config-error diagnostics through `debugmsg(SUBSYS_NET, VERBOSITY_ERROR)`; leave the `net_add_nic` `exit(1)` |
+| 261 | `core/debugmsg.c`, `include/misc.h` | opt-in default-OFF global break-on-ERROR-debugmsg (`debugmsg_break_on_error`, toggled by `breakpoint subsystem all error`); not the TODO's fragile always-break |
+
+Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; all three inert on a normal boot.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

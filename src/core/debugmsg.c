@@ -94,6 +94,13 @@ int *debugmsg_current_verbosity = NULL;
 static int *debugmsg_breakpoint_level = NULL;
 static int debugmsg_n_breakpoints = 0;
 
+/*
+ *  #261: opt-in, default-OFF global "break on any ERROR-level message".
+ *  Toggled by `breakpoint subsystem all error` / `... all off`, and checked
+ *  in debugmsg_va() alongside the per-subsystem levels. Default 0 = no-op.
+ */
+int debugmsg_break_on_error = 0;
+
 static const int default_verbosity = VERBOSITY_INFO;
 
 static size_t debug_indent = 0;
@@ -141,9 +148,18 @@ static void debugmsg_va(struct cpu* cpu, int subsystem,
 {
 	bool subsystem_breakpoint = false;
 
-	if (debugmsg_n_breakpoints > 0 &&
+	/*
+	 *  #261: opt-in global break on any ERROR-level message (covers every
+	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+	 *  was set). Default off = single false test = no-op.
+	 */
+	bool do_bp = (debugmsg_n_breakpoints > 0 &&
 	    debugmsg_breakpoint_level[subsystem] >= 0 &&
-	    verbosity <= debugmsg_breakpoint_level[subsystem]) {
+	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+		do_bp = true;
+
+	if (do_bp) {
 		/*
 		 *  This message triggers a breakpoint on subsystem messages:
 		 *  make sure the message itself is shown (even if the current
@@ -554,6 +570,14 @@ int debugmsg_set_breakpoint(const char *subsystem_name, int level)
 
 	if (level < 0)
 		level = -1;
+
+	/*
+	 *  #261: the "ALL" pseudo-subsystem also (dis)arms the global
+	 *  break-on-ERROR toggle: `... all error` arms it, `... all off`
+	 *  (level < 0) clears it. Only ERROR arms; warning/info/debug do not.
+	 */
+	if (strcasecmp("ALL", subsystem_name) == 0)
+		debugmsg_break_on_error = (level == VERBOSITY_ERROR) ? 1 : 0;
 
 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i) {
 		if (strcasecmp("ALL", subsystem_name) != 0) {

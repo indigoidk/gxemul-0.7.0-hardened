@@ -179,6 +179,15 @@ static void add_breakpoints(struct machine *m)
 			debug(" (%s)", m->breakpoints.string[i]);
 		debug("\n");
 	}
+
+	/*
+	 *  #259: make -K (debugger_enter_at_end_of_run) implicit and sticky
+	 *  when any breakpoint is configured. Breakpoints already fire without
+	 *  -K; this only affects end-of-run (drop into the debugger at machine
+	 *  halt instead of exiting). Never cleared once set.
+	 */
+	if (m->breakpoints.n > 0)
+		debugger_enter_at_end_of_run = true;
 }
 
 

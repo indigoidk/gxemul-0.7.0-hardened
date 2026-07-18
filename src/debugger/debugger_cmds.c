@@ -220,6 +220,9 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 		m->breakpoints.ignore_left[i] = ignore;	/*  #248  */
 
 		m->breakpoints.n ++;
+		/*  #259: a configured breakpoint implies -K — drop into the
+		    debugger at machine halt instead of exiting. Sticky.  */
+		debugger_enter_at_end_of_run = true;
 		show_breakpoint(m, i);
 
 		/*  Clear translations:  */
@@ -291,6 +294,11 @@ static void debugger_cmd_breakpoint(struct machine *m, char *args)
 			    "subsystems.\n", name);
 			return;
 		}
+
+		/*  #259: an armed subsystem breakpoint (level >= 0) also
+		    implies -K, so machine halt drops into the debugger.  */
+		if (level >= 0)
+			debugger_enter_at_end_of_run = true;
 
 		debugmsg_print_breakpoints();
 		return;

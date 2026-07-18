@@ -735,6 +735,16 @@ Item #6 of the 8-item TODO-triage batch — a display-only debuggability aid for
 Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`** (output byte-identical outside the debugger dump).
 
 
+---
+## Thirty-second round (#259, #260, #261) — debugger/net QoL (Codex + Fable + Ollama)
+Items #8a, #8b, #7 of the 8-item TODO-triage batch — three small, low-risk debuggability/housekeeping wins.
+- **#259** `core/emul.c` + `debugger/debugger_cmds.c`: make `-K` (drop into the debugger at machine halt) implicit and **sticky** when any breakpoint is configured — set `debugger_enter_at_end_of_run` at the config/`-p`, interactive `breakpoint add`, and `breakpoint subsystem` sites. (Breakpoints already *fire* without `-K`; this only affects end-of-run.)
+- **#260** `net/net.c`: route the four remaining `net_init()` diagnostics (bad IPv4 address / prefix length / unresolved remote / malformed `host:port`) through `debugmsg(SUBSYS_NET, …, VERBOSITY_ERROR)`, matching the existing net conversions; the `net_add_nic()` NULL programmer-error `exit(1)` is left as-is.
+- **#261** `core/debugmsg.c` + `include/misc.h`: an **opt-in, default-OFF** global "break on any ERROR-level debugmsg" — a `debugmsg_break_on_error` flag checked in `debugmsg_va()` alongside the per-subsystem levels, toggled by `breakpoint subsystem all error` / `… all off`. (The panel rejected the TODO's literal "always break" as boot-fragile; the existing `all error` already covers registered subsystems, so this is a small robustness upgrade.) Default OFF = single false test = no-op.
+Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`** (all three inert on a normal boot).
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process
