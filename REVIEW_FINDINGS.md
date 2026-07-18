@@ -848,6 +848,15 @@ Item #5 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; base cloc
 
 Build 0/0 both trees; arc 13/13 + pmax 15/15 boot → `uid=0(root)`. OpenBSD's IT_VALUE=9 → exactly 100.0 Hz → no-op on the verified boot.
 
+## Thirty-first round (#258) — decoded STATUS/CAUSE/FCSR in the MIPS register dump
+Item #6 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; display-only).
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 258 | `cpus/cpu_mips.c` (both trees) | the debugger register dump printed COP0 STATUS/CAUSE + FPU FCSR as raw hex only, unhelpful for the fault-signature workflow | two static helpers decode named bit-fields under the raw hex (R3000 KU/IE stack vs R4000 KSU/ERL/EXL via exc_model; CAUSE mnemonic via exception_names[]; FCSR cause/enable/flag EVZOUI groups); display-only, R5900 FCSR skipped |
+
+Build 0/0 both trees; pmax 15/15 + arc 13/13 boot → `uid=0(root)`; display-only, no behavior change.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

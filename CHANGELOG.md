@@ -729,6 +729,12 @@ Item #5 of the 8-item TODO-triage batch. The arc (Acer PICA/Jazz, R4000) R4030 i
 OpenBSD 2.2/arc writes 9 → exactly 100.0 Hz → `timer_update_frequency` early-returns, so the fix is a **no-op on the verified boot**. Build **0/0** both trees; **arc 13/13 + pmax 15/15 boot → `uid=0(root)`**.
 
 
+## Thirty-first round (#258) — decoded STATUS/CAUSE/FCSR in the MIPS register dump (Codex + Fable + Ollama)
+Item #6 of the 8-item TODO-triage batch — a display-only debuggability aid for the fault-signature workflow. `mips_cpu_register_dump()` (`cpus/cpu_mips.c`) printed COP0 STATUS/CAUSE and the FPU FCSR as raw hex only.
+- **#258** `cpus/cpu_mips.c` (both trees): two static helpers decode, under the existing raw-hex rows, STATUS (R2000/R3000 EXC3K keeps the 3-deep KU/IE stack + cache-diag bits; R4000+ EXC4K has KSU/ERL/EXL/KX/SX/UX), CAUSE (`exception_names[]` mnemonic + exccode/BD/CE/IV/IP; 4-bit exccode on EXC3K vs 5-bit on EXC4K), and FCSR (FCC byte, FS, cause/enables/flags E-V-Z-O-U-I groups, rounding mode). Reuses existing bit `#define`s; the R5900's nonstandard FCSR layout is skipped. **Display-only — reads `reg[]`/`fcr[]` and calls `debug()`, no state change.**
+Build **0/0** both trees; **pmax 15/15 + arc 13/13 boot → `uid=0(root)`** (output byte-identical outside the debugger dump).
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process
