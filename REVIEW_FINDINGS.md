@@ -801,6 +801,23 @@ inbound path — config/tap or hole-punch, not a device bug); L12 UART model (lo
 `EXT_IMASK` gating (real but SEC already carries the corrected split; pmax has no jazzio). **Build 0/0** both
 trees; **pmax 15/15 + arc 13/13 boot** → `uid=0(root)`.
 
+## Twenty-seventh round (#253) — Linux tun/tap enablement (Codex + Fable)
+GXemul's Ethernet tap backend (`net/net_tap.c`) opened the device BSD-style (`open(tapdev)`), so tap networking —
+the only way to give the guest a real L2 link, and thus receive **unsolicited inbound** traffic the userspace NAT
+cannot deliver (the L13 class) — did not work on Linux. A Codex `gpt-5.6-sol` + Fable panel designed the minimal
+Linux path (converged on the body; split on the include header, resolved by test-compiling all three variants under
+`-Wall -Wextra -Wshadow`).
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 253 | `net/net_tap.c` | `net_tap_init()` opened the tap BSD-style (`open(tapdev)` device node); Linux needs the clone device `/dev/net/tun` + `TUNSETIFF`, so tap networking was Linux-broken and the guest could not receive unsolicited inbound traffic (L13 class) | `#if defined(__linux__)`: open `/dev/net/tun` + `ioctl(TUNSETIFF, IFF_TAP\|IFF_NO_PI, ifr_name=tapdev)` (Linux tapdev = interface name); BSD device-path `open()` unchanged in `#else`; shared FIONBIO/tail; gated includes `<net/if.h>`+`<linux/if_tun.h>` |
+
+**Verified live (pmax rig, R3000):** `-e 3max -L tap0` attaches (`tap0` → `UP,LOWER_UP`, 0 errors); guest `ifconfig
+le0 10.0.0.10`; host→guest **unsolicited** `ping` → 4/4 replies (ttl=255), and a host UDP datagram to a closed guest
+port → ICMP port-unreachable (reached the guest kernel with no prior NAT mapping). Both NAT boot regressions still
+pass (pmax 15/15 + arc 13/13 → `uid=0(root)`); build **0/0** both trees. arc cannot demo — its SONIC (`dev_sn.c`) is
+a register stub with no RX/TX; use the pmax LANCE (`dev_le.c`).
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

@@ -12097,6 +12097,77 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  
  	close(s);
+diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/net/net_tap.c GXEMUL-SEC/src/net/net_tap.c
+--- src/net/net_tap.c	2021-04-22 13:04:21.000000000 -0500
++++ GXEMUL-SEC/src/net/net_tap.c	2026-07-18 11:55:03.485962100 -0500
+@@ -43,7 +43,15 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <string.h>
+-#include <unistd.h> 
++#include <unistd.h>
++
++#if defined(__linux__)
++/*  #253: <net/if.h> for struct ifreq; <linux/if_tun.h> for TUNSETIFF /
++    IFF_TAP / IFF_NO_PI. Do NOT also include <linux/if.h> — it redefines
++    struct ifreq / the IFF_* flags against <net/if.h> on older glibc.  */
++#include <net/if.h>
++#include <linux/if_tun.h>
++#endif
+ 
+ #include "misc.h"
+ #include "net.h"
+@@ -166,6 +174,42 @@
+ 	int fd;
+ 	int one = 1;
+ 
++#if defined(__linux__)
++	/*  #253: On Linux a tap is not opened via its own device node —
++	    tapdev is the name of a tap INTERFACE (e.g. "tap0"). Open the
++	    clone device /dev/net/tun and bind to that interface, which the
++	    user pre-creates with e.g.
++	        ip tuntap add dev tap0 mode tap user $USER
++	    IFF_NO_PI: the rest of the net code expects bare Ethernet frames
++	    without Linux' 4-byte packet-info header.  */
++	struct ifreq ifr;
++	size_t len = strlen(tapdev);
++
++	if (len >= sizeof(ifr.ifr_name)) {
++		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
++		    "tap interface name '%s' is too long", tapdev);
++		return false;
++	}
++
++	memset(&ifr, 0, sizeof(ifr));
++	memcpy(ifr.ifr_name, tapdev, len);
++	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
++
++	fd = open("/dev/net/tun", O_RDWR);
++	if (fd < 0) {
++		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
++		    "unable to open /dev/net/tun: %s", strerror(errno));
++		return false;
++	}
++
++	if (ioctl(fd, TUNSETIFF, &ifr) < 0) {
++		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
++		    "unable to attach to tap interface '%s': %s",
++		    tapdev, strerror(errno));
++		close(fd);
++		return false;
++	}
++#else
+ 	fd = open(tapdev, O_RDWR);
+ 	if (fd < 0) {
+ 		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
+@@ -173,6 +217,7 @@
+ 		    tapdev, strerror(errno));
+ 		return false;
+ 	}
++#endif
+ 
+ 	if (ioctl(fd, FIONBIO, &one) < 0) {
+ 		debugmsg(SUBSYS_NET, "tap", VERBOSITY_ERROR,
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/promemul/arcbios.c GXEMUL-SEC/src/promemul/arcbios.c
 --- src/promemul/arcbios.c	2021-04-22 13:04:21.000000000 -0500
 +++ GXEMUL-SEC/src/promemul/arcbios.c	2026-07-17 00:00:16.472233900 -0500

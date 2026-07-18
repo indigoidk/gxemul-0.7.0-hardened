@@ -661,6 +661,37 @@ against pristine `src/` by `diff`; + reviewer holistic pass). Build **0/0** both
 regression PASS** (pmax R3000 15/15 → `uid=0(root)`, OpenBSD 2.2; arc R4000 13/13 → `uid=0(root)`, clean halt).
 
 
+## Twenty-seventh round (#253) — Linux tun/tap enablement (net_tap.c) + inbound-delivery recipe (Codex + Fable)
+Follow-up to round 26's L13 disposition (the userspace NAT has no unsolicited-inbound path, so an `inetd` UDP
+`dgram/wait` service cannot receive its datagram). GXemul already ships a complete Ethernet **tap** backend
+(`net/net_tap.c`, wired in `net/net.c`, selected by a `net( tapdev(...) )` config block or the `-L` CLI option),
+but `net_tap_init()` opened the device BSD-style (`open(tapdev)`, a `/dev/tapN` node) — which does not work on
+Linux. A Codex `gpt-5.6-sol` + Fable panel designed the minimal Linux path; applied:
+- **#253** `net/net_tap.c` `net_tap_init()`: on `#if defined(__linux__)`, open the clone device `/dev/net/tun`
+  and `ioctl(TUNSETIFF, { IFF_TAP | IFF_NO_PI, ifr_name = tapdev })` — so on Linux `tapdev` is the tap **interface
+  name** (`tap0`), which the user pre-creates (`ip tuntap add dev tap0 mode tap user $USER`); the BSD device-path
+  `open()` is preserved verbatim in the `#else`. `IFF_NO_PI` because the switch code (`net_tap_rx_avail`/`_tx`)
+  expects bare Ethernet frames with no 4-byte packet-info header. The shared `FIONBIO` + `strdup`/`tap_fd` tail is
+  untouched, so **non-Linux hosts compile byte-identical** and the NAT path (only reached when `tapdev == NULL`) is
+  entirely unaffected. Gated includes `#if defined(__linux__)`: `<net/if.h>` (glibc `struct ifreq`) +
+  `<linux/if_tun.h>` — **not** `<linux/if.h>`, which redefines `struct ifreq`/`IFF_*` against `<net/if.h>` on older
+  glibc; the two seats split on the header and it was resolved by test-compiling all three variants under the build's
+  `-Wall -Wextra -Wshadow`.
+
+**Verification.** Build **0/0** both trees; both NAT boot regressions still pass (pmax 15/15 + arc 13/13 →
+`uid=0(root)`), confirming zero NAT-path impact. **Live tap test (pmax rig, R3000):** `gxemul -e 3max -L tap0 -d
+1:/tmp/rig.img /tmp/bsd.pmax` attaches (host `tap0` → `UP,LOWER_UP`, 0 errors; guest `le0` on the tap). With the
+guest `ifconfig le0 inet 10.0.0.10 netmask 255.0.0.0 up`, an **unsolicited inbound** `ping` from the WSL host got
+**4/4 replies** (guest ttl=255) and a host UDP datagram to a closed guest port drew an **ICMP port-unreachable** —
+i.e. the datagram reached the guest kernel with no prior NAT mapping, the delivery the userspace NAT structurally
+cannot do (closes the L13 class). The guest also learned the host MAC (`arp: (10.0.0.1) at …`), confirming
+bidirectional L2. **Use the pmax rig for tap:** the arc/pica SONIC (`dev_sn.c`) is a register stub (no RX/TX),
+whereas 3max LANCE (`dev_le.c`) is complete. Invocation: `-e 3max -L tap0` (the `-L` flag feeds `tapdev` via
+`emul_simple_init`→`net_init`), or a `@config` with `net( tapdev("tap0") )` **before** `machine(...)` (a NIC joins
+`emul->net` at machine-setup time, so net-first ordering is required). Under WSL2 the tap is host↔guest only (the VM's
+NAT network isn't bridged to the LAN) — sufficient for the unsolicited-inbound proof.
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process
