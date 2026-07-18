@@ -34,7 +34,8 @@
  *  TODO: Figure out how the int enable mask works; it seems to be shifted
  *  10 bits (?) according to NetBSD/arc sources.
  *
- *  TODO: Don't hardcode the timer to 100 Hz.
+ *  #257: the interval timer follows the R4030 IT_VALUE-programmed rate
+ *  (100 Hz is the power-on default).
  *
  *  JAZZ interrupts 0..14 are connected to MIPS irq 3,
  *  JAZZ interrupt 15 (the timer) is connected to MIPS irq 6,
@@ -394,6 +395,18 @@ DEVICE_ACCESS(jazz)
 			/*  Clean start: drop any interval-timer backlog that
 			    accrued before the guest programmed the timer.  */
 			d->pending_timer_interrupts = 0;
+			/*  #257: honor the guest-programmed rate. The R4030
+			    interval timer counts down at 1 kHz and reloads from
+			    this register, so a write of N interrupts every
+			    (N+1) ms: hz = 1000/(N+1). (OpenBSD 2.2/arc writes 9
+			    -> exactly 100.0 Hz, so its verified boot keeps the
+			    old default and this no-ops.) Compute from the
+			    unsigned idata, not the int-truncated interval_start
+			    (0xffffffff there is -1, and -1+1 would divide by
+			    zero); N >= 0 bounds the rate to (0, 1000] Hz.  */
+			if (d->timer != NULL)
+				timer_update_frequency(d->timer,
+				    1000.0 / ((double) idata + 1.0));
 		} else
 			odata = d->interval_start;
 		break;
@@ -742,7 +755,8 @@ DEVINIT(jazz)
 	    0xf0000000ULL, 4, dev_jazz_jazzio_access, (void *)d,
 	    DM_DEFAULT, NULL);
 
-	/*  Add a timer, hardcoded to 100 Hz. TODO: Don't hardcode!  */
+	/*  #257: 100 Hz is only the power-on default; a guest write to
+	    R4030_SYS_IT_VALUE retunes it (see the IT_VALUE case above).  */
 	d->timer = timer_add(100.0, timer_tick, d);
 	machine_add_tickfunction(devinit->machine, dev_jazz_tick,
 	    d, DEV_JAZZ_TICKSHIFT);

@@ -839,6 +839,15 @@ Item #2 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama, unanimous
 
 Build 0/0 both trees; verified on arc (`breakpoint show` → `0xffffffff80100000`); pmax 15/15 + arc 13/13 boot unaffected.
 
+## Thirtieth round (#257) — R4030 interval timer honors the guest-programmed rate
+Item #5 of the 8-item TODO-triage batch (Codex xhigh + Fable + Ollama; base clock resolved empirically = OpenBSD writes IT_VALUE 9 → 100 Hz → 1 kHz base).
+
+| # | file | Problem | Fix |
+|---|------|---------|-----|
+| 257 | `devices/dev_jazz.c` (both trees) | R4030 interval timer hardcoded to 100 Hz; guest `R4030_SYS_IT_VALUE` writes (the arc OS clock rate) were stored but ignored | on IT_VALUE write, `timer_update_frequency(d->timer, 1000.0/((double)idata+1.0))` (1 kHz base, empirically confirmed OpenBSD writes 9→100 Hz); unsigned idata (div-0-safe, bounds (0,1000] Hz); 100 Hz stays the power-on default |
+
+Build 0/0 both trees; arc 13/13 + pmax 15/15 boot → `uid=0(root)`. OpenBSD's IT_VALUE=9 → exactly 100.0 Hz → no-op on the verified boot.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

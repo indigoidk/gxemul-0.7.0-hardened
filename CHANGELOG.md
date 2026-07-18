@@ -723,6 +723,12 @@ Item #2 of the 8-item TODO-triage batch. `breakpoint add <kseg0 addr>` typed int
 Build **0/0** both trees; verified on the arc rig — `breakpoint add 0x80100000` now shows `0xffffffff80100000` (was `0x0000000080100000`); pmax + arc boot regressions unaffected (15/15 + 13/13 → `uid=0(root)`).
 
 
+## Thirtieth round (#257) — R4030 interval timer honors the guest-programmed rate (dev_jazz.c, both trees)
+Item #5 of the 8-item TODO-triage batch. The arc (Acer PICA/Jazz, R4000) R4030 interval timer was created at a hardcoded 100 Hz (`dev_jazz.c timer_add(100.0, …)`, with the author's own "TODO: Don't hardcode!"); guest writes to `R4030_SYS_IT_VALUE` (the arc OS clock rate) were stored but never propagated, so any non-100 rate was silently ignored. A 3-model panel (Codex `gpt-5.6-sol`/xhigh + Fable + Ollama; agy dropped on a headless file-read limit) split on the R4030 base clock (1 kHz vs 1 MHz); resolved **empirically** by instrumenting the IT_VALUE write and booting arc — OpenBSD 2.2 writes exactly **9** at clock init, which is 100 Hz only under a **1 kHz** base (`1000/(9+1)`), not 1 MHz.
+- **#257** `devices/dev_jazz.c` (both trees, hand-applied — the file diverges between est/ and SEC): on a guest write to `R4030_SYS_IT_VALUE`, `timer_update_frequency(d->timer, 1000.0/((double)idata + 1.0))` — the R4030 counts down at 1 kHz and reloads N, interrupting every (N+1) ms. Computed from the **unsigned** `idata` (the `int interval_start` would give −1 on 0xffffffff → −1+1 div-by-zero); N ≥ 0 bounds the rate to (0, 1000] Hz. The 100 Hz `timer_add` stays the power-on default. Precedent: `dev_8253`/`dev_mc146818`/`dev_vr41xx` all retune via `timer_update_frequency` from their write handlers.
+OpenBSD 2.2/arc writes 9 → exactly 100.0 Hz → `timer_update_frequency` early-returns, so the fix is a **no-op on the verified boot**. Build **0/0** both trees; **arc 13/13 + pmax 15/15 boot → `uid=0(root)`**.
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

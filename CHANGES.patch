@@ -6015,8 +6015,18 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		templ.extra = d;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_jazz.c GXEMUL-SEC/src/devices/dev_jazz.c
 --- src/devices/dev_jazz.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-10 00:36:52.827788800 -0500
-@@ -61,6 +61,22 @@
++++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-18 14:33:53.887131600 -0500
+@@ -34,7 +34,8 @@
+  *  TODO: Figure out how the int enable mask works; it seems to be shifted
+  *  10 bits (?) according to NetBSD/arc sources.
+  *
+- *  TODO: Don't hardcode the timer to 100 Hz.
++ *  #257: the interval timer follows the R4030 IT_VALUE-programmed rate
++ *  (100 Hz is the power-on default).
+  *
+  *  JAZZ interrupts 0..14 are connected to MIPS irq 3,
+  *  JAZZ interrupt 15 (the timer) is connected to MIPS irq 6,
+@@ -61,6 +62,22 @@
  #define	DEV_JAZZ_LENGTH			0x280
  #define	DEV_JAZZ_TICKSHIFT		14
  #define	PICA_TIMER_IRQ			15
@@ -6039,7 +6049,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  struct jazz_data {
  	struct interrupt mips_irq_3;
-@@ -70,7 +86,8 @@
+@@ -70,7 +87,8 @@
  	struct cpu	*cpu;
  
  	/*  Jazz stuff:  */
@@ -6049,7 +6059,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	uint32_t	int_asserted;
  
  	/*  ISA stuff:  */
-@@ -103,7 +120,14 @@
+@@ -103,7 +121,14 @@
  
  void reassert_isa_interrupts(struct jazz_data *d)
  {
@@ -6065,7 +6075,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		INTERRUPT_ASSERT(d->mips_irq_4);
  	else
  		INTERRUPT_DEASSERT(d->mips_irq_4);
-@@ -115,9 +139,9 @@
+@@ -115,9 +140,9 @@
  	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
  	d->int_asserted |= (1 << interrupt->line);
  
@@ -6077,7 +6087,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		INTERRUPT_ASSERT(d->mips_irq_6);
  }
  void jazz_interrupt_deassert(struct interrupt *interrupt)
-@@ -125,9 +149,9 @@
+@@ -125,9 +150,9 @@
  	struct jazz_data *d = (struct jazz_data *) interrupt->extra;
  	d->int_asserted &= ~(1 << interrupt->line);
  
@@ -6089,7 +6099,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		INTERRUPT_DEASSERT(d->mips_irq_6);
  }
  void jazz_isa_interrupt_assert(struct interrupt *interrupt)
-@@ -235,15 +259,15 @@
+@@ -235,15 +260,15 @@
  	struct jazz_data *d = (struct jazz_data *) extra;
  
  	/*  Used by NetBSD/arc and OpenBSD/arc:  */
@@ -6114,7 +6124,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (d->pending_timer_interrupts > 0)
  			INTERRUPT_ASSERT(d->jazz_timer_irq);
  	}
-@@ -258,7 +282,7 @@
+@@ -258,7 +283,7 @@
  
  		/*  New timer system:  */
  		if (d->pending_timer_interrupts > 0)
@@ -6123,7 +6133,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  }
  
-@@ -276,8 +300,16 @@
+@@ -276,8 +301,16 @@
  	switch (relative_addr) {
  	case R4030_SYS_CONFIG:
  		if (writeflag == MEM_WRITE) {
@@ -6142,7 +6152,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		} else {
  			/*  Reading the config register should give
  			    0x0104 or 0x0410. Why? TODO  */
-@@ -337,8 +369,11 @@
+@@ -337,8 +370,11 @@
  		}
  		break;
  	case R4030_SYS_ISA_VECTOR:
@@ -6156,17 +6166,29 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		{
  			uint32_t x = d->isa_int_asserted
  			    & d->isa_int_enable_mask;
-@@ -356,6 +391,9 @@
+@@ -356,6 +392,21 @@
  		if (writeflag == MEM_WRITE) {
  			d->interval_start = idata;
  			d->interval = d->interval_start;
 +			/*  Clean start: drop any interval-timer backlog that
 +			    accrued before the guest programmed the timer.  */
 +			d->pending_timer_interrupts = 0;
++			/*  #257: honor the guest-programmed rate. The R4030
++			    interval timer counts down at 1 kHz and reloads from
++			    this register, so a write of N interrupts every
++			    (N+1) ms: hz = 1000/(N+1). (OpenBSD 2.2/arc writes 9
++			    -> exactly 100.0 Hz, so its verified boot keeps the
++			    old default and this no-ops.) Compute from the
++			    unsigned idata, not the int-truncated interval_start
++			    (0xffffffff there is -1, and -1+1 would divide by
++			    zero); N >= 0 bounds the rate to (0, 1000] Hz.  */
++			if (d->timer != NULL)
++				timer_update_frequency(d->timer,
++				    1000.0 / ((double) idata + 1.0));
  		} else
  			odata = d->interval_start;
  		break;
-@@ -373,18 +411,18 @@
+@@ -373,18 +424,18 @@
  		break;
  	case R4030_SYS_EXT_IMASK:
  		if (writeflag == MEM_WRITE) {
@@ -6193,7 +6215,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  			if (old_assert_3 && !new_assert_3)
  				INTERRUPT_DEASSERT(d->mips_irq_3);
-@@ -395,17 +433,29 @@
+@@ -395,17 +446,29 @@
  				INTERRUPT_DEASSERT(d->mips_irq_6);
  			else if (!old_assert_6 && new_assert_6)
  				INTERRUPT_ASSERT(d->mips_irq_6);
@@ -6230,6 +6252,16 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  	}
  
+@@ -692,7 +755,8 @@
+ 	    0xf0000000ULL, 4, dev_jazz_jazzio_access, (void *)d,
+ 	    DM_DEFAULT, NULL);
+ 
+-	/*  Add a timer, hardcoded to 100 Hz. TODO: Don't hardcode!  */
++	/*  #257: 100 Hz is only the power-on default; a guest write to
++	    R4030_SYS_IT_VALUE retunes it (see the IT_VALUE case above).  */
+ 	d->timer = timer_add(100.0, timer_tick, d);
+ 	machine_add_tickfunction(devinit->machine, dev_jazz_tick,
+ 	    d, DEV_JAZZ_TICKSHIFT);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_kn01.c GXEMUL-SEC/src/devices/dev_kn01.c
 --- src/devices/dev_kn01.c	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/dev_kn01.c	2026-06-28 23:25:43.276595100 -0500
