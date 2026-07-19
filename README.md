@@ -55,23 +55,27 @@ Oldest first.
 | `5ee491e` | Security review (#130–#154) + feature round (#120–#129): 23 fixes |
 | `9d18d15` | arc: OpenBSD 2.2 headless bring-up + NE2000 networking |
 | `8426be6` | README: document the OpenBSD 2.2/arc + NE2000 round |
-| `deeb998` | Hardening / fidelity / debuggability rounds 17–25 (#155–#250) |
-| `e56f54e` | Round 26 (#251/#252): console host-glue fidelity (output flush + stdin-EOF freeze) |
-| `efb4eea` | CHANGES.patch: regenerate to match the SEC tree (recover missed files) |
-| `4c3420b` | Round 27 (#253): `net_tap_init` — Linux tun/tap clone-device path |
-| `cb85399` | README: reorganize for flow (GXemul intro, change summary, timeline, features) |
-| `58ff040` | Round 28 (#254/#255): MIPS FPU result-correctness — div/sqrt via host IEEE, unified compare, NaN canonicalization |
-| `7b53a4f` | Round 29 (#256): interactive-debugger MIPS breakpoint sign-extension |
-| `7b53e46` | Round 30 (#257): R4030 interval timer honors the guest-programmed rate |
-| `a138bd0` | Round 31 (#258): decoded STATUS/CAUSE/FCSR in the MIPS register dump |
-| `eb7c406` | Round 32 (#259–#261): debugger/net QoL — implicit `-K`, net→`debugmsg`, opt-in break-on-error |
-| `0b5b53e` | Round 33 (#262): LANCE RX-ring exhaustion → CSR0.MISS / descriptor BUFF + drain-fix |
-| `fe3e2b6` | Round 34 (#263): ASC/R4030 DMA accounting — heap disclosure + count over-transfer |
-| `2955644` | Round 35 (#264): ASC zero-length DATA_OUT host-abort → guest disconnect |
-| `4c54c82` | Round 36 (#265/#266): ASC FIFO occupancy + chip-reset IRQ hygiene |
-| `584c377` | Round 37 (#267): R4030 DMA translation-table limit |
-| `accbcbc` | Round 38 (#268): R4030 DMA count-register width mask |
-| `8758562` | Round 39: close the ASC/R4030 DMA audit — document known gaps |
+| `de1398e` | Hardening / fidelity / debuggability rounds 17–25 (#155–#250) |
+| `af0c73b` | Round 26 (#251/#252): console host-glue fidelity (output flush + stdin-EOF freeze) |
+| `4975057` | CHANGES.patch: regenerate to match the SEC tree (recover missed files) |
+| `dee8c1a` | Round 27 (#253): `net_tap_init` — Linux tun/tap clone-device path |
+| `5af5422` | README: reorganize for flow (GXemul intro, change summary, timeline, features) |
+| `9e4239e` | Round 28 (#254/#255): MIPS FPU result-correctness — div/sqrt via host IEEE, unified compare, NaN canonicalization |
+| `bfd4a2c` | Round 29 (#256): interactive-debugger MIPS breakpoint sign-extension |
+| `b679170` | Round 30 (#257): R4030 interval timer honors the guest-programmed rate |
+| `f5d85ca` | Round 31 (#258): decoded STATUS/CAUSE/FCSR in the MIPS register dump |
+| `962bf09` | Round 32 (#259–#261): debugger/net QoL — implicit `-K`, net→`debugmsg`, opt-in break-on-error |
+| `24d6678` | Round 33 (#262): LANCE RX-ring exhaustion → CSR0.MISS / descriptor BUFF + drain-fix |
+| `794c415` | Round 34 (#263): ASC/R4030 DMA accounting — heap disclosure + count over-transfer |
+| `87c062a` | Round 35 (#264): ASC zero-length DATA_OUT host-abort → guest disconnect |
+| `508ab23` | Round 36 (#265/#266): ASC FIFO occupancy + chip-reset IRQ hygiene |
+| `938aa8b` | Round 37 (#267): R4030 DMA translation-table limit |
+| `a749cbe` | Round 38 (#268): R4030 DMA count-register width mask |
+| `4011246` | Round 39: close the ASC/R4030 DMA audit — document known gaps |
+| `5bc4353` | README: document the FPU / debuggability / ASC-R4030 batch (rounds 28–39, #254–#268) |
+| `2dfa3d4` | OUTSTANDING_BUGS: record two pmax/arc emulation-fidelity candidates (cross-arch trueness review) |
+| `fc6e0b1` | OUTSTANDING_BUGS: test-first triage refutes both trueness candidates (no change) |
+| `afd244d` | OUTSTANDING_BUGS: conclude the post-batch pmax/arc fidelity cluster (non-triaged remainder documented) |
 
 ## Feature highlights
 
