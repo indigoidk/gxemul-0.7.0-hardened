@@ -201,6 +201,15 @@ static void dev_asc_reset(struct asc_data *d)
 	d->reg_wo[NCR_CCF] = 2;
 	memcpy(d->reg_ro, d->reg_wo, sizeof(d->reg_ro));
 	d->reg_wo[NCR_SYNCTP] = 5;
+
+	/*  #266: a chip reset (RSTCHIP, the only caller) also releases the
+	    interrupt output.  reg_ro incl. NCRSTAT_INT was cleared above, but
+	    DEVICE_TICK(asc) only asserts on a rising edge and the sole other
+	    deassert is the NCR_INTR read -- so without this a pending IRQ stays
+	    latched (line high, STAT==0) until the guest happens to read INTR.
+	    dev_asc_reset runs only at RSTCHIP, after INTERRUPT_CONNECT.  */
+	INTERRUPT_DEASSERT(d->irq);
+	d->irq_asserted = 0;
 }
 
 
@@ -213,7 +222,9 @@ static int dev_asc_fifo_read(struct asc_data *d)
 {
 	int res = d->fifo[d->fifo_out];
 
-	if (d->fifo_in == d->fifo_out) {
+	if (d->n_bytes_in_fifo == 0) {	/*  #265: fifo_in==fifo_out is also true
+	    when the FIFO is exactly full (16); test the cached count so a full
+	    FIFO drains instead of being read as empty forever.  */
 		/*  #197: (Codex/Fable) reading an empty FIFO must not drive
 		    n_bytes_in_fifo negative -- a later non-DMA selection turns
 		    the negative count into a huge size_t alloc -> exit(). Warn
@@ -239,14 +250,17 @@ static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
 	/*  #197: (Codex/Fable) don't push the FIFO occupancy past its
 	    physical size; a bloated count later becomes a huge size_t alloc
 	    -> exit() (mirror of the read underflow guard).  */
-	if (d->n_bytes_in_fifo >= ASC_FIFO_LEN)
+	if (d->n_bytes_in_fifo >= ASC_FIFO_LEN) {
+		/*  #265: this is the real overflow -- the byte is dropped here.
+		    The old post-write fifo_in==fifo_out check fired on the legal
+		    16th byte instead and could never catch an actual 17th-byte
+		    overrun.  */
+		fatal("dev_asc: WARNING! FIFO overrun on write!\n");
 		return;
+	}
 	d->fifo[d->fifo_in] = data;
 	d->fifo_in = (d->fifo_in + 1) % ASC_FIFO_LEN;
 	d->n_bytes_in_fifo ++;
-
-	if (d->fifo_in == d->fifo_out)
-		fatal("dev_asc: WARNING! FIFO overrun on write!\n");
 }
 
 
@@ -555,7 +569,9 @@ fatal("TODO.......asdgasin\n");
 			d->xferp->msg_out_len = newlen;
 
 			i = oldlen;
-			while (d->fifo_in != d->fifo_out) {
+			while (d->n_bytes_in_fifo > 0) {	/*  #265: see fifo_read;
+			    a full(16) FIFO has fifo_in==fifo_out and would copy 0 of
+			    the bytes just realloc'd into msg_out.  */
 				ch = dev_asc_fifo_read(d);
 				d->xferp->msg_out[i++] = ch;
 #ifdef ASC_DEBUG
@@ -729,7 +745,9 @@ static int dev_asc_select(struct cpu *cpu, struct asc_data *d, int from_id,
 		    &d->xferp->cmd, d->n_bytes_in_fifo, 0);
 
 		i = 0;
-		while (d->fifo_in != d->fifo_out) {
+		while (d->n_bytes_in_fifo > 0) {	/*  #265: a full(16) FIFO has
+		    fifo_in==fifo_out and would copy 0 of the 16 bytes just
+		    allocated (clearflag=0) as the CDB.  */
 			ch = dev_asc_fifo_read(d);
 			d->xferp->cmd[i++] = ch;
 			if (!quiet_mode)
