@@ -372,7 +372,11 @@ DEVICE_ACCESS(jazz)
 		break;
 	case R4030_SYS_DMA0_REGS + 0x10:
 		if (writeflag == MEM_WRITE) {
-			d->dma0_count = idata;
+			/*  #268: the R4030 DMA byte-count register is 20 bits wide;
+			    mask the write so the stored count (and its read-back)
+			    cannot express a transfer longer than the real chip
+			    (R4030_DMA_COUNT_MASK).  */
+			d->dma0_count = idata & R4030_DMA_COUNT_MASK;
 		} else {
 			odata = d->dma0_count;
 		}
