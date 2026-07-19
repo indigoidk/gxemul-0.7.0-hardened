@@ -1,18 +1,25 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
-> ## 2026-07-19 — GXEMUL emulation-fidelity candidates from the cross-arch TRUENESS review (pmax/arc)
-> Two gxemul emulation BUGs identified in the emulation-vs-physical trueness campaign, NOT yet fixed and IN the
-> pmax/arc mandate (candidates for a future round):
-> - **[BUG] arc headless VGA text-console character-drop under load** — `dev_vga` `vga_update_textmode` →
->   `console_putchar` → stdout mirror loses bytes on long/rapid (~70-char) lines (`BOUND`→`BOUN`, mangled hex;
->   surfaced 2026-07-18). Real arc VGA does not drop. DISTINCT device path from the UART serial-drop L12 (fixed
->   as **#251**) — the VGA text mirror, not the DZ/ns16550 TX. Likely the same flush/buffering class as #251;
->   surgical. Workaround: route results through the arc writable raw disk, not the console.
-> - **[BUG] unaligned instruction-fetch exception CLASS — gxemul raises TLBL (ExcCode=2) where real R3000/R4000
->   raise AdEL (ExcCode=4)** for a controlled jump to an unaligned/OOB PC (e.g. `0x42424242`; observed firing #20
->   lprm, noted for #267). Fault-signature fidelity, pmax+arc; extends the #210–#233 exception line. Immaterial to
->   security verdicts (captured PC = attacker bytes either way) but a real class delta. Verify the current ifetch
->   path first (#234/#228 are adjacent).
+> ## 2026-07-19 — GXEMUL trueness candidates TEST-FIRST TRIAGED → both REFUTED (no change; "only change what we can test for")
+> Two gxemul candidates were raised from the cross-arch trueness campaign, then reproduced test-first on the
+> committed builds before any change. **Both NOT-REPRODUCED — neither is a real reachable bug; no fix made:**
+> - **unaligned instruction-fetch exception class (TLBL vs AdEL) — ALREADY CORRECT.** Correction **#228** guards
+>   all six register-indirect PC-setting sites (`cpu_mips_instr.c` 1343/1373/1396/1424/1462/1495: `if (pc & 3)
+>   → EXCEPTION_ADEL`). Live test: pmax `jr ra`/`jalr` with ra=0x42424242 → `cause: ADEL (exccode 4)` on BOTH
+>   R3000 and R4000. `jr`/`jalr` are the only genuine MIPS instructions that can produce an unaligned PC (j/branch
+>   targets are word-aligned by encoding), so the reachable path is fully covered. The residual TLBL appears ONLY
+>   when `pc` is *forced* unaligned in the debugger (non-instruction) — present identically on R3000 AND R4000, so
+>   not R3000-specific and not guest-reachable. The trueness note's "R3000 TLBL" was that debugger artifact.
+> - **arc VGA text-console character-drop — FAITHFUL differential repaint, not a drop.** `vga_update_textmode`
+>   (`dev_vga.c:276`) emits `ESC[y;xH`+char only for cells that CHANGED vs `charcells_outputed`, and never emits
+>   `\n` — correct for a persistent 2D ANSI terminal / the real VGA screen. Live test: a 25-line rapid burst
+>   renders all visible lines + `FINALMARKER…DONE` byte-perfect on a faithful 2D render. The campaign's
+>   `BOUND`→`BOUN` was a LINEARIZATION artifact (ANSI-stripping the paint stream without a terminal model makes
+>   skipped-because-unchanged cells look dropped) plus an INVALID test (arc root shell is `csh`; the burst used
+>   `sh` `while`/`$((…))` → "Illegal variable name"). `console_putchar` writes every byte with the #251 flush
+>   guarantee — nothing is lost at the console layer.
+> Test scripts (scratchpad): `itemA_pmax.py`/`itemA_pmax_jalr.py`/`itemA_arc.py`, `itemB3_arc.sh`/`itemB3_parse.py`.
+> (Latent/optional, NOT live bugs: the generic-fetch-path TLBL divergence is arch-neutral + debugger-only-reachable.)
 > Already-resolved trueness items (NOT open): **L12** serial-drop → #251; **L5** pty/forkpty hang → #252; **L13**
 > UDP-inetd handoff → dispositioned (userspace-NAT topology, reachable via tap **#253**). Inherent GAPs (not
 > fixable without a rewrite): **L1** not-cycle-accurate; **L7** FP/uninitialized-memory lowest-confidence (FP
