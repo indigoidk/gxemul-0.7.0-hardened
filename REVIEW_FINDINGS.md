@@ -913,6 +913,99 @@ The follow-up flagged in #267, and the last item from the #263 ASC + R4030 DMA-s
 - **#268** `devices/dev_jazz.c` (both trees): the R4030 DMA channel-0 byte-count register is **20 bits wide** (`R4030_DMA_COUNT_MASK = 0x000fffff`, previously defined but unused), but the register write stored the **raw 32-bit value**, so a guest could express a DMA transfer **longer than any real R4030** — the extra high bits are physically absent on the chip. The channel-0 count write is now masked to 20 bits; the read-back returns the masked value, and the copy-loop count/clamp (**#263**) and the translation-table bound (**#267**) now see a value that is correctly bounded to the hardware width. **Channel-0 only** (`dma1` stores only its mode register; `dma2`/`dma3` are unmodeled). The mask also clears bits 32–63 before the assign to the `uint32_t` field, so it slightly hardens the `dma_addr + dma0_count` sum in the copy-loop guard and puts the previously-unused header constant to its intended use.
 Verified **empirically**: an instrumented arc boot recorded **0** count writes with bits above the mask (guest SCSI transfers are bounded by **MAXPHYS**, far below 1 MB), so the mask is a **no-op on the verified boot**. Build **0/0** both trees; **arc 13/13 + pmax 15/15 boot → `uid=0(root)`**.
 
+## ASC / R4030 DMA audit — known gaps & deferred items
+
+This records the outcome of the full NCR 53C94 "ASC" SCSI + Jazz R4030 DMA audit (a two-model deep audit —
+Codex 5.6-sol xhigh and Fable — cross-referenced and adjudicated against the source). The reachable
+correctness/safety findings were fixed in rounds 34–38 (#263 DMA count-clamp + heap-disclosure, #264
+zero-length DATA_OUT host-abort → guest disconnect, #265 FIFO full-as-empty, #266 chip-reset IRQ hygiene,
+#267 R4030 translation-table limit, #268 R4030 DMA count-register width mask). The items below were
+deliberately NOT changed — either because they are unreachable by the target guests (Ultrix / NetBSD /
+OpenBSD 2.2 on pmax + arc), because a faithful fix needs infrastructure disproportionate to the low reach, or
+because the "fix" would add more risk to the boot-critical SCSI path than the non-bug it addresses. Each is
+recorded here so the audit is complete and a future round can pick any of them up with full context.
+
+### Assessed and intentionally left as-is (fixing would be a regression risk for ~zero guest benefit)
+
+- **PMAZ DMA address register — reads allowed, direction/alignment not enforced** (`dev_asc.c`
+  `DEVICE_ACCESS(asc_address_reg)`). On real DEC PMAZ-AA hardware this 4-byte register is write-only (reads
+  bus-timeout), bit 31 selects DMA direction, and bit 0 is ignored (halfword alignment). GXemul allows reads,
+  does not enforce the direction bit, and keeps bit 0. **Why left as-is:** every use of the register masks the
+  value with `& (ASC_DMA_SIZE-1)` = `& 0x1FFFF`, so the address is always safely bounded to the 128 KB SRAM
+  buffer and bit 31 is already discarded — there is no memory-safety or data-correctness bug that reaches any
+  guest. Ultrix/BSD program a correct direction and an aligned address, so the alignment/direction/write-only
+  fidelity gaps are never exercised. Making reads fail or rejecting a "wrong-direction" transfer would add a
+  guest-visible behavior change to a boot-critical pmax path with no demonstrated beneficiary. Cosmetic
+  fidelity only.
+
+### Unreachable by the target guests (documented; fix only if a guest is found that needs it)
+
+- **DMA-mode target SELECT sources the CDB from the built-in SRAM even on arc** (`dev_asc.c`, the SELECT-with-
+  DMA path). On arc the command bytes would arrive through the Jazz DMA controller, but the code reads the DEC
+  SRAM buffer (all-zero on arc). Unreachable: the ncr53c9x/esp drivers load the CDB into the FIFO and issue
+  SELECT without the DMA bit (`dmaflag == 0`), which is handled correctly. A `NCR_F_DMASELECT` front-end would
+  expose it.
+- **Message-phase rejection / negotiation / recovery** (`dev_asc.c` MSGACK + MSG-IN/OUT handling). Message
+  Accepted always disconnects (raises DIS) even when ATN is set, and DMA MESSAGE OUT is a stub. Real hardware
+  would transition to MESSAGE OUT for MESSAGE REJECT / abort / parity recovery / sync negotiation. Unreachable:
+  the target disks never disconnect and the guests use no synchronous negotiation on this controller; the
+  normal command-complete path has ATN clear and works.
+- **No two-deep command / interrupt sequencer; ENSEL is a no-op** (`dev_asc.c` command-register dispatch). The
+  53C94 has a two-entry command FIFO and two-level interrupt stacking; GXemul executes each command
+  immediately and ORs causes into one interrupt register. Unreachable: with the synchronous diskimage backend
+  there is no real mid-command disconnect/reselection, so the stacking and ENSEL/DISSEL semantics are dormant.
+- **Non-DMA (PIO) DATA-IN / DATA-OUT are stubs** (`dev_asc.c`). PIO data-in returns zeroes (the source buffer
+  is never populated) and PIO data-out transfers nothing. Unreachable: Ultrix/NetBSD/OpenBSD use DMA for all
+  SCSI data on both machines; only an exotic PIO fallback would hit these.
+- **Power-on/reset identity mixes 53C94 and F9x semantics** (`dev_asc.c` init + reset). CFG3 is initialized
+  with the F9x `CDB` bit before any reset, `dev_asc_reset()` is not called at init, and the readable Config-1
+  bus-ID is forced to 7. Probe/diagnostic-visible only; boot drivers issue Reset Chip then program the ID.
+
+### Deferred — a faithful fix needs infrastructure beyond the audited scope
+
+- **R4030 translation-limit / memory-error FAULT reporting** (the scope-(b) companion to #267). The real R4030
+  raises a translation-limit interrupt (`R4030_DMA_ENAB_TL_IE`) with a fault/invalid-address status readable via
+  `R4030_SYS_DMA_INT_SRC`. GXemul models none of that: there is no DMA interrupt-source register handler, no
+  invalid-address register (pica.h does not even define one), and no DMA fault interrupt wire. #267 stops the
+  out-of-range transfer safely (no bad PTE fetch) but does not raise the guest-visible fault. Modeling it means
+  adding a status register, an invalid-address register, and a new interrupt line — low reach (only a
+  misprogramming/faulting guest), and a spurious interrupt on an unmodeled line could itself break a verified
+  boot.
+- **ASC/R4030 DMA residual + Terminal Count fidelity** (the A2/A4 family, scope-(b) companion to #263). On a
+  short or partial DMA the ASC still reports Terminal Count with a zero residual, and the R4030 count/address
+  registers are not left in a hardware-faithful residual state (the address is not advanced, so a naive
+  residual would be wrong). A correct model needs a live R4030 register file (advancing address + decrementing
+  count during the transfer) with the honored callback return threaded through all three ASC call sites — a
+  coherent standalone correction, deferred because it touches the boot-critical completion path and no target
+  guest exercises a short DMA on the happy boot.
+- **Transfer-Pad against the current nexus** (the scope-(b) companion to #264). Real 53C94 Transfer Pad
+  pads/discards excess bytes on the CURRENT SCSI nexus; GXemul allocates a fresh empty transfer
+  (`dev_asc_newxfer`), which is why #264 had to convert the resulting zero-length DATA_OUT into a guest
+  disconnect. A faithful Transfer Pad (preserve the nexus, pad DATA_OUT with zeros / discard DATA_IN, keep
+  TC/BS/phase correct) plus cleaning up the non-DMA-TRPAD fall-through is a separate correction with its own
+  state-machine risk; the guests only reach TRPAD on error/padding recovery.
+- **FIFO Gross-Error status; chip-reset cur_phase reset; TC preserved across an INTR read** (deferred from
+  #265/#266). Setting the Gross-Error bit on a FIFO overflow, resetting `cur_phase` on a chip reset, and NOT
+  clearing Terminal Count when the interrupt register is read are all datasheet-correct, but each interacts
+  with the empirically-tuned interrupt/phase handling (the INTR-read block is hand-tuned "For Mach/PMAX", next
+  to the function-complete suppression that must not change), and none has a demonstrated victim on the target
+  guests. Deferred, to be done one at a time with instrumentation if a guest is found that needs them.
+
+### Deliberately stubbed and correct for this scope — do NOT "fix"
+
+- **Function-complete (FC) interrupt suppressed after a data transfer** (`dev_asc.c`). Empirically tuned:
+  asserting `NCRINTR_FC` here made Linux/DECstation and OpenBSD/pmax choke. Only `NCRINTR_BS` is raised by
+  design. Leave it.
+- **Target-mode commands** (SNDMSG/SNDSTAT/RECCMD/…) are unimplemented — the diskimage topology has no
+  external initiator, so initiator-only operation is correct.
+- **R4030 DMA channels 1–3** are not modeled — only channel 0 (SCSI) is wired; the others are unused by the
+  target machines.
+- **`R4030_SYS_TL_IVALID` (translation-cache invalidate) is a no-op** — GXemul re-reads the guest PTE on every
+  copy quantum, so it is over-coherent; there is no cached translation to invalidate until a translation cache
+  is introduced.
+- **Reserved read registers** (CCF/test read-back) are not faithfully modeled — the NCR datasheet defines those
+  addresses as reserved, so there is no stable real value to score against.
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
