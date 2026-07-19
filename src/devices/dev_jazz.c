@@ -211,6 +211,20 @@ size_t dev_jazz_dma_controller(void *dma_controller_data,
 	dma_addr = d->dma0_addr;
 	i = 0;
 	while (dma_addr < d->dma0_addr + d->dma0_count && i < (int32_t)len) {
+		/*  #267: bound the translation-table walk by the programmed
+		    R4030 TL_LIMIT (the table's size in bytes; NetBSD/arc and
+		    Linux jazzdma both program it that way, and OpenBSD 2.2/arc
+		    writes 0x8000 = 4096 * 8), so a DMA address past the table
+		    does not read an arbitrary guest word as a PTE.  The real
+		    chip raises a translation-limit fault here (DMA_ENAB_TL_IE /
+		    DMA_INT_SRC); that error path is not modeled, so stop and
+		    report the bytes done so far.  A limit of 0 (never
+		    programmed) leaves DMA unrestricted.  */
+		if (d->dma_translation_table_limit != 0 &&
+		    (uint64_t)(dma_addr >> 12) * 8 >=
+		    d->dma_translation_table_limit)
+			break;
+
 		/* int res = */  cpu->memory_rw(cpu, cpu->mem,
 		    d->dma_translation_table_base + (dma_addr >> 12) * 8,
 		    tr, sizeof(tr), 0, PHYSICAL | NO_EXCEPTIONS);

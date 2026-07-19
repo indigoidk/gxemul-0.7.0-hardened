@@ -6275,7 +6275,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		templ.extra = d;
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_jazz.c GXEMUL-SEC/src/devices/dev_jazz.c
 --- src/devices/dev_jazz.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-18 18:01:09.488314500 -0500
++++ GXEMUL-SEC/src/devices/dev_jazz.c	2026-07-18 20:28:10.289675200 -0500
 @@ -34,7 +34,8 @@
   *  TODO: Figure out how the int enable mask works; it seems to be shifted
   *  10 bits (?) according to NetBSD/arc sources.
@@ -6359,7 +6359,28 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		INTERRUPT_DEASSERT(d->mips_irq_6);
  }
  void jazz_isa_interrupt_assert(struct interrupt *interrupt)
-@@ -209,6 +234,13 @@
+@@ -186,6 +211,20 @@
+ 	dma_addr = d->dma0_addr;
+ 	i = 0;
+ 	while (dma_addr < d->dma0_addr + d->dma0_count && i < (int32_t)len) {
++		/*  #267: bound the translation-table walk by the programmed
++		    R4030 TL_LIMIT (the table's size in bytes; NetBSD/arc and
++		    Linux jazzdma both program it that way, and OpenBSD 2.2/arc
++		    writes 0x8000 = 4096 * 8), so a DMA address past the table
++		    does not read an arbitrary guest word as a PTE.  The real
++		    chip raises a translation-limit fault here (DMA_ENAB_TL_IE /
++		    DMA_INT_SRC); that error path is not modeled, so stop and
++		    report the bytes done so far.  A limit of 0 (never
++		    programmed) leaves DMA unrestricted.  */
++		if (d->dma_translation_table_limit != 0 &&
++		    (uint64_t)(dma_addr >> 12) * 8 >=
++		    d->dma_translation_table_limit)
++			break;
++
+ 		/* int res = */  cpu->memory_rw(cpu, cpu->mem,
+ 		    d->dma_translation_table_base + (dma_addr >> 12) * 8,
+ 		    tr, sizeof(tr), 0, PHYSICAL | NO_EXCEPTIONS);
+@@ -209,6 +248,13 @@
  		if ((phys_addr & 255) == 0 && i + 255 <= (int32_t)len)
  			ncpy = 255;
  
@@ -6373,7 +6394,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		/* int res = */  cpu->memory_rw(cpu, cpu->mem, phys_addr,
  		    &data[i], ncpy, writeflag, PHYSICAL | NO_EXCEPTIONS);
  
-@@ -219,7 +251,8 @@
+@@ -219,7 +265,8 @@
  	/*  TODO: Is this correct?  */
  	d->dma0_count = 0;
  
@@ -6383,7 +6404,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  }
  
  
-@@ -235,15 +268,15 @@
+@@ -235,15 +282,15 @@
  	struct jazz_data *d = (struct jazz_data *) extra;
  
  	/*  Used by NetBSD/arc and OpenBSD/arc:  */
@@ -6408,7 +6429,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		if (d->pending_timer_interrupts > 0)
  			INTERRUPT_ASSERT(d->jazz_timer_irq);
  	}
-@@ -258,7 +291,7 @@
+@@ -258,7 +305,7 @@
  
  		/*  New timer system:  */
  		if (d->pending_timer_interrupts > 0)
@@ -6417,7 +6438,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	}
  }
  
-@@ -276,8 +309,16 @@
+@@ -276,8 +323,16 @@
  	switch (relative_addr) {
  	case R4030_SYS_CONFIG:
  		if (writeflag == MEM_WRITE) {
@@ -6436,7 +6457,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		} else {
  			/*  Reading the config register should give
  			    0x0104 or 0x0410. Why? TODO  */
-@@ -337,8 +378,11 @@
+@@ -337,8 +392,11 @@
  		}
  		break;
  	case R4030_SYS_ISA_VECTOR:
@@ -6450,7 +6471,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		{
  			uint32_t x = d->isa_int_asserted
  			    & d->isa_int_enable_mask;
-@@ -356,6 +400,21 @@
+@@ -356,6 +414,21 @@
  		if (writeflag == MEM_WRITE) {
  			d->interval_start = idata;
  			d->interval = d->interval_start;
@@ -6472,7 +6493,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		} else
  			odata = d->interval_start;
  		break;
-@@ -373,18 +432,18 @@
+@@ -373,18 +446,18 @@
  		break;
  	case R4030_SYS_EXT_IMASK:
  		if (writeflag == MEM_WRITE) {
@@ -6499,7 +6520,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  			if (old_assert_3 && !new_assert_3)
  				INTERRUPT_DEASSERT(d->mips_irq_3);
-@@ -395,17 +454,29 @@
+@@ -395,17 +468,29 @@
  				INTERRUPT_DEASSERT(d->mips_irq_6);
  			else if (!old_assert_6 && new_assert_6)
  				INTERRUPT_ASSERT(d->mips_irq_6);
@@ -6536,7 +6557,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		}
  	}
  
-@@ -692,7 +763,8 @@
+@@ -692,7 +777,8 @@
  	    0xf0000000ULL, 4, dev_jazz_jazzio_access, (void *)d,
  	    DM_DEFAULT, NULL);
  
