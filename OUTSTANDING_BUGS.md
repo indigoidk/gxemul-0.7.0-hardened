@@ -1,5 +1,25 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-19 — GXEMUL emulation-fidelity candidates from the cross-arch TRUENESS review (pmax/arc)
+> Two gxemul emulation BUGs identified in the emulation-vs-physical trueness campaign, NOT yet fixed and IN the
+> pmax/arc mandate (candidates for a future round):
+> - **[BUG] arc headless VGA text-console character-drop under load** — `dev_vga` `vga_update_textmode` →
+>   `console_putchar` → stdout mirror loses bytes on long/rapid (~70-char) lines (`BOUND`→`BOUN`, mangled hex;
+>   surfaced 2026-07-18). Real arc VGA does not drop. DISTINCT device path from the UART serial-drop L12 (fixed
+>   as **#251**) — the VGA text mirror, not the DZ/ns16550 TX. Likely the same flush/buffering class as #251;
+>   surgical. Workaround: route results through the arc writable raw disk, not the console.
+> - **[BUG] unaligned instruction-fetch exception CLASS — gxemul raises TLBL (ExcCode=2) where real R3000/R4000
+>   raise AdEL (ExcCode=4)** for a controlled jump to an unaligned/OOB PC (e.g. `0x42424242`; observed firing #20
+>   lprm, noted for #267). Fault-signature fidelity, pmax+arc; extends the #210–#233 exception line. Immaterial to
+>   security verdicts (captured PC = attacker bytes either way) but a real class delta. Verify the current ifetch
+>   path first (#234/#228 are adjacent).
+> Already-resolved trueness items (NOT open): **L12** serial-drop → #251; **L5** pty/forkpty hang → #252; **L13**
+> UDP-inetd handoff → dispositioned (userspace-NAT topology, reachable via tap **#253**). Inherent GAPs (not
+> fixable without a rewrite): **L1** not-cycle-accurate; **L7** FP/uninitialized-memory lowest-confidence (FP
+> largely #254/#255; uninit zero-fill #244). **[FAITHFUL]** L2 strict-alignment + LE endianness are correct
+> reproductions — do NOT touch. All the trueness doc's #5–#23 security items are [FAITHFUL] gxemul reproductions
+> (they *confirm* fidelity), not emulator defects.
+
 > ## 2026-07-18 — Twenty-eighth round (#254, #255): MIPS FPU result-correctness (4-model panel)
 > Item #1 of the 8-item TODO-triage batch. Applied **#254** (div/sqrt/compare result bugs in `fpu_op`) + **#255**
 > (NaN → legacy-MIPS quiet-NaN canonicalization), 4-model-panel designed+reviewed (Codex xhigh + agy + Fable +
