@@ -1,5 +1,24 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-19 — Post-batch pmax/arc fidelity cluster: CONCLUDED (2 refuted, 2 un-testable, 2 left untriaged)
+> After rounds 28-39 (#254-#268) a final pmax/arc fidelity cluster of 6 candidates was scoped under the rule
+> **"only change what we can test for"** + a full 4-model panel per change. Outcome — **no further corrections
+> made; the pmax/arc hardening is considered complete for this pass:**
+> - **REFUTED by test-first** (details in the entry below): unaligned-ifetch TLBL-vs-AdEL (already correct via
+>   #228) and arc VGA text-console char-drop (faithful differential repaint, mis-measured).
+> - **Un-testable on the rigs → not changed** (per the rule): **S-format FP round-to-nearest**
+>   (`core/float_emul.c:~277`, `ieee_store_float_value` truncates the fraction instead of round-to-nearest →
+>   single-precision 1 ulp low) — reaching it needs hand-assembled single-precision ops (gcc never emits
+>   c.olt.s/etc.; the rig image has no in-guest `cc`), AND the function is SHARED across alpha/m88k/mips/ppc/sh so
+>   the blast radius exceeds pmax/arc; **arc partition LBA signed `int*512`** (`arcbios.c`, defeats the #168 bound
+>   on a hostile partition table) — needs a crafted large-LBA partition image to exercise. Both remain genuine
+>   pre-existing candidates; deferred until a test fixture exists.
+> - **LEFT UNTRIAGED this pass** (low value, deferred): **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket
+>   `mips_irq_3` deassert without clearing `int_asserted` → possible stuck/missed non-timer JAZZ IRQ) — latent
+>   (the arc boot reaches 13/13 without hitting it, so a repro needs a crafted multi-IRQ sequence and the fix
+>   would touch the verified arc boot); **NE2000 invalid-TX log-flood** (`dev_ne2000.c`, SEC-only) — cosmetic log
+>   hygiene, gate the diagnostic if pursued. Neither triaged; recorded here so they aren't lost.
+
 > ## 2026-07-19 — GXEMUL trueness candidates TEST-FIRST TRIAGED → both REFUTED (no change; "only change what we can test for")
 > Two gxemul candidates were raised from the cross-arch trueness campaign, then reproduced test-first on the
 > committed builds before any change. **Both NOT-REPRODUCED — neither is a real reachable bug; no fix made:**
