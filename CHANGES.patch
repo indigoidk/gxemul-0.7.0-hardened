@@ -56,7 +56,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		XDestroyImage(win->fb_ximage);
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/core/debugmsg.c GXEMUL-SEC/src/core/debugmsg.c
 --- src/core/debugmsg.c	2021-04-22 13:04:13.000000000 -0500
-+++ GXEMUL-SEC/src/core/debugmsg.c	2026-07-18 15:31:22.429165800 -0500
++++ GXEMUL-SEC/src/core/debugmsg.c	2026-07-25 18:43:35.765933800 -0500
 @@ -52,7 +52,6 @@
   *  TODO:
   *	New debugger commands:
@@ -144,7 +144,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	debugmsg_set_verbosity_level(subsys, default_verbosity);
  
  	return subsys;
-@@ -499,6 +552,104 @@
+@@ -499,6 +552,119 @@
  
  
  /*
@@ -240,7 +240,22 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		++n;
 +	}
 +
-+	if (n == 0)
++	/*
++	 *  #270: the #261 global break-on-ERROR toggle is state SEPARATE from
++	 *  the per-subsystem levels above: `breakpoint subsystem all error`
++	 *  arms it, and a later `breakpoint subsystem <name> off` clears only
++	 *  that subsystem's level, NOT the global. Without this line the
++	 *  listing shows such a subsystem as unarmed while an ERROR-level
++	 *  message from it still enters the debugger. Display only -- the
++	 *  override itself is unchanged, and is now stated rather than hidden.
++	 */
++	if (debugmsg_break_on_error)
++		printf("Also breaking on ERROR-level messages from ALL"
++		    " subsystems, including subsystems with no breakpoint of"
++		    " their own. (Armed by \"breakpoint subsystem all error\","
++		    " cleared by \"breakpoint subsystem all off\".)\n");
++
++	if (n == 0 && !debugmsg_break_on_error)
 +		printf("No breakpoints on subsystem messages set.\n");
 +}
 +
@@ -249,7 +264,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
   *  debugmsg_init():
   *
   *  Initializes the debugmsg functionality.
-@@ -508,6 +659,11 @@
+@@ -508,6 +674,11 @@
  	debugmsg_nr_of_subsystems = 11;
  	debugmsg_subsystem_name = malloc(sizeof(char*) * debugmsg_nr_of_subsystems);
  	debugmsg_current_verbosity = malloc(sizeof(int) * debugmsg_nr_of_subsystems);;
@@ -5578,8 +5593,24 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_asc.c GXEMUL-SEC/src/devices/dev_asc.c
 --- src/devices/dev_asc.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-18 19:59:34.901212300 -0500
-@@ -201,6 +201,15 @@
++++ GXEMUL-SEC/src/devices/dev_asc.c	2026-07-25 18:43:27.789143100 -0500
+@@ -116,6 +116,15 @@
+ 	int		fifo_out;
+ 	int		n_bytes_in_fifo;		/*  cached  */
+ 
++	/*  #269: one-shot latches for the two guest-reachable FIFO
++	    diagnostics below. (The read-side message says "overrun" for
++	    historical reasons; the condition is a read of an EMPTY FIFO.)
++	    Deliberately NOT cleared by dev_asc_reset() or dev_asc_fifo_flush():
++	    a guest could otherwise re-arm the flood with RSTCHIP. Zeroed by
++	    the memset in dev_asc_init().  */
++	int		fifo_underrun_warned;
++	int		fifo_overrun_warned;
++
+ 	/*  ATN signal:  */
+ 	int		atn;
+ 
+@@ -201,6 +210,15 @@
  	d->reg_wo[NCR_CCF] = 2;
  	memcpy(d->reg_ro, d->reg_wo, sizeof(d->reg_ro));
  	d->reg_wo[NCR_SYNCTP] = 5;
@@ -5595,11 +5626,12 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  }
  
  
-@@ -213,8 +222,16 @@
+@@ -213,8 +231,30 @@
  {
  	int res = d->fifo[d->fifo_out];
  
 -	if (d->fifo_in == d->fifo_out)
+-		fatal("dev_asc: WARNING! FIFO overrun!\n");
 +	if (d->n_bytes_in_fifo == 0) {	/*  #265: fifo_in==fifo_out is also true
 +	    when the FIFO is exactly full (16); test the cached count so a full
 +	    FIFO drains instead of being read as empty forever.  */
@@ -5607,13 +5639,27 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		    n_bytes_in_fifo negative -- a later non-DMA selection turns
 +		    the negative count into a huge size_t alloc -> exit(). Warn
 +		    and return without underflowing.  */
- 		fatal("dev_asc: WARNING! FIFO overrun!\n");
++		/*  #269: warn once per device. A guest looping reads of
++		    NCR_FIFO while empty otherwise emits one host line per read
++		    (measured: 24 reads -> 24 lines). fatal() is deliberately
++		    kept rather than debugmsg(): under -q the post-startup
++		    verbosity settles at VERBOSITY_ERROR (main.c lowers it by
++		    one, but debugmsg_add_verbosity_level() floors at 0), so a
++		    WARNING-level debugmsg would be invisible to the boot-log
++		    hygiene grep, and an ERROR-level one would change the
++		    printed form and would trip #261's global break-on-ERROR
++		    whenever that is armed.  */
++		if (!d->fifo_underrun_warned) {
++			d->fifo_underrun_warned = 1;
++			fatal("dev_asc: WARNING! FIFO overrun!"
++			    " (further occurrences suppressed)\n");
++		}
 +		return res;
 +	}
  
  	d->fifo_out = (d->fifo_out + 1) % ASC_FIFO_LEN;
  	d->n_bytes_in_fifo --;
-@@ -230,12 +247,20 @@
+@@ -230,12 +270,30 @@
   */
  static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
  {
@@ -5625,7 +5671,17 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
 +		    The old post-write fifo_in==fifo_out check fired on the legal
 +		    16th byte instead and could never catch an actual 17th-byte
 +		    overrun.  */
-+		fatal("dev_asc: WARNING! FIFO overrun on write!\n");
++		/*  #269: ...but it fires on EVERY dropped byte, i.e. one host
++		    line per guest store (measured: 24 dropped -> 24 lines), and
++		    fatal() is not verbosity-gated and writes stdout one
++		    character at a time -- the same stream the boot harness
++		    pattern-matches -- so an undrained pipe can block the
++		    single-threaded emulator. Warn once per device.  */
++		if (!d->fifo_overrun_warned) {
++			d->fifo_overrun_warned = 1;
++			fatal("dev_asc: WARNING! FIFO overrun on write!"
++			    " (further occurrences suppressed)\n");
++		}
 +		return;
 +	}
  	d->fifo[d->fifo_in] = data;
@@ -5637,7 +5693,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  }
  
  
-@@ -274,6 +299,17 @@
+@@ -274,6 +332,17 @@
  	int res = 1, all_done = 1;
  	int len, i, ch;
  
@@ -5655,7 +5711,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (!quiet_mode)
  		debug(" { TRANSFER to/from id %i: ", d->reg_wo[NCR_SELID] & 7);
  
-@@ -290,7 +326,8 @@
+@@ -290,7 +359,8 @@
  				    d->reg_wo[NCR_TCM] * 256;
  
  				len--;
@@ -5665,7 +5721,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				debug(" %02x", ch);
  
  				d->incoming_data_addr ++;
-@@ -329,8 +366,11 @@
+@@ -329,8 +399,11 @@
  					    (ASC_DMA_SIZE-1));
  
  				if (lenIn2 > lenIn) {
@@ -5678,7 +5734,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  					lenIn2 = lenIn;
  				}
  
-@@ -406,9 +446,16 @@
+@@ -406,9 +479,16 @@
  				len2 = 65536;
  
  			if (len == 0) {
@@ -5698,7 +5754,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			}
  
  			/*  TODO: Make sure that len2 doesn't go outside
-@@ -423,14 +470,26 @@
+@@ -423,14 +503,26 @@
  				    d->xferp->data_out_offset;
  			}
  
@@ -5726,7 +5782,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
  				if (d->dma_controller != NULL)
  					d->dma_controller(
-@@ -510,7 +569,9 @@
+@@ -510,7 +602,9 @@
  			d->xferp->msg_out_len = newlen;
  
  			i = oldlen;
@@ -5737,7 +5793,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  				ch = dev_asc_fifo_read(d);
  				d->xferp->msg_out[i++] = ch;
  #ifdef ASC_DEBUG
-@@ -684,7 +745,9 @@
+@@ -684,7 +778,9 @@
  		    &d->xferp->cmd, d->n_bytes_in_fifo, 0);
  
  		i = 0;
@@ -5748,7 +5804,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  			ch = dev_asc_fifo_read(d);
  			d->xferp->cmd[i++] = ch;
  			if (!quiet_mode)
-@@ -1166,14 +1229,19 @@
+@@ -1166,14 +1262,19 @@
  			break;
  
  		default:

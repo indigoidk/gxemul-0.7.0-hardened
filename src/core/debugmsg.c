@@ -644,7 +644,22 @@ void debugmsg_print_breakpoints(void)
 		++n;
 	}
 
-	if (n == 0)
+	/*
+	 *  #270: the #261 global break-on-ERROR toggle is state SEPARATE from
+	 *  the per-subsystem levels above: `breakpoint subsystem all error`
+	 *  arms it, and a later `breakpoint subsystem <name> off` clears only
+	 *  that subsystem's level, NOT the global. Without this line the
+	 *  listing shows such a subsystem as unarmed while an ERROR-level
+	 *  message from it still enters the debugger. Display only -- the
+	 *  override itself is unchanged, and is now stated rather than hidden.
+	 */
+	if (debugmsg_break_on_error)
+		printf("Also breaking on ERROR-level messages from ALL"
+		    " subsystems, including subsystems with no breakpoint of"
+		    " their own. (Armed by \"breakpoint subsystem all error\","
+		    " cleared by \"breakpoint subsystem all off\".)\n");
+
+	if (n == 0 && !debugmsg_break_on_error)
 		printf("No breakpoints on subsystem messages set.\n");
 }
 

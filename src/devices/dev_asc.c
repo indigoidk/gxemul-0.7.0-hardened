@@ -116,6 +116,15 @@ struct asc_data {
 	int		fifo_out;
 	int		n_bytes_in_fifo;		/*  cached  */
 
+	/*  #269: one-shot latches for the two guest-reachable FIFO
+	    diagnostics below. (The read-side message says "overrun" for
+	    historical reasons; the condition is a read of an EMPTY FIFO.)
+	    Deliberately NOT cleared by dev_asc_reset() or dev_asc_fifo_flush():
+	    a guest could otherwise re-arm the flood with RSTCHIP. Zeroed by
+	    the memset in dev_asc_init().  */
+	int		fifo_underrun_warned;
+	int		fifo_overrun_warned;
+
 	/*  ATN signal:  */
 	int		atn;
 
@@ -229,7 +238,21 @@ static int dev_asc_fifo_read(struct asc_data *d)
 		    n_bytes_in_fifo negative -- a later non-DMA selection turns
 		    the negative count into a huge size_t alloc -> exit(). Warn
 		    and return without underflowing.  */
-		fatal("dev_asc: WARNING! FIFO overrun!\n");
+		/*  #269: warn once per device. A guest looping reads of
+		    NCR_FIFO while empty otherwise emits one host line per read
+		    (measured: 24 reads -> 24 lines). fatal() is deliberately
+		    kept rather than debugmsg(): under -q the post-startup
+		    verbosity settles at VERBOSITY_ERROR (main.c lowers it by
+		    one, but debugmsg_add_verbosity_level() floors at 0), so a
+		    WARNING-level debugmsg would be invisible to the boot-log
+		    hygiene grep, and an ERROR-level one would change the
+		    printed form and would trip #261's global break-on-ERROR
+		    whenever that is armed.  */
+		if (!d->fifo_underrun_warned) {
+			d->fifo_underrun_warned = 1;
+			fatal("dev_asc: WARNING! FIFO overrun!"
+			    " (further occurrences suppressed)\n");
+		}
 		return res;
 	}
 
@@ -255,7 +278,17 @@ static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
 		    The old post-write fifo_in==fifo_out check fired on the legal
 		    16th byte instead and could never catch an actual 17th-byte
 		    overrun.  */
-		fatal("dev_asc: WARNING! FIFO overrun on write!\n");
+		/*  #269: ...but it fires on EVERY dropped byte, i.e. one host
+		    line per guest store (measured: 24 dropped -> 24 lines), and
+		    fatal() is not verbosity-gated and writes stdout one
+		    character at a time -- the same stream the boot harness
+		    pattern-matches -- so an undrained pipe can block the
+		    single-threaded emulator. Warn once per device.  */
+		if (!d->fifo_overrun_warned) {
+			d->fifo_overrun_warned = 1;
+			fatal("dev_asc: WARNING! FIFO overrun on write!"
+			    " (further occurrences suppressed)\n");
+		}
 		return;
 	}
 	d->fifo[d->fifo_in] = data;
