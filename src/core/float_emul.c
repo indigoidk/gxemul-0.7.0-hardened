@@ -41,6 +41,35 @@
 
 
 /*
+ *  #279: one-shot latches for the two "unimplemented format" diagnostics
+ *  below.  Both were printed by ungated fatal() from a path a guest repeats at
+ *  will: on MIPS every fmt outside {S,D,W,L} maps to 0 here (see
+ *  mips_fmt_to_ieee_fmt[] in cpu_mips_coproc.c) and cpu_mips_instr.c admits PS
+ *  to the slow COP1 path, so ONE add.ps produced 8 host lines -- 6 from
+ *  ieee_interpret_float_value() (three sites, two operands) and 2 from
+ *  ieee_store_float_value() -- measured identically on R3000 and R4000.
+ *
+ *  A latch, not a verbosity gate.  The guest is told nothing here: fd is
+ *  silently written 0, so this line is the only record that the emulator met a
+ *  format it does not model, and exactly one of them should survive into a -q
+ *  run, where a VERBOSITY_DEBUG gate would be invisible.  (#276 gates its
+ *  message instead -- there the guest IS answered, so the line is noise rather
+ *  than a deficiency tripwire.)  fatal() is kept because neither function has
+ *  a cpu or a machine pointer in scope, so debugmsg_cpu() is not available.
+ *
+ *  These flags are PROCESS-GLOBAL, not per-instance like #269's and #277's:
+ *  float_emul.c is a stateless helper with no struct to hang state on.  The
+ *  cost is that with more than one emulated machine only the first one's bad
+ *  format is reported.  That is a deliberate deviation, stated here rather
+ *  than left to be discovered.  One flag per distinct message and never one
+ *  shared flag -- a shared flag would let whichever message fires first mask
+ *  the other one for good.
+ */
+static int interpret_badfmt_warned = 0;
+static int store_badfmt_warned = 0;
+
+
+/*
  *  ieee_interpret_float_value():
  *
  *  Interprets a float value from binary IEEE format into an ieee_float_value
@@ -61,8 +90,12 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 	case IEEE_FMT_W:	n_frac = 31; n_exp = 0; break;
 	case IEEE_FMT_D:	n_frac = 52; n_exp = 11; break;
 	case IEEE_FMT_L:	n_frac = 63; n_exp = 0; break;
-	default:fatal("ieee_interpret_float_value(): "
-		    "unimplemented format %i\n", fmt);
+	default:/*  #279  */
+		if (!interpret_badfmt_warned) {
+			interpret_badfmt_warned = 1;
+			fatal("ieee_interpret_float_value(): "
+			    "unimplemented format %i\n", fmt);
+		}
 	}
 
 	/*  Get the Exponent:  */
@@ -79,8 +112,12 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 		exponent = (x >> n_frac) & ((1 << n_exp) - 1);
 		exponent -= (1 << (n_exp-1)) - 1;
 		break;
-	default:fatal("ieee_interpret_float_value(): unimplemented "
-		    "format %i\n", fmt);
+	default:/*  #279  */
+		if (!interpret_badfmt_warned) {
+			interpret_badfmt_warned = 1;
+			fatal("ieee_interpret_float_value(): unimplemented "
+			    "format %i\n", fmt);
+		}
 	}
 
 	/*  Is this a Not-A-Number?  */
@@ -151,8 +188,12 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 		fraction = (fraction / 2.0) + 1.0;
 		break;
 
-	default:fatal("ieee_interpret_float_value(): "
-		    "unimplemented format %i\n", fmt);
+	default:/*  #279  */
+		if (!interpret_badfmt_warned) {
+			interpret_badfmt_warned = 1;
+			fatal("ieee_interpret_float_value(): "
+			    "unimplemented format %i\n", fmt);
+		}
 	}
 
 	/*  form the value:  */
@@ -213,8 +254,18 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 	case IEEE_FMT_W:	n_frac = 31; n_exp = 0; signofs = 31; break;
 	case IEEE_FMT_D:	n_frac = 52; n_exp = 11; signofs = 63; break;
 	case IEEE_FMT_L:	n_frac = 63; n_exp = 0; signofs = 63; break;
-	default:fatal("ieee_store_float_value(): unimplemented format"
-		    " %i\n", fmt);
+	default:/*  #279: the missing return is the real defect here.  Without
+		    it this default fell out of the switch into the SECOND
+		    switch below, whose default printed a second line for the
+		    same call -- measured 2.00 host lines per store call.  r is
+		    still 0 and the tail below only masks it to 32 bits, so
+		    returning here yields exactly what the old path returned.  */
+		if (!store_badfmt_warned) {
+			store_badfmt_warned = 1;
+			fatal("ieee_store_float_value(): unimplemented format"
+			    " %i\n", fmt);
+		}
+		return 0;
 	}
 
 	switch (fmt) {
@@ -330,8 +381,14 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 		}
 		break;
 	default:/*  TODO  */
-		fatal("ieee_store_float_value(): unimplemented format %i\n",
-		    fmt);
+		/*  #279: unreachable now that the default above returns, but
+		    kept -- and latched with the same flag, so the invariant
+		    holds if that return is ever removed again.  */
+		if (!store_badfmt_warned) {
+			store_badfmt_warned = 1;
+			fatal("ieee_store_float_value(): unimplemented format"
+			    " %i\n", fmt);
+		}
 	}
 
 	if (fmt == IEEE_FMT_S || fmt == IEEE_FMT_W)
