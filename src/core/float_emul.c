@@ -225,7 +225,33 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 		 *  If nf < 0.0, then r2 will begin with a sequence of binary
 		 *  1's, which is ok.
 		 */
-		r3 = (int64_t) nf;
+		/*  #273: NaN, +/-Inf and out-of-range operands must not reach
+		    the cast -- (int64_t) of those is undefined in C, so the
+		    guest-visible result would otherwise depend on the build
+		    host (x86 yields the integer indefinite 0x8000...0, which
+		    the W path below truncates to 0; aarch64 saturates
+		    instead). With the Invalid trap disabled, R3010/R4010
+		    return the largest positive integer for all five cases,
+		    with no sign dependence. W's lower bound is deliberately
+		    <= -2147483649.0 and not < -2147483648.0, because
+		    trunc(-2147483648.5) is -2147483648, which IS
+		    representable; L's is strict, because -2^63 is exactly
+		    representable. 2^63 is spelled as a literal on purpose:
+		    (double)INT64_MAX rounds UP to 2^63, which would let
+		    equality through to the cast.  */
+		if (fmt == IEEE_FMT_W) {
+			if (isnan(nf) || nf >= 2147483648.0 ||
+			    nf <= -2147483649.0)
+				r3 = 0x7fffffff;
+			else
+				r3 = (int64_t) nf;
+		} else {
+			if (isnan(nf) || nf >= 9223372036854775808.0 ||
+			    nf < -9223372036854775808.0)
+				r3 = 0x7fffffffffffffffLL;
+			else
+				r3 = (int64_t) nf;
+		}
 		r2 = r3;
 		r |= r2;
 		break;
