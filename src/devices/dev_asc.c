@@ -525,10 +525,17 @@ fatal("TODO.......asdgasin\n");
 			/*  Copy data from DMA to data_out:  */
 			int len2 = d->reg_wo[NCR_TCL] +
 			    d->reg_wo[NCR_TCM] * 256;
+			int programmed;		/*  #283  */
+			size_t moved = 0;	/*  #283  */
 			len = d->xferp->data_out_len;
 
 			if (len2 == 0)
 				len2 = 65536;
+
+			/*  #283: the count the guest actually asked for,
+			    snapshotted before the clamps below rewrite len2
+			    into the count this transfer may move.  */
+			programmed = len2;
 
 			if (len == 0) {
 				/*  #264: a DATA_OUT transfer with a zero-length
@@ -576,30 +583,99 @@ fatal("TODO.......asdgasin\n");
 				scsi_transfer_allocbuf(&d->xferp->data_out_len,
 				    &d->xferp->data_out, len, 1);
 
+				/*  #283: capture what the controller moved.  */
 				if (d->dma_controller != NULL)
-					d->dma_controller(
+					moved = d->dma_controller(
 					    d->dma_controller_data,
 					    d->xferp->data_out,
 					    len2, 0);
-				else
+				else {
 					memcpy(d->xferp->data_out,
 					    d->dma + (d->dma_address_reg &
 					    (ASC_DMA_SIZE-1)), len2);
-				d->xferp->data_out_offset = len2;
+					moved = len2;
+				}
+				d->xferp->data_out_offset = moved;
 			} else {
 				/*  Continuing a multi-transfer:  */
+				/*  #283: ditto -- fixing only the fresh path
+				    above would leave this one able to commit
+				    an underfilled final chunk.  */
 				if (d->dma_controller != NULL)
-					d->dma_controller(
+					moved = d->dma_controller(
 					    d->dma_controller_data,
 					    d->xferp->data_out +
 						d->xferp->data_out_offset,
 					    len2, 0);
-				else
+				else {
 					memcpy(d->xferp->data_out +
 					    d->xferp->data_out_offset,
 					    d->dma + (d->dma_address_reg &
 					    (ASC_DMA_SIZE-1)), len2);
-				d->xferp->data_out_offset += len2;
+					moved = len2;
+				}
+				d->xferp->data_out_offset += moved;
+			}
+
+			/*
+			 *  #283: the controller's return used to be discarded
+			 *  while data_out_offset was advanced by the REQUESTED
+			 *  len2, so a short transfer still passed the disk
+			 *  layer's "is the buffer full yet" gate and committed
+			 *  bytes the guest never supplied to the disk image --
+			 *  silently, since a short and a complete transfer
+			 *  reported identical STAT/TCL/TCM/STEP/INTR. The
+			 *  fatal() below is the only witness this has.
+			 *
+			 *  ANY short fails the transfer, not just a zero one:
+			 *  fault injection on OpenBSD 2.2/arc panics the guest
+			 *  on a positive partial that is allowed to continue,
+			 *  and survives when it is aborted here. #267's
+			 *  translation-limit break and #268's count mask are
+			 *  themselves sources of a short callback, and this
+			 *  covers them; dev_jazz.c zeroes dma0_count on such a
+			 *  break, so the R4030 cannot resume mid-transfer, but
+			 *  the disconnect makes the guest re-arm anyway.
+			 *
+			 *  len2 is the count AFTER the clamps above: comparing
+			 *  against the programmed one would fire on a benign
+			 *  re-entry where the disk wants less than was offered.
+			 *  len2 > 0 keeps a clamped-to-nothing (or negative)
+			 *  count from being read as a failure.
+			 *
+			 *  A real 53C94 does NOT synthesize a disconnect here;
+			 *  it stalls waiting for a DREQ that never comes, and
+			 *  the measurement shows stalling panics the guest.
+			 *  This is therefore a deliberate ROBUSTNESS
+			 *  APPROXIMATION and not hardware fidelity: an
+			 *  instantaneous emulator cannot express an indefinite
+			 *  bus stall, and DIS is the nearest guest-handleable
+			 *  terminal state. The faithful path is the R4030
+			 *  DMA_INT_SRC fault interrupt, a known gap since #267.
+			 */
+			if (len2 > 0 && moved < (size_t)len2) {
+				int residual = programmed - (int)moved;
+
+				fatal("[ asc: short DATA_OUT DMA, %i of %i "
+				    "bytes moved, offset %i ]\n", (int)moved,
+				    (int)len2, (int)d->xferp->data_out_offset);
+
+				/*  The honest residual, both bytes (#281):
+				    reg_ro[] is uint32_t and the DEC read path
+				    returns the whole word. NCRSTAT_TC is left
+				    CLEAR -- nothing here reached terminal
+				    count.  */
+				d->reg_ro[NCR_TCL] = residual & 255;
+				d->reg_ro[NCR_TCM] = (residual >> 8) & 255;
+
+				/*  Fail BEFORE diskimage_scsicommand() below.
+				    The NCRCMD_TRANS caller turns this into
+				    STATE_DISCONNECTED + NCRINTR_DIS |
+				    NCRSTAT_INT and frees the transfer; it
+				    writes only INTR/STAT/STEP, so the counter
+				    written above survives. #264 already
+				    returns 0 under the same contract.  */
+				return 0;
 			}
 
 			/*  If the disk wants more than we're DMAing,
