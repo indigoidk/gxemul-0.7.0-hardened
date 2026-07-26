@@ -1,5 +1,132 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-26 — Rounds 41–46 (#271–#279): the backlog this batch DOCUMENTED rather than fixed
+> Six rounds shipped **nine corrections** (#271–#279) across `devices/dev_vga.c`, `core/float_emul.c`,
+> `devices/dev_le.c`, `devices/dev_asc.c` and `cpus/cpu_mips.c` — see CHANGELOG / REVIEW_FINDINGS
+> "Forty-first" … "Forty-sixth round". Each round was gated on its own; the batch was then closed with a
+> **holistic regression at HEAD `b38cc4f` built from committed source** (clean rebuild **0 warnings / 0 errors**
+> both trees, 223 pmax / 224 arc objects; **pmax 15/15 + arc 13/13 → `uid=0(root)`**; log hygiene **0** for
+> every string the batch touched; live pmax ping **3/3, 0 % loss**; in-guest `sprintf("%d", ±1e30)` →
+> `+2147483647` both signs; all twelve per-correction probe rigs re-run on the final binaries, plus the
+> `trunc.l` addendum; the #274 would-fire counter still **0** on both a healthy boot and a flood, byte-identical
+> to the pre-change reading; 20/20 machines byte-identical to a pre-batch binary rebuilt from `be95418` on both
+> trees; divergence set still exactly the five known files).
+>
+> **The items below were found and characterized during this batch and deliberately NOT fixed.** Each is
+> recorded with the evidence a next round needs, so the backlog is a record rather than folklore. Line numbers
+> are at HEAD `b38cc4f`.
+>
+> 1. **COP1 ISA-level routing — the best-scoped next-round candidate (fidelity, not hygiene).** An R4000 is
+>    MIPS III, but `cpus/cpu_mips_instr.c:4991-4995` admits `COP1_FMT_PS` (along with S/D/W/L) to `cop1_slow`,
+>    so `add.ps` **executes** on an R4000/R3000 and silently writes `fd = 0x00000000` instead of raising
+>    **Reserved Instruction**. Measured in round 46: one `add.ps` produced 8.0 host lines and a zeroed `fd`,
+>    identically on arc/R4000 and pmax/R3000A; only PS reaches `float_emul.c` at all — every *other* reserved
+>    fmt hits the decoder's own `fatal()` + `goto bad` at `:5006-5008` (fmt 18 and fmt 23 controls: **0**
+>    `float_emul` lines). **The constraint already established, and the reason this is not a one-line deletion:
+>    `include/mips_cpu_types.h` DOES contain `isa_level == 64` CPUs that have FPUs — `5Kc` (:103), `5KE` (:104),
+>    `SB1` (:111), `SR7100` (:112) — for which PS is architecturally plausible (MIPS64r1 defines it; r6 removes
+>    it). So the routing cannot simply be deleted.** The fix has **two halves**: an ISA gate that raises RI below
+>    MIPS-V, *and* the fact that `float_emul.c` models no PS arithmetic whatsoever, so gating alone would leave
+>    those CPUs without a format they are entitled to. Whoever picks this up must decide both. Same family:
+>    **`trunc.l` executes on an R3000A** although it is MIPS III and an R3010 would raise RI — measured in
+>    round 42 and re-measured in this regression. That measurement has a trap worth keeping: the obvious
+>    `sdc1` read-back of the result is itself a MIPS-II 64-bit store an R3000 does not have, so the RI it
+>    raises is easily mistaken for the instruction under test faulting; reading `$f2`/`$f3` back with two
+>    MIPS-I `swc1`s (`probe_273_pmax_l.py`) shows `trunc.l.d` really did run and returned the pinned values.
+>    So the COP1 decoder does not enforce ISA level **anywhere**.
+> 2. **FP rounding mode — `cvt.w` truncates, and `FCSR.RM` is read nowhere.** `cvt.w` of `3.5` yields **3**
+>    where the MIPS default rounding mode (RN, round-to-nearest-even) gives **4**; measured as a deliberate
+>    control in the #273 probe, which carries both a rounding-*sensitive* case (`3.5`) and a rounding-*insensitive*
+>    one (`3.25`) so this defect can never be confused with the conversion defect #273 fixed. A tree-wide grep
+>    finds `MIPS_FPU_FCSR` touched **only** for the condition-code bits and the flush-to-zero bit
+>    (`MIPS_FPU_FLUSH_BIT`, #246): the **rounding-mode field is never decoded anywhere**. **Record the trap:
+>    `cvt.w` should honour `FCSR.RM`, but `trunc.w` is architecturally round-toward-zero *regardless* of RM, so
+>    a future fix must NOT "fix" `trunc.w`.** That is not academic here — `cpu_mips_coproc.c` routes
+>    `cvt.w.fmt` (`:1574`), `trunc.w.fmt` (`:1498`) and `trunc.l.fmt` (`:1485`) through the **same**
+>    `FPU_OP_CVT` call with the same target format, so `cvt.w` and `trunc.w` are currently indistinguishable
+>    downstream: honouring RM requires separating them first. Related and also unfixed: **S-format round-to-nearest** in `ieee_store_float_value()` (truncates the
+>    fraction instead of rounding → single-precision results 1 ulp low), already recorded under round 28 and
+>    still blocked on the same thing — gcc never emits the single-precision compares, so only hand-assembled
+>    tests reach it.
+> 3. **FCSR Invalid-flag signalling — still the documented deferred TODO.** #273 corrected only the *result* of
+>    an invalid FP→integer conversion (the pinned `0x7fffffff` / `0x7fff…ffff`); the Invalid flag is still not
+>    raised on these conversions, and the wider FCSR V/Z/O/U/I cause/flag maintenance + enabled-exception
+>    trapping remains deferred for the reasons recorded under round 28 (needs qNaN/sNaN discrimination,
+>    target-format rounding, R4000-gating so R3000 FCSR stays bit-identical per #246). Noted here because #273's
+>    W bound was deliberately given slack that *would* matter only if Invalid signalling were added later.
+> 4. **LANCE `STP` stamped on the last descriptor of a chained frame** (`devices/dev_le.c`): the end-of-packet
+>    block clears `d->rx_middle_bit` at **`:604`** (and frees the frame), and the `STP` block at **`:610-611`**
+>    then sets `LE_STP` *because* `rx_middle_bit` is clear — so the **last** descriptor of a chained frame is
+>    stamped `STP` as well as `ENP`, and it carries the **whole frame length** in rmd3. A BSD driver reads that
+>    as a complete single-buffer packet (`am7990_rint()` accepts only `STP|ENP` and otherwise prints "dropping
+>    chained buffer"). **Pre-existing** (not introduced by #262 or #274) and **unreachable on both rigs** —
+>    neither guest chains RX, which the #274 would-fire instrumentation measured directly (`rx_calls=14
+>    frames=14` on a healthy boot + ping, `321/321` under flood, `la_extra_reject = 0` in both). Recorded so
+>    that anyone who makes chaining reachable fixes this first.
+> 5. **Console/keyboard FIFO overrun discards the WHOLE queue, not one byte.** Three ring buffers share one
+>    shape — the producer advances/stores and *then* warns, leaving `head == tail`, which every consumer reads
+>    as **EMPTY**: `console/console.c:306-315` (`console_makeavail`, `"console fifo overrun"`),
+>    `devices/dev_dc7085.c:103-110` (`add_to_rx_queue`, `"rx_queue overrun!"`) and
+>    `devices/dev_pckbc.c:129-137` (`pckbc_add_code`, `"queue overrun"` — this one advances the head, warns,
+>    then stores at the new head). So an overrun does not drop the newest byte, it **silently discards every
+>    byte already queued**. **Host-input-driven, not guest-driven** (it needs input arriving faster than the
+>    guest drains it), which is why it is out of the guest→host charter and was not fixed in this batch; it is
+>    also why the boot rigs never hit it (**0** occurrences of all three strings on the pmax and arc boot logs).
+>    A fix would drop the incoming byte and keep the queue, not the other way round.
+> 6. **The Class-A "ungated diagnostic a guest can repeat" remainder in the pmax/arc set.** Rounds 41/44/45/46
+>    fixed the sites that were measured at 1.00+ host lines per guest access; these were **swept and left**:
+>    - **MEASURED on the final binaries** (fresh boot logs, this regression — so these fire during an ordinary
+>      healthy boot): `devices/dev_asc.c:406` `{ asc: data in, lenIn=%i lenIn2=%i }` — **1** hit on pmax, **5**
+>      on arc; `devices/dev_fdc.c:75-78` `[ fdc: write to reg %i: … ]` (a **2+len-call** site: one `fatal()`
+>      for the prefix, one per data byte, one for the closer; the read arm at `:71` is one call) — **2** hits on
+>      arc, 0 on pmax; `devices/dev_pckbc.c:718`
+>      `[ pckbc: TODO: hack for non-8242 … ]` — **1** hit on arc (this is the long-known pre-existing arc-log
+>      line the hygiene greps whitelist). All other swept strings measured **0** on both logs:
+>      `dev_pckbc.c:944` (`write to DATA`), `dev_jazz.c:199` (`dma not enabled?`) and `:207`
+>      (`wrong direction?`), the `promemul/arcbios.c` escape-sequence loop (`:255-266`, one `fatal()` per byte
+>      of an unimplemented sequence), the remaining `dev_le.c` register/SRAM write dumps (`:899-902`,
+>      `:948-951`, `:964-968`), and `cpus/cpu_mips_coproc.c:1327` (`fpu_op(): unimplemented op`) / `:2365`
+>      (`UNIMPLEMENTED coproc%i function`).
+>    - **READ ONLY (static sweep — reachability reasoned from source, amplification not measured):** the
+>      `dev_asc.c` tail — `:357`, `:369`, `:373`, `:396`, `:455` (a bare `printf("WARNING!!!!!!!!! BUG!!!!…")`),
+>      `:487`, `:505`, `:579`, `:611`, `:648`, `:655`, `:760`, `:766`, `:780`. Two neighbours that a naive grep
+>      would add are **compiled out** and are deliberately excluded: `:641` (`#ifdef MACH`) and `:943`
+>      (`#if 0`).
+>    None of these was reproduced test-first, so under the project rule ("only change what we can test for")
+>    none was touched. The two that fire on a healthy boot (`asc: data in`, `fdc: write to reg`) are the
+>    cheapest next targets **because they are already reproducible without a rig**; the rest need a trigger
+>    designed first. Note the sweep's original line numbers were taken at `be95418` and rounds 43–44 have since
+>    shifted them; the numbers above are re-located at HEAD `b38cc4f`.
+> 7. **`devices/dev_wdc.c` guest-reachable `exit()` — out of scope, and stated precisely.** Four
+>    guest-reachable `exit(1)` calls remain at **`:654`, `:669`, `:708`, `:730`**, and **`:708` fires on any
+>    failed ATAPI command** (`WDC: ATAPI scsi error?`). **`machines/machine_pmax.c` does not instantiate the
+>    device at all, and `machines/machine_arc.c`'s `device_add(machine, "wdc addr=0x900001f0, irq=38")` at
+>    `:235` sits inside a `#if 0` (`:232`) whose body begins `Not yet.` (`:233`).** That precision matters: an
+>    earlier, looser phrasing of this item said only "not instantiated", which was corrected during round 41 —
+>    the `device_add` line *does* exist in `machine_arc.c`, it is simply compiled out. So the site is real and
+>    the `exit()` is a genuine defect of the same class as #167/#240/#264/#271, but it is unreachable on either
+>    rig and belongs to a tree-wide `fatal()`/`exit()` hygiene round rather than to the pmax/arc mandate.
+>
+> **Resolved by this batch — do not carry these forward:**
+> - **"In-guest FP microtest blocked" (recorded under round 28) — RESOLVED for the paths that matter.** That
+>   note assumed a future round would have to install a toolchain or inject a static MIPS binary, because the
+>   OpenBSD 2.2 rig image has no working `cc`. Round 42 found the route with no compiler at all: `awk`'s
+>   `printf`/`sprintf` **`%d`** casts a double to a C `long`, which on 32-bit MIPS is exactly the double→int
+>   conversion, so `sprintf("%d", 1e30)` → **2147483647** and `sprintf("%d", -1e30)` → **+2147483647** proves
+>   #273 end-to-end in ordinary compiled guest code (round 28's regression had already reached `div.d`/`sqrt.d`/
+>   `c.lt.d` through plain `awk` arithmetic). Recorded with its trap: **`awk`'s `int()` does NOT exercise this
+>   path** — it stays in floating point (`int(1e30)` prints `1.0000…e+30`, `int(3.9)` yields `4`), so a test
+>   built on `int()` proves nothing. What remains genuinely blocked is only the **single-precision** S-format
+>   work in item 2, which needs hand-assembled instructions gcc never emits.
+> - The open question under #279 — whether the COP1 PS routing could simply be removed — is **answered** (item
+>   1: no, `mips_cpu_types.h` has MIPS64 CPUs with FPUs), so it is no longer an open question, only an
+>   unimplemented fix.
+> - Older, and noticed while auditing this file for stale entries: the seventeenth/eighteenth-round blocks below
+>   still list **"#185 `dev_asc.c` DATA_OUT `data_out_len==0` `exit(1)`"** as deferred. It was **resolved as
+>   #264** (round 35) — the branch now `fatal()`s and returns 0, which the `NCRCMD_TRANS`/`NCRCMD_TRPAD` caller
+>   converts into a guest-visible SCSI disconnect. Recorded here rather than by editing the historical blocks,
+>   which are kept as the audit record.
+
 > ## 2026-07-19 — Post-batch pmax/arc fidelity cluster: CONCLUDED (2 refuted, 2 un-testable, 2 left untriaged)
 > After rounds 28-39 (#254-#268) a final pmax/arc fidelity cluster of 6 candidates was scoped under the rule
 > **"only change what we can test for"** + a full 4-model panel per change. Outcome — **no further corrections

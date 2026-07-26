@@ -16,7 +16,7 @@ untouched upstream tree, and everything after it is the change set summarized be
 
 ## What changed
 
-**~268 numbered corrections** (each tagged `/* #NNN */` in the source) across ~39 review rounds,
+**~279 numbered corrections** (each tagged `/* #NNN */` in the source) across ~46 review rounds,
 in four themes:
 
 1. **Guest→host memory safety & robustness** (the bulk, #1–~#154) — bound guest-controlled
@@ -24,15 +24,22 @@ in four themes:
    guest→host memory boundary, so an untrusted ROM, disk image, or guest cannot drive
    out-of-bounds writes into the host; guest-reachable `exit(1)`/`abort()`/host crashes become
    warn-and-continue.
-2. **Hardware fidelity** (#155–#268) — accuracy to real silicon: MIPS fault-signature fidelity,
+2. **Hardware fidelity** (#155–#279) — accuracy to real silicon: MIPS fault-signature fidelity,
    guest-reachable host halts turned into hardware-plausible faults, R4000 FPU denormal traps,
    MIPS FPU result-correctness (div/sqrt/compare/NaN canonicalization, #254/#255), the R4030
    interval-timer rate (#257), LANCE RX-ring exhaustion signalling (#262), and a **deep NCR 53C94
    (ASC) SCSI + Jazz R4030 DMA audit** (#263–#268): DMA-accounting safety (count clamp,
    heap-disclosure), a guest-reachable `exit(1)` turned into a SCSI disconnect, FIFO-occupancy and
-   chip-reset-IRQ hygiene, and R4030 translation-table / count-register bounds.
+   chip-reset-IRQ hygiene, and R4030 translation-table / count-register bounds. Rounds 40–46
+   (#269–#279) add a pmax/arc **host-abort and diagnostic-hygiene sweep**: a guest-reachable VGA
+   CRTC `exit(1)` (#271), LANCE descriptors held forever instead of dropped or failed (#274/#275),
+   the FP→integer conversion of NaN/±Inf/out-of-range values pinned to the R3010/R4010 result
+   instead of an undefined C cast whose answer depended on the build host (#273), and six
+   guest-repeatable `fatal()` floods either verbosity-gated or latched once per device (#269,
+   #272, #276–#279).
 3. **Debuggability** — subsystem breakpoints, breakpoint hit-counts + "run N" (#248), data
-   write-watchpoints (#250), verbosity gating, and debugger conveniences.
+   write-watchpoints (#250), an honest `breakpoint subsystem` listing (#270), verbosity gating,
+   and debugger conveniences.
 4. **New capabilities** — see [Feature highlights](#feature-highlights).
 
 Every round is regression-gated: **0 errors / 0 warnings** under gcc and clang, a
@@ -76,6 +83,14 @@ Oldest first.
 | `2dfa3d4` | OUTSTANDING_BUGS: record two pmax/arc emulation-fidelity candidates (cross-arch trueness review) |
 | `fc6e0b1` | OUTSTANDING_BUGS: test-first triage refutes both trueness candidates (no change) |
 | `afd244d` | OUTSTANDING_BUGS: conclude the post-batch pmax/arc fidelity cluster (non-triaged remainder documented) |
+| `4ad04c4` | README: refresh commit timeline (post-scrub hashes + recent doc commits) |
+| `be95418` | Round 40 (#269/#270): self-review fixes — ASC FIFO diagnostic flood, breakpoint-listing honesty |
+| `680cb56` | Round 41 (#271/#272): VGA CRTC — guest-reachable host abort → latched `fatal()`; unhandled-index flood → DEBUG gate |
+| `79d04eb` | Round 42 (#273): FP→integer conversion — undefined C cast → the pinned R3010/R4010 result |
+| `5bf592d` | Round 43 (#274/#275): LANCE — descriptors held forever instead of dropped or failed |
+| `d917a66` | Round 44 (#276/#277): ASC — two guest-repeatable diagnostic floods, one gated and one latched |
+| `b93b428` | Round 45 (#278): MIPS exception path — nine ungated `fatal()` calls per low-address guest access |
+| `b38cc4f` | Round 46 (#279): `float_emul.c` — the reserved-format `fatal()` cluster, and a missing `return` |
 
 ## Feature highlights
 
