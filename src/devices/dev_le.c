@@ -270,6 +270,45 @@ static void le_chip_init(struct le_data *d)
 
 
 /*
+ *  le_tx_abort():
+ *
+ *  #275: Hand the current transmit descriptor back to the host with an error,
+ *  instead of leaving it owned by the chip forever.  According to the Am7990
+ *  manual, a buffer error is reported as BUFF (plus UFLO) in tmd3 and ERR in
+ *  tmd1, and "BUFF error disables the transmitter (CSR0 = TXON = 0)"; TINT is
+ *  what tells the driver that a descriptor is ready to be looked at.
+ *
+ *  NOTE:  LE_TBUFF is 0x8000, i.e. the same value as LE_OWN.  It belongs in
+ *  tmd3 ONLY; setting it in tmd1 would put OWN back and recreate the stall.
+ */
+static void le_tx_abort(struct le_data *d, uint16_t *tx_descr)
+{
+	if (d->tx_packet != NULL) {
+		free(d->tx_packet);
+		d->tx_packet = NULL;
+		d->tx_packet_len = 0;
+	}
+
+	tx_descr[1] &= ~LE_OWN;
+	tx_descr[1] |= LE_ERR;
+	tx_descr[3] |= LE_TBUFF | LE_UFLO;
+
+	/*  Write back the descriptor to SRAM:  */
+	le_write_16bit(d, d->tdra + d->txp*8 + 2, tx_descr[1]);
+	le_write_16bit(d, d->tdra + d->txp*8 + 4, tx_descr[2]);
+	le_write_16bit(d, d->tdra + d->txp*8 + 6, tx_descr[3]);
+
+	d->reg[0] |= LE_TINT;
+	d->reg[0] &= ~LE_TXON;
+
+	/*  Go to the next descriptor:  */
+	d->txp ++;
+	if (d->txp >= d->tlen)
+		d->txp = 0;
+}
+
+
+/*
  *  le_tx():
  *
  *  Check the transmitter descriptor ring for buffers that are owned by the
@@ -302,15 +341,49 @@ static void le_tx(struct net *net, struct le_data *d)
 
 		/*
 		 *  Check the OWN bit. If it is zero, then this buffer is
-		 *  not ready to be transmitted yet.  Also check the '1111'
-		 *  mark, and make sure that byte-count is reasonable.
+		 *  not ready to be transmitted yet.
 		 */
 		if (!(tx_descr[1] & LE_OWN))
 			return;
-		if ((tx_descr[2] & 0xf000) != 0xf000)
+
+		/*
+		 *  #275: The chip owns this buffer, but it is not the start of
+		 *  a packet and no packet is in progress.  The Am7990 manual
+		 *  (1986) section 4.5.2 says that the chip then "will simply
+		 *  turn the ownership back over to the host", generate TINT,
+		 *  and go on to the next buffer, without any error indication.
+		 *
+		 *  This has to be decided BEFORE the tmd2 checks below: while
+		 *  polling, the chip reads the status word (tmd1) only, and
+		 *  does not fetch the byte count from tmd2 until it has found
+		 *  both OWN and STP set.
+		 */
+		if (d->tx_packet == NULL && !stp) {
+			debugmsg(d->subsys, "tx", VERBOSITY_DEBUG,
+			    "descr %3i skipped: !stp but tx_packet == NULL",
+			    d->txp);
+			tx_descr[1] &= ~LE_OWN;
+			le_write_16bit(d, d->tdra + d->txp*8 + 2, tx_descr[1]);
+			d->reg[0] |= LE_TINT;
+			d->txp ++;
+			if (d->txp >= d->tlen)
+				d->txp = 0;
+			continue;
+		}
+
+		/*
+		 *  Check the '1111' mark, and make sure that byte-count is
+		 *  reasonable.  #275: a descriptor that fails these tests is
+		 *  returned to the host with an error, instead of being kept
+		 *  chip-owned forever with the guest waiting for it.
+		 */
+		if ((tx_descr[2] & 0xf000) != 0xf000) {
+			le_tx_abort(d, tx_descr);
 			return;
+		}
 		if (buflen < 12 || buflen > 1900) {
 			debugmsg(d->subsys, "tx", VERBOSITY_WARNING, "buflen = %i", buflen);
+			le_tx_abort(d, tx_descr);
 			return;
 		}
 
@@ -319,12 +392,6 @@ static void le_tx(struct net *net, struct le_data *d)
 		    "=> addr=0x%06x, len=%i bytes, STP=%i ENP=%i", d->txp,
 		    tx_descr[0], tx_descr[1], tx_descr[2], tx_descr[3],
 		    bufaddr, buflen, stp, enp);
-
-		if (d->tx_packet == NULL && !stp) {
-			debugmsg(d->subsys, "tx", VERBOSITY_WARNING,
-			    "!stp but tx_packet == NULL");
-			return;
-		}
 
 		if (d->tx_packet != NULL && stp) {
 			debugmsg(d->subsys, "tx", VERBOSITY_WARNING,
@@ -344,11 +411,10 @@ static void le_tx(struct net *net, struct le_data *d)
 		} else {
 			/*  #199: (Codex/Fable) cap the aggregate multi-fragment TX
 			    packet so a guest rearming a non-ENP descriptor can't grow
-			    host memory without bound.  */
+			    host memory without bound.  #275: report the aborted frame
+			    to the guest instead of holding the descriptor forever.  */
 			if ((size_t)d->tx_packet_len + buflen > 65536) {
-				free(d->tx_packet);
-				d->tx_packet = NULL;
-				d->tx_packet_len = 0;
+				le_tx_abort(d, tx_descr);
 				return;
 			}
 			d->tx_packet_len += buflen;
@@ -399,10 +465,51 @@ static void le_tx(struct net *net, struct le_data *d)
 
 
 /*
+ *  le_rx_descr_ok():
+ *
+ *  #274: Can a receive descriptor be used?  It has to carry the '1111' mark,
+ *  and its byte count has to be reasonable.  The very same predicate is used
+ *  both for the descriptor that is about to be filled in and for the lookahead
+ *  at the next one, so that the two cannot drift apart.  (rx_descr2 is the
+ *  descriptor word at offset 4.)
+ */
+static int le_rx_descr_ok(uint16_t rx_descr2)
+{
+	uint32_t buflen = 4096 - (rx_descr2 & 0xfff);
+
+	if ((rx_descr2 & 0xf000) != 0xf000)
+		return 0;
+	if (buflen < 12 || buflen > 1900)
+		return 0;
+
+	return 1;
+}
+
+
+/*
+ *  le_rx_miss():
+ *
+ *  #274: Give up on the frame that is currently being received: report it as
+ *  a missed packet in CSR0, and release it.  Callers return 1, so that
+ *  le_register_fix() stops polling the ingress queue (see #262).
+ */
+static void le_rx_miss(struct le_data *d)
+{
+	d->reg[0] |= LE_MISS;
+	free(d->rx_packet);
+	d->rx_packet = NULL;
+	d->rx_packet_len = 0;
+	d->rx_packet_offset = 0;
+	d->rx_middle_bit = 0;
+}
+
+
+/*
  *  le_rx():
  *
  *  This routine should only be called if RXON is enabled.
- *  Returns non-zero if a frame was dropped because the ring was exhausted.
+ *  Returns non-zero if a frame was dropped, either because the ring was
+ *  exhausted or because the descriptor was unusable (#274).
  */
 static int le_rx(struct net *net, struct le_data *d)
 {
@@ -426,27 +533,34 @@ static int le_rx(struct net *net, struct le_data *d)
 
 		/*
 		 *  Check the OWN bit. If it is zero, then this buffer is
-		 *  not ready to receive data yet.  Also check the '1111'
-		 *  mark, and make sure that byte-count is reasonable.
+		 *  not ready to receive data yet.
 		 */
 		if (!(rx_descr[1] & LE_OWN)) {
 			/*  #262: No chip-owned descriptor is available to
 			    start this frame.  Drop it and report MISS.  A
 			    chained-buffer shortage is detected below, before
 			    ownership of the current descriptor is released.  */
-			d->reg[0] |= LE_MISS;
-			free(d->rx_packet);
-			d->rx_packet = NULL;
-			d->rx_packet_len = 0;
-			d->rx_packet_offset = 0;
-			d->rx_middle_bit = 0;
+			le_rx_miss(d);
 			return 1;
 		}
-		if ((rx_descr[2] & 0xf000) != 0xf000)
-			return 0;
-		if (buflen < 12 || buflen > 1900) {
-			debugmsg(d->subsys, "rx", VERBOSITY_WARNING, "buflen = %i", buflen);
-			return 0;
+
+		/*
+		 *  #274: The descriptor is owned by the chip, but it is not
+		 *  usable.  The lookahead below only lets a frame continue
+		 *  into a descriptor that this very test accepts, so this can
+		 *  only be the FIRST buffer of a frame: nothing has been
+		 *  filled in, and the descriptor is deliberately NOT written
+		 *  back.  Drop the frame just like the exhaustion case above.
+		 *  (The manual gives no status for a descriptor violating the
+		 *  '1111' rule; reporting it as a missed packet is emulator
+		 *  policy, not documented Am7990 behaviour.)
+		 */
+		if (!le_rx_descr_ok(rx_descr[2])) {
+			debugmsg(d->subsys, "rx", VERBOSITY_WARNING,
+			    "descr %i unusable (0x%04x, buflen = %i)",
+			    d->rxp, rx_descr[2], buflen);
+			le_rx_miss(d);
+			return 1;
 		}
 
 		debugmsg(d->subsys, "rx", VERBOSITY_DEBUG,
@@ -512,9 +626,14 @@ static int le_rx(struct net *net, struct le_data *d)
 
 			if (next_rxp >= d->rlen)
 				next_rxp = 0;
+			/*  #274: the next descriptor has to be usable, not
+			    just chip-owned; a descriptor with a bad mark or
+			    byte count cannot hold the rest of this frame.  */
 			if (next_rxp == d->rxp ||
 			    !(le_read_16bit(d,
-			    d->rdra + next_rxp*8 + 2) & LE_OWN)) {
+			    d->rdra + next_rxp*8 + 2) & LE_OWN) ||
+			    !le_rx_descr_ok(le_read_16bit(d,
+			    d->rdra + next_rxp*8 + 4))) {
 				rx_descr[1] |= LE_ERR | LE_RBUFF;
 				free(d->rx_packet);
 				d->rx_packet = NULL;
