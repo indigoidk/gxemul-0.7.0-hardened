@@ -14,7 +14,8 @@
 >
 > **The items below were found and characterized during this batch and deliberately NOT fixed.** Each is
 > recorded with the evidence a next round needs, so the backlog is a record rather than folklore. Line numbers
-> are at HEAD `b38cc4f`.
+> are at HEAD `b38cc4f`; items 8 and 9 were added later and re-verified at HEAD `895af34`, which touches only
+> `README.md` and this file, so every number in the block refers to the same source.
 >
 > 1. **COP1 ISA-level routing — the best-scoped next-round candidate (fidelity, not hygiene).** An R4000 is
 >    MIPS III, but `cpus/cpu_mips_instr.c:4991-4995` admits `COP1_FMT_PS` (along with S/D/W/L) to `cop1_slow`,
@@ -106,6 +107,75 @@
 >    the `device_add` line *does* exist in `machine_arc.c`, it is simply compiled out. So the site is real and
 >    the `exit()` is a genuine defect of the same class as #167/#240/#264/#271, but it is unreachable on either
 >    rig and belongs to a tree-wide `fatal()`/`exit()` hygiene round rather than to the pmax/arc mandate.
+> 8. **S-format store: an overflow produces a NaN encoding where hardware gives ±Inf.** In
+>    `core/float_emul.c`, `ieee_store_float_value()` (`:245`) reaches the shared S/D arm at `:309-310`, whose
+>    `FP_NORMAL` case (`:330`) writes the fraction bits into `r` at `:354-360` and *then* **clamps** the biased
+>    exponent at `:367-368` (`if (exponent >= ((int64_t)1 << n_exp)) exponent = ((int64_t)1 << n_exp) - 1;`)
+>    and ORs it in at `:369` — **without clearing the fraction it has already written**. Exponent 255 with a
+>    non-zero fraction is a **NaN** encoding. The `FP_INFINITE` arm two cases up (`:318-323`) holds the right
+>    answer (`0x7f800000`) and is simply never reached, because the *double* being stored is finite; it is the
+>    single-precision destination that overflows. Measured in this batch's class-B sweep: `1e40` →
+>    **`0x7feb194f`**; a second seat independently measured `1e39` → **`0x7fbc143f`**, `1e300` →
+>    **`0x7fbf21e4`** and `-1e300` → **`0xffbf21e4`**, where hardware gives `0x7f800000` / `0xff800000`. **All
+>    four reproduce bit-for-bit** when the function's own arithmetic is replayed on host doubles, which also
+>    pins the threshold: the clamp first fires at |x| ≥ 2^128 ≈ `3.4028e38`, just above `FLT_MAX` — `3.4e38`
+>    still stores exactly (`0x7f7fc99e`, identical to a host `(float)` cast) while `3.5e38` already yields
+>    `0x7f83a7c6`. (That is a re-derivation, not a live reading; an in-emulator measurement still wants a
+>    hand-assembled `-V step` probe of the round-46 shape.) **The interaction that lets this survive #255 is
+>    the part worth keeping:** the NaN canonicalizer #255 added (`cpus/cpu_mips_coproc.c:1123-1133`) gates on
+>    `fpclassify(nf) == FP_NAN` at `:1128`, and `nf` is the *host double* result — `fpclassify(1e300)` is
+>    `FP_NORMAL`, so the canonicalizer never fires and the bogus NaN reaches `fd` untouched.
+>    **Reachable from ordinary guest FP code**, not only from hand-assembly: `cvt.s.d` of any double past the
+>    threshold (`cpu_mips_coproc.c:1552`, `output_fmt = COP1_FMT_S`) and any `add.s` / `mul.s` / `div.s` whose
+>    result overflows single precision (`:1392`, `:1416`, `:1428`, each passing `output_fmt = fmt`); all of them
+>    reach `fpu_store_float_value()` (`:1105`) → `ieee_store_float_value()` (`:1121`). **Distinct from the
+>    S-format round-to-nearest item in 2 above** — that one is a 1-ulp truncation of the fraction (the same
+>    `:354-360` loop), this one produces the wrong *class* of value.
+>    **The blast radius is wider than #273's, which is the reason it is recorded rather than fixed.** #273 was
+>    confined to the MIPS-only W/L arm and said so; the S/D arm is shared. On the **store** side mips, m88k
+>    (`cpu_m88k_instr.c`), ppc (`cpu_ppc_instr.c:2421`, `:2444`) and sh (`cpu_sh_instr.c`) all store S, and
+>    alpha stores D (`cpu_alpha_instr.c` has zero `IEEE_FMT_S` references); `dev_pvr.c` touches the S arm on the
+>    **interpret** side only (13 `ieee_interpret_float_value(…, IEEE_FMT_S)` calls, no stores). So this needs
+>    the non-MIPS blast-radius gate #279 used, not a MIPS-only one.
+>    **Fix shape one seat proposed, recorded because it is a better shape than three separate S-format
+>    patches:** follow the **#254** precedent and route the S store to the host FPU — a single `(float)` cast
+>    plus a `memcpy` into a `uint32_t` — which collapses **three** defects into one change: this one, the
+>    round-to-nearest truncation (item 2), and the **underflow sign loss** at `:365-366` + `:372-373`, where a
+>    value too small for single precision is clamped to exponent 0 and then `r = 0` discards the sign bit set at
+>    `:312-313` (`-1e-40` stores as `0x00000000`, not `0x80000000`; same replay). On MIPS that third half is
+>    partly masked — #246's guard at `cpu_mips_coproc.c:1115-1119` traps an S-format result below `FLT_MIN`
+>    rather than storing it — but only on EXC4K parts and only while `FCSR.FS` is clear (`fpu_unimpl_trap()`
+>    returns 0 for EXC3K at `:1091-1092`), and the other four families have no such guard at all.
+> 9. **The #182-shaped stale length is still live on the VGA's *accepted* mode paths — latent, and deliberately
+>    left.** In `devices/dev_vga.c` the geometry block that follows a mode change assigns `d->fb_size`
+>    **unconditionally** in both arms — `:924-925` (charcell) and `:929-930` (graphics) — immediately after
+>    calling `dev_fb_resize()` at `:921-923` / `:927-928`, which returns `void` and whose effect is never
+>    checked. `dev_fb_resize()` (`devices/dev_fb.c:123`) has **five** early returns that leave the old buffer
+>    and the old `d->framebuffer_size` in place: `:129-132` (`d == NULL`), `:134-142` (#184, a dimension < 10),
+>    `:147-151` (#156, a dimension > 16384), `:153-157` (`bytes_per_line` overflow) and `:161-165` (total-size
+>    overflow); the buffer and its length are updated only at `:189-190`, past all five. `fb_size` is then used
+>    as a **write bound** at `dev_vga.c:381` (graphics redraw) and `:488` (text redraw), each gating a
+>    `dev_fb_access(…, MEM_WRITE, d->fb)`. That is the same shape as **#182** — a length outliving the resize
+>    that was supposed to change it — which was rated CRITICAL. **Two independent review seats found it.**
+>    **It is NOT guest-reachable on pmax/arc, so it is latent, and the panel's explicit call was to document it
+>    rather than expand round 41 into it:** #271 now `return`s at `:917`, before the block, on a rejected mode,
+>    and all eleven accepted mode bytes are self-consistent — at the default `scaleup == 1`
+>    (`machines/machine.c:91`) every accepted arm resizes to 640×400, 640×350 or 640×480, far inside
+>    `dev_fb_resize()`'s [10, 16384] window, so no accepted mode can take an early return. The only route found
+>    is host configuration rather than guest input: `-Y -26` or lower (`core/main.c:490-501`, and the same shape
+>    in `core/emul_parse.c:545-547`) makes `scaleup > 25` and pushes a charcell width past 16384 — reasoned
+>    from source, **not** exercised.
+>    **Two qualifications, so the item is neither over- nor under-stated.** (a) A stale-too-large `fb_size`
+>    would **not** overrun the host through these two sites: `dev_fb_access()` re-bounds every access against
+>    `d->framebuffer_size` at `dev_fb.c:719-721` (the OB-1 end-span guard), so the observable consequence is
+>    dropped or mis-shaped paint, not a write past the allocation. The *shape* is #182's; the severity is not,
+>    and #182's own severity came from feeding the dyntrans fast-map (`core/memory.c:339`,
+>    `memory_device_update_length()`), which this does not. (b) Noticed while verifying, and belonging to the
+>    same fix: `d->fb_max_x` / `d->fb_max_y`, which supply the **stride** in both bounded expressions
+>    (`:379-380`, `:486-487`), are assigned **only** in `dev_vga_init()` (`:1307-1311`) and are never
+>    recomputed on a mode change — so after even a *successful* resize the address arithmetic still uses the
+>    initial geometry while `fb_size` describes the new one. Whoever fixes the `fb_size` assignment should fix
+>    that in the same pass.
 >
 > **Resolved by this batch — do not carry these forward:**
 > - **"In-guest FP microtest blocked" (recorded under round 28) — RESOLVED for the paths that matter.** That
