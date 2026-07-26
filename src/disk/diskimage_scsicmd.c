@@ -1123,8 +1123,25 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		 *  to set the size of CDROM sectors to 2048.
 		 */
 
-		if (xferp->data_out_offset == 0) {
-			xferp->data_out_len = 12;	/*  TODO  */
+		/*  #285: ask for the 12-byte parameter list, and accept it only
+		    once all 12 bytes have arrived. The gate used to be
+		    `data_out_offset == 0`, i.e. it refused an EMPTY buffer but
+		    accepted a PARTIAL one, and the parse below then read fixed
+		    offsets up to byte 11 out of a buffer whose tail the
+		    controller never supplied: a MODE SELECT(6) with 11 of 12
+		    bytes transferred committed a logical_block_size computed
+		    from a byte that was never sent. #205's guard does not fire
+		    on that, because data_out_len IS 12 on re-entry. This is the
+		    same contract the WRITE gate above already demands of every
+		    caller, and it is the only data_out gate in this file that
+		    was not `!= size`.
+
+		    The assignment stays BEFORE the test on purpose: data_out_len
+		    is 0 on first entry, so testing it before setting it would
+		    compare 0 against 0, never ask for the buffer at all, and
+		    turn every MODE SELECT into a silent no-op.  */
+		xferp->data_out_len = 12;	/*  TODO  */
+		if (xferp->data_out_offset != xferp->data_out_len) {
 			debug("data_out == NULL, wanting %i bytes ]\n",
 			    (int)xferp->data_out_len);
 			return 2;
