@@ -399,12 +399,22 @@ fatal("TODO..............\n");
 				size_t lenIn = d->xferp->data_in_len;
 				size_t lenIn2 = d->reg_wo[NCR_TCL] +
 				    d->reg_wo[NCR_TCM] * 256;
+				size_t programmed;
 				if (lenIn2 == 0)
 					lenIn2 = 65536;
 
+				/*  #281: the count the guest actually asked
+				    for, snapshotted before the clamps below
+				    rewrite lenIn2 into the count that moved.  */
+				programmed = lenIn2;
+
                                 if (lenIn < lenIn2) {
+					/*  #282: lenIn/lenIn2 are size_t, so
+					    passing them to %i was undefined on
+					    LP64. Cast, as the neighbouring
+					    warning below already does.  */
                                         fatal("{ asc: data in, lenIn=%i lenIn2=%i "
-					    "}\n", lenIn, lenIn2);
+					    "}\n", (int)lenIn, (int)lenIn2);
                                 }
 
 				/*  TODO: check lenIn2 in a similar way?  */
@@ -415,11 +425,15 @@ fatal("TODO..............\n");
 					    (ASC_DMA_SIZE-1));
 
 				if (lenIn2 > lenIn) {
-					/*  Zero only what fits in d->dma (lenIn is
-					    already clamped to the buffer); lenIn2 is
-					    the un-clamped guest transfer count.  */
-					memset(d->dma + (d->dma_address_reg &
-					    (ASC_DMA_SIZE-1)), 0, lenIn);
+					/*  #281: the memset that used to stand
+					    here is gone. It zeroed exactly the
+					    region the memcpy below overwrites,
+					    and on arc it zeroed d->dma, which
+					    is not the destination at all. With
+					    an honest residual the driver stops
+					    reading the tail, so zeroing it is
+					    unnecessary rather than merely
+					    redundant.  */
 					lenIn2 = lenIn;
 				}
 
@@ -472,13 +486,35 @@ if (d->dma_controller != NULL)
 					lenIn = lenIn2;
 				}
 
-				lenIn = 0;
+				/*
+				 *  #281: report the transfer honestly. What
+				 *  moved is lenIn2; what the guest programmed
+				 *  is `programmed`. The residual left in the
+				 *  counter is the difference, and Terminal
+				 *  Count is set ONLY when that difference is
+				 *  zero -- this used to store 0 and set TC
+				 *  unconditionally, so a short DATA_IN was
+				 *  bit-for-bit indistinguishable from a
+				 *  complete one and the guest was told the
+				 *  full count had moved. Both bytes are
+				 *  written: on a 1024-byte residual the low
+				 *  byte is 0x00, so writing TCL alone would
+				 *  still read as "complete". TCH is left
+				 *  alone; the counter is 16-bit here. (A
+				 *  count programmed as 0 means 65536, which
+				 *  the 16-bit counter cannot represent -- it
+				 *  reads back as 0 with TC clear, exactly as
+				 *  the status bit exists to disambiguate.)
+				 */
+				lenIn = programmed - lenIn2;
 
 				d->reg_ro[NCR_TCL] = lenIn & 255;
 				d->reg_ro[NCR_TCM] = (lenIn >> 8) & 255;
 
-				/*  Successful DMA transfer:  */
-				d->reg_ro[NCR_STAT] |= NCRSTAT_TC;
+				if (lenIn == 0) {
+					/*  Successful DMA transfer:  */
+					d->reg_ro[NCR_STAT] |= NCRSTAT_TC;
+				}
 			}
 		}
 	} else if (d->cur_phase == PHASE_DATA_OUT) {
