@@ -948,8 +948,24 @@ static int dev_asc_select(struct cpu *cpu, struct asc_data *d, int from_id,
 				debug("%02x ", ch);
 		}
 
-		d->reg_ro[NCR_TCL] = len & 255;
-		d->reg_ro[NCR_TCM] = (len >> 8) & 255;
+		/*
+		 *  #284: the loop above is infallible and exits at i == len,
+		 *  so every one of the `len` bytes has been copied and the
+		 *  honest residual is ZERO. The counter used to be loaded
+		 *  with the FULL count while Terminal Count was asserted --
+		 *  "nothing moved" and "the transfer completed" reported at
+		 *  the same time, which no real 53C94 can do. TC stays set.
+		 *
+		 *  This is a conformance fix, not a guest-visible one: the
+		 *  next DMA command reloads the counter from the write-only
+		 *  registers, so the stale value was overwritten before any
+		 *  data phase could read it. It is not a latent path either,
+		 *  though -- OpenBSD/pmax issues SEL_ATN|DMA for every SCSI
+		 *  command and reaches this 1659 times per boot. (arc preloads
+		 *  the CDB into the FIFO and never gets here.)
+		 */
+		d->reg_ro[NCR_TCL] = 0;
+		d->reg_ro[NCR_TCM] = 0;
 
 		d->reg_ro[NCR_STAT] |= NCRSTAT_TC;
 	}
