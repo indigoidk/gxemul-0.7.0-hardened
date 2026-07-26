@@ -1920,23 +1920,36 @@ void mips_cpu_exception(struct cpu *cpu, int exccode, int tlb, uint64_t vaddr,
 		char *symbol = get_symbol_name(&cpu->machine->symbol_context,
 		    cpu->pc, &offset);
 
-		// TODO: debugmsg SUBSYS_CPU, or better: SUBSYS_EXCEPTION
-		// VERBOSITY_WARNING since this is a relatively sure sign of a bug.
-
-		fatal("[ ");
-		if (cpu->machine->ncpus > 1)
-			fatal("cpu%i: ", cpu->cpu_id);
-		fatal("warning: LOW reference: vaddr=");
-		if (cpu->is_32bit)
-			fatal("0x%08" PRIx32, (uint32_t) vaddr);
-		else
-			fatal("0x%016" PRIx64, (uint64_t) vaddr);
-		fatal(", exception %s, pc=", exception_names[exccode]);
-		if (cpu->is_32bit)
-			fatal("0x%08" PRIx32, (uint32_t) cpu->pc);
-		else
-			fatal("0x%016" PRIx64, (uint64_t)cpu->pc);
-		fatal(" <%s> ]\n", symbol? symbol : "(no symbol)");
+		/*  #278: nine ungated fatal() calls built this one host line,
+		    once per guest access to a low address: measured 1.00 lines
+		    per access on both R4000/arc and R3000/pmax. The site sits
+		    OUTSIDE the !quiet_mode block above, so -q did not silence
+		    it either. One debugmsg_cpu() with the same payload; the
+		    "cpu%i: " prefix is now supplied by the helper.
+		    DEBUG, not the WARNING the old TODO asked for: a normal run
+		    settles at VERBOSITY_WARNING, so WARNING would print on
+		    every call, while under -q the level floors at
+		    VERBOSITY_ERROR, so WARNING would be invisible in exactly
+		    the mode the boot harness greps -- the one level that is
+		    both too loud and too quiet. And with a non-zero ASID this
+		    fires on every userland NULL dereference, ordinary guest
+		    behaviour rather than an emulator deficiency. Deliberately
+		    NOT wrapped in ENOUGH_VERBOSITY(): debugmsg.c:181 skips the
+		    verbosity test while single_step is set and for subsystem
+		    breakpoints, so a pre-gate would hide this under -V step
+		    and keep `breakpoint subsystem exception` from firing here.
+		    Reproduce with ASID != 0; on a cold rig the zeroed TLB
+		    entry matches vaddr 0 with V=0, which is a TLB *invalid*,
+		    not a refill, and tlb is 0 here.  */
+		int w = cpu->is_32bit? 8 : 16;
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "LOW reference",
+		    VERBOSITY_DEBUG,
+		    "vaddr=0x%0*" PRIx64 ", exception %s, pc=0x%0*" PRIx64
+		    " <%s>",
+		    w, (uint64_t) (cpu->is_32bit? (uint32_t)vaddr : vaddr),
+		    exception_names[exccode],
+		    w, (uint64_t) (cpu->is_32bit? (uint32_t)cpu->pc : cpu->pc),
+		    symbol? symbol : "(no symbol)");
 	}
 
 	/*  Clear the exception code bits of the cause register...  */
