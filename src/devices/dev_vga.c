@@ -115,6 +115,13 @@ struct vga_data {
 	unsigned char	crtc_reg_select;
 	unsigned char	crtc_reg[256];
 
+	/*  #271: one-shot latch for the unimplemented-video-mode warning
+	    (crtc_reg[0xff] holding a mode byte that is not listed below).
+	    Deliberately NOT cleared by register_reset(): a guest could
+	    otherwise re-arm the warning by selecting an accepted mode in
+	    between. Zeroed by the memset in dev_vga_init().  */
+	int		invalid_mode_warned;
+
 	unsigned char	palette_read_index;
 	char		palette_read_subindex;
 	unsigned char	palette_write_index;
@@ -886,9 +893,28 @@ static void vga_crtc_reg_write(struct machine *machine, struct vga_data *d,
 			    2 * machine->x11_md.scaleup;
 			break;
 		default:
-			fatal("TODO! video mode change hack (mode 0x%02x)\n",
-			    d->crtc_reg[0xff]);
-			exit(1);
+			/*  #271: a guest must not be able to exit() the host
+			    (mirrors #167, #240 and #264): two guest byte
+			    stores (index 0xff, then an unlisted mode byte)
+			    killed the emulator process with exit code 1.
+			    Return rather than break: a REJECTED mode must
+			    have no side effects, and falling through would
+			    clear the screen and run reset_palette() with
+			    grayscale == 0. d->crtc_reg[0xff] is deliberately
+			    left holding the rejected byte -- every other
+			    unhandled CRTC index is RAM-backed too, and the
+			    previously accepted mode is not reconstructible
+			    (0x00/0x01, 0x02/0x03 and 0x09/0x0d give identical
+			    geometry). Warn once per device: without exit(1)
+			    an ungated fatal() in a guest loop would flood the
+			    host console (the #269 shape).  */
+			if (!d->invalid_mode_warned) {
+				d->invalid_mode_warned = 1;
+				fatal("TODO! video mode change hack (mode "
+				    "0x%02x) (further occurrences suppressed"
+				    ")\n", d->crtc_reg[0xff]);
+			}
+			return;
 		}
 
 		if (d->cur_mode == MODE_CHARCELL) {
@@ -929,7 +955,14 @@ static void vga_crtc_reg_write(struct machine *machine, struct vga_data *d,
 		reset_palette(d, grayscale);
 		register_reset(d);
 		break;
-	default:fatal("[ vga_crtc_reg_write: regnr=0x%02x idata=0x%02x ]\n",
+	/*  #272: unhandled CRTC index. Only 0x0a-0x0f are handled above, so
+	    every ordinary horizontal/vertical timing register a real VGA
+	    driver writes during a mode set lands here -- an ungated fatal()
+	    emitted one host line per guest data store. This is ordinary
+	    unimplemented traffic rather than a deficiency tripwire, so gate
+	    it at DEBUG level: silent in a normal run.  */
+	default:debugmsg(SUBSYS_DEVICE, "vga", VERBOSITY_DEBUG,
+		    "vga_crtc_reg_write: regnr=0x%02x idata=0x%02x",
 		    regnr, idata);
 	}
 }

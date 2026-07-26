@@ -8969,8 +8969,22 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/dev_vga.c GXEMUL-SEC/src/devices/dev_vga.c
 --- src/devices/dev_vga.c	2021-04-22 13:04:20.000000000 -0500
-+++ GXEMUL-SEC/src/devices/dev_vga.c	2026-06-28 23:25:43.536717500 -0500
-@@ -258,6 +258,13 @@
++++ GXEMUL-SEC/src/devices/dev_vga.c	2026-07-25 23:51:47.171887500 -0500
+@@ -115,6 +115,13 @@
+ 	unsigned char	crtc_reg_select;
+ 	unsigned char	crtc_reg[256];
+ 
++	/*  #271: one-shot latch for the unimplemented-video-mode warning
++	    (crtc_reg[0xff] holding a mode byte that is not listed below).
++	    Deliberately NOT cleared by register_reset(): a guest could
++	    otherwise re-arm the warning by selecting an accepted mode in
++	    between. Zeroed by the memset in dev_vga_init().  */
++	int		invalid_mode_warned;
++
+ 	unsigned char	palette_read_index;
+ 	char		palette_read_subindex;
+ 	unsigned char	palette_write_index;
+@@ -258,6 +265,13 @@
  	char s[50];
  	int i, oldcolor = -1, printed_last = 0;
  
@@ -8984,7 +8998,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	for (i=start; i<=end; i+=2) {
  		unsigned char ch = d->charcells[base+i];
  		int fg = d->charcells[base+i+1] & 15;
-@@ -342,13 +349,16 @@
+@@ -342,13 +356,16 @@
  			int addr = (y * d->max_x + x) * d->bits_per_pixel;
  			switch (d->bits_per_pixel) {
  			case 8:	addr >>= 3;
@@ -9003,7 +9017,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  					c = d->gfx_mem[addr >> 1] >> 4;
  				else
  					c = d->gfx_mem[addr >> 1] & 0xf;
-@@ -405,6 +415,13 @@
+@@ -405,6 +422,13 @@
  	base = ((d->crtc_reg[VGA_CRTC_START_ADDR_HIGH] << 8)
  	    + d->crtc_reg[VGA_CRTC_START_ADDR_LOW]) * 2;
  
@@ -9017,7 +9031,7 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  	if (!machine->x11_md.in_use)
  		vga_update_textmode(machine, d, base, start, end);
  
-@@ -604,10 +621,32 @@
+@@ -604,10 +628,32 @@
  		x2 = (relative_addr+len-1) % d->max_x;
  
  		if (writeflag == MEM_WRITE) {
@@ -9054,6 +9068,54 @@ diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'fon
  		break;
  	case GRAPHICS_MODE_4BIT:
  		y = relative_addr * 8 / d->max_x;
+@@ -847,9 +893,28 @@
+ 			    2 * machine->x11_md.scaleup;
+ 			break;
+ 		default:
+-			fatal("TODO! video mode change hack (mode 0x%02x)\n",
+-			    d->crtc_reg[0xff]);
+-			exit(1);
++			/*  #271: a guest must not be able to exit() the host
++			    (mirrors #167, #240 and #264): two guest byte
++			    stores (index 0xff, then an unlisted mode byte)
++			    killed the emulator process with exit code 1.
++			    Return rather than break: a REJECTED mode must
++			    have no side effects, and falling through would
++			    clear the screen and run reset_palette() with
++			    grayscale == 0. d->crtc_reg[0xff] is deliberately
++			    left holding the rejected byte -- every other
++			    unhandled CRTC index is RAM-backed too, and the
++			    previously accepted mode is not reconstructible
++			    (0x00/0x01, 0x02/0x03 and 0x09/0x0d give identical
++			    geometry). Warn once per device: without exit(1)
++			    an ungated fatal() in a guest loop would flood the
++			    host console (the #269 shape).  */
++			if (!d->invalid_mode_warned) {
++				d->invalid_mode_warned = 1;
++				fatal("TODO! video mode change hack (mode "
++				    "0x%02x) (further occurrences suppressed"
++				    ")\n", d->crtc_reg[0xff]);
++			}
++			return;
+ 		}
+ 
+ 		if (d->cur_mode == MODE_CHARCELL) {
+@@ -890,7 +955,14 @@
+ 		reset_palette(d, grayscale);
+ 		register_reset(d);
+ 		break;
+-	default:fatal("[ vga_crtc_reg_write: regnr=0x%02x idata=0x%02x ]\n",
++	/*  #272: unhandled CRTC index. Only 0x0a-0x0f are handled above, so
++	    every ordinary horizontal/vertical timing register a real VGA
++	    driver writes during a mode set lands here -- an ungated fatal()
++	    emitted one host line per guest data store. This is ordinary
++	    unimplemented traffic rather than a deficiency tripwire, so gate
++	    it at DEBUG level: silent in a normal run.  */
++	default:debugmsg(SUBSYS_DEVICE, "vga", VERBOSITY_DEBUG,
++		    "vga_crtc_reg_write: regnr=0x%02x idata=0x%02x",
+ 		    regnr, idata);
+ 	}
+ }
 diff -ruN -x '*.o' -x 'tmp_*.c' -x 'auto*.c' -x 'generate_*' -x Makefile -x 'font8x*.c' -x ppc_spr_strings.h -x '*.d' -x gxemul -x '_testprog*' -x config.h -x '*.stackdump' -x .index src/devices/makeautodev.sh GXEMUL-SEC/src/devices/makeautodev.sh
 --- src/devices/makeautodev.sh	2021-04-22 13:04:20.000000000 -0500
 +++ GXEMUL-SEC/src/devices/makeautodev.sh	2026-06-28 23:25:43.560306800 -0500
