@@ -67,15 +67,42 @@ DEVICE_ACCESS(fdc)
 	switch (relative_addr) {
 	case 0x04:
 		break;
-	default:if (writeflag==MEM_READ) {
-			fatal("[ fdc: read from reg %i ]\n",
-			    (int)relative_addr);
+	default:/*
+		 *  #280: this dummy skeleton models exactly one register --
+		 *  0x04, the Main Status Register, handled above -- so every
+		 *  other offset lands here, and an ungated fatal() emitted one
+		 *  host line per guest access (measured: 1.00 lines/access,
+		 *  read and write alike).
+		 *
+		 *  Gated at DEBUG like #276, NOT latched like #277/#279,
+		 *  because the guest IS told: the probe fails through modelled
+		 *  behaviour and the OS draws the right conclusion by itself
+		 *  ("fdc at pica0 slot 2 offset 0x0 not configured"). A latch
+		 *  would be actively wrong here -- fdcprobe's reset pulse is
+		 *  TWO writes to reg 2 (0x00, then FDO_FRST), and a latch
+		 *  would suppress the second one, the only interesting thing
+		 *  this site shows.
+		 *
+		 *  The write arm's 2+len fatal() calls built ONE line between
+		 *  them (only the closer carried the newline); they collapse
+		 *  into a single debugmsg with the bytes pre-formatted into a
+		 *  buffer sized from the register array, never from len.
+		 */
+		if (writeflag==MEM_READ) {
+			debugmsg(SUBSYS_DEVICE, "fdc", VERBOSITY_DEBUG,
+			    "read from reg %i", (int)relative_addr);
 			odata = d->reg[relative_addr];
 		} else {
-			fatal("[ fdc: write to reg %i:", (int)relative_addr);
-			for (i=0; i<len; i++)
-				fatal(" %02x", data[i]);
-			fatal(" ]\n");
+			char buf[3 * DEV_FDC_LENGTH + 1];
+			size_t p = 0;
+
+			buf[0] = '\0';
+			for (i=0; i<len && i<DEV_FDC_LENGTH; i++)
+				p += snprintf(buf + p, sizeof(buf) - p,
+				    " %02x", data[i]);
+
+			debugmsg(SUBSYS_DEVICE, "fdc", VERBOSITY_DEBUG,
+			    "write to reg %i:%s", (int)relative_addr, buf);
 			d->reg[relative_addr] = idata;
 		}
 	}
