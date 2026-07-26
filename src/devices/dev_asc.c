@@ -125,6 +125,13 @@ struct asc_data {
 	int		fifo_underrun_warned;
 	int		fifo_overrun_warned;
 
+	/*  #277: one-shot latches for the two guest-repeatable transfer
+	    diagnostics. SEPARATE fields on purpose: a single shared flag would
+	    let whichever message fires first mask the other one for good.
+	    Not cleared by dev_asc_reset(), same rule as #269.  */
+	int		unknown_phase_warned;
+	int		newxfer_warned;
+
 	/*  ATN signal:  */
 	int		atn;
 
@@ -305,8 +312,17 @@ static void dev_asc_fifo_write(struct asc_data *d, unsigned char data)
 static void dev_asc_newxfer(struct asc_data *d)
 {
 	if (d->xferp != NULL) {
-		printf("WARNING! dev_asc_newxfer(): freeing previous"
-		    " transfer\n");
+		/*  #277: this fires on two SELECTs without an intervening
+		    MSGOK, which a guest can repeat forever (measured: one host
+		    line per store). Warn once per device. fatal() rather than
+		    the bare printf() that used to be here, so the message is
+		    decorated like the rest of this file. The transfer itself
+		    is still freed every time.  */
+		if (!d->newxfer_warned) {
+			d->newxfer_warned = 1;
+			fatal("WARNING! dev_asc_newxfer(): freeing previous"
+			    " transfer (further occurrences suppressed)\n");
+		}
 		scsi_transfer_free(d->xferp);
 		d->xferp = NULL;
 	}
@@ -648,8 +664,24 @@ fatal("TODO.......asdgasin\n");
 		    d->reg_wo[NCR_SELID] & 7, dmaflag, 0);
 		return res;
 	} else {
-		fatal("!!! TODO: unknown/unimplemented phase "
-		    "in transfer: %i\n", d->cur_phase);
+		/*  #277: the transfer tail leaves cur_phase == PHASE_STATUS,
+		    which no branch above handles, so a guest that keeps issuing
+		    transfer commands lands here once per store (measured
+		    together with the newxfer warning above at 2.00 host lines
+		    per store). Warn once per device.
+		    LATCHED RATHER THAN VERBOSITY-GATED, unlike the stray-access
+		    messages of #276 in this same file: this arm sets no
+		    interrupt, so the transfer simply hangs and the guest is
+		    never told through any other channel. A DEBUG gate would
+		    leave a wedged guest completely silent under -q -- the mode
+		    the boot harness runs in -- whereas a latch keeps exactly
+		    one line in the log it greps.  */
+		if (!d->unknown_phase_warned) {
+			d->unknown_phase_warned = 1;
+			fatal("!!! TODO: unknown/unimplemented phase "
+			    "in transfer: %i (further occurrences "
+			    "suppressed)\n", d->cur_phase);
+		}
 	}
 
 	/*  Redo the command if data was just sent using DATA_OUT:  */
@@ -965,12 +997,26 @@ DEVICE_ACCESS(asc)
 		    relative_addr, data, len, writeflag,
 		    d->turbochannel);
 	} else {
+		/*  #276: every access to an offset this device does not model
+		    lands here (on arc/PICA that is all of 0x10..0xfff), and an
+		    ungated fatal() emitted one host line per guest access
+		    (measured: 1.00 lines/access). This is ordinary probing
+		    traffic for registers we do not implement, not a deficiency
+		    tripwire -- and unlike the latched sites in #277 the guest
+		    does get an answer (a read returns odata, a write is
+		    dropped), so nothing hangs waiting for a message that isn't
+		    printed. Gate it at DEBUG level: silent in a normal run,
+		    shown at -v -v or with `break device`.  (relative_addr is a
+		    uint64_t, so cast it for %x as the disabled debug block at
+		    the top of this function already does.)  */
 		if (writeflag==MEM_READ) {
-			fatal("[ asc: read from 0x%04x: 0x%02x ]\n",
-			    relative_addr, (int)odata);
+			debugmsg(SUBSYS_DEVICE, "asc", VERBOSITY_DEBUG,
+			    "read from 0x%04x: 0x%02x",
+			    (int)relative_addr, (int)odata);
 		} else {
-			fatal("[ asc: write to  0x%04x: 0x%02x ]\n",
-			    relative_addr, (int)idata);
+			debugmsg(SUBSYS_DEVICE, "asc", VERBOSITY_DEBUG,
+			    "write to  0x%04x: 0x%02x",
+			    (int)relative_addr, (int)idata);
 		}
 	}
 
