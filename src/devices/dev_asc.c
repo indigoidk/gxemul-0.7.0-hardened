@@ -400,6 +400,7 @@ fatal("TODO..............\n");
 				size_t lenIn2 = d->reg_wo[NCR_TCL] +
 				    d->reg_wo[NCR_TCM] * 256;
 				size_t programmed;
+				size_t moved = 0;	/*  #286  */
 				if (lenIn2 == 0)
 					lenIn2 = 65536;
 
@@ -452,15 +453,65 @@ fatal("TODO..............\n");
 				 *  the DECstation 5000/200 built-in DMA
 				 *  region.
 				 */
+				/*  #286: capture what the controller actually
+				    moved; the built-in DMA region always moves it
+				    all.  */
 				if (d->dma_controller != NULL)
-					d->dma_controller(
+					moved = d->dma_controller(
 					    d->dma_controller_data,
 					    d->xferp->data_in,
 					    lenIn2, 1);
-				else
+				else {
 					memcpy(d->dma + (d->dma_address_reg &
 					    (ASC_DMA_SIZE-1)),
 					    d->xferp->data_in, lenIn2);
+					moved = lenIn2;
+				}
+
+				/*
+				 *  #286: the controller's return used to be
+				 *  discarded, so the residual below came from the
+				 *  count REQUESTED rather than the count that
+				 *  MOVED: when programmed == lenIn2 it read as 0
+				 *  with NCRSTAT_TC set, making a short DATA_IN
+				 *  indistinguishable from a complete one while the
+				 *  guest's buffer kept its stale tail. The arc
+				 *  driver does read this counter (ASC_TC_GET, six
+				 *  sites) even though it ignores the TC status bit.
+				 *
+				 *  moved is compared post-clamp, so a target that
+				 *  merely offered less than was programmed is not
+				 *  read as a controller failure; all three counts
+				 *  are size_t with moved <= lenIn2 <= programmed,
+				 *  so the subtraction cannot underflow. Placed
+				 *  BEFORE the multitransfer block, which advances
+				 *  data_in by lenIn2 and would discard the bytes
+				 *  that never arrived. The TRANS/TRPAD caller
+				 *  writes only INTR/STAT/STEP, so the counter set
+				 *  here survives (#264/#283 contract).
+				 *
+				 *  Reports the fault; does not repair it. A real
+				 *  53C94 would stall awaiting a DREQ, so the
+				 *  disconnect is the same robustness approximation
+				 *  as #283, not fidelity -- and the transfer is
+				 *  abandoned rather than retried, because
+				 *  NCRCMD_ENSEL below is an unimplemented no-op.
+				 *  Ending the transfer normally instead was
+				 *  measured at two injection points and panics the
+				 *  guest. See the CHANGELOG round block.
+				 */
+				if (lenIn2 > 0 && moved < lenIn2) {
+					size_t residual = programmed - moved;
+
+					fatal("[ asc: short DATA_IN DMA, %i of %i"
+					    " bytes moved ]\n", (int)moved,
+					    (int)lenIn2);
+
+					d->reg_ro[NCR_TCL] = residual & 255;
+					d->reg_ro[NCR_TCM] = (residual >> 8) & 255;
+
+					return 0;
+				}
 
 				if (d->xferp->data_in_len > lenIn2) {
 					unsigned char *n;

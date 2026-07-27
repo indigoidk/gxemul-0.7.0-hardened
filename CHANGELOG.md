@@ -885,6 +885,95 @@ Verified: clean rebuild **0/0** both trees (223 pmax / 224 arc objects); pmax **
 ---
 
 
+## Fiftieth round (#286) — ASC: a short DATA\_IN reported as complete, and the last discarded DMA return
+
+One correction, closing the gap round 49 recorded against its own work: #281 made the DATA\_IN
+residual honest with respect to the ASC's clamps, but still computed it from the count
+**requested** rather than the count that **moved**, so the arc path stayed dishonest under a
+short R4030 transfer. `devices/dev_asc.c` is **non-divergent**, so both trees stay byte-identical.
+
+- **#286 (`devices/dev_asc.c`, SCSI/DMA, Medium — latent):** the `PHASE_DATA_IN` DMA branch
+  discarded `d->dma_controller()`'s return. `dev_jazz_dma_controller()` has reported the count it
+  actually moved since our own #263, and it can fall short four ways — the R4030 byte count can be
+  smaller than the ASC asked for (it is also cleared after every call), #267's translation-limit
+  `break` stops the table walk, #268 masks the count to 20 bits, and a wrong direction returns 0
+  outright. The residual was then computed as `programmed - lenIn2`, so whenever
+  `programmed == lenIn2` it read as **0 with `NCRSTAT_TC` set**: a short DATA\_IN was bit-for-bit
+  indistinguishable from a complete one, and the undelivered tail of the guest's buffer kept
+  whatever it held before. The multitransfer block below it compounded this by advancing
+  `data_in` by `lenIn2` regardless. Fixed by capturing the return, and on
+  `lenIn2 > 0 && moved < lenIn2` writing the honest residual `programmed - moved` to TCL **and**
+  TCM with TC left clear, emitting one `fatal()` witness, and returning 0 **before** the
+  multitransfer block — the `NCRCMD_TRANS`/`NCRCMD_TRPAD` caller converts that into
+  `STATE_DISCONNECTED` + `NCRINTR_DIS | NCRSTAT_INT`, writing only INTR/STAT/STEP so the counter
+  survives. This is the #283 shape, deliberately, and it is now the last discarded
+  `dma_controller` return in the file.
+
+### What was measured, and what it does not claim
+
+**The defect reproduces on the committed logic.** With the R4030 forced short, the witness read
+`programmed=2048 lenIn2=2048 moved=256 → TCL=00 TCM=00 residual=0 TC=SET`: 256 bytes delivered,
+"all 2048 complete" reported. Three such transfers, all reported with TC set.
+
+**It is LATENT on the reference guest and this round is not credited with a hygiene win.** A
+control boot logged **2282** DATA\_IN transfers with **zero** shorts. OpenBSD 2.2/arc derives the
+R4030 count and the ASC counter from the same `len` (`asc_dma_in()` → `DMA_START` +
+`ASC_TC_PUT`), so none of our clamps can bite by construction. Same standing as #283 (0 of
+145/209).
+
+**The counter is genuinely consumed by the guest, which is why the honest value matters.**
+`ASC_TC_GET` (`arch/arc/dev/ascreg.h:149`) reads exactly the TCL/TCM pair written here, and it
+appears at six sites in `arch/arc/dev/asc.c`; `asc_last_dma_in()` derives `buflen` and
+`xs->resid` from it. Note this does **not** contradict the round-47/49 record that `ASC_CSR_TC`
+is referenced nowhere in `arch/arc` — that is the status **bit**, which is masked out of
+`SCRIPT_MATCH` by `0x67`. The bit is ignored; the counter is not. Do not generalise the former
+into the latter.
+
+**The terminal state was chosen by fault injection, not by panel vote.** Of the five seats, the
+four available at design time split 3–1; both the dissenting seat and one supporting seat
+independently required the measurement first. (Codex answered only on a third attempt, after two
+`at capacity` failures, and concurred with the shipped design; its accepted criticism was that
+the first form of the in-code comment was too long for the charter, which is why the shipped one
+is about half of it.)
+Three designs were compiled into one binary and selected at runtime, with a single-shot short
+injected on the Nth to-memory callback:
+
+| design | outcome on OpenBSD 2.2/arc |
+|---|---|
+| discard the return (HEAD) | boot completes, nothing reported — the silent defect |
+| honest residual, terminate the transfer normally | **guest panics** |
+| honest residual, abort → synthesized DISCONNECT (**shipped**) | no panic; transfer abandoned |
+
+The "terminate normally" design was argued from the observation that the benign clamp path
+already produces a TC-clear nonzero residual safely on every healthy boot. That reasoning did not
+survive contact: truncating mid-DMA leaves the guest's script state machine disagreeing with the
+controller, and it panics.
+
+**Verified.** Clean rebuild **0 warnings / 0 errors** both trees (223 pmax / 224 arc objects);
+pmax **15/15** and arc **13/13** to `uid=0(root)`; `dev_asc.c` one md5 across all four tree copies
+and the divergence set unchanged at five. The new `short DATA_IN DMA` witness fires **0** times on
+both healthy boot logs, against a positive control (an injected short scores 1) proving the grep
+is not dead. Log hygiene otherwise unchanged: 0 panics on either rig, and the pre-existing
+`{ asc: data in … }` control still reads **1 pmax / 5 arc**.
+
+**A measurement trap this round paid for, recorded so it is not repeated.** Emulator `fatal()`
+output is **not** guest console output — it goes to stdout and interleaves into the pty stream, so
+counting it from the reconstructed 80×25 arc screen loses it. `{ asc: data in }` reads **0** from
+the screen rebuild and **5** from the raw arc pty log. Grade guest tokens from the reconstruction
+(the VGA console repaints differentially); grade emulator diagnostics from the raw log.
+
+**Honest limitation, recorded rather than glossed.** The shipped design does not let the guest
+*recover* the transfer — it abandons it. The guest answers the synthesized disconnect with
+`ASC_CMD_ENABLE_SEL`, and `NCRCMD_ENSEL` (`dev_asc.c:1221-1225`) is an unimplemented no-op, so
+nothing ever reselects. A real 53C94 would stall awaiting a DREQ rather than disconnect at all,
+so this remains a deliberate **robustness approximation, not fidelity** — the same disclaimer
+#283 ships. The faithful path is the R4030 `DMA_INT_SRC` fault interrupt, a known gap since #267.
+What the correction buys is that a fault our own guards detect can no longer be reported to the
+guest as success.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

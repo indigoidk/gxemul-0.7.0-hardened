@@ -1230,6 +1230,99 @@ Two things follow, and neither was predicted. **There is no livelock**: #264 fea
 
 Verified: clean rebuild **0/0** both trees (223 pmax / 224 arc objects); pmax **15/15** and arc **13/13** to `uid=0(root)`; `dev_asc.c` and `diskimage_scsicmd.c` each one md5 across all four tree copies; divergence set unchanged at five files (`dev_jazz.c`, `diskimage.c`, `machine_arc.c`, `arcbios.c`, and `dev_ne2000.c` which exists only in SEC). **#283:** the corrupting case leaves the block **byte-identical to before the transfer**, `TCL 0x80`/`TCM 0x01` = residual **384**, TC **clear**, `STAT 0x80`, `INTR 0x38`, `STEP 0x00`, one diagnostic line; matched and over-programmed controls unchanged at `STAT 0x93` / TC set / residual 0 with all 512 persisted bytes guest-supplied; on the guest, **both** fault shapes survive with 0 panics and 0 `data overrun`. **No-regression, the union of all four observations the panel proposed, because they did not converge and the union is cheap:** 0 diagnostic lines on six healthy boot logs; `moved == requested` on **145/145** pmax and **209/209** arc DATA\_OUT transfers with a positive control scoring 1 on the deliberately short case; the pmax changed-block set against the golden master **identical** across two pre-change boots and the post-change boot (125 blocks); the pmax boot transcript **identical** (101 distinct / 116 total lines) across all three. **The literal "byte-identical disk image" form of that gate is not well posed and was not faked:** two boots of the *same* pre-change binary already differ (680 bytes pmax, 1,653 arc) because the guest writes wall-clock timestamps, so the deterministic changed-block set is used instead. On arc that set varies run to run even same-binary (the varying blocks are `/var/log/messages` and a `/var/run` directory block holding `inetd.pid`), so the arc half rests on the mechanism instead: with `do_short = 0` every DATA\_OUT transfer took the unchanged path, and `cmddma = 0` and 0 MODE SELECTs mean #284 and #285 executed no changed line on that boot at all. **#284:** counter reads **0 with TC set** on both machines; **1,659** hits per pmax boot and **0 of 4,136** guest `TCL`/`TCM` reads able to observe the changed value, against a positive control scoring 4. **#285:** the 11-of-12 partial keeps block size at **512** (was 4096); a normal MODE SELECT still commits **2048** and **4097**; 20-machine six-architecture smoke **byte-identical 20/20** on both trees against the pre-change binary, 17/20 reaching the prompt identically before and after. Log hygiene: **0** panics either rig, `{ asc: data in … }` unchanged at **1 pmax / 5 arc**.
 
+## Fiftieth round (#286) — the DATA\_IN counter: our own residual was still the requested count
+
+Round 48 (#281) made the `PHASE_DATA_IN` residual honest with respect to the ASC's own clamps, and
+round 49 recorded, against our own work, that it was still computed from `programmed - lenIn2` —
+the count **requested** — and so remained dishonest on arc whenever the R4030 moved less. This
+round closes that, and with it the last discarded `dma_controller` return in the file.
+
+| # | file | Problem | Fix |
+|---|---|---|---|
+| 286 | `devices/dev_asc.c` | `PHASE_DATA_IN` discarded `d->dma_controller()`'s return and computed the residual from the requested count, so a short transfer reported residual 0 with `NCRSTAT_TC` set — indistinguishable from a complete one — while the multitransfer block advanced `data_in` by the requested count regardless | capture the return; on `lenIn2 > 0 && moved < lenIn2` write residual `programmed - moved` to TCL **and** TCM, leave TC clear, emit one witness, and `return 0` **before** the multitransfer block |
+
+### Why the guest cares, and a distinction that must not be blurred
+
+`ASC_TC_GET` (`arch/arc/dev/ascreg.h:149`) reads exactly the TCL/TCM pair written here, and it
+appears at **six** sites in `arch/arc/dev/asc.c`; `asc_last_dma_in()` derives `state->buflen` and
+`xs->resid` from it. So the value is consumed, not inert.
+
+This does **not** contradict the round-47/49 record that `ASC_CSR_TC` is referenced nowhere in
+`arch/arc` — re-verified, zero occurrences. That is the status **bit** (`0x10`), which
+`SCRIPT_MATCH` masks out with `0x67`. The bit is ignored; the counter is not. **Do not generalise
+the former into the latter** — a future round reasoning "arc ignores TC, so the residual does not
+matter" would be wrong.
+
+### The terminal state was chosen by fault injection, over the panel majority's reasoning
+
+Four seats reviewed (Codex was unreachable — see below). Three specified the #283 mirror; one
+dissented, arguing the transfer should instead be terminated normally so the guest's own
+resume path could run. Both the dissenting seat and one supporting seat independently required a
+DATA\_IN measurement before shipping, so the split was settled by experiment. Three designs were
+compiled into one binary, selected at runtime, with a single-shot short injected on the Nth
+to-memory callback, at **two independent injection points**:
+
+| design | point 1 (N=40, K=64) | point 2 (N=120, K=128) |
+|---|---|---|
+| discard the return (HEAD) | 13/13 steps, no report — the silent defect | 11/11 steps, no report |
+| honest residual, terminate normally | **panic** | **panic** |
+| honest residual, abort → DISCONNECT (**shipped**) | no panic, transfer abandoned | no panic, transfer abandoned |
+
+The dissent's argument — that the benign clamp path already produces a TC-clear nonzero residual
+safely on every healthy boot — did not survive contact: truncating mid-DMA leaves the guest's
+script state machine disagreeing with the controller, and it panics at both points.
+
+**The dissent was still right about the mechanism, and that finding is kept.** `NCRCMD_ENSEL`
+(`dev_asc.c:1221-1225`) is `/* TODO */ break;` — an unimplemented no-op — so when the guest
+answers the synthesized disconnect with `ASC_CMD_ENABLE_SEL`, nothing reselects. The shipped fix
+therefore **reports the fault; it does not repair it**. That is a deliberate robustness
+approximation, as in #283, not fidelity; a real 53C94 would stall awaiting a DREQ. The faithful
+path remains the R4030 `DMA_INT_SRC` fault interrupt, a known gap since #267.
+
+A correction to how #283's evidence was carried into this round: "the guest survives" there meant
+"did not panic", **not** "recovered" — round 49's own matrix recorded `records out 0` for the
+abort designs against `4+0 records out` for HEAD. The brief that opened this round over-read that,
+and the dissenting seat caught it.
+
+### Reachability — stated plainly
+
+**Latent.** A control boot logged **2282** DATA\_IN transfers with **zero** shorts.
+OpenBSD 2.2/arc derives the R4030 count and the ASC counter from the same `len`
+(`asc_dma_in()` → `DMA_START` + `ASC_TC_PUT`), so #263's clamp, #267's break and #268's mask
+cannot bite by construction, and the direction check cannot fire either. Same standing as #283
+(0 of 145/209). This round is **not** credited with a log-hygiene win; what it buys is that a
+fault our own guards detect can no longer be reported to the guest as success.
+
+### Panel note
+
+**Five seats, but Codex 5.6-SOL took three attempts.** The first two returned
+`ERROR: Selected model is at capacity` — the first after 324,615 tokens of exploration — and the
+third answered. It **concurred** with the shipped design, deriving the same guard, the same
+`programmed - moved` residual and the same placement independently, and it independently
+confirmed both of this round's load-bearing readings: that "`ASC_CSR_TC` is unused" applies only
+to the status **bit** while the driver actively consumes TCL/TCM, and that "#283's DATA\_OUT
+result did not by itself establish the correct DATA\_IN terminal state; direction-specific
+testing was necessary."
+
+**Its one substantive criticism was accepted and acted on:** the first form of the in-code
+comment ran to roughly 55 lines, longer than any other in this file and out of proportion to a
+twelve-line change under a charter that asks for terse, minimal edits. It was cut to about 30,
+keeping the mechanism and the two load-bearing warnings (the counter-versus-bit distinction, and
+that `NCRCMD_ENSEL` is a no-op so the transfer is abandoned rather than retried) and deferring
+the rest to this round block. Its other notes were line-number precision — `:421-425` reduces
+`lenIn`, not `lenIn2`, so `lenIn2` is not directly clamped twice — and one observation recorded
+as a **separate** gap, not folded in: `dev_jazz_dma_controller()` counts loop-accounted bytes and
+discards both `memory_rw()` return values, so its count is not proof of delivery.
+
+**A trap in verifying seats, worth keeping:** a seat's output can *look* complete, because the
+brief embeds the completion marker in its own REQUIRED OUTPUT FORMAT section, so any seat that
+echoes its prompt satisfies a naive marker grep. Codex's first failed run matched four times
+while having answered nothing. Require the marker in the file's **tail**, and never count a seat
+that did not answer as agreement.
+
+---
+
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
