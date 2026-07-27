@@ -1303,6 +1303,116 @@ by construction.
 ---
 
 
+## Fifty-fourth round (#290) — the COP1 decoder enforced ISA level nowhere
+
+One correction to `cpus/cpu_mips_instr.c`. The file is **non-divergent**, so both trees stay
+byte-identical; it is `#include`d into `cpu_mips.o`, so `rm src/cpus/*.o` is required or the
+change silently is not built.
+
+> **#289 is VOID** — it was the number reserved for the R4030 DMA return-value check that the
+> previous round audited and rejected as dead code, and the round-53 block already refers to it
+> by that meaning ("…which is why it does not justify #289"). Reusing it here would leave two
+> different things called #289 in a published document, so this correction takes **#290**.
+> Same convention as the existing void numbers #247 and #249.
+
+- **#290 (`cpus/cpu_mips_instr.c`, MIPS COP1 decode, Low — latent):** the COP1 format dispatch
+  admitted `S`, `D`, `W`, `L` and `PS` on every CPU that has an FPU at all, with **no ISA-level
+  test anywhere**. Measured on the committed build: `add.ps` executed on both an R3000A (MIPS I)
+  and an R4000 (MIPS III), and `add.l` and `cvt.d.l` executed on the R3000A. Paired single is
+  MIPS V; the L format needs a 64-bit FPU, i.e. MIPS III. Fixed by refusing each format below
+  its ISA floor with a genuine Reserved Instruction.
+
+### Two things this correction had to avoid, both of which the review caught
+
+**`goto bad` is NOT a guest exception — it is a host-side emulation abort.**
+`cpus/cpu_dyntrans.c:1983-2014` says "Abort the emulation", sets `about_to_enter_single_step`,
+logs `UNIMPLEMENTED instruction`, and sets **`cpu->running = 0`**. Measured directly:
+`add.ps` on the `default:` arm yields `cpu: UNIMPLEMENTED instruction ... emul: All machines
+stopped.` with the guest's `cause` ExcCode still 0. The brief that opened this round asserted
+that reserved formats "raise Reserved Instruction via `goto bad`", and **three seats
+independently caught it**. A fix following that stated precedent would have *halted the
+emulator* on `add.ps`. This project has already had to undo exactly that confusion twice, in
+**#236** and **#237**. The correct idiom is `instr(reserved)` (`cpu_mips_instr.c:131-140`),
+which syncs the PC and calls `mips_cpu_exception(EXCEPTION_RI, …)` — the same idiom the LDC1 /
+SDC1 gate at `:5378` already uses, one of eleven `isa_level` gates already in this file.
+
+**`PS` must not join the `x64` fall-through group.** Placed *after* it, `DMFC1`/`DMTC1`/`L`
+would fall into the PS predicate and be refused on an R4000 — the catastrophic
+restrictive-direction failure. Placed *before* it, legal PS would fall into `x64 = 1`. PS
+therefore gets its own arm, duplicating two body lines to be immune to both orderings.
+
+`L` needed no new predicate at all: it joins the existing `x64` label group, because
+`is_32bit` is defined in `cpu_mips.c` as `isa_level <= 2 || isa_level == 32` — exactly "no
+64-bit FPU" — and the `x64` tail already converts that to `instr(reserved)` with a one-shot
+warning. `DMFC1`/`DMTC1` sit in that same arm and were **measured** giving RI on pmax and
+nothing on arc, so the outcome was known before a line was written.
+
+### Measured, PRE and POST, on both rigs
+
+Each row is graded on two independent signals: the seed `0xa5a5a5a5` left in `$f2` before the
+instruction (a trapped instruction leaves it, since `fp_op` runs its `swc1` regardless — the
+stale-register trap paid for two rounds ago), and an exception line in the trace. A row counts
+as trapped only when both agree.
+
+| instruction | pmax (R3000A, MIPS I) | arc (R4000, MIPS III) |
+|---|---|---|
+| `add.ps`, `mul.ps` | executed → **TRAPPED** | executed → **TRAPPED** |
+| `add.l`, `cvt.d.l` | executed → **TRAPPED** | **executed → executed** |
+| `add.s`, `add.d`, `cvt.w.d`, `cvt.s.d` | executed → executed | executed → executed |
+
+8/8 matching expectation on both rigs. **The arc `L` rows are the restrictive-direction
+canaries** — the R4000 keeps its MIPS III right to the L format and loses only paired single.
+If the gate were too broad they would have flipped to TRAPPED, and the round would be wrong.
+
+Two refinements to the original description, both from measurement: `add.ps` writes only the
+**low half** of the destination pair (`$f2 = 0`, upper single left stale) — "half a result",
+not "writes 0"; and the "8 host lines per instruction" figure is **stale**, since #279 latched
+both diagnostics and it is now two lines once per process.
+
+### Scope: split, deliberately
+
+Only the two *format* gates ship. `trunc.l` — the other symptom — is a **function**-level
+defect: it carries fmt `D`, which MIPS I legitimately has, and its illegality is in the function
+field decoded in `cpu_mips_coproc.c`. It is a different layer in a different file, and it
+collides with a pre-existing defect found while measuring: an unimplemented COP1 *function*
+raises **CoProcessor Unusable** (ExcCode 11, measured `cause = 0x1000002c` on both rigs) from an
+**ungated, unlatched per-execution `fatal()`** at `cpu_mips_coproc.c:2365-2369` — the wrong
+exception plus the log-flood class fixed in #265/#269/#280. That deserves its own design pass
+and is recorded in the backlog rather than tacked on here.
+
+Also left alone deliberately: PS *arithmetic*. `float_emul.c` models none, so on the
+`isa_level == 64` parts PS stays admitted-and-unimplemented exactly as before, still recorded by
+#279's latch. Implementing it would be a new feature on a shared five-CPU helper with no
+reachable consumer.
+
+### Reachability — latent, measured two ways
+
+Static scan of both kernels for forbidden encodings, rejecting all-printable-ASCII words (OpenBSD
+links strings into `.text`, and `"VAIL"` matches the COP1 masks): **0** of 293,344 words in
+`gxemul_pmax_rig/bsd`, **0** of 543,623 in `gxemul_arc_rig/bsd`. Runtime: full boots to multiuser
+on both rigs with **0** occurrences of `unimplemented format` — #279's latch is a perfect PS
+tripwire, since PS is the only format that reaches `float_emul` at all — and 0 of
+`UNIMPLEMENTED coproc`, `UNIMPLEMENTED instruction`, and the 64-bit-on-32-bit warning.
+OpenBSD 2.2's gcc 2.7-era o32 toolchain cannot emit PS, and gas rejects `trunc.l` below `-mips3`.
+Credited as latent, like #283/#286/#287.
+
+**A behaviour change that must be named rather than buried:** on 32-bit MIPS machines, `add.l`
+and `cvt.d.l` go from computing a plausible value to raising RI. No reference guest is affected
+(0 encodings, 0 markers), but a non-reference 32-bit guest that today gets a value from `add.l`
+would now take SIGILL. It would be executing an instruction an R3010 does not have, so the new
+behaviour is the correct one — but it is a change.
+
+Verified: clean rebuild **0 warnings / 0 errors** both trees (223 pmax / 224 arc objects);
+`cpu_mips_instr.c` one md5 across all four tree copies; divergence set unchanged at five.
+
+Panel: four substantive seats (Codex 5.6-SOL ultra, Fable 5, Opus 5, agy 3.6). **Kimi 3 MAX did
+not deliver a verdict** — its output matched the completion marker only because it was restating
+the required output format while still drafting, the same false-positive that affected a
+different seat two rounds ago. A seat that does not answer is not counted as agreement.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

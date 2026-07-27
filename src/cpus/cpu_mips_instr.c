@@ -4984,15 +4984,43 @@ X(to_be_translated)
 
 			break;
 
+		case COP1_FMT_PS:
+			/*  #290: paired single is MIPS V / MIPS64 only. Everywhere
+			    else the format does not exist and the encoding is
+			    reserved, so raise RI instead of silently writing half a
+			    result (measured: fd's low single set to 0, the upper
+			    single left stale, on both an R3000A and an R4000). Where
+			    PS IS legal nothing changes: it stays admitted and
+			    unimplemented, still recorded by #279's latch, because
+			    float_emul.c models no PS arithmetic.
+			    instr(reserved), NOT goto bad -- the latter is a host-side
+			    emulation abort (cpu->running = 0), the confusion #236 and
+			    #237 already had to undo. Kept out of the fall-through
+			    group below on purpose: after it, DMFC/DMTC/L would land in
+			    this test and be refused on an R4000.  */
+			if (cpu->cd.mips.cpu_type.isa_level != 5 &&
+			    cpu->cd.mips.cpu_type.isa_level != 64) {
+				ic->f = instr(reserved);
+				break;
+			}
+			ic->f = instr(cop1_slow);
+			ic->arg[0] = (uint32_t)iword & ((1 << 26) - 1);
+			break;
+
 		case COPz_DMFCz:
 		case COPz_DMTCz:
+		case COP1_FMT_L:	/*  #290: the L format needs a 64-bit FPU,
+					    i.e. MIPS III and up -- which is what
+					    is_32bit already means (cpu_mips.c:
+					    isa_level <= 2 || isa_level == 32), so
+					    reuse the x64 tail rather than invent a
+					    predicate. DMFC/DMTC in this same group
+					    already take that path.  */
 			x64 = 1;
 			/*  FALL-THROUGH  */
 		case COP1_FMT_S:
 		case COP1_FMT_D:
 		case COP1_FMT_W:
-		case COP1_FMT_L:
-		case COP1_FMT_PS:
 		case COPz_CFCz:
 		case COPz_CTCz:
 		case COPz_MFCz:
