@@ -1323,6 +1323,96 @@ that did not answer as agreement.
 ---
 
 
+## Fifty-first round (#287) — the S-format store: overflow produced a NaN, underflow lost the sign
+
+| # | file | Problem | Fix |
+|---|---|---|---|
+| 287 | `core/float_emul.c` | `FP_NORMAL` wrote the fraction and then forced the biased exponent to all-ones without clearing it — exponent-max plus a nonzero fraction is a NaN (mostly *signaling*) where hardware gives ±Inf; and the "special case for 0.0" line, which 0.0 never reaches, flushed underflow to zero **discarding the sign** | test the biased exponent for all-ones and keep only the sign before OR-ing the exponent in; flush underflow to a *signed* zero |
+
+### The finding that changed the fix
+
+The brief opening this round — and `OUTSTANDING_BUGS.md` item 8, in the same words — located the
+defect at the clamp (`:367-368`) and said it "first fires at |x| ≥ 2^128". **Both are wrong.** The
+clamp tests `>= (1 << n_exp)` = 256 and first fires at **2^129**; for `|x|` in `[2^128, 2^129)`
+the biased exponent arrives at **255 with no clamp at all** and is written straight over the
+fraction. A fix scoped to the clamp branch — the literal reading of the proposal — would have
+shipped still-broken across that entire binade, passing a probe built from `1e300` while failing
+on `3.5e38`, which the brief itself printed as a headline defect.
+
+**Four of five seats caught this independently** (9,740 survivors over a 20M sweep; 20,000/20,000
+in that octave; `4e38 → 0x7f967699`), and the live probe confirmed three first-binade rows
+NaN-encoded with exponent field 255. This is the same class of boundary trap as round 49's
+`:1126` set-then-compare. `3.5e38` is therefore mandatory in the acceptance suite.
+
+### Why rounding was left alone (the Option-B rejection)
+
+A host `(float)`-cast rewrite would have collapsed three defects at once and was seriously
+proposed by one seat. It was rejected on a fact from the tree itself: `cpu_sh.c:116` sets
+`fpscr = 0x00040001` and `cpu_sh.h:199` defines `SH_FPSCR_RM_ZERO 0x1`, so **SH-4 resets to
+round-to-zero** — truncation is architecturally *correct* there by default, and a
+round-to-nearest cast would regress it on a measured 41% of its S stores across 16 sites.
+PowerPC's `stfs` truncates by architecture as well. The four S-storing families do not share a
+rounding mode and the shared helper has no parameter to carry one. The #254 precedent argues the
+other way: #254 was MIPS-**local**. Rounding remains a documented gap owned by a future
+`FCSR.RM`-aware change, which also owns the residual `[2^128 − 2^103, 2^128)` sliver.
+
+### Gate methodology — the usual smoke was the wrong instrument
+
+The #279 20-machine smoke executes a zero blob under `-V` and quits **without a single FP store**,
+so it is vacuous for this change: it would pass whether the fix were right, wrong or absent. Since
+the function is pure, the gate is an offline differential with a **closed form for the
+change-set**, so that a regression is definitionally a difference outside it:
+
+```
+old(x) != new(x)  =>  (finite && |x| >= 2^128) || (0 < |x| < 2^-126 && signbit(x))
+```
+
+20,016,002 samples → 13,133,666 S differences, partitioning exactly into 8,756,599 overflow and
+4,377,067 negative underflow; **0 unexplained, 0 in-range, 0 D-format**. The empty D change-set is
+the *proof* that alpha (D-only) and every D store on m88k/ppc/sh are untouched — stronger than any
+boot run, and it makes the real blast radius four families, not five.
+
+### A stale reading, investigated instead of accepted
+
+The first POST run gave `-1e-40 → 0xff800000` on arc against `0x80000000` on pmax. The fix cannot
+produce −Inf there, so it was re-run with `$f2` seeded to a known value: arc returned **the seed
+unchanged plus two `exception FPE … cause=0x1000003c` lines**, proving the instruction trapped via
+#246 and that `fp_op`'s unconditional `swc1 $f2` had stored the neighbouring case's value. Not a
+regression. **Keep the rule:** after a trapped FP instruction neither the sentinel nor an adjacent
+row's value may be read as a result — seed a distinctive value first. D3 is observable on **pmax
+only**; arc's identical input is a control proving #246 still gates.
+
+### Reachability
+
+**Reachable from stock userland on crafted input; not exercised by the boot workload.** Verified
+against the OpenBSD 2.2 sources: `lib/libc/stdio/vfscanf.c:651` is
+`*va_arg(ap, float *) = res;`, so a plain `%f` narrows a parsed double to `float` (`cvt.s.d` on
+MIPS), and `gnu/usr.bin/texinfo/makeinfo/multi.c` declares `float columnfrac;` (`:152`) and parses
+user-controlled `@columnfractions` through `sscanf (params, "%f", &columnfrac)` (`:177`). Four
+seats called it latent; one found this route and it checks out. Stronger than #283/#286's latency,
+weaker than boot-visible — state it that way.
+
+### Documented, not fixed
+
+* **D2 — the fraction loop truncates instead of rounding to nearest-even.** S-only (the D loop
+  extracts all 52 bits exactly). Measured 41% of inexact S stores differ from round-to-nearest.
+  Belongs to the future `FCSR.RM`-aware change, together with the `[2^128 − 2^103, 2^128)` sliver
+  where round-to-nearest hardware gives Inf and this code gives FLT_MAX.
+* **D4 — no gradual-underflow generation.** The empty `FP_SUBNORMAL` arm returns a signed zero,
+  which is correct flush-to-zero behaviour for MIPS (`FCSR.FS`) and reset-state SH-4
+  (`FPSCR.DN`), so it is a D-format gap rather than an S defect. Naming it here so a future seat
+  does not "fix" code that is already right by default.
+
+### Panel
+
+Five seats (Codex 5.6-SOL ultra, Fable 5, Opus 5, agy 3.6, Kimi 3 MAX), **4–1**. The dissent
+argued the host-cast rewrite; the four points above answer it. Two contributions were decisive and
+came from single seats: the binade correction (found by four, but it inverted the fix) and the
+stock-userland reachability route (found by one, verified from source here).
+
+---
+
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers

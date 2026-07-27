@@ -974,6 +974,117 @@ guest as success.
 ---
 
 
+## Fifty-first round (#287) — S-format overflow stored a NaN encoding where hardware gives ±Inf
+
+One correction to `core/float_emul.c`'s `ieee_store_float_value()`, the arch-shared IEEE store
+helper. `float_emul.c` is **non-divergent**, so both trees stay byte-identical.
+
+- **#287 (`core/float_emul.c`, FPU, Medium):** the `FP_NORMAL` arm assembles the fraction bits and
+  *then* forces the biased exponent to all-ones on overflow **without clearing that fraction** —
+  and exponent-max with a nonzero fraction is a **NaN**, mostly a *signaling* one. The
+  `FP_INFINITE` arm holds the right answer and is never reached, because the *double* is finite;
+  it is the single-precision destination that overflows. Separately, the line labelled "Special
+  case for 0.0" (`if (exponent == 0) r = 0;`) is never reached by 0.0 at all — `FP_ZERO` has its
+  own arm — so it is purely an underflow flush, and it **discarded the sign bit** set at the top
+  of the arm. Fixed by testing the biased exponent for all-ones and keeping only the sign before
+  OR-ing the exponent in, and by flushing underflow to a *signed* zero.
+
+### Measured, live in the emulator — not re-derived
+
+Every previous record of this defect was a replay of the function's arithmetic on host doubles.
+This round ran it through genuine guest `cvt.s.d` instructions on the committed binaries
+(`_scratchpad/r50_probe.py`, on the validated `gxprobe` harness; the double is loaded as the
+`$f0/$f1` pair with two MIPS-I `lwc1`s, since LDC1 is MIPS-II and traps on R3000).
+
+| case | PRE | POST | hardware |
+|---|---|---|---|
+| `1e300` | `0x7fbf21e4` (NaN) | `0x7f800000` | `0x7f800000` |
+| `-1e300` | `0xffbf21e4` (NaN) | `0xff800000` | `0xff800000` |
+| **`3.5e38`** | **`0x7f83a7c6`** (NaN) | `0x7f800000` | `0x7f800000` |
+| `1e40` | `0x7feb194f` (NaN) | `0x7f800000` | `0x7f800000` |
+| `-1e-40` (pmax) | `0x00000000` | `0x80000000` | *(see below)* |
+| `3.4e38` control | `0x7f7fc99e` | `0x7f7fc99e` | unmoved |
+| `1.0` / `-2.5` / `0.0` controls | — | unchanged | unmoved |
+
+**THE BRIEF THAT OPENED THIS ROUND PROPOSED A HALF-FIX, AND THE PANEL CAUGHT IT.** It asserted
+(as does `OUTSTANDING_BUGS.md` item 8, in the same words) that "the clamp first fires at
+|x| ≥ 2^128" and framed the fix as clearing the fraction *where the clamp fires*. The clamp tests
+`>= (1 << n_exp)` = 256 and therefore first fires at **2^129**. For `|x|` in `[2^128, 2^129)` the
+biased exponent reaches **255 with no clamp at all**. Four of five seats caught this
+independently — 9,740 survivors over a 20M sweep, 20,000/20,000 in that octave, and
+`4e38 → 0x7f967699` — and the live probe confirmed three such rows NaN-encoded with exponent 255.
+**The test is therefore on the biased exponent, not on the clamp**, and `3.5e38` is a mandatory
+acceptance case: a clamp-scoped fix passes on `1e300` and fails there.
+
+### Blast radius: an offline differential, because the usual smoke is vacuous here
+
+The #279 20-machine six-architecture smoke boots a zero blob under `-V` and quits **without
+executing a single FP store**, so it would pass identically whether this fix were right, wrong or
+absent. The function is pure, so the gate is an offline differential of old against new with a
+**closed form for the change-set** — a regression being, by definition, any difference outside it:
+
+```
+old(x) != new(x)  =>  (finite && |x| >= 2^128) || (0 < |x| < 2^-126 && signbit(x))
+```
+
+Result over 20,016,002 samples (structured sweeps across both boundaries plus random
+bit-patterns): 13,133,666 S differences, partitioning **exactly** into 8,756,599 overflow and
+4,377,067 negative-underflow; **0 unexplained, 0 in-range S differences, 0 D-format differences**.
+The empty D change-set is the *proof* that **alpha is untouched** (it stores only `IEEE_FMT_D`), and
+that every D store on m88k, ppc and sh is unchanged. Real exposure is S stores on m88k, ppc
+(`stfs`/`stfsx` only) and sh — four families, not the five the brief claimed.
+
+### Why the fraction rounding was NOT also fixed
+
+Routing the S store through a host `(float)` cast would have collapsed this defect together with
+the 1-ulp truncation and the underflow sign loss, and was proposed. It was rejected because the
+four S-storing families **do not share a rounding mode**: `cpu_sh.c:116` sets
+`fpscr = 0x00040001` and `cpu_sh.h:199` defines `SH_FPSCR_RM_ZERO 0x1`, so **SH-4 resets to
+round-to-zero** and truncation is architecturally *correct* there by default — a host
+round-to-nearest cast would regress it across 16 store sites, on a measured 41% of its S stores.
+PowerPC's `stfs` truncates by architecture too. The shared helper carries no rounding-mode
+parameter, and adding one is the abstraction the charter forbids. The #254 precedent cuts the
+other way: #254 was **MIPS-local**, inside `cpu_mips_coproc.c`. Rounding therefore stays as a
+documented gap for a future `FCSR.RM`-aware change, which also owns the residual sliver
+`[2^128 − 2^103, 2^128)` where round-to-nearest hardware gives Inf and this code still gives
+FLT_MAX.
+
+### The one intended difference, and one anomaly that was chased down
+
+`-1e-40` now stores `0x80000000` (−0.0) where a generic IEEE cast gives the subnormal
+`0x800116c2`. That is deliberate: gradual-underflow *generation* is per-family control-register
+policy (MIPS `FCSR.FS`, SH-4 `FPSCR.DN`, both defaulting to flush) that a shared helper cannot
+see. The probe carries this as a **named intended difference with its justification**, rather than
+having its expected value edited to match the new output.
+
+The first POST run showed `-1e-40 → 0xff800000` on **arc** against `0x80000000` on pmax. Since the
+fix cannot produce −Inf there (the biased exponent clamps to 0, so the all-ones test cannot fire),
+it was checked with a seeded protocol: put a known value in `$f2`, then run the case. arc returned
+**the seed unchanged, with two `exception FPE … cause=0x1000003c` lines** — the instruction trapped
+via #246's guard and never wrote `$f2`, so `fp_op`'s unconditional `swc1 $f2` stored the *previous*
+case's value. A stale read, not a regression. **D3 is observable on pmax only**; arc's identical
+input is a control proving #246 still gates that path.
+
+### Reachability — better than latent, and verified from guest source
+
+Four seats called this latent. One found a **stock-userland route, confirmed against the OpenBSD
+2.2 sources on disk**: `lib/libc/stdio/vfscanf.c:651` does `*va_arg(ap, float *) = res;`, so a
+plain `%f` narrows the parsed double to `float` — `cvt.s.d` on MIPS — and stock
+`gnu/usr.bin/texinfo/makeinfo/multi.c` declares `float columnfrac;` (`:152`) and feeds
+user-controlled `@columnfractions` text straight into `sscanf (params, "%f", &columnfrac)`
+(`:177`). A `.texi` file containing `1e300` therefore reaches this defect through a stock binary,
+with no hand assembly and no in-guest compiler. The honest classification is **reachable from
+stock userland on crafted input, not exercised by the boot workload** — which is a stronger claim
+than #283/#286's latency and a weaker one than boot-visible.
+
+Verified: clean rebuild **0 warnings / 0 errors** both trees (223 pmax / 224 arc objects); pmax
+**15/15** and arc **13/13** to `uid=0(root)`; `float_emul.c` one md5 across all four tree copies;
+divergence set unchanged at five. Log hygiene unchanged, including the pre-existing
+`{ asc: data in }` at 1 pmax / 5 arc.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

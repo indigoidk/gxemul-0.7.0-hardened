@@ -366,11 +366,32 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 				exponent = 0;
 			if (exponent >= ((int64_t)1 << n_exp))
 				exponent = ((int64_t)1 << n_exp) - 1;
+
+			/*  #287: an all-ones exponent means the value overflowed
+			    the DESTINATION format, and the fraction assembled
+			    above has to go: exponent-max with a nonzero fraction
+			    is a NaN, and mostly a SIGNALING one, where hardware
+			    gives +/-Inf (1e300 stored as 0x7fbf21e4). #255 cannot
+			    catch it because that gates on the class of the host
+			    double, which is merely FP_NORMAL. Test the biased
+			    exponent and NOT the clamp above: |x| in [2^128, 2^129)
+			    reaches 255 with no clamping at all, so a clamp-scoped
+			    fix would leave that whole binade storing NaNs.  */
+			if (exponent == ((int64_t)1 << n_exp) - 1)
+				r &= (uint64_t)1 << signofs;
 			r |= (uint64_t)exponent << n_frac;
 
-			/*  Special case for 0.0:  */
+			/*  #287: exponent 0 here is UNDERFLOW, never 0.0 -- that
+			    has its own FP_ZERO arm -- so flush to zero but keep
+			    the sign set at the top of this arm, as the
+			    FP_SUBNORMAL arm below already does (-1e-40 stored as
+			    +0). Both arms are unreachable for D, whose finite
+			    exponents bias into 1..2046. Rounding is deliberately
+			    left alone: truncation is wrong for MIPS but right for
+			    SH-4, which resets to round-to-zero, so it needs an
+			    FCSR.RM-aware change and not this one.  */
 			if (exponent == 0)
-				r = 0;
+				r &= (uint64_t)1 << signofs;
 			break;
 		case FP_SUBNORMAL:
 			// TODO
