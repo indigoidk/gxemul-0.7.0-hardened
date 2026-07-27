@@ -1085,6 +1085,108 @@ divergence set unchanged at five. Log hygiene unchanged, including the pre-exist
 ---
 
 
+## Fifty-second round (#288) — the arc keyboard queue discarded itself, and its drain loop starved the guest
+
+One correction to `devices/dev_pckbc.c`, in two parts. `dev_pckbc.c` is **non-divergent**, so
+both trees stay byte-identical.
+
+- **#288 (`devices/dev_pckbc.c`, console input, Medium):** `pckbc_add_code()` advanced `head`
+  and only *then* tested for collision, so an overrun left `head == tail` — the state every
+  reader (`pckbc_get_code()`, the status DIB bit, the interrupt assert) treats as **EMPTY**.
+  One overrun therefore discarded the **entire queue**, not the single code that did not fit.
+  Fixed by computing the next head first and dropping the **incoming** code when the ring is
+  full, warning once per port. Separately and more seriously, `DEVICE_TICK(pckbc)`'s drain loop
+  had **no space guard at all** — unlike `lk201_tick()` (`lk201.c:253`) and `dev_luna88k.c`
+  (`:371`, `:380`) — and because `console_charavail()` refills the console FIFO from the host
+  *inside* that loop, an unbounded producer kept it true indefinitely and the tick never
+  returned to the guest. Fixed with a room guard whose reserve exceeds the longest scancode
+  sequence, so an admitted character always fits whole and a make cannot be queued with its
+  break dropped.
+
+### Measured, on the committed build and after
+
+**The queue discard, reproduced.** A 44 KB paste (44,257 chars ≈ 132,771 scancodes against a
+32,767-slot ring) into the arc rig:
+
+| | PRE (committed) | POST (#288) |
+|---|---|---|
+| `pckbc: queue overrun` | **4** | 0 |
+| first line delivered to the guest | `L1680` | **`R51FIRST`** |
+| lines delivered of 1702 sent | 21 | 39 |
+
+`R51FIRST` — a marker placed at the head of the flood **before** the run — is the
+discriminator. A one-byte-drop implementation delivers it and loses something later; a
+whole-queue wipe loses it, because at the wrap everything already queued becomes unreachable.
+It was absent before and is present after.
+
+An independent cross-check: the *old* code warns once per lap, so the warning count measures
+the amplification. 132,771 codes / 32,767 slots = 4.05 laps, and exactly **4** warnings were
+observed — two unrelated instruments agreeing.
+
+**The starvation, with pmax as the control.** Under an unbounded producer:
+
+| rig | control | unbounded producer |
+|---|---|---|
+| arc, before | 4 `OpenBSD` lines | **0 lines**, 10,806 overruns |
+| arc, after | 4 lines | **4 lines**, **0 overruns** |
+| pmax (already guarded) | 1 line | 1 line, 0 overruns |
+
+Same host, same console layer, identical stimulus: the arc guest never reached its banner,
+while pmax — whose drain loop has exactly this guard — was unaffected. That A/B is what
+identifies the missing guard as the cause rather than anything else in the console path.
+
+### What is NOT claimed
+
+**The ring half has not been observed firing.** With the drain guard in place, back pressure
+stops the queue filling, so `pckbc_add_code()`'s drop-and-latch path is never reached — which
+is why the post-fix flood shows 0 overruns rather than 1. Both measurements above therefore
+prove the **drain guard**. The ring change is retained as the correctness invariant
+(`head == tail` must never mean "full") and as defence in depth for producers that bypass the
+guarded tick — the guest-authored controller-response paths — not because it was measured.
+
+The gap between 39 delivered lines and 1702 sent is the guest's own tty layer (`TTYHOG` ≈ 1024)
+discarding the middle of the stream under flood. That was flagged as a confound in advance,
+and is precisely why the grading rests on the first-marker asymmetry rather than on line counts.
+
+### A behaviour change this fix introduces
+
+**The arc console's stdin is now genuinely flow-controlled, and a harness that writes a large
+blob inline while draining the same pty will DEADLOCK** — the writer blocks waiting for the
+emulator to consume, the emulator blocks writing output because nobody is reading. This is
+correct back pressure and is exactly what pmax has always done, but it broke this project's own
+flood test, which had to be restructured to write from a background thread. Before the fix the
+unbounded drain swallowed the whole blob instantly, so an inline write appeared to work; that
+appearance *was* the defect. (Also run such probes with `python3 -u`: the first post-fix attempt
+block-buffered into a pipe and `timeout` discarded every line, yielding a silent empty result
+that looked like a crash.)
+
+### Documented, not fixed — with the experiments that would reopen them
+
+Three sites share the same advance-then-warn shape and are **not** changed, because none could
+be reproduced and the charter forbids changing what cannot be tested:
+
+* **`console/console.c:304`** — the stdin producer is bounded by the throttle at `:364`, and the
+  `+1` in `room < sizeof(ch) + 1` is load-bearing (room 101 → read 100 → occupancy 4095, one
+  slot short). Measured **0** overruns even under the flood that wrapped pckbc four times, and
+  under an unbounded producer. Two seats nevertheless identified producers that bypass the
+  throttle: the debugger's CTRL-K inserts **72** characters, not one, and `dev_ns16550.c:163`
+  feeds every transmit byte straight to `console_makeavail()` when `MCR_LOOPBACK` is set, which
+  is **guest-authored**. The named experiment that would reopen this file: on arc, drive
+  `com_mcr` loopback from the guest and issue several thousand transmit writes into a handle
+  nothing drains, then grep for `console fifo overrun`. **Until that is run, this arch-shared
+  file must not be touched.**
+* **`devices/dev_dc7085.c:103`** — unreachable, and the reference implementation. `lk201_tick()`
+  re-tests `space_available_in_queue()` **every iteration** and `dev_dc7085.c:80` reserves 20
+  entries, so occupancy parks at ~1004 of 1023. Measured 0 under both stimuli.
+* **`devices/dev_scc.c:140`** — same shape, 1 char/tick feed, on machines that are not tested rigs.
+
+Verified: clean rebuild **0 warnings / 0 errors** both trees (223 pmax / 224 arc objects); pmax
+**15/15** and arc **13/13** to `uid=0(root)`; `dev_pckbc.c` one md5 across all four tree copies;
+divergence set unchanged at five; log hygiene unchanged.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

@@ -105,6 +105,7 @@ struct pckbc_data {
 
 	unsigned	key_queue[2][MAX_8042_QUEUELEN];
 	int		head[2], tail[2];
+	int		overrun_warned[2];	/*  #288  */
 
 	int		mouse_buttons;
 };
@@ -126,13 +127,46 @@ struct pckbc_data {
  *
  *  Adds a byte to the data queue.
  */
+/*
+ *  pckbc_room_left():
+ *
+ *  #288: codes that still fit before head would meet tail.
+ */
+static int pckbc_room_left(struct pckbc_data *d, int port)
+{
+	int used = d->head[port] - d->tail[port];
+	if (used < 0)
+		used += MAX_8042_QUEUELEN;
+	return MAX_8042_QUEUELEN - 1 - used;
+}
+
+
 void pckbc_add_code(struct pckbc_data *d, int code, int port)
 {
 	/*  Add at the head, read at the tail:  */
-	d->head[port] = (d->head[port]+1) % MAX_8042_QUEUELEN;
-	if (d->head[port] == d->tail[port])
-		fatal("[ pckbc: queue overrun, port %i! ]\n", port);
+	int next = (d->head[port]+1) % MAX_8042_QUEUELEN;
 
+	/*  #288: on a full queue drop the INCOMING code and keep what is
+	    already queued. The old shape advanced head onto tail and only
+	    then warned -- and head == tail is what pckbc_get_code() and the
+	    status and interrupt paths all read as EMPTY, so one overrun
+	    silently discarded the WHOLE queue rather than the single code
+	    that did not fit. Measured on arc: a 44 KB paste wrapped the ring
+	    4 times and the guest received 21 of 1702 lines. Warn once per
+	    port -- nothing tells the guest (no 8042 overrun status bit is
+	    modelled) and fatal() is ungated, so a per-code message would be
+	    a flood of over a million lines under the very input that trips
+	    it.  */
+	if (next == d->tail[port]) {
+		if (!d->overrun_warned[port]) {
+			d->overrun_warned[port] = 1;
+			fatal("[ pckbc: queue overrun, port %i; dropping"
+			    " input ]\n", port);
+		}
+		return;
+	}
+
+	d->head[port] = next;
 	d->key_queue[port][d->head[port]] = code;
 }
 
@@ -613,7 +647,22 @@ DEVICE_TICK(pckbc)
 
 	// Keyboard input:
 	if (d->in_use) {
-		while (console_charavail(d->console_handle)) {
+		/*  #288: stop draining while the queue is nearly full, the way
+		    lk201_tick() and dev_luna88k.c already do. Without a bound
+		    here console_charavail() refills the console fifo from the
+		    host inside this very loop, so a producer that never stops
+		    keeps it true forever and the tick never returns to the
+		    guest: measured on arc, an unbounded producer left the guest
+		    with 0 "OpenBSD" banner lines against 4 in the control, while
+		    pmax under identical stimulus was unaffected because its
+		    lk201 drain loop has this guard. Leaving the input in the
+		    host buffer is the correct back pressure. The reserve exceeds
+		    the longest scancode sequence (6: shift make, code, break,
+		    shift break -- shift and ctrl are mutually exclusive in all
+		    three converters) so an admitted character always fits whole
+		    and a make cannot be queued with its break dropped.  */
+		while (pckbc_room_left(d, 0) > 8 &&
+		    console_charavail(d->console_handle)) {
 			ch = console_readchar(d->console_handle);
 			if (ch >= 0) {
 				switch (d->translation_table) {

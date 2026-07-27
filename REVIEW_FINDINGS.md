@@ -1413,6 +1413,109 @@ stock-userland reachability route (found by one, verified from source here).
 ---
 
 
+## Fifty-second round (#288) — the keyboard ring that read as empty, and the drain loop with no guard
+
+| # | file | Problem | Fix |
+|---|---|---|---|
+| 288 | `devices/dev_pckbc.c` | (a) `pckbc_add_code()` advanced `head` before testing for collision, so an overrun left `head == tail` — which every reader treats as EMPTY, discarding the **whole queue** rather than the one code that did not fit. (b) `DEVICE_TICK(pckbc)`'s drain loop had **no space guard**, and `console_charavail()` refills from the host inside it, so an unbounded producer starved the guest indefinitely | (a) compute the next head first; on a full ring drop the **incoming** code, warn once per port. (b) add a room guard whose reserve exceeds the longest scancode sequence, as `lk201_tick()` and `dev_luna88k.c` already have |
+
+### The finding that changed the fix
+
+Three of five seats proposed the ring fix alone. That is correct but incomplete, and shipping it
+alone would have made the system **worse observationally**: the starvation would have remained
+while the new one-shot latch removed the only evidence it was happening. One seat identified the
+missing drain guard and measured it; the A/B below confirms it.
+
+| rig | control | unbounded producer |
+|---|---|---|
+| arc, before | 4 `OpenBSD` lines | **0 lines**, 10,806 overruns |
+| arc, after | 4 lines | **4 lines**, 0 overruns |
+| pmax (drain loop already guarded) | 1 line | 1 line, 0 overruns |
+
+Identical stimulus through the identical console layer; only the guard differs. `dev_pckbc.c`
+was the **only** console drain loop in the tree without one.
+
+### Reachability — and the methodological error that hid it
+
+The brief opening this round asserted the pckbc path "requires a graphical run; the rigs are
+headless." **False, and it was the one site the brief was most confident about.**
+`machine_arc.c:139-141` forces `fb_console = 1` on PICA unconditionally, making pckbc the arc
+rig's `main_console_handle` and its stdin consumer — the fork's own comment at `:136` says so.
+The defect reproduces 4 times on a 44 KB paste and 10,806 times under an unbounded producer.
+
+The error underneath it: **"0 occurrences on both healthy boot logs" was allowed to stand in for
+a reachability argument.** The harness types ~50 characters into a 32,767-slot ring; that control
+cannot speak to reachability at all. Same lesson as #262's dead-on-healthy-boot branch. A seat
+that argued document-only rested its pckbc case on exactly this and was refuted by measurement.
+
+### What is NOT claimed
+
+The **ring half has not been observed firing.** The drain guard prevents the queue from filling,
+so the drop-and-latch path is unreached (0 overruns post-fix, not 1). Both measurements prove the
+guard. The ring change stands as the correctness invariant — `head == tail` must never mean
+"full" — and as defence in depth for the guest-authored controller-response producers that
+bypass the tick.
+
+### A seat that refuted its own prediction
+
+One seat predicted the whole-queue discard would strand a shift make-code and latch a modifier
+in the guest, ran it (400,000 × `A`, 73 discards all landing inside shift make/break pairs), and
+found login behaviour **identical to the control** — the shift state is self-healing, since the
+next complete sequence delivers a fresh release. It reported the refutation rather than dropping
+it. Recorded because the same seat had an unmeasured remedy refuted by fault injection two rounds
+earlier, and this is the corrected practice.
+
+### Quantitative discriminator, for reuse
+
+The pre-fix code warns once per **lap**, which turns the warning count into an independent
+measure of amplification: `overruns = floor(k·N / 32768)`. Verified at two amplification factors
+and four input sizes, exact to the integer (`a`, k=3: 100K→9, 200K→18, 400K→36; `A`, k=6:
+400K→73). Single-byte-drop would predict `k·N − 32767` — a 100K:200K ratio of 8.4 against the
+2.0 measured. That is how the two failure modes were distinguished by measurement rather than
+by inspection.
+
+### Documented, not fixed
+
+* **`console/console.c:304`** — the `:364` throttle bounds the stdin producer exactly (the `+1`
+  is load-bearing). 0 overruns measured under both the flood and an unbounded producer. But two
+  seats found bypassing producers: the debugger's CTRL-K inserts **72** characters, and
+  `dev_ns16550.c:163` feeds `console_makeavail()` directly under `MCR_LOOPBACK`, which is
+  **guest-authored**. **Named experiment before this arch-shared file is touched:** drive
+  `com_mcr` loopback from an arc guest, issue several thousand transmit writes into an undrained
+  handle, grep for `console fifo overrun`.
+* **`devices/dev_dc7085.c:103`** — unreachable and the reference implementation: `lk201_tick()`
+  re-tests `space_available_in_queue()` every iteration; `:80` reserves 20 entries; occupancy
+  parks at ~1004 of 1023.
+* **`devices/dev_scc.c:140`** — same shape, 1 char/tick, non-rig machines.
+
+### A design smell recorded, not changed
+
+`console_charavail()` is a **mutator named as a query**: it performs `select()` and a 100-byte
+`read()` as a side effect, and is called from ordinary guest status-register reads
+(`dev_ns16550.c:84,135`, `dev_ssc.c`, `dev_clmpcc.c`, `dev_sh4.c`, `dev_cons.c`). A saturated
+stdin therefore adds host syscall cost to plain MMIO reads. Arch-shared, no reproduction of
+harm — documented so it is not rediscovered.
+
+### Harness consequence of this fix
+
+The arc console's stdin is now genuinely flow-controlled. A harness writing a large blob **inline
+while draining the same pty deadlocks** — writer waits on the emulator, emulator waits on the
+reader. Correct back pressure, identical to pmax's long-standing behaviour, but this project's
+own flood test had to be restructured to write from a background thread. Run such probes with
+`python3 -u`; the first post-fix attempt block-buffered into a pipe and `timeout` discarded every
+line, producing a silent empty result indistinguishable from a crash.
+
+### Panel
+
+Five seats (Codex 5.6-SOL ultra, Fable 5, Opus 5, agy 3.6, Kimi 3 MAX). Four for a fix, one for
+document-only. The decisive contribution — the missing drain guard, which changed what shipped —
+came from a single seat and was confirmed by an independent A/B. One seat's proposed diff
+transposed the `pckbc_add_code(d, code, port)` parameters; copying it verbatim would have swapped
+scancode and port at every call site.
+
+---
+
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
