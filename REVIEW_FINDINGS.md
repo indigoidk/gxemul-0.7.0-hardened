@@ -1516,6 +1516,122 @@ scancode and port at every call site.
 ---
 
 
+## Fifty-third round — R4030 DMA delivery accounting: assessed, NOT changed
+
+Round 50 (#286) made `dev_asc.c`'s DATA_IN path trust `dev_jazz_dma_controller()`'s return to
+decide whether a transfer was short, and its commit recorded a follow-on concern: the copy loop
+discards **both** `cpu->memory_rw()` return values (`dev_jazz.c:228` PTE fetch, `:258` the copy)
+while `i += ncpy` counts the bytes as moved regardless, so the count is "not proof of delivery".
+This round audited that and **deliberately changes nothing.** The proposed correction would have
+been dead code, and the reasoning is recorded here so it is not proposed a fourth time.
+
+**Both returns are a constant `MEMORY_ACCESS_OK` for every address a guest can steer the R4030
+at.** Both calls pass `PHYSICAL | NO_EXCEPTIONS`, and:
+
+* `cpus/memory_rw.c:84-86` is `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) { paddr
+  = vaddr; } else { ... }`. The **#244** zero-fill *and* its `return MEMORY_ACCESS_FAILED` are
+  both inside that `else`, so `PHYSICAL` bypasses them entirely. #244 can never execute for
+  either call — the round-50 note citing it as the mechanism was wrong.
+* Every other failure return is gated off by `NO_EXCEPTIONS`: `:423` (device-handler gate),
+  `:442` (`res <= 0 && !no_exceptions`), `:515` (`paddr >= physical_max && !no_exceptions`),
+  `:537`, `:584`.
+
+The only surviving path to `MEMORY_ACCESS_FAILED` is a `DM_READS_HAVE_NO_SIDE_EFFECTS` device
+handler that clears `cpu->running` — on PICA only the VGA unimplemented-mode arm — during which
+the emulator is terminating anyway. **Consuming these returns would therefore guard nothing,
+detect nothing and change nothing on any constructible input.** Worse than inert: a later round
+could build on it believing DMA faults were being checked.
+
+**The underlying phenomenon is real, but it is a silent absorb reported as success, not a failed
+access.** Out-of-range reads are zero-filled and return OK — from `:520-522` (beyond
+`physical_max`), `:569-573` (NULL memblock; by design, `memory.c:554-564`) or `:330-331` (#95) —
+and out-of-range writes are discarded and return OK (`:548-551`).
+
+**Measured by hand from the cold debugger on the committed build**, ASC transfers driven through
+the R4030 with only `PTE[0]` varied, both observation pages seeded `0xEE`. Every row below
+reported **residual 0, TC SET, and zero short-transfer messages** to the guest:
+
+| run | `PTE[0]` | outcome |
+|---|---|---|
+| V (control) | `0x00300000` | 512 disk bytes land on the correct page; page 0 untouched |
+| Z | `0x00000000` | **512 disk bytes land on guest physical page 0** — the exception vectors |
+| X | `0x08000000` (past 64 MB RAM) | nothing lands anywhere; guest told 512/512 complete |
+| D | `0x80000000` (device space) | write dropped — `TL_BASE` still reads `0x00200000` |
+| E | `0x400a0000` (`vga_gfx`) | emulator survives; transfer reported complete |
+
+And on the DATA_OUT side, against a throwaway image pre-filled `0xAA`:
+
+| run | `PTE[0]` | host disk file before → after |
+|---|---|---|
+| Wc (control) | valid | `aa…` → `5a 5a 5a 5a …` (the write path itself is sound) |
+| **Wh** | `0x08000000` | **`aa…` → `00 00 00 00 …`** |
+
+**Run Wh is the strongest fact in this round:** a source page past installed RAM is zero-filled
+and then *committed to the platter*, destroying 512 bytes of real data while the guest is told
+the write completed. That is data destruction, not a mis-report — and it is still invisible in
+the return value, which is why it does not justify #289.
+
+**Why the two obvious guards are also wrong.** Neither is a smaller version of the right fix:
+
+* **Rejecting `phys_addr < 0x1000`:** `dev_jazz.c:228-230` fetches `sizeof(tr)` = **4 bytes at a
+  stride of 8** — the entry's second word is never read, so **the model has no validity bit at
+  all**. A zero entry means physical page frame 0, and DMAing there is what the modelled hardware
+  does. An absorbed fetch and a guest-written zero entry are indistinguishable *by value*. Such a
+  guard would replace a faithful behaviour with an unfaithful one.
+* **Bounding against `physical_max`:** DMA into device space is legitimate and works today for
+  `DM_READS_HAVE_NO_SIDE_EFFECTS` devices (`vga_gfx` at `0x400a0000`), so a RAM-only bound would
+  regress it. A correct detector would have to replicate `memory_rw`'s own dispatch —
+  `physical_max` *and* the device window — inside a device model, which is the abstraction the
+  charter forbids and which would drift.
+
+**#286 is as much a reason to leave this loop alone as to touch it.** Since #283/#286 convert a
+short return into a synthesized guest DISCONNECT, and rounds 47-49 measured mis-handling there as
+a guest **panic**, any new early break here is more dangerous than when #267 shipped, not less.
+A guard whose true-positive rate on the reference guest is **0 in 255,000** loop iterations has
+only false positives available to it — and the ASC discards the controller's return at three
+call sites, so a false break would be *silent*, surfacing as filesystem corruption rather than an
+error.
+
+**The faithful fix, and the reopen condition.** Both consequences are properly signalled by the
+R4030's own address-error / `DMA_INT_SRC` machinery, which this emulator does not model — the
+known gap already recorded when #267 added the translation-limit break. What has changed since
+is that #283 and #286 have built the downstream guest-visible path (short transfer → honest
+residual → synthesized DISCONNECT) and measured it survivable on OpenBSD 2.2/arc, so that round
+now has somewhere to deliver its signal. **Reopen when the fault infrastructure is built, not
+before.**
+
+**Reachability: latent, and MEASURED rather than argued.** A full instrumented OpenBSD 2.2/arc
+boot to `uid=0(root)` with a clean halt, counters on all four hazard conditions:
+
+```
+R52PROBE_ARM physmax=0x4000000 devmin=0x400a0000 devmax=0x1c000bc000
+R52PROBE_TOT iters=255000 oorpte=0 pte0=0 oordst=0 dev=0      (2000+ controller calls)
+```
+
+Zero out-of-range table walks, zero zero-PTEs, zero out-of-range destinations, zero device-space
+destinations. The guest builds its translation table from its own free pages and every one is a
+real page under 64 MB. Every reproduction above required writing a bogus PTE from the debugger.
+Consistent with #267's earlier measurement (`TL_LIMIT = 0x8000` written once, maximum table
+offset `0x458`, 0 out-of-bound walks over 2602 transfers). Note the table base and the frame
+values are validated against nothing; only the *walk offset* is bounded, by #267.
+*Caveat, stated honestly:* that is one boot-to-shell profile — no `fsck`-heavy, swap-heavy or
+network-loaded workload. The falsifier is to re-run the same instrumentation under such a load
+and show any nonzero counter.
+
+**Cosmetic, recorded so it is not "fixed":** the comment at `:244` says "copying 16 or 256 bytes"
+while the code sets `ncpy = 15` / `255`, so the fast path de-aligns itself after one chunk. An
+upstream performance quirk, not a correctness bug — and the reason a 512-byte transfer costs
+~128 loop iterations.
+
+Panel: five seats, **unanimous DOCUMENT-ONLY**. Three independently identified the #244
+mis-citation. One seat drove the reproductions above by hand from the cold debugger and ran the
+boot instrumentation, and also supplied the point that the model's 4-of-8-byte entry read means
+there is no valid bit to consult — which is what makes any value-based page-0 guard unfaithful
+by construction.
+
+---
+
+
 ## Build note: `-fgnu89-inline`
 On modern glibc/gcc the link fails with `multiple definition of __cmsg_nxthdr /
 recv / recvfrom / inet_ntop / inet_pton` — glibc's `extern inline` socket wrappers
