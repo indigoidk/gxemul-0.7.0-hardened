@@ -119,6 +119,8 @@ Oldest first.
 | `992bccb` | Round 52 (#288): the arc keyboard queue discarded itself, and its drain loop starved the guest |
 | `84ee137` | Round 53: R4030 DMA delivery accounting — audited, **not** changed (no correction number) |
 | `85a1d9e` | Round 54 (#290): the COP1 decoder enforced ISA level nowhere (#289 is void) |
+| `120586c` | docs: bring the commit timeline current (rounds 47–54, #280–#290) |
+| `2050c50` | Round 55: a regression harness, and the retirement of two gates that could not fail |
 
 ## Feature highlights
 
