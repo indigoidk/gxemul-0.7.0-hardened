@@ -28,6 +28,28 @@ RIG=$ROOT/gxemul_arc_rig
 gate_begin "clean-build"
 need_file "$EST/src" "$SEC/src" "$PMAX_TREE" "$ARC_TREE"
 
+# list_diffs <dirA> <dirB> -- relative paths of source files that differ, or exist on
+# only one side.
+#
+# Deliberately NOT `diff -rq --include='*.c'`. diff has --exclude but NO --include (that
+# is a grep option), so that command exits 2 with "unrecognized option" and prints
+# nothing -- and with stderr discarded it looks exactly like "no differences". Both the
+# divergence check and the sync check below were written that way and passed vacuously on
+# an empty list. Measured: the raw command produced 0 lines while the trees genuinely
+# differ in 6 files.
+list_diffs() {
+    local A=$1 B=$2
+    local la=$LOGDIR/.ld_a lb=$LOGDIR/.ld_b
+    ( cd "$A" && find . \( -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.skel' \) \
+        -print ) | sed 's|^\./||' | sort > "$la"
+    ( cd "$B" && find . \( -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.skel' \) \
+        -print ) | sed 's|^\./||' | sort > "$lb"
+    comm -3 "$la" "$lb" | tr -d '\t'
+    comm -12 "$la" "$lb" | while IFS= read -r f; do
+        cmp -s "$A/$f" "$B/$f" || echo "$f"
+    done
+}
+
 build_tree() {   # label, source tree, compile tree, expected object count
     local lab=$1 src=$2 tree=$3 want=$4
     local log=$LOGDIR/build_$lab.log
@@ -40,12 +62,10 @@ build_tree() {   # label, source tree, compile tree, expected object count
     # in the compile tree would silently leave the OLD source in place and the gate would
     # then report a clean build of the wrong code. That is precisely the failure this gate
     # exists to prevent, so it is asserted rather than assumed.
-    local unsynced
-    unsynced=$(diff -rq --include='*.c' --include='*.h' --include='*.cc' \
-        "$src/src" "$tree/src" 2>/dev/null | grep -c '^')
+    list_diffs "$src/src" "$tree/src" > "$LOGDIR/unsynced_$lab.txt"
+    local unsynced; unsynced=$(grep -c '^' < "$LOGDIR/unsynced_$lab.txt")
     check "$lab: source tree fully synced into compile tree" "$unsynced" "0"
-    [ "$unsynced" = 0 ] || diff -rq --include='*.c' --include='*.h' --include='*.cc' \
-        "$src/src" "$tree/src" 2>/dev/null | head -8 | sed 's/^/       /'
+    [ "$unsynced" = 0 ] || head -8 "$LOGDIR/unsynced_$lab.txt" | sed 's/^/       /'
 
     cd "$tree" || return 1
     [ -f Makefile ] || { note "$lab: no Makefile, running ./configure"
@@ -84,19 +104,22 @@ promemul/arcbios.c
 devices/dev_ne2000.c"
 
 note "checking est/ vs GXEMUL-SEC/ divergence"
-diff -rq --include='*.c' --include='*.h' --include='*.cc' --include='*.skel' \
-    "$EST/src" "$SEC/src" 2>/dev/null \
-    | sed -E 's|^Files .*/est/src/(.*) and .*|\1|; s|^Only in .*/src/?(.*): (.*)|\1/\2|; s|^//|/|' \
-    | sed 's|^/||' | sort > "$LOGDIR/divergent_actual.txt"
+list_diffs "$EST/src" "$SEC/src" | sort > "$LOGDIR/divergent_actual.txt"
 echo "$DIVERGENT" | sort > "$LOGDIR/divergent_expected.txt"
-unexpected=$(comm -23 "$LOGDIR/divergent_actual.txt" "$LOGDIR/divergent_expected.txt")
-n_unexpected=$(printf '%s' "$unexpected" | grep -c '^' )
-if [ -n "$unexpected" ]; then
+comm -23 "$LOGDIR/divergent_actual.txt" "$LOGDIR/divergent_expected.txt" \
+    > "$LOGDIR/divergent_unexpected.txt"
+n_actual=$(grep -c '^' < "$LOGDIR/divergent_actual.txt")
+n_unexpected=$(grep -c '^' < "$LOGDIR/divergent_unexpected.txt")
+if [ "$n_unexpected" != 0 ]; then
     note "UNEXPECTED divergence (likely an un-propagated correction):"
-    printf '%s\n' "$unexpected" | sed 's/^/         /'
+    sed 's/^/         /' "$LOGDIR/divergent_unexpected.txt"
 fi
-check "no divergence outside the documented set" "$n_unexpected" "0"
-note "divergent files seen: $(tr '\n' ' ' < "$LOGDIR/divergent_actual.txt")"
+note "divergent files seen ($n_actual): $(tr '\n' ' ' < "$LOGDIR/divergent_actual.txt")"
+# A FLOOR as well as a ceiling. The divergence set is known to be non-empty, so an empty
+# list means the comparison itself broke -- which is exactly how the previous version of
+# this check passed while measuring nothing.
+check_min "divergence comparison actually ran" "$n_actual" 1
+check     "no divergence outside the documented set" "$n_unexpected" "0"
 echo
 
 build_tree pmax "$EST" "$PMAX_TREE" 223
