@@ -1,5 +1,66 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-27 — NEW CANDIDATE: the SuperH console loses guest input non-deterministically
+> Found while building the landisk rig for round 55's harness, and **not yet diagnosed** —
+> recorded here with its measurement so a future round starts from evidence rather than
+> from the symptom.
+>
+> **Symptom.** Driving OpenBSD 7.6 / landisk (`-E landisk -M 64 openbsd76-landisk-bsd.rd`)
+> to the installer's `(S)hell` and then typing commands, individual commands vanish
+> **whole**: no terminal echo, no output, no error. The shell is alive — a command sent
+> moments later runs correctly and prints the right answer.
+>
+> **What it is not.** Three hypotheses were tested and refuted:
+> - *Timing.* Adding a settle delay before each write, and raising the post-write wait from
+>   8 s to 25 s, changed nothing.
+> - *Line terminator.* Switching from `\r` to `\n` (what the long-standing pmax and arc
+>   rigs use) improved matters but did not fix them.
+> - *Input length.* One boot, ten `echo` commands of increasing length: the **15, 23 and
+>   33** byte lines ran; the **9, 17, 27 and 41** byte lines were lost. Neither a length
+>   ceiling nor a strict alternation. Roughly one write in three survives.
+>
+> Retrying a command up to six times still failed to land `$((6*7))` or `uname -m`
+> reliably, and even a bare `echo` succeeded only sometimes.
+>
+> **Where to look.** `dev_scif.c` (the SH SCIF serial console) and the console host-glue in
+> `core/console.c`. Rounds 26/27 (#251/#252) already found two real bugs in that glue — an
+> output-flush bookkeeping error and a stdin-EOF freeze — so an input-side defect in the
+> same area is plausible. The alternative is a receiver-ready/interrupt-timing issue in the
+> SCIF model itself, where a byte written while the guest has not armed its receiver is
+> dropped instead of held.
+>
+> **Why it was not chased in round 55.** The rig only needed a dependable boot gate, and
+> `BOOT_REACHED` is 1 on every run, so the harness asserts the boot and the chip identity
+> the guest's own PCI probe prints (`shpcic0 at mainbus0: HITACHI SH7751R`) and sends no
+> input at all. That is honest coverage; this is a separate bug and deserves its own round.
+> **Reproduce with** `regress/drive_guest.py` by giving the `landisk` rig a `steps` list.
+
+> ## 2026-07-27 — Round 55: the harness UNBLOCKED an item that was dropped as un-testable
+> **S-format round-to-nearest** (`core/float_emul.c` ~277: `ieee_store_float_value()` truncates to 23
+> fraction bits, so single-precision inexact results are 1 ulp low — pre-existing, all ops, all five
+> calling CPU families) was previously set aside as **un-testable**: exercising it live was thought to
+> need hand-written single-precision assembly, because the OpenBSD 2.2 rig image has no working `cc`
+> and gcc never emits the relevant instruction forms.
+>
+> **That reasoning was wrong, and round 55's `regress/diff_ieee_store.c` is the counter-example.**
+> `ieee_store_float_value()` is a **pure function**, so it needs no guest at all: it can be
+> differentialled offline over tens of millions of inputs in seconds, and — unlike the #287 overflow
+> case, where the differential compared old against new — round-to-nearest has an **independent
+> oracle** available. The host's own `(float)x` conversion *is* correctly-rounded IEEE-754, so the
+> test is not "did the answer change" but "is the answer right", which is a strictly stronger claim
+> than anything the project has been able to make about this function.
+>
+> The measurement to run first, per the standing "only change what we can test for" rule: sweep random
+> doubles, compare `store(x, IEEE_FMT_S)` against the host `(float)` result, and count how many differ
+> and by how much. If the 1-ulp-low characterization is right, the differential will show it directly
+> and bound the blast radius before a line is edited. **Still un-fixed — this entry records that the
+> obstacle was the instrument, not the bug.**
+>
+> Note the one thing the offline route does *not* cover, so it is not oversold: SH-4 resets to
+> round-to-zero (established in round 51), so any rounding change must be FCSR/FPSCR-aware rather than
+> unconditionally round-to-nearest. The differential can prove the arithmetic; it cannot by itself
+> decide the per-architecture rounding-mode policy.
+
 > ## 2026-07-26 — Rounds 41–46 (#271–#279): the backlog this batch DOCUMENTED rather than fixed
 > Six rounds shipped **nine corrections** (#271–#279) across `devices/dev_vga.c`, `core/float_emul.c`,
 > `devices/dev_le.c`, `devices/dev_asc.c` and `cpus/cpu_mips.c` — see CHANGELOG / REVIEW_FINDINGS

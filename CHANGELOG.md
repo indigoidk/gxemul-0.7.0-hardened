@@ -1413,6 +1413,198 @@ different seat two rounds ago. A seat that does not answer is not counted as agr
 ---
 
 
+## Fifty-fifth round — the regression harness itself, and two gates that could not fail
+
+No correction number: nothing under `src/` changes. This round is about the instrument
+rather than the patient, and it starts by retiring two gates this project had been
+treating as evidence.
+
+### The two vacuous gates
+
+**The 20-machine `-V` smoke.** It booted twenty machines on a zero-filled blob and quit.
+Round 51 instrumented it and measured that it executed **zero** floating-point stores —
+so it would have passed identically whether #287 was correct, wrong, or absent. It was
+reported as a pass in several earlier rounds.
+
+**The 97-alias startup matrix**, added earlier in this same session and retired within it.
+With no kernel, every machine prints `No filename. Aborting.`, so the matrix compared
+*error strings* across three builds. It produced exactly one genuine signal — `g4plus`,
+an MPC7455 subtype this fork added that upstream does not recognise — and could not have
+caught a wrong answer anywhere.
+
+Both are replaced by gates that either execute guest code or differentiate a pure function
+in closed form.
+
+### A measurement trap that manufactured a finding
+
+The first version of the replacement A/B compared how many bytes each build produced on a
+guest boot. It reported that upstream 0.7.0 suffered a capability regression on luna88k:
+zero bytes, against 4,793 for the fork.
+
+That was an artifact. When gxemul's stdout is a pipe it is 4 KB block-buffered, and
+`timeout`'s SIGTERM discards a partial block — so a guest that produced 3 KB of perfectly
+good boot output scores **zero**, while one that produced 5 KB scores 4096. Re-run under
+`stdbuf -o0`, upstream produces its full 699-byte banner.
+
+Two rules came out of it, both now enforced in `regress/lib.sh`:
+
+- every emulator invocation goes through `run_emu()`, which forces `stdbuf -o0 -e0`;
+- comparison is on **semantic markers**, never byte counts. Under a wall-clock timeout a
+  byte count measures how fast the host happened to be. The luna88k A/B makes the point
+  directly: HEAD and pre-batch differ by 47 bytes and are *identical* on every marker.
+
+A third rule came from the same run: a missing binary must hard-fail (`need_exec`), never
+score zero, because a wrong path is otherwise indistinguishable from total failure.
+
+### Upstream 0.7.0 does not boot OpenBSD/luna88k
+
+Measured unbuffered over 300 s: upstream emits its 699-byte banner and no guest output at
+all, while both fork builds reach a `login:` prompt. `gate_ab.sh` asserts that as the
+**expected** baseline rather than flagging it.
+
+The obvious explanation was tested and **refuted**. The hypothesis was that the fork's
+m88k signed-shift and shift-by-32 UB corrections (#36–40, #46) mattered because a modern
+GCC exploits that undefined behaviour. Rebuilding pristine `39748e3` with
+`-O2 -fwrapv -fno-strict-overflow -fno-strict-aliasing` compiles clean (223 objects) and
+still produces nothing but the banner. Whatever fixed luna88k is a real source change
+inside the first hardening commit; narrowing it further would need that commit split.
+
+### New coverage: the first non-MIPS rig that checks an answer
+
+`core/float_emul.c` is called by the alpha, m88k, mips, ppc and sh cores plus `dev_pvr`,
+but until now only MIPS had ever executed it under test — which is precisely why #287, a
+change to the *shared* S-format arm, had no non-MIPS evidence behind it.
+
+**OpenBSD 7.7 / luna88k (M88100)** closes that. `cpus/cpu_m88k_instr.c` stores
+`IEEE_FMT_S`, the exact arm #287 changed. The rig drives the guest to a root shell and
+checks a **computed value**, not merely that the guest survived:
+
+```
+awk 'BEGIN{printf "%.6f %.6f", 1.5/3.0, 2.0**0.5}'   ->   0.500000 1.414214
+```
+
+**OpenBSD 7.6 / landisk (SH4)** boots the SH4 core through a full kernel device probe and
+checks a value the guest itself prints — `shpcic0 at mainbus0: HITACHI SH7751R`. It sends
+**no** guest input, and that turned into a finding of its own.
+
+### A new bug candidate, found by trying to build a rig on it
+
+The SuperH console **loses guest input non-deterministically**. Commands vanish whole: no
+terminal echo, no output, no error, while the shell stays alive and a command sent moments
+later runs correctly. Three explanations were tested and refuted before it was recorded as
+a bug rather than worked around:
+
+- *timing* — a settle delay before each write, and raising the post-write wait from 8 s to
+  25 s, changed nothing;
+- *line terminator* — moving from `\r` to `\n` (what the pmax and arc rigs have always
+  used) improved it but did not fix it;
+- *input length* — one boot, ten `echo` commands of increasing length: the **15, 23 and
+  33** byte lines ran, the **9, 17, 27 and 41** byte ones were lost. Neither a length
+  ceiling nor a strict alternation; roughly one write in three survives.
+
+Retrying up to six times per command still could not land `$((6*7))` or `uname -m`
+reliably. Since `BOOT_REACHED` is 1 on every run, the rig asserts the boot and drops the
+interactive steps — an intermittent gate is worse than a narrow one, because it gets
+ignored and then switched off. `OUTSTANDING_BUGS.md` carries the measurements and points
+at `dev_scif.c` and the console host-glue, where rounds 26/27 (#251/#252) already found two
+real defects.
+
+Independently of that, no in-guest FP test is possible on this media anyway: the install
+ramdisk was probed and has no `awk`, `perl`, `bc`, `dc` or `python`, so SH4's FP store path
+remains unproven and the coverage table says so.
+
+### The strongest gate is offline
+
+`ieee_store_float_value()` is pure, so it is differentialled old-against-new over
+**20,016,002** inputs in about twenty seconds. The gate does not ask "did anything
+change" — it asserts a closed form for the change-set:
+
+```
+old(x) != new(x)  =>  (finite && |x| >= 2^128)          // S overflow
+                  ||  (0 < |x| < 2^-126 && signbit(x))  // S negative underflow
+```
+
+with an **empty** change-set required for `IEEE_FMT_D`. A regression is by definition a
+difference outside that set. Measured: 13,133,666 S-format differences, all classified
+(8,756,599 overflow, 4,377,067 negative underflow), **0 unexplained**, **0** in-range
+values moved, **0** D-format differences.
+
+It also pins two thresholds that sit close together and were conflated in an earlier draft
+of `regress/README.md`. They are not the same number, and the gate now determines both
+empirically rather than trusting the prose:
+
+- the stored exponent reaches 255 at **2^128** (bias 127, so `e + 127 >= 255`), which is
+  what governs the change-set;
+- the clamp statement `if (exponent >= 256)` only fires at **2^129**. Values in
+  `[2^128, 2^129)` reach exponent 255 *without* the clamp — which is why the old code
+  emitted Inf-with-garbage-mantissa there, and why the bug was never merely a clamping
+  oversight.
+
+### The panel found the new harness had the exact defect it was built to remove
+
+Two seats reviewed the harness independently and reached the same headline finding, which
+is worth stating plainly because it is embarrassing: **gate 2 did not test the emulator.**
+It transcribed *both* sides of its differential into its own C file and compared the copy
+against itself. It never compiled, linked or executed `src/core/float_emul.c` — so
+deleting #287 from the shipped source would have left all eight checks green. That is the
+same defect as the 20-machine smoke this very round retired, one level of indirection
+further back.
+
+A second overstatement, also caught by both seats: the m88k rig was described as covering
+#287. It does not. `1.5/3.0` and `sqrt(2)` are far inside the region where the two
+implementations provably agree — the harness's own closed form says they can only differ
+at `|x| >= 2^128` or `|x| < 2^-126` — so reverting #287 leaves every rig green. What the
+rig proves is that the m88k **core** executes guest code and calls the shared function.
+**No rig in the harness reaches the arm #287 changed**, MIPS included, and the coverage
+table now says so.
+
+What changed as a result:
+
+- gate 2 compiles and links the real `float_emul.c`, and asserts the file it compiled is
+  **byte-identical to the committed one**, so "the test passed" and "the repository is
+  correct" became the same statement;
+- it checks **absolute answers** as well as agreement — `1e300` must store as
+  `0x7f800000` — because a purely relative differential passes when both sides are wrong
+  the same way;
+- the change-set is now checked as an **equivalence**. Containment alone is satisfied by a
+  mutant that disables the overflow arm while keeping the underflow one; the completeness
+  half rejects it, measured at **8,756,600** inputs that should have moved and did not.
+  On the shipped source the two populations come out *identical* — 13,133,666 predicted,
+  13,133,666 observed, **0 unexplained and 0 missed** — so the closed form is an
+  empirically established equivalence rather than a one-way bound;
+- a new `selftest_mutation.sh` gate exists for one purpose: to prove gate 2 can fail. It
+  reverts #287 in a scratch copy and requires the differential to go red. It is the only
+  gate that asserts something about the *harness* rather than the emulator;
+- `count()` was emitting **two** lines on a zero match (`grep -c` prints `0` *and* exits 1,
+  so the `|| echo 0` fired as well), which made gate 6's one deliberate expected-negative
+  assertion impossible to satisfy. The full run reproduced it verbatim;
+- the skip exit code moved from 2 to **77**, because bash exits 2 on a syntax error — a
+  typo in a gate script was being reported as a coverage gap while the run exited 0;
+- `gate_build.sh` now asserts that `est/` and `GXEMUL-SEC/` diverge in exactly the
+  documented set. Nothing else in the harness would notice a correction applied to one
+  tree and not the other: both build clean, both boot, and pmax quietly runs the old code.
+
+Three of the harness's own assertions were wrong and were corrected by *running* it, not by
+review — which is the point of a gate that can fail.
+
+- `{ asc: data in }` (`dev_asc.c:417`) fires whenever a SCSI target has fewer bytes ready
+  than the guest asked for — an ordinary event, measured at 1 on pmax and 5 on arc across
+  a healthy boot — so requiring zero was simply wrong. It is bounded by a ceiling now,
+  which still catches the flood class that round 40 found.
+- A first-difference probe that swept exact powers of two reported "no difference
+  anywhere", because at an exact power of two the assembled fraction is already zero and
+  #287's mantissa clear is a no-op. It sweeps `1.5 * 2^e` instead.
+- The completeness predicate initially excluded "exact powers of two" for that same
+  reason, and the gate promptly found **one** input in 13,133,667 that contradicted it:
+  `-1.1960164410049153e+198`, which both versions store as `ff800000` and which is not a
+  power of two. The function *truncates* the fraction to 23 bits, so **any** double whose
+  leading 23 fraction bits are zero assembles an all-zero mantissa; powers of two are
+  merely the special case. With the predicate derived from the truncation rather than
+  guessed, the missed count went to zero.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

@@ -157,10 +157,60 @@ Oldest first.
   Remaining fidelity gaps (unreachable or needing new interrupt infrastructure) are documented in
   `REVIEW_FINDINGS.md`.
 
+## Regression harness
+
+`regress/run.sh` runs six gates; `regress/run.sh 2 4` runs a subset. The governing rule is
+that **a gate which cannot fail is worse than no gate**, because it reports green — and
+this fork had been counting two such gates as evidence:
+
+- a 20-machine `-V` smoke that booted each machine on a zero-filled blob and quit. It
+  executed **zero** floating-point stores, so it would have passed identically whether
+  #287 was right, wrong or absent;
+- a 97-alias startup matrix that, with no kernel supplied, compared the three builds'
+  **error strings**.
+
+Both were retired and replaced by gates that either execute guest code or differentiate a
+pure function in closed form.
+
+| # | Gate | Proves |
+|---|------|--------|
+| 1 | `gate_build.sh` | Both trees rebuild clean from committed source — 223 objects (pmax), 224 (arc), zero warnings |
+| 2 | `gate_offline.sh` | Closed-form differential of `ieee_store_float_value()` over 20,016,002 inputs |
+| 3 | `gate_mips.sh` | pmax 15/15 and arc 13/13 to `uid=0(root)` on OpenBSD 2.2 |
+| 4 | `gate_crossfamily.sh` | m88k and SuperH cores execute guest code and return checked answers |
+| 5 | `gate_hygiene.sh` | No distress markers in the raw pty logs |
+| 6 | `gate_ab.sh` | Three-way A/B against pristine `39748e3` and pre-batch `2ffc91e` |
+
+**The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
+differentialled old-against-new over twenty million inputs in seconds — a stronger
+instrument than any boot test, which can only observe whether a guest happened to notice.
+It does not ask "did anything change"; it asserts a closed form for the change-set, which
+is what makes an intended correction distinguishable from a regression.
+
+**New in this round: the first non-MIPS rig that checks an answer.** `core/float_emul.c` is
+called by the alpha, m88k, mips, ppc and sh cores, but only MIPS had ever executed it under
+test. `cpus/cpu_m88k_instr.c` stores `IEEE_FMT_S` — the exact arm #287 changed — so the
+OpenBSD 7.7 / luna88k rig drives the guest to a root shell and checks a computed value:
+`1.5/3.0` and `sqrt(2)` must come back as `0.500000` and `1.414214`.
+
+A SuperH rig (OpenBSD 7.6 / landisk) boots the SH4 core through a full kernel device probe
+and checks a value the guest itself prints (`shpcic0 at mainbus0: HITACHI SH7751R`). It
+sends **no** guest input, which is a measured decision rather than a shortcut: the emulated
+SuperH console loses writes non-deterministically — on one boot, ten commands of increasing
+length, and the 15, 23 and 33 byte lines ran while the 9, 17, 27 and 41 byte ones vanished
+whole, with no echo and no output. That is now a bug candidate in its own right, written up
+with its measurements in [`OUTSTANDING_BUGS.md`](OUTSTANDING_BUGS.md). An intermittent gate
+is worse than a narrow one.
+
+See [`regress/README.md`](regress/README.md) for the full coverage table, the gaps in the
+harness itself, and what each gate does *not* prove.
+
 ## Documentation
 
 - [`CHANGELOG.md`](CHANGELOG.md) — per-correction detail
 - [`REVIEW_FINDINGS.md`](REVIEW_FINDINGS.md) — findings, severities, methodology
 - [`CHANGES.patch`](CHANGES.patch) — full unified diff against upstream
 - [`OUTSTANDING_BUGS.md`](OUTSTANDING_BUGS.md) — triaged / deferred items
+- [`regress/README.md`](regress/README.md) — the regression harness, and what each gate does *not* prove
+- [`regress/images.md`](regress/images.md) — guest images, provenance, and the per-family coverage table
 - [`README`](README) / [`LICENSE`](LICENSE) — upstream's original overview, build instructions, and license, retained unchanged
