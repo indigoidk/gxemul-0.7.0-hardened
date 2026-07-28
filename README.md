@@ -24,7 +24,7 @@ in four themes:
    guest→host memory boundary, so an untrusted ROM, disk image, or guest cannot drive
    out-of-bounds writes into the host; guest-reachable `exit(1)`/`abort()`/host crashes become
    warn-and-continue.
-2. **Hardware fidelity** (#155–#279) — accuracy to real silicon: MIPS fault-signature fidelity,
+2. **Hardware fidelity** (#155–#290) — accuracy to real silicon: MIPS fault-signature fidelity,
    guest-reachable host halts turned into hardware-plausible faults, R4000 FPU denormal traps,
    MIPS FPU result-correctness (div/sqrt/compare/NaN canonicalization, #254/#255), the R4030
    interval-timer rate (#257), LANCE RX-ring exhaustion signalling (#262), and a **deep NCR 53C94
@@ -36,7 +36,15 @@ in four themes:
    the FP→integer conversion of NaN/±Inf/out-of-range values pinned to the R3010/R4010 result
    instead of an undefined C cast whose answer depended on the build host (#273), and six
    guest-repeatable `fatal()` floods either verbosity-gated or latched once per device (#269,
-   #272, #276–#279).
+   #272, #276–#279). Rounds 47–54 (#280–#290) pursue one theme — **an emulated device telling the
+   guest a transfer succeeded when it did not**: the ASC reported short DATA\_IN and DATA\_OUT
+   transfers as complete (#281–#284, and #286 for the count it still took from the *request*
+   rather than the transfer), a MODE SELECT gate parsed a byte that was never sent (#285), the
+   S-format store turned a floating-point overflow into a NaN encoding where hardware gives ±Inf
+   (#287), the arc keyboard ring discarded its whole contents on overrun while its drain loop
+   could starve the guest outright (#288), and the COP1 decoder admitted floating-point formats no
+   ISA level in the machine actually defines (#290). Round 53 audited a sixth candidate and
+   **shipped no code**, because the check it proposed would have been unreachable by construction.
 3. **Debuggability** — subsystem breakpoints, breakpoint hit-counts + "run N" (#248), data
    write-watchpoints (#250), an honest `breakpoint subsystem` listing (#270), verbosity gating,
    and debugger conveniences.
@@ -47,6 +55,14 @@ multi-CPU-architecture boot sweep, and full OpenBSD 2.2 rigs on pmax (R3000) and
 booting to a root shell and halting cleanly. Built with an agentic multi-model workflow: each
 change drafted by Claude, then adversarially reviewed to consensus by independent models (Codex
 GPT-5.x, Fable, Gemini, and other cloud models) before commit.
+
+Two working rules do most of the load-bearing work. **Only change what can be tested for** — the
+wrong behaviour is reproduced on the committed build *before* any edit, and a candidate that
+cannot be reproduced is documented rather than patched; round 53 closed that way, and so did the
+`dev_asc.c` PMAZ address register during the R4030 audit. And **the panel decides by measurement,
+not by vote** — where seats disagreed, the tie was broken by fault injection or a probe on the
+real rigs, which has now overturned the panel majority several times. Each round also records what
+it did *not* prove: several corrections here are latent on the reference guests and say so.
 
 ## Commit timeline
 
@@ -91,6 +107,18 @@ Oldest first.
 | `d917a66` | Round 44 (#276/#277): ASC — two guest-repeatable diagnostic floods, one gated and one latched |
 | `b93b428` | Round 45 (#278): MIPS exception path — nine ungated `fatal()` calls per low-address guest access |
 | `b38cc4f` | Round 46 (#279): `float_emul.c` — the reserved-format `fatal()` cluster, and a missing `return` |
+| `895af34` | docs: close out rounds 41–46 (#271–#279) — timeline, and a real backlog |
+| `18f81d2` | docs: backlog items 8 and 9 — S-format overflow, and the VGA stale length |
+| `05488a1` | Round 47 (#280): `dev_fdc.c` — one host line per guest access to an unmodelled register |
+| `a0d34f4` | Round 48 (#281/#282): ASC — a short DATA\_IN transfer reported as if the full count had moved |
+| `2b52fca` | Round 49 (#283): ASC — a short DATA\_OUT DMA committed bytes the guest never supplied |
+| `8522065` | Round 49 (#284): ASC — the COMMAND-phase DMA counter said "nothing moved" and "complete" at once |
+| `2ffc91e` | Round 49 (#285): the MODE SELECT gate accepted a partial parameter list, and parsed a byte that was never sent |
+| `26de880` | Round 50 (#286): the DATA\_IN counter still reported the count requested, not the count that moved |
+| `0f95109` | Round 51 (#287): the S-format store turned an overflow into a NaN, and an underflow into +0 |
+| `992bccb` | Round 52 (#288): the arc keyboard queue discarded itself, and its drain loop starved the guest |
+| `84ee137` | Round 53: R4030 DMA delivery accounting — audited, **not** changed (no correction number) |
+| `85a1d9e` | Round 54 (#290): the COP1 decoder enforced ISA level nowhere (#289 is void) |
 
 ## Feature highlights
 
