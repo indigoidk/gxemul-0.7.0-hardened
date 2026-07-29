@@ -35,24 +35,48 @@ done
 rm -rf "$T"; mkdir -p "$T"
 cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 
-# Revert #287 in the COPY: drop the overflow guard, restore the upstream underflow line.
-python3 - "$T/mutant.c" <<'PY'
+# THREE mutants now, one per guarded property. Each breaks the code a different way and
+# the differential must go red for every one of them.
+#
+#   A  revert #287      overflow keeps its garbage fraction (a NaN encoding) and
+#                       underflow loses its sign -- in the #292 structure that is
+#                       "to_inf never fires" plus "flush drops the sign bit"
+#   B  ties-away        #292's nearest mode rounds every exact tie up instead of to
+#                       even. A random sweep cannot catch this (an exact tie occurs
+#                       about once per 2^29 inputs); only the named vectors do.
+#   C  mode ignored     #292's rm parameter is accepted and discarded. Every
+#                       differential ever written passes an ignored parameter; the
+#                       mode-is-read vector pair is what catches it.
+mutate() {   # name -> writes $T/mutant_<name>.c, echoes ok/FAIL
+    local name=$1
+    cp "$TREE/src/core/float_emul.c" "$T/mutant_$name.c"
+    python3 - "$T/mutant_$name.c" "$name" <<'PY'
 import io, sys
-p = sys.argv[1]
+p, name = sys.argv[1], sys.argv[2]
 s = io.open(p, encoding="utf-8", errors="surrogateescape").read()
-a = "\t\t\tif (exponent == ((int64_t)1 << n_exp) - 1)\n\t\t\t\tr &= (uint64_t)1 << signofs;\n"
-b = "\t\t\tif (exponent == 0)\n\t\t\t\tr &= (uint64_t)1 << signofs;\n"
-if a not in s or b not in s:
-    print("SETUP_FAIL: the #287 guards were not found -- has the arm been rewritten?")
-    sys.exit(1)
-s = s.replace(a, "", 1).replace(b, "\t\t\tif (exponent == 0)\n\t\t\t\tr = 0;\n", 1)
+def need(frag):
+    if frag not in s:
+        print("SETUP_FAIL: expected fragment not found for mutant %s" % name)
+        sys.exit(1)
+
+if name == "revert287":
+    a = "\t\t\t\tif (to_inf)\n\t\t\t\t\tr &= (uint64_t)1 << signofs;"
+    b = "\t\t\tif (exponent == 0)\n\t\t\t\tr &= (uint64_t)1 << signofs;"
+    need(a); need(b)
+    s = s.replace(a, "\t\t\t\tif (0)\n\t\t\t\t\tr &= (uint64_t)1 << signofs;", 1)
+    s = s.replace(b, "\t\t\tif (exponent == 0)\n\t\t\t\tr = 0;", 1)
+elif name == "tiesaway":
+    a = "round_up = nf > 0.5 ||\n\t\t\t\t\t    (nf == 0.5 && (r & 1));"
+    need(a)
+    s = s.replace(a, "round_up = nf >= 0.5;", 1)
+elif name == "modeignored":
+    a = "uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)\n{"
+    need(a)
+    s = s.replace(a, a + "\n\trm = IEEE_RM_LEGACY;", 1)
 io.open(p, "w", encoding="utf-8", errors="surrogateescape", newline="").write(s)
 PY
-if [ $? -ne 0 ]; then
-    check "mutation could be applied" "no" "yes"
-    gate_end; exit $?
-fi
-check "mutation could be applied" "yes" "yes"
+    [ $? -eq 0 ] && echo ok || echo FAIL
+}
 
 build_and_run() {   # label, source file -> prints DIFF_PASS count
     $CC -O2 -I"$TREE/src/include" -o "$T/$1" \
@@ -61,16 +85,19 @@ build_and_run() {   # label, source file -> prints DIFF_PASS count
     grep -c 'DIFF_PASS' "$T/$1.out"
 }
 
+for m in revert287 tiesaway modeignored; do
+    check "mutant $m could be applied" "$(mutate $m)" "ok"
+done
+
 note "control: differential against the shipped float_emul.c"
 real=$(build_and_run real "$TREE/src/core/float_emul.c")
-note "mutant: differential against float_emul.c with #287 reverted"
-mut=$(build_and_run mut "$T/mutant.c")
+check "unmutated source passes gate 2" "$real" "1"
 
-grep -E '^(absolute-answer failures|S-format differences|first-difference-at)' \
-    "$T/mut.out" 2>/dev/null | sed 's/^/       mutant: /'
-
-check "unmutated source passes gate 2"        "$real" "1"
-check "reverted #287 is DETECTED (must fail)" "$mut"  "0"
+for m in revert287 tiesaway modeignored; do
+    note "mutant $m: the differential must go red"
+    out=$(build_and_run "mut_$m" "$T/mutant_$m.c")
+    check "mutant $m is DETECTED (must fail)" "$out" "0"
+done
 
 gate_end
 exit $?

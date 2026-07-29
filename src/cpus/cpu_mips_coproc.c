@@ -1118,7 +1118,19 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
 	    fpu_unimpl_trap(cpu, cp))
 		return;
 
-	uint64_t r = ieee_store_float_value(nf, ieee_fmt);
+	/*  #292: honour FCSR's rounding mode for the result store.  The
+	    default mode 0 is round-to-nearest-even, under which half of all
+	    in-range single-precision results were previously 1 ulp low
+	    (truncation).  FCSR[1:0] uses the same 0..3 encoding as
+	    IEEE_RM_*, so the field passes straight through.  The W and L
+	    integer formats ignore the mode inside the store function on
+	    purpose -- cvt.w and trunc.w are indistinguishable at this
+	    call today, and trunc.w must stay round-toward-zero regardless
+	    of FCSR (see OUTSTANDING_BUGS on cvt.w).  Double-precision
+	    results cannot change: a host double already has exactly the
+	    52 fraction bits D wants, so the remainder is always zero.  */
+	uint64_t r = ieee_store_float_value_rm(nf, ieee_fmt,
+	    cp->fcr[MIPS_FPU_FCSR] & MIPS_FCSR_RM_MASK);
 
 	/*  #255: canonicalize a NaN result to the legacy-MIPS QUIET NaN
 	    (fraction MSB clear). ieee_store_float_value() emits all-ones

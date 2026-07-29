@@ -238,11 +238,34 @@ no_reasonable_result:
 
 
 /*
- *  ieee_store_float_value():
+ *  ieee_store_float_value_rm():
  *
- *  Generates a 64-bit IEEE-formated value in a specific format.
+ *  Generates a 64-bit IEEE-formated value in a specific format, under a
+ *  caller-supplied rounding mode.
+ *
+ *  #292: the historical entry point below truncates the fraction, which is
+ *  bit-exact round-toward-zero -- measured at 0 mismatches against a
+ *  round-toward-zero oracle over 2.48 million in-range doubles.  That is
+ *  CORRECT for the SH-4 (whose FPSCR resets to round-to-zero) and for
+ *  PowerPC stfs (architecturally a bit extraction), but WRONG for MIPS,
+ *  whose default mode is round-to-nearest-even: half of all in-range
+ *  single-precision stores came out 1 ulp low (measured 310438 of 619333,
+ *  always low, never high).
+ *
+ *  The mode values 0..3 match the encoding MIPS FCSR[1:0], SH FPSCR[1:0]
+ *  (which defines only 0 and 1) and PowerPC FPSCR[1:0] all share:
+ *  0 nearest-even, 1 toward zero, 2 toward +Inf, 3 toward -Inf.
+ *  IEEE_RM_LEGACY reproduces the historical behaviour bit for bit --
+ *  truncation, but with #287's overflow-to-Infinity kept as-is -- and is
+ *  what every caller that does not pass a mode still gets.
+ *
+ *  The W and L (integer) formats IGNORE the mode on purpose: cvt.w and
+ *  trunc.w currently route through the same call and cannot be told apart
+ *  here, and trunc.w is architecturally round-toward-zero REGARDLESS of
+ *  the mode bits.  Honouring rm for them would break trunc.w.  See the
+ *  outstanding-bugs entry on cvt.w before changing that.
  */
-uint64_t ieee_store_float_value(double nf, int fmt)
+uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 {
 	int n_frac = 0, n_exp = 0, signofs = 0, i, exponent;
 	uint64_t r = 0, r2;
@@ -359,6 +382,45 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 				}
 			}
 
+			/*  #292: what remains in nf after the loop is the exact
+			    remainder, in units of one ulp of the destination:
+			    every step is a multiply by 2 (exact) or a subtraction
+			    of 1 from a value in [1,2) (exact by Sterbenz), so
+			    nf == 0.5 is a true half-way tie, exactly.  Round the
+			    assembled word as a UNIT -- the carry must be allowed
+			    to run out of the fraction into the exponent, or
+			    2 - 2^-24 would wrap to 1.0 instead of rounding to
+			    2.0.  For D the remainder is always exactly 0 (a host
+			    double has exactly the 52 bits D wants), so every mode
+			    is a no-op there and D results cannot change.  */
+			if (rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ &&
+			    nf > 0.0) {
+				int negative = (r >> signofs) & 1;
+				int round_up = 0;
+				switch (rm) {
+				case IEEE_RM_RN:
+					round_up = nf > 0.5 ||
+					    (nf == 0.5 && (r & 1));
+					break;
+				case IEEE_RM_RP:
+					round_up = !negative;
+					break;
+				case IEEE_RM_RM:
+					round_up = negative;
+					break;
+				}
+				if (round_up) {
+					uint64_t fracmask =
+					    (((uint64_t)1 << n_frac) - 1);
+					uint64_t frac = (r & fracmask) + 1;
+					if (frac >> n_frac) {
+						frac = 0;
+						exponent ++;
+					}
+					r = (r & ~fracmask) | frac;
+				}
+			}
+
 			/*  Insert the exponent into the resulting word:  */
 			/*  (First bias, then make sure it's within range)  */
 			exponent += (((uint64_t)1 << (n_exp-1)) - 1);
@@ -376,9 +438,37 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 			    double, which is merely FP_NORMAL. Test the biased
 			    exponent and NOT the clamp above: |x| in [2^128, 2^129)
 			    reaches 255 with no clamping at all, so a clamp-scoped
-			    fix would leave that whole binade storing NaNs.  */
-			if (exponent == ((int64_t)1 << n_exp) - 1)
-				r &= (uint64_t)1 << signofs;
+			    fix would leave that whole binade storing NaNs.
+
+			    #292: overflow is MODE-DEPENDENT (IEEE 754 s7.4).
+			    Nearest carries to Infinity; toward-zero stops at the
+			    largest finite value; the directed modes give Infinity
+			    on the side they round toward and the largest finite
+			    value on the other.  IEEE_RM_LEGACY keeps #287's
+			    unconditional Infinity so the historical entry point
+			    is bit-identical.  */
+			if (exponent == ((int64_t)1 << n_exp) - 1) {
+				int to_inf = 1;
+				int negative = (r >> signofs) & 1;
+				switch (rm) {
+				case IEEE_RM_RZ:
+					to_inf = 0;
+					break;
+				case IEEE_RM_RP:
+					to_inf = !negative;
+					break;
+				case IEEE_RM_RM:
+					to_inf = negative;
+					break;
+				}
+				if (to_inf)
+					r &= (uint64_t)1 << signofs;
+				else {
+					exponent = ((int64_t)1 << n_exp) - 2;
+					r = (r & ((uint64_t)1 << signofs)) |
+					    (((uint64_t)1 << n_frac) - 1);
+				}
+			}
 			r |= (uint64_t)exponent << n_frac;
 
 			/*  #287: exponent 0 here is UNDERFLOW, never 0.0 -- that
@@ -386,10 +476,15 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 			    the sign set at the top of this arm, as the
 			    FP_SUBNORMAL arm below already does (-1e-40 stored as
 			    +0). Both arms are unreachable for D, whose finite
-			    exponents bias into 1..2046. Rounding is deliberately
-			    left alone: truncation is wrong for MIPS but right for
-			    SH-4, which resets to round-to-zero, so it needs an
-			    FCSR.RM-aware change and not this one.  */
+			    exponents bias into 1..2046.
+
+			    #292: the flush-to-zero semantics are kept for every
+			    mode -- MIPS routes non-flush denormal results away
+			    before this store (#246), and SH FPSCR.DN flushes in
+			    hardware.  The one rounding interaction that matters
+			    is handled above: a fraction carry can lift biased
+			    exponent 0 to 1, which is exactly FLT_MIN, the correct
+			    nearest result for values just under 2^-126.  */
 			if (exponent == 0)
 				r &= (uint64_t)1 << signofs;
 			break;
@@ -416,5 +511,22 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 		r = (uint32_t) r;
 
 	return r;
+}
+
+
+/*
+ *  ieee_store_float_value():
+ *
+ *  The historical entry point.  #292: now a wrapper that selects
+ *  IEEE_RM_LEGACY -- truncation (bit-exact round-toward-zero) with #287's
+ *  overflow-to-Infinity -- so all 24 pre-existing single-precision call
+ *  sites, and every double-precision one, keep their behaviour bit for
+ *  bit.  The offline regression gate compares this entry point against
+ *  unmodified upstream over 20 million inputs, so any deviation the
+ *  wrapper introduced would show up there as an unexplained difference.
+ */
+uint64_t ieee_store_float_value(double nf, int fmt)
+{
+	return ieee_store_float_value_rm(nf, fmt, IEEE_RM_LEGACY);
 }
 

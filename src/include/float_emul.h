@@ -45,7 +45,21 @@ struct ieee_float_value {
 #define	IEEE_FMT_W		3	/*  word, 32-bit integer  */
 #define	IEEE_FMT_L		4	/*  long, 64-bit integer  */
 
+/*  #292: rounding modes for ieee_store_float_value_rm().  0..3 match the
+    encoding MIPS FCSR[1:0], SH FPSCR[1:0] and PowerPC FPSCR[1:0] share, so
+    a caller can pass its status-register field through directly.  LEGACY
+    reproduces the historical behaviour bit for bit (truncation, with
+    #287's overflow-to-Infinity) and is what the two-argument entry point
+    uses.  The W/L integer formats ignore the mode -- see the comment on
+    the function before changing that.  */
+#define	IEEE_RM_RN		0	/*  to nearest, ties to even  */
+#define	IEEE_RM_RZ		1	/*  toward zero  */
+#define	IEEE_RM_RP		2	/*  toward +Inf  */
+#define	IEEE_RM_RM		3	/*  toward -Inf  */
+#define	IEEE_RM_LEGACY		4	/*  truncate; overflow to Inf  */
+
 void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp, int fmt);
 uint64_t ieee_store_float_value(double nf, int fmt);
+uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
 
 #endif	/*  FLOAT_EMUL_H  */

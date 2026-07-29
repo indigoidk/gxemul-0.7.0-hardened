@@ -70,6 +70,7 @@
 #include <stdarg.h>
 #include <math.h>
 #include <string.h>
+#include <float.h>		/*  FLT_MIN, for the #292 oracles  */
 
 #include "float_emul.h"		/*  the REAL ieee_store_float_value()  */
 
@@ -186,6 +187,54 @@ static int p_differs(double x)
 struct abs_case { double v; int fmt; uint64_t want; const char *name; };
 
 /*
+ *  #292 oracles.  The host's (float) cast is correctly-rounded IEEE-754
+ *  round-to-nearest-even, so it is an INDEPENDENT right answer -- unlike the
+ *  #287 sections above, which compare the shipped code against upstream's.
+ *  The toward-zero oracle is derived from it with nextafterf: if nearest
+ *  overshot the magnitude, toward-zero is one step back toward zero
+ *  (nextafterf(+Inf, 0) is FLT_MAX, which handles overflow for free).
+ *
+ *  DO NOT rewrite these with fesetround()/fenv.  Measured on gcc 15.2: the
+ *  compiler CSEs two casts that differ only in prevailing rounding mode into
+ *  one, even under -frounding-math, and the result LOOKS like a clean pass
+ *  while comparing a value against itself.
+ *
+ *  Two deliberate deviations of the emulator function are carved out as
+ *  predicates, never as tolerances:
+ *    - results in the subnormal band flush to signed zero (the function's
+ *      documented flush-to-zero semantics; MIPS #246 routes non-flush
+ *      denormals away before the store, SH flushes in hardware);
+ *    - toward-zero overflow stops at the largest finite value.
+ */
+static uint32_t oracle_s_rn(double x)
+{
+	volatile double vx = x;
+	volatile float f = (float) vx;
+	float r = f;
+	uint32_t b;
+	if (isinf(r))
+		return signbit(x) ? 0xff800000u : 0x7f800000u;
+	if (r != 0.0f && fabsf(r) < FLT_MIN)
+		return signbit(x) ? 0x80000000u : 0u;
+	memcpy(&b, &r, 4);
+	return b;
+}
+
+static uint32_t oracle_s_rz(double x)
+{
+	volatile double vx = x;
+	volatile float f = (float) vx;	/*  nearest-even  */
+	float r = f;
+	uint32_t b;
+	if ((double) fabsf(r) > fabs(x))
+		r = nextafterf(r, 0.0f);	/*  nearest overshot -> step back  */
+	if (r != 0.0f && fabsf(r) < FLT_MIN)
+		return signbit(x) ? 0x80000000u : 0u;
+	memcpy(&b, &r, 4);
+	return b;
+}
+
+/*
  *  Does the S-format fraction assemble to all zeros?
  *
  *  #287 clears the mantissa when the exponent is 255. If the mantissa was already zero
@@ -228,6 +277,8 @@ int main(void)
 	long long n = 0, dS = 0, dD = 0, unexplained = 0, ovf = 0, und = 0;
 	long long inrange_diff = 0;
 	long long should_differ = 0, missed = 0;
+	long long rm_rn_bad = 0, rm_rz_bad = 0, rm_mode_diff = 0, rm_d_bad = 0;
+	int rm_vec_bad = 0, rm_vec_n = 0;
 	int i, e_clamp, e_255, e_diff, abs_bad = 0;
 
 	/*
@@ -328,6 +379,41 @@ int main(void)
 			}
 		}
 
+		/*  #292: the mode-aware entry point against INDEPENDENT oracles.
+		    This is a stronger claim than the sections above -- not "did
+		    the answer change" but "is the answer right".  NaN and Inf
+		    inputs are skipped; those arms are mode-free and already
+		    covered by the legacy comparison.  */
+		if (isfinite(x)) {
+			uint32_t grn = (uint32_t) ieee_store_float_value_rm(
+			    x, IEEE_FMT_S, IEEE_RM_RN);
+			uint32_t grz = (uint32_t) ieee_store_float_value_rm(
+			    x, IEEE_FMT_S, IEEE_RM_RZ);
+			uint32_t wrn = oracle_s_rn(x);
+			uint32_t wrz = oracle_s_rz(x);
+			if (grn != wrn) { rm_rn_bad++;
+				if (rm_rn_bad < 4)
+					printf("  RM/RN WRONG %.17g: got %08x want %08x\n",
+					    x, grn, wrn);
+			}
+			if (grz != wrz) { rm_rz_bad++;
+				if (rm_rz_bad < 4)
+					printf("  RM/RZ WRONG %.17g: got %08x want %08x\n",
+					    x, grz, wrz);
+			}
+			if (grn != grz)
+				rm_mode_diff++;
+			/*  D results must be untouched by ANY mode: a host
+			    double has exactly the 52 fraction bits D wants  */
+			if (isnormal(x)) {
+				uint64_t dw;
+				memcpy(&dw, &x, 8);
+				if (ieee_store_float_value_rm(x, IEEE_FMT_D,
+				    IEEE_RM_RN) != dw)
+					rm_d_bad++;
+			}
+		}
+
 		/*  D format: the change-set must be EMPTY  */
 		a = store_old(x, IEEE_FMT_D, NULL, NULL);
 		b = ieee_store_float_value(x, IEEE_FMT_D);
@@ -349,9 +435,65 @@ int main(void)
 	printf("must-differ population        : %lld\n", should_differ);
 	printf("MISSED                        : %lld\n", missed);
 
+	/*
+	 *  #292 named vectors.  Each catches a specific WRONG implementation
+	 *  that the random sweep cannot: an exact half-way tie occurs about
+	 *  once per 2^29 random inputs, so ties-to-even vs ties-away is
+	 *  invisible to 20M samples; the carry-out and mode-overflow cases
+	 *  are similarly rare.  Chosen by the review panel.
+	 */
+	{
+		struct { double v; int rm; uint32_t want; const char *why; } vec[] = {
+		    { 0, IEEE_RM_RN, 0x3eaaaaab, "RN 1/3 rounds up" },
+		    { 0, IEEE_RM_RZ, 0x3eaaaaaa, "RZ 1/3 truncates (mode is read)" },
+		    { 0x1.000001p0,  IEEE_RM_RN, 0x3f800000, "even tie stays" },
+		    { 0x1.000003p0,  IEEE_RM_RN, 0x3f800002, "odd tie goes up" },
+		    { 0, IEEE_RM_RN, 0x40000000, "carry out of the fraction" },
+		    { 0x1.ffffffp127, IEEE_RM_RN, 0x7f800000, "carry into Inf" },
+		    { 0, IEEE_RM_RN, 0x7f800000, "sliver below 2^128 -> Inf" },
+		    { 1e300,  IEEE_RM_RZ, 0x7f7fffff, "RZ overflow stops at MAX" },
+		    { 1e300,  IEEE_RM_RP, 0x7f800000, "RP overflow, toward side" },
+		    { -1e300, IEEE_RM_RP, 0xff7fffff, "RP overflow, away side" },
+		    { 1e300,  IEEE_RM_RM, 0x7f7fffff, "RM overflow, away side" },
+		    { -1e300, IEEE_RM_RM, 0xff800000, "RM overflow, toward side" },
+		    { -1e-40, IEEE_RM_RN, 0x80000000, "flush keeps the sign" },
+		    { 0x1.ffffffp-127, IEEE_RM_RN, 0x00800000, "carry lifts to FLT_MIN" },
+		};
+		int k;
+		vec[0].v = 1.0 / 3.0;
+		vec[1].v = 1.0 / 3.0;
+		vec[4].v = 2.0 - 0x1p-24;
+		vec[6].v = 0x1.ffffffp127 + 0x1p103;
+		rm_vec_n = (int)(sizeof(vec) / sizeof(vec[0]));
+		for (k = 0; k < rm_vec_n; k++) {
+			uint32_t got = (uint32_t) ieee_store_float_value_rm(
+			    vec[k].v, IEEE_FMT_S, vec[k].rm);
+			if (got != vec[k].want) {
+				rm_vec_bad++;
+				printf("  RM VECTOR WRONG (%s): got %08x want %08x\n",
+				    vec[k].why, got, vec[k].want);
+			}
+		}
+		/*  and the wrapper: legacy behaviour must be reachable  */
+		if ((uint32_t) ieee_store_float_value(1e300, IEEE_FMT_S)
+		    != 0x7f800000u) {
+			rm_vec_bad++;
+			printf("  RM VECTOR WRONG (legacy wrapper overflow)\n");
+		}
+		rm_vec_n++;
+	}
+
+	printf("rm: RN oracle mismatches      : %lld\n", rm_rn_bad);
+	printf("rm: RZ oracle mismatches      : %lld\n", rm_rz_bad);
+	printf("rm: mode-differing population : %lld\n", rm_mode_diff);
+	printf("rm: D mismatches under modes  : %lld\n", rm_d_bad);
+	printf("rm: named-vector failures     : %d (of %d)\n", rm_vec_bad, rm_vec_n);
+
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
 	    inrange_diff == 0 && dD == 0 && dS > 0 &&
-	    e_clamp == 129 && e_255 == 128 && e_diff == 128)
+	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&
+	    rm_rn_bad == 0 && rm_rz_bad == 0 && rm_mode_diff > 1000000 &&
+	    rm_d_bad == 0 && rm_vec_bad == 0)
 		printf("DIFF_PASS -- change-set is exactly the two predicted classes.\n");
 	else
 		printf("DIFF_FAIL\n");

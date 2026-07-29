@@ -94,6 +94,11 @@ struct mips_tlb {
 #define	MIPS_FPU_FCSR			31
 #define	   MIPS_FCSR_FCC0_SHIFT		   23
 #define	   MIPS_FCSR_FCC1_SHIFT		   25
+/*  #292: FCSR bits 1:0 are the rounding mode -- 0 nearest-even, 1 toward
+    zero, 2 toward +Inf, 3 toward -Inf; the same encoding float_emul.h's
+    IEEE_RM_* constants use, so the field passes through unmapped.  No
+    mask for it existed before because nothing ever decoded it.  */
+#define	   MIPS_FCSR_RM_MASK		   0x3
 
 #define	N_VADDR_TO_TLB_INDEX_ENTRIES	(1 << 20)
 

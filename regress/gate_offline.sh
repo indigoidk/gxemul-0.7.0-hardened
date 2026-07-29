@@ -83,6 +83,16 @@ check_min "samples swept"                          "$(val 'samples')"       2000
 check     "clamp threshold is 2^129, not 2^128"    "$(val 'clamp-at')"          "2^129"
 check     "exponent-255 threshold is 2^128"        "$(val 'exp255-at')"         "2^128"
 check     "first shipped-vs-upstream diff at 2^128" "$(val 'first-difference-at')" "2^128"
+
+# #292: the mode-aware entry point, checked against INDEPENDENT oracles (the host's own
+# correctly-rounded float conversion) rather than against upstream. Named vectors carry
+# the cases a random sweep cannot hit -- an exact half-way tie occurs about once per 2^29
+# random inputs.
+check     "rm: nearest matches the host oracle"    "$(val 'rm: RN oracle')"     "0"
+check     "rm: toward-zero matches its oracle"     "$(val 'rm: RZ oracle')"     "0"
+check_min "rm: the mode actually changes results"  "$(val 'rm: mode-differing')" 1000000
+check     "rm: D untouched under every mode"       "$(val 'rm: D mismatches')"  "0"
+check     "rm: named-vector failures"              "$(val 'rm: named-vector' | cut -d'(' -f1)" "0"
 check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG")" "1"
 
 gate_end
