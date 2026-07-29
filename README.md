@@ -46,7 +46,7 @@ main test machines (a DECstation and an Acer PICA, both running OpenBSD 2.2).
 
 ## What changed
 
-**~279 numbered corrections** (each tagged `/* #NNN */` in the source) across ~46 review rounds,
+**~282 numbered corrections** (each tagged `/* #NNN */` in the source) across ~58 review rounds,
 in four themes:
 
 1. **Guest→host memory safety & robustness** (the bulk, #1–~#154) — bound guest-controlled
@@ -54,7 +54,7 @@ in four themes:
    guest→host memory boundary, so an untrusted ROM, disk image, or guest cannot drive
    out-of-bounds writes into the host; guest-reachable `exit(1)`/`abort()`/host crashes become
    warn-and-continue.
-2. **Hardware fidelity** (#155–#290) — accuracy to real silicon: MIPS fault-signature fidelity,
+2. **Hardware fidelity** (#155–#293) — accuracy to real silicon: MIPS fault-signature fidelity,
    guest-reachable host halts turned into hardware-plausible faults, R4000 FPU denormal traps,
    MIPS FPU result-correctness (div/sqrt/compare/NaN canonicalization, #254/#255), the R4030
    interval-timer rate (#257), LANCE RX-ring exhaustion signalling (#262), and a **deep NCR 53C94
@@ -151,6 +151,13 @@ Oldest first.
 | `85a1d9e` | Round 54 (#290): the COP1 decoder enforced ISA level nowhere (#289 is void) |
 | `120586c` | docs: bring the commit timeline current (rounds 47–54, #280–#290) |
 | `2050c50` | Round 55: a regression harness, and the retirement of two gates that could not fail |
+| `8cbc2bb` | regress: gate 1's divergence and sync checks were passing on an empty list |
+| `ff57278` | regress: gate 8 — run upstream GXemul's own test suite, three-way |
+| `218ab01` | regress: gate 9 — every machine started under AddressSanitizer, vs upstream |
+| `db562cf` | docs: plainer words throughout (glossary; jargon explained inline) |
+| `d961cac` | Round 56 (#291): the ARM cache-size fields shifted a negative number |
+| `3eaaf3a` | Round 57 (#292): single-precision results were 1 ulp low half the time |
+| `3ab1a40` | Round 58 (#293): typed input on SuperH was stolen before the serial port saw it |
 
 ## Feature highlights
 
