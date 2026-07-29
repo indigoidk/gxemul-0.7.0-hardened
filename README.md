@@ -14,6 +14,36 @@ software, **not a security boundary.**
 This fork starts from the final upstream release, **0.7.0 (2021)**: the first commit is the
 untouched upstream tree, and everything after it is the change set summarized below.
 
+## New here? Read this bit
+
+**What it does:** runs old operating systems on emulated 1990s hardware — you can boot a
+1997 copy of OpenBSD on a simulated DECstation and get a shell.
+
+**What this fork adds:** about 290 bug fixes to that emulator, mostly memory-safety and
+correctness issues. Each fix has a number like `#287`, marked in the source as
+`/* #287: ... */` and written up in [`CHANGELOG.md`](CHANGELOG.md).
+
+**Try it:**
+
+```
+./configure && make
+./gxemul -H                    # list every machine it can emulate
+```
+
+**Check nothing is broken:**
+
+```
+regress/run.sh                 # runs all the automated checks
+```
+
+That prints one line per check and ends with `REGRESS_PASS` or `REGRESS_FAIL`. See
+[`regress/README.md`](regress/README.md), which opens with a plain-language guide and a
+glossary of the terms this project uses.
+
+**A few terms you'll meet:** *pristine* means unmodified upstream 0.7.0; *rig* means a
+setup that boots a real OS so we can check it still works; *pmax* and *arc* are the two
+main test machines (a DECstation and an Acer PICA, both running OpenBSD 2.2).
+
 ## What changed
 
 **~279 numbered corrections** (each tagged `/* #NNN */` in the source) across ~46 review rounds,

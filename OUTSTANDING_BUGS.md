@@ -1,5 +1,35 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-29 — NEW: undefined behaviour in the ARM cache-type register, on `rpi`
+> **What's wrong.** `cpus/cpu_arm.c:144` builds the ARM cache-type register like this:
+>
+> ```c
+> | ((cpu->cd.arm.cpu_type.dcache_shift - 9) << ARM_CACHETYPE_DSIZE_SHIFT)
+> ```
+>
+> On the Raspberry Pi machine (`-E rpi`) `dcache_shift` is 0, so this shifts **−9** left,
+> which is undefined behaviour in C. The same site is used for `icache_shift` two lines
+> below.
+>
+> **How it was found.** Gate 9 (the AddressSanitizer machine sweep) reports it on *both*
+> upstream 0.7.0 and this fork:
+>
+> ```
+> cpu_arm.c:144:49: runtime error: left shift of negative value -9
+> ```
+>
+> So it is **inherited from upstream, not introduced here** — one of only two machines in
+> the whole sweep still dirty on both sides, against 13 where this fork already fixed the
+> memory errors.
+>
+> **Why it wasn't fixed in this round.** The fork has touched `cpu_arm.c` (two lines), but
+> not this site, and it is outside the pmax/arc priority scope. It is also *latent*: the
+> register is documented in-source as "aren't used yet". The fix is the same pattern as
+> corrections #24/#25 — compute in an unsigned type, or guard the subtraction so it cannot
+> go negative — but per the project rule, it needs a test that reproduces the wrong
+> behaviour first. Gate 9 already is that test, which makes this a well-scoped next round.
+
+
 > ## 2026-07-27 — NEW CANDIDATE: the SuperH console loses guest input non-deterministically
 > Found while building the landisk rig for round 55's harness, and **not yet diagnosed** —
 > recorded here with its measurement so a future round starts from evidence rather than

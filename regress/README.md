@@ -1,5 +1,41 @@
 # Regression harness
 
+## Start here
+
+**What this is:** a set of automated checks you run before pushing, to make sure a bug fix
+didn't break something that used to work. Run them all with:
+
+```
+./run.sh
+```
+
+It prints one line per check and a final `REGRESS_PASS` or `REGRESS_FAIL`. Nothing else is
+required — no arguments, no configuration.
+
+**What this project is:** GXemul is an emulator for old computers (1990s DECstations, SGI
+workstations, Sun-era hardware and so on). This is a security-hardened fork of version
+0.7.0, carrying about 290 numbered bug fixes. Each fix has a number like `#287`, and those
+numbers appear throughout the code as comments and in `CHANGELOG.md`.
+
+**Vocabulary used here**, because some of it is specific to this project:
+
+| Term | Means |
+|---|---|
+| **gate** | one automated check, e.g. `gate_build.sh`. Passes or fails. |
+| **rig** | a set-up that boots a real operating system inside the emulator, so we can see whether it still works |
+| **pmax / arc** | the two main test machines — a DECstation 5000 and an Acer PICA, both running OpenBSD 2.2 from 1997 |
+| **pristine** | unmodified upstream GXemul 0.7.0, used as the "before" picture |
+| **pre-batch** | this fork as it stood before the most recent round of fixes |
+| **HEAD** | the current code |
+| **#287** etc. | a numbered bug fix; look it up in `CHANGELOG.md` |
+| **a check that can't fail** | a test that reports success no matter what — worse than no test, because it looks like coverage. Several are described below as warnings. |
+
+If you only read one thing: **a check that cannot fail is worse than no check**, because it
+reports green. Most of the notes below exist because a check in this harness turned out to
+be one, and the details are kept so the same mistake isn't repeated.
+
+---
+
 This fork carries ~290 numbered corrections against GXemul 0.7.0. The harness exists to
 answer one question before each push: *did a correction break something that used to
 work?*
@@ -35,6 +71,7 @@ what it does not.
 | 6 | `gate_hygiene.sh` | No distress markers in the boot logs, with a positive control so empty logs cannot pass. | ~5 s |
 | 7 | `gate_ab.sh` | Three-way A/B against pristine 0.7.0 and the pre-batch fork. | ~15 min |
 | 8 | `gate_upstream.sh` | **Upstream's own test suite**, run three-way. The only gate this project did not author. | ~30 s |
+| 9 | `gate_asan_sweep.sh` | Every machine type built under AddressSanitizer and compared against upstream. The **breadth** gate. | ~6 min |
 
 Gate 3 is the one that keeps the rest honest. Every other gate asserts something about the
 emulator; that one asserts something about **the harness** — that its strongest check
@@ -130,6 +167,47 @@ call into the shared function; #287 itself is covered by gate 2, which links the
 `float_emul.c`. **The S-format overflow arm has no in-guest coverage on any rig**, MIPS
 included. Closing that would need a staged guest binary computing something like
 `1e30f * 1e30f`, not a double-precision `awk` one-liner.
+
+## Gate 9 — every machine, under a memory-error detector
+
+This is the **breadth** check. Every other gate runs four machines; the fork changed 117
+source files, and 27 of those belong to architectures (Alpha, ARM, i960, PowerPC, SGI) that
+none of the four ever touch. Gate 9 builds every machine type, attaches its devices, and
+lets AddressSanitizer watch for memory errors.
+
+**Setup** — it needs two instrumented builds, which take a few minutes:
+
+```
+./build_asan.sh          # builds current code and upstream 0.7.0 with ASan
+```
+
+Without them the gate reports `SKIP`, never a false pass.
+
+**The comparison runs in one direction only, and that is deliberate.** The fork exists
+partly to *fix* memory errors, so upstream being dirty where the current code is clean is
+success, not failure:
+
+| Upstream | Current | Meaning |
+|---|---|---|
+| clean | **dirty** | **regression — gate fails** |
+| dirty | clean | the fork did its job |
+| dirty | dirty | pre-existing upstream bug, reported but not failed |
+
+**Measured result:** 40 machine types swept, 38 construct successfully, **13 machines where
+the fork fixed real memory errors**, **2 still carrying pre-existing upstream bugs**, and
+**0 regressions**. Among the 13 is `macppc`, where upstream throws an AddressSanitizer
+heap-buffer-overflow that the current code no longer does — that is correction #23, found
+by this same technique years ago and now guarded by a standing check rather than a one-off.
+
+**A machine must be given a file or it never starts up.** `-E testmips` with no file prints
+a usage message and quits *before attaching any device* — a sweep written that way would
+test nothing and pass every time. Handing it a 500-byte dummy file makes it report
+`model:`, `cpu:`, `memory:` and attach hardware. Machines with sub-models additionally need
+`-e <subtype>`; without that, 13 of 37 never start.
+
+**No ROM images are needed.** GXemul re-implements the firmware in software (`promemul/`:
+ARCBIOS, DECstation PROM, Open Firmware, YAMON and others), so machines boot without
+proprietary ROM dumps. Only `machine_pmax.c` references a real ROM at all.
 
 ## Upstream's own tests, and the intended-difference allowlist
 
