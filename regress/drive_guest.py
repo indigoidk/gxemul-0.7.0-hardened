@@ -70,29 +70,37 @@ RIGS = {
                  IMAGES + "/openbsd76-landisk-bsd.rd"],
         "boot_wait": 420,
         "boot_pat": r"\(I\)nstall, \(U\)pgrade, \(A\)utoinstall or \(S\)hell\?",
-        # THIS RIG SENDS NO GUEST INPUT, and that is a measured decision rather than
-        # laziness. The emulated SuperH console loses writes non-deterministically: on a
-        # single boot, ten commands of increasing length were sent and the 15, 23 and 33
-        # byte lines ran while the 9, 17, 27 and 41 byte ones vanished whole -- no echo,
-        # no output. So it is neither a length limit nor a strict alternation. Retrying
-        # up to six times per command still failed to land `$((6*7))` and `uname -m`
-        # reliably, and even a bare `echo` succeeded only sometimes.
+        # This rig is INTERACTIVE again as of #293. It originally sent no input at all,
+        # because typed lines vanished non-deterministically -- measured at 10 of 12
+        # commands lost whole, no echo, no execution. The cause was never the SCIF: the
+        # machine's main console handle was unclaimed on landisk, so handle 0 (polled
+        # every tick for CTRL-C) raced the SCIF for the same host stdin and stole whole
+        # lines. #293 makes the SCIF claim the main console, after which the same probe
+        # measures 12 of 12 commands delivered. The confirm-and-retry machinery is kept
+        # as a belt against future regressions -- a retry that never fires is free.
         #
-        # An intermittent gate is worse than a narrow one: it gets ignored, then disabled.
-        # So this rig asserts the part that IS solid -- BOOT_REACHED has been 1 on every
-        # run -- and the input-loss behaviour is written up as its own finding rather than
-        # buried in retry logic.
-        #
-        # The checked answer therefore comes from the guest's own boot output. "HITACHI
-        # SH7751R" is printed by the OpenBSD PCI-controller probe, so matching it proves
-        # the SH4 core executed a full kernel boot through device attachment -- thousands
-        # of instructions -- and reported the right chip. It cannot be produced by a pty
-        # echo, because nothing is ever typed.
-        "steps": [],
-        "markers": ["OpenBSD 7.6", "root on rd0a"],
-        # Anchored on the shpcic0 probe line. A bare "HITACHI (SH\w+)" matches the earlier
-        # cpu0 line and returns "SH4", which is why the pattern names the device.
-        "expect_values": {r"shpcic0 at mainbus0: HITACHI (\w+)": ["SH7751R"]},
+        # Markers are split in the source (GX_SH''ELL_OK) so a pty echo of the typed
+        # command cannot satisfy them; only guest output can.
+        "tries": 3,
+        "settle": 2,
+        "steps": [
+            ("S\n", 15),
+            ("stty sane\n", 5),
+            ("echo GX_SH''ELL_OK\n", 8, r"GX_SHELL_OK"),
+            # The checked ANSWER: integer arithmetic computed by the guest shell. The
+            # typed text is "$((6*7))", which does not contain "42", so the value can
+            # only come from execution.
+            ("echo GX_ANS $((6*7))\n", 8, r"GX_ANS 42"),
+            ("echo GX_DO''NE\n", 8, r"GX_DONE"),
+        ],
+        "markers": ["OpenBSD 7.6", "root on rd0a", "GX_SHELL_OK", "GX_DONE"],
+        # Both the boot-time hardware probe AND the interactive answer are asserted.
+        # Anchored on the shpcic0 line: a bare "HITACHI (SH\w+)" matches the earlier
+        # cpu0 line and returns "SH4".
+        "expect_values": {
+            r"shpcic0 at mainbus0: HITACHI (\w+)": ["SH7751R"],
+            r"GX_ANS (\d+)": ["42"],
+        },
     },
 }
 

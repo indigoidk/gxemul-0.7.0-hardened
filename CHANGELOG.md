@@ -1683,6 +1683,106 @@ guest changes today. This is correctness groundwork, not a visible bug fix.
 ---
 
 
+## Fifty-seventh round (#292) — single-precision results were 1 ulp low half the time
+
+Files: `core/float_emul.c`, `include/float_emul.h`, `include/cpu_mips.h`,
+`cpus/cpu_mips_coproc.c`. None are tree-divergent; both trees stay byte-identical.
+
+**What was wrong, measured first.** `ieee_store_float_value()` assembles the fraction bit
+by bit and throws the remainder away. Against the host's own `(float)` conversion — which
+is correctly-rounded IEEE-754 and therefore an *independent* right answer — **50.12% of
+in-range single-precision stores differed, always 1 ulp low, never high** (310,438 of
+619,333 random in-range doubles). `1/3`, `0.1`, `1.7` and π all stored one bit small.
+Double precision was exact, as expected: a host double has exactly the 52 fraction bits
+the D format wants.
+
+**What the review panel established before any edit** (four seats; all converged):
+
+- The truncation is not sloppiness — it is **bit-exact round-toward-zero** (0 mismatches
+  in 2.48M samples against a toward-zero oracle). That is *correct* for the SH-4, whose
+  FPSCR resets to round-to-zero, and for PowerPC `stfs` per the recorded review — so an
+  unconditional "fix" to nearest would have repaired 7 call sites by breaking 18.
+- Only MIPS has the rounding mode in scope at its store: `fcr[FCSR]` is already read six
+  lines above the call. The SH stores its mode but decodes it nowhere; m88k models no
+  rounding register at all; Alpha and `dev_pvr` never store single precision.
+- One seat disputes the "PowerPC `stfs` truncates architecturally" claim (believes it
+  rounds per FPSCR.RN). Unresolved — flagged for the Power manual **before anyone wires
+  PPC**. It does not affect this round: every seat keeps PPC on the legacy entry point.
+
+**The change.** A mode-aware sibling, `ieee_store_float_value_rm(nf, fmt, rm)`, with modes
+0–3 in the encoding MIPS FCSR, SH FPSCR and PPC FPSCR all share, plus `IEEE_RM_LEGACY`
+reproducing the historical behaviour bit for bit. The old entry point becomes a one-line
+wrapper selecting LEGACY, so all 24 untouched single-precision call sites and every
+double-precision one keep their bytes. Exactly one caller changes: the MIPS result store
+now passes `FCSR & 3`. The W/L integer formats **ignore the mode on purpose** — `cvt.w`
+and `trunc.w` are indistinguishable at that call today and `trunc.w` is architecturally
+round-toward-zero regardless of mode (see OUTSTANDING_BUGS before touching that).
+
+Three implementation traps the panel predicted, each with a named test that would have
+caught it: the carry must run out of the fraction into the exponent (`2−2^-24` must give
+`0x40000000`, not wrap to 1.0); ties are to *even*, which a 20M random sweep cannot check
+(an exact tie occurs about once per 2^29 inputs — `1+2^-24` stays, `1+3·2^-24` goes up);
+and overflow is mode-dependent (nearest→Inf, toward-zero→largest finite, directed→per
+side). The sliver `[2^128−2^103, 2^128)` rounds to Infinity under nearest *below* the
+overflow line, and does.
+
+**Verified.**
+- Offline gate, extended: the nearest mode matches the host oracle over ~10M finite
+  inputs with **0 mismatches** — "is the answer right", not "did it change as intended" —
+  toward-zero likewise 0; ~9.99M mode-differing results; D untouched under every mode;
+  14 named kill-vectors plus the legacy row all pass; every pre-existing #287 assertion
+  unchanged (the legacy differential still classifies 13,133,666 differences with 0
+  unexplained and 0 missed).
+- The mutation self-test now runs **three mutants** — #287 reverted, ties-to-even broken
+  to ties-away, and the mode parameter silently ignored — and the gate goes red on each.
+  The ignored-parameter mutant exists because every differential ever written passes a
+  parameter that is accepted and discarded.
+- **In-emulator, both rigs** (the panel's own bar: without this, the pure-function tests
+  can all pass while MIPS still calls the legacy entry): on a live R3000 (pmax) and R4000
+  (arc), `ctc1` FCSR.RM=0 then `cvt.s.d` of 1/3 stores `0x3eaaaaab`; RM=1 stores
+  `0x3eaaaaaa`. PROBE292_PASS.
+- Clean rebuild 0 warnings / 0 errors, both trees.
+
+## Fifty-eighth round (#293) — typed input on SuperH was stolen before the serial port saw it
+
+One line plus a comment, `devices/dev_sh4.c`. Not tree-divergent.
+
+**The symptom** (recorded as an outstanding bug two days earlier): commands typed at an
+OpenBSD/landisk shell vanished whole — no echo, no execution — non-deterministically,
+about one line in three, while the shell stayed alive. Timing, line terminators and line
+length had already been measured and refuted as causes.
+
+**The diagnosis was a chain of refuted instruments, worth keeping.** A counter pair on the
+console layer showed 77 characters in, 77 out — which read as "delivery is perfect" and
+sent the investigation at the SCIF's status bits. A patch setting the never-modelled RDF
+flag alongside DR was built and measured: **no effect**. The panel then took the case
+apart: one seat proved from the guest driver source that a delivered line *cannot* die
+between the FIFO register and the tty (the driver stores at least `count` characters per
+batch, and ksh switches modes with TCSADRAIN, which never discards) — and another seat
+found the real mechanism and **ran the fix before recommending it**: on landisk nothing
+ever claims `machine->main_console_handle`, so handle 0 — polled every tick for CTRL-C —
+and the SCIF's own handle race for the same host stdin, and `console_charavail()` imports
+up to 100 bytes into whichever polls first. When handle 0 wins, the line never reaches the
+SCIF at all. The 77/77 counters were an artifact: they were global, and the debugger's
+exit-time drain of handle 0 balanced the books.
+
+**Confirmed from both sides.** A side-effect probe (`touch /tmp/mNN` × 12, then `ls`)
+showed 10 of 12 commands vanished **and their files were never created** — the commands
+never ran, killing the output-visibility theory. With the fix, the same probe delivers
+**12 of 12**.
+
+**The fix** is the claim `dev_dreamcast_maple.c`, `dev_luna88k.c` and `dev_vr41xx.c`
+already make: the console-owning device sets `main_console_handle`. On the Dreamcast this
+device is created with the CPU, *before* `dreamcast_maple` — so the maple keyboard still
+overrides it and Dreamcast behaviour is unchanged.
+
+**Harness consequence:** the landisk rig, which had deliberately sent no input since the
+bug was found, is interactive again — it now boots to the installer shell and checks a
+computed answer (`$((6*7))` → 42) on top of the hardware-probe assertion, with the
+confirm-and-retry machinery kept as a free belt. The three refuted-hypothesis
+measurements and the counter-artifact are recorded here so the next console mystery
+starts from them.
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

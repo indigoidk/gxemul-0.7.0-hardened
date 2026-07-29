@@ -1,5 +1,35 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## ✅ 2026-07-30 — RESOLVED as #292: S-format round-to-nearest (was item 8 / "round 55 unblocked")
+> Fixed via a mode-aware sibling `ieee_store_float_value_rm()`; the historical entry point
+> is a bit-identical wrapper and only the MIPS store passes `FCSR & 3`. Measured before:
+> 50.12% of in-range single-precision stores 1 ulp low. Measured after: 0 mismatches
+> against the host's correctly-rounded oracle over ~10M finite inputs, and a live-rig probe
+> shows `ctc1` RM=0 → `cvt.s.d(1/3)` = `0x3eaaaaab`, RM=1 → `0x3eaaaaaa` on both pmax and
+> arc. See CHANGELOG "Fifty-seventh round". **Kept open under this entry, deliberately:**
+> - **SH FPSCR.RM is stored but decoded nowhere** — the SH core is unconditionally
+>   round-toward-zero, which is correct at reset; a guest that sets RM=nearest computes
+>   1 ulp low there today. Wiring it is mechanical (`fpscr & 3` at 16 sites) but has no
+>   live test until the landisk rig can run FP (its ramdisk has no FP-capable tool).
+> - **PPC `stfs` rounding is DISPUTED between panel seats** (bit-extraction vs rounds per
+>   FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
+> - **m88k models no rounding register at all** — nothing to wire.
+
+> ## ✅ 2026-07-30 — RESOLVED as #293: the SuperH console input loss (2026-07-27 entry below)
+> The mechanism was none of the recorded suspects: on landisk nothing claimed
+> `machine->main_console_handle`, so handle 0 (polled each tick for CTRL-C) raced the
+> SCIF's console handle for the same host stdin and stole whole lines —
+> `console_charavail()` imports up to 100 bytes into whichever handle polls first. Fixed
+> by the one-line claim `dev_dreamcast_maple.c` / `dev_luna88k.c` / `dev_vr41xx.c` already
+> make; Dreamcast is unaffected (maple still overrides, it initialises later). Measured:
+> 10/12 commands stolen before, 12/12 delivered after; a side-effect probe proved the
+> stolen commands never executed. **Instrument warning kept for the next console mystery:**
+> a global chars-in/chars-out counter pair balanced at 77/77 *while lines were being
+> stolen*, because the debugger's exit-time drain of handle 0 evened the books — count
+> per-handle or not at all. The never-set RDF status bit remains a modelling gap (patching
+> it changed nothing here); the SSR verbatim-write and FDR-width warts are recorded in the
+> round-58 panel record.
+
 > ## ✅ 2026-07-29 — RESOLVED as #291 (see CHANGELOG "Fifty-sixth round")
 > Fixed: an unspecified cache size now encodes as 0 and each field is masked to its own
 > width. `rpi` goes from 1 sanitizer report to 0; `cats`, `netwinder`, `iq80321`, `iyonix`

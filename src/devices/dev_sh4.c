@@ -1907,6 +1907,26 @@ DEVINIT(sh4)
 	d->scif_console_handle = console_start_slave(devinit->machine,
 	    "SH4 SCIF", 1);
 
+	/*  #293: claim the machine's main console, or typed input is STOLEN.
+	    Nothing on landisk ever set main_console_handle, so it stayed 0 --
+	    and handle 0 also reads the host's stdin (the main loop polls it
+	    for CTRL-C every tick, and console_charavail() imports up to 100
+	    bytes into whichever handle polls first).  Two consumers raced for
+	    every line typed at the guest: when handle 0 won, the line never
+	    reached the SCIF at all -- no echo, no execution.  Measured on
+	    OpenBSD/landisk: 10 of 12 commands vanished whole, and a
+	    side-effect probe (touch /tmp/mNN) confirmed the vanished ones
+	    never ran; with this line, 0 losses.  The instrumented counter
+	    pair that first looked like proof of delivery (77 chars into the
+	    console layer, 77 out) was an artifact: the counters were global,
+	    and the debugger's exit-time drain of handle 0 balanced the books.
+	    This is the same claim dev_dreamcast_maple.c, dev_luna88k.c and
+	    dev_vr41xx.c already make.  On the Dreamcast this device is
+	    created with the CPU (cpu_sh.c), BEFORE machine_dreamcast.c adds
+	    dreamcast_maple, so the maple keyboard still overrides this and
+	    Dreamcast behaviour is unchanged.  */
+	devinit->machine->main_console_handle = d->scif_console_handle;
+
 	snprintf(tmp, sizeof(tmp), "%s.irq[0x%x]",
 	    devinit->interrupt_path, SH4_INTEVT_SCIF_RXI);
 	INTERRUPT_CONNECT(tmp, d->scif_rx_irq);
