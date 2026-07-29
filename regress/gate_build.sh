@@ -34,9 +34,9 @@ need_file "$EST/src" "$SEC/src" "$PMAX_TREE" "$ARC_TREE"
 # Deliberately NOT `diff -rq --include='*.c'`. diff has --exclude but NO --include (that
 # is a grep option), so that command exits 2 with "unrecognized option" and prints
 # nothing -- and with stderr discarded it looks exactly like "no differences". Both the
-# divergence check and the sync check below were written that way and passed vacuously on
-# an empty list. Measured: the raw command produced 0 lines while the trees genuinely
-# differ in 6 files.
+# divergence check and the sync check below were written that way, so both were comparing
+# an empty list against an empty list and could never fail. Measured: the raw command
+# produced 0 lines while the trees genuinely differ in 6 files.
 list_diffs() {
     local A=$1 B=$2
     local la=$LOGDIR/.ld_a lb=$LOGDIR/.ld_b

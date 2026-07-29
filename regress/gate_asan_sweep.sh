@@ -20,7 +20,7 @@
 #
 # A MACHINE MUST BE HANDED A FILE OR IT NEVER CONSTRUCTS. Measured: `-E testmips` with no
 # file prints usage and aborts before any device is attached -- a sweep built that way
-# would exercise nothing and pass vacuously. With a dummy image the machine reports
+# would test nothing and pass every time. With a dummy image the machine reports
 # `model:`, `cpu:`, `memory:` and attaches devices. Machines with subtypes additionally
 # need `-e <subtype>`; without it 13 of 37 types never construct.
 set -u

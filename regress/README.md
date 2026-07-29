@@ -29,6 +29,10 @@ numbers appear throughout the code as comments and in `CHANGELOG.md`.
 | **HEAD** | the current code |
 | **#287** etc. | a numbered bug fix; look it up in `CHANGELOG.md` |
 | **a check that can't fail** | a test that reports success no matter what — worse than no test, because it looks like coverage. Several are described below as warnings. |
+| **side-by-side comparison** | run the same thing on two builds and compare the results (elsewhere called a *differential*) |
+| **nothing extra changed** | no difference appeared outside the ones we expected |
+| **nothing was missed** | every difference we expected did in fact appear |
+| **proof the check ran** | a check that the test itself did something, so an empty or skipped run can't look like success |
 
 If you only read one thing: **a check that cannot fail is worse than no check**, because it
 reports green. Most of the notes below exist because a check in this harness turned out to
@@ -68,7 +72,7 @@ what it does not.
 | 3 | `selftest_mutation.sh` | **Proves gate 2 can fail.** Reverts #287 in a scratch copy and requires the differential to go red. | ~50 s |
 | 4 | `gate_mips.sh` | The two primary rigs boot OpenBSD 2.2 to `uid=0` — pmax 15/15, arc 13/13. | ~6 min |
 | 5 | `gate_crossfamily.sh` | Non-MIPS CPU cores execute guest code and return checked answers: m88k to a root shell with a verified FP result, SuperH through a full kernel boot to a verified device-probe result. | ~12 min |
-| 6 | `gate_hygiene.sh` | No distress markers in the boot logs, with a positive control so empty logs cannot pass. | ~5 s |
+| 6 | `gate_hygiene.sh` | No error markers in the boot logs, plus a check that the logs are real, so empty ones can't pass. | ~5 s |
 | 7 | `gate_ab.sh` | Three-way A/B against pristine 0.7.0 and the pre-batch fork. | ~15 min |
 | 8 | `gate_upstream.sh` | **Upstream's own test suite**, run three-way. The only gate this project did not author. | ~30 s |
 | 9 | `gate_asan_sweep.sh` | Every machine type built under AddressSanitizer and compared against upstream. The **breadth** gate. | ~6 min |
@@ -117,11 +121,14 @@ old(x) != new(x)  =>  (finite && |x| >= 2^128)          // S-format overflow
 
 and that for `IEEE_FMT_D` the change-set is **empty**.
 
-It is checked as an **equivalence, in both directions**, and that matters more than it
-sounds. Containment alone (nothing differs outside the classes) is satisfied by a mutant
-that clears the overflow mantissa for negative values but not positive ones: both classes
-are non-empty, nothing is unexplained, and every positive overflow is still broken. So the
-gate also asserts **completeness** — every input inside the classes must differ.
+It is checked **both ways round**, and that matters more than it sounds.
+
+Checking only that *nothing extra changed* is not enough on its own: a broken version that
+fixes the overflow for negative numbers but not positive ones would pass it. Both groups
+would be non-empty, nothing would look unexplained, and every positive overflow would still
+be wrong. So the check also proves that *nothing was missed* — every input that should have
+changed did change. Both halves together mean the rule above describes the difference
+exactly, rather than merely allowing it.
 
 The two extra predicates are load-bearing, not decoration. `x` must be an `isnormal`
 double, because a host value below `2^-1022` takes the `FP_SUBNORMAL` arm where both
@@ -286,10 +293,10 @@ between. The image's mtime settled it — it tracked the most recent boot, not t
 Timing was ruled out by measurement rather than assumed: both builds reach `login:` in
 about **100 s** against a 300 s budget, so it was never a marginal timeout.
 
-One caveat worth stating. `R:` freezes the image *as it currently is*, which is the state
-many earlier read/write boots left it in — not a pristine download. That makes runs
-**reproducible**, which is what a gate needs, but it does not make the starting state
-pedigreed. Re-fetching the image would be needed for that.
+One caveat worth stating. `R:` freezes the image *as it currently is* — the state many
+earlier read/write boots left it in, not a fresh download. So every run now starts from the
+same place, which is what a check needs; but that place isn't guaranteed clean.
+Re-downloading the image would be needed for that.
 
 ## Known gaps in the harness itself
 
@@ -327,4 +334,4 @@ counted as a pass.
 ## Guest images
 
 Gate 4 needs images that are not in this repository (they are between 2 MB and 2 GB).
-`images.md` lists each one, its provenance and the exact invocation.
+`images.md` lists each one, where it came from, and the exact command to run it.

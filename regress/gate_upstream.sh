@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE 8 -- upstream GXemul's OWN test suite, run three-way.
+# GATE 8 -- run upstream GXemul's own tests, on all three builds.
 #
 # Why this gate is worth having when seven others already exist: everything else in this
 # harness was authored by the same process that made the ~290 corrections. These tests
@@ -30,11 +30,13 @@
 #     format-specific marker that only the real loader path can print -- "ELF64 LSB",
 #     "b.out", "a.out" and so on -- so an error, a usage message or an empty run all fail.
 #
-# DELIBERATELY NOT INCLUDED: test/floatingpoint/fptest.c. It needs a cross-toolchain to
-# build a guest binary, and gate 2 already makes a STRONGER claim about the one function
-# #287 changed (20M inputs, closed-form change-set, both directions, mutation self-test).
-# fptest would add the in-guest end-to-end FP path -- real, but the most expensive item
-# here and the least additive. See README.md.
+# DELIBERATELY NOT INCLUDED: test/floatingpoint/fptest.c. It needs a cross-compiler to
+# build a program that runs inside the emulator, and gate 2 already proves MORE about the
+# one function fix #287 changed: it checks 20 million inputs and shows the difference from
+# upstream is exactly what was intended, with nothing extra changed and nothing missed,
+# and it has its own self-test proving it can fail. fptest would add the floating-point
+# path end to end inside a guest -- worth having, but the most setup for the least new
+# information. See README.md.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
@@ -74,19 +76,19 @@ run_case() {   # machine, testfile, binary, outfile
               -e 's/^GXemul [^ ]*/GXemul <VER>/' > "$4"
 }
 
-# THE INTENDED-DIFFERENCE ALLOWLIST.
+# THE LIST OF DIFFERENCES WE MEANT TO MAKE.
 #
-# The fork carries ~290 deliberate changes, so "pristine and HEAD differ" is not by itself
-# a finding -- counting differences is useless when hundreds are intended. What makes a
-# three-way tractable is CLASSIFYING each one:
+# This fork changed about 290 things on purpose, so "upstream and current differ" is not
+# by itself a problem -- just counting differences is useless when hundreds are deliberate.
+# What makes the comparison workable is sorting each difference into one of three boxes:
 #
-#     identical                        -> fine
-#     differs, maps to correction #N   -> fine, and #N is named here
-#     differs, unexplained             -> REGRESSION
+#     the same                          -> fine
+#     differs, and it is fix #N         -> fine, and #N is named below
+#     differs, and nobody knows why     -> REGRESSION
 #
-# Each entry below erases exactly one intended change so that everything remaining is,
-# by construction, unexplained. Adding an entry is a deliberate act: it means "the fork
-# changed this on purpose, under this correction number".
+# Each entry below cancels out exactly one intended change, so anything still left over is
+# unexplained by definition. Adding an entry is a deliberate act: it says "we changed this
+# on purpose, under this fix number".
 #
 #   #260 -- net diagnostics were routed through debugmsg(SUBSYS_NET, ...), which prefixes
 #           them with "net: ". Upstream printed them bare.

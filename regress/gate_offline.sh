@@ -67,14 +67,15 @@ val() { grep -E "^$1" "$LOG" | head -1 | sed 's/.*: *//' | tr -d ' '; }
 check     "absolute-answer failures"               "$(val 'absolute-answer failures')" "0"
 check_min "absolute-answer cases run"              "$(val 'absolute-answer cases')"    6
 
-# CONTAINMENT: nothing may differ outside the predicted classes.
+# NOTHING EXTRA CHANGED: no difference may appear outside the two expected groups.
 check     "S-format: unexplained differences"      "$(val 'UNEXPLAINED')"       "0"
 check     "S-format: in-range values moved"        "$(val 'in-range')"          "0"
-# COMPLETENESS: everything inside the predicted classes must differ. Without this the
-# gate only proves the differences it saw were allowed -- a mutant that fixes overflow
-# for negative values but not positive ones satisfies containment perfectly.
+# NOTHING WAS MISSED: everything inside those groups must actually differ. Without this
+# half, the check only proves the differences it happened to see were allowed -- and a
+# broken version that fixes overflow for negative numbers but not positive ones would
+# sail through.
 check     "S-format: inputs that should have moved but did not" "$(val 'MISSED')" "0"
-check_min "S-format: must-differ population is non-trivial" "$(val 'must-differ population')" 1000
+check_min "S-format: how many inputs should have moved" "$(val 'must-differ population')" 1000
 check     "D-format: change-set is empty"          "$(val 'D-format diffs')"    "0"
 check_min "S-format: overflow class is non-empty"  "$(val '  of which overflow')" 1
 check_min "S-format: underflow class is non-empty" "$(val '  of which negative')" 1
