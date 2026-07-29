@@ -1540,6 +1540,41 @@ empirically rather than trusting the prose:
   emitted Inf-with-garbage-mantissa there, and why the bug was never merely a clamping
   oversight.
 
+### Addendum: gate 7 booted three builds against one writable image
+
+Found by running the gate rather than reading it. Gate 7 returned a **non-deterministic
+FAIL** — HEAD came back `1:1:0` (boot markers present, login prompt absent) after passing
+`1:1:1` twice at the same commit with no code change in between.
+
+Three explanations, resolved by measurement:
+
+- *a regression?* No — both builds reach `login:` in about **100 s**;
+- *a marginal timeout?* No — 100 s against a 300 s budget is three times the headroom;
+- *shared mutable state?* Yes. The image's mtime tracked the most recent boot rather than
+  the download.
+
+GXemul's `-d` opens a disk image **read/write** by default, and the gate booted pristine,
+pre-batch and HEAD **sequentially against the same 2 GB file**. Each build inherited
+whatever filesystem state the previous one left behind — including an unclean unmount,
+because the 300 s budget kills a guest that has already reached its login prompt. The runs
+were never independent.
+
+Fixed by booting through GXemul's `R:` prefix, which opens the base image read-only and
+routes guest writes into a temporary overlay that is discarded at exit. Applied to gate 7
+and to the gate 5 rig. Verified by running gate 7 **twice back to back** — a single pass
+proves nothing about a flaky gate — with identical results both times and the image md5
+unchanged (`82cce539…` before and after).
+
+One measurement trap on the way: the first timing script reported "login never reached"
+for *both* builds, which read like a serious regression. `login: ` is a prompt with **no
+trailing newline**, so a line-oriented reader blocks forever waiting for a terminator that
+never arrives. `grep` on the finished file sees it, because it reads the final partial
+line. The instrument was broken, not the emulator.
+
+`R:` freezes the image as it currently stands — the state many earlier read/write boots
+left it in, not a pristine download. That buys reproducibility, which is what a gate needs,
+but not provenance.
+
 ### The panel found the new harness had the exact defect it was built to remove
 
 Two seats reviewed the harness independently and reached the same headline finding, which

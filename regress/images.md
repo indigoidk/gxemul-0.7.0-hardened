@@ -16,8 +16,14 @@ non-MIPS execution coverage at all**.
 
 ```
 cd _images
-gxemul -e luna-88k -d liveimage-luna88k-raw-20250518.img boot
+gxemul -e luna-88k -d R:liveimage-luna88k-raw-20250518.img boot
 ```
+
+**The `R:` prefix is required for any harness use**, and omitting it caused a real
+non-deterministic gate failure. Plain `-d` opens the image read/write, so every boot
+mutates the shared 2 GB file and later runs inherit the previous run's filesystem state.
+`R:` opens the base read-only and discards guest writes into a temporary overlay. See
+`README.md`.
 
 Boots to a `login:` prompt in roughly three to four minutes. The root password is not set,
 so `root` then Enter gives a shell. `awk` is present, which is what makes the in-guest FP

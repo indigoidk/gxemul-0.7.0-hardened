@@ -130,6 +130,34 @@ call into the shared function; #287 itself is covered by gate 2, which links the
 included. Closing that would need a staged guest binary computing something like
 `1e30f * 1e30f`, not a double-precision `awk` one-liner.
 
+## Guest disk images must be booted with `R:`
+
+Any gate that boots the same disk image more than once — or boots it under more than one
+build — has to use GXemul's `R:` prefix:
+
+```
+gxemul -e luna-88k -d R:liveimage-luna88k-raw-20250518.img boot
+```
+
+`R:` opens the base image **read-only** and routes every guest write into a temporary
+overlay that is discarded at exit. Plain `-d` opens it **read/write**, so the guest's
+writes land in the shared file and persist.
+
+This is not theoretical. Gate 7 booted three builds sequentially against one writable 2 GB
+image, so each build inherited whatever filesystem state the previous one left behind —
+including an unclean unmount, because the 300 s budget kills a guest that has already
+reached its login prompt. The result was a gate that failed non-deterministically: HEAD
+returned `1:1:0` after passing `1:1:1` twice at the same commit with no code change in
+between. The image's mtime settled it — it tracked the most recent boot, not the download.
+
+Timing was ruled out by measurement rather than assumed: both builds reach `login:` in
+about **100 s** against a 300 s budget, so it was never a marginal timeout.
+
+One caveat worth stating. `R:` freezes the image *as it currently is*, which is the state
+many earlier read/write boots left it in — not a pristine download. That makes runs
+**reproducible**, which is what a gate needs, but it does not make the starting state
+pedigreed. Re-fetching the image would be needed for that.
+
 ## Known gaps in the harness itself
 
 Stated here rather than left to be rediscovered. These are limits of the *instrument*, not

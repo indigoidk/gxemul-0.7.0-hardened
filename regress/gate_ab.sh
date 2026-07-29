@@ -65,10 +65,24 @@ gate_begin "a-b-baselines"
 need_exec "$PRISTINE_DIR/gxemul" "$PREBATCH_DIR/gxemul" "$ROOT/build/gxemul"
 
 # probe <label> <binary> <logfile> <args...>  -> prints "marker=N ..." for the rig
+# NOTE THE R: PREFIX. It opens the base image read-only and routes every guest write into
+# a temporary overlay that is discarded when the run ends.
+#
+# Without it this function booted THREE DIFFERENT BUILDS SEQUENTIALLY AGAINST ONE SHARED,
+# WRITABLE 2 GB IMAGE, so the runs were not independent: each build inherited whatever
+# filesystem state the previous one left behind, including an unclean unmount when the
+# 300 s timeout killed a guest that had reached its login prompt. The symptom was a
+# non-deterministic FAIL -- HEAD came back 1:1:0 having passed 1:1:1 twice at the same
+# commit with no code change. The image's mtime confirmed it: it tracked the most recent
+# boot, not the download.
+#
+# Timing was ruled out separately by measurement: both builds reach `login:` in about
+# 100 s against a 300 s budget, so this was never a marginal timeout.
+LUNA_IMG="R:$IMAGES/liveimage-luna88k-raw-20250518.img"
+
 luna_markers() {   # binary, tag
     local log=$LOGDIR/ab_luna_$2.log
-    run_emu 300 "$log" "$1" -e luna-88k \
-        -d "$IMAGES/liveimage-luna88k-raw-20250518.img" boot
+    run_emu 300 "$log" "$1" -e luna-88k -d "$LUNA_IMG" boot
     echo "$(count "$log" 'LUNA-88K BOOT'):$(count "$log" 'M88100'):$(count "$log" 'login:')"
 }
 

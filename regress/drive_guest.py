@@ -28,8 +28,13 @@ RIGS = {
     # m88k: cpu_m88k_instr.c stores IEEE_FMT_S, i.e. the exact arm #287 changed, and had
     # no execution coverage at all before this rig existed.
     "luna88k": {
+        # "R:" opens the base image read-only and sends every guest write to a temporary
+        # overlay that is thrown away at exit. Without it each run mutates the shared 2 GB
+        # image and later runs inherit whatever filesystem state earlier ones left --
+        # including an unclean unmount when a timeout kills a booted guest. That made
+        # gate 7 fail non-deterministically; see the note in gate_ab.sh.
         "args": ["-e", "luna-88k", "-d",
-                 IMAGES + "/liveimage-luna88k-raw-20250518.img", "boot"],
+                 "R:" + IMAGES + "/liveimage-luna88k-raw-20250518.img", "boot"],
         "boot_wait": 600,
         "boot_pat": r"login:",
         "tries": 4,
