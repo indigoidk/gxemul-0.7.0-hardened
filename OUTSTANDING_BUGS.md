@@ -1,5 +1,42 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## ✅ 2026-07-30 — RESOLVED as #294: cvt.w honours the rounding mode (item 2 of the rounds 41–46 block)
+> `cvt.w` of 3.5 under the default mode now yields 4 (nearest-even); `trunc.w` still
+> truncates regardless of the mode, as the architecture requires — and the live probe
+> proves both, on both rigs, under all four FCSR modes (32 rows, PROBE294_PASS). The
+> panel-refuted proof (a computed remainder can equal 0.5 for a non-tie) and the repaired
+> midpoint comparison, the mode-by-mode boundary table, and the non-discriminating
+> +2147483647.5 case are all recorded in CHANGELOG "Fifty-ninth round". The related trap
+> is now enforced by a mutation self-test: the W arm rounding under LEGACY is a mutant the
+> gate must detect.
+
+> ## 2026-07-30 — NEW, well-scoped next candidate: round.w / ceil.w / floor.w / cvt.l are not decoded
+> Found by the #294 panel and verified by two seats independently. The COP1 dispatcher
+> admits these by format, `fpu_function()` matches no function code (upstream's own TODO
+> at ~:1056 lists exactly these opcodes), and the tail raises a Coprocessor-Unusable
+> exception for CP1 **with CU1 already enabled** (`cpu_mips_coproc.c` ~:2373-2381). A BSD
+> kernel answers CpU(1) by granting the FPU and retrying the same instruction — a retry
+> livelock plus a host-log flood. Latent on both rigs: zero `UNIMPLEMENTED coproc1
+> function` markers across green boots, and OpenBSD 2.2's base system does not emit these
+> opcodes. With #294's forced-mode parameter the fix is three copies of the trunc.w decode
+> block — `round.w` forces nearest, `ceil.w` toward-+Inf, `floor.w` toward--Inf — plus a
+> decision about `cvt.l` (MIPS III; the ISA-gating question recorded under #290/#273
+> applies). Directly testable with the #294 probe pattern: `round.w.d(2.5)=2`,
+> `ceil.w.d(2.25)=3`, `floor.w.d(-2.25)=-3` under FCSR mode 1, proving the override.
+
+> ## 2026-07-30 — #26 re-review (four seats, unanimous): the FCSR exception-flag defer STANDS after #292
+> #292 thinned exactly one blocker — target-format rounding now exists, so the
+> Overflow/Underflow/Inexact flags are computable in principle. Everything load-bearing is
+> untouched, verified in-tree: the store has no channel to return flag events (an API
+> change across five CPU families); `struct ieee_float_value` still carries a single `nan`
+> flag, so signalling-NaN Invalid is undetectable; trap delivery does not exist (only
+> `MIPS_FPU_EXCEPTION_UNIMPL` is ever raised, and the CTC1 enable-bit TODO stands);
+> R3000 FCSR bit-identity (#246) still constrains; and the guest enables no FP traps and
+> reads no sticky flags (the kernel zeroes FCSR on exec and after every FP trap), so the
+> in-scope consumer count is zero. If a consumer ever appears, the panel's first slice is
+> STICKY FLAGS ONLY — Z and O first (both cleanly detectable post-#292), V only after
+> qNaN/sNaN discrimination exists, I last — R4000-gated, with no cause/trap semantics.
+
 > ## ✅ 2026-07-30 — RESOLVED as #292: S-format round-to-nearest (was item 8 / "round 55 unblocked")
 > Fixed via a mode-aware sibling `ieee_store_float_value_rm()`; the historical entry point
 > is a bit-identical wrapper and only the MIPS store passes `FCSR & 3`. Measured before:

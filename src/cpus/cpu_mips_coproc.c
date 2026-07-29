@@ -1053,6 +1053,10 @@ static const char *ccname[16] = {
 #define	FPU_OP_C	8
 #define	FPU_OP_ABS	9
 #define	FPU_OP_NEG	10
+/*  #294: sentinel for fpu_op()'s rm_force parameter -- "no forced mode,
+    use FCSR's rounding-mode field".  trunc.w/trunc.l force IEEE_RM_RZ
+    instead, because they are architecturally mode-independent.  */
+#define	FPU_RM_FROM_FCSR	(-1)
 /*  TODO: CEIL.L, CEIL.W, FLOOR.L, FLOOR.W, RECIP, ROUND.L, ROUND.W, RSQRT  */
 
 
@@ -1103,7 +1107,7 @@ static int fpu_unimpl_trap(struct cpu *cpu, struct mips_coproc *cp)
  *  Stores a float value (actually a double) in fmt format.
  */
 static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
-	struct mips_coproc *cp, int fd, double nf, int fmt, int nan)
+	struct mips_coproc *cp, int fd, double nf, int fmt, int nan, int rm)
 {
 	int ieee_fmt = mips_fmt_to_ieee_fmt[fmt];
 
@@ -1118,7 +1122,9 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
 	    fpu_unimpl_trap(cpu, cp))
 		return;
 
-	/*  #292: honour FCSR's rounding mode for the result store.  The
+	/*  #292/#294: honour the EFFECTIVE rounding mode for the result
+	    store -- FCSR's field for ordinary operations, or a mode the
+	    decoder forced (trunc.w/trunc.l pass toward-zero).  The
 	    default mode 0 is round-to-nearest-even, under which half of all
 	    in-range single-precision results were previously 1 ulp low
 	    (truncation).  FCSR[1:0] uses the same 0..3 encoding as
@@ -1129,8 +1135,7 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
 	    of FCSR (see OUTSTANDING_BUGS on cvt.w).  Double-precision
 	    results cannot change: a host double already has exactly the
 	    52 fraction bits D wants, so the remainder is always zero.  */
-	uint64_t r = ieee_store_float_value_rm(nf, ieee_fmt,
-	    cp->fcr[MIPS_FPU_FCSR] & MIPS_FCSR_RM_MASK);
+	uint64_t r = ieee_store_float_value_rm(nf, ieee_fmt, rm);
 
 	/*  #255: canonicalize a NaN result to the legacy-MIPS QUIET NaN
 	    (fraction MSB clear). ieee_store_float_value() emits all-ones
@@ -1182,7 +1187,7 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
  *  false.
  */
 static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
-	int ft, int fs, int fd, int cond, int output_fmt)
+	int ft, int fs, int fd, int cond, int output_fmt, int rm_force)
 {
 	/*  Potentially two input registers, fs and ft  */
 	struct ieee_float_value float_value[2];
@@ -1191,6 +1196,10 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 	uint64_t fs_v = 0;
 	double nf;
 	int fr = cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & STATUS_FR ? 1 : 0;
+	/*  #294: the rounding mode every store below uses -- forced by the
+	    decoder for mode-independent instructions, FCSR otherwise.  */
+	int rm = rm_force == FPU_RM_FROM_FCSR ?
+	    (int)(cp->fcr[MIPS_FPU_FCSR] & MIPS_FCSR_RM_MASK) : rm_force;
 
 	// printf("op %x (fmt %i):\n", op, fmt);
 
@@ -1231,21 +1240,21 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		/*  debug("  add: %f + %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan || float_value[1].nan);
+		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_SUB:
 		nf = float_value[0].f - float_value[1].f;
 		/*  debug("  sub: %f - %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan || float_value[1].nan);
+		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_MUL:
 		nf = float_value[0].f * float_value[1].f;
 		/*  debug("  mul: %f * %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan || float_value[1].nan);
+		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_DIV:
 		/*  #254: IEEE division, unconditionally. The old code sent any
@@ -1259,7 +1268,7 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		    cause/flag bits remain a documented TODO.  */
 		nf = float_value[0].f / float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan || float_value[1].nan);
+		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_SQRT:
 		/*  #254: sqrt of a negative is a quiet NaN, not fatal()+0.0.
@@ -1267,25 +1276,25 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		    +Inf for +Inf -- exactly as the R3010/R4010 do.  */
 		nf = sqrt(float_value[0].f);
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan);
+		    float_value[0].nan, rm);
 		break;
 	case FPU_OP_ABS:
 		nf = fabs(float_value[0].f);
 		/*  debug("  abs: %f => %f\n", float_value[0].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan);
+		    float_value[0].nan, rm);
 		break;
 	case FPU_OP_NEG:
 		nf = - float_value[0].f;
 		/*  debug("  neg: %f => %f\n", float_value[0].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan);
+		    float_value[0].nan, rm);
 		break;
 	case FPU_OP_CVT:
 		nf = float_value[0].f;
 		/*  debug("  mov: %f => %f\n", float_value[0].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
-		    float_value[0].nan);
+		    float_value[0].nan, rm);
 		break;
 	case FPU_OP_MOV:
 		/*  Non-arithmetic move:  */
@@ -1401,7 +1410,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_ADD, fmt, ft, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_ADD, fmt, ft, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1413,7 +1422,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_SUB, fmt, ft, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_SUB, fmt, ft, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1425,7 +1434,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_MUL, fmt, ft, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_MUL, fmt, ft, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1437,7 +1446,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_DIV, fmt, ft, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_DIV, fmt, ft, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1448,7 +1457,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_SQRT, fmt, -1, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_SQRT, fmt, -1, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1459,7 +1468,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_ABS, fmt, -1, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_ABS, fmt, -1, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1470,7 +1479,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_MOV, fmt, -1, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_MOV, fmt, -1, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1481,7 +1490,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_NEG, fmt, -1, fs, fd, -1, fmt);
+		fpu_op(cpu, cp, FPU_OP_NEG, fmt, -1, fs, fd, -1, fmt, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1492,9 +1501,10 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		/*  TODO: not CVT?  */
-
-		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_L);
+		/*  #294: it IS a convert, but with the rounding mode FORCED to
+		    toward-zero -- trunc ignores FCSR by architecture. (This
+		    answers upstream's "TODO: not CVT?".)  */
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_L, IEEE_RM_RZ);
 		return 1;
 	}
 
@@ -1505,9 +1515,9 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		/*  TODO: not CVT?  */
-
-		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_W);
+		/*  #294: same as trunc.l above -- a convert with the mode forced
+		    to toward-zero.  */
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_W, IEEE_RM_RZ);
 		return 1;
 	}
 
@@ -1523,7 +1533,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 			return 1;
 
 		cond_true = fpu_op(cpu, cp, FPU_OP_C, fmt,
-		    ft, fs, -1, cond, fmt);
+		    ft, fs, -1, cond, fmt, FPU_RM_FROM_FCSR);
 
 		/*  #246: compare trapped on a denormal operand; the condition
 		    codes must remain untouched.  */
@@ -1561,7 +1571,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_S);
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_S, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1572,7 +1582,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_D);
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_D, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 
@@ -1583,7 +1593,7 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		if (unassemble_only)
 			return 1;
 
-		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_W);
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1, COP1_FMT_W, FPU_RM_FROM_FCSR);
 		return 1;
 	}
 

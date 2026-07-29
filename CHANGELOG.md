@@ -1783,6 +1783,69 @@ confirm-and-retry machinery kept as a free belt. The three refuted-hypothesis
 measurements and the counter-artifact are recorded here so the next console mystery
 starts from them.
 
+## Fifty-ninth round (#294) — cvt.w now honours the rounding mode; trunc.w provably does not
+
+Files: `core/float_emul.c`, `include/float_emul.h`, `cpus/cpu_mips_coproc.c`. None are
+tree-divergent.
+
+**The defect, measured first.** `cvt.w.d` of 3.5 yielded **3**; the MIPS default mode
+(round-to-nearest-even) gives **4**. The cause was structural: `cvt.w`, `trunc.w` and
+`trunc.l` all routed through the same convert operation and were indistinguishable at the
+store — everything behaved like trunc. Upstream's own decoder carries `/*  TODO: not
+CVT?  */` at both trunc sites; this round answers it: it *is* a convert, with the mode
+forced.
+
+**Design, from a four-seat panel with an adjudication pass.** The store's rounding mode
+becomes an explicit parameter: the decoder forces toward-zero for `trunc.w`/`trunc.l`
+(architecturally mode-independent) and everything else defers to FCSR. The integer (W/L)
+arm of the store now rounds the value to an integral per the mode FIRST, then applies
+#273's range clamps verbatim — once the value is integral, the same two constants express
+exact range membership under every mode, so no per-mode clamp table exists to get wrong.
+The adjudicator picked the parameter over per-instruction operation enums on the argument
+that rounding policy is orthogonal to the operation, and future fixed-mode instructions
+(`round.w`, `ceil.w`, `floor.w`) then need no new machinery at all.
+
+**A proof in the design was refuted and repaired before implementation.** The tie test
+"remainder equals 0.5" is NOT sound: `nf - floor(nf)` can round to exactly 0.5 for a
+value that is not a tie (`nextafter(-0.5, 0)` — true distance 0.5 + 2^-54). No wrong
+*result* survived the error, but the implementation compares against the exactly
+representable midpoint `floor(nf) + 0.5` instead. `rint`/`nearbyint` are forbidden here
+(they follow the HOST's mode) and `llround` rounds ties away from zero.
+
+**Boundary facts pinned by the panel** (exact-rational arithmetic, encoded as vectors):
+`-2147483648.5` stays IN RANGE under nearest — the tie lands on -2^31, which is *even* —
+and under toward-zero and toward-+Inf; only toward--Inf floors it out. `+2147483647.5`
+answers `0x7fffffff` under **all four modes** (two as a genuine result, two as the pinned
+invalid default), so it discriminates nothing and the probes use exact integers. L has no
+mode-dependent edge at its bounds: every double at that magnitude is already integral.
+
+**Why the rigs cannot regress, from the guest's own toolchain source.** OpenBSD 2.2's
+GAS expands `trunc.w.d` into an FCSR save, a `ctc1` forcing the mode field to toward-zero,
+the `cvt.w.d`, and a restore — so pmax binaries execute `cvt.w` *frequently*, always under
+forced toward-zero, where the new path is bit-identical by construction (and by a
+406,405-double boundary sweep, 0 mismatches). The arc kernel uses the real `trunc.w`,
+now forced toward-zero by the decoder. Measured: pmax 15/15 and arc 13/13 to `uid=0`,
+unchanged.
+
+**Verified.**
+- Offline gate: 36 named vectors now, including the full tie matrix, the boundary table
+  above, LEGACY rows that pin the historical truncation bit-for-bit (which the 20M sweep
+  never covered for W), a NaN pin, and an L bound; every #287/#292 assertion unchanged.
+- The mutation self-test runs a **fourth mutant** — the W arm rounding under LEGACY —
+  and the gate goes red on it. Its first version was itself a no-op (LEGACY matched no
+  case in the inner switch and fell through harmlessly); the self-test's own
+  must-fail check caught that, which is precisely the job it exists to do.
+- **Live on both rigs**: 32 probe rows — `cvt.w.d` ties under all four FCSR modes
+  (3.5→4 nearest, 2.5→2 even, -2.5→-2 even, -2.5→-3 toward--Inf), `trunc.w.d` giving
+  identical answers under different FCSR modes, the -2^31-0.5 boundary per mode, and a
+  #292 S-arm regression row. PROBE294_PASS.
+- Clean rebuild 0 warnings / 0 errors, both trees.
+
+**Recorded, not fixed:** `round.w`, `ceil.w`, `floor.w` and `cvt.l` are not decoded at
+all and fall through to a Coprocessor-Unusable exception *with CU1 enabled* — a
+kernel-retry livelock shape (latent: zero occurrences across green boots). With this
+round's machinery they are three decode blocks; see OUTSTANDING_BUGS.
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

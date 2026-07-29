@@ -259,11 +259,13 @@ no_reasonable_result:
  *  truncation, but with #287's overflow-to-Infinity kept as-is -- and is
  *  what every caller that does not pass a mode still gets.
  *
- *  The W and L (integer) formats IGNORE the mode on purpose: cvt.w and
- *  trunc.w currently route through the same call and cannot be told apart
- *  here, and trunc.w is architecturally round-toward-zero REGARDLESS of
- *  the mode bits.  Honouring rm for them would break trunc.w.  See the
- *  outstanding-bugs entry on cvt.w before changing that.
+ *  #294: the W and L (integer) formats honour the mode too -- the value is
+ *  rounded to an integral per rm and then #273's range guards and the cast
+ *  apply unchanged.  The SEPARATION lives in the caller: the MIPS decoder
+ *  passes a forced toward-zero mode for trunc.w/trunc.l (architecturally
+ *  mode-independent) and defers to FCSR for cvt.*, so honouring rm here
+ *  cannot break trunc.  Callers using the two-argument legacy entry point
+ *  get LEGACY, under which W/L behaviour is bit-identical to before.
  */
 uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 {
@@ -299,6 +301,44 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 		 *  If nf < 0.0, then r2 will begin with a sequence of binary
 		 *  1's, which is ok.
 		 */
+
+		/*  #294: round to an integral value per the caller's mode
+		    FIRST, so #273's range guards below test the value that
+		    will actually be cast.  Under RZ and LEGACY nothing is done
+		    -- the cast truncates, exactly as before, which a sweep of
+		    406,405 boundary-bracketing doubles confirmed bit-identical.
+
+		    The nearest-even tie test compares against the exactly
+		    representable midpoint floor(nf) + 0.5 and NOT against a
+		    computed difference: nf - floor(nf) can round to exactly
+		    0.5 for a value that is not a tie (nextafter(-0.5, 0) is
+		    the counterexample -- its true distance is 0.5 + 2^-54).
+		    For |nf| < 2^52 the midpoint is exact; at or above 2^52
+		    every double is already integral and floor(nf) == nf, so
+		    the branch is never entered.  rint()/nearbyint() are
+		    forbidden here (they follow the HOST's rounding mode) and
+		    llround() rounds ties away from zero, which is wrong.  */
+		if (!isnan(nf) &&
+		    rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ) {
+			double fl = floor(nf);
+			if (nf != fl) {
+				switch (rm) {
+				case IEEE_RM_RN:
+					if (nf > fl + 0.5 ||
+					    (nf == fl + 0.5 &&
+					    fmod(fl, 2.0) != 0.0))
+						fl += 1.0;
+					nf = fl;
+					break;
+				case IEEE_RM_RP:
+					nf = fl + 1.0;
+					break;
+				case IEEE_RM_RM:
+					nf = fl;
+					break;
+				}
+			}
+		}
 		/*  #273: NaN, +/-Inf and out-of-range operands must not reach
 		    the cast -- (int64_t) of those is undefined in C, so the
 		    guest-visible result would otherwise depend on the build

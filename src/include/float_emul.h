@@ -50,8 +50,9 @@ struct ieee_float_value {
     a caller can pass its status-register field through directly.  LEGACY
     reproduces the historical behaviour bit for bit (truncation, with
     #287's overflow-to-Infinity) and is what the two-argument entry point
-    uses.  The W/L integer formats ignore the mode -- see the comment on
-    the function before changing that.  */
+    uses.  #294: the W/L integer formats honour the mode as well; the
+    caller is responsible for forcing toward-zero for trunc-style
+    instructions (the MIPS decoder does).  */
 #define	IEEE_RM_RN		0	/*  to nearest, ties to even  */
 #define	IEEE_RM_RZ		1	/*  toward zero  */
 #define	IEEE_RM_RP		2	/*  toward +Inf  */

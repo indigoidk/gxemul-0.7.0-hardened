@@ -35,7 +35,7 @@ done
 rm -rf "$T"; mkdir -p "$T"
 cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 
-# THREE mutants now, one per guarded property. Each breaks the code a different way and
+# FOUR mutants now, one per guarded property. Each breaks the code a different way and
 # the differential must go red for every one of them.
 #
 #   A  revert #287      overflow keeps its garbage fraction (a NaN encoding) and
@@ -47,6 +47,9 @@ cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 #   C  mode ignored     #292's rm parameter is accepted and discarded. Every
 #                       differential ever written passes an ignored parameter; the
 #                       mode-is-read vector pair is what catches it.
+#   D  W rounds under LEGACY   #294's integer arm rounding when it should truncate
+#                       would silently change every pre-existing trunc-style caller;
+#                       the legacy W vectors are what catch it.
 mutate() {   # name -> writes $T/mutant_<name>.c, echoes ok/FAIL
     local name=$1
     cp "$TREE/src/core/float_emul.c" "$T/mutant_$name.c"
@@ -73,6 +76,26 @@ elif name == "modeignored":
     a = "uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)\n{"
     need(a)
     s = s.replace(a, a + "\n\trm = IEEE_RM_LEGACY;", 1)
+elif name == "wlegacyrounds":
+    # #294's W/L arm suddenly rounding under LEGACY would change every
+    # pre-existing trunc-style caller. The legacy W vectors must catch it.
+    #
+    # The FIRST version of this mutant only dropped LEGACY from the outer
+    # guard -- and the differential rightly stayed green, because LEGACY
+    # matches no case in the inner rounding switch and fell through
+    # unchanged. A mutant that cannot fail tests nothing (the self-test's
+    # own check caught that). This version forces LEGACY to round nearest,
+    # which the "W: LEGACY == old truncation" vector must detect.
+    a = ("\t\tif (!isnan(nf) &&\n"
+         "\t\t    rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ) {\n"
+         "\t\t\tdouble fl = floor(nf);")
+    need(a)
+    s = s.replace(a,
+         "\t\tif (!isnan(nf) &&\n"
+         "\t\t    rm != IEEE_RM_RZ) {\n"
+         "\t\t\tif (rm == IEEE_RM_LEGACY)\n"
+         "\t\t\t\trm = IEEE_RM_RN;\n"
+         "\t\t\tdouble fl = floor(nf);", 1)
 io.open(p, "w", encoding="utf-8", errors="surrogateescape", newline="").write(s)
 PY
     [ $? -eq 0 ] && echo ok || echo FAIL
@@ -85,7 +108,7 @@ build_and_run() {   # label, source file -> prints DIFF_PASS count
     grep -c 'DIFF_PASS' "$T/$1.out"
 }
 
-for m in revert287 tiesaway modeignored; do
+for m in revert287 tiesaway modeignored wlegacyrounds; do
     check "mutant $m could be applied" "$(mutate $m)" "ok"
 done
 
@@ -93,7 +116,7 @@ note "control: differential against the shipped float_emul.c"
 real=$(build_and_run real "$TREE/src/core/float_emul.c")
 check "unmutated source passes gate 2" "$real" "1"
 
-for m in revert287 tiesaway modeignored; do
+for m in revert287 tiesaway modeignored wlegacyrounds; do
     note "mutant $m: the differential must go red"
     out=$(build_and_run "mut_$m" "$T/mutant_$m.c")
     check "mutant $m is DETECTED (must fail)" "$out" "0"

@@ -483,6 +483,76 @@ int main(void)
 		rm_vec_n++;
 	}
 
+	/*
+	 *  #294 vectors: the W (integer) arm under each mode.  The panel's
+	 *  boundary table, verified by exact-rational arithmetic:
+	 *    - ties go to EVEN (-3.5 -> -4 because -4 is even; 2.5 -> 2);
+	 *    - -2147483648.5 stays IN RANGE under nearest (the tie lands on
+	 *      -2^31, which is even and representable), toward-zero and
+	 *      toward-+Inf; only toward--Inf floors it out;
+	 *    - +2147483647.5 answers 0x7fffffff under ALL FOUR modes (two as
+	 *      a real result, two as the pinned invalid default), so it
+	 *      discriminates nothing and exact integers probe the bounds;
+	 *    - LEGACY rows pin the historical truncation bit for bit, which
+	 *      the 20M sweep never covered for W.
+	 */
+	{
+		struct { double v; int rm; uint32_t want; const char *why; } wv[] = {
+		    { 3.5,  IEEE_RM_RN, 4,          "W: 3.5 nearest -> 4 (THE defect)" },
+		    { -3.5, IEEE_RM_RN, 0xfffffffc, "W: -3.5 nearest -> -4 (even)" },
+		    { 2.5,  IEEE_RM_RN, 2,          "W: 2.5 tie -> even 2, not 3" },
+		    { -2.5, IEEE_RM_RN, 0xfffffffe, "W: -2.5 tie -> even -2, not -3" },
+		    { 3.25, IEEE_RM_RN, 3,          "W: 3.25 control (same as old)" },
+		    { 3.5,  IEEE_RM_RZ, 3,          "W: RZ truncates" },
+		    { 2.5,  IEEE_RM_RP, 3,          "W: RP ceils" },
+		    { -2.5, IEEE_RM_RM, 0xfffffffd, "W: RM floors -> -3" },
+		    { 3.5,  IEEE_RM_LEGACY, 3,      "W: LEGACY == old truncation" },
+		    { -3.5, IEEE_RM_LEGACY, 0xfffffffd, "W: LEGACY -3.5 -> -3" },
+		    { -2147483648.5, IEEE_RM_RN, 0x80000000, "W: -2^31-0.5 tie -> even -2^31" },
+		    { -2147483648.5, IEEE_RM_RZ, 0x80000000, "W: -2^31-0.5 RZ in range" },
+		    { -2147483648.5, IEEE_RM_RP, 0x80000000, "W: -2^31-0.5 RP in range" },
+		    { -2147483648.5, IEEE_RM_RM, 0x7fffffff, "W: -2^31-0.5 RM floors OUT" },
+		    { -2147483648.5, IEEE_RM_LEGACY, 0x80000000, "W: -2^31-0.5 LEGACY (#273)" },
+		    { 2147483648.0,  IEEE_RM_RN, 0x7fffffff, "W: 2^31 pinned invalid" },
+		    { -2147483649.0, IEEE_RM_RN, 0x7fffffff, "W: -2^31-1 pinned invalid" },
+		    { 2147483647.0,  IEEE_RM_RN, 0x7fffffff, "W: INT_MAX genuine" },
+		    { -2147483648.0, IEEE_RM_RN, 0x80000000, "W: INT_MIN genuine" },
+		};
+		int k;
+		for (k = 0; k < (int)(sizeof(wv) / sizeof(wv[0])); k++) {
+			uint32_t got;
+			if (wv[k].rm == IEEE_RM_LEGACY)
+				got = (uint32_t) ieee_store_float_value(
+				    wv[k].v, IEEE_FMT_W);
+			else
+				got = (uint32_t) ieee_store_float_value_rm(
+				    wv[k].v, IEEE_FMT_W, wv[k].rm);
+			rm_vec_n++;
+			if (got != wv[k].want) {
+				rm_vec_bad++;
+				printf("  RM VECTOR WRONG (%s): got %08x want %08x\n",
+				    wv[k].why, got, wv[k].want);
+			}
+		}
+		/*  NaN stays the pinned invalid result under every mode  */
+		if ((uint32_t) ieee_store_float_value_rm(0.0 / 0.0,
+		    IEEE_FMT_W, IEEE_RM_RN) != 0x7fffffffu) {
+			rm_vec_bad++;
+			printf("  RM VECTOR WRONG (W: NaN pinned under RN)\n");
+		}
+		rm_vec_n++;
+		/*  L: no mode-dependent edge exists at the bounds -- every
+		    double at that magnitude is already integral  */
+		if (ieee_store_float_value_rm(9223372036854774784.0,
+		    IEEE_FMT_L, IEEE_RM_RN) != 0x7ffffffffffffc00ULL ||
+		    ieee_store_float_value(9223372036854774784.0,
+		    IEEE_FMT_L) != 0x7ffffffffffffc00ULL) {
+			rm_vec_bad++;
+			printf("  RM VECTOR WRONG (L: 2^63-1024 under RN/legacy)\n");
+		}
+		rm_vec_n++;
+	}
+
 	printf("rm: RN oracle mismatches      : %lld\n", rm_rn_bad);
 	printf("rm: RZ oracle mismatches      : %lld\n", rm_rz_bad);
 	printf("rm: mode-differing population : %lld\n", rm_mode_diff);
