@@ -1640,6 +1640,49 @@ review — which is the point of a gate that can fail.
 ---
 
 
+## Fifty-sixth round (#291) — the ARM cache-size fields shifted a negative number
+
+One fix, in `cpus/cpu_arm.c`. The file is not one of the five that differ between the two
+trees, so both stay byte-identical.
+
+**What was wrong.** The ARM cache-type register packs each cache size into a 3-bit field,
+encoded as `log2(bytes) - 9`. But 32 of the entries in `arm_cpu_types.h` leave
+`dcache_shift` at 0 — ARM1136JSR1, which the Raspberry Pi machine selects, is one of them.
+Those computed `0 - 9 = -9` and shifted it left, which is undefined behaviour in C.
+
+**Inherited, not introduced.** UBSan reports it on unmodified upstream 0.7.0 as well.
+
+**It was not just undefined, it was wrong.** −9 does not stay inside a 3-bit field.
+Measured for ARM1136JSR1:
+
+| | value |
+|---|---|
+| as shipped | `0xffdea0ea` |
+| correct | `0x0b02a0ea` |
+| bits wrongly set | `0xf4dc0000`, smeared across the CLASS and HARVARD fields |
+
+**The obvious fix is the wrong one.** Casting to `uint32_t` makes the sanitizer stop
+complaining and leaves the register exactly as corrupt — measured byte-identical at
+`0xffdea0ea`. That is the same "quietly mask the problem" pattern rounds #118/#119 already
+rejected in this project. An unspecified size now encodes as 0, and each field is masked to
+its own width.
+
+**Blast radius, measured rather than argued.** Only CPUs that leave a cache size
+unspecified change. ARM920T, SA110 (used by `cats`) and 80321_400 produce byte-identical
+values before and after.
+
+**How it was found and how it was checked.** Gate 9 — the AddressSanitizer machine sweep
+added in the previous round — reported it, which is the first time this project has had a
+standing check capable of finding it. After the fix, `rpi` goes from 1 report to **0**, and
+`cats`, `netwinder`, `iq80321`, `iyonix` and `testarm` all stay at 0. Both trees rebuild at
+0 warnings and 0 errors.
+
+The register is still marked "aren't used yet" in the source, so nothing observable to a
+guest changes today. This is correctness groundwork, not a visible bug fix.
+
+---
+
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

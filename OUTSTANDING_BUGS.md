@@ -1,6 +1,36 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
-> ## 2026-07-29 — NEW: undefined behaviour in the ARM cache-type register, on `rpi`
+> ## ✅ 2026-07-29 — RESOLVED as #291 (see CHANGELOG "Fifty-sixth round")
+> Fixed: an unspecified cache size now encodes as 0 and each field is masked to its own
+> width. `rpi` goes from 1 sanitizer report to 0; `cats`, `netwinder`, `iq80321`, `iyonix`
+> and `testarm` stay at 0; both trees rebuild 0/0. Worth keeping from the investigation:
+> it affected **32** CPU table entries, not just `rpi`, and casting to unsigned would have
+> silenced the sanitizer while leaving the register byte-identically corrupt.
+
+> ## 2026-07-29 — NARROWED: the console/keyboard overrun is X11-only, and mostly guarded
+> The earlier entry (item 5 of the rounds 41–46 block) says three ring buffers share the
+> "overrun discards the whole queue" shape, one fixed and two still broken. The *code
+> pattern* is identical in all three, but two of them have **feeder-level guards the entry
+> does not mention**, so the exposure is far narrower than it reads:
+>
+> * `console/console.c:311` — the site is unguarded, but `console_charavail()` refuses to
+>   read when the FIFO has less than 101 bytes of room, and **that guard is upstream's**
+>   (`git log -S roomLeftInFIFO` shows only the import commit). The stdin path therefore
+>   cannot overrun. Bypassing callers: `x11.c` (42 sites), `debugger.c` (11),
+>   `dev_ns16550.c`, `dev_vr41xx.c` (24).
+> * `devices/dev_dc7085.c:109` — the site is unguarded, but `lk201.c:253` loops on
+>   `space_available_in_queue()`, which reserves 20 slots, before feeding console input.
+>   The bypasses are the X11 keyboard/mouse expansions (`lk201.c:135-148`, `199-203`,
+>   `290-291`), each adding up to ~4 bytes per event unchecked — so an overrun needs more
+>   than five X11 events between drains.
+> * `devices/dev_pckbc.c:159` — already fixed by #288.
+>
+> **Net: the residual exposure on both remaining sites is X11-only.** This project runs its
+> rigs headless, so the bug cannot be reproduced in our own configuration — which under
+> "only change what we can test for" means it is not fixed here. Recorded so the next
+> reader does not act on the older entry's wider framing.
+
+> ## 2026-07-29 — (superseded, kept for the trail) undefined behaviour in the ARM cache-type register, on `rpi`
 > **What's wrong.** `cpus/cpu_arm.c:144` builds the ARM cache-type register like this:
 >
 > ```c

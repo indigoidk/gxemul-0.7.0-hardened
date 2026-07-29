@@ -137,16 +137,37 @@ int arm_cpu_new(struct cpu *cpu, struct memory *mem,
 		cpu->cd.arm.control |= ARM_CONTROL_R;
 	}
 
+	/*  #291: the cache-size fields are 3 bits wide and encode the size as
+	    log2(bytes) - 9, but 32 of the entries in arm_cpu_types.h leave
+	    dcache_shift at 0 (ARM1136JSR1, which the rpi machine selects, is
+	    one). Those computed 0 - 9 = -9 and shifted it left, which is
+	    undefined behaviour -- UBSan reports it on upstream 0.7.0 too, so
+	    this is inherited, not introduced here.
+
+	    It is not merely undefined, it is WRONG: -9 does not stay inside
+	    its 3-bit field. ARM1136JSR1 yielded 0xffdea0ea where 0x0b02a0ea
+	    is correct, smearing 0xf4dc0000 across the CLASS and HARVARD
+	    fields as well.
+
+	    Casting to unsigned would silence the sanitizer and leave the
+	    register just as corrupt (measured: byte-identical 0xffdea0ea), so
+	    it is not the fix. An unspecified size encodes as 0, and each
+	    field is masked to its own width. CPUs that do specify both sizes
+	    are unaffected -- ARM920T, SA110 and 80321_400 all produce exactly
+	    the value they produced before.  */
+	uint32_t dsize = cpu->cd.arm.cpu_type.dcache_shift >= 9 ?
+	    (uint32_t) (cpu->cd.arm.cpu_type.dcache_shift - 9) : 0;
+	uint32_t isize = cpu->cd.arm.cpu_type.icache_shift >= 9 ?
+	    (uint32_t) (cpu->cd.arm.cpu_type.icache_shift - 9) : 0;
+
 	/*  TODO: Some of these values (iway and dway) aren't used yet:  */
 	cpu->cd.arm.cachetype =
 	      (5 << ARM_CACHETYPE_CLASS_SHIFT)
 	    | (1 << ARM_CACHETYPE_HARVARD_SHIFT)
-	    | ((cpu->cd.arm.cpu_type.dcache_shift - 9) <<
-		ARM_CACHETYPE_DSIZE_SHIFT)
+	    | ((dsize << ARM_CACHETYPE_DSIZE_SHIFT) & ARM_CACHETYPE_DSIZE)
 	    | (5 << ARM_CACHETYPE_DASSOC_SHIFT)		/*  32-way  */
 	    | (2 << ARM_CACHETYPE_DLINE_SHIFT)		/*  8 words/line  */
-	    | ((cpu->cd.arm.cpu_type.icache_shift - 9) <<
-		ARM_CACHETYPE_ISIZE_SHIFT)
+	    | ((isize << ARM_CACHETYPE_ISIZE_SHIFT) & ARM_CACHETYPE_ISIZE)
 	    | (5 << ARM_CACHETYPE_IASSOC_SHIFT)		/*  32-way  */
 	    | (2 << ARM_CACHETYPE_ILINE_SHIFT);		/*  8 words/line  */
 
