@@ -34,6 +34,7 @@ what it does not.
 | 5 | `gate_crossfamily.sh` | Non-MIPS CPU cores execute guest code and return checked answers: m88k to a root shell with a verified FP result, SuperH through a full kernel boot to a verified device-probe result. | ~12 min |
 | 6 | `gate_hygiene.sh` | No distress markers in the boot logs, with a positive control so empty logs cannot pass. | ~5 s |
 | 7 | `gate_ab.sh` | Three-way A/B against pristine 0.7.0 and the pre-batch fork. | ~15 min |
+| 8 | `gate_upstream.sh` | **Upstream's own test suite**, run three-way. The only gate this project did not author. | ~30 s |
 
 Gate 3 is the one that keeps the rest honest. Every other gate asserts something about the
 emulator; that one asserts something about **the harness** — that its strongest check
@@ -129,6 +130,60 @@ call into the shared function; #287 itself is covered by gate 2, which links the
 `float_emul.c`. **The S-format overflow arm has no in-guest coverage on any rig**, MIPS
 included. Closing that would need a staged guest binary computing something like
 `1e30f * 1e30f`, not a double-precision `awk` one-liner.
+
+## Upstream's own tests, and the intended-difference allowlist
+
+Gate 8 runs the `test/` directory GXemul has shipped since 2021. It is the only gate here
+this project did not write, which is exactly its value: every other instrument was
+authored by the same process that made the ~290 corrections.
+
+What it covers that nothing else did. The rigs do load kernels, so loader coverage was
+never zero — but it was narrow: a.out, ELF32 LSB MIPS, ELF32 MSB PowerPC and gzip. Gate 8
+adds **ELF64** (RISC-V LSB and SH5 MSB — a separate code path from ELF32), **b.out i960**,
+**MIPS16**, and a **negative case** (`FileLoader_NonsenseFile`), which is precisely the
+malformed-input handling the fork hardened. The fork changed seven files under
+`src/file/`; ECOFF, Mach-O, SREC and Android still have no corpus.
+
+**The allowlist is the part worth understanding.** With ~290 intended changes, "pristine
+and HEAD differ" is not a finding — counting differences is meaningless when hundreds are
+deliberate. So each difference is *classified*:
+
+```
+identical                       -> fine
+differs, maps to correction #N  -> fine, and #N is named in the allowlist
+differs, unexplained            -> REGRESSION
+```
+
+`intended_norm()` erases exactly one intended change per entry, so whatever survives is by
+construction unexplained. Today it holds one entry — **#260**, which routed net
+diagnostics through `debugmsg(SUBSYS_NET, …)` and so prefixes them with `net: `. Measured
+result: **6 raw differences per case, 0 unexplained**. Adding an entry is a deliberate act
+meaning "the fork changed this on purpose, under this number."
+
+### What this gate got wrong on its first run
+
+Both mistakes are the harness's recurring failure mode, so they are recorded rather than
+quietly fixed:
+
+1. It used `-e testmips`. That is the **subtype** flag; the machine flag is `-E`. Every
+   invocation produced `Sorry, emulation "" (subtype "testmips") is unknown.` — and the
+   gate compared that identical error across three builds and reported **22 checks
+   passing**. Upstream's own `configure` comment still shows `-e`; it predates the change.
+2. Its only guard was a 100-byte floor on output, which an error message clears easily.
+   **A floor proves volume, not validity.** Every case now asserts a format-specific
+   marker only the real loader can print — `ELF64 LSB`, `b.out`, `a.out` — so an error, a
+   usage message or an empty run all fail.
+
+### Deliberately not included
+
+`test/floatingpoint/fptest.c` cross-compiles a guest binary that prints FP results as raw
+hex against a golden file — genuinely the in-guest instrument for #287. It is **not** wired
+in, because it needs a cross-toolchain, and gate 2 already makes a stronger claim about the
+one function #287 changed (20M inputs, closed-form change-set in both directions, plus a
+mutation self-test). It would add the end-to-end in-guest FP path: real value, highest
+setup cost, least additive. Revisit when a cross-toolchain is available — and note that
+#255's NaN canonicalisation will produce *intended* differences in the NaN rows, needing
+allowlist entries.
 
 ## Guest disk images must be booted with `R:`
 
