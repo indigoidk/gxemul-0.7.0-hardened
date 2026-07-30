@@ -36,6 +36,9 @@ DEST = 0x8c010100
 
 DN = 0x00040000            # FPSCR.DN, set at reset
 PR = 0x00080000            # double precision
+NODN = 0x80000000          # #303 row marker, NOT an FPSCR bit: the harness strips
+                           # DN for rows whose operands are denormal (see the #303
+                           # rows for why a DN=1 numeric expectation would be wrong)
 RN = 0x0                   # round to nearest
 RZ = 0x1                   # round to zero
 
@@ -175,6 +178,25 @@ VECTORS = [
     ("ftrcD-neghalf -2^31-0.5", PR, {"fr0": 0xc1e00000, "fr1": 0x00100000},
      (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
      (0x0009 << 16) | 0x2122),
+
+    # ---- #303: subnormal OPERANDS decode to their true IEEE value -------------------
+    #  Every other row in this table runs under DN=1 (the reset default this probe
+    #  ORs in), which is honest for them -- none has a denormal operand. These two DO,
+    #  and a numeric true-IEEE expectation under DN=1 would bless a value real
+    #  silicon flushes to zero, so they carry NODN: the harness STRIPS the DN bit and
+    #  the architectural claim is DN=0-with-kernel-completion (which computes exactly
+    #  this decode; the FPU-error trap itself stays unmodelled -- the #296/#297
+    #  precedent). RM is pinned by the row's single mode key; SH-4 resets to RZ, so
+    #  an unpinned mode would make the fdiv byte ambiguous (panel pass-2).
+    #  Committed-build bytes, measured live before the fix: 0x32000001, 0x3f800001.
+    #  The results here are NORMAL, so the #287/#292 store flush is never involved.
+    ("subn fmul S-min*2^100", NODN, {"fr0": 0x00000001, "fr1": 0x71800000},
+     instr(0xf012, 0),                       # fmul fr1,fr0
+     {RN: 0x27000000}),
+    #  quotient of garbles was ~1.0 (0x3f800001 under RN); true quotient is exactly 2.
+    ("subn fdiv 2ulp/1ulp", NODN, {"fr0": 0x00000002, "fr1": 0x00000001},
+     instr(0xf013, 0),                       # fdiv fr1,fr0
+     {RN: 0x40000000}),
 ]
 
 
@@ -258,7 +280,10 @@ for vec in VECTORS:
     word2 = vec[5] if len(vec) > 5 else None
     for mode, expect in sorted(want.items()):
         total += 1
-        got = run(DN | extra | mode, seed, word, word2)
+        fps = DN | (extra & ~NODN) | mode
+        if extra & NODN:
+            fps &= ~DN          # #303 rows: denormal operands, DN must be clear
+        got = run(fps, seed, word, word2)
         label = "nearest" if mode == RN else "toward-zero"
         if got is None:
             print("%-28s %-12s %-10s %-10s FAIL(no-readback)"

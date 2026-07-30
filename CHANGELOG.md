@@ -3027,6 +3027,112 @@ toolchain puts the instruction one line away, and before this round that one lin
 stopped the whole emulator. A real defect, fixed with its thinness stated rather than
 dressed up.
 
+## Sixty-eighth round (#303) — every subnormal decoded wrong, on every architecture at once
+
+One correction in `core/float_emul.c`'s `ieee_interpret_float_value()`, the decode
+half of the module whose store half rounds 51–67 rebuilt. The widest blast radius of
+the campaign: five CPU families consume this function for every S/D operand, and
+before this round every subnormal bit pattern — all 2×8,388,607 single-precision
+magnitudes, exhaustively — decoded to garbage.
+
+### The defect
+
+The S/D arm added the implicit leading 1 and used exponent `-bias` for every nonzero
+finite input. A subnormal (biased exponent 0, mantissa m ≠ 0) has neither: its value
+is `(m/2^frac)·2^(1-bias)`. The committed decode returned `(1+m/2^frac)·2^(-bias)` —
+S 0x00000001 read as 5.877e-39 where the true value is 1.401e-45, a factor of 4.19
+million; the worst D ratio is 2.25e15; the maximum D subnormal decoded as exactly
+DBL_MIN, a NORMAL; and D m=3 and m=4 COLLIDED onto one host double (the garbled
+ideals sit half a grid step apart and the decoder's own last halving rounds them
+together — the committed loop rounded; the fixed one is exact, a property it
+acquires because true subnormals are grid-aligned).
+
+### Who consumed it — the panel refuted the masking claim and the rigs agreed
+
+The pass-1 brief claimed MIPS was fully masked by #246's denormal trap. Two seats
+independently refuted it from the code — `fpu_unimpl_trap()` returns 0 for EXC3K
+because the R3010 signals through an external interrupt pin the emulated machines
+never wire — and the rig settled it: pmax/R3000 stored `0x32000001` for
+S-min × 2^100 (the garbled product, bit-exact with the offline oracle), while
+arc/R4000 kept its `0xdeadbeef` sentinel (the trap fired; the store never ran). So
+the measured victim list is m88k (every FP operand, on a rig that boots OpenBSD to
+root), SH, Alpha, PPC — where `lfs` alone puts the garbled widening straight into
+the FPR, no arithmetic involved — and pmax, our primary rig. arc is the no-change
+control. A third seat's census found the two `dev_pvr.c` framebuffer decoders too
+(13 sites, Dreamcast vertex data; no rig, cosmetic).
+
+### The fix
+
+Save the biased exponent where the unbiasing destroys it, then one branch at the
+implicit-bit site: biased 0 → no implicit 1, exponent `1-bias`. Three lines of
+mechanism; W/L arms, the zero check and the Alpha exponent-1024 hack untouched.
+The guest-visible contracts this lands on are the ones the guests own: MIPS R3000
+and m88k kernel completion compute exactly this decode; PPC hardware computes it
+directly; SH is now a stated MIXED contract — operands per DN=0-with-completion,
+subnormal results still flushed by the deliberate #287/#292 store policy — one gap,
+named in the source, so nobody fixes half of it. The store side is untouched: its
+flush is documented policy whose per-arch encode contract the queued store round
+measures before changing anything.
+
+### Verification — every byte pinned live before the fix, every transition measured after
+
+Offline (gate 2, 23 → 30 checks): exhaustive S both signs, 400,010 D rows, the
+m=3/m=4 collision row, 27 controls, and an FTZ/DAZ + rounding-mode canary built
+from volatile operands — a constant expression would fold at compile time and pass
+on exactly the poisoned build it exists to catch (a seat's demand, like the
+generated-Makefile fast-math grep that closes the `CFLAGS=-Ofast ./configure` hole
+the script-level grep cannot see). The mutation self-test grew mutant `revert303`,
+defined as force-the-normal-arm after a seat proved deleting the branch body is
+algebraically a no-op mutant; it fails exactly the interpret rows.
+
+Rig rows, every committed-side byte measured live before the fix landed: m88k
+(gate 11, 40 → 46 rows) — both fmul signs (0x32000001/0xb2000001 → 0x27000000/
+0xa7000000), the fmul.dss widen with s2 pinned at 1.0f, the fmul.ddd scale row
+whose committed byte 0x3E80000000000000 was settled three independent ways after
+BOTH seats' pass-1 arithmetic had it one ulp wrong, and fcmp.ssd against a D
+comparand inside the (true, garbled) gap — the ONLY discriminating compare shape:
+the garble maps subnormals monotonically into (0, FLT_MIN), so every same-format
+compare preserves order (a seat's band theorem, conceded and then sharpened by the
+collision case). SH (gate 10, 34 → 36 pairs): fmul and fdiv rows that STRIP the
+probe's DN=1 default — a numeric true-IEEE expectation under DN=1 would bless a
+value real silicon flushes (the seat that caught it also pinned RM=RN in the same
+write; SH-4 resets to round-to-zero). MIPS (gate 12, 11 → 15 rows): pmax mul.s and
+cvt.d.s discriminators plus the arc trap control.
+
+Two rows are pinned KNOWN-CHANGE, not failures — and they run on the NEGATIVE
+operand, because the diff-review pass caught the positive form overclaiming: m88k
+fmul.sss(−S-min, 2.0) and pmax add.s(−S-min, −S-min). The garbled product landed
+S-normal (the positive twin measured 0x00800001 pre-fix; the negative one is the
+same path with the sign applied last); the true result −2^-148 is subnormal and
+takes the deliberate #287/#292 store flush to MINUS zero — the sign #287
+preserves. A positive row reads +0 under both the old and the current store and
+cannot see a #287 revert at all; the negative row trips a revert of EITHER
+correction. They are the before/after evidence the queued store-side round
+inherits.
+
+### The panel
+
+Four seats to concurrence in two passes — Codex xhigh, agy, and a Fable agent,
+with GLM-5.2 seated for the fourth after Kimi wedged twice (alive, near-zero CPU;
+stopped, relaunched, replaced). Every factual dispute was settled by measurement,
+not vote: the masking refutation (above), the compare-witness refutations (the
+original fcmp threshold was itself subnormal — both builds answer "less"), the
+one-ulp committed-byte correction both its authors retracted, and eleven live
+probe rows across four rigs that matched their predictions bit for bit. The PPC
+lfs row ran once more on the fixed build (0x36a0000000000000, control clean) per a
+seat's demand; its permanent gate row lands with round 69's PPC gate.
+
+The DIFF then took its own four-seat pass: three SHIP, one FIX with four findings,
+all adopted and re-measured — the arc trap row gained an integer-store execution
+witness (a dead session previously left the same sentinel the trap does: the
+project's own load-bearing-control rule, turned back on this round); gate 12's
+late skip could discard failures the first section had already recorded (inputs
+now preflighted, no-result is a failing check); the flip rows went negative
+(above); and two canary comments claimed coverage of the generated-Makefile hole
+that only the grep can see (narrowed — the canary is the HOST-level defence). A
+SHIP seat added two one-line hardenings: a check_min on the D population and the
+why-comment on the unpinned L INT64_MAX.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

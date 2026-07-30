@@ -52,14 +52,17 @@ grep -E " ok$| FAIL" "$LOG" | sed 's/^/       /'
 res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 
-# 40 = 25 as of #300 (21 behaviour rows + the flipped residue-band row + the exact-zero
+# 46 = 25 as of #300 (21 behaviour rows + the flipped residue-band row + the exact-zero
 # sign rows and Inf row + the fdiv.ddd directed row + fcr63 retention) + #302's six
 # trnc rows (FOUR discriminators -- +Inf, the NEGATIVE-NaN-goes-positive signature,
 # the double 2^31 boundary, and the positive double qNaN; a panel seat corrected the
 # original count of three -- plus two negative-side host-independence pins) + #302's
 # eight int/nint rows (the decoder previously HALTED the machine on these legal
-# instructions).
-check "rows run"       "$want" 40
+# instructions) + #303's six subnormal-operand rows (both fmul signs, the dss widen,
+# the ddd scale row, the ONLY discriminating compare shape fcmp.ssd, and the
+# KNOWN-CHANGE flip pin -- see the probe's comment for why every committed byte was
+# measured live before the fix).
+check "rows run"       "$want" 46
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -76,7 +79,9 @@ done
 for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-pos RN tie" \
          "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf" "fdiv.ddd 1/10 RZ" \
          "trncSS +Inf" "trncSS qNaN-" "trncSD 2^31" "trncSD qNaN+" "trncSD qNaN-" \
-         "intSS 5.2 +Inf" "intSS -5.2 -Inf" "nintSS 2.5 tie" "nintSS 3.5 tie" "nintSD 2.5 tie"; do
+         "intSS 5.2 +Inf" "intSS -5.2 -Inf" "nintSS 2.5 tie" "nintSS 3.5 tie" "nintSD 2.5 tie" \
+         "subn fmul +" "subn fmul -" "subn fmul.dss" "subn fmul.ddd" "subn fcmp.ssd" \
+         "subn flip x2.0"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
 done

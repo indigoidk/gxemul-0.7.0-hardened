@@ -71,6 +71,7 @@
 #include <math.h>
 #include <string.h>
 #include <float.h>		/*  FLT_MIN, for the #292 oracles  */
+#include <fenv.h>		/*  #303: the canary asserts FE_TONEAREST  */
 
 #include "float_emul.h"		/*  the REAL ieee_store_float_value()  */
 
@@ -81,6 +82,14 @@
 void fatal(const char *fmt, ...)
 {
 	(void) fmt;
+}
+
+/*  #303: host bit pattern of a double, for bit-exact interpret comparisons.  */
+static uint64_t interp_bits(double d)
+{
+	uint64_t u;
+	memcpy(&u, &d, sizeof u);
+	return u;
 }
 
 /*
@@ -970,11 +979,241 @@ int main(void)
 
 	
 
+	long interp_bad = 0;
+
+	/*  =============== #303: ieee_interpret_float_value ===============
+	 *
+	 *  The DECODE side of the module, measured the same way the store
+	 *  side is.  Before #303 every subnormal (biased exponent 0, mantissa
+	 *  nonzero) decoded with the implicit 1 added and the exponent one
+	 *  too low -- S 0x00000001 read as (1+2^-23)*2^-127, 4.19e6 times its
+	 *  real value; the max D subnormal decoded as DBL_MIN, a NORMAL.
+	 *  Oracle: S subnormal = ldexp(m,-149), D = ldexp(m,-1074), both
+	 *  EXACT in a host double (S lands host-normal; D lands exactly on
+	 *  the host's own subnormal grid).  Compared bit-exact.
+	 *
+	 *  The canary comes first: on a HOST running FTZ/DAZ (MXCSR set by
+	 *  the environment) or a non-nearest rounding mode, the D
+	 *  expectations below are void.  That is the ONLY hole it covers --
+	 *  this binary is compiled with the gate's own -O2, so a TREE
+	 *  poisoned with fast-math through the generated Makefiles is
+	 *  invisible here; the gate's generated-Makefile grep is the sole
+	 *  defence for that one (a diff-review seat corrected the first
+	 *  version of this comment, which conflated the two).  It is
+	 *  GENUINELY runtime -- volatile operands and a volatile result --
+	 *  because constant expressions would fold at compile time and pass
+	 *  on exactly the build they exist to catch.  fegetround() matters
+	 *  too: the D m=3/m=4 collision expectation assumes host-nearest.
+	 */
+	{
+		long ibad = 0, itot = 0, icbad = 0, ictot = 0;
+		int interp_canary = 1, interp_collide = 0;
+		uint64_t m;
+		struct ieee_float_value fv, fv2;
+
+		volatile double v_one = 1.0;
+		volatile double v_tiny;
+		volatile double v_dmin = 2.2250738585072014e-308;
+		volatile double v_half;
+		v_tiny = ldexp(v_one, -1074);
+		v_half = v_dmin / 2.0;
+		if (v_tiny == 0.0 || v_half == 0.0 || v_half * 2.0 != v_dmin)
+			interp_canary = 0;
+		if (fegetround() != FE_TONEAREST)
+			interp_canary = 0;
+		printf("interp: FTZ/DAZ+RN canary     : %s\n",
+		    interp_canary ? "alive" : "DEAD");
+
+		/*  exhaustive S, BOTH signs: 2 x 8,388,607  */
+		for (m = 1; m <= 0x7fffffULL; m++) {
+			double want = ldexp((double) m, -149);
+			ieee_interpret_float_value(m, &fv, IEEE_FMT_S);
+			itot++;
+			if (interp_bits(fv.f) != interp_bits(want))
+				ibad++;
+			ieee_interpret_float_value(m | 0x80000000ULL, &fv,
+			    IEEE_FMT_S);
+			itot++;
+			if (interp_bits(fv.f) != interp_bits(-want))
+				ibad++;
+		}
+		printf("interp: S subnormals both signs: %ld bad (of %ld)\n",
+		    ibad, itot);
+
+		/*  D: edges + 200,000 deterministic samples, both signs  */
+		{
+			static const uint64_t edges[] = {
+				1, 2, 3, 0x8000000000000ULL,
+				0xfffffffffffffULL,
+			};
+			uint64_t st = 0x9e3779b97f4a7c15ULL;
+			long dbad = 0, dtot = 0;
+			size_t i;
+			long k;
+			for (i = 0; i < sizeof edges / sizeof edges[0]; i++) {
+				double want = ldexp((double) edges[i], -1074);
+				ieee_interpret_float_value(edges[i], &fv,
+				    IEEE_FMT_D);
+				dtot++;
+				if (interp_bits(fv.f) != interp_bits(want))
+					dbad++;
+				ieee_interpret_float_value(edges[i] |
+				    0x8000000000000000ULL, &fv, IEEE_FMT_D);
+				dtot++;
+				if (interp_bits(fv.f) != interp_bits(-want))
+					dbad++;
+			}
+			for (k = 0; k < 200000; k++) {
+				uint64_t mm;
+				double want;
+				st ^= st >> 12; st ^= st << 25; st ^= st >> 27;
+				mm = (st * 0x2545f4914f6cdd1dULL) &
+				    0xfffffffffffffULL;
+				if (mm == 0)
+					continue;
+				want = ldexp((double) mm, -1074);
+				ieee_interpret_float_value(mm, &fv, IEEE_FMT_D);
+				dtot++;
+				if (interp_bits(fv.f) != interp_bits(want))
+					dbad++;
+				ieee_interpret_float_value(mm |
+				    0x8000000000000000ULL, &fv, IEEE_FMT_D);
+				dtot++;
+				if (interp_bits(fv.f) != interp_bits(-want))
+					dbad++;
+			}
+			printf("interp: D subnormals both signs: %ld bad (of %ld)\n",
+			    dbad, dtot);
+			ibad += dbad;
+			itot += dtot;
+		}
+
+		/*  the collision row: the COMMITTED decode collapsed D m=3 and
+		    m=4 onto one host double (both 0x0008000000000002 -- the
+		    garbled ideals are half-grid apart and the final halving
+		    rounds them together).  The fixed decode must keep them
+		    DISTINCT and ORDERED.  This is also what makes the mutant
+		    (normal arm forced) fail loudly here.  */
+		ieee_interpret_float_value(3, &fv, IEEE_FMT_D);
+		ieee_interpret_float_value(4, &fv2, IEEE_FMT_D);
+		interp_collide = !(interp_bits(fv.f) != interp_bits(fv2.f) &&
+		    fv.f < fv2.f);
+		printf("interp: D m=3/m=4 distinct     : %s\n",
+		    interp_collide ? "COLLIDE" : "yes");
+
+		/*  named controls -- all classes that must NOT change, plus the
+		    high-32-junk mask rows and the W/L extrema  */
+		{
+			struct { const char *name; uint64_t x; int fmt;
+			    double want; } ctl[] = {
+			{ "S 1.0",        0x3f800000ULL, IEEE_FMT_S, 1.0 },
+			{ "S -2.5",       0xc0200000ULL, IEEE_FMT_S, -2.5 },
+			{ "S FLT_MIN",    0x00800000ULL, IEEE_FMT_S,
+			    1.1754943508222875e-38 },
+			{ "S -FLT_MIN",   0x80800000ULL, IEEE_FMT_S,
+			    -1.1754943508222875e-38 },
+			{ "S nextnormal", 0x00800001ULL, IEEE_FMT_S,
+			    1.1754944909521339e-38 },
+			{ "S FLT_MAX",    0x7f7fffffULL, IEEE_FMT_S,
+			    3.4028234663852886e+38 },
+			{ "S maxsubn",    0x007fffffULL, IEEE_FMT_S,
+			    1.1754942106924411e-38 },
+			{ "S -maxsubn",   0x807fffffULL, IEEE_FMT_S,
+			    -1.1754942106924411e-38 },
+			{ "S junk-high 1.0", 0xdeadbeef3f800000ULL, IEEE_FMT_S,
+			    1.0 },
+			{ "D 1.0",        0x3ff0000000000000ULL, IEEE_FMT_D, 1.0 },
+			{ "D -2.5",       0xc004000000000000ULL, IEEE_FMT_D, -2.5 },
+			{ "D DBL_MIN",    0x0010000000000000ULL, IEEE_FMT_D,
+			    2.2250738585072014e-308 },
+			{ "D -DBL_MIN",   0x8010000000000000ULL, IEEE_FMT_D,
+			    -2.2250738585072014e-308 },
+			{ "W INT32_MAX",  0x7fffffffULL, IEEE_FMT_W, 2147483647.0 },
+			{ "W INT32_MIN",  0x80000000ULL, IEEE_FMT_W, -2147483648.0 },
+			{ "W junk-high",  0xdeadbeef80000000ULL, IEEE_FMT_W,
+			    -2147483648.0 },
+			/*  L pins only INT64_MIN, which is exactly
+			    representable; INT64_MAX through the L arm's host
+			    cast rounds per the host and is #301's territory,
+			    deliberately NOT pinned here.  */
+			{ "L INT64_MIN",  0x8000000000000000ULL, IEEE_FMT_L,
+			    -9223372036854775808.0 },
+			};
+			size_t i;
+			for (i = 0; i < sizeof ctl / sizeof ctl[0]; i++) {
+				ieee_interpret_float_value(ctl[i].x, &fv,
+				    ctl[i].fmt);
+				ictot++;
+				if (interp_bits(fv.f) !=
+				    interp_bits(ctl[i].want)) {
+					icbad++;
+					printf("  interp CONTROL WRONG (%s)\n",
+					    ctl[i].name);
+				}
+			}
+			/*  D nextnormal, exact host constant via ldexp  */
+			ieee_interpret_float_value(0x0010000000000001ULL, &fv,
+			    IEEE_FMT_D);
+			ictot++;
+			if (interp_bits(fv.f) !=
+			    interp_bits(2.2250738585072014e-308 +
+			    ldexp(1.0, -1074)))
+				icbad++;
+			/*  infinities: value classes, not bit-compare  */
+			ieee_interpret_float_value(0x7f800000ULL, &fv,
+			    IEEE_FMT_S);
+			ictot++;
+			if (!(isinf(fv.f) && fv.f > 0))
+				icbad++;
+			ieee_interpret_float_value(0xff800000ULL, &fv,
+			    IEEE_FMT_S);
+			ictot++;
+			if (!(isinf(fv.f) && fv.f < 0))
+				icbad++;
+			ieee_interpret_float_value(0xfff0000000000000ULL, &fv,
+			    IEEE_FMT_D);
+			ictot++;
+			if (!(isinf(fv.f) && fv.f < 0))
+				icbad++;
+			/*  zeros keep their sign  */
+			ieee_interpret_float_value(0x80000000ULL, &fv,
+			    IEEE_FMT_S);
+			ictot++;
+			if (fv.f != 0.0 || !signbit(fv.f))
+				icbad++;
+			ieee_interpret_float_value(0x8000000000000000ULL, &fv,
+			    IEEE_FMT_D);
+			ictot++;
+			if (fv.f != 0.0 || !signbit(fv.f))
+				icbad++;
+			/*  NaN classification: quiet and signaling, both
+			    formats -- fvp->nan is the contract  */
+			ieee_interpret_float_value(0x7fc00000ULL, &fv,
+			    IEEE_FMT_S);
+			ictot++; if (!fv.nan) icbad++;
+			ieee_interpret_float_value(0x7f800001ULL, &fv,
+			    IEEE_FMT_S);
+			ictot++; if (!fv.nan) icbad++;
+			ieee_interpret_float_value(0x7ff8000000000000ULL, &fv,
+			    IEEE_FMT_D);
+			ictot++; if (!fv.nan) icbad++;
+			ieee_interpret_float_value(0x7ff0000000000001ULL, &fv,
+			    IEEE_FMT_D);
+			ictot++; if (!fv.nan) icbad++;
+			printf("interp: controls              : %ld bad (of %ld)\n",
+			    icbad, ictot);
+		}
+
+		interp_bad = ibad + icbad + interp_collide +
+		    (interp_canary ? 0 : 1);
+		printf("INTERP_RESULT=%s\n", interp_bad == 0 ? "PASS" : "FAIL");
+	}
+
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
 	    inrange_diff == 0 && dD == 0 && dS > 0 &&
 	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&
 	    rm_rn_bad == 0 && rm_rz_bad == 0 && rm_mode_diff > 1000000 &&
-	    rm_d_bad == 0 && rm_vec_bad == 0)
+	    rm_d_bad == 0 && rm_vec_bad == 0 && interp_bad == 0)
 		printf("DIFF_PASS -- change-set is exactly the two predicted classes.\n");
 	else
 		printf("DIFF_FAIL\n");

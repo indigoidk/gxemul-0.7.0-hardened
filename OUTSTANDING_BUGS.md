@@ -36,11 +36,27 @@
 >   serves the triad: trnc→toward-zero, int→fcr63 via the #298 decode, nint→nearest.
 >   Thirteen new gate-11 rows (38 total); the trnc mutant failed exactly its four
 >   discriminators.
-> - **`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1** (traced by
->   a #297 panel seat): raw `0x00000001` decodes as (1+2^-23)·2^-127 instead of 2^-149.
->   Invisible through `ftrc` and through any store that flushes subnormals, which is how
->   it survived; a consumer doing arithmetic on an interpreted subnormal would see it.
->   Pre-existing, all five CPU families.
+> - ~~**`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1**~~ —
+>   **RESOLVED as #303 (round 68)**: biased exponent 0 now decodes without the implicit
+>   1 at exponent 1−bias; exhaustive both-signs S + 400k D offline rows, all bit-exact.
+>   The "invisible through stores that flush" theory was HALF-wrong: the pass-1 claim
+>   that MIPS was fully masked by #246 was refuted by two panel seats and the rig —
+>   `fpu_unimpl_trap()` returns 0 on EXC3K (R3010 interrupt pin unwired), so
+>   **pmax/R3000 consumed the garble** (measured `0x32000001` for S-min×2^100, now
+>   `0x27000000`), as did m88k, SH, Alpha and PPC (`lfs` alone: `0x3800000020000000` →
+>   `0x36a0000000000000`). arc/R4000 keeps the trap — the no-change control. Sixteen
+>   new gate rows across gates 2/10/11/12 + mutant `revert303`; two pinned KNOWN-CHANGE
+>   flip rows (garbled S-normal products → true subnormal results → deliberate
+>   #287/#292 store flush → +0) are the before/after evidence the store-side round
+>   below inherits.
+> - **Store-side subnormal ENCODE** (opened by #303's panel): `ieee_store_float_value`
+>   flushes subnormal RESULTS to signed zero — documented #287/#292 policy whose
+>   rationale covers MIPS-R4000 (#246 routes results away) and SH DN=1 silicon, but is
+>   NOT verified for m88k (kernel completion delivers true subnormals), PPC IEEE mode,
+>   Alpha, or R3000. The two #303 KNOWN-CHANGE flip rows (m88k `fmul.sss(S-min,2.0)`,
+>   pmax `add.s(S-min,S-min)`: guest observes x≠0 but x·2==0) are its measured
+>   before/after evidence. Needs per-arch encode-contract measurement before any
+>   change — same discipline as #303's operand side.
 >
 > **Reproduced, but blocked on an instrument rather than on knowledge**
 > - **PowerPC, four measured defects** (the 2026-07-30 spike, evidence in the block

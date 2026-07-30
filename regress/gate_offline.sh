@@ -58,6 +58,25 @@ else
     check "tree build flags preserve IEEE arithmetic (no fast-math)" "absent" "absent"
 fi
 
+# #303: the grep above reads the SCRIPTS; `CFLAGS=-Ofast ./configure` lands only in the
+# GENERATED Makefiles, which the emulator is actually built from, while this gate compiles
+# with its own -O2 -- a poisoned tree would misdecode D subnormals in the emulator with
+# every offline check green. So grep what the build actually uses, in every configured
+# tree present. This grep is the ONLY defence against tree-flag poisoning -- the runtime
+# canary below runs in THIS gate's own -O2 binary and can only see HOST-level trouble
+# (MXCSR FTZ/DAZ, a wrong rounding mode), a DIFFERENT hole (both were a panel seat's
+# findings; a diff-review seat corrected the first version of this comment, which
+# claimed the canary covered this one too).
+GENBAD=absent
+for t in "$ROOT/build" /tmp/gxsec-build; do
+    [ -f "$t/Makefile" ] || continue
+    if grep -Eq -- "-ffast-math|-Ofast|-funsafe-math|-fassociative-math|-ffp-contract=fast" \
+            "$t/Makefile" "$t"/src/Makefile "$t"/src/*/Makefile 2>/dev/null; then
+        GENBAD=found
+    fi
+done
+check "generated Makefiles preserve IEEE arithmetic too" "$GENBAD" "absent"
+
 BIN=$LOGDIR/diff_ieee_store
 LOG=$LOGDIR/diff_ieee_store.log
 if ! $CC -O2 -I"$TREE/src/include" -o "$BIN" \
@@ -105,6 +124,22 @@ check     "rm: toward-zero matches its oracle"     "$(val 'rm: RZ oracle')"     
 check_min "rm: the mode actually changes results"  "$(val 'rm: mode-differing')" 1000000
 check     "rm: D untouched under every mode"       "$(val 'rm: D mismatches')"  "0"
 check     "rm: named-vector failures"              "$(val 'rm: named-vector' | cut -d'(' -f1)" "0"
+
+# #303: the DECODE side. The canary is load-bearing for HOST-level trouble only --
+# MXCSR FTZ/DAZ or a non-nearest rounding mode void every D-subnormal expectation, and
+# the canary is the only check that can tell. (Tree-flag poisoning is the generated-
+# Makefile grep's job above; this binary compiles with its own -O2 and cannot see tree
+# flags.) It is computed with volatile operands at runtime -- a constant expression
+# would fold at compile time and pass on exactly the build it exists to catch.
+check     "interp: FTZ/DAZ+RN canary alive"        "$(val 'interp: FTZ')"       "alive"
+check     "interp: S subnormals both signs"        "$(grep 'interp: S subnormals' "$LOG" | grep -oE '[0-9]+ bad' | cut -d' ' -f1)" "0"
+check_min "interp: S population is exhaustive x2"  "$(grep 'interp: S subnormals' "$LOG" | grep -oE 'of [0-9]+' | cut -d' ' -f2)" 16777214
+check     "interp: D subnormals both signs"        "$(grep 'interp: D subnormals' "$LOG" | grep -oE '[0-9]+ bad' | cut -d' ' -f1)" "0"
+check_min "interp: D population not shrunken"      "$(grep 'interp: D subnormals' "$LOG" | grep -oE 'of [0-9]+' | cut -d' ' -f2)" 400000
+check     "interp: D m=3/m=4 decode distinct"      "$(val 'interp: D m=3/m=4')"  "yes"
+check     "interp: controls untouched"             "$(grep 'interp: controls' "$LOG" | grep -oE '[0-9]+ bad' | cut -d' ' -f1)" "0"
+check     "interp: verdict"                        "$(grep -c 'INTERP_RESULT=PASS' "$LOG")" "1"
+
 check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG")" "1"
 
 gate_end

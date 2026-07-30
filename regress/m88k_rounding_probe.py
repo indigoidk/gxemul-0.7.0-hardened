@@ -180,6 +180,45 @@ ROWS = [
     ("fdiv.ddd 1/10 RZ", RZ, {"r2": 0x3ff00000, "r3": 0x00000000,
                                "r8": 0x40240000, "r9": 0x00000000},
      0x84c272a8, "r7", 0x99999999),
+
+    # #303: subnormal OPERANDS decode to their true IEEE value. Before, every
+    # subnormal decoded with the implicit 1 added and the exponent one too low --
+    # S 0x00000001 read as (1+2^-23)*2^-127, 4.19e6x its real 2^-149 -- and every
+    # m88k FP operand consumed the garble (the MC88100 contract is kernel
+    # completion, which computes true IEEE). All committed-build bytes below were
+    # MEASURED live before the fix (0x32000001/0xb2000001, 38000000:20000000,
+    # 3e800000:00000000, mask 0x9a) and every fixed byte after it.
+    #   Same-format compares can NEVER discriminate this defect (the garble maps
+    # subnormals monotonically into (0, FLT_MIN), order preserved) -- fcmp.ssd
+    # with a DOUBLE comparand INSIDE the (true, garbled) gap is the only
+    # discriminating compare shape, hence the 2^-135 row. The fmul rows have
+    # NORMAL results, so the #287/#292 store flush never touches them.
+    #   fmul.dss r6,r2,r3 = 0x84c20023 (s2 NAMED 1.0f: the pinned bytes are the
+    # pure widen); fmul.ddd r6,r2,r8 = 0x84c202a8; fcmp.ssd r4,r2,r6 = 0x84823886.
+    ("subn fmul +",    RN, {"r2": 0x00000001, "r3": 0x71800000}, FMUL, "r4",
+     0x27000000),
+    ("subn fmul -",    RN, {"r2": 0x80000001, "r3": 0x71800000}, FMUL, "r4",
+     0xa7000000),
+    ("subn fmul.dss",  RN, {"r2": 0x00000001, "r3": 0x3f800000}, 0x84c20023, "r6",
+     0x36a00000),
+    ("subn fmul.ddd",  RN, {"r2": 0x00000000, "r3": 0x00000001,
+                            "r8": 0x7e700000, "r9": 0x00000000}, 0x84c202a8, "r6",
+     0x3b500000),
+    ("subn fcmp.ssd",  RN, {"r2": 0x00000001,
+                            "r6": 0x37800000, "r7": 0x00000000}, 0x84823886, "r4",
+     0x0000006a),
+    # KNOWN-CHANGE pin, NEGATIVE operand: the garbled product of -S-min * 2.0
+    # landed S-NORMAL and stored nonzero (the positive twin measured 0x00800001
+    # pre-#303; the negative one is the same path with the sign applied last);
+    # the TRUE product -2^-148 is subnormal, so the deliberate #287/#292 store
+    # flush now answers MINUS zero -- the sign survives because #287 fixed
+    # exactly that. The row is negative BECAUSE of that: a #287 revert (sign
+    # lost, +0) trips it, where a positive row reads +0 under both stores and
+    # cannot see the revert at all (a diff-review seat's finding). A #303
+    # revert trips it too. The guest still observes x != 0 but x*2 == 0 -- the
+    # interim half-state the queued store-side round inherits.
+    ("subn flip x2.0", RN, {"r2": 0x80000001, "r3": 0x40000000}, FMUL, "r4",
+     0x80000000),
 ]
 
 

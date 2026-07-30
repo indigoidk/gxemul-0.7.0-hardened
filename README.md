@@ -223,17 +223,17 @@ pure function in closed form.
 | # | Gate | Proves |
 |---|------|--------|
 | 1 | `gate_build.sh` | Both trees rebuild clean from committed source — 223 objects (pmax), 224 (arc), zero warnings |
-| 2 | `gate_offline.sh` | Closed-form differential of `ieee_store_float_value()` over 20,016,002 inputs |
+| 2 | `gate_offline.sh` | Closed-form differential of `ieee_store_float_value()` over 20,016,002 inputs + `ieee_interpret_float_value()` exhaustive over every subnormal, both signs, with an FTZ/DAZ runtime canary |
 | 3 | `gate_mips.sh` | pmax 15/15 and arc 13/13 to `uid=0(root)` on OpenBSD 2.2 |
 | 4 | `gate_crossfamily.sh` | m88k and SuperH cores execute guest code and return checked answers |
 | 5 | `gate_hygiene.sh` | No distress markers in the raw pty logs |
 | 6 | `gate_ab.sh` | Three-way A/B against pristine `39748e3` and pre-batch `2ffc91e` |
-| 7 | `selftest_mutation.sh` | Four deliberate mutants prove gate 2 can actually fail |
+| 7 | `selftest_mutation.sh` | Five deliberate mutants prove gate 2 can actually fail |
 | 8 | `gate_upstream.sh` | Upstream GXemul's own `test/` suite, run three-way |
 | 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
-| 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 15 vectors × 2 modes on real guest instructions |
-| 11 | `gate_m88k_rounding.sh` | m88k rounding + the float→int triad — 40 rows incl. swap tripwires and NaN-sign pins |
-| 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR — 11 rows on the arc rig, incl. FR=0 |
+| 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 36 vector-mode pairs on real guest instructions, incl. two DN=0 subnormal rows |
+| 11 | `gate_m88k_rounding.sh` | m88k rounding + the float→int triad + subnormal operands — 46 rows incl. swap tripwires, NaN-sign pins and a KNOWN-CHANGE flip pin |
+| 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows) + #303 subnormal decode on BOTH rigs (pmax discriminators, arc trap control) |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger

@@ -83,6 +83,10 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 
 	int n_frac = 0, n_exp = 0;
 	int i, nan, sign = 0, exponent;
+	int exp_biased = 1;	/*  #303: biased exponent, saved so the S/D
+				    fraction arm can tell a subnormal (0) from
+				    a normal.  1 is a safe "normal" sentinel
+				    for the W/L formats, which have none.  */
 	double fraction;
 
 	/*  n_frac and n_exp:  */
@@ -110,8 +114,8 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 		x &= 0xffffffffULL;
 		// fall through
 	case IEEE_FMT_D:
-		exponent = (x >> n_frac) & ((1 << n_exp) - 1);
-		exponent -= (1 << (n_exp-1)) - 1;
+		exp_biased = (x >> n_frac) & ((1 << n_exp) - 1);  /*  #303  */
+		exponent = exp_biased - ((1 << (n_exp-1)) - 1);
 		break;
 	default:/*  #279  */
 		if (!interpret_badfmt_warned) {
@@ -185,8 +189,47 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp,
 				fraction += 1.0;
 		}
 
-		/*  Add implicit bit 0:  */
-		fraction = (fraction / 2.0) + 1.0;
+		/*  #303: biased exponent 0 with a nonzero mantissa is a
+		    SUBNORMAL: no implicit 1, and the true exponent is
+		    (1 - bias) -- one above what the unbiasing above gave.
+		    Before this, EVERY subnormal decoded with the implicit 1
+		    added and the exponent one too low: S 0x00000001 read as
+		    (1+2^-23)*2^-127, 4.19e6 times its real 1.4e-45 (measured
+		    2x8,388,607/2x8,388,607 S patterns wrong; worst D ratio
+		    2.25e15; the max D subnormal decoded as DBL_MIN, a NORMAL,
+		    and D m=3/m=4 COLLIDED onto one host double).  The halving
+		    loop below is exact for the fixed decode -- the fraction
+		    has <= n_frac significant bits, halving never widens that
+		    span, and below 2^-1022 the value sits exactly on the
+		    host's own subnormal grid -- a property the OLD decode did
+		    not have (its D targets needed 53 bits below 2^-1022, so
+		    its last halving rounded; the DBL_MIN artifact above IS
+		    that rounding).  True zeros never reach here (the x==0
+		    test above exits first).
+		    Who consumed the wrong value (all measured live): m88k
+		    (every FP operand; OpenBSD/luna88k boots on this rig),
+		    SH, Alpha, PPC (lfs alone puts the garbled widening
+		    straight into the FPR), and MIPS R3000 -- #246's denormal
+		    gate only delivers on EXC4K+ machines; on EXC3K
+		    fpu_unimpl_trap() returns 0 (the R3010's external
+		    interrupt line is not wired) and execution falls through
+		    to the decoded value, measured on pmax.  arc/R4000 keeps
+		    the trap and is the no-change control.  SH-4's FPSCR.DN
+		    (denormals-as-zero, set at reset) stays NOT modelled --
+		    with DN clear real silicon traps to the kernel, whose
+		    softfloat completion equals this decode; DN set would
+		    flush operands to zero.  After #303 the SH contract is
+		    MIXED and stated: operands decode per DN=0-with-
+		    completion while subnormal RESULTS still flush (#287/#292
+		    store policy, coinciding with DN=1 silicon) -- one gap,
+		    named, so nobody fixes half of it.  */
+		if (exp_biased == 0) {
+			fraction = fraction / 2.0;	/*  m / 2^n_frac  */
+			exponent ++;			/*  1 - bias  */
+		} else {
+			/*  Add implicit bit 0:  */
+			fraction = (fraction / 2.0) + 1.0;
+		}
 		break;
 
 	default:/*  #279  */

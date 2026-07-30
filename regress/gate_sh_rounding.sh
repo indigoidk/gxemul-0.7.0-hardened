@@ -53,16 +53,19 @@ res=$(grep -o "SH_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 disc=$(grep -o "SH_ROUND_DISCRIMINATING=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 
-# 34 vector-mode pairs: 17 vectors x 2 modes (9 from #296, 6 ftrc rows from #297, and
+# 36 vector-mode pairs: 17 vectors x 2 modes (9 from #296, 6 ftrc rows from #297, and
 # #299 turned the double-rounding PIN into a discriminating row and added the fmac
-# tie-band witness).
-check     "vector-mode pairs run"                  "$want" 34
+# tie-band witness) + #303's two single-mode subnormal-operand rows (RN pinned; DN
+# STRIPPED by their NODN marker -- a DN=1 numeric expectation would bless a value
+# real silicon flushes; committed bytes 0x32000001 / 0x3f800001 measured live).
+check     "vector-mode pairs run"                  "$want" 36
 check     "vector-mode pairs correct"              "$got"  "$want"
 # EXACTLY 9 of the 17 vectors discriminate between the two modes: the 7 from #296 plus
 # the #299-fixed fsub band row and the #300-fixed D-division row (each a PIN until its
 # fix landed; each flip was that fix's acceptance test). If this number drops, someone weakened the table; if it RISES,
 # someone made a mode-independent row (an ftrc row, or the fmac tie whose two modes
 # genuinely agree) depend on FPSCR.RM, which is drift in the other direction.
+# (#303's two rows are single-mode by design and cannot enter this count.)
 check     "vectors that discriminate the two modes" "$disc" 9
 
 # Per-instruction closure: naming them individually means a single site silently reverting
@@ -74,6 +77,11 @@ for v in "fdiv" "float" "fadd " "fmac " "fmactie" "fipr" "ftrv" "fmul" \
          "ftrcD-2p31" "ftrcD-neghalf"; do
     n=$(grep -c "^$v.*ok$" "$LOG")
     check "  $v: both modes correct" "$n" 2
+done
+# #303's subnormal rows are SINGLE-mode (RN pinned; see the probe) -- one line each.
+for v in "subn fmul" "subn fdiv"; do
+    n=$(grep -c "^$v.*ok$" "$LOG")
+    check "  $v: RN row correct" "$n" 1
 done
 
 gate_end

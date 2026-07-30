@@ -35,7 +35,7 @@ done
 rm -rf "$T"; mkdir -p "$T"
 cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 
-# FOUR mutants now, one per guarded property. Each breaks the code a different way and
+# FIVE mutants now, one per guarded property. Each breaks the code a different way and
 # the differential must go red for every one of them.
 #
 #   A  revert #287      overflow keeps its garbage fraction (a NaN encoding) and
@@ -76,6 +76,15 @@ elif name == "modeignored":
     a = "uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)\n{"
     need(a)
     s = s.replace(a, a + "\n\trm = IEEE_RM_LEGACY;", 1)
+elif name == "revert303":
+    # #303 reverted: the subnormal branch is never taken, every input runs the
+    # unconditional implicit-1 arm. NOT "delete the branch body" -- leaving
+    # m/2^(n_frac-1) at exponent -bias is algebraically the FIXED value, a
+    # mutant that cannot fail (a panel seat named exactly that trap). The
+    # anchor is a single line so no escape sequences are needed here.
+    a = "if (exp_biased == 0) {"
+    need(a)
+    s = s.replace(a, "if (0) { /* MUTANT: normal arm forced */", 1)
 elif name == "wlegacyrounds":
     # #294's W/L arm suddenly rounding under LEGACY would change every
     # pre-existing trunc-style caller. The legacy W vectors must catch it.
@@ -108,7 +117,7 @@ build_and_run() {   # label, source file -> prints DIFF_PASS count
     grep -c 'DIFF_PASS' "$T/$1.out"
 }
 
-for m in revert287 tiesaway modeignored wlegacyrounds; do
+for m in revert287 tiesaway modeignored wlegacyrounds revert303; do
     check "mutant $m could be applied" "$(mutate $m)" "ok"
 done
 
@@ -116,7 +125,7 @@ note "control: differential against the shipped float_emul.c"
 real=$(build_and_run real "$TREE/src/core/float_emul.c")
 check "unmutated source passes gate 2" "$real" "1"
 
-for m in revert287 tiesaway modeignored wlegacyrounds; do
+for m in revert287 tiesaway modeignored wlegacyrounds revert303; do
     note "mutant $m: the differential must go red"
     out=$(build_and_run "mut_$m" "$T/mutant_$m.c")
     check "mutant $m is DETECTED (must fail)" "$out" "0"
