@@ -1,146 +1,82 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
 > ## 2026-07-30 — OPEN LIST, at a glance
-> Everything genuinely open, newest first. The dated blocks below carry the evidence; this
-> is only the index, so nobody has to read the whole file to find the live items.
+> **Only genuinely OPEN items live here.** Resolved ones are removed, not annotated: an
+> index that accumulates its own history stops being an index, and a section headed
+> "everything genuinely open" that is mostly ticks is the dishonest-listing class #270
+> exists to prevent. The dated blocks below and the CHANGELOG carry what was fixed and
+> why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
+> what follows is what they left, plus what they found on the way.
 >
-> **Ready to work — a test already reproduces it**
-> - ✅ `round`/`ceil`/`floor` + `cvt.l` undecoded → **RESOLVED as #295** (round 60).
-> - ✅ `dev_mb89352.c` uninitialised DATA_OUT buffer → **RESOLVED as #295**; the sibling
->   `dev_osiop.c:520` was examined and **deliberately left** (its offset is honest, the
->   route is closed by the phase machine, no rig instantiates it).
-> - ✅ **SH `FPSCR.RM` decoded nowhere → RESOLVED as #296** (round 61). Thirteen of the
->   sixteen single-precision stores now honour the mode, covered by the new gate 10. The
->   split was corrected mid-round: `fipr` and `ftrv` were initially left truncating on the
->   theory that reduced-precision instructions should not take a rounding mode, and the
->   manual (§6.4) says the opposite — the reduced precision is in the intermediate, the
->   final result is still rounded under RM. The declared second change (overflow under
->   toward-zero moving from ±Inf to ±FLT_MAX) was measured separately and confirmed
->   against §6.5.
+> **Ready to work — reproduced, and an instrument already exists**
+> - **MIPS `cvt.d.l` ignores the rounding mode** (found by a #300 panel seat): a 64-bit
+>   integer with more than 53 significant bits is converted to double under the host's
+>   nearest mode inside `ieee_interpret_float_value` before `fpu_op` can apply FCSR, and
+>   the D store is a pure re-encode, so the mode never gets a say. Witness: `2^53+1`
+>   under toward-+Inf owes `0x4340000000000001`, gets `...000`. The residual is
+>   computable exactly in integer arithmetic, and both MIPS rigs execute the opcode —
+>   this is the most actionable item on the list. (`cvt.d.s`/`cvt.d.w` are exact
+>   conversions; no defect.)
+> - **m88k `trnc`/`int`/`nint` use raw C casts** (`(int32_t) f1.f`) — the same host-UB
+>   class #297 fixed on SH and #273 on MIPS, on a rig that boots to root. Needs the
+>   MC88100's own special-case table first, exactly as #297 needed the SH-4 manual's.
+> - **`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1** (traced by
+>   a #297 panel seat): raw `0x00000001` decodes as (1+2^-23)·2^-127 instead of 2^-149.
+>   Invisible through `ftrc` and through any store that flushes subnormals, which is how
+>   it survived; a consumer doing arithmetic on an interpreted subnormal would see it.
+>   Pre-existing, all five CPU families.
 >
-> **Real, but needs infrastructure or a rig that does not exist yet**
-> - ✅ **D-format arithmetic ignores the rounding mode → RESOLVED as #300** (round 65),
->   for SH, MIPS and m88k alike: four fma-residual helpers correct the host's nearest
->   result, with quantum-derived accepted-nearest bands (operand below 2^-969 for
->   div/sqrt, product for mul), an overflow clamp by mode-and-sign, exact div-by-zero,
->   a 2Sum overflow-tie exclusion, and zero-crossing directed steps. Three panel passes
->   rejected three designs before this one; 34 offline vectors plus rig rows on both
->   machines pin it. Remaining known gaps: cvt.d.l (indexed above) and the accepted
->   bands themselves (pinned).
-> - ~~superseded by the entry above; original record follows~~ **SH double-precision arithmetic ignores `FPSCR.RM`** — exposed while resolving #296
->   and deliberately not patched. It cannot be fixed where the single-precision defect was:
->   the D format *is* a host double, so the store is a pure re-encode with no narrowing for
->   a mode to control, and the rounding already happened in the host's own arithmetic.
->   Measured: double `1.0/10.0` gives the same bits under both modes. Under RM=00 that
->   agrees with silicon, so only toward-zero double code diverges. A fix means running the
->   arithmetic under a controlled host rounding mode, which #292 established is not
->   straightforward (the compiler CSEs mode-switched casts). Pinned in gate 10.
-> - ✅ **Host-double double rounding on single-precision `fadd`/`fsub`/`fmac` → RESOLVED
->   as #299** (round 64). One shared round-to-odd helper (`ieee_sum_round_to_odd`,
->   Knuth 2Sum + odd-force, Boldo–Melquiond 53 ≥ 2·24+2) routed from eight sites across
->   SH, m88k and MIPS. Both gate pins flipped exactly as their comments required; the
->   fmac tie-band (the organic default-mode victim) is fixed and gated; the exact-zero
->   −0-under-toward−Inf contract is implemented and measured on the luna88k rig. The
->   panel caught a guest-visible Inf/NaN corruption INSIDE the fix before it shipped
->   (NaN != 0.0 is true in C; +Inf+1.0 briefly became DBL_MAX) — guarded, and pinned at
->   three levels. A measured, conformant NaN-sign propagation change (1.0 − qNaN now
->   negative canonical NaN) is pinned at full value. What this deliberately does NOT
->   cover: D-format **arithmetic** under non-nearest modes — round 65's fma-residual
->   work, where overflow and subnormal handling become mandatory.
-> - ✅ **SH `ftrc` raw C casts → RESOLVED as #297** (round 62). Reproduced first (+Inf and
->   2^40 measured 0x80000000 on the committed build; the manual owes +MAX), then replaced
->   with the manual's own value ladder on the raw bits — NaN checked before range so a
->   positive NaN gets −MAX, strict single bound vs `>=` double bounds, negative double
->   bound at −(2^31+1). 21/21 probe rows; six rows added to gate 10 (now 30 pairs), which
->   also asserts the ftrc rows stay mode-INDEPENDENT. Values only — no FPSCR.V cause bit,
->   same scope call as #273 but with SH's ±MAX split, not MIPS's all-0x7fffffff table.
-> - ~~PowerPC `stfs` rounding is disputed~~ — **settled by the feasibility triage** (Power
->   ISA §4.6.3: bit-extraction, no rounding; `frsp` is the rounding instruction). The
->   dated block below carries the quote; the real PPC defects found instead (frsp NaN→+0.0
->   and friends) are listed in this section further down.
-> - ✅ **m88k fcr63 rounding decoded nowhere → RESOLVED as #298** (round 63). The record
->   here previously said "no rounding register at all — nothing to wire", which the
->   feasibility panel proved wrong twice over, and the defect was LIVE: OpenBSD zeroes
->   fcr63 at exec (= round-to-nearest) while all six single-precision arms truncated, so
->   every luna88k userland single-precision result was 1 ulp low about half the time on
->   a rig that boots to root. Fixed with the 2↔3 directed-pair swap (m88k order is
->   2=toward−Inf, 3=toward+Inf — opposite our enum), covered by the new gate 11 (20 rows,
->   four sign-asymmetric swap tripwires, an fstcr warning contract with its own positive
->   control, and TWO mutants run against it with pre-registered predictions: missing-swap
->   13/20, legacy-revert 11/20). `m88k_fstcr()` no longer calls pure-RM fcr63 writes
->   UNIMPLEMENTED.
-> - **PPC: the spike ran, and all four predictions measured true** (2026-07-30). A cold
->   debugger on macppc/G4 executes guest FP once MSR.FP (0x2000) is set — `testppc` bare
->   is REFUTED, it prints usage and exits, so a real kernel must be named (loaded, never
->   run). Measured: `frsp` of a qNaN stores **+0.0** where the ISA owes the NaN with its
->   low 29 fraction bits zeroed; `frsp` of 1+3*2^-25 under toward-zero gives
->   `3ff0000020000000` where the ISA owes `3ff0000010000000` (the host cast rounds
->   nearest regardless of FPSCR.RN); `stfs` of that value gives `3f800000` under **both**
->   RN settings — **which settles the standing panel dissent empirically: stfs does NOT
->   round per the mode, so wiring it to FPSCR.RN would be a regression**; and `stfs` of
->   2^-127 flushes to `00000000` where the ISA's denormalization band owes `00400000`.
->   What still blocks a fix round is an INSTRUMENT, not knowledge: there is no PPC OS
->   rig, so a correction would need a regression gate built on this probe path first.
->   Probe: `_scratchpad/probe_ppc_spike.py`.
-> - **PPC `frsp` of a NaN stores +0.0** (`cpu_ppc_instr.c:969-989`; the ISA owes the NaN
->   with the low 29 fraction bits zeroed), `frsp` ignores FPSCR.RN (host cast = nearest
->   always), the `stfs` denormalization band diverges (2^-127: ISA owes 0x00400000, the
->   legacy store flushes to 0), and finite ≥2^128 extraction wraps rather than giving Inf
->   — found by the same panel. No PPC OS rig; a `testppc` cold-debugger probe is the
->   gating spike (f0..f31 and fpscr are debugger-settable — verified live).
-> - PS (paired-single) **arithmetic** is unmodelled, so #290's ISA gate leaves the four
->   64-bit FPU CPUs (5Kc, 5KE, SB1, SR7100) without a format they are entitled to.
-> - FCSR exception flags — **defer re-confirmed 4–0** after #292 (entry below).
+> **Reproduced, but blocked on an instrument rather than on knowledge**
+> - **PowerPC, four measured defects** (the 2026-07-30 spike, evidence in the block
+>   below): `frsp` of a qNaN stores +0.0; `frsp` ignores FPSCR.RN entirely; `stfs`
+>   flushes the ISA's denormalization band to zero; and finite values ≥2^128 wrap in the
+>   extraction rather than giving Inf. The probe path is settled and works
+>   (`_scratchpad/probe_ppc_spike.py`). What is missing is a *regression gate* — there is
+>   no PPC OS rig, so any fix round must build one on the probe path first.
+>   **Do NOT wire `stfs` to FPSCR.RN**: measured under both RN settings, it does not
+>   round, and the Power ISA extraction reading is correct.
 >
-> **Latent / documented, deliberately not forced**
-> - The console overrun's remaining two sites are **X11-only**; this project runs headless
->   (2026-07-29 entry). The SuperH `RDF` status bit is never set (patched and measured: it
->   was not the input-loss cause), and the SSR verbatim-write and FDR-width warts stand.
-> - #291 was a **symptom fix**: 32 ARM CPU table entries still have an unpopulated
->   `dcache_shift`, the table's `iway`/`dway` are ignored, and ARMv6 parts use a different
->   cache-type register format than the v4/v5 layout hardcoded for every CPU.
+> **Instruction-coverage gaps (the decoder rejects legal encodings)**
+> - **m88k `fdiv.dds`** — size code 0x11 falls through to "Unimplemented"/`goto bad`.
+> - **m88k mixed-format S-destination arithmetic** — e.g. `fadd.ssd` (size code 0x04).
+>   Same family; both are pre-existing, and both were found by panel census work rather
+>   than by a failing test.
+> - **MIPS paired-single arithmetic is unmodelled.** Deferred on purpose: the FIR
+>   advertisement sits inside `#if 0`, so the emulator makes no false claim a test could
+>   reproduce. This is feature work, not defect work. Reopen when a rig boots a
+>   PS-capable CPU or a guest binary executes PS.
+> - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
+>   encoding, pre-existing dispatch behaviour).
+>
+> **Known and deliberately not forced — each with the reason it stays**
+> - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause
+>   bit and no arithmetic trap is delivered. #297 made it observable (`STS FPSCR` after
+>   `ftrc(+Inf)` reads V=0 where hardware reads 1). Not patched piecemeal, because a lone
+>   V bit would imply the other flags work. OpenBSD leaves the enables clear at exec.
+> - **MIPS FCSR exception flags** — deferral re-confirmed 4–0. The blockers are
+>   structural: `ieee_float_value` carries a single `nan` flag (no qNaN/sNaN
+>   discrimination, so V is uncomputable) and the stores return a bare value with no flag
+>   channel. **New reopen condition:** #299/#300's residual machinery computes exact
+>   inexactness as a byproduct, which makes the I flag nearly free and inverts the
+>   original "I last" sketch.
+> - **#300's accepted-nearest bands** — div/sqrt below a 2^-969 operand, mul below a
+>   2^-969 product — are real divergences from IEEE, pinned as named gate vectors rather
+>   than hidden. Closing them needs scaled residuals, not a threshold.
+> - **SH `fsca` and `fsrra` stay on the truncating store**: transcendental
+>   approximations where silicon deviates by roughly 2^-21, so no witness exists whose
+>   correct answer is decided by `FPSCR.RM`. Untestable by this project's rule.
+> - **#291 was a symptom fix**: 32 ARM CPU table entries still have an unpopulated
+>   `dcache_shift`, `iway`/`dway` are ignored, and ARMv6 parts use a different cache-type
+>   register format than the v4/v5 layout hardcoded for every CPU.
+> - The console overrun's remaining two sites are **X11-only** and this project runs
+>   headless; the SuperH `RDF` status bit is never set (patched and measured — it was not
+>   the input-loss cause), and the SSR verbatim-write and FDR-width warts stand.
 > - Items 4, 6, 7 and 9 of the rounds 41–46 block: LANCE `STP` on chained frames
 >   (unreachable on both rigs), the Class-A diagnostic remainder, `dev_wdc.c`'s
->   guest-reachable `exit()` (out of scope), and the #182-shaped stale length on the VGA's
->   accepted mode paths.
-> - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and a
->   change there would touch the verified arc boot.
-> - **The SH FPU exception model does not exist** — no instruction sets any FPSCR cause
->   bit and no arithmetic FPU trap is delivered. #297 makes the concrete case observable:
->   `STS FPSCR` after `ftrc(+Inf)` reads V=0 where hardware reads 1, and a guest that
->   sets ENABLE_V gets the saturated value where hardware traps with FPUL preserved.
->   Deliberately not patched piecemeal — a lone V bit would imply the other flags work.
->   OpenBSD leaves the enables clear at exec, so the shipped guest sees exact manual
->   values.
-> - **`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1** (a #297
->   panel seat traced `float_emul.c`: raw 0x00000001 decodes as (1+2^-23)·2^-127 instead
->   of 2^-149). Invisible through `ftrc` — both truncate to 0 — and through any store that
->   flushes subnormals, which is why it has survived; a consumer that does arithmetic on
->   an interpreted subnormal would see it. Pre-existing, all five CPU families.
-> - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
->   encoding; pre-existing dispatch behaviour, untouched by #297).
-> - **m88k  is undecoded** (a #300 panel census find): size code 0x11 on the
->   fdiv dispatch goes to "Unimplemented"/goto bad -- a legal MC88100 encoding with no
->   handler, pre-existing, same family as the next entry.
-> - **m88k mixed-format S-destination arithmetic is undecoded** (a #298 panel seat's
->   find): the ISA defines e.g. `fadd.ssd` (single = single + double, size code 0x04),
->   and the decoder rejects it — a pre-existing instruction-coverage gap, not a store
->   site #298 missed. Same family as the already-listed `flt.ds` odd-register TODO.
-> - **MIPS `cvt.d.l` ignores the rounding mode** (a #300 panel seat's find, indexed as
->   outside that round's five arithmetic ops): a 64-bit integer with more than 53
->   significant bits converts to double under host nearest before the store's mode can
->   matter — `2^53+1` under toward-+Inf owes `0x4340000000000001`, gets `...000`. The
->   residual is computable exactly in integer arithmetic; needs its own round.
->   (`cvt.d.s` and `cvt.d.w` are exact conversions — no defect.)
-> - **m88k `trnc`/`int`/`nint` conversions use raw C casts** (`(int32_t) f1.f` in
->   `cpu_m88k_instr.c`) — the same host-UB class #297 fixed on SH and #273 on MIPS.
->   Needs the MC88100's own special-case table before patching; queued behind the
->   feasibility rounds.
-> - **SH `fsca` and `fsrra` stay on the truncating store** (the three sites #296 left alone).
->   Unlike `fipr`/`ftrv`, these are transcendental approximations where real silicon is
->   documented to deviate by roughly 2^-21 — far more than a last-bit rounding choice — so no
->   witness can be built whose correct answer is decided by `FPSCR.RM`. Wiring them would be
->   untestable by this project's rule, so they are indexed here instead.
+>   guest-reachable `exit()` (out of scope), and the #182-shaped stale length on the
+>   VGA's accepted mode paths.
+> - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and
+>   a change there would touch the verified arc boot.
 
 > ## ✅ 2026-07-30 — RESOLVED as #294: cvt.w honours the rounding mode (item 2 of the rounds 41–46 block)
 > `cvt.w` of 3.5 under the default mode now yields 4 (nearest-even); `trunc.w` still
