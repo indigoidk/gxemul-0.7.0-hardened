@@ -1,5 +1,44 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
+> ## 2026-07-30 — OPEN LIST, at a glance
+> Everything genuinely open, newest first. The dated blocks below carry the evidence; this
+> is only the index, so nobody has to read the whole file to find the live items.
+>
+> **Ready to work — a test already reproduces it**
+> - `round.w` / `ceil.w` / `floor.w` / `cvt.l` are **not decoded**, and fall through to a
+>   Coprocessor-Unusable exception with CU1 enabled — a kernel-retry livelock shape. Three
+>   decode blocks with #294's machinery. *Best-scoped next candidate.* (2026-07-30 entry)
+> - Two sibling `scsi_transfer_allocbuf(..., clearflag = 0)` sites survive #263's fix:
+>   `devices/dev_mb89352.c:430` (luna88k/mvme88k) and `devices/dev_osiop.c:520`. #263
+>   proved by fault injection that `clearflag = 0` on the ASC put **384 bytes of the
+>   previous command's heap buffer onto the disk image**; these two are the same shape on
+>   other HBAs. Out of the pmax/arc scope that #263 was cut to, never re-examined since.
+>
+> **Real, but needs infrastructure or a rig that does not exist yet**
+> - SH `FPSCR.RM` is stored, guest-writable and **decoded nowhere** — the SH core is
+>   unconditionally round-toward-zero (correct at reset, wrong once a guest sets nearest).
+>   Wiring is mechanical at 16 sites; no live test until a SuperH rig can run FP.
+> - **PowerPC `stfs` rounding is disputed between panel seats** (bit-extraction vs rounds
+>   per FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
+> - m88k models **no rounding register at all** — nothing to wire.
+> - PS (paired-single) **arithmetic** is unmodelled, so #290's ISA gate leaves the four
+>   64-bit FPU CPUs (5Kc, 5KE, SB1, SR7100) without a format they are entitled to.
+> - FCSR exception flags — **defer re-confirmed 4–0** after #292 (entry below).
+>
+> **Latent / documented, deliberately not forced**
+> - The console overrun's remaining two sites are **X11-only**; this project runs headless
+>   (2026-07-29 entry). The SuperH `RDF` status bit is never set (patched and measured: it
+>   was not the input-loss cause), and the SSR verbatim-write and FDR-width warts stand.
+> - #291 was a **symptom fix**: 32 ARM CPU table entries still have an unpopulated
+>   `dcache_shift`, the table's `iway`/`dway` are ignored, and ARMv6 parts use a different
+>   cache-type register format than the v4/v5 layout hardcoded for every CPU.
+> - Items 4, 6, 7 and 9 of the rounds 41–46 block: LANCE `STP` on chained frames
+>   (unreachable on both rigs), the Class-A diagnostic remainder, `dev_wdc.c`'s
+>   guest-reachable `exit()` (out of scope), and the #182-shaped stale length on the VGA's
+>   accepted mode paths.
+> - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and a
+>   change there would touch the verified arc boot.
+
 > ## ✅ 2026-07-30 — RESOLVED as #294: cvt.w honours the rounding mode (item 2 of the rounds 41–46 block)
 > `cvt.w` of 3.5 under the default mode now yields 4 (nearest-even); `trunc.w` still
 > truncates regardless of the mode, as the architecture requires — and the live probe
@@ -141,7 +180,11 @@
 > behaviour first. Gate 9 already is that test, which makes this a well-scoped next round.
 
 
-> ## 2026-07-27 — NEW CANDIDATE: the SuperH console loses guest input non-deterministically
+> ## 2026-07-27 — (superseded, kept for the trail) the SuperH console loses guest input non-deterministically
+> **→ RESOLVED as #293 — see the ✅ entry at the top of this file. The mechanism was none
+> of the suspects recorded below** (it was an unclaimed main console stealing lines before
+> the serial port saw them), but the refuted-hypothesis measurements below are what made
+> the real diagnosis fast, so they stay.
 > Found while building the landisk rig for round 55's harness, and **not yet diagnosed** —
 > recorded here with its measurement so a future round starts from evidence rather than
 > from the symptom.
@@ -176,7 +219,9 @@
 > input at all. That is honest coverage; this is a separate bug and deserves its own round.
 > **Reproduce with** `regress/drive_guest.py` by giving the `landisk` rig a `steps` list.
 
-> ## 2026-07-27 — Round 55: the harness UNBLOCKED an item that was dropped as un-testable
+> ## 2026-07-27 — (superseded, kept for the trail) Round 55: the harness UNBLOCKED an item that was dropped as un-testable
+> **→ RESOLVED as #292 — see the ✅ entry at the top of this file.** This entry records the
+> moment the obstacle turned out to be the instrument rather than the bug.
 > **S-format round-to-nearest** (`core/float_emul.c` ~277: `ieee_store_float_value()` truncates to 23
 > fraction bits, so single-precision inexact results are 1 ulp low — pre-existing, all ops, all five
 > calling CPU families) was previously set aside as **un-testable**: exercising it live was thought to
@@ -219,7 +264,17 @@
 > are at HEAD `b38cc4f`; items 8 and 9 were added later and re-verified at HEAD `895af34`, which touches only
 > `README.md` and this file, so every number in the block refers to the same source.
 >
-> 1. **COP1 ISA-level routing — the best-scoped next-round candidate (fidelity, not hygiene).** An R4000 is
+> **STATUS AS OF 2026-07-30 — five of the nine have since been dealt with; the items keep their original
+> text as the historical record, each with a pointer:**
+> - item 1 → partly resolved as **#290** (round 54: the ISA gate); the PS-arithmetic half is still open
+> - item 2 → resolved as **#294** (round 59), and its round-to-nearest tail as **#292** (round 57)
+> - item 3 → defer **re-confirmed 4–0** on 2026-07-30 (entry at the top of this file)
+> - item 5 → the pckbc third fixed as **#288** (round 52); the rest narrowed to X11-only (2026-07-29 entry)
+> - item 8 → resolved as **#287** (round 51)
+> - items 4, 6, 7, 9 → still open, unchanged
+>
+> 1. **[→ partly resolved as #290, round 54: the ISA gate shipped; the PS-arithmetic half for
+>    5Kc/5KE/SB1/SR7100 remains open]** **COP1 ISA-level routing — the best-scoped next-round candidate (fidelity, not hygiene).** An R4000 is
 >    MIPS III, but `cpus/cpu_mips_instr.c:4991-4995` admits `COP1_FMT_PS` (along with S/D/W/L) to `cop1_slow`,
 >    so `add.ps` **executes** on an R4000/R3000 and silently writes `fd = 0x00000000` instead of raising
 >    **Reserved Instruction**. Measured in round 46: one `add.ps` produced 8.0 host lines and a zeroed `fd`,
@@ -237,7 +292,8 @@
 >    raises is easily mistaken for the instruction under test faulting; reading `$f2`/`$f3` back with two
 >    MIPS-I `swc1`s (`probe_273_pmax_l.py`) shows `trunc.l.d` really did run and returned the pinned values.
 >    So the COP1 decoder does not enforce ISA level **anywhere**.
-> 2. **FP rounding mode — `cvt.w` truncates, and `FCSR.RM` is read nowhere.** `cvt.w` of `3.5` yields **3**
+> 2. **[→ resolved as #294, round 59; the round-to-nearest tail as #292, round 57]**
+>    **FP rounding mode — `cvt.w` truncates, and `FCSR.RM` is read nowhere.** `cvt.w` of `3.5` yields **3**
 >    where the MIPS default rounding mode (RN, round-to-nearest-even) gives **4**; measured as a deliberate
 >    control in the #273 probe, which carries both a rounding-*sensitive* case (`3.5`) and a rounding-*insensitive*
 >    one (`3.25`) so this defect can never be confused with the conversion defect #273 fixed. A tree-wide grep
@@ -251,7 +307,8 @@
 >    fraction instead of rounding → single-precision results 1 ulp low), already recorded under round 28 and
 >    still blocked on the same thing — gcc never emits the single-precision compares, so only hand-assembled
 >    tests reach it.
-> 3. **FCSR Invalid-flag signalling — still the documented deferred TODO.** #273 corrected only the *result* of
+> 3. **[→ defer re-confirmed 4–0 on 2026-07-30 after #292 — see the entry at the top of this file]**
+>    **FCSR Invalid-flag signalling — still the documented deferred TODO.** #273 corrected only the *result* of
 >    an invalid FP→integer conversion (the pinned `0x7fffffff` / `0x7fff…ffff`); the Invalid flag is still not
 >    raised on these conversions, and the wider FCSR V/Z/O/U/I cause/flag maintenance + enabled-exception
 >    trapping remains deferred for the reasons recorded under round 28 (needs qNaN/sNaN discrimination,
@@ -266,7 +323,9 @@
 >    neither guest chains RX, which the #274 would-fire instrumentation measured directly (`rx_calls=14
 >    frames=14` on a healthy boot + ping, `321/321` under flood, `la_extra_reject = 0` in both). Recorded so
 >    that anyone who makes chaining reachable fixes this first.
-> 5. **Console/keyboard FIFO overrun discards the WHOLE queue, not one byte.** Three ring buffers share one
+> 5. **[→ the pckbc third fixed as #288, round 52; the remaining two narrowed to X11-only exposure on
+>    2026-07-29 — see that entry — and left, since this project runs headless]**
+>    **Console/keyboard FIFO overrun discards the WHOLE queue, not one byte.** Three ring buffers share one
 >    shape — the producer advances/stores and *then* warns, leaving `head == tail`, which every consumer reads
 >    as **EMPTY**: `console/console.c:306-315` (`console_makeavail`, `"console fifo overrun"`),
 >    `devices/dev_dc7085.c:103-110` (`add_to_rx_queue`, `"rx_queue overrun!"`) and
@@ -309,7 +368,8 @@
 >    the `device_add` line *does* exist in `machine_arc.c`, it is simply compiled out. So the site is real and
 >    the `exit()` is a genuine defect of the same class as #167/#240/#264/#271, but it is unreachable on either
 >    rig and belongs to a tree-wide `fatal()`/`exit()` hygiene round rather than to the pmax/arc mandate.
-> 8. **S-format store: an overflow produces a NaN encoding where hardware gives ±Inf.** In
+> 8. **[→ resolved as #287, round 51 — CHANGELOG "Fifty-first round"]**
+>    **S-format store: an overflow produces a NaN encoding where hardware gives ±Inf.** In
 >    `core/float_emul.c`, `ieee_store_float_value()` (`:245`) reaches the shared S/D arm at `:309-310`, whose
 >    `FP_NORMAL` case (`:330`) writes the fraction bits into `r` at `:354-360` and *then* **clamps** the biased
 >    exponent at `:367-368` (`if (exponent >= ((int64_t)1 << n_exp)) exponent = ((int64_t)1 << n_exp) - 1;`)
@@ -457,6 +517,7 @@
 >   OpenBSD 2.2 (no FP traps enabled); medium-high risk. Panel unanimous DEFER.
 > - **S-format round-to-nearest** in `ieee_store_float_value` (`float_emul.c` ~277 truncates to 23 fraction bits →
 >   single-precision inexact results 1 ulp low). Pre-existing, all ops; own correction.
+>   **[→ resolved as #292, round 57; and the FCSR item above was re-confirmed deferred 4–0 on 2026-07-30]**
 > - **In-guest FP microtest blocked** — the OpenBSD 2.2 rig image has no comp set / working `cc`; a future round
 >   could install a toolchain or inject a static MIPS test binary to exercise c.olt/c.ole live (gcc never emits them,
 >   so only hand-asm reaches those paths).
