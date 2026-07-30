@@ -69,6 +69,19 @@
 >   control, and TWO mutants run against it with pre-registered predictions: missing-swap
 >   13/20, legacy-revert 11/20). `m88k_fstcr()` no longer calls pure-RM fcr63 writes
 >   UNIMPLEMENTED.
+> - **PPC: the spike ran, and all four predictions measured true** (2026-07-30). A cold
+>   debugger on macppc/G4 executes guest FP once MSR.FP (0x2000) is set — `testppc` bare
+>   is REFUTED, it prints usage and exits, so a real kernel must be named (loaded, never
+>   run). Measured: `frsp` of a qNaN stores **+0.0** where the ISA owes the NaN with its
+>   low 29 fraction bits zeroed; `frsp` of 1+3*2^-25 under toward-zero gives
+>   `3ff0000020000000` where the ISA owes `3ff0000010000000` (the host cast rounds
+>   nearest regardless of FPSCR.RN); `stfs` of that value gives `3f800000` under **both**
+>   RN settings — **which settles the standing panel dissent empirically: stfs does NOT
+>   round per the mode, so wiring it to FPSCR.RN would be a regression**; and `stfs` of
+>   2^-127 flushes to `00000000` where the ISA's denormalization band owes `00400000`.
+>   What still blocks a fix round is an INSTRUMENT, not knowledge: there is no PPC OS
+>   rig, so a correction would need a regression gate built on this probe path first.
+>   Probe: `_scratchpad/probe_ppc_spike.py`.
 > - **PPC `frsp` of a NaN stores +0.0** (`cpu_ppc_instr.c:969-989`; the ISA owes the NaN
 >   with the low 29 fraction bits zeroed), `frsp` ignores FPSCR.RN (host cast = nearest
 >   always), the `stfs` denormalization band diverges (2^-127: ISA owes 0x00400000, the
