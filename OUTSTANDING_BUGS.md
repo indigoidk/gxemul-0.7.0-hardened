@@ -9,18 +9,34 @@
 > - ✅ `dev_mb89352.c` uninitialised DATA_OUT buffer → **RESOLVED as #295**; the sibling
 >   `dev_osiop.c:520` was examined and **deliberately left** (its offset is honest, the
 >   route is closed by the phase machine, no rig instantiates it).
-> - **SH `FPSCR.RM`** — reproduced on the committed build by two seats with a media-free
->   cold-debugger probe, and the precondition sourced from OpenBSD (`setregs()` installs
->   `FPSCR_PR`, i.e. RM=00 nearest, at **every exec**; `libc fpsetround.c` writes RM
->   directly). The wiring is 8 IEEE-exact store sites in `cpu_sh_instr.c`. **Carries a
->   second, independent change that must be declared and tested separately**: passing the
->   reset mode (toward-zero) instead of LEGACY also changes S-format overflow from ±Inf to
->   ±FLT_MAX — which is the correct IEEE-754 §7.4 answer, but is not a mode plumb.
+> - ✅ **SH `FPSCR.RM` decoded nowhere → RESOLVED as #296** (round 61). Thirteen of the
+>   sixteen single-precision stores now honour the mode, covered by the new gate 10. The
+>   split was corrected mid-round: `fipr` and `ftrv` were initially left truncating on the
+>   theory that reduced-precision instructions should not take a rounding mode, and the
+>   manual (§6.4) says the opposite — the reduced precision is in the intermediate, the
+>   final result is still rounded under RM. The declared second change (overflow under
+>   toward-zero moving from ±Inf to ±FLT_MAX) was measured separately and confirmed
+>   against §6.5.
 >
 > **Real, but needs infrastructure or a rig that does not exist yet**
-> - SH `FPSCR.RM` is stored, guest-writable and **decoded nowhere** — the SH core is
->   unconditionally round-toward-zero (correct at reset, wrong once a guest sets nearest).
->   Wiring is mechanical at 16 sites; no live test until a SuperH rig can run FP.
+> - **SH double-precision arithmetic ignores `FPSCR.RM`** — exposed while resolving #296
+>   and deliberately not patched. It cannot be fixed where the single-precision defect was:
+>   the D format *is* a host double, so the store is a pure re-encode with no narrowing for
+>   a mode to control, and the rounding already happened in the host's own arithmetic.
+>   Measured: double `1.0/10.0` gives the same bits under both modes. Under RM=00 that
+>   agrees with silicon, so only toward-zero double code diverges. A fix means running the
+>   arithmetic under a controlled host rounding mode, which #292 established is not
+>   straightforward (the compiler CSEs mode-switched casts). Pinned in gate 10.
+> - **Host-double double rounding on `fadd`/`fsub`/`fmac`** — every CPU core here evaluates
+>   in host double and then narrows, so a cancellation finer than 2^-53 is gone before the
+>   store: `fsub` of 1.0 and 2^-60 collapses to exactly 1.0, and toward-zero yields
+>   `0x3f800000` where silicon rounds the exact difference to `0x3f7fffff`. Measured.
+>   Pre-existing, not architecture-specific, and pinned in gate 10 so it cannot drift
+>   silently. `fmul` is immune (the product is exact in double).
+> - **SH `ftrc` converts with raw C casts** (`cpu_sh_instr.c`), so it carries the same
+>   NaN/Infinity/out-of-range conversion problem that #273 fixed for MIPS W/L; real SH-4
+>   saturates. Found while auditing #296; untested so far, so it is listed rather than
+>   patched.
 > - **PowerPC `stfs` rounding is disputed between panel seats** (bit-extraction vs rounds
 >   per FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
 > - m88k models **no rounding register at all** — nothing to wire.
@@ -41,6 +57,11 @@
 >   accepted mode paths.
 > - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and a
 >   change there would touch the verified arc boot.
+> - **SH `fsca` and `fsrra` stay on the truncating store** (the three sites #296 left alone).
+>   Unlike `fipr`/`ftrv`, these are transcendental approximations where real silicon is
+>   documented to deviate by roughly 2^-21 — far more than a last-bit rounding choice — so no
+>   witness can be built whose correct answer is decided by `FPSCR.RM`. Wiring them would be
+>   untestable by this project's rule, so they are indexed here instead.
 
 > ## ✅ 2026-07-30 — RESOLVED as #294: cvt.w honours the rounding mode (item 2 of the rounds 41–46 block)
 > `cvt.w` of 3.5 under the default mode now yields 4 (nearest-even); `trunc.w` still
@@ -86,10 +107,13 @@
 > against the host's correctly-rounded oracle over ~10M finite inputs, and a live-rig probe
 > shows `ctc1` RM=0 → `cvt.s.d(1/3)` = `0x3eaaaaab`, RM=1 → `0x3eaaaaaa` on both pmax and
 > arc. See CHANGELOG "Fifty-seventh round". **Kept open under this entry, deliberately:**
-> - **SH FPSCR.RM is stored but decoded nowhere** — the SH core is unconditionally
->   round-toward-zero, which is correct at reset; a guest that sets RM=nearest computes
->   1 ulp low there today. Wiring it is mechanical (`fpscr & 3` at 16 sites) but has no
->   live test until the landisk rig can run FP (its ramdisk has no FP-capable tool).
+> - ~~**SH FPSCR.RM is stored but decoded nowhere**~~ — **RESOLVED as #296** (round 61).
+>   The blocker recorded here was "no live test until the landisk rig can run FP (its
+>   ramdisk has no FP-capable tool)". That premise was wrong: no FP-capable *tool* is
+>   needed, because the guest does not have to be booted at all. A cold debugger seeds the
+>   registers, the guest executes one instruction and stores the result with its own
+>   `fmov.s`, and the value is read back from memory. That is now gate 10, and it is how
+>   the defect was reproduced before the fix.
 > - **PPC `stfs` rounding is DISPUTED between panel seats** (bit-extraction vs rounds per
 >   FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
 > - **m88k models no rounding register at all** — nothing to wire.

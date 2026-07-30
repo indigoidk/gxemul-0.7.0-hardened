@@ -65,6 +65,85 @@
 		return;							\
 	}
 
+#ifndef	SH_FP_ROUNDING_MODE_INCLUDED
+#define	SH_FP_ROUNDING_MODE_INCLUDED
+/*
+ *  #296: the rounding mode for a single-precision store.
+ *
+ *  FPSCR.RM was stored, guest-writable, and decoded NOWHERE -- the mask in
+ *  cpu_sh.h was referenced only by its own #define, so every store
+ *  truncated. Truncation IS round-toward-zero, which is the mode the SH-4
+ *  resets into (RM = 01), and that is exactly why #292 left this core on
+ *  the legacy entry point: under the reset mode there was no wrong answer
+ *  to reproduce. (Round-toward-zero of the value handed to the store, to be
+ *  precise -- not of the infinitely-precise result. Every core here
+ *  evaluates in host double and then narrows, so a cancellation finer than
+ *  2^-53 is already gone: FSUB of 1.0 and 2^-60 collapses to exactly 1.0
+ *  before the store sees it, and toward-zero then yields 0x3f800000 where
+ *  real silicon rounds the exact difference to 0x3f7fffff. That
+ *  double-rounding is pre-existing, shared by every CPU core in the tree,
+ *  and untouched by this correction.) But OpenBSD's setregs()
+ *  installs FPSCR_PR at every exec -- RM = 00, round-to-nearest -- and its
+ *  libc fpsetround() writes RM directly, so every user process on landisk
+ *  runs in nearest and got results one unit-in-the-last-place low.
+ *  Reproduced on the committed build with a cold-debugger probe: 1.0/3.0
+ *  stored 0x3eaaaaaa under BOTH modes, where nearest owes 0x3eaaaaab.
+ *
+ *  SH-4 defines only 00 (nearest) and 01 (toward zero); 10 and 11 are
+ *  reserved. OpenBSD's fesetround() nonetheless ACCEPTS FE_UPWARD and
+ *  FE_DOWNWARD, so a guest can put a reserved value here -- those keep the
+ *  reset mode rather than inventing directed-rounding behaviour the
+ *  silicon does not document.
+ *
+ *  Thirteen of the sixteen single-precision stores use this. FIPR and the
+ *  four FTRV stores are among them, which was NOT the first decision here:
+ *  they were left truncating on the theory that a reduced-precision
+ *  instruction should not be given a rounding mode. That theory was wrong
+ *  twice over. The reduced precision is in the INTERMEDIATE -- a 28-bit
+ *  multiply array -- while the manual still selects the FINAL
+ *  normalize-and-round with RM; and this emulator does not model the
+ *  reduced intermediate at all, it evaluates the whole dot product in host
+ *  double, so the final store is the ONLY rounding in the emulated path.
+ *  Truncating it is not fidelity to imprecise hardware, just a different
+ *  wrong answer. Measured: FIPR of {1.5,0,0,0} against {1+2^-23,0,0,0} is
+ *  an exact midpoint, and nearest returned the truncated 0x3fc00001 where
+ *  it owes 0x3fc00002.
+ *
+ *  FSCA (sin/cos) and FSRRA (reciprocal square root) stay on the legacy
+ *  path. Those are transcendental approximations where real silicon is
+ *  documented to deviate by about 2^-21 -- far more than a last-bit
+ *  rounding choice -- so no witness can be built whose correct answer is
+ *  decided by RM. Per the project rule, that is documented rather than
+ *  changed.
+ *
+ *  Double precision is NOT fixed by this and cannot be: the D format IS a
+ *  host double, so the store is a pure re-encode with no narrowing step for
+ *  a mode to control (see float_emul.c's own note that D has no remainder).
+ *  SuperH double arithmetic therefore still inherits the HOST's rounding
+ *  mode. Measured: double 1.0/10.0 gives 0x...9999999a under both modes.
+ *  Fixing it needs the arithmetic itself performed under a controlled host
+ *  mode, which #292 established is not straightforward.
+ *
+ *  The guard is future-proofing, not present necessity, and saying so is
+ *  the point. tmp_sh_tail.c includes this file at :63 and again at :118,
+ *  but the second include sits under #ifdef DYNTRANS_DUALMODE_32, which
+ *  cpu_sh.c does not define (it defines only DYNTRANS_32; MIPS, PPC and
+ *  RISC-V are the dual-mode cores). So there is exactly ONE live inclusion
+ *  for SH today and the guard is inert. It is kept because a future
+ *  dual-mode SH build would otherwise get a duplicate definition, and
+ *  because this is the idiom cpu_mips_instr.c already uses for its shared
+ *  helpers, where two inclusions really are live. Both inclusions land in
+ *  one translation unit, so the first definition stays in scope for the
+ *  second; were that not so it would be a hard compile error, not silent
+ *  breakage.
+ */
+static int sh_fp_rm(struct cpu *cpu)
+{
+	return (cpu->cd.sh.fpscr & SH_FPSCR_RM_MASK) == SH_FPSCR_RM_NEAREST?
+	    IEEE_RM_RN : IEEE_RM_RZ;
+}
+#endif
+
 /*
  *  SH_ALIGN_CHECK_LD / _ST:
  *
@@ -2674,7 +2753,7 @@ X(float_fpul_frn)
 		reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
 	} else {
 		/*  Single-precision:  */
-		uint32_t ieee = ieee_store_float_value(fpul, IEEE_FMT_S);
+		uint32_t ieee = ieee_store_float_value_rm(fpul, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[0]) = (uint32_t) ieee;
 	}
 }
@@ -2737,7 +2816,7 @@ X(fcnvds_drm_fpul)
 	    ((uint64_t)reg(ic->arg[0]) << 32);
 	ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 
-	cpu->cd.sh.fpul = ieee_store_float_value(op1.f, IEEE_FMT_S);
+	cpu->cd.sh.fpul = ieee_store_float_value_rm(op1.f, IEEE_FMT_S, sh_fp_rm(cpu));
 }
 
 
@@ -2793,7 +2872,7 @@ X(fipr_fvm_fvn)
 	    frm0.f * frn0.f + frm1.f * frn1.f +
 	    frm2.f * frn2.f + frm3.f * frn3.f;
 
-	reg(ic->arg[1] + 12) = ieee_store_float_value(frn3.f, IEEE_FMT_S);
+	reg(ic->arg[1] + 12) = ieee_store_float_value_rm(frn3.f, IEEE_FMT_S, sh_fp_rm(cpu));
 }
 
 
@@ -2832,10 +2911,10 @@ X(ftrv_xmtrx_fvn)
 	for (i=0; i<4; i++)
 		frnp3 += xmtrx[i*4 + 3].f * frn[i].f;
 
-	reg(ic->arg[0] +  0) = ieee_store_float_value(frnp0, IEEE_FMT_S);
-	reg(ic->arg[0] +  4) = ieee_store_float_value(frnp1, IEEE_FMT_S);
-	reg(ic->arg[0] +  8) = ieee_store_float_value(frnp2, IEEE_FMT_S);
-	reg(ic->arg[0] + 12) = ieee_store_float_value(frnp3, IEEE_FMT_S);
+	reg(ic->arg[0] +  0) = ieee_store_float_value_rm(frnp0, IEEE_FMT_S, sh_fp_rm(cpu));
+	reg(ic->arg[0] +  4) = ieee_store_float_value_rm(frnp1, IEEE_FMT_S, sh_fp_rm(cpu));
+	reg(ic->arg[0] +  8) = ieee_store_float_value_rm(frnp2, IEEE_FMT_S, sh_fp_rm(cpu));
+	reg(ic->arg[0] + 12) = ieee_store_float_value_rm(frnp3, IEEE_FMT_S, sh_fp_rm(cpu));
 }
 
 
@@ -2907,7 +2986,7 @@ X(fsqrt_frn)
 		/*  Single-precision:  */
 		int32_t ieee, r1 = reg(ic->arg[0]);
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
-		ieee = ieee_store_float_value(sqrt(op1.f), IEEE_FMT_S);
+		ieee = ieee_store_float_value_rm(sqrt(op1.f), IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[0]) = ieee;
 	}
 }
@@ -2980,7 +3059,7 @@ X(fadd_frm_frn)
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
 
 		result = op2.f + op1.f;
-		ieee = ieee_store_float_value(result, IEEE_FMT_S);
+		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
 }
@@ -3013,7 +3092,7 @@ X(fsub_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
 		result = op2.f - op1.f;
-		ieee = ieee_store_float_value(result, IEEE_FMT_S);
+		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
 }
@@ -3050,7 +3129,7 @@ X(fmul_frm_frn)
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
 
 		result = op2.f * op1.f;
-		ieee = ieee_store_float_value(result, IEEE_FMT_S);
+		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
 }
@@ -3102,7 +3181,7 @@ X(fdiv_frm_frn)
 		 */
 		result = op2.f / op1.f;
 
-		ieee = ieee_store_float_value(result, IEEE_FMT_S);
+		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
@@ -3118,7 +3197,7 @@ X(fmac_fr0_frm_frn)
 	ieee_interpret_float_value(fr0, &op0, IEEE_FMT_S);
 	ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 	ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
-	ieee = ieee_store_float_value(op0.f * op1.f + op2.f, IEEE_FMT_S);
+	ieee = ieee_store_float_value_rm(op0.f * op1.f + op2.f, IEEE_FMT_S, sh_fp_rm(cpu));
 	reg(ic->arg[1]) = ieee;
 }
 X(fcmp_eq_frm_frn)

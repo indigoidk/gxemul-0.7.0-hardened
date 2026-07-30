@@ -2102,6 +2102,184 @@ the *window* still permits OOB into the smaller buffer. The high-severity class 
 - **OB-24 (signed `byte<<24` in CPU instruction cores) — skipped**, consistent with the existing
   decision below (UBSan-only, hottest path, no exploit path; the shared decoder is already fixed in #27).
 
+## Sixty-first round (#296) — SuperH read the rounding-mode field but never used it
+
+One fix, `cpus/cpu_sh_instr.c`, not a tree-divergent file. A new regression gate. And a
+repository cleanup that is unrelated to the code but touches the A/B baseline, so it is
+recorded here rather than slipped in quietly.
+
+### The field was decoded nowhere
+
+`SH_FPSCR_RM_MASK` in `src/include/cpu_sh.h` was referenced by nothing in the tree except
+the two `#define`s sitting directly under it. Every single-precision store called
+`ieee_store_float_value(x, IEEE_FMT_S)` — the legacy two-argument entry point, which
+truncates.
+
+Truncation *is* round-toward-zero, and the SH-4 resets with RM = 01, toward zero. That is
+why #292 wired the MIPS core and deliberately left this one alone: under the reset mode
+there was no wrong answer to reproduce, and the rule here is not to touch what cannot be
+reproduced.
+
+What closed the gap was finding the guest that changes the mode. OpenBSD/landisk
+`setregs()` does `pcb->pcb_fp.fpr_fpscr = FPSCR_PR` — RM = 00, round-to-nearest — at every
+`exec`, and libc `fpsetround()` writes the field directly. So during user code it is not
+the reset mode in force, it is nearest, and every result came back one unit-in-the-last-place
+low.
+
+**Measured on the committed build before any edit.** The SuperH serial port drops
+host→guest writes non-deterministically (that is #293), so a probe that types at a guest
+shell is not trustworthy here. Instead the debugger seeds registers cold, the guest itself
+executes the instruction and stores the result with its own `fmov.s`, and the value is read
+back out of memory — `reg` does not print floating-point registers on this core.
+
+```
+                      before        after
+1.0/3.0  RM=01       3eaaaaaa      3eaaaaaa    toward zero, right both times
+1.0/3.0  RM=00       3eaaaaaa      3eaaaaab    nearest: was one ulp low
+```
+
+### Thirteen of sixteen stores, and the first split was wrong
+
+Wired: `float`, `fcnvds`, `fsqrt`, `fadd`, `fsub`, `fmul`, `fdiv`, `fmac`, `fipr`, and the
+four `ftrv` stores.
+
+Left on the legacy path: `fsca` (sin/cos) and `fsrra` (reciprocal square root). Those are
+transcendental approximations where real silicon is documented to deviate by roughly 2^-21
+— far more than a last-bit rounding choice — so no witness can be constructed whose correct
+answer is decided by RM. Documented rather than changed.
+
+**`fipr` and `ftrv` were in the second list until the panel took them out of it**, and the
+reasoning that put them there was wrong twice over. The first draft argued that applying a
+rounding mode to a reduced-precision instruction invents accuracy the silicon lacks. But
+the reduced precision is in the *intermediate* — which is why the manual says the inexact
+flag is always raised for these two — and the manual is explicit that the final result is
+still rounded under RM. §6.4, verbatim:
+
+> In a floating-point instruction, rounding is performed when generating the final
+> operation result from the intermediate result. Therefore, the result of combination
+> instructions such as FMAC, FTRV, and FIPR will differ from the result when using a basic
+> instruction such as FADD, FSUB, or FMUL. … There are two rounding methods, the method to
+> be used being determined by the RM field in FPSCR.
+
+And the second error: this emulator does not model the reduced intermediate *at all*. It
+evaluates the whole dot product in host double, so the final store is the only rounding in
+the emulated path. Truncating it is not fidelity to imprecise hardware, just a different
+wrong answer. Measured — `fipr` of {1.5,0,0,0} against {1+2^-23,0,0,0} is an exact
+midpoint, and nearest returned the truncated `3fc00001` where it owes `3fc00002`.
+
+`ftrc` is untouched and stays untouched: round-toward-zero by architecture regardless of
+RM. It never routes through `ieee_store_float_value` at all, which was checked rather than
+assumed.
+
+RM values 10 and 11 are **reserved** on SH-4 and map here to the reset mode. This is not
+hypothetical: OpenBSD's `fenv.h` defines `FE_UPWARD` as 0x2 and `FE_DOWNWARD` as 0x3 inside
+its round mask, so `fesetround()` genuinely writes the reserved encodings. Keeping the
+reset mode invents less than inventing directed rounding the hardware does not document.
+
+### The rider: this also changes what overflow stores
+
+Leaving `IEEE_RM_LEGACY` is not only a rounding change. LEGACY's overflow arm is
+unconditional ±Infinity — that is #287, and gate 2 asserts it stays bit-identical — while
+the real modes are mode-dependent. A second, independent behaviour change on the same
+commit, so it was measured on its own. `1e30f * 1e30f`:
+
+```
+RM=00 nearest      7f800000   +Inf      unchanged
+RM=01 toward zero  7f7fffff   FLT_MAX   CHANGED, was +Inf
+```
+
+This one had to be right, because a wrong answer would make the commit a regression on the
+*reset* mode — the mode a bare-metal guest that never touches FPSCR runs in forever. The
+manual settles it, §6.5:
+
+> Overflow (O): When rounding mode = RZ, the maximum normalized number, with the same sign
+> as the unrounded value, is generated. When rounding mode = RN, infinity with the same
+> sign as the unrounded value is generated.
+
+The emulator's reset value was checked to match too — `cpu_sh.c` initialises FPSCR to
+`0x00040001`, which is the manual's reset state with RM = 01 — so a guest that never writes
+the field still gets toward-zero, and the only thing that changed for it is the overflow
+answer, in the direction the manual specifies.
+
+### What the panel found, including where it was wrong
+
+Two seats returned DO NOT SHIP. One was right and one was not, and both were settled by
+measurement rather than by counting seats.
+
+The right one is the `fipr`/`ftrv` finding above. Two seats derived the same exact-midpoint
+witness independently, and running it reproduced the defect.
+
+The other objection was that leaving the seven `IEEE_FMT_D` stores alone makes this a
+half-fix. It does not, and the reason is a format identity rather than an oversight: the D
+format **is** a host double — same 11-bit exponent, same 52-bit fraction — so the store is a
+pure re-encode with no narrowing step for a mode to control. The rounding already happened
+in the host's arithmetic. Measured: double `1.0/10.0` gives low word `9999999a` under both
+modes, where a real toward-zero would owe `99999999`. Wiring those seven sites would have
+been a provable no-op. The seat's own worked example was self-refuting as well — `1.0 +
+2^-53` is an exact tie, and ties-to-even returns the 1.0 it called wrong — which two other
+seats spotted independently.
+
+**The objection does expose a real gap, now recorded rather than patched.** SuperH
+double-precision arithmetic ignores FPSCR.RM entirely; it inherits the host's mode, which
+is nearest. Under RM=00 that happens to agree with silicon, so the gap is invisible in the
+common case; under RM=01 it diverges. Fixing it means running the arithmetic itself under a
+controlled host mode, and #292 already established why that road is closed here.
+
+A third finding corrected the commit's own comment rather than its code. The first draft
+said truncation is "bit-exact round-toward-zero". It is not — it is toward-zero *of the
+value handed to the store*. Every core here evaluates in host double and then narrows, so a
+cancellation finer than 2^-53 is already gone: `fsub` of 1.0 and 2^-60 collapses to exactly
+1.0 before the store sees it, and toward-zero then yields `3f800000` where silicon rounds
+the exact difference to `3f7fffff`. Measured and confirmed. Pre-existing, shared by every
+CPU core in the tree, untouched by this correction — and now stated accurately in the
+comment and pinned in the gate.
+
+A fourth corrected a claim about the build. The comment justified its include guard with
+"this file is included twice". It is not, for SuperH: the second inclusion in
+`tmp_sh_tail.c` sits under `#ifdef DYNTRANS_DUALMODE_32`, which `cpu_sh.c` never defines
+(MIPS, PPC and RISC-V are the dual-mode cores). The guard is correct future-proofing and is
+kept, but it is inert today and now says so. This project shipped #270 to fix exactly this
+kind of overclaim.
+
+One objection was raised and rejected on the merits: that the mode should be hoisted into
+instruction selection rather than read per execution. It must not be. Translated
+instruction calls are cached and nothing invalidates them when FPSCR is written, so a
+translation-time mode would go stale the moment a guest called `fpsetround()` — which is
+the defect being fixed. The per-execution read is a load and a compare in front of a store
+primitive that already runs a bit-serial loop.
+
+### Gate 10, and proving it can fail
+
+`regress/gate_sh_rounding.sh` runs nine vectors under both rounding modes on real guest
+instructions — eighteen pairs, all passing. Seven of the nine discriminate: their two modes
+want different answers, so reverting the fix turns them red. `fdiv`, `float`, `fadd`,
+`fmac`, `fipr`, `ftrv` and `fmul` are each named individually, so a single site reverting
+cannot hide behind an aggregate count. The gate also asserts *how many* vectors
+discriminate, because a table where every vector wanted the same answer in both modes would
+pass vacuously — the failure mode this harness has now been bitten by five times.
+
+Then it was proved rather than assumed. A mutant with `sh_fp_rm()` forced back to
+`IEEE_RM_LEGACY` scores **11 of 18**: every one of the seven instructions fails exactly one
+arm, which is the arithmetic the fix predicts.
+
+The remaining two vectors are deliberately mode-independent and marked PIN — the
+double-precision no-op and the double-rounding limitation. They record what is *not* fixed.
+A pin going red means a known limitation moved without the record being updated, which is
+worth knowing in either direction.
+
+### Repository cleanup: two files that were never upstream
+
+`src/cpus/grep.exe.stackdump` and `src/devices/grep.exe.stackdump` are git-bash crash dumps
+that were swept into `39748e3`, the commit that is supposed to be pristine upstream 0.7.0.
+They are not part of GXemul, appear in no object list, are referenced by nothing, and get
+rewritten whenever a `grep` crashes — which made them show up as diff noise. Untracked and
+added to `.gitignore`.
+
+They cannot have affected any measurement: the build uses explicit object lists with no
+wildcards, so no A/B or regression conclusion drawn against `39748e3` is disturbed. The
+import commit is left alone rather than rewritten again; this note is the record that it
+carries two files upstream never shipped.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

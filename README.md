@@ -159,6 +159,7 @@ Oldest first.
 | `3eaaf3a` | Round 57 (#292): single-precision results were 1 ulp low half the time |
 | `3ab1a40` | Round 58 (#293): typed input on SuperH was stolen before the serial port saw it |
 | `6440006` | Round 59 (#294): cvt.w honours the FPU rounding mode; trunc.w provably does not |
+| `e61badd` | Round 60 (#295): the fixed-rounding conversions, and a buffer declared full before it was filled |
 
 ## Feature highlights
 
@@ -199,7 +200,7 @@ Oldest first.
 
 ## Regression harness
 
-`regress/run.sh` runs six gates; `regress/run.sh 2 4` runs a subset. The governing rule is
+`regress/run.sh` runs ten gates; `regress/run.sh 2 4` runs a subset. The governing rule is
 that **a gate which cannot fail is worse than no gate**, because it reports green — and
 this fork had been counting two such gates as evidence:
 
@@ -220,6 +221,10 @@ pure function in closed form.
 | 4 | `gate_crossfamily.sh` | m88k and SuperH cores execute guest code and return checked answers |
 | 5 | `gate_hygiene.sh` | No distress markers in the raw pty logs |
 | 6 | `gate_ab.sh` | Three-way A/B against pristine `39748e3` and pre-batch `2ffc91e` |
+| 7 | `selftest_mutation.sh` | Four deliberate mutants prove gate 2 can actually fail |
+| 8 | `gate_upstream.sh` | Upstream GXemul's own `test/` suite, run three-way |
+| 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
+| 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 9 vectors × 2 modes on real guest instructions |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger
