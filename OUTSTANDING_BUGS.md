@@ -39,7 +39,24 @@
 >   patched.
 > - **PowerPC `stfs` rounding is disputed between panel seats** (bit-extraction vs rounds
 >   per FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
-> - m88k models **no rounding register at all** — nothing to wire.
+> - ~~m88k models no rounding register at all — nothing to wire~~ — **WRONG as recorded,
+>   twice over** (2026-07-30 five-seat feasibility panel). `fldcr`/`fstcr` ARE decoded and
+>   `m88k_fstcr()` stores the value into `fcr[]` (it only warns), so FPCR (fcr63) is
+>   retained, readable and decoded into nothing — the #296 shape. Worse: the six m88k
+>   single-precision arms store via legacy truncation while OpenBSD/m88k `setregs()`
+>   zeroes fcr63 (= round-to-nearest), so **every luna88k userland single-precision
+>   result is 1 ulp low about half the time today**, on a rig that boots to root. Queued
+>   as its own round. Bit meanings settled from OpenBSD libc + the MC88100 manual:
+>   fcr63[15:14], 0=RN 1=RZ **2=toward−Inf 3=toward+Inf** — the OPPOSITE directed order
+>   from our `IEEE_RM_*` enum (RP=2, RM=3), so the mapping must swap 2↔3, and the probe
+>   needs sign-asymmetric directed-mode vectors because a swapped mapping passes every
+>   symmetric one.
+> - **PPC `frsp` of a NaN stores +0.0** (`cpu_ppc_instr.c:969-989`; the ISA owes the NaN
+>   with the low 29 fraction bits zeroed), `frsp` ignores FPSCR.RN (host cast = nearest
+>   always), the `stfs` denormalization band diverges (2^-127: ISA owes 0x00400000, the
+>   legacy store flushes to 0), and finite ≥2^128 extraction wraps rather than giving Inf
+>   — found by the same panel. No PPC OS rig; a `testppc` cold-debugger probe is the
+>   gating spike (f0..f31 and fpscr are debugger-settable — verified live).
 > - PS (paired-single) **arithmetic** is unmodelled, so #290's ISA gate leaves the four
 >   64-bit FPU CPUs (5Kc, 5KE, SB1, SR7100) without a format they are entitled to.
 > - FCSR exception flags — **defer re-confirmed 4–0** after #292 (entry below).
@@ -114,9 +131,15 @@
 >   registers, the guest executes one instruction and stores the result with its own
 >   `fmov.s`, and the value is read back from memory. That is now gate 10, and it is how
 >   the defect was reproduced before the fix.
-> - **PPC `stfs` rounding is DISPUTED between panel seats** (bit-extraction vs rounds per
->   FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
-> - **m88k models no rounding register at all** — nothing to wire.
+> - ~~PPC `stfs` rounding is DISPUTED between panel seats~~ — **SETTLED 2026-07-30** from
+>   Power ISA v3.0B Book I §4.6.3, quoted verbatim by a panel seat: `stfs` is a defined
+>   bit-EXTRACTION (fraction truncated at bit 23; a denormalization band; no rounding, no
+>   FPSCR.RN, "Special Registers Altered: None"); `frsp` is the rounding instruction. Do
+>   NOT wire `stfs` to FPSCR.RN — that would move away from the architecture. The real
+>   PPC defects found instead are listed in the at-a-glance section above.
+> - ~~m88k models no rounding register at all~~ — **WRONG as recorded; see the
+>   at-a-glance section above** (fcr file modeled and retained; live 1-ulp defect on
+>   luna88k userland; queued as its own round).
 
 > ## ✅ 2026-07-30 — RESOLVED as #293: the SuperH console input loss (2026-07-27 entry below)
 > The mechanism was none of the recorded suspects: on landisk nothing claimed
