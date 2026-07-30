@@ -842,6 +842,134 @@ int main(void)
 		rm_vec_bad += bad300;
 	}
 
+	/*  #301: cvt.d.l's int64 -> double conversion under each mode. Every
+	    expected value is the exact mathematical answer -- an int64 has at
+	    most 63 significant bits, so rounding to 53 is a decision about the
+	    discarded tail and nothing else, which is why this needs no oracle
+	    beyond arithmetic. The rig rows measured the same values through
+	    real guest ctc1/ldc1/cvt.d.l on arc.  */
+	{
+		static const struct {
+			const char *name;
+			int64_t v;
+			int rm;
+			uint64_t want;
+		} v301[] = {
+		/*  exact: 53 significant bits or fewer, mode irrelevant  */
+		{ "L 5 RN",            5,                  IEEE_RM_RN, 0x4014000000000000ULL },
+		{ "L 5 RP",            5,                  IEEE_RM_RP, 0x4014000000000000ULL },
+		{ "L 2^53 RP",         9007199254740992LL, IEEE_RM_RP, 0x4340000000000000ULL },
+		/*  2^53+1: the first integer that needs a decision  */
+		{ "L 2^53+1 RN",       9007199254740993LL, IEEE_RM_RN, 0x4340000000000000ULL },
+		{ "L 2^53+1 RZ",       9007199254740993LL, IEEE_RM_RZ, 0x4340000000000000ULL },
+		{ "L 2^53+1 RP",       9007199254740993LL, IEEE_RM_RP, 0x4340000000000001ULL },
+		{ "L 2^53+1 RM",       9007199254740993LL, IEEE_RM_RM, 0x4340000000000000ULL },
+		/*  negatives: RP and RM swap roles, which a symmetric suite
+		    would never notice (the #298 lesson)  */
+		{ "L -(2^53+1) RZ",   -9007199254740993LL, IEEE_RM_RZ, 0xc340000000000000ULL },
+		{ "L -(2^53+1) RM",   -9007199254740993LL, IEEE_RM_RM, 0xc340000000000001ULL },
+		{ "L -(2^53+1) RP",   -9007199254740993LL, IEEE_RM_RP, 0xc340000000000000ULL },
+		/*  2^54+7: a tail of more than one bit  */
+		{ "L 2^54+7 RZ",      18014398509481991LL, IEEE_RM_RZ, 0x4350000000000001ULL },
+		{ "L 2^54+7 RP",      18014398509481991LL, IEEE_RM_RP, 0x4350000000000002ULL },
+		{ "L 2^54+7 RN",      18014398509481991LL, IEEE_RM_RN, 0x4350000000000002ULL },
+		{ "L -(2^54+7) RZ",  -18014398509481991LL, IEEE_RM_RZ, 0xc350000000000001ULL },
+		/*  exact ties, both parities: ties-to-even must pick the even
+		    neighbour, so these two land on DIFFERENT sides  */
+		/*  genuine ties are remainder==half: 2^54+2 sits exactly between
+		    2^54 and 2^54+4 with an EVEN lower neighbour (stays), 2^54+6
+		    between +4 and +8 with an ODD one (goes up) -- so the two
+		    ties land on OPPOSITE sides. The first version of this table
+		    labelled 2^54+1 and 2^54+3 as ties; they are not (remainders
+		    1 and 3 of 4), and the CODE flagged the TABLE.  */
+		{ "L 2^54+2 RN tie",  18014398509481986LL, IEEE_RM_RN, 0x4350000000000000ULL },
+		{ "L 2^54+6 RN tie",  18014398509481990LL, IEEE_RM_RN, 0x4350000000000002ULL },
+		/*  carry out of the rounded significand into the exponent  */
+		{ "L 2^54-1 RP carry", 18014398509481983LL, IEEE_RM_RP, 0x4350000000000000ULL },
+		/*  the extremes: INT64_MIN is -2^63 exactly (and negating it
+		    would overflow, which is why it is handled first), and
+		    INT64_MAX rounds up to 2^63 under toward-+Inf  */
+		{ "L INT64_MIN RZ",   INT64_MIN,           IEEE_RM_RZ, 0xc3e0000000000000ULL },
+		{ "L INT64_MIN RM",   INT64_MIN,           IEEE_RM_RM, 0xc3e0000000000000ULL },
+		{ "L INT64_MAX RZ",   INT64_MAX,           IEEE_RM_RZ, 0x43dfffffffffffffULL },
+		{ "L INT64_MAX RP",   INT64_MAX,           IEEE_RM_RP, 0x43e0000000000000ULL },
+		{ "L 0 RM",           0,                   IEEE_RM_RM, 0x0000000000000000ULL },
+		};
+		int i, bad301 = 0;
+		int n301 = (int)(sizeof(v301) / sizeof(v301[0]));
+
+		for (i = 0; i < n301; i++) {
+			double got = ieee_int64_to_double_rm(v301[i].v, v301[i].rm);
+			uint64_t gotbits;
+			memcpy(&gotbits, &got, sizeof(gotbits));
+			if (gotbits != v301[i].want) {
+				bad301++;
+				printf("  #301 VECTOR WRONG (%s): got %016llx want %016llx\n",
+				    v301[i].name,
+				    (unsigned long long) gotbits,
+				    (unsigned long long) v301[i].want);
+			}
+		}
+		printf("cvt: #301 vector failures     : %d (of %d)\n",
+		    bad301, n301);
+		rm_vec_bad += bad301;
+	}
+
+	/*  #301, the L->S half: cvt.s.l as the emulator now computes it --
+	    int64 rounded to double under ROUND-TO-ODD, then the ordinary
+	    single store in the requested mode (Boldo-Melquiond 53 >= 2*24+2).
+	    The first row is the panel's witness: on the pre-fix path it tied
+	    DOWN twice (int->double tie-to-even, then double->single
+	    tie-to-even) and stored 0x5a800000 where direct rounding of the
+	    integer owes 0x5a800001. Reproduced on the arc rig before the
+	    fix; gate 12 pins the same witness through real guest code (one
+	    RN row there -- the directed-mode behaviour is pinned HERE,
+	    through the #292-validated store).  */
+	{
+		static const struct {
+			const char *name;
+			int64_t v;
+			int rm;
+			uint32_t want;
+		} v301s[] = {
+		{ "SL witness dbl-tie RN", 0x0040000040000002LL, IEEE_RM_RN, 0x5a800001 },
+		{ "SL witness RZ",         0x0040000040000002LL, IEEE_RM_RZ, 0x5a800000 },
+		{ "SL 2^53+1 RP",          0x0020000000000001LL, IEEE_RM_RP, 0x5a000001 },
+		{ "SL 2^53+1 RZ",          0x0020000000000001LL, IEEE_RM_RZ, 0x5a000000 },
+		{ "SL -(2^54+2^30+2) RM", -0x0040000040000002LL, IEEE_RM_RM, 0xda800001 },
+		{ "SL -(2^54+2^30+2) RN", -0x0040000040000002LL, IEEE_RM_RN, 0xda800001 },
+		/*  the second witness class (a different seat's): one BELOW a
+		    binary32 midpoint, which the host double rounds ONTO, and
+		    ties-to-even then picks the wrong upper neighbour. Round-to-
+		    odd can never land on a midpoint, so the store sees the
+		    truth.  */
+		{ "SL below-mid RN",       0x400000bfffffffffLL,  IEEE_RM_RN, 0x5e800001 },
+		{ "SL exact 2^24 RN",      16777216LL,            IEEE_RM_RN, 0x4b800000 },
+		{ "SL small 5 RN",         5LL,                   IEEE_RM_RN, 0x40a00000 },
+		{ "SL INT64_MAX RZ",       INT64_MAX,             IEEE_RM_RZ, 0x5effffff },
+		{ "SL INT64_MAX RP",       INT64_MAX,             IEEE_RM_RP, 0x5f000000 },
+		{ "SL INT64_MIN RZ",       INT64_MIN,             IEEE_RM_RZ, 0xdf000000 },
+		};
+		int i, bad301s = 0;
+		int n301s = (int)(sizeof(v301s) / sizeof(v301s[0]));
+
+		for (i = 0; i < n301s; i++) {
+			uint32_t got = (uint32_t) ieee_store_float_value_rm(
+			    ieee_int64_to_double_odd(v301s[i].v),
+			    IEEE_FMT_S, v301s[i].rm);
+			if (got != v301s[i].want) {
+				bad301s++;
+				printf("  #301 VECTOR WRONG (%s): got %08x want %08x\n",
+				    v301s[i].name, got, v301s[i].want);
+			}
+		}
+		printf("cvtsl: #301 L->S failures     : %d (of %d)\n",
+		    bad301s, n301s);
+		rm_vec_bad += bad301s;
+	}
+
+	
+
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
 	    inrange_diff == 0 && dD == 0 && dS > 0 &&
 	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&

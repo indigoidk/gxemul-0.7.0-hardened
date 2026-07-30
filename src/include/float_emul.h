@@ -75,13 +75,29 @@ double ieee_sum_round_to_odd(double a, double b, int rm);
     store is a pure re-encode, so the mode is honoured by correcting the
     arithmetic: one fma residual (or 2Sum) recovers which neighbour the
     host's nearest-mode result landed on. RN and LEGACY return the plain
-    host result; non-finite operands and results pass through untouched;
-    the |result| < 2^-900 band deliberately accepts the nearest answer
-    (residual lemmas are proven for normals only) and is pinned in the
-    offline gate.  */
+    host result; non-finite operands and results pass through untouched.
+    The accepted-nearest bands are QUANTUM-derived (residual-scale operand
+    below 2^-969 for div/sqrt, product for mul; add needs none but has one
+    overflow-tie exclusion) and are pinned in the offline gate.  */
 double ieee_add_round_rm(double a, double b, int rm);
 double ieee_mul_round_rm(double a, double b, int rm);
 double ieee_div_round_rm(double a, double b, int rm);
 double ieee_sqrt_round_rm(double a, int rm);
+
+/*  #301: int64 -> double under a rounding mode, exact in integer
+    arithmetic (the discarded low bits ARE the remainder -- no fma, unlike
+    #300). For cvt.d.l, whose conversion otherwise happens as a host cast
+    before the mode is available. NOTE on IEEE_RM_LEGACY: for the STORE
+    entry points above, LEGACY means truncate -- but here it folds to
+    NEAREST, because this conversion's legacy behaviour was the host cast,
+    which rounds nearest. One constant, two legacies; stated so the next
+    caller reads it before relying on it (unreachable from the MIPS
+    decoder today -- every CVT caller resolves to modes 0..3).  */
+double ieee_int64_to_double_rm(int64_t v, int rm);
+
+/*  #301, the L->S half: int64 -> double under ROUND-TO-ODD, so a
+    subsequent single-precision store rounds correctly in every mode
+    (Boldo-Melquiond, 53 >= 2*24+2) instead of double-rounding.  */
+double ieee_int64_to_double_odd(int64_t v);
 
 #endif	/*  FLOAT_EMUL_H  */

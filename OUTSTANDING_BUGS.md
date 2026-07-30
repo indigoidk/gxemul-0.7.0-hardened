@@ -9,14 +9,21 @@
 > what follows is what they left, plus what they found on the way.
 >
 > **Ready to work — reproduced, and an instrument already exists**
-> - **MIPS `cvt.d.l` ignores the rounding mode** (found by a #300 panel seat): a 64-bit
->   integer with more than 53 significant bits is converted to double under the host's
->   nearest mode inside `ieee_interpret_float_value` before `fpu_op` can apply FCSR, and
->   the D store is a pure re-encode, so the mode never gets a say. Witness: `2^53+1`
->   under toward-+Inf owes `0x4340000000000001`, gets `...000`. The residual is
->   computable exactly in integer arithmetic, and both MIPS rigs execute the opcode —
->   this is the most actionable item on the list. (`cvt.d.s`/`cvt.d.w` are exact
->   conversions; no defect.)
+> - ✅ **MIPS `cvt.d.l` (and `cvt.s.l`) ignore the rounding mode → RESOLVED as #301**
+>   (round 66). L→D is exact integer rounding in the requested mode (the discarded low
+>   bits ARE the remainder — no fma); L→S goes via round-to-odd so the single store
+>   rounds correctly in every mode. The L→S half was deferred in the first draft and the
+>   panel refused, each seat with its own witness class (tie-down-twice, and
+>   one-below-a-midpoint rounded onto it). Covered by the new gate 12 on the arc rig —
+>   including an FR=0 row, because every other row ran with Status.FR set and the
+>   pair-assembly path deserved a measurement, not a reading — plus 34 offline vectors
+>   with both helpers' negative controls failing exactly their five predicted rows.
+>   pmax raises Reserved Instruction on the `ldc1` (cvt.d.l is MIPS-III+), so the blast
+>   radius is R4000+ and the R3000 rig is untouched by construction.
+>   Indexed, not modelled: some real silicon (the VR4300 famously) raises Unimplemented
+>   Operation for L operands beyond 2^53 and lets the kernel softfloat complete —
+>   architecturally the same FCSR-rounded value; GXemul's no-trap depth here matches its
+>   pre-existing modelling (#246 covers denormals only).
 > - **m88k `trnc`/`int`/`nint` use raw C casts** (`(int32_t) f1.f`) — the same host-UB
 >   class #297 fixed on SH and #273 on MIPS, on a rig that boots to root. Needs the
 >   MC88100's own special-case table first, exactly as #297 needed the SH-4 manual's.

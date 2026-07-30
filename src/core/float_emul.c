@@ -836,6 +836,124 @@ double ieee_add_round_rm(double a, double b, int rm)
 }
 
 
+/*
+ *  ieee_int64_to_double_rm():
+ *
+ *  #301: a 64-bit integer converted to double under a caller-supplied
+ *  rounding mode, computed EXACTLY in integer arithmetic.
+ *
+ *  cvt.d.l could not honour FCSR before this. The conversion happened in
+ *  ieee_interpret_float_value()'s IEEE_FMT_L arm as a plain host cast --
+ *  under the host's nearest mode -- and the D-format store is a pure
+ *  re-encode, so by the time the requested mode was available the bits
+ *  were already gone. Measured on the arc rig before the fix: 2^53+1
+ *  under toward-+Inf gave 0x4340000000000000 where it owes ...001, and
+ *  2^54+7 under toward-zero gave ...002 where it owes ...001.
+ *
+ *  No fma and no residual here -- unlike #300 this is an integer problem,
+ *  and the discarded low bits ARE the remainder. Everything with 53 or
+ *  fewer significant bits is exact and returns unrounded; above that,
+ *  the guard and sticky information is simply the shifted-out tail.
+ *
+ *  INT64_MIN is handled first because negating it overflows; it is
+ *  -2^63, a power of two, so it is exactly representable and never
+ *  needs rounding at all.
+ *
+ *  This is the L->D half; its function body follows the sibling below.
+ *  The L->S half is ieee_int64_to_double_odd() -- the first draft
+ *  deferred it, and the panel refused the deferral with two independent
+ *  witnesses, so both halves shipped in the same round.
+ */
+/*
+ *  ieee_int64_to_double_odd():
+ *
+ *  #301: the L->S half. cvt.s.l cannot be fixed the way cvt.d.l was --
+ *  rounding the integer to double in the REQUESTED mode and then
+ *  rounding that double to single in the same mode double-rounds (the
+ *  panel's witness: 2^54 + 2^30 + 2 under nearest ties DOWN twice,
+ *  landing at 2^54 where direct rounding owes 2^54 + 2^31). Instead the
+ *  integer is rounded to double under ROUND-TO-ODD -- truncate to 53
+ *  bits and, if inexact, force the quotient's last bit odd -- and the
+ *  ordinary single-precision store then rounds correctly in ANY mode:
+ *  Boldo-Melquiond, 53 >= 2*24 + 2, the same theorem #299 rests on.
+ *  No carry is possible here: only an EVEN quotient is ever bumped, and
+ *  an even value one below the significand limit bumps to an odd one
+ *  still inside it.
+ */
+double ieee_int64_to_double_odd(int64_t v)
+{
+	uint64_t mag, q;
+	int negative = (v < 0), shift, n;
+
+	if (v == INT64_MIN)
+		return -9223372036854775808.0;	/*  -2^63, exact  */
+	mag = negative ? (uint64_t)(-v) : (uint64_t)v;
+
+	n = 0;
+	while ((mag >> n) != 0)
+		n++;
+	if (n <= 53)
+		return negative ? -(double)mag : (double)mag;
+
+	shift = n - 53;
+	q = mag >> shift;
+	if ((mag & (((uint64_t)1 << shift) - 1)) != 0)
+		q |= 1;			/*  round to odd  */
+
+	return negative ? -ldexp((double)q, shift) : ldexp((double)q, shift);
+}
+
+
+double ieee_int64_to_double_rm(int64_t v, int rm)
+{
+	uint64_t mag, q, rem, half;
+	int negative = (v < 0), shift, n;
+
+	if (v == INT64_MIN)
+		return -9223372036854775808.0;	/*  -2^63, exact  */
+	mag = negative ? (uint64_t)(-v) : (uint64_t)v;
+
+	/*  number of significant bits  */
+	n = 0;
+	while ((mag >> n) != 0)
+		n++;
+	if (n <= 53)
+		return negative ? -(double)mag : (double)mag;
+
+	shift = n - 53;
+	q = mag >> shift;
+	rem = mag & (((uint64_t)1 << shift) - 1);
+	half = (uint64_t)1 << (shift - 1);
+
+	if (rem != 0) {
+		switch (rm) {
+		case IEEE_RM_RZ:
+			break;
+		case IEEE_RM_RP:
+			if (!negative)
+				q++;
+			break;
+		case IEEE_RM_RM:
+			if (negative)
+				q++;
+			break;
+		default:		/*  RN -- and LEGACY, which for THIS
+					    conversion means nearest: the legacy
+					    behaviour was the host cast. The
+					    store's LEGACY truncates; one
+					    constant, two legacies (see the
+					    header note).  */
+			if (rem > half || (rem == half && (q & 1)))
+				q++;
+			break;
+		}
+	}
+
+	/*  q can carry to 2^53, which is still exactly representable.  */
+	return negative ? -ldexp((double)q, shift) : ldexp((double)q, shift);
+}
+
+
 double ieee_sum_round_to_odd(double a, double b, int rm)
 {
 	double s = a + b;

@@ -1327,7 +1327,28 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		    float_value[0].nan, rm);
 		break;
 	case FPU_OP_CVT:
-		nf = float_value[0].f;
+		/*  #301: the L-source conversions must round per FCSR. The
+		    interpret step above already cast the 64-bit integer to a
+		    host double under the HOST's nearest mode, so both arms
+		    redo the conversion from the raw source register. L->D is
+		    exact integer rounding in the requested mode (the D store
+		    is a pure re-encode). L->S goes via ROUND-TO-ODD -- the
+		    first draft deferred it and the panel refused, each seat
+		    with its own witness -- so the single store below rounds
+		    correctly in any mode. cvt.d.s and cvt.d.w are exact
+		    conversions with nothing to round and stay unwired.  */
+		if (fmt == COP1_FMT_L && output_fmt == COP1_FMT_D)
+			nf = ieee_int64_to_double_rm((int64_t)fs_v, rm);
+		else if (fmt == COP1_FMT_L && output_fmt == COP1_FMT_S)
+			/*  #301: cvt.s.l via round-to-odd -- rounding the int
+			    to double in the requested mode and then to single
+			    would double-round (panel witness: 2^54+2^30+2
+			    under nearest ties down twice). The odd-rounded
+			    double lets the S store below round correctly in
+			    any mode.  */
+			nf = ieee_int64_to_double_odd((int64_t)fs_v);
+		else
+			nf = float_value[0].f;
 		/*  debug("  mov: %f => %f\n", float_value[0].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan, rm);

@@ -2761,6 +2761,152 @@ fix it had independently derived, ran the full 25-site census clean (finding m88
 `fdiv.dds` undecoded — a pre-existing gap on a legal encoding, indexed), and proved the
 five gate-2 D rows it added all fail on the pre-guard build.
 
+## Sixty-sixth round (#301) — cvt.d.l converted the integer before the rounding mode existed
+
+One helper in `core/float_emul.c`, one wired site in `cpus/cpu_mips_coproc.c`, and a new
+gate. First item of the post-queue backlog, flagged by a #300 panel seat with the witness
+already recorded.
+
+### The defect, and where it hid
+
+`cvt.d.l` converts a 64-bit integer to a double. The conversion happened inside
+`ieee_interpret_float_value()`'s L arm as a plain host cast — under the *host's* nearest
+mode — before `fpu_op`'s CVT case ever saw the FCSR mode, and the D store is a pure
+re-encode with nothing left to round. So for integers with more than 53 significant bits
+the guest's rounding mode was never consulted. Reproduced on the arc rig with the guest
+setting FCSR itself via `ctc1`:
+
+```
+2^53+1       toward +Inf   measured 4340000000000000    owes ...001
+2^54+7       toward zero   measured 4350000000000002    owes ...001
+-(2^54+7)    toward zero   measured c350000000000002    owes ...001
+nearest rows and the small-integer control: correct
+```
+
+The scope fact that shapes everything else: **pmax raises Reserved Instruction on the
+`ldc1`** — `cvt.d.l` is MIPS-III+, so the defect and its gate are arc-only, and the
+R3000 rig is untouched by construction.
+
+### An integer problem, solved in integers
+
+Unlike #300 there is no fma and no residual lemma here: the discarded low bits of the
+integer *are* the remainder, exactly. The helper counts significant bits; 53 or fewer is
+exact and returns unrounded; otherwise it splits the magnitude into a 53-bit quotient and
+a tail, and the mode decides on the tail — toward-zero keeps the quotient, the directed
+modes bump it on their side, nearest compares the tail against half with ties-to-even.
+The one carry (a bumped quotient reaching 2^53) is exactly representable, and INT64_MIN
+is handled first because negating it overflows — it is −2^63, a power of two, exact.
+
+The fix is wired at the MIPS CVT case only, from the raw source register: the shared
+interpret arm is deliberately untouched, both because it feeds five CPU families and
+because the queued subnormal-decode round owns that ground. `cvt.d.s` and `cvt.d.w` are
+exact conversions and stay unwired. `cvt.s.l` — the L→S half — was deferred in the first
+draft, and the panel overturned that; its section is below.
+
+### The probe took four attempts, and the control row is why that was survivable
+
+The first probe reported the defect REPRODUCED while measuring nothing at all — six
+sentinel reads from guest code that had never run. Three real bugs, found one per run:
+the rig is little-endian and the operand was laid out big-endian; the COP1 `fd` field is
+bits 10:6, so the first encoding overwrote its own operand (`cvt.d.l r0,r0` — the
+disassembler said so); and dropping one function bit turned the instruction into `sub.l`,
+which computed x−x and stored the zero being read back. The row that caught every one of
+them was the small-integer control: a probe whose control fails has measured nothing, and
+no other row may be believed. That rule is now enforced in the gate itself — a dead
+probe is a hard failure, never a quiet pass or a false REPRODUCED.
+
+And the discipline cut the other way too: one offline vector failed against the *correct*
+code, because the table had labelled 2^54+1 and 2^54+3 as ties. They are not — their
+remainders are 1 and 3 of 4 — and the genuine ties (2^54+2 and 2^54+6, remainder exactly
+half, opposite parities landing on opposite sides) replaced them. Absolute-answer tables
+check the code and the table checks back.
+
+### Verification
+
+- **Gate 2**: 22 absolute-answer vectors — exacts, the first-decision integer in all
+  four modes, negatives (where toward-±Inf swap roles), multi-bit tails, genuine ties of
+  both parities, the carry row, INT64_MIN/MAX, zero. 0 failures.
+- **Gate 12** (new): ten rows on the arc rig through the real decode path, guest-set
+  FCSR, 10/10 — including the `cvt.s.l` witness — with the control row asserted by name
+  so the wiring can never revert while the pure helper stays green (the helper-vs-wiring
+  hole a #299 seat named).
+- **Negative control**: the helper neutered to the old host cast fails **exactly the
+  five predicted rows** — the directed rows whose answer differs from nearest, including
+  INT64_MAX under toward-zero, where the cast rounds 2^63−1 up to 2^63 — and nothing
+  else.
+
+### The panel refused the deferral, and was right to
+
+The brief deferred `cvt.s.l` — the L→S half — as "would double-round through the host
+double, left for its own round." Two seats independently rejected that: `cvt.s.l` is
+*decoded*, so a guest executing a legal instruction was getting wrong answers today, and
+each seat brought its own witness class. One: `2^54 + 2^30 + 2` under nearest ties DOWN
+twice — once at the double, once at the single — landing at `5a800000` where direct
+rounding of the integer owes `5a800001`. The other: `0x400000bfffffffff` sits one *below*
+a binary32 midpoint, the host double rounds it ONTO the midpoint, and ties-to-even then
+picks the wrong upper neighbour. Both reproduced on the arc rig against the committed
+build, control green, before any fix.
+
+The repair is #299's own theorem pointed at an integer: `ieee_int64_to_double_odd()`
+truncates the integer to 53 bits and, if inexact, forces the quotient's last bit odd —
+round-to-odd can never land on a midpoint, so the ordinary single-precision store then
+rounds correctly in every mode (53 ≥ 2·24 + 2). No carry is possible: only an even
+quotient is ever bumped. Verified: 12 offline L→S vectors including both witness classes
+and the INT64 extremes, 0 failures; the rig's `SL dbltie` row green through real guest
+code; and the odd helper neutered to the host cast fails exactly the five predicted rows
+— the two nearest-mode witnesses, the directed 2^53+1, the negative mirror, and
+INT64_MAX under toward-zero — while every L→D vector stays green, because the two
+helpers are separate by design.
+
+### What the rest of the panel proved, and the paper-trail lesson — again
+
+The two verification seats went further than the brief asked. One re-derived the entire
+vector table by hand *and* by two independent oracles, swept the helper against an exact
+oracle over eight million inputs at zero mismatches, hand-verified every probe encoding,
+and confirmed the no-interaction claims (NaN plumbing, the #246 subnormal trap, #294's
+store-side W/L rounding — `cvt.l.d` enters with fmt D and matches neither new arm). The
+other built a **host-FPU oracle** — `fesetround` plus the hardware's own convert-from-int,
+guarded against the rounds-57 fenv/CSE trap with volatiles and `-frounding-math` — and
+differentialled both shipped paths against it over twenty million samples: zero
+mismatches; then ran two mutants of its own (an RP-sign flip killed by exactly the
+negative-operand vector the #298 lesson mandated, and an odd-force deletion killed by
+three SL vectors, proving the sticky bit is load-bearing), re-ran gate 12 on the rig
+itself, and audited gate 12 for checks that cannot fail — finding none, and correctly
+classifying the one row-count check as a row-deletion tripwire rather than a behaviour
+check.
+
+The same seat blocked the commit over two comments — rightly. Both deferral comments,
+written when `cvt.s.l` was still deferred, survived above the very arm that un-deferred
+it: the file said "left to its own round" three lines above the wired code. The #270
+honesty bar applies to comments exactly because they are the durable artifact; both are
+rewritten, along with a vector comment that claimed a 4/4 rig instrument the repository
+does not carry (the gate carries one rig row; the directed-mode behaviour is pinned
+offline through the #292-validated store, and the comment now says precisely that).
+
+And for the second round running, the panel's paper trail drifted: the review diff was
+cut before the `cvt.s.l` half existed, so seats certified against a moving target and
+said so. The remedy is the same as round 65's — the final state is what the gates,
+mutants, and this block describe, and the commit is the artifact of record.
+
+Two indexed notes from the seats, neither a defect in this round: some real silicon
+(the VR4300 famously) raises Unimplemented Operation for L operands beyond 2^53 and lets
+the kernel softfloat complete — architecturally the same FCSR-rounded value, and
+GXemul's no-trap depth here matches its pre-existing modelling; and the helper's
+`default:` arm folds LEGACY into nearest, which IS this conversion's legacy behaviour
+(the host cast was nearest) — stated in the code now, so a future caller expecting
+truncation from that constant reads the truth before relying on it.
+
+One seat's closing added two demands that both landed. The FR=0 gap: every rig row ran
+with Status.FR set, so the 32-bit-FPU pair-assembly that feeds the helper had no
+end-to-end measurement — it rested on reading the code, "and this project's history is
+precisely about reading versus measuring." Gate 12 now carries an FR=0 row — the same
+witness with FR clear — measured green. And the LEGACY semantics clash: the header
+defines LEGACY as truncate for the store entry points, while the int64 helpers fold it
+to nearest, which *is* this conversion's legacy behaviour (the host cast rounded
+nearest). One constant, two legacies; the clash is harmless only while no caller passes
+it, which nothing enforces — so it is now stated outright at both sites, where the next
+caller would look.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.
