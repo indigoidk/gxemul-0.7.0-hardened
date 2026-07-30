@@ -166,6 +166,7 @@ Oldest first.
 | `51899d7` | Round 64 (#299): the single-precision sum was rounded twice — round-to-odd fixes all three families |
 | `e644a30` | Round 65 (#300): D-format directed rounding via fma residuals — three panel passes, quantum bands |
 | `4453ff2` | Round 66 (#301): cvt.d.l/cvt.s.l converted the integer before the rounding mode existed; gate 12 |
+| `96b86a9` | Round 67 (#302): the m88k float→int triad — trnc cast raw, int/nint halted the emulator |
 
 ## Feature highlights
 
