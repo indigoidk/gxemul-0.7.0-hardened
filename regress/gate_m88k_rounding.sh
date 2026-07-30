@@ -52,10 +52,9 @@ grep -E " ok$| FAIL" "$LOG" | sed 's/^/       /'
 res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 
-# 24 = 20 behaviour rows + the residue-band row (#298's PIN, flipped by #299's
-# round-to-odd exactly as its comment required) + #299's two exact-zero sign rows +
-# fcr63 retention.
-check "rows run"       "$want" 24
+# 25 = 21 behaviour rows + #298's flipped residue-band row + #299's two exact-zero
+# sign rows and Inf row + #300's fdiv.ddd directed row + fcr63 retention.
+check "rows run"       "$want" 25
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -70,7 +69,7 @@ done
 # four are #299's: the flipped band row, the exact-zero sign pair, and the Inf
 # pass-through witness on the double-operand sds arm.
 for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-pos RN tie" \
-         "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf"; do
+         "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf" "fdiv.ddd 1/10 RZ"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
 done

@@ -101,17 +101,17 @@ VECTORS = [
      instr(0xf012, 0),                       # fmul fr1,fr0
      {RN: 0x7f800000, RZ: 0x7f7fffff}),
 
-    # ---- PIN: double precision is mode-INDEPENDENT and must stay that way -----------
-    #  The D format IS a host double, so the store is a pure re-encode with no narrowing
-    #  for a mode to control; the rounding already happened in host arithmetic. This pin
-    #  fails if someone "fixes" D by wiring the store, which would be a no-op, or breaks
-    #  it by routing D through a rounding path it must not enter.
-    #  1.0/10.0 low word: nearest 0x9999999a, and toward-zero WOULD be 0x99999999.
-    ("PIN double 1.0/10.0 low", PR,
+    # ---- D-format directed rounding, FIXED by #300 and now discriminating -----------
+    #  This row was a PIN from #296 to #299: the D store is a pure re-encode, so wiring
+    #  the STORE could never fix it, and both modes measured the host-nearest 9a. #300
+    #  corrects the ARITHMETIC instead -- one fma residual recovers which neighbour the
+    #  host's nearest result landed on -- so toward-zero now yields the true 99. The pin
+    #  flipped exactly as its own comment required, by the only mechanism that could.
+    ("Ddiv 1.0/10.0 low", PR,
      {"fr0": 0x3ff00000, "fr1": 0x00000000,
       "fr2": 0x40240000, "fr3": 0x00000000},
      instr(0xf023, 1),                       # fdiv dr2,dr0 ; store fr1 = low half
-     {RN: 0x9999999a, RZ: 0x9999999a}),
+     {RN: 0x9999999a, RZ: 0x99999999}),
 
     # ---- the double-rounding band, FIXED by #299 and now discriminating -------------
     #  This row was a PIN from #296 to #298: the sum collapsed in host double before the

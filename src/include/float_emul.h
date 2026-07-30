@@ -71,4 +71,17 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
     an exact zero under toward-minus-infinity.  */
 double ieee_sum_round_to_odd(double a, double b, int rm);
 
+/*  #300: DOUBLE-format arithmetic under a directed rounding mode. The D
+    store is a pure re-encode, so the mode is honoured by correcting the
+    arithmetic: one fma residual (or 2Sum) recovers which neighbour the
+    host's nearest-mode result landed on. RN and LEGACY return the plain
+    host result; non-finite operands and results pass through untouched;
+    the |result| < 2^-900 band deliberately accepts the nearest answer
+    (residual lemmas are proven for normals only) and is pinned in the
+    offline gate.  */
+double ieee_add_round_rm(double a, double b, int rm);
+double ieee_mul_round_rm(double a, double b, int rm);
+double ieee_div_round_rm(double a, double b, int rm);
+double ieee_sqrt_round_rm(double a, int rm);
+
 #endif	/*  FLOAT_EMUL_H  */

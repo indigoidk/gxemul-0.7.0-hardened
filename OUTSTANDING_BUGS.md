@@ -19,7 +19,15 @@
 >   against §6.5.
 >
 > **Real, but needs infrastructure or a rig that does not exist yet**
-> - **SH double-precision arithmetic ignores `FPSCR.RM`** — exposed while resolving #296
+> - ✅ **D-format arithmetic ignores the rounding mode → RESOLVED as #300** (round 65),
+>   for SH, MIPS and m88k alike: four fma-residual helpers correct the host's nearest
+>   result, with quantum-derived accepted-nearest bands (operand below 2^-969 for
+>   div/sqrt, product for mul), an overflow clamp by mode-and-sign, exact div-by-zero,
+>   a 2Sum overflow-tie exclusion, and zero-crossing directed steps. Three panel passes
+>   rejected three designs before this one; 34 offline vectors plus rig rows on both
+>   machines pin it. Remaining known gaps: cvt.d.l (indexed above) and the accepted
+>   bands themselves (pinned).
+> - ~~superseded by the entry above; original record follows~~ **SH double-precision arithmetic ignores `FPSCR.RM`** — exposed while resolving #296
 >   and deliberately not patched. It cannot be fixed where the single-precision defect was:
 >   the D format *is* a host double, so the store is a pure re-encode with no narrowing for
 >   a mode to control, and the rounding already happened in the host's own arithmetic.
@@ -98,10 +106,19 @@
 >   an interpreted subnormal would see it. Pre-existing, all five CPU families.
 > - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
 >   encoding; pre-existing dispatch behaviour, untouched by #297).
+> - **m88k  is undecoded** (a #300 panel census find): size code 0x11 on the
+>   fdiv dispatch goes to "Unimplemented"/goto bad -- a legal MC88100 encoding with no
+>   handler, pre-existing, same family as the next entry.
 > - **m88k mixed-format S-destination arithmetic is undecoded** (a #298 panel seat's
 >   find): the ISA defines e.g. `fadd.ssd` (single = single + double, size code 0x04),
 >   and the decoder rejects it — a pre-existing instruction-coverage gap, not a store
 >   site #298 missed. Same family as the already-listed `flt.ds` odd-register TODO.
+> - **MIPS `cvt.d.l` ignores the rounding mode** (a #300 panel seat's find, indexed as
+>   outside that round's five arithmetic ops): a 64-bit integer with more than 53
+>   significant bits converts to double under host nearest before the store's mode can
+>   matter — `2^53+1` under toward-+Inf owes `0x4340000000000001`, gets `...000`. The
+>   residual is computable exactly in integer arithmetic; needs its own round.
+>   (`cvt.d.s` and `cvt.d.w` are exact conversions — no defect.)
 > - **m88k `trnc`/`int`/`nint` conversions use raw C casts** (`(int32_t) f1.f` in
 >   `cpu_m88k_instr.c`) — the same host-UB class #297 fixed on SH and #273 on MIPS.
 >   Needs the MC88100's own special-case table before patching; queued behind the

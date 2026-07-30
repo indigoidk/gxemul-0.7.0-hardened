@@ -689,6 +689,159 @@ int main(void)
 		rm_vec_bad += bad299;
 	}
 
+	/*  #300: D-format directed arithmetic. Expected values derived from
+	    exact rational oracles by the offline constructor
+	    (mk_300_vectors.py), whose model sweep -- 255000 cross-checks --
+	    caught the negative-product overshoot sign flip before any C
+	    existed. The first mul row here IS that caught case.  */
+	{
+		static const struct {
+			const char *name;
+			int op;			/*  0 add 1 mul 2 div 3 sqrt  */
+			uint64_t a, b;
+			int rm;
+			uint64_t want;
+		} v300[] = {
+		/*  the round-61 pinned case, all four modes  */
+		{ "D div 1/10 RZ", 2, 0x3ff0000000000000ULL, 0x4024000000000000ULL,
+		  IEEE_RM_RZ, 0x3fb9999999999999ULL },
+		{ "D div 1/10 RN", 2, 0x3ff0000000000000ULL, 0x4024000000000000ULL,
+		  IEEE_RM_RN, 0x3fb999999999999aULL },
+		{ "D div -1/10 RM", 2, 0xbff0000000000000ULL, 0x4024000000000000ULL,
+		  IEEE_RM_RM, 0xbfb999999999999aULL },
+		{ "D div -1/10 RP", 2, 0xbff0000000000000ULL, 0x4024000000000000ULL,
+		  IEEE_RM_RP, 0xbfb9999999999999ULL },
+		/*  b < 0: the naive sign(r) trap  */
+		{ "D div 1/-10 RZ", 2, 0x3ff0000000000000ULL, 0xc024000000000000ULL,
+		  IEEE_RM_RZ, 0xbfb9999999999999ULL },
+		{ "D div 2/3 RP",  2, 0x4000000000000000ULL, 0x4008000000000000ULL,
+		  IEEE_RM_RP, 0x3fe5555555555556ULL },
+		/*  overflow arms  */
+		{ "D div ovf RZ",  2, 0x7fefffffffffffffULL, 0x3fe0000000000000ULL,
+		  IEEE_RM_RZ, 0x7fefffffffffffffULL },
+		{ "D div ovf RP",  2, 0x7fefffffffffffffULL, 0x3fe0000000000000ULL,
+		  IEEE_RM_RP, 0x7ff0000000000000ULL },
+		{ "D div -ovf RM", 2, 0xffefffffffffffffULL, 0x3fe0000000000000ULL,
+		  IEEE_RM_RM, 0xfff0000000000000ULL },
+		{ "D div -ovf RZ", 2, 0xffefffffffffffffULL, 0x3fe0000000000000ULL,
+		  IEEE_RM_RZ, 0xffefffffffffffffULL },
+		/*  the caught mul case: negative product, RZ and RM  */
+		{ "D mul negp RZ", 1, 0x4035b3f999029742ULL, 0xc150061ff7ad61ffULL,
+		  IEEE_RM_RZ, 0xc195bc4873451cc1ULL },
+		{ "D mul negp RM", 1, 0x4035b3f999029742ULL, 0xc150061ff7ad61ffULL,
+		  IEEE_RM_RM, 0xc195bc4873451cc2ULL },
+		/*  add band and exact-zero  */
+		{ "D add 1+2^-80 RP", 0, 0x3ff0000000000000ULL, 0x3af0000000000000ULL,
+		  IEEE_RM_RP, 0x3ff0000000000001ULL },
+		{ "D add 1-1 RM",  0, 0x3ff0000000000000ULL, 0xbff0000000000000ULL,
+		  IEEE_RM_RM, 0x8000000000000000ULL },
+		{ "D add 1-1 RN",  0, 0x3ff0000000000000ULL, 0xbff0000000000000ULL,
+		  IEEE_RM_RN, 0x0000000000000000ULL },
+		/*  sqrt  */
+		{ "D sqrt2 RZ",    3, 0x4000000000000000ULL, 0,
+		  IEEE_RM_RZ, 0x3ff6a09e667f3bccULL },
+		{ "D sqrt2 RP",    3, 0x4000000000000000ULL, 0,
+		  IEEE_RM_RP, 0x3ff6a09e667f3bcdULL },
+		/*  Inf/NaN pass-through (the #299 lesson, structural here)  */
+		{ "D div Inf/2 RZ", 2, 0x7ff0000000000000ULL, 0x4000000000000000ULL,
+		  IEEE_RM_RZ, 0x7ff0000000000000ULL },
+		{ "D add +Inf+1 RZ", 0, 0x7ff0000000000000ULL, 0x3ff0000000000000ULL,
+		  IEEE_RM_RZ, 0x7ff0000000000000ULL },
+		/*  #300 panel: subnormal-OPERAND residual underflow. A seat
+		    traced both witnesses: the residual lives at the operand's
+		    scale, underflows below 2^-1074, and the unguarded helper
+		    mistook that for exactness. These rows PIN the documented
+		    accepted-nearest band (the operand guard at 2^-1018); the
+		    boundary control just above the guard proves correction
+		    still applies there. True directed answers inside the band
+		    (e.g. the div witness owes ...556 under toward-+Inf) are
+		    deliberately NOT delivered -- that is the band's honest
+		    width, stated rather than hidden.  */
+		{ "D div subn-a band RP", 2, 0x0000000000000001ULL,
+		  0x0018000000000000ULL, IEEE_RM_RP, 0x3ca5555555555555ULL },
+		{ "D sqrt subn-a band RP", 3, 0x0000000000000003ULL, 0,
+		  IEEE_RM_RP, 0x1e6bb67ae8584caaULL },
+		{ "D div boundary ctrl RP", 2, 0x03f0000000000000ULL,
+		  0x03a8000000000000ULL, IEEE_RM_RP, 0x4035555555555556ULL },
+		/*  #299/#300 shared class, measured then pinned: sub as
+		    a + (-b) negates a NaN subtrahend, and the D store's
+		    canonical NaN carries the sign -- all-ones, mirroring the
+		    #299 single-precision pin.  */
+		{ "D sub-NaN sign pin", 0, 0x3ff0000000000000ULL,
+		  0xfff8000000000000ULL, IEEE_RM_RN, 0xfff8000000000000ULL },
+		/*  #300 panel round two: a seat showed the RESULT-magnitude
+		    band (2^-900) covered 122 normal binades where the
+		    correction was silently absent, and that divide-by-zero's
+		    EXACT infinity was falling into the overflow clamp. The
+		    band is now on the residual-scale OPERAND instead, so this
+		    row -- the seat's own witness -- is CORRECTED, not
+		    band-accepted; the div-by-zero rows pin the exactness; and
+		    the zero-crossing rows prove the directed step works on
+		    the sign-magnitude pattern down to and across zero.  */
+		{ "D div 2^-900/10 RZ", 2, 0x07b0000000000000ULL,
+		  0x4024000000000000ULL, IEEE_RM_RZ, 0x0779999999999999ULL },
+		{ "D div 1/+0 RZ",   2, 0x3ff0000000000000ULL,
+		  0x0000000000000000ULL, IEEE_RM_RZ, 0x7ff0000000000000ULL },
+		{ "D div -1/+0 RM",  2, 0xbff0000000000000ULL,
+		  0x0000000000000000ULL, IEEE_RM_RM, 0xfff0000000000000ULL },
+		{ "D div +tiny/huge RP", 2, 0x03f0000000000000ULL,
+		  0x7fd0000000000000ULL, IEEE_RM_RP, 0x0000000000000001ULL },
+		{ "D div -tiny/huge RP", 2, 0x83f0000000000000ULL,
+		  0x7fd0000000000000ULL, IEEE_RM_RP, 0x8000000000000000ULL },
+		{ "D div -tiny/huge RM", 2, 0x83f0000000000000ULL,
+		  0x7fd0000000000000ULL, IEEE_RM_RM, 0x8000000000000001ULL },
+		/*  #300 panel round three: the band bound must come from the
+		    residual's QUANTUM (multiple of 2^(eq+eb-104)), not its
+		    typical magnitude -- a seat CONSTRUCTED all-normal
+		    witnesses in the 48 binades my 2^-1018 bound left open,
+		    with significands chosen so the residual is a lone bit
+		    beneath the subnormal quantum. Random sweeps cannot hit
+		    that tail (P ~ 2^-51 per draw), which is how 264000 sweep
+		    checks stayed green over the hole: these CONSTRUCTED rows
+		    are the only defence. Band rows pin accepted-nearest at
+		    the honest values; the 2^-960 controls prove the
+		    corrected side. The 2Sum overflow-tie family (finite s,
+		    infinite intermediate) anti-corrected under toward-minus
+		    -Inf before its guard existed.  */
+		{ "D div quantum band RZ", 2, 0x0170000000000002ULL,
+		  0x39b0000000000001ULL, IEEE_RM_RZ, 0x07b0000000000001ULL },
+		{ "D sqrt quantum band RZ", 3, 0x0330000000000002ULL, 0,
+		  IEEE_RM_RZ, 0x2190000000000001ULL },
+		{ "D mul quantum band RP", 1, 0x20b0000000000001ULL,
+		  0x20b0000000000001ULL, IEEE_RM_RP, 0x0170000000000002ULL },
+		{ "D add ovf-tie RM",  0, 0x7ca8000000000000ULL,
+		  0xffefffffffffffffULL, IEEE_RM_RM, 0xffeffffffffffffeULL },
+		{ "D add ovf-tie RZ",  0, 0x7ca8000000000000ULL,
+		  0xffefffffffffffffULL, IEEE_RM_RZ, 0xffeffffffffffffeULL },
+		};
+		int i, bad300 = 0;
+		int n300 = (int)(sizeof(v300) / sizeof(v300[0]));
+
+		for (i = 0; i < n300; i++) {
+			double a, b, got;
+			uint64_t gotbits;
+			memcpy(&a, &v300[i].a, sizeof(a));
+			memcpy(&b, &v300[i].b, sizeof(b));
+			switch (v300[i].op) {
+			case 0: got = ieee_add_round_rm(a, b, v300[i].rm); break;
+			case 1: got = ieee_mul_round_rm(a, b, v300[i].rm); break;
+			case 2: got = ieee_div_round_rm(a, b, v300[i].rm); break;
+			default: got = ieee_sqrt_round_rm(a, v300[i].rm); break;
+			}
+			memcpy(&gotbits, &got, sizeof(gotbits));
+			if (gotbits != v300[i].want) {
+				bad300++;
+				printf("  #300 VECTOR WRONG (%s): got %016llx want %016llx\n",
+				    v300[i].name,
+				    (unsigned long long) gotbits,
+				    (unsigned long long) v300[i].want);
+			}
+		}
+		printf("dir: #300 vector failures     : %d (of %d)\n",
+		    bad300, n300);
+		rm_vec_bad += bad300;
+	}
+
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
 	    inrange_diff == 0 && dD == 0 && dS > 0 &&
 	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&

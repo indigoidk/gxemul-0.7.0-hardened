@@ -58,19 +58,19 @@ disc=$(grep -o "SH_ROUND_DISCRIMINATING=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 # tie-band witness).
 check     "vector-mode pairs run"                  "$want" 34
 check     "vector-mode pairs correct"              "$got"  "$want"
-# EXACTLY 8 of the 17 vectors discriminate between the two modes: the 7 from #296 plus
-# the #299-fixed fsub band row (a PIN until round-to-odd landed; its flip was the fix's
-# acceptance test). If this number drops, someone weakened the table; if it RISES,
+# EXACTLY 9 of the 17 vectors discriminate between the two modes: the 7 from #296 plus
+# the #299-fixed fsub band row and the #300-fixed D-division row (each a PIN until its
+# fix landed; each flip was that fix's acceptance test). If this number drops, someone weakened the table; if it RISES,
 # someone made a mode-independent row (an ftrc row, or the fmac tie whose two modes
 # genuinely agree) depend on FPSCR.RM, which is drift in the other direction.
-check     "vectors that discriminate the two modes" "$disc" 8
+check     "vectors that discriminate the two modes" "$disc" 9
 
 # Per-instruction closure: naming them individually means a single site silently reverting
 # cannot hide behind an aggregate count. The ftrc rows are #297's regression checks; the
 # "fsub band" and "fmactie" rows are #299's (the pre-#299 build fails the band's RZ arm
 # and the tie's RN arm).
 for v in "fdiv" "float" "fadd " "fmac " "fmactie" "fipr" "ftrv" "fmul" \
-         "fsub band" "faddinf" "ftrcS-inf" "ftrcS-ovf" "ftrcS-nan" "ftrcS-edge" \
+         "fsub band" "faddinf" "Ddiv" "ftrcS-inf" "ftrcS-ovf" "ftrcS-nan" "ftrcS-edge" \
          "ftrcD-2p31" "ftrcD-neghalf"; do
     n=$(grep -c "^$v.*ok$" "$LOG")
     check "  $v: both modes correct" "$n" 2

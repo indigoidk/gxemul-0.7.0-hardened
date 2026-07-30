@@ -1245,6 +1245,10 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		if (fmt == COP1_FMT_S && output_fmt == COP1_FMT_S)
 			nf = ieee_sum_round_to_odd(float_value[0].f,
 			    float_value[1].f, rm);
+		else if (fmt == COP1_FMT_D && output_fmt == COP1_FMT_D)
+			/*  #300: D arithmetic under the effective mode  */
+			nf = ieee_add_round_rm(float_value[0].f,
+			    float_value[1].f, rm);
 		else
 			nf = float_value[0].f + float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
@@ -1255,13 +1259,25 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		if (fmt == COP1_FMT_S && output_fmt == COP1_FMT_S)
 			nf = ieee_sum_round_to_odd(float_value[0].f,
 			    -float_value[1].f, rm);
+		else if (fmt == COP1_FMT_D && output_fmt == COP1_FMT_D)
+			/*  #300: as a + (-b), matching the #299 single arms  */
+			nf = ieee_add_round_rm(float_value[0].f,
+			    -float_value[1].f, rm);
 		else
 			nf = float_value[0].f - float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_MUL:
-		nf = float_value[0].f * float_value[1].f;
+		/*  #300: D results honour the mode via the exact-product
+		    residual; S and everything else keep the plain path (the
+		    single mul is already correct in all modes -- the product
+		    of two singles is exact in double).  */
+		if (fmt == COP1_FMT_D && output_fmt == COP1_FMT_D)
+			nf = ieee_mul_round_rm(float_value[0].f,
+			    float_value[1].f, rm);
+		else
+			nf = float_value[0].f * float_value[1].f;
 		/*  debug("  mul: %f * %f = %f\n",
 		    float_value[0].f, float_value[1].f, nf);  */
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
@@ -1277,7 +1293,12 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		    host FP exceptions, so plain division is safe. A denormal
 		    operand already trapped above (#246, EXC4K+); FCSR Z/V
 		    cause/flag bits remain a documented TODO.  */
-		nf = float_value[0].f / float_value[1].f;
+		if (fmt == COP1_FMT_D && output_fmt == COP1_FMT_D)
+			/*  #300: Markstein-residual directed rounding  */
+			nf = ieee_div_round_rm(float_value[0].f,
+			    float_value[1].f, rm);
+		else
+			nf = float_value[0].f / float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan, rm);
 		break;
@@ -1285,7 +1306,11 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 		/*  #254: sqrt of a negative is a quiet NaN, not fatal()+0.0.
 		    Host sqrt() gives NaN for negatives, -0.0 for -0.0 and
 		    +Inf for +Inf -- exactly as the R3010/R4010 do.  */
-		nf = sqrt(float_value[0].f);
+		if (fmt == COP1_FMT_D && output_fmt == COP1_FMT_D)
+			/*  #300  */
+			nf = ieee_sqrt_round_rm(float_value[0].f, rm);
+		else
+			nf = sqrt(float_value[0].f);
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan, rm);
 		break;

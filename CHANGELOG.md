@@ -2630,6 +2630,137 @@ whose first operand is already 53-bit — changes organically; on SH the band is
 because toward-zero is the hardware reset mode; on MIPS the correction is latent until a
 guest programs a directed mode.
 
+## Sixty-fifth round (#300) — the D-format store has nothing to round, so the arithmetic learned to
+
+Four helpers in `core/float_emul.c`, routed from twenty-five call sites across the same
+three CPU families as #299: SH's five D arms, MIPS's five D operations in `fpu_op`, and
+fifteen m88k D-destination arms. Fourth item of the feasibility queue, and the one whose
+half-fix versions the panel pre-refused.
+
+### Why the store could never fix this
+
+A host double already has exactly the 52 fraction bits the D format wants, so
+`ieee_store_float_value` on a D result is a pure re-encode — gate 10 carried that fact
+as a PIN since round 61, with `1.0/10.0` under toward-zero measuring low word `…9a`
+(the host's nearest answer) where silicon owes `…99`. The only place a rounding mode can
+be honoured is the arithmetic itself, and the host's arithmetic runs under nearest.
+
+The mechanism: take the host's nearest result, then recover — exactly — which side of
+the true value it landed on. One fma does it per operation: `r = fma(q, b, −a)` is the
+exact division residual (the Markstein lemma), `r = fma(q, q, −a)` the square root's,
+`r = fma(a, b, −p)` the exact product error, and Knuth's 2Sum covers add and subtract.
+If the residual says the nearest result sits on the wrong side for the requested
+direction, step one ulp on the sign-magnitude bit pattern. Under nearest (and LEGACY)
+the helpers return the plain host result, so nearest-mode guests — which is every stock
+boot on all three rigs — are bit-identical by construction.
+
+### The model sweep caught the predicted bug before any C existed
+
+The feasibility panel's review of the *design sketch* had already refuted two formulas
+and predicted a third failure mode: "the residual sign convention is self-inconsistent
+across ops — an offline differential with per-op sign truth tables is a hard
+requirement." So this round's first artifact was not code but a Python model of the
+whole mechanism, checked against exact rational oracles: 80 000 division, 160 000
+multiply/add, and 15 000 square-root property checks, plus named rows for every overflow
+arm.
+
+The sweep's first run failed 30 114 of 160 000 — the multiply overshoot test read
+`r < 0` unconditionally, which is correct for positive products and *exactly backwards*
+for negative ones. The division form never had the bug because it tests against
+`sign(a)`. One line, invisible to every positive-operand test, precisely the flip the
+panel named. Fixed in the model, swept to zero, and only then transliterated to C — the
+19 offline gate vectors include the caught case as a permanent pin, and the C passed all
+of them on its first run.
+
+### The mandatory edges, all present
+
+- **Overflow**: when the nearest result is ±Inf from finite operands, the fma residual
+  would be NaN. `ieee_dir_overflow` answers by mode and sign — toward-zero clamps to
+  ±DBL_MAX, toward+Inf keeps +Inf but clamps the negative side, toward−Inf mirrors.
+- **The accepted-nearest bands** (in their final, thrice-reviewed form — the first two
+  versions guarded the wrong quantity, and both stories are below): div and sqrt accept
+  the nearest answer when the residual-scale *operand* is below 2^-969 — the residual's
+  QUANTUM bound — mul when the *product* is, and add needs no band, only the single
+  overflow-tie exclusion. Above the bands the correction is live everywhere, subnormal
+  results included.
+- **Non-finite operands and results pass through untouched.** After #299's lesson
+  (`NaN != 0.0` is true in C), every helper checks `isfinite` first — structurally, not
+  as an afterthought.
+
+### Verification
+
+- Gate 2: 19 absolute-answer vectors from the exact constructor — the round-61 case in
+  all four modes, the `b < 0` sign trap, both overflow signs and directions, the caught
+  negative-product mul case, the add band, exact-zero signs, `sqrt(2)`, and Inf/NaN
+  pass-through. 0 failures, first run.
+- Gate 10: the D pin **flipped exactly as its own comment required** — by correcting
+  the arithmetic, the only mechanism its comment said could ever flip it — and is now
+  the ninth discriminating vector.
+- Gate 11: a new `fdiv.ddd` row proves the mode end-to-end on the m88k rig, guest
+  `fstcr` included. Its first version failed with the *nearest* answer and the failure
+  was real — in the probe: the row seeded r5 as the divisor's low word, silently
+  clobbering the register the probe stages the rounding mode in before the guest's
+  `fstcr` consumes it. The register plan is part of the vector, and the row's comment
+  now says so.
+
+### The panel's second pass redesigned the safety bands
+
+Two seats attacked the helpers' edges and both connected. One filed the
+subnormal-OPERAND witnesses with full traces: a subnormal dividend can yield a perfectly
+normal quotient whose residual lives at the *dividend's* scale — beneath the subnormal
+quantum — so the fma underflows it to zero and the helper mistakes underflow for
+exactness, silently skipping the nudge. The result-magnitude guard could never see it.
+The other seat went further on three fronts: the same class for sqrt from a barely-normal
+input; **divide-by-zero's exact, mode-independent infinity falling into the overflow
+clamp** (`1.0 / +0.0` under toward-zero returned DBL_MAX — and the seat also refuted the
+model's own note claiming SH intercepts zero divisors; it does not); and the honest
+observation that the result-magnitude band spanned **122 normal binades** in which the
+correction was silently absent and, despite the comment's claim, unpinned.
+
+The redesign, model-first as before: the bands moved to where the failure actually is —
+the residual-scale *operand* (dividend, radicand) below 2^-1018 for div and sqrt, the
+*product* below the same threshold for mul, and no band at all for add, whose 2Sum error
+is exactly representable down through gradual underflow. Above the bands the correction
+is now live everywhere, **including subnormal results**: the directed step works on the
+sign-magnitude pattern down to and across zero, so a positive-tiny quotient under
+toward-+Inf correctly yields 2^-1074 stepped from the +0 pattern — which also exposed
+that a comparison-derived sign breaks at −0, fixed with signbit. Divide-by-zero passes
+through exact. Each piece was model-validated first (a further ~9 000 subnormal-result
+oracle checks and the zero-crossing rows), then transliterated; the offline gate grew to
+28 vectors, with the 122-binade seat's own witness now a *corrected* row rather than an
+accepted band, both div-by-zero signs pinned, and the agy witnesses pinned at the honest
+band values.
+
+One further find is indexed, not patched: `cvt.d.l` — a 64-bit integer with more than 53
+significant bits — converts under host nearest before any mode can matter. Outside this
+round's five operations; recorded in OUTSTANDING_BUGS with its witness.
+
+### The third pass: the band was still wrong, and the proof needed construction
+
+The post-fix verification seat rejected the second design too, with witnesses run on the
+committed code. The 2^-1018 bound came from a typical-magnitude argument (the residual is
+about 2^-53 times the operand) — but exactness is governed by the residual's **quantum**:
+`a − q·b` is a multiple of 2^(eq+eb−104), representable only when the scale operand is at
+or above ~2^-969. In the 48 binades between the two bounds the seat *constructed*
+all-normal witnesses — significands chosen so `sq·sb ≡ 1 mod 2^51`, leaving the residual
+a lone bit beneath the subnormal quantum — for div, sqrt, **and mul**, whose hole the
+band redesign had silently re-opened (the deleted result band had been protecting it).
+Random sweeps structurally cannot find these: the tail's probability is ~2^-51 per draw,
+which is how 264 000 sweep checks and a green gate sat on top of the hole. The
+constructed rows are now named vectors, with 2^-960 boundary controls proving the
+corrected side, and the in-code comment carries the quantum derivation instead of the
+magnitude heuristic.
+
+The same seat found 2Sum's one exclusion: at the overflow-tie threshold (3·2^970 plus
+−DBL_MAX gives a *finite* tie-to-even sum while `s − a` is infinite) the error term goes
+NaN — and a NaN overshoot flag did not merely miss, under toward−Inf it stepped **away**
+from the exact value. Guarded with accept-nearest, family pinned in both directions. It
+also confirmed the D sub-arms' NaN-subtrahend sign change (the #299 class, MIPS immune)
+— measured, pinned at the store's sign-preserving canonical NaN — verified the div-zero
+fix it had independently derived, ran the full 25-site census clean (finding m88k's
+`fdiv.dds` undecoded — a pre-existing gap on a legal encoding, indexed), and proved the
+five gate-2 D rows it added all fail on the pre-guard build.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

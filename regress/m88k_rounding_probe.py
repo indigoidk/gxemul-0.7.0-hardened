@@ -119,6 +119,18 @@ ROWS = [
     # input on this rig. The unguarded helper turned it into DBL_MAX.
     ("fsub.sds inf", RZ, {"r2": 0x7ff00000, "r3": 0x00000000, "r6": 0x3f800000},
      FSUB_SDS, "r4", 0x7f800000),
+
+    # #300: D-format arithmetic honours the mode via the fma-residual helpers. The
+    # result register pair is r6:r7 (big-endian, high word first); the low word under
+    # toward-zero is the round-61 witness ...99, where host-nearest gives ...9a.
+    # fdiv.ddd r6,r2,r8 = major 0x21, d=6, s1=2, op11 0x0e, size ddd (0x15), s2=8.
+    # The divisor pair lives in r8:r9, NOT r4:r5 -- this probe stages the rounding
+    # mode in r5 before the guest's fstcr consumes it, and the first version of this
+    # row seeded r5 as the divisor's low word, silently reverting the mode to nearest
+    # and failing with the RN answer. A probe register plan is part of the vector.
+    ("fdiv.ddd 1/10 RZ", RZ, {"r2": 0x3ff00000, "r3": 0x00000000,
+                               "r8": 0x40240000, "r9": 0x00000000},
+     0x84c272a8, "r7", 0x99999999),
 ]
 
 

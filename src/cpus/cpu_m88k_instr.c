@@ -975,7 +975,9 @@ X(fadd_dss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f + f2.f, IEEE_FMT_D);
+	/*  #300: D arithmetic honours the mode via the 2Sum helper  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -999,7 +1001,9 @@ X(fadd_dsd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f + f2.f, IEEE_FMT_D);
+	/*  #300: D arithmetic honours the mode via the 2Sum helper  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1023,7 +1027,9 @@ X(fadd_dds)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f + f2.f, IEEE_FMT_D);
+	/*  #300: D arithmetic honours the mode via the 2Sum helper  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1048,7 +1054,9 @@ X(fadd_ddd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f + f2.f, IEEE_FMT_D);
+	/*  #300: D arithmetic honours the mode via the 2Sum helper  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1120,7 +1128,9 @@ X(fsub_dss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_D);
+	/*  #300: as a + (-b), matching the #299 single arms  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, -f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1144,7 +1154,9 @@ X(fsub_dsd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_D);
+	/*  #300: as a + (-b), matching the #299 single arms  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, -f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1168,7 +1180,9 @@ X(fsub_dds)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_D);
+	/*  #300: as a + (-b), matching the #299 single arms  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, -f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1193,7 +1207,9 @@ X(fsub_ddd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_D);
+	/*  #300: as a + (-b), matching the #299 single arms  */
+	d = ieee_store_float_value(
+	    ieee_add_round_rm(f1.f, -f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1237,7 +1253,9 @@ X(fmul_dss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f * f2.f, IEEE_FMT_D);
+	/*  #300: exact-product-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_mul_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1261,7 +1279,9 @@ X(fmul_dsd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f * f2.f, IEEE_FMT_D);
+	/*  #300: exact-product-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_mul_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1285,7 +1305,9 @@ X(fmul_dds)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f * f2.f, IEEE_FMT_D);
+	/*  #300: exact-product-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_mul_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1310,7 +1332,9 @@ X(fmul_ddd)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
 
-	d = ieee_store_float_value(f1.f * f2.f, IEEE_FMT_D);
+	/*  #300: exact-product-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_mul_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1369,7 +1393,9 @@ X(fdiv_dss)
 		return;
 	}
 
-	d = ieee_store_float_value(f1.f / f2.f, IEEE_FMT_D);
+	/*  #300: Markstein-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_div_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1400,7 +1426,9 @@ X(fdiv_dsd)
 		return;
 	}
 
-	d = ieee_store_float_value(f1.f / f2.f, IEEE_FMT_D);
+	/*  #300: Markstein-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_div_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
@@ -1432,7 +1460,9 @@ X(fdiv_ddd)
 		return;
 	}
 
-	d = ieee_store_float_value(f1.f / f2.f, IEEE_FMT_D);
+	/*  #300: Markstein-residual directed rounding  */
+	d = ieee_store_float_value(
+	    ieee_div_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
 
 	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
 	reg(ic->arg[0] + 4) = d;	/*  and low word.  */

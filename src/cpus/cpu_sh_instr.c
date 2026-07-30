@@ -3059,7 +3059,9 @@ X(fsqrt_frn)
 		r1 = reg(ic->arg[0] + sizeof(uint32_t)) +
 		    ((uint64_t)reg(ic->arg[0]) << 32);
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
-		ieee = ieee_store_float_value(sqrt(op1.f), IEEE_FMT_D);
+		/*  #300: directed rounding via the fma-residual helper  */
+		ieee = ieee_store_float_value(
+		    ieee_sqrt_round_rm(op1.f, sh_fp_rm(cpu)), IEEE_FMT_D);
 		reg(ic->arg[0]) = (uint32_t) (ieee >> 32);
 		reg(ic->arg[0] + sizeof(uint32_t)) = (uint32_t) ieee;
 	} else {
@@ -3124,7 +3126,8 @@ X(fadd_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_D);
 
-		result = op2.f + op1.f;
+		/*  #300: directed rounding via the 2Sum helper  */
+		result = ieee_add_round_rm(op2.f, op1.f, sh_fp_rm(cpu));
 		ieee = ieee_store_float_value(result, IEEE_FMT_D);
 		reg(ic->arg[1]) = (uint32_t) (ieee >> 32);
 		reg(ic->arg[1] + sizeof(uint32_t)) = (uint32_t) ieee;
@@ -3162,7 +3165,8 @@ X(fsub_frm_frn)
 		    ((uint64_t)reg(ic->arg[1]) << 32);
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_D);
-		result = op2.f - op1.f;
+		/*  #300: as a + (-b), same as the #299 single arms  */
+		result = ieee_add_round_rm(op2.f, -op1.f, sh_fp_rm(cpu));
 		ieee = ieee_store_float_value(result, IEEE_FMT_D);
 		reg(ic->arg[1]) = (uint32_t) (ieee >> 32);
 		reg(ic->arg[1] + sizeof(uint32_t)) = (uint32_t) ieee;
@@ -3198,7 +3202,8 @@ X(fmul_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_D);
 
-		result = op2.f * op1.f;
+		/*  #300: directed rounding via the exact-product residual  */
+		result = ieee_mul_round_rm(op2.f, op1.f, sh_fp_rm(cpu));
 		ieee = ieee_store_float_value(result, IEEE_FMT_D);
 		reg(ic->arg[1]) = (uint32_t) (ieee >> 32);
 		reg(ic->arg[1] + sizeof(uint32_t)) = (uint32_t) ieee;
@@ -3241,7 +3246,8 @@ X(fdiv_frm_frn)
 		 *  directly instead of silently returning 0.0. FPSCR
 		 *  exception-enable (DIV0 trap) handling remains a TODO.
 		 */
-		result = op2.f / op1.f;
+		/*  #300: directed rounding via the Markstein residual  */
+		result = ieee_div_round_rm(op2.f, op1.f, sh_fp_rm(cpu));
 
 		ieee = ieee_store_float_value(result, IEEE_FMT_D);
 
