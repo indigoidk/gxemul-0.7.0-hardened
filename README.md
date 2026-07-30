@@ -162,6 +162,7 @@ Oldest first.
 | `e61badd` | Round 60 (#295): the fixed-rounding conversions, and a buffer declared full before it was filled |
 | `f52c2fe` | Round 61 (#296): SuperH read the FPU rounding-mode field but never used it; gate 10 |
 | `06445b5` | Round 62 (#297): ftrc converted with a raw C cast — the guest answer depended on the host |
+| `85cc973` | Round 63 (#298): m88k stored its rounding register, read it back, used it nowhere; gate 11 |
 
 ## Feature highlights
 
