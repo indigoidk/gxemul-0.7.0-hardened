@@ -73,6 +73,20 @@
 > and `testarm` stay at 0; both trees rebuild 0/0. Worth keeping from the investigation:
 > it affected **32** CPU table entries, not just `rpi`, and casting to unsigned would have
 > silenced the sanitizer while leaving the register byte-identically corrupt.
+>
+> **2026-07-30 retroactive review (one seat) — the fix stands, and it is a SYMPTOM fix.**
+> Per the ARM ARM, a size field of 0 means a **512-byte cache**, not "unspecified" — the
+> real defect is that those 32 table entries in `arm_cpu_types.h` simply never had their
+> `dcache_shift` populated. So the register is no longer undefined or corrupt, but it
+> under-reports the D-cache on those CPUs. The only reader is the guest's
+> `MRC p15,0,Rd,c0,c0,1`, and GXemul executes cache flushes as no-ops, so nothing a guest
+> does changes — the visible effect is a wrong size in a guest kernel's boot messages.
+> Follow-on candidates recorded, none taken up (all latent, none testable on the rigs):
+> populate the 32 missing `dcache_shift` values from CPU datasheets; honour the table's
+> `iway`/`dway` fields instead of the hardcoded 32-way/8-word constants; shifts above 16
+> would silently wrap in the 3-bit field (no current entry exceeds 16); and ARMv6 parts
+> (ARM1136) architecturally use a different cache-type register format than the v4/v5
+> layout GXemul hardcodes for every CPU.
 
 > ## 2026-07-29 — NARROWED: the console/keyboard overrun is X11-only, and mostly guarded
 > The earlier entry (item 5 of the rounds 41–46 block) says three ring buffers share the
