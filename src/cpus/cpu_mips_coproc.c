@@ -1521,6 +1521,88 @@ static int fpu_function(struct cpu *cpu, struct mips_coproc *cp,
 		return 1;
 	}
 
+	/*
+	 *  #295: round./ceil./floor.{w,l} and cvt.l -- the fixed-rounding
+	 *  conversions.  Before this they were decoded NOWHERE: fpu_function()
+	 *  matched no case, returned 0, and the dispatcher tail did an ungated
+	 *  fatal("UNIMPLEMENTED coproc1 function") AND raised a
+	 *  Coprocessor-Unusable exception for CP1 -- with CU1 already enabled.
+	 *  Nothing in the CPU state changes across that trap (same EPC, same
+	 *  instruction word, CU1 already set), so a kernel that answers CpU(1)
+	 *  by granting the FPU and returning re-executes it forever.  Upstream's
+	 *  own TODO above lists exactly these opcodes.
+	 *
+	 *  Reserved Instruction would be the WRONG exception even for a CPU
+	 *  that lacks them.  The R4000 manual puts a reserved COP1 *function*
+	 *  code under the FPU's Unimplemented Operation exception (FCSR Cause.E,
+	 *  ExcCode 15), which this file already models in fpu_unimpl_trap()
+	 *  -- RI is for CPU-level reserved encodings decided at translate time
+	 *  (#231's ERET gate, #290's PS gate).  These are therefore decoded
+	 *  UNGATED, matching trunc.l/trunc.w which are decoded ungated today
+	 *  (trunc.l demonstrably runs on an R3000A -- recorded under #273).
+	 *  Gating the whole fpu_function() table by ISA level is one coherent
+	 *  follow-on, not a thing to do piecemeal here.
+	 *
+	 *  The rounding mode is FORCED per instruction and must override FCSR.
+	 *  A copy-paste of the cvt.w block below -- passing FPU_RM_FROM_FCSR --
+	 *  would agree with a correct round.w on every input under the default
+	 *  FCSR.RM=0 and is invisible there; the probe vectors set FCSR.RM to a
+	 *  non-zero mode precisely to catch it.
+	 */
+
+	/*  round.l.fmt / round.w.fmt: to nearest, ties to even  */
+	if ((function & 0x001f003f) == 0x00000008 ||
+	    (function & 0x001f003f) == 0x0000000c) {
+		int to_w = (function & 0x3f) == 0x0c;
+		if (cpu->machine->instruction_trace || unassemble_only)
+			debug("round.%s.%s\tr%i,r%i\n", to_w? "w" : "l",
+			    fmtname[fmt], fd, fs);
+		if (unassemble_only)
+			return 1;
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1,
+		    to_w? COP1_FMT_W : COP1_FMT_L, IEEE_RM_RN);
+		return 1;
+	}
+
+	/*  ceil.l.fmt / ceil.w.fmt: toward +infinity  */
+	if ((function & 0x001f003f) == 0x0000000a ||
+	    (function & 0x001f003f) == 0x0000000e) {
+		int to_w = (function & 0x3f) == 0x0e;
+		if (cpu->machine->instruction_trace || unassemble_only)
+			debug("ceil.%s.%s\tr%i,r%i\n", to_w? "w" : "l",
+			    fmtname[fmt], fd, fs);
+		if (unassemble_only)
+			return 1;
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1,
+		    to_w? COP1_FMT_W : COP1_FMT_L, IEEE_RM_RP);
+		return 1;
+	}
+
+	/*  floor.l.fmt / floor.w.fmt: toward -infinity  */
+	if ((function & 0x001f003f) == 0x0000000b ||
+	    (function & 0x001f003f) == 0x0000000f) {
+		int to_w = (function & 0x3f) == 0x0f;
+		if (cpu->machine->instruction_trace || unassemble_only)
+			debug("floor.%s.%s\tr%i,r%i\n", to_w? "w" : "l",
+			    fmtname[fmt], fd, fs);
+		if (unassemble_only)
+			return 1;
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1,
+		    to_w? COP1_FMT_W : COP1_FMT_L, IEEE_RM_RM);
+		return 1;
+	}
+
+	/*  cvt.l.fmt: convert to long fixed-point, honouring FCSR  */
+	if ((function & 0x001f003f) == 0x00000025) {
+		if (cpu->machine->instruction_trace || unassemble_only)
+			debug("cvt.l.%s\tr%i,r%i\n", fmtname[fmt], fd, fs);
+		if (unassemble_only)
+			return 1;
+		fpu_op(cpu, cp, FPU_OP_CVT, fmt, -1, fs, fd, -1,
+		    COP1_FMT_L, FPU_RM_FROM_FCSR);
+		return 1;
+	}
+
 	/*  c.cond.fmt: Floating-point compare  */
 	if ((function & 0x000000f0) == 0x00000030) {
 		int cond_true;

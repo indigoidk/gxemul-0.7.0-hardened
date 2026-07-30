@@ -1846,6 +1846,74 @@ all and fall through to a Coprocessor-Unusable exception *with CU1 enabled* — 
 kernel-retry livelock shape (latent: zero occurrences across green boots). With this
 round's machinery they are three decode blocks; see OUTSTANDING_BUGS.
 
+## Sixtieth round (#295) — the fixed-rounding conversions, and a buffer declared full before it was filled
+
+Two fixes, `cpus/cpu_mips_coproc.c` and `devices/dev_mb89352.c`. Neither file is
+tree-divergent. Both came out of a backlog audit that found five of nine items in an older
+block had silently been fixed while two live ones had never been indexed at all.
+
+### `round` / `ceil` / `floor` / `cvt.l` were not decoded
+
+`fpu_function()` matched no case for function codes `0x08`, `0x0a`, `0x0b`, `0x0c`, `0x0e`,
+`0x0f` or `0x25`, returned 0, and the dispatcher tail did an ungated
+`fatal("UNIMPLEMENTED coproc1 function")` **and** raised a Coprocessor-Unusable exception
+for CP1 — with CU1 already enabled. Nothing in the CPU state changes across that trap
+(same EPC, same instruction, CU1 already set), so a kernel that answers CpU(1) by granting
+the FPU and returning re-executes it forever. Upstream's own TODO lists exactly these
+opcodes.
+
+**Reserved Instruction would have been the wrong exception**, and a panel seat settled it
+from the primary source: the R4000 manual places a reserved COP1 *function* code under the
+FPU's Unimplemented Operation exception (FCSR Cause.E, ExcCode 15) — which this file
+already models in `fpu_unimpl_trap()`. RI is for CPU-level reserved encodings decided at
+translate time (#231's ERET gate, #290's PS gate). So these are decoded **ungated**,
+matching `trunc.l`/`trunc.w` which are ungated today and which #273 measured running on an
+R3000A. Gating the whole table by ISA level is one coherent follow-on, not something to do
+piecemeal.
+
+Each instruction forces its own rounding mode through #294's parameter — nearest for
+`round`, toward +Inf for `ceil`, toward −Inf for `floor` — while `cvt.l` defers to FCSR.
+
+**The test had to be designed around an invisible bug.** The likeliest wrong
+implementation is a copy-paste of the `cvt.w` block sitting seventy lines below, passing
+`FPU_RM_FROM_FCSR` instead of a forced mode. Under the default `FCSR.RM = 0` that mutant
+**agrees with a correct `round.w` on every input**. So every probe row runs under a
+*non-zero* FCSR mode. Verified on both rigs: **20/20 rows**, including `round.w(2.5) → 2`
+and `round.w(3.5) → 4` (ties to even), `ceil.w(−2.25) → −2` against `floor.w(−2.25) → −3`,
+and `trunc.w` still ignoring FCSR entirely. Then the mutation was built for real:
+`round.w(2.7)` under toward−Inf gives **3** on the shipped code and **2** on the mutant —
+exactly the floor answer predicted.
+
+### `dev_mb89352.c`: a DATA_OUT buffer declared full before any byte arrived
+
+The backlog had this recorded as "the same defect as #263, on another host adapter". It
+is not, and the difference matters. `mb89352_dreg_write()` only issues the command at
+exact fill, so the natural path always supplies every byte — there is no short-transfer
+tail. The actual defect is one line later: `data_out_offset = d->transfer_count` is set
+**at allocation time**, and the disk layer's only guard is exactly that field
+(`diskimage_scsicmd.c:778` compares it against the CDB size, then `:788` writes
+`data_out` straight to the image). A guest that sets up a DATA_OUT phase, writes no data
+bytes and then issues a WRITE therefore committed whatever the freed heap block last
+held — and `scsi_transfer_alloc()` keeps a freelist for the transfer structs while the
+buffers are `free()`d, so a same-size `malloc` very often returns the previous command's
+sector data. #263 measured that exact consequence on the ASC: 384 bytes of the previous
+command's buffer written onto the disk image.
+
+Fixed by zeroing the allocation. **The honest repair — a truthful offset advanced as bytes
+arrive — is deliberately deferred**, because the disk layer would then return "incomplete"
+and this model discards that return, so the guest would be told a WRITE completed that
+never reached the disk: exactly the defect #283 fixed in the ASC, re-created on the
+luna88k write path. That needs its own round and its own probe.
+
+`devices/dev_osiop.c:520` carries the same `clearflag = 0` and is **deliberately not
+changed**: its offset advances only by bytes actually copied, so the disk layer's gate is
+honest and a short transfer cannot commit uninitialised bytes; the grow-after-alloc route
+is closed by the phase machine; and no harness rig instantiates it. Documented, not
+patched.
+
+**Verified.** Clean rebuild 0 warnings / 0 errors both trees; probe 20/20 on pmax and arc
+with a real mutation as the negative control.
+
 ## How findings were produced
 1. Manual review + `gcc -fanalyzer` over all 265 TUs.
 2. ASan/UBSan mutation-fuzzing of the file loaders (a.out/ELF/Mach-O) and an in-process

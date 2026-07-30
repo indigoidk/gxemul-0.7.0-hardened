@@ -5,14 +5,17 @@
 > is only the index, so nobody has to read the whole file to find the live items.
 >
 > **Ready to work — a test already reproduces it**
-> - `round.w` / `ceil.w` / `floor.w` / `cvt.l` are **not decoded**, and fall through to a
->   Coprocessor-Unusable exception with CU1 enabled — a kernel-retry livelock shape. Three
->   decode blocks with #294's machinery. *Best-scoped next candidate.* (2026-07-30 entry)
-> - Two sibling `scsi_transfer_allocbuf(..., clearflag = 0)` sites survive #263's fix:
->   `devices/dev_mb89352.c:430` (luna88k/mvme88k) and `devices/dev_osiop.c:520`. #263
->   proved by fault injection that `clearflag = 0` on the ASC put **384 bytes of the
->   previous command's heap buffer onto the disk image**; these two are the same shape on
->   other HBAs. Out of the pmax/arc scope that #263 was cut to, never re-examined since.
+> - ✅ `round`/`ceil`/`floor` + `cvt.l` undecoded → **RESOLVED as #295** (round 60).
+> - ✅ `dev_mb89352.c` uninitialised DATA_OUT buffer → **RESOLVED as #295**; the sibling
+>   `dev_osiop.c:520` was examined and **deliberately left** (its offset is honest, the
+>   route is closed by the phase machine, no rig instantiates it).
+> - **SH `FPSCR.RM`** — reproduced on the committed build by two seats with a media-free
+>   cold-debugger probe, and the precondition sourced from OpenBSD (`setregs()` installs
+>   `FPSCR_PR`, i.e. RM=00 nearest, at **every exec**; `libc fpsetround.c` writes RM
+>   directly). The wiring is 8 IEEE-exact store sites in `cpu_sh_instr.c`. **Carries a
+>   second, independent change that must be declared and tested separately**: passing the
+>   reset mode (toward-zero) instead of LEGACY also changes S-format overflow from ±Inf to
+>   ±FLT_MAX — which is the correct IEEE-754 §7.4 answer, but is not a mode plumb.
 >
 > **Real, but needs infrastructure or a rig that does not exist yet**
 > - SH `FPSCR.RM` is stored, guest-writable and **decoded nowhere** — the SH core is

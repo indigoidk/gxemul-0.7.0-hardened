@@ -427,8 +427,46 @@ DEVICE_ACCESS(mb89352)
 
 					switch (d->phase) {
 					case PH_DATAOUT:
+						/*  #295: zero the buffer (clearflag 1).
+						    The line below declares it FULL --
+						    data_out_offset = transfer_count -- before
+						    a single guest byte has arrived, and the
+						    disk layer's only guard is exactly that
+						    field (diskimage_scsicmd.c:778 compares
+						    data_out_offset against the CDB size and
+						    otherwise writes data_out straight to the
+						    image at :788).  A guest that sets up a
+						    DATA_OUT phase, writes NO data bytes, and
+						    then issues a WRITE therefore committed
+						    whatever the freed heap block last held --
+						    and scsi_transfer_alloc() keeps a freelist
+						    for the transfer structs while the buffers
+						    themselves are free()d, so a same-size
+						    malloc very often returns the PREVIOUS
+						    command's sector data.  #263 measured that
+						    exact consequence on the ASC: 384 bytes of
+						    the previous command's buffer written onto
+						    the disk image.
+
+						    This is NOT #263's short-transfer shape --
+						    mb89352_dreg_write() only issues the
+						    command at exact fill, so the natural PIO
+						    path always supplies every byte.  The
+						    defect is the premature offset, and the
+						    honest repair (offset 0, advanced as bytes
+						    arrive) is DEFERRED on purpose: the disk
+						    layer would then return 2 and this model
+						    discards that return, so the guest would
+						    be told a WRITE completed that never
+						    reached the disk -- exactly the defect
+						    #283 fixed in the ASC, re-created on the
+						    luna88k write path.  That needs its own
+						    round and its own probe.  Zeroing removes
+						    the disclosure now and cannot regress a
+						    correct guest, which overwrites every one
+						    of these bytes before use.  */
 						scsi_transfer_allocbuf(&d->xferp->data_out_len,
-						    &d->xferp->data_out, d->transfer_count, 0);
+						    &d->xferp->data_out, d->transfer_count, 1);
 						d->xferp->data_out_offset = d->transfer_count;
 						break;
 					case PH_DATAIN:
