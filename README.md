@@ -163,6 +163,7 @@ Oldest first.
 | `f52c2fe` | Round 61 (#296): SuperH read the FPU rounding-mode field but never used it; gate 10 |
 | `06445b5` | Round 62 (#297): ftrc converted with a raw C cast — the guest answer depended on the host |
 | `85cc973` | Round 63 (#298): m88k stored its rounding register, read it back, used it nowhere; gate 11 |
+| `51899d7` | Round 64 (#299): the single-precision sum was rounded twice — round-to-odd fixes all three families |
 
 ## Feature highlights
 
