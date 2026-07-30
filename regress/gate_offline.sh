@@ -46,6 +46,18 @@ else
     gate_end; exit $?
 fi
 
+# #299's 2Sum exactness contract is enforced by GLOBAL build facts, not by anything
+# local to the helper: it needs strict IEEE doubles, so -ffast-math (or friends) in the
+# TREE's configure would break the shipped emulator while this gate -- which compiles
+# with its own flags -- stayed green. A panel seat named that exact hole, so the gate
+# trips on the flags themselves.
+if grep -Eq -- "-ffast-math|-Ofast|-funsafe-math|-fassociative-math|-ffp-contract=fast" \
+        "$SEC/configure" "$SEC/Makefile.skel" 2>/dev/null; then
+    check "tree build flags preserve IEEE arithmetic (no fast-math)" "found" "absent"
+else
+    check "tree build flags preserve IEEE arithmetic (no fast-math)" "absent" "absent"
+fi
+
 BIN=$LOGDIR/diff_ieee_store
 LOG=$LOGDIR/diff_ieee_store.log
 if ! $CC -O2 -I"$TREE/src/include" -o "$BIN" \

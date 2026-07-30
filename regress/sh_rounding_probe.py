@@ -113,15 +113,37 @@ VECTORS = [
      instr(0xf023, 1),                       # fdiv dr2,dr0 ; store fr1 = low half
      {RN: 0x9999999a, RZ: 0x9999999a}),
 
-    # ---- PIN: the double-rounding limitation, recorded so it cannot drift silently --
-    #  Every core evaluates in host double then narrows, so 1.0 - 2^-60 collapses to
-    #  exactly 1.0 before the store. Real silicon rounds the exact difference and yields
-    #  0x3f7fffff under toward-zero. Pre-existing, shared by all cores, NOT fixed by
-    #  #296 -- pinned so that if it ever does get fixed, the gate says so out loud.
-    ("PIN fsub 1.0-2^-60 dblround", 0,
+    # ---- the double-rounding band, FIXED by #299 and now discriminating -------------
+    #  This row was a PIN from #296 to #298: the sum collapsed in host double before the
+    #  store could round it, so both modes measured 0x3f800000. #299 routes the sum
+    #  through round-to-odd (Knuth 2Sum + odd-force in float_emul.c), so toward-zero now
+    #  yields the true 0x3f7fffff. The pin flipped exactly as its own comment required.
+    ("fsub band 1.0-2^-60", 0,
      {"fr0": 0x3f800000, "fr1": 0x21800000},
      instr(0xf011, 0),                       # fsub fr1,fr0
-     {RN: 0x3f800000, RZ: 0x3f800000}),
+     {RN: 0x3f800000, RZ: 0x3f7fffff}),
+
+    # ---- #299's organic default-mode witness: the fmac tie band ---------------------
+    #  (0x3fc00003 * 0x33fffffc) + 1.0 lands just below the midpoint between
+    #  0x3f800001 and 0x3f800002. The manual says fmac rounds ONCE; the old
+    #  two-rounding path collapsed onto the midpoint in double and ties-to-even then
+    #  picked 0x3f800002. Correct under BOTH modes is 0x3f800001, so this row is
+    #  mode-independent by value -- but the pre-#299 build fails its RN arm, which is
+    #  what makes it a revert tripwire. Constructed and verified exactly offline.
+    ("fmactie (a*b)+1.0", 0,
+     {"fr0": 0x3fc00003, "fr1": 0x33fffffc, "fr2": 0x3f800000},
+     instr(0xf21e, 2),                       # fmac fr0,fr1,fr2
+     {RN: 0x3f800001, RZ: 0x3f800001}),
+
+    # ---- #299 panel: Inf must pass through the round-to-odd helper UNTOUCHED --------
+    #  Three seats independently refuted the first helper's NaN guard (NaN != 0.0 is
+    #  TRUE in C), under which +Inf + 1.0 came back as FLT_MAX under toward-zero and
+    #  -Inf - 1.0 as a NaN. The offline gate watched both corruptions happen before the
+    #  isfinite() guard existed; this row keeps the rig honest about the same contract.
+    ("faddinf +Inf+1.0", 0,
+     {"fr0": 0x7f800000, "fr1": 0x3f800000},
+     instr(0xf010, 0),                       # fadd fr1,fr0
+     {RN: 0x7f800000, RZ: 0x7f800000}),
 
     # ---- #297: ftrc's value ladder. DELIBERATELY mode-independent -- the manual says
     #  "the rounding mode is always truncation", so these rows run under both modes and

@@ -98,18 +98,27 @@ ROWS = [
     ("flt-neg toward-Inf", MINF, {"r2": 0xfeffffff}, FLT, "r4", 0xcb800001),
     ("flt-neg toward+Inf", PINF, {"r2": 0xfeffffff}, FLT, "r4", 0xcb800000),
 
-    # PIN: the sub-double-ulp residue band, KNOWN-DIVERGENT (a #298 panel seat's find).
-    # Hardware's sticky bit is "the logical OR of all the bits that would be in the
-    # result if the result was infinitely precise" (MC88100UM), so toward-+Inf owes
-    # 0x3f800001 for 1.0 + 2^-60. The emulator computes in host double, where 1.0 +
-    # 2^-60 collapses to exactly 1.0 BEFORE the store sees it, and stores 0x3f800000.
-    # Add/sub only (fmul: 48-bit product exact; fdiv: a nonzero residue always survives
-    # the double); RN/RZ immune (the collapsed value is their answer anyway). The remedy
-    # is round 64's round-to-odd helper -- when it lands, THIS ROW MUST FLIP to
-    # 0x3f800001 and be rewritten as a discriminating vector. Until then the pin says
-    # out loud what the directed modes cannot see.
-    ("PIN fadd 1+2^-60 band", PINF, {"r2": 0x3f800000, "r3": 0x21800000}, FADD, "r4",
-     0x3f800000),
+    # The sub-double-ulp residue band, FIXED by #299 -- this row was the PIN a #298
+    # panel seat demanded, expected at the divergent 0x3f800000 with the instruction
+    # that it must flip when round-to-odd landed. It flipped: hardware's sticky bit
+    # rounds 1.0 + 2^-60 UP under toward-+Inf, and so does the emulator now.
+    ("fadd band toward+Inf", PINF, {"r2": 0x3f800000, "r3": 0x21800000}, FADD, "r4",
+     0x3f800001),
+
+    # #299's exact-zero sign contract: x + (-x) is -0 ONLY toward minus infinity.
+    # The host computes +0 under its nearest mode, so without the helper's special
+    # case the toward-minus-Inf row would read 0x00000000.
+    ("fadd zero toward-Inf", MINF, {"r2": 0x3f800000, "r3": 0xbf800000}, FADD, "r4",
+     0x80000000),
+    ("fadd zero RN",         RN,   {"r2": 0x3f800000, "r3": 0xbf800000}, FADD, "r4",
+     0x00000000),
+
+    # #299 panel: Inf must pass through the round-to-odd helper untouched, and
+    # fsub.sds makes it DIRECTLY reachable -- its first operand is a full DOUBLE
+    # (a seat's find), so +Inf minus 1.0f exercises the helper with an infinite
+    # input on this rig. The unguarded helper turned it into DBL_MAX.
+    ("fsub.sds inf", RZ, {"r2": 0x7ff00000, "r3": 0x00000000, "r6": 0x3f800000},
+     FSUB_SDS, "r4", 0x7f800000),
 ]
 
 

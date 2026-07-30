@@ -559,6 +559,136 @@ int main(void)
 	printf("rm: D mismatches under modes  : %lld\n", rm_d_bad);
 	printf("rm: named-vector failures     : %d (of %d)\n", rm_vec_bad, rm_vec_n);
 
+	/*  #299: ieee_sum_round_to_odd() -- the panel's hard requirement for
+	    this round was per-op ABSOLUTE answers offline, because the two
+	    formula bugs the panel caught in the design sketch (a broken 3-flop
+	    2Sum, and a residual sign convention that silently flipped for
+	    negative operands) are exactly the class only an offline
+	    differential sees. Every expected value below was derived from the
+	    EXACT rational result by the offline constructor and cross-checked
+	    against a Python model of the same bit-stepping logic.  */
+	{
+		static const struct {
+			const char *name;
+			double a, b;
+			int rm;
+			uint32_t want;
+		} v299[] = {
+		/*  the pinned band, all four directions and both signs:  */
+		{ "band fsub 1-2^-60 RZ",  1.0, -0x1p-60, IEEE_RM_RZ, 0x3f7fffff },
+		{ "band fadd 1+2^-60 RP",  1.0,  0x1p-60, IEEE_RM_RP, 0x3f800001 },
+		{ "band fsub 1-2^-60 RM",  1.0, -0x1p-60, IEEE_RM_RM, 0x3f7fffff },
+		{ "band fadd 1+2^-60 RN",  1.0,  0x1p-60, IEEE_RM_RN, 0x3f800000 },
+		{ "band -1-2^-60 RM",     -1.0, -0x1p-60, IEEE_RM_RM, 0xbf800001 },
+		{ "band -1-2^-60 RP",     -1.0, -0x1p-60, IEEE_RM_RP, 0xbf800000 },
+		{ "band -1+2^-60 RP",     -1.0,  0x1p-60, IEEE_RM_RP, 0xbf7fffff },
+		{ "band -1+2^-60 RM",     -1.0,  0x1p-60, IEEE_RM_RM, 0xbf800000 },
+		{ "band -1+2^-60 RZ",     -1.0,  0x1p-60, IEEE_RM_RZ, 0xbf7fffff },
+		/*  exact-zero sign: x + (-x) is -0 ONLY toward minus infinity  */
+		{ "zero 1-1 RM",           1.0, -1.0,     IEEE_RM_RM, 0x80000000 },
+		{ "zero 1-1 RN",           1.0, -1.0,     IEEE_RM_RN, 0x00000000 },
+		{ "zero 1-1 RZ",           1.0, -1.0,     IEEE_RM_RZ, 0x00000000 },
+		{ "zero (+0)+(+0) RM",     0.0,  0.0,     IEEE_RM_RM, 0x00000000 },
+		/*  no-change controls: exact sums must pass through untouched  */
+		{ "ctrl 1+1.5*2^-24 RN",   1.0,  0x1.8p-24, IEEE_RM_RN, 0x3f800001 },
+		{ "ctrl 1+1.5*2^-24 RZ",   1.0,  0x1.8p-24, IEEE_RM_RZ, 0x3f800000 },
+		/*  #299 panel: NaN != 0.0 is TRUE in C, so an unguarded 2Sum
+		    error test let NaN and Inf into the odd-force branch --
+		    where +Inf's even-lsb bit pattern was stepped DOWN to
+		    DBL_MAX, so +Inf + 1.0 stored 0x7f7fffff. Two seats found
+		    it independently; one noted fsub.sds's first operand is a
+		    DOUBLE, making Inf directly reachable there. These rows
+		    fail on the unguarded helper and pin the guard forever.  */
+		{ "inf +Inf+1.0 RN",  INFINITY, 1.0,      IEEE_RM_RN, 0x7f800000 },
+		{ "inf +Inf+1.0 RZ",  INFINITY, 1.0,      IEEE_RM_RZ, 0x7f800000 },
+		{ "inf -Inf-1.0 RM", -INFINITY, -1.0,     IEEE_RM_RM, 0xff800000 },
+		/*  #299 panel, measured behaviour change, PINNED at its new
+		    value: routing subtraction as a + (-b) means a NaN
+		    SUBTRAHEND is negated before propagation, so 1.0 - qNaN
+		    now stores the negative canonical NaN where it stored the
+		    positive one. IEEE leaves the sign of an arithmetic NaN
+		    unspecified and class/quietness are preserved, so this is
+		    conformant -- but it is a real A/B difference, and an
+		    undocumented one is how drift starts. Deterministic for
+		    the single-NaN case (unlike Inf-Inf, whose NaN is the
+		    host's and is checked class-only above).  */
+		{ "nan 1.0-qNaN sign", 1.0, -NAN,         IEEE_RM_RN, 0xffffffff },
+		};
+		int i, bad299 = 0;
+		int n299 = (int)(sizeof(v299) / sizeof(v299[0]));
+
+		for (i = 0; i < n299; i++) {
+			uint32_t got = (uint32_t) ieee_store_float_value_rm(
+			    ieee_sum_round_to_odd(v299[i].a, v299[i].b,
+			    v299[i].rm), IEEE_FMT_S, v299[i].rm);
+			if (got != v299[i].want) {
+				bad299++;
+				printf("  #299 VECTOR WRONG (%s): got %08x want %08x\n",
+				    v299[i].name, got, v299[i].want);
+			}
+		}
+
+		/*  the fmac tie-band witness, operands as single-precision bit
+		    patterns so the product is formed exactly as the emulator
+		    forms it:  */
+		{
+			uint32_t ab = 0x3fc00003, bb2 = 0x33fffffc;
+			float fa, fb;
+			double prod;
+			uint32_t got;
+			memcpy(&fa, &ab, sizeof(fa));
+			memcpy(&fb, &bb2, sizeof(fb));
+			prod = (double)fa * (double)fb;	/*  exact: 48 bits  */
+			got = (uint32_t) ieee_store_float_value_rm(
+			    ieee_sum_round_to_odd(prod, 1.0, IEEE_RM_RN),
+			    IEEE_FMT_S, IEEE_RM_RN);
+			if (got != 0x3f800001) {
+				bad299++;
+				printf("  #299 VECTOR WRONG (fmac tie RN): got %08x want 3f800001\n",
+				    got);
+			}
+			/*  and the OLD path must still get it wrong, or this
+			    vector has stopped discriminating:  */
+			got = (uint32_t) ieee_store_float_value_rm(prod + 1.0,
+			    IEEE_FMT_S, IEEE_RM_RN);
+			if (got != 0x3f800002) {
+				bad299++;
+				printf("  #299 CONTROL BROKEN (plain-double fmac now %08x, expected the wrong 3f800002)\n",
+				    got);
+			}
+		}
+		n299 += 2;
+
+		/*  NaN inputs must survive as NaN CLASS (payload untouched by
+		    the helper; canonicalization is the store's business):  */
+		{
+			double nanv = NAN;
+			uint32_t got = (uint32_t) ieee_store_float_value_rm(
+			    ieee_sum_round_to_odd(nanv, 1.0, IEEE_RM_RN),
+			    IEEE_FMT_S, IEEE_RM_RN);
+			if ((got & 0x7f800000) != 0x7f800000 ||
+			    (got & 0x007fffff) == 0) {
+				bad299++;
+				printf("  #299 VECTOR WRONG (NaN+1.0 lost NaN class): %08x\n",
+				    got);
+			}
+			got = (uint32_t) ieee_store_float_value_rm(
+			    ieee_sum_round_to_odd(INFINITY, -INFINITY,
+			    IEEE_RM_RN), IEEE_FMT_S, IEEE_RM_RN);
+			if ((got & 0x7f800000) != 0x7f800000 ||
+			    (got & 0x007fffff) == 0) {
+				bad299++;
+				printf("  #299 VECTOR WRONG (Inf-Inf lost NaN class): %08x\n",
+				    got);
+			}
+			n299 += 2;
+		}
+
+		printf("rto: #299 vector failures     : %d (of %d)\n",
+		    bad299, n299);
+		rm_vec_bad += bad299;
+	}
+
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
 	    inrange_diff == 0 && dD == 0 && dS > 0 &&
 	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&

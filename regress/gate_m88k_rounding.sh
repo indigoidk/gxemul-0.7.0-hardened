@@ -52,9 +52,10 @@ grep -E " ok$| FAIL" "$LOG" | sed 's/^/       /'
 res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 
-# 21 = 19 behaviour rows + the known-divergent residue-band PIN (which must FLIP and be
-# rewritten when round 64's round-to-odd helper lands) + fcr63 retention.
-check "rows run"       "$want" 21
+# 24 = 20 behaviour rows + the residue-band row (#298's PIN, flipped by #299's
+# round-to-odd exactly as its comment required) + #299's two exact-zero sign rows +
+# fcr63 retention.
+check "rows run"       "$want" 24
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -65,8 +66,11 @@ for v in "fadd-neg toward+Inf" "fadd-neg toward-Inf" \
     check "  asymmetric: $v" "$n" 1
 done
 
-# One row per wired site, so a single site silently reverting cannot hide.
-for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-pos RN tie"; do
+# One row per wired site, so a single site silently reverting cannot hide. The last
+# four are #299's: the flipped band row, the exact-zero sign pair, and the Inf
+# pass-through witness on the double-operand sds arm.
+for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-pos RN tie" \
+         "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
 done

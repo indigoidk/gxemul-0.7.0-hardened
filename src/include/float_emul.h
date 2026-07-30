@@ -63,4 +63,12 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp, int fm
 uint64_t ieee_store_float_value(double nf, int fmt);
 uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
 
+/*  #299: exact sum of two doubles, rounded to ODD, so that a subsequent
+    SINGLE-precision store rounds correctly in every mode (Boldo-Melquiond,
+    53 >= 2*24+2). For the single-precision add/sub/fmac arms ONLY -- the
+    intermediates are then overflow- and subnormal-free by construction.
+    rm is consulted for one case round-to-odd cannot express: the sign of
+    an exact zero under toward-minus-infinity.  */
+double ieee_sum_round_to_odd(double a, double b, int rm);
+
 #endif	/*  FLOAT_EMUL_H  */

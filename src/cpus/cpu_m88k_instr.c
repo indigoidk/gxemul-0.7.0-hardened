@@ -948,7 +948,12 @@ X(fadd_sss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value_rm(f1.f + f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
+	/*  #299: sum via round-to-odd so the store rounds correctly in every
+	    mode -- this is the row gate 11 pinned as known-divergent, now
+	    fixed (see float_emul.c).  */
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
 
 	reg(ic->arg[0]) = d;
 }
@@ -1066,7 +1071,10 @@ X(fsub_sss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value_rm(f1.f - f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
+	/*  #299: same round-to-odd routing as fadd_sss.  */
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, -f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
 	reg(ic->arg[0]) = d;
 }
 X(fsub_sds)
@@ -1088,7 +1096,10 @@ X(fsub_sds)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value_rm(f1.f - f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
+	/*  #299: same round-to-odd routing as fadd_sss.  */
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, -f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
 	reg(ic->arg[0]) = d;
 }
 X(fsub_dss)

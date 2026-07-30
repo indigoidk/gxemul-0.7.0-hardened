@@ -2505,6 +2505,131 @@ row as a named PIN, expected at today's divergent value, with the instruction th
 must flip and be rewritten as a discriminating vector when the next round's
 round-to-odd helper lands — whose scope now explicitly includes these m88k arms.
 
+## Sixty-fourth round (#299) — the sum was rounded twice, and round-to-odd makes the first rounding harmless
+
+One shared helper in `core/float_emul.c`, routed from eight call sites across three CPU
+families: SH (`fadd`, `fsub`, `fmac`), m88k (`fadd.sss`, `fsub.sss`, `fsub.sds`), and
+MIPS (`add.s`, `sub.s`). Third item of the feasibility queue.
+
+### The defect, pinned twice before the fix
+
+Every core computes single-precision add/sub in host double, then stores. The double
+rounds to 53 bits first — in the host's nearest mode — so a residue finer than the
+double grid is gone before the store can round it. Gates 10 and 11 had this **pinned as
+known-divergent** since the rounds that discovered it:
+
+```
+SH   fsub 1.0 − 2^-60   RZ           measured 3f800000    silicon owes 3f7fffff
+m88k fadd 1.0 + 2^-60   toward +Inf  measured 3f800000    sticky bit owes 3f800001
+```
+
+And the one *organic, default-mode* victim: `fmac` under plain nearest. The SH-4 manual
+says fmac rounds ONCE; the old path rounded the exact result to double, landed exactly on
+a single-precision midpoint, and ties-to-even then picked the far side. The witness was
+constructed offline from exact rationals: `(0x3fc00003 × 0x33fffffc) + 1.0` measured
+`3f800002` where nearest owes `3f800001` — and gcc emits fmac on SH-4, so real compiled
+guest code takes this path.
+
+### Round-to-odd, and the two formulas the panel had already killed
+
+Boldo–Melquiond: when the wide format carries at least 2p+2 bits of the narrow one — and
+53 ≥ 2·24+2 — rounding the exact value to odd in the wide format, then rounding to the
+narrow format in ANY mode, equals the direct correct rounding. Round-to-odd of a sum
+needs no wider arithmetic: Knuth's 2Sum recovers the rounding error of `a + b` exactly
+in six flops, and if the error is nonzero the sum is forced to the neighbouring double
+with odd mantissa, stepping toward the error's sign.
+
+Both halves of that sentence had wrong versions that were refuted before any code was
+written, which is why the offline gate now asserts absolute answers rather than trusting
+formulas. The feasibility brief's 2Sum was a broken three-flop hybrid that produces
+garbage when |a| < |b| — every seat refuted it, and Knuth's magnitude-unconditional form
+is what shipped. And the obvious odd-force — `bits |= 1` — steps away from zero
+regardless of which side the exact value is on; the shipped step is ±1 on the
+sign-magnitude pattern, toward the error's sign, cross-validated bit-for-bit against a
+Python model in the offline constructor.
+
+One case round-to-odd cannot express is handled explicitly: IEEE gives `x + (−x)` the
+sign of the *mode* — +0 everywhere except toward-minus-infinity, where it is −0. The
+host computes +0, so the helper flips an exact zero under that one mode, with
+`(+0)+(+0)` excluded. Measured on the luna88k rig: the toward−Inf zero row reads
+`0x80000000` and the nearest row reads `0x00000000`.
+
+The helper is deliberately **not** safe for double arithmetic — for single operands the
+intermediates can neither overflow nor reach subnormals, which is exactly the safety
+argument, and it evaporates for doubles. That is the next round's fma-residual work,
+with mandatory overflow and subnormal handling this function does not have.
+
+### Verification
+
+- **Gate 2 (offline)**: seventeen new absolute-answer vectors — all four band
+  directions on both operand signs, the exact-zero sign table, no-change controls, the
+  fmac witness, and a control asserting the *plain-double* path still gets the tie
+  wrong (so the vector provably discriminates). Every expected value derived from exact
+  rationals by the constructor and cross-checked against an independent Python model of
+  the same bit-stepping. 0 failures.
+- **Gate 10 (SH rig)**: the #296 PIN flipped exactly as its own comment required and is
+  now a discriminating vector (8 of 16 vectors discriminate, up from 7); the fmac
+  tie-band row is green on both modes; the faddinf Inf-pass-through row closes the panel's find. 34 pairs, PASS.
+- **Gate 11 (m88k rig)**: the #298 PIN flipped to `3f800001`; the two exact-zero rows
+  pass; the fsub.sds Inf row exercises the helper with an infinite double operand. 24 rows, PASS.
+- **MIPS**: add.s/sub.s take the same helper, gated to single-in/single-out; the double
+  path is untouched by construction and gate 2's D-untouched sweep stays at zero.
+
+### The panel caught a guest-visible regression inside the fix, before it shipped
+
+The review brief's attack-surface section contained a claim written with confidence and
+exactly backwards: "2Sum's e is NaN, `e != 0.0` is false — passes through." In C,
+`NaN != 0.0` is **true**. Three seats refuted it independently, each with the same
+concrete input: with a ±Inf operand the 2Sum error is NaN, the odd-force branch runs,
+and the raw bit step lands one below +Inf — which is DBL_MAX. `+Inf + 1.0` stored
+`0x7f7fffff` under toward-zero, and `−Inf − 1.0` stepped **up** into a negative NaN. One
+seat sharpened the reachability: `fsub.sds`'s first operand is a full *double*, so Inf
+walks straight in on the m88k rig. The exact-rational constructor never saw it because
+it only ever generated finite vectors — an instrument can only refute what its inputs
+reach.
+
+The sequence that followed is the project's discipline working as designed: the Inf
+vectors were added to the offline gate **first** and watched fail on the unguarded
+helper (`+Inf+1.0 RZ → 7f7fffff`; `−Inf−1.0 RM → ffffffff`); then the one-line
+`isfinite(s)` guard went in; then the vectors went green — 0 of 22 — and rig rows on
+both machines (`faddinf` on SH, `fsub.sds inf` on m88k) pin the contract where guests
+actually run. The guard's comment credits the refutation and preserves the seat-proven
+fact that finite `s` with nonzero `e` cannot be zero for any routed operand (the
+2^-298 quantum floor).
+
+The rest of the audit came back clean across every seat: the finite bit step is a true
+nextafter including binade crossings; the exact-zero table is right in all rows; the
+sub-as-negated-add identity is exact; the MIPS gate condition selects exactly
+add.s/sub.s with no #246 subnormal-trap interplay (a grid argument — no representable
+point inside the RTO-vs-RN sliver around FLT_MIN); the fmac product-exactness claim
+holds down to subnormal singles; the scope is complete; and the build flags (-O3, no
+fast-math, no fp-contract) protect 2Sum's preconditions.
+
+### The negative control, one mutant, predictions written first
+
+The helper neutered to plain `a + b` fails exactly what the fix claims and nothing else:
+gate 2's band and zero-RM and fmac vectors (DIFF_FAIL), gate 10's band-RZ and fmac-RN
+arms (30 of 32), gate 11's band and zero-toward-Inf rows (21 of 23) — measured, not
+asserted.
+
+One more measured find from the post-fix verification seat, documented and pinned rather
+than left to drift: routing subtraction as `a + (−b)` means a NaN **subtrahend** is
+negated before propagation, so `1.0 − qNaN` now stores the negative canonical NaN where
+it stored the positive one (A/B-measured at the build's own optimisation level; MIPS is
+immune behind its canonical-NaN override). IEEE leaves the sign of an arithmetic NaN
+unspecified and class and quietness are preserved, so this is conformant — but it is a
+real difference, and an undocumented one is how drift starts. The offline gate pins the
+single-NaN case at its new full value; the Inf−Inf NaN stays class-only because that one
+belongs to the host. The same seat also named the sharpest remaining structural hole:
+the offline gate compiles the helper with its *own* flags, so a future `-ffast-math` in
+configure would break the shipped emulator's 2Sum while the gate stayed green — the gate
+now trips on the tree's flags directly. And its victim accounting is worth keeping: on
+luna88k under default round-to-nearest, `fadd.sss`/`fsub.sss` are bit-identical to
+before (53 ≥ 2·24+2 makes RN-then-RN innocuous) and only `fsub.sds` — the fmac-analog
+whose first operand is already 53-bit — changes organically; on SH the band is organic
+because toward-zero is the hardware reset mode; on MIPS the correction is latent until a
+guest programs a directed mode.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

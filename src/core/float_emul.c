@@ -570,3 +570,94 @@ uint64_t ieee_store_float_value(double nf, int fmt)
 	return ieee_store_float_value_rm(nf, fmt, IEEE_RM_LEGACY);
 }
 
+
+/*
+ *  ieee_sum_round_to_odd():
+ *
+ *  #299: the sum of two doubles, rounded to ODD instead of to nearest, so
+ *  that a single-precision store of the result rounds CORRECTLY in every
+ *  mode.  This kills the double-rounding band that gates 10 and 11 pin:
+ *  computing a single-precision add in host double first rounds to 53
+ *  bits (host nearest), then the store rounds to 24 -- and a residue
+ *  finer than the double grid is gone before the store can see it, so
+ *  1.0 + 2^-60 under toward-+Inf stored 1.0 where hardware's sticky bit
+ *  rounds up, and an fmac tie-band input rounded to the WRONG side under
+ *  plain nearest (measured: (0x3fc00003 * 0x33fffffc) + 1.0 gave
+ *  0x3f800002 where nearest owes 0x3f800001).
+ *
+ *  Boldo-Melquiond: if the wide format has at least 2p+2 bits of the
+ *  narrow one (53 >= 2*24+2), then round-to-odd in the wide format
+ *  followed by ANY rounding to the narrow format equals the direct
+ *  rounding of the exact value.  Round-to-odd of an exact sum is
+ *  computable without wider arithmetic: s = a + b under host nearest,
+ *  plus Knuth's 2Sum error term e (EXACT for any two doubles, six flops,
+ *  no magnitude precondition -- the three-flop Fast2Sum needs |a| >= |b|
+ *  and an earlier draft of this round shipped a broken hybrid of the
+ *  two, refuted by every panel seat).  If e is nonzero the sum was
+ *  inexact: force the result to the neighbouring double with ODD
+ *  mantissa, stepping TOWARD e's sign when the lsb is even.  A plain
+ *  |= 1 on the bit pattern is wrong -- it always steps away from zero,
+ *  regardless of which side the exact value is on (also a panel find).
+ *
+ *  The intermediates cannot overflow or hit subnormals for single
+ *  operands (|sum| < 2^129 and either exact or >= 2^-149-ish), which is
+ *  precisely why this helper is SAFE for the single-precision arms and
+ *  must NOT be reused as-is for double arithmetic -- that is the next
+ *  round's fma-residual work, with mandatory overflow and subnormal
+ *  handling this function deliberately does not have.
+ *
+ *  The rm parameter exists for ONE case round-to-odd cannot express:
+ *  IEEE 754 gives x + (-x) the sign of the MODE -- +0 everywhere except
+ *  toward-minus-infinity, where it is -0.  The host computes +0 under
+ *  nearest, so under IEEE_RM_RM an exact zero sum from nonzero-or-
+ *  opposite-signed operands is flipped to -0 here.  (+0) + (+0) stays
+ *  +0 in every mode and is excluded.
+ */
+double ieee_sum_round_to_odd(double a, double b, int rm)
+{
+	double s = a + b;
+	double bb = s - a;
+	double e = (a - (s - bb)) + (b - bb);	/*  Knuth 2Sum  */
+
+	/*  isfinite(s) is LOAD-BEARING, not defensive. With a NaN or Inf
+	    operand the 2Sum error e is NaN, and NaN != 0.0 is TRUE in C --
+	    the first version of this function claimed the opposite and let
+	    Inf into the odd-force, where +Inf's even-lsb bit pattern was
+	    stepped DOWN: +Inf + 1.0 became DBL_MAX (stored 0x7f7fffff under
+	    toward-zero) and -Inf - 1.0 became a NEGATIVE NaN. Two panel
+	    seats refuted the claim independently, one noting that
+	    fsub.sds's first operand is a full double, so Inf is directly
+	    reachable there; the offline gate reproduced both corruptions
+	    before this guard existed and pins them now. For finite s from
+	    these call sites, s == 0 with e != 0 is impossible: every
+	    operand is a single (or an exact 48-bit product, or sds's
+	    double) whose nonzero sums are bounded away from the double
+	    underflow threshold -- a seat proved the 2^-298 quantum floor.  */
+	if (isfinite(s) && e != 0.0) {
+		uint64_t sb;
+		memcpy(&sb, &s, sizeof(sb));
+		if (!(sb & 1)) {
+			/*  Step toward e's sign. On the sign-magnitude bit
+			    pattern, toward +Inf is bits+1 for positive s and
+			    bits-1 for negative s; toward -Inf the reverse.
+			    s cannot be zero here: 2Sum's error is zero
+			    whenever the sum is exactly representable, and
+			    an exact sum of zero certainly is.  */
+			int upward = (e > 0.0);
+			int negative = (sb >> 63) != 0;
+			if (upward != negative)
+				sb++;
+			else
+				sb--;
+			memcpy(&s, &sb, sizeof(sb));
+		}
+	} else if (s == 0.0 && rm == IEEE_RM_RM && !signbit(s) &&
+	    !(a == 0.0 && b == 0.0 && !signbit(a) && !signbit(b))) {
+		/*  exact zero from cancellation (or (+0)+(-0)): -0 under
+		    toward-minus-infinity  */
+		s = -0.0;
+	}
+
+	return s;
+}
+

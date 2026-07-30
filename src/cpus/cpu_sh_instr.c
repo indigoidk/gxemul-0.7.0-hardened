@@ -3138,7 +3138,10 @@ X(fadd_frm_frn)
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
 
-		result = op2.f + op1.f;
+		/*  #299: sum via round-to-odd so the store rounds correctly
+		    in every mode (kills the double-rounding band gate 10
+		    pins; see float_emul.c).  */
+		result = ieee_sum_round_to_odd(op2.f, op1.f, sh_fp_rm(cpu));
 		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
@@ -3171,7 +3174,8 @@ X(fsub_frm_frn)
 		r2 = reg(ic->arg[1]);
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 		ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
-		result = op2.f - op1.f;
+		/*  #299: same round-to-odd routing as fadd.  */
+		result = ieee_sum_round_to_odd(op2.f, -op1.f, sh_fp_rm(cpu));
 		ieee = ieee_store_float_value_rm(result, IEEE_FMT_S, sh_fp_rm(cpu));
 		reg(ic->arg[1]) = (uint32_t) ieee;
 	}
@@ -3277,7 +3281,15 @@ X(fmac_fr0_frm_frn)
 	ieee_interpret_float_value(fr0, &op0, IEEE_FMT_S);
 	ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 	ieee_interpret_float_value(r2, &op2, IEEE_FMT_S);
-	ieee = ieee_store_float_value_rm(op0.f * op1.f + op2.f, IEEE_FMT_S, sh_fp_rm(cpu));
+	/*  #299: the product of two singles is EXACT in double (48 bits), so
+	    fmac reduces to one round-to-odd sum -- which also delivers the
+	    manual's rounds-ONCE semantics under plain nearest, where the old
+	    two-rounding path picked the wrong side of a tie band (measured:
+	    (0x3fc00003 * 0x33fffffc) + 1.0 gave 0x3f800002, nearest owes
+	    0x3f800001).  */
+	ieee = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(op0.f * op1.f, op2.f, sh_fp_rm(cpu)),
+	    IEEE_FMT_S, sh_fp_rm(cpu));
 	reg(ic->arg[1]) = ieee;
 }
 X(fcmp_eq_frm_frn)

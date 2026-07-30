@@ -1236,16 +1236,27 @@ static int fpu_op(struct cpu *cpu, struct mips_coproc *cp, int op, int fmt,
 
 	switch (op) {
 	case FPU_OP_ADD:
-		nf = float_value[0].f + float_value[1].f;
-		/*  debug("  add: %f + %f = %f\n",
-		    float_value[0].f, float_value[1].f, nf);  */
+		/*  #299: for add.s, sum via round-to-odd so the store rounds
+		    correctly in every mode -- computing in host double first
+		    loses any residue finer than 2^-53 before the store can
+		    round it (the band gate 10 pins on SH; same arithmetic
+		    here).  Double stays on the plain path: that is the next
+		    round's fma-residual work.  */
+		if (fmt == COP1_FMT_S && output_fmt == COP1_FMT_S)
+			nf = ieee_sum_round_to_odd(float_value[0].f,
+			    float_value[1].f, rm);
+		else
+			nf = float_value[0].f + float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan, rm);
 		break;
 	case FPU_OP_SUB:
-		nf = float_value[0].f - float_value[1].f;
-		/*  debug("  sub: %f - %f = %f\n",
-		    float_value[0].f, float_value[1].f, nf);  */
+		/*  #299: same round-to-odd routing as add.s.  */
+		if (fmt == COP1_FMT_S && output_fmt == COP1_FMT_S)
+			nf = ieee_sum_round_to_odd(float_value[0].f,
+			    -float_value[1].f, rm);
+		else
+			nf = float_value[0].f - float_value[1].f;
 		fpu_store_float_value(cpu, fr, cp, fd, nf, output_fmt,
 		    float_value[0].nan || float_value[1].nan, rm);
 		break;

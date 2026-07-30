@@ -27,18 +27,18 @@
 >   agrees with silicon, so only toward-zero double code diverges. A fix means running the
 >   arithmetic under a controlled host rounding mode, which #292 established is not
 >   straightforward (the compiler CSEs mode-switched casts). Pinned in gate 10.
-> - **Host-double double rounding on `fadd`/`fsub`/`fmac`** — every CPU core here evaluates
->   in host double and then narrows, so a cancellation finer than 2^-53 is gone before the
->   store: `fsub` of 1.0 and 2^-60 collapses to exactly 1.0, and toward-zero yields
->   `0x3f800000` where silicon rounds the exact difference to `0x3f7fffff`. Measured.
->   Pre-existing, not architecture-specific, and pinned in gate 10 so it cannot drift
->   silently. `fmul` is immune (the product is exact in double), and a #298 panel seat
->   sharpened the m88k boundary: `fdiv` is immune too (a nonzero residue always survives
->   the double), so the band exists only for add/sub with a large exponent gap. **#298
->   widens the observers**: m88k's directed modes are now reachable, and hardware's
->   sticky bit would round `1.0 + 2^-60` UP under toward-+Inf where the emulator's
->   collapsed double cannot. Same remedy, the round-64 round-to-odd helper — which must
->   therefore cover the m88k `fadd.sss`/`fsub.sss`/`fsub.sds` arms as well as SH and MIPS.
+> - ✅ **Host-double double rounding on single-precision `fadd`/`fsub`/`fmac` → RESOLVED
+>   as #299** (round 64). One shared round-to-odd helper (`ieee_sum_round_to_odd`,
+>   Knuth 2Sum + odd-force, Boldo–Melquiond 53 ≥ 2·24+2) routed from eight sites across
+>   SH, m88k and MIPS. Both gate pins flipped exactly as their comments required; the
+>   fmac tie-band (the organic default-mode victim) is fixed and gated; the exact-zero
+>   −0-under-toward−Inf contract is implemented and measured on the luna88k rig. The
+>   panel caught a guest-visible Inf/NaN corruption INSIDE the fix before it shipped
+>   (NaN != 0.0 is true in C; +Inf+1.0 briefly became DBL_MAX) — guarded, and pinned at
+>   three levels. A measured, conformant NaN-sign propagation change (1.0 − qNaN now
+>   negative canonical NaN) is pinned at full value. What this deliberately does NOT
+>   cover: D-format **arithmetic** under non-nearest modes — round 65's fma-residual
+>   work, where overflow and subnormal handling become mandatory.
 > - ✅ **SH `ftrc` raw C casts → RESOLVED as #297** (round 62). Reproduced first (+Inf and
 >   2^40 measured 0x80000000 on the committed build; the manual owes +MAX), then replaced
 >   with the manual's own value ladder on the raw bits — NaN checked before range so a
