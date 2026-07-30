@@ -165,6 +165,7 @@ Oldest first.
 | `85cc973` | Round 63 (#298): m88k stored its rounding register, read it back, used it nowhere; gate 11 |
 | `51899d7` | Round 64 (#299): the single-precision sum was rounded twice — round-to-odd fixes all three families |
 | `e644a30` | Round 65 (#300): D-format directed rounding via fma residuals — three panel passes, quantum bands |
+| `4453ff2` | Round 66 (#301): cvt.d.l/cvt.s.l converted the integer before the rounding mode existed; gate 12 |
 
 ## Feature highlights
 
