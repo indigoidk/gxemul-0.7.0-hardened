@@ -52,9 +52,14 @@ grep -E " ok$| FAIL" "$LOG" | sed 's/^/       /'
 res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 
-# 25 = 21 behaviour rows + #298's flipped residue-band row + #299's two exact-zero
-# sign rows and Inf row + #300's fdiv.ddd directed row + fcr63 retention.
-check "rows run"       "$want" 25
+# 40 = 25 as of #300 (21 behaviour rows + the flipped residue-band row + the exact-zero
+# sign rows and Inf row + the fdiv.ddd directed row + fcr63 retention) + #302's six
+# trnc rows (FOUR discriminators -- +Inf, the NEGATIVE-NaN-goes-positive signature,
+# the double 2^31 boundary, and the positive double qNaN; a panel seat corrected the
+# original count of three -- plus two negative-side host-independence pins) + #302's
+# eight int/nint rows (the decoder previously HALTED the machine on these legal
+# instructions).
+check "rows run"       "$want" 40
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -69,7 +74,9 @@ done
 # four are #299's: the flipped band row, the exact-zero sign pair, and the Inf
 # pass-through witness on the double-operand sds arm.
 for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-pos RN tie" \
-         "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf" "fdiv.ddd 1/10 RZ"; do
+         "fadd band toward+Inf" "fadd zero toward-Inf" "fadd zero RN" "fsub.sds inf" "fdiv.ddd 1/10 RZ" \
+         "trncSS +Inf" "trncSS qNaN-" "trncSD 2^31" "trncSD qNaN+" "trncSD qNaN-" \
+         "intSS 5.2 +Inf" "intSS -5.2 -Inf" "nintSS 2.5 tie" "nintSS 3.5 tie" "nintSD 2.5 tie"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
 done

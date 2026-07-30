@@ -24,9 +24,18 @@
 >   Operation for L operands beyond 2^53 and lets the kernel softfloat complete —
 >   architecturally the same FCSR-rounded value; GXemul's no-trap depth here matches its
 >   pre-existing modelling (#246 covers denormals only).
-> - **m88k `trnc`/`int`/`nint` use raw C casts** (`(int32_t) f1.f`) — the same host-UB
->   class #297 fixed on SH and #273 on MIPS, on a rig that boots to root. Needs the
->   MC88100's own special-case table first, exactly as #297 needed the SH-4 manual's.
+> - ✅ **m88k float→int conversions → RESOLVED as #302** (round 67), and the scope GREW
+>   in review: `trnc.ss`/`trnc.sd` were raw C casts (host-UB on specials — x86 answered
+>   0x80000000 for everything), and `int`/`nint` — the other two thirds of the MC88100
+>   triad — were **absent from the decoder entirely**, so a legal guest instruction
+>   halted the emulator ("All machines stopped", reproduced for both). The contract is
+>   OpenBSD's kernel completion (the MC88100 traps on every special and writes nothing;
+>   the manual's trap window even catches in-range [2^30, 2^31), which the handler
+>   completes): SoftFloat saturation with **all NaN forced positive** — a third table,
+>   distinct from SH's (#297) and MIPS's (#273). One shared mode-parametric ladder
+>   serves the triad: trnc→toward-zero, int→fcr63 via the #298 decode, nint→nearest.
+>   Thirteen new gate-11 rows (38 total); the trnc mutant failed exactly its four
+>   discriminators.
 > - **`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1** (traced by
 >   a #297 panel seat): raw `0x00000001` decodes as (1+2^-23)·2^-127 instead of 2^-149.
 >   Invisible through `ftrc` and through any store that flushes subnormals, which is how

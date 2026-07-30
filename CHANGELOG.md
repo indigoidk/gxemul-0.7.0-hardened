@@ -2907,6 +2907,126 @@ nearest). One constant, two legacies; the clash is harmless only while no caller
 it, which nothing enforces — so it is now stated outright at both sites, where the next
 caller would look.
 
+## Sixty-seventh round (#302) — the m88k truncations were raw C casts, and the third architecture has a third table
+
+One shared mode-parametric ladder in `cpus/cpu_m88k_instr.c` serving the whole MC88100
+float→int triad — `trnc` existed and was wrong; `int` and `nint` did not exist at all,
+and executing either halted the emulator. Second item of the post-queue backlog, and the
+second round running whose scope grew because the panel refused a deferral.
+
+### The defect, and the survey that preceded the design
+
+Both truncation handlers converted with `(int32_t) f1.f` — undefined behaviour in C for
+NaN, ±Inf and out-of-range, so the guest-visible result was the *host's*: measured on
+the committed build, every special case on both arms delivered x86's `0x80000000`, with
+all seven in-range controls green. The same class #273 fixed on MIPS and #297 on SH — on
+a rig that boots OpenBSD 7.7 to root.
+
+### The contract took a primary-source hunt, and it is nobody else's table
+
+For every *special* operand the MC88100 delivers no result itself: any operand with
+exponent ≥ 30 takes the integer-conversion-overflow exception, reserved operands (NaN,
+Inf) take the reserved-operand exception, and "since the instruction that caused the
+precise exception is not executed, no result will be written" (UM §6.8.4). In-range
+operands below the threshold convert directly in hardware — a seat caught the first
+draft of this paragraph overclaiming "never" — and the trap window is deliberately
+conservative: in-range values in [2^30, 2^31) trap too, and the handler completes them
+with the correct result.
+
+So the observable value belongs to the *guest's kernel*, and the guest this project
+boots is OpenBSD: `m88100_fp.c` forces round-to-zero for trnc and lands in SoftFloat's
+`float32/64_to_int32_round_to_zero`, which saturates —
+
+```
+NaN, either sign     7fffffff     SoftFloat forces the NaN's sign positive
++Inf, ≥ 2^31         7fffffff
+−Inf, < −2^31        80000000
+exactly −2^31        80000000     in range, explicitly guarded
+```
+
+The NaN row is the signature: **all NaN go positive** — not SH's all-NaN-to-`80000000`
+(#297), not MIPS's all-`7fffffff`-for-everything (#273). Three architectures, three
+distinct tables, which is exactly why cross-copying was named the hazard before design
+began. Two honest wrinkles are on the record rather than smoothed over: Motorola's own
+shipped BCS handler wrote a "nonsignaling NaN" *pattern* on true overflow — a different
+contract, but not our guest's — and on the real kernel path fcr62 accumulates AFINV,
+which this values-only fix states in its comment instead of modelling piecemeal (the
+same scope call as #297 and #273, for the same reason).
+
+### The fix, and why the NaN branch is load-bearing
+
+A shared `m88k_toint_result(fv, rm)` — NaN first → `7fffffff` regardless of sign; then
+round the double to an integral value under the requested mode (the #294-validated
+exact-midpoint form, with the saturation applied to the *rounded* value, matching the
+kernel completion, which rounds first and range-checks after); then the two saturations;
+else the cast, now reachable only for integral values inside int32 by construction. NaN
+*must* come first — it falls through both ordered comparisons as false, so without that
+branch a NaN reaches exactly the raw cast this correction removes (the #297 lesson,
+third appearance). Exact −2^31 merges into the ≤ branch, value-identically. For `.ss`
+the operand was already widened single→double by the interpreter, so every int32
+boundary comparison is exact. `trnc` calls the ladder with toward-zero, `int` with the
+#298 fcr63 decode (swap included), `nint` with nearest.
+
+Measured after the trnc fix: all 17 survey rows match the sourced table, controls
+unchanged.
+
+### Verification
+
+Gate 11 grew fifteen rows — 40 total, PASS. The trnc six: **four
+discriminators** (+Inf, the negative-NaN signature, the exact-2^31 double boundary, and
+the positive double qNaN — a panel seat corrected the original count of three) whose
+pre-#302 x86 answer differs, and two negative-side **host-independence pins** that
+coincide with x86-UB today but would catch an aarch64 host's different saturation — the
+same pin logic #297 used. The int/nint seven: mode-discrimination on 5.2 (toward-+Inf 6
+against toward-zero 5), the sign-asymmetric −5.2 directed row (the #298 lesson), both
+nint tie parities (2.5 → 2, 3.5 → 4 — catching a trunc-wired and a half-up-wired
+mistake alike), the double-format int arm, and the shared NaN table through the new
+instructions. Eight of the thirteen are asserted by name. The trnc mutant — the ladder
+reverted to the raw cast — failed exactly the four discriminators (27 of 31 on the
+pre-triad gate) while the pins stayed green, as x86-UB predicts.
+
+### The panel refused to ship a third of a triad
+
+The first draft indexed `int` (0x09) and `nint` (0x0a) — the other two thirds of the
+MC88100's float→int triad — to the coverage-gap round. A seat refused: they are real,
+correctly-disassembled instructions whose absence from the decoder sends a legal guest
+instruction to `goto bad`, which **halts the emulator** — reproduced on the committed
+build for both ("All machines stopped"), which is the round-53 lesson's definition of a
+wrong answer, and the contract was *already sourced* in the same report (`int` honours
+fcr63's rounding mode, `nint` forces nearest, both land in the same OpenBSD completion
+and the same saturation table). The same refusal shape as round 66's `cvt.s.l`, accepted
+for the same reason.
+
+So the ladder generalized to `m88k_toint_result(fv, rm)` — round the double to an
+integral value under the requested mode first (the #294-validated exact-midpoint form;
+the saturation applies to the *rounded* value, matching the kernel, which rounds first
+and range-checks after), then the same table. `trnc` calls it with toward-zero, `int`
+with the #298 fcr63 decode, `nint` with nearest, and the decoder grew the two cases
+mirroring `trnc`'s, odd-register double guard included.
+
+### The verification seat's census, and the honest victim accounting
+
+The final seat approved after a differential of its own — an exact Python mirror of the
+new function against an independent SoftFloat-style reference sharing no code with it:
+all thirteen row values re-derived, fifty-four adversarial edges, and 1,040,000 random
+comparisons across all four modes at zero divergence, plus every named mutant failing
+exactly the rows the comments claim. Three of its findings landed before commit: a
+fossil "31 =" in the gate's row-count comment, the missing double-inclusion guard on the
+new helper (its neighbour `m88k_fp_rm` established the idiom), and the one handler in
+the triad no instrument executed — `nint.sd` — which now has its own row (39 total).
+
+Its census of the shipped guest image is the round's honest victim accounting. `trnc`
+appears about 3,500 times as real compiled code in the OpenBSD/luna88k world — the m88k
+compiler emits it for every float→int cast — so the raw-cast defect had *ubiquitous*
+organic victims: any userland cast of a value ≥ 2^31, or of +Inf or NaN, returned
+−2147483648 where the kernel completion owes +2147483647, a sign-flipped answer in
+ordinary code. `int` and `nint`, by contrast, appear **only as data** — assembler opcode
+tables, termcap, DWARF bytecode — never as executed instructions. So the halt fix
+protects against hand-written assembly rather than shipped code: the guest's own
+toolchain puts the instruction one line away, and before this round that one line
+stopped the whole emulator. A real defect, fixed with its thinness stated rather than
+dressed up.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

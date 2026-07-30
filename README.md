@@ -231,7 +231,7 @@ pure function in closed form.
 | 8 | `gate_upstream.sh` | Upstream GXemul's own `test/` suite, run three-way |
 | 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
 | 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 15 vectors × 2 modes on real guest instructions |
-| 11 | `gate_m88k_rounding.sh` | m88k honours fcr63 rounding — 25 rows incl. sign-asymmetric swap tripwires |
+| 11 | `gate_m88k_rounding.sh` | m88k rounding + the float→int triad — 40 rows incl. swap tripwires and NaN-sign pins |
 | 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR — 11 rows on the arc rig, incl. FR=0 |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be

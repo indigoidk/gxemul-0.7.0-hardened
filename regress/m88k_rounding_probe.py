@@ -120,6 +120,55 @@ ROWS = [
     ("fsub.sds inf", RZ, {"r2": 0x7ff00000, "r3": 0x00000000, "r6": 0x3f800000},
      FSUB_SDS, "r4", 0x7f800000),
 
+    # #302: trnc.ss/trnc.sd -- the float->int32 truncations, previously raw C casts
+    # (host-UB on the specials; x86 answered 0x80000000 for everything). The m88k
+    # contract is OpenBSD's kernel completion (the MC88100 always traps and writes
+    # nothing): NaN of EITHER sign -> 0x7fffffff -- SoftFloat forces the sign positive,
+    # the signature that distinguishes this table from SH's and MIPS's -- +Inf and
+    # positive overflow -> 0x7fffffff, negatives -> 0x80000000, exact -2^31 in range.
+    # The positive rows discriminate against the pre-#302 build; the negative rows
+    # coincide with x86-UB and are HOST-INDEPENDENCE pins (an aarch64 host's cast
+    # saturates differently and turns NaN into 0). trnc ignores the rounding mode, so
+    # the fstcr prelude's RN is inert here.
+    #   trnc.ss r4,r2 = 0x84805802 ; trnc.sd r4,r2 = 0x84805882 (r2:r3 pair, hi first)
+    ("trncSS +Inf",   RN, {"r2": 0x7f800000}, 0x84805802, "r4", 0x7fffffff),
+    ("trncSS qNaN-",  RN, {"r2": 0xffc00000}, 0x84805802, "r4", 0x7fffffff),
+    ("trncSS -2^40",  RN, {"r2": 0xd3800000}, 0x84805802, "r4", 0x80000000),
+    ("trncSD 2^31",   RN, {"r2": 0x41e00000, "r3": 0x00000000}, 0x84805882, "r4",
+     0x7fffffff),
+    ("trncSD qNaN+",  RN, {"r2": 0x7ff80000, "r3": 0x00000000}, 0x84805882, "r4",
+     0x7fffffff),
+    ("trncSD -Inf",   RN, {"r2": 0xfff00000, "r3": 0x00000000}, 0x84805882, "r4",
+     0x80000000),
+    #  negative NaN through the DOUBLE arm: a panel seat noted the signature row
+    #  existed only for .ss, so a regression special-casing the sd arm's NaN handling
+    #  would pass green. Same want as .ss -- the m88k table forces NaN positive.
+    ("trncSD qNaN-",  RN, {"r2": 0xfff80000, "r3": 0x00000000}, 0x84805882, "r4",
+     0x7fffffff),
+
+    # #302 second half: int (fcr63-modal) and nint (round-to-nearest). Before this the
+    # decoder sent both to goto bad and the emulator HALTED on a legal instruction
+    # ("All machines stopped", reproduced). int.ss r4,r2 = 0x84804802; int.sd =
+    # 0x84804882; nint.ss = 0x84805002. 5.2 discriminates the modes (toward-+Inf 6,
+    # toward-zero 5, and trunc-wired-by-mistake would also read 5 under +Inf); -5.2
+    # under toward-MINUS-Inf is the sign-asymmetric row (#298 lesson: a missing 2<->3
+    # swap passes every symmetric row); nint's two tie parities catch both a
+    # trunc-wired and a half-up-wired mistake; the NaN row proves the shared table
+    # through the new arms.
+    ("intSS 5.2 +Inf", PINF, {"r2": 0x40a66666}, 0x84804802, "r4", 0x00000006),
+    ("intSS 5.2 RZ",   RZ,   {"r2": 0x40a66666}, 0x84804802, "r4", 0x00000005),
+    ("intSS -5.2 -Inf", MINF, {"r2": 0xc0a66666}, 0x84804802, "r4", 0xfffffffa),
+    ("intSD 5.2 +Inf", PINF, {"r2": 0x4014cccc, "r3": 0xcccccccd}, 0x84804882, "r4",
+     0x00000006),
+    ("nintSS 2.5 tie", RN,   {"r2": 0x40200000}, 0x84805002, "r4", 0x00000002),
+    ("nintSS 3.5 tie", RN,   {"r2": 0x40600000}, 0x84805002, "r4", 0x00000004),
+    ("nintSS qNaN-",   RN,   {"r2": 0xffc00000}, 0x84805002, "r4", 0x7fffffff),
+    #  nint.sd was the one handler in the triad no row executed (a panel seat's find:
+    #  correct by inspection and symmetry, but never once touched by an instrument).
+    #  2.5 in double, ties-to-even -> 2, through the .sd pair-assembly path.
+    ("nintSD 2.5 tie", RN,   {"r2": 0x40040000, "r3": 0x00000000}, 0x84805082, "r4",
+     0x00000002),
+
     # #300: D-format arithmetic honours the mode via the fma-residual helpers. The
     # result register pair is r6:r7 (big-endian, high word first); the low word under
     # toward-zero is the round-61 witness ...99, where host-nearest gives ...9a.

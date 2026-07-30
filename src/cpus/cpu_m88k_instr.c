@@ -1636,6 +1636,98 @@ X(flt_ds)
  *
  *  Note: For trnc.sd, arg[1] points to a _pair_ of registers!
  */
+#ifndef	M88K_TOINT_RESULT_INCLUDED
+#define	M88K_TOINT_RESULT_INCLUDED
+/*
+ *  #302: the MC88100 float->int triad -- trnc (toward zero), int
+ *  (fcr63-modal), nint (nearest). trnc.ss/trnc.sd existed and were
+ *  wrong; int and nint were ABSENT from the decoder entirely and a
+ *  legal guest instruction halted the emulator (their handlers follow
+ *  the trnc pair below).
+ *
+ *  The trnc arms cast with (int32_t) f1.f, UNDEFINED BEHAVIOUR in C for
+ *  NaN, +/-Inf and out-of-range values -- the guest-visible result was
+ *  whatever the HOST cpu did (x86: 0x80000000 for every special case;
+ *  an aarch64 host would answer differently). The #297/#273 class, on
+ *  the third architecture.
+ *
+ *  The m88k contract, from primary sources: for every SPECIAL operand
+ *  the MC88100 delivers no result itself -- any operand with exponent
+ *  >= 30 takes the integer-conversion-overflow exception, reserved
+ *  operands (NaN, Inf) the reserved-operand exception, and "since the
+ *  instruction that caused the precise exception is not executed, no
+ *  result will be written" (UM 6.8.4). In-range operands below the trap
+ *  threshold are converted directly by hardware, which is why the
+ *  in-range arm below is just the cast. For the trapped cases the
+ *  observable value belongs to the GUEST's kernel: OpenBSD's
+ *  m88100_fp.c forces round-to-zero for trnc and lands in SoftFloat's
+ *  float32/64_to_int32_round_to_zero, which saturates:
+ *
+ *      NaN, either sign   0x7fffffff   (SoftFloat forces the sign
+ *                                       positive for NaN -- NOT the
+ *                                       SH table's 0x80000000, and
+ *                                       NOT MIPS #273's; a third
+ *                                       distinct table)
+ *      +Inf, >= 2^31      0x7fffffff
+ *      -Inf, < -2^31      0x80000000
+ *      exactly -2^31      0x80000000   (in range; SoftFloat guards it)
+ *
+ *  Values only, per #297/#273: GXemul models no SFU1 FP exception
+ *  delivery and no fcr62 accrual, so the trap-and-complete dance
+ *  collapses to its result. On the real path the kernel also
+ *  accumulates AFINV into fcr62 -- stated here as the true contract
+ *  rather than modelled piecemeal. The NaN branch is load-bearing:
+ *  NaN falls through both ordered comparisons as false, so without it
+ *  a NaN reaches the raw cast this correction removes.
+ *
+ *  (Motorola's own shipped BCS handler wrote a "nonsignaling NaN"
+ *  pattern on true overflow instead -- a different contract. The guest
+ *  this project boots is OpenBSD, and OpenBSD's completion is what a
+ *  luna88k user observes.)
+ */
+static uint32_t m88k_toint_result(struct ieee_float_value *fv, int rm)
+{
+	double fl;
+
+	if (fv->nan)
+		return 0x7fffffff;
+
+	/*  Round to an integral double under the requested mode, using the
+	    #294-validated exact-midpoint form: for |v| < 2^52 the midpoint
+	    fl + 0.5 is exact, and at or above 2^52 every double is already
+	    integral so no branch fires. floor(+/-Inf) stays +/-Inf and
+	    saturates below. The rounding can push fl exactly onto 2^31
+	    (2147483647.7 under toward-+Inf), which the saturation then
+	    catches -- the table applies to the ROUNDED value, matching the
+	    kernel completion, which rounds first and range-checks after.  */
+	fl = floor(fv->f);
+	switch (rm) {
+	case IEEE_RM_RN:
+		if (fv->f > fl + 0.5 ||
+		    (fv->f == fl + 0.5 && fmod(fl, 2.0) != 0.0))
+			fl += 1.0;
+		break;
+	case IEEE_RM_RZ:
+		if (fv->f < 0.0 && fv->f != fl)
+			fl += 1.0;
+		break;
+	case IEEE_RM_RP:
+		if (fv->f != fl)
+			fl += 1.0;
+		break;
+	default:
+		break;			/*  toward -Inf: floor already  */
+	}
+
+	if (fl >= 2147483648.0)
+		return 0x7fffffff;
+	if (fl <= -2147483648.0)
+		return 0x80000000;
+	return (uint32_t) (int32_t) fl;
+}
+#endif
+
+
 X(trnc_ss)
 {
 	struct ieee_float_value f1;
@@ -1648,7 +1740,7 @@ X(trnc_ss)
 		return;
 	}
 
-	reg(ic->arg[0]) = (int32_t) f1.f;
+	reg(ic->arg[0]) = m88k_toint_result(&f1, IEEE_RM_RZ);	/*  #302  */
 }
 X(trnc_sd)
 {
@@ -1664,7 +1756,80 @@ X(trnc_sd)
 		return;
 	}
 
-	reg(ic->arg[0]) = (int32_t) f1.f;
+	reg(ic->arg[0]) = m88k_toint_result(&f1, IEEE_RM_RZ);	/*  #302  */
+}
+
+
+/*
+ *  int (0x09) and nint (0x0a): the other two thirds of the MC88100's
+ *  float->int triad. #302 found them ABSENT from the decoder -- a legal
+ *  guest instruction fell to `goto bad`, which HALTS the emulator ("All
+ *  machines stopped", reproduced on the committed build for both) -- and
+ *  the panel refused to ship trnc alone. Same trap-and-complete contract,
+ *  same OpenBSD completion, same saturation table; int honours fcr63's
+ *  rounding mode via the #298 decode, nint forces round-to-nearest
+ *  (OpenBSD m88100_fp.c: int keeps the current FPCR mode, nint forces
+ *  FP_RN, both land in the same fpu_store).
+ */
+X(int_ss)
+{
+	struct ieee_float_value f1;
+	ieee_interpret_float_value(reg(ic->arg[1]), &f1, IEEE_FMT_S);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	reg(ic->arg[0]) = m88k_toint_result(&f1, m88k_fp_rm(cpu));
+}
+X(int_sd)
+{
+	struct ieee_float_value f1;
+	uint64_t x = reg(ic->arg[1]);
+	x = (x << 32) + reg(ic->arg[1] + 4);
+	ieee_interpret_float_value(x, &f1, IEEE_FMT_D);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	reg(ic->arg[0]) = m88k_toint_result(&f1, m88k_fp_rm(cpu));
+}
+X(nint_ss)
+{
+	struct ieee_float_value f1;
+	ieee_interpret_float_value(reg(ic->arg[1]), &f1, IEEE_FMT_S);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	reg(ic->arg[0]) = m88k_toint_result(&f1, IEEE_RM_RN);
+}
+X(nint_sd)
+{
+	struct ieee_float_value f1;
+	uint64_t x = reg(ic->arg[1]);
+	x = (x << 32) + reg(ic->arg[1] + 4);
+	ieee_interpret_float_value(x, &f1, IEEE_FMT_D);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	reg(ic->arg[0]) = m88k_toint_result(&f1, IEEE_RM_RN);
 }
 
 
@@ -2561,6 +2726,27 @@ X(to_be_translated)
 					fatal("Unimplemented fcmp combination 0x%x.\n",
 					    (iword >> 5) & 0x3f);
 				goto bad;
+			}
+			break;
+
+		case 0x09:	/*  int: FPCR-modal float->int (#302)  */
+		case 0x0a:	/*  nint: round-to-nearest float->int (#302)  */
+			if (d == 0) {
+				fatal("TODO: exception for d = 0 in int/nint instruction\n");
+				goto bad;
+			}
+			ic->arg[0] = (size_t) &cpu->cd.m88k.r[d];
+			ic->arg[1] = (size_t) &cpu->cd.m88k.r[s2];
+			if ((iword >> 7) & 1) {
+				ic->f = (op11 == 0x09) ?
+				    instr(int_sd) : instr(nint_sd);
+				if (s2 & 1) {
+					fatal("TODO: double precision int/nint from uneven register r%i?\n", s2);
+					goto bad;
+				}
+			} else {
+				ic->f = (op11 == 0x09) ?
+				    instr(int_ss) : instr(nint_ss);
 			}
 			break;
 
