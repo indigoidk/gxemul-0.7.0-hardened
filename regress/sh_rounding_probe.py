@@ -49,6 +49,9 @@ def instr(op, store_reg):
 
 
 #  name, fpscr extra bits, register seed, packed instruction word, {mode: expected}
+#  A vector may carry an OPTIONAL sixth element: a second 32-bit instruction word placed
+#  at CODE+4 (stepped as 3 instructions instead of 2). ftrc needs it: the result lands in
+#  FPUL, so the guest runs `ftrc ; sts fpul,r2` then `mov.l r2,@r1`.
 VECTORS = [
     # ---- the reported defect: FDIV, cpu_sh_instr.c fdiv single arm -------------------
     ("fdiv 1.0/3.0", 0,
@@ -119,10 +122,41 @@ VECTORS = [
      {"fr0": 0x3f800000, "fr1": 0x21800000},
      instr(0xf011, 0),                       # fsub fr1,fr0
      {RN: 0x3f800000, RZ: 0x3f800000}),
+
+    # ---- #297: ftrc's value ladder. DELIBERATELY mode-independent -- the manual says
+    #  "the rounding mode is always truncation", so these rows run under both modes and
+    #  must agree; if someone ever wires ftrc to RM, the discriminating-count check
+    #  catches the drift. Before #297 the conversion was a raw C cast (UB on the
+    #  specials): +Inf and +2^40 measured 0x80000000 on x86 where the manual owes +MAX.
+    #  sequence: ftrc fr0,fpul (0xf03d) ; sts fpul,r2 (0x025a) ; mov.l r2,@r1 (0x2122)
+    ("ftrcS-inf +Inf",   0, {"fr0": 0x7f800000},
+     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+     (0x0009 << 16) | 0x2122),
+    ("ftrcS-ovf +2^40",  0, {"fr0": 0x53800000},
+     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+     (0x0009 << 16) | 0x2122),
+    #  A positive NaN also exceeds the positive range bound; the manual routes it to
+    #  -MAX. This row is what catches a ladder with the checks in the wrong order.
+    ("ftrcS-nan qNaN+",  0, {"fr0": 0x7fc00000},
+     (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
+     (0x0009 << 16) | 0x2122),
+    #  The S bound is STRICT: 0x4effffff itself is NORM and truncates to 2147483520.
+    ("ftrcS-edge 4effffff", 0, {"fr0": 0x4effffff},
+     (0x025a << 16) | 0xf03d, {RN: 0x7fffff80, RZ: 0x7fffff80},
+     (0x0009 << 16) | 0x2122),
+    #  The D bound is >=: exactly 2^31 is already Invalid -> +MAX.
+    ("ftrcD-2p31 exact", PR, {"fr0": 0x41e00000, "fr1": 0x00000000},
+     (0x025a << 16) | 0xf03d, {RN: 0x7fffffff, RZ: 0x7fffffff},
+     (0x0009 << 16) | 0x2122),
+    #  The NEGATIVE D bound is -(2^31+1): -2147483648.5 is still NORM and truncates to
+    #  -2^31 -- a defined cast, not the invalid arm (same stored bits, different route).
+    ("ftrcD-neghalf -2^31-0.5", PR, {"fr0": 0xc1e00000, "fr1": 0x00100000},
+     (0x025a << 16) | 0xf03d, {RN: 0x80000000, RZ: 0x80000000},
+     (0x0009 << 16) | 0x2122),
 ]
 
 
-def run(fpscr, seed, word):
+def run(fpscr, seed, word, word2=None):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
@@ -170,10 +204,12 @@ def run(fpscr, seed, word):
     cmds = ["fpscr=0x%08x" % fpscr]
     cmds += ["%s=0x%08x" % (k, v) for k, v in seed.items()]
     cmds += ["r1=0x%08x" % DEST,
-             "put w 0x%08x, 0x%08x" % (DEST, 0xdeadbeef),   # sentinel
-             "put w 0x%08x, 0x%08x" % (CODE, word),
-             "pc=0x%08x" % CODE,
-             "step 2"]
+             "put w 0x%08x, 0x%08x" % (DEST, 0xdeadbeef)]   # sentinel
+    cmds += ["put w 0x%08x, 0x%08x" % (CODE, word)]
+    if word2 is not None:
+        cmds += ["put w 0x%08x, 0x%08x" % (CODE + 4, word2)]
+    cmds += ["pc=0x%08x" % CODE,
+             "step %d" % (3 if word2 is not None else 2)]
     for c in cmds:
         send(c)
     mark = len(buf)
@@ -195,10 +231,12 @@ def run(fpscr, seed, word):
 
 
 passed = total = 0
-for name, extra, seed, word, want in VECTORS:
+for vec in VECTORS:
+    name, extra, seed, word, want = vec[:5]
+    word2 = vec[5] if len(vec) > 5 else None
     for mode, expect in sorted(want.items()):
         total += 1
-        got = run(DN | extra | mode, seed, word)
+        got = run(DN | extra | mode, seed, word, word2)
         label = "nearest" if mode == RN else "toward-zero"
         if got is None:
             print("%-28s %-12s %-10s %-10s FAIL(no-readback)"
@@ -211,7 +249,9 @@ for name, extra, seed, word, want in VECTORS:
 
 # A vector whose two modes want the SAME answer cannot detect a reverted fix. Report the
 # count of genuinely discriminating vectors so the gate can assert on it rather than
-# trusting that the table was written correctly.
-discriminating = sum(1 for _, _, _, _, w in VECTORS if len(set(w.values())) > 1)
+# trusting that the table was written correctly. The ftrc rows are REQUIRED to be
+# mode-independent (truncation by architecture), so this count doubles as the tripwire
+# for anyone accidentally wiring ftrc to FPSCR.RM.
+discriminating = sum(1 for v in VECTORS if len(set(v[4].values())) > 1)
 print("SH_ROUND_DISCRIMINATING=%d" % discriminating)
 print("SH_ROUND_RESULT=%d/%d" % (passed, total))

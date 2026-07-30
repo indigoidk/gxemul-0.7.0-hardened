@@ -33,10 +33,13 @@
 >   `0x3f800000` where silicon rounds the exact difference to `0x3f7fffff`. Measured.
 >   Pre-existing, not architecture-specific, and pinned in gate 10 so it cannot drift
 >   silently. `fmul` is immune (the product is exact in double).
-> - **SH `ftrc` converts with raw C casts** (`cpu_sh_instr.c`), so it carries the same
->   NaN/Infinity/out-of-range conversion problem that #273 fixed for MIPS W/L; real SH-4
->   saturates. Found while auditing #296; untested so far, so it is listed rather than
->   patched.
+> - ✅ **SH `ftrc` raw C casts → RESOLVED as #297** (round 62). Reproduced first (+Inf and
+>   2^40 measured 0x80000000 on the committed build; the manual owes +MAX), then replaced
+>   with the manual's own value ladder on the raw bits — NaN checked before range so a
+>   positive NaN gets −MAX, strict single bound vs `>=` double bounds, negative double
+>   bound at −(2^31+1). 21/21 probe rows; six rows added to gate 10 (now 30 pairs), which
+>   also asserts the ftrc rows stay mode-INDEPENDENT. Values only — no FPSCR.V cause bit,
+>   same scope call as #273 but with SH's ±MAX split, not MIPS's all-0x7fffffff table.
 > - **PowerPC `stfs` rounding is disputed between panel seats** (bit-extraction vs rounds
 >   per FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
 > - ~~m88k models no rounding register at all — nothing to wire~~ — **WRONG as recorded,
@@ -74,6 +77,20 @@
 >   accepted mode paths.
 > - **OB-22** (`dev_jazz.c:613` jazzio vector-read blanket deassert) — self-healing, and a
 >   change there would touch the verified arc boot.
+> - **The SH FPU exception model does not exist** — no instruction sets any FPSCR cause
+>   bit and no arithmetic FPU trap is delivered. #297 makes the concrete case observable:
+>   `STS FPSCR` after `ftrc(+Inf)` reads V=0 where hardware reads 1, and a guest that
+>   sets ENABLE_V gets the saturated value where hardware traps with FPUL preserved.
+>   Deliberately not patched piecemeal — a lone V bit would imply the other flags work.
+>   OpenBSD leaves the enables clear at exec, so the shipped guest sees exact manual
+>   values.
+> - **`ieee_interpret_float_value` mis-decodes subnormals with an implicit 1** (a #297
+>   panel seat traced `float_emul.c`: raw 0x00000001 decodes as (1+2^-23)·2^-127 instead
+>   of 2^-149). Invisible through `ftrc` — both truncate to 0 — and through any store that
+>   flushes subnormals, which is why it has survived; a consumer that does arithmetic on
+>   an interpreted subnormal would see it. Pre-existing, all five CPU families.
+> - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
+>   encoding; pre-existing dispatch behaviour, untouched by #297).
 > - **SH `fsca` and `fsrra` stay on the truncating store** (the three sites #296 left alone).
 >   Unlike `fipr`/`ftrv`, these are transcendental approximations where real silicon is
 >   documented to deviate by roughly 2^-21 — far more than a last-bit rounding choice — so no

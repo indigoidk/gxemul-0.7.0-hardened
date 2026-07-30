@@ -2770,15 +2770,95 @@ X(ftrc_frm_fpul)
 
 	FLOATING_POINT_AVAILABLE_CHECK;
 
+	/*  #297: the conversion was a raw C cast, `(int32_t) op1.f`.  For NaN,
+	 *  infinity and out-of-range values that cast is UNDEFINED BEHAVIOUR --
+	 *  the guest-visible result depended on the HOST cpu.  On x86 the cast
+	 *  happens to deliver 0x80000000 for every special case; the SH-4
+	 *  manual (E602156 rev 5.0, FTRC pseudocode + special-case table)
+	 *  instead delivers +MAX 0x7fffffff for +Inf and positive overflow.
+	 *  Reproduced on the committed build before this edit: ftrc of +Inf
+	 *  and of 2^40 both stored 0x80000000 where the manual owes 0x7fffffff.
+	 *
+	 *  The ladder below mirrors the manual's ftrc_single_type_of /
+	 *  ftrc_double_type_of on the raw bits, constants included:
+	 *
+	 *    single: NaN if bits > 0x7f800000 (checked FIRST -- a positive NaN
+	 *            also exceeds the range bound, and the manual routes it to
+	 *            NINF, i.e. 0x80000000, NOT to +MAX); positive out-of-range
+	 *            and +Inf if bits > 0x4effffff (P_INT_SINGLE_RANGE,
+	 *            strict); negative side if magnitude > 0x4f000000
+	 *            (N_INT_SINGLE_RANGE), which covers -Inf, negative NaN and
+	 *            negative overflow alike.
+	 *    double: NaN if the high word says so; positive bound is
+	 *            0x41e0000000000000 (2^31) with >=; negative bound is
+	 *            magnitude >= 0x41e0000000200000, i.e. -(2^31+1), also >=,
+	 *            so -2147483648.5 is still NORM and truncates to -2^31.
+	 *
+	 *  ALL NaN deliver 0x80000000 regardless of sign -- the panel seat that
+	 *  claimed +MAX for positive NaN was refuted by the pseudocode itself.
+	 *  Every invalid case delivers the VALUE only.  The manual's
+	 *  ftrc_invalid sets the FPSCR.V cause bit unconditionally before the
+	 *  enable check; this model does not, and the honest reason is
+	 *  internal consistency, not scope hand-waving: NO instruction in this
+	 *  core sets ANY FPSCR cause bit (see the TODO at the fdiv arm), so a
+	 *  lone V here would be the one flag a guest could observe, implying
+	 *  the others work.  The deviation is guest-visible -- STS FPSCR after
+	 *  ftrc(+Inf) reads V=0 where hardware reads 1, and a guest that
+	 *  enables the trap gets a value where hardware traps with FPUL
+	 *  preserved -- and is tracked in OUTSTANDING_BUGS with the rest of
+	 *  the missing SH FPU exception model.  (#273 is precedent only for
+	 *  the values-only SCOPE on MIPS; its all-0x7fffffff result table is
+	 *  MIPS-specific and must not be copied here -- SH documents the
+	 *  ±MAX split this ladder implements.)
+	 *  In the NORM arm the truncated value fits int32 by construction, so
+	 *  the cast there is defined C and byte-identical to the old path.  */
 	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
 		/*  Double-precision, using a pair of registers:  */
-		int64_t r1 = ((uint64_t)reg(ic->arg[0]) << 32) +
+		uint64_t r1 = ((uint64_t)reg(ic->arg[0]) << 32) +
 		    reg(ic->arg[0] + sizeof(uint32_t));
+		uint32_t hi = (uint32_t) (r1 >> 32);
+		if (!(r1 & 0x8000000000000000ULL)) {
+			if (hi > 0x7ff00000 ||
+			    (hi == 0x7ff00000 && (uint32_t)r1 != 0)) {
+				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+				return;
+			}
+			if (r1 >= 0x41e0000000000000ULL) {
+				/*  out of range, +Inf:  */
+				cpu->cd.sh.fpul = 0x7fffffff;
+				return;
+			}
+		} else {
+			if ((r1 & 0x7fffffffffffffffULL) >=
+			    0x41e0000000200000ULL) {
+				/*  out of range, -Inf, NaN:  */
+				cpu->cd.sh.fpul = 0x80000000;
+				return;
+			}
+		}
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_D);
 		cpu->cd.sh.fpul = (int32_t) op1.f;
 	} else {
 		/*  Single-precision:  */
-		ieee_interpret_float_value(reg(ic->arg[0]), &op1, IEEE_FMT_S);
+		uint32_t r1 = reg(ic->arg[0]);
+		if (!(r1 & 0x80000000)) {
+			if (r1 > 0x7f800000) {
+				cpu->cd.sh.fpul = 0x80000000;	/*  NaN  */
+				return;
+			}
+			if (r1 > 0x4effffff) {
+				/*  out of range, +Inf:  */
+				cpu->cd.sh.fpul = 0x7fffffff;
+				return;
+			}
+		} else {
+			if ((r1 & 0x7fffffff) > 0x4f000000) {
+				/*  out of range, -Inf, NaN:  */
+				cpu->cd.sh.fpul = 0x80000000;
+				return;
+			}
+		}
+		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
 		cpu->cd.sh.fpul = (int32_t) op1.f;
 	}
 }

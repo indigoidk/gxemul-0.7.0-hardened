@@ -53,16 +53,22 @@ res=$(grep -o "SH_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 disc=$(grep -o "SH_ROUND_DISCRIMINATING=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 
-# 18 vector-mode pairs: 9 vectors x 2 modes.
-check     "vector-mode pairs run"                  "$want" 18
+# 30 vector-mode pairs: 15 vectors x 2 modes (9 from #296, 6 ftrc rows from #297).
+check     "vector-mode pairs run"                  "$want" 30
 check     "vector-mode pairs correct"              "$got"  "$want"
-# 7 of the 9 vectors must genuinely discriminate between the two modes. If this number
-# drops, someone weakened the table and the gate stopped being able to fail.
+# EXACTLY 7 of the 15 vectors discriminate between the two modes. If this number drops,
+# someone weakened the #296 table and the gate stopped being able to fail; if it RISES,
+# someone made a mode-independent row (a PIN, or an ftrc row -- ftrc is truncation by
+# architecture) depend on FPSCR.RM, which is drift in the other direction.
 check     "vectors that discriminate the two modes" "$disc" 7
 
 # Per-instruction closure: naming them individually means a single site silently reverting
-# cannot hide behind an aggregate count.
-for v in "fdiv" "float" "fadd" "fmac" "fipr" "ftrv" "fmul"; do
+# cannot hide behind an aggregate count. The ftrc rows are #297's regression checks: on
+# the pre-#297 build the +Inf and +2^40 rows measured 0x80000000 (the raw-cast UB answer)
+# where the SH-4 manual owes +MAX.
+for v in "fdiv" "float" "fadd" "fmac" "fipr" "ftrv" "fmul" \
+         "ftrcS-inf" "ftrcS-ovf" "ftrcS-nan" "ftrcS-edge" \
+         "ftrcD-2p31" "ftrcD-neghalf"; do
     n=$(grep -c "^$v .*ok$" "$LOG")
     check "  $v: both modes correct" "$n" 2
 done

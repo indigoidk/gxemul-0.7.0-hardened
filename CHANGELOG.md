@@ -2280,6 +2280,111 @@ wildcards, so no A/B or regression conclusion drawn against `39748e3` is disturb
 import commit is left alone rather than rewritten again; this note is the record that it
 carries two files upstream never shipped.
 
+## Sixty-second round (#297) — ftrc converted with a raw C cast, so the guest's answer depended on the host
+
+One fix, `cpus/cpu_sh_instr.c`, not a tree-divergent file. First item of the five-seat
+feasibility triage's queue, and the panel's unanimous rank 1.
+
+### The defect
+
+`ftrc` — SuperH's float-to-integer conversion — did `(int32_t) op1.f` on both arms. For
+NaN, ±Infinity and out-of-range values that cast is undefined behaviour in C, which means
+the *guest-visible* result was whatever the *host* CPU happened to do. On x86 the cast
+delivers 0x80000000 for every special case; an aarch64 host saturates and gives NaN → 0 —
+same guest, same program, different answer. The SH-4 manual instead specifies a value
+ladder: +Inf and positive overflow deliver +MAX 0x7fffffff; −Inf, negative overflow and
+**all NaN of either sign** deliver −MAX 0x80000000.
+
+Measured on the committed build before the edit: ftrc(+Inf) and ftrc(2^40) both stored
+0x80000000 where the manual owes 0x7fffffff. The in-range control (5.7 → 5) passed. That
+is the reproduction the project rule requires, and it is also the practical exposure: an
+organic guest path (any userland `(int)` cast of a NaN/Inf/huge double — awk's `int()`,
+printf of casts) reaches this instruction, and OpenBSD runs SH-4 processes with PR=1, so
+the double arm is the hot one.
+
+### The fix mirrors the manual's own pseudocode, constants and all
+
+The classifier runs on the raw register bits, exactly as the manual's
+`ftrc_single_type_of` / `ftrc_double_type_of` do, and only then hands in-range values to
+the old interpret-and-cast path — which keeps the happy path byte-identical.
+
+The details that would have been easy to get wrong, each verified by a probe row:
+
+- **The NaN test must come first.** A positive NaN's bits also exceed the positive range
+  bound, and the manual routes NaN to −MAX, not +MAX. A ladder with the checks in the
+  natural "range first" order ships NaN → +MAX and passes every non-NaN vector.
+- **The single-precision bound is strict, the double bound is not.** 0x4effffff
+  (2147483520) is NORM and truncates to 0x7fffff80; but exactly 2^31 in double is already
+  Invalid → +MAX.
+- **The negative double bound is −(2^31+1), not −2^31.** So −2147483648.5 is still NORM
+  and truncates — legally — to −2^31. Same stored bits as the Invalid arm, different
+  route; the distinction matters the day someone adds the V cause bit.
+- **−2^31 exactly, in single, is NORM** (the strict negative check), and the cast of
+  −2147483648.0 is defined C.
+
+Every value the ladder admits to the NORM arm has an integral part representable in
+int32 — the extreme admitted doubles are 0x41dfffffffffffff (truncates to INT32_MAX) and
+0xc1e00000001fffff (truncates to INT32_MIN) — so the one cast that remains is defined C
+on every host. A panel seat verified exactly those two witnesses.
+
+Scope: values only. No FPSCR.V cause bit is raised — this model raises no SH FPU
+exceptions anywhere, and a lone cause bit would be new guest-visible surface with no
+victim. That mirrors #273's values-only scope on MIPS, **but not #273's result table**:
+MIPS chose legacy-compatible 0x7fffffff for all five special cases; SH-4 documents the
+±MAX split, and the two must not be cross-copied.
+
+### Verification
+
+21 probe rows on the fixed build, 21 passing — S and D arms, both defect witnesses
+flipped, all four boundary semantics exact, NaN of both signs and both arms, and
+subnormals (which route to NORM and truncate to 0, as the pseudocode implies).
+
+Gate 10 grew six ftrc rows and now runs 15 vectors × 2 modes = 30 pairs. The ftrc rows
+are **deliberately mode-independent** — the manual says "the rounding mode is always
+truncation" — and the gate's discriminating-count check now cuts both ways: it fails if
+the #296 table is weakened *and* if anyone ever wires ftrc to FPSCR.RM. The probe gained
+an optional second instruction word per vector, because ftrc's result lands in FPUL and
+the guest has to run `sts fpul,r2 ; mov.l r2,@r1` to get it into dumpable memory.
+
+The negative control ran for real: a build with #297 reverted scores **24 of 30**,
+failing exactly the three vectors whose x86-UB answer differs from the manual — +Inf,
++2^40 and the D 2^31 boundary, both arms each — while the rows where the UB cast happens
+to coincide with the manual on x86 (NaN, the strict S edge, the negative D half) stay
+green. That is the arithmetic the fix predicts, and it is also the honest statement of
+what the old code got right by accident on this one host.
+
+The five-seat adverse panel: three SHIP, one SHIP WITH CHANGES, no in-scope code defect
+— every seat conceded all seven attack-surface points. One seat verified every constant
+and comparison operator against the manual's pseudocode table by table; two
+independently proved the extreme NORM-admitted doubles truncate to exactly INT32_MAX and
+INT32_MIN, closing the cast-definedness question (one noting it holds *because* the
+interpreted value is a double — a float there would re-open the UB); one confirmed the
+early returns skip no bookkeeping because the dyntrans loop advances `next_ic` before
+the handler runs.
+
+Three findings were adopted, all about honesty rather than code:
+
+- The comment's original "no victim" justification for skipping the FPSCR.V cause bit
+  **argued the wrong thing** — FPSCR is *existing* guest-visible surface and `STS FPSCR`
+  after ftrc(+Inf) falsifies the claim (hardware reads V=1, this model reads 0). The
+  comment now states the boring true reason: no instruction in this core sets any FPSCR
+  cause bit, so a lone V here would be the one flag a guest could observe, implying the
+  others work. The whole missing SH FPU exception model is now indexed in
+  OUTSTANDING_BUGS instead of being waved off.
+- The negative-boundary probe rows are **value-vacuous by construction** — NORM
+  truncation and the Invalid arm both store 0x80000000 for every value in
+  (−2^31−1, −2^31], so those rows cannot distinguish the route, only the value. Stated
+  here so the 21/21 is not over-read; the rows that carry the proof are +Inf, +2^40,
+  the strict S edge, and the positive-NaN ordering witness — all four of which are
+  durably gated in gate 10.
+- A **pre-existing** subnormal decode defect in `ieee_interpret_float_value`
+  (implicit-1 applied to subnormals; invisible through ftrc since both truncate to 0)
+  was surfaced and indexed.
+
+The organic in-guest witness, for the record: `awk 'BEGIN{print int(2^40)}'` owes
+2147483647 and the old build on x86 printed −2147483648 — and a different wrong answer
+on an ARM host, which is the whole point.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.
