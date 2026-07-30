@@ -32,7 +32,13 @@
 >   store: `fsub` of 1.0 and 2^-60 collapses to exactly 1.0, and toward-zero yields
 >   `0x3f800000` where silicon rounds the exact difference to `0x3f7fffff`. Measured.
 >   Pre-existing, not architecture-specific, and pinned in gate 10 so it cannot drift
->   silently. `fmul` is immune (the product is exact in double).
+>   silently. `fmul` is immune (the product is exact in double), and a #298 panel seat
+>   sharpened the m88k boundary: `fdiv` is immune too (a nonzero residue always survives
+>   the double), so the band exists only for add/sub with a large exponent gap. **#298
+>   widens the observers**: m88k's directed modes are now reachable, and hardware's
+>   sticky bit would round `1.0 + 2^-60` UP under toward-+Inf where the emulator's
+>   collapsed double cannot. Same remedy, the round-64 round-to-odd helper — which must
+>   therefore cover the m88k `fadd.sss`/`fsub.sss`/`fsub.sds` arms as well as SH and MIPS.
 > - ✅ **SH `ftrc` raw C casts → RESOLVED as #297** (round 62). Reproduced first (+Inf and
 >   2^40 measured 0x80000000 on the committed build; the manual owes +MAX), then replaced
 >   with the manual's own value ladder on the raw bits — NaN checked before range so a
@@ -40,20 +46,21 @@
 >   bound at −(2^31+1). 21/21 probe rows; six rows added to gate 10 (now 30 pairs), which
 >   also asserts the ftrc rows stay mode-INDEPENDENT. Values only — no FPSCR.V cause bit,
 >   same scope call as #273 but with SH's ±MAX split, not MIPS's all-0x7fffffff table.
-> - **PowerPC `stfs` rounding is disputed between panel seats** (bit-extraction vs rounds
->   per FPSCR.RN). Check the Power ISA manual before wiring PPC to anything.
-> - ~~m88k models no rounding register at all — nothing to wire~~ — **WRONG as recorded,
->   twice over** (2026-07-30 five-seat feasibility panel). `fldcr`/`fstcr` ARE decoded and
->   `m88k_fstcr()` stores the value into `fcr[]` (it only warns), so FPCR (fcr63) is
->   retained, readable and decoded into nothing — the #296 shape. Worse: the six m88k
->   single-precision arms store via legacy truncation while OpenBSD/m88k `setregs()`
->   zeroes fcr63 (= round-to-nearest), so **every luna88k userland single-precision
->   result is 1 ulp low about half the time today**, on a rig that boots to root. Queued
->   as its own round. Bit meanings settled from OpenBSD libc + the MC88100 manual:
->   fcr63[15:14], 0=RN 1=RZ **2=toward−Inf 3=toward+Inf** — the OPPOSITE directed order
->   from our `IEEE_RM_*` enum (RP=2, RM=3), so the mapping must swap 2↔3, and the probe
->   needs sign-asymmetric directed-mode vectors because a swapped mapping passes every
->   symmetric one.
+> - ~~PowerPC `stfs` rounding is disputed~~ — **settled by the feasibility triage** (Power
+>   ISA §4.6.3: bit-extraction, no rounding; `frsp` is the rounding instruction). The
+>   dated block below carries the quote; the real PPC defects found instead (frsp NaN→+0.0
+>   and friends) are listed in this section further down.
+> - ✅ **m88k fcr63 rounding decoded nowhere → RESOLVED as #298** (round 63). The record
+>   here previously said "no rounding register at all — nothing to wire", which the
+>   feasibility panel proved wrong twice over, and the defect was LIVE: OpenBSD zeroes
+>   fcr63 at exec (= round-to-nearest) while all six single-precision arms truncated, so
+>   every luna88k userland single-precision result was 1 ulp low about half the time on
+>   a rig that boots to root. Fixed with the 2↔3 directed-pair swap (m88k order is
+>   2=toward−Inf, 3=toward+Inf — opposite our enum), covered by the new gate 11 (20 rows,
+>   four sign-asymmetric swap tripwires, an fstcr warning contract with its own positive
+>   control, and TWO mutants run against it with pre-registered predictions: missing-swap
+>   13/20, legacy-revert 11/20). `m88k_fstcr()` no longer calls pure-RM fcr63 writes
+>   UNIMPLEMENTED.
 > - **PPC `frsp` of a NaN stores +0.0** (`cpu_ppc_instr.c:969-989`; the ISA owes the NaN
 >   with the low 29 fraction bits zeroed), `frsp` ignores FPSCR.RN (host cast = nearest
 >   always), the `stfs` denormalization band diverges (2^-127: ISA owes 0x00400000, the
@@ -91,6 +98,14 @@
 >   an interpreted subnormal would see it. Pre-existing, all five CPU families.
 > - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
 >   encoding; pre-existing dispatch behaviour, untouched by #297).
+> - **m88k mixed-format S-destination arithmetic is undecoded** (a #298 panel seat's
+>   find): the ISA defines e.g. `fadd.ssd` (single = single + double, size code 0x04),
+>   and the decoder rejects it — a pre-existing instruction-coverage gap, not a store
+>   site #298 missed. Same family as the already-listed `flt.ds` odd-register TODO.
+> - **m88k `trnc`/`int`/`nint` conversions use raw C casts** (`(int32_t) f1.f` in
+>   `cpu_m88k_instr.c`) — the same host-UB class #297 fixed on SH and #273 on MIPS.
+>   Needs the MC88100's own special-case table before patching; queued behind the
+>   feasibility rounds.
 > - **SH `fsca` and `fsrra` stay on the truncating store** (the three sites #296 left alone).
 >   Unlike `fipr`/`ftrv`, these are transcendental approximations where real silicon is
 >   documented to deviate by roughly 2^-21 — far more than a last-bit rounding choice — so no

@@ -202,7 +202,7 @@ Oldest first.
 
 ## Regression harness
 
-`regress/run.sh` runs ten gates; `regress/run.sh 2 4` runs a subset. The governing rule is
+`regress/run.sh` runs eleven gates; `regress/run.sh 2 4` runs a subset. The governing rule is
 that **a gate which cannot fail is worse than no gate**, because it reports green — and
 this fork had been counting two such gates as evidence:
 
@@ -226,7 +226,8 @@ pure function in closed form.
 | 7 | `selftest_mutation.sh` | Four deliberate mutants prove gate 2 can actually fail |
 | 8 | `gate_upstream.sh` | Upstream GXemul's own `test/` suite, run three-way |
 | 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
-| 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 9 vectors × 2 modes on real guest instructions |
+| 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 15 vectors × 2 modes on real guest instructions |
+| 11 | `gate_m88k_rounding.sh` | m88k honours fcr63 rounding — 20 rows incl. sign-asymmetric swap tripwires |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger

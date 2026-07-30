@@ -877,6 +877,59 @@ X(fstcr)
  *
  *  Note: For 'd' variants, arg[x] points to a _pair_ of registers!
  */
+#ifndef	M88K_FP_ROUNDING_MODE_INCLUDED
+#define	M88K_FP_ROUNDING_MODE_INCLUDED
+/*
+ *  #298: the rounding mode for a single-precision result.
+ *
+ *  fcr63 (the FPCR) was stored by m88k_fstcr(), read back by fldcr, and
+ *  decoded into NOTHING -- while all six single-precision arms below
+ *  stored through the legacy truncating entry point. The victim is not
+ *  hypothetical and not even mode-changing guests: OpenBSD/m88k's
+ *  setregs() zeroes fcr63 at every exec ("fstcr r0, fcr63" -- r0 is
+ *  hardwired zero), and zero means round-to-NEAREST, so every luna88k
+ *  userland single-precision result was one ulp low about half the
+ *  time. Reproduced cold on the committed build: fadd.sss of 1.0 and
+ *  1.5*2^-24 returned 0x3f800000 where nearest owes 0x3f800001.
+ *
+ *  The decode must SWAP the directed pair: m88k's RM field is 00
+ *  nearest, 01 zero, 10 toward MINUS infinity, 11 toward PLUS infinity
+ *  (MC88100 manual sec. 2.4.4 table 2-5; OpenBSD <ieeefp.h> FP_RM=2 and
+ *  FP_RP=3), while float_emul.h's IEEE_RM_RP is 2 and IEEE_RM_RM is 3
+ *  -- the MIPS/SH bit order. The m88k gate pins both defences: its
+ *  direction-pinned positive rows catch a straight missing swap (the
+ *  same operands under 0x8000 and 0xc000 must land on opposite sides),
+ *  and its sign-ASYMMETRIC rows additionally catch any sign-dependent
+ *  mis-mapping a symmetric suite cannot see. The missing-swap mutant
+ *  was built and run for real: 13 of 20, failing exactly those rows.
+ *
+ *  KNOWN-DIVERGENT band, pinned in gate 11 (a panel seat's find): the
+ *  arms below compute in host double before the store, so a residue
+ *  finer than 2^-53 collapses before a directed mode can see it --
+ *  hardware's sticky bit would round 1.0 + 2^-60 UP under toward-+Inf
+ *  (MC88100UM: sticky is the OR of ALL infinitely-precise result bits)
+ *  where this model stores 1.0. Add/sub only; fmul's product is exact
+ *  in double and a nonzero fdiv residue always survives; RN and RZ are
+ *  unaffected. The remedy is the shared round-to-odd helper of the
+ *  next round, not a rider here.
+ *
+ *  tmp_m88k_tail.c includes this file twice, but the second include
+ *  sits under DYNTRANS_DUALMODE_32, which cpu_m88k.c never defines --
+ *  so there is exactly ONE live inclusion today and this guard is
+ *  future-proofing, same as the cpu_sh_instr.c helper.
+ */
+static int m88k_fp_rm(struct cpu *cpu)
+{
+	switch ((cpu->cd.m88k.fcr[M88K_FCR_FPCR] & M88K_FPCR_RM_MASK)
+	    >> M88K_FPCR_RM_SHIFT) {
+	case 1:  return IEEE_RM_RZ;
+	case 2:  return IEEE_RM_RM;	/*  toward -Inf: the swap  */
+	case 3:  return IEEE_RM_RP;	/*  toward +Inf: the swap  */
+	default: return IEEE_RM_RN;
+	}
+}
+#endif
+
 X(fadd_sss)
 {
 	struct ieee_float_value f1;
@@ -895,7 +948,7 @@ X(fadd_sss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f + f2.f, IEEE_FMT_S);
+	d = ieee_store_float_value_rm(f1.f + f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
 
 	reg(ic->arg[0]) = d;
 }
@@ -1013,7 +1066,7 @@ X(fsub_sss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_S);
+	d = ieee_store_float_value_rm(f1.f - f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
 	reg(ic->arg[0]) = d;
 }
 X(fsub_sds)
@@ -1035,7 +1088,7 @@ X(fsub_sds)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f - f2.f, IEEE_FMT_S);
+	d = ieee_store_float_value_rm(f1.f - f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
 	reg(ic->arg[0]) = d;
 }
 X(fsub_dss)
@@ -1152,7 +1205,7 @@ X(fmul_sss)
 	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
 	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
 
-	d = ieee_store_float_value(f1.f * f2.f, IEEE_FMT_S);
+	d = ieee_store_float_value_rm(f1.f * f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
 	reg(ic->arg[0]) = d;
 }
 X(fmul_dss)
@@ -1276,7 +1329,7 @@ X(fdiv_sss)
 		return;
 	}
 
-	d = ieee_store_float_value(f1.f / f2.f, IEEE_FMT_S);
+	d = ieee_store_float_value_rm(f1.f / f2.f, IEEE_FMT_S, m88k_fp_rm(cpu));
 
 	reg(ic->arg[0]) = d;
 }
@@ -1513,7 +1566,7 @@ X(flt_ss)
 		return;
 	}
 
-	reg(ic->arg[0]) = ieee_store_float_value((double)x, IEEE_FMT_S);
+	reg(ic->arg[0]) = ieee_store_float_value_rm((double)x, IEEE_FMT_S, m88k_fp_rm(cpu));
 }
 X(flt_ds)
 {

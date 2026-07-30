@@ -151,6 +151,19 @@ struct m88k_cpu_type_def {
 #define	M88K_FPECR_FUNIMP		(1 << 6)
 /*  ... TODO: more  */
 
+/*  #298: fcr63 is the FPCR, the user-mode FPU control register. Its RM
+    field (bits 15:14) selects the rounding mode: 00 nearest, 01 toward
+    zero, 10 toward MINUS infinity, 11 toward PLUS infinity -- note the
+    directed pair is the OPPOSITE order from MIPS FCSR / SH FPSCR and
+    from the IEEE_RM_* values in float_emul.h, so the decode must swap
+    2 and 3. Source: MC88100 User's Manual sec. 2.4.4, and OpenBSD's
+    m88k <ieeefp.h> (FP_RM=2 toward -Inf, FP_RP=3 toward +Inf) with
+    libc fpsetround() writing exactly this field via fstcr.  */
+#define	M88K_FCR_FPSR		62
+#define	M88K_FCR_FPCR		63
+#define	M88K_FPCR_RM_SHIFT	14
+#define	M88K_FPCR_RM_MASK	(3 << M88K_FPCR_RM_SHIFT)
+
 
 #define	M88K_N_IC_ARGS			3
 #define	M88K_INSTR_ALIGNMENT_SHIFT	2

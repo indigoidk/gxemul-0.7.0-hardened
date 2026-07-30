@@ -2385,6 +2385,126 @@ The organic in-guest witness, for the record: `awk 'BEGIN{print int(2^40)}'` owe
 2147483647 and the old build on x86 printed −2147483648 — and a different wrong answer
 on an ARM host, which is the whole point.
 
+## Sixty-third round (#298) — m88k stored its rounding register, read it back, and used it nowhere
+
+One fix across `cpus/cpu_m88k_instr.c` and `include/cpu_m88k.h`, neither tree-divergent.
+Second item of the feasibility queue, and the one with a live victim.
+
+### The defect was live on a rig that boots to root
+
+fcr63 — the m88k FPCR, the user-mode FPU control register — was faithfully stored by
+`m88k_fstcr()` and read back by `fldcr`, and decoded into nothing. All six m88k
+single-precision arms stored through the legacy truncating entry point. OUTSTANDING_BUGS
+had this recorded as "m88k models no rounding register at all — nothing to wire", which
+the feasibility panel proved wrong twice over: the register file is modeled and retained,
+and the defect does not even need a mode-changing guest. OpenBSD/m88k's `setregs()`
+zeroes fcr63 at every exec — `fstcr r0, fcr63`, r0 being hardwired zero — and zero means
+round-to-NEAREST. So every luna88k userland single-precision result was one ulp low about
+half the time, on the OpenBSD 7.7 rig this project boots to a root shell in gate 4.
+
+Reproduced cold on the committed build before any edit, with the pipeline proven first:
+
+```
+control  1.0f + 1.0f       -> 40000000    ok, the probe machinery works
+defect   1.0f + 1.5*2^-24  -> 3f800000    round-to-nearest owes 3f800001
+fcr63    fstcr 0x4000      -> fldcr reads it back: retained, unused
+```
+
+### The decode must swap the directed pair, and the gate is built around that fact
+
+m88k's RM field is 00 nearest, 01 toward zero, **10 toward MINUS infinity, 11 toward PLUS
+infinity** — the opposite directed order from MIPS FCSR, SH FPSCR, and `float_emul.h`'s
+own IEEE_RM values. Primary sources, both from the feasibility round and re-verified by
+this round's panel: the MC88100 User's Manual §2.4.4, and the guest's own authority —
+OpenBSD's m88k `<ieeefp.h>` (`FP_RM=2` toward −Inf, `FP_RP=3` toward +Inf) with libc
+`fpsetround()` writing exactly this field via `fstcr`.
+
+The trap in that fact: a decode that FORGETS the swap passes every sign-symmetric test,
+because the two directed modes simply trade places consistently. Only rows whose expected
+value differs by the *sign* of the operand catch it. Gate 11 therefore runs
+sign-asymmetric pairs — the same magnitudes with the sign flipped, where toward+Inf must
+truncate the negative sum it grew on the positive side — and asserts those four rows by
+name.
+
+Six sites wired: `fadd.sss`, `fsub.sss`, `fsub.sds` (the mixed double-minus-single arm),
+`fmul.sss`, `fdiv.sss`, and `flt.ss` (integer to single — exact into double, so the store
+is the only rounding). The D-format arms are excluded on the established
+nothing-to-round-at-the-store grounds, and the m88k `trnc`/`int` conversions — which have
+the same raw-cast defect #297 just fixed on SH — are deliberately a separate round rather
+than a rider on this one.
+
+### Gate 11
+
+Twenty rows on the luna-88k machine, cold debugger, nothing booted. Every row sets the
+mode the way a real guest does — the guest itself executes `fstcr r5,fcr63` — so the
+decode is proven end-to-end, not just the store arm. m88k floating point operates on
+general registers, which the debugger seeds and prints directly; no memory round-trip.
+The fcr63 retention row pins the #296-shape premise itself.
+
+20 of 20 pass on the fixed build: the flipped defect row, all four modes on the positive
+witness, the four asymmetric swap tripwires, one row per wired site including the exact
+midpoint (`fmul` ties-to-even), `fdiv` 1.0/3.0, and the `flt` integer tie on both signs.
+
+One measurement lesson is recorded in the probe rather than papered over: a single row in
+the first full run returned no value at all — not a wrong value — and three targeted
+re-runs all read the correct answer. The register dump had straggled in after the
+prompt detector fired under host load. The probe now retries the *read* once (the value
+cannot change between two `reg` commands, so retrying the read is honest where retrying
+the row until green would not be).
+
+Both negative controls ran for real, each with its prediction written down first:
+
+- **The missing-swap mutant** — the panel's named likeliest wrong implementation, a
+  decode without the 2↔3 exchange — scores **13 of 20**: all four asymmetric tripwires
+  red by name, plus the three direction-pinned symmetric rows, while every RN/RZ row
+  stays green. Exactly the failure signature the gate was designed to produce.
+- **The legacy-revert mutant** — the helper forced back to truncation — scores
+  **11 of 20**, failing the five RN rows a truncating store must fail plus the four
+  directed rows truncation gets wrong, while the RZ rows (truncation *is* toward-zero)
+  and the two accidental coincidences stay green.
+
+### What the panel changed
+
+One seat's DO NOT SHIP contained one finding that was adopted and one that was already
+queued. Adopted: with the RM field now decoded, `m88k_fstcr()`'s blanket "UNIMPLEMENTED
+fcr" warning became dishonest — a guest calling `fpsetround()` is doing something
+implemented. fcr63 now warns only for bits *outside* the RM field, which really are
+ignored (the #270 honesty class). Overruled by the queue: the D-format arms still follow
+the host's rounding mode — that is round 65's fma-residual work, adjudicated by the
+feasibility panel, not a rider on this round; and the seat's concrete witness was an
+exact tie (`1.0 + 2^-53`), which rounds to the same value under nearest and toward-zero
+alike, demonstrating no divergence. The same seat independently confirmed the swap from
+MC88100 Table 2-4 and validated the asymmetric-vector design as the decisive measurement.
+
+Another seat's SHIP-WITH-CHANGES did this round its biggest favour. It demanded a
+positive control for the new zero-warning check — and chasing that demand exposed that
+the check was **born vacuous**: the fstcr warning goes to the emulator's stdout, which
+only the probe's pty capture ever sees, so the gate was grepping a log that could not
+contain the string. A check that cannot fail, caught before it ever reported a
+misleading green. The probe now counts the warning inside each session and reports two
+markers — the accumulated count across all pure-RM sessions (asserted 0) and a
+deliberate non-RM write of 0x1 as the positive control (asserted exactly 1, proving the
+counter counts). The same seat re-ran gate 11 and the full luna88k boot rig itself on
+the fixed build (20/20 and PASS with the exact expected answers), confirmed the swap
+from four primary sources including the kernel's own FP-completion code, and did a full
+handler census proving the six wired sites are the only single-precision result
+producers in the file. Its census also surfaced a pre-existing coverage gap — the ISA's
+mixed-format S-destination forms (`fadd.ssd` and friends) are undecoded entirely — which
+is indexed, not patched.
+
+The last seat found the one divergence the new modes can actually observe, and it is
+pinned rather than hidden. The arms compute in host double before the store, so a
+residue finer than 2^-53 collapses before a directed mode can see it: hardware's sticky
+bit — "the logical OR of all the bits that would be in the result if the result was
+infinitely precise" — rounds `1.0 + 2^-60` **up** under toward-+Inf, where this model
+stores 1.0. The seat also proved the band's edges: add/sub only, because `fmul`'s
+48-bit product is always exact in double and a nonzero `fdiv` residue always survives
+the double grid, and RN/RZ are unaffected because the collapsed value is their answer
+anyway. Only the two modes #298 *introduces* can observe it. Gate 11 now carries the
+row as a named PIN, expected at today's divergent value, with the instruction that it
+must flip and be rewritten as a discriminating vector when the next round's
+round-to-odd helper lands — whose scope now explicitly includes these m88k arms.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

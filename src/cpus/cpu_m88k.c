@@ -598,15 +598,27 @@ void m88k_fstcr(struct cpu *cpu, uint32_t value, int fcr)
 {
 	switch (fcr) {
 
+	case 63:
+		/*  #298: the FPCR's RM field (bits 15:14) is now decoded by
+		    the single-precision result stores, so a guest calling
+		    fpsetround() -- which writes exactly this field -- is
+		    doing something IMPLEMENTED, and warning "UNIMPLEMENTED"
+		    for it would be dishonest (a panel seat's finding, same
+		    class as #270). Warn only for bits outside RM, which
+		    really are ignored.  */
+		if ((value & ~(uint32_t)M88K_FPCR_RM_MASK) == 0)
+			break;
+
+		// fall through
+
 	case 0:
 	case 62:
-	case 63:
 		// Don't warn for writes with the value zero for these, for now.
 		if (value == 0)
 			break;
 
 		// fall through
-	
+
 	default:debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_WARNING,
 		    "WARNING: fstcr: write 0x%08x to UNIMPLEMENTED fcr = 0x%02x (%s)",
 		    value, fcr, m88k_fcr_name(cpu, fcr));
