@@ -161,6 +161,7 @@ Oldest first.
 | `6440006` | Round 59 (#294): cvt.w honours the FPU rounding mode; trunc.w provably does not |
 | `e61badd` | Round 60 (#295): the fixed-rounding conversions, and a buffer declared full before it was filled |
 | `f52c2fe` | Round 61 (#296): SuperH read the FPU rounding-mode field but never used it; gate 10 |
+| `06445b5` | Round 62 (#297): ftrc converted with a raw C cast — the guest answer depended on the host |
 
 ## Feature highlights
 
