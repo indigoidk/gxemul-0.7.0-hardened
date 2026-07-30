@@ -167,6 +167,7 @@ Oldest first.
 | `e644a30` | Round 65 (#300): D-format directed rounding via fma residuals — three panel passes, quantum bands |
 | `4453ff2` | Round 66 (#301): cvt.d.l/cvt.s.l converted the integer before the rounding mode existed; gate 12 |
 | `96b86a9` | Round 67 (#302): the m88k float→int triad — trnc cast raw, int/nint halted the emulator |
+| `e3d972c` | Round 68 (#303): every subnormal decoded wrong on every architecture — pmax unmasked, five rigs measured |
 
 ## Feature highlights
 
