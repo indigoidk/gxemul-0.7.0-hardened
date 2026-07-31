@@ -3464,6 +3464,160 @@ a family whose other half this tree already implements. The methodology that
 produced the bad number is recorded too — executable-section census first,
 disassembly validation second, whole-image scanning only as reconnaissance.
 
+## Seventy-first round (#311, #312, #313) — ARM: two wrong flags and one more halt
+
+The first ARM round in this fork, and the first work on the architecture at all,
+so it opens with an instrument: `testarm`/SA1110 under the cold debugger, guest
+flags read by the guest's own `mrs`, 58 rows and 51 checks in gate 14. The machine needs a file
+argument to construct — it prints usage and exits without one — so a four-byte raw
+stub is loaded and immediately overwritten. Memory is little-endian here, the
+opposite of the PowerPC rig, and every word the probe reads is byte-swapped back.
+
+All three defects were reproduced on the committed build before anything was
+edited. That sweep scored 39 of the 56 rows the table held at the time, failing in
+exactly the 17 places the fixes were predicted to flip and nowhere else. Two pins
+covering the PC-as-operand path were added afterwards and pass either way, so the
+same build on the final 58-row table reads 41/58; the number is given both ways
+rather than restated as the tidier 39/58, because it is evidence.
+
+### #311 — the subtract carry ignored the borrow it had just subtracted
+
+`cpu_arm_instr_dpi.c` computed the carry-out of every subtract-family instruction
+as `a >= b`. ARM's subtract carry is NOT-BORROW, and for SUB, CMP and RSB that
+formula is exactly right. But SBC and RSC compute `a - b - NOT(C)`, which borrows
+whenever `a <= b`, so the correct flag is `a > b` — and the two disagree precisely
+when `a == b` with the carry-in clear. There, `a - a - 1` borrows and the emulator
+claimed it had not. Subtracting equal values is the ordinary way multi-word
+arithmetic produces a zero limb, so this is not an exotic input.
+
+The result register was always correct; only the flag was wrong, which is why
+every value row in the gate is a pin rather than a discriminator, and why a fix
+that repaired the flag by disturbing the arithmetic would fail the gate.
+
+The repair takes the flag from the full 64-bit result the file already had in
+hand, `c32 == c64` — the mirror image of the add arm's `c32 != c64` two lines
+below. Because both operands are zero-extended from 32 bits, a subtraction that
+did not borrow lands in `[0, 0xffffffff]` and equals its own low half, and one
+that did wraps with the high bits set. That equivalence is what makes the change
+safe for the three instructions that were already right, and the gate pins all
+three rather than trusting the argument.
+
+One panel seat proposed `(uint32_t)c64 == c32` as a more defensive spelling. It is
+a tautology — `c32 = c64` is the assignment on the line above — and would have set
+the carry unconditionally on every subtract and compare in the emulator. It was
+caught by a second seat and by the reasoning, not by a test, which is worth
+recording: the rig would have caught it too, but only because the pins exist.
+
+### #313 — ADCS could clear the overflow flag but never set it
+
+Found by a panel seat reading the `#if` nesting rather than the logic. `A__ADC` is
+named in the outer guard that CLEARS V and recomputes it, but matched neither
+inner formula — not the `ADD || CMN` arm, not the `SUB || RSB || CMP || RSC ||
+SBC` one. So `v` stayed 0 and `ADCS` could only ever clear V. Of the eight
+opcodes in the outer guard, ADC was the only one missing from an inner arm.
+
+Measured: `ADCS 0x7fffffff + 0` with carry-in gives `0x80000000` with V clear,
+while `ADDS` with the identical overflow correctly sets it. That pairing is what
+makes the gate rows a statement about ADC rather than about V in general.
+
+The fix adds ADC to the add arm. The sign rule stays exact with a carry-in
+because it reads the actual result: operands of opposite sign cannot overflow
+even when 1 is carried in, and operands of like sign overflow exactly when the
+result's sign differs from theirs — the dual of why the subtract arm was already
+correct for SBC and RSC.
+
+### #312 — the undefined instruction space stopped the emulator
+
+The same halt class as #264, #309 and #310. Unmatched encodings in the
+`main_opcode >= 6, bit 4 set` space reached `goto bad`, which sets
+`cpu->running = 0`. On the ARMv4 this models that whole space is architecturally
+undefined, and it contains ARM's permanently-undefined encoding and the word GDB
+plants for breakpoints; real silicon raises the Undefined Instruction exception.
+
+The sharpest form of the defect is that the halt happened during DECODE. A
+*conditional* undefined word whose condition was false — an instruction the guest
+would never have executed — stopped the emulator anyway. That is measured, and it
+is the row in gate 14 that states the reachability most plainly.
+
+The witness is the handler, not the absence of a message: code planted at the UND
+vector stores a marker, the mode and the return address, so a row cannot pass by
+the instruction being quietly ignored. One row places the undefined word in the
+last slot of a 4KB page, because `X(und)` reconstructs the faulting PC with a
+hard-coded page mask whose arithmetic is entirely zero at offset 0 — a panel
+seat's point that the obvious placement tests nothing.
+
+The tree already contained the right routing for this, a few lines below, with a
+comment naming GDB's breakpoint. It was unreachable: its predicate is bit-identical
+to the enclosing block's guard, and every path through that block breaks first. All
+four panel seats verified that identity independently — one additionally checked the
+all-paths-break property the identity argument silently assumes — and three of the
+four recommended deleting rather than annotating, which is what was done, with the
+GDB rationale moved to the live path.
+
+Encodings that are not the permanently-undefined pattern warn once before routing,
+since they may be an extension nobody has implemented rather than a true
+undefined; the true pattern is silent, because a guest executing it is not a
+deficiency of the emulator. Speculative decode still takes the old path, which
+both keeps the prior rounds' shape and preserves the warning for the real pass.
+
+### What the diff review caught, all of it in the instrument
+
+The three corrections came through review unchanged. Everything the seats found was
+in the scaffolding around them, which is worth stating plainly because it is now the
+third round running where that has been true.
+
+**Two of gate 14's checks could never have passed.** The gate matches each named row
+with two spaces after the name, so that a name which is a prefix of a longer one
+cannot match both. But the probe padded names to a 26-wide column that was then 24
+wide, and two names — `udf gdb-form handler ran` and `udf page-end handler ran` —
+are exactly 24 characters. A name as long as its column gets no padding at all, so
+only the format's single separator space follows it, and those two checks could match
+nothing. Gate 14 would have reported FAIL on a fully correct build.
+
+This is the exact mirror of the trap the gate's own comment says it is avoiding, and
+the audit run here for prefix collisions did not catch it, because it was looking for
+names that match *too much*. The seat that found it also observed that the 58/58 had
+only ever come from running the probe directly — the gate script as a whole had never
+executed end-to-end, so nothing had exercised the checks themselves. It has now, and
+the column is 26 with the invariant written down next to it.
+
+**The two new files were untracked.** `gate_arm.sh` and `arm_flags_probe.py` were
+never added to git, so they did not appear in the diff under review and a commit of
+tracked changes alone would have left `run.sh` invoking a gate that does not exist.
+Caught by a seat that noticed the reviewed patch could not reproduce the result the
+patch claimed.
+
+**The `A__PC` corner was promoted from a note to a fix.** Three seats raised it and
+one classified it as a regression this round would introduce rather than a
+pre-existing corner, which is the correct reading: it is a case where the old test
+was right and the new one would not be. Truncating the reconstructed PC operand to
+32 bits is correct on its own terms — ARM's PC is 32 bits and reading it must wrap —
+so the fix is not a workaround for the new carry test, and it also removes a spurious
+carry the ADD family has been reporting at those two addresses since long before this
+round. For every operand below 2^32 it is a no-op, which is every operand these rigs
+can reach; the top-of-address-space behaviour it corrects is reasoned, not measured,
+and is labelled as such in the code.
+
+### Recorded, not fixed
+
+- **The `A__PC` operand at the very top of the address space.** When Rn is PC the
+  template recomputes the operand as page base + slot + 8 in 64-bit arithmetic,
+  which exceeds 2^32 for the last two instruction slots of the 4GB space. There
+  the old truncating test was right and `c32 == c64` would not be. It needs RAM
+  mapped at `0xfffff000`, which no rig here has, so it is documented rather than
+  fixed blind — this project does not change what it cannot test. The same corner
+  already affects the ADD family identically and predates this round. A pin row
+  covers the reachable part of that path.
+- **Three more halts in the same decoder**, found by the panel while reviewing
+  #312: `uxtab` and `uxtah` with a non-zero rotate, and a data-processing
+  immediate path that rejects a legal non-canonical rotated immediate. These are a
+  different sub-case — the decoder recognises the instruction and rejects only an
+  unimplemented variant, so routing them to "undefined" would be its own kind of
+  lie — and they get their own round.
+- **The media encodings decode on every ARM model**, including the ARMv4 this rig
+  runs, where silicon would raise Undefined. Pre-existing, a fidelity question
+  rather than a halt, and deliberately not entangled with #312.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

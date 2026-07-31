@@ -171,6 +171,7 @@ Oldest first.
 | `37daeee` | Round 69 (#304/#305): PowerPC narrowed with a host cast and destroyed every NaN it touched; gate 13 |
 | `0fc81c5` | Round 70A (#306/#307/#308): twelve legal m88k float forms and `tcnd` stopped the machine; round-to-odd for narrowed products and quotients |
 | `638eff2` | Round 70B (#309/#310): MIPS REGIMM halted instead of raising RI; all eight PowerPC float update forms were undecoded |
+| `<pending>` | Round 71 (#311/#312/#313): ARM's subtract carry ignored the borrow it had just subtracted, ADCS could never set V, and an undefined word stopped the emulator at decode time; gate 14 |
 
 ## Feature highlights
 
@@ -211,7 +212,7 @@ Oldest first.
 
 ## Regression harness
 
-`regress/run.sh` runs thirteen gates; `regress/run.sh 2 4` runs a subset. The governing rule is
+`regress/run.sh` runs fourteen gates; `regress/run.sh 2 4` runs a subset. The governing rule is
 that **a gate which cannot fail is worse than no gate**, because it reports green — and
 this fork had been counting two such gates as evidence:
 

@@ -148,6 +148,20 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
 		VAR_A = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1)
 		    << ARM_INSTR_ALIGNMENT_SHIFT);
 		VAR_A += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT) + 8;
+		/*
+		 *  #311: keep the operand 32 bits wide. ARM's PC is 32 bits
+		 *  and reading it must wrap, but the sum above is computed
+		 *  in 64 bits under A__S and exceeds 2^32 for the last two
+		 *  instruction slots of the address space. Both carry tests
+		 *  below compare the full result against its low half, so an
+		 *  operand carrying high bits would report a borrow that did
+		 *  not happen -- and the add arm, which is older than this
+		 *  round, already reported a carry that did not happen there.
+		 *  For every operand below 2^32 this is a no-op, which is
+		 *  every operand the rigs here can reach; the top-of-space
+		 *  case needs RAM mapped at 0xfffff000 and is unmeasured.
+		 */
+		VAR_A = (uint32_t) VAR_A;
 	}
 #endif
 #endif
@@ -255,7 +269,18 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
 
 #if defined(A__CMP) || defined(A__RSB) || defined(A__SUB) || \
     defined(A__RSC) || defined(A__SBC)
-	if ((uint32_t)a >= (uint32_t)b)
+	/*
+	 *  #311: the subtract carry-out is NOT-BORROW, and it has to be read
+	 *  off the FULL result. `a >= b` is right for SUB/CMP/RSB, which have
+	 *  no borrow-in, but SBC/RSC compute `a - b - NOT(C)` and that borrows
+	 *  whenever a <= b -- so the two disagree exactly when a == b with the
+	 *  carry-in clear, where `a - a - 1` borrows and `a >= b` claimed it
+	 *  had not. Both operands are zero-extended from 32 bits, so a result
+	 *  that did not borrow lies in [0, 0xffffffff] and compares equal to
+	 *  its own low half, while one that did wraps with the high bits set.
+	 *  The mirror image of the add arm below, as the architecture asks.
+	 */
+	if ((uint64_t)c32 == c64)
 		cpu->cd.arm.flags |= ARM_F_C;
 #else
 #if defined(A__ADC) || defined(A__ADD) || defined(A__CMN)
@@ -275,7 +300,18 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
  || defined(A__RSB) || defined(A__RSC) || defined(A__SBC) || defined(A__SUB)
 	{
 		int v = 0;
-#if defined(A__ADD) || defined(A__CMN)
+		/*
+		 *  #313: A__ADC belongs on this arm. It is named in the
+		 *  outer #if above -- which CLEARS V -- but used to match
+		 *  neither this formula nor the subtract one below, so `v`
+		 *  stayed 0 and ADCS could only ever clear the overflow
+		 *  flag, never set it. The sign rule stays exact with a
+		 *  carry-in because it reads the actual result: operands of
+		 *  opposite sign can never overflow even when 1 is carried
+		 *  in, and operands of like sign overflow precisely when the
+		 *  result's sign differs from theirs.
+		 */
+#if defined(A__ADD) || defined(A__CMN) || defined(A__ADC)
 		if (((int32_t)a >= 0 && (int32_t)b >= 0 &&
 		    (int32_t)c32 < 0) ||
 		    ((int32_t)a < 0 && (int32_t)b < 0 &&

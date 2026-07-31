@@ -3535,9 +3535,66 @@ X(to_be_translated)
 				int width = 1 + ((iword >> 16) & 31);
 				ic->arg[2] = (width << 16) + lsb;
 			} else {
-				if (!cpu->translation_readahead)
-					fatal("unimplemented special non-loadstore encoding!\n");
-				goto bad;
+				/*
+				 *  #312: a word reaching here takes the
+				 *  Undefined Instruction exception. It must not
+				 *  stop the emulator, which is what used to
+				 *  happen: `goto bad` reaches the shared label
+				 *  in cpu_dyntrans.c, which sets
+				 *  cpu->running = 0. On the ARMv4 CPUs this
+				 *  tree actually models, the whole space is
+				 *  architecturally undefined -- it holds ARM's
+				 *  permanently-undefined encoding and the word
+				 *  GDB plants for breakpoints -- so und is the
+				 *  faithful answer as well as the safe one.
+				 *  For the ARMv6 models that share this decoder
+				 *  some of these words are real instructions
+				 *  (REV16 and the rest of the media set) that
+				 *  nobody has implemented; und is then an
+				 *  approximation, which is what the warning
+				 *  below is for. Halting was never right for
+				 *  either.
+				 *
+				 *  Worse, the halt happened HERE, during
+				 *  decode, so a CONDITIONAL undefined word
+				 *  whose condition was false -- one the guest
+				 *  would never have executed -- stopped the
+				 *  emulator too. Routing to und fixes that as
+				 *  well: the exception is raised only if the
+				 *  condition passes.
+				 *
+				 *  This is where the und routing lives now. The
+				 *  copy that used to sit further down this case
+				 *  was unreachable -- its predicate was exactly
+				 *  this block's guard, and every path here ends
+				 *  in a break -- so it is gone.
+				 */
+				if (cpu->translation_readahead)
+					goto bad;
+				if ((iword & 0x0ff000f0) != 0x07f000f0) {
+					/*
+					 *  Not the permanently-undefined
+					 *  pattern, so it may instead be an
+					 *  extension nobody has implemented
+					 *  yet. Say so once -- a guest can sit
+					 *  in a loop on one of these.
+					 */
+					static int warned_undef = 0;
+					if (!warned_undef) {
+						warned_undef = 1;
+						debugmsg_cpu(cpu, SUBSYS_CPU,
+						    "opcode",
+						    VERBOSITY_WARNING,
+						    "unimplemented special "
+						    "non-loadstore encoding "
+						    "0x%08" PRIx32 " -- routing "
+						    "to Undefined Instruction. "
+						    "Only printing this once.",
+						    (uint32_t) iword);
+					}
+				}
+				ic->f = cond_instr(und);
+				ic->arg[0] = addr & 0xfff;
 			}
 			break;
 		}
@@ -3560,11 +3617,6 @@ X(to_be_translated)
 			ic->arg[1] = imm;
 		else
 			ic->arg[1] = (size_t)(void *)arm_r[iword & 0xfff];
-		if ((iword & 0x0e000010) == 0x06000010) {
-			/*  GDB uses this for breakpoints.  */
-			ic->f = cond_instr(und);
-			ic->arg[0] = addr & 0xfff;
-		}
 		/*  Special case: pc-relative load within the same page:  */
 		if (rn == ARM_PC && rd != ARM_PC && main_opcode < 6 && l_bit) {
 			unsigned char *p = page;

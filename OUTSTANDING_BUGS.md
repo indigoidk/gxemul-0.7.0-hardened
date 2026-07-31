@@ -133,6 +133,47 @@
 >   PS-capable CPU or a guest binary executes PS.
 > - **SH `ftrc` with an odd m under PR=1** decodes as an odd `fr[]` pair (reserved
 >   encoding, pre-existing dispatch behaviour).
+> - ~~**ARM's subtract carry, ADCS's overflow flag, and the undefined space**~~ —
+>   **RESOLVED as #311/#313/#312 (round 71)**, the first ARM work in this fork, opened
+>   with a new instrument (gate 14, 58 rows on a `testarm` cold debugger; the pre-fix
+>   build scored 39 of the 56 rows then present, failing exactly the 17 predicted rows
+>   and nothing else). #311: the carry-out was `a >= b` for the whole
+>   subtract family, which is right for SUB/CMP/RSB but ignores the borrow SBC/RSC just
+>   subtracted — wrong exactly when `a == b` with carry-in clear, i.e. the ordinary way
+>   multi-word arithmetic makes a zero limb. #313, found by a panel seat reading the `#if`
+>   nesting: ADC was named in the outer guard that CLEARS V but matched neither inner
+>   formula, so `ADCS` could only ever clear the overflow flag. #312: unmatched encodings
+>   in the `main_opcode >= 6, bit 4` space halted the emulator, and the halt fired at
+>   DECODE — so a *conditional* undefined word whose condition was false stopped the
+>   machine too. The tree's own correct routing sat a few lines below, unreachable behind
+>   an identical predicate; three seats verified the identity and it was deleted.
+> - **The `A__PC` operand at the very top of the address space** (`cpu_arm_instr_dpi.c`,
+>   raised by three seats reviewing #311, one of them calling it a regression the round would
+>   introduce rather than a pre-existing corner). With Rn = PC the operand is recomputed as
+>   page base + slot + 8 in 64-bit arithmetic, which passes 2^32 for the last two instruction
+>   slots of the 4GB space, and #311's `c32 == c64` would then differ from the old truncating
+>   test. **FIXED as part of #311** by truncating that operand to 32 bits — correct
+>   independently of the carry change, since ARM's PC is 32 bits and reading it must wrap, and
+>   it also removes a spurious carry the ADD family has reported at those two addresses since
+>   long before this round. **Still open is the measurement:** the fix is a provable no-op for
+>   every operand below 2^32, which is everything these rigs can reach, so its effect at the
+>   top of the address space is reasoned rather than measured. Reaching it needs RAM mapped at
+>   `0xfffff000` — a `dev_ram` config statement is the only route found so far.
+> - **Three more guest-reachable halts in the ARM decoder** (same review): `uxtab` and
+>   `uxtah` with a non-zero rotate, both inside the block #312 edited, and the
+>   data-processing immediate path that rejects a legal non-canonical rotated immediate.
+>   A different sub-case from #312 — the decoder recognises the instruction and rejects
+>   only an unimplemented variant, so answering "undefined" would be its own lie; the
+>   immediate one is the worst, because that instruction is unambiguously legal.
+> - **ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result** (`cpu_arm.c`, three
+>   near-identical blocks; found while scoping #311). Carry is correctly read from bit 32,
+>   but `if (result == 0)` tests the 64-bit value, so any operation that carries out of bit
+>   31 leaves Z clear even when the architectural 32-bit result is zero — and subtracting
+>   equal values is the commonest way to reach zero. N truncates correctly. Not yet
+>   reproduced: the round-71 rig only enters ARM mode, so Thumb needs a new entry path.
+> - **The ARMv6 media encodings decode on every ARM model**, including the ARMv4 SA1110
+>   this rig runs, where silicon would raise Undefined. Pre-existing fidelity gap rather
+>   than a halt; deliberately not entangled with #312.
 >
 > **Known and deliberately not forced — each with the reason it stays**
 > - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause
