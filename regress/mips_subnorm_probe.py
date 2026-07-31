@@ -136,7 +136,7 @@ def run(machine, kernel, status, src0, words, nread):
 #  keeps running, where before it printed "UNIMPLEMENTED instruction" and set
 #  cpu->running = 0. Both rigs run the row -- the arm is CPU-independent, and
 #  a fix that reached only one dyntrans mode would pass a single-rig gate.
-def run_regimm(machine, kernel, status, iword):
+def run_regimm(machine, kernel, status, iword, nstep=1):
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(BIN, [BIN, "-V", "-e", machine, "-M", "64", kernel])
@@ -182,21 +182,149 @@ def run_regimm(machine, kernel, status, iword):
 
     send("status=0x%08x" % status)
     send("put w 0x%x, 0x%08x" % (CODE, iword))
+    #  A delay slot the branch control needs, and harmless to the RI rows.
+    send("put w 0x%x, 0x00000000" % (CODE + 4))
     send("pc=0x%x" % CODE)
     mark = len(buf)
-    send("step 1")
+    send("step %d" % nstep)
     tail = buf[mark:]
+
+    #  Read the PC back, so a branch row has a witness beyond "did not fault".
+    pc = None
+    for _ in range(2):
+        mark2 = len(buf)
+        send("reg")
+        m = re.search(r"\bpc\s*=\s*0x([0-9a-f]+)", buf[mark2:])
+        if m:
+            pc = int(m.group(1), 16) & 0xffffffff
+            break
+        time.sleep(1.0)
+        rd(1.0)
     try:
         os.write(fd, b"quit" + bytes([10]))
         time.sleep(0.4)
         os.kill(pid, 9); os.waitpid(pid, 0)
     except Exception:
         pass
+
+    #  Every outcome is named. The first version returned a catch-all
+    #  "ran-no-exception" for anything that was not exactly RI or a halt, so a
+    #  timeout, an EOF or a DIFFERENT exception all scored as success -- a
+    #  diff-review seat's finding, and the same class of defect this gate
+    #  exists to catch in the emulator.
     if "All machines stopped" in tail or "UNIMPLEMENTED instruction" in tail:
         return "halted"
     if "exception RI" in tail:
         return "RI"
-    return "ran-no-exception"
+    if "exception" in tail:
+        return "other-exception"
+    if pc is None:
+        return "no-pc-readback"
+    return "pc=0x%08x" % pc
+
+
+
+def run_branch_control(machine, kernel, status):
+    """Prove BGEZ actually BRANCHES, through the dump channel both rigs share.
+
+    The first version of this control asserted "did not fault", which a nop
+    would have satisfied, and then a PC readback, which parses reliably on arc
+    but not on pmax. So the guest writes its own witness instead: two stores
+    to the same address, one on the fall-through path and one at the branch
+    target. Taken -> 0x22222222; not taken -> 0x11111111; nothing ran -> the
+    sentinel survives. Three outcomes, all distinguishable, no PC parsing.
+
+      lui/ori r9  = the witness address
+      lui/ori r8  = 0x11111111   (fall-through marker)
+      lui/ori r10 = 0x22222222   (target marker)
+      bgez r0,+2  -- r0 >= 0 always, target = branch + 4 + 8
+      nop         -- the delay slot, which executes either way
+      sw r8,0(r9) -- skipped when the branch is taken
+      sw r10,0(r9)-- the branch target
+    """
+    addr = SRC + 16
+    words = [0x3c090000 | ((addr >> 16) & 0xffff),
+             0x35290000 | (addr & 0xffff),
+             0x3c081111, 0x35081111,
+             0x3c0a2222, 0x354a2222,
+             0x04010002,          # bgez r0, +2
+             0x00000000,          # delay slot
+             0xad280000,          # sw r8,0(r9)   -- fall-through
+             0xad2a0000]          # sw r10,0(r9)  -- branch target
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-e", machine, "-M", "64", kernel])
+        os._exit(127)
+    buf = ""
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            if buf.rstrip().endswith(">"):
+                return True
+        return False
+
+    def send(x):
+        b = (x + chr(10)).encode("latin1")
+        n = 0
+        while n < len(b):
+            n += os.write(fd, b[n:])
+        wait()
+
+    if not wait(150):
+        try:
+            os.kill(pid, 9); os.waitpid(pid, 0)
+        except Exception:
+            pass
+        return None
+
+    send("status=0x%08x" % status)
+    send("put w 0x%x, 0xdeadbeef" % addr)
+    for i, w in enumerate(words):
+        send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    send("pc=0x%x" % CODE)
+    send("step %d" % len(words))
+    val = None
+    for _ in range(3):
+        mark = len(buf)
+        send("dump 0x%x 0x%x" % (addr, addr + 4))
+        hits = re.findall(r"0x0*[0-9a-f]+\s+((?:[0-9a-f]{8}\s+){1,4})",
+                          buf[mark:])
+        flat = "".join(hits).split()
+        if flat:
+            val = "%08x" % int.from_bytes(bytes.fromhex(flat[0]), "little")
+            break
+        time.sleep(1.0)
+        rd(1.0)
+    try:
+        os.write(fd, b"quit" + bytes([10]))
+        time.sleep(0.4)
+        os.kill(pid, 9); os.waitpid(pid, 0)
+    except Exception:
+        pass
+    if val is None:
+        return "no-readback"
+    if val == "22222222":
+        return "branched"
+    if val == "11111111":
+        return "fell-through"
+    return "marker=" + val
 
 
 #  name, machine, status, instruction word, expected outcome
@@ -204,11 +332,16 @@ def run_regimm(machine, kernel, status, iword):
 #  unimplemented range (4-7, 0xd, 0xf, 0x14-0x17, 0x1a-0x1e); 0x01 is BGEZ,
 #  the control that must still execute as a branch rather than fault.
 REGIMM_ROWS = [
-    ("pmax regimm rt=0x15", "3max", 0x20000000, 0x04150000, "RI"),
-    ("arc regimm rt=0x15",  "pica", 0x24000000, 0x04150000, "RI"),
-    ("pmax regimm rt=0x1e", "3max", 0x20000000, 0x041e0000, "RI"),
-    ("pmax BGEZ control",   "3max", 0x20000000, 0x04010000, "ran-no-exception"),
-    ("arc BGEZ control",    "pica", 0x24000000, 0x04010000, "ran-no-exception"),
+    ("pmax regimm rt=0x15", "3max", 0x20000000, 0x04150000, 1, "RI"),
+    ("arc regimm rt=0x15",  "pica", 0x24000000, 0x04150000, 1, "RI"),
+    ("pmax regimm rt=0x1e", "3max", 0x20000000, 0x041e0000, 1, "RI"),
+]
+
+#  The branch controls, which prove an IMPLEMENTED REGIMM sub-opcode still
+#  works -- and prove it by branching, not merely by not faulting.
+BRANCH_ROWS = [
+    ("pmax BGEZ control", "3max", 0x20000000, "branched"),
+    ("arc BGEZ control",  "pica", 0x24000000, "branched"),
 ]
 
 
@@ -244,11 +377,20 @@ for name, machine, status, src0, words, nread, want in ROWS:
     passed += ok
     print("%-19s got %s want %s %s" %
           (name, got, want, "ok" if ok else "FAIL"))
-for name, machine, status, iword, want in REGIMM_ROWS:
+for name, machine, status, iword, nstep, want in REGIMM_ROWS:
     kernel = PMAX_KERNEL if machine == "3max" else ARC_KERNEL
-    got = run_regimm(machine, kernel, status, iword)
+    got = run_regimm(machine, kernel, status, iword, nstep)
     ok = got == want
     passed += ok
     print("%-19s got %-18s want %-18s %s" %
           (name, got, want, "ok" if ok else "FAIL"))
-print("MIPS_SUBN_RESULT=%d/%d" % (passed, len(ROWS) + len(REGIMM_ROWS)))
+
+for name, machine, status, want in BRANCH_ROWS:
+    kernel = PMAX_KERNEL if machine == "3max" else ARC_KERNEL
+    got = run_branch_control(machine, kernel, status)
+    ok = got == want
+    passed += ok
+    print("%-19s got %-18s want %-18s %s" %
+          (name, got, want, "ok" if ok else "FAIL"))
+print("MIPS_SUBN_RESULT=%d/%d" %
+      (passed, len(ROWS) + len(REGIMM_ROWS) + len(BRANCH_ROWS)))

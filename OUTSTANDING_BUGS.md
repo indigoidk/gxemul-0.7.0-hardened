@@ -86,7 +86,7 @@
 >   (round 70B)**, and the family was twice the size this entry named: the four primary
 >   opcodes (`lfsu`/`lfdu`/`stfsu`/`stfdu`, whose defines were missing outright) *and*
 >   the four indexed forms (extended opcodes 567/631/695/759). All eight were measured
->   halting the emulator; thirteen gate-13 rows now assert both the value transferred and
+>   halting the emulator; eighteen gate-13 rows now assert both the value transferred and
 >   the base-register update, with non-update controls proving the base stays put.
 >   A prevalence claim made for this fix was **withdrawn**: restricted to the executable
 >   section, the NetBSD/macppc kernel contains none of these forms — the hundreds first

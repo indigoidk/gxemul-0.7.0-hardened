@@ -3420,14 +3420,28 @@ been a call through whatever followed the table.
 
 ### Verification
 
-Gate 12 grew five rows and gate 13 grew thirteen. The MIPS rows assert the
-*outcome* rather than a register — "RI" for the unimplemented sub-opcodes,
-"ran-no-exception" for BGEZ — and run on both rigs, because a fix reaching only
-one dyntrans mode would pass a single-rig gate. The PowerPC rows assert both
-halves of what an update form owes: the value transferred and the base register
-receiving the effective address. Two non-update rows assert the mirror image,
-that the base is unchanged, so an implementation updating everything fails as
-loudly as one updating nothing.
+Gate 12 grew five rows and gate 13 grew eighteen. The MIPS rows assert the
+*outcome* rather than a register: "RI" for the unimplemented sub-opcodes, and a
+memory witness for the BGEZ controls — the guest stores one marker on the
+fall-through path and another at the branch target, so taken, not-taken and
+nothing-ran are three distinguishable answers. Both rigs run every row, because
+a fix reaching only one dyntrans mode would pass a single-rig gate. The PowerPC
+rows give each of the eight forms both halves of its contract, a value row and a
+base-register row, and two non-update rows assert the mirror image — that the
+base is unchanged — with nonzero displacement and index, so an implementation
+updating everything fails as loudly as one updating nothing.
+
+Those rows reached that state through a diff review that found three of them
+unable to fail. The two non-update controls used a zero displacement, which
+makes the effective address equal the base, so a wrongly-updating implementation
+would have written back exactly the value the row expected. Five of the eight
+forms had a base row but no value row, so a wrong transfer size that still
+advanced the base would have passed. And the MIPS classifier returned a
+catch-all "ran-no-exception" for every outcome that was not exactly RI or a
+halt, which meant a timeout, an EOF or a different exception all scored as
+success — while BGEZ, tested with a zero offset, would have been satisfied by a
+nop. Each is the same species of defect this harness exists to catch in the
+emulator, and each is recorded next to the row it produced.
 
 Those rows needed a register plan before they measured anything. The first
 version used one register as both the index and the publish base, and published

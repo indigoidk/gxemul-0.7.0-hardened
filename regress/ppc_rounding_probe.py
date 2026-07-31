@@ -477,9 +477,13 @@ FCTIWZ_ROWS = [
 #
 #  Register plan, because the first version of these rows had none and
 #  measured its own confusion: r3 is the base under test, r4 is the index for
-#  the indexed forms ONLY, r5 is the publish base and nothing else, r6 is the
-#  target the update-stores write into. Publishing through a register that is
-#  also an operand makes a row report whichever value happened to survive.
+#  the indexed forms ONLY, and r5 is the publish base and nothing else.
+#  Publishing through a register that is also an operand makes a row report
+#  whichever value happened to survive. The update-stores address their target
+#  through r3 like every other form -- into DEST when the row reads the stored
+#  VALUE back, into STORE_AT when it reads the updated base -- so no fourth
+#  register is involved (an earlier draft of this comment invented an r6 that
+#  appears in no row, which is exactly the confusion the plan exists to stop).
 #
 #  Honest note on reach, corrected in review: an earlier census claimed
 #  hundreds of these instructions in the NetBSD/macppc kernel. That came from
@@ -495,33 +499,56 @@ PUBLISH_VALUE = 0xD8250000
 STORE_AT = 0x9900
 
 UPDATE_ROWS = [
-    #  name, r3 seed, index (r4 or None), code words, reads, want
+    #  name, r3 seed, index (r4 or None), code words, reads, want, class
+    #
+    #  Every update form gets BOTH a value row and a base row. A base row
+    #  alone would pass an implementation with the wrong size or direction
+    #  that still advanced r3; a value row alone would pass one that forgot
+    #  the update entirely. The first version of this table had base-only
+    #  rows for five of the eight forms -- a diff-review seat caught it.
     ("lfsu value",       SRC - 4, None, [0xC4230004, PUBLISH_VALUE], 2,
-     "3ff0000000000000"),
+     "3ff0000000000000", "DISC"),
     ("lfsu updates r3",  SRC - 4, None, [0xC4230004, PUBLISH_BASE], 1,
-     "%08x" % SRC),
-    ("lfs leaves r3",    SRC,     None, [0xC0230000, PUBLISH_BASE], 1,
-     "%08x" % SRC),
+     "%08x" % SRC, "DISC"),
     ("lfdu value",       SRC,     None, [0xCC230008, PUBLISH_VALUE], 2,
-     "3ff0000000000000"),
+     "3ff0000000000000", "DISC"),
     ("lfdu updates r3",  SRC,     None, [0xCC230008, PUBLISH_BASE], 1,
-     "%08x" % (SRC + 8)),
+     "%08x" % (SRC + 8), "DISC"),
+    #  The store forms publish nothing themselves: their witness is the
+    #  MEMORY they wrote, so they store into DEST and the dump reads it back.
+    ("stfsu value",      DEST - 4, None, [0xD4230004], 1,
+     "3f800000", "DISC"),
     ("stfsu updates r3", STORE_AT - 4, None, [0xD4230004, PUBLISH_BASE], 1,
-     "%08x" % STORE_AT),
+     "%08x" % STORE_AT, "DISC"),
+    ("stfdu value",      DEST - 8, None, [0xDC230008], 2,
+     "3ff0000000000000", "DISC"),
     ("stfdu updates r3", STORE_AT - 8, None, [0xDC230008, PUBLISH_BASE], 1,
-     "%08x" % STORE_AT),
+     "%08x" % STORE_AT, "DISC"),
     ("lfsux value",      SRC - 4, 4, [0x7C23246E, PUBLISH_VALUE], 2,
-     "3ff0000000000000"),
+     "3ff0000000000000", "DISC"),
     ("lfsux updates r3", SRC - 4, 4, [0x7C23246E, PUBLISH_BASE], 1,
-     "%08x" % SRC),
-    ("lfsx leaves r3",   SRC,     0, [0x7C23242E, PUBLISH_BASE], 1,
-     "%08x" % SRC),
-    ("lfdux updates r3", SRC,     8, [0x7C2324EE, PUBLISH_BASE], 1,
-     "%08x" % (SRC + 8)),
+     "%08x" % SRC, "DISC"),
+    ("lfdux value",      SRC, 8, [0x7C2324EE, PUBLISH_VALUE], 2,
+     "3ff0000000000000", "DISC"),
+    ("lfdux updates r3", SRC, 8, [0x7C2324EE, PUBLISH_BASE], 1,
+     "%08x" % (SRC + 8), "DISC"),
+    ("stfsux value",     DEST - 4, 4, [0x7C23256E], 1,
+     "3f800000", "DISC"),
     ("stfsux updates r3", STORE_AT - 4, 4, [0x7C23256E, PUBLISH_BASE], 1,
-     "%08x" % STORE_AT),
+     "%08x" % STORE_AT, "DISC"),
+    ("stfdux value",     DEST - 8, 8, [0x7C2325EE], 2,
+     "3ff0000000000000", "DISC"),
     ("stfdux updates r3", STORE_AT - 8, 8, [0x7C2325EE, PUBLISH_BASE], 1,
-     "%08x" % STORE_AT),
+     "%08x" % STORE_AT, "DISC"),
+    #  The non-update PINS. Their displacement and index are NONZERO on
+    #  purpose: with a zero offset the effective address equals the base, so
+    #  an implementation that wrongly updated would write back the value the
+    #  row already expects and the control could not fail. Same seat, same
+    #  finding -- these two rows were vacuous exactly that way.
+    ("lfs leaves r3",    SRC - 4, None, [0xC0230004, PUBLISH_BASE], 1,
+     "%08x" % (SRC - 4), "PIN"),
+    ("lfsx leaves r3",   SRC - 4, 4, [0x7C23242E, PUBLISH_BASE], 1,
+     "%08x" % (SRC - 4), "PIN"),
 ]
 
 
@@ -606,8 +633,8 @@ def main():
     for name, operand, want, cls in FCTIWZ_ROWS:
         report(name, run_fctiwz(operand), want, cls)
 
-    for name, r3, r4, words, nread, want in UPDATE_ROWS:
-        report(name, run_update(r3, r4, words, nread), want, "DISC")
+    for name, r3, r4, words, nread, want, cls in UPDATE_ROWS:
+        report(name, run_update(r3, r4, words, nread), want, cls)
 
     for name, operand, mode, want, cls in COMPOSED_ROWS:
         report(name, run_composed(operand, mode), want, cls)

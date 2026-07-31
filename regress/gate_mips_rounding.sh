@@ -86,8 +86,13 @@ done
 # `goto bad`, which sets cpu->running = 0 -- a legal-to-attempt encoding stopping the
 # emulator instead of raising the Reserved Instruction exception real silicon raises.
 # These rows assert the OUTCOME rather than a register: "RI" for the unimplemented rt
-# values, "ran-no-exception" for BGEZ, which must still branch. Both rigs run them,
-# because a fix reaching only one dyntrans mode would pass a single-rig gate.
+# values. The BGEZ controls prove an IMPLEMENTED sub-opcode still BRANCHES, through a
+# memory witness -- the guest stores one marker on the fall-through path and another at
+# the branch target, so taken, not-taken and nothing-ran are three distinguishable
+# answers. An earlier version asserted only "did not fault", which a nop would have
+# satisfied, and then a PC readback, which parses on arc but not reliably on pmax; the
+# dump channel works on both. Both rigs run every row, because a fix reaching only one
+# dyntrans mode would pass a single-rig gate.
 python3 mips_subnorm_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" > "$SLOG" 2>&1 || true
 
 if ! grep -q "MIPS_SUBN_RESULT=" "$SLOG"; then
