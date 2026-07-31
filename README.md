@@ -169,6 +169,7 @@ Oldest first.
 | `96b86a9` | Round 67 (#302): the m88k float→int triad — trnc cast raw, int/nint halted the emulator |
 | `e3d972c` | Round 68 (#303): every subnormal decoded wrong on every architecture — pmax unmasked, five rigs measured |
 | `37daeee` | Round 69 (#304/#305): PowerPC narrowed with a host cast and destroyed every NaN it touched; gate 13 |
+| `0fc81c5` | Round 70A (#306/#307/#308): twelve legal m88k float forms and `tcnd` stopped the machine; round-to-odd for narrowed products and quotients |
 
 ## Feature highlights
 
