@@ -311,6 +311,34 @@ def run_fctiwz(fbits):
     return w[1]
 
 
+
+def run_update(r3, r4, words, nread):
+    """Seed the register plan, run the sequence, read DEST back.
+
+    The debugger cannot print PowerPC FPRs or GPRs on this machine (the same
+    limitation that sent #304's mode readback through mffs), so publishing to
+    memory IS the readback path -- which is why every row ends in a store.
+    """
+    cmds = ["msr=0x2000",
+            "r3=0x%x" % r3,
+            "r5=0x%x" % DEST,
+            "f1=0x3ff0000000000000",
+            "put w 0x%x, 0x3f800000" % SRC,           # 1.0f for the S loads
+            "put w 0x%x, 0x3ff00000" % (SRC + 8),     # 1.0d, high word
+            "put w 0x%x, 0x00000000" % (SRC + 12),    # 1.0d, low word
+            "put w 0x%x, 0xdeadbeef" % DEST,
+            "put w 0x%x, 0xdeadbeef" % (DEST + 4)]
+    if r4 is not None:
+        cmds.append("r4=0x%x" % r4)
+    for i, w in enumerate(words):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    cmds += ["pc=0x%x" % CODE, "step %d" % len(words)]
+    w, _ = session(cmds, nread)
+    if w is None:
+        return None
+    return "".join(w) if nread == 2 else w[0]
+
+
 def run_composed(fbits, mode=RN):
     """frsp f0,f1 ; then stfs the ROUNDED value -- the compiler's own float
     store sequence, and the row a guest-visible triage would hit first."""
@@ -435,6 +463,68 @@ FCTIWZ_ROWS = [
 ]
 
 
+#  #310: the eight float UPDATE forms. Each was measured HALTING the emulator
+#  before this correction (their non-update twins ran, as controls), because
+#  neither the primary opcodes 0x31/0x33/0x35/0x37 nor the indexed extended
+#  opcodes 567/631/695/759 were defined or decoded -- opcodes_ppc.h even had
+#  blank lines where the four primary ones belong.
+#
+#  A row asserts BOTH halves of what an update form owes: the value
+#  transferred AND rA receiving the effective address. Asserting only the
+#  value would pass an implementation that forgot the update entirely, which
+#  is the whole difference between these instructions and their twins; the
+#  non-update control rows assert the mirror image, that rA is UNCHANGED.
+#
+#  Register plan, because the first version of these rows had none and
+#  measured its own confusion: r3 is the base under test, r4 is the index for
+#  the indexed forms ONLY, r5 is the publish base and nothing else, r6 is the
+#  target the update-stores write into. Publishing through a register that is
+#  also an operand makes a row report whichever value happened to survive.
+#
+#  Honest note on reach, corrected in review: an earlier census claimed
+#  hundreds of these instructions in the NetBSD/macppc kernel. That came from
+#  scanning the whole RWX PT_LOAD, which is mostly data. Restricted to the
+#  executable section, this kernel contains lfd 34, stfd 36 and NONE of the
+#  update forms. They are justified by being legal encodings that stopped the
+#  machine, not by their frequency in one image.
+#
+#  Encodings: stw r3,0(r5) = 0x90650000 publishes the base; stfd f1,0(r5) =
+#  0xD8250000 publishes the loaded value.
+PUBLISH_BASE = 0x90650000
+PUBLISH_VALUE = 0xD8250000
+STORE_AT = 0x9900
+
+UPDATE_ROWS = [
+    #  name, r3 seed, index (r4 or None), code words, reads, want
+    ("lfsu value",       SRC - 4, None, [0xC4230004, PUBLISH_VALUE], 2,
+     "3ff0000000000000"),
+    ("lfsu updates r3",  SRC - 4, None, [0xC4230004, PUBLISH_BASE], 1,
+     "%08x" % SRC),
+    ("lfs leaves r3",    SRC,     None, [0xC0230000, PUBLISH_BASE], 1,
+     "%08x" % SRC),
+    ("lfdu value",       SRC,     None, [0xCC230008, PUBLISH_VALUE], 2,
+     "3ff0000000000000"),
+    ("lfdu updates r3",  SRC,     None, [0xCC230008, PUBLISH_BASE], 1,
+     "%08x" % (SRC + 8)),
+    ("stfsu updates r3", STORE_AT - 4, None, [0xD4230004, PUBLISH_BASE], 1,
+     "%08x" % STORE_AT),
+    ("stfdu updates r3", STORE_AT - 8, None, [0xDC230008, PUBLISH_BASE], 1,
+     "%08x" % STORE_AT),
+    ("lfsux value",      SRC - 4, 4, [0x7C23246E, PUBLISH_VALUE], 2,
+     "3ff0000000000000"),
+    ("lfsux updates r3", SRC - 4, 4, [0x7C23246E, PUBLISH_BASE], 1,
+     "%08x" % SRC),
+    ("lfsx leaves r3",   SRC,     0, [0x7C23242E, PUBLISH_BASE], 1,
+     "%08x" % SRC),
+    ("lfdux updates r3", SRC,     8, [0x7C2324EE, PUBLISH_BASE], 1,
+     "%08x" % (SRC + 8)),
+    ("stfsux updates r3", STORE_AT - 4, 4, [0x7C23256E, PUBLISH_BASE], 1,
+     "%08x" % STORE_AT),
+    ("stfdux updates r3", STORE_AT - 8, 8, [0x7C2325EE, PUBLISH_BASE], 1,
+     "%08x" % STORE_AT),
+]
+
+
 #  The composed sequence a compiler emits for `float f = (float)d; store f;`.
 COMPOSED_ROWS = [
     ("composed frsp->stfs NaN",     0x7ff8000000000000, RN, "7fc00000", "DISC"),
@@ -515,6 +605,9 @@ def main():
 
     for name, operand, want, cls in FCTIWZ_ROWS:
         report(name, run_fctiwz(operand), want, cls)
+
+    for name, r3, r4, words, nread, want in UPDATE_ROWS:
+        report(name, run_update(r3, r4, words, nread), want, "DISC")
 
     for name, operand, mode, want, cls in COMPOSED_ROWS:
         report(name, run_composed(operand, mode), want, cls)

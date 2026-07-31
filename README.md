@@ -236,8 +236,8 @@ pure function in closed form.
 | 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
 | 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 36 vector-mode pairs on real guest instructions, incl. two DN=0 subnormal rows |
 | 11 | `gate_m88k_rounding.sh` | m88k rounding, the float→int triad, subnormal operands, the twelve mixed-format arms and `tcnd`'s traps — 71 rows incl. swap tripwires, NaN-sign pins, a KNOWN-CHANGE flip pin and the double-rounding witness |
-| 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows) + #303 subnormal decode on BOTH rigs (pmax discriminators, arc trap control) |
-| 13 | `gate_ppc.sh` | PowerPC single conversion — 54 rows on the macppc probe path: `frsp` under all four modes (each verified guest-visible through `mffs`), the ISA denormalization band, NaN payload/sign transport through both the base and indexed forms, sticky `VXSNAN`, and three pins where this fork deliberately differs from the letter |
+| 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows), #303 subnormal decode on BOTH rigs, and #309's REGIMM Reserved-Instruction rows |
+| 13 | `gate_ppc.sh` | PowerPC single conversion — 67 rows on the macppc probe path: `frsp` under all four modes (each verified guest-visible through `mffs`), the ISA denormalization band, NaN payload/sign transport, sticky `VXSNAN`, all eight float update forms asserting value *and* base-register update, and three pins where this fork deliberately differs from the letter |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger

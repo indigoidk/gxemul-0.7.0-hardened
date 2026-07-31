@@ -159,6 +159,7 @@
 #define	  PPC_31_ADDCO		  522
 #define	  PPC_31_LWBRX		  534
 #define	  PPC_31_LFSX		  535
+#define	  PPC_31_LFSUX		  567	/*  #310  */
 #define	  PPC_31_SRW		  536
 #define	  PPC_31_SUBFO		  552
 #define	  PPC_31_TLBSYNC	  566
@@ -166,6 +167,7 @@
 #define	  PPC_31_LSWI		  597
 #define	  PPC_31_SYNC		  598
 #define	  PPC_31_LFDX		  599
+#define	  PPC_31_LFDUX		  631	/*  #310  */
 #define	  PPC_31_NEGO		  616
 #define	  PPC_31_DCLST		  630
 #define	  PPC_31_SUBFEO		  648
@@ -173,10 +175,12 @@
 #define	  PPC_31_MFSRIN		  659
 #define	  PPC_31_STWBRX		  662
 #define	  PPC_31_STFSX		  663
+#define	  PPC_31_STFSUX		  695	/*  #310  */
 #define	  PPC_31_SUBFZEO	  712
 #define	  PPC_31_ADDZEO		  714
 #define	  PPC_31_STSWI		  725
 #define	  PPC_31_STFDX		  727
+#define	  PPC_31_STFDUX		  759	/*  #310  */
 #define	  PPC_31_SUBFMEO	  744
 #define	  PPC_31_ADDMEO		  746
 #define	  PPC_31_MULLWO		  747
@@ -215,12 +219,13 @@
 #define	PPC_HI6_LMW		0x2e
 #define	PPC_HI6_STMW		0x2f
 #define	PPC_HI6_LFS		0x30
-
+#define	PPC_HI6_LFSU		0x31	/*  #310  */
 #define	PPC_HI6_LFD		0x32
-
+#define	PPC_HI6_LFDU		0x33	/*  #310  */
 #define	PPC_HI6_STFS		0x34
-
+#define	PPC_HI6_STFSU		0x35	/*  #310  */
 #define	PPC_HI6_STFD		0x36
+#define	PPC_HI6_STFDU		0x37	/*  #310  */
 
 #define	PPC_HI6_LD		0x3a
 #define	PPC_HI6_59		0x3b

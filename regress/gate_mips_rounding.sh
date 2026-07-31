@@ -81,6 +81,13 @@ done
 # a positive row cannot; a diff-review seat's finding). arc/R4000 keeps the trap: its
 # row proves the sentinel survives AND carries an integer-store execution witness so
 # a dead session cannot false-pass. See mips_subnorm_probe.py.
+#
+# The last five rows are #309's. An unimplemented REGIMM sub-opcode used to reach
+# `goto bad`, which sets cpu->running = 0 -- a legal-to-attempt encoding stopping the
+# emulator instead of raising the Reserved Instruction exception real silicon raises.
+# These rows assert the OUTCOME rather than a register: "RI" for the unimplemented rt
+# values, "ran-no-exception" for BGEZ, which must still branch. Both rigs run them,
+# because a fix reaching only one dyntrans mode would pass a single-rig gate.
 python3 mips_subnorm_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" > "$SLOG" 2>&1 || true
 
 if ! grep -q "MIPS_SUBN_RESULT=" "$SLOG"; then
@@ -96,9 +103,11 @@ grep -E " ok$| FAIL" "$SLOG" | sed 's/^/       /'
 
 sres=$(grep -o "MIPS_SUBN_RESULT=[0-9]*/[0-9]*" "$SLOG" | tail -1 | cut -d= -f2)
 sgot=${sres%/*}; swant=${sres#*/}
-check "subnorm rows run"     "$swant" 4
+check "subnorm rows run"     "$swant" 9
 check "subnorm rows correct" "$sgot"  "$swant"
-for v in "pmax mul.s subn" "pmax cvt.d.s subn" "pmax add.s flip" "arc mul.s trap"; do
+for v in "pmax mul.s subn" "pmax cvt.d.s subn" "pmax add.s flip" "arc mul.s trap" \
+         "pmax regimm rt=0x15" "arc regimm rt=0x15" "pmax regimm rt=0x1e" \
+         "pmax BGEZ control" "arc BGEZ control"; do
     n=$(count "$SLOG" "^$v .*ok$")
     check "  subnorm: $v" "$n" 1
 done

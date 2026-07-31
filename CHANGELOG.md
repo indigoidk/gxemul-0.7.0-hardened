@@ -3365,6 +3365,91 @@ round should not let deterministic decoder fixes mask an under-specified device
 change. That round also inherits a read-path twin of the same defect, found by the
 same seat two lines from the write one.
 
+## Seventieth round, part B (#309, #310) — two more decoders that stopped the machine
+
+The same class as part A, on the two architectures it had not yet been swept on.
+`goto bad` in a dyntrans decoder reaches a shared label in `cpu_dyntrans.c` that
+prints "UNIMPLEMENTED instruction" and sets `cpu->running = 0` — so on every
+dyntrans architecture, an encoding the decoder lacks stops the emulator rather
+than faulting the guest.
+
+### #309 — an unimplemented MIPS REGIMM sub-opcode halted instead of raising RI
+
+REGIMM's `default` arm ran `fatal()` and fell into `goto bad`. The implemented
+sub-opcodes are the branches, the trap-immediates, the branch-and-links and three
+CPU-specific ones; everything else — rt = 4–7, 0xd, 0xf, 0x14–0x17, 0x1a–0x1e —
+stopped the machine. Real silicon raises a Reserved Instruction exception, which
+is what the guest kernel is written to handle.
+
+Reproduced on both rigs with rt = 0x15, and again with 0x1e; BGEZ ran throughout
+as the control. The repair is the tree's own shape from two arms above, where
+trap opcodes on a pre-MIPS32 CPU already resolve to `instr(reserved)` behind a
+latched warning — and it is the same conclusion upstream reached independently in
+the 0.7.1 line it never released. The warning is latched rather than
+verbosity-gated because it reports a deficiency of the emulator, which #279
+argues should survive one quiet run; speculative decode still takes the old path,
+because readahead must not warn at all.
+
+### #310 — the float update forms were absent, and the family was twice the size reported
+
+`lfsu`, `lfdu`, `stfsu` and `stfdu` were not defined in `opcodes_ppc.h` — the
+header had blank lines exactly where their primary opcodes belong — and not
+decoded anywhere. All four halted.
+
+The round would have shipped four fixes if a panel seat had not demanded the
+*indexed* twins be checked first, on the principle part A established: a compiler
+emits `lfsux` from the same loops that emit `lfsu`, so fixing half a family
+leaves the other half stopping the machine. The seat was right that they needed
+checking and wrong about which encodings they are — 599 and 663 are `lfdx` and
+`stfsx`, which this tree already decodes. The update forms are extended opcodes
+567, 631, 695 and 759, none of which appeared anywhere in the tree, and all four
+were then measured halting too. Eight, not four.
+
+Each is its non-update sibling plus "rA receives the effective address", which
+the generic load/store tables already implement, so the handlers differ from
+`lfs`/`lfd`/`stfs`/`stfd` by one array index and inherit #304's and #305's
+conversion work unchanged.
+
+The two dispatch tables are not the same shape, and that cost a compile: the
+D-form table carries a zero-displacement dimension and encodes update at +32,
+while the indexed table has no displacement at all and encodes it at +16 in only
+32 entries. The first draft used the D-form's term for the indexed handlers,
+which reads past the end of the array; `-Warray-bounds` reported it as an
+out-of-bounds subscript and the build failed. Without that warning it would have
+been a call through whatever followed the table.
+
+### Verification
+
+Gate 12 grew five rows and gate 13 grew thirteen. The MIPS rows assert the
+*outcome* rather than a register — "RI" for the unimplemented sub-opcodes,
+"ran-no-exception" for BGEZ — and run on both rigs, because a fix reaching only
+one dyntrans mode would pass a single-rig gate. The PowerPC rows assert both
+halves of what an update form owes: the value transferred and the base register
+receiving the effective address. Two non-update rows assert the mirror image,
+that the base is unchanged, so an implementation updating everything fails as
+loudly as one updating nothing.
+
+Those rows needed a register plan before they measured anything. The first
+version used one register as both the index and the publish base, and published
+through an instruction whose operands were reversed, so several rows reported
+whichever value happened to survive. That is recorded in the probe next to the
+plan, because the failure looked exactly like a broken fix.
+
+### A claim this round withdrew
+
+The reach of #310 was first argued from a census of the NetBSD/macppc kernel
+that reported hundreds of update-form instructions. A seat re-ran it against the
+ELF's section metadata rather than the broad read-write-execute segment and got a
+different answer, which an independent parse then reproduced exactly: in that
+kernel's executable text there are 34 `lfd`, 36 `stfd`, and **none** of the eight
+update forms. The earlier count was data.
+
+So the prevalence claim is withdrawn rather than softened. What justifies #310 is
+what was always exact: eight legal encodings, measured stopping the emulator, in
+a family whose other half this tree already implements. The methodology that
+produced the bad number is recorded too — executable-section census first,
+disassembly validation second, whole-image scanning only as reconnaissance.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

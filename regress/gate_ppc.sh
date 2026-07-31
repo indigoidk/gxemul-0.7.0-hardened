@@ -32,6 +32,14 @@
 #   DISC -- discriminator: committed byte is the defect, want flips with the fix.
 #   DIV  -- known divergence left to a later round, pinned so it cannot drift.
 #
+# #310's thirteen rows cover the eight float UPDATE forms, every one of which
+# stopped the emulator before this round -- neither the primary opcodes
+# 0x31/0x33/0x35/0x37 nor the indexed 567/631/695/759 were defined or decoded.
+# Each asserts BOTH halves of the contract: the value transferred and rA
+# receiving the effective address. Two non-update rows assert the mirror image,
+# that rA is unchanged, so an implementation that updated everything would fail
+# as loudly as one that updated nothing.
+#
 # The control row is load-bearing: `msr=0x2000` must take or every FP instruction
 # raises FPU-unavailable and the probe measures nothing. A dead probe SKIPs; it never
 # passes quietly. The mode rows additionally read FPSCR back, because `mtfsf`'s FM-mask
@@ -83,7 +91,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 54
+check "rows run"     "$want" 67
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -91,7 +99,7 @@ check "rows correct" "$got"  "$want"
 # damage. Both counts are asserted rather than trusted.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 25
+check_min "discriminating rows present" "$disc" 38
 check_min "pinned rows present"         "$pins" 25
 
 # The one row that records a divergence this round deliberately does NOT fix.
@@ -109,7 +117,13 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "frsp tiny RP" "frsp 2^128 RZ" "frsp carry-up RZ" \
          "stfs 2^-127" "stfs band tail" "stfs band-" "stfsx 2^-127" \
          "stfs qNaN payload" "stfs sNaN passthrough" "stfsx qNaN payload" \
-         "lfs qNaN-" "composed frsp->stfs NaN" "lfsx qNaN-" "VXSNAN sticky" "fctiwz qNaN div"; do
+         "lfs qNaN-" "composed frsp->stfs NaN" "lfsx qNaN-" "VXSNAN sticky" \
+         "fctiwz qNaN div" \
+         "lfsu value" "lfsu updates r3" "lfs leaves r3" \
+         "lfdu value" "lfdu updates r3" "stfsu updates r3" \
+         "stfdu updates r3" "lfsux value" "lfsux updates r3" \
+         "lfsx leaves r3" "lfdux updates r3" "stfsux updates r3" \
+         "stfdux updates r3"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

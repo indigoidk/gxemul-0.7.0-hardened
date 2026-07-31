@@ -82,9 +82,15 @@
 >   settled first, or it bakes in a policy that round may change.
 > - **`fctiwz` of a NaN answers 0** where the ISA owes `0x80000000`; pinned in gate 13 as
 >   a divergence so it cannot drift silently.
-> - **The update-form conversions are not decoded at all** — `lfsu`, `stfsu`, `lfsux`,
->   `stfsux` fall to `goto bad`, which halts the emulator on legal encodings. Same class
->   as #302's `int`/`nint`; belongs to the halt-class sweep.
+> - ~~**The update-form conversions are not decoded at all**~~ — **RESOLVED as #310
+>   (round 70B)**, and the family was twice the size this entry named: the four primary
+>   opcodes (`lfsu`/`lfdu`/`stfsu`/`stfdu`, whose defines were missing outright) *and*
+>   the four indexed forms (extended opcodes 567/631/695/759). All eight were measured
+>   halting the emulator; thirteen gate-13 rows now assert both the value transferred and
+>   the base-register update, with non-update controls proving the base stays put.
+>   A prevalence claim made for this fix was **withdrawn**: restricted to the executable
+>   section, the NetBSD/macppc kernel contains none of these forms — the hundreds first
+>   reported were data in the read-write-execute segment.
 > - **The exception-enable bits (OE/UE/VE) and the FPRF class bits are unmodelled.** Not
 >   forced piecemeal, for the reason the SH exception model is not: a lone enabled bit
 >   implies the others work.

@@ -5286,9 +5286,47 @@ X(to_be_translated)
 			}
 			break;
 
-		default:if (!cpu->translation_readahead)
-				fatal("UNIMPLEMENTED regimm rt=%i\n", rt);
-			goto bad;
+		default:/*
+			 *  #309: an unimplemented REGIMM sub-opcode is a
+			 *  RESERVED INSTRUCTION, not a reason to stop the
+			 *  machine.  `goto bad` reaches the shared label in
+			 *  cpu_dyntrans.c, which sets cpu->running = 0 -- so
+			 *  before this, a guest executing any rt outside the
+			 *  implemented set (4-7, 0xd, 0xf, 0x14-0x17,
+			 *  0x1a-0x1e) halted the emulator instead of taking
+			 *  the exception real silicon takes.  Reproduced on
+			 *  both rigs with rt=0x15; the same encoding now
+			 *  raises RI and the guest kernel decides what to do.
+			 *
+			 *  The shape is the tree's own, two arms above: the
+			 *  trap opcodes on a pre-MIPS32 CPU already resolve to
+			 *  instr(reserved) behind a latched warning.  Upstream
+			 *  reached the same conclusion independently in the
+			 *  0.7.1 line it never released.
+			 *
+			 *  The warning is latched rather than verbosity-gated
+			 *  because it reports a DEFICIENCY of the emulator
+			 *  (an opcode nobody implemented), which #279 argues
+			 *  should survive into a quiet run exactly once --
+			 *  unlike #276's guest-answered diagnostics, which are
+			 *  gated.  translation_readahead still takes the old
+			 *  path: speculative decoding must not warn at all.
+			 */
+			if (cpu->translation_readahead)
+				goto bad;
+			else {
+				static int warned_regimm = 0;
+				if (!warned_regimm) {
+					warned_regimm = 1;
+					debugmsg_cpu(cpu, SUBSYS_CPU, "opcode",
+					    VERBOSITY_WARNING,
+					    "unimplemented REGIMM rt=%i -- "
+					    "raising Reserved Instruction. "
+					    "Only printing this once.", rt);
+				}
+				ic->f = instr(reserved);
+			}
+			break;
 		}
 		break;
 

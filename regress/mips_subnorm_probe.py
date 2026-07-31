@@ -129,6 +129,89 @@ def run(machine, kernel, status, src0, words, nread):
     return vals
 
 
+
+#  #309: an unimplemented REGIMM sub-opcode must raise Reserved Instruction,
+#  not stop the machine. The witness is therefore not a register value but
+#  WHICH OUTCOME the session reaches: the emulator prints "exception RI" and
+#  keeps running, where before it printed "UNIMPLEMENTED instruction" and set
+#  cpu->running = 0. Both rigs run the row -- the arm is CPU-independent, and
+#  a fix that reached only one dyntrans mode would pass a single-rig gate.
+def run_regimm(machine, kernel, status, iword):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-e", machine, "-M", "64", kernel])
+        os._exit(127)
+    buf = ""
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            if buf.rstrip().endswith(">"):
+                return True
+        return False
+
+    def send(x):
+        b = (x + chr(10)).encode("latin1")
+        n = 0
+        while n < len(b):
+            n += os.write(fd, b[n:])
+        wait()
+
+    if not wait(150):
+        try:
+            os.kill(pid, 9); os.waitpid(pid, 0)
+        except Exception:
+            pass
+        return None
+
+    send("status=0x%08x" % status)
+    send("put w 0x%x, 0x%08x" % (CODE, iword))
+    send("pc=0x%x" % CODE)
+    mark = len(buf)
+    send("step 1")
+    tail = buf[mark:]
+    try:
+        os.write(fd, b"quit" + bytes([10]))
+        time.sleep(0.4)
+        os.kill(pid, 9); os.waitpid(pid, 0)
+    except Exception:
+        pass
+    if "All machines stopped" in tail or "UNIMPLEMENTED instruction" in tail:
+        return "halted"
+    if "exception RI" in tail:
+        return "RI"
+    return "ran-no-exception"
+
+
+#  name, machine, status, instruction word, expected outcome
+#  REGIMM is opcode 0x01; rt selects the sub-opcode. 0x15 is in the
+#  unimplemented range (4-7, 0xd, 0xf, 0x14-0x17, 0x1a-0x1e); 0x01 is BGEZ,
+#  the control that must still execute as a branch rather than fault.
+REGIMM_ROWS = [
+    ("pmax regimm rt=0x15", "3max", 0x20000000, 0x04150000, "RI"),
+    ("arc regimm rt=0x15",  "pica", 0x24000000, 0x04150000, "RI"),
+    ("pmax regimm rt=0x1e", "3max", 0x20000000, 0x041e0000, "RI"),
+    ("pmax BGEZ control",   "3max", 0x20000000, 0x04010000, "ran-no-exception"),
+    ("arc BGEZ control",    "pica", 0x24000000, 0x04010000, "ran-no-exception"),
+]
+
+
 #  name, machine, status, first-operand word, guest words (after the lui/ori
 #  prelude), reads, want
 ROWS = [
@@ -161,4 +244,11 @@ for name, machine, status, src0, words, nread, want in ROWS:
     passed += ok
     print("%-19s got %s want %s %s" %
           (name, got, want, "ok" if ok else "FAIL"))
-print("MIPS_SUBN_RESULT=%d/%d" % (passed, len(ROWS)))
+for name, machine, status, iword, want in REGIMM_ROWS:
+    kernel = PMAX_KERNEL if machine == "3max" else ARC_KERNEL
+    got = run_regimm(machine, kernel, status, iword)
+    ok = got == want
+    passed += ok
+    print("%-19s got %-18s want %-18s %s" %
+          (name, got, want, "ok" if ok else "FAIL"))
+print("MIPS_SUBN_RESULT=%d/%d" % (passed, len(ROWS) + len(REGIMM_ROWS)))

@@ -2568,6 +2568,246 @@ X(lfs)
 		    (uint32_t) *(uint64_t *)ic->arg[0]);
 	}
 }
+#ifndef PPC_STFS_EXTRACT_INCLUDED
+#define PPC_STFS_EXTRACT_INCLUDED
+/*
+ *  ppc_stfs_extract():  #304/#305 -- the two classes where the shared store
+ *  cannot spell what the ISA's SINGLE() extraction owes.  Returns 1 and fills
+ *  *out when it handled the value; 0 when the legacy path is already right.
+ *
+ *  Book I gives SINGLE() three cases on the operand's biased exponent E:
+ *
+ *    E > 896            splice sign, exponent and the top 23 fraction bits --
+ *                       truncation, mode-independent, never rounding.  The
+ *                       shared store already reproduces this bit for bit for
+ *                       finite values (measured), so it keeps that path.
+ *    874 <= E <= 896    DENORMALIZE: restore the implicit 1 and shift right
+ *                       until the exponent reaches the single's minimum,
+ *                       truncating what falls off.  The shared store flushes
+ *                       this whole band to signed zero instead (its #287/#292
+ *                       policy), which is the defect #304 fixes here.
+ *    E < 874            WORD is architecturally UNDEFINED; the flush stands as
+ *                       this fork's policy, and the gate pins it.
+ *
+ *  The NaN class is #305's: exponent all-ones is part of the splice case, so a
+ *  NaN's sign and top-23 payload must survive.  The shared store canonicalizes
+ *  every NaN to 0x7fffffff instead -- sign and payload both lost (measured).
+ *  Note what the letter does here and this code faithfully repeats: a NaN whose
+ *  payload lives entirely in the discarded low bits splices to the INFINITY
+ *  pattern.  That is the extraction working as specified, not a case to repair,
+ *  and there is a gate row asserting exactly that byte.  Quieting belongs to
+ *  frsp alone -- a store must not alter the class of what it is storing.
+ */
+static int ppc_stfs_extract(uint64_t d, uint32_t *out)
+{
+	int exp = (int) ((d >> 52) & 0x7ff);
+	uint64_t frac = d & 0xfffffffffffffULL;
+	uint32_t sign = (uint32_t) (d >> 63) & 1;
+
+	if (exp == 0x7ff && frac != 0) {		/*  #305: NaN  */
+		*out = (sign << 31) | 0x7f800000 |
+		    (uint32_t) (frac >> 29);
+		return 1;
+	}
+
+	if (exp >= 874 && exp <= 896) {			/*  #304: the band  */
+		uint64_t sig = frac | (1ULL << 52);
+		int shift = 29 + (896 - exp) + 1;
+		/*  Truncate -- the extraction never rounds, so no guard bit is
+		    consulted here, unlike frsp's path through the same band.  */
+		*out = (sign << 31) | (uint32_t) (sig >> shift);
+		return 1;
+	}
+
+	return 0;
+}
+#endif	/*  PPC_STFS_EXTRACT_INCLUDED  */
+
+
+/*
+ *  #310: the eight UPDATE forms of the single/double float loads and stores.
+ *
+ *  lfsu/lfdu/stfsu/stfdu (primary opcodes 0x31/0x33/0x35/0x37) and their
+ *  indexed twins lfsux/lfdux/stfsux/stfdux (opcode 31, extended 567/631/
+ *  695/759) were not defined in opcodes_ppc.h and not decoded anywhere -- the
+ *  header even had blank lines where the four primary opcodes belong.  Every
+ *  one of them reached `goto bad`, which stops the emulator, and all eight
+ *  were measured doing exactly that on the macppc probe path before this fix
+ *  (their non-update twins ran, as controls).
+ *
+ *  The round originally scoped four; a panel seat demanded the indexed twins
+ *  be checked first, on the principle #306 established -- a compiler emits
+ *  both from the same loops, so fixing half a family leaves the other half
+ *  stopping the machine.  It was right, though not about which extended
+ *  opcodes they are: 599 and 663 are lfdx and stfsx, which this tree already
+ *  decodes.  The update forms are 567/631/695/759, and none appeared here.
+ *
+ *  Each is its non-update sibling plus "rA receives the effective address",
+ *  which the generic load/store table already implements (the +32 index term
+ *  writes the address back through arg[1]).  So these bodies differ from
+ *  lfs/lfd/stfs/stfd by one array index, and the format conversion -- the
+ *  part #304 and #305 corrected -- is shared unchanged.
+ *
+ *  rA = 0 is an invalid form for every update instruction, and the decoder
+ *  rejects it before reaching here, exactly as it already does for the
+ *  integer update forms.
+ *
+ *  The two dispatch tables are NOT the same shape: the D-form table has a
+ *  zero-displacement dimension and encodes update at +32, while the
+ *  indexed table has no displacement at all and encodes it at +16 in only
+ *  32 entries.  Using the D-form's term for the indexed handlers reads
+ *  past the end of the array; the compiler caught that here as an
+ *  out-of-bounds subscript, which is the only reason it did not become a
+ *  call through whatever happened to follow the table.
+ */
+X(lfsu)
+{
+	uint64_t old_pc, low_pc = ((size_t)ic - (size_t)
+	    cpu->cd.ppc.cur_ic_page) / sizeof(struct ppc_instr_call);
+	old_pc = cpu->pc = (cpu->pc & ~((PPC_IC_ENTRIES_PER_PAGE-1) <<
+	    PPC_INSTR_ALIGNMENT_SHIFT)) + (low_pc << PPC_INSTR_ALIGNMENT_SHIFT);
+	if (!(cpu->cd.ppc.msr & PPC_MSR_FP)) {
+		ppc_exception(cpu, PPC_EXCEPTION_FPU);
+		return;
+	}
+
+#ifdef MODE32
+	ppc32_loadstore
+#else
+	ppc_loadstore
+#endif
+	    [2 + 4 + 8 + 32](cpu, ic);
+
+	if (old_pc == cpu->pc) {
+		(*(uint64_t *)ic->arg[0]) &= 0xffffffff;
+		(*(uint64_t *)ic->arg[0]) = ppc_single_widen(
+		    (uint32_t) *(uint64_t *)ic->arg[0]);
+	}
+}
+X(lfdu)
+{
+	CHECK_FOR_FPU_EXCEPTION;
+
+#ifdef MODE32
+	ppc32_loadstore
+#else
+	ppc_loadstore
+#endif
+	    [3 + 4 + 8 + 32](cpu, ic);
+}
+X(stfsu)
+{
+	uint64_t *old_arg0 = (uint64_t *) ic->arg[0];
+	struct ieee_float_value val;
+	uint64_t tmp_val;
+	uint32_t extracted;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	if (ppc_stfs_extract(*old_arg0, &extracted)) {
+		tmp_val = extracted;
+	} else {
+		ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
+		tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	}
+
+	ic->arg[0] = (size_t)&tmp_val;
+
+#ifdef MODE32
+	ppc32_loadstore
+#else
+	ppc_loadstore
+#endif
+	    [2 + 4 + 32](cpu, ic);
+
+	ic->arg[0] = (size_t)old_arg0;
+}
+X(stfdu)
+{
+	CHECK_FOR_FPU_EXCEPTION;
+
+#ifdef MODE32
+	ppc32_loadstore
+#else
+	ppc_loadstore
+#endif
+	    [3 + 4 + 32](cpu, ic);
+}
+X(lfsux)
+{
+	uint64_t old_pc, low_pc = ((size_t)ic - (size_t)
+	    cpu->cd.ppc.cur_ic_page) / sizeof(struct ppc_instr_call);
+	old_pc = cpu->pc = (cpu->pc & ~((PPC_IC_ENTRIES_PER_PAGE-1) <<
+	    PPC_INSTR_ALIGNMENT_SHIFT)) + (low_pc << PPC_INSTR_ALIGNMENT_SHIFT);
+	if (!(cpu->cd.ppc.msr & PPC_MSR_FP)) {
+		ppc_exception(cpu, PPC_EXCEPTION_FPU);
+		return;
+	}
+
+#ifdef MODE32
+	ppc32_loadstore_indexed
+#else
+	ppc_loadstore_indexed
+#endif
+	    [2 + 4 + 8 + 16](cpu, ic);
+
+	if (old_pc == cpu->pc) {
+		(*(uint64_t *)ic->arg[0]) &= 0xffffffff;
+		(*(uint64_t *)ic->arg[0]) = ppc_single_widen(
+		    (uint32_t) *(uint64_t *)ic->arg[0]);
+	}
+}
+X(lfdux)
+{
+	CHECK_FOR_FPU_EXCEPTION;
+
+#ifdef MODE32
+	ppc32_loadstore_indexed
+#else
+	ppc_loadstore_indexed
+#endif
+	    [3 + 4 + 8 + 16](cpu, ic);
+}
+X(stfsux)
+{
+	uint64_t *old_arg0 = (uint64_t *)ic->arg[0];
+	struct ieee_float_value val;
+	uint64_t tmp_val;
+	uint32_t extracted;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	if (ppc_stfs_extract(*old_arg0, &extracted)) {
+		tmp_val = extracted;
+	} else {
+		ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
+		tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	}
+
+	ic->arg[0] = (size_t)&tmp_val;
+
+#ifdef MODE32
+	ppc32_loadstore_indexed
+#else
+	ppc_loadstore_indexed
+#endif
+	    [2 + 4 + 16](cpu, ic);
+
+	ic->arg[0] = (size_t)old_arg0;
+}
+X(stfdux)
+{
+	CHECK_FOR_FPU_EXCEPTION;
+
+#ifdef MODE32
+	ppc32_loadstore_indexed
+#else
+	ppc_loadstore_indexed
+#endif
+	    [3 + 4 + 16](cpu, ic);
+}
+
+
 X(lfsx)
 {
 	/*  Sync. PC in case of an exception, and remember it:  */
@@ -2626,60 +2866,7 @@ X(lfdx)
 #endif
 	    [3 + 4 + 8](cpu, ic);
 }
-#ifndef PPC_STFS_EXTRACT_INCLUDED
-#define PPC_STFS_EXTRACT_INCLUDED
-/*
- *  ppc_stfs_extract():  #304/#305 -- the two classes where the shared store
- *  cannot spell what the ISA's SINGLE() extraction owes.  Returns 1 and fills
- *  *out when it handled the value; 0 when the legacy path is already right.
- *
- *  Book I gives SINGLE() three cases on the operand's biased exponent E:
- *
- *    E > 896            splice sign, exponent and the top 23 fraction bits --
- *                       truncation, mode-independent, never rounding.  The
- *                       shared store already reproduces this bit for bit for
- *                       finite values (measured), so it keeps that path.
- *    874 <= E <= 896    DENORMALIZE: restore the implicit 1 and shift right
- *                       until the exponent reaches the single's minimum,
- *                       truncating what falls off.  The shared store flushes
- *                       this whole band to signed zero instead (its #287/#292
- *                       policy), which is the defect #304 fixes here.
- *    E < 874            WORD is architecturally UNDEFINED; the flush stands as
- *                       this fork's policy, and the gate pins it.
- *
- *  The NaN class is #305's: exponent all-ones is part of the splice case, so a
- *  NaN's sign and top-23 payload must survive.  The shared store canonicalizes
- *  every NaN to 0x7fffffff instead -- sign and payload both lost (measured).
- *  Note what the letter does here and this code faithfully repeats: a NaN whose
- *  payload lives entirely in the discarded low bits splices to the INFINITY
- *  pattern.  That is the extraction working as specified, not a case to repair,
- *  and there is a gate row asserting exactly that byte.  Quieting belongs to
- *  frsp alone -- a store must not alter the class of what it is storing.
- */
-static int ppc_stfs_extract(uint64_t d, uint32_t *out)
-{
-	int exp = (int) ((d >> 52) & 0x7ff);
-	uint64_t frac = d & 0xfffffffffffffULL;
-	uint32_t sign = (uint32_t) (d >> 63) & 1;
 
-	if (exp == 0x7ff && frac != 0) {		/*  #305: NaN  */
-		*out = (sign << 31) | 0x7f800000 |
-		    (uint32_t) (frac >> 29);
-		return 1;
-	}
-
-	if (exp >= 874 && exp <= 896) {			/*  #304: the band  */
-		uint64_t sig = frac | (1ULL << 52);
-		int shift = 29 + (896 - exp) + 1;
-		/*  Truncate -- the extraction never rounds, so no guard bit is
-		    consulted here, unlike frsp's path through the same band.  */
-		*out = (sign << 31) | (uint32_t) (sig >> shift);
-		return 1;
-	}
-
-	return 0;
-}
-#endif	/*  PPC_STFS_EXTRACT_INCLUDED  */
 
 
 X(stfs)
@@ -3179,7 +3366,9 @@ X(to_be_translated)
 	case PPC_HI6_LWZU:
 	case PPC_HI6_LD:
 	case PPC_HI6_LFD:
+	case PPC_HI6_LFDU:	/*  #310  */
 	case PPC_HI6_LFS:
+	case PPC_HI6_LFSU:	/*  #310  */
 	case PPC_HI6_STB:
 	case PPC_HI6_STBU:
 	case PPC_HI6_STH:
@@ -3188,7 +3377,9 @@ X(to_be_translated)
 	case PPC_HI6_STWU:
 	case PPC_HI6_STD:
 	case PPC_HI6_STFD:
+	case PPC_HI6_STFDU:	/*  #310  */
 	case PPC_HI6_STFS:
+	case PPC_HI6_STFSU:	/*  #310  */
 		rs = (iword >> 21) & 31;
 		ra = (iword >> 16) & 31;
 		imm = (int16_t)iword;
@@ -3205,7 +3396,11 @@ X(to_be_translated)
 		case PPC_HI6_LWZU: load=1; size=2; update=1; break;
 		case PPC_HI6_LD:   load=1; size=3; break;
 		case PPC_HI6_LFD:  load=1; size=3; fp=1;ic->f=instr(lfd);break;
+		case PPC_HI6_LFDU: load=1; size=3; fp=1; update=1;
+				   ic->f=instr(lfdu); break;	/*  #310  */
 		case PPC_HI6_LFS:  load=1; size=2; fp=1;ic->f=instr(lfs);break;
+		case PPC_HI6_LFSU: load=1; size=2; fp=1; update=1;
+				   ic->f=instr(lfsu); break;	/*  #310  */
 		case PPC_HI6_STB:  break;
 		case PPC_HI6_STBU: update=1; break;
 		case PPC_HI6_STH:  size=1; break;
@@ -3214,7 +3409,11 @@ X(to_be_translated)
 		case PPC_HI6_STWU: size=2; update=1; break;
 		case PPC_HI6_STD:  size=3; break;
 		case PPC_HI6_STFD: size=3; fp=1; ic->f = instr(stfd); break;
+		case PPC_HI6_STFDU: size=3; fp=1; update=1;
+				   ic->f = instr(stfdu); break;	/*  #310  */
 		case PPC_HI6_STFS: size=2; fp=1; ic->f = instr(stfs); break;
+		case PPC_HI6_STFSU: size=2; fp=1; update=1;
+				   ic->f = instr(stfsu); break;	/*  #310  */
 		}
 		if (ic->f == NULL) {
 			ic->f =
@@ -3800,7 +3999,9 @@ X(to_be_translated)
 		case PPC_31_LHBRX:
 		case PPC_31_LWBRX:
 		case PPC_31_LFDX:
+		case PPC_31_LFDUX:	/*  #310  */
 		case PPC_31_LFSX:
+		case PPC_31_LFSUX:	/*  #310  */
 		case PPC_31_STBX:
 		case PPC_31_STBUX:
 		case PPC_31_STHX:
@@ -3812,7 +4013,9 @@ X(to_be_translated)
 		case PPC_31_STHBRX:
 		case PPC_31_STWBRX:
 		case PPC_31_STFDX:
+		case PPC_31_STFDUX:	/*  #310  */
 		case PPC_31_STFSX:
+		case PPC_31_STFSUX:	/*  #310  */
 			rs = (iword >> 21) & 31;
 			ra = (iword >> 16) & 31;
 			rb = (iword >> 11) & 31;
@@ -3839,8 +4042,12 @@ X(to_be_translated)
 					   ic->f = instr(lwbrx); break;
 			case PPC_31_LFDX:  size=3; load=1; fp=1;
 					   ic->f = instr(lfdx); break;
+			case PPC_31_LFDUX: size=3; load=1; fp=1; update=1;
+					   ic->f = instr(lfdux); break;	/*  #310  */
 			case PPC_31_LFSX:  size=2; load=1; fp=1;
 					   ic->f = instr(lfsx); break;
+			case PPC_31_LFSUX: size=2; load=1; fp=1; update=1;
+					   ic->f = instr(lfsux); break;	/*  #310  */
 			case PPC_31_STBX:  break;
 			case PPC_31_STBUX: update = 1; break;
 			case PPC_31_STHX:  size=1; break;
@@ -3855,8 +4062,12 @@ X(to_be_translated)
 					   ic->f = instr(stwbrx); break;
 			case PPC_31_STFDX: size=3; fp=1;
 					   ic->f = instr(stfdx); break;
+			case PPC_31_STFDUX:size=3; fp=1; update=1;
+					   ic->f = instr(stfdux); break;	/*  #310  */
 			case PPC_31_STFSX: size=2; fp=1;
 					   ic->f = instr(stfsx); break;
+			case PPC_31_STFSUX:size=2; fp=1; update=1;
+					   ic->f = instr(stfsux); break;	/*  #310  */
 			}
 			if (fp)
 				ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rs]);
