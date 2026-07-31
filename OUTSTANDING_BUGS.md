@@ -94,10 +94,33 @@
 >   3–1 with the dissent recorded; reopen only on silicon evidence or a guest victim.
 >
 > **Instruction-coverage gaps (the decoder rejects legal encodings)**
-> - **m88k `fdiv.dds`** — size code 0x11 falls through to "Unimplemented"/`goto bad`.
-> - **m88k mixed-format S-destination arithmetic** — e.g. `fadd.ssd` (size code 0x04).
->   Same family; both are pre-existing, and both were found by panel census work rather
->   than by a failing test.
+> - ~~**m88k `fdiv.dds`** and **mixed-format S-destination arithmetic**~~ — **RESOLVED as
+>   #306 (round 70A)**, and the census found the entry understated it: the size field is a
+>   format *triple*, so each of `fadd`/`fsub`/`fmul`/`fdiv` has eight legal forms and
+>   **twelve** were missing, not two. Six were measured halting the emulator on the
+>   luna88k rig. Eighteen gate-11 rows cover them — including the `fmul.ssd` mode rows
+>   that caught a double rounding in the fix itself, registered by a panel seat before the
+>   code was tested.
+> - ~~**m88k `tcnd` absent from the decoder**~~ — **RESOLVED as #307**: modelled from the
+>   manual's four-class condition mask (the zero test is the NOR of the low *31* bits, so
+>   `0x80000000` is its own class), with `tb0`/`tb1`'s privilege-then-condition order,
+>   plus disassembly. Upstream's own narrow patch was refused: it leaves `tcnd eq0,r0`
+>   halting, and `0 == 0` is the case that must trap.
+> - ~~**`fdiv_sss` double-rounds**~~ — **WITHDRAWN as a phantom** in the same review that
+>   filed it. Inexact is not the same as double-rounds-wrong: with two single sources the
+>   quotient's error can never reach a single-precision midpoint (the exclusion-zone
+>   argument), and 400,000 random single÷single quotients found no disagreement with a
+>   single correct rounding. The arms that genuinely had the hazard were the six #306
+>   introduced, and they were fixed in the same round by **#308**'s round-to-odd helpers —
+>   which also revealed that #300's `_rm` helpers return the host result unchanged under
+>   nearest, correct for a double destination and a double rounding for a narrower one.
+>   **Still open, elsewhere:** the same narrowing question applies to MIPS `div.s`, SH
+>   `fdiv`, and both architectures' single-precision `sqrt`; #308's helpers now exist to
+>   answer it, but no witness has been constructed for those paths yet.
+> - **m88k `bcnd`'s condition table is NULL for legal unnamed masks** (found while sourcing
+>   #307): the manual gives `bcnd` the same mask semantics as `tcnd`, but the generated
+>   table has no entry for m5 = 4, 6, 9, 0xa, 0xb, 0xf, or anything with the reserved bit
+>   set — so those halt. Same class as #302 and #307, one probe from reproduction.
 > - **MIPS paired-single arithmetic is unmodelled.** Deferred on purpose: the FIR
 >   advertisement sits inside `#if 0`, so the emulator makes no false claim a test could
 >   reproduce. This is feature work, not defect work. Reopen when a rig boots a

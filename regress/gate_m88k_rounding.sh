@@ -52,17 +52,43 @@ grep -E " ok$| FAIL" "$LOG" | sed 's/^/       /'
 res=$(grep -o "M88K_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
 
-# 46 = 25 as of #300 (21 behaviour rows + the flipped residue-band row + the exact-zero
-# sign rows and Inf row + the fdiv.ddd directed row + fcr63 retention) + #302's six
-# trnc rows (FOUR discriminators -- +Inf, the NEGATIVE-NaN-goes-positive signature,
-# the double 2^31 boundary, and the positive double qNaN; a panel seat corrected the
-# original count of three -- plus two negative-side host-independence pins) + #302's
-# eight int/nint rows (the decoder previously HALTED the machine on these legal
-# instructions) + #303's six subnormal-operand rows (both fmul signs, the dss widen,
-# the ddd scale row, the ONLY discriminating compare shape fcmp.ssd, and the
-# KNOWN-CHANGE flip pin -- see the probe's comment for why every committed byte was
-# measured live before the fix).
-check "rows run"       "$want" 46
+# 73 = 46 as of #303 (25 rounding-mode rows + #302's six trnc and eight int/nint rows,
+# which the decoder used to HALT on + #303's six subnormal-operand rows) + #306's
+# eighteen mixed-format rows + #307's seven tcnd trap rows + #308's two round-to-nearest witnesses.
+#
+# #306 closed a FAMILY, not the two encodings that happened to get reported: the size
+# field is a format TRIPLE, so each of fadd/fsub/fmul/fdiv has eight legal forms, and
+# this tree implemented whichever ones its guests happened to execute -- fsub had .sds
+# while fadd did not. Twelve were missing and every one stopped the emulator on a legal
+# instruction; six were measured halting on this rig before the fix.
+#
+# The fmul/fdiv mode rows earned their place twice over, because the fix took two
+# tries and a seat's witness caught each one.
+#
+# Draft one copied fmul_sss's "compute in host double, round at the store", which is
+# safe ONLY because two SINGLE sources make the product exact in a double. A double
+# source voids that and the two roundings compound: 3.0f times the nearest double to
+# 1/3 has an exact product just BELOW 1.0, the host product ties to exactly 1.0, and
+# the toward-zero store answers 0x3f800000 where one correct rounding owes 0x3f7fffff.
+# The "fmul.ssd RZ" and "RM" rows are that failure.
+#
+# Draft two moved to #300's _rm helpers -- and those return the host result UNCHANGED
+# under nearest, because for a DOUBLE destination the host's nearest result already is
+# correct. Narrowed to single it is a double rounding again, in the mode OpenBSD/m88k
+# userland actually runs. The two "odd ..." rows are that failure: 1.5f times
+# 0x3FF555556AAAAAAB gave 0x40000000 for 0x40000001, and a quotient landing exactly on
+# the 1+2^-24 midpoint gave 0x3f800000 for 0x3f800001.
+#
+# #308's round-to-odd helpers fix every mode at once (53 >= 2*24 + 2, so an odd
+# intermediate can never sit on a destination midpoint), verified offline against a
+# single correct rounding over 960,000 operand pairs in all four modes.
+#
+# #307's rows measure a TRAP, so their witness is the PC after one step rather than a
+# register: taken lands at VBR + 8*vector, not-taken advances by four, and either way
+# the emulator is still running -- which is the point, since every one of these
+# encodings stopped it before. The vector is 128 or above on purpose: vectors 0..127
+# are the hardware ones and vector 0 is RESET, which really does stop the machine.
+check "rows run"       "$want" 73
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -81,7 +107,14 @@ for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-
          "trncSS +Inf" "trncSS qNaN-" "trncSD 2^31" "trncSD qNaN+" "trncSD qNaN-" \
          "intSS 5.2 +Inf" "intSS -5.2 -Inf" "nintSS 2.5 tie" "nintSS 3.5 tie" "nintSD 2.5 tie" \
          "subn fmul +" "subn fmul -" "subn fmul.dss" "subn fmul.ddd" "subn fcmp.ssd" \
-         "subn flip x2.0"; do
+         "subn flip x2.0" \
+         "fmul.ssd RZ" "fmul.ssd RN" "fmul.ssd RM" "fadd.ssd RN" "fadd.sds RN" \
+         "fadd.sdd RN" "fsub.ssd RN" "fsub.sdd RN" "fmul.sds RN" "fmul.sdd RN" \
+         "fdiv.ssd RN" "fdiv.ssd RZ" "fdiv.sds RN" "fdiv.sdd RN" \
+         "fdiv.dds RN hi" "fdiv.dds RN lo" "fdiv.dds RP lo" \
+         "tcnd eq0,r0 taken" "tcnd ne0,r0 fallthru" "tcnd lt0,r2=-1 taken" \
+         "tcnd gt0,r2=-1 fall" "tcnd maxneg taken" "tcnd maxneg vs 2^31-1" \
+         "tcnd mask 0x1d ~ ne0" "odd fmul.sds RN" "odd fdiv.ssd RN"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
 done

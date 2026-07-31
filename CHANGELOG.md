@@ -3249,6 +3249,122 @@ decoded at all, and the exception-enable bits nothing sets — the enable side o
 `VXSNAN` included, so nothing above should be read as a working trap model. Each has
 a round with its name on it.
 
+## Seventieth round, part A (#306, #307, #308) — a family of legal instructions that stopped the machine
+
+Two corrections in the m88k core, both of the class this project keeps finding: an
+encoding the manual defines, the decoder rejects, and `goto bad` turns into
+`cpu->running = 0`. A guest that executes one gets "All machines stopped" instead of
+an answer.
+
+### #306 — the decoder implemented whichever format combinations its guests happened to run
+
+The size field of a major-0x21 floating-point instruction is a format *triple* —
+(s1 is double) << 4 | (s2 is double) << 2 | (destination is double) — so each of
+`fadd`, `fsub`, `fmul` and `fdiv` has eight legal forms. This tree had five or six of
+each, and the gaps were not principled: `fsub` had `.sds` while `fadd` did not,
+`fdiv` was missing four. They had been added over the years as guests demanded them,
+which is exactly why a census beats a bug report. Twelve combinations were missing;
+six were measured halting the emulator on the luna88k rig before the fix, spanning
+all four instructions.
+
+Each new handler is its sibling's body with the operand and result widths changed,
+because the arithmetic contract does not vary with the triple: sources are
+interpreted in their own formats — a double source is never pre-narrowed because the
+destination happens to be single — the operation happens once, and the result is
+rounded once, into the destination format, under fcr63's mode.
+
+### #308 — the same witness fired twice, and the second time was worse
+
+The first draft of the single-destination products and quotients copied `fmul_sss`
+and `fdiv_sss`, which compute in host double and round at the store. A panel seat with
+the MC88100 manual refused that and registered a counterexample *before the code was
+tested*: `fmul.ssd` of 3.0f by the nearest double to 1/3. The exact product is just
+below 1.0; the host product ties to exactly 1.0; a toward-zero store then answers
+`0x3f800000` where a single correct rounding owes `0x3f7fffff`. It failed exactly
+there.
+
+The reason is worth stating plainly, because it is the whole lesson: those siblings
+are safe *because* two single sources make the product exact in a double, so their
+store rounds once. A double source voids that argument. "Copy the sibling" is only
+sound when the sibling's correctness *argument* survives the change.
+
+The second draft routed the six arms through #300's `_rm` residual helpers — and the
+same seat caught that those **return the host result unchanged under round-to-nearest**,
+since for a *double* destination the host's nearest result already is the correctly
+rounded one. Narrowed to single, that is a double rounding again, and nearest is the
+mode OpenBSD/m88k userland actually runs (fcr63 is zero at exec). Two more constructed
+witnesses, both measured: `1.5f × 0x3FF555556AAAAAAB` gave `0x40000000` for the owed
+`0x40000001`, and `0x3F800001 ÷ 0x3FF000000FFFFFF0` put the host quotient exactly on
+the 1+2⁻²⁴ midpoint, giving `0x3f800000` for the owed `0x3f800001`. The first witness
+set could not have found these: it only discriminated the directed modes.
+
+So #308 adds the multiplicative twins of #299's sum helper — `ieee_mul_round_to_odd()`
+and `ieee_div_round_to_odd()`, over the fma and Markstein residuals — and the six arms
+now pass no mode to the arithmetic at all, only to the store. Round-to-odd fixes every
+mode at once: with 53 ≥ 2·24 + 2 an odd intermediate can never sit on a destination
+midpoint, so the narrowing store rounds once by construction.
+
+The first attempt at the helpers had the step direction inverted, which the rig
+reported immediately by *regressing* the directed rows that had been passing — the
+witness set doing its job in the other direction. The repair was to stop hand-rolling
+the bit arithmetic and reuse the file's own `overshoot` convention and `ieee_dir_step()`.
+Verified three ways: all four rig witnesses, an offline differential against a single
+correct rounding over 960,000 operand pairs in all four modes with zero mismatches, and
+the gate rows themselves.
+
+One filing was withdrawn in the same review. `fdiv_sss` had been recorded as carrying
+this defect on the grounds that a quotient of two singles is not exact — but inexact is
+not the same as double-rounds-wrong, and by the exclusion-zone argument its error can
+never reach a single-precision midpoint. 400,000 random single÷single quotients found
+no disagreement. The six arms this round introduced were the only ones that genuinely
+had the hazard.
+
+### #307 — `tcnd` was absent entirely, and upstream's own patch would not have fixed it
+
+Trap-on-condition was not in the decoder at all, so every form halted the machine.
+The abandoned 0.7.1 line upstream had added a narrow patch: treat `tcnd ne0,r0,x` as
+a no-op, since r0 is never nonzero, and leave the rest halting. A seat refused to
+adopt it and was right twice over — `tcnd eq0,r0` still reaches `goto bad`, and
+`0 == 0` is precisely the case that must trap; and in user mode a trap to a hardware
+vector owes a privilege violation whether or not the condition holds, so no-oping is
+wrong there even for its own case.
+
+The semantics are derived, not invented. The manual gives the condition field as a
+mask over four mutually exclusive classes of the source register — maximum negative,
+less than zero, equal to zero, greater than zero — where the zero test is the NOR of
+the low *thirty-one* bits, which is what makes `0x80000000` its own class. All nine
+entries of the disassembler's own condition table agree with that reading. The trap
+itself is `tb0`/`tb1`'s body verbatim, including the privilege check before the
+condition, which the manual retroactively confirms was the right order there too.
+Disassembly was added as well, so the instruction no longer prints as UNIMPLEMENTED.
+
+### Verification
+
+Gate 11 grew from 46 rows to 71 and now runs 59 checks. Eighteen rows cover the new
+format arms — one per instruction and format class, the register-pair word order on
+the double-destination divide, a directed-mode row through the divide path, and the
+three `fmul.ssd` mode rows that caught the double rounding. Seven rows cover `tcnd`,
+and they measure a *trap*: the witness is the program counter after one step, since
+a taken trap lands at VBR + 8·vector and an untaken one advances by four — and either
+outcome proves the emulator survived, which is the whole point. One of those rows
+pins the mask-not-enumeration reading by using a condition value with the reserved
+bit set, and another pins the low-thirty-one-bit zero test by distinguishing
+`0x80000000` from `0x7fffffff`.
+
+The vector is 128 or above on purpose. The first version of the probe used vector 0,
+which is RESET — the trap was delivered correctly and the machine reset, and the row
+read a correct answer as a failure.
+
+### What went to its own round
+
+The four guest-reachable `exit(1)` calls in `dev_wdc.c` were reproduced in the same
+sweep — a guest doubleword store to the data register kills the emulator outright,
+with no message at all — but they ship separately, by panel verdict: the m88k work
+has complete primary-source semantics and an existing instrument, and a single green
+round should not let deterministic decoder fixes mask an under-specified device
+change. That round also inherits a read-path twin of the same defect, found by the
+same seat two lines from the write one.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

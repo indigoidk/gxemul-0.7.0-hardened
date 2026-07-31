@@ -71,6 +71,14 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
     an exact zero under toward-minus-infinity.  */
 double ieee_sum_round_to_odd(double a, double b, int rm);
 
+/*  #308: the multiplicative twins of the sum helper above. Round the product
+    or quotient to ODD in double so a caller storing it as a SINGLE rounds
+    once. ieee_mul_round_rm()/ieee_div_round_rm() cannot serve that purpose:
+    they return the host result unchanged under nearest, which is right for a
+    double destination and a double rounding for a narrower one.  */
+double ieee_mul_round_to_odd(double a, double b);
+double ieee_div_round_to_odd(double a, double b);
+
 /*  #300: DOUBLE-format arithmetic under a directed rounding mode. The D
     store is a pure re-encode, so the mode is honoured by correcting the
     arithmetic: one fma residual (or 2Sum) recovers which neighbour the

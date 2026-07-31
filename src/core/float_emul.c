@@ -800,6 +800,114 @@ double ieee_div_round_rm(double a, double b, int rm)
 	return ieee_dir_adjust(q, (r > 0.0) == (a > 0.0), rm);
 }
 
+/*
+ *  ieee_force_odd():  #308 -- step an inexact result to the neighbour with an
+ *  odd significand, so that a later rounding to a narrower format rounds once
+ *  instead of twice.
+ *
+ *  `overshoot` has the same meaning it does in ieee_dir_adjust() above: the
+ *  value's MAGNITUDE exceeds the exact result's.  Working in magnitude rather
+ *  than in signed value is what lets this reuse ieee_dir_step(), whose bit
+ *  increment is a magnitude step by construction -- the first version of this
+ *  function took a signed "is it above the exact value" flag, inverted it at
+ *  both call sites, and stepped every witness the wrong way.
+ *
+ *  Stepping toward the exact value is what makes the result odd AND keeps it
+ *  on the correct side, which is the property the narrowing store relies on.
+ */
+static double ieee_force_odd(double v, int overshoot)
+{
+	uint64_t vb;
+
+	memcpy(&vb, &v, sizeof(vb));
+	if (vb & 1)
+		return v;		/*  already odd  */
+
+	return ieee_dir_step(v, overshoot ? 1 : 0);
+}
+
+
+/*
+ *  ieee_mul_round_to_odd(), ieee_div_round_to_odd():  #308
+ *
+ *  The product or quotient, rounded to ODD in double, so that a caller storing
+ *  the result as a SINGLE gets one correct rounding instead of two.
+ *
+ *  Why this exists at all.  ieee_mul_round_rm()/ieee_div_round_rm() (#300)
+ *  correct the host's result for the three DIRECTED modes and return it
+ *  untouched under nearest -- which is right for a DOUBLE destination, because
+ *  the host's nearest result already IS the correctly rounded double.  It stops
+ *  being right the moment that double is narrowed again: nearest-to-53 followed
+ *  by nearest-to-24 is a double rounding, and the two disagree exactly when the
+ *  first rounding lands on a 24-bit midpoint.  A panel seat measured both cases
+ *  after the #306 arms were written to use the _rm helpers:
+ *
+ *    1.5f * 0x3FF555556AAAAAAB  (exact 2 + 2^-23 + 2^-53)
+ *        host-then-store 0x40000000, one correct rounding 0x40000001
+ *    0x3F800001 / 0x3FF000000FFFFFF0
+ *        host quotient lands exactly on 0x3FF0000010000000, the 1+2^-24
+ *        midpoint: host-then-store 0x3F800000, owed 0x3F800001
+ *
+ *  Both are mid-range values under round-to-NEAREST, which is the mode
+ *  OpenBSD/m88k userland runs (fcr63 is zero at exec), so this was not an edge
+ *  case waiting for an unusual guest.
+ *
+ *  Round-to-odd is the standard cure (Boldo & Melquiond): when the destination
+ *  has 24 significand bits and the intermediate has 53, and 53 >= 2*24 + 2, a
+ *  round-to-odd intermediate followed by any rounding to the destination equals
+ *  a single rounding of the exact value, in every mode.  #299 used exactly this
+ *  for sums; these two are the same idea over the multiplicative residual.
+ *
+ *  The residual is exact in both cases: fma(a, b, -p) is the error of a product
+ *  by definition, and fma(q, b, -a) is the (negated, scaled) error of a
+ *  quotient -- the same Markstein residual ieee_div_round_rm() already uses.
+ *
+ *  isfinite() is load-bearing here for the reason #299 documents at length: with
+ *  a NaN or Inf operand the residual is NaN, NaN != 0.0 is TRUE in C, and the
+ *  odd-force would then step an infinity's bit pattern down to DBL_MAX.
+ */
+double ieee_mul_round_to_odd(double a, double b)
+{
+	double p = a * b;
+	double r;
+
+	if (!isfinite(p))
+		return p;
+
+	r = fma(a, b, -p);
+	if (r == 0.0)
+		return p;		/*  exact: nothing to force  */
+
+	/*  r = exact - p, so p overshot the magnitude iff r opposes p's sign.  */
+	return ieee_force_odd(p, (r > 0.0) == (signbit(p) != 0));
+}
+
+
+double ieee_div_round_to_odd(double a, double b)
+{
+	double q = a / b;
+	double r;
+
+	if (!isfinite(q))
+		return q;
+
+	/*  r = q*b - a, so the quotient overshot the exact value iff r has
+	    the same sign as a.  Below the residual's own quantum the fma
+	    cannot resolve the error, so leave the host result alone -- the
+	    same OPTINY guard #300 applies to the directed path.  */
+	if (fabs(a) < IEEE_DIR_OPTINY)
+		return q;
+
+	r = fma(q, b, -a);
+	if (r == 0.0)
+		return q;		/*  exact  */
+
+	/*  r = q*b - a, so q overshot the magnitude iff sign(r) == sign(a) --
+	    the same test ieee_div_round_rm() uses two functions below.  */
+	return ieee_force_odd(q, (r > 0.0) == (a > 0.0));
+}
+
+
 double ieee_mul_round_rm(double a, double b, int rm)
 {
 	double p = a * b;

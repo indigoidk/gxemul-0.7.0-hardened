@@ -1470,6 +1470,381 @@ X(fdiv_ddd)
 
 
 /*
+ *  #306: the twelve mixed-format combinations the decoder rejected.
+ *
+ *  The size field of a major-0x21 floating-point instruction is a format
+ *  TRIPLE -- (s1 is double) << 4 | (s2 is double) << 2 | (destination is
+ *  double) -- so each of fadd/fsub/fmul/fdiv has eight legal forms.  This
+ *  tree implemented five or six of each, chosen by whatever the guests of
+ *  the day happened to execute: fsub had .sds but fadd did not, fdiv was
+ *  missing four.  Every unimplemented combination fell through the dispatch
+ *  to `goto bad`, which sets cpu->running = 0 -- so a LEGAL instruction from
+ *  the MC88100's own manual stopped the emulator ("All machines stopped",
+ *  reproduced on the luna88k rig for six of the twelve before this fix).
+ *
+ *  Each handler below is its sibling's body with the operand and result
+ *  widths changed, which is the point: the arithmetic contract does not vary
+ *  with the format triple.  Sources are interpreted in THEIR OWN format -- a
+ *  double source is never pre-narrowed because the destination is single --
+ *  the operation happens once, and the result is rounded once, into the
+ *  destination format, under fcr63's mode (#298).
+ *
+ *  Single-destination sums and differences go through #299's round-to-odd
+ *  helper, as their .sss and .sds siblings already do, so the two roundings
+ *  (to double, then to single) cannot compound.
+ *
+ *  The single-destination PRODUCTS and QUOTIENTS go through #308's
+ *  round-to-odd helpers, and getting there took two corrections.  The first
+ *  draft copied fmul_sss/fdiv_sss, which compute in host double and round at
+ *  the store; those siblings are safe only because two SINGLE sources make
+ *  the product exact in a double (24+24 <= 53 bits), so their store rounds
+ *  once, and a DOUBLE source voids the argument entirely.  A panel seat
+ *  registered the counterexample before the code was tested: fmul.ssd of
+ *  3.0f by the nearest double to 1/3 has an exact product just BELOW 1.0,
+ *  the host product ties to exactly 1.0, and a toward-zero store then
+ *  answers 0x3f800000 where one rounding owes 0x3f7fffff.
+ *
+ *  The second draft moved to #300's _rm helpers -- and the same seat caught
+ *  that those return the host result UNCHANGED under nearest, because for a
+ *  DOUBLE destination the host's nearest result already is correct.  Narrowed
+ *  to single it is a double rounding again, and nearest is the mode
+ *  OpenBSD/m88k userland actually runs.  Two more measured witnesses:
+ *  1.5f * 0x3FF555556AAAAAAB gave 0x40000000 where 0x40000001 is owed, and
+ *  0x3F800001 / 0x3FF000000FFFFFF0 put the host quotient exactly on the
+ *  1+2^-24 midpoint, giving 0x3F800000 where 0x3F800001 is owed.
+ *
+ *  Round-to-odd fixes every mode at once (53 >= 2*24 + 2, so an odd
+ *  intermediate cannot sit on a destination midpoint), which is why these
+ *  arms no longer pass a mode to the arithmetic at all -- only to the store.
+ *  Gate 11 carries all four witnesses.
+ *
+ *  fdiv_sss and fmul_sss keep the plain host path: with two single sources
+ *  the product is exact and the quotient's error is bounded away from every
+ *  single-precision midpoint, so their single store rounds once.  That was
+ *  briefly filed here as a defect and withdrawn -- inexact is not the same as
+ *  double-rounds-wrong, and no witness against them exists.
+ */
+X(fadd_ssd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fadd_sds)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s2 = reg(ic->arg[2]);
+	uint64_t s1 = reg(ic->arg[1]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
+
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fadd_sdd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint64_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fsub_ssd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, -f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fsub_sdd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint64_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(
+	    ieee_sum_round_to_odd(f1.f, -f2.f, m88k_fp_rm(cpu)),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fmul_ssd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(ieee_mul_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fmul_sds)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s2 = reg(ic->arg[2]);
+	uint64_t s1 = reg(ic->arg[1]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
+
+	d = ieee_store_float_value_rm(ieee_mul_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fmul_sdd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint64_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	d = ieee_store_float_value_rm(ieee_mul_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fdiv_ssd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_S);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	if (f2.f == 0) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FDVZ;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	d = ieee_store_float_value_rm(ieee_div_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fdiv_sds)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint32_t s2 = reg(ic->arg[2]);
+	uint64_t s1 = reg(ic->arg[1]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
+
+	if (f2.f == 0) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FDVZ;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	d = ieee_store_float_value_rm(ieee_div_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fdiv_sdd)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint32_t d;
+	uint64_t s1 = reg(ic->arg[1]);
+	uint64_t s2 = reg(ic->arg[2]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+	s2 = (s2 << 32) + reg(ic->arg[2] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_D);
+
+	if (f2.f == 0) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FDVZ;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	d = ieee_store_float_value_rm(ieee_div_round_to_odd(f1.f, f2.f),
+	    IEEE_FMT_S, m88k_fp_rm(cpu));
+	reg(ic->arg[0]) = d;
+}
+X(fdiv_dds)
+{
+	struct ieee_float_value f1;
+	struct ieee_float_value f2;
+	uint64_t d;
+	uint32_t s2 = reg(ic->arg[2]);
+	uint64_t s1 = reg(ic->arg[1]);
+	s1 = (s1 << 32) + reg(ic->arg[1] + 4);
+
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FUNIMP;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	ieee_interpret_float_value(s1, &f1, IEEE_FMT_D);
+	ieee_interpret_float_value(s2, &f2, IEEE_FMT_S);
+
+	if (f2.f == 0) {
+		SYNCH_PC;
+		cpu->cd.m88k.fcr[M88K_FPCR_FPECR] = M88K_FPECR_FDVZ;
+		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+		return;
+	}
+
+	/*  #300: Markstein-residual directed rounding, as .ddd uses -- the
+	    destination is double, so the quotient is rounded once, correctly,
+	    with no host-double intermediate to round twice.  */
+	d = ieee_store_float_value(
+	    ieee_div_round_rm(f1.f, f2.f, m88k_fp_rm(cpu)), IEEE_FMT_D);
+
+	reg(ic->arg[0]) = d >> 32;	/*  High 32-bit word,  */
+	reg(ic->arg[0] + 4) = d;	/*  and low word.  */
+}
+
+
+/*
  *  fcmp.sXX:  Floating point comparison
  *
  *  arg[0] = pointer to destination register
@@ -2099,6 +2474,63 @@ X(prom_call)
 
 
 /*
+ *  tcnd:  Trap on Condition  (#307)
+ *
+ *  arg[0] = the m5 condition mask
+ *  arg[1] = pointer to the source register
+ *  arg[2] = trap vector
+ *
+ *  The instruction was absent from the decoder entirely, so a legal encoding
+ *  reached `goto bad` and stopped the emulator -- reproduced on the luna88k
+ *  rig for both `tcnd ne0,r0,0` and `tcnd lt0,r2,0` before this fix.
+ *
+ *  The condition field is a MASK over four mutually exclusive classes of the
+ *  source register, and the manual gives the bits directly: 8 "maximum
+ *  negative number", 4 "less than zero", 2 "equal to zero", 1 "greater than
+ *  zero" (bit 16 is reserved).  The trap is taken when the register's class
+ *  is among the bits set.  Every entry of the disassembler's own condition
+ *  table agrees with that reading -- ge0 = 3 = eq0|gt0, le0 = 0xe =
+ *  maxneg|lt0|eq0, ne0 = 0xd = maxneg|lt0|gt0 -- which is what makes this a
+ *  derivation rather than a guess.
+ *
+ *  Upstream's abandoned 0.7.1 line took a narrower route: it treated
+ *  `tcnd ne0,r0,x` as a nop, since r0 is never nonzero, and left everything
+ *  else halting.  That is right about the nop and wrong as a fix -- under it
+ *  `tcnd eq0,r0,x` still reaches `goto bad`, and 0 == 0 is exactly the case
+ *  that MUST trap.  Modelling the condition removes the halt for every form,
+ *  and the r0 nop falls out of it for free.
+ *
+ *  The privilege and vector handling is tb0/tb1's, verbatim: user mode may
+ *  not reach the system trap vectors.
+ */
+X(tcnd)
+{
+	int32_t v = (int32_t) reg(ic->arg[1]);
+	int cls;
+
+	SYNCH_PC;
+
+	if (!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE)
+	    && ic->arg[2] < M88K_EXCEPTION_USER_TRAPS_START) {
+		m88k_exception(cpu, M88K_EXCEPTION_PRIVILEGE_VIOLATION, 0);
+		return;
+	}
+
+	if (v == (int32_t) 0x80000000)
+		cls = 8;		/*  maximum negative number  */
+	else if (v < 0)
+		cls = 4;		/*  less than zero  */
+	else if (v == 0)
+		cls = 2;		/*  equal to zero  */
+	else
+		cls = 1;		/*  greater than zero  */
+
+	if (ic->arg[0] & cls)
+		m88k_exception(cpu, ic->arg[2], 1);
+}
+
+
+/*
  *  tb0, tb1:  Trap on bit Clear/Set
  *
  *  arg[0] = bitmask to check (e.g. 0x00020000 for bit 17)
@@ -2634,7 +3066,10 @@ X(to_be_translated)
 			switch ((iword >> 5) & 0x3f) {
 			case 0x00:	ic->f = instr(fmul_sss); break;
 			case 0x01:	ic->f = instr(fmul_dss); break;
+			case 0x04:	ic->f = instr(fmul_ssd); break;	/*  #306  */
 			case 0x05:	ic->f = instr(fmul_dsd); break;
+			case 0x10:	ic->f = instr(fmul_sds); break;	/*  #306  */
+			case 0x14:	ic->f = instr(fmul_sdd); break;	/*  #306  */
 			case 0x11:	ic->f = instr(fmul_dds); break;
 			case 0x15:	ic->f = instr(fmul_ddd); break;
 			default:if (!cpu->translation_readahead)
@@ -2675,7 +3110,10 @@ X(to_be_translated)
 			switch ((iword >> 5) & 0x3f) {
 			case 0x00:	ic->f = instr(fadd_sss); break;
 			case 0x01:	ic->f = instr(fadd_dss); break;
+			case 0x04:	ic->f = instr(fadd_ssd); break;	/*  #306  */
 			case 0x05:	ic->f = instr(fadd_dsd); break;
+			case 0x10:	ic->f = instr(fadd_sds); break;	/*  #306  */
+			case 0x14:	ic->f = instr(fadd_sdd); break;	/*  #306  */
 			case 0x11:	ic->f = instr(fadd_dds); break;
 			case 0x15:	ic->f = instr(fadd_ddd); break;
 			default:if (!cpu->translation_readahead)
@@ -2697,9 +3135,11 @@ X(to_be_translated)
 			switch ((iword >> 5) & 0x3f) {
 			case 0x00:	ic->f = instr(fsub_sss); break;
 			case 0x01:	ic->f = instr(fsub_dss); break;
+			case 0x04:	ic->f = instr(fsub_ssd); break;	/*  #306  */
 			case 0x05:	ic->f = instr(fsub_dsd); break;
 			case 0x10:	ic->f = instr(fsub_sds); break;
 			case 0x11:	ic->f = instr(fsub_dds); break;
+			case 0x14:	ic->f = instr(fsub_sdd); break;	/*  #306  */
 			case 0x15:	ic->f = instr(fsub_ddd); break;
 			default:if (!cpu->translation_readahead)
 					fatal("Unimplemented fsub combination 0x%x.\n",
@@ -2781,7 +3221,11 @@ X(to_be_translated)
 			switch ((iword >> 5) & 0x3f) {
 			case 0x00:	ic->f = instr(fdiv_sss); break;
 			case 0x01:	ic->f = instr(fdiv_dss); break;
+			case 0x04:	ic->f = instr(fdiv_ssd); break;	/*  #306  */
 			case 0x05:	ic->f = instr(fdiv_dsd); break;
+			case 0x10:	ic->f = instr(fdiv_sds); break;	/*  #306  */
+			case 0x11:	ic->f = instr(fdiv_dds); break;	/*  #306  */
+			case 0x14:	ic->f = instr(fdiv_sdd); break;	/*  #306  */
 			case 0x15:	ic->f = instr(fdiv_ddd); break;
 			default:if (!cpu->translation_readahead)
 					fatal("Unimplemented fdiv combination 0x%x.\n",
@@ -2957,6 +3401,15 @@ X(to_be_translated)
 			case 0x34: ic->f = instr(tb0); break;
 			case 0x36: ic->f = instr(tb1); break;
 			}
+			break;
+
+		case 0x3a:	/*  tcnd  (#307)  */
+			/*  Same operand shape as tb0/tb1, but arg[0] is the
+			    m5 condition MASK rather than a bit position.  */
+			ic->arg[0] = d;
+			ic->arg[1] = (size_t) &cpu->cd.m88k.r[s1];
+			ic->arg[2] = iword & 0x1ff;
+			ic->f = instr(tcnd);
 			break;
 
 		default:goto bad;

@@ -1364,6 +1364,26 @@ int m88k_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 			}
 			debug("%s\t%i,r%i,0x%x\n", mnem, d, s1, iw & 0x1ff);
 			break;
+		case 0x3a:	/*  tcnd  (#307)  */
+			/*  The condition field is the same m5 encoding bcnd
+			    uses above, so the two print alike -- which is also
+			    the cross-check that made #307's execution
+			    semantics a derivation rather than a guess.  */
+			debug("tcnd\t");
+			switch (d) {
+			case 0x1: debug("gt0"); break;
+			case 0x2: debug("eq0"); break;
+			case 0x3: debug("ge0"); break;
+			case 0x5: debug("not_maxneg_nor_zero"); break;
+			case 0x7: debug("not_maxneg"); break;
+			case 0x8: debug("maxneg"); break;
+			case 0xc: debug("lt0"); break;
+			case 0xd: debug("ne0"); break;
+			case 0xe: debug("le0"); break;
+			default:  debug("unimplemented_%i", d);
+			}
+			debug(",r%i,0x%x\n", s1, iw & 0x1ff);
+			break;
 		default:debug("UNIMPLEMENTED 0x3c, op10=0x%02x\n", op10);
 		}
 		break;

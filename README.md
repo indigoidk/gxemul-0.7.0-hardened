@@ -234,7 +234,7 @@ pure function in closed form.
 | 8 | `gate_upstream.sh` | Upstream GXemul's own `test/` suite, run three-way |
 | 9 | `gate_asan_sweep.sh` | Every machine started under AddressSanitizer, compared against upstream |
 | 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 36 vector-mode pairs on real guest instructions, incl. two DN=0 subnormal rows |
-| 11 | `gate_m88k_rounding.sh` | m88k rounding + the float→int triad + subnormal operands — 46 rows incl. swap tripwires, NaN-sign pins and a KNOWN-CHANGE flip pin |
+| 11 | `gate_m88k_rounding.sh` | m88k rounding, the float→int triad, subnormal operands, the twelve mixed-format arms and `tcnd`'s traps — 71 rows incl. swap tripwires, NaN-sign pins, a KNOWN-CHANGE flip pin and the double-rounding witness |
 | 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows) + #303 subnormal decode on BOTH rigs (pmax discriminators, arc trap control) |
 | 13 | `gate_ppc.sh` | PowerPC single conversion — 54 rows on the macppc probe path: `frsp` under all four modes (each verified guest-visible through `mffs`), the ISA denormalization band, NaN payload/sign transport through both the base and indexed forms, sticky `VXSNAN`, and three pins where this fork deliberately differs from the letter |
 

@@ -181,6 +181,95 @@ ROWS = [
                                "r8": 0x40240000, "r9": 0x00000000},
      0x84c272a8, "r7", 0x99999999),
 
+    # #306: the twelve mixed-format combinations the decoder used to reject.
+    # The size field is a format TRIPLE -- (s1 double)<<4 | (s2 double)<<2 |
+    # (dest double) -- so each of fadd/fsub/fmul/fdiv has eight legal forms and
+    # this tree implemented five or six of each, chosen by whatever the guests
+    # of the day happened to run. Every missing one reached goto bad, which
+    # stops the emulator on a legal instruction; six of the twelve were
+    # measured halting on this rig before the fix.
+    #   encoding = 0x84000000 | d<<21 | s1<<16 | op11<<11 | size<<5 | s2,
+    #   with d=r4, s1=r2, s2=r6 so the double operands land in aligned pairs.
+    #
+    # THE ROW THAT CAUGHT A REAL BUG: fmul.ssd of 3.0f by the nearest double
+    # to 1/3. The exact product is just BELOW 1.0, but the HOST double product
+    # ties to exactly 1.0 -- so the first draft of #306, which copied
+    # fmul_sss's "compute in host double, round at the store", answered
+    # 0x3f800000 under toward-zero where one correct rounding owes 0x3f7fffff.
+    # A panel seat registered this witness before the code was tested. The
+    # siblings are safe only because two SINGLE sources make the product exact
+    # in a double; a double source voids that argument entirely.
+    ("fmul.ssd RZ",  RZ,   {"r2": 0x40400000, "r6": 0x3fd55555, "r7": 0x55555555},
+     0x84820086, "r4", 0x3f7fffff),
+    ("fmul.ssd RN",  RN,   {"r2": 0x40400000, "r6": 0x3fd55555, "r7": 0x55555555},
+     0x84820086, "r4", 0x3f800000),
+    ("fmul.ssd RM",  MINF, {"r2": 0x40400000, "r6": 0x3fd55555, "r7": 0x55555555},
+     0x84820086, "r4", 0x3f7fffff),
+    # fadd.ssd: 1.0f + (2^-24 + 2^-50). Rounding the operand to single first
+    # would land on the 1+2^-24 tie and pick even (0x3f800000); consuming the
+    # double source whole gives the odd neighbour under nearest.
+    ("fadd.ssd RN",  RN,   {"r2": 0x3f800000, "r6": 0x3e700000, "r7": 0x04000000},
+     0x84822886, "r4", 0x3f800001),
+    ("fadd.ssd RZ",  RZ,   {"r2": 0x3f800000, "r6": 0x3e700000, "r7": 0x04000000},
+     0x84822886, "r4", 0x3f800000),
+    # fadd.sds: the same sum with the DOUBLE as s1 -- reading s1 as a single
+    # would give 0.234375, grossly wrong, so this pins the operand widths.
+    ("fadd.sds RN",  RN,   {"r2": 0x3e700000, "r3": 0x04000000, "r6": 0x3f800000},
+     0x84822a06, "r4", 0x3f800001),
+    # fadd.sdd / fsub.ssd / fsub.sdd: both sources double, single destination.
+    ("fadd.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
+                            "r6": 0x3e700000, "r7": 0x04000000},
+     0x84822a86, "r4", 0x3f800001),
+    ("fsub.ssd RN",  RN,   {"r2": 0x3f800000, "r6": 0xbe700000, "r7": 0x04000000},
+     0x84823086, "r4", 0x3f800001),
+    ("fsub.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
+                            "r6": 0xbe700000, "r7": 0x04000000},
+     0x84823286, "r4", 0x3f800001),
+    # fmul.sds / fmul.sdd: the other two S-destination product arms.
+    ("fmul.sds RN",  RN,   {"r2": 0x3ff00000, "r3": 0x10000004, "r6": 0x3f800000},
+     0x84820206, "r4", 0x3f800001),
+    ("fmul.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x10000000,
+                            "r6": 0x3ff00000, "r7": 0x00000004},
+     0x84820286, "r4", 0x3f800001),
+    # fdiv S-destination arms: 1 / 3 in three format spellings, one answer.
+    ("fdiv.ssd RN",  RN,   {"r2": 0x3f800000, "r6": 0x40080000, "r7": 0x00000000},
+     0x84827086, "r4", 0x3eaaaaab),
+    ("fdiv.ssd RZ",  RZ,   {"r2": 0x3f800000, "r6": 0x40080000, "r7": 0x00000000},
+     0x84827086, "r4", 0x3eaaaaaa),
+    ("fdiv.sds RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000, "r6": 0x40400000},
+     0x84827206, "r4", 0x3eaaaaab),
+    ("fdiv.sdd RN",  RN,   {"r2": 0x3ff00000, "r3": 0x00000000,
+                            "r6": 0x40080000, "r7": 0x00000000},
+     0x84827286, "r4", 0x3eaaaaab),
+    # fdiv.dds: the one DOUBLE-destination arm that was missing. The directed
+    # row pins the mode through the divide path; the result pair is r4:r5, so
+    # this row also proves the high/low word order.
+    ("fdiv.dds RN hi", RN, {"r2": 0x3ff00000, "r3": 0x00000000, "r6": 0x40400000},
+     0x84827226, "r4", 0x3fd55555),
+    ("fdiv.dds RN lo", RN, {"r2": 0x3ff00000, "r3": 0x00000000, "r6": 0x40400000},
+     0x84827226, "r5", 0x55555555),
+    ("fdiv.dds RP lo", PINF, {"r2": 0x3ff00000, "r3": 0x00000000, "r6": 0x40400000},
+     0x84827226, "r5", 0x55555556),
+
+    # #308: the ROUND-TO-NEAREST half of the same hazard, and the reason the
+    # arms above call a round-to-odd helper rather than #300's _rm ones.
+    # Those return the host result UNCHANGED under nearest -- correct for a
+    # DOUBLE destination, since the host's nearest result already is the
+    # correctly rounded double, but a double rounding once it is narrowed to
+    # single. Nearest is the mode OpenBSD/m88k userland runs (fcr63 = 0 at
+    # exec), so these are not exotic cases:
+    #   1.5f * 0x3FF555556AAAAAAB  (exact 2 + 2^-23 + 2^-53) gave 0x40000000
+    #   0x3F800001 / 0x3FF000000FFFFFF0 put the host quotient exactly on the
+    #     1+2^-24 midpoint and gave 0x3f800000
+    # against owed 0x40000001 and 0x3f800001. A panel seat constructed both
+    # after the first repair; the second repair (round-to-odd) fixes every
+    # mode at once, and an offline differential over 960,000 operand pairs in
+    # all four modes agrees with a single correct rounding everywhere.
+    ("odd fmul.sds RN", RN, {"r2": 0x3ff55555, "r3": 0x6aaaaaab,
+                             "r6": 0x3fc00000}, 0x84820206, "r4", 0x40000001),
+    ("odd fdiv.ssd RN", RN, {"r2": 0x3f800001, "r6": 0x3ff00000,
+                             "r7": 0x0ffffff0}, 0x84827086, "r4", 0x3f800001),
+
     # #303: subnormal OPERANDS decode to their true IEEE value. Before, every
     # subnormal decoded with the implicit 1 added and the exponent one too low --
     # S 0x00000001 read as (1+2^-23)*2^-127, 4.19e6x its real 2^-149 -- and every
@@ -219,6 +308,110 @@ ROWS = [
     # interim half-state the queued store-side round inherits.
     ("subn flip x2.0", RN, {"r2": 0x80000001, "r3": 0x40000000}, FMUL, "r4",
      0x80000000),
+]
+
+
+
+#  #307: tcnd rows measure a TRAP, so their witness is the program counter
+#  after one step -- not a register. A taken trap lands at VBR + 8*vector; a
+#  condition that does not hold simply advances by four. Both outcomes prove
+#  the emulator SURVIVED, which is the point: every one of these encodings
+#  stopped the machine before #307 ("All machines stopped", reproduced).
+#
+#  The vector is 128 or above on purpose. Vectors 0..127 are the hardware
+#  ones, and the manual is explicit that a user-mode trap to those raises a
+#  privilege violation whether or not the condition holds; vector 0 is RESET,
+#  which really does stop the machine -- the first version of this probe used
+#  it and read a correct trap as a failure.
+def run_tcnd(seeds, op):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(IMAGES)
+        os.execvp(BIN, [BIN, "-V", "-e", "luna-88k", "-d", "R:" + IMG, "boot"])
+        os._exit(127)
+    buf = ""
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(timeout=60):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            if buf.rstrip().endswith(">"):
+                return True
+        return False
+
+    def send(x):
+        b = (x + "\n").encode("latin1")
+        n = 0
+        while n < len(b):
+            n += os.write(fd, b[n:])
+        wait()
+
+    if not wait(120):
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
+        return None
+
+    for k, v in seeds.items():
+        send("%s=0x%08x" % (k, v))
+    send("put w 0x%08x, 0x%08x" % (CODE, op))
+    send("pc=0x%08x" % CODE)
+    send("step 1")
+    pc = None
+    for _ in range(2):
+        mark = len(buf)
+        send("reg")
+        m = re.search(r"\bpc\s*=\s*0x([0-9a-f]+)", buf[mark:])
+        if m:
+            pc = int(m.group(1), 16)
+            break
+        time.sleep(1.0)
+        rd(1.0)
+    try:
+        os.write(fd, b"quit\n")
+        time.sleep(0.4)
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    return pc
+
+
+#  name, seeds, instruction word, expected pc
+#  0xF0000000 | m5<<21 | s1<<16 | 0x3a<<10 | vector, vector = 128 (0x80).
+TCND_ROWS = [
+    #  The case upstream's narrow patch would still halt on: r0 IS zero, so
+    #  eq0 holds and the trap must be taken.
+    ("tcnd eq0,r0 taken",   {},                 0xF040E880, 0x00000400),
+    #  r0 is never nonzero, so ne0 never fires -- upstream nop'd exactly this
+    #  form, and it is the one case where nop'ing happened to be right.
+    ("tcnd ne0,r0 fallthru", {},                0xF1A0E880, 0x00010004),
+    ("tcnd lt0,r2=-1 taken", {"r2": 0xffffffff}, 0xF182E880, 0x00000400),
+    ("tcnd gt0,r2=-1 fall",  {"r2": 0xffffffff}, 0xF022E880, 0x00010004),
+    #  The zero bit is the NOR of the low THIRTY-ONE bits, so 0x80000000 is
+    #  its own class ("maximum negative"), distinct from ordinary negatives.
+    ("tcnd maxneg taken",    {"r2": 0x80000000}, 0xF102E880, 0x00000400),
+    ("tcnd maxneg vs 2^31-1", {"r2": 0x7fffffff}, 0xF102E880, 0x00010004),
+    #  m5 is a MASK over the four classes, not an enumeration: bit 25 is
+    #  reserved and ignored, so 0x1d behaves exactly as ne0 (0x0d).
+    ("tcnd mask 0x1d ~ ne0", {"r2": 0x00000001}, 0xF3A2E880, 0x00000400),
 ]
 
 
@@ -387,6 +580,18 @@ for name, fcr, seeds, op, dest, want in ROWS:
     passed += ok
     print("%-24s %-10s 0x%08x %s"
           % (name, ("0x%08x" % got) if got is not None else "None", want,
+             "ok" if ok else "FAIL"))
+
+#  #307: the trap rows. Their witness is the PC, so they are scored here
+#  rather than in the register loop above, but they count toward the same
+#  total -- the gate asserts one number.
+for name, seeds, op, want_pc in TCND_ROWS:
+    total += 1
+    got = run_tcnd(seeds, op)
+    ok = (got == want_pc)
+    passed += ok
+    print("%-24s %-10s 0x%08x %s"
+          % (name, ("0x%08x" % got) if got is not None else "None", want_pc,
              "ok" if ok else "FAIL"))
 
 # fcr63 retention through the guest's own fstcr/fldcr -- the #296-shape premise
