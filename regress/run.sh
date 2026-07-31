@@ -7,7 +7,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
 
-GATES=(gate_build gate_offline selftest_mutation gate_mips gate_crossfamily gate_hygiene gate_ab gate_upstream gate_asan_sweep gate_sh_rounding gate_m88k_rounding gate_mips_rounding)
+GATES=(gate_build gate_offline selftest_mutation gate_mips gate_crossfamily gate_hygiene gate_ab gate_upstream gate_asan_sweep gate_sh_rounding gate_m88k_rounding gate_mips_rounding gate_ppc)
 
 # Validate selectors up front. Without this, `./run.sh 99` matched nothing, ran zero
 # gates, and printed REGRESS_PASS -- one mistyped digit produced a green push.

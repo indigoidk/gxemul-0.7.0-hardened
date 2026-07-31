@@ -58,15 +58,40 @@
 >   before/after evidence. Needs per-arch encode-contract measurement before any
 >   change — same discipline as #303's operand side.
 >
-> **Reproduced, but blocked on an instrument rather than on knowledge**
-> - **PowerPC, four measured defects** (the 2026-07-30 spike, evidence in the block
->   below): `frsp` of a qNaN stores +0.0; `frsp` ignores FPSCR.RN entirely; `stfs`
->   flushes the ISA's denormalization band to zero; and finite values ≥2^128 wrap in the
->   extraction rather than giving Inf. The probe path is settled and works
->   (`_scratchpad/probe_ppc_spike.py`). What is missing is a *regression gate* — there is
->   no PPC OS rig, so any fix round must build one on the probe path first.
->   **Do NOT wire `stfs` to FPSCR.RN**: measured under both RN settings, it does not
->   round, and the Power ISA extraction reading is correct.
+> - ~~**PowerPC, four measured defects**~~ — **RESOLVED as #304/#305 (round 69)**, with
+>   **gate 13** built first on the probe path: 50 rows, every committed byte recorded
+>   before a line of the fix existed. `frsp` now narrows by exact bit surgery under
+>   `FPSCR[1:0]` (three of four modes had been unreachable behind a host cast) and keeps
+>   a NaN instead of delivering +0.0; `stfs`/`stfsx` implement Book I's denormalization
+>   band; and #305 stopped all four conversion instructions destroying a NaN's sign and
+>   payload (`lfs(0xffc00001)` used to arrive as `0x7fffffffffffffff`). All 25
+>   discriminators flipped to pre-registered bytes on the first run; all 25 pins held.
+>   The fourth "defect" was REFUTED by measurement — finite values ≥2^128 already give
+>   ±Inf (#287) — and closes as a pin.
+>   **Still true, still enforced:** do NOT wire `stfs` to FPSCR.RN; it does not round.
+>
+> **PowerPC, filed by round 69's panel and each owed its own round**
+> - **`mtfsf`'s FM-mask decode is scrambled** (`cpu_ppc_instr.c:3888-3892`): the nibble
+>   masks are built at an 8-bit stride, so FM[0..3] write nothing and FM[4..6] write the
+>   wrong fields (FM[4] lands on the VXSNAN nibble); only FM[7] is correct, which by luck
+>   covers the rounding field. Any guest `fpsetround` using another mask misprograms
+>   FPSCR. Gate 13's fpscr readback is the instrument.
+> - **The single-precision arithmetic family does not narrow**: `fmuls` is an alias of
+>   `fmul` (and the rest follow), so `float` arithmetic keeps double precision. #304's
+>   helper now exists, so this is wiring — but it needs the store-side subnormal contract
+>   settled first, or it bakes in a policy that round may change.
+> - **`fctiwz` of a NaN answers 0** where the ISA owes `0x80000000`; pinned in gate 13 as
+>   a divergence so it cannot drift silently.
+> - **The update-form conversions are not decoded at all** — `lfsu`, `stfsu`, `lfsux`,
+>   `stfsux` fall to `goto bad`, which halts the emulator on legal encodings. Same class
+>   as #302's `int`/`nint`; belongs to the halt-class sweep.
+> - **The exception-enable bits (OE/UE/VE) and the FPRF class bits are unmodelled.** Not
+>   forced piecemeal, for the reason the SH exception model is not: a lone enabled bit
+>   implies the others work.
+> - **The splice letter is deliberately not followed** for finite values around 2^129:
+>   Book I's `SINGLE()` would WRAP the exponent (2^129 → a 2.0f-class pattern, 1.5·2^128
+>   → the NaN pattern `0x7FC00000`), and this fork keeps #287's ±Inf instead. Panel
+>   3–1 with the dissent recorded; reopen only on silicon evidence or a guest victim.
 >
 > **Instruction-coverage gaps (the decoder rejects legal encodings)**
 > - **m88k `fdiv.dds`** — size code 0x11 falls through to "Unimplemented"/`goto bad`.

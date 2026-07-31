@@ -208,7 +208,7 @@ Oldest first.
 
 ## Regression harness
 
-`regress/run.sh` runs twelve gates; `regress/run.sh 2 4` runs a subset. The governing rule is
+`regress/run.sh` runs thirteen gates; `regress/run.sh 2 4` runs a subset. The governing rule is
 that **a gate which cannot fail is worse than no gate**, because it reports green — and
 this fork had been counting two such gates as evidence:
 
@@ -235,6 +235,7 @@ pure function in closed form.
 | 10 | `gate_sh_rounding.sh` | SuperH honours `FPSCR.RM` — 36 vector-mode pairs on real guest instructions, incl. two DN=0 subnormal rows |
 | 11 | `gate_m88k_rounding.sh` | m88k rounding + the float→int triad + subnormal operands — 46 rows incl. swap tripwires, NaN-sign pins and a KNOWN-CHANGE flip pin |
 | 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows) + #303 subnormal decode on BOTH rigs (pmax discriminators, arc trap control) |
+| 13 | `gate_ppc.sh` | PowerPC single conversion — 54 rows on the macppc probe path: `frsp` under all four modes (each verified guest-visible through `mffs`), the ISA denormalization band, NaN payload/sign transport through both the base and indexed forms, sticky `VXSNAN`, and three pins where this fork deliberately differs from the letter |
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger

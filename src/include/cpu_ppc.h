@@ -188,6 +188,14 @@ struct ppc_cpu {
 #define	PPC_FPSCR_FG	(1 << 14)	/*  Greater than  */
 #define	PPC_FPSCR_FE	(1 << 13)	/*  Equal or Zero  */
 #define	PPC_FPSCR_FU	(1 << 12)	/*  Unordered or NaN  */
+/*  #304: the rounding-control field, FPSCR[30:31] in IBM numbering -- the two
+    LOWEST bits of the register.  The encoding (0 nearest, 1 toward zero,
+    2 toward +Inf, 3 toward -Inf) is numerically identical to this project's
+    IEEE_RM_* values, so `fpscr & PPC_FPSCR_RN_MASK` may be passed straight to
+    float_emul's mode-aware entry points.  The register was guest-writable and
+    decoded NOWHERE before #304: `frsp` narrowed with a host cast, which always
+    rounds to nearest, so three of the four architected modes were unreachable.  */
+#define	PPC_FPSCR_RN_MASK	0x3
 
 /*  Exceptions:  */
 #define	PPC_EXCEPTION_DSI	0x3	/*  Data Storage Interrupt  */

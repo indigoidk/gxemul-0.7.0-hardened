@@ -957,6 +957,164 @@ X(fcmpu)
 }
 
 
+#ifndef PPC_SINGLE_NARROW_INCLUDED
+#define PPC_SINGLE_NARROW_INCLUDED
+/*
+ *  ppc_single_narrow():  #304 -- the FINITE half of the PowerPC's
+ *  double -> single narrowing, as exact bit surgery.
+ *
+ *  Returns the 32-bit single pattern for a finite double, rounded under `rm`
+ *  (an IEEE_RM_* value, which for this CPU is just `fpscr & PPC_FPSCR_RN_MASK`).
+ *  Specials never reach here: the callers handle NaN and Infinity themselves,
+ *  because those classes are pattern transport, not arithmetic.
+ *
+ *  Why bit surgery rather than the host's own float:  a host cast rounds under
+ *  the HOST's mode -- nearest, always -- which is exactly the defect this fixes,
+ *  and no portable C construct rounds to single under a caller-chosen mode.
+ *  Every step below is exact integer work on the significand.
+ *
+ *  The three ranges, and the rounding they share:
+ *
+ *    normal      the significand keeps 24 bits; the discarded tail decides.
+ *    subnormal   the exponent is pinned at the format minimum and the
+ *                significand shifts right, so the tail grows -- this is the
+ *                band `stfs` truncates and `frsp` rounds.
+ *    underflow   everything shifts out; only the directed modes can still
+ *                deliver the smallest subnormal, on the side they round toward.
+ *
+ *  Rounding is decided once, from (guard, sticky, lsb, sign), and applied by
+ *  incrementing the significand.  The increment is allowed to carry out of the
+ *  fraction and into the exponent -- that is how a subnormal at the top of the
+ *  band becomes the smallest NORMAL, and how the largest finite single becomes
+ *  Infinity, with no special case for either.
+ */
+static uint32_t ppc_single_narrow(uint64_t d, int rm)
+{
+	int sign = (int) (d >> 63) & 1;
+	int exp = (int) ((d >> 52) & 0x7ff);
+	uint64_t frac = d & 0xfffffffffffffULL;
+	uint64_t sig;			/*  significand, 24 bits wide when normal  */
+	int e;				/*  the single's biased exponent  */
+	int shift, round_up = 0;
+	uint64_t guard_sticky = 0;
+
+	if (exp == 0 && frac == 0)
+		return (uint32_t) sign << 31;		/*  +/-0 passes through  */
+
+	/*  Unbias to the single's frame.  A D subnormal (exp 0) is far below the
+	    single format's reach, so it lands in the underflow arm below.  */
+	sig = (exp == 0) ? frac : (frac | (1ULL << 52));
+	e = ((exp == 0) ? 1 : exp) - 1023 + 127;
+
+	/*  The significand is 53 bits; single wants 24.  Discard 29 -- more when
+	    the value is subnormal in the single format (e <= 0), which is the
+	    denormalization the ISA spells out step by step.  */
+	shift = 29;
+	if (e <= 0) {
+		shift += 1 - e;
+		e = 0;
+		if (shift > 63) {
+			/*  Everything shifts out.  Only a directed mode toward
+			    this value's own sign can still deliver the smallest
+			    subnormal; nearest and toward-zero give signed 0.  */
+			if ((rm == IEEE_RM_RP && !sign) ||
+			    (rm == IEEE_RM_RM && sign))
+				return ((uint32_t) sign << 31) | 1;
+			return (uint32_t) sign << 31;
+		}
+	}
+
+	guard_sticky = sig & ((1ULL << shift) - 1);
+	sig >>= shift;
+
+	switch (rm) {
+	case IEEE_RM_RN:
+		{
+			uint64_t half = 1ULL << (shift - 1);
+			if (guard_sticky > half ||
+			    (guard_sticky == half && (sig & 1)))
+				round_up = 1;
+		}
+		break;
+	case IEEE_RM_RP:
+		round_up = (guard_sticky != 0) && !sign;
+		break;
+	case IEEE_RM_RM:
+		round_up = (guard_sticky != 0) && sign;
+		break;
+	default:	/*  IEEE_RM_RZ and the legacy value: discard the tail  */
+		break;
+	}
+
+	if (round_up) {
+		sig ++;
+		/*  A carry out of the 24-bit significand lifts the exponent --
+		    subnormal to smallest-normal, or largest-finite to Infinity --
+		    which is why the increment is done on the ASSEMBLED value and
+		    not clamped first.  */
+		if (sig >> 24) {
+			sig >>= 1;
+			e ++;
+		} else if (e == 0 && (sig >> 23)) {
+			e = 1;
+			sig &= 0x7fffff;
+		}
+	}
+
+	if (e >= 255) {
+		/*  Overflow is mode-dependent (IEEE 754 s7.4, and the ISA follows
+		    it): nearest carries to Infinity, toward-zero stops at the
+		    largest finite value, and each directed mode gives Infinity on
+		    the side it rounds toward.  */
+		int to_inf = 1;
+		switch (rm) {
+		case IEEE_RM_RZ: to_inf = 0; break;
+		case IEEE_RM_RP: to_inf = !sign; break;
+		case IEEE_RM_RM: to_inf = sign; break;
+		}
+		if (to_inf)
+			return ((uint32_t) sign << 31) | 0x7f800000;
+		return ((uint32_t) sign << 31) | 0x7f7fffff;
+	}
+
+	return ((uint32_t) sign << 31) | ((uint32_t) e << 23) |
+	    (uint32_t) (sig & 0x7fffff);
+}
+
+
+/*
+ *  ppc_single_widen():  #305 -- the exact single -> double pattern conversion,
+ *  including the classes the value domain cannot carry.
+ *
+ *  NaN is the reason this exists: a NaN's payload and sign are DATA, and the
+ *  interpret/store pair destroys both (interpret reports only "is a NaN", and
+ *  the store canonicalizes to all-ones).  Measured before #305: a single qNaN
+ *  0xffc00001 widened to 0x7fffffffffffffff -- wrong sign, wrong payload.
+ */
+static uint64_t ppc_single_widen(uint32_t s)
+{
+	uint64_t sign = (uint64_t) (s >> 31) & 1;
+	uint32_t exp = (s >> 23) & 0xff;
+	uint32_t frac = s & 0x7fffff;
+	struct ieee_float_value val;
+
+	if (exp == 0xff) {
+		/*  Infinity and NaN: exponent all-ones, fraction shifted into
+		    place. The single's 23 fraction bits are the TOP 23 of the
+		    double's 52, which is the same alignment the store's splice
+		    uses in the other direction.  */
+		return (sign << 63) | 0x7ff0000000000000ULL |
+		    ((uint64_t) frac << 29);
+	}
+
+	/*  Finite: the value domain is exact for every single, subnormals
+	    included, since #303 taught the decode to read them properly.  */
+	ieee_interpret_float_value(s, &val, IEEE_FMT_S);
+	return ieee_store_float_value(val.f, IEEE_FMT_D);
+}
+#endif	/*  PPC_SINGLE_NARROW_INCLUDED  */
+
+
 /*
  *  frsp:  Floating-point Round to Single Precision
  *
@@ -965,28 +1123,79 @@ X(fcmpu)
  */
 X(frsp)
 {
-	struct ieee_float_value frb;
-	float fl = 0.0;
+	uint64_t frb_bits, res;
 	int c = 0;
 
 	CHECK_FOR_FPU_EXCEPTION;
 
-	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &frb, IEEE_FMT_D);
-	if (frb.nan) {
+	frb_bits = *(uint64_t *)ic->arg[0];
+
+	/*
+	 *  #304/#305: the narrowing is done on the PATTERN, under the mode the
+	 *  guest asked for.  What it replaces was `float fl = frb.f` -- a host
+	 *  cast, which rounds to nearest whatever FPSCR says, so the three
+	 *  directed modes were unreachable and the ISA's denormalization band
+	 *  was rounded by the host instead of the emulated FPU.  The NaN arm is
+	 *  worse than mode-blind: it left `fl` at its initialiser, so EVERY NaN
+	 *  was delivered as +0.0 (measured).
+	 *
+	 *  The classes, per Book I's Round-to-Single-Precision model:
+	 *    NaN   the fraction truncates to the single's 23 bits and re-widens;
+	 *          a signalling NaN is quieted and sets VXSNAN.  The payload and
+	 *          sign are DATA and must survive.
+	 *    Inf   passes through untouched.
+	 *    else  round to single under FPSCR, then widen exactly.
+	 */
+	if ((frb_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+	    (frb_bits & 0xfffffffffffffULL) != 0) {
+		/*  NaN.  Truncate to what a single can hold; quiet it if it
+		    arrived signalling.  Without the quiet bit a signalling NaN
+		    whose payload lives entirely in the discarded low bits would
+		    collapse to Infinity -- the class would be lost, not just
+		    the payload.  */
+		int snan = !(frb_bits & 0x8000000000000ULL);
+		res = frb_bits & ~0x1fffffffULL;
+		if (snan) {
+			res |= 0x8000000000000ULL;
+			/*  VXSNAN is a STICKY exception bit: hardware sets it
+			    and leaves it set until the guest clears it through
+			    mtfsf/mcrfs, and VX is the OR-summary of the whole
+			    invalid-operation group while FX latches the 0->1
+			    transition.  The first version of this arm set
+			    VXSNAN alone and the arm below then cleared it on
+			    the next non-NaN frsp, so `frsp(sNaN); frsp(1.0)`
+			    lost the record entirely -- worse than never
+			    setting it (a diff-review seat's finding; there is
+			    a gate row for the stickiness now).  Nothing here
+			    implies the TRAP side works: the enable bits
+			    (VE/OE/UE) remain unmodelled and stated as such.  */
+			cpu->cd.ppc.fpscr |= PPC_FPSCR_VXNAN | PPC_FPSCR_VX |
+			    PPC_FPSCR_FX;
+		}
 		c = 1;
+	} else if ((frb_bits & 0x7fffffffffffffffULL) ==
+	    0x7ff0000000000000ULL) {
+		res = frb_bits;				/*  +/-Inf  */
+		c = (frb_bits >> 63) ? 8 : 4;
 	} else {
-		fl = frb.f;
-		if (fl < 0.0)
-			c = 8;
-		else if (fl > 0.0)
-			c = 4;
+		uint32_t narrowed = ppc_single_narrow(frb_bits,
+		    cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK);
+		res = ppc_single_widen(narrowed);
+		if (res & 0x8000000000000000ULL)
+			c = ((res << 1) == 0) ? 2 : 8;
 		else
-			c = 2;
+			c = (res == 0) ? 2 : 4;
 	}
-	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+
+	/*  FPCC reports the class of the RESULT, so a value that rounded away to
+	    zero -- or up off zero under a directed mode -- reports what the guest
+	    can actually see in the register.  FPCC is a status field and is
+	    rewritten every time; the exception bits above are NOT, which is the
+	    whole difference between the two and why only this line clears.  */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
-	(*(uint64_t *)ic->arg[1]) = ieee_store_float_value(fl, IEEE_FMT_D);
+
+	(*(uint64_t *)ic->arg[1]) = res;
 }
 
 
@@ -2346,13 +2555,17 @@ X(lfs)
 	    [2 + 4 + 8](cpu, ic);
 
 	if (old_pc == cpu->pc) {
-		/*  The load succeeded. Let's convert the value:  */
-		struct ieee_float_value val;
+		/*  The load succeeded. Widen the single to double.
+		    #305: through ppc_single_widen(), because the value domain
+		    cannot carry a NaN -- interpret reports only THAT a pattern
+		    is a NaN, and the store canonicalizes every one of them to
+		    all-ones, so a guest's qNaN 0xffc00001 used to arrive in the
+		    register as 0x7fffffffffffffff: wrong sign, wrong payload.
+		    Finite values still travel the (exact, #303-verified) value
+		    path inside the helper.  */
 		(*(uint64_t *)ic->arg[0]) &= 0xffffffff;
-		ieee_interpret_float_value(*(uint64_t *)ic->arg[0],
-		    &val, IEEE_FMT_S);
-		(*(uint64_t *)ic->arg[0]) =
-		    ieee_store_float_value(val.f, IEEE_FMT_D);
+		(*(uint64_t *)ic->arg[0]) = ppc_single_widen(
+		    (uint32_t) *(uint64_t *)ic->arg[0]);
 	}
 }
 X(lfsx)
@@ -2376,13 +2589,17 @@ X(lfsx)
 	    [2 + 4 + 8](cpu, ic);
 
 	if (old_pc == cpu->pc) {
-		/*  The load succeeded. Let's convert the value:  */
-		struct ieee_float_value val;
+		/*  The load succeeded. Widen the single to double.
+		    #305: through ppc_single_widen(), because the value domain
+		    cannot carry a NaN -- interpret reports only THAT a pattern
+		    is a NaN, and the store canonicalizes every one of them to
+		    all-ones, so a guest's qNaN 0xffc00001 used to arrive in the
+		    register as 0x7fffffffffffffff: wrong sign, wrong payload.
+		    Finite values still travel the (exact, #303-verified) value
+		    path inside the helper.  */
 		(*(uint64_t *)ic->arg[0]) &= 0xffffffff;
-		ieee_interpret_float_value(*(uint64_t *)ic->arg[0],
-		    &val, IEEE_FMT_S);
-		(*(uint64_t *)ic->arg[0]) =
-		    ieee_store_float_value(val.f, IEEE_FMT_D);
+		(*(uint64_t *)ic->arg[0]) = ppc_single_widen(
+		    (uint32_t) *(uint64_t *)ic->arg[0]);
 	}
 }
 X(lfd)
@@ -2409,16 +2626,77 @@ X(lfdx)
 #endif
 	    [3 + 4 + 8](cpu, ic);
 }
+#ifndef PPC_STFS_EXTRACT_INCLUDED
+#define PPC_STFS_EXTRACT_INCLUDED
+/*
+ *  ppc_stfs_extract():  #304/#305 -- the two classes where the shared store
+ *  cannot spell what the ISA's SINGLE() extraction owes.  Returns 1 and fills
+ *  *out when it handled the value; 0 when the legacy path is already right.
+ *
+ *  Book I gives SINGLE() three cases on the operand's biased exponent E:
+ *
+ *    E > 896            splice sign, exponent and the top 23 fraction bits --
+ *                       truncation, mode-independent, never rounding.  The
+ *                       shared store already reproduces this bit for bit for
+ *                       finite values (measured), so it keeps that path.
+ *    874 <= E <= 896    DENORMALIZE: restore the implicit 1 and shift right
+ *                       until the exponent reaches the single's minimum,
+ *                       truncating what falls off.  The shared store flushes
+ *                       this whole band to signed zero instead (its #287/#292
+ *                       policy), which is the defect #304 fixes here.
+ *    E < 874            WORD is architecturally UNDEFINED; the flush stands as
+ *                       this fork's policy, and the gate pins it.
+ *
+ *  The NaN class is #305's: exponent all-ones is part of the splice case, so a
+ *  NaN's sign and top-23 payload must survive.  The shared store canonicalizes
+ *  every NaN to 0x7fffffff instead -- sign and payload both lost (measured).
+ *  Note what the letter does here and this code faithfully repeats: a NaN whose
+ *  payload lives entirely in the discarded low bits splices to the INFINITY
+ *  pattern.  That is the extraction working as specified, not a case to repair,
+ *  and there is a gate row asserting exactly that byte.  Quieting belongs to
+ *  frsp alone -- a store must not alter the class of what it is storing.
+ */
+static int ppc_stfs_extract(uint64_t d, uint32_t *out)
+{
+	int exp = (int) ((d >> 52) & 0x7ff);
+	uint64_t frac = d & 0xfffffffffffffULL;
+	uint32_t sign = (uint32_t) (d >> 63) & 1;
+
+	if (exp == 0x7ff && frac != 0) {		/*  #305: NaN  */
+		*out = (sign << 31) | 0x7f800000 |
+		    (uint32_t) (frac >> 29);
+		return 1;
+	}
+
+	if (exp >= 874 && exp <= 896) {			/*  #304: the band  */
+		uint64_t sig = frac | (1ULL << 52);
+		int shift = 29 + (896 - exp) + 1;
+		/*  Truncate -- the extraction never rounds, so no guard bit is
+		    consulted here, unlike frsp's path through the same band.  */
+		*out = (sign << 31) | (uint32_t) (sig >> shift);
+		return 1;
+	}
+
+	return 0;
+}
+#endif	/*  PPC_STFS_EXTRACT_INCLUDED  */
+
+
 X(stfs)
 {
 	uint64_t *old_arg0 = (uint64_t *) ic->arg[0];
 	struct ieee_float_value val;
 	uint64_t tmp_val;
+	uint32_t extracted;
 
 	CHECK_FOR_FPU_EXCEPTION;
 
-	ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
-	tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	if (ppc_stfs_extract(*old_arg0, &extracted)) {
+		tmp_val = extracted;
+	} else {
+		ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
+		tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	}
 
 	ic->arg[0] = (size_t)&tmp_val;
 
@@ -2437,11 +2715,20 @@ X(stfsx)
 	uint64_t *old_arg0 = (uint64_t *)ic->arg[0];
 	struct ieee_float_value val;
 	uint64_t tmp_val;
+	uint32_t extracted;
 
 	CHECK_FOR_FPU_EXCEPTION;
 
-	ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
-	tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	/*  #304/#305: the indexed form is the same store and gets the same
+	    extraction -- a fix that reached only the base form would leave every
+	    indexed store on the old path, which is why the gate runs rows through
+	    both.  */
+	if (ppc_stfs_extract(*old_arg0, &extracted)) {
+		tmp_val = extracted;
+	} else {
+		ieee_interpret_float_value(*old_arg0, &val, IEEE_FMT_D);
+		tmp_val = ieee_store_float_value(val.f, IEEE_FMT_S);
+	}
 
 	ic->arg[0] = (size_t)&tmp_val;
 

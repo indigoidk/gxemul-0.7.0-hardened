@@ -3133,6 +3133,122 @@ that only the grep can see (narrowed — the canary is the HOST-level defence). 
 SHIP seat added two one-line hardenings: a check_min on the D population and the
 why-comment on the unpinned L INT64_MAX.
 
+## Sixty-ninth round (#304, #305) — the PowerPC narrowed with a host cast, and threw away every NaN it touched
+
+Two corrections in `cpus/cpu_ppc_instr.c`, and the gate that had to exist before
+either of them could be believed. This is the architecture with no OS rig: nothing
+boots on the PowerPC path, so every defect here was found by a cold-debugger spike
+and each one is worth exactly what its instrument measured.
+
+### Gate 13 came first, and it caught three of my own predictions
+
+Fifty rows across `frsp`, `stfs`, `stfsx`, `lfs` and the composed store sequence a
+compiler actually emits, run against the **committed** build before a line of the fix
+existed, with every byte recorded. That baseline is what makes "the fix worked" a
+measurement rather than a claim — and it immediately refuted three rows of my own
+table: `frsp` of 2^128 under round-to-nearest gives Infinity, which is *correct*
+(nearest overflows to infinity, so that row is a pin, not a defect); the negative
+band row keeps its sign through the flush, because #287 fixed exactly that; and the
+overflow row I had wanted at the pattern of 2^128 itself, a value no correct
+implementation can produce. The emulator was right and the annotation was wrong,
+three times, before any code changed.
+
+### #304 — the mode the FPU never read, and the band it flushed
+
+`frsp` narrowed with `float fl = frb.f` — a host C cast, which rounds to nearest
+whatever FPSCR says. Three of the four architected modes were unreachable, so a
+guest that set toward-zero got nearest anyway. The same cast handled the ISA's
+denormalization band, and `stfs` did not handle it at all: the shared store's
+documented flush answered signed zero across the whole band where Book I's
+`SINGLE()` spells out a shift-and-truncate. And the NaN arm was worse than
+mode-blind — it left `fl` at its initialiser, so **every NaN became +0.0**.
+
+The fix is one PPC-local helper doing exact bit surgery on the significand: shift,
+collect guard and sticky, decide once from (guard, sticky, lsb, sign), then increment
+— and let the carry run out of the fraction into the exponent, which is how a
+subnormal at the top of the band becomes the smallest normal and how the largest
+finite single becomes Infinity, with no special case for either. `frsp` calls it with
+`fpscr & PPC_FPSCR_RN_MASK` (a define this header never had; the encoding is
+numerically identical to this project's `IEEE_RM_*`, verified rather than assumed);
+`stfs`/`stfsx` intercept only the band and leave every other finite value on the
+proven legacy path, because the legacy path already reproduces the splice bit for bit
+and reproving the whole domain buys nothing.
+
+### #305 — a NaN's payload is data, and the value domain cannot carry it
+
+`lfs` and `stfs` converted through `interpret → host double → store`. That pair
+reports only *that* a pattern is a NaN and then canonicalizes it to all-ones, so a
+guest's `0xffc00001` arrived in the register as `0x7fffffffffffffff` — wrong sign,
+wrong payload — and came back out of a store as `0x7fffffff`. Both measured. The
+class is exactly decidable (exponent all-ones, fraction nonzero) and disjoint from
+the finite path, so it is handled by pattern surgery on all four instructions:
+truncate to what a single can hold on the way down, shift back on the way up. The
+store does **not** quiet — quieting belongs to `frsp` alone, because a store must not
+alter the class of what it stores — and a signalling-NaN row plus a collapse row
+(a NaN whose payload lives entirely in the discarded bits splices to the *Infinity*
+pattern, which is the extraction working as specified) keep an over-eager quiet bit
+unshippable.
+
+### Verification
+
+All twenty-five discriminators flipped to bytes registered **before** the fix
+existed, on the first run, with no byte adjusted after seeing a result; all
+twenty-five pins held. The control rows prove `msr=0x2000` took, without which every
+FP instruction raises FPU-unavailable and the probe measures nothing.
+
+Then the diff review found three defects in the round's own work, and the last of
+them was the most instructive. `frsp` had been *setting* `VXSNAN` and then clearing
+it on the next non-NaN conversion — the bit is sticky in hardware, so
+`frsp(sNaN); frsp(1.0)` erased the record, which is worse than never setting it; it
+now sets the bit with its `VX`/`FX` summaries and never clears them, with a row that
+runs exactly that sequence. `lfsx` was fixed but untested, so deleting the fix would
+still have scored a clean sweep; it has its own NaN-payload row now. And the check
+that was supposed to prove each rounding-mode write took **had never once worked**:
+it parsed the debugger's plain `reg`, which does not print FPSCR on this CPU at all,
+so every run reported "0 bad" out of readbacks that never parsed. A seat predicted
+the hole from the code; the rewrite then measured it, forty-three rows of *unparsed*.
+The replacement reads FPSCR the way a guest does — `mffs` into memory — and proves
+the channel once per mode in its own session, because the first repair put that read
+inside every row and its dump interleaved with theirs, corrupting one result and
+losing twenty reads to straggle. Both numbers are asserted now, since "0 bad" and
+"read nothing" are otherwise the same answer.
+
+A fourth check was wrong in the same family: a name-anchored row count matched
+`frsp qNaN` against `frsp qNaN payload` and counted two.
+
+Final instrument: 54 rows — 25 discriminators, 25 pins (two of them policy pins
+recording a deliberate divergence from the letter), one divergence row for
+`fctiwz`'s NaN, the sticky-`VXSNAN` sequence, and the indexed load and store forms —
+31 gate checks, all green.
+
+### What the panel refused, and what it settled
+
+The scope grew and shrank in review. A seat measured that the old "finite values
+above 2^128 wrap" entry does **not** reproduce — #287 already gives Infinity there —
+so it closes as a pin rather than a fix. Against that, the literal Book I splice
+*would* wrap the exponent for finite values around 2^129, and the panel voted 3–1 to
+keep #287's Infinity as deliberate policy: the letter turns a finite overflow into a
+NaN pattern (1.5·2^128 → `0x7FC00000`), which is worse than the divergence. The
+dissent is recorded rather than smoothed away.
+
+The NaN round went the other way. One seat wanted it deferred and had the better
+argument until the defect was measured; once `lfs` and `stfs` were shown destroying
+payloads on the rig, the seat that proposed deferring flipped its own vote — its
+position had been explicitly conditioned on there being no measured victim. The tie
+broke on the same ground round 67 used when it refused to ship a third of a triad:
+pinning bytes that are already scheduled to change manufactures a known-wrong
+intermediate.
+
+Filed, not fixed: `mtfsf`'s FM-mask stride (its nibble masks are built at an 8-bit
+stride, so most of the register is unreachable through it — which is why this gate
+sets the mode through the debugger and verifies it through `mffs`), the
+single-precision arithmetic family (`fmuls` is a no-narrowing alias of `fmul`),
+`fctiwz` of a NaN answering 0 where the ISA owes `0x80000000` (pinned here as a
+divergence row so it cannot drift), the update-form loads and stores that are not
+decoded at all, and the exception-enable bits nothing sets — the enable side of
+`VXSNAN` included, so nothing above should be read as a working trap model. Each has
+a round with its name on it.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.
