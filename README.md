@@ -168,6 +168,7 @@ Oldest first.
 | `4453ff2` | Round 66 (#301): cvt.d.l/cvt.s.l converted the integer before the rounding mode existed; gate 12 |
 | `96b86a9` | Round 67 (#302): the m88k float→int triad — trnc cast raw, int/nint halted the emulator |
 | `e3d972c` | Round 68 (#303): every subnormal decoded wrong on every architecture — pmax unmasked, five rigs measured |
+| `37daeee` | Round 69 (#304/#305): PowerPC narrowed with a host cast and destroyed every NaN it touched; gate 13 |
 
 ## Feature highlights
 
