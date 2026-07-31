@@ -173,7 +173,7 @@ Oldest first.
 | `638eff2` | Round 70B (#309/#310): MIPS REGIMM halted instead of raising RI; all eight PowerPC float update forms were undecoded |
 | `a06e92f` | Round 71 (#311/#312/#313): ARM's subtract carry ignored the borrow it had just subtracted, ADCS could never set V, and an undefined word stopped the emulator at decode time; gate 14 |
 | `1d82ee1` | Round 71B: non-ARM upstream triage — the MIPS "early-store hazard" refuted by measurement, m88k PFAR unmodelled, SH `synco` promoted |
-| `<pending>` | Round 79 (#314): SuperH answered eight legal encodings — three of them base ISA — by stopping the emulator; now the illegal-instruction exception |
+| `f415b91` | Round 79 (#314): SuperH answered eight legal encodings — three of them base ISA — by stopping the emulator; now the illegal-instruction exception |
 
 ## Feature highlights
 
