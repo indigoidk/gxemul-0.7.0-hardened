@@ -175,6 +175,29 @@
 >   this rig runs, where silicon would raise Undefined. Pre-existing fidelity gap rather
 >   than a halt; deliberately not entangled with #312.
 >
+> **Round 71B — the non-ARM upstream candidates, triaged. Two refuted, one promoted.**
+> - ~~**MIPS "early-store hazard"** (`cpu_mips.c`, the `store_32bit_word` to
+>   `0xffffffff9fc00000` in `mips_cpu_new`)~~ — **REFUTED by measurement, no change.** The
+>   worry was that a store issued at CPU-creation time lands before the machine has
+>   installed RAM. Read back on the pmax rig, that address holds `0x00c0de0c` repeated
+>   every 8 bytes — the DEC PROM emulation's own vectors — not the `0x00c0de0d` the CPU-init
+>   store writes. So the store is not lost into a void; it is *overridden by
+>   machine-specific initialisation*, which is precisely what the comment above it says
+>   should happen. The mechanism is working as designed. Left open, and much weaker than the
+>   original claim: whether the default ever survives on a machine that does NOT override it
+>   (`testmips` did not construct in the configuration tried), which would make it a dead
+>   default rather than a hazard.
+> - ~~**m88k `PFAR`**~~ — **REFUTED as a defect: the register is not modelled at all.**
+>   `PFAR` appears nowhere in `src/`. That is a missing feature, not a wrong behaviour, and
+>   there is no reproducer to write for it.
+> - **SH `synco` (0x00ab) is undecoded and HALTS the emulator** — the one candidate that
+>   survived, and it is the halt class again. It falls to the `main_opcode == 0` default in
+>   `cpu_sh_instr.c`, which `goto bad`s into the shared `cpu->running = 0` label. `synco` is
+>   an ordering barrier and GXemul reorders nothing, so the correct implementation is a nop:
+>   this is a pure decode gap. Not yet reproduced. Gets its own round, together with a sweep
+>   of the other ten `goto bad` sites in that file — the halt sweep that produced #309 for
+>   MIPS and #310 for PowerPC has never been run on SuperH.
+>
 > **Known and deliberately not forced — each with the reason it stays**
 > - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause
 >   bit and no arithmetic trap is delivered. #297 made it observable (`STS FPSCR` after
