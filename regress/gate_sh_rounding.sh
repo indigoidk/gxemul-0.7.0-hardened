@@ -84,4 +84,47 @@ for v in "subn fmul" "subn fdiv"; do
     check "  $v: RN row correct" "$n" 1
 done
 
+# ---- #314: legal encodings must not stop the emulator ------------------------
+# The SH decoder answered an unimplemented encoding with `goto bad`, which sets
+# cpu->running = 0. All eight rows below were measured HALTING the committed
+# build; three of them are BASE ISA (MAC.L, MAC.W, TST.B), present since
+# SH-1/SH-2 and legal on the SH7751R this rig models -- so this is not a
+# question about accepting SH-4A extensions on an SH-4 core.
+#
+# The probe classifies the outcome from the dyntrans halt MESSAGE, not from a
+# memory marker: after the fix the exception is raised and any store placed
+# after the test instruction is legitimately never reached, so a marker-only
+# check called every repaired row a failure (and called SLEEP, which is
+# implemented and simply sleeps, a halt). See the probe's header.
+HLOG=$LOGDIR/gate_sh_halt.log
+python3 sh_halt_probe.py "$PMAX" "$KERNEL" > "$HLOG" 2>&1 || true
+
+if ! grep -q "SH_HALT_RESULT=" "$HLOG"; then
+    note "halt probe produced no result line; last lines follow"
+    tail -5 "$HLOG" | sed 's/^/       /'
+    #  a CHECK, not a gate_skip: the rounding section above has already
+    #  recorded results and a skip here would discard them.
+    check "halt probe completed" "no" "yes"
+    gate_end; exit $?
+fi
+
+grep -E " ok$| FAIL$" "$HLOG" | sed 's/^/       /'
+
+hctrl=$(grep -o "SH_HALT_CONTROL=[A-Z]*" "$HLOG" | tail -1 | cut -d= -f2)
+check "halt-probe control proves it measures" "${hctrl:-missing}" "OK"
+
+hres=$(grep -o "SH_HALT_RESULT=[0-9]*/[0-9]*" "$HLOG" | tail -1 | cut -d= -f2)
+hgot=${hres%/*}; hwant=${hres#*/}
+check "halt rows run"     "$hwant" 9
+check "halt rows correct" "$hgot"  "$hwant"
+
+# Named, so one encoding regressing cannot hide behind a total. Two spaces after
+# the name: the probe pads to a fixed column and a name that is a PREFIX of
+# another would otherwise match both rows (the trap that made two of gate 14's
+# checks unsatisfiable and two of gate 13's count the wrong rows).
+for v in "MAC.L" "MAC.W" "TST.B" "STC SGR" "STC.L DBR" "MOVLI.L" "SYNCO" "PREFI"; do
+    n=$(count "$HLOG" "^$v  .*ok$")
+    check "  survives: $v" "$n" 1
+done
+
 gate_end

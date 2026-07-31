@@ -175,6 +175,24 @@ X(nop)
 
 
 /*
+ *  reserved:  An encoding this emulator does not implement.
+ *
+ *  #314: the decoder used to `goto bad` for these, which reaches the shared
+ *  label in cpu_dyntrans.c and sets cpu->running = 0 -- so a guest executing
+ *  any instruction missing from the tables stopped the whole emulator. Real
+ *  silicon raises the general illegal-instruction exception, which is what
+ *  the guest kernel is written to handle. Measured halting on this rig, among
+ *  others: SLEEP, MAC.L, STC SGR, STC.L/LDC.L DBR, SYNCO, PREFI, ICBI,
+ *  MOVLI.L and MOVCO.L.
+ */
+X(reserved)
+{
+	SYNCH_PC;
+	sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+}
+
+
+/*
  *  sleep:  Wait for interrupt
  */
 X(sleep)
@@ -3834,7 +3852,10 @@ X(to_be_translated)
 					if (!cpu->translation_readahead)
 						fatal("Unimplemented NOP"
 						    " variant?\n");
-					goto bad;
+					if (cpu->translation_readahead)
+						goto bad;
+					ic->f = instr(reserved);	/*  #314  */
+					break;
 				}
 				break;
 			case 0x0a:	/*  STS MACH,Rn  */
@@ -3917,7 +3938,10 @@ X(to_be_translated)
 					fatal("Unimplemented opcode 0x%x,"
 					    "0x%03x\n", main_opcode,
 					    iword & 0xfff);
-				goto bad;
+				if (cpu->translation_readahead)
+					goto bad;
+				ic->f = instr(reserved);	/*  #314  */
+				break;
 			}
 		}
 		break;
@@ -3979,7 +4003,10 @@ X(to_be_translated)
 		default:if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%x\n",
 				    main_opcode, lo4);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 		break;
 
@@ -4024,7 +4051,10 @@ X(to_be_translated)
 		default:if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%x\n",
 				    main_opcode, lo4);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 		break;
 
@@ -4259,7 +4289,10 @@ X(to_be_translated)
 			default:if (!cpu->translation_readahead)
 					fatal("Unimplemented opcode 0x%x,"
 					    "0x%02x\n", main_opcode, lo8);
-				goto bad;
+				if (cpu->translation_readahead)
+					goto bad;
+				ic->f = instr(reserved);	/*  #314  */
+				break;
 			}
 		}
 		break;
@@ -4335,7 +4368,10 @@ X(to_be_translated)
 		default:if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%x\n",
 				    main_opcode, lo4);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 		break;
 
@@ -4404,7 +4440,10 @@ X(to_be_translated)
 		default:if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%x\n",
 				    main_opcode, r8);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 
 		/*  samepage branches:  */
@@ -4539,7 +4578,10 @@ X(to_be_translated)
 		default:if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%x\n",
 				    main_opcode, r8);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 		break;
 
@@ -4716,13 +4758,19 @@ X(to_be_translated)
 			if (!cpu->translation_readahead)
 				fatal("Unimplemented opcode 0x%x,0x%02x\n",
 				    main_opcode, lo8);
-			goto bad;
+			if (cpu->translation_readahead)
+				goto bad;
+			ic->f = instr(reserved);	/*  #314  */
+			break;
 		}
 		break;
 
 	default:if (!cpu->translation_readahead)
 			fatal("Unimplemented main opcode 0x%x\n", main_opcode);
-		goto bad;
+		if (cpu->translation_readahead)
+			goto bad;
+		ic->f = instr(reserved);	/*  #314  */
+		break;
 	}
 
 

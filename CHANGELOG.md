@@ -3618,6 +3618,79 @@ and is labelled as such in the code.
   runs, where silicon would raise Undefined. Pre-existing, a fidelity question
   rather than a halt, and deliberately not entangled with #312.
 
+## Seventy-ninth round (#314) — SuperH answered a legal instruction by stopping
+
+The round opened as "decode `synco`" and the panel turned it into something else
+entirely, which is the second time in three rounds that reviewing a narrow fix
+found the wide one underneath it.
+
+`synco` (0x00AB) really is undecoded, and it really does stop the emulator: the
+`main_opcode == 0` switch has no case for it, so it falls to a `default` that runs
+`fatal()` and `goto bad`, and `goto bad` reaches the shared label in
+`cpu_dyntrans.c` that sets `cpu->running = 0`. Measured on the landisk rig before
+anything was edited.
+
+The proposal was to add two `case` labels decoding `synco` and `prefi` as nops.
+Three things killed it:
+
+**The premise was false.** The diff justified itself by saying `PREF` (0x83) is
+already treated as a nop. It is not — `pref_rn` is a 57-line store-queue writeback
+engine that bursts to a QACR-derived external address and raises its own exception
+for prohibited user access. Two seats caught it and the source confirms it. The
+same objection applies to citing `MOVCA.L`: its existing nop silently drops a
+guest-visible store, so it is a live bug, not a precedent.
+
+**The CPU model is wrong for the fix.** This tree defines SH7708R and the
+SH7750/7750R/7751R only — there is no SH-4A model, and landisk instantiates an
+SH7751R. `synco` and `prefi` are SH-4A instructions, so on every core this emulator
+can build they are *reserved encodings*. Decoding them as nops would have made an
+SH-4 execute SH-4A instructions silently.
+
+**Two encodings was a rounding error.** A sweep of legal encodings found eight that
+stop the emulator, and three of them — `MAC.L`, `MAC.W` and `TST.B` — are BASE ISA,
+present since SH-1/SH-2 and unambiguously legal on the modelled part. No argument
+about extensions applies to those; the tree simply lacks them, and lacking them
+killed the machine.
+
+So the fix is the one this fork has already made three times: the ten
+unimplemented-opcode `goto bad` sites now decode to `instr(reserved)`, which raises
+the general illegal-instruction exception the guest kernel is written to handle.
+That repairs every unimplemented encoding at once rather than the two that happened
+to be named. The exception is raised at EXECUTE time, not from the decoder — a seat
+made the point precisely: readahead translates instructions that may never run, so
+raising during decode would corrupt state for a guest that never executed the word.
+Readahead itself keeps `goto bad`, matching #309 and #312.
+
+Baseline and result, measured on rebuilt binaries either side of the change: eight
+of eight legal encodings halted before, none after, with `nop` unchanged as the
+control.
+
+**The measurement was wrong twice before it was right**, and both errors were mine.
+The first sweep classified purely on whether a marker store after the test
+instruction had run. That conflates three different outcomes — the emulator
+stopped, the exception was raised so the store was never reached, and the
+instruction ran but did not reach the store. It reported `SLEEP` as a halt, which
+is false (`SLEEP` has a case and a handler and simply sleeps), and then, once the
+fix landed, reported every repaired row as still broken. Reading the outcome off
+the dyntrans halt message instead, and naming each outcome separately, is what made
+the numbers mean anything. The row count came down from eleven to eight in the
+process, and the smaller number is the true one.
+
+### Recorded, not fixed
+
+A seat's audit of all eleven `goto bad` sites found only four reachable by a legal
+encoding; two are dead code, and one is an ifetch failure rather than an encoding
+at all. The same audit named more legal encodings still unimplemented — `ICBI`,
+`MOVCO.L`, the `SGR`/`DBR` load-store forms, `FPCHG` — which now raise the
+exception instead of halting but are still not *implemented*. `MOVLI.L`/`MOVCO.L`
+in particular must never become nops: they are the guest's atomics.
+
+Separately, and out of this round's scope, four legal SH-4 sequences reach
+`ABORT_EXECUTION`, which sets `cpu->running = 0` by a different route that a decode
+sweep cannot see: `FMOV` with `FPSCR.SZ=1` on two paths, `FSRRA` with `PR=1`, and —
+inside `pref_rn` itself — a store-queue prefetch while the MMU is enabled, which is
+the ordinary way that hardware is used.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

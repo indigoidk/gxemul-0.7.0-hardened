@@ -190,13 +190,29 @@
 > - ~~**m88k `PFAR`**~~ — **REFUTED as a defect: the register is not modelled at all.**
 >   `PFAR` appears nowhere in `src/`. That is a missing feature, not a wrong behaviour, and
 >   there is no reproducer to write for it.
-> - **SH `synco` (0x00ab) is undecoded and HALTS the emulator** — the one candidate that
->   survived, and it is the halt class again. It falls to the `main_opcode == 0` default in
->   `cpu_sh_instr.c`, which `goto bad`s into the shared `cpu->running = 0` label. `synco` is
->   an ordering barrier and GXemul reorders nothing, so the correct implementation is a nop:
->   this is a pure decode gap. Not yet reproduced. Gets its own round, together with a sweep
->   of the other ten `goto bad` sites in that file — the halt sweep that produced #309 for
->   MIPS and #310 for PowerPC has never been run on SuperH.
+> - ~~**SH `synco` (0x00ab) is undecoded and HALTS the emulator**~~ — **RESOLVED, much
+>   wider than filed, as #314 (round 79).** The premise recorded here was wrong twice over:
+>   `synco` is an SH-4A instruction and this tree models no SH-4A core (landisk is an
+>   SH7751R), so a nop would have made an SH-4 execute an SH-4A instruction; and the claim
+>   that `PREF` was "already a nop" was false — `pref_rn` is a store-queue writeback engine.
+>   A sweep then found **eight** legal encodings halting, three of them BASE ISA (`MAC.L`,
+>   `MAC.W`, `TST.B`, present since SH-1/SH-2 and legal on the modelled part). Fixed the way
+>   #309 and #312 fixed their architectures: the ten unimplemented-opcode `goto bad` sites
+>   now decode to `instr(reserved)` and raise the illegal-instruction exception at EXECUTE
+>   time. Eight of eight halted before, none after.
+> - **Legal SH encodings that no longer halt but are still UNIMPLEMENTED** (they now raise
+>   the exception, which is honest, but the instructions are absent): `ICBI`, `MOVLI.L`,
+>   `MOVCO.L`, the `SGR` and `DBR` load/store forms, and `FPCHG`. `MOVLI.L`/`MOVCO.L` are
+>   the guest's atomics and must be implemented rather than nopped if anything ever needs
+>   them.
+> - **Four legal SH-4 sequences reach `ABORT_EXECUTION`**, which sets `cpu->running = 0` by
+>   a route a decode sweep structurally cannot see (found by a seat auditing #314): `FMOV`
+>   with `FPSCR.SZ=1` on two paths, `FSRRA` with `PR=1`, and — inside `pref_rn` itself — a
+>   store-queue prefetch while the MMU is enabled, which is the ordinary way that hardware
+>   is used. Own round.
+> - **SH `MOVCA.L` is decoded as a nop but architecturally STORES R0 to `@Rn`** — the cache
+>   allocation is the hint, the store is not. Dropping it is a wrong-answer bug, not a halt;
+>   Linux/sh `clear_page` and the BSD sh4 page-zeroing paths use it.
 >
 > **Known and deliberately not forced — each with the reason it stays**
 > - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause
