@@ -179,7 +179,7 @@ Oldest first.
 | `cbbe1ec` | Round 78 (#319/#320/#321): ARM rotations the decoder answered by halting — and MVNS, which took its carry from the complement and was wrong in every band |
 | `0c1eb58` | Round 78 addendum (#322) + round 84: the panel overturned the PC-source carve-out, and stopped three device bounds checks that could never have fired |
 | `8885758` | Round 83: attempted, not reproduced — combining is unreachable from a step-driven probe, recorded rather than fixed on a reading |
-| `<pending>` | Round 76 (#323): m88k `bcnd` rejected two thirds of its own condition masks; the manual's four-class mask written once, replacing nine named comparisons |
+| `d12114d` | Round 76 (#323): m88k `bcnd` rejected two thirds of its own condition masks; the manual's four-class mask written once, replacing nine named comparisons |
 
 ## Feature highlights
 
