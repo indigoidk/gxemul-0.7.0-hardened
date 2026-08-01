@@ -89,15 +89,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 58
+check "rows run"     "$want" 79
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 17
-check_min "pinned rows present"         "$pins" 41
+check_min "discriminating rows present" "$disc" 35
+check_min "pinned rows present"         "$pins" 44
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -159,6 +159,33 @@ for v in "udf handler ran" "udf UND32 mode" "udf lr=pc+4" \
          "udf page-end lr=pc+4" "udf cond-failed nop"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  undefined: $v" "$n" 1
+done
+
+# ---- #319/#320/#321: rotations the decoder rejected, and MVNS's carry -------
+# Every row asserts a VALUE. `uxtah ROR 24` is the discriminating one of the
+# first group: a byte extract is the same under a rotate as under a shift at
+# every encodable amount, so the uxtab rows cannot tell those apart, while the
+# halfword form at 24 wraps rm's low byte into bits 15:8.
+#
+# `rotc zero C` is the row that never halted -- the old guard exempted an imm8
+# of zero, so that case shipped with the wrong carry rather than stopping, which
+# is why this group is a wrong-answer fix and not only a halt fix.
+#
+# All four MVNS bands are present because two of them would pass by coincidence:
+# the decoder rewrites `mvn #imm` to `mov #~imm`, and with S set the carry was
+# then read off the COMPLEMENT.
+for v in "uxtab ROR 8" "uxtab ROR 16" "uxtab ROR 24" \
+         "uxtah ROR 8" "uxtah ROR 16" "uxtah ROR 24" \
+         "rotc movs val" "rotc movs C" "rotc zero C" "rotc ands C" \
+         "rotc orrs val" "rotc bics val" "rotc tst C" \
+         "mvns rot0 C=0" "mvns rot0 C=1" "mvns b31=0 C" "mvns b31=1 C" \
+         "mvns value"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  round 78: $v" "$n" 1
+done
+for v in "uxtab ROR 0" "rot0 movs C" "mvn S-clear"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  round 78 pin: $v" "$n" 1
 done
 
 gate_end

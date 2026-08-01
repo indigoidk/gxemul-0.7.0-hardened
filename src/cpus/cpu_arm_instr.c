@@ -1152,6 +1152,92 @@ Y(uxtab)
 
 
 /*
+ *  dpis_imm_rotc:  A flag-setting logical data-processing instruction whose
+ *		    ROTATED immediate came out small.
+ *
+ *  #320: ARM's shifter carry-out for an immediate operand is "unchanged if the
+ *  rotate is zero, otherwise bit 31 of the rotated value". The dpi template
+ *  decides that from the VALUE, treating "greater than 255" as a proxy for
+ *  "was rotated" -- which is right in every case except a rotate whose result
+ *  lands at or below 255, where the architecture says clear the carry and the
+ *  proxy leaves it alone. The decoder used to answer that by stopping the
+ *  emulator, and it stopped it far more widely than the hazard: the rejection
+ *  ignored both the S bit and the opcode, so even `mov r0, #4 ROR 2`, which
+ *  writes no flags at all, halted the machine.
+ *
+ *  Only the eight logical opcodes consume the shifter carry, and only when S
+ *  is set -- the same set the REGISTER path twenty lines above already names
+ *  for itself. Those are routed here; everything else now decodes normally.
+ *  The carry is CLEARED unconditionally, because bit 31 of a value at or below
+ *  255 is zero.
+ *
+ *  Carrying the instruction word (the `mla` shape) rather than a marker bit is
+ *  what makes this portable: the argument slots hold the value and two
+ *  register pointers, and a marker above bit 31 would exist only on a 64-bit
+ *  host -- and would be invisible anyway, since the template reads the operand
+ *  as a uint32_t.
+ *
+ *  arg[0] = the instruction word
+ *  arg[1] = the rotated immediate
+ */
+X(dpis_imm_rotc)
+{
+	uint32_t iw = ic->arg[0], b = ic->arg[1], a, c;
+	int op = (iw >> 21) & 15;
+
+	a = cpu->cd.arm.r[(iw >> 16) & 15];
+
+	switch (op) {
+	case 0x0:				/*  AND  */
+	case 0x8: c = a & b; break;		/*  TST  */
+	case 0x1:				/*  EOR  */
+	case 0x9: c = a ^ b; break;		/*  TEQ  */
+	case 0xc: c = a | b; break;		/*  ORR  */
+	case 0xd: c = b; break;			/*  MOV  */
+	case 0xe: c = a & ~b; break;		/*  BIC  */
+	default:  c = ~b; break;		/*  MVN  */
+	}
+
+	/*  TST and TEQ compute their flags and write no register.  */
+	if (op != 0x8 && op != 0x9)
+		cpu->cd.arm.r[(iw >> 12) & 15] = c;
+
+	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C);
+	if (c == 0)
+		cpu->cd.arm.flags |= ARM_F_Z;
+	if ((int32_t)c < 0)
+		cpu->cd.arm.flags |= ARM_F_N;
+	/*  V is untouched, and C stays clear.  */
+}
+Y(dpis_imm_rotc)
+
+
+/*
+ *  uxtab_rot:  Unsigned Extend and Add Byte, with a non-zero rotation.
+ *
+ *  #319: a rotate used to reach `goto bad`, which stops the emulator on an
+ *  instruction the decoder otherwise implements. There is no room for the
+ *  rotate in the three argument slots -- rd, rn and rm already fill them --
+ *  so this variant carries the instruction word instead and re-extracts,
+ *  the same shape `mla` and the block-transfer handlers use.
+ *
+ *  A BYTE extract gives the same answer under a rotate as under a shift at
+ *  every encodable amount, because the bits that wrap land above bit 7.
+ *
+ *  arg[0] = the instruction word
+ */
+X(uxtab_rot)
+{
+	uint32_t iw = ic->arg[0];
+	uint32_t x = cpu->cd.arm.r[iw & 15];
+
+	cpu->cd.arm.r[(iw >> 12) & 15] = cpu->cd.arm.r[(iw >> 16) & 15]
+	    + (uint8_t)(x >> (((iw >> 10) & 3) * 8));
+}
+Y(uxtab_rot)
+
+
+/*
  *  uxtah:  Unsigned Extend and Add Halfword.
  *
  *  arg[0] = ptr to rd
@@ -1163,6 +1249,34 @@ X(uxtah)
 	reg(ic->arg[0]) = reg(ic->arg[1]) + (uint16_t)reg(ic->arg[2]);
 }
 Y(uxtah)
+
+
+/*
+ *  uxtah_rot:  Unsigned Extend and Add Halfword, with a non-zero rotation.
+ *
+ *  #319: as uxtab_rot above -- but a HALFWORD extract is not a shift at a
+ *  rotate of 24. There the low byte of rm wraps into bits 15:8, which a
+ *  plain shift would drop; the sibling uxth and sxth already spell that
+ *  case out, and copying the byte form's shift here would have been silently
+ *  wrong for exactly one of the four encodings.
+ *
+ *  arg[0] = the instruction word
+ */
+X(uxtah_rot)
+{
+	uint32_t iw = ic->arg[0];
+	uint32_t x = cpu->cd.arm.r[iw & 15];
+	int rot = ((iw >> 10) & 3) * 8;
+
+	if (rot == 24)
+		x = (x >> 24) | ((x & 0xff) << 8);
+	else
+		x >>= rot;
+
+	cpu->cd.arm.r[(iw >> 12) & 15] = cpu->cd.arm.r[(iw >> 16) & 15]
+	    + (uint16_t)x;
+}
+Y(uxtah_rot)
 
 
 /*
@@ -3432,17 +3546,60 @@ X(to_be_translated)
 			while (r8-- > 0)
 				imm = (imm >> 2) | ((imm & 3) << 30);
 
-			if (steps != 0 && (imm != 0 && imm < 256)) {
-				if (!cpu->translation_readahead)
-					fatal("TODO: see cpu_arm_instr_dpi; non-zero steps but still under 256 is not implemented yet\n");
-				goto bad;
-			}
-
 			ic->arg[1] = imm;
+
+			/*
+			 *  #320: a rotate whose result came out at or below
+			 *  255. The dpi template cannot tell that from an
+			 *  unrotated immediate -- it judges by magnitude --
+			 *  so the carry it owes (clear) would be left alone.
+			 *  This used to `goto bad`, stopping the emulator, and
+			 *  it did so for EVERY opcode and regardless of the S
+			 *  bit, though only the eight logical opcodes with S
+			 *  set can consume the shifter carry at all. That set
+			 *  is the one the register path names for itself just
+			 *  above; the rest now decode normally.
+			 *
+			 *  Note there is no `imm != 0` here, unlike the test
+			 *  this replaces: a rotate of an imm8 of zero has the
+			 *  same carry owing, and being exempt from the halt is
+			 *  precisely why it went out WRONG rather than loudly.
+			 *
+			 *  Placed before the mvn rewrite below so MVN arrives
+			 *  with its true operand and its own opcode.
+			 */
+			if (s_bit && steps != 0 && imm < 256
+			    && !((secondary_opcode >= 2 &&
+			    secondary_opcode <= 7) || secondary_opcode == 0xa
+			    || secondary_opcode == 0xb)
+			    && rn != ARM_PC && rd != ARM_PC) {
+				ic->arg[0] = iword;
+				ic->f = cond_instr(dpis_imm_rotc);
+				break;
+			}
 		}
 
-		/*  mvn #imm ==> mov #~imm  */
-		if (secondary_opcode == 0xf && !regform) {
+		/*
+		 *  mvn #imm ==> mov #~imm
+		 *
+		 *  #321: only when the S bit is CLEAR. The rewrite complements
+		 *  the operand here, at decode time, and the dpi template then
+		 *  judges the shifter carry from whatever value it is handed --
+		 *  so with S set it was reading the carry off the COMPLEMENT,
+		 *  which inverts the answer in every band. Measured on the
+		 *  committed build: `mvns r0,#1` set the carry where the
+		 *  architecture leaves it alone, `mvns r0,#0x3fc` set it where
+		 *  the architecture clears it, and `mvns r0,#0xff000000`
+		 *  cleared it where the architecture sets it.
+		 *
+		 *  The flag-setting form has its own table entries already --
+		 *  the generator emits all sixteen opcodes for S=1, and the
+		 *  immediate mvns slots were simply unreachable because this
+		 *  rewrite always fired first. The template's own MVN arm
+		 *  computes ~b and runs the carry test on the TRUE operand,
+		 *  which is what the architecture asks for.
+		 */
+		if (secondary_opcode == 0xf && !regform && !s_bit) {
 			secondary_opcode = 0xd;
 			ic->arg[1] = ~ic->arg[1];
 		}
@@ -3494,9 +3651,10 @@ X(to_be_translated)
 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
 				ic->f = cond_instr(uxtab);
 				if (iword & 0xc00) {
-					if (!cpu->translation_readahead)
-						fatal("unimplemented uxtab with rotate != 0\n");
-					goto bad;
+					/*  #319: a rotate is legal here; it
+					    used to stop the emulator.  */
+					ic->arg[0] = iword;
+					ic->f = cond_instr(uxtab_rot);
 				}
 			} else if ((iword & 0x0fff03f0) == 0x06ff0070) {
 				ic->f = cond_instr(uxth);
@@ -3509,9 +3667,9 @@ X(to_be_translated)
 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
 				ic->f = cond_instr(uxtah);
 				if (iword & 0xc00) {
-					if (!cpu->translation_readahead)
-						fatal("unimplemented uxtah with rotate != 0\n");
-					goto bad;
+					/*  #319  */
+					ic->arg[0] = iword;
+					ic->f = cond_instr(uxtah_rot);
 				}
 			} else if ((iword & 0x0fe00070) == 0x07c00010) {
 				ic->f = cond_instr(bfi);

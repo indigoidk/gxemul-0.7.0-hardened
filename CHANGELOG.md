@@ -3855,6 +3855,117 @@ this one. Also still open: ordinary queue-filling stores skip UTLB validation
 entirely when `AT=1`, the identity mapping ignores address bits `[25:6]`, and
 multiple-matching-entry detection remains unimplemented.
 
+## Seventy-eighth round (#319, #320, #321) — ARM: two rejected rotations, and a carry read off the wrong value
+
+Round 71 left three ARM decoder halts on the record. Working them turned up a
+fourth defect that never halted at all, which is the more interesting half of
+this round: it had been answering wrongly in silence.
+
+### #319 — uxtab and uxtah rejected a rotation they had room to perform
+
+Both instructions rotate their source before extracting, and both answered a
+non-zero rotate with `goto bad` — stopping the emulator on an instruction the
+decoder otherwise implements. There was no room for the rotate: rd, rn and rm
+already fill all three argument slots. The variants added here carry the
+instruction word instead and re-extract, which is the shape `mla` and the
+block-transfer handlers already use, and costs one handler per instruction
+rather than one per rotate.
+
+A panel seat flagged the trap in doing this by symmetry, and it is worth
+recording because the measurement would not have caught it either: a **byte**
+extract gives the same answer under a rotate as under a shift at every encodable
+amount, since the wrapped bits land above bit 7 — but a **halfword** at ROR 24
+wraps rm's low byte into bits 15:8. Copying the byte form's shift would have
+been silently wrong for exactly one of the four encodings. The sibling `uxth`
+and `sxth` already spell that case out; the gate now has the row that
+distinguishes them (`0x11223344` → `0x4411`, not `0x0011`).
+
+### #320 — the immediate path rejected far more than the hazard it was guarding
+
+ARM's shifter carry-out for an immediate is "unchanged if the rotate is zero,
+otherwise bit 31 of the rotated value". The dpi template judges that from the
+VALUE, treating "greater than 255" as a proxy for "was rotated". The proxy is
+right except when a rotate lands at or below 255 — where the architecture says
+clear the carry and the proxy leaves it alone — and the decoder answered that by
+stopping the emulator.
+
+It stopped it far more widely than the hazard. The rejection ignored the S bit
+and the opcode both, so `mov r0, #4 ROR 2`, which writes no flags at all, halted
+the machine. Only eight logical opcodes consume the shifter carry, and only with
+S set — and the REGISTER path twenty lines above already names that exact set for
+itself. Applying its own condition lets everything else decode normally.
+
+For the remainder, the round originally proposed shipping a documented one-bit
+divergence, on the grounds that a portable mechanism looked expensive. Two seats
+refuted the cost estimate and pointed at the same in-file pattern used for #319:
+carry the instruction word, and the condition-code wrappers come free from the
+existing macro. That is one cold handler, reached only by encodings nothing
+emits, and it closes the class outright instead of documenting it.
+
+**And the guard was not even protecting the case it named.** Its test exempted
+an imm8 of zero, so `movs r0, #0 ROR 4` decoded happily and shipped with the
+wrong carry — the same defect, silent instead of loud, live on every build this
+fork has ever cut. Two seats found it independently and the rig confirmed it.
+That is what turns this from a halt fix into a wrong-answer fix, and the routing
+condition here deliberately drops the `imm != 0` clause.
+
+### #321 — MVNS took its carry from the complement, and was wrong in every band
+
+Found by a seat auditing #320's blast radius. The decoder rewrites `mvn #imm`
+into `mov #~imm` at decode time, and with S set the template then read the
+shifter carry off the **complemented** operand. Measured on the committed build:
+`mvns r0,#1` set the carry where the architecture leaves it alone;
+`mvns r0,#0x3fc` set it where the architecture clears it; `mvns r0,#0xff000000`
+cleared it where the architecture sets it.
+
+The fix is to gate the rewrite on the S bit being clear. The flag-setting form
+already had table entries — the generator emits all sixteen opcodes for S=1, and
+the immediate `mvns` slots were simply unreachable because the rewrite always
+fired first. The template's own MVN arm computes `~b` and runs the carry test on
+the true operand, which is what the architecture asks for. All four bands now
+measure correct, and the two that would have passed by coincidence are in the
+gate alongside the two that would not.
+
+### A measurement of mine that was wrong, and how it was caught
+
+The first MVNS reproduction used `0xE3E0…`, which has the S bit **clear** — that
+is `mvn`, not `mvns`, and it writes no flags at all. Every verdict in that run
+was an artifact of the encoding rather than a property of the emulator, and two
+of the four rows would have read as "confirmed defect" anyway. Re-run with
+`0xE3F0…`, the real defect appeared exactly where the seat predicted. This is the
+second time in this project a bad hand-assembled encoding has nearly produced a
+finding out of nothing; the gate rows now carry the encodings that were actually
+measured.
+
+### Recorded, not fixed
+
+- **The combined TST/TEQ handlers never update the carry at all**, and the
+  combiner accepts rotated immediate forms — so the magnitude proxy is not the
+  only thing wrong on that path once instruction combination kicks in. Separate
+  from this round's residual and unmeasured here.
+- **uxtab/uxtah are ARMv6 media instructions and this rig's SA1110 is ARMv4**, so
+  faithful behaviour on *that* model is Undefined rather than execution. #319
+  removes a halt and implements the instruction correctly for the models that
+  have it; the missing CPU-model gating is the same gap round 71 recorded and is
+  not claimed fixed here.
+- Rd or Rm as PC in these encodings is unpredictable and the decoder accepts it.
+- **The #320 routing leaves PC forms on the old path, and a diff-review seat put the
+  sharp question: those encodings used to HALT, so this round moves them from loud
+  to silently divergent — the very pattern #320 exists to condemn.** Taking it
+  case by case rather than waving at it:
+  - `rd == PC` is **moot, not lost**. With S set the template reloads the flags
+    from SPSR after the write, so the shifter carry is overwritten before anything
+    can observe it. Verified in the template, not assumed.
+  - `rn == PC` on MOV or MVN is an SBZ-field violation, i.e. architecturally
+    unpredictable. Routing it would only serve encodings that have no defined
+    behaviour to be right about.
+  - That leaves `ands`/`eors`/`orrs`/`bics`/`tst`/`teq` with **rn == PC** and a
+    rotated small immediate, which really is legal and really does keep the old
+    one-bit divergence. Covering it needs the PC+8 reconstruction the template
+    does specially, which the cold handler has no access to — a real cost for an
+    encoding that reads the program counter through a non-canonical rotation.
+    Left, deliberately, and stated here rather than left to be discovered.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

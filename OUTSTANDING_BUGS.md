@@ -159,12 +159,18 @@
 >   every operand below 2^32, which is everything these rigs can reach, so its effect at the
 >   top of the address space is reasoned rather than measured. Reaching it needs RAM mapped at
 >   `0xfffff000` — a `dev_ram` config statement is the only route found so far.
-> - **Three more guest-reachable halts in the ARM decoder** (same review): `uxtab` and
->   `uxtah` with a non-zero rotate, both inside the block #312 edited, and the
->   data-processing immediate path that rejects a legal non-canonical rotated immediate.
->   A different sub-case from #312 — the decoder recognises the instruction and rejects
->   only an unimplemented variant, so answering "undefined" would be its own lie; the
->   immediate one is the worst, because that instruction is unambiguously legal.
+> - ~~**Three more guest-reachable halts in the ARM decoder**~~ — **RESOLVED as #319/#320
+>   (round 78)**, and the round found a fourth defect that never halted: the immediate
+>   guard exempted an imm8 of zero, so `movs r0,#0 ROR 4` shipped with the wrong carry
+>   instead of stopping loudly. Also **#321**: `mvns` with an immediate took its shifter
+>   carry from the COMPLEMENTED operand (the decoder rewrites `mvn #imm` to `mov #~imm`),
+>   which is wrong in every band — measured setting the carry where the architecture
+>   leaves it alone, setting it where the architecture clears it, and clearing it where
+>   the architecture sets it.
+> - **The combined TST/TEQ handlers never update the carry**, and the combiner accepts
+>   rotated immediate forms — so the dpi magnitude proxy is not the only thing wrong on
+>   that path once instruction combination kicks in. Found by a seat auditing #320;
+>   unmeasured, separate from #320's residual.
 > - **ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result** (`cpu_arm.c`, three
 >   near-identical blocks; found while scoping #311). Carry is correctly read from bit 32,
 >   but `if (result == 0)` tests the 64-bit value, so any operation that carries out of bit
@@ -1097,6 +1103,31 @@ corruption without a clear host-OOB path.
 
 ---
 
+> ## STATUS OF THIS SECTION, re-verified against the source 2026-08-01
+>
+> **The tables below are the ORIGINAL audit listing and are largely historical.** Nineteen
+> of the twenty-four entries have since been corrected and carry an `OB-N` marker comment
+> at the fixed site: OB-1, 2, 3, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 and
+> 23. Treat a row below as closed unless it is named here.
+>
+> **Still open, confirmed by reading the code rather than by trusting this list:**
+> - **OB-4** (`dev_pvr.c`, `DEVICE_ACCESS(pvr_vram)`) — the read arm does
+>   `memcpy(data, d->vram + relative_addr, len)` with no `addr + len <= VRAM_SIZE` check.
+>   Distinct from the render and texture paths already fixed as #65/#68.
+> - **OB-10** (`dev_ether.c`, `DEVICE_ACCESS(ether_buf)`) — no end check in either
+>   direction.
+> - **OB-5** (`dev_asc.c`) — **line numbers in the row below have drifted** under the
+>   #263–#268 and #286 edits, so the current site must be located and re-confirmed before
+>   anything is written. Not assumed open.
+> - **OB-22** — left as recorded: self-healing, correctness-only.
+> - **OB-24** — the residual signed `byte<<24` UB; real C UB that never reaches a host
+>   pointer, size or index. Deliberately not chased (see the "Not changed" note).
+>
+> Two rows were checked by hand during that pass and are worth recording because the first
+> reading of each was wrong: **OB-6** is fixed, and **OB-7** is fixed at the index-WRITE
+> site (`idata & 0xff`), not at the data-write site where the indexing itself looks
+> unguarded. Reading only the second site suggests a defect that is not there.
+
 ## High — guest → host OOB read/write
 
 | ID | Site | Pattern | Trigger / impact |
@@ -1153,3 +1184,8 @@ corruption without a clear host-OOB path.
 
 > Generated read-only; no source was modified. Raw review transcripts:
 > session scratchpad `codex_review.txt` (high) and `codex_review_xhigh.txt` (xhigh).
+>
+> **That last sentence is true only of the ORIGINAL audit pass.** Nineteen of these have
+> been corrected in the source since, and the remediation order above is therefore stale as
+> a work list — see the status block at the head of this section for what is actually left
+> (OB-4, OB-10, and OB-5 pending re-location). Round 84 carries them.

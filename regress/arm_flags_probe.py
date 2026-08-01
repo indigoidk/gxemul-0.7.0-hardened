@@ -266,6 +266,80 @@ def run_und(iw, at=CODE):
     return sw(w[0]), sw(w[1]), sw(w[2])
 
 
+#  ---- round 78: rotations the decoder used to reject, and MVNS's carry ------
+#  Three defects, all measured halting or answering wrongly on the committed
+#  build. Each row asserts a VALUE, not survival: round 79's sweep showed that a
+#  probe which only asks "did the emulator keep running" cannot tell a repaired
+#  instruction from one that merely stopped faulting.
+#
+#  `uxtah ROR 24` is the discriminating row of the first group. A byte extract
+#  gives the same answer under a rotate as under a shift at every encodable
+#  amount, so the uxtab rows cannot distinguish the two; at ROR 24 the halfword
+#  form wraps rm's low byte into bits 15:8, and copying the byte form's shift
+#  would be silently wrong for exactly that one encoding.
+#
+#  The `movs r0,#0 ROR 4` row is the one that never halted: the old guard
+#  exempted an imm8 of zero, so that case shipped with the wrong carry instead
+#  of loudly stopping. It is the reason this group is a wrong-answer fix and not
+#  only a halt fix.
+#
+#  The MVNS rows cover all four bands. The decoder rewrites `mvn #imm` into
+#  `mov #~imm`, and with S set the template then read the carry off the
+#  COMPLEMENT -- inverting the answer everywhere. Two rows would have passed by
+#  coincidence, which is why all four bands are here.
+STR_R0_R4 = 0xe5840000
+MRS_R3_CPSR2 = 0xe10f3000
+STR_R3_R4 = 0xe5843000
+SUBS_PRESET = 0xe0566007
+
+R78 = [
+    #  (name, register presets, instruction, want, carry-in or None, read_flag)
+    ("uxtab ROR 8",   ["r1=0", "r2=0x11223344"], 0xe6e10472, 0x33, None, False),
+    ("uxtab ROR 16",  ["r1=0", "r2=0x11223344"], 0xe6e10872, 0x22, None, False),
+    ("uxtab ROR 24",  ["r1=0", "r2=0x11223344"], 0xe6e10c72, 0x11, None, False),
+    ("uxtah ROR 8",   ["r1=0", "r2=0x11223344"], 0xe6f10472, 0x2233, None, False),
+    ("uxtah ROR 16",  ["r1=0", "r2=0x11223344"], 0xe6f10872, 0x1122, None, False),
+    ("uxtah ROR 24",  ["r1=0", "r2=0x11223344"], 0xe6f10c72, 0x4411, None, False),
+    ("uxtab ROR 0",   ["r1=0", "r2=0x11223344"], 0xe6e10072, 0x44, None, False),
+    ("rotc movs val", [], 0xe3b00104, 1, None, False),
+    ("rotc movs C",   [], 0xe3b00104, 0, 1, True),
+    ("rotc zero C",   [], 0xe3b00200, 0, 1, True),
+    ("rotc ands C",   ["r1=0xffffffff"], 0xe2110104, 0, 1, True),
+    ("rotc orrs val", ["r1=0x10"], 0xe3910104, 0x11, None, False),
+    ("rotc bics val", ["r1=0xff"], 0xe3d10104, 0xfe, None, False),
+    ("rotc tst C",    ["r1=0xffffffff"], 0xe3110104, 0, 1, True),
+    ("rot0 movs C",   [], 0xe3b00004, 1, 1, True),
+    ("mvns rot0 C=0", [], 0xe3f00001, 0, 0, True),
+    ("mvns rot0 C=1", [], 0xe3f00001, 1, 1, True),
+    ("mvns b31=0 C",  [], 0xe3f00fff, 0, 1, True),
+    ("mvns b31=1 C",  [], 0xe3f004ff, 1, 0, True),
+    ("mvns value",    [], 0xe3f00001, 0xfffffffe, None, False),
+    ("mvn S-clear",   [], 0xe3e00001, 0xfffffffe, None, False),
+]
+
+
+def run78(pre, iw, cin, read_flag):
+    """Run one round-78 row; return the observed value, or None."""
+    code = [iw, MRS_R3_CPSR2, STR_R3_R4] if read_flag else [iw, STR_R0_R4]
+    cmds = list(pre)
+    if cin is not None:
+        #  Preset the carry with a plain SUBS, never a debugger cpsr write:
+        #  the debugger sets cpsr but not the separate `flags` field the
+        #  handlers actually read, so a written carry would preset nothing.
+        r6, r7 = (1, 0) if cin else (0, 1)
+        cmds = ["r6=%d" % r6, "r7=%d" % r7] + cmds
+        code = [SUBS_PRESET] + code
+    cmds += ["r4=0x%x" % DEST, "put w 0x%x, 0xdeadbeef" % DEST]
+    for i, w in enumerate(code):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    cmds += ["pc=0x%x" % CODE, "step %d" % len(code)]
+    w, _ = session(cmds, 1)
+    if w is None:
+        return None
+    v = sw(w[0])
+    return ((v >> 29) & 1) if read_flag else v
+
+
 rows = []
 
 
@@ -430,5 +504,10 @@ row("udf cond-failed nop", "DISC",
     "ran=0x%08x handler=0x%08x" % (fall, handler)
     if fall is not None else "dead",
     "ran=0x0000005a handler=0xdeadbeef")
+
+for name, pre, iw, want, cin, rf in R78:
+    got = run78(pre, iw, cin, rf)
+    row(name, "DISC" if name != "uxtab ROR 0" and name != "rot0 movs C"
+        and name != "mvn S-clear" else "PIN", got, want)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
