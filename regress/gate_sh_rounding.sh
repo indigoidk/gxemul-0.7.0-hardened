@@ -115,7 +115,7 @@ check "halt-probe control proves it measures" "${hctrl:-missing}" "OK"
 
 hres=$(grep -o "SH_HALT_RESULT=[0-9]*/[0-9]*" "$HLOG" | tail -1 | cut -d= -f2)
 hgot=${hres%/*}; hwant=${hres#*/}
-check "halt rows run"     "$hwant" 21
+check "halt rows run"     "$hwant" 26
 check "halt rows correct" "$hgot"  "$hwant"
 
 # Named, so one encoding regressing cannot hide behind a total. Two spaces after
@@ -143,6 +143,32 @@ done
 # `movca.l` carries its own trap: r12 is the DECODER's default source for that
 # encoding, so the row seeds r12 with a decoy and fails if the R0 override is
 # ever dropped.
+# ---- #318: the store-queue flush with the MMU on -----------------------------
+# `pref` into the SQ range is a write-back, and with MMUCR.AT set the
+# destination comes from the UTLB, not from QACR. That path used to run
+# ABORT_EXECUTION.
+#
+# The probe installs the UTLB entry and MMUCR through GUEST stores to the
+# architectural MMIO windows, because the debugger's register names for those
+# fields exist but do not reach them -- an earlier version set them by name,
+# never entered the AT branch, and would have passed against an unfixed build.
+#
+# `sq at1 ok` is the composition witness, not just a survival check: the operand
+# has nonzero bits in BOTH [9:5] and [4:0], and the architectural destination is
+# the translated page plus [9:5] with [4:0] zeroed -- an address that is neither
+# the operand nor the page base.
+#
+# `sq at1 clean` pins the WRITE-type judgement the panel split on: a clean page
+# owes an initial-page-write fault, so a build that judged this access as a read
+# would complete the copy and fail this row alone.
+#
+# `sq at0 qacr` is the regression guard: with the MMU off the QACR composition
+# must be exactly as before.
+for v in "sq at1 ok" "sq at1 miss" "sq at1 prot" "sq at1 clean" "sq at0 qacr"; do
+    n=$(count "$HLOG" "^$v  .*ok$")
+    check "  round 81: $v" "$n" 1
+done
+
 for v in "movca.l" "fmovd @r1" "fmovd @r2" "fmovd xd st" "fmovd xd ld" \
          "fmovd r0idx" "fmovs SZ=0" "fsrra PR=1" "fneg odd PR=1" \
          "fabs odd PR=1" "fp in slot" "trapa in slot"; do

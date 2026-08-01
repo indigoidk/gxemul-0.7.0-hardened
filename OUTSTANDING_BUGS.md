@@ -215,13 +215,22 @@
 >   `sh_exception` had no case for EITHER delay-slot event, so `trapa` in a delay slot and an
 >   FP instruction in a delay slot with FD=1 both killed the process. Lazy-FPU kernels run
 >   user code with FD=1, so that one is plausibly reachable by a real guest.
-> - **The store-queue prefetch with the MMU on STILL HALTS** — the fourth of that group, and
->   deliberately not fixed in round 80. Three seats independently refuted the drafted fix:
->   `sh_translate_v2p` short-circuits the whole SQ range before the UTLB path, so the patch
->   would have compiled, never faulted, and replaced a loud halt with a silent no-op copying
->   the queue onto itself. The identity mapping cannot just be removed — it is how ordinary
->   guest stores fill the queues — so this needs a dedicated entry point, which is a design
->   no seat has reviewed. Own round, constraints recorded there.
+> - ~~**The store-queue prefetch with the MMU on STILL HALTS**~~ — **RESOLVED as #318
+>   (round 81)** via a dedicated entry point, `sh_translate_sq_v2p`, since the general one
+>   deliberately maps the range identically and must keep doing so for ordinary queue-filling
+>   stores. The load/store question two rounds could not settle was decided on the manual's
+>   own evidence rather than by count: an SQ page's UTLB entry keeps the `D` bit meaningful
+>   while `C` and `WT` are explicitly meaningless, and `D` is consulted only on a write. The
+>   dissenting reading came from the manual's *plain* `PREF` description — the sentence quoted
+>   in the comment above that very handler — which is true of every other address range.
+>   Measured with a composition witness, not just survival: operand `0xE00000E7` lands at
+>   page + `0xE0`, proving `[9:5]` carried and `[4:0]` zeroed.
+> - **The `SQMD` user-access check is still wrong in three ways** (round 81 deferred it,
+>   deliberately): it raises reserved-instruction where hardware raises a data address error,
+>   it is gated on `AT=1` though the rule is not, and ordinary queue-filling stores skip UTLB
+>   validation altogether. Two seats wanted it folded into #318 and two did not — and they
+>   disagreed on the correct event code, which is the argument for a round that can measure
+>   it. Needs a user-mode witness, which does not exist yet.
 > - ~~**SH `MOVCA.L` is decoded as a nop but architecturally STORES R0 to `@Rn`**~~ —
 >   **RESOLVED as #317**: it decodes to the existing longword store, which has the same
 >   alignment class and exception behaviour.

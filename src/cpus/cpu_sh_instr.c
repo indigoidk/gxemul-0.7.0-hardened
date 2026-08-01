@@ -3572,10 +3572,37 @@ X(pref_rn)
 			}
 		}
 
-		fatal("Store Queue to external memory, when "
-		    "MMU enabled: Not yet implemented... TODO\n");
-		ABORT_EXECUTION;
-		return;
+		/*
+		 *  #318: with the MMU on, the destination comes from the UTLB
+		 *  and QACR takes no part -- it composes the address only when
+		 *  translation is off, so the extaddr built above is discarded
+		 *  here. This used to run ABORT_EXECUTION, stopping the
+		 *  emulator on the ordinary way store queues are used with
+		 *  paging enabled.
+		 *
+		 *  The UNMASKED operand is what gets translated, and that is
+		 *  load-bearing twice over. It gives the fault the guest's
+		 *  actual address for TEA; and translate_via_mmu passes a
+		 *  page's in-page bits through untranslated, so masking its
+		 *  RESULT to the 32-byte block is what produces the
+		 *  architectural composition -- translated bits above, the
+		 *  operand's own [9:5] preserved, [4:0] zero. Translating an
+		 *  already-aligned address instead would silently drop [9:5].
+		 *
+		 *  The block cannot straddle a page: it is 32-byte aligned and
+		 *  the smallest page is 1K, so the masked and unmasked
+		 *  addresses always resolve through the same entry.
+		 *
+		 *  With the write flag set this returns either 0, having
+		 *  raised the fault itself, or 2 -- there is no read-only
+		 *  success to mishandle.
+		 */
+		uint64_t paddr;
+
+		if (!sh_translate_sq_v2p(cpu, addr, &paddr, FLAG_WRITEFLAG))
+			return;
+
+		extaddr = (uint32_t) paddr & ~0x1fU;
 	}
 
 	for (ofs = 0; ofs < 32; ofs += sizeof(uint32_t)) {

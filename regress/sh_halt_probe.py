@@ -224,7 +224,7 @@ R80 = [
 ]
 
 
-def run_seq(cmds, nwords):
+def run_seq(cmds, nwords, dumpat=DEST):
     """Return (outcome, values). Outcome distinguishes a host EXIT from an
     emulator halt from a live run -- three of round 80's defects killed the
     gxemul process outright rather than setting cpu->running = 0, and a probe
@@ -286,7 +286,7 @@ def run_seq(cmds, nwords):
     if ok and not died:
         for _ in range(3):
             mark = len(buf)
-            send("dump 0x%x 0x%x" % (DEST, DEST + 4 * nwords))
+            send("dump 0x%x 0x%x" % (dumpat, dumpat + 4 * nwords))
             w = re.findall(r"0x0*[0-9a-f]+\s+((?:[0-9a-f]{8}\s+){1,4})",
                            buf[mark:])
             flat = "".join(w).split()
@@ -309,6 +309,80 @@ def run_seq(cmds, nwords):
         return "HALTED", None
     return "alive", vals
 
+
+#  ---- round 81: the store-queue flush with the MMU on -------------------------
+#  #318. `pref` into 0xE0000000..0xE3FFFFFF is a store-queue write-back, and with
+#  MMUCR.AT set the destination comes from the UTLB rather than from QACR. That
+#  path used to run ABORT_EXECUTION.
+#
+#  MMUCR and the UTLB arrays are written by GUEST stores, not by debugger register
+#  writes: the debugger names exist but do not reach the fields, so an earlier
+#  version of this probe set them, never entered the AT branch at all, and would
+#  have passed against a build with no fix in it. The prologue below installs the
+#  entry through the architectural MMIO windows (UTLB address array 0xF6000000,
+#  data array 0xF7000000) and sets MMUCR at 0xFF000010, exactly as a guest kernel
+#  would.
+#
+#  The operand carries nonzero bits in BOTH [9:5] and [4:0] on purpose. The
+#  architectural destination is the translated page plus the operand's own [9:5]
+#  with [4:0] zeroed, so 0xE00000E7 must land at page|0xE0 -- an address that is
+#  neither the raw operand nor the page base. That is what proves the composition
+#  rather than merely proving the emulator survived.
+#
+#  The clean-page row is the one that pins the WRITE-type judgement: under a
+#  read-type reading the copy would simply complete, so a build that got that
+#  question wrong fails this row and only this row.
+SQ_AA = 0xf6000000
+SQ_DA1 = 0xf7000000
+MMUCR = 0xff000010
+DESTPHYS = 0x0c020000
+DESTVIRT = 0x8c020000
+SQ_AA_VAL = (0xe0000000 & 0xfffffc00) | 0x100 | 0x200      # VPN | V | D
+
+
+def sq_da1(pr=3, d=1):
+    return (DESTPHYS & 0x1ffffc00) | (pr << 5) | 0x100 | (0x004 if d else 0)
+
+
+def sq_seq(da1val, install=True, operand=0xe00000e7):
+    """Fill queue 1, install the UTLB entry + MMUCR from the guest, then pref."""
+    c = ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
+         for i in range(8)]
+    c += ["r1=0x%x" % SQ_AA, "r2=0x%08x" % SQ_AA_VAL,
+          "r3=0x%x" % SQ_DA1, "r4=0x%08x" % da1val,
+          "r5=0x%x" % MMUCR, "r6=0x00000001",
+          "r7=0x%08x" % operand,
+          "put w 0x%x, 0xdeadbeef" % (DESTVIRT + 0xE0)]
+    if install:
+        c += ["put h 0x%x, 0x2122" % CODE,        # mov.l r2,@r1  (UTLB AA)
+              "put h 0x%x, 0x2342" % (CODE + 2),  # mov.l r4,@r3  (UTLB DA1)
+              "put h 0x%x, 0x2562" % (CODE + 4),  # mov.l r6,@r5  (MMUCR.AT=1)
+              "put h 0x%x, 0x0783" % (CODE + 6),  # pref @r7
+              "pc=0x%x" % CODE, "step 4"]
+    else:
+        c += ["put h 0x%x, 0x2562" % CODE,
+              "put h 0x%x, 0x0783" % (CODE + 2),
+              "pc=0x%x" % CODE, "step 2"]
+    return c
+
+
+SENTINEL = [0xdeadbeef]
+FLUSHED = [0xa0000000, 0xa0000001]
+
+R81 = [
+    ("sq at1 ok",   sq_seq(sq_da1()),          DESTVIRT + 0xE0, FLUSHED),
+    ("sq at1 miss", sq_seq(sq_da1(), False),   DESTVIRT + 0xE0, SENTINEL),
+    ("sq at1 prot", sq_seq(sq_da1(pr=0)),      DESTVIRT + 0xE0, SENTINEL),
+    ("sq at1 clean", sq_seq(sq_da1(d=0)),      DESTVIRT + 0xE0, SENTINEL),
+    #  AT=0 keeps the QACR composition: destination is addr & 0x03ffffe0, i.e.
+    #  physical 0xE0, reachable through P1. This row is the regression guard.
+    ("sq at0 qacr",
+     ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
+      for i in range(8)]
+     + ["r7=0xe00000e7", "put w 0x%x, 0xdeadbeef" % 0x800000e0,
+        "put h 0x%x, 0x0783" % CODE, "pc=0x%x" % CODE, "step 1"],
+     0x800000e0, FLUSHED),
+]
 
 rows = []
 control = run(0x0009)
@@ -337,5 +411,15 @@ for name, cmds, want in R80:
     rows.append(ok)
     print("%-14s %-14s %-8s %-16s %s"
           % (name, got, wnt, "round 80", "ok" if ok else "FAIL"))
+
+for name, cmds, dumpat, want in R81:
+    st, vals = run_seq(cmds, len(want), dumpat)
+    ok = (st == "alive" and vals is not None and vals[:len(want)] == want)
+    got = st if st != "alive" else (
+        ",".join("0x%08x" % v for v in (vals or [])[:len(want)]) or "nodump")
+    rows.append(ok)
+    print("%-14s %-24s %-24s %-10s %s"
+          % (name, got, ",".join("0x%08x" % w for w in want),
+             "round 81", "ok" if ok else "FAIL"))
 
 print("SH_HALT_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

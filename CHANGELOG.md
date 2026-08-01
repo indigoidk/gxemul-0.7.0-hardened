@@ -3777,6 +3777,84 @@ constraint is recorded with it: exception class is the data-TLB **write** family
 whichever of the raw or masked address is passed to translation, the other must be
 used for the flush.
 
+## Eighty-first round (#318) — the store-queue flush the previous round refused to guess at
+
+Round 80 scoped this and then deliberately did not ship it, because three seats
+refuted the mechanism. This round is the redesign.
+
+`pref` into `0xE0000000`–`0xE3FFFFFF` is a store-queue write-back. With `MMUCR.AT`
+set it ran `ABORT_EXECUTION` — the emulator stopping on the ordinary way store
+queues are used once paging is on.
+
+### Why the obvious fix was wrong, and what replaced it
+
+The natural patch calls `cpu->translate_v2p`. That cannot work: `sh_translate_v2p`
+short-circuits the entire store-queue range before the MMU path is reachable,
+returning the virtual address unchanged and raising nothing. The patch would have
+compiled, never faulted, and replaced a loud halt with a silent no-op copying the
+queue onto itself.
+
+The identity mapping cannot simply be removed or made conditional either — it is
+how ordinary guest stores reach the modelled queue SRAM. So the flush gets its own
+entry point, `sh_translate_sq_v2p`, a thin exported wrapper on the static MMU
+walker. A flag threaded through the general function was the alternative and was
+rejected: that function has exactly one caller, the dyntrans hook, whose signature
+is fixed, and a new flag would have to live in the all-architectures namespace to
+serve one SuperH quirk.
+
+### Read or write — the question the previous round could not settle
+
+The two round-80 seats split on whether the write-back's TLB fault is judged as a
+load or a store, and the answer decides three exception codes. This round put it to
+four seats and the split reappeared, so it was settled on evidence rather than
+count: the store-queue chapter gives an SQ page's UTLB entry the same
+`ASID/V/SZ/SH/PR/D` meanings as any other page while saying `C` and `WT` mean
+nothing there — and the dirty bit is consulted only on a write. If the transfer
+were judged a read, `D` would be exactly as meaningless as the two the manual
+explicitly discards.
+
+The dissenting seat's reasoning was also identified rather than merely outvoted: it
+generalised from the manual's *plain* `PREF` description, where the instruction is
+a droppable read that raises almost nothing. That sentence is quoted in the comment
+directly above this very handler — which is presumably how it got there — and it is
+true of every address range except this one.
+
+It is a **write**, and the gate pins it: a clean page owes an initial-page-write
+fault, so a build that judged the access as a read would complete the copy and fail
+that row alone.
+
+### Measured
+
+The witness installs the UTLB entry and MMUCR through **guest stores** to the
+architectural MMIO windows. An earlier version set them by debugger register name;
+those names exist but do not reach the fields, so the AT branch was never entered
+and the probe would have passed against a build containing no fix at all. It was
+caught by instrumenting the branch and finding the marker absent.
+
+The operand carries nonzero bits in both `[9:5]` and `[4:0]`, because the
+architectural destination is the translated page plus `[9:5]` with `[4:0]` zeroed —
+an address that is neither the operand nor the page base. Measured: operand
+`0xE00000E7` lands at page + `0xE0`, which is the composition and not merely
+survival. That works because the MMU walker already passes a page's in-page bits
+through untranslated, so translating the *unmasked* operand and masking the
+*result* produces the manual's rule; the comment says so, because translating an
+already-aligned address instead would silently drop `[9:5]`.
+
+Full ladder, five rows: valid+dirty+writable copies; no entry, read-only, and clean
+each fault without copying; and with the MMU off the QACR composition is unchanged.
+
+### Recorded, not fixed
+
+The `SQMD` user-access check raises reserved-instruction where the hardware raises
+a data address error, and it is consulted only when `AT=1` though the rule is not
+conditioned on `AT`. Two seats wanted it in this round; two disagreed, and they also
+disagreed on the correct event code — which is itself the argument for leaving it.
+It needs a user-mode witness that does not exist yet, and under this project's
+test-first rule that makes it a round of its own rather than a guess bundled into
+this one. Also still open: ordinary queue-filling stores skip UTLB validation
+entirely when `AT=1`, the identity mapping ignores address bits `[25:6]`, and
+multiple-matching-entry detection remains unimplemented.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

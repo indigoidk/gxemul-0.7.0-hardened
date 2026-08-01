@@ -244,6 +244,8 @@ void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr);
 /*  memory_sh.c:  */
 int sh_translate_v2p(struct cpu *cpu, uint64_t vaddr,
 	uint64_t *return_addr, int flags);
+int sh_translate_sq_v2p(struct cpu *cpu, uint64_t vaddr,
+	uint64_t *return_addr, int flags);		/*  #318  */
 
 
 #endif	/*  CPU_SH_H  */

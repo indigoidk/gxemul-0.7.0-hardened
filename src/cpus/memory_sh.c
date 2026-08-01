@@ -236,6 +236,36 @@ exception:
 
 
 /*
+ *  sh_translate_sq_v2p():
+ *
+ *  #318: translate a store-queue address for the WRITE-BACK, which is the one
+ *  store-queue access that goes through the UTLB.
+ *
+ *  sh_translate_v2p() maps the 0xe0000000..0xe3ffffff range identically and
+ *  deliberately: that is how ordinary guest stores reach the modelled queue
+ *  SRAM, so the range must never be routed through the MMU there. The flush
+ *  triggered by `pref` is the exception to that, and it needs its own way in
+ *  rather than a flag on the general entry point -- which has one caller, the
+ *  dyntrans hook, whose signature is fixed.
+ *
+ *  Judged as a WRITE. The store-queue chapter gives the UTLB entry covering an
+ *  SQ page the same ASID/V/SZ/SH/PR/D meanings as any other page while saying C
+ *  and WT mean nothing there, and the dirty bit is only consulted on a write --
+ *  so a clean page owes an initial-page-write exception, which is what lets the
+ *  guest kernel track the page at all. (A panel seat read this as a load, from
+ *  the sentence describing PREF's ordinary prefetch role -- quoted in the
+ *  comment above pref_rn -- which is true of every OTHER address range.)
+ *
+ *  Same return values as sh_translate_v2p().
+ */
+int sh_translate_sq_v2p(struct cpu *cpu, uint64_t vaddr, uint64_t *return_paddr,
+	int flags)
+{
+	return translate_via_mmu(cpu, (uint32_t) vaddr, return_paddr, flags);
+}
+
+
+/*
  *  sh_translate_v2p():
  *
  *  Return values:
