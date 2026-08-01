@@ -719,20 +719,27 @@ X(fmov_rm_frn)
 	/*  SZ=1 (register pair) is a 64-bit access needing 8-byte alignment.  */
 	SH_ALIGN_CHECK_LD(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
 
+	/*
+	 *  #315: the destination base for a register-pair transfer. An ODD
+	 *  register field selects the XD bank (XF[field & ~1]), which is what
+	 *  the postinc/predec siblings have always done. This used to be
+	 *  `fatal("ODD ...")` + exit(1) -- a legal instruction killing the host
+	 *  process -- with the correct redirect sitting unreachable on the very
+	 *  next line. The base is used for BOTH words below; assigning it and
+	 *  then still writing through ic->arg[1] would have left the redirect
+	 *  dead, which a panel seat caught in the first draft of this fix.
+	 */
+	size_t r1 = ic->arg[1];
+
 	uint32_t data2 = 0;
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
 		// Register pair. Read second word first, then fallback
 		// to read the first word.
 
-		// Check if it is to an odd register first.
-		size_t r1 = ic->arg[1];
 		int ofs = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
-		if (ofs & 1) {
-			fatal("ODD fmov_rm_frn: TODO");
-			exit(1);
+		if (ofs & 1)
 			r1 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
-		}
-		
+
 		SYNCH_PC;
 		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned char *)&data,
 		    sizeof(data), MEM_READ, CACHE_DATA)) {
@@ -765,7 +772,7 @@ X(fmov_rm_frn)
 	else
 		data = BE32_TO_HOST(data);
 
-	reg(ic->arg[1]) = data;
+	reg(r1) = data;			/*  #315: the redirected base  */
 
 	// TODO: How about little endian: read words in opposite order?
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
@@ -773,21 +780,70 @@ X(fmov_rm_frn)
 			data2 = LE32_TO_HOST(data2);
 		else
 			data2 = BE32_TO_HOST(data2);
-		reg(ic->arg[1] + 4) = data2;
+		reg(r1 + 4) = data2;	/*  #315  */
 	}
 }
 X(fmov_r0_rm_frn)
 {
 	uint32_t data, addr = reg(ic->arg[0]) + cpu->cd.sh.r[0];
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
+	/*
+	 *  #315: SZ=1 (register pair) used to run ABORT_EXECUTION here, which
+	 *  sets cpu->running = 0 -- a legal FMOV stopping the emulator. It is
+	 *  now the same transfer the postinc sibling has always performed: an
+	 *  odd register field selects the XD bank, and the second word lives at
+	 *  addr + 4. The alignment class widens with it: a register pair is a
+	 *  64-bit access and needs 8-byte alignment, which the hard-coded mask
+	 *  of 3 did not ask for.
+	 */
+	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+	size_t r1 = ic->arg[1];
+
+	if (d) {
+		int ofs = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+		if (ofs & 1)
+			r1 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
+	}
 
 	FLOATING_POINT_AVAILABLE_CHECK;
 
-	SH_ALIGN_CHECK_LD(addr, 3);
+	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
 
-	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
-		fatal("fmov_r0_rm_frn: sz=1 (register pair): TODO\n");
-		ABORT_EXECUTION;
+	if (d) {
+		uint32_t data2;
+
+		if (p != NULL) {
+			data = p[(addr & 0xfff) >> 2];
+		} else {
+			SYNCH_PC;
+			if (!cpu->memory_rw(cpu, cpu->mem, addr,
+			    (unsigned char *)&data, sizeof(data),
+			    MEM_READ, CACHE_DATA)) {
+				if (!cpu->running)
+					cpu->cd.sh.next_ic = &nothing_call;
+				return;
+			}
+		}
+
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4,
+		    (unsigned char *)&data2, sizeof(data2),
+		    MEM_READ, CACHE_DATA)) {
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+			data = LE32_TO_HOST(data);
+			data2 = LE32_TO_HOST(data2);
+		} else {
+			data = BE32_TO_HOST(data);
+			data2 = BE32_TO_HOST(data2);
+		}
+
+		reg(r1) = data;
+		reg(r1 + 4) = data2;
 		return;
 	}
 
@@ -1331,20 +1387,38 @@ X(fmov_frm_rn)
 	/*  SZ=1 (register pair) is a 64-bit access needing 8-byte alignment.  */
 	SH_ALIGN_CHECK_ST(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
 
+	/*
+	 *  #315: the SOURCE base for a register-pair store. Two defects lived
+	 *  in the old three lines. The parity was taken from ic->arg[1], which
+	 *  in a STORE handler is the ADDRESS register, not the floating-point
+	 *  one -- so the parity of a difference between unrelated pointers
+	 *  decided whether the guest got its data or the host called exit(1),
+	 *  and `fmov drM,@rN` was measured killing the process for half of all
+	 *  rN. And the odd case that survived went to `fatal(); exit(1);` with
+	 *  the correct XD redirect unreachable on the next line. Now the parity
+	 *  comes from arg[0], the redirect stands, and the base is used for
+	 *  both words; for an even field it equals arg[0], so even-DR stores
+	 *  are bit-identical to before.
+	 */
+	size_t r0 = ic->arg[0];
+
 	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
 		// Register pair. Store second word first, then fallback
 		// to store the first word.
 
-		// Check if it is to an odd register first.
-		size_t r0 = ic->arg[1];
 		int ofs = (r0 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
-		if (ofs & 1) {
-			fatal("ODD fmov_frm_rn: TODO");
-			exit(1);
+		if (ofs & 1)
 			r0 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
-		}
 
-		uint32_t data2 = reg(ic->arg[0] + 4);
+		uint32_t data2 = reg(r0 + 4);
+
+		/*  #315: byte-swap the second word too. The first word is
+		    swapped below and this one was not, so half of every
+		    register-pair store went out in host order.  */
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+			data2 = LE32_TO_HOST(data2);
+		else
+			data2 = BE32_TO_HOST(data2);
 
 		SYNCH_PC;
 		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned char *)&data2,
@@ -1354,9 +1428,11 @@ X(fmov_frm_rn)
 				cpu->cd.sh.next_ic = &nothing_call;
 			return;
 		}
-		
+
 		// fall-through to write the first word in the pair:
 	}
+
+	data = reg(r0);			/*  #315: the redirected base  */
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
 		data = LE32_TO_HOST(data);
@@ -1380,16 +1456,44 @@ X(fmov_frm_r0_rn)
 {
 	uint32_t addr = reg(ic->arg[1]) + cpu->cd.sh.r[0];
 	uint32_t *p = (uint32_t *) cpu->cd.sh.host_store[addr >> 12];
-	uint32_t data = reg(ic->arg[0]);
+	uint32_t data;
+	/*
+	 *  #315: SZ=1 used to run ABORT_EXECUTION, stopping the emulator on a
+	 *  legal FMOV. Same shape as the predec sibling: odd register field
+	 *  selects the XD bank, second word at addr + 4, and the alignment
+	 *  class widens to 8 bytes for the pair.
+	 */
+	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+	size_t r0 = ic->arg[0];
+
+	if (d) {
+		int ofs = (r0 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+		if (ofs & 1)
+			r0 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
+	}
+
+	data = reg(r0);
 
 	FLOATING_POINT_AVAILABLE_CHECK;
 
-	SH_ALIGN_CHECK_ST(addr, 3);
+	SH_ALIGN_CHECK_ST(addr, d ? 7 : 3);
 
-	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
-		fatal("fmov_frm_r0_rn: sz=1 (register pair): TODO\n");
-		ABORT_EXECUTION;
-		return;
+	if (d) {
+		uint32_t data2 = reg(r0 + 4);
+
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+			data2 = LE32_TO_HOST(data2);
+		else
+			data2 = BE32_TO_HOST(data2);
+
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4,
+		    (unsigned char *)&data2, sizeof(data2),
+		    MEM_WRITE, CACHE_DATA)) {
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
 	}
 
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
@@ -3040,8 +3144,19 @@ X(fneg_frn)
 	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
 		int ofs0 = (ic->arg[0] - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
 		if (ofs0 & 1) {
-			fatal("TODO: fneg_frn odd register in double prec. mode.\n");
-			exit(1);
+			/*
+			 *  #316: an odd register field with PR=1 is a reserved
+			 *  combination, not a reason to exit() the host. This
+			 *  was measured killing the gxemul process outright,
+			 *  which is the same defect class as the ABORTs this
+			 *  round removes, reached by a different macro.
+			 */
+			SYNCH_PC;
+			if (cpu->delay_slot)
+				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+			else
+				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+			return;
 		}
 	}
 
@@ -3057,8 +3172,16 @@ X(fabs_frn)
 	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
 		int ofs0 = (ic->arg[0] - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
 		if (ofs0 & 1) {
-			fatal("TODO: fneg_frn odd register in double prec. mode.\n");
-			exit(1);
+			/*  #316: as fneg_frn above -- a reserved combination
+			    takes the exception instead of exit()ing the host.
+			    (The message this used to print even named the
+			    wrong instruction.)  */
+			SYNCH_PC;
+			if (cpu->delay_slot)
+				sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+			else
+				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+			return;
 		}
 	}
 
@@ -3100,9 +3223,21 @@ X(fsrra_frn)
 	FLOATING_POINT_AVAILABLE_CHECK;
 
 	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
-		/*  Double-precision:  */
-		fatal("Double-precision fsrra? TODO\n");
-		ABORT_EXECUTION;
+		/*
+		 *  #316: FSRRA is defined for single precision only, so PR=1
+		 *  is a reserved mode combination. It used to run
+		 *  ABORT_EXECUTION, stopping the emulator; it now takes the
+		 *  illegal-instruction exception, or its delay-slot variant if
+		 *  that is where the guest put it -- the same order the
+		 *  FPU-availability macro above uses, and the same shape
+		 *  `trapa` uses. FPU-disabled still wins over both, because
+		 *  FLOATING_POINT_AVAILABLE_CHECK has already returned by here.
+		 */
+		SYNCH_PC;
+		if (cpu->delay_slot)
+			sh_exception(cpu, EXPEVT_SLOT_INST, 0, 0);
+		else
+			sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
 		return;
 	} else {
 		/*  Single-precision:  */
@@ -3925,9 +4060,24 @@ X(to_be_translated)
 				ic->f = instr(nop);
 				break;
 			case 0xc3:	/*  MOVCA.L R0,@Rn  */
-				/*  Treat as nop for now:  */
-				/*  TODO: Implement this.  */
-				ic->f = instr(nop);
+				/*
+				 *  #317: this STORES R0 to @Rn. The cache
+				 *  allocation is the hint; the store is the
+				 *  instruction, and treating the whole thing as
+				 *  a nop dropped it. Linux/sh clear_page and the
+				 *  BSD sh4 page-zeroing paths use MOVCA.L, so a
+				 *  dropped store is a wrong answer, not a
+				 *  missing optimisation. No new handler is
+				 *  needed: the plain longword store has the same
+				 *  alignment class and the same TLB/protection
+				 *  exception behaviour, and leaving the rest of
+				 *  the cache block untouched is a permitted
+				 *  realisation of contents the ISA leaves
+				 *  undefined.
+				 */
+				ic->f = instr(mov_l_store_rm_rn);
+				ic->arg[0] = (size_t)&cpu->cd.sh.r[0];
+				ic->arg[1] = (size_t)&cpu->cd.sh.r[r8];
 				break;
 			case 0xfa:	/*  STC DBR,Rn  */
 				ic->f = instr(copy_privileged_register);

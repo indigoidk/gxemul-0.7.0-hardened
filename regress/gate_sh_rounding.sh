@@ -115,7 +115,7 @@ check "halt-probe control proves it measures" "${hctrl:-missing}" "OK"
 
 hres=$(grep -o "SH_HALT_RESULT=[0-9]*/[0-9]*" "$HLOG" | tail -1 | cut -d= -f2)
 hgot=${hres%/*}; hwant=${hres#*/}
-check "halt rows run"     "$hwant" 9
+check "halt rows run"     "$hwant" 21
 check "halt rows correct" "$hgot"  "$hwant"
 
 # Named, so one encoding regressing cannot hide behind a total. Two spaces after
@@ -125,6 +125,29 @@ check "halt rows correct" "$hgot"  "$hwant"
 for v in "MAC.L" "MAC.W" "TST.B" "STC SGR" "STC.L DBR" "MOVLI.L" "SYNCO" "PREFI"; do
     n=$(count "$HLOG" "^$v  .*ok$")
     check "  survives: $v" "$n" 1
+done
+
+# ---- #315/#316/#317: execute-time halts, and one dropped store ---------------
+# These need a state prologue (FPSCR.SZ/PR, SR.FD, a branch), so the bare
+# encoding sweep above is structurally blind to them -- which is why they
+# outlived #314. Three of them killed the gxemul PROCESS rather than setting
+# cpu->running = 0, so the probe distinguishes a host exit from an emulator
+# halt from a live run; a check that only looked for the halt message would
+# have scored those as passes.
+#
+# The two XD rows are load-bearing. The register-pair handlers redirect an ODD
+# register field to the XF bank, and an earlier draft computed that redirect
+# then still transferred through the original pointer -- which every DR test
+# passes. Only a row that seeds fr and xf differently can tell them apart.
+#
+# `movca.l` carries its own trap: r12 is the DECODER's default source for that
+# encoding, so the row seeds r12 with a decoy and fails if the R0 override is
+# ever dropped.
+for v in "movca.l" "fmovd @r1" "fmovd @r2" "fmovd xd st" "fmovd xd ld" \
+         "fmovd r0idx" "fmovs SZ=0" "fsrra PR=1" "fneg odd PR=1" \
+         "fabs odd PR=1" "fp in slot" "trapa in slot"; do
+    n=$(count "$HLOG" "^$v  .*ok$")
+    check "  round 80: $v" "$n" 1
 done
 
 gate_end

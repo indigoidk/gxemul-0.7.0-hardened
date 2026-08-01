@@ -205,14 +205,31 @@
 >   `MOVCO.L`, the `SGR` and `DBR` load/store forms, and `FPCHG`. `MOVLI.L`/`MOVCO.L` are
 >   the guest's atomics and must be implemented rather than nopped if anything ever needs
 >   them.
-> - **Four legal SH-4 sequences reach `ABORT_EXECUTION`**, which sets `cpu->running = 0` by
->   a route a decode sweep structurally cannot see (found by a seat auditing #314): `FMOV`
->   with `FPSCR.SZ=1` on two paths, `FSRRA` with `PR=1`, and — inside `pref_rn` itself — a
->   store-queue prefetch while the MMU is enabled, which is the ordinary way that hardware
->   is used. Own round.
-> - **SH `MOVCA.L` is decoded as a nop but architecturally STORES R0 to `@Rn`** — the cache
->   allocation is the hint, the store is not. Dropping it is a wrong-answer bug, not a halt;
->   Linux/sh `clear_page` and the BSD sh4 page-zeroing paths use it.
+> - ~~**Four legal SH-4 sequences reach `ABORT_EXECUTION`**~~ — **three RESOLVED as #315/#316
+>   (round 80)**, and they were worse than filed: two of them did not stop the emulator at
+>   all, they called `exit()` and killed the gxemul process. `fmov drM,@rN` with SZ=1 exited
+>   the host for HALF of all rN, because the odd-register check read its parity from the
+>   address register instead of the floating-point one. `fneg`/`fabs` with an odd field under
+>   PR=1 exited too. Also fixed in passing: the register-pair alignment class (8 bytes, asked
+>   for 4), a second word that was never byte-swapped, and — a prerequisite the panel found —
+>   `sh_exception` had no case for EITHER delay-slot event, so `trapa` in a delay slot and an
+>   FP instruction in a delay slot with FD=1 both killed the process. Lazy-FPU kernels run
+>   user code with FD=1, so that one is plausibly reachable by a real guest.
+> - **The store-queue prefetch with the MMU on STILL HALTS** — the fourth of that group, and
+>   deliberately not fixed in round 80. Three seats independently refuted the drafted fix:
+>   `sh_translate_v2p` short-circuits the whole SQ range before the UTLB path, so the patch
+>   would have compiled, never faulted, and replaced a loud halt with a silent no-op copying
+>   the queue onto itself. The identity mapping cannot just be removed — it is how ordinary
+>   guest stores fill the queues — so this needs a dedicated entry point, which is a design
+>   no seat has reviewed. Own round, constraints recorded there.
+> - ~~**SH `MOVCA.L` is decoded as a nop but architecturally STORES R0 to `@Rn`**~~ —
+>   **RESOLVED as #317**: it decodes to the existing longword store, which has the same
+>   alignment class and exception behaviour.
+> - **Adjacent store-queue model gaps** (same function, same audit, not fixed): the SQMD
+>   user-access check raises reserved-instruction where hardware raises an address error and
+>   is only consulted when AT=1; the identity mapping ignores address bits [25:6], so a guest
+>   filling a queue through a non-zero offset stores where the flush will not read it; and
+>   UTLB multiple-hit detection is unimplemented.
 >
 > **Known and deliberately not forced — each with the reason it stays**
 > - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause

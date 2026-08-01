@@ -3691,6 +3691,92 @@ sweep cannot see: `FMOV` with `FPSCR.SZ=1` on two paths, `FSRRA` with `PR=1`, an
 inside `pref_rn` itself — a store-queue prefetch while the MMU is enabled, which is
 the ordinary way that hardware is used.
 
+## Eightieth round (#315, #316, #317) — the SuperH halts a decode sweep cannot see
+
+#314 converted this file's decode-time halts. These are the execute-time ones: they
+need a state prologue — FPSCR.SZ or PR, SR.FD, a branch — so a sweep over bare
+encodings is structurally blind to them, which is exactly how they outlived the
+previous round. Three of them do not set `cpu->running = 0` at all; they call
+`exit()` and kill the gxemul process outright.
+
+Every row below was reproduced on the committed build before anything was edited.
+
+### #315 — the FMOV register-pair family, and a store that killed the process
+
+With FPSCR.SZ=1 an FMOV moves a register *pair*. Four of the six handlers were
+wrong, in three different ways.
+
+The two R0-indexed forms ran `ABORT_EXECUTION` outright — a legal FMOV stopping
+the emulator. They now perform the transfer the postinc/predec siblings have always
+performed.
+
+`fmov drM,@rN` was worse than a halt: it **exited the host process** for half of all
+rN. The odd-register check computed its parity from `ic->arg[1]`, which in a *store*
+handler is the address register, not the floating-point one — so the parity of a
+difference between two unrelated pointers decided whether the guest got its data or
+gxemul died. Measured: `@r1` killed the process, `@r2` worked, same instruction.
+
+And where the odd case did get detected, both handlers ran `fatal(); exit(1);` with
+the correct redirect sitting unreachable on the very next line — an odd register
+field selects the XD bank, which the siblings have always handled.
+
+The trap in fixing that is worth recording, because a panel seat caught it in the
+first draft and the measurement would not have: those dead redirect lines assign a
+*local* that neither handler ever reads. Un-deadening the line and deleting the
+`exit(1)` produces code that compiles, runs, passes every DR test, and silently
+transfers the wrong bank. The base pointer has to be used for both words. Gate 10
+now carries two XD rows that seed `fr0/fr1` and `xf0/xf1` differently, which are
+the only rows in the table that can tell the two apart.
+
+Two smaller defects fell out of the same reading: the register-pair alignment class
+is 8 bytes and the R0-indexed forms asked for 4; and the plain store byte-swapped
+its first word but not its second, so half of every pair went out in host order.
+
+### #316 — reserved FPU mode combinations killed the host
+
+`fsrra` with PR=1 ran `ABORT_EXECUTION`; `fneg` and `fabs` with an odd register field
+under PR=1 called `exit(1)` (with a message naming the wrong instruction). All three
+are reserved combinations, and all three now take the illegal-instruction exception —
+or its delay-slot variant, since that distinction is architectural.
+
+That last part had a prerequisite the panel found: `sh_exception` had **no case** for
+either delay-slot event. `EXPEVT_SLOT_INST` is raised by `trapa` in a delay slot and
+`EXPEVT_FPU_SLOT_DISABLE` by the FPU-availability macro every FP handler starts with —
+both already in the tree, both falling to a `default` that called `exit()`. Measured:
+a branch with `trapa` in its delay slot, and an FP instruction in a delay slot with
+FD=1, each killed the process. Lazy-FPU kernels run user code with FD=1 and compilers
+do schedule FP work into delay slots, so that one is plausibly reachable by a real
+guest. Both now take their general vector.
+
+### #317 — MOVCA.L dropped its store
+
+`MOVCA.L R0,@Rn` was decoded as a nop. The cache allocation is the hint; the store is
+the instruction. It now decodes to the existing longword-store handler, which has the
+same alignment class and the same exception behaviour, so no new handler was needed.
+Leaving the rest of the cache block untouched is a permitted realisation of contents
+the ISA leaves undefined. Linux/sh `clear_page` and the BSD sh4 page-zeroing paths
+use this instruction, so the dropped store was a wrong answer rather than a missing
+optimisation. The gate row seeds a decoy: r12 is the decoder's *default* source for
+this encoding, so forgetting the R0 override would silently store the wrong register.
+
+### Rejected by the panel, and therefore not shipped
+
+The round was scoped to include the store-queue prefetch — `pref` into the SQ region
+with the MMU enabled, which is the ordinary way that hardware is used and which halts
+the emulator today. The proposed fix was to translate the SQ address through the UTLB.
+**Three seats independently refuted the mechanism**: `sh_translate_v2p` short-circuits
+the whole `0xe0000000`–`0xe3ffffff` range before the MMU path is ever reached, returning
+the virtual address unchanged. The patch would have compiled, never faulted, and
+replaced a loud halt with a silent no-op that copies the store queue onto itself —
+worse than the defect, because it is undiagnosable.
+
+The correct route needs a dedicated entry point, since the identity mapping is
+load-bearing for ordinary guest stores into the queues and cannot simply be removed.
+That is a design no seat has reviewed, so it is deferred rather than improvised. The
+constraint is recorded with it: exception class is the data-TLB **write** family, and
+whichever of the raw or masked address is passed to translation, the other must be
+used for the flush.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

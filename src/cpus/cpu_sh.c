@@ -740,6 +740,21 @@ void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
 	case EXPEVT_FPU_DISABLE:
 		break;
 
+	case EXPEVT_SLOT_INST:
+	case EXPEVT_FPU_SLOT_DISABLE:
+		/*
+		 *  #315: the two DELAY-SLOT variants. Both are raised by code
+		 *  already in this tree -- `trapa` in a delay slot, and the
+		 *  FPU-availability macro when the FPU is disabled and
+		 *  cpu->delay_slot is set -- but neither had a case here, so
+		 *  each fell to the default below and called exit(). A guest
+		 *  putting a trapa or an FP instruction in a branch delay slot
+		 *  killed the host process outright; both were measured doing
+		 *  exactly that. They take the same general vector as their
+		 *  non-slot counterparts, which is already set up above.
+		 */
+		break;
+
 	case EXPEVT_ADDR_ERR_LD:
 	case EXPEVT_ADDR_ERR_ST:
 		/*  CPU address error (misaligned access). Sets TEA to
