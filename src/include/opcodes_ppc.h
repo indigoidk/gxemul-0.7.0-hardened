@@ -239,7 +239,13 @@
 #define	PPC_HI6_63		0x3f
 #define	  PPC_63_FCMPU		  0
 #define	  PPC_63_FRSP		  12
+#define	  PPC_63_FCTIW		  14	/*  #326  */
 #define	  PPC_63_FCTIWZ		  15
+#define	  PPC_63_FSEL		  23	/*  #326  */
+#define	  PPC_63_MTFSB1		  38	/*  #326  */
+#define	  PPC_63_MCRFS		  64	/*  #326  */
+#define	  PPC_63_MTFSB0		  70	/*  #326  */
+#define	  PPC_63_MTFSFI		  134	/*  #326  */
 #define	  PPC_63_FDIV		  18
 #define	  PPC_63_FSUB		  20
 #define	  PPC_63_FADD		  21

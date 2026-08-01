@@ -121,7 +121,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 86
+check "rows run"     "$want" 94
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -135,8 +135,8 @@ pins=$(grep -c " PIN " "$LOG")
 # warns about twice. The two numbers must also sum to the asserted `rows run` above
 # (50 + 36 = 86); if they stop summing, a row lost its class rather than the table
 # losing a row.
-check_min "discriminating rows present" "$disc" 50
-check_min "pinned rows present"         "$pins" 36
+check_min "discriminating rows present" "$disc" 55
+check_min "pinned rows present"         "$pins" 39
 
 # The one row that records a divergence this round deliberately does NOT fix.
 div=$(grep -c " DIV " "$LOG")

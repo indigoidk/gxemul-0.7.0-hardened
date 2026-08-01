@@ -96,12 +96,25 @@
 >   correct *classification* of "out of range" — the model range-checks after rounding,
 >   so under round-toward-zero an operand stays convertible while `x < 2147483648.0`.
 >   Reusing those branches to raise VXCVI would flag endpoints that are not invalid.
-> - **Seven FP control/convert encodings are absent from the tree entirely**, so each
->   halts the emulator via `goto bad`: `fctiw` (the round-per-RN sibling of the
->   implemented `fctiwz`), `fctid`/`fctidz`, `mtfsfi`, `mtfsb0`/`mtfsb1`, and `mcrfs`.
->   `mcrfs` is the sharpest — `frsp`'s own comment names it as the guest's path for
->   clearing the sticky VXSNAN that #304 introduced, and it does not exist. Same class as
->   rounds 70/70B/78/79/80; gate 13 is already the instrument.
+> - ~~**Seven FP control/convert encodings are absent from the tree entirely**~~ —
+>   **largely RESOLVED as #326 (round 87)**, and the entry understated it badly: a 28-row
+>   sweep measured **twenty-four** legal encodings halting the emulator, not seven. The
+>   biggest was not an instruction at all but `if (rc) goto bad;` at both floating-point
+>   entries, so **every record form** halted — `fadd.`, `frsp.`, `fmr.` — including those
+>   of instructions that worked with Rc=0. Twelve are decoded now (the Rc forms, `mcrfs`,
+>   `mtfsb0`, `mtfsb1`, `mtfsfi`, `fctiw`, `fnabs`, `fsel`); gate 15 holds the line.
+> - **Twelve encodings still halt, deliberately, and gate 15 asserts that they do.** Split
+>   by reason, because the reasons are not the same:
+>   - `fctid`, `fctidz`, `fcfid`, `fsqrt`, `fsqrts` — **64-bit-only, or outside the G4's
+>     instruction groups.** On a 32-bit G4 real silicon raises a program interrupt, so
+>     implementing them unconditionally would make the model *less* faithful. These ride
+>     on the missing exception model, not on decode work.
+>   - `fres`, `frsqrte` — estimate instructions, accuracy implementation-defined.
+>   - `fcmpo`, `fnmadd`, `fnmsub`, `fmadds`, `fmsubs` — **no technical blocker.** A few
+>     dozen lines each at the fidelity bar already shipped (`fadds` and `fmuls` are
+>     aliases of their double forms today). Out of #326 for round size alone. Do
+>     `fmadds` first: gcc emits it for ordinary `float` arithmetic, so it is likely the
+>     most frequently executed instruction still in this set.
 > - **The splice letter is deliberately not followed** for finite values around 2^129:
 >   Book I's `SINGLE()` would WRAP the exponent (2^129 → a 2.0f-class pattern, 1.5·2^128
 >   → the NaN pattern `0x7FC00000`), and this fork keeps #287's ±Inf instead. Panel

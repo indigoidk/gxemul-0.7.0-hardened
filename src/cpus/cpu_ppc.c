@@ -1828,6 +1828,35 @@ void update_cr0(struct cpu *cpu, uint64_t value)
 }
 
 
+/*
+ *  update_cr1():  #326
+ *
+ *  Sets CR field 1 from the top four bits of the FPSCR, which is what every
+ *  floating-point instruction with Rc=1 owes: Book I, "For all floating-point
+ *  instructions in which Rc=1, CR Field 1 is a copy of the final state of
+ *  FPSCR FX, FEX, VX, OX". Those are FPSCR bits 0:3, i.e. the register's top
+ *  nibble, and CR field n lives at shift 28-4n -- so field 1 is shift 24. The
+ *  same 28-4*BF convention is visible in the fcmpu translation.
+ *
+ *  This lives here, beside update_cr0, rather than as a static in
+ *  cpu_ppc_instr.c: that file is compiled twice (DYNTRANS_DUALMODE_32), so a
+ *  static helper there would be defined twice in one translation unit.
+ *
+ *  The copy is exact whatever the FPSCR contains. This fork does not model the
+ *  FPU exception state fully, so FX/FEX/VX/OX are mostly zero -- but they are
+ *  not always: frsp's signalling-NaN arm sets FX and VX, so `frsp.` after an
+ *  sNaN reads back nonzero. Where the bits are zero, hardware with no pending
+ *  exception delivers zero too, and a guest reading the same under-populated
+ *  FPSCR through mffs already sees it. No new inaccuracy is introduced here;
+ *  what is removed is a legal instruction halting the emulator.
+ */
+void update_cr1(struct cpu *cpu)
+{
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << 24);
+	cpu->cd.ppc.cr |= ((uint32_t)((cpu->cd.ppc.fpscr >> 28) & 0xf) << 24);
+}
+
+
 #include "memory_ppc.c"
 
 

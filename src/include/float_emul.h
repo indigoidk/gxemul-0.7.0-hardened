@@ -63,6 +63,11 @@ void ieee_interpret_float_value(uint64_t x, struct ieee_float_value *fvp, int fm
 uint64_t ieee_store_float_value(double nf, int fmt);
 uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm);
 
+/*  #326: round a double to an integral value under an IEEE_RM_* mode,
+    without disturbing the host's rounding mode. Shared by the MIPS integer
+    converts (via ieee_store_float_value_rm) and the PowerPC ones.  */
+double ieee_round_to_integral(double nf, int rm);
+
 /*  #299: exact sum of two doubles, rounded to ODD, so that a subsequent
     SINGLE-precision store rounds correctly in every mode (Boldo-Melquiond,
     53 >= 2*24+2). For the single-precision add/sub/fmac arms ONLY -- the

@@ -4192,6 +4192,183 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Eighty-seventh round (#326) — twenty-four legal PowerPC encodings stopped the emulator, and every record form was one of them
+
+### What was measured first
+
+A 28-row sweep stepped each encoding on a macppc/G4 with FP enabled and classified the
+outcome as `alive` / `HALTED` / `DEAD`, reading a halt off the dyntrans
+`UNIMPLEMENTED instruction` message and separately proving the session still answered.
+Four control rows — `fadd`, `fmr`, `fctiwz`, `mtfsf`, all already implemented — read
+`alive`. **Twenty-four rows read `HALTED`.**
+
+This is not a guest-visible exception. Both floating-point blocks in the translator end
+with `default: goto bad;`, and `bad:` sets `cpu->running = 0`. A legal instruction stops
+the whole machine.
+
+### The one that mattered was not an exotic instruction
+
+`if (rc) { fatal(...); goto bad; }` sat at the entry of **both** the opcode-59 and
+opcode-63 blocks. Every **record form** halted — `fadd.`, `frsp.`, `fctiwz.`, `fmr.`,
+`fadds.` — including the record forms of instructions that worked perfectly with Rc=0.
+That is what a compiler emits whenever a floating-point result feeds a condition test.
+
+The fix follows the house pattern this same file already uses for the integer side:
+an `FDOT(n)` macro, twin to `DOT0`, that runs the base handler and then sets CR field 1
+from FPSCR[0:3] — Book I, "for all floating-point instructions in which Rc=1, CR Field 1
+is a copy of the final state of FPSCR FX, FEX, VX, OX".
+
+Three things about that were not obvious and were caught by the panel before any code was
+written:
+
+- **`CHECK_FOR_FPU_EXCEPTION` has to come first, in the wrapper.** The base handler's own
+  check returns from the *base*, which would leave the wrapper writing CR1 on top of a
+  just-entered exception context for an instruction that never ran. NetBSD/macppc does
+  lazy FP — MSR[FP] is clear on a process's first floating-point instruction — so that is
+  the ordinary path, not a corner.
+- **`update_cr1` cannot be a static in `cpu_ppc_instr.c`.** That file is compiled twice
+  (`DYNTRANS_DUALMODE_32`), so it lives beside `update_cr0` in `cpu_ppc.c` instead. The
+  same trap caught the new `ppc_convert_to_word` helper, which needed the file's existing
+  `#ifndef ..._INCLUDED` idiom.
+- **`fcmpu` and `mcrfs` must NOT get record forms.** Neither defines an Rc bit; the low
+  bit of their encoding is reserved. The `rc_f` selection therefore carries an explicit
+  `NULL` guard, so those two keep being rejected — and so a case that forgets to set
+  `rc_f` stays a loud halt rather than becoming a silent no-op that executes and never
+  writes CR1.
+
+### The rest of what was decoded
+
+`mcrfs`, `mtfsb0`, `mtfsb1`, `mtfsfi` — the FPSCR control group. Their absence mattered
+more than the count suggests: Book I names `mcrfs`, `mtfsfi`, `mtfsf` and `mtfsb0` as the
+only four instructions that may clear a sticky exception bit, **and three of the four did
+not exist.** Two ISA rules govern them, both verified against the text rather than
+assumed: FEX and VX are OR summaries that none of these may write, and FX is implicitly
+set by every FP instruction *except* `mtfsfi` and `mtfsf`.
+
+`mcrfs`'s bit-clearing is the subtle one, and the first design was wrong. It clears only
+the *exception* bits it copied, per a table in Book I — four of the eight fields clear
+**nothing** — 4, 6 and 7 — and those are precisely the ones that would hurt: field 4 is the
+FPCC, field 6 the exception enables, and **field 7 holds the rounding mode**, so a blanket
+clear would have made `mcrfs x,7` silently reset the guest to round-to-nearest — which
+#304's `frsp` reads. (Field 3 clears VXVC only, keeping FR and FI.)
+
+`fctiw` — the round-per-RN sibling of `fctiwz` — now shares one body with it, split only
+by the mode. The obvious shortcut here is a trap: `ieee_store_float_value_rm(..., W, rm)`
+already rounds and range-checks, but it implements the **MIPS** contract (#273), where a
+NaN and both overflow directions all give `0x7fffffff` with no sign dependence. PowerPC
+owes `0x7FFF_FFFF` only for a positive out-of-range operand. Instead #294's rounding block
+was factored out as `ieee_round_to_integral()` and is now shared, unchanged.
+
+`fnabs` and `fsel`. `PPC_63_FNABS` had been *defined in `opcodes_ppc.h` all along* with no
+case in the decoder — the define alone does nothing. Both are bit transport, never
+interpret-and-restore, because `ieee_interpret_float_value` collapses every NaN to the
+host's `NAN` and would lose the payload.
+
+### Two defects in code that was already running
+
+Found by reading for context, not by the sweep — which could not have found either, since
+neither is a halt.
+
+**`fcmpu` threw away the unordered bit.** It wrote `cr |= ((c & 0xe) << bf_shift)`, and
+`c == 1` is the unordered case. Measured, with the three ordered rows as controls:
+`1.0<2.0`, `2.0>1.0` and `1.0==1.0` all gave the right nibble; **both NaN rows gave `0`**
+— neither less, greater, equal, nor unordered, a CR state hardware never produces. A
+guest branching on unordered never took the branch. It reads like a transplanted
+template: the integer compares build the same 8/4/2 and then OR `XER.SO` into the low bit,
+where masking off "the bit I am not supplying" is sensible. In a floating-point compare
+that bit is FU, a result.
+
+**Seven handlers were erasing a sticky bit.** `fcmpu`, `fmul`, `fmadd`, `fmsub`, `fadd`,
+`fsub` and `fdiv` each wrote `fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN)` when only the
+FPCC half is theirs. Book I: the exception bits "are sticky; that is, once set to 1 they
+remain set to 1 until they are set to 0 by an mcrfs, mtfsfi, mtfsf, or mtfsb0
+instruction". None of those seven is one of the four. So #304 set VXSNAN on a signalling
+NaN and the very next arithmetic instruction destroyed the record.
+
+**Gate 13 had a blind spot exactly where the defect lived.** Its `VXSNAN sticky` row runs
+a second `frsp` — and `frsp` is the *one* floating-point handler in the file that was not
+clearing the bit. The property was proven against the only instruction that could not
+break it. Three rows now run `fadd`, `fmul` and `fcmpu` in that second slot instead, which
+is the shape of the lesson: an instrument only refutes what its inputs reach.
+
+### Left halting, on purpose, and recorded as such
+
+Twelve encodings still stop the emulator, and gate 15 asserts that they *do*, so the count
+cannot drift and the queue cannot quietly lie. The reasons differ and the distinction is
+the point:
+
+- `fctid`, `fctidz`, `fcfid`, `fsqrt`, `fsqrts` — **64-bit-only, or outside the G4's
+  instruction groups.** On the 32-bit machine this gate drives, real silicon takes a
+  program interrupt. Implementing them unconditionally would make the model *less*
+  faithful; the honest fix is the missing exception model.
+- `fres`, `frsqrte` — estimate instructions with implementation-defined accuracy.
+- `fcmpo`, `fnmadd`, `fnmsub`, `fmadds`, `fmsubs` — **no technical blocker at all.** A few
+  dozen lines each at the fidelity bar this file already ships. They are out of this round
+  for size alone, and that is recorded as the reason, because a queue entry that invents a
+  blocker costs a future round the time to disprove it. `fmadds` is the one to do first:
+  gcc emits it for ordinary `float` arithmetic, so it is probably the most frequently
+  executed instruction still in the halting set.
+
+### The refactor silently disarmed a mutation test, and the harness said so
+
+Factoring `#294`'s rounding block out of `ieee_store_float_value_rm()` into
+`ieee_round_to_integral()` is behaviour-preserving — the differential proves it, and the
+MIPS path is token-for-token the same operations. But `selftest_mutation.sh` mutates by
+**string replacement on the source**, and the `wlegacyrounds` mutant's fragment was the
+block that moved. It stopped matching, so that mutant tested nothing, and `#294`'s W/L
+rounding was left unguarded with every other gate still green.
+
+The gate caught it, because a previous round had already been bitten by a mutant that
+could not fail and added a `need()` check on the fragment: a mutation that no longer
+applies reports `SETUP_FAIL` instead of quietly succeeding. It failed loudly, twice —
+once as "could be applied" and once as "is DETECTED". Only that one mutant broke; the
+other four still applied and were detected, which is what a partial failure here should
+look like.
+
+Retargeted at the helper with the same mutation. The rule this leaves behind: **when code
+moves, grep the mutation script for the text that moved.**
+
+### What the after-pass found, including a false statement in this round's own code
+
+The finished diff went back to the panel, and two seats independently reached the same
+defect: **FEX and VX are preserved where they should be recomputed.** Stopping the four
+new instructions from *writing* those bits is only half of what Book I says. It defines
+them as derived — VX is the OR of the invalid-operation causes, FEX the OR of the enabled
+pending exceptions — so "cannot alter explicitly" is not "keep the stale value". This
+fork stores them. The sharp case is one **this round made reachable**: three of the four
+instructions that may clear an exception bit did not exist before it, and now a guest can
+clear the last VXSNAN through `mcrfs` or `mtfsb0` and be left with **VX set and no
+cause**, which hardware cannot produce — copied into CR1 by every record form thereafter.
+
+A comment written in this round claimed all five move-to-FPSCR instructions mask FEX and
+VX out of what they write. **That was false**: `mtfsf` does not, and `mtfsf` was in the
+list. Corrected, and the reason it is not simply fixed is worth stating, because it is not
+laziness — masking `mtfsf` too would make the behaviour *worse*. Its unmasked write is
+currently the only way out of the phantom-VX state above. Remove it without adding the
+recompute and the phantom becomes permanent. The mask and the recompute have to land
+together, which is what #61 now says.
+
+Two smaller corrections to this round's own commentary, both from the same pass: `mcrfs`
+clears nothing in **three** of eight fields, not four (field 3 clears VXVC while keeping
+FR and FI); and the claim that rounding-before-range-check meant status bits could be
+added later "without moving anything" is **wrong for RZ**, where the helper deliberately
+returns the operand unrounded and lets the cast truncate — so `2147483647.9` takes the
+saturation branch though its converted value is in range. Same 32-bit result today, a
+false VXCVI the moment those branches drive status.
+
+### Gate 15
+
+New: 28 rows, 22 checks. It is a **liveness** gate and nothing more: it proves each
+encoding no longer stops the emulator, and inspects neither FRT, FPSCR, nor CR1. A wrong
+shift in `update_cr1` would pass every check in both PowerPC gates. The semantic rows
+that would close that — CR1 content per dot form, the eight `mcrfs` masks, `fctiw` under
+all four modes with named tie vectors, `fsel`'s NaN and −0.0 arms, `fnabs`'s payload
+transport, and the four repaired sticky sites (`fsub`, `fdiv`, `fmadd`, `fmsub`) the new
+rows do not reach — are listed in #61 rather than implied to exist. Every encoding is built **from fields** rather than typed as hex,
+and each row prints both the five-bit and ten-bit extended opcode — an A-form word reads
+back as `xo10=125` where its real XO is 29, which is exactly how a wrong field hides
+behind a plausible-looking number. Gate 13 grows to 94 rows / 63 checks.
+
 ## Seventy-third round (#324, #325) — two PowerPC corrections, and a gate row that was measuring the wrong register
 
 ### #324 — mtfsf spread its mask across sixty-four bits

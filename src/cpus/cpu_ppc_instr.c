@@ -37,6 +37,27 @@
 #include "float_emul.h"
 
 
+/*
+ *  #326: FDOT -- the floating-point twin of DOT0/1/2 below.
+ *
+ *  Every opcode-59/63 form with Rc=1 used to reach `goto bad`, which does not
+ *  raise a program exception: it stops the emulator. That meant `fadd.`,
+ *  `frsp.`, `fmr.` and the rest killed the machine, including the record
+ *  forms of instructions that worked perfectly with Rc=0 -- and a compiler
+ *  emits them whenever a floating-point result feeds a condition test.
+ *
+ *  CHECK_FOR_FPU_EXCEPTION comes FIRST, before the base handler, and that
+ *  ordering is load-bearing rather than tidy. The base handler's own check
+ *  returns from the BASE on MSR[FP]=0, which would leave this wrapper to
+ *  write CR1 on top of a just-entered exception context, for an instruction
+ *  that never executed. NetBSD/macppc does lazy FP -- MSR[FP] is clear on
+ *  every process's first floating-point instruction -- so that is the
+ *  ordinary path, not a corner. Checking here returns before the base runs;
+ *  when FP is available the base's identical check simply passes again.
+ */
+#define FDOT(n) X(n ## _dot) { CHECK_FOR_FPU_EXCEPTION; \
+	instr(n)(cpu,ic); update_cr1(cpu); }
+
 #define DOT0(n) X(n ## _dot) { instr(n)(cpu,ic); \
 	update_cr0(cpu, reg(ic->arg[0])); }
 #define DOT1(n) X(n ## _dot) { instr(n)(cpu,ic); \
@@ -894,6 +915,193 @@ X(fmr)
 
 
 /*
+ *  #326: the FPSCR control group -- mtfsb0, mtfsb1, mtfsfi and mcrfs. None
+ *  was decoded, so each stopped the emulator on a legal encoding. Their
+ *  absence mattered more than the count suggests: Book I names mcrfs,
+ *  mtfsfi, mtfsf and mtfsb0 as the only four instructions that may clear a
+ *  sticky exception bit, and three of those four did not exist.
+ *
+ *  Two rules from the FPSCR bit definitions govern all of them:
+ *
+ *    - FEX (bit 1) and VX (bit 2) are OR summaries. Book I: "mcrfs, mtfsfi,
+ *      mtfsf, mtfsb0, and mtfsb1 cannot alter FPSCR FEX / VX explicitly."
+ *      The four instructions BELOW mask those two bits out of whatever they
+ *      write. mtfsf does NOT -- it still copies them straight out of the
+ *      source FPR when FM selects field 0, which is a divergence gate 13
+ *      records (its FM=0x80 row) and #61 owns.
+ *
+ *      Masking mtfsf here as well would look like finishing the job and
+ *      would make things WORSE, which is why it is not done piecemeal.
+ *      This fork STORES FEX and VX instead of deriving them, so nothing
+ *      recomputes VX when the last VXxx cause is cleared -- a guest that
+ *      clears VXSNAN through mcrfs or mtfsb0 is left with VX set and no
+ *      cause, a state hardware cannot produce. mtfsf's unmasked write is
+ *      currently the ONLY way out of it. Take that away without adding the
+ *      recompute and the phantom VX becomes permanent, copied into CR1 by
+ *      every record form from then on. The two changes have to land
+ *      together.
+ *    - FX (bit 0) is implicitly set by "every floating-point instruction,
+ *      EXCEPT mtfsfi and mtfsf", when that instruction drives an exception
+ *      bit from 0 to 1. mtfsb1 is therefore subject to it; mtfsfi is not,
+ *      and takes FX only from the immediate it was given.
+ */
+#define	PPC_FPSCR_SUMMARY	(PPC_FPSCR_FEX | PPC_FPSCR_VX)
+
+/*  The sticky exception bits: ISA bits 3:12 and 21:23, as a host mask.  */
+#define	PPC_FPSCR_EXC_BITS	(0x1ff80000 | 0x00000700)
+
+
+/*
+ *  mtfsb1:  Move To FPSCR Bit 1        #326
+ *
+ *  arg[0] = BT, the ISA bit number (0..31)
+ */
+X(mtfsb1)
+{
+	uint32_t bit = (uint32_t)1 << (31 - (int)ic->arg[0]);
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	/*  "Bits 1 and 2 (FEX and VX) cannot be explicitly set."  */
+	if (bit & PPC_FPSCR_SUMMARY)
+		return;
+
+	/*  Subject to the implicit-FX rule: driving an exception bit from 0
+	    to 1 sets FX too.  */
+	if ((bit & PPC_FPSCR_EXC_BITS) && !(cpu->cd.ppc.fpscr & bit))
+		cpu->cd.ppc.fpscr |= PPC_FPSCR_FX;
+
+	cpu->cd.ppc.fpscr |= bit;
+}
+
+
+/*
+ *  mtfsb0:  Move To FPSCR Bit 0        #326
+ *
+ *  arg[0] = BT, the ISA bit number (0..31)
+ */
+X(mtfsb0)
+{
+	uint32_t bit = (uint32_t)1 << (31 - (int)ic->arg[0]);
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	/*  "Bits 1 and 2 (FEX and VX) cannot be explicitly reset."  */
+	if (bit & PPC_FPSCR_SUMMARY)
+		return;
+
+	cpu->cd.ppc.fpscr &= ~bit;
+}
+
+
+/*
+ *  mtfsfi:  Move To FPSCR Field Immediate      #326
+ *
+ *  arg[0] = shift of the target field (28 - 4*BF)
+ *  arg[1] = the four-bit immediate U
+ */
+X(mtfsfi)
+{
+	int shift = ic->arg[0];
+	uint32_t mask = ((uint32_t)0xf << shift) & ~PPC_FPSCR_SUMMARY;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	cpu->cd.ppc.fpscr &= ~mask;
+	cpu->cd.ppc.fpscr |= (((uint32_t)ic->arg[1] << shift) & mask);
+}
+
+
+/*
+ *  mcrfs:  Move to Condition Register from FPSCR       #326
+ *
+ *  arg[0] = shift of the destination CR field (28 - 4*BF)
+ *  arg[1] = shift of the source FPSCR field  (28 - 4*BFA)
+ *  arg[2] = exactly which bits this BFA clears
+ *
+ *  The source field is copied into CR field BF, and the exception bits that
+ *  were copied are then cleared -- but ONLY those. Clearing the whole
+ *  four-bit field would be guest-visible damage in four separate places:
+ *  field 3 also holds FR and FI (it clears VXVC only), and THREE fields --
+ *  4, 6 and 7 -- clear nothing at all. Those three are the ones that would
+ *  hurt most: field 4 IS the FPCC (the last compare result), field 6 is the
+ *  exception ENABLES, and field 7 holds the ROUNDING MODE that #304's frsp
+ *  reads -- so a blanket `mcrfs x,7` would silently reset the guest to
+ *  round-to-nearest. Which bits each BFA clears is a table in Book I;
+ *  computed once at decode and carried in arg[2].
+ */
+X(mcrfs)
+{
+	int dst_shift = ic->arg[0], src_shift = ic->arg[1];
+	uint32_t field = (cpu->cd.ppc.fpscr >> src_shift) & 0xf;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	cpu->cd.ppc.cr &= ~((uint32_t)0xf << dst_shift);
+	cpu->cd.ppc.cr |= (field << dst_shift);
+
+	/*  Never the summary bits, whatever the table says.  */
+	cpu->cd.ppc.fpscr &= ~((uint32_t)ic->arg[2] & ~PPC_FPSCR_SUMMARY);
+}
+
+
+/*
+ *  fnabs:  Floating-point Negative Absolute Value      #326
+ *
+ *  PPC_63_FNABS was defined in opcodes_ppc.h all along with no case in the
+ *  decoder. The define alone does nothing, so this halted the emulator.
+ *
+ *  Sign surgery in the style of fabs and fneg, and it has to stay bit
+ *  transport: going through ieee_interpret_float_value would collapse every
+ *  NaN to the host's NAN and lose the payload. OR, not XOR -- the result is
+ *  negative for every operand, so a negative input stays negative.
+ *
+ *  arg[0] = ptr to frb
+ *  arg[1] = ptr to frt
+ */
+X(fnabs)
+{
+	uint64_t v;
+	CHECK_FOR_FPU_EXCEPTION;
+	v = *(uint64_t *)ic->arg[0];
+	*(uint64_t *)ic->arg[1] = v | 0x8000000000000000ULL;
+}
+
+
+/*
+ *  fsel:  Floating-point Select        #326
+ *
+ *  FRT = (FRA >= 0.0 and FRA is not a NaN) ? FRC : FRB.
+ *
+ *  Bit transport, for the same reason as fnabs: the selected operand is
+ *  moved unchanged, payload and all. The sign of zero needs no special
+ *  handling -- the ISA selects FRC for -0.0, and C's `-0.0 >= 0.0` is true,
+ *  so the plain comparison already agrees. The NaN test is the one that has
+ *  to be explicit, and a NaN selects FRB.
+ *
+ *  Four register operands and only three args, so the instruction word is
+ *  carried in arg[2] and frb/frc read out of it -- the same shape fmadd uses.
+ *
+ *  arg[0] = ptr to frt
+ *  arg[1] = ptr to fra
+ *  arg[2] = the instruction word
+ */
+X(fsel)
+{
+	uint32_t iw = ic->arg[2];
+	int b = (iw >> 11) & 31, c = (iw >> 6) & 31;
+	struct ieee_float_value fra;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
+
+	*(uint64_t *)ic->arg[0] = (!fra.nan && fra.f >= 0.0)
+	    ? cpu->cd.ppc.fpr[c] : cpu->cd.ppc.fpr[b];
+}
+
+
+/*
  *  fabs:  Floating-point Absulute Value
  *
  *  arg[0] = ptr to frb
@@ -950,9 +1158,34 @@ X(fcmpu)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
+
+	/*
+	 *  #326: the mask used to be `c & 0xe`, which discarded the UNORDERED
+	 *  bit -- the one result this instruction exists to report. `c` is one
+	 *  of 8/4/2/1 (LT/GT/EQ/FU), so an unordered compare wrote 0000 into
+	 *  the CR field: neither less, greater, equal, NOR unordered, which is
+	 *  a state hardware never produces. Measured, with the ordered rows as
+	 *  controls: 1.0<2.0, 2.0>1.0 and 1.0==1.0 all gave the right nibble;
+	 *  both NaN rows gave 0 where the ISA owes 1.
+	 *
+	 *  The mask is deleted rather than widened to 0xf, because `c` is
+	 *  already exactly four bits. It reads like a transplanted template:
+	 *  the INTEGER compares build the same 8/4/2 and then OR XER.SO into
+	 *  the low bit, where masking off "the bit I am not supplying" is
+	 *  sensible. In a floating-point compare that low bit is FU, a result.
+	 */
 	cpu->cd.ppc.cr &= ~((uint32_t)0xf << bf_shift);
-	cpu->cd.ppc.cr |= ((uint32_t)(c&0xe) << bf_shift);
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	cpu->cd.ppc.cr |= ((uint32_t)c << bf_shift);
+
+	/*
+	 *  #326: FPCC is status and is rewritten by every compare, but VXSNAN
+	 *  is STICKY and must not be cleared here. Book I: the exception bits
+	 *  "are sticky; that is, once set to 1 they remain set to 1 until they
+	 *  are set to 0 by an mcrfs, mtfsfi, mtfsf, or mtfsb0 instruction".
+	 *  fcmpu is none of those four, and clearing it here erased the record
+	 *  #304 had just gone to the trouble of setting.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 }
 
@@ -1200,6 +1433,63 @@ X(frsp)
 
 
 /*
+ *  ppc_convert_to_word():  #326
+ *
+ *  The body shared by fctiw and fctiwz. The two differ only in the rounding
+ *  mode: fctiwz forces toward-zero, fctiw takes FPSCR[RN].
+ *
+ *  The saturation is SIGN-DEPENDENT, and that is the trap in this function.
+ *  It is tempting to hand the operand to ieee_store_float_value_rm() with
+ *  IEEE_FMT_W, which already rounds per mode and range-checks -- but that
+ *  path implements the MIPS contract (#273), where a NaN and BOTH overflow
+ *  directions all return 0x7fffffff with no sign dependence. PowerPC owes
+ *  0x7FFF_FFFF only for a positive out-of-range operand; a negative one and
+ *  every NaN owe 0x8000_0000 (Book I, Appendix A.2: Infinity Operand and
+ *  Large Operand branch on sign, SNaN and QNaN do not). Reusing the MIPS
+ *  entry point would silently give PowerPC the wrong answer for exactly the
+ *  cases #325 was about.
+ *
+ *  Rounding happens before the range test, as the ISA model does -- but only
+ *  for the three directed modes. ieee_round_to_integral() deliberately
+ *  returns RZ operands untouched and lets the cast truncate, so under RZ
+ *  the range test still sees the UNROUNDED value: 2147483647.9 takes the
+ *  saturation branch although its converted value, 2147483647, is in range.
+ *  The 32-bit result is identical either way, because the saturation value
+ *  equals the boundary -- so nothing is wrong today. It stops being
+ *  harmless the moment these branches drive VXCVI or FR/FI, which would
+ *  then be raised for operands that are perfectly convertible. Whoever
+ *  adds the status bits must round RZ explicitly here first; this comment
+ *  previously claimed they could be added without restructuring, and that
+ *  was wrong.
+ */
+#ifndef PPC_CONVERT_TO_WORD_INCLUDED
+#define PPC_CONVERT_TO_WORD_INCLUDED
+static uint32_t ppc_convert_to_word(struct cpu *cpu, uint64_t frb_bits, int rm)
+{
+	struct ieee_float_value frb;
+	double nf;
+
+	ieee_interpret_float_value(frb_bits, &frb, IEEE_FMT_D);
+
+	/*  #325: a NaN converts to the most negative value, not to zero.
+	    Zero is the worse kind of wrong -- a legitimate result the guest
+	    cannot tell apart from a successful conversion of 0.0.  */
+	if (frb.nan)
+		return 0x80000000;
+
+	nf = ieee_round_to_integral(frb.f, rm);
+
+	if (nf >= 2147483647.0)
+		return 0x7fffffff;
+	if (nf <= -2147483648.0)
+		return 0x80000000;
+
+	return (uint32_t)(int32_t) nf;
+}
+#endif	/*  PPC_CONVERT_TO_WORD_INCLUDED  */
+
+
+/*
  *  fctiwz:  Floating-point Convert to Integer Word, Round to Zero
  *
  *  arg[0] = ptr to frb
@@ -1207,33 +1497,30 @@ X(frsp)
  */
 X(fctiwz)
 {
-	struct ieee_float_value frb;
-	uint32_t res = 0;
-
 	CHECK_FOR_FPU_EXCEPTION;
 
-	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &frb, IEEE_FMT_D);
-	if (frb.nan) {
-		/*
-		 *  #325: a NaN converts to the most negative value, not to
-		 *  zero. The ISA gives the same answer for a NaN as for an
-		 *  operand below the representable range, and zero is a
-		 *  legitimate result the guest cannot tell apart from a
-		 *  successful conversion of 0.0. Recorded as a pinned
-		 *  divergence in gate 13 since #304 measured it; this is the
-		 *  fix that divergence was waiting for.
-		 */
-		res = 0x80000000;
-	} else {
-		if (frb.f >= 2147483647.0)
-			res = 0x7fffffff;
-		else if (frb.f <= -2147483648.0)
-			res = 0x80000000;
-		else
-			res = (int32_t) frb.f;
-	}
+	*(uint64_t *)ic->arg[1] = ppc_convert_to_word(cpu,
+	    *(uint64_t *)ic->arg[0], IEEE_RM_RZ);
+}
 
-	*(uint64_t *)ic->arg[1] = (uint32_t)res;
+
+/*
+ *  fctiw:  Floating-point Convert to Integer Word     #326
+ *
+ *  Identical to fctiwz except that it rounds per FPSCR[RN] instead of
+ *  toward zero. It was not decoded at all, so a legal encoding stopped the
+ *  emulator.
+ *
+ *  arg[0] = ptr to frb
+ *  arg[1] = ptr to frt
+ */
+X(fctiw)
+{
+	CHECK_FOR_FPU_EXCEPTION;
+
+	*(uint64_t *)ic->arg[1] = ppc_convert_to_word(cpu,
+	    *(uint64_t *)ic->arg[0],
+	    cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK);
 }
 
 
@@ -1267,7 +1554,14 @@ X(fmul)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[0]) =
@@ -1314,7 +1608,14 @@ X(fmadd)
 			cc = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (cc << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[0]) =
@@ -1356,7 +1657,14 @@ X(fmsub)
 			cc = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (cc << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[0]) =
@@ -1394,7 +1702,14 @@ X(fadd)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[2]) =
@@ -1428,7 +1743,14 @@ X(fsub)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[2]) =
@@ -1462,7 +1784,14 @@ X(fdiv)
 			c = 2;
 	}
 	/*  TODO: Signaling vs Quiet NaN  */
-	cpu->cd.ppc.fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN);
+	/*
+	 *  #326: FPCC is status and is rewritten here; VXSNAN is STICKY and
+	 *  is not ours to clear. Book I lists exactly four instructions that
+	 *  may clear an exception bit -- mcrfs, mtfsfi, mtfsf, mtfsb0 -- and
+	 *  this is not one of them. Clearing it here meant any arithmetic
+	 *  following a signalling-NaN operation erased the record.
+	 */
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
 	cpu->cd.ppc.fpscr |= (c << PPC_FPSCR_FPCC_SHIFT);
 
 	(*(uint64_t *)ic->arg[2]) =
@@ -3158,6 +3487,41 @@ X(end_of_page)
 }
 
 
+/*
+ *  #326: the record forms. Every floating-point instruction that defines an
+ *  Rc bit gets a `_dot` twin here, generated by FDOT: run the base, then set
+ *  CR field 1 from FPSCR[0:3].
+ *
+ *  fcmpu and mcrfs are absent ON PURPOSE. Neither defines Rc -- the low bit
+ *  of their encoding is reserved -- so there is no `fcmpu.` or `mcrfs.` to
+ *  implement, and an encoding with that bit set is invalid rather than a
+ *  record form. The decoder keeps rejecting those two.
+ */
+FDOT(frsp)
+FDOT(fctiw)
+FDOT(fctiwz)
+FDOT(fneg)
+FDOT(fabs)
+FDOT(fnabs)
+FDOT(fmr)
+FDOT(fsel)
+FDOT(fadd)
+FDOT(fsub)
+FDOT(fmul)
+FDOT(fdiv)
+FDOT(fmadd)
+FDOT(fmsub)
+FDOT(fadds)
+FDOT(fsubs)
+FDOT(fmuls)
+FDOT(fdivs)
+FDOT(mffs)
+FDOT(mtfsf)
+FDOT(mtfsb0)
+FDOT(mtfsb1)
+FDOT(mtfsfi)
+
+
 /*****************************************************************************/
 
 
@@ -4282,12 +4646,16 @@ X(to_be_translated)
 		rs = (iword >>  6) & 31;	/*  actually frc  */
 		rc = iword & 1;
 
-		if (rc) {
-			if (!cpu->translation_readahead)
-				fatal("Floating point (59) "
-				    "with rc bit! TODO\n");
-			goto bad;
-		}
+		/*
+		 *  #326: Rc=1 no longer stops the emulator. Each case below
+		 *  sets rc_f to its record-form twin, and the substitution is
+		 *  applied once, after the switch. A case that forgets to set
+		 *  rc_f leaves it NULL and still reaches `goto bad` -- so a
+		 *  missed record form stays a loud halt rather than becoming a
+		 *  silent no-op that executes but never writes CR1. (The
+		 *  integer block uses the same rc_f shape with no such guard.)
+		 */
+		rc_f = NULL;
 
 		/*  NOTE: Some floating-point instructions are selected
 		    using only the lowest 5 bits, not all 10!  */
@@ -4296,16 +4664,16 @@ X(to_be_translated)
 		case PPC_59_FSUBS:
 		case PPC_59_FADDS:
 			switch (xo & 31) {
-			case PPC_59_FDIVS: ic->f = instr(fdivs); break;
-			case PPC_59_FSUBS: ic->f = instr(fsubs); break;
-			case PPC_59_FADDS: ic->f = instr(fadds); break;
+			case PPC_59_FDIVS: ic->f = instr(fdivs); rc_f = instr(fdivs_dot); break;
+			case PPC_59_FSUBS: ic->f = instr(fsubs); rc_f = instr(fsubs_dot); break;
+			case PPC_59_FADDS: ic->f = instr(fadds); rc_f = instr(fadds_dot); break;
 			}
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[ra]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[rb]);
 			ic->arg[2] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			break;
 		case PPC_59_FMULS:
-			ic->f = instr(fmuls);
+			ic->f = instr(fmuls); rc_f = instr(fmuls_dot);
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[ra]);
 			ic->arg[2] = (size_t)(&cpu->cd.ppc.fpr[rs]); /* frc */
@@ -4314,6 +4682,12 @@ X(to_be_translated)
 			switch (xo) {
 			default:goto bad;
 			}
+		}
+		/*  #326: apply the record form, guarded.  */
+		if (rc) {
+			if (rc_f == NULL)
+				goto bad;
+			ic->f = rc_f;
 		}
 		break;
 
@@ -4325,12 +4699,8 @@ X(to_be_translated)
 		rs = (iword >>  6) & 31;	/*  actually frc  */
 		rc = iword & 1;
 
-		if (rc) {
-			if (!cpu->translation_readahead)
-				fatal("Floating point (63) "
-				    "with rc bit! TODO\n");
-			goto bad;
-		}
+		/*  #326: see the opcode-59 block above.  */
+		rc_f = NULL;
 
 		/*  NOTE: Some floating-point instructions are selected
 		    using only the lowest 5 bits, not all 10!  */
@@ -4339,16 +4709,16 @@ X(to_be_translated)
 		case PPC_63_FSUB:
 		case PPC_63_FADD:
 			switch (xo & 31) {
-			case PPC_63_FDIV: ic->f = instr(fdiv); break;
-			case PPC_63_FSUB: ic->f = instr(fsub); break;
-			case PPC_63_FADD: ic->f = instr(fadd); break;
+			case PPC_63_FDIV: ic->f = instr(fdiv); rc_f = instr(fdiv_dot); break;
+			case PPC_63_FSUB: ic->f = instr(fsub); rc_f = instr(fsub_dot); break;
+			case PPC_63_FADD: ic->f = instr(fadd); rc_f = instr(fadd_dot); break;
 			}
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[ra]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[rb]);
 			ic->arg[2] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			break;
 		case PPC_63_FMUL:
-			ic->f = instr(fmul);
+			ic->f = instr(fmul); rc_f = instr(fmul_dot);
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[ra]);
 			ic->arg[2] = (size_t)(&cpu->cd.ppc.fpr[rs]); /* frc */
@@ -4356,9 +4726,15 @@ X(to_be_translated)
 		case PPC_63_FMSUB:
 		case PPC_63_FMADD:
 			switch (xo & 31) {
-			case PPC_63_FMSUB: ic->f = instr(fmsub); break;
-			case PPC_63_FMADD: ic->f = instr(fmadd); break;
+			case PPC_63_FMSUB: ic->f = instr(fmsub); rc_f = instr(fmsub_dot); break;
+			case PPC_63_FMADD: ic->f = instr(fmadd); rc_f = instr(fmadd_dot); break;
 			}
+			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
+			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[ra]);
+			ic->arg[2] = iword;
+			break;
+		case PPC_63_FSEL:	/*  #326  */
+			ic->f = instr(fsel); rc_f = instr(fsel_dot);
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[ra]);
 			ic->arg[2] = iword;
@@ -4372,26 +4748,83 @@ X(to_be_translated)
 				ic->arg[2] = (size_t)(&cpu->cd.ppc.fpr[rb]);
 				break;
 			case PPC_63_FRSP:
+			case PPC_63_FCTIW:	/*  #326  */
 			case PPC_63_FCTIWZ:
 			case PPC_63_FNEG:
 			case PPC_63_FABS:
+			case PPC_63_FNABS:	/*  #326  */
 			case PPC_63_FMR:
 				switch (xo) {
-				case PPC_63_FRSP:   ic->f = instr(frsp); break;
-				case PPC_63_FCTIWZ: ic->f = instr(fctiwz);break;
-				case PPC_63_FNEG:   ic->f = instr(fneg); break;
-				case PPC_63_FABS:   ic->f = instr(fabs); break;
-				case PPC_63_FMR:    ic->f = instr(fmr); break;
+				case PPC_63_FRSP:   ic->f = instr(frsp); rc_f = instr(frsp_dot); break;
+				case PPC_63_FCTIW:  ic->f = instr(fctiw); rc_f = instr(fctiw_dot); break;
+				case PPC_63_FCTIWZ: ic->f = instr(fctiwz); rc_f = instr(fctiwz_dot);break;
+				case PPC_63_FNEG:   ic->f = instr(fneg); rc_f = instr(fneg_dot); break;
+				case PPC_63_FABS:   ic->f = instr(fabs); rc_f = instr(fabs_dot); break;
+				case PPC_63_FNABS:  ic->f = instr(fnabs); rc_f = instr(fnabs_dot); break;
+				case PPC_63_FMR:    ic->f = instr(fmr); rc_f = instr(fmr_dot); break;
 				}
 				ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rb]);
 				ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 				break;
+
+			/*
+			 *  #326: the FPSCR control group. BT is the five-bit
+			 *  rt field; BF and BFA are three bits each, sitting
+			 *  at the TOP of the rt and ra fields, hence the >> 2
+			 *  -- the same shape the fcmpu case above uses.
+			 */
+			case PPC_63_MTFSB0:
+			case PPC_63_MTFSB1:
+				if (xo == PPC_63_MTFSB0) {
+					ic->f = instr(mtfsb0);
+					rc_f  = instr(mtfsb0_dot);
+				} else {
+					ic->f = instr(mtfsb1);
+					rc_f  = instr(mtfsb1_dot);
+				}
+				ic->arg[0] = rt;
+				break;
+			case PPC_63_MTFSFI:
+				ic->f = instr(mtfsfi); rc_f = instr(mtfsfi_dot);
+				ic->arg[0] = 28 - 4*(rt >> 2);
+				/*  U is the four bits at ISA 16:19, which is
+				    the top of the rb field.  */
+				ic->arg[1] = (iword >> 12) & 0xf;
+				break;
+			case PPC_63_MCRFS:
+				ic->f = instr(mcrfs);
+				ic->arg[0] = 28 - 4*(rt >> 2);
+				ic->arg[1] = 28 - 4*(ra >> 2);
+				/*
+				 *  Book I lists, per BFA, exactly which of the
+				 *  copied bits are cleared. Four of the eight
+				 *  fields clear NOTHING -- and those are the
+				 *  ones that would hurt: field 4 is the FPCC,
+				 *  6 the exception enables, 7 the rounding
+				 *  mode. Computed here so the handler stays a
+				 *  mask-and-go.
+				 */
+				switch (ra >> 2) {
+				case 0:	/*  FX and OX; not FEX/VX  */
+					ic->arg[2] = 0x90000000; break;
+				case 1:	/*  UX ZX XX VXSNAN  */
+					ic->arg[2] = 0x0f000000; break;
+				case 2:	/*  VXISI VXIDI VXZDZ VXIMZ  */
+					ic->arg[2] = 0x00f00000; break;
+				case 3:	/*  VXVC only; NOT FR/FI/C  */
+					ic->arg[2] = 0x00080000; break;
+				case 5:	/*  VXSOFT VXSQRT VXCVI  */
+					ic->arg[2] = 0x00000700; break;
+				default:	/*  4, 6, 7: nothing  */
+					ic->arg[2] = 0x00000000;
+				}
+				break;
 			case PPC_63_MFFS:
-				ic->f = instr(mffs);
+				ic->f = instr(mffs); rc_f = instr(mffs_dot);
 				ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 				break;
 			case PPC_63_MTFSF:
-				ic->f = instr(mtfsf);
+				ic->f = instr(mtfsf); rc_f = instr(mtfsf_dot);
 				ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rb]);
 				/*
 				 *  #324: the FPSCR is eight FOUR-bit fields,
@@ -4417,6 +4850,17 @@ X(to_be_translated)
 				break;
 			default:goto bad;
 			}
+		}
+		/*
+		 *  #326: apply the record form. The NULL guard keeps the
+		 *  two encodings that have no Rc bit -- fcmpu and mcrfs --
+		 *  rejected when their low bit is set, because that is a
+		 *  reserved encoding and not a record form.
+		 */
+		if (rc) {
+			if (rc_f == NULL)
+				goto bad;
+			ic->f = rc_f;
 		}
 		break;
 

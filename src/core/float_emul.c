@@ -282,6 +282,58 @@ no_reasonable_result:
 
 
 /*
+ *  ieee_round_to_integral():  #326
+ *
+ *  Rounds a double to an integral value under an IEEE_RM_* mode, without
+ *  touching the host's rounding mode. Extracted from #294's block inside
+ *  ieee_store_float_value_rm() so the PowerPC integer converts can share it;
+ *  behaviour is unchanged, and #294's 406,405-double boundary sweep still
+ *  covers the MIPS caller.
+ *
+ *  Under RZ and LEGACY nothing is done -- every caller casts afterwards, and
+ *  the cast truncates.
+ *
+ *  The nearest-even tie test compares against the exactly representable
+ *  midpoint floor(nf) + 0.5 and NOT against a computed difference:
+ *  nf - floor(nf) can round to exactly 0.5 for a value that is not a tie
+ *  (nextafter(-0.5, 0) is the counterexample -- its true distance is
+ *  0.5 + 2^-54). For |nf| < 2^52 the midpoint is exact; at or above 2^52
+ *  every double is already integral and floor(nf) == nf, so the branch is
+ *  never entered.
+ *
+ *  rint()/nearbyint() are FORBIDDEN here -- they follow the HOST's rounding
+ *  mode, which is not what any guest asked for -- and llround() rounds ties
+ *  away from zero, which no mode in this set wants. NaN and the infinities
+ *  fall through unchanged: floor() of either is itself, so the callers' own
+ *  range guards still see what they expect.
+ */
+double ieee_round_to_integral(double nf, int rm)
+{
+	double fl;
+
+	if (isnan(nf) || rm == IEEE_RM_LEGACY || rm == IEEE_RM_RZ)
+		return nf;
+
+	fl = floor(nf);
+	if (nf == fl)
+		return nf;
+
+	switch (rm) {
+	case IEEE_RM_RN:
+		if (nf > fl + 0.5 || (nf == fl + 0.5 && fmod(fl, 2.0) != 0.0))
+			fl += 1.0;
+		return fl;
+	case IEEE_RM_RP:
+		return fl + 1.0;
+	case IEEE_RM_RM:
+		return fl;
+	}
+
+	return nf;
+}
+
+
+/*
  *  ieee_store_float_value_rm():
  *
  *  Generates a 64-bit IEEE-formated value in a specific format, under a
@@ -348,41 +400,11 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 
 		/*  #294: round to an integral value per the caller's mode
 		    FIRST, so #273's range guards below test the value that
-		    will actually be cast.  Under RZ and LEGACY nothing is done
-		    -- the cast truncates, exactly as before, which a sweep of
-		    406,405 boundary-bracketing doubles confirmed bit-identical.
-
-		    The nearest-even tie test compares against the exactly
-		    representable midpoint floor(nf) + 0.5 and NOT against a
-		    computed difference: nf - floor(nf) can round to exactly
-		    0.5 for a value that is not a tie (nextafter(-0.5, 0) is
-		    the counterexample -- its true distance is 0.5 + 2^-54).
-		    For |nf| < 2^52 the midpoint is exact; at or above 2^52
-		    every double is already integral and floor(nf) == nf, so
-		    the branch is never entered.  rint()/nearbyint() are
-		    forbidden here (they follow the HOST's rounding mode) and
-		    llround() rounds ties away from zero, which is wrong.  */
-		if (!isnan(nf) &&
-		    rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ) {
-			double fl = floor(nf);
-			if (nf != fl) {
-				switch (rm) {
-				case IEEE_RM_RN:
-					if (nf > fl + 0.5 ||
-					    (nf == fl + 0.5 &&
-					    fmod(fl, 2.0) != 0.0))
-						fl += 1.0;
-					nf = fl;
-					break;
-				case IEEE_RM_RP:
-					nf = fl + 1.0;
-					break;
-				case IEEE_RM_RM:
-					nf = fl;
-					break;
-				}
-			}
-		}
+		    will actually be cast.  The rounding itself now lives in
+		    ieee_round_to_integral() (#326), so the PowerPC converts
+		    can share it instead of growing a second copy; the
+		    behaviour is unchanged.  */
+		nf = ieee_round_to_integral(nf, rm);
 		/*  #273: NaN, +/-Inf and out-of-range operands must not reach
 		    the cast -- (int64_t) of those is undefined in C, so the
 		    guest-visible result would otherwise depend on the build

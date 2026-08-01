@@ -79,6 +79,15 @@ FRSP_F0_F1 = 0xFC000818         # frsp  f0,f1
 MFFS_F3 = 0xFC60048E            # mffs  f3        (FPSCR -> FPR, the guest's read)
 STFD_F3_R5 = 0xD8650000         # stfd  f3,0(r5)
 
+#  #326. Built from fields rather than typed as hex, and each is spelled out
+#  so a wrong register cannot hide: fcmpu is X-form with BF in the top three
+#  bits of the RT slot (BF=0 -> cr0), fadd/fmul are A-form.
+FCMPU_CR0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (0 << 1)
+MFCR_R3 = (31 << 26) | (3 << 21) | (19 << 1)            # mfcr r3
+STW_R3_R4 = (36 << 26) | (3 << 21) | (4 << 16)          # stw  r3,0(r4)
+FADD_F0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (21 << 1)
+FMUL_F0_F1_F1 = (63 << 26) | (0 << 21) | (1 << 16) | (1 << 6) | (25 << 1)
+
 RN, RZ, RP, RM = 0, 1, 2, 3
 MODENAME = {RN: "RN", RZ: "RZ", RP: "RP", RM: "RM"}
 
@@ -216,6 +225,72 @@ def run_lfs(sbits, indexed=False):
     if w is None:
         return None
     return w[0] + w[1]
+
+
+def run_vxsnan_sticky_arith(second):
+    """frsp(sNaN), then ANOTHER instruction, then read FPSCR the guest's way.
+
+    #326. The sticky row below runs a second `frsp`, and that turned out to be
+    the one instruction in the file that could not break the property: every
+    OTHER floating-point handler -- fcmpu, fadd, fsub, fmul, fdiv, fmadd,
+    fmsub -- cleared VXSNAN on every execution, seven sites in all, because
+    they wrote `fpscr &= ~(PPC_FPSCR_FPCC | PPC_FPSCR_VXNAN)` when only the
+    FPCC half is theirs to clear. Book I is explicit that the exception bits
+    "are sticky ... until they are set to 0 by an mcrfs, mtfsfi, mtfsf, or
+    mtfsb0 instruction", and none of those seven is one of the four.
+
+    So the gate proved stickiness against the single instruction that
+    preserved it, while the guest lost the record to the first arithmetic that
+    followed. This row takes the second instruction as a parameter for exactly
+    that reason -- an instrument only refutes what its inputs reach.
+    """
+    w, _ = session([
+        "msr=0x2000",
+        "fpscr=0x00000000",
+        "f1=0x7ff0000000000123",
+        "f2=0x3ff0000000000000",
+        "r5=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, FRSP_F0_F1),
+        "pc=0x%x" % CODE,
+        "step 1",
+        "put w 0x%x, 0x%08x" % (CODE + 16, second),
+        "pc=0x%x" % (CODE + 16),
+        "step 1",
+        "put w 0x%x, 0x%08x" % (CODE + 32, MFFS_F3),
+        "put w 0x%x, 0x%08x" % (CODE + 36, STFD_F3_R5),
+        "pc=0x%x" % (CODE + 32),
+        "step 2"], 2)
+    if w is None or len(w) < 2 or w[1] == "deadbeef":
+        return None
+    return "set" if (int(w[1], 16) & (1 << 24)) else "clear"
+
+
+def run_fcmpu_cr(a, b):
+    """fcmpu cr0,f1,f2 ; mfcr r3 ; stw r3,0(r4) -- read the CR the guest's way.
+
+    #326. The CR field must receive the full four-bit condition LT/GT/EQ/FU.
+    The handler masked the low bit off, so an unordered compare wrote 0000 --
+    neither less, greater, equal, NOR unordered, which hardware never
+    produces. The three ordered rows are the controls that make the two NaN
+    rows mean something: they passed before the fix and after it.
+    """
+    w, _ = session([
+        "msr=0x2000",
+        "cr=0x00000000",
+        "f1=0x%016x" % a,
+        "f2=0x%016x" % b,
+        "r4=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0x%08x" % (CODE, FCMPU_CR0_F1_F2),
+        "put w 0x%x, 0x%08x" % (CODE + 4, MFCR_R3),
+        "put w 0x%x, 0x%08x" % (CODE + 8, STW_R3_R4),
+        "pc=0x%x" % CODE,
+        "step 3"], 1)
+    if w is None:
+        return None
+    return w[0]
 
 
 def run_vxsnan_sticky():
@@ -794,6 +869,27 @@ def main():
 
     #  VXSNAN must survive a following non-NaN frsp (see run_vxsnan_sticky).
     report("VXSNAN sticky", run_vxsnan_sticky(), "set", "DISC")
+
+    #  #326: and it must survive the instructions that were CLEARING it. frsp
+    #  was the only handler that did not, so the row above passed while the
+    #  property was broken for every other one.
+    for nm, iw in (("fadd", FADD_F0_F1_F2), ("fmul", FMUL_F0_F1_F1),
+                   ("fcmpu", FCMPU_CR0_F1_F2)):
+        report("VXSNAN sticky vs %s" % nm,
+               run_vxsnan_sticky_arith(iw), "set", "DISC")
+
+    #  #326: fcmpu must put all four condition bits in the CR, unordered
+    #  included. The ordered rows are controls -- they were already right.
+    for nm, a, b, want in (
+            ("fcmpu LT", 0x3ff0000000000000, 0x4000000000000000, "80000000"),
+            ("fcmpu GT", 0x4000000000000000, 0x3ff0000000000000, "40000000"),
+            ("fcmpu EQ", 0x3ff0000000000000, 0x3ff0000000000000, "20000000"),
+            ("fcmpu FU qNaN-a", 0x7ff8000000000000, 0x3ff0000000000000,
+             "10000000"),
+            ("fcmpu FU qNaN-b", 0x3ff0000000000000, 0x7ff8000000000000,
+             "10000000")):
+        report(nm, run_fcmpu_cr(a, b), want,
+               "PIN" if nm.startswith("fcmpu ") and "FU" not in nm else "DISC")
 
     #  The control row is load-bearing: a probe whose control fails has
     #  measured NOTHING, and no other row may be believed (this harness has

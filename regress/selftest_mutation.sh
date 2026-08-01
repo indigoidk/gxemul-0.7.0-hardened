@@ -95,16 +95,22 @@ elif name == "wlegacyrounds":
     # unchanged. A mutant that cannot fail tests nothing (the self-test's
     # own check caught that). This version forces LEGACY to round nearest,
     # which the "W: LEGACY == old truncation" vector must detect.
-    a = ("\t\tif (!isnan(nf) &&\n"
-         "\t\t    rm != IEEE_RM_LEGACY && rm != IEEE_RM_RZ) {\n"
-         "\t\t\tdouble fl = floor(nf);")
+    # #326 MOVED the block this mutant patches: the rounding was factored out
+    # of ieee_store_float_value_rm() into ieee_round_to_integral() so the
+    # PowerPC converts could share it. The old fragment stopped matching, and
+    # this gate reported it as SETUP_FAIL rather than passing quietly -- which
+    # is the whole point of need(): a mutant that no longer applies tests
+    # nothing, and would have left #294's W/L rounding unguarded while the
+    # gate stayed green. Retargeted at the helper; the mutation is the same
+    # one, LEGACY forced to round nearest.
+    a = ("\tif (isnan(nf) || rm == IEEE_RM_LEGACY || rm == IEEE_RM_RZ)\n"
+         "\t\treturn nf;")
     need(a)
     s = s.replace(a,
-         "\t\tif (!isnan(nf) &&\n"
-         "\t\t    rm != IEEE_RM_RZ) {\n"
-         "\t\t\tif (rm == IEEE_RM_LEGACY)\n"
-         "\t\t\t\trm = IEEE_RM_RN;\n"
-         "\t\t\tdouble fl = floor(nf);", 1)
+         "\tif (isnan(nf) || rm == IEEE_RM_RZ)\n"
+         "\t\treturn nf;\n"
+         "\tif (rm == IEEE_RM_LEGACY)\n"
+         "\t\trm = IEEE_RM_RN;", 1)
 io.open(p, "w", encoding="utf-8", errors="surrogateescape", newline="").write(s)
 PY
     [ $? -eq 0 ] && echo ok || echo FAIL
