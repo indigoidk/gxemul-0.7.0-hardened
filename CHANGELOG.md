@@ -3949,8 +3949,31 @@ measured.
   have it; the missing CPU-model gating is the same gap round 71 recorded and is
   not claimed fixed here.
 - Rd or Rm as PC in these encodings is unpredictable and the decoder accepts it.
-- **The #320 routing leaves PC forms on the old path, and a diff-review seat put the
-  sharp question: those encodings used to HALT, so this round moves them from loud
+### #322 — the carve-out the panel would not let stand
+
+The first draft of #320 excluded `rn == PC` from routing, and this entry originally
+argued the case was too rare to be worth a mechanism and that a cold handler could
+not reach the PC+8 reconstruction anyway. **Four of the five diff-review seats
+independently named that carve-out as the round's one remaining defect**, and one
+supplied the encoding: `tst pc, #4 ROR 2`, which measured leaving the carry SET
+where the architecture clears it.
+
+Both halves of the argument for leaving it were wrong. It is reachable — the ARM
+manual permits PC as the source for these logical operations — and the
+reconstruction needs only `ic`, `cur_ic_page` and `cpu->pc`, all of which the
+handler already has; the template does exactly the same three lines. Measured
+before and after, with three controls that stay correct either way.
+
+`rd == PC` stays excluded, and that exclusion is right rather than expedient:
+writing the PC with S set is an exception return, and the existing handler
+restores the flags from SPSR afterwards, so the shifter carry there is overwritten
+rather than lost.
+
+What the record below says about the residual is kept, because it is the reasoning
+that was overturned and the overturning is the useful part:
+
+- **The #320 routing left PC forms on the old path, and a diff-review seat put the
+  sharp question: those encodings used to HALT, so this round moved them from loud
   to silently divergent — the very pattern #320 exists to condemn.** Taking it
   case by case rather than waving at it:
   - `rd == PC` is **moot, not lost**. With S set the template reloads the flags
@@ -3960,11 +3983,10 @@ measured.
     unpredictable. Routing it would only serve encodings that have no defined
     behaviour to be right about.
   - That leaves `ands`/`eors`/`orrs`/`bics`/`tst`/`teq` with **rn == PC** and a
-    rotated small immediate, which really is legal and really does keep the old
-    one-bit divergence. Covering it needs the PC+8 reconstruction the template
-    does specially, which the cold handler has no access to — a real cost for an
-    encoding that reads the program counter through a non-canonical rotation.
-    Left, deliberately, and stated here rather than left to be discovered.
+    rotated small immediate. This was left, with the claim that the cold handler
+    had no access to the PC+8 reconstruction — **and that claim was false.**
+    #322 above closes it; the paragraph stands as written because the panel
+    overturning it is the point.
   - The mirror case a second seat raised — `TST`/`TEQ` with the *unused* Rd field
     set to 15 — is the same SBZ argument in the other direction and gets the same
     answer.
@@ -3981,6 +4003,114 @@ measured.
   BEFORE `uxtab` in the same else-chain, so an rn-of-15 encoding is claimed by
   `uxtb` and never reaches the new handler. Same for `uxth` ahead of `uxtah`.
   The concern is real in shape and unreachable in fact.
+
+## Eighty-fourth round — three device bounds checks that would never have fired
+
+**No source changed, on a unanimous five-seat verdict** (Codex, Fable, GLM, Kimi,
+agy — the first round run under the standing five-seat rule, and the first with
+Kimi back in the panel after several rounds of it wedging).
+
+The round was scoped to add an end-of-buffer check to three MMIO handlers that copy
+`len` bytes at `buffer + relative_addr` with no test that `relative_addr + len`
+stays inside the allocation: `pvr_vram`, `asc_dma` and `ether_buf`. Read in
+isolation all three look exactly like the end-span defects this project has already
+fixed elsewhere. In context none of them is a defect.
+
+The sharpest statement of why came from a seat and is worth quoting in shape: a
+guest really can *request* a straddling access — a 32-byte PVR DMA at the final
+VRAM byte, or the six-byte MAC write the ethernet device itself issues at the final
+buffer byte — but the handler receives only the remaining byte.
+
+`memory_rw.c` clamps before it dispatches to any handler:
+
+```c
+	paddr -= mem->devices[i].baseaddr;
+	if (paddr + len > mem->devices[i].length) {
+		...  truncation notice, debug verbosity, capped at 8  ...
+		len = mem->devices[i].length - paddr;
+	}
+```
+
+So `relative_addr + len <= length` is guaranteed on entry to every handler reached
+that way, and the truncation is even reported — with a comment noting that probing
+the end of a device's range is common and benign. A seat confirmed that dispatch
+site is the *only* one in the tree, so there is no second path to worry about.
+
+The proposed checks could not fire, which is the same defect class as a gate that
+cannot fail. And they would not have been merely inert: a handler returning 0 is
+not a no-op. `memory_rw.c` coerces it to `res = -1`, which raises a bus error on
+MIPS and m88k and, on SuperH — the only architecture that has the PVR — silently
+abandons the access. (An earlier draft of this entry said "raises a guest bus
+error" flatly; that is true of two architectures and not of the one that owns the
+first site.) Either way: three unreachable checks whose only possible effect would
+have been to damage a guest.
+
+Worth recording because it inverts the brief's own reasoning: the argument for
+`return 0` over clamping was that "a partial copy would leave the caller believing
+a whole access succeeded". That is precisely what the memory layer already does by
+design, on every architecture — it clamps, serves the in-range prefix, zero-fills
+the read tail (#95), and reports success.
+
+### The distinction that makes the original audit's entries make sense
+
+Some handlers are called **directly by other handlers**, bypassing that clamp
+entirely — `dev_dec21030.c` and `dev_sgi_mardigras.c` both call `dev_fb_access`
+with an offset they compute themselves. Those need their own bound, and
+`dev_fb_access` has one; it is tagged `OB-1` and uses the overflow-safe form
+`len > (uint64_t)size - relative_addr` rather than `addr + len > size`.
+
+That is the whole rule, and it is coherent once stated: **a handler reachable only
+through the memory layer relies on the central clamp; a handler that anything else
+calls directly carries its own.** The three sites here are registered and never
+called directly — checked by symbol grep, not assumed. OB-1 was fixed because it is
+in the second category.
+
+A seat found the one other direct invocation in the tree, `dev_pvr_ta_access` called
+from the PVR's own DMA path — and it self-bounds with a mask, so it is in the second
+category and already correct. It is also the honest caveat on this round's
+conclusion: what has been shown is that no current call path can straddle, not that
+one is structurally impossible. A future device that calls one of these three
+directly would reintroduce the question, which is exactly why the rule is being
+written down rather than the finding alone.
+
+### Corrections to this round's own brief, from the seats
+
+- The in-file precedent quoted in the design brief — `if (relative_addr + len > 4)
+  return 0;` in the ASC address-register handler — was **misapplied, and also
+  mis-located**. It sits immediately above the *second* site, not the third, and it
+  is not an end-of-region guard at all: that handler's region is registered as 4096
+  bytes over a page-sized buffer, so the check rejects offsets 4..4095 of a window
+  whose meaningful register is 4 bytes wide. Its own end-straddle case is already
+  unreachable. Copying its shape to a framebuffer-sized window was reasoning by
+  appearance twice over.
+- **The brief quoted only the read path of the first site.** The write path contains
+  a second `memcpy` into the same buffer. A guard written "before the copy" as
+  literally quoted would have covered one of the two and left the other — so the
+  sketch was not merely unnecessary, it was half a fix. A real guard would have had
+  to sit at the top of the function.
+- The escape hatch the brief offered itself — "if a guest cannot produce a
+  straddling access, document it and change nothing" — was the wrong test, and two
+  seats corrected the phrasing independently. A guest *can* produce one: eight-byte
+  accesses exist on these guests, and a non-CPU caller in the ethernet device passes
+  a six-byte length. What is true is narrower and is the thing worth recording: the
+  layer truncates the straddle before dispatch, so the handler's invariant already
+  holds when it is entered.
+- One seat reported that the `ether_buf` region is larger than its buffer, which
+  would have made the proposed bound wrong there. **Refuted from the
+  registration**: the device registers *two* regions, the buffer at `addr` with
+  length `DEV_ETHER_BUFFER_SIZE` — exactly the buffer's size — and the control
+  registers as a separate device at `addr + DEV_ETHER_BUFFER_SIZE`. The
+  `relative_addr + DEV_ETHER_BUFFER_SIZE` expression that prompted the concern is
+  in the *other* handler, re-deriving a documentation offset.
+
+### Still genuinely open, and a different shape
+
+The "window larger than backing" class is **not** covered by the clamp, which
+bounds against the registered length and not the allocation: a device that
+registers a window bigger than its buffer satisfies the clamp and overruns anyway.
+OB-2, OB-12 and OB-15 are that shape; all three carry fix markers and are believed
+done. The distinction is why that shape needs a per-device check and this one does
+not.
 
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines

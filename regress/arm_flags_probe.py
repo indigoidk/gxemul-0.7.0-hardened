@@ -315,6 +315,25 @@ R78 = [
     ("mvns b31=1 C",  [], 0xe3f004ff, 1, 0, True),
     ("mvns value",    [], 0xe3f00001, 0xfffffffe, None, False),
     ("mvn S-clear",   [], 0xe3e00001, 0xfffffffe, None, False),
+    #  #322: reading the PC as the source operand. Four of the five diff-review
+    #  seats named this as the round's one remaining defect and one supplied the
+    #  witness, which measured leaving the carry SET where the architecture
+    #  clears it. The first fix excluded rn == PC from routing on the stated
+    #  grounds that a cold handler could not reconstruct PC+8; that was simply
+    #  wrong -- it needs ic, cur_ic_page and cpu->pc, all of which it has.
+    #
+    #  The rot-0 row is the pin that keeps the fix honest: with no rotation the
+    #  carry must be left ALONE, so a handler that just cleared it always would
+    #  pass the row above and fail this one.
+    #
+    #  `pc gt255` goes through the template rather than the new handler, and
+    #  `bound 256` sits exactly one above the routing's `imm < 256` test -- a
+    #  rotated operand of 0x100 must take the template's >255 arm and clear the
+    #  carry from bit 31. Together they pin both sides of the boundary.
+    ("rotc pc src C", [], 0xe31f0104, 0, 1, True),
+    ("rot0 pc src C", [], 0xe31f0004, 1, 1, True),
+    ("rotc pc gt255", [], 0xe31f0fff, 0, 1, True),
+    ("rotc bound 256", [], 0xe3b00c01, 0, 1, True),
 ]
 
 
@@ -507,7 +526,8 @@ row("udf cond-failed nop", "DISC",
 
 for name, pre, iw, want, cin, rf in R78:
     got = run78(pre, iw, cin, rf)
-    row(name, "DISC" if name != "uxtab ROR 0" and name != "rot0 movs C"
-        and name != "mvn S-clear" else "PIN", got, want)
+    row(name, "PIN" if name in ("uxtab ROR 0", "rot0 movs C", "mvn S-clear",
+                                "rot0 pc src C", "rotc pc gt255",
+                                "rotc bound 256") else "DISC", got, want)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

@@ -177,11 +177,14 @@
 >   no handler in any form and has raised Undefined since #312. A missing instruction, not
 >   a halt — the "half a family" shape again, and it belongs with the rest of the
 >   unimplemented ARMv6 media set.
-> - **#320's PC carve-out survives for `rn == PC` on the six rn-reading logical opcodes.**
->   Those used to halt and now execute with the pre-existing one-bit carry divergence.
->   `rd == PC` is moot (the template reloads flags from SPSR); the SBZ-field variants
->   (`rn == PC` on MOV/MVN, `rd == PC` on TST/TEQ) are architecturally unpredictable.
->   Closing the real case needs the PC+8 reconstruction the cold handler cannot reach.
+> - ~~**#320's PC carve-out survives for `rn == PC`**~~ — **RESOLVED as #322**, after four
+>   of the five diff-review seats independently named it and one supplied the witness
+>   (`tst pc, #4 ROR 2`, measured leaving the carry set where the architecture clears it).
+>   The stated reason for leaving it — that a cold handler could not reach the PC+8
+>   reconstruction — was false; it needs only `ic`, `cur_ic_page` and `cpu->pc`.
+>   `rd == PC` remains excluded and correctly so: writing the PC with S set is an
+>   exception return whose flags come from SPSR, so the carry there is overwritten
+>   rather than lost.
 > - **ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result** (`cpu_arm.c`, three
 >   near-identical blocks; found while scoping #311). Carry is correctly read from bit 32,
 >   but `if (result == 0)` tests the 64-bit value, so any operation that carries out of bit
@@ -1121,15 +1124,26 @@ corruption without a clear host-OOB path.
 > at the fixed site: OB-1, 2, 3, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21 and
 > 23. Treat a row below as closed unless it is named here.
 >
-> **Still open, confirmed by reading the code rather than by trusting this list:**
-> - **OB-4** (`dev_pvr.c`, `DEVICE_ACCESS(pvr_vram)`) — the read arm does
->   `memcpy(data, d->vram + relative_addr, len)` with no `addr + len <= VRAM_SIZE` check.
->   Distinct from the render and texture paths already fixed as #65/#68.
-> - **OB-10** (`dev_ether.c`, `DEVICE_ACCESS(ether_buf)`) — no end check in either
->   direction.
-> - **OB-5** (`dev_asc.c`) — **line numbers in the row below have drifted** under the
->   #263–#268 and #286 edits, so the current site must be located and re-confirmed before
->   anything is written. Not assumed open.
+> **OB-4, OB-5 and OB-10 are NOT DEFECTS — closed by round 84 after a full review, no
+> source changed.** All three copy `len` bytes at `buffer + relative_addr` with no end
+> check *in the handler*, which is why the original audit flagged them; but
+> `memory_rw.c` clamps `len` to the device length before dispatching to any handler, so
+> `relative_addr + len <= length` is guaranteed on entry. Adding the checks would have
+> been three tests that can never fire — and worse than inert, since a handler returning
+> 0 raises a guest bus error rather than doing nothing.
+>
+> **The rule, now stated so this does not get re-filed:** a handler reachable only
+> through the memory layer relies on that central clamp. A handler that another handler
+> calls DIRECTLY bypasses it and needs its own bound — which is exactly why OB-1
+> (`dev_fb_access`, called straight from `dev_dec21030.c` and `dev_sgi_mardigras.c`) was
+> a real defect and carries its own overflow-safe check. The three above are registered
+> and never called directly; that was checked, not assumed.
+>
+> **A different shape the clamp does NOT cover:** "window larger than backing" (OB-2,
+> OB-12, OB-15). The clamp bounds against the REGISTERED LENGTH, not the allocation, so
+> a device registering a window bigger than its buffer satisfies the clamp and overruns
+> anyway. Those three carry fix markers and are believed done — but that is the shape
+> that genuinely needs a per-device check.
 > - **OB-22** — left as recorded: self-healing, correctness-only.
 > - **OB-24** — the residual signed `byte<<24` UB; real C UB that never reaches a host
 >   pointer, size or index. Deliberately not chased (see the "Not changed" note).

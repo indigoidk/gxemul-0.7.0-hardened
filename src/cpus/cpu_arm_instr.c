@@ -1184,8 +1184,28 @@ X(dpis_imm_rotc)
 {
 	uint32_t iw = ic->arg[0], b = ic->arg[1], a, c;
 	int op = (iw >> 21) & 15;
+	int rn = (iw >> 16) & 15;
 
-	a = cpu->cd.arm.r[(iw >> 16) & 15];
+	if (rn == ARM_PC) {
+		/*
+		 *  #322: reading the PC as the source yields this
+		 *  instruction's address plus 8, which has to be
+		 *  reconstructed from the ic slot exactly as the template
+		 *  does -- r[15] is not maintained during execution.
+		 *
+		 *  The first version of this handler simply refused rn == PC
+		 *  and left those encodings on the old path, on the stated
+		 *  grounds that a cold handler could not reach the
+		 *  computation. That was wrong: it needs only ic,
+		 *  cur_ic_page and cpu->pc, all of which are right here.
+		 */
+		uint32_t low_pc = ((size_t)ic - (size_t)
+		    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+		a = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1)
+		    << ARM_INSTR_ALIGNMENT_SHIFT);
+		a += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT) + 8;
+	} else
+		a = cpu->cd.arm.r[rn];
 
 	switch (op) {
 	case 0x0:				/*  AND  */
@@ -3572,7 +3592,25 @@ X(to_be_translated)
 			    && !((secondary_opcode >= 2 &&
 			    secondary_opcode <= 7) || secondary_opcode == 0xa
 			    || secondary_opcode == 0xb)
-			    && rn != ARM_PC && rd != ARM_PC) {
+			    && rd != ARM_PC) {
+				/*
+				 *  #322: rn == PC is allowed through -- the
+				 *  handler reconstructs PC+8 itself. Three
+				 *  independent diff-review seats named the
+				 *  rn == PC carve-out as this round's one
+				 *  remaining defect and one supplied the
+				 *  witness (`tst pc, #4 ROR 2`, measured
+				 *  leaving the carry set where the
+				 *  architecture clears it), which is what
+				 *  overturned the decision to leave it.
+				 *
+				 *  rd == PC stays out: writing the PC with the
+				 *  S bit set is an exception return, and the
+				 *  existing handler restores the flags from
+				 *  SPSR afterwards -- so the shifter carry
+				 *  there is overwritten rather than lost, and
+				 *  routing it would break the return.
+				 */
 				ic->arg[0] = iword;
 				ic->f = cond_instr(dpis_imm_rotc);
 				break;

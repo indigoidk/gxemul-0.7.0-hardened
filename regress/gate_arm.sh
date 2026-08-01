@@ -89,15 +89,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 79
+check "rows run"     "$want" 83
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 35
-check_min "pinned rows present"         "$pins" 44
+check_min "discriminating rows present" "$disc" 36
+check_min "pinned rows present"         "$pins" 47
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -183,7 +183,12 @@ for v in "uxtab ROR 8" "uxtab ROR 16" "uxtab ROR 24" \
     n=$(count "$LOG" "^$v  .*ok$")
     check "  round 78: $v" "$n" 1
 done
-for v in "uxtab ROR 0" "rot0 movs C" "mvn S-clear"; do
+for v in "rotc pc src C"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  round 78: $v" "$n" 1
+done
+for v in "uxtab ROR 0" "rot0 movs C" "mvn S-clear" "rot0 pc src C" \
+         "rotc pc gt255" "rotc bound 256"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  round 78 pin: $v" "$n" 1
 done
