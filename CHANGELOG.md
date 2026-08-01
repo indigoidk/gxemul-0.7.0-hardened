@@ -3965,6 +3965,22 @@ measured.
     does specially, which the cold handler has no access to — a real cost for an
     encoding that reads the program counter through a non-canonical rotation.
     Left, deliberately, and stated here rather than left to be discovered.
+  - The mirror case a second seat raised — `TST`/`TEQ` with the *unused* Rd field
+    set to 15 — is the same SBZ argument in the other direction and gets the same
+    answer.
+- **`sxtab` and `sxtah` are not decoded at all** (raised by a diff-review seat,
+  confirmed: the encodings `0x06a00070` and `0x06b00070` appear nowhere in the
+  file). #319 gave the unsigned extend-and-add pair its rotation; the SIGNED pair
+  has no handler in any form. Since #312 they raise Undefined rather than halting,
+  so this is a missing instruction and not a halt — the same "half a family"
+  shape #310 hit on PowerPC, and it belongs with the rest of the unimplemented
+  ARMv6 media set.
+- **Refuted, and worth recording because the reasoning is not obvious**: a seat
+  reported that `uxtab_rot`/`uxtah_rot` read `r[15]` without the PC+8 adjustment
+  the template applies. They cannot: `uxtb`'s mask pins rn to 15 and is tested
+  BEFORE `uxtab` in the same else-chain, so an rn-of-15 encoding is claimed by
+  `uxtb` and never reaches the new handler. Same for `uxth` ahead of `uxtah`.
+  The concern is real in shape and unreachable in fact.
 
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines

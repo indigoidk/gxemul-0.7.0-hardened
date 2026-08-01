@@ -171,6 +171,17 @@
 >   rotated immediate forms — so the dpi magnitude proxy is not the only thing wrong on
 >   that path once instruction combination kicks in. Found by a seat auditing #320;
 >   unmeasured, separate from #320's residual.
+> - **`sxtab` and `sxtah` are not decoded at all** — the encodings `0x06a00070` and
+>   `0x06b00070` appear nowhere in `cpu_arm_instr.c` (confirmed by a round-78 diff seat and
+>   verified). #319 gave the UNSIGNED extend-and-add pair its rotation; the signed pair has
+>   no handler in any form and has raised Undefined since #312. A missing instruction, not
+>   a halt — the "half a family" shape again, and it belongs with the rest of the
+>   unimplemented ARMv6 media set.
+> - **#320's PC carve-out survives for `rn == PC` on the six rn-reading logical opcodes.**
+>   Those used to halt and now execute with the pre-existing one-bit carry divergence.
+>   `rd == PC` is moot (the template reloads flags from SPSR); the SBZ-field variants
+>   (`rn == PC` on MOV/MVN, `rd == PC` on TST/TEQ) are architecturally unpredictable.
+>   Closing the real case needs the PC+8 reconstruction the cold handler cannot reach.
 > - **ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result** (`cpu_arm.c`, three
 >   near-identical blocks; found while scoping #311). Carry is correctly read from bit 32,
 >   but `if (result == 0)` tests the 64-bit value, so any operation that carries out of bit
