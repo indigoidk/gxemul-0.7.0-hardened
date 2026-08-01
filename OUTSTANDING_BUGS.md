@@ -167,10 +167,28 @@
 >   which is wrong in every band — measured setting the carry where the architecture
 >   leaves it alone, setting it where the architecture clears it, and clearing it where
 >   the architecture sets it.
-> - **The combined TST/TEQ handlers never update the carry**, and the combiner accepts
->   rotated immediate forms — so the dpi magnitude proxy is not the only thing wrong on
->   that path once instruction combination kicks in. Found by a seat auditing #320;
->   unmeasured, separate from #320's residual.
+> - **The combined TST/TEQ handlers never update the carry** — established by reading,
+>   **NOT reproduced**, and deliberately not fixed. `tsts_lo_beq_samepage`,
+>   `teqs_beq_samepage` and their `bne` twins all do
+>   `flags &= ~(ARM_F_Z | ARM_F_N)` and never write C, while the uncombined path does
+>   write C whenever the immediate was rotated. The combiner installs them from
+>   `COMBINE(beq_etc)` on `ic[-1].f == instr(tsts)` with only a bit-31 guard on the
+>   immediate — which prevents the case where C would need to be SET and not the case
+>   where it must be CLEARED.
+>
+>   **What defeated the reproduction, recorded so the next attempt starts further on:**
+>   instruction combination is gated on `!single_step && !single_step_breakpoint`, so a
+>   `step`-driven probe can never reach it — and on `testarm` a free-running `continue`
+>   never returns to the prompt (the machine's halt stub leaves the guest spinning), so
+>   there is no way back to read the result. Driving it with a breakpoint DOES return,
+>   but a differential run with and without `-J` (which forces combining off) produced
+>   **identical** flags, so either the breakpoint suppressed the combination or it fired
+>   without changing the answer. The two cannot be told apart without a positive control
+>   that the combination actually occurred — the instruction counter is the obvious one,
+>   since a combined handler counts one instruction where two executed.
+>
+>   Until that control exists this stays open and unfixed: the reading is suggestive,
+>   but a fix with no reproduction is exactly what this project does not ship.
 > - **`sxtab` and `sxtah` are not decoded at all** — the encodings `0x06a00070` and
 >   `0x06b00070` appear nowhere in `cpu_arm_instr.c` (confirmed by a round-78 diff seat and
 >   verified). #319 gave the UNSIGNED extend-and-add pair its rotation; the signed pair has
