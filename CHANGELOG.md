@@ -4112,6 +4112,86 @@ OB-2, OB-12 and OB-15 are that shape; all three carry fix markers and are believ
 done. The distinction is why that shape needs a per-device check and this one does
 not.
 
+## Seventy-sixth round (#323) — bcnd rejected two thirds of its own condition masks
+
+`tcnd`'s twin, found while sourcing #307 and left on the record since. The m88k
+`bcnd` handler table was generated only for the **nine** mask values the assembler
+has mnemonics for; the other twenty-three stayed NULL, and the decoder answers a
+NULL entry with `goto bad`, which stops the emulator.
+
+Measured on the committed build: all nine named masks executed, and every one of
+the eight unnamed masks tested — 0, 4, 6, 9, 0xa, 0xb, 0xf and 0x11 — halted the
+machine.
+
+The manual gives `m5` as a **mask** over four mutually exclusive classes of the
+source register, not a list of comparisons: greater than zero, equal to zero, less
+than zero *excluding* the most negative value, and the most negative value as its
+own class, with bit 4 reserved. That is the same reading `tcnd` was given in #307,
+and it reproduces all nine named cases exactly — `0x3` is gt0|eq0 = ">= 0", `0xc`
+is maxneg|lt0 = "< 0", `0xd` adds gt0 and becomes "!= 0", and so on.
+
+So the fix writes the mask once and **deletes the enumeration** rather than adding
+a second mechanism beside it. The generator's `print_operator()` is gone; leaving
+it would have left two answers to the same question.
+
+The risk in that rewrite is a silent change to one of the nine cases that already
+worked — which no amount of "the previously-halting masks now run" would catch. It
+was put to the panel as the round's first question, and one seat did not argue it
+but **measured** it: the old comparison against the new mask expression over
+roughly 1.9 million values, zero mismatches. The signed/unsigned split is where
+such an argument would have broken if it were going to, since the old code compared
+unsigned for masks 5, 7 and 8 and signed for the rest; another seat singled out
+exactly those three as the easily mishandled ones and worked them through by hand.
+
+Because the rewrite touches those nine, the gate rows carry two of them as pins. The load-bearing row is the pair `m5=4` against
+`m5=0xc`: both mean "negative", and they differ *only* on `0x80000000`, so an
+implementation that collapsed those two classes would pass every other row and
+fail that one. Seven rows in gate 11, asserting the branch **decision** rather
+than survival — rounds 79 and 80 both showed a survival-only row cannot tell a
+repaired instruction from one that merely stopped faulting.
+
+### The generated table in the repository was stale
+
+Also from a seat, and the more consequential of its two cleanup notes:
+`tmp_m88k_bcnd.c` is **tracked** — this tree commits its generated sources, all
+fifty of them — and it still held the pre-fix table, 101 NULLs where the new one
+has 32. The build regenerates it, so nothing measured here was affected (the build
+trees had it removed before each `make`), but committing the generator without its
+output would have put an artifact in the repository that contradicts the code that
+produces it, and any reader or marker-grep would have seen the old table. Regenerated
+and committed alongside: 96 handlers, 32 NULLs, and those 32 are exactly the
+`samepage`+delay-slot slots that have no handler by construction.
+
+### The disassembler was calling both instructions unimplemented
+
+Raised by a seat as non-blocking cleanup, taken because leaving it would have been
+a false statement the tree makes about itself: the m88k disassembler printed
+`unimplemented_N` for any condition outside the nine named ones — for **`tcnd` as
+well as `bcnd`**. That was accurate while the decoder had no handler and stopped
+the emulator; it stopped being accurate for `tcnd` at #307 and for `bcnd` here.
+Both now print the mask value, since what those encodings lack is an assembler
+mnemonic, not an implementation.
+
+A wording correction from the same seat is taken too: the reserved bit 4 forms are
+better described as *accepted field values* than as "legal encodings" — the manual
+requires that bit be zero for future compatibility, so accepting them is tolerance
+rather than conformance.
+
+### An instrument error, and a review claim, both corrected
+
+The first reproduction attempt reported *every* mask as halting, including the nine
+that work. That was a placeholder instruction left in the probe, not a finding —
+and the control rows failing is exactly what said so. The second attempt then
+parsed no addresses at all because the m88k disassembly lines carry an `s` prefix
+the regex did not expect. Both were instrument defects caught by controls rather
+than by inspection, which is the whole reason the controls are there.
+
+A diff-review seat noted that the `samepage`+delay-slot table slots remain NULL and
+suggested a same-page delayed branch would still halt. **Refuted from the decoder:**
+the NULL test guards only `ic->f`, which is taken from the non-samepage half of the
+table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
+there means the optimisation is skipped, not that anything faults.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

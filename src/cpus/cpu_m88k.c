@@ -1284,7 +1284,18 @@ int m88k_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 			case 0xc: debug("lt0"); break;
 			case 0xd: debug("ne0"); break;
 			case 0xe: debug("le0"); break;
-			default:  debug("unimplemented_%i", d);
+			/*
+			 *  #323: these read "unimplemented_N" until now, which
+			 *  was true while the decoder had no handler for them
+			 *  and stopped the emulator on one. Both instructions
+			 *  take the condition as a MASK over four classes, so
+			 *  every value is implemented -- #307 did tcnd and
+			 *  #323 does bcnd -- and the ones outside the nine
+			 *  named combinations simply have no assembler
+			 *  mnemonic. The disassembly shows the mask rather
+			 *  than claiming the instruction does not work.
+			 */
+			default:  debug("mask0x%x", d);
 			}
 		} else {
 			debug("%i", d);
@@ -1380,7 +1391,18 @@ int m88k_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
 			case 0xc: debug("lt0"); break;
 			case 0xd: debug("ne0"); break;
 			case 0xe: debug("le0"); break;
-			default:  debug("unimplemented_%i", d);
+			/*
+			 *  #323: these read "unimplemented_N" until now, which
+			 *  was true while the decoder had no handler for them
+			 *  and stopped the emulator on one. Both instructions
+			 *  take the condition as a MASK over four classes, so
+			 *  every value is implemented -- #307 did tcnd and
+			 *  #323 does bcnd -- and the ones outside the nine
+			 *  named combinations simply have no assembler
+			 *  mnemonic. The disassembly shows the mask rather
+			 *  than claiming the instruction does not work.
+			 */
+			default:  debug("mask0x%x", d);
 			}
 			debug(",r%i,0x%x\n", s1, iw & 0x1ff);
 			break;

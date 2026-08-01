@@ -415,6 +415,38 @@ TCND_ROWS = [
 ]
 
 
+#  #323: bcnd is tcnd's twin and had the same defect in a different place. Its
+#  handler table was generated only for the NINE mask values the assembler has
+#  mnemonics for; the other twenty-three stayed NULL, and the decoder answers a
+#  NULL entry with `goto bad`, which stops the emulator. Measured: all nine named
+#  masks ran, all eight unnamed ones tested halted the machine.
+#
+#  These rows assert the BRANCH DECISION, not survival. Rounds 79 and 80 both
+#  showed that a row asking only "did the emulator keep running" cannot tell a
+#  repaired instruction from one that merely stopped faulting -- and here it
+#  would also miss a mask decoded with the wrong condition.
+#
+#  The load-bearing pair is 0x4 versus 0xc. Both are "negative", and they differ
+#  only on the most negative value, which the manual makes its own class: 0x4
+#  must branch on -1 and NOT on 0x80000000, while 0xc must branch on both. A
+#  mask implementation that collapsed the two classes would pass every other row
+#  here and fail that one.
+#
+#  Instruction word: 0x3a << 26 | m5 << 21 | s1 << 16 | d16, with d16 = 4 so the
+#  target is CODE + 0x10 and the fall-through is CODE + 4.
+BCND_ROWS = [
+    ("bcnd m5=4 -1 taken",   {"r2": 0xffffffff}, 0xE8820004, 0x00010010),
+    ("bcnd m5=4 MIN fall",   {"r2": 0x80000000}, 0xE8820004, 0x00010004),
+    ("bcnd m5=c MIN taken",  {"r2": 0x80000000}, 0xE9820004, 0x00010010),
+    ("bcnd m5=f all taken",  {"r2": 0x00000005}, 0xE9E20004, 0x00010010),
+    ("bcnd m5=0 none fall",  {"r2": 0x00000005}, 0xE8020004, 0x00010004),
+    #  Two of the nine that always worked, so a regression in the rewrite that
+    #  replaced their named comparisons with the mask is caught here.
+    ("bcnd m5=1 gt0 taken",  {"r2": 0x00000005}, 0xE8220004, 0x00010010),
+    ("bcnd m5=2 eq0 taken",  {"r2": 0x00000000}, 0xE8420004, 0x00010010),
+]
+
+
 #  The fstcr diagnostic contract (#298): pure-RM writes to fcr63 are IMPLEMENTED and must
 #  not warn; bits outside RM still must. The warning goes to the EMULATOR's stdout, which
 #  only this probe's pty capture ever sees -- a gate grepping its own log for it would be
@@ -586,6 +618,17 @@ for name, fcr, seeds, op, dest, want in ROWS:
 #  rather than in the register loop above, but they count toward the same
 #  total -- the gate asserts one number.
 for name, seeds, op, want_pc in TCND_ROWS:
+    total += 1
+    got = run_tcnd(seeds, op)
+    ok = (got == want_pc)
+    passed += ok
+    print("%-24s %-10s 0x%08x %s"
+          % (name, ("0x%08x" % got) if got is not None else "None", want_pc,
+             "ok" if ok else "FAIL"))
+
+#  #323: bcnd's rows use the same PC witness -- run_tcnd plants one instruction
+#  and reports where control went, which is exactly what a branch needs too.
+for name, seeds, op, want_pc in BCND_ROWS:
     total += 1
     got = run_tcnd(seeds, op)
     ok = (got == want_pc)

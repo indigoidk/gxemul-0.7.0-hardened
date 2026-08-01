@@ -88,7 +88,7 @@ got=${res%/*}; want=${res#*/}
 # the emulator is still running -- which is the point, since every one of these
 # encodings stopped it before. The vector is 128 or above on purpose: vectors 0..127
 # are the hardware ones and vector 0 is RESET, which really does stop the machine.
-check "rows run"       "$want" 73
+check "rows run"       "$want" 80
 check "rows correct"   "$got"  "$want"
 
 # The four swap-tripwire rows asserted by name: these are the rows a 2<->3 decode
@@ -117,6 +117,33 @@ for v in "fadd-pos RN" "fsub.sss RN" "fsub.sds RN" "fmul RN tie" "fdiv RN" "flt-
          "tcnd mask 0x1d ~ ne0" "odd fmul.sds RN" "odd fdiv.ssd RN"; do
     n=$(count "$LOG" "^$v .*ok$")
     check "  site: $v" "$n" 1
+done
+
+# ---- #323: bcnd, tcnd's twin ------------------------------------------------
+# The handler table was generated only for the nine mask values the assembler
+# has mnemonics for; the other twenty-three stayed NULL and the decoder answers
+# a NULL entry with `goto bad`, stopping the emulator. Measured: nine named
+# masks ran, eight unnamed ones halted.
+#
+# These rows assert the BRANCH DECISION rather than survival -- rounds 79 and 80
+# both showed a survival-only row cannot tell a repaired instruction from one
+# that merely stopped faulting, and here it would also miss a mask decoded with
+# the wrong condition.
+#
+# The load-bearing pair is m5=4 against m5=c. Both mean "negative" and they
+# differ only on the most negative value, which the manual makes its own class:
+# an implementation that collapsed those two classes passes every other row and
+# fails "m5=4 MIN fall".
+for v in "bcnd m5=4 -1 taken" "bcnd m5=4 MIN fall" "bcnd m5=c MIN taken" \
+         "bcnd m5=f all taken" "bcnd m5=0 none fall"; do
+    n=$(count "$LOG" "^$v .*ok$")
+    check "  #323: $v" "$n" 1
+done
+# Two of the nine that always worked: the rewrite replaced their named
+# comparisons with the mask, so a regression there shows up here.
+for v in "bcnd m5=1 gt0 taken" "bcnd m5=2 eq0 taken"; do
+    n=$(count "$LOG" "^$v .*ok$")
+    check "  #323 pin: $v" "$n" 1
 done
 
 # Every row writes a pure-RM value into fcr63 through the guest's own fstcr. Since #298

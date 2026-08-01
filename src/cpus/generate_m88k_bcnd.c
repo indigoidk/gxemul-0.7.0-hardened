@@ -49,24 +49,71 @@ void print_function_name(int samepage, int n_bit, int m5)
 	case 0xc: printf("lt0"); break;
 	case 0xd: printf("ne0"); break;
 	case 0xe: printf("le0"); break;
+
+	/*
+	 *  #323: every other mask value. These are legal encodings that the
+	 *  assembler has no mnemonic for, and until now they had no handler
+	 *  either -- the table entry stayed NULL and the decoder answered
+	 *  `goto bad`, which stops the emulator.
+	 */
+	default:  printf("m%02x", m5); break;
 	}
 }
 
 
-void print_operator(int m5)
+/*
+ *  #323: the condition as the manual states it -- a MASK over four mutually
+ *  exclusive classes of the source register, not a list of named comparisons:
+ *
+ *	bit 0	> 0
+ *	bit 1	== 0
+ *	bit 2	< 0, excluding the most negative value
+ *	bit 3	== 0x80000000 (the most negative value, its own class)
+ *
+ *  Bit 4 is reserved and matches no class, so it simply never contributes.
+ *  This is the same reading `tcnd` was given in #307, and it reproduces all
+ *  nine of the previously-named cases exactly: 0x3 is gt0|eq0 = ">= 0", 0xc is
+ *  maxneg|lt0 = "< 0", 0xd is those plus gt0 = "!= 0", and so on. Writing it
+ *  once replaces the enumeration rather than sitting beside it.
+ */
+void print_condition(int m5)
 {
-	switch (m5) {
-	case 0x1: printf("> 0"); break;
-	case 0x2: printf("== 0"); break;
-	case 0x3: printf(">= 0"); break;
-	case 0x5: printf("!= 0x80000000UL"); break;
-	case 0x7: printf("!= 0x80000000UL"); break;
-	case 0x8: printf("== 0x80000000UL"); break;
-	case 0xc: printf("< 0"); break;
-	case 0xd: printf("!= 0"); break;
-	case 0xe: printf("<= 0"); break;
+	const char *sep = "";
+
+	printf("(");
+
+	if (m5 & 1) {
+		printf("%s(int32_t)reg(ic->arg[0]) > 0", sep);
+		sep = " || ";
 	}
+	if (m5 & 2) {
+		printf("%sreg(ic->arg[0]) == 0", sep);
+		sep = " || ";
+	}
+	if (m5 & 4) {
+		printf("%s((int32_t)reg(ic->arg[0]) < 0 &&\n\t    "
+		    "(uint32_t)reg(ic->arg[0]) != 0x80000000UL)", sep);
+		sep = " || ";
+	}
+	if (m5 & 8) {
+		printf("%s(uint32_t)reg(ic->arg[0]) == 0x80000000UL", sep);
+		sep = " || ";
+	}
+
+	/*  A mask selecting no class at all never branches.  */
+	if (sep[0] == '\0')
+		printf("0");
+
+	printf(")");
 }
+
+
+/*
+ *  #323: print_operator() lived here. It enumerated a comparison per named
+ *  mask and is gone rather than left beside its replacement -- the nine cases
+ *  it covered are exactly what print_condition() derives from the mask, and
+ *  keeping both would leave two answers to the same question.
+ */
 
 
 void bcnd(int samepage, int n_bit, int m5)
@@ -80,14 +127,9 @@ void bcnd(int samepage, int n_bit, int m5)
 
 	/*  Easiest case is without the n_bit:  */
 	if (!n_bit) {
-		printf("\tif ((%sint32_t)reg(ic->arg[0]) ",
-		    (m5 == 5 || m5 == 7 || m5 == 8)? "u" : "");
-		print_operator(m5);
-
-		if (m5 == 5)
-			printf(" && (int32_t)reg(ic->arg[0]) != 0");
-
-		printf(") {\n");
+		printf("\tif ");
+		print_condition(m5);
+		printf(" {\n");
 
 		if (samepage)
 			printf("\t\tcpu->cd.m88k.next_ic = (struct m88k_"
@@ -100,11 +142,8 @@ void bcnd(int samepage, int n_bit, int m5)
 		printf("\t}\n");
 	} else {
 		/*  n_bit, i.e. delay slot:  */
-		printf("\tint cond = (%sint32_t)reg(ic->arg[0]) ",
-		    (m5 == 5 || m5 == 7 || m5 == 8)? "u" : "");
-		print_operator(m5);
-		if (m5 == 5)
-			printf(" && (int32_t)reg(ic->arg[0]) != 0");
+		printf("\tint cond = ");
+		print_condition(m5);
 		printf(";\n");
 
 		printf("\tSYNCH_PC;\n");
@@ -149,9 +188,9 @@ int main(int argc, char *argv[])
 	for (samepage=0; samepage<=1; samepage++)
 		for (n_bit=0; n_bit<=1; n_bit++)
 			for (m5=0; m5<=31; m5++) {
-				if (m5 == 1 || m5 == 2 || m5 == 3 || m5 == 5 || m5 == 7 || m5 == 8 ||
-				    m5 == 0xc || m5 == 0xd || m5 == 0xe)
-					bcnd(samepage, n_bit, m5);
+				/*  #323: every mask, not just the nine the
+				    assembler has names for.  */
+				bcnd(samepage, n_bit, m5);
 			}
 
 	/*  Array of pointers to all the functions:  */
@@ -163,17 +202,21 @@ int main(int argc, char *argv[])
 				if (m5 || n_bit || samepage)
 					printf(",\n");
 
-				if (m5 == 1 || m5 == 2 || m5 == 3 || m5 == 5 || m5 == 7 || m5 == 8 ||
-				    m5 == 0xc || m5 == 0xd || m5 == 0xe) {
-					if (samepage && n_bit)
-						printf("NULL");
-					else {
-						printf("m88k_instr_");
-						print_function_name(
-						    samepage, n_bit, m5);
-					}
-				} else
+				/*
+				 *  #323: a slot is NULL now only for the
+				 *  samepage+delay-slot combination, which has
+				 *  no handler by construction. Every mask
+				 *  value has one; leaving twenty-three of them
+				 *  NULL is what sent a legal encoding to
+				 *  `goto bad` and stopped the emulator.
+				 */
+				if (samepage && n_bit)
 					printf("NULL");
+				else {
+					printf("m88k_instr_");
+					print_function_name(samepage,
+					    n_bit, m5);
+				}
 			}
 	printf(" };\n");
 

@@ -123,10 +123,14 @@
 >   **Still open, elsewhere:** the same narrowing question applies to MIPS `div.s`, SH
 >   `fdiv`, and both architectures' single-precision `sqrt`; #308's helpers now exist to
 >   answer it, but no witness has been constructed for those paths yet.
-> - **m88k `bcnd`'s condition table is NULL for legal unnamed masks** (found while sourcing
->   #307): the manual gives `bcnd` the same mask semantics as `tcnd`, but the generated
->   table has no entry for m5 = 4, 6, 9, 0xa, 0xb, 0xf, or anything with the reserved bit
->   set — so those halt. Same class as #302 and #307, one probe from reproduction.
+> - ~~**m88k `bcnd`'s condition table is NULL for legal unnamed masks**~~ — **RESOLVED as
+>   #323 (round 76)**. Reproduced first: all nine named masks ran, and all eight unnamed
+>   ones tested (0, 4, 6, 9, 0xa, 0xb, 0xf, 0x11) halted the emulator. Fixed the way #307
+>   fixed `tcnd` — the manual's four-class mask written once, replacing the enumeration of
+>   nine named comparisons rather than sitting beside it, so `print_operator()` is gone.
+>   Seven gate-11 rows assert the branch DECISION, including the pair `m5=4` vs `m5=0xc`
+>   that differs only on the most negative value and would catch an implementation that
+>   collapsed those two classes.
 > - **MIPS paired-single arithmetic is unmodelled.** Deferred on purpose: the FIR
 >   advertisement sits inside `#if 0`, so the emulator makes no false claim a test could
 >   reproduce. This is feature work, not defect work. Reopen when a rig boots a

@@ -177,6 +177,9 @@ Oldest first.
 | `54f72c0` | Round 80 (#315/#316/#317): the SuperH halts a decode sweep cannot see — an FMOV register-pair store that killed the host process for half of all base registers, reserved FPU modes, two delay-slot events with no case at all, and MOVCA.L's dropped store |
 | `6a2f41c` | Round 81 (#318): the SuperH store-queue flush with the MMU on — the fix round 80 refused to guess at, via a dedicated translation entry point; the load-vs-store question settled on the manual's own evidence |
 | `cbbe1ec` | Round 78 (#319/#320/#321): ARM rotations the decoder answered by halting — and MVNS, which took its carry from the complement and was wrong in every band |
+| `0c1eb58` | Round 78 addendum (#322) + round 84: the panel overturned the PC-source carve-out, and stopped three device bounds checks that could never have fired |
+| `8885758` | Round 83: attempted, not reproduced — combining is unreachable from a step-driven probe, recorded rather than fixed on a reading |
+| `<pending>` | Round 76 (#323): m88k `bcnd` rejected two thirds of its own condition masks; the manual's four-class mask written once, replacing nine named comparisons |
 
 ## Feature highlights
 
