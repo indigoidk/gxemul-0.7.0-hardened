@@ -48,9 +48,33 @@
 #
 # The control row is load-bearing: `msr=0x2000` must take or every FP instruction
 # raises FPU-unavailable and the probe measures nothing. A dead probe SKIPs; it never
-# passes quietly. The mode rows additionally read FPSCR back, because `mtfsf`'s FM-mask
-# decode is scrambled (its own filed defect) and a mode that silently failed to take
-# would turn every directed-mode row into a second copy of the RN row.
+# passes quietly. The mode rows additionally read FPSCR back, because a mode that
+# silently failed to take would turn every directed-mode row into a second copy of
+# the RN row.
+#
+# Those rows set FPSCR by DEBUGGER WRITE rather than through the guest's own `mtfsf`,
+# which used to be necessary: #324 found that instruction building its write mask with
+# an eight-bit stride across four-bit fields, so half the FM bits wrote nothing and the
+# rest wrote the wrong fields. It is fixed and has six rows of its own now. The
+# debugger write stays because it keeps the mode rows independent of a second
+# instruction's correctness -- which is the property that let #324 be found at all.
+#
+# One `mtfsf` row records a DIVERGENCE rather than conformance, and says so in the
+# probe: FM=0x80 selects field 0, whose bits 1 and 2 are FEX and VX. Book I is explicit
+# that mtfsf must NOT copy those from frB -- they are OR summaries, "set according to
+# the usual rule ... and not from (FRB)33:34" -- so hardware would answer 90000000
+# where this emulator answers f0000000. It is the same unmodelled-exception-state gap
+# as the absent OE/UE/VE. FM=0x40 is the clean companion row: field 1 has no summary
+# bits, and it is the field holding VXSNAN, which the guest could not clear at all
+# until #324 (its nibble used to land above bit 31).
+#
+# #325's `fctiwz` rows carry a warning of their own. That row was pinned as a known
+# DIVERGENCE from #304 onward with its answer recorded as 00000000 -- and it was never
+# measuring the instruction it named: its word had frB = 0, so it converted f0 while
+# the probe seeded f1, and the zero came from an empty register. The `fctiwz 1.0
+# control` row exists because of it: a wrong register field yields zero for ANY
+# operand, so rows expecting 0x80000000 or 0 can be satisfied by accident and a row
+# expecting 1 cannot.
 set -u
 cd "$(dirname "$0")"
 . ./lib.sh
@@ -97,7 +121,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 72
+check "rows run"     "$want" 86
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -105,12 +129,22 @@ check "rows correct" "$got"  "$want"
 # damage. Both counts are asserted rather than trusted.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 41
-check_min "pinned rows present"         "$pins" 25
+# Both floors are set to the ACTUAL counts, not below them. They had drifted to 47/26
+# against real counts of 50/36, which means a whole class could have lost rows without
+# the floor noticing -- the same "a check that cannot fail" species this gate's header
+# warns about twice. The two numbers must also sum to the asserted `rows run` above
+# (50 + 36 = 86); if they stop summing, a row lost its class rather than the table
+# losing a row.
+check_min "discriminating rows present" "$disc" 50
+check_min "pinned rows present"         "$pins" 36
 
 # The one row that records a divergence this round deliberately does NOT fix.
 div=$(grep -c " DIV " "$LOG")
-check "divergence rows recorded" "$div" 1
+# #325 retired the one DIV row this gate carried: fctiwz of a NaN answered zero,
+# and now answers the most negative value the ISA owes. The count is asserted at
+# zero rather than the check being deleted -- a gate that stops counting a class
+# stops noticing when a member of it reappears.
+check "divergence rows recorded" "$div" 0
 
 # Named rows, one per contract, so a single site reverting cannot hide behind a total.
 #
@@ -124,7 +158,11 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "stfs 2^-127" "stfs band tail" "stfs band-" "stfsx 2^-127" \
          "stfs qNaN payload" "stfs sNaN passthrough" "stfsx qNaN payload" \
          "lfs qNaN-" "composed frsp->stfs NaN" "lfsx qNaN-" "VXSNAN sticky" \
-         "fctiwz qNaN div" \
+         "fctiwz qNaN" "fctiwz -qNaN" "fctiwz 1.0 control" \
+         "fctiwz +Inf" "fctiwz -Inf" "fctiwz 2^31" "fctiwz -(2^31+1)" \
+         "fctiwz 1.9 RTZ" "fctiwz -1.9 RTZ" \
+         "mtfsf FM=0xff" "mtfsf FM=0x80" "mtfsf FM=0x01" "mtfsf FM=0x0f" \
+         "mtfsf FM=0x40" "mtfsf clears" \
          "lfsu value" "lfsu updates r3" "lfdu value" "lfdu updates r3" \
          "stfsu value" "stfsu updates r3" "stfdu value" "stfdu updates r3" \
          "lfsux value" "lfsux updates r3" "lfdux value" "lfdux updates r3" \

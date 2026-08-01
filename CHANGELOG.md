@@ -4192,6 +4192,182 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Seventy-third round (#324, #325) — two PowerPC corrections, and a gate row that was measuring the wrong register
+
+### #324 — mtfsf spread its mask across sixty-four bits
+
+The FPSCR is eight **four**-bit fields and the FM field has one bit per field, so
+the decoder builds the write mask a nibble at a time. It shifted by **eight** bits
+per iteration while ORing in four:
+
+```c
+	for (bi=7; bi>=0; bi--) {
+		ic->arg[1] <<= 8;
+		if (iword & (1 << (17+bi)))
+			ic->arg[1] |= 0xf;
+	}
+```
+
+so the mask sprawled across sixty-four bits. The first four FM bits landed entirely
+above the 32-bit FPSCR and wrote **nothing**; the rest wrote the wrong fields.
+Measured with every field selected and a source of all ones, the register came back
+`0x0f0f0f0f` instead of `0xffffffff`; `FM=0x80` wrote nothing at all; and `FM=0x01`
+was correct only by the coincidence of being the final iteration, with no shift
+after it. One character: the stride is 4.
+
+This is why gate 13 sets FPSCR by **debugger write** everywhere rather than through
+the guest's own `mtfsf`, and why its mode rows read FPSCR back afterwards: a mode
+that silently failed to take would have turned every directed-mode row into a second
+copy of the RN row. That precaution is what made this finding possible — had the
+gate driven the mode through `mtfsf`, the defect would have been baked into the
+measurement instead of exposed by it. The debugger write stays for exactly that
+reason, and `mtfsf` now has six rows of its own.
+
+### #325 — fctiwz converted a NaN to zero
+
+The ISA gives a NaN the same answer as an operand below the representable range:
+the most negative value. This returned **zero**, which is the worse kind of wrong —
+a legitimate result the guest cannot distinguish from a successful conversion of
+0.0. Two lines.
+
+### The part worth reading: the row that recorded that divergence never measured it
+
+`fctiwz`'s defect has been pinned in gate 13 as a known divergence since #304, with
+its committed answer recorded as `00000000`. **That row was not measuring `fctiwz`
+of a NaN.** Its instruction word was `0xFC00001E`, whose frB field is **zero**, so
+it converted `f0` while the probe seeded the operand into `f1`. The answer was zero
+because it converted an empty register.
+
+The source reading behind the original filing was right, and the row that appeared
+to confirm it was measuring something else that happened to agree. Two independent
+wrongs producing one plausible number is exactly the failure this harness exists to
+prevent, and it survived a round-69 five-seat review and every run since.
+
+It was caught only because the fix did not change the row. Chasing that produced
+the diagnostic that mattered: **`fctiwz` of 1.0 also returned zero**, which no
+theory of the NaN path can explain.
+
+Two things follow, and both are in the gate now:
+
+- The scope is exactly one encoding. Every other hand-assembled word in that probe
+  was decoded field by field and is correct — `FRSP_F0_F1` genuinely has frB=1, so
+  #304's verification, which is most of this gate, stands.
+- The new **`fctiwz 1.0 control`** row is the one that could have caught it from the
+  start. With a wrong frB the answer is zero for *any* operand, and every existing
+  `fctiwz` row expected `0x80000000` or `0` — values a broken encoding can produce
+  by accident. A row whose expected answer is small and nonzero cannot.
+
+That is the third time in this project a hand-assembled encoding has nearly
+manufactured a finding, and the first time one reached a committed gate.
+
+### The after-pass: two seats disagreed about the ISA, and the ISA answered
+
+The five-seat review of the finished diff split on one question — what `fctiwz` owes
+for an operand that is too *large and positive*, a branch neither correction touches.
+One seat held that PowerPC saturates to `0x7fffffff`. Another held that PowerPC uses a
+single invalid sentinel, `0x80000000`, for every bad operand the way x87 does, and
+filed the unchanged branch as a defect the round should have fixed.
+
+Settled from Book I rather than by counting seats. The instruction's own definition:
+
+> If the operand in FRB is greater than 2^31 - 1, then bits 32:63 of FRT are set to
+> `0x7FFF_FFFF`. If the operand in FRB is less than -2^31, then bits 32:63 of FRT are
+> set to `0x8000_0000`.
+
+and Appendix A.2's model splits the invalid cases three ways: **Infinity Operand** and
+**Large Operand** both branch on sign, while **SNaN Operand** and **QNaN Operand**
+return `0x8000_0000` unconditionally. So the existing branch is right, the proposed
+change would have been a regression, and #325's unconditional `0x80000000` for NaN is
+right for both NaN kinds and both signs.
+
+One thing had to be checked before that conclusion held, because #325 could have
+broken infinities by accident: `ieee_interpret_float_value` does **not** set `nan` for
+±Inf — it takes the `zero_or_no_reasonable_result` path, which applies the sign — so
+`frb.nan` is false for infinities and they still reach the sign-dependent branches.
+Had that function classified Inf as NaN, #325 would have turned `fctiwz(+Inf)` from
+`0x7fffffff` into `0x80000000`.
+
+The disagreement was worth having: it landed on a branch with **no gate coverage at
+all**. Four rows now pin it — `+Inf`, `-Inf`, `2^31`, `-(2^31+1)` — so the misreading
+that was proposed here cannot be applied later without a gate going red.
+
+### What the same pass found in the gate rows themselves
+
+Three more, each from a different seat and each verified before being acted on:
+
+**The `mtfsf FM=0x80` row blesses a defect.** Field 0 is FX, FEX, VX, OX, and Book I's
+own note says FX and OX come from `(FRB)32` and `(FRB)35` while *"Bits 1 and 2 (FEX and
+VX) are set according to the usual rule ... and not from (FRB)33:34"* — they are OR
+summaries and `mtfsf` must never copy them. This emulator copies all four, so it answers
+`f0000000` where hardware answers `90000000`. Two seats found this independently. The row
+stays, because it is what measures #324's field placement, but it is now labelled as
+recording a divergence rather than conformance, and **`FM=0x40` was added as the clean
+companion**: field 1 carries no summary bits.
+
+That companion turned out to be the row worth having for another reason. Field 1 holds
+**VXSNAN** — the sticky bit #304 made the emulator set, and which `frsp`'s own comment
+names `mtfsf` as the guest's way to clear. Under the old stride, field 1's nibble landed
+at bits 48–51, above the 32-bit FPSCR. **The guest could not clear VXSNAN at all.** #324
+is what makes that documented path real; nobody had connected the two defects.
+
+**Every `mtfsf` row measured only half the handler.** All of them started from a zeroed
+FPSCR and wrote ones, so `fpscr &= ~mask` could have been deleted entirely and all four
+would still have passed. One row now preloads all ones and writes zeros into the selected
+field, so the clearing half is measured too.
+
+**`fctiwz 1.0` cannot pin round-toward-zero.** An integer converts identically under
+every rounding mode, so a decode that reached `fctiw` (XO 14, rounds per RN) instead of
+`fctiwz` (XO 15) would pass it. `1.9 → 1` and `-1.9 → -1` separate them; nearest would
+give 2 and -2. The control row was doing the job it was added for — proving the operand
+register is read — and none of the job its name implied.
+
+One caveat is recorded rather than acted on: the `>= 2147483647.0` / `<= -2147483648.0`
+comparisons give the right *result* for every operand, but they are not a correct
+*classification* of which operands are out of range. The model range-checks after
+rounding, so under round-toward-zero an operand stays convertible while
+`x < 2147483648.0`. Anyone who later reuses these branches to raise VXCVI will flag
+exact endpoints and the fractional fringe that are not invalid at all.
+
+### Still open in this cluster, deliberately
+
+`fmuls`, `fadds`, `fsubs` and `fdivs` are bare aliases of their double-precision
+handlers, each with a `/* TODO */` — they do not narrow at all. That is not a
+one-liner: doing it properly means computing in double, rounding once to single
+under FPSCR's mode, and representing the result back in double, which is #308's
+round-to-odd machinery plus rounding-mode plumbing this round did not build. The
+exception-enable bits (OE/UE/VE) and the FPRF class field remain unmodelled, and
+the splice-letter divergence at ~2^129 stays a deliberate policy pin.
+
+## Retrospective review of round 81 (#318) — the code stands, one bug record did not
+
+Part of the standing rule that shipped work gets a panel pass after the fact, not only
+before. #318 (the SH-4 store-queue flush with the MMU on) was re-reviewed against the
+SH7750 manual and comes back **correct**: the exception-XOR-store property holds (a
+failing translation returns before the copy loop, and every failing path inside
+`translate_via_mmu` raises through the `exception:` label), the store-family EXPEVT/TEA/
+PTEH/SPC state is right for the guest to fault and retry, translating the *unmasked*
+address and masking the *result* is what preserves bits [9:5] as the manual requires, and
+the write classification is load-bearing rather than cosmetic — a read classification
+would let a flush to a clean page skip `EXPEVT_TLB_MOD` and lose the dirty bit, which is
+exactly what gate 10's `sq at1 clean` row pins.
+
+**What did not survive is an entry in `OUTSTANDING_BUGS.md`.** It claimed the store-queue
+identity mapping ignores address bits [25:6], "so a guest filling a queue through a
+non-zero offset stores where the flush will not read it". That is false. `memory_sh.c:301`
+passes the **full** virtual address through, and the store-queue device wraps its index
+with `% sizeof(d->sq)` (`dev_sh4.c:952`), so bits [5:0] — the queue select and the offset
+within it — survive intact and an aliased fill lands exactly where the flush reads. That
+is hardware's own don't-care treatment of [25:6], not a defect.
+
+It was a bug report filed against correct behaviour, and it had been sitting in the queue
+as scheduled work. Corrected in the record and withdrawn from round 82's task, with the
+reason kept: a false entry in a bug list is not free — it costs a future round the time to
+re-derive it, and it is the same dishonest-listing class #270 exists to prevent. The
+review also noted a genuine gap the round did not have: gate 10's store-queue rows assert
+the memory effect but pin none of the exception registers, so a regression that swapped
+the store-family event codes for load-family would pass everything except one row. Folded
+into round 82, which is already building the user-mode witness those rows need.
+
 ## Not changed (assessed, intentionally left)
 - ELF64 `st_name` "truncation" — **false positive**: gxemul's `exec_elf.h` defines
   `Elf64_Half = uint32_t` (32-bit), so it is not truncated.

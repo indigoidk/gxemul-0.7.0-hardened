@@ -1213,7 +1213,18 @@ X(fctiwz)
 	CHECK_FOR_FPU_EXCEPTION;
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &frb, IEEE_FMT_D);
-	if (!frb.nan) {
+	if (frb.nan) {
+		/*
+		 *  #325: a NaN converts to the most negative value, not to
+		 *  zero. The ISA gives the same answer for a NaN as for an
+		 *  operand below the representable range, and zero is a
+		 *  legitimate result the guest cannot tell apart from a
+		 *  successful conversion of 0.0. Recorded as a pinned
+		 *  divergence in gate 13 since #304 measured it; this is the
+		 *  fix that divergence was waiting for.
+		 */
+		res = 0x80000000;
+	} else {
 		if (frb.f >= 2147483647.0)
 			res = 0x7fffffff;
 		else if (frb.f <= -2147483648.0)
@@ -4382,9 +4393,24 @@ X(to_be_translated)
 			case PPC_63_MTFSF:
 				ic->f = instr(mtfsf);
 				ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rb]);
+				/*
+				 *  #324: the FPSCR is eight FOUR-bit fields,
+				 *  one per FM bit, so the stride here is 4.
+				 *  It was 8, which spread the mask across
+				 *  sixty-four bits: the first four FM bits
+				 *  landed entirely above the 32-bit FPSCR and
+				 *  wrote nothing at all, and the rest wrote
+				 *  the wrong fields. Measured with every field
+				 *  selected and a source of all ones, the
+				 *  register came back 0x0f0f0f0f instead of
+				 *  0xffffffff; FM=0x80 wrote nothing; and
+				 *  FM=0x01 was right only by coincidence,
+				 *  being the last iteration with no shift
+				 *  after it.
+				 */
 				ic->arg[1] = 0;
 				for (bi=7; bi>=0; bi--) {
-					ic->arg[1] <<= 8;
+					ic->arg[1] <<= 4;
 					if (iword & (1 << (17+bi)))
 						ic->arg[1] |= 0xf;
 				}

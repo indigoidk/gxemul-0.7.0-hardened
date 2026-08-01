@@ -16,12 +16,15 @@ swapping, unlike every other rig in this harness.
 the FPU-unavailable exception and the probe measures nothing. The control row
 exists to prove that setup took.
 
-FPSCR is set by DEBUGGER WRITE, never by the guest's own mtfsf: mtfsf's FM-mask
-decode is scrambled (cpu_ppc_instr.c:3888-3892 builds nibble masks at an 8-bit
-stride, so FM[0..3] write nothing and FM[4..6] write the wrong fields). That is
-a filed defect of its own; using it here would make the mode rows measure the
-bug instead of the mode. Each mode row READS FPSCR BACK and reports it, so a
-write that did not take is visible rather than silently scoring.
+FPSCR is set by DEBUGGER WRITE, never by the guest's own mtfsf, and each mode row
+READS FPSCR BACK so a write that did not take is visible rather than silently
+scoring. That precaution was not hypothetical: mtfsf's FM-mask decode WAS
+scrambled -- it built nibble masks at an 8-bit stride, so FM[0..3] wrote nothing
+and FM[4..6] wrote the wrong fields -- and had the mode rows driven the mode
+through it, the defect would have been baked into every measurement instead of
+exposed by one. #324 fixed the stride; the debugger write stays, because keeping
+the mode rows independent of a second instruction's correctness is what made the
+finding reachable. mtfsf now has six rows of its own.
 
 The contracts (Power ISA Book I / PEM)
 --------------------------------------
@@ -293,6 +296,88 @@ def verify_mode_writes():
     return good, bad
 
 
+#  #324: mtfsf's FM field selects eight FOUR-bit FPSCR fields. The decoder built
+#  the mask with an EIGHT-bit stride, spreading it across sixty-four bits: the
+#  first four FM bits landed entirely above the 32-bit FPSCR and wrote nothing,
+#  and the rest wrote the wrong fields.
+#
+#  This is why every mode row in this file sets FPSCR by DEBUGGER WRITE and the
+#  header says using the guest's own mtfsf "would make the mode rows measure the
+#  bug instead of the mode". These rows measure the bug on purpose, and they are
+#  the reason that note can now be read as history.
+#
+#  FM=0x01 is the row that matters least and is kept anyway: it was correct on
+#  the broken build, by the coincidence of being the last loop iteration with no
+#  shift after it. A table of only-broken rows would have suggested the whole
+#  instruction was dead, which it was not.
+def run_mtfsf(fm, fval, preload=0x00000000):
+    """mtfsf FM,f1 ; mffs f3 ; stfd f3 -- read FPSCR back through the guest.
+
+    `preload` is the FPSCR the guest starts from. It defaults to zero, which
+    measures only the OR half of the handler's `&= ~mask` / `|= mask & frb`
+    pair: from zero, a handler that never cleared would still answer correctly
+    on every row. One row preloads all ones and writes zeros, so the clearing
+    half is measured too.
+    """
+    mtfsf = (63 << 26) | ((fm & 0xff) << 17) | (1 << 11) | (711 << 1)
+    w, _ = session([
+        "msr=0x2000",
+        "fpscr=0x%08x" % preload,
+        "f1=0x%016x" % fval,
+        "r5=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, mtfsf),
+        "put w 0x%x, 0x%08x" % (CODE + 4, MFFS_F3),
+        "put w 0x%x, 0x%08x" % (CODE + 8, STFD_F3_R5),
+        "pc=0x%x" % CODE,
+        "step 3"], 2)
+    if w is None:
+        return None
+    #  big-endian: the FPSCR is the low word of the doubleword
+    return w[1]
+
+
+#  #324. Every row writes a source of all ones with FPSCR forced to zero first,
+#  so the byte read back IS the mask the decoder built.
+#
+#  FM=0x80 RECORDS A KNOWN DIVERGENCE, not conformance. It selects field 0,
+#  whose four bits are FX, FEX, VX, OX -- and Book I's mtfsf note says FX and OX
+#  come from (FRB)32 and (FRB)35 while "Bits 1 and 2 (FEX and VX) are set
+#  according to the usual rule ... and not from (FRB)33:34". They are OR
+#  summaries, and mtfsf must never copy them. This emulator copies all four, so
+#  it answers f0000000 where hardware would answer 90000000: FX and OX copied,
+#  FEX and VX recomputed to zero because no other exception bit is set. That is
+#  the same unmodelled-exception-state gap as the absent OE/UE/VE, kept here as
+#  a measured record of it rather than a silent one. FM=0xff escapes the
+#  question only by coincidence -- with every exception and enable bit set, both
+#  summaries are legitimately 1, so ffffffff is the conformant answer too.
+#
+#  FM=0x01 is a PIN and not a DISC: the old 8-bit stride left the last iteration
+#  unshifted, so this row answered 0000000f before the fix as well. It flips
+#  nothing and must not be counted among the rows that do.
+#  FM=0x40 is the row that tests the top half of the mask WITHOUT the summary-bit
+#  question, and it is the one that matters most in practice: field 1 holds
+#  VXSNAN, the sticky bit #304 made the emulator set. Under the old stride that
+#  field's nibble landed at bits 48-51, above the 32-bit FPSCR, so the guest
+#  could not clear VXSNAN at all -- mtfsf is the documented way to do it, and it
+#  wrote nothing. #324 is what makes that path real.
+#
+#  The last row preloads all ones and writes a source whose field 0 is zero, so
+#  it measures the CLEARING half of `fpscr &= ~mask; fpscr |= mask & frb`. Every
+#  other row starts from zero, where a handler that never cleared would still
+#  answer correctly on all of them.
+MTFSF_ROWS = [
+    #  name,           FM,   frB value,           want,       class, preload
+    ("mtfsf FM=0xff",  0xff, 0x00000000ffffffff, "ffffffff", "DISC", 0x00000000),
+    ("mtfsf FM=0x80",  0x80, 0x00000000ffffffff, "f0000000", "DISC", 0x00000000),
+    ("mtfsf FM=0x40",  0x40, 0x00000000ffffffff, "0f000000", "DISC", 0x00000000),
+    ("mtfsf FM=0x01",  0x01, 0x00000000ffffffff, "0000000f", "PIN",  0x00000000),
+    ("mtfsf FM=0x0f",  0x0f, 0x00000000ffffffff, "0000ffff", "DISC", 0x00000000),
+    ("mtfsf clears",   0x80, 0x000000000fffffff, "0fffffff", "DISC", 0xffffffff),
+]
+
+
 def run_fctiwz(fbits):
     """fctiwz f0,f1 ; stfd f0,0(r3) -- the converted word is the LOW half."""
     w, _ = session([
@@ -302,7 +387,10 @@ def run_fctiwz(fbits):
         "r3=0x%x" % DEST,
         "put w 0x%x, 0xdeadbeef" % DEST,
         "put w 0x%x, 0xdeadbeef" % (DEST + 4),
-        "put w 0x%x, 0x%08x" % (CODE, 0xFC00001E),      # fctiwz f0,f1
+        #  frB is bits 11-15. This word carried 0xFC00001E, whose frB is ZERO,
+        #  so it converted f0 and never the operand seeded into f1 -- see the
+        #  note on FCTIWZ_ROWS below.
+        "put w 0x%x, 0x%08x" % (CODE, 0xFC00081E),      # fctiwz f0,f1
         "put w 0x%x, 0x%08x" % (CODE + 4, STFD_F0_R3),
         "pc=0x%x" % CODE,
         "step 2"], 2)
@@ -455,11 +543,51 @@ LFSX_ROWS = [
     ("lfsx qNaN-",                  0xffc00001, "fff8000020000000", "DISC"),
 ]
 
-#  fctiwz of a NaN answers 0 where the ISA owes 0x80000000. NOT this round's
-#  scope -- it is the PPC cleanup round's -- but pinned here as a DIVERGENCE so
-#  it cannot drift silently while nobody is looking at it.
+#  fctiwz. The NaN answer was the divergence this table was created to pin; #325
+#  fixed it and the DIV rows became DISC rows.
 FCTIWZ_ROWS = [
-    ("fctiwz qNaN div",             0x7ff8000000000000, "00000000", "DIV"),
+    #  #325: was pinned at 00000000 as a recorded divergence from #304 onward.
+    #  The ISA converts a NaN to the most negative value, the same answer it
+    #  gives for an operand below the representable range. Zero was the worse
+    #  kind of wrong: a legitimate result the guest cannot tell apart from a
+    #  successful conversion of 0.0.
+    #
+    #  THE ROW WAS ALSO NOT MEASURING WHAT IT SAID. Its instruction word had
+    #  frB = 0, so it converted f0 while the probe seeded the operand into f1 --
+    #  the answer was 0 because it converted an empty register, not because the
+    #  NaN path returned 0. The source reading was right and the row was
+    #  measuring something else that happened to agree. Both are fixed here.
+    #
+    #  The 1.0 row is the control that exposes it: with a wrong frB the answer
+    #  is 0 for ANY operand, so a row whose expected value is nonzero cannot
+    #  pass while the encoding is wrong. Every NaN and out-of-range row expects
+    #  0x80000000 or 0, which a broken encoding can satisfy by accident.
+    #
+    #  The out-of-range answer is SIGN-DEPENDENT and the NaN answer is not.
+    #  Book I gives the instruction's own rule -- "greater than 2^31-1 ->
+    #  0x7FFF_FFFF, less than -2^31 -> 0x8000_0000" -- and Appendix A.2's
+    #  model splits it three ways: Infinity Operand and Large Operand both
+    #  branch on sign, while SNaN Operand and QNaN Operand return
+    #  0x8000_0000 unconditionally. The four rows below pin the sign-dependent
+    #  half, which #325 does NOT touch and which the NaN rows cannot reach.
+    #  They exist because a plausible misreading -- that PowerPC uses one
+    #  invalid sentinel for every bad operand, the way x87 does -- would turn
+    #  the positive rows into 0x80000000, and nothing in this gate would have
+    #  noticed. A panel seat proposed exactly that change; the ISA refuted it.
+    #  1.0 proves the operand register is read; it cannot prove the ROUNDING,
+    #  because an integer converts the same way under every mode -- a decode
+    #  that reached `fctiw` (round per RN, XO 14) instead of `fctiwz` (XO 15)
+    #  would pass it. The 1.9 and -1.9 rows are the ones that separate them:
+    #  toward zero gives 1 and -1, nearest would give 2 and -2.
+    ("fctiwz 1.0 control",          0x3ff0000000000000, "00000001", "PIN"),
+    ("fctiwz 1.9 RTZ",              0x3ffe666666666666, "00000001", "PIN"),
+    ("fctiwz -1.9 RTZ",             0xbffe666666666666, "ffffffff", "PIN"),
+    ("fctiwz qNaN",                 0x7ff8000000000000, "80000000", "DISC"),
+    ("fctiwz -qNaN",                0xfff8000000000000, "80000000", "DISC"),
+    ("fctiwz +Inf",                 0x7ff0000000000000, "7fffffff", "PIN"),
+    ("fctiwz -Inf",                 0xfff0000000000000, "80000000", "PIN"),
+    ("fctiwz 2^31",                 0x41e0000000000000, "7fffffff", "PIN"),
+    ("fctiwz -(2^31+1)",            0xc1e0000000200000, "80000000", "PIN"),
 ]
 
 
@@ -592,7 +720,28 @@ COMMITTED_BEFORE = {
     "lfs qNaN-":               "7fffffffffffffff",
     "lfs qNaN+":               "7fffffffffffffff",
     "composed frsp->stfs NaN": "00000000",
+
+    #  #324, measured on the build that precedes it. The old decoder shifted 8
+    #  bits per iteration while ORing in 4, so the mask sprawled across 64 bits
+    #  and only its low 32 survived the AND: FM=0xff and FM=0x0f both collapse
+    #  to the same 0f0f0f0f, FM=0x80 landed entirely above bit 31 and wrote
+    #  nothing, and FM=0x01 was right only as the last iteration with no shift
+    #  after it. The first three were measured; FM=0x0f is stated from the same
+    #  mask arithmetic and was added after the fix, so it has no measured
+    #  pre-fix byte of its own.
+    "mtfsf FM=0xff":           "0f0f0f0f",
+    "mtfsf FM=0x80":           "00000000",
+    "mtfsf FM=0x01":           "0000000f",
 }
+
+#  #325 has no entry above, deliberately. The pre-fix byte for `fctiwz` of a
+#  NaN cannot be quoted from the row that recorded it: that row's instruction
+#  word had frB = 0 and converted an empty f0, so its 00000000 is evidence
+#  about an encoding, not about the NaN path. What WAS measured on the
+#  committed build, and is why the encoding came under suspicion at all, is
+#  that `fctiwz` of 1.0 through the same row also returned 00000000 -- which
+#  no account of the NaN path explains. The `fctiwz 1.0 control` row is that
+#  diagnostic, kept.
 
 
 
@@ -632,6 +781,10 @@ def main():
 
     for name, operand, want, cls in FCTIWZ_ROWS:
         report(name, run_fctiwz(operand), want, cls)
+
+    #  #324: FM decode, measured through the guest's own mtfsf and mffs.
+    for name, fm, fval, want, cls, preload in MTFSF_ROWS:
+        report(name, run_mtfsf(fm, fval, preload), want, cls)
 
     for name, r3, r4, words, nread, want, cls in UPDATE_ROWS:
         report(name, run_update(r3, r4, words, nread), want, cls)

@@ -1,6 +1,6 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
-> ## 2026-07-30 — OPEN LIST, at a glance
+> ## 2026-08-01 — OPEN LIST, at a glance
 > **Only genuinely OPEN items live here.** Resolved ones are removed, not annotated: an
 > index that accumulates its own history stops being an index, and a section headed
 > "everything genuinely open" that is mostly ticks is the dishonest-listing class #270
@@ -71,17 +71,10 @@
 >   **Still true, still enforced:** do NOT wire `stfs` to FPSCR.RN; it does not round.
 >
 > **PowerPC, filed by round 69's panel and each owed its own round**
-> - **`mtfsf`'s FM-mask decode is scrambled** (`cpu_ppc_instr.c:3888-3892`): the nibble
->   masks are built at an 8-bit stride, so FM[0..3] write nothing and FM[4..6] write the
->   wrong fields (FM[4] lands on the VXSNAN nibble); only FM[7] is correct, which by luck
->   covers the rounding field. Any guest `fpsetround` using another mask misprograms
->   FPSCR. Gate 13's fpscr readback is the instrument.
 > - **The single-precision arithmetic family does not narrow**: `fmuls` is an alias of
 >   `fmul` (and the rest follow), so `float` arithmetic keeps double precision. #304's
 >   helper now exists, so this is wiring — but it needs the store-side subnormal contract
 >   settled first, or it bakes in a policy that round may change.
-> - **`fctiwz` of a NaN answers 0** where the ISA owes `0x80000000`; pinned in gate 13 as
->   a divergence so it cannot drift silently.
 > - ~~**The update-form conversions are not decoded at all**~~ — **RESOLVED as #310
 >   (round 70B)**, and the family was twice the size this entry named: the four primary
 >   opcodes (`lfsu`/`lfdu`/`stfsu`/`stfdu`, whose defines were missing outright) *and*
@@ -93,7 +86,22 @@
 >   reported were data in the read-write-execute segment.
 > - **The exception-enable bits (OE/UE/VE) and the FPRF class bits are unmodelled.** Not
 >   forced piecemeal, for the reason the SH exception model is not: a lone enabled bit
->   implies the others work.
+>   implies the others work. Round 73's after-pass added two specifics and a warning:
+>   `fctiwz` owes **VXCVI** (and **VXSNAN** for a signalling operand), and `mtfsf` must
+>   **not copy FEX and VX** — Book I calls them summaries "set according to the usual
+>   rule ... and not from `(FRB)33:34`", so the emulator answers `f0000000` for
+>   `FM=0x80` where hardware answers `90000000`. Gate 13 measures that divergence rather
+>   than hiding it. The warning, and it is load-bearing: `fctiwz`'s existing
+>   `>= 2147483647.0` / `<= -2147483648.0` branches give the right *result* but are not a
+>   correct *classification* of "out of range" — the model range-checks after rounding,
+>   so under round-toward-zero an operand stays convertible while `x < 2147483648.0`.
+>   Reusing those branches to raise VXCVI would flag endpoints that are not invalid.
+> - **Seven FP control/convert encodings are absent from the tree entirely**, so each
+>   halts the emulator via `goto bad`: `fctiw` (the round-per-RN sibling of the
+>   implemented `fctiwz`), `fctid`/`fctidz`, `mtfsfi`, `mtfsb0`/`mtfsb1`, and `mcrfs`.
+>   `mcrfs` is the sharpest — `frsp`'s own comment names it as the guest's path for
+>   clearing the sticky VXSNAN that #304 introduced, and it does not exist. Same class as
+>   rounds 70/70B/78/79/80; gate 13 is already the instrument.
 > - **The splice letter is deliberately not followed** for finite values around 2^129:
 >   Book I's `SINGLE()` would WRAP the exponent (2^129 → a 2.0f-class pattern, 1.5·2^128
 >   → the NaN pattern `0x7FC00000`), and this fork keeps #287's ±Inf instead. Panel
@@ -277,10 +285,24 @@
 >   **RESOLVED as #317**: it decodes to the existing longword store, which has the same
 >   alignment class and exception behaviour.
 > - **Adjacent store-queue model gaps** (same function, same audit, not fixed): the SQMD
->   user-access check raises reserved-instruction where hardware raises an address error and
->   is only consulted when AT=1; the identity mapping ignores address bits [25:6], so a guest
->   filling a queue through a non-zero offset stores where the flush will not read it; and
->   UTLB multiple-hit detection is unimplemented.
+>   user-access check raises reserved-instruction where hardware raises an address error
+>   (`EXPEVT_ADDR_ERR_ST`, which `sh_exception` already implements) and is only consulted
+>   when AT=1, though the manual's SQMD rule is not AT-conditioned — so with AT=0, SQMD=1
+>   and a user-mode guest, the flush proceeds where hardware would fault; queue-filling
+>   stores under AT=1 take the identity map and skip UTLB judgment entirely, where real
+>   hardware exception-judges SQ-area writes too; and UTLB multiple-hit detection is
+>   unimplemented.
+>
+>   **Correction, 2026-08-01 (retrospective review of round 81).** This entry used to add
+>   that "the identity mapping ignores address bits [25:6], so a guest filling a queue
+>   through a non-zero offset stores where the flush will not read it." That is **not
+>   true**, and it was a bug report against correct behaviour. `memory_sh.c:301` passes the
+>   **full** vaddr through, and the SQ device wraps with `% sizeof(d->sq)` (`dev_sh4.c:952`),
+>   so bits [5:0] — the queue select and the offset within it — survive intact. An aliased
+>   fill lands exactly where the flush reads, which is hardware's own don't-care treatment
+>   of [25:6]. Removed rather than annotated in place, per this file's rule, but the
+>   correction is recorded because a false entry in a bug list costs a future round the time
+>   to re-derive it.
 >
 > **Known and deliberately not forced — each with the reason it stays**
 > - **The SH FPU exception model does not exist**: no instruction sets any FPSCR cause
