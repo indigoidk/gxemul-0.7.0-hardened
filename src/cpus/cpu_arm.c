@@ -1093,6 +1093,70 @@ int arm_cpu_disassemble_instr_thumb(struct cpu *cpu, unsigned char *ib,
 
 
 /*
+ *  thumb_addsub_flags():  #328
+ *
+ *  N, Z, C and V for the Thumb add/subtract family, from the ORIGINAL operands.
+ *  Returns the 32-bit result; the caller stores it where the encoding says.
+ *
+ *  Four near-identical blocks used to compute this inline as
+ *
+ *      uint64_t result = old + (uint32_t)(-b);
+ *
+ *  and read all four flags off that. Three of them were wrong, measured on a
+ *  Thumb rig (an ARM `bx` to an odd address; flags read back through the
+ *  guest's own `mrs`):
+ *
+ *    Z came from `result == 0`, the FULL 64-bit value. A subtract that reaches
+ *      zero carries out of bit 31, so result was 0x100000000 -- not zero -- and
+ *      Z stayed CLEAR although the stored 32-bit result was zero. Subtracting
+ *      equal values is the commonest way to reach zero, and `subs; bne` is how
+ *      a Thumb countdown loop ends: it never did. The same line also silenced Z
+ *      for an ADD that wrapped to zero (1 + 0xffffffff).
+ *    C came from bit 32 of that sum. With b == 0 the addend is (uint32_t)(-0),
+ *      which is 0, nothing carries out, and C read 0 -- but a subtraction that
+ *      does not borrow must SET carry, so `cmp r0,#0` reported a borrow that
+ *      never happened.
+ *    V read the sign of the NEGATED subtrahend, and negation is exactly what
+ *      does not work at 0x80000000: (uint32_t)(-0x80000000) is 0x80000000, so
+ *      the code saw "adding two negatives". V was inverted for every register
+ *      subtraction with that subtrahend -- including x - x, which cannot
+ *      overflow yet reported V set.
+ *
+ *  N was always right, because it cast to int32_t before testing. That is the
+ *  shape the whole function should have had.
+ *
+ *  The carry test mirrors #311's committed ARM-mode fix (cpu_arm_instr_dpi.c):
+ *  compute the operation in 64 bits on the UN-negated operands and compare
+ *  against the truncated result. Note it is not transplantable to the old
+ *  expression -- `old + (uint32_t)(-b)` is a different 64-bit value, and
+ *  applying #311's equality test to it sets C backwards for every nonzero b.
+ *  Restructuring onto the true subtraction first is what makes them agree.
+ */
+static uint32_t thumb_addsub_flags(struct cpu *cpu, uint32_t a, uint32_t b,
+	int isSub)
+{
+	uint64_t c64 = isSub ? (uint64_t)a - b : (uint64_t)a + b;
+	uint32_t c32 = (uint32_t) c64;
+	int carry = isSub ? ((uint64_t)c32 == c64) : ((uint64_t)c32 != c64);
+	int overflow = isSub
+	    ? (((a ^ b) & (a ^ c32) & 0x80000000U) != 0)
+	    : ((~(a ^ b) & (a ^ c32) & 0x80000000U) != 0);
+
+	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C | ARM_F_V);
+	if (c32 == 0)
+		cpu->cd.arm.flags |= ARM_F_Z;
+	if ((int32_t)c32 < 0)
+		cpu->cd.arm.flags |= ARM_F_N;
+	if (carry)
+		cpu->cd.arm.flags |= ARM_F_C;
+	if (overflow)
+		cpu->cd.arm.flags |= ARM_F_V;
+
+	return c32;
+}
+
+
+/*
  *  arm_cpu_interpret_thumb_SLOW():
  *
  *  Slow interpretation of THUMB instructions.
@@ -1212,48 +1276,24 @@ int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
 			// add or sub
 			int isSub = iw & 0x0200;
 			int isImm3 = iw & 0x0400;
-			uint64_t old = cpu->cd.arm.r[r3];
-			uint64_t tmp64 = isImm3 ? (uint64_t)r6 : cpu->cd.arm.r[r6];
-			tmp64 = (uint32_t)(isSub ? -tmp64 : tmp64);
-			uint64_t result = old + tmp64;
-			cpu->cd.arm.r[rd] = result;
-			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C | ARM_F_V);
-			if (result == 0)
-				cpu->cd.arm.flags |= ARM_F_Z;
-			if ((int32_t)result < 0)
-				cpu->cd.arm.flags |= ARM_F_N;
-			if (result & 0x100000000ULL)
-				cpu->cd.arm.flags |= ARM_F_C;
-			if (result & 0x80000000) {
-				if ((tmp64 & 0x80000000) == 0 && (old & 0x80000000) == 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			} else {
-				if ((tmp64 & 0x80000000) != 0 && (old & 0x80000000) != 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			}
+			uint32_t a = cpu->cd.arm.r[r3];
+			/*  #328: capture the subtrahend BEFORE the result is
+			    stored. `subs r0,r1,r0` is legal, so re-reading the
+			    register afterwards would fetch the value this
+			    instruction just wrote and compute carry from it.  */
+			uint32_t b = isImm3 ? (uint32_t)r6 : cpu->cd.arm.r[r6];
+			cpu->cd.arm.r[rd] =
+			    thumb_addsub_flags(cpu, a, b, isSub);
 		}
 		break;
 
 	case 0x2:
 		// movs or cmp
 		if (iw & 0x0800) {
-			uint64_t old = cpu->cd.arm.r[rd8];
-			uint64_t tmp64 = (uint32_t)(-(iw & 0xff));
-			uint64_t result = old + tmp64;
-			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C | ARM_F_V);
-			if (result == 0)
-				cpu->cd.arm.flags |= ARM_F_Z;
-			if ((int32_t)result < 0)
-				cpu->cd.arm.flags |= ARM_F_N;
-			if (result & 0x100000000ULL)
-				cpu->cd.arm.flags |= ARM_F_C;
-			if (result & 0x80000000) {
-				if ((tmp64 & 0x80000000) == 0 && (old & 0x80000000) == 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			} else {
-				if ((tmp64 & 0x80000000) != 0 && (old & 0x80000000) != 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			}
+			/*  #328: cmp is always a subtract, and writes no
+			    register -- only the flags.  */
+			(void) thumb_addsub_flags(cpu, cpu->cd.arm.r[rd8],
+			    (uint32_t)(iw & 0xff), 1);
 		} else {
 			cpu->cd.arm.r[rd8] = iw & 0xff;
 			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
@@ -1265,29 +1305,9 @@ int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
 	case 0x3:
 		// adds or sub
 		{
-			uint64_t old = cpu->cd.arm.r[rd8];
-			uint64_t tmp64 = iw & 0xff;
-			
-			if (iw & 0x0800)
-				tmp64 = (uint32_t)(-tmp64);
-
-			uint64_t result = old + tmp64;
-			cpu->cd.arm.r[rd8] = result;
-
-			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C | ARM_F_V);
-			if (result == 0)
-				cpu->cd.arm.flags |= ARM_F_Z;
-			if ((int32_t)result < 0)
-				cpu->cd.arm.flags |= ARM_F_N;
-			if (result & 0x100000000ULL)
-				cpu->cd.arm.flags |= ARM_F_C;
-			if (result & 0x80000000) {
-				if ((tmp64 & 0x80000000) == 0 && (old & 0x80000000) == 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			} else {
-				if ((tmp64 & 0x80000000) != 0 && (old & 0x80000000) != 0)
-					cpu->cd.arm.flags |= ARM_F_V;
-			}
+			cpu->cd.arm.r[rd8] = thumb_addsub_flags(cpu,
+			    cpu->cd.arm.r[rd8], (uint32_t)(iw & 0xff),
+			    iw & 0x0800);
 		}
 		break;
 
@@ -1349,25 +1369,11 @@ int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
 					cpu->cd.arm.flags |= ARM_F_N;
 				break;
 			case 10:	// cmp
-				{
-					uint64_t old = cpu->cd.arm.r[rd];
-					uint64_t tmp64 = (uint32_t) (-cpu->cd.arm.r[r3]);
-					uint64_t result = old + tmp64;
-					cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N | ARM_F_C | ARM_F_V);
-					if (result == 0)
-						cpu->cd.arm.flags |= ARM_F_Z;
-					if ((int32_t)result < 0)
-						cpu->cd.arm.flags |= ARM_F_N;
-					if (result & 0x100000000ULL)
-						cpu->cd.arm.flags |= ARM_F_C;
-					if (result & 0x80000000) {
-						if ((tmp64 & 0x80000000) == 0 && (old & 0x80000000) == 0)
-							cpu->cd.arm.flags |= ARM_F_V;
-					} else {
-						if ((tmp64 & 0x80000000) != 0 && (old & 0x80000000) != 0)
-							cpu->cd.arm.flags |= ARM_F_V;
-					}
-				}
+				/*  #328: register cmp -- subtract, flags only,
+				    no writeback. rd here is the FIRST operand,
+				    not a destination.  */
+				(void) thumb_addsub_flags(cpu,
+				    cpu->cd.arm.r[rd], cpu->cd.arm.r[r3], 1);
 				break;
 			case 12:// orrs
 				cpu->cd.arm.r[rd] |= cpu->cd.arm.r[r3];

@@ -4192,6 +4192,107 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Seventy-seventh round (#328) — three flag defects in the Thumb interpreter
+
+### Reaching Thumb at all was the round
+
+Gate 14 has only ever driven ARM-mode encodings, and the Thumb interpreter
+(`arm_cpu_interpret_thumb_SLOW`) is a completely separate implementation that #311 never
+touched. Thumb is entered **architecturally** here — an ARM `bx` to an odd address sets
+`ARM_FLAG_T` and `cpu_dyntrans.c` dispatches to the interpreter — and never by writing the
+T bit with the debugger, for the reason gate 14 already records about carry-in: a debugger
+write reaches `cpsr` but not the separate `flags` field the handlers read, so it would
+preset nothing. `mrs` is ARM-only in Thumb-1, so each row returns to ARM with a second
+`bx` before publishing; `bx` touches no flags.
+
+### What was wrong
+
+Four near-identical blocks — add/sub register+imm3, `CMP` imm8, add/sub imm8, and
+format-4 register `CMP` — each computed
+
+```c
+uint64_t result = old + (uint32_t)(-b);
+```
+
+and read every flag off that value. **Three of the four flags were wrong.** Measured on
+the committed build, with three controls passing including a genuine-borrow case:
+
+- **Z** came from `result == 0`, the full 64-bit value. A subtract that reaches zero
+  carries out of bit 31, so `result` is `0x100000000` — not zero — and Z stayed **clear**
+  while the stored 32-bit result was 0. Subtracting equal values is the commonest way to
+  reach zero, and `subs; bne` is how a Thumb countdown loop ends: it never did. The same
+  line also missed Z for an **ADD that wrapped to zero**, which the round's first framing
+  had not noticed.
+- **C** came from bit 32. With `b == 0` the addend is `(uint32_t)(-0)` — which is 0 —
+  nothing carries out, and C read 0. So `cmp r0, #0` reported a borrow that never
+  happened.
+- **V** came from the sign of the *negated* subtrahend, and negation is exactly what
+  cannot work at `0x80000000`, the one value that is its own negation. V was wrong in
+  **both directions**: `0 - INT_MIN` gave V=0 where 1 is owed, `-1 - INT_MIN` gave V=1
+  where 0 is owed, and `INT_MIN - INT_MIN` — an `x - x` that cannot overflow — reported
+  V set *and* Z clear, two defects on one instruction. Note this one is reachable in
+  **two** of the four blocks, not four: imm3 and imm8 cannot encode `0x80000000`. Z and
+  C were in all four.
+
+**N was always right**, because it cast to `int32_t` before testing. That is the shape the
+other three should have had, sitting in the same block the whole time.
+
+### The fix, and the bug the panel caught in it
+
+One helper, `thumb_addsub_flags()`, replacing all four inline copies. Carry mirrors
+#311's committed ARM-mode formulation — compute in 64 bits on the **un-negated** operands
+and compare against the truncated result. That mirroring is not a transplant: applying
+#311's `c32 == c64` test to the *old* expression would have set C backwards for every
+nonzero subtrahend, because `old + (uint32_t)(-b)` is a different 64-bit value.
+Restructuring onto a true subtraction first is what makes the two agree.
+
+The first draft of the fix would have shipped a bug. It tested `old >= b` — but **no `b`
+exists** at that point: the subtrahend has already been destroyed by the negation, and in
+the register block `r[rd] = result` executes *before* the flag code. Since `subs r0,r1,r0`
+is legal, re-reading the register there would have computed carry from the value the
+instruction had just written. The helper takes both operands as arguments, and a gate row
+(`T alias subs rd==rm`) exists specifically because a review seat found that.
+
+### Gate 14
+
+Grows from 83 rows to **129**, 122 checks. Sixteen Thumb rows, each asserting the flags
+**and** `rd` — these are flag defects, the computed value was already correct, and a row
+checking only the flag could not tell a fixed flag from a broken result. Three are
+controls, and the borrow control is the one that proves the rig can still distinguish a
+real borrow from the broken ones.
+
+Every defect row was measured failing on the committed build before the fix, including
+the three V rows: those were first *derived* from the source, and then the change was
+stashed, the tree rebuilt, and all thirteen re-measured — because a derivation presented
+as a measurement is exactly the error #327's after-pass had just caught.
+
+The after-pass then found a hole in the gate itself. Sixteen rows covered every *register*
+form and both CMP forms, and left the **immediate** arms unpinned: nothing exercised
+`ADDS Rd,#imm8` or either imm3 form, so a regression that read the register instead of the
+imm3 field, or inverted `isSub` only where it shows on an ADD, would have passed the whole
+table. Three rows close it. The same pass caught a `nzcv()` helper added here that
+**shadowed an existing function of the same name** — harmless only because the file runs
+top to bottom, which is a latent trap rather than a design; it is `thumb_nzcv()` now.
+
+### Found while sweeping, not fixed here
+
+The completeness question was answered by sweep rather than spot-check: `result &
+0x100000000ULL` occurs exactly four times in the file, and every other Z/N site reads a
+`uint32_t`. So these four blocks were the whole of *this* defect pair. But the same sweep
+turned up three more, filed rather than folded in:
+
+- **ASR-immediate sets Z and N from a register chosen by the shift amount.** It writes
+  `r[rd]` and then tests `r[rd8]` — and in that encoding `rd8` is bits 10:8, the top three
+  bits of `imm5`. `asr r0, r1, #12` sets flags from **r3**.
+- **`RORS` never clears Z/N** before ORing them in, unlike every neighbouring case, so a
+  stale Z survives a nonzero rotate.
+- **`LSR #0` and `ASR #0` are shift-by-32** in this encoding, not shift-by-zero, and
+  neither the result nor C reflects that.
+
+Also noted: Thumb `ADC`, `SBC`, `NEG`, `CMN` and the hi-register `ADD`/`CMP` are not
+implemented and reach a `default:` that stops the emulator — the same halt class as rounds
+70/78/79/80/87.
+
 ## Eighty-eighth round (#327) — VX and FEX were stored, and the ISA says they are derived
 
 ### Measured first, in both directions

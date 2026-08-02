@@ -229,12 +229,19 @@
 >   `rd == PC` remains excluded and correctly so: writing the PC with S set is an
 >   exception return whose flags come from SPSR, so the carry there is overwritten
 >   rather than lost.
-> - **ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result** (`cpu_arm.c`, three
->   near-identical blocks; found while scoping #311). Carry is correctly read from bit 32,
->   but `if (result == 0)` tests the 64-bit value, so any operation that carries out of bit
->   31 leaves Z clear even when the architectural 32-bit result is zero — and subtracting
->   equal values is the commonest way to reach zero. N truncates correctly. Not yet
->   reproduced: the round-71 rig only enters ARM mode, so Thumb needs a new entry path.
+> - ~~**ARM Thumb `add`/`sub` take Z from the untruncated 64-bit result**~~ — **RESOLVED as
+>   #328 (round 77)**, and the entry was wrong in three ways worth recording. There were
+>   **four** near-identical blocks, not three. Carry was **not** "correctly read from bit
+>   32": subtracting zero produced no carry-out at all, so `cmp r0,#0` reported a borrow
+>   that never happened. And a **third** flag was wrong that the entry never mentioned —
+>   V came from the sign of the *negated* subtrahend, which fails at `0x80000000`, the one
+>   value that is its own negation; it was inverted in both directions, and `x - x` at that
+>   value claimed overflow. Only N was right, because it truncated first.
+>
+>   Reproduced first, as owed: Thumb is reached by an ARM `bx` to an odd address, and all
+>   thirteen defect rows were measured failing on the committed build before any edit.
+>   V is reachable only in the two REGISTER forms — imm3 and imm8 cannot encode
+>   `0x80000000` — so that one defect was in two copies while Z and C were in four.
 > - **The ARMv6 media encodings decode on every ARM model**, including the ARMv4 SA1110
 >   this rig runs, where silicon would raise Undefined. Pre-existing fidelity gap rather
 >   than a halt; deliberately not entangled with #312.

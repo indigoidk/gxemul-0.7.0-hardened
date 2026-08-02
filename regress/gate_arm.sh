@@ -49,7 +49,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 14: ARM subtract carry + undefined routing (#311/#312)"
+gate_begin "gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328)"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_arm.log
@@ -89,7 +89,7 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 83
+check "rows run"     "$want" 129
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
@@ -191,6 +191,23 @@ for v in "uxtab ROR 0" "rot0 movs C" "mvn S-clear" "rot0 pc src C" \
          "rotc pc gt255" "rotc bound 256"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  round 78 pin: $v" "$n" 1
+done
+
+# #328: the THUMB rows. Everything above is ARM-mode; the Thumb interpreter is a
+# separate implementation that #311 never touched, and it had THREE flag defects in
+# four near-identical blocks -- Z read off a 64-bit value, C derived from the carry
+# out of a negation (so subtracting zero reported a borrow), and V read from the sign
+# of the negated subtrahend (which breaks at 0x80000000, the one value that is its
+# own negation). Each row asserts the flags AND rd, because the value was already
+# right and a flags-only row could not tell a fixed flag from a broken result.
+for v in "T ctrl ADDS 2+3" "T ctrl SUBS 5-3" "T ctrl SUBS borrow"          "T Z subs equal" "T Z cmp imm equal" "T Z subs imm equal"          "T Z cmp reg equal" "T Z adds wrap"          "T C subs zero" "T C cmp imm 0" "T C subs imm 0" "T C cmp reg zero"          "T V 0-INT_MIN" "T V -1-INT_MIN" "T V INT_MIN-same"          "T alias subs rd==rm" \
+         "T Z adds imm8 wrap" "T Z adds imm3 wrap" "T C subs imm3 zero" \
+         "T V subs INT_MIN" "T V adds overflow" "T C subs 0-0" \
+         "T V adds INT_MIN x2"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  thumb: $v" "$n" 1
+    n=$(count "$LOG" "^$v rd  .*ok$")
+    check "  thumb: $v rd" "$n" 1
 done
 
 gate_end

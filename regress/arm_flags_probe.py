@@ -530,4 +530,196 @@ for name, pre, iw, want, cin, rf in R78:
                                 "rot0 pc src C", "rotc pc gt255",
                                 "rotc bound 256") else "DISC", got, want)
 
+
+#  ---------------------------------------------------------------------------
+#  #328: THUMB. Everything above drives ARM-mode encodings; the Thumb
+#  interpreter is a completely separate implementation (cpu_arm.c,
+#  arm_cpu_interpret_thumb_SLOW) and #311 never touched it.
+#
+#  Thumb is entered ARCHITECTURALLY: an ARM `bx` to an ODD address sets
+#  ARM_FLAG_T and leaves the low bit in pc, and cpu_dyntrans.c dispatches to
+#  the interpreter on the T bit.
+#
+#  An earlier draft of this comment gave the wrong reason for that choice,
+#  claiming a debugger `cpsr=` write "would preset nothing" the way it does for
+#  the NZCV carry-in above. That is FALSE and was corrected by a review seat:
+#  cpu_dyntrans.c reads `cpu->cd.arm.cpsr & ARM_FLAG_T` directly, so a debugger
+#  write does set T. The mirror problem is real but applies only to NZCV. The
+#  actual reason to use `bx` is that the interpreter demands BOTH conditions --
+#  `if (!(cpu->pc & 1) || !(cpsr & ARM_FLAG_T))` -- so setting T alone lands on
+#  an even pc and refuses to run, and `bx` is the one operation that
+#  establishes both together, exactly as a guest would.
+#
+#  `mrs` is ARM-only in Thumb-1, so each row returns to ARM with a second `bx`
+#  before publishing; `bx` does not touch the flags, so the round trip is
+#  transparent to what is being measured.
+#
+#  Four near-identical blocks each computed `old + b` in 64 bits -- with b
+#  NEGATED first on the subtract arms -- and read every flag off that value.
+#  Three of the four flags were wrong:
+#    Z  from `result == 0` -- a subtract of equal NONZERO operands carries out
+#       of bit 31, so Z stayed CLEAR while rd was 0, and `subs; bne` never
+#       terminated. (0 - 0 was the one subtract that happened to work: nothing
+#       carries out of it, so Z was set -- though C was still wrong there.) The
+#       same line also missed Z for an ADD that wrapped to zero.
+#    C  from bit 32 -- with b == 0 the addend is (uint32_t)(-0) == 0, nothing
+#       carries out, so `cmp r0,#0` reported a borrow that never happened.
+#    V  from the sign of the NEGATED subtrahend, which breaks at exactly
+#       0x80000000 because that value is its own negation. Wrong in BOTH
+#       directions, and x - x claimed overflow.
+#  N was always right -- it cast to int32_t first, which is the shape the rest
+#  should have had.
+#
+#  Every row publishes rd as well as the flags: these are FLAG defects, the
+#  value was already correct, and a row checking only the flag could not tell a
+#  fixed flag from a broken result.
+THUMB_AT = 0x8100
+THUMB_RET = 0x8200
+BX_R6 = 0xE12FFF16              # arm:   bx r6
+T_BX_R7 = 0x4738                # thumb: bx r7
+
+
+def t_reg(op, rd, rs, rn):      # ADDS/SUBS rd,rs,rn  (format 2)
+    return op | ((rn & 7) << 6) | ((rs & 7) << 3) | (rd & 7)
+
+
+def t_imm8(op, rd, imm):        # CMP/SUBS rd,#imm8   (format 3)
+    return op | ((rd & 7) << 8) | (imm & 0xff)
+
+
+def t_reg3(op, rd, rs, imm3):   # ADDS/SUBS rd,rs,#imm3 (format 2, I set)
+    return op | ((imm3 & 7) << 6) | ((rs & 7) << 3) | (rd & 7)
+
+
+def t_cmp_reg(rd, rs):          # CMP rd,rs           (format 4, op 1010)
+    return 0x4280 | ((rs & 7) << 3) | (rd & 7)
+
+
+def run_thumb(tiw, r0=0, r1=0, r2=0):
+    """One Thumb instruction, entered by bx; returns (cpsr, rd)."""
+    w, _ = session([
+        "r0=0x%x" % r0, "r1=0x%x" % r1, "r2=0x%x" % r2,
+        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+        "r6=0x%x" % (THUMB_AT | 1), "r7=0x%x" % THUMB_RET,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, BX_R6),
+        #  two Thumb halfwords per word, low halfword first
+        "put w 0x%x, 0x%08x" % (THUMB_AT, (T_BX_R7 << 16) | tiw),
+        "put w 0x%x, 0x%08x" % (THUMB_RET,     MRS_R3_CPSR),
+        "put w 0x%x, 0x%08x" % (THUMB_RET + 4, STR_R3_R4),
+        "put w 0x%x, 0x%08x" % (THUMB_RET + 8, STR_R0_R5),
+        "pc=0x%x" % CODE, "step 6"], 2)
+    if w is None:
+        return None, None
+    return sw(w[0]), sw(w[1])
+
+
+def thumb_nzcv(cpsr):
+    """Flags as a string. NOT named nzcv(): there is already an nzcv() above
+    that returns an int, and defining a second one here SHADOWED it. Nothing
+    broke only because this file executes top to bottom and the first one has
+    finished being used by the time this line runs -- which is a latent trap,
+    not a design. A review seat spotted it."""
+    if cpsr is None:
+        return None
+    return "N%d Z%d C%d V%d" % ((cpsr >> 31) & 1, (cpsr >> 30) & 1,
+                                (cpsr >> 29) & 1, (cpsr >> 28) & 1)
+
+
+T_ADD, T_SUB = 0x1800, 0x1A00           # format 2, register operand
+T_ADD3, T_SUB3 = 0x1C00, 0x1E00         # format 2, imm3 operand (I bit set)
+T_CMPI, T_SUBI, T_ADDI = 0x2800, 0x3800, 0x3000     # format 3, imm8
+
+#  name, word, r0, r1, r2, want rd, want NZCV, class
+THUMB_ROWS = [
+    #  controls -- if these fail the rig never reached Thumb and no other
+    #  Thumb row here may be believed. The borrow control is the one that
+    #  proves the rig can still tell a REAL borrow from the broken ones.
+    ("T ctrl ADDS 2+3",    t_reg(T_ADD, 0, 1, 2), 0, 2, 3, 5,
+     "N0 Z0 C0 V0", "PIN"),
+    ("T ctrl SUBS 5-3",    t_reg(T_SUB, 0, 1, 2), 0, 5, 3, 2,
+     "N0 Z0 C1 V0", "PIN"),
+    ("T ctrl SUBS borrow", t_reg(T_SUB, 0, 1, 2), 0, 3, 5, 0xfffffffe,
+     "N1 Z0 C0 V0", "PIN"),
+
+    #  Z, all four blocks, plus the ADD that wraps to zero.
+    ("T Z subs equal",     t_reg(T_SUB, 0, 1, 2), 0, 5, 5, 0,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T Z cmp imm equal",  t_imm8(T_CMPI, 0, 5),  5, 0, 0, 5,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T Z subs imm equal", t_imm8(T_SUBI, 0, 5),  5, 0, 0, 0,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T Z cmp reg equal",  t_cmp_reg(0, 1),       5, 5, 0, 5,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T Z adds wrap",      t_reg(T_ADD, 0, 1, 2), 0, 1, 0xffffffff, 0,
+     "N0 Z1 C1 V0", "DISC"),
+
+    #  C, all four blocks: a subtraction of ZERO does not borrow.
+    ("T C subs zero",      t_reg(T_SUB, 0, 1, 2), 0, 5, 0, 5,
+     "N0 Z0 C1 V0", "DISC"),
+    ("T C cmp imm 0",      t_imm8(T_CMPI, 0, 0),  5, 0, 0, 5,
+     "N0 Z0 C1 V0", "DISC"),
+    ("T C subs imm 0",     t_imm8(T_SUBI, 0, 0),  5, 0, 0, 5,
+     "N0 Z0 C1 V0", "DISC"),
+    ("T C cmp reg zero",   t_cmp_reg(0, 1),       5, 0, 0, 5,
+     "N0 Z0 C1 V0", "DISC"),
+
+    #  V at the one subtrahend where negation cannot work. The middle row is
+    #  the one that proves the defect ran in BOTH directions, and the third
+    #  shows Z and V failing together on the same instruction.
+    ("T V 0-INT_MIN",      t_cmp_reg(0, 1), 0, 0x80000000, 0, 0,
+     "N1 Z0 C0 V1", "DISC"),
+    ("T V -1-INT_MIN",     t_cmp_reg(0, 1), 0xffffffff, 0x80000000, 0,
+     0xffffffff, "N0 Z0 C1 V0", "DISC"),
+    ("T V INT_MIN-same",   t_cmp_reg(0, 1), 0x80000000, 0x80000000, 0,
+     0x80000000, "N0 Z1 C1 V0", "DISC"),
+
+    #  rd == rm, the aliasing case: the subtrahend must be captured BEFORE the
+    #  result is stored, because `subs r0,r1,r0` overwrites it.
+    #
+    #  Read the operands here carefully, because the FIRST version of this row
+    #  used 5 - 5 and a review seat showed it proved nothing about aliasing:
+    #  for result = a - b, `a >= result` and `a >= b` have the SAME truth value
+    #  at every operand, so no choice of values can catch a late re-read used
+    #  by the CARRY formula. 0 - 1 is used instead because it catches a late
+    #  re-read used by the OVERFLOW formula: with b captured (1) V is 0, while
+    #  with b re-read after the store (0xffffffff) V comes out 1.
+    ("T alias subs rd==rm", t_reg(T_SUB, 0, 1, 0), 1, 0, 0, 0xffffffff,
+     "N1 Z0 C0 V0", "DISC"),
+
+    #  The IMMEDIATE arms. Without these the `isImm3` operand selection and the
+    #  ADD-side `isSub` polarity are unpinned: a regression that read the
+    #  register instead of the imm3 field, or inverted isSub only where it
+    #  shows on an ADD, would pass every row above. A review seat found the
+    #  hole after the fix was already green.
+    ("T Z adds imm8 wrap", t_imm8(T_ADDI, 0, 1), 0xffffffff, 0, 0, 0,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T Z adds imm3 wrap", t_reg3(T_ADD3, 0, 1, 1), 0, 0xffffffff, 0, 0,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T C subs imm3 zero", t_reg3(T_SUB3, 0, 1, 0), 0, 5, 0, 5,
+     "N0 Z0 C1 V0", "DISC"),
+
+    #  Four more the after-pass asked for, each closing a way a wrong
+    #  implementation could still have passed everything above:
+    #    - the V rows were all register CMP, so a SUBS with the same operand
+    #      pins the OTHER register form,
+    #    - no ADD row wanted V=1, so an add that always cleared V passed,
+    #    - 0 - 0 is the one subtract that sets Z on the OLD code (nothing
+    #      carries out), which makes it the case where C alone discriminates.
+    ("T V subs INT_MIN",   t_reg(T_SUB, 0, 1, 2), 0, 0, 0x80000000,
+     0x80000000, "N1 Z0 C0 V1", "DISC"),
+    ("T V adds overflow",  t_reg(T_ADD, 0, 1, 2), 0, 0x7fffffff, 1,
+     0x80000000, "N1 Z0 C0 V1", "PIN"),
+    ("T C subs 0-0",       t_reg(T_SUB, 0, 1, 2), 0, 0, 0, 0,
+     "N0 Z1 C1 V0", "DISC"),
+    ("T V adds INT_MIN x2", t_reg(T_ADD, 0, 1, 2), 0, 0x80000000, 0x80000000,
+     0, "N0 Z1 C1 V1", "DISC"),
+]
+
+for nm, tiw, a0, a1, a2, want_rd, want_f, cls in THUMB_ROWS:
+    cpsr, rd = run_thumb(tiw, a0, a1, a2)
+    row(nm, cls, thumb_nzcv(cpsr), want_f)
+    row(nm + " rd", cls, rd, want_rd)
+
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
