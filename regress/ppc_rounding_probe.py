@@ -90,6 +90,11 @@ MFCR_R3 = (31 << 26) | (3 << 21) | (19 << 1)            # mfcr r3
 STW_R3_R4 = (36 << 26) | (3 << 21) | (4 << 16)          # stw  r3,0(r4)
 FADD_F0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (21 << 1)
 FMUL_F0_F1_F1 = (63 << 26) | (0 << 21) | (1 << 16) | (1 << 6) | (25 << 1)
+#  #330: benign-operand twins, so the stickiness rows cannot be satisfied
+#  by a handler that clears the bit and immediately re-raises it.
+FADD_F0_F2_F2 = (63 << 26) | (0 << 21) | (2 << 16) | (2 << 11) | (21 << 1)
+FMUL_F0_F2_F2 = (63 << 26) | (0 << 21) | (2 << 16) | (2 << 6) | (25 << 1)
+FCMPU_CR0_F2_F2 = (63 << 26) | (0 << 21) | (2 << 16) | (2 << 11) | (0 << 1)
 
 RN, RZ, RP, RM = 0, 1, 2, 3
 MODENAME = {RN: "RN", RZ: "RZ", RP: "RP", RM: "RM"}
@@ -322,6 +327,65 @@ SUMMARY_ROWS = [
     ("FX latches once only", 0x00000000,
      [FRSP_F0_F1, MTFSB0(0), FRSP_F0_F1], SNAN_D, "21001000", "DISC"),
 ]
+
+
+#  #330: one instruction from a zeroed FPSCR, read back through the guest's own
+#  mffs. FPCC in these wants is TODAY's classification -- no FPRF class bit, and
+#  Inf classified GT/LT -- so the future FPRF round moves them again.
+SNAN_OP, QNAN_OP = 0x7ff0000000000123, 0x7ff8000000000000
+PINF, NINF, PZERO, PONE = (0x7ff0000000000000, 0xfff0000000000000,
+                           0x0, 0x3ff0000000000000)
+FSUB_F0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (20 << 1)
+FDIV_F0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (18 << 1)
+FMUL_F0_F1_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 6) | (25 << 1)
+FCTIWZ_F0_F1  = (63 << 26) | (0 << 21) | (1 << 11) | (15 << 1)
+
+CAUSE_ROWS = [
+    #  raised
+    ("VXISI fadd Inf-Inf",  FADD_F0_F1_F2, PINF,  NINF,  "a0801000"),
+    ("VXISI fsub Inf-Inf",  FSUB_F0_F1_F2, PINF,  PINF,  "a0801000"),
+    ("VXIDI fdiv Inf/Inf",  FDIV_F0_F1_F2, PINF,  PINF,  "a0401000"),
+    ("VXZDZ fdiv 0/0",      FDIV_F0_F1_F2, PZERO, PZERO, "a0201000"),
+    #  NOT "Inf*0": `*` is a BRE repetition operator, and gate_ppc.sh
+    #  matches each named row with a plain grep. `Inf*0` there means
+    #  "In" followed by any number of "f" and then "0", which never
+    #  matches the literal text -- the row passes while its named check
+    #  silently counts zero. Third variant of this trap in this harness
+    #  (long name, prefix name, now metacharacter); keep row names to
+    #  letters, digits, spaces and hyphens.
+    ("VXIMZ fmul Inf-by-0", FMUL_F0_F1_F2, PINF,  PZERO, "a0101000"),
+    ("ZX fdiv 1/0",         FDIV_F0_F1_F2, PONE,  PZERO, "84004000"),
+    ("VXSNAN fadd sNaN",    FADD_F0_F1_F2, SNAN_OP, PONE, "a1001000"),
+    ("VXSNAN fcmpu sNaN",   FCMPU_CR0_F1_F2, SNAN_OP, PONE, "a1001000"),
+    ("VXCVI fctiwz sNaN",   FCTIWZ_F0_F1,  SNAN_OP, PONE, "a1000100"),
+    ("VXCVI fctiwz qNaN",   FCTIWZ_F0_F1,  QNAN_OP, PONE, "a0000100"),
+
+    #  NOT raised -- the discriminators. A handler that raises on any NaN, or
+    #  on any Inf, or on any zero divisor, fails exactly here.
+    ("clean fadd qNaN",     FADD_F0_F1_F2, QNAN_OP, PONE, "00001000"),
+    ("clean fcmpu qNaN",    FCMPU_CR0_F1_F2, QNAN_OP, PONE, "00001000"),
+    ("clean fadd Inf+Inf",  FADD_F0_F1_F2, PINF,  PINF,  "00004000"),
+    ("clean fsub Inf--Inf", FSUB_F0_F1_F2, PINF,  NINF,  "00004000"),
+    ("clean fmul Inf-by-1", FMUL_F0_F1_F2, PINF,  PONE,  "00004000"),
+    ("clean fdiv Inf/0",    FDIV_F0_F1_F2, PINF,  PZERO, "00004000"),
+    ("clean fdiv 1/1",      FDIV_F0_F1_F2, PONE,  PONE,  "00004000"),
+]
+
+
+def run_cause(iw, f1, f2):
+    """One arithmetic instruction from a zeroed FPSCR; read FPSCR via mffs."""
+    w, _ = session([
+        "msr=0x2000", "fpscr=0x00000000",
+        "f1=0x%016x" % f1, "f2=0x%016x" % f2, "r5=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, iw),
+        "put w 0x%x, 0x%08x" % (CODE + 4, MFFS_F3),
+        "put w 0x%x, 0x%08x" % (CODE + 8, STFD_F3_R5),
+        "pc=0x%x" % CODE, "step 3"], 2)
+    if w is None or len(w) < 2 or w[1] == "deadbeef":
+        return None
+    return w[1]
 
 
 def run_vxsnan_sticky_arith(second):
@@ -973,14 +1037,34 @@ def main():
     for name, pre, seq, seed, want, cls in SUMMARY_ROWS:
         report(name, run_fpscr_seq(pre, seq, seed), want, cls)
 
+    #  #330: the exception CAUSES. #327 made VX and FEX derive correctly over
+    #  a cause set that nothing wrote -- measured, arithmetic raised NOTHING,
+    #  and every FPSCR read back held only its FPCC nibble. Every want below
+    #  was PRE-REGISTERED from Book I before the code existed, and two panel
+    #  seats derived them independently and agreed byte for byte.
+    #
+    #  The NEGATIVE rows are not decoration. Without them a handler that
+    #  raised indiscriminately would pass every positive row here.
+    for nm, iw, a, b, want in CAUSE_ROWS:
+        report(nm, run_cause(iw, a, b), want, "DISC")
+
     #  VXSNAN must survive a following non-NaN frsp (see run_vxsnan_sticky).
     report("VXSNAN sticky", run_vxsnan_sticky(), "set", "DISC")
 
     #  #326: and it must survive the instructions that were CLEARING it. frsp
     #  was the only handler that did not, so the row above passed while the
     #  property was broken for every other one.
-    for nm, iw in (("fadd", FADD_F0_F1_F2), ("fmul", FMUL_F0_F1_F1),
-                   ("fcmpu", FCMPU_CR0_F1_F2)):
+    #
+    #  #330 RE-ARMED these. They used to run the second instruction on f1,
+    #  which still holds the signalling NaN -- fine while arithmetic raised
+    #  nothing, but the moment #330 made it RAISE VXSNAN the rows stopped
+    #  testing stickiness at all: a handler that cleared the bit and then
+    #  re-raised it from its own operand would still answer "set". The second
+    #  instruction now runs on f2 (a benign 1.0), so the only way the bit can
+    #  still be set is if it genuinely survived. A review seat predicted this
+    #  going vacuous before the code landed.
+    for nm, iw in (("fadd", FADD_F0_F2_F2), ("fmul", FMUL_F0_F2_F2),
+                   ("fcmpu", FCMPU_CR0_F2_F2)):
         report("VXSNAN sticky vs %s" % nm,
                run_vxsnan_sticky_arith(iw), "set", "DISC")
 

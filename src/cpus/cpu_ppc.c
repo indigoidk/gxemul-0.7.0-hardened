@@ -1912,6 +1912,46 @@ void ppc_fpscr_recompute(struct cpu *cpu)
 }
 
 
+/*
+ *  ppc_fpscr_raise():  #330
+ *
+ *  Raise one or more FPSCR exception CAUSES, apply the implicit-FX rule, and
+ *  let the summaries follow. Every site that detects an exception goes through
+ *  here, so that a future cause cannot be added without FX and the summaries
+ *  coming with it.
+ *
+ *  #327 made VX and FEX derived and correct. They derived over a cause set
+ *  that almost nothing wrote: measured, arithmetic raised NOTHING -- not
+ *  VXISI for Inf-Inf, not VXZDZ for 0/0, not VXIMZ for Inf*0, not ZX for a
+ *  divide by zero, not even VXSNAN for a signalling operand. Every FPSCR read
+ *  back from an operation held only its FPCC nibble. This is what feeds them.
+ *
+ *  It takes a MASK, not a single bit, because one instruction can owe two:
+ *  fctiwz of a signalling NaN owes VXSNAN and VXCVI together, and an fmadd of
+ *  0*Inf with a signalling addend owes VXSNAN and VXIMZ.
+ *
+ *  The FX test is PER BIT -- `causes & ~fpscr` -- and that is not a
+ *  stylistic choice. mtfsb1 tests a single bit with `!(fpscr & bit)`, and
+ *  transplanting that form here would miss FX exactly when one cause is
+ *  already sticky-set and another transitions: raise VXSNAN|VXCVI while
+ *  VXSNAN is already set and FX must still latch for VXCVI, but the
+ *  single-bit form sees a nonzero intersection and skips it. A review seat
+ *  caught that before it was written; there is a gate row for it.
+ *
+ *  This never touches FPCC, never consults the enable bits, and never traps.
+ *  Enable-driven result suppression and trap delivery are a separate round.
+ */
+void ppc_fpscr_raise(struct cpu *cpu, uint32_t causes)
+{
+	if (causes & ~cpu->cd.ppc.fpscr)
+		cpu->cd.ppc.fpscr |= PPC_FPSCR_FX;
+
+	cpu->cd.ppc.fpscr |= causes;
+
+	ppc_fpscr_recompute(cpu);
+}
+
+
 #include "memory_ppc.c"
 
 

@@ -87,7 +87,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 13: PowerPC single conversion (#304/#305)"
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330)"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_ppc.log
@@ -129,7 +129,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 101
+check "rows run"     "$want" 118
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -141,9 +141,9 @@ pins=$(grep -c " PIN " "$LOG")
 # against real counts of 50/36, which means a whole class could have lost rows without
 # the floor noticing -- the same "a check that cannot fail" species this gate's header
 # warns about twice. The two numbers must also sum to the asserted `rows run` above
-# (62 + 39 = 101); if they stop summing, a row lost its class rather than the table
+# (79 + 39 = 118); if they stop summing, a row lost its class rather than the table
 # losing a row.
-check_min "discriminating rows present" "$disc" 62
+check_min "discriminating rows present" "$disc" 79
 check_min "pinned rows present"         "$pins" 39
 
 # The one row that records a divergence this round deliberately does NOT fix.
@@ -169,6 +169,10 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "fctiwz qNaN" "fctiwz -qNaN" "fctiwz 1.0 control" \
          "fctiwz +Inf" "fctiwz -Inf" "fctiwz 2^31" "fctiwz -(2^31+1)" \
          "fctiwz 1.9 RTZ" "fctiwz -1.9 RTZ" \
+         "VXISI fadd Inf-Inf" "VXIDI fdiv Inf/Inf" "VXZDZ fdiv 0/0" \
+         "VXIMZ fmul Inf-by-0" "ZX fdiv 1/0" "VXSNAN fadd sNaN" \
+         "VXSNAN fcmpu sNaN" "VXCVI fctiwz sNaN" "VXCVI fctiwz qNaN" \
+         "clean fadd qNaN" "clean fadd Inf+Inf" "clean fdiv Inf/0" \
          "mtfsf FM=0xff" "mtfsf FM=0x80" "mtfsf FM=0x01" "mtfsf FM=0x0f" \
          "mtfsf FM=0x40" "mtfsf clears" \
          "VX falls on last clear" "VX rises on cause" \

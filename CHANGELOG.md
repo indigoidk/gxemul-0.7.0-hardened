@@ -4192,6 +4192,85 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Eighty-ninth round (#330) — the exception causes VX and FEX had nothing to derive from
+
+#327 made FPSCR's VX and FEX derived and correct. This measured what they were deriving
+*over*, and the answer was nothing: **ten distinct exception causes, none ever raised.**
+Every FPSCR read back after an arithmetic instruction held only its FPCC nibble.
+
+| operation | before | after | cause |
+|---|---|---|---|
+| `fadd` Inf + −Inf | `00001000` | `a0801000` | VXISI |
+| `fsub` Inf − Inf | `00001000` | `a0801000` | VXISI |
+| `fdiv` Inf / Inf | `00001000` | `a0401000` | VXIDI |
+| `fdiv` 0 / 0 | `00001000` | `a0201000` | VXZDZ |
+| `fmul` Inf × 0 | `00001000` | `a0101000` | VXIMZ |
+| `fdiv` 1 / 0 | `00004000` | `84004000` | ZX |
+| `fadd` / `fcmpu` sNaN | `00001000` | `a1001000` | VXSNAN |
+| `fctiwz` sNaN / qNaN | `00000000` | `a1000100` / `a0000100` | VXCVI |
+
+**Every one of those bytes was pre-registered from Book I before the code existed, and
+two panel seats derived them independently and agreed byte for byte.** All seventeen new
+rows — ten raised, seven negative controls — matched on the first run.
+
+### The negative controls are the round
+
+Seven rows assert that nothing is raised, and they are not decoration: a handler that
+raised on any NaN, any infinity, or any zero divisor would pass every positive row above.
+`qNaN + 1` must not raise VXSNAN; `Inf + Inf` must not raise VXISI (it is sign-specific);
+`Inf × 1` must not raise VXIMZ; and **`Inf / 0` must raise nothing at all**, because ZX
+needs a *finite nonzero* dividend — `0/0` is VXZDZ, not ZX, and `sNaN/0` is VXSNAN, not
+ZX. Zero false positives across all seven.
+
+### Three panel warnings that were load-bearing
+
+- **`fmul` reads `arg[1]` and `arg[2]`; `fadd`/`fsub`/`fdiv` read `arg[0]` and `arg[1]`.**
+  A shared operand macro across these handlers would have classified `fmul`'s
+  **destination register**. Each handler binds its own named locals.
+- **`struct ieee_float_value` cannot distinguish a signalling NaN from a quiet one** — it
+  collapses every NaN to the host's `NAN` and takes a path that also drops the sign. So
+  detection reads raw 64-bit patterns. And `frsp`'s bare quiet-bit test, lifted out of its
+  already-NaN branch, calls **Infinity** a signalling NaN; the new predicate carries its
+  own NaN-class guard.
+- **Detect from operands, never from the host result.** `isnan(result)` is the obvious
+  lure and it is wrong: for an `fmadd` whose product overflows the host, the host computes
+  a NaN where the ISA's unrounded intermediate is an infinity and no exception is owed —
+  a result-driven test would invent one.
+
+`ppc_fpscr_raise()` takes a **mask**, because one instruction can owe two causes at once
+(`fctiwz` of a signalling NaN owes VXSNAN and VXCVI together), and its FX test is
+**per-bit** (`causes & ~fpscr`). Transplanting `mtfsb1`'s single-bit form would miss FX
+exactly when one cause is already sticky and another transitions.
+
+VXCVI is classified **separately from the result branches**, which the source has warned
+about since #326: reusing `>= 2147483647.0` / `<= -2147483648.0` as the predicate would
+call exactly 2^31−1 and exactly −2^31 invalid, and under RZ would see an unrounded value.
+The predicate rounds under the real mode first and uses strict inequalities.
+
+### Two things this round had to repair in the harness
+
+**Three rows from #326 had gone vacuous.** The `VXSNAN sticky vs fadd/fmul/fcmpu` rows ran
+their second instruction on the register still holding the signalling NaN. That was fine
+while arithmetic raised nothing — but the moment this round made it *raise* VXSNAN, a
+handler that cleared the bit and immediately re-raised it from its own operand would still
+answer "set". They now run on a benign operand. A seat predicted this before the code
+landed; nothing in the gate would have noticed.
+
+**A row name containing `*` made its own check unsatisfiable.** `VXIMZ fmul Inf*0` passed
+as a row and its named check counted **zero**, because the gate matches names with a plain
+grep and `Inf*0` in a basic regular expression means "In" followed by any number of "f"
+and then "0". Third variant of this trap here — first a name as long as its column, then a
+name that was a prefix of another, now a metacharacter. Row names are letters, digits,
+spaces and hyphens from now on.
+
+### Deferred, with reasons
+
+XX/FI (FI is non-sticky state this file has never modelled), OX/UX (**blocked**: the
+subnormal store arm is a bare TODO that flushes to signed zero, so underflow cannot be
+honestly reported over it), the FPRF class bit (it *moves* existing bytes), and
+enable-driven result suppression (it changes what lands in the target register and drags
+in trap delivery). Gate 13: 101 rows → **118**, 82 checks.
+
 ## Ninetieth round (#329) — the Thumb shift paths, where the flags came from a register the instruction never named
 
 #328's completeness sweep swept past its own scope and found three more flag defects in

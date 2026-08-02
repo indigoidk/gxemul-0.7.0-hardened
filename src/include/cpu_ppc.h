@@ -222,6 +222,17 @@ struct ppc_cpu {
 				 PPC_FPSCR_VXIMZ | PPC_FPSCR_VXVC | \
 				 PPC_FPSCR_VXSOFT | PPC_FPSCR_VXSQRT | \
 				 PPC_FPSCR_VXCVI)
+
+/*
+ *  #330: every STICKY exception bit -- ISA 3:12 and 21:23. Moved here from
+ *  cpu_ppc_instr.c, which is compiled twice, so that ppc_fpscr_raise() in
+ *  cpu_ppc.c can see it too. The run stops at ISA 12 and resumes at 21
+ *  because bit 20 is reserved.
+ */
+#define	PPC_FPSCR_EXC_BITS	(PPC_FPSCR_OX | PPC_FPSCR_UX | \
+				 PPC_FPSCR_ZX | PPC_FPSCR_XX | \
+				 PPC_FPSCR_VX_CAUSES)
+
 #define	PPC_FPSCR_FPCC	0x0000f000
 #define	PPC_FPSCR_FPCC_SHIFT	12
 #define	PPC_FPSCR_FL	(1 << 15)	/*  Less than  */

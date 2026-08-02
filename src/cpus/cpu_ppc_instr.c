@@ -36,6 +36,98 @@
 
 #include "float_emul.h"
 
+/*  #330: which invalid-operation rule a two-operand op follows.  */
+#define	PPC_INVOP_ADD	0
+#define	PPC_INVOP_SUB	1
+#define	PPC_INVOP_MUL	2
+#define	PPC_INVOP_DIV	3
+
+#ifndef PPC_FP_CLASSIFY_INCLUDED
+#define PPC_FP_CLASSIFY_INCLUDED
+/*
+ *  #330: operand CLASSIFICATION for the exception causes.
+ *
+ *  These read the RAW 64-bit pattern, never `struct ieee_float_value`, and
+ *  that is forced rather than preferred: ieee_interpret_float_value() collapses
+ *  every NaN to the host's NAN and takes a path that skips the sign, so the
+ *  struct cannot tell a signalling NaN from a quiet one -- taking VXSNAN from
+ *  its `nan` field would raise on every quiet NaN.
+ *
+ *  ppc_is_snan() also carries its own NaN-class guard. frsp tests the quiet
+ *  bit bare, which is correct only because it sits inside an already-NaN
+ *  branch; copied out of that context the same test calls INFINITY a
+ *  signalling NaN, since Inf has an all-ones exponent and a clear bit 51.
+ */
+static int ppc_is_nan(uint64_t x)
+{
+	return (x & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL
+	    && (x & 0x000fffffffffffffULL) != 0;
+}
+
+static int ppc_is_snan(uint64_t x)
+{
+	return ppc_is_nan(x) && !(x & 0x0008000000000000ULL);
+}
+
+static int ppc_is_inf(uint64_t x)
+{
+	return (x & 0x7fffffffffffffffULL) == 0x7ff0000000000000ULL;
+}
+
+static int ppc_is_zero(uint64_t x)
+{
+	return (x & 0x7fffffffffffffffULL) == 0;
+}
+
+/*
+ *  The invalid-operation cause owed by a two-operand arithmetic instruction,
+ *  as a mask for ppc_fpscr_raise(). Detection is from the OPERANDS, never from
+ *  the host result: for an fmadd whose product overflows the host, the host
+ *  computes a NaN while the ISA's unrounded intermediate is an infinity and no
+ *  exception is owed at all, so a result-driven test would invent one.
+ *
+ *  A signalling operand takes precedence and is the only cause in that case
+ *  for add/sub/mul; the class-specific causes apply to numerically invalid
+ *  combinations of non-signalling operands.
+ */
+static uint32_t ppc_invalid_cause(uint64_t a, uint64_t b, int op)
+{
+	if (ppc_is_snan(a) || ppc_is_snan(b))
+		return PPC_FPSCR_VXNAN;
+
+	/*  A quiet NaN operand propagates and raises nothing.  */
+	if (ppc_is_nan(a) || ppc_is_nan(b))
+		return 0;
+
+	switch (op) {
+	case PPC_INVOP_ADD:	/*  Inf + (-Inf)  */
+		if (ppc_is_inf(a) && ppc_is_inf(b)
+		    && ((a ^ b) >> 63) != 0)
+			return PPC_FPSCR_VXISI;
+		break;
+	case PPC_INVOP_SUB:	/*  Inf - Inf, same sign  */
+		if (ppc_is_inf(a) && ppc_is_inf(b)
+		    && ((a ^ b) >> 63) == 0)
+			return PPC_FPSCR_VXISI;
+		break;
+	case PPC_INVOP_MUL:	/*  Inf * 0, either order  */
+		if ((ppc_is_inf(a) && ppc_is_zero(b))
+		    || (ppc_is_zero(a) && ppc_is_inf(b)))
+			return PPC_FPSCR_VXIMZ;
+		break;
+	case PPC_INVOP_DIV:
+		if (ppc_is_inf(a) && ppc_is_inf(b))
+			return PPC_FPSCR_VXIDI;
+		if (ppc_is_zero(a) && ppc_is_zero(b))
+			return PPC_FPSCR_VXZDZ;
+		break;
+	}
+
+	return 0;
+}
+#endif	/*  PPC_FP_CLASSIFY_INCLUDED  */
+
+
 
 /*
  *  #326: FDOT -- the floating-point twin of DOT0/1/2 below.
@@ -942,16 +1034,8 @@ X(fmr)
  */
 #define	PPC_FPSCR_SUMMARY	(PPC_FPSCR_FEX | PPC_FPSCR_VX)
 
-/*
- *  The sticky exception bits: ISA 3:12 and 21:23. #327 replaced the two hex
- *  literals this used to be spelled with (0x1ff80000 | 0x00000700) by the
- *  named bits now that they exist -- identical value, verified, but the
- *  literal form hid that the run stops at ISA 12 and resumes at 21 because
- *  bit 20 is RESERVED.
- */
-#define	PPC_FPSCR_EXC_BITS	(PPC_FPSCR_OX | PPC_FPSCR_UX | \
-				 PPC_FPSCR_ZX | PPC_FPSCR_XX | \
-				 PPC_FPSCR_VX_CAUSES)
+/*  PPC_FPSCR_EXC_BITS moved to cpu_ppc.h in #330: ppc_fpscr_raise()
+    needs it, and this file is compiled twice so it cannot live here.  */
 
 
 /*
@@ -1154,6 +1238,16 @@ X(fcmpu)
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[2], &frb, IEEE_FMT_D);
+
+	/*
+	 *  #330: fcmpu owes VXSNAN for a signalling operand and NOTHING
+	 *  else, ever. VXVC belongs exclusively to fcmpo, which is not
+	 *  decoded at all yet (it halts the emulator; filed separately).
+	 *  This is what the old `TODO: Signaling vs Quiet NaN` marked.
+	 */
+	if (ppc_is_snan(*(uint64_t *)ic->arg[1])
+	    || ppc_is_snan(*(uint64_t *)ic->arg[2]))
+		ppc_fpscr_raise(cpu, PPC_FPSCR_VXNAN);
 	if (fra.nan | frb.nan) {
 		c = 1;
 	} else {
@@ -1199,6 +1293,7 @@ X(fcmpu)
 
 #ifndef PPC_SINGLE_NARROW_INCLUDED
 #define PPC_SINGLE_NARROW_INCLUDED
+
 /*
  *  ppc_single_narrow():  #304 -- the FINITE half of the PowerPC's
  *  double -> single narrowing, as exact bit surgery.
@@ -1510,6 +1605,39 @@ static uint32_t ppc_convert_to_word(struct cpu *cpu, uint64_t frb_bits, int rm)
 	/*  #325: a NaN converts to the most negative value, not to zero.
 	    Zero is the worse kind of wrong -- a legitimate result the guest
 	    cannot tell apart from a successful conversion of 0.0.  */
+	/*
+	 *  #330: VXCVI, and VXSNAN for a signalling operand. The RESULT
+	 *  branches below are unchanged -- what is new is that the exception
+	 *  is now recorded, and it is classified SEPARATELY from them.
+	 *
+	 *  That separation is the whole point. Reusing the saturation
+	 *  branches as the predicate would misclassify three ways, two of them
+	 *  in every rounding mode: `>= 2147483647.0` fires on exactly 2^31-1
+	 *  and `<= -2147483648.0` on exactly -2^31, both of which convert
+	 *  perfectly, and under RZ the test sees an UNROUNDED value because
+	 *  ieee_round_to_integral() deliberately passes RZ through, so
+	 *  2147483647.9 would be called invalid although it truncates in
+	 *  range. The predicate therefore rounds under the real mode first --
+	 *  trunc() for RZ, which is host-mode-independent -- and then uses
+	 *  STRICT inequalities.
+	 */
+	{
+		uint32_t causes = 0;
+		double r;
+
+		if (ppc_is_snan(frb_bits))
+			causes |= PPC_FPSCR_VXNAN;
+
+		r = (rm == IEEE_RM_RZ) ? trunc(frb.f)
+		    : ieee_round_to_integral(frb.f, rm);
+
+		if (frb.nan || r > 2147483647.0 || r < -2147483648.0)
+			causes |= PPC_FPSCR_VXCVI;
+
+		if (causes)
+			ppc_fpscr_raise(cpu, causes);
+	}
+
 	if (frb.nan)
 		return 0x80000000;
 
@@ -1578,6 +1706,20 @@ X(fmul)
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[2], &frc, IEEE_FMT_D);
+
+	/*
+	 *  #330. NOTE the operands are arg[1] and arg[2] here -- arg[0] is
+	 *  the DESTINATION. fadd/fsub/fdiv use arg[0] and arg[1] instead, so
+	 *  a shared operand macro across these handlers would have
+	 *  classified fmul's target register. A review seat caught that
+	 *  before it was written.
+	 */
+	{
+		uint32_t cause = ppc_invalid_cause(*(uint64_t *)ic->arg[1],
+		    *(uint64_t *)ic->arg[2], PPC_INVOP_MUL);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	result = fra.f * frc.f;
 	if (isnan(result))
 		c = 1;
@@ -1726,6 +1868,19 @@ X(fadd)
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &frb, IEEE_FMT_D);
+
+	/*
+	 *  #330: the invalid-operation cause, from the OPERANDS.
+	 *  Measured before this round: this instruction raised nothing
+	 *  at all, so VX and FEX -- correct since #327 -- derived over
+	 *  an empty cause set.
+	 */
+	{
+		uint32_t cause = ppc_invalid_cause(*(uint64_t *)ic->arg[0], *(uint64_t *)ic->arg[1],
+		    PPC_INVOP_ADD);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	result = fra.f + frb.f;
 	if (isnan(result))
 		c = 1;
@@ -1767,6 +1922,19 @@ X(fsub)
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &frb, IEEE_FMT_D);
+
+	/*
+	 *  #330: the invalid-operation cause, from the OPERANDS.
+	 *  Measured before this round: this instruction raised nothing
+	 *  at all, so VX and FEX -- correct since #327 -- derived over
+	 *  an empty cause set.
+	 */
+	{
+		uint32_t cause = ppc_invalid_cause(*(uint64_t *)ic->arg[0], *(uint64_t *)ic->arg[1],
+		    PPC_INVOP_SUB);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	result = fra.f - frb.f;
 	if (isnan(result))
 		c = 1;
@@ -1808,6 +1976,28 @@ X(fdiv)
 
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[0], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &frb, IEEE_FMT_D);
+
+	/*
+	 *  #330: the invalid-operation cause, from the OPERANDS.
+	 *  Measured before this round: this instruction raised nothing
+	 *  at all, so VX and FEX -- correct since #327 -- derived over
+	 *  an empty cause set.
+	 */
+	{
+		uint32_t cause = ppc_invalid_cause(*(uint64_t *)ic->arg[0], *(uint64_t *)ic->arg[1],
+		    PPC_INVOP_DIV);
+		if (!cause && ppc_is_zero(*(uint64_t *)ic->arg[1])
+		    && !ppc_is_zero(*(uint64_t *)ic->arg[0])
+		    && !ppc_is_inf(*(uint64_t *)ic->arg[0])
+		    && !ppc_is_nan(*(uint64_t *)ic->arg[0])) {
+			/*  ZX needs a FINITE NONZERO dividend: 0/0 is
+			    VXZDZ not ZX, Inf/0 raises nothing, and a
+			    NaN dividend is the NaN's business.  */
+			cause = PPC_FPSCR_ZX;
+		}
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	result = fra.f / frb.f;
 	if (isnan(result))
 		c = 1;
