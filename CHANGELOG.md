@@ -4192,6 +4192,62 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninetieth round (#329) — the Thumb shift paths, where the flags came from a register the instruction never named
+
+#328's completeness sweep swept past its own scope and found three more flag defects in
+the same function. All three measured on the committed build, both controls passing.
+
+**ASR-immediate took Z and N from `r[rd8]` while writing `r[rd]`.** In the
+shift-immediate format (`000 op imm5 Rs Rd`), `rd8` is bits 10:8 — **the top three bits of
+the shift amount**. So `asrs r0,r1,#12` computed the right value and then set its flags
+from **r3**, a register the instruction does not mention. Change the shift count and the
+flags come from a different register. LSL and LSR never had it; ASR alone did.
+
+There is a trap in witnessing this, which the panel flagged before any row was written:
+for a shift below 4, `rd8` is 0, so a row writing r0 reads back the right register **by
+accident**. The witness uses `#12`.
+
+**RORS never cleared Z and N** before ORing them in, unlike every neighbouring case — the
+`tst` arm immediately below does it correctly. A stale Z survived a rotate to a nonzero
+result, and a stale N survived one to a positive result.
+
+**`LSR #0` and `ASR #0` encode shift-by-32, not shift-by-zero.** LSR gives 0, ASR gives a
+sign fill, and both write C from bit 31 of the operand. Both executed as no-ops with C
+untouched. `LSL #0` *is* a genuine no-op whose C must survive — it is the control here,
+and the one member of the family whose zero encoding means what it says.
+
+Written as explicit branches rather than by turning 0 into 32 and shifting: a shift of 32
+on a 32-bit type is **undefined in C**, so the obvious form would have been UB on exactly
+the case the fix exists to repair.
+
+### Half the contract was unmeasurable, and the rig had to change first
+
+C for the shift-by-32 cases is *always written* but **not always set** — a positive
+operand clears it. The Thumb rig #328 built could not see that half: it never preset the
+flags, so on a cold machine C starts clear, and both "LSR #0 clears C for a positive
+operand" and "LSL #0 leaves C alone" passed against a build that never touched C at all.
+
+`run_thumb` now presets carry with the same real `SUBS` gate 14 uses in ARM mode — never a
+debugger `cpsr` write — placed before the `bx`, which is safe because `bx` touches no
+flags. It can also publish a register other than r0, because every Thumb row until now
+wrote and read r0, so a handler reading r0 instead of `rd` would have been invisible —
+the shadow of this round's own first defect.
+
+Gate 14: 129 rows → **149**, 142 checks.
+
+### The boundary, stated
+
+Both seats swept every flag write in the function and agree the set is now complete
+*within what the interpreter implements*. One near-miss is worth recording as a
+non-defect: `movs` with an 8-bit immediate clears Z and N and then sets only Z. That is
+**correct** — an imm8 result is 0..255, so N is always 0 and the clear supplies it. It
+would have been easy to "fix" into a bug.
+
+What bounds the claim is coverage, not correctness: nine format-4 ALU operations
+(register `LSL`/`LSR`/`ASR`, `ADC`, `SBC`, `NEG`, `CMN`, `BIC`, `MVN`) and the
+hi-register `ADD`/`CMP` are not implemented at all and stop the emulator — the halt class
+of rounds 70/78/79/80/87, not silent flag corruption.
+
 ## Seventy-seventh round (#328) — three flag defects in the Thumb interpreter
 
 ### Reaching Thumb at all was the round

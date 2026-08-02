@@ -49,7 +49,7 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328)"
+gate_begin "gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329)"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_arm.log
@@ -89,7 +89,7 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 129
+check "rows run"     "$want" 149
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
@@ -208,6 +208,20 @@ for v in "T ctrl ADDS 2+3" "T ctrl SUBS 5-3" "T ctrl SUBS borrow"          "T Z 
     check "  thumb: $v" "$n" 1
     n=$(count "$LOG" "^$v rd  .*ok$")
     check "  thumb: $v rd" "$n" 1
+done
+
+
+# #329: the Thumb SHIFT rows. ASR-immediate took Z and N from a register chosen by the
+# shift amount; RORS never cleared Z/N; and LSR #0 / ASR #0 encode shift-by-32 rather
+# than shift-by-zero. The two LSL #0 rows are the control -- that encoding IS a genuine
+# no-op and its C must survive untouched, which is why they run at both carry-in values.
+# The positive-operand shift-32 rows only became measurable once the rig could preset
+# carry: against a build that never writes C they would pass on a cold machine anyway.
+for v in "T LSL #0 keeps C1" "T LSL #0 keeps C0" "T ASR #12 flags reg"          "T RORS clears Z" "T RORS clears N"          "T LSR #0 neg" "T LSR #0 pos" "T ASR #0 neg" "T ASR #0 pos"          "T LSR rd!=0"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  shift: $v" "$n" 1
+    n=$(count "$LOG" "^$v rd  .*ok$")
+    check "  shift: $v rd" "$n" 1
 done
 
 gate_end

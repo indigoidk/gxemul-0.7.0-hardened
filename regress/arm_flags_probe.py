@@ -576,6 +576,7 @@ for name, pre, iw, want, cin, rf in R78:
 THUMB_AT = 0x8100
 THUMB_RET = 0x8200
 BX_R6 = 0xE12FFF16              # arm:   bx r6
+SUBS_R8_R8_R9 = 0xE0588009      # arm:   subs r8,r8,r9  (the carry preset)
 T_BX_R7 = 0x4738                # thumb: bx r7
 
 
@@ -595,21 +596,44 @@ def t_cmp_reg(rd, rs):          # CMP rd,rs           (format 4, op 1010)
     return 0x4280 | ((rs & 7) << 3) | (rd & 7)
 
 
-def run_thumb(tiw, r0=0, r1=0, r2=0):
-    """One Thumb instruction, entered by bx; returns (cpsr, rd)."""
-    w, _ = session([
-        "r0=0x%x" % r0, "r1=0x%x" % r1, "r2=0x%x" % r2,
+def run_thumb(tiw, r0=0, r1=0, r2=0, r3=0, cin=None, pub=0):
+    """One Thumb instruction, entered by bx; returns (cpsr, published reg).
+
+    `cin` presets the CARRY, and it is not optional decoration. Without it the
+    machine starts with C clear, which makes two whole contracts unmeasurable:
+    "LSR #0 must CLEAR C for a positive operand" and "LSL #0 must LEAVE C
+    alone" both pass vacuously against C=0. The preset is the same real SUBS
+    gate 14 uses in ARM mode -- never a debugger cpsr write, which reaches
+    cpsr but not the `flags` field the handlers read -- and it runs BEFORE the
+    `bx`, which is safe because `bx` touches no flags.
+
+    `pub` selects which register is published. Every row used to write and read
+    r0, so a handler that read r0 instead of rd would have been invisible;
+    that is the shadow of the very defect #329 fixes in the ASR block, where
+    the flags came from a register chosen by the shift amount.
+    """
+    pre = []
+    lead = 0
+    if cin is not None:
+        #  r8/r9 as the SUBS operands so r0-r3 stay free for the row.
+        a, b = (1, 0) if cin else (0, 1)     # 1-0 => no borrow => C=1
+        pre = ["r8=0x%x" % a, "r9=0x%x" % b,
+               "put w 0x%x, 0x%08x" % (CODE, SUBS_R8_R8_R9)]
+        lead = 1
+    str_pub = STR_R0_R5 if pub == 0 else (STR_R0_R5 | (pub << 12))
+    w, _ = session(pre + [
+        "r0=0x%x" % r0, "r1=0x%x" % r1, "r2=0x%x" % r2, "r3=0x%x" % r3,
         "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
         "r6=0x%x" % (THUMB_AT | 1), "r7=0x%x" % THUMB_RET,
         "put w 0x%x, 0xdeadbeef" % DEST,
         "put w 0x%x, 0xdeadbeef" % (DEST + 4),
-        "put w 0x%x, 0x%08x" % (CODE, BX_R6),
+        "put w 0x%x, 0x%08x" % (CODE + 4 * lead, BX_R6),
         #  two Thumb halfwords per word, low halfword first
         "put w 0x%x, 0x%08x" % (THUMB_AT, (T_BX_R7 << 16) | tiw),
         "put w 0x%x, 0x%08x" % (THUMB_RET,     MRS_R3_CPSR),
         "put w 0x%x, 0x%08x" % (THUMB_RET + 4, STR_R3_R4),
-        "put w 0x%x, 0x%08x" % (THUMB_RET + 8, STR_R0_R5),
-        "pc=0x%x" % CODE, "step 6"], 2)
+        "put w 0x%x, 0x%08x" % (THUMB_RET + 8, str_pub),
+        "pc=0x%x" % CODE, "step %d" % (6 + lead)], 2)
     if w is None:
         return None, None
     return sw(w[0]), sw(w[1])
@@ -721,5 +745,80 @@ for nm, tiw, a0, a1, a2, want_rd, want_f, cls in THUMB_ROWS:
     cpsr, rd = run_thumb(tiw, a0, a1, a2)
     row(nm, cls, thumb_nzcv(cpsr), want_f)
     row(nm + " rd", cls, rd, want_rd)
+
+
+#  ---------------------------------------------------------------------------
+#  #329: the THUMB SHIFT paths. Three more flag defects in the same function
+#  #328 fixed, found by that round's completeness sweep.
+#
+#    1. ASR-immediate read Z and N from r[rd8] while writing r[rd]. In the
+#       shift-immediate format (000 op imm5 Rs Rd) rd8 is bits 10:8 -- the top
+#       three bits of imm5 -- so `asrs r0,r1,#12` took its flags from r3, a
+#       register the instruction does not name. LSL and LSR never had this.
+#       NOTE the witness needs imm5 >= 4: below that rd8 is 0, which for a row
+#       writing r0 is accidentally the right register.
+#    2. RORS ORed Z and N in without clearing first, so a stale Z survived a
+#       nonzero rotate and a stale N survived a positive one.
+#    3. LSR #0 and ASR #0 encode SHIFT BY 32, not shift by zero: LSR gives 0,
+#       ASR gives a sign fill, and both write C from bit 31 of the operand.
+#       They executed as no-ops with C untouched. LSL #0 IS a real no-op and
+#       must stay one -- it is the control.
+#
+#  Half of contract 3 was unmeasurable until this round gave run_thumb a carry
+#  preset: with C starting clear, "LSR #0 CLEARS C for a positive operand" and
+#  "LSL #0 LEAVES C alone" both pass against a build that never touches C. The
+#  rows below preset C=1 precisely so those two can fail.
+T_LSL_I, T_LSR_I, T_ASR_I = 0x0000, 0x0800, 0x1000
+
+
+def t_shift(op, rd, rs, imm5):
+    return op | ((imm5 & 31) << 6) | ((rs & 7) << 3) | (rd & 7)
+
+
+def t_ror(rd, rs):
+    return 0x41C0 | ((rs & 7) << 3) | (rd & 7)
+
+
+#  name, word, r0, r1, r2, r3, carry-in, publish, want reg, want NZCV, class
+SHIFT_ROWS = [
+    #  LSL #0 is the control in both directions: value through, C preserved.
+    ("T LSL #0 keeps C1", t_shift(T_LSL_I, 0, 1, 0), 0, 0x80000000, 0, 0,
+     1, 0, 0x80000000, "N1 Z0 C1 V0", "PIN"),
+    ("T LSL #0 keeps C0", t_shift(T_LSL_I, 0, 1, 0), 0, 0x80000000, 0, 0,
+     0, 0, 0x80000000, "N1 Z0 C0 V0", "PIN"),
+
+    #  1. flags from the result, not from a register named by the shift count.
+    ("T ASR #12 flags reg", t_shift(T_ASR_I, 0, 1, 12), 0, 0x80000000, 0, 0,
+     0, 0, 0xfff80000, "N1 Z0 C0 V0", "DISC"),
+
+    #  2. RORS must clear both. Z stale after an equal compare, N stale after
+    #     a negative one -- the rotate results are nonzero and positive.
+    ("T RORS clears Z", t_ror(0, 1), 0x12345678, 4, 0, 0,
+     1, 0, 0x81234567, "N1 Z0 C1 V0", "DISC"),
+    ("T RORS clears N", t_ror(0, 1), 0x00000010, 4, 0, 0,
+     1, 0, 0x00000001, "N0 Z0 C0 V0", "DISC"),
+
+    #  3. shift-by-32, both operand signs. The POSITIVE rows are the ones the
+    #     carry preset made possible: C must be driven to 0, not left at 1.
+    ("T LSR #0 neg", t_shift(T_LSR_I, 0, 1, 0), 0, 0x80000000, 0, 0,
+     0, 0, 0x00000000, "N0 Z1 C1 V0", "DISC"),
+    ("T LSR #0 pos", t_shift(T_LSR_I, 0, 1, 0), 0, 0x7fffffff, 0, 0,
+     1, 0, 0x00000000, "N0 Z1 C0 V0", "DISC"),
+    ("T ASR #0 neg", t_shift(T_ASR_I, 0, 1, 0), 0, 0x80000000, 0, 0,
+     0, 0, 0xffffffff, "N1 Z0 C1 V0", "DISC"),
+    ("T ASR #0 pos", t_shift(T_ASR_I, 0, 1, 0), 0, 0x7fffffff, 0, 0,
+     1, 0, 0x00000000, "N0 Z1 C0 V0", "DISC"),
+
+    #  A row whose destination is NOT r0, published from r1. Every other row
+    #  here writes and reads r0, so a handler reading r0 instead of rd would
+    #  be invisible -- which is the shadow of defect 1 itself.
+    ("T LSR rd!=0", t_shift(T_LSR_I, 1, 2, 4), 0xdeadbeef, 0, 0x80000000, 0,
+     0, 1, 0x08000000, "N0 Z0 C0 V0", "DISC"),
+]
+
+for nm, tiw, a0, a1, a2, a3, cin, pub, want_r, want_f, cls in SHIFT_ROWS:
+    cpsr, rv = run_thumb(tiw, a0, a1, a2, a3, cin=cin, pub=pub)
+    row(nm, cls, thumb_nzcv(cpsr), want_f)
+    row(nm + " rd", cls, rv, want_r)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

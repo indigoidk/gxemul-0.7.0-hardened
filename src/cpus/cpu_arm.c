@@ -1225,53 +1225,102 @@ int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
 	switch (main_opcode)
 	{
 	case 0x0:
-		if (iw & 0x0800) {
-			// lsr
-			tmp = cpu->cd.arm.r[r3];
-			if (imm6 > 1)
-				tmp >>= (imm6 - 1);
-			cpu->cd.arm.r[rd] = cpu->cd.arm.r[r3] >> imm6;
-			tmp &= 1;
-		} else {
-			// lsl
-			tmp = cpu->cd.arm.r[r3];
-			if (imm6 > 1)
-				tmp <<= (imm6 - 1);
-			cpu->cd.arm.r[rd] = cpu->cd.arm.r[r3] << imm6;
-			tmp >>= 31;
-		}
-		cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
-		if (cpu->cd.arm.r[rd] == 0)
-			cpu->cd.arm.flags |= ARM_F_Z;
-		if ((int32_t)cpu->cd.arm.r[rd] < 0)
-			cpu->cd.arm.flags |= ARM_F_N;
-		if (imm6 != 0) {
-			// tmp is "last bit shifted out"
-			cpu->cd.arm.flags &= ~ARM_F_C;
-			if (tmp)
-				cpu->cd.arm.flags |= ARM_F_C;
+		{
+			uint32_t src = cpu->cd.arm.r[r3];
+			int have_c = 1;
+
+			if (iw & 0x0800) {
+				/*
+				 *  #329: LSR with an encoded shift of ZERO
+				 *  means SHIFT BY 32, not shift by nothing:
+				 *  the result is 0 and C is bit 31 of the
+				 *  operand. It used to execute as a no-op with
+				 *  C left alone, so `lsrs r0,r1,#0` returned
+				 *  the operand unchanged.
+				 *
+				 *  Spelled as an explicit branch rather than
+				 *  by turning 0 into 32 and shifting: a shift
+				 *  of 32 on a 32-bit type is undefined in C,
+				 *  so the "obvious" form would be UB on the
+				 *  one case this exists to fix.
+				 */
+				if (imm6 == 0) {
+					tmp = src >> 31;
+					cpu->cd.arm.r[rd] = 0;
+				} else {
+					tmp = (src >> (imm6 - 1)) & 1;
+					cpu->cd.arm.r[rd] = src >> imm6;
+				}
+			} else {
+				/*  LSL #0 IS a genuine no-op, and C must be
+				    left exactly as it was -- the one member of
+				    this family whose zero encoding means what
+				    it says.  */
+				if (imm6 == 0) {
+					have_c = 0;
+					cpu->cd.arm.r[rd] = src;
+				} else {
+					tmp = (src >> (32 - imm6)) & 1;
+					cpu->cd.arm.r[rd] = src << imm6;
+				}
+			}
+
+			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+			if (cpu->cd.arm.r[rd] == 0)
+				cpu->cd.arm.flags |= ARM_F_Z;
+			if ((int32_t)cpu->cd.arm.r[rd] < 0)
+				cpu->cd.arm.flags |= ARM_F_N;
+			if (have_c) {
+				/*  #329: C is UPDATED whenever the shift is
+				    architecturally defined to touch it -- which
+				    for LSR includes the encoded zero. Updated
+				    is not the same as set: a positive operand
+				    clears it.  */
+				cpu->cd.arm.flags &= ~ARM_F_C;
+				if (tmp)
+					cpu->cd.arm.flags |= ARM_F_C;
+			}
 		}
 		break;
 
 	case 0x1:
 		if (!(iw & 0x0800)) {
 			// asr
-			tmp = cpu->cd.arm.r[r3];
-			if (imm6 > 1)
-				tmp = (int32_t)tmp >> (imm6 - 1);
-			cpu->cd.arm.r[rd] = (int32_t)cpu->cd.arm.r[r3] >> imm6;
-			tmp &= 1;
-			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
-			if (cpu->cd.arm.r[rd8] == 0)
-				cpu->cd.arm.flags |= ARM_F_Z;
-			if ((int32_t)cpu->cd.arm.r[rd8] < 0)
-				cpu->cd.arm.flags |= ARM_F_N;
-			if (imm6 != 0) {
-				// tmp is "last bit shifted out"
-				cpu->cd.arm.flags &= ~ARM_F_C;
-				if (tmp)
-					cpu->cd.arm.flags |= ARM_F_C;
+			uint32_t src = cpu->cd.arm.r[r3];
+
+			/*
+			 *  #329: ASR with an encoded shift of ZERO means
+			 *  SHIFT BY 32 -- the result is a sign fill (0 or
+			 *  0xffffffff) and C is bit 31 of the operand.
+			 *  Explicit branch again: `(int32_t)x >> 32` is
+			 *  undefined in C.
+			 */
+			if (imm6 == 0) {
+				tmp = src >> 31;
+				cpu->cd.arm.r[rd] = tmp ? 0xffffffff : 0;
+			} else {
+				tmp = ((int32_t)src >> (imm6 - 1)) & 1;
+				cpu->cd.arm.r[rd] = (int32_t)src >> imm6;
 			}
+
+			/*
+			 *  #329: these two tested r[rd8], NOT the result.
+			 *  In this encoding rd8 is bits 10:8 -- the TOP THREE
+			 *  BITS OF THE SHIFT AMOUNT -- so `asrs r0,r1,#12`
+			 *  took Z and N from r3, a register the instruction
+			 *  does not name. Measured: the value was right and
+			 *  the flags came from somewhere else entirely.
+			 *  LSL and LSR never had this; ASR alone did.
+			 */
+			cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+			if (cpu->cd.arm.r[rd] == 0)
+				cpu->cd.arm.flags |= ARM_F_Z;
+			if ((int32_t)cpu->cd.arm.r[rd] < 0)
+				cpu->cd.arm.flags |= ARM_F_N;
+
+			cpu->cd.arm.flags &= ~ARM_F_C;
+			if (tmp)
+				cpu->cd.arm.flags |= ARM_F_C;
 		} else {
 			// add or sub
 			int isSub = iw & 0x0200;
@@ -1354,6 +1403,14 @@ int arm_cpu_interpret_thumb_SLOW(struct cpu *cpu)
 							cpu->cd.arm.flags |= ARM_F_C;
 					}
 					
+					/*  #329: these ORed the new values in
+					    without clearing first, so a stale Z
+					    survived a nonzero rotate and a stale
+					    N survived a positive one. Every
+					    neighbouring case clears -- see `tst`
+					    immediately below.  */
+					cpu->cd.arm.flags &=
+					    ~(ARM_F_Z | ARM_F_N);
 					if (cpu->cd.arm.r[rd] == 0)
 						cpu->cd.arm.flags |= ARM_F_Z;
 					if ((int32_t)cpu->cd.arm.r[rd] < 0)
