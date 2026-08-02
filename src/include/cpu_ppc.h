@@ -176,12 +176,52 @@ struct ppc_cpu {
 #define	PPC_MSR_LE	(1)		/*  Little-Endian Mode  */
 
 /*  Floating-point Status:  */
-#define	PPC_FPSCR_FX	(1 << 31)	/*  Exception summary  */
+#define	PPC_FPSCR_FX	(1U << 31)	/*  Exception summary  */
 #define	PPC_FPSCR_FEX	(1 << 30)	/*  Enabled Exception summary  */
 #define	PPC_FPSCR_VX	(1 << 29)	/*  Invalid Operation summary  */
-/*  .. TODO  */
-#define	PPC_FPSCR_VXNAN	(1 << 24)
-/*  .. TODO  */
+/*
+ *  #327: the rest of the FPSCR, from Book I's bit table. ISA numbering is
+ *  big-endian (bit 0 is the MSB), so a bit at ISA position n lives at host
+ *  position 31-n -- which is why FX, the ISA's bit 0, is (1U << 31) above (unsigned:
+ *  1 << 31 is undefined for a signed int).
+ *
+ *  ISA bit 20 is RESERVED, between VXVC and VXSOFT. It is deliberately absent
+ *  here: the nine Invalid Operation causes are ISA 7:12 and 21:23, and a
+ *  contiguous-looking mask over 7:12+20:23 would fold that reserved bit into
+ *  the VX summary.
+ */
+#define	PPC_FPSCR_OX	(1 << 28)	/*  Overflow  */
+#define	PPC_FPSCR_UX	(1 << 27)	/*  Underflow  */
+#define	PPC_FPSCR_ZX	(1 << 26)	/*  Zero divide  */
+#define	PPC_FPSCR_XX	(1 << 25)	/*  Inexact  */
+#define	PPC_FPSCR_VXNAN	(1 << 24)	/*  Invalid: SNaN  */
+#define	PPC_FPSCR_VXISI	(1 << 23)	/*  Invalid: Inf - Inf  */
+#define	PPC_FPSCR_VXIDI	(1 << 22)	/*  Invalid: Inf / Inf  */
+#define	PPC_FPSCR_VXZDZ	(1 << 21)	/*  Invalid: 0 / 0  */
+#define	PPC_FPSCR_VXIMZ	(1 << 20)	/*  Invalid: Inf * 0  */
+#define	PPC_FPSCR_VXVC	(1 << 19)	/*  Invalid: compare  */
+#define	PPC_FPSCR_FR	(1 << 18)	/*  Fraction Rounded  */
+#define	PPC_FPSCR_FI	(1 << 17)	/*  Fraction Inexact  */
+#define	PPC_FPSCR_VXSOFT (1 << 10)	/*  Invalid: software request  */
+#define	PPC_FPSCR_VXSQRT (1 << 9)	/*  Invalid: square root  */
+#define	PPC_FPSCR_VXCVI	(1 << 8)	/*  Invalid: integer convert  */
+#define	PPC_FPSCR_VE	(1 << 7)	/*  Invalid enable  */
+#define	PPC_FPSCR_OE	(1 << 6)	/*  Overflow enable  */
+#define	PPC_FPSCR_UE	(1 << 5)	/*  Underflow enable  */
+#define	PPC_FPSCR_ZE	(1 << 4)	/*  Zero divide enable  */
+#define	PPC_FPSCR_XE	(1 << 3)	/*  Inexact enable  */
+#define	PPC_FPSCR_NI	(1 << 2)	/*  Non-IEEE mode  */
+
+/*
+ *  The nine Invalid Operation causes. VX is defined by Book I as the OR of
+ *  exactly these -- it is derived, not stored, and no instruction may write
+ *  it directly.
+ */
+#define	PPC_FPSCR_VX_CAUSES	(PPC_FPSCR_VXNAN | PPC_FPSCR_VXISI | \
+				 PPC_FPSCR_VXIDI | PPC_FPSCR_VXZDZ | \
+				 PPC_FPSCR_VXIMZ | PPC_FPSCR_VXVC | \
+				 PPC_FPSCR_VXSOFT | PPC_FPSCR_VXSQRT | \
+				 PPC_FPSCR_VXCVI)
 #define	PPC_FPSCR_FPCC	0x0000f000
 #define	PPC_FPSCR_FPCC_SHIFT	12
 #define	PPC_FPSCR_FL	(1 << 15)	/*  Less than  */

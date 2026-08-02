@@ -881,6 +881,7 @@ X(mtfsf)
 	CHECK_FOR_FPU_EXCEPTION;
 	cpu->cd.ppc.fpscr &= ~ic->arg[1];
 	cpu->cd.ppc.fpscr |= (ic->arg[1] & (*(uint64_t *)ic->arg[0]));
+	ppc_fpscr_recompute(cpu);	/*  #327  */
 }
 
 
@@ -925,21 +926,15 @@ X(fmr)
  *
  *    - FEX (bit 1) and VX (bit 2) are OR summaries. Book I: "mcrfs, mtfsfi,
  *      mtfsf, mtfsb0, and mtfsb1 cannot alter FPSCR FEX / VX explicitly."
- *      The four instructions BELOW mask those two bits out of whatever they
- *      write. mtfsf does NOT -- it still copies them straight out of the
- *      source FPR when FM selects field 0, which is a divergence gate 13
- *      records (its FM=0x80 row) and #61 owns.
- *
- *      Masking mtfsf here as well would look like finishing the job and
- *      would make things WORSE, which is why it is not done piecemeal.
- *      This fork STORES FEX and VX instead of deriving them, so nothing
- *      recomputes VX when the last VXxx cause is cleared -- a guest that
- *      clears VXSNAN through mcrfs or mtfsb0 is left with VX set and no
- *      cause, a state hardware cannot produce. mtfsf's unmasked write is
- *      currently the ONLY way out of it. Take that away without adding the
- *      recompute and the phantom VX becomes permanent, copied into CR1 by
- *      every record form from then on. The two changes have to land
- *      together.
+ *      All five mask those two bits out of whatever they write, mtfsf
+ *      included as of #327 -- and the two halves landed together, which
+ *      the #326 version of this comment said they had to. Masking mtfsf
+ *      alone would have made things worse: this fork used to STORE FEX and
+ *      VX rather than derive them, so nothing lowered VX when the last
+ *      cause was cleared, and mtfsf's unmasked write was the only escape
+ *      from the resulting phantom. #327 added ppc_fpscr_recompute(), so
+ *      the escape is no longer needed and the summaries follow the causes
+ *      in both directions.
  *    - FX (bit 0) is implicitly set by "every floating-point instruction,
  *      EXCEPT mtfsfi and mtfsf", when that instruction drives an exception
  *      bit from 0 to 1. mtfsb1 is therefore subject to it; mtfsfi is not,
@@ -947,8 +942,16 @@ X(fmr)
  */
 #define	PPC_FPSCR_SUMMARY	(PPC_FPSCR_FEX | PPC_FPSCR_VX)
 
-/*  The sticky exception bits: ISA bits 3:12 and 21:23, as a host mask.  */
-#define	PPC_FPSCR_EXC_BITS	(0x1ff80000 | 0x00000700)
+/*
+ *  The sticky exception bits: ISA 3:12 and 21:23. #327 replaced the two hex
+ *  literals this used to be spelled with (0x1ff80000 | 0x00000700) by the
+ *  named bits now that they exist -- identical value, verified, but the
+ *  literal form hid that the run stops at ISA 12 and resumes at 21 because
+ *  bit 20 is RESERVED.
+ */
+#define	PPC_FPSCR_EXC_BITS	(PPC_FPSCR_OX | PPC_FPSCR_UX | \
+				 PPC_FPSCR_ZX | PPC_FPSCR_XX | \
+				 PPC_FPSCR_VX_CAUSES)
 
 
 /*
@@ -972,6 +975,7 @@ X(mtfsb1)
 		cpu->cd.ppc.fpscr |= PPC_FPSCR_FX;
 
 	cpu->cd.ppc.fpscr |= bit;
+	ppc_fpscr_recompute(cpu);	/*  #327  */
 }
 
 
@@ -991,6 +995,7 @@ X(mtfsb0)
 		return;
 
 	cpu->cd.ppc.fpscr &= ~bit;
+	ppc_fpscr_recompute(cpu);	/*  #327  */
 }
 
 
@@ -1009,6 +1014,7 @@ X(mtfsfi)
 
 	cpu->cd.ppc.fpscr &= ~mask;
 	cpu->cd.ppc.fpscr |= (((uint32_t)ic->arg[1] << shift) & mask);
+	ppc_fpscr_recompute(cpu);	/*  #327  */
 }
 
 
@@ -1042,6 +1048,7 @@ X(mcrfs)
 
 	/*  Never the summary bits, whatever the table says.  */
 	cpu->cd.ppc.fpscr &= ~((uint32_t)ic->arg[2] & ~PPC_FPSCR_SUMMARY);
+	ppc_fpscr_recompute(cpu);	/*  #327  */
 }
 
 
@@ -1402,8 +1409,37 @@ X(frsp)
 			    a gate row for the stickiness now).  Nothing here
 			    implies the TRAP side works: the enable bits
 			    (VE/OE/UE) remain unmodelled and stated as such.  */
-			cpu->cd.ppc.fpscr |= PPC_FPSCR_VXNAN | PPC_FPSCR_VX |
-			    PPC_FPSCR_FX;
+			/*
+			 *  #327: FX latches only on a 0->1 TRANSITION of an
+			 *  exception bit. VXSNAN is sticky, so a second
+			 *  signalling NaN after the guest has explicitly
+			 *  cleared FX must NOT set it again -- this used to
+			 *  set FX unconditionally.
+			 */
+			if (!(cpu->cd.ppc.fpscr & PPC_FPSCR_VXNAN))
+				cpu->cd.ppc.fpscr |= PPC_FPSCR_FX;
+
+			cpu->cd.ppc.fpscr |= PPC_FPSCR_VXNAN;
+
+			/*
+			 *  #327: and derive the summaries rather than leaving
+			 *  them to whatever happened to be stored. Setting VX
+			 *  by hand was right as far as it went, but nothing
+			 *  here ever raised FEX, so an enabled invalid
+			 *  operation left FEX clear no matter how the guest
+			 *  got there.
+			 *
+			 *  An earlier draft of this comment claimed the old
+			 *  code was ORDER-DEPENDENT here. It was not, and the
+			 *  claim was never measured: with no recompute on
+			 *  either path, `mtfsb1 24; frsp(sNaN)` and
+			 *  `frsp(sNaN); mtfsb1 24` both answered a1001080 --
+			 *  agreeing, and both missing FEX. The two gate rows
+			 *  are kept because order-independence is worth
+			 *  pinning now that FEX moves at all, not because
+			 *  they caught a disagreement.
+			 */
+			ppc_fpscr_recompute(cpu);
 		}
 		c = 1;
 	} else if ((frb_bits & 0x7fffffffffffffffULL) ==
@@ -4847,6 +4883,26 @@ X(to_be_translated)
 					if (iword & (1 << (17+bi)))
 						ic->arg[1] |= 0xf;
 				}
+				/*
+				 *  #327: mtfsf may not write FEX or VX either
+				 *  -- Book I lists it among the five that
+				 *  "cannot alter FPSCR FEX / VX explicitly".
+				 *  It was the last one still copying them
+				 *  straight out of the source FPR, which #326
+				 *  recorded as a divergence and said had to
+				 *  land together with the recompute. It does,
+				 *  here: masking mtfsf alone would have made
+				 *  the phantom-VX state permanent, since its
+				 *  unmasked write was the only escape.
+				 *
+				 *  FX is deliberately NOT masked. mtfsf is one
+				 *  of the two instructions exempt from the
+				 *  implicit-FX rule, so its FX comes from the
+				 *  source and nowhere else; masking it would
+				 *  break a legitimate write.
+				 */
+				ic->arg[1] &= ~(size_t)(PPC_FPSCR_FEX |
+				    PPC_FPSCR_VX);
 				break;
 			default:goto bad;
 			}

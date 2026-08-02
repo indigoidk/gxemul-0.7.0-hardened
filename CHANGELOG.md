@@ -4192,6 +4192,102 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Eighty-eighth round (#327) — VX and FEX were stored, and the ISA says they are derived
+
+### Measured first, in both directions
+
+Book I does not describe these as storage. VX is "the OR of all the Invalid Operation
+exception bits"; FEX is "the OR of all the floating-point exception bits masked by their
+respective enable bits"; and no instruction may write either — "mcrfs, mtfsfi, mtfsf,
+mtfsb0, and mtfsb1 cannot alter FPSCR VX / FEX explicitly". This fork stored both, so they
+went stale each way. Measured on the committed build, control first:
+
+| sequence | FPSCR via `mffs` | |
+|---|---|---|
+| `frsp(sNaN)` | `a1001000` | FX+VX+VXSNAN — **control, correct** |
+| `frsp(sNaN); mtfsb0 7` | `a0001000` | cause cleared, **VX still set** |
+| `mtfsb1 10` (VXZDZ) | `80200000` | cause set, **VX never rose** |
+| `mtfsb1 7; mtfsb1 24` | `81000080` | VXSNAN+VE, **FEX never rose** |
+
+"VX set with no cause" is a state hardware cannot produce, and **#326 is what made it
+reachable**: three of the four instructions that may clear an exception bit did not exist
+before it. Every record form then copied the phantom into CR1.
+
+### The fix, and why both halves had to land in one commit
+
+`ppc_fpscr_recompute()` derives both bits from the rest of the register, called from the
+five FPSCR writers and from `frsp`. It deliberately leaves FX alone — FX is sticky and
+latches on a 0→1 transition, so recomputing it would undo a guest's explicit clear.
+
+`mtfsf` also stops copying FEX and VX out of the source FPR. #326 recorded that as a
+divergence and its comment said the mask and the recompute "have to land together"; this
+is that landing, and the reason is not tidiness. Before the recompute existed, `mtfsf`'s
+unmasked write was **the only way a guest could clear a phantom VX** — every other path
+either early-returns or masks the bit. Masking `mtfsf` alone would have made the phantom
+permanent. FX is *not* masked out of `mtfsf`, because it is one of the two instructions
+exempt from the implicit-FX rule and takes FX from its source.
+
+Two smaller defects fixed alongside, both found by the panel:
+
+- **`frsp` set FX unconditionally.** FX latches only on a 0→1 transition, so a second
+  signalling NaN after the guest had explicitly cleared FX must not set it again.
+- **FEX never rose at all**, however the guest got there: an enabled invalid operation
+  left it clear. Two rows now pin that the two orderings agree.
+
+  A correction to this round's own record, from the after-pass: the first draft said
+  the old code was *order-dependent* here, giving different FEX for
+  `mtfsb1 24; frsp(sNaN)` than for the reverse. **That was never measured and it is
+  false** — with no recompute on either path both orderings answered `a1001080`,
+  agreeing with each other and both missing FEX. The rows are kept, because
+  order-independence is worth pinning now that FEX moves at all and a recompute wired
+  to the wrong site would break it, but they did not catch a disagreement and the
+  record should not say they did.
+
+### Twelve pre-registered bytes, and four rows that had to move with the code
+
+The panel worked out that the recompute changes **four existing `mtfsf` rows**, not the
+one this round set out to fix, because the derived summaries re-establish themselves from
+whatever `mtfsf` did write. Every byte was derived from Book I and written down *before*
+the code was built, then verified independently:
+
+| row | was | now | why |
+|---|---|---|---|
+| `mtfsf FM=0x80` | `f0000000` | `90000000` | FEX/VX no longer copied |
+| `mtfsf FM=0x40` | `0f000000` | `2f000000` | VXSNAN derives VX |
+| `mtfsf FM=0x0f` | `0000ffff` | `6000ffff` | VXSOFT/VXSQRT/VXCVI + VE derive both |
+| `mtfsf clears` | `0fffffff` | `6fffffff` | preloaded causes/enables survive the write |
+
+`FM=0xff` is unchanged **only by coincidence** — with every cause and enable set,
+derivation happens to reproduce the copy — and `FM=0x01` selects a field containing no
+causes. Six new rows cover the summaries directly (`80001000`, `a0200000`, `e1000080`,
+`00000040`, and the two order-independence rows at `e1001080`).
+
+Twelve rows were predicted in advance — the six `mtfsf` rows (four changing, two
+predicted to stay put) and the six new ones — and every one matched on the first run.
+Predicting that a row will *not* move is as much a prediction as predicting that it
+will. That is what makes the gate this fix's acceptance test rather than a transcript
+of it, and it is the discipline gate 13's header has demanded since #304.
+
+One qualification the after-pass insisted on, and it is fair: three of those wants
+(`80001000` and the two `e1001080` rows) contain an **FPRF nibble this fork models
+incompletely**. Hardware gives a NaN the class `10001` — C *and* FU — while this
+emulator sets only FU. So those bytes are Book I's answer for the summary bits plus
+*this model's* answer for FPRF, not Book I end to end, and "pre-registered from the
+ISA" would be an overclaim if said without that. The C bit (ISA 15) is a real
+divergence, unpinned by any row; it belongs with the arithmetic exception work.
+
+Also unrecorded until now: reserved ISA bit 20 is *retained* when `mtfsf` or `mtfsfi`
+write it — `6000ffff` includes it — where a real G4 reads it back as zero. v2.01's
+reserved-bit rule permits either, so this is policy rather than a defect, but it was
+policy nobody had written down.
+
+Gate 13 grows to 101 rows / 70 checks. The FPSCR bit table in `cpu_ppc.h` now covers
+every bit this round needs — all the causes, all five enables, FR/FI and NI; FPRF's
+class bit (ISA 15) is still undefined and unset, so "complete" would be an overclaim —
+with **ISA bit 20 excluded from `VX_CAUSES` because it is reserved** — a contiguous-looking
+mask over 7:12+20:23 would have folded it into the summary. Two hex literals left in #326's
+code (`0x1ff80000 | 0x00000700`) were replaced by the named composition, verified identical.
+
 ## Eighty-seventh round (#326) — twenty-four legal PowerPC encodings stopped the emulator, and every record form was one of them
 
 ### What was measured first

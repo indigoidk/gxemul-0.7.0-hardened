@@ -87,11 +87,12 @@
 > - **The exception-enable bits (OE/UE/VE) and the FPRF class bits are unmodelled.** Not
 >   forced piecemeal, for the reason the SH exception model is not: a lone enabled bit
 >   implies the others work. Round 73's after-pass added two specifics and a warning:
->   `fctiwz` owes **VXCVI** (and **VXSNAN** for a signalling operand), and `mtfsf` must
->   **not copy FEX and VX** — Book I calls them summaries "set according to the usual
->   rule ... and not from `(FRB)33:34`", so the emulator answers `f0000000` for
->   `FM=0x80` where hardware answers `90000000`. Gate 13 measures that divergence rather
->   than hiding it. The warning, and it is load-bearing: `fctiwz`'s existing
+>   `fctiwz` owes **VXCVI** (and **VXSNAN** for a signalling operand). ~~and `mtfsf`
+>   must not copy FEX and VX~~ — **RESOLVED as #327 (round 88)**, together with the
+>   recompute it had to land beside: VX and FEX are now DERIVED from the causes and
+>   enables rather than stored, in both directions, so the phantom "VX set with no
+>   cause" state #326 made reachable is gone. `frsp`'s unconditional FX set and an
+>   order-dependence in FEX went with it. The warning, and it is load-bearing: `fctiwz`'s existing
 >   `>= 2147483647.0` / `<= -2147483648.0` branches give the right *result* but are not a
 >   correct *classification* of "out of range" — the model range-checks after rounding,
 >   so under round-toward-zero an operand stays convertible while `x < 2147483648.0`.

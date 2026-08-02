@@ -59,14 +59,22 @@
 # debugger write stays because it keeps the mode rows independent of a second
 # instruction's correctness -- which is the property that let #324 be found at all.
 #
-# One `mtfsf` row records a DIVERGENCE rather than conformance, and says so in the
-# probe: FM=0x80 selects field 0, whose bits 1 and 2 are FEX and VX. Book I is explicit
-# that mtfsf must NOT copy those from frB -- they are OR summaries, "set according to
-# the usual rule ... and not from (FRB)33:34" -- so hardware would answer 90000000
-# where this emulator answers f0000000. It is the same unmodelled-exception-state gap
-# as the absent OE/UE/VE. FM=0x40 is the clean companion row: field 1 has no summary
-# bits, and it is the field holding VXSNAN, which the guest could not clear at all
-# until #324 (its nibble used to land above bit 31).
+# The `mtfsf` rows used to record a DIVERGENCE here: FM=0x80 selects field 0, whose bits
+# 1 and 2 are FEX and VX, and mtfsf copied them straight out of frB although Book I
+# lists it among the five instructions that "cannot alter FPSCR FEX / VX explicitly".
+# #327 closed that, and the row now expects hardware's 90000000 instead of the
+# emulator's old f0000000. THREE MORE ROWS MOVED WITH IT, because VX and FEX are
+# DERIVED and the recompute re-establishes them from whatever mtfsf did write: FM=0x40
+# gains VX from VXSNAN, FM=0x0f gains both from VXSOFT/VXSQRT/VXCVI plus VE, and
+# `mtfsf clears` keeps both because its preloaded causes and enables survive the
+# field-0 write. FM=0xff is unchanged only by coincidence -- with every cause and
+# enable set, derivation reproduces the copy -- and FM=0x01 selects a field with no
+# causes in it at all.
+#
+# All four bytes were PRE-REGISTERED from Book I before the code was written, which is
+# what makes this gate the fix's acceptance test rather than a transcript of it.
+# FM=0x40 stays the clean companion row for field PLACEMENT: it holds VXSNAN, which
+# the guest could not clear at all until #324 (its nibble landed above bit 31).
 #
 # #325's `fctiwz` rows carry a warning of their own. That row was pinned as a known
 # DIVERGENCE from #304 onward with its answer recorded as 00000000 -- and it was never
@@ -121,7 +129,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 94
+check "rows run"     "$want" 101
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -133,9 +141,9 @@ pins=$(grep -c " PIN " "$LOG")
 # against real counts of 50/36, which means a whole class could have lost rows without
 # the floor noticing -- the same "a check that cannot fail" species this gate's header
 # warns about twice. The two numbers must also sum to the asserted `rows run` above
-# (50 + 36 = 86); if they stop summing, a row lost its class rather than the table
+# (62 + 39 = 101); if they stop summing, a row lost its class rather than the table
 # losing a row.
-check_min "discriminating rows present" "$disc" 55
+check_min "discriminating rows present" "$disc" 62
 check_min "pinned rows present"         "$pins" 39
 
 # The one row that records a divergence this round deliberately does NOT fix.
@@ -163,6 +171,10 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "fctiwz 1.9 RTZ" "fctiwz -1.9 RTZ" \
          "mtfsf FM=0xff" "mtfsf FM=0x80" "mtfsf FM=0x01" "mtfsf FM=0x0f" \
          "mtfsf FM=0x40" "mtfsf clears" \
+         "VX falls on last clear" "VX rises on cause" \
+         "FEX rises on enable" "FEX falls with its cause" \
+         "FEX order: enable first" "FEX order: cause first" \
+         "FX latches once only" \
          "lfsu value" "lfsu updates r3" "lfdu value" "lfdu updates r3" \
          "stfsu value" "stfsu updates r3" "stfdu value" "stfdu updates r3" \
          "lfsux value" "lfsux updates r3" "lfdux value" "lfdux updates r3" \

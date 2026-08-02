@@ -1857,6 +1857,61 @@ void update_cr1(struct cpu *cpu)
 }
 
 
+/*
+ *  ppc_fpscr_recompute():  #327
+ *
+ *  Re-derives the two FPSCR summary bits from the rest of the register.
+ *
+ *  Book I does not describe VX and FEX as storage. VX is "the OR of all the
+ *  Invalid Operation exception bits" and FEX "the OR of all the floating-point
+ *  exception bits masked by their respective enable bits", and no instruction
+ *  may write either one: "mcrfs, mtfsfi, mtfsf, mtfsb0, and mtfsb1 cannot
+ *  alter FPSCR VX / FEX explicitly." This fork stored them, so they went stale
+ *  in BOTH directions, measured:
+ *
+ *      frsp(sNaN)              -> a1001000   FX|VX|VXSNAN, correct
+ *      frsp(sNaN); mtfsb0 7    -> a0001000   cause cleared, VX STILL SET
+ *      mtfsb1 10 (VXZDZ)       -> 80200000   cause set, VX NEVER ROSE
+ *      mtfsb1 7; mtfsb1 24     -> 81000080   VXSNAN+VE, FEX NEVER ROSE
+ *
+ *  "VX set with no cause" is a state hardware cannot produce, and #326 is what
+ *  made it reachable: three of the four instructions that may clear an
+ *  exception bit did not exist before it. Every record form then copied the
+ *  phantom into CR1.
+ *
+ *  FEX pairs the invalid-operation GROUP with the single VE enable -- there is
+ *  no per-cause enable, so `VX & VE` is the whole invalid term. Pairing each
+ *  VXxx bit with VE separately would be the same expression expanded.
+ *
+ *  This deliberately does NOT touch FX. FX is sticky and latches only when an
+ *  exception bit goes 0->1; recomputing it here would re-set it after a guest
+ *  had explicitly cleared it.
+ */
+void ppc_fpscr_recompute(struct cpu *cpu)
+{
+	uint32_t f = cpu->cd.ppc.fpscr;
+	int fex = 0;
+
+	if (f & PPC_FPSCR_VX_CAUSES)
+		f |= PPC_FPSCR_VX;
+	else
+		f &= ~PPC_FPSCR_VX;
+
+	if ((f & PPC_FPSCR_VX) && (f & PPC_FPSCR_VE)) fex = 1;
+	if ((f & PPC_FPSCR_OX) && (f & PPC_FPSCR_OE)) fex = 1;
+	if ((f & PPC_FPSCR_UX) && (f & PPC_FPSCR_UE)) fex = 1;
+	if ((f & PPC_FPSCR_ZX) && (f & PPC_FPSCR_ZE)) fex = 1;
+	if ((f & PPC_FPSCR_XX) && (f & PPC_FPSCR_XE)) fex = 1;
+
+	if (fex)
+		f |= PPC_FPSCR_FEX;
+	else
+		f &= ~PPC_FPSCR_FEX;
+
+	cpu->cd.ppc.fpscr = f;
+}
+
+
 #include "memory_ppc.c"
 
 

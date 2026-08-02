@@ -51,7 +51,10 @@ Row classes
            against the ISA but is NOT this round's scope; the row exists so the
            divergence cannot drift silently.
   DISC  -- discriminator: the committed byte is the measured defect, and the
-           want flips when the fix lands.
+           want flips when the fix lands. #327's twelve moved bytes were all
+           PRE-REGISTERED -- derived from Book I and written down before the
+           code existed -- so the flip is an acceptance test and not a
+           transcript of whatever the new build printed.
 """
 import os
 import pty
@@ -225,6 +228,100 @@ def run_lfs(sbits, indexed=False):
     if w is None:
         return None
     return w[0] + w[1]
+
+
+def _fps(op, rt=0, ra=0, rb=0, xo=0):
+    """#327: assemble an X-form FPSCR-control word from its fields."""
+    return (((op & 63) << 26) | ((rt & 31) << 21) | ((ra & 31) << 16)
+            | ((rb & 31) << 11) | ((xo & 1023) << 1))
+
+
+def MTFSB0(bt):
+    return _fps(63, rt=bt, xo=70)
+
+
+def MTFSB1(bt):
+    return _fps(63, rt=bt, xo=38)
+
+
+def MCRFS(bf, bfa):
+    return _fps(63, rt=bf << 2, ra=bfa << 2, xo=64)
+
+
+def run_fpscr_seq(preload, seq, seed_f1=None):
+    """#327: run a sequence of instructions and read FPSCR back via mffs.
+
+    The instrument for the two SUMMARY bits. Book I derives VX from the nine
+    Invalid Operation causes and FEX from the exceptions masked by their
+    enables; this fork stored both, so they went stale in both directions and
+    a guest could see VX set with no cause -- a state hardware cannot produce.
+    Each row drives a real instruction sequence and reads the guest-visible
+    register, never the debugger's view.
+    """
+    cmds = ["msr=0x2000", "fpscr=0x%08x" % preload]
+    if seed_f1 is not None:
+        cmds.append("f1=0x%016x" % seed_f1)
+    cmds += ["r5=0x%x" % DEST,
+             "put w 0x%x, 0xdeadbeef" % DEST,
+             "put w 0x%x, 0xdeadbeef" % (DEST + 4)]
+    for i, iw in enumerate(seq):
+        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
+    n = len(seq)
+    cmds += ["pc=0x%x" % CODE, "step %d" % n,
+             "put w 0x%x, 0x%08x" % (CODE + 4 * n, MFFS_F3),
+             "put w 0x%x, 0x%08x" % (CODE + 4 * n + 4, STFD_F3_R5),
+             "pc=0x%x" % (CODE + 4 * n), "step 2"]
+    w, _ = session(cmds, 2)
+    if w is None or len(w) < 2 or w[1] == "deadbeef":
+        return None
+    return w[1]
+
+
+#  #327. Every want here was PRE-REGISTERED -- derived from Book I and written
+#  down before the code was built -- so the flip is the fix's acceptance test
+#  rather than a transcription of whatever the new build happened to print.
+SNAN_D = 0x7ff0000000000123
+SUMMARY_ROWS = [
+    #  LOWER: clear the only invalid cause; VX must fall. Committed build gave
+    #  a0001000 -- VX still set with nothing causing it.
+    ("VX falls on last clear", 0x00000000,
+     [FRSP_F0_F1, MTFSB0(7)], SNAN_D, "80001000", "DISC"),
+
+    #  RAISE: set a cause; VX must rise. Committed gave 80200000, VX never rose.
+    ("VX rises on cause", 0x00000000,
+     [MTFSB1(10)], None, "a0200000", "DISC"),
+
+    #  FEX from an enabled pending exception. Committed gave 81000080.
+    ("FEX rises on enable", 0x00000000,
+     [MTFSB1(7), MTFSB1(24)], None, "e1000080", "DISC"),
+
+    #  FEX must FALL when mcrfs clears the exception that enabled it. The
+    #  preload is not stale to begin with -- OX and OE legitimately derive
+    #  FEX=1 -- it goes stale only once mcrfs clears OX, which is exactly what
+    #  a build that merely stores FEX would fail to notice.
+    ("FEX falls with its cause", 0x50000040,
+     [MCRFS(0, 0)], None, "00000040", "DISC"),
+
+    #  ORDER INDEPENDENCE: enable-then-cause must equal cause-then-enable.
+    #  NOT a pre-existing disagreement -- the old build answered a1001080
+    #  BOTH ways, agreeing while missing FEX entirely, and an earlier note
+    #  here wrongly claimed otherwise without measuring it. The rows earn
+    #  their place now that FEX actually moves: a recompute driven from the
+    #  wrong site, or only from frsp, would make these two disagree.
+    ("FEX order: enable first", 0x00000000,
+     [MTFSB1(24), FRSP_F0_F1], SNAN_D, "e1001080", "DISC"),
+    ("FEX order: cause first", 0x00000000,
+     [FRSP_F0_F1, MTFSB1(24)], SNAN_D, "e1001080", "DISC"),
+
+    #  FX latches on a 0->1 TRANSITION of an exception bit, so once VXSNAN is
+    #  sticky-set, a guest that clears FX must not have it re-set by a second
+    #  signalling NaN. frsp used to set FX unconditionally, which answers
+    #  a1001000 here; the guard makes it 21001000 -- FX stays clear, VXSNAN and
+    #  the derived VX stay set. This row exists because the after-pass noticed
+    #  #327 had fixed the FX latch and left nothing measuring it.
+    ("FX latches once only", 0x00000000,
+     [FRSP_F0_F1, MTFSB0(0), FRSP_F0_F1], SNAN_D, "21001000", "DISC"),
+]
 
 
 def run_vxsnan_sticky_arith(second):
@@ -416,23 +513,28 @@ def run_mtfsf(fm, fval, preload=0x00000000):
 #  #324. Every row writes a source of all ones with FPSCR forced to zero first,
 #  so the byte read back IS the mask the decoder built.
 #
-#  FM=0x80 RECORDS A KNOWN DIVERGENCE, not conformance. It selects field 0,
-#  whose four bits are FX, FEX, VX, OX -- and Book I's mtfsf note says FX and OX
+#  FM=0x80 selects field 0 -- FX, FEX, VX, OX. Book I's mtfsf note says FX and OX
 #  come from (FRB)32 and (FRB)35 while "Bits 1 and 2 (FEX and VX) are set
-#  according to the usual rule ... and not from (FRB)33:34". They are OR
-#  summaries, and mtfsf must never copy them. This emulator copies all four, so
-#  it answers f0000000 where hardware would answer 90000000: FX and OX copied,
-#  FEX and VX recomputed to zero because no other exception bit is set. That is
-#  the same unmodelled-exception-state gap as the absent OE/UE/VE, kept here as
-#  a measured record of it rather than a silent one. FM=0xff escapes the
-#  question only by coincidence -- with every exception and enable bit set, both
-#  summaries are legitimately 1, so ffffffff is the conformant answer too.
+#  according to the usual rule ... and not from (FRB)33:34": they are OR
+#  summaries and mtfsf must never copy them. This row USED to record that as a
+#  divergence, answering f0000000; #327 masked mtfsf and made the summaries
+#  derived, so it now expects hardware's 90000000 -- FX and OX copied, FEX and
+#  VX derived to zero because nothing else is set.
+#
+#  Three rows moved with it, and that is the interesting part: once the
+#  summaries are DERIVED, they re-establish themselves from whatever mtfsf did
+#  write. FM=0x40 gains VX from the VXSNAN it writes, FM=0x0f gains VX and FEX
+#  from VXSOFT/VXSQRT/VXCVI plus VE, and `mtfsf clears` keeps both because its
+#  preload's causes and enables survive a field-0 write. FM=0xff is unchanged
+#  only by coincidence -- with every cause and enable set, derivation reproduces
+#  the copy. All four bytes were registered from Book I before the code existed.
 #
 #  FM=0x01 is a PIN and not a DISC: the old 8-bit stride left the last iteration
 #  unshifted, so this row answered 0000000f before the fix as well. It flips
 #  nothing and must not be counted among the rows that do.
-#  FM=0x40 is the row that tests the top half of the mask WITHOUT the summary-bit
-#  question, and it is the one that matters most in practice: field 1 holds
+#  FM=0x40 tests the top half of the mask, and it is the row that matters most in
+#  practice (it does NOT avoid the summary question any more -- since #327 its
+#  want carries a derived VX): field 1 holds
 #  VXSNAN, the sticky bit #304 made the emulator set. Under the old stride that
 #  field's nibble landed at bits 48-51, above the 32-bit FPSCR, so the guest
 #  could not clear VXSNAN at all -- mtfsf is the documented way to do it, and it
@@ -445,11 +547,11 @@ def run_mtfsf(fm, fval, preload=0x00000000):
 MTFSF_ROWS = [
     #  name,           FM,   frB value,           want,       class, preload
     ("mtfsf FM=0xff",  0xff, 0x00000000ffffffff, "ffffffff", "DISC", 0x00000000),
-    ("mtfsf FM=0x80",  0x80, 0x00000000ffffffff, "f0000000", "DISC", 0x00000000),
-    ("mtfsf FM=0x40",  0x40, 0x00000000ffffffff, "0f000000", "DISC", 0x00000000),
+    ("mtfsf FM=0x80",  0x80, 0x00000000ffffffff, "90000000", "DISC", 0x00000000),
+    ("mtfsf FM=0x40",  0x40, 0x00000000ffffffff, "2f000000", "DISC", 0x00000000),
     ("mtfsf FM=0x01",  0x01, 0x00000000ffffffff, "0000000f", "PIN",  0x00000000),
-    ("mtfsf FM=0x0f",  0x0f, 0x00000000ffffffff, "0000ffff", "DISC", 0x00000000),
-    ("mtfsf clears",   0x80, 0x000000000fffffff, "0fffffff", "DISC", 0xffffffff),
+    ("mtfsf FM=0x0f",  0x0f, 0x00000000ffffffff, "6000ffff", "DISC", 0x00000000),
+    ("mtfsf clears",   0x80, 0x000000000fffffff, "6fffffff", "DISC", 0xffffffff),
 ]
 
 
@@ -866,6 +968,10 @@ def main():
 
     for name, operand, mode, want, cls in COMPOSED_ROWS:
         report(name, run_composed(operand, mode), want, cls)
+
+    #  #327: VX and FEX are DERIVED, not stored. Six rows, both directions.
+    for name, pre, seq, seed, want, cls in SUMMARY_ROWS:
+        report(name, run_fpscr_seq(pre, seq, seed), want, cls)
 
     #  VXSNAN must survive a following non-NaN frsp (see run_vxsnan_sticky).
     report("VXSNAN sticky", run_vxsnan_sticky(), "set", "DISC")
