@@ -1102,6 +1102,60 @@ static int fpu_unimpl_trap(struct cpu *cpu, struct mips_coproc *cp)
 
 
 /*
+ *  fpu_subst_tiny():  #332
+ *
+ *  The architectural substitution for a result that came out SUBNORMAL in the
+ *  destination format.  Until #331 this function could not exist, because the
+ *  generic encoder flushed every subnormal to signed zero and MIPS was getting
+ *  its flush from that bug rather than from anything that meant it -- which is
+ *  precisely why the two arms below were never distinguishable.
+ *
+ *  Classification is done on the ENCODED word, not on the host double, so it
+ *  is tininess AFTER rounding, which is what MIPS specifies: the exact upper
+ *  midpoint 2^-126 - 2^-150 rounds to FLT_MIN under nearest and is then a
+ *  NORMAL result that must not be substituted at all.  (The #246 trap check
+ *  above still uses the pre-rounding `fabs(nf) < FLT_MIN` predicate and so
+ *  over-traps across that same sliver on EXC4K+ with FS clear.  Left alone
+ *  deliberately: moving it would change WHEN the trap fires for a band the
+ *  committed arc trap rows sit near, which is a measurement this round did not
+ *  make.  Recorded in OUTSTANDING_BUGS rather than fixed blind.)
+ *
+ *  EXC3K keeps flushing to signed zero unconditionally.  FCSR.FS does not
+ *  exist on the R3010 (MBZ per mips_cpuregs.h), and #246 deliberately left
+ *  EXC3K bit-identical because GXemul wires no R3010 FPA interrupt pin: real
+ *  hardware routes the denormal to a software handler that completes it, but
+ *  an emulator that merely declined to write the destination -- with nothing
+ *  to deliver the interrupt to -- would leave the guest reading a STALE
+ *  register, which is worse than either honest answer.
+ *
+ *  EXC4K+ can only reach here with FS set, because the FS-clear case trapped
+ *  and returned above.  R4000 with FS set and traps disabled does NOT flush
+ *  universally: it substitutes signed zero or MinNorm according to the sign
+ *  and the rounding mode, so a positive tiny under round-toward-+Inf owes
+ *  +MinNorm and a negative tiny under round-toward--Inf owes -MinNorm.
+ */
+static uint64_t fpu_subst_tiny(struct cpu *cpu, uint64_t r, int ieee_fmt,
+	int rm)
+{
+	int n_frac = ieee_fmt == IEEE_FMT_S ? 23 : 52;
+	int signofs = ieee_fmt == IEEE_FMT_S ? 31 : 63;
+	uint64_t sign = r & ((uint64_t)1 << signofs);
+	uint64_t mag = r & ~((uint64_t)1 << signofs);
+	int negative = sign != 0, to_min;
+
+	/*  subnormal in the destination == biased exponent 0, fraction set  */
+	if (mag == 0 || (mag >> n_frac) != 0)
+		return r;
+
+	to_min = cpu->cd.mips.cpu_type.exc_model != EXC3K &&
+	    ((rm == IEEE_RM_RP && !negative) ||
+	     (rm == IEEE_RM_RM && negative));
+
+	return sign | (to_min ? (uint64_t)1 << n_frac : 0);
+}
+
+
+/*
  *  fpu_store_float_value():
  *
  *  Stores a float value (actually a double) in fmt format.
@@ -1136,6 +1190,11 @@ static void fpu_store_float_value(struct cpu *cpu, int fr_flag,
 	    results cannot change: a host double already has exactly the
 	    52 fraction bits D wants, so the remainder is always zero.  */
 	uint64_t r = ieee_store_float_value_rm(nf, ieee_fmt, rm);
+
+	/*  #332: #331 made the encoder deliver gradual underflow, so the two
+	    architectures that must NOT see it now say so here.  */
+	if (ieee_fmt == IEEE_FMT_S || ieee_fmt == IEEE_FMT_D)
+		r = fpu_subst_tiny(cpu, r, ieee_fmt, rm);
 
 	/*  #255: canonicalize a NaN result to the legacy-MIPS QUIET NaN
 	    (fraction MSB clear). ieee_store_float_value() emits all-ones

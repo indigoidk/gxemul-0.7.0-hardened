@@ -208,12 +208,24 @@ struct abs_case { double v; int fmt; uint64_t want; const char *name; };
  *  one, even under -frounding-math, and the result LOOKS like a clean pass
  *  while comparing a value against itself.
  *
- *  Two deliberate deviations of the emulator function are carved out as
- *  predicates, never as tolerances:
- *    - results in the subnormal band flush to signed zero (the function's
- *      documented flush-to-zero semantics; MIPS #246 routes non-flush
- *      denormals away before the store, SH flushes in hardware);
- *    - toward-zero overflow stops at the largest finite value.
+ *  ONE deliberate deviation of the emulator function is carved out as a
+ *  predicate, never as a tolerance: toward-zero overflow stops at the largest
+ *  finite value.
+ *
+ *  #331 DELETED THE OTHER CARVE-OUT, and its removal is the point of this
+ *  round.  These two oracles used to contain
+ *
+ *      if (r != 0.0f && fabsf(r) < FLT_MIN)
+ *              return signbit(x) ? 0x80000000u : 0u;
+ *
+ *  which re-implemented the very flush-to-zero the emulator was being checked
+ *  against -- so for the whole subnormal band the "independent right answer"
+ *  was neither independent nor right, and the band could not have been
+ *  measured wrong by this gate no matter how wrong it was.  That is the
+ *  complicit-instrument failure this file's own header warns about in its
+ *  first paragraph, surviving in a second form.  The host's cast already
+ *  produces correctly-rounded subnormals; nothing needs to be added here, only
+ *  removed.
  */
 static uint32_t oracle_s_rn(double x)
 {
@@ -223,8 +235,6 @@ static uint32_t oracle_s_rn(double x)
 	uint32_t b;
 	if (isinf(r))
 		return signbit(x) ? 0xff800000u : 0x7f800000u;
-	if (r != 0.0f && fabsf(r) < FLT_MIN)
-		return signbit(x) ? 0x80000000u : 0u;
 	memcpy(&b, &r, 4);
 	return b;
 }
@@ -237,8 +247,6 @@ static uint32_t oracle_s_rz(double x)
 	uint32_t b;
 	if ((double) fabsf(r) > fabs(x))
 		r = nextafterf(r, 0.0f);	/*  nearest overshot -> step back  */
-	if (r != 0.0f && fabsf(r) < FLT_MIN)
-		return signbit(x) ? 0x80000000u : 0u;
 	memcpy(&b, &r, 4);
 	return b;
 }
@@ -269,13 +277,31 @@ static int must_differ(double x)
 {
 	const double TWO128   = 340282366920938463463374607431768211456.0;
 	const double TWO_M126 = 1.1754943508222875e-38;
+	const double TWO_M149 = 0x1p-149;	/*  #331: one S quantum  */
 
 	if (fpclassify(x) != FP_NORMAL)
 		return 0;
 	if (fabs(x) >= TWO128 && !frac23_is_zero(x))
 		return 1;			/*  overflow: mantissa must be cleared  */
-	if (fabs(x) > 0.0 && fabs(x) < TWO_M126 && signbit(x))
-		return 1;			/*  underflow: sign must be kept  */
+	/*  #331: the `&& signbit(x)` that used to close this clause is gone.
+	    It dated from #287, when the only thing the band was required to
+	    get right was KEEPING THE SIGN of the zero it flushed to -- so a
+	    positive underflow legitimately agreed with upstream and had to be
+	    excluded from the completeness requirement.  Now the band must
+	    differ from upstream in BOTH signs, because upstream flushes and
+	    this tree delivers the gradually-underflowed value.  Leaving the
+	    conjunct in place dropped every positive band sample into
+	    `unexplained` -- 112190 of them -- which is how it announced itself.
+
+	    The LOWER bound is new and is not decoration.  This differential
+	    runs through the LEGACY entry point, which truncates, so a value
+	    below one whole quantum still truncates to zero and legitimately
+	    agrees with upstream.  Demanding that those differ too claimed
+	    4263461 inputs "should have moved but did not" -- a completeness
+	    requirement that is false is just as useless as one that is
+	    vacuous, and this one was loud in the opposite direction.  */
+	if (fabs(x) >= TWO_M149 && fabs(x) < TWO_M126)
+		return 1;			/*  underflow: gradual, both signs  */
 	return 0;
 }
 
@@ -300,11 +326,35 @@ int main(void)
 	    { -2.0,   IEEE_FMT_S, 0xc0000000ULL,         "-2.0 -> S" },
 	    { 1e300,  IEEE_FMT_S, 0x7f800000ULL,         "1e300 -> S is +Inf" },
 	    { -1e300, IEEE_FMT_S, 0xff800000ULL,         "-1e300 -> S is -Inf" },
-	    { -1e-40, IEEE_FMT_S, 0x80000000ULL,         "-1e-40 -> S is -0" },
-	    { 1e-40,  IEEE_FMT_S, 0x00000000ULL,         "1e-40 -> S is +0" },
+	    /*  #331: these two used to read 0x80000000 / 0x00000000 -- the
+	        flush.  They are the absolute rows that PINNED the defect, so
+	        they are re-authored to the owed values rather than deleted;
+	        a class whose evidence disappears when it is fixed cannot be
+	        shown to have stayed fixed.  1e-40 is a NORMAL host double and
+	        a SUBNORMAL single, which is why it went through the encoder's
+	        FP_NORMAL arm and not its FP_SUBNORMAL one.  */
+	    { -1e-40, IEEE_FMT_S, 0x800116c2ULL,         "-1e-40 -> S subnormal" },
+	    { 1e-40,  IEEE_FMT_S, 0x000116c2ULL,         "1e-40 -> S subnormal" },
 	    { -2.0,   IEEE_FMT_D, 0xc000000000000000ULL, "-2.0 -> D" },
 	    { 1e300,  IEEE_FMT_D, 0x7e37e43c8800759cULL, "1e300 -> D is finite" },
+	    /*  #331: D had NO gradual underflow at all -- the FP_SUBNORMAL arm
+	        was an empty TODO returning the sign bit -- so these are new,
+	        and they are bit IDENTITIES: every finite double is exactly
+	        representable in D, under every mode, with nothing to round.  */
+	    { 0.0,    IEEE_FMT_D, 0x0000000000000001ULL, "D min subnormal identity" },
+	    { 0.0,    IEEE_FMT_D, 0x000fffffffffffffULL, "D max subnormal identity" },
 	};
+	/*  #331: the two D identity rows are named by their BIT PATTERN, which
+	    is the whole contract, so the input is built from the pattern
+	    rather than written as a decimal literal that would have to be
+	    trusted to round to it.  */
+	{
+		double t;
+		uint64_t b = 0x0000000000000001ULL;
+		memcpy(&t, &b, 8); cases[8].v = t;
+		b = 0x000fffffffffffffULL;
+		memcpy(&t, &b, 8); cases[9].v = t;
+	}
 	for (i = 0; i < (int)(sizeof(cases)/sizeof(cases[0])); i++) {
 		uint64_t got = ieee_store_float_value(cases[i].v, cases[i].fmt);
 		if (got != cases[i].want) {
@@ -337,7 +387,7 @@ int main(void)
 			n++;
 			if (a != b) { dS++;
 				if (isfinite(v[k]) && fabs(v[k]) >= TWO128) ovf++;
-				else if (fabs(v[k]) > 0 && fabs(v[k]) < TWO_M126 && signbit(v[k])) und++;
+				else if (fabs(v[k]) > 0 && fabs(v[k]) < TWO_M126) und++;	/*  #331: both signs  */
 				else { unexplained++;
 					if (unexplained < 5)
 						printf("  UNEXPLAINED %.17g: %08llx -> %08llx\n",
@@ -367,7 +417,7 @@ int main(void)
 		if (a != b) {
 			dS++;
 			if (isfinite(x) && fabs(x) >= TWO128) ovf++;
-			else if (fabs(x) > 0 && fabs(x) < TWO_M126 && signbit(x)) und++;
+			else if (fabs(x) > 0 && fabs(x) < TWO_M126) und++;	/*  #331: both signs  */
 			else { unexplained++;
 				if (unexplained < 5)
 					printf("  UNEXPLAINED %.17g: %08llx -> %08llx\n",
@@ -465,8 +515,33 @@ int main(void)
 		    { -1e300, IEEE_RM_RP, 0xff7fffff, "RP overflow, away side" },
 		    { 1e300,  IEEE_RM_RM, 0x7f7fffff, "RM overflow, away side" },
 		    { -1e300, IEEE_RM_RM, 0xff800000, "RM overflow, toward side" },
-		    { -1e-40, IEEE_RM_RN, 0x80000000, "flush keeps the sign" },
+		    /*  #331: was "flush keeps the sign", expecting 0x80000000.
+		        The NAME was as stale as the value -- there is no flush
+		        now -- so both are re-authored rather than deleted.  */
+		    { -1e-40, IEEE_RM_RN, 0x800116c2, "gradual underflow keeps the sign" },
 		    { 0x1.ffffffp-127, IEEE_RM_RN, 0x00800000, "carry lifts to FLT_MIN" },
+		    /*  #331: the exact upper midpoint of the band,
+		        2^-126 - 2^-150.  The row above is ABOVE that midpoint
+		        and rounds up under every tie rule -- it proves the
+		        carry happens, not that it happens for the right
+		        reason.  These do: ties-to-even must cross OUT of the
+		        band into the smallest normal, and an implementation
+		        that masks the carry back into the fraction answers
+		        0x00000000, a full FLT_MIN of error.  The negative twin
+		        swaps RP and RM, catching a helper that takes the
+		        magnitude before applying the direction.  */
+		    { 0x1.fffffep-127, IEEE_RM_RN, 0x00800000, "band top tie RN to FLT_MIN" },
+		    { 0x1.fffffep-127, IEEE_RM_RZ, 0x007fffff, "band top tie RZ stays sub" },
+		    { -0x1.fffffep-127, IEEE_RM_RP, 0x807fffff, "band top tie -RP toward zero" },
+		    { -0x1.fffffep-127, IEEE_RM_RM, 0x80800000, "band top tie -RM away" },
+		    /*  the bottom of the band: half a quantum, where
+		        ties-to-even goes DOWN to zero and the sign of that
+		        zero must still survive.  */
+		    { 0x1p-150,  IEEE_RM_RN, 0x00000000, "half quantum RN to even zero" },
+		    { 0x1p-150,  IEEE_RM_RP, 0x00000001, "half quantum RP to min sub" },
+		    { -0x1p-150, IEEE_RM_RM, 0x80000001, "half quantum -RM to -min sub" },
+		    { -0x1p-150, IEEE_RM_RN, 0x80000000, "half quantum -RN keeps -0" },
+		    { 0x1.8p-149, IEEE_RM_RN, 0x00000002, "1.5 quanta RN ties to even" },
 		};
 		int k;
 		vec[0].v = 1.0 / 3.0;
@@ -1209,12 +1284,27 @@ int main(void)
 		printf("INTERP_RESULT=%s\n", interp_bad == 0 ? "PASS" : "FAIL");
 	}
 
+	/*  #331 moved two of these terms, and the reasons are not the same:
+	 *
+	 *  dD == 0 became dD > 0.  This tree now DELIBERATELY differs from
+	 *  upstream for every D subnormal, because upstream has no gradual
+	 *  underflow in double precision at all -- its FP_SUBNORMAL arm was an
+	 *  empty TODO.  The count is asserted positive here and floored in the
+	 *  gate script; it must not go back to being a bare "> 0" with no floor,
+	 *  or one surviving diff would satisfy a class of roughly ten thousand.
+	 *
+	 *  e_diff == 128 became -149.  The first input at which the two
+	 *  implementations disagree used to be 2^128, the overflow threshold
+	 *  #287 fixed; it is now the bottom of the single subnormal band, which
+	 *  is simply a smaller number and comes first.  The overflow behaviour
+	 *  is unchanged and still pinned by e_clamp and e_255 either side of it.
+	 */
 	if (abs_bad == 0 && unexplained == 0 && missed == 0 && should_differ > 0 &&
-	    inrange_diff == 0 && dD == 0 && dS > 0 &&
-	    e_clamp == 129 && e_255 == 128 && e_diff == 128 &&
+	    inrange_diff == 0 && dD > 0 && dS > 0 &&
+	    e_clamp == 129 && e_255 == 128 && e_diff == -149 &&
 	    rm_rn_bad == 0 && rm_rz_bad == 0 && rm_mode_diff > 1000000 &&
 	    rm_d_bad == 0 && rm_vec_bad == 0 && interp_bad == 0)
-		printf("DIFF_PASS -- change-set is exactly the two predicted classes.\n");
+		printf("DIFF_PASS -- change-set is exactly the three predicted classes.\n");
 	else
 		printf("DIFF_FAIL\n");
 	return 0;

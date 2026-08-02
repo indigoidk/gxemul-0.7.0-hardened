@@ -35,7 +35,7 @@ done
 rm -rf "$T"; mkdir -p "$T"
 cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 
-# FIVE mutants now, one per guarded property. Each breaks the code a different way and
+# SEVEN mutants now, one per guarded property. Each breaks the code a different way and
 # the differential must go red for every one of them.
 #
 #   A  revert #287      overflow keeps its garbage fraction (a NaN encoding) and
@@ -50,6 +50,12 @@ cp "$TREE/src/core/float_emul.c" "$T/mutant.c"
 #   D  W rounds under LEGACY   #294's integer arm rounding when it should truncate
 #                       would silently change every pre-existing trunc-style caller;
 #                       the legacy W vectors are what catch it.
+#   E  mask carry       #331's subnormal encode masking the rounded quantum count
+#                       back into the fraction. Only the band-TOP tie vectors see
+#                       it: every other value in the band still comes out right,
+#                       and the largest subnormal's round-up becomes a zero.
+#   F  flush band       #331 reverted outright -- subnormal results go back to a
+#                       signed zero. The whole round rides on this one going red.
 mutate() {   # name -> writes $T/mutant_<name>.c, echoes ok/FAIL
     local name=$1
     cp "$TREE/src/core/float_emul.c" "$T/mutant_$name.c"
@@ -63,11 +69,36 @@ def need(frag):
         sys.exit(1)
 
 if name == "revert287":
+    # #331 moved this mutant's second anchor. It used to quote the
+    # flush block verbatim -- "if (exponent == 0) r &= sign;" -- and
+    # that block is gone: the underflow arm now ENCODES the subnormal
+    # instead of flushing to a signed zero. The property #287 put there
+    # is still present and still worth attacking, though; it just moved
+    # one line. Dropping the sign mask is exactly the #287 regression
+    # (underflow discarding its sign), and every negative band row now
+    # catches it, where before only the -0 rows did.
     a = "\t\t\t\tif (to_inf)\n\t\t\t\t\tr &= (uint64_t)1 << signofs;"
-    b = "\t\t\tif (exponent == 0)\n\t\t\t\tr &= (uint64_t)1 << signofs;"
+    b = "\t\t\tif (exponent == 0) {\n\t\t\t\tr &= (uint64_t)1 << signofs;"
     need(a); need(b)
     s = s.replace(a, "\t\t\t\tif (0)\n\t\t\t\t\tr &= (uint64_t)1 << signofs;", 1)
-    s = s.replace(b, "\t\t\tif (exponent == 0)\n\t\t\t\tr = 0;", 1)
+    s = s.replace(b, "\t\t\tif (exponent == 0) {\n\t\t\t\tr = 0;", 1)
+elif name == "maskcarry":
+    # #331: the specific wrong implementation the band-top vectors
+    # exist for. Masking the rounded quantum count back into the
+    # fraction turns the largest subnormal's round-up into a ZERO --
+    # the maximal error the band admits -- while leaving every other
+    # value in the band correct, so only the tie rows can see it.
+    a = "\treturn (uint64_t) k;"
+    need(a)
+    s = s.replace(a, "\treturn ((uint64_t) k) & ((fmt == IEEE_FMT_S ?"
+        " (uint64_t)1 << 23 : (uint64_t)1 << 52) - 1);", 1)
+elif name == "flushband":
+    # #331: reverts the round outright -- the encoder goes back to
+    # flushing every subnormal result to a signed zero. If this survives,
+    # the whole round is unprotected.
+    a = "\t\t\tr |= ieee_encode_subnormal(orig, fmt, rm);\n\t\t\tbreak;"
+    need(a)
+    s = s.replace(a, "\t\t\tbreak;", 1)
 elif name == "tiesaway":
     a = "round_up = nf > 0.5 ||\n\t\t\t\t\t    (nf == 0.5 && (r & 1));"
     need(a)
@@ -123,7 +154,7 @@ build_and_run() {   # label, source file -> prints DIFF_PASS count
     grep -c 'DIFF_PASS' "$T/$1.out"
 }
 
-for m in revert287 tiesaway modeignored wlegacyrounds revert303; do
+for m in revert287 tiesaway modeignored wlegacyrounds revert303 maskcarry flushband; do
     check "mutant $m could be applied" "$(mutate $m)" "ok"
 done
 
@@ -131,7 +162,7 @@ note "control: differential against the shipped float_emul.c"
 real=$(build_and_run real "$TREE/src/core/float_emul.c")
 check "unmutated source passes gate 2" "$real" "1"
 
-for m in revert287 tiesaway modeignored wlegacyrounds revert303; do
+for m in revert287 tiesaway modeignored wlegacyrounds revert303 maskcarry flushband; do
     note "mutant $m: the differential must go red"
     out=$(build_and_run "mut_$m" "$T/mutant_$m.c")
     check "mutant $m is DETECTED (must fail)" "$out" "0"

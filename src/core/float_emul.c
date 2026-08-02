@@ -334,6 +334,62 @@ double ieee_round_to_integral(double nf, int rm)
 
 
 /*
+ *  ieee_encode_subnormal():  #331
+ *
+ *  The magnitude bits of a value that is SUBNORMAL in the destination format,
+ *  correctly rounded.  Returns the fraction, and -- when rounding carries all
+ *  the way up -- the exponent LSB with it: the caller ORs this into a word
+ *  holding only the sign, so a result of exactly 2^n_frac lands as biased
+ *  exponent 1 with a zero fraction, which is the smallest NORMAL value.  That
+ *  carry must NOT be masked back into the fraction; masking it is the classic
+ *  way to turn the largest subnormal's round-up into a zero, the maximal
+ *  possible error in this band, and the +/-0x1.fffffep-127 vectors exist to
+ *  catch exactly that.
+ *
+ *  Every subnormal of a format is an integer multiple of its quantum, so the
+ *  encoding is "scale by one quantum and round to an integer": 2^149 for S
+ *  (bias 127 + 23 fraction bits - 1) and 2^1074 for D.  The scaling is EXACT
+ *  -- multiplying by a power of two only moves the exponent, and the scaled
+ *  magnitude lands in [0, 2^n_frac], far from overflow -- so all the rounding
+ *  error is in the one deliberate rounding step below.  ldexp() is required
+ *  rather than a literal: 2^1074 is not a finite double, so `0x1p1074` is
+ *  +Inf and would silently turn every D subnormal into a NaN.
+ *
+ *  For D this rounding is a formality: the input is already a double, so every
+ *  finite D value is exactly representable and the scaled magnitude is already
+ *  an integer.  There are no D ties to break.  The shared path is kept anyway
+ *  because "exact" is then a property the code demonstrates rather than one a
+ *  comment claims.
+ *
+ *  The SIGNED value is scaled, not the magnitude, because IEEE_RM_RP and
+ *  IEEE_RM_RM are directions in the reals and not in the magnitude: RP of a
+ *  negative tiny rounds toward zero, RM of a positive one likewise.  The
+ *  magnitude is taken only afterwards, once the direction has been applied.
+ *  IEEE_RM_RZ and IEEE_RM_LEGACY are truncated here rather than handed to
+ *  ieee_round_to_integral(), which returns those two UNCHANGED -- its own
+ *  callers truncate downstream, and inheriting that no-op would leave a
+ *  fractional quantum count to be cut by the cast below, which rounds toward
+ *  zero and so would be right by accident under RZ and wrong under LEGACY's
+ *  overflow contract if that ever diverges.
+ */
+static uint64_t ieee_encode_subnormal(double nf, int fmt, int rm)
+{
+	double scaled = ldexp(nf, fmt == IEEE_FMT_S ? 149 : 1074);
+	double k;
+
+	if (rm == IEEE_RM_RZ || rm == IEEE_RM_LEGACY)
+		k = trunc(scaled);
+	else
+		k = ieee_round_to_integral(scaled, rm);
+
+	if (k < 0.0)
+		k = -k;
+
+	return (uint64_t) k;
+}
+
+
+/*
  *  ieee_store_float_value_rm():
  *
  *  Generates a 64-bit IEEE-formated value in a specific format, under a
@@ -368,6 +424,8 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 	int n_frac = 0, n_exp = 0, signofs = 0, i, exponent;
 	uint64_t r = 0, r2;
 	int64_t r3;
+	double orig = nf;	/*  #331: kept signed and unscaled; the
+				    FP_NORMAL arm destroys both  */
 
 	/*  n_frac and n_exp:  */
 	switch (fmt) {
@@ -584,18 +642,39 @@ uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
 			    +0). Both arms are unreachable for D, whose finite
 			    exponents bias into 1..2046.
 
-			    #292: the flush-to-zero semantics are kept for every
-			    mode -- MIPS routes non-flush denormal results away
-			    before this store (#246), and SH FPSCR.DN flushes in
-			    hardware.  The one rounding interaction that matters
-			    is handled above: a fraction carry can lift biased
-			    exponent 0 to 1, which is exactly FLT_MIN, the correct
-			    nearest result for values just under 2^-126.  */
-			if (exponent == 0)
+			    #331: the flush is GONE, and both of the reasons #292
+			    gave for it were wrong.  "MIPS routes non-flush
+			    denormal results away (#246)" holds only for EXC4K+
+			    with FCSR.FS clear -- fpu_unimpl_trap() returns 0 on
+			    EXC3K so R3000 fell through to here, and the FS=1 arm
+			    deliberately SKIPS the routing, so R4000 was getting
+			    its flush-to-zero from this bug rather than from any
+			    code that meant it.  "SH FPSCR.DN flushes in hardware"
+			    is true only for DN=1 (DN=0 raises an FPU error), and
+			    SH_FPSCR_DN_ZERO was never read by anything at all.
+			    Both architectures now state their policy at their own
+			    store sites, where the control bit is visible; this
+			    function's job is the IEEE answer.
+
+			    The fraction carry noted below still works and is now
+			    load-bearing in a second place: see
+			    ieee_encode_subnormal(), where a carry out of the
+			    fraction is what produces FLT_MIN.  */
+			if (exponent == 0) {
 				r &= (uint64_t)1 << signofs;
+				r |= ieee_encode_subnormal(orig, fmt, rm);
+			}
 			break;
 		case FP_SUBNORMAL:
-			// TODO
+			/*  #331: a host double this small is subnormal in D and
+			    far below the band in S, where it rounds to zero or
+			    to the minimum subnormal depending on the mode and
+			    the sign.  Both are the same computation.  Before
+			    this, the arm was an empty "// TODO" that returned
+			    the sign bit alone, so D had no gradual underflow
+			    whatsoever: every one of the 220 subnormal-power and
+			    boundary cases measured stored as +/-0.  */
+			r |= ieee_encode_subnormal(orig, fmt, rm);
 			break;
 		case FP_ZERO:
 			// r already has zeros in the lowest bits. Done.

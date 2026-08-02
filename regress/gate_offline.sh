@@ -107,13 +107,26 @@ check     "S-format: in-range values moved"        "$(val 'in-range')"          
 # sail through.
 check     "S-format: inputs that should have moved but did not" "$(val 'MISSED')" "0"
 check_min "S-format: how many inputs should have moved" "$(val 'must-differ population')" 1000
-check     "D-format: change-set is empty"          "$(val 'D-format diffs')"    "0"
+# #331: this was "D-format: change-set is empty" == 0, and its flip is the
+# headline of that round -- upstream has NO gradual underflow in double
+# precision (an empty "FP_SUBNORMAL: TODO" arm), so this tree now differs from
+# it for every D subnormal it samples. The floor is what makes the assertion
+# mean something: a bare "> 0" would be satisfied by a single surviving diff
+# where the class is roughly ten thousand strong, which is the same
+# cannot-fail species this gate's header warns about. Measured 9839 over the
+# 20M-sample sweep (host-subnormal patterns are about 1 in 2048 of it).
+check_min "D-format: subnormal change-set present" "$(val 'D-format diffs')" 9000
 check_min "S-format: overflow class is non-empty"  "$(val '  of which overflow')" 1
 check_min "S-format: underflow class is non-empty" "$(val '  of which negative')" 1
 check_min "samples swept"                          "$(val 'samples')"       20000000
 check     "clamp threshold is 2^129, not 2^128"    "$(val 'clamp-at')"          "2^129"
 check     "exponent-255 threshold is 2^128"        "$(val 'exp255-at')"         "2^128"
-check     "first shipped-vs-upstream diff at 2^128" "$(val 'first-difference-at')" "2^128"
+# #331: was 2^128 -- the overflow threshold #287 fixed, which used to be the
+# smallest input where the two implementations parted. The subnormal band is
+# further down, so it now comes first. The overflow pins either side of it
+# (clamp-at, exp255-at) are unchanged, which is what shows this moved because
+# a NEW class appeared below it rather than because the old one drifted.
+check     "first shipped-vs-upstream diff at 2^-149" "$(val 'first-difference-at')" "2^-149"
 
 # #292: the mode-aware entry point, checked against INDEPENDENT oracles (the host's own
 # correctly-rounded float conversion) rather than against upstream. Named vectors carry

@@ -296,18 +296,31 @@ ROWS = [
     ("subn fcmp.ssd",  RN, {"r2": 0x00000001,
                             "r6": 0x37800000, "r7": 0x00000000}, 0x84823886, "r4",
      0x0000006a),
-    # KNOWN-CHANGE pin, NEGATIVE operand: the garbled product of -S-min * 2.0
-    # landed S-NORMAL and stored nonzero (the positive twin measured 0x00800001
-    # pre-#303; the negative one is the same path with the sign applied last);
-    # the TRUE product -2^-148 is subnormal, so the deliberate #287/#292 store
-    # flush now answers MINUS zero -- the sign survives because #287 fixed
-    # exactly that. The row is negative BECAUSE of that: a #287 revert (sign
-    # lost, +0) trips it, where a positive row reads +0 under both stores and
-    # cannot see the revert at all (a diff-review seat's finding). A #303
-    # revert trips it too. The guest still observes x != 0 but x*2 == 0 -- the
-    # interim half-state the queued store-side round inherits.
+    # KNOWN-CHANGE pin, NEGATIVE operand -- and this is the round it was
+    # recorded FOR. It has now flipped a second time, which is the whole point
+    # of having pinned it:
+    #
+    #   pre-#303   0x00800001-ish  the garbled product of -S-min * 2.0 landed
+    #                              S-NORMAL and stored nonzero (the positive
+    #                              twin measured 0x00800001; the negative one
+    #                              is the same path with the sign applied last)
+    #   post-#303  0x80000000      the operand decoded correctly, so the TRUE
+    #                              product -2^-148 appeared -- and the
+    #                              deliberate #287/#292 store flush answered
+    #                              MINUS zero. The guest could observe x != 0
+    #                              but x*2 == 0.
+    #   post-#331  0x80000002      -2^-148 is exactly two quanta, and the store
+    #                              finally encodes it. MEASURED, not predicted.
+    #
+    # m88k gets no call-site guard, unlike MIPS (#332), SH (#334) and Alpha
+    # (#333): the MC88100 manual's default underflow handler writes the
+    # denormalized result, so gradual underflow is what this architecture owes.
+    # The row stays NEGATIVE for its original reason -- a #287 revert (sign
+    # lost) trips it, where a positive row could not see that at all, which was
+    # a diff-review seat's finding. A #303 revert still trips it, and a #331
+    # revert now trips it too.
     ("subn flip x2.0", RN, {"r2": 0x80000001, "r3": 0x40000000}, FMUL, "r4",
-     0x80000000),
+     0x80000002),
 ]
 
 

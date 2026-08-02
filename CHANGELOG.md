@@ -4192,6 +4192,112 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Seventy-second round (#331–#334) — there was no gradual underflow, and three architectures were quietly relying on that
+
+`ieee_store_float_value_rm()` could not produce a subnormal result. In double precision it
+could not produce one *at all*: the `FP_SUBNORMAL` arm was an empty `// TODO` that returned
+the sign bit, so every subnormal double stored as **±0**. In single precision the loss came
+from somewhere else entirely, and the queued item named the wrong line — a single-subnormal
+value such as `1e-40` is a **normal host double**, so it ran the `FP_NORMAL` arm, was
+normalised to a biased exponent below zero, clamped to zero at `:533`, and flushed at `:594`.
+
+Measured on the committed build before anything was edited, against two oracles that are not
+the code under test — for D the identity (every finite double is exactly representable in D,
+so there is nothing to round and the owed answer is the input's own bit pattern), for S the
+host's own correctly-rounded cast taken under the matching hardware mode:
+
+```
+D-format: 220/220 wrong          (all four modes, every subnormal -> +/-0)
+S-format: 65737/65740 wrong      (via FP_SUBNORMAL arm: 1, via FP_NORMAL arm: 65736)
+  S 1e-40   cls=FP_NORMAL  gxemul 00000000  host 000116c2
+  D 2^-1074                gxemul 0000000000000000  owed ...0001
+```
+
+**65736 of the 65737 single-precision failures arrived through the arm the queue did not
+name.** A round that fixed only the `TODO` would have reported success and left every single
+subnormal still flushing.
+
+- **#331 (`core/float_emul.c`)** — `ieee_encode_subnormal()`. Every subnormal is an integer
+  multiple of its format's quantum, so the encoding is "scale by one quantum, round to an
+  integer": `2^149` for S, `2^1074` for D. The scaling is exact — a power of two only moves
+  the exponent — so the single deliberate rounding is the only error in the path. `ldexp()`
+  is required rather than a literal: **`0x1p1074` is not a finite double**, it is `+Inf`, and
+  writing it would have turned every D subnormal into a NaN. The rounding carry is
+  deliberately **not masked**: a result of exactly `2^n_frac` ORs into a word holding only the
+  sign and lands as biased exponent 1 with a zero fraction, which is `FLT_MIN`. `IEEE_RM_RZ`
+  and `IEEE_RM_LEGACY` are truncated here rather than handed to `ieee_round_to_integral()`,
+  which returns those two *unchanged*.
+- **#332 (`cpus/cpu_mips_coproc.c`)** — `fpu_subst_tiny()`. #292 justified the old flush with
+  "MIPS routes non-flush denormal results away (#246)", and **both halves of that were
+  wrong**: `fpu_unimpl_trap()` returns 0 on EXC3K so R3000 fell straight through, and the
+  FS=1 arm *deliberately skips* the routing, so **R4000 was getting its flush-to-zero from
+  this bug rather than from any code that meant it**. R4000 with FS set does not flush
+  universally either — it substitutes signed zero *or MinNorm* by sign and rounding mode, so
+  a positive tiny under round-toward-+Inf owes `+MinNorm`. Classification is done on the
+  **encoded word**, which is tininess *after* rounding as MIPS specifies.
+- **#333 (`cpus/cpu_alpha_instr.c`)** — `alpha_store_t()`. Only the *unqualified* `addt`,
+  `subt`, `mult`, `divt` are decoded, and those owe zero on underflow. That used to fall out
+  of the encoder's flush. Bit-identical to previous behaviour on every input, deliberately:
+  there is no Alpha rig, so "preserve what shipped" is the only honest reading available.
+- **#334 (`cpus/cpu_sh_instr.c`)** — `sh_dn()`. `SH_FPSCR_DN_ZERO` had been defined since the
+  port was written and was **read by nothing**. SH-4 never delivers a subnormal result: DN=1
+  writes a signed zero, DN=0 raises an FPU error. **FPSCR resets to `0x40001`**, so DN=1 is
+  the default configuration and shipping #331 alone would have changed every SH guest.
+  Applied through two macros rather than twenty-three hand edits — the safer construction,
+  not merely the shorter one, because a per-site edit can miss a site silently and this
+  cannot; the function is a no-op for everything that is not subnormal in the destination.
+
+**What the instrument was doing wrong.** Gate 2's own oracles contained
+`if (r != 0.0f && fabsf(r) < FLT_MIN) return signbit(x) ? 0x80000000u : 0u;` — they
+**re-implemented the very flush they were checking**, so across the whole subnormal band the
+"independent right answer" was neither independent nor right, and the band could not have
+been measured wrong no matter how wrong it was. That is the complicit-instrument failure this
+file's header already warns about, surviving in a second form. Removing it needed nothing
+added; the host's cast was already correct. `must_differ()`'s `&& signbit(x)` was equally
+stale — it dated from #287, when the only thing the band had to get right was *keeping the
+sign of the zero it flushed to* — and leaving it in dropped 112190 positive band samples into
+`unexplained`. Its new lower bound is not decoration either: the differential runs through
+the LEGACY entry point, which truncates, so values below one whole quantum still truncate to
+zero and legitimately agree with upstream; demanding otherwise claimed 4263461 inputs "should
+have moved but did not".
+
+Rows re-authored rather than deleted, because a class whose evidence disappears when it is
+fixed cannot be shown to have stayed fixed: the absolute rows `±1e-40 → ±0`, and the named
+vector literally called **"flush keeps the sign"**, whose *name* was as stale as its value.
+Nine new named vectors, the load-bearing ones being `±0x1.fffffep-127` — the exact midpoint
+`2^-126 - 2^-150` between the largest subnormal (odd) and `FLT_MIN` (even). The pre-existing
+control at `0x1.ffffffp-127` sits **above** that midpoint and rounds up under every tie rule,
+so it proved the carry happens but not that it happens for the right reason; the new rows
+prove ties-to-even crosses *out* of the band, and an implementation that masks the carry
+answers `0x00000000` — a full `FLT_MIN` of error. Two new mutants pin exactly those two
+failure modes, and `revert287`'s anchor was retargeted: it quoted the deleted flush verbatim
+and would have gone `SETUP_FAIL`, which is the third time that guard has caught a mutant
+outliving the code it attacked.
+
+**Panel.** Two seats, before the round. They **dissented from each other twice**, and the
+more precise reading won both times: that R4000 FS=1 is a mode-dependent substitution and not
+a plain flush, and that pmax must *not* be recorded as answering `0x80000002`, because the
+R3010 leaves the destination register unchanged on UnImp and software completion is a later
+action, not the CPU's answer. pmax is therefore left flushing, per #246's deliberate EXC3K
+bit-identity — GXemul wires no R3010 interrupt pin, so an emulator that merely declined to
+write the destination would leave the guest reading a **stale register**, which is worse than
+either honest answer. The seats also corrected two claims in the brief itself: the macro is
+`SH_FPSCR_DN_ZERO` and not `SH4_FPSCR_DN`, and `2^-149` is the minimum subnormal, not the
+midpoint — the midpoint is `2^-150`.
+
+**The one guest-visible row that moved**, and it is the row #303 pinned *for* this round:
+m88k `fmul.sss(-S-min, 2.0)` went `0x80000000` → **`0x80000002`**, measured. It has now
+flipped twice — garbled-nonzero before #303, minus-zero after it, and the true `-2^-148`
+now — which is exactly what a KNOWN-CHANGE pin is for. m88k gets no call-site guard because
+the MC88100's default underflow handler writes the denormalized result, so gradual underflow
+is what that architecture owes. **pmax did not move**, which is the control: gate 12 passed
+untouched, confirming #332 keeps EXC3K bit-identical rather than merely intending to.
+
+**Left open, and recorded rather than guessed at:** PPC-D, Alpha and SH PR=1 D arithmetic
+have no gate rows at all, so #331 changes them without a witness; the #246 trap predicate is
+still pre-rounding and over-traps across the sliver that rounds up to `FLT_MIN`; and whether
+Alpha wants `+0` for a negative tiny is unmeasurable here.
+
 ## Eighty-ninth round (#330) — the exception causes VX and FEX had nothing to derive from
 
 #327 made FPSCR's VX and FEX derived and correct. This measured what they were deriving

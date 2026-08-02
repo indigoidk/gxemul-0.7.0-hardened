@@ -497,6 +497,40 @@ X(fneg)
 
 
 /*
+ *  alpha_store_t():  #333
+ *
+ *  T-format (IEEE double) result store for the UNQUALIFIED arithmetic opcodes
+ *  -- the only ones this decoder recognises (`addt`/`subt`/`mult`/`divt` at
+ *  0x0a0..0x0a3; there is no /S, /U or /SUI form here, and the FPCR is stored
+ *  but never consulted).  Alpha's default, non-trapping underflow behaviour
+ *  for those is to deliver ZERO rather than a gradual result.
+ *
+ *  Before #331 that fell out of the generic encoder, which flushed every
+ *  subnormal; now that the encoder delivers gradual underflow correctly, this
+ *  architecture has to state its own policy or it would silently start
+ *  returning subnormals that the unqualified opcodes never produce.
+ *
+ *  The zero keeps the SIGN, which is exactly what the old flush did, so this
+ *  is bit-identical to the emulator's previous behaviour on every input.  That
+ *  is deliberate: there is no Alpha rig in this project and therefore no way
+ *  to measure a refinement, so the conservative reading -- preserve what
+ *  shipped -- is the only honest one available.  Whether the architecture
+ *  wants +0 for a negative tiny is left open in OUTSTANDING_BUGS rather than
+ *  guessed at here.
+ */
+static uint64_t alpha_store_t(double v)
+{
+	uint64_t r = ieee_store_float_value(v, IEEE_FMT_D);
+	uint64_t mag = r & 0x7fffffffffffffffULL;
+
+	if (mag != 0 && (mag >> 52) == 0)
+		r &= 0x8000000000000000ULL;
+
+	return r;
+}
+
+
+/*
  *  addt, subt, mult, divt:  Floating point arithmetic.
  *
  *  arg[0] = pointer to rc  (destination)
@@ -508,28 +542,28 @@ X(addt)
 	struct ieee_float_value fa, fb;
 	ieee_interpret_float_value(reg(ic->arg[1]), &fa, IEEE_FMT_D);
 	ieee_interpret_float_value(reg(ic->arg[2]), &fb, IEEE_FMT_D);
-	reg(ic->arg[0]) = ieee_store_float_value(fa.f + fb.f, IEEE_FMT_D);
+	reg(ic->arg[0]) = alpha_store_t(fa.f + fb.f);
 }
 X(subt)
 {
 	struct ieee_float_value fa, fb;
 	ieee_interpret_float_value(reg(ic->arg[1]), &fa, IEEE_FMT_D);
 	ieee_interpret_float_value(reg(ic->arg[2]), &fb, IEEE_FMT_D);
-	reg(ic->arg[0]) = ieee_store_float_value(fa.f - fb.f, IEEE_FMT_D);
+	reg(ic->arg[0]) = alpha_store_t(fa.f - fb.f);
 }
 X(mult)
 {
 	struct ieee_float_value fa, fb;
 	ieee_interpret_float_value(reg(ic->arg[1]), &fa, IEEE_FMT_D);
 	ieee_interpret_float_value(reg(ic->arg[2]), &fb, IEEE_FMT_D);
-	reg(ic->arg[0]) = ieee_store_float_value(fa.f * fb.f, IEEE_FMT_D);
+	reg(ic->arg[0]) = alpha_store_t(fa.f * fb.f);
 }
 X(divt)
 {
 	struct ieee_float_value fa, fb;
 	ieee_interpret_float_value(reg(ic->arg[1]), &fa, IEEE_FMT_D);
 	ieee_interpret_float_value(reg(ic->arg[2]), &fb, IEEE_FMT_D);
-	reg(ic->arg[0]) = ieee_store_float_value(fa.f / fb.f, IEEE_FMT_D);
+	reg(ic->arg[0]) = alpha_store_t(fa.f / fb.f);
 }
 X(cmpteq)
 {

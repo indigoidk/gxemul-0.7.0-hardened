@@ -49,14 +49,42 @@
 >   flip rows (garbled S-normal products → true subnormal results → deliberate
 >   #287/#292 store flush → +0) are the before/after evidence the store-side round
 >   below inherits.
-> - **Store-side subnormal ENCODE** (opened by #303's panel): `ieee_store_float_value`
->   flushes subnormal RESULTS to signed zero — documented #287/#292 policy whose
->   rationale covers MIPS-R4000 (#246 routes results away) and SH DN=1 silicon, but is
->   NOT verified for m88k (kernel completion delivers true subnormals), PPC IEEE mode,
->   Alpha, or R3000. The two #303 KNOWN-CHANGE flip rows (m88k `fmul.sss(S-min,2.0)`,
->   pmax `add.s(S-min,S-min)`: guest observes x≠0 but x·2==0) are its measured
->   before/after evidence. Needs per-arch encode-contract measurement before any
->   change — same discipline as #303's operand side.
+> - ~~**Store-side subnormal ENCODE**~~ — **RESOLVED as #331–#334 (round 72)**, and the
+>   entry as filed named the wrong line for half of it. Measured on the committed build
+>   first, against oracles that are not the code under test — for D the identity (every
+>   finite double is exactly representable, so nothing is rounded and the owed answer is
+>   the input's own bit pattern), for S the host's correctly-rounded cast under the
+>   matching mode: **D 220/220 wrong** (no gradual underflow in double precision *at
+>   all* — the arm was an empty `// TODO`) and **S 65737/65740 wrong, of which 65736 came
+>   through the `FP_NORMAL` arm and one through the `FP_SUBNORMAL` arm this entry
+>   blamed.** A single-subnormal value like `1e-40` is a NORMAL host double; it was lost
+>   to the exponent clamp and the flush, not to the TODO.
+>   **Both of #292's stated rationales were false.** "MIPS routes non-flush denormal
+>   results away (#246)" holds only for EXC4K+ with FS clear — `fpu_unimpl_trap()` returns
+>   0 on EXC3K so R3000 fell through, and the FS=1 arm *deliberately skips* the routing,
+>   so **R4000 was getting its flush from the bug**. "SH DN=1 silicon" was true of the
+>   silicon and not of this tree: `SH_FPSCR_DN_ZERO` was read by nothing, and FPSCR resets
+>   with DN set, so the encoder fix alone would have changed the DEFAULT SH configuration.
+>   Both now state their policy at their own store sites (#332, #334), as does Alpha
+>   (#333). pmax is deliberately **left flushing**: a panel seat established from the IDT
+>   manual that the R3010 leaves the destination unchanged on UnImp and that software
+>   completion is a later action, so recording `0x80000002` as the hardware answer would
+>   have been a false row — and GXemul wires no R3010 interrupt pin, so declining to write
+>   would leave a stale register instead. Nine new named vectors, two new mutants.
+>
+> - **Still open, from round 72's own findings** (recorded, not guessed at):
+>   - **PPC-D, Alpha, and SH PR=1 D arithmetic have no gate rows at all**, so #331 changed
+>     them without a witness. Alpha has no rig, which is why #333 is deliberately
+>     bit-identical to previous behaviour rather than a refinement; whether the
+>     architecture wants `+0` for a negative tiny cannot be measured here.
+>   - **The #246 trap predicate is pre-rounding.** `fabs(nf) < FLT_MIN` at
+>     `cpu_mips_coproc.c` traps values in `(2^-126 - 2^-150, 2^-126)` that round *up* to
+>     `FLT_MIN` and are therefore normal results; MIPS specifies tininess after rounding.
+>     #332's substitution classifies on the encoded word and is correct; the trap check
+>     above it was left alone because moving it changes WHEN the trap fires for a band the
+>     committed arc trap rows sit near, and that measurement was not made this round.
+>   - **PowerPC `NI`** is defined and never consumed — another architecture-level FTZ
+>     policy that must not contaminate the generic encoder.
 >
 > - ~~**PowerPC, four measured defects**~~ — **RESOLVED as #304/#305 (round 69)**, with
 >   **gate 13** built first on the probe path: 50 rows, every committed byte recorded
@@ -142,9 +170,29 @@
 >   introduced, and they were fixed in the same round by **#308**'s round-to-odd helpers —
 >   which also revealed that #300's `_rm` helpers return the host result unchanged under
 >   nearest, correct for a double destination and a double rounding for a narrower one.
->   **Still open, elsewhere:** the same narrowing question applies to MIPS `div.s`, SH
->   `fdiv`, and both architectures' single-precision `sqrt`; #308's helpers now exist to
->   answer it, but no witness has been constructed for those paths yet.
+>   **The "still open elsewhere" clause that used to close this entry is WITHDRAWN too**,
+>   as the same phantom wearing a different architecture's name. It read: the narrowing
+>   question "applies to MIPS `div.s`, SH `fdiv`, and both architectures' single-precision
+>   `sqrt`" — but that is the *same arithmetic* the paragraph above refutes, single sources
+>   into a single destination, and the sentence sat ten lines under its own refutation for
+>   five rounds. Neither instruction has a mixed-format form: `cpu_mips_coproc.c:1301`
+>   and `cpu_sh_instr.c:3425` divide S by S, `:1313` and `:3212` take the root of an S.
+>   The bound is explicit — for singles `a`, `b` and any single-format value or midpoint
+>   `s`, `q* - s = (a - s*b)/b` where `a - s*b` is an integer multiple of
+>   `2^min(ea, es+eb)` with a significand product under 2^48, so a nonzero difference is at
+>   least `2^-48*|q*|` (`2^-49` against midpoints), while harmful double rounding needs the
+>   exact value inside the intermediate double's half-ulp at `~2^-53*|q*|`. That is a
+>   32-fold gap, 16-fold against midpoints; the same argument through `s^2` gives
+>   `>= 2^-49*sqrt(a)`. Measured as well as argued, against exact-rational oracles using no
+>   host FP, in all four modes: 157,920 random quotients and 120,006 random radicands, plus
+>   219,888 **constructed** division cases and 95,628 constructed root cases built to land
+>   *on* grid points and midpoints — 0 mismatches, closest approach `2^-41.29`, twelve
+>   binades short of where a double rounding could bite. Two review seats reached this
+>   independently, one analytically and one by sweep. The hazardous class is
+>   wide-source/narrow-destination, which is exactly where #308's helpers were applied
+>   (`cpu_m88k_instr.c:1668`); MIPS and SH have no such instruction to apply them to.
+>   **The deliverable for this item was the search, and this paragraph is it** — recorded
+>   at length so the next triage does not re-file it a third time.
 > - ~~**m88k `bcnd`'s condition table is NULL for legal unnamed masks**~~ — **RESOLVED as
 >   #323 (round 76)**. Reproduced first: all nine named masks ran, and all eight unnamed
 >   ones tested (0, 4, 6, 9, 0xa, 0xb, 0xf, 0x11) halted the emulator. Fixed the way #307

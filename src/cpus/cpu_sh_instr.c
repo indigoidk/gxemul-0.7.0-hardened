@@ -142,6 +142,60 @@ static int sh_fp_rm(struct cpu *cpu)
 	return (cpu->cd.sh.fpscr & SH_FPSCR_RM_MASK) == SH_FPSCR_RM_NEAREST?
 	    IEEE_RM_RN : IEEE_RM_RZ;
 }
+
+
+/*
+ *  sh_dn():  #334  --  FPSCR.DN, the denormalization mode.
+ *
+ *  SH-4 never delivers a subnormal ARITHMETIC RESULT.  With DN=1 it writes a
+ *  signed zero; with DN=0 the silicon raises an FPU error instead of computing
+ *  one.  SH_FPSCR_DN_ZERO has been defined since the port was written and was
+ *  read by NOTHING -- the flush happened to be correct only because the shared
+ *  encoder flushed unconditionally, which #331 stopped.  Without this, every
+ *  SH guest would begin seeing gradual underflow, and FPSCR RESETS TO 0x40001
+ *  (cpu_sh.c), i.e. DN=1, so that would be the DEFAULT configuration rather
+ *  than an exotic one.
+ *
+ *  DN=0 delivers the IEEE value here rather than raising the FPU error, which
+ *  is this tree's established modelling depth for SH FP exceptions -- the same
+ *  choice #303 made on the operand side, and the reason the two committed
+ *  gate-10 rows deliberately clear DN.  It is a NAMED divergence, recorded in
+ *  OUTSTANDING_BUGS, not an oversight; the exception model is its own queued
+ *  round.
+ *
+ *  Applied uniformly to every FP result store in this file through the two
+ *  macros below, rather than hand-edited into twenty-three call sites.  That
+ *  is the safer construction and not merely the shorter one: a per-site edit
+ *  can MISS a site silently, whereas this cannot, and the function is a no-op
+ *  for everything except a value that is subnormal in the destination -- the
+ *  integer W/L formats and every normal, zero, Inf and NaN result pass through
+ *  bit-identical.  The parenthesised callee suppresses the macro so the real
+ *  function is still what gets called.
+ */
+static uint64_t sh_dn(struct cpu *cpu, uint64_t ieee, int fmt)
+{
+	int n_frac, signofs;
+	uint64_t mag;
+
+	if (fmt != IEEE_FMT_S && fmt != IEEE_FMT_D)
+		return ieee;
+	if (!(cpu->cd.sh.fpscr & SH_FPSCR_DN_ZERO))
+		return ieee;
+
+	n_frac = fmt == IEEE_FMT_S ? 23 : 52;
+	signofs = fmt == IEEE_FMT_S ? 31 : 63;
+	mag = ieee & ~((uint64_t)1 << signofs);
+
+	if (mag == 0 || (mag >> n_frac) != 0)
+		return ieee;
+
+	return ieee & ((uint64_t)1 << signofs);
+}
+
+#define	ieee_store_float_value(v, fmt)					\
+	sh_dn(cpu, (ieee_store_float_value)((v), (fmt)), (fmt))
+#define	ieee_store_float_value_rm(v, fmt, rm)				\
+	sh_dn(cpu, (ieee_store_float_value_rm)((v), (fmt), (rm)), (fmt))
 #endif
 
 /*
