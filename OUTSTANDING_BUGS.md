@@ -1485,3 +1485,26 @@ corruption without a clear host-OOB path.
 > WRONG would be worse than leaving it — a model marked too high silently permits encodings
 > that should trap, and too low breaks working guests — so this needs per-model primary
 > sources, not inference from the names. Scoped, not started.
+
+> ## 2026-08-03 — round 82 (#54): the "no user-mode witness" blocker is FALSE
+> This item was parked on "needs a user-mode witness, which does not exist yet", and round
+> 81's note recorded that debugger writes do not reach SR's mode fields. That is true of
+> `sr` and it is the wrong register to write.
+>
+> **`rte` performs the transition architecturally**: `cpu_sh_instr.c:2767` calls
+> `sh_update_sr(cpu, cpu->cd.sh.ssr)`, which applies MD and performs the r0-r7 bank swap —
+> precisely what a kernel returning to user code does. So the witness is: debugger-write
+> **`ssr`** with MD clear and **`spc`** to the user code address, plant `rte` plus its delay
+> slot, and run. No SR write is involved and none is needed.
+>
+> Combined with #340's free-running two-pass driver, the remaining pieces are ordinary:
+> set MMUCR.SQMD through the MMIO window (round 81's probe already writes MMUCR), plant a
+> handler at the exception vector to publish EXPEVT and TEA, breakpoint after it, tracing
+> off. The event-code dispute recorded above (ADDR_ERR_LD vs ADDR_ERR_ST) is exactly what
+> such a probe settles by measurement instead of by argument — which is why it was left
+> open rather than guessed.
+>
+> Scoped and unblocked; not built. The three code defects are unchanged: the check raises
+> reserved-instruction where hardware raises a data address error, it is nested inside the
+> `AT=1` branch though the rule is not conditioned on address translation, and the
+> queue-FILL path (`memory_sh.c:298-303`) has no privilege check at all.
