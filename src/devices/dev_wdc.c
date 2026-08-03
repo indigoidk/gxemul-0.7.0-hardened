@@ -599,8 +599,24 @@ DEVICE_ACCESS(wdc)
 			}
 
 			if (d->atapi_cmd_in_progress) {
-				d->atapi_len -= len;
-				d->atapi_received += len;
+				/*  #341: account for what was actually CONSUMED
+				    from the buffer, not for what the guest
+				    asked for. The reads above take one byte,
+				    two if len >= 2, four only if len == 4 --
+				    so a 3- or 8-byte access consumes 1 or 2
+				    while `len` says 3 or 8. Subtracting the
+				    requested length let atapi_len step PAST
+				    zero, which its `== 0` test then never
+				    catches, so PHASE_COMPLETED never fires and
+				    the guest is told a transfer is further
+				    along than the bytes it received. Same
+				    truthfulness defect as #283 in the ASC and
+				    #338 in the mb89352: the count reported has
+				    to be the count that happened.  */
+				int consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1);
+
+				d->atapi_len -= consumed;
+				d->atapi_received += consumed;
 				if (d->atapi_len == 0) {
 					if (d->atapi_received < d->atapi_st->
 					    data_in_len) {

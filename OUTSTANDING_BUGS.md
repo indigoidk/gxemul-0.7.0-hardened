@@ -1508,3 +1508,25 @@ corruption without a clear host-OOB path.
 > reserved-instruction where hardware raises a data address error, it is nested inside the
 > `AT=1` branch though the rule is not conditioned on address translation, and the
 > queue-FILL path (`memory_sh.c:298-303`) has no privilege check at all.
+
+> ## 2026-08-03 — #341: dev_wdc's ATAPI read accounted for bytes it never delivered
+> Found by #337's review sweep, and it is the READ-side twin of #338. The data-register
+> read consumes one byte, two if `len >= 2`, four only if `len == 4` — so a 3- or 8-byte
+> access consumes 1 or 2 — but the accounting used the REQUESTED `len`:
+> `d->atapi_len -= len; d->atapi_received += len;`. For `len == 8` that subtracts 8 for 2
+> bytes delivered, which lets `atapi_len` step PAST zero; its `== 0` test then never
+> matches, `PHASE_COMPLETED` never fires, and the guest is told a transfer is further along
+> than the data it actually got. Fixed to account for what was consumed.
+>
+> Same class as #283 (ASC) and #338 (mb89352): **the count reported has to be the count
+> that happened.** Reachability-argued rather than rig-measured, like #337 — the landisk
+> ATAPI witness is still its own round, and no gate row asserts this yet.
+>
+> **Still open from the same sweep**, none of them mine and all now measurable with #340's
+> free-running driver: `netbsd_cacheclean` and `netbsd_cacheclean2` skip their `subs` flag
+> updates entirely; `netbsd_idle` skips both TEQs without updating N/Z and never writes its
+> guest destination register; `xchg` has no `a != b` guard, so where standalone
+> `eor r,r,r` zeroes a register the folded form leaves it unchanged; `netbsd_memcpy`
+> bypasses its LDMs without publishing the final r3/r4/ip/lr. On the PowerPC side:
+> `fmadd`/`fmsub` raise none of their exception causes, `fnmadd`/`fnmsub` are undecoded and
+> halt, and `NI` is defined but never consumed.
