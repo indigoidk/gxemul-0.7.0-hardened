@@ -1419,3 +1419,24 @@ corruption without a clear host-OOB path.
 > (#54) as well, since that one also needs real execution rather than stepped instructions.
 > It also closes the wider hole: the whole combined-handler family (`cmps_*`, `teqs_*`,
 > `tsts_*`, `netbsd_*`, `strlen`, `xchg`) is ungated today for exactly this reason.
+
+> ### Correction, same day: breakpoint-and-continue is NECESSARY but NOT SUFFICIENT
+> Built the free-running driver described above and measured with it. The combined rows
+> **still** read the standalone answer. The recipe was incomplete, and the missing piece is
+> not about how execution is driven at all:
+>
+> `arm_combine_instructions` rewrites **`ic[-1].f`** — the PREVIOUS instruction — while the
+> BRANCH is being translated. In straight-line code the `teq` has already executed by then.
+> So the combined handler is reached only on a **second pass** over the same code; a single
+> forward run cannot reach it no matter whether it is stepped, continued, or breakpointed.
+>
+> A working witness therefore needs the sequence inside a **loop** executed at least twice,
+> publishing flags on the second iteration — with the breakpoint after the loop, still not
+> on the pair, and tracing still off. The two facts recorded above (that
+> `single_step_breakpoint` is transient and that `allow_instruction_combinations` defaults
+> on) remain correct and are still prerequisites; they were just not the whole story.
+>
+> The rows were withdrawn rather than committed, for the second time in this file's
+> history, and for the same reason: they passed green while measuring the wrong code path.
+> That is now the strongest argument for building this witness properly — the defect has
+> twice looked absent under instrumentation that could not see it.
