@@ -1465,3 +1465,23 @@ corruption without a clear host-OOB path.
 > folded handlers, which is what made the sweep worth doing. Verified equivalent and needing
 > no work: all `cmps_*`, `tsts_lo_*` (after #340), `netbsd_memset`, `netbsd_scanc`,
 > `netbsd_copyin/out`, `strlen`.
+
+> ## 2026-08-03 — round 86 (#58) scoped accurately; the queue text was wrong
+> The item said "32 table entries have no feature data". Measured against the tree, that is
+> not the shape of the problem:
+> - `ARM_CPU_TYPE_DEFS` has **51** entries (`src/include/arm_cpu_types.h:50`), not 32.
+> - The `flags` field is not partly-filled — it holds exactly **three** bits, and they are
+>   all it has ever held: `ARM_NO_MMU`, `ARM_DUAL_ENDIAN`, `ARM_XSCALE` (`:38-42`). There is
+>   **no architecture-level field at all**. The file says so itself, twice:
+>   `/* TODO: Include "ARM level", i.e. ARMv5 */` and `/* NOTE: Most of these are bogus! */`.
+> - `cpu_type.flags` is read in exactly **three** places tree-wide — `cpu_arm.c:178`,
+>   `cpu_arm.c:498`, `memory_arm.c:198` — and every one is XScale coprocessor/cache/memory
+>   behaviour. **No instruction-decode path consults the CPU model at all**, which is why a
+>   v6 media encoding decodes happily on an ARMv4: nothing is gating it, rather than a table
+>   row being blank.
+>
+> So the real round is: add an architecture-level to the struct, populate it correctly for
+> all 51 models from ARM's own documentation, and then gate the decoder on it. Populating it
+> WRONG would be worse than leaving it — a model marked too high silently permits encodings
+> that should trap, and too low breaks working guests — so this needs per-model primary
+> sources, not inference from the names. Scoped, not started.
