@@ -99,6 +99,28 @@
 >   `fma()` rounds once but per the host mode, so a directed-mode fused rounding needs an
 >   exact product-sum rather than a helper call. Gate 13 exists with 121 rows to build on.
 >
+> - **The ARM instruction COMBINER changes observable flags — and NO probe in this
+>   harness can currently see it.** Source-verified: a data-processing immediate with the
+>   S bit set updates C from the shifter carry-out, which this tree approximates as "if
+>   the encoded immediate is > 255 it was rotated, so C := its bit 31"
+>   (`cpu_arm_instr_dpi.c:121-140`). The standalone `teqs`/`tsts` do that. The
+>   `*_samepage` handlers a `teq`/`tst`-followed-by-branch is folded into do **not touch
+>   C at all** (`cpu_arm_instr.c:2589`, `:2610`, `:2628`, `:2651`), and the `teqs`
+>   combiner has **no guard on the operand whatsoever** (`:2973`, `:2989`) while the
+>   `tsts` one guards only bit 31 — which is about N (with the top bit clear `a & b`
+>   cannot be negative), not about C. So folding changes the flags a guest observes.
+>   **Why it is not fixed here:** `cpu_dyntrans.c:1888` disables combining whenever
+>   `single_step` is set, and every probe in `regress/` drives the guest with the
+>   debugger's `step`. Rows written against a `teq`+`beq` pair therefore measure the
+>   STANDALONE path while appearing to measure the combined one — five such rows were
+>   written, measured "correct", and withdrawn rather than committed, because a row that
+>   cannot fail is worse than no row. A real witness needs FREE-RUNNING execution with
+>   `allow_instruction_combinations` on and a breakpoint after the sequence — the same
+>   "gates are only provable free-running" constraint this project has hit before. The
+>   whole combined-handler family (`cmps_*`, `teqs_*`, `tsts_*`, `netbsd_*`, `strlen`,
+>   `xchg`) is unguarded by the harness for the same reason, which is a wider hole than
+>   this one defect.
+>
 > - **Still open, from round 72's own findings** (recorded, not guessed at):
 >   - **PPC-D, Alpha, and SH PR=1 D arithmetic have no gate rows at all**, so #331 changed
 >     them without a witness. Alpha has no rig, which is why #333 is deliberately
