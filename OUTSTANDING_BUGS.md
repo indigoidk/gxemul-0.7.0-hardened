@@ -1420,7 +1420,11 @@ corruption without a clear host-OOB path.
 > It also closes the wider hole: the whole combined-handler family (`cmps_*`, `teqs_*`,
 > `tsts_*`, `netbsd_*`, `strlen`, `xchg`) is ungated today for exactly this reason.
 
-> ### Correction, same day: breakpoint-and-continue is NECESSARY but NOT SUFFICIENT
+> ### RESOLVED as #340 (round 83): the witness was built and the defect measured
+> The two corrections below were both right, and together they made the witness buildable.
+> See the round-83 block in CHANGELOG.md. Original notes kept:
+>
+> ### Correction: breakpoint-and-continue is NECESSARY but NOT SUFFICIENT
 > Built the free-running driver described above and measured with it. The combined rows
 > **still** read the standalone answer. The recipe was incomplete, and the missing piece is
 > not about how execution is driven at all:
@@ -1440,3 +1444,24 @@ corruption without a clear host-OOB path.
 > history, and for the same reason: they passed green while measuring the wrong code path.
 > That is now the strongest argument for building this witness properly — the defect has
 > twice looked absent under instrumentation that could not see it.
+
+> ## 2026-08-03 — three MORE combined handlers diverge in flags (found by #340's after-panel)
+> #340 fixed the four `teqs`/`tsts` `*_samepage` handlers. A review seat then swept the rest
+> of the family and found three that are **still** wrong, all pre-existing:
+> - **`netbsd_cacheclean`** never writes flags at all, though the loop it replaces contains
+>   a `subs` (`cpu_arm_instr.c:2067`, `:2072`). It also skips the loads, leaving r2 stale.
+> - **`netbsd_cacheclean2`** skips its `subs` entirely (`:2087`, `:2093`) and leaves r0/r1
+>   unchanged despite the ADD/SUB loop it stands in for.
+> - **`netbsd_idle`** skips both TEQs on its fast paths without updating N/Z (`:2141`,
+>   `:2172`); C/V happen to be right only because both immediates are zero. It also reads
+>   rX into a local without writing the guest destination register.
+>
+> Two non-flag divergences in the same sweep: **`xchg`** has no `a != b` guard
+> (`:2889`), so where standalone `eor r,r,r` would zero the register the folded form leaves
+> it unchanged; and **`netbsd_memcpy`** bypasses its LDMs without publishing the final
+> r3/r4/ip/lr.
+>
+> These are now MEASURABLE: #340 built the two-pass free-running probe driver that reaches
+> folded handlers, which is what made the sweep worth doing. Verified equivalent and needing
+> no work: all `cmps_*`, `tsts_lo_*` (after #340), `netbsd_memset`, `netbsd_scanc`,
+> `netbsd_copyin/out`, `strlen`.

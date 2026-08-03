@@ -4192,6 +4192,56 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Eighty-third round (#340) — folding a compare into a branch changed the flags, and it took three attempts to see it
+
+For a data-processing immediate with the S bit set, ARM sets C from the shifter carry-out.
+The standalone `teqs`/`tsts` do that. The `*_samepage` handlers a `teq`/`tst`-followed-by-a-
+branch is folded into **did not touch C at all**, and the `teqs` combiner has no operand
+guard whatsoever while the `tsts` one guards only bit 31 — which is about **N** (with the top
+bit clear, `a & b` cannot be negative), not about C. So the optimisation was observable.
+
+**The measurement is the story here.** The defect looked *absent* twice, under two different
+instruments that could not see it:
+
+1. **`step` cannot reach it.** `cpu_dyntrans.c:1888` disables combining whenever
+   `single_step` is set, so a stepped probe exercises the standalone handler while appearing
+   to exercise the folded one. Five rows written that way passed **green** against a build
+   with the defect still in it.
+2. **A single forward run cannot reach it either**, however it is driven.
+   `arm_combine_instructions` rewrites `ic[-1].f` — the *previous* instruction — while the
+   **branch** is translated, and by then the compare has already executed. The folded handler
+   therefore first exists on the **second pass** over that ic slot.
+
+The working witness is free-running *and* two-pass: the pair sits in a loop that runs exactly
+twice, flags are published on the second iteration, the breakpoint is after the loop (never on
+the pair, because `single_step_breakpoint` is in the same guard — transient, but still fatal
+if it lands on the sequence), and instruction tracing stays off, since
+`!cpu->machine->instruction_trace` is the guard's third term. The carry preset uses `r7 = 0`
+so `subs r6,r6,r7` re-establishes C on **both** passes without changing `r6`; a decrementing
+preset would have differed silently between them.
+
+```
+A teq rot C combined       C1   owed C0   DISC     <- the defect, finally visible
+A tst rot C combined       C1   owed C0   DISC
+A teq rot C standalone     C0        C0   PIN  ok  <- control: same encoding, no branch
+A tst rot C standalone     C0        C0   PIN  ok
+A teq flat C preserved     C1        C1   PIN  ok  <- unrotated: C must be left alone
+```
+
+`0x0000FF00` is `0xFF ror 24`: rotated, above 255, bit 31 clear, so the owed answer is
+`C := 0`. C is preset to **1** so "did nothing" is distinguishable from "cleared correctly".
+
+- **#340 (`cpus/cpu_arm_instr.c`)** — `arm_combined_shifter_carry()`, applied in all four
+  folded handlers. Guarded with `#ifndef ..._INCLUDED` because this file is compiled twice
+  under `DYNTRANS_DUALMODE_32`. Whether `> 255` is an exact test for "was rotated" is a
+  separate, pre-existing approximation in `cpu_arm_instr_dpi.c`; what this round fixes is
+  that **folding must not change the flags**, and the standalone path is the oracle.
+
+Gate 14 goes 149 → 154 rows. The wider hole this closes: the whole combined-handler family
+(`cmps_*`, `teqs_*`, `tsts_*`, `netbsd_*`, `strlen`, `xchg`) had **no** gate coverage at all,
+because every probe in `regress/` drives the guest with `step`. There is now a driver that can
+reach them.
+
 ## Seventy-fourth round (#338) — the SCSI controller declared the write data had arrived before any of it had
 
 `dev_mb89352` set `data_out_offset = transfer_count` at **allocation** time — "all the data

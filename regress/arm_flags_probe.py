@@ -210,6 +210,70 @@ def run_flags(iw, rn, rm, cin):
     return sw(w[0]), sw(w[1])
 
 
+def teq_imm(rot, imm8):
+    return 0xE3310000 | (rot << 8) | imm8
+
+
+def tst_imm(rot, imm8):
+    return 0xE3110000 | (rot << 8) | imm8
+
+
+MOV_R8_1   = 0xE3A08001         # mov  r8,#1     -- the pass counter
+SUBS_R8_R9 = 0xE0588009         # subs r8,r8,r9  -- r9 = 1
+BEQ_FWD3   = 0x0A000003         # beq  +3 words (the not-taken branch under test)
+BEQ_BACK8  = 0x0AFFFFF8         # beq  -8 words (back to the top of the loop)
+
+
+def run_combined(iw, rn, cin):
+    """FREE-RUNNING, TWO PASSES: the only way to reach a *_samepage handler.
+
+    Two facts have to hold at once, and each defeated an earlier attempt:
+
+      1. `step` cannot work. cpu_dyntrans.c:1888 disables combining whenever
+         single_step is set, so a stepped probe exercises the STANDALONE
+         handler while appearing to exercise the combined one.
+
+      2. A single forward run cannot work either, however it is driven.
+         arm_combine_instructions rewrites ic[-1].f -- the PREVIOUS
+         instruction -- while the BRANCH is translated, and by then the
+         compare has already executed. The combined handler therefore exists
+         only from the SECOND pass over that ic slot onward.
+
+    So the compare and its branch sit inside a loop that runs exactly twice,
+    and the flags published are the second pass's. r8 counts: 1 -> 0 sets Z and
+    branches back, 0 -> -1 clears Z and falls through. The carry preset uses
+    r7 = 0, so `subs r6,r6,r7` re-establishes C=1 on BOTH passes without
+    changing r6 -- a decrementing preset would silently differ between them.
+
+    The breakpoint goes after the loop, never on the pair: single_step_breakpoint
+    is in the same guard but is transient (set at :1802-1823 only when pc equals
+    a breakpoint address, cleared at :1930). Instruction tracing must stay off
+    for the same reason -- it is the third term of that guard."""
+    r6, r7 = (1, 0) if cin else (0, 1)
+    w, _ = session([
+        "r1=0x%x" % rn, "r0=0x0",
+        "r6=0x%x" % r6, "r7=0x%x" % r7, "r9=0x1",
+        "r4=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE,      MOV_R8_1),
+        # loop top
+        "put w 0x%x, 0x%08x" % (CODE + 4,  SUBS_R6_R6_R7),
+        "put w 0x%x, 0x%08x" % (CODE + 8,  iw),
+        "put w 0x%x, 0x%08x" % (CODE + 12, BEQ_FWD3),
+        "put w 0x%x, 0x%08x" % (CODE + 16, MRS_R3_CPSR),
+        "put w 0x%x, 0x%08x" % (CODE + 20, STR_R3_R4),
+        "put w 0x%x, 0x%08x" % (CODE + 24, SUBS_R8_R9),
+        "put w 0x%x, 0x%08x" % (CODE + 28, BEQ_BACK8),
+        # loop exit / breakpoint
+        "put w 0x%x, 0x%08x" % (CODE + 32, NOP),
+        "breakpoint add 0x%x" % (CODE + 32),
+        "pc=0x%x" % CODE, "continue"], 2)
+    if w is None or w[0] == "deadbeef":
+        return None
+    return sw(w[0])
+
+
 def run_und_condfailed(iw):
     """A conditional UDF whose condition is FALSE must do nothing at all.
 
@@ -820,5 +884,42 @@ for nm, tiw, a0, a1, a2, a3, cin, pub, want_r, want_f, cls in SHIFT_ROWS:
     cpsr, rv = run_thumb(tiw, a0, a1, a2, a3, cin=cin, pub=pub)
     row(nm, cls, thumb_nzcv(cpsr), want_f)
     row(nm + " rd", cls, rv, want_r)
+
+
+#  #340: the instruction COMBINER changes observable flags.
+#
+#  A data-processing immediate with S set updates C from the shifter carry-out;
+#  this tree approximates that as "encoded immediate > 255 means it was rotated,
+#  so C := its bit 31" (cpu_arm_instr_dpi.c:121-140). The standalone teqs/tsts
+#  do it. The *_samepage handlers that a teq/tst-followed-by-branch folds into
+#  do not touch C at all, and the teqs combiner has NO operand guard while the
+#  tsts one guards only bit 31 -- which is about N (with the top bit clear,
+#  a & b cannot be negative), not about C.
+#
+#  0x0000FF00 is `0xFF ror 24`: rotated, > 255, bit 31 CLEAR, so the owed answer
+#  is C := 0. C is preset to 1 so "did nothing" is distinguishable from
+#  "cleared correctly".
+#
+#  The STANDALONE rows are the control and are what attributes a difference to
+#  the COMBINER rather than to the instruction: identical encoding, identical
+#  operands, no following branch, and they must read C0 on both builds.
+TEQ_ROT = teq_imm(12, 0xFF)     # teq r1, #0x0000FF00
+TST_ROT = tst_imm(12, 0xFF)     # tst r1, #0x0000FF00
+
+COMBINE_ROWS = [
+    ("A teq rot C combined", run_combined(TEQ_ROT, 0x00000001, 1), 0, "DISC"),
+    ("A tst rot C combined", run_combined(TST_ROT, 0x0000FF00, 1), 0, "DISC"),
+    ("A teq rot C standalone", run_flags(TEQ_ROT, 0x00000001, 0, 1)[0], 0,
+     "PIN"),
+    ("A tst rot C standalone", run_flags(TST_ROT, 0x0000FF00, 0, 1)[0], 0,
+     "PIN"),
+    #  unrotated (<= 255): C is PRESERVED by the ISA on both paths. Catches a
+    #  fix that starts clobbering C where it must be left alone.
+    ("A teq flat C preserved", run_combined(teq_imm(0, 0x01), 0x00000010, 1),
+     1, "PIN"),
+]
+for nm, cpsr, want_c, cls in COMBINE_ROWS:
+    row(nm, cls, "C%d" % cflag(cpsr) if cpsr is not None else "dead",
+        "C%d" % want_c)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

@@ -89,15 +89,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 149
+check "rows run"     "$want" 154
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 36
-check_min "pinned rows present"         "$pins" 47
+check_min "discriminating rows present" "$disc" 38
+check_min "pinned rows present"         "$pins" 50
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -106,6 +106,19 @@ check_min "pinned rows present"         "$pins" 47
 #
 # The SBC/RSC discriminators -- three different equal-operand values, because a
 # fix that special-cased one constant would pass a single row.
+# #340: the combiner rows. The two "combined" rows carry the defect; the two
+# "standalone" rows are the control that attributes it to the COMBINER rather
+# than to the instruction -- same encoding, same operands, no following branch;
+# and "flat C preserved" catches a fix that starts clobbering C on an
+# unrotated immediate, where the ISA preserves it. Named individually so one
+# reverting site cannot hide behind the total.
+for v in "A teq rot C combined" "A tst rot C combined" \
+         "A teq rot C standalone" "A tst rot C standalone" \
+         "A teq flat C preserved"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  row: $v" "$n" 1
+done
+
 for v in "sbcs eq C=0 C" "sbcs eq0 C=0 C" "sbcs eqmax C=0 C" "rscs eq C=0 C"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  disc: $v" "$n" 1

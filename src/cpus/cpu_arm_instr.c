@@ -2586,11 +2586,49 @@ X(cmps_ble_samepage)
 /*
  *  teqs followed by beq (inside the same page):
  */
+
+/*
+ *  arm_combined_shifter_carry():  #340
+ *
+ *  The shifter carry-out that the STANDALONE teqs/tsts perform and the
+ *  *_samepage handlers did not. For a data-processing IMMEDIATE with the S bit
+ *  set, ARM sets C from bit 31 of the rotated immediate, and the test used is
+ *  "is the EXPANDED OPERAND > 255?". In the dpi template that is a documented
+ *  approximation, because a nonzero rotation can still expand to a small value.
+ *  Here it is EXACT, and a review seat established why: the decoder routes that
+ *  ambiguous case -- nonzero rotation whose expanded value is under 256 -- to
+ *  dpis_imm_rotc, which clears C explicitly, so no such instruction is ever
+ *  eligible for teqs/tsts folding in the first place. What matters here is that
+ *  FOLDING A COMPARE INTO A BRANCH
+ *  MUST NOT CHANGE THE FLAGS, and it did: the teqs combiner has no operand
+ *  guard at all, and the tsts one guards only bit 31 -- which is about N, since
+ *  with the top bit clear a & b cannot be negative, not about C.
+ *
+ *  Measured with a two-pass free-running probe, because nothing else can see
+ *  it: combining is disabled under single-step, and the combiner rewrites the
+ *  PREVIOUS instruction while the branch is translated, so the folded handler
+ *  first executes on the second pass over the loop. Committed build answered
+ *  C=1 (untouched) where the standalone path answered C=0.
+ */
+#ifndef ARM_COMBINED_SHIFTER_CARRY_INCLUDED
+#define ARM_COMBINED_SHIFTER_CARRY_INCLUDED
+static void arm_combined_shifter_carry(struct cpu *cpu, uint32_t b)
+{
+	if (b > 255) {
+		if (b & 0x80000000)
+			cpu->cd.arm.flags |= ARM_F_C;
+		else
+			cpu->cd.arm.flags &= ~ARM_F_C;
+	}
+}
+#endif
+
 X(teqs_beq_samepage)
 {
 	uint32_t a = reg(ic->arg[0]), b = ic->arg[1], c = a ^ b;
 	cpu->n_translated_instrs ++;
 	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+	arm_combined_shifter_carry(cpu, ic->arg[1]);
 	if (c == 0) {
 		cpu->cd.arm.flags |= ARM_F_Z;
 		cpu->cd.arm.next_ic = (struct arm_instr_call *)
@@ -2612,6 +2650,7 @@ X(tsts_lo_beq_samepage)
 	uint32_t a = reg(ic->arg[0]), b = ic->arg[1], c = a & b;
 	cpu->n_translated_instrs ++;
 	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+	arm_combined_shifter_carry(cpu, ic->arg[1]);
 	if (c == 0)
 		cpu->cd.arm.flags |= ARM_F_Z;
 	if (c == 0)
@@ -2630,6 +2669,7 @@ X(teqs_bne_samepage)
 	uint32_t a = reg(ic->arg[0]), b = ic->arg[1], c = a ^ b;
 	cpu->n_translated_instrs ++;
 	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+	arm_combined_shifter_carry(cpu, ic->arg[1]);
 	if (c == 0) {
 		cpu->cd.arm.flags |= ARM_F_Z;
 	} else {
@@ -2653,6 +2693,7 @@ X(tsts_lo_bne_samepage)
 	uint32_t a = reg(ic->arg[0]), b = ic->arg[1], c = a & b;
 	cpu->n_translated_instrs ++;
 	cpu->cd.arm.flags &= ~(ARM_F_Z | ARM_F_N);
+	arm_combined_shifter_carry(cpu, ic->arg[1]);
 	if (c == 0)
 		cpu->cd.arm.flags |= ARM_F_Z;
 	if (c == 0)
