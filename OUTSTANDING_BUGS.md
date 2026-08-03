@@ -90,7 +90,15 @@
 >   so moving those signs inside the FMA is NOT equivalent under directed rounding. The
 >   single-precision `fmadds`/`fmsubs` family must stay fused as well and cannot alias
 >   the double handlers, whose final rounding is to D.
-> - **PowerPC `FPSCR[RN]` is not wired to arithmetic at all.** `fadd`, `fsub`, `fmul`,
+> - ~~**PowerPC `FPSCR[RN]` is not wired to arithmetic**~~ — **RESOLVED as #336 (round 91)
+>   for `fadd`/`fsub`/`fmul`/`fdiv`**, which now use #300's `_rm` helpers. Measured
+>   `1.0 + 3*2^-54` under RZ answering `3ff0000000000001` (the nearest result) where
+>   toward-zero owes `3ff0000000000000`, with an RN control row pinned unmoved.
+>   **`fmadd`/`fmsub` remain unwired**: #335 made them correctly fused, but `fma()` rounds
+>   per the HOST mode, so a directed-mode fused rounding needs an exact product-sum rather
+>   than a two-operand helper. That is the residue of this item.
+>
+> - **(historical) PowerPC `FPSCR[RN]` was not wired to arithmetic at all.** `fadd`, `fsub`, `fmul`,
 >   `fdiv`, `fmadd` and `fmsub` all compute in host double under the HOST rounding mode
 >   and store through the legacy entry point (`cpu_ppc_instr.c:1746/1800/1849/1907/1961/
 >   2024`); only the conversions `frsp` (`:1546`) and `fctiw` (`:1687`) read the mode.

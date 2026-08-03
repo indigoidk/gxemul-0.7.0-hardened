@@ -1720,7 +1720,8 @@ X(fmul)
 		if (cause)
 			ppc_fpscr_raise(cpu, cause);
 	}
-	result = fra.f * frc.f;
+	/*  #336: honour FPSCR[RN]; see the note on fadd.  */
+	result = ieee_mul_round_rm(fra.f, frc.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
 	if (isnan(result))
 		c = 1;
 	else {
@@ -1907,7 +1908,12 @@ X(fadd)
 		if (cause)
 			ppc_fpscr_raise(cpu, cause);
 	}
-	result = fra.f + frb.f;
+	/*  #336: PowerPC double arithmetic computed in host double under the
+	    HOST rounding mode and never read FPSCR[RN] -- only the conversions
+	    frsp and fctiw did. Measured: 1.0 + 3*2^-54 under RZ answered
+	    3ff0000000000001, the nearest result, where toward-zero owes
+	    3ff0000000000000. #300's helpers already serve MIPS, SH and m88k.  */
+	result = ieee_add_round_rm(fra.f, frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
 	if (isnan(result))
 		c = 1;
 	else {
@@ -1961,7 +1967,9 @@ X(fsub)
 		if (cause)
 			ppc_fpscr_raise(cpu, cause);
 	}
-	result = fra.f - frb.f;
+	/*  #336: see fadd.  Subtraction is addition of the negated operand,
+	    which is exact, so one rounding remains.  */
+	result = ieee_add_round_rm(fra.f, -frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
 	if (isnan(result))
 		c = 1;
 	else {
@@ -2024,7 +2032,8 @@ X(fdiv)
 		if (cause)
 			ppc_fpscr_raise(cpu, cause);
 	}
-	result = fra.f / frb.f;
+	/*  #336: see fadd.  */
+	result = ieee_div_round_rm(fra.f, frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
 	if (isnan(result))
 		c = 1;
 	else {

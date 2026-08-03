@@ -444,6 +444,43 @@ FMA_ROWS = [
 ]
 
 
+def run_arith_rm(iw, f1, f2, rm):
+    """One two-operand arithmetic instruction under a chosen FPSCR[RN], reading
+    the RESULT. The mode is set by DEBUGGER WRITE for the same reason the
+    conversion rows do it: it keeps the measurement independent of mtfsf's own
+    correctness, which is what let #324 be found in the first place."""
+    w, _ = session([
+        "msr=0x2000", "fpscr=0x%08x" % rm,
+        "f1=0x%016x" % f1, "f2=0x%016x" % f2, "r3=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, iw),
+        "put w 0x%x, 0x%08x" % (CODE + 4, STFD_F0_R3),
+        "pc=0x%x" % CODE, "step 2"], 2)
+    if w is None or len(w) < 2 or w[0] == "deadbeef":
+        return None
+    return w[0] + w[1]
+
+
+#  1.0 + 3*2^-54 is exactly three quarters of the way from 1.0 to the next
+#  double, so the modes genuinely disagree: nearest rounds UP to
+#  3ff0000000000001 and toward-zero truncates to 3ff0000000000000. Any operand
+#  pair whose exact sum is representable would agree in every mode and measure
+#  nothing.
+#
+#  The RN row is the control and is a PIN: it must give the same byte before and
+#  after, which is what shows the instruction and the operands work and isolates
+#  the MODE as the thing that was ignored. Without it a "fix" that broke fadd
+#  outright would still flip the RZ row and look like success.
+THREE_2M54 = 0x3ca8000000000000
+ARITH_RM_ROWS = [
+    ("fadd RZ mode ignored", FADD_F0_F1_F2, PONE, THREE_2M54, 1,
+     "3ff0000000000000", "DISC"),
+    ("fadd RN control",      FADD_F0_F1_F2, PONE, THREE_2M54, 0,
+     "3ff0000000000001", "PIN"),
+]
+
+
 def run_vxsnan_sticky_arith(second):
     """frsp(sNaN), then ANOTHER instruction, then read FPSCR the guest's way.
 
@@ -1103,6 +1140,9 @@ def main():
     #  raised indiscriminately would pass every positive row here.
     for nm, iw, a, b, want in CAUSE_ROWS:
         report(nm, run_cause(iw, a, b), want, "DISC")
+
+    for nm, iw, a, b, rm, want, kind in ARITH_RM_ROWS:
+        report(nm, run_arith_rm(iw, a, b, rm), want, kind)
 
     for nm, iw, fa, fc, fb, want, kind in FMA_ROWS:
         report(nm, run_fma3(iw, fa, fc, fb), want, kind)

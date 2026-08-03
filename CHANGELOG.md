@@ -4192,6 +4192,35 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-first round (#336) — PowerPC double arithmetic never read its own rounding mode
+
+`fadd`, `fsub`, `fmul` and `fdiv` computed in host double under the **host** rounding mode
+and never consulted `FPSCR[RN]`. Only the conversions (`frsp`, `fctiw`) read it — which is
+why the mode looked wired when gate 13 was built around those. Measured with the guest's
+own instruction:
+
+```
+fadd RZ mode ignored   3ff0000000000001   owed 3ff0000000000000   DISC
+fadd RN control        3ff0000000000001        3ff0000000000001   PIN  ok
+```
+
+`1.0 + 3·2^-54` is exactly three quarters of the way from `1.0` to the next double, so the
+modes genuinely disagree: nearest rounds up, toward-zero truncates. Any operand pair whose
+exact sum is representable would agree in every mode and measure nothing. The RN row is the
+control and is a **PIN** — it must give the same byte before and after, which isolates *the
+mode* as the thing that was ignored; without it, a "fix" that broke `fadd` outright would
+still flip the RZ row and look like success.
+
+- **#336 (`cpus/cpu_ppc_instr.c`)** — the four operations now go through #300's
+  `ieee_add_round_rm` / `ieee_mul_round_rm` / `ieee_div_round_rm`, which already serve MIPS,
+  SH and m88k. `PPC_FPSCR_RN_MASK` is 0..3 in the same encoding as `IEEE_RM_*`, so the field
+  passes straight through. `fsub` is `ieee_add_round_rm(a, -b, rm)`: negating an operand is
+  exact, so one rounding remains.
+
+**Still not wired:** `fmadd`/`fmsub`. #335 made them correctly *fused*, but `fma()` rounds
+per the host mode, so a directed-mode fused rounding needs an exact product-sum rather than
+a helper call — the one case in this family that a two-operand helper cannot serve.
+
 ## Ninety-second round (#335) — `fmadd` rounded twice, and whether that was wrong depended on the compiler
 
 PowerPC `fmadd` is architecturally **fused**: Book I defines it as rounding the product-sum
