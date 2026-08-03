@@ -1393,3 +1393,29 @@ corruption without a clear host-OOB path.
 > unimplemented legal encodings, the missing SH FPU exception model (which #334 also
 > depends on: DN=0 should raise an FPU error rather than deliver a value), and `fsca`'s
 > store. None of those is a comment-sized change.
+
+> ## 2026-08-03 — the free-running witness IS buildable; recipe recorded
+> Round 83 was blocked because `cpu_dyntrans.c:1888` disables instruction combining under
+> single-step and every probe in `regress/` drives the guest with `step`. Checked whether a
+> breakpoint-and-continue harness can work instead. **It can**, and the one thing that
+> looked fatal is not:
+> - `single_step_breakpoint` appears in the SAME guard, but it is **transient, not a mode**:
+>   set only when the PC equals a breakpoint address (`:1802-1823`) and cleared at `:1930`
+>   after that one instruction executes and is marked for re-translation. It suppresses
+>   combining for the instruction **at** the breakpoint, not globally.
+> - `allow_instruction_combinations` already defaults to 1 (`machine.c:86`) and is a
+>   registered runtime setting (`machine.c:109`). Nothing to turn on.
+> - `breakpoint` and `continue` both exist (`debugger_cmds.c:2022`, `:2028`).
+>
+> **Recipe.** Put the breakpoint on an instruction AFTER the sequence under test, never on
+> the sequence. Keep the pair in straight-line code within one page so the combiner sees
+> `ic[-1]` at translation time. Drive with `continue`. **Do not enable instruction tracing**
+> — `!cpu->machine->instruction_trace` is in the same guard, so a probe that switches on
+> tracing to observe what happened disables the thing it is measuring. That is the identical
+> failure mode as the five `step`-driven rows that passed green while measuring the
+> standalone path; it is written down here rather than rediscovered.
+>
+> This unblocks round 83 (#55) and is the likely route for round 82's user-mode SH witness
+> (#54) as well, since that one also needs real execution rather than stepped instructions.
+> It also closes the wider hole: the whole combined-handler family (`cmps_*`, `teqs_*`,
+> `tsts_*`, `netbsd_*`, `strlen`, `xchg`) is ungated today for exactly this reason.
