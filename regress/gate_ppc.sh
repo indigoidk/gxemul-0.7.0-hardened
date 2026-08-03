@@ -129,7 +129,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 118
+check "rows run"     "$want" 121
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -143,8 +143,10 @@ pins=$(grep -c " PIN " "$LOG")
 # warns about twice. The two numbers must also sum to the asserted `rows run` above
 # (79 + 39 = 118); if they stop summing, a row lost its class rather than the table
 # losing a row.
-check_min "discriminating rows present" "$disc" 79
-check_min "pinned rows present"         "$pins" 39
+# #335 added two DISC (fmadd/fmsub fusion) and one PIN (the 2by3+1 control that
+# proves the hand-assembled A-form register fields land where intended).
+check_min "discriminating rows present" "$disc" 81
+check_min "pinned rows present"         "$pins" 40
 
 # The one row that records a divergence this round deliberately does NOT fix.
 div=$(grep -c " DIV " "$LOG")
@@ -181,6 +183,7 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "FX latches once only" \
          "lfsu value" "lfsu updates r3" "lfdu value" "lfdu updates r3" \
          "stfsu value" "stfsu updates r3" "stfdu value" "stfdu updates r3" \
+         "fmadd fused 1+-2^-52" "fmsub fused 1+-2^-52" "fmadd 2by3+1 control" \
          "lfsux value" "lfsux updates r3" "lfdux value" "lfdux updates r3" \
          "stfsux value" "stfsux updates r3" "stfdux value" \
          "stfdux updates r3" "lfs leaves r3" "lfsx leaves r3"; do

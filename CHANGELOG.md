@@ -4192,6 +4192,71 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-second round (#335) — `fmadd` rounded twice, and whether that was wrong depended on the compiler
+
+PowerPC `fmadd` is architecturally **fused**: Book I defines it as rounding the product-sum
+exactly once. The emulator computed `fra.f * frc.f + frb.f`, which rounds **twice** unless
+the compiler contracts it into a hardware FMA — so this instruction's correctness was a
+property of the **build host** rather than of this source. `gate_offline.sh` asserts only
+that the generated Makefiles do not *add* `-ffp-contract=fast`, which cannot see GCC's own
+GNU-mode default, and on a baseline x86-64 target there is no FMA instruction to contract
+into at all.
+
+Measured, offline first and then in the guest through the cold debugger:
+
+```
+a*b+c as written : 0x0p+0      UNFUSED (two roundings)
+fma(a,b,c)       : -0x1p-104   the architectural answer
+
+fmadd fused 1+-2^-52   0000000000000000   owed b970000000000000   DISC
+fmsub fused 1+-2^-52   0000000000000000   owed b970000000000000   DISC
+fmadd 2by3+1 control   401c000000000000   401c000000000000        PIN  ok
+```
+
+`(1+2^-52)·(1-2^-52)` is exactly `1 - 2^-104`, which needs 104 significant bits: the first
+rounding destroys it and the second has nothing left to keep. Forcing `-std=c99` changed
+nothing — the reason this build does not contract is the absent instruction, not the
+language mode.
+
+The `2.0 × 3.0 + 1.0 → 7.0` row is an operand-**routing** diagnostic and passes on both
+sides. Its justification is narrower than the `fctiwz` precedent it resembles, and the
+first version of this note overstated it: because the two defect rows expect a *nonzero*
+byte, an empty or misrouted register makes them fail rather than pass by accident. What the
+control adds is the ability to tell "the fusion is wrong" from "the operands never arrived"
+— the same symptom on those rows, and different bugs.
+
+- **#335 (`cpus/cpu_ppc_instr.c`)** — `fma(fra.f, frc.f, frb.f)` for `fmadd`, and
+  `fma(fra.f, frc.f, -frb.f)` for `fmsub`; negating the **addend** rather than the result is
+  what keeps it a single fused operation. Correct *and* host-independent, where the old
+  expression was at best accidentally correct.
+
+**Deliberately not fixed here, and one honest qualification.** `fma()` rounds per the
+**host** mode, which is round-to-nearest. PowerPC `FPSCR[RN]` is not wired to arithmetic
+anywhere in this tree — all six double-precision operations compute in host double and store
+through the legacy entry point, and only the conversions (`frsp`, `fctiw`) read the mode.
+That is its own queued round.
+
+The first draft of this entry claimed the change was "no worse" for directed modes. **A
+review seat refuted that with a witness**: for `a = 1+31u`, `c = 1+u`, `b = -1` (`u = 2^-52`)
+the old double rounding happened to land on the toward-zero answer `3d00000000000000`, while
+the fused result rounds to `3d00000000000001`. So directed-mode arithmetic can be *pointwise*
+worse, not merely equally unsupported. Accidentally right is not a property worth preserving
+— and the round's own `-2^-104` vector cannot expose this, because that result is exactly
+representable in every mode.
+
+**Adjacent, and left open:** `fmadd`/`fmsub` still raise none of their architectural
+exception causes, where `fmul` calls the cause machinery — and an FMA can owe two at once
+(`0·Inf` with an sNaN addend owes `VXIMZ|VXSNAN`), which the tree already documents. The new
+rows read only the result, so they cannot see it. `fnmadd`/`fnmsub` are **not decoded at
+all** and halt, so they never ran the defective expression; when they are implemented they
+must negate the **already-rounded** result (`-fma(a,c,b)`), which is not the same as moving
+the sign inside. The single-precision `fmadds`/`fmsubs` family must stay fused too and
+cannot simply alias these handlers.
+
+Gate 13 goes 118 → 121 rows (81 DISC / 40 PIN). The control row's name is `2by3+1` and not
+`2*3+1` on purpose: a `*` in a row name is a BRE repetition operator and makes the gate's own
+named-row check unsatisfiable, which this harness has already been bitten by once.
+
 ## Seventy-second round (#331–#334) — there was no gradual underflow, and three architectures were quietly relying on that
 
 `ieee_store_float_value_rm()` could not produce a subnormal result. In double precision it

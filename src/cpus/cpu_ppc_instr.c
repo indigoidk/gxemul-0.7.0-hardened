@@ -1774,7 +1774,30 @@ X(fmadd)
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
-	result = fra.f * frc.f + frb.f;
+	/*  #335: fmadd is architecturally FUSED -- Book I defines it as rounding
+	    the product-sum EXACTLY ONCE -- and `fra.f * frc.f + frb.f` rounds
+	    twice unless the compiler happens to contract it into a hardware FMA.
+	    That made this instruction's correctness a property of the BUILD HOST
+	    rather than of this source: gate 2 asserts only that the generated
+	    Makefiles do not ADD -ffp-contract=fast, which cannot see GCC's own
+	    GNU-mode default, and on a baseline x86-64 target there is no FMA
+	    instruction to contract into at all. Measured on this build with the
+	    guest's own instruction: (1+2^-52)*(1-2^-52) + -1.0 answered
+	    0000000000000000 where the ISA owes b970000000000000 (-2^-104) -- the
+	    exact product needs 104 significant bits, so the first rounding
+	    destroys it and the second has nothing left to keep. fma() rounds once
+	    by definition, which is both the correct answer and the same answer on
+	    every build host.
+
+	    fma() rounds per the HOST mode, i.e. nearest. That is exactly right
+	    while FPSCR[RN] remains unwired here -- no PowerPC arithmetic in this
+	    tree reads it -- but it is NOT strictly better in every case: a review
+	    seat produced an operand set where the old double rounding happened to
+	    land on the toward-zero answer and the fused one does not
+	    (a = 1+31u, c = 1+u, b = -1, u = 2^-52). Accidentally right is not a
+	    property worth keeping, and directed-mode arithmetic is unsupported
+	    either way, but the claim "no worse" would have been false.  */
+	result = fma(fra.f, frc.f, frb.f);
 	if (isnan(result))
 		cc = 1;
 	else {
@@ -1823,7 +1846,10 @@ X(fmsub)
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
-	result = fra.f * frc.f - frb.f;
+	/*  #335: fmsub is fmadd with frB negated, and is fused for the same
+	    reason -- see the note there. Negating the ADDEND rather than the
+	    result is what keeps it a single fused operation.  */
+	result = fma(fra.f, frc.f, -frb.f);
 	if (isnan(result))
 		cc = 1;
 	else {

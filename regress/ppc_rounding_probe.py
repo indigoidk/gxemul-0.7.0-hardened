@@ -388,6 +388,62 @@ def run_cause(iw, f1, f2):
     return w[1]
 
 
+#  fmadd frD,frA,frC,frB -- A-form: OPCD 63, XO 29, frC in bits 21..25.
+#  frD=f0, frA=f1, frB=f2, frC=f3.
+FMADD_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (3 << 6) \
+    | (29 << 1)
+FMSUB_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (3 << 6) \
+    | (28 << 1)
+
+
+def run_fma3(iw, fa, fc, fb):
+    """One three-operand FP instruction; read the RESULT (f0), not FPSCR.
+
+    fmadd is architecturally FUSED -- it rounds the product-sum ONCE -- so the
+    value is the whole contract here and FPSCR is not what is being asked."""
+    w, _ = session([
+        "msr=0x2000", "fpscr=0x00000000",
+        "f1=0x%016x" % fa, "f3=0x%016x" % fc, "f2=0x%016x" % fb,
+        "r3=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, iw),
+        "put w 0x%x, 0x%08x" % (CODE + 4, STFD_F0_R3),
+        "pc=0x%x" % CODE, "step 2"], 2)
+    if w is None or len(w) < 2 or w[0] == "deadbeef":
+        return None
+    return w[0] + w[1]
+
+
+#  a*c is exactly 1 - 2^-104, which needs 104 significant bits.  Two roundings
+#  collapse it to 1.0 and then to +0; ONE rounding keeps -2^-104.  The ISA says
+#  fmadd rounds once, so 0000000000000000 is the emulator getting the
+#  instruction wrong and b970000000000000 is the architectural answer.
+#
+#  The control row is an operand-ROUTING diagnostic, and its justification is
+#  narrower than the fctiwz precedent it resembles.  This encoding is
+#  hand-assembled, so a wrong frA/frB/frC field is a live risk -- but unlike the
+#  fctiwz row that was pinned wrong for five rounds, the two rows above expect a
+#  NONZERO byte, so an empty or misrouted register makes them FAIL rather than
+#  pass by accident.  The control still earns its place: it distinguishes "the
+#  fusion is wrong" from "the operands never arrived", which are the same
+#  symptom on those rows and different bugs.  (A review seat corrected the first
+#  version of this comment, which claimed the control was what prevented a false
+#  pass.)
+ONE_P = 0x3ff0000000000001          # 1 + 2^-52
+ONE_M = 0x3feffffffffffffe          # 1 - 2^-52
+NEG_ONE = 0xbff0000000000000
+FMA_ROWS = [
+    ("fmadd fused 1+-2^-52", FMADD_F0_F1_F3_F2, ONE_P, ONE_M, NEG_ONE,
+     "b970000000000000", "DISC"),
+    ("fmsub fused 1+-2^-52", FMSUB_F0_F1_F3_F2, ONE_P, ONE_M,
+     0x3ff0000000000000, "b970000000000000", "DISC"),
+    #  2.0 * 3.0 + 1.0 == 7.0 -- proves frA/frB/frC land where intended.
+    ("fmadd 2by3+1 control", FMADD_F0_F1_F3_F2, 0x4000000000000000,
+     0x4008000000000000, 0x3ff0000000000000, "401c000000000000", "PIN"),
+]
+
+
 def run_vxsnan_sticky_arith(second):
     """frsp(sNaN), then ANOTHER instruction, then read FPSCR the guest's way.
 
@@ -1047,6 +1103,9 @@ def main():
     #  raised indiscriminately would pass every positive row here.
     for nm, iw, a, b, want in CAUSE_ROWS:
         report(nm, run_cause(iw, a, b), want, "DISC")
+
+    for nm, iw, fa, fc, fb, want, kind in FMA_ROWS:
+        report(nm, run_fma3(iw, fa, fc, fb), want, kind)
 
     #  VXSNAN must survive a following non-NaN frsp (see run_vxsnan_sticky).
     report("VXSNAN sticky", run_vxsnan_sticky(), "set", "DISC")

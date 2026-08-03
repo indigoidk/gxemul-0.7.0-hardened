@@ -72,6 +72,33 @@
 >   have been a false row — and GXemul wires no R3010 interrupt pin, so declining to write
 >   would leave a stale register instead. Nine new named vectors, two new mutants.
 >
+> - ~~**PowerPC `fmadd`/`fmsub` modelled unfused**~~ — **RESOLVED as #335 (round 92)**.
+>   Book I rounds the product-sum once; `fra.f * frc.f + frb.f` rounds twice unless the
+>   compiler contracts it, so correctness was a property of the BUILD HOST. Measured
+>   `0000000000000000` where the ISA owes `b970000000000000`, with a `2.0*3.0+1.0 → 7.0`
+>   control passing on both sides to rule out a wrong register field. Now `fma()`.
+>
+> - **`fmadd`/`fmsub` raise none of their exception causes.** `fmul` calls the cause
+>   machinery (`cpu_ppc_instr.c:1717`); the FMA handlers go straight from operand
+>   conversion to computation and update only FPCC (`:1774`, `:1790`, `:1836`). An FMA
+>   can owe two causes at once — `0·Inf` with an sNaN addend owes `VXIMZ|VXSNAN`, which
+>   this tree already documents at `cpu_ppc.c:1929`. #335's rows read only the RESULT,
+>   deliberately, so they cannot see this.
+> - **`fnmadd`/`fnmsub` are not decoded and halt** (`ppc_halt_probe.py:260` has them
+>   pending). When implemented they must negate the **already-rounded** result —
+>   `-fma(a,c,b)` and `-fma(a,c,-b)` — because the ISA rounds before the final negation,
+>   so moving those signs inside the FMA is NOT equivalent under directed rounding. The
+>   single-precision `fmadds`/`fmsubs` family must stay fused as well and cannot alias
+>   the double handlers, whose final rounding is to D.
+> - **PowerPC `FPSCR[RN]` is not wired to arithmetic at all.** `fadd`, `fsub`, `fmul`,
+>   `fdiv`, `fmadd` and `fmsub` all compute in host double under the HOST rounding mode
+>   and store through the legacy entry point (`cpu_ppc_instr.c:1746/1800/1849/1907/1961/
+>   2024`); only the conversions `frsp` (`:1546`) and `fctiw` (`:1687`) read the mode.
+>   #300's `ieee_add_round_rm`/`ieee_mul_round_rm`/`ieee_div_round_rm` already exist and
+>   are wired on MIPS, SH and m88k. The fused `fmadd` case is harder than the other four:
+>   `fma()` rounds once but per the host mode, so a directed-mode fused rounding needs an
+>   exact product-sum rather than a helper call. Gate 13 exists with 121 rows to build on.
+>
 > - **Still open, from round 72's own findings** (recorded, not guessed at):
 >   - **PPC-D, Alpha, and SH PR=1 D arithmetic have no gate rows at all**, so #331 changed
 >     them without a witness. Alpha has no rig, which is why #333 is deliberately
