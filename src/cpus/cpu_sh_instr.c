@@ -3297,6 +3297,20 @@ X(fsrra_frn)
 		/*  Single-precision:  */
 		int32_t ieee, r1 = reg(ic->arg[0]);
 		ieee_interpret_float_value(r1, &op1, IEEE_FMT_S);
+		/*  #339: this uses the LEGACY store where every neighbour in
+		    this file uses the mode-aware one, and that difference is
+		    deliberate rather than an oversight -- recorded here
+		    because it has been re-filed as a defect more than once.
+		    FSRRA is an APPROXIMATION instruction: the SH-4 manual
+		    specifies it only to within a relative error bound, not as
+		    a correctly-rounded result, so there is no rounding mode
+		    for it to honour and `1.0f / sqrt()` is already a different
+		    approximation from the silicon's table-driven one. Wiring
+		    it to sh_fp_rm() would round a number that was never the
+		    architectural answer to begin with, which buys nothing and
+		    implies a precision the instruction does not have. The
+		    FPSCR.DN policy still applies and is enforced by #334's
+		    macro, which wraps this call like every other.  */
 		ieee = ieee_store_float_value(1.0f / sqrt(op1.f), IEEE_FMT_S);
 		reg(ic->arg[0]) = ieee;
 	}

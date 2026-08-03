@@ -1384,3 +1384,12 @@ corruption without a clear host-OOB path.
 > been corrected in the source since, and the remediation order above is therefore stale as
 > a work list — see the status block at the head of this section for what is actually left
 > (OB-4, OB-10, and OB-5 pending re-location). Round 84 carries them.
+
+> ## 2026-08-02 — round 85 (#57) partial: `fsrra`'s store settled, the rest still open
+> **#339** records why `X(fsrra_frn)` uses the LEGACY store while its neighbours use the
+> mode-aware one: FSRRA is an approximation instruction, specified only to a relative error
+> bound, so there is no rounding mode for it to honour. That is now a comment in the source
+> instead of a recurring re-file. **Everything else in round 85 remains open** — the
+> unimplemented legal encodings, the missing SH FPU exception model (which #334 also
+> depends on: DN=0 should raise an FPU error rather than deliver a value), and `fsca`'s
+> store. None of those is a comment-sized change.
