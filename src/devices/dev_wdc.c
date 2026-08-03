@@ -69,6 +69,13 @@ struct wdc_data {
 
 	int		int_assert;
 
+	/*  #337: latch each replaced exit(1) so a guest that retries in a
+	    loop cannot flood the host log -- the same flood #265 caused and
+	    #269 had to undo.  */
+	int		warned_badlen;
+	int		warned_atapi_err;
+	int		warned_atapi_dataout;
+
 	int		write_in_progress;
 	int		write_count;
 	int64_t		write_offset;
@@ -649,9 +656,24 @@ DEVICE_ACCESS(wdc)
 					wdc_addtoinbuf(d, (idata >> 8) & 0xff);
 					break;
 				case 1:	wdc_addtoinbuf(d, idata); break;
-				default:fatal("wdc: unimplemented write "
-					    "len %i\n", len);
-					exit(1);
+				/*  #337: a 3- or 8-byte access to the data
+				    port used to call exit(1) -- a GUEST
+				    choosing an access width killed the host
+				    process. Same halt class as #184/#186/
+				    #187/#315/#316/#326. Drop the access and
+				    say so once; a device that cannot honour
+				    a transfer must not take the emulator
+				    with it. (Unreachable from SH-4, which
+				    has no 3- or 8-byte access, but reachable
+				    from a 64-bit MIPS machine carrying wdc
+				    over bus_isa/bus_pci.)  */
+				default:if (!d->warned_badlen) {
+						d->warned_badlen = 1;
+						fatal("wdc: unimplemented "
+						    "write len %i (ignored)\n",
+						    len);
+					}
+					break;
 				}
 			} else {
 				switch (len) {
@@ -664,9 +686,24 @@ DEVICE_ACCESS(wdc)
 					wdc_addtoinbuf(d, idata & 0xff);
 					break;
 				case 1:	wdc_addtoinbuf(d, idata); break;
-				default:fatal("wdc: unimplemented write "
-					    "len %i\n", len);
-					exit(1);
+				/*  #337: a 3- or 8-byte access to the data
+				    port used to call exit(1) -- a GUEST
+				    choosing an access width killed the host
+				    process. Same halt class as #184/#186/
+				    #187/#315/#316/#326. Drop the access and
+				    say so once; a device that cannot honour
+				    a transfer must not take the emulator
+				    with it. (Unreachable from SH-4, which
+				    has no 3- or 8-byte access, but reachable
+				    from a 64-bit MIPS machine carrying wdc
+				    over bus_isa/bus_pci.)  */
+				default:if (!d->warned_badlen) {
+						d->warned_badlen = 1;
+						fatal("wdc: unimplemented "
+						    "write len %i (ignored)\n",
+						    len);
+					}
+					break;
 				}
 			}
 
@@ -703,9 +740,27 @@ DEVICE_ACCESS(wdc)
 				    d->drive + d->base_drive, DISKIMAGE_IDE,
 				    d->atapi_st);
 
+				/*  #337: an ATAPI command the SCSI layer
+				    rejected used to exit(1). Any guest that
+				    issues an unsupported or malformed packet
+				    command could therefore kill the host.
+				    Complete the command instead: the phase
+				    goes to COMPLETED with no data, and the
+				    interrupt below still fires, which is how
+				    a real drive reports a failed packet
+				    command to its driver.  */
 				if (res == 0) {
-					fatal("WDC: ATAPI scsi error?\n");
-					exit(1);
+					if (!d->warned_atapi_err) {
+						d->warned_atapi_err = 1;
+						fatal("wdc: ATAPI command "
+						    "rejected; completing "
+						    "with no data\n");
+					}
+					d->atapi_len = 0;
+					d->atapi_received = 0;
+					d->atapi_phase = PHASE_COMPLETED;
+					d->int_assert = 1;
+					break;
 				}
 
 				d->atapi_len = 0;
@@ -725,9 +780,21 @@ DEVICE_ACCESS(wdc)
 						    PHASE_COMPLETED;
 					}
 				} else {
-					fatal("wdc atapi Dataout? TODO\n");
+					/*  #337: this arm ALREADY set the
+					    right phase and then called
+					    exit(1) anyway, so removing the
+					    abort is the whole fix -- any
+					    ATAPI command wanting a DATA OUT
+					    phase (MODE SELECT, for one) took
+					    the host down. The transfer
+					    itself is still unimplemented,
+					    which is what the warning says.  */
+					if (!d->warned_atapi_dataout) {
+						d->warned_atapi_dataout = 1;
+						fatal("wdc: ATAPI DATA OUT "
+						    "phase not implemented\n");
+					}
 					d->atapi_phase = PHASE_DATAOUT;
-					exit(1);
 				}
 
 				d->int_assert = 1;

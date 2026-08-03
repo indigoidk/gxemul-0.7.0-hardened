@@ -4192,6 +4192,36 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Seventieth round, part C (#337) — four guest-reachable `exit(1)` calls in the IDE controller
+
+A guest could kill the **host process** four different ways through `dev_wdc`, the same halt
+class this fork has removed repeatedly (#184/#186/#187/#315/#316/#326). Two were reached by
+nothing more than choosing an access width; two by issuing an ordinary ATAPI packet command.
+
+- **The two `default:` length arms** (data-port writes of 3 or 8 bytes) now drop the access
+  and warn once instead of aborting. Not reachable from SH-4, which has no 3- or 8-byte
+  access — `fmov.d` is two 4-byte accesses — but reachable from a 64-bit MIPS machine
+  carrying `wdc` over `bus_isa`/`bus_pci`.
+- **`res == 0`** — any packet command the SCSI layer rejects. Now completes with no data and
+  still asserts the interrupt, which is how a real drive reports a failed packet command,
+  rather than taking the emulator down.
+- **`res == 2`** — any ATAPI command wanting a DATA OUT phase, `MODE SELECT` among them.
+  That arm **already set the correct phase and then called `exit(1)` anyway**, so deleting
+  the abort is the entire fix; the transfer itself remains unimplemented and now says so.
+
+Each replaced abort latches a warn-once flag. That is not decoration: #265 shipped an
+unlatched warning that a retrying guest turned into a host-log flood, and #269 had to undo
+it.
+
+**Honest limits.** This is a *reachability-argued* round, not a rig-measured one. The queued
+item asked for a PReP/IDE instrument; a review seat established that no such rig is needed —
+`machine_landisk.c` already instantiates `wdc` and landisk is a passing gate-5 rig — but
+building the ATAPI witness is its own round, and only `res == 0` and `res == 2` would be
+measurable on it. The four sites are removed on the strength of the code path plus the class
+precedent, and the harness confirms nothing regressed; no row asserts them yet. The queue
+entry also said "four" — the file contains no other `exit(1)` now, but that was worth
+checking rather than trusting.
+
 ## Ninety-first round (#336) — PowerPC double arithmetic never read its own rounding mode
 
 `fadd`, `fsub`, `fmul` and `fdiv` computed in host double under the **host** rounding mode
