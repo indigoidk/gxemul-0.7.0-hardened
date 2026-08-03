@@ -257,6 +257,14 @@ void mb89352_dreg_write(struct cpu* cpu, struct mb89352_data *d, int writeflag, 
 	switch (d->phase) {
 
 	case PH_DATAOUT:
+		/*  #338: publish how many bytes ACTUALLY arrived. This is the
+		    only place that knows -- transfer_bufpos counted them one
+		    at a time above -- and it is reached exactly when the
+		    buffer has filled, so the command now becomes eligible
+		    because the data is present rather than because it was
+		    promised.  */
+		d->xferp->data_out_offset = d->transfer_bufpos;
+
 		res = diskimage_scsicommand(cpu,
 	    	    d->target, DISKIMAGE_SCSI, d->xferp);
 
@@ -467,7 +475,24 @@ DEVICE_ACCESS(mb89352)
 						    of these bytes before use.  */
 						scsi_transfer_allocbuf(&d->xferp->data_out_len,
 						    &d->xferp->data_out, d->transfer_count, 1);
-						d->xferp->data_out_offset = d->transfer_count;
+						/*  #338: was `= d->transfer_count`,
+						    i.e. "all the data has arrived"
+						    declared at ALLOCATION time, before
+						    a single byte had. diskimage_scsicmd
+						    gates a WRITE on
+						    `data_out_offset != size` and on
+						    nothing else, so that satisfied the
+						    guard immediately: a guest could
+						    SELECT, XFR a DATAOUT phase sized to
+						    the write, switch to PH_CMD, send a
+						    WRITE(6) CDB, and have the buffer
+						    committed to the disk image without
+						    ever entering a data phase. #295
+						    zeroed the buffer, so what remained
+						    was silent corruption rather than
+						    heap disclosure -- the offset is now
+						    truthful instead, and starts empty.  */
+						d->xferp->data_out_offset = 0;
 						break;
 					case PH_DATAIN:
 						break;

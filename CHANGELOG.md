@@ -4192,6 +4192,37 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Seventy-fourth round (#338) — the SCSI controller declared the write data had arrived before any of it had
+
+`dev_mb89352` set `data_out_offset = transfer_count` at **allocation** time — "all the data
+is here", asserted before a single byte was. `diskimage_scsicmd` gates a WRITE on
+`data_out_offset != size` and on nothing else, so that satisfied the guard immediately.
+
+The reachable sequence, which needs no data phase at all: `SCMD_SELECT`, then `SCMD_XFR`
+with `PCTL = PH_DATAOUT` and TC sized to the write (this allocates the buffer and sets the
+offset), then `SCMD_XFR` with `PCTL = PH_CMD`, then a six-byte `WRITE(6)` CDB — at which
+point the CDB completes, the guard passes, and the buffer is committed to the disk image.
+The `xferp` survives across `SCMD_XFR` commands; it is freed only on `SCMD_SELECT`.
+
+#295 had already zeroed that buffer, so what remained was silent **corruption** of the disk
+image rather than heap disclosure — which is why this half was deferred and why it still
+mattered.
+
+- **#338 (`devices/dev_mb89352.c`)** — the offset starts at **0**, and the `PH_DATAOUT` arm
+  publishes `d->transfer_bufpos` — the count the byte-at-a-time write path actually
+  maintained — immediately before calling `diskimage_scsicommand`. That arm is reached
+  exactly when the buffer has filled, so a command now becomes eligible because the data is
+  *present* rather than because it was *promised*.
+
+The deferral note claimed the honest repair was blocked because "this model discards that
+return". A review seat showed that is only half true: the `PH_CMD` arm already handles
+`res == 2` by moving to `PH_DATAOUT`; only the `PH_DATAOUT` arm discards it, and that is a
+separate `// TODO` this round does not touch.
+
+Same limits as #337: reachability-argued from the code path, not rig-measured — a luna88k
+mb89352 probe with a pre-poisoned sector is its own round. The harness confirms no
+regression; no row asserts this yet.
+
 ## Seventieth round, part C (#337) — four guest-reachable `exit(1)` calls in the IDE controller
 
 A guest could kill the **host process** four different ways through `dev_wdc`, the same halt
