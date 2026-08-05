@@ -89,15 +89,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 158
+check "rows run"     "$want" 161
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 39
-check_min "pinned rows present"         "$pins" 53
+check_min "discriminating rows present" "$disc" 41
+check_min "pinned rows present"         "$pins" 54
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -131,7 +131,9 @@ done
 # here; they still cannot distinguish folded-and-correct from
 # not-folded-and-correct, which is why they are pins and not discriminators.
 for v in "A xchg same-reg zeroes" "A xchg same-reg r1 pin" \
-         "A xchg swap r0" "A xchg swap r1"; do
+         "A xchg swap r0" "A xchg swap r1" \
+         "A cacheclean r0 intact" "A cacheclean r1 intact" \
+         "A cacheclean still folds"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

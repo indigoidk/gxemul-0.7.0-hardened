@@ -4192,6 +4192,45 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-fourth round (#345) — the cache-clean fold matched a loop's shape and ignored its registers
+
+`X(netbsd_cacheclean)` replaces a NetBSD cache-clean loop with a closed-form update, and it
+hardcodes `r[0] += r[1]; r[1] = 0`. Its matcher tested only the loop's **shape** — a
+post-indexed word load, `subs rX,rX,#32`, a branch back to the load — and **never which
+registers it used**. Any loop of that shape built on a different pair had r0 and r1 clobbered
+and its own registers left untouched.
+
+Measured with the two-pass free-running driver #340 built, on a loop using **r5 and r6**,
+with r0 and r1 seeded to sentinels the loop never mentions:
+
+```
+A cacheclean r0 intact     00000033   owed 00000011   DISC   <- r0 was given r1's 0x22
+A cacheclean r1 intact     00000000   owed 00000022   DISC   <- r1 was zeroed
+A cacheclean still folds   00009120        00009120   PIN
+```
+
+- **#345 (`cpus/cpu_arm_instr.c`)** — the matcher now requires the load's base to be r0 and
+  the counter to be r1, the two registers the handler actually writes.
+
+This is the same species as #342's missing `a != b` and **worse in consequence**: that one
+needed a degenerate encoding a compiler would never emit, while this fires on ordinary code
+that merely happens to match the shape.
+
+**The control row is doing real work here**, and it is the row that distinguishes this fix
+from an over-tight one. A guard that was too strict would disable the optimisation
+altogether — correct but silently slower, and invisible to the two DISC rows, which pass
+either way. So the PIN runs a loop that genuinely does use r0 and r1 and asserts it **still
+folds**: `0x9100 + 32 = 0x9120` folded versus `0x9104` unfolded. It reads `0x9120`.
+
+Gate 14 goes 158 → 161 rows.
+
+**Still open in this round:** the flag divergences that were originally filed —
+`netbsd_cacheclean` and `netbsd_cacheclean2` never write flags though the loops they replace
+contain a `subs` (the final one reaching zero owes Z=1 N=0 C=1 V=0), `netbsd_idle` skips both
+TEQs without updating N/Z and never writes its guest destination register, and
+`netbsd_memcpy` bypasses its LDMs without publishing the final r3/r4/ip/lr. All four are now
+measurable with this driver; each needs its own NetBSD sequence reconstructed first.
+
 ## Ninety-sixth round (#344) — the negative multiply-adds were never decoded, and halted the emulator
 
 Opcode 63's five-bit switch had cases for `FMSUB` (28) and `FMADD` (29) and **none** for

@@ -340,6 +340,77 @@ def run_xchg(same_reg):
     return sw(w[0]), sw(w[1])
 
 
+#  #345: NetBSD cache-clean fold. The matcher (cpu_arm_instr.c:2796) tested only
+#  the SHAPE of the loop -- a post-indexed word load, `subs rX,rX,#32`, a branch
+#  back to the load -- and never WHICH registers it used, while
+#  X(netbsd_cacheclean) hardcodes `r[0] += r[1]; r[1] = 0`. A loop built on any
+#  other pair had r0 and r1 clobbered and its own registers left stale.
+LDR_R4_R5_P4 = 0xE4954004       # ldr  r4,[r5],#4   (post-indexed, W=0 U=1)
+LDR_R4_R0_P4 = 0xE4904004       # ldr  r4,[r0],#4
+SUBS_R6_32   = 0xE2566020       # subs r6,r6,#32
+SUBS_R1_32   = 0xE2511020       # subs r1,r1,#32
+BNE_BACK4    = 0x1AFFFFFC       # bne  -4 words, back to the load
+MCR_CLEAN    = 0xEE070F9A       # the iword that arms the combination check
+MOV_R6_32    = 0xE3A06020       # mov  r6,#32  -> one subs reaches zero
+MOV_R1_32    = 0xE3A01020       # mov  r1,#32
+MOV_R0_11    = 0xE3A00011       # mov  r0,#0x11 -- sentinel the loop never uses
+MOV_R1_22    = 0xE3A01022       # mov  r1,#0x22
+MOV_R5_9100  = 0xE3A05C91       # mov  r5,#0x9100  (safe RAM as the load base)
+MOV_R0_9100  = 0xE3A00C91       # mov  r0,#0x9100
+STR_R0_R7    = 0xE5870000
+STR_R1_R7_4  = 0xE5871004
+BEQ_BACK13   = 0x0AFFFFF3       # beq -13 words, back to the outer loop top
+
+
+def run_cacheclean(use_r01=False):
+    """Two-pass witness for the cache-clean fold's missing register check.
+
+    The inner `bne` never has to be TAKEN -- the matcher inspects the branch's
+    target at translation time, not its outcome -- so the counter is seeded to
+    32 and one `subs` reaches zero. What must happen twice is entry to the whole
+    block, because the combiner rewrites ic[-3] while the MCR is translated, so
+    the folded handler only exists from the second pass (see run_combined).
+
+    use_r01=False builds the loop on r5/r6 and re-seeds r0/r1 to sentinels the
+    loop never touches: a fold that fires answers 0x11 + 0x22 = 0x33 and r1 = 0,
+    where the architectural answer leaves them alone.
+
+    use_r01=True is the CONTROL -- a loop that really does use r0 and r1, which
+    must STILL fold. Folded it answers 0x9100 + 32 = 0x9120; unfolded the
+    post-index leaves 0x9104. It therefore discriminates fold from no-fold, and
+    is what stops an over-tight guard from disabling the optimisation unnoticed.
+    """
+    seed_cnt = MOV_R1_32 if use_r01 else MOV_R6_32
+    seed_a = MOV_R0_9100 if use_r01 else MOV_R0_11
+    seed_b = NOP if use_r01 else MOV_R1_22
+    seed_c = NOP if use_r01 else MOV_R5_9100
+    ldr = LDR_R4_R0_P4 if use_r01 else LDR_R4_R5_P4
+    subs = SUBS_R1_32 if use_r01 else SUBS_R6_32
+    w, _ = session([
+        "r9=0x1", "r7=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE,      MOV_R8_1),
+        "put w 0x%x, 0x%08x" % (CODE + 4,  seed_cnt),      # outer loop top
+        "put w 0x%x, 0x%08x" % (CODE + 8,  seed_a),
+        "put w 0x%x, 0x%08x" % (CODE + 12, seed_b),
+        "put w 0x%x, 0x%08x" % (CODE + 16, seed_c),
+        "put w 0x%x, 0x%08x" % (CODE + 20, ldr),           # ic[-3]
+        "put w 0x%x, 0x%08x" % (CODE + 24, subs),          # ic[-2]
+        "put w 0x%x, 0x%08x" % (CODE + 28, BNE_BACK4),     # ic[-1]
+        "put w 0x%x, 0x%08x" % (CODE + 32, MCR_CLEAN),     # ic[0]
+        "put w 0x%x, 0x%08x" % (CODE + 36, STR_R0_R7),
+        "put w 0x%x, 0x%08x" % (CODE + 40, STR_R1_R7_4),
+        "put w 0x%x, 0x%08x" % (CODE + 44, SUBS_R8_R9),
+        "put w 0x%x, 0x%08x" % (CODE + 48, BEQ_BACK13),
+        "put w 0x%x, 0x%08x" % (CODE + 52, NOP),
+        "breakpoint add 0x%x" % (CODE + 52),
+        "pc=0x%x" % CODE, "continue"], 2)
+    if w is None or w[0] == "deadbeef":
+        return None
+    return sw(w[0]), sw(w[1])
+
+
 def run_und_condfailed(iw):
     """A conditional UDF whose condition is FALSE must do nothing at all.
 
@@ -1010,5 +1081,15 @@ XCHG_ROWS.append(("A xchg swap r0", _s[0] if _s else None, 0x000000a5, "PIN"))
 XCHG_ROWS.append(("A xchg swap r1", _s[1] if _s else None, 0x0000005a, "PIN"))
 for nm, got, want, cls in XCHG_ROWS:
     row(nm, cls, "%08x" % got if got is not None else "dead", "%08x" % want)
+
+#  #345: the cache-clean fold clobbered r0/r1 for a loop that used neither.
+_cc = run_cacheclean()
+_cg = run_cacheclean(use_r01=True)
+for _nm, _got, _want, _cls in (
+        ("A cacheclean r0 intact", _cc[0] if _cc else None, 0x11, "DISC"),
+        ("A cacheclean r1 intact", _cc[1] if _cc else None, 0x22, "DISC"),
+        ("A cacheclean still folds", _cg[0] if _cg else None, 0x9120, "PIN")):
+    row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
+        "%08x" % _want)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

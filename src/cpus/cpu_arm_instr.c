@@ -2794,8 +2794,22 @@ void COMBINE(netbsd_cacheclean)(struct cpu *cpu,
 	    & (ARM_IC_ENTRIES_PER_PAGE-1);
 
 	if (n_back >= 3) {
+		/*  #345: the register checks are REQUIRED, and their absence was
+		    guest-visible. This matcher tested the SHAPE of the loop -- a
+		    post-indexed word load, `subs rX,rX,#32`, a branch back -- and
+		    never which registers it used, while X(netbsd_cacheclean)
+		    hardcodes `r[0] += r[1]; r[1] = 0`. A loop built on any other
+		    pair therefore had r0 and r1 clobbered and its own registers
+		    left stale. Measured with a two-pass free-running probe on a
+		    loop using r5 and r6: r0 came back 0x33 for a seeded 0x11 (it
+		    had been given r1's 0x22) and r1 came back 0. Same species as
+		    #342's missing `a != b`, and worse in consequence -- that one
+		    needed a degenerate encoding, this one fires on ordinary code
+		    that merely happens to match the shape.  */
 		if (ic[-3].f==instr(load_w0_word_u1_p0_imm) &&
+		    ic[-3].arg[0] == (size_t)(&cpu->cd.arm.r[0]) &&
 		    ic[-2].f == instr(subs) &&
+		    ic[-2].arg[0] == (size_t)(&cpu->cd.arm.r[1]) &&
 		    ic[-2].arg[0]==ic[-2].arg[2] && ic[-2].arg[1] == 0x20 &&
 		    ic[-1].f == instr(b_samepage__ne) &&
 		    ic[-1].arg[0] == (size_t)&ic[-3]) {
