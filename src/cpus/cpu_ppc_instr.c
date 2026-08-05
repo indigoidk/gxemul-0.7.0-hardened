@@ -1801,6 +1801,126 @@ X(fmul)
 	(*(uint64_t *)ic->arg[0]) =
 	    ieee_store_float_value(result, IEEE_FMT_D);
 }
+/*
+ *  fnmadd, fnmsub:  Floating-point Negative Multiply-Add / Subtract   (#344)
+ *
+ *  arg[0] = ptr to frt
+ *  arg[1] = ptr to fra
+ *  arg[2] = copy of the instruction word
+ *
+ *  Both encodings reached `goto bad` before this round. Opcode 63's five-bit
+ *  switch had cases for FMSUB (28) and FMADD (29) and none for FNMSUB (30) or
+ *  FNMADD (31), so they fell through to a ten-bit switch whose only arm sets
+ *  cpu->running = 0 -- two legal encodings, either of which let a guest stop
+ *  the emulator. Gate 15 pinned them as PEND with the probe's own note that
+ *  they had "no technical blocker at all and were left out for round size
+ *  alone", which is the record this round is closing.
+ *
+ *  THE NEGATION APPLIES TO THE ALREADY-ROUNDED RESULT. That is what the ISA
+ *  specifies and it is NOT the same as negating an operand: round-then-negate
+ *  and negate-then-round can differ under the directed modes. The FMA still
+ *  ignores FPSCR[RN] here -- recorded separately -- so the distinction is not
+ *  yet observable, but writing it the other way would have to be undone the
+ *  moment it becomes so.
+ *
+ *  FPCC describes the FINAL result and is therefore computed after the
+ *  negation. The invalid-operation causes are #343's and do not depend on the
+ *  sign of the result, so they are classified from the operands exactly as
+ *  fmadd/fmsub classify them.
+ *
+ *  Book I's treatment of a NaN result's sign under these two instructions is
+ *  not modelled: this tree's operand conversion collapses every guest NaN to
+ *  the host NaN and loses sign and payload before arithmetic ever sees it, a
+ *  gap recorded against the whole FP path rather than these instructions.
+ */
+X(fnmadd)
+{
+	uint32_t iw = ic->arg[2];
+	int b = (iw >> 11) & 31, c = (iw >> 6) & 31;
+	struct ieee_float_value fra;
+	struct ieee_float_value frb;
+	struct ieee_float_value frc;
+	double result = 0.0;
+	int cc;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
+	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
+	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
+
+	{
+		uint32_t cause = ppc_invalid_cause_fma(
+		    *(uint64_t *)ic->arg[1], cpu->cd.ppc.fpr[c],
+		    cpu->cd.ppc.fpr[b], 0);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
+
+	result = -fma(fra.f, frc.f, frb.f);
+
+	if (isnan(result))
+		cc = 1;
+	else {
+		if (result < 0.0)
+			cc = 8;
+		else if (result > 0.0)
+			cc = 4;
+		else
+			cc = 2;
+	}
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
+	cpu->cd.ppc.fpscr |= (cc << PPC_FPSCR_FPCC_SHIFT);
+
+	(*(uint64_t *)ic->arg[0]) =
+	    ieee_store_float_value(result, IEEE_FMT_D);
+}
+X(fnmsub)
+{
+	uint32_t iw = ic->arg[2];
+	int b = (iw >> 11) & 31, c = (iw >> 6) & 31;
+	struct ieee_float_value fra;
+	struct ieee_float_value frb;
+	struct ieee_float_value frc;
+	double result = 0.0;
+	int cc;
+
+	CHECK_FOR_FPU_EXCEPTION;
+
+	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
+	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
+	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
+
+	{
+		uint32_t cause = ppc_invalid_cause_fma(
+		    *(uint64_t *)ic->arg[1], cpu->cd.ppc.fpr[c],
+		    cpu->cd.ppc.fpr[b], 1);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
+
+	result = -fma(fra.f, frc.f, -frb.f);
+
+	if (isnan(result))
+		cc = 1;
+	else {
+		if (result < 0.0)
+			cc = 8;
+		else if (result > 0.0)
+			cc = 4;
+		else
+			cc = 2;
+	}
+	cpu->cd.ppc.fpscr &= ~PPC_FPSCR_FPCC;
+	cpu->cd.ppc.fpscr |= (cc << PPC_FPSCR_FPCC_SHIFT);
+
+	(*(uint64_t *)ic->arg[0]) =
+	    ieee_store_float_value(result, IEEE_FMT_D);
+}
+FDOT(fnmadd)
+FDOT(fnmsub)
+
+
 X(fmuls)
 {
 	/*  TODO  */
@@ -5069,9 +5189,13 @@ X(to_be_translated)
 			break;
 		case PPC_63_FMSUB:
 		case PPC_63_FMADD:
+		case PPC_63_FNMSUB:	/*  #344  */
+		case PPC_63_FNMADD:	/*  #344  */
 			switch (xo & 31) {
 			case PPC_63_FMSUB: ic->f = instr(fmsub); rc_f = instr(fmsub_dot); break;
 			case PPC_63_FMADD: ic->f = instr(fmadd); rc_f = instr(fmadd_dot); break;
+			case PPC_63_FNMSUB: ic->f = instr(fnmsub); rc_f = instr(fnmsub_dot); break;
+			case PPC_63_FNMADD: ic->f = instr(fnmadd); rc_f = instr(fnmadd_dot); break;
 			}
 			ic->arg[0] = (size_t)(&cpu->cd.ppc.fpr[rt]);
 			ic->arg[1] = (size_t)(&cpu->cd.ppc.fpr[ra]);

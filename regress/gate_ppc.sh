@@ -129,7 +129,7 @@ check "all four modes read back by guest" "${modereads:-0}"       "4"
 
 res=$(grep -o "PPC_CONV_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 136
+check "rows run"     "$want" 138
 check "rows correct" "$got"  "$want"
 
 # The table must keep enough of each class to be worth running: a gate whose rows are
@@ -141,11 +141,11 @@ pins=$(grep -c " PIN " "$LOG")
 # against real counts of 50/36, which means a whole class could have lost rows without
 # the floor noticing -- the same "a check that cannot fail" species this gate's header
 # warns about twice. The two numbers must also sum to the asserted `rows run` above
-# (92 + 44 = 136); if they stop summing, a row lost its class rather than the table
+# (94 + 44 = 138); if they stop summing, a row lost its class rather than the table
 # losing a row.
 # #335 added two DISC (fmadd/fmsub fusion) and one PIN (the 2by3+1 control that
 # proves the hand-assembled A-form register fields land where intended).
-check_min "discriminating rows present" "$disc" 92
+check_min "discriminating rows present" "$disc" 94
 check_min "pinned rows present"         "$pins" 44
 
 # The one row that records a divergence this round deliberately does NOT fix.
@@ -189,6 +189,7 @@ for v in "frsp qNaN" "frsp sNaN" "frsp 1+3ulp/2 RZ" "frsp band RP" "frsp band- R
          "VXISI fmsub Inf-Inf" "clean fmsub Inf--Inf" "clean fmadd 2by3+1" \
          "VXIMZ fmadd 0-by-Inf" "VXSNAN fmadd frC" "VXIMZ fmadd qNaN addend" \
          "VXIMZ not VXISI" "VXISI fmadd neg product" \
+         "fnmadd 2by3+1 = -7" "fnmsub 2by3-1 = -5" \
          "fadd RZ mode ignored" "fadd RN control" \
          "lfsux value" "lfsux updates r3" "lfdux value" "lfdux updates r3" \
          "stfsux value" "stfsux updates r3" "stfdux value" \

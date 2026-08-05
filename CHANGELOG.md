@@ -4192,6 +4192,42 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-sixth round (#344) — the negative multiply-adds were never decoded, and halted the emulator
+
+Opcode 63's five-bit switch had cases for `FMSUB` (28) and `FMADD` (29) and **none** for
+`FNMSUB` (30) or `FNMADD` (31), so both fell through to a ten-bit switch whose only arm is
+`goto bad` — which sets `cpu->running = 0`. Two legal encodings, either of which let a guest
+stop the whole emulator. The same halt class as #264/#309/#310/#326.
+
+`PPC_63_FNMADD` and `PPC_63_FNMSUB` were not even defined; `PPC_59_FMSUBS` still isn't.
+
+Gate 15 was already the measurement: both were pinned as **PEND**, with the probe's own note
+that `fcmpo`/`fnmadd`/`fnmsub`/`fmadds`/`fmsubs` have *"no technical blocker at all and were
+left out for round size alone"* — a record this round closes rather than a blocker it
+disproves.
+
+- **#344 (`cpus/cpu_ppc_instr.c`, `include/opcodes_ppc.h`)** — both encodings defined,
+  decoded, and implemented, with their `Rc=1` forms via `FDOT`.
+
+**The negation applies to the already-rounded result.** That is what the ISA specifies and it
+is *not* the same as negating an operand: round-then-negate and negate-then-round can differ
+under the directed modes. The FMA still ignores `FPSCR[RN]` here — recorded separately — so
+the distinction is not yet observable, but writing it the other way would have to be undone
+the moment it becomes so. FPCC describes the final result and is computed after the negation;
+the invalid-operation causes are #343's and do not depend on the result's sign.
+
+Gate 15 moves two rows PEND → FIXED (12/12 becomes 14 fixed / 10 pending). But "alive" only
+proves the emulator survived — **a nop would pass that too** — so gate 13 gains two *value*
+rows: `-(2×3+1) = -7` and `-(2×3−1) = -5`, which no nop and no un-negated implementation can
+satisfy. 136 → 138 rows.
+
+**Not done here:** `fmadds`/`fmsubs` remain undecoded — the single-precision forms need the
+narrowing question that `fmuls`/`fadds` already have open against them, so aliasing them to
+the double handlers would bake in a known divergence rather than close one. Book I's treatment
+of a NaN result's sign under these two instructions is also not modelled, because this tree
+collapses every guest NaN to the host NaN before arithmetic sees it — a gap recorded against
+the whole FP path.
+
 ## Ninety-fifth round (#343) — the fused multiply-adds raised none of their exception causes
 
 `#330` gave PowerPC arithmetic its invalid-operation causes, and `fmul` has called that

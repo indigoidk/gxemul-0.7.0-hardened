@@ -262,8 +262,10 @@ ROWS = [
     #      falls through to a ten-bit switch whose only arm is `goto bad`.
     ("fmadds",        enc(59, rt=0, ra=1, rb=2, frc=3, xo=29),        "PEND"),
     ("fmsubs",        enc(59, rt=0, ra=1, rb=2, frc=3, xo=28),        "PEND"),
-    ("fnmadd",        enc(63, rt=0, ra=1, rb=2, frc=3, xo=31),        "PEND"),
-    ("fnmsub",        enc(63, rt=0, ra=1, rb=2, frc=3, xo=30),        "PEND"),
+    #  #344: both were PEND with the probe's own note that they had no
+    #  technical blocker. Two legal encodings that stopped the emulator.
+    ("fnmadd",        enc(63, rt=0, ra=1, rb=2, frc=3, xo=31),        "FIXED"),
+    ("fnmsub",        enc(63, rt=0, ra=1, rb=2, frc=3, xo=30),        "FIXED"),
     ("fsqrt",         enc(63, rt=0, rb=1, xo=22),                     "PEND"),
     ("fsqrts",        enc(59, rt=0, rb=1, xo=22),                     "PEND"),
     ("fsel",          enc(63, rt=0, ra=1, rb=2, frc=3, xo=23),        "FIXED"),

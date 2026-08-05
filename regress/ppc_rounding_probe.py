@@ -393,6 +393,10 @@ def run_cause(iw, f1, f2):
 #  frD=f0, frA=f1, frB=f2, frC=f3.
 FMADD_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (3 << 6) \
     | (29 << 1)
+FNMADD_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) \
+    | (3 << 6) | (31 << 1)
+FNMSUB_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) \
+    | (3 << 6) | (30 << 1)
 FMSUB_F0_F1_F3_F2 = (63 << 26) | (0 << 21) | (1 << 16) | (2 << 11) | (3 << 6) \
     | (28 << 1)
 
@@ -442,6 +446,14 @@ FMA_ROWS = [
     #  2.0 * 3.0 + 1.0 == 7.0 -- proves frA/frB/frC land where intended.
     ("fmadd 2by3+1 control", FMADD_F0_F1_F3_F2, 0x4000000000000000,
      0x4008000000000000, 0x3ff0000000000000, "401c000000000000", "PIN"),
+    #  #344: the negative forms decoded at all for the first time. Gate
+    #  15 reports them "alive", which only proves the emulator survived --
+    #  a nop would pass that too -- so the VALUE is pinned here:
+    #  -(2*3+1) = -7 and -(2*3-1) = -5.
+    ("fnmadd 2by3+1 = -7", FNMADD_F0_F1_F3_F2, 0x4000000000000000,
+     0x4008000000000000, 0x3ff0000000000000, "c01c000000000000", "DISC"),
+    ("fnmsub 2by3-1 = -5", FNMSUB_F0_F1_F3_F2, 0x4000000000000000,
+     0x4008000000000000, 0x3ff0000000000000, "c014000000000000", "DISC"),
 ]
 
 

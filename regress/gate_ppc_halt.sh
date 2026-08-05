@@ -80,8 +80,8 @@ ctrls=$(grep -c " CTRL " "$LOG")
 fixed=$(grep -c " FIXED " "$LOG")
 pend=$(grep -c " PEND " "$LOG")
 check "control rows present" "$ctrls" 4
-check "rows fixed by #326"   "$fixed" 12
-check "rows still pending"   "$pend"  12
+check "rows fixed by #326+#344" "$fixed" 14
+check "rows still pending"   "$pend"  10
 
 # Named rows, so one site reverting cannot hide behind a total. The pattern demands TWO
 # spaces after the name because the probe pads to a fixed column -- a name that is a
