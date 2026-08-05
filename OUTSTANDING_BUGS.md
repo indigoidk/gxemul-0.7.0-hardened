@@ -1549,3 +1549,28 @@ corruption without a clear host-OOB path.
 > final r3/r4/ip/lr. Those four are harder than `xchg` was: each needs the exact NetBSD
 > instruction sequence its combiner matches, reconstructed from the match conditions, before
 > a row can be written at all.
+
+> ## 2026-08-05 — netbsd_cacheclean2 is worse than its sibling, and #345 did not touch it
+> #345 fixed variant 1's missing register check. Variant 2 has the same hole **and a second,
+> larger one**. Its matcher (`cpu_arm_instr.c:2833-2839`) pins the two MCRs exactly by their
+> instruction words, then accepts `add rX,rX,#32` and `subs rY,rY,#32` **without checking
+> either register** — the same shape-not-registers defect #345 measured. But
+> `X(netbsd_cacheclean2)` (`:2085-2089`) only advances `n_translated_instrs` and sets
+> `next_ic = &ic[5]`. **It updates no registers whatsoever.**
+>
+> So it skips the two MCRs, the `add`, the `subs` and the branch, and leaves every register
+> exactly as it found them. The loop it replaces would end with the add's register advanced
+> by 32 per iteration and the subs's register at zero. This is wrong *even for the NetBSD
+> sequence it was written for* — unlike variant 1, which at least performs
+> `r[0] += r[1]; r[1] = 0`. It also reads `r[1]` for its instruction count without ever
+> having checked that `r1` is the loop's counter.
+>
+> The fix is therefore two-part, and larger than #345's one-line guard: pin the registers as
+> #345 did, **and** perform the update the fold is standing in for
+> (`r[0] += r[1]; r[1] = 0`, the same closed form variant 1 uses). A witness needs the two
+> exact MCRs plus add/subs/branch, run twice, with both registers seeded and published —
+> the `run_cacheclean` driver in `arm_flags_probe.py` is the right starting shape.
+>
+> **The flag divergence originally filed against both variants still stands and is separate**:
+> neither writes flags though the loops they replace end on a `subs` reaching zero, which
+> owes Z=1 N=0 C=1 V=0.
