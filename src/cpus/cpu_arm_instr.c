@@ -2892,7 +2892,17 @@ void COMBINE(xchg)(struct cpu *cpu,
 
 	a = ic[-2].arg[0]; b = ic[-1].arg[0];
 
-	if (ic[-2].f == instr(eor_regshort) &&
+	/*  #342: a != b is REQUIRED, and its absence was guest-visible. The XOR
+	    swap is only a swap for two DISTINCT registers; with a == b the same
+	    three encodings are `eor rX,rX,rX` three times over, and each of those
+	    ZEROES rX. X(xchg) exchanges rX with itself, so the register comes out
+	    unchanged instead of cleared. Measured with a two-pass free-running
+	    probe: r0 re-seeded to 0x5a at the top of the loop read back 0x5a where
+	    the architecture owes 0. That byte is unambiguous -- three standalone
+	    EORs cannot leave a nonzero value, so only the folded handler can
+	    produce it, which makes the row its own proof that the fold happened.  */
+	if (a != b &&
+	    ic[-2].f == instr(eor_regshort) &&
 	    ic[-1].f == instr(eor_regshort) &&
 	    ic[-2].arg[0] == a && ic[-2].arg[1] == b && ic[-2].arg[2] == b &&
 	    ic[-1].arg[0] == b && ic[-1].arg[1] == a && ic[-1].arg[2] == a &&

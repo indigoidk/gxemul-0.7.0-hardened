@@ -1530,3 +1530,21 @@ corruption without a clear host-OOB path.
 > bypasses its LDMs without publishing the final r3/r4/ip/lr. On the PowerPC side:
 > `fmadd`/`fmsub` raise none of their exception causes, `fnmadd`/`fnmsub` are undecoded and
 > halt, and `NI` is defined but never consumed.
+
+
+> ## 2026-08-05 — #342 resolves the `xchg` entry above
+> The XOR-swap fold had no `a != b` guard. With one register the three encodings are
+> `eor rX,rX,rX` three times over, each of which ZEROES rX, while `X(xchg)` exchanges rX
+> with itself and leaves it unchanged. Measured on the committed build with #340's two-pass
+> free-running driver: **0x5a where the architecture owes 0**. That byte is the row's own
+> proof that the fold occurred — three standalone EORs cannot leave a nonzero value — which
+> matters because this project has twice shipped combiner rows that were silently measuring
+> the standalone path instead.
+>
+> **The other combined-handler entries above still stand**, and all four remain measurable
+> with the same driver: `netbsd_cacheclean` and `netbsd_cacheclean2` skip their `subs` flag
+> updates entirely, `netbsd_idle` skips both TEQs without updating N/Z and never writes its
+> guest destination register, and `netbsd_memcpy` bypasses its LDMs without publishing the
+> final r3/r4/ip/lr. Those four are harder than `xchg` was: each needs the exact NetBSD
+> instruction sequence its combiner matches, reconstructed from the match conditions, before
+> a row can be written at all.

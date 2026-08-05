@@ -89,15 +89,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 154
+check "rows run"     "$want" 158
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 38
-check_min "pinned rows present"         "$pins" 50
+check_min "discriminating rows present" "$disc" 39
+check_min "pinned rows present"         "$pins" 53
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -115,6 +115,23 @@ check_min "pinned rows present"         "$pins" 50
 for v in "A teq rot C combined" "A tst rot C combined" \
          "A teq rot C standalone" "A tst rot C standalone" \
          "A teq flat C preserved"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  row: $v" "$n" 1
+done
+
+# #342: the XOR-swap fold. The DISC row is its own proof that the fold
+# happened -- three standalone `eor rX,rX,rX` cannot leave a nonzero value, so
+# only X(xchg) could have produced the 0x5a the committed build returned.
+#
+# The swap rows are PINs in the shape the matcher actually accepts, Rm == Rd
+# (`eor X,Y,X`). The first version of them used Rn == Rd and so never matched
+# the combiner at all -- it was measuring three standalone EORs while claiming
+# to exercise the fold, which a review seat caught. They now run the FOLDED
+# handler on pass 2 and pin that its swap is correct, so a broken X(xchg) fails
+# here; they still cannot distinguish folded-and-correct from
+# not-folded-and-correct, which is why they are pins and not discriminators.
+for v in "A xchg same-reg zeroes" "A xchg same-reg r1 pin" \
+         "A xchg swap r0" "A xchg swap r1"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

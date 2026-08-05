@@ -4192,6 +4192,61 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-third round (#342) — the XOR-swap fold had no "two distinct registers" guard
+
+The combiner recognises the classic XOR swap — `eor a,a,b` / `eor b,b,a` / `eor a,a,b` —
+and replaces it with `X(xchg)`, which exchanges the two registers directly. That is only a
+swap when the two registers are **distinct**. With `a == b` the very same three encodings are
+`eor rX,rX,rX` three times over, and each of those **zeroes** `rX`; `X(xchg)` exchanges `rX`
+with itself and leaves it untouched. Nothing in the match excluded it.
+
+Measured on the committed build with #340's two-pass free-running driver — the only
+instrument that reaches a folded handler, since combining is disabled under `single_step`
+and the combiner rewrites `ic[-2].f` while `ic[0]` is being translated:
+
+```
+A xchg same-reg zeroes   0000005a   owed 00000000   DISC
+A xchg swap control      0000005a        0000005a   PIN  ok
+```
+
+`r0` is re-seeded to `0x5a` at the **top of the loop**, and that detail is what makes the
+round measurable at all: without it pass 1 would zero `r0` and pass 2's "unchanged" would
+also read zero, so the row could not fail. **The byte is its own proof.** Three standalone
+EORs cannot leave a nonzero value, so only the folded handler can produce `0x5a` — the row
+demonstrates both the defect and the fact that the fold occurred, which matters here because
+this project has twice shipped combiner rows that were silently measuring the standalone
+path.
+
+- **#342 (`cpus/cpu_arm_instr.c`)** — `a != b` added to the match. One term; the whole
+  defect.
+
+**The after-panel found the control row wrong, and it was wrong twice over.** `eor_regshort`
+is `arg[0] = Rn`, `arg[1] = Rm`, `arg[2] = Rd`, so the matcher's shape is `eor X,Y,X` —
+**`Rm == Rd`**. My first control emitted `eor r0,r0,r1`, which is `Rn == Rd`, and therefore
+never matched the combiner at all: it was measuring three standalone EORs while claiming to
+exercise the fold. And even with the encodings corrected it still could not have pinned
+anything, because `r1` was seeded once *outside* the loop — after pass 1 both registers held
+`0x5a`, so a correct swap and a no-op give the same answer. Both registers are now re-seeded
+to **distinct** values at the loop top and both are published.
+
+That correction matters beyond this round: it is the *third* time an instrument here has
+been caught measuring the standalone path while appearing to measure the folded one. The
+DISC row was never affected — with every operand collapsed to one register it matches under
+either reading of the convention — which is why the measurement stood and only the control
+had to be rebuilt.
+
+The swap rows are PINs, not discriminators. They now genuinely run `X(xchg)` on pass 2 and
+pin that its swap is correct, so a broken handler fails them; they still cannot separate
+folded-and-correct from not-folded-and-correct, which is exactly what keeps them out of the
+DISC class.
+
+One claim narrowed. "The folded handler only exists from the second pass" is true *of this
+probe*, but not universally: translation read-ahead can translate the third instruction and
+rewrite the first before the first executes. It holds here because the breakpoint disables
+read-ahead, and `single_step` separately disables combination creation.
+
+Gate 14 goes 154 → 158 rows.
+
 ## Eighty-third round (#340) — folding a compare into a branch changed the flags, and it took three attempts to see it
 
 For a data-processing immediate with the S bit set, ARM sets C from the shifter carry-out.

@@ -274,6 +274,72 @@ def run_combined(iw, rn, cin):
     return sw(w[0])
 
 
+#  eor Rd,Rn,Rm == 0xE0200000 | (Rn << 16) | (Rd << 12) | Rm.
+#
+#  The MATCHER's shape is `eor X,Y,X` -- Rm == Rd -- because eor_regshort's
+#  arg[0] is Rn, arg[1] is Rm and arg[2] is Rd (cpu_arm_instr_dpi.c:72/110/252).
+#  The first version of this control emitted `eor r0,r0,r1`, which is Rn == Rd,
+#  so it never matched the combiner at all and was measuring three standalone
+#  EORs while claiming to exercise the fold. A review seat caught it. The
+#  same-register row is unaffected -- every operand collapses to one register,
+#  so it matches under either reading -- which is why the DISC measurement below
+#  stands and only the control had to be rebuilt.
+EOR_R0_R0_R0 = 0xE0200000       # eor r0,r0,r0  -- zeroes r0, three times over
+EOR_R0_R1_R0 = 0xE0210000       # eor r0,r1,r0  -- r0 ^= r1
+EOR_R1_R0_R1 = 0xE0201001       # eor r1,r0,r1  -- r1 ^= r0
+MOV_R1_A5    = 0xE3A010A5       # mov r1,#0xa5
+STR_R1_R5    = 0xE5851000       # str r1,[r5]
+BEQ_BACK10   = 0x0AFFFFF6       # beq -10 words, back to the loop top
+
+
+def run_xchg(same_reg):
+    """Two-pass free-running witness for the XOR-swap fold (see run_combined
+    for why both properties are needed).
+
+    The combiner folds `eor a,a,b / eor b,b,a / eor a,a,b` into X(xchg), which
+    swaps the two registers -- but its match has NO a != b guard, so three
+    `eor rX,rX,rX` also match. Standalone, each of those ZEROES rX; the folded
+    swap exchanges rX with itself and leaves it alone.
+
+    r0 is re-seeded to 0x5a at the TOP of the loop, which is what makes the two
+    passes distinguishable: without it pass 1 would zero r0 and pass 2's
+    "unchanged" would also read zero, and the row could not fail.
+
+    A result of 0x5a is unambiguous -- three standalone EORs cannot leave a
+    nonzero value, so only the folded handler can produce it, and it is both
+    the defect and the proof that the fold occurred. A result of 0 is the
+    correct answer but does NOT by itself prove the fold happened, so it is
+    never read as evidence of a fix on its own."""
+    seq = ([EOR_R0_R0_R0] * 3 if same_reg
+           else [EOR_R0_R1_R0, EOR_R1_R0_R1, EOR_R0_R1_R0])
+    w, _ = session([
+        "r0=0x0", "r1=0x0", "r9=0x1",
+        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE,      MOV_R8_1),
+        #  BOTH registers are re-seeded at the loop top, and to DISTINCT
+        #  values. Seeding r1 once outside the loop was the second half of the
+        #  same review finding: pass 1 would leave r1 == r0, so on pass 2 a
+        #  correct swap and a no-op would both answer 0x5a and the control
+        #  could not fail.
+        "put w 0x%x, 0x%08x" % (CODE + 4,  MOV_R0_5A),   # loop top
+        "put w 0x%x, 0x%08x" % (CODE + 8,  MOV_R1_A5),
+        "put w 0x%x, 0x%08x" % (CODE + 12, seq[0]),
+        "put w 0x%x, 0x%08x" % (CODE + 16, seq[1]),
+        "put w 0x%x, 0x%08x" % (CODE + 20, seq[2]),
+        "put w 0x%x, 0x%08x" % (CODE + 24, STR_R0_R4),
+        "put w 0x%x, 0x%08x" % (CODE + 28, STR_R1_R5),
+        "put w 0x%x, 0x%08x" % (CODE + 32, SUBS_R8_R9),
+        "put w 0x%x, 0x%08x" % (CODE + 36, BEQ_BACK10),
+        "put w 0x%x, 0x%08x" % (CODE + 40, NOP),
+        "breakpoint add 0x%x" % (CODE + 40),
+        "pc=0x%x" % CODE, "continue"], 2)
+    if w is None or w[0] == "deadbeef":
+        return None
+    return sw(w[0]), sw(w[1])
+
+
 def run_und_condfailed(iw):
     """A conditional UDF whose condition is FALSE must do nothing at all.
 
@@ -921,5 +987,28 @@ COMBINE_ROWS = [
 for nm, cpsr, want_c, cls in COMBINE_ROWS:
     row(nm, cls, "C%d" % cflag(cpsr) if cpsr is not None else "dead",
         "C%d" % want_c)
+
+#  #342: the XOR-swap fold had no a != b guard.
+#
+#  DISC: three  each ZERO r0; X(xchg) exchanges r0 with itself and
+#  leaves it alone. 0x5a is the row own proof that the fold happened, since no
+#  standalone EOR triplet can leave a nonzero value.
+#
+#  PIN: the distinct-register swap, in the shape the matcher actually accepts
+#  (Rm == Rd). It exercises the FOLDED handler on pass 2 and pins that the swap
+#  it performs is correct -- so a broken X(xchg) fails here -- but it cannot by
+#  itself distinguish folded-and-correct from not-folded-and-correct, which is
+#  exactly why it is a PIN and not a second discriminator.
+XCHG_ROWS = []
+_d = run_xchg(True)
+XCHG_ROWS.append(("A xchg same-reg zeroes", _d[0] if _d else None,
+                  0x00000000, "DISC"))
+XCHG_ROWS.append(("A xchg same-reg r1 pin", _d[1] if _d else None,
+                  0x000000a5, "PIN"))
+_s = run_xchg(False)
+XCHG_ROWS.append(("A xchg swap r0", _s[0] if _s else None, 0x000000a5, "PIN"))
+XCHG_ROWS.append(("A xchg swap r1", _s[1] if _s else None, 0x0000005a, "PIN"))
+for nm, got, want, cls in XCHG_ROWS:
+    row(nm, cls, "%08x" % got if got is not None else "dead", "%08x" % want)
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
