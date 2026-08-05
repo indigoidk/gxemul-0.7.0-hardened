@@ -1574,3 +1574,34 @@ corruption without a clear host-OOB path.
 > **The flag divergence originally filed against both variants still stands and is separate**:
 > neither writes flags though the loops they replace end on a `subs` reaching zero, which
 > owes Z=1 N=0 C=1 V=0.
+
+> ## 2026-08-05 — the shape-not-registers defect is a FAMILY, not two instances
+> After #345 and the cacheclean2 note above, swept every ARM combiner for the same
+> mismatch: does the matcher verify the registers its handler hardcodes? Counting register
+> references in each matcher against each handler:
+>
+> | combiner | matcher reg-checks | handler reg-uses | verdict |
+> |---|---:|---:|---|
+> | `netbsd_cacheclean` | (now 2) | 2 | **fixed as #345** |
+> | `netbsd_cacheclean2` | 0 | 1 read | **broken** — and updates nothing at all |
+> | `netbsd_memset` | 0 | 3 (`r[ARM_IP]`, `r[2]`, `r[3]`) | **broken** |
+> | `netbsd_memcpy` | 0 | 4 | **broken** |
+> | `netbsd_scanc` | 4 | 5 | guarded; the fifth wants checking |
+> | `netbsd_copyin` / `copyout` | 6 | 3 | guarded |
+> | `strlen` | 2 | 0 | fine |
+> | `netbsd_idle` | 0 | 0 | no hardcoded registers; its defect is the skipped TEQs |
+>
+> So **three more handlers write hardcoded registers their matchers never verified**, the
+> same defect #345 measured on `netbsd_cacheclean` — where a loop using r5/r6 had r0 handed
+> r1's value and r1 zeroed. `netbsd_memset` is the sharpest of the three: it hardcodes
+> `r12`, `r2` and `r3`, so a matching loop built on other registers has three clobbered at
+> once.
+>
+> This reframes the round. It is not "four handlers have flag bugs" but **one systematic
+> defect in how these combiners were written** — the matchers were built to recognise a
+> code SHAPE and the handlers to shortcut a specific NetBSD register allocation, and nobody
+> connected the two. Each needs the same one-line-per-register guard #345 added, and each
+> needs its own witness because the sequences differ.
+>
+> `netbsd_scanc`'s fifth register use is the one open question in the table: it may be a
+> read of an already-checked register, or a fourth unguarded write.
