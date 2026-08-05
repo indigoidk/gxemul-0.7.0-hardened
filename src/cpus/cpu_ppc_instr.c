@@ -125,6 +125,61 @@ static uint32_t ppc_invalid_cause(uint64_t a, uint64_t b, int op)
 
 	return 0;
 }
+/*
+ *  ppc_invalid_cause_fma():  #343
+ *
+ *  An FMA computes (frA x frC) +/- frB and can owe MORE THAN ONE invalid
+ *  cause at once, which is why it cannot reuse ppc_invalid_cause(): that one
+ *  returns a single cause and, correctly for a two-operand instruction,
+ *  abandons the operation-specific test the moment it sees any NaN.
+ *
+ *  The three conditions are independent:
+ *
+ *    VXNAN   any of frA, frC, frB is a signalling NaN.
+ *    VXIMZ   the MULTIPLY is Inf x 0, either order. This depends only on frA
+ *            and frC, so a NaN ADDEND does not suppress it -- Inf*0 with an
+ *            sNaN addend owes VXIMZ | VXNAN, the case cpu_ppc.c already
+ *            documents and the reason this function exists at all.
+ *    VXISI   the product is infinite AND the addend is an infinity that
+ *            cancels it. Inf x 0 is excluded first: there is no product for an
+ *            addend to disagree with.
+ *
+ *  fmsub subtracts frB, so its addend's effective sign is inverted -- the same
+ *  operands that make fmadd invalid make fmsub clean, and the gate rows are a
+ *  2x2 on exactly that.
+ */
+static uint32_t ppc_invalid_cause_fma(uint64_t a, uint64_t c, uint64_t b,
+	int subtract)
+{
+	uint32_t cause = 0;
+	int prodneg, addneg;
+
+	if (ppc_is_snan(a) || ppc_is_snan(c) || ppc_is_snan(b))
+		cause |= PPC_FPSCR_VXNAN;
+
+	/*  VXIMZ: the multiply operands alone decide it.  */
+	if (!ppc_is_nan(a) && !ppc_is_nan(c) &&
+	    ((ppc_is_inf(a) && ppc_is_zero(c)) ||
+	     (ppc_is_zero(a) && ppc_is_inf(c))))
+		return cause | PPC_FPSCR_VXIMZ;
+
+	/*  Beyond this point a NaN anywhere means there is no infinite product
+	    to cancel, and a NaN addend cannot cancel one.  */
+	if (ppc_is_nan(a) || ppc_is_nan(c) || ppc_is_nan(b))
+		return cause;
+
+	if ((ppc_is_inf(a) || ppc_is_inf(c)) && ppc_is_inf(b)) {
+		prodneg = (int) (((a ^ c) >> 63) & 1);
+		addneg = (int) ((b >> 63) & 1);
+		if (subtract)
+			addneg = !addneg;
+		if (prodneg != addneg)
+			cause |= PPC_FPSCR_VXISI;
+	}
+
+	return cause;
+}
+
 #endif	/*  PPC_FP_CLASSIFY_INCLUDED  */
 
 
@@ -1775,6 +1830,20 @@ X(fmadd)
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
+
+	/*  #343: an FMA can owe MORE THAN ONE invalid cause at once, which is
+	    why it cannot reuse ppc_invalid_cause(): that one returns a single
+	    cause and abandons its operation test at the first NaN, correct for
+	    a two-operand instruction and wrong here. VXIMZ depends only on the
+	    MULTIPLY operands, so a NaN ADDEND must not suppress it -- Inf*0
+	    with an sNaN addend owes VXIMZ | VXNAN.  */
+	{
+		uint32_t cause = ppc_invalid_cause_fma(
+		    *(uint64_t *)ic->arg[1], cpu->cd.ppc.fpr[c],
+		    cpu->cd.ppc.fpr[b], 0);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	/*  #335: fmadd is architecturally FUSED -- Book I defines it as rounding
 	    the product-sum EXACTLY ONCE -- and `fra.f * frc.f + frb.f` rounds
 	    twice unless the compiler happens to contract it into a hardware FMA.
@@ -1847,6 +1916,20 @@ X(fmsub)
 	ieee_interpret_float_value(*(uint64_t *)ic->arg[1], &fra, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[b], &frb, IEEE_FMT_D);
 	ieee_interpret_float_value(cpu->cd.ppc.fpr[c], &frc, IEEE_FMT_D);
+
+	/*  #343: an FMA can owe MORE THAN ONE invalid cause at once, which is
+	    why it cannot reuse ppc_invalid_cause(): that one returns a single
+	    cause and abandons its operation test at the first NaN, correct for
+	    a two-operand instruction and wrong here. VXIMZ depends only on the
+	    MULTIPLY operands, so a NaN ADDEND must not suppress it -- Inf*0
+	    with an sNaN addend owes VXIMZ | VXNAN.  */
+	{
+		uint32_t cause = ppc_invalid_cause_fma(
+		    *(uint64_t *)ic->arg[1], cpu->cd.ppc.fpr[c],
+		    cpu->cd.ppc.fpr[b], 1);
+		if (cause)
+			ppc_fpscr_raise(cpu, cause);
+	}
 	/*  #335: fmsub is fmadd with frB negated, and is fused for the same
 	    reason -- see the note there. Negating the ADDEND rather than the
 	    result is what keeps it a single fused operation.  */

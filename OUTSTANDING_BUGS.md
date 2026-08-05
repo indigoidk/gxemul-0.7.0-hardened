@@ -78,12 +78,13 @@
 >   `0000000000000000` where the ISA owes `b970000000000000`, with a `2.0*3.0+1.0 → 7.0`
 >   control passing on both sides to rule out a wrong register field. Now `fma()`.
 >
-> - **`fmadd`/`fmsub` raise none of their exception causes.** `fmul` calls the cause
->   machinery (`cpu_ppc_instr.c:1717`); the FMA handlers go straight from operand
->   conversion to computation and update only FPCC (`:1774`, `:1790`, `:1836`). An FMA
->   can owe two causes at once — `0·Inf` with an sNaN addend owes `VXIMZ|VXSNAN`, which
->   this tree already documents at `cpu_ppc.c:1929`. #335's rows read only the RESULT,
->   deliberately, so they cannot see this.
+> - ~~**`fmadd`/`fmsub` raise none of their exception causes**~~ — **RESOLVED as #343
+>   (round 95)**. Measured at `00001000` (FPCC alone, no cause bits) on every row before
+>   the fix. `ppc_invalid_cause_fma()` treats the three conditions as independent, which
+>   `ppc_invalid_cause()` cannot: it returns a single cause and abandons its op test at the
+>   first NaN. The `Inf × 0` with sNaN addend case now correctly owes **both** `VXIMZ` and
+>   `VXNAN` (`a1101000`), and the four VXISI rows are a 2×2 on identical operands pinning
+>   `fmsub`'s addend-sign inversion. Eight new gate-13 rows.
 > - **`fnmadd`/`fnmsub` are not decoded and halt** (`ppc_halt_probe.py:260` has them
 >   pending). When implemented they must negate the **already-rounded** result —
 >   `-fma(a,c,b)` and `-fma(a,c,-b)` — because the ISA rounds before the final negation,

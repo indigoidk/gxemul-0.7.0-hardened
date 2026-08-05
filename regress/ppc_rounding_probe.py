@@ -286,6 +286,7 @@ def run_fpscr_seq(preload, seq, seed_f1=None):
 #  down before the code was built -- so the flip is the fix's acceptance test
 #  rather than a transcription of whatever the new build happened to print.
 SNAN_D = 0x7ff0000000000123
+QNAN_D = 0x7ff8000000000000
 SUMMARY_ROWS = [
     #  LOWER: clear the only invalid cause; VX must fall. Committed build gave
     #  a0001000 -- VX still set with nothing causing it.
@@ -478,6 +479,77 @@ ARITH_RM_ROWS = [
      "3ff0000000000000", "DISC"),
     ("fadd RN control",      FADD_F0_F1_F2, PONE, THREE_2M54, 0,
      "3ff0000000000001", "PIN"),
+]
+
+
+def run_fma_cause(iw, fa, fc, fb):
+    """One FMA from a zeroed FPSCR; read FPSCR back through the guest's own
+    mffs, the same channel every other cause row in this file uses.
+
+    mffs targets f3, which is also frC here -- harmless, because it runs AFTER
+    the FMA has consumed it, and deliberately noted because a reader checking
+    the seeding would otherwise wonder."""
+    w, _ = session([
+        "msr=0x2000", "fpscr=0x00000000",
+        "f1=0x%016x" % fa, "f3=0x%016x" % fc, "f2=0x%016x" % fb,
+        "r5=0x%x" % DEST,
+        "put w 0x%x, 0xdeadbeef" % DEST,
+        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
+        "put w 0x%x, 0x%08x" % (CODE, iw),
+        "put w 0x%x, 0x%08x" % (CODE + 4, MFFS_F3),
+        "put w 0x%x, 0x%08x" % (CODE + 8, STFD_F3_R5),
+        "pc=0x%x" % CODE, "step 3"], 2)
+    if w is None or len(w) < 2 or w[1] == "deadbeef":
+        return None
+    return w[1]
+
+
+#  #343: an FMA's invalid-operation causes. Every byte below is derived from
+#  Book I before the code exists, which is what makes this an acceptance test
+#  rather than a transcript of the implementation.
+#
+#    FX 0x80000000 | VX 0x20000000 | VXSNAN 0x01000000 | VXISI 0x00800000
+#    VXIMZ 0x00100000 | FPCC << 12 (1 = NaN/FU, 4 = positive/FG)
+#
+#  The two-cause row is the point of the round. VXIMZ depends only on the
+#  MULTIPLY operands, so a NaN ADDEND must not suppress it -- Inf*0 with an
+#  sNaN addend owes VXIMZ **and** VXSNAN, which cpu_ppc.c already documents and
+#  no other instruction in this gate can exercise.
+#
+#  The four VXISI rows are a 2x2 on IDENTICAL operands: the addend that makes
+#  fmadd invalid is the one that makes fmsub clean, and vice versa. A fix that
+#  forgot fmsub negates its addend passes neither diagonal, and one that
+#  negated unconditionally passes neither either.
+FMA_CAUSE_ROWS = [
+    ("VXIMZ+VXSNAN fmadd", FMADD_F0_F1_F3_F2, PINF, PZERO, SNAN_D,
+     "a1101000", "DISC"),
+    ("VXIMZ fmadd Inf-by-0", FMADD_F0_F1_F3_F2, PINF, PZERO, PONE,
+     "a0101000", "DISC"),
+    ("VXSNAN fmadd sNaN", FMADD_F0_F1_F3_F2, SNAN_D, PONE, PONE,
+     "a1001000", "DISC"),
+    ("VXISI fmadd Inf+-Inf", FMADD_F0_F1_F3_F2, PINF, PONE, NINF,
+     "a0801000", "DISC"),
+    ("clean fmadd Inf+Inf", FMADD_F0_F1_F3_F2, PINF, PONE, PINF,
+     "00004000", "PIN"),
+    ("VXISI fmsub Inf-Inf", FMSUB_F0_F1_F3_F2, PINF, PONE, PINF,
+     "a0801000", "DISC"),
+    ("clean fmsub Inf--Inf", FMSUB_F0_F1_F3_F2, PINF, PONE, NINF,
+     "00004000", "PIN"),
+    ("clean fmadd 2by3+1", FMADD_F0_F1_F3_F2, 0x4000000000000000,
+     0x4008000000000000, 0x3ff0000000000000, "00004000", "PIN"),
+    #  The five rows an after-panel identified as missing. Each pins a clause
+    #  of ppc_invalid_cause_fma() that the first table left unexercised, so a
+    #  helper that got that clause wrong would still have passed.
+    ("VXIMZ fmadd 0-by-Inf", FMADD_F0_F1_F3_F2, PZERO, PINF, PONE,
+     "a0101000", "DISC"),
+    ("VXSNAN fmadd frC", FMADD_F0_F1_F3_F2, PONE, SNAN_D, PONE,
+     "a1001000", "DISC"),
+    ("VXIMZ fmadd qNaN addend", FMADD_F0_F1_F3_F2, PINF, PZERO, QNAN_D,
+     "a0101000", "DISC"),
+    ("VXIMZ not VXISI", FMADD_F0_F1_F3_F2, PINF, PZERO, PINF,
+     "a0101000", "DISC"),
+    ("VXISI fmadd neg product", FMADD_F0_F1_F3_F2, PINF, NEG_ONE, PINF,
+     "a0801000", "DISC"),
 ]
 
 
@@ -1143,6 +1215,9 @@ def main():
 
     for nm, iw, a, b, rm, want, kind in ARITH_RM_ROWS:
         report(nm, run_arith_rm(iw, a, b, rm), want, kind)
+
+    for nm, iw, fa, fc, fb, want, kind in FMA_CAUSE_ROWS:
+        report(nm, run_fma_cause(iw, fa, fc, fb), want, kind)
 
     for nm, iw, fa, fc, fb, want, kind in FMA_ROWS:
         report(nm, run_fma3(iw, fa, fc, fb), want, kind)

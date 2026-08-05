@@ -4192,6 +4192,76 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-fifth round (#343) — the fused multiply-adds raised none of their exception causes
+
+`#330` gave PowerPC arithmetic its invalid-operation causes, and `fmul` has called that
+machinery ever since (`cpu_ppc_instr.c:1717`). The FMA handlers never did: they went straight
+from operand conversion to computation and updated only FPCC. Measured on the committed
+build, every cause row read `00001000` — the FPCC nibble alone, no cause bits, no summary
+bits, nothing.
+
+**An FMA cannot reuse `ppc_invalid_cause()`,** for two reasons. It returns a *single* cause,
+and it abandons its operation-specific test at the first NaN — both correct for a two-operand
+instruction and both wrong here. `ppc_invalid_cause_fma()` treats the three conditions as
+what they are, independent:
+
+- **VXNAN** — any of frA, frC, frB signalling.
+- **VXIMZ** — the *multiply* is `Inf × 0`. This depends only on frA and frC, so a NaN
+  **addend does not suppress it**: `Inf × 0` with an sNaN addend owes `VXIMZ | VXNAN`, the
+  two-at-once case `cpu_ppc.c:1929` already documents and which no other instruction in this
+  gate can exercise. That case is the reason the function exists.
+- **VXISI** — the product is infinite *and* frB is an infinity that cancels it. `Inf × 0` is
+  excluded first: there is no product for an addend to disagree with.
+
+`fmsub` subtracts frB, so its addend's effective sign inverts.
+
+Every **cause and summary** bit was derived from Book I before the code was written:
+
+```
+VXIMZ+VXSNAN fmadd    a1101000        <- the two-cause row
+VXIMZ fmadd Inf-by-0  a0101000
+VXSNAN fmadd sNaN     a1001000
+VXISI fmadd Inf+-Inf  a0801000    clean fmadd Inf+Inf   00004000
+VXISI fmsub Inf-Inf   a0801000    clean fmsub Inf--Inf  00004000
+```
+
+Those last four are a **2×2 on identical operands**: the addend that makes `fmadd` invalid is
+exactly the one that makes `fmsub` clean, and vice versa. A fix that forgot `fmsub` negates
+its addend fails one diagonal; one that negated unconditionally fails the other. What they do
+**not** prove is *which* internal sign was flipped — negating the product and negating the
+addend give the same Boolean for this predicate, so the rows pin that subtraction reverses
+the cancellation relation, nothing finer.
+
+**These are not Book I-complete bytes, and the first draft of this entry claimed they were.**
+They carry this fork's four-bit FPCC model, not the full five-bit FPRF: Book I would also set
+the class bit, making the invalid rows `a1111000` / `a0111000` / `a1011000` / `a0811000` and
+the infinite clean row `00005000`. That FPRF gap is a pre-existing, separately recorded
+divergence — the probe already says so about its other arithmetic oracles — so the rows are
+right for what this tree currently models, and the *claim* was what needed narrowing.
+
+- **#343 (`cpus/cpu_ppc_instr.c`)** — `ppc_invalid_cause_fma()` inside the existing
+  `PPC_FP_CLASSIFY_INCLUDED` guard, wired into both handlers with the subtract flag.
+
+**Five rows were added after review**, because the first table left whole clauses of the
+helper unexercised — a helper that got any of them wrong would still have passed: `0 × Inf`
+(the *either-order* half of VXIMZ), an sNaN in **frC** (the "any of all three operands" half
+of VXSNAN), `Inf × 0` with a **qNaN** addend (general non-suppression, where the two-cause row
+only shows the sNaN case), `Inf × 0` with an **infinite** addend (the direct discriminator
+that VXISI is excluded once the multiply is invalid), and a **negative multiplier** (the
+product-sign XOR, which an implementation reading only frA's sign would get wrong).
+
+Gate 13 goes 123 → 136 rows (92 DISC / 44 PIN). The three clean PINs are what show the fix
+raises causes only when owed — a change that started raising them unconditionally would pass
+every DISC row and fail all three.
+
+One naming note: the macro is historically `PPC_FPSCR_VXNAN`, but Book I and every other row
+in this gate call the status bit **VXSNAN**, so the new rows use that.
+
+**Still open in this item:** `fnmadd`/`fnmsub` are not decoded and halt, and FPSCR `NI` is
+defined but never consumed. Both are their own rounds; the negative forms in particular must
+negate the **already-rounded** result, which is not the same as moving the sign inside the
+FMA.
+
 ## Ninety-third round (#342) — the XOR-swap fold had no "two distinct registers" guard
 
 The combiner recognises the classic XOR swap — `eor a,a,b` / `eor b,b,a` / `eor a,a,b` —
