@@ -1605,3 +1605,45 @@ corruption without a clear host-OOB path.
 >
 > `netbsd_scanc`'s fifth register use is the one open question in the table: it may be a
 > read of an already-checked register, or a fourth unguarded write.
+
+> ## 2026-08-05 — RETRACTION: the "shape-not-registers FAMILY" entry above is WRONG
+> The table in the entry dated earlier today generalised #345's defect to `netbsd_memset`,
+> `netbsd_memcpy` and possibly `netbsd_scanc`. **That generalisation is refuted**, by a
+> review seat and then independently by measurement. The counting method was the error: it
+> counted literal `r[...]` tokens in each matcher and missed that these combiners match on
+> **exact 28-bit instruction words**, so the register encoding is carried by the matched
+> function's IDENTITY rather than by an explicit comparison.
+>
+> `COMBINE(netbsd_memset)` requires all sixteen slots to be `instr(multi_0x08ac000c__ge)`,
+> installed only under `(iword & 0x0fffffff) == 0x08ac000c` — `stmia r12!,{r2,r3}`, i.e.
+> Rn = `ARM_IP` and reglist r2/r3, exactly the three registers the handler hardcodes. There
+> is nothing to guard. Measured: a foreign-register loop left `ip` intact at its seeded
+> `0x11` **even with the fold forced live**, which is the empirical half of the proof rather
+> than merely "nothing folded". `netbsd_memcpy`'s registers are pinned the same way
+> (`0x08b15018` / `0x08a05018`). #345 itself stands — `netbsd_cacheclean` matches on
+> function CLASS, not exact iword, which is why its registers really were free.
+>
+> ## The same investigation found something larger: X(netbsd_memset) is DEAD CODE
+> It has never executed. `cpu_arm_instr.c:3979-3981` arms
+> `combination_check = COMBINE(netbsd_memset)` for `iword == 0xcaffffed`, and
+> `:4040-4043` then **unconditionally overwrites it** with `COMBINE(beq_etc)` for
+> `main_opcode == 0xa` with condition code 12 — and `0xcaffffed` is condition GT = 12.
+> Ordering decides it: `strlen` (cond 1) and `netbsd_cacheclean2` (cond 8) are in that same
+> list but armed *after* the catch-all, so they survive; `netbsd_memcpy` (cond GE = 10) is
+> not in the list at all. `netbsd_memset` is the only loser. Proven twice: an instrumented
+> build logged zero entries to the combiner, and re-arming it after `:4043` made it fold
+> immediately.
+>
+> **Latent, not live:** with the fold reachable, the matcher tests its `subs` only as
+> `arg[0]==arg[2] && arg[1]==128` — any register — which collides with the hardcoded
+> `r[ARM_IP]` when the subs targets ip: the handler reads the address *before* the subs and
+> then overwrites ip with `addr+128`, discarding the subtraction (measured `0x100` where the
+> architecture owes `0x80`, with the 128 bytes landing at `0x80..0xff`). That is #342-class
+> and dormant. Whether to revive this fold at all is a scope decision, not a bug fix, and it
+> has no value-discriminating PIN available: for a well-formed loop the fold is
+> observationally equivalent to the STMs apart from a missing `&= 0xffc` base alignment.
+>
+> **`netbsd_memcpy` has a real but DIFFERENT defect, and it IS live** (cond GE escapes the
+> overwrite): it replaces four block transfers with one `memcpy` and publishes only r0 and
+> r1, leaving **r3, r4, ip and lr** stale where the LDMs would have left the last sixteen
+> bytes copied. A missing side effect, not a register-guard hole.
