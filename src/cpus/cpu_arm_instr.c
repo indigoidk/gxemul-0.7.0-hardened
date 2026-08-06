@@ -2092,7 +2092,52 @@ X(netbsd_cacheclean)
  */
 X(netbsd_cacheclean2)
 {
-	cpu->n_translated_instrs += ((cpu->cd.arm.r[1] >> 5) * 5) - 1;
+	/*
+	 *  #347: this handler used to update NO GUEST REGISTERS AT ALL. It
+	 *  advanced n_translated_instrs and jumped to ic[5], so the two MCRs,
+	 *  the add, the subs and the branch were all skipped and every register
+	 *  came out exactly as it went in. That is wrong even for the NetBSD
+	 *  sequence above -- unlike variant 1, which at least performs
+	 *  r[0] += r[1]; r[1] = 0. Measured on the committed build with the
+	 *  two-pass free-running driver, r0 = 0x9100 and r1 = 0x40: the fold
+	 *  returned r0 = 0x9100 and r1 = 0x40, where the identical program with
+	 *  one MCR replaced by a nop -- so that nothing combines at all --
+	 *  returns r0 = 0x9140 and r1 = 0.
+	 *
+	 *  The closed form is NOT variant 1's `r[0] += r[1]; r[1] = 0`. This
+	 *  loop ends on `bhi`, which is C && !Z, so it exits either when the
+	 *  subs reaches zero OR when the subs BORROWS, and that second exit is
+	 *  the one taken by every counter that is not a nonzero multiple of 32.
+	 *  The branch is also at the BOTTOM, so one iteration always runs and a
+	 *  partial tail costs a whole extra one. Hence
+	 *
+	 *      n = (r1 == 0 || (r1 & 31) != 0)? (r1 >> 5) + 1 : (r1 >> 5)
+	 *
+	 *  which was checked against the un-combined loop for r1 = 0, 1, 0x1f,
+	 *  0x20, 0x21, 0x30, 0x40, 0x60 and 0x7f and agrees on all nine.
+	 *  `r[0] += r[1]; r[1] = 0` -- variant 1's form, and what the bug record
+	 *  proposed -- agrees on THREE of those nine, 0x20, 0x40 and 0x60, the
+	 *  only nonzero multiples of 32 in the set. r1 = 0x30 really leaves r0
+	 *  advanced by 0x40 and r1 at 0xfffffff0, where that form gives 0x30 and
+	 *  0; r1 = 0 really advances r0 by 0x20 and leaves r1 at 0xffffffe0,
+	 *  where that form leaves r0 alone.
+	 *
+	 *  The wraparound is deliberate. At r1 = 0xffffffff, n is 0x8000000 and
+	 *  n << 5 truncates to 0 -- which is exactly what advancing a 32-bit
+	 *  register by 2^32 bytes does.
+	 *
+	 *  STILL NOT MODELLED: the flags. The subs that ends the loop owes
+	 *  N/Z/C/V and this fold writes none of them (see OUTSTANDING_BUGS).
+	 *  With the registers now correct that is the ONLY guest-visible
+	 *  difference left between the fold and the loop, which is precisely
+	 *  what gate 14's control row has to read to prove the fold still fires.
+	 */
+	uint32_t r1 = cpu->cd.arm.r[1];
+	uint32_t n = (r1 == 0 || (r1 & 31) != 0)? (r1 >> 5) + 1 : (r1 >> 5);
+
+	cpu->n_translated_instrs += (n * 5) - 1;
+	cpu->cd.arm.r[0] += n << 5;
+	cpu->cd.arm.r[1] = r1 - (n << 5);
 	cpu->cd.arm.next_ic = &ic[5];
 }
 
@@ -2850,11 +2895,46 @@ void COMBINE(netbsd_cacheclean2)(struct cpu *cpu,
 	    & (ARM_IC_ENTRIES_PER_PAGE-1);
 
 	if (n_back >= 4) {
+		/*  #347: the register checks are REQUIRED, for the same reason
+		    they were in COMBINE(netbsd_cacheclean) above -- and unlike
+		    netbsd_memset, whose operands turned out to be pinned already
+		    by the exact iwords its matcher demands, these two really are
+		    free. instr(add) and instr(subs) are the GENERIC dpi table
+		    entries (arm_dpi_instr[], cpu_arm_instr_dpi.c:72-74:
+		    arg[0] = &Rn, arg[1] = immediate, arg[2] = &Rd), so
+		    `add rX,rX,#32` and `subs rY,rY,#32` select them for ANY X
+		    and Y, and this matcher tested only that each had rn == rd
+		    and an immediate of 32.
+
+		    That r0 and r1 are the right registers to demand is not a
+		    convention: the two MCRs are pinned by exact iword and both
+		    name Rd = r0, so the address the cache ops walk IS r0, and a
+		    loop advancing anything else is not this loop.
+
+		    Measured on the committed build with the two-pass
+		    free-running driver, r1 = 0x40:
+		      add r5,r5,#32 / subs r1,r1,#32 -> folded; r5 stayed at its
+		        seeded 0x9100 where the loop owes 0x9140, r1 at 0x40
+		        where the loop owes 0;
+		      add r0,r0,#32 / subs r6,r6,#32 -> folded; r6 stayed at 0x40
+		        where the loop owes 0.
+		    Both were invisible before this round only because the
+		    handler wrote nothing at all. Now that it writes r[0] and
+		    r[1] by name, an unguarded match would additionally CLOBBER
+		    those two in a loop that never mentions them -- #345's defect
+		    exactly, reintroduced by fixing the other half.
+
+		    ic[0] needs no check of its own: this combiner is armed only
+		    from iword == 0x8afffffa (see :4145 below), which is `bhi`
+		    with offset -6, so its target is ic[-4] by encoding, and
+		    n_back >= 4 keeps ic[-4] inside the same instruction page.  */
 		if (ic[-4].f == instr(mcr_mrc) && ic[-4].arg[0] == 0xee070f3a &&
 		    ic[-3].f == instr(mcr_mrc) && ic[-3].arg[0] == 0xee070f36 &&
 		    ic[-2].f == instr(add) &&
+		    ic[-2].arg[0] == (size_t)(&cpu->cd.arm.r[0]) &&
 		    ic[-2].arg[0]==ic[-2].arg[2] && ic[-2].arg[1] == 0x20 &&
 		    ic[-1].f == instr(subs) &&
+		    ic[-1].arg[0] == (size_t)(&cpu->cd.arm.r[1]) &&
 		    ic[-1].arg[0]==ic[-1].arg[2] && ic[-1].arg[1] == 0x20) {
 			ic[-4].f = instr(netbsd_cacheclean2);
 		}

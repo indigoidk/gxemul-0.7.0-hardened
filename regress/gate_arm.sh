@@ -32,6 +32,10 @@
 # 165, failing the three cache-clean rows the fix flips and nowhere else. The
 # two cache-clean CONTROL rows pass on both builds, which is what they are for.
 #
+# And again for #347 against a binary built from ITS parent (be6ea08): 168 of
+# 173, failing exactly the five `A cclean2 ... ` discriminators and nowhere
+# else. All three of that round's control/anti-clobber pins pass on both builds.
+#
 # Why most of this gate is PINs
 # ----------------------------
 # #311 rewrites ONE line that five instructions share, and two of them were
@@ -93,15 +97,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 165
+check "rows run"     "$want" 173
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 44
-check_min "pinned rows present"         "$pins" 55
+check_min "discriminating rows present" "$disc" 49
+check_min "pinned rows present"         "$pins" 58
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -163,6 +167,35 @@ for v in "A cacheclean r0 intact" "A cacheclean r1 intact" \
          "A cacheclean still folds" "A cacheclean fold r0" \
          "A cacheclean imm4 r0" "A cacheclean imm4 r2" \
          "A cacheclean wrong Rd"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  row: $v" "$n" 1
+done
+
+# #347: the SECOND cache-clean fold, which had BOTH halves of the defect --
+# `add rX,rX,#32 / subs rY,rY,#32` accepted for any X and Y, and a handler that
+# wrote no guest register at all. Three loops, each one field off the genuine
+# `mcr / mcr / add r0,r0,#32 / subs r1,r1,#32 / bhi`.
+#
+#   fold r0/r1    -- the genuine sequence. The committed handler returned
+#       r0 = 0x9100 and r1 = 0x40 for a loop that owes 0x9140 and 0.
+#   base r5/r1    -- `add r5,r5,#32`: the fold fired anyway and stranded r5 at
+#       0x9100 and r1 at 0x40.
+#   cnt r6        -- `subs r6,r6,#32`: fired anyway, r6 left at 0x40.
+#   base r0 / cnt r1 -- the anti-clobber pins. They pass on the pre-fix build
+#       too, on purpose: they exist to catch the OPPOSITE error, a handler that
+#       now writes r[0]/r[1] by name behind a matcher that still takes any
+#       register. Without them the register guard could be dropped and only the
+#       rows above, which already pass, would notice.
+#   still fold    -- the CONTROL, and it must read the cpsr, not a register.
+#       Once the closed form is right r0 and r1 are the same folded or not, so
+#       nothing in a register can prove the optimisation still fires. The fold
+#       writes no flags though the loop ends on a subs reaching zero: seeded
+#       N=1, the folded run still reads N=1 where the real loop leaves Z=1 C=1.
+#       That is a defect #347 does not fix, pinned deliberately -- same trade as
+#       #346's stale-r2 control, and the only fold detector available.
+for v in "A cclean2 fold r0" "A cclean2 fold r1" "A cclean2 still fold" \
+         "A cclean2 base r5" "A cclean2 base r1" "A cclean2 base r0" \
+         "A cclean2 cnt r6" "A cclean2 cnt r1"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

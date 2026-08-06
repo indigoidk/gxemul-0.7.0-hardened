@@ -4192,6 +4192,93 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-eighth round (#347) — the second cache-clean fold skipped a loop and updated nothing
+
+`X(netbsd_cacheclean2)` replaced the five-instruction NetBSD cache-clean loop with
+`n_translated_instrs += ((r[1] >> 5) * 5) - 1; next_ic = &ic[5];` and **nothing else**. It
+skipped the two MCRs, the `add`, the `subs` and the branch, and left every guest register
+exactly as it found it. That is wrong even for the sequence it was written for — unlike
+variant 1, which at least performs `r[0] += r[1]; r[1] = 0`. On top of that its matcher had
+the same shape-not-registers hole #345 fixed in variant 1: the two MCRs are pinned by exact
+iword, but `add rX,rX,#32` and `subs rY,rY,#32` were tested only for `rn == rd` and an
+immediate of 32, for **any** X and Y.
+
+The premise had to be checked first, because the last round of this family turned on it:
+`netbsd_memset`'s operands are pinned by the exact iwords its matcher demands, so there was
+nothing to guard there. Here `instr(add)` and `instr(subs)` are the **generic** dpi table
+entries (`arm_dpi_instr[]`, `cpu_arm_instr_dpi.c:72-74` — `arg[0] = &Rn`, `arg[1]` the
+immediate, `arg[2] = &Rd`), selected by condition/opcode/S-bit alone. The registers really
+are free.
+
+Measured on the committed build with the two-pass free-running driver, `r0 = 0x9100`,
+counter `0x40` (two iterations):
+
+```
+A cclean2 fold r0          00009100   owed 00009140   <- the genuine sequence
+A cclean2 fold r1          00000040   owed 00000000   <- ...updated neither register
+A cclean2 base r5          00009100   owed 00009140   <- add r5,r5,#32 folded anyway
+A cclean2 base r1          00000040   owed 00000000
+A cclean2 cnt r6           00000040   owed 00000000   <- subs r6,r6,#32 folded anyway
+```
+
+Every "owed" value is measured, not derived: the identical program with the first MCR
+replaced by a nop, so that nothing combines. `cr7` is an unconditional no-op in this
+emulator (`cpu_arm_coproc.c:209-215`), and a second neutraliser that instead perturbs only
+the *second* MCR's opcode2 (`0xee070f56`, still `cr7`) returned identical values for all
+three loops on both builds — so the substitution is not carrying the result.
+
+- **#347 (`cpus/cpu_arm_instr.c`)** — the matcher now requires `ic[-2].arg[0] == &r[0]` and
+  `ic[-1].arg[0] == &r[1]`, and the handler performs the update the fold stands in for.
+
+**The closed form is not variant 1's.** This loop ends on `bhi` — `C && !Z` — so it exits
+either when the `subs` reaches zero **or when the `subs` borrows**, and that second exit is
+the one every counter that is not a nonzero multiple of 32 actually takes. The branch is
+also at the *bottom*, so one iteration always runs and a partial tail costs a whole extra
+one. Hence
+
+```
+n = (r1 == 0 || (r1 & 31) != 0) ? (r1 >> 5) + 1 : (r1 >> 5)
+r[0] += n << 5;   r[1] = r1 - (n << 5);
+```
+
+which was swept against the un-combined loop for `r1` = 0, 1, 0x1f, 0x20, 0x21, 0x30, 0x40,
+0x60 and 0x7f and agrees on all nine, folded and unfolded alike. `r[0] += r[1]; r[1] = 0` —
+what the bug record proposed — agrees on **three** of those nine, `0x20`, `0x40` and `0x60`,
+the only nonzero multiples of 32 in the set. Where it differs it is not close: `r1 = 0x30`
+really leaves r0 advanced by `0x40` and r1 at `0xfffffff0`, where that form gives `0x30` and
+0; `r1 = 0` really advances r0 by `0x20` and leaves r1 at `0xffffffe0`, where that form
+leaves r0 alone. The 32-bit wraparound at `r1 = 0xffffffff` is correct by the same
+arithmetic: `n << 5` truncates to 0, which is what advancing a 32-bit register by 2^32
+bytes does.
+
+**The control has to read the cpsr, not a register.** Once the closed form is right, r0 and
+r1 are identical folded and unfolded — that is what "correct" means here — so no register
+can show that the optimisation still fires, and an over-tight guard that silently disabled
+it would pass every discriminator above. The one guest-visible difference left is that the
+fold writes no **flags** though the loop ends on a `subs`: seeded N=1 by `cmp r9,#2`, the
+folded run still reads N=1 where the real loop leaves Z=1 C=1. `A cclean2 still fold` pins
+that, which means it pins a defect this round does not fix — deliberately and on the
+record, the same trade #346 made with the stale load destination, and for the same reason:
+it is the only fold detector available. It works only with a counter that is a nonzero
+multiple of 32; any other value exits on a borrow and leaves N=1 too, which is the seed's
+own value.
+
+Two rows are neither discriminators nor controls. `A cclean2 base r0` and `A cclean2 cnt r1`
+assert the sentinels 0x11 and 0x22 survive, and they pass on the pre-fix build as well —
+they exist to catch the **opposite** error, a handler that now writes `r[0]`/`r[1]` by name
+behind a matcher that still accepts any register. Without them the register guard could be
+deleted and only rows that already pass would notice. `wrongcnt`'s r0 is deliberately not a
+row: the architecture leaves `0x9140` there and an unguarded fold reading `r1 = 0x22`
+computes `0x9140` too, so it can attribute nothing.
+
+Gate 14 goes 165 → 173 rows. Swept against a binary built from the parent commit `be6ea08`:
+**168 of 173**, failing exactly the five discriminators above and nowhere else, with all
+three pins passing on both builds.
+
+**Still open on this handler:** the flags, as above — the loop's final `subs` owes N/Z/C/V
+and the fold writes none of them. Fixing it would also remove the only evidence that the
+fold fires at all, so it needs a different instrument, not just a different line.
+
 ## Ninety-seventh round (#346) — the cache-clean fold ignored the stride its own arithmetic assumed
 
 #345 checked the two registers `X(netbsd_cacheclean)` **writes** and stopped there. Two

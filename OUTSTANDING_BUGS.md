@@ -1551,6 +1551,11 @@ corruption without a clear host-OOB path.
 > a row can be written at all.
 
 > ## 2026-08-05 — netbsd_cacheclean2 is worse than its sibling, and #345 did not touch it
+> **RESOLVED as #347** (see the entry at the end of this file). Both halves are fixed: the
+> matcher now pins the add's base to r0 and the subs's counter to r1, and the handler
+> performs the register update. One detail below is **wrong** and was corrected by
+> measurement — the closed form is not variant 1's `r[0] += r[1]; r[1] = 0`.
+>
 > #345 fixed variant 1's missing register check. Variant 2 has the same hole **and a second,
 > larger one**. Its matcher (`cpu_arm_instr.c:2833-2839`) pins the two MCRs exactly by their
 > instruction words, then accepts `add rX,rX,#32` and `subs rY,rY,#32` **without checking
@@ -1678,3 +1683,58 @@ corruption without a clear host-OOB path.
 >
 > `gate_arm.sh` now carries seven rows here, each loop one field off the genuine sequence.
 > The two control rows pass on both builds by design; the pre-fix build scores 162/165.
+
+> ## 2026-08-05 — #347 closes BOTH cacheclean2 defects; the flags stay open
+> The entry above dated today ("netbsd_cacheclean2 is worse than its sibling") is
+> **resolved**. `X(netbsd_cacheclean2)` really did update no guest register at all, and its
+> matcher really did take any register pair; both are measured and both are fixed.
+>
+> Premise checked first, because the previous round of this family turned on exactly that
+> point: `netbsd_memset`'s operands are pinned by the exact iwords its matcher demands, so
+> there was nothing to guard. Here `instr(add)` and `instr(subs)` are the **generic** dpi
+> table entries (`arm_dpi_instr[]`, `cpu_arm_instr_dpi.c:72-74`), selected by
+> condition/opcode/S-bit alone, so the registers really are free. That the right ones to
+> demand are r0 and r1 is not a convention either: the two MCRs are pinned by exact iword
+> and both name Rd = r0, so the address the cache ops walk **is** r0.
+>
+> Measured on the committed build, two-pass free-running driver, r0 = `0x9100`, counter
+> `0x40`: the genuine sequence folded and returned r0 = `0x9100`, r1 = `0x40` where the loop
+> owes `0x9140` and 0; `add r5,r5,#32` folded anyway and stranded r5 at `0x9100`; and
+> `subs r6,r6,#32` folded anyway and left r6 at `0x40`.
+>
+> **The closed form recorded in the entry above was WRONG.** `r[0] += r[1]; r[1] = 0` is
+> variant 1's, and variant 1 ends on `bne`. This loop ends on `bhi` (`C && !Z`), so it exits
+> on a BORROW as well as on zero, and its branch is at the bottom, so one iteration always
+> runs. The measured trip count is
+> `n = (r1 == 0 || (r1 & 31) != 0) ? (r1 >> 5) + 1 : (r1 >> 5)`, then `r[0] += n << 5` and
+> `r[1] = r1 - (n << 5)`. Swept against the un-combined loop for r1 = 0, 1, 0x1f, 0x20,
+> 0x21, 0x30, 0x40, 0x60, 0x7f: agrees on all nine, where the proposed form agrees on
+> **three** of them — `0x20`, `0x40`, `0x60`, the only nonzero multiples of 32 in the set.
+> `r1 = 0x30` really advances r0 by `0x40` and leaves r1 at `0xfffffff0`, where the proposed
+> form gives `0x30` and 0; `r1 = 0` really advances r0 by `0x20` and leaves r1 at
+> `0xffffffe0`, where the proposed form leaves r0 alone.
+>
+> ## STILL OPEN HERE: the flags — and READ THIS BEFORE FIXING THEM
+> The `subs` that ends this loop owes N/Z/C/V and the fold writes none of them — the same
+> divergence still filed against variant 1. With the registers now correct it is the **only**
+> guest-visible difference left between the fold and the loop.
+>
+> That has a consequence for whoever closes it. Gate 14's control row **`A cclean2 still
+> fold`** is built on this defect: it seeds N=1 with `cmp r9,#2` and asserts the folded run
+> still reads N=1 where the real loop leaves Z=1 C=1. It is the *only* evidence that the
+> optimisation still fires at all, because once the closed form is right r0 and r1 read the
+> same folded or unfolded, so no register can discriminate. Writing the flags will therefore
+> make that row **fail**, and it will not be a regression — it will be the row doing its job
+> in a world where its premise is gone.
+>
+> **So the flag fix and the control row have to be re-authored in the SAME change.** Do not
+> "fix" the failure by relaxing the row. There is no register left to move it to; it needs a
+> genuinely different instrument — an execution-count/timing observable, or a sibling loop
+> deliberately one field off the matcher so that folded and unfolded diverge somewhere the
+> handler is not required to be right. Budget for building that instrument as part of the
+> flag round, not as a surprise at the end of it.
+>
+> `gate_arm.sh` carries eight `A cclean2 ...` rows: five discriminators, one cpsr control,
+> and two anti-clobber pins that pass on both builds and exist to catch the opposite error —
+> a handler writing r[0]/r[1] by name behind a matcher that still accepts any register. The
+> pre-fix build (`be6ea08`) scores 168/173.

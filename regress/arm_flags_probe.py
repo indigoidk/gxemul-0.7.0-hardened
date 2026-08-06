@@ -455,6 +455,112 @@ def run_cacheclean(variant):
     return tuple(sw(x) for x in w)
 
 
+#  #347: the SECOND cache-clean fold, and a worse case than the first. The
+#  genuine NetBSD sequence (from the comment above X(netbsd_cacheclean2)) is
+#
+#      mcr 15,0,r0,cr7,cr10,1     mcr 15,0,r0,cr7,cr6,1
+#      add r0,r0,#0x20            subs r1,r1,#0x20        bhi back
+#
+#  The two MCRs are pinned by exact iword, but the add and the subs were tested
+#  only for `rn == rd` and an immediate of 32 -- ANY register -- while the
+#  handler updated NO registers at all. Both halves are measured below.
+#
+#  The counter is 0x40, two iterations, so the loop's last subs reaches ZERO:
+#  that is what makes the flags usable as the fold detector (see run_cc2).
+MCR_CC2_A  = 0xEE070F3A         # mcr 15,0,r0,cr7,cr10,1  -- ic[-4]
+MCR_CC2_B  = 0xEE070F36         # mcr 15,0,r0,cr7,cr6,1   -- ic[-3]
+ADD_R0_32  = 0xE2800020         # add  r0,r0,#0x20
+ADD_R5_32  = 0xE2855020         # add  r5,r5,#0x20
+BHI_BACK6  = 0x8AFFFFFA         # bhi  -6 words; the iword that arms the check
+CMP_R9_2   = 0xE3590002         # cmp  r9,#2  (r9 == 1) -> N=1 Z=0 C=0 V=0
+MOV_R1_64  = 0xE3A01040         # mov  r1,#0x40  -- two iterations
+MOV_R6_64  = 0xE3A06040         # mov  r6,#0x40
+MOV_R5_55  = 0xE3A05055         # mov  r5,#0x55 -- sentinel
+STR_R5_R7_8  = 0xE5875008
+STR_R3_R7_16 = 0xE5873010
+BEQ_BACK19 = 0x0AFFFFED         # beq -19 words, back to the outer loop top
+
+
+def run_cc2(variant):
+    """Two-pass witness for the SECOND cache-clean fold. Returns
+    (r0, r1, r5, r6, cpsr).
+
+    Unlike variant 1 the trigger is the BRANCH itself (cpu_arm_instr.c:4145
+    arms the check on iword 0x8afffffa), which sits at the bottom of the loop,
+    so on pass 1 the combiner rewrites ic[-4] and the very next backward branch
+    already lands on the folded handler. Pass 2 is still the one that matters:
+    it re-seeds every register and enters the block with the fold already in
+    place, which is the state a real guest reaches. The stores run on both
+    passes and the second overwrites the first.
+
+    Three loops, each ONE field off the genuine sequence:
+
+      "genuine"   -- the real thing. DISC on r0 and r1: the committed handler
+          left them at 0x9100 and 0x40 where the loop owes 0x9140 and 0.
+
+      "wrongbase" -- `add r5,r5,#32 / subs r1,r1,#32`. DISC on r5 and r1, which
+          the fold stranded at 0x9100 and 0x40. r0 is seeded 0x11 and PINNED:
+          it is what catches the OPPOSITE error, a handler that now writes r[0]
+          and r[1] by name behind a matcher that still accepts any register.
+
+      "wrongcnt"  -- `add r0,r0,#32 / subs r6,r6,#32`. DISC on r6 (0x40 where
+          the loop owes 0); r1 is seeded 0x22 and pinned for the same reason.
+          r0 is deliberately NOT a row here: the architecture leaves 0x9140 and
+          an unguarded fold reading r1 = 0x22 computes 0x9140 too, so it cannot
+          attribute anything.
+
+    THE CONTROL is the cpsr. Once the closed form is right, r0 and r1 are
+    identical folded and unfolded -- that is what "correct" means here -- so no
+    register can prove the optimisation still fires, and an over-tight guard
+    that silently disabled it would pass every row above. The one guest-visible
+    difference left is that the fold writes no FLAGS though the loop ends on a
+    subs: seeded N=1 by `cmp r9,#2`, the folded run still reads N=1 while the
+    real loop leaves Z=1 C=1. That is a defect this round does NOT fix (see
+    OUTSTANDING_BUGS), pinned deliberately and on the record, exactly as #346
+    pinned the stale load destination for the same reason. It only works with a
+    counter that is a nonzero multiple of 32: any other value exits the loop on
+    a BORROW and leaves N=1 as well, which is the seed's own value.
+
+    Architectural answers are measured, never derived: the identical program
+    with the first MCR replaced by a nop, so nothing combines. cr7 is an
+    unconditional no-op in this emulator (cpu_arm_coproc.c:209-215), so the
+    substitution changes nothing else, and a second neutraliser that instead
+    perturbs only the SECOND MCR's opcode2 (0xee070f56, still cr7) returned the
+    same values for all three loops on both builds.
+    """
+    if variant == "genuine":
+        seeds = [MOV_R1_64, MOV_R0_9100, MOV_R5_55, MOV_R6_66]
+        add, subs = ADD_R0_32, SUBS_R1_32
+    elif variant == "wrongbase":
+        seeds = [MOV_R1_64, MOV_R5_9100, MOV_R0_11, MOV_R6_66]
+        add, subs = ADD_R5_32, SUBS_R1_32
+    elif variant == "wrongcnt":
+        seeds = [MOV_R6_64, MOV_R0_9100, MOV_R1_22, MOV_R5_55]
+        add, subs = ADD_R0_32, SUBS_R6_32
+    else:
+        raise ValueError(variant)
+    #  CODE+4 is the outer loop top; the flag seed is the LAST seed so that the
+    #  value the control reads cannot have been left by anything but the loop.
+    prog = [MOV_R8_1] + seeds + [CMP_R9_2] + [
+        MCR_CC2_A,              # ic[-4] -- also the branch's target
+        MCR_CC2_B,              # ic[-3]
+        add,                    # ic[-2]
+        subs,                   # ic[-1]
+        BHI_BACK6,              # ic[ 0] -- arms the combination check
+        MRS_R3_CPSR, STR_R0_R7, STR_R1_R7_4, STR_R5_R7_8, STR_R6_R7_12,
+        STR_R3_R7_16, SUBS_R8_R9, BEQ_BACK19, NOP]
+    cmds = ["r9=0x1", "r7=0x%x" % DEST]
+    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(5)]
+    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+             for i, iw in enumerate(prog)]
+    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+             "pc=0x%x" % CODE, "continue"]
+    w, _ = session(cmds, 5)
+    if w is None or sw(w[0]) == 0xdeadbeef:
+        return None
+    return tuple(sw(x) for x in w)
+
+
 def run_und_condfailed(iw):
     """A conditional UDF whose condition is FALSE must do nothing at all.
 
@@ -1143,6 +1249,25 @@ for _nm, _got, _want, _cls in (
         ("A cacheclean imm4 r0", _ci[0] if _ci else None, 0x9104, "DISC"),
         ("A cacheclean imm4 r2", _ci[2] if _ci else None, CC_MEM, "DISC"),
         ("A cacheclean wrong Rd", _cd[3] if _cd else None, CC_MEM, "DISC")):
+    row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
+        "%08x" % _want)
+
+#  #347: the SECOND cache-clean fold had BOTH halves wrong -- unguarded
+#  registers AND no register update whatsoever. See run_cc2 for what each loop
+#  isolates and why the control has to read the cpsr rather than a register.
+_g2 = run_cc2("genuine")
+_b2 = run_cc2("wrongbase")
+_n2 = run_cc2("wrongcnt")
+_nzcv = (_g2[4] & 0xf0000000) if _g2 else None
+for _nm, _got, _want, _cls in (
+        ("A cclean2 fold r0", _g2[0] if _g2 else None, 0x9140, "DISC"),
+        ("A cclean2 fold r1", _g2[1] if _g2 else None, 0x00000000, "DISC"),
+        ("A cclean2 still fold", _nzcv, 0x80000000, "PIN"),
+        ("A cclean2 base r5", _b2[2] if _b2 else None, 0x9140, "DISC"),
+        ("A cclean2 base r1", _b2[1] if _b2 else None, 0x00000000, "DISC"),
+        ("A cclean2 base r0", _b2[0] if _b2 else None, 0x11, "PIN"),
+        ("A cclean2 cnt r6", _n2[3] if _n2 else None, 0x00000000, "DISC"),
+        ("A cclean2 cnt r1", _n2[1] if _n2 else None, 0x22, "PIN")):
     row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
         "%08x" % _want)
 
