@@ -2806,8 +2806,27 @@ void COMBINE(netbsd_cacheclean)(struct cpu *cpu,
 		    #342's missing `a != b`, and worse in consequence -- that one
 		    needed a degenerate encoding, this one fires on ordinary code
 		    that merely happens to match the shape.  */
+		/*  #346: #345 checked the two registers the handler WRITES and
+		    stopped there; the load's own two remaining operands were
+		    still unchecked, and the first of them is a stride. The
+		    closed form `r[0] += r[1]` is arithmetic that is only true
+		    when each iteration advances the base by 32, so the load's
+		    post-index immediate is part of the contract, not decoration.
+		    Measured on the committed build with the two-pass driver, on
+		    `ldr r2,[r0],#4 / subs r1,r1,#32 / bne / mcr`: r0 came back
+		    0x9120 where the architecture -- the identical program with
+		    the MCR replaced by a nop, so nothing combines -- returns
+		    0x9104. Eight times the real advance, from a loop a compiler
+		    can emit. arg[2] is checked for the same reason the base is:
+		    the handler never writes the load's destination, so a fold
+		    that fires on any other Rd strands that register too; pinning
+		    it to r2 confines the stale value to the one register the
+		    NetBSD sequence above uses. That staleness is NOT fixed here
+		    -- see OUTSTANDING_BUGS -- only its blast radius.  */
 		if (ic[-3].f==instr(load_w0_word_u1_p0_imm) &&
 		    ic[-3].arg[0] == (size_t)(&cpu->cd.arm.r[0]) &&
+		    ic[-3].arg[1] == 0x20 &&
+		    ic[-3].arg[2] == (size_t)(&cpu->cd.arm.r[2]) &&
 		    ic[-2].f == instr(subs) &&
 		    ic[-2].arg[0] == (size_t)(&cpu->cd.arm.r[1]) &&
 		    ic[-2].arg[0]==ic[-2].arg[2] && ic[-2].arg[1] == 0x20 &&

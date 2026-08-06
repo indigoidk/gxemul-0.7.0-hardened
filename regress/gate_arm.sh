@@ -28,6 +28,10 @@
 # machinery does not reach here, because it operates on float_emul.c and this
 # gate measures the real emulator instead of a pure function.
 #
+# Swept again for #346 against a binary built from the parent commit: 162 of
+# 165, failing the three cache-clean rows the fix flips and nowhere else. The
+# two cache-clean CONTROL rows pass on both builds, which is what they are for.
+#
 # Why most of this gate is PINs
 # ----------------------------
 # #311 rewrites ONE line that five instructions share, and two of them were
@@ -89,15 +93,15 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 161
+check "rows run"     "$want" 165
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
 # reverted fix, and one with no pins cannot detect collateral damage.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 41
-check_min "pinned rows present"         "$pins" 54
+check_min "discriminating rows present" "$disc" 44
+check_min "pinned rows present"         "$pins" 55
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -131,9 +135,34 @@ done
 # here; they still cannot distinguish folded-and-correct from
 # not-folded-and-correct, which is why they are pins and not discriminators.
 for v in "A xchg same-reg zeroes" "A xchg same-reg r1 pin" \
-         "A xchg swap r0" "A xchg swap r1" \
-         "A cacheclean r0 intact" "A cacheclean r1 intact" \
-         "A cacheclean still folds"; do
+         "A xchg swap r0" "A xchg swap r1"; do
+    n=$(count "$LOG" "^$v  .*ok$")
+    check "  row: $v" "$n" 1
+done
+
+# #345/#346: the cache-clean fold. Four loops, each one field off the genuine
+# `ldr r2,[r0],#32 / subs r1,r1,#0x20 / bne / mcr`, so no row can be satisfied
+# by the wrong guard.
+#
+#   r0/r1 intact  -- #345: base r5, counter r6. Its stride is 32 deliberately,
+#       so that #346's immediate check cannot block this fold and stand in for
+#       the register check the row exists to protect.
+#   imm4 r0/r2    -- #346: `ldr r2,[r0],#4` folded anyway and advanced r0 by 32,
+#       reading 0x9120 where the architecture returns 0x9104. r2 is the second
+#       half of that: the skipped load left it at its 0x77 seed.
+#   wrong Rd      -- `ldr r6,[r0],#32` folded and stranded r6 at 0x66.
+#
+# The two control rows are what stop an over-tight guard from disabling the
+# optimisation unnoticed -- no discriminator above can see that, since they all
+# pass when nothing ever folds. "fold r0" pins the closed form's arithmetic;
+# "still folds" is the only value that PROVES the fold fired for the genuine
+# sequence, because r0 is 0x9120 whether it folds or not. It asserts a stale r2,
+# which is a defect #346 does not fix -- when that is fixed its want becomes
+# 0xa5a5a5a5 and it keeps working as the fold detector.
+for v in "A cacheclean r0 intact" "A cacheclean r1 intact" \
+         "A cacheclean still folds" "A cacheclean fold r0" \
+         "A cacheclean imm4 r0" "A cacheclean imm4 r2" \
+         "A cacheclean wrong Rd"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

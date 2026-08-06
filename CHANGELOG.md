@@ -4192,6 +4192,63 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-seventh round (#346) — the cache-clean fold ignored the stride its own arithmetic assumed
+
+#345 checked the two registers `X(netbsd_cacheclean)` **writes** and stopped there. Two
+review seats independently found that incomplete, and both were right: the load's own
+remaining operands were still unchecked, and the first of them is a **stride**. The handler's
+closed form `r[0] += r[1]` is arithmetic that is only true when each iteration advances the
+base by 32 bytes, so the post-indexed immediate is part of the contract, not decoration.
+
+Measured on the committed build with the two-pass free-running driver, on
+`ldr r2,[r0],#4 / subs r1,r1,#0x20 / bne / mcr` — a loop of exactly the shape the matcher
+accepts, with the registers #345 now requires:
+
+```
+A cacheclean imm4 r0       00009120   owed 00009104   <- base advanced by 32, not 4
+A cacheclean imm4 r2       00000077   owed a5a5a5a5   <- the load was skipped
+A cacheclean wrong Rd      00000066   owed a5a5a5a5   <- ldr r6,[r0],#32, r6 stranded
+```
+
+Every "owed" value above is not a derivation: it is the identical program with the MCR
+replaced by a nop, so that nothing combines at all.
+
+- **#346 (`cpus/cpu_arm_instr.c`)** — the matcher now also requires `ic[-3].arg[1] == 0x20`
+  and `ic[-3].arg[2] == &r[2]`, the load's immediate and destination.
+
+Eight times the real base advance, from a loop a compiler can emit — this is a live
+miscompilation, not a degenerate encoding. `arg[2]` is pinned for a different reason: the
+handler never performs the load, so a fold that fires on any other Rd strands that register
+as well. That does not FIX the staleness, it confines it to the one register the NetBSD
+sequence uses.
+
+**The control row committed with #345 had to be rebuilt, and it was actively holding the
+defect in place.** `run_cacheclean(use_r01=True)` built its "must still fold" loop with
+`ldr r4,[r0],#4` — immediate 4, destination r4 — and asserted the FOLDED answer `0x9120`
+for a program whose architectural answer is `0x9104`. It was pinning the miscompilation as
+correct, and adding the immediate check would have failed it. It now runs the genuine
+sequence out of the comment above `X(netbsd_cacheclean)`.
+
+Rebuilding it surfaced the reason a naive control cannot work here: **for a real 32-stride
+loop r0 cannot discriminate at all**, because the closed form is exactly right there — both
+answers are `0x9120`, measured. The only value that separates folded from unfolded is the
+load's destination, which the fold leaves stale. So the control asserts `r2 == 0x77`, its
+seed, where the architecture leaves the fetched `0xa5a5a5a5`. That row pins a defect this
+round does not fix, deliberately and on the record: it is the only evidence available that
+the optimisation still fires, and an over-tight guard that silently disabled it would be
+invisible to every discriminator in the gate.
+
+Gate 14 goes 161 → 165 rows (four loops, each one field off the genuine sequence, so no row
+can be satisfied by the wrong guard). Swept against a binary built from the parent commit:
+**162 of 165**, failing the three rows above and nowhere else, with both controls passing on
+both builds.
+
+**Still open on this handler, both pre-existing, both already filed:** the load's
+destination is never written (#346 narrows the blast radius to r2, it does not close it —
+closing it means performing the final load, in a fold whose purpose is to skip loads); and
+flags are never written though the loop it replaces ends on a `subs` reaching zero, which
+owes Z=1 N=0 C=1 V=0.
+
 ## Ninety-fourth round (#345) — the cache-clean fold matched a loop's shape and ignored its registers
 
 `X(netbsd_cacheclean)` replaces a NetBSD cache-clean loop with a closed-form update, and it

@@ -340,13 +340,19 @@ def run_xchg(same_reg):
     return sw(w[0]), sw(w[1])
 
 
-#  #345: NetBSD cache-clean fold. The matcher (cpu_arm_instr.c:2796) tested only
-#  the SHAPE of the loop -- a post-indexed word load, `subs rX,rX,#32`, a branch
-#  back to the load -- and never WHICH registers it used, while
-#  X(netbsd_cacheclean) hardcodes `r[0] += r[1]; r[1] = 0`. A loop built on any
-#  other pair had r0 and r1 clobbered and its own registers left stale.
-LDR_R4_R5_P4 = 0xE4954004       # ldr  r4,[r5],#4   (post-indexed, W=0 U=1)
-LDR_R4_R0_P4 = 0xE4904004       # ldr  r4,[r0],#4
+#  #345/#346: NetBSD cache-clean fold. The matcher (cpu_arm_instr.c:2796) tested
+#  only the SHAPE of the loop -- a post-indexed word load, `subs rX,rX,#32`, a
+#  branch back to the load -- while X(netbsd_cacheclean) hardcodes
+#  `r[0] += r[1]; r[1] = 0`. #345 pinned the two registers the handler WRITES;
+#  #346 pins the load's own remaining two operands, because that closed form is
+#  arithmetic that only holds for a 32-BYTE STRIDE.
+#
+#  The genuine sequence, from the comment above X(netbsd_cacheclean):
+#
+#      ldr  r2,[r0],#32        subs r1,r1,#0x20        bne back        mcr ...
+#
+#  All four loops below are built from that with exactly ONE field wrong, so
+#  each row attributes its answer to one guard.
 SUBS_R6_32   = 0xE2566020       # subs r6,r6,#32
 SUBS_R1_32   = 0xE2511020       # subs r1,r1,#32
 BNE_BACK4    = 0x1AFFFFFC       # bne  -4 words, back to the load
@@ -357,13 +363,27 @@ MOV_R0_11    = 0xE3A00011       # mov  r0,#0x11 -- sentinel the loop never uses
 MOV_R1_22    = 0xE3A01022       # mov  r1,#0x22
 MOV_R5_9100  = 0xE3A05C91       # mov  r5,#0x9100  (safe RAM as the load base)
 MOV_R0_9100  = 0xE3A00C91       # mov  r0,#0x9100
+MOV_R2_77    = 0xE3A02077       # mov  r2,#0x77 -- the load's destination seed
+MOV_R6_66    = 0xE3A06066       # mov  r6,#0x66 -- ditto for the wrong-Rd loop
 STR_R0_R7    = 0xE5870000
 STR_R1_R7_4  = 0xE5871004
-BEQ_BACK13   = 0x0AFFFFF3       # beq -13 words, back to the outer loop top
+STR_R2_R7_8  = 0xE5872008
+STR_R6_R7_12 = 0xE587600C
+BEQ_BACK16   = 0x0AFFFFF0       # beq -16 words, back to the outer loop top
+
+CC_BASE = 0x9100                # safe RAM, clear of DEST..DEST+15
+CC_MEM  = 0xA5A5A5A5            # the word the load must fetch from CC_BASE
 
 
-def run_cacheclean(use_r01=False):
-    """Two-pass witness for the cache-clean fold's missing register check.
+def ldr_post(rn, rd, imm):
+    """LDR Rd,[Rn],#imm -- post-indexed, immediate, U=1 W=0 (add, no writeback
+    bit; post-index always writes back). arg[0]=&r[Rn], arg[1]=imm,
+    arg[2]=&r[Rd] (cpu_arm_instr.c:3863-3878, cpu_arm_instr_loadstore.c:118)."""
+    return 0xE4900000 | (rn << 16) | (rd << 12) | imm
+
+
+def run_cacheclean(variant):
+    """Two-pass witness for the cache-clean fold's operand checks.
 
     The inner `bne` never has to be TAKEN -- the matcher inspects the branch's
     target at translation time, not its outcome -- so the counter is seeded to
@@ -371,44 +391,68 @@ def run_cacheclean(use_r01=False):
     block, because the combiner rewrites ic[-3] while the MCR is translated, so
     the folded handler only exists from the second pass (see run_combined).
 
-    use_r01=False builds the loop on r5/r6 and re-seeds r0/r1 to sentinels the
-    loop never touches: a fold that fires answers 0x11 + 0x22 = 0x33 and r1 = 0,
-    where the architectural answer leaves them alone.
+    Returns (r0, r1, r2, r6). Four variants, one wrong field each:
 
-    use_r01=True is the CONTROL -- a loop that really does use r0 and r1, which
-    must STILL fold. Folded it answers 0x9100 + 32 = 0x9120; unfolded the
-    post-index leaves 0x9104. It therefore discriminates fold from no-fold, and
-    is what stops an over-tight guard from disabling the optimisation unnoticed.
+      "wrongregs" -- base r5, counter r6, stride 32. #345's guard. Folded it
+          answers r0 = 0x11 + 0x22 = 0x33 and r1 = 0; architecturally r0 and r1
+          are untouched. Its stride is 32 ON PURPOSE, so that #346's immediate
+          check cannot block this fold and quietly stand in for #345's.
+
+      "genuine"   -- the real sequence, and the CONTROL: it must STILL fold, or
+          the guards are over-tight and the optimisation is silently dead. r0
+          CANNOT discriminate here -- the closed form is exactly right for a
+          32-stride loop, and both answers are 0x9120 (measured). What separates
+          them is r2: the handler never performs the load, so folded r2 keeps its
+          seed 0x77, while unfolded it holds CC_MEM. That stale destination is a
+          real defect this round does NOT fix (see OUTSTANDING_BUGS); the row
+          pins today's behaviour precisely because it is the only value that
+          proves the fold fired. If the staleness is ever fixed, this row's want
+          becomes CC_MEM and it goes on detecting the fold either way.
+
+      "imm4"      -- the same loop with `ldr r2,[r0],#4`. #346's discriminator:
+          the fold advances r0 by 32 regardless, so it answered 0x9120 where the
+          architecture returns 0x9104, and r2 was left at 0x77 instead of CC_MEM.
+
+      "wrongdest" -- `ldr r6,[r0],#32`. Right stride, right base and counter,
+          wrong destination: the fold fired and stranded r6 at 0x66 rather than
+          CC_MEM.
+
+    Every architectural answer above was taken from the identical program with
+    the MCR replaced by a nop, so that nothing combines at all.
     """
-    seed_cnt = MOV_R1_32 if use_r01 else MOV_R6_32
-    seed_a = MOV_R0_9100 if use_r01 else MOV_R0_11
-    seed_b = NOP if use_r01 else MOV_R1_22
-    seed_c = NOP if use_r01 else MOV_R5_9100
-    ldr = LDR_R4_R0_P4 if use_r01 else LDR_R4_R5_P4
-    subs = SUBS_R1_32 if use_r01 else SUBS_R6_32
-    w, _ = session([
-        "r9=0x1", "r7=0x%x" % DEST,
-        "put w 0x%x, 0xdeadbeef" % DEST,
-        "put w 0x%x, 0xdeadbeef" % (DEST + 4),
-        "put w 0x%x, 0x%08x" % (CODE,      MOV_R8_1),
-        "put w 0x%x, 0x%08x" % (CODE + 4,  seed_cnt),      # outer loop top
-        "put w 0x%x, 0x%08x" % (CODE + 8,  seed_a),
-        "put w 0x%x, 0x%08x" % (CODE + 12, seed_b),
-        "put w 0x%x, 0x%08x" % (CODE + 16, seed_c),
-        "put w 0x%x, 0x%08x" % (CODE + 20, ldr),           # ic[-3]
-        "put w 0x%x, 0x%08x" % (CODE + 24, subs),          # ic[-2]
-        "put w 0x%x, 0x%08x" % (CODE + 28, BNE_BACK4),     # ic[-1]
-        "put w 0x%x, 0x%08x" % (CODE + 32, MCR_CLEAN),     # ic[0]
-        "put w 0x%x, 0x%08x" % (CODE + 36, STR_R0_R7),
-        "put w 0x%x, 0x%08x" % (CODE + 40, STR_R1_R7_4),
-        "put w 0x%x, 0x%08x" % (CODE + 44, SUBS_R8_R9),
-        "put w 0x%x, 0x%08x" % (CODE + 48, BEQ_BACK13),
-        "put w 0x%x, 0x%08x" % (CODE + 52, NOP),
-        "breakpoint add 0x%x" % (CODE + 52),
-        "pc=0x%x" % CODE, "continue"], 2)
+    if variant == "wrongregs":
+        seeds = [MOV_R6_32, MOV_R0_11, MOV_R1_22, MOV_R5_9100, MOV_R2_77]
+        ldr, subs = ldr_post(5, 4, 0x20), SUBS_R6_32
+    elif variant == "genuine":
+        seeds = [MOV_R1_32, MOV_R0_9100, NOP, NOP, MOV_R2_77]
+        ldr, subs = ldr_post(0, 2, 0x20), SUBS_R1_32
+    elif variant == "imm4":
+        seeds = [MOV_R1_32, MOV_R0_9100, NOP, NOP, MOV_R2_77]
+        ldr, subs = ldr_post(0, 2, 0x04), SUBS_R1_32
+    elif variant == "wrongdest":
+        seeds = [MOV_R1_32, MOV_R0_9100, MOV_R6_66, NOP, MOV_R2_77]
+        ldr, subs = ldr_post(0, 6, 0x20), SUBS_R1_32
+    else:
+        raise ValueError(variant)
+    #  CODE+4 is the outer loop top: every seed re-runs on both passes.
+    prog = [MOV_R8_1] + seeds + [
+        ldr,                    # ic[-3]
+        subs,                   # ic[-2]
+        BNE_BACK4,              # ic[-1]
+        MCR_CLEAN,              # ic[0] -- arms the combination check
+        STR_R0_R7, STR_R1_R7_4, STR_R2_R7_8, STR_R6_R7_12,
+        SUBS_R8_R9, BEQ_BACK16, NOP]
+    cmds = ["r9=0x1", "r7=0x%x" % DEST,
+            "put w 0x%x, 0x%08x" % (CC_BASE, CC_MEM)]
+    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(4)]
+    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+             for i, iw in enumerate(prog)]
+    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+             "pc=0x%x" % CODE, "continue"]
+    w, _ = session(cmds, 4)
     if w is None or w[0] == "deadbeef":
         return None
-    return sw(w[0]), sw(w[1])
+    return tuple(sw(x) for x in w)
 
 
 def run_und_condfailed(iw):
@@ -1083,12 +1127,22 @@ for nm, got, want, cls in XCHG_ROWS:
     row(nm, cls, "%08x" % got if got is not None else "dead", "%08x" % want)
 
 #  #345: the cache-clean fold clobbered r0/r1 for a loop that used neither.
-_cc = run_cacheclean()
-_cg = run_cacheclean(use_r01=True)
+#  #346: and it fired on any post-index immediate, so a 4-byte stride advanced
+#  the base by 32. See run_cacheclean for what each variant isolates; the two
+#  "still folds" rows are the control that the guards did not disable the
+#  optimisation outright, which no discriminator here could detect.
+_cc = run_cacheclean("wrongregs")
+_cg = run_cacheclean("genuine")
+_ci = run_cacheclean("imm4")
+_cd = run_cacheclean("wrongdest")
 for _nm, _got, _want, _cls in (
         ("A cacheclean r0 intact", _cc[0] if _cc else None, 0x11, "DISC"),
         ("A cacheclean r1 intact", _cc[1] if _cc else None, 0x22, "DISC"),
-        ("A cacheclean still folds", _cg[0] if _cg else None, 0x9120, "PIN")):
+        ("A cacheclean still folds", _cg[2] if _cg else None, 0x77, "PIN"),
+        ("A cacheclean fold r0", _cg[0] if _cg else None, 0x9120, "PIN"),
+        ("A cacheclean imm4 r0", _ci[0] if _ci else None, 0x9104, "DISC"),
+        ("A cacheclean imm4 r2", _ci[2] if _ci else None, CC_MEM, "DISC"),
+        ("A cacheclean wrong Rd", _cd[3] if _cd else None, CC_MEM, "DISC")):
     row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
         "%08x" % _want)
 

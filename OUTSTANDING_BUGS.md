@@ -1647,3 +1647,34 @@ corruption without a clear host-OOB path.
 > overwrite): it replaces four block transfers with one `memcpy` and publishes only r0 and
 > r1, leaving **r3, r4, ip and lr** stale where the LDMs would have left the last sixteen
 > bytes copied. A missing side effect, not a register-guard hole.
+
+> ## 2026-08-05 — #346 closes the cache-clean STRIDE hole; two defects there stay open
+> Two review seats found #345 incomplete on the same point, and both were right. #345
+> checked the two registers `X(netbsd_cacheclean)` **writes** and stopped; the load's own
+> other two operands were still unchecked, and the first of them is a stride. The closed
+> form `r[0] += r[1]` is arithmetic that is only true when each iteration advances the base
+> by 32, so `ic[-3].arg[1]` is part of the contract. Measured on the committed build,
+> `ldr r2,[r0],#4 / subs r1,r1,#0x20 / bne / mcr` folded and returned r0 = `0x9120` where
+> the architecture returns `0x9104` — eight times the real advance, from a loop a compiler
+> can emit. **#346 requires `arg[1] == 0x20` and `arg[2] == &r[2]`.**
+>
+> The same round found the **control row committed with #345 was asserting the wrong thing**
+> and would have locked the defect in: `run_cacheclean(use_r01=True)` built its "must still
+> fold" loop with `ldr r4,[r0],#4` and asserted the FOLDED answer `0x9120` for a program
+> whose architectural answer is `0x9104`. It has been rebuilt on the genuine sequence. Note
+> for anyone rebuilding it again: for a real 32-stride loop **r0 cannot discriminate**,
+> because the closed form is exactly right there and both answers are `0x9120`. The only
+> value that proves the fold fired is the stale destination.
+>
+> **Still open on this handler, both pre-existing and both recorded above:**
+> - **the load's destination is never written.** `X(netbsd_cacheclean)` skips the loads, so
+>   r2 keeps whatever it held (measured: seed `0x77` retained where the architecture leaves
+>   the fetched `0xa5a5a5a5`). #346 does not fix this — it only confines it to r2, since a
+>   fold on any other Rd would strand that register too. Fixing it means performing the
+>   final iteration's load, which is a scope decision about a fold whose whole purpose is to
+>   skip loads.
+> - **flags are never written**, though the loop it replaces ends on a `subs` reaching zero,
+>   which owes Z=1 N=0 C=1 V=0.
+>
+> `gate_arm.sh` now carries seven rows here, each loop one field off the genuine sequence.
+> The two control rows pass on both builds by design; the pre-fix build scores 162/165.
