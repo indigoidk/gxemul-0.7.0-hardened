@@ -108,27 +108,16 @@
 >   `fma()` rounds once but per the host mode, so a directed-mode fused rounding needs an
 >   exact product-sum rather than a helper call. Gate 13 exists with 121 rows to build on.
 >
-> - **The ARM instruction COMBINER changes observable flags — and NO probe in this
->   harness can currently see it.** Source-verified: a data-processing immediate with the
->   S bit set updates C from the shifter carry-out, which this tree approximates as "if
->   the encoded immediate is > 255 it was rotated, so C := its bit 31"
->   (`cpu_arm_instr_dpi.c:121-140`). The standalone `teqs`/`tsts` do that. The
->   `*_samepage` handlers a `teq`/`tst`-followed-by-branch is folded into do **not touch
->   C at all** (`cpu_arm_instr.c:2589`, `:2610`, `:2628`, `:2651`), and the `teqs`
->   combiner has **no guard on the operand whatsoever** (`:2973`, `:2989`) while the
->   `tsts` one guards only bit 31 — which is about N (with the top bit clear `a & b`
->   cannot be negative), not about C. So folding changes the flags a guest observes.
->   **Why it is not fixed here:** `cpu_dyntrans.c:1888` disables combining whenever
->   `single_step` is set, and every probe in `regress/` drives the guest with the
->   debugger's `step`. Rows written against a `teq`+`beq` pair therefore measure the
->   STANDALONE path while appearing to measure the combined one — five such rows were
->   written, measured "correct", and withdrawn rather than committed, because a row that
->   cannot fail is worse than no row. A real witness needs FREE-RUNNING execution with
->   `allow_instruction_combinations` on and a breakpoint after the sequence — the same
->   "gates are only provable free-running" constraint this project has hit before. The
->   whole combined-handler family (`cmps_*`, `teqs_*`, `tsts_*`, `netbsd_*`, `strlen`,
->   `xchg`) is unguarded by the harness for the same reason, which is a wider hole than
->   this one defect.
+> - ~~**The ARM instruction COMBINER changes observable flags — and NO probe can
+>   see it.**~~ — **RESOLVED as a campaign, not an entry.** #340 built the
+>   two-pass free-running witness and fixed the `teqs`/`tsts` `*_samepage`
+>   handlers; #342 the `xchg` fold; #345/#346/#347 the cache-clean matchers and
+>   registers; #348/#349/#350 the cache-clean exit flags, the fold-fired marker
+>   channel, and the non-multiple runtime guard (see the 2026-08-09 entry at the
+>   end of this file). The family members still diverging — `netbsd_idle`'s
+>   skipped TEQs and unwritten destination, `netbsd_memcpy`'s stale
+>   r3/r4/ip/lr — are carried by the dated entries below, each measurable with
+>   the #340 driver.
 >
 > - **Still open, from round 72's own findings** (recorded, not guessed at):
 >   - **PPC-D, Alpha, and SH PR=1 D arithmetic have no gate rows at all**, so #331 changed
@@ -1738,3 +1727,63 @@ corruption without a clear host-OOB path.
 > and two anti-clobber pins that pass on both builds and exist to catch the opposite error —
 > a handler writing r[0]/r[1] by name behind a matcher that still accepts any register. The
 > pre-fix build (`be6ea08`) scores 168/173.
+
+> ## 2026-08-09 — #348/#349/#350 close the cache-clean flag entries; the fold detector was re-authored in the same change
+> The flag divergence filed against both cache-clean folds is **resolved**: each
+> handler now leaves r1 at the final iteration's operand and delegates the last
+> subtraction to the real dpi `subs` (the netbsd_memcpy fold's own pattern), so
+> the exit flags are computed by the same instruction the loop would have
+> executed — Z|C on a zero exit, N on a borrow exit, V structurally 0 (the
+> final operand lies in [0, 0x20] for every uint32 counter). Gate 14 grew
+> 173 -> 189 rows; the pre-fix HEAD binary scored 181/189 failing exactly the
+> eight new discriminators; the fixed build 189/189.
+>
+> `A cclean2 still fold` — the control row built ON the missing flags — was
+> retired and replaced by #349's marker channel in the same change, as the
+> entry above demanded: a DEBUG-gated `debugmsg_cpu` at the top of each
+> handler, silent at default verbosity (pinned by the quiet rows), visible
+> under `verbosity cpu 3` (the fires rows, each carrying its own echoed
+> "3: DEBUG" as proof the level took), and deliberately not pre-gated with
+> ENOUGH_VERBOSITY() per the #278 convention, so `breakpoint subsystem cpu`
+> can catch a fold in flight.
+>
+> **#350** closed a hole this file had not yet named: variant 1's closed form
+> terminated loops the architecture never exits. A counter that is not a
+> multiple of 32 has an invariant residue, so its subs never reaches zero —
+> the fold returned r1 = 0 anyway. The matcher cannot see r1 (translation
+> time), so the HANDLER bails out to the pinned genuine load handler whenever
+> `r1 & 0x1f` is nonzero; the residue is invariant, so every re-entry bails
+> too and the guest keeps the infinite loop, the real loads, the faults and
+> the interruptibility. r1 == 0 stays folded (it terminates, in 2^27
+> iterations) and its marker/instruction accounting now uses the honest
+> n = 2^27 rather than the 0 that `r1 >> 5` reported.
+>
+> **Still open on these handlers, deliberately:**
+> - **Variant 1's skipped load** — stale r2 stays, and stays USEFUL: it is the
+>   fold detector independent of the marker, and `A cacheclean still folds`
+>   pins it. Two consequences sharpened in review and recorded here: a folded
+>   run can never take the **data abort** the real loads could take, and never
+>   performs their **MMIO/read side effects**. Fixing any of that means
+>   performing real loads, i.e. deleting the fold's reason to exist.
+> - **Both folds elide their MCRs.** Harmless while cr7 operations are no-ops
+>   (`cpu_arm_coproc.c:209-216`); the day cache operations or coprocessor
+>   traps are modelled, both folds silently skip them.
+> - **`netbsd_idle` and `netbsd_memcpy`** (2026-08-03 entry above) remain the
+>   open combiner divergences, next in the queue.
+>
+> **New follow-up candidate, found by the #350 witness:** a read of
+> non-existent physical memory emits one host log line per access —
+> `memory READ: from non-existant paddr=...` — and execution continues. That
+> is a guest-reachable, per-access host-log flood of exactly the class this
+> fork has repeatedly gated (#278 et al.), reachable on any ARM machine by a
+> loop walking past the top of RAM, and presumably on other architectures
+> through the same memory layer. Measured live: ~one line per loop iteration,
+> tens of thousands per second. Needs its own round: locate the emitting
+> site(s), classify latch-vs-gate per the recorded axis, and check which
+> architectures share the path.
+>
+> The witness's own first draft is part of the record (see run_cc_nonmult's
+> docstring): it expected a data abort at the top of RAM — measured false,
+> the read logs and continues — and it compared a dump string against
+> "deadbeef" unswapped, reading its own sentinel's parity as a measurement.
+> Both are the file's recorded trap classes, re-encountered and re-recorded.

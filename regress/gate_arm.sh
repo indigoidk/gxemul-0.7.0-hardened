@@ -36,6 +36,21 @@
 # 173, failing exactly the five `A cclean2 ... ` discriminators and nowhere
 # else. All three of that round's control/anti-clobber pins pass on both builds.
 #
+# And for round 99 (#348/#349/#350) against a binary built from the pre-fix
+# HEAD (dea2fef): 181 of 190, failing exactly the NINE new DISC rows -- the
+# two flags rows, the tail/zero/tail-V flag rows, the two fires rows,
+# `A cacheclean nonmult` reading "fold", and `A cacheclean zero n` reading
+# "none" -- and nowhere else. On the fixed build: 190/190. The retired
+# `A cclean2 still fold` control asserted the MISSING flags and was replaced
+# in the same change by the #349 marker rows, exactly as its own comment
+# required. The nonmult witness's first draft is itself a recorded lesson:
+# it expected a data abort at the top of RAM (measured false -- non-existent
+# reads log and continue) and compared a dump string unswapped, so it read
+# its own sentinel's parity; see run_cc_nonmult's docstring. Its "live"
+# verdict was then tightened in review to also demand load progress (r0
+# moved off 0x9120), closing a false pass against a guard that returns
+# without calling the load.
+#
 # Why most of this gate is PINs
 # ----------------------------
 # #311 rewrites ONE line that five instructions share, and two of them were
@@ -97,15 +112,18 @@ check "control row proves the probe measures" "${ctrl:-missing}" "OK"
 
 res=$(grep -o "ARM_FLAGS_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
 got=${res%/*}; want=${res#*/}
-check "rows run"     "$want" 173
+check "rows run"     "$want" 190
 check "rows correct" "$got"  "$want"
 
 # Both classes must stay populated: a gate that is all pins cannot detect a
-# reverted fix, and one with no pins cannot detect collateral damage.
+# reverted fix, and one with no pins cannot detect collateral damage. The
+# floors track the deltas each round adds; a review seat noted they are far
+# below the actuals (112/78 after round 99) and so guard only against mass
+# reclassification, with `rows run` guarding deletion.
 disc=$(grep -c " DISC " "$LOG")
 pins=$(grep -c " PIN " "$LOG")
-check_min "discriminating rows present" "$disc" 49
-check_min "pinned rows present"         "$pins" 58
+check_min "discriminating rows present" "$disc" 58
+check_min "pinned rows present"         "$pins" 66
 
 # Named rows, one contract each, so a single site reverting cannot hide behind
 # a total. Two spaces after the name: the probe pads names to a fixed column,
@@ -144,9 +162,9 @@ for v in "A xchg same-reg zeroes" "A xchg same-reg r1 pin" \
     check "  row: $v" "$n" 1
 done
 
-# #345/#346: the cache-clean fold. Four loops, each one field off the genuine
-# `ldr r2,[r0],#32 / subs r1,r1,#0x20 / bne / mcr`, so no row can be satisfied
-# by the wrong guard.
+# #345/#346/#348/#349/#350: the first cache-clean fold. Matcher probes, each
+# one field off the genuine `ldr r2,[r0],#32 / subs r1,r1,#0x20 / bne / mcr`,
+# so no row can be satisfied by the wrong guard:
 #
 #   r0/r1 intact  -- #345: base r5, counter r6. Its stride is 32 deliberately,
 #       so that #346's immediate check cannot block this fold and stand in for
@@ -156,28 +174,48 @@ done
 #       half of that: the skipped load left it at its 0x77 seed.
 #   wrong Rd      -- `ldr r6,[r0],#32` folded and stranded r6 at 0x66.
 #
-# The two control rows are what stop an over-tight guard from disabling the
-# optimisation unnoticed -- no discriminator above can see that, since they all
-# pass when nothing ever folds. "fold r0" pins the closed form's arithmetic;
-# "still folds" is the only value that PROVES the fold fired for the genuine
-# sequence, because r0 is 0x9120 whether it folds or not. It asserts a stale r2,
-# which is a defect #346 does not fix -- when that is fixed its want becomes
-# 0xa5a5a5a5 and it keeps working as the fold detector.
+# "fold r0" pins the closed form's arithmetic; "still folds" asserts the stale
+# r2, a defect deliberately unfixed (OUTSTANDING_BUGS), which makes it a fold
+# detector independent of #349's marker. The #348 rows ride a 0x40 counter --
+# at 0x20, a fix that skipped the r1 preload would be invisible:
+#
+#   flags         -- #348: seeded N|V (cmp r9,#0x80000000), the loop's zero
+#       exit owes Z|C = 0x6; the committed pre-fix build read the seed back.
+#   fold r1       -- the genuine counter result, 0, unasserted before round 99.
+#   nonmult       -- #350: a 0x21 counter re-entering the installed fold. The
+#       unguarded fold consumed it (r0 went odd: += 0x21); the guard falls
+#       back to the real loop, which never exits, and the session is forced
+#       back with ^C. The verdict is read from the registers: "fold" on an
+#       unaided exit with r0 odd, "live" only with the residue invariant
+#       AND r0 advanced off its phase-A value (load progress).
+#   quiet/fires   -- #349: the fold-fired marker, absent at default verbosity,
+#       present under `verbosity cpu 3` on the genuine loop only. The fires
+#       row is the channel's own positive control; ctrl proves selectivity.
+#   zero n        -- #350's r1 == 0 arm: the honest iteration count (2^27) is
+#       unassertable by any register or flag, so it is read off the marker
+#       text itself. A formula reverted to `r1 >> 5` prints 0 and fails.
 for v in "A cacheclean r0 intact" "A cacheclean r1 intact" \
          "A cacheclean still folds" "A cacheclean fold r0" \
          "A cacheclean imm4 r0" "A cacheclean imm4 r2" \
-         "A cacheclean wrong Rd"; do
+         "A cacheclean wrong Rd" "A cacheclean flags" \
+         "A cacheclean fold r1" "A cacheclean nonmult" \
+         "A cacheclean quiet" "A cacheclean fires" \
+         "A cacheclean fires ctrl" "A cacheclean zero n"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done
 
-# #347: the SECOND cache-clean fold, which had BOTH halves of the defect --
-# `add rX,rX,#32 / subs rY,rY,#32` accepted for any X and Y, and a handler that
-# wrote no guest register at all. Three loops, each one field off the genuine
-# `mcr / mcr / add r0,r0,#32 / subs r1,r1,#32 / bhi`.
+# #347/#348/#349: the SECOND cache-clean fold, which had BOTH halves of the
+# #347 defect -- `add rX,rX,#32 / subs rY,rY,#32` accepted for any X and Y,
+# and a handler that wrote no guest register at all -- and then the flags
+# defect #348 closed. Loops one field off the genuine
+# `mcr / mcr / add r0,r0,#32 / subs r1,r1,#32 / bhi`, plus counters for both
+# exits of the loop:
 #
-#   fold r0/r1    -- the genuine sequence. The committed handler returned
-#       r0 = 0x9100 and r1 = 0x40 for a loop that owes 0x9140 and 0.
+#   fold r0/r1    -- the genuine sequence. The committed #346-era handler
+#       returned r0 = 0x9100 and r1 = 0x40 for a loop that owes 0x9140 and 0.
+#   flags         -- #348: seeded N|V, the 0x40 counter's zero exit owes
+#       Z|C = 0x6. The pre-fix build read the seed back.
 #   base r5/r1    -- `add r5,r5,#32`: the fold fired anyway and stranded r5 at
 #       0x9100 and r1 at 0x40.
 #   cnt r6        -- `subs r6,r6,#32`: fired anyway, r6 left at 0x40.
@@ -186,16 +224,24 @@ done
 #       now writes r[0]/r[1] by name behind a matcher that still takes any
 #       register. Without them the register guard could be dropped and only the
 #       rows above, which already pass, would notice.
-#   still fold    -- the CONTROL, and it must read the cpsr, not a register.
-#       Once the closed form is right r0 and r1 are the same folded or not, so
-#       nothing in a register can prove the optimisation still fires. The fold
-#       writes no flags though the loop ends on a subs reaching zero: seeded
-#       N=1, the folded run still reads N=1 where the real loop leaves Z=1 C=1.
-#       That is a defect #347 does not fix, pinned deliberately -- same trade as
-#       #346's stale-r2 control, and the only fold detector available.
-for v in "A cclean2 fold r0" "A cclean2 fold r1" "A cclean2 still fold" \
+#   tail flags/r0/r1 -- the 0x30 counter exits on the subs BORROWING and owes
+#       N alone (0x8); the registers pin #347's closed form on the borrow
+#       path, which no earlier row covered. "tail V" repeats the run seeded
+#       V=1: V must come back 0 on the borrow exit too (it is structurally 0
+#       -- the final operand lies in [0, 0x20] for every uint32 counter).
+#   zero flags/r0/r1 -- counter 0, the one input where #347's `(r1 == 0 ||`
+#       disjunct is load-bearing: owes r0 += 0x20, r1 = 0xffffffe0, flags 0x8.
+#   quiet/fires   -- #349: the marker channel. The old `still fold` control
+#       asserted the MISSING flags (seeded N surviving) and was retired in the
+#       same change that fixed them, as its own comment required; the marker
+#       is its replacement as the only fold-fired detector, since post-#348
+#       the genuine sequence is architecturally transparent.
+for v in "A cclean2 fold r0" "A cclean2 fold r1" "A cclean2 flags" \
          "A cclean2 base r5" "A cclean2 base r1" "A cclean2 base r0" \
-         "A cclean2 cnt r6" "A cclean2 cnt r1"; do
+         "A cclean2 cnt r6" "A cclean2 cnt r1" "A cclean2 tail flags" \
+         "A cclean2 tail r0" "A cclean2 tail r1" "A cclean2 tail V" \
+         "A cclean2 zero flags" "A cclean2 zero r0" "A cclean2 zero r1" \
+         "A cclean2 quiet" "A cclean2 fires" "A cclean2 fires ctrl"; do
     n=$(count "$LOG" "^$v  .*ok$")
     check "  row: $v" "$n" 1
 done

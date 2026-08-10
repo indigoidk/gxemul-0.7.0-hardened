@@ -4192,6 +4192,149 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## Ninety-ninth round (#348, #349, #350) — the folds learned their exit flags, and the detector the fix would blind was rebuilt in the same change
+
+Both cache-clean folds stand in for a loop whose final instruction is a
+`subs`, and neither wrote any of the four flags that subtraction owes.
+Measured on the committed build with the two-pass free-running driver, the
+flags seeded by a `cmp` that re-runs on every pass and read back by the
+guest's own `mrs`:
+
+```
+variant 1  ctr 0x20   armed: NZCV = seed (9)   neutralized: 6   <- Z|C owed
+variant 2  ctr 0x40   armed: NZCV = seed (9)   neutralized: 6
+variant 2  ctr 0x30   armed: NZCV = seed (6)   neutralized: 8   <- N owed
+```
+
+("neutralized" = the arming iword replaced by a nop, so nothing combines.
+Registers agreed armed/neutralized in every row — #345/#346/#347 hold; the
+flags were the last guest-visible divergence.)
+
+- **#348 (`cpus/cpu_arm_instr.c`)** — both handlers now leave r1 at the
+  final iteration's operand and delegate the last subtraction to the real
+  dpi `subs` — the netbsd_memcpy fold's own pattern — whose arguments the
+  matchers already pin to (r1, #0x20, r1). For variant 1 every terminating
+  counter's final operand is 0x20 (nonzero multiples end 32 -> 0; the
+  r1 == 0 wrap ends on the same operand after 2^27 iterations whose 2^32
+  bytes of base advance return r0 to itself). For variant 2 the operand is
+  `before_last = r1 - ((n-1) << 5)`, which lies in [0, 0x20] for every
+  uint32 counter — 0 for r1 == 0, r1 & 31 for non-multiples, 0x20 for
+  nonzero multiples — so the stored register result is byte-identical to
+  #347's closed form and V is structurally 0: the dpi overflow rule needs a
+  negative operand, and neither `before_last` nor 0x20 can be one. A zero
+  exit answers Z|C, a borrow exit answers N, both measured against the
+  un-combined loop. This is not a simulation of the flags: it is the real
+  final iteration, executed by the real instruction; the only thing
+  delegated away is the loop.
+
+- **#349 (`cpus/cpu_arm_instr.c`)** — a fold-fired marker,
+  `debugmsg_cpu(SUBSYS_CPU, ..., VERBOSITY_DEBUG, "combined N iterations")`,
+  in both handlers. #348 makes the genuine variant-2 sequence
+  architecturally transparent folded or unfolded, so gate 14's old control
+  row — which proved the fold fired by reading the MISSING flags — dies
+  with the defect it was built on, exactly as its own comment said it
+  would. The marker replaces it: silent at default verbosity (the quiet
+  rows pin that), visible under `verbosity cpu 3` (the fires rows, each
+  carrying the echoed "3: DEBUG" as its own proof the level took), and
+  deliberately NOT pre-gated with ENOUGH_VERBOSITY(), per the #278
+  convention — a pre-gate would hide it under `-V step` and keep
+  `breakpoint subsystem cpu` from firing on it. One review seat required
+  the pre-gate in pass 1 and withdrew it without reservation in pass 2
+  after reading the #278 comment, which a second seat had cited
+  independently: for this site the catchability is load-bearing, since the
+  marker IS the round's designed fold-observation channel.
+
+- **#350 (`cpus/cpu_arm_instr.c`)** — variant 1's closed form terminated
+  loops the architecture does not terminate: a counter that is not a
+  multiple of 32 has an invariant nonzero residue, so its `subs` never
+  reaches zero and the real `bne` loop runs forever, while the fold
+  returned r1 = 0 and moved on. The matcher cannot refuse this — it runs
+  at translation time and never sees r1 — so the HANDLER now bails out to
+  the genuine pinned load handler whenever `r1 & 0x1f` is nonzero (the
+  netbsd_memcpy bail-out shape; the fallback touches neither `next_ic` nor
+  any register, so a data abort raised by the real load stands). The
+  residue is invariant under the loop's own -0x20, so every re-entry bails
+  too: the guest keeps its infinite loop, its real loads, its faults and
+  its interruptibility. r1 == 0 stays folded — that loop terminates — and
+  its marker and instruction accounting now use the honest n = 2^27 rather
+  than the 0 that `r1 >> 5` reported. Both handlers also CLAMP the
+  n_translated_instrs addition to the batch budget's remaining room: the
+  billing reaches ~5*2^27, the limit (8191) is only tested per dispatch
+  group, and the zero-counter fold is a fixed point (it leaves r1 == 0),
+  so a two-instruction guest loop could otherwise drive the signed counter
+  through overflow — the #169 class, sharpened by this very round and
+  caught by a pass-2 seat. A #169-style bail would disable the fold for
+  every counter above a few tens of KB; dropping the overshoot costs only
+  the instruction statistics in that synthetic corner.
+
+**Gate 14 goes 173 -> 190 rows** (the variant-1 block 7 -> 14, the
+variant-2 block 8 -> 18, `A cclean2 still fold` retired). The new
+discriminators: both `flags` rows (seeded `cmp r9,#0x80000000` = 0x9, so
+every NZCV bit must move to reach the owed 0x6), `tail flags` (borrow
+exit, seed 0x6 -> owed 0x8), `tail V` (the same borrow run seeded V=1,
+pinning V's clearance on that exit), `zero flags` plus two register pins
+(r1 == 0 is the one input where #347's `(r1 == 0 ||` disjunct is
+load-bearing; an alternative closed form such as `(r1+31)>>5` fails
+exactly there, and nothing had tested it), `fires` for both variants,
+`nonmult`, and `zero n` — which reads the honest 2^27 off the marker text
+itself, because a formula reverted to `r1 >> 5` reproduces every register
+and flag and differs only in what it prints and bills. The #348 rows ride
+a NEW 0x40-counter session because a review seat proved the existing
+0x20 session could not fail against a fix that skipped the r1 preload —
+at one iteration the live counter IS the preload value. `A cacheclean
+fold r1` pins the genuine fold's counter result, unasserted since #345.
+The probe's name column widened 26 -> 30 after a proposed name landed
+exactly on the padded-column trap's width, and both pty argv lists gained
+`-A`: under pty.fork() a CLICOLOR in the caller's environment would put
+ANSI escapes inside the debugmsg line and silently fail every marker
+grep — an environment-dependent FAIL that would have read as a real
+regression.
+
+Swept against a binary built from the pre-fix HEAD (`dea2fef`):
+**181 of 190, failing exactly the nine new discriminators and nowhere
+else** — the five flag rows at their seed values, both fires rows absent,
+nonmult reading "fold", zero n reading "none". On the fixed build:
+**190/190**, at 0 warnings, all four trees byte-identical.
+
+**The #350 witness earned its own entries in the trap ledger.** Its first
+draft planted a handler at the data-abort vector and expected the guarded
+walk to fault at the top of RAM: measured FALSE — a read of non-existent
+physical memory logs one host line per access
+(`memory READ: from non-existant paddr=...`) and execution continues, r0
+observed 4 MB past RAM top and still walking (which is also the live
+proof the guard's fallback executes real loads: pc mid-loop, r0 in exact
+0x20 strides, the residue invariant holding). The same draft compared a
+dump string against "deadbeef" without byte-swapping — the little-endian
+transposition the probe's own header warns about — and so read its own
+sentinel's parity as a measurement. And its second draft's "live" verdict
+was refuted by a pass-2 seat with a constructive counterexample: a broken
+guard that returns WITHOUT calling the load also loops forever with the
+residue invariant intact, but parks r0 at its phase-A value — so "live"
+now additionally demands load progress. The per-access log line is filed
+in OUTSTANDING_BUGS as a flood-class follow-up candidate.
+
+Both passes ran the full six-seat panel (Codex xhigh, agy, Kimi, GLM,
+MiniMax, Claude/Opus). Pass 1 (design): unanimous GO/GO-WITH-CHANGES;
+it changed the round four times — the runtime guard (three seats, adopted
+as #350), the honest zero count, the 0x40-counter session, and the
+zero/tail-V rows — and one seat's claim that the r1 == 0 loop never
+terminates was refuted by three others' proofs. Pass 2 (diff): three GO,
+three GO-WITH-CHANGES, every required change adopted — the clamp, the
+load-progress predicate, the `-A` flag, the zero-n row — except one:
+numeric line citations for the arming/matcher sites, which had now gone
+stale twice in two consecutive rounds (each round's own added lines
+re-staled the previous fix), were replaced by symbol-anchored citations
+instead of a third set of numbers.
+
+Still open on these handlers, all recorded in OUTSTANDING_BUGS: variant
+1's skipped load (stale r2 — kept deliberately as the fold detector
+independent of the marker — plus the two consequences a review seat
+sharpened: a folded run can never take the data abort or perform the MMIO
+side effects the real loads could); both folds elide their MCRs, which
+becomes visible the day cache operations are modelled; and the
+netbsd_idle and netbsd_memcpy divergences found by #340's after-panel,
+which are the next two rounds.
+
 ## Ninety-eighth round (#347) — the second cache-clean fold skipped a loop and updated nothing
 
 `X(netbsd_cacheclean2)` replaced the five-instruction NetBSD cache-clean loop with

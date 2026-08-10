@@ -2072,9 +2072,63 @@ X(netbsd_memcpy)
 X(netbsd_cacheclean)
 {
 	uint32_t r1 = cpu->cd.arm.r[1];
-	cpu->n_translated_instrs += ((r1 >> 5) * 3);
+	uint32_t n;
+
+	/*  #350: a counter that is not a multiple of 32 never reaches zero,
+	    so the real bne loop never exits -- the closed form below would
+	    terminate a loop the architecture does not terminate. Fall back
+	    to the genuine load handler (the netbsd_memcpy bail-out shape,
+	    cf. :2028): r1 mod 32 is invariant under the loop's -0x20, so
+	    every re-entry falls back too and the guest keeps its infinite
+	    loop, its loads, its faults and its interruptibility. r1 == 0
+	    stays folded: that loop terminates, after 2^27 iterations whose
+	    2^32 bytes of base advance wrap r0 to itself.  */
+	if (r1 & 0x1f) {
+		instr(load_w0_word_u1_p0_imm)(cpu, ic);
+		return;
+	}
+
+	n = r1 == 0 ? (uint32_t)1 << 27 : r1 >> 5;
+
+	/*  #349: fold-fired marker. Once #348 made this fold write the
+	    loop's true exit state, the genuine sequence became
+	    architecturally transparent, so gate 14's fold detector reads
+	    this DEBUG-gated line (and the stale r2, while the skipped load
+	    stays unfixed). Deliberately NOT pre-gated with
+	    ENOUGH_VERBOSITY(), per the #278 convention: a pre-gate would
+	    hide it under -V step and keep `breakpoint subsystem cpu` from
+	    firing here.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_cacheclean",
+	    VERBOSITY_DEBUG, "combined %u iterations", (unsigned) n);
+
+	/*  #350: bill the skipped instructions against the batch budget,
+	    CLAMPED to the room left. n*3 reaches 3*2^27, the limit is only
+	    tested per dispatch group, and the r1 == 0 fold is a fixed point
+	    (it leaves r1 == 0), so an unclamped add is guest-drivable into
+	    signed overflow -- the #169 class, sharpened by this round. A
+	    #169-style bail would disable the fold for every counter above
+	    a few tens of KB, so the overshoot is dropped instead; only the
+	    total instruction statistics under-count in that corner.  */
+	{
+		uint64_t add = (uint64_t) n * 3;
+		int room = N_SAFE_DYNTRANS_LIMIT - cpu->n_translated_instrs;
+		if (room > 0)
+			cpu->n_translated_instrs +=
+			    (add > (uint64_t) room) ? room : (int) add;
+	}
 	cpu->cd.arm.r[0] += r1;
-	cpu->cd.arm.r[1] = 0;
+
+	/*  #348: the loop ends on `subs r1,r1,#0x20` reaching zero, which
+	    owes N/Z/C/V. Delegate the final subtraction to the real dpi
+	    handler, the netbsd_memcpy fold's own pattern (:2048); ic here
+	    is the LOAD slot, so &ic[1] is the subs the matcher pinned to
+	    (r1, #0x20, r1). Every terminating counter's final operand is
+	    0x20 -- nonzero multiples end 32 -> 0, and the r1 == 0 wrap
+	    ends on the same operand -- so this leaves r1 = 0 with Z|C set
+	    and N|V clear, exactly as the loop does.  */
+	cpu->cd.arm.r[1] = 0x20;
+	instr(subs)(cpu, &ic[1]);
+
 	cpu->cd.arm.next_ic = &ic[4];
 }
 
@@ -2126,18 +2180,45 @@ X(netbsd_cacheclean2)
 	 *  n << 5 truncates to 0 -- which is exactly what advancing a 32-bit
 	 *  register by 2^32 bytes does.
 	 *
-	 *  STILL NOT MODELLED: the flags. The subs that ends the loop owes
-	 *  N/Z/C/V and this fold writes none of them (see OUTSTANDING_BUGS).
-	 *  With the registers now correct that is the ONLY guest-visible
-	 *  difference left between the fold and the loop, which is precisely
-	 *  what gate 14's control row has to read to prove the fold still fires.
+	 *  #348: the flags. The subs that ends the loop owes N/Z/C/V; the
+	 *  final subtraction is delegated to the real dpi handler, the
+	 *  netbsd_memcpy fold's own pattern (:2048). ic here is the FIRST
+	 *  MCR slot, so &ic[3] is the subs the matcher pinned to
+	 *  (r1, #0x20, r1). r1 is left at the final iteration's operand,
+	 *  before_last = r1 - ((n-1) << 5), which lies in [0, 0x20] for
+	 *  every uint32 counter (0 for r1 == 0; r1 & 31 for non-multiples;
+	 *  0x20 for nonzero multiples), so the stored result is
+	 *  byte-identical to the closed form above and V is structurally
+	 *  0: a zero exit answers Z|C, a borrow exit answers N, both
+	 *  measured against the un-combined loop.
+	 *
+	 *  #349: the marker. That delegation makes the genuine sequence
+	 *  architecturally transparent folded or unfolded, so gate 14's
+	 *  fold detector is this DEBUG-gated line -- the old control row
+	 *  read the MISSING flags and was retired in the same change.
+	 *  Deliberately NOT pre-gated with ENOUGH_VERBOSITY(), per the
+	 *  #278 convention: a pre-gate would hide it under -V step and
+	 *  keep `breakpoint subsystem cpu` from firing here.
 	 */
 	uint32_t r1 = cpu->cd.arm.r[1];
 	uint32_t n = (r1 == 0 || (r1 & 31) != 0)? (r1 >> 5) + 1 : (r1 >> 5);
 
-	cpu->n_translated_instrs += (n * 5) - 1;
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_cacheclean2",
+	    VERBOSITY_DEBUG, "combined %u iterations", (unsigned) n);
+
+	/*  #350: clamped for the same reason as netbsd_cacheclean above --
+	    (n*5)-1 reaches ~5*2^27 and the batch limit is only tested per
+	    dispatch group.  */
+	{
+		uint64_t add = (uint64_t) n * 5 - 1;
+		int room = N_SAFE_DYNTRANS_LIMIT - cpu->n_translated_instrs;
+		if (room > 0)
+			cpu->n_translated_instrs +=
+			    (add > (uint64_t) room) ? room : (int) add;
+	}
 	cpu->cd.arm.r[0] += n << 5;
-	cpu->cd.arm.r[1] = r1 - (n << 5);
+	cpu->cd.arm.r[1] = r1 - ((n - 1) << 5);
+	instr(subs)(cpu, &ic[3]);
 	cpu->cd.arm.next_ic = &ic[5];
 }
 
@@ -2925,7 +3006,9 @@ void COMBINE(netbsd_cacheclean2)(struct cpu *cpu,
 		    exactly, reintroduced by fixing the other half.
 
 		    ic[0] needs no check of its own: this combiner is armed only
-		    from iword == 0x8afffffa (see :4145 below), which is `bhi`
+		    from iword == 0x8afffffa (the case-0xa arming in
+		    to_be_translated below; a NUMERIC line cite here has gone
+		    stale twice in two rounds), which is `bhi`
 		    with offset -6, so its target is ic[-4] by encoding, and
 		    n_back >= 4 keeps ic[-4] inside the same instruction page.  */
 		if (ic[-4].f == instr(mcr_mrc) && ic[-4].arg[0] == 0xee070f3a &&

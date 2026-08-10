@@ -110,9 +110,14 @@ ARM_MODE_UND32 = 0x1b
 
 def session(cmds, nwords):
     """Run one cold-debugger session; return (words, transcript)."""
+    #  -A disables colorized output. Under pty.fork() both isatty() checks
+    #  pass, so a CLICOLOR in the caller's environment would otherwise put
+    #  ANSI escapes between "cpu " and the debugmsg name and silently fail
+    #  every marker grep -- an environment-dependent FAIL that looks like a
+    #  real regression (a round-99 review seat's catch).
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp(BIN, [BIN, "-V", "-E", "testarm", "-M", "64",
+        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
                         "0x%x:%s" % (CODE, STUB)])
         os._exit(127)
     buf = ""
@@ -340,7 +345,9 @@ def run_xchg(same_reg):
     return sw(w[0]), sw(w[1])
 
 
-#  #345/#346: NetBSD cache-clean fold. The matcher (cpu_arm_instr.c:2796) tested
+#  #345/#346: NetBSD cache-clean fold. The matcher (COMBINE(netbsd_cacheclean)
+#  in cpu_arm_instr.c; numeric line cites here went stale twice in two rounds,
+#  so this one is by symbol) tested
 #  only the SHAPE of the loop -- a post-indexed word load, `subs rX,rX,#32`, a
 #  branch back to the load -- while X(netbsd_cacheclean) hardcodes
 #  `r[0] += r[1]; r[1] = 0`. #345 pinned the two registers the handler WRITES;
@@ -369,45 +376,111 @@ STR_R0_R7    = 0xE5870000
 STR_R1_R7_4  = 0xE5871004
 STR_R2_R7_8  = 0xE5872008
 STR_R6_R7_12 = 0xE587600C
-BEQ_BACK16   = 0x0AFFFFF0       # beq -16 words, back to the outer loop top
 
-CC_BASE = 0x9100                # safe RAM, clear of DEST..DEST+15
+#  Round 99: the outer back-branch is COMPUTED from the program layout
+#  (outer_beq below). Its predecessor BEQ_BACK16 was a hand-encoded offset
+#  that was correct only for the 17-word #345/#346 program; adding the flag
+#  seed and the cpsr publish would have silently retargeted it mid-program,
+#  skipped the counter seeds on pass 2, and let `fold r0` and `still folds`
+#  keep passing while measuring a different program -- the hand-assembled-
+#  encoding trap this harness has recorded twice already.
+MOV_R1_48    = 0xE3A01030       # mov  r1,#0x30 -- borrow-exit counter
+MOV_R1_0     = 0xE3A01000       # mov  r1,#0    -- the #347 r1==0 disjunct
+MOV_R1_33    = 0xE3A01021       # mov  r1,#0x21 -- non-multiple counter
+MOV_R10_20   = 0xE3A0A020       # mov  r10,#0x20 -- zero-n pass-1 counter
+MOV_R10_0    = 0xE3A0A000       # mov  r10,#0    -- zero-n pass-2 counter
+MOV_R1_R10   = 0xE1A0100A       # mov  r1,r10   -- per-pass counter seed
+CMP_R9_HI    = 0xE3590208       # cmp  r9,#0x80000000 (0x08 ror 4; r9=1 ->
+                                #   N1 Z0 C0 V1 = 0x9: every NZCV bit must
+                                #   move to reach the 0x6 answer. 0xE3590102
+                                #   encodes the same value; this one is the
+                                #   form the round-99 repro measured live)
+CMP_R9_1     = 0xE3590001       # cmp  r9,#1 (r9=1 -> 0 -> Z1 C1 = 0x6)
+
+CC_BASE = 0x9100                # safe RAM, clear of DEST..DEST+19
 CC_MEM  = 0xA5A5A5A5            # the word the load must fetch from CC_BASE
+
+#  #349's fold-fired markers, anchored to the debugmsg line shape. On this
+#  1-machine 1-cpu rig the line is `[ cpu <name>: combined N iterations ]`
+#  -- there is NO "cpu0:" prefix (debugmsg.c:213-232 prints it only for
+#  multiple machines/cpus). Anchoring on `cpu <name>: combined` survives
+#  both the name-prefix collision (cacheclean vs cacheclean2) and pty ECHO
+#  of the probe's own typed commands, which lands in the same transcript.
+MARK1 = re.compile(r"cpu netbsd_cacheclean: combined")
+MARK2 = re.compile(r"cpu netbsd_cacheclean2: combined")
+
+
+def outer_beq(branch_idx, target_idx=1):
+    """Backward BEQ from program word branch_idx to word target_idx
+    (ARM B offset: target = branch + 8 + imm24*4)."""
+    return 0x0A000000 | ((target_idx - branch_idx - 2) & 0xFFFFFF)
+
+
+def verb_cmds():
+    """Raise the cpu subsystem to DEBUG and echo the setting back. The
+    echo line ("3: DEBUG") is each fires-session's own positive control
+    that the level took -- an absence row under a verbosity that silently
+    failed to rise would pass for the wrong reason."""
+    return ["verbosity cpu 3", "verbosity cpu"]
+
+
+def marker_count(buf, mark):
+    return len(mark.findall(buf)) if buf else 0
+
+
+def verb_took(buf):
+    return "3: DEBUG" in (buf or "")
 
 
 def ldr_post(rn, rd, imm):
     """LDR Rd,[Rn],#imm -- post-indexed, immediate, U=1 W=0 (add, no writeback
     bit; post-index always writes back). arg[0]=&r[Rn], arg[1]=imm,
-    arg[2]=&r[Rd] (cpu_arm_instr.c:3863-3878, cpu_arm_instr_loadstore.c:118)."""
+    arg[2]=&r[Rd] (the load/store decode in cpu_arm_instr.c's main-opcode-4
+    case, and cpu_arm_instr_loadstore.c:118)."""
     return 0xE4900000 | (rn << 16) | (rd << 12) | imm
 
 
-def run_cacheclean(variant):
+def run_cacheclean(variant, seed=NOP, verbose=False):
     """Two-pass witness for the cache-clean fold's operand checks.
 
     The inner `bne` never has to be TAKEN -- the matcher inspects the branch's
     target at translation time, not its outcome -- so the counter is seeded to
-    32 and one `subs` reaches zero. What must happen twice is entry to the whole
-    block, because the combiner rewrites ic[-3] while the MCR is translated, so
-    the folded handler only exists from the second pass (see run_combined).
+    32 and one `subs` reaches zero, except in "genuine40", whose TWO
+    iterations are load-bearing for #348: with a 0x20 counter, a broken fix
+    that skipped the `r[1] = 0x20` preload and delegated the subs on the LIVE
+    counter would produce bit-identical registers AND flags, and no row could
+    see it (a round-99 review seat's finding). At 0x40 the two diverge:
+    correct code answers r1 = 0 with flags Z|C; a missing preload answers
+    r1 = 0x20 with C alone. What must happen twice is entry to the whole
+    block, because the combiner rewrites ic[-3] while the MCR is translated,
+    so the folded handler only exists from the second pass (see run_combined).
 
-    Returns (r0, r1, r2, r6). Four variants, one wrong field each:
+    `seed` is one extra instruction word run LAST among the seeds on every
+    pass -- the flag preset for the #348 rows, a NOP elsewhere -- so the
+    value the cpsr row reads cannot have been left by anything but the loop.
+    `verbose=True` raises the cpu subsystem to DEBUG first and echoes the
+    setting back (the #349 fires rows; the echo is the session's own proof
+    the level took). Returns ((r0, r1, r2, r6, cpsr), transcript).
+
+    Five program variants, one field each:
 
       "wrongregs" -- base r5, counter r6, stride 32. #345's guard. Folded it
           answers r0 = 0x11 + 0x22 = 0x33 and r1 = 0; architecturally r0 and r1
           are untouched. Its stride is 32 ON PURPOSE, so that #346's immediate
           check cannot block this fold and quietly stand in for #345's.
 
-      "genuine"   -- the real sequence, and the CONTROL: it must STILL fold, or
-          the guards are over-tight and the optimisation is silently dead. r0
-          CANNOT discriminate here -- the closed form is exactly right for a
-          32-stride loop, and both answers are 0x9120 (measured). What separates
-          them is r2: the handler never performs the load, so folded r2 keeps its
-          seed 0x77, while unfolded it holds CC_MEM. That stale destination is a
-          real defect this round does NOT fix (see OUTSTANDING_BUGS); the row
-          pins today's behaviour precisely because it is the only value that
-          proves the fold fired. If the staleness is ever fixed, this row's want
-          becomes CC_MEM and it goes on detecting the fold either way.
+      "genuine"   -- the real sequence, counter 0x20, and a fold CONTROL: it
+          must STILL fold, or the guards are over-tight and the optimisation
+          is silently dead. r0 CANNOT discriminate here -- the closed form is
+          exactly right for a 32-stride loop, and both answers are 0x9120
+          (measured). What separates them is r2: the handler never performs
+          the load, so folded r2 keeps its seed 0x77, while unfolded it holds
+          CC_MEM. That stale destination is a real defect round 99 did NOT fix
+          (see OUTSTANDING_BUGS); the row pins today's behaviour precisely
+          because it is a fold detector independent of #349's marker.
+
+      "genuine40" -- the real sequence, counter 0x40: carries the #348 flag
+          and counter rows (see above).
 
       "imm4"      -- the same loop with `ldr r2,[r0],#4`. #346's discriminator:
           the fold advances r0 by 32 regardless, so it answered 0x9120 where the
@@ -426,6 +499,9 @@ def run_cacheclean(variant):
     elif variant == "genuine":
         seeds = [MOV_R1_32, MOV_R0_9100, NOP, NOP, MOV_R2_77]
         ldr, subs = ldr_post(0, 2, 0x20), SUBS_R1_32
+    elif variant == "genuine40":
+        seeds = [MOV_R1_64, MOV_R0_9100, NOP, NOP, MOV_R2_77]
+        ldr, subs = ldr_post(0, 2, 0x20), SUBS_R1_32
     elif variant == "imm4":
         seeds = [MOV_R1_32, MOV_R0_9100, NOP, NOP, MOV_R2_77]
         ldr, subs = ldr_post(0, 2, 0x04), SUBS_R1_32
@@ -434,25 +510,262 @@ def run_cacheclean(variant):
         ldr, subs = ldr_post(0, 6, 0x20), SUBS_R1_32
     else:
         raise ValueError(variant)
-    #  CODE+4 is the outer loop top: every seed re-runs on both passes.
-    prog = [MOV_R8_1] + seeds + [
+    #  CODE+4 is the outer loop top: every seed re-runs on both passes, and
+    #  the flag seed runs LAST.
+    prog = [MOV_R8_1] + seeds + [seed] + [
         ldr,                    # ic[-3]
         subs,                   # ic[-2]
         BNE_BACK4,              # ic[-1]
         MCR_CLEAN,              # ic[0] -- arms the combination check
-        STR_R0_R7, STR_R1_R7_4, STR_R2_R7_8, STR_R6_R7_12,
-        SUBS_R8_R9, BEQ_BACK16, NOP]
+        MRS_R3_CPSR,
+        STR_R0_R7, STR_R1_R7_4, STR_R2_R7_8, STR_R6_R7_12, STR_R3_R7_16,
+        SUBS_R8_R9]
+    prog += [outer_beq(len(prog)), NOP]
     cmds = ["r9=0x1", "r7=0x%x" % DEST,
             "put w 0x%x, 0x%08x" % (CC_BASE, CC_MEM)]
-    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(4)]
+    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(5)]
     cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
              for i, iw in enumerate(prog)]
+    if verbose:
+        cmds += verb_cmds()
     cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
              "pc=0x%x" % CODE, "continue"]
-    w, _ = session(cmds, 4)
+    w, buf = session(cmds, 5)
     if w is None or w[0] == "deadbeef":
+        return None, buf
+    return tuple(sw(x) for x in w), buf
+
+
+def run_cc_nonmult():
+    """#350's witness: a counter that is not a multiple of 32 must NOT fold.
+
+    Architecturally `subs r1,r1,#0x20` from 0x21 never reaches zero (the
+    residue mod 32 is invariant), so the bne loop never exits; the unguarded
+    fold terminated it. The program installs the fold with a genuine 0x20
+    pass, then re-enters the SAME translated slot once with r1 = 0x21:
+
+        word  0  mov r8,#1               outer-pass counter
+              1  mov r1,#0x20            \\ phase-A seeds
+              2  mov r0,#0x9100          /
+              3  mov r2,#0x77
+              4  ldr r2,[r0],#32         <- the fold slot
+              5  subs r1,r1,#0x20
+              6  bne -> 4
+              7  mcr (arms; fold exit lands at word 8)
+              8  mov r1,#0x21            phase-B counter
+              9  subs r8,r9              1->0 Z=1 first time, 0->-1 Z=0 after
+             10  beq -> 4                taken exactly once: re-enter the fold
+             11  str r0,[r7]             publish
+             12  nop                     breakpoint
+
+    UNGUARDED: the fold consumes r1 = 0x21, r0 += 0x21 = 0x9141 (odd), falls
+    out to words 8-12 and hits the breakpoint without help. GUARDED: the
+    handler falls back to the real load every iteration and the loop runs
+    forever, exactly as the architecture says; the session is forced back to
+    the prompt with ^C and the verdict read from the REGISTERS. "live"
+    demands THREE things, and the third is load-bearing (a review seat's
+    catch): r1 mod 32 == 1 (the residue invariant), r0 a multiple of 0x20,
+    AND r0 advanced past phase A's 0x9120 -- because a broken guard that
+    returned WITHOUT calling the load would also loop forever with the
+    residue invariant intact, but its r0 would be parked at 0x9120. Only
+    the genuine fallback's post-index writeback moves r0.
+
+    The first version of this witness planted a handler at the data-abort
+    vector and expected the walking load to fault at the top of RAM. That
+    was measured FALSE on this tree: a read of non-existent physical memory
+    logs `memory READ: from non-existant paddr=...` per access and execution
+    CONTINUES with the load returning junk -- r0 was observed 4 MB past the
+    top of RAM, still walking (pc mid-loop, r1 invariant holding, which is
+    also the live proof the guard's fallback path executes real loads). The
+    same first version compared the dump string against "deadbeef" without
+    byte-swapping -- the little-endian transposition this file's header
+    warns about -- and so read its own sentinel's parity as a measurement.
+    Both mistakes are recorded here so the next witness starts further on.
+
+    A "live" verdict proves the guard HELD; it cannot by itself prove the
+    fold was ever INSTALLED -- a broken matcher yields the same infinite
+    loop. Words 4-7 here are iword-identical to the genuine session's
+    program, whose still-folds and fires rows carry installation for this
+    shape; the coverage is cross-row by design.
+
+    Returns "fold" (the defect: fold consumed the counter), "live" (guard
+    held; loop genuinely running), a state string for anything else, or
+    None if the session died."""
+    prog = [MOV_R8_1, MOV_R1_32, MOV_R0_9100, MOV_R2_77,
+            ldr_post(0, 2, 0x20),   # word 4: the fold slot
+            SUBS_R1_32,
+            BNE_BACK4,              # -> word 4
+            MCR_CLEAN,
+            MOV_R1_33,
+            SUBS_R8_R9,
+            0x0AFFFFF8,             # beq -> word 4 (imm24 = 4 - 10 - 2 = -8)
+            STR_R0_R7, NOP]
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+                        "0x%x:%s" % (CODE, STUB)])
+        os._exit(127)
+    buf = ""
+
+    def rd(t=0.4):
+        nonlocal buf
+        r, _, _ = select.select([fd], [], [], t)
+        if fd not in r:
+            return True
+        try:
+            d = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        buf += d.decode("latin1", "replace")
+        return True
+
+    def wait(timeout=30):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            if buf.rstrip().endswith(">"):
+                return True
+        return False
+
+    def send(s, tmo=30):
+        b = (s + "\n").encode("latin1")
+        n = 0
+        while n < len(b):
+            n += os.write(fd, b[n:])
+        return wait(tmo)
+
+    if not wait(60):
+        try:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
         return None
-    return tuple(sw(x) for x in w)
+    send("r9=0x1")
+    send("r7=0x%x" % DEST)
+    send("put w 0x%x, 0x%08x" % (CC_BASE, CC_MEM))
+    for i, iw in enumerate(prog):
+        send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
+    send("breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)))
+    send("pc=0x%x" % CODE)
+    #  Prompt detection anchored PAST the continue echo: whole-buffer
+    #  endswith() could match the stale pre-continue prompt, or a flood
+    #  line's trailing '>'. Either mis-detection fails toward "dead" (the
+    #  reg parse then starves), never toward a false verdict, but the
+    #  anchor removes the stall.
+    mark0 = len(buf)
+    os.write(fd, b"continue\n")
+
+    def wait_past_mark(timeout):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not rd():
+                return False
+            if len(buf) > mark0 and buf[mark0:].rstrip().endswith(">"):
+                return True
+        return False
+
+    hit_bp = wait_past_mark(2.5)
+    if not hit_bp:
+        os.write(fd, b"\x03")
+        if not wait(15):
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except Exception:
+                pass
+            return None
+    mark = len(buf)
+    send("reg")
+    seg = buf[mark:]
+    regs = {}
+    for r in ("r0", "r1"):
+        m = re.search(r"\b%s\s*=\s*0x([0-9a-f]+)" % r, seg)
+        if not m:
+            try:
+                os.write(fd, b"quit\n")
+                time.sleep(0.3)
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except Exception:
+                pass
+            return None
+        regs[r] = int(m.group(1), 16)
+    try:
+        os.write(fd, b"quit\n")
+        time.sleep(0.3)
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    if hit_bp:
+        return "fold" if (regs["r0"] & 1) else "exit-%x" % regs["r0"]
+    if ((regs["r1"] & 0x1f) == 1 and (regs["r0"] & 0x1f) == 0
+            and regs["r0"] != 0x9120):
+        return "live"
+    return "state-%x-%x" % (regs["r0"], regs["r1"])
+
+
+def run_cc_zero_n():
+    """#350's r1 == 0 arm: gate the HONEST iteration count via the marker.
+
+    For a zero counter the fold's registers and flags are identical whether
+    n is 2^27 or a reverted `r1 >> 5` (= 0) -- only the marker text and the
+    batch billing differ -- so the adopted formula was unassertable by any
+    state row (a review seat's catch). The #349 marker carries the count,
+    so this row reads it back.
+
+    Installing the fold by genuinely executing a zero-counter loop is
+    infeasible (pass 1 would run 2^27 real iterations, walking the load
+    past the top of RAM through the log flood), so the counter is seeded
+    THROUGH A REGISTER that changes between passes: pass 1 runs the loop
+    with r1 = r10 = 0x20 (one iteration, installs the fold), r10 is then
+    cleared, and pass 2 re-enters with r1 = r10 = 0 -- the fold computes
+    n = 2^27 instantly and prints it.
+
+        word  0  mov r8,#1
+              1  mov r10,#0x20
+              2  mov r1,r10          <- outer loop top, re-runs both passes
+              3  mov r0,#0x9100
+              4  mov r2,#0x77
+              5  ldr r2,[r0],#32     <- the fold slot
+              6  subs r1,r1,#0x20
+              7  bne -> 5
+              8  mcr (arms)
+              9  mov r10,#0          the second pass's counter
+             10  subs r8,r9
+             11  beq -> 2
+             12  nop                 breakpoint
+
+    Returns the printed count as a string, "none" if the marker never
+    fired, or None if the session died."""
+    prog = [MOV_R8_1, MOV_R10_20,
+            MOV_R1_R10,             # word 2: outer loop top
+            MOV_R0_9100, MOV_R2_77,
+            ldr_post(0, 2, 0x20),   # word 5: the fold slot
+            SUBS_R1_32,
+            BNE_BACK4,              # -> word 5
+            MCR_CLEAN,
+            MOV_R10_0,
+            SUBS_R8_R9,
+            0x0AFFFFF5,             # beq -> word 2 (imm24 = 2 - 11 - 2 = -11)
+            NOP]
+    cmds = ["r9=0x1",
+            "put w 0x%x, 0x%08x" % (CC_BASE, CC_MEM)]
+    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+             for i, iw in enumerate(prog)]
+    cmds += verb_cmds()
+    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+             "pc=0x%x" % CODE, "continue"]
+    w, buf = session(cmds, 0)
+    if w is None:
+        return None
+    m = re.search(r"cpu netbsd_cacheclean: combined (\d+) iterations",
+                  buf or "")
+    return m.group(1) if m else "none"
 
 
 #  #347: the SECOND cache-clean fold, and a worse case than the first. The
@@ -465,8 +778,9 @@ def run_cacheclean(variant):
 #  only for `rn == rd` and an immediate of 32 -- ANY register -- while the
 #  handler updated NO registers at all. Both halves are measured below.
 #
-#  The counter is 0x40, two iterations, so the loop's last subs reaches ZERO:
-#  that is what makes the flags usable as the fold detector (see run_cc2).
+#  The genuine counter is 0x40, two iterations, so the loop's last subs
+#  reaches ZERO; the borrow (0x30) and zero (0) counters exercise the other
+#  exit, where the subs BORROWS (see run_cc2).
 MCR_CC2_A  = 0xEE070F3A         # mcr 15,0,r0,cr7,cr10,1  -- ic[-4]
 MCR_CC2_B  = 0xEE070F36         # mcr 15,0,r0,cr7,cr6,1   -- ic[-3]
 ADD_R0_32  = 0xE2800020         # add  r0,r0,#0x20
@@ -478,25 +792,35 @@ MOV_R6_64  = 0xE3A06040         # mov  r6,#0x40
 MOV_R5_55  = 0xE3A05055         # mov  r5,#0x55 -- sentinel
 STR_R5_R7_8  = 0xE5875008
 STR_R3_R7_16 = 0xE5873010
-BEQ_BACK19 = 0x0AFFFFED         # beq -19 words, back to the outer loop top
 
 
-def run_cc2(variant):
+def run_cc2(variant, seed=CMP_R9_2, verbose=False):
     """Two-pass witness for the SECOND cache-clean fold. Returns
-    (r0, r1, r5, r6, cpsr).
+    ((r0, r1, r5, r6, cpsr), transcript).
 
-    Unlike variant 1 the trigger is the BRANCH itself (cpu_arm_instr.c:4145
-    arms the check on iword 0x8afffffa), which sits at the bottom of the loop,
-    so on pass 1 the combiner rewrites ic[-4] and the very next backward branch
-    already lands on the folded handler. Pass 2 is still the one that matters:
-    it re-seeds every register and enters the block with the fold already in
-    place, which is the state a real guest reaches. The stores run on both
-    passes and the second overwrites the first.
+    Unlike variant 1 the trigger is the BRANCH itself (the iword ==
+    0x8afffffa arming in cpu_arm_instr.c's to_be_translated, case 0xa --
+    cited by symbol; the numeric cite went stale twice), which sits at the
+    bottom of the loop, so on pass 1 the combiner rewrites ic[-4] and the
+    very next backward branch already lands on the folded handler. Pass 2 is still the
+    one that matters: it re-seeds every register and enters the block with
+    the fold already in place, which is the state a real guest reaches. The
+    stores run on both passes and the second overwrites the first.
 
-    Three loops, each ONE field off the genuine sequence:
+    `seed` is the flag preset, run LAST among the seeds on every pass so the
+    value the cpsr rows read cannot have been left by anything but the loop.
+    The #348 rows use `cmp r9,#0x80000000` (0x9 -- every NZCV bit must move
+    to reach the zero-exit answer 0x6) and `cmp r9,#1` (0x6, against the
+    borrow-exit answer 0x8). `verbose=True` raises the cpu subsystem to
+    DEBUG and echoes the setting (the #349 fires rows).
 
-      "genuine"   -- the real thing. DISC on r0 and r1: the committed handler
-          left them at 0x9100 and 0x40 where the loop owes 0x9140 and 0.
+    Five loops -- three matcher probes, each ONE field off the genuine
+    sequence, and two more counters for the exit-flag family:
+
+      "genuine"   -- the real thing, counter 0x40, zero exit. DISC on r0/r1
+          (the #347 defect: stranded at 0x9100/0x40 where the loop owes
+          0x9140/0) and on the exit flags (the #348 defect: seed survived
+          where the loop owes Z|C = 0x6).
 
       "wrongbase" -- `add r5,r5,#32 / subs r1,r1,#32`. DISC on r5 and r1, which
           the fold stranded at 0x9100 and 0x40. r0 is seeded 0x11 and PINNED:
@@ -509,17 +833,22 @@ def run_cc2(variant):
           an unguarded fold reading r1 = 0x22 computes 0x9140 too, so it cannot
           attribute anything.
 
-    THE CONTROL is the cpsr. Once the closed form is right, r0 and r1 are
-    identical folded and unfolded -- that is what "correct" means here -- so no
-    register can prove the optimisation still fires, and an over-tight guard
-    that silently disabled it would pass every row above. The one guest-visible
-    difference left is that the fold writes no FLAGS though the loop ends on a
-    subs: seeded N=1 by `cmp r9,#2`, the folded run still reads N=1 while the
-    real loop leaves Z=1 C=1. That is a defect this round does NOT fix (see
-    OUTSTANDING_BUGS), pinned deliberately and on the record, exactly as #346
-    pinned the stale load destination for the same reason. It only works with a
-    counter that is a nonzero multiple of 32: any other value exits the loop on
-    a BORROW and leaves N=1 as well, which is the seed's own value.
+      "borrow"    -- counter 0x30: the loop exits on the subs BORROWING, not
+          reaching zero, and owes N alone (0x8) with r0 = 0x9140 and
+          r1 = 0xfffffff0. The registers pin #347's closed form on the borrow
+          path, which no other row covers; run with both flag seeds, 0x6 to
+          discriminate N/Z/C and 0x9 to discriminate V.
+
+      "zero"      -- counter 0: the one input where #347's `(r1 == 0 ||`
+          disjunct is load-bearing (an alternative closed form like
+          `(r1+31)>>5` fails exactly here). One iteration, borrow exit:
+          owes r0 = 0x9120, r1 = 0xffffffe0, flags 0x8.
+
+    The old cpsr CONTROL row (`A cclean2 still fold`) asserted the MISSING
+    flags and died with the defect: once #348 lands, the genuine sequence is
+    architecturally transparent folded or unfolded, and no register or flag
+    can prove the fold still fires. #349's DEBUG-gated marker took over that
+    duty -- see the fires/quiet rows.
 
     Architectural answers are measured, never derived: the identical program
     with the first MCR replaced by a nop, so nothing combines. cr7 is an
@@ -537,28 +866,40 @@ def run_cc2(variant):
     elif variant == "wrongcnt":
         seeds = [MOV_R6_64, MOV_R0_9100, MOV_R1_22, MOV_R5_55]
         add, subs = ADD_R0_32, SUBS_R6_32
+    elif variant == "borrow":
+        seeds = [MOV_R1_48, MOV_R0_9100, MOV_R5_55, MOV_R6_66]
+        add, subs = ADD_R0_32, SUBS_R1_32
+    elif variant == "zero":
+        seeds = [MOV_R1_0, MOV_R0_9100, MOV_R5_55, MOV_R6_66]
+        add, subs = ADD_R0_32, SUBS_R1_32
     else:
         raise ValueError(variant)
     #  CODE+4 is the outer loop top; the flag seed is the LAST seed so that the
-    #  value the control reads cannot have been left by anything but the loop.
-    prog = [MOV_R8_1] + seeds + [CMP_R9_2] + [
+    #  value the flag rows read cannot have been left by anything but the loop.
+    #  Program length is identical for every variant and seed (one-for-one
+    #  substitutions), so the computed outer branch always resolves to the
+    #  same word the old hand-encoded BEQ_BACK19 held.
+    prog = [MOV_R8_1] + seeds + [seed] + [
         MCR_CC2_A,              # ic[-4] -- also the branch's target
         MCR_CC2_B,              # ic[-3]
         add,                    # ic[-2]
         subs,                   # ic[-1]
         BHI_BACK6,              # ic[ 0] -- arms the combination check
         MRS_R3_CPSR, STR_R0_R7, STR_R1_R7_4, STR_R5_R7_8, STR_R6_R7_12,
-        STR_R3_R7_16, SUBS_R8_R9, BEQ_BACK19, NOP]
+        STR_R3_R7_16, SUBS_R8_R9]
+    prog += [outer_beq(len(prog)), NOP]
     cmds = ["r9=0x1", "r7=0x%x" % DEST]
     cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(5)]
     cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
              for i, iw in enumerate(prog)]
+    if verbose:
+        cmds += verb_cmds()
     cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
              "pc=0x%x" % CODE, "continue"]
-    w, _ = session(cmds, 5)
+    w, buf = session(cmds, 5)
     if w is None or sw(w[0]) == 0xdeadbeef:
-        return None
-    return tuple(sw(x) for x in w)
+        return None, buf
+    return tuple(sw(x) for x in w), buf
 
 
 def run_und_condfailed(iw):
@@ -714,17 +1055,19 @@ rows = []
 
 
 def row(name, kind, got, want):
-    #  The name column is 26 wide, not 24, and that is load-bearing: gate_arm.sh
+    #  The name column is 30 wide, and that is load-bearing: gate_arm.sh
     #  matches each named row with TWO spaces after the name, to stop a name that
     #  is a prefix of a longer one from matching both. A name as long as the
     #  column gets NO padding and only the format's single separator space, so
     #  its check can never match anything -- the mirror image of the double-count
     #  trap, and it silently made two checks unsatisfiable until a diff-review
-    #  seat found them. 26 leaves >= 2 spaces for every name here; the longest is
-    #  24. Keep this wider than the longest row name if any are added.
+    #  seat found them. It was 26 through #347; round 99's review widened it to
+    #  30 for headroom after a proposed name came out at exactly 26 characters.
+    #  30 leaves >= 2 spaces for every name here; the longest is 24. Keep this
+    #  wider than the longest row name plus two if any are added.
     ok = (got == want)
     rows.append(ok)
-    print("%-26s %-12s %-12s %s %s"
+    print("%-30s %-12s %-12s %s %s"
           % (name,
              ("0x%08x" % got) if isinstance(got, int) else str(got),
              ("0x%08x" % want) if isinstance(want, int) else str(want),
@@ -1234,13 +1577,26 @@ for nm, got, want, cls in XCHG_ROWS:
 
 #  #345: the cache-clean fold clobbered r0/r1 for a loop that used neither.
 #  #346: and it fired on any post-index immediate, so a 4-byte stride advanced
-#  the base by 32. See run_cacheclean for what each variant isolates; the two
-#  "still folds" rows are the control that the guards did not disable the
-#  optimisation outright, which no discriminator here could detect.
-_cc = run_cacheclean("wrongregs")
-_cg = run_cacheclean("genuine")
-_ci = run_cacheclean("imm4")
-_cd = run_cacheclean("wrongdest")
+#  the base by 32. #348 made the fold write the loop's exit flags; #349 gave
+#  it a DEBUG-gated fold-fired marker; #350 made a non-multiple counter fall
+#  back to the real loop instead of terminating a loop that architecturally
+#  never exits. See run_cacheclean / run_cc_nonmult for what each variant
+#  isolates. "still folds" (stale r2) remains a fold detector independent of
+#  the marker, because the skipped load is deliberately unfixed.
+_cc, _ = run_cacheclean("wrongregs")
+_cg, _ = run_cacheclean("genuine")
+_ci, _ = run_cacheclean("imm4")
+_cd, _ = run_cacheclean("wrongdest")
+#  The #348 rows ride the 0x40 counter -- at 0x20 a fix that skipped the r1
+#  preload would be invisible (see the docstring). The quiet row shares the
+#  default-verbosity session: the marker must be absent from a plain run.
+#  NB debugmsg's verbosity gate is bypassed under single_step, so the quiet
+#  rows are valid only for breakpoint+continue sessions like these -- do not
+#  rewrite them to drive the loop with `step`.
+_cf, _cfbuf = run_cacheclean("genuine40", seed=CMP_R9_HI)
+_, _cvbuf = run_cacheclean("genuine40", seed=CMP_R9_HI, verbose=True)
+_, _cwbuf = run_cacheclean("wrongregs", verbose=True)
+_cn = run_cc_nonmult()
 for _nm, _got, _want, _cls in (
         ("A cacheclean r0 intact", _cc[0] if _cc else None, 0x11, "DISC"),
         ("A cacheclean r1 intact", _cc[1] if _cc else None, 0x22, "DISC"),
@@ -1248,27 +1604,79 @@ for _nm, _got, _want, _cls in (
         ("A cacheclean fold r0", _cg[0] if _cg else None, 0x9120, "PIN"),
         ("A cacheclean imm4 r0", _ci[0] if _ci else None, 0x9104, "DISC"),
         ("A cacheclean imm4 r2", _ci[2] if _ci else None, CC_MEM, "DISC"),
-        ("A cacheclean wrong Rd", _cd[3] if _cd else None, CC_MEM, "DISC")):
+        ("A cacheclean wrong Rd", _cd[3] if _cd else None, CC_MEM, "DISC"),
+        ("A cacheclean flags", (_cf[4] & 0xf0000000) if _cf else None,
+         0x60000000, "DISC"),
+        ("A cacheclean fold r1", _cf[1] if _cf else None, 0x00000000, "PIN")):
     row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
         "%08x" % _want)
+#  The #350 verdict is a state word, not a register value: "fold" = the fold
+#  consumed the 0x21 counter (prompt reached unaided, r0 odd), "live" = the
+#  guard held and the architectural infinite loop was observed running
+#  (^C-interrupted; r1 mod 32 == 1 and r0 even, the loop's two invariants).
+row("A cacheclean nonmult", "DISC", _cn if _cn else "dead", "live")
+#  Marker rows. The fires rows demand BOTH the marker and the echoed
+#  "3: DEBUG" -- a session whose verbosity silently failed to rise reports
+#  no-verb and fails, instead of passing an absence check for the wrong
+#  reason. fires ctrl proves matcher selectivity under the SAME raised
+#  verbosity whose effectiveness the fires row just proved.
+_f1 = ("yes" if marker_count(_cvbuf, MARK1) >= 1 else "no") \
+    if verb_took(_cvbuf) else "no-verb"
+_x1 = ("absent" if marker_count(_cwbuf, MARK1) == 0 else "present") \
+    if verb_took(_cwbuf) else "no-verb"
+row("A cacheclean quiet", "PIN", "%d" % marker_count(_cfbuf, MARK1), "0")
+row("A cacheclean fires", "DISC", _f1, "yes")
+row("A cacheclean fires ctrl", "PIN", _x1, "absent")
+#  #350's r1 == 0 arm: no register or flag can assert the honest n -- a
+#  formula reverted to `r1 >> 5` reproduces every stored value -- so the
+#  count is read off the #349 marker itself (see run_cc_zero_n).
+_zn = run_cc_zero_n()
+row("A cacheclean zero n", "DISC", _zn if _zn else "dead", "134217728")
 
 #  #347: the SECOND cache-clean fold had BOTH halves wrong -- unguarded
-#  registers AND no register update whatsoever. See run_cc2 for what each loop
-#  isolates and why the control has to read the cpsr rather than a register.
-_g2 = run_cc2("genuine")
-_b2 = run_cc2("wrongbase")
-_n2 = run_cc2("wrongcnt")
-_nzcv = (_g2[4] & 0xf0000000) if _g2 else None
+#  registers AND no register update whatsoever. #348 added the exit flags by
+#  delegating the final subs to the real dpi handler (zero exit owes Z|C,
+#  borrow exit owes N; V is structurally 0, since before_last lies in
+#  [0, 0x20] for every uint32 counter). The old `A cclean2 still fold`
+#  control row ASSERTED the missing flags and died with the defect it was
+#  built on -- #349's marker rows below are its replacement, decided and
+#  re-authored in the same change, as the OUTSTANDING_BUGS entry required.
+_g2, _g2buf = run_cc2("genuine", seed=CMP_R9_HI)
+_b2, _ = run_cc2("wrongbase")
+_n2, _ = run_cc2("wrongcnt")
+_t2, _ = run_cc2("borrow", seed=CMP_R9_1)
+_tv, _ = run_cc2("borrow", seed=CMP_R9_HI)
+_z2, _ = run_cc2("zero", seed=CMP_R9_1)
+_, _f2buf = run_cc2("genuine", seed=CMP_R9_HI, verbose=True)
+_, _w2buf = run_cc2("wrongbase", verbose=True)
 for _nm, _got, _want, _cls in (
         ("A cclean2 fold r0", _g2[0] if _g2 else None, 0x9140, "DISC"),
         ("A cclean2 fold r1", _g2[1] if _g2 else None, 0x00000000, "DISC"),
-        ("A cclean2 still fold", _nzcv, 0x80000000, "PIN"),
+        ("A cclean2 flags", (_g2[4] & 0xf0000000) if _g2 else None,
+         0x60000000, "DISC"),
         ("A cclean2 base r5", _b2[2] if _b2 else None, 0x9140, "DISC"),
         ("A cclean2 base r1", _b2[1] if _b2 else None, 0x00000000, "DISC"),
         ("A cclean2 base r0", _b2[0] if _b2 else None, 0x11, "PIN"),
         ("A cclean2 cnt r6", _n2[3] if _n2 else None, 0x00000000, "DISC"),
-        ("A cclean2 cnt r1", _n2[1] if _n2 else None, 0x22, "PIN")):
+        ("A cclean2 cnt r1", _n2[1] if _n2 else None, 0x22, "PIN"),
+        ("A cclean2 tail flags", (_t2[4] & 0xf0000000) if _t2 else None,
+         0x80000000, "DISC"),
+        ("A cclean2 tail r0", _t2[0] if _t2 else None, 0x9140, "PIN"),
+        ("A cclean2 tail r1", _t2[1] if _t2 else None, 0xfffffff0, "PIN"),
+        ("A cclean2 tail V", (_tv[4] & 0xf0000000) if _tv else None,
+         0x80000000, "DISC"),
+        ("A cclean2 zero flags", (_z2[4] & 0xf0000000) if _z2 else None,
+         0x80000000, "DISC"),
+        ("A cclean2 zero r0", _z2[0] if _z2 else None, 0x9120, "PIN"),
+        ("A cclean2 zero r1", _z2[1] if _z2 else None, 0xffffffe0, "PIN")):
     row(_nm, _cls, "%08x" % _got if _got is not None else "dead",
         "%08x" % _want)
+_f2y = ("yes" if marker_count(_f2buf, MARK2) >= 1 else "no") \
+    if verb_took(_f2buf) else "no-verb"
+_x2 = ("absent" if marker_count(_w2buf, MARK2) == 0 else "present") \
+    if verb_took(_w2buf) else "no-verb"
+row("A cclean2 quiet", "PIN", "%d" % marker_count(_g2buf, MARK2), "0")
+row("A cclean2 fires", "DISC", _f2y, "yes")
+row("A cclean2 fires ctrl", "PIN", _x2, "absent")
 
 print("ARM_FLAGS_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
