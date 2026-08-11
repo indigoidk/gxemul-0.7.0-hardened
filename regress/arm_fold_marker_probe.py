@@ -209,6 +209,55 @@ def count(buf, name):
     return len([l for l in buf.splitlines() if "%s: combined" % name in l])
 
 
+def declined(buf, name):
+    return len([l for l in buf.splitlines() if "%s: declined" % name in l])
+
+
+def installed(buf, name):
+    return len([l for l in buf.splitlines() if "%s: installed" % name in l])
+
+
+#  #360: the A/B pair. The `quiet` rows above assert the marker is ABSENT at
+#  default verbosity, which tests the verbosity gate rather than the fold. These
+#  test the fold: two programs differing by ONE instruction, where the cold arm
+#  must produce a DECLINE rather than merely a silence.
+#
+#  Why "reads zero" is not a control, measured: with verbosity off the guest ran
+#  perfectly -- full six-transfer advance -- and reported zero fires AND zero
+#  installs, so an install marker does not rescue it either; and a program whose
+#  pc never reaches the block also reads zero. Both are indistinguishable from a
+#  dead fold if the row only counts absences. So every arm below asserts the
+#  verbosity echo, a positive execution witness (the six transferred values,
+#  which are identical folded or not and therefore prove the program ran without
+#  presuming the fold), and the exact decline count.
+#
+#  The cold arm replaces the warm-up with a NOP rather than deleting it, so the
+#  two programs have identical layout and no address-derived expectation shifts.
+NOP = 0xE1A00000            # mov r0,r0
+WARM_LDRT = 0xE4B05004      # ldrt r5,[r0],#4   -- sets the user bit for the page
+WARM_STRT = 0xE4A15004      # strt r5,[r1],#4   -- copyout needs a STORE: a load
+                            # leaves host_store NULL and the fold declines
+                            # "no-page" instead of firing, so an ldrt warm-up
+                            # would make the healthy build fail its own row.
+
+
+def ab_prog(fold, warm):
+    """Straight-line single-pass program. No loop, no branch, no breakpoint."""
+    if fold == "copyin":
+        return ([0xE3A00801,            # mov r0,#0x10000
+                 warm and WARM_LDRT or NOP,
+                 0xE3A00801,            # mov r0,#0x10000  (re-seed)
+                 0xE4B0A004, 0xE4B0B004, 0xE4B06004,
+                 0xE4B07004, 0xE4B08004, 0xE4B09004,
+                 0xEAFFFFFE])           # b .
+    return ([0xE3A01A11,                # mov r1,#0x11000
+             warm and WARM_STRT or NOP,
+             0xE3A01A11,                # mov r1,#0x11000  (re-seed)
+             0xE4A18004, 0xE4A19004, 0xE4A1A004,
+             0xE4A1B004, 0xE4A16004, 0xE4A17004,
+             0xEAFFFFFE])
+
+
 print("=== #358: fold-fired markers, netbsd_copyin / netbsd_copyout ===")
 rows = []
 
@@ -263,6 +312,37 @@ else:
     buf, _, _ = r
     n = count(buf, "netbsd_copyout")
     rows.append(("A fold copyout quiet", "PIN", "markers=%d" % n, n == 0))
+
+#  ---- #360: A/B pairs ------------------------------------------------------
+#  Expected counts are NUMBERS derived from the mechanism, never thresholds: a
+#  straight-line single-pass block dispatches the entry slot exactly once, so a
+#  warm arm is 1 fire / 0 declines and a cold arm is 0 fires / 1 decline, with
+#  1 install either way because the matcher runs at translation regardless.
+SEED2 = {"r5": 0x5A5A0001, "r6": 0x66660001, "r7": 0x77770002,
+         "r8": 0x88880003, "r9": 0x99990004, "sl": 0xAAAA0005,
+         "fp": 0xBBBB0006}
+for fold, warm, want_fire, want_dec in (("copyin", True, 1, 0),
+                                        ("copyin", False, 0, 1),
+                                        ("copyout", True, 1, 0),
+                                        ("copyout", False, 0, 1)):
+    nm = "A fold %s %s" % (fold, "warm" if warm else "cold")
+    r = session(ab_prog(fold, warm), True, seed_regs=SEED2)
+    if r is None:
+        rows.append((nm, "DISC" if warm else "PIN", "DEAD", False))
+        continue
+    buf, regs, _ = r
+    full = "netbsd_" + fold
+    f, d, i = (count(buf, full), declined(buf, full), installed(buf, full))
+    verb = "3: DEBUG" in buf
+    #  The execution witness: r0/r1 advanced by the full six transfers. This
+    #  holds folded OR not, so it proves the program ran without presuming the
+    #  fold -- which is exactly what makes the cold arm's zero meaningful.
+    adv = (regs.get("r0") == 0x10000 + 24 if fold == "copyin"
+           else regs.get("r1") == 0x11000 + 24)
+    ok = (f == want_fire and d == want_dec and i == 1 and verb and adv)
+    rows.append((nm, "DISC" if warm else "PIN",
+                 "fire=%d dec=%d inst=%d verb=%s adv=%s"
+                 % (f, d, i, verb, adv), ok))
 
 ngot = 0
 for name, kind, detail, ok in rows:

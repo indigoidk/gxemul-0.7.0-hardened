@@ -645,11 +645,30 @@ grep -E " ok$| FAIL$" "$FOLDLOG" | sed 's/^/       /'
 
 fres=$(grep -o "FOLDMARK_RESULT=[0-9]*/[0-9]*" "$FOLDLOG" | tail -1 | cut -d= -f2)
 fgot=${fres%/*}; fwant=${fres#*/}
-check "fold-marker rows run"     "$fwant" 4
+#  #360: the `warm`/`cold` pairs are the LIVE controls, and the difference from
+#  the `quiet` rows is visible in one measurement. On a build with ONLY
+#  netbsd_copyin's arming disabled, `A fold copyin quiet` still reads **ok** --
+#  it asserts an absence, and an absence is exactly what a dead fold produces --
+#  while `A fold copyin cold` goes red because it asserts a DECLINE occurred
+#  (install 1, fire 0, decline 1). Measured 5 of 8 on that build, red at exactly
+#  the three copyin rows, with copyout's four green.
+#
+#  The install count is what makes the diagnosis one-read: install 0 means the
+#  matcher declined; install 1 with fire 0 and decline 1 means the fold was
+#  reached and turned the operands down, and the decline text names the clause.
+#  Every arm also asserts the verbosity echo and that r0/r1 advanced by the full
+#  six transfers -- the latter holds folded or not, so it proves the program ran
+#  without presuming the fold, which is what stops the cold arm's zero from
+#  being meaningless. Measured: with verbosity off the guest ran perfectly and
+#  reported zero fires AND zero installs, so counting absences alone cannot tell
+#  a dead fold from a broken session.
+check "fold-marker rows run"     "$fwant" 8
 check "fold-marker rows correct" "$fgot"  "$fwant"
 
 for v in "A fold copyin fires" "A fold copyin quiet" \
-         "A fold copyout fires" "A fold copyout quiet"; do
+         "A fold copyout fires" "A fold copyout quiet" \
+         "A fold copyin warm" "A fold copyin cold" \
+         "A fold copyout warm" "A fold copyout cold"; do
     n=$(count "$FOLDLOG" "^$v  .*ok$")
     check "  fold-marker row: $v" "$n" 1
 done

@@ -2021,6 +2021,48 @@ corruption without a clear host-OOB path.
 > handler is a divergence to explain, not automatically a defect to fix — the handler may
 > be the one that is wrong.
 
+> ## 2026-08-11 — #360: the `quiet` row asserted an absence, and an absence is what a dead fold produces
+> #358's `quiet` rows assert that no marker appears at default verbosity. That tests the
+> verbosity gate, not the fold. #360 replaces them with `warm`/`cold` pairs that make a
+> positive statement, and adds the two markers that let them: a **decline** marker computed in
+> the guard's own short-circuit (so the diagnosis cannot drift from the condition it
+> describes) and an **install** marker in each matcher.
+>
+> **The install marker is load-bearing, not decoration.** A decline marker alone is a two-way
+> split, because "the matcher declined" and "the slot was never dispatched" both read fire 0 /
+> decline 0. All three terms give a one-read diagnosis: install 1 / fire 1 / decline 0 healthy;
+> install 1 / fire 0 / decline 1 reached and declined, with the text naming the clause;
+> install 1 / fire 0 / decline 0 never dispatched (a misplaced breakpoint); install 0 the
+> matcher declined. One line per translation, so it is free even in a hot guest. The decline
+> text avoids the word "combined" because the probes count fires by matching
+> `<name>: combined` and would otherwise tally declines as fires.
+>
+> **The whole point, in one measurement.** On a build with ONLY `netbsd_copyin`'s arming
+> disabled, `A fold copyin quiet` still reads **ok** while `A fold copyin cold` goes **red** —
+> the vacuous row and its live replacement side by side on the same run. 5 of 8, red at exactly
+> the three copyin rows, copyout's four green, and `install 0` naming the cause.
+>
+> **"Reads zero" is unsound as a control, and this is measured, not argued.** With verbosity
+> off the guest ran *perfectly* — full six-transfer advance — and reported zero fires AND zero
+> installs, so an install marker does not rescue that case; a program whose pc never reaches
+> the block also reads zero. So each arm asserts the verbosity echo, an execution witness
+> (`r0`/`r1` advanced by the full six transfers, which holds folded or not and so proves the
+> program ran without presuming the fold), and the exact decline count. Counts are numbers
+> derived from the mechanism — a straight-line single-pass block dispatches the entry slot
+> once, so warm is 1/0 and cold is 0/1 with 1 install either way — never thresholds.
+>
+> **A prediction that would otherwise have cost a false failure:** `copyout`'s warm-up must be
+> a **store**. A load sets the user-page bit but leaves the store mapping empty, so the fold
+> declines `no-page` instead of firing and the *healthy* build fails its own row. Derived from
+> source by a review seat, confirmed by measurement, and now stated in the handler comment.
+>
+> **Still owed:** rows for `xchg` and `scanc`, which have markers but none. Their constants are
+> measured and recorded on the queue item — notably that `xchg`'s negative control is a
+> **matcher** decline (install 0), a different signature that must not share an expected shape
+> with these pairs, and that `scanc` needs a trailing sentinel because its result register
+> reads zero in every arm, plus that its "omit the warm-up" control is wrong when the row
+> seeds data with `put w`, which already warms the load mapping.
+
 > ## 2026-08-11 — #359: a fold copying HALF THE BYTES passed all 243 gate-14 checks
 > The severest coverage finding of this whole sequence, and it was measured rather than
 > suspected. A build whose `netbsd_memcpy` fold called `memcpy` with **16 instead of 32** —

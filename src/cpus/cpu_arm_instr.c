@@ -2634,7 +2634,34 @@ X(netbsd_copyin)
 	uint32_t *p32 = (uint32_t *) p, *q32;
 	int ok = cpu->cd.arm.is_userpage[index >> 5] & (1 << (index & 31));
 
-	if (ofs > 0x1000 - 6*4 || !ok || p == NULL) {
+	/*
+	 *  #360: name the reason this fold declined, in the SAME expression the
+	 *  guard tests, so the diagnosis cannot drift away from the condition it
+	 *  describes. Duplicating the three terms in a separate print would be a
+	 *  second thing to keep in sync; a short-circuit chain evaluated once
+	 *  cannot disagree with itself.
+	 *
+	 *  Why a bail marker at all: with only the #358 fire marker, a red row is
+	 *  ambiguous between causes that need different fixes. Adding this one and
+	 *  the install marker in COMBINE() below makes the triple readable in one
+	 *  look -- install 1 / fire 1 / bail 0 is healthy; install 1 / fire 0 /
+	 *  bail 1 means the fold was reached and DECLINED, and the text says which
+	 *  clause; install 1 / fire 0 / bail 0 means the slot was never dispatched
+	 *  (a misplaced breakpoint); install 0 means the matcher declined -- or the
+	 *  session itself broke, which is why every row also asserts the verbosity
+	 *  echo and a value witness.
+	 *
+	 *  The text deliberately avoids the word "combined": the probes count fire
+	 *  markers by matching "<name>: combined", and a bail line containing it
+	 *  would be tallied as a fold that fired.
+	 */
+	const char *why = ofs > 0x1000 - 6*4 ? "page-end" :
+	    !ok ? "not-user" : p == NULL ? "no-page" : NULL;
+
+	if (why != NULL) {
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyin", VERBOSITY_DEBUG,
+		    "declined (%s) ofs=0x%x user=%d", why, (unsigned) ofs,
+		    ok ? 1 : 0);
 		instr(load_w1_word_u1_p0_imm)(cpu, ic);
 		return;
 	}
@@ -2696,7 +2723,18 @@ X(netbsd_copyout)
 	uint32_t *p32 = (uint32_t *) p, *q32;
 	int ok = cpu->cd.arm.is_userpage[index >> 5] & (1 << (index & 31));
 
-	if (ofs > 0x1000 - 6*4 || !ok || p == NULL) {
+	/*  #360: see X(netbsd_copyin) above for why the reason is computed in the
+	    guard's own short-circuit and why the text avoids "combined". Note this
+	    fold reads host_STORE, so "no-page" here means the destination page has
+	    never been written -- a load-only warm-up leaves it NULL and this fold
+	    declines, which is why a copyout row's warm-up must be a store.  */
+	const char *why = ofs > 0x1000 - 6*4 ? "page-end" :
+	    !ok ? "not-user" : p == NULL ? "no-page" : NULL;
+
+	if (why != NULL) {
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyout", VERBOSITY_DEBUG,
+		    "declined (%s) ofs=0x%x user=%d", why, (unsigned) ofs,
+		    ok ? 1 : 0);
 		instr(store_w1_word_u1_p0_imm)(cpu, ic);
 		return;
 	}
@@ -3449,6 +3487,12 @@ void COMBINE(netbsd_copyin)(struct cpu *cpu,
 	    ic[-2].arg[2] == (size_t)(&cpu->cd.arm.r[7]) &&
 	    ic[-1].arg[2] == (size_t)(&cpu->cd.arm.r[8])) {
 		ic[-5].f = instr(netbsd_copyin);
+		/*  #360: one line per TRANSLATION, not per execution, so this is
+		    free even in a hot guest. It is the term that separates "the
+		    matcher declined" from "the slot was installed but never
+		    dispatched" -- without it those both read fire 0 / bail 0.  */
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyin",
+		    VERBOSITY_DEBUG, "installed at ic[-5]");
 	}
 #endif
 }
@@ -3480,6 +3524,8 @@ void COMBINE(netbsd_copyout)(struct cpu *cpu,
 	    ic[-2].arg[2] == (size_t)(&cpu->cd.arm.r[11]) &&
 	    ic[-1].arg[2] == (size_t)(&cpu->cd.arm.r[6])) {
 		ic[-5].f = instr(netbsd_copyout);
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyout",   /*  #360  */
+		    VERBOSITY_DEBUG, "installed at ic[-5]");
 	}
 #endif
 }

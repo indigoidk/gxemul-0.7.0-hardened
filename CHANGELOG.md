@@ -4192,6 +4192,70 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-sixth round (#360) — the row that asserted an absence still passed when the fold was dead
+
+`#358` gave two folds a fire marker and a `quiet` row asserting that no marker
+appears at default verbosity. That row tests the **verbosity gate**, not the fold:
+an absence is exactly what a dead fold produces. This round replaces it with a
+control that makes a positive statement.
+
+- **#360 (`cpus/cpu_arm_instr.c`)** — a **decline marker** on `netbsd_copyin` and
+  `netbsd_copyout`, computed in the guard's **own short-circuit** so the diagnosis
+  cannot drift from the condition it describes (duplicating the three terms in a
+  separate print would be a second thing to keep in sync), plus an **install
+  marker** in each matcher.
+
+  The install marker is what makes the diagnosis one-read, and the reason is that
+  a decline marker alone gives only a **two-way** split: "the matcher declined"
+  and "the slot was never dispatched" both read fire 0 / decline 0. With all three
+  terms — install 1 / fire 1 / decline 0 is healthy; install 1 / fire 0 /
+  decline 1 means the fold was reached and turned the operands down, and the text
+  names which clause; install 1 / fire 0 / decline 0 means the slot never
+  dispatched, i.e. a misplaced breakpoint; install 0 means the matcher declined.
+  The install marker costs **one line per translation**, not per execution.
+
+  The decline text deliberately avoids the word "combined", because the probes
+  count fire markers by matching `<name>: combined` and a decline line containing
+  it would be tallied as a fold that fired.
+
+- **`regress/arm_fold_marker_probe.py`** — a `warm`/`cold` pair per fold, two
+  programs differing by **one instruction**, where the cold arm is built by
+  replacing the warm-up with a NOP rather than deleting it so the layout and every
+  address-derived expectation stay identical. Expected counts are **numbers
+  derived from the mechanism**, never thresholds: a straight-line single-pass
+  block dispatches the entry slot exactly once, so warm is 1 fire / 0 declines and
+  cold is 0 fires / 1 decline, with 1 install either way because the matcher runs
+  at translation regardless.
+
+**Why "reads zero" is not a control, measured rather than argued.** With verbosity
+off the guest ran *perfectly* — the full six-transfer advance — and reported zero
+fires **and zero installs**, so an install marker does not rescue that case
+either; and a program whose pc never reaches the block also reads zero. Both are
+indistinguishable from a dead fold if a row only counts absences. So every arm
+asserts three things together: the verbosity echo, an execution witness (`r0`/`r1`
+advanced by the full six transfers, which holds folded *or* not and therefore
+proves the program ran without presuming the fold), and the exact decline count.
+
+**The improvement is visible in a single measurement.** On a build with **only**
+`netbsd_copyin`'s arming disabled, `A fold copyin quiet` still reads **ok** while
+`A fold copyin cold` goes **red** — the vacuous row and its live replacement side
+by side, on the same run. Measured **5 of 8**, red at exactly the three copyin
+rows with copyout's four green, and the `install 0` signature naming the cause as
+a matcher decline rather than a guard decline.
+
+**A source-derived prediction that would otherwise have cost a false failure:**
+`copyout`'s warm-up must be a **store**. A load sets the user-page bit but leaves
+the store mapping empty, so the fold declines `no-page` instead of firing and the
+healthy build fails its own row. A review seat derived that from the handler
+reading the store array; the measurement confirms it, and the source comment now
+says so where the next reader will look.
+
+Gate 14 grows 4 checks. `xchg` and `scanc` still have markers without rows and
+remain queued — with their measured constants, including that `xchg`'s negative
+control is a **matcher** decline (install 0), a different signature that must not
+share an expected shape with these, and that `scanc` needs a trailing sentinel
+because its result register reads zero in every arm.
+
 ## One-hundred-and-fifth round (#359) — a fold that copied half the bytes passed every check in the gate
 
 Harness-only: no emulator source changes. It closes a coverage hole that was
