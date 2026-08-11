@@ -1948,3 +1948,39 @@ corruption without a clear host-OOB path.
 > per-occurrence, lower reachability, complete fix already specified above),
 > copyin/copyout (two one-line fixes), strlen (host liveness), cacheclean2's elided MCRs
 > (unobservable until cache ops are modelled), memset (dead).
+
+> ## 2026-08-11 — #355/#356 resolve the strlen fold's two defects
+> The audit block's `strlen` entry is **resolved**. **#355**: the matcher now requires the
+> load's base and destination to differ, rejecting exactly `0xe5f33001`. Recorded honestly:
+> this is a **self-consistency / oracle** fix, not a wrong-answer fix — ARM calls the
+> encoding UNPREDICTABLE, so the fold's answer was not wrong; what was wrong is that this
+> emulator returned two different answers for one program depending on whether the
+> combination happened, and `-J` is gate 14's own architectural oracle. #342 is precedent
+> for the guard's SHAPE only (its case is well-defined ARM and produced a wrong value).
+> The rejected alternative is in the source: a handler-side "fix" would put the guest's
+> genuine infinite loop inside one C call — an unkillable host hang.
+> **#356**: the walk is bounded by the batch budget, tested at the BOTTOM of the do-while
+> so at least one iteration always completes (a top-of-loop return would skip the load and
+> let a guest with r3 == 0 exit its loop having never loaded a byte — a new divergence of
+> the class being fixed), yielding to `&ic[0]` with the same `3n-1` billing as the normal
+> exit. Gate 14 grew 7 rows (now 220 checks): pre-fix 3/7, fixed 7/7.
+>
+> **Corrections to what this file previously said about this defect:**
+> - Reachability was understated ~30x. `n_translated_instrs` resets once per `run_instr`,
+>   not per fold entry, and the walk is REPLAYABLE — twenty back-to-back walks measured
+>   983,080 instructions accumulating into one int. The signed overflow needs ~18-24 MB of
+>   non-NUL memory at the DEFAULT `-M 64`, not ~700 MB.
+> - "No device ticks" was wrong: `machine_run` decrements by a constant and discards
+>   `run_instr`'s return, so no tick is skipped. The real faults are a ~6000x
+>   instructions-per-tick ratio distortion and a host stall in which ^C, the console and
+>   the debugger are dead.
+>
+> **Recorded, not fixed:** the signed-overflow EVENT stays **reasoned-not-witnessed** —
+> ~716 MB of contiguous non-NUL memory is not honestly gateable — with #350 as the family
+> argument. Also recorded, from the same review: the probe cannot verify the `3n-1` billing
+> constant to better than ~8K instructions, because `ninstrs` is committed only when
+> `run_instr` returns; the constant rests on the source derivation plus a 1 MB differential
+> (folded 3,144,852 vs an architectural 3,145,728, `-J` 3,138,120), not on any gate row.
+> And once a walk exhausts the budget, the rest of that dispatch group advances one byte
+> per dispatch, so ~4% of a long walk's dispatches are near-empty — progress is guaranteed,
+> but the derivation is written down so the next reader need not redo it.

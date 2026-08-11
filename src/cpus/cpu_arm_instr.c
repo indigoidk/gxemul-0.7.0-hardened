@@ -2421,6 +2421,55 @@ X(strlen)
 	unsigned int n_loops = 0;
 	uint32_t rY, rX = reg(ic[0].arg[0]);
 	unsigned char *p;
+	/*
+	 *  #356: the walk used to run to the end of the string with no bound,
+	 *  inside ONE dispatch. Two consequences, the second measured:
+	 *
+	 *  - The host is unresponsive for the duration: ^C, the console and the
+	 *    debugger are only polled between dispatch groups, so a multi-KB
+	 *    walk is unbreakable while it runs, and the emulated
+	 *    instructions-per-tick ratio is distorted by up to ~6000x for that
+	 *    call. (No tick is SKIPPED -- machine_run decrements by a constant
+	 *    and discards run_instr's return -- so the earlier "no device
+	 *    ticks" wording was wrong.)
+	 *  - n_translated_instrs is an int, reset once per run_instr, not per
+	 *    fold entry, and this walk is REPLAYABLE: measured, twenty
+	 *    back-to-back walks accumulated 983,080 instructions into one int
+	 *    with no group boundary. So the signed overflow needs only ~18-24
+	 *    MB of non-NUL memory at the DEFAULT -M 64 -- from a ~6-instruction
+	 *    guest program, in seconds -- not the ~700 MB a per-entry reading
+	 *    suggests. Past overflow the `>= N_SAFE_DYNTRANS_LIMIT` test fails
+	 *    on a negative value, cpu->ninstrs can run BACKWARDS (guest-visible
+	 *    through the test machine's MP cycle register), and the arithmetic
+	 *    is UB under this project's own sanitizer sweeps.
+	 *
+	 *  The budget test is at the BOTTOM of the do-while, which structurally
+	 *  guarantees at least one completed iteration. That is load-bearing,
+	 *  not stylistic: `if (room <= 0) return;` at the top would skip the
+	 *  ldrb and still fall through to the genuine cmps (the dispatcher
+	 *  POST-increments next_ic, so an untouched return resumes at ic[1]),
+	 *  and a guest arriving with r3 == 0 would then take the not-taken bne
+	 *  and leave its loop having never loaded a byte -- a new divergence of
+	 *  exactly the class this round is fixing. room <= 0 at entry is
+	 *  reachable, and the dominant producer is THIS FOLD'S OWN previous
+	 *  yield inside the same group: the first entry eats the whole budget,
+	 *  and the remaining dispatches of that group of 120 re-enter with
+	 *  nothing left. (The group's +120 lands AFTER the group, so it alone
+	 *  always leaves room >= 1 at a group start; a sibling fold such as
+	 *  netbsd_idle, which adds N_DYNTRANS_IDLE_BREAK == the whole limit,
+	 *  is the other producer.) Consequence worth knowing: once the budget
+	 *  is gone the rest of the group advances one byte per dispatch, so a
+	 *  long walk moves ~2850 bytes per batch rather than 2731 and ~4% of
+	 *  its dispatches are near-empty. Progress is still guaranteed.
+	 *
+	 *  Because the loop is bounded, n_loops * 3 <= room + 2 <= 8193 and
+	 *  neither the unsigned wrap nor the signed conversion is reachable any
+	 *  more -- the bound SUBSUMES a #350-style min(add, room) clamp, so
+	 *  only one of the two is shipped. The (int) cast in the condition is
+	 *  kept regardless: without it a negative room would promote to ~4
+	 *  billion and the bound would silently vanish.
+	 */
+	int room = N_SAFE_DYNTRANS_LIMIT - cpu->n_translated_instrs;
 
 	do {
 		rX ++;
@@ -2439,9 +2488,46 @@ X(strlen)
 		cpu->cd.arm.flags = ARM_F_C;
 		if (rY == 0)
 			cpu->cd.arm.flags |= ARM_F_Z;
-	} while (rY != 0);
+	} while (rY != 0 && (int) (n_loops * 3) < room);
 
 	cpu->n_translated_instrs += (n_loops * 3) - 1;
+
+	if (rY != 0) {
+		/*
+		 *  #356: budget exhausted mid-walk. Yield to the dispatcher so
+		 *  the group can end, the host can breathe and the batch limit
+		 *  can be tested; then re-enter here. next_ic = &ic[0] is what
+		 *  the guest's own taken `bne` would do, and it keeps the
+		 *  billing identical to the normal exit (3n-1 owed plus the
+		 *  dispatcher's 1 for this call = 3n exactly). Falling through
+		 *  instead would re-execute the genuine cmps and bne and owe
+		 *  3n-3, i.e. a second accounting constant for no gain.
+		 *
+		 *  Every entry completes at least one iteration, so this cannot
+		 *  spin without advancing, and the yielded state -- r3 = the
+		 *  last byte (nonzero), the base at its address, flags C set
+		 *  with Z clear -- is exactly the state the genuine loop is in
+		 *  after a taken bne, so an interrupt at the group boundary sees
+		 *  an architecturally reachable machine.
+		 *
+		 *  The marker corroborates the yield (the round's hard witness
+		 *  is the test machine's cycle counter, which needs no marker)
+		 *  and is deliberately NOT pre-gated with ENOUGH_VERBOSITY(),
+		 *  per the #278 convention, so `breakpoint subsystem cpu`
+		 *  catches a yield in flight. The `n_loops > 1` guard is what
+		 *  makes "only on a long walk" TRUE: without it a SHORT,
+		 *  ordinary strlen dispatched into a group whose budget sibling
+		 *  folds had already exhausted would fire a one-byte marker on
+		 *  each of up to a group's worth of dispatches. Every genuinely
+		 *  long walk still fires at least one big-chunk line.
+		 */
+		if (n_loops > 1)
+			debugmsg_cpu(cpu, SUBSYS_CPU, "strlen", VERBOSITY_DEBUG,
+			    "yielded after %u bytes", n_loops);
+		cpu->cd.arm.next_ic = &ic[0];
+		return;
+	}
+
 	cpu->cd.arm.next_ic = &ic[3];
 }
 
@@ -3158,7 +3244,38 @@ void COMBINE(strlen)(struct cpu *cpu,
 	if (n_back < 2)
 		return;
 
+	/*  #355: the load's base and destination must DIFFER. This is not a
+	    wrong-answer fix -- `ldrb r3,[r3,#1]!` is UNPREDICTABLE in the
+	    architecture, so the fold's answer is not "wrong" -- it is a
+	    self-consistency fix: without the term, THIS emulator gives two
+	    different answers for one program, selected by whether the
+	    combination happened. Measured on the committed build: folded, the
+	    walk exits at the first NUL byte (the loop condition tests the local
+	    byte); genuine, the writeback overwrites the loaded byte so the cmps
+	    compares an ADDRESS, never zero, and the loop runs on (r3 observed
+	    at 0x037a2557, still climbing). Which one a guest gets depended on
+	    -J, on a breakpoint, on instruction tracing, or on the loop's page
+	    offset -- and gate 14 uses -J as its architectural oracle
+	    throughout, so the divergence was an oracle defect regardless of
+	    what ARM permits.
+
+	    One term suffices and rejects exactly one iword (0xe5f33001): the
+	    cmps reads ic[-1].arg[0], pinned to r3, and the load writes back
+	    ic[-2].arg[0], so the writeback can only corrupt the compared value
+	    when base == dest. No genuine strlen is rejected -- a base==dest
+	    walk cannot traverse a string at all. The guard is first in the
+	    chain, the shape #342 used; note that #342 is precedent for the
+	    SHAPE only, not licence for this fix -- its `eor rX,rX,rX` case is
+	    well-defined ARM and produced a demonstrably wrong value.
+
+	    The rejected alternative, recorded so it is not revisited: making
+	    the HANDLER faithful instead (test the written-back register after
+	    the writeback) would put the guest's genuine infinite loop INSIDE
+	    one C call -- an unkillable host hang. Failing the match instead
+	    leaves the guest spinning on real dispatched instructions, which
+	    remain interruptible.  */
 	if (ic[-2].f == instr(load_w1_byte_u1_p1_imm) &&
+	    ic[-2].arg[0] != ic[-2].arg[2] &&
 	    ic[-2].arg[1] == 1 &&
 	    ic[-2].arg[2] == (size_t)(&cpu->cd.arm.r[3]) &&
 	    ic[-1].f == instr(cmps) &&

@@ -459,4 +459,56 @@ for v in "A memcpy 1it r3" "A memcpy 1it r4" "A memcpy 1it ip" \
     check "  memcpy row: $v" "$n" 1
 done
 
+# ---- #355/#356: the strlen fold ---------------------------------------------
+# #355: COMBINE(strlen) never required the load's base and destination to
+# differ, so `ldrb r3,[r3,#1]!` folded. The genuine writeback overwrites the
+# loaded byte, so the cmps compares an ADDRESS and the loop runs on; the fold's
+# condition tests the byte and EXITS. The encoding is UNPREDICTABLE, so neither
+# answer is "wrong" -- but the emulator was giving two answers for one program
+# depending on whether the combination happened, and -J is this gate's own
+# architectural oracle.
+#
+# #356: the walk had no budget bound and ran the whole string inside ONE
+# dispatch -- host unresponsive for the duration, and n_translated_instrs (an
+# int, reset per run_instr, with a REPLAYABLE walk) drivable into signed
+# overflow with ~18-24 MB of non-NUL memory at the DEFAULT -M 64.
+#
+# The yield is witnessed WITHOUT a clock: the test machine's mp device exposes
+# cpu->ninstrs at 0x110000d0, and ninstrs is committed only when run_instr
+# returns, so a guest sampling it either side of a 16 KB walk reads ~0 if the
+# walk never left one dispatch. All numeric rows assert BANDS, because the exact
+# counts depend on N_SAFE_DYNTRANS_LIMIT (8191) and the 120-dispatch group
+# boundary -- named so a change to either moves the bands deliberately.
+#
+# Swept against a binary built from the pre-fix HEAD: 3 of 7, failing exactly
+# the four discriminators -- `yields` and `bill band` both read 0 (the walk
+# never left the dispatch), `alias exits` read 0x55 (the fold took the wrong
+# exit) and `alias moved` read "no" (it had exited after three bytes). The
+# three PINs pass on both builds. On the fixed build: 7/7.
+STRLOG=$LOGDIR/gate_arm_strlen.log
+python3 arm_strlen_probe.py "$PMAX" > "$STRLOG" 2>&1 || true
+
+if ! grep -q "STRLEN_RESULT=" "$STRLOG"; then
+    note "strlen probe produced no result line; last lines follow"
+    tail -5 "$STRLOG" | sed 's/^/       /'
+    gate_skip "strlen probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$STRLOG" | sed 's/^/       /'
+
+sctrl=$(grep -o "STRLEN_CONTROL=[A-Z]*" "$STRLOG" | tail -1 | cut -d= -f2)
+check "strlen control: -J reference walked and yielded" "${sctrl:-missing}" "OK"
+
+sres=$(grep -o "STRLEN_RESULT=[0-9]*/[0-9]*" "$STRLOG" | tail -1 | cut -d= -f2)
+sgot=${sres%/*}; swant=${sres#*/}
+check "strlen rows run"     "$swant" 7
+check "strlen rows correct" "$sgot"  "$swant"
+
+for v in "A strlen -J ref" "A strlen -J end addr" "A strlen yields" \
+         "A strlen bill band" "A strlen end addr" "A strlen alias exits" \
+         "A strlen alias moved"; do
+    n=$(count "$STRLOG" "^$v  .*ok$")
+    check "  strlen row: $v" "$n" 1
+done
+
 gate_end

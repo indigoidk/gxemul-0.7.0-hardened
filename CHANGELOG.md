@@ -4192,6 +4192,134 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-second round (#355, #356) — the strlen fold answered a question the architecture never asked, and never came up for air
+
+`X(strlen)` folds `ldrb rY,[rX,#1]! / cmps rY,#0 / bne` into an internal byte
+walk. Two corrections, found by the combiner-publication audit and each
+reproduced on the committed build before anything was edited.
+
+- **#355 (`cpus/cpu_arm_instr.c`)** — `COMBINE(strlen)` pinned the load's
+  destination to r3 and its immediate to 1 but never required the base and the
+  destination to DIFFER, so `ldrb r3,[r3,#1]!` folded. The genuine writeback
+  lands after the load, so r3 ends up holding the ADDRESS and `cmps r3,#0`
+  compares an address — never zero, so the loop runs on. The fold's condition
+  tests its local copy of the BYTE and exits at the first NUL. Measured, read-
+  ahead on: folded the walk exited (sentinel stored, r3 parked at 0x9103);
+  under `-J` it never exited, r3 walked to 0x037a2557 and was still climbing.
+  One term, first in the chain: `ic[-2].arg[0] != ic[-2].arg[2]`, which rejects
+  exactly one iword (0xe5f33001) and cannot refuse a genuine strlen — a
+  base==dest walk cannot traverse a string at all.
+
+  **This is a self-consistency fix, not a wrong-answer fix, and the record
+  should not claim otherwise.** ARM calls the encoding UNPREDICTABLE, so the
+  fold's answer is not "wrong". What is wrong is that THIS emulator returned
+  two different answers for one program, selected by whether the combination
+  happened — and `-J` is gate 14's own architectural oracle, so the divergence
+  was an oracle defect regardless of what the architecture permits. #342 is
+  cited for the guard's SHAPE only; its `eor rX,rX,rX` case is well-defined ARM
+  and produced a demonstrably wrong value, which this one does not.
+  **The rejected alternative is recorded in the source:** making the HANDLER
+  faithful instead (test the register after the writeback) would put the
+  guest's genuine infinite loop inside one C call — an unkillable host hang.
+  Failing the match leaves the guest spinning on real dispatched instructions,
+  which stay interruptible.
+
+- **#356 (`cpus/cpu_arm_instr.c`)** — the walk had no budget bound: it ran to
+  the end of the string inside ONE dispatch. Two consequences, and the round's
+  first framing of both was wrong until the panel measured them:
+  - **Reachability was understated ~30x.** `n_translated_instrs` is an int
+    reset once per `run_instr`, not per fold entry, and the walk is
+    REPLAYABLE — twenty back-to-back walks were measured accumulating 983,080
+    instructions into one int with no group boundary. So the signed overflow
+    needs roughly **18-24 MB of non-NUL memory at the DEFAULT `-M 64`**, from a
+    ~6-instruction guest program, in seconds — not the ~700 MB a per-entry
+    reading suggests. Past overflow the `>= N_SAFE_DYNTRANS_LIMIT` test fails
+    on a negative value, `cpu->ninstrs` can run BACKWARDS (guest-visible), and
+    the arithmetic is UB under this project's own sanitizer sweeps.
+  - **No tick is skipped** — `machine_run` decrements by a constant and
+    discards `run_instr`'s return, so the earlier "no device ticks" wording was
+    simply wrong. The real faults are an instructions-per-tick ratio distorted
+    by up to ~6000x for one call, and a guest-triggerable host stall in which
+    ^C, the console and the debugger are all dead.
+
+  The budget test sits at the **bottom** of the existing do-while, which
+  structurally guarantees at least one completed iteration. That is
+  load-bearing, not stylistic: a top-of-loop `if (room <= 0) return;` would
+  skip the ldrb and still fall through to the genuine cmps — the dispatcher
+  POST-increments `next_ic`, so an untouched return resumes at ic[1] — and a
+  guest arriving with r3 == 0 would then take the not-taken bne and leave its
+  loop having never loaded a byte. That is a NEW divergence of exactly the
+  class this round fixes, and `room <= 0` at entry is reachable — the dominant
+  producer being this fold's OWN prior yield inside the same group, since the
+  group's +120 lands *after* the group and so always leaves at least one unit
+  at a group start; a sibling fold like `netbsd_idle`, which adds the whole
+  limit in one go, is the other. On yield the fold sets `next_ic = &ic[0]` — where the guest's own
+  taken bne goes — and bills `(n_loops * 3) - 1`, identical to the normal exit,
+  so no second accounting constant exists. Because the loop is bounded,
+  `n_loops * 3 <= room + 2 <= 8193` and neither the unsigned wrap nor the
+  signed conversion is reachable, so the bound SUBSUMES a #350-style
+  `min(add, room)` and only one of the two shipped. The `(int)` cast in the
+  condition is kept regardless: without it a negative `room` promotes to ~4
+  billion and the bound silently vanishes.
+
+  The three existing billing paths were checked and are exact — normal `3n-1`,
+  NULL-page delegate a bare `3n`, and now the yield `3n-1` — each plus the
+  dispatcher's blanket 1 for the call.
+
+**Two hazards this round's own work created, both caught by measuring seats and
+both fixed here.** The yield marker's low-information tail is the STEADY STATE,
+not a corner: measured with `-v -v` on a 64 KB walk, 2706 marker lines of which
+2683 (99.15%) said "yielded after 1 bytes". The mechanism is the fold's own
+prior yield inside the same group -- the batch limit is only TESTED at the
+120-dispatch boundary, so once the budget is gone the rest of that group each
+re-enter, do one byte and print. An `n_loops > 1` guard drops the tail and
+leaves every genuinely long walk its big-chunk line. Three seats argued the
+flood was self-limiting; the measurement settled it.
+And **#355 itself opened a probe hazard**: because the aliased loop no longer
+exits, it marches off the end of RAM, and every byte past it logs a warning --
+164,668 lines / 12.0 MB into the pty in under a second, making the row's r3
+host-speed-dependent. The alias session now runs with `-T` (halt on a
+non-existent access): one warning, 132 bytes, deterministic, and the pre/post
+discrimination is untouched. `-q` cannot be used for this -- `main.c` ignores it
+whenever `-V` is given.
+
+**Gate 14 grows 7 rows** via a new `arm_strlen_probe.py`, and the yield is
+witnessed **without a clock**: the test machine's `mp` device exposes
+`cpu->ninstrs` at 0x110000d0, and that counter is committed only when
+`run_instr` returns, so a guest sampling it either side of a 16 KB walk reads
+~0 if the walk never left one dispatch. Measured: **42714 folded vs 41400 under
+`-J`**, both ending at exactly 0x14000, where the pre-fix build read **0**.
+Every numeric row asserts a BAND, and the dependency on
+`N_SAFE_DYNTRANS_LIMIT` (8191) and the 120-dispatch group is named in the probe
+so a future change to either moves the bands deliberately rather than silently.
+Swept against a binary built from the pre-fix HEAD: **3 of 7, failing exactly
+the four discriminators**; on the fixed build 7/7, whole gate 14 PASS at 220
+checks (was 210).
+
+**The probe caught a defect in itself during authoring, which is worth
+recording.** Its first forward-progress row asserted through a guest store
+placed after the loop — a store #355 makes unreachable, so the row could never
+PASS. That is the mirror of the row-that-cannot-fail this harness already
+retires, and the fix (read r3 from the debugger instead) is noted in the
+docstring. Two rows were also relabelled PIN → DISC after the sweep showed them
+failing pre-fix; a PIN here must pass on both builds.
+
+Eight-seat panel, both passes (Codex xhigh, agy, Kimi, Ollama
+glm-5.2/deepseek-v4-pro/minimax-m3, Opus 5 and Fable 5 via the Agent tool).
+Pass 1 reshaped the round three times — the UNPREDICTABLE justification, the
+severity figures, and the spurious-exit hazard in the round's own proposed fix
+— and supplied the cycle-counter instrument that turned a defect the brief had
+called possibly-unwitnessable into a hard deterministic row. A four-way split
+over the billing constant was settled by reading the dispatcher rather than by
+vote, which also refuted one seat's claim that the existing `-1` was missing:
+it was already there.
+
+**Recorded, not fixed:** the signed-overflow EVENT itself stays
+reasoned-not-witnessed (~716 MB of contiguous non-NUL memory is not honestly
+gateable), with #350 as the family argument.
+
+Harness: REGRESS_PASS, 15/15.
+
 ## One-hundred-and-first round (#354) — the memcpy fold moved the bytes but never published the registers
 
 `X(netbsd_memcpy)` folds the NetBSD/arm memcpy loop —
