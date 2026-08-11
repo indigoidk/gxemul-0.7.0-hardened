@@ -4192,6 +4192,133 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-tenth round (#364) — the row-to-site table was inverted, so two shipped rotations were never measured
+
+`#362`'s commit message claimed its three new rows prevented "a measurable
+self-disagreement behind a green gate". That was true of one of its three rotation
+sites and false of the other two, and the reason was a mechanism note recorded here
+as **verified** — with the two cases exactly the wrong way round.
+
+- **#364 (`regress/arm_writeback_probe.py`, `regress/gate_arm.sh`)** — three
+  `put b`-seeded rows that are the first in this probe's history to reach
+  `A__NAME__general`, plus corrections to every record that asserted otherwise.
+  Harness only; no emulator source change.
+
+**What was believed.** The probe's docstring and the gate's row-to-site table both
+said: "the fast path only runs once the page is in the translation array, so a
+SINGLE-execution row measures the GENERAL path and nothing else." `OUTSTANDING_BUGS`
+recorded the supporting mechanism among "two verifications worth keeping, because they
+underwrite the row set": that `put w` seeding uses `CACHE_NONE | NO_EXCEPTIONS` and so
+"cannot pre-populate the arrays".
+
+**What is true.** That describes **`put b`**. `put w` routes through
+`store_32bit_word` → `memory_rw` with **`CACHE_DATA`**, and insertion into the
+translation array is gated on `!no_exceptions` — so seeding a page with `put w`
+**warms** it, and `host_load` is non-NULL before the guest executes anything.
+
+**MEASURED, and it is worse than "one site uncovered".** A temporary marker at the top
+of `A__NAME__general` counted **zero** hits across **all 17 rows** — not only the
+one-shot rows but every iteration of the ×10 rows and both passes of the re-seeded
+row. No row in the file reached the general path at all. Consequences, each confirmed
+independently rather than inferred:
+
+- Neutralising `#362`'s **general-path** rotation left the writeback probe at
+  **17/17** and the whole of **gate 14 PASS at 261 checks**.
+- Neutralising `#362`'s **`netbsd_copyin`** rotation left writeback at **17/17** and
+  the fold-marker probe at **14/14**. Worse: every copyin arm in that probe bases on
+  `mov r0,#0x10000`, so `r0 & 3 == 0` always and the six-word rotation body **never
+  executes**.
+- `#357`'s general-path **writeback** sites are unmeasured by the same argument, so
+  that round's historical 5-of-14 pre-fix sweep is entirely a fast-path result.
+
+**The mechanism is pinned on ONE binary by ONE variable**, which is what makes this a
+measurement rather than a story. On the general-rotation-dead build, changing only the
+seeding width of the page being read: `put b` gave `ls_general=1` and the mask-only
+answer `0x11223344`; `put w` gave `ls_general=0` and the rotated `0x44112233`.
+
+**A proposal was refuted before any code was written**, which is the part of test-first
+that pays for itself. The review suggested seeding via a **guest store**, on the theory
+that it warms `host_store` only and leaves `host_load` NULL. Measured false:
+`update_translation_table` sets `host_load` **unconditionally** and gates only
+`host_store` on the write flag, so storing to a page warms it for loading too. `put b`
+is the only seeding that leaves a page cold.
+
+**Three rows added, not seventeen switched.** Switching the probe wholesale to `put b`
+would move every existing row to the general path and **delete** the fast-path
+coverage — which is currently the only coverage those four sites have. So the existing
+17 rows and their seeding are untouched, and the new rows read a dedicated page at
+`0x20000` that nothing else in the file touches. Measured both ways before landing:
+**20/20** on the committed build, and **17/20** with the general-path rotation dead,
+red at exactly the three new rows.
+
+**Records corrected, because a false note that is *believed* costs more than a missing
+one.** The probe's site table, and the docstrings of `once()` ("Reaches the GENERAL
+path only" — it reaches it never), `loop10()` ("iteration 1 takes the general path")
+and `warmed()` ("pass 2 is the only execution … that reaches the fast pre-index site" —
+both passes do). The gate's table, which also **referred forward to a "CORRECTION
+below" that was never written**, and its claim that "no row pins the unaligned loaded
+DATA", falsified by `#362` itself. The struck mechanism note in `OUTSTANDING_BUGS`. And
+`#362`'s own CHANGELOG claim. The numeric site cites (`:213/:216`, `:338/:342`) had
+gone stale a **third** time in a file whose own `#357` note says a numeric cite here
+has gone stale twice — so they are gone rather than refreshed.
+
+**Records corrected — and the ones NOT corrected, named rather than implied.** A
+review seat pointed out that "every record" was overstated, so: `#357`'s own block is
+now struck where it asserts the inverted mapping, and the probe's stale
+"NO UNALIGNED-LOAD-DATA ROW" section, its residual numeric site cites (stale a
+**third** time in the file whose `#357` note warns about exactly that), and its
+`%-34s`/`%-32s` column discrepancy are all fixed here. Still **not** re-audited: the
+instrument-gap inventory in `OUTSTANDING_BUGS`, several of whose claims about which
+fast paths are covered follow from the same inverted premise. That is a separate
+round, and this block does not pretend otherwise.
+
+Two smaller corrections from the same review: `put b` is **not** the only cold
+seeding — the debugger's string modes `put s` and `put z` also write with
+`CACHE_NONE | NO_EXCEPTIONS`, so it is the flag that matters and not the command.
+And the evidence types differ and should not be conflated: `#362`'s two rotations
+were **mutation-tested** (neutralised, gate still green), whereas `#357`'s writeback
+sites are shown unmeasured by the **zero-hit marker** — sufficient, since nothing
+inside a function no row enters can be measured, but not the same experiment.
+
+**A draft of this round's own table repeated the error it corrects**, and the catch is
+worth recording because it took a second review pass. The draft claimed the three new
+rows cover "general post-index writeback". They do not: their `LDR_OFF0` is P=1/W=0,
+and the template emits a writeback only under (P ∧ W) or (¬P) — so an **offset form has
+no writeback statement at all**, and `wb_addr` is not even declared for it. What the
+cold rows genuinely cover is `A__NAME__general`'s **load-and-rotate** arm and the
+`memory_rw` slow path, which is a **data** site, not one of the four writeback sites.
+The round's value is unchanged — `#362`'s general-path rotation was deletable with the
+whole gate green before these rows existed — but the table now separates the two axes
+instead of conflating them, which is the same discipline the inverted note failed at.
+
+**Still owed and recorded, not quietly dropped:** **both** general-path **writeback**
+sites, pre- and post-index, still have no row, so `#357`'s general-path fix remains
+entirely unmeasured. A better instrument than the cold page exists for that and the
+project had already recorded it without using it: an **`ldrt` form is general-path by
+construction** — the `#if !defined(A__P) && defined(A__W)` block tests `is_userpage`
+and falls into `A__NAME__general` when the bit is clear, **regardless of warming** — so
+it cannot be silently voided by a future `put w`, needs no cold page, and enters
+`p0_u1_w1`, one of the four translation units the residual list says nothing enters.
+The cold page is still required for general **pre-index**, which has no T form. The
+`netbsd_copyin` rotation still has no row, which needs an unaligned-base two-pass
+`ldrt` arm in the fold-marker probe rather than anything here. And a permanent
+path-telemetry check — asserting the warm rows stay fast and the cold rows take
+exactly one general fallback — would make this class self-reporting instead of
+requiring a temporary marker and a subagent to rediscover it. All six are written up
+in `OUTSTANDING_BUGS.md`, on the queue rather than in prose here: a review pass caught
+this block, the probe and the gate all pointing at an entry that did not yet exist —
+the same dangling forward reference this round removes from the gate, recreated by the
+round removing it.
+
+**Harness: gate 14 PASS at 264 checks** (261 + the three new named rows), and the probe
+reads **20/20** on the committed build. The round took **two** review passes: the first
+found the mechanism uncited and the alias hole; the second found this round's own table
+repeating the error it corrects, plus the dangling reference, plus two wrong numbers in
+notes whose subject is exactness (the strike note overclaimed "Fixed in `#364`" when
+only the rotation half is, and the column note said the longest row name is 24 chars
+when it is 26). Recorded because the pattern is the point: a records-correction round
+is exactly where a false record is easiest to introduce.
+
 ## One-hundred-and-ninth round (#363) — the gate-14 flake: the prompt predicate matched the guest's own output
 
 Gate 14 failed **exactly 2 of its checks in 1 run out of 4**, with no code change
@@ -4344,6 +4471,17 @@ and the two in the divergence zone have neither a guest image nor a rig.
 measurable self-disagreement behind a green gate. Offset 0 deliberately gets no
 row — rotation by zero is the identity, so it could never fail. Swept pre-fix:
 14 of 17, red at exactly the three new rows.
+
+> **✗ CORRECTED BY `#364`.** That last claim holds for the **fast** path only. The
+> three rows added here seed their page with `put w`, which warms the translation
+> mapping, so all three take the fast path — and the **general-path rotation and the
+> `netbsd_copyin` rotation shipped in this round were both unmeasured**. Each was
+> independently confirmed deletable with the whole of gate 14 still green at 261
+> checks. Worse for `netbsd_copyin`: every fold-marker arm bases on `mov r0,#0x10000`,
+> so `r0 & 3 == 0` always and that rotation's body **never executes**. The round did
+> ship a measurable self-disagreement behind a green gate at two of its three sites,
+> which is exactly what the sentence above claimed it prevented. `#364` adds three
+> `put b`-seeded rows for the general path; the copyin row is still owed.
 
 **Harness: gate 14 PASS at 261 checks** (was 258); full battery 14 of 15. The single
 red gate was **not** this round's — gate 7 `gate_ab` returned HEAD `1:1:0` on luna88k
@@ -4805,6 +4943,19 @@ one-shot post-index rows and by iteration 1 of the ×10 rows, `:342` by
 iterations 2+, `:213` by the pre-index one-shot, and **`:338` by one row alone**
 — two passes with the base re-seeded each pass, because without the re-seed
 pass 1 leaves an aligned base and the row has nothing left to discriminate.
+
+> **✗ THAT SITE MAPPING IS INVERTED, and `#364` measured it.** A single-execution
+> row measures the **fast** path and nothing else, because the probe's own `put w`
+> seeding warms the page before the guest runs: `put w` → `store_32bit_word` →
+> `memory_rw(CACHE_DATA)`, and insertion is gated on `!no_exceptions`. A marker at
+> the top of `A__NAME__general` counted **zero** hits across all 17 rows, so **none
+> of the general-path writeback sites claimed here was ever measured** — the
+> re-seeded row reaches the fast pre-index site on **both** passes, not one. The
+> 5-of-14 pre-fix sweep this round reports is therefore entirely a fast-path
+> result. `#364` adds three `put b`-seeded rows that do reach `A__NAME__general`,
+> but they are LOAD-DATA rows: the general-path **writeback** sites remain
+> uncovered and are recorded in `OUTSTANDING_BUGS`. The re-seed itself is still
+> load-bearing for the reason given above; only the site attribution was wrong.
 Loads and stores are separate instantiations, so a load-only set could not see a
 store-side regression: there is a store row. Register-offset forms are a third
 family: there is a `ldr r1,[r0],r2` row. Swept against a snapshot of the pre-fix

@@ -543,19 +543,54 @@ done
 # architectural result; the count lives in r3, so nothing here depends on how
 # far execution got or on host speed.
 #
-# WHICH ROW REACHES WHICH SITE, which is why the set is this shape. There are
-# four writeback sites -- :213/:216 general, :338/:342 fast -- and the fast
-# path only runs once the page is in the translation array, so a
-# single-execution row measures the GENERAL path and nothing else:
-#   :216 general post-index  iteration 1 of the x10 rows -- but see the
-#                            CORRECTION below: the one-shot rows do NOT reach
-#                            the general path
-#   :342 fast    post-index  iterations 2+ of the x10 rows
-#   :213 general pre-index   "pre4 unal gen"
-#   :338 fast    pre-index   "pre4 unal fast" ALONE -- two passes with the base
-#                            re-seeded each pass, because without the re-seed
-#                            pass 1 leaves an ALIGNED base and the row has
-#                            nothing left to discriminate
+# WHICH ROW REACHES WHICH SITE -- #364 CORRECTED THIS TABLE, WHICH WAS INVERTED.
+# It used to say the fast path "only runs once the page is in the translation
+# array, so a single-execution row measures the GENERAL path and nothing else",
+# and it referred forward to a "CORRECTION below" that was never written. Both
+# are fixed here. MEASURED: no row in this probe reached the general path at
+# all -- a marker at the top of A__NAME__general counted ZERO hits on all 17
+# rows, including the x10 iterations and both re-seeded passes.
+#
+# The cause was the probe's own seeding. `put w` -> store_32bit_word ->
+# memory_rw(CACHE_DATA), and insertion is gated on !no_exceptions, so a page
+# seeded with `put w` is ALREADY warm before the guest runs. `put b` uses
+# CACHE_NONE | NO_EXCEPTIONS and does not insert. The old note had the two
+# backwards, and it was recorded as a verified mechanism, so two shipped rounds
+# leaned on it: #357's general-path writeback and #362's general-path rotation
+# were both unmeasured, and each was independently confirmed DELETABLE with this
+# whole gate still green at 261 checks.
+#
+# TWO AXES, kept apart. The first draft of this correction conflated them and
+# claimed the new cold rows cover "general post-index writeback". They do NOT:
+# their LDR is P=1/W=0, and the writeback is emitted only under (P and W) or
+# (not P), so an offset form has no writeback statement at all. Caught in review.
+#
+#   -- the four WRITEBACK sites (the `reg(ic->arg[0]) =` statements) --
+#   fast    post-index  every iteration of the x10 rows, plus the one-shot
+#                       post-index rows and the PIN rows (11 in total)
+#   fast    pre-index   "pre4 unal gen" AND "pre4 unal fast" (both passes)
+#   general post-index  UNCOVERED
+#   general pre-index   UNCOVERED
+#
+#   -- rows with NO writeback site (P=1/W=0 offset forms) --
+#   "pre4 no wb" and the three "rot word unal" rows   (fast function)
+#   the three "rot word cold" rows                    (general function)
+#
+#   -- which rows enter A__NAME__general AT ALL, the question this round answers --
+#   the three "rot word cold" rows, and nothing else: they exercise the
+#   load-and-rotate arm and the memory_rw slow path, which is a DATA site.
+#
+# So #357's general-path WRITEBACK fix still has no row reaching it. That is
+# recorded in OUTSTANDING_BUGS rather than papered over here.
+#
+# No line numbers here on purpose: the ones this table used to carry (:213/:216,
+# :338/:342) had gone stale by the round that corrected it -- the third time in
+# this file, whose own #357 note already says a numeric cite here has gone stale
+# twice before.
+#
+# "pre4 unal fast" still needs its two passes with the base re-seeded each pass:
+# without the re-seed, pass 1 leaves an ALIGNED base and the row has nothing
+# left to discriminate. Only its SITE attribution was wrong, not its design.
 # Loads and stores are separate instantiations of the template, so a load-only
 # set cannot see a store-side regression: hence the store row. Register-offset
 # forms are a third family: hence the regofs row.
@@ -572,14 +607,20 @@ done
 # There is no LDRD/STRD row on purpose: A2.8 makes an unaligned doubleword
 # access UNPREDICTABLE prior to ARMv6, so every base that would exercise the
 # ~7 mask makes the instruction unspecified -- covered by the fix, not honestly
-# assertable. And no row pins the unaligned loaded DATA: this template masks
-# without ROTATING where ARMv5 rotates right by 8*addr[1:0], so such a row
-# would be inverted by the round that fixes rotation. The data row uses an
-# ALIGNED base, where no rotation applies in any architecture version.
+# assertable.
+#
+# #364: the sentence that used to stand here -- "no row pins the unaligned
+# loaded DATA ... such a row would be inverted by the round that fixes
+# rotation" -- was falsified by #362, which added exactly three such rows, and
+# by #364, which added three more from a cold page. It is removed rather than
+# annotated. The ALIGNED data row remains, and remains correct for its own
+# reason: no rotation applies at offset 0 in any architecture version.
 #
 # Swept against a snapshot of the pre-fix binary: 5 of 14, with all nine DISC
 # rows failing at exactly the predicted masked values and all five PINs
-# passing. On the fixed build: 14/14.
+# passing. On the fixed build: 14/14. Read that 5/14 with the corrected table
+# above -- it is entirely a FAST-path result, since no row of that era entered
+# the general path. #362 took the set to 17, #364 to 20.
 WBLOG=$LOGDIR/gate_arm_writeback.log
 python3 arm_writeback_probe.py "$PMAX" > "$WBLOG" 2>&1 || true
 
@@ -596,7 +637,7 @@ check "writeback control: guest ran and loaded" "${wctrl:-missing}" "OK"
 
 wres=$(grep -o "WRITEBACK_RESULT=[0-9]*/[0-9]*" "$WBLOG" | tail -1 | cut -d= -f2)
 wgot=${wres%/*}; wwant=${wres#*/}
-check "writeback rows run"     "$wwant" 17
+check "writeback rows run"     "$wwant" 20
 check "writeback rows correct" "$wgot"  "$wwant"
 
 # #358: fold-fired markers (netbsd_copyin / netbsd_copyout)
@@ -712,7 +753,9 @@ for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
          "A wb algn load data" "A wb byte post1 unal" \
          "A wb word pre4 no wb" "A wb wrap from zero" \
          "A wb rot word unal plus1" "A wb rot word unal plus2" \
-         "A wb rot word unal plus3"; do
+         "A wb rot word unal plus3" \
+         "A wb rot word cold plus1" "A wb rot word cold plus2" \
+         "A wb rot word cold plus3"; do
     n=$(count "$WBLOG" "^$v  .*ok$")
     check "  writeback row: $v" "$n" 1
 done

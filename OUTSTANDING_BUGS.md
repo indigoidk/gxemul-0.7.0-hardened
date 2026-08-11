@@ -2522,6 +2522,25 @@ corruption without a clear host-OOB path.
 > `!no_exceptions`); and — the part that could have invalidated everything — the debugger's
 > `put w` seeding uses `CACHE_NONE | NO_EXCEPTIONS`, which that condition **excludes**, so
 > probe seeding cannot pre-populate the arrays and make iteration 1 take the fast path.
+>
+> > **✗ THAT LAST CLAUSE IS BACKWARDS, and `#364` measured it.** It describes **`put b`**,
+> > not `put w`. `put w` routes through `store_32bit_word` → `memory_rw` with **`CACHE_DATA`**,
+> > and insertion is gated on `!no_exceptions`, so `put w` seeding **does** pre-populate the
+> > translation array. `put b` is the one that uses `CACHE_NONE | NO_EXCEPTIONS` and does not.
+> > This sentence is struck rather than deleted because it was recorded here as a *verified
+> > mechanism* "underwriting the row set", and two shipped rounds then leaned on it: the
+> > writeback probe's whole row-to-site attribution was inverted, so **`#357`'s general-path
+> > writeback sites and `#362`'s general-path rotation were both unmeasured** — each
+> > independently confirmed deletable with the whole of gate 14 green at 261 checks. Pinned on
+> > one binary by changing only the seeding width: `put b` gave `ls_general=1` and the
+> > mask-only answer, `put w` gave `ls_general=0` and the rotated answer. `#364` fixed **the
+> > rotation half**: three `put b`-seeded rows, the first in that probe's history to enter
+> > `A__NAME__general`. It did **not** fix the writeback half — those rows use a P=1/W=0 offset
+> > form, which compiles no writeback statement at all, so `#357`'s general-path correction is
+> > still unmeasured. See the `#364` residuals entry at the end of this file for what is owed.
+> > A guest STORE does not substitute — `update_translation_table` sets `host_load`
+> > unconditionally and gates only `host_store` on the write flag, so storing warms it for
+> > loading too (measured, and it refuted the proposal that suggested it).
 > Separately, the register-offset row's double `reg_func` call on the fast-to-general
 > fallback is provably benign: both load and store decodes index the **s == 0** half of
 > `arm_r[]`, and only the `s == 1` half writes the carry flag, so the offset function is pure
@@ -2852,3 +2871,89 @@ corruption without a clear host-OOB path.
 > unreachable while FP trap delivery is unmodelled. But it qualifies `float_emul.c`'s comment
 > that "R3010/R4010 return the largest positive integer", which states an architectural default
 > as though it were an implementation fact. Fix the comment's claim, not the code.
+
+> ## 2026-08-11 — `#364` residuals: the general path is entered at last, but its WRITEBACK sites are still unmeasured
+>
+> This is the entry that `arm_writeback_probe.py`, `gate_arm.sh` and `#364`'s CHANGELOG block
+> all point at. Written because a review pass caught all three pointing at a record that did
+> not exist — the same dangling-forward-reference defect `#364` removes from the gate, created
+> by the round that removed it. Recorded here rather than in CHANGELOG prose because the live
+> queue is the OPEN LIST head **plus the dated tail entries**: an item that exists only in a
+> CHANGELOG paragraph is off-queue.
+>
+> **What `#364` actually closed.** Three `put b`-seeded rows now enter `A__NAME__general` — the
+> first rows in that probe's history to do so — and they exercise its **load-and-rotate** arm
+> plus the `memory_rw` slow path. Before them, `#362`'s general-path rotation was deletable with
+> the whole of gate 14 green at 261 checks. That half is fixed and measured.
+>
+> **What it did NOT close, and a draft of its own table claimed it had.** The three rows use a
+> P=1/W=0 offset form, and the template emits a writeback only under `(A__P ∧ A__W)` or `(¬A__P)`
+> — so an offset form compiles **no writeback statement at all**, and `wb_addr` is not even
+> declared for it (`#if !defined(A__P) || defined(A__W)`). Therefore **both** general-path
+> writeback sites, pre- and post-index, remain uncovered, and **`#357`'s general-path correction
+> still has no row that reaches it**. Two review seats caught this independently, in the same
+> direction as the original inverted note — which is the argument for keeping the two axes
+> (which function a row enters, versus which writeback statement it reaches) permanently apart.
+>
+> **Owed rows, in value order.**
+>
+> 1. **General post-index writeback — and use an `ldrt` form, not a cold page.** The project had
+>    already recorded the reason and never used it: the template's
+>    `#if !defined(A__P) && defined(A__W)` block tests `is_userpage[addr >> 17]` and falls into
+>    `A__NAME__general` when the bit is clear, **regardless of warming**. So an `ldrt` row cannot
+>    be silently voided by a future `put w`, needs no cold page, and enters `p0_u1_w1` — one of
+>    the four translation units this file's own residual list says nothing enters. Assert the
+>    UNMASKED base: an unaligned base of `0x10001` with offset 4 owes `0x10005`, not the masked
+>    `0x10004`. Confirm the encoding through `unassemble` first.
+> 2. **General pre-index writeback.** No T form exists, so this one does need the cold page: a
+>    cold `ldr r1,[r0,#4]!` asserting `r0`. Note the buggy value is the *base itself*, which
+>    makes the row weaker than the post-index one — state that when writing it.
+> 3. **The general STORE arm is owed and was named nowhere.** Loads and stores are separate
+>    instantiations by this probe's own axiom, and the existing store row covers the **fast**
+>    arm only. `put b` leaves `host_store` NULL too, so a cold `str` row would reach the store
+>    family's `A__NAME__general` and cover its post-index writeback. Non-obvious asymmetry worth
+>    recording: instruction fetch inserts with `writeflag 0`, and
+>    `invalidate_translation_caches(..., JUST_MARK_AS_NON_WRITABLE)` clears `host_store` for
+>    translated pages — so code pages are load-warm and store-cold.
+> 4. **Every other general arm is still unexecuted** — byte, the halfword `addr &= ~1` mask, and
+>    register-offset. A cold regofs row would additionally let the recorded "the double
+>    `reg_func` call on the fast-to-general fallback is provably benign" claim be *measured*
+>    rather than argued.
+> 5. **The `netbsd_copyin` rotation's body never executes.** Every fold-marker arm bases on
+>    `mov r0,#0x10000`, so `r0 & 3 == 0` always. Needs a two-pass `ldrt` arm with `r0` re-seeded
+>    to `0x10001`, which is a self-contradiction test on ONE binary: pass 1 declines and runs the
+>    template (rotated), pass 2 folds (unrotated) unless the fold rotates too.
+> 6. **Permanent path telemetry, the item that stops this recurring.** `#364`'s finding needed a
+>    temporary `debugmsg_cpu` marker, a scratch build and a subagent — none of which survives the
+>    round, so the next false attribution costs the same again. Emit a per-row general-path entry
+>    count and assert in the gate that every WARM row takes **zero** general fallbacks and every
+>    COLD row takes **exactly one**. That turns "which site does this row reach" from a comment
+>    into a checked quantity, and would have caught the inverted table the day it was written.
+>
+> **Why the cold rows still need that telemetry, i.e. why item 6 is not optional.** They pass iff
+> the loaded value is rotated — which is also what the fast path yields. Warm `COLD` by any route
+> the new assert does not cover and they become silent duplicates of the `rot word unal` triple
+> and stay green: the exact failure shape this round exists to correct, pushed one step away.
+>
+> **Mechanism notes that belong with the inventory, both counter-intuitive.** The device arm of
+> `memory_rw` inserts into the translation array **even under `NO_EXCEPTIONS`** — its gate is
+> `update_translation_table != NULL && !(ok & MEMORY_NOT_FULL_PAGE) && (devices[i].flags &
+> DM_DYNTRANS_OK)`, with no `!no_exceptions` term — so a `put b` to a fully-backed
+> `DM_DYNTRANS_OK` device page warms it while the write itself is dropped. And instruction fetch
+> inserts with `writeflag 0`. So "`put b` leaves a page cold" is a claim about **seeding**, not
+> about a page's whole life. Two further contingencies: the array is a **384-entry round-robin
+> TLB**, so any attribution is a property of a probe's working set rather than a theorem; and
+> with the MMU **on**, `arm_translate_v2p_mmu` failure returns before the insertion gate, so
+> `put w` would not warm an unmapped page at all — `testarm` never enables it.
+>
+> **Three items in the instrument-gap inventory above are now FALSE**, from the same inverted
+> premise, and are struck rather than silently edited: "every row that reaches the fast path is a
+> word access" (the halfword and byte rows are fast-path; only the fast **store** halfword site
+> is still uncovered); "the negative-offset rows are single-shot, so `!A__U` is untested"
+> (single-shot rows are fast-path, so those rows do exercise it); and "no row asserts fast-path
+> DATA at all" (the aligned data control is fast-path, and `#362`'s three rot rows assert
+> unaligned fast-path data). The fourth item survives and is the real residual: **four of the
+> eight translation units are entered by no row** — `p0_u0_w1`, `p0_u1_w1`, `p1_u0_w0`,
+> `p1_u0_w1`. A full re-audit of the inventory against the corrected premise is owed, and must be
+> done by **measurement** rather than re-reading, because reasoning confidently from a plausible
+> premise is precisely what produced the original note.

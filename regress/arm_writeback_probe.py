@@ -11,25 +11,109 @@ DDI 0100I computes the writeback from the UNMASKED Rn:
          address sent to memory -- never on the register.
 
 There are EXACTLY FOUR writeback sites in the single-register path, established
-by enumeration: `reg(ic->arg[0]) =` at :213 and :216 (general path) and :338 and
-:342 (fast path). `A__NAME_PC` and every conditional variant (`__eq`, `__ne`,
+by enumeration: two `reg(ic->arg[0]) =` statements in `A__NAME__general` (the
+pre-index and post-index forms) and the matching pair in `A__NAME`'s fast path.
+#364 removed the numeric cites that used to stand here -- they had gone stale a
+THIRD time, in the very file whose #357 note below says a numeric cite here has
+gone stale twice. Grep for the statement, not a line.
+`A__NAME_PC` and every conditional variant (`__eq`, `__ne`,
 ...) merely CALL `A__NAME`; two review seats suspected the PC special case was a
 third copy and it is not. A review seat enumerated the instantiations from
 generate_arm_loadstore.c -- 8 p/u/w files x (8 mode-2 + 12 mode-3) = 160 handler
 families -- all funnelling through those four statements.
 
-WHICH SITE EACH ROW REACHES, which is the point of the row set
---------------------------------------------------------------
-The fast path only runs once the page is in the translation array, so a
-SINGLE-execution row measures the GENERAL path and nothing else. That means the
-obvious one-instruction rows leave two of the four sites uncovered. A review seat
-caught this; the row set is built around it:
+WHICH SITE EACH ROW REACHES  --  #364: THE TABLE BELOW USED TO BE INVERTED
+---------------------------------------------------------------------------
+It claimed "the fast path only runs once the page is in the translation array,
+so a SINGLE-execution row measures the GENERAL path and nothing else", and
+attributed rows to general sites on that basis. MEASURED FALSE, and in the worst
+direction: NO row in this probe reached the general path AT ALL. A temporary
+marker at the top of `A__NAME__general` counted ZERO hits across all 17 rows --
+not only the `once()` rows but the `loop10` iterations and both `warmed` passes.
 
-  :216 general post-index  -- rows B, F, G, and iteration 1 of A/A2/S/R
-  :342 fast    post-index  -- iterations 2+ of A/A2/S/R
-  :213 general pre-index   -- row C
-  :338 fast    pre-index   -- row C2 ONLY (two passes, base re-seeded each pass
-                              so the second execution is still unaligned)
+The cause is this probe's own seeding. `put w` routes through
+`store_32bit_word` -> `memory_rw` with CACHE_DATA, and insertion into the
+translation array is gated on `!no_exceptions`, so seeding a page with `put w`
+ALREADY warms it: `host_load` is non-NULL before the guest executes a single
+instruction. `put b` is the opposite -- CACHE_NONE | NO_EXCEPTIONS -- and does
+not insert. The old note had these two backwards.
+
+Consequence, stated plainly because two shipped rounds leaned on the old table:
+`#357`'s general-path writeback sites and `#362`'s general-path rotation were
+BOTH unmeasured, and each was independently confirmed deletable with the whole
+of gate 14 still green at 261 checks. The historical pre-fix sweep of 5/14 is
+entirely attributable to the fast path.
+
+TWO AXES, kept apart, because conflating them is how the first draft of this very
+correction went wrong. A round of review found that draft claimed the new cold
+rows covered "general post-index writeback". They do not, and the reason is worth
+stating because it is easy to miss twice: `LDR_OFF0` is P=1/W=0, and the writeback
+is emitted only under (P and W) or (not P) -- so an offset form has NO WRITEBACK
+STATEMENT AT ALL, and `wb_addr` is not even declared for it. So:
+
+WHICH ROWS REACH THE FOUR WRITEBACK SITES (the `reg(ic->arg[0]) =` statements)
+  fast    post-index  -- A, A2, B, F, S, R, G, `post4 algn`, `algn load data`,
+                         `byte post1 unal`, `wrap from zero`      (11 rows)
+  fast    pre-index   -- C (`pre4 unal gen`) and C2 (`pre4 unal fast`, BOTH
+                         passes, not just the second)              (2 rows)
+  general post-index  -- UNCOVERED
+  general pre-index   -- UNCOVERED
+So `#357`'s general-path writeback fix STILL has no row reaching it. Recorded in
+OUTSTANDING_BUGS; the cold-page machinery below is what a future row will use,
+and an `ldrt` form would be better still (see the note on warming immunity).
+
+ROWS WITH NO WRITEBACK SITE AT ALL (P=1/W=0 offset forms)
+  `pre4 no wb` and the three `rot word unal` rows -- in the FAST function
+  the three `rot word cold` rows                 -- in the GENERAL function
+
+WHICH ROWS REACH THE GENERAL FUNCTION AT ALL, which is a different question and
+the one this round actually answers: the three `rot word cold` rows, and nothing
+else. They exercise `A__NAME__general`'s load-and-rotate arm and the `memory_rw`
+slow path -- the first rows in this file's history to enter that function. That
+is a DATA site, not a writeback site, and the round's value is real either way:
+`#362`'s general-path rotation was deletable with the whole gate green before
+these rows existed.
+
+Deliberately no line numbers here: the `#357` note below says a numeric cite in
+this file has gone stale twice, and the ones this table used to carry had gone
+stale a third time by the round that corrected it.
+
+A general-path row therefore needs a page this probe never touches with `put w`.
+That is what COLD/COLD1/COLD2/COLD3 are for, and the three `cold` rotation rows
+are the first rows in this file's history to enter `A__NAME__general`.
+A guest STORE does NOT work for this and was tried: `update_translation_table`
+sets `host_load` unconditionally and gates only `host_store` on the write flag,
+so storing to a page warms it for loading too.
+
+`put b` is not the ONLY cold seeding -- a review seat corrected an earlier draft
+that said so. The debugger's string modes `put s` and `put z` also write through
+`memory_rw` with `CACHE_NONE | NO_EXCEPTIONS` and leave a page equally cold. It
+is the flag that matters, not the command; `put b` is simply the convenient one
+for laying down four chosen bytes. (`put h`/`put w`/`put d` all reach CACHE_DATA
+via store_16/32/64bit_word, so all three warm.)
+
+TWO INSERTION ROUTES THAT DO NOT OBEY THE `!no_exceptions` GATE, both found in
+review and both counter-intuitive enough to be worth naming here rather than
+leaving for the next person to trip over:
+  * THE DEVICE ARM INSERTS DESPITE NO_EXCEPTIONS. `memory_rw`'s device path gates
+    on `update_translation_table != NULL && !(ok & MEMORY_NOT_FULL_PAGE) &&
+    (devices[i].flags & DM_DYNTRANS_OK)` -- with NO `!no_exceptions` term. So a
+    `put b` to a fully-backed DM_DYNTRANS_OK device page WARMS it, and with
+    NO_EXCEPTIONS set the device handler is not even called, so the write is
+    dropped while the mapping is installed. Harmless at 0x20000 on testarm, whose
+    devices all sit at >= 0x10000000 -- but fatal to this mechanism if COLD ever
+    moves, and the assert below does NOT check for it.
+  * INSTRUCTION FETCH INSERTS WITH writeflag 0. quick_pc_to_pointers' generic
+    path calls update_translation_table when host_load is NULL, so EXECUTING on a
+    page warms it for LOADS (leaving host_store NULL). Irrelevant to COLD, which
+    is never executed, but it means "put b leaves a page cold" is a statement
+    about SEEDING and not about the page's whole life.
+Also contingent, and worth knowing before this is reused: with the MMU ON,
+arm_translate_v2p_mmu failure returns BEFORE the insertion gate, so `put w` would
+not warm an unmapped page at all. testarm never enables the MMU. And the
+translation array is a 384-entry round-robin TLB, so a row set touching more
+pages than that would silently re-cool a warmed page -- this probe's working set
+is about four pages, so the attribution here is a property of that, not a theorem.
 
 Loads and stores are SEPARATE instantiations of this template, so a row set made
 only of loads cannot see a store-side regression at all: row S is a store
@@ -64,14 +148,22 @@ The general-path fix covers LDRD/STRD (the fast path chickens out to it at
 gated. #355 already taught this project not to assert on encodings the
 architecture declines to define.
 
-NO UNALIGNED-LOAD-DATA ROW. This template masks without ROTATING, where ARMv5
-and below with CP15 A == 0 rotate the aligned word right by 8 * addr[1:0] (A2.8
-p. A2-38, A4.1.23) -- 0x11223344 here where a rotating implementation returns
-0x44112233. A PIN pinning the unrotated value would be inverted by the round
-that fixes the rotation: the row would be rewritten by the change it exists to
-guard. A review seat caught this. Row H asserts the loaded data at an ALIGNED
-base instead, where no rotation applies in any architecture version, so the data
-path is still guarded without pinning anything the rotation round will move.
+UNALIGNED-LOAD-DATA ROWS -- #364: THIS SECTION USED TO SAY THERE WERE NONE, and
+it was written when that was true. It argued that a PIN on the unrotated value
+would be "inverted by the round that fixes the rotation", i.e. rewritten by the
+change it exists to guard, so only an ALIGNED-base data row was safe.
+
+That reasoning was sound and its conclusion is now obsolete: `#362` FIXED the
+rotation and added three DISC rows on the unrotated-vs-rotated pair (a DISC row
+states both values, so it is not inverted by the fix -- it is satisfied by it),
+and `#364` added three more from a cold page. Six rows now pin unaligned loaded
+data. The aligned-base row stays, and stays correct for its own reason: no
+rotation applies at offset 0 in any architecture version.
+
+Kept rather than deleted because the ARCHITECTURE note is still the reference:
+ARMv5 and below with CP15 A == 0 rotate the aligned word right by 8 * addr[1:0]
+(A2.8 p. A2-38, A4.1.23), so a base of 0x10001 over the word 0x11223344 owes
+0x44112233 and NOT the masked 0x11223344.
 """
 import os
 import pty
@@ -125,21 +217,94 @@ UNAL3 = [MOV_R0_10000, ADD_R0_3]    # base 0x10003
 ALIGN = [MOV_R0_10000]              # base 0x10000
 ZERO = [MOV_R0_0]                   # base 0
 
+#  #364: a page this probe seeds with `put b` and NEVER with `put w`, so its
+#  translation entry stays absent and a load from it takes the GENERAL path.
+#  That is the whole point -- see the seeding note in run() and the corrected
+#  site table above. 0xE3A00802 is `mov r0,#0x20000`, CHECKED THROUGH
+#  `unassemble` rather than derived: same rot-8 immediate field as the verified
+#  MOV_R0_10000 (0xE3A00801) with imm8 stepped 1 -> 2.
+#
+#  THE SEEDING MECHANISM, cited from source rather than asserted. A review seat
+#  made the fair point that the previous note here stated this mechanism in
+#  several places without a citation -- and since the note it replaced was
+#  itself inverted, leaning on an uncited claim a second time would repeat the
+#  original mistake one level up. So, the four links:
+#    put b  -> debugger_cmds.c  memory_rw(..., MEM_WRITE, CACHE_NONE|NO_EXCEPTIONS)
+#    put w  -> debugger_cmds.c  store_32bit_word()
+#           -> memory.c         cpu->memory_rw(..., MEM_WRITE, CACHE_DATA)
+#    insertion gate, memory_rw.c:
+#           if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+#               && !(ok & MEMORY_NOT_FULL_PAGE) && !no_exceptions)
+#                   cpu->update_translation_table(...)
+#  So NO_EXCEPTIONS blocks insertion outright, which is why `put b` leaves the
+#  page cold and `put w` does not. Note the gate ALSO requires a full page, so
+#  a device-backed or partial-page target would stay cold under `put w` too --
+#  irrelevant here (plain RAM), but it is the other way this can surprise.
+COLD = 0x20000
+MOV_R0_20000 = 0xE3A00802           # mov  r0,#0x20000
+COLD1 = [MOV_R0_20000, ADD_R0_1]    # base 0x20001, page never warmed
+COLD2 = [MOV_R0_20000, ADD_R0_2]    # base 0x20002
+COLD3 = [MOV_R0_20000, ADD_R0_3]    # base 0x20003
+
+#  #364: assert nothing this probe warms shares COLD's page. A review seat found
+#  the hole: nothing enforced the inequality, so if a future edit moved CODE, SRC
+#  or the row-K address onto COLD's page, the program-write loop would warm it
+#  BEFORE `pc=` was sent -- and the three cold rows would still PASS, because the
+#  fast path yields the same rotated answer. Silent vacuity, in the exact shape
+#  this round exists to correct, merely pushed one step away.
+#
+#  Evaluated ONCE at import, not inside run(): a second review pass pointed out
+#  that inside run() it fires 20 times, each time AFTER forking an emulator and
+#  sending seeds, so a failure would leak a child and a pty master and would not
+#  fire until the first fork. Here it fires before any process exists.
+#
+#  Failure mode, stated so nobody misdiagnoses it: an AssertionError means no
+#  WRITEBACK_RESULT= line, which makes gate_arm.sh call gate_skip, and gate_skip
+#  exits EXIT_SKIP -- so every check AFTER the writeback section stops running and
+#  gate 14 reports SKIP, which reads like a missing rig image rather than a
+#  broken invariant. (That gate_skip swallows already-recorded failures is itself
+#  a separate defect, recorded in OUTSTANDING_BUGS.)
+#
+#  The 4 KB mask is not an assumption: ARM_ADDR_TO_PAGENR shifts by 12,
+#  tmp_arm_head.c sets DYNTRANS_PAGESIZE 4096, N_VPH32_ENTRIES is 2^32/2^12, and
+#  memory_rw inserts at `vaddr & ~offset_mask` with offset_mask 0xfff for ARM.
+#  What this guard does NOT cover, per the notes above: COLD landing on a
+#  DM_DYNTRANS_OK device page, which inserts even under NO_EXCEPTIONS.
+_PG = ~0xFFF
+for _n, _a in (("CODE", CODE), ("CODE end", CODE + 4 * 15),
+               ("SRC", SRC), ("SRC end", SRC + 4 * 7),
+               ("row K", 0x0), ("testarm stub", 64 * 1048576 - 4096 + 32)):
+    assert (_a & _PG) != (COLD & _PG), \
+        "%s 0x%x shares COLD's page 0x%x -- it would be warmed" % (_n, _a, COLD)
+
 
 def _br(cond, frm, to):
     return cond | ((to - (frm + 2)) & 0xFFFFFF)
 
 
 def once(setup, body):
-    """One execution of `body`, then spin. Reaches the GENERAL path only."""
+    """One execution of `body`, then spin.
+
+    #364: this used to claim "Reaches the GENERAL path only." MEASURED FALSE --
+    it reaches the general path NEVER. A marker at the top of A__NAME__general
+    counted zero hits on all 17 rows. The reason is this probe's own seeding:
+    `put w` goes through store_32bit_word -> memory_rw with CACHE_DATA, which
+    inserts the page into the translation array, so by the time the guest runs,
+    `host_load` is already non-NULL and even a single execution takes the FAST
+    path. Use COLD1/2/3 for a general-path row -- those pages are seeded with
+    `put b`, which uses CACHE_NONE | NO_EXCEPTIONS and does not insert.
+    """
     return list(setup) + list(body) + [SPIN]
 
 
 def loop10(setup, body):
     """`body` ten times, counted in r3 so the count cannot depend on r0.
 
-    Iteration 1 takes the general path (page not yet in the translation array);
-    iterations 2+ take the fast path. One row, both writeback sites.
+    #364: this used to claim iteration 1 takes the general path and iterations
+    2+ the fast one, i.e. "one row, both writeback sites". MEASURED FALSE -- the
+    page is ALREADY in the translation array before the guest runs, because the
+    probe seeds it with `put w`. Every iteration takes the fast path, and the
+    marker count for these rows is zero like all the others. One row, ONE site.
     """
     prog = list(setup) + [MOV_R3_0]
     top = len(prog)
@@ -153,8 +318,13 @@ def warmed(body):
     """Two passes, base RE-SEEDED each pass, so pass 2 is still unaligned.
 
     Without the re-seed the pre-index row self-heals: pass 1 leaves an ALIGNED
-    base, and pass 2 then has nothing to discriminate. Pass 2 is the only
-    execution in this whole set that reaches the fast pre-index site.
+    base, and pass 2 then has nothing to discriminate.
+
+    #364: this used to claim pass 2 is "the only execution in this whole set
+    that reaches the fast pre-index site". MEASURED FALSE in the other direction
+    from once()/loop10 -- BOTH passes reach it, because the probe's `put w`
+    seeding warms the page before pass 1. The re-seed is still load-bearing for
+    the reason above; only the site claim was wrong.
     """
     prog = [MOV_R3_1]
     top = len(prog)
@@ -164,7 +334,16 @@ def warmed(body):
     return prog
 
 
-#  Names stay well inside the %-34s column they print into, so a gate check of
+#  #364: the column is `%-32s` followed by TWO LITERAL SPACES in the format
+#  string, not `%-34s` as this note used to say -- a review seat caught the
+#  discrepancy. It matters that the two spaces are literal: they are emitted
+#  unconditionally, so even a name that filled the whole 32-column field would
+#  still satisfy a two-space gate pattern. The longest name here is 26 chars
+#  ("A wb regofs post1 unal x10"); a draft of this very note said 24, which is
+#  the length of the six `rot word` names -- corrected in review, and worth
+#  correcting rather than shrugging at in a note whose whole subject is being
+#  exact about this trap.
+#  Names stay well inside that column, so a gate check of
 #  the form "<name>  *DISC" always sees at least two spaces. A name as long as
 #  its column makes such a check UNSATISFIABLE -- shipped once before.
 ROWS = [
@@ -217,6 +396,26 @@ ROWS = [
      once(UNAL2, [LDR_OFF0]), "r1", 0x11223344, 0x33441122),
     ("A wb rot word unal plus3", "DISC",
      once(UNAL3, [LDR_OFF0]), "r1", 0x11223344, 0x22334411),
+
+    #  #364: the same three offsets, from a page seeded ONLY with `put b`, so the
+    #  translation entry is absent and the load takes the GENERAL path. These are
+    #  the first rows in this file to enter `A__NAME__general` -- see the
+    #  corrected site table at the top.
+    #
+    #  Why they are not redundant with the three rows above, which is the whole
+    #  finding: with `#362`'s general-path rotation neutralised and its fast-path
+    #  rotation left intact, the rows above stayed GREEN and the whole of gate 14
+    #  passed at 261 checks. These three go red, reading the unrotated
+    #  0x11223344. The two triples differ in exactly one thing -- the seeding
+    #  width of the page they read -- which is what pins the mechanism: on ONE
+    #  binary, `put b` gave ls_general=1 and the mask-only answer while `put w`
+    #  gave ls_general=0 and the rotated answer.
+    ("A wb rot word cold plus1", "DISC",
+     once(COLD1, [LDR_OFF0]), "r1", 0x11223344, 0x44112233),
+    ("A wb rot word cold plus2", "DISC",
+     once(COLD2, [LDR_OFF0]), "r1", 0x11223344, 0x33441122),
+    ("A wb rot word cold plus3", "DISC",
+     once(COLD3, [LDR_OFF0]), "r1", 0x11223344, 0x22334411),
 ]
 
 
@@ -275,6 +474,20 @@ def run(prog, regs):
     for i in range(8):
         send("put w 0x%x, 0x%08x" % (SRC + 4 * i, 0x11223344 + i))
     send("put w 0x0, 0x99887766")        # row K reads from address 0
+
+    #  #364: the COLD page, laid down a BYTE AT A TIME on purpose. `put b` uses
+    #  CACHE_NONE | NO_EXCEPTIONS, and translation-array insertion is gated on
+    #  `!no_exceptions`, so this page is NOT warmed and a load from it takes the
+    #  general path -- which no other row in this file does. `put w` here would
+    #  silently convert these rows into three more fast-path rows.
+    #
+    #  Bytes ascending so the little-endian word reads 0x11223344, matching the
+    #  `put w` pages above: 0x44 at COLD+0 through 0x11 at COLD+3. Do NOT switch
+    #  the whole probe to `put b` -- that would move all 17 existing rows to the
+    #  general path and DELETE the fast-path coverage, which is currently the
+    #  only coverage those four sites have.
+    for i, b in enumerate((0x44, 0x33, 0x22, 0x11)):
+        send("put b 0x%x, 0x%02x" % (COLD + i, b))
 
     for i, iw in enumerate(prog):
         send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
