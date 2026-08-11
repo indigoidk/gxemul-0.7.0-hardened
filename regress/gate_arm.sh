@@ -662,13 +662,43 @@ fgot=${fres%/*}; fwant=${fres#*/}
 #  being meaningless. Measured: with verbosity off the guest ran perfectly and
 #  reported zero fires AND zero installs, so counting absences alone cannot tell
 #  a dead fold from a broken session.
-check "fold-marker rows run"     "$fwant" 8
+#  #361 adds rows for the last two folds that had #358 markers but nothing
+#  exercising them -- the scope debt #358 was criticised for. Two shapes, and
+#  they are NOT interchangeable:
+#    xchg  declines at the MATCHER (install 0), because #342's `a != b` term
+#          rejects the shape before anything is installed.
+#    scanc declines at a GUARD (install 1, decline 1), like copyin/copyout, and
+#          has TWO decline sites -- the second reachable only after the first
+#          passes, since the table address is computed from the byte just loaded.
+#          Both are exercised, with distinct reason spellings so a row can say
+#          which page missed.
+#
+#  `A fold xchg selective` is one row spanning BOTH xchg arms, and it exists
+#  because a measuring seat showed the negative arm is VACUOUS ALONE: install 0 /
+#  fire 0 reads identically on a healthy build and on one with xchg's arming
+#  removed, so by itself it cannot tell "the matcher rejected the shape" from
+#  "the matcher does not exist" -- the #360 defect again. Measured on an
+#  arming-dead build: `A fold xchg samereg` reads **ok** while
+#  `A fold xchg selective` goes red. The rejected alternative is recorded in the
+#  probe: relocating #342's term into the matched shape so the arm self-diagnoses
+#  works, but it edits a shipped correction's guard for instrumentation's sake.
+#
+#  scanc's r3 is a genuine three-way value witness -- 0x77 is table[4] when the
+#  fold runs, 0x66 is table[0] because an unmapped string load yields zero, and
+#  0x00 when the table page is the missing one -- plus an r5 sentinel proving the
+#  program reached its end. Measured: on a scanc-arming-dead build all three arms
+#  keep byte-identical register values and only the marker triple moves, so a
+#  value-only row would be vacuous for this fold.
+check "fold-marker rows run"     "$fwant" 14
 check "fold-marker rows correct" "$fgot"  "$fwant"
 
 for v in "A fold copyin fires" "A fold copyin quiet" \
          "A fold copyout fires" "A fold copyout quiet" \
          "A fold copyin warm" "A fold copyin cold" \
-         "A fold copyout warm" "A fold copyout cold"; do
+         "A fold copyout warm" "A fold copyout cold" \
+         "A fold xchg fires" "A fold xchg samereg" \
+         "A fold xchg selective" "A fold scanc fires" \
+         "A fold scanc nostr" "A fold scanc notbl"; do
     n=$(count "$FOLDLOG" "^$v  .*ok$")
     check "  fold-marker row: $v" "$n" 1
 done

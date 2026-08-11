@@ -2324,7 +2324,19 @@ X(netbsd_scanc)
 	unsigned char *page = cpu->cd.arm.host_load[cpu->cd.arm.r[1] >> 12];
 	uint32_t t;
 
+	/*
+	 *  #361: name the reason this fold declined, in the SAME expression the
+	 *  guard tests -- the #360 shape. Unlike copyin/copyout, the two bail-outs
+	 *  CANNOT share one `why` chain: the second tests a page derived from the
+	 *  byte the first bail-out proves unreadable, so the reasons must be
+	 *  printed at their own guards, in order. The text avoids the word
+	 *  "combined" because the probes count fires by matching "<name>:
+	 *  combined"; the two reasons are also spelled differently so a row can
+	 *  tell WHICH page missed.
+	 */
 	if (page == NULL) {
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_scanc", VERBOSITY_DEBUG,
+		    "declined (str-no-page) r1=0x%x", (unsigned) cpu->cd.arm.r[1]);
 		instr(load_w0_byte_u1_p1_imm)(cpu, ic);
 		return;
 	}
@@ -2334,6 +2346,8 @@ X(netbsd_scanc)
 	page = cpu->cd.arm.host_load[t >> 12];
 
 	if (page == NULL) {
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_scanc", VERBOSITY_DEBUG,
+		    "declined (tbl-no-page) t=0x%x", (unsigned) t);
 		instr(load_w0_byte_u1_p1_imm)(cpu, ic);
 		return;
 	}
@@ -3368,6 +3382,8 @@ void COMBINE(netbsd_scanc)(struct cpu *cpu,
 	    ic[-1].arg[1] == (size_t)arm_r_r3_t0_c0 &&
 	    ic[-1].arg[2] == (size_t)(&cpu->cd.arm.r[3])) {
 		ic[-2].f = instr(netbsd_scanc);
+		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_scanc",   /*  #361  */
+		    VERBOSITY_DEBUG, "installed at ic[-2]");
 	}
 }
 
@@ -3457,6 +3473,14 @@ void COMBINE(xchg)(struct cpu *cpu,
 	    ic[-1].arg[0] == b && ic[-1].arg[1] == a && ic[-1].arg[2] == a &&
 	    ic[ 0].arg[0] == a && ic[ 0].arg[1] == b && ic[ 0].arg[2] == b) {
 		ic[-2].f = instr(xchg);
+		/*  #361: one line per TRANSLATION. X(xchg) has no bail path, so
+		    there is no decline marker to add here -- for this fold the
+		    negative control is the MATCHER declining, and this line is
+		    what makes that visible: install 0 / fire 0 says the a != b
+		    term rejected the shape, install 1 / fire 0 would say the
+		    slot was installed but never dispatched.  */
+		debugmsg_cpu(cpu, SUBSYS_CPU, "xchg",
+		    VERBOSITY_DEBUG, "installed at ic[-2]");
 	}
 }
 

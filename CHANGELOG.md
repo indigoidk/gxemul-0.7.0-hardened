@@ -4192,6 +4192,74 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-seventh round (#361) — the last two folds with markers but no rows, and a negative arm that was vacuous alone
+
+`#358` gave five folds fire markers; `#360` gave two of them rows. This round
+closes the debt on the other two — the scope criticism `#358` earned — and finds
+the `#360` defect a third time, in a new place.
+
+- **#361 (`cpus/cpu_arm_instr.c`)** — decline markers on **both** of
+  `netbsd_scanc`'s bail sites plus install markers in its matcher and in
+  `xchg`'s.
+
+  `scanc`'s two sites **cannot share one reason expression** the way
+  `copyin`/`copyout` do: the second tests a page derived from the byte the first
+  proves unreadable, so each prints at its own guard, with distinct spellings so a
+  row can say *which* page missed. Neither text contains "combined", which would
+  make the probes tally declines as fires.
+
+  `xchg` gets **no** decline marker, because it has no bail path. Its rejection
+  happens in the **matcher**, so its signature is `install 0` — a fundamentally
+  different shape from a guard decline's `install 1 / decline 1`, and the two must
+  not share an expected form.
+
+**The finding, and it is the `#360` lesson a third time.** The obvious `xchg`
+negative arm — three EORs on one register, the shape `#342`'s guard rejects —
+reads `install 0 / fire 0`, which is **identical on a healthy build and on one
+with `xchg`'s arming removed**. Alone it cannot tell "the matcher rejected the
+shape" from "the matcher does not exist". Measured on an arming-dead build:
+`A fold xchg samereg` reads **ok** while the new `A fold xchg selective` goes
+**red**.
+
+The fix taken is to make the coupling explicit rather than to change the
+emulator: selectivity is **one row spanning both arms**, which cannot pass unless
+the matcher both installs for distinct registers and declines for equal ones. The
+pair was always the meaningful unit; this stops a reader mistaking half of it for
+a test. **The rejected alternative is recorded** — a seat built and measured a
+version that relocates `#342`'s `a != b` term into the matched shape so the arm
+self-diagnoses, and it works, but it edits a shipped correction's guard for
+instrumentation's sake.
+
+**`scanc` turned out to have a better witness than "none".** Its result register
+was thought to read zero in every arm; it actually takes **three distinct
+values** — the table byte when the fold runs, `table[0]` when the string page is
+missing (an unmapped load yields zero, so the genuine path indexes the table with
+zero), and zero when the table page itself is the missing one. Each arm therefore
+has a value witness *and* a sentinel proving the program reached its end,
+confirmed not to perturb the fold. Even so, the marker triple is the only real
+detector: on an arming-dead build all three arms keep **byte-identical registers**
+and only the markers move, so a value-only row would be vacuous for this fold too.
+
+**Two construction facts measured along the way.** The debugger's `put b` does
+**not** warm the translation mapping while `put w` does — the byte path uses
+uncached, no-exception access while the wider stores go through the caching path.
+That refines what an earlier round recorded as simply "`put w` populates it": the
+width matters. And `scanc`'s second decline site is only reachable with the string
+page already warm; without the warm-up the row declines at the *first* site
+instead, so the warm-up is load-bearing for that arm specifically — and it must
+use a base register the matcher does not pin, or the warm-up load is itself a fold
+candidate.
+
+**A probe defect of my own, recorded because its symptom misleads.** The session
+helper read a fixed register list that omitted the two `scanc` witnesses, so all
+three arms reported a zero result and a missing sentinel **while their marker
+counts were already correct** — it looked as though the guest had not run when in
+fact only the readback was absent. The comparison is now `is not None`-guarded,
+because one arm legitimately expects zero and a missing readback must not pass as
+a correct zero.
+
+Gate 14 grows 6 checks; the fold-marker probe goes 8/8 → 14/14.
+
 ## One-hundred-and-sixth round (#360) — the row that asserted an absence still passed when the fold was dead
 
 `#358` gave two folds a fire marker and a `quiet` row asserting that no marker

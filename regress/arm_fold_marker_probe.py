@@ -111,7 +111,7 @@ COPYOUT = [
 ]
 
 
-def session(prog, verbose, seed_regs=None, extra=None):
+def session(prog, verbose, seed_regs=None, extra=None, bseed=None):
     """Free-running two-pass session. Returns (marker_count, verb_took, regs)."""
     stub = "/tmp/r104f_stub.bin"
     with open(stub, "wb") as f:
@@ -161,6 +161,13 @@ def session(prog, verbose, seed_regs=None, extra=None):
 
     for i in range(8):
         send("put w 0x%x, 0x%08x" % (LOADSRC + 4 * i, 0x11223344 + i))
+    #  #361: BYTE seeding, deliberately. `put b` goes through memory_rw with
+    #  CACHE_NONE | NO_EXCEPTIONS, so unlike `put w` it does NOT warm the
+    #  translation mapping -- measured. The scanc rows warm explicitly with a
+    #  guest load through an unpinned base instead, so they do not depend on a
+    #  side effect of the seeding width either way.
+    for a, v in (bseed or []):
+        send("put b 0x%x, 0x%x" % (a, v))
     for r, v in (seed_regs or {}).items():
         send("%s=0x%x" % (r, v))
     for i, iw in enumerate(prog):
@@ -184,7 +191,12 @@ def session(prog, verbose, seed_regs=None, extra=None):
         wait_from(cmark, 15)
 
     regs = {}
-    for rn in ("sl", "fp", "r6", "r7", "r8", "r9", "r0", "r1"):
+    #  r3 and r5 are read for the #361 scanc rows: r3 is that fold's three-way
+    #  value witness and r5 its run-to-the-end sentinel. Omitting them was a
+    #  probe defect that reported r3 = 0 and the sentinel absent while the marker
+    #  counts were already correct -- i.e. it looked like the guest had not run
+    #  when in fact only the readback was missing.
+    for rn in ("sl", "fp", "r6", "r7", "r8", "r9", "r0", "r1", "r3", "r5"):
         mark = len(buf)
         send("print %s" % rn)
         m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
@@ -343,6 +355,88 @@ for fold, warm, want_fire, want_dec in (("copyin", True, 1, 0),
     rows.append((nm, "DISC" if warm else "PIN",
                  "fire=%d dec=%d inst=%d verb=%s adv=%s"
                  % (f, d, i, verb, adv), ok))
+
+#  ---- #361: xchg and netbsd_scanc, which had #358 fire markers but no rows ---
+#  Every iword below was verified through the emulator's own `unassemble`.
+XCHG_POS = [0xE0212002, 0xE0221001, 0xE0212002,   # eor r2,r1,r2 / r1,r2,r1 / r2,r1,r2
+            0xE3A0505A, 0xEAFFFFFE]               # sentinel, park
+XCHG_NEG = [0xE0211001, 0xE0211001, 0xE0211001,   # eor r1,r1,r1 x3 -- #342 rejects
+            0xE3A0505A, 0xEAFFFFFE]
+
+#  scanc: warm through r4 (a base the matcher does NOT pin) so the warm-up load
+#  is not itself a fold candidate, then the pinned r1/r2 sequence. The two
+#  negative arms move ONE immediate each into unmapped space; the layout is
+#  otherwise identical so no address-derived expectation shifts.
+def scanc_prog(str_base, tbl_base):
+    return [str_base, tbl_base, 0xE3A0C0FF,       # mov r1,# / mov r2,# / mov ip,#0xff
+            0xE3A04801, 0xE5D43000,               # warm the string page via r4
+            0xE3A04802, 0xE5D43000,               # warm the table page via r4
+            0xE5D13000,                           # ldrb r3,[r1]  <- fold entry
+            0xE7D23003,                           # ldrb r3,[r2,r3]
+            0xE113000C,                           # tsts r3,ip    arms the matcher
+            0xE3A0505A, 0xEAFFFFFE]               # sentinel, park
+
+SC_R1_OK, SC_R2_OK = 0xE3A01801, 0xE3A02802       # r1=0x10000, r2=0x20000
+SC_UNMAPPED = 0xE3A01201                          # #0x10000000 -- out of RAM
+SC_R2_BAD = 0xE3A02201
+
+#  #361: the xchg negative arm is VACUOUS ON ITS OWN, which a measuring seat
+#  caught -- install 0 / fire 0 reads identically on a healthy build and on one
+#  with xchg's arming removed, so alone it cannot tell "the matcher rejected the
+#  shape" from "the matcher does not exist". That is the very defect #360 was
+#  about. Rather than relocate #342's `a != b` term into the matched shape to
+#  make the arm self-diagnosing (measured to work, and recorded as the rejected
+#  alternative -- it edits a shipped correction's guard for instrumentation's
+#  sake), the coupling is made EXPLICIT: selectivity is ONE row over BOTH arms,
+#  which cannot pass unless the matcher both installs for distinct registers and
+#  declines for equal ones. The pair was always the meaningful unit; this stops a
+#  reader mistaking half of it for a test.
+for nm, prog, want_fire, want_inst, wit in (
+        ("A fold xchg fires", XCHG_POS, 1, 1, ("r1", 0xB2B2B202)),
+        ("A fold xchg samereg", XCHG_NEG, 0, 0, ("r1", 0x00000000))):
+    r = session(prog, True, seed_regs={"r1": 0xA1A1A101, "r2": 0xB2B2B202})
+    if r is None:
+        rows.append((nm, "DISC", "DEAD", False)); continue
+    buf, regs, _ = r
+    f, i = count(buf, "xchg"), installed(buf, "xchg")
+    verb, wr = "3: DEBUG" in buf, regs.get(wit[0]) == wit[1]
+    rows.append((nm, "DISC" if want_fire else "PIN",
+                 "fire=%d inst=%d verb=%s wit=%s" % (f, i, verb, wr),
+                 f == want_fire and i == want_inst and verb and wr))
+    if want_fire:
+        _xchg_pos = (f, i)
+    else:
+        #  The row that cannot pass on a build where xchg does not exist.
+        rows.append(("A fold xchg selective", "DISC",
+                     "pos(inst=%d fire=%d) neg(inst=%d fire=%d)"
+                     % (_xchg_pos[1], _xchg_pos[0], i, f),
+                     _xchg_pos == (1, 1) and (f, i) == (0, 0)))
+
+#  scanc: r3 is a genuine three-way value witness -- 0x77 is table[4] on the
+#  positive arm, 0x66 is table[0] because an unmapped string load yields 0, and
+#  0x00 when the table page itself is missing. Plus the r5 sentinel, measured
+#  not to perturb the fold.
+for nm, prog, wf, wd, wr3 in (
+        ("A fold scanc fires", scanc_prog(SC_R1_OK, SC_R2_OK), 1, 0, 0x77),
+        ("A fold scanc nostr", scanc_prog(SC_UNMAPPED, SC_R2_OK), 0, 1, 0x66),
+        ("A fold scanc notbl", scanc_prog(SC_R1_OK, SC_R2_BAD), 0, 1, 0x00)):
+    r = session(prog, True, seed_regs={"r3": 0xDEAD, "r5": 0},
+                bseed=[(0x10000, 0x04), (0x20004, 0x77), (0x20000, 0x66)])
+    if r is None:
+        rows.append((nm, "DISC" if wf else "PIN", "DEAD", False)); continue
+    buf, regs, _ = r
+    f, d, i = (count(buf, "netbsd_scanc"), declined(buf, "netbsd_scanc"),
+               installed(buf, "netbsd_scanc"))
+    verb = "3: DEBUG" in buf
+    #  `is not None` matters: the notbl arm legitimately expects r3 == 0, so a
+    #  missing readback must not be silently accepted as a correct zero.
+    got3 = regs.get("r3")
+    ok = (f == wf and d == wd and i == 1 and verb
+          and got3 is not None and got3 == wr3 and regs.get("r5") == 0x5A)
+    rows.append((nm, "DISC" if wf else "PIN",
+                 "fire=%d dec=%d inst=%d r3=%s sent=%s"
+                 % (f, d, i, "none" if got3 is None else "0x%x" % got3,
+                    regs.get("r5") == 0x5A), ok))
 
 ngot = 0
 for name, kind, detail, ok in rows:
