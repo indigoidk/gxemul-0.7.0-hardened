@@ -1984,3 +1984,39 @@ corruption without a clear host-OOB path.
 > And once a walk exhausts the budget, the rest of that dispatch group advances one byte
 > per dispatch, so ~4% of a long walk's dispatches are near-empty — progress is guaranteed,
 > but the derivation is written down so the next reader need not redo it.
+
+> ## 2026-08-11 — CORRECTION to the combiner audit: two of its four "live defects" may be non-defects
+> Scoping the copyin/copyout item turned up a root cause that INVERTS part of the audit
+> recorded above, and it is written down here before anyone acts on that ranking.
+>
+> The audit measured each fold against the handler it stands in for. For the two
+> "unmasked base writeback" findings — `netbsd_cacheclean`'s `r[0] += r1` and
+> `netbsd_copyin`/`netbsd_copyout`'s `r0 + 24` — the handler is the wrong yardstick:
+> `cpu_arm_instr_loadstore.c` masks the address (`addr &= ~3`) and then post-index writes
+> back `addr + offset`, i.e. the MASKED base plus the offset. **Real ARM writes back
+> `Rn + offset` UNMASKED** — the alignment masking governs only which bytes are read and
+> how a loaded word is rotated. If that reading holds, GXemul's TEMPLATE is the
+> simplification and those two folds are CLOSER to the architecture than the code they
+> were compared against, so "mask the base on entry" would move them away from real
+> hardware to agree with a local shortcut.
+>
+> **Required first step, now queued as its own item:** settle the post-index writeback from
+> a primary source (ARM ARM DDI 0100, LDR/STR post-indexed, plus what silicon does with an
+> unaligned base and W=1). This project has needed the manual twice for exactly this class
+> of question (m88k #307 and #323). Then either fix the template ONCE — writeback
+> unmasked, data path still masked and rotated — which closes both fold items by agreement
+> and touches no fold; or record the simplification deliberately and close them as
+> non-defects. A template change's blast radius is every ARM load/store with writeback, so
+> it needs its own round with aligned and unaligned rows and a full battery.
+>
+> **Unaffected by this correction, still live:** the byteswap half of the copyin/copyout
+> item (those folds move words with a direct `uint32_t` access where the single-register
+> template assembles per `cpu->byte_order`, so a big-endian guest gets byte-reversed words
+> — and unlike the memcpy case the template really does swap, so the fold genuinely
+> disagrees with the instructions it replaces); `netbsd_cacheclean`'s stale r2 and elided
+> load side effects; and the `strlen` items, resolved this round as #355/#356.
+>
+> **The general lesson, recorded because it cost a near-miss:** "measured against the
+> handler" is not "measured against the architecture". A fold that diverges from its
+> handler is a divergence to explain, not automatically a defect to fix — the handler may
+> be the one that is wrong.
