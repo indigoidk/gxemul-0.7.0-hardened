@@ -56,11 +56,23 @@ WHICH ROWS REACH THE FOUR WRITEBACK SITES (the `reg(ic->arg[0]) =` statements)
                          `byte post1 unal`, `wrap from zero`      (11 rows)
   fast    pre-index   -- C (`pre4 unal gen`) and C2 (`pre4 unal fast`, BOTH
                          passes, not just the second)              (2 rows)
-  general post-index  -- UNCOVERED
-  general pre-index   -- UNCOVERED
-So `#357`'s general-path writeback fix STILL has no row reaching it. Recorded in
-OUTSTANDING_BUGS; the cold-page machinery below is what a future row will use,
-and an `ldrt` form would be better still (see the note on warming immunity).
+  general post-index  -- `ldrt post4 unal` (this probe), and the fold-marker
+                         probe's `copyin cold` / `copyout cold` arms
+  general pre-index   -- `cold pre4 unal` (this probe), and the strlen probe's
+                         `ldrb r3,[r4,#1]!` walk on each new page
+
+#365 CORRECTED A CLAIM #364 MADE HERE. This table used to say both general
+writeback sites were UNCOVERED and that `#357`'s fix "STILL has no row reaching
+it". Measured false, and the correction is sharper than the claim: both sites
+were already REACHED, just not by rows in this file -- deleting the two general
+writeback statements turns 8 gate checks red in the strlen and fold-marker
+sections while this probe stays 20/20. What was missing was DISCRIMINATION.
+Rebuild with the faithful pre-`#357` bug (general writeback re-masked, fast pair
+intact) and the whole gate passed at 264: `ldrb` has datalen 1, so
+`addr &= ~(datalen - 1)` is the identity, and the fold arms use aligned bases.
+Reaching a statement without discriminating its correction measures nothing about
+it. The two `#365` rows are the first anywhere in the battery that do discriminate
+it, verified against that exact mutant.
 
 ROWS WITH NO WRITEBACK SITE AT ALL (P=1/W=0 offset forms)
   `pre4 no wb` and the three `rot word unal` rows -- in the FAST function
@@ -207,6 +219,26 @@ ADD_R3_1     = 0xE2833001   # add  r3,r3,#1
 SUBS_R3_1    = 0xE2533001   # subs r3,r3,#1
 CMP_R3_10    = 0xE353000A   # cmp  r3,#10
 SPIN         = 0xEAFFFFFE   # b .
+
+#  #365: the T form -- P=0/U=1/B=0/W=1/L=1, class 010. CHECKED through
+#  `unassemble` as `ldrt r1,[r0],#4`, and it lands in
+#  tmp_arm_loadstore_p0_u1_w1.c, handler arm_instr_load_w1_word_u1_p0_imm
+#  (generator index reg*512+p*256+u*128+b*64+w*32+l*16+c, so
+#  ((iword >> 16) & 0x3f0) + cond = 176 + 14 = 190).
+#
+#  WHY A T FORM RATHER THAN A COLD PAGE: this reaches A__NAME__general BY
+#  CONSTRUCTION and is immune to warming. The template tests
+#  is_userpage[addr >> 17] BEFORE the `page == NULL` test, and a clear bit calls
+#  A__NAME__general regardless of how warm the page is. The bit is set only when
+#  update_translation_table receives MEMORY_USER_ACCESS, which only this T-form
+#  family passes -- so a `put w` page is warm and the first `ldrt` still goes
+#  general. That cannot be silently voided by a future seeding change, which a
+#  cold page can be (see the device-arm and instruction-fetch notes above).
+#
+#  Rd is r1 DELIBERATELY, not r9: `0xE4B09004` is the word that arms
+#  COMBINE(netbsd_copyin), so an r9 destination would put this row in the
+#  instruction-combiner's path and measure something else entirely.
+LDRT_P4      = 0xE4B01004           # ldrt r1,[r0],#4   post-index +4, T bit
 
 UNAL = [MOV_R0_10000, ADD_R0_1]     # base 0x10001
 ADD_R0_2     = 0xE2800002           # add  r0,r0,#2
@@ -416,6 +448,38 @@ ROWS = [
      once(COLD2, [LDR_OFF0]), "r1", 0x11223344, 0x33441122),
     ("A wb rot word cold plus3", "DISC",
      once(COLD3, [LDR_OFF0]), "r1", 0x11223344, 0x22334411),
+
+    #  #365: the first two rows anywhere in the battery that DISCRIMINATE #357's
+    #  general-path correction. The distinction matters and cost a refuted
+    #  prediction to find: the two general writeback SITES were already being
+    #  REACHED before this round -- the strlen probe's `ldrb r3,[r4,#1]!` is
+    #  P=1/W=1 and takes the general pre-index arm on each new page, and the
+    #  fold-marker probe's `copyin cold` / `copyout cold` arms are six ldrt/strt
+    #  with the is_userpage bit deliberately clear, so all six run in
+    #  A__NAME__general and their r0/r1-advanced-by-24 witness IS a writeback
+    #  assertion. Deleting both statements turns 8 gate checks red in THOSE
+    #  sections.
+    #
+    #  But nothing DISCRIMINATED the mask. Rebuild with the faithful pre-#357
+    #  bug -- the general writeback re-masked, `addr` instead of `wb_addr`, fast
+    #  pair intact -- and the whole of gate 14 passed at 264 checks, 0 failures.
+    #  Every row that reached those sites was blind to it: `ldrb` has
+    #  datalen 1, so `addr &= ~(datalen - 1)` is the IDENTITY, and the fold arms
+    #  use aligned bases 0x10000/0x11000 where masked and unmasked agree. So the
+    #  honest statement is "undiscriminated", not "unreached" -- and a row that
+    #  reaches a statement without discriminating its correction measures nothing
+    #  about it.
+    #
+    #  Measured on four builds. Pristine: both ok. General writeback DELETED:
+    #  both red at the un-incremented base. General writeback RE-MASKED (the real
+    #  #357 bug): both red at exactly the predicted masked values. POST-index
+    #  only: the ldrt row red and the cold pre4 row green, which separates the
+    #  two sites -- as it must, since P=0/W=1 and P=1/W=1 are distinct
+    #  translation units each compiling only its own #ifdef arm.
+    ("A wb word ldrt post4 unal", "DISC",
+     once(UNAL, [LDRT_P4]), "r0", 0x10004, 0x10005),
+    ("A wb word cold pre4 unal", "DISC",
+     once(COLD1, [LDR_PRE4W]), "r0", 0x20004, 0x20005),
 ]
 
 

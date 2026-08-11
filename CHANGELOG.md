@@ -4192,6 +4192,76 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-eleventh round (#365) — "unreached" was wrong; the sites were reached and nothing DISCRIMINATED the fix
+
+`#364` recorded that both general-path writeback sites were **uncovered** and that
+`#357`'s correction "still has no row reaching it". A falsification run refuted that,
+and the corrected finding is sharper than the claim it replaces.
+
+- **#365 (`regress/arm_writeback_probe.py`, `regress/gate_arm.sh`)** — two rows that are
+  the first anywhere in the battery to **discriminate** `#357`'s general-path fix, plus
+  the correction to `#364`'s claim. Harness only; no emulator source change.
+
+**The refutation.** Deleting the two general-path writeback statements does **not** leave
+gate 14 green: it turns **8 of 264 checks red** — and none of them in the writeback
+probe, which stays at 20/20. The red rows are in two other sections, and they identify
+which row was already reaching each site:
+
+| site | already reached by |
+|---|---|
+| general **pre**-index | the strlen probe's `ldrb r3,[r4,#1]!` — P=1/W=1, taking the general arm on each new page |
+| general **post**-index | the fold-marker probe's `copyin cold` / `copyout cold` arms — six `ldrt`/`strt` with the `is_userpage` bit deliberately clear, so all six run in `A__NAME__general`, and their "r0/r1 advanced by 24" witness *is* a writeback assertion |
+
+Attribution was then separated with a **post-index-only** mutant: strlen goes 7/7 green
+and exactly the two fold cold arms go red. That pins each family to its own statement, as
+it must — P=1/W=1 and P=0/W=1 are distinct translation units, each compiling only its
+own `#ifdef` arm.
+
+**But the round's substance survives, and this is the distinction worth keeping.** Built
+with the *faithful* pre-`#357` bug — the general writeback **re-masked**, `addr` instead
+of `wb_addr`, fast pair intact — the whole of gate 14 **passed at 264 checks, zero
+failures**. Every row that reached those sites was blind to the mask: `ldrb` has
+`datalen 1`, so `addr &= ~(datalen - 1)` is the **identity**, and the fold arms use
+aligned bases `0x10000`/`0x11000` where masked and unmasked agree. So the honest word is
+**undiscriminated**, not unreached — and *reaching a statement without discriminating its
+correction measures nothing about it*. That is a fifth distinct way a green row can mean
+nothing, and it is the subtlest so far: the row runs the code, and still cannot tell the
+fix from the bug.
+
+**The instrument is correct by construction, not by circumstance.** `ldrt` reaches
+`A__NAME__general` because the template tests `is_userpage[addr >> 17]` **before** the
+`page == NULL` test, and the bit is set only when `update_translation_table` receives
+`MEMORY_USER_ACCESS`, which only the T-form family passes. So a `put w`-warmed page still
+sends the first `ldrt` down the general path — immune to any future seeding change, unlike
+a cold page, which the device arm or an unguarded `put w` can silently re-warm. Encoding
+checked through `unassemble` (`e4b01004 → ldrt r1,[r0],#4`), and it lands in
+`tmp_arm_loadstore_p0_u1_w1.c` — one of the four translation units the residual list says
+nothing enters, so the count of those drops to three. `Rd` is **r1 and not r9** on
+purpose: `0xE4B09004` is the word that arms `COMBINE(netbsd_copyin)`, which would have put
+the row in the combiner's path measuring something else.
+
+**Measured on four builds**, which is what makes these rows worth their lines:
+pristine **22/22** and gate 14 **PASS at 266**; general writeback **deleted** → 20/22, red
+at the un-incremented base; general writeback **re-masked** (the real `#357` bug) → 20/22,
+red at exactly the predicted masked values; **post-index only** → 21/22, separating the two
+sites. A row that passes on a good build but does not fail on the mutant measures nothing.
+
+**Closed by construction rather than by a row**, and worth recording because it retires a
+standing open question: the "double `reg_func` call on the fast-to-general fallback is
+provably benign" claim is **unobservable**, not merely unmeasured. Load/store decode always
+indexes the low half of `arm_r[8192]`, which the generator emits as the `s == 0` family — a
+scan finds **4096 `s == 0` functions, none writing CPU state**, against 4080 of 4096
+`s == 1` that do. Even the RRX case reads `ARM_F_C` and writes it only under `if (s)`. No
+row can observe a doubled call through a pure function, so no row is owed.
+
+**Still owed**, unchanged in substance but now correctly scoped: a general **store**-arm
+row (`strt r2,[r0],#4` = `0xE4A02004` is warming-immune and preferable to a cold `str`),
+a general register-offset row (`0xE6B01002 = ldrt r1,[r0],r2`), the `netbsd_copyin`
+unaligned-base arm, and the permanent path telemetry. Note for whoever writes the store
+row: with the MMU off `ok - 1 == 1` always, so **any** warming access — even a load — sets
+`host_store` too, meaning a store-cold page must never be touched by a warming access at
+all.
+
 ## One-hundred-and-tenth round (#364) — the row-to-site table was inverted, so two shipped rotations were never measured
 
 `#362`'s commit message claimed its three new rows prevented "a measurable
@@ -4293,7 +4363,19 @@ instead of conflating them, which is the same discipline the inverted note faile
 
 **Still owed and recorded, not quietly dropped:** **both** general-path **writeback**
 sites, pre- and post-index, still have no row, so `#357`'s general-path fix remains
-entirely unmeasured. A better instrument than the cold page exists for that and the
+entirely unmeasured.
+
+> **✗ REFUTED BY `#365`, and the correction is sharper than the claim.** Both sites were
+> already being **reached** — deleting their two statements turns **8 of 264** gate checks
+> red, in the strlen probe (whose `ldrb r3,[r4,#1]!` is P=1/W=1) and in the fold-marker
+> probe's `copyin cold`/`copyout cold` arms (six `ldrt`/`strt` with `is_userpage` clear).
+> What was missing was **discrimination**: rebuilt with the faithful pre-`#357` bug (the
+> general writeback re-masked rather than deleted), the whole gate **passed at 264, zero
+> failures**, because `ldrb` has `datalen 1` so the mask is the identity and the fold arms
+> use aligned bases. The right word is *undiscriminated*, not *unreached*. `#365` adds the
+> two rows that do discriminate it, verified against that exact mutant.
+
+A better instrument than the cold page exists for that and the
 project had already recorded it without using it: an **`ldrt` form is general-path by
 construction** — the `#if !defined(A__P) && defined(A__W)` block tests `is_userpage`
 and falls into `A__NAME__general` when the bit is clear, **regardless of warming** — so

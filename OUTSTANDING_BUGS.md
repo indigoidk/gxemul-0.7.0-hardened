@@ -2895,9 +2895,29 @@ corruption without a clear host-OOB path.
 > direction as the original inverted note — which is the argument for keeping the two axes
 > (which function a row enters, versus which writeback statement it reaches) permanently apart.
 >
-> **Owed rows, in value order.**
+> > **✗ "REMAIN UNCOVERED" IS WRONG — `#365` measured it.** Both sites were already being
+> > **reached**, just not from this probe: deleting their two statements turns **8 of 264**
+> > checks red, in the strlen probe (`ldrb r3,[r4,#1]!` is P=1/W=1, taking the general
+> > pre-index arm on each new page) and in the fold-marker probe's `copyin cold`/`copyout
+> > cold` arms (six `ldrt`/`strt` with the `is_userpage` bit deliberately clear, whose
+> > "advanced by 24" witness is a writeback assertion). A post-index-only mutant separates
+> > them: strlen 7/7 green, exactly the two fold arms red.
+> >
+> > What was actually missing is **DISCRIMINATION**, and that half stands: rebuilt with the
+> > *faithful* pre-`#357` bug — general writeback **re-masked**, not deleted — the whole gate
+> > **passed at 264 with zero failures**, because `ldrb` has `datalen 1` so
+> > `addr &= ~(datalen - 1)` is the identity, and the fold arms use aligned bases where
+> > masked and unmasked agree. **Reaching a statement without discriminating its correction
+> > measures nothing about it** — a fifth way a green row can mean nothing, and the subtlest:
+> > the row runs the code and still cannot tell the fix from the bug. `#365` adds the two
+> > rows that do discriminate, verified against that exact mutant.
 >
-> 1. **General post-index writeback — and use an `ldrt` form, not a cold page.** The project had
+> **Owed rows, in value order.** ✅ **Items 1 and 2 were delivered by `#365`** — marked here
+> rather than left standing, because an owed-list that still names delivered work is what sent
+> this project to re-derive an already-fixed MIPS item 47 rounds late. Item 4's `reg_func`
+> half is **closed by construction** (see the note at the end). Items 3, 5 and 6 remain.
+>
+> 1. ✅ **DONE in `#365`** — **General post-index writeback — and use an `ldrt` form, not a cold page.** The project had
 >    already recorded the reason and never used it: the template's
 >    `#if !defined(A__P) && defined(A__W)` block tests `is_userpage[addr >> 17]` and falls into
 >    `A__NAME__general` when the bit is clear, **regardless of warming**. So an `ldrt` row cannot
@@ -2905,9 +2925,11 @@ corruption without a clear host-OOB path.
 >    the four translation units this file's own residual list says nothing enters. Assert the
 >    UNMASKED base: an unaligned base of `0x10001` with offset 4 owes `0x10005`, not the masked
 >    `0x10004`. Confirm the encoding through `unassemble` first.
-> 2. **General pre-index writeback.** No T form exists, so this one does need the cold page: a
+> 2. ✅ **DONE in `#365`** — **General pre-index writeback.** No T form exists, so this one does need the cold page: a
 >    cold `ldr r1,[r0,#4]!` asserting `r0`. Note the buggy value is the *base itself*, which
 >    makes the row weaker than the post-index one — state that when writing it.
+>    *(As shipped, the discriminating value is the masked `0x20004` against the architectural
+>    `0x20005`, which is stronger than this note anticipated.)*
 > 3. **The general STORE arm is owed and was named nowhere.** Loads and stores are separate
 >    instantiations by this probe's own axiom, and the existing store row covers the **fast**
 >    arm only. `put b` leaves `host_store` NULL too, so a cold `str` row would reach the store
@@ -2915,10 +2937,16 @@ corruption without a clear host-OOB path.
 >    recording: instruction fetch inserts with `writeflag 0`, and
 >    `invalidate_translation_caches(..., JUST_MARK_AS_NON_WRITABLE)` clears `host_store` for
 >    translated pages — so code pages are load-warm and store-cold.
-> 4. **Every other general arm is still unexecuted** — byte, the halfword `addr &= ~1` mask, and
->    register-offset. A cold regofs row would additionally let the recorded "the double
->    `reg_func` call on the fast-to-general fallback is provably benign" claim be *measured*
->    rather than argued.
+> 4. **Other general arms** — byte, the halfword `addr &= ~1` mask, and register-offset. A
+>    register-offset row is constructible (`0xE6B01002 = ldrt r1,[r0],r2`, warming-immune, or
+>    `0xE6901002` from a cold base). But the `reg_func` half of this item is **✅ CLOSED BY
+>    CONSTRUCTION rather than owed a row**: the recorded "the double `reg_func` call on the
+>    fast-to-general fallback is provably benign" claim is **unobservable**, not unmeasured.
+>    Load/store decode always indexes the low half of `arm_r[8192]`, which the generator emits
+>    as the `s == 0` family, and a scan finds **4096 `s == 0` functions of which none write CPU
+>    state**, against 4080 of 4096 `s == 1` that do — even the RRX case reads `ARM_F_C` and
+>    writes it only under `if (s)`. No row can observe a doubled call through a pure function.
+>    A closure by construction is worth as much as a row, and cheaper to keep true.
 > 5. **The `netbsd_copyin` rotation's body never executes.** Every fold-marker arm bases on
 >    `mov r0,#0x10000`, so `r0 & 3 == 0` always. Needs a two-pass `ldrt` arm with `r0` re-seeded
 >    to `0x10001`, which is a self-contradiction test on ONE binary: pass 1 declines and runs the

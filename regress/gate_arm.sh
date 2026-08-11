@@ -637,7 +637,7 @@ check "writeback control: guest ran and loaded" "${wctrl:-missing}" "OK"
 
 wres=$(grep -o "WRITEBACK_RESULT=[0-9]*/[0-9]*" "$WBLOG" | tail -1 | cut -d= -f2)
 wgot=${wres%/*}; wwant=${wres#*/}
-check "writeback rows run"     "$wwant" 20
+check "writeback rows run"     "$wwant" 22
 check "writeback rows correct" "$wgot"  "$wwant"
 
 # #358: fold-fired markers (netbsd_copyin / netbsd_copyout)
@@ -755,7 +755,8 @@ for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
          "A wb rot word unal plus1" "A wb rot word unal plus2" \
          "A wb rot word unal plus3" \
          "A wb rot word cold plus1" "A wb rot word cold plus2" \
-         "A wb rot word cold plus3"; do
+         "A wb rot word cold plus3" \
+         "A wb word ldrt post4 unal" "A wb word cold pre4 unal"; do
     n=$(count "$WBLOG" "^$v  .*ok$")
     check "  writeback row: $v" "$n" 1
 done
