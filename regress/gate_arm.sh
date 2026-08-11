@@ -511,4 +511,84 @@ for v in "A strlen -J ref" "A strlen -J end addr" "A strlen yields" \
     check "  strlen row: $v" "$n" 1
 done
 
+# #357: the base writeback (cpu_arm_instr_loadstore.c)
+# -------------------------------------------------------------------------
+# The template computed one address, masked it for alignment, and wrote the
+# base register back FROM THE MASKED VALUE. ARM ARM DDI 0100I computes the
+# writeback from the unmasked Rn (A5.2.8 post-indexed, A5.2.5 pre-indexed;
+# A2-43 puts the truncation inside Memory[]).
+#
+# The reachable symptom is a loop that cannot make progress, not a wrong
+# value: with a word access and a post-index offset of 1 the masked writeback
+# is a FIXED POINT -- base 0x10001 masks to 0x10000, plus 1 is 0x10001, the
+# value it started from. Rows A/A2 run ten iterations and assert the exact
+# architectural result; the count lives in r3, so nothing here depends on how
+# far execution got or on host speed.
+#
+# WHICH ROW REACHES WHICH SITE, which is why the set is this shape. There are
+# four writeback sites -- :213/:216 general, :338/:342 fast -- and the fast
+# path only runs once the page is in the translation array, so a
+# single-execution row measures the GENERAL path and nothing else:
+#   :216 general post-index  rows post4/postneg4/halfword + iteration 1 of the
+#                            x10 rows
+#   :342 fast    post-index  iterations 2+ of the x10 rows
+#   :213 general pre-index   "pre4 unal gen"
+#   :338 fast    pre-index   "pre4 unal fast" ALONE -- two passes with the base
+#                            re-seeded each pass, because without the re-seed
+#                            pass 1 leaves an ALIGNED base and the row has
+#                            nothing left to discriminate
+# Loads and stores are separate instantiations of the template, so a load-only
+# set cannot see a store-side regression: hence the store row. Register-offset
+# forms are a third family: hence the regofs row.
+#
+# The control is the loaded-data row rather than a pass count: r1 starts at 0,
+# so a distinctive nonzero value proves the guest really executed and really
+# loaded. A wrong register field reads 0, and a row that accepts 0 accepts that
+# mistake by accident -- this harness has shipped exactly that defect before.
+#
+# DISC-M ("model") on the halfword row is deliberate: an unaligned halfword
+# load's DATA is UNPREDICTABLE (A4.1.28) while its writeback stays defined
+# (A5.3.6), so the row asserts the BASE only and pins the pseudocode model, not
+# a silicon mandate. Every other DISC row is a word form, i.e. mandated space.
+# There is no LDRD/STRD row on purpose: A2.8 makes an unaligned doubleword
+# access UNPREDICTABLE prior to ARMv6, so every base that would exercise the
+# ~7 mask makes the instruction unspecified -- covered by the fix, not honestly
+# assertable. And no row pins the unaligned loaded DATA: this template masks
+# without ROTATING where ARMv5 rotates right by 8*addr[1:0], so such a row
+# would be inverted by the round that fixes rotation. The data row uses an
+# ALIGNED base, where no rotation applies in any architecture version.
+#
+# Swept against a snapshot of the pre-fix binary: 5 of 14, with all nine DISC
+# rows failing at exactly the predicted masked values and all five PINs
+# passing. On the fixed build: 14/14.
+WBLOG=$LOGDIR/gate_arm_writeback.log
+python3 arm_writeback_probe.py "$PMAX" > "$WBLOG" 2>&1 || true
+
+if ! grep -q "WRITEBACK_RESULT=" "$WBLOG"; then
+    note "writeback probe produced no result line; last lines follow"
+    tail -5 "$WBLOG" | sed 's/^/       /'
+    gate_skip "writeback probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$WBLOG" | sed 's/^/       /'
+
+wctrl=$(grep -o "WRITEBACK_CONTROL=[A-Z]*" "$WBLOG" | tail -1 | cut -d= -f2)
+check "writeback control: guest ran and loaded" "${wctrl:-missing}" "OK"
+
+wres=$(grep -o "WRITEBACK_RESULT=[0-9]*/[0-9]*" "$WBLOG" | tail -1 | cut -d= -f2)
+wgot=${wres%/*}; wwant=${wres#*/}
+check "writeback rows run"     "$wwant" 14
+check "writeback rows correct" "$wgot"  "$wwant"
+
+for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
+         "A wb word post4 unal" "A wb word pre4 unal gen" \
+         "A wb word pre4 unal fast" "A wb word postneg4 unal" \
+         "A wb store post1 unal x10" "A wb regofs post1 unal x10" \
+         "A wb halfword post1 unal" "A wb word post4 algn" \
+         "A wb algn load data" "A wb byte post1 unal" \
+         "A wb word pre4 no wb" "A wb wrap from zero"; do
+    n=$(count "$WBLOG" "^$v  .*ok$")
+    check "  writeback row: $v" "$n" 1
+done
+
 gate_end

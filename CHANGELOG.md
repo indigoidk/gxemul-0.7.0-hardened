@@ -4192,6 +4192,218 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-third round (#357) — the load/store template masked the base writeback, so a post-index loop could not advance
+
+`cpu_arm_instr_loadstore.c` is a macro template `#include`d once per variant to
+generate every ARM single-register load/store — 8 p/u/w files × 20 addressing
+forms. It computed one address, **masked it for alignment, and then wrote the
+base register back from the masked value.**
+
+- **#357 (`cpus/cpu_arm_instr_loadstore.c`)** — the writeback is computed from
+  the UNMASKED address. ARM ARM DDI 0100I **A5.2.8** (immediate post-indexed) is
+  `address = Rn` then `Rn = Rn + offset_12`; **A5.2.5** (pre-indexed) is
+  `address = Rn + offset_12` then `Rn = address`. Both read the raw `Rn`, and
+  **A2-43** puts the truncation inside `Memory[<address>,<size>]` — on the
+  address sent to memory, never on the register. Where the manual really does
+  force an address it says so plainly (LDC "ignores the least significant two
+  bits of the address"); it never says anything comparable about a base
+  register. A5.2.9/A5.2.10 (register and scaled offsets) and A5.3.6 (halfword)
+  are the same shape, and **A4.1.31** makes `ldrt`/`strt` inherit A5.2.8
+  unchanged ("the addressing mode is the same in all other respects"). The fix
+  keeps the unmasked value in `wb_addr` and masks only the copy handed to
+  memory: four sites, two per function, plus one guarded declaration each.
+
+  **The reachable symptom is not a wrong value, it is a loop that stops
+  advancing.** The masked writeback latches the base's low bits after a single
+  iteration: the map `b → (b & ~(d-1)) + offset` drives the residue to
+  `offset & (d-1)` and then holds it there, so from the second iteration onward
+  the loop advances by exactly **`offset & ~(d-1)`** — the offset truncated down
+  to a multiple of the access size. When the offset is *smaller* than the access
+  size that advance is **zero** and the base becomes a **fixed point**: base
+  `0x10001` masks to `0x10000`, plus 1 is `0x10001`, the value it started from.
+  Measured on the committed build, `ldr r1,[r0],#1` ran ten times and left `r0`
+  at `0x00010001` where the architecture gives `0x1000b`; entering the same loop
+  **aligned** wedges too, reaching the fixed point after one step instead of
+  `0x1000a`. The halfword form wedges identically (offset 1 < size 2). Nothing
+  about this is guest-specific.
+
+  *An earlier draft of this block claimed any non-multiple offset produces a
+  fixed point. A review seat caught that as too broad and it was wrong: with a
+  word access and offset 5 the loop advances by 4 per iteration, not 0. The law
+  above was then checked against the iteration map rather than restated — it
+  predicts both the fixed point at offset < size and the truncated advance
+  above it, and it explains the aligned case, where the first step moves 1 and
+  every later step moves 0.*
+
+  **This round INVERTS two items the queue had recorded as fold defects.**
+  `netbsd_cacheclean`'s `r[0] += r1` and `netbsd_copyin`/`copyout`'s `+ 24`
+  write the base back unmasked, i.e. they already matched the architecture, and
+  the template they were measured against was the one that was wrong. The two
+  queued "mask the base on entry" fixes are **cancelled**; shipping them would
+  have moved the emulator away from real hardware to agree with a local
+  shortcut. The general lesson, now recorded twice: *measured against the
+  handler is not measured against the architecture.*
+
+  **Corroboration from inside the emulator, which is what made the reading
+  safe:** every other ARM writeback path already implements the unmasked model —
+  `arm_pop`/`arm_push` write back the raw stepped address, the generated LDM/STM
+  masks its DATA pointer (`addr &= 0xffc`) but adds `4*n_regs` to the base raw,
+  and all three folds are raw. This template was the sole outlier, so the fix
+  makes the emulator internally consistent as well as architecturally correct —
+  including the folds' own fallback into it on a page or user-page miss, which
+  previously disagreed with the fold that called it.
+
+  **Honest limit, recorded rather than glossed:** no silicon document states the
+  writeback value for an unaligned post-indexed access. The SA-1110 manual and
+  the ARM920T TRM both defer to the ARM ARM. The conclusion rests on the ARM ARM
+  pseudocode being normative plus the absence of contradicting silicon text, and
+  on the internal-consistency argument above — strong, but not independently
+  silicon-confirmed. A panel seat added supporting evidence: the ARMv7 Base
+  Updated Abort model writes back `Rn + offset` even when the access aborts,
+  which is hard to reconcile with a masked writeback.
+
+  **Completeness was established by enumeration, not by argument.**
+  `reg(ic->arg[0]) =` occurs at exactly four lines in the single-register path,
+  and `A__NAME_PC` plus every conditional variant (`__eq`, `__ne`, …) merely
+  *call* `A__NAME`. Two seats suspected the PC special case held a third copy;
+  it does not. LDRD/STRD are covered because the fast path delegates to the
+  general function, which masks with `datalen - 1 == 7`. Negative offsets are
+  covered because the sign is folded into `offset` before the address is
+  computed, so `wb_addr + offset` already carries it — verified by measurement,
+  not only by reading. A condition-failed access does no writeback at all,
+  matching `if ConditionPassed(cond) then Rn = …`. The declaration is guarded
+  `#if !defined(A__P) || defined(A__W)` because the offset-addressing
+  instantiations have no writeback block and this file is included once per
+  variant; a full ARM recompile produces **no warnings**.
+
+**Gate 14 grows 17 checks (220 → 237)** via a new `arm_writeback_probe.py`, and
+the row set is shaped by which of the four sites each row can actually reach —
+a point a review seat raised and which changed the design. The fast path only
+runs once the page is in the translation array, so a single-execution row
+measures the **general** path and nothing else. Hence `:216` is covered by the
+one-shot post-index rows and by iteration 1 of the ×10 rows, `:342` by
+iterations 2+, `:213` by the pre-index one-shot, and **`:338` by one row alone**
+— two passes with the base re-seeded each pass, because without the re-seed
+pass 1 leaves an aligned base and the row has nothing left to discriminate.
+Loads and stores are separate instantiations, so a load-only set could not see a
+store-side regression: there is a store row. Register-offset forms are a third
+family: there is a `ldr r1,[r0],r2` row. Swept against a snapshot of the pre-fix
+binary: **5 of 14, with all nine DISC rows failing at exactly the predicted
+masked values and all five PINs passing**; on the fixed build 14/14. The control
+is the loaded-data row rather than a pass count, because `r1` starts at 0 and a
+distinctive nonzero value proves the guest really executed and really loaded —
+a wrong register field reads 0, and a row that accepts 0 accepts that mistake by
+accident, which this harness has shipped before.
+
+**Two rows deliberately absent, and one deliberately weakened.** No LDRD/STRD
+row, overruling three seats that asked for one: A2.8 makes an unaligned
+doubleword access UNPREDICTABLE prior to ARMv6, so every base that would
+exercise the `~7` mask makes the instruction unspecified — covered by the fix,
+not honestly assertable, and #355 already taught this project not to assert on
+encodings the architecture declines to define. No row pins the **unaligned
+loaded data**: this template masks without ROTATING where ARMv5 with CP15 A == 0
+rotates right by `8 * addr[1:0]` (A2.8, A4.1.23), so a row pinning the
+unrotated `0x11223344` would be inverted by the round that fixes rotation — the
+row would be rewritten by the change it exists to guard. A seat caught that; the
+data row now uses an **aligned** base, where no rotation applies in any
+architecture version. And the halfword row is labelled **DISC-M**: an unaligned
+halfword load's data is UNPREDICTABLE (A4.1.28) while its writeback stays
+defined (A5.3.6), so it asserts the base only and pins the pseudocode model
+rather than a silicon mandate. Every other DISC row is a word form, i.e. in
+mandated space.
+
+**An encoding error was caught before the sweep, by disassembling every word
+through the emulator itself.** `0xe4002001` is `str r2,[r0],#-1`, a *negative*
+offset — with `L == 0` the U bit sits in the same nibble — so the store row
+needed `0xe4802001`. Left unchecked it would have produced an unexpected value
+and sent the round debugging the emulator instead of the probe. This is the
+fourth incident of its class here, one of which was a committed gate row that
+measured the wrong register for months.
+
+**Recorded, not fixed:** the missing rotation on unaligned word **loads**, which
+is queued separately for a reason worth writing down. A seat made the strongest
+case for folding it in — leaving it out creates a window in which a future
+*slow-path-only* rotation fix would make the two paths disagree on data, and the
+folds fall back from fast to slow, so that window is exactly where a fold's
+fallback would change the visible value. The same seat supplied the tie-breaker:
+the rotation must be fixed in **both** paths at once, and the fast path
+assembles bytes individually, so shipping a slow-path-only rotation that the
+fast path silently undoes would be worse than shipping neither. Stores need no
+change (A4.1.99: "Prior to ARMv6, STR ignores the least significant two bits of
+the address. This is different from the LDR behavior") and unaligned halfword
+loads are UNPREDICTABLE, so the item is LOADS-ONLY. Also recorded: CP15's A
+(alignment fault) bit is decorative in this tree — `ARM_CONTROL_ALIGN` is read
+only to be printed — while `cpu_arm.c:129` ORs it into the initial control
+value, contradicting SA-1110 reset state, where alignment faults are disabled;
+because A == 0 on real silicon, hardware rotates silently rather than faulting,
+which is what makes the rotation reachable rather than an exception. And a
+sibling question: PowerPC's update forms do `ra = ea`, so if `ea` is masked
+before that assignment it is the same mistake in a sibling template.
+
+**One consequence of the fix worth stating, since it changes a pattern rather
+than a value:** bases can now *retain* their low bits across iterations, where
+previously the mask made them self-healing after one step. Unaligned fast-path
+accesses therefore become more frequent for such guests. Each still masks
+per-size before indexing memory, and `page`/`is_userpage` are still selected
+from the unmasked address — correct because an AND cannot carry into bit 12, so
+`(addr & ~3) >> 12 == addr >> 12` and a masked access can never land outside the
+page that was selected — so there is no new host access pattern, only more of an
+existing one. Three seats checked that page argument independently.
+
+**Measured, and it is the strongest result of the round: the fix REMOVED three
+live fold/no-fold divergences.** With an unaligned base the pre-fix un-folded
+loop produced `(base & ~3) + n·stride` while all three folds produced
+`base + n·stride`. Measured fold against `-J` — gate 14's own architectural
+oracle — before and after: `netbsd_cacheclean` `0x9141` vs `0x9140` → both
+`0x9141`; `netbsd_copyin` `0x10019` vs `0x10018` → both `0x10019`;
+`netbsd_copyout` likewise. All three now agree, and the folds still fire
+(`cacheclean`'s stale `r2 = 0x77` witness is present in both columns). So this
+change did not merely satisfy the manual, it made the emulator self-consistent
+where it previously answered two different values for one program depending on
+whether a combination happened. `COMBINE(netbsd_cacheclean)` places no alignment
+precondition on r0, so that divergence was reachable.
+
+**One consequence measured rather than predicted:** a base can now *stay*
+unaligned across iterations, so a walk can cross a page boundary that previously
+it could not. Ten `ldr r1,[r0],#1` from `0x10ffd` read the *same* word ten times
+on the pre-fix build and never crossed; on the fixed build the base sweeps
+in-page offsets `0xffd/0xffe/0xfff`, lands correctly in the next page, and logs
+zero non-existent-address complaints. Worth stating for the next reader: the mask
+applied to the value used to index the host page is load-bearing for **bounds**,
+not only for architecture — it is what keeps `page[(addr & 0xfff) + 3]` inside
+the 4 KB page when the unmasked in-page offset is `0xfff`. A later
+"simplification" that lifted it would be a memory defect, not a cosmetic one.
+
+Eight-seat panel, both passes, and it earned its keep in both directions.
+Pass 1 was unanimous on the reading and changed the row set in three places.
+Pass 2 was unanimous that the code is correct and complete — one seat proved the
+guard is an *identity* rather than a lucky enumeration, since the writeback text
+emits a statement iff `(P ∧ W) ∨ ¬P`, which is exactly `¬P ∨ W` — but it forced
+five corrections to this round's own **record**: the overbroad fixed-point claim
+above, a `0xffc` bound that is word-specific in a template also instantiated for
+halfword and byte, four **stale numeric line cites** in a new comment (the diff
+shifted the mask sites by 42 lines, and this tree already carries a warning that
+numeric cites have gone stale twice in two rounds), a cross-file claim asserted
+without citations, and an enumeration of "every other writeback path" that
+omitted `X(strlen)`'s own base writeback. A comment that overclaims counts as a
+defect here, so all five were fixed rather than argued.
+
+One seat measured that the **unguarded** form of the local emits 72 warnings and
+would have failed `gate_build`'s zero-warning check outright — the guard is
+load-bearing for the gate, not tidiness. Another independently rebuilt the probe
+in a private tree and reproduced the pre-fix numbers, which is a second
+measurement rather than a second reading; its first attempt was contaminated by
+the *shared* build tree while this round was rebuilding, producing 167 rows of
+"FAIL" that were all dead sessions rather than wrong values — diagnosed
+correctly, and a reminder that a seat measuring against `build/` is racing the
+main loop. Seat health, recorded because it drifts: the Codex seat produced no
+review in pass 1 (transcript ends mid-tool-trace after failed searches for the
+manual) but answered in pass 2 and is the seat that caught the fixed-point
+overreach; the DeepSeek seat inverted that, answering in pass 1 and returning an
+**empty** response in pass 2 with 199 KB of hidden reasoning and no output text —
+the known thinking-model failure mode. Neither is counted as agreement where it
+did not answer.
+
 ## One-hundred-and-second round (#355, #356) — the strlen fold answered a question the architecture never asked, and never came up for air
 
 `X(strlen)` folds `ldrb rY,[rX,#1]! / cmps rY,#0 / bne` into an internal byte
