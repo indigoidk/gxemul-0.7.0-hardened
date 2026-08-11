@@ -460,7 +460,31 @@
 > is now enforced by a mutation self-test: the W arm rounding under LEGACY is a mutant the
 > gate must detect.
 
-> ## 2026-07-30 — NEW, well-scoped next candidate: round.w / ceil.w / floor.w / cvt.l are not decoded
+> ## 2026-07-30 — ✅ round.w / ceil.w / floor.w / cvt.l are not decoded → RESOLVED as #295
+> **RESOLVED, and this entry is why the queue nearly funded the work twice.** All six of
+> `round.w`/`round.l`, `ceil.w`/`ceil.l`, `floor.w`/`floor.l` are decoded with the correct
+> forced modes, and `cvt.l` is decoded rounding per FCSR, which is right for that
+> instruction. Shipped as **#295** in commit `e61badd` (round 60) — see
+> `CHANGELOG.md`'s "#295" block. Verified three ways on 2026-08-11: the commit exists with
+> that subject; the forced modes are live in the tree (`IEEE_RM_RN` for round, `IEEE_RM_RP`
+> for ceil, `IEEE_RM_RM` for floor, and the constants at `src/core/float_emul.c` are
+> 0/1/2/3 = nearest-even/zero/+Inf/−Inf, matching MIPS IV per-instruction pages B-85, B-44,
+> B-57 and B-48); and `grep -rn "295\|round\.w" regress/` returns **nothing**, which is the
+> separate real defect — see the 2026-08-11 entry below.
+>
+> **This entry read as OPEN for 47 rounds because it never got its resolution marker**,
+> unlike its immediate neighbours which carry `✅ … RESOLVED as #294 / #292`. `CLAUDE.md`
+> defines the live queue as the OPEN LIST head *plus the dated tail entries*, so an unmarked
+> tail entry **is** the queue saying open. A stale `/* TODO: … ROUND.W … */` sitting 600
+> lines above the implementation in the same source file made it believable. The lesson is
+> not "read more carefully" — it is that a resolved entry must be marked at the moment it is
+> resolved, and that `git log` plus a `grep` of `regress/` costs seconds before funding any
+> round. Noted for the irony: #295's own CHANGELOG block records that it "came out of a
+> backlog audit that found five of nine items in an older block had silently been fixed".
+>
+> Original text follows, kept because its reproduction recipe is still the right one for the
+> detector that is now owed.
+>
 > Found by the #294 panel and verified by two seats independently. The COP1 dispatcher
 > admits these by format, `fpu_function()` matches no function code (upstream's own TODO
 > at ~:1056 lists exactly these opcodes), and the tail raises a Coprocessor-Unusable
@@ -2768,3 +2792,63 @@ corruption without a clear host-OOB path.
 > column is a third source, unarmed only by today's seed constants. This collapsed the brief's
 > "only `reg` can do this" narrowing — and is simultaneously the strongest argument for the fix,
 > which the brief had failed to make.
+
+> ## 2026-08-11 — `#295` has NO committed detector, and the mutant that reverts it passes the whole battery
+>
+> Found while scoping what turned out to be an already-fixed queue item (the 2026-07-30 entry
+> above, now marked resolved). The correction is real and shipped; the **instrument is absent**.
+> Measured: `grep -rn "295\|round\.w\|ceil\.w\|floor\.w" regress/` returns **nothing**. Gate 12
+> (`gate_mips_rounding.sh`) covers `#301`'s `cvt.d.l`/`cvt.s.l` and `#303`/`#309`'s
+> subnormal-decode plus REGIMM, and nothing of `#295`. The round's own 20/20 verification was a
+> one-off `_scratchpad/probe_295_fixedmode.py` with `mutant_295*.sh` alongside — none committed,
+> none wired into `run.sh`.
+>
+> **This is worse than an ordinary coverage gap, and it is the sharpest instance of the class
+> this project keeps finding.** `#295`'s own design note records that the likeliest wrong
+> implementation — a copy-paste passing `FPU_RM_FROM_FCSR` instead of the forced mode — **agrees
+> with correct code on every input under the default `FCSR.RM = 0`**. So the mutant is not merely
+> undetected, it is **undetectable** by any row that does not first set a non-zero rounding mode.
+> Every new row must do so or it is *born vacuous*. That is a fifth entry in the vacuity
+> taxonomy: not an absent row, and not a row asserting a dead absence, but a row whose **oracle
+> cannot separate the mutant from the fix**. General rule: **when a correction FORCES a
+> parameter, the detector must vary that parameter away from its default.**
+>
+> Gate 12's own header already warned about exactly this hole — "the offline vectors pin the pure
+> helper, but the CVT-case WIRING in `cpu_mips_coproc.c` could revert silently while the helper
+> stayed perfect" — and nobody closed it. A gate that documents its own gap is not covered.
+>
+> **Test-first is honest here even though the defect is an absence:** the reproduction is "build
+> the `FPU_RM_FROM_FCSR` mutant, run the committed battery, watch it pass 15/15", which is
+> measurable on the committed build.
+>
+> Discriminators the round should use, all under a **non-zero** `FCSR.RM`: `round.w(2.5) → 2` and
+> `round.w(3.5) → 4` (nearest-EVEN, which also separates nearest-away); `ceil.w(−2.25) → −2`
+> against `floor.w(−2.25) → −3` (the pair separates RP from RM, which a single row cannot);
+> `trunc.w` invariant across all four modes; and the pinned mutation witness `round.w(2.7)` under
+> toward−Inf = **3** shipped versus **2** mutant. Add a NaN row expecting `0x7fffffff`, now
+> citable verbatim to R4000 B-49 ("If Invalid operation is not enabled, then no exception is
+> taken and 2^31−1 is returned") and MIPS IV B-85 rather than inferred from `#273`'s measurements
+> on sibling instructions — but assert the **result** and not the flag, since FCSR exception
+> flags are the four-to-nil re-confirmed defer recorded above, so `round.w(NaN)` returns
+> `0x7fffffff` with V clear.
+>
+> No booting guest can witness this: MIPS IV opcodes cannot appear in a MIPS I/III guest, `#295`
+> recorded zero `UNIMPLEMENTED coproc1 function` markers across green boots, and — the reason a
+> guest can never substitute — **OpenBSD 2.2's GAS *expands* `trunc.w.d`** into save-FCSR /
+> `ctc1` / `cvt.w.d` / restore, so pmax binaries exercise `cvt.w` heavily and never emit the
+> fixed-rounding opcodes at all. Use gate 12's cold-debugger pattern (kernel loaded so the
+> machine constructs but never executed; the guest sets FCSR itself with `ctc1`) and read results
+> back with two MIPS I `swc1`s, **not** `sdc1` — per `#273`'s trap, `sdc1` is itself a MIPS II
+> instruction and the RI it raises is easily mistaken for the instruction under test.
+>
+> **One primary-source tension, assessed and NOT changed.** The R4000 manual contradicts itself
+> on out-of-range converts: its instruction pages give the IEEE default (2^31−1 written to `fd`
+> when Invalid Operation is not enabled), but Table 7-2 p. 191 has the row "Overflow on convert
+> V E E Source out of integer range" — i.e. the R4010 raises **Unimplemented Operation in both
+> the trap-enabled and trap-disabled columns**, and §7.1 says a taken trap writes no result. So
+> real silicon appears to punt out-of-range converts to software completion rather than deliver
+> 2^31−1 in hardware. This does **not** undermine `#273`'s five-case table, which is
+> independently corroborated by Linux `arch/mips/math-emu` and pre-2014 QEMU, and it is
+> unreachable while FP trap delivery is unmodelled. But it qualifies `float_emul.c`'s comment
+> that "R3010/R4010 return the largest positive integer", which states an architectural default
+> as though it were an implementation fact. Fix the comment's claim, not the code.
