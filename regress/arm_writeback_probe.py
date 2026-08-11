@@ -455,10 +455,20 @@ ROWS = [
     #  REACHED before this round -- the strlen probe's `ldrb r3,[r4,#1]!` is
     #  P=1/W=1 and takes the general pre-index arm on each new page, and the
     #  fold-marker probe's `copyin cold` / `copyout cold` arms are six ldrt/strt
-    #  with the is_userpage bit deliberately clear, so all six run in
-    #  A__NAME__general and their r0/r1-advanced-by-24 witness IS a writeback
-    #  assertion. Deleting both statements turns 8 gate checks red in THOSE
-    #  sections.
+    #  with the is_userpage bit left clear, and their r0/r1-advanced-by-24
+    #  witness IS a writeback assertion. Deleting both statements turns 8 gate
+    #  checks red in THOSE sections.
+    #
+    #  #366 corrected a detail this comment got wrong when it shipped: it said
+    #  ALL SIX of those ldrt/strt run in A__NAME__general. Only the FIRST does.
+    #  The general path's own memory_rw insert SETS the user bit --
+    #  cpu_dyntrans.c does `if (useraccess) is_userpage[index >> 5] |= 1 <<
+    #  (index & 31)`, and the found-entry arm clears-then-sets it -- so the
+    #  second ldrt on that page finds the bit set and takes the FAST path. The
+    #  fold-marker probe's own docstring already said as much ("only pass 2 and
+    #  later can fold"). The count is ONE general entry per cold arm, not six.
+    #  Nothing else here changes: the arms still reach the site, and the 8-red
+    #  measurement stands.
     #
     #  But nothing DISCRIMINATED the mask. Rebuild with the faithful pre-#357
     #  bug -- the general writeback re-masked, `addr` instead of `wb_addr`, fast

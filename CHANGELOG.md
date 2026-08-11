@@ -4210,7 +4210,17 @@ which row was already reaching each site:
 | site | already reached by |
 |---|---|
 | general **pre**-index | the strlen probe's `ldrb r3,[r4,#1]!` — P=1/W=1, taking the general arm on each new page |
-| general **post**-index | the fold-marker probe's `copyin cold` / `copyout cold` arms — six `ldrt`/`strt` with the `is_userpage` bit deliberately clear, so all six run in `A__NAME__general`, and their "r0/r1 advanced by 24" witness *is* a writeback assertion |
+| general **post**-index | the fold-marker probe's `copyin cold` / `copyout cold` arms — `ldrt`/`strt` with the `is_userpage` bit left clear, whose "r0/r1 advanced by 24" witness *is* a writeback assertion |
+
+> **✗ One detail of the row above was wrong when it shipped, corrected by `#366`.** It said
+> *all six* of those `ldrt`/`strt` run in `A__NAME__general`. Only the **first** does: the
+> general path's own `memory_rw` insert **sets** the user bit — `cpu_dyntrans.c` does
+> `if (useraccess) is_userpage[index >> 5] |= 1 << (index & 31)`, and the found-entry arm
+> clears-then-sets it — so the second `ldrt` on that page finds the bit set and takes the
+> **fast** path. The fold-marker probe's own docstring already said it ("only pass 2 and
+> later can fold"), which is the tell that should have caught this before the commit. The
+> count is **one** general entry per cold arm, not six. Nothing else changes: the arms still
+> reach the site, and the 8-red measurement stands.
 
 Attribution was then separated with a **post-index-only** mutant: strlen goes 7/7 green
 and exactly the two fold cold arms go red. That pins each family to its own statement, as
