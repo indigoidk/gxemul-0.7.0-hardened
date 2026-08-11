@@ -4192,6 +4192,73 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifth round (#359) — a fold that copied half the bytes passed every check in the gate
+
+Harness-only: no emulator source changes. It closes a coverage hole that was
+**measured, not suspected**.
+
+- **#359 (`regress/arm_memcpy_probe.py`, `regress/gate_arm.sh`)** — five rows that
+  read the **destination bytes** of the `netbsd_memcpy` fold, with the copy
+  destination pre-filled with a sentinel (`0xbaadf00d`) so a word the fold never
+  wrote is unmistakable rather than indistinguishable from zeroed RAM.
+
+  **The hole.** A build whose fold called `memcpy` with **16 instead of 32** — same
+  iteration count, same register advance, **half the bytes moved** — passed the
+  committed memcpy probe **12/12** and the whole of gate 14 at **243 checks**.
+  Nothing in the suite could see it, and the reason is structural rather than an
+  oversight: `r3/r4/ip/lr` are published by a *direct page read that bypasses the
+  fold's `memcpy` call* (that is #354's own design, and correct), and `r0`/`r1`
+  advance unconditionally. So every register this gate asserts is right on a build
+  that moves the wrong bytes.
+
+  **A count-based row would not have closed it either.** The round that was
+  originally planned here would have asserted reported iterations × 32 against the
+  register advance — which still holds exactly when the copy size shrinks. That is
+  worth recording, because the count row was the plan until a seat measured the
+  mutant and found the count blind to it.
+
+  Measured, healthy against mutant: **17/17** and **15/17**, red at exactly
+  `1it dst w6` and `2it dst w14`, both reading the sentinel where a source word was
+  owed. Gate 14 goes **243 → 248**.
+
+  **They are PIN, not DISC,** and the distinction matters: the genuine
+  `ldmia`/`stmia` moves the same bytes, so the destination is identical folded or
+  not. These rows do not discriminate fold from no-fold — they discriminate a
+  **broken copy**, which is a different axis from everything else in the gate.
+  `2it dst w9` deliberately **passes** on that mutant, because it lies in the first
+  16 bytes of the second iteration, which is still copied; keeping both `w9` and
+  `w14` is what lets the row set say *which half* of the copy failed rather than
+  merely that something did. The tail row asserts the sentinel **survives** at word
+  8 after a one-iteration copy, catching the opposite mistake — a fold that writes
+  past what it was asked to.
+
+**A probe defect was introduced and fixed during authoring, recorded because its
+symptom is misleading.** The original teardown sat between the register dump and
+the new destination dump, so it killed the emulator before the second dump ran and
+every destination row scored DEAD — which reads exactly like a dead fold rather
+than like a broken probe. The teardown now follows both dumps.
+
+**Measured facts about this fold that the round did not need but should not lose.**
+A page-aligned multi-page copy never bails, because `(addr & 0xfff) + 32 > 0x1000`
+is false at the last in-page offset (`0xfe0 + 32 == 0x1000` exactly), so an
+8160-byte two-page copy is **one dispatch and one marker**; a 32-byte-misaligned
+copy bails once per crossing and the deficit is exactly 32 bytes per bail, because
+each bail delegates one genuine **uncounted** iteration. The general identity is
+therefore `32 × (reported + bail delegations) == advance`, not the simpler form.
+The fold reads `host_store` for its **source** page as well as its destination, so
+a copy whose source has never been stored into never folds at all — measured, 255
+of 255 iterations running genuinely. And the debugger's `put w` **does** populate
+that array, which is why the committed probe folds with no explicit warm-up; that
+had previously been recorded as *not established*.
+
+**Deliberately still open, and named rather than implied:** the `copyin`/`copyout`
+bail and install markers, the warm-up A/B rows, and rows for `xchg` and `scanc`.
+Pass 1 measured that a "reads zero" negative control is **unsound on its own** — a
+session whose verbosity raise silently failed reads zero markers while the program
+ran perfectly correctly, and an install marker does not rescue it — so those rows
+need the bail marker to become live statements about which guard ran. They are a
+separate round rather than a half-finished part of this one.
+
 ## One-hundred-and-fourth round (#358) — five folds were doing work no test could see, and the last round removed the only witness
 
 Five ARM instruction combiners produce results **identical** to the guest

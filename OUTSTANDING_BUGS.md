@@ -2021,6 +2021,98 @@ corruption without a clear host-OOB path.
 > handler is a divergence to explain, not automatically a defect to fix — the handler may
 > be the one that is wrong.
 
+> ## 2026-08-11 — #359: a fold copying HALF THE BYTES passed all 243 gate-14 checks
+> The severest coverage finding of this whole sequence, and it was measured rather than
+> suspected. A build whose `netbsd_memcpy` fold called `memcpy` with **16 instead of 32** —
+> same iteration count, same register advance, half the data moved — passed the committed
+> `arm_memcpy_probe.py` at **12/12** and gate 14 at **243 checks**. The blindness is
+> structural, not an oversight: `r3/r4/ip/lr` are published by a direct page read that
+> **bypasses the fold's `memcpy` call** (that is #354's own design and it is correct), and
+> `r0`/`r1` advance unconditionally. Every register this gate asserted was right on a build
+> moving the wrong bytes. **A count-based row would not have closed it either** — reported
+> iterations × 32 still equals the register advance when the copy size shrinks, and a count
+> row was the plan for this round until a seat built the mutant and measured the count blind
+> to it. Closed by five rows that read the destination bytes against a pre-filled sentinel:
+> **17/17** healthy, **15/17** on the mutant, red at exactly `1it dst w6` and `2it dst w14`.
+> Gate 14 is now 248 checks. The rows are **PIN not DISC** — the genuine `ldmia`/`stmia`
+> moves the same bytes, so they discriminate a broken COPY rather than fold-versus-no-fold,
+> a different axis from everything else in the gate.
+>
+> **Measured mechanics of this fold, kept because they were expensive to establish.** A
+> page-aligned multi-page copy **never bails**: `(addr & 0xfff) + 32 > 0x1000` is false at
+> the last in-page offset (`0xfe0 + 32 == 0x1000` exactly), so an 8160-byte two-page copy is
+> one dispatch and one marker with an exact sum. A 32-byte-misaligned copy bails once per
+> crossing and the deficit is exactly 32 bytes per bail, because **each bail delegates one
+> genuine UNCOUNTED iteration** — so the general identity is
+> `32 × (reported + bail delegations) == advance`, not the simpler form, and the `n_iter == 0`
+> bails print nothing today so that term is currently unobservable. The fold reads
+> `host_store` for its **source** page as well as its destination, so a copy whose source has
+> never been stored into never folds at all (measured: 255 of 255 iterations genuine, source
+> page flag clear every time). And the debugger's `put w` **does** populate that array —
+> previously recorded here as not established — which is why the committed probe folds with
+> no explicit warm-up. **A cold program is a double trap:** without warming, the healthy
+> build FAILS its own count row (the first dispatch takes a silent no-page bail, so healthy
+> reports one fewer than owed) while the `n_iter += 2` mutant PASSES at one seed by
+> coincidence — both failure modes in a single row.
+>
+> **Still owed, with every constant already measured so the next round need not re-derive
+> them.** (i) `copyin`/`copyout` **bail and install markers**: a bail marker alone gives a
+> two-way split, since "arming or matcher broke" and "breakpoint misplaced" both read fires 0
+> bails 0; adding an install marker in the matcher completes the table — install 1 / fires 1 /
+> bails 0 is healthy, install 1 / fires 0 / bails ≥ 1 means the guard rejected and its fields
+> name which clause, install 1 / fires 0 / bails 0 means the slot never dispatched, install 0
+> means the matcher rejected **or the session broke**. Volume measured at 1:204 against the
+> fire marker; the install marker is one line per translation. A shipped memcpy bail marker
+> must keep printing `n_iter` — a prototype that dropped the field destroyed the summing
+> identity. (ii) The **warm-up A/B rows**, whose exact counts are measured: copyin and
+> copyout give install 1 / fires 1 / bails 0 warm and install 1 / fires 0 / bails 1 cold;
+> `xchg` needs no warm-up and its negative control is the **matcher** (install 0), a
+> different signature that must not share an expected shape with the others; `scanc` warm
+> gives fires 1 and an unmapped base gives fires 0 / bails 1. (iii) A **"reads zero" negative
+> control is unsound on its own** — measured twice: with verbosity off the program ran
+> perfectly (full six-transfer advance) and reported zero markers AND zero installs, so an
+> install marker does not rescue it; and a program whose pc never reaches the block also
+> reads zero. Every negative arm needs the verbosity echo, a positive execution witness, and
+> ideally `bails == 1`. **`scanc` has no natural witness** (its result register is zero in
+> every arm) and needs a trailing sentinel, measured not to perturb the fold. (iv) `scanc`'s
+> "omit the warm-up" control is **wrong** if the row seeds data with `put w`, because that
+> seeding already warms the load array — use the unmapped base. (v) Do **not** replace the
+> two-pass rows: they are the only shape exercising the guard transitioning from reject to
+> accept inside one session, which is the mechanism a real guest depends on.
+>
+> **Unmeasured and honestly open:** whether `is_userpage` survives TLB eviction; the
+> per-megabyte bail rate under a real guest (the 256/MB figure is extrapolated from a
+> six-page synthetic walk and assumes one crossing per page, which unaligned guest bases
+> would exceed); and whether the `-J` control arm and the marker arms agree on instruction
+> billing, which no row reads.
+>
+> **Pass-2 residuals on #359 itself — gaps in the new rows, not defects in them, so queued
+> rather than held.** (i) There is **no two-iteration tail row**: nothing asserts that the
+> sentinel survives at word 16 after the 64-byte copy, so a fold that over-copied to 80 or 96
+> bytes would pass all five. The one-iteration tail row covers the over-copy *class*, so a
+> mutation that over-copies only on the second iteration is contrived — but the row is one
+> line and the dump would need to reach 18 words. (ii) **A dump-format mismatch is
+> indistinguishable from a byte defect.** If the emulator's `dump` output ever stops matching
+> the probe's regex, the destination list comes back short and the rows read red for a reason
+> that has nothing to do with the fold — the same misleading-symptom class as the teardown
+> defect this round already hit. A distinguishable failure line (rather than letting the rows
+> simply go red) would make a future red row triageable in one look. (iii) Eleven destination
+> words are never read back, and word-level reads cannot see a byte permutation *inside* a
+> word that preserves the 32-bit value. A seat named the specific mutation that survives,
+> which is more useful than the word count: **a fold writing 7 words instead of 8** — an
+> off-by-one on a *count* rather than a stride — because every sampled word is still a correct
+> source word and the tail is still sentinel. Same hole at 15-of-16 in the two-iteration case.
+> Both the pre-fill and the dump are already 16 words wide, so closing it is "add more `dst`
+> rows", not "widen the pre-fill". Three seats independently agreed this is a future-work item
+> rather than a defect in the shipped rows, at 5-of-16 sampling density.
+>
+> **One pass-2 claim was checked and is wrong**, recorded so it is not acted on later: a seat
+> reported the probe's existing `0xdeadbeef` pre-fill as vestigial, on the reasoning that the
+> publish area and the copy destination must be the same region. They are distinct — the
+> publish area sits at one address and the copy destination 0x300 bytes above it, the program
+> stores its registers to the former via r7 and copies into the latter — so both pre-fills are
+> live and neither should be removed.
+
 > ## 2026-08-11 — #358 fold-fired markers: what shipped, what is measured, and what is still owed
 > Five ARM combiners produce results identical to the sequences they replace, so a row
 > asserting their result passes whether or not the fold fires. #358 adds DEBUG-gated markers

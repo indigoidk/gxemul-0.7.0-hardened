@@ -444,17 +444,35 @@ check "memcpy control: harness measures (not fold-fired)" "${mctrl:-missing}" "O
 
 mres=$(grep -o "MEMCPY_RESULT=[0-9]*/[0-9]*" "$MEMLOG" | tail -1 | cut -d= -f2)
 mgot=${mres%/*}; mwant=${mres#*/}
-check "memcpy rows run"     "$mwant" 12
+check "memcpy rows run"     "$mwant" 17
 check "memcpy rows correct" "$mgot"  "$mwant"
 
 # The four r0/r1 PINs pass on both builds -- they guard against a fix that
 # regresses the advance while writing the registers (Codex's clobber concern:
 # r0/r1/r2 are outside the {r3,r4,ip,lr} reglist, so the exact-iword matcher
 # already forbids aliasing; these pins make that guarantee visible).
+#  #359: the five `dst` rows are the only assertions in this whole gate that
+#  read the BYTES the fold moved. Everything else here reads registers, and
+#  registers cannot see the copy size: r3/r4/ip/lr are published by a direct
+#  page read that bypasses the fold's memcpy call, and r0/r1 advance
+#  unconditionally. Measured, and this is why the rows exist: a build whose fold
+#  called memcpy with 16 instead of 32 -- half the bytes moved, same iteration
+#  count, same register advance -- passed this probe 12/12 and the whole of gate
+#  14 at 243 checks. With the dst rows it reads 15/17, red at exactly
+#  `1it dst w6` and `2it dst w14`, both showing the pre-fill sentinel where a
+#  source word was owed. They are PIN, not DISC: the genuine ldmia/stmia moves
+#  the same bytes, so the destination is identical folded or not -- what they
+#  discriminate is a broken copy. Note `2it dst w9` deliberately PASSES on that
+#  mutant (it lies in the first 16 bytes of the second iteration, which is still
+#  copied); the discriminator for a later iteration is w14, and keeping both
+#  makes the row set say which half of the copy failed.
 for v in "A memcpy 1it r3" "A memcpy 1it r4" "A memcpy 1it ip" \
          "A memcpy 1it lr" "A memcpy 1it r0" "A memcpy 1it r1" \
+         "A memcpy 1it dst w1" "A memcpy 1it dst w6" \
+         "A memcpy 1it dst tail" \
          "A memcpy 2it r3" "A memcpy 2it r4" "A memcpy 2it ip" \
-         "A memcpy 2it lr" "A memcpy 2it r0" "A memcpy 2it r1"; do
+         "A memcpy 2it lr" "A memcpy 2it r0" "A memcpy 2it r1" \
+         "A memcpy 2it dst w9" "A memcpy 2it dst w14"; do
     n=$(count "$MEMLOG" "^$v  .*ok$")
     check "  memcpy row: $v" "$n" 1
 done

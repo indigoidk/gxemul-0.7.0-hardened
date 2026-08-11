@@ -112,6 +112,12 @@ def session(r2seed, srcwords, extra):
         send("put w 0x%x, 0x%08x" % (SRC + 4 * i, w))
     for i in range(6):
         send("put w 0x%x, 0xdeadbeef" % (DEST + 4 * i))
+    #  #359: pre-fill the COPY DESTINATION with a sentinel unlike any source
+    #  word, so a word the fold never wrote is unmistakable rather than
+    #  indistinguishable from zeroed RAM. 16 words covers both the one- and
+    #  two-iteration programs.
+    for i in range(16):
+        send("put w 0x%x, 0xbaadf00d" % (DST + 4 * i))
     send("r7=0x%x" % DEST)
     for i, iw in enumerate(prog(r2seed)):
         send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
@@ -138,6 +144,26 @@ def session(r2seed, srcwords, extra):
         if len(flat) >= 6:
             break
         time.sleep(1.0); rd(1.0)
+    #  NB the teardown that used to sit here moved BELOW the destination dump.
+    #  Left in place it killed the emulator first, so the new dump read nothing
+    #  and every destination row scored DEAD -- a probe defect that looks
+    #  exactly like a dead fold.
+    #  #359: read back the COPY DESTINATION itself. Everything above this point
+    #  reads registers, and registers cannot see how many BYTES the fold moved:
+    #  the handler publishes r3/r4/ip/lr from a direct page read that does not
+    #  go through its memcpy call, and advances r0/r1 unconditionally. Measured
+    #  consequence -- a build whose fold copies 16 of every 32 bytes passed this
+    #  probe 12/12 and the whole of gate 14 at 243 checks. Sampling the
+    #  destination is the only assertion in the suite that reads FAIL on it.
+    dstw = []
+    for _ in range(3):
+        mark = len(buf)
+        send("dump 0x%x 0x%x" % (DST, DST + 64))
+        words = re.findall(r"0x0*[0-9a-f]+\s+((?:[0-9a-f]{8}\s+){1,4})", buf[mark:])
+        dstw = "".join(words).split()
+        if len(dstw) >= 16:
+            break
+        time.sleep(1.0); rd(1.0)
     try:
         os.write(fd, b"quit\n"); time.sleep(0.2)
         os.kill(pid, 9); os.waitpid(pid, 0)
@@ -145,7 +171,9 @@ def session(r2seed, srcwords, extra):
         pass
     if len(flat) < 6:
         return None
-    return [int.from_bytes(bytes.fromhex(x), "little") for x in flat[:6]]
+    regs = [int.from_bytes(bytes.fromhex(x), "little") for x in flat[:6]]
+    dst = [int.from_bytes(bytes.fromhex(x), "little") for x in dstw[:16]]
+    return regs + [dst]
 
 
 rows = []
@@ -185,6 +213,22 @@ for nm, got, want, kind in (
         ("A memcpy 1it r1", _1[5] if _1 else None, SRC + 0x20, "PIN")):
     row(nm, kind, got, want)
 
+#  #359: the BYTES. Every row above reads registers, and registers cannot see
+#  how much the fold actually copied -- r3/r4/ip/lr come from a direct page read
+#  that bypasses the memcpy call, and r0/r1 advance unconditionally. A build
+#  whose fold copied 16 of every 32 bytes was measured passing this probe 12/12
+#  and gate 14 at all 243 checks. These are PIN, not DISC: the genuine
+#  ldmia/stmia copies the same bytes, so the destination is identical folded or
+#  not. What they discriminate is a BROKEN copy, which nothing else here can see.
+#  The word at index 6 is the discriminator for a halved copy (it sits in the
+#  second 16 bytes of the 32-byte iteration); the tail word catches the opposite
+#  mistake, a fold that copies MORE than it was asked to.
+_d1 = _1[6] if _1 else None
+for nm, idx, want in (("A memcpy 1it dst w1", 1, SRCW[1]),
+                      ("A memcpy 1it dst w6", 6, SRCW[6]),
+                      ("A memcpy 1it dst tail", 8, 0xBAADF00D)):
+    row(nm, "PIN", (_d1[idx] if _d1 and len(_d1) > idx else None), want)
+
 #  ---- row 2: r2=0x20 -> TWO iterations (Opus: 0x40 is THREE, bge branches on
 #  N==V regardless of Z). Owed = the final iteration's 2nd ldmia = SRC+48..+60
 #  = words 12..15. r0/r1 advance by 0x40.
@@ -197,5 +241,14 @@ for nm, got, want, kind in (
         ("A memcpy 2it r0", _2[4] if _2 else None, DST + 0x40, "PIN"),
         ("A memcpy 2it r1", _2[5] if _2 else None, SRC + 0x40, "PIN")):
     row(nm, kind, got, want)
+
+#  #359: bytes again, but deep in the SECOND iteration. A mutation that copies
+#  the right amount on the first pass and less on later ones, or that mis-steps
+#  the source pointer between iterations, shows up here and not above. Index 14
+#  is in the final 16 bytes of the 64-byte copy, and no sentinel should survive.
+_d2 = _2[6] if _2 else None
+for nm, idx, want in (("A memcpy 2it dst w9", 9, SRCW[9]),
+                      ("A memcpy 2it dst w14", 14, SRCW[14])):
+    row(nm, "PIN", (_d2[idx] if _d2 and len(_d2) > idx else None), want)
 
 print("MEMCPY_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))
