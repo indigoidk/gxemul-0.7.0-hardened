@@ -580,6 +580,62 @@ wgot=${wres%/*}; wwant=${wres#*/}
 check "writeback rows run"     "$wwant" 14
 check "writeback rows correct" "$wgot"  "$wwant"
 
+# #358: fold-fired markers (netbsd_copyin / netbsd_copyout)
+# -------------------------------------------------------------------------
+# Both folds replace six user-mode transfers with one C function whose
+# registers, addresses and instruction billing are IDENTICAL to the
+# instructions replaced, so a row asserting their result passes whether or not
+# the fold fires. Until #357 one witness existed -- the template masked its base
+# writeback while these folds did not, so an unaligned base read 0x10019 folded
+# against 0x10018 genuine -- and #357 correctly removed it by fixing the
+# template. These two folds also had NO rows at all before this.
+#
+# The rows are FREE-RUNNING by necessity, not by style. Measured: a two-pass
+# program with a breakpoint one instruction before the folded window executes the
+# GENUINE sequence on both the default and the -J build, while the same program
+# with no breakpoint folds -- so a breakpoint suppresses the fold. A breakpoint ON
+# a slot is worse: that path re-marks its own slot for retranslation and the
+# matchers test ic[i].f, so a fold can never install there. Two passes are
+# required because the folds gate on is_userpage, which only the user-access
+# general handler sets -- the very handler the fold's bail-out delegates to.
+#
+# Each fold gets a pair so neither row can be vacuous in either direction. The
+# `fires` row demands the marker AND the verbosity echo AND the six transferred
+# values: without the echo a session whose verbosity raise silently failed would
+# report zero markers and look exactly like a dead fold, and without the values
+# the row would prove a line was printed rather than that work was done. The
+# `quiet` row asserts silence at default verbosity and must never be rewritten to
+# drive the guest with `step` -- single-step BYPASSES debugmsg's verbosity gate.
+#
+# Non-vacuity proven per fold on scratch trees built from this exact source.
+# Disabling ONLY netbsd_copyin's arming (by making its iword test unsatisfiable,
+# which keeps the statement structure intact) gives 3 of 4, with exactly
+# `A fold copyin fires` red and copyout's rows still green. An earlier attempt
+# replaced the arming assignment with a comment and left a dangling `if` that
+# swallowed the copyout arming, killing both folds -- one real reason and one
+# artifact, which is why the break is done by constant and not by deletion.
+FOLDLOG=$LOGDIR/gate_arm_foldmark.log
+python3 arm_fold_marker_probe.py "$PMAX" > "$FOLDLOG" 2>&1 || true
+
+if ! grep -q "FOLDMARK_RESULT=" "$FOLDLOG"; then
+    note "fold-marker probe produced no result line; last lines follow"
+    tail -5 "$FOLDLOG" | sed 's/^/       /'
+    gate_skip "fold-marker probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$FOLDLOG" | sed 's/^/       /'
+
+fres=$(grep -o "FOLDMARK_RESULT=[0-9]*/[0-9]*" "$FOLDLOG" | tail -1 | cut -d= -f2)
+fgot=${fres%/*}; fwant=${fres#*/}
+check "fold-marker rows run"     "$fwant" 4
+check "fold-marker rows correct" "$fgot"  "$fwant"
+
+for v in "A fold copyin fires" "A fold copyin quiet" \
+         "A fold copyout fires" "A fold copyout quiet"; do
+    n=$(count "$FOLDLOG" "^$v  .*ok$")
+    check "  fold-marker row: $v" "$n" 1
+done
+
 for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
          "A wb word post4 unal" "A wb word pre4 unal gen" \
          "A wb word pre4 unal fast" "A wb word postneg4 unal" \

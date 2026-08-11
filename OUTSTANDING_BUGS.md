@@ -2021,6 +2021,144 @@ corruption without a clear host-OOB path.
 > handler is a divergence to explain, not automatically a defect to fix — the handler may
 > be the one that is wrong.
 
+> ## 2026-08-11 — #358 fold-fired markers: what shipped, what is measured, and what is still owed
+> Five ARM combiners produce results identical to the sequences they replace, so a row
+> asserting their result passes whether or not the fold fires. #358 adds DEBUG-gated markers
+> to `netbsd_copyin`, `netbsd_copyout`, `netbsd_scanc`, `xchg` and `netbsd_memcpy`, plus the
+> first rows for the two that had none. Gate 14: 237 → 243 checks.
+>
+> **What is measured.** The folds fire on `testarm` — established on the pre-#357 snapshot
+> where the old writeback detector still works (`0x10019` folded against `0x10018` under
+> `-J`), deterministic across 5 consecutive runs. The marker discriminates: 1 line with
+> combining on, 0 under `-J`, verbosity echo confirmed in both. Rows 4/4 on the shipping
+> build; on a scratch tree with **only** `netbsd_copyin`'s arming disabled, 3/4 with exactly
+> `A fold copyin fires` red and `copyout`'s rows green — so each row tracks its own fold's
+> arming, which `-J` alone could not show.
+>
+> **CORRECTION, from the compile-and-measure seat: a marker-free instrument DOES exist.**
+> This round's design claimed the `mp` device's instruction counter cannot detect firing for
+> any of these folds because each bills exactly. The billing is exact; the conclusion does not
+> follow. The run loop advances the counter by a fixed amount per **batch of 120 dispatches**
+> and tests the batch limit only at those boundaries, so a fold — which changes
+> instructions-per-dispatch — shifts the quantum and `ninstrs` lands elsewhere. Measured on the
+> committed binary, no source change and no marker: **0xabef combining-on against 0xa1b8 under
+> `-J`**, reproducible, discriminating across block counts 10 through 60, with the
+> broken-arming build reading `0xa1b8` as the control. The unfolded value is `120 × 345`
+> exactly, so this is quantisation, not a billing error. **Deliberately not made a gate row:**
+> it pins emulator internals (the batch limit, the 120-dispatch unroll) rather than an
+> architectural value, so a future dyntrans change rewrites it silently, and it must be
+> re-checked per row — one shape collided, reading the same value folded and not. Recorded as
+> the round's pre-fix reproduction instead, which also means the round was **not** forced into
+> an inverted order. Related fidelity issue in its own right, worth its own look: the counter
+> the guest reads leaks the dyntrans batch quantum, so an identical architectural instruction
+> stream reads differently depending only on whether a combination fired.
+>
+> **CORRECTION: the `step` hazard is refuted as stated, and replaced by a sharper one.** The
+> warning was that an already-installed fold would still execute under `step` and print its
+> marker at default verbosity through the gate bypass. Measured: it does not — **stepping onto
+> a fold slot re-translates it uncombined**, so no marker appears at any step. That also
+> explains this round's own step-pc measurement: the mechanism is not "a breakpoint suppresses
+> the fold" but "stepping un-folds the slot". The correct warning is stronger: never drive a
+> row with `step`, because it measures the genuine sequence while appearing to measure the
+> fold. Unmeasured: a `step` onto a fold slot reached as a branch target.
+>
+> **The breakpoint matrix, measured, because it is a trap for whoever writes the queued rows.**
+> Breakpoint *after* the sequence: 1 install, 7 folds over 8 passes. Breakpoint *inside* the
+> loop: **8 installs, 0 folds** — the matcher re-installs every pass and the fold never runs, so
+> the row reads exactly like a dead fold on a healthy binary, and the signature is invisible
+> without instrumenting the matcher. With read-ahead off (any breakpoint present) the fold
+> count is always `passes − 1`. Every queued row's expected count must be a number derived
+> from that rule, never "greater than zero".
+>
+> **A better row shape than the one shipped, measured and recommended for the queued work.**
+> A single warm-up `ldrt` to the same page makes the fold fire on the FIRST execution of a
+> straight-line block: with the warm-up, fires 1 and bails 0; without it, fires 0 and bails 1.
+> That is a perfect A/B pair differing by one instruction — no loop, no branch, no
+> free-running subtleties — and the no-warm-up arm is a negative control that must read zero,
+> which makes the row unable to pass vacuously. It tests the FOLD, where the shipped `quiet`
+> row only tests the verbosity gate. It needs read-ahead, so no breakpoint: a grace-then-
+> interrupt row.
+>
+> **A gap in the markers themselves, worth closing next round.** There is no BAIL marker, so a
+> red row is ambiguous between three causes needing three different fixes: arming or matcher
+> broke (no install, no fire), the guard rejected the operands (install, no fire, bail), and
+> the breakpoint was misplaced (install, no fire, no bail). A distinctly-named bail marker on
+> copyin/copyout would name the cause in one read, and costs about 256 lines per MB against
+> the fire marker's 42,900.
+>
+> **Flood measured rather than estimated:** 1010 KB of copyin produced 42,926 marker lines and
+> 1.90 MB of console text, an 11 ms run becoming 538 ms — a 49x slowdown, and console output
+> twice the size of the data copied. The design's ~44,700/MB estimate was right to within 4%.
+> A 63 KB copy costs 40 ms, so block-sized rows are free, which is what the accept-the-volume
+> decision rests on.
+>
+> **`is_userpage` is STABLE, contrary to two seats' concern:** 10 of 10 runs identical, and an
+> intervening non-user access to the same page does NOT turn the fold off, because the clear
+> lives inside `update_translation_table` which the plain load's fast path never calls once the
+> page is mapped. Unmeasured, and the one thing that could still make a future row flaky: TLB
+> eviction, which needs enough distinct pages to cycle the entries.
+>
+> **A pass-1 seat's marker-free instrument, and the honest limit of its refutation.** The
+> seat proposed that one `step` across a warm folded slot would advance pc by the whole
+> 24-byte window. Measured under the protocol `breakpoint` on the instruction before the
+> window → `continue` (arrive pass 1, window untranslated) → `continue` (window translates
+> during the free run, so the fold should install; arrive pass 2) → `step` over the `mov` →
+> `step` across the entry slot: the result was **pc + 4 with one register loaded**, i.e. a
+> single genuine instruction, on both the default and the `-J` build, with the fold's
+> destinations zeroed first so pass-1 leftovers could not masquerade as loads. In pass 2 the
+> seat proposed that exact first-hit/resume ordering as an *untested* variant; it is the
+> protocol that was tested, so the refutation covers it.
+> **The mechanism, initially recorded as unestablished, is now SETTLED by the
+> compile-and-measure seat and it is neither of the two candidates guessed at first.** It is
+> not that the fold failed to install, nor that a breakpoint suppresses it: **stepping onto a
+> fold slot re-translates that slot uncombined**, so the step executes a plain instruction.
+> That fully explains the observed `pc + 4`, and it is why the correct warning is "never drive
+> a row with `step`" rather than anything about breakpoints per se. Note the pc-stride witness
+> is dead for a sharper reason than brittleness, then — the act of stepping destroys the thing
+> it would measure. Either way it would not remove the need for the marker:
+> the `quiet` rows need the marker's ABSENCE at default verbosity, and single-step **bypasses**
+> the verbosity gate, so a stepped session actively falsifies that direction.
+>
+> **Whether to ship markers without rows was the pass-2 panel's only real split**, and it was
+> settled on the argument rather than the count: one seat wanted the round HELD, three wanted
+> it shipped with the gap recorded. The decisive distinction is that an unexercised marker and
+> an unfailable row are different classes. A row that cannot fail actively asserts coverage
+> that does not exist — it lies to the reader of the harness. An unexercised marker asserts
+> nothing to the harness at all; its failure mode is silent drift, not false assurance, and it
+> is strictly better than the previous state, in which those folds had neither a marker nor
+> firing coverage. Holding the round would also have pressured three rushed row-pairs, and a
+> rushed unfailable row is the worse defect. **But the dissent lands on one item, and it is
+> conceded here rather than argued away:** `netbsd_memcpy`'s iteration counter is not merely
+> unexercised instrumentation, it is **untested LOGIC** — new state with arithmetic that no
+> row checks — so if the count is wrong nothing notices. Two seats reached that independently.
+> It is the first item below for that reason.
+>
+> **Owed work, each with its non-vacuity break named, so this is queued and not implied:**
+> - **`memcpy`'s row FIRST, and it must check the count arithmetic** — the summed reported
+>   iterations times 32 equalling the r0 advance — because reporting a count is the whole point
+>   of counting it, and that arithmetic is the one piece of genuinely untested logic this round
+>   ships.
+> - **Rows for `xchg` and `scanc`** as well, which also received markers but no rows. Their
+>   programs already exist in committed probes, so the additions are mechanical.
+> - **`scanc`'s pair must include a "bail silent" row** — second-load page miss, marker count
+>   0. This is the only arrangement that can detect a marker placed before or between the two
+>   bail-outs, because a `fires` row alone prints in either placement. Without it the
+>   placement argument rests on review, not on a row.
+> - **`memcpy`'s row should check the count arithmetic** — the summed reported iterations
+>   times 32 equalling the r0 advance — since reporting a count is the stated point of
+>   counting it.
+> - **Tighten the `fires` rows from `>= 1` to `== 1`** where the program's construction
+>   warrants exactly one line, per this project's expect-an-exact-small-nonzero-value lesson;
+>   it would surface a double-fire anomaly that `>= 1` accepts.
+>
+> **Recorded, not fixed:** `netbsd_memset` gets no marker because it is dead (its arming is
+> overwritten by the compare-and-branch catch-all), and this round will not ship an
+> instrument that cannot be exercised. The 17 micro-folds are excluded because a marker per
+> compare-and-branch would make raised verbosity unusable for everything else, including
+> these new rows. And the markers add a varargs call plus a few branches per fold dispatch at
+> default verbosity — the accepted price of the no-pre-gate convention, unmeasured here, and
+> the first suspect to eliminate if the known gate-14 timing flake's rate shifts.
+
 > ## 2026-08-11 — #19 SETTLED from the ARM ARM: the TEMPLATE is the defect, and the folds were right
 > The question the correction block above left open ("settle the post-index writeback from
 > a primary source") is answered, and the answer confirms the inversion: GXemul's

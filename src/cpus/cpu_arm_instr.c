@@ -2015,6 +2015,32 @@ X(netbsd_memcpy)
 {
 	unsigned char *page_0, *page_1;
 	uint32_t addr_r0, addr_r1;
+	/*
+	 *  #358: count the 32-byte iterations this call actually folded, so the
+	 *  marker can be COUNT-AND-SUMMARISE. Unlike the other four marked folds
+	 *  this handler has a real loop, so one DISPATCH emits one line however
+	 *  many iterations it folded. A copy that never straddles a page is a
+	 *  single dispatch and therefore a single line; a straddling copy bails,
+	 *  runs one genuine iteration, and the back-branch re-dispatches this
+	 *  slot, so it costs roughly one line per crossing. (An earlier draft of
+	 *  this comment said "one line per call by construction", which is false
+	 *  for exactly the straddling case the next paragraph describes -- a 1 MB
+	 *  copy bails about 512 times. The flood conclusion survives: lines track
+	 *  crossings, not the 32-byte iterations, and stay far below the
+	 *  per-dispatch volume accepted for the loopless folds.)
+	 *
+	 *  The guard on the mid-loop markers below is about TRUTHFULNESS, not
+	 *  flood control, and must not be confused with strlen's `n_loops > 1`
+	 *  guard, which exists to suppress low-information lines. Both of this
+	 *  fold's bail-outs are INSIDE the loop: a bail on the first iteration
+	 *  folded nothing, while a bail on iteration k > 1 follows k-1 completed
+	 *  32-byte copies. So a summary-only marker would under-report every
+	 *  page-straddling copy (a 1 MB copy bails about 512 times), and an
+	 *  unguarded bail marker would over-report the zero-work entries at page
+	 *  ends. Reporting the count is what makes a row able to check that the
+	 *  pieces sum to the copy the register advance implies.
+	 */
+	unsigned n_iter = 0;
 
 	do {
 		addr_r0 = cpu->cd.arm.r[0];
@@ -2025,6 +2051,11 @@ X(netbsd_memcpy)
 		/*  Crossing a page boundary? Then continue non-combined.  */
 		if ((addr_r0 & 0xfff) + 32 > 0x1000 ||
 		    (addr_r1 & 0xfff) + 32 > 0x1000) {
+			if (n_iter)			/*  #358  */
+				debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_memcpy",
+				    VERBOSITY_DEBUG,
+				    "combined %u iterations, page boundary",
+				    n_iter);
 			instr(multi_0x08b15018)(cpu, ic);
 			return;
 		}
@@ -2034,6 +2065,10 @@ X(netbsd_memcpy)
 
 		/*  No page translations? Continue non-combined.  */
 		if (page_0 == NULL || page_1 == NULL) {
+			if (n_iter)			/*  #358  */
+				debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_memcpy",
+				    VERBOSITY_DEBUG,
+				    "combined %u iterations, no page", n_iter);
 			instr(multi_0x08b15018)(cpu, ic);
 			return;
 		}
@@ -2089,6 +2124,7 @@ X(netbsd_memcpy)
 		    page_1 + (addr_r1 & 0xfff), 32);
 		cpu->cd.arm.r[0] = addr_r0 + 32;
 		cpu->cd.arm.r[1] = addr_r1 + 32;
+		n_iter ++;				/*  #358  */
 
 		cpu->n_translated_instrs += 4;
 
@@ -2099,6 +2135,12 @@ X(netbsd_memcpy)
 		cpu->n_translated_instrs ++;
 	} while (((cpu->cd.arm.flags & ARM_F_N)?1:0) ==
 	    ((cpu->cd.arm.flags & ARM_F_V)?1:0));
+
+	/*  #358: normal exit -- summarise. Unguarded, because reaching here means
+	    the loop body ran at least once (the bail-outs return early), so the
+	    count is always >= 1.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_memcpy",
+	    VERBOSITY_DEBUG, "combined %u iterations", n_iter);
 
 	/*  Continue at the instruction after the bge:  */
 	cpu->cd.arm.next_ic = &ic[6];
@@ -2295,6 +2337,21 @@ X(netbsd_scanc)
 		instr(load_w0_byte_u1_p1_imm)(cpu, ic);
 		return;
 	}
+
+	/*  #358: fold-fired marker. Transparent otherwise -- byte loads need no
+	    mask, N is cleared and never set (correct only because r3 holds a
+	    freshly loaded BYTE, so r3 & ip <= 255), C is left alone (correct
+	    because the register form of TST takes no shifter-carry path), and the
+	    billing is 2 + 1 for the 3 instructions replaced.
+
+	    After BOTH bail-outs, and that placement is the one a plausible-looking
+	    patch gets wrong: the second miss is reachable after the first passes,
+	    because the table address `t` is computed from the byte just loaded, so
+	    a marker between them would fire on a call that wrote no guest state.
+	    Both bail-outs are host-page misses, not a "character found" exit, so
+	    neither is a legitimate fold completion.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_scanc",
+	    VERBOSITY_DEBUG, "combined 3 instrs");
 
 	cpu->cd.arm.r[3] = page[t & 0xfff];
 
@@ -2542,6 +2599,17 @@ X(strlen)
 X(xchg)
 {
 	uint32_t tmp = reg(ic[0].arg[0]);
+
+	/*  #358: fold-fired marker. No bail-out, so anywhere in the body is
+	    exact. Transparent otherwise: eor_regshort is the S == 0 table entry so
+	    no flags are touched, and the billing is 2 + 1 for the three EORs
+	    replaced. Post-#342's `a != b` guard the fold and three real EORs are
+	    indistinguishable in every register and flag, which is what left the
+	    gate's own two swap rows unable -- by its own admission -- to tell
+	    folded-and-correct from not-folded-and-correct.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "xchg",
+	    VERBOSITY_DEBUG, "combined 3 eors");
+
 	cpu->n_translated_instrs += 2;
 	cpu->cd.arm.next_ic = &ic[3];
 	reg(ic[0].arg[0]) = reg(ic[1].arg[0]);
@@ -2570,6 +2638,33 @@ X(netbsd_copyin)
 		instr(load_w1_word_u1_p0_imm)(cpu, ic);
 		return;
 	}
+
+	/*
+	 *  #358: fold-fired marker. This fold is otherwise UNOBSERVABLE: its
+	 *  registers, the addresses it reads and its instruction billing are all
+	 *  identical to the six genuine ldrt's, so a harness row asserting its
+	 *  result passes whether or not the fold ever fires. #357 removed the one
+	 *  witness that existed -- before it, the template masked its base
+	 *  writeback while this fold did not, so an unaligned base gave r0 =
+	 *  0x10019 folded against 0x10018 genuine. That one-bit difference was
+	 *  the detector; now both paths agree, and any row asserting "the fold
+	 *  fired" is unsatisfiable without this line.
+	 *
+	 *  Placed AFTER the bail-out on purpose. The bail-out delegates the first
+	 *  ldrt to the genuine handler and returns without setting next_ic, so
+	 *  the remaining five run genuinely too; a marker before it would report
+	 *  a fold that did no folding. Not pre-gated with ENOUGH_VERBOSITY(), per
+	 *  the #278 convention, so `breakpoint subsystem cpu` catches a fold in
+	 *  flight -- which is also why a static first-N latch was rejected here:
+	 *  it would gate the breakpoint path too and kill that capability after
+	 *  N folds. This fold has no internal loop, so there is nothing to
+	 *  summarise and no information-content guard analogous to strlen's
+	 *  `n_loops > 1`; the volume is accepted and the rows copy blocks, not
+	 *  megabytes.
+	 */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyin",
+	    VERBOSITY_DEBUG, "combined 6 loads");
+
 	q32 = &cpu->cd.arm.r[6];
 	ofs >>= 2;
 	q32[0] = p32[ofs+2];
@@ -2605,6 +2700,13 @@ X(netbsd_copyout)
 		instr(store_w1_word_u1_p0_imm)(cpu, ic);
 		return;
 	}
+
+	/*  #358: fold-fired marker -- see X(netbsd_copyin) above for why this
+	    fold is otherwise unobservable and why the marker sits after the
+	    bail-out rather than before it.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyout",
+	    VERBOSITY_DEBUG, "combined 6 stores");
+
 	q32 = &cpu->cd.arm.r[6];
 	ofs >>= 2;
 	p32[ofs  ] = q32[2];

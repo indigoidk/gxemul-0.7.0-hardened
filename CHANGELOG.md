@@ -4192,6 +4192,154 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fourth round (#358) — five folds were doing work no test could see, and the last round removed the only witness
+
+Five ARM instruction combiners produce results **identical** to the guest
+sequences they replace — same registers, same addresses touched, same
+instruction billing. That identity is the goal of several previous corrections,
+and it has a cost nobody had written down: a harness row asserting a fold's
+result **passes whether or not the fold ever fires**, so a broken matcher or
+arming condition would delete the coverage silently with every row still green.
+This project already calls that vacuously green and treats it as worse than no
+row.
+
+- **#358 (`cpus/cpu_arm_instr.c`)** — DEBUG-gated fold-fired markers for
+  `netbsd_copyin`, `netbsd_copyout`, `netbsd_scanc`, `xchg` and `netbsd_memcpy`,
+  in the existing `debugmsg_cpu(cpu, SUBSYS_CPU, name, VERBOSITY_DEBUG, …)`
+  shape, deliberately **not** pre-gated with `ENOUGH_VERBOSITY()` so
+  `breakpoint subsystem cpu` still catches a fold in flight.
+
+  **#357 is what made this urgent rather than tidy.** Until last round the
+  load/store template masked its base writeback while these folds did not, so an
+  unaligned base read `r0 = 0x10019` folded against `0x10018` genuine. That
+  one-bit difference was the *only* witness that `copyin`/`copyout` fire. #357
+  corrected the template — the folds were right all along — and the detector went
+  with it. Both folds also had **no harness rows of any kind** before this round.
+
+  **Placement is the whole correctness argument.** For `copyin`, `copyout` and
+  `scanc` the marker sits *after* the last bail-out, because those bail-outs
+  delegate the first instruction to the genuine handler and return without
+  setting `next_ic`, so the rest run genuinely too — a marker before one would
+  report a fold that did no folding. `scanc` needs care: its second bail-out is
+  reachable *after* the first passes, since the table address is computed from
+  the byte just loaded, so a marker between them would fire on a call that wrote
+  no guest state. `memcpy` is the opposite shape — both of its bail-outs are
+  **inside** its loop — so it counts iterations, summarises once at the normal
+  exit, and emits a **guarded** marker before each mid-loop return. That guard
+  exists for **truthfulness, not flood control**, and must not be confused with
+  the information-content guard an earlier round added to `strlen`: a
+  summary-only marker would under-report every page-straddling copy (a 1 MB copy
+  bails about 512 times), while an unguarded one would over-report the zero-work
+  entries at page ends.
+
+  **Flood control is split, and the rejected option is the interesting one.**
+  `memcpy` summarises, because it has a real loop and one guest call is one
+  dispatch, so a summary is one line per call by construction. The other four
+  have no loop to summarise and no natural information-content guard, so the
+  volume is accepted and the rows copy blocks rather than megabytes. A **static
+  first-N latch was rejected** on this project's own terms: it would gate the
+  breakpoint path as well, so `breakpoint subsystem cpu` would die after N folds
+  — the exact field capability the no-pre-gate convention exists to preserve.
+
+  **`netbsd_memset` deliberately gets nothing.** It is dead: its arming for the
+  iword `0xcaffffed` is unconditionally overwritten by the compare-and-branch
+  catch-all, because that iword's condition field is in the catch-all's list and
+  no `break` separates the two sites. A marker there could never fire, and this
+  round will not ship an instrument that cannot be exercised. The 17
+  compare-and-branch micro-folds are excluded for a different reason: a marker
+  per compare would make raised verbosity unusable for everything else,
+  **including the new rows** — the instrument would destroy its own channel.
+
+**Measured, and one measurement overturned a review seat.** The folds *do* fire
+on `testarm`, established on the pre-#357 snapshot where the old detector still
+works (`0x10019` folded against `0x10018` under `-J`) and **deterministic across
+5 consecutive runs**. The marker then discriminates on the new build: 1 line with
+combining on, 0 under `-J`, with the verbosity echo confirmed in both — so the
+zero is a real absence rather than a silently failed verbosity raise.
+
+**A MARKER-FREE INSTRUMENT DOES EXIST, and this round's first framing was wrong
+about that.** The design claimed the test machine's instruction counter could not
+detect firing for any of these folds because each bills exactly. The billing is
+exact; the conclusion does not follow. The run loop advances its counter by a
+fixed amount per **batch of 120 dispatches** and only tests the batch limit at
+those boundaries, so a fold — which changes instructions-per-dispatch — shifts the
+**quantum**, and `ninstrs` lands elsewhere. Measured on the committed binary with
+no source change and no marker, a guest reading the counter either side of a
+copyin block: **0xabef with combining on against 0xa1b8 with `-J`**, reproducible,
+and discriminating across block counts from 10 to 60. The broken-arming build
+reads `0xa1b8`, agreeing with `-J`, which is the control. The unfolded reading is
+`120 × 345` exactly, so the signal is quantisation rather than a billing error.
+
+That witness is recorded here as the round's **pre-fix reproduction**, and
+deliberately **not** turned into a gate row: it pins emulator internals — the
+batch limit and the 120-dispatch unroll — rather than an architectural value, so a
+future dyntrans change would silently rewrite it, and it has to be re-checked per
+row (one shape collided, reading the same value folded and not). So the honest
+position is not "no alternative exists" but "the alternative was measured and
+rejected as too brittle for a row", which is a different and better claim. It also
+means the round was **not** forced into an inverted order after all.
+
+**And the `step` hazard this round was warned about is refuted as stated, with
+something stronger in its place.** The concern was that an already-installed fold
+would still execute under `step`, printing its marker at default verbosity through
+the gate bypass. Measured: it does not — **stepping onto a fold slot re-translates
+it uncombined**, so the step executes a plain instruction and no marker appears at
+any step. That also explains this round's own earlier step-pc measurement, which
+showed `pc + 4`: the mechanism is not "a breakpoint suppresses the fold" but
+"stepping un-folds the slot". The correct warning is therefore sharper than the
+original: a row must never drive the guest with `step`, because it would measure
+the genuine sequence **while believing it measured the fold**.
+
+**The breakpoint matrix, measured, because it is a booby trap for row authors.**
+A breakpoint *after* the sequence gives one matcher install and seven folds over
+eight passes. A breakpoint *inside* the loop gives **eight installs and zero
+folds** — the matcher re-installs every pass and the fold never runs, so the row
+reads exactly like a dead fold on a healthy binary. With read-ahead off (any
+breakpoint present) the fold count is always `passes − 1`, because the install
+lands after the entry slot has already dispatched once. Every row's expected count
+must be written as a number derived from that rule rather than as "greater than
+zero". This is also direct evidence for the separate open item about combiner rows
+never exercising the read-ahead install path.
+
+**Gate 14 grows 6 checks (237 → 243)** via a new `arm_fold_marker_probe.py`
+carrying a `fires`/`quiet` pair per fold. The `fires` row demands the marker
+**and** the verbosity echo **and** the six transferred values, so it cannot pass
+on a printed line alone, and `copyout`'s row asserts the stored **memory** so a
+future permutation regression stays visible. The `quiet` row asserts silence at
+default verbosity and must never be rewritten to drive the guest with `step` —
+single-step **bypasses** the verbosity gate, so a stepped session prints markers
+at default verbosity and the row would fail for a reason unrelated to the fold.
+The rows are free-running by necessity, per the measurement above.
+
+**Non-vacuity is proven per fold, not per round.** On a scratch tree built from
+this exact source with **only** `netbsd_copyin`'s arming disabled: **3 of 4, with
+exactly `A fold copyin fires` red** and `copyout`'s rows still green. So each row
+tracks its own fold's arming rather than combining in general, which `-J` alone
+could not show.
+
+**Three probe defects of my own, recorded because each would have produced a
+confident wrong conclusion.** The first step-pc probe put its breakpoint *on* the
+entry slot — the case a seat had explicitly flagged as self-defeating, since the
+breakpoint path re-marks its own slot for retranslation and the matchers test
+`ic[i].f`, so a fold can never install there; it reported "genuine" for the wrong
+reason. With the destinations left unzeroed it also showed all six registers
+loaded from a *single* genuine load, which were pass-1 leftovers. And the first
+arming break replaced the assignment with a comment, leaving a **dangling `if`**
+that swallowed the adjacent `copyout` arming and killed both folds — one real
+reason and one artifact. The break is now done by making the iword test
+unsatisfiable, which preserves the statement structure.
+
+**Scope stated plainly rather than implied: `xchg`, `scanc` and `memcpy` received
+markers but no rows this round.** Their programs already exist in committed
+probes, so adding marker assertions is mechanical, and it is queued with the
+wider vacuity inventory — which also records that three folds had no rows at all,
+that the gate's own text admits two `xchg` rows and all twelve `memcpy` rows
+cannot distinguish folded-and-correct from not-folded-and-correct, that all seven
+`strlen` rows are vacuous with respect to *firing* because an unfolded 16 KB walk
+lands inside both asserted instruction bands, and that `netbsd_idle`'s two path
+rows pass without the fold while the flag named in the source as its detector is
+asserted by no row.
+
 ## One-hundred-and-third round (#357) — the load/store template masked the base writeback, so a post-index loop could not advance
 
 `cpu_arm_instr_loadstore.c` is a macro template `#include`d once per variant to
