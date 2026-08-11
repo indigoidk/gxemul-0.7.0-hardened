@@ -2275,7 +2275,6 @@ X(netbsd_scanc)
 X(netbsd_idle)
 {
 	uint32_t rY = reg(ic[0].arg[0]);
-	uint32_t rZ = reg(ic[3].arg[0]);
 	uint32_t *p;
 	uint32_t rX;
 
@@ -2295,8 +2294,39 @@ X(netbsd_idle)
 		return;
 	}
 
-	if (rZ == 0) {
-		/*  Synch the program counter.  */
+	/*  #351: both fast paths below are reached only with rX == 0, and the
+	    loop they stand in for executes `ldr rX,[rY]` (writing rX) and
+	    `teqs rZ,#0` (writing N/Z) before either exit -- the fold wrote
+	    NEITHER, so the guest read a stale destination and stale flags.
+	    Measured on the committed build via translation read-ahead (which
+	    installs the fold before the ldr ever runs, so the destination is
+	    whatever it held on entry): the rZ != 0 exit returned dest = seed
+	    and NZCV = seed where the loop owes dest = 0 and the second teqs's
+	    flags.
+
+	    Write the destination FIRST, then delegate the second teqs to the
+	    real dpi handler at its matcher-pinned slot (the netbsd_memcpy
+	    fold's own pattern). Writing dest first is load-bearing: it makes a
+	    loop whose second teqs ALIASES the load destination (the matcher
+	    pins rZ != rY but not rZ != rX) read the freshly-written 0 and idle
+	    correctly, instead of reading the stale register and wrongly exiting.
+	    The store of rX is safe ONLY because rX is provably 0 here -- it is the
+	    raw host word from the inline 0-test read above, which skips byte-swap
+	    precisely because a 0-test needs none. The rX != 0 case never reaches
+	    this store: it falls back to instr(load_w0_word_u1_p1_imm), the real
+	    load that DOES byte-swap. So do not reuse this store for a future
+	    non-zero fast path without byte-swapping first.
+
+	    Call instr(teqs) BY NAME, never ic[3].f: this same combiner rewrote
+	    ic[3] to teqs_beq_samepage (the beq folded its predecessor), whose
+	    handler would branch instead of computing flags.  */
+	reg(ic[0].arg[2]) = rX;
+	instr(teqs)(cpu, &ic[3]);
+
+	if (cpu->cd.arm.flags & ARM_F_Z) {
+		/*  Synch the program counter.  The teqs delegation ran BEFORE
+		    this handoff, so the flags an interrupt banks into SPSR are
+		    the architectural post-teqs value.  */
 		uint32_t low_pc = ((size_t)ic - (size_t)
 		    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
 		cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1)
@@ -2304,11 +2334,30 @@ X(netbsd_idle)
 		cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
 
 		cpu->wants_to_idle = true;
+		/*  Idle-path billing is deliberately just N_DYNTRANS_IDLE_BREAK,
+		    NOT the exit path's `+= 4`: this is the batch-break the other
+		    architectures' idle combiners also use, subtracted back when
+		    the machine actually idles (cpu_dyntrans.c), and per-instruction
+		    rate accounting is meaningless while idling. The asymmetry with
+		    the exit path is intended.  */
 		cpu->n_translated_instrs += N_DYNTRANS_IDLE_BREAK;
 		cpu->cd.arm.next_ic = &nothing_call;
 		return;
 	}
 
+	/*  #352: fold-fired marker on the EXIT path only. This path became
+	    architecturally transparent once #351 wrote the dest and flags, so
+	    the marker is gate 14's fold-fired detector here. The idle path is
+	    deliberately NOT marked: it re-enters ~2000x/s while the guest
+	    idles (a flood), and it needs no marker -- `wants_to_idle` is the
+	    only ARM setter of that flag, so it is already a fold detector.
+	    Not pre-gated with ENOUGH_VERBOSITY(), per the #278 convention, so
+	    `breakpoint subsystem cpu` can catch a fold in flight.
+	    #351: the exit stands in for five architectural instructions and
+	    billed none; owe the other four.  */
+	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_idle", VERBOSITY_DEBUG,
+	    "combined idle-loop exit");
+	cpu->n_translated_instrs += 4;
 	cpu->cd.arm.next_ic = &ic[5];
 }
 
@@ -3213,7 +3262,16 @@ void COMBINE(beq_etc)(struct cpu *cpu,
 		    ic[-2].f == instr(b_samepage__ne) &&
 		    ic[-1].f == instr(teqs) &&
 		    ic[-1].arg[0] != ic[-4].arg[0] &&
-		    ic[-1].arg[1] == 0) {
+		    ic[-1].arg[1] == 0 &&
+		    /*  #353: the beq MUST target the ldr, or this is not an idle
+			loop. Without this the matcher accepted a FORWARD beq
+			(any same-page target), and X(netbsd_idle) then treated a
+			non-loop as an idle loop and HUNG the guest -- measured on
+			the committed build (pc parked at the fold slot, the real
+			target never reached). All same-page conditional branches
+			carry their target ic as arg[0], so the loop-back beq has
+			arg[0] == &ic[-4].  */
+		    ic[0].arg[0] == (size_t)(&ic[-4])) {
 			ic[-4].f = instr(netbsd_idle);
 		}
 		if (ic[-1].f == instr(teqs)) {

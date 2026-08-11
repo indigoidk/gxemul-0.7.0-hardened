@@ -238,11 +238,27 @@ def run_combined(iw, rn, cin):
          single_step is set, so a stepped probe exercises the STANDALONE
          handler while appearing to exercise the combined one.
 
-      2. A single forward run cannot work either, however it is driven.
+      2. A single forward run cannot work either WHEN A BREAKPOINT IS SET.
          arm_combine_instructions rewrites ic[-1].f -- the PREVIOUS
          instruction -- while the BRANCH is translated, and by then the
          compare has already executed. The combined handler therefore exists
          only from the SECOND pass over that ic slot onward.
+
+         CORRECTION (round 100): this is true only with a breakpoint. The
+         guard above is NOT the whole story -- translation READ-AHEAD
+         (cpu_dyntrans.c translates up to 128 following instructions ahead
+         of execution and runs the combiner for each) is separately gated on
+         `cpu->machine->breakpoints.n == 0` (:1939). Every probe in THIS file
+         uses `breakpoint add`, which sets breakpoints.n and turns read-ahead
+         OFF -- forcing the two-pass install. A real guest sets no breakpoint,
+         so the fold installs AHEAD of execution and a single forward pass
+         reaches it. The netbsd_idle rows live in arm_idle_probe.py precisely
+         so they can exercise that path (its register-alias and forward-beq
+         defects are invisible under a breakpoint, because the two-pass
+         install pre-writes the register the fold would otherwise read stale).
+         The two-pass driver below stays correct for the flag rows here; it
+         is just not the only way a fold is reached, contrary to what this
+         comment used to assert as a law.
 
     So the compare and its branch sit inside a loop that runs exactly twice,
     and the flags published are the second pass's. r8 counts: 1 -> 0 sets Z and

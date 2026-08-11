@@ -4192,6 +4192,98 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundredth round (#351, #352, #353) — the idle-loop fold skipped its writes, aliased a register, and hung the guest on a forward branch
+
+`X(netbsd_idle)` folds the five-instruction NetBSD/arm idle loop
+(`ldr rX,[rY] / teqs rX,#0 / bne out / teqs rZ,#0 / beq back`). Reproduced on
+the committed build, three defects — and a fourth found by a review seat that
+compiled variants rather than only reading:
+
+- **#351 (`cpus/cpu_arm_instr.c`)** — on both fast paths (the idle handoff and
+  the `rZ != 0` exit) the fold wrote NEITHER the load destination NOR the flags,
+  though the loop it stands in for executes `ldr rX` and `teqs rZ` before either
+  exit. Measured via translation read-ahead (which installs the fold before the
+  `ldr` runs, so the destination is whatever it held on entry): the exit path
+  returned `dest = 0x77` and `NZCV = 0x6` where the loop owes `dest = 0` and the
+  second teqs's flags (`0xA` on this vector). The fix writes the destination
+  first, then delegates the second teqs to the real dpi handler
+  (`instr(teqs)(cpu, &ic[3])`, the netbsd_memcpy fold's own pattern — by name,
+  because the combiner rewrote `ic[3]` to `teqs_beq_samepage`), and branches the
+  idle/exit decision on the `ARM_F_Z` the delegation set. The stale
+  `rZ = reg(ic[3].arg[0])` snapshot is DELETED, which makes a third defect
+  impossible by construction:
+  - the matcher pins `rZ != rY` but not `rZ != dest`, so a loop whose second
+    teqs aliases the load destination was accepted; the fold read the stale
+    destination and EXITED where the architecture idles. Writing the destination
+    before the delegation reads it (now `0`) idles correctly. This is an ORDERING
+    requirement on the handler, not a matcher guard — a pass-1 reproduction that
+    concluded the alias was harmless was wrong, an artifact of its own debugger
+    breakpoint (see the instrument note below); the defect is live under
+    read-ahead. The store of `rX` is safe ONLY because `rX` is provably 0 here
+    (a raw host word, no byte-swap); the comment says so, and any future
+    non-zero fast path must byte-swap first.
+  The exit path also bills the four instructions it stood in for
+  (`n_translated_instrs += 4`).
+
+- **#352 (`cpus/cpu_arm_instr.c`)** — a fold-fired marker
+  (`debugmsg_cpu(SUBSYS_CPU, "netbsd_idle", VERBOSITY_DEBUG, ...)`) on the EXIT
+  path ONLY. #351 makes that path architecturally transparent, so the marker is
+  gate 14's fold-fired detector there. The idle path is deliberately NOT marked:
+  an idling guest re-enters it ~2000×/s (`emul.c` sleeps 500 µs between wakes),
+  and it needs no marker because `wants_to_idle` — set nowhere else on ARM — is
+  already a fold signal. Not pre-gated with `ENOUGH_VERBOSITY()`, per the #278
+  convention, so `breakpoint subsystem cpu` can catch a fold in flight.
+
+- **#353 (`cpus/cpu_arm_instr.c`)** — the matcher never pinned the beq's TARGET,
+  so a FORWARD `beq` (any same-page target) matched and `X(netbsd_idle)` treated
+  a non-loop as an idle loop and HUNG the guest — measured on the committed
+  build, pc parked at the fold slot, the real branch target never reached, no
+  guest code able to change `rZ` or the memory word to break out. Higher
+  severity than the flag/register defects, and #351 alone does NOT fix it. The
+  matcher now requires `ic[0].arg[0] == (size_t)(&ic[-4])` — `b_samepage__eq`
+  carries its taken target in `arg[0]`, so the loop-back beq targets the `ldr`
+  at `ic[-4]`. Verified: the genuine backward-beq loop still folds and idles; a
+  forward beq now reaches its target.
+
+**Instrument correction (the reason two of these were invisible before).** Every
+combiner witness in `arm_flags_probe.py` drives the guest with a debugger
+`breakpoint`, and translation read-ahead is gated on
+`cpu->machine->breakpoints.n == 0` — so a breakpoint turns read-ahead OFF and
+the fold is only ever installed by the two-pass EXECUTE path, where the real
+`ldr` pre-writes the very register the alias defect depends on. Real guests set
+no breakpoint and take the read-ahead path, where the fold installs before the
+`ldr` runs. The probe's comment asserting "a single forward run cannot work
+either, however it is driven" was a false law; it is corrected. The new
+`arm_idle_probe.py` runs every row with NO breakpoint (read-ahead ON) and `-J`
+as the architectural neutralizer — the only way defects (c) and (d) can be
+witnessed. Gate 14 grows by 9 rows (now 195 checks); swept against the pre-fix
+HEAD (`704036e`) the idle probe scores **2/9, failing exactly the seven DISC
+rows** (exit dest 0x77, exit flags 0x6, idle dest 0x77, idle flags 0x8, `alias
+exits` 0x55, `target reached` deadbeef = hung, `fires` = no marker) and passing
+the two PINs; on the fixed build **9/9**. Build 0 warnings, all four trees
+byte-identical.
+
+Seven-seat panel, both passes (Codex xhigh, agy, Kimi, Ollama glm-5.2 /
+deepseek-v4-pro / minimax-m3, and Claude Opus 5 via the Agent tool). Pass 1
+reshaped the round three times: it refuted a hypothesized fourth defect
+(register-alias-as-matcher-gap → subsumed by #351's ordering), then a seat that
+compiled variants overturned the "alias is harmless" reproduction (read-ahead
+artifact) and found the forward-beq guest hang (#353) that no reading had
+surfaced. Pass 2 on the diff was unanimous GO after one fix: a seat found the
+new probe's PTY wait/recovery was not gate-robust (whole-buffer prompt match, no
+dump retry, a ^C-recovery failure could hang ~60 s), so `session()` was rebuilt
+to mark the buffer before every command, require a prompt past that mark,
+terminate on failed recovery, and retry the dump — the round-99 pattern the new
+probe had not inherited. Two seats independently reproduced the 2/9-vs-9/9 split
+by compiling both binaries.
+
+Still open on this handler, recorded in OUTSTANDING_BUGS: the idle path bills
+`N_DYNTRANS_IDLE_BREAK` and is not re-examined here; the ARMv6-media / non-idle
+combiner divergences (netbsd_memcpy) remain their own rounds; and the broader
+read-ahead-blind-spot audit of prior combiner rounds is filed separately.
+
+Harness: REGRESS_PASS, 15/15.
+
 ## Ninety-ninth round (#348, #349, #350) — the folds learned their exit flags, and the detector the fix would blind was rebuilt in the same change
 
 Both cache-clean folds stand in for a loop whose final instruction is a

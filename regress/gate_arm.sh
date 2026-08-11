@@ -364,4 +364,47 @@ for v in "T LSL #0 keeps C1" "T LSL #0 keeps C0" "T ASR #12 flags reg"          
     check "  shift: $v rd" "$n" 1
 done
 
+# ---- #351/#352/#353: netbsd_idle, via the READ-AHEAD install path -----------
+# A SEPARATE probe (arm_idle_probe.py), because every row here runs with NO
+# breakpoint so translation read-ahead is ON -- the install path a real guest
+# takes, and the one arm_flags_probe.py's breakpoint driver structurally cannot
+# reach (cpu_dyntrans.c:1939 gates read-ahead on breakpoints.n == 0). The
+# register-alias defect (c) and the forward-beq hang (d) are invisible under a
+# breakpoint, so they could only be witnessed here.
+#
+# Swept against a binary built from the pre-fix HEAD (704036e): 2 of 9, failing
+# exactly the seven DISC rows -- exit dest 0x77, exit flags 0x6, idle dest 0x77,
+# idle flags 0x8, `alias exits` 0x55 (fold took the wrong exit), `target
+# reached` deadbeef (the forward-beq HUNG the guest), and `fires` (no marker) --
+# and passing the two PINs. On the fixed build: 9/9.
+IDLELOG=$LOGDIR/gate_arm_idle.log
+python3 arm_idle_probe.py "$PMAX" "$STUB" > "$IDLELOG" 2>&1 || true
+
+if ! grep -q "IDLE_RESULT=" "$IDLELOG"; then
+    note "idle probe produced no result line; last lines follow"
+    tail -5 "$IDLELOG" | sed 's/^/       /'
+    gate_skip "idle probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$IDLELOG" | sed 's/^/       /'
+
+ictrl=$(grep -o "IDLE_CONTROL=[A-Z]*" "$IDLELOG" | tail -1 | cut -d= -f2)
+check "idle control proves the probe measures" "${ictrl:-missing}" "OK"
+
+ires=$(grep -o "IDLE_RESULT=[0-9]*/[0-9]*" "$IDLELOG" | tail -1 | cut -d= -f2)
+igot=${ires%/*}; iwant=${ires#*/}
+check "idle rows run"     "$iwant" 9
+check "idle rows correct" "$igot"  "$iwant"
+
+# Named rows, one contract each. The two PINs pass on both builds by design:
+# `quiet` asserts marker absence at default verbosity (boot-log hygiene), and
+# `alias -J ref` pins that the alias program's architectural answer really is
+# idle (so the DISC above attributes its 0x55 to the fold, not the program).
+for v in "A idle exit dest" "A idle exit flags" "A idle path dest" \
+         "A idle path flags" "A idle alias exits" "A idle target reached" \
+         "A idle fires" "A idle quiet" "A idle alias -J ref"; do
+    n=$(count "$IDLELOG" "^$v  .*ok$")
+    check "  idle row: $v" "$n" 1
+done
+
 gate_end

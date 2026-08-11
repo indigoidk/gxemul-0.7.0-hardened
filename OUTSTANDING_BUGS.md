@@ -1787,3 +1787,33 @@ corruption without a clear host-OOB path.
 > the read logs and continues — and it compared a dump string against
 > "deadbeef" unswapped, reading its own sentinel's parity as a measurement.
 > Both are the file's recorded trap classes, re-encountered and re-recorded.
+
+> ## 2026-08-10 — #351/#352/#353 resolve netbsd_idle; a fourth defect and an instrument blind spot found on the way
+> The `netbsd_idle` entries in the 2026-08-03 combiner sweep are **resolved**. The fold
+> wrote neither the load destination (#351) nor the flags (#351, by delegating the second
+> `teqs` and branching on its `ARM_F_Z`); a loop whose second `teqs` aliased the load
+> destination exited where the architecture idles (subsumed by #351's write-dest-before-read
+> ordering, NOT a matcher guard); and a **FORWARD `beq` matched the loop and HUNG the guest**
+> (#353 pins `ic[0].arg[0] == &ic[-4]`). Gate 14 grew 9 rows via a new `arm_idle_probe.py`;
+> pre-fix HEAD scores 2/9, fixed 9/9; seven-seat panel, both passes, unanimous GO.
+>
+> **The alias defect was nearly filed as "harmless."** A first reproduction concluded it
+> could not diverge — an artifact of its own debugger breakpoint, which turns translation
+> read-ahead OFF (`cpu_dyntrans.c:1939` gates read-ahead on `breakpoints.n == 0`) and so
+> forced a two-pass install whose real `ldr` pre-wrote the aliased register. A review seat
+> that COMPILED variants found it live under read-ahead, and found the forward-`beq` hang no
+> reading had surfaced. See task #12 below.
+>
+> **Still open / recorded, deliberately:**
+> - **The read-ahead install-path audit (task #12).** Every gate-14 combiner row before this
+>   round used a breakpoint, so none exercised the read-ahead path real guests take. The new
+>   idle probe runs read-ahead-ON; the flag probe's false "a single forward run cannot work,
+>   however driven" law is corrected. But #340/#342/#345/#346/#347/#348/#350's rows were all
+>   breakpoint-driven — their FIXES are install-path-independent and stand, but their COVERAGE
+>   of the read-ahead path is absent, and a register-aliasing defect in any of them would have
+>   been masked exactly as netbsd_idle's was. Worth a sweep.
+> - **`A idle alias exits`'s want is the dest prefill** (0xdeadbeef = "the exit store never
+>   ran"), so its anti-vacuity rests on the IDLE_CONTROL bail and the `alias -J ref` PIN, not
+>   on a self-evidently-non-seed value. Kept together on the record.
+> - **`netbsd_memcpy`** (publishes only r0/r1, leaves r3/r4/ip/lr stale) remains the open
+>   combiner divergence, next in the queue.
