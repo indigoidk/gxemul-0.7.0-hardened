@@ -407,4 +407,56 @@ for v in "A idle exit dest" "A idle exit flags" "A idle path dest" \
     check "  idle row: $v" "$n" 1
 done
 
+# ---- #354: netbsd_memcpy, via the READ-AHEAD install path -------------------
+# The memcpy fold did memcpy(dst,src,32) + advanced r0/r1 but never wrote
+# r3/r4/ip/lr, which the architecture leaves = the last 16 bytes loaded (the
+# final iteration's second ldmia). Same SEPARATE-probe / read-ahead-ON reason
+# as the idle rows. Owed words are full-width and distinct per register so a
+# byteswap or wrong index is self-evident.
+#
+# Swept against a binary built from the committed HEAD (pre-#354): 4 of 12,
+# failing exactly the eight DISC rows (r3/r4/ip/lr = seeds 0x33/0x44/0xcc/0xee
+# on both the 1-iteration and 2-iteration loops) and passing the four r0/r1
+# PINs (the advance was always correct). On the fixed build: 12/12.
+MEMLOG=$LOGDIR/gate_arm_memcpy.log
+python3 arm_memcpy_probe.py "$PMAX" "$STUB" > "$MEMLOG" 2>&1 || true
+
+if ! grep -q "MEMCPY_RESULT=" "$MEMLOG"; then
+    note "memcpy probe produced no result line; last lines follow"
+    tail -5 "$MEMLOG" | sed 's/^/       /'
+    gate_skip "memcpy probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$MEMLOG" | sed 's/^/       /'
+
+# The control proves the harness runs end-to-end (program assembled, guest
+# executed, dump parsed, byteswap convention right) against the GENUINE
+# instruction path under -J. It does NOT prove the measured sessions went
+# through the FOLD: post-#354 the fold and the genuine path agree by
+# construction, so nothing here would notice if a future change broke the
+# combiner registration -- the rows would keep passing via the real
+# instructions and the coverage would silently vanish. Only a #349/#352-style
+# fold-fired marker closes that; it is recorded in OUTSTANDING_BUGS, and the
+# historical pre-#354 sweep (4/12, the eight DISC rows red) is what establishes
+# that these rows discriminate at all.
+mctrl=$(grep -o "MEMCPY_CONTROL=[A-Z]*" "$MEMLOG" | tail -1 | cut -d= -f2)
+check "memcpy control: harness measures (not fold-fired)" "${mctrl:-missing}" "OK"
+
+mres=$(grep -o "MEMCPY_RESULT=[0-9]*/[0-9]*" "$MEMLOG" | tail -1 | cut -d= -f2)
+mgot=${mres%/*}; mwant=${mres#*/}
+check "memcpy rows run"     "$mwant" 12
+check "memcpy rows correct" "$mgot"  "$mwant"
+
+# The four r0/r1 PINs pass on both builds -- they guard against a fix that
+# regresses the advance while writing the registers (Codex's clobber concern:
+# r0/r1/r2 are outside the {r3,r4,ip,lr} reglist, so the exact-iword matcher
+# already forbids aliasing; these pins make that guarantee visible).
+for v in "A memcpy 1it r3" "A memcpy 1it r4" "A memcpy 1it ip" \
+         "A memcpy 1it lr" "A memcpy 1it r0" "A memcpy 1it r1" \
+         "A memcpy 2it r3" "A memcpy 2it r4" "A memcpy 2it ip" \
+         "A memcpy 2it lr" "A memcpy 2it r0" "A memcpy 2it r1"; do
+    n=$(count "$MEMLOG" "^$v  .*ok$")
+    check "  memcpy row: $v" "$n" 1
+done
+
 gate_end

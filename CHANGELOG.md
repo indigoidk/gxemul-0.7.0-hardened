@@ -4192,6 +4192,100 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-first round (#354) — the memcpy fold moved the bytes but never published the registers
+
+`X(netbsd_memcpy)` folds the NetBSD/arm memcpy loop —
+`ldmia r1!,{r3,r4,ip,lr} / stmia r0!,{...}` twice, then `subs r2,r2,#0x20 / bge`
+— into one `memcpy(dst, src, 32)` per iteration. It advanced r0/r1 and delegated
+the `subs` (so the flags were already right), but it never wrote **r3, r4, ip,
+lr**, which the architecture leaves holding the LAST 16 bytes loaded: the final
+iteration's second `ldmia`. A guest that read any of those four after a memcpy
+got its pre-loop value.
+
+Reproduced first on the committed build, read-ahead ON (no debugger breakpoint,
+so `COMBINE(netbsd_memcpy)` installs the fold ahead of execution — the path a
+real guest takes), one iteration, source words seeded per 16-byte block:
+
+```
+r3 = 0x00000033   owed 0x000000b0     r0 = 0x00009220  owed 0x00009220  ok
+r4 = 0x00000044   owed 0x000000b1     r1 = 0x00009120  owed 0x00009120  ok
+ip = 0x000000cc   owed 0x000000b2
+lr = 0x000000ee   owed 0x000000b3
+```
+
+- **#354 (`cpus/cpu_arm_instr.c`)** — the fold now publishes the four registers
+  from `page_1 + (addr_r1 & 0xffc) + 16` on every iteration, so the final
+  iteration's second block persists exactly as the architecture leaves it. Three
+  details, each settled by the panel rather than by preference:
+  - **Direct host read, NO byteswap.** This matches the handler the fold
+    emulates (`multi_0x08b15018`, `tmp_arm_multi.c:595-599`: `addr &= 0xffc;
+    r[k] = p[k]`, machine-generated with no `cpu->byte_order` test) and — the
+    decisive argument — the fold's OWN page-cross / NULL-page bail-outs, which
+    delegate to that same handler. A byteswap would have made an on-page memcpy
+    leave different registers than an identical memcpy that straddles a page:
+    a page-alignment-dependent register result, manufactured by the fix. So
+    fold == handler == bail-out for every guest byte order. Big-endian ARM is
+    not a configured machine here and the fold is `#ifdef HOST_LITTLE_ENDIAN`,
+    so a BE-guest row would only re-document a pre-existing upstream LDM
+    limitation; none was added.
+  - **Published BEFORE the memcpy — and not because that makes overlap safe.**
+    A review seat measured that claim false and it was corrected before commit:
+    the real second `ldmia` runs AFTER the first `stmia`, so on a *forward*
+    overlap it loads post-store bytes, which no placement around a single
+    `memcpy` can reproduce (`dst = src+16` diverges either way). The actual
+    reason is determinism — publish-after would read bytes a UB-on-overlap
+    `memcpy` had just written, making the registers depend on the host
+    `memcpy`'s direction and vector width, while publish-before is identical
+    in every case the fold is correct in (no overlap) and deterministic
+    otherwise.
+  - **Word-aligned base (`& 0xffc`)**, as the real handler masks — and this is
+    load-bearing, not cosmetic, which the same seat established by
+    measurement. ARM's LDM *ignores* `addr[1:0]` rather than requiring
+    alignment, and the matcher matches code SHAPE not register values, so a
+    guest with `r1 & 3 != 0` does fold: at `r1 = SRC+1` the masked read
+    publishes what the genuine sequence publishes, while `& 0xfff` would have
+    published byte-rotated words — the very bytes the fold's own unmasked
+    `memcpy` writes. `(r1 & 0xfff) + 16 <= 0xff0` rules out a carry past bit
+    11, so the publish address is bit-for-bit the real second `ldmia`'s.
+    Bound: the entry guard gives `(r1 & 0xfff) <= 0xfe0` and masking only
+    lowers it, so `+16..+31` stays inside the page.
+
+**Gate 14 grows 12 rows** via a new `arm_memcpy_probe.py`, read-ahead ON with
+`-J` (combining off) as the architectural control. The owed words are
+full-width and distinct per register (`0x1a2a3a4X`), so an accidental byteswap
+or a transposed register index is self-evident rather than hidden behind
+single-byte values; the four r0/r1 rows are PINs that guard the advance the fold
+always got right. Two loops: one iteration (owed the second `ldmia`'s block) and
+**two** iterations (owed the final iteration's second block). Note `r2 = 0x40`
+is *three* iterations, not two — `bge` continues on N==V regardless of Z, so the
+`subs` reaching zero still branches; `r2 = 0x20` is the clean two-iteration
+value.
+
+Swept against a binary built from the committed HEAD (pre-#354): **4 of 12,
+failing exactly the eight DISC rows** — r3/r4/ip/lr stale at their seeds on both
+loops — and passing the four r0/r1 PINs. On the fixed build **12/12**; whole
+gate 14 PASS at 210 checks. Build 0 warnings, all four trees byte-identical.
+
+Seven-seat panel, both passes (Codex xhigh, agy, Kimi, Ollama
+glm-5.2 / deepseek-v4-pro / minimax-m3, and Claude Opus 5 via the Agent tool).
+The byte-order question was resolved BEFORE the panel by a read-only subagent
+that traced the generated handler, then confirmed by every seat. Pass 1 was
+unanimous approve-with-two-changes, both adopted: publish before the memcpy
+(overlap ordering) and mask the base to a word (handler identity). One seat
+implemented and measured the fix independently during review, and corrected the
+brief's iteration arithmetic.
+
+**Recorded, not fixed (pre-existing, out of scope for #354):** the fold's
+`memcpy` uses exact byte offsets where both the real LDM and STM mask `0xffc`,
+so an unaligned base diverges — an unaligned bail-out would be the honest fix;
+and the fold reads its source through `host_store` where the handler uses
+`host_load` (harmless: a read-only source page is NULL there and bails out to
+the handler). Also worth an audit sweep: several ARM folds publish fewer
+registers than the sequence they replace — `netbsd_cacheclean`'s known-stale r2
+is the same species as this defect.
+
+Harness: REGRESS_PASS, 15/15.
+
 ## One-hundredth round (#351, #352, #353) — the idle-loop fold skipped its writes, aliased a register, and hung the guest on a forward branch
 
 `X(netbsd_idle)` folds the five-instruction NetBSD/arm idle loop
