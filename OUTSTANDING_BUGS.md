@@ -1879,3 +1879,72 @@ corruption without a clear host-OOB path.
 >   `src/cpus/Makefile.skel` from `generate_arm_multi.c` + `cpu_arm_multi.txt`); it does
 >   not exist in a fresh checkout and its line numbers move whenever an opcode is added.
 >   Cite `generate_arm_multi.c` instead — #354's comment was corrected to do so.
+
+> ## 2026-08-10 — ARM combiner publication audit: every fold, what it fails to publish
+> The generalisation of #351 (netbsd_idle's unwritten load destination and flags) and #354
+> (netbsd_memcpy's unwritten r3/r4/ip/lr): a read-only audit of EVERY ARM combiner, asking
+> per fold which guest-visible effects the replaced sequence produces that the handler does
+> not. Method notes that matter, because a previous attempt at this generalisation was
+> retracted: an exact-iword pin implicitly pins its registers (the encoding rides on the
+> matched function's identity — do NOT count literal `r[...]` tokens in a matcher), and
+> `instr(X)` names are the UNCONDITIONAL table entries, so no matcher can catch a
+> conditional compare, and `rd == PC || rn == PC` selects a different table entirely.
+> Structural non-finding worth recording: every matcher rewrites only the ENTRY slot's `f`,
+> so a guest branch into the middle of a folded window executes the original handlers — no
+> fold diverges that way.
+>
+> **CLEAN, needing no work** (so a future round need not re-derive it): `netbsd_scanc`,
+> `netbsd_idle` (post-#351/#353), `xchg` (post-#342), `netbsd_memcpy`'s registers and flags
+> (post-#354), `netbsd_cacheclean2`'s registers and flags (post-#347/#348), and all
+> thirteen `cmps_*` plus four `teqs_*`/`tsts_*` folds (post-#340) — each verified against
+> the dpi templates for N/Z/C/V, including the `b == 0` and sign-restricted V
+> specialisations and the shifter-carry restoration.
+>
+> **RESOLVED: `netbsd_scanc`'s fifth register use** (the open question above) is a READ of
+> an already-pinned register, not an unguarded write. It is `r[ARM_IP]` at
+> `cpu_arm_instr.c:2301`, standing in for `tst r3,ip`, and the arming condition
+> `iword == 0xe113000c` (`:4014`) fixes BOTH operands by encoding. Its flags are exact for
+> a non-obvious reason worth keeping: N is cleared and never set, correct only because r3
+> holds a freshly loaded BYTE so `r3 & ip <= 255`; and C is left alone, correct because the
+> register form of TST takes no shifter-carry path (`cpu_arm_instr_dpi.c:123` excludes the
+> register variants).
+>
+> **FOUR live divergences found, none previously recorded, each now a queued task:**
+> - **`netbsd_cacheclean` publishes an unmasked r0.** `:2166` does `r[0] += r1` where the
+>   genuine post-index writeback stores the MASKED address (`cpu_arm_instr_loadstore.c:292`
+>   masks, `:342` writes back the masked value). r0 = 0x9101, r1 = 0x40: the loop leaves
+>   0x9140, the fold 0x9141. The matcher cannot see r0's value, so any shape-matching loop
+>   with an unaligned base folds. Note the tension: the handler's masking is itself a GXemul
+>   simplification (real ARM writes back Rn+offset unmasked), so which side to correct needs
+>   a primary source. Distinct from this handler's already-recorded stale r2 / elided loads.
+> - **`netbsd_copyin` / `netbsd_copyout` diverge twice**, and unlike the memcpy byte-order
+>   case these disagree with the very instructions they replace: `:2495` writes `r0 + 24`
+>   and `:2530` writes `r1 + 24` where the six genuine `ldrt`/`strt` write back the masked
+>   address; and `:2489-2494` / `:2524-2529` move words by direct `uint32_t` access where
+>   the single-register template swaps per `cpu->byte_order`
+>   (`cpu_arm_instr_loadstore.c:293-302`), so a BE guest on an LE host moves byte-reversed
+>   words. The folds' own data offsets ARE masked (`:2478`/`:2513`), which is what confines
+>   the first defect to the base's two low bits.
+> - **`strlen` has an unbounded, non-interruptible loop.** `:2425-2442` exits only on a NUL
+>   byte or a NULL host page — no iteration cap, no `N_SAFE_DYNTRANS_LIMIT` check — so a
+>   guest pointing it at a long non-NUL run stays inside one C call for millions of
+>   iterations with no device ticks and no interrupt delivery, then adds an unclamped
+>   `n_loops * 3` (`:2444`). That is the #169 class #350 already clamped for both
+>   cache-clean folds. Latent alongside it: the matcher (`:3161-3166`) never requires
+>   `arg[0] != arg[2]`, so `ldrb r3,[r3,#1]!` makes the genuine `cmps` compare an ADDRESS
+>   while the fold compares the byte (#342 class, on an encoding ARM calls UNPREDICTABLE).
+> - **`netbsd_memset` is DEAD and its divergences are latent** — re-verified: `0xcaffffed`
+>   is condition 12, so the arming at `:4266-4268` is overwritten by the `beq_etc` catch-all
+>   at `:4327-4330` before the check ever runs. Were it revived, its generic `subs` pin
+>   collides with the hardcoded `r[ARM_IP]` read taken before the subtraction, and its
+>   `memset` uses the unmasked offset where the sixteen real stores mask. Correctness-neutral
+>   side effect of the same arming order, worth knowing: for the exact iwords `0x1afffffc`
+>   and `0x8afffffa`, `strlen`/`cacheclean2` STEAL `beq_etc`, so a compare immediately before
+>   one of those two branch words is never folded into it — a lost optimisation, not a
+>   divergence.
+>
+> Ranked by live x guest-visible severity: cacheclean-r0 (wrong register value on every
+> folded call), memcpy's data path (wrong BYTES for unaligned/overlapping copies — higher
+> per-occurrence, lower reachability, complete fix already specified above),
+> copyin/copyout (two one-line fixes), strlen (host liveness), cacheclean2's elided MCRs
+> (unobservable until cache ops are modelled), memset (dead).
