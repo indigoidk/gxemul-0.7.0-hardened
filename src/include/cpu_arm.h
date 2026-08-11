@@ -250,6 +250,26 @@ struct arm_cpu {
 
 	/*  ARM specific: */
 	uint32_t			is_userpage[N_VPH32_ENTRIES/32];
+
+	/*
+	 *  #367: how many times a load/store entered A__NAME__general, i.e.
+	 *  took the SLOW path. Test instrumentation, and it exists because
+	 *  which path a probe row takes was a claim in a comment and was wrong
+	 *  three times running -- #364 found the put w / put b warming note
+	 *  inverted, #364's own draft mis-attributed a writeback site to an
+	 *  offset form that compiles no writeback at all, and #365 found the
+	 *  sites reached but undiscriminated. Each was rediscovered with a
+	 *  throwaway marker, a scratch build and a fresh investigation.
+	 *
+	 *  Read it with the debugger's `tlbdump`. A plain counter rather than a
+	 *  debugmsg: markers there are disqualified on PERTURBATION, not cost --
+	 *  debugmsg's verbosity gate is bypassed under single-step, its
+	 *  subsystem-breakpoint test runs BEFORE that gate, and the #278
+	 *  convention forbids pre-gating one. The increment sits in a function
+	 *  that already pays a full memory_rw slow path per entry, so it is
+	 *  structurally unmeasurable there; the FAST path is untouched.
+	 */
+	uint64_t			ls_general;
 };
 
 

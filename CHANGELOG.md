@@ -4192,6 +4192,100 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twelfth round (#367) — path attribution stops being a comment and becomes a checked quantity
+
+Which of the two load/store paths a probe row takes was asserted in prose, and it was
+**wrong three rounds running**: `#364` found the `put w` / `put b` warming note **inverted**
+and recorded as a *verified mechanism*, with two shipped rounds leaning on it; `#364`'s own
+draft then attributed a writeback site to an offset form that compiles no writeback
+statement at all; and `#365` found the general writeback sites reached but
+**undiscriminated**. Each was rediscovered with a throwaway marker, a scratch build and a
+fresh investigation, because the instrument never survived the round.
+
+- **#367 (`include/cpu_arm.h`, `cpus/cpu_arm.c`, `cpus/cpu_arm_instr_loadstore.c`,
+  `regress/arm_writeback_probe.py`, `regress/gate_arm.sh`)** — the emulator counts entries
+  into `A__NAME__general`, `tlbdump` reads the counter out, and the gate asserts a derived
+  expected count for every one of the 22 rows.
+
+**The observation window was one empty function away.** `arm_cpu_tlbdump` was an **empty
+stub**, while `tlbdump` is already the debugger's designated verb for exactly this state and
+prints it on other architectures. So the state that decides fast-versus-slow — page presence
+in `host_load`/`host_store` and the `is_userpage` bit — was unobservable from outside a build
+one edit from exposing it. Filling an upstream-shaped stub is the smallest possible touch,
+and it is **pull-only**: nothing prints unless a session asks, so the rows elsewhere in this
+battery that assert an **absence** of output are untouched, and a free-running guest cannot
+be flooded.
+
+**There is no external answer, and the reason is structural rather than practical.** The
+fast and general paths are *required* to produce identical architectural effects —
+observational equivalence is the correctness condition for a dyntrans cache, and `#357` and
+`#362` deliberately made them agree — so any guest-visible signal that distinguished them
+would itself be a bug. Corollaries, recorded so the question is not reopened: instruction
+counts are path-invariant (`A__NAME__general` is *called from* `A__NAME`, not dispatched, so
+the `mp` NCYCLES register, `cpu->ninstrs` and the statistics facility all bill identically);
+the translation arrays are private struct members; pty wall-clock timing is hopeless, as this
+session's own load-induced `gate_ab` failure showed; and `dump`/`put b` can read or write
+memory without warming but cannot *see* warmth. One further route is worse than useless —
+`#250` write-watchpoints **coerce what they observe**, since `update_translation_table`
+deliberately holds a watched page's `host_store` NULL to force stores down the slow path.
+
+**A counter, not a marker — and the disqualifier is PERTURBATION, not cost.** `debugmsg`'s
+quiet path is genuinely cheap (a varargs call and a few integer tests; the formatting sits
+after the gate). It is disqualified three times over regardless: the verbosity gate is
+**bypassed under single-step**, so a permanent template marker would print on every stepped
+general-path access forever; the subsystem-breakpoint test runs **before** that gate, so
+`breakpoint subsystem cpu` would enter the debugger once per access machine-wide; and this
+fork's own `#278` convention **forbids** pre-gating a marker, so a conforming one is loud by
+design and a pre-gated one violates the convention. A plain `++` has none of these modes, and
+sits in a function that already pays a full `memory_rw` slow path per entry, so it is
+structurally unmeasurable there. The fast path is untouched. Two other transports were
+rejected with reasons worth keeping: a **guest-visible counter word**'s increment is itself a
+memory access that can **recurse into the general path it counts**, and pollutes the
+translation state under test; a new `mp`-style register is **self-counting**, since the
+readout load from a device page is itself always a general-path access.
+
+**The expected count is a RULE, not a table**, because a wrong expectation becomes a new
+false red:
+
+> count = (page × needed-permission) upgrade events + T-form first touches per page
+
+The general path's own `memory_rw` **self-warms** — it inserts, setting `host_load`
+unconditionally, `host_store` iff the access was a write, and the `is_userpage` bit iff it
+was a user access. So every `put w`-seeded row is **0**, including all ten iterations of the
+×10 rows and both passes of the re-seeded row; the four `put b`-seeded cold rows are **1**;
+and the `ldrt` row is **1 even though its page is warm**, because the `is_userpage` test
+precedes the page test and a kernel `put w` insert never sets that bit. Non-obvious cases
+stated for whoever adds rows: a **cold ×10 row is 1**, not 0 and not 10, since iteration 1
+warms via the general path's own insert — it is 10 only where insertion is *blocked* (a device
+page, a partial page, MMU-on unmapped); and a cold row doing a load then a store on one page
+is **2**, because the load's insert leaves `host_store` NULL.
+
+**MEASURED: 22/22 values and 22/22 paths.** Every derived expectation held on the first run —
+seventeen zeros, five ones. The seventeen zeros are exactly the claim `#364` found inverted,
+now permanently asserted rather than believed. Verified separately, one variable at a time, on
+one binary: the same load from a `put w` page reads 0 and from a `put b` page reads 1, and the
+T form reads 1 from a *warm* page — confirming it is general-path by construction and immune
+to any future seeding change.
+
+**The `" path"` suffix on the new rows' names is load-bearing, not cosmetic.** The gate greps
+named rows as `^<name>  .*ok$` — two spaces — so printing a path row under the bare name would
+have given every one of the 22 existing named checks a count of 2 where it expects 1, turning
+the whole section red. Verified afterwards that all 22 value names and all 22 path names match
+**exactly once each**, with the longest path name at 31 characters, inside the `%-32s` column.
+
+**A harness bug of mine, reported because test-first caught it and the shape recurs.** The
+first verification script reported the cold page as 0, which looks exactly like the instrument
+failing. It was quoting: a multi-line seed passed through command substitution was mangled, so
+the `put b` writes never landed. A rerun with a plain multi-line variable gave 1, and a
+register readback confirmed the load had executed. Same class as the clobbered-pristine-binary
+incident earlier in this session — when a measurement contradicts a derivation, suspect the
+harness before the emulator.
+
+Propagated byte-identically to `est/` and both in-place build trees; `src/cpus/*.o` removed
+before rebuilding, since these `.c` files are `#include`d and the dependency rules miss them.
+The build's own check caught that the first rebuild had compiled **stale** sources, which is
+exactly the trap that no-VPATH tree exists to create.
+
 ## One-hundred-and-eleventh round (#365) — "unreached" was wrong; the sites were reached and nothing DISCRIMINATED the fix
 
 `#364` recorded that both general-path writeback sites were **uncovered** and that

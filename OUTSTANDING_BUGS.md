@@ -2951,7 +2951,12 @@ corruption without a clear host-OOB path.
 >    `mov r0,#0x10000`, so `r0 & 3 == 0` always. Needs a two-pass `ldrt` arm with `r0` re-seeded
 >    to `0x10001`, which is a self-contradiction test on ONE binary: pass 1 declines and runs the
 >    template (rotated), pass 2 folds (unrotated) unless the fold rotates too.
-> 6. **Permanent path telemetry, the item that stops this recurring.** `#364`'s finding needed a
+> 6. ✅ **DONE in `#367`** — **Permanent path telemetry, the item that stops this recurring.** Delivered as a
+>    `uint64_t` counter incremented at the top of `A__NAME__general`, read out through the
+>    previously-EMPTY `arm_cpu_tlbdump` stub (pull-only, so nothing prints unless asked and no
+>    absence-asserting row is disturbed), with a derived expected count asserted for all 22 rows —
+>    **measured 22/22 on the first run**, seventeen zeros and five ones. The seventeen zeros are
+>    exactly the claim `#364` found inverted, now asserted rather than believed. `#364`'s finding needed a
 >    temporary `debugmsg_cpu` marker, a scratch build and a subagent — none of which survives the
 >    round, so the next false attribution costs the same again. Emit a per-row general-path entry
 >    count and assert in the gate that every WARM row takes **zero** general fallbacks and every

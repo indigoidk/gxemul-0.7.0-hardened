@@ -640,6 +640,45 @@ wgot=${wres%/*}; wwant=${wres#*/}
 check "writeback rows run"     "$wwant" 22
 check "writeback rows correct" "$wgot"  "$wwant"
 
+# #367: PATH ATTRIBUTION IS NOW A CHECKED QUANTITY, not a comment.
+#
+# Which of the two load/store paths a row takes was asserted in prose and was
+# wrong three rounds running: #364 found the `put w` / `put b` warming note
+# INVERTED and recorded as verified, with two shipped rounds leaning on it;
+# #364's own draft then mis-attributed a writeback site to an offset form that
+# compiles no writeback statement at all; and #365 found the general writeback
+# sites reached but UNDISCRIMINATED, since `ldrb` has datalen 1 so the alignment
+# mask is the identity for it. Each was rediscovered with a throwaway marker and
+# a scratch build, three times, because the instrument did not survive the round.
+#
+# The emulator now counts entries into A__NAME__general (cpu_arm.h ls_general),
+# and `tlbdump` -- previously an EMPTY stub on ARM while it printed on other
+# architectures -- reads it out. PULL-ONLY: nothing prints unless a session asks,
+# so the rows elsewhere in this gate that assert an ABSENCE of output are
+# untouched, and a free-running guest cannot be flooded.
+#
+# The aggregate carries the seventeen ZEROS -- exactly the claim #364 found
+# inverted -- so a warming assumption that silently changes turns this red even
+# though no named row below covers those rows individually.
+lsres=$(grep -o "LSGEN_RESULT=[0-9]*/[0-9]*" "$WBLOG" | tail -1 | cut -d= -f2)
+lsgot=${lsres%/*}; lswant=${lsres#*/}
+check "writeback path rows run"     "${lswant:-missing}" 22
+check "writeback path rows correct" "${lsgot:-missing}"  "$lswant"
+
+# The five rows that must ENTER the general path, named individually so one
+# reverting cannot hide behind the total. The derivation, which matters more than
+# the numbers: the general path's own memory_rw SELF-WARMS, so a cold row is 1
+# and not N. The `ldrt` row is 1 despite its page being WARM, because the
+# is_userpage test precedes the page test and a kernel `put w` insert never sets
+# that bit -- which is what makes a T form general-path BY CONSTRUCTION and
+# immune to any future seeding change.
+for v in "A wb rot word cold plus1" "A wb rot word cold plus2" \
+         "A wb rot word cold plus3" "A wb word ldrt post4 unal" \
+         "A wb word cold pre4 unal"; do
+    n=$(count "$WBLOG" "^$v path  .*ok\$")
+    check "  writeback path: $v" "$n" 1
+done
+
 # #358: fold-fired markers (netbsd_copyin / netbsd_copyout)
 # -------------------------------------------------------------------------
 # Both folds replace six user-mode transfers with one C function whose

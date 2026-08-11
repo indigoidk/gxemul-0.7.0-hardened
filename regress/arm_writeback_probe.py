@@ -591,6 +591,28 @@ def run(prog, regs):
         m = re.search(r"(?m)^0x([0-9a-fA-F]+)\s*$", buf[mark:])
         if m:
             out[rn] = int(m.group(1), 16)
+
+    #  #367: how many times this row entered A__NAME__general, read from the
+    #  emulator's own counter via `tlbdump`. This is the round that stopped path
+    #  attribution being a claim in a comment: which path a row takes was wrong
+    #  three times running (#364's inverted seeding note, #364's draft
+    #  mis-attributing a writeback site to an offset form that compiles none, and
+    #  #365 finding the sites reached but undiscriminated), and each was
+    #  rediscovered with a throwaway marker and a scratch build.
+    #
+    #  PULL, not push: `tlbdump` prints only when asked, so it cannot disturb the
+    #  rows elsewhere in this battery that assert an ABSENCE of output, and it
+    #  cannot flood a free-running guest. It is read AFTER the registers so a
+    #  parse failure here cannot cost a register value.
+    #
+    #  A missing line is DEAD, never 0 -- 0 is the expected value for every warm
+    #  row, so defaulting to it would make a lost read indistinguishable from a
+    #  correct answer, which is the defect class this battery keeps finding.
+    mark = len(buf)
+    send("tlbdump")
+    m = re.search(r"arm\.ls_general\s*=\s*(\d+)", buf[mark:])
+    out["_lsgen"] = int(m.group(1)) if m else None
+
     try:
         os.write(fd, b"quit\n")
         time.sleep(0.2)
@@ -612,8 +634,40 @@ print("=== #19: ARM load/store base writeback (pre/post-index) ===")
 print("    buggy = masked base + offset ; arch = unmasked (A5.2.5 / A5.2.8)")
 print("    DISC-M pins the A5.3.6 pseudocode model, not a silicon mandate")
 
+#  #367: the expected number of A__NAME__general entries per row. Derived from
+#  the template's control flow, NOT guessed, because a wrong expectation here
+#  becomes a new false red:
+#
+#      count = (page x needed-permission) upgrade events + T-form first touches
+#
+#  The general path's own memory_rw SELF-WARMS -- it inserts, setting host_load
+#  unconditionally, host_store iff the access was a write, and the is_userpage
+#  bit iff it was a user access. So:
+#    * every `put w`-seeded row is 0, including all ten iterations of the x10
+#      rows and both passes of the re-seeded row: the page is warm before the
+#      guest runs a single instruction;
+#    * the four `put b`-seeded cold rows are 1 -- one entry, which then warms;
+#    * the `ldrt` T-form row is 1 even though its page IS warm, because the
+#      is_userpage test precedes the page test and a kernel `put w` insert never
+#      sets that bit. Its own general call then SETS it, which is why a SECOND
+#      ldrt on that page would be fast.
+#  Non-obvious cases for whoever adds rows: a COLD x10 row is 1, not 0 and not
+#  10 -- iteration 1 warms via the general path's own insert. It is 10 only where
+#  insertion is BLOCKED (a device page, a partial page, MMU-on unmapped). A cold
+#  row doing a load then a store on one page is 2, because the load's insert
+#  leaves host_store NULL.
+LSGEN = {
+    "A wb rot word cold plus1": 1,
+    "A wb rot word cold plus2": 1,
+    "A wb rot word cold plus3": 1,
+    "A wb word cold pre4 unal": 1,
+    "A wb word ldrt post4 unal": 1,
+}
+
 ngot = 0
 control = "FAIL"
+lsgot = 0
+lswant = 0
 for name, kind, prog, reg, buggy, arch in ROWS:
     got = run(prog, [reg])
     if got is None or reg not in got:
@@ -627,5 +681,27 @@ for name, kind, prog, reg, buggy, arch in ROWS:
     print("%-32s  %-6s %s=0x%08x want 0x%08x (buggy 0x%08x)  %s"
           % (name, kind, reg, v, arch, buggy, "ok" if ok else "FAIL"))
 
+    #  #367: the path assertion, printed as its own row so the gate can name it.
+    #
+    #  The name gets a " path" SUFFIX, and that is load-bearing rather than
+    #  cosmetic. The gate greps named rows as "^<name>  .*ok$" -- TWO spaces --
+    #  so a path row printed under the bare name would give every one of the 22
+    #  existing named checks a count of 2 where it expects 1, turning the whole
+    #  section red. The suffix puts a single space after the base name, which
+    #  that pattern cannot match, so the value checks stay exact and the path
+    #  rows get their own names. The longest becomes 31 chars
+    #  ("A wb regofs post1 unal x10 path"), still inside the %-32s column, and
+    #  the format's two literal spaces keep the gate pattern satisfiable
+    #  regardless of padding.
+    lswant += 1
+    exp = LSGEN.get(name, 0)
+    seen = got.get("_lsgen")
+    lsok = (seen is not None and seen == exp)
+    lsgot += lsok
+    print("%-32s  %-6s general=%s want %d  %s"
+          % (name + " path", "PATH", "unread" if seen is None else seen, exp,
+             "ok" if lsok else "FAIL"))
+
 print("WRITEBACK_CONTROL=%s" % control)
 print("WRITEBACK_RESULT=%d/%d" % (ngot, len(ROWS)))
+print("LSGEN_RESULT=%d/%d" % (lsgot, lswant))

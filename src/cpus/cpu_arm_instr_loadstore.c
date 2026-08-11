@@ -65,6 +65,14 @@ static struct arm_instr_call nothing_call = { arm_instr_nothing, {0,0,0} };
  */
 void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 {
+	/*
+	 *  #367: count ENTRIES, before any work, so an exception-driven early
+	 *  exit still counts -- an exception is still a general-path event.
+	 *  Read via `tlbdump`; see the declaration in cpu_arm.h for why this is
+	 *  a counter and not a debugmsg.
+	 */
+	cpu->cd.arm.ls_general ++;				/*  #367  */
+
 #if !defined(A__P) && defined(A__W)
 	const int memory_rw_flags = CACHE_DATA | MEMORY_USER_ACCESS;
 #else

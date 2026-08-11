@@ -744,6 +744,48 @@ void arm_exception(struct cpu *cpu, int exception_nr)
  */
 void arm_cpu_tlbdump(struct cpu *cpu, int rawflag)
 {
+	/*
+	 *  #367: this was an empty stub, so the state that decides fast-vs-slow
+	 *  load/store -- page presence in host_load/host_store and the
+	 *  is_userpage bit -- was unobservable from outside, while `tlbdump`
+	 *  already prints it on other architectures. Filling it is the smallest
+	 *  touch that makes path attribution measurable instead of asserted; the
+	 *  harness needed it because three rounds running got that attribution
+	 *  wrong (see cpu_arm.h's ls_general).
+	 *
+	 *  PULL-ONLY, deliberately: this prints nothing unless a session asks
+	 *  for it, so it cannot disturb the rows that assert an ABSENCE of
+	 *  output, and it cannot flood a free-running guest. A pushed marker
+	 *  could do both.
+	 */
+	debug("cpu%i: arm.ls_general = %" PRIu64 "\n", cpu->cpu_id,
+	    cpu->cd.arm.ls_general);
+
+	if (rawflag) {
+		size_t i, shown = 0;
+
+		for (i = 0; i < N_VPH32_ENTRIES; i++) {
+			if (cpu->cd.arm.host_load[i] == NULL &&
+			    cpu->cd.arm.host_store[i] == NULL)
+				continue;
+
+			/*  Bound the output: a guest that has touched most of
+			    its address space would otherwise print a million
+			    lines into a pty the harness reads.  */
+			if (shown ++ >= 64) {
+				debug("cpu%i:   ... (more entries not shown)\n",
+				    cpu->cpu_id);
+				break;
+			}
+
+			debug("cpu%i:   vaddr 0x%08x load=%s store=%s user=%i\n",
+			    cpu->cpu_id, (int) (i << 12),
+			    cpu->cd.arm.host_load[i] != NULL? "y" : "n",
+			    cpu->cd.arm.host_store[i] != NULL? "y" : "n",
+			    (cpu->cd.arm.is_userpage[i >> 5] &
+			      ((uint32_t)1 << (i & 31)))? 1 : 0);
+		}
+	}
 }
 
 
