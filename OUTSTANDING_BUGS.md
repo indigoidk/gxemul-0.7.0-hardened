@@ -2693,3 +2693,78 @@ corruption without a clear host-OOB path.
 > strictly stronger than the existing "never two gate/harness invocations at once" — the
 > contending work here was not another gate, it was ordinary read-only research, and it still
 > produced a false FAIL in a 45-minute battery.
+
+> ## 2026-08-11 — `#363` residuals: what the gate-14 flake round deliberately left, and two seat claims that were refuted
+>
+> `#363` closed the flake mechanism — the prompt predicate now matches the full `GXemul>`
+> rather than a bare `>` at all thirteen sites. What follows is what it did **not** do, and why
+> each is separate rather than forgotten.
+>
+> **The stale-prompt false positive is still live in `arm_flags_probe.py`, and it is
+> DETERMINISTIC, not a race.** Two whole-buffer waits remain (the one inside `session()` and the
+> one inside `run_cc_nonmult`; `wait_past_mark` anchors only the post-`continue` wait). After any
+> completed command `buf` **ends** with the prompt — so the next `send()` writes its bytes, calls
+> `wait()`, immediately sees the *previous* command's prompt at the end of the buffer, and returns
+> without waiting for the new command's output at all. Every `send()` after the first therefore
+> returns instantly, and roughly 1500 commands stream into the 4 KB console FIFO instead of being
+> round-tripped. **The probe's correctness currently relies on FIFO depth**, an implementation
+> detail of `console.c`. Round 100 anchored the other five probes and never back-ported it here.
+> Held out of `#363` for a reason that matters: the claim above is deterministic and therefore
+> cheap to measure (count `send()` calls returning with zero new bytes in their own slice —
+> prediction: nearly all of them), and it has **not been measured yet**. This project ships fixes
+> whose effect was measured and documents the rest. Expect the fix to make gate 14 **slower** by
+> tens of seconds, and record that, or the next reader will misread it as a regression.
+>
+> **`send()`'s return value is discarded at essentially every call site**, and in
+> `arm_flags_probe.py`'s `session()` it is not even returned. A prompt that never arrived is
+> indistinguishable from one that did. `if not send(cmd): return None` is smaller and more
+> general than the retry loops below, and is the root defect underneath them.
+>
+> **Six reads still have no retry** while every other `dump` read retries three times: the three
+> `reg` reads (`run_cc_nonmult`'s r0/r1, idle's r2/cpsr, strlen's r3), the two `print` loops
+> (writeback's per-row register, fold-marker's ten registers), and the one the first scoping
+> missed — fold-marker's **single-shot `dump`** of the copyout destination, whose truncation fails
+> `A fold copyout fires` through `mem_ok=False`. The retry predicate must be **consumer-keyed**
+> ("r2 present in this slice", "r0 AND r1 present"), mirroring the dump loops' `len(flat) >=
+> nwords`; a retry keyed on "prompt seen" re-fires on the same truncation and changes nothing.
+> Safe because re-sending a read to a stopped guest is idempotent, and because the absence rows
+> are **verbosity**-gated rather than timing-gated — `A idle quiet` counts a `VERBOSITY_DEBUG`
+> marker in a session run at default verbosity, where it cannot be emitted at all, so no amount
+> of extra waiting can make it appear. Rule for the code: **never put `continue` or `step` inside
+> a retry loop.** One wart in the *existing* loops while there: if attempt 1's output straggles
+> into attempt 2's window, `buf[mark:]` holds tail-of-1 plus all-of-2 and `flat[0]` is the wrong
+> word — parse from the **last** dump block in the segment.
+>
+> **The durable instrument, and the highest-value item left.** Have each probe count reads that
+> had to be retried or came back unparseable, print `<probe>_READS_RETRIED=n`, and add
+> `check "<probe> reads not retried" "$n" 0`. That makes the *next* flake self-identifying rather
+> than costing a panel and a 45-minute battery, and converts the whole class from "intermittent
+> red row of unknown origin" into a named, counted quantity.
+>
+> **Two small hardening items.** `gate_arm.sh` should `unset CLICOLOR`: `use_colorized_output()`
+> requires `isatty(0) && isatty(1) && enable_colorized_output`, and **both** isatty checks DO pass
+> under `pty.fork()` — so the probes' `-A` flag is load-bearing rather than decorative, and is
+> currently the only thing keeping colour escapes out of the parsed output. And the enumeration
+> "no site legitimately depends on a non-prompt `>`" is the load-bearing safety argument for
+> `#363` and should live in a probe comment, not only in a review.
+>
+> **Two seat claims checked and REFUTED, recorded so nobody re-derives them.** One seat held that
+> `#362`'s fast-path rotation has no `#if defined(A__L)` guard and would therefore rotate byte and
+> halfword loads. It does not: the rotation sits in the `#else` of **both** `#ifdef A__B` and
+> `#ifdef A__H`, so the guard is structural through the nested `#ifdef` chain rather than a fresh
+> `#if` on the hunk — the seat read the diff without its enclosing context. Another held that
+> `#362`'s guard might have caught `SWP`. It cannot: `SWP` is not instantiated through that
+> template at all but is a standalone `X(swp)` handler, and the template's own header says so
+> ("ldrex/strex/swp/scanc have no base writeback"). Both were confident and specific, which is
+> exactly why the standing rule is to check rather than count votes.
+>
+> **One premise of `#363`'s own brief was false**, and the correction is the more useful half:
+> the brief claimed `< no symbol >` is the ONLY `>`-terminated line in these sessions, eliminating
+> the disassembly because its `<%s>` sites are symbol-guarded. They are not — the `else` branch
+> prints `<0x%08x` with no guard and `debug(">")` closes it unconditionally, and both
+> `DISASSEMBLE` call sites pass `running = 1`. So any breakpoint landing on an `ldr`/`str` emits a
+> second `>`-terminated line; it is unarmed only because every breakpoint in these probes happens
+> to target a `NOP`, which is a property of the probes and enforced by nothing. `dump`'s ASCII
+> column is a third source, unarmed only by today's seed constants. This collapsed the brief's
+> "only `reg` can do this" narrowing — and is simultaneously the strongest argument for the fix,
+> which the brief had failed to make.

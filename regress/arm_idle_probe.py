@@ -152,12 +152,46 @@ def session(prog, extra, verbose=False, grace=2.0):
     #  Wait for a prompt AFTER a given buffer mark -- never the whole buffer.
     #  A stale prompt already in `buf` must not satisfy a later wait (Codex's
     #  round-100 finding); the round-99 nonmult witness learned the same.
+    #
+    #  #363: the suffix is the FULL prompt, not a bare '>'. This was the
+    #  gate-14 flake. `debug()` reaches va_debug(), which emits ONE printf per
+    #  CHARACTER, so on a pty (_IOLBF, and these probes exec the binary
+    #  directly rather than through lib.sh's stdbuf) the only flush boundary is
+    #  the newline: the ARM register dump arrives as FIVE separate write(2)s.
+    #  Its FIRST line ends in '>' unconditionally -- cpu_arm.c prints
+    #  "  <%s>" with " no symbol " as the fallback, and testarm never calls
+    #  machine_add_devices_as_symbols(). So a reader waking between line 1 and
+    #  line 2 saw a bare '>' and returned with the registers still unread,
+    #  while cpsr -- which sits ON line 1 -- was already present. That is why
+    #  `A idle path dest` failed alone while `A idle path flags` passed, giving
+    #  the 2-red-check signature the flake always showed.
+    #
+    #  Measured, not argued. Replacing os.read(fd, 65536) with os.read(fd, 1)
+    #  evaluates the predicate at every byte boundary and makes the truncation
+    #  CERTAIN rather than a scheduler race: with a bare '>' the probe scored
+    #  8/9 with `A idle path dest` reading None, and with the full prompt it
+    #  scored 9/9 -- the same run confirming the mechanism and validating the
+    #  fix. The committed 64 KB reader scores 9/9 either way, which is exactly
+    #  why the defect was intermittent rather than visible.
+    #
+    #  Matching the full prompt is also SUFFICIENT rather than merely safer:
+    #  the prompt is written AFTER all five lines and a pty preserves order, so
+    #  seeing the real prompt guarantees the whole dump has arrived. And it
+    #  pre-emptively disarms two latent '>' sources that are unarmed only by
+    #  current probe choices -- cpu_arm.c's load/store disassembly emits an
+    #  UNGUARDED "<0x%08x...>" whenever a breakpoint or trace hits one (both
+    #  DISASSEMBLE call sites pass running=1; today every breakpoint here lands
+    #  on a NOP), and `dump`'s ASCII column ends a line with its last byte,
+    #  which would end in '>' for a seed byte of 0x3e.
+    #
+    #  Do NOT "fix" the missing stdbuf -o0: per-character printf under -o0
+    #  would make every byte its own write and multiply these boundaries.
     def wait_from(mark, timeout=30):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if len(buf) > mark and buf[mark:].rstrip().endswith(">"):
+            if len(buf) > mark and buf[mark:].rstrip().endswith("GXemul>"):
                 return True
         return False
 
@@ -188,7 +222,7 @@ def session(prog, extra, verbose=False, grace=2.0):
     t = time.time()
     while time.time() - t < grace:
         rd(0.3)
-    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith(">")):
+    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith("GXemul>")):
         os.write(fd, b"\x03")
         if not wait_from(cmark, 15):
             kill()

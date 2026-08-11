@@ -140,7 +140,7 @@ def session(prog, extra, nwords, grace, load_str, read_r3=False):
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if len(buf) > mark and buf[mark:].rstrip().endswith(">"):
+            if len(buf) > mark and buf[mark:].rstrip().endswith("GXemul>"):
                 return True
         return False
 
@@ -171,7 +171,7 @@ def session(prog, extra, nwords, grace, load_str, read_r3=False):
     t = time.time()
     while time.time() - t < grace:
         rd(0.3)
-    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith(">")):
+    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith("GXemul>")):
         os.write(fd, b"\x03")
         if not wait_from(cmark, 20):
             try:
@@ -286,8 +286,17 @@ row("A strlen alias exits", "DISC",
 #  0x9103 and this reads "no". Post-fix the guest walks on for millions of
 #  bytes. It doubles as the forward-progress guard -- a program that never
 #  armed, or never ran at all, cannot masquerade as "still looping".
+#  #363: an UNREAD register must not read as "no". The old form folded
+#  `_ar3 is None` into the same "no" the pre-fix defect produces, so a lost
+#  readback was byte-identical to a real regression -- the one row in this
+#  suite that failed to a value indistinguishable from the defect it guards,
+#  and the inverse of the corrosive-red-row problem: it would have taught the
+#  reader to BELIEVE a phantom regression. Verdict-preserving on every
+#  successful read, since `_ar3 is not None` was already required for "moved".
+#  Same shape as `A fold scanc notbl`, whose comment states the principle.
 row("A strlen alias moved", "DISC",
-    ("moved" if (_ar3 is not None and _ar3 > ALIAS_STR + 16) else "no"),
+    ("unread" if _ar3 is None else
+     ("moved" if _ar3 > ALIAS_STR + 16 else "no")),
     "moved")
 
 print("STRLEN_RESULT=%d/%d" % (sum(1 for r in rows if r), len(rows)))

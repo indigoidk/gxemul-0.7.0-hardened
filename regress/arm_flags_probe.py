@@ -141,7 +141,7 @@ def session(cmds, nwords):
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            if buf.rstrip().endswith("GXemul>"):
                 return True
         return False
 
@@ -642,7 +642,7 @@ def run_cc_nonmult():
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            if buf.rstrip().endswith("GXemul>"):
                 return True
         return False
 
@@ -680,7 +680,7 @@ def run_cc_nonmult():
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if len(buf) > mark0 and buf[mark0:].rstrip().endswith(">"):
+            if len(buf) > mark0 and buf[mark0:].rstrip().endswith("GXemul>"):
                 return True
         return False
 

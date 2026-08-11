@@ -4192,6 +4192,88 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-ninth round (#363) — the gate-14 flake: the prompt predicate matched the guest's own output
+
+Gate 14 failed **exactly 2 of its checks in 1 run out of 4**, with no code change
+between runs. That is corrosive out of proportion to its size: seven batteries
+underwrite six shipped corrections, and an unexplained red row teaches the reader
+to dismiss red rows.
+
+- **#363 (`regress/arm_{flags,idle,memcpy,strlen,writeback,fold_marker}_probe.py`)** —
+  the prompt-readiness predicate now matches the **full** prompt, `GXemul>`, instead of
+  a bare `>`, at all **thirteen** sites. Plus one row that failed to a misleading value.
+
+**The mechanism, and it is not where a reader would look.** `debug()` reaches
+`va_debug()`, which emits **one `printf` per character**, so on a pty — `_IOLBF`, and
+these six probes `exec` the binary directly rather than through `lib.sh`'s `stdbuf` —
+the only flush boundary is the newline, and the ARM register dump arrives as **five
+separate `write(2)`s**. Its **first** line ends in `>` unconditionally: `cpu_arm.c`
+prints `  <%s>` with `" no symbol "` as the fallback, and `testarm` never calls
+`machine_add_devices_as_symbols()`. A reader waking between line 1 and line 2 therefore
+saw a bare `>`, decided the debugger was ready, and returned with the registers still
+unread — while `cpsr`, which sits **on** line 1, was already there. That asymmetry is
+the whole signature: `A idle path dest` failed alone while its sibling
+`A idle path flags` passed, and in `gate_arm.sh` one red **named** row costs exactly
+two checks (the aggregate `rows correct`, plus that row's own check).
+
+**MEASURED, and the measurement is deterministic rather than statistical.** Replacing
+`os.read(fd, 65536)` with `os.read(fd, 1)` evaluates the predicate at every byte
+boundary, which converts the scheduler race into a certainty. On one idle host, in one
+experiment: the committed probe scored **9/9**; the 1-byte reader with a bare `>`
+scored **8/9** with `A idle path dest` reading `None`; the 1-byte reader with the full
+prompt scored **9/9** again. The same run confirms the mechanism and validates the fix.
+The 64 KB reader scores 9/9 either way, which is precisely why this was intermittent
+instead of visible.
+
+**The first test plan was wrong and was thrown away.** It proposed measuring the
+truncation *rate* idle versus under load. That could not have refuted anything: at a
+few per cent base rate, "30 post-fix runs show zero" is the expected outcome under both
+hypotheses — the round-65 lesson that a sweep proves nothing about a tail it cannot
+reach. Two seats also pointed out the load prediction may be **backwards**, since on an
+idle multi-core host the woken reader can be dispatched on another CPU within
+microseconds and catch a partial buffer, whereas load delays the reader as much as the
+writer. Three more proposed `strace` on the `write(2)` granularity, which measures
+mechanism where a rate measures only frequency; the 1-byte reader is that idea taken
+one step further, and it doubles as the fix's validation.
+
+**Matching the full prompt is SUFFICIENT, not merely safer** — worth stating because the
+brief argued only the weaker claim. The prompt is written **after** all five lines and a
+pty preserves order, so seeing the real prompt *guarantees* the complete dump has
+arrived. It also disarms two latent `>` sources that are unarmed today only by the
+probes' own choices, not by anything in the emulator: `cpu_arm.c`'s load/store
+disassembly emits an **unguarded** `<0x%08x…>` whenever a breakpoint or trace hits one
+(both `DISASSEMBLE` call sites pass `running = 1`; today every breakpoint in these
+probes happens to land on a `NOP`), and `dump`'s ASCII column ends a line with its last
+byte, which would end in `>` for a seed byte of `0x3e`. **A premise of the design brief
+was false here** and is corrected in the source comment: the brief claimed
+`< no symbol >` was the *only* `>`-terminated line and eliminated the disassembly as
+symbol-guarded. It is not guarded. That collapsed the brief's diagnostic narrowing — but
+it strengthens the fix, which now pre-empts both traps.
+
+**A row must fail to a token DISTINGUISHABLE from the defect it guards.**
+`A strlen alias moved` computed `"moved" if (r3 is not None and r3 > base + 16) else
+"no"`, so a **lost read** produced `"no"` — byte-identical to the pre-`#355` signature
+of a fold that exited after three bytes. Every other truncation-sensitive row in the
+suite fails to `None`, `dead` or `DEAD`; this one alone failed to a value that reads as
+a real regression, which is the corrosive-red-row problem inverted — it would have
+taught the reader to *believe* a phantom. It now reads `"unread"`, and the change is
+verdict-preserving on every successful read because `r3 is not None` was already
+required for `"moved"`. `A fold scanc notbl` already had this shape; its comment states
+the principle.
+
+**Deliberately not in this round**, because each is a different defect with a different
+justification and one of them has no measurement yet: `arm_flags_probe.py`'s two
+remaining whole-buffer waits still match a **stale** prompt, so every `send()` after the
+first returns instantly and ~1500 commands stream into the 4 KB console FIFO — a
+deterministic defect, not a race, and one whose reproduction has not been run;
+`send()`'s return value is discarded almost everywhere, so a prompt that never arrived
+is indistinguishable from one that did; six reads still have no retry (three `reg`, two
+`print`, and the fold-marker copyout `dump`); and a `READS_RETRIED` counter with a gate
+check at zero would make the next such flake self-identifying instead of costing a panel
+and a battery. Recorded in `OUTSTANDING_BUGS.md`. **Do not** "fix" the missing
+`stdbuf -o0`: per-character `printf` under `-o0` makes every byte its own write and
+multiplies exactly the boundaries this round removed.
+
 ## One-hundred-and-eighth round (#362) — unaligned word loads returned the aligned word, unrotated
 
 The second of the two divergences `#357`'s research turned up, and the one it

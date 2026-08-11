@@ -90,7 +90,7 @@ def session(r2seed, srcwords, extra):
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if len(buf) > mark and buf[mark:].rstrip().endswith(">"):
+            if len(buf) > mark and buf[mark:].rstrip().endswith("GXemul>"):
                 return True
         return False
 
@@ -127,7 +127,7 @@ def session(r2seed, srcwords, extra):
     t = time.time()
     while time.time() - t < 2.0:
         rd(0.3)
-    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith(">")):
+    if not (len(buf) > cmark and buf[cmark:].rstrip().endswith("GXemul>")):
         os.write(fd, b"\x03")
         if not wait_from(cmark, 15):
             try:
