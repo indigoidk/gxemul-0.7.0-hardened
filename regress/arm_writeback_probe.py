@@ -117,6 +117,11 @@ CMP_R3_10    = 0xE353000A   # cmp  r3,#10
 SPIN         = 0xEAFFFFFE   # b .
 
 UNAL = [MOV_R0_10000, ADD_R0_1]     # base 0x10001
+ADD_R0_2     = 0xE2800002           # add  r0,r0,#2
+ADD_R0_3     = 0xE2800003           # add  r0,r0,#3
+LDR_OFF0     = 0xE5901000           # ldr  r1,[r0]   pre-index, offset 0, no wb
+UNAL2 = [MOV_R0_10000, ADD_R0_2]    # base 0x10002
+UNAL3 = [MOV_R0_10000, ADD_R0_3]    # base 0x10003
 ALIGN = [MOV_R0_10000]              # base 0x10000
 ZERO = [MOV_R0_0]                   # base 0
 
@@ -192,6 +197,26 @@ ROWS = [
      once(ALIGN, [LDR_PRE4]), "r0", 0x10000, 0x10000),
     ("A wb wrap from zero", "PIN",
      once(ZERO, [LDR_M4]), "r0", 0xFFFFFFFC, 0xFFFFFFFC),
+
+    #  #362: an unaligned word LOAD returns the aligned word ROTATED RIGHT by
+    #  8 * addr[1:0] (DDI 0100I A2.8, A4.1.23). This template masked and never
+    #  rotated. The word at 0x10000 is 0x11223344, so the three offsets owe
+    #  0x44112233, 0x33441122 and 0x22334411, and the "buggy" column is the
+    #  unrotated word -- which is what the pre-fix build returned in all three.
+    #
+    #  These rows IDENTIFY the model rather than merely failing an expectation:
+    #  mask-only, rotate, and the ARMv6 U == 1 true-unaligned access are pairwise
+    #  distinct at every nonzero offset, so a wrong answer says WHICH model is
+    #  implemented. Measured MASK-only on all three pre-fix, ROTATE post-fix.
+    #
+    #  Offset 0 is deliberately absent: rotation by zero is the identity, so such
+    #  a row could never fail, and the aligned case is already pinned elsewhere.
+    ("A wb rot word unal plus1", "DISC",
+     once(UNAL, [LDR_OFF0]), "r1", 0x11223344, 0x44112233),
+    ("A wb rot word unal plus2", "DISC",
+     once(UNAL2, [LDR_OFF0]), "r1", 0x11223344, 0x33441122),
+    ("A wb rot word unal plus3", "DISC",
+     once(UNAL3, [LDR_OFF0]), "r1", 0x11223344, 0x22334411),
 ]
 
 

@@ -4192,6 +4192,85 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-eighth round (#362) — unaligned word loads returned the aligned word, unrotated
+
+The second of the two divergences `#357`'s research turned up, and the one it
+deferred. An unaligned word **load** must return the aligned word **rotated right
+by `8 * addr[1:0]`** — DDI 0100I A2.8 (p. A2-38) states it, and A4.1.23 LDR's
+pseudocode is `data = Memory[address,4] Rotate_Right (8 * address[1:0])` when the
+CP15 U bit is 0. This template masked and never rotated.
+
+- **#362 (`cpus/cpu_arm_instr_loadstore.c`, `cpus/cpu_arm_instr.c`)** — capture
+  `8 * (addr & 3)` before each mask and rotate after each word arm's byte
+  assembly, in both the general and the fast path, plus the matching rotation in
+  `netbsd_copyin`.
+
+  **Measured, and the measurement identifies the model rather than merely failing
+  an expectation.** With the word at the base seeded to `0x11223344`, the three
+  candidate behaviours — mask-only, rotate, and the ARMv6 `U == 1` true unaligned
+  access — are **pairwise distinct at every nonzero offset**, so a wrong answer
+  says *which* model is implemented. Pre-fix read `0x11223344` at all four
+  offsets, i.e. mask-only; post-fix reads `0x11223344 / 0x44112233 / 0x33441122 /
+  0x22334411`, i.e. rotate.
+
+  **LOADS ONLY.** A4.1.99 says STR ignores the low two address bits, so stores
+  were already right — confirmed by measurement, a store at each offset leaves the
+  aligned word modified and its neighbour untouched. A4.1.28 makes an unaligned
+  halfword load's data UNPREDICTABLE, so masking without rotating stays permitted
+  there. LDRD is excluded automatically, because `A__LDRD` does not define `A__L`.
+
+**The fast path was not the hard part, and the note that said otherwise was
+wrong.** `#357`'s record warned that a slow-path-only rotation would be silently
+undone and that the fast path was materially more work — the reason this stayed
+queued as a large round. It is the same three lines: that path already masks and
+then assembles the bytes of the *aligned* word, so rotating the assembled value is
+exactly equivalent to re-indexing them. Eleven lines, four sites, no warnings.
+
+**`#357`'s `wb_addr` could not be reused**, which is worth recording because it is
+the obvious shortcut: it exists only under `!defined(A__P) || defined(A__W)`, and
+the plain offset-addressing word load has neither, so the rotation needs its own
+guarded capture. It is taken *after* `page` and `is_userpage` are indexed from the
+unmasked address, so `#357`'s bounds argument is untouched.
+
+**`netbsd_copyin` had to change in the same commit**, and the measured form of why
+is sharper than a fold-versus-`-J` differential. On **one binary** with an
+unaligned base, pass 1 declines, runs through the template and yields the rotated
+word, while pass 2 folds and yields the unrotated one — the emulator contradicting
+itself inside a single guest loop, the `#342`/`#355` class. Its matcher inspects
+only the preceding slots' handler, base register and offset, never the base's
+*value*, so an unaligned base does fold. Every other fold is clear for a stated
+reason: `copyout` does stores; `memcpy` and the block-transfer handlers are the
+LDM/STM class this template cannot reach; `idle` reads one word but writes it only
+when provably zero, and rotating zero is zero; `cacheclean` performs no read at
+all; `scanc` and `strlen` are byte loads.
+
+**Applied unconditionally rather than gated on architecture version, by a
+dominance argument rather than a preference.** Rotation is correct for ARMv3/v4/v5
+and for v6+ with `U == 0`; where v6+ with `U == 1` wants a true unaligned access,
+masking and rotating are wrong *equally*. So this is never worse than what it
+replaces, in any combination. Gating would also be unsound here: there is no
+architecture level in the CPU type table — its own header says "TODO: Include ARM
+level" and "Most of these are bogus" — deriving one from the ID register
+misclassifies one part as ARMv6, wrong in the direction that changes behaviour,
+and no `ARM_CONTROL_U` is defined anywhere. Recorded divergence: v6+ with
+`U == 1`. Population supports it too: 7 of the 9 ARM machines select a v4/v5 CPU,
+and the two in the divergence zone have neither a guest image nor a rig.
+
+**Nothing depended on the old behaviour.** All six committed ARM probes read
+251/251 on both builds, and the round adds three rows because the existing ones are
+**all aligned-base** and blind to this: without them the change would ship a
+measurable self-disagreement behind a green gate. Offset 0 deliberately gets no
+row — rotation by zero is the identity, so it could never fail. Swept pre-fix:
+14 of 17, red at exactly the three new rows.
+
+**Harness: gate 14 PASS at 261 checks** (was 258); full battery 14 of 15. The single
+red gate was **not** this round's — gate 7 `gate_ab` returned HEAD `1:1:0` on luna88k
+under host load, and `1:1:1` matching prebatch when re-run alone on a quiet machine.
+Recorded separately in `OUTSTANDING_BUGS.md` as a harness defect in its own right: a
+wall-clock oracle whose timeout is indistinguishable from a real capability regression,
+since both produce `1:1:0`. This round could not have caused it regardless — it touches
+only the two ARM files, and m88k compiles no ARM code.
+
 ## One-hundred-and-seventh round (#361) — the last two folds with markers but no rows, and a negative arm that was vacuous alone
 
 `#358` gave five folds fire markers; `#360` gave two of them rows. This round

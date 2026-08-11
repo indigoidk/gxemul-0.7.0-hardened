@@ -163,6 +163,39 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 	const uint32_t wb_addr = addr;
 #endif
 
+	/*
+	 *  #362: an unaligned word LOAD returns the aligned word ROTATED RIGHT by
+	 *  8 * addr[1:0]. DDI 0100I A2.8 (p. A2-38) states it, and A4.1.23 LDR's
+	 *  pseudocode is `data = Memory[address,4] Rotate_Right (8 * address[1:0])`
+	 *  when the CP15 U bit is 0. This template masked and never rotated, so it
+	 *  returned the aligned word unchanged -- measured wrong in 3 of the 4
+	 *  low-bit cases.
+	 *
+	 *  LOADS ONLY: A4.1.99 says STR ignores the low two address bits, so stores
+	 *  are already right, and A4.1.28 makes an unaligned halfword load's data
+	 *  UNPREDICTABLE, so masking without rotating is permitted there. LDRD is
+	 *  excluded automatically because A__LDRD does not define A__L.
+	 *
+	 *  Applied UNCONDITIONALLY rather than gated on architecture version, and
+	 *  the reason is dominance rather than convenience: rotation is correct for
+	 *  ARMv3/v4/v5 and for v6+ with U == 0, and where v6+ with U == 1 wants a
+	 *  true unaligned access, masking and rotating are wrong equally -- so this
+	 *  is never worse than what it replaces, in any combination. Gating would
+	 *  also be unsound here: there is no architecture level in the CPU type
+	 *  table (its own header says "TODO: Include ARM level" and "Most of these
+	 *  are bogus"), deriving one from cpu_id[19:16] misclassifies ARM7500FE as
+	 *  ARMv6 -- wrong in the direction that changes behaviour -- and no
+	 *  ARM_CONTROL_U is defined anywhere. Recorded divergence: v6+ with U == 1.
+	 *
+	 *  #357's `wb_addr` cannot be reused for this: it exists only under
+	 *  `!defined(A__P) || defined(A__W)`, and the plain offset-addressing word
+	 *  load has neither. Captured here, after the address is computed and
+	 *  before the mask.
+	 */
+#if defined(A__L) && !defined(A__B) && !defined(A__H) && !defined(A__LDRD)
+	const uint32_t rot_sh = 8 * (addr & 3);
+#endif
+
 	addr &= ~(datalen - 1);
 
 #if defined(A__L) || defined(A__LDRD)
@@ -195,6 +228,12 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 		cpu->byte_order == EMUL_LITTLE_ENDIAN
 		? data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24)
 		: data[3] + (data[2] << 8) + (data[1] << 16) + (data[0] << 24);
+	/*  #362: rotate right by 8 * addr[1:0]; see the capture above. Guarded on
+	    rot_sh so the aligned case emits no shift at all, and because a 32-bit
+	    value shifted left by 32 is undefined in C.  */
+	if (rot_sh)
+		reg(ic->arg[2]) = (reg(ic->arg[2]) >> rot_sh) |
+		    (reg(ic->arg[2]) << (32 - rot_sh));
 #else
 	// TODO: Double-check if this is correct
 	reg(ic->arg[2]) =
@@ -357,6 +396,15 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
 		    ? (page[addr & 0xfff] + (page[(addr & 0xfff) + 1] << 8))
 		    : ((page[addr & 0xfff] << 8) + page[(addr & 0xfff) + 1]));
 #else
+		/*  #362: captured before the mask, and AFTER `page` and
+		    `is_userpage` were indexed from the unmasked addr, so #357's
+		    bounds argument is untouched. This path already assembles the
+		    bytes of the ALIGNED word, so rotating the assembled value is
+		    exactly equivalent to re-indexing them -- which is why the fix
+		    here is the same three lines as the general path, and not the
+		    larger job an earlier round's notes predicted.  */
+		const uint32_t rot_sh = 8 * (addr & 3);
+
 		addr &= ~3;
 		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
 			reg(ic->arg[2]) = page[addr & 0xfff] +
@@ -368,6 +416,9 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
 			    (page[(addr & 0xfff) + 2] << 8) +
 			    (page[(addr & 0xfff) + 1] << 16) +
 			    (page[(addr & 0xfff) + 0] << 24);
+		if (rot_sh)					/*  #362  */
+			reg(ic->arg[2]) = (reg(ic->arg[2]) >> rot_sh) |
+			    (reg(ic->arg[2]) << (32 - rot_sh));
 #endif
 #endif
 #else

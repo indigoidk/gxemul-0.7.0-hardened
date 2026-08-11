@@ -547,8 +547,9 @@ done
 # four writeback sites -- :213/:216 general, :338/:342 fast -- and the fast
 # path only runs once the page is in the translation array, so a
 # single-execution row measures the GENERAL path and nothing else:
-#   :216 general post-index  rows post4/postneg4/halfword + iteration 1 of the
-#                            x10 rows
+#   :216 general post-index  iteration 1 of the x10 rows -- but see the
+#                            CORRECTION below: the one-shot rows do NOT reach
+#                            the general path
 #   :342 fast    post-index  iterations 2+ of the x10 rows
 #   :213 general pre-index   "pre4 unal gen"
 #   :338 fast    pre-index   "pre4 unal fast" ALONE -- two passes with the base
@@ -595,7 +596,7 @@ check "writeback control: guest ran and loaded" "${wctrl:-missing}" "OK"
 
 wres=$(grep -o "WRITEBACK_RESULT=[0-9]*/[0-9]*" "$WBLOG" | tail -1 | cut -d= -f2)
 wgot=${wres%/*}; wwant=${wres#*/}
-check "writeback rows run"     "$wwant" 14
+check "writeback rows run"     "$wwant" 17
 check "writeback rows correct" "$wgot"  "$wwant"
 
 # #358: fold-fired markers (netbsd_copyin / netbsd_copyout)
@@ -709,7 +710,9 @@ for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
          "A wb store post1 unal x10" "A wb regofs post1 unal x10" \
          "A wb halfword post1 unal" "A wb word post4 algn" \
          "A wb algn load data" "A wb byte post1 unal" \
-         "A wb word pre4 no wb" "A wb wrap from zero"; do
+         "A wb word pre4 no wb" "A wb wrap from zero" \
+         "A wb rot word unal plus1" "A wb rot word unal plus2" \
+         "A wb rot word unal plus3"; do
     n=$(count "$WBLOG" "^$v  .*ok$")
     check "  writeback row: $v" "$n" 1
 done

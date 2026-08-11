@@ -2021,6 +2021,49 @@ corruption without a clear host-OOB path.
 > handler is a divergence to explain, not automatically a defect to fix — the handler may
 > be the one that is wrong.
 
+> ## 2026-08-11 — #362: unaligned word loads returned the aligned word, unrotated
+> The second divergence #357's research found, now closed. An unaligned word LOAD must return
+> the aligned word ROTATED RIGHT by `8 * addr[1:0]` (DDI 0100I A2.8 p. A2-38, and A4.1.23's
+> pseudocode `data = Memory[address,4] Rotate_Right (8 * address[1:0])` when the CP15 U bit is
+> 0). The template masked and never rotated. Fixed in both paths plus `netbsd_copyin`.
+>
+> **The measurement identifies the model**, which is a better instrument than a pass/fail
+> expectation and worth reusing: mask-only, rotate, and the ARMv6 `U == 1` true unaligned
+> access are pairwise distinct at every nonzero offset, so a wrong answer says WHICH model is
+> implemented. Pre-fix read the unrotated word at all four offsets; post-fix reads
+> `0x11223344 / 0x44112233 / 0x33441122 / 0x22334411`.
+>
+> **TWO OF THIS FILE'S OWN CLAIMS WERE WRONG AND ARE CORRECTED.** (i) The #357 entry recorded
+> that the rotation "must land in BOTH paths in one change or the fast path silently undoes it"
+> and that the fast path was materially more work — that is why this sat queued as a large
+> round. It is the same three lines: the fast path already masks and then assembles the bytes
+> of the ALIGNED word, so rotating the assembled value is exactly equivalent to re-indexing
+> them. Eleven lines, four sites. The "both paths in one change" part stands; the "materially
+> more work" part was an overestimate that cost several rounds of deferral. (ii) #357's
+> `wb_addr` cannot be carried over: it exists only under `!defined(A__P) || defined(A__W)`, and
+> the plain offset-addressing word load has neither, so the rotation needs its own capture.
+>
+> **Version gating was rejected on a dominance argument, not a preference**, and the reasoning
+> should survive: rotation is correct for ARMv3/v4/v5 and for v6+ with `U == 0`, and where v6+
+> with `U == 1` wants a true unaligned access, masking and rotating are wrong EQUALLY — so
+> unconditional rotation is never worse than what it replaced, in any combination. Gating would
+> also be unsound: there is no architecture level in the CPU type table (its own header says
+> "TODO: Include ARM level" and "Most of these are bogus"), deriving one from the ID register
+> misclassifies one part as ARMv6 — wrong in the direction that changes behaviour — and no
+> `ARM_CONTROL_U` is defined anywhere. **Recorded divergence: ARMv6+ with `U == 1`**, where the
+> architecture wants a true unaligned access and this emulator now rotates. Unmeasured: whether
+> `U` is 0 at reset on the specific v6 parts the table names; the decision does not depend on
+> it, but a divergence note quoting a reset value would need a source.
+>
+> **Still open in this family, all recorded with measurements:** `swp` implements a THIRD model
+> (a true unaligned access whose store crossed the word boundary — measured), `ldrex` HALTS the
+> emulator on an unaligned address, and the LDM/STM class was left alone because this project
+> has not checked the manual's wording for it — treat "UNPREDICTABLE" there as unverified
+> rather than established. Also open and adjacent: the #357 path-coverage claim in
+> `arm_writeback_probe.py`'s docstring is false, because `put w` warms the mapping and the rows
+> it attributes to the general path take the fast one; the general load path may currently be
+> exercised by nothing, and the cheap fix is one `put b`-seeded row.
+
 > ## 2026-08-11 — #360: the `quiet` row asserted an absence, and an absence is what a dead fold produces
 > #358's `quiet` rows assert that no marker appears at default verbosity. That tests the
 > verbosity gate, not the fold. #360 replaces them with `warm`/`cold` pairs that make a
@@ -2502,3 +2545,151 @@ corruption without a clear host-OOB path.
 > losing: PowerPC's update forms (`lbzu` and friends) do `ra = ea`, so if `ea` is masked
 > before that assignment it is the same mistake in a sibling template — queued, with the
 > caveat that PPC's alignment rules are not ARM's and the template may not mask at all.
+
+> ## 2026-08-11 — the rest of the ARM alignment family, SETTLED from DDI 0100I: one real fix, one new defect, four non-defects
+>
+> `#362` fixed the unaligned word **load**. The research that produced it left four sibling
+> questions marked "unverified", and reading the primary source rather than reasoning outward
+> from `#362`'s answer settles all four — in three different directions, which is the point.
+> One expectation of mine was **wrong**, and the correction changes what the fix is allowed
+> to claim.
+>
+> **`swp` is a real defect with a MANDATED answer — a fix, not a `#355`-style record-and-leave.**
+> I had guessed this might land as UNPREDICTABLE. It does not. A4.1.108 (pp. A4-212/213) gives
+> the pseudocode as `temp = Memory[address,4] Rotate_Right (8 * address[1:0])` followed by
+> `Memory[address,4] = Rm` when the CP15 U bit is 0, and its Alignment note says outright that
+> "the alignment rules are the same as for an LDR on the read and an STR on the write". So the
+> two halves obey **different** rules, which is exactly why this instruction looked like a third
+> model: the load half rotates like LDR (A4.1.23), the store half ignores `addr[1:0]` like STR
+> (A4.1.99, which says "This is different from the LDR behavior"). Table A2-9 (p. A2-39) files
+> SWP in **both** the WLoad and WStore rows, and Table A2-10 (p. A2-40) gives WLoad "Loaded data
+> rotated right by 8 * Addr[1:0] bits" against WStore "Operation unaffected by Addr[1:0]" at
+> U=0/A=0. The measured before-state already satisfies test-first: `swp r1,r2,[0x10001]` with
+> `r2 = 0xff` returned `r1 = 0x88112233` where the rotate answer is `0x44112233`, and the store
+> crossed the word boundary, leaving `[0x10000] = 0x0000ff44` and `[0x10004] = 0x55667700`
+> where `[0x10004]` must be **untouched**. The fix cannot regress aligned guests: rotate and
+> mask are both the identity when `addr[1:0] == 0`.
+>
+> **`swpb` is a NON-DEFECT.** A4.1.109 (pp. A4-214/215) carries no Alignment note at all, and
+> Tables A2-9/A2-10 file SWPB in the Byte row, Normal for every combination. Closed with a
+> citation, which is worth as much as a fix and costs a paragraph.
+>
+> **`ldrex`/`strex`: MY EXPECTATION WAS WRONG, and the honest framing changes with it.** I had
+> assumed the alignment fault was mandatory regardless of the A bit. A4.1.27 (p. A4-53) and
+> A4.1.103 (p. A4-203) both say: "If CP15 register 1(A,U) != (0,0) and Rd<1:0> != 0b00, an
+> alignment exception will be taken. There is no support for unaligned Load Exclusive. If
+> Rd<1:0> != 0b00 and (A,U) = (0,0), the result is UNPREDICTABLE." Table A2-10's WSync rows
+> agree — only U=1 or A=1 give an Alignment Fault. This tree sits permanently at (A,U) = (0,0),
+> so unaligned LDREX/STREX is **UNPREDICTABLE here**. Two caveats. `Rd<1:0>` is a manual typo
+> for `Rn` — the pseudocode reads `Memory[Rn,4]`, and SWP's own note on p. A4-213 says `Rn[1:0]`
+> correctly. And the **halt is still wrong**, because UNPREDICTABLE licenses any architectural
+> outcome and stopping the machine is not one; that is precisely `#312`'s finding. But raising a
+> data abort is a **choice under latitude**, not a mandated fault, and the record must say so —
+> "chose the A=1/U=1 behaviour under UNPREDICTABLE latitude", never "implemented the mandated
+> fault". It remains the better choice: it is what a checking part does, and the only outcome a
+> guest handler can observe. Machinery exists and nothing needs building. `arm_exception()` is
+> directly callable from a handler; copy the `X(swi)`/`X(bkpt)`/`X(und)` idiom. **Two mechanical
+> requirements**: it ends with `quick_pc_to_pointers()`, so the handler must **not** also set
+> `next_ic`; and for `ARM_EXCEPTION_DATA_ABT` it adds 4 on top of the usual 4, giving
+> `r14_abt = pc + 8`, the architectural data-abort return address. Set `far` to the faulting
+> address and `fsr` to `FAULT_ALIGN_0` (0x01, already in `thirdparty/armreg.h`; Table B4-1
+> p. B4-20 gives Alignment as FS 0b00001 with Domain Invalid, so the domain term is 0). Whatever
+> replaces the halt must not merely **delete** the guard: the raw addresses at the
+> `ldrex`/`strex` `memory_rw` calls are unreachable only while the guard stands.
+>
+> **NEW DEFECT — `ldm`/`stm` answer the alignment question two ways depending on whether the
+> page is mapped.** This **supersedes** the note above that recorded the LDM/STM wording as
+> unverified. `arm_pop` and `arm_push` take an unmasked address from the base register and then
+> the two paths disagree: the **fast** path indexes `p32[(addr & 0xfff) >> 2]`, and that `>> 2`
+> truncates `addr[1:0]`, which **is** the architectural answer; the **slow** path hands the raw
+> `addr` straight to `memory_rw`, which aligns nothing, producing a true unaligned access. One
+> instruction, two answers, selected by page residency — the same fast/slow asymmetry class as
+> the `#362` family, and a self-disagreement rather than a uniform wrong answer. Now citable:
+> LDM (1) A4.1.20 p. A4-37 — "For CP15_reg1_Ubit == 0, the Load Multiple instructions ignore
+> the least significant two bits of the address"; STM (1) A4.1.97 p. A4-190 — "the STM[1]
+> instruction ignores the least significant two bits of address"; and Table A2-10 p. A2-40
+> gives Multi-word at U=0/A=0 as "Operation unaffected by Addr[1:0]". So the correct behaviour
+> is what the fast path already does, and it is **not** UNPREDICTABLE as previously recorded
+> here. **The fix is a mask at the access only**, and the trap is one this project has already
+> paid for twice: masking `addr` at **entry** would corrupt the base writeback, because that
+> writeback assigns the running `addr` back to the base register and `#357` established the
+> writeback must use the **unmasked** value. **Measurement caveat that will otherwise produce a
+> false pass:** proving this requires reaching the slow path, i.e. a page absent from
+> `host_load`/`host_store` — the same trap that made `arm_writeback_probe.py`'s path-coverage
+> docstring false, since `put w` warms the mapping and `put b` does not. A cold-page or
+> `put b`-seeded row is mandatory, or the probe measures the already-correct fast path and
+> reports green.
+>
+> **The three masked Thumb paths are NON-DEFECTS, and `#362`'s rotate must NOT be propagated
+> into them.** This is the sibling-transfer trap in the flesh: the natural move after `#362` is
+> to sweep for other masks and rotate them all, and here that would inject a defect. Thumb
+> LDR (1) A7.1.28 (p. A7-47) makes an unaligned load's data UNPREDICTABLE, and Thumb PUSH/STMIA
+> "ignore the least significant two bits", so masking is legal in all three. Honest tension to
+> record rather than resolve: Table A2-9 files Thumb LDR under WLoad, whose U=0/A=0 row says
+> rotate, while the instruction page says UNPREDICTABLE — masking is within latitude under
+> either reading, so the code is safe either way.
+>
+> **One memory-layer observation, worth the round even though it is not the defect.**
+> `memory_rw` masks only the page base for the host-block lookup and keeps the byte offset
+> verbatim, so an unaligned access straddling a 4 KB page boundary is **translated once**: the
+> tail bytes come from the physical continuation of the first page's host block, and the second
+> page's translation and permission check never happen. There is no host out-of-bounds —
+> `#165`'s guard splits any access crossing a 1 MB memblock — so this is a correctness defect
+> and not a memory-safety one. It is an additional argument for masking at the access rather
+> than teaching the memory layer to perform unaligned transfers.
+>
+> **Sequencing: two rounds, `swp` first.** They look like one family but are findings with
+> incompatible justifications — mandated answer versus UNPREDICTABLE latitude — so one
+> CHANGELOG block cannot honestly state both. `swp` also needs no new machinery and cannot
+> regress aligned guests, while `ldrex` needs a real exception path.
+
+> ## 2026-08-11 — `gate_ab` fails under host load, and its failure is indistinguishable from a real regression
+>
+> Found while gating round 108, and recorded here rather than in that round's block because it
+> is a **harness** defect the round merely tripped over. `#362`'s battery came back
+> `REGRESS_FAIL` at 14/15. The failure was **not** gate 14, the round's own gate, which passed;
+> it was gate 7, `gate_ab`, on "HEAD boots luna88k to a login prompt". HEAD returned `1:1:0`,
+> stopping at "Automatic boot in progress: starting file system checks", while the pre-batch
+> baseline reached `login:`.
+>
+> **Settled by measurement, not by argument.** Re-running `gate_ab` alone on a quiet machine
+> returned HEAD `1:1:1`, matching prebatch `1:1:1` — gate PASS, 5 checks. The round under test
+> could not have caused it in any case: `#362` touches only `cpu_arm_instr.c` and
+> `cpu_arm_instr_loadstore.c`, and **m88k compiles no ARM code**. Corroborating the load claim
+> unusually directly: during the battery a bare `ls` under WSL took **over 120 seconds**, with
+> two research subagents and interactive commands running concurrently.
+>
+> **The defect is not the budget, it is that the failure is unfalsifiable.** `gate_ab` gives
+> each luna88k boot `run_emu 300`, and the gate's own header records the normal boot as "about
+> 100 s against a 300 s budget, so this was never a marginal timeout". That measurement is true
+> on a **quiet** machine and false in general — a 3× margin does not survive a loaded host. But
+> raising the budget alone would be the wrong correction, because the real problem is the
+> **shape** of the failure: a timeout and a genuine capability regression both produce `1:1:0`,
+> so the gate cannot distinguish "the guest never reached login" from "the guest was still
+> booting when we killed it". That is the same class as the `A strlen alias moved` row in the
+> gate-14 flake work — a check that fails to a value indistinguishable from the defect it
+> guards manufactures a phantom regression, which is worse than missing a real one. And it does
+> the specific damage this project keeps fighting: an unexplained red row in the battery that
+> underwrites the shipped corrections teaches the reader to dismiss red rows.
+>
+> **Correction, two parts, the second being the load-bearing one:** raise the luna88k budget,
+> but justify the number by measuring the boot under deliberate load rather than picking a round
+> figure; and make the timeout **distinguishable** — `timeout(1)` exits 124, so `luna_markers`
+> can report whether the emulator exited on its own or was killed, and assert a distinct
+> "boot TIMED OUT at N s — inconclusive, not a regression" rather than falling through to the
+> same `1:1:0` a real regression produces. An **inconclusive** verdict is the honest outcome for
+> a wall-clock oracle that ran out of time, and `gate_ab` already has a `degrade` helper for the
+> adjacent "did not run" case (image absent).
+>
+> **Sweep the siblings in the same round** rather than fixing one gate: any row whose oracle is
+> a wall-clock budget shares this defect. To check — `gate_ppc_halt` and `gate_sh_halt` (both
+> assert a guest does *not* halt within a window), the ARM probes' grace constants, and every
+> `run_emu <n>` whose `n` was chosen against a quiet-machine measurement. General rule worth
+> stating once: **a wall-clock budget is a load-sensitive oracle**, so either it reports timeout
+> separately from failure, or its margin is justified against a loaded host and not a quiet one.
+>
+> **Operational rule this establishes, now in `CLAUDE.md`:** do not run panel seats, subagents,
+> or other CPU-heavy work while a wall-clock-budgeted gate or battery is running. This is
+> strictly stronger than the existing "never two gate/harness invocations at once" — the
+> contending work here was not another gate, it was ordinary read-only research, and it still
+> produced a false FAIL in a 45-minute battery.

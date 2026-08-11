@@ -2714,6 +2714,29 @@ X(netbsd_copyin)
 	q32[3] = p32[ofs+5];
 	q32[4] = p32[ofs+0];
 	q32[5] = p32[ofs+1];
+
+	/*
+	 *  #362: the six ldrt's this replaces are word LOADS, so an unaligned base
+	 *  rotates each of them right by 8 * r0[1:0]. Without this the fold would
+	 *  disagree with the very template it delegates to on a decline -- and the
+	 *  measured form of that is sharper than a fold-versus-`-J` differential:
+	 *  on ONE binary with r0 = 0x10001, pass 1 declines (not-user), runs
+	 *  genuinely and yields 0x44112233, while pass 2 folds and yields
+	 *  0x11223344. The emulator would contradict itself inside a single guest
+	 *  loop, which is the #342/#355 class.
+	 *
+	 *  This matters because the matcher inspects only the preceding slots'
+	 *  handler, base register and offset -- never r0's VALUE -- so an unaligned
+	 *  base folds. The data offsets are masked (`r0 & 0xffc`) and the
+	 *  `ofs > 0x1000 - 6*4` bound is computed from the masked value, so both are
+	 *  unaffected; only the assembled words rotate.
+	 */
+	if (r0 & 3) {
+		const uint32_t rot = 8 * (r0 & 3);
+		int k;
+		for (k = 0; k < 6; k++)
+			q32[k] = (q32[k] >> rot) | (q32[k] << (32 - rot));
+	}
 	cpu->cd.arm.r[0] = r0 + 24;
 	cpu->n_translated_instrs += 5;
 	cpu->cd.arm.next_ic = &ic[6];
