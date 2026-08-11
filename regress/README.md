@@ -13,7 +13,7 @@ It prints one line per check and a final `REGRESS_PASS` or `REGRESS_FAIL`. Nothi
 required — no arguments, no configuration.
 
 **What this project is:** GXemul is an emulator for old computers (1990s DECstations, SGI
-workstations, Sun-era hardware and so on). This is a security-hardened fork of version
+workstations, Sun-era hardware and so on). This is a hardened fork of version
 0.7.0, carrying about 290 numbered bug fixes. Each fix has a number like `#287`, and those
 numbers appear throughout the code as comments and in `CHANGELOG.md`.
 

@@ -922,7 +922,7 @@
 > UDP-inetd handoff → dispositioned (userspace-NAT topology, reachable via tap **#253**). Inherent GAPs (not
 > fixable without a rewrite): **L1** not-cycle-accurate; **L7** FP/uninitialized-memory lowest-confidence (FP
 > largely #254/#255; uninit zero-fill #244). **[FAITHFUL]** L2 strict-alignment + LE endianness are correct
-> reproductions — do NOT touch. All the trueness doc's #5–#23 security items are [FAITHFUL] gxemul reproductions
+> reproductions — do NOT touch. All the trueness doc's #5–#23 items are [FAITHFUL] gxemul reproductions
 > (they *confirm* fidelity), not emulator defects.
 
 > ## 2026-07-18 — Twenty-eighth round (#254, #255): MIPS FPU result-correctness (4-model panel)
@@ -1074,7 +1074,7 @@
 >   a known fast-map-vs-slow-path privilege-boundary fidelity limitation for the audit.
 > - **#233 remainder:** the mfc0/dmfc0 READ-side availability check (side-effect-free fast paths), the
 >   `rt==$zero`→nop fold, and the EXC3K user-mode-from-PC heuristic (in-code comment: forcing KUc "crashes
->   Linux") — invasive/risky for marginal exploit value; deferred.
+>   Linux") — invasive/risky for marginal reachability value; deferred.
 
 > ## 2026-07-16 — Twenty-first round (#227–#229): fault-signature fidelity trio (multi-model panel, unanimous 3-0)
 > A **multi-model advisory panel** — Codex `gpt-5.6-sol` + agy `Gemini` + Fable (Ollama not installed on host) —
@@ -1125,7 +1125,7 @@
 > dreamcast gdrom/maple/g2, and `cpu_arm_coproc.c` CP15 writes 165/252/407/518). Each is guest-reachable when its
 > machine is selected; extending the #118/#119 warn-once-and-continue pattern would close them — a future round.
 > **Document-only (assessed, not bugs):** R3000 BEV=1 bootstrap-vector base (`0xbfc00200` vs `0xbfc00100`; off the
-> exploit window — OpenBSD clears BEV early); `mtc0`-writable `BADVADDR` (Irix compat); the SH `sh_exception()`
+> fault window — OpenBSD clears BEV early); `mtc0`-writable `BADVADDR` (Irix compat); the SH `sh_exception()`
 > default and the dyntrans `bad:` halt (both already emit a trappable SUBSYS message — an intentional
 > "unimplemented" signal the maintainers want surfaced).
 
@@ -1159,8 +1159,8 @@
 >   render cfg), 1245, 1419 (unimplemented TA list-cmd).** Reachable via STARTRENDER; converting these safely needs
 >   flood-free per-iteration recovery, unlike the simple MMIO-write fall-through used for #187.
 > - **CUE symlink/junction bypass of #158 (`disk/diskimage.c`, med, host-side threat):** the #158 guard rejects only
->   *lexical* `..`/absolute paths; `fopen()` still follows a symlink/junction inside an attacker-supplied CUE bundle.
->   Needs an attacker-supplied disk image (host-side), not a malicious guest — lower priority under the guest→host charter.
+>   *lexical* `..`/absolute paths; `fopen()` still follows a symlink/junction inside a caller-supplied CUE bundle.
+>   Needs a caller-supplied disk image (host-side), not an untrusted guest — lower priority under the guest→host charter.
 > - **Cross-memblock dyntrans invalidation gap in #165 (`cpus/memory_rw.c`, med):** a bulk RAM write spanning a
 >   memblock boundary invalidates only the endpoint pages, so translated code in interior pages can go stale.
 > - **Lower-severity Codex findings:** overlay write rejected-but-reported-GOOD (`diskimage.c`, silent data loss);
@@ -1250,7 +1250,7 @@
 > - **1 deferred** — OB-22 (jazz jazzio vector-ack): emulation correctness, not host-OOB;
 >   medium-confidence; in the #69 arc interrupt path — deferred to avoid regressing the verified arc boot.
 > - **1 skipped** — OB-24 (signed `byte<<24` in CPU instruction cores): UBSan-only, hottest path, no
->   exploit path; consistent with the pre-existing "intentionally left" decision (shared decoder fixed in #27).
+>   reachability path; consistent with the pre-existing "intentionally left" decision (shared decoder fixed in #27).
 >
 > The per-finding analysis below is retained as the audit record.
 
@@ -1264,7 +1264,7 @@ correction set (#70+). The 69 already-applied corrections are in `REVIEW_FINDING
 and are **not** repeated here. `src/` (pristine baseline) is untouched.
 
 **Threat model:** the emulator runs untrusted guest OS images (device MMIO/DMA) and loads untrusted
-executable files (loaders). HIGH = a malicious guest or input file can cause a guest→**host**
+executable files (loaders). HIGH = an untrusted guest or input file can cause a guest→**host**
 memory-safety violation (OOB read/write of host memory). MED/LOW = host DoS / UB / device-state
 corruption without a clear host-OOB path.
 
@@ -1350,7 +1350,7 @@ corruption without a clear host-OOB path.
 | ID | Site | Note |
 |----|------|------|
 | OB-23 | `devices/dev_sgi_re.c:1127` | MTE fill subtracts `sizeof(zerobuf)` from `dstlen` while writing only `fill_len` → mis-accounting → guest hang / wrong emulated writes (no host OOB observed) |
-| OB-24 | `cpus/*` (e.g. `cpu_arm_instr_loadstore.c:297`; ARM/MIPS/PPC/m88k/PROM) | residual signed `byte<<24` UB; real C UB but does not feed host pointers/sizes/indices — sanitizer/portability cleanup, no exploit path found |
+| OB-24 | `cpus/*` (e.g. `cpu_arm_instr_loadstore.c:297`; ARM/MIPS/PPC/m88k/PROM) | residual signed `byte<<24` UB; real C UB but does not feed host pointers/sizes/indices — sanitizer/portability cleanup, no reachability path found |
 
 ## Confirmed clean
 - **#69 (arc Jazz interrupt-enable mask)** — both review passes independently found **no regression**:
@@ -1358,7 +1358,7 @@ corruption without a clear host-OOB path.
   change, and masked pendings stay in `int_asserted` (delivered when later enabled).
 
 ## Suggested remediation order
-1. **Window>backing (OB-2, OB-12, OB-15):** straight host-heap corruption from any access in-window;
+1. **Window>backing (OB-2, OB-12, OB-15):** straight out-of-bounds host write from any access in-window;
    bound the offset to the real allocation size. Highest priority.
 2. **End-span family (OB-1, OB-4, OB-5, OB-9, OB-10, OB-11):** add `addr+len <= size`; many share the
    `dev_fb_access` helper (fix once in OB-1 covers OB-1's direct callers).

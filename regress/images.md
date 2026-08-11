@@ -42,7 +42,7 @@ The tempting explanation is wrong, and was checked rather than assumed: the fork
 signed-shift and shift-by-32 UB corrections (#36–40, #46) are *not* the cause. Pristine
 rebuilt with `-O2 -fwrapv -fno-strict-overflow -fno-strict-aliasing` compiles clean and
 still produces nothing but the banner. Whatever fixed luna88k is a genuine source change
-inside the first hardening commit, not a compiler exploiting undefined behaviour.
+inside the first hardening commit, not a compiler relying on undefined behaviour.
 
 ## OpenBSD 7.6 / landisk — SuperH (SH4)
 

@@ -1,4 +1,4 @@
-# GXemul 0.7.0 — Code Examination, Corrections & Security Findings
+# GXemul 0.7.0 — Code Examination, Corrections & Correctness Findings
 
 *Built & verified under Linux (gcc 15.2.1): primary gcc build **0 errors, 0 warnings**, binary runs.
 Last updated 2026-06-27.*
@@ -25,10 +25,10 @@ to the **root `configure`** so the original baseline builds cleanly too (the cod
 |---|------|---------|-----|
 | 1 | `core/misc.c` | `mystrlcpy`/`mystrlcat` (strlcpy fallbacks) ignored `size` → buffer overflow by construction | Correct bounded BSD-semantics implementations |
 | 2 | `core/misc.c` | `mymkstemp` weak: 10-digit charset, no retry | 62-char alphanumeric set + collision retry; keeps atomic `O_CREAT\|O_EXCL` |
-| 3 | `core/emul.c` | **Shell command injection**: `system("mv %s …")` / `system("gunzip … %s")` with unquoted, attacker-influenceable file names | Replaced with a `fork()`+`execlp("gunzip",…)`+`dup2()` helper — never invokes a shell |
+| 3 | `core/emul.c` | **Unsafe shell invocation**: `system("mv %s …")` / `system("gunzip … %s")` with unquoted, caller-influenceable file names | Replaced with a `fork()`+`execlp("gunzip",…)`+`dup2()` helper — never invokes a shell |
 | 4 | `core/emul.c` | `snprintf` truncation warning (`tmpstr[20]`) | `tmpstr[32]` |
 | 5 | `promemul/arcbios.c` | `malloc(0)` (`-Walloc-size`) | `NULL` (the following `realloc(NULL,…)` behaves like `malloc`) |
-| 6 | `file/file_srec.c` | **Uninitialized stack leak**: `bytes[270]` never cleared; attacker-controlled `count` makes the type switch read past the parsed data into the load address / emulated RAM. Also `count-1-data_start` could go negative → huge `size_t` length | `memset(bytes,0,…)` per record + guard the write length `> 0` |
+| 6 | `file/file_srec.c` | **Uninitialized stack read**: `bytes[270]` never cleared; caller-controlled `count` makes the type switch read past the parsed data into the load address / emulated RAM. Also `count-1-data_start` could go negative → huge `size_t` length | `memset(bytes,0,…)` per record + guard the write length `> 0` |
 | 7 | `disk/diskimage.c` | Memory leak of `overlay_basename` on two `fopen` error paths | `free()` on both error paths |
 | 8 | `devices/dev_fb.c` | **Guest-triggerable OOB host write**: in `framebuffer_blockcopyfill`, clipping never ensures `x2 >= x1`, so `linelen = (x2-x1+1)*bpp` (a `size_t`) wraps huge → `memset`/copy past the framebuffer | Early-return when `x2 < x1`; bounded 8-bit `memset` size |
 | 9 | `configure` | Stock `./configure && make` fails to link on modern glibc | Auto-detect & add `-fgnu89-inline` (see build note below) |
@@ -119,7 +119,7 @@ No libFuzzer/clang is available here, so I built gxemul with
 fixtures (byte-flips, truncation, header corruption, oversized 32-bit fields) into
 the loader, watching for sanitizer reports. This **immediately found a real OOB
 read (SEGV)** in the a.out loader — `add_symbol_name` ← `file_load_aout`
-(correction #14) — an attacker-controlled `str_index` indexing past the string
+(correction #14) — a caller-controlled `str_index` indexing past the string
 table. The **identical pattern existed in the ELF, ECOFF and Mach-O** symbol
 loaders; all four are fixed (#14–16). UBSan additionally flagged the generator
 shift UB (#13). A first re-fuzz confirmed the `str_index` fixes but surfaced a
@@ -341,8 +341,8 @@ items deferred.** Clean rebuild (Gentoo WSL, `-O3 -Wall -Wextra`): **0 errors / 
 name; local-only) and the osiop `exit(1)` on a guest-reachable state (host DoS, but it replaced a worse
 null-deref; #10).
 
-**Tooling note (checkers):** `agy`/Gemini 3.1 Pro **refused** the CPU chunk under a "vulnerability
-analysis" framing (needed reframing as plain correctness QA), emits findings only to its transcript
+**Tooling note (checkers):** `agy`/Gemini 3.1 Pro **refused** the CPU chunk under an offensive-security
+framing (needed reframing as plain correctness QA), emits findings only to its transcript
 (empty stdout in headless `--print`), and mixes **hallucinated** placeholder findings (fake paths like
 `src/cpu/cpu_mips_map.c`) into checkpoint summaries — only its *final* answer is reliable. Codex ran
 clean headless. Every accepted finding was verified against source before acceptance.
@@ -441,7 +441,7 @@ real**) and fixed. Build 0/0; pmax (boots from a SCSI disk → exercises #113) +
 ## Ninth round (#114–#115): OB-25 / OB-26 remediation (the last two low-severity candidates)
 - **#115 `disk/diskimage.c` (OB-25, low):** the `-d …R:` read-only-overlay path created its temp data +
   `.map` files at predictable `getpid()`-based names, then `diskimage_add_overlay()` reopened them by name
-  → a local attacker could pre-plant a symlink at the guessable path in the close→reopen window (TOCTOU).
+  → a local caller could pre-plant a symlink at the guessable path in the close→reopen window (TOCTOU).
   Fix: create the data file with `mymkstemp()` (unpredictable /dev/urandom suffix, atomic O_CREAT|O_EXCL)
   and the `.map` exclusively, so the path can't be guessed/pre-planted.
 - **#114 `devices/dev_osiop.c` (OB-26, low):** the #10 NULL-`xferp` guard called `exit(1)` on a state a
@@ -510,10 +510,10 @@ unless `-v`) and CONTINUE when sane, hard-EXIT only on truly unrecoverable state
 guest-triggered anomaly** (`fatal()` at src/core/debugmsg.c; ~756 `fatal()` in src/devices; `dev_scc`
 default = `debug()` + continue; see [[gxemul-author-error-ethos]]). Our host-safety fixes had gone SILENT
 (clamp/zero/skip with no message) — the one option the author never uses. **User directive:** keep ALL
-security bounds (untrusted ROMs cannot be validated, so security stays regardless of upstream intent), add
+bounds checks (untrusted ROMs cannot be validated, so the checks stay regardless of upstream intent), add
 *just-enough* rate-limited verbosity in the author's style, and above all NEVER crash. Approach + each item
 were passed through Codex (gpt-5.5/xhigh) + agy (Gemini 3.1 Pro); the user chose "keep both behavior
-refinements." **No security bound was removed.**
+refinements." **No bounds check was removed.**
 - **#118 `dev_osiop.c` (real host crash):** `read_word`/`read_byte`/`write_byte` dereferenced
   `memory_paddr_to_hostaddr()` with no NULL check (it returns NULL on a read miss) — a guest pointing the
   SCSI SCRIPTS engine at unmapped RAM crashed the host. Added a NULL guard + `osiop_hostpage_fault()`
@@ -521,7 +521,7 @@ refinements." **No security bound was removed.**
   `osiop_execute_scripts_instr` keeps the bogus fetch from reaching a `TODO; exit(1)`). No deref, no exit.
 - **#101 `dev_scc.c` (refined):** the prior `% N_SCC_PORTS` was host-safe but ALIASED out-of-range offsets
   onto a valid port (wrong hardware). Now bounds-check + **NO-OP** out-of-range (read returns 0) + warn-once
-  — same security (no OOB into `scc_register_r[]`), no aliasing. (The author's SGI `0xf` remap is left
+  — same bound (no OOB into `scc_register_r[]`), no aliasing. (The author's SGI `0xf` remap is left
   untouched: his code, and not an OOB.)
 - **#114 `dev_osiop.c` (refined):** the NULL-`xferp` data phase used a quiet `debug()` and then *fell
   through to fake "Transfer complete"*. Now warn-once `fatal()` + stop the script + return (no fake
@@ -544,7 +544,7 @@ BSD/macOS *OS-axis* builds still need those hosts; the `fopen(...,"wx")` overlay
 newer-libc dependency to smoke-test there.
 
 **Commit-review (Codex + agy, 5 iterations → unanimous APPROVE FOR COMMIT):** the end-of-batch review caught
-real bugs *in our course-correction edits* that no build/boot test surfaces (they need a malicious guest):
+real bugs *in our course-correction edits* that no build/boot test surfaces (they need a crafted guest):
 (1) **agy** found `dev_ps2_gs` #99 still did a bare `return 0` (skipped output + signalled a guest bus
 fault) → fixed to `memory_writemax64(...,0); return 1;`. (2) **Codex** found `dev_pcc2`'s OOB-read guard
 fell through to guest-reachable `exit(1)` in PCCTWO_IPL/MASK → converted those to warn-once + continue. (3)
@@ -604,7 +604,7 @@ full-boot + NAT rig; and a positive S-record over-read test (crafted record clam
 ---
 
 ## Fifteenth round (#155–#177) — Codex 5.6-Sol-Ultra review, Fable-verified (ported from est/)
-A full-tree security pass by **Codex CLI `gpt-5.6-sol`/ultra** (report `../harness/codex_sol_ultra_to_fable.md`):
+A full-tree code review by **Codex CLI `gpt-5.6-sol`/ultra** (report `../harness/codex_sol_ultra_to_fable.md`):
 **21 findings, all confirmed REAL by 4 Fable verifiers (0 false positives)**, applied as minimal ethos-matched
 corrections + 2 companions (#176/#177). Developed and build-verified in `est/`, then ported here byte-identically;
 the full ranked table is in `../est/CHANGELOG.md` (and `est/REVIEW_FINDINGS.md`). Headlines: **3 CRITICAL** —
@@ -682,7 +682,7 @@ fidelity), per-site verified. **14 corrections (#210–#223)** — per-correctio
   service, #220 footbridge reset / PCI-bus-255, #221 mp STARTUPCPU, #222 kn02ba MER/MSR, #223 8253 (5 sites).
 
 **Fidelity baseline (not a gap):** GXemul already raises AdEL/AdES (not TLBL) for unaligned *mapped* targets with
-correct ExcCode/CE/BadVAddr/EPC/BD. Document-only: R3000 BEV=1 vector base (off exploit window); `mtc0`-writable
+correct ExcCode/CE/BadVAddr/EPC/BD. Document-only: R3000 BEV=1 vector base (off the fault window); `mtc0`-writable
 `BADVADDR` (Irix compat). **Build 0/0** both trees, all tags matched; **pmax boot regression PASS**.
 
 ## Twentieth round (#224–#226) — MIPS FPU memory-safety (Codex 5.6-Sol-Ultra)

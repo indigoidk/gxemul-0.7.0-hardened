@@ -2,7 +2,7 @@
 
 How the ~117 corrections + #116/#117 are validated against regression. Reviewed by Codex (gpt-5.5/xhigh)
 + agy (Gemini 3.1 Pro): boot battery = strong **regression** coverage (5 CPU arches × 3 OS families); the
-guest→host bounds-checks themselves would additionally need negative/exploit-path tests (a separate, later
+guest→host bounds-checks themselves would additionally need negative/reachability tests (a separate, later
 coverage frontier — current focus is regression protection of the 0.7 baseline).
 
 ## Boot battery (run on the rebuilt `build/gxemul` after every change)
@@ -54,6 +54,6 @@ harness — normal boot traffic never sends the bad values.
 
 ## Coverage gaps (acknowledged, lower priority than regression protection)
 The bounds-check fixes for guest→host OOB (e.g. ps2_gs #99, scc #101, net_arp #102, pvr/gdrom/maple) are
-only hit by a *malicious* input, which a normal boot never sends — so booting does not exercise them.
-Closing that needs persistent ASan negative-corpus replay + targeted MMIO/exploit-path tests with
+only hit by a *crafted* input, which a normal boot never sends — so booting does not exercise them.
+Closing that needs persistent ASan negative-corpus replay + targeted MMIO/reachability tests with
 behavioral assertions (+ snapshot/save-restore fuzzing, CI enforcement). Tracked for future work.

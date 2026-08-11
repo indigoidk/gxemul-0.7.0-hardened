@@ -144,13 +144,13 @@ Pro) APPROVE FOR COMMIT; build 0/0; OpenBSD 3.4/macppc boots on g4 AND g4plus; f
 
 ## #118 / #119 / #101 / #114 — course-correction: silent host-safety masks made LOUD (Codex+agy+Claude consensus)
 Per the author's "warn-visibly-and-continue, never silently hide a fault" ethos (see REVIEW_FINDINGS "Twelfth
-round") + the user's directive (keep ALL security bounds for unvalidated ROMs, add just-enough rate-limited
-verbosity, never crash). No security bound removed.
+round") + the user's directive (keep ALL bounds checks for unvalidated ROMs, add just-enough rate-limited
+verbosity, never crash). No bounds check removed.
 | File | Corr. | What changed |
 |------|-------|--------------|
 | `devices/dev_osiop.c` | #118 | NULL guards in read_word/read_byte/write_byte + `osiop_hostpage_fault()` (warn-once + stop-script) + early-return in execute_scripts_instr — fixes a real host NULL-deref crash |
 | `devices/dev_osiop.c` | #114 | NULL-`xferp` data phase: quiet skip+fake-completion → warn-once + stop-script + return (no fake, no exit) |
-| `devices/dev_scc.c` | #101 | `% N_SCC_PORTS` alias → bounds-check + NO-OP out-of-range + warn-once (security kept, no aliasing) |
+| `devices/dev_scc.c` | #101 | `% N_SCC_PORTS` alias → bounds-check + NO-OP out-of-range + warn-once (the bound kept, no aliasing) |
 | `devices/dev_disk.c, dev_pcc2.c, dev_vga.c, dev_pmagja.c, dev_ps2_gs.c, dev_pvr.c`, `net/net.c` | #119 | loud-once `fatal()`/first-N on each previously-silent OOB skip/zero/clamp |
 
 Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hostile ROM cannot flood. `#95`
@@ -212,7 +212,7 @@ regressions); the OpenBSD/pmax rig (full boot + root shell + NAT ping + clean ha
 showing the S‑record loader now clamps the crafted over‑long record while a valid record still loads cleanly.
 
 ## Fifteenth round (#155–#177) — Codex 5.6-Sol-Ultra review, Fable-verified (ported from est/)
-A whole-tree security review by **Codex CLI `gpt-5.6-sol`/ultra** (report
+A whole-tree code review by **Codex CLI `gpt-5.6-sol`/ultra** (report
 `../harness/codex_sol_ultra_to_fable.md`) raised **21 findings**; **4 parallel Fable verifiers** independently
 confirmed **all 21 REAL, 0 false positives** against the real code + the pristine baseline; **4 Fable fixers**
 applied minimal, ethos-matched corrections, plus **2 same-class companions** (#176/#177). These were developed and
@@ -265,13 +265,13 @@ Codex medium/lows are triaged in `OUTSTANDING_BUGS.md`.
 | # | ID | Sev | File — fix |
 |---|-----|-----|------------|
 | **#182** | Cdx.1 | **CRITICAL** | `core/memory.c`+`include/memory.h`, `devices/dev_fb.c`: `dev_fb_resize()` called `memory_device_update_data()` (swaps only the dyntrans data pointer) but never shrank the device's registered `length`; the #155 fast-map gate `(paddr|mask) < length` then trusted the OLD length and installed a writable host mapping past the end of the new, smaller framebuffer → guest-controlled OOB host write (e.g. SGI O2/GBE `HCMAP` shrink 1280→640, then touch offset 0x200000). Latent in pristine upstream. **Fix:** new `memory_device_update_length()` keeps `length`/`endaddr`/`mmap_dev_maxaddr` in sync on resize; the existing #157 cache-invalidate then drops stale fast-path pointers. |
-| **#183** | Cdx.2 | **HIGH** | `console/x11.c`: `x11_fb_resize()` computed the XImage allocation `new_xsize*new_ysize*alloc_depth/8` in 32-bit `int`; a guest-reachable resize within #156's 16384/axis cap (e.g. 12000×12000×32bpp) overflows `int`, under-allocates, then `XPutPixel` overruns the buffer → host heap corruption on X11 builds. **Fix:** widen the arithmetic to `size_t`. |
+| **#183** | Cdx.2 | **HIGH** | `console/x11.c`: `x11_fb_resize()` computed the XImage allocation `new_xsize*new_ysize*alloc_depth/8` in 32-bit `int`; a guest-reachable resize within #156's 16384/axis cap (e.g. 12000×12000×32bpp) overflows `int`, under-allocates, then `XPutPixel` overruns the buffer → out-of-bounds host write on X11 builds. **Fix:** widen the arithmetic to `size_t`. |
 | **#184** | Cdx.4 | MED | `devices/dev_fb.c`: the `dev_fb_resize()` too-small (`<10`) branch still did `exit(1)`; guest-reachable via GBE `HCMAP`/`VCMAP` written with a tiny/zero dimension → emulator-abort DoS. **Fix:** reject and keep the old framebuffer (return), matching the sibling `>16384` branch (#156 idiom). |
 | **#186** | Cdx.6 | MED | `devices/dev_mb89352.c`: a valid guest `SCMD_XFR` with an unimplemented `PCTL` phase (4/5/6) hit `exit(1)`. **Fix:** log + `break` (#119 idiom). |
 | **#187** | Cdx.7 | MED | `devices/dev_pvr.c`: eight guest-reachable PVR **MMIO register-write** `exit(1)`s (STARTRENDER read; OB_ADDR / TILEBUF_ADDR / TA_OPB_START / TA_OB_START unknown-bit; DIWCONF magic; TA access-len; and the default unhandled-register case). **Fix:** log-and-continue (mask-and-`DEFAULT_WRITE` / `break`), matching #166/#176. |
 
 Provenance/severity: **#182 CRITICAL** overturns the Fable-panel-only "memory-safety clean" read — a genuine
-guest→host heap-overwrite, latent in pristine upstream, exposed by any framebuffer that shrinks (SGI GBE, or
+out-of-bounds framebuffer write, latent in pristine upstream, exposed by any framebuffer that shrinks (SGI GBE, or
 `fbctrl`). **#183 HIGH** is X11-build-only. #184/#186/#187 are availability (`exit(1)`) DoS, converted per the fork's
 #118/#119 log-and-continue ethos. **Deferred (documented in `OUTSTANDING_BUGS.md`, not silently dropped):** the ASC
 `data_out_len==0` `exit(1)` (#185 — needs a structural transfer-skip), the four PVR render/texture-loop `exit(1)`s
@@ -359,7 +359,7 @@ changes live.
 | # | File — change |
 |---|---------------|
 | **#210** | `cpus/cpu_mips.c`: emit every MIPS exception on the trappable `SUBSYS_EXCEPTION` channel (MIPS was the only major CPU not doing so) with the fault signature fully set. Lets `break exception` stop inside the TLB-miss path that the `-p` PC breakpoint structurally cannot reach — the key hook for tracing a controlled-PC-into-unmapped chain. Cheap when no breakpoint/verbosity is armed. |
-| **#211** | `cpus/cpu_mips.c`: an Address Error (AdEL/AdES) or VCE now updates **only BadVAddr**, not Context/EntryHi/XContext — real R3000/R4000 write those only on TLB Mod/Refill/Invalid. Stops the emulator polluting the CP0 fault fingerprint on the misalignment / kernel-touch faults an exploit hits. |
+| **#211** | `cpus/cpu_mips.c`: an Address Error (AdEL/AdES) or VCE now updates **only BadVAddr**, not Context/EntryHi/XContext — real R3000/R4000 write those only on TLB Mod/Refill/Invalid. Stops the emulator polluting the CP0 fault fingerprint on the misalignment / kernel-touch faults a controlled-PC fault reaches. |
 | **#212** | `cpus/cpu_mips_instr.c`: unaligned `LL/LLD` raise AdEL and `SC/SCD` raise AdES (were `exit(1)`), matching silicon and keeping the emulator alive/debuggable on a guest RMW. |
 | **#213** | `cpus/cpu_mips_coproc.c`: `mfc0`/`mtc0` to an unimplemented CONFIG select (Config2..7) returns a defined 0 / ignores the write (was `exit(1)`) — any guest can reach it by probing. |
 | **#214** | `cpus/cpu_mips_coproc.c`: `mtc0 ENTRYLO1` on an R3000 (reg 3 undefined) warns and ignores instead of `exit(1)`. |
@@ -383,7 +383,7 @@ changes live.
 
 **Fidelity baseline confirmed (not changed):** GXemul already raises AdEL/AdES (not TLBL) for unaligned *mapped*
 targets with correct ExcCode/CE/BadVAddr/EPC/Cause.BD — the general "exception-ordering" caveat is not a gap.
-Two document-only items: the R3000 BEV=1 bootstrap-vector base (`0xbfc00200` vs `0xbfc00100`; off the exploit
+Two document-only items: the R3000 BEV=1 bootstrap-vector base (`0xbfc00200` vs `0xbfc00100`; off the fault
 window — OpenBSD clears BEV early) and `mtc0`-writable `BADVADDR` (Irix compat). The broad tail of remaining
 `fatal();exit(1)` in other device handlers (adb, clmpcc, igsfb, lca, m8820x, pcc2, …) is recorded in
 `OUTSTANDING_BUGS.md` for a future sweep.
@@ -424,7 +424,7 @@ controlled-PC / BADVADDR finding.
   the rest (DBE is a shared load/store code; Mod can't arise from a read). Uses the full CP0 accessor (no local
   `reg` alias exists there — Fable correction).
 - **#228** `cpus/cpu_mips_instr.c` (6 register-jump handlers): a **misaligned `jr`/`jalr` target** was silently
-  rounded down to the IC index instead of raising instruction-fetch AdEL — so a controlled-PC exploit that landed
+  rounded down to the IC index instead of raising instruction-fetch AdEL — so a controlled-PC fault that landed
   an odd target mis-signaled (executed aligned-down rather than faulting). **Fix:** in each of
   `jr`/`jr_ra`/`jr_ra_addiu`/`jr_ra_trace`/`jalr`/`jalr_trace`, after setting `pc` and clearing the delay state,
   `if (pc & 3)` raise AdEL (BadVAddr=EPC=rs, BD=0) and return — *before* the trace hooks; `jr_ra_addiu` counts its
@@ -573,7 +573,7 @@ trees; **pmax + arc boot regression PASS** (pmax R3000 15/15 → `uid=0(root)`, 
 
 ## Twenty-fifth round (#248, #250) — debugger QoL for the audit: breakpoint hit-counts + data write-watchpoints (4-model panel)
 A scoping pass over the author's own `doc/TODO.html`, filtered to items that improve **debuggability** for the
-OpenBSD 2.2 pmax/arc exploitation audit. Recon found the fork already implements most of the TODO debugger wishlist
+OpenBSD 2.2 pmax/arc behaviour review. Recon found the fork already implements most of the TODO debugger wishlist
 (`find`, `put s/z`, `step call`, `verbosity`, subsystem/`debugmsg` breakpoints, prefix-abbrev subcmds — the
 #120–#128 round) **and** the `-f` fsync option (so the panel's "C3 fsync CLI toggle" candidate, tentatively
 **#249**, was **already done — #249 is VOID / unconsumed**). A **4-model panel** (Codex `gpt-5.6-sol` + agy `Gemini`
@@ -1464,7 +1464,7 @@ all, while both fork builds reach a `login:` prompt. `gate_ab.sh` asserts that a
 
 The obvious explanation was tested and **refuted**. The hypothesis was that the fork's
 m88k signed-shift and shift-by-32 UB corrections (#36–40, #46) mattered because a modern
-GCC exploits that undefined behaviour. Rebuilding pristine `39748e3` with
+GCC relies on that undefined behaviour. Rebuilding pristine `39748e3` with
 `-O2 -fwrapv -fno-strict-overflow -fno-strict-aliasing` compiles clean (223 objects) and
 still produces nothing but the banner. Whatever fixed luna88k is a real source change
 inside the first hardening commit; narrowing it further would need that commit split.
@@ -2100,7 +2100,7 @@ the *window* still permits OOB into the smaller buffer. The high-severity class 
   stabilized by #69 — deferred to avoid regressing the verified arc boot; revisit with dedicated arc
   interrupt testing.
 - **OB-24 (signed `byte<<24` in CPU instruction cores) — skipped**, consistent with the existing
-  decision below (UBSan-only, hottest path, no exploit path; the shared decoder is already fixed in #27).
+  decision below (UBSan-only, hottest path, no reachability path; the shared decoder is already fixed in #27).
 
 ## Sixty-first round (#296) — SuperH read the rounding-mode field but never used it
 

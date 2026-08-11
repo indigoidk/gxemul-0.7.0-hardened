@@ -9,7 +9,7 @@ computer-architecture emulator: it runs real, unmodified operating systems on em
 hardware, across several CPU families (MIPS, PowerPC, SuperH, ARM, Motorola 88K, …) and whole
 machines (DECstation, Acer PICA/Jazz, SGI, macppc, Dreamcast, …) — CPU, MMU, interrupt
 controllers, serial, framebuffers, SCSI/IDE disks, Ethernet NICs. It is educational/experimental
-software, **not a security boundary.**
+software, **not a trust or isolation boundary.**
 
 This fork starts from the final upstream release, **0.7.0 (2021)**: the first commit is the
 untouched upstream tree, and everything after it is the change set summarized below.
@@ -101,11 +101,11 @@ Oldest first.
 | Commit | Change |
 |--------|--------|
 | `39748e3` | Import GXemul 0.7.0 (unmodified upstream baseline) |
-| `8dd86b5` | Security hardening: ~119 memory-safety & robustness corrections (#1–#119) |
+| `8dd86b5` | Robustness hardening: ~119 memory-correctness & robustness corrections (#1–#119) |
 | `b75e05d` | docs: hardened-fork notice, highlights, provenance |
 | `3925954` | docs: changeset patch, regression battery, outstanding-bugs notes |
 | `266aaaa` | battery: scrubbed regression harness + battery docs |
-| `5ee491e` | Security review (#130–#154) + feature round (#120–#129): 23 fixes |
+| `5ee491e` | Code review (#130–#154) + feature round (#120–#129): 23 fixes |
 | `9d18d15` | arc: OpenBSD 2.2 headless bring-up + NE2000 networking |
 | `8426be6` | README: document the OpenBSD 2.2/arc + NE2000 round |
 | `de1398e` | Hardening / fidelity / debuggability rounds 17–25 (#155–#250) |
