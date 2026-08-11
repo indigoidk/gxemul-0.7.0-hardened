@@ -4233,8 +4233,15 @@ row.
   entries at page ends.
 
   **Flood control is split, and the rejected option is the interesting one.**
-  `memcpy` summarises, because it has a real loop and one guest call is one
-  dispatch, so a summary is one line per call by construction. The other four
+  `memcpy` summarises, because it has a real loop, so one **dispatch** emits one
+  line however many iterations it folded: a copy that never straddles a page is a
+  single dispatch and therefore a single line, while a straddling copy costs
+  roughly one line per crossing, since the bail runs one genuine iteration and the
+  back-branch re-dispatches the slot. (An earlier draft of this block, and of the
+  source comment, said "one line per call by construction" — false for exactly the
+  straddling case described two sentences later, where a 1 MB copy bails about 512
+  times. A review seat caught it. The flood conclusion survives: lines track
+  crossings, not iterations.) The other four
   have no loop to summarise and no natural information-content guard, so the
   volume is accepted and the rows copy blocks rather than megabytes. A **static
   first-N latch was rejected** on this project's own terms: it would gate the
@@ -4307,9 +4314,14 @@ carrying a `fires`/`quiet` pair per fold. The `fires` row demands the marker
 on a printed line alone, and `copyout`'s row asserts the stored **memory** so a
 future permutation regression stays visible. The `quiet` row asserts silence at
 default verbosity and must never be rewritten to drive the guest with `step` —
-single-step **bypasses** the verbosity gate, so a stepped session prints markers
-at default verbosity and the row would fail for a reason unrelated to the fold.
-The rows are free-running by necessity, per the measurement above.
+though for a sharper reason than first written. The original worry was that
+single-step **bypasses** the verbosity gate, so a stepped session would print
+markers at default verbosity and fail the row for an unrelated reason. That gate
+bypass is real in the code but the scenario is unreachable, because **stepping
+onto a fold slot re-translates it uncombined**, so no marker is produced at all.
+The true hazard is worse: a stepped row measures the **genuine sequence** while
+appearing to measure the fold. The rows are free-running by necessity, per the
+measurements above.
 
 **Non-vacuity is proven per fold, not per round.** On a scratch tree built from
 this exact source with **only** `netbsd_copyin`'s arming disabled: **3 of 4, with
