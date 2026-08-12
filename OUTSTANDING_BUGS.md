@@ -2996,3 +2996,18 @@ corruption without a clear host-OOB path.
 > `p1_u0_w1`. A full re-audit of the inventory against the corrected premise is owed, and must be
 > done by **measurement** rather than re-reading, because reasoning confidently from a plausible
 > premise is precisely what produced the original note.
+
+> ## 2026-08-11 — LDM/STM fast path ignores byte order (#372's sibling, inverted) — task #52
+> Found by #372's pass-2 panel and verified from source. `generate_arm_multi.c` emits the
+> LDM/STM fast path as raw `r[i] = p[x]` / `p[x] = r[i]` uint32 copies with NO byte-order
+> handling (grep for byte_order/swap in that generator = 0), while the general fallback
+> `bdt_load`/`bdt_store` (`cpu_arm_instr.c` ~1528/~1705) explicitly swap under
+> `HOST_LITTLE_ENDIAN` for a big-endian guest. Same warm/cold self-contradiction as #372,
+> INVERTED: here the FAST path is wrong and the GENERAL path is right, so a BE guest's
+> LDM/STM to a WARM page is byte-reversed and to a COLD page is correct (the discriminating
+> rows are the warm ones, opposite of #372's cold rows). LDM/STM is emitted on every function
+> prologue/epilogue, so this is the largest remaining ARM-BE defect — reachable via `-E
+> barearm`, measurable with the `arm_endian_probe.py` pattern. Fix: teach the generator the
+> same `bdt_load` swap idiom (reuse it verbatim so the two paths cannot drift), or fall the
+> fast path through to `bdt_load` for BE guests. Guest-value impact is nil today (no BE ARM
+> guest boots), so like #372 the value is self-consistency + correctness, not a repaired boot.

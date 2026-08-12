@@ -4230,9 +4230,13 @@ on LE the broken code was accidentally right, host order being guest order, whic
 is exactly why LE could never have surfaced this.
 
 **A new probe, `regress/arm_endian_probe.py`**, runs both byte orders — the first
-in the battery to do so. Its six `be *` rows (barearm) are the discriminators; its
-six `le *` rows (testarm) are **invariance controls**, present only to catch a fix
-that repairs BE by breaking LE, which the pre-fix source shows is a live shape.
+in the battery to do so. **Five** of its six `be *` rows (barearm) are the
+discriminators — the cold-page rows, which enter the buggy general store path; the
+sixth, `be warm word`, takes the order-aware fast path and so is green on both
+builds — it is the rig control (a pass-2 seat caught the probe mislabelling it DISC;
+corrected). Its six `le *` rows (testarm) are **invariance controls**, present only
+to catch a fix that repairs BE by breaking LE, which the pre-fix source shows is a
+live shape.
 The `ldrb` witnesses are the purest form: a byte load has no byte order, so it
 reads the raw layout directly, and each buggy value is the exact reverse of its
 arch value — the two mirror-image groups cannot both pass a swapped expectation

@@ -178,7 +178,12 @@ for name, machine, base, reg, arch, buggy in ROWS:
     ngot += ok
     if name == "be warm word" and v == 0x11223344:
         control = "OK"
-    kind = "CTRL" if machine == "testarm" else "DISC"
+    #  Only the FIVE cold BE rows discriminate #372: they enter the general
+    #  store path, which was the buggy one. `be warm word` is a BE row but takes
+    #  the order-aware FAST path, so it is green on both the buggy and fixed
+    #  builds -- it is the rig CONTROL, not a discriminator, and labelling it
+    #  DISC was a precision slip. All six LE rows are invariance controls.
+    kind = "DISC" if (machine == "barearm" and "cold" in name) else "CTRL"
     print("%-20s %-4s %s=0x%08x want 0x%08x (buggy 0x%08x)  %s"
           % (name, kind, reg, v, arch, buggy, "ok" if ok else "FAIL"))
 
