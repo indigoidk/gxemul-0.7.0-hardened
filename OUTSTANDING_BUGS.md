@@ -2114,7 +2114,9 @@ corruption without a clear host-OOB path.
 > it, but a divergence note quoting a reset value would need a source.
 >
 > **Still open in this family, all recorded with measurements:** `swp` implements a THIRD model
-> (a true unaligned access whose store crossed the word boundary — measured), `ldrex` HALTS the
+> (a true unaligned access whose store crossed the word boundary — measured) **[RESOLVED as
+> #386, 2026-08-12: byte-order + rotate + mask in one round, RED 42/58 → GREEN 58/58, three
+> mutants each caught at their predicted counts — see the 2026-08-12 entry]**, `ldrex` HALTS the
 > emulator on an unaligned address, and the LDM/STM class was left alone because this project
 > has not checked the manual's wording for it — treat "UNPREDICTABLE" there as unverified
 > rather than established. Also open and adjacent: the #357 path-coverage claim in
@@ -2651,7 +2653,10 @@ corruption without a clear host-OOB path.
 > `r2 = 0xff` returned `r1 = 0x88112233` where the rotate answer is `0x44112233`, and the store
 > crossed the word boundary, leaving `[0x10000] = 0x0000ff44` and `[0x10004] = 0x55667700`
 > where `[0x10004]` must be **untouched**. The fix cannot regress aligned guests: rotate and
-> mask are both the identity when `addr[1:0] == 0`.
+> mask are both the identity when `addr[1:0] == 0`. **[Done as #386, 2026-08-12 — plus the
+> byte-order half the queue item led with (X(swp) was LE-only on BOTH assemble and emit):
+> all three shipped together, and the committed P+4 sentinel row formalizes exactly this
+> entry's crossed-the-boundary measurement. See the 2026-08-12 entry.]**
 >
 > **`swpb` is a NON-DEFECT.** A4.1.109 (pp. A4-214/215) carries no Alignment note at all, and
 > Tables A2-9/A2-10 file SWPB in the Byte row, Normal for every combination. Closed with a
@@ -3236,5 +3241,38 @@ corruption without a clear host-OOB path.
 > (re-filed UNRECONCILED, re-measurement queued), the REVIEW_FINDINGS date line, the
 > #360-records-clean clause. Refuted seat claims: a fabricated "word[*]" quote; a
 > "wrong filename" (`arm_endian_probe.py`) that exists and carries the corrected fact.
+> [#386 correction: the "word[*]" refutation belongs to the CONCURRENT #29 pass-1 panel,
+> not to this round's pass-2 — only the wrong-filename claim was refuted here.]
 > Fifth consecutive records round whose pass 2 caught its own restatement of the claim
 > under correction — the second pass stays mandatory.
+
+> ## 2026-08-12 — #386 (round 126): swp — byte-order on both sides, rotate on the load, aligned word for both accesses
+>
+> `X(swp)` was LE-only on assemble AND emit (no `cpu->byte_order` term) and used the raw
+> address with no rotate: on a BE guest every swp byte-reversed both the value into Rd and
+> the value into memory, and any unaligned swp read/wrote 4 raw bytes at `Rn` (the "third
+> model" this file's 2026-08-11 alignment-family entry measured). Fixed with the sibling
+> idiom exactly: runtime byte_order (ldrex/strex token-identical), `rot_sh` captured from
+> the RAW addr BEFORE `addr &= ~3`, rotate LOAD-only guarded on rot_sh, Rd written last,
+> swpb untouched (order-free, no Alignment note). RED 42/58 on the committed build — all
+> 16 DISC rows at their EXACT predicted buggy values (mechanism + register-field proof in
+> one measurement) — then GREEN 58/58; mutants x3 each at its predicted count (LE-revert
+> 48, no-rotate 56, no-mask 46, of 58), three distinct signatures. Gate 14 PASS 317
+> checks (34 -> 58 endian rows, +16 named DISC rows), zero FAIL/SKIP, single clean run.
+>
+> **Probe facts:** the LE-unaligned rows are ARCH rows, not controls — the manual's
+> rotation is endian-independent, so the fix MOVES them; a must-not-move LE control would
+> false-red the FIXED build. "swp be unal b2" is arch==buggy BY CONSTRUCTION (bits[15:8]
+> lands at P+2 under both the buggy +1-shifted LE write and the fixed BE write, for any
+> store value) — typed CTRL, excluded from the gate's named-DISC list. The P+4 sentinel is
+> seeded 0x99, never 0x55: the buggy write's last byte IS 0x55, so a 0x55 seed cannot
+> distinguish survival from corruption.
+>
+> **Panel:** pass 1 eight seats unanimous (fold the alignment half in; gate on the RED
+> unaligned row — satisfied). One "critical compile blocker" was a FABRICATED QUOTE
+> (refuted from another seat's verbatim brief echo); one ladder-base catch was real and
+> adopted (the unaligned witness re-bases at the aligned P). Pass 2 follows the commit.
+>
+> **Residuals:** swp's fatal()-on-abort console noise + missing next_ic reset vs the
+> template idiom (task filed); cpu_arm_instr_loadstore.c:248-249 missing `(uint32_t)` cast
+> on `<<24` (formal UB, benign, unmeasurable by construction — recorded, not tasked).

@@ -102,6 +102,18 @@ MOV_R1_0 = 0xE3A01000           # mov r1,#0  (LDM sentinel: a dead LDM reads 0)
 MOV_R2_0 = 0xE3A02000           # mov r2,#0
 SPIN = 0xEAFFFFFE               # b .
 
+#  #386: swp/swpb. X(swp) goes through memory_rw directly (no warm/cold fast
+#  path), so a put b-seeded page suffices and there is no #372-style split.
+SWP_R2_R1_R0 = 0xE1002091      # swp  r2,r1,[r0]
+SWPB_R2_R1_R0 = 0xE1402091     # swpb r2,r1,[r0]  (bit 22 = B)
+ADD_R0_1 = 0xE2800001          # add r0,r0,#1   (unaligned rows)
+SUB_R0_1 = 0xE2400001          # sub r0,r0,#1   (ladder re-bases at aligned P)
+LDRB_R7_R0_4 = 0xE5D07004      # ldrb r7,[r0,#4] -- the P+4 survivor sentinel
+BUILD_R1_5567 = [0xE3A01455,   # mov r1,#0x55000000
+                 0xE3811866,   # orr r1,r1,#0x00660000
+                 0xE3811C77,   # orr r1,r1,#0x00007700
+                 0xE3811088]   # orr r1,r1,#0x88      -> r1 = 0x55667788
+
 
 def store_prog(base_mov):
     return BUILD_R1 + [base_mov, STR_R1_R0, LDR_R2_R0] + list(LDRB) + [SPIN]
@@ -121,6 +133,30 @@ def seed_bytes(base):
     return ["put b 0x%x, 0x%02x" % (base + i, v)
             for i, v in enumerate((0x11, 0x22, 0x33, 0x44,
                                    0x55, 0x66, 0x77, 0x88))]
+
+
+def swp_prog():
+    return BUILD_R1_5567 + [MOV_R0_COLD, SWP_R2_R1_R0] + list(LDRB) + [SPIN]
+
+
+def swpb_prog():
+    return BUILD_R1_5567 + [MOV_R0_COLD, SWPB_R2_R1_R0, LDRB[0]] + [SPIN]
+
+
+def swp_unal_prog():
+    #  r0 = P+1 for the swp only; the ladder re-bases at the aligned P and adds
+    #  the P+4 sentinel read. Pre-fix the swp reads/writes 4 RAW bytes at P+1;
+    #  post-fix both accesses use P and the load rotates (DDI 0100I A4.1.108).
+    return (BUILD_R1_5567 + [MOV_R0_COLD, ADD_R0_1, SWP_R2_R1_R0, SUB_R0_1]
+            + list(LDRB) + [LDRB_R7_R0_4, SPIN])
+
+
+#  #386 unaligned seeds: the P+4 sentinel byte must NOT be 0x55 -- the buggy
+#  raw store's last byte (LE emit of 0x55667788) lands 0x55 at P+4, so a 0x55
+#  seed would make survival and corruption indistinguishable. 0x99 is disjoint
+#  from every seed and store byte.
+def swp_unal_seeds():
+    return seed_bytes(COLD)[:4] + ["put b 0x%x, 0x99" % (COLD + 4)]
 
 
 def run(machine, prog, seeds, regs):
@@ -271,6 +307,51 @@ GROUPS = [
      SEED_WARM_W + seed_bytes(WARM), [
         ("le ldm warm r1", "r1", 0x44332211, 0x44332211, "CTRL"),
         ("le ldm warm r2", "r2", 0x88776655, 0x88776655, "CTRL"),
+    ]),
+    #  ---- #386 rows: X(swp) was LE-only on BOTH its load-assemble and its
+    #  store-emit, and used the RAW address with no rotate (DDI 0100I A4.1.108
+    #  U==0: load rotates by 8*addr[1:0], store does not, both accesses use the
+    #  aligned word). `buggy` = the pre-#386 build. The LE ALIGNED rows are
+    #  byte-identical pre/post (CTRL); the LE UNALIGNED rows MOVE under the fix
+    #  (the manual's rotation is endian-independent), so they are ARCH rows,
+    #  deliberately NOT must-not-move controls. "swp be unal b2" is arch==buggy
+    #  BY CONSTRUCTION for the +1 shift: buggy puts LE-d[1]=bits[15:8] at P+2,
+    #  fixed puts BE-d[2]=bits[15:8] there too -- same byte for ANY store value.
+    #  The P+4 sentinel (0x99 seed) proves the buggy raw P+1..P+4 write did NOT
+    #  occur -- 0x99 survives fixed, 0x55 (the buggy write's last byte) pre-fix.
+    ("386 be swp", "barearm", swp_prog(), seed_bytes(COLD)[:4], [
+        ("swp be word", "r2", 0x11223344, 0x44332211, "DISC"),
+        ("swp be b0", "r3", 0x55, 0x88, "DISC"),
+        ("swp be b1", "r4", 0x66, 0x77, "DISC"),
+        ("swp be b2", "r5", 0x77, 0x66, "DISC"),
+        ("swp be b3", "r6", 0x88, 0x55, "DISC"),
+    ]),
+    ("386 le swp", "testarm", swp_prog(), seed_bytes(COLD)[:4], [
+        ("swp le word", "r2", 0x44332211, 0x44332211, "CTRL"),
+        ("swp le b0", "r3", 0x88, 0x88, "CTRL"),
+        ("swp le b1", "r4", 0x77, 0x77, "CTRL"),
+        ("swp le b2", "r5", 0x66, 0x66, "CTRL"),
+        ("swp le b3", "r6", 0x55, 0x55, "CTRL"),
+    ]),
+    ("386 be swpb", "barearm", swpb_prog(), seed_bytes(COLD)[:1], [
+        ("swpb be r2", "r2", 0x11, 0x11, "CTRL"),
+        ("swpb be mem", "r3", 0x88, 0x88, "CTRL"),
+    ]),
+    ("386 be swp unal", "barearm", swp_unal_prog(), swp_unal_seeds(), [
+        ("swp be unal r2", "r2", 0x44112233, 0x99443322, "DISC"),
+        ("swp be unal b0", "r3", 0x55, 0x11, "DISC"),
+        ("swp be unal b1", "r4", 0x66, 0x88, "DISC"),
+        ("swp be unal b2", "r5", 0x77, 0x77, "CTRL"),
+        ("swp be unal b3", "r6", 0x88, 0x66, "DISC"),
+        ("swp be unal sent", "r7", 0x99, 0x55, "DISC"),
+    ]),
+    ("386 le swp unal", "testarm", swp_unal_prog(), swp_unal_seeds(), [
+        ("swp le unal r2", "r2", 0x11443322, 0x99443322, "DISC"),
+        ("swp le unal b0", "r3", 0x88, 0x11, "DISC"),
+        ("swp le unal b1", "r4", 0x77, 0x88, "DISC"),
+        ("swp le unal b2", "r5", 0x66, 0x77, "DISC"),
+        ("swp le unal b3", "r6", 0x55, 0x66, "DISC"),
+        ("swp le unal sent", "r7", 0x99, 0x55, "DISC"),
     ]),
 ]
 

@@ -4192,6 +4192,71 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-sixth round (#386) — a big-endian guest's every swp moved both its words byte-reversed, and an unaligned swp used the raw address
+
+`X(swp)` (cpu_arm_instr.c) assembled the loaded word and emitted the stored word
+little-endian UNCONDITIONALLY — no `cpu->byte_order` term on either side — and passed the
+raw `Rn` to both `memory_rw` calls with no rotate. Every sibling has been order-aware since
+`#372`/`#378`/`#382`/`#383` (ldrex/strex always were), leaving `swp` the last word-sized ARM
+memory handler outside the series: on a BE guest every swp byte-reversed the value INTO
+`Rd` AND the value INTO memory (the #342/#355 self-contradiction class — an `LDR` of the
+same bytes disagreed with what the `SWP` beside it had just read). Unaligned, DDI 0100I
+A4.1.108 (U==0) rotates the LOAD right by `8*address[1:0]` and gives BOTH accesses the
+ALIGNED word (alignment per LDR on the read, per STR on the write, p. A4-213) — the "third
+model" the 2026-08-11 alignment-family entry had already measured crossing a word boundary.
+
+**The fix** mirrors the siblings token-for-token: runtime `cpu->byte_order` branches
+(ldrex's assemble, strex's emit), `rot_sh = 8 * (addr & 3)` captured from the RAW address
+BEFORE `addr &= ~(uint32_t)3` (the reversed order is the silent trap — a post-mask capture
+is always 0 and every aligned row still passes), the rotate applied to the LOAD only and
+guarded on `rot_sh` (`<<32` is UB in C), `Rd` written LAST (a data abort on either access
+leaves it unchanged — the manual's both-access clause), `swpb` untouched (byte-sized,
+order-free; A4.1.109 carries no Alignment note). Masking in place is safe because swp has
+no base writeback (the loadstore template's own header lists it). The aligned LE path is
+byte-identical to the old code, and the alignment half is inert on aligned addresses (mask
+a no-op, rotate skipped) — neither half can regress a currently-correct case.
+
+**Measured, in order.** RED on the committed build: **42/58**, all 16 new DISC rows at
+their EXACT predicted buggy values (`0x44332211` aligned; `0x99443322` unaligned on both
+orders — the `0x99` sentinel byte visible in the top byte proves the raw `P+1..P+4` read;
+ladders `88 77 66 55`; sentinel stuck at `0x55`). Exact-value hits double as the
+register-field proof: a dead or wrong-register swp reads 0, matching neither column. GREEN
+after the fix: **58/58**. Mutants, each executed, each at its predicted count: LE-revert
+**48/58** (`swp be word` red at the buggy column), remove-rotate **56/58** (unaligned r2 =
+`0x11223344` — assembled right, unrotated), remove-mask **46/58** (sentinel = `0x88`, the
+shifted write's last byte landing at P+4). Three distinct signatures, both halves' detectors
+proven load-bearing. Gate 14 grown 34 → 58 endian rows + 16 named DISC rows: **PASS, 317
+checks** (was 301), zero FAIL/SKIP in the log, single clean run with nothing else on the
+host.
+
+**Probe design facts worth keeping** (from the pass-1 panel; the first is three seats
+convergent): the LE-unaligned rows are ARCH rows, not must-not-move controls — the manual's
+rotation is endian-independent, so the fix MOVES them (to `0x11443322`), and a habit-written
+LE control would false-red the FIXED build; `swp be unal b2` is arch==buggy BY CONSTRUCTION
+for the +1 shift (bits[15:8] of the store value lands at P+2 under both the buggy
+shifted-LE write and the fixed BE write, for ANY value), so it is typed CTRL and kept out of
+the gate's named-DISC list; and the P+4 sentinel is seeded `0x99`, NOT `0x55`, because the
+buggy write's last byte IS `0x55` — a 0x55 seed makes survival and corruption
+indistinguishable (the distinguishable-token rule applied at the byte level).
+
+**Panel.** Pass 1: eight seats, UNANIMOUS on both claims and on folding the alignment half
+in, gated on the RED unaligned reproduction — satisfied above. Two seat claims settled by
+mechanism: one "critical compile blocker" (the sketch's BE arm allegedly reads `word[*]`)
+was a FABRICATED QUOTE — the brief's sketch uses `d[*]` throughout, proven from another
+seat's verbatim echo of the same brief; a ladder-base observation (the unaligned witness
+must re-base its byte reads at the aligned P, not at `r0 = P+1`) was REAL and adopted.
+Pass 2 on the shipped diff follows this commit; its findings, if any, land as the next
+round (the #384 precedent).
+
+**Residuals, adjudicated at round end:** (1) `swp`'s `fatal("swp: load/store failed")` on a
+legitimate guest data abort is console noise the template's silent return avoids, and the
+handler does not reset `next_ic` the way the template's `!cpu->running` arm does — task
+filed; the behaviour (return without writing Rd) is otherwise correct. (2)
+`cpu_arm_instr_loadstore.c:248-249` lacks the `(uint32_t)` cast on its `<<24` term (formal
+UB for byte values ≥ 0x80, benign on real compilers) — RECORDED, not tasked: the effect is
+unmeasurable by construction, and a fix whose effect cannot be measured gets documented
+instead.
+
 ## One-hundred-and-twenty-fifth round (#385) — the records re-audit: no committed expectation was wrong, six records were
 
 Docs and comments only — no emulator code, no probe assertion, no gate expectation changed
@@ -4256,8 +4321,12 @@ recheck seat caught the memcpy 255/255 re-endorsement (re-filed UNRECONCILED abo
 flagged that mid-review fixes superseded the inlined diff the seats were briefed on — the
 committed version is the post-fix tree. Two seat claims were refuted against the brief
 text and source (a fabricated "word[*]" quote; a "wrong filename" that exists and carries
-the corrected fact). A records round catching its own restatement in pass 2 is now the
-fifth consecutive instance of the class — the second pass stays mandatory.
+the corrected fact). [#386 correction: the "word[*]" refutation belongs to the CONCURRENT
+#29 pass-1 panel, not to this round's pass-2 — only the wrong-filename claim was refuted
+here. The conflation itself shipped in this block: records rounds repeat their own error
+class even in the paragraph saying so.] A records round catching its own restatement in
+pass 2 is now the fifth consecutive instance of the class — the second pass stays
+mandatory.
 
 ## One-hundred-and-twenty-third round (#382, #383) — a big-endian guest's copyin/copyout folds moved byte-reversed words
 

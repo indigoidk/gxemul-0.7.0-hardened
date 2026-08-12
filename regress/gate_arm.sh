@@ -840,6 +840,9 @@ done
 # green. Fixed: 12/12. #378 grew the section to 34 rows (22 BE / 12 LE) with the
 # INVERTED polarity -- its sweep numbers are in the named-row comment below; the
 # 12-row narrative above this line is #372 history, scoped as such by #379.
+# #386 grew it to 58: swp (the last word-sized ARM memory handler, LE-only on
+# both sides + raw unmasked address) and its swpb/aligned-LE/by-construction
+# controls; sweep numbers in the named-row comment below.
 ENDLOG=$LOGDIR/gate_arm_endian.log
 python3 arm_endian_probe.py "$PMAX" > "$ENDLOG" 2>&1 || true
 
@@ -873,7 +876,7 @@ check "endian puts all landed (379)" "${eputs:-missing}" "OK"
 
 eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 egot=${eres%/*}; ewant=${eres#*/}
-check "endian rows run"     "${ewant:-missing}" 34
+check "endian rows run"     "${ewant:-missing}" 58
 check "endian rows correct" "${egot:-missing}"  "$ewant"
 
 # The BE discriminators named individually, so one reverting cannot hide
@@ -882,11 +885,23 @@ check "endian rows correct" "${egot:-missing}"  "$ewant"
 # the inverted polarity is the point, and the probe carries explicit per-row
 # kinds for exactly that reason. Swept against the pre-#378 build: 24/34, the
 # ten warm multi rows red at exactly the per-word-reversed values. Fixed: 34/34.
+# #386 grew the section 34 -> 58 (swp/swpb; X(swp) was LE-only both sides and
+# unrotated/unmasked). Swept against the pre-#386 build: 42/58, all 16 DISC
+# rows red at exactly the predicted buggy values. Fixed: 58/58. The LE unal
+# rows are DISC too (the manual's rotation is endian-independent, so the fix
+# MOVES them); "swp be unal b2" is arch==buggy by construction (bits[15:8]
+# lands at P+2 under both the buggy +1-shifted LE write and the fixed BE
+# write) and is deliberately NOT in this list.
 for v in "be cold word" "be cold byte0" "be cold byte1" \
          "be cold byte2" "be cold byte3" \
          "be stm warm b0" "be stm warm b1" "be stm warm b2" "be stm warm b3" \
          "be stm warm b4" "be stm warm b5" "be stm warm b6" "be stm warm b7" \
-         "be ldm warm r1" "be ldm warm r2"; do
+         "be ldm warm r1" "be ldm warm r2" \
+         "swp be word" "swp be b0" "swp be b1" "swp be b2" "swp be b3" \
+         "swp be unal r2" "swp be unal b0" "swp be unal b1" \
+         "swp be unal b3" "swp be unal sent" \
+         "swp le unal r2" "swp le unal b0" "swp le unal b1" \
+         "swp le unal b2" "swp le unal b3" "swp le unal sent"; do
     n=$(count "$ENDLOG" "^$v  .*ok$")
     check "  endian row: $v" "$n" 1
 done

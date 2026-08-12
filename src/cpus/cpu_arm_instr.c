@@ -1387,6 +1387,10 @@ Y(bfi)
 X(swp)
 {
 	uint32_t addr = reg(ic->arg[2]), data, data2;
+	/*  #386: an unaligned swp rotates the LOADED word right by 8*addr[1:0]
+	    (DDI 0100I A4.1.108 U==0, same as LDR p. A4-43); the shift is taken
+	    from the RAW address BEFORE the alignment mask below.  */
+	uint32_t rot_sh = 8 * (addr & 3);
 	unsigned char d[4];
 
 	/*  Synchronize the program counter:  */
@@ -1395,14 +1399,35 @@ X(swp)
 	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
 	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
 
+	/*  #386: Memory[address,4] is the ALIGNED word for BOTH accesses
+	    (A4-213: alignment per LDR on the read, per STR on the write).
+	    swp has no base writeback (see cpu_arm_instr_loadstore.c), so
+	    masking in place loses nothing. Like the #362 template this models
+	    pre-v6 U==0; v6+ U==1 (true unaligned access, no rotate) is not.  */
+	addr &= ~(uint32_t)3;
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_READ,
 	    CACHE_DATA)) {
 		fatal("swp: load failed\n");
 		return;
 	}
-	data = d[0] + (d[1] << 8) + (d[2] << 16) + ((uint32_t)d[3] << 24);
+	/*  #386: assemble and emit per cpu->byte_order, mirroring ldrex/strex;
+	    this handler was LE-only on both sides, so a BE guest read AND wrote
+	    every swp word byte-reversed. The store emits Rm UNROTATED (the
+	    manual rotates only the load), and Rd is written LAST so a data
+	    abort on either access leaves it unchanged (A4-213).  */
+	data = cpu->byte_order == EMUL_LITTLE_ENDIAN
+	    ? d[0] + (d[1] << 8) + (d[2] << 16) + ((uint32_t)d[3] << 24)
+	    : d[3] + (d[2] << 8) + (d[1] << 16) + ((uint32_t)d[0] << 24);
+	if (rot_sh)	/*  guarded: a 32-bit shift by 32 is undefined in C  */
+		data = (data >> rot_sh) | (data << (32 - rot_sh));
 	data2 = reg(ic->arg[1]);
-	d[0] = data2; d[1] = data2 >> 8; d[2] = data2 >> 16; d[3] = data2 >> 24;
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+		d[0] = data2; d[1] = data2 >> 8;
+		d[2] = data2 >> 16; d[3] = data2 >> 24;
+	} else {
+		d[3] = data2; d[2] = data2 >> 8;
+		d[1] = data2 >> 16; d[0] = data2 >> 24;
+	}
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_WRITE,
 	    CACHE_DATA)) {
 		fatal("swp: store failed\n");
