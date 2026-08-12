@@ -193,20 +193,30 @@ for v in taken takenj untaken; do
     check "  idle row: $v" "$n" 1
 done
 
+#  #381: the predicate requires the EQUALITY slot == ntn, not merely both
+#  >= 1 -- in the taken-row session every fold entry is taken, so the two
+#  counters are equal there by the handler's construction (one slot dispatch
+#  per entry), and a handler that dispatched the slot twice per entry (or a
+#  counters line reading slot:12344) satisfied the old >=1 predicate while
+#  every value row stayed green (the witness store is idempotent). ntp == 0
+#  pins EXCLUSIVE use of the new handler in the same session (the plain
+#  handler's counter was parsed and then ignored -- a pass-2 seat's finding).
 ctrs=$(grep -o "M380_COUNTERS=[A-Za-z0-9:,/]*" "$ILOG" | tail -1 | cut -d= -f2)
 case "$ctrs" in
     installs:*)
         i2=${ctrs#installs:*/*/}; i2=${i2%%,*}
+        ntp=${ctrs#*ntp:}; ntp=${ntp%%,*}
         ntn=${ctrs#*ntn:}; ntn=${ntn%%,*}
         slt=${ctrs#*slot:}; slt=${slt%%,*}
         ds=${ctrs#*ds:}
         [ "${i2:-0}" -ge 1 ] && [ "${ntn:-0}" -ge 1 ] && \
-            [ "${slt:-0}" -ge 1 ] && [ "${ds:-1}" -eq 0 ] \
+            [ "${slt:-0}" -eq "${ntn:-1}" ] && [ "${ntp:-1}" -eq 0 ] && \
+            [ "${ds:-1}" -eq 0 ] \
             && cver="OK" || cver="BAD($ctrs)"
         ;;
     *)  cver="DEAD" ;;
 esac
-check "  idle counters: arm3 fired, slot ran, guard quiet" "$cver" "OK"
+check "  idle counters: arm3 fired, slot==ntn, ntp=0, guard quiet" "$cver" "OK"
 
 ires=$(grep -o "M380_RESULT=[0-9]*/[0-9]*" "$ILOG" | tail -1 | cut -d= -f2)
 check "idle rows run"     "${ires#*/}" 3

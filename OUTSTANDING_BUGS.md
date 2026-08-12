@@ -3105,3 +3105,16 @@ corruption without a clear host-OOB path.
 >   dropped by the fast path. No such guest exists on the rigs (the matched sequences use
 >   0xff), so the conjunct has no live install to measure against — recorded as
 >   by-construction, the honest label for a fix whose defect cannot be reproduced on any rig.
+>
+> **#381 additions to the residual list** (pass-2 findings; the two above stand):
+> - **The once-per-BREAK approximation is itself a recorded semantic limitation, not just a
+>   comment**: for a matcher-accepted slot that is accumulating, MMIO, order-sensitive, or
+>   one that WRITES THE POLLED WORD (arm 3 is the first arm whose elided instruction can —
+>   `tb1`/`ld` cannot), the collapsed spin diverges from per-iteration execution; a
+>   polled-word-writing slot still arms one idle sleep decided from the PRE-slot value.
+>   Exact for the live guests' loop-invariant `or`; listed so the next matcher widening
+>   re-derives nothing.
+> - **The crosspage fold-loss residual above is narrower than it reads**: the reset path
+>   requires `low_pc == 0`, so the fold is lost only when the loop-head `tb1` sits at page
+>   index 0 AND a `.n` branch ends the previous page with it as its slot — strengthening the
+>   performance-only triage.

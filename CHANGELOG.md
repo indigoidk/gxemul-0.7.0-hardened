@@ -4198,7 +4198,10 @@ there means the optimisation is skipped, not that anything faults.
 `tb1 / ld / bcnd.n` shape — five copies in the current boot image — but
 installed `idle_with_tb1`, the handler written for the **plain**-`bcnd`
 sequence. The `.n` delay slot, which the MC88100 executes once per branch
-*whether or not it is taken* (UM p. 1-4 §1.2.5, p. 3-26 §3.3.2, p. 3-35),
+*whether or not it is taken* (UM p. 1-4 §1.2.5, p. 3-26 §3.3.2 — the manual's
+own TOC mislabels this section "Shift Circular"; the body heading is
+authoritative, a #381-recorded caveat so no future reader "corrects" a
+correct cite — and p. 3-35),
 therefore ran **zero** times per taken iteration for as long as the guest
 idled. On loop exit it ran once — by accident (`next_ic = &ic[3]` happens to
 be the slot) — which is exactly why no post-loop witness can see the defect:
@@ -4222,12 +4225,20 @@ fold accepts a store, an MMIO access, or a faulting instruction.
   DATA_ACCESS, but diverges on the third `m88k_exception` branch's SFIP (the
   arm upstream itself labels "Perhaps something like this could work"), on
   INSTRUCTION_ACCESS's zeroing, and left `delay_target` stale-from-the-last-
-  branch rather than current.
+  branch — consequence-bearing only jointly with the cleared flag, since no
+  exception arm reads `delay_target` when `delay_slot` is `NOT_DELAYED`
+  [#381 tightened]. (The commit message additionally listed XIP_E among the
+  wrongly-filed state; that was wrong — XIP_E filing is unconditional on
+  `delay_slot` and identical old and new. The message is immutable; this
+  line is its correction, #381.)
 - **#380 (matcher)** — arm 3 requires the slot to be a *real same-page ic*
   (`n_back <= ENTRIES-2`: at the page's last slot the "delay slot" would be
-  the `end_of_page` sentinel, which repoints `cur_ic_page` when invoked —
-  executing that would be worse than the elision; the declined case falls
-  through to the faithful path, which runs the slot natively). Both `tb1`
+  the `end_of_page` sentinel, which repoints `cur_ic_page` when invoked. The
+  bound prevents a desync the NEW handler would otherwise have introduced —
+  the old code never called `ic[3]` as a slot, it merely dispatched it as
+  `next_ic`, where `end_of_page` runs normally and correctly [#381 reframed
+  this from "worse than the elision"]; the declined case falls through to the
+  faithful path, which runs the slot natively). Both `tb1`
   arms gain `vector >= M88K_EXCEPTION_USER_TRAPS_START`: `X(tb1)` raises
   PRIVILEGE_VIOLATION in user mode for vectors below 128 and the fast paths
   never called it — an elided check closed by construction (the matched
@@ -4244,7 +4255,10 @@ fold accepts a store, an MMIO access, or a faulting instruction.
   already carry. A matcher gate on the slot's identity is impossible, not
   merely undesirable: `combination_check` runs in the tail of the bcnd's own
   translation and read-ahead walks forward, so the slot is `TO_BE_TRANSLATED`
-  at matcher time in *both* modes — an identity test would be dead always.
+  at matcher time in *both* modes — an identity test would be dead on every
+  first-touch path and unreliable in general (a resume into the slot address
+  can pre-translate it before the bcnd re-arms the matcher — #381 softened
+  the original "dead always"), which still fully supports the decision.
 - **#380 (`cpu_m88k.h`, `cpu_m88k.c`)** — pull-only counters
   (`installs[3]`, `n_taken_plain`, `n_taken_n`, `slot_runs`, `in_delayslot`)
   printed first in `m88k_cpu_tlbdump` (on the test machines every CMMU slot
@@ -4274,29 +4288,37 @@ fold accepts a store, an MMIO access, or a faulting instruction.
 path both stored. Fixed build: 3/3, and the counters pin the semantics:
 `installs 0/0/1, n_taken_n 6172, slot_runs 6172` — the taken path entered
 6,172 times in the four-second idle window and the slot ran **exactly once
-per entry** (the two counts equal by construction; pre-fix that count was
-zero), guard quiet. Mutation proof: arm 3 reverted to the plain handler by
+per entry** (the two counts are equal because this probe's loop never exits —
+zero untaken entries; on the live rig they differ by exactly the untaken
+count [#381 corrected the original "equal by construction"]; pre-fix the slot
+count was zero), guard quiet. Mutation proof: arm 3 reverted to the plain handler by
 constant (exactly-once anchor), `taken` back to `deadbeef`, references still
 green, counters showing the designed signature `installs[2]>=1,
 n_taken_plain>=1, n_taken_n==0`.
 
 **The final gate took four runs, and the diagnosis is part of the record.**
-`gate_ab` (the luna88k boot, with the five in-image arm-3 sequences now
-running the new handler) FAILED twice on the `login:` marker — and on the
-second run the pre-batch reference binary, which contains no `#380` code,
-missed it too, which acquitted the fix and indicted the environment. A stray
-emulator process was found and killed (`pkill` exit 0), yet a third clean-host
-run still failed on *both* binaries. What settled it was measurement, not
-theory: a solo timestamped boot of the `#380` binary reached `login:` at
-129.7 s (budget 300 s) with the fold's counters healthy on the live rig
-(`installs 0/0/1, n_taken_n 34415, slot_runs 34415+3648` — one slot dispatch
-per entry, taken and untaken, and user-mode PATC entries proving userland up);
-the gate's *exact* `run_emu` invocation replicated solo scored 1:1:1 with
-`timeout` reaping the emulator cleanly; and the full gate re-run under a
-10-second process-count watcher **passed 1:1:1 / 1:1:1 (5 checks)** with
-exactly one emulator alive throughout. Net: three independent green
-measurements of the `#380` boot; the two red runs were transient host load
-(the stray-process era) — the third measured instance of the `gate_ab`
+`gate_ab` (the luna88k boot — five static copies of the arm-3 shape exist in
+the image, and exactly **one** was translated and folded during the boot,
+`installs[2] == 1`; the other four are almost certainly install-set copies
+never executed [#381 corrected this sentence's original "five sequences now
+running the new handler" over-claim]) FAILED **three times** on the `login:`
+marker [#381: an earlier draft of this paragraph said "twice" in one place
+and "the two red runs" in another while itself describing three failures —
+initial, re-run, and post-`pkill` clean-host run]. On the second run the
+pre-batch reference binary, which contains no `#380` code, missed the marker
+too, which acquitted the fix and indicted the environment; a stray emulator
+process was found and killed (`pkill` exit 0), yet the third, clean-host run
+still failed on *both* binaries. What settled it was measurement, not theory:
+a solo timestamped boot of the `#380` binary reached `login:` at 129.7 s
+(budget 300 s) with the fold's counters healthy on the live rig
+(`installs 0/0/1, n_taken_n 34415, slot_runs 38063 = 34415 taken + 3648
+untaken` — one slot dispatch per entry, and user-mode PATC entries proving
+userland up); the gate's *exact* `run_emu` invocation replicated solo scored
+1:1:1 with `timeout` reaping the emulator cleanly; and the full gate re-run
+(the fourth) under a 10-second process-count watcher **passed 1:1:1 / 1:1:1
+(5 checks)** with exactly one emulator alive throughout. Net: three
+independent green measurements of the `#380` boot; the three red runs were
+transient host conditions — the third measured instance of the `gate_ab`
 wall-clock oracle's load-sensitivity class, now the priority argument for the
 queued gate-hardening item, which also inherits this round's diagnostic kit
 (the marker-timestamp boot script and the process-count watcher). One
