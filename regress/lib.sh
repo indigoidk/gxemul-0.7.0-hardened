@@ -83,7 +83,29 @@ gate_end() {
     fi
 }
 
-gate_skip() { echo; echo "${C_SKIP}$GATE_NAME: SKIP${C_OFF} -- $*"; exit $EXIT_SKIP; }
+#  #371: gate_skip() exits with the SKIP code, which run.sh maps to
+#  REGRESS_PASS_WITH_GAPS -- a green-ish verdict. It never consulted the running
+#  failure counter, so a gate that had ALREADY recorded red checks and then hit a
+#  gate_skip (a probe that produced no result line, a missing rig image) reported
+#  those reds as a skip and they vanished from the battery. Measured on a
+#  synthetic gate: one FAIL then gate_skip exited 77, PASS_WITH_GAPS. This is the
+#  same "a green row means nothing" class the gate rows themselves guard against,
+#  in the harness's own control flow.
+#
+#  So a gate_skip AFTER failures is a FAIL, not a skip: the skip cannot un-record
+#  what already failed. A gate_skip with a clean slate stays a genuine skip (a
+#  preflight that could not run at all -- need_file/need_exec). degrade() was
+#  already correct: gate_end() tests _fails before _degraded, so a degraded gate
+#  with recorded failures already reports FAIL. Nothing there to change.
+gate_skip() {
+    echo
+    if [ "${_fails:-0}" != 0 ]; then
+        echo "${C_BAD}$GATE_NAME: FAIL${C_OFF} ($_fails of $_checks checks failed" \
+             "before this section could not run: $*)"
+        exit 1
+    fi
+    echo "${C_SKIP}$GATE_NAME: SKIP${C_OFF} -- $*"; exit $EXIT_SKIP
+}
 
 need_file() {
     for f in "$@"; do

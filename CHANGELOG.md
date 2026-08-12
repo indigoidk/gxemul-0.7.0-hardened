@@ -4192,6 +4192,39 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fourteenth round (#371) — a gate that failed after a green section could report SKIP, hiding the failure
+
+The battery's own control flow carried the exact defect its rows are built to
+catch: a green result that means nothing. `gate_skip()` in `regress/lib.sh` exited
+with the SKIP code, which `run.sh` maps to `REGRESS_PASS_WITH_GAPS` — a pass-ish
+verdict — and it never consulted the running failure counter. So a gate that had
+**already recorded red checks** and then hit a `gate_skip` (a probe that produced no
+result line, a missing rig image) reported those reds *as a skip*, and they vanished
+from the battery.
+
+- **#371 (`regress/lib.sh`)** — `gate_skip()` now checks `_fails`: a skip requested
+  *after* failures is a FAIL, because a skip cannot un-record what already failed; a
+  skip from a clean slate stays a genuine skip.
+
+**Measured, test-first, on a synthetic gate** sourcing the committed `lib.sh` — no
+emulator needed, which is why this was the round to run alongside a build-tree one.
+Before: one recorded FAIL followed by `gate_skip` exited **77** (SKIP →
+`PASS_WITH_GAPS`), the failure gone. After: the same sequence exits **1** and names
+it (`N of M checks failed before this section could not run`). Two controls confirm
+the fix is narrow: a `gate_skip` with **no** recorded failures still exits 77 — a
+preflight that genuinely could not run (`need_file`/`need_exec`) is not a failure —
+and `degrade()` is unchanged, because `gate_end()` already tests `_fails` before
+`_degraded`, so a degraded gate with failures already reported FAIL. The five
+mid-gate `gate_skip` sites in `gate_arm.sh` (a probe crashing after earlier sections
+passed) are now safe by this backstop; converting them to `degrade` so an
+all-green-then-crash renders as "N passed, part could not run" rather than SKIP is a
+larger gate refactor, filed separately.
+
+**Why this gate exists at all:** the same class the ARM gate rows keep finding — a
+row asserting an absence passes when the guarded thing is dead; a count no row reads
+is untested; a green that survives the very defect it guards. This one was in the
+scaffold rather than a probe. Gate 14 re-run unchanged after the fix.
+
 ## One-hundred-and-thirteenth round (#368) — the copyin fold's rotation shipped unreachable, and its row is a cross-path XOR
 
 `#362` added a six-word rotation to the `netbsd_copyin` instruction combiner, guarded by
