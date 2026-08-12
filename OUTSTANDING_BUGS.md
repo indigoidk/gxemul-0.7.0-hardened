@@ -2812,7 +2812,15 @@ corruption without a clear host-OOB path.
 > "only `reg` can do this" narrowing — and is simultaneously the strongest argument for the fix,
 > which the brief had failed to make.
 
-> ## 2026-08-11 — `#295` has NO committed detector, and the mutant that reverts it passes the whole battery
+> ## 2026-08-11 — ✅ `#295` has NO committed detector, and the mutant that reverts it passes the whole battery → RESOLVED as #376
+>
+> **(2026-08-12, round 117.)** `regress/mips_fixedmode_probe.py` (14 rows × both rigs, every
+> discriminating row under non-zero FCSR.RM), gate 12 section 3 (21 → 53 checks, single clean
+> run green), and `regress/selftest_mutation_295.sh` (full-build /tmp mutation test — measured
+> M295MUT_PASS with the exact per-op flip matrix, three mutants). Two of the one-off probe's
+> rows were born vacuous against the primary mutant and were re-moded before promotion; the
+> ctc1-witness is the `cvt.w.d`+`cfc1` pair (trunc cannot witness it — mode-immune). See the
+> #376 CHANGELOG block for the panel adjudication and the two measurement incidents.
 >
 > Found while scoping what turned out to be an already-fixed queue item (the 2026-07-30 entry
 > above, now marked resolved). The correction is real and shipped; the **instrument is absent**.
@@ -3011,3 +3019,34 @@ corruption without a clear host-OOB path.
 > same `bdt_load` swap idiom (reuse it verbatim so the two paths cannot drift), or fall the
 > fast path through to `bdt_load` for BE guests. Guest-value impact is nil today (no BE ARM
 > guest boots), so like #372 the value is self-consistency + correctness, not a repaired boot.
+
+> ## 2026-08-12 — round 117 (#376) residuals: three committed-harness defects found by the pass-1 panel
+>
+> Surfaced while reviewing the #295-detector design; each is its own small round, none blocks
+> anything. Harness task numbers in parentheses.
+>
+> - **(#55) `selftest_mutation.sh` counts a crashing mutant as detection.** Its must-fail check
+>   treats "zero `DIFF_PASS` lines" as the mutant being caught (`:153` area) without checking
+>   the mutant executable's exit status — a mutant that crashes, times out, or emits nothing
+>   passes vacuously. `selftest_mutation_295.sh` already refuses this (`grep M295_RESULT= ||
+>   SETUP_FAIL`); port the same discipline back. Test-first: swap a mutant binary for
+>   `/bin/false` and watch the old check "detect" it.
+> - **(#56) `mips_rounding_probe.py`'s readback accepts any dump-shaped line** (`:151` regex) —
+>   no binding between the parsed line's address and the requested one, so a stale or
+>   interleaved dump line can satisfy a row. The #376 probe binds its parse to the aligned
+>   32-bit line address (`dump` aligns the line address DOWN to 16 bytes, truncates it to 32
+>   bits, and prints only in-range words, in memory order — measured, and worth knowing before
+>   writing any new dump parser). Same family as the #37 prompt-predicate sweep.
+> - **(#57) arc-only `.l` rows for `round.l`/`ceil.l`/`floor.l`.** The W rows prove the forced
+>   constants (same source line, `to_w ? W : L`), but the L branch and the L range guard
+>   (`float_emul.c` strict lower bound) have no row. Needs a 64-bit readback design that avoids
+>   `sdc1`'s #273 ambiguity on nothing — arc is MIPS-III so `sdc1` is legal there, but two
+>   `swc1`-visible words of an FR=1 register need the pair trick or `dmfc1`; design first.
+>   Candidate discriminators (from a pass-1 seat, unverified): `round.l.d(2147483648.5)@RP`,
+>   `ceil.l.d(2147483648.25)@RM`, `floor.l.d(-2147483648.25)@RP`.
+>
+> Also recorded: the pass-1 kimi seat produced 328 bytes (a thinking-model non-answer) and was
+> counted as a SEAT FAILURE, not agreement — 7 of 8 seats answered. The `cpu_mips_coproc.c:1185`
+> stale comment (claims W/L ignore the store mode and cvt.w/trunc.w are indistinguishable —
+> false since #294) is folded into the existing comment-only docs task rather than forcing a
+> shared-C propagation into a regress-only round.

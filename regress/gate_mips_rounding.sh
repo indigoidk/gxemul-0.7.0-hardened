@@ -1,6 +1,6 @@
 #!/bin/bash
-# GATE 12 -- MIPS cvt.d.l AND cvt.s.l rounding (arc), and #303 subnormal-operand
-# decode on BOTH MIPS rigs.
+# GATE 12 -- MIPS cvt.d.l AND cvt.s.l rounding (arc), #303 subnormal-operand
+# decode on BOTH MIPS rigs, and #295 forced rounding modes on BOTH rigs.
 #
 # What this protects
 # -----------------
@@ -29,6 +29,7 @@ KERNEL=$ROOT/gxemul_arc_rig/bsd
 PMAX_KERNEL=$ROOT/gxemul_pmax_rig/bsd
 LOG=$LOGDIR/gate_mips_rounding.log
 SLOG=$LOGDIR/gate_mips_subnorm.log
+FLOG=$LOGDIR/gate_mips_fixedmode.log
 
 # ALL required inputs preflighted here, before either probe runs: a gate_skip fired
 # after the first section has recorded checks would return SKIP and DISCARD any
@@ -115,6 +116,56 @@ for v in "pmax mul.s subn" "pmax cvt.d.s subn" "pmax add.s flip" "arc mul.s trap
          "pmax BGEZ control" "arc BGEZ control"; do
     n=$(count "$SLOG" "^$v .*ok$")
     check "  subnorm: $v" "$n" 1
+done
+
+# ---- #295: forced rounding modes, both rigs ---------------------------------
+# round.w/ceil.w/floor.w force their architectural modes; the likeliest revert
+# (cvt.w's FPU_RM_FROM_FCSR copy-pasted back) EQUALS correct code under the
+# default FCSR.RM=0, so every discriminating row sets a NON-ZERO mode via guest
+# ctc1. Both rigs as TRANSPORT breadth only -- the constants sit in shared C
+# below the rigs' convergence point (cop1_slow -> coproc_function ->
+# fpu_function), so either rig kills the constant mutant; what differs per rig
+# is operand transport (FR=0 lwc1-pair vs FR=1 ldc1) and the dyntrans
+# instantiation. Source-format scope: D rows only -- the .s spellings reach the
+# SAME call sites with the SAME constants (the fmt field is masked out of the
+# decode switch), and .l is queue item #57. Row names are asserted as FIXED
+# strings with embedded delimiters (M295_ROW=rig:name RESULT=PASS): this gate's
+# own padded-column `^name .*ok$` pattern has already produced both a
+# double-match and an unsatisfiable row elsewhere in the battery.
+# selftest_mutation_295.sh (manual lane, full rebuild per mutant) proves each
+# row flips under its op's mutant; the trunc/NaN/cvt/cfc1 rows are CONTROLS and
+# cannot flip by construction.
+python3 mips_fixedmode_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" both > "$FLOG" 2>&1 || true
+
+if ! grep -q "M295_RESULT=" "$FLOG"; then
+    note "fixedmode probe produced no result line; last lines follow"
+    tail -5 "$FLOG" | sed 's/^/       /'
+    check "fixedmode probe completed" "no" "yes"
+    gate_end; exit $?
+fi
+
+grep "M295_ROW=" "$FLOG" | sed 's/^/       /'
+
+# The ctc1 witness pair is LOAD-BEARING per rig: on the fixed binary every
+# discriminating row is FCSR-independent, so only the cvt.w row (which consumes
+# FCSR) and the cfc1 readback prove the guest's mode write landed. A trunc row
+# cannot -- trunc is mode-immune in every state.
+for rig in pmax arc; do
+    c=$(grep -o "M295_CONTROL=$rig:[A-Z]*" "$FLOG" | tail -1 | cut -d: -f2)
+    check "  fixedmode ctc1 witness ($rig)" "${c:-missing}" "OK"
+done
+
+fres=$(grep -o "M295_RESULT=[0-9]*/[0-9]*" "$FLOG" | tail -1 | cut -d= -f2)
+fgot=${fres%/*}; fwant=${fres#*/}
+check "fixedmode rows run"     "$fwant" 28
+check "fixedmode rows correct" "$fgot"  "$fwant"
+
+for rig in pmax arc; do
+    for n in r25rp r35rm r27rm rn25rm rbnd c21rm cn225rm f29rp fn225rp \
+             cvt27rm cfc1 t35rp tn35rm nan; do
+        c=$(grep -cF "M295_ROW=$rig:$n RESULT=PASS" "$FLOG")
+        check "  fixedmode: $rig:$n" "$c" 1
+    done
 done
 
 gate_end

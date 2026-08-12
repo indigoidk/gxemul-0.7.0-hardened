@@ -4192,6 +4192,85 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-seventeenth round (#376) — #295's fix gets the detector its reverting mutant demanded
+
+`#295` (round 60) made `round.w`/`ceil.w`/`floor.w` force their architectural
+rounding modes instead of inheriting FCSR.RM — and shipped with **no committed
+detector**. Worse than uncovered: the likeliest wrong edit, copy-pasting `cvt.w`'s
+`FPU_RM_FROM_FCSR` back over the forced constant, **equals the correct code
+whenever FCSR.RM is 0** (the reset default), and every committed row left FCSR
+alone — so the reverting mutant passed the *entire* battery. That is the
+taxonomy's sharpest class: a shipped fix whose mutant nothing can see. Pure
+instrument round; no emulator change.
+
+- **#376 (`regress/mips_fixedmode_probe.py`, new)** — 14 rows × both rigs, every
+  discriminating row under a NON-ZERO FCSR.RM set by guest `ctc1`. Nine
+  must-flip rows (5 round incl. the `-2147483648.5` boundary witness, 2 ceil,
+  2 floor), five controls (a `cvt.w.d` FCSR-consumer, a `cfc1` readback, two
+  trunc-wiring contrasts, a NaN result pin using the tree's legacy-quiet
+  encoding `0x7ff7ffffffffffff`). pmax loads doubles as the `$f0/$f1` pair with
+  two MIPS-I `lwc1` and reads back via `swc1`, never `sdc1` (#273). Fresh
+  emulator per row plus an explicit `$f2` poison from the seeded result slot, so
+  a faulting op and a dead store are the same distinguishable token. Output is
+  fixed-string `M295_ROW=rig:name RESULT=…` lines — this battery has already
+  produced both a double-match and an unsatisfiable row from padded-column
+  regexes.
+- **#376 (`regress/gate_mips_rounding.sh`)** — section 3: 32 checks (28 rows,
+  2 per-rig ctc1-witness controls, 2 totals). Gate 12 goes 21 → 53 checks, all
+  green in a single clean run on the committed build.
+- **#376 (`regress/selftest_mutation_295.sh`, new)** — the proof the rows are
+  not vacuous: a full-build /tmp-copy mutation test (the offline
+  `selftest_mutation.sh` compiles only `float_emul.c` by design and can never
+  see this decoder wiring). Three per-op mutants, substitution BY CONSTANT with
+  exactly-once anchors, a cmp-vs-repo baseline before trusting the copied tree,
+  and crash/empty output counted as SETUP_FAIL, never detection. **Measured:
+  M295MUT_PASS — the exact flip matrix**, every must-flip row failing with its
+  predicted directed-mode value (`round.w(2.7)@RM` 3→2, the boundary row
+  `0x80000000`→`0x7fffffff`, …) while every control stays green, three times.
+
+**What the eight-seat panel changed before a line was written.** Two rows of the
+round's own one-off probe were **born vacuous against the very mutant they
+existed to catch** — `round(2.5)@RM` and `round(-2.5)@RP` give the same answer on
+fix and mutant (re-moded to `@RP`/`@RM`, both now flip). The draft acceptance
+rule "every committed row must flip" was rejected independently by five seats as
+self-contradictory — the controls cannot flip; that is their purpose — and became
+the two-tier matrix above. The trunc rows had been labeled "proves the RM write
+took effect", which is exactly backwards (trunc is mode-*immune* in every state);
+the witness that `ctc1` landed is the `cvt.w.d` row (it consumes FCSR, so a dead
+write reads RN's 3 instead of RM's 2) plus the `cfc1` readback, whose `$t0` is
+clobbered between write and read so a no-op `cfc1` cannot false-pass. Both-rigs
+is recorded as *transport breadth*, not necessity — the constants sit in shared C
+below the rigs' convergence (`cop1_slow → coproc_function → fpu_function`, traced
+by a seat), and the `.s` spellings reach the same call sites with the same
+constants (the fmt field is masked out of the decode switch), so D rows cover the
+constant-mutant class by construction; `.l` on arc is queued (#57 in the harness
+list). One seat's claim of separate per-format switch arms was refuted from the
+decode mask. A non-answering seat (328 bytes) was recorded as a seat failure,
+never agreement.
+
+**Two measurement incidents, kept honestly.** (1) The *fifth* hand-assembled
+encoding incident: the pinned `cvt.w.d` constant `0x46200024` disassembles as
+`cvt.w.d r0,r0` — fd=0, overwriting the operand and never writing `$f2` (COP1
+puts func in bits 5:0, fd in 10:6; the right word is `0x462000a4`). A
+mnemonic-only unassemble check *blessed the wrong word*; the registers in the
+disassembly and the probe's import-time `assert helper==constant` caught it.
+(2) The probe's first full run scored 0/28 with every row `got=None` — the dump
+parse assumed the requested address appears on the output line, but `dump`
+prints the line address ALIGNED DOWN to 16 bytes and TRUNCATED to 32 bits, with
+only in-range words printed (out-of-range slots as blank columns) in MEMORY
+order. The ctc1-witness controls reported DEAD on both rigs, which is the
+control doing its one job: refusing a dead instrument instead of writing a
+false verdict. Fixed parse binds to the aligned line address.
+
+Panel pass 1 also surfaced three committed-harness defects, queued as their own
+work: `selftest_mutation.sh` counts a *crashing* mutant as detection (exit
+status ignored); `mips_rounding_probe.py`'s readback accepts any dump-shaped
+line without binding the address; and the arc `.l` coverage gap. The stale
+`cpu_mips_coproc.c:1185` comment (it still claims W/L ignore the mode and that
+cvt.w/trunc.w are indistinguishable — false since #294) folds into the existing
+comment-only docs task rather than forcing a shared-C propagation into this
+regress-only round.
+
 ## One-hundred-and-sixteenth round (#375) — the mips_loadstore[] index was a silent cross-file coupling; now a checked invariant
 
 The MIPS load/store dispatch table's index is computed one way in a generator and
