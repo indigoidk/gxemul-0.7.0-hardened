@@ -86,6 +86,7 @@ int devinit_mb89352(struct devinit *);
 int devinit_mk48txx(struct devinit *);
 int devinit_mp(struct devinit *);
 int devinit_mvme187(struct devinit *);
+int devinit_ne2000(struct devinit *);
 int devinit_ns16550(struct devinit *);
 int devinit_ohci(struct devinit *);
 int devinit_osiop(struct devinit *);
@@ -200,6 +201,7 @@ void autodev_init(void)
 	device_register("mk48txx", devinit_mk48txx);
 	device_register("mp", devinit_mp);
 	device_register("mvme187", devinit_mvme187);
+	device_register("ne2000", devinit_ne2000);
 	device_register("ns16550", devinit_ns16550);
 	device_register("ohci", devinit_ohci);
 	device_register("osiop", devinit_osiop);
