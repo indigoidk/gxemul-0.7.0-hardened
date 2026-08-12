@@ -782,7 +782,10 @@ check "fold-marker rows correct" "$fgot"  "$fwant"
 # architectural word on every build), so a dead barearm session cannot
 # false-green the BE group.
 fctrlbe=$(grep -o "FOLDMARK_CONTROL_BE=[A-Z]*" "$FOLDLOG" | tail -1 | cut -d= -f2)
-check "fold-marker BE control: barearm ran and folded" "${fctrlbe:-missing}" "OK"
+# #384: the control pins that the barearm rig ran, both passes executed, and
+# the rig is genuinely big-endian (an LE rig fails it). It does NOT prove the
+# fold fired -- that is the value rows' fire==1 -- so the name does not claim it.
+check "fold-marker BE control: barearm ran, rig is BE" "${fctrlbe:-missing}" "OK"
 
 for v in "A fold copyin fires" "A fold copyin quiet" \
          "A fold copyout fires" "A fold copyout quiet" \

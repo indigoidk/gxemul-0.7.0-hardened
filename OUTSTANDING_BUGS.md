@@ -3123,7 +3123,7 @@ corruption without a clear host-OOB path.
 >   index 0 AND a `.n` branch ends the previous page with it as its slot — strengthening the
 >   performance-only triage.
 
-> ## 2026-08-12 — ✅ netbsd_copyin/copyout folds ignore guest byte order (task #17) → RESOLVED as #382
+> ## 2026-08-12 — ✅ netbsd_copyin/copyout folds ignore guest byte order (task #17) → RESOLVED as #382, #383
 >
 > The live half: both folds moved six raw host words with no byte-order term while the
 > template they delegate to is order-aware since #372 — the #342/#355 class, and (unlike
@@ -3133,7 +3133,7 @@ corruption without a clear host-OOB path.
 > live r6..r11). Probe: 4 barearm rows (copyin two-pass XOR at +0/+1/+3 — the unaligned
 > ones are the swap-before-rotation discriminators — and a raw-byte copyout row) +
 > FOLDMARK_CONTROL_BE; gate 14 17 → 21 fold-marker rows; three-mutant proof (M383MUT_PASS).
-> Full mechanics + the three record corrections in the #382 CHANGELOG block.
+> Full mechanics + the three record corrections in the #382/#383 CHANGELOG block (#383 = the swap, #382 = the record corrections; see the block header).
 >
 > **Two premises this round retired, both were wrong records:**
 > - Reachability: the folds are reachable with the MMU OFF (is_userpage is set by the

@@ -604,7 +604,7 @@ for nm, prog, wf, wd, wr3 in (
 #  self-contradiction class, and (unlike memset/memcpy) NOT closed by #378's
 #  install gate because these matchers key on the GENERIC handler, which
 #  installs for a BE guest too. These rows put the folds' BE behaviour on the
-#  test surface: on the committed build they read reversed values (the defect);
+#  test surface: on the pre-fix build they read reversed values (the defect);
 #  after the swap they agree with the order-aware general path.
 #
 #  The two-pass XOR is the copyin machinery reused verbatim: pass 1 declines
@@ -651,10 +651,16 @@ for off in (0, 1, 3):
     agree = regs.get("r1") == 0
     puts = not regs.get("__put_failed")
     #  FOLDMARK_CONTROL_BE: pass 1's general value is r1 ^ sl, which is the
-    #  architectural word on BOTH builds -- a fix-state-independent liveness
-    #  pin (the barearm rig constructed, both passes ran, the fold fired),
-    #  mirroring ENDIAN_CONTROL378. A dead or mis-threaded session cannot
-    #  false-green the BE group.
+    #  architectural word 0x11223344 on BOTH builds (broken and fixed) -- a
+    #  fix-state-independent liveness pin, mirroring ENDIAN_CONTROL378. It pins
+    #  that the barearm rig CONSTRUCTED, both passes RAN, and (#384) that the
+    #  rig is genuinely big-endian: on an LE rig the general handler would
+    #  assemble the put-b bytes 11 22 33 44 as 0x44332211, so r1^sl != the
+    #  0x11223344 checked below and the control FAILs. It does NOT by itself
+    #  prove the fold FIRED -- a gated-off fold runs the general handler on
+    #  pass 2 too, giving r1 == 0 and the same control value; FOLDING is proven
+    #  by the value rows' fire==1 (#384 dropped the earlier "the fold fired"
+    #  over-claim). A dead/mis-threaded session cannot false-green the group.
     if off == 0 and regs.get("r1") is not None and regs.get("sl") is not None:
         if (regs["r1"] ^ regs["sl"]) == 0x11223344:
             control_be = "OK"
@@ -681,15 +687,30 @@ if r is None:
     rows.append(("A fold copyout BE", "DISC", "DEAD", False))
 else:
     buf, regs, _ = r
-    f = count(buf, "netbsd_copyout")
+    f, d, i = (count(buf, "netbsd_copyout"), declined(buf, "netbsd_copyout"),
+               installed(buf, "netbsd_copyout"))
     verb = "3: DEBUG" in buf
     gotb = regs.get("__dstbytes")
     bytes_ok = (gotb == BE_WANT_BYTES)
     adv = regs.get("r1") == 0x11000 + 24
+    #  #384: the source registers must SURVIVE the fold -- copyout captures the
+    #  six words before swapping precisely so it does NOT corrupt the guest's
+    #  live r6..r11, and nothing else asserted that. Without this a future
+    #  in-place "simplification" would keep the stored bytes correct while
+    #  clobbering the registers, and no row would catch it. (Validated by a
+    #  throwaway in-place-copyout mutant, which turns this False.) sl/fp are
+    #  r10/r11 in the seed.
+    regs_kept = all(regs.get(k) == BE_STORE_SEED[k]
+                    for k in ("r6", "r7", "r8", "r9", "sl", "fp"))
+    #  #384: f == 1, not >= 1 -- the single-pass straight-line block dispatches
+    #  the fold entry slot exactly once; d == 0 / i == 1 are the derived
+    #  numbers the probe's own doctrine requires (the loose "fires" shape was
+    #  legacy).
     rows.append(("A fold copyout BE", "DISC",
-                 "markers=%d verb=%s adv=%s bytes=%s"
-                 % (f, verb, adv, gotb.hex() if gotb else "none"),
-                 f >= 1 and verb and adv and bytes_ok))
+                 "fire=%d dec=%d inst=%d verb=%s adv=%s bytes=%s kept=%s"
+                 % (f, d, i, verb, adv, bytes_ok, regs_kept),
+                 f == 1 and d == 0 and i == 1 and verb and adv
+                 and bytes_ok and regs_kept))
 
 ngot = 0
 for name, kind, detail, ok in rows:

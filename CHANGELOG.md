@@ -4192,7 +4192,16 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
-## One-hundred-and-twenty-third round (#382) — a big-endian guest's copyin/copyout folds moved byte-reversed words
+## One-hundred-and-twenty-third round (#382, #383) — a big-endian guest's copyin/copyout folds moved byte-reversed words
+
+> **Correction numbers (#384): the load-bearing swap and its rows are tagged
+> `#383` in the source, probe, gate and mutation test; `#382` marks only the
+> record/comment corrections carried in the same commit (the
+> `(#382 correction:)` lines). Both compile-and-measure seats flagged that the
+> original block header said `#382` alone, which broke the grep-either-way
+> tag↔CHANGELOG traceability and would have collided with round 124's `#383`.
+> Read the bullets below accordingly: `#383` = the swap + probe rows, `#382` =
+> the three record corrections.**
 
 The `netbsd_copyin` and `netbsd_copyout` instruction-combiner folds move six
 words each between the guest register file and the host page by raw `uint32_t`
@@ -4205,18 +4214,25 @@ into disagree: the `#342`/`#355` self-contradiction class, and the divergence
 matchers key on the GENERIC `load/store_w1_word_u1_p0_imm` handler, which
 installs for a big-endian guest too, so they install and fire on `-E barearm`.
 
-- **#382 (`cpus/cpu_arm_instr.c`)** — copyin swaps the six words in place
+- **#383 (`cpus/cpu_arm_instr.c`)** — copyin swaps the six words in place
   (its `q32 = &r[6]` IS the destination), BEFORE `#362`'s rotation, because the
   architecture rotates the value assembled in the memory system's order, not
   the raw host word (DDI 0100I p. A4-44). copyout captures the six source words
   first (there `q32` aliases the guest's live `r6..r11`, so an in-place swap
   would corrupt them), swaps, then stores. Both use the open-coded byte-swap
   from `arm_push`/`arm_pop`, not `SWAP32` (which has no other use in `src/cpus`
-  and evaluates its argument four times), so the fold and the template cannot
-  drift. Two-armed `#ifdef HOST_LITTLE_ENDIAN` guards, the `#else` written for
-  symmetry (the matchers are `#ifdef HOST_LITTLE_ENDIAN`, so a fold never runs
-  on a big-endian host).
-- **#382 (`regress/arm_fold_marker_probe.py`)** — `session()` gains a `machine`
+  and evaluates its argument four times); the copy is textual, which makes a
+  grep-audit of the two symmetric — it does not itself *prevent* drift
+  (#384 corrected the earlier "cannot drift" over-claim). Two-armed
+  `#ifdef HOST_LITTLE_ENDIAN` guards, the `#else` written for symmetry (the
+  matchers are `#ifdef HOST_LITTLE_ENDIAN`, so a fold never runs on a
+  big-endian host). Honest scope: copyout masks its base to a word
+  (`r1 & 0xffc`) with no term for an unaligned base's addr[1:0], so the
+  fold-vs-general equivalence for an *unaligned* copyout is unverified —
+  correct for STR (aligns / UNPREDICTABLE pre-ARMv6) and NetBSD copyout
+  aligns, so likely unreachable, but recorded here as copyin's #362 comment
+  records the same for its own path (#384, both compile seats).
+- **#383 (`regress/arm_fold_marker_probe.py`)** — `session()` gains a `machine`
   parameter; `barearm` is the big-endian rig `arm_endian_probe.py` uses. Four
   new rows: copyin BE at offsets +0/+1/+3 (the two-pass XOR reused verbatim —
   pass 1 declines and runs the order-aware general handler, pass 2 folds, and
