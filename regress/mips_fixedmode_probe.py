@@ -21,7 +21,8 @@ Row classes (the mutation self-test treats them differently):
   -2^31 is IN range -- float_emul.c's W guard is deliberately <= -2147483649.0 --
   while the mutant's floor answer -2^31-1 is out of range and saturates to
   0x7fffffff), ceil x2, floor x2. Each flips under exactly its op's mutant.
-* controls (5, must-pass, exempt from flipping -- they CANNOT flip by construction):
+* controls (5, must-pass; they cannot flip under any committed mutant -- the
+  trunc rows DO flip under the trunc mutant, which is exactly their job):
   - cvt27rm: cvt.w.d consumes FCSR via FPU_RM_FROM_FCSR (cpu_mips_coproc.c:1794),
     so this row is the witness that the guest ctc1 LANDED: a dead FCSR write reads
     the RN answer 3, not the RM answer 2. The trunc rows cannot witness this --
@@ -212,12 +213,18 @@ def run(machine, status, kernel, instr, opbits, fcsr, pair_load):
     send("step %d" % len(words))
 
     #  Retry the READ, never the row. The parse is BOUND to the dump line's
-    #  address (any dump-shaped line would otherwise do -- see #56). Measured
-    #  format on both rigs: the line address is ALIGNED DOWN to 16 bytes and
-    #  TRUNCATED to 32 bits (`0x80021000  ...`), and only the words inside the
-    #  requested range are printed (out-of-range slots render as blank columns),
-    #  so for a dump of exactly [OUT, OUT+8) the FIRST hex word on the bound
-    #  line is OUT's value, in MEMORY order.
+    #  address (any dump-shaped line would otherwise do -- see #56). Dump
+    #  format per debugger_cmd_dump: the line address is ALIGNED DOWN to 16
+    #  bytes, and its WIDTH follows the CPU -- 8 digits only when c->is_32bit
+    #  (pmax's R3000; debugger_cmds.c prints %08x/%016x on that flag), 16
+    #  digits on arc's 64-bit R4000 (`0xffffffff80021000  ...`). An earlier
+    #  version of this comment said "truncated to 32 bits" unconditionally --
+    #  wrong on arc, and it only measured green because the regex's
+    #  `0x[0-9a-f]*` prefix tolerates both renderings (a pass-2 seat traced
+    #  the flag). Only the words inside the requested range are printed
+    #  (out-of-range slots render as blank columns), so for a dump of exactly
+    #  [OUT, OUT+8) the FIRST hex word on the bound line is OUT's value, in
+    #  MEMORY order.
     addr_tail = "%x" % ((OUT & 0xffffffff) & ~0xf)
     val = None
     for _ in range(3):

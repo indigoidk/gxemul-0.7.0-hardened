@@ -3026,17 +3026,23 @@ corruption without a clear host-OOB path.
 > anything. Harness task numbers in parentheses.
 >
 > - **(#55) `selftest_mutation.sh` counts a crashing mutant as detection.** Its must-fail check
->   treats "zero `DIFF_PASS` lines" as the mutant being caught (`:153` area) without checking
->   the mutant executable's exit status — a mutant that crashes, times out, or emits nothing
->   passes vacuously. `selftest_mutation_295.sh` already refuses this (`grep M295_RESULT= ||
+>   — `check "mutant $m is DETECTED" "$out" "0"` at `:167`, fed by the `grep -c DIFF_PASS`
+>   at `:154` (a pass-2 seat corrected the first draft's ":153 area" cite) — never checks
+>   the mutant executable's exit status, so a mutant that crashes, times out, or emits
+>   nothing yields count 0 and passes as "DETECTED" vacuously (BUILDFAIL is separately
+>   caught; the crash-after-build case is not). `selftest_mutation_295.sh` already refuses this (`grep M295_RESULT= ||
 >   SETUP_FAIL`); port the same discipline back. Test-first: swap a mutant binary for
 >   `/bin/false` and watch the old check "detect" it.
 > - **(#56) `mips_rounding_probe.py`'s readback accepts any dump-shaped line** (`:151` regex) —
 >   no binding between the parsed line's address and the requested one, so a stale or
 >   interleaved dump line can satisfy a row. The #376 probe binds its parse to the aligned
->   32-bit line address (`dump` aligns the line address DOWN to 16 bytes, truncates it to 32
->   bits, and prints only in-range words, in memory order — measured, and worth knowing before
->   writing any new dump parser). Same family as the #37 prompt-predicate sweep.
+>   line address. Facts for any new dump parser (`debugger_cmd_dump`): the line address is
+>   aligned DOWN to 16 bytes; its width follows the CPU — 8 hex digits only when
+>   `c->is_32bit` (pmax/R3000), 16 digits on 64-bit CPUs (arc/R4000) — and only in-range
+>   words print, in memory order. The first draft of this entry said "truncates to 32 bits"
+>   unconditionally; that is pmax-only, and the probe passed on arc only because its regex
+>   prefix tolerates both widths (pass-2 seat finding — a parser built from the draft's
+>   guidance would break on every 64-bit CPU). Same family as the #37 prompt-predicate sweep.
 > - **(#57) arc-only `.l` rows for `round.l`/`ceil.l`/`floor.l`.** The W rows prove the forced
 >   constants (same source line, `to_w ? W : L`), but the L branch and the L range guard
 >   (`float_emul.c` strict lower bound) have no row. Needs a 64-bit readback design that avoids

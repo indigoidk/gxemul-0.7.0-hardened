@@ -133,8 +133,13 @@ done
 # own padded-column `^name .*ok$` pattern has already produced both a
 # double-match and an unsatisfiable row elsewhere in the battery.
 # selftest_mutation_295.sh (manual lane, full rebuild per mutant) proves each
-# row flips under its op's mutant; the trunc/NaN/cvt/cfc1 rows are CONTROLS and
-# cannot flip by construction.
+# row flips under its op's mutant; the NaN/cvt/cfc1 rows are CONTROLS that stay
+# green under every committed mutant, and the trunc rows flip under exactly the
+# trunc mutant (their discrimination is measured, not asserted). Wall-clock
+# note: this section spawns 28 emulators (one per row), each with a 150 s
+# boot-wait ceiling -- under heavy host load that ceiling is a load-sensitive
+# oracle of the gate_ab class, so do not run CPU-heavy work (panel seats,
+# builds) concurrently with this gate.
 python3 mips_fixedmode_probe.py "$PMAX" "$PMAX_KERNEL" "$KERNEL" both > "$FLOG" 2>&1 || true
 
 if ! grep -q "M295_RESULT=" "$FLOG"; then

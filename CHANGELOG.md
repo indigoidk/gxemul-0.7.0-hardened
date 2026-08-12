@@ -4192,6 +4192,46 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-eighteenth round (#377) — #376's pass-2 review: one wrong measured fact in three records, and the trunc control's claim made measurable
+
+The eight-seat pass-2 review of `#376`'s committed diff returned clean verdicts
+on the code from every answering seat — all independently re-derived the flip
+matrix, none found a false-pass path — and one seat found the round's single
+real defect **in its records**: the "dump line address is TRUNCATED to 32 bits"
+fact, stated as measured-on-both-rigs in the probe comment, the CHANGELOG
+incident, and (worst) the `#56` queue entry that offers it as guidance for
+future dump parsers. Traced in source: `debugger_cmd_dump` prints `%08x` only
+when `c->is_32bit`, and arc's R4000 (ISA III) is 64-bit — so arc renders 16
+digits, and the probe passed there only because its regex's `0x[0-9a-f]*`
+prefix happens to tolerate both widths. A parser built from the recorded
+guidance would break on every 64-bit CPU. All three records corrected; the
+probe code needed no change. A wrong measured-fact record is exactly the class
+this project's rounds keep getting burned by, and it survived one author pass
+plus four clean seat verdicts before the fifth seat traced the flag.
+
+- **#377 (`regress/selftest_mutation_295.sh`)** — a fourth mutant,
+  `trunc: IEEE_RM_RZ -> FPU_RM_FROM_FCSR` (the W-format trunc line, unique by
+  `COP1_FMT_W` against its single-line L sibling), converting the trunc control
+  rows' advertised discrimination — "they kill a trunc revert, which no other
+  row would" — from an asserted claim into a measured one. Predicted flips:
+  `t35rp` 3 -> 4 (RP ceils the tie), `tn35rm` -3 -> -4 (RM floors it); every
+  other row, including all round/ceil/floor discriminators, must stay green.
+  Also: the self-test's scratch logs move to a PID-unique directory (stale
+  fixed-name logs once confused forensics), fixing two expect() reads that
+  still named the old paths.
+- **#377 (records)** — the three-place dump-width correction above; the `#55`
+  entry's cite corrected to the actual check line (`:167`, fed by the `:154`
+  grep — the draft said ":153 area"); the probe/gate "controls cannot flip by
+  construction" wording scoped to "under any committed mutant" (the trunc rows
+  flipping under the trunc mutant is their job, not a violation).
+
+Measured before commit: the extended self-test's full four-mutant run —
+baseline green, exact flip matrix per op, all non-flip rows green each time.
+Residual seat suggestions adjudicated and dropped with reasons (nightly
+mini-selftest; a gate `tail -1` hardening that is already rig-bound by its grep
+pattern) or folded into the comment-only docs task (`float_emul.c` W-guard cite
+at the `rbnd` row, a `.s`-by-construction comment at the forced-constant site).
+
 ## One-hundred-and-seventeenth round (#376) — #295's fix gets the detector its reverting mutant demanded
 
 `#295` (round 60) made `round.w`/`ceil.w`/`floor.w` force their architectural
@@ -4256,11 +4296,13 @@ mnemonic-only unassemble check *blessed the wrong word*; the registers in the
 disassembly and the probe's import-time `assert helper==constant` caught it.
 (2) The probe's first full run scored 0/28 with every row `got=None` — the dump
 parse assumed the requested address appears on the output line, but `dump`
-prints the line address ALIGNED DOWN to 16 bytes and TRUNCATED to 32 bits, with
-only in-range words printed (out-of-range slots as blank columns) in MEMORY
-order. The ctc1-witness controls reported DEAD on both rigs, which is the
-control doing its one job: refusing a dead instrument instead of writing a
-false verdict. Fixed parse binds to the aligned line address.
+prints the line address ALIGNED DOWN to 16 bytes, with only in-range words
+printed (out-of-range slots as blank columns) in MEMORY order. The ctc1-witness
+controls reported DEAD on both rigs, which is the control doing its one job:
+refusing a dead instrument instead of writing a false verdict. Fixed parse
+binds to the aligned line address. [This paragraph originally also claimed the
+address is "TRUNCATED to 32 bits" — pmax-only, corrected by #377: the width
+follows `c->is_32bit`, and arc's R4000 prints 16 digits.]
 
 Panel pass 1 also surfaced three committed-harness defects, queued as their own
 work: `selftest_mutation.sh` counts a *crashing* mutant as detection (exit
