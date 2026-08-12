@@ -4192,6 +4192,66 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifteenth round (#372) — the general-path word STORE ignored byte order, because its arm was dead code
+
+On a big-endian ARM guest, a word `STR` to a cold page wrote the register's
+**host** bytes and a word `STR` to a warm page wrote guest order — the same
+instruction disagreeing with itself by page residency, the `#342`/`#355` class.
+And every `strt`, which is general-path on its first access per page (`#366`),
+was reversed. The cause was an arm that had never once executed.
+
+- **#372 (`cpus/cpu_arm_instr_loadstore.c`)** — two edits: the load-only aliasing
+  optimisation is now gated on `A__L`, and the dead store wrapper is removed so
+  the byte-order-aware walk serves the word store too.
+
+**The arm was UNCONDITIONALLY EMPTY.** Its guard was
+`!defined(A__B) && !defined(A__H) && defined(HOST_LITTLE_ENDIAN)` and its only
+body was `#ifdef A__STRD` — but `A__STRD` is defined only under `A__H`, which the
+guard excludes, so for a plain word `STR` on an LE host the block compiled to
+nothing. The store emitted no bytes and `memory_rw` copied the register's host
+bytes to guest memory, `cpu->byte_order` never consulted. Deleting the wrapper is
+the fix, not cleanup: the wrapper is what emptied the arm.
+
+**Two edits, because the one-line delete is a fresh regression.** In the
+`datalen == 4` block, `data` *aliases the source register* on an LE host. Removing
+only the wrapper leaves the byte walk running against that alias — and the walk
+both reads `reg(ic->arg[2])` and writes `data[i]`, so each byte written corrupts
+the value the next read consumes. Traced for BE with `0x11223344`, that produces
+`44 33 33 44` — a *third* wrong answer. So the alias is gated on `A__L` (an exact
+compile-time load/store discriminator here) and the store gets a real buffer; the
+walk then fills it in order and `memory_rw` writes it. This was the scoping seat's
+catch, verified before the edit.
+
+**MEASURED, test-first, on `-E barearm`** — whose `MACHINE_SETUP` sets
+`EMUL_BIG_ENDIAN` outright, so no config file or ELF is needed. Before the fix, a
+cold store of `0x11223344` read back **`0x44332211`** (raw bytes `44 33 22 11`);
+after, **`0x11223344`** (`11 22 33 44`). The LE guest is **unchanged** both ways —
+on LE the broken code was accidentally right, host order being guest order, which
+is exactly why LE could never have surfaced this.
+
+**A new probe, `regress/arm_endian_probe.py`**, runs both byte orders — the first
+in the battery to do so. Its six `be *` rows (barearm) are the discriminators; its
+six `le *` rows (testarm) are **invariance controls**, present only to catch a fix
+that repairs BE by breaking LE, which the pre-fix source shows is a live shape.
+The `ldrb` witnesses are the purest form: a byte load has no byte order, so it
+reads the raw layout directly, and each buggy value is the exact reverse of its
+arch value — the two mirror-image groups cannot both pass a swapped expectation
+table. Swept against the pre-fix build (its own HEAD, restored by `cmp` afterward
+under a `build/.MUTANT` sentinel): **7 of 12**, red at exactly the five cold BE
+rows, at the host-order values; the BE warm control and all six LE controls green.
+On the fixed build **12/12**. `r1` is built with immediates, never loaded, so no
+load adds a stray general-path access; `COLD` is unseeded RAM (provably cold);
+every encoding was checked through `unassemble`.
+
+**Non-defects settled while here, so no future round re-derives them:** the
+general halfword and byte store arms already agree with the fast path and Table
+A2-2 (byte order handled or absent); STRD already took the walk (its guard was
+false for the same reason the word arm's was); and the pre-`#357` UB in the
+load-assembly expressions (`data[i] << 24` promoting `unsigned char` to `int`) is
+left untouched — this round adds no assembling expression, and that UB has no
+witness here. The LDRD big-endian load (`data[1] << 6`) is a separate, visibly
+broken expression, recorded and queued.
+
 ## One-hundred-and-fourteenth round (#371) — a gate that failed after a green section could report SKIP, hiding the failure
 
 The battery's own control flow carried the exact defect its rows are built to

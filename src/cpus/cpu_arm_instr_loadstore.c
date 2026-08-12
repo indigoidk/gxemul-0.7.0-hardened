@@ -98,7 +98,18 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 	const int datalen = 2;
 #else
 	const int datalen = 4;
-#ifdef HOST_LITTLE_ENDIAN
+	/*
+	 *  #372: the alias is a LOAD-only optimisation. On a load, memory_rw
+	 *  writes guest bytes straight into r[Rd]'s storage and the load arm
+	 *  below re-assembles them in place -- self-consistent, because the
+	 *  assembled value is fully evaluated before the assignment. On the STORE
+	 *  side it is fatal: the byte walk reads reg(ic->arg[2]) while writing
+	 *  data[i], so each byte written corrupts the value the next read
+	 *  consumes. So gate the alias on A__L (an exact compile-time load/store
+	 *  discriminator in this datalen==4 block) and give the store a real
+	 *  buffer. See the Store block below for why this arm was reachable.
+	 */
+#if defined(A__L) && defined(HOST_LITTLE_ENDIAN)
 	unsigned char *data = (unsigned char *) ic->arg[2];
 #else
 	unsigned char data[4];
@@ -257,12 +268,22 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 #endif
 #else
 	/*  Store:  */
-#if !defined(A__B) && !defined(A__H) && defined(HOST_LITTLE_ENDIAN)
-#ifdef A__STRD
-	*(uint32_t *)data = reg(ic->arg[2]);
-	*(uint32_t *)(data + 4) = reg(ic->arg[2] + 4);
-#endif
-#else
+	/*
+	 *  #372: the guard here was `!A__B && !A__H && HOST_LITTLE_ENDIAN` and its
+	 *  ONLY body was `#ifdef A__STRD`. But A__STRD implies A__H (see the top of
+	 *  this file), which the guard excludes -- so for a plain word STR on an LE
+	 *  host the arm was UNCONDITIONALLY EMPTY. The store emitted no bytes, and
+	 *  memory_rw copied the register's HOST bytes to guest memory, never
+	 *  consulting cpu->byte_order. The FAST path's word-store arm has always
+	 *  been order-aware, so one STR wrote guest order to a warm page and host
+	 *  order to a cold one -- and every strt, which is general-path on its
+	 *  first access per page, was reversed. Measured on -E barearm: a cold
+	 *  store of 0x11223344 read back 0x44332211. Removing the dead wrapper is
+	 *  the fix, not cleanup: the wrapper IS what emptied the arm. The byte walk
+	 *  below is already correct for the word case (A__B and A__H both undefined
+	 *  -> all four bytes emitted, MSB at the lowest address in BE per DDI 0100I
+	 *  Table A2-2, p. A2-32) and matches the fast path and X(strex).
+	 */
 	int i = cpu->byte_order == EMUL_LITTLE_ENDIAN ? 0 : datalen - 1;
 	data[i] = reg(ic->arg[2]);
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
@@ -284,10 +305,12 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
 	data[i] = reg(ic->arg[2] + 4) >> 24;
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-#endif
-#endif
-#endif
-#endif
+#endif	/*  A__STRD  */
+#endif	/*  !A__H || A__STRD  */
+#endif	/*  !A__B  */
+	/*  #372: the outer `#if !A__B && !A__H && HOST_LE` wrapper (and its dead
+	    A__STRD-only body) is gone; the byte walk above now serves the word
+	    store too. One `#endif` removed with it.  */
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, datalen,
 	    MEM_WRITE, memory_rw_flags)) {
 		/*  store failed, an exception was generated  */

@@ -802,4 +802,55 @@ for v in "A wb word post1 unal x10" "A wb word post1 algn x10" \
     check "  writeback row: $v" "$n" 1
 done
 
+# #372: the general-path word STORE ignored cpu->byte_order.
+# ----------------------------------------------------------------------------
+# Its arm was UNCONDITIONALLY EMPTY -- guard `!A__B && !A__H && HOST_LE` with an
+# `#ifdef A__STRD`-only body, and A__STRD implies A__H, which the guard excludes.
+# So a plain word STR on an LE host emitted no bytes and memory_rw copied the
+# register's HOST bytes; the FAST path was always order-aware, so one STR wrote
+# guest order to a warm page and host order to a cold one, and every strt (always
+# general on its first access per page) was reversed.
+#
+# This probe runs BOTH byte orders. The six `be *` rows use -E barearm (BE) and
+# are the DISCriminators; the six `le *` rows use -E testarm (LE) and are
+# INVARIANCE CONTROLS -- on LE the broken code was accidentally right (host order
+# == guest order), so they pin nothing about #372 and exist only to catch a fix
+# that repairs BE by breaking LE. The `ldrb` witnesses are the purest form: a
+# byte load has no byte order, so it exposes the raw memory layout directly, and
+# the buggy column is the exact reverse of the arch column.
+#
+# Swept against the pre-fix build: 7 of 12 -- the five cold BE rows red at the
+# host-order values, the BE warm control and all six LE controls green (the warm
+# store takes the order-aware fast path). On the fixed build: 12/12.
+ENDLOG=$LOGDIR/gate_arm_endian.log
+python3 arm_endian_probe.py "$PMAX" > "$ENDLOG" 2>&1 || true
+
+if ! grep -q "ENDIAN_RESULT=" "$ENDLOG"; then
+    note "endian probe produced no result line; last lines follow"
+    tail -5 "$ENDLOG" | sed 's/^/       /'
+    gate_skip "endian probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$ENDLOG" | sed 's/^/       /'
+
+# The control is the BE cold-word row's SIBLING warm row: it demands a
+# distinctive nonzero word through the order-aware fast path, proving the BE rig
+# (barearm) constructed and the program ran, before any DISC row is believed.
+ectrl=$(grep -o "ENDIAN_CONTROL=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
+check "endian control: BE rig ran and stored" "${ectrl:-missing}" "OK"
+
+eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
+egot=${eres%/*}; ewant=${eres#*/}
+check "endian rows run"     "${ewant:-missing}" 12
+check "endian rows correct" "${egot:-missing}"  "$ewant"
+
+# The five BE discriminators named individually, so one reverting cannot hide
+# behind the total. The warm/cold word PAIR is the self-contradiction proof;
+# the four cold bytes are the byte-order-independent witnesses.
+for v in "be cold word" "be cold byte0" "be cold byte1" \
+         "be cold byte2" "be cold byte3"; do
+    n=$(count "$ENDLOG" "^$v  .*ok$")
+    check "  endian row: $v" "$n" 1
+done
+
 gate_end
