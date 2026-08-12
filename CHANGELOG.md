@@ -4248,13 +4248,36 @@ load adds a stray general-path access; `COLD` is unseeded RAM (provably cold);
 every encoding was checked through `unassemble`.
 
 **Non-defects settled while here, so no future round re-derives them:** the
-general halfword and byte store arms already agree with the fast path and Table
-A2-2 (byte order handled or absent); STRD already took the walk (its guard was
-false for the same reason the word arm's was); and the pre-`#357` UB in the
+general halfword and byte store arms agree with the fast path and Table A2-2
+(byte order handled or absent) **for their register-domain values — but note
+these are assessed by reading, not by a probe row**; and the pre-`#357` UB in the
 load-assembly expressions (`data[i] << 24` promoting `unsigned char` to `int`) is
 left untouched — this round adds no assembling expression, and that UB has no
 witness here. The LDRD big-endian load (`data[1] << 6`) is a separate, visibly
 broken expression, recorded and queued.
+
+> **✗ ONE CLAIM ABOVE WAS AN OVER-CLAIM (was: "STRD already took the walk (its
+> guard was false for the same reason the word arm's was)"), corrected here by
+> `#373`'s follow-up review.** STRD is `datalen == 8` and never reaches the
+> `datalen == 4` block this round edited, so the `A__L` gate does not touch it —
+> that much is right. But "took the walk" is a **reachability** statement, not a
+> correctness one: on a BE guest the walk starts at `i = 7` and writes `Rd`'s
+> bytes to `data[4..7]` and `Rd+1`'s to `data[0..3]`, so `Rd` lands at `addr+4`
+> and `Rd+1` at `addr` — **the two words are swapped** (DDI 0100I p. A2-32:
+> doubleword accesses are a series of word accesses at incrementing addresses).
+> STRD on BE is a live defect, not a non-defect; it is the word-order half of the
+> queued `BE LDRD/STRD` item, which the `data[1] << 6` note captured only the
+> byte-lane half of. Two seats caught the over-claim independently.
+>
+> **And the round UNDER-claimed its own blast radius.** The impact is framed as
+> cold-page-vs-warm-page plus `strt`, but **device pages are never in
+> `host_store`**, so pre-`#372` *every* word store to a memory-mapped register on
+> a BE ARM guest was byte-reversed permanently, not just on first touch — and
+> `MACHINE_SETUP(barearm)`'s 128 MB `dev_ram` mirror at `0xa0000000` is a device
+> to dyntrans, so the tree's one BE-ARM configuration sits **entirely** on the
+> always-general path. `file_elf.c` also sets big-endian from an `armeb` header,
+> so the reach is any ARM machine with a BE image, not only `barearm`. The fix is
+> worth more than the block claimed.
 
 ## One-hundred-and-fourteenth round (#371) — a gate that failed after a green section could report SKIP, hiding the failure
 
