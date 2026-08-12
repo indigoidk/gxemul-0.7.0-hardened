@@ -111,15 +111,27 @@ COPYOUT = [
 ]
 
 
-def session(prog, verbose, seed_regs=None, extra=None, bseed=None):
-    """Free-running two-pass session. Returns (marker_count, verb_took, regs)."""
-    stub = "/tmp/r104f_stub.bin"
+def session(prog, verbose, seed_regs=None, extra=None, bseed=None,
+            machine="testarm", loadsrc_be=False, dump_raw=False):
+    """Free-running two-pass session. Returns (marker_count, verb_took, regs).
+
+    #383: `machine` selects the rig. `barearm` sets EMUL_BIG_ENDIAN outright
+    (machine_test.c) -- the same BE rig arm_endian_probe.py uses -- and is how
+    the copyin/copyout folds' byte-order handling is put on the test surface;
+    the folds install and fire on BE exactly as on testarm (their matchers gate
+    on HOST endianness, not guest). The stub is packed in guest order so its
+    fetch decodes. loadsrc_be seeds LOADSRC with `put b` in architectural
+    big-endian byte order (11 22 33 44 ...), so every BE expectation traces to
+    DDI 0100I Table A2-2 alone rather than to trusting `put w`'s own swap.
+    """
+    stub = "/tmp/r104f_stub_%s.bin" % machine
+    order = "big" if machine == "barearm" else "little"
     with open(stub, "wb") as f:
-        f.write((0xE1A00000).to_bytes(4, "little"))
+        f.write((0xE1A00000).to_bytes(4, order))
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp(BIN, [BIN, "-V", "-A"] + (extra or []) +
-                  ["-E", "testarm", "-M", "64", "0x%x:%s" % (CODE, stub)])
+                  ["-E", machine, "-M", "64", "0x%x:%s" % (CODE, stub)])
         os._exit(127)
     buf = ""
 
@@ -159,8 +171,21 @@ def session(prog, verbose, seed_regs=None, extra=None, bseed=None):
         os.kill(pid, 9); os.waitpid(pid, 0)
         return None
 
-    for i in range(8):
-        send("put w 0x%x, 0x%08x" % (LOADSRC + 4 * i, 0x11223344 + i))
+    put_failed = False
+    if loadsrc_be:
+        #  #383: architectural big-endian bytes, laid one at a time with `put b`
+        #  (order-free: CACHE_NONE|NO_EXCEPTIONS, so no emulator byte_order code
+        #  touches the seed). Word k = 0x11223344+k -> bytes 11 22 33 (44+k).
+        for i in range(8):
+            w = 0x11223344 + i
+            for b in range(4):
+                if "FAILED" in send("put b 0x%x, 0x%x"
+                                    % (LOADSRC + 4 * i + b,
+                                       (w >> (8 * (3 - b))) & 0xff)):
+                    put_failed = True
+    else:
+        for i in range(8):
+            send("put w 0x%x, 0x%08x" % (LOADSRC + 4 * i, 0x11223344 + i))
     #  #361: BYTE seeding, deliberately. `put b` goes through memory_rw with
     #  CACHE_NONE | NO_EXCEPTIONS, so unlike `put w` it does NOT warm the
     #  translation mapping -- measured. The scanc rows warm explicitly with a
@@ -190,7 +215,7 @@ def session(prog, verbose, seed_regs=None, extra=None, bseed=None):
         os.write(fd, b"\x03")
         wait_from(cmark, 15)
 
-    regs = {}
+    regs = {"__put_failed": put_failed}   # #383: BE rows assert this (#379 PUT_STATUS)
     #  r3 and r5 are read for the #361 scanc rows: r3 is that fold's three-way
     #  value witness and r5 its run-to-the-end sentinel. Omitting them was a
     #  probe defect that reported r3 = 0 and the sentinel absent while the marker
@@ -203,12 +228,22 @@ def session(prog, verbose, seed_regs=None, extra=None, bseed=None):
         if m:
             regs[rn] = int(m.group(1), 16)
     mem = []
-    if prog is COPYOUT:
+    if prog is COPYOUT or dump_raw:
         mark = len(buf)
         send("dump 0x%x 0x%x" % (STOREDST, STOREDST + 24))
         w = re.findall(r"0x0*[0-9a-f]+\s+((?:[0-9a-f]{8}\s+){1,4})", buf[mark:])
-        mem = [int.from_bytes(bytes.fromhex(x), "little")
-               for x in "".join(w).split()][:6]
+        hexwords = "".join(w).split()[:6]
+        if dump_raw:
+            #  #383: return the RAW 24 memory bytes in address order. `dump`
+            #  renders bytes in memory order; the committed path below then
+            #  reassembles them LITTLE-endian, which would INVERT a BE row
+            #  (green on the broken build, red on the fixed one). A BE copyout
+            #  row compares the byte sequence itself against the architectural
+            #  layout, with no assembly-order assumption.
+            regs["__dstbytes"] = b"".join(bytes.fromhex(x) for x in hexwords)
+        else:
+            mem = [int.from_bytes(bytes.fromhex(x), "little")
+                   for x in hexwords]
     try:
         os.write(fd, b"quit\n"); time.sleep(0.2)
         os.kill(pid, 9); os.waitpid(pid, 0)
@@ -247,10 +282,14 @@ def installed(buf, name):
 #  two programs have identical layout and no address-derived expectation shifts.
 NOP = 0xE1A00000            # mov r0,r0
 WARM_LDRT = 0xE4B05004      # ldrt r5,[r0],#4   -- sets the user bit for the page
-WARM_STRT = 0xE4A15004      # strt r5,[r1],#4   -- copyout needs a STORE: a load
-                            # leaves host_store NULL and the fold declines
-                            # "no-page" instead of firing, so an ldrt warm-up
-                            # would make the healthy build fail its own row.
+WARM_STRT = 0xE4A15004      # strt r5,[r1],#4   -- copyout warms with a STORE
+                            # because that sets host_store under ANY config.
+                            # (#382: the older reason "a load leaves host_store
+                            # NULL" holds only MMU-on + read-only page; MMU-off
+                            # here, a load sets host_store too -- ok-1==1. The
+                            # store warm-up is the robust choice, not the only
+                            # one -- the corrected fact lives at cpu_arm_instr.c
+                            # X(netbsd_copyout) and arm_endian_probe.py:60.)
 
 
 def ab_prog(fold, warm):
@@ -558,8 +597,103 @@ for nm, prog, wf, wd, wr3 in (
                  % (f, d, i, "none" if got3 is None else "0x%x" % got3,
                     regs.get("r5") == 0x5A), ok))
 
+#  ---- #383: the copyin/copyout folds vs GUEST byte order (barearm) ----------
+#  Both fold bodies moved raw HOST words between the guest registers and the
+#  host page with no byte-order term, while the load/store_w1_word template
+#  they delegate to on a decline is order-aware since #372 -- the #342/#355
+#  self-contradiction class, and (unlike memset/memcpy) NOT closed by #378's
+#  install gate because these matchers key on the GENERIC handler, which
+#  installs for a BE guest too. These rows put the folds' BE behaviour on the
+#  test surface: on the committed build they read reversed values (the defect);
+#  after the swap they agree with the order-aware general path.
+#
+#  The two-pass XOR is the copyin machinery reused verbatim: pass 1 declines
+#  (is_userpage clear on the first ldrt) and runs the order-aware general
+#  handler, pass 2 folds. r1 == 0 iff the two AGREE, and the final `vals` are
+#  the fold's own output. THE UNALIGNED ROWS ARE LOAD-BEARING: the aligned row
+#  cannot tell swap-before-rotation from swap-after (ROR by 0 and 16 commute
+#  with a 4-byte reversal), so a fix that swapped AFTER #362's rotation would
+#  pass every aligned row and ship green. +1 and +3 are the offsets where the
+#  two orders diverge (a sweep that only hit palindromic seeds would miss this
+#  -- the tail a sweep cannot reach). LOADSRC is seeded with `put b` in
+#  big-endian byte order so every expectation below traces to DDI 0100I Table
+#  A2-2 (p. A2-32) and LDR's Alignment note (p. A4-44), not to `put w`'s swap.
+def copyin_xor(off):
+    """copyin_unal generalised to offset 0 (a NOP in the add slot keeps the
+    14-word layout and the proven 0x5AFFFFF4 bpl target)."""
+    return [
+        0xE3A03001, MOV_R1_0, 0xE3A00801,
+        NOP if off == 0 else ADD_R0_N[off - 1],
+        0xE4B0A004, 0xE4B0B004, 0xE4B06004, 0xE4B07004, 0xE4B08004, 0xE4B09004,
+        EOR_R1_SL, 0xE2533001, 0x5AFFFFF4, 0xEAFFFFFE,
+    ]
+
+
+def ror32(v, r):
+    r &= 31
+    return v if r == 0 else ((v >> r) | (v << (32 - r))) & 0xFFFFFFFF
+
+
+control_be = "FAIL"
+for off in (0, 1, 3):
+    want = tuple(ror32(0x11223344 + k, 8 * off) for k in range(6))
+    nm = "A fold copyin BE +%d" % off
+    r = session(copyin_xor(off), True, seed_regs=SEED2,
+                machine="barearm", loadsrc_be=True)
+    if r is None:
+        rows.append((nm, "DISC", "DEAD", False)); continue
+    buf, regs, _ = r
+    f, d, i = (count(buf, "netbsd_copyin"), declined(buf, "netbsd_copyin"),
+               installed(buf, "netbsd_copyin"))
+    verb = "3: DEBUG" in buf
+    adv = regs.get("r0") == 0x10000 + off + 24
+    vals = tuple(regs.get(k) for k in ("sl", "fp", "r6", "r7", "r8", "r9"))
+    agree = regs.get("r1") == 0
+    puts = not regs.get("__put_failed")
+    #  FOLDMARK_CONTROL_BE: pass 1's general value is r1 ^ sl, which is the
+    #  architectural word on BOTH builds -- a fix-state-independent liveness
+    #  pin (the barearm rig constructed, both passes ran, the fold fired),
+    #  mirroring ENDIAN_CONTROL378. A dead or mis-threaded session cannot
+    #  false-green the BE group.
+    if off == 0 and regs.get("r1") is not None and regs.get("sl") is not None:
+        if (regs["r1"] ^ regs["sl"]) == 0x11223344:
+            control_be = "OK"
+    ok = (f == 1 and d == 1 and i == 1 and verb and adv
+          and vals == want and agree and puts)
+    rows.append((nm, "DISC",
+                 "fire=%d dec=%d inst=%d adv=%s vals=%s xor=%s puts=%s"
+                 % (f, d, i, adv, vals == want,
+                    "unread" if regs.get("r1") is None else "0x%x" % regs["r1"],
+                    puts), ok))
+
+#  copyout BE: single warm pass, then compare the RAW 24 stored bytes against
+#  the architectural big-endian layout (store order r8,r9,sl,fp,r6,r7, pinned
+#  by the matcher). Raw bytes, never a little-assembled value -- see dump_raw.
+BE_STORE_SEED = {"r5": 0x5A5A0000, "r6": 0x66660001, "r7": 0x77770002,
+                 "r8": 0x88880003, "r9": 0x99990004, "sl": 0xAAAA0005,
+                 "fp": 0xBBBB0006}
+BE_WANT_BYTES = bytes([0x88, 0x88, 0x00, 0x03, 0x99, 0x99, 0x00, 0x04,
+                       0xAA, 0xAA, 0x00, 0x05, 0xBB, 0xBB, 0x00, 0x06,
+                       0x66, 0x66, 0x00, 0x01, 0x77, 0x77, 0x00, 0x02])
+r = session(ab_prog("copyout", True), True, seed_regs=BE_STORE_SEED,
+            machine="barearm", dump_raw=True)
+if r is None:
+    rows.append(("A fold copyout BE", "DISC", "DEAD", False))
+else:
+    buf, regs, _ = r
+    f = count(buf, "netbsd_copyout")
+    verb = "3: DEBUG" in buf
+    gotb = regs.get("__dstbytes")
+    bytes_ok = (gotb == BE_WANT_BYTES)
+    adv = regs.get("r1") == 0x11000 + 24
+    rows.append(("A fold copyout BE", "DISC",
+                 "markers=%d verb=%s adv=%s bytes=%s"
+                 % (f, verb, adv, gotb.hex() if gotb else "none"),
+                 f >= 1 and verb and adv and bytes_ok))
+
 ngot = 0
 for name, kind, detail, ok in rows:
     ngot += ok
     print("%-28s  %-4s %-40s %s" % (name, kind, detail, "ok" if ok else "FAIL"))
+print("FOLDMARK_CONTROL_BE=%s" % control_be)
 print("FOLDMARK_RESULT=%d/%d" % (ngot, len(rows)))

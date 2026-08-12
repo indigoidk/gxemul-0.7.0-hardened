@@ -770,8 +770,19 @@ fgot=${fres%/*}; fwant=${fres#*/}
 #  program reached its end. Measured: on a scanc-arming-dead build all three arms
 #  keep byte-identical register values and only the marker triple moves, so a
 #  value-only row would be vacuous for this fold.
-check "fold-marker rows run"     "$fwant" 17
+check "fold-marker rows run"     "$fwant" 21
 check "fold-marker rows correct" "$fgot"  "$fwant"
+
+# #383: the four BE rows put the copyin/copyout folds' byte-order handling on
+# the test surface -- on barearm both folds install and fire (their matchers
+# gate on HOST endianness, not guest), so the value rows discriminate the fix.
+# The +1/+3 UNALIGNED copyin rows are the composition-order discriminators (a
+# fix swapping AFTER #362's rotation passes +0 but fails these). FOLDMARK_
+# CONTROL_BE is the fix-state-independent liveness pin (r1 ^ sl == the
+# architectural word on every build), so a dead barearm session cannot
+# false-green the BE group.
+fctrlbe=$(grep -o "FOLDMARK_CONTROL_BE=[A-Z]*" "$FOLDLOG" | tail -1 | cut -d= -f2)
+check "fold-marker BE control: barearm ran and folded" "${fctrlbe:-missing}" "OK"
 
 for v in "A fold copyin fires" "A fold copyin quiet" \
          "A fold copyout fires" "A fold copyout quiet" \
@@ -781,7 +792,9 @@ for v in "A fold copyin fires" "A fold copyin quiet" \
          "A fold xchg selective" "A fold scanc fires" \
          "A fold scanc nostr" "A fold scanc notbl" \
          "A fold copyin rot plus1" "A fold copyin rot plus2" \
-         "A fold copyin rot plus3"; do
+         "A fold copyin rot plus3" \
+         "A fold copyin BE +0" "A fold copyin BE +1" \
+         "A fold copyin BE +3" "A fold copyout BE"; do
     n=$(count "$FOLDLOG" "^$v  .*ok$")
     check "  fold-marker row: $v" "$n" 1
 done

@@ -4192,6 +4192,74 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-third round (#382) — a big-endian guest's copyin/copyout folds moved byte-reversed words
+
+The `netbsd_copyin` and `netbsd_copyout` instruction-combiner folds move six
+words each between the guest register file and the host page by raw `uint32_t`
+access, with no byte-order term — while the single-register load/store template
+they delegate to on a decline has assembled per `cpu->byte_order` since `#372`.
+So on a big-endian guest the fold and the very handler its own bail-out falls
+into disagree: the `#342`/`#355` self-contradiction class, and the divergence
+`#354` forbids. Unlike the memset/memcpy folds — closed on big-endian by
+`#378`'s install gate — these two are the only folds that gate escapes: their
+matchers key on the GENERIC `load/store_w1_word_u1_p0_imm` handler, which
+installs for a big-endian guest too, so they install and fire on `-E barearm`.
+
+- **#382 (`cpus/cpu_arm_instr.c`)** — copyin swaps the six words in place
+  (its `q32 = &r[6]` IS the destination), BEFORE `#362`'s rotation, because the
+  architecture rotates the value assembled in the memory system's order, not
+  the raw host word (DDI 0100I p. A4-44). copyout captures the six source words
+  first (there `q32` aliases the guest's live `r6..r11`, so an in-place swap
+  would corrupt them), swaps, then stores. Both use the open-coded byte-swap
+  from `arm_push`/`arm_pop`, not `SWAP32` (which has no other use in `src/cpus`
+  and evaluates its argument four times), so the fold and the template cannot
+  drift. Two-armed `#ifdef HOST_LITTLE_ENDIAN` guards, the `#else` written for
+  symmetry (the matchers are `#ifdef HOST_LITTLE_ENDIAN`, so a fold never runs
+  on a big-endian host).
+- **#382 (`regress/arm_fold_marker_probe.py`)** — `session()` gains a `machine`
+  parameter; `barearm` is the big-endian rig `arm_endian_probe.py` uses. Four
+  new rows: copyin BE at offsets +0/+1/+3 (the two-pass XOR reused verbatim —
+  pass 1 declines and runs the order-aware general handler, pass 2 folds, and
+  `r1 == 0` iff they agree), and a copyout BE row that compares the RAW stored
+  bytes (never a little-assembled value, which would invert the expectation).
+  A `FOLDMARK_CONTROL_BE` liveness pin (`r1 ^ sl` is the architectural word on
+  every build) so a dead barearm session cannot false-green the group. The
+  seed is laid with `put b` in big-endian byte order, so every expectation
+  traces to DDI 0100I Table A2-2 alone. gate 14 fold-marker section 17 → 21.
+
+**The unaligned rows are load-bearing, and a reviewer's sweep first missed
+why.** A 4-byte reversal commutes with rotate-by-0 and rotate-by-16, so the
+aligned copyin row cannot tell a swap placed BEFORE the rotation from one
+placed AFTER; +1 and +3 are the offsets where the two orders diverge. A
+compile-and-measure seat's first host-side sweep stepped its test word by
+`0x10001`, generating only `XYXY` palindromes — for which the reversal IS a
+rotate — and the wrong composition passed with zero mismatches: the same "a
+sweep proves nothing about a tail it cannot reach" trap, self-inflicted and
+caught. The mutation self-test's third mutant moves the swap AFTER the rotation
+and is killed by exactly the +1/+3 rows (measured: m1 flips the three copyin
+rows, m2 the copyout row, m3 the two unaligned rows and not +0).
+
+**Both scout premises were confirmed by measurement, and both correct a
+record.** The queue said these folds were "latent only behind `is_userpage`
+(MMU-on)"; in fact `is_userpage` is set by the LDRT/STRT T-bit alone, MMU-off —
+`fire=1 dec=1 inst=1` on the barearm rows measures it. And the "unmasked base
+writeback" half of the task is VOID: post-`#357` the template also writes the
+unmasked base, so the fold's `r0+24`/`r1+24` agree exactly — nothing witnesses
+a divergence because there is none. Recorded as resolved-by-`#357`, not
+measured. A third record error is corrected in the same pass: a comment
+claiming "a load-only warm-up leaves `host_store` NULL" holds only with the MMU
+on and the page read-only; MMU-off (the test rigs) a load sets `host_store`
+too, so the store warm-up is the robust choice, not the only working one.
+
+Adjudicated the handler-side swap over an `#378`-style install gate by all
+seven answering seats (kimi is quota-dead). The decisive reason is recorded in
+its accurate form, not the brief's persuasive one: a gate would leave the
+fold's own big-endian code UNINSTALLED on barearm, so its behaviour never
+reaches the test surface — the rows would re-exercise `#372`'s already-covered
+generic handler. The swap keeps the folds correct AND on the test surface,
+adds no dead order-blind body (the debt `#378` already carries twice), and is
+twelve moves against `#378`'s generated 9,575-line file.
+
 ## One-hundred-and-twenty-first round (#380) — the m88k idle fold ran the bcnd.n delay slot zero times per taken branch
 
 `COMBINE(idle)`'s third arm matches the OpenBSD/luna88k idle loop's

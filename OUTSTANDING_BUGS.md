@@ -3026,10 +3026,14 @@ corruption without a clear host-OOB path.
 > future round that wants a live BE fast path must use the S4 shape (emit `_le`/`_be`
 > variant bodies and pick at translate time, the in-tree MIPS multi precedent), and
 > must in the SAME change swap the `netbsd_memcpy` fold's four raw `pw[]` publishes —
-> the amended `#354` comment marks both trip-wires in the source. AND SEE task #17:
-> the `netbsd_copyin`/`copyout` folds key on GENERIC handlers, so the install gate
-> does NOT close them — post-#378 they are the largest LIVE ARM-BE divergence
-> (both pass-2 agent seats convergent), latent only behind `is_userpage` (MMU-on).
+> the amended `#354` comment marks both trip-wires in the source. The
+> `netbsd_copyin`/`copyout` folds keyed on GENERIC handlers, so the install gate did
+> NOT close them — they were RESOLVED separately as #382 (their own byte-order swap).
+> [#382 correction: an earlier version of this line called them "latent only behind
+> `is_userpage` (MMU-on)". Wrong — `is_userpage` is set by the LDRT/STRT T-bit alone,
+> so the folds are reachable with the MMU OFF, and #382 measured them firing on the
+> barearm rig. The "MMU-on" premise was the queue item's stated blocker and it did
+> not exist.]
 > [Historical note, #379: the pre-resolution text below this entry retains its
 > discovery-time present tense — "largest remaining", an active "Fix:" — read it
 > as written 2026-08-11, before #378 shipped.]
@@ -3118,3 +3122,27 @@ corruption without a clear host-OOB path.
 >   requires `low_pc == 0`, so the fold is lost only when the loop-head `tb1` sits at page
 >   index 0 AND a `.n` branch ends the previous page with it as its slot — strengthening the
 >   performance-only triage.
+
+> ## 2026-08-12 — ✅ netbsd_copyin/copyout folds ignore guest byte order (task #17) → RESOLVED as #382
+>
+> The live half: both folds moved six raw host words with no byte-order term while the
+> template they delegate to is order-aware since #372 — the #342/#355 class, and (unlike
+> memset/memcpy) NOT closed by #378's install gate because their matchers key on the
+> GENERIC load/store_w1_word handler. Fixed by the same open-coded swap arm_push/arm_pop
+> use (copyin in place before #362's rotation; copyout capture-then-swap since q32 aliases
+> live r6..r11). Probe: 4 barearm rows (copyin two-pass XOR at +0/+1/+3 — the unaligned
+> ones are the swap-before-rotation discriminators — and a raw-byte copyout row) +
+> FOLDMARK_CONTROL_BE; gate 14 17 → 21 fold-marker rows; three-mutant proof (M383MUT_PASS).
+> Full mechanics + the three record corrections in the #382 CHANGELOG block.
+>
+> **Two premises this round retired, both were wrong records:**
+> - Reachability: the folds are reachable with the MMU OFF (is_userpage is set by the
+>   LDRT/STRT T-bit, not by MMU state) — MEASURED firing on barearm. The queue item's
+>   "(MMU-on)" blocker did not exist.
+> - The "unmasked base writeback" half of task #17 is VOID: post-#357 the template also
+>   writes the unmasked base, so the folds' r0+24/r1+24 agree exactly. Nothing witnesses a
+>   divergence because there is none. Resolved-by-#357, not measured.
+> Plus the load-vs-host_store comment fix (a load-only warm-up leaving host_store NULL
+> holds only MMU-on + read-only; MMU-off a load sets it too) at cpu_arm_instr.c and the
+> fold-marker probe. A sweep of #360/#367 records for the same wrong claim is a follow-up
+> for task #43's OUTSTANDING re-audit.

@@ -2727,6 +2727,32 @@ X(netbsd_copyin)
 	q32[5] = p32[ofs+1];
 
 	/*
+	 *  #383 copyin-order: the six moves above are raw HOST words. The general
+	 *  handler this fold delegates to on a decline assembles per cpu->byte_order
+	 *  (cpu_arm_instr_loadstore.c load word arm, order-aware since #372), so on
+	 *  a big-endian guest they were byte-reversed -- the #342/#355 self-
+	 *  contradiction class, and the divergence the #354 invariant forbids.
+	 *  q32 = &r[6] IS the destination register block, so the swap is in place.
+	 *  Idiom open-coded from arm_push/arm_pop (bdt_load), not SWAP32, so the two
+	 *  paths cannot drift. BEFORE the #362 rotation: DDI 0100I p. A4-44 rotates
+	 *  the value assembled in the memory system's order, not the raw host word.
+	 *  This fold is not reached on a big-endian HOST (the matcher is
+	 *  #ifdef HOST_LITTLE_ENDIAN), so the #else arm is written only for symmetry.
+	 */
+#ifdef HOST_LITTLE_ENDIAN
+	if (cpu->byte_order == EMUL_BIG_ENDIAN) {
+#else
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+#endif
+		int k;
+		for (k = 0; k < 6; k++) {
+			uint32_t v = q32[k];
+			q32[k] = ((v & 0xff) << 24) | ((v & 0xff00) << 8) |
+			    ((v & 0xff0000) >> 8) | ((v & 0xff000000) >> 24);
+		}
+	}
+
+	/*
 	 *  #362: the six ldrt's this replaces are word LOADS, so an unaligned base
 	 *  rotates each of them right by 8 * r0[1:0]. Without this the fold would
 	 *  disagree with the very template it delegates to on a decline -- and the
@@ -2773,9 +2799,14 @@ X(netbsd_copyout)
 
 	/*  #360: see X(netbsd_copyin) above for why the reason is computed in the
 	    guard's own short-circuit and why the text avoids "combined". Note this
-	    fold reads host_STORE, so "no-page" here means the destination page has
-	    never been written -- a load-only warm-up leaves it NULL and this fold
-	    declines, which is why a copyout row's warm-up must be a store.  */
+	    fold reads host_STORE, so "no-page" here means host_store[index] is NULL.
+	    A copyout row's warm-up is a STORE because that sets host_store under
+	    ANY configuration. (#382 correction: the older claim that "a load-only
+	    warm-up leaves it NULL" is only true with the MMU ON and the page
+	    read-only; with the MMU OFF -- the testarm/barearm rigs -- a load ALSO
+	    sets host_store, because memory_arm.c's translate returns 2 and the
+	    writeflag ok-1 == 1 populates host_store on a read too. So the store
+	    warm-up is the robust choice, not the only working one.)  */
 	const char *why = ofs > 0x1000 - 6*4 ? "page-end" :
 	    !ok ? "not-user" : p == NULL ? "no-page" : NULL;
 
@@ -2795,12 +2826,40 @@ X(netbsd_copyout)
 
 	q32 = &cpu->cd.arm.r[6];
 	ofs >>= 2;
-	p32[ofs  ] = q32[2];
-	p32[ofs+1] = q32[3];
-	p32[ofs+2] = q32[4];
-	p32[ofs+3] = q32[5];
-	p32[ofs+4] = q32[0];
-	p32[ofs+5] = q32[1];
+	{
+		/*
+		 *  #383 copyout-order: capture the six source words FIRST. q32 = &r[6]
+		 *  aliases the guest's LIVE r6..r11, so an in-place swap would corrupt
+		 *  them guest-visibly (copyin can swap in place -- there r[6..11] are
+		 *  the destination -- but copyout must not). Then swap for a big-endian
+		 *  guest (the store template is order-aware since #372) and store. The
+		 *  store order r8,r9,sl,fp,r6,r7 is pinned by the matcher; the swap
+		 *  leaves it untouched. Not reached on a big-endian HOST; #else for
+		 *  symmetry. See X(netbsd_copyin) for the full byte-order rationale.
+		 */
+		uint32_t v0 = q32[2], v1 = q32[3], v2 = q32[4];
+		uint32_t v3 = q32[5], v4 = q32[0], v5 = q32[1];
+#ifdef HOST_LITTLE_ENDIAN
+		if (cpu->byte_order == EMUL_BIG_ENDIAN) {
+#else
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+#endif
+			uint32_t *vv[6]; int k;
+			vv[0] = &v0; vv[1] = &v1; vv[2] = &v2;
+			vv[3] = &v3; vv[4] = &v4; vv[5] = &v5;
+			for (k = 0; k < 6; k++) {
+				uint32_t v = *vv[k];
+				*vv[k] = ((v & 0xff) << 24) | ((v & 0xff00) << 8) |
+				    ((v & 0xff0000) >> 8) | ((v & 0xff000000) >> 24);
+			}
+		}
+		p32[ofs  ] = v0;
+		p32[ofs+1] = v1;
+		p32[ofs+2] = v2;
+		p32[ofs+3] = v3;
+		p32[ofs+4] = v4;
+		p32[ofs+5] = v5;
+	}
 	cpu->cd.arm.r[1] = r1 + 24;
 	cpu->n_translated_instrs += 5;
 	cpu->cd.arm.next_ic = &ic[6];
