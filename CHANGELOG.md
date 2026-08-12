@@ -4192,6 +4192,119 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-first round (#380) — the m88k idle fold ran the bcnd.n delay slot zero times per taken branch
+
+`COMBINE(idle)`'s third arm matches the OpenBSD/luna88k idle loop's
+`tb1 / ld / bcnd.n` shape — five copies in the current boot image — but
+installed `idle_with_tb1`, the handler written for the **plain**-`bcnd`
+sequence. The `.n` delay slot, which the MC88100 executes once per branch
+*whether or not it is taken* (UM p. 1-4 §1.2.5, p. 3-26 §3.3.2, p. 3-35),
+therefore ran **zero** times per taken iteration for as long as the guest
+idled. On loop exit it ran once — by accident (`next_ic = &ic[3]` happens to
+be the slot) — which is exactly why no post-loop witness can see the defect:
+every boot marker and exit register reads identical on buggy and fixed
+builds. In the shipped image the slot is `or r2,rX,imm`, so the guest-visible
+blast radius is a stale `r2` during every idle sleep (visible to trapframes
+and in-guest debuggers); but the matcher never inspects the slot, so the same
+fold accepts a store, an MMIO access, or a faulting instruction.
+
+- **#380 (`cpus/cpu_m88k_instr.c`)** — a dedicated `idle_with_tb1_n` handler
+  that keeps the generated `bcnd_n_eq0` protocol bit-for-bit around the slot
+  call: pc moved to the *bcnd* (as the generated handler holds it), a real
+  `delay_target` both ways, `TO_BE_DELAYED`, the slot counted even when it
+  faults, the exception owning pc/next_ic on `EXCEPTION_IN_DELAY_SLOT`, and
+  the taken path assigning the precomputed target rather than re-deriving via
+  `SYNCH_PC` (a slot that undefinedly moved `cur_ic_page` — the manual's
+  "programming error is not detected" class — would make the re-derivation
+  compute a wrong page's address; assignment is immune). The untaken exit now
+  runs the slot **inside** delay-slot context, closing the narrower sibling
+  defect: the plain path's fault filing coincides with the protocol's for
+  DATA_ACCESS, but diverges on the third `m88k_exception` branch's SFIP (the
+  arm upstream itself labels "Perhaps something like this could work"), on
+  INSTRUCTION_ACCESS's zeroing, and left `delay_target` stale-from-the-last-
+  branch rather than current.
+- **#380 (matcher)** — arm 3 requires the slot to be a *real same-page ic*
+  (`n_back <= ENTRIES-2`: at the page's last slot the "delay slot" would be
+  the `end_of_page` sentinel, which repoints `cur_ic_page` when invoked —
+  executing that would be worse than the elision; the declined case falls
+  through to the faithful path, which runs the slot natively). Both `tb1`
+  arms gain `vector >= M88K_EXCEPTION_USER_TRAPS_START`: `X(tb1)` raises
+  PRIVILEGE_VIOLATION in user mode for vectors below 128 and the fast paths
+  never called it — an elided check closed by construction (the matched
+  images use vector 0xff; zero live installs change). All three idle handlers
+  gain a delay-slot entry guard (delegate to the faithful instruction if
+  `cpu->delay_slot != NOT_DELAYED`) — assessed unreachable on the image, a
+  by-construction guard. The old "we take a chance and hope" NOTE is replaced
+  by the honest contract: collapsing the spin still runs the slot **once per
+  idle break** rather than once per architectural iteration — exact for an
+  idempotent slot whose inputs the loop does not write (the image's `or`,
+  whose `r19` is loop-invariant, making the boot A/B a risk control rather
+  than a witness), inexact for accumulating, MMIO, order-sensitive or
+  polled-state-modifying slots; the same approximation the `ld`/`tb1` arms
+  already carry. A matcher gate on the slot's identity is impossible, not
+  merely undesirable: `combination_check` runs in the tail of the bcnd's own
+  translation and read-ahead walks forward, so the slot is `TO_BE_TRANSLATED`
+  at matcher time in *both* modes — an identity test would be dead always.
+- **#380 (`cpu_m88k.h`, `cpu_m88k.c`)** — pull-only counters
+  (`installs[3]`, `n_taken_plain`, `n_taken_n`, `slot_runs`, `in_delayslot`)
+  printed first in `m88k_cpu_tlbdump` (on the test machines every CMMU slot
+  is NULL, so the counter line is tlbdump's only output there). The two taken
+  counters are deliberately distinct: the mutation self-test reverts arm 3 to
+  the plain handler, and a single counter would read the same under mutant
+  and fix — the mutant would blind its own diagnostics.
+- **#380 (`regress/m88k_idle_probe.py`, gate 11 section 2, +6 checks)** — the
+  witness makes the slot a **store** (`st r5,r7,0`) and reads the stored word
+  *during* the idle: `taken` (fold path), `takenj` (`-J` reference — the
+  faithful path stores on every build), `untaken` (the exit path stores on
+  every build, then execution falls into zeroes and aborts — expected noise).
+  Placement is load-bearing and derived from the pass-1 panel's false-green
+  routes: free-running with no breakpoints (read-ahead installs the fold
+  before the first dispatch — with any breakpoint set the first iteration
+  runs the real branch and the slot executes once, a silent non-reproduction),
+  the spin word inside the code page (a cold page would take the `p==NULL`
+  fallback into the faithful sequence), DEST on a different page (a guest
+  store to the code page would invalidate the loop's own translations every
+  break). All four program words unassemble-verified with registers; the
+  arming pattern is written only in masked form (`(iword & 0xffe0ffff) ==
+  0xec40fffe` — as a literal word that spells `bcnd.n eq0,r0,-8`, which the
+  matcher *rejects*).
+
+**Measured end to end.** Test-first on the committed build: `taken` read the
+`0xdeadbeef` seed — the slot demonstrably never ran — while `-J` and the exit
+path both stored. Fixed build: 3/3, and the counters pin the semantics:
+`installs 0/0/1, n_taken_n 6172, slot_runs 6172` — the taken path entered
+6,172 times in the four-second idle window and the slot ran **exactly once
+per entry** (the two counts equal by construction; pre-fix that count was
+zero), guard quiet. Mutation proof: arm 3 reverted to the plain handler by
+constant (exactly-once anchor), `taken` back to `deadbeef`, references still
+green, counters showing the designed signature `installs[2]>=1,
+n_taken_plain>=1, n_taken_n==0`.
+
+**The final gate took four runs, and the diagnosis is part of the record.**
+`gate_ab` (the luna88k boot, with the five in-image arm-3 sequences now
+running the new handler) FAILED twice on the `login:` marker — and on the
+second run the pre-batch reference binary, which contains no `#380` code,
+missed it too, which acquitted the fix and indicted the environment. A stray
+emulator process was found and killed (`pkill` exit 0), yet a third clean-host
+run still failed on *both* binaries. What settled it was measurement, not
+theory: a solo timestamped boot of the `#380` binary reached `login:` at
+129.7 s (budget 300 s) with the fold's counters healthy on the live rig
+(`installs 0/0/1, n_taken_n 34415, slot_runs 34415+3648` — one slot dispatch
+per entry, taken and untaken, and user-mode PATC entries proving userland up);
+the gate's *exact* `run_emu` invocation replicated solo scored 1:1:1 with
+`timeout` reaping the emulator cleanly; and the full gate re-run under a
+10-second process-count watcher **passed 1:1:1 / 1:1:1 (5 checks)** with
+exactly one emulator alive throughout. Net: three independent green
+measurements of the `#380` boot; the two red runs were transient host load
+(the stray-process era) — the third measured instance of the `gate_ab`
+wall-clock oracle's load-sensitivity class, now the priority argument for the
+queued gate-hardening item, which also inherits this round's diagnostic kit
+(the marker-timestamp boot script and the process-count watcher). One
+self-inflicted lesson kept honestly: the first diagnostic boot passed `-x`,
+which routes consoles to X11 windows that do not exist under WSL, so its
+marker capture was empty while its counters carried the verdict — boot
+diagnostics must not use `-x`.
+
 ## One-hundred-and-twentieth round (#379) — #378's pass-2 review: a false-green route in the new probe, and four record errors
 
 Seven of eight seats answered on `#378`'s committed diff (kimi produced its

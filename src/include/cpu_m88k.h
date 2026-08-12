@@ -275,6 +275,18 @@ struct m88k_cpu {
 	/*  Delayed-branch target (for exception handling):  */
 	uint32_t	delay_target;
 
+	/*  #380: COMBINE(idle) instrumentation, pull-only (read via the
+	    debugger's tlbdump; plain counters, never debugmsg -- a pushed
+	    marker would flood a free-running idle loop). installs[] is per
+	    arm; the two n_taken counters are DELIBERATELY distinct: the
+	    mutation self-test reverts arm 3 to the plain handler, and a
+	    single counter would read the same under mutant and fix.  */
+	uint64_t	idle_fold_installs[3];
+	uint64_t	idle_fold_n_taken_plain;	/*  idle_with_tb1, v==0  */
+	uint64_t	idle_fold_n_taken_n;		/*  idle_with_tb1_n, v==0  */
+	uint64_t	idle_fold_slot_runs;		/*  delay slot dispatched  */
+	uint64_t	idle_fold_in_delayslot;		/*  fold entered AS a slot  */
+
 
 	/*
 	 *  Instruction translation cache, internal TLB structure, and 32-bit

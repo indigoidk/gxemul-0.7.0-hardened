@@ -3083,3 +3083,25 @@ corruption without a clear host-OOB path.
 > stale comment (claims W/L ignore the store mode and cvt.w/trunc.w are indistinguishable —
 > false since #294) is folded into the existing comment-only docs task rather than forcing a
 > shared-C propagation into a regress-only round.
+
+> ## 2026-08-12 — ✅ the m88k idle fold vs bcnd.n's delay slot → RESOLVED as #380 (round 121), with two residuals
+>
+> The queue item (harness task #53, from #375's audit): COMBINE(idle)'s .n arm installed the
+> plain-bcnd handler, so the delay slot ran zero times per taken branch — witnessed live
+> (`taken got=deadbeef` on the committed build, the slot's store never landing) and fixed by a
+> dedicated protocol-faithful handler; probe + gate 11 section 2 (+6 checks, 74 total) +
+> two-counter mutation proof. Full mechanics in the #380 CHANGELOG block. Residuals:
+>
+> - **Crosspage re-entry can silently LOSE an installed idle fold until page flush**
+>   (pre-existing, performance-only, found by a #380 pass-1 seat): a crosspage-delay-slot
+>   entry into the loop head re-translates the tb1's ic via `end_of_page`, the dyntrans
+>   special case then resets it `TO_BE_TRANSLATED`, and a later plain re-translation of the
+>   tb1 never re-fires the matcher — only bcnd words arm `combination_check`. The loop then
+>   spins un-folded (correct results, no idle sleep) until the page is flushed. Affects all
+>   three arms; worth a one-line fix only if a real guest measurably hits it.
+> - **The elided tb1 privilege check is now closed by construction, unmeasured** (#380 added
+>   `vector >= M88K_EXCEPTION_USER_TRAPS_START` to both tb1 arms): a user-mode guest whose
+>   idle-shaped loop used a vector below 128 would have had its PRIVILEGE_VIOLATION silently
+>   dropped by the fast path. No such guest exists on the rigs (the matched sequences use
+>   0xff), so the conjunct has no live install to measure against — recorded as
+>   by-construction, the honest label for a fix whose defect cannot be reproduced on any rig.

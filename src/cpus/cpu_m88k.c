@@ -337,6 +337,20 @@ void m88k_cpu_tlbdump(struct cpu* cpu, int rawflag)
 		if (cpu == cpu->machine->cpus[i])
 			cpu_nr = i;
 
+	/*  #380: the idle-fold counters print FIRST, before the CMMU loop --
+	    on the test machines every cmmu[] slot is NULL, so this line is
+	    the only tlbdump output there, and the probe regexes depend on it.  */
+	printf("cpu%i: idle_fold installs=%" PRIu64 "/%" PRIu64 "/%" PRIu64
+	    " n_taken_plain=%" PRIu64 " n_taken_n=%" PRIu64
+	    " slot_runs=%" PRIu64 " in_delayslot=%" PRIu64 "\n", cpu_nr,
+	    cpu->cd.m88k.idle_fold_installs[0],
+	    cpu->cd.m88k.idle_fold_installs[1],
+	    cpu->cd.m88k.idle_fold_installs[2],
+	    cpu->cd.m88k.idle_fold_n_taken_plain,
+	    cpu->cd.m88k.idle_fold_n_taken_n,
+	    cpu->cd.m88k.idle_fold_slot_runs,
+	    cpu->cd.m88k.idle_fold_in_delayslot);
+
 	for (cmmu_nr = 0; cmmu_nr < MAX_M8820X_CMMUS; cmmu_nr++) {
 		struct m8820x_cmmu *cmmu = cpu->cd.m88k.cmmu[cmmu_nr];
 		if (cmmu == NULL)

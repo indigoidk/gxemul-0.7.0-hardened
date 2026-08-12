@@ -160,4 +160,56 @@ wctrl=$(grep -o "M88K_WARN_CONTROL=[0-9None]*" "$LOG" | tail -1 | cut -d= -f2)
 check "pure-RM fcr63 writes produce no UNIMPLEMENTED warning" "${warns:-missing}" 0
 check "positive control: non-RM write 0x1 warns exactly once" "${wctrl:-missing}" 1
 
+# ---- #380: the idle fold vs bcnd.n's delay slot ------------------------------
+# COMBINE(idle)'s .n arm installed the handler written for the PLAIN-bcnd
+# sequence, so the delay slot -- which the architecture executes once per
+# branch, taken or not -- ran ZERO times per taken iteration. On loop exit it
+# ran once, which is exactly why no post-loop witness can see this: the probe's
+# slot is a STORE and the stored word is read DURING the idle. Rows: `taken`
+# (fold path; pre-fix deadbeef, fixed 11111111), `takenj` (-J reference: the
+# faithful path stores on every build), `untaken` (the exit path stores on
+# every build -- and then execution falls into zeroes and aborts, expected).
+# The counter predicate is the reachability half: installs[2]>=1 proves the .n
+# arm matched, n_taken_n>=1 proves the NEW handler's taken path ran (a distinct
+# counter from the plain handler's, so the mutation self-test -- which reverts
+# the install to the plain handler -- reads ntp>=1,ntn==0 instead of blinding
+# itself), slot_runs>=1 proves the delay slot was dispatched, in_delayslot==0
+# proves the by-construction guard never fired on this rig. Absent counters
+# parse as DEAD, never zero.
+ILOG=$LOGDIR/gate_m88k_idle.log
+python3 m88k_idle_probe.py "$PMAX" > "$ILOG" 2>&1 || true
+
+if ! grep -q "M380_RESULT=" "$ILOG"; then
+    note "idle probe produced no result line; last lines follow"
+    tail -5 "$ILOG" | sed 's/^/       /'
+    check "idle probe completed" "no" "yes"
+    gate_end; exit $?
+fi
+
+grep -E "M380_ROW=|M380_COUNTERS=" "$ILOG" | sed 's/^/       /'
+
+for v in taken takenj untaken; do
+    n=$(grep -cF "M380_ROW=$v RESULT=PASS got=11111111" "$ILOG")
+    check "  idle row: $v" "$n" 1
+done
+
+ctrs=$(grep -o "M380_COUNTERS=[A-Za-z0-9:,/]*" "$ILOG" | tail -1 | cut -d= -f2)
+case "$ctrs" in
+    installs:*)
+        i2=${ctrs#installs:*/*/}; i2=${i2%%,*}
+        ntn=${ctrs#*ntn:}; ntn=${ntn%%,*}
+        slt=${ctrs#*slot:}; slt=${slt%%,*}
+        ds=${ctrs#*ds:}
+        [ "${i2:-0}" -ge 1 ] && [ "${ntn:-0}" -ge 1 ] && \
+            [ "${slt:-0}" -ge 1 ] && [ "${ds:-1}" -eq 0 ] \
+            && cver="OK" || cver="BAD($ctrs)"
+        ;;
+    *)  cver="DEAD" ;;
+esac
+check "  idle counters: arm3 fired, slot ran, guard quiet" "$cver" "OK"
+
+ires=$(grep -o "M380_RESULT=[0-9]*/[0-9]*" "$ILOG" | tail -1 | cut -d= -f2)
+check "idle rows run"     "${ires#*/}" 3
+check "idle rows correct" "${ires%/*}" "${ires#*/}"
+
 gate_end

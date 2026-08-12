@@ -2579,6 +2579,18 @@ X(idle)
 	uint32_t *p32 = (uint32_t *) p;
 	uint32_t v;
 
+	/*  #380: entered AS some other .n branch's delay slot? Then next_ic
+	    belongs to that branch's handler (it increments or redirects it
+	    after we return) and wants_to_idle must not fire mid-branch.
+	    Delegate to the faithful instruction. Assessed unreachable on the
+	    luna88k image (no .n branch precedes any matched entry point) --
+	    a by-construction guard, not a measured fix.  */
+	if (cpu->delay_slot != NOT_DELAYED) {
+		cpu->cd.m88k.idle_fold_in_delayslot ++;
+		instr(ld_u_4_be)(cpu, ic);
+		return;
+	}
+
 	/*  Fallback:  */
 	if (p == NULL || (rY & 3)) {
 		instr(ld_u_4_be)(cpu, ic);
@@ -2620,6 +2632,13 @@ X(idle_with_tb1)
 	uint32_t *p32 = (uint32_t *) p;
 	uint32_t v;
 
+	/*  #380: see X(idle) -- same by-construction delay-slot guard.  */
+	if (cpu->delay_slot != NOT_DELAYED) {
+		cpu->cd.m88k.idle_fold_in_delayslot ++;
+		instr(tb1)(cpu, ic);
+		return;
+	}
+
 	/*  Fallback:  */
 	if (p == NULL || (rY & 3)) {
 		instr(tb1)(cpu, ic);
@@ -2636,12 +2655,113 @@ X(idle_with_tb1)
 
 	if (v == 0) {
 		SYNCH_PC;
+		cpu->cd.m88k.idle_fold_n_taken_plain ++;
 		cpu->wants_to_idle = true;
 		cpu->n_translated_instrs += N_DYNTRANS_IDLE_BREAK;
 		cpu->cd.m88k.next_ic = &nothing_call;
 	} else {
 		cpu->n_translated_instrs += 2;
 		cpu->cd.m88k.next_ic = &ic[3];
+	}
+}
+
+
+/*
+ *  idle_with_tb1_n:
+ *
+ *  s:	tb1	bit,r0,vector		ic[0]
+ *	ld	rX,rY,ofs		ic[1]
+ *	bcnd.n	eq0,rX,s		ic[2]
+ *	<delay slot>			ic[3]
+ *
+ *  #380: arm 3 of COMBINE(idle) used to reuse idle_with_tb1 -- the handler
+ *  written for the PLAIN-bcnd sequence -- so the bcnd.n delay slot, which
+ *  the architecture executes once per branch whether or not it is taken
+ *  (MC88100 UM p. 1-4 sec 1.2.5, p. 3-26 sec 3.3.2, p. 3-35), never ran for
+ *  as long as the guest idled; on loop exit it ran once, but OUTSIDE
+ *  delay-slot context, so a faulting exit slot would have filed its
+ *  delay-slot state wrong (delay_slot flag, XIP_E, and the vector-dependent
+ *  SFIP arm -- for DATA_ACCESS the plain-path SNIP/SFIP coincide with the
+ *  protocol's, so the divergence is the narrower non-DATA set). This handler
+ *  keeps the generated bcnd_n_eq0 protocol bit-for-bit around the slot call.
+ *
+ *  Collapsing the spin still runs the slot once per idle BREAK rather than
+ *  once per architectural iteration -- exact for an idempotent slot whose
+ *  inputs the loop does not write (the matched guests' `or rD,r19,imm`),
+ *  inexact for an accumulating, MMIO, order-sensitive or
+ *  polled-state-modifying one; the same approximation the ld and tb1 arms
+ *  already carry for their elided instructions. A matcher gate on ic[3]'s
+ *  identity is impossible, not merely undesirable: combination_check runs in
+ *  the tail of the BCND's own translation and read-ahead walks FORWARD, so
+ *  ic[3] is TO_BE_TRANSLATED at matcher time in BOTH modes -- an identity
+ *  test would be dead always (the #360/#361 fold-shipped-dead shape).
+ */
+X(idle_with_tb1_n)
+{
+	uint32_t rY = reg(ic[1].arg[1]) + ic[1].arg[2];
+	uint32_t index = rY >> 12;
+	unsigned char *p = cpu->cd.m88k.host_load[index];
+	uint32_t *p32 = (uint32_t *) p;
+	uint32_t v;
+
+	/*  #380: see X(idle) -- same by-construction delay-slot guard.  */
+	if (cpu->delay_slot != NOT_DELAYED) {
+		cpu->cd.m88k.idle_fold_in_delayslot ++;
+		instr(tb1)(cpu, ic);
+		return;
+	}
+
+	/*  Fallback:  */
+	if (p == NULL || (rY & 3)) {
+		instr(tb1)(cpu, ic);
+		return;
+	}
+
+	v = p32[(rY & 0xfff) >> 2];
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+		v = LE32_TO_HOST(v);
+	else
+		v = BE32_TO_HOST(v);
+
+	reg(ic[1].arg[0]) = v;
+
+	/*  The delay slot, under the full generated protocol. SYNCH_PC lands
+	    on the tb1 (this ic); the generated handler holds pc at the BCND
+	    while the slot runs, so move there and derive the target from it:
+	    taken = the tb1 (the arming mask pins d16 to -8, so the bcnd.n's
+	    target IS the tb1 here), untaken = bcnd + 8.  */
+	SYNCH_PC;
+	cpu->pc += 8;
+	cpu->cd.m88k.delay_target = (v == 0)? cpu->pc - 8 : cpu->pc + 8;
+	cpu->delay_slot = TO_BE_DELAYED;
+	cpu->cd.m88k.idle_fold_slot_runs ++;
+	ic[3].f(cpu, &ic[3]);
+	cpu->n_translated_instrs ++;	/*  the slot -- counted even when it
+					    faults, as the generated handler
+					    counts it  */
+	if (cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT) {
+		/*  The exception owns pc and next_ic.  */
+		cpu->delay_slot = NOT_DELAYED;
+		return;
+	}
+	cpu->delay_slot = NOT_DELAYED;
+
+	if (v == 0) {
+		/*  pc = the precomputed target, NOT a second SYNCH_PC: a slot
+		    that undefinedly moved cur_ic_page (UM p. 3-35 -- "not
+		    detected") would make SYNCH_PC compute the new page's base
+		    plus this slot's index. Assignment is immune and mirrors
+		    the generated handler.  */
+		cpu->pc = cpu->cd.m88k.delay_target;
+		cpu->cd.m88k.idle_fold_n_taken_n ++;
+		cpu->wants_to_idle = true;
+		cpu->n_translated_instrs += N_DYNTRANS_IDLE_BREAK;
+		cpu->cd.m88k.next_ic = &nothing_call;
+	} else {
+		cpu->n_translated_instrs += 2;	/*  ld + bcnd; the tb1 is the
+						    dispatch loop's own count,
+						    the slot was counted above  */
+		cpu->cd.m88k.next_ic = &ic[4];
 	}
 }
 
@@ -2762,35 +2882,52 @@ void COMBINE(idle)(struct cpu *cpu, struct m88k_instr_call *ic, int low_addr)
 	    ic[0].arg[0] == ic[-1].arg[0] &&
 	    ic[0].arg[0] != (size_t) &cpu->cd.m88k.r[M88K_ZERO_REG]) {
 		ic[-1].f = instr(idle);
+		cpu->cd.m88k.idle_fold_installs[0] ++;	/*  #380  */
 		return;
 	}
 
+	/*  #380: the tb1 vector conjunct on this and the .n arm closes an
+	    elided user-mode privilege check -- X(tb1) raises
+	    PRIVILEGE_VIOLATION for vector < M88K_EXCEPTION_USER_TRAPS_START,
+	    and the fast paths never call it. Unreachable in the matched
+	    images (their vector is 0xff) and zero live installs change: a
+	    by-construction fix, recorded as such.  */
 	if (ic[0].f == instr(bcnd_samepage_eq0) &&
 	    ic[0].arg[2] == (size_t) &ic[-2] &&
 	    ic[-2].f == instr(tb1) &&
 	    ic[-2].arg[1] == (size_t) &cpu->cd.m88k.r[M88K_ZERO_REG] &&
+	    ic[-2].arg[2] >= M88K_EXCEPTION_USER_TRAPS_START &&
 	    ic[-1].f == instr(ld_u_4_be) &&
 	    ic[0].arg[0] == ic[-1].arg[0] &&
 	    ic[0].arg[0] != (size_t) &cpu->cd.m88k.r[M88K_ZERO_REG]) {
 		ic[-2].f = instr(idle_with_tb1);
+		cpu->cd.m88k.idle_fold_installs[1] ++;	/*  #380  */
 		return;
 	}
 
-	// NOTE: In this case, we are only checking the tb1, the ld, and
-	// the bcnd.n instruction. It actually executes the instruction after
-	// it: hopefully it is an 'or', but in principle it could be anything.
-	// Here we take a chance and hope that it is not something weird that
-	// would cause an exception. (It is unlikely that this particular loop
-	// construct, used for idle loops, would have something else after it.)
+	/*  #380: the .n arm. The delay slot (the word after the bcnd.n) is
+	    part of the sequence's semantics -- the architecture executes it
+	    once per branch, taken or not -- and idle_with_tb1_n runs it under
+	    the full generated protocol, so this matcher no longer "takes a
+	    chance and hopes" (the old NOTE's words) about ic[3]. It DOES
+	    require the slot to be a REAL same-page ic: at
+	    n_back == ENTRIES-1 the "slot" would be the end_of_page sentinel,
+	    which repoints cur_ic_page when invoked, and executing that as a
+	    delay slot is worse than the elision it replaces. The declined
+	    case falls through to the faithful non-combined path, which
+	    executes the slot natively. (n_back is the bcnd's own index, so
+	    the slot is n_back+1 and the last real index is ENTRIES-1.)  */
 	if (ic[0].f == instr(bcnd_n_eq0) &&
+	    n_back <= M88K_IC_ENTRIES_PER_PAGE - 2 &&
 	    ic[0].arg[2] == (size_t) low_addr - 8 &&
 	    ic[-2].f == instr(tb1) &&
 	    ic[-2].arg[1] == (size_t) &cpu->cd.m88k.r[M88K_ZERO_REG] &&
+	    ic[-2].arg[2] >= M88K_EXCEPTION_USER_TRAPS_START &&
 	    ic[-1].f == instr(ld_u_4_be) &&
 	    ic[0].arg[0] == ic[-1].arg[0] &&
 	    ic[0].arg[0] != (size_t) &cpu->cd.m88k.r[M88K_ZERO_REG]) {
-		ic[-2].f = instr(idle_with_tb1);
-		// printf("NEW IDLE using bcnd.n!!!\n");
+		ic[-2].f = instr(idle_with_tb1_n);
+		cpu->cd.m88k.idle_fold_installs[2] ++;	/*  #380  */
 		return;
 	}
 }
