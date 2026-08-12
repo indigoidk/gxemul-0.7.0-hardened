@@ -356,6 +356,99 @@ for fold, warm, want_fire, want_dec in (("copyin", True, 1, 0),
                  "fire=%d dec=%d inst=%d verb=%s adv=%s"
                  % (f, d, i, verb, adv), ok))
 
+#  ---- #368: the copyin fold's ROTATION, with an UNALIGNED base ---------------
+#  Every arm above bases on `mov r0,#0x10000`, so `r0 & 3 == 0` and #362's
+#  six-word rotation block in X(netbsd_copyin) NEVER EXECUTES. Measured: with
+#  that block neutralised, the writeback probe stayed 17/17 and this probe stayed
+#  14/14. So the rotation shipped unreachable, not merely unmeasured.
+#
+#  The row is a fold-versus-TEMPLATE differential on ONE binary, not a check
+#  against constants computed here. Pass 1 declines (the is_userpage bit is
+#  clear), so its six loads run through the very handler the fold's bail-out
+#  delegates to; pass 2 folds. r1 accumulates `sl` across both passes, so
+#  r1 == 0 iff the two paths AGREE -- and when they do not, pass 1's own value is
+#  recoverable as r1 ^ sl. That XOR is the whole design: a row that read
+#  registers only at the end would measure pass 2 against hand-arithmetic,
+#  because pass 2 OVERWRITES r6-r11 and pass 1's values are gone.
+#
+#  r1 is the accumulator deliberately: session() already reads it back and only
+#  the copyout arms assert it, so the shared helper needs no change.
+#
+#  THREE offsets, not one. `8 * (r0 & 1)` agrees with `8 * (r0 & 3)` at +1 and
+#  differs at +2 and +3, and a guard of `if (r0 & 1)` would skip the rotation
+#  entirely at +2 -- one arm cannot tell those apart.
+#
+#  Every iword was checked through `unassemble`; the branch target especially,
+#  since a wrong target silently changes the pass count and the pass count is
+#  what makes fire=1/dec=1 a DERIVED number rather than a threshold. 0x5AFFFFF4
+#  disassembles as `bpl 0x8008`, which is word index 2 -- the re-seed point.
+#
+#  HONEST SCOPE: NetBSD's bcopyinout.S does `ands r3,r0,#0x03 / bne` before its
+#  six-ldrt block, so a real guest never reaches this fold with an unaligned
+#  base. These rows pin an INTERNAL-CONSISTENCY property -- the fold agreeing
+#  with the handler its own bail-out delegates to, the #342/#355 class -- and not
+#  a guest-reachable behaviour. Also note #362's own comment describes the BROKEN
+#  build ("pass 1 yields the rotated word while pass 2 folds and yields the
+#  unrotated one"); on the shipped build BOTH rotate, so the healthy expectation
+#  here is AGREEMENT, not contradiction.
+MOV_R1_0 = 0xE3A01000       # mov  r1,#0
+EOR_R1_SL = 0xE021100A      # eor  r1,r1,sl
+ADD_R0_N = (0xE2800001, 0xE2800002, 0xE2800003)     # add r0,r0,#1 / #2 / #3
+
+
+def copyin_unal(n):
+    """Two passes, base re-seeded to 0x1000n each pass. No breakpoint anywhere:
+    read-ahead must stay alive so the fold is installed before its slot
+    dispatches, and a breakpoint would also make the fold count passes - 1."""
+    return [
+        0xE3A03001,        # 0  mov  r3,#1        two passes
+        MOV_R1_0,          # 1  mov  r1,#0        agreement accumulator
+        0xE3A00801,        # 2  L: mov r0,#0x10000
+        ADD_R0_N[n - 1],   # 3  add  r0,r0,#n     UNALIGNED, re-seeded each pass
+        0xE4B0A004,        # 4  ldrt sl,[r0],#4   <- fold entry slot
+        0xE4B0B004,        # 5  ldrt fp,[r0],#4
+        0xE4B06004,        # 6  ldrt r6,[r0],#4
+        0xE4B07004,        # 7  ldrt r7,[r0],#4
+        0xE4B08004,        # 8  ldrt r8,[r0],#4
+        0xE4B09004,        # 9  ldrt r9,[r0],#4   arms COMBINE(netbsd_copyin)
+        EOR_R1_SL,         # 10 eor  r1,r1,sl     0 iff both passes agree
+        0xE2533001,        # 11 subs r3,r3,#1
+        0x5AFFFFF4,        # 12 bpl -> word 2
+        0xEAFFFFFE,        # 13 b .
+    ]
+
+
+#  ROR 8*n of the six seeded words 0x11223344..0x49. "Rotation absent" would give
+#  the UNROTATED words -- which is exactly what the aligned `fires` row asserts,
+#  so a fold that stops rotating cannot pass these rows by satisfying that one.
+for n in (1, 2, 3):
+    rot = 8 * n
+    want = tuple(((0x11223344 + k) >> rot) | (((0x11223344 + k) << (32 - rot))
+                 & 0xFFFFFFFF) for k in range(6))
+    nm = "A fold copyin rot plus%d" % n
+    r = session(copyin_unal(n), True, seed_regs=SEED2)
+    if r is None:
+        rows.append((nm, "DISC", "DEAD", False))
+        continue
+    buf, regs, _ = r
+    f, d, i = (count(buf, "netbsd_copyin"), declined(buf, "netbsd_copyin"),
+               installed(buf, "netbsd_copyin"))
+    verb = "3: DEBUG" in buf
+    #  r0 advanced by the full six transfers from the UNALIGNED base. #357 makes
+    #  the fold and the template agree here, so this proves the program ran
+    #  without presuming the fold -- a run-witness, not a fold-witness.
+    adv = regs.get("r0") == 0x10000 + n + 24
+    vals = tuple(regs.get(k) for k in ("sl", "fp", "r6", "r7", "r8", "r9"))
+    agree = regs.get("r1") == 0
+    ok = (f == 1 and d == 1 and i == 1 and verb and adv
+          and vals == want and agree)
+    rows.append((nm, "DISC",
+                 "fire=%d dec=%d inst=%d adv=%s vals=%s xor=%s"
+                 % (f, d, i, adv, vals == want,
+                    "unread" if regs.get("r1") is None else "0x%x" % regs["r1"]),
+                 ok))
+
+
 #  ---- #361: xchg and netbsd_scanc, which had #358 fire markers but no rows ---
 #  Every iword below was verified through the emulator's own `unassemble`.
 XCHG_POS = [0xE0212002, 0xE0221001, 0xE0212002,   # eor r2,r1,r2 / r1,r2,r1 / r2,r1,r2

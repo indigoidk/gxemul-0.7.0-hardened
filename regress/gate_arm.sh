@@ -770,7 +770,7 @@ fgot=${fres%/*}; fwant=${fres#*/}
 #  program reached its end. Measured: on a scanc-arming-dead build all three arms
 #  keep byte-identical register values and only the marker triple moves, so a
 #  value-only row would be vacuous for this fold.
-check "fold-marker rows run"     "$fwant" 14
+check "fold-marker rows run"     "$fwant" 17
 check "fold-marker rows correct" "$fgot"  "$fwant"
 
 for v in "A fold copyin fires" "A fold copyin quiet" \
@@ -779,7 +779,9 @@ for v in "A fold copyin fires" "A fold copyin quiet" \
          "A fold copyout warm" "A fold copyout cold" \
          "A fold xchg fires" "A fold xchg samereg" \
          "A fold xchg selective" "A fold scanc fires" \
-         "A fold scanc nostr" "A fold scanc notbl"; do
+         "A fold scanc nostr" "A fold scanc notbl" \
+         "A fold copyin rot plus1" "A fold copyin rot plus2" \
+         "A fold copyin rot plus3"; do
     n=$(count "$FOLDLOG" "^$v  .*ok$")
     check "  fold-marker row: $v" "$n" 1
 done

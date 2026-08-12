@@ -2947,10 +2947,16 @@ corruption without a clear host-OOB path.
 >    state**, against 4080 of 4096 `s == 1` that do — even the RRX case reads `ARM_F_C` and
 >    writes it only under `if (s)`. No row can observe a doubled call through a pure function.
 >    A closure by construction is worth as much as a row, and cheaper to keep true.
-> 5. **The `netbsd_copyin` rotation's body never executes.** Every fold-marker arm bases on
+> 5. ✅ **DONE in `#368`** — **The `netbsd_copyin` rotation's body never executes.** Every fold-marker arm bases on
 >    `mov r0,#0x10000`, so `r0 & 3 == 0` always. Needs a two-pass `ldrt` arm with `r0` re-seeded
 >    to `0x10001`, which is a self-contradiction test on ONE binary: pass 1 declines and runs the
 >    template (rotated), pass 2 folds (unrotated) unless the fold rotates too.
+>    *(As shipped: THREE arms, offsets +1/+2/+3, because one offset cannot separate the
+>    `& 1`-for-`& 3` and skip-at-+2 mutants; and the comparison is carried in an XOR
+>    accumulator in `r1`, because pass 2 overwrites r6–r11 so a final register dump cannot
+>    see pass 1 — the original one-arm read-at-end design was refuted in review. Note also
+>    the sentence above describes the BROKEN build; on the shipped build both passes rotate,
+>    so the healthy expectation is agreement, `r1 == 0`.)*
 > 6. ✅ **DONE in `#367`** — **Permanent path telemetry, the item that stops this recurring.** Delivered as a
 >    `uint64_t` counter incremented at the top of `A__NAME__general`, read out through the
 >    previously-EMPTY `arm_cpu_tlbdump` stub (pull-only, so nothing prints unless asked and no

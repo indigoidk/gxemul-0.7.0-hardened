@@ -4192,6 +4192,69 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirteenth round (#368) — the copyin fold's rotation shipped unreachable, and its row is a cross-path XOR
+
+`#362` added a six-word rotation to the `netbsd_copyin` instruction combiner, guarded by
+`if (r0 & 3)`. **That body never executed under the battery**: every copyin arm in the
+fold-marker probe bases on `mov r0,#0x10000`, so `r0 & 3 == 0` always. Measured in round
+110 — neutralising the block left the writeback probe 17/17 and the fold-marker probe
+14/14. Unreachable, not merely unmeasured.
+
+- **#368 (`regress/arm_fold_marker_probe.py`, `regress/gate_arm.sh`)** — three arms that
+  drive the fold with an unaligned base, at all three nonzero offsets. Harness only; no
+  emulator source change.
+
+**The row is a fold-versus-template differential on ONE binary**, not a check against
+constants computed in the probe. Each arm runs two passes with the base re-seeded to
+`0x1000N` at the top of each: pass 1 declines (the `is_userpage` bit is clear) and its six
+loads run through the very handler the fold's bail-out delegates to; pass 2 folds. An XOR
+accumulator in `r1` (`eor r1,r1,sl` once per pass) makes `r1 == 0` iff the two paths
+**agree** — and when they do not, pass 1's own value is recoverable as `r1 ^ sl`.
+
+**The XOR is the design, and it exists because the obvious shape was refuted in review.**
+A row that reads registers only at the end measures pass 2 against hand-arithmetic,
+because pass 2 *overwrites* r6–r11 and pass 1's values are gone by the time the probe
+reads them. The accumulator carries the comparison inside the guest, where both values
+still exist. `r1` is the accumulator deliberately: the shared `session()` already reads it
+back, and only the copyout arms assert it, so the helper needed no change.
+
+**Three offsets, not one.** `8 * (r0 & 1)` agrees with `8 * (r0 & 3)` at +1 and differs at
++2 and +3, and a guard of `if (r0 & 1)` would skip the rotation entirely at +2 — a single
+arm cannot separate those mutants. The expected values are the ROR-8/16/24 images of the
+six seeded words; "rotation absent" is the unrotated words, which is exactly what the
+**aligned** `fires` row asserts, so a fold that stops rotating cannot pass these rows by
+satisfying that one.
+
+**Two records `#362`/`#365` got wrong are corrected in passing.** `#362`'s comment
+describes the *broken* build ("pass 1 yields the rotated word while pass 2 folds and
+yields the unrotated one") — on the shipped build both rotate, so the healthy expectation
+is **agreement**, not contradiction. And the marker counts here are **derived, not
+thresholded**: install 1, fire 1, decline 1 over two passes, which depends on `#366`'s
+corrected fact that the general path's own insert sets the `is_userpage` bit — pass 1's
+bail delegates only the entry slot, whose general-path access sets the bit, after which
+the remaining five `ldrt` go fast and pass 2 folds.
+
+**The five combiner traps, each avoided by construction** rather than by care: no `step`
+anywhere (the session free-runs and interrupts); no breakpoint at all, which also keeps
+read-ahead alive — `breakpoints.n` must be 0 for it, and with a 14-word block on one page
+the arming slot is translated during read-ahead so the fold is installed *before* its slot
+first dispatches, which is why there is no `passes − 1` correction; nothing re-marks the
+entry slot; and the matcher provably never reads `r0`'s value — it runs at translation
+time, where register values are meaningless.
+
+**Encodings checked through `unassemble` before use**, the branch target especially:
+`0x5AFFFFF4` disassembles as `bpl 0x8008`, the re-seed point. A target of `0x8004` would
+give three passes and `fire=2`; `0x800c` would never re-seed the base. A wrong target
+silently changes the pass count, and the pass count is what makes `fire=1 dec=1` derived
+numbers. The other new words: `0xE3A01000` (`mov r1,#0`) and `0xE021100A`
+(`eor r1,r1,sl`) — the latter arms `COMBINE(xchg)`'s matcher in passing, which was checked
+and declines silently on the same-register short-circuit.
+
+**Honest scope.** NetBSD's `bcopyinout.S` does `ands r3, r0, #0x03 / bne` before its
+six-`ldrt` block, so a real guest never reaches this fold with an unaligned base. These
+rows pin an **internal-consistency** property — the fold agreeing with the handler its own
+bail-out delegates to, the `#342`/`#355` class — not a guest-reachable behaviour.
+
 ## One-hundred-and-twelfth round (#367) — path attribution stops being a comment and becomes a checked quantity
 
 Which of the two load/store paths a probe row takes was asserted in prose, and it was
