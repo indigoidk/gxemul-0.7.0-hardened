@@ -108,6 +108,8 @@ SWP_R2_R1_R0 = 0xE1002091      # swp  r2,r1,[r0]
 SWPB_R2_R1_R0 = 0xE1402091     # swpb r2,r1,[r0]  (bit 22 = B)
 ADD_R0_1 = 0xE2800001          # add r0,r0,#1   (unaligned rows)
 SUB_R0_1 = 0xE2400001          # sub r0,r0,#1   (ladder re-bases at aligned P)
+ADD_R0_2 = 0xE2800002          # add r0,r0,#2   (#387: the +2 offset groups)
+SUB_R0_2 = 0xE2400002          # sub r0,r0,#2
 LDRB_R7_R0_4 = 0xE5D07004      # ldrb r7,[r0,#4] -- the P+4 survivor sentinel
 BUILD_R1_5567 = [0xE3A01455,   # mov r1,#0x55000000
                  0xE3811866,   # orr r1,r1,#0x00660000
@@ -157,6 +159,18 @@ def swp_unal_prog():
 #  from every seed and store byte.
 def swp_unal_seeds():
     return seed_bytes(COLD)[:4] + ["put b 0x%x, 0x99" % (COLD + 4)]
+
+
+#  #387: the +2 groups seed P+5 explicitly (0xAA, disjoint from everything)
+#  so the buggy raw P+2..P+5 read has a defined fourth byte that does not
+#  lean on the unseeded-RAM-is-zero assumption.
+def swp_un2_prog():
+    return (BUILD_R1_5567 + [MOV_R0_COLD, ADD_R0_2, SWP_R2_R1_R0, SUB_R0_2]
+            + list(LDRB) + [LDRB_R7_R0_4, SPIN])
+
+
+def swp_un2_seeds():
+    return swp_unal_seeds() + ["put b 0x%x, 0xaa" % (COLD + 5)]
 
 
 def run(machine, prog, seeds, regs):
@@ -352,6 +366,32 @@ GROUPS = [
         ("swp le unal b2", "r5", 0x66, 0x77, "DISC"),
         ("swp le unal b3", "r6", 0x55, 0x66, "DISC"),
         ("swp le unal sent", "r7", 0x99, 0x55, "DISC"),
+    ]),
+    #  ---- #387 rows: the +2 offset. The +1 groups above cannot distinguish
+    #  the shipped `8*(addr&3)` / `if(rot_sh)` / `addr&=~3` from three wrong
+    #  forms that AGREE at +1 -- `8*(addr&1)`, a guard of `if(addr&1)`, and a
+    #  mask of `~1` (the fold-marker probe's three-offsets rule, its :437).
+    #  At +2 all three diverge: the &1 amount gives 0, the &1 guard skips the
+    #  rotate entirely, and the ~1 mask leaves the access at P+2. Every +2 row
+    #  is DISC -- the +1 b2 by-construction collision does not recur (buggy at
+    #  +2 puts LE-d[0]=bits[7:0]=0x88 at P+2; fixed puts bits[15:8]=0x77).
+    #  `buggy` = the pre-#386 build: raw LE load of P+2..P+5 = 33 44 99 AA ->
+    #  0xAA994433; raw LE store at P+2..P+5 -> ladder 11 22 88 77, sent 66.
+    ("387 be swp un2", "barearm", swp_un2_prog(), swp_un2_seeds(), [
+        ("swp be un2 r2", "r2", 0x33441122, 0xAA994433, "DISC"),
+        ("swp be un2 b0", "r3", 0x55, 0x11, "DISC"),
+        ("swp be un2 b1", "r4", 0x66, 0x22, "DISC"),
+        ("swp be un2 b2", "r5", 0x77, 0x88, "DISC"),
+        ("swp be un2 b3", "r6", 0x88, 0x77, "DISC"),
+        ("swp be un2 sent", "r7", 0x99, 0x66, "DISC"),
+    ]),
+    ("387 le swp un2", "testarm", swp_un2_prog(), swp_un2_seeds(), [
+        ("swp le un2 r2", "r2", 0x22114433, 0xAA994433, "DISC"),
+        ("swp le un2 b0", "r3", 0x88, 0x11, "DISC"),
+        ("swp le un2 b1", "r4", 0x77, 0x22, "DISC"),
+        ("swp le un2 b2", "r5", 0x66, 0x88, "DISC"),
+        ("swp le un2 b3", "r6", 0x55, 0x77, "DISC"),
+        ("swp le un2 sent", "r7", 0x99, 0x66, "DISC"),
     ]),
 ]
 

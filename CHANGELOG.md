@@ -4192,6 +4192,49 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-seventh round (#387) — #386's pass-2: three wrong swp forms passed all 58 rows, and eight records read wrong
+
+Detector + records only — no emulator code (all seven answering pass-2 seats verified the
+shipped `X(swp)` clean against the manual, five of them re-deriving every constant).
+
+**The detector hole (the Opus seat's finding, the fold-marker probe's own three-offsets
+rule applied to this rig):** the #386 unaligned rows exercise ONLY offset +1, where three
+wrong-but-plausible forms AGREE with the shipped code — a rotate amount of `8*(addr&1)`,
+a rotate guard keyed on the raw odd bit, and an alignment mask of `~1` (which at +1 maps
+`P+1` to `P`, indistinguishable from `~3`). All three passed the full 58-row set. Closed
+with +2-offset groups on both orders (12 rows, every one DISC — the +1 `b2`
+by-construction collision does not recur at +2), P+5 seeded `0xAA` so the buggy raw-read
+constant does not lean on unseeded-RAM-is-zero, and the three hole-mutants EXECUTED,
+each at its predicted count with the +1 rows GREEN (the hole property, confirmed) and
+the +2 rows red: amount-`&1` 68/70 (un2 r2 = `0x11223344`, assembled right, unrotated),
+raw-odd-guard 68/70, mask-`~1` 58/70 (both un2 groups entirely; the BE sentinel reads
+`0x77` — the P+2-shifted write's own bits[15:8] byte landing at P+4). GREEN on the
+committed build first: 70/70. The gate's named-row pattern now also pins each row's
+KIND (`DISC ... ok`), closing the re-type-a-red-row-as-CTRL vacuity mode the same seat
+named; rows 58 → 70, named DISC rows 31 → 43. Gate 14: **PASS, 329 checks** (was 317;
++12 = exactly the new named rows), zero FAIL/SKIP, single clean run.
+
+**The records corrections (each tagged in place):** the #386 pass-1 seat count said
+"eight", transcribed from the roster line — the artifacts show SEVEN answering seats
+(kimi's 403 quota error is not a seat; the recheck seat's finding, and the commit
+message's copy is immutable so the block carries the note); "sentinel stuck at 0x55" →
+overwritten to (two seats convergent); "FABRICATED QUOTE" → misattributed from the
+sibling handlers' real `word[*]` variable (with the #385 block's copy softened the same
+way and its leading "Two" count marked); the mutant parentheticals now name the BE group
+(the LE rows differ); the ladders parenthetical scoped to the aligned group; the
+loadstore no-writeback citation pointed at the `#357` block comment (`:157`), not the
+file "header"; and the stale "two rounds, `swp` first" sequencing pointer annotated
+(#386 done; the ldrex-halt half remains).
+
+**Two panel-seat mechanics worth the record:** a seat claimed `LDRB_R7_R0_4 = 0xE5D07004`
+is the register-offset form (`ldrb r7,[r0,+r4]`) — REFUTED: the single-data-transfer
+I-bit is INVERTED relative to data-processing (bit 25 = 0 IS the immediate form), the
+same `0xE5D0` prefix has anchored the committed ladder for months of exact-value rows,
+and this round's own sentinel measured exactly `0x99`/`0x55` — values that exist only at
+`P+4`. The encoding-trap lesson gains its first refutation pattern. And one cloud seat
+died of length (65,536 eval tokens, all thinking, empty response) — a seat-health mode
+distinct from the quota death already on the roster.
+
 ## One-hundred-and-twenty-sixth round (#386) — a big-endian guest's every swp moved both its words byte-reversed, and an unaligned swp used the raw address
 
 `X(swp)` (cpu_arm_instr.c) assembled the loaded word and emitted the stored word
@@ -4212,19 +4255,24 @@ is always 0 and every aligned row still passes), the rotate applied to the LOAD 
 guarded on `rot_sh` (`<<32` is UB in C), `Rd` written LAST (a data abort on either access
 leaves it unchanged — the manual's both-access clause), `swpb` untouched (byte-sized,
 order-free; A4.1.109 carries no Alignment note). Masking in place is safe because swp has
-no base writeback (the loadstore template's own header lists it). The aligned LE path is
+no base writeback (the `#357` block comment at `cpu_arm_instr_loadstore.c:157` lists it
+[#387 precision: previously cited as the file "header"]). The aligned LE path is
 byte-identical to the old code, and the alignment half is inert on aligned addresses (mask
 a no-op, rotate skipped) — neither half can regress a currently-correct case.
 
 **Measured, in order.** RED on the committed build: **42/58**, all 16 new DISC rows at
 their EXACT predicted buggy values (`0x44332211` aligned; `0x99443322` unaligned on both
 orders — the `0x99` sentinel byte visible in the top byte proves the raw `P+1..P+4` read;
-ladders `88 77 66 55`; sentinel stuck at `0x55`). Exact-value hits double as the
+ladders `88 77 66 55` [#387 precision: the ALIGNED group's; the unaligned groups' buggy
+ladder is `11 88 77 66`]; sentinel overwritten to `0x55` [#387 correction: this said
+"stuck at" — the sentinel was SEEDED 0x99 and the buggy shifted write OVERWROTE it]).
+Exact-value hits double as the
 register-field proof: a dead or wrong-register swp reads 0, matching neither column. GREEN
 after the fix: **58/58**. Mutants, each executed, each at its predicted count: LE-revert
-**48/58** (`swp be word` red at the buggy column), remove-rotate **56/58** (unaligned r2 =
-`0x11223344` — assembled right, unrotated), remove-mask **46/58** (sentinel = `0x88`, the
-shifted write's last byte landing at P+4). Three distinct signatures, both halves' detectors
+**48/58** (`swp be word` red at the buggy column), remove-rotate **56/58** (BE unaligned
+r2 = `0x11223344` — assembled right, unrotated; the LE row reads `0x44332211`),
+remove-mask **46/58** (BE sentinel = `0x88`, the shifted write's last byte landing at
+P+4; the LE sentinel reads `0x55`). Three distinct signatures, both halves' detectors
 proven load-bearing. Gate 14 grown 34 → 58 endian rows + 16 named DISC rows: **PASS, 317
 checks** (was 301), zero FAIL/SKIP in the log, single clean run with nothing else on the
 host.
@@ -4239,12 +4287,18 @@ the gate's named-DISC list; and the P+4 sentinel is seeded `0x99`, NOT `0x55`, b
 buggy write's last byte IS `0x55` — a 0x55 seed makes survival and corruption
 indistinguishable (the distinguishable-token rule applied at the byte level).
 
-**Panel.** Pass 1: eight seats, UNANIMOUS on both claims and on folding the alignment half
-in, gated on the RED unaligned reproduction — satisfied above. Two seat claims settled by
-mechanism: one "critical compile blocker" (the sketch's BE arm allegedly reads `word[*]`)
-was a FABRICATED QUOTE — the brief's sketch uses `d[*]` throughout, proven from another
-seat's verbatim echo of the same brief; a ladder-base observation (the unaligned witness
-must re-base its byte reads at the aligned P, not at `r0 = P+1`) was REAL and adopted.
+**Panel.** Pass 1: seven seats [#387 correction: this block and the commit message said
+"eight", transcribed from the roster line rather than counted — kimi's 328-byte 403
+quota error is not an answering seat, and the same commit's #385 entry counted its
+identical panel honestly as seven], UNANIMOUS on both claims and on folding the alignment
+half in, gated on the RED unaligned reproduction — satisfied above. Two seat claims
+settled by mechanism: one "critical compile blocker" (the sketch's BE arm allegedly reads
+`word[*]`) was a quote MISATTRIBUTED from the sibling handlers [#387 precision: `word[*]`
+is ldrex/strex's real variable ~460 lines away — the seat most plausibly lifted the
+sibling's identifiers and presented them as the sketch's text, which uses `d[*]`
+throughout (proven from another seat's verbatim echo of the same brief); "fabricated"
+overstated the mechanism]; a ladder-base observation (the unaligned witness must re-base
+its byte reads at the aligned P, not at `r0 = P+1`) was REAL and adopted.
 Pass 2 on the shipped diff follows this commit; its findings, if any, land as the next
 round (the #384 precedent).
 
@@ -4324,7 +4378,10 @@ text and source (a fabricated "word[*]" quote; a "wrong filename" that exists an
 the corrected fact). [#386 correction: the "word[*]" refutation belongs to the CONCURRENT
 #29 pass-1 panel, not to this round's pass-2 — only the wrong-filename claim was refuted
 here. The conflation itself shipped in this block: records rounds repeat their own error
-class even in the paragraph saying so.] A records round catching its own restatement in
+class even in the paragraph saying so.] [#387: the sentence's leading "Two" therefore
+also reads wrong for this round — ONE claim was refuted here; and "fabricated" is
+softened to "misattributed": the `word[*]` tokens are ldrex/strex's real variable,
+lifted and presented as the brief's text.] A records round catching its own restatement in
 pass 2 is now the fifth consecutive instance of the class — the second pass stays
 mandatory.
 

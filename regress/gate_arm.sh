@@ -876,7 +876,7 @@ check "endian puts all landed (379)" "${eputs:-missing}" "OK"
 
 eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 egot=${eres%/*}; ewant=${eres#*/}
-check "endian rows run"     "${ewant:-missing}" 58
+check "endian rows run"     "${ewant:-missing}" 70
 check "endian rows correct" "${egot:-missing}"  "$ewant"
 
 # The BE discriminators named individually, so one reverting cannot hide
@@ -892,6 +892,15 @@ check "endian rows correct" "${egot:-missing}"  "$ewant"
 # MOVES them); "swp be unal b2" is arch==buggy by construction (bits[15:8]
 # lands at P+2 under both the buggy +1-shifted LE write and the fixed BE
 # write) and is deliberately NOT in this list.
+# #387 grew it 58 -> 70: the +2 offset groups, because three wrong forms
+# AGREE with the shipped code at +1 and aligned -- `8*(addr&1)`, a raw-odd
+# rotate guard, and an `addr &= ~1` mask -- and all three passed the 58-row
+# set (the fold-marker probe's three-offsets rule). Every +2 row is DISC
+# (the +1 b2 collision does not recur at +2). Measured: each hole-mutant
+# reddens the +2 rows while the +1 rows stay green (68/68/58 of 70).
+# The pattern below also pins each named row's KIND (DISC): re-typing a red
+# discriminator as CTRL with arch=buggy would otherwise keep the name green
+# -- the "shipped fix with no detector" vacuity mode, closed for free here.
 for v in "be cold word" "be cold byte0" "be cold byte1" \
          "be cold byte2" "be cold byte3" \
          "be stm warm b0" "be stm warm b1" "be stm warm b2" "be stm warm b3" \
@@ -901,8 +910,12 @@ for v in "be cold word" "be cold byte0" "be cold byte1" \
          "swp be unal r2" "swp be unal b0" "swp be unal b1" \
          "swp be unal b3" "swp be unal sent" \
          "swp le unal r2" "swp le unal b0" "swp le unal b1" \
-         "swp le unal b2" "swp le unal b3" "swp le unal sent"; do
-    n=$(count "$ENDLOG" "^$v  .*ok$")
+         "swp le unal b2" "swp le unal b3" "swp le unal sent" \
+         "swp be un2 r2" "swp be un2 b0" "swp be un2 b1" \
+         "swp be un2 b2" "swp be un2 b3" "swp be un2 sent" \
+         "swp le un2 r2" "swp le un2 b0" "swp le un2 b1" \
+         "swp le un2 b2" "swp le un2 b3" "swp le un2 sent"; do
+    n=$(count "$ENDLOG" "^$v  *DISC .*ok$")
     check "  endian row: $v" "$n" 1
 done
 

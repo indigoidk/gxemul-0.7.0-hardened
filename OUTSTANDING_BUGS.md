@@ -2726,7 +2726,8 @@ corruption without a clear host-OOB path.
 > and not a memory-safety one. It is an additional argument for masking at the access rather
 > than teaching the memory layer to perform unaligned transfers.
 >
-> **Sequencing: two rounds, `swp` first.** They look like one family but are findings with
+> **Sequencing: two rounds, `swp` first.** [#387 note: the swp round is DONE (#386);
+> the `ldrex`-halt half is what remains of this pairing.] They look like one family but are findings with
 > incompatible justifications — mandated answer versus UNPREDICTABLE latitude — so one
 > CHANGELOG block cannot honestly state both. `swp` also needs no new machinery and cannot
 > regress aligned guests, while `ldrex` needs a real exception path.
@@ -3242,7 +3243,9 @@ corruption without a clear host-OOB path.
 > #360-records-clean clause. Refuted seat claims: a fabricated "word[*]" quote; a
 > "wrong filename" (`arm_endian_probe.py`) that exists and carries the corrected fact.
 > [#386 correction: the "word[*]" refutation belongs to the CONCURRENT #29 pass-1 panel,
-> not to this round's pass-2 — only the wrong-filename claim was refuted here.]
+> not to this round's pass-2 — only the wrong-filename claim was refuted here.] [#387:
+> and "fabricated" is softened to "misattributed" — the `word[*]` tokens are
+> ldrex/strex's real variable, lifted and presented as the brief's text.]
 > Fifth consecutive records round whose pass 2 caught its own restatement of the claim
 > under correction — the second pass stays mandatory.
 
@@ -3257,7 +3260,9 @@ corruption without a clear host-OOB path.
 > swpb untouched (order-free, no Alignment note). RED 42/58 on the committed build — all
 > 16 DISC rows at their EXACT predicted buggy values (mechanism + register-field proof in
 > one measurement) — then GREEN 58/58; mutants x3 each at its predicted count (LE-revert
-> 48, no-rotate 56, no-mask 46, of 58), three distinct signatures. Gate 14 PASS 317
+> 48, no-rotate 56, no-mask 46, of 58 — the parenthetical values in the CHANGELOG block
+> are the BE rows'; the LE rows differ [#387 precision]), three distinct signatures.
+> Gate 14 PASS 317
 > checks (34 -> 58 endian rows, +16 named DISC rows), zero FAIL/SKIP, single clean run.
 >
 > **Probe facts:** the LE-unaligned rows are ARCH rows, not controls — the manual's
@@ -3268,11 +3273,43 @@ corruption without a clear host-OOB path.
 > seeded 0x99, never 0x55: the buggy write's last byte IS 0x55, so a 0x55 seed cannot
 > distinguish survival from corruption.
 >
-> **Panel:** pass 1 eight seats unanimous (fold the alignment half in; gate on the RED
-> unaligned row — satisfied). One "critical compile blocker" was a FABRICATED QUOTE
-> (refuted from another seat's verbatim brief echo); one ladder-base catch was real and
-> adopted (the unaligned witness re-bases at the aligned P). Pass 2 follows the commit.
+> **Panel:** pass 1 seven seats unanimous [#387 correction: "eight" was transcribed from
+> the roster line, not counted — kimi's 403 quota error is not an answering seat] (fold
+> the alignment half in; gate on the RED unaligned row — satisfied). One "critical
+> compile blocker" was a quote MISATTRIBUTED from the sibling handlers' `word[*]`
+> variable and presented as the sketch's text [#387 precision: "fabricated" overstated
+> the mechanism] (refuted from another seat's verbatim brief echo); one ladder-base
+> catch was real and adopted (the unaligned witness re-bases at the aligned P). Pass 2
+> follows the commit.
 >
 > **Residuals:** swp's fatal()-on-abort console noise + missing next_ic reset vs the
 > template idiom (task filed); cpu_arm_instr_loadstore.c:248-249 missing `(uint32_t)` cast
 > on `<<24` (formal UB, benign, unmeasurable by construction — recorded, not tasked).
+
+> ## 2026-08-12 — #387 (round 127): #386's pass-2 — the +2-offset detector, the kind pin, and eight record precisions
+>
+> No emulator code — all seven answering pass-2 seats verified the shipped X(swp) clean
+> (five re-derived every constant; the Opus seat re-derived all four measured counts by
+> hand and hand-decoded every encoding). Two DETECTOR findings closed:
+> - **The +1-only hole** (the fold-marker probe's own three-offsets rule): a rotate
+>   amount of `8*(addr&1)`, a raw-odd rotate guard, and a `~1` alignment mask all AGREE
+>   with the shipped code at +1 and aligned — all three passed the 58-row set. Closed
+>   with +2 groups both orders (12 rows, all DISC; P+5 seeded 0xAA so the buggy constant
+>   is assumption-free). GREEN 70/70 on the committed build first; then each hole-mutant
+>   EXECUTED and caught at its predicted count with the +1 rows still green: 68/70,
+>   68/70, 58/70. Gate rows 58 -> 70, named DISC 31 -> 43, gate 14 PASS 329.
+> - **The kind pin**: the gate's named pattern now requires `DISC ... ok`, so re-typing
+>   a red discriminator as CTRL with arch==buggy can no longer keep its name green.
+> Records corrected in place (tags at each site): pass-1 seat count "eight" -> SEVEN
+> (kimi's 403 is not a seat — the recheck seat's catch; commit message immutable, block
+> carries the note); "sentinel stuck at" -> overwritten to (2 seats convergent);
+> "FABRICATED QUOTE" -> misattributed from ldrex/strex's real `word[*]` variable (the
+> #385 copy softened identically, its "Two" count marked); mutant parentheticals scoped
+> to the BE group; ladders parenthetical scoped to the aligned group; the no-writeback
+> citation now names the #357 block comment (:157), not the file "header"; the stale
+> "two rounds, swp first" sequencing pointer annotated (#386 done, ldrex-halt remains).
+> Panel mechanics recorded: the I-bit refutation (0xE5D0xxxx IS immediate-form ldrb —
+> the load/store I-bit is inverted vs data-processing; proven by field decode + months
+> of committed ladder rows + the sentinel's exact 0x99/0x55 measured hits) and one cloud
+> seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
+> mode distinct from quota death).
