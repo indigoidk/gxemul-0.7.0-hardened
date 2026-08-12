@@ -3017,11 +3017,22 @@ corruption without a clear host-OOB path.
 >
 > **LATENT-DEFECT RECORD (do not lose):** the emitted multi fast path itself remains
 > ORDER-BLIND — `generate_arm_multi.c` still has no byte-order term, and 23 of its 256
-> handlers load PC. It is dead on BE guests ONLY via the one-line install gate. Any
+> handlers load PC. On BE guests it is unreachable via the install gate's new
+> `byte_order` conjunct — the load-bearing term in the normal optimized LE-host
+> configuration (the enclosing `HOST_LITTLE_ENDIAN` guard, `GATHER_BDT_STATISTICS`
+> and `show_trace_tree` also suppress it in other configurations, per a #379 seat;
+> and note the one-armed conjunct is correct ONLY under that enclosing host guard —
+> the codebase's two-armed idiom is the hardening if the guard is ever relaxed). Any
 > future round that wants a live BE fast path must use the S4 shape (emit `_le`/`_be`
 > variant bodies and pick at translate time, the in-tree MIPS multi precedent), and
 > must in the SAME change swap the `netbsd_memcpy` fold's four raw `pw[]` publishes —
-> the amended `#354` comment marks both trip-wires in the source.
+> the amended `#354` comment marks both trip-wires in the source. AND SEE task #17:
+> the `netbsd_copyin`/`copyout` folds key on GENERIC handlers, so the install gate
+> does NOT close them — post-#378 they are the largest LIVE ARM-BE divergence
+> (both pass-2 agent seats convergent), latent only behind `is_userpage` (MMU-on).
+> [Historical note, #379: the pre-resolution text below this entry retains its
+> discovery-time present tense — "largest remaining", an active "Fix:" — read it
+> as written 2026-08-11, before #378 shipped.]
 > Found by #372's pass-2 panel and verified from source. `generate_arm_multi.c` emits the
 > LDM/STM fast path as raw `r[i] = p[x]` / `p[x] = r[i]` uint32 copies with NO byte-order
 > handling (grep for byte_order/swap in that generator = 0), while the general fallback

@@ -4566,7 +4566,10 @@ X(to_be_translated)
 		 *  B-bit route exits the emulator (see cpu_arm_coproc.c). The
 		 *  same decision the MIPS multi generator makes with its _le/_be
 		 *  variants -- a future BE-ARM-guest round should emit those
-		 *  (S4 in the round-118 records) rather than re-open this gate.
+		 *  (S4 in the round-119/#378 records) rather than re-open this
+		 *  gate. NOTE the memcpy fold's two BAIL-OUT calls also invoke
+		 *  the emitted handler directly -- reachable only when its
+		 *  matcher fired, i.e. never on BE; see the #354 comment.
 		 */
 		if (!cpu->machine->show_trace_tree &&
 		    cpu->byte_order == EMUL_LITTLE_ENDIAN) {

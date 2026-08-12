@@ -49,15 +49,22 @@ dependence on any word path; each `buggy` column is the exact reverse of its
 by a swapped expectation table. r10/r11 are printed as `sl`/`fp` -- the
 debugger's ARM_REG_NAMES have no r10/r11 spellings.
 
-r1 = 0x11223344 and r2 = 0x55667788 are built with immediates, never loaded.
+In the STORE-test programs r1 = 0x11223344 and r2 = 0x55667788 are built with
+immediates, never loaded (a load would add its own path under test); the LDM
+programs of course DO load them -- that is what they test -- so those rows
+zero both registers first as sentinels.
 WARM pages are seeded with an explicit-width `put w` (which maps AND warms:
 MMU off => ok-1 == 1 => host_store too; the polarity is proven from source --
 memory_rw gates update_translation_table on !no_exceptions, and `put b` passes
 NO_EXCEPTIONS). Exact bytes on a warm page are laid with `put b` AFTER the
-`put w` (a byte write has no order and does not un-warm). COLD pages for the
-multi rows see ONLY `put b` (never any word access); #372's cold rows stay
-fully unseeded as before. The `put` width is spelled on EVERY command --
-put_type is static in debugger_cmds.c and silently persists.
+`put w` (a byte write has no order and does not un-warm). The cold LDM page
+sees ONLY `put b`; the cold STM page is fully UNSEEDED (no access of any kind
+-- unseeded RAM is zero); #372's cold rows stay fully unseeded as before. The
+`put` width is spelled on EVERY command -- put_type is static in
+debugger_cmds.c and silently persists. #379: every put's echo is checked for
+the debugger's FAILED marker (PUT_STATUS) -- a silently failing `put w` would
+leave the warm pages cold and flip every warm DISC row to a FALSE GREEN on a
+buggy build, the one direction the controls must never allow.
 
 Every encoding below was verified through the emulator's own `unassemble`,
 CHECKING THE REGISTER FIELDS, not just the mnemonic (the round-117 lesson).
@@ -160,7 +167,8 @@ def run(machine, prog, seeds, regs):
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        return wait_from(mark)
+        wait_from(mark)
+        return buf[mark:]
 
     if not wait_from(0, 60):
         try:
@@ -169,14 +177,22 @@ def run(machine, prog, seeds, regs):
             pass
         return None
 
+    #  #379: every seed/program `put` is CHECKED for the debugger's "FAILED"
+    #  echo. The ten warm DISC rows depend on `put w` having warmed the page;
+    #  a silently failing put would leave it cold, route the transfer through
+    #  bdt_*, and turn every DISC row architecturally green ON A BUGGY BUILD --
+    #  a false pass, the one direction a control must never allow.
+    put_ok = True
     for s in seeds:
-        send(s)
+        if "FAILED" in send(s):
+            put_ok = False
     for i, iw in enumerate(prog):
-        send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
+        if "FAILED" in send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)):
+            put_ok = False
     send("pc=0x%x" % CODE)
     send("step %d" % (len(prog) - 1))    # straight-line, ends at the spin
 
-    out = {}
+    out = {"__put_ok": put_ok}
     for rn in regs:
         mark = len(buf)
         send("print %s" % rn)
@@ -269,10 +285,13 @@ print("    #378 DISC rows are WARM (fast path was wrong) -- inverted polarity")
 #  field or non-firing LDM reads 0 / a sentinel instead.
 control = "FAIL"
 control378 = {}
+puts_ok = True
 ngot = ntot = 0
 for glabel, machine, prog, seeds, rows in GROUPS:
     regs = [r[1] for r in rows]
     got = run(machine, prog, seeds, regs)
+    if got is not None and not got.get("__put_ok", False):
+        puts_ok = False
     for name, reg, arch, buggy, kind in rows:
         ntot += 1
         if got is None or reg not in got:
@@ -292,4 +311,5 @@ print("ENDIAN_CONTROL=%s" % control)
 print("ENDIAN_CONTROL378=%s"
       % ("OK" if control378.get("be stm cold b0")
          and control378.get("be ldm cold r1") else "FAIL"))
+print("PUT_STATUS=%s" % ("OK" if puts_ok else "FAIL"))
 print("ENDIAN_RESULT=%d/%d" % (ngot, ntot))

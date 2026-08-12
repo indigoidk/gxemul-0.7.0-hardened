@@ -819,9 +819,11 @@ done
 # byte load has no byte order, so it exposes the raw memory layout directly, and
 # the buggy column is the exact reverse of the arch column.
 #
-# Swept against the pre-fix build: 7 of 12 -- the five cold BE rows red at the
-# host-order values, the BE warm control and all six LE controls green (the warm
-# store takes the order-aware fast path). On the fixed build: 12/12.
+# #372's original sweep (its SIX BE + six LE rows): pre-fix 7 of 12 -- the five
+# cold BE rows red at the host-order values, the warm control and LE controls
+# green. Fixed: 12/12. #378 grew the section to 34 rows (22 BE / 12 LE) with the
+# INVERTED polarity -- its sweep numbers are in the named-row comment below; the
+# 12-row narrative above this line is #372 history, scoped as such by #379.
 ENDLOG=$LOGDIR/gate_arm_endian.log
 python3 arm_endian_probe.py "$PMAX" > "$ENDLOG" 2>&1 || true
 
@@ -845,6 +847,13 @@ check "endian control: BE rig ran and stored" "${ectrl:-missing}" "OK"
 # instead. Distinct from ENDIAN_CONTROL so the two extensions fail separately.
 ectrl378=$(grep -o "ENDIAN_CONTROL378=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 check "endian control: multi rows ran (378)" "${ectrl378:-missing}" "OK"
+
+# #379: the warm DISC rows depend on `put w` having warmed the pages, and a
+# silently failing put would flip them all to a FALSE GREEN on a buggy build
+# (bdt_* is architecturally correct on both arms). The probe checks every
+# put's echo for the debugger's FAILED marker.
+eputs=$(grep -o "PUT_STATUS=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
+check "endian puts all landed (379)" "${eputs:-missing}" "OK"
 
 eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 egot=${eres%/*}; ewant=${eres#*/}

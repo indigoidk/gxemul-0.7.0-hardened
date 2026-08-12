@@ -4192,6 +4192,53 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twentieth round (#379) — #378's pass-2 review: a false-green route in the new probe, and four record errors
+
+Seven of eight seats answered on `#378`'s committed diff (kimi produced its
+fourth consecutive non-answer); all seven returned clean verdicts on the fix
+itself — several re-derived the full 34-row table and the flip matrix
+independently. What survived adversarial review of a *correct* fix was, again,
+its instruments and records:
+
+- **#379 (`regress/arm_endian_probe.py`, `regress/gate_arm.sh`) — the warmth
+  false-green.** The ten warm-BE DISC rows depend entirely on `put w` having
+  warmed the page, and nothing asserted it: a silently failing `put` (the
+  debugger prints `FAILED!` and carries on) would leave the page cold, route
+  the transfer through the always-correct `bdt_*`, and turn **every
+  discriminating row architecturally green on a buggy build** — a false pass,
+  the one direction a control must never allow. The probe now checks every
+  `put` echo and emits `PUT_STATUS`; the gate asserts it. Gate 14 goes
+  295 → **296 checks, single clean run green**; probe re-measured 34/34 with
+  all three controls (`ENDIAN_CONTROL`, `ENDIAN_CONTROL378`, `PUT_STATUS`) OK.
+- **#379 (records, five corrections).** (1) `tmp_arm_multi.c` is
+  **9,575 lines** (9,056 is its non-blank count) — two seats reported the two
+  numbers as a contradiction and `wc -l` settled it; the S1 paragraph now
+  carries both. (2) "`== EMUL_LITTLE_ENDIAN` alone matches seven sites" was
+  wrong — ten at HEAD, eight at the parent; no counting yields seven; the
+  conclusion (single-term anchors are not exactly-once) stands and is
+  stronger. (3) "the fast path no bootable guest uses" was loose — `barearm`
+  IS a BE guest and is the probe's own rig; the claim is about BE ARM *OS*
+  guests. (4) The install-gate comment cited "round-118" for S4 (it is this
+  fork's round 119/#378) and under-mentioned the memcpy fold's two *bail-out*
+  calls — a second, transitive route into the emitted handler, dead on BE
+  only because the matcher declines. (5) `gate_arm.sh`'s endian preamble
+  still described `#372`'s six-and-six row world above a 34-row check — the
+  narrative is now scoped as `#372` history. The OUTSTANDING latent-defect
+  record was rewritten in the same pass: "dead ONLY via the gate" softened to
+  name the other suppressors (`HOST_LITTLE_ENDIAN`, statistics, trace mode),
+  the one-armed-conjunct idiom note added (the conjunct is correct only under
+  the enclosing host guard; the two-armed form is the hardening if that guard
+  is ever relaxed), a historical marker added over the entry's discovery-time
+  present tense, and a cross-reference to the copyin/copyout item.
+- **Queue movement from the same pass:** `netbsd_copyin`/`netbsd_copyout`
+  (task #17) re-ranked to the front — both agent seats independently traced
+  that their matchers key on the **generic** load/store handlers, which
+  install for BE guests too, so `#378`'s install gate does not close them;
+  post-#378 they are the largest live ARM-BE divergence, latent only behind
+  `is_userpage` (MMU-on). The LDM-with-PC instrument gap (no probe row loads
+  PC through the multi path, so the round's headline severity is source-read,
+  not measured) was merged into task #59.
+
 ## One-hundred-and-nineteenth round (#378) — a BE guest's every LDM/STM through a warm page was byte-reversed, 23 handlers of it into PC
 
 `generate_arm_multi.c` emits the LDM/STM fast path as raw host-word moves — no
@@ -4236,7 +4283,10 @@ on every prologue/epilogue, making this the largest ARM-BE defect to date.
 **Adjudicated S3 over S1 by all seven answering seats** (the eighth, kimi,
 produced its third consecutive non-answer and is recorded as a seat failure).
 S1 — teaching the generator an `arm_push`-style swap — would have kept a BE
-fast path *no bootable guest uses* at the cost of regenerating the 9,056-line
+fast path *no BE ARM OS guest boots to use* — the barearm rig IS a BE guest
+and does exercise LDM/STM; it is the probe's own rig (#379 tightened this
+wording) — at the cost of regenerating the 9,575-line (9,056 non-blank; both
+counts were reported by seats and settled by measurement, #379)
 tracked `tmp_arm_multi.c` across four no-VPATH trees, a coupled same-round fix
 to the memcpy fold's publishes, a live runtime branch on the hottest LE path,
 and a mutant exposed to the generator-regeneration vacuity trap (the Makefile
@@ -4254,7 +4304,9 @@ the ten warm-BE DISC rows red at precisely their predicted reversed values
 controls and all cold/LE rows stayed green — the warm/cold differential is
 itself the proof the fast path fired. Fixed build: 34/34. Mutation proof
 (`/tmp` copy, the full two-line install condition as the exactly-once anchor —
-`== EMUL_LITTLE_ENDIAN` alone matches seven sites — reverted BY CONSTANT to
+`== EMUL_LITTLE_ENDIAN` alone matches ten sites at HEAD, eight before this
+commit (the first draft said seven; no counting gives seven — #379) — reverted
+BY CONSTANT to
 the pre-fix condition): the exact flip matrix, every DISC row red at its buggy
 value, every control green. Pass-1 review also repaired the row design before
 anything ran: the `ldrb` witnesses originally read through `r0` while the
