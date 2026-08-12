@@ -641,7 +641,10 @@ print("    DISC-M pins the A5.3.6 pseudocode model, not a silicon mandate")
 #      count = (page x needed-permission) upgrade events + T-form first touches
 #
 #  The general path's own memory_rw SELF-WARMS -- it inserts, setting host_load
-#  unconditionally, host_store iff the access was a write, and the is_userpage
+#  unconditionally, host_store whenever the access is granted write permission
+#  (#382 correction: these rigs run MMU-off, where update_translation_table's
+#  writeflag is ok-1 == 1 for ANY data access, so a LOAD warms host_store too;
+#  host_store is left NULL only MMU-on on a read-only page), and the is_userpage
 #  bit iff it was a user access. So:
 #    * every `put w`-seeded row is 0, including all ten iterations of the x10
 #      rows and both passes of the re-seeded row: the page is warm before the
@@ -654,8 +657,9 @@ print("    DISC-M pins the A5.3.6 pseudocode model, not a silicon mandate")
 #  Non-obvious cases for whoever adds rows: a COLD x10 row is 1, not 0 and not
 #  10 -- iteration 1 warms via the general path's own insert. It is 10 only where
 #  insertion is BLOCKED (a device page, a partial page, MMU-on unmapped). A cold
-#  row doing a load then a store on one page is 2, because the load's insert
-#  leaves host_store NULL.
+#  row doing a load then a store on one page is 1, not 2 (#382 correction): MMU
+#  off, the load's own insert already warms host_store (ok-1 == 1), so the store
+#  finds the page mapped -- it would be 2 only MMU-on on a read-only page.
 LSGEN = {
     "A wb rot word cold plus1": 1,
     "A wb rot word cold plus2": 1,

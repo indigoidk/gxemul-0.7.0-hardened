@@ -1,7 +1,15 @@
 # GXemul 0.7.0 — Code Examination, Corrections & Correctness Findings
 
+> **Scope note (#385, 2026-08-12):** this file is the one-time examination report and is
+> FROZEN at its final row, the fifty-fourth round (#290). Corrections #291 onward are
+> recorded per-round in `CHANGELOG.md` round blocks instead — the deliberate decision
+> recorded in `OUTSTANDING_BUGS.md` (2026-08-11 dated entry). Stated here so the standing
+> "REVIEW_FINDINGS row per correction" directive is read with this file's actual cutoff in
+> view, and the absence of rows after #290 is not mistaken for an omission.
+
 *Built & verified under Linux (gcc 15.2.1): primary gcc build **0 errors, 0 warnings**, binary runs.
-Last updated 2026-06-27.*
+Last findings update 2026-06-27; scope banner added 2026-08-12 (#385, meta-only — content
+otherwise unchanged).*
 
 This is the full sweep: a manual review, a `gcc -fanalyzer` static-analysis pass
 over every translation unit, and an ASan/UBSan **fuzzing** campaign against the

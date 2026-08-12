@@ -4192,6 +4192,73 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-fifth round (#385) — the records re-audit: no committed expectation was wrong, six records were
+
+Docs and comments only — no emulator code, no probe assertion, no gate expectation changed
+(queue task #43). A read-only audit swept OUTSTANDING_BUGS.md, this file, REVIEW_FINDINGS.md
+and the probe comments against source ground truth, re-verifying the mechanism once:
+`cpu_dyntrans.c:1595-1596` (`host_store[index] = writeflag ? host_page : NULL`),
+`memory_rw.c:585-589` (a *data* access passes `ok - 1` as that writeflag), `memory_arm.c:54-60`
+(MMU-off translate returns 2, so `ok-1 == 1` for ANY data access — a load warms `host_store`
+too; the flag tracks page WRITABILITY, not access direction, so a load leaves `host_store`
+NULL only MMU-on on a page mapped read-only).
+
+**Headline: no load-bearing records error.** Every committed `LSGEN` expectation is `1` and
+none rests on the audited claims; what the audit found was advisory or reader-misleading.
+(The six wrong records of the headline: the probe derivation comment, the #367 block's
+claim, the #379 premise, the head index, the TST/TEQ blocker, the memcpy wording. The
+REVIEW_FINDINGS freeze — the last bullet below — was deliberate and recorded: under-surfaced,
+not wrong, so it is not counted.) Corrected, in rank order:
+
+- **The host_store family's last two live sites** (the #382-established fact, applied):
+  `arm_writeback_probe.py`'s derivation comment — "host_store iff the access was a write" →
+  set on any data access MMU-off, and the "a cold load-then-store on one page is 2"
+  hypothetical → **1** (2 only MMU-on on a read-only page). The `#367` round block below
+  carries the same two claims verbatim: annotated `[#382 correction]` in place, not
+  rewritten. The `#379` block's "(MMU-on)" reachability premise — retracted by #382 —
+  got its forward-marker.
+- **The OUTSTANDING open-list head brought current**: an honest status paragraph (the head
+  is a 2026-08-01 snapshot that had drifted from its own "resolved are removed" charter),
+  a post-2026-08-01 open-residuals block surfacing the four residual families that lived
+  only in the dated tail (#364 / #378-latent / #380-#381 / #376-harness — harness tasks
+  #42 #22 #59 #60 #61 #55 #56 #57; the fifth tail family, the #382 records sweep, is not
+  surfaced as open because this round IS its completion), and the stale "still diverging" sentence
+  updated in place (netbsd_idle and netbsd_memcpy were both resolved after it was written).
+- **The TST/TEQ-carry entry re-filed**: its recorded blocker — "no positive control that
+  the combination occurred exists" — predates #340's two-pass free-running driver and
+  #358's fold-fired markers (and #358 measured the bare instruction-counter route the
+  entry proposed to be insufficient by itself). Now filed as reproducible-now,
+  defect-status UNMEASURED; nothing claims the C-flag divergence is fixed.
+- **The memcpy-fold wording made precise**: "a copy whose source has never been stored
+  into never folds" → never **warmed by any data access** (MMU-off, a load alone warms
+  `host_store`); the "read-only source page is NULL in host_store" remark tagged
+  MMU-on-only. The recorded 255/255-genuine measurement is re-filed as **UNRECONCILED**
+  (the recheck seat's finding): under the corrected mechanism a fully-cold source should
+  self-warm on its first delegated iteration (bail → `bdt_load` → `memory_rw` insert),
+  predicting ~1 genuine + 254 folded — re-measurement queued as a follow-up task.
+- **REVIEW_FINDINGS.md's freeze banner**: frozen at its final row (#290) per the decision
+  recorded in the 2026-08-11 OUTSTANDING entry; the banner states it so the standing
+  "row per correction" directive reads against the actual cutoff. The carrier's ethos
+  line now says the same (that file lives outside the repo; local-only edit, recorded here).
+
+**Assessed, not changed:** the ~30 ticked/struck head entries stay in place — clutter, not
+a trap (a ticked entry cannot be re-worked by mistake), and mass removal was judged too
+deletion-risky for a records round; an over-deleted open item is forgotten work. `#366`
+keeps its inline-annotation record inside the `#365` block (real commit `0aceec2`; every
+citation resolves; only the dedicated block is absent, by the micro-round precedent `#384`
+also follows).
+
+**Pass 2 (seven seats, all fixes landed pre-commit):** four seats convergently caught a
+five-vs-four residual-family count in this block's own narrative; codex caught the block's
+residual restatement of the very claim under correction ("iff the access was a write …
+true only MMU-on" — the flag tracks page WRITABILITY, in no mode access direction); the
+recheck seat caught the memcpy 255/255 re-endorsement (re-filed UNRECONCILED above) and
+flagged that mid-review fixes superseded the inlined diff the seats were briefed on — the
+committed version is the post-fix tree. Two seat claims were refuted against the brief
+text and source (a fabricated "word[*]" quote; a "wrong filename" that exists and carries
+the corrected fact). A records round catching its own restatement in pass 2 is now the
+fifth consecutive instance of the class — the second pass stays mandatory.
+
 ## One-hundred-and-twenty-third round (#382, #383) — a big-endian guest's copyin/copyout folds moved byte-reversed words
 
 > **Correction numbers (#384): the load-bearing swap and its rows are tagged
@@ -4454,7 +4521,9 @@ its instruments and records:
   that their matchers key on the **generic** load/store handlers, which
   install for BE guests too, so `#378`'s install gate does not close them;
   post-#378 they are the largest live ARM-BE divergence, latent only behind
-  `is_userpage` (MMU-on). The LDM-with-PC instrument gap (no probe row loads
+  `is_userpage` (MMU-on). [#382 correction: `is_userpage` is set by the
+  LDRT/STRT T-bit alone and is reachable MMU-off — the divergence is NOT gated
+  on the MMU being enabled; see the #382 round block.] The LDM-with-PC instrument gap (no probe row loads
   PC through the multi path, so the round's headline severity is source-read,
   not measured) was merged into task #59.
 
@@ -4998,6 +5067,15 @@ stated for whoever adds rows: a **cold ×10 row is 1**, not 0 and not 10, since 
 warms via the general path's own insert — it is 10 only where insertion is *blocked* (a device
 page, a partial page, MMU-on unmapped); and a cold row doing a load then a store on one page
 is **2**, because the load's insert leaves `host_store` NULL.
+
+> **[#382 correction]** Two claims in the paragraph above are inverted for the MMU-off
+> testarm/barearm rigs these rows actually run on: `host_store` is set on ANY data access,
+> not "iff the access was a write" (MMU-off ⇒ `update_translation_table` writeflag = `ok-1`
+> = 1, so a *load* warms `host_store` too), and a cold load-then-store on one page is therefore
+> **1**, not 2. The `2` / "leaves `host_store` NULL" case is MMU-on-on-a-read-only-page only.
+> The shipped `LSGEN` expectations — five rows, every value `1` — are unaffected; only this
+> derivation prose was wrong. Corrected statement: the #382 round block and
+> `arm_endian_probe.py:56-59` (that probe carried the correct polarity from #382 on).
 
 **MEASURED: 22/22 values and 22/22 paths.** Every derived expectation held on the first run —
 seventeen zeros, five ones. The seventeen zeros are exactly the claim `#364` found inverted,
@@ -5603,7 +5681,16 @@ each bail delegates one genuine **uncounted** iteration. The general identity is
 therefore `32 × (reported + bail delegations) == advance`, not the simpler form.
 The fold reads `host_store` for its **source** page as well as its destination, so
 a copy whose source has never been stored into never folds at all — measured, 255
-of 255 iterations running genuinely. And the debugger's `put w` **does** populate
+of 255 iterations running genuinely. [#385 precision: the operative condition is
+"never **warmed by any data access**" — on the MMU-off rigs a source page warmed by
+a *load* alone is already in `host_store` (`ok-1 == 1`, the #382 mechanism), so
+"never stored into" overstates; and "a read-only source page is NULL in host_store"
+is an MMU-on-only property. The closing "255/255 genuine, source flag clear every time"
+record is UNRECONCILED under this mechanism: a fully-cold source should SELF-WARM on the
+first delegated iteration (the no-page bail runs the real ldmia via bdt_load → memory_rw,
+which inserts), predicting ~1 genuine + 254 folded. Not settleable by reading —
+re-measurement queued; until then treat the 255/255 as unexplained, not as confirmation.]
+And the debugger's `put w` **does** populate
 that array, which is why the committed probe folds with no explicit warm-up; that
 had previously been recorded as *not established*.
 

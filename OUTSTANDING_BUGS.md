@@ -1,12 +1,38 @@
 # GXemul est/ — Outstanding bug candidates (not yet fixed)
 
 > ## 2026-08-01 — OPEN LIST, at a glance
+> **[#385 status, 2026-08-12]** This head is a snapshot dated 2026-08-01 that has drifted
+> from the charter in the next paragraph: most entries below now carry ✅/strikethrough
+> resolution marks (the charter says resolved items are REMOVED), and residuals found from
+> 2026-08-02 onward lived only in the dated tail, invisible from here. What is true today:
+> **the live queue is the harness TaskList, plus the "post-2026-08-01 open residuals" block
+> just below, plus the un-ticked entries in this head.** Ticked/struck entries are kept in
+> place — mass removal was judged too deletion-risky for a records round (an over-deleted
+> open item is forgotten work; a kept-but-ticked one is only clutter) — and their full
+> stories live in the dated tail and the CHANGELOG round blocks.
+>
 > **Only genuinely OPEN items live here.** Resolved ones are removed, not annotated: an
 > index that accumulates its own history stops being an index, and a section headed
 > "everything genuinely open" that is mostly ticks is the dishonest-listing class #270
 > exists to prevent. The dated blocks below and the CHANGELOG carry what was fixed and
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
+>
+> ### OPEN — post-2026-08-01 residuals (surfaced by the #385 re-audit; full detail in the dated tail)
+> - **#364 residuals** — the general-path writeback sites remain unmeasured beyond the
+>   shipped telemetry; four load/store translation units have no row (`p0_u0_w1`,
+>   `p0_u1_w1`, `p1_u0_w0`, `p1_u0_w1`); the general STORE-arm row is owed
+>   (harness tasks #42, #22).
+> - **#378 latent** — `generate_arm_multi.c`'s emitted fast path is order-blind by
+>   construction and 23/256 emitted handlers load PC; #378's install gate closes the
+>   BE *install*, not the emitter. Latent, not live (harness tasks #59, #60 carry the
+>   measurable edges).
+> - **#380/#381 residuals** — crosspage idle-fold loss (pre-existing), the tb1
+>   privilege-by-construction note, the once-per-BREAK semantic limit
+>   (harness task #61).
+> - **#376 harness residuals** — the mutation selftest counts a crashing mutant as
+>   detection (task #55); the rounding-probe parser lacks address binding (task #56);
+>   arc-only `.l` rows owed (task #57).
 >
 > **Ready to work — reproduced, and an instrument already exists**
 > - ✅ **MIPS `cvt.d.l` (and `cvt.s.l`) ignore the rounding mode → RESOLVED as #301**
@@ -114,10 +140,11 @@
 >   handlers; #342 the `xchg` fold; #345/#346/#347 the cache-clean matchers and
 >   registers; #348/#349/#350 the cache-clean exit flags, the fold-fired marker
 >   channel, and the non-multiple runtime guard (see the 2026-08-09 entry at the
->   end of this file). The family members still diverging — `netbsd_idle`'s
->   skipped TEQs and unwritten destination, `netbsd_memcpy`'s stale
->   r3/r4/ip/lr — are carried by the dated entries below, each measurable with
->   the #340 driver.
+>   end of this file). [#385 update, 2026-08-12: the two family members this
+>   entry still named as diverging have since been resolved as well —
+>   `netbsd_idle`'s skipped TEQs and unwritten destination by #351/#352/#353,
+>   `netbsd_memcpy`'s stale r3/r4/ip/lr by #354; the dated entries below carry
+>   both resolutions.]
 >
 > - **Still open, from round 72's own findings** (recorded, not guessed at):
 >   - **PPC-D, Alpha, and SH PR=1 D arithmetic have no gate rows at all**, so #331 changed
@@ -310,6 +337,13 @@
 >
 >   Until that control exists this stays open and unfixed: the reading is suggestive,
 >   but a fix with no reproduction is exactly what this project does not ship.
+>   **[#385 re-audit update, 2026-08-12]** The missing positive control has since been
+>   BUILT, so the blocker above is obsolete: #340's two-pass free-running driver
+>   (breakpoint AFTER the sequence, tracing off) and #358's fold-fired marker channel
+>   both post-date this paragraph — and #358 measured that the bare instruction-counter
+>   route this paragraph proposed is by itself NOT a sufficient witness. Re-filed as:
+>   REPRODUCIBLE NOW with the #340 driver + #358 markers; whether the C-flag divergence
+>   is live remains UNMEASURED (nothing here claims the defect is fixed).
 > - **`sxtab` and `sxtah` are not decoded at all** — the encodings `0x06a00070` and
 >   `0x06b00070` appear nowhere in `cpu_arm_instr.c` (confirmed by a round-78 diff seat and
 >   verified). #319 gave the UNSIGNED extend-and-add pair its rotation; the signed pair has
@@ -2157,7 +2191,13 @@ corruption without a clear host-OOB path.
 > bails print nothing today so that term is currently unobservable. The fold reads
 > `host_store` for its **source** page as well as its destination, so a copy whose source has
 > never been stored into never folds at all (measured: 255 of 255 iterations genuine, source
-> page flag clear every time). And the debugger's `put w` **does** populate that array —
+> page flag clear every time). [#385 precision: "never stored into" overstates — the operative
+> condition is never **warmed by any data access**, since MMU-off a load alone sets host_store
+> (`ok-1 == 1`, the #382 mechanism). The "255/255 genuine, flag clear every time" record is
+> UNRECONCILED under that mechanism — a fully-cold source should self-warm on the first
+> delegated iteration (bail → bdt_load → memory_rw insert), predicting ~1 genuine + 254
+> folded; re-measurement queued, treat as unexplained meanwhile.]
+> And the debugger's `put w` **does** populate that array —
 > previously recorded here as not established — which is why the committed probe folds with
 > no explicit warm-up. **A cold program is a double trap:** without warming, the healthy
 > build FAILS its own count row (the first dispatch takes a silent no-page bail, so healthy
@@ -3145,4 +3185,56 @@ corruption without a clear host-OOB path.
 > Plus the load-vs-host_store comment fix (a load-only warm-up leaving host_store NULL
 > holds only MMU-on + read-only; MMU-off a load sets it too) at cpu_arm_instr.c and the
 > fold-marker probe. A sweep of #360/#367 records for the same wrong claim is a follow-up
-> for task #43's OUTSTANDING re-audit.
+> for task #43's OUTSTANDING re-audit. **[Done as #385, 2026-08-12 — the sweep found the
+> #367 CHANGELOG block and `arm_writeback_probe.py` still carrying the claim (both corrected
+> in place), the #379 "(MMU-on)" premise un-annotated (marked), #360's records CLEAN (no
+> instance of the wrong claim — verified by grep in the pass-2 review), and NO load-bearing
+> instance anywhere: every committed `LSGEN` expectation was already `1`. See the 2026-08-12
+> entry.]**
+
+> ## 2026-08-12 — #385 (round 125): the records re-audit (queue task #43) — no committed expectation was wrong, six records were
+>
+> Docs and comments only — no emulator code, no probe assertion, no gate expectation
+> changed. A read-only audit swept this file, the CHANGELOG, REVIEW_FINDINGS.md and the
+> probe comments against source ground truth, with the mechanism re-verified once at
+> `cpu_dyntrans.c:1595-1596` (host_store = writeflag ? page : NULL), `memory_rw.c:585-589`
+> (data-access writeflag = ok-1), `memory_arm.c:54-60` (MMU-off translate returns 2, so
+> ok-1 == 1 for ANY data access — a load warms host_store too).
+>
+> **Headline: no load-bearing records error.** Every committed `LSGEN` expectation is `1`
+> and none rests on the audited claims. (The six wrong records: the probe derivation
+> comment, the #367 block's claim, the #379 premise, the head index, the TST/TEQ blocker,
+> the memcpy wording. The REVIEW_FINDINGS freeze was deliberate and recorded — under-
+> surfaced, not wrong, so not counted.) Corrected, in rank order:
+> - the host_store family's last two live sites — `arm_writeback_probe.py`'s derivation
+>   comment ("iff the access was a write" → any-data-access-MMU-off; "load then store on
+>   one page is 2" → 1, it is 2 only MMU-on on a read-only page) and the #367 CHANGELOG
+>   block (annotated `[#382 correction]` in place, not rewritten); plus the #379 block's
+>   retracted "(MMU-on)" premise (forward-marker to #382);
+> - the OPEN-LIST head brought current — honest status paragraph, the post-2026-08-01
+>   open-residuals block (four open residual families previously visible only down here;
+>   the fifth tail family, the #382 records sweep, is this round itself — it closes rather
+>   than opens), the stale "still diverging" sentence updated (idle/memcpy both since
+>   resolved);
+> - the TST/TEQ-carry entry re-filed (its "no positive control exists" blocker predates
+>   #340/#358; now: reproducible, defect-status UNMEASURED — no claim it is fixed);
+> - the memcpy-fold wording made precise ("never stored into" → never warmed by any data
+>   access; read-only-page remark tagged MMU-on-only; the recorded 255/255-genuine
+>   measurement re-filed UNRECONCILED with the corrected mechanism — a cold source should
+>   self-warm on the first delegated iteration — re-measurement queued);
+> - REVIEW_FINDINGS.md's freeze banner (frozen at #290 per the recorded 2026-08-11
+>   decision); the carrier's "row per correction" line now points at it (local-only file).
+>
+> **Assessed, not changed:** the ~30 ticked/struck head entries stay in place (clutter,
+> not a trap — a ticked entry cannot be re-worked by mistake; mass removal was judged too
+> deletion-risky for a records round); #366 keeps its inline-annotation record inside the
+> #365 block (real commit `0aceec2`, citations resolve, nothing dangles).
+>
+> **Pass 2 (seven seats), fixes landed pre-commit:** the five-vs-four family count (four
+> seats convergent), the "iff write … only MMU-on" restatement in the round's own block
+> (the flag tracks page writability in every mode), the memcpy 255/255 re-endorsement
+> (re-filed UNRECONCILED, re-measurement queued), the REVIEW_FINDINGS date line, the
+> #360-records-clean clause. Refuted seat claims: a fabricated "word[*]" quote; a
+> "wrong filename" (`arm_endian_probe.py`) that exists and carries the corrected fact.
+> Fifth consecutive records round whose pass 2 caught its own restatement of the claim
+> under correction — the second pass stays mandatory.
