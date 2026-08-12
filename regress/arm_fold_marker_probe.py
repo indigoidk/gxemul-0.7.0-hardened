@@ -404,7 +404,13 @@ for fold, warm, want_fire, want_dec in (("copyin", True, 1, 0),
 #  what makes fire=1/dec=1 a DERIVED number rather than a threshold. 0x5AFFFFF4
 #  disassembles as `bpl 0x8008`, which is word index 2 -- the re-seed point.
 #
-#  HONEST SCOPE: NetBSD's bcopyinout.S does `ands r3,r0,#0x03 / bne` before its
+#  HONEST SCOPE -- #370: the bcopyinout claim below is UNVERIFIED. It exists in
+#  this tree only in our own writing; no NetBSD source is present, so it is
+#  panel recollection, the DDI 0100I provenance pattern. Until someone reads the
+#  real bcopyinout.S or disassembles copyin in the battery's ARM kernel image,
+#  the honest statement is "these rows pin internal consistency; guest
+#  reachability of the unaligned fold path is unverified."
+#  REPORTEDLY: NetBSD's bcopyinout.S does `ands r3,r0,#0x03 / bne` before its
 #  six-ldrt block, so a real guest never reaches this fold with an unaligned
 #  base. These rows pin an INTERNAL-CONSISTENCY property -- the fold agreeing
 #  with the handler its own bail-out delegates to, the #342/#355 class -- and not

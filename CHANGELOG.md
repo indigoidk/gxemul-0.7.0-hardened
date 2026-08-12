@@ -4211,6 +4211,35 @@ loads run through the very handler the fold's bail-out delegates to; pass 2 fold
 accumulator in `r1` (`eor r1,r1,sl` once per pass) makes `r1 == 0` iff the two paths
 **agree** — and when they do not, pass 1's own value is recoverable as `r1 ^ sl`.
 
+> **✗ TWO CLAIMS IN THIS BLOCK ARE WRONG, corrected by `#370`.**
+>
+> **(1) "its six loads run through the very handler the fold's bail-out delegates to" —
+> false.** Only the **entry** load reaches `A__NAME__general`. Its general-path access SETS
+> the `is_userpage` bit, so the other five hit the **fast** body — a *different* rotation
+> site. The commit message got this right and this block did not. It matters: it is precisely
+> why an XOR of `sl` **alone** caught the secondary mutant, since `sl` is the one value in
+> pass 1 produced by the general path.
+>
+> **(2) The XOR is REDUNDANT, not load-bearing**, and the over-claim is itself the finding.
+> `vals == want` is an **absolute** check — `want` is computed in the probe from the seeds and
+> the ROR model, and pass 2 is the fold — so any defect in the fold's rotation is caught by
+> `vals` alone, *including* both passes wrong identically, since both-wrong must still differ
+> from `want`. The primary mutant was in fact caught by `vals` (`vals=False`, in this round's
+> own measurements); `agree` added nothing there. And the secondary mutant was **also** caught
+> by the writeback probe's pre-existing `A wb rot word cold plus1/2/3` rows — as this commit
+> message itself notes further down. So "a cross-path discrimination no aligned row and no
+> value-only row can make" does not survive: it already existed elsewhere. What the XOR
+> *uniquely* covers is a divergence in a world where the absolute expectations were themselves
+> wrong in the same direction, and a **relative** check is precisely blind to that. Keep it —
+> one word, good diagnostics, and same-loop self-contradiction is this fork's signature
+> evidence class — but stop calling it the discriminator.
+>
+> **The real blind spot, now named:** only **one of six** values crosses the pass boundary.
+> Pass 1's `fp, r6, r7, r8, r9` are overwritten by pass 2 and compared to nothing. A template
+> rotation that is correct for the FIRST access and wrong for LATER ones — load 1 general,
+> loads 2–6 fast — yields `agree == True`, `vals == want`, and correct marker counts, and
+> nothing in the row catches it. Widening the accumulator to all six registers is queued.
+
 **The XOR is the design, and it exists because the obvious shape was refuted in review.**
 A row that reads registers only at the end measures pass 2 against hand-arithmetic,
 because pass 2 *overwrites* r6–r11 and pass 1's values are gone by the time the probe
@@ -4259,7 +4288,17 @@ and declines silently on the same-register short-circuit.
 > `instr(eor_regshort)`. Recorded because "checked and declines" was true while the *reason*
 > given was invented, which is the failure mode this project keeps paying for.
 
-**Honest scope.** NetBSD's `bcopyinout.S` does `ands r3, r0, #0x03 / bne` before its
+**Honest scope — and `#370` downgrades this paragraph's own sourcing to UNVERIFIED.**
+The `bcopyinout.S` claim below appears in this tree only in our own writing (this block,
+the probe comment, and an OUTSTANDING entry); there is **no NetBSD source in the repo**,
+so it is a load-bearing scope claim sourced from panel recollection — the exact DDI 0100I
+provenance pattern `CLAUDE.md` warns about, caught this time before it aged. To settle it:
+read `sys/arch/arm/arm/bcopyinout.S` in a real NetBSD tree, or disassemble `copyin` in the
+ARM kernel image the battery already uses. Note the claim is also *narrower* than needed
+even if true: that alignment test is about src/dst relative alignment, and the unaligned
+path may still issue `ldrt` at unaligned addresses. Until checked, the honest statement is
+"the rows pin internal consistency; guest reachability of the unaligned fold path is
+UNVERIFIED", not "a real guest never reaches it". NetBSD's `bcopyinout.S` reportedly does `ands r3, r0, #0x03 / bne` before its
 six-`ldrt` block, so a real guest never reaches this fold with an unaligned base. These
 rows pin an **internal-consistency** property — the fold agreeing with the handler its own
 bail-out delegates to, the `#342`/`#355` class — not a guest-reachable behaviour.
