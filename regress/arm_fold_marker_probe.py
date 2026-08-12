@@ -374,6 +374,27 @@ for fold, warm, want_fire, want_dec in (("copyin", True, 1, 0),
 #  r1 is the accumulator deliberately: session() already reads it back and only
 #  the copyout arms assert it, so the shared helper needs no change.
 #
+#  #369: the accumulator covers ONE register of six (`sl`), and the reason that
+#  is sufficient is load-bearing enough to write down. All six ldrt dispatch the
+#  SAME instantiation, load_w1_word_u1_p0_imm, so a template defect cannot hit
+#  five destination registers and spare sl -- the six are not independent
+#  samples, they are one code path exercised six times. The six `vals` are still
+#  compared individually, so a FOLD defect that mangles one register is caught
+#  by those; the XOR's job is only the cross-path comparison. If a future change
+#  ever specialises one of those six slots to a different handler, this argument
+#  lapses and the accumulator must widen -- it would narrow silently otherwise.
+#
+#  #369: these arms also arm COMBINE(xchg) in passing (any eor_regshort decode
+#  arms it) and it declines -- but NOT for the reason #368's record gave. It is
+#  not a same-register short-circuit on r1: COMBINE(xchg) reads
+#  a = ic[-2].arg[0] and b = ic[-1].arg[0], which at the eor's slot are the
+#  `ldrt r8` and `ldrt r9` slots, whose arg[0] are BOTH &r[0] -- the two loads'
+#  shared BASE register. So `a != b` fails on that, and independently ic[-2].f
+#  is a load handler rather than instr(eor_regshort). Same conclusion, different
+#  mechanism. xchg prints only on install, so nothing is emitted either way; and
+#  because count()/declined()/installed() are name-scoped, a future xchg decline
+#  marker would not disturb these rows.
+#
 #  THREE offsets, not one. `8 * (r0 & 1)` agrees with `8 * (r0 & 3)` at +1 and
 #  differs at +2 and +3, and a guard of `if (r0 & 1)` would skip the rotation
 #  entirely at +2 -- one arm cannot tell those apart.

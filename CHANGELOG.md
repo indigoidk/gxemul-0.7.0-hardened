@@ -4250,6 +4250,15 @@ numbers. The other new words: `0xE3A01000` (`mov r1,#0`) and `0xE021100A`
 (`eor r1,r1,sl`) — the latter arms `COMBINE(xchg)`'s matcher in passing, which was checked
 and declines silently on the same-register short-circuit.
 
+> **✗ THAT DECLINE MECHANISM IS WRONG, corrected by `#369`.** The conclusion holds — it
+> declines, and prints nothing either way, since `xchg` prints only on install — but not for
+> the stated reason. `COMBINE(xchg)` reads `a = ic[-2].arg[0]` and `b = ic[-1].arg[0]`, which
+> at the `eor`'s slot are the `ldrt r8` and `ldrt r9` slots, whose `arg[0]` are **both
+> `&r[0]`** — the two loads' shared *base* register. So `a != b` fails on that, not on any
+> same-register property of `r1`; and independently `ic[-2].f` is a load handler rather than
+> `instr(eor_regshort)`. Recorded because "checked and declines" was true while the *reason*
+> given was invented, which is the failure mode this project keeps paying for.
+
 **Honest scope.** NetBSD's `bcopyinout.S` does `ands r3, r0, #0x03 / bne` before its
 six-`ldrt` block, so a real guest never reaches this fold with an unaligned base. These
 rows pin an **internal-consistency** property — the fold agreeing with the handler its own
