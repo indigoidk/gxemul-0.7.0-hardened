@@ -4192,6 +4192,53 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-sixteenth round (#375) — the mips_loadstore[] index was a silent cross-file coupling; now a checked invariant
+
+The MIPS load/store dispatch table's index is computed one way in a generator and
+re-derived by hand at a dozen sites in three other files, with no comment tying
+them together and no check that they agree. That is the first non-ARM round, and
+it is pure instrument: no emulator change.
+
+- **#375 (`regress/gate_offline.sh`)** — twelve checks asserting the committed
+  `mips32_loadstore[32]` and `mips_loadstore[32]` tables resolve their
+  load-bearing indices to the handlers the hand-coded sites assume.
+
+**The coupling.** `generate_mips_loadstore.c` emits the 32-entry table in the loop
+order `endianness → store → size → signedness`, so an entry's index is
+`endianness*16 + store*8 + size*2 + signedness`. `cpu_mips_instr.c` then hard-codes
+that arithmetic's *results*: the multi-transfer fold bails to `mips*_loadstore[5]`
+(plain `lw`), the coprocessor handlers use `[5]`/`[12]`/`[7]`/`[14]` for
+`lwc1`/`swc1`/`ldc1`/`sdc1`, and the `COMBINE(nop)`/`strlen`/`#169` matchers key on
+`[4+1]`, `[1]`, `[8]`. Reorder that one generator loop — swap `store` and `size`,
+say — and every hand-coded index silently names a different handler: the fold bail
+dispatches the wrong access *size*, `ldc1` becomes `lw`, and **nothing fails to
+compile**. This is the taxonomy's silent-miscompile class, in a dispatch table.
+
+**Byte rows are load-bearing in the other direction.** A byte access has no
+endianness, so the generator makes the byte LE and BE entries the *same* symbol —
+`[1]==[17]`, `[8]==[24]`. `#169`'s byte-store guard and the strlen byte-load guard
+rely on that share (their `|| [x+16]` terms are deliberate no-ops today). The word
+rows `[5]!=[21]` assert the discrimination the byte rows lack; if a generator change
+ever split the byte entries, those tautologies would silently go live and the
+matchers weaken. Both directions are now pinned.
+
+**Offline and mutation-verified.** The rows read only the committed generated table
+— no compiler, no rig, no emulator — so they sit at the top of `gate_offline`,
+ahead of the float differential's `gate_skip`. Confirmed they discriminate: on a
+copy of the table with index 5 repointed to the BE handler (exactly a loop-reorder's
+effect), the `[5]=LE` and `[5]!=[21]` rows both go red. The real table is never
+touched. `gate_offline` goes 31 → 43 checks.
+
+**Found by the `#46` MIPS-combiner audit**, whose headline was that the MIPS
+multi-transfer folds are *better built* than the ARM ones (byte order consulted, no
+partial-commit window, this very index verified correct) — so `#46` is now scoped as
+coverage-owed instrumentation, and the audit's live defects (an m88k idle fold that
+drops a delay slot; this index coupling) are their own rounds. Both boot rigs are
+little-endian, so the `_be` table entries are dead code on the harness today; the
+coupling is pinned for whenever BE MIPS work happens. A one-line comment in the
+generator naming the four dependent files is a cheap follow-up; the gate rows are the
+load-bearing half and need no rebuild.
+
 ## One-hundred-and-fifteenth round (#372) — the general-path word STORE ignored byte order, because its arm was dead code
 
 On a big-endian ARM guest, a word `STR` to a cold page wrote the register's

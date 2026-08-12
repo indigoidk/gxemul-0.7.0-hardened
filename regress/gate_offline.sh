@@ -23,6 +23,54 @@ SRC=core/float_emul.c
 
 gate_begin "offline-differential"
 
+# #375: the mips*_loadstore[32] dispatch-table index is a SILENT CROSS-FILE
+# COUPLING. generate_mips_loadstore.c emits the table in the loop order
+# `endianness -> store -> size -> signedness`, so an entry's index is
+# endianness*16 + store*8 + size*2 + signedness. That arithmetic is then
+# hard-coded BY HAND, with no comment and no check, at a dozen sites: the
+# multi-transfer fold's bail (`mips32_loadstore[5]` = plain lw), the coproc
+# handlers (lwc1->5, swc1->12, ldc1->7, sdc1->14), the canonical decoder, and
+# the COMBINE(nop)/strlen/#169 matcher slots. Reorder that one generator loop
+# and every hand-coded index silently mis-resolves -- the fold bail dispatches
+# the wrong access SIZE, ldc1 becomes lw -- and NOTHING fails to compile. These
+# rows turn the coupling into a checked invariant, offline, needing no compiler
+# and no rig (only the committed generated table). Found by the #46 MIPS-combiner
+# audit; both boot rigs are LE, so the _be entries are dead code on the harness
+# but the coupling is real for any future BE MIPS work.
+#
+# The byte rows are load-bearing in the opposite direction: size==0 has no
+# endianness, so the generator makes the byte LE and BE entries the SAME symbol
+# ([1]==[17], [8]==[24]). #169's byte-store check and the strlen byte-load check
+# rely on that share; the word rows ([5]!=[21]) prove the discrimination the byte
+# rows deliberately lack. If a generator change ever split the byte entries, the
+# `|| [x+16]` matcher tautologies become live and those checks silently weaken.
+MIPSLS=$SEC/src/cpus/tmp_mips_loadstore.c
+need_file "$MIPSLS"
+
+#  ls_entry <array-name> <index> -> the function symbol at that index, read from
+#  the committed generated table (the [32] arrays, not the [16] generic ones).
+ls_entry() {
+    awk -v arr="$1" -v idx="$2" '
+        $0 ~ ("\\*" arr "\\[32\\]") { f = 1; n = 0; next }
+        f && /^};/ { f = 0 }
+        f { gsub(/[ \t,};]/, "");
+            if ($0 != "") { if (n == idx) { print $0; exit } n++ } }
+    ' "$MIPSLS"
+}
+
+for arr in mips32_loadstore mips_loadstore; do
+    pfx=${arr%_loadstore}
+    check "  $arr[5]  = plain word-load LE"  "$(ls_entry $arr 5)"  "${pfx}_instr_l4_le"
+    check "  $arr[12] = plain word-store LE" "$(ls_entry $arr 12)" "${pfx}_instr_s4_le"
+    check "  $arr[21] = plain word-load BE"  "$(ls_entry $arr 21)" "${pfx}_instr_l4_be"
+    check "  $arr byte-load LE/BE share [1]==[17]" \
+        "$([ "$(ls_entry $arr 1)" = "$(ls_entry $arr 17)" ] && echo same || echo differ)" "same"
+    check "  $arr byte-store LE/BE share [8]==[24]" \
+        "$([ "$(ls_entry $arr 8)" = "$(ls_entry $arr 24)" ] && echo same || echo differ)" "same"
+    check "  $arr word-load LE != BE [5]!=[21]" \
+        "$([ "$(ls_entry $arr 5)" != "$(ls_entry $arr 21)" ] && echo differ || echo same)" "differ"
+done
+
 command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || \
     gate_skip "no C compiler on PATH"
 CC=$(command -v cc || command -v gcc)
