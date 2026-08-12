@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 #372: the general-path word STORE ignored cpu->byte_order.
+#378: the LDM/STM fast path ignored it too -- polarity INVERTED.
 
 The general path's word-store arm was UNCONDITIONALLY EMPTY -- its guard was
 `!A__B && !A__H && HOST_LITTLE_ENDIAN` and its only body was `#ifdef A__STRD`,
@@ -14,30 +15,52 @@ general-path on its first access per page (#366), was reversed.
 Measured before the fix on -E barearm: a cold store of 0x11223344 read back
 0x44332211. After #372's fix: 0x11223344.
 
+#378 is the SIBLING WITH THE POLARITY INVERTED: the LDM/STM fast path emitted by
+generate_arm_multi.c moved raw host words (no byte-order term anywhere in the
+generator), while the bdt_load/bdt_store fallback (arm_pop/arm_push) swaps on
+BOTH its warm and cold arms. So for multi-transfers the WARM rows discriminate
+and the COLD rows are the already-correct controls -- exactly opposite to
+#372's rows above. The fix gates the fast path's INSTALLATION on
+cpu->byte_order == EMUL_LITTLE_ENDIAN (sound because byte_order cannot change
+after translation: the CP15 endian-switch route exits the emulator, SETEND is
+undecoded, and every other write is machine-setup-time), so post-fix a BE guest
+takes bdt_* everywhere and warm == cold == architectural.
+
+Measured before the fix on -E barearm: stmia of r1=0x11223344,r2=0x55667788 to
+a WARM page laid down 44 33 22 11 88 77 66 55; DDI 0100I Table A2-2 (p. A2-32,
+with A2.7.2 p. A2-33 making LDM/STM a series of ordinary word accesses)
+requires 11 22 33 44 55 66 77 88. After the fix: the architectural bytes.
+
 THIS PROBE RUNS BOTH BYTE ORDERS.
-  * The BE rig is `-E barearm`, whose MACHINE_SETUP sets EMUL_BIG_ENDIAN outright
-    (machine_test.c) -- no config file, no ELF, no stub-order wrinkle. Its rows
-    are the DISCriminators.
+  * The BE rig is `-E barearm`, whose MACHINE_SETUP sets EMUL_BIG_ENDIAN
+    outright (machine_test.c) -- no config file, no ELF, no stub-order wrinkle.
   * The LE rig is plain `-E testarm`. On LE the broken code was ACCIDENTALLY
-    RIGHT (host order == guest order), so the LE rows discriminate NOTHING about
-    this fix: they are INVARIANCE CONTROLS, present to catch a fix that repairs
-    BE by breaking LE (mutant M1 shows that is a live possibility -- see the
-    round's mutation record).
+    RIGHT (host order == guest order), so LE rows discriminate NOTHING: they
+    are INVARIANCE CONTROLS, present to catch a fix that repairs BE by
+    breaking LE.
 
-The cold/warm pair is the whole argument: same instruction word, same value,
-same addr[1:0], differing ONLY in the seeding of the target page -- which pins
-the defect to A__NAME__general rather than to `str` in general. The four `ldrb`
-witnesses are the purest form, because a byte load has no byte order (data[0] in
-both branches), so they expose the raw memory layout with no dependence on the
-word-load path; their `buggy` column is the exact reverse of `arch`, so the two
-mirror-image groups cannot both be satisfied by a swapped expectation table.
+Every row carries an EXPLICIT kind (DISC/CTRL) -- #372's rows derived kind from
+"cold in name", which #378's inverted polarity would have turned into a lie.
 
-r1 = 0x11223344 is built with immediates, never loaded -- a load would add its
-own general-path access. COLD = 0x20000 is seeded with NOTHING (unseeded RAM is
-zero and provably cold; stronger than `put b`, which carries a device-arm
-warming caveat). WARM = 0x10000 is seeded with `put w`, which warms host_load
-AND host_store (MMU off => ok-1==1 => writeflag set). Every encoding below was
-verified through the emulator's own `unassemble`, the standing rule.
+The ldrb witnesses are the purest form, because a byte load has no byte order
+(data[0] in both branches), so they expose the raw memory layout with no
+dependence on any word path; each `buggy` column is the exact reverse of its
+`arch` column, so the mirror-image BE and LE groups cannot both be satisfied
+by a swapped expectation table. r10/r11 are printed as `sl`/`fp` -- the
+debugger's ARM_REG_NAMES have no r10/r11 spellings.
+
+r1 = 0x11223344 and r2 = 0x55667788 are built with immediates, never loaded.
+WARM pages are seeded with an explicit-width `put w` (which maps AND warms:
+MMU off => ok-1 == 1 => host_store too; the polarity is proven from source --
+memory_rw gates update_translation_table on !no_exceptions, and `put b` passes
+NO_EXCEPTIONS). Exact bytes on a warm page are laid with `put b` AFTER the
+`put w` (a byte write has no order and does not un-warm). COLD pages for the
+multi rows see ONLY `put b` (never any word access); #372's cold rows stay
+fully unseeded as before. The `put` width is spelled on EVERY command --
+put_type is static in debugger_cmds.c and silently persists.
+
+Every encoding below was verified through the emulator's own `unassemble`,
+CHECKING THE REGISTER FIELDS, not just the mnemonic (the round-117 lesson).
 """
 import os
 import pty
@@ -53,11 +76,23 @@ COLD = 0x20000
 
 #  Build r1 = 0x11223344 with immediates (mov + 3 orr), verified via unassemble.
 BUILD_R1 = [0xE3A01411, 0xE3811822, 0xE3811C33, 0xE3811044]
+#  Build r2 = 0x55667788 (mov + 3 orr, Rd=Rn=2), #378.
+BUILD_R2 = [0xE3A02455, 0xE3822866, 0xE3822C77, 0xE3822088]
 MOV_R0_WARM = 0xE3A00801        # mov r0,#0x10000
 MOV_R0_COLD = 0xE3A00802        # mov r0,#0x20000
+MOV_R3_WARM = 0xE3A03801        # mov r3,#0x10000
+MOV_R3_COLD = 0xE3A03802        # mov r3,#0x20000
 STR_R1_R0 = 0xE5801000          # str  r1,[r0]
 LDR_R2_R0 = 0xE5902000          # ldr  r2,[r0]
 LDRB = (0xE5D03000, 0xE5D04001, 0xE5D05002, 0xE5D06003)  # ldrb r3..r6,[r0,#0..3]
+#  #378: stmia/ldmia r3,{r1,r2} (W=0 so r3 survives as the readback base) and
+#  an 8-byte ldrb ladder BASED ON R3 into r4..r11 (never clobbering r1/r2/r3).
+STMIA_R3 = 0xE8830006           # stmia r3,{r1,r2}
+LDMIA_R3 = 0xE8930006           # ldmia r3,{r1,r2}
+LDRB8_R3 = (0xE5D34000, 0xE5D35001, 0xE5D36002, 0xE5D37003,
+            0xE5D38004, 0xE5D39005, 0xE5D3A006, 0xE5D3B007)
+MOV_R1_0 = 0xE3A01000           # mov r1,#0  (LDM sentinel: a dead LDM reads 0)
+MOV_R2_0 = 0xE3A02000           # mov r2,#0
 SPIN = 0xEAFFFFFE               # b .
 
 
@@ -65,7 +100,23 @@ def store_prog(base_mov):
     return BUILD_R1 + [base_mov, STR_R1_R0, LDR_R2_R0] + list(LDRB) + [SPIN]
 
 
-def run(machine, be_stub, prog, regs):
+def stm_prog(base_mov):
+    return (BUILD_R1 + BUILD_R2 + [base_mov, STMIA_R3] + list(LDRB8_R3)
+            + [SPIN])
+
+
+def ldm_prog(base_mov):
+    return [MOV_R1_0, MOV_R2_0, base_mov, LDMIA_R3, SPIN]
+
+
+def seed_bytes(base):
+    """Explicit-width put b commands laying 11 22 33 44 55 66 77 88."""
+    return ["put b 0x%x, 0x%02x" % (base + i, v)
+            for i, v in enumerate((0x11, 0x22, 0x33, 0x44,
+                                   0x55, 0x66, 0x77, 0x88))]
+
+
+def run(machine, prog, seeds, regs):
     #  A raw stub just makes the machine construct. barearm lays no LE halt stub
     #  of its own (unlike testarm), so nothing decodes as garbage post-flip.
     stub = "/tmp/gx_endian_%s.bin" % machine
@@ -118,8 +169,8 @@ def run(machine, be_stub, prog, regs):
             pass
         return None
 
-    #  Seed the WARM page (put w warms it), leave COLD untouched.
-    send("put w 0x%x, 0x00000000" % WARM)
+    for s in seeds:
+        send(s)
     for i, iw in enumerate(prog):
         send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw))
     send("pc=0x%x" % CODE)
@@ -140,52 +191,105 @@ def run(machine, be_stub, prog, regs):
     return out
 
 
-#  (name, machine, base_mov, reg, arch, buggy)   buggy = the pre-#372 value.
-#  On the LE machine arch == buggy by construction (host order == guest order):
-#  those rows are INVARIANCE controls, not discriminators.
-ROWS = [
-    #  BE discriminators -----------------------------------------------------
-    ("be warm word", "barearm", MOV_R0_WARM, "r2", 0x11223344, 0x11223344),
-    ("be cold word", "barearm", MOV_R0_COLD, "r2", 0x11223344, 0x44332211),
-    ("be cold byte0", "barearm", MOV_R0_COLD, "r3", 0x11, 0x44),
-    ("be cold byte1", "barearm", MOV_R0_COLD, "r4", 0x22, 0x33),
-    ("be cold byte2", "barearm", MOV_R0_COLD, "r5", 0x33, 0x22),
-    ("be cold byte3", "barearm", MOV_R0_COLD, "r6", 0x44, 0x11),
-    #  LE invariance controls ------------------------------------------------
-    ("le warm word", "testarm", MOV_R0_WARM, "r2", 0x11223344, 0x11223344),
-    ("le cold word", "testarm", MOV_R0_COLD, "r2", 0x11223344, 0x11223344),
-    ("le cold byte0", "testarm", MOV_R0_COLD, "r3", 0x44, 0x44),
-    ("le cold byte1", "testarm", MOV_R0_COLD, "r4", 0x33, 0x33),
-    ("le cold byte2", "testarm", MOV_R0_COLD, "r5", 0x22, 0x22),
-    ("le cold byte3", "testarm", MOV_R0_COLD, "r6", 0x11, 0x11),
+SEED_WARM_W = ["put w 0x%x, 0x00000000" % WARM]
+
+#  Row groups: one emulator spawn each; every row carries an EXPLICIT kind.
+#  (group_label, machine, prog, seeds, [(row_name, reg, arch, buggy, kind)])
+#  `buggy` = the value the PRE-FIX build produces (#372 rows: pre-#372;
+#  #378 rows: pre-#378). arch == buggy marks a control by construction.
+GROUPS = [
+    #  ---- #372 rows, byte-identical behaviour to the committed probe --------
+    ("372 be warm", "barearm", store_prog(MOV_R0_WARM), SEED_WARM_W, [
+        ("be warm word", "r2", 0x11223344, 0x11223344, "CTRL"),
+    ]),
+    ("372 be cold", "barearm", store_prog(MOV_R0_COLD), SEED_WARM_W, [
+        ("be cold word", "r2", 0x11223344, 0x44332211, "DISC"),
+        ("be cold byte0", "r3", 0x11, 0x44, "DISC"),
+        ("be cold byte1", "r4", 0x22, 0x33, "DISC"),
+        ("be cold byte2", "r5", 0x33, 0x22, "DISC"),
+        ("be cold byte3", "r6", 0x44, 0x11, "DISC"),
+    ]),
+    ("372 le warm", "testarm", store_prog(MOV_R0_WARM), SEED_WARM_W, [
+        ("le warm word", "r2", 0x11223344, 0x11223344, "CTRL"),
+    ]),
+    ("372 le cold", "testarm", store_prog(MOV_R0_COLD), SEED_WARM_W, [
+        ("le cold word", "r2", 0x11223344, 0x11223344, "CTRL"),
+        ("le cold byte0", "r3", 0x44, 0x44, "CTRL"),
+        ("le cold byte1", "r4", 0x33, 0x33, "CTRL"),
+        ("le cold byte2", "r5", 0x22, 0x22, "CTRL"),
+        ("le cold byte3", "r6", 0x11, 0x11, "CTRL"),
+    ]),
+    #  ---- #378 rows: WARM discriminates, COLD is the already-correct control.
+    ("378 be stm warm", "barearm", stm_prog(MOV_R3_WARM), SEED_WARM_W, [
+        ("be stm warm b0", "r4", 0x11, 0x44, "DISC"),
+        ("be stm warm b1", "r5", 0x22, 0x33, "DISC"),
+        ("be stm warm b2", "r6", 0x33, 0x22, "DISC"),
+        ("be stm warm b3", "r7", 0x44, 0x11, "DISC"),
+        ("be stm warm b4", "r8", 0x55, 0x88, "DISC"),
+        ("be stm warm b5", "r9", 0x66, 0x77, "DISC"),
+        ("be stm warm b6", "sl", 0x77, 0x66, "DISC"),
+        ("be stm warm b7", "fp", 0x88, 0x55, "DISC"),
+    ]),
+    ("378 be stm cold", "barearm", stm_prog(MOV_R3_COLD), [], [
+        ("be stm cold b0", "r4", 0x11, 0x11, "CTRL"),
+        ("be stm cold b1", "r5", 0x22, 0x22, "CTRL"),
+        ("be stm cold b2", "r6", 0x33, 0x33, "CTRL"),
+        ("be stm cold b3", "r7", 0x44, 0x44, "CTRL"),
+    ]),
+    ("378 be ldm warm", "barearm", ldm_prog(MOV_R3_WARM),
+     SEED_WARM_W + seed_bytes(WARM), [
+        ("be ldm warm r1", "r1", 0x11223344, 0x44332211, "DISC"),
+        ("be ldm warm r2", "r2", 0x55667788, 0x88776655, "DISC"),
+    ]),
+    ("378 be ldm cold", "barearm", ldm_prog(MOV_R3_COLD), seed_bytes(COLD), [
+        ("be ldm cold r1", "r1", 0x11223344, 0x11223344, "CTRL"),
+        ("be ldm cold r2", "r2", 0x55667788, 0x55667788, "CTRL"),
+    ]),
+    ("378 le stm warm", "testarm", stm_prog(MOV_R3_WARM), SEED_WARM_W, [
+        ("le stm warm b0", "r4", 0x44, 0x44, "CTRL"),
+        ("le stm warm b1", "r5", 0x33, 0x33, "CTRL"),
+        ("le stm warm b2", "r6", 0x22, 0x22, "CTRL"),
+        ("le stm warm b3", "r7", 0x11, 0x11, "CTRL"),
+    ]),
+    ("378 le ldm warm", "testarm", ldm_prog(MOV_R3_WARM),
+     SEED_WARM_W + seed_bytes(WARM), [
+        ("le ldm warm r1", "r1", 0x44332211, 0x44332211, "CTRL"),
+        ("le ldm warm r2", "r2", 0x88776655, 0x88776655, "CTRL"),
+    ]),
 ]
 
-print("=== #372: general-path word STORE must honour cpu->byte_order ===")
-print("    BE rows DISCriminate; LE rows are INVARIANCE controls (host==guest)")
+print("=== #372 store + #378 LDM/STM: byte order must reach guest memory ===")
+print("    #372 DISC rows are COLD (general path was wrong);")
+print("    #378 DISC rows are WARM (fast path was wrong) -- inverted polarity")
 
-#  Control: the BE cold-word row must return a distinctive nonzero, proving the
-#  barearm rig constructed, the program ran and the store+load happened, before
-#  any DISC verdict is believed. A wrong register field reads 0.
+#  Controls: `be warm word` proves the #372 machinery live (fast STR was always
+#  order-aware). `be stm cold b0` + `be ldm cold r1` prove the #378 machinery
+#  live INDEPENDENT of the fix state -- bdt_* swaps on every build, so these
+#  read arch values on buggy and fixed builds alike; a dead rig, wrong register
+#  field or non-firing LDM reads 0 / a sentinel instead.
 control = "FAIL"
-ngot = 0
-for name, machine, base, reg, arch, buggy in ROWS:
-    got = run(machine, machine == "barearm", store_prog(base), [reg])
-    if got is None or reg not in got:
-        print("%-20s DEAD  FAIL" % name)
-        continue
-    v = got[reg]
-    ok = (v == arch)
-    ngot += ok
-    if name == "be warm word" and v == 0x11223344:
-        control = "OK"
-    #  Only the FIVE cold BE rows discriminate #372: they enter the general
-    #  store path, which was the buggy one. `be warm word` is a BE row but takes
-    #  the order-aware FAST path, so it is green on both the buggy and fixed
-    #  builds -- it is the rig CONTROL, not a discriminator, and labelling it
-    #  DISC was a precision slip. All six LE rows are invariance controls.
-    kind = "DISC" if (machine == "barearm" and "cold" in name) else "CTRL"
-    print("%-20s %-4s %s=0x%08x want 0x%08x (buggy 0x%08x)  %s"
-          % (name, kind, reg, v, arch, buggy, "ok" if ok else "FAIL"))
+control378 = {}
+ngot = ntot = 0
+for glabel, machine, prog, seeds, rows in GROUPS:
+    regs = [r[1] for r in rows]
+    got = run(machine, prog, seeds, regs)
+    for name, reg, arch, buggy, kind in rows:
+        ntot += 1
+        if got is None or reg not in got:
+            print("%-20s DEAD  FAIL" % name)
+            continue
+        v = got[reg]
+        ok = (v == arch)
+        ngot += ok
+        if name == "be warm word" and v == 0x11223344:
+            control = "OK"
+        if name in ("be stm cold b0", "be ldm cold r1"):
+            control378[name] = ok
+        print("%-20s %-4s %s=0x%08x want 0x%08x (buggy 0x%08x)  %s"
+              % (name, kind, reg, v, arch, buggy, "ok" if ok else "FAIL"))
 
 print("ENDIAN_CONTROL=%s" % control)
-print("ENDIAN_RESULT=%d/%d" % (ngot, len(ROWS)))
+print("ENDIAN_CONTROL378=%s"
+      % ("OK" if control378.get("be stm cold b0")
+         and control378.get("be ldm cold r1") else "FAIL"))
+print("ENDIAN_RESULT=%d/%d" % (ngot, ntot))

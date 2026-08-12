@@ -160,6 +160,18 @@ void arm_coproc_15(struct cpu *cpu, int opcode1, int opcode2, int l_bit,
 
 		if ((old_control & ARM_CONTROL_BIG) !=
 		    (cpu->cd.arm.control & ARM_CONTROL_BIG)) {
+			/*  #378: this exit is LOAD-BEARING for translate-time
+			    byte-order decisions elsewhere: the LDM/STM fast-path
+			    install gate in cpu_arm_instr.c reads cpu->byte_order
+			    once, at translation, which is sound only because no
+			    route changes it afterwards (this one exits; SETEND
+			    is undecoded; every other write is machine setup).
+			    Implementing the switch therefore needs more than
+			    setting byte_order: invalidate_translation_caches(
+			    cpu, 0, INVALIDATE_ALL) so cached ic->f handlers are
+			    re-picked, AND re-translation of instruction words
+			    (the decoder itself reads byte_order), AND a revisit
+			    of that install gate.  */
 			fatal("ERROR: Trying to switch endianness. Not "
 			    "supported yet.\n");
 			exit(1);

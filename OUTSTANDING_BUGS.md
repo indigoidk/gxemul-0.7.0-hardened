@@ -3005,7 +3005,23 @@ corruption without a clear host-OOB path.
 > done by **measurement** rather than re-reading, because reasoning confidently from a plausible
 > premise is precisely what produced the original note.
 
-> ## 2026-08-11 — LDM/STM fast path ignores byte order (#372's sibling, inverted) — task #52
+> ## 2026-08-11 — ✅ LDM/STM fast path ignores byte order (#372's sibling, inverted) → RESOLVED as #378
+>
+> **(2026-08-12, round 119.)** One line: the fast-path install gate in `cpu_arm_instr.c`
+> now requires `cpu->byte_order == EMUL_LITTLE_ENDIAN` (adjudicated S3 by all seven
+> answering pass-1 seats; translate-time resolution proven sound — byte_order cannot
+> change post-translation). Probe 12→34 rows with explicit per-row kinds (the polarity
+> here is INVERTED vs #372: warm rows discriminate), gate 14 284→295 checks, single
+> clean run green. Test-first 24/34 at the exact reversed values; fixed 34/34; mutation
+> proof M378MUT_PASS with the exact flip matrix. See the #378 CHANGELOG block.
+>
+> **LATENT-DEFECT RECORD (do not lose):** the emitted multi fast path itself remains
+> ORDER-BLIND — `generate_arm_multi.c` still has no byte-order term, and 23 of its 256
+> handlers load PC. It is dead on BE guests ONLY via the one-line install gate. Any
+> future round that wants a live BE fast path must use the S4 shape (emit `_le`/`_be`
+> variant bodies and pick at translate time, the in-tree MIPS multi precedent), and
+> must in the SAME change swap the `netbsd_memcpy` fold's four raw `pw[]` publishes —
+> the amended `#354` comment marks both trip-wires in the source.
 > Found by #372's pass-2 panel and verified from source. `generate_arm_multi.c` emits the
 > LDM/STM fast path as raw `r[i] = p[x]` / `p[x] = r[i]` uint32 copies with NO byte-order
 > handling (grep for byte_order/swap in that generator = 0), while the general fallback

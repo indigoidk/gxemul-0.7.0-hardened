@@ -4192,6 +4192,75 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-nineteenth round (#378) — a BE guest's every LDM/STM through a warm page was byte-reversed, 23 handlers of it into PC
+
+`generate_arm_multi.c` emits the LDM/STM fast path as raw host-word moves — no
+byte-order term anywhere in the generator — while the `bdt_load`/`bdt_store`
+fallback (via `arm_pop`/`arm_push`) swaps on both its warm and cold arms. The
+dispatcher installed the fast path with no `cpu->byte_order` test, so on this
+LE host a big-endian guest's multi-transfers to a WARM page moved reversed
+words and to a COLD page correct ones — `#372`'s self-contradiction class with
+the **polarity inverted** (there the general path was wrong; here the fast
+path). Not just data: **23 of the 256 emitted handlers load PC**, so a BE
+`ldm {...,pc}` function return jumped to a byte-reversed address. LDM/STM sits
+on every prologue/epilogue, making this the largest ARM-BE defect to date.
+
+- **#378 (`cpus/cpu_arm_instr.c`)** — one line: the fast-path install gate now
+  also requires `cpu->byte_order == EMUL_LITTLE_ENDIAN`, so a BE guest takes
+  the already-correct `bdt_*` everywhere. Resolving the guest term at
+  TRANSLATE time is sound because `byte_order` cannot change afterwards, a
+  fact three review seats verified independently by exhausting the routes: the
+  CP15 c1 B-bit write calls `fatal()` and **exits** (now commented as
+  load-bearing in `cpu_arm_coproc.c` — a future endian-switch round needs
+  translation-cache invalidation AND re-translation, since instruction decode
+  reads `byte_order` too); SETEND is undecoded and `ARM_FLAG_E` inert; every
+  host-side write is machine-setup-time. Closing the gate also closes the
+  `netbsd_memcpy` fold's raw `pw[]` publishes **for free** — its matcher
+  requires the fast-path handler installed, so it declines on BE (the `#354`
+  invariant comment is amended to say so) — and disables the order-immune
+  memset fold on BE (a performance note, not a correctness change).
+- **#378 (`regress/arm_endian_probe.py`, rewritten)** — 12 → 34 rows with
+  EXPLICIT per-row kinds: `#372`'s DISC rows are the COLD ones, `#378`'s are
+  the WARM ones, and the old "cold in name ⇒ DISC" expression would have
+  labelled the new rows backwards. New: warm/cold STM byte-witness ladders,
+  warm/cold LDM word rows with zero sentinels, LE invariance mirrors, and a
+  second liveness control (`ENDIAN_CONTROL378`: the cold multi rows go through
+  `bdt_*` on every build, so they prove the machinery live independent of fix
+  state). Grouped spawns; explicit `put` width on every command (`put_type` is
+  static and sticky); r10/r11 read as `sl`/`fp` (the debugger has no rN
+  spelling for them). All 18 new words unassemble-verified WITH REGISTERS.
+- **#378 (`regress/gate_arm.sh`)** — endian section 12 → 34 rows, +11 checks
+  (the ten new BE DISC rows named individually + the 378 control). Gate 14
+  goes 284 → **295 checks, single clean run green**.
+
+**Adjudicated S3 over S1 by all seven answering seats** (the eighth, kimi,
+produced its third consecutive non-answer and is recorded as a seat failure).
+S1 — teaching the generator an `arm_push`-style swap — would have kept a BE
+fast path *no bootable guest uses* at the cost of regenerating the 9,056-line
+tracked `tmp_arm_multi.c` across four no-VPATH trees, a coupled same-round fix
+to the memcpy fold's publishes, a live runtime branch on the hottest LE path,
+and a mutant exposed to the generator-regeneration vacuity trap (the Makefile
+dependency is on the generator *binary*; a stale-mtime copy measures the
+unmutated build). A pass-1 draft cited the in-tree MIPS multi generator as
+precedent for S3; a seat corrected this — the MIPS shape emits `_le`/`_be`
+variant bodies and picks at translate time, which is neither S1 nor S3 but a
+fourth shape, **S4, and S4 is the recorded design for any future round that
+wants a live BE fast path** (it must then also swap the memcpy fold's four
+publishes — see the amended `#354` comment).
+
+**Measured end to end.** Test-first on the committed build: exactly 24/34,
+the ten warm-BE DISC rows red at precisely their predicted reversed values
+(`44 33 22 11 88 77 66 55`; `0x44332211`/`0x88776655`) while both liveness
+controls and all cold/LE rows stayed green — the warm/cold differential is
+itself the proof the fast path fired. Fixed build: 34/34. Mutation proof
+(`/tmp` copy, the full two-line install condition as the exactly-once anchor —
+`== EMUL_LITTLE_ENDIAN` alone matches seven sites — reverted BY CONSTANT to
+the pre-fix condition): the exact flip matrix, every DISC row red at its buggy
+value, every control green. Pass-1 review also repaired the row design before
+anything ran: the `ldrb` witnesses originally read through `r0` while the
+transfers based on `r3` (rebased, deleting a MOV), and the `sl`/`fp` naming
+and `put_type` stickiness were caught as would-be silent row failures.
+
 ## One-hundred-and-eighteenth round (#377) — #376's pass-2 review: one wrong measured fact in three records, and the trunc control's claim made measurable
 
 The eight-seat pass-2 review of `#376`'s committed diff returned clean verdicts

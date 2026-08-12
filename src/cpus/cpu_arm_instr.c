@@ -2110,7 +2110,18 @@ X(netbsd_memcpy)
 		    Publish-before is identical to publish-after in every case
 		    this fold is correct in (no overlap) and deterministic
 		    otherwise. The overlap and unaligned-copy divergences are
-		    pre-existing and recorded in OUTSTANDING_BUGS.  */
+		    pre-existing and recorded in OUTSTANDING_BUGS.
+
+		    #378: "NO byteswap" above is safe ONLY because this matcher
+		    can no longer fire for a big-endian guest: it requires
+		    instr(multi_0x08b15018) installed at ic[-5], and the
+		    dispatcher now installs the multi fast path only when
+		    cpu->byte_order == EMUL_LITTLE_ENDIAN (a BE guest gets
+		    bdt_load there, the matcher declines, and this raw pw[] block
+		    is unreachable). If a future round re-enables the fast path
+		    for BE (the S4 _le/_be shape), these four publishes must gain
+		    the same swap in the SAME change or fold and handler diverge
+		    -- exactly the class the #354 invariant above forbids.  */
 		{
 			uint32_t *pw = (uint32_t *)
 			    (page_1 + (addr_r1 & 0xffc) + 16);
@@ -4539,8 +4550,26 @@ X(to_be_translated)
 		 *
 		 *  The optimized functions do not support show_trace_tree,
 		 *  but it's ok to use the unoptimized version in that case.
+		 *
+		 *  #378: nor do they support a big-endian guest -- the emitted
+		 *  bodies move raw host words (generate_arm_multi.c has no
+		 *  byte-order term), so on this LE host a BE guest's LDM/STM
+		 *  through them is byte-reversed per word, and 23 of the 256
+		 *  handlers load PC, i.e. a reversed RETURN ADDRESS. bdt_load/
+		 *  bdt_store (via arm_pop/arm_push) swap on both their warm and
+		 *  cold arms, so installing only for a little-endian guest makes
+		 *  every BE multi-transfer correct at the cost of the fast path
+		 *  no BE guest today can boot to use. Resolving the guest term
+		 *  at translate time is sound because cpu->byte_order cannot
+		 *  change after translation: every write is machine-setup-time,
+		 *  SETEND is undecoded (and ARM_FLAG_E inert), and the CP15 c1
+		 *  B-bit route exits the emulator (see cpu_arm_coproc.c). The
+		 *  same decision the MIPS multi generator makes with its _le/_be
+		 *  variants -- a future BE-ARM-guest round should emit those
+		 *  (S4 in the round-118 records) rather than re-open this gate.
 		 */
-		if (!cpu->machine->show_trace_tree) {
+		if (!cpu->machine->show_trace_tree &&
+		    cpu->byte_order == EMUL_LITTLE_ENDIAN) {
 			int i = 0, j = iword;
 			j = ((j & 0x00800000) >> 16) | ((j & 0x00100000) >> 14)
 			  | ((j & 0x00040000) >> 13) | ((j & 0x00010000) >> 12)

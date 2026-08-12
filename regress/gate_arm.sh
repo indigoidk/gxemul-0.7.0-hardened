@@ -839,16 +839,29 @@ grep -E " ok$| FAIL$" "$ENDLOG" | sed 's/^/       /'
 ectrl=$(grep -o "ENDIAN_CONTROL=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 check "endian control: BE rig ran and stored" "${ectrl:-missing}" "OK"
 
+# #378's own liveness pin: the multi-transfer cold rows go through bdt_*, which
+# swaps on EVERY build, so they read arch values on buggy and fixed builds
+# alike -- a dead rig, wrong register field or non-firing LDM reads 0/sentinel
+# instead. Distinct from ENDIAN_CONTROL so the two extensions fail separately.
+ectrl378=$(grep -o "ENDIAN_CONTROL378=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
+check "endian control: multi rows ran (378)" "${ectrl378:-missing}" "OK"
+
 eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 egot=${eres%/*}; ewant=${eres#*/}
-check "endian rows run"     "${ewant:-missing}" 12
+check "endian rows run"     "${ewant:-missing}" 34
 check "endian rows correct" "${egot:-missing}"  "$ewant"
 
-# The five BE discriminators named individually, so one reverting cannot hide
-# behind the total. The warm/cold word PAIR is the self-contradiction proof;
-# the four cold bytes are the byte-order-independent witnesses.
+# The BE discriminators named individually, so one reverting cannot hide
+# behind the total. #372's DISC rows are the COLD ones (general path was
+# wrong); #378's DISC rows are the WARM ones (LDM/STM fast path was wrong) --
+# the inverted polarity is the point, and the probe carries explicit per-row
+# kinds for exactly that reason. Swept against the pre-#378 build: 24/34, the
+# ten warm multi rows red at exactly the per-word-reversed values. Fixed: 34/34.
 for v in "be cold word" "be cold byte0" "be cold byte1" \
-         "be cold byte2" "be cold byte3"; do
+         "be cold byte2" "be cold byte3" \
+         "be stm warm b0" "be stm warm b1" "be stm warm b2" "be stm warm b3" \
+         "be stm warm b4" "be stm warm b5" "be stm warm b6" "be stm warm b7" \
+         "be ldm warm r1" "be ldm warm r2"; do
     n=$(count "$ENDLOG" "^$v  .*ok$")
     check "  endian row: $v" "$n" 1
 done
