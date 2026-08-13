@@ -26,6 +26,35 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 gate_begin "log-hygiene"
 
+# ---- static wiring: the readiness-predicate ratchet ---------------------
+#
+#  DELIBERATELY BEFORE the log check below, so a missing log can never SKIP
+#  it.  This gate had no source assertions at all until now -- it graded logs
+#  and nothing else -- which is why the defect it guards could spread unseen.
+#
+#  THE DEFECT IT FREEZES: a readiness predicate matching a BARE ">" is
+#  satisfied by the guest's own register dump, whose FIRST line is the
+#  symbol line "  <...>" -- and that line ends in ">".  Line-buffered on a
+#  pty, each line is its own flush, so a reader waking between line 1 and
+#  line 2 returns SATISFIED WITH THE REGISTERS UNREAD.  Healthy host,
+#  microseconds wide, and armed on every CPU family whose dump starts that
+#  way (MIPS, PPC, SH, m88k all do).
+#
+#  This is a RATCHET, not the fix.  Converting the sites is its own round --
+#  8 files and 5 gates, all needing re-baselining.  Until then the count is
+#  FROZEN: any new occurrence fails this gate immediately, so the defect
+#  cannot spread while the conversion is queued.  When the conversion lands,
+#  drop EXPECT_BARE to 0 in the same commit.
+#
+#  Exact equality, not a ceiling, and on purpose: a "<=" check would let the
+#  number fall silently, and a silent fall is how you lose track of whether
+#  the conversion actually happened.  Any movement in either direction must
+#  be a deliberate edit here.
+EXPECT_BARE=14
+bare=$(grep -c 'endswith(">")' "$HERE"/*.py 2>/dev/null | \
+       awk -F: '{s+=$2} END {print s+0}')
+check "readiness: bare-prompt sites frozen (#37)" "$bare" "$EXPECT_BARE"
+
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog
 [ -f "$PLOG" ] && [ -f "$ALOG" ] || \
