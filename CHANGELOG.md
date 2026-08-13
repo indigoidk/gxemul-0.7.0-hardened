@@ -4290,6 +4290,33 @@ whole-buffer predicates in `arm_flags_probe.py`, which keep a fail-closed allowl
 here; and the unrecorded invariant that every probe's `CODE` address is safe only because it
 happens to have no symbol, which nothing states or enforces.
 
+**Pass 2 found a hole in the gate this round shipped, and it is the review's sharpest
+result.** The new checks catch a REVERT but could not see an ADDITION of the OTHER broken
+form. A fresh site spelled `buf.rstrip().endswith("GXemul>")` passed everything: bare was
+still 0; the spelling is RECOGNISED, so `unknown` stayed 0; and it is not the anchored form,
+so the converted count stayed 14. Yet arm B measured exactly that configuration — full
+prompt, whole buffer — failing as completely as the bare one, at 0/80 and byte-identical.
+
+The count is now asserted explicitly at 2. Those two are `arm_flags_probe.py:144` and `:645`,
+already filed and deliberately outside this round's scope, so pinning the number turns that
+scope decision into a FAIL-CLOSED ALLOWLIST rather than an unstated omission — and it goes to
+0 in the commit that converts them. Mutants: adding a third such site reddens the new row
+**while bare, unknown and anchored all stay green**, which is the measurement of the hole
+rather than an argument for it; converting one of the two reddens it as well, so the allowlist
+catches removals and not only additions.
+
+Two smaller pass-2 corrections. The ratchet comment conflated two different failure routes: a
+shared helper holding the prompt in a CONSTANT fails the `unknown` check, but a REGEX is not
+an `endswith` at all, so `unknown` never moves and it fails the anchored COUNT instead. And
+the three positive counts used two different file filters — one comment-stripped, two raw — so
+a comment mentioning the echo guard would have inflated one and not the others. Latent, never
+fired, fixed before it could.
+
+Seat record for this pass: five live seats answered. The Codex seat FAILED with "Argument
+list too long" — the brief inlined a 36 KB diff into argv, over the documented ~32 KB Windows
+cap — and was re-fired with a pointer prompt. A dead seat is a seat failure and is never
+counted as agreement.
+
 ## One-hundred-and-thirty-first round (#391) — a control that passed on evidence it never received
 
 `arm_endian_probe.py`'s `send()` computed a readiness verdict and **discarded it**, returning

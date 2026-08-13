@@ -46,12 +46,17 @@ gate_begin "log-hygiene"
 #  require the command's own echo first.
 #
 #  The converted predicate deliberately keeps the LITERAL endswith("GXemul>")
-#  spelling, which is the idiom the ARM probes already use.  A reviewer proposed
-#  a shared helper holding the prompt in a constant or a regex; that would have
-#  been counted as an UNRECOGNISED spelling by the closed-world check below and
-#  failed this gate.  Matching the house idiom kept the ratchet working with no
-#  redesign -- worth remembering the next time a "cleaner" abstraction is
-#  proposed for something a static check is watching.
+#  spelling, which is the idiom the ARM probes already use (arm_idle_probe.py:194).
+#  A reviewer proposed a shared helper holding the prompt in a constant or a
+#  regex; either would have broken this gate, though -- as a pass-2 seat pointed
+#  out -- NOT by the same route, and the first draft of this comment conflated
+#  them:
+#      endswith(PROMPT)  -> counted, unrecognised -> fails the `unknown` check;
+#      re.search(...)    -> not an endswith at all, so `unknown` never moves --
+#                           it fails the anchored-site COUNT below instead.
+#  Matching the house idiom kept the ratchet working with no redesign, which is
+#  worth remembering the next time a "cleaner" abstraction is proposed for
+#  something a static check is watching.
 #
 #  Exact equality, not a ceiling, and on purpose: a "<=" check would let the
 #  number fall silently, and a silent fall is how you lose track of whether
@@ -116,11 +121,35 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  a site quietly disappear.  If a probe legitimately gains or loses a wait site,
 #  this number is edited deliberately, in the same commit, by someone who looked.
 EXPECT_CONVERTED=14
-conv_anchor=$(py_code | grep -o 'resp.rstrip().endswith("GXemul>")' | wc -l)
-conv_echo=$(printf '%s\n' "$(find "$HERE" -name '*_probe.py' -type f -print0 2>/dev/null | \
-            xargs -0 grep -h 'echo is not None and echo not in resp' 2>/dev/null)" | grep -c .)
-conv_mark=$(printf '%s\n' "$(find "$HERE" -name '*_probe.py' -type f -print0 2>/dev/null | \
-            xargs -0 grep -h 'return wait(mark=_mark' 2>/dev/null)" | grep -c .)
+#  One helper for all three, so they agree on WHAT they look at.  The first draft
+#  used py_code() for the anchored count and a raw grep for the other two, which
+#  meant a comment mentioning the echo guard would have inflated one count and not
+#  the others -- a spurious mismatch with no defect behind it.  A seat caught it
+#  while it was still latent.
+probe_code() { find "$HERE" -name '*.py' -type f \
+                    ! -name 'readiness_predicate_test.py' -print0 2>/dev/null | \
+               xargs -0 grep -h "$1" 2>/dev/null | grep -v '^[[:space:]]*#'; }
+conv_anchor=$(probe_code 'resp.rstrip().endswith("GXemul>")' | grep -c .)
+conv_echo=$(probe_code 'echo is not None and echo not in resp' | grep -c .)
+conv_mark=$(probe_code 'return wait(mark=_mark' | grep -c .)
+
+#  THE HOLE A PASS-2 SEAT FOUND, and it is the sharpest finding of the review:
+#  the checks above catch a REVERT but not an ADDITION of the OTHER broken form.
+#  A brand-new site spelled
+#        if buf.rstrip().endswith("GXemul>"):
+#  passes everything -- bare is still 0, the spelling is RECOGNISED so `unknown`
+#  stays 0, and it is not the anchored form so conv_anchor stays 14.  Yet #392
+#  MEASURED that exact configuration (full prompt, whole buffer) failing just as
+#  completely as the bare one: arm B scored 0/80, byte-identical to arm A.
+#
+#  So count it explicitly.  The two that exist are arm_flags_probe.py:144 and
+#  :645 -- known, filed, and deliberately out of #392's scope.  Pinning the count
+#  at 2 turns that scope decision into a FAIL-CLOSED ALLOWLIST: those two are
+#  tolerated, a third is not, and when they are finally converted this number
+#  goes to 0 in the same commit.
+EXPECT_WHOLE_FULL=2
+whole_full=$(probe_code 'buf.rstrip().endswith("GXemul>")' | grep -c .)
+check "readiness: whole-buffer full-prompt sites (allowlist)" "$whole_full" "$EXPECT_WHOLE_FULL"
 check "readiness: anchored full-prompt sites (#392)" "$conv_anchor" "$EXPECT_CONVERTED"
 check "readiness: echo guard present (#392)"         "$conv_echo"   "$EXPECT_CONVERTED"
 check "readiness: send takes a fresh mark (#392)"    "$conv_mark"   "$EXPECT_CONVERTED"
