@@ -137,6 +137,70 @@ def seed_bytes(base):
                                    0x55, 0x66, 0x77, 0x88))]
 
 
+#  #390: `str rX,[pc,#imm]` used a base of instruction+12 where A5.2.2 (and
+#  A5.2.3/A5.2.4, and A5.3.2/A5.3.3 for mode 3) define R15-as-Rn to be the
+#  address of the instruction PLUS EIGHT.  One scratch word was serving two
+#  roles -- the BASE when Rn == PC, and the DATA when Rd == PC -- and the store
+#  arm set it to +12 for both.  LDRD was caught in it too: mode 3 encodes LDRD
+#  with L == 0, so the generator never defines A__L for it and it takes the
+#  store arm despite being a load.
+#
+#  Readback is ALWAYS through a register base, never a pc-relative load: the
+#  decoder folds pc-relative LOADS into a constant MOV at TRANSLATE time, so
+#  such a load reports the bytes as they were BEFORE the store under test.
+STR_R4_PC_40  = 0xE58F4040      # str r4,[pc,#0x40]
+STR_PC_R7     = 0xE587F000      # str pc,[r7]
+STR_PC_PC_40  = 0xE58FF040      # str pc,[pc,#0x40]
+LDRD_R0_PC_40 = 0xE1CF04D0      # ldrd r0,[pc,#0x40]
+MOV_R7_20000  = 0xE3A07802      # mov r7,#0x20000
+MOV_R3_8000   = 0xE3A03C80      # mov r3,#0x8000   (0x80 ror 24)
+ORR_R3_58     = 0xE3833058      # orr r3,r3,#0x58  -> r3 = 0x8058
+ORR_R3_48     = 0xE3833048      # orr r3,r3,#0x48  -> r3 = 0x8048
+LDR_R5_R3     = 0xE5935000      # ldr r5,[r3]
+LDR_R6_R3_4   = 0xE5936004      # ldr r6,[r3,#4]
+LDR_R5_R7     = 0xE5975000      # ldr r5,[r7]
+
+
+def str_base_prog():
+    """R1: str r4,[pc,#0x40] at CODE+0x10; read BOTH candidate words.
+
+    The +8 candidate is 0x8058 and the +12 candidate 0x805c, so one ldr pair
+    covers both and the WRONG candidate is asserted to hold its sentinel --
+    a row that only checked the right address would pass a store-to-both.
+    """
+    return (list(BUILD_R4) + [STR_R4_PC_40, MOV_R3_8000, ORR_R3_58,
+                              LDR_R5_R3, LDR_R6_R3_4, SPIN])
+
+
+def str_data_prog():
+    """R2: str pc,[r7] -- the DATA role, with an ordinary base register.
+
+    Must read instruction+12 BEFORE and AFTER the fix.  This is the row that
+    catches a role-aware guard written without an else: that leaves the scratch
+    word holding whatever the previous PC-relative instruction left in it.
+    """
+    return [MOV_R7_20000, STR_PC_R7, LDR_R5_R7, SPIN]
+
+
+def str_bothpc_prog():
+    """R3: str pc,[pc,#0x40] -- both roles at once, the load-bearing row.
+
+    Needs base = instruction+8 AND stored value = instruction+12 SIMULTANEOUSLY.
+    Checking the VALUE at the +8 address is what separates the two-word fix from
+    a blanket +8, which puts the right address there carrying the wrong word.
+    """
+    return [STR_PC_PC_40, MOV_R3_8000, ORR_R3_48, LDR_R5_R3, SPIN]
+
+
+def ldrd_pc_prog():
+    """R4: ldrd r0,[pc,#0x40] with three distinct words planted.
+
+    r0/r1 identify WHICH pair was read, so a base that is four bytes high is
+    distinguishable from a correct one rather than merely 'not the sentinel'.
+    """
+    return [LDRD_R0_PC_40, SPIN]
+
+
 def swp_prog():
     return BUILD_R1_5567 + [MOV_R0_COLD, SWP_R2_R1_R0] + list(LDRB) + [SPIN]
 
@@ -459,6 +523,78 @@ GROUPS = [
         ("strd le b5", "r9", 0x77, 0x77, "CTRL"),
         ("strd le b6", "sl", 0x66, 0x66, "CTRL"),
         ("strd le b7", "fp", 0x55, 0x55, "CTRL"),
+    ]),
+
+    #  ---- #390 rows: the PC-as-base role conflation.  Addresses, not bytes,
+    #  so every value below is byte-order INDEPENDENT and both rigs must agree
+    #  -- which is itself the check that no byte-order-specific regression hides
+    #  here.  All four groups run on barearm and testarm alike.
+    #
+    #  buggy = MEASURED on the pre-#390 build (parent 495a07a), not predicted.
+    #  A THIRD implementation, a blanket +8 that also moves the data role, is
+    #  what "390 bothpc" exists to catch: it would put the right ADDRESS there
+    #  carrying 0x8008 instead of 0x800c, which no other row can see.
+    #
+    #  STR is at CODE+0x10 in the base group (four BUILD_R4 words precede it),
+    #  so its +8 target is 0x8058 and its +12 target 0x805c.  In the bothpc and
+    #  ldrd groups the instruction is first, at CODE, so the targets are 0x8048
+    #  and 0x804c.
+    ("390 be base", "barearm", str_base_prog(), [], [
+        ("390 be base +8",  "r5", 0x11223344, 0x00000000, "DISC"),
+        ("390 be base +12", "r6", 0x00000000, 0x11223344, "DISC"),
+    ]),
+    ("390 le base", "testarm", str_base_prog(), [], [
+        ("390 le base +8",  "r5", 0x11223344, 0x00000000, "DISC"),
+        ("390 le base +12", "r6", 0x00000000, 0x11223344, "DISC"),
+    ]),
+
+    #  DATA-role guard.  arch == buggy ON PURPOSE: this row must pass on BOTH
+    #  builds.  It is not a discriminator for the defect -- it is the detector
+    #  for a WRONG FIX that moves the stored R15 value off +12.  A2-9 forbids
+    #  an implementation using +8 for some R15 stores and +12 for others.
+    ("390 be data", "barearm", str_data_prog(), [], [
+        ("390 be data +12", "r5", 0x8010, 0x8010, "CTRL"),
+    ]),
+    ("390 le data", "testarm", str_data_prog(), [], [
+        ("390 le data +12", "r5", 0x8010, 0x8010, "CTRL"),
+    ]),
+
+    #  BOTH-PC: base +8 and data +12 at the same time.  buggy = 0 because
+    #  pre-#390 nothing was written to the +8 target at all.
+    ("390 be bothpc", "barearm", str_bothpc_prog(), [], [
+        ("390 be bothpc", "r5", 0x800c, 0x00000000, "DISC"),
+    ]),
+    ("390 le bothpc", "testarm", str_bothpc_prog(), [], [
+        ("390 le bothpc", "r5", 0x800c, 0x00000000, "DISC"),
+    ]),
+
+    #  LDRD base -- CTRL, and the story behind that is the point.
+    #
+    #  These began life as DISC rows, on the reasoning that LDRD encodes L == 0
+    #  and so takes A__NAME_PC's store arm and inherited its +12 base.  That
+    #  reasoning was WRONG, and the mutant battery is what exposed it: reverting
+    #  the base assignment to +12 left these rows GREEN, which they could not be
+    #  if they depended on it.  Building the actual pre-#390 parent settled it --
+    #  r0 reads 0xaaaa0001 there too, identical to the fixed build.  LDRD's base
+    #  was NEVER four bytes high, and the `buggy` column these rows used to
+    #  carry was fiction: they could not have failed for the stated reason.
+    #
+    #  They are kept, re-typed CTRL with arch == buggy, because the measurement
+    #  is worth having: it is the standing evidence that LDRD with Rn == PC is
+    #  UNAFFECTED by the base-role split, and it will redden if some future
+    #  round drags LDRD into that path.  Three distinct planted words, so the
+    #  row still says WHICH pair was read rather than merely "not a sentinel".
+    ("390 be ldrd", "barearm", ldrd_pc_prog(),
+     ["put w 0x8048, 0xaaaa0001", "put w 0x804c, 0xbbbb0002",
+      "put w 0x8050, 0xcccc0003"], [
+        ("390 be ldrd r0", "r0", 0xaaaa0001, 0xaaaa0001, "CTRL"),
+        ("390 be ldrd r1", "r1", 0xbbbb0002, 0xbbbb0002, "CTRL"),
+    ]),
+    ("390 le ldrd", "testarm", ldrd_pc_prog(),
+     ["put w 0x8048, 0xaaaa0001", "put w 0x804c, 0xbbbb0002",
+      "put w 0x8050, 0xcccc0003"], [
+        ("390 le ldrd r0", "r0", 0xaaaa0001, 0xaaaa0001, "CTRL"),
+        ("390 le ldrd r1", "r1", 0xbbbb0002, 0xbbbb0002, "CTRL"),
     ]),
 ]
 

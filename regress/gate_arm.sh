@@ -890,7 +890,7 @@ ectrld=$(grep -o "ENDIAN_CONTROL_D=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 #  the NAME must say what it actually pins.
 check "endian control: ldrd/strd ran on the LE rig (389)" "${ectrld:-missing}" "OK"
 
-check "endian rows run"     "${ewant:-missing}" 90
+check "endian rows run"     "${ewant:-missing}" 102
 check "endian rows correct" "${egot:-missing}"  "$ewant"
 
 # The BE discriminators named individually, so one reverting cannot hide
@@ -931,8 +931,31 @@ for v in "be cold word" "be cold byte0" "be cold byte1" \
          "swp le un2 b2" "swp le un2 b3" "swp le un2 sent" \
          "ldrd be r4" "ldrd be r5" \
          "strd be b0" "strd be b1" "strd be b2" "strd be b3" \
-         "strd be b4" "strd be b5" "strd be b6" "strd be b7"; do
+         "strd be b4" "strd be b5" "strd be b6" "strd be b7" \
+         "390 be base +8" "390 be base +12" \
+         "390 le base +8" "390 le base +12" \
+         "390 be bothpc" "390 le bothpc"; do
     n=$(count "$ENDLOG" "^$v  *DISC .*ok$")
+    check "  endian row: $v" "$n" 1
+done
+
+#  #390's CTRL rows, pinned by name so they cannot be quietly retyped or
+#  dropped -- a DISC pattern would never match them.  Two different reasons:
+#
+#  the DATA-role rows must pass on the PRE-fix build too, because they do not
+#  detect the defect; they detect a WRONG FIX that moves the stored R15 value
+#  off +12, which A2-9 forbids doing for some R15 stores and not others.
+#
+#  the LDRD rows are CTRL because the round's original claim about them was
+#  REFUTED by measurement: LDRD's base was never +12.  They began as DISC with
+#  a `buggy` column that turned out to be fiction -- the mutant battery left
+#  them green, and the actual pre-#390 parent reads the same values the fixed
+#  build does.  They are kept as standing evidence that LDRD with Rn == PC is
+#  unaffected, and they will redden if a future round drags it into that path.
+for v in "390 be data +12" "390 le data +12" \
+         "390 be ldrd r0" "390 be ldrd r1" \
+         "390 le ldrd r0" "390 le ldrd r1"; do
+    n=$(count "$ENDLOG" "^$v  *CTRL .*ok$")
     check "  endian row: $v" "$n" 1
 done
 

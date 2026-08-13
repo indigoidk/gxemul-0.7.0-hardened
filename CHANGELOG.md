@@ -4192,6 +4192,91 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirtieth round (#390) — one scratch word, two roles: a PC-relative store's base was four bytes high
+
+`A__NAME_PC` (`cpu_arm_instr_loadstore.c`) handles every load/store whose `Rn` or `Rd` is
+the PC. It splits on `#ifdef A__L` — by INSTRUCTION CLASS — while the two uses of the
+scratch word `tmp_pc` are distinguished by **ROLE**: the BASE value when `Rn == PC`, and
+the DATA value when `Rd == PC` (the "stores store PC+12" quirk the file's own header
+documents). The load arm is role-aware, setting `tmp + 8` only when `arg[0]` is the scratch
+word. The store arm set `tmp + 12` **unconditionally** — and the decoder points `arg[0]` at
+that same word whenever `rn == ARM_PC`, with no reference to the L bit. So the base came
+from the data role's value.
+
+`str rX,[pc,#imm]` therefore addressed **four bytes high**. That is not a latitude case:
+for the non-writeback OFFSET forms, `Rn == R15` is architecturally DEFINED as the address
+of the instruction plus eight — A5.2.2 (`ddi0100i.txt:18700`), A5.2.3 (`:18740`), A5.2.4
+(`:18840`), and for mode 3 A5.3.2 (`:19425`) and A5.3.3 (`:19473`). Only the pre-/post-
+indexed forms, which would write back to R15, are UNPREDICTABLE (`:18888`, `:18936`,
+`:19046`, `:19104`, `:19156`, `:19272`, `:19526`, `:19570`, `:19623`, `:19665`). The
+emulator's own decoder already agreed for LOADS: its pc-relative load fold computes
+`(addr & 0xfff) + 8`. Nothing rescued stores — that fold requires the L bit.
+
+**The fix is two scratch words, and the one-word version is measurably wrong.** A
+role-aware guard on a single word looks sufficient until `str pc,[pc,#imm]`, where `arg[0]`
+and `arg[2]` are the SAME pointer: setting it to `+8` for the base silently changes the
+STORED word to `+8` too. A2-9 (`:1639-1642`) permits either `+8` or `+12` for a store of
+R15 but **forbids using one for some ARM STR/STM instructions and the other for the rest**,
+and this fork uses `+12` in both the template and the STM path. So `cpu_arm.h` gains
+`tmp_pc_data[2]`, the decoder points `arg[2]` at it at both sites (mode 2 and the mode-3
+twin), and the store arm computes both values unconditionally. Separating the roles at
+DECODE time removes the need for a pointer-identity test at run time, and the `[2]` sizing
+keeps a doubleword's second-word access inside the scratch instead of landing on
+`tmp_branch`, the THUMB branch-prefix register.
+
+**Measured.** RED on the parent `495a07a`, both rigs identical: the value appeared at the
+`+12` target and the `+8` target held its sentinel. GREEN after: the reverse. The data role
+still stores instruction+12; the both-PC case now puts instruction+12 AT the `+8` target,
+which is the combination a blanket `+8` gets wrong. Gate 14: **PASS, 352 checks, 0 FAIL,
+0 SKIP**; the endian probe runs **102/102**. Blast radius, with the expected set declared
+BEFORE looking: preprocessing all EIGHT generated flavor files old-against-new and
+comparing brace-matched function bodies gives **80 changed bodies, all 80 `_pc`, and ZERO
+load-named** — exactly the instantiations that compile the edited arm, nothing else.
+
+**Four mutants, all caught, and the pairing is the point.** A blanket `+8`, a deleted data
+assignment, and a reverted decoder redirect each redden the both-PC and data rows while
+leaving the base rows GREEN (98/102); reverting the base to `+12` reddens the base and
+both-PC rows while leaving the data rows GREEN (96/102, which is exactly the pre-fix
+parent's own score). The base-role and data-role mutants produce OPPOSITE signatures —
+that is what proves the rows separate the two roles rather than merely noticing that
+something changed.
+
+**The round's most valuable result is a claim of its own that measurement destroyed.**
+Three independent sources — the design seat, the compile-and-measure seat, and this block's
+author — concluded that LDRD was in scope, reasoning that it encodes `L == 0`, therefore
+takes the store arm, therefore inherited the `+12` base; one of them backed it by quoting
+the LDRD instantiation's PREPROCESSED body, which does contain `tmp_pc = tmp + 12`. The
+mutant battery refused to cooperate: reverting the base left the LDRD rows GREEN, which is
+impossible if they depended on it. Building the actual pre-#390 parent settled it —
+`ldrd r0,[pc,#0x40]` reads the same words there as on the fixed build. **LDRD's base was
+never four bytes high.** The four LDRD rows had been written as discriminators with a
+`buggy` column that was fiction; they could not have failed for the stated reason, which is
+this project's own vacuity class arriving in its newest disguise — not a row that cannot
+detect its defect, but a row whose defect does not exist. They are re-typed CTRL with
+`arch == buggy` and kept, because the measurement is real: it is standing evidence that
+LDRD with `Rn == PC` is unaffected, and it will redden if a later round drags it into that
+path. **Left open, and worth someone's attention:** the preprocessed LDRD body genuinely
+contains the `+12` assignment, yet the instruction's base is `+8` in practice. Something
+upstream supplies the base for mode-3 `Rn == PC`, or that function is not the one
+dispatched. "Measured unaffected, mechanism unknown" is honest, and weaker than it should
+be. The generalisable lesson: **a mutant that fails to redden a row is not a nuisance to be
+waved through — it is evidence about the row, and here it was the only thing standing
+between a false claim and the record.**
+
+**Not touched, each for its own reason** — the `+12` DATA value is correct and locked by
+A2-9's consistency rule, but only STR (word) is the IMPLEMENTATION DEFINED case: STRB and
+STRBT (`:14342`, `:14415`) and STRH (`:14690`) make `Rd == PC` flatly UNPREDICTABLE, and
+STRD makes an odd `Rd` UNDEFINED (`:14495`). Writing "the architecture permits +8 or +12"
+across all four would be an overclaim. Also untouched: the writeback forms with `Rn == PC`
+(UNPREDICTABLE; their writeback already only clobbers the scratch), the pc-relative load
+fold, and the doubleword alignment questions.
+
+**Residuals**: the `A__NAME_PC` header TODO asking whether implementations use pc+8 or
+pc+12 for stores is now answerable and answered; the TODO proposing to "separate the two
+cases: a load where arg[0] = PC, and the case where arg[2] = PC" is exactly what this round
+did. The two `+12` sites — this template and the STM path — must change together or not at
+all per A2-9, and nothing in the code said so until now.
+
 ## One-hundred-and-twenty-ninth round (#389) — big-endian LDRD/STRD: two 32-bit words, not one 64-bit swap
 
 The template's big-endian LDRD arm was three defects deep (`cpu_arm_instr_loadstore.c`,

@@ -3324,6 +3324,58 @@ corruption without a clear host-OOB path.
 > seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
 > mode distinct from quota death).
 
+> ## 2026-08-13 — #390 (round 130): one scratch word, two roles — a PC-relative store's base was four bytes high
+>
+> A__NAME_PC splits on #ifdef A__L (instruction CLASS) while tmp_pc's two uses are
+> distinguished by ROLE — BASE when Rn==PC, DATA when Rd==PC. The store arm set
+> tmp + 12 UNCONDITIONALLY, and the decoder points arg[0] at that same word
+> whenever rn==ARM_PC regardless of the L bit, so the base took the data value.
+> `str rX,[pc,#imm]` addressed FOUR BYTES HIGH. DEFINED behaviour, not latitude:
+> A5.2.2 :18700, A5.2.3 :18740, A5.2.4 :18840, A5.3.2 :19425, A5.3.3 :19473 all
+> give Rn==R15 as instruction+8 for the non-writeback offset forms; only the
+> writeback forms are UNPREDICTABLE. The emulator's own pc-relative LOAD fold
+> already used +8 — it requires the L bit, so stores were never rescued.
+> FIX: TWO scratch words. A one-word role-aware guard is MEASURABLY WRONG for
+> `str pc,[pc,#imm]`, where arg[0] and arg[2] are the same pointer and setting
+> the base to +8 silently moves the STORED word to +8 — which A2-9 :1639-1642
+> forbids, since an implementation may pick +8 or +12 for R15 stores but must
+> use ONE everywhere. cpu_arm.h gains tmp_pc_data[2]; both decoder sites point
+> arg[2] at it; the store arm computes both values unconditionally. Separating
+> the roles at DECODE time removes any run-time pointer-identity test, and the
+> [2] sizing keeps a doubleword's second word off tmp_branch (THUMB state).
+> MEASURED: RED on parent 495a07a both rigs, GREEN after; probe 102/102; gate 14
+> PASS 352 checks 0 FAIL 0 SKIP; blast radius with the expected set DECLARED
+> FIRST = 80 changed bodies across all EIGHT flavor files, all _pc, ZERO
+> load-named. FOUR MUTANTS all caught, and the PAIRING is the evidence: blanket
+> +8 / deleted data assignment / reverted decoder redirect each redden bothpc +
+> data with base GREEN (98/102); reverting the base reddens base + bothpc with
+> data GREEN (96/102 — exactly the pre-fix parent's own score). Opposite
+> signatures prove the rows separate the roles rather than noticing change.
+>
+> *** THE ROUND REFUTED ITS OWN LDRD CLAIM, and that is the part to remember. ***
+> Three independent sources agreed LDRD was in scope (it encodes L==0, so it
+> takes the store arm), one quoting its PREPROCESSED body, which really does
+> contain tmp_pc = tmp + 12. The mutant that reverts the base left the LDRD rows
+> GREEN — impossible if they depended on it — so the actual pre-#390 parent was
+> built: pre-fix LDRD reads the same words as the fixed build. LDRD's base was
+> NEVER four bytes high. Those four rows had a FICTIONAL buggy column and could
+> not have failed for the stated reason: a new face of the vacuity class — not a
+> row that cannot detect its defect, but a row whose defect does not exist. They
+> are re-typed CTRL (arch==buggy) and KEPT as standing evidence that LDRD with
+> Rn==PC is unaffected. OPEN: the preprocessed body contains the +12 assignment
+> yet the base is +8 in practice — find what supplies the base for mode-3
+> Rn==PC, or which function is really dispatched. "Measured unaffected,
+> mechanism unknown" is honest and weaker than it should be.
+> LESSON, generalisable: A MUTANT THAT FAILS TO REDDEN A ROW IS EVIDENCE ABOUT
+> THE ROW, not a nuisance. Here it was the only thing between a false claim and
+> the record. And: a claim several seats agree on is still a claim.
+> #68 does NOT fold in — its Rn==PC base half is refuted for LDRD; its Rd==PC
+> half remains open and must be re-verified independently, not inherited.
+> PER-INSTRUCTION, why the +12 DATA value is left alone: only STR (word) is the
+> IMPLEMENTATION DEFINED +8-or-+12 case; STRB/STRBT (:14342, :14415) and STRH
+> (:14690) make Rd==PC flatly UNPREDICTABLE, and STRD makes an odd Rd UNDEFINED
+> (:14495). One blanket sentence across all four would overclaim.
+>
 > ## 2026-08-12 — #389 (round 129): big-endian LDRD/STRD — two 32-bit words, not one 64-bit swap
 >
 > Three defects in the template's BE LDRD arm (word-pair inversion BOTH sides — Rd

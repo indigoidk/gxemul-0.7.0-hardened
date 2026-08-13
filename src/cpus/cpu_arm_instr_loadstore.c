@@ -579,15 +579,33 @@ void A__NAME_PC(struct cpu *cpu, struct arm_instr_call *ic)
 			cpu_functioncall_trace(cpu, cpu->pc);
 	}
 #else
-	/*  Store:  */
+	/*  Store (and LDRD -- see below):  */
 	uint32_t low_pc, tmp;
-	/*  Calculate tmp from this instruction's PC + 12  */
+	/*
+	 *  #390: this arm used to set ONE scratch word to tmp + 12 and let it
+	 *  serve both roles.  It cannot: the decoder points arg[0] at tmp_pc
+	 *  whenever Rn == PC (regardless of the L bit) and arg[2] at the data
+	 *  scratch when Rd == PC, and `str pc,[pc,#imm]` asks for BOTH at once.
+	 *  The base must be instruction+8 (A5.2.2/A5.2.3/A5.2.4 and
+	 *  A5.3.2/A5.3.3 all say so for the non-writeback offset forms, which
+	 *  are exactly the forms where Rn == PC is DEFINED rather than
+	 *  UNPREDICTABLE), while the stored word stays instruction+12 -- the
+	 *  choice A2-9 leaves to the implementation and REQUIRES to be uniform
+	 *  across every ARM STR and STM that stores R15.  So compute both,
+	 *  unconditionally, into separate words.
+	 *
+	 *  This arm is reached by LDRD too, which is a LOAD: mode 3 encodes it
+	 *  with L == 0 (s=1,h=0), so the generator never defines A__L for it
+	 *  and the #ifdef above sends it here.  That is why the comment says
+	 *  "Store (and LDRD)" -- its base was four bytes high as well.
+	 */
 	low_pc = ((size_t)ic - (size_t) cpu->cd.arm.cur_ic_page) /
 	    sizeof(struct arm_instr_call);
 	tmp = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1) <<
 	    ARM_INSTR_ALIGNMENT_SHIFT);
 	tmp += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
-	cpu->cd.arm.tmp_pc = tmp + 12;
+	cpu->cd.arm.tmp_pc = tmp + 8;		/*  #390: BASE role  */
+	cpu->cd.arm.tmp_pc_data[0] = tmp + 12;	/*  #390: DATA role  */
 	A__NAME(cpu, ic);
 #endif
 }

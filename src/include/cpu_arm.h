@@ -161,7 +161,22 @@ struct arm_cpu {
 	uint32_t		abt_r13_r14[2];
 	uint32_t		und_r13_r14[2];
 
-	uint32_t		tmp_pc;		/*  Used for load/stores  */
+	uint32_t		tmp_pc;		/*  Used for load/stores: the BASE
+					    value when Rn == PC (#390)  */
+	/*
+	 *  #390: the DATA value when Rd == PC, i.e. what a store of R15
+	 *  actually writes.  Split out of tmp_pc because the two roles need
+	 *  DIFFERENT values at the same time: `str pc,[pc,#imm]` is a defined
+	 *  encoding whose base is instruction+8 (A5.2.2) while the word it
+	 *  stores is instruction+12 (A2-9's implementation-defined choice,
+	 *  which this fork makes uniformly -- see cpu_arm_instr.c's STM path,
+	 *  and note A2-9 FORBIDS using 8 for some R15 stores and 12 for
+	 *  others).  One word cannot hold both, and before #390 it tried to.
+	 *  [2], not a scalar: LDRD/STRD reach arg[2]+1, and with a scalar here
+	 *  that lands on tmp_branch below -- THUMB state clobbered by a data
+	 *  access.
+	 */
+	uint32_t		tmp_pc_data[2];
 	uint32_t		tmp_branch;	/*  Set by THUMB branch prefix instruction  */
 
 	/*

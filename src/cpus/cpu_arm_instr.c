@@ -4201,9 +4201,12 @@ X(to_be_translated)
 				if (rn == ARM_PC)
 					ic->arg[0] = (size_t)
 					    (&cpu->cd.arm.tmp_pc);
+				/*  #390: the DATA role gets its own word;
+				    with Rn == PC as well, one word cannot
+				    hold both instruction+8 and +12.  */
 				if (!l_bit && rd == ARM_PC)
 					ic->arg[2] = (size_t)
-					    (&cpu->cd.arm.tmp_pc);
+					    (&cpu->cd.arm.tmp_pc_data[0]);
 			} else
 				ic->f = arm_load_store_instr_3[
 				    condition_code + (l_bit? 16 : 0)
@@ -4561,8 +4564,11 @@ X(to_be_translated)
 			    & 0x3f0) + condition_code];
 			if (rn == ARM_PC)
 				ic->arg[0] = (size_t)(&cpu->cd.arm.tmp_pc);
+			/*  #390: DATA role -> its own word (see the mode-3
+			    twin above and cpu_arm.h's tmp_pc_data).  */
 			if (!l_bit && rd == ARM_PC)
-				ic->arg[2] = (size_t)(&cpu->cd.arm.tmp_pc);
+				ic->arg[2] =
+				    (size_t)(&cpu->cd.arm.tmp_pc_data[0]);
 		} else {
 			ic->f = arm_load_store_instr[((iword >> 16) &
 			    0x3f0) + condition_code];
