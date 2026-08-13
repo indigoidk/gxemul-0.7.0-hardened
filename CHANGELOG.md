@@ -4246,16 +4246,35 @@ build — **mips-rigs PASS, 6 checks, zero FAIL**, pmax boots OpenBSD 2.2 to `ui
 and arc completes 13/13 harness steps to root, byte-for-byte the committed boot
 behaviour. The counters are invisible until pulled.
 
-**Phases B and C follow in-round:** B = `mips_fold_probe.py` (3max LE + testmips BE rows,
-free-running with the breakpoint on a non-arming instruction, fire == passes−1 under a
-breakpoint — read-ahead is disabled MACHINE-wide by any breakpoint, and folds install
-during read-ahead when none is set, so the no-breakpoint expectation is passes, per-row
-arithmetic never shared) plus the single-sub-arm mutant graded as an expectation vector;
-C = the reachability census on the committed OpenBSD 2.2 boots, whose zeros will be
-recorded as "unreached under the committed rigs" with `expected_zero_reason` tags — never
-as "dead": pmax structurally cannot reach `b_samepage_daddiu` (64-bit) nor arc the
-EXC3K-only cache fold, and the `netbsd_*`/`linux_*` names encode guests the committed
-rigs do not run.
+**Phase B, measured.** `regress/mips_fold_probe.py` (new) drives real fold loops
+free-running — never `step`, which disables combining — with the breakpoint on a
+NON-ARMING instruction after each sequence, and grades the counters as EQUALITIES derived
+per row from the read-ahead rule (a breakpoint anywhere disables read-ahead MACHINE-wide,
+so fire == passes−1; with none set, folds install during read-ahead and fire == passes).
+**All nine checks green at their derived values**: bne_samepage_nop, lui_ori, multi_lw_2
+and memset rows across 3max (R3000/MODE32/LE) and testmips (5KE/64-bit/BE, plus
+`-C R3000` for the 32-bit-BE cell) — the multi rows being the FIRST big-endian MIPS guest
+executions in this harness, with two value rows (`0x0badcafe`, sign-extended
+`0xffffffffdeadbeef`) witnessing the `_be` generated body's BE32 assembly, not just its
+selection; memset (1,1) confirming fire counts handler COMPLETIONS. One probe defect was
+found and fixed by measurement en route: the debugger's `print <reg>` answers a BARE
+`0x%x` line with no name echo (the `name = value` form is the assignment echo) — the
+probe's docstring and parse both corrected, the bare-hex idiom the ARM probes already
+use. **The non-vacuity mutant**: deleting the bne_samepage_nop replacement sub-arm
+(including its install++ — an orphaned increment would lie) flips exactly that fold to
+(0,0) and reddens its two rows while every sibling sharing the same COMBINE dispatcher
+stays green (M388MUT_PASS) — the per-variant attribution `-J` cannot give. **Gate 16**
+(`gate_mips_folds.sh`, wired into run.sh) names all nine rows individually plus the
+parse-liveness control and the 9/9 total: PASS, 11 checks.
+
+**Phase C re-scoped to its own follow-up** (the fallback this round's design
+pre-declared): the census must ctrl-C the out-of-repo pty boot harnesses at the login
+prompt, a new scripting surface with real flake risk that does not belong on this
+commit's green path. Its zeros, when taken, will be recorded as "unreached under the
+committed rigs" with `expected_zero_reason` tags — never as "dead": pmax structurally
+cannot reach `b_samepage_daddiu` (64-bit) nor arc the EXC3K-only cache fold, the
+`netbsd_*`/`linux_*` names encode guests the committed rigs do not run, and
+install-without-fire is the normal state for `multi_*_2..4`.
 
 ## One-hundred-and-twenty-seventh round (#387) — #386's pass-2: three wrong swp forms passed all 58 rows, and eight records read wrong
 

@@ -3340,7 +3340,19 @@ corruption without a clear host-OOB path.
 > START n=34 / END n=0 nonzero=0 over piped stdin (no pty needed without a guest
 > console — phase B reuses this). No-perturbation oracle: one clean serial gate 3 run
 > on the instrumented build = mips-rigs PASS 6 checks zero FAIL (pmax uid=0, arc 13/13
-> steps to root — unchanged boots; the counters are invisible until pulled). Phases B
-> (probe + single-sub-arm mutant with an expectation vector) and C (census; zeros filed
-> as "unreached under the committed rigs" with expected_zero_reason tags, NEVER "dead")
-> follow in-round.
+> steps to root — unchanged boots; the counters are invisible until pulled).
+>
+> **Phase B MEASURED (same day):** mips_fold_probe.py 9/9 at derived equalities —
+> bne_samepage_nop/lui_ori/multi_lw_2/memset across 3max(32LE) + testmips(64BE) +
+> testmips -C R3000(32BE); the multi rows are the FIRST BE MIPS guest executions in
+> the harness, with two value rows witnessing the _be body's BE32 assembly + sign
+> extension; memset (1,1) = completions. One measured probe fix en route: `print`
+> answers a BARE 0x%x line (no name echo — that form is the assignment echo).
+> Mutant M388MUT_PASS: the deleted bne_samepage_nop sub-arm (incl. its install++)
+> reads (0,0) with its two rows red and every sibling green — per-variant
+> attribution -J cannot give. Gate 16 (gate_mips_folds.sh, wired into run.sh):
+> PASS 11 checks. **Phase C (census) re-scoped to its own follow-up task** per the
+> design's pre-declared fallback (ctrl-C-ing the out-of-repo pty boot harnesses is
+> a new flake surface that does not belong on this commit's green path); its zeros
+> will be filed "unreached under the committed rigs" + expected_zero_reason, NEVER
+> "dead"; install-without-fire stays the normal state for multi_*_2..4.
