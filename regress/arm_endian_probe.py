@@ -305,13 +305,24 @@ def run(machine, prog, seeds, regs):
                 return True
         return False
 
+    #  #391: send() used to DISCARD wait_from()'s verdict and return the slice
+    #  regardless.  That is a FALSE PASS in the one place this probe says it
+    #  must never allow one (see the #379 comment below): on a wait TIMEOUT the
+    #  slice is EMPTY, `"FAILED" in ""` is False, so a `put` that never landed
+    #  scored as landed, PUT_STATUS printed OK, and gate 14's "endian puts all
+    #  landed" check asserted OK on evidence it never received.  The timeout is
+    #  now recorded out-of-band, so send()'s return contract is unchanged and
+    #  every existing caller keeps working.
+    timeouts = []
+
     def send(sx):
         mark = len(buf)
         b = (sx + "\n").encode("latin1")
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        wait_from(mark)
+        if not wait_from(mark):
+            timeouts.append(sx)
         return buf[mark:]
 
     if not wait_from(0, 60):
@@ -326,13 +337,21 @@ def run(machine, prog, seeds, regs):
     #  a silently failing put would leave it cold, route the transfer through
     #  bdt_*, and turn every DISC row architecturally green ON A BUGGY BUILD --
     #  a false pass, the one direction a control must never allow.
+    #  #391: a put is "landed" only if BOTH hold -- the debugger did not echo
+    #  FAILED, AND the command actually completed.  Checking only the echo
+    #  meant a timed-out put, whose slice is empty, scored as success.  A put
+    #  that never completed is exactly the silently-cold-page case the comment
+    #  above says must never pass.
     put_ok = True
+    n_timeouts_before = len(timeouts)
     for s in seeds:
         if "FAILED" in send(s):
             put_ok = False
     for i, iw in enumerate(prog):
         if "FAILED" in send("put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)):
             put_ok = False
+    if len(timeouts) != n_timeouts_before:
+        put_ok = False
     send("pc=0x%x" % CODE)
     send("step %d" % (len(prog) - 1))    # straight-line, ends at the spin
 

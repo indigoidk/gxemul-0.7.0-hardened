@@ -4192,6 +4192,69 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-first round (#391) — a control that passed on evidence it never received
+
+`arm_endian_probe.py`'s `send()` computed a readiness verdict and **discarded it**, returning
+the output slice regardless. On a wait timeout that slice is EMPTY, so the caller's
+`"FAILED" in send(...)` test was false, `put_ok` stayed true, `PUT_STATUS=OK` printed, and
+gate 14's `endian puts all landed (379)` check asserted OK. The probe's own comment sits
+eight lines below the defect and states exactly why that must never happen: a silently
+failing `put w` leaves the page cold, routes the transfer through `bdt_*`, and **turns every
+DISC row architecturally green ON A BUGGY BUILD** — "a false pass, the one direction a
+control must never allow." The code contradicted its own stated intent.
+
+The fix keeps `send()`'s return contract intact so every existing caller is unaffected: a
+timed-out command is recorded out-of-band in a `timeouts` list, and the put loop fails
+`put_ok` if that list grew. A put now counts as landed only if the debugger did not echo
+FAILED **and** the command actually completed.
+
+**Measured on both sides, which is the whole argument.** With one `put`'s response forced
+never to arrive: the fixed probe reports `PUT_STATUS=FAIL`; the pre-#391 probe, given the
+identical fault, reports `PUT_STATUS=OK`. Showing the fix fails proves little on its own —
+showing that the old code PASSED on the same input is what demonstrates the defect was real
+and silent. Unmutated: 102/102 rows, every control OK. Gate 14: PASS, 352 checks, 0 FAIL,
+0 SKIP.
+
+**This round's own brief was wrong on all three of its headline claims, and that is worth
+more than the fix.** It asserted a deterministic wrong-value defect across six probes. A
+compile-and-measure seat could not confirm any of it:
+
+- **Scope**: ONE probe, not six. Only `arm_flags_probe.py` still has the whole-buffer
+  readiness predicate. The other six already use the anchored model — and `arm_idle`'s own
+  comment records that as fixed thirty rounds ago. The brief proposed generalising something
+  already generalised.
+- **Mechanism**: a load-dependent race, not determinism. GXemul always echoes the command,
+  and the echo flushes atomically at the newline BEFORE any reply arrives and does not end
+  in the prompt. The stale prompt is only at the tail if the echo is delayed past the 0.4 s
+  select — a >400 ms stall, the same load class that already false-FAILs `gate_ab`. The
+  brief's reproduction modelled a stream with no command echo, which GXemul cannot emit.
+- **Consequence**: truncation, not misattribution. Every consumer takes its mark immediately
+  before sending and parses only from there, so an early return makes the slice SHORT, never
+  SHIFTED. The failure is `None` → DEAD row → FAIL: noisy but FAIL-SAFE. The item had been
+  ranked first on a silent-wrong-value claim that is not reachable in the committed code.
+
+The method error is specific and worth naming, because it is the second instance in one
+session: **the trigger was reproduced and the consequence was assumed.** Proving a predicate
+misbehaves says nothing about what the consumer does with the result — that needs its own
+measurement, and here it would have shown a fail-safe truncation rather than the silent
+corruption claimed. The earlier instance was #390's LDRD reversal, where "the mutant did not
+redden the row" became "the defect is not there". Same shape: one inference past the
+evidence.
+
+**Residuals, none of them touched here and all now specified.** Anchoring has NO detector —
+reverting it passes on a healthy host, so it needs a stall-injection mutant. A bare `wait(15)`
+survives outside `send()`. Two `wait_from` results are discarded after `^C`, where three
+sibling probes check and kill. Byte-offset anchoring does NOT close the late-`^C`-prompt
+hole; requiring the COMMAND ECHO in the slice before accepting a prompt does, is free, and is
+strictly stronger than either predicate. `READS_RETRIED == 0` must NOT be asserted — retries
+are triggered by host slowness, so that would make the oracle a proxy for load, which is the
+`gate_ab` mistake in a new place; fail on reads that never answered instead. And "parse the
+last complete response" is wrong for `tlbdump`, whose underlying counter is monotonic: two
+attempts can legitimately differ and "last" silently takes the larger. Filed, with the
+non-ARM readiness sites — 14 of them matching a bare `>` against five CPU families that print
+a `>`-terminated line first in their register dump — recorded as HIGHER severity than this
+round, because that one needs no unusual host conditions at all.
+
 ## One-hundred-and-thirtieth round (#390) — one scratch word, two roles: a PC-relative store's base was four bytes high
 
 `A__NAME_PC` (`cpu_arm_instr_loadstore.c`) handles every load/store whose `Rn` or `Rd` is

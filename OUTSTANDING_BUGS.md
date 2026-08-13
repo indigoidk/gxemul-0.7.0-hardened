@@ -3324,6 +3324,60 @@ corruption without a clear host-OOB path.
 > seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
 > mode distinct from quota death).
 
+> ## 2026-08-13 — #391 (round 131): a control passed on evidence it never received
+>
+> arm_endian_probe.py's send() computed wait_from()'s verdict and DISCARDED it,
+> returning the slice regardless. On a TIMEOUT that slice is EMPTY, so
+> `"FAILED" in send(...)` was False, put_ok stayed True, PUT_STATUS printed OK,
+> and gate 14's "endian puts all landed (379)" asserted OK. The probe's own
+> comment eight lines below says why that is fatal: a silently failing `put w`
+> leaves the page cold, routes through bdt_*, and turns every DISC row
+> architecturally green ON A BUGGY BUILD — "a false pass, the one direction a
+> control must never allow." The code contradicted its own stated intent.
+> FIX: timed-out commands are recorded out-of-band in a `timeouts` list, so
+> send()'s return contract is unchanged and every caller keeps working; the put
+> loop fails put_ok if the list grew. A put is landed only if the debugger did
+> not echo FAILED AND the command completed.
+> MEASURED BOTH SIDES: with one put's response forced never to arrive, the
+> fixed probe reports PUT_STATUS=FAIL and the PRE-#391 probe reports
+> PUT_STATUS=OK. The second half is the one that proves the defect was real and
+> silent. Unmutated 102/102, all controls OK; gate 14 PASS 352, 0 FAIL 0 SKIP.
+>
+> *** THE ROUND'S OWN BRIEF WAS WRONG ON ALL THREE HEADLINE CLAIMS. *** It
+> asserted a deterministic wrong-value defect across six probes; a
+> compile-and-measure seat confirmed none of it. SCOPE: one probe, not six —
+> the other six already use the anchored model and arm_idle's comment records
+> it fixed in round 100. MECHANISM: a load-dependent race, not determinism —
+> GXemul always echoes the command and the echo flushes atomically BEFORE any
+> reply, so the stale prompt is only at the tail after a >400 ms stall, the
+> same load class that false-FAILs gate_ab; the brief's reproduction modelled a
+> stream GXemul cannot emit. CONSEQUENCE: truncation, not misattribution — no
+> consumer spans two sends, so the slice is SHORT not SHIFTED and the failure
+> is None -> DEAD row -> FAIL, i.e. FAIL-SAFE. The item had been ranked #1 on a
+> silent-wrong-value claim that is not reachable in the committed code.
+> METHOD LESSON, second instance in one session: THE TRIGGER WAS REPRODUCED AND
+> THE CONSEQUENCE WAS ASSUMED. Proving a predicate misbehaves says nothing
+> about what the consumer does with it. The first instance was #390's LDRD
+> reversal ("the mutant did not redden the row" -> "the defect is not there").
+> Same shape: one inference past the evidence.
+>
+> RESIDUALS, all specified, none touched: anchoring has NO detector (reverting
+> it passes on a healthy host — needs a stall-injection mutant); a bare
+> wait(15) survives outside send(); two wait_from results are discarded after
+> ^C where three sibling probes check and kill; byte-offset anchoring does NOT
+> close the late-^C-prompt hole — requiring the COMMAND ECHO in the slice
+> before accepting a prompt does, is free, and is strictly stronger;
+> READS_RETRIED must NOT be asserted zero (retries are triggered by host
+> slowness, so that makes the oracle a proxy for load — the gate_ab mistake in
+> a new place) — fail on reads that NEVER answered instead; and "parse the last
+> complete response" is wrong for tlbdump, whose counter is MONOTONIC, so two
+> attempts can legitimately differ and "last" silently takes the larger.
+> The 14 non-ARM readiness sites matching a bare '>' are recorded as HIGHER
+> severity than this round: five CPU families print a '>'-terminated
+> " no symbol " line FIRST in the register dump, line-buffered on a pty, so a
+> reader waking between lines returns with the registers UNREAD — and that
+> needs no unusual host conditions at all.
+>
 > ## 2026-08-13 — #390 (round 130): one scratch word, two roles — a PC-relative store's base was four bytes high
 >
 > A__NAME_PC splits on #ifdef A__L (instruction CLASS) while tmp_pc's two uses are
