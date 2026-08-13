@@ -140,9 +140,11 @@ for name, pred, want_saw in ARMS:
 #  cannot help -- the stale prompt is genuinely after the mark. Only requiring
 #  the new command's own echo first can tell the two prompts apart, because the
 #  debugger emits the echo only when it starts consuming that command
-#  (debugger.c:597 -- the per-character printf; :589 is the read loop's head.
-#  The pass-2c commit message CLAIMED this correction and did not make it; a seat
-#  caught the claim outliving the edit.)
+#  (debugger.c:597 -- the per-character printf. The read loop's head is :389;
+#  :589 is the visible-character branch test, NOT the loop head as this comment
+#  claimed when it was "corrected". Three passes have now cited this one echo
+#  four different ways -- :589, :594, :597, and a wrong gloss on :589 -- which is
+#  why the rule is to read the line before citing it.)
 LATE = PROMPT + NEW_ECHO + NEW_REPLY + PROMPT
 
 
