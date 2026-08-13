@@ -604,10 +604,12 @@ done
 # load's DATA is UNPREDICTABLE (A4.1.28) while its writeback stays defined
 # (A5.3.6), so the row asserts the BASE only and pins the pseudocode model, not
 # a silicon mandate. Every other DISC row is a word form, i.e. mandated space.
-# There is no LDRD/STRD row on purpose: A2.8 makes an unaligned doubleword
-# access UNPREDICTABLE prior to ARMv6, so every base that would exercise the
-# ~7 mask makes the instruction unspecified -- covered by the fix, not honestly
-# assertable.
+# There is no *unaligned* LDRD/STRD row on purpose: A2.8 makes an unaligned
+# doubleword access UNPREDICTABLE prior to ARMv6, so every base that would
+# exercise the ~7 mask makes the instruction unspecified -- covered by the
+# fix, not honestly assertable. [#389: ALIGNED LDRD/STRD byte-order rows now
+# live in the endian section below -- this note is scoped to the writeback/
+# unaligned axis only.]
 #
 # #364: the sentence that used to stand here -- "no row pins the unaligned
 # loaded DATA ... such a row would be inverted by the round that fixes
@@ -876,7 +878,12 @@ check "endian puts all landed (379)" "${eputs:-missing}" "OK"
 
 eres=$(grep -o "ENDIAN_RESULT=[0-9]*/[0-9]*" "$ENDLOG" | tail -1 | cut -d= -f2)
 egot=${eres%/*}; ewant=${eres#*/}
-check "endian rows run"     "${ewant:-missing}" 70
+#  #389's liveness pin: the LE LDRD/STRD rows are fix-state-independent (LE
+#  was always correct) and read the sentinel 0 if the instructions are dead.
+ectrld=$(grep -o "ENDIAN_CONTROL_D=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
+check "endian control: ldrd/strd ran (389)" "${ectrld:-missing}" "OK"
+
+check "endian rows run"     "${ewant:-missing}" 90
 check "endian rows correct" "${egot:-missing}"  "$ewant"
 
 # The BE discriminators named individually, so one reverting cannot hide
@@ -914,7 +921,10 @@ for v in "be cold word" "be cold byte0" "be cold byte1" \
          "swp be un2 r2" "swp be un2 b0" "swp be un2 b1" \
          "swp be un2 b2" "swp be un2 b3" "swp be un2 sent" \
          "swp le un2 r2" "swp le un2 b0" "swp le un2 b1" \
-         "swp le un2 b2" "swp le un2 b3" "swp le un2 sent"; do
+         "swp le un2 b2" "swp le un2 b3" "swp le un2 sent" \
+         "ldrd be r4" "ldrd be r5" \
+         "strd be b0" "strd be b1" "strd be b2" "strd be b3" \
+         "strd be b4" "strd be b5" "strd be b6" "strd be b7"; do
     n=$(count "$ENDLOG" "^$v  *DISC .*ok$")
     check "  endian row: $v" "$n" 1
 done

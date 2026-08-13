@@ -4192,6 +4192,86 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-ninth round (#389) — big-endian LDRD/STRD: two 32-bit words, not one 64-bit swap
+
+The template's big-endian LDRD arm was three defects deep (`cpu_arm_instr_loadstore.c`,
+the `A__LDRD`/`A__STRD` instantiations): **E1**, a word-pair inversion on BOTH sides — Rd
+was sourced from the UPPER word where the architecture pairs Rd with the LOWER address
+(A4.1.26: `Rd = Memory[address,4]; R(d+1) = Memory[address+4,4]`; the pair-order sentence
+names "the address of the lower of the two words"); **E2**, a carry-corrupting
+`data[1] << 6` term — wrong index AND wrong shift, and because the terms are `+`-summed
+the bits[7:6] overlap CARRIES: the buggy Rd for memory `11 22 33 44 55 66 77 88` is
+`0x55660908`, not even a byte permutation; **E3**, the R(d+1) BE branch was a verbatim
+copy of the LE expression. STRD's only error was E1's store-side mirror (per-word bytes
+right, the pair swapped). The LE arms were correct on both sides — the LE rows are true
+invariance controls. Reachability: the decoder dispatches LDRD/STRD with NO version gate
+(both rigs are ARMv4 SA1110 where the instructions are architecturally absent — the
+emulator executes them regardless, recorded as-is), and both always take the general path
+(the fast-path chicken-out is unconditional for `A__LDRD||A__STRD`).
+
+**The fix**: two explicit per-word assemblies on each side, mirroring the word arm —
+`(uint32_t)` casts on every shifted term of BOTH branches of the new statements (byte
+operands promote to signed int; `0x88 << 24` is shift UB — the casts change definedness
+only, declared detector-free by construction). The STRD arm leaves the shared descending
+byte walk entirely (`#ifndef A__STRD` around the walk with its `int i` declared inside —
+the walk's shared index IS what produced E1, and a dead `|| defined(A__STRD)` disjunct
+left behind would be the #372 defect shape, so the `:293` guard is reduced to
+`#ifndef A__H` in the same edit). Byte/halfword/word stores keep the walk byte-identical.
+The `~7` alignment mask and the #362-rotate exclusion are untouched and correct (A2.8:
+non-doubleword-aligned LDRD/STRD is UNPREDICTABLE pre-v6; LDRD's pseudocode has no
+Rotate_Right term). The Time-order note LICENSES the emulator's single 8-byte access —
+what the architecture forbids is the 64-bit byte REVERSAL, and an aligned 8-byte access
+can never straddle a page.
+
+**Measured, in order.** RED on the committed build: `ldrd r4,[r3]` over seeded
+`11 22 33 44 55 66 77 88` on `-E barearm` read back **r4=0x55660908, r5=0x44332211** —
+the exact predicted buggy values including the carry, which simultaneously proved the
+mechanism, the encodings (`0xE1C340D0`/`0xE1C340F0`; a pass-1 seat's claim that these
+words are misencoded — an "Rt2 field", bit 22 inverted, L=1 — was refuted by mechanism
+first: mode-3 has no Rt2 field, bit 22 = 1 IS the immediate form, LDRD sits in the L=0
+half; the RED values settled it empirically). Blast radius proven by `gcc -E` diff of the
+`p1_u1_w0` instantiation flavor against the old and new template: exactly FOUR function
+bodies changed out of 620 — the LDRD imm/reg and STRD imm/reg instantiations (named
+`*_signed_byte_*`/`*_signed_halfword_*` by the generator's raw-field scheme) — nothing
+else, closing the no-halfword-store-row exposure. Both trees rebuilt at zero warnings
+(the walk's `int i` scoping kept `gate_build`'s warnings==0 intact). GREEN: **90/90**
+endian rows — the BE LDRD pair now equals the already-gated LDM rows' values on identical
+memory (the internal-consistency oracle), BE STRD lays `11 22 33 44 55 66 77 88`, all 20
+new rows (10 DISC / 10 CTRL) at their derived constants, `ENDIAN_CONTROL_D=OK` (the LE
+rows double as fix-state-independent liveness pins — a dead LDRD reads the MOV sentinels,
+a dead STRD ladder reads unseeded zero).
+
+**Mutants**: eight executed, each anchored on the NEW code and each built and probed in
+its own `/tmp` copy of the build tree (the shared trees are never mutated, so no
+`.MUTANT` window exists); **all eight CAUGHT, every one with its sibling arms still
+green** — M1 restores the original carry-corrupting `data[1] << 6` line (89/90, only the
+BE r4 row red because E3 is not restored with it), M2 is the plausible HALF-fix: it swaps
+the two correctly-assembled BE words, i.e. E2 and E3 corrected but **E1's pair inversion
+left standing** — the exact shape of a fix that notices the carry bug and the copy-paste
+but not the pairing (88/90), M6 uses the BE expression on both ternary branches so the LE
+side breaks instead (89/90), M7 drops the `+1` on the pair write so both halves land on Rd
+(86/90 — four rows: the r5 rows of both byte orders keep their sentinel and both r4 rows
+take the upper word), M8/M9/M11 are the three distinct STRD-BE corruptions the fix must
+exclude — pair inversion, per-word byte reversal, and the full 8-byte reversal (82/90
+each), and M12 is an adjacent-index transcription slip inside the NEW LE store arm
+(88/90, red on b1/b2 — the LE arm is rewritten code, so it needs its own mutant). M10
+(`~7` → `~3`) remains the DECLARED survivor recorded at OUTSTANDING_BUGS.md:2508-2514:
+under the aligned bases the #355 rule requires, the two masks coincide, so no legal row
+can separate them.
+
+**Gate 14** (`gate_arm.sh`), one clean serial run: **PASS, 340 checks, zero FAIL and zero
+SKIP** — the committed 329 plus the ten named discriminator rows plus the
+`endian control: ldrd/strd ran (389)` liveness check, with `endian rows run` reading 90.
+Each of the ten new names matched exactly one row (`1`, not `2` and not `0`), so neither
+half of the padded-column pattern trap is in play.
+
+**Residuals**: the `A__NAME_PC` family (Rn==PC takes the store branch's pc+12; Rd==PC
+pair-writes `tmp_pc`'s neighbour `tmp_branch` — THUMB state clobbered by a data access;
+all UNPREDICTABLE inputs) consolidated into task #68 with the #312 latitude rule
+attached. The two committed "NO LDRD/STRD ROW" comments narrowed to their actual
+unaligned/writeback scope (both files now cross-reference the new aligned rows — the
+probe already carried a scar from exactly this blanket-denial mistake).
+
 ## One-hundred-and-twenty-eighth round (#388, phase A) — the MIPS folds get their first witness: 34 variants, none of which any instrument could see fire
 
 The nine MIPS COMBINE sites install 34 fold-handler variants (18 hand-written — five of

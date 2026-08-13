@@ -152,13 +152,17 @@ is labelled DISC-M ("model") for exactly that reason: it pins the pseudocode
 model of A5.3.6, not a silicon mandate, and it asserts only the BASE -- an
 unaligned halfword load's DATA is UNPREDICTABLE and must never be asserted.
 
-NO LDRD/STRD ROW, overruling three review seats: A2.8 makes a doubleword access
-UNPREDICTABLE prior to ARMv6 whenever the address is not doubleword-aligned, so
-every base that would exercise the `~7` mask makes the instruction unspecified.
-The general-path fix covers LDRD/STRD (the fast path chickens out to it at
-:226-228, masking with `datalen - 1` == 7) but that coverage cannot honestly be
-gated. #355 already taught this project not to assert on encodings the
-architecture declines to define.
+NO *UNALIGNED/WRITEBACK* LDRD/STRD ROW here, overruling three review seats:
+A2.8 makes a doubleword access UNPREDICTABLE prior to ARMv6 whenever the
+address is not doubleword-aligned, so every base that would exercise the `~7`
+mask makes the instruction unspecified. The general-path fix covers LDRD/STRD
+(the fast path chickens out to it unconditionally, cpu_arm_instr_loadstore.c
+:338-340, masking with `datalen - 1` == 7) but that coverage cannot honestly
+be gated. #355 already taught this project not to assert on encodings the
+architecture declines to define. [#389: ALIGNED LDRD/STRD byte-order rows now
+exist in arm_endian_probe.py -- this note is scoped to the unaligned/writeback
+axis only; do not read it as a blanket denial (this section once carried
+exactly that mistake, see below).]
 
 UNALIGNED-LOAD-DATA ROWS -- #364: THIS SECTION USED TO SAY THERE WERE NONE, and
 it was written when that was true. It argued that a PIN on the unrotated value

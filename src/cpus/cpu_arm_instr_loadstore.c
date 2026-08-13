@@ -27,7 +27,10 @@
  *
  *  TODO:  Many things...
  *
- *	o)  Big-endian Double-Word loads/stores are likely INCORRECT.
+ *	o)  [RESOLVED as #389: big-endian LDRD/STRD were three defects deep --
+ *	    a word-pair inversion on both sides, a carry-corrupting data[1]<<6
+ *	    term, and a copy-pasted LE branch. Both sides now assemble TWO
+ *	    independent 32-bit words per DDI 0100I A4.1.26/A4.1.102.]
  *
  *	o)  "Base Updated Abort Model", which updates the base register
  *	    even if the memory access failed.
@@ -254,15 +257,28 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 		reg(ic->arg[2]) = (reg(ic->arg[2]) >> rot_sh) |
 		    (reg(ic->arg[2]) << (32 - rot_sh));
 #else
-	// TODO: Double-check if this is correct
-	reg(ic->arg[2]) =
+	/*  #389: LDRD is TWO independent 32-bit word loads, never a 64-bit
+	    swap (DDI 0100I A4.1.26: Rd = Memory[address,4]; R(d+1) =
+	    Memory[address+4,4] -- Rd pairs with the LOWER address, and each
+	    word assembles per byte order like any other word access). The BE
+	    arm here previously sourced Rd from the UPPER word with a
+	    carry-corrupting data[1]<<6 term, and R(d+1) from a verbatim copy
+	    of the LE expression. (uint32_t) casts on every shifted term of
+	    BOTH branches: data[i] promotes to signed int, and 0x88<<24 is
+	    shift UB. Oracle: post-fix ldrd equals the already-gated LDM rows
+	    on identical memory.  */
+	reg(ic->arg[2]) =                          /*  Rd <- lower word  */
 		cpu->byte_order == EMUL_LITTLE_ENDIAN
-		? data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24)
-		: data[7] + (data[1] << 6) + (data[5] << 16) + (data[4] << 24);
-	reg(((uint32_t *)ic->arg[2]) + 1) =
+		? (uint32_t)data[0] + ((uint32_t)data[1] << 8)
+		    + ((uint32_t)data[2] << 16) + ((uint32_t)data[3] << 24)
+		: (uint32_t)data[3] + ((uint32_t)data[2] << 8)
+		    + ((uint32_t)data[1] << 16) + ((uint32_t)data[0] << 24);
+	reg(((uint32_t *)ic->arg[2]) + 1) =        /*  R(d+1) <- higher  */
 		cpu->byte_order == EMUL_LITTLE_ENDIAN
-		? data[4] + (data[5] << 8) + (data[6] << 16) + (data[7] << 24)
-		: data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24);
+		? (uint32_t)data[4] + ((uint32_t)data[5] << 8)
+		    + ((uint32_t)data[6] << 16) + ((uint32_t)data[7] << 24)
+		: (uint32_t)data[7] + ((uint32_t)data[6] << 8)
+		    + ((uint32_t)data[5] << 16) + ((uint32_t)data[4] << 24);
 #endif
 #endif
 #endif
@@ -284,30 +300,50 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 	 *  -> all four bytes emitted, MSB at the lowest address in BE per DDI 0100I
 	 *  Table A2-2, p. A2-32) and matches the fast path and X(strex).
 	 */
+#ifndef A__STRD
 	int i = cpu->byte_order == EMUL_LITTLE_ENDIAN ? 0 : datalen - 1;
 	data[i] = reg(ic->arg[2]);
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
 #ifndef A__B
 	data[i] = reg(ic->arg[2]) >> 8;
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-#if !defined(A__H) || defined(A__STRD)
+#ifndef A__H
 	data[i] = reg(ic->arg[2]) >> 16;
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
 	data[i] = reg(ic->arg[2]) >> 24;
 	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-#ifdef A__STRD
-	// TODO: Double-check if this is correct
-	data[i] = reg(ic->arg[2] + 4);
-	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-	data[i] = reg(ic->arg[2] + 4) >> 8;
-	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-	data[i] = reg(ic->arg[2] + 4) >> 16;
-	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-	data[i] = reg(ic->arg[2] + 4) >> 24;
-	i += cpu->byte_order == EMUL_LITTLE_ENDIAN ? 1 : -1;
-#endif	/*  A__STRD  */
-#endif	/*  !A__H || A__STRD  */
+#endif	/*  !A__H  */
 #endif	/*  !A__B  */
+#else	/*  A__STRD:  */
+	/*  #389: STRD is TWO independent 32-bit word stores (A4.1.102:
+	    Memory[address,4] = Rd; Memory[address+4,4] = R(d+1)), each
+	    emitted per byte order like the word arm. The shared descending
+	    walk (kept above for byte/halfword/word, byte-identical) put Rd's
+	    bytes at addr+4 and R(d+1)'s at addr on BE -- per-word bytes
+	    right, the PAIR swapped. Two explicit assemblies, symmetric with
+	    the #389 LDRD fix; the walk's `|| defined(A__STRD)` disjunct is
+	    gone with it (a guard term that could never be true inside its
+	    own block is the #372 defect shape).  */
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+		data[0] = reg(ic->arg[2]);
+		data[1] = reg(ic->arg[2]) >> 8;
+		data[2] = reg(ic->arg[2]) >> 16;
+		data[3] = reg(ic->arg[2]) >> 24;
+		data[4] = reg(ic->arg[2] + 4);
+		data[5] = reg(ic->arg[2] + 4) >> 8;
+		data[6] = reg(ic->arg[2] + 4) >> 16;
+		data[7] = reg(ic->arg[2] + 4) >> 24;
+	} else {
+		data[3] = reg(ic->arg[2]);
+		data[2] = reg(ic->arg[2]) >> 8;
+		data[1] = reg(ic->arg[2]) >> 16;
+		data[0] = reg(ic->arg[2]) >> 24;
+		data[7] = reg(ic->arg[2] + 4);
+		data[6] = reg(ic->arg[2] + 4) >> 8;
+		data[5] = reg(ic->arg[2] + 4) >> 16;
+		data[4] = reg(ic->arg[2] + 4) >> 24;
+	}
+#endif	/*  A__STRD  */
 	/*  #372: the outer `#if !A__B && !A__H && HOST_LE` wrapper (and its dead
 	    A__STRD-only body) is gone; the byte walk above now serves the word
 	    store too. One `#endif` removed with it.  */

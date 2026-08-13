@@ -161,6 +161,36 @@ def swp_unal_seeds():
     return seed_bytes(COLD)[:4] + ["put b 0x%x, 0x99" % (COLD + 4)]
 
 
+#  #389: LDRD/STRD. Encodings verified by the round's RED reproduction (the
+#  committed build produced the exact predicted buggy values, impossible for
+#  a wrong or UNDEFINED word). The pair register is IMPLICIT R(d+1) -- mode-3
+#  has no Rt2 field; bit 22 = 1 is the IMMEDIATE form; LDRD sits in the L=0
+#  half of the extra-loads space (S/H distinguish it).
+LDRD_R4_R3 = 0xE1C340D0        # ldrd r4,[r3]  (loads r4 AND r5)
+STRD_R4_R3 = 0xE1C340F0        # strd r4,[r3]  (stores r4 AND r5)
+MOV_R4_0 = 0xE3A04000          # mov r4,#0  (dead-LDRD sentinel)
+MOV_R5_0 = 0xE3A05000          # mov r5,#0
+BUILD_R4 = [0xE3A04411,        # mov r4,#0x11000000
+            0xE3844822,        # orr r4,r4,#0x00220000
+            0xE3844C33,        # orr r4,r4,#0x00003300
+            0xE3844044]        # orr r4,r4,#0x44      -> r4 = 0x11223344
+BUILD_R5 = [0xE3A05455,        # mov r5,#0x55000000
+            0xE3855866,        # orr r5,r5,#0x00660000
+            0xE3855C77,        # orr r5,r5,#0x00007700
+            0xE3855088]        # orr r5,r5,#0x88      -> r5 = 0x55667788
+
+
+def ldrd_prog():
+    return [MOV_R4_0, MOV_R5_0, MOV_R3_COLD, LDRD_R4_R3, SPIN]
+
+
+def strd_prog():
+    #  The STRD page is fully UNSEEDED (no access of any kind -- unseeded RAM
+    #  is zero), so a dead STRD reads sentinel 0 through the ladder.
+    return (BUILD_R4 + BUILD_R5 + [MOV_R3_COLD, STRD_R4_R3]
+            + list(LDRB8_R3) + [SPIN])
+
+
 #  #387: the +2 groups seed P+5 explicitly (0xAA, disjoint from everything)
 #  so the buggy raw P+2..P+5 read has a defined fourth byte that does not
 #  lean on the unseeded-RAM-is-zero assumption.
@@ -393,6 +423,43 @@ GROUPS = [
         ("swp le un2 b3", "r6", 0x55, 0x77, "DISC"),
         ("swp le un2 sent", "r7", 0x99, 0x66, "DISC"),
     ]),
+    #  ---- #389 rows: LDRD/STRD were three defects deep on BE -- a word-pair
+    #  inversion on BOTH sides (Rd took the upper word; the architecture pairs
+    #  Rd with the LOWER address, A4.1.26/A4.1.102), a carry-corrupting
+    #  data[1]<<6 term (buggy Rd = 0x55660908, NOT a byte permutation), and a
+    #  verbatim-LE R(d+1) branch. Both always take the general path (the
+    #  chicken-out is unconditional for A__LDRD||A__STRD), so no warm/cold
+    #  split. The LE rows are true invariance controls (LE was correct).
+    #  Oracle: the ldrd arch values equal the committed LDM rows' on the same
+    #  bytes. buggy = the pre-#389 build, measured in the RED reproduction.
+    ("389 be ldrd", "barearm", ldrd_prog(), seed_bytes(COLD), [
+        ("ldrd be r4", "r4", 0x11223344, 0x55660908, "DISC"),
+        ("ldrd be r5", "r5", 0x55667788, 0x44332211, "DISC"),
+    ]),
+    ("389 le ldrd", "testarm", ldrd_prog(), seed_bytes(COLD), [
+        ("ldrd le r4", "r4", 0x44332211, 0x44332211, "CTRL"),
+        ("ldrd le r5", "r5", 0x88776655, 0x88776655, "CTRL"),
+    ]),
+    ("389 be strd", "barearm", strd_prog(), [], [
+        ("strd be b0", "r4", 0x11, 0x55, "DISC"),
+        ("strd be b1", "r5", 0x22, 0x66, "DISC"),
+        ("strd be b2", "r6", 0x33, 0x77, "DISC"),
+        ("strd be b3", "r7", 0x44, 0x88, "DISC"),
+        ("strd be b4", "r8", 0x55, 0x11, "DISC"),
+        ("strd be b5", "r9", 0x66, 0x22, "DISC"),
+        ("strd be b6", "sl", 0x77, 0x33, "DISC"),
+        ("strd be b7", "fp", 0x88, 0x44, "DISC"),
+    ]),
+    ("389 le strd", "testarm", strd_prog(), [], [
+        ("strd le b0", "r4", 0x44, 0x44, "CTRL"),
+        ("strd le b1", "r5", 0x33, 0x33, "CTRL"),
+        ("strd le b2", "r6", 0x22, 0x22, "CTRL"),
+        ("strd le b3", "r7", 0x11, 0x11, "CTRL"),
+        ("strd le b4", "r8", 0x88, 0x88, "CTRL"),
+        ("strd le b5", "r9", 0x77, 0x77, "CTRL"),
+        ("strd le b6", "sl", 0x66, 0x66, "CTRL"),
+        ("strd le b7", "fp", 0x55, 0x55, "CTRL"),
+    ]),
 ]
 
 print("=== #372 store + #378 LDM/STM: byte order must reach guest memory ===")
@@ -406,6 +473,7 @@ print("    #378 DISC rows are WARM (fast path was wrong) -- inverted polarity")
 #  field or non-firing LDM reads 0 / a sentinel instead.
 control = "FAIL"
 control378 = {}
+controlD = {}
 puts_ok = True
 ngot = ntot = 0
 for glabel, machine, prog, seeds, rows in GROUPS:
@@ -425,6 +493,11 @@ for glabel, machine, prog, seeds, rows in GROUPS:
             control = "OK"
         if name in ("be stm cold b0", "be ldm cold r1"):
             control378[name] = ok
+        #  #389 liveness pins: fix-state-independent LE rows whose DEAD value
+        #  is the sentinel 0 (MOV_R4_0 / the unseeded STRD page) -- nonzero
+        #  proves the instructions executed on the rig at all.
+        if name in ("ldrd le r4", "strd le b0"):
+            controlD[name] = (v != 0)
         print("%-20s %-4s %s=0x%08x want 0x%08x (buggy 0x%08x)  %s"
               % (name, kind, reg, v, arch, buggy, "ok" if ok else "FAIL"))
 
@@ -432,5 +505,8 @@ print("ENDIAN_CONTROL=%s" % control)
 print("ENDIAN_CONTROL378=%s"
       % ("OK" if control378.get("be stm cold b0")
          and control378.get("be ldm cold r1") else "FAIL"))
+print("ENDIAN_CONTROL_D=%s"
+      % ("OK" if controlD.get("ldrd le r4")
+         and controlD.get("strd le b0") else "FAIL"))
 print("PUT_STATUS=%s" % ("OK" if puts_ok else "FAIL"))
 print("ENDIAN_RESULT=%d/%d" % (ngot, ntot))

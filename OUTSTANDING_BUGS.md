@@ -3314,6 +3314,42 @@ corruption without a clear host-OOB path.
 > seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
 > mode distinct from quota death).
 
+> ## 2026-08-12 — #389 (round 129): big-endian LDRD/STRD — two 32-bit words, not one 64-bit swap
+>
+> Three defects in the template's BE LDRD arm (word-pair inversion BOTH sides — Rd
+> pairs with the LOWER address per A4.1.26; a carry-corrupting data[1]<<6 term —
+> buggy Rd = 0x55660908, not a byte permutation; a verbatim-LE R(d+1) branch) and
+> E1's mirror in STRD. LE was correct on both sides. Fixed with two explicit
+> per-word assemblies each side, casts on both branches of the new statements
+> (shift UB; detector-free by construction, declared), the STRD arm lifted out of
+> the shared descending walk (`int i` scoped inside #ifndef A__STRD; the :293
+> guard reduced to #ifndef A__H — a dead disjunct is the #372 shape).
+> MEASURED: RED on the committed build = r4 0x55660908 / r5 0x44332211 exactly
+> (mechanism + encoding proof in one run — a seat's misencoding claim was refuted
+> by mechanism then killed by these values); gcc -E blast radius = exactly the 4
+> LDRD/STRD instantiation bodies of 620 changed; zero build warnings; GREEN 90/90
+> with the BE ldrd pair equal to the gated LDM rows on identical memory (the
+> internal-consistency oracle) and ENDIAN_CONTROL_D liveness pins OK.
+> MUTANTS: eight executed (each in its own /tmp copy of the build tree, so no
+> .MUTANT window; each anchored on the NEW code), ALL EIGHT CAUGHT with their
+> sibling arms green — M1 the restored data[1]<<6 line (89/90; E3 not restored
+> with it, so only the BE r4 row reddens), M2 the plausible HALF-fix = E2+E3
+> corrected with E1's pair inversion LEFT STANDING (88/90), M6 the BE expression
+> on both ternary branches (89/90, LE side red), M7 the dropped +1 on the pair
+> write (86/90 — r5 keeps its sentinel in both orders AND both r4 rows take the
+> upper word), M8/M9/M11 the three STRD-BE corruptions — pair
+> inversion, per-word reversal, full 8-byte reversal (82/90 each), M12 an
+> adjacent-index slip in the NEW LE store arm (88/90, b1/b2 red). M10 (~7 -> ~3)
+> stays the DECLARED survivor per :2508-2514 — aligned bases make the masks
+> coincide, so no legal row separates them.
+> GATE 14: one clean serial run, PASS 340 checks, zero FAIL / zero SKIP (329
+> committed + 10 named DISC + the ldrd/strd liveness check; "endian rows run"
+> reads 90). Each new name matched EXACTLY ONE row, so neither half of the
+> padded-column trap applies.
+> Residuals: the A__NAME_PC family consolidated into task #68 (Rn==PC pc+12;
+> Rd==PC pair-writes tmp_branch — #312 latitude rule attached); the two
+> "NO LDRD/STRD ROW" comments narrowed to their unaligned/writeback scope.
+
 > ## 2026-08-12 — #388 phase A (round 128): the MIPS folds get their witness — 34 variants, counters, tlbdump schema
 >
 > Design converged from a seven-seat pass-1 that changed the brief materially: install
