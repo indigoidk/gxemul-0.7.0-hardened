@@ -37,19 +37,28 @@ if [ ! -f "$PMAX_KERNEL" ]; then gate_skip "no pmax kernel at $PMAX_KERNEL"; fi
 FLOG=$LOGDIR/gate_mips_folds.log
 python3 mips_fold_probe.py "$PMAX" "$PMAX_KERNEL" > "$FLOG" 2>&1 || true
 
+#  #388 pass-2 (four seats convergent): a probe that STARTED but produced no
+#  result line is a failure of the thing under test (crash, dead emulator,
+#  unwritable /tmp), not preflight -- it must FAIL, not skip (lib.sh's #371
+#  doctrine: skip = could-not-run-at-all; the binary/kernel checks above are
+#  the real preflight). A silent skip here would report
+#  REGRESS_PASS_WITH_GAPS while removing all fold coverage.
 if ! grep -q "MFOLDPROBE_RESULT=" "$FLOG"; then
     note "fold probe produced no result line; last lines follow"
     tail -5 "$FLOG" | sed 's/^/       /'
-    gate_skip "fold probe did not complete"
 fi
+check "fold probe completed (result line present)" \
+      "$(grep -q 'MFOLDPROBE_RESULT=' "$FLOG" && echo yes || echo no)" "yes"
 
 grep -E " ok$| FAIL$" "$FLOG" | sed 's/^/       /'
 
 #  Every row named individually (the %-24s column keeps two-space anchoring
 #  satisfiable; no name is a prefix of another).
-for v in "bne_nop_3max" "bne_nop_tm64" "lui_ori_3max" "mlw2_le_3max" \
-         "mlw2_be_tm64" "mlw2v0_be_tm64" "mlw2v1_be_tm64" "mlw2_be_tm32" \
-         "memset_3max"; do
+for v in "bne_nop_3max" "bne_nop_tm64" "lui_ori_3max" \
+         "mlw2_le_3max" "mlw2v0_le_3max" "mlw2v1_le_3max" \
+         "mlw2_be_tm64" "mlw2v0_be_tm64" "mlw2v1_be_tm64" \
+         "mlw2_be_tm32" "mlw2v0_be_tm32" "mlw2v1_be_tm32" \
+         "mlw2_dev_tm64" "memset_3max"; do
     n=$(count "$FLOG" "^$v  *.*ok$")
     check "  fold row: $v" "$n" 1
 done
@@ -58,6 +67,6 @@ fctrl=$(grep -o "MFOLDPROBE_CONTROL=[A-Z]*" "$FLOG" | tail -1 | cut -d= -f2)
 check "fold probe control (parse liveness)" "${fctrl:-missing}" "OK"
 
 fres=$(grep -o "MFOLDPROBE_RESULT=[0-9]*/[0-9]*" "$FLOG" | tail -1 | cut -d= -f2)
-check "fold rows correct" "${fres:-missing}" "9/9"
+check "fold rows correct" "${fres:-missing}" "14/14"
 
 gate_end

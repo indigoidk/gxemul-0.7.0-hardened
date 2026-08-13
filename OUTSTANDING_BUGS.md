@@ -3338,20 +3338,30 @@ corruption without a clear host-OOB path.
 > MFOLD_END schema (absent END = DEAD; END with nonzero=0 = live all-zero; counts catch
 > truncation) + flush. Measured: both trees build; testmips debugger smoke prints
 > START n=34 / END n=0 nonzero=0 over piped stdin (no pty needed without a guest
-> console — phase B reuses this). No-perturbation oracle: one clean serial gate 3 run
+> console — phase B reuses this). No-perturbation oracle: one clean serial gate 4
+> [#388 pass-2: was "gate 3" — run.sh is 1-based, gate 3 is selftest_mutation] run
 > on the instrumented build = mips-rigs PASS 6 checks zero FAIL (pmax uid=0, arc 13/13
 > steps to root — unchanged boots; the counters are invisible until pulled).
 >
 > **Phase B MEASURED (same day):** mips_fold_probe.py 9/9 at derived equalities —
 > bne_samepage_nop/lui_ori/multi_lw_2/memset across 3max(32LE) + testmips(64BE) +
-> testmips -C R3000(32BE); the multi rows are the FIRST BE MIPS guest executions in
+> testmips -C R3000(32BE); the RUN contains the first BE MIPS guest executions in
+> [#388 pass-2: bne_nop_tm64 precedes the multi rows — attribution corrected; the
+> first-ever claim itself verified by both re-derivation seats] —
 > the harness, with two value rows witnessing the _be body's BE32 assembly + sign
 > extension; memset (1,1) = completions. One measured probe fix en route: `print`
 > answers a BARE 0x%x line (no name echo — that form is the assignment echo).
 > Mutant M388MUT_PASS: the deleted bne_samepage_nop sub-arm (incl. its install++)
-> reads (0,0) with its two rows red and every sibling green — per-variant
-> attribution -J cannot give. Gate 16 (gate_mips_folds.sh, wired into run.sh):
-> PASS 11 checks. **Phase C (census) re-scoped to its own follow-up task** per the
+> reads (0,0) with its two rows red and every OTHER ROW green [#388 pass-2: the
+> "sibling" wording was false — the isolation shown is cross-SITE; and the deletion
+> also un-installs linux_pmax_idle via its ic[-5] requirement, a coupling recorded
+> for #69] — per-variant attribution -J cannot give. Gate 16 (gate_mips_folds.sh,
+> wired into run.sh): PASS 11 checks [pass-2: grown to 17 — the (1,0) device-page
+> bail-detector row (a fire bump hoisted above the generated bail measured RED at
+> (1,4)), in-loop poisons making all six value rows load-bearing (the stripped-
+> writes mutant measured all six red at the surviving poison), the MODE32 32-bit
+> print expectations measured, and the did-not-complete path now FAILs instead of
+> skipping]. **Phase C (census) re-scoped to its own follow-up task** per the
 > design's pre-declared fallback (ctrl-C-ing the out-of-repo pty boot harnesses is
 > a new flake surface that does not belong on this commit's green path); its zeros
 > will be filed "unreached under the committed rigs" + expected_zero_reason, NEVER

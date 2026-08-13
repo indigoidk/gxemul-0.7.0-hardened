@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#388 phase-B instrument: the MIPS fold-witness counters, on real guest loops.
+r"""#388 phase-B instrument: the MIPS fold-witness counters, on real guest loops.
 
 Each row seeds a tiny loop at the debugger of a FRESH emulator, sets ONE
 breakpoint on a non-arming instruction (a lui; lui never sets
@@ -9,7 +9,11 @@ cpu_dyntrans.c:1888 combination gate skips single_step, so a step-driven row
 would measure an emulator in which folds cannot install at all. A breakpoint
 instead disables only translation READ-AHEAD (cpu_dyntrans.c:1938 requires
 breakpoints.n == 0); the :1888 gate tests neither breakpoints.n nor the plain
-delay_slot flag (only in_crosspage_delayslot), so combining stays live and
+delay_slot flag (only in_crosspage_delayslot) -- though it DOES test
+single_step_breakpoint, which a breakpoint HIT sets transiently (#388 pass-2:
+an ignore-count breakpoint form would set it on every ignored hit and silently
+disable combining; these rows hit their anchor exactly once, at the end), so
+combining stays live and
 translation becomes lazy -- each instruction translates when first reached,
 including the arming instruction inside pass 1's delay-slot dispatch.
 
@@ -25,7 +29,8 @@ Rows (P=5 passes; every expectation derived, not observed):
                  bne t0,t1,loop / nop(0x00000000) / lui[bp].  t0=0,t1=5: the
                  bne executes 5x (4 taken + 1 final untaken).  Pass 1 = plain
                  bne_samepage; translating its delay-slot nop runs
-                 COMBINE(nop), whose last arm rewrites the bne slot
+                 COMBINE(nop), whose bne arm (4th of 5 in MODE32, 2nd of 3 in
+                 MODE64 -- the beq arm is last) rewrites the bne slot
                  (install=1); executions 2..5 dispatch the fold -> fire=4.
   bne_nop_tm64   same loop on testmips 5KE 64-bit BE: install=1 fire=4.
   lui_ori_3max   lui t2 / ori t2,t2 / addiu t0,t0,1 / bne t0,t1,loop /
@@ -35,13 +40,22 @@ Rows (P=5 passes; every expectation derived, not observed):
                  delay-slot filler is or t3,t3,t3 (rd!=0), NOT a nop: 'or'
                  sets no combination_check, so the bne stays un-folded and
                  the row witnesses lui_ori alone.
-  mlw2_le_3max   lw t2,0(t0) / lw t3,4(t0) / addiu t1,t1,1 / bne t1,t4,loop /
-                 or t5,t5,t5 / lui[bp].  COMBINE(lw)'s _2 arm at lw#2's
-                 translation (same handler, same base ptr, dest#1 != base)
-                 rewrites the lw#1 slot (install=1).  Pass 1's REAL loads warm
-                 host_load for the data page, so the generated body's single
-                 bail (delay_slot / page NULL / misalign / cross-page) never
-                 triggers on passes 2..5 -> fire=4.  multi_lw_2_le (pmax LE).
+  mlw2_le_3max   lui t2,0xdead / lui t3,0xdead / lw t2,0(t0) / lw t3,4(t0) /
+                 addiu t1,t1,1 / bne t1,t4,loop / or t5,t5,t5 / lui[bp].
+                 COMBINE(lw)'s _2 arm at lw#2's translation (same handler,
+                 same base ptr, dest#1 != base) rewrites the lw#1 slot
+                 (install=1).  The data page is warm before execution -- the
+                 seeding `put w` itself installs host_load AND host_store
+                 (#388 pass-2 correction: pass 1's loads warm nothing that
+                 put w has not already warmed) -- so the generated body's
+                 single bail never triggers on passes 2..5 -> fire=4.
+                 The in-loop POISONS (lui t2/t3,0xdead) make the value checks
+                 load-bearing: every pass clobbers t2/t3 before the loads, so
+                 the final values can only come from the LAST dispatch -- the
+                 folded body -- never survive from pass 1's real loads (#388
+                 pass-2: without them, a fold body that wrote nothing kept
+                 pass 1's correct values and the value rows stayed green).
+                 multi_lw_2_le (pmax LE), value rows on this row too.
   mlw2_be_tm64   same on testmips 5KE BE -> multi_lw_2_be, install=1 fire=4.
                  PLUS two value checks read via `print` (never dump on BE):
                  the final pass's loads went through the _be BODY, so
@@ -140,6 +154,18 @@ LW_T3_4_T0 = itype(0x23, 8, 11, 4)         # lw t3,4(t0)
 SW_ZR_M4_T0 = itype(0x2b, 8, 0, -4)        # sw zr,-4(t0)
 NOP = 0x00000000
 ANCHOR = itype(0x0f, 0, 15, 0)             # lui t7,0 -- the breakpoint anchor
+#  #388 pass-2: in-loop poisons (lui is non-arming) so the value checks can
+#  only be satisfied by the LAST dispatch's writes, and a longer backward
+#  branch for the grown loop.
+LUI_T2_P = itype(0x0f, 0, 10, 0xdead)      # lui t2,0xdead
+LUI_T3_P = itype(0x0f, 0, 11, 0xdead)      # lui t3,0xdead
+BNE_T1_T4_M6 = itype(0x05, 9, 12, -6)      # bne t1,t4,-6 (poisoned mlw2 loop)
+#  #388 pass-2: the bail-detector row's base -- the kseg1 view of the test
+#  machines' console device (DEV_CONS_ADDRESS 0x10000000). Device pages are
+#  NEVER inserted into host_load, so the generated fold bails on EVERY
+#  dispatch: (install, fire) == (1, 0). A fire bump hoisted above the bail
+#  reads (1, 4) and reddens the row.
+DEVBASE = 0xffffffffb0000000
 
 #  A drifting helper otherwise tests a different instruction silently.
 assert ADDIU_T0_1 == 0x25080001 and ADDIU_T0_4 == 0x25080004
@@ -150,6 +176,8 @@ assert LUI_T2 == 0x3c0a1234 and ORI_T2 == 0x354a5678
 assert LW_T2_0_T0 == 0x8d0a0000 and LW_T3_4_T0 == 0x8d0b0004
 assert SW_ZR_M4_T0 == 0xad00fffc and ANCHOR == 0x3c0f0000
 assert orsame(11) == 0x016b5825 and orsame(13) == 0x01ad6825
+assert LUI_T2_P == 0x3c0adead and LUI_T3_P == 0x3c0bdead
+assert BNE_T1_T4_M6 == 0x152cfffa
 
 #  Name tables mirrored from cpu_mips.c (order irrelevant here; membership only).
 FOLD_NAMES = frozenset((
@@ -354,7 +382,8 @@ def stub_path():
 #  Loop bodies (memory order; [bp] = breakpoint anchor, never executes):
 W_BNE_NOP = [ADDIU_T0_1, BNE_T0_T1_M2, NOP, ANCHOR]
 W_LUI_ORI = [LUI_T2, ORI_T2, ADDIU_T0_1, BNE_T0_T1_M4, orsame(11), ANCHOR]
-W_MLW2 = [LW_T2_0_T0, LW_T3_4_T0, ADDIU_T1_1, BNE_T1_T4_M4, orsame(13), ANCHOR]
+W_MLW2 = [LUI_T2_P, LUI_T3_P, LW_T2_0_T0, LW_T3_4_T0, ADDIU_T1_1,
+          BNE_T1_T4_M6, orsame(13), ANCHOR]
 W_MEMSET = [ADDIU_T0_4, BNE_T1_T0_M2, SW_ZR_M4_T0, ANCHOR]
 
 M3MAX = ["-e", "3max", "-M", "64", PMAX_KERNEL]     # the committed 3max form
@@ -378,12 +407,19 @@ def rows(stub):
          cnt_regs, "bne_samepage_nop", (1, PASSES - 1), []),
         ("lui_ori_3max", M3MAX, 150, CODE3MAX, W_LUI_ORI, 0x14, [],
          cnt_regs, "lui_ori", (1, PASSES - 1), []),
-        ("mlw2_le_3max", M3MAX, 150, CODE3MAX, W_MLW2, 0x14, lw_data3,
-         lw_regs3, "multi_lw_2_le", (1, PASSES - 1), []),
-        ("mlw2_be_tm64", tm64, 90, CODETEST, W_MLW2, 0x14, lw_datat,
+        ("mlw2_le_3max", M3MAX, 150, CODE3MAX, W_MLW2, 0x1c, lw_data3,
+         lw_regs3, "multi_lw_2_le", (1, PASSES - 1), ["t2", "t3"]),
+        ("mlw2_be_tm64", tm64, 90, CODETEST, W_MLW2, 0x1c, lw_datat,
          lw_regst, "multi_lw_2_be", (1, PASSES - 1), ["t2", "t3"]),
-        ("mlw2_be_tm32", tm32, 90, CODETEST, W_MLW2, 0x14, lw_datat,
-         lw_regst, "multi_lw_2_be", (1, PASSES - 1), []),
+        ("mlw2_be_tm32", tm32, 90, CODETEST, W_MLW2, 0x1c, lw_datat,
+         lw_regst, "multi_lw_2_be", (1, PASSES - 1), ["t2", "t3"]),
+        #  #388 pass-2, the bail-detector: base = a DEVICE page (never enters
+        #  host_load), so the generated body bails on EVERY dispatch. The one
+        #  row whose fire expectation is 0 -- it is what notices a fire bump
+        #  hoisted above the bail (which would read (1,4) here).
+        ("mlw2_dev_tm64", tm64, 90, CODETEST, W_MLW2, 0x1c, [],
+         [("t0", DEVBASE), ("t1", 0), ("t4", PASSES)],
+         "multi_lw_2_be", (1, 0), []),
         #  memset: fire counts handler COMPLETIONS -- one un-clamped chunk.
         ("memset_3max", M3MAX, 150, CODE3MAX, W_MEMSET, 0x0c, [],
          [("t0", DATA3MAX), ("t1", DATA3MAX + 0x100)],
@@ -391,11 +427,21 @@ def rows(stub):
     ]
 
 
-#  Register-value checks (5KE: lw sign-extends via (MODE_int_t)(int32_t)):
-VALS_TM64 = [("mlw2v0_be_tm64", "t2", 0x0badcafe),
-             ("mlw2v1_be_tm64", "t3", 0xffffffffdeadbeef)]
+#  Register-value checks; the in-loop poisons make these witness the LAST
+#  dispatch's writes. The 0x8000_0000-bit expectation is BUILD-dependent,
+#  MEASURED (#388 pass-2): the 64-bit build prints the sign-extended register
+#  (0xffffffffdeadbeef); the MODE32 builds print the 32-bit value
+#  (0xdeadbeef). Both witness the (MODE_int_t)(int32_t) assembly equally.
+VALS = {
+    "mlw2_le_3max": [("mlw2v0_le_3max", "t2", 0x0badcafe),
+                     ("mlw2v1_le_3max", "t3", 0xdeadbeef)],
+    "mlw2_be_tm64": [("mlw2v0_be_tm64", "t2", 0x0badcafe),
+                     ("mlw2v1_be_tm64", "t3", 0xffffffffdeadbeef)],
+    "mlw2_be_tm32": [("mlw2v0_be_tm32", "t2", 0x0badcafe),
+                     ("mlw2v1_be_tm32", "t3", 0xdeadbeef)],
+}
 
-_names = [r[0] for r in rows("x")] + [v[0] for v in VALS_TM64]
+_names = [r[0] for r in rows("x")] + [v[0] for vl in VALS.values() for v in vl]
 for _a in _names:                    # the padded-column trap, statically dead
     assert len(_a) <= 22
     for _b in _names:
@@ -424,8 +470,8 @@ for (name, argv, fwait, code, words, bp, puts, regs, fold, want,
     passed += ok
     print("%-24s install=%s/%d fire=%s/%d %s" % (
         name, got_i, want[0], got_f, want[1], "ok" if ok else "FAIL"))
-    if name == "mlw2_be_tm64":
-        for vname, reg_, vwant in VALS_TM64:
+    if name in VALS:
+        for vname, reg_, vwant in VALS[name]:
             total += 1
             got = vals.get(reg_)
             vok = (got == vwant)

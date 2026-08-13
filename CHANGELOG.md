@@ -4241,7 +4241,11 @@ the brief — the details are the review's findings, not the original design):
 emitted bumps; a debugger-only smoke on `-E testmips` prints `MFOLD_START version=1 n=34`
 / `MFOLD_END n=0 nonzero=0` (the all-zero live state, over plain piped stdin — the
 debugger needs no pty when no guest console is involved, an operational fact phase B
-reuses). And the no-perturbation oracle: one clean serial gate 3 run on the instrumented
+reuses). And the no-perturbation oracle: one clean serial gate 4 [#388 pass-2
+correction: this said "gate 3", but run.sh's selectors are 1-based — gate 3 is
+selftest_mutation and `./run.sh 3` would not reproduce the cited run; the boot gate
+mips-rigs is gate 4; the 792fea0 commit message carries the same error, immutable] run
+on the instrumented
 build — **mips-rigs PASS, 6 checks, zero FAIL**, pmax boots OpenBSD 2.2 to `uid=0(root)`
 and arc completes 13/13 harness steps to root, byte-for-byte the committed boot
 behaviour. The counters are invisible until pulled.
@@ -4253,17 +4257,38 @@ per row from the read-ahead rule (a breakpoint anywhere disables read-ahead MACH
 so fire == passes−1; with none set, folds install during read-ahead and fire == passes).
 **All nine checks green at their derived values**: bne_samepage_nop, lui_ori, multi_lw_2
 and memset rows across 3max (R3000/MODE32/LE) and testmips (5KE/64-bit/BE, plus
-`-C R3000` for the 32-bit-BE cell) — the multi rows being the FIRST big-endian MIPS guest
+`-C R3000` for the 32-bit-BE cell) — the RUN containing the first big-endian MIPS guest
+executions [#388 pass-2 attribution: bne_nop_tm64 precedes the multi rows in probe
+order; verified by both re-derivation seats that NO prior BE MIPS guest execution exists
+anywhere in the harness — the upstream/asan gates construct testmips but never execute
+(dead stdin spins the debugger read loop)] — the multi rows being the first big-endian
+MIPS guest
 executions in this harness, with two value rows (`0x0badcafe`, sign-extended
 `0xffffffffdeadbeef`) witnessing the `_be` generated body's BE32 assembly, not just its
-selection; memset (1,1) confirming fire counts handler COMPLETIONS. One probe defect was
+selection [#388 pass-2 x2: the value witness became LOAD-BEARING only after in-loop
+poisons were added — without them a fold body that wrote nothing kept pass 1's correct
+values and the rows stayed green (measured: the stripped-writes mutant turns all six
+value rows red at the surviving poison 0xdead0000); and the sign-extension expectation is
+BUILD-dependent, measured — the 64-bit build prints 0xffffffffdeadbeef, the MODE32 builds
+print 0xdeadbeef]; memset (1,1) confirming fire counts handler COMPLETIONS [#388 pass-2
+correction: overclaim — in that row dispatch==completion==1, so the row cannot make that
+discrimination; what (1,1) DOES establish is that the fold collapsed a 64-iteration loop
+into one un-clamped chunk (fire is neither passes−1 nor 64), and the bump precedes the
+memset() so it counts commitment]. One probe defect was
 found and fixed by measurement en route: the debugger's `print <reg>` answers a BARE
 `0x%x` line with no name echo (the `name = value` form is the assignment echo) — the
 probe's docstring and parse both corrected, the bare-hex idiom the ARM probes already
 use. **The non-vacuity mutant**: deleting the bne_samepage_nop replacement sub-arm
-(including its install++ — an orphaned increment would lie) flips exactly that fold to
-(0,0) and reddens its two rows while every sibling sharing the same COMBINE dispatcher
-stays green (M388MUT_PASS) — the per-variant attribution `-J` cannot give. **Gate 16**
+(including its install++ — an orphaned increment would NOT actually lie: it reads (1,0),
+failing the vector and self-identifying [#388 pass-2 precision]) flips that fold to
+(0,0) and reddens its two rows while every OTHER ROW stays green (M388MUT_PASS) — the
+per-variant attribution `-J` cannot give. [#388 pass-2 x2: "every sibling sharing the
+same COMBINE dispatcher stays green" was the shipped wording and is FALSE as stated — no
+green row shares COMBINE(nop) with the mutated arm; the demonstrated isolation is
+cross-SITE (the gate header's modest wording was right all along). And "exactly that
+fold" overreaches: the deletion also permanently un-installs linux_pmax_idle, whose arm
+requires ic[-5].f == instr(bne_samepage_nop) — a fold-feeds-fold coupling recorded as a
+census fact for task #69.] **Gate 16**
 (`gate_mips_folds.sh`, wired into run.sh) names all nine rows individually plus the
 parse-liveness control and the 9/9 total: PASS, 11 checks.
 
