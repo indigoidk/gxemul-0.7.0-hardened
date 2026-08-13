@@ -4226,8 +4226,11 @@ compile-and-measure seat could not confirm any of it:
   comment records that as fixed thirty rounds ago. The brief proposed generalising something
   already generalised.
 - **Mechanism**: a load-dependent race, not determinism. GXemul always echoes the command,
-  and the echo flushes atomically at the newline BEFORE any reply arrives and does not end
-  in the prompt. The stale prompt is only at the tail if the echo is delayed past the 0.4 s
+  and the echo does not contain the prompt. **[Pass-2: the round claimed the echo "flushes
+  atomically at the newline". That is FALSE — the debugger's read loop fflushes on EVERY
+  iteration, so the echo is flushed ONE CHARACTER AT A TIME, up to N writes. The conclusion
+  survives, but it rests on the echo's CONTENT, not its atomicity, and a round whose thesis
+  is "do not state a mechanism you did not measure" must not assert the wrong one.]** The stale prompt is only at the tail if the echo is delayed past the 0.4 s
   select — a >400 ms stall, the same load class that already false-FAILs `gate_ab`. The
   brief's reproduction modelled a stream with no command echo, which GXemul cannot emit.
 - **Consequence**: truncation, not misattribution — **for the read consumers that were
@@ -4235,17 +4238,22 @@ compile-and-measure seat could not confirm any of it:
   there, so an early return makes the slice SHORT rather than SHIFTED, giving `None` → DEAD
   row → FAIL. The item had been ranked first on a silent-wrong-value claim not reachable in
   those consumers.
-  **[NARROWED IN PASS 2, because this correction OVER-CORRECTED and the over-correction is
-  the same error one more time.]** "Fail-safe" was extrapolated from the read parsers to
-  EVERY consumer, and that does not hold. A timeout does not imply an EMPTY slice — it may
-  carry echo or partial output. A mark prevents matching bytes present BEFORE it; it does
-  not prevent a delayed earlier response arriving AFTER it. And decisively: **this round
-  exists precisely because a setup-command consumer was NOT fail-safe** — the put control
-  turned a timeout into a silent OK. Writing "the failure mode is fail-safe" in the same
-  block that fixes a non-fail-safe consumer is a contradiction, and it is the third instance
-  today of extrapolating past what was measured. The honest statement is: the checked READ
-  parsers degrade to `None`; the SETUP-command consumers did not, which is what this round
-  repaired; the remaining `pc=`, `step` and `print` call sites are UNVERIFIED either way.
+  **[RETRACTED IN PASS 2 — MEASURED FALSE. The original brief was RIGHT and this correction
+  was WRONG.]** A seat replayed the probe's own reader byte-for-byte against a scripted
+  debugger with a virtual clock. With a stall on `step` (or on `pc=`, or on any `print`),
+  the result is **misattribution producing WRONG VALUES, not `None`s**: one DEAD row followed
+  by four registers each holding the PREVIOUS register's answer — the classic
+  off-by-one-command shift. `buf` is shared and each mark is taken before the write, so
+  output arriving after a timeout lands in the NEXT command's slice, and `re.search` returns
+  the FIRST bare-hex line there.
+  **What actually saves the group is not the parser but the VALUE TABLE**: no two adjacent
+  rows in any of the 34 groups share an expected value, so every shifted value mismatches and
+  the group fails. That is a property of the data, not of the code, and a future row pair
+  with equal adjacent expectations would pass silently.
+  So the honest record is: an early return CAN yield wrong values; the read parsers are not
+  fail-safe; and the setup-command consumers were not either, which is what this round
+  repaired. **This block reproduced the trigger and assumed the consequence a SECOND time,
+  in the opposite direction — the very error it names.** Three instances in one session.
 
 The method error is specific and worth naming, because it is the second instance in one
 session: **the trigger was reproduced and the consequence was assumed.** Proving a predicate

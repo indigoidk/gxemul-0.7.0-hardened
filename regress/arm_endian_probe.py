@@ -641,7 +641,16 @@ ngot = ntot = 0
 for glabel, machine, prog, seeds, rows in GROUPS:
     regs = [r[1] for r in rows]
     got = run(machine, prog, seeds, regs)
-    if got is not None and not got.get("__put_ok", False):
+    #  #391 pass-2: this was `got is not None and not got.get(...)`, i.e.
+    #  FAIL-OPEN -- a run() that returned None never falsified puts_ok, so a
+    #  session that never started still printed PUT_STATUS=OK and gate 14's
+    #  "endian puts all landed" asserted OK.  MEASURED against a nonexistent
+    #  binary: every other control read FAIL and this one read OK, with zero
+    #  puts issued.  Every sibling control here defaults to FAIL; only this one
+    #  defaulted to OK.  Same defect as the round's headline, three lines below
+    #  the round's own fix -- which is why the round's residual list now leads
+    #  with "I fixed one instance of a pattern".
+    if got is None or not got.get("__put_ok", False):
         puts_ok = False
     for name, reg, arch, buggy, kind in rows:
         ntot += 1

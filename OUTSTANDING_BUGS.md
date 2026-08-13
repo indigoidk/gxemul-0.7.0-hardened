@@ -3324,6 +3324,69 @@ corruption without a clear host-OOB path.
 > seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
 > mode distinct from quota death).
 
+> ## 2026-08-13 — #391 pass-2, SECOND correction: the records were wrong in BOTH directions
+>
+> *** THE SHIFT IS REAL AND PRODUCES WRONG VALUES. MEASURED. *** The brief said
+> misattribution; the first correction "fixed" that to fail-safe truncation; a
+> pass-2 seat then replayed the probe's OWN reader byte-for-byte against a
+> scripted debugger with a virtual clock and showed THE BRIEF WAS RIGHT. A stall
+> on `step` (or `pc=`, or any `print`) gives one DEAD row followed by FOUR
+> registers each holding the PREVIOUS register's answer — an off-by-one-command
+> shift. buf is shared and every mark is taken BEFORE the write, so output
+> arriving after a timeout lands in the NEXT command's slice and re.search
+> returns the FIRST bare-hex line there.
+> *** WHAT SAVES THE GROUP IS THE VALUE TABLE, NOT THE PARSER. *** No two
+> adjacent rows in any of the 34 groups share an expected value, so every
+> shifted value mismatches and the group fails. That is a property of the DATA.
+> ANY NEW ROW MUST BE CHECKED AGAINST ITS NEIGHBOURS — a future pair with equal
+> adjacent expectations would pass silently.
+> ALSO RETRACTED: "the echo flushes atomically at the newline" is FALSE. The
+> debugger fflushes on EVERY iteration of its character loop, so the echo is
+> emitted ONE CHARACTER AT A TIME, up to N writes. The conclusion survives, but
+> it rests on the echo's CONTENT (it never contains the prompt), not on its
+> atomicity — and a round whose thesis is "do not state a mechanism you did not
+> measure" must not assert the wrong one.
+>
+> CODE FIX, one line, measured: puts_ok was FAIL-OPEN. `got is not None and not
+> got.get("__put_ok")` meant a run() returning None never falsified it, so a
+> session that NEVER STARTED printed PUT_STATUS=OK and gate 14's "endian puts
+> all landed" asserted OK. Against a nonexistent binary it read OK before and
+> reads FAIL now, while every OTHER control in the file already defaulted to
+> FAIL. Same defect as #391's headline, three lines below #391's own fix — the
+> round fixed one instance of a pattern and left its sibling adjacent to it.
+> Gate 14 after: PASS 352, 0 FAIL, 0 SKIP; probe 102/102.
+>
+> THE MUTANT WAS HALF-BLIND: `_forced or not wait_from(mark)` SHORT-CIRCUITS, so
+> wait_from was never called and the shipped conditional was never exercised by
+> the mutant meant to prove it. It also modelled "the reader skipped the wait"
+> rather than "the response never arrived" — the forced command still executes
+> and its output lands in the next slice, silently constructing the very desync
+> the records claimed impossible. Real detection needs PTY-LEVEL FAULT
+> INJECTION; filed as task #81 with the structured-completion-result work.
+>
+> SIBLING SITES, none previously listed: arm_fold_marker_probe.py:161-168 has
+> the byte-identical discarded-verdict defect feeding :182-185 -> :218 -> :652
+> -> :667-668, in #379's own idiom (smaller blast radius, since a missing seed
+> still reddens the value comparison, but the flag is a false False by the same
+> mechanism); mips_fold_probe.py:311-318 and m88k_idle_probe.py:107-114 discard
+> the verdict; arm_writeback_probe.py:547-553 and arm_idle_probe.py:198-204
+> RETURN it correctly and every caller drops it one frame out, and
+> arm_writeback has NO FAILED check on any put at all. Also: `pc=` emits a bare
+> hex line into a discarded slice — a floating value of exactly the shape the
+> register regex accepts.
+> PROMOTE THIS RESIDUAL: "require the COMMAND ECHO in the slice before accepting
+> a prompt" was filed only as the fix for the late-^C-prompt hole. It ALSO fully
+> closes the measured shift — a `print r2` slice carrying `step`'s trailing
+> prompt would be rejected for lacking `print r2`, the reader keeps waiting, and
+> the stream resynchronises. Single change, both holes. Pair it with
+> abort-and-resynchronise, since it is NOT a transaction id for IDENTICAL
+> retries (a late prior identical echo+prompt still satisfies it).
+>
+> METHOD, four instances in one session: LDRD, the brief, the first correction,
+> and a mutant that skipped its own conditional. EACH TIME ONE STEP WAS PROVED
+> AND THE NEXT ASSERTED. Write only the claim you measured; mark the rest
+> UNVERIFIED.
+>
 > ## 2026-08-13 — #391 (round 131): a control passed on evidence it never received
 >
 > arm_endian_probe.py's send() computed wait_from()'s verdict and DISCARDED it,
