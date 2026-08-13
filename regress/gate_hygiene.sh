@@ -50,10 +50,43 @@ gate_begin "log-hygiene"
 #  number fall silently, and a silent fall is how you lose track of whether
 #  the conversion actually happened.  Any movement in either direction must
 #  be a deliberate edit here.
+#  COUNTING IT PROPERLY, after a review pass named three ways to walk around a
+#  naive grep: the single-quoted spelling, a variable or helper holding the
+#  prompt, and probes living in a subdirectory the flat glob never visits.
+#  A ratchet you can step around is worse than no ratchet, because it reads as
+#  protection.  So:
+#    - find RECURSIVELY, not "$HERE"/*.py;
+#    - accept either quote style;
+#    - and make the check CLOSED-WORLD: every .endswith() in the tree must use
+#      one of the two KNOWN literals.  A third spelling -- including
+#      endswith(PROMPT) or any indirection through a helper -- is unknown, and
+#      unknown fails.  That converts "I grepped for the bad thing" into "I
+#      enumerated everything and recognised all of it", which is the only form
+#      that cannot be evaded by inventing a new way to write it.
 EXPECT_BARE=14
-bare=$(grep -c 'endswith(">")' "$HERE"/*.py 2>/dev/null | \
-       awk -F: '{s+=$2} END {print s+0}')
+EXPECT_UNKNOWN=0
+#  CODE ONLY.  The first version of this check counted a line of PROSE -- a
+#  comment in arm_flags_probe.py that discusses endswith() -- and reported an
+#  unrecognised spelling that does not exist.  A check that fires on its own
+#  documentation trains the reader to ignore it, so full-line comments are
+#  stripped before anything is counted.  (Known limit, stated rather than
+#  hidden: an endswith() sitting after code on the same line as a trailing
+#  comment is still counted as code, which is the safe direction.)
+py_code() { find "$HERE" -name '*.py' -type f -print0 2>/dev/null | \
+            xargs -0 grep -h "endswith(" 2>/dev/null | grep -v '^[[:space:]]*#'; }
+#  -o, so these count OCCURRENCES and not LINES.  With -c a single line holding
+#  two different spellings counts once in each of the three totals and drives
+#  `unknown` NEGATIVE -- a subtraction is only meaningful if all three terms
+#  count the same kind of thing.
+bare=$(py_code | grep -o "endswith([\"']>[\"'])" | wc -l)
+#  Every endswith( in code, minus the two we recognise: the bare prompt above
+#  and the correct full prompt.  Anything left is a spelling nobody reviewed --
+#  including endswith(PROMPT) or any indirection through a helper.
+allends=$(py_code | grep -o "endswith(" | wc -l)
+full=$(py_code | grep -o "endswith([\"']GXemul>[\"'])" | wc -l)
+unknown=$((allends - bare - full))
 check "readiness: bare-prompt sites frozen (#37)" "$bare" "$EXPECT_BARE"
+check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN"
 
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog
