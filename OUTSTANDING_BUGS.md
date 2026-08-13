@@ -3361,6 +3361,38 @@ corruption without a clear host-OOB path.
 > reversal ("the mutant did not redden the row" -> "the defect is not there").
 > Same shape: one inference past the evidence.
 >
+> *** PASS-2 CORRECTION: THE CONSEQUENCE CORRECTION ABOVE OVER-CORRECTED, and
+> the over-correction is the SAME ERROR ONE MORE TIME. *** "Truncation, not
+> misattribution / FAIL-SAFE" was extrapolated from the READ parsers to EVERY
+> consumer. It does not hold. A timeout does not imply an EMPTY slice (echo or
+> partial output may be present); a mark stops bytes present BEFORE it but not a
+> delayed earlier response arriving AFTER it; and decisively, THIS ROUND EXISTS
+> BECAUSE A SETUP-COMMAND CONSUMER WAS NOT FAIL-SAFE — the put control turned a
+> timeout into a silent OK. Claiming the failure mode is fail-safe in the same
+> entry that fixes a non-fail-safe consumer is a contradiction. HONEST VERSION:
+> the checked READ parsers degrade to None; the SETUP-command consumers did not,
+> which is what this round repaired; `pc=`, `step` and `print` remain UNVERIFIED.
+> Also narrowed: "turns EVERY DISC row green" is too broad (one invocation
+> affects only its own emulator group, and a code put lacks a warm-page seed's
+> warmth consequence). Also corrected: the tlbdump rationale was WRONG —
+> ls_general increments during GUEST EXECUTION while debugger commands run with
+> emulation STOPPED, so two synchronised reads SHOULD agree; taking only the last
+> is still unsafe, but a disagreement is a PROTOCOL FAILURE, not a legitimate
+> monotonic increase. Also corrected: FOUR non-ARM families (MIPS, PPC, SH,
+> m88k), not five — ARM emits such a line too but its sites no longer use the
+> bare predicate.
+> RESIDUALS THE ROUND MISSED, added in pass 2: unacted pc=/step/print failures;
+> PUT_STATUS=OK when run() returns None; NO committed durable detector for the
+> #391 timeout itself; continuing a session after synchronisation is lost;
+> EOF/read errors mislabelled as timeouts; time.time() where a MONOTONIC
+> deadline is required. Their disposition is bigger than this round: propagate a
+> structured completion result instead of a side list, abort on a failed
+> state-changing command, and add PTY-LEVEL FAULT INJECTION so the detector is
+> real rather than simulated by string-matching a command.
+> Also corrected: requiring the COMMAND ECHO is NOT a general transaction
+> identifier for identical retries — a late prior identical echo+prompt can still
+> satisfy it. Abort and resynchronise after a wait failure rather than retrying.
+>
 > RESIDUALS, all specified, none touched: anchoring has NO detector (reverting
 > it passes on a healthy host — needs a stall-injection mutant); a bare
 > wait(15) survives outside send(); two wait_from results are discarded after

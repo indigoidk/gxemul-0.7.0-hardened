@@ -4199,9 +4199,11 @@ the output slice regardless. On a wait timeout that slice is EMPTY, so the calle
 `"FAILED" in send(...)` test was false, `put_ok` stayed true, `PUT_STATUS=OK` printed, and
 gate 14's `endian puts all landed (379)` check asserted OK. The probe's own comment sits
 eight lines below the defect and states exactly why that must never happen: a silently
-failing `put w` leaves the page cold, routes the transfer through `bdt_*`, and **turns every
-DISC row architecturally green ON A BUGGY BUILD** — "a false pass, the one direction a
-control must never allow." The code contradicted its own stated intent.
+failing `put w` leaves the page cold, routes the transfer through `bdt_*`, and turns DISC
+rows architecturally green ON A BUGGY BUILD — "a false pass, the one direction a control
+must never allow." The code contradicted its own stated intent. [Pass-2 narrowing: "every
+DISC row" was too broad — one invocation affects only its own emulator group, and a code
+`put` does not carry the same page-warmth consequence as a warm-page seed.]
 
 The fix keeps `send()`'s return contract intact so every existing caller is unaffected: a
 timed-out command is recorded out-of-band in a `timeouts` list, and the put loop fails
@@ -4228,10 +4230,22 @@ compile-and-measure seat could not confirm any of it:
   in the prompt. The stale prompt is only at the tail if the echo is delayed past the 0.4 s
   select — a >400 ms stall, the same load class that already false-FAILs `gate_ab`. The
   brief's reproduction modelled a stream with no command echo, which GXemul cannot emit.
-- **Consequence**: truncation, not misattribution. Every consumer takes its mark immediately
-  before sending and parses only from there, so an early return makes the slice SHORT, never
-  SHIFTED. The failure is `None` → DEAD row → FAIL: noisy but FAIL-SAFE. The item had been
-  ranked first on a silent-wrong-value claim that is not reachable in the committed code.
+- **Consequence**: truncation, not misattribution — **for the read consumers that were
+  actually checked.** Those take their mark immediately before sending and parse only from
+  there, so an early return makes the slice SHORT rather than SHIFTED, giving `None` → DEAD
+  row → FAIL. The item had been ranked first on a silent-wrong-value claim not reachable in
+  those consumers.
+  **[NARROWED IN PASS 2, because this correction OVER-CORRECTED and the over-correction is
+  the same error one more time.]** "Fail-safe" was extrapolated from the read parsers to
+  EVERY consumer, and that does not hold. A timeout does not imply an EMPTY slice — it may
+  carry echo or partial output. A mark prevents matching bytes present BEFORE it; it does
+  not prevent a delayed earlier response arriving AFTER it. And decisively: **this round
+  exists precisely because a setup-command consumer was NOT fail-safe** — the put control
+  turned a timeout into a silent OK. Writing "the failure mode is fail-safe" in the same
+  block that fixes a non-fail-safe consumer is a contradiction, and it is the third instance
+  today of extrapolating past what was measured. The honest statement is: the checked READ
+  parsers degrade to `None`; the SETUP-command consumers did not, which is what this round
+  repaired; the remaining `pc=`, `step` and `print` call sites are UNVERIFIED either way.
 
 The method error is specific and worth naming, because it is the second instance in one
 session: **the trigger was reproduced and the consequence was assumed.** Proving a predicate
@@ -4249,11 +4263,27 @@ hole; requiring the COMMAND ECHO in the slice before accepting a prompt does, is
 strictly stronger than either predicate. `READS_RETRIED == 0` must NOT be asserted — retries
 are triggered by host slowness, so that would make the oracle a proxy for load, which is the
 `gate_ab` mistake in a new place; fail on reads that never answered instead. And "parse the
-last complete response" is wrong for `tlbdump`, whose underlying counter is monotonic: two
-attempts can legitimately differ and "last" silently takes the larger. Filed, with the
-non-ARM readiness sites — 14 of them matching a bare `>` against five CPU families that print
-a `>`-terminated line first in their register dump — recorded as HIGHER severity than this
-round, because that one needs no unusual host conditions at all.
+last complete response" is wrong for `tlbdump` — though the ROUND'S STATED REASON for that
+was itself wrong, and pass 2 corrected it: `ls_general` increments during GUEST EXECUTION,
+while interactive debugger commands run with emulation STOPPED, so two correctly
+synchronised reads SHOULD agree. Taking only the last is still unsafe, but a disagreement is
+a PROTOCOL FAILURE to be reported, not a legitimate monotonic increase to be tolerated. The
+conclusion survives; the reasoning behind it did not. Filed, with the
+non-ARM readiness sites — 14 of them matching a bare `>` across FOUR non-ARM families (MIPS,
+PPC, SH, m88k) that print a `>`-terminated line first in their register dump; ARM is a fifth
+family that emits such a line, but its relevant sites no longer use the bare predicate —
+recorded as HIGHER severity than this round, because that one needs no unusual host
+conditions at all.
+
+**Residuals the round MISSED, added in pass 2:** the unacted `pc=`, `step` and `print`
+failures (the fix covers puts only, and those siblings sit one line away); `PUT_STATUS=OK`
+when `run()` returns `None`; no committed durable detector for the #391 timeout itself;
+continuing a session after synchronisation has been lost rather than aborting; EOF and read
+errors being mislabelled as timeouts; and `time.time()` used where a monotonic deadline is
+required. The disposition those imply is larger than this round: propagate a structured
+completion result rather than a side list, abort on a failed state-changing command instead
+of continuing, and add PTY-level fault injection so the detector is real rather than
+simulated by string-matching a command.
 
 ## One-hundred-and-thirtieth round (#390) — one scratch word, two roles: a PC-relative store's base was four bytes high
 
