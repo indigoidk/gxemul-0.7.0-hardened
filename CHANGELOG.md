@@ -4317,6 +4317,59 @@ list too long" — the brief inlined a 36 KB diff into argv, over the documented
 cap — and was re-fired with a pointer prompt. A dead seat is a seat failure and is never
 counted as agreement.
 
+**Pass 2b — the measure-seat found that half of #392 shipped with no detector at all, and
+verified the other half end-to-end.**
+
+Two things arrived together. First the verification the round was missing: **all eight
+converted probes run green end-to-end** against the committed build, every result and control
+line matching its gate's expectation — `MIPS_CVT 11/11` + `CONTROL=OK`, `MIPS_SUBN 9/9`,
+`M295 28/28` with both rig controls OK, `SH_ROUND 36/36` + `DISCRIMINATING=9`,
+`SH_HALT 26/26` + `CONTROL=OK`, `PPC_HALT 28/28` + `CONTROL=OK`, `PPC_CONV 138/138` +
+`CONTROL=OK`, `MODEWRITES_BAD=0`, `MODEREADS=4`. No probe timed out and no rows were lost.
+The seat also reproduced arm B independently — on `mips_rounding` and the arc rig, neither of
+which this round used — at 0/11 with the control DEAD, confirming that the full prompt over a
+whole buffer is no better than a bare `>`.
+
+Then the defect, and it is in the gate this round shipped. `conv_mark` grepped
+`'return wait(mark=_mark'` — **a PREFIX**. Deleting `, echo=s if s else None` from all
+fourteen sites therefore left every readiness counter byte-identical, and the seat measured
+that mutant passing `gate_hygiene`, `gate_offline`, `gate_mips_rounding` and
+`gate_sh_rounding` simultaneously. Half the fix shipped with no detector — this project's
+worst vacuity class, in a commit whose whole subject was detectors. The grep now anchors
+through the comma.
+
+Compounding it: **none of the truth table's four arms tested the echo at all**. They prove the
+mark and the prompt string; the echo conjunct had zero behavioural coverage. Two arms are
+added for the case only the echo can decide — a PREVIOUS command's prompt arriving *after* the
+mark, where byte anchoring cannot help because the stale prompt is genuinely inside the slice.
+Measured: without the echo the wait stops after 7 bytes on the stale prompt and never sees the
+reply; with it, 60 bytes and the reply arrives. The pin was also grepping raw, so a seat gutted
+both negative arms, left the two spellings in a *comment*, and it still read 2 — the comment
+filter this file applies sixty lines above was missing from the one check whose job is keeping
+an exemption honest.
+
+Three findings recorded rather than changed. **`len(buf) > mark` is a dead conjunct** in all
+fourteen sites: `resp = buf[mark:]`, so it is equivalent to `resp != ""`, and the empty string
+cannot end with the prompt — brute-forced over all whitespace strings to length 4, none pass.
+It matches the ARM house idiom and is harmless, but it does no work. **The empty-command guard
+is a dead branch**: 4033 commands were instrumented across all eight probes and none had length
+zero, so the repeat-last-command form the round guards against is never used. And
+**MAX_CMD_BUFLEN truncation is unreachable** — the longest command measured is 42 characters
+against a 71-character cutoff.
+
+A credit the round did not claim: the startup waits were broken too, and this fixed them. On
+pmax, landisk and macppc the pre-#392 bare `>` first matched 85–115 bytes *before* the prompt
+existed, at the `cpu0: starting at 0x… <sym>` line, and on three of four rigs that `>` is
+followed by a real line-flush boundary. The full-prompt anchor closes it: on all four rigs the
+full form first becomes true only inside the genuine prompt. luna88k printed no prompt inside
+the seat's capture window and remains untested.
+
+Deferred with a task rather than fixed here: a *stalled* echo costs a full wait timeout and,
+because `sh_halt_probe.py:318` returns `HOSTEXIT` before it checks `halted` at `:320`, converts
+a genuine `HALTED` row into a different wrong verdict while the control stays green — 17 such
+rows in the seat's forced-bad-echo run. Today's exposure is zero (293/293 sends verified live),
+so it is a latent trap, not a live defect.
+
 ## One-hundred-and-thirty-first round (#391) — a control that passed on evidence it never received
 
 `arm_endian_probe.py`'s `send()` computed a readiness verdict and **discarded it**, returning

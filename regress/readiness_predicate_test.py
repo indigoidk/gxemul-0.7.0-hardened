@@ -100,9 +100,63 @@ for name, pred, want_saw in ARMS:
           % (name, consumed, "yes" if saw else "no",
              "yes" if want_saw else "no", "ok" if ok else "FAIL"))
 
+
+#  ---- SCENARIO B: the LATE PROMPT, which is what the echo guard is for -------
+#
+#  The four arms above prove the MARK and the PROMPT STRING. They do NOT touch
+#  the echo conjunct -- a review seat measured that the echo half could be
+#  deleted from all fourteen sites with every gate still green, because nothing
+#  executed it. This scenario is that missing coverage.
+#
+#  The situation: a PREVIOUS command's prompt is still in flight when the next
+#  command's mark is taken, so it lands INSIDE the new slice. Byte anchoring
+#  cannot help -- the stale prompt is genuinely after the mark. Only requiring
+#  the new command's own echo first can tell the two prompts apart, because the
+#  debugger emits the echo only when it starts consuming that command
+#  (debugger.c:589).
+LATE = PROMPT + NEW_ECHO + NEW_REPLY + PROMPT
+
+
+def replay_late(predicate):
+    """Everything arrives AFTER the mark, beginning with the stale prompt."""
+    buf = ""
+    pos = 0
+
+    def rd():
+        nonlocal buf, pos
+        if pos >= len(LATE):
+            return False
+        buf += LATE[pos]
+        pos += 1
+        return True
+
+    mark = 0
+    while rd():
+        if predicate(buf, mark, NEW_ECHO.strip()):
+            break
+    return pos, NEW_REPLY.strip() in buf[mark:]
+
+
+LATE_ARMS = [
+    #  no echo requirement: the stale prompt ends the wait immediately
+    ("late-noecho", lambda b, m, e: len(b) > m and b[m:].rstrip().endswith("GXemul>"), False),
+    #  the shipped form: the echo must appear before any prompt is accepted
+    ("late-echo",
+     lambda b, m, e: (e in b[m:]) and len(b) > m and b[m:].rstrip().endswith("GXemul>"), True),
+]
+for name, pred, want_saw in LATE_ARMS:
+    consumed, saw = replay_late(pred)
+    ok = (saw == want_saw)
+    if not ok:
+        bad += 1
+    print("READINESS_ROW %-12s bytes=%-4d saw_reply=%-3s want=%-3s %s"
+          % (name, consumed, "yes" if saw else "no",
+             "yes" if want_saw else "no", "ok" if ok else "FAIL"))
+
 #  The leftover byte, printed rather than asserted in prose, so a reader can see
 #  the mechanism instead of taking it on trust.
 seen = PREV_REPLY + PROMPT
 print("READINESS_LEFTOVER stripped=%r keeps_prompt=%s"
       % (PROMPT[-1], "yes" if seen.rstrip().endswith("GXemul>") else "no"))
-print("READINESS_RESULT=%d/%d" % (len(ARMS) - bad, len(ARMS)))
+print("READINESS_RESULT=%d/%d" % (len(ARMS) + len(LATE_ARMS) - bad,
+                                 len(ARMS) + len(LATE_ARMS)))

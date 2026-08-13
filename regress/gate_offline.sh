@@ -226,7 +226,15 @@ check     "readiness: full+whole ALSO returns early" "$(rrow full-whole)" "no"
 check     "readiness: bare+mark returns early"      "$(rrow bare-mark)"  "no"
 check     "readiness: full+mark reads the reply"    "$(rrow full-mark)"  "yes"
 check     "readiness: rstrip re-matches old prompt" "$(grep -c 'READINESS_LEFTOVER.*keeps_prompt=yes' "$RLOG")" "1"
-check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT=4/4' "$RLOG")" "1"
+#  The two LATE-PROMPT rows are the ECHO conjunct's only behavioural coverage.
+#  A seat measured that the echo half could be deleted from all fourteen sites
+#  with every gate still green, because the four rows above exercise the mark and
+#  the prompt string and nothing exercised the echo. These two do: a stale prompt
+#  arriving AFTER the mark cannot be distinguished by byte anchoring, only by
+#  requiring the new command's own echo first.
+check     "readiness: late prompt fools a no-echo wait"  "$(rrow late-noecho)" "no"
+check     "readiness: echo guard survives a late prompt" "$(rrow late-echo)"   "yes"
+check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT=6/6' "$RLOG")" "1"
 
 gate_end
 exit $?

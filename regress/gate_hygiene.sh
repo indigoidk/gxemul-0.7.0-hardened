@@ -131,7 +131,14 @@ probe_code() { find "$HERE" -name '*.py' -type f \
                xargs -0 grep -h "$1" 2>/dev/null | grep -v '^[[:space:]]*#'; }
 conv_anchor=$(probe_code 'resp.rstrip().endswith("GXemul>")' | grep -c .)
 conv_echo=$(probe_code 'echo is not None and echo not in resp' | grep -c .)
-conv_mark=$(probe_code 'return wait(mark=_mark' | grep -c .)
+#  ANCHOR THROUGH THE ECHO ARGUMENT.  The first version stopped at
+#  'return wait(mark=_mark' -- a PREFIX -- so deleting ", echo=s if s else None"
+#  from all fourteen sites left this count at 14 and every other counter
+#  unchanged. A pass-2 seat MEASURED that mutant passing gate_hygiene,
+#  gate_offline, gate_mips_rounding and gate_sh_rounding simultaneously: a
+#  shipped fix with no detector, which is this project's worst vacuity class.
+#  The comma is what makes the assertion an assertion.
+conv_mark=$(probe_code 'return wait(mark=_mark, echo=' | grep -c .)
 
 #  THE HOLE A PASS-2 SEAT FOUND, and it is the sharpest finding of the review:
 #  the checks above catch a REVERT but not an ADDITION of the OTHER broken form.
@@ -166,11 +173,19 @@ check "readiness: send takes a fresh mark (#392)"    "$conv_mark"   "$EXPECT_CON
 #  LEFTOVER demonstration line, which re-matches the prompt on purpose to show
 #  that rstrip() erases the trailing space.  The first draft of this check
 #  expected 2 and failed; the file was right and the expectation was wrong.
+#  CODE ONLY here too.  The first version grepped the file RAW, so a seat
+#  gutted both negative arms, dropped the two spellings into a single COMMENT
+#  line, and the pin still read 2 and 3. The filter that this file already
+#  applies sixty lines above was missing from the one check whose whole job is
+#  to keep an exemption honest.
 rpt="$HERE/readiness_predicate_test.py"
+rpt_code() { [ -f "$rpt" ] && grep -v '^[[:space:]]*#' "$rpt"; }
 check "readiness: truth table keeps its 2 bad arms" \
-      "$( [ -f "$rpt" ] && grep -o 'endswith(">")' "$rpt" | wc -l || echo missing)" "2"
+      "$( [ -f "$rpt" ] && rpt_code | grep -o 'endswith(">")' | wc -l || echo missing)" "2"
+#  FIVE, not three: the two original full-* arms, the two late-prompt arms that
+#  give the ECHO conjunct its behavioural coverage, and the leftover demo.
 check "readiness: truth table keeps its good arms + leftover demo" \
-      "$( [ -f "$rpt" ] && grep -o 'endswith("GXemul>")' "$rpt" | wc -l || echo missing)" "3"
+      "$( [ -f "$rpt" ] && rpt_code | grep -o 'endswith("GXemul>")' | wc -l || echo missing)" "5"
 
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog
