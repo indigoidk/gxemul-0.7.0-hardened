@@ -206,6 +206,52 @@ struct r3000_cache_line {
 DYNTRANS_MISC_DECLARATIONS(mips,MIPS,uint64_t)
 DYNTRANS_MISC64_DECLARATIONS(mips,MIPS,uint8_t)
 
+/*  #388: one id per instruction-combiner ("fold") handler VARIANT -- the
+    resolution the reachability census needs (COMBINE(nop) alone installs five
+    distinct folds). 16 generated multi_{l,s}w variants + 18 hand-written = 34.
+    The name table lives in cpu_mips.c (this header's includers include the
+    doubly-included cpu_mips_instr.c, which must gain no file-scope objects).  */
+enum mips_fold_id {
+	MIPS_FOLD_MULTI_SW_2_LE,	MIPS_FOLD_MULTI_SW_3_LE,
+	MIPS_FOLD_MULTI_SW_4_LE,	MIPS_FOLD_MULTI_SW_5_LE,
+	MIPS_FOLD_MULTI_SW_2_BE,	MIPS_FOLD_MULTI_SW_3_BE,
+	MIPS_FOLD_MULTI_SW_4_BE,	MIPS_FOLD_MULTI_SW_5_BE,
+	MIPS_FOLD_MULTI_LW_2_LE,	MIPS_FOLD_MULTI_LW_3_LE,
+	MIPS_FOLD_MULTI_LW_4_LE,	MIPS_FOLD_MULTI_LW_5_LE,
+	MIPS_FOLD_MULTI_LW_2_BE,	MIPS_FOLD_MULTI_LW_3_BE,
+	MIPS_FOLD_MULTI_LW_4_BE,	MIPS_FOLD_MULTI_LW_5_BE,
+	MIPS_FOLD_MEMSET_ADDIU_BNE_SW,
+	MIPS_FOLD_NETBSD_R3K_PICACHE_DO_INV,
+	MIPS_FOLD_LINUX_PMAX_IDLE,
+	MIPS_FOLD_NETBSD_PMAX_IDLE,
+	MIPS_FOLD_STRLEN_LB_ADDIU_BNE_NOP,
+	MIPS_FOLD_BNE_SAMEPAGE_NOP,
+	MIPS_FOLD_BEQ_SAMEPAGE_NOP,
+	MIPS_FOLD_XOR_ANDI_SLL,
+	MIPS_FOLD_ANDI_SLL,
+	MIPS_FOLD_LUI_ORI,
+	MIPS_FOLD_MULTI_ADDU_3,
+	MIPS_FOLD_ADDIU_BNE_SAMEPAGE_ADDIU,
+	MIPS_FOLD_LUI_ADDIU,
+	MIPS_FOLD_B_SAMEPAGE_ADDIU,
+	MIPS_FOLD_BEQ_SAMEPAGE_ADDIU,
+	MIPS_FOLD_BNE_SAMEPAGE_ADDIU,
+	MIPS_FOLD_JR_RA_ADDIU,
+	MIPS_FOLD_B_SAMEPAGE_DADDIU,
+	MIPS_N_FOLDS
+};
+
+/*  #388: one id per COMBINE function ("site"). fold_arm[] separates "the
+    opcode never appeared" from "appeared, but no arm matched".  */
+enum mips_combine_site {
+	MIPS_CSITE_SW,		MIPS_CSITE_LW,
+	MIPS_CSITE_R3K_CACHE_INV,
+	MIPS_CSITE_NOP,		MIPS_CSITE_SLL,
+	MIPS_CSITE_ORI,		MIPS_CSITE_ADDU,
+	MIPS_CSITE_ADDIU,	MIPS_CSITE_B_DADDIU,
+	MIPS_N_COMBINE_SITES
+};
+
 
 struct mips_cpu {
 	struct mips_cpu_type_def cpu_type;
@@ -285,6 +331,23 @@ struct mips_cpu {
 	VPH_TLBS(mips,MIPS)
 	VPH32(mips,MIPS)
 	VPH64(mips,MIPS)
+
+	/*  #388: fold witness -- pull-only counters, printed by tlbdump, no
+	    output on any normal boot. Placed at the very END of the struct so
+	    the hot fold_fire[] writes never share a cache line with the
+	    dispatch fields in DYNTRANS_ITC above. arm = COMBINE body entered;
+	    install = a per-variant replacement assignment ran (counts every
+	    selection event -- escalation may supersede an installed width, so
+	    install-without-fire is NORMAL for multi_*_2..4); fire = a folded
+	    handler ran past its bails (memset: counts handler COMPLETIONS,
+	    one per page-clamped chunk). idle_entered[] counts every DISPATCH
+	    of the two idle handlers (they commit their lui unconditionally, so
+	    dispatch is the meaningful "ran" event); their fold_fire counts only
+	    the genuinely-idle path, bumped immediately before instr(idle).  */
+	uint64_t	fold_arm[MIPS_N_COMBINE_SITES];
+	uint64_t	fold_install[MIPS_N_FOLDS];
+	uint64_t	fold_fire[MIPS_N_FOLDS];
+	uint64_t	idle_entered[2];	/*  0=linux, 1=netbsd  */
 };
 
 

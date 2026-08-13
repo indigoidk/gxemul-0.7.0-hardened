@@ -3313,3 +3313,34 @@ corruption without a clear host-OOB path.
 > of committed ladder rows + the sentinel's exact 0x99/0x55 measured hits) and one cloud
 > seat's length-death (65,536 eval tokens all thinking, empty response — a seat-health
 > mode distinct from quota death).
+
+> ## 2026-08-12 — #388 phase A (round 128): the MIPS folds get their witness — 34 variants, counters, tlbdump schema
+>
+> Design converged from a seven-seat pass-1 that changed the brief materially: install
+> counters moved from the decoder arming lines to the per-variant REPLACEMENT SITES
+> (arming is unconditional, variant-blind, retranslation-inflated — the lying-instrument
+> variant; three seats convergent); fold_arm[9] added (site-entered vs no-arm-matched —
+> two zeros a census must not conflate); fire by the CFG rule with pinned exceptions
+> (idles bump before instr(idle) + idle_entered[] counts dispatches; jr_ra_addiu's AdEL
+> path stays counted; memset counts handler COMPLETIONS); the 16 multi-width installs are
+> single ternary lines AFTER their brace-less if/else pairs; install-without-fire is
+> NORMAL for multi_*_2..4 (escalation supersedes pre-dispatch) — recorded so the census
+> cannot read it as a defect. Refuted during review, by mechanism: "a breakpoint disables
+> combining" (the :1888 gate has no breakpoints term — only read-ahead :1938 does; with a
+> breakpoint fire==passes-1, without one folds install DURING read-ahead so fire==passes),
+> "pmax/arc are BE" (both LE), enum counts 30/31 (mechanical manifest: 35 sites = 34
+> variants). `-s` found to be a second fold kill switch besides -J (census argv must
+> carry neither).
+> Shipped: cpu_mips.h enums+counters (struct END, cache-line isolation), 9 arm + 27
+> install + 18 hand fire + 2 idle_entered bumps (no file-scope objects — the TU is
+> doubly included), generator-emitted bumps for the 32 generated bodies (each build
+> asserts the regenerated tmp carries exactly 32), tlbdump MFOLD_START/rows/ARM/IDLE/
+> MFOLD_END schema (absent END = DEAD; END with nonzero=0 = live all-zero; counts catch
+> truncation) + flush. Measured: both trees build; testmips debugger smoke prints
+> START n=34 / END n=0 nonzero=0 over piped stdin (no pty needed without a guest
+> console — phase B reuses this). No-perturbation oracle: one clean serial gate 3 run
+> on the instrumented build = mips-rigs PASS 6 checks zero FAIL (pmax uid=0, arc 13/13
+> steps to root — unchanged boots; the counters are invisible until pulled). Phases B
+> (probe + single-sub-arm mutant with an expectation vector) and C (census; zeros filed
+> as "unreached under the committed rigs" with expected_zero_reason tags, NEVER "dead")
+> follow in-round.

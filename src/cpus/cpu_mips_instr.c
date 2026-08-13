@@ -239,6 +239,7 @@ X(beq_samepage_addiu)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_BEQ_SAMEPAGE_ADDIU] ++;	/*  #388  */
 	cpu->n_translated_instrs ++;
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
@@ -257,6 +258,7 @@ X(beq_samepage_nop)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_BEQ_SAMEPAGE_NOP] ++;	/*  #388  */
 	cpu->n_translated_instrs ++;
 	if (rs == rt)
 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
@@ -328,6 +330,7 @@ X(bne_samepage_addiu)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_BNE_SAMEPAGE_ADDIU] ++;	/*  #388  */
 	cpu->n_translated_instrs ++;
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
@@ -346,6 +349,7 @@ X(bne_samepage_nop)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_BNE_SAMEPAGE_NOP] ++;	/*  #388  */
 	cpu->n_translated_instrs ++;
 	if (rs != rt)
 		cpu->cd.mips.next_ic = (struct mips_instr_call *) ic->arg[2];
@@ -1388,6 +1392,8 @@ X(jr_ra_addiu)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_JR_RA_ADDIU] ++;	/*  #388: the AdEL
+	    return below is NOT a bail -- the fused addiu commits  */
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
 	cpu->pc = rs;
@@ -3308,6 +3314,9 @@ X(memset_addiu_bne_sw)
 		bytes_to_write = 0x1000 - (rX & 0xfff);
 		partial = 1;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MEMSET_ADDIU_BNE_SW] ++;	/*  #388:
+	    counts handler COMPLETIONS, one per page-clamped chunk (the
+	    clamp above is not a bail)  */
 
 	/*  printf("rX = %08x\n", (int)rX);
 	    printf("rY = %08x\n", (int)rY);
@@ -3340,6 +3349,7 @@ X(multi_addu_3)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_ADDU_3] ++;	/*  #388  */
 	reg(ic[0].arg[2]) = (int32_t)(reg(ic[0].arg[0]) + reg(ic[0].arg[1]));
 	reg(ic[1].arg[2]) = (int32_t)(reg(ic[1].arg[0]) + reg(ic[1].arg[1]));
 	reg(ic[2].arg[2]) = (int32_t)(reg(ic[2].arg[0]) + reg(ic[2].arg[1]));
@@ -3380,6 +3390,7 @@ X(netbsd_r3k_picache_do_inv)
 		return;
         }
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_NETBSD_R3K_PICACHE_DO_INV] ++;	/*  #388  */
 	reg(ic[3].arg[0]) = ry;
 	cpu->n_translated_instrs += (int) count;
 
@@ -3403,6 +3414,10 @@ X(netbsd_pmax_idle)
 	uint32_t addr, pageindex, i;
 	int32_t *page;
 
+	cpu->cd.mips.idle_entered[1] ++;	/*  #388: every dispatch (the
+	    lui below commits unconditionally); fire counts only the
+	    genuinely-idle path  */
+
 	reg(ic[0].arg[0]) = (int32_t)ic[0].arg[1];
 
 	addr = reg(ic[0].arg[0]) + (int32_t)ic[1].arg[2];
@@ -3414,6 +3429,7 @@ X(netbsd_pmax_idle)
 	if (cpu->delay_slot || page == NULL || page[i] != 0)
 		return;
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_NETBSD_PMAX_IDLE] ++;	/*  #388  */
 	instr(idle)(cpu, ic);
 }
 
@@ -3436,6 +3452,10 @@ X(linux_pmax_idle)
 	uint32_t addr, addr2, pageindex, pageindex2, i, i2;
 	int32_t *page, *page2;
 
+	cpu->cd.mips.idle_entered[0] ++;	/*  #388: every dispatch (the
+	    lui below commits unconditionally); fire counts only the
+	    genuinely-idle path  */
+
 	reg(ic[0].arg[0]) = (int32_t)ic[0].arg[1];
 
 	addr = reg(ic[0].arg[0]) + (int32_t)ic[1].arg[2];
@@ -3453,6 +3473,7 @@ X(linux_pmax_idle)
 	    page[i] != 0 || page2[i2] != 0)
 		return;
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_LINUX_PMAX_IDLE] ++;	/*  #388  */
 	instr(idle)(cpu, ic);
 }
 #endif
@@ -3527,6 +3548,8 @@ X(strlen_lb_addiu_bne_nop)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_STRLEN_LB_ADDIU_BNE_NOP] ++;	/*  #388  */
+
 	i = rx & 0xfff;
 
 	/*
@@ -3562,6 +3585,7 @@ X(addiu_bne_samepage_addiu)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_ADDIU_BNE_SAMEPAGE_ADDIU] ++;	/*  #388  */
 	cpu->n_translated_instrs += 2;
 	reg(ic[0].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[0].arg[0]) + (int32_t)ic[0].arg[2]);
@@ -3587,6 +3611,7 @@ X(xor_andi_sll)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_XOR_ANDI_SLL] ++;	/*  #388  */
 	reg(ic[0].arg[2]) = reg(ic[0].arg[0]) ^ reg(ic[0].arg[1]);
 	reg(ic[1].arg[1]) = reg(ic[1].arg[0]) & (uint32_t)ic[1].arg[2];
 	reg(ic[2].arg[2]) = (int32_t)(reg(ic[2].arg[0])<<(int32_t)ic[2].arg[1]);
@@ -3607,6 +3632,7 @@ X(andi_sll)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_ANDI_SLL] ++;	/*  #388  */
 	reg(ic[0].arg[1]) = reg(ic[0].arg[0]) & (uint32_t)ic[0].arg[2];
 	reg(ic[1].arg[2]) = (int32_t)(reg(ic[1].arg[0])<<(int32_t)ic[1].arg[1]);
 
@@ -3626,6 +3652,7 @@ X(lui_ori)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_LUI_ORI] ++;	/*  #388  */
 	reg(ic[0].arg[0]) = (int32_t)ic[0].arg[1];
 	reg(ic[1].arg[1]) = reg(ic[1].arg[0]) | (uint32_t)ic[1].arg[2];
 
@@ -3645,6 +3672,7 @@ X(lui_addiu)
 		return;
 	}
 
+	cpu->cd.mips.fold_fire[MIPS_FOLD_LUI_ADDIU] ++;	/*  #388  */
 	reg(ic[0].arg[0]) = (int32_t)ic[0].arg[1];
 	reg(ic[1].arg[1]) = (int32_t)
 	    ((int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2]);
@@ -3668,6 +3696,7 @@ X(b_samepage_addiu)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_B_SAMEPAGE_ADDIU] ++;	/*  #388  */
 	reg(ic[1].arg[1]) = (int32_t)
 	    ( (int32_t)reg(ic[1].arg[0]) + (int32_t)ic[1].arg[2] );
 	cpu->n_translated_instrs ++;
@@ -3688,6 +3717,7 @@ X(b_samepage_daddiu)
 		cpu->delay_slot |= EXCEPTION_IN_DELAY_SLOT;
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_B_SAMEPAGE_DADDIU] ++;	/*  #388  */
 	*(uint64_t *)ic[1].arg[1] = *(uint64_t *)ic[1].arg[0] +
 	    (int32_t)ic[1].arg[2];
 	cpu->n_translated_instrs ++;
@@ -3787,6 +3817,8 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_SW] ++;	/*  #388  */
+
 	if (n_back < 4)
 		return;
 
@@ -3798,6 +3830,8 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-4].f = instr(multi_sw_5_le);
 		else
 			ic[-4].f = instr(multi_sw_5_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_SW_5_LE : MIPS_FOLD_MULTI_SW_5_BE] ++;	/*  #388  */
 	}
 
 	/*  Convert a multi_sw_3 to a multi_sw_4:  */
@@ -3808,6 +3842,8 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-3].f = instr(multi_sw_4_le);
 		else
 			ic[-3].f = instr(multi_sw_4_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_SW_4_LE : MIPS_FOLD_MULTI_SW_4_BE] ++;	/*  #388  */
 	}
 
 	/*  Convert a multi_sw_2 to a multi_sw_3:  */
@@ -3818,6 +3854,8 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-2].f = instr(multi_sw_3_le);
 		else
 			ic[-2].f = instr(multi_sw_3_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_SW_3_LE : MIPS_FOLD_MULTI_SW_3_BE] ++;	/*  #388  */
 	}
 
 	if (ic[-1].f == ic[0].f && ic[-1].arg[1] == ic[0].arg[1]) {
@@ -3825,6 +3863,8 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-1].f = instr(multi_sw_2_le);
 		else
 			ic[-1].f = instr(multi_sw_2_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_SW_2_LE : MIPS_FOLD_MULTI_SW_2_BE] ++;	/*  #388  */
 	}
 
 	if (ic[-2].f == instr(addiu) && ic[-2].arg[0] == ic[-2].arg[1] &&
@@ -3837,6 +3877,7 @@ void COMBINE(sw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	    ic[0].arg[0] != ic[0].arg[1] &&
 	    ic[0].arg[1] == ic[-2].arg[0] && (int32_t)ic[0].arg[2] == -4) {
 		ic[-2].f = instr(memset_addiu_bne_sw);
+		cpu->cd.mips.fold_install[MIPS_FOLD_MEMSET_ADDIU_BNE_SW] ++;	/*  #388  */
 	}
 }
 
@@ -3854,6 +3895,8 @@ void COMBINE(lw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_LW] ++;	/*  #388  */
+
 	if (n_back < 4)
 		return;
 
@@ -3866,6 +3909,8 @@ void COMBINE(lw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-4].f = instr(multi_lw_5_le);
 		else
 			ic[-4].f = instr(multi_lw_5_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_LW_5_LE : MIPS_FOLD_MULTI_LW_5_BE] ++;	/*  #388  */
 	}
 
 	/*  Convert a multi_lw_3 to a multi_lw_4:  */
@@ -3877,6 +3922,8 @@ void COMBINE(lw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-3].f = instr(multi_lw_4_le);
 		else
 			ic[-3].f = instr(multi_lw_4_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_LW_4_LE : MIPS_FOLD_MULTI_LW_4_BE] ++;	/*  #388  */
 	}
 
 	/*  Convert a multi_lw_2 to a multi_lw_3:  */
@@ -3888,6 +3935,8 @@ void COMBINE(lw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-2].f = instr(multi_lw_3_le);
 		else
 			ic[-2].f = instr(multi_lw_3_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_LW_3_LE : MIPS_FOLD_MULTI_LW_3_BE] ++;	/*  #388  */
 	}
 
 	/*  Note: Loads to the base register are not allowed in slot -1.  */
@@ -3898,6 +3947,8 @@ void COMBINE(lw)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 			ic[-1].f = instr(multi_lw_2_le);
 		else
 			ic[-1].f = instr(multi_lw_2_be);
+		cpu->cd.mips.fold_install[cpu->byte_order == EMUL_LITTLE_ENDIAN ?
+		    MIPS_FOLD_MULTI_LW_2_LE : MIPS_FOLD_MULTI_LW_2_BE] ++;	/*  #388  */
 	}
 }
 
@@ -3922,6 +3973,8 @@ void COMBINE(netbsd_r3k_cache_inv)(struct cpu *cpu,
 {
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
+
+	cpu->cd.mips.fold_arm[MIPS_CSITE_R3K_CACHE_INV] ++;	/*  #388  */
 
 	if (n_back < 8)
 		return;
@@ -3948,6 +4001,7 @@ void COMBINE(netbsd_r3k_cache_inv)(struct cpu *cpu,
 	    ic[-3].arg[1] == ic[-5].arg[0] &&
 	    ic[-2].f == instr(nop) && ic[-1].f == instr(nop)) {
 		ic[-8].f = instr(netbsd_r3k_picache_do_inv);
+		cpu->cd.mips.fold_install[MIPS_FOLD_NETBSD_R3K_PICACHE_DO_INV] ++;	/*  #388  */
 	}
 }
 
@@ -3964,6 +4018,8 @@ void COMBINE(nop)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 {
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
+
+	cpu->cd.mips.fold_arm[MIPS_CSITE_NOP] ++;	/*  #388  */
 
 	if (n_back < 8)
 		return;
@@ -3986,6 +4042,7 @@ void COMBINE(nop)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	    ic[-1].arg[2] == (size_t) &ic[-8] &&
 	    ic[-1].f == instr(beq_samepage)) {
 		ic[-8].f = instr(linux_pmax_idle);
+		cpu->cd.mips.fold_install[MIPS_FOLD_LINUX_PMAX_IDLE] ++;	/*  #388  */
 		return;
 	}
 
@@ -3998,6 +4055,7 @@ void COMBINE(nop)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	    ic[-1].arg[2] == (size_t) &ic[-4] &&
 	    ic[-1].f == instr(beq_samepage)) {
 		ic[-4].f = instr(netbsd_pmax_idle);
+		cpu->cd.mips.fold_install[MIPS_FOLD_NETBSD_PMAX_IDLE] ++;	/*  #388  */
 		return;
 	}
 
@@ -4009,6 +4067,7 @@ void COMBINE(nop)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	    ic[-1].arg[1] == (size_t) &cpu->cd.mips.gpr[MIPS_GPR_ZERO] &&
 	    ic[-1].f == instr(bne_samepage)) {
 		ic[-3].f = instr(strlen_lb_addiu_bne_nop);
+		cpu->cd.mips.fold_install[MIPS_FOLD_STRLEN_LB_ADDIU_BNE_NOP] ++;	/*  #388  */
 		return;
 	}
 #else
@@ -4020,17 +4079,20 @@ void COMBINE(nop)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	    ic[-1].arg[1] == (size_t) &cpu->cd.mips.gpr[MIPS_GPR_ZERO] &&
 	    ic[-1].f == instr(bne_samepage)) {
 		ic[-3].f = instr(strlen_lb_addiu_bne_nop);
+		cpu->cd.mips.fold_install[MIPS_FOLD_STRLEN_LB_ADDIU_BNE_NOP] ++;	/*  #388  */
 		return;
 	}
 #endif
 
 	if (ic[-1].f == instr(bne_samepage)) {
 		ic[-1].f = instr(bne_samepage_nop);
+		cpu->cd.mips.fold_install[MIPS_FOLD_BNE_SAMEPAGE_NOP] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(beq_samepage)) {
 		ic[-1].f = instr(beq_samepage_nop);
+		cpu->cd.mips.fold_install[MIPS_FOLD_BEQ_SAMEPAGE_NOP] ++;	/*  #388  */
 		return;
 	}
 
@@ -4049,16 +4111,20 @@ void COMBINE(sll)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_SLL] ++;	/*  #388  */
+
 	if (n_back < 2)
 		return;
 
 	if (ic[-2].f == instr(xor) && ic[-1].f == instr(andi)) {
 		ic[-2].f = instr(xor_andi_sll);
+		cpu->cd.mips.fold_install[MIPS_FOLD_XOR_ANDI_SLL] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(andi)) {
 		ic[-1].f = instr(andi_sll);
+		cpu->cd.mips.fold_install[MIPS_FOLD_ANDI_SLL] ++;	/*  #388  */
 		return;
 	}
 }
@@ -4072,11 +4138,14 @@ void COMBINE(ori)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_ORI] ++;	/*  #388  */
+
 	if (n_back < 1)
 		return;
 
 	if (ic[-1].f == instr(set)) {
 		ic[-1].f = instr(lui_ori);
+		cpu->cd.mips.fold_install[MIPS_FOLD_LUI_ORI] ++;	/*  #388  */
 		return;
 	}
 }
@@ -4090,6 +4159,8 @@ void COMBINE(addu)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_ADDU] ++;	/*  #388  */
+
 	if (n_back < 4)
 		return;
 
@@ -4100,6 +4171,7 @@ void COMBINE(addu)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 
 	if (ic[-2].f == instr(addu) && ic[-1].f == instr(addu)) {
 		ic[-2].f = instr(multi_addu_3);
+		cpu->cd.mips.fold_install[MIPS_FOLD_MULTI_ADDU_3] ++;	/*  #388  */
 		return;
 	}
 }
@@ -4115,37 +4187,45 @@ void COMBINE(addiu)(struct cpu *cpu, struct mips_instr_call *ic, int low_addr)
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_ADDIU] ++;	/*  #388  */
+
 	if (n_back < 2)
 		return;
 
 	if (ic[-2].f == instr(addiu) &&
 	    ic[-1].f == instr(bne_samepage)) {
 		ic[-2].f = instr(addiu_bne_samepage_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_ADDIU_BNE_SAMEPAGE_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(set)) {
 		ic[-1].f = instr(lui_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_LUI_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(b_samepage)) {
 		ic[-1].f = instr(b_samepage_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_B_SAMEPAGE_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(beq_samepage)) {
 		ic[-1].f = instr(beq_samepage_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_BEQ_SAMEPAGE_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(bne_samepage)) {
 		ic[-1].f = instr(bne_samepage_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_BNE_SAMEPAGE_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
 	if (ic[-1].f == instr(jr_ra)) {
 		ic[-1].f = instr(jr_ra_addiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_JR_RA_ADDIU] ++;	/*  #388  */
 		return;
 	}
 
@@ -4162,11 +4242,14 @@ void COMBINE(b_daddiu)(struct cpu *cpu, struct mips_instr_call *ic,
 	int n_back = (low_addr >> MIPS_INSTR_ALIGNMENT_SHIFT)
 	    & (MIPS_IC_ENTRIES_PER_PAGE - 1);
 
+	cpu->cd.mips.fold_arm[MIPS_CSITE_B_DADDIU] ++;	/*  #388  */
+
 	if (n_back < 1)
 		return;
 
 	if (ic[-1].f == instr(b_samepage)) {
 		ic[-1].f = instr(b_samepage_daddiu);
+		cpu->cd.mips.fold_install[MIPS_FOLD_B_SAMEPAGE_DADDIU] ++;	/*  #388  */
 	}
 
 	/*  TODO: other branches that are followed by daddiu should be here  */

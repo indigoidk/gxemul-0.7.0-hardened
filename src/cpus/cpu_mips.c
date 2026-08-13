@@ -475,6 +475,47 @@ int mips_cpu_instruction_has_delayslot(struct cpu *cpu, unsigned char *ib)
 }
 
 
+/*  #388: name tables for the fold-witness census printed by
+    mips_cpu_tlbdump() below. Order MUST match enum mips_fold_id and enum
+    mips_combine_site in cpu_mips.h exactly; the negative-array-size
+    typedefs turn a count mismatch into a compile error. (These live here
+    and not in cpu_mips_instr.c, which is included twice into one
+    translation unit and must gain no file-scope objects.)  */
+static const char *mips_fold_names[] = {
+	"multi_sw_2_le", "multi_sw_3_le", "multi_sw_4_le", "multi_sw_5_le",
+	"multi_sw_2_be", "multi_sw_3_be", "multi_sw_4_be", "multi_sw_5_be",
+	"multi_lw_2_le", "multi_lw_3_le", "multi_lw_4_le", "multi_lw_5_le",
+	"multi_lw_2_be", "multi_lw_3_be", "multi_lw_4_be", "multi_lw_5_be",
+	"memset_addiu_bne_sw",
+	"netbsd_r3k_picache_do_inv",
+	"linux_pmax_idle",
+	"netbsd_pmax_idle",
+	"strlen_lb_addiu_bne_nop",
+	"bne_samepage_nop",
+	"beq_samepage_nop",
+	"xor_andi_sll",
+	"andi_sll",
+	"lui_ori",
+	"multi_addu_3",
+	"addiu_bne_samepage_addiu",
+	"lui_addiu",
+	"b_samepage_addiu",
+	"beq_samepage_addiu",
+	"bne_samepage_addiu",
+	"jr_ra_addiu",
+	"b_samepage_daddiu"
+};
+typedef char mips_fold_names_check[(sizeof(mips_fold_names) /
+    sizeof(mips_fold_names[0]) == MIPS_N_FOLDS)? 1 : -1];	/*  #388  */
+
+static const char *mips_csite_names[] = {
+	"sw", "lw", "r3k_cache_inv", "nop", "sll", "ori", "addu", "addiu",
+	"b_daddiu"
+};
+typedef char mips_csite_names_check[(sizeof(mips_csite_names) /
+    sizeof(mips_csite_names[0]) == MIPS_N_COMBINE_SITES)? 1 : -1];	/*  #388  */
+
+
 /*
  *  mips_cpu_tlbdump():
  *
@@ -487,6 +528,50 @@ void mips_cpu_tlbdump(struct cpu *cpu, int rawflag)
 {
 	int i, j;
 	struct machine* m = cpu->machine;
+
+	/*  #388: fold-witness census -- printed for EVERY cpu in the machine
+	    ahead of both TLB output paths, on any tlbdump invocation. Pull-
+	    only: nothing prints during a normal boot. One MFOLD row per fold
+	    id with a nonzero install or fire, one MFOLD_ARM row per COMBINE
+	    site with a nonzero arm count, MFOLD_IDLE entered-counts (the
+	    idles' fire is in their MFOLD row); MFOLD_END always follows,
+	    with n = data rows printed and nonzero = nonzero fold rows.  */
+	for (i=0; i<m->ncpus; i++) {
+		struct mips_cpu *mc = &m->cpus[i]->cd.mips;
+		int rows = 0, nz = 0;
+
+		printf("cpu%i: MFOLD_START version=1 n=%i\n",
+		    i, (int) MIPS_N_FOLDS);
+		for (j=0; j<MIPS_N_FOLDS; j++) {
+			if (mc->fold_install[j] == 0 && mc->fold_fire[j] == 0)
+				continue;
+			printf("cpu%i: MFOLD %s install=%" PRIu64
+			    " fire=%" PRIu64 "\n", i, mips_fold_names[j],
+			    (uint64_t) mc->fold_install[j],
+			    (uint64_t) mc->fold_fire[j]);
+			rows ++;
+			nz ++;
+		}
+		for (j=0; j<MIPS_N_COMBINE_SITES; j++) {
+			if (mc->fold_arm[j] == 0)
+				continue;
+			printf("cpu%i: MFOLD_ARM %s count=%" PRIu64 "\n",
+			    i, mips_csite_names[j],
+			    (uint64_t) mc->fold_arm[j]);
+			rows ++;
+		}
+		for (j=0; j<2; j++) {
+			if (mc->idle_entered[j] == 0)
+				continue;
+			printf("cpu%i: MFOLD_IDLE %s entered=%" PRIu64 "\n",
+			    i, j == 0? "linux" : "netbsd",
+			    (uint64_t) mc->idle_entered[j]);
+			rows ++;
+		}
+		printf("cpu%i: MFOLD_END n=%i nonzero=%i\n", i, rows, nz);
+	}
+	fflush(stdout);	/*  #388: absent MFOLD_END must mean the emulator
+	    died, never that output sat in a buffer  */
 
 	/*  Raw output:  */
 	if (rawflag) {

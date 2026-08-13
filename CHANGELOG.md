@@ -4192,6 +4192,71 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-twenty-eighth round (#388, phase A) — the MIPS folds get their first witness: 34 variants, none of which any instrument could see fire
+
+The nine MIPS COMBINE sites install 34 fold-handler variants (18 hand-written — five of
+them living in the branch-handler block far from the others — plus 16 generated
+`multi_{l,s}w_{2..5}_{le,be}`), and until this round NOTHING could witness one firing:
+one `debugmsg` in the whole file (the unknown-opcode diagnostic), no counters, no harness
+rows. Because most folds are architecturally transparent by construction, any
+result-asserting row would pass whether or not the fold fired — the recorded vacuity
+mode, now closed the same way m88k's #380 closed it: PULL counters, printed only by
+`tlbdump`, zero output on any normal boot.
+
+**What phase A ships** (design converged from a seven-seat pass-1 that materially changed
+the brief — the details are the review's findings, not the original design):
+- `cpu_mips.h`: `enum mips_fold_id` (34, mechanically verified against the 35 replacement
+  sites — strlen's two mode-arms share one id), `enum mips_combine_site` (9), and
+  `fold_arm[9]` / `fold_install[34]` / `fold_fire[34]` / `idle_entered[2]` at the very END
+  of `struct mips_cpu`, so the hot `fold_fire` writes never share a cache line with the
+  dispatch fields in `DYNTRANS_ITC`.
+- `fold_arm` counts each COMBINE body ENTERED (before its `n_back` guard) — it separates
+  "the opcode never appeared" from "appeared but no arm matched", the two zeros a census
+  must not conflate. `fold_install` counts each per-variant replacement assignment — at
+  the REPLACEMENT SITES inside the COMBINE bodies, not the decoder arming lines, which
+  are unconditional, variant-blind, and re-fire on every re-translation (three seats
+  convergent; installing there is the lying-instrument variant of the design). The 16
+  multi-width assignments are brace-less if/else pairs, so their bumps are single
+  ternary-indexed lines after each pair. Escalation supersedes installed widths before
+  they ever dispatch, so **install-without-fire is the NORMAL state for `multi_*_2..4`**
+  — recorded here so the census cannot manufacture phantom defects from it.
+- `fold_fire` by the control-flow rule (unreachable from every delegating bail, once per
+  folded execution, before the first fused effect), with the pinned exceptions: the two
+  pmax idles bump immediately before `instr(idle)` (their unconditional lui commit would
+  otherwise count every poll — `idle_entered[]` counts dispatches separately);
+  `jr_ra_addiu` bumps after its delay-slot guard so the `#228` AdEL path (fused addiu
+  already committed) stays counted; `memset` bumps after the page clamp (the clamp still
+  folds — fire counts handler COMPLETIONS, one per page chunk).
+- The generator emits the 32 generated bodies' bumps itself (`tmp_mips_loadstore_multi.c`
+  is regenerated at build time; each build tree asserts the regenerated file carries
+  exactly 32 — a stale copy propagated by hand would otherwise report the whole multi
+  family as unreached).
+- `tlbdump` prints, above its raw/nice split and for every CPU: `MFOLD_START version=1
+  n=34`, one row per nonzero fold (`install= fire=`), nonzero `MFOLD_ARM`/`MFOLD_IDLE`
+  rows, and ALWAYS `MFOLD_END n=<rows> nonzero=<K>` followed by a flush — absent END
+  means DEAD, present END with nonzero=0 means a live all-zero instrument, and the
+  START/END counts make a truncated print distinguishable from both.
+
+**Measured this phase:** both build trees compile with the regenerated tmp at exactly 32
+emitted bumps; a debugger-only smoke on `-E testmips` prints `MFOLD_START version=1 n=34`
+/ `MFOLD_END n=0 nonzero=0` (the all-zero live state, over plain piped stdin — the
+debugger needs no pty when no guest console is involved, an operational fact phase B
+reuses). And the no-perturbation oracle: one clean serial gate 3 run on the instrumented
+build — **mips-rigs PASS, 6 checks, zero FAIL**, pmax boots OpenBSD 2.2 to `uid=0(root)`
+and arc completes 13/13 harness steps to root, byte-for-byte the committed boot
+behaviour. The counters are invisible until pulled.
+
+**Phases B and C follow in-round:** B = `mips_fold_probe.py` (3max LE + testmips BE rows,
+free-running with the breakpoint on a non-arming instruction, fire == passes−1 under a
+breakpoint — read-ahead is disabled MACHINE-wide by any breakpoint, and folds install
+during read-ahead when none is set, so the no-breakpoint expectation is passes, per-row
+arithmetic never shared) plus the single-sub-arm mutant graded as an expectation vector;
+C = the reachability census on the committed OpenBSD 2.2 boots, whose zeros will be
+recorded as "unreached under the committed rigs" with `expected_zero_reason` tags — never
+as "dead": pmax structurally cannot reach `b_samepage_daddiu` (64-bit) nor arc the
+EXC3K-only cache fold, and the `netbsd_*`/`linux_*` names encode guests the committed
+rigs do not run.
+
 ## One-hundred-and-twenty-seventh round (#387) — #386's pass-2: three wrong swp forms passed all 58 rows, and eight records read wrong
 
 Detector + records only — no emulator code (all seven answering pass-2 seats verified the

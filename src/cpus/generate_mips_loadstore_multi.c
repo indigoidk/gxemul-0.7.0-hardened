@@ -86,6 +86,14 @@ void generate_multi(int store, int endianness, int n, int sixtyfourbit)
 
 	printf("\t\treturn;\n\t}\n");
 
+	/*  #388: fold-fire witness -- this one emission point covers all 32
+	    generated bodies; past the single bail above, the handler always
+	    completes. The enum NAME is emitted textually and resolves via
+	    cpu_mips.h in the including translation unit.  */
+	printf("\tcpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_%cW_%i_%cE] ++;"
+	    "\t/*  #388  */\n",
+	    store? 'S' : 'L', n, endianness? 'B' : 'L');
+
 	for (i=0; i<n; i++)
 		printf("\taddr%i = (addr%i >> 2) & 0x3ff;\n", i, i);
 
