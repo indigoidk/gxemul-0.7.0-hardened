@@ -218,13 +218,24 @@ check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG"
 # NOTE what this does NOT prove: it tests the four FORMS, not the probes, so on
 # its own it would stay green if a probe were reverted. The static census in
 # gate_hygiene.sh is what binds the shipped code to this result.
-#  A PER-RUN NONCE, and it is the reason this section cannot be faked. A seat
-#  demonstrated a bypass in which readiness_predicate_test.py was replaced by a
-#  script that PRINTED the six expected rows and carried the pinned token counts
-#  in a TRAILING comment -- computing nothing, passing everything. The nonce goes
-#  into the scripted reply, so the reported byte counts shift by exactly its
-#  length; a transcript that does not run the loops cannot produce them, and it
-#  cannot be hardcoded because $$ differs every run.
+#  A PER-RUN NONCE. It RAISES THE BAR AND DOES NOT CLOSE THE DOOR, and the
+#  previous version of this comment claimed otherwise -- wrongly.
+#
+#  What it does stop: a static transcript. The nonce enters the scripted reply,
+#  so the reported byte counts shift by exactly its length, and a file of frozen
+#  numbers fails (measured: fake reports 53 where 59 is required).
+#
+#  *** WHAT IT DOES NOT STOP, MEASURED BY A SEAT: the nonce is passed as an
+#  ARGUMENT TO THE VERY SCRIPT BEING VALIDATED, so a fake needs only
+#  len(sys.argv[1]) to compute the affine counts. A 12-line transcript that runs
+#  no loops passed all ten checks here and both pins in gate_hygiene. ***
+#  An oracle that asks the prover to KNOW A PUBLIC INPUT is not an oracle that
+#  asks it to DO THE WORK. A nonce only binds when it is WITHHELD -- the gate
+#  would have to recompute the expected stream itself, or vary something whose
+#  effect is not a length the script is handed. That is a design change, filed
+#  rather than rushed; see the queue entry on binding this test to real work.
+#  Recorded here rather than quietly weakened, because a check that overstates
+#  what it proves is worse than one that states its limit.
 RNONCE="n$$"
 RLEN=${#RNONCE}
 RLOG=$LOGDIR/readiness_predicate.log
