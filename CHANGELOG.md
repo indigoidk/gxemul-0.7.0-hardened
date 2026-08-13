@@ -4192,6 +4192,104 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-second round (#392) — the readiness predicate matched the same prompt twice
+
+Fourteen sites across eight probes decided "the command's response is complete" with
+
+```python
+if buf.rstrip().endswith(">"):
+```
+
+over the WHOLE accumulated buffer. Two independent defects live in that one line, and
+fixing either alone leaves the probe broken — which is the part that took measuring to
+learn.
+
+**Measured first, on `m88k_rounding_probe` — four arms, only the reader width and the
+predicate differing.** The 1-byte reader evaluates the predicate at every byte boundary,
+which converts a scheduler race into a certainty; it invents no failure the committed code
+cannot have, it removes the luck that usually hides it.
+
+| arm | reader | predicate | result |
+|---|---|---|---|
+| base | 64 KB | bare `>`, whole buffer (as committed) | 80/80 |
+| A | 1 byte | bare `>`, whole buffer (UNCHANGED) | **0/80** — 78 rows `None`, 2 rows WRONG |
+| B | 1 byte | full `GXemul>`, whole buffer | **0/80** — identical to A |
+| C | 1 byte | full `GXemul>` + fresh mark | **80/80** |
+
+**Arm B is the result that mattered.** Changing the prompt STRING and nothing else helped
+not at all. The reason is a detail that is easy to get backwards, so it was proved offline
+rather than argued: the prompt is `"GXemul> "` **with a trailing space**. A wait that stops
+as soon as it has seen `...GXemul>` leaves that space unread; the next wait's first read
+consumes exactly that one byte; and `rstrip()` then DELETES IT AGAIN, so the whole-buffer
+predicate matches the SAME prompt a second time and returns having read nothing of the new
+reply. `rstrip()` erases the only evidence that the prompt was already consumed. A stricter
+prompt string cannot help, because the string it matches is a real prompt — just the wrong
+one.
+
+That mechanism is now a committed test, `regress/readiness_predicate_test.py`, which
+replays the probes' own `wait()` loop over a scripted byte stream. Pure Python: no emulator,
+no pty, no host timing. Its four rows are a truth table, and the second wait reads
+1 / 1 / 9 / 53 bytes for bare+whole, full+whole, bare+mark and full+mark respectively —
+only the last sees the reply. A readiness test whose verdict moved with host load would
+repeat the mistake that once false-FAILed a 45-minute battery.
+
+**Shipped:** all 14 sites take a fresh `mark` before the write, require the full prompt
+inside `buf[mark:]`, and require the command's own ECHO in that slice first. The echo is
+emitted by the debugger's own read loop (`debugger.c:594`), not by the tty
+(`console.c:859-863` clears `ECHO`), so its presence proves the debugger consumed the
+command — measured: a command written 0.25 s into a 2,196,367-byte `dump` echoed at offset
+2195480, i.e. only when the debugger reached its prompt, never interleaved. The empty
+command is guarded, because an empty line is the debugger's repeat-last-command form and
+echoes only `\r\n`; no probe sends one today. `send()` now also RETURNS its verdict.
+
+**Four claims made during this round were WRONG and are recorded as such, because three of
+them were believed by more than one reviewer:**
+
+- *"`reg` is the only command that reaches a register dump."* **False.**
+  `promemul/sh_ipl_g.c:105` dumps registers on any guest exception that is not `TRAPA #0xfc`,
+  which fires during `step` on landisk — measured on a committed row. Since #314 makes every
+  unimplemented SH encoding raise `EXPEVT_RES_INST`, every such row takes that path. The
+  "arms 4 of 14" and "arms 7 of 14" counts are both withdrawn; the honest statement is that
+  a `>`-terminated line can come from any command that runs guest code, and from several
+  PROM paths.
+- *"The two wrong values came from a stale register dump."* **False.** `run_tcnd` sends
+  exactly one `reg`, so no earlier dump exists in that session; the only text matching
+  `\bpc\s*=\s*0x` is the ECHO of the probe's own `send("pc=0x00010000")`. (Independently
+  corroborated: the luna88k `boot` a.out carries no symbol table at all, so no symbol line
+  could have supplied it either.)
+- *"Requiring the echo therefore cannot be the fix."* **False**, and the correction is
+  subtle: once every preceding send waits for its own echo AND prompt, that earlier echo
+  necessarily precedes the later mark and cannot enter the slice. The consumer ambiguity is
+  defence-in-depth, not a surviving hole; the real residual is an ignored wait failure.
+- *"Anchor the consumer on the dump's two-space spelling."* **Would have broken MIPS** — the
+  pmax dump prints the pc with no `0x` prefix at all. The portable form is
+  `^cpu\d+:\s+pc\s*=\s*(?:0x)?([0-9a-f]+)`.
+
+**Also assessed and REFUTED, recorded so it is not raised again:** a reviewer reported
+`_images/openbsd76-landisk-bsd.rd` as a gzip-wrapped ELF that `file.c:307-311` rejects with
+`exit(1)`, which would have made both SH probes dead. It IS gzip, but GXemul gunzips it
+transparently first — the rejection is unreachable on that path. **And `-A`**, proposed for
+all fourteen launch sites to strip colour: measured no-op (zero escape bytes on all five
+rigs, and colour is embedded INSIDE the symbol name, so `<sym>` would still end in `>`).
+Neither change was made.
+
+**Gates.** `gate_hygiene` gains the positive half of the check — the bare count drops to 0
+and three new counts require all fourteen anchored predicates, echo guards and marked sends,
+by exact equality, so a single reverted site reddens two rows. `gate_offline` gains the
+truth table. The offline test is exempted from the hygiene census (it deliberately contains
+the broken spellings) and its own contents are pinned in the same gate, so the exemption
+cannot outlive what it exempts. Mutants: reverting one site → bare-row and anchored-row both
+FAIL; dropping one echo guard → echo-row FAILs; gutting a truth-table negative arm →
+the pin FAILs; unmutated control all green. `gate_hygiene` PASS (45 checks); the converted
+`m88k_rounding_probe` scores 80/80 with the committed reader, warn-control 1, warns 0.
+
+**Deliberately NOT in scope, each filed:** the consumer/echo regex ambiguity; the three
+halt detectors that compute a whole-buffer flag once and never re-evaluate it (reproduced —
+a genuine halt reported "alive" on 2 of 6 runs when `CODE` sits on a symbol); the two
+whole-buffer predicates in `arm_flags_probe.py`, which keep a fail-closed allowlist entry
+here; and the unrecorded invariant that every probe's `CODE` address is safe only because it
+happens to have no symbol, which nothing states or enforces.
+
 ## One-hundred-and-thirty-first round (#391) — a control that passed on evidence it never received
 
 `arm_endian_probe.py`'s `send()` computed a readiness verdict and **discarded it**, returning

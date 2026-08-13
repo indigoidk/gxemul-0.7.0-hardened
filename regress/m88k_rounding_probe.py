@@ -358,21 +358,27 @@ def run_tcnd(seeds, op):
         buf += d.decode("latin1", "replace")
         return True
 
-    def wait(timeout=60):
+    def wait(timeout=60, mark=0, echo=None):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            resp = buf[mark:]
+            #  #392: the ECHO first -- a prompt in the slice proves
+            #  nothing until the debugger has taken the command.
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
                 return True
         return False
 
     def send(x):
         b = (x + "\n").encode("latin1")
+        _mark = len(buf)
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        wait()
+        return wait(mark=_mark, echo=x if x else None)
 
     if not wait(120):
         try:
@@ -495,21 +501,27 @@ def run(fcr, seeds, op, dest):
         buf += d.decode("latin1", "replace")
         return True
 
-    def wait(timeout=60):
+    def wait(timeout=60, mark=0, echo=None):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            resp = buf[mark:]
+            #  #392: the ECHO first -- a prompt in the slice proves
+            #  nothing until the debugger has taken the command.
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
                 return True
         return False
 
     def send(s):
         b = (s + "\n").encode("latin1")
+        _mark = len(buf)
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        wait()
+        return wait(mark=_mark, echo=s if s else None)
 
     if not wait(120):
         try:
@@ -578,21 +590,27 @@ def run_warn_control():
         buf += d.decode("latin1", "replace")
         return True
 
-    def wait(timeout=60):
+    def wait(timeout=60, mark=0, echo=None):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            resp = buf[mark:]
+            #  #392: the ECHO first -- a prompt in the slice proves
+            #  nothing until the debugger has taken the command.
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
                 return True
         return False
 
     def send(s):
         b = (s + "\n").encode("latin1")
+        _mark = len(buf)
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        wait()
+        return wait(mark=_mark, echo=s if s else None)
 
     if not wait(120):
         try:
@@ -677,21 +695,27 @@ def run_retention():
         buf += d.decode("latin1", "replace")
         return True
 
-    def wait(timeout=60):
+    def wait(timeout=60, mark=0, echo=None):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
                 return False
-            if buf.rstrip().endswith(">"):
+            resp = buf[mark:]
+            #  #392: the ECHO first -- a prompt in the slice proves
+            #  nothing until the debugger has taken the command.
+            if echo is not None and echo not in resp:
+                continue
+            if len(buf) > mark and resp.rstrip().endswith("GXemul>"):
                 return True
         return False
 
     def send(s):
         b = (s + "\n").encode("latin1")
+        _mark = len(buf)
         n = 0
         while n < len(b):
             n += os.write(fd, b[n:])
-        wait()
+        return wait(mark=_mark, echo=s if s else None)
 
     if not wait(120):
         try:

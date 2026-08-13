@@ -40,11 +40,18 @@ gate_begin "log-hygiene"
 #  microseconds wide, and armed on every CPU family whose dump starts that
 #  way (MIPS, PPC, SH, m88k all do).
 #
-#  This is a RATCHET, not the fix.  Converting the sites is its own round --
-#  8 files and 5 gates, all needing re-baselining.  Until then the count is
-#  FROZEN: any new occurrence fails this gate immediately, so the defect
-#  cannot spread while the conversion is queued.  When the conversion lands,
-#  drop EXPECT_BARE to 0 in the same commit.
+#  THE CONVERSION HAS LANDED (#392), so EXPECT_BARE is now 0 and this is a
+#  RATCHET AGAINST REGRESSION rather than against spread.  All 14 sites now take
+#  a fresh mark before the write, require the FULL prompt in that slice, and
+#  require the command's own echo first.
+#
+#  The converted predicate deliberately keeps the LITERAL endswith("GXemul>")
+#  spelling, which is the idiom the ARM probes already use.  A reviewer proposed
+#  a shared helper holding the prompt in a constant or a regex; that would have
+#  been counted as an UNRECOGNISED spelling by the closed-world check below and
+#  failed this gate.  Matching the house idiom kept the ratchet working with no
+#  redesign -- worth remembering the next time a "cleaner" abstraction is
+#  proposed for something a static check is watching.
 #
 #  Exact equality, not a ceiling, and on purpose: a "<=" check would let the
 #  number fall silently, and a silent fall is how you lose track of whether
@@ -63,7 +70,7 @@ gate_begin "log-hygiene"
 #      unknown fails.  That converts "I grepped for the bad thing" into "I
 #      enumerated everything and recognised all of it", which is the only form
 #      that cannot be evaded by inventing a new way to write it.
-EXPECT_BARE=14
+EXPECT_BARE=0
 EXPECT_UNKNOWN=0
 #  CODE ONLY.  The first version of this check counted a line of PROSE -- a
 #  comment in arm_flags_probe.py that discusses endswith() -- and reported an
@@ -72,7 +79,17 @@ EXPECT_UNKNOWN=0
 #  stripped before anything is counted.  (Known limit, stated rather than
 #  hidden: an endswith() sitting after code on the same line as a trailing
 #  comment is still counted as code, which is the safe direction.)
-py_code() { find "$HERE" -name '*.py' -type f -print0 2>/dev/null | \
+#  readiness_predicate_test.py is EXCLUDED here and pinned separately below.
+#  It is the offline truth table for #392, so it necessarily CONTAINS the two
+#  broken spellings -- demonstrating them is its whole job. Counting them with
+#  the live sites would make the ratchet permanently red.
+#
+#  This is a FAIL-CLOSED exception, not a hole: the file is named exactly, and
+#  its own contents are asserted below, so it cannot quietly stop testing what it
+#  claims to test. A loose `grep -v test` would have been the wrong shape -- it
+#  would silently exempt any future file with "test" in its name.
+py_code() { find "$HERE" -name '*.py' -type f \
+                 ! -name 'readiness_predicate_test.py' -print0 2>/dev/null | \
             xargs -0 grep -h "endswith(" 2>/dev/null | grep -v '^[[:space:]]*#'; }
 #  -o, so these count OCCURRENCES and not LINES.  With -c a single line holding
 #  two different spellings counts once in each of the three totals and drives
@@ -87,6 +104,44 @@ full=$(py_code | grep -o "endswith([\"']GXemul>[\"'])" | wc -l)
 unknown=$((allends - bare - full))
 check "readiness: bare-prompt sites frozen (#37)" "$bare" "$EXPECT_BARE"
 check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN"
+
+#  THE POSITIVE HALF OF THE #392 CHECK, and it is the half that binds the offline
+#  truth table in gate_offline.sh to the code that actually ships.  Counting only
+#  the ABSENCE of the bad spelling is not enough: a site could be deleted, or
+#  reverted to something that is neither the old form nor the new one, and the two
+#  checks above would both stay green.  So count the three constructs the
+#  conversion introduced and require all fourteen of each.
+#
+#  Exact equality again, and for the same reason as EXPECT_BARE: a ">=" would let
+#  a site quietly disappear.  If a probe legitimately gains or loses a wait site,
+#  this number is edited deliberately, in the same commit, by someone who looked.
+EXPECT_CONVERTED=14
+conv_anchor=$(py_code | grep -o 'resp.rstrip().endswith("GXemul>")' | wc -l)
+conv_echo=$(printf '%s\n' "$(find "$HERE" -name '*_probe.py' -type f -print0 2>/dev/null | \
+            xargs -0 grep -h 'echo is not None and echo not in resp' 2>/dev/null)" | grep -c .)
+conv_mark=$(printf '%s\n' "$(find "$HERE" -name '*_probe.py' -type f -print0 2>/dev/null | \
+            xargs -0 grep -h 'return wait(mark=_mark' 2>/dev/null)" | grep -c .)
+check "readiness: anchored full-prompt sites (#392)" "$conv_anchor" "$EXPECT_CONVERTED"
+check "readiness: echo guard present (#392)"         "$conv_echo"   "$EXPECT_CONVERTED"
+check "readiness: send takes a fresh mark (#392)"    "$conv_mark"   "$EXPECT_CONVERTED"
+
+#  PIN THE EXEMPTED FILE'S OWN CONTENTS.  readiness_predicate_test.py is excluded
+#  from the census above because it deliberately contains the broken spellings;
+#  that exemption is only safe while the file still HOLDS them.  If its two
+#  negative arms were deleted the offline truth table would go green by testing
+#  nothing, and the exclusion above would hide it.  So the exemption and this
+#  assertion travel together -- an allowlist entry that checks what it exempts.
+#  -o again, not -c: OCCURRENCES, not lines.  Same reason as above, and the
+#  expected numbers are asymmetric for a real reason -- 2 bad arms, but 3 good
+#  occurrences, because besides the two `full-*` arms the test also prints the
+#  LEFTOVER demonstration line, which re-matches the prompt on purpose to show
+#  that rstrip() erases the trailing space.  The first draft of this check
+#  expected 2 and failed; the file was right and the expectation was wrong.
+rpt="$HERE/readiness_predicate_test.py"
+check "readiness: truth table keeps its 2 bad arms" \
+      "$( [ -f "$rpt" ] && grep -o 'endswith(">")' "$rpt" | wc -l || echo missing)" "2"
+check "readiness: truth table keeps its good arms + leftover demo" \
+      "$( [ -f "$rpt" ] && grep -o 'endswith("GXemul>")' "$rpt" | wc -l || echo missing)" "3"
 
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog

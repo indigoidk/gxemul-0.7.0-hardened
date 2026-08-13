@@ -203,5 +203,30 @@ check     "interp: verdict"                        "$(grep -c 'INTERP_RESULT=PAS
 
 check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG")" "1"
 
+# ---- #392: the readiness predicate, proved offline ----------------------
+# Belongs in THIS gate because it needs no emulator, no pty and no host timing --
+# it replays the probes' wait() loop over a scripted byte stream. That property is
+# the point: a readiness test whose verdict moved with host load would repeat the
+# mistake that once false-FAILed a 45-minute battery.
+#
+# The four rows are a truth table, and the middle two are the interesting ones:
+# changing the prompt STRING alone does not fix the defect (full+whole still
+# returns after one byte), and anchoring alone does not either. Only both together
+# read the reply. If a future change makes 'full-whole' pass, the predicate has
+# stopped being tested rather than started working.
+#
+# NOTE what this does NOT prove: it tests the four FORMS, not the probes, so on
+# its own it would stay green if a probe were reverted. The static census in
+# gate_hygiene.sh is what binds the shipped code to this result.
+RLOG=$LOGDIR/readiness_predicate.log
+python3 "$HERE/readiness_predicate_test.py" > "$RLOG" 2>&1 || true
+rrow() { grep -E "^READINESS_ROW +$1 " "$RLOG" | grep -oE 'saw_reply=[a-z]+' | cut -d= -f2; }
+check     "readiness: bare+whole returns early"     "$(rrow bare-whole)" "no"
+check     "readiness: full+whole ALSO returns early" "$(rrow full-whole)" "no"
+check     "readiness: bare+mark returns early"      "$(rrow bare-mark)"  "no"
+check     "readiness: full+mark reads the reply"    "$(rrow full-mark)"  "yes"
+check     "readiness: rstrip re-matches old prompt" "$(grep -c 'READINESS_LEFTOVER.*keeps_prompt=yes' "$RLOG")" "1"
+check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT=4/4' "$RLOG")" "1"
+
 gate_end
 exit $?
