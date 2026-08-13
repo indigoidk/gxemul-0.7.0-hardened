@@ -4370,6 +4370,45 @@ a genuine `HALTED` row into a different wrong verdict while the control stays gr
 rows in the seat's forced-bad-echo run. Today's exposure is zero (293/293 sends verified live),
 so it is a latent trap, not a live defect.
 
+**Pass 2c — the pin proved token counts, not arms, and the "fixed" anchor still had a
+one-word evasion.** Two seats answered (the three cloud seats were rate-limited, HTTP 429,
+not silent — see below).
+
+A seat built the strongest gutting and measured it: replace
+`readiness_predicate_test.py` with a script that **computes nothing** and simply prints the
+six expected rows, carrying the pinned token counts in a **trailing** comment — which the
+gate's filter preserves, because it strips only lines that *begin* with `#`. That fake passed
+the pin and every one of gate_offline's six row checks. So the earlier claim that
+`gate_offline` made the exemption safe was wrong: the gate extracts self-reported fields, and
+a transcript can report anything.
+
+The fix does not try to out-grep the faker. The test now takes a **caller-supplied nonce**,
+places it inside the scripted reply, and the reported byte counts shift by exactly its length;
+`gate_offline` passes `n$$` and checks the arithmetic. Measured across nonce lengths 0, 5 and
+10: `full-mark` is 53 + len and `late-echo` is 60 + len. A hardcoded transcript cannot satisfy
+that without running the loops, and it cannot be pre-computed because the nonce differs every
+run. Mutant: the real test reports 59 for a 6-character nonce; the fake reports 53 and the
+gate reddens.
+
+The second finding is the **third** tightening of one count. `conv_mark` began as
+`'return wait(mark=_mark'` — a prefix satisfied by the de-echoed code. Pass 2b anchored it at
+`', echo='`, and a seat pointed out that still admits `echo=None`, which passes the argument
+and disables the guard in one word. It now anchors the whole conditional. Each round the
+surviving prefix was a real substring of *both* the fixed and the broken form, which is
+precisely the property a detector must not have. Mutant: rewriting all fourteen sites to
+`echo=None` now reddens the row.
+
+Two smaller corrections, both from the same pass: the docstring called mark-plus-prompt "the
+shipped form", omitting the echo the round actually ships — two seats flagged it — and the
+echo citation pointed at `debugger.c:589` where the character echo is at `:597`.
+
+**Seat record, stated because a rate limit is not a considered non-answer.** Two seats
+answered this pass; all three Ollama cloud seats returned HTTP 429 on both panel runs fired
+within ten minutes of each other. `panel.sh` now distinguishes the two cases in its summary
+and says so out loud, and it derives the seat denominator from the roster instead of the
+hardcoded "6" that survived a seventh seat being added — the run that proved Grok working
+printed "1/6 … no answer from: … grok".
+
 ## One-hundred-and-thirty-first round (#391) — a control that passed on evidence it never received
 
 `arm_endian_probe.py`'s `send()` computed a readiness verdict and **discarded it**, returning

@@ -138,7 +138,15 @@ conv_echo=$(probe_code 'echo is not None and echo not in resp' | grep -c .)
 #  gate_offline, gate_mips_rounding and gate_sh_rounding simultaneously: a
 #  shipped fix with no detector, which is this project's worst vacuity class.
 #  The comma is what makes the assertion an assertion.
-conv_mark=$(probe_code 'return wait(mark=_mark, echo=' | grep -c .)
+#  ANCHOR THROUGH THE WHOLE EXPRESSION, not just as far as "echo=". A pass-2b
+#  seat pointed out that the previous form still admitted
+#      return wait(mark=_mark, echo=None)
+#  which passes the argument and disables the guard in ONE WORD. This is the
+#  THIRD tightening of this same count -- first it stopped at "_mark", then at
+#  "echo=", now at the full conditional. Each time the surviving prefix was a
+#  real substring of both the fixed and the broken code, which is exactly the
+#  property a detector must not have.
+conv_mark=$(probe_code 'return wait(mark=_mark, echo=[a-z][a-z]* if [a-z][a-z]* else None)' | grep -c .)
 
 #  THE HOLE A PASS-2 SEAT FOUND, and it is the sharpest finding of the review:
 #  the checks above catch a REVERT but not an ADDITION of the OTHER broken form.

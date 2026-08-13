@@ -218,8 +218,18 @@ check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG"
 # NOTE what this does NOT prove: it tests the four FORMS, not the probes, so on
 # its own it would stay green if a probe were reverted. The static census in
 # gate_hygiene.sh is what binds the shipped code to this result.
+#  A PER-RUN NONCE, and it is the reason this section cannot be faked. A seat
+#  demonstrated a bypass in which readiness_predicate_test.py was replaced by a
+#  script that PRINTED the six expected rows and carried the pinned token counts
+#  in a TRAILING comment -- computing nothing, passing everything. The nonce goes
+#  into the scripted reply, so the reported byte counts shift by exactly its
+#  length; a transcript that does not run the loops cannot produce them, and it
+#  cannot be hardcoded because $$ differs every run.
+RNONCE="n$$"
+RLEN=${#RNONCE}
 RLOG=$LOGDIR/readiness_predicate.log
-python3 "$HERE/readiness_predicate_test.py" > "$RLOG" 2>&1 || true
+python3 "$HERE/readiness_predicate_test.py" "$RNONCE" > "$RLOG" 2>&1 || true
+rbytes() { grep -E "^READINESS_ROW +$1 " "$RLOG" | grep -oE 'bytes=[0-9]+' | cut -d= -f2; }
 rrow() { grep -E "^READINESS_ROW +$1 " "$RLOG" | grep -oE 'saw_reply=[a-z]+' | cut -d= -f2; }
 check     "readiness: bare+whole returns early"     "$(rrow bare-whole)" "no"
 check     "readiness: full+whole ALSO returns early" "$(rrow full-whole)" "no"
@@ -234,6 +244,11 @@ check     "readiness: rstrip re-matches old prompt" "$(grep -c 'READINESS_LEFTOV
 #  requiring the new command's own echo first.
 check     "readiness: late prompt fools a no-echo wait"  "$(rrow late-noecho)" "no"
 check     "readiness: echo guard survives a late prompt" "$(rrow late-echo)"   "yes"
+#  THE ANTI-FAKE CHECK. Both counts are affine in the nonce length, so a printed
+#  transcript cannot satisfy them. 53 and 60 are the measured baselines at
+#  nonce="" and the arithmetic was verified at lengths 0, 5 and 10.
+check     "readiness: full-mark byte count tracks the nonce" "$(rbytes full-mark)" "$((53 + RLEN))"
+check     "readiness: late-echo byte count tracks the nonce" "$(rbytes late-echo)" "$((60 + RLEN))"
 check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT=6/6' "$RLOG")" "1"
 
 gate_end

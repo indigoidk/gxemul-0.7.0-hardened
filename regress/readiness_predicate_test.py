@@ -12,14 +12,20 @@ That last point is deliberate. This project has already had a 45-minute battery
 false-FAIL because a wall-clock budget was used as an oracle under host load. A
 readiness test whose verdict moves with host speed would be the same mistake.
 
-WHAT IT PROVES. Four predicate forms are replayed against the same stream:
+WHAT IT PROVES. SIX rows over two scenarios. Four predicate forms replayed
+against one stream:
 
     bare '>'  + whole buffer     the committed form before #392
     full      + whole buffer     the "obvious" fix -- AND IT DOES NOT WORK
     bare '>'  + fresh mark       the other half alone -- also does not work
-    full      + fresh mark       the shipped form
+    full      + fresh mark       mark + prompt, but NOT yet the shipped form
 
-Only the fourth reads the new command's reply. The other three return early.
+Only the fourth reads the new command's reply; the other three return early.
+Then two more rows over a LATE-PROMPT stream, which is the only thing that
+exercises the echo conjunct -- and the shipped predicate is all three together
+(fresh mark + full prompt + the command's own echo), not the fourth row alone.
+An earlier version of this docstring called row four "the shipped form"; two
+seats flagged that as an overclaim, because it omits the echo.
 
 THE MECHANISM, which is easy to get backwards. The debugger prompt is "GXemul> "
 WITH A TRAILING SPACE. A wait that stops as soon as it has seen "...GXemul>"
@@ -39,7 +45,19 @@ this result -- it counts the converted sites and fails if one goes back. The two
 checks are only meaningful together.
 """
 
+import sys
+
 PROMPT = "GXemul> "
+
+#  A NONCE SUPPLIED BY THE CALLER, and it is what makes this test un-fakeable.
+#  A review seat demonstrated a complete bypass: replace this file with a script
+#  that PRINTS the expected six rows and carries the pinned token counts in a
+#  TRAILING comment (the gate's filter only strips lines that BEGIN with '#').
+#  That fake computed nothing and passed the pin and every gate row.
+#  So the reply now carries a caller-chosen string, and the reported byte counts
+#  shift by exactly its length. The gate passes a nonce and checks the arithmetic,
+#  which a hardcoded transcript cannot satisfy without actually running the loops.
+NONCE = sys.argv[1] if len(sys.argv) > 1 else ""
 
 #  A scripted session, byte-for-byte as a pty delivers it: the previous command's
 #  reply and prompt, then the new command's echo, its reply, and its prompt. The
@@ -48,7 +66,10 @@ PROMPT = "GXemul> "
 #  what the bare form matches.
 PREV_REPLY = "cpu0:  pc  = 0x00010000  < no symbol >\r\n"
 NEW_ECHO = "reg\r\n"
-NEW_REPLY = "cpu0:  pc  = 0x00000400  < no symbol >\r\n"
+#  The nonce sits INSIDE the reply line, so it changes the byte counts without
+#  changing any predicate's behaviour: no predicate inspects the reply's text,
+#  only whether a prompt has arrived after it.
+NEW_REPLY = "cpu0:  pc  = 0x00000400 " + NONCE + " < no symbol >\r\n"
 
 
 def replay(predicate):
