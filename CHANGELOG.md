@@ -4215,12 +4215,15 @@ emulator's own decoder already agreed for LOADS: its pc-relative load fold compu
 **The fix is two scratch words, and the one-word version is measurably wrong.** A
 role-aware guard on a single word looks sufficient until `str pc,[pc,#imm]`, where `arg[0]`
 and `arg[2]` are the SAME pointer: setting it to `+8` for the base silently changes the
-STORED word to `+8` too. A2-9 (`:1639-1642`) permits either `+8` or `+12` for a store of
+STORED word to `+8` too. A2-9 (`:1637-1641`) permits either `+8` or `+12` for a store of
 R15 but **forbids using one for some ARM STR/STM instructions and the other for the rest**,
 and this fork uses `+12` in both the template and the STM path. So `cpu_arm.h` gains
 `tmp_pc_data[2]`, the decoder points `arg[2]` at it at both sites (mode 2 and the mode-3
 twin), and the store arm computes both values unconditionally. Separating the roles at
-DECODE time removes the need for a pointer-identity test at run time, and the `[2]` sizing
+DECODE time removes the need for a pointer-identity test **on the data role** (the load arm
+still has one, and it is still sound — `arg[0]` is the scratch word only when `Rn == PC`;
+pass-2 narrowed this sentence, which had claimed the test was gone altogether), and the
+`[2]` sizing
 keeps a doubleword's second-word access inside the scratch instead of landing on
 `tmp_branch`, the THUMB branch-prefix register.
 
@@ -4241,32 +4244,57 @@ parent's own score). The base-role and data-role mutants produce OPPOSITE signat
 that is what proves the rows separate the two roles rather than merely noticing that
 something changed.
 
-**The round's most valuable result is a claim of its own that measurement destroyed.**
-Three independent sources — the design seat, the compile-and-measure seat, and this block's
-author — concluded that LDRD was in scope, reasoning that it encodes `L == 0`, therefore
-takes the store arm, therefore inherited the `+12` base; one of them backed it by quoting
-the LDRD instantiation's PREPROCESSED body, which does contain `tmp_pc = tmp + 12`. The
-mutant battery refused to cooperate: reverting the base left the LDRD rows GREEN, which is
-impossible if they depended on it. Building the actual pre-#390 parent settled it —
-`ldrd r0,[pc,#0x40]` reads the same words there as on the fixed build. **LDRD's base was
-never four bytes high.** The four LDRD rows had been written as discriminators with a
-`buggy` column that was fiction; they could not have failed for the stated reason, which is
-this project's own vacuity class arriving in its newest disguise — not a row that cannot
-detect its defect, but a row whose defect does not exist. They are re-typed CTRL with
-`arch == buggy` and kept, because the measurement is real: it is standing evidence that
-LDRD with `Rn == PC` is unaffected, and it will redden if a later round drags it into that
-path. **Left open, and worth someone's attention:** the preprocessed LDRD body genuinely
-contains the `+12` assignment, yet the instruction's base is `+8` in practice. Something
-upstream supplies the base for mode-3 `Rn == PC`, or that function is not the one
-dispatched. "Measured unaffected, mechanism unknown" is honest, and weaker than it should
-be. The generalisable lesson: **a mutant that fails to redden a row is not a nuisance to be
-waved through — it is evidence about the row, and here it was the only thing standing
-between a false claim and the record.**
+**[CORRECTED IN PASS 2 — the paragraph that stood here was WRONG, and its correction is
+the most instructive thing in this round. It claimed "LDRD's base was never four bytes
+high" and called the LDRD rows "a row whose defect does not exist". Both are false. The
+compile-and-measure seat settled it by measuring, and the code as shipped is right — it
+fixes MORE than this block originally credited it with.]**
+
+**LDRD's base WAS four bytes high before this round, and this round fixed it.** The reason
+the round briefly believed otherwise is a mechanism worth naming, because it is a
+defect-hiding surface that will do this again. The general path masks the address with
+`addr &= ~(datalen - 1)`, and `datalen` is 8 for LDRD/STRD. The base error is exactly +4.
+So `(I+8+off)` and `(I+12+off)` land in the SAME eight-byte block precisely when the
+correct address is doubleword-aligned — and A2.8 (`ddi0100i.txt:3031`) makes a
+non-doubleword-aligned LDRD/STRD UNPREDICTABLE before ARMv6. **Therefore, on every
+architecturally DEFINED mode-3 `Rn == PC` access, the mask always heals the +4 error, and
+the defect is observable only where correct behaviour is already UNPREDICTABLE.** That is a
+theorem, not an accident of the probe: the round's row used offset `0x40` at the code base,
+which is exactly the aligned case. Rows at offset `0x44`, or with the instruction one word
+later, show the pre-fix base plainly — measured `0xcccc0003` against the fixed build's
+`0xaaaa0001`, on both rigs. The same reasoning covers STRD, whose PC-relative form is a
+DEFINED encoding per A5.3.2.
+
+So the dispatch chain was exactly what the three original sources said: `l=0, s=1, h=0`
+gives `A__LDRD` with no `A__L`, `A__NAME_PC` takes the `#else` arm, the decoder selects the
+populated `_pc` table entry, the general path reads `tmp_pc` as the base — and then the
+mask hides the consequence. Nothing upstream supplies the base.
+
+**The four LDRD rows are therefore the ORDINARY vacuity class — a row that cannot detect
+its defect — not a row whose defect does not exist.** They stay CTRL, because no DISC row
+is available: every layout that defeats the mask is architecturally UNPREDICTABLE, which
+the #355 rule forbids asserting on. But the reason recorded against them was wrong, and the
+promise that they "will redden if a later round drags LDRD into that path" is provably
+false — reverting the base does not move them. That promise is withdrawn.
+
+**The pre-parent methodology was sound; the INFERENCE was the error.** Restoring the three
+touched source files into a copy of the build tree does produce a faithful parent binary,
+and the one real hazard — stale `src/cpus/*.o` silently yielding the fixed binary — is
+excluded by the round's own data, since the STR base rows went RED on that build, which a
+stale-object build could not do. The measurement was right; what was drawn from it was not.
+
+**The generalisable lessons, both of which survive intact and one of which is sharpened:**
+a mutant that fails to redden a row is evidence about the ROW — that part held, and it is
+what exposed the blindness in the first place. But the follow-up inference must be
+"therefore this row cannot see its defect", NOT "therefore the defect is not there". The
+first is a statement about the instrument; the second is a claim about the world, and it
+needs its own measurement. This block made the leap and got it wrong within the same round
+that congratulated itself for not making leaps.
 
 **Not touched, each for its own reason** — the `+12` DATA value is correct and locked by
 A2-9's consistency rule, but only STR (word) is the IMPLEMENTATION DEFINED case: STRB and
 STRBT (`:14342`, `:14415`) and STRH (`:14690`) make `Rd == PC` flatly UNPREDICTABLE, and
-STRD makes an odd `Rd` UNDEFINED (`:14495`). Writing "the architecture permits +8 or +12"
+STRD makes an odd `Rd` UNDEFINED (`:14503`). Writing "the architecture permits +8 or +12"
 across all four would be an overclaim. Also untouched: the writeback forms with `Rn == PC`
 (UNPREDICTABLE; their writeback already only clobbers the scratch), the pc-relative load
 fold, and the doubleword alignment questions.

@@ -568,22 +568,29 @@ GROUPS = [
         ("390 le bothpc", "r5", 0x800c, 0x00000000, "DISC"),
     ]),
 
-    #  LDRD base -- CTRL, and the story behind that is the point.
+    #  LDRD base -- CTRL because these rows are BLIND, not because LDRD is fine.
     #
-    #  These began life as DISC rows, on the reasoning that LDRD encodes L == 0
-    #  and so takes A__NAME_PC's store arm and inherited its +12 base.  That
-    #  reasoning was WRONG, and the mutant battery is what exposed it: reverting
-    #  the base assignment to +12 left these rows GREEN, which they could not be
-    #  if they depended on it.  Building the actual pre-#390 parent settled it --
-    #  r0 reads 0xaaaa0001 there too, identical to the fixed build.  LDRD's base
-    #  was NEVER four bytes high, and the `buggy` column these rows used to
-    #  carry was fiction: they could not have failed for the stated reason.
+    #  [This comment was itself corrected once.  It briefly claimed LDRD's base
+    #  was never wrong.  It was wrong, and #390 fixed it.]
     #
-    #  They are kept, re-typed CTRL with arch == buggy, because the measurement
-    #  is worth having: it is the standing evidence that LDRD with Rn == PC is
-    #  UNAFFECTED by the base-role split, and it will redden if some future
-    #  round drags LDRD into that path.  Three distinct planted words, so the
-    #  row still says WHICH pair was read rather than merely "not a sentinel".
+    #  LDRD does take A__NAME_PC's store arm (it encodes L == 0, so the
+    #  generator never defines A__L for it) and its base WAS four bytes high
+    #  before #390.  These rows cannot see that, and the reason is a theorem
+    #  rather than an accident: the general path masks the address with
+    #  ~(datalen - 1), and datalen is 8 here.  The base error is exactly +4, so
+    #  the wrong and right addresses share an eight-byte block whenever the
+    #  RIGHT one is doubleword-aligned -- and a non-doubleword-aligned LDRD is
+    #  UNPREDICTABLE before ARMv6 (A2.8).  So on every architecturally DEFINED
+    #  layout the mask heals the error, and no legal row can expose it.  Rows at
+    #  offset 0x44, or with the instruction one word later, DO show it -- but
+    #  those are exactly the UNPREDICTABLE layouts #355 forbids asserting on.
+    #
+    #  Hence CTRL with arch == buggy: an honest record that these values do not
+    #  move, NOT a claim that the instruction is unaffected.  Do NOT re-type
+    #  them DISC expecting them to catch a base regression; they cannot, and a
+    #  mutant reverting the base leaves them green.  Three distinct planted
+    #  words, so the row still says WHICH pair was read rather than merely
+    #  "not a sentinel".
     ("390 be ldrd", "barearm", ldrd_pc_prog(),
      ["put w 0x8048, 0xaaaa0001", "put w 0x804c, 0xbbbb0002",
       "put w 0x8050, 0xcccc0003"], [

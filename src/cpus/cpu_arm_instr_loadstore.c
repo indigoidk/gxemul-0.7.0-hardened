@@ -36,6 +36,14 @@
  *	    even if the memory access failed.
  *
  *	o)  Some ARM implementations use pc+8, some use pc+12 for stores?
+ *	    [ANSWERED as #390: yes, and A2-9 (ddi0100i.txt:1637-1641) makes it an
+ *	    IMPLEMENTATION DEFINED choice for the STORED VALUE when Rd is R15 --
+ *	    but it REQUIRES one choice to be used for every ARM STR and STM that
+ *	    stores R15.  This fork uses +12, here and in the STM path, and those
+ *	    two sites must change together or not at all.  Note this latitude
+ *	    covers only the stored VALUE: the BASE, when R15 is Rn, is defined as
+ *	    instruction+8 with no choice about it.  Conflating the two is what
+ *	    #390 fixed.]
  *
  *	o)  All load/store variants with the PC register are not really
  *	    valid. (E.g. a byte load into the PC register. What should that
@@ -550,12 +558,17 @@ void A__NAME(struct cpu *cpu, struct arm_instr_call *ic)
  *	exception handler, in which case we simply recalculate the pointers a
  *	second time (no harm is done by doing that).
  *
- *	TODO: A tiny performance optimization would be to separate the two
- *	cases: a load where arg[0] = PC, and the case where arg[2] = PC.
+ *	[RESOLVED as #390: the two cases ARE separated now, and it was never a
+ *	performance question -- they need DIFFERENT VALUES at the same time.
+ *	`str pc,[pc,#imm]` wants base = instruction+8 and stored word =
+ *	instruction+12 simultaneously, so one variable could not serve both.]
  *
- *  o)	Stores store "PC of the current instruction + 12". The solution I have
- *	choosen is to calculate this value and place it into a temporary
- *	variable (tmp_pc), which is then used for the store.
+ *  o)	Stores store "PC of the current instruction + 12".
+ *	[CORRECTED as #390: that value now lives in tmp_pc_data[0], NOT in
+ *	tmp_pc.  tmp_pc holds the BASE, which is instruction+8 -- the value
+ *	A5.2.2/A5.3.2 define for R15 as Rn.  The sentence below described the
+ *	pre-#390 arrangement in which one word served both roles and the base
+ *	silently took the store's value.]
  */
 void A__NAME_PC(struct cpu *cpu, struct arm_instr_call *ic)
 {

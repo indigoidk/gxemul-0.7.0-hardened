@@ -3337,7 +3337,7 @@ corruption without a clear host-OOB path.
 > already used +8 — it requires the L bit, so stores were never rescued.
 > FIX: TWO scratch words. A one-word role-aware guard is MEASURABLY WRONG for
 > `str pc,[pc,#imm]`, where arg[0] and arg[2] are the same pointer and setting
-> the base to +8 silently moves the STORED word to +8 — which A2-9 :1639-1642
+> the base to +8 silently moves the STORED word to +8 — which A2-9 :1637-1641
 > forbids, since an implementation may pick +8 or +12 for R15 stores but must
 > use ONE everywhere. cpu_arm.h gains tmp_pc_data[2]; both decoder sites point
 > arg[2] at it; the store arm computes both values unconditionally. Separating
@@ -3352,29 +3352,48 @@ corruption without a clear host-OOB path.
 > data GREEN (96/102 — exactly the pre-fix parent's own score). Opposite
 > signatures prove the rows separate the roles rather than noticing change.
 >
-> *** THE ROUND REFUTED ITS OWN LDRD CLAIM, and that is the part to remember. ***
-> Three independent sources agreed LDRD was in scope (it encodes L==0, so it
-> takes the store arm), one quoting its PREPROCESSED body, which really does
-> contain tmp_pc = tmp + 12. The mutant that reverts the base left the LDRD rows
-> GREEN — impossible if they depended on it — so the actual pre-#390 parent was
-> built: pre-fix LDRD reads the same words as the fixed build. LDRD's base was
-> NEVER four bytes high. Those four rows had a FICTIONAL buggy column and could
-> not have failed for the stated reason: a new face of the vacuity class — not a
-> row that cannot detect its defect, but a row whose defect does not exist. They
-> are re-typed CTRL (arch==buggy) and KEPT as standing evidence that LDRD with
-> Rn==PC is unaffected. OPEN: the preprocessed body contains the +12 assignment
-> yet the base is +8 in practice — find what supplies the base for mode-3
-> Rn==PC, or which function is really dispatched. "Measured unaffected,
-> mechanism unknown" is honest and weaker than it should be.
-> LESSON, generalisable: A MUTANT THAT FAILS TO REDDEN A ROW IS EVIDENCE ABOUT
-> THE ROW, not a nuisance. Here it was the only thing between a false claim and
-> the record. And: a claim several seats agree on is still a claim.
+> *** [CORRECTED IN PASS 2. The paragraph that stood here claimed "LDRD's base
+> was NEVER four bytes high" and called the LDRD rows "a row whose defect does
+> not exist". BOTH ARE FALSE. The compile-and-measure seat settled it by
+> measuring. LDRD's base WAS four bytes high and #390 FIXED IT — the round did
+> more good than it credited itself with.] ***
+> THE MECHANISM, and it is a defect-hiding surface that will do this again: the
+> general path masks with `addr &= ~(datalen - 1)` and datalen is 8 for
+> LDRD/STRD. The base error is exactly +4, so (I+8+off) and (I+12+off) fall in
+> the SAME eight-byte block precisely when the correct address is
+> doubleword-aligned — and A2.8 (ddi0100i.txt:3031) makes a non-doubleword-
+> aligned LDRD/STRD UNPREDICTABLE before ARMv6. THEREFORE on every
+> architecturally DEFINED mode-3 Rn==PC access the mask ALWAYS heals the error,
+> and it is observable only where correct behaviour is already UNPREDICTABLE.
+> That is a THEOREM, not a probe accident: the row used offset 0x40 at the code
+> base, the aligned case. Rows at offset 0x44, or with the instruction one word
+> later, show it plainly — measured 0xcccc0003 pre-fix against 0xaaaa0001 fixed,
+> both rigs. STRD is covered identically, and its PC-relative form is DEFINED
+> per A5.3.2.
+> So the dispatch chain was exactly as the three original sources said, and
+> nothing upstream supplies the base. The four LDRD rows are the ORDINARY
+> vacuity class — a row that CANNOT DETECT ITS DEFECT. They stay CTRL because no
+> DISC row is available: every mask-defeating layout is UNPREDICTABLE, which
+> #355 forbids asserting on. But the reason recorded against them was wrong, and
+> the promise that they "will redden if a later round drags LDRD into that path"
+> is PROVABLY FALSE — reverting the base does not move them. WITHDRAWN.
+> THE PRE-PARENT METHODOLOGY WAS SOUND; THE INFERENCE WAS THE ERROR. Restoring
+> the three touched files into a build-tree copy does yield a faithful parent,
+> and the stale-.o hazard is excluded by the round's own data (the STR rows went
+> RED there, which a stale build could not do).
+> LESSON, corrected and sharper: A MUTANT THAT FAILS TO REDDEN A ROW IS EVIDENCE
+> ABOUT THE ROW — that part held, and it is what exposed the blindness. But the
+> follow-up must be "therefore this row cannot see its defect", NOT "therefore
+> the defect is not there". The first is a statement about the INSTRUMENT; the
+> second is a claim about the WORLD and needs its own measurement. This round
+> made that leap inside the very block congratulating itself for not leaping.
+> And still true: a claim several seats agree on is still a claim.
 > #68 does NOT fold in — its Rn==PC base half is refuted for LDRD; its Rd==PC
 > half remains open and must be re-verified independently, not inherited.
 > PER-INSTRUCTION, why the +12 DATA value is left alone: only STR (word) is the
 > IMPLEMENTATION DEFINED +8-or-+12 case; STRB/STRBT (:14342, :14415) and STRH
 > (:14690) make Rd==PC flatly UNPREDICTABLE, and STRD makes an odd Rd UNDEFINED
-> (:14495). One blanket sentence across all four would overclaim.
+> (:14503). One blanket sentence across all four would overclaim.
 >
 > ## 2026-08-12 — #389 (round 129): big-endian LDRD/STRD — two 32-bit words, not one 64-bit swap
 >
