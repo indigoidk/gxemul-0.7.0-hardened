@@ -254,6 +254,11 @@ pure function in closed form.
 | 11 | `gate_m88k_rounding.sh` | m88k rounding, the float→int triad, subnormal operands, the twelve mixed-format arms and `tcnd`'s traps — 71 rows incl. swap tripwires, NaN-sign pins, a KNOWN-CHANGE flip pin and the double-rounding witness |
 | 12 | `gate_mips_rounding.sh` | MIPS cvt.d.l/cvt.s.l honour FCSR (arc, 11 rows), #303 subnormal decode on BOTH rigs, and #309's REGIMM Reserved-Instruction rows |
 | 13 | `gate_ppc.sh` | PowerPC single conversion — 72 rows on the macppc probe path: `frsp` under all four modes (each verified guest-visible through `mffs`), the ISA denormalization band, NaN payload/sign transport, sticky `VXSNAN`, all eight float update forms asserting value *and* base-register update, and three pins where this fork deliberately differs from the letter |
+| 14 | `gate_arm.sh` | ARM/Thumb flags, the combiner rows, the endian and writeback probes — the largest gate, 352 checks |
+| 15 | `gate_ppc_halt.sh` | PowerPC halt-path classes |
+| 16 | `gate_mips_folds.sh` | The MIPS fold witness — install/fire pull counters for all 34 variants |
+
+`regress/run.sh` carries a `GATE_MANIFEST` count and refuses to run if the gate array no longer matches it, so "the battery is green" always names a known battery size. The summary line reports `GATE_COVERAGE=n/16` and says explicitly whether a subset was selected.
 
 **The strongest gate is the offline one.** `ieee_store_float_value()` is pure, so it can be
 differentialled old-against-new over twenty million inputs in seconds — a stronger

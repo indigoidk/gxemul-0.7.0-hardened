@@ -9,6 +9,22 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 
 GATES=(gate_build gate_offline selftest_mutation gate_mips gate_crossfamily gate_hygiene gate_ab gate_upstream gate_asan_sweep gate_sh_rounding gate_m88k_rounding gate_mips_rounding gate_ppc gate_arm gate_ppc_halt gate_mips_folds)
 
+#  How many gates this battery is supposed to have.  Every round ends with a claim of
+#  the form "the battery is green", and until now NOTHING checked how many gates that
+#  covered -- so a gate silently dropped from the array above would have looked exactly
+#  like a battery that was always this size.  The count was also wrong in three places
+#  at once: this README said "all six", the top-level README stopped at 13, and the
+#  working notes had said both 15 and 17.  A number nobody checks is not a fact.
+#
+#  Adding a gate means editing BOTH lines, deliberately.  That is the point.
+GATE_MANIFEST=16
+if [ "${#GATES[@]}" -ne "$GATE_MANIFEST" ]; then
+    echo "GATE MANIFEST MISMATCH: array has ${#GATES[@]}, manifest says $GATE_MANIFEST"
+    echo "  a gate was added or removed without updating GATE_MANIFEST -- refusing to run,"
+    echo "  because 'the battery is green' means nothing if the battery changed size."
+    exit 2
+fi
+
 # Validate selectors up front. Without this, `./run.sh 99` matched nothing, ran zero
 # gates, and printed REGRESS_PASS -- one mistyped digit produced a green push.
 for i in "$@"; do
@@ -60,6 +76,14 @@ for r in "${RESULTS[@]}"; do
 done
 echo
 echo "  passed $pass   failed $fail   skipped $skip"
+#  Say what was actually covered.  A bare "passed N" invites the reader to assume N is
+#  the whole battery; when a subset was selected it is not, and that distinction is
+#  exactly what an auditor of a green push needs.
+if [ ${#want[@]} -eq 0 ]; then
+    echo "  GATE_COVERAGE=$((pass+fail+skip))/$GATE_MANIFEST (full battery)"
+else
+    echo "  GATE_COVERAGE=$((pass+fail+skip))/$GATE_MANIFEST (SUBSET: ${want[*]})"
+fi
 echo
 # A skip is NEVER a pass. It means a gate could not run, which is a gap in coverage, not
 # evidence of correctness -- so the overall verdict says so out loud.

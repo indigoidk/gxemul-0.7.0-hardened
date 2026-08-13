@@ -82,7 +82,7 @@ emulator; that one asserts something about **the harness** — that its stronges
 responds to a broken subject. The first version of gate 2 did not, and no amount of green
 output would have revealed it.
 
-`./run.sh` runs all six and prints one verdict line per gate. `./run.sh 2 4` runs a subset;
+`./run.sh` runs all sixteen and prints one verdict line per gate. `./run.sh 2 4` runs a subset;
 out-of-range selectors are rejected rather than silently running nothing.
 
 Verdicts are `PASS`, `FAIL` and `SKIP`, and **a `SKIP` is never counted as a `PASS`** — it
