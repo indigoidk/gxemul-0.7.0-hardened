@@ -881,7 +881,14 @@ egot=${eres%/*}; ewant=${eres#*/}
 #  #389's liveness pin: the LE LDRD/STRD rows are fix-state-independent (LE
 #  was always correct) and read the sentinel 0 if the instructions are dead.
 ectrld=$(grep -o "ENDIAN_CONTROL_D=[A-Z]*" "$ENDLOG" | tail -1 | cut -d= -f2)
-check "endian control: ldrd/strd ran (389)" "${ectrld:-missing}" "OK"
+#  #389 pass-2 (Opus seat): the name used to read "ldrd/strd ran", which
+#  overclaimed -- BOTH pins behind ENDIAN_CONTROL_D are on the LE rig
+#  (testarm), so nothing here pins that LDRD/STRD executed on barearm. That is
+#  not a fixable omission: a liveness pin must be fix-state-INDEPENDENT, and on
+#  BE every LDRD/STRD row changes value with the fix by construction. The BE
+#  side is still fail-closed -- a dead BE rig reddens its ten DISC rows -- but
+#  the NAME must say what it actually pins.
+check "endian control: ldrd/strd ran on the LE rig (389)" "${ectrld:-missing}" "OK"
 
 check "endian rows run"     "${ewant:-missing}" 90
 check "endian rows correct" "${egot:-missing}"  "$ewant"

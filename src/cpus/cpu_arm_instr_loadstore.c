@@ -323,7 +323,16 @@ void A__NAME__general(struct cpu *cpu, struct arm_instr_call *ic)
 	    right, the PAIR swapped. Two explicit assemblies, symmetric with
 	    the #389 LDRD fix; the walk's `|| defined(A__STRD)` disjunct is
 	    gone with it (a guard term that could never be true inside its
-	    own block is the #372 defect shape).  */
+	    own block is the #372 defect shape).
+
+	    #389 pass-2: two committed comments used to cite this file BY LINE for
+	    the fast-path chicken-out (the `#if defined(A__LDRD) ||
+	    defined(A__STRD)` at the top of A__NAME).  Every one of those numbers
+	    has been wrong at some point -- :226-228, then :338-340, which this
+	    round's own insertions turned into the middle of the STRD arm below.
+	    They now name the construct instead.  Follow the #357 rule in this
+	    file: no line numbers here, they go stale in the round that adds
+	    them.  */
 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
 		data[0] = reg(ic->arg[2]);
 		data[1] = reg(ic->arg[2]) >> 8;

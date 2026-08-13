@@ -4202,9 +4202,16 @@ names "the address of the lower of the two words"); **E2**, a carry-corrupting
 `data[1] << 6` term — wrong index AND wrong shift, and because the terms are `+`-summed
 the bits[7:6] overlap CARRIES: the buggy Rd for memory `11 22 33 44 55 66 77 88` is
 `0x55660908`, not even a byte permutation; **E3**, the R(d+1) BE branch was a verbatim
-copy of the LE expression. STRD's only error was E1's store-side mirror (per-word bytes
-right, the pair swapped). The LE arms were correct on both sides — the LE rows are true
-invariance controls. Reachability: the decoder dispatches LDRD/STRD with NO version gate
+copy of the LE **Rd** expression — `data[0] + (data[1]<<8) + (data[2]<<16) + (data[3]<<24)`,
+the LOWER word ascending, not the LE R(d+1) expression [pass-2 correction from a
+diff-review seat: the block first said "a copy of the LE expression", which sends a
+future reader tracing the copy-paste to the wrong source line; verified against
+`f55a8e3:cpu_arm_instr_loadstore.c:262-265`, and it is why the RED r5 read
+`0x44332211`]. STRD's only error was E1's store-side mirror (per-word bytes right, the
+pair swapped). The LE arms were correct **behaviourally, as measured on this compiler** —
+the LE rows are true invariance controls — but not as an ISO C claim: the old LE arms
+carried the same uncast `data[n] << 24` this round fixed, so a byte ≥ 0x80 in the
+top lane was already shift UB there too [pass-2, a diff-review seat]. Reachability: the decoder dispatches LDRD/STRD with NO version gate
 (both rigs are ARMv4 SA1110 where the instructions are architecturally absent — the
 emulator executes them regardless, recorded as-is), and both always take the general path
 (the fast-path chicken-out is unconditional for `A__LDRD||A__STRD`).
@@ -4215,28 +4222,55 @@ operands promote to signed int; `0x88 << 24` is shift UB — the casts change de
 only, declared detector-free by construction). The STRD arm leaves the shared descending
 byte walk entirely (`#ifndef A__STRD` around the walk with its `int i` declared inside —
 the walk's shared index IS what produced E1, and a dead `|| defined(A__STRD)` disjunct
-left behind would be the #372 defect shape, so the `:293` guard is reduced to
-`#ifndef A__H` in the same edit). Byte/halfword/word stores keep the walk byte-identical.
-The `~7` alignment mask and the #362-rotate exclusion are untouched and correct (A2.8:
-non-doubleword-aligned LDRD/STRD is UNPREDICTABLE pre-v6; LDRD's pseudocode has no
-Rotate_Right term). The Time-order note LICENSES the emulator's single 8-byte access —
-what the architecture forbids is the 64-bit byte REVERSAL, and an aligned 8-byte access
-can never straddle a page.
+left behind would be the #372 defect shape, so that guard is reduced to `#ifndef A__H` in
+the same edit — **at :310 in the post-change file**; this block first cited `:293`, which
+was its pre-change line, moved by this round's own insertions [pass-2; the FOURTH recorded
+instance of a numeric site cite going stale in the round that touched it — cite the
+CURRENT file]. Byte/halfword/word stores keep the walk byte-identical.
+The `~7` alignment mask and the #362-rotate exclusion are untouched, and correct **for the
+configurations this fork actually runs** (A2.8: non-doubleword-aligned LDRD/STRD is
+UNPREDICTABLE pre-v6; LDRD's pseudocode has no Rotate_Right term). **Narrowed in pass-2:**
+"correct" is not an architecture-wide claim. LDRD's own pseudocode (`ddi0100i.txt:8505-8509`)
+guards on `(address[1:0] == 0b00) and ((CP15_reg1_Ubit == 1) or (address[2] == 0))`, so
+from ARMv6 with the CP15 U bit SET, an address congruent to 4 modulo 8 is a legal
+doubleword access — and `~7` would round it down by four bytes. Both ARM rigs here are
+pre-v6, so nothing reachable exercises it; the ARMv6/U=1 case is filed as follow-up work
+rather than claimed correct. The Time-order note LICENSES the emulator's single 8-byte
+access **to RAM** — what the architecture forbids is the 64-bit byte REVERSAL, and an
+aligned 8-byte access can never straddle a page. It does NOT license it for MMIO: GXemul
+hands one `len=8` call to a single device callback, and a device whose handler serves one
+register per access cannot reconstruct the two word transactions the architecture
+describes. That path is filed rather than defended [pass-2, a diff-review seat].
 
-**Measured, in order.** RED on the committed build: `ldrd r4,[r3]` over seeded
-`11 22 33 44 55 66 77 88` on `-E barearm` read back **r4=0x55660908, r5=0x44332211** —
-the exact predicted buggy values including the carry, which simultaneously proved the
-mechanism, the encodings (`0xE1C340D0`/`0xE1C340F0`; a pass-1 seat's claim that these
+**Measured, in order.** RED on the **parent commit `f55a8e3`** (named explicitly in pass-2:
+"the committed build" is ambiguous now that this round's own commit is green): `ldrd
+r4,[r3]` over seeded `11 22 33 44 55 66 77 88` on `-E barearm` read back
+**r4=0x55660908, r5=0x44332211** — the exact predicted buggy values including the carry,
+which simultaneously proved the mechanism and pinned **GXemul's decode route** for these
+words (`0xE1C340D0`/`0xE1C340F0` — pass-2 narrowing: an execution result proves what the
+emulator decodes them AS, not what the architecture says they are; the architectural
+encoding rests on the field decode and the manual, and the two agree; a pass-1 seat's claim that these
 words are misencoded — an "Rt2 field", bit 22 inverted, L=1 — was refuted by mechanism
 first: mode-3 has no Rt2 field, bit 22 = 1 IS the immediate form, LDRD sits in the L=0
 half; the RED values settled it empirically). Blast radius proven by `gcc -E` diff of the
 `p1_u1_w0` instantiation flavor against the old and new template: exactly FOUR function
 bodies changed out of 620 — the LDRD imm/reg and STRD imm/reg instantiations (named
 `*_signed_byte_*`/`*_signed_halfword_*` by the generator's raw-field scheme) — nothing
-else, closing the no-halfword-store-row exposure. Both trees rebuilt at zero warnings
+else. **Pass-2 correction — this sentence originally ended "closing the
+no-halfword-store-row exposure", which is an overclaim, and a substitute review seat
+caught it by grepping for the row rather than trusting the prose:** there is no `strh`
+row anywhere in `regress/`, before this round or after it. What the `gcc -E` result
+establishes is that this diff provably does not TOUCH the halfword-store path — which is
+why the missing row could not hide a #389 regression. It does not create coverage that
+never existed. The STRH byte-order gap remains fully open and is now filed. Both trees
+rebuilt at zero warnings
 (the walk's `int i` scoping kept `gate_build`'s warnings==0 intact). GREEN: **90/90**
 endian rows — the BE LDRD pair now equals the already-gated LDM rows' values on identical
-memory (the internal-consistency oracle), BE STRD lays `11 22 33 44 55 66 77 88`, all 20
+memory (an internal-consistency cross-check performed **at development time**; pass-2
+narrowing: `gate_arm.sh` adds no assertion comparing the LDRD constants to the LDM
+constants, so a future regression that broke one and not the other would not be caught
+here — the word "oracle" claimed more than the gate enforces, and promoting the
+comparison to a real assertion is filed as follow-up), BE STRD lays `11 22 33 44 55 66 77 88`, all 20
 new rows (10 DISC / 10 CTRL) at their derived constants, `ENDIAN_CONTROL_D=OK` (the LE
 rows double as fix-state-independent liveness pins — a dead LDRD reads the MOV sentinels,
 a dead STRD ladder reads unseeded zero).
@@ -4246,18 +4280,33 @@ its own `/tmp` copy of the build tree (the shared trees are never mutated, so no
 `.MUTANT` window exists); **all eight CAUGHT, every one with its sibling arms still
 green** — M1 restores the original carry-corrupting `data[1] << 6` line (89/90, only the
 BE r4 row red because E3 is not restored with it), M2 is the plausible HALF-fix: it swaps
-the two correctly-assembled BE words, i.e. E2 and E3 corrected but **E1's pair inversion
-left standing** — the exact shape of a fix that notices the carry bug and the copy-paste
-but not the pairing (88/90), M6 uses the BE expression on both ternary branches so the LE
-side breaks instead (89/90), M7 drops the `+1` on the pair write so both halves land on Rd
+the two correctly-assembled BE words **in LDRD only**, i.e. E2 and E3 corrected but
+**E1's pair inversion left standing** — the exact shape of a fix that notices the carry
+bug and the copy-paste but not the pairing (88/90: the two LDRD BE rows; STRD keeps the
+round's fix, which is why it is not 80/90 — two seats independently flagged that the
+original wording did not say "LDRD only" and a reader could mis-derive the count), M6
+puts the BE expression on **both branches of the `Rd` ternary, leaving the `R(d+1)`
+statement untouched**, so the LE side breaks instead (89/90 — one row; a cloud seat read
+the original "both ternary branches" as both STATEMENTS, derived 88/90, and called the
+measurement inconsistent. Refuted by mechanism: the mutant's anchor text
+`assert s.count(a)==1` matches only the `Rd` ternary, so exactly one row can redden, and
+a second seat derived the same thing independently. The number was right and the sentence
+was ambiguous — fixed here), M7 drops the `+1` on the pair write so both halves land on Rd
 (86/90 — four rows: the r5 rows of both byte orders keep their sentinel and both r4 rows
 take the upper word), M8/M9/M11 are the three distinct STRD-BE corruptions the fix must
 exclude — pair inversion, per-word byte reversal, and the full 8-byte reversal (82/90
 each), and M12 is an adjacent-index transcription slip inside the NEW LE store arm
 (88/90, red on b1/b2 — the LE arm is rewritten code, so it needs its own mutant). M10
-(`~7` → `~3`) remains the DECLARED survivor recorded at OUTSTANDING_BUGS.md:2508-2514:
-under the aligned bases the #355 rule requires, the two masks coincide, so no legal row
-can separate them.
+(`~7` → `~3`) remains the DECLARED survivor, and the record is stated here rather than
+delegated: under the aligned bases the #355 rule requires, `addr & ~7 == addr & ~3 ==
+addr`, so no legal row can separate the two masks. [pass-2 correction: this sentence
+originally pointed at `OUTSTANDING_BUGS.md:2508-2514`, which contains the writeback-probe
+row-omission rationale and says nothing about M10, `~3`, or mutants — a pointer to a
+paragraph that does not hold the record is worse than no pointer, so the substance is
+inlined. An Opus diff-review seat found it. Note the M10 declaration is itself
+architecture-scoped, see the `~7` narrowing above: from ARMv6 with CP15 U set, the two
+masks ARE separable, and M10 becomes killable at the same moment the mask becomes a
+defect.]
 
 **Gate 14** (`gate_arm.sh`), one clean serial run: **PASS, 340 checks, zero FAIL and zero
 SKIP** — the committed 329 plus the ten named discriminator rows plus the
@@ -4265,12 +4314,129 @@ SKIP** — the committed 329 plus the ten named discriminator rows plus the
 Each of the ten new names matched exactly one row (`1`, not `2` and not `0`), so neither
 half of the padded-column pattern trap is in play.
 
+**Pass-2 review** ran on the committed diff with the records hunks inlined. Seat health
+first, since a silent seat is not agreement: Kimi answered 328 bytes (its billing-cycle
+403, unchanged) and **the Fable seat is newly quota-dead** — two relaunches failed
+identically with a usage limit, which is a quota and not a wedge, so the roster is now six
+live seats plus a clearly-labelled substitute carrying the static/records lens. Nobody
+found a defect in the shipped code: every seat that derived the byte assembly
+independently got the same answer, and the `#ifndef A__STRD` restructuring was confirmed
+behaviour-preserving for the other 616 bodies. What the pass DID find was in the evidence
+and the prose, which is where the last several rounds' real findings have been.
+**Two distinct mutant-coverage gaps, both verified here before acceptance.** First: the
+`(uint32_t)` casts have no detector and cannot get one from a value row — the seed's
+top-lane bytes are `0x11` and `0x55`, both below 0x80, and even a high-MSB seed would not
+catch cast deletion because the UB is benign on this compiler; the only real detector is a
+shift-sanitizer build. The round declared the casts "detector-free by construction", which
+was honest, but three seats converged on the sanitizer as the way to close it rather than
+leave it declared. Second, and sharper: **no LDRD/STRD row is warm.** `seed_bytes` uses
+`put b`, which does not warm the translation mapping, and the STRD rows seed nothing at
+all, so every one of the ten rows takes the cold general path — which means the
+`|| defined(A__STRD)` disjunct in the fast-path chicken-out at `:374-376` has NO detector.
+Deleting it is not academic: `A__STRD` is only defined where `A__H` already is (`:53`), and
+the fast path's halfword arm writes exactly two bytes (`:496-503`), so a warm-page STRD
+would store 2 bytes where 8 are required, and all 90 rows would stay green. Both premises
+were checked against the file, not taken on the seat's word.
+One seat claim was **refuted**: that M6's measured 89/90 was "factually inconsistent" and
+should be 88/90. It assumed the mutant altered both register statements; the mutant's own
+anchor matches only the `Rd` ternary. The measurement stands, the sentence was ambiguous,
+and the sentence is what changed — a second seat derived the correct reading unprompted.
+Everything else the pass produced was a records correction, applied above and tagged in
+place: the E3 lineage, the ISO-C status of "LE was correct", the architecture-wide reading
+of the `~7` mask, the Time-order licence for MMIO, what the RED values actually prove, the
+ambiguous parent-commit reference, the unenforced "oracle", and two numeric site cites
+that this round's own insertions had made stale.
+
+**The compile-and-measure seat (Opus) went further than the round did, in both
+directions.** It strengthened the central proof: where this round preprocessed ONE flavor
+file and reported 4 of 620 bodies changed, that seat preprocessed **all twenty macro sets
+across all eight p/u/w flavor files — 160 instantiations, old against new — and got 128
+identical, 32 differing, with every one of the 32 being LDRD/STRD imm+reg**. It also
+confirmed 620 = 20 × 31 exactly, making the true global blast radius 32 of 4960. Seven
+eighths of that proof had been inspection; it is now measurement. (It also caught its own
+vacuous green on the way: a first run reported "160 identical, 0 differing" because a
+broken `-I` path made both sides fail to preprocess. A comparison of two failed builds is
+always "identical" — a new entry for this project's vacuity taxonomy, caught by a
+non-emptiness self-check rather than by luck.)
+
+In the other direction it found **the mutant gap that matters most, by compiling it**:
+a single mis-transcribed cast — `((int8_t)data[1] << 16)` in place of
+`((uint32_t)data[1] << 16)` — is **wrong on 50% of all doublewords and passes every one of
+the 90 rows and all eight mutants**. Measured, not argued: identical to the shipped code on
+the probe seed, `0x91a2b3c4` versus `0x90a2b3c4` on a high-bit seed, and divergent on
+100,000 of 200,000 random doublewords. The mechanism is that the seed
+`11 22 33 44 55 66 77 88` contains exactly one byte ≥ 0x80 and it only ever lands where
+sign extension is harmless, so no sign-extension defect on `data[0..6]` can move any row.
+This **corrects this block's own framing** of the casts: "detector-free by construction" is
+true of cast DELETION (whose UB is benign on this compiler, so only a sanitizer sees it)
+but NOT of a WRONG cast, which four extra rows on a high-bit seed would kill outright. The
+concession was wider than the round realised, and cheaper to close.
+
+Two further honesty points from the same seat, both accepted. First, **this round's
+headline is a mental model, not a measured property**: "two 32-bit words, not one 64-bit
+swap" describes how to think about the instruction, but for an ALIGNED access the shipped
+code and the maligned "one 64-bit value, then split" formulation are the same function —
+zero disagreements over 400,000 cases — because they diverge only at unaligned addresses,
+exactly the UNPREDICTABLE region this round declined to gate. What was actually fixed is
+E1/E2/E3: a wrong permutation and a carry. No row pins "64-bit-swap-ness" and none can.
+Second, **"LDRD does not rotate" is asserted in prose and tested by nothing** — the
+exclusion is incidental (the guard also requires `A__L`, which LDRD does not define), and
+every LDRD row uses an 8-aligned base where the rotate amount is 0 anyway. A plausible
+future "improvement" applying the #362 rotation per word would pass all 90 rows and all
+eight mutants. Like M10 it cannot be gated with legal bases, so it is DECLARED here as
+this round's second by-construction survivor rather than left silent. (Also corrected: the
+prohibition on the 64-bit reversal follows from applying Table A2-2 per word, not from the
+Time-order note, which licenses only the combining.)
+
+The substitute seat re-derived the four arms and the "4 of 620" arithmetic from the
+generator's own enumeration — reaching the same numbers by a different route than the
+`gcc -E` runs — and independently reached the same manual citations for the residual
+correction above, having read `ddi0100i.txt` rather than taking this block's word for it.
+The same seat's naming point was taken too: the #389 liveness check is renamed
+`endian control: ldrd/strd ran on the LE rig (389)`, because both of its pins are on
+testarm and nothing in it pins BE execution — a fix-state-INDEPENDENT BE pin cannot exist
+here, since on BE every LDRD/STRD row changes value with the fix by construction. Worth
+recording alongside it, from the confirming gate run: the suite is not blind to a dead BE
+rig in general — a separate `endian control: BE rig ran and stored` check already covers
+that — so the rename sharpens what this particular pin claims rather than exposing an
+unguarded rig.
+
+Its own finding was the halfword-store overclaim corrected earlier in this block: it
+checked by GREPPING for the row instead of trusting the prose, found `strh` appears
+nowhere in `regress/`, and separated the two claims that had been conflated — that the
+diff cannot touch that path (proved) versus that the path is covered (false, and still
+false). Filed. It also flagged, correctly, that the records corrections in this block were
+sitting uncommitted while `origin/main` still carried the wrong architecture claims; they
+ship with this commit.
+
 **Residuals**: the `A__NAME_PC` family (Rn==PC takes the store branch's pc+12; Rd==PC
-pair-writes `tmp_pc`'s neighbour `tmp_branch` — THUMB state clobbered by a data access;
-all UNPREDICTABLE inputs) consolidated into task #68 with the #312 latitude rule
-attached. The two committed "NO LDRD/STRD ROW" comments narrowed to their actual
-unaligned/writeback scope (both files now cross-reference the new aligned rows — the
-probe already carried a scar from exactly this blanket-denial mistake).
+pair-writes `tmp_pc`'s neighbour `tmp_branch` — THUMB state clobbered by a data access)
+consolidated into task #68.
+**[CORRECTED the same day, before any follow-up round, by reading the manual this repo
+actually has: the clause "all UNPREDICTABLE inputs, #312 latitude rule attached" was
+WRONG on both halves and is withdrawn.** For the two OFFSET forms of both addressing
+modes, `Rn==R15` is architecturally **DEFINED**, not UNPREDICTABLE, and the value is the
+address of the instruction **plus eight** — A5.2.2 (`ddi0100i.txt:18700`), A5.2.4
+(`:18840`), A5.3.2 (`:19425`), A5.3.3 (`:19473`); only the pre-/post-indexed forms, which
+would write back to R15, are UNPREDICTABLE (A5.3.4 `:19526`, A5.3.5 `:19570`). And
+`Rd==R15` for LDRD/STRD is not UNPREDICTABLE either: R15 is odd-numbered, and both
+A4.1.26 and A4.1.102 say an odd-numbered `<Rd>` makes the instruction **UNDEFINED** —
+a category that requires an exception rather than granting latitude. So #68 is a
+defined-behaviour divergence, not a latitude question, and the #312 rule does not apply
+to it. The error was mine, introduced in this round's own residual sentence; it is
+corrected here rather than silently in a later round.**
+
+The committed "NO LDRD/STRD ROW" comments were narrowed to their actual unaligned/writeback
+scope and now cross-reference the new aligned rows — the probe already carried a scar from
+exactly this blanket-denial mistake. **Pass-2 correction: there were THREE copies of that
+rationale, not two.** The round narrowed `gate_arm.sh` and `arm_writeback_probe.py` and
+missed the one in `OUTSTANDING_BUGS.md` — which is the very paragraph this block cited for
+M10 — so "the two committed comments narrowed" read as complete while a third still stated
+the blanket denial. An Opus diff-review seat found it. All three are narrowed now, and
+every line-number cite in them is replaced by the construct's NAME: the numbers have been
+wrong at `:226-228`, then at `:338-340` (which this round's own insertions turned into the
+middle of the new STRD arm), and a third number would have drifted the same way. The
+template's own #357 comment already prescribes exactly this — no line numbers in this file.
 
 ## One-hundred-and-twenty-eighth round (#388, phase A) — the MIPS folds get their first witness: 34 variants, none of which any instrument could see fire
 

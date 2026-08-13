@@ -2505,13 +2505,23 @@ corruption without a clear host-OOB path.
 > different defect; nothing in the tree is known to do this, so it is a thing to watch
 > rather than to pre-empt.
 >
-> **Deliberately not gated, overruling three review seats: LDRD/STRD.** A2.8 makes a
-> doubleword access UNPREDICTABLE prior to ARMv6 whenever the address is not
-> doubleword-aligned, so *every* base that would exercise the `~7` mask makes the
-> instruction unspecified. The fix does cover LDRD/STRD — the fast path chickens out to the
-> general function at :226-228, which masks with `datalen - 1 == 7` — but that coverage
-> cannot honestly be asserted, and #355 already taught this project not to build assertions
-> on encodings the architecture declines to define. Covered, ungateable, recorded.
+> **Deliberately not gated on the UNALIGNED axis, overruling three review seats:
+> LDRD/STRD.** A2.8 makes a doubleword access UNPREDICTABLE prior to ARMv6 whenever the
+> address is not doubleword-aligned, so *every* base that would exercise the `~7` mask
+> makes the instruction unspecified. The fix does cover LDRD/STRD — the fast path chickens
+> out to the general function unconditionally (the `#if defined(A__LDRD) ||
+> defined(A__STRD)` at the top of `A__NAME`), which masks with `datalen - 1 == 7` — but
+> that coverage cannot honestly be asserted, and #355 already taught this project not to
+> build assertions on encodings the architecture declines to define. Covered on the
+> unaligned axis, ungateable, recorded.
+> [NARROWED by #389's pass-2, and the narrowing matters: **ALIGNED LDRD/STRD byte-order
+> rows now exist** in arm_endian_probe.py, so do not read this as a blanket denial that
+> LDRD/STRD can be gated at all — it is scoped to the UNALIGNED axis only. #389 narrowed
+> the two OTHER copies of this rationale (gate_arm.sh, arm_writeback_probe.py) and MISSED
+> this third one, which is the copy the #389 CHANGELOG block happened to cite; an Opus
+> diff-review seat found it. The stale `:226-228` line cite it carried is replaced above
+> with the construct's NAME rather than a new number: this file's own #357 comment already
+> records that a numeric cite here has gone stale twice, and #389 made it three and four.]
 >
 > **Not moved by this, and deliberately kept separate:** unaligned word **loads** should
 > also ROTATE the aligned word right by `8 * addr[1:0]` (A2.8 p. A2-38, A4.1.23), which this
@@ -3347,8 +3357,65 @@ corruption without a clear host-OOB path.
 > reads 90). Each new name matched EXACTLY ONE row, so neither half of the
 > padded-column trap applies.
 > Residuals: the A__NAME_PC family consolidated into task #68 (Rn==PC pc+12;
-> Rd==PC pair-writes tmp_branch — #312 latitude rule attached); the two
-> "NO LDRD/STRD ROW" comments narrowed to their unaligned/writeback scope.
+> Rd==PC pair-writes tmp_branch); the two "NO LDRD/STRD ROW" comments narrowed
+> to their unaligned/writeback scope.
+> [CORRECTED same day from the manual this repo actually holds — the withdrawn
+> clause was "all UNPREDICTABLE inputs, #312 latitude rule attached", which was
+> wrong on BOTH halves. Rn==R15 in the two OFFSET forms of BOTH addressing modes
+> is DEFINED as instruction+8: A5.2.2 ddi0100i.txt:18700, A5.2.4 :18840,
+> A5.3.2 :19425, A5.3.3 :19473. Only the pre-/post-indexed forms (which write
+> back to R15) are UNPREDICTABLE: A5.3.4 :19526, A5.3.5 :19570. And Rd==R15 for
+> LDRD/STRD is UNDEFINED, not UNPREDICTABLE — R15 is odd-numbered, and both
+> A4.1.26 and A4.1.102 state an odd-numbered <Rd> makes the instruction
+> UNDEFINED, which requires an exception rather than granting latitude. #68 is
+> therefore a DEFINED-behaviour divergence and #312 does not apply to it.]
+>
+> PASS-2 PANEL (6 seats answered; kimi 328b quota, and the FABLE SEAT IS NOW
+> QUOTA-DEAD too — two identical usage-limit failures, so a sonnet substitute
+> carried that lens and is recorded AS a substitute). No seat found a code
+> defect: every seat that derived the byte assembly independently agreed, and
+> the restructuring was confirmed behaviour-preserving. The Opus seat compiled
+> and measured, and STRENGTHENED the central proof — where this round
+> preprocessed ONE flavor file (4 of 620 bodies), it preprocessed all twenty
+> macro sets across all EIGHT p/u/w files: 160 instantiations, 128 identical,
+> 32 differing, all 32 being LDRD/STRD imm+reg. 620 = 20x31 confirmed exact;
+> true global blast radius 32 of 4960. It also caught its own vacuous green on
+> the way (a broken -I path made both sides fail to preprocess, and a
+> comparison of two FAILED builds is always "identical") — a new entry for the
+> vacuity taxonomy.
+> TWO MUTANT GAPS, both verified here before acceptance:
+> (1) OPUS, MEASURED: a single WRONG cast — (int8_t)data[1]<<16 for
+>     (uint32_t)data[1]<<16 — is wrong on 100000 of 200000 random doublewords
+>     (50%) yet passes ALL 90 rows and ALL 8 mutants. The seed
+>     11 22 33 44 55 66 77 88 has exactly one byte >= 0x80 and it only lands
+>     where sign extension is harmless, so no sign-extension defect in
+>     data[0..6] can move a row. Four rows on a high-bit seed close it. This
+>     also corrects this round's "detector-free by construction" framing: that
+>     holds for cast DELETION (benign UB here, sanitizer-only) but NOT for a
+>     wrong cast. -> task #72.
+> (2) AGY: NO LDRD/STRD row is warm — seed_bytes uses `put b` (does not warm)
+>     and the STRD rows seed nothing — so the fast-path chicken-out disjunct
+>     has NO detector. Deleting `|| defined(A__STRD)` makes a warm-page STRD
+>     write 2 bytes of 8 (A__STRD implies A__H; the fast path's A__H arm writes
+>     exactly 2), with all 90 rows still green. -> task #71.
+> REFUTED BY MECHANISM: one cloud seat called M6's measured 89/90 "factually
+> inconsistent" and demanded 88/90, assuming the mutant changed both register
+> statements. The mutant's own anchor (assert s.count(a)==1) matches only the
+> Rd ternary, so exactly one row can redden; a second seat derived the same
+> reading unprompted. The measurement stood and the ambiguous SENTENCE was what
+> changed — the sixth recorded case of the panel majority-or-confidence being
+> wrong on mechanism.
+> TWO HONESTY POINTS ACCEPTED: this round's headline is a MENTAL MODEL, not a
+> measured property (for an aligned access the shipped code and the "one 64-bit
+> value then split" formulation are the same function — 0 disagreements over
+> 400k cases — since they diverge only at unaligned addresses, the region #355
+> forbids gating); and "LDRD does not rotate" is asserted in prose and tested by
+> nothing, so it is DECLARED as a second by-construction survivor beside M10.
+> NEW TASKS: #71 warm rows, #72 high-bit seed + sanitizer, #73 register-offset
+> and writeback rows (+ an STRD write-extent sentinel per #386/#387 practice),
+> #74 the ARMv6 U=1 ~7 mask, #75 the device len=8 path, #76 odd-Rd UNDEFINED
+> (the ONLY gateable divergence the pass surfaced), #77 Rd==R14 (in bounds —
+> checked — but the PC desyncs).
 
 > ## 2026-08-12 — #388 phase A (round 128): the MIPS folds get their witness — 34 variants, counters, tlbdump schema
 >

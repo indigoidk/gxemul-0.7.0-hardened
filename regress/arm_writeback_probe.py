@@ -156,13 +156,23 @@ NO *UNALIGNED/WRITEBACK* LDRD/STRD ROW here, overruling three review seats:
 A2.8 makes a doubleword access UNPREDICTABLE prior to ARMv6 whenever the
 address is not doubleword-aligned, so every base that would exercise the `~7`
 mask makes the instruction unspecified. The general-path fix covers LDRD/STRD
-(the fast path chickens out to it unconditionally, cpu_arm_instr_loadstore.c
-:338-340, masking with `datalen - 1` == 7) but that coverage cannot honestly
+(the fast path chickens out to it unconditionally -- the
+`#if defined(A__LDRD) || defined(A__STRD)` at the top of `A__NAME` in
+cpu_arm_instr_loadstore.c -- and the general path masks with `datalen - 1` == 7;
+NO LINE NUMBERS ON PURPOSE, see below) but that coverage cannot honestly
 be gated. #355 already taught this project not to assert on encodings the
 architecture declines to define. [#389: ALIGNED LDRD/STRD byte-order rows now
 exist in arm_endian_probe.py -- this note is scoped to the unaligned/writeback
 axis only; do not read it as a blanket denial (this section once carried
-exactly that mistake, see below).]
+exactly that mistake, see below).
+#389 pass-2: the line number that used to sit in the sentence above is GONE, not
+corrected. Its history is the argument: it was `:226-228` (stale), #389 "fixed"
+it to `:338-340` -- which was the PRE-#389 line, computed against the revision
+being corrected, and which now lands in the middle of the BE STRD store arm that
+same round ADDED -- and the second fix to `:374-376` would have drifted on the
+next insertion too. An Opus diff-review seat caught both. The template's own #357
+comment already says "deliberately no line numbers" for exactly this reason.
+Name the construct; the compiler will find it, a stale number will not.]
 
 UNALIGNED-LOAD-DATA ROWS -- #364: THIS SECTION USED TO SAY THERE WERE NONE, and
 it was written when that was true. It argued that a PIN on the unrotated value
