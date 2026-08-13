@@ -256,7 +256,9 @@ check     "readiness: rstrip re-matches old prompt" "$(grep -c 'READINESS_LEFTOV
 check     "readiness: late prompt fools a no-echo wait"  "$(rrow late-noecho)" "no"
 check     "readiness: echo guard survives a late prompt" "$(rrow late-echo)"   "yes"
 #  THE ANTI-FAKE CHECK. Both counts are affine in the nonce length, so a printed
-#  transcript cannot satisfy them. 53 and 60 are the measured baselines at
+#  transcript OF FROZEN NUMBERS cannot satisfy them -- but one that reads the
+#  nonce from argv can, which is why this is a bar and not a door (see above).
+#  53 and 60 are the measured baselines at
 #  nonce="" and the arithmetic was verified at lengths 0, 5 and 10.
 check     "readiness: full-mark byte count tracks the nonce" "$(rbytes full-mark)" "$((53 + RLEN))"
 check     "readiness: late-echo byte count tracks the nonce" "$(rbytes late-echo)" "$((60 + RLEN))"

@@ -49,14 +49,20 @@ import sys
 
 PROMPT = "GXemul> "
 
-#  A NONCE SUPPLIED BY THE CALLER, and it is what makes this test un-fakeable.
+#  A NONCE SUPPLIED BY THE CALLER. It RAISES THE BAR; IT DOES NOT CLOSE THE DOOR,
+#  and an earlier version of this very comment claimed otherwise.
 #  A review seat demonstrated a complete bypass: replace this file with a script
 #  that PRINTS the expected six rows and carries the pinned token counts in a
 #  TRAILING comment (the gate's filter only strips lines that BEGIN with '#').
 #  That fake computed nothing and passed the pin and every gate row.
 #  So the reply now carries a caller-chosen string, and the reported byte counts
 #  shift by exactly its length. The gate passes a nonce and checks the arithmetic,
-#  which a hardcoded transcript cannot satisfy without actually running the loops.
+#  which a STATIC transcript of frozen numbers cannot satisfy. But the nonce is
+#  handed to this script as argv, so a fake needs only len(sys.argv[1]) to compute
+#  them -- MEASURED: a 12-line transcript running no loops passed all ten
+#  gate_offline checks and both gate_hygiene pins. A nonce binds only when it is
+#  WITHHELD. The real fix (have the gate drive these predicates instead of reading
+#  a self-report) is filed as its own task, not bolted on here.
 NONCE = sys.argv[1] if len(sys.argv) > 1 else ""
 
 #  A scripted session, byte-for-byte as a pty delivers it: the previous command's
