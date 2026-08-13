@@ -16,6 +16,7 @@ X(multi_lw_2_le)
 		mips32_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_2_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = page[addr0];
@@ -52,6 +53,7 @@ X(multi_lw_2_le)
 		mips_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_2_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = page[addr0];
@@ -81,6 +83,7 @@ X(multi_lw_3_le)
 		mips32_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_3_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -122,6 +125,7 @@ X(multi_lw_3_le)
 		mips_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_3_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -156,6 +160,7 @@ X(multi_lw_4_le)
 		mips32_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_4_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -202,6 +207,7 @@ X(multi_lw_4_le)
 		mips_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_4_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -241,6 +247,7 @@ X(multi_lw_5_le)
 		mips32_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_5_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -292,6 +299,7 @@ X(multi_lw_5_le)
 		mips_loadstore[5](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_5_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -332,6 +340,7 @@ X(multi_sw_2_le)
 		mips32_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_2_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = reg(ic[0].arg[0]);
@@ -368,6 +377,7 @@ X(multi_sw_2_le)
 		mips_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_2_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = reg(ic[0].arg[0]);
@@ -397,6 +407,7 @@ X(multi_sw_3_le)
 		mips32_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_3_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -438,6 +449,7 @@ X(multi_sw_3_le)
 		mips_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_3_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -472,6 +484,7 @@ X(multi_sw_4_le)
 		mips32_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_4_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -518,6 +531,7 @@ X(multi_sw_4_le)
 		mips_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_4_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -557,6 +571,7 @@ X(multi_sw_5_le)
 		mips32_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_5_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -608,6 +623,7 @@ X(multi_sw_5_le)
 		mips_loadstore[12](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_5_LE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -648,6 +664,7 @@ X(multi_lw_2_be)
 		mips32_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_2_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = page[addr0];
@@ -684,6 +701,7 @@ X(multi_lw_2_be)
 		mips_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_2_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = page[addr0];
@@ -713,6 +731,7 @@ X(multi_lw_3_be)
 		mips32_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_3_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -754,6 +773,7 @@ X(multi_lw_3_be)
 		mips_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_3_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -788,6 +808,7 @@ X(multi_lw_4_be)
 		mips32_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_4_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -834,6 +855,7 @@ X(multi_lw_4_be)
 		mips_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_4_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -873,6 +895,7 @@ X(multi_lw_5_be)
 		mips32_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_5_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -924,6 +947,7 @@ X(multi_lw_5_be)
 		mips_loadstore[21](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_LW_5_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -964,6 +988,7 @@ X(multi_sw_2_be)
 		mips32_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_2_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = reg(ic[0].arg[0]);
@@ -1000,6 +1025,7 @@ X(multi_sw_2_be)
 		mips_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_2_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	r0 = reg(ic[0].arg[0]);
@@ -1029,6 +1055,7 @@ X(multi_sw_3_be)
 		mips32_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_3_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -1070,6 +1097,7 @@ X(multi_sw_3_be)
 		mips_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_3_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -1104,6 +1132,7 @@ X(multi_sw_4_be)
 		mips32_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_4_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -1150,6 +1179,7 @@ X(multi_sw_4_be)
 		mips_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_4_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -1189,6 +1219,7 @@ X(multi_sw_5_be)
 		mips32_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_5_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
@@ -1240,6 +1271,7 @@ X(multi_sw_5_be)
 		mips_loadstore[28](cpu, ic);
 		return;
 	}
+	cpu->cd.mips.fold_fire[MIPS_FOLD_MULTI_SW_5_BE] ++;	/*  #388  */
 	addr0 = (addr0 >> 2) & 0x3ff;
 	addr1 = (addr1 >> 2) & 0x3ff;
 	addr2 = (addr2 >> 2) & 0x3ff;
