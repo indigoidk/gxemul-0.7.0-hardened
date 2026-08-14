@@ -188,8 +188,24 @@ check     "no stale allowlist entries"               "$n_stale"      "0"
 check     "every allowlist entry names a real file"  "$n_bogus"      "0"
 echo
 
-build_tree pmax "$EST" "$PMAX_TREE" 223
-build_tree arc  "$SEC" "$ARC_TREE"  224
+# #397: PROPAGATE build_tree's RETURN. It ends with `cd "$tree" || return 1` (see the
+# function above), and both call sites used to discard that status. Six panel seats
+# found the consequence independently: a failed cd returns BEFORE any check() runs, so
+# the five build-result rows never execute and never touch _fails, _fails stays 0,
+# gate_end returns 0, and the gate reports PASS having built nothing. If a stale
+# executable is still sitting in the tree it is then published under that PASS verdict
+# -- strictly worse than the defect #395 and #396 were written to close, because this
+# one produces a GREEN verdict rather than a red one.
+#
+# Capturing $? immediately is load-bearing: check() is itself a command, so reading `$?`
+# after the first check would report the CHECK's status, not build_tree's.
+#
+# NAME THE MUTANT: guarding only ONE of the two calls still passes a test that only
+# breaks the arc tree. Both are asserted, and the detector breaks each in turn.
+build_tree pmax "$EST" "$PMAX_TREE" 223; rc_pmax=$?
+build_tree arc  "$SEC" "$ARC_TREE"  224; rc_arc=$?
+check "pmax: build_tree ran to completion" "$rc_pmax" "0"
+check "arc: build_tree ran to completion"  "$rc_arc"  "0"
 
 # Publish the arc binary where the rigs expect it -- but ONLY after the VERDICT says pass.
 #

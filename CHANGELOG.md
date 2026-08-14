@@ -4192,6 +4192,63 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-seventh round (#397) — a failed `cd` made the gate report PASS having built nothing
+
+`build_tree` ends with
+
+```sh
+    cd "$tree" || return 1
+```
+
+and both call sites discarded that status. There is no `set -e`. So a failed `cd`
+returns **before any `check()` runs**: the five build-result rows for that tree never
+execute, never touch `_fails`, `gate_end` returns 0, and the gate reports PASS having
+built nothing. If a stale executable is still sitting in the tree, #396's publish block
+then hands it to the rigs under that green verdict.
+
+That makes this the most dangerous of the three publication defects, and the reason is
+worth stating plainly: #395's defect published under a visible `FAIL`, and #396's
+reopened it under a `FAIL` as well. **This one is green.** Nothing in the output invites
+a second look.
+
+Six panel seats found it independently while reviewing #394/#395, and none of them could
+run it — it is a code-reading finding that the round then measured.
+
+The fix captures each return on the same line as its call:
+
+```sh
+build_tree pmax "$EST" "$PMAX_TREE" 223; rc_pmax=$?
+build_tree arc  "$SEC" "$ARC_TREE"  224; rc_arc=$?
+check "pmax: build_tree ran to completion" "$rc_pmax" "0"
+check "arc: build_tree ran to completion"  "$rc_arc"  "0"
+```
+
+The same-line capture is load-bearing rather than stylistic: `check()` is itself a
+command, so reading `$?` after the first `check` would report *that check's* status and
+not `build_tree`'s — a version that looks equivalent and silently measures the wrong
+thing.
+
+**Detector.** The mutant forces `cd` to fail, and each call site is broken in turn,
+because guarding only one passes any test that only breaks the other. Measured: baseline
+`PASS (18 checks)` with both new rows green and the binary published; breaking pmax gives
+`FAIL pmax: build_tree ran to completion got=1 want=0`, exit 1, nothing published;
+breaking arc gives the arc row specifically; restore returns `PASS (18 checks)` and
+republishes.
+
+The corroborating detail is the check count. Both mutant runs report `1 of 13 checks`
+rather than 1 of 18 — five rows genuinely vanish, which is the mechanism itself showing
+up in the arithmetic. Before this round those thirteen would all have been green and the
+verdict would have been PASS. Each mutant also stayed localised: breaking pmax left
+`arc: objects built 224` intact, and breaking arc left `pmax: objects built 223`, so
+neither failure is a general collapse of the gate.
+
+**How this was found is the part worth keeping.** It was listed as the headline item of
+the follow-up round and then not implemented in it. #396's commit message does not claim
+it — the record stayed honest — but the round was closed in my head while one of its own
+named items was outstanding. What caught it was re-reading the shipped diff against the
+task's own fix list rather than against my memory of what the round was about. "It is not
+in the message" and "it is done" are different statements, and only one of them was true.
+
 ## One-hundred-and-thirty-sixth round (#396) — the guard I shipped had the right quantity at the wrong time, and nine of my own claims were too strong
 
 An eight-seat panel reviewed the shipped #394/#395 diff. Six seats answered (Kimi 403,
