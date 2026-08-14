@@ -266,13 +266,22 @@ static void wdc_initialize_identify_struct(struct cpu *cpu, struct wdc_data *d)
 	 *
 	 *  The byte order is NOT a second defect and was deliberately left alone.
 	 *  :187 states the convention ("Offsets are in 16-bit WORDS! High byte, then
-	 *  low"), :193-206 follow it, and the transmit loop at :486-489 pushes [i+1]
+	 *  low"), :193-206 follow it, and the transmit loop at :517-520 pushes [i+1]
 	 *  before [i+0] so a little-endian guest reassembles (high << 8) | low at
-	 *  :571-575. Two panel seats called it a defect from the snippet alone; two
-	 *  that read the file found it consistent, and execution agreed. The 57-vs-58
-	 *  WORD order is not establishable from this tree at all -- there is no ATA
-	 *  specification here -- so a mask-only correction is exactly as much as the
-	 *  source can justify.
+	 *  :600-618. Two panel seats called it a defect from the snippet alone; two
+	 *  that read the file found it consistent, and a later pass CONFIRMED it by
+	 *  executing the whole guest path: both the LE and BE branches, plus
+	 *  memory_writemax64, land the SAME two bytes in guest memory, so the device
+	 *  layer is byte-stream-preserving. The 57-vs-58 WORD order is not
+	 *  establishable from this tree at all -- there is no ATA specification here
+	 *  -- so a mask-only correction is exactly as much as the source can justify.
+	 *
+	 *  #407: the two line numbers above were STALE BY EXACTLY +31 -- the length of
+	 *  this very comment, which shifted everything below it. They pointed at the
+	 *  WDCC_IDP case and at the tail of a fatal() string. Nothing they SAID was
+	 *  wrong; only the numbers had moved. A citation written before its own
+	 *  insertion is measured against the file it was written in, not the file it
+	 *  ships in -- re-read every line reference AFTER the edit is in place.
 	 */
 	/*  57-58: current capacity in sectors  */
 	d->identify_struct[2 * 58 + 0] = ((total_size / 512) >> 24) & 255;

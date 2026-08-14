@@ -27,15 +27,36 @@
  *  But diskimage_recalc_size() (diskimage.c:254-268) rounds every image up to a
  *  whole number of cylinders, so the sector count IS the product of the geometry
  *  words in the same block -- and the block can therefore be checked against
- *  ITSELF. Measured on the committed code: 65,471 of 65,535 cylinder counts
- *  produce a self-contradicting IDENTIFY block, the first at 65 cylinders.
+ *  ITSELF.
  *
- *  KNOWN SURVIVOR, recorded rather than papered over: a COMPENSATING PAIR that
- *  swaps +0/+1 in all eight capacity lines AND swaps the two pushes in the
- *  transmit loop is invisible here, because this driver reads identify_struct
- *  directly rather than through the transmit path. The word-53 anchor below
- *  catches the packing half alone. Note that word 47 is 0x8080 -- a byte-swap
- *  palindrome -- and is therefore useless as an anchor.
+ *  #407 CORRECTION, and it is a correction to THIS FILE'S OWN RECORD. The
+ *  original text here claimed "65,471 of 65,535 cylinder counts produce a
+ *  self-contradicting block, the first at 65 cylinders". That number is true for
+ *  H=16 -- the geometry diskimage.c:255-256 actually pins -- but the loop below
+ *  used H=15 and stopped at c=2000, so what it really printed on reverted code
+ *  was "1931 of 2000, first at 70". Both figures are true; they belong to
+ *  different geometries. The loop now uses the REAL H=16 and runs to 65535, so
+ *  the comment and the measurement finally describe the same thing.
+ *
+ *  #407: THE RECORDED "KNOWN SURVIVOR" WAS WRONG, and it was wrong in the
+ *  flattering direction. It claimed a compensating pair -- swap +0/+1 in the
+ *  eight capacity lines AND swap the two transmit pushes -- was invisible here.
+ *  BUILT AND MEASURED: that pair produces EIGHT FAILURES. So does the packing
+ *  swap alone. The transmit swap alone produces zero, which is the real gap
+ *  (see below). The mutation that IS guest-invisible is the WHOLE-STRUCT swap
+ *  plus the transmit swap -- which this comment never described -- and the
+ *  word-53 anchor CATCHES even that, nine failures, reporting "02 00, want
+ *  00 02". The anchor therefore earns its keep against a mutation nobody
+ *  anticipated. Word 47 is 0x8080, a byte-swap palindrome, and would have been
+ *  useless for it.
+ *
+ *  *** THE ACTUAL BLIND SPOT, recorded honestly and NOT closed here: the
+ *  transmit loop (dev_wdc.c:517-520) is entirely ungated. Swapping its two
+ *  pushes byte-swaps every IDENTIFY word a guest reads -- 4,096 heads, 13,330
+ *  cylinders -- at ZERO failures, because this driver reads identify_struct
+ *  DIRECTLY rather than through the path the guest uses. Closing it needs a
+ *  different harness (drive wdc_command(WDCC_IDENTIFY) then dev_wdc_access on
+ *  wd_data), which is new machinery rather than another row, so it is filed. ***
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,9 +85,25 @@ void fatal(const char *fmt, ...)
  *  pulled in, and defining them first produces "conflicting types" against the
  *  very prototypes they are meant to satisfy.
  */
+/*
+ *  #407: THE STUB MUST DEPEND ON `id`, and that is not tidiness.
+ *
+ *  While it ignored id, the SMALLEST SURVIVING MUTANT in the whole file was ten
+ *  characters -- delete `d->drive + ` from dev_wdc.c:179 -- which makes the
+ *  SLAVE announce the MASTER's capacity, and passed all ten rows. Measured on a
+ *  100-cylinder master with a 300-cylinder slave: drive 1 reported 100,800
+ *  sectors while still reporting 300 cylinders, a block contradicting its own
+ *  geometry, which is precisely what the oracle below claims to guard.
+ *
+ *  So each drive id gets a distinct size, and row_slave() below reads drive 1.
+ */
+static uint64_t stub_size_for[4] = { 0, 0, 0, 0 };
+
 int64_t diskimage_getsize(struct machine *machine, int id, int type)
 {
-	(void)machine; (void)id; (void)type;
+	(void)machine; (void)type;
+	if (id >= 0 && id < 4 && stub_size_for[id] != 0)
+		return (int64_t) stub_size_for[id];
 	return (int64_t) stub_size;
 }
 
@@ -110,6 +147,7 @@ static void build(struct wdc_data *d, uint64_t sectors, int c, int h, int s)
 	d->heads[0] = h;
 	d->sectors_per_track[0] = s;
 	stub_size = sectors * 512;
+	stub_size_for[0] = stub_size_for[1] = 0;	/*  single-drive rows  */
 	wdc_initialize_identify_struct(NULL, d);
 }
 
@@ -162,17 +200,90 @@ static void row_anchor(void)
 }
 
 /*
+ *  #407: THE SLAVE ROW. Kills the smallest surviving mutant in the file -- ten
+ *  characters, deleting `d->drive + ` from dev_wdc.c:179 -- which made drive 1
+ *  report drive 0's capacity while still reporting its own geometry. It passed
+ *  all ten of the original rows because every one of them left d->drive at 0.
+ */
+static void row_slave(void)
+{
+	struct wdc_data d;
+	uint64_t master = 100ULL * 16 * 63;	/*  100 cylinders  */
+	uint64_t slave  = 300ULL * 16 * 63;	/*  300 cylinders  */
+	uint64_t got;
+
+	memset(&d, 0, sizeof(d));
+	d.drive = 1;
+	d.cyls[1] = 300; d.heads[1] = 16; d.sectors_per_track[1] = 63;
+	stub_size_for[0] = master * 512;
+	stub_size_for[1] = slave  * 512;
+	stub_size = slave * 512;
+	wdc_initialize_identify_struct(NULL, &d);
+	stub_size_for[0] = stub_size_for[1] = 0;
+
+	rows ++;
+	got = sectors_from_block(&d, 60, 61);
+	if (got != slave) {
+		printf("  FAIL %-38s drive 1 says %llu, its own geometry says %llu\n",
+		    "the SLAVE reports its own capacity",
+		    (unsigned long long)got, (unsigned long long)slave);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %llu (master %llu)\n",
+		    "the SLAVE reports its own capacity",
+		    (unsigned long long)got, (unsigned long long)master);
+	}
+}
+
+/*
+ *  #407: WORD 49 MUST STAY ZERO, and this row is worth one character of mutant.
+ *  Setting dev_wdc.c:236 to 2 advertises LBA and passed all ten original rows.
+ *  It is not cosmetic: the LBA offset arms in wdc__read/wdc__write are `#if 0`
+ *  (:315-321, :361-367), the live offsets at :311-313/:358-360 are pure CHS, and
+ *  d->lba is parsed at :970 and never reaches an offset computation. A guest
+ *  told LBA is supported would have its LBA addresses read as C/H/S.
+ *
+ *  This asserts the CURRENT, DELIBERATE state. If LBA is ever implemented, this
+ *  row must be re-authored in the SAME change -- that is the point of pinning it.
+ */
+static void row_no_lba_claim(void)
+{
+	struct wdc_data d;
+
+	build(&d, 1024, 1, 1, 1);
+	rows ++;
+	if (d.identify_struct[2 * 49 + 0] != 0 ||
+	    d.identify_struct[2 * 49 + 1] != 0) {
+		printf("  FAIL word 49 claims a capability: %02x %02x"
+		    " (0x200 = LBA, 0x100 = DMA -- neither is implemented)\n",
+		    d.identify_struct[2 * 49 + 0], d.identify_struct[2 * 49 + 1]);
+		failures ++;
+	} else {
+		printf("  ok   %-38s word 49 = 00 00\n",
+		    "no unimplemented capability claimed");
+	}
+}
+
+/*
  *  THE SPEC-FREE ORACLE. Images are rounded to whole cylinders, so the sector
  *  count must equal cyls * heads * sectors_per_track -- both readable from the
  *  same block. No ATA document is needed to see the block contradict itself.
+ *
+ *  #407: H WAS 15 AND THE BOUND WAS 2000. Both were wrong for their purpose.
+ *  diskimage.c:255-256 pins H=16/S=63 for every non-floppy, so H=15 measured a
+ *  geometry no image has. And an 11-bit cylinder truncation, `(cyls >> 8) & 7`,
+ *  SURVIVED all ten rows because its first self-contradiction is at c=2048 --
+ *  the loop stopped 48 short of catching it. 65535 is the last count word 1 can
+ *  represent, so it is the right bound; c=65536 cannot be represented at all and
+ *  is a separate defect (the missing clamp) with its own round.
  */
 static void row_selfconsistent(void)
 {
 	struct wdc_data d;
 	int c, bad = 0, first_bad = 0;
-	const int H = 15, S = 63;
+	const int H = 16, S = 63;
 
-	for (c = 1; c <= 2000; c++) {
+	for (c = 1; c <= 65535; c++) {
 		uint64_t sectors = (uint64_t)c * H * S;
 		uint64_t claimed, geom;
 
@@ -188,12 +299,12 @@ static void row_selfconsistent(void)
 	}
 	rows ++;
 	if (bad) {
-		printf("  FAIL self-consistency: %d of 2000 cylinder counts give a\n"
+		printf("  FAIL self-consistency: %d of 65535 cylinder counts give a\n"
 		       "       block that contradicts its own geometry, first at %d\n",
 		    bad, first_bad);
 		failures ++;
 	} else {
-		printf("  ok   %-38s 0 of 2000 contradict their geometry\n",
+		printf("  ok   %-38s 0 of 65535 contradict their geometry\n",
 		    "IDENTIFY agrees with itself");
 	}
 }
@@ -217,6 +328,8 @@ int main(void)
 	row("every byte 255",                                0xFFFFFFFFULL);
 
 	row_anchor();
+	row_slave();
+	row_no_lba_claim();
 	row_selfconsistent();
 
 	printf("\n%d rows, %d failures\n", rows, failures);

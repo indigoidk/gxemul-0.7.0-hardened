@@ -348,7 +348,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 10
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 12
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -371,6 +371,20 @@ else
     #  0x8080, a byte-swap palindrome, and would have been useless here.
     check     "wdc IDENTIFY: the packing anchor is present" \
               "$(grep -c 'packing anchor' "$WDCLOG")" "1"
+    #  #407: three rows added after a measure seat found three mutants that passed
+    #  the original ten. Each is named because each is the ONLY row that kills its
+    #  mutant -- verified by asserting the row NAME in the kill, not just that
+    #  something failed.
+    #    slave      <- 10 chars: drop `d->drive + ` at dev_wdc.c:179
+    #    word 49    <- 1 char:   advertise LBA that is #if 0'd out
+    #    65535 loop <- 11-bit cylinder truncation, first contradiction at c=2048,
+    #                  which the old c<=2000 bound missed by FORTY-EIGHT
+    check     "wdc IDENTIFY: the slave-drive row is present" \
+              "$(grep -c 'the SLAVE reports its own capacity' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the word-49 capability row is present" \
+              "$(grep -c 'no unimplemented capability claimed' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the oracle sweeps the full 16-bit range" \
+              "$(grep -c 'of 65535 contradict their geometry' "$WDCLOG")" "1"
 fi
 
 # ---- #406: the autodev.c generator ----------------------------------------------
