@@ -4192,6 +4192,60 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-third round (#403) — gcov said the interrupt line had never run, and fourteen wrong versions passed
+
+A measure seat replayed the #400/#401 table under gcov and found `dev_sh4.c`'s
+`timer_interrupts_pending[i]++` marked `#####` — **never executed**. No row had ever set
+`TCR_UNIE`. It then constructed **fourteen wrong implementations that passed the whole
+table**, and that coverage hole is why most of them were invisible.
+
+Re-measured against the committed table before fixing anything, because #401 had already
+moved: `nomod` was dead, and **five were still live**. Only those five were treated as
+real.
+
+* **`signed_cmp`** — writing the borrow test signed declares an underflow from the reset
+  default `TCNT = 0xffffffff` on the first tick and every tick after, raising a spurious
+  interrupt 400 times in 400. No value-only row saw it: the counter still lands on the
+  right number, and only the UNF flag differs.
+* **`unf_assign`** — `d->tcr[i] = TCR_UNF` instead of `|=`. One character, and it wipes the
+  guest's prescaler select and its UNIE bit on every underflow. `TCNT` is identical either
+  way, so no arithmetic row can see it.
+* **`period_tcor0`** — `tcor[0]` inside the *period* expression. #400 claimed the
+  three-timer row killed the index mutants; it kills `tcnt[0]`, the reload's `tcor[0]`, and
+  both together, but **this neighbour survived**, because every timer in that row had
+  `remaining < period` so the modulo never reduced. Correcting the row's third timer to
+  `step = 40` makes the subscript observable.
+* **`no_pend`** and **`no_gate`** — deleting the interrupt increment, and ignoring `TSTR`
+  entirely. Both invisible while no row set UNIE and every row started the timers it
+  inspected.
+
+Three rows close them: an underflow with `TCR_UNIE` set that asserts the pending count
+*and* that the guest's other TCR bits survive; a stopped timer that must not move; and the
+reset default asserting the value **and** `UNF = 0`. Sixteen rows now, and each of the five
+dies to one, two or three of them — none is carried by the pile.
+
+**The test's `fatal()` stub now prints.** A seat measured that a row tripping the refresh
+branch at the top of the tick died with `exit 1`, sixty bytes on stdout and **zero on
+stderr** — the message naming the cause was discarded by the stub. Failing closed is right;
+failing closed and silent is not.
+
+**Two records corrected.** #400's "the three-timer row kills both" is true of the two
+mutants named and false of the third neighbour, as above. And `diff_sh4_tmu.c`'s claim that
+"a mutation to dev_sh4.c is seen by this test by construction" had fourteen
+counter-examples; the defensible statement — the one `gate_offline.sh` actually makes — is
+narrower: *transcription drift* is impossible, because the function under test is the one
+compiled. Being unable to drift is not the same as being unable to hide.
+
+Also measured, and worth keeping: the patch is bit-identical to the pre-#400 code across
+216,527 non-underflow cases on every observable field; at `step == cnt + 1` the old code
+landed on `TCOR - 1` in only 5,081 of 19,231 cases and anywhere at all — including *above*
+`TCOR` — in the rest, so no guest could have been written against it. `d->tcnt[]` is read
+in exactly two places tree-wide, so the blast radius is one guest register. And the
+already-filed truncation at `dev_sh4.c:204` loses **63.25 counts per second** at the
+landisk P4 prescaler, which is the first number anyone has put on it.
+
+Gate 2 is green at 63 checks.
+
 ## One-hundred-and-forty-first round (#401) — the eleven rows never once exercised the modulo, which is the correction
 
 Panel pass 2 on the shipped #400 diff. **Four seats independently found a wrong

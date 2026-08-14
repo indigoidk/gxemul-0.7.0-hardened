@@ -37,8 +37,22 @@
 #include <string.h>
 #include <stdarg.h>
 
-/*  The one symbol sh4_timer_tick() needs from the rest of the emulator.  */
-void fatal(const char *fmt, ...) { (void)fmt; }
+/*
+ *  The one symbol sh4_timer_tick() needs from the rest of the emulator.
+ *
+ *  #403: it PRINTS. A seat measured that a row which trips the refresh branch at
+ *  the top of the tick died with `exit 1`, 60 bytes on stdout and ZERO bytes on
+ *  stderr -- the message naming the cause was swallowed by a stub that discarded
+ *  it. Failing closed is right; failing closed and silent is not, because the
+ *  next person to add a row that trips it gets an exit status and no reason.
+ */
+void fatal(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+}
 
 #include "../src/devices/dev_sh4.c"
 
@@ -105,10 +119,16 @@ static void row_three_timers(void)
 	struct sh4_data d;
 	static const uint32_t tcor[3] = { 20833, 0xffffffff, 7 };
 	static const uint32_t tcnt[3] = { 100, 100, 3 };
-	static const uint32_t step[3] = { 18939, 200, 5 };
+	/*  #403: t2's step was 5, which left remaining(1) < period(8) on every
+	    timer -- so `period` taken from tcor[0] instead of tcor[i] survived this
+	    row. At step 40 the modulo REDUCES on a timer whose TCOR differs from
+	    timer 0's, which is what makes the subscript observable.  */
+	static const uint32_t step[3] = { 18939, 200, 40 };
 	/*  Independently derived: t0 no underflow (step>cnt -> 20833-(18838%20834));
-	    t1 wraps once; t2 3 -> underflow, remaining 1, 7-(1%8) = 6.  */
-	static const uint32_t want[3] = { 1995, 0xffffff9c, 6 };
+	    t1 wraps once; t2 3 -> underflow, remaining 36, period 8, 36%8 = 4,
+	    7-4 = 3. With period from tcor[0] it would be 36%20834 = 36 and 7-36
+	    would wrap.  */
+	static const uint32_t want[3] = { 1995, 0xffffff9c, 3 };
 	static const int want_unf[3]  = { 1, 1, 1 };
 	int i, bad = 0;
 
@@ -179,6 +199,90 @@ static void row_no_freeze(void)
 	}
 }
 
+/*
+ *  #403: THE INTERRUPT PATH, WHICH NOTHING HAD EVER EXECUTED.
+ *
+ *  gcov on the #400/#401 table reported dev_sh4.c's
+ *  `timer_interrupts_pending[i]++` as `#####` -- never run -- because no row set
+ *  TCR_UNIE. A seat then found FOURTEEN wrong implementations that passed the
+ *  whole table, and this was why: deleting the increment, always taking it,
+ *  taking it on the wrong index, or wiping TCR outright were all invisible.
+ *
+ *  Two claims are pinned here, and they are separate:
+ *    - the count is raised, on the right timer, only when UNIE is set;
+ *    - TCR_UNF is OR-ed IN. `d->tcr[i] = TCR_UNF` (one character) would wipe the
+ *      guest's prescaler select and its UNIE bit, and no value-only row can see
+ *      that, because TCNT is identical either way.
+ */
+static void row_interrupt(void)
+{
+	struct sh4_data d;
+	uint32_t keep = TCR_UNIE | TCR_TPSC_P16;   /*  guest-owned bits  */
+	int bad = 0;
+
+	reset(&d);
+	d.tcor[0] = 20833;
+	d.tcnt[0] = 100;
+	d.timer_hz[0] = 101.0 * SH4_PSEUDO_TIMER_HZ;   /*  step 101 -> one underflow  */
+	d.tcr[0] = keep;
+	d.tstr = TSTR_STR0;
+
+	sh4_timer_tick(NULL, &d);
+	rows ++;
+
+	if (d.timer_interrupts_pending[0] != 1) {
+		printf("  FAIL interrupt: pending[0] = %d, want 1\n",
+		    d.timer_interrupts_pending[0]);
+		bad = 1;
+	}
+	if (d.timer_interrupts_pending[1] != 0 || d.timer_interrupts_pending[2] != 0) {
+		printf("  FAIL interrupt: a stopped timer's count moved\n");
+		bad = 1;
+	}
+	if ((d.tcr[0] & keep) != keep) {
+		printf("  FAIL interrupt: TCR guest bits lost (%08x, wanted %08x kept)"
+		    " -- `=` where `|=` is meant\n", d.tcr[0], keep);
+		bad = 1;
+	}
+	if (!(d.tcr[0] & TCR_UNF)) {
+		printf("  FAIL interrupt: TCR_UNF not set\n");
+		bad = 1;
+	}
+	if (bad)
+		failures ++;
+	else
+		printf("  ok   %-34s pending=1, TCR bits preserved\n",
+		    "underflow raises one interrupt");
+}
+
+/*
+ *  #403: a timer whose TSTR bit is CLEAR must not move at all. Without this,
+ *  deleting the started-check is invisible: every other row starts the timers it
+ *  inspects, so a body that ignores TSTR produces identical answers.
+ */
+static void row_stopped(void)
+{
+	struct sh4_data d;
+
+	reset(&d);
+	d.tcor[0] = 20833;
+	d.tcnt[0] = 12345;
+	d.timer_hz[0] = 500.0 * SH4_PSEUDO_TIMER_HZ;
+	d.tstr = 0;                       /*  not started  */
+
+	sh4_timer_tick(NULL, &d);
+	rows ++;
+
+	if (d.tcnt[0] != 12345 || (d.tcr[0] & TCR_UNF)) {
+		printf("  FAIL stopped timer moved: %08x/UNF%d want 00003039/UNF0\n",
+		    d.tcnt[0], (d.tcr[0] & TCR_UNF) ? 1 : 0);
+		failures ++;
+	} else {
+		printf("  ok   %-34s untouched while TSTR bit is clear\n",
+		    "stopped timer");
+	}
+}
+
 int main(void)
 {
 	printf("SH-4 TMU tick arithmetic (#400), against the REAL dev_sh4.c\n");
@@ -230,7 +334,20 @@ int main(void)
 	    Stepping past zero from there must bridge into the periodic regime.  */
 	row1("cnt > TCOR bridges in",     20833, 0xfffffffeU, 0xffffffffU, 20833, 1);
 
+	/*
+	 *  #403: THE RESET DEFAULT, and it must NOT underflow. TCNT and TCOR both
+	 *  start at 0xffffffff (dev_sh4.c:2030-2032), so a comparison written
+	 *  signed -- `(int32_t)(cnt - step) >= 0` -- declares an underflow here on
+	 *  the very first tick and on every tick after, raising a spurious
+	 *  interrupt 400 times out of 400. No value-only row caught it, because the
+	 *  counter still lands on the right number; only the UNF flag differs.
+	 */
+	row1("reset default must not underflow",
+	     0xffffffffU, 0xffffffffU, 75757, 0xfffed812U, 0);
+
 	row_three_timers();
+	row_interrupt();
+	row_stopped();
 	row_no_freeze();
 
 	printf("\n%d rows, %d failures\n", rows, failures);

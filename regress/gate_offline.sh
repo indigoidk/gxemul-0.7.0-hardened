@@ -294,7 +294,7 @@ else
     check     "SH-4 TMU: row failures" \
               "$(grep -oE '[0-9]+ failures' "$TMULOG" | grep -oE '^[0-9]+')" "0"
     check_min "SH-4 TMU: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 13
+              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 16
     check     "SH-4 TMU: offline verdict" "$(grep -c 'SH4_TMU_PASS' "$TMULOG")" "1"
     #  #401: the multi-period rows are named because they are the ONLY rows that
     #  make the modulo mean anything. Four seats independently found that dropping
@@ -308,6 +308,17 @@ else
               "$(grep -c 'no freeze past 515.4 s' "$TMULOG")" "1"
     check     "SH-4 TMU: the three-timer row is present" \
               "$(grep -c 'three timers at once' "$TMULOG")" "1"
+    #  #403: a seat found FOURTEEN wrong implementations that passed the earlier
+    #  table, because gcov showed timer_interrupts_pending[i]++ was NEVER
+    #  EXECUTED -- no row set TCR_UNIE. These three rows are what made deleting
+    #  the increment, wiping TCR with `=`, ignoring TSTR, and a signed compare
+    #  visible. Name them so removing one is loud.
+    check     "SH-4 TMU: the interrupt row is present" \
+              "$(grep -c 'underflow raises one interrupt' "$TMULOG")" "1"
+    check     "SH-4 TMU: the stopped-timer row is present" \
+              "$(grep -c 'stopped timer' "$TMULOG")" "1"
+    check     "SH-4 TMU: the reset-default row is present" \
+              "$(grep -c 'reset default must not underflow' "$TMULOG")" "1"
 fi
 
 gate_end
