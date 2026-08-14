@@ -4192,6 +4192,132 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-fifth round (#416) — one guest WRITE past the end of a 10 KB image grew it to 512 MB, and the guest was told it succeeded
+
+`diskimage__internal_access()` had no capacity check of any kind. The only limit on a guest LBA was
+a byte-count cap, so a single `WRITE(10)` past the end of a 10,240-byte image **grew the host file
+to 512,000,512 bytes** and its advertised capacity from 1,008 to 1,000,944 blocks — with **status
+GOOD**, and permanently, because capacity is re-derived by `stat()` on the next run.
+
+Three defects compounded to make it silent. The internal layer never reported a short or failed
+transfer: its own check was compiled out under `#if 0`, and it read `lendone <= 0`, so it would not
+have caught a *partial* write even if enabled. SCSI READ then **swallowed** the result — turning
+`!result` into a zero-fill with status GOOD — while SCSI WRITE discarded it outright, the call
+edited down to `/* int result = */` with `/* TODO: how about return code? */` beneath it.
+
+### The hard part was not the bound, it was which extent to bound against
+
+All five rig images carry a **480–992 block whole-cylinder round-up gap**: capacity is rounded up to
+whole cylinders, so the last fraction of a megabyte is addressable but not backed by file. Reads of
+that gap have succeeded as zero-fill for the life of this fork. `gxemul_pmax_rig/disk.img` records
+`d_secperunit = 614880` against a 614,400-block file, with partition `c` extending 480 blocks past
+the end — geometry the guest's own installer wrote.
+
+**The design this round first specified was measured to be wrong.** Bounding *reads* against
+`d->total_size`, the backed extent, **breaks all five rig images** (`internal_access → 0`) and the
+detector's own control row. It also scored a *lower* failure count than the correct bound, which was
+a **masquerade**: two short-write rows write at exactly `total_size`, so they passed because the
+bound rejected them, not because a short write was detected — passing for the wrong reason.
+
+**The bound that shipped is therefore asymmetric**, and the asymmetry is the whole design:
+
+```c
+limit = writeflag ? d->total_size                                  /* backed extent   */
+                  : nr_of_logical_blocks * logical_block_size;     /* advertised      */
+```
+
+Writes stop at the backed extent, so **a guest can never grow the host file by even one byte**.
+Reads run to advertised capacity and zero-fill past EOF, so the round-up gap behaves exactly as the
+rig images have always relied on. The comparison avoids `offset + len`, which would overflow before
+it could be tested, and the read-side zero-fill is load-bearing rather than tidiness: `dev_wdc`'s
+read path declares a 32 KB buffer **on the stack**, discards this function's return value, and
+copies the whole buffer to the guest, so an early return leaving `buf` untouched would hand the
+guest uninitialised host memory.
+
+Three lines of evidence settled the choice, the first decisive:
+
+* **The absence of a bound is itself the instrument.** The shipped code checked nothing, so a write
+  into the gap at any point in an image's history — including its install — would have grown the
+  file permanently, and `stat` would still show it. All five sit at exact round sizes: 300 MiB,
+  300 MiB, 1 GiB, 1 GiB, 2 GiB. **Nothing has ever written there.** A historical measurement, not a
+  prediction.
+* Partition tables agree: the pmax `a` (root, ends 548856) and `b` (swap, ends 614392) both finish
+  *inside* the file; only the raw whole-disk `c` reaches the gap. On arc, `d_secperunit = 196608`
+  leaves every partition 1.9M blocks short of the file end.
+* The gates never write the base image at all — `gate_ab` and `gate_m88k_rounding` both use the `R:`
+  prefix, which opens `d->f` read-only and routes guest writes into a throwaway overlay.
+
+### CHECK CONDITION and sense data are one change, not two
+
+Returning CHECK CONDITION without sense data is worse than returning nothing: `REQUEST SENSE`
+hardcoded sense key `0x00`, so a guest told "something failed" and then "nothing is wrong" cannot
+act — ARC in particular can read that pair as success. This round adds `sense_key`/`sense_asc`/
+`sense_ascq` to `struct diskimage`, latches them at every new CHECK CONDITION, and has `REQUEST
+SENSE` **report and then clear** them: sense is defined as "current errors" and is consumed by the
+read, so clearing is contract, not tidiness — leaving it latched would make one failure answer every
+later query.
+
+Note the READ path already zeroed its buffer on failure (#159). That stops stale data reaching the
+guest but *reports a successful read of zeros*, which is precisely how a refused transfer stayed
+invisible. The status and the zero-fill defend different things and both are needed.
+
+### The overlay `exit(1)` was four sites, not one
+
+`overlay_set_block_in_use()` held three (bitmap seek for read, bitmap seek for write, bitmap write)
+and `fwrite_helper()` a fourth. All are guest-triggerable — a guest write to an overlaid disk lands
+there, so a full filesystem killed the emulator outright rather than failing the write. The function
+now returns 1/0 and its caller propagates: a bitmap update that fails means the block is written but
+not *recorded* as written, so a later read would take it from the wrong layer.
+
+This completes a conversion the tree had already begun in exactly one place — #164 turned the two
+abort paths in `fwrite_helper()` into `return 0` and left its immediate neighbour aborting, four
+lines apart.
+
+### Detector
+
+`regress/diff_diskimage_io.c` goes **8 failures → 0**, the `-DDISKIMAGE_IO_UNFIXED` guard is
+**deleted** (keeping it after the defects were fixed is exactly the permanent opt-out its own note
+warned about), and a new SECTION G asserts the boundary. Gate 2 goes 105 → 110 checks; the detector
+runs **31 rows, 0 failures at `-O0/-O1/-O2/-O3/-Os`, 0 UBSan/ASan runtime errors**.
+
+Three mutants survived the old suite and are now killed by named rows, because **every** past-capacity
+row aimed at LBA 1,000,000 on a 1,008-block disk — a point so far outside that nothing near the edge
+was tested:
+
+| surviving mutant | closing row |
+|---|---|
+| bound one block too permissive | `WRITE one block past ADVERTISED is refused` |
+| only the START offset checked, so a transfer begins legally and runs off the end | `WRITE starting in range but running off the end is refused` |
+| writes bounded by advertised rather than the backed extent | `WRITE into the advertised gap is refused` + `the host file did not grow` |
+
+One row needed no new code at all: the past-EOF row **already computed `allzero` and only printed
+it**, asserting nothing but the return value — so inverting the read-side zero-fill (one character)
+passed the whole suite while leaking host memory. *A row that computes evidence and does not assert
+it is the same class of defect as a check that cannot fail.* Its `check()` now exists.
+
+The gate's `rows actually run` minimum was also raised from 3 to 31. It was written when only three
+rows ran by default; leaving it would have permitted 28 rows to be deleted silently.
+
+### Assessed, not changed
+
+* **READ CAPACITY now advertises blocks the disk will refuse to write.** `disklabel(8)` or `fsck` on
+  a raw partition can issue exactly that. It **cannot** be fixed by advertising less: the pmax rig's
+  on-disk label already records `d_secperunit = 614880`, so the advertised number is baked into
+  guest-written data and is permanent. Recorded rather than papered over.
+* **A 0-byte image is now unwritable** (advertised capacity is 0, so every LBA is refused), where the
+  shipped code allowed the write and grew the file. This is a property of *any* bound, and no escape
+  hatch was added: a `nr_of_logical_blocks > 0` exemption is the same shape that was measured in
+  #414 to let a zero-block disk skip a bound entirely. The documented image-creation workflow
+  (`dd … seek=N`) produces a **sparse file with full `st_size`**, so it is unaffected.
+* **The misaligned overlay read is fixed by none of this.** `fread_helper` advances `buf` by
+  `OVERLAY_BLOCK_SIZE` regardless of `lentoread`, while `fwrite_helper` guards both misalignments.
+  No overlay rows exist in any detector — **do not read overlay correctness into the zero-filled
+  rows above.** Filed.
+* **IDE/ATA propagation is not in this round.** `dev_wdc` still ignores the result on both reads and
+  writes; the bound stops the growth, but the guest is still told the transfer worked. Doing it
+  properly needs `d->error` to raise `WDCS_ERR` — merely checking the return while still queueing
+  zero data would be insufficient. Filed.
+
 ## One-hundred-and-fifty-fourth round (#414) — one multiplication, two factors nobody computed, and every `-d g` disk reported no capacity
 
 `diskimage_recalc_size()` finishes with

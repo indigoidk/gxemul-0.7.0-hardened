@@ -252,6 +252,26 @@ static void section_read_eof(void)
 	    allzero ? "ALL ZERO -- the guest cannot tell" : "not zero-filled");
 	check("[PROOF] read starting past EOF returns failure", res, 0);
 
+	/*
+	 *  #416: THIS ROW ALREADY EXISTED AS A COMPUTATION AND WAS ONLY
+	 *  PRINTED.  `allzero` was measured above and reported to the reader,
+	 *  while the only ASSERTION was the return value -- so inverting the
+	 *  bound's read-side zero-fill (`if (!writeflag)` -> `if (writeflag)`,
+	 *  one character) passed the whole suite while handing the guest
+	 *  uninitialised host memory.  A row that computes evidence and does
+	 *  not assert it is the same class of defect as a check that cannot
+	 *  fail.
+	 *
+	 *  It matters specifically because dev_wdc's read path declares a
+	 *  32 KB buffer ON THE STACK, discards this function's return value,
+	 *  and copies the whole buffer to the guest; the SCSI path cannot
+	 *  observe it (diskimage_scsicmd.c memsets on !result), so the IDE
+	 *  path is the one that leaks and only a direct call like this one
+	 *  can see it.
+	 */
+	check("[PROOF] a refused read leaves NO caller bytes unwritten",
+	    allzero, 1);
+
 	fclose(d.f);
 }
 
@@ -560,6 +580,93 @@ static void section_roundup_gap(void)
  *  prints rather than asserts -- the numbers decide whether the M1 regression
  *  risk is theoretical or routine.
  */
+/*  ------------------------------------------------------------------  */
+/*  SECTION G (#416): the BOUNDARY, and the gap between backed and        */
+/*  advertised.  Every past-capacity row elsewhere in this file aims at   */
+/*  LBA 1,000,000 on a 1,008-block disk -- a point so far outside that    */
+/*  three separate mutants survived the whole suite:                      */
+/*                                                                        */
+/*    * a bound one block too permissive;                                 */
+/*    * a bound that checks only the START offset, so a transfer may      */
+/*      begin legally and run off the end;                                */
+/*    * a write bounded by ADVERTISED capacity rather than the backed     */
+/*      extent, which lets the host file grow into the round-up gap.      */
+/*                                                                        */
+/*  A far-outside row cannot distinguish any of them.  PROBE THE          */
+/*  BOUNDARY, NOT A POINT FAR INSIDE IT.                                  */
+/*                                                                        */
+/*  The fixture is deliberately split: 1000 blocks BACKED by file, 1008   */
+/*  ADVERTISED, so LBA 1000..1007 is the whole-cylinder round-up gap that */
+/*  every rig image also has (480..992 blocks there).                     */
+
+static void section_boundary(void)
+{
+	char path[256];
+	struct diskimage d;
+	unsigned char buf[1024];
+	int res;
+	long long before;
+
+	printf("\nSECTION G -- the boundary, and the backed/advertised gap\n");
+
+	snprintf(path, sizeof(path), "%s/g1.img", WORK);
+	mkfile(path, 512000, 0x33);		/*  1000 blocks BACKED  */
+	mkdisk(&d, path, "r+", 1);
+	d.total_size = 512000;
+	d.nr_of_logical_blocks = 1008;		/*  1008 ADVERTISED  */
+
+	/*  CONTROLS first: the last BACKED block must still work both ways.
+	    NOTE this says BACKED, not ADVERTISED -- an earlier draft of this
+	    row asserted the last ADVERTISED block was writable, which encodes
+	    the superseded symmetric design and would fail here for the right
+	    reason.  */
+	memset(buf, 0x77, sizeof(buf));
+	res = diskimage__internal_access(&d, 1, 999 * 512, buf, 512);
+	check("[CONTROL] WRITE of the last BACKED block is accepted", res, 1);
+	res = diskimage__internal_access(&d, 0, 999 * 512, buf, 512);
+	check("[CONTROL] READ of the last BACKED block is accepted", res, 1);
+
+	/*  A read INSIDE the advertised gap must still succeed as zero-fill.
+	    This is what all five rig images rely on and what a total_size
+	    read bound was measured to break.  */
+	memset(buf, 0xEE, sizeof(buf));
+	res = diskimage__internal_access(&d, 0, 1000 * 512, buf, 512);
+	check("[CONTROL] READ inside the advertised gap still succeeds", res, 1);
+	check("[CONTROL] ... and is zero-filled", buf[0] == 0 && buf[511] == 0, 1);
+	res = diskimage__internal_access(&d, 0, 1007 * 512, buf, 512);
+	check("[CONTROL] READ of the last ADVERTISED block succeeds", res, 1);
+
+	/*  THE GAP WRITE.  This is the row that distinguishes a bound against
+	    the backed extent from one against advertised capacity: the block
+	    is inside what READ CAPACITY reports, but past the end of the
+	    file, so permitting it grows the host image.  */
+	before = fsize(path);
+	memset(buf, 0x99, sizeof(buf));
+	res = diskimage__internal_access(&d, 1, 1000 * 512, buf, 512);
+	check("[PROOF] WRITE into the advertised gap is refused", res, 0);
+	check("[PROOF] ... and the host file did not grow",
+	    fsize(path), before);
+
+	/*  ONE BLOCK past advertised -- the off-by-one a far-outside row
+	    cannot see.  */
+	res = diskimage__internal_access(&d, 1, 1008 * 512, buf, 512);
+	check("[PROOF] WRITE one block past ADVERTISED is refused", res, 0);
+	res = diskimage__internal_access(&d, 0, 1008 * 512, buf, 512);
+	check("[PROOF] READ one block past ADVERTISED is refused", res, 0);
+
+	/*  STARTS LEGAL, RUNS OFF THE END.  A bound that only checks the
+	    start offset accepts this and writes past the extent.  */
+	before = fsize(path);
+	res = diskimage__internal_access(&d, 1, 999 * 512, buf, 1024);
+	check("[PROOF] WRITE starting in range but running off the end is"
+	    " refused", res, 0);
+	check("[PROOF] ... and that one did not grow the file either",
+	    fsize(path), before);
+
+	fclose(d.f);
+}
+
+
 static void section_real_images(void)
 {
 	static const char *imgs[] = {
@@ -652,28 +759,31 @@ int main(int argc, char *argv[])
 	 *                      damage from a single guest command.
 	 *    scsi_write_fail-- a WRITE onto a full store returns status GOOD.
 	 *
-	 *  Enabling them now would make gate 2 red for defects nobody has fixed
-	 *  yet, which is a phantom regression rather than a finding. They are
-	 *  kept HERE, with their vectors, so the rounds that fix those defects
-	 *  need not rediscover any of it -- build with -DDISKIMAGE_IO_UNFIXED to
-	 *  see them fail, and DELETE THIS GUARD in the commit that fixes them.
+	 *  *** #416 FIXED ALL FOUR AND DELETED THE GUARD.  These sections now
+	 *  run unconditionally, which is the point: the -DDISKIMAGE_IO_UNFIXED
+	 *  flag existed so the vectors would survive until someone fixed the
+	 *  defects, and keeping it after that would be exactly the "permanent
+	 *  opt-out" the original note warned about. ***
 	 *
-	 *  *** THE STAGING CONSTRAINT THAT ROUND MUST RESPECT, measured: every
-	 *  one of the five rig images carries a 480-992 block round-up gap. The
-	 *  `#if 0` failure check in diskimage__internal_access is currently
-	 *  harmless only because the SCSI layer swallows the result; fix both and
-	 *  the last ~0.25-0.5 MB of EVERY bootable image returns CHECK CONDITION.
-	 *  section_roundup_gap below measures that gap and stays green either
-	 *  way, deliberately -- it is evidence, not an assertion. ***
+	 *  THE STAGING CONSTRAINT THAT ROUND HAD TO RESPECT, and how it was
+	 *  resolved: every one of the five rig images carries a 480-992 block
+	 *  whole-cylinder round-up gap, addressable but not backed by file.
+	 *  Bounding reads against the backed extent was MEASURED to break all
+	 *  five.  The bound #416 shipped is therefore ASYMMETRIC -- writes are
+	 *  limited to d->total_size so the host file can never grow, reads run
+	 *  to the advertised capacity and zero-fill past EOF, so the gap keeps
+	 *  behaving exactly as the rig images have always relied on.
+	 *  section_roundup_gap below still measures that gap and stays green
+	 *  either way, deliberately -- it is evidence, not an assertion, and
+	 *  SECTION G is where the boundary is actually asserted.
 	 */
-#ifdef DISKIMAGE_IO_UNFIXED
 	section_write_return();
 	section_read_eof();
 	section_scsi_lba();
 	section_scsi_write_fail();
-#endif
 	section_read_capacity();
 	section_roundup_gap();
+	section_boundary();
 	section_real_images();
 
 	printf("\n%d rows, %d failures, %d faults\n", rows, failures, faults);

@@ -182,6 +182,31 @@ static void diskimage__return_default_status_and_message(
 
 
 /*
+ *  diskimage__return_check_condition():
+ *
+ *  #416: report a failed command as CHECK CONDITION (status 0x02) and latch
+ *  the sense data the guest's follow-up REQUEST SENSE will read.
+ *
+ *  The two halves are inseparable and must never be split: a CHECK CONDITION
+ *  whose sense says "no sense" tells the guest that something failed and then
+ *  that nothing is wrong, which is not a state it can act on.  Latching here
+ *  is what makes the status meaningful.
+ */
+static void diskimage__return_check_condition(struct scsi_transfer *xferp,
+	struct diskimage *d, int key, int asc, int ascq)
+{
+	d->sense_key = key;
+	d->sense_asc = asc;
+	d->sense_ascq = ascq;
+
+	scsi_transfer_allocbuf(&xferp->status_len, &xferp->status, 1, 0);
+	xferp->status[0] = 0x02;	/*  CHECK CONDITION  */
+	scsi_transfer_allocbuf(&xferp->msg_in_len, &xferp->msg_in, 1, 0);
+	xferp->msg_in[0] = 0x00;
+}
+
+
+/*
  *  diskimage__switch_tape():
  *
  *  Used by the SPACE command.  (d is assumed to be non-NULL.)
@@ -753,8 +778,17 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			/*  #159: (Codex/Fable) on a failed
 			    read, make sure no stale buffer contents are
 			    presented to the guest.  */
-			if (!result)
+			if (!result) {
 				memset(xferp->data_in, 0, size);
+				/*  #416: and tell the guest.  Zeroing the
+				    buffer stops stale data reaching it, but
+				    on its own it reports a successful read
+				    of zeros -- which is why a short or
+				    refused transfer was invisible.  */
+				diskimage__return_check_condition(xferp, d,
+				    0x05, 0x21, 0x00);	/*  ILLEGAL REQUEST,
+					LOGICAL BLOCK ADDRESS OUT OF RANGE  */
+			}
 		}
 
 		if (d->is_a_tape && d->f != NULL)
@@ -826,11 +860,21 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		debug("WRITE ofs=%i size=%i offset=%i\n", (int)ofs,
 		    (int)size, (int)xferp->data_out_offset);
 
-		/*  int result = */  diskimage__internal_access(d, 1, ofs, xferp->data_out, size);
-
-		/*  TODO: how about return code?  */
-
-		diskimage__return_default_status_and_message(xferp);
+		/*
+		 *  #416: propagate the result.  It used to be discarded
+		 *  outright -- the call was commented out to `int result =`
+		 *  and followed by "TODO: how about return code?" -- so a
+		 *  write that landed no bytes at all, or that was refused for
+		 *  running past the end of the disk, was still reported to the
+		 *  guest as GOOD.  That is the difference between a full store
+		 *  and silent data loss.
+		 */
+		if (!diskimage__internal_access(d, 1, ofs,
+		    xferp->data_out, size))
+			diskimage__return_check_condition(xferp, d,
+			    0x03, 0x0c, 0x00);	/*  MEDIUM ERROR, WRITE ERROR  */
+		else
+			diskimage__return_default_status_and_message(xferp);
 		break;
 
 	case SCSICMD_SYNCHRONIZE_CACHE:
@@ -887,12 +931,29 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		xferp->data_in[0] = 0x80 + 0x70;/*  0x80 = valid,
 						    0x70 = "current errors"  */
-		xferp->data_in[2] = 0x00;	/*  SENSE KEY!  */
+
+		/*
+		 *  #416: report the sense latched by the command that
+		 *  returned CHECK CONDITION, then CLEAR it.
+		 *
+		 *  This byte was hardcoded to 0x00, so every CHECK CONDITION
+		 *  in this file was followed by "no sense" -- a guest could
+		 *  learn that a command failed but never why, and ARC can read
+		 *  that pair as success.  Sense data is defined as "current
+		 *  errors" and is consumed by the read, so clearing it here is
+		 *  part of the contract, not tidiness: leaving it latched
+		 *  would make one failure answer every later REQUEST SENSE.
+		 */
+		xferp->data_in[2] = d->sense_key & 0x0f;	/*  SENSE KEY  */
+		xferp->data_in[12] = d->sense_asc;
+		xferp->data_in[13] = d->sense_ascq;
 
 		if (d->filemark) {
 			xferp->data_in[2] = 0x80;
 		}
 		debug(": [2]=0x%02x ", xferp->data_in[2]);
+
+		d->sense_key = d->sense_asc = d->sense_ascq = 0;
 
 		/*  TODO  */
 		xferp->data_in[7] = retlen - 7;	/*  additional sense length  */

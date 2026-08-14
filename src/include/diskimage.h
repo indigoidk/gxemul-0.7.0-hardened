@@ -154,6 +154,21 @@ struct diskimage {
 	uint64_t	tape_offset;
 	int		tape_filenr;
 	int		filemark;
+
+	/*
+	 *  #416: latched SCSI sense, reported by the next REQUEST SENSE and
+	 *  cleared by it ("current errors" are consumed once).
+	 *
+	 *  This exists because CHECK CONDITION without sense data is worse
+	 *  than no CHECK CONDITION at all: REQUEST SENSE previously answered
+	 *  a hardcoded key 0, so a guest told "something went wrong" and then
+	 *  "nothing is wrong" cannot make progress -- ARC in particular can
+	 *  read that pair as success.  Any command that returns CHECK
+	 *  CONDITION must therefore latch a real key here first.
+	 */
+	int		sense_key;	/*  0 = no sense  */
+	int		sense_asc;	/*  additional sense code  */
+	int		sense_ascq;	/*  ... qualifier  */
 };
 
 

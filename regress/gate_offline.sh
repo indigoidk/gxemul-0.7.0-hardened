@@ -496,11 +496,32 @@ else
               "$(grep -oE '[0-9]+ failures' "$IOLOG" | grep -oE '^[0-9]+')" "0"
     check     "diskimage I/O: faults" \
               "$(grep -oE '[0-9]+ faults' "$IOLOG" | grep -oE '^[0-9]+')" "0"
+    #  #416: was `>= 3`, written when only three rows ran by default.  The
+    #  guard that hid the other four sections is now gone, so 3 would permit
+    #  28 rows to be deleted silently -- a minimum the current value exceeds
+    #  tenfold is decoration, not evidence.
     check_min "diskimage I/O: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$IOLOG" | grep -oE '^[0-9]+')" 3
+              "$(grep -oE '^[0-9]+ rows' "$IOLOG" | grep -oE '^[0-9]+')" 31
     #  Named so that deleting the zero-block row is visible rather than silent.
     check     "diskimage I/O: the zero-block capacity row is present" \
               "$(grep -c 'zero-block disk does not announce' "$IOLOG")" "1"
+    #  #416: the four sections that used to sit behind -DDISKIMAGE_IO_UNFIXED
+    #  now run unconditionally.  Named individually so that re-hiding any of
+    #  them is visible; the grep text appears whether the row passes or fails,
+    #  so a FAILING row cannot read as a MISSING one.
+    check     "diskimage I/O: the past-capacity WRITE rows run by default" \
+              "$(grep -c 'WRITE(10) past capacity' "$IOLOG")" "3"
+    check     "diskimage I/O: the refused-read zero-fill is ASSERTED" \
+              "$(grep -c 'refused read leaves NO caller bytes' "$IOLOG")" "1"
+    #  SECTION G is the boundary.  Without it three separate mutants survive:
+    #  an off-by-one bound, a start-only bound, and a write bounded by
+    #  ADVERTISED capacity rather than the backed extent.
+    check     "diskimage I/O: the gap-write row is present" \
+              "$(grep -c 'WRITE into the advertised gap is refused' "$IOLOG")" "1"
+    check     "diskimage I/O: the run-off-the-end row is present" \
+              "$(grep -c 'running off the end' "$IOLOG")" "1"
+    check     "diskimage I/O: the gap READ still succeeds (the rig images)" \
+              "$(grep -c 'READ inside the advertised gap still succeeds' "$IOLOG")" "1"
 fi
 
 # ----------------------------------------------------------------------------

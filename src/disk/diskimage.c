@@ -1150,8 +1150,22 @@ static size_t diskimage_access__cue(struct diskimage *d, off_t offset,
 /**************************************************************************/
 
 
-/*  Helper function.  */
-static void overlay_set_block_in_use(struct diskimage *d,
+/*
+ *  Helper function.
+ *
+ *  #416: returns 1 on success, 0 on failure -- it used to return void and
+ *  exit(1) on any I/O error against the overlay BITMAP.  Every one of those
+ *  three paths is guest-triggerable: a guest write to an overlaid disk lands
+ *  here, so a full filesystem or a revoked descriptor killed the emulator
+ *  outright rather than failing the write.
+ *
+ *  This completes a conversion the tree had already started in exactly one
+ *  place: #164 turned the two abort paths in fwrite_helper() into `return 0`,
+ *  and #206 did the same for a zero-length access.  The bitmap sites were
+ *  simply missed, and they are the reason "the overlay exit(1)" was recorded
+ *  as one defect when it is four.
+ */
+static int overlay_set_block_in_use(struct diskimage *d,
 	int overlay_nr, off_t ofs)
 {
 	off_t bit_nr = ofs / OVERLAY_BLOCK_SIZE;
@@ -1165,7 +1179,7 @@ static void overlay_set_block_in_use(struct diskimage *d,
 		perror("my_fseek");
 		fprintf(stderr, "Could not seek in bitmap file?"
 		    " offset = %lli, read\n", (long long)bitmap_file_offset);
-		exit(1);
+		return 0;			/*  #416: was exit(1)  */
 	}
 
 	/*  Read the original bitmap data, and OR in the new bit:  */
@@ -1182,20 +1196,22 @@ static void overlay_set_block_in_use(struct diskimage *d,
 		perror("my_fseek");
 		fprintf(stderr, "Could not seek in bitmap file?"
 		    " offset = %lli, write\n", (long long)bitmap_file_offset);
-		exit(1);
+		return 0;			/*  #416: was exit(1)  */
 	}
 	res = fwrite(&data, 1, 1, d->overlays[overlay_nr].f_bitmap);
 	if (res != 1) {
-		fprintf(stderr, "Could not write to bitmap file. Aborting.\n");
-		exit(1);
+		fprintf(stderr, "Could not write to bitmap file.\n");
+		return 0;			/*  #416: was exit(1)  */
 	}
-	
+
 	if (do_fsync) {
 		/*  fflush first: fsync only flushes kernel buffers, not
 		    stdio's userspace buffer.  */
 		fflush(d->overlays[overlay_nr].f_bitmap);
 		fsync(fileno(d->overlays[overlay_nr].f_bitmap));
 	}
+
+	return 1;
 }
 
 
@@ -1288,7 +1304,10 @@ static size_t fwrite_helper(off_t offset, unsigned char *buf,
 		if (lenwritten != OVERLAY_BLOCK_SIZE) {
 			fatal("[ diskimage: fwrite_helper(): fwrite to"
 			    " overlay failed on disk id %i ]\n", d->id);
-			exit(1);
+			/*  #416: was exit(1).  The fseek failure four lines
+			    above already returned 0 -- #164 converted that
+			    one and left its neighbour aborting.  */
+			return 0;
 		}
 
 		buf += OVERLAY_BLOCK_SIZE;
@@ -1299,7 +1318,12 @@ static size_t fwrite_helper(off_t offset, unsigned char *buf,
 		}
 
 		/*  Mark this block in the last overlay as in use:  */
-		overlay_set_block_in_use(d, overlay_nr, curofs);
+		/*  #416: a bitmap update that fails means the block is
+		    written but not RECORDED as written, so a later read would
+		    take it from the wrong layer.  Report it rather than
+		    silently continuing -- or, as before, exiting the host.  */
+		if (!overlay_set_block_in_use(d, overlay_nr, curofs))
+			return 0;
 	}
 
 	return len;
@@ -1405,6 +1429,61 @@ int diskimage__internal_access(struct diskimage *d, int writeflag,
 	if (d->f == NULL)
 		return 0;
 
+	/*
+	 *  #416: bound every access against the disk's extent.  Before this,
+	 *  the only limit on a guest LBA was a byte-count cap, so ONE
+	 *  WRITE(10) past capacity grew a 10,240-byte image to 512,000,512
+	 *  bytes -- and the growth persisted, because capacity is re-derived
+	 *  by stat() on the next run.
+	 *
+	 *  THE TWO LIMITS DIFFER ON PURPOSE, and the asymmetry is the whole
+	 *  design:
+	 *
+	 *    WRITES are bounded by d->total_size, the BACKED extent, so a
+	 *    guest can never grow the host file by even one byte.
+	 *
+	 *    READS are bounded by the ADVERTISED capacity, which is rounded up
+	 *    to whole cylinders and so exceeds the file by 480..992 blocks on
+	 *    every image in this project.  Reads of that gap must keep
+	 *    succeeding as zero-fill: the pmax rig's own BSD disklabel records
+	 *    d_secperunit = 614880 against a 614400-block file, with partition
+	 *    c extending 480 blocks past the end -- geometry the guest's own
+	 *    installer wrote.  Bounding reads by total_size instead was
+	 *    measured to break all five rig images.
+	 *
+	 *  Refusing gap WRITES costs nothing measurable: since the shipped
+	 *  code had no bound at all, any write there would have grown the file
+	 *  permanently at some point in each image's history, and all five
+	 *  still sit at their exact original sizes (300 MiB, 300 MiB, 1 GiB,
+	 *  1 GiB, 2 GiB).  Recorded honestly: this does leave READ CAPACITY
+	 *  advertising blocks the disk will then refuse to write, which
+	 *  disklabel(8) or fsck on a raw partition could reach.  It cannot be
+	 *  fixed by advertising less, because the advertised number is already
+	 *  baked into guest-written labels on disk.
+	 *
+	 *  Tapes are exempt: their offsets are sequential positions, not
+	 *  addresses into a fixed extent (the SCSI tape read uses
+	 *  d->tape_offset and is legitimately unbounded).
+	 *
+	 *  The comparison is written to avoid offset+len, which would overflow
+	 *  before it could be tested.  The zero-fill on the read side is
+	 *  LOAD-BEARING, not tidiness: dev_wdc's read path declares a 32 KB
+	 *  buffer on the stack, discards this function's return value, and
+	 *  copies the whole buffer to the guest, so an early return that left
+	 *  buf untouched would hand the guest uninitialised host memory.
+	 */
+	if (!d->is_a_tape) {
+		int64_t limit = writeflag ? d->total_size
+		    : (int64_t) d->nr_of_logical_blocks * d->logical_block_size;
+
+		if (offset < 0 || (int64_t)len > limit ||
+		    (int64_t)offset > limit - (int64_t)len) {
+			if (!writeflag)
+				memset(buf, 0, len);
+			return 0;
+		}
+	}
+
 	if (writeflag) {
 		if (!d->writable)
 			return 0;
@@ -1436,19 +1515,32 @@ int diskimage__internal_access(struct diskimage *d, int writeflag,
 	/*
 	 *  Incomplete data transfer?
 	 *
-	 *  If we could not read anything at all, then return failure.
-	 *  If we could read a partial block, then return success (with
-	 *  the resulting buffer zero-filled at the end).
+	 *  READS may legitimately come up short and still succeed: the
+	 *  advertised capacity is rounded up to whole cylinders, so the last
+	 *  480..992 blocks of every image in this project are addressable but
+	 *  not backed by file.  Those reads are zero-filled above and stay
+	 *  GOOD -- that is the behaviour the rig images have relied on for the
+	 *  life of this fork.
+	 *
+	 *  WRITES may not.  A short write means bytes the guest handed us are
+	 *  not on the disk, and reporting success for that is the difference
+	 *  between a full store and silent data loss.  The bound above makes
+	 *  this reachable only through a genuine I/O failure, since a
+	 *  past-the-end write is now refused before it starts.
+	 *
+	 *  #416: this replaces a check that was compiled out under `#if 0`.
+	 *  Its own TODO read "check against full cylinder-size instead",
+	 *  which is what the bound above now does; and as written it tested
+	 *  `lendone <= 0`, so it would not have caught a PARTIAL write at all
+	 *  -- only a total one.  Both halves are addressed here.
 	 */
-#if 0
-// TODO: check against full cylinder-size instead
-	if (lendone <= 0) {
-		fatal("[ diskimage__internal_access(): disk_id %i, offset %lli"
-		    ", transfer not completed. len=%i, len_done=%i ]\n",
-		    d->id, (long long)offset, (int)len, (int)lendone);
+	if (writeflag && lendone < (ssize_t)len) {
+		debugmsg(SUBSYS_DISK, "", VERBOSITY_WARNING,
+		    "disk_id %i: short write at offset %lli: %i of %i bytes",
+		    d->id, (long long)offset, (int)lendone, (int)len);
 		return 0;
 	}
-#endif
+
 	return 1;
 }
 
