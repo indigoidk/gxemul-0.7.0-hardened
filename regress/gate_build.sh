@@ -37,10 +37,32 @@ gate_begin "clean-build"
 # in WSL's /tmp, which is cleared on reboot, while $RIG/gxsec-gxemul survives; so the
 # first gate 1 after a reboot takes exactly this path.
 #
-# Withdraw-then-republish makes "a published binary exists" mean "the last gate 1 that
-# ran, PASSED" for every termination route, not just the ones that reach the bottom.
-rm -f /tmp/gxsec-gxemul
-if [ -d "$RIG" ]; then rm -f "$RIG/gxsec-gxemul"; fi
+# #398 CORRECTS TWO THINGS #396 GOT WRONG HERE.
+#
+# FIRST, THE CLAIM. #396 stated that withdraw-then-republish makes "a published binary
+# exists" mean "the last gate 1 that ran, PASSED", for every termination route. *** THAT
+# IS FALSE, and a seat measured it. *** Publication sat BETWEEN the verdict and the
+# stale-verdict guard, so when that guard fired the binary was already published: exit 1
+# with both copies present and fresh. #398 moves the guard ABOVE publication, which makes
+# the invariant hold for the routes that reach the bottom -- but it STILL does not hold
+# in general, because a check appended below the publish block is not seen by a verdict
+# taken above it. The honest statement is the narrow one: NOTHING IS PUBLISHED UNLESS
+# gate_end RETURNED 0. The general property needs publication to move OUT of this script
+# into run.sh, conditioned on gate 1's exit status -- a gate cannot verify its own
+# publication after its own verdict. That is filed, not attempted here.
+#
+# SECOND, THE METHOD. #396 DELETED the published copies, and that introduced a denial of
+# service: a SKIP destroys both, and NOTHING IN THIS REPO EVER CREATES /tmp/gxsec-build
+# (measured with `grep -rn gxsec-build`), so a gate 1 run after a reboot -- when WSL's
+# /tmp is empty -- wipes the rig's only binary and cannot replace it. Withdrawing by
+# RENAME keeps the honesty (no published name during or after a failed run) without the
+# destruction: the artifact stays recoverable at *.withdrawn.
+withdraw() {                     # $1 = published path
+    [ -e "$1" ] || return 0
+    mv -f "$1" "$1.withdrawn" 2>/dev/null || rm -f "$1"
+}
+withdraw /tmp/gxsec-gxemul
+if [ -d "$RIG" ]; then withdraw "$RIG/gxsec-gxemul"; fi
 
 need_file "$EST/src" "$SEC/src" "$PMAX_TREE" "$ARC_TREE"
 
@@ -118,9 +140,21 @@ build_tree() {   # label, source tree, compile tree, expected object count
 # separated field is the filename; the rest is prose for the reader. Filenames here
 # contain no spaces, so `awk '{print $1}'` splits it exactly.
 # *** ONE LINE PER ENTRY. NEVER WRAP A REASON. *** A wrapped reason donates the
-# continuation line's first word to the allowlist -- measured, that took a genuine
-# divergence from RED to GREEN. The "every allowlist entry names a real file" check
-# below is what enforces this; keep the reasons terse rather than defeating it.
+# continuation line's first word to the allowlist, and a seat measured that taking a
+# genuine divergence from RED to GREEN.
+#
+# #398 CORRECTS WHAT #396 CLAIMED ABOUT THIS. #396 said the "names a real file" check
+# below enforces the rule. IT DOES NOT, and two seats showed why from opposite sides:
+#  * the RED->GREEN wrap needs the continuation's first word to be A REAL PATH THAT IS
+#    ALREADY DIVERGENT -- it then moves from unexpected to expected and the failure
+#    disappears. Such a path EXISTS and IS in the actual list, so BOTH new checks stay
+#    green. #396's own detector used a continuation beginning `The`, which cannot
+#    suppress anything: a benign variant that reddens via the stale row. The detector
+#    tested a different mutant from the one the claim is about.
+#  * and the check was vacuous for directories until #398 changed -e to -f.
+# So this rule is enforced by NOTHING today; it is a convention, and the checks below
+# catch only its clumsier violations. Keep the reasons on one line because a reader
+# depends on it, not because a gate will stop you.
 #
 # #396 corrected three of these reasons. They were written from what the divergence was
 # BELIEVED to be, and two panel seats measured the actual est<->SEC diffs and found the
@@ -173,7 +207,10 @@ fi
 n_bogus=0
 while IFS= read -r _e; do
     [ -n "$_e" ] || { n_bogus=$((n_bogus+1)); continue; }
-    if [ ! -e "$EST/src/$_e" ] && [ ! -e "$SEC/src/$_e" ]; then
+    # #398: -f, not -e. `-e` is true for DIRECTORIES, so a reason wrapping onto a line
+    # that begins `devices ...` left this row GREEN -- vacuous for precisely the input
+    # the comment above claimed it caught. Measured by a seat.
+    if [ ! -f "$EST/src/$_e" ] && [ ! -f "$SEC/src/$_e" ]; then
         note "ALLOWLIST ENTRY IS NOT A FILE IN EITHER TREE: '$_e'"
         n_bogus=$((n_bogus+1))
     fi
@@ -249,6 +286,17 @@ gate_end
 verdict=$?
 fails_at_verdict=$_fails
 
+# #398: THE GUARD MOVED ABOVE PUBLICATION. In #396 it sat BELOW, which meant that when
+# it fired the binary had ALREADY been published -- a seat measured exactly that: guard
+# fires, exit 1, both copies present and fresh. A guard that runs after the action it is
+# meant to prevent is a report, not a guard. Nothing may be inserted between gate_end and
+# this test.
+if [ "$_fails" != "$fails_at_verdict" ]; then
+    echo "  *** A CHECK RAN AFTER gate_end: the verdict printed above is STALE"
+    echo "      (_fails was $fails_at_verdict at the verdict, $_fails now). Failing."
+    verdict=1
+fi
+
 if [ "$verdict" != 0 ]; then
     note "gate did not pass -- arc binary left UNPUBLISHED (withdrawn at gate start)"
 elif [ -x "$ARC_TREE/gxemul" ]; then
@@ -261,6 +309,11 @@ elif [ -x "$ARC_TREE/gxemul" ]; then
     # not either copy landed -- a disk-full or unwritable rig would have been announced
     # as a success. Say what actually happened.
     if [ "$published" = 0 ]; then
+        # The withdrawn copies were the recovery artifact for a failed run. A fresh one
+        # has now landed, so they are stale -- drop them rather than accumulating a
+        # decoy that a later reader could mistake for a published binary.
+        rm -f /tmp/gxsec-gxemul.withdrawn
+        if [ -d "$RIG" ]; then rm -f "$RIG/gxsec-gxemul.withdrawn"; fi
         note "arc binary published to rig and /tmp/gxsec-gxemul"
     else
         note "*** PUBLISH FAILED -- the copy did not land; downstream will SKIP ***"
@@ -269,21 +322,20 @@ else
     note "gate passed but $ARC_TREE/gxemul is missing -- nothing published"
 fi
 
-# gate_end already ran above -- it is what decided `verdict`, and it prints the verdict
-# line as a side effect. Calling it a second time here would print a SECOND verdict and
-# (worse) a log-scraping consumer would see two, so exit on the value already captured.
+# gate_end already ran above -- it decided `verdict` and printed the verdict line as a
+# side effect. Calling it again would print a SECOND verdict that a log-scraping consumer
+# would see, so exit on the value already captured.
 #
-# BUT DO NOT EXIT ON A STALE VERDICT. Moving gate_end earlier fixes the defect where an
-# appended check could publish first and fail afterwards, but it introduces the mirror
-# hazard: a check appended down here would now be IGNORED ENTIRELY, since both the
-# printed verdict and the exit status were decided above. Neither shape is structurally
-# immune -- publication and adjudication are simply adjacent -- so the honest move is to
-# make the remaining hazard LOUD instead of silent. If _fails moved after the verdict
-# was taken, the verdict on screen is wrong, and saying so is worth more than pretending
-# the ordering is guaranteed.
-if [ "$_fails" != "$fails_at_verdict" ]; then
-    echo "  *** A CHECK RAN AFTER gate_end: the verdict printed above is STALE"
-    echo "      (_fails was $fails_at_verdict at the verdict, $_fails now). Failing."
-    verdict=1
-fi
+# WHAT IS STILL NOT GUARANTEED, stated plainly because #395 and #396 each claimed a
+# guarantee they did not have. A check appended BELOW this point is invisible: the
+# verdict and the exit status were both decided above, and the stale-verdict guard has
+# already run. A seat measured it -- a red check at the bottom of this file gives
+# PASS (18 checks), exit 0, published. The guard above narrows the window to the region
+# between gate_end and publication; it does not close it.
+#
+# THE REAL FIX IS STRUCTURAL AND IS FILED, NOT ATTEMPTED HERE: publication belongs in
+# run.sh, conditioned on gate 1's exit status. A gate cannot verify its own publication
+# after its own verdict, because whichever of the two runs first can be defeated from the
+# other side -- which is why four consecutive rounds of moving this guard around produced
+# four different orderings, each with a hole somewhere else.
 exit "$verdict"

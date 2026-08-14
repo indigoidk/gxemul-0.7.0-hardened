@@ -4192,6 +4192,77 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-eighth round (#398) — the guard I added fired after the thing it was meant to prevent, and withdrawing by deletion was a denial of service
+
+A measure seat replayed gate 1 in a scratch copy and falsified the claim #396 rests on.
+
+**The invariant was false.** #396 said withdraw-then-republish makes "a published binary
+exists" mean "the last gate 1 that ran, passed", for every termination route. Measured:
+publication sat *between* `verdict=$?` and the stale-verdict guard, so when that guard
+fired the binary had **already been published** — exit 1, both copies present and fresh.
+A guard that runs after the action it is meant to prevent is a report, not a guard. It is
+now above publication, and the detector shows the inversion directly: a red check between
+the verdict and the guard now gives exit 1 with **nothing published**, where the same
+input under #396 published first.
+
+**Withdrawing by deletion was a denial of service, and #396 introduced it.** A SKIP
+destroyed both published copies — and `grep -rn gxsec-build` shows that *nothing in this
+repository ever creates* `/tmp/gxsec-build`. So a gate 1 run after a reboot, when WSL's
+`/tmp` is empty, wiped the rig's only binary and could not replace it. Withdrawal is now
+a rename to `*.withdrawn`: the published *name* still disappears for a failed run, which
+is the honesty the round wanted, but the artifact stays recoverable. Measured: SKIP leaves
+`/tmp/gxsec-gxemul` absent and `/tmp/gxsec-gxemul.withdrawn` present, on both copies. A
+successful publish removes the withdrawn pair rather than leaving a decoy behind.
+
+**`-e` was true for directories.** The allowlist entry check used `-e`, so a reason
+wrapping onto a line beginning `devices …` left that row green — vacuous for precisely
+the input its own comment claimed it caught. Now `-f`.
+
+**And the comment above it was wrong, in a way worth spelling out.** #396 said that check
+enforces the never-wrap rule. It does not, and two seats showed why from opposite
+directions. The RED→GREEN wrap requires the continuation's first word to be *a real path
+that is already divergent* — it then moves from unexpected to expected and the failure
+disappears — and such a path both exists and is in the actual list, so it sails past
+**both** new checks. #396's own detector used a continuation beginning `The`, which
+cannot suppress anything; it reddened via the stale row. **The detector tested a different
+mutant from the one the claim was about.** That is now a standing trap in its own right:
+ask not only "did it fail?" but "is what I broke the same thing the claim is about?"
+
+This round's own `-f` mutant makes the same point honestly. It reddens **both** rows —
+`no stale allowlist entries` and `every allowlist entry names a real file` — because
+`devices` is not in the actual list either, so the stale row was already catching it. So
+`-f` fixes a false comment and removes a vacuity; it does **not** add detection power. The
+existence row remains subsumed by the stale row. Saying otherwise would be the same
+species of overclaim this round exists to correct.
+
+**What is still not guaranteed, stated rather than papered over.** A check appended below
+the publish block is invisible: the verdict and the exit status were both decided above
+it. The guard narrows the window; it does not close it. The general property cannot be had
+inside this script, because publication and adjudication are adjacent and whichever runs
+first can be defeated from the other side — which is exactly why four consecutive rounds
+of moving one guard produced four orderings, each with a hole somewhere else. The
+structural answer is that publication belongs in `run.sh`, conditioned on gate 1's exit
+status: **a gate cannot verify its own publication after its own verdict.** Filed, not
+attempted here.
+
+Three corrections were also applied to the #396/#397 blocks above: the false invariant;
+the `check()` explanation, which was *understated* rather than overstated (it returns 0
+unconditionally, so the naive form is permanently green — execution moved that claim in
+the opposite direction from two seats' reading); and an unsupported provenance clause that
+blamed one specific file's comment for the "gate 5" error when four scripts self-label one
+low and which was read first is simply unrecorded. Inventing a plausible causal account of
+one's own mistake is still an unsupported claim.
+
+Detector: baseline `PASS (18 checks)`, published, no stale `.withdrawn` surviving; the
+SKIP mutant leaving nothing published but the artifact recoverable; the late-check mutant
+firing the guard, exiting 1, publishing nothing; the wrapped-`devices` mutant reddening
+the real-file row. Restore returns `PASS (18 checks)` and republishes.
+
+**This is the last round on this file.** Four rounds took the check count 14 → 14 → 16 →
+18 while the severity of what remained fell, and a review seat asked to rank the project's
+work put further hardening here below two emulator defects that a single first-pass audit
+of the device layer had already found. What is left in `gate_build.sh` is filed.
+
 ## One-hundred-and-thirty-seventh round (#397) — a failed `cd` made the gate report PASS having built nothing
 
 `build_tree` ends with
@@ -4224,7 +4295,14 @@ check "arc: build_tree ran to completion"  "$rc_arc"  "0"
 ```
 
 The same-line capture is load-bearing rather than stylistic: `check()` is itself a
-command, so reading `$?` after the first `check` would report *that check's* status and
+command, so reading `$?` after the first `check` would report *that check's* status and — #398: **understated.** `check()` returns 0 *unconditionally* (`lib.sh:46` ends the
+ok branch in `printf`; `lib.sh:49` ends the FAIL branch in the assignment
+`_fails=$((_fails+1))`), so the naive form is not merely mismeasuring, it is permanently
+green. Demonstrated: that form with arc's `cd` broken gives `PASS (13 checks)`, exit 0,
+and publishes the *previous* run's binary. Two seats called this claim overstated from
+reading alone; execution moved it the other way. What follows below is therefore weaker
+than the truth, and is left in place so the correction is legible:
+not
 not `build_tree`'s — a version that looks equivalent and silently measures the wrong
 thing.
 
@@ -4280,6 +4358,12 @@ on reboot, while `$RIG/gxsec-gxemul` survives, so the first gate 1 after a reboo
 exactly that path. Withdraw-then-republish makes "a published binary exists" mean "the
 last gate 1 that ran, passed" for every termination route.
 
+**That claim is false, and #398 corrects it.** A seat measured the counter-case:
+publication sat *between* `verdict=$?` and the stale-verdict guard, so when the guard
+fired the binary had already been published — exit 1 with both copies present and fresh.
+#398 moves the guard above publication, which buys the narrow property (nothing is
+published unless `gate_end` returned 0) but not the general one.
+
 **The mirror hazard, made loud rather than denied.** Moving `gate_end` earlier fixes one
 ordering and opens its opposite: a check appended *below* it would now be ignored
 entirely, since both the printed verdict and the exit status were already decided.
@@ -4330,7 +4414,10 @@ listing because most were mine and several were flattering:
   equality against the regenerated output proves the committed bytes match what the
   generator emits *today*; it says nothing about their history. This was the round's own
   self-congratulatory line and it was the weakest one in it.
-* "gate 5" for `gate_hygiene.sh` — it is **gate 6**. The wrong number was read from
+* "gate 5" for `gate_hygiene.sh` — it is **gate 6**. (#398: the correction is right,
+  but the *provenance* given here was not checked — `gate_hygiene.sh`'s own header also
+  says "GATE 5", so blaming one specific file's comment was an invented causal story.
+  Four scripts self-label one low; which one was read first is unrecorded.) It was read from
   `gate_mips.sh`'s own comment, and that comment is wrong: four scripts self-label one
   low. A new variant of this project's standing trap — the rule is *read the line before
   citing it*, and the line was read; the line itself was false. Filed separately.
