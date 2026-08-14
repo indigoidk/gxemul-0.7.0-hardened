@@ -348,7 +348,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 12
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 13
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -385,6 +385,15 @@ else
               "$(grep -c 'no unimplemented capability claimed' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the oracle sweeps the full 16-bit range" \
               "$(grep -c 'of 65535 contradict their geometry' "$WDCLOG")" "1"
+    #  #408: two more named rows, each closing a mutant class that survived the
+    #  twelve. The slave row previously asserted only CAPACITY, so four mutants
+    #  reading drive 0's cylinders/heads/spt went unnoticed; and base_drive -- which
+    #  dev_wdc_init sets to 2 for the SECONDARY controller, so it is live, not
+    #  hypothetical -- was ungated at all three call sites.
+    check     "wdc IDENTIFY: the slave row covers geometry, not just capacity" \
+              "$(grep -c 'the SLAVE reports its own' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the base_drive row is present" \
+              "$(grep -c 'base_drive reaches the diskimage id' "$WDCLOG")" "1"
 fi
 
 # ---- #406: the autodev.c generator ----------------------------------------------

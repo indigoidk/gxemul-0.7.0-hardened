@@ -51,12 +51,25 @@
  *  useless for it.
  *
  *  *** THE ACTUAL BLIND SPOT, recorded honestly and NOT closed here: the
- *  transmit loop (dev_wdc.c:517-520) is entirely ungated. Swapping its two
+ *  transmit loop -- the `for (i=0; i<sizeof(d->identify_struct); i+=2)` inside
+ *  wdc_command()'s WDCC_IDENTIFY case -- is entirely ungated. Swapping its two
  *  pushes byte-swaps every IDENTIFY word a guest reads -- 4,096 heads, 13,330
  *  cylinders -- at ZERO failures, because this driver reads identify_struct
  *  DIRECTLY rather than through the path the guest uses. Closing it needs a
  *  different harness (drive wdc_command(WDCC_IDENTIFY) then dev_wdc_access on
  *  wd_data), which is new machinery rather than another row, so it is filed. ***
+ *
+ *  #408: THAT CITATION USED TO BE A LINE NUMBER AND IT WENT STALE TWICE.
+ *  #405's references were +31 off (the length of its own inserted comment);
+ *  #407 "corrected" them and was itself +9 off, from the identical mechanism,
+ *  while carrying a comment that said to re-read line references after editing.
+ *  Naming the construct is the fix that does not need repeating.
+ *
+ *  THE BUILD FLAGS BELOW ARE LOAD-BEARING FOR CORRECTNESS, NOT SPEED. This file
+ *  needs -ffunction-sections -fdata-sections -Wl,--gc-sections to LINK at all
+ *  (otherwise: undefined debug, quiet_mode, diskimage_access, diskimage_exist,
+ *  machine_add_tickfunction). gate_offline.sh passes them. Do not "simplify"
+ *  them away.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,13 +110,26 @@ void fatal(const char *fmt, ...)
  *
  *  So each drive id gets a distinct size, and row_slave() below reads drive 1.
  */
-static uint64_t stub_size_for[4] = { 0, 0, 0, 0 };
+static uint64_t stub_size_for[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+static int stub_size_for_active = 0;
 
+/*
+ *  #408: NO FALLBACK WHEN THE PER-ID TABLE IS ACTIVE.
+ *
+ *  #407's version fell back to the single `stub_size` for any id outside the two
+ *  it populated, and row_slave() set that fallback to the SLAVE's size -- so an
+ *  id that was off by one still returned the correct answer and the mutant
+ *  `id + 1` SURVIVED. A stub that answers correctly for an id nobody asked about
+ *  is not a stub, it is a second implementation.  Poison instead.
+ */
 int64_t diskimage_getsize(struct machine *machine, int id, int type)
 {
 	(void)machine; (void)type;
-	if (id >= 0 && id < 4 && stub_size_for[id] != 0)
-		return (int64_t) stub_size_for[id];
+	if (stub_size_for_active) {
+		if (id < 0 || id >= 8)
+			return 0;
+		return (int64_t) stub_size_for[id];	/*  0 = poison  */
+	}
 	return (int64_t) stub_size;
 }
 
@@ -140,6 +166,29 @@ static uint64_t sectors_from_block(struct wdc_data *d, int lo, int hi)
 	return ((uint64_t)word(d, hi) << 16) | word(d, lo);
 }
 
+/*
+ *  #408: A REAL struct cpu, BECAUSE PASSING NULL WAS UNDEFINED BEHAVIOUR.
+ *
+ *  wdc_initialize_identify_struct() dereferences cpu->machine three times (the
+ *  diskimage_getsize, diskimage_is_a_cdrom and diskimage_getname calls). #405
+ *  and #407 both passed NULL, and it "worked" only because -O2 inlines the stubs
+ *  and deletes the load. MEASURED: the same driver SEGFAULTS at -O0 and at -O1
+ *  (exit 139). That is not a latent nicety -- it means the gate's optimisation
+ *  flags were load-bearing for CORRECTNESS, and a future "build regress at -O0 to
+ *  debug this" would have turned the gate red in a way that looks exactly like a
+ *  capability regression.
+ */
+static struct machine stub_machine;
+static struct cpu     stub_cpu;
+
+static struct cpu *fake_cpu(void)
+{
+	memset(&stub_machine, 0, sizeof(stub_machine));
+	memset(&stub_cpu, 0, sizeof(stub_cpu));
+	stub_cpu.machine = &stub_machine;
+	return &stub_cpu;
+}
+
 static void build(struct wdc_data *d, uint64_t sectors, int c, int h, int s)
 {
 	memset(d, 0, sizeof(*d));
@@ -147,8 +196,8 @@ static void build(struct wdc_data *d, uint64_t sectors, int c, int h, int s)
 	d->heads[0] = h;
 	d->sectors_per_track[0] = s;
 	stub_size = sectors * 512;
-	stub_size_for[0] = stub_size_for[1] = 0;	/*  single-drive rows  */
-	wdc_initialize_identify_struct(NULL, d);
+	stub_size_for_active = 0;			/*  single-drive rows  */
+	wdc_initialize_identify_struct(fake_cpu(), d);
 }
 
 /*
@@ -211,27 +260,89 @@ static void row_slave(void)
 	uint64_t master = 100ULL * 16 * 63;	/*  100 cylinders  */
 	uint64_t slave  = 300ULL * 16 * 63;	/*  300 cylinders  */
 	uint64_t got;
+	int bad = 0;
 
 	memset(&d, 0, sizeof(d));
 	d.drive = 1;
-	d.cyls[1] = 300; d.heads[1] = 16; d.sectors_per_track[1] = 63;
+	d.cyls[0] = 100; d.heads[0] = 16; d.sectors_per_track[0] = 63;
+	d.cyls[1] = 300; d.heads[1] = 15; d.sectors_per_track[1] = 17;
+	memset(stub_size_for, 0, sizeof(stub_size_for));
 	stub_size_for[0] = master * 512;
 	stub_size_for[1] = slave  * 512;
-	stub_size = slave * 512;
-	wdc_initialize_identify_struct(NULL, &d);
-	stub_size_for[0] = stub_size_for[1] = 0;
+	stub_size = 0;				/*  poison: no fallback answer  */
+	stub_size_for_active = 1;
+	wdc_initialize_identify_struct(fake_cpu(), &d);
+	stub_size_for_active = 0;
 
 	rows ++;
 	got = sectors_from_block(&d, 60, 61);
 	if (got != slave) {
-		printf("  FAIL %-38s drive 1 says %llu, its own geometry says %llu\n",
+		printf("  FAIL %-38s drive 1 says %llu, want %llu\n",
 		    "the SLAVE reports its own capacity",
 		    (unsigned long long)got, (unsigned long long)slave);
+		bad = 1;
+	}
+
+	/*
+	 *  #408: THE GEOMETRY HALF, which #407 left open. It closed the mutant that
+	 *  made the slave report the master's CAPACITY and never checked that the
+	 *  slave reports its own CYLINDERS, HEADS and SECTORS. Measured: four
+	 *  mutants -- cyls[d->drive]->cyls[0], heads[...]->heads[0],
+	 *  sectors_per_track[...]->[0], on both bytes -- all SURVIVED the 12 rows.
+	 *  Master and slave are given DELIBERATELY DIFFERENT geometries (16/63 vs
+	 *  15/17) so that reading the wrong drive's field cannot coincide.
+	 */
+	if (word(&d, 1) != 300 || word(&d, 3) != 15 || word(&d, 6) != 17) {
+		printf("  FAIL %-38s drive 1 reports c=%u h=%u s=%u, want 300/15/17\n",
+		    "the SLAVE reports its own geometry",
+		    word(&d, 1), word(&d, 3), word(&d, 6));
+		bad = 1;
+	}
+
+	if (bad)
+		failures ++;
+	else
+		printf("  ok   %-38s %llu sectors, c=300 h=15 s=17\n",
+		    "the SLAVE reports its own capacity+geometry",
+		    (unsigned long long)got);
+}
+
+/*
+ *  #408: base_drive IS NOT HYPOTHETICAL -- dev_wdc_init() sets it to 2 for the
+ *  SECONDARY controller (the 0x170 address arm), so every access on that
+ *  controller adds it. #407's slave row never varied it, and MEASURED, dropping
+ *  `+ d->base_drive` from all three call sites SURVIVED every row. Here drive 0
+ *  of a base_drive=2 controller must read diskimage id 2, and ids 0/1 are poison
+ *  so borrowing the primary controller's disk cannot look correct.
+ */
+static void row_base_drive(void)
+{
+	struct wdc_data d;
+	uint64_t want = 500ULL * 16 * 63;
+	uint64_t got;
+
+	memset(&d, 0, sizeof(d));
+	d.drive = 0;
+	d.base_drive = 2;
+	d.cyls[0] = 500; d.heads[0] = 16; d.sectors_per_track[0] = 63;
+	memset(stub_size_for, 0, sizeof(stub_size_for));
+	stub_size_for[2] = want * 512;		/*  ids 0,1,3.. stay poison  */
+	stub_size = 0;
+	stub_size_for_active = 1;
+	wdc_initialize_identify_struct(fake_cpu(), &d);
+	stub_size_for_active = 0;
+
+	rows ++;
+	got = sectors_from_block(&d, 60, 61);
+	if (got != want) {
+		printf("  FAIL %-38s got %llu, want %llu (base_drive ignored?)\n",
+		    "base_drive reaches the diskimage id",
+		    (unsigned long long)got, (unsigned long long)want);
 		failures ++;
 	} else {
-		printf("  ok   %-38s %llu (master %llu)\n",
-		    "the SLAVE reports its own capacity",
-		    (unsigned long long)got, (unsigned long long)master);
+		printf("  ok   %-38s id 2 -> %llu sectors\n",
+		    "base_drive reaches the diskimage id",
+		    (unsigned long long)got);
 	}
 }
 
@@ -329,6 +440,7 @@ int main(void)
 
 	row_anchor();
 	row_slave();
+	row_base_drive();
 	row_no_lba_claim();
 	row_selfconsistent();
 

@@ -4192,6 +4192,74 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-eighth round (#408) — the round that corrected stale citations committed the identical error, and the detector was relying on the optimiser
+
+#407's headline record was that #405's line citations had gone **stale by exactly +31 — the
+length of the comment #405 itself inserted.** It wrote that lesson into the source: *"re-read
+every line reference AFTER the edit is in place."*
+
+**#407's own comment insertion was +9 lines net, and every citation it "corrected" is stale by
+exactly +9.** Verified by reading each line: the transmit loop is at `:526-529`, not `:517-520`
+(which is `d->int_assert = 1;` in `WDCC_RECAL`); reassembly is `:609-627`, not `:600-618`; the
+six `& 255` lines are at `:287-289`/`:293-295`, not `:278-280`/`:284-286`. **Lines 279-284 —
+precisely where the record said the defective lines were — contained #407's own sentence about
+re-reading citations.**
+
+**So writing the lesson down did nothing, and the fix is not better line numbers — it is
+fewer of them.** A line reference inside a file the same commit edits is measured against the
+file it was written in, not the one that ships. Every citation in both files and in the
+CHANGELOG now **names the construct** (`wdc_command()`'s `WDCC_IDENTIFY` case, the `wd_data`
+read in `dev_wdc_access()`, the capacity assignments for words 57-58/60-61), which survives
+every future edit instead of resetting the cycle.
+
+### The detector was relying on the optimiser to hide undefined behaviour
+
+`wdc_initialize_identify_struct()` dereferences `cpu->machine` three times. #405 and #407 both
+passed **`NULL`**. It appeared to work only because `-O2` inlines the stubs and deletes the
+load. **Measured: the same driver segfaults at `-O0` and `-O1` (exit 139).**
+
+That is not a latent nicety. It meant the gate's *optimisation flags were load-bearing for
+correctness*, so a future "let's build the regress tools at `-O0` to debug this" would have
+turned the gate red in a way indistinguishable from a real capability regression. The driver
+now builds a real zeroed `struct cpu` pointing at a zeroed `struct machine`, and is verified
+across **`-O0`, `-O1`, `-O2`, `-O3` and `-Os`** — 13 rows, 0 failures at every level. The
+link-flag requirement (`-ffunction-sections -fdata-sections -Wl,--gc-sections`, without which
+it does not link at all) is now recorded in the file as load-bearing rather than cosmetic.
+
+### Three more holes, all found by mutation and all on live paths
+
+**The slave's geometry was never checked — only its capacity.** #407 closed the mutant that
+made the slave report the master's *capacity* and never asked whether it reports its own
+*cylinders, heads and sectors*. Four mutants (`cyls`/`heads`/`sectors_per_track` reading
+`[0]` instead of `[d->drive]`) survived all twelve rows. Master and slave are now given
+**deliberately different geometries** (16/63 versus 15/17) so that reading the wrong drive's
+field cannot coincidentally agree.
+
+**`base_drive` was entirely ungated, and it is not hypothetical** — `dev_wdc_init()` sets it
+to **2 for the secondary controller** (the `0x170` address arm), so every access there adds
+it. Dropping `+ d->base_drive` from all three call sites survived every row. A new row puts
+drive 0 on a `base_drive = 2` controller and requires it to read diskimage id 2.
+
+**The stub was answering questions nobody asked.** #407's id-dependent `diskimage_getsize()`
+fell back to the single `stub_size` for any unpopulated id — and `row_slave()` had set that
+fallback to the *slave's* size, so the mutant `id + 1` returned the correct answer and
+survived. The table is now **poisoned** outside the populated ids. A stub that answers
+correctly for an input under test is not a stub; it is a second implementation.
+
+### Records corrected
+
+- **The word-49 narrative was wrong, though the row is right.** #407 called `[2*49+1] = 2` an
+  "advertising LBA" mutant. That is the **low** byte, which is vendor-specific; LBA is `0x200`,
+  the **high** byte. The in-tree OpenBSD guest settles it — its `wdc.c` takes capabilities from
+  `tb[49] >> 8` and puts the low byte in `wdp_vendor3`, which is never read. The row pins both
+  bytes, so the detector was always correct; only the description was not.
+- **"`diskimage_getsize()` returns a multiple of 512 always" is too strong.** A guest MODE
+  SELECT can set `logical_block_size` to any value in [256, 8192], and `dev_wdc.c` reaches
+  that path for ATAPI. The dismissal of the `(total_size + 511)/512` mutants holds for every
+  ordinary disk; the word "always" did not.
+- #407's **commit message** says "three rows added". Two were added and `row_selfconsistent()`
+  was widened. The message is immutable; the correction is recorded here.
+
 ## One-hundred-and-forty-seventh round (#407) — the detector two rounds ago shipped with four holes and a note that was wrong in the flattering direction
 
 A pass-2 measure seat built and ran **133 mutants** against #405's `diff_wdc_identify.c`,
@@ -4219,7 +4287,10 @@ oracle claims to guard. It was invisible because `build()` memset the struct and
 `d->drive`, and the stub `diskimage_getsize()` ignored its `id`. Fixed by making the stub
 id-dependent and adding one slave row.
 
-**Runner-up was one character**: `[2 * 49 + 1] = 0` → `= 2`, advertising LBA. #405 had
+**Runner-up was one character**: `[2 * 49 + 1] = 0` → `= 2`. (*#408: that sets the LOW byte,
+which is vendor-specific — LBA is `0x200`, the HIGH byte. The row pins both bytes so it is
+correct; only this description was wrong. The in-tree OpenBSD guest reads `tb[49] >> 8`.*)
+#405 had
 documented in prose why that zero is deliberate and then not gated it. Now asserted.
 
 **An 11-bit cylinder truncation also survived.** `(cyls >> 8) & 7` produces 63,488
@@ -4239,8 +4310,8 @@ note never described — and the word-53 anchor **catches even that**, nine fail
 
 **The citations were stale by exactly +31 — the length of the comment #405 itself inserted.**
 `:486-489` and `:571-575` had become the `WDCC_IDP` case and the tail of a `fatal()` string;
-the real transmit loop is `:517-520` and reassembly is `:600-618`. The CHANGELOG's
-`:247-249`/`:253-255` had become `:278-280`/`:284-286`. **Nothing the citations said was
+the real transmit loop is the `for (i=0; ...; i+=2)` in `wdc_command()`'s `WDCC_IDENTIFY`
+case, and reassembly is the `wd_data` read in `dev_wdc_access()`. **Nothing the citations said was
 wrong — only the numbers had moved.** A line reference written before its own insertion is
 measured against the file it was written in, not the file it ships in.
 
@@ -4256,10 +4327,13 @@ argument: both the LE and BE branches plus `memory_writemax64` land the *same* t
 guest memory, so the device layer is byte-stream-preserving. No ATA document was consulted —
 there is none in this tree. Two apparent survivors (`(total_size + 511)/512` and `+256`) were
 **discarded as artifacts of the seat's own probe**: `diskimage_getsize()` returns
-`nr_of_logical_blocks * logical_block_size`, always a multiple of 512.
+`nr_of_logical_blocks * logical_block_size`, a multiple of 512 for every non-ATAPI disk.
+(*#408: "always" was too strong — a guest MODE SELECT can set `logical_block_size` to any
+value in [256, 8192], and `dev_wdc.c` reaches that path for ATAPI. The dismissal holds for
+ordinary disks; the word "always" did not.*)
 
 **The real blind spot is recorded and deliberately not closed here.** The transmit loop
-(`:517-520`) is entirely ungated: swapping its two pushes byte-swaps every IDENTIFY word a
+(the `for (i=0; ...; i+=2)` in `wdc_command()`'s `WDCC_IDENTIFY` case) is entirely ungated: swapping its two pushes byte-swaps every IDENTIFY word a
 guest reads — 4,096 heads, 13,330 cylinders — at **zero failures**, because this driver reads
 `identify_struct` directly rather than through the path the guest uses. Closing it needs a
 different harness (drive `wdc_command(WDCC_IDENTIFY)` then `dev_wdc_access` on `wd_data`),
@@ -4359,8 +4433,8 @@ today.
 ## One-hundred-and-forty-fifth round (#405) — the disk told the guest the wrong size, and the test that proves it had to be built backwards
 
 `wdc_initialize_identify_struct()` packs the ATA IDENTIFY capacity into eight byte
-assignments. **Six used `% 255` where `& 255` is meant** (`dev_wdc.c:278-280`, `:284-286`
-— *#407 corrected these from `:247-249`/`:253-255`, which were the pre-commit lines*).
+assignments. **Six used `% 255` where `& 255` is meant** — the eight capacity assignments for
+words 57-58 and 60-61 in `wdc_initialize_identify_struct()`.
 The two that were already correct are the bottom line of each group — the only two whose
 operand is a single byte to begin with. That asymmetry is the sole evidence of intent
 available, because **there is no ATA specification in this repository**, and the fix is
@@ -4384,9 +4458,9 @@ have is **33,546,240 bytes / 65 cylinders — a 32 MB disk that announces itself
 **The byte order was examined and deliberately left alone**, and saying so matters because
 two panel seats called it a second defect. They were reading the snippet. `:187` states the
 convention in the file's own words ("Offsets are in 16-bit WORDS! High byte, then low"),
-`:193-206` follow it, and the transmit loop at `:517-520` pushes `[i+1]` before `[i+0]` so a
-little-endian guest reassembles `(high << 8) | low` at `:600-618` (*#407 corrected both from
-`:486-489`/`:571-575`*). The two seats that read
+the geometry words follow it, the transmit loop in `wdc_command()`'s `WDCC_IDENTIFY` case
+pushes `[i+1]` before `[i+0]`, and `dev_wdc_access()`'s `wd_data` read reassembles
+`(high << 8) | low`. The two seats that read
 the file found it consistent, and execution agreed. The 57-vs-58 *word* order is not
 establishable from this tree at all — so a mask-only correction is exactly as much as the
 source can justify, and no more.
@@ -4426,8 +4500,8 @@ word-53 anchor catches the packing half alone; word 47 is `0x8080`, a byte-swap 
 would have been useless for that.
 
 **Not touched, deliberately: word 49 (LBA support) stays zero.** The LBA offset arms in
-`wdc__read`/`wdc__write` are `#if 0` (`:315-321`, `:361-367`) and `d->lba` is parsed at `:970`
-and then ignored (*#407 corrected all three from `:284-290`/`:330-336`/`:939`*). Advertising
+`wdc__read`/`wdc__write` are `#if 0`, and `d->lba` is parsed in the `wd_sdh` case and then
+never reaches an offset computation. Advertising
 LBA while still computing CHS offsets would send a guest's requests to the wrong place — the
 zero may be accidentally load-bearing. **#407 gated it**: a one-character edit setting word 49
 to `2` passed all ten of this round's rows, so the deliberate zero is now asserted.
