@@ -4192,6 +4192,78 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-fifth round (#405) — the disk told the guest the wrong size, and the test that proves it had to be built backwards
+
+`wdc_initialize_identify_struct()` packs the ATA IDENTIFY capacity into eight byte
+assignments. **Six used `% 255` where `& 255` is meant** (`dev_wdc.c:247-249`, `:253-255`).
+The two that were already correct are the bottom line of each group — the only two whose
+operand is a single byte to begin with. That asymmetry is the sole evidence of intent
+available, because **there is no ATA specification in this repository**, and the fix is
+scoped to exactly what that evidence supports.
+
+This is not a rare corner. The other six lines shift **without pre-masking**, so their
+operand is a multi-byte quantity and `% 255` is a base-256 digit sum rather than byte
+extraction — verified in closed form with 0 counterexamples over 2²⁶:
+
+    x % 255 == ((x >> 8) + (x & 255)) % 255
+
+Above the divergence point it is wrong 100% of the time. The ~0.39% of sizes where the
+`>> 8` byte comes out accidentally right are precisely the ones where `>> 16` is wrong.
+Worst case a real disk announces **zero sectors**.
+
+**Smallest divergence, reachable rather than theoretical.** The raw threshold is 65,280
+sectors, but `diskimage_recalc_size()` (`diskimage.c:254-268`) rounds every image up to
+whole cylinders, so that exact count cannot occur. The smallest count an actual image can
+have is **33,546,240 bytes / 65 cylinders — a 32 MB disk that announces itself as 120 KB.**
+
+**The byte order was examined and deliberately left alone**, and saying so matters because
+two panel seats called it a second defect. They were reading the snippet. `:187` states the
+convention in the file's own words ("Offsets are in 16-bit WORDS! High byte, then low"),
+`:193-206` follow it, and the transmit loop at `:486-489` pushes `[i+1]` before `[i+0]` so a
+little-endian guest reassembles `(high << 8) | low` at `:571-575`. The two seats that read
+the file found it consistent, and execution agreed. The 57-vs-58 *word* order is not
+establishable from this tree at all — so a mask-only correction is exactly as much as the
+source can justify, and no more.
+
+### The detector, and why an obvious table would have been worthless
+
+`regress/diff_wdc_identify.c` (10 rows, wired into gate 2, now 73 checks) is the third
+instance of the offline-differential construction after `diff_ieee_store.c` and
+`diff_sh4_tmu.c`: stub the `diskimage_*` externals, `#include` the device file, and the
+function under test **is the one that ships**.
+
+*** `%` and `&` return the same byte for every operand below 255. A table of
+plausible-looking disk sizes therefore **passes on the unfixed code** — every disk under
+33,423,360 bytes agrees. *** So each row names the specific byte it drives past the
+divergence point: 65,280 (`>>8` threshold), 65,536 (carry into `>>16`), `0x12345678` (all
+four bytes distinct), `0xFF0000` (the window where `>>8` is accidentally right, which is
+what proves the `>>16` line is checked at all), `0xFF010203` (`>>24` threshold), and
+`0xFFFFFFFF`. Two small controls sit below the threshold to show the rig reports true
+values rather than to detect anything.
+
+Measured against mutants rather than asserted: the **full revert fails 7 rows**, and a
+**partial fix correcting only the two `>> 8` lines still fails 4** — the half-repair a
+carelessly chosen table would have waved through. A positive control (`+1` on an
+already-correct line) fires on 8, and the harness refuses to score a build failure or a
+signal as a row kill.
+
+**A spec-free oracle, which is the part worth reusing.** With no ATA document available the
+absolute encoding cannot be cited — but images are rounded to whole cylinders, so the sector
+count *is* the product of the geometry words in the same block. The block can therefore be
+checked against **itself**, needing no specification whatsoever. On the shipped defect,
+65,471 of 65,535 cylinder counts produce an IDENTIFY block that contradicts its own geometry.
+
+**Known survivor, recorded rather than papered over.** A compensating pair that swaps `+0`/`+1`
+across all eight capacity lines *and* swaps the two pushes in the transmit loop is invisible to
+this driver, which reads `identify_struct` directly rather than through the transmit path. The
+word-53 anchor catches the packing half alone; word 47 is `0x8080`, a byte-swap palindrome, and
+would have been useless for that.
+
+**Not touched, deliberately: word 49 (LBA support) stays zero.** The LBA offset arms in
+`wdc__read`/`wdc__write` are `#if 0` (`:284-290`, `:330-336`) and `d->lba` is parsed at `:939`
+and then ignored. Advertising LBA while still computing CHS offsets would send a guest's
+requests to the wrong place — the zero may be accidentally load-bearing.
+
 ## One-hundred-and-forty-fourth round (#404) — the SH-4 RTC is not settable, and that is recorded rather than guessed
 
 A device audit flagged `dev_rs5c313.c` as re-reading host time before every access including

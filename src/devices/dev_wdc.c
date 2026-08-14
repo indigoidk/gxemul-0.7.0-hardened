@@ -243,16 +243,47 @@ static void wdc_initialize_identify_struct(struct cpu *cpu, struct wdc_data *d)
 	d->identify_struct[2 * 53 + 0] = 0x00;
 	d->identify_struct[2 * 53 + 1] = 0x02;
 
+	/*
+	 *  #405: `% 255` where `& 255` is meant, on six of these eight lines.
+	 *
+	 *  The two that were already right are the ones whose operand is small:
+	 *  `(sectors) & 255` cannot exceed a byte anyway. Every other line shifts
+	 *  first and does NOT pre-mask, so its operand is a multi-byte quantity and
+	 *  `% 255` is not byte extraction that occasionally coincides -- it is a
+	 *  base-256 digit sum. Measured in closed form, 0 counterexamples over 2^26:
+	 *      x % 255 == ((x >> 8) + (x & 255)) % 255
+	 *
+	 *  So this is not a rare corner. Above the threshold it is wrong 100.0000%
+	 *  of the time; the 0.39% of sizes where the >>8 byte is accidentally right
+	 *  are exactly the ones where >>16 is wrong. The announced capacity lands
+	 *  either side of the truth, worst case reporting ZERO SECTORS.
+	 *
+	 *  Smallest size at which any byte diverges is 65,280 sectors -- but
+	 *  diskimage_recalc_size() (diskimage.c:254-268) rounds every image up to
+	 *  whole cylinders, so that exact count is unreachable. The smallest
+	 *  REACHABLE divergence is 33,546,240 bytes (65 cylinders), where a 32 MB
+	 *  disk announces itself as 120 KB.
+	 *
+	 *  The byte order is NOT a second defect and was deliberately left alone.
+	 *  :187 states the convention ("Offsets are in 16-bit WORDS! High byte, then
+	 *  low"), :193-206 follow it, and the transmit loop at :486-489 pushes [i+1]
+	 *  before [i+0] so a little-endian guest reassembles (high << 8) | low at
+	 *  :571-575. Two panel seats called it a defect from the snippet alone; two
+	 *  that read the file found it consistent, and execution agreed. The 57-vs-58
+	 *  WORD order is not establishable from this tree at all -- there is no ATA
+	 *  specification here -- so a mask-only correction is exactly as much as the
+	 *  source can justify.
+	 */
 	/*  57-58: current capacity in sectors  */
-	d->identify_struct[2 * 58 + 0] = ((total_size / 512) >> 24) % 255;
-	d->identify_struct[2 * 58 + 1] = ((total_size / 512) >> 16) % 255;
-	d->identify_struct[2 * 57 + 0] = ((total_size / 512) >> 8) % 255;
+	d->identify_struct[2 * 58 + 0] = ((total_size / 512) >> 24) & 255;
+	d->identify_struct[2 * 58 + 1] = ((total_size / 512) >> 16) & 255;
+	d->identify_struct[2 * 57 + 0] = ((total_size / 512) >> 8) & 255;
 	d->identify_struct[2 * 57 + 1] = (total_size / 512) & 255;
 
 	/*  60-61: total nr of addressable sectors  */
-	d->identify_struct[2 * 61 + 0] = ((total_size / 512) >> 24) % 255;
-	d->identify_struct[2 * 61 + 1] = ((total_size / 512) >> 16) % 255;
-	d->identify_struct[2 * 60 + 0] = ((total_size / 512) >> 8) % 255;
+	d->identify_struct[2 * 61 + 0] = ((total_size / 512) >> 24) & 255;
+	d->identify_struct[2 * 61 + 1] = ((total_size / 512) >> 16) & 255;
+	d->identify_struct[2 * 60 + 0] = ((total_size / 512) >> 8) & 255;
 	d->identify_struct[2 * 60 + 1] = (total_size / 512) & 255;
 
 	/*  64: Advanced PIO mode support. 0x02 = mode4, 0x01 = mode3  */

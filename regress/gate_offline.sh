@@ -321,5 +321,57 @@ else
               "$(grep -c 'reset default must not underflow' "$TMULOG")" "1"
 fi
 
+# ---- #405: the ATA IDENTIFY capacity bytes --------------------------------------
+# Third instance of the same construction (float_emul, dev_sh4, now dev_wdc): the driver
+# stubs the diskimage_* externals and #includes dev_wdc.c, so the function that runs is
+# the one that ships. wdc_initialize_identify_struct() is static, so there is no way to
+# link it without including the file.
+#
+# *** WHY THE NAMED ROWS BELOW ARE THE WHOLE POINT. `% 255` and `& 255` return the SAME
+# byte for every operand below 255, so a table of plausible-looking disk sizes passes on
+# the UNFIXED code -- every disk under 33,423,360 bytes agrees. Each named row puts a
+# specific byte at or past the divergence point. Measured against the shipped defect:
+# the full revert fails 7 rows, and a PARTIAL fix that corrects only the two `>> 8`
+# lines still fails 4 -- which is the case a less careful table would have let through.
+# ***
+WDCBIN=$LOGDIR/diff_wdc_identify
+WDCLOG=$LOGDIR/diff_wdc_identify.log
+if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$WDCBIN" "$HERE/diff_wdc_identify.c" > "$WDCLOG" 2>&1; then
+    note "wdc IDENTIFY differential compile failed:"; sed 's/^/       /' "$WDCLOG" | head -12
+    check "wdc IDENTIFY: compiles against the real dev_wdc.c" "no" "yes"
+else
+    check "wdc IDENTIFY: compiles against the real dev_wdc.c" "yes" "yes"
+    "$WDCBIN" > "$WDCLOG" 2>&1
+    sed 's/^/       /' "$WDCLOG"
+    check     "wdc IDENTIFY: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "wdc IDENTIFY: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 10
+    check     "wdc IDENTIFY: offline verdict" \
+              "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
+    #  The four divergence rows. Deleting any one of them returns the table to the
+    #  vacuous state described above, so each is named rather than merely counted.
+    check     "wdc IDENTIFY: the >>8 threshold row is present" \
+              "$(grep -c 'threshold: >>8 byte reaches 255' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the carry row is present" \
+              "$(grep -c 'carry: >>8 wraps into >>16' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the >>16 row is present" \
+              "$(grep -c '>>8 accidentally right, >>16 wrong' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the >>24 threshold row is present" \
+              "$(grep -c 'threshold: >>24 byte reaches 255' "$WDCLOG")" "1"
+    #  The spec-free oracle. There is no ATA document in this tree, so the absolute
+    #  encoding cannot be cited -- but diskimage_recalc_size() rounds every image up to
+    #  a whole cylinder, so the block must agree with its OWN geometry words. That
+    #  needs no specification at all, and it is what makes the fix defensible here.
+    check     "wdc IDENTIFY: the self-consistency oracle is present" \
+              "$(grep -c 'IDENTIFY agrees with itself' "$WDCLOG")" "1"
+    #  Word 53 is 0x0002 -- asymmetric, so a +0/+1 packing swap is visible. Word 47 is
+    #  0x8080, a byte-swap palindrome, and would have been useless here.
+    check     "wdc IDENTIFY: the packing anchor is present" \
+              "$(grep -c 'packing anchor' "$WDCLOG")" "1"
+fi
+
 gate_end
 exit $?
