@@ -450,7 +450,34 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		diskimage_recalc_size(d);
 
-		size = d->nr_of_logical_blocks - 1;
+		/*
+		 *  #412: a zero-block disk must not announce a last block.
+		 *
+		 *  `size` is uint64_t and nr_of_logical_blocks is int64_t, so
+		 *  0 - 1 underflows and the four bytes below then report
+		 *  0xffffffff -- the guest is told the disk holds 4,294,967,296
+		 *  blocks, i.e. 2 TiB at 512 bytes each, rather than that it is
+		 *  empty.  MEASURED against this function: 0 blocks announced
+		 *  last-LBA 0xffffffff.
+		 *
+		 *  This is not hypothetical.  A separate defect leaves EVERY
+		 *  floppy and every `-d gH;S` disk with zero blocks, so today
+		 *  every floppy answers READ CAPACITY with 2 TiB.  The "0 KB"
+		 *  the operator sees on the console is only the host-side
+		 *  banner; the GUEST is told two terabytes.  That defect is
+		 *  fixed separately -- this guard is what makes an empty disk
+		 *  report itself as empty regardless of how it got that way,
+		 *  and it stays correct after that fix lands.
+		 *
+		 *  0xffffffff is also the ATA/SCSI "capacity too large for this
+		 *  command" sentinel, so reporting it for an EMPTY disk is the
+		 *  worst available answer: it is not merely wrong, it is the
+		 *  one value that means something else entirely.
+		 */
+		if (d->nr_of_logical_blocks < 1)
+			size = 0;
+		else
+			size = d->nr_of_logical_blocks - 1;
 
 		xferp->data_in[0] = (size >> 24) & 255;
 		xferp->data_in[1] = (size >> 16) & 255;

@@ -463,5 +463,42 @@ else
               "$(grep -c 'SURVIVES' "$AGLOG")" "0"
 fi
 
+# ---- #412: SCSI READ CAPACITY on a zero-block disk -------------------------------
+# `size` is uint64_t and nr_of_logical_blocks is int64_t, so 0 - 1 underflowed and the
+# guest was told the disk holds 4,294,967,296 blocks -- 2 TiB -- rather than that it is
+# empty. Measured both directions before and after: 0xffffffff -> 0x00000000.
+#
+# THIS IS NOT A CORNER CASE TODAY. A separate live defect leaves every floppy and every
+# `-d gH;S` disk with zero blocks, so every floppy currently answers READ CAPACITY with
+# 2 TiB. The "0 KB" on the console is the host-side banner only; the guest is told two
+# terabytes. This guard keeps an empty disk reporting empty however it got that way, and
+# stays correct after that defect is fixed -- which is why its row uses a 0-BYTE IMAGE
+# rather than a floppy. A floppy row would go vacuous the moment the geometry fix lands.
+#
+# The driver carries four further sections, DISABLED, that assert defects still live
+# (short/failed writes reported as success, reads past EOF, and a single WRITE(10) that
+# grew a 10 KB image to 512 MB with status GOOD). Build with -DDISKIMAGE_IO_UNFIXED to
+# see them fail; the round that fixes them deletes the guard.
+IOLOG=$LOGDIR/diff_diskimage_io.log
+if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$LOGDIR/diff_diskimage_io" "$HERE/diff_diskimage_io.c" > "$IOLOG" 2>&1; then
+    note "diskimage I/O differential compile failed:"; sed 's/^/       /' "$IOLOG" | head -12
+    check "diskimage I/O: compiles against the real diskimage.c" "no" "yes"
+else
+    check "diskimage I/O: compiles against the real diskimage.c" "yes" "yes"
+    "$LOGDIR/diff_diskimage_io" > "$IOLOG" 2>&1
+    sed 's/^/       /' "$IOLOG"
+    check     "diskimage I/O: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$IOLOG" | grep -oE '^[0-9]+')" "0"
+    check     "diskimage I/O: faults" \
+              "$(grep -oE '[0-9]+ faults' "$IOLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "diskimage I/O: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$IOLOG" | grep -oE '^[0-9]+')" 3
+    #  Named so that deleting the zero-block row is visible rather than silent.
+    check     "diskimage I/O: the zero-block capacity row is present" \
+              "$(grep -c 'zero-block disk does not announce' "$IOLOG")" "1"
+fi
+
 gate_end
 exit $?

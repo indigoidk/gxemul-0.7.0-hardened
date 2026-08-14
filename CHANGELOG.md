@@ -4192,6 +4192,52 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-second round (#412) — every floppy in this fork tells the guest it holds 2 TiB
+
+`SCSICMD_READ_CAPACITY` computes `size = d->nr_of_logical_blocks - 1` where `size` is
+`uint64_t` and the block count is `int64_t`. **A zero-block disk therefore underflows and
+announces last-LBA `0xffffffff` — 4,294,967,296 blocks, 2 TiB at 512 bytes each** — rather
+than reporting itself empty.
+
+**This is not a corner case today.** A separate live defect leaves *every* floppy and every
+`-d gH;S` disk with zero blocks, so **every floppy currently answers READ CAPACITY with 2 TiB.**
+The `0 KB` the operator sees on the console is only the host-side banner; the guest is told two
+terabytes. That was found by measuring the shipped code, not by reading it.
+
+`0xffffffff` is also the ATA/SCSI "capacity too large for this command" sentinel, which makes
+it the worst available answer for an empty disk: not merely wrong, but the one value that means
+something else entirely.
+
+Measured both directions against the real handler: `0 blocks -> last-block 0xffffffff` before,
+`0x00000000` after.
+
+### The detector ships with four sections deliberately disabled
+
+`regress/diff_diskimage_io.c` (new, wired into gate 2 — now 94 checks) stubs five symbols and
+`#include`s the shipping `diskimage.c` and `diskimage_scsicmd.c`, so the code under test is the
+code that ships. It runs **3 rows / 0 failures** by default and **19 rows / 8 failures** under
+`-DDISKIMAGE_IO_UNFIXED`.
+
+The disabled four assert defects that are **still live and confirmed**, and enabling them now
+would make the gate red for things nobody has fixed — a phantom regression rather than a
+finding. They are kept *with their vectors* so the rounds that fix them need not rediscover
+anything: a short write (256 of 1024 absorbed) and a total failure both return success with
+errno 27; a read starting past EOF returns success; **one `WRITE(10)` past capacity grew a
+10 KB image to 512,000,512 bytes and its capacity from 1,008 to 1,000,944 blocks, status
+GOOD**; and a write onto a full store returns GOOD.
+
+**The staging constraint that round must respect, measured:** all five rig images carry a
+480–992 block round-up gap. The `#if 0` failure check inside `diskimage__internal_access()` is
+currently harmless *only because* the SCSI layer swallows the result — fix both and the last
+~0.25–0.5 MB of **every bootable image** returns CHECK CONDITION. `section_roundup_gap` measures
+that gap and stays green either way, deliberately: it is evidence, not an assertion.
+
+**Why the row uses a 0-byte image rather than a floppy.** A floppy row would go vacuous the
+moment the geometry defect is fixed. The zero case is reached deliberately through an empty
+image so the row stays valid afterwards — the two fixes are semantically coupled (the handler
+calls `diskimage_recalc_size()` one line above the subtraction) even though they do not overlap
+textually, and whichever lands second must re-measure.
+
 ## One-hundred-and-fifty-first round (#411) — the stopping condition #410 wrote could be satisfied to the letter while still shipping a false pass
 
 #410 declared `regress/diff_wdc_identify.c` done against a written condition, precisely so that
