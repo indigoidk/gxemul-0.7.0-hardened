@@ -4219,8 +4219,11 @@ Both mutants now die, and by those rows specifically. The gate names them and re
 of them, so deleting one is visible rather than silent, and the row floor rises to 13.
 
 **A record was also too strong.** #400 said the transcription vacuity was *structurally
-impossible* here. It is not: replace the `#include` with a pasted body and the test is
-green against a copy again. What is true, and is enough, is that **it cannot happen
+impossible* here. It is not. `static` only forecloses linking the function from a separate
+translation unit; it does nothing to stop a test from `#include`-ing the file **and also**
+carrying a second, differently-named transcribed copy, then asserting against that. What
+actually rules the vacuity out in this file is that nobody wrote one — established by
+reading it, not proved by the storage class. What is true, and is enough, is that **it cannot happen
 silently while the include line remains** — deleting that line does not weaken the test,
 it fails to compile. Corrected in the file.
 
@@ -4276,8 +4279,16 @@ does not terminate for `TCOR = 0` or for a 32-bit period of 0.
 
 **The assumption is recorded rather than assumed away.** A period is `TCOR + 1` counts.
 There is no SH-4 manual in this source collection, and the only in-tree evidence was the
-comment this hunk replaced — `TCOR` appears nowhere else, and the hardclock's 20833 never
-appears in source at all. **The patch would have deleted the sole evidence for its own
+comment this hunk replaced.
+
+*(#401 corrects the sentence that followed. It read "`TCOR` appears nowhere else, and the
+hardclock's 20833 never appears in source at all" — true of the tree being looked at, and
+FALSE of the tree this commit shipped, because `regress/diff_sh4_tmu.c` was added by the
+same commit and contains both — measured just now, 18 occurrences of `TCOR` and 13 of
+`20833`. The intended claim was about other
+pre-existing files, and that does hold; but a reader who greps the shipped tree to check
+the evidence for the `TCOR+1` assumption is exactly the reader the sentence was for, and
+they would find it wrong on the first try.)* **The patch would have deleted the sole evidence for its own
 premise**, so `dev_sh4.c` now restates the convention deliberately. A seat also measured
 that the assumption is less load-bearing than feared: scored against a `TCOR`-period
 oracle, the "delete the clamp and keep `+= tcor`" variant is wrong 416,082 times out of
