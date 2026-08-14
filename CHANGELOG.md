@@ -4192,7 +4192,114 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
-## One-hundred-and-thirty-fifth round (#395) — the gate reported FAIL and published the binary four lines later
+## One-hundred-and-thirty-sixth round (#396) — the guard I shipped had the right quantity at the wrong time, and nine of my own claims were too strong
+
+An eight-seat panel reviewed the shipped #394/#395 diff. Six seats answered (Kimi 403,
+Fable quota-dead — both recorded as seat failures, never as agreement), plus a
+compile-and-measure seat and a records seat standing in for Fable. They found defects in
+both commits and in the prose describing them.
+
+**The guard was positional, not semantic.** #395 replaced `[ -x "$ARC_TREE/gxemul" ]`
+with `[ "$_fails" != 0 ]`. That reads the right quantity at the wrong moment. A seat
+replaying the gate measured the consequence: append one failing `check` after the `fi`
+and you get `clean-build: FAIL (1 of 15 checks)`, exit 1, **and the binary published**.
+The defect #395 existed to close reopens completely, one line lower, the first time
+anyone extends this gate. #395's own comment asserted "every check has already run by
+this point" — true of the file that day, and not a property anything enforced.
+
+Publication now keys off `gate_end`'s **return value**. `gate_end` is what decides
+PASS/FAIL, so nothing can be appended between the decision and the action.
+
+The seat also named the mutant a careful reviewer would write: "harden" `$_fails` to
+`${_fails:-0}` for consistency with `lib.sh:102`. Measured — when unset that takes the
+**publish** branch. Defaulting an unknown state to "publish" is exactly backwards for a
+guard whose entire job is to withhold.
+
+**Withdrawal moved to the top of the gate.** #395 removed the stale copies only on the
+failing branch, so every route that never *reached* that block left them in place:
+`need_file`'s SKIP (exit 77), a signal, a `set -u` abort, a death inside `make`. That is
+not hypothetical — `$ARC_TREE` is `/tmp/gxsec-build`, in WSL's `/tmp`, which is cleared
+on reboot, while `$RIG/gxsec-gxemul` survives, so the first gate 1 after a reboot takes
+exactly that path. Withdraw-then-republish makes "a published binary exists" mean "the
+last gate 1 that ran, passed" for every termination route.
+
+**The mirror hazard, made loud rather than denied.** Moving `gate_end` earlier fixes one
+ordering and opens its opposite: a check appended *below* it would now be ignored
+entirely, since both the printed verdict and the exit status were already decided.
+Neither ordering is structurally immune — publication and adjudication are adjacent
+operations, and whichever runs first can be defeated from the other side. Rather than
+assert an ordering guarantee that nothing enforces (which is precisely the claim #395
+shipped and this round is correcting), the code captures `_fails` at the verdict and
+fails loudly if it moved. Measured: the appended check prints `FAIL`, then
+`*** A CHECK RAN AFTER gate_end: the verdict printed above is STALE (_fails was 0 at the
+verdict, 1 now)`, and the gate exits 1 instead of 0.
+
+**Two assertions #394 should have shipped.** Only `comm -23` was computed —
+actual-minus-expected — so an entry that is allowlisted but *no longer divergent* could
+never fail. Measured: normalise `disk/diskimage.c`, which is literally what its own
+reason instructs, keep the entry, and the gate still reported `PASS (14 checks)`. A
+silently stale exemption is the exact defect #394 claimed to be fixing, so #394 shipped
+without the assertion that would have proved its own point. `comm -13` now covers it.
+
+The second is subtler. The parser takes each line's first whitespace field, so any stray
+line becomes an entry — and the realistic instance is not exotic: **a reason wrapped onto
+a second line donates that line's first word.** Measured, that took a genuine divergence
+from RED to GREEN. The reasons run 100–300 characters in a file wrapped at about 90
+columns, so wrapping one is an ordinary edit. Every parsed entry must now name a file
+that exists in at least one tree, which makes prose fail loudly: `The` is not a file.
+
+**Three allowlist reasons were false**, which is worse than no reason — an exemption that
+*looks* justified. `machines/machine_arc.c` is not wholly conditional (7 hunks, +33/−5;
+the ne2000 `device_add` at `:209-212` is unconditional inside `machine_arc_init`; only
+`:140-141` is PICA-gated). `promemul/arcbios.c` is not wholly `MACHINE_ARC`-gated
+(`CHECK_ALLOCATION(boot_string)` at `arcbios.c:2654` sits outside that test). And the
+`#257` tag named the wrong change entirely: `#257` is the R4030 interval-timer rate
+(`CHANGELOG.md:726`), present in **both** trees and therefore not a divergence at all;
+the real one is the arc-only `EXT_IMASK` IP3/IP4/IP6 split described at `:653-656`, which
+belongs to the #251/#252 round and carries no number of its own.
+
+**Nine record corrections** were applied to the #394/#395 blocks above, and they are worth
+listing because most were mine and several were flattering:
+
+* "published the binary four lines later" — **measured distance is 14**, and the block's
+  own quoted `1 of 14 checks` refutes it: if all fourteen rows printed, the publish line
+  cannot be four lines after the first failure. The phrase had shipped in four places.
+* "every downstream gate ... was measuring" — only `gate_mips.sh:30` consumes the arc
+  copy. Eleven gates consume the *pmax* binary, which this change still never withholds.
+* "no gate-1 log persists on disk" — `$LOGDIR/build_{pmax,arc}.log`,
+  `divergent_{actual,expected,unexpected}.txt` and `unsynced_*.txt` are all written. What
+  is missing is a persisted combined **verdict**, which is a narrower and truer claim.
+* "SEC's committed generated file ... was never hand-edited" — does not follow. Byte
+  equality against the regenerated output proves the committed bytes match what the
+  generator emits *today*; it says nothing about their history. This was the round's own
+  self-congratulatory line and it was the weakest one in it.
+* "gate 5" for `gate_hygiene.sh` — it is **gate 6**. The wrong number was read from
+  `gate_mips.sh`'s own comment, and that comment is wrong: four scripts self-label one
+  low. A new variant of this project's standing trap — the rule is *read the line before
+  citing it*, and the line was read; the line itself was false. Filed separately.
+* Plus: "a mid-string entry is the only safe target" (the others need quote-aware editing,
+  not impossibility), "gate 1 calls make so it only runs under WSL" (true of this host's
+  toolchain, not of the code), "can never be resolved" (holds under the current
+  generator), and `selftest_mutation_295.sh:51-52` cited as precedent for a producer
+  deleting its output when it is a consumer-side freshness check.
+
+Also: `cp -f`'s status is now checked, so "published" is no longer printed when the copy
+did not land.
+
+The detector runs the baseline plus four mutants and requires each to die for its **own**
+reason — a mutant that goes red for the wrong reason proves nothing. Measured: baseline
+`PASS (16 checks)` and published; the stale entry killed by `FAIL no stale allowlist
+entries got=1 want=0`; the wrapped reason killed by `ALLOWLIST ENTRY IS NOT A FILE IN
+EITHER TREE: 'The'`; the late check producing the stale-verdict message and exit 1; and
+the SKIP route leaving no published binary in either location.
+
+The first attempt at that last mutant appended the check to the end of the file — after
+`exit "$verdict"` — so it never executed, and the guard "failed" because the mutant was
+dead code. The rule that every reproduction must answer *"did it fail for the reason under
+test?"* is what caught it; without it this round would have "fixed" a guard that was never
+exercised.
+
+## One-hundred-and-thirty-fifth round (#395) — the gate reported FAIL and published the binary anyway
 
 Gate 1 ended with:
 
@@ -4210,8 +4317,9 @@ binary exists, never whether the gate passed. Measured on 2026-08-13, in a real 
 clean-build: FAIL (1 of 14 checks)
 ```
 
-The publish line sits *between* the failure and the verdict. Every downstream gate, and
-every hand-run arc probe, was measuring a binary handed over by a failing gate — the
+The publish line sits *between* the failure and the verdict. Only `gate_mips.sh:30`
+actually consumes that copy -- the count was overstated when first written -- but it
+was measuring a binary handed over by a failing gate — the
 silent-false-pass class this harness ranks first.
 
 The guard now tests `_fails`, the harness's own accounting (`lib.sh:33`, reset per gate
@@ -4242,14 +4350,15 @@ would plausibly write.
 Writing the detector cost three false starts, all of the same family and all recorded
 because each would have read as a pass:
 - it first ran under **git-bash**, where `/tmp` is not WSL's `/tmp`. Gate 1 calls
-  `make -j12`, so it only runs under WSL, and the git-bash view reported the published
+  `make -j12`, and on this host that means WSL, so the git-bash view reported the published
   binary as `MISSING` — which looks exactly like "the guard already works".
 - `git checkout -- <file>` restores from the **index**, and the guard was unstaged, so
   the restore step would have silently wiped the change under test.
 - the injection first targeted `devices/dev_jazz.c`, which is the first allowlist entry
   and shares its line with `DIVERGENT="`, so `^devices/dev_jazz` matched nothing.
   `devices/autodev.c` is unusable for the opposite reason — it is last and carries the
-  closing quote. A mid-string entry is the only safe target.
+  closing quote. A mid-string entry is the safe target for a naive line-delete;
+  the other two need quote-aware editing rather than being impossible.
 
 ## Not changed, assessed (`gate_mips.sh:78-79`)
 
@@ -4261,7 +4370,8 @@ suppressing it on failure destroys the diagnosis exactly when it is needed. Its 
 comment already explains why it copies rather than leaving the file in `/tmp`.
 
 There *is* a real hazard there, but it is a different one: a partial log from a failed
-run could be graded as complete. The fix for that is for gate 5 to know its input came
+run could be graded as complete. The fix for that is for gate 6 (`gate_hygiene.sh`; its own header
+mis-labels it 5) to know its input came
 from a failed run, not for gate 4 to withhold it — and that belongs with the existing
 record that `gate_hygiene` accepts published logs as proof the MIPS gate ran. Filed, not
 folded, because a mechanical "apply the same fix to the sibling" would have deleted
@@ -4289,7 +4399,8 @@ device directory and emits an entry per `DEVINIT()` it greps out. `dev_ne2000.c`
 the only device file SEC has and est lacks — confirmed with `comm -13` — and the
 diff is exactly its declaration plus its `device_register()` call. Every other
 generator input is byte-identical. So the divergence is a mechanical consequence of
-the differing device sets and can *never* be resolved while the trees differ. That is
+the differing device sets and, under the current generator, cannot be resolved
+while the trees differ. That is
 proof from the generator, not inference, and it is the one that belongs on the list.
 
 `cpus/tmp_mips_loadstore_multi.c` was the opposite: stale generated output. Its
@@ -4303,7 +4414,9 @@ rather than allowlisted.** That work is not in this diff, because est is not tra
 Regenerating instead of copying paid a dividend worth more than the fix. est's
 generator was recompiled fresh, run to a temp file, and `cmp`'d against SEC *before*
 anything was installed — and the bytes matched exactly. That proves SEC's committed
-generated file really is its generator's output and was never hand-edited. Nothing in
+generated file matches what its generator emits TODAY. (It does not prove the file
+was never hand-edited at some point in its history -- byte equality is a statement
+about the current bytes, not about their provenance.) Nothing in
 this harness checks that invariant; a `cp SEC est` would have fixed the symptom and
 proved neither half. It also avoided a trap: est's `generate_mips_loadstore_multi`
 **binary** is dated 2026-06-26, older than its own `.c` source, so re-invoking it in
@@ -4333,7 +4446,7 @@ how an earlier version of it passed while measuring nothing.
 
 Not fixed here, and filed instead: gate 1 still publishes the arc binary without
 checking that the gate passed (the same run that produced the red above printed
-`arc binary published to rig and /tmp/gxsec-gxemul` four lines later); no gate-1 log
+`arc binary published to rig and /tmp/gxsec-gxemul` before the verdict); no gate-1 log
 persists on disk, so the last verdict was unrecoverable; est's stale generator binary
 is still present; and round #393 shipped with no CHANGELOG block at all.
 
