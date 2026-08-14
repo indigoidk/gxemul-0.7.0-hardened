@@ -131,8 +131,37 @@ echo
 build_tree pmax "$EST" "$PMAX_TREE" 223
 build_tree arc  "$SEC" "$ARC_TREE"  224
 
-# Publish the arc binary where the rigs expect it, but only if it really built.
-if [ -x "$ARC_TREE/gxemul" ]; then
+# Publish the arc binary where the rigs expect it -- but ONLY if the whole gate passed.
+#
+# #395: this block used to test `[ -x "$ARC_TREE/gxemul" ]` alone. That asks "did a
+# binary get produced", never "did the gate pass", and the old comment claiming "only if
+# it really built" was true of the file and false of the verdict. Measured on 2026-08-13:
+# a real run printed
+#     FAIL no divergence outside the documented set             got=2 want=0
+#     clean-build: FAIL (1 of 14 checks)
+# and, four lines earlier, "arc binary published to rig and /tmp/gxsec-gxemul". Every
+# downstream gate and every hand-run arc probe then measured a binary handed over by a
+# FAILING gate. That is the silent-false-pass class this harness ranks first.
+#
+# `_fails` (lib.sh:33, reset per gate at :36, incremented by check() at :49 and
+# check_min() at :60, read by gate_end() at :76) is the harness's own accounting, and
+# gate_build.sh sources lib.sh into THIS shell, so it is live here. Every check in this
+# gate -- the divergence comparison and both build_tree calls -- has already run by this
+# point, so `_fails` reflects the whole gate rather than just the arc build. That
+# distinction is the point: the failure that triggered this was the DIVERGENCE check,
+# which a guard scoped to the arc build alone would have sailed straight past.
+#
+# On failure the stale copies are REMOVED rather than left in place. Leaving them is the
+# worse lie: downstream gates would go green against a binary that is not the code under
+# test, which is the same "build-tree residue is not evidence" trap that cost four rounds
+# of #88. Removing them makes the downstream need_exec preflights SKIP loudly instead.
+# Precedent for preferring a loud stop over a quiet stale pass: gate_offline.sh:87-95
+# ("THE HONESTY LINK") and selftest_mutation_295.sh:51-52.
+if [ "$_fails" != 0 ]; then
+    rm -f /tmp/gxsec-gxemul
+    [ -d "$RIG" ] && rm -f "$RIG/gxsec-gxemul"
+    note "gate FAILED -- arc binary NOT published; stale copies removed so downstream SKIPs"
+elif [ -x "$ARC_TREE/gxemul" ]; then
     cp -f "$ARC_TREE/gxemul" /tmp/gxsec-gxemul
     [ -d "$RIG" ] && cp -f "$ARC_TREE/gxemul" "$RIG/gxsec-gxemul"
     note "arc binary published to rig and /tmp/gxsec-gxemul"

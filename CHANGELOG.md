@@ -4192,6 +4192,81 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-fifth round (#395) — the gate reported FAIL and published the binary four lines later
+
+Gate 1 ended with:
+
+```sh
+# Publish the arc binary where the rigs expect it, but only if it really built.
+if [ -x "$ARC_TREE/gxemul" ]; then
+```
+
+That comment was true of the *file* and false of the *verdict*. `[ -x ]` asks whether a
+binary exists, never whether the gate passed. Measured on 2026-08-13, in a real run:
+
+```
+  FAIL no divergence outside the documented set             got=2 want=0
+  --   arc binary published to rig and /tmp/gxsec-gxemul
+clean-build: FAIL (1 of 14 checks)
+```
+
+The publish line sits *between* the failure and the verdict. Every downstream gate, and
+every hand-run arc probe, was measuring a binary handed over by a failing gate — the
+silent-false-pass class this harness ranks first.
+
+The guard now tests `_fails`, the harness's own accounting (`lib.sh:33`, reset per gate
+at `:36`, incremented by `check()` at `:49` and `check_min()` at `:60`, read by
+`gate_end()` at `:76`); `gate_build.sh` sources `lib.sh` into the same shell, so it is
+live at the publish site, and every check in the gate has already run by then. That last
+detail is the whole design: **the failure that triggered this was the divergence check**,
+and a guard scoped to the arc build's own health would have sailed straight past it.
+
+On failure the stale copies are **removed** rather than left. Leaving them is the worse
+lie — downstream gates would go green against a binary that is not the code under test,
+which is the same "build-tree residue is not evidence" trap that cost four rounds of #88.
+Removing them makes the downstream `need_exec` preflights SKIP loudly. Precedent for
+preferring a loud stop over a quiet stale pass: `gate_offline.sh:87-95` ("THE HONESTY
+LINK") and `selftest_mutation_295.sh:51-52`.
+
+**The detector, and why its injection is orthogonal.** An entry was dropped from the
+`DIVERGENT` allowlist so the *divergence* check fails while both builds stay clean.
+Measured: gate exits non-zero, `FAIL no divergence outside the documented set got=1
+want=0`, **pmax 223 objects and arc 224 objects still built clean**, no publish line, and
+both `/tmp/gxsec-gxemul` and the rig copy gone. Restored, the gate returns
+`clean-build: PASS (14 checks)` and republishes the identical binary (`09839152a2b1`
+before and after). The 223/224 assertion is not decoration: it is what proves the gate
+went red for a reason outside the build, which is the only configuration that
+distinguishes a whole-gate guard from a build-scoped one — the first mutant a reviewer
+would plausibly write.
+
+Writing the detector cost three false starts, all of the same family and all recorded
+because each would have read as a pass:
+- it first ran under **git-bash**, where `/tmp` is not WSL's `/tmp`. Gate 1 calls
+  `make -j12`, so it only runs under WSL, and the git-bash view reported the published
+  binary as `MISSING` — which looks exactly like "the guard already works".
+- `git checkout -- <file>` restores from the **index**, and the guard was unstaged, so
+  the restore step would have silently wiped the change under test.
+- the injection first targeted `devices/dev_jazz.c`, which is the first allowlist entry
+  and shares its line with `DIVERGENT="`, so `^devices/dev_jazz` matched nothing.
+  `devices/autodev.c` is unusable for the opposite reason — it is last and carries the
+  closing quote. A mid-string entry is the only safe target.
+
+## Not changed, assessed (`gate_mips.sh:78-79`)
+
+The sibling sweep found one other unconditional publish: `gate_mips.sh` copies the raw
+pty logs to `$LOGDIR` whether or not the gate passed. **Deliberately left alone.** The
+binary and the log are not the same kind of artifact — a binary is *tested with*, so
+publishing a bad one poisons every later stage, while a log is *evidence*, and
+suppressing it on failure destroys the diagnosis exactly when it is needed. Its own
+comment already explains why it copies rather than leaving the file in `/tmp`.
+
+There *is* a real hazard there, but it is a different one: a partial log from a failed
+run could be graded as complete. The fix for that is for gate 5 to know its input came
+from a failed run, not for gate 4 to withhold it — and that belongs with the existing
+record that `gate_hygiene` accepts published logs as proof the MIPS gate ran. Filed, not
+folded, because a mechanical "apply the same fix to the sibling" would have deleted
+evidence.
+
 ## One-hundred-and-thirty-fourth round (#394) — the divergence allowlist said which files may differ, never why
 
 Gate 1 asserts that `est/` and `GXEMUL-SEC/` agree outside a fixed list of files. Run
