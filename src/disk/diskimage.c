@@ -243,10 +243,25 @@ bool diskimage_recalc_size(struct diskimage *d)
 		}
 
 		if (!d->chs_override) {
-			d->cylinders = 80;
 			d->heads = 2;
-			d->sectors_per_track = d->nr_of_logical_blocks * d->logical_block_size
-				/ (d->cylinders * d->heads * 512);
+			/*  #414: derive sectors-per-track from the byte count
+			    assigned at the top of this function.  The old
+			    expression read d->nr_of_logical_blocks, which this
+			    same function does not assign until below, so on the
+			    first call it was always 0 -- and stably 0, because a
+			    second call re-read the 0 it had just stored.  80
+			    cylinders and 2 heads are the documented floppy
+			    assumption (man/gxemul.1); the four sizes listed
+			    there divide by 80*2*512 exactly, giving 9, 15, 18
+			    and 36.  The clamp is load-bearing, not defensive:
+			    sectors_per_track reaches single-byte MODE SENSE
+			    fields, and no parser check can reach a value this
+			    arm COMPUTES.  */
+			d->sectors_per_track = d->total_size / (80 * 2 * 512);
+			if (d->sectors_per_track < 1)
+				d->sectors_per_track = 1;
+			if (d->sectors_per_track > DISKIMAGE_MAX_SPT)
+				d->sectors_per_track = DISKIMAGE_MAX_SPT;
 		}
 		break;
 
@@ -254,12 +269,32 @@ bool diskimage_recalc_size(struct diskimage *d)
 		if (!d->chs_override) {
 			d->heads = 16;
 			d->sectors_per_track = 63;
-
-			int64_t bytespercyl = d->heads * d->sectors_per_track * 512;
-			d->cylinders = size / bytespercyl;
-			if (d->cylinders * bytespercyl < size)
-				d->cylinders ++;
 		}
+	}
+
+	/*
+	 *  #414: cylinders are derived from the size for EVERY disk -- both
+	 *  arms, with or without a -d gH;S override.  Both assignments to
+	 *  d->cylinders used to sit inside "if (!d->chs_override)", and a
+	 *  census of the file showed those were the only two, so an override
+	 *  removed every write to the field that existed and left the zeroed
+	 *  0 in place.  The shared block below is what makes the override
+	 *  usable; it also removes a duplicated copy of the arithmetic.
+	 *
+	 *  bytespercyl is guarded ITSELF rather than only its factors: the
+	 *  factors are clamped above, but guarding the divisor is what stops
+	 *  a SIGFPE if a future non-parser caller sets heads or spt to 0.
+	 *  Guard and clamp do different jobs -- the guard prevents a crash,
+	 *  the clamp is what makes the answer right.
+	 */
+	{
+		int64_t bytespercyl = (int64_t) d->heads
+		    * d->sectors_per_track * 512;
+		if (bytespercyl < 1)
+			bytespercyl = 1;
+		d->cylinders = size / bytespercyl;
+		if (d->cylinders * bytespercyl < size)
+			d->cylinders ++;
 	}
 
 	// printf("c=%i h=%i s=%i\n", d->cylinders, d->heads, d->sectors_per_track);
@@ -1480,7 +1515,14 @@ int get_default_disk_type_for_machine(struct machine *machine)
  *	d	DISK (this is the default)
  *	f	FLOPPY (instead of SCSI)
  *	gH;S;	set geometry (H=heads, S=sectors per track, cylinders are
- *		automatically calculated). (This is ignored for floppies.)
+ *		automatically calculated).  H and S must each be 1..255.
+ *		#414: this applies to floppies too.  It used to be
+ *		documented as ignored for them, but the code never ignored
+ *		it -- the floppy arm was already skipped when the override
+ *		was set, and the resulting disk simply had no cylinders and
+ *		so no capacity.  Note the advertised capacity is the
+ *		cylinder-rounded product, which equals the autodetected size
+ *		only when H*S*512 divides the file exactly.
  *	i	IDE (instead of SCSI)
  *	oOFS;	set base offset in bytes, when booting from an ISO9660 fs
  *	r       read-only (don't allow changes to the file)
@@ -1497,7 +1539,10 @@ int get_default_disk_type_for_machine(struct machine *machine)
 int diskimage_add(struct machine *machine, char *fname)
 {
 	struct diskimage *d, *d2;
-	int id = 0, override_heads=0, override_spt=0;
+	int id = 0;
+	/*  #414: int64_t so the parse below can DETECT an out-of-range value
+	    instead of silently truncating it into the range.  */
+	int64_t override_heads = 0, override_spt = 0;
 	int64_t override_base_offset=0;
 	char *cp;
 	int prefix_b=0, prefix_c=0, prefix_d=0, prefix_f=0, prefix_g=0;
@@ -1541,22 +1586,39 @@ int diskimage_add(struct machine *machine, char *fname)
 				break;
 			case 'g':
 				prefix_g = 1;
-				override_heads = atoi(fname);
+				/*  #414: strtoll, not atoi, and BOTH fields.
+				    atoi() truncates to int BEFORE any range
+				    check can see the value, so -d g4294967312
+				    (2^32+16) was accepted as heads=16.  The
+				    base is written 10 explicitly: base 0 would
+				    read a leading zero as octal, silently
+				    turning g010 into 8 heads.  strtoll
+				    saturates to LLONG_MAX on overflow, which
+				    the range check below rejects, so no errno
+				    test is needed.  The comparison is done in
+				    int64_t, BEFORE any narrowing -- narrowing
+				    first would reintroduce the same defect.  */
+				override_heads = strtoll(fname, NULL, 10);
 				while (*fname != '\0' && *fname != ';')
 					fname ++;
 				if (*fname == ';')
 					fname ++;
-				override_spt = atoi(fname);
+				override_spt = strtoll(fname, NULL, 10);
 				while (*fname != '\0' && *fname != ';' &&
 				    *fname != ':')
 					fname ++;
 				if (*fname == ';')
 					fname ++;
 				if (override_heads < 1 ||
-				    override_spt < 1) {
-					fatal("Bad geometry: heads=%i "
-					    "spt=%i\n", override_heads,
-					    override_spt);
+				    override_heads > DISKIMAGE_MAX_HEADS ||
+				    override_spt < 1 ||
+				    override_spt > DISKIMAGE_MAX_SPT) {
+					fatal("Bad geometry: heads=%" PRIi64
+					    " spt=%" PRIi64 " (heads must be"
+					    " 1..%i, sectors per track"
+					    " 1..%i)\n", override_heads,
+					    override_spt, DISKIMAGE_MAX_HEADS,
+					    DISKIMAGE_MAX_SPT);
 					return -1;
 				}
 				break;

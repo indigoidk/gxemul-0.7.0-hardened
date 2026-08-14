@@ -43,6 +43,37 @@
 #define	DISKIMAGE_IDE		2
 #define	DISKIMAGE_FLOPPY	3
 
+/*
+ *  #414: the largest heads / sectors-per-track this tree can DESCRIBE.
+ *
+ *  These are DERIVED, not chosen.  The narrowest carriers are one byte each,
+ *  all four in diskimage_scsicmd.c's MODE SENSE pages: heads in page 4 byte 5
+ *  and page 5 byte 4; sectors-per-track in page 3 byte 11 (whose companion
+ *  byte 10 is hardwired to 0, so the nominally two-byte field carries eight
+ *  bits) and page 5 byte 5.  Those four are the ONLY unmasked byte stores in
+ *  those blocks -- every neighbouring field is written "& 255" -- so they are
+ *  the code's own assertion that H and S fit in a byte.  Nothing enforced it
+ *  until now, and an unclamped store of 256 truncated to 0.
+ *
+ *  255 is therefore permissive rather than restrictive, and it bounds
+ *  heads*spt*512 -- the bytes-per-cylinder divisor -- at 33,292,800.
+ *
+ *  That bounds the DIVISOR, not the final product, and the difference
+ *  matters: with g1;1 on a file of INT64_MAX bytes the divisor is 512, the
+ *  rounded-up cylinder count is about 1.8e16, and the closing
+ *  heads*spt*cylinders*512 still reaches 2^63 and overflows.  Reaching it
+ *  needs an eight-exabyte (sparse) image, so it is recorded as a residual
+ *  rather than fixed here -- but "overflow is unreachable by construction"
+ *  would be an overclaim and is not what these constants deliver.
+ *
+ *  They are NOT permissive for every
+ *  consumer: the ATA SDH head field is four bits (dev_wdc.c, d->head =
+ *  idata & 0xf), so an IDE guest cannot address more than 16 heads.  That
+ *  narrowing is pre-existing and is recorded, not fixed, here.
+ */
+#define	DISKIMAGE_MAX_HEADS	255
+#define	DISKIMAGE_MAX_SPT	255
+
 #define	DISKIMAGE_TYPES		{ "(NONE)", "SCSI", "IDE", "FLOPPY" }
 
 

@@ -4192,6 +4192,170 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-fourth round (#414) — one multiplication, two factors nobody computed, and every `-d g` disk reported no capacity
+
+`diskimage_recalc_size()` finishes with
+
+```c
+size = d->heads * d->sectors_per_track * d->cylinders * 512;
+```
+
+**Two independent upstream omissions each left one of those factors at zero**, so the product —
+and therefore the whole disk — was zero. They look like separate bugs and are one line's worth of
+consequence:
+
+* **the floppy arm** derived `sectors_per_track` from `d->nr_of_logical_blocks`, a field *this same
+  function* does not assign until about twenty lines further down. On a freshly zeroed struct that
+  read 0, and it was **stably** 0: a second call recomputed spt from the 0 it had just stored.
+  The author's formula was right and named the wrong field — `d->total_size` holds exactly the byte
+  count they wanted and is assigned eighteen lines above the broken line. The four sizes the manual
+  lists divide by 80·2·512 to give precisely 9, 15, 18 and 36.
+* **the `-d gH;S` override arm** never computed cylinders at all. A census settled it: `d->cylinders`
+  had **exactly two** assignment sites in the file, and *both* sat inside `if (!d->chs_override)`,
+  so supplying an override did not merely skip a default — it removed every write to that field
+  that existed.
+
+Reproduced before any edit, on the committed tree: the geometry differential fails **21 of 26 rows**
+with its control row green. The headline is broader than "floppies and unusual geometries":
+`-d g16;63:` — which merely spells out the tree's *own* default heads and sectors-per-track — also
+returned `blocks=0`. **Every** use of `-d g` produced a zero-capacity disk.
+
+**The fix hoists the cylinder computation out of both arms** into one shared, unconditional block,
+which *removes* a duplicated copy of the arithmetic rather than adding one. The floppy arm derives
+spt from `d->total_size` and clamps it to `[1, 255]`; the parser parses both `g` fields with
+`strtoll(…, 10)` into `int64_t` and range-checks them **before any narrowing**. `bytespercyl` is
+guarded itself rather than only its factors — the guard prevents a SIGFPE, and the clamp is what
+makes the answer right; measured, guarding alone still returned `40960/2/0 blocks=0` for a 40 KB
+`-d f:` image where the clamp gives `40/2/1 blocks=80`.
+
+`atoi` was not a style question. On the shipped binary `-d g4294967312;63` (2³²+16) was **accepted
+as heads=16**, because the truncation happened before any check could see the value.
+
+### The bound is derived, and it restores an assumption the code already made
+
+`DISKIMAGE_MAX_HEADS` / `DISKIMAGE_MAX_SPT` = 255 are not chosen. In `diskimage_scsicmd.c`'s MODE
+SENSE pages, heads (page 4 byte 5, page 5 byte 4) and sectors-per-track (page 3 byte 11, whose
+companion byte 10 is hardwired to 0, and page 5 byte 5) are **the only unmasked byte stores in those
+blocks** — every neighbouring field is written `& 255`. Those four bare stores *are* the codebase's
+own assertion that H and S fit in a byte; nothing enforced it, and an unclamped 256 truncated to 0.
+255 also caps `H·S·512` at 33,292,800, which makes the cylinder multiplication overflow unreachable
+by construction.
+
+**Measured, and it decides the scope question:** the shipped tree reports **0** UBSan errors here,
+the fix reports 0, and the variant with the arms fixed but *without* the bound reports **2** signed
+overflows. The overflow does not exist today only because `cylinders = 0` annihilates the product —
+so the bound is not hardening bolted on beside a fix, it repairs a defect that fixing the arms
+*introduces*. Splitting the round would have shipped a new UB site.
+
+### Records corrected, including several of our own
+
+* *"An override cannot change advertised capacity, only its description."* **False**, and it was the
+  entire basis of an earlier decision recorded for this task. Three review seats produced three
+  counterexamples on one 1.44 MB image (2880 blocks autodetected): `g3;7` → 2898, `fg7;11` → 2926,
+  `fg16;63` → 3024. It holds only when `H·S·512` divides the file exactly, which the one example we
+  had generalised from happened to do. The manual now **documents** the capacity change instead.
+* `man/gxemul.1` and this file's own header comment both said the `gH;S;` prefix is *ignored* for
+  floppies. It never was: the code skipped the floppy arm whenever the override was set and simply
+  produced no cylinders. Code and documentation had disagreed all along and the zero-capacity defect
+  hid it. Both carriers are corrected — a tree-wide grep confirms there were exactly two.
+* The manual's claim that cylinders "are assumed to be 80" is true only for the four standard
+  formats; with the fix, `-d f:` on 40 KB gives 40 and on 20 MB gives 81.
+* An earlier note warned that swapping the parser's heads/spt assignments "survives every row".
+  **False for this detector**, confirmed independently by two seats: the `bound: 16;63` row runs
+  through the real `diskimage_add()` and asserts the full tuple, so a swap yields 63/16 — identical
+  `bytespercyl`, identical block count, wrong tuple. The stale note described an earlier draft.
+* A brief for this round cited the ATA SDH head field (`d->head = idata & 0xf`) as a wider carrier
+  that "agrees with room". It is four bits, i.e. **narrower** than 255, so an IDE guest cannot
+  address more than 16 heads. `diskimage.h` records that narrowing as a limitation rather than
+  citing it as support.
+
+### The detector, and the five evasions it closes
+
+`regress/diff_diskimage_geom.c` is new: 30 rows against the real `diskimage.c`, wired into gate 2
+(94 → 102 checks). Every row asserts the **full tuple** — cylinders, heads, sectors-per-track *and*
+block count — because a row asserting only "capacity is no longer zero" passes on a fix that
+computes the wrong cylinder count.
+
+A measure seat compiled and ran **38 mutants** against the 26-row draft: 23 killed, 15 survived, of
+which 5 are provably equivalent and 10 were real evasions. Five rows close the five that matter, and
+each is annotated in place with the witness that proves the mutant is a behaviour change rather than
+a synonym:
+
+| surviving mutant | witness | closing row |
+|---|---|---|
+| `720*1024` → `721*1024` — **one character** | a plain `:` 737280 B image returned 2/16/63 blocks=2016 instead of 80/2/9 blocks=1440 | the four floppy rows now pass type **UNKNOWN**, so each covers its own autodetection predicate; previously only *one* row reached that code at all |
+| `if (prefix_g)` → `if (prefix_g && !prefix_f)` — **one token**, and literally what the manual used to claim | `-d fg2;9:` returned 80/2/18 instead of 160/2/9 | `fg2;9 is honoured through the parser` — no row had ever driven both prefixes together |
+| `atoi` left on spt while heads gets `strtoll` | `-d g16;4294967360:` accepted with spt=64 | `bound: 2^32+64 … in the SPT position` — the suite's only wrap vector had been in the heads position |
+| `strtoll(…, 0)` instead of base 10 — **one character** | `g010;63:` becomes 8 heads; `g0x10;63:` flips from rejected to accepted-as-16 | `parse: leading zero is decimal, not octal` |
+| `if (d->cylinders < 1) d->cylinders = 1;` — a plausible defensive edit | a 0-byte disk goes from blocks=0 to blocks=1008 | `0-byte image stays empty (guards #412)` — **this row guards a fix from three commits earlier, not this one**: it is what keeps #412's zero-block guard firing on its own gate vector. The suite had contained no zero-byte image. |
+
+**A second mutation pass against the resulting 30-row file ran 46 more mutants and found TEN MORE
+real evasions, in three families the first pass had not reached at all.** Four further rows close
+them, and the shape of the misses is the lesson — each family was a whole *region* of the input
+space that no row entered, so tightening the existing rows could never have found them:
+
+| family | what survived all 30 rows | witness | closing row |
+|---|---|---|---|
+| **the floppy divisor was pinned from one side only** | `512` → `511` (one character), `80` → `79`, ceil-for-floor. All four documented floppy sizes are exact multiples of 81920, so the floor divide is insensitive: **every divisor in [79706, 81920] survived** — 2215 integers, with the shipped value at the top of the window | `-d f:` on 736,000 B returned 80/2/9 instead of 90/2/8 | an `f:` row whose size is deliberately **not** a multiple of 81920 |
+| **no row reached the shared block at type SCSI or IDE** — and that is the default type for every primary rig | wrapping the block in `if (d->type != DISKIMAGE_SCSI)` | `-d s:` on 10 MB returned **0/16/63, blocks=0** — *this round's own defect, reinstated*, for the type `get_default_disk_type_for_machine()` returns on PMAX/ARC/SGI/LUNA88K/MVME88K | `parse("s:…")` and `parse("i:…")` |
+| **an unsigned parse folds a negative value back into range** | `strtoll` → `strtoull` at the spt site (one inserted character) | `g16;-18446744073709551615:` — `strtoull` applies the minus in unsigned arithmetic, yielding **1**, accepted as spt=1 | a −ULLONG_MAX row; note a plain `-1` does *not* discriminate, since both parses land below 1 |
+
+The root cause of the second family is structural and worth stating: `diskimage_add()` assigns the
+machine-default type **after** it calls `diskimage_recalc_size()`, so every parser-level row is still
+UNKNOWN when geometry is computed. An explicit `s:`/`i:` prefix is the only way in.
+
+**Verified:** **34 rows, 0 failures** at `-O0`, `-O1`, `-O2`, `-O3` and `-Os`, 0 warnings under
+`-Wall -Wextra` at all five, **0 UBSan runtime errors**, and gate 2 green at 102 checks.
+ASan is clean **only with `detect_leaks=0`**: by default LeakSanitizer reports ~9.9 KB in 33
+allocations and `_exit`s, which also swallows the detector's buffered stdout so the log shows the
+leak report instead of the results. Those leaks are harness-lifetime and pre-existing — HEAD leaks
+*more* (11,328 B / 45 allocations), because it accepts the out-of-range geometries this round
+rejects. Recorded because any future sanitizer gate row must set that option or it fails showing
+nothing.
+
+### Assessed, not changed
+
+* The whole-cylinder round-up now creates advertised-but-unbacked tails on paths that previously
+  advertised *zero* — `-d f:` on a 20 MB file advertises 41310 blocks (21,150,720 B) for a
+  20,971,520 B file, a 179,200-byte tail whose first unbacked LBA is 40,960. **The phenomenon
+  itself is not new** and the round must not claim it is: the default arm already advertised a
+  516,095-byte, 100%-unbacked tail for a 1-byte plain image before this change. What the round does
+  is (a) give two paths a tail where they had none, and (b) raise the worst reachable case from
+  516,095 to **33,292,799 bytes — a 64.5× increase**, hit by `-d g255;255:` on a 1-byte file.
+  This **makes the open write-bound work harder, not easier**, and is filed there: a bound written
+  against advertised capacity would let a guest legally write LBA 0..65024 on that 1-byte image and
+  grow the host file to 33,292,800 bytes. The bound has to be against `d->total_size`.
+* **The `g` parse still accepts trailing garbage** — `-d g16abc;63:` and `-d g16;63abc:` are both
+  accepted as 16;63, because `strtoll(fname, NULL, 10)` discards the end pointer. The tree's own
+  precedent, `parse_int_option()` in `main.c`, uses `&endp` and rejects a non-empty remainder, and
+  its comment names "accepts trailing garbage" as the reason it dropped `atoi`. This round adopts
+  half that precedent: it fixes the truncation but not the trailing-garbage acceptance, which is not
+  a regression (`atoi` did the same) but is more awkward to fix here because the terminator is `;`
+  or `:` rather than NUL. Assessed, not changed.
+* A **stale cross-file citation this round created and then removed**: `dev_wdc.c` cited
+  `diskimage.c:254-268` for the whole-cylinder round-up, and hoisting that code invalidated the
+  range — nine lines below a block that states citations there "name constructs, not line numbers,
+  and that is deliberate". This is the #405/#407 mechanism for a third time; the reference now names
+  the construct. **A diff that moves code must re-check citations in files it does not touch.**
+* **A method note, because the error is invisible when it works:** the evidence first offered for
+  the new `PRIi64` format string was that `-Wall -Wextra` produced no warning. That check *cannot
+  fail* — `fatal()` carries no printf format attribute, so nothing verifies its arguments. The
+  conclusion was right and the reasoning was worthless; it was settled properly by recompiling with
+  a forced `format(printf,1,2)` attribute under `-Wformat=2` (no diagnostics) and by execution.
+* `size & (logical_block_size - 1)` is a mask standing in for a modulo and assumes a power of two,
+  while MODE SELECT accepts 256..8192. It fails identically before and after this round, so it is
+  neither fixed nor affected here; a row for it sits behind `#ifdef GEOM_ROW_LBS257` with its vector
+  and reason so the round that fixes it need not rediscover them. There are at least three sites.
+* `diskimage_dump_info()` prints `int64_t` cylinders and sectors-per-track with `%i`. Undefined
+  behaviour in diagnostics only, invisible to `-Wall -Wformat` because `debug()`/`debugmsg()` carry
+  no format attribute. Its guard is `FLOPPY || chs_override` — exactly the two configurations that
+  reported zero, so it now prints real values for the first time.
+* Cylinders have their own narrower carriers and are **not** covered by an H·S bound: MODE SENSE
+  page 5 gives cylinders two bytes where page 4 gives three, so `-d g1;1` on a 32 MB file now yields
+  C=65536 and truncates to 0 there and in IDENTIFY word 1. Newly reachable via the override; filed.
+* Even with H·S bounded, `ceil(size/bytespercyl) · bytespercyl` can exceed `INT64_MAX` for a
+  near-`INT64_MAX` sparse image. Residual, not a reason to widen this round.
+
 ## One-hundred-and-fifty-third round (#413) — #412's prose was wrong in four places: a floppy answers nothing, because no device ever asks for one
 
 #412 wrote that *"every floppy currently answers READ CAPACITY with 2 TiB."* A measure seat

@@ -503,5 +503,60 @@ else
               "$(grep -c 'zero-block disk does not announce' "$IOLOG")" "1"
 fi
 
+# ----------------------------------------------------------------------------
+# #414: disk GEOMETRY differential -- diskimage_recalc_size() and the -d gH;S
+# parser, linked against the real diskimage.c.
+#
+# It needs a WRITABLE DIRECTORY because recalc_size() calls stat(): every row
+# creates a real file of an exact size rather than faking the size field, so
+# what is measured is the shipped code path and not a stub of it.  GEOMDIR is
+# how the driver is told where to put them.
+#
+# The row count is asserted, not merely reported.  Two files named
+# diff_diskimage_geom.c existed during development in paths differing only by
+# the case of a parent directory, and the smaller one encoded a design decision
+# that had since been reversed; a run that silently used the wrong one looked
+# exactly like a run that used the right one.
+GEOMLOG=$LOGDIR/diff_diskimage_geom.log
+if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$LOGDIR/diff_diskimage_geom" "$HERE/diff_diskimage_geom.c" \
+        "$SEC/src/disk/diskimage.c" > "$GEOMLOG" 2>&1; then
+    note "disk geometry differential compile failed:"; sed 's/^/       /' "$GEOMLOG" | head -12
+    check "disk geometry: compiles against the real diskimage.c" "no" "yes"
+else
+    check "disk geometry: compiles against the real diskimage.c" "yes" "yes"
+    GEOMDIR="$LOGDIR" "$LOGDIR/diff_diskimage_geom" > "$GEOMLOG" 2>&1
+    sed 's/^/       /' "$GEOMLOG"
+    check     "disk geometry: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$GEOMLOG" | grep -oE '^[0-9]+')" "0"
+    check     "disk geometry: verdict token" \
+              "$(grep -c 'DISKIMAGE_GEOM_PASS' "$GEOMLOG")" "1"
+    check_min "disk geometry: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$GEOMLOG" | grep -oE '^[0-9]+')" 34
+    #  Named individually so that DELETING one is visible rather than silent.
+    #  Every one of these closed a mutant that survived all the other rows;
+    #  the grep text is chosen to appear whether the row PASSES OR FAILS, so a
+    #  failing row cannot read as a missing row.
+    check     "disk geometry: the autodetect rows use type UNKNOWN" \
+              "$(grep -c 'autodetect 720 KB\|autodetect 1.2 MB\|autodetect 2.88 MB' "$GEOMLOG")" "3"
+    check     "disk geometry: the zero-byte row guarding #412 is present" \
+              "$(grep -c '0-byte image stays empty' "$GEOMLOG")" "1"
+    check     "disk geometry: the fg prefix row is present" \
+              "$(grep -c 'fg2;9 is honoured through the parser' "$GEOMLOG")" "1"
+    check     "disk geometry: the SPT-position wrap row is present" \
+              "$(grep -c 'wrap in the SPT position' "$GEOMLOG")" "1"
+    #  These four cover regions no earlier row entered at all.  The s:/i:
+    #  pair is the important one: without it the shared cylinder block is
+    #  never reached at the type every primary rig actually uses, and a
+    #  one-condition mutant reinstates the whole defect for those disks.
+    check     "disk geometry: the non-multiple floppy size row is present" \
+              "$(grep -c 'NOT a multiple of 81920' "$GEOMLOG")" "1"
+    check     "disk geometry: the shared block is reached as SCSI and IDE" \
+              "$(grep -c 'reaches the shared cylinder block' "$GEOMLOG")" "2"
+    check     "disk geometry: the unsigned-fold row is present" \
+              "$(grep -c 'must not fold to 1 in the SPT position' "$GEOMLOG")" "1"
+fi
+
 gate_end
 exit $?

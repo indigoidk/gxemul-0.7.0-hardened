@@ -259,7 +259,8 @@ static void wdc_initialize_identify_struct(struct cpu *cpu, struct wdc_data *d)
 	 *  either side of the truth, worst case reporting ZERO SECTORS.
 	 *
 	 *  Smallest size at which any byte diverges is 65,280 sectors -- but
-	 *  diskimage_recalc_size() (diskimage.c:254-268) rounds every image up to
+	 *  diskimage_recalc_size()'s closing whole-cylinder round-up (the shared
+	 *  bytespercyl block, hoisted there by #414) rounds every image up to
 	 *  whole cylinders, so that exact count is unreachable. The smallest
 	 *  REACHABLE divergence is 33,546,240 bytes (65 cylinders), where a 32 MB
 	 *  disk announces itself as 120 KB.
