@@ -460,14 +460,28 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		 *  empty.  MEASURED against this function: 0 blocks announced
 		 *  last-LBA 0xffffffff.
 		 *
-		 *  This is not hypothetical.  A separate defect leaves EVERY
-		 *  floppy and every `-d gH;S` disk with zero blocks, so today
-		 *  every floppy answers READ CAPACITY with 2 TiB.  The "0 KB"
-		 *  the operator sees on the console is only the host-side
-		 *  banner; the GUEST is told two terabytes.  That defect is
+		 *  This is not hypothetical.  A separate defect leaves every
+		 *  `-d gH;S` disk with zero blocks, and such a disk KEEPS its
+		 *  SCSI or IDE type -- so it reaches this handler and is told
+		 *  it holds two terabytes.  Measured: a 10 MB image announced
+		 *  as "SCSI DISK id 0, read/write, 0 MB (CHS=0,16,63)".  The
+		 *  "0 MB" the operator sees on the console is only the
+		 *  host-side banner; the GUEST is told 2 TiB.  That defect is
 		 *  fixed separately -- this guard is what makes an empty disk
 		 *  report itself as empty regardless of how it got that way,
 		 *  and it stays correct after that fix lands.
+		 *
+		 *  #413 NARROWED THIS CLAIM.  #412 said "every floppy", which
+		 *  is wrong: DISKIMAGE_FLOPPY is a WRITE-ONLY TYPE in this
+		 *  codebase.  It occurs in exactly seven places, all inside
+		 *  diskimage.c/diskimage.h and NONE in any device; every
+		 *  controller hard-codes its type argument (six pass
+		 *  DISKIMAGE_SCSI, one DISKIMAGE_IDE) and both lookups match on
+		 *  d->type == type.  A floppy-typed disk therefore never
+		 *  reaches this function at all -- it is invisible to every
+		 *  controller, which is a DIFFERENT and separately filed
+		 *  defect.  The gate row below is unaffected: it uses a 0-byte
+		 *  image, which is a genuinely reachable zero-block SCSI disk.
 		 *
 		 *  0xffffffff is also the ATA/SCSI "capacity too large for this
 		 *  command" sentinel, so reporting it for an EMPTY disk is the

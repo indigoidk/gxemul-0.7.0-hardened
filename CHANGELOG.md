@@ -4192,7 +4192,67 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
-## One-hundred-and-fifty-second round (#412) — every floppy in this fork tells the guest it holds 2 TiB
+## One-hundred-and-fifty-third round (#413) — #412's prose was wrong in four places: a floppy answers nothing, because no device ever asks for one
+
+#412 wrote that *"every floppy currently answers READ CAPACITY with 2 TiB."* A measure seat
+drove the shipping binary and the shipped parser and established that **a floppy answers
+nothing at all.**
+
+**`DISKIMAGE_FLOPPY` is a write-only type in this codebase.** It occurs in exactly seven
+places, all inside `diskimage.c`/`diskimage.h`, and **none in any device**. Every controller
+hard-codes its type argument — six call sites pass `DISKIMAGE_SCSI`, one passes
+`DISKIMAGE_IDE` — and both `diskimage_access()` and `diskimage_scsicommand()` select on
+`d->type == type`. A floppy-typed disk is therefore never reached by any controller.
+
+Measured, not read:
+
+```
+  ok  diskimage_exist(id 0, SCSI) -- what dev_asc asks   = 0
+  ok  diskimage_exist(id 0, IDE)  -- what dev_wdc asks   = 0
+  ok  the disk IS there under type FLOPPY                = 1
+  ok  [CONTROL] with 's:' the SCSI controller DOES see it = 1
+```
+
+**So `-d d:image` on a floppy-sized file does not hand the guest a zero-capacity disk — it
+hands the guest no disk at all**, while the console prints `FLOPPY DISK id 0, read/write, 0 KB`,
+which reads like a device that is present. That is a *different* and more serious defect than
+the one #412 described, and it is filed rather than fixed here.
+
+**#412's fix and its gate row are untouched and remain sound** — the row uses a 0-byte image,
+which genuinely *is* a reachable zero-block SCSI disk. Only the prose over-reached. The true
+carrier was in the same sentence: **`-d gH;S` keeps its SCSI/IDE type** while carrying zero
+blocks, so it does reach the handler. Measured: a 10 MB image announced as
+`SCSI DISK id 0, read/write, 0 MB (CHS=0,16,63)`. The correction is a narrowing, not a reversal,
+and it was applied to all three live sites (this file, the gate comment, and the source
+comment); #412's commit message is immutable and is corrected here.
+
+### Measured while confirming it — the numeric sweep
+
+Every numeric option in `diskimage_add()` parses with `atoi` and validates only from below:
+
+| option | parse | validated | verdict |
+|---|---|---|---|
+| `g` heads | `atoi` → `int` | `< 1` only | truncating, **no upper bound** |
+| `g` spt | `atoi` → `int` | `< 1` only | truncating, **no upper bound** |
+| `o` offset | `atoi` → **`int64_t`** | `< 0` only | truncating, **silent above 2³²** |
+
+**The `o` failure splits, and only one half is loud.** `[2³¹, 2³²)` truncates negative and is
+caught by the existing `< 0` check — it aborts. **`≥ 2³²` truncates positive and passes
+silently:** `o4294967296 → 0`, `o4294967396 → 100`, `o9999999999999 → 1316134911`. And the
+consequence is guest-visible — the bootblock read at offset 0 goes negative and is **served
+zeros**, printing `[ reading before start of disk image ]`. A detector that tests only 2³¹
+passes on entirely unfixed code; the discriminating vectors are `≥ 2³²` with positive low words.
+
+Also measured: `o0x1000` is silently taken as `0`; trailing garbage `o1000abc` is accepted as
+`1000`; two id digits silently let the last win; and **a `;` inside the pathname is consumed as
+geometry** (the heads scan stops at `';'` but not at `':'`). No out-of-bounds read — every scan
+tests for NUL first.
+
+## One-hundred-and-fifty-second round (#412) — a zero-block disk told the guest it held 2 TiB
+
+> **#413 correction.** This round's original title and prose said *"every floppy"*. That
+> over-reached — see the #413 block above. The fix and its gate row are unaffected.
+
 
 `SCSICMD_READ_CAPACITY` computes `size = d->nr_of_logical_blocks - 1` where `size` is
 `uint64_t` and the block count is `int64_t`. **A zero-block disk therefore underflows and
@@ -4200,7 +4260,9 @@ announces last-LBA `0xffffffff` — 4,294,967,296 blocks, 2 TiB at 512 bytes eac
 than reporting itself empty.
 
 **This is not a corner case today.** A separate live defect leaves *every* floppy and every
-`-d gH;S` disk with zero blocks, so **every floppy currently answers READ CAPACITY with 2 TiB.**
+`-d gH;S` disk with zero blocks — and such a disk **keeps its SCSI/IDE type**, so it reaches
+the handler and is told it holds 2 TiB. Measured: a 10 MB image announced as
+`SCSI DISK id 0, read/write, 0 MB (CHS=0,16,63)`.
 The `0 KB` the operator sees on the console is only the host-side banner; the guest is told two
 terabytes. That was found by measuring the shipped code, not by reading it.
 

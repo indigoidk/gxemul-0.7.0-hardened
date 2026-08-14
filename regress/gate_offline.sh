@@ -468,9 +468,12 @@ fi
 # guest was told the disk holds 4,294,967,296 blocks -- 2 TiB -- rather than that it is
 # empty. Measured both directions before and after: 0xffffffff -> 0x00000000.
 #
-# THIS IS NOT A CORNER CASE TODAY. A separate live defect leaves every floppy and every
-# `-d gH;S` disk with zero blocks, so every floppy currently answers READ CAPACITY with
-# 2 TiB. The "0 KB" on the console is the host-side banner only; the guest is told two
+# THIS IS NOT A CORNER CASE TODAY. A separate live defect leaves every `-d gH;S` disk with
+# zero blocks, and such a disk KEEPS its SCSI/IDE type, so it reaches the handler and is told
+# it holds 2 TiB. Measured: a 10 MB image announced as "SCSI DISK id 0, 0 MB (CHS=0,16,63)".
+# (#413 narrowed this from "every floppy": DISKIMAGE_FLOPPY is a WRITE-ONLY type -- no device
+# ever passes it, so a floppy-typed disk never reaches this handler at all. That is a separate
+# filed defect. The row below is unaffected; a 0-byte image IS a reachable zero-block disk.) The "0 KB" on the console is the host-side banner only; the guest is told two
 # terabytes. This guard keeps an empty disk reporting empty however it got that way, and
 # stays correct after that defect is fixed -- which is why its row uses a 0-BYTE IMAGE
 # rather than a floppy. A floppy row would go vacuous the moment the geometry fix lands.
