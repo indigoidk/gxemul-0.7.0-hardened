@@ -195,36 +195,59 @@ static void sh4_timer_tick(struct timer *t, void *extra)
 
 	/*  Timer interrupts:  */
 	for (i=0; i<N_SH4_TIMERS; i++) {
-		int32_t old = d->tcnt[i];
-
-		/*  printf("tcnt[%i] = %08x   tcor[%i] = %08x\n",
-		    i, d->tcnt[i], i, d->tcor[i]);  */
+		uint32_t step, cnt;
 
 		/*  Only update timers that are currently started:  */
 		if (!(d->tstr & (TSTR_STR0 << i)))
 			continue;
 
-		/*  Update the current count:  */
-		d->tcnt[i] -= (uint32_t) (d->timer_hz[i] / SH4_PSEUDO_TIMER_HZ);
+		step = (uint32_t) (d->timer_hz[i] / SH4_PSEUDO_TIMER_HZ);
+		cnt  = d->tcnt[i];
 
-		/*  Has the timer underflowed?  */
-		if ((int32_t)d->tcnt[i] < 0 && old >= 0) {
+		/*
+		 *  #400: THE COUNTER'S CONVENTION, kept here because this is the
+		 *  only place in the tree that records it. TCNT counts
+		 *  TCOR, TCOR-1, ..., 1, 0 and then underflows to TCOR, so a
+		 *  period is TCOR+1 counts. That is an ASSUMPTION -- there is no
+		 *  SH-4 manual in this source collection -- and it is inherited
+		 *  from the comment this hunk replaces, which stated the intent as
+		 *  "Set tcnt[i] to tcor[i]" on underflow. Deleting that sentence
+		 *  without restating it would have removed the only evidence for
+		 *  the arithmetic below.
+		 *
+		 *  The previous code did all of this through int32_t and then
+		 *  clamped a negative result to zero, which pinned TCNT at 0
+		 *  permanently once a reload could not lift it back above the sign
+		 *  boundary -- measured on a booting OpenBSD/landisk guest as a
+		 *  wall clock that froze after 515.4 s and never recovered. It
+		 *  also landed on TCOR-1 rather than TCOR, so it did not implement
+		 *  its own comment.
+		 *
+		 *  The 64-bit cast on `period` is load-bearing: computed in
+		 *  uint32_t, TCOR == 0xffffffff makes it 0 and the modulo below is
+		 *  a division by zero. Modulo rather than a loop, because a loop
+		 *  does not terminate for TCOR == 0 or for a 32-bit period of 0.
+		 */
+		if (step <= cnt) {
+			d->tcnt[i] = cnt - step;
+		} else {
+			uint64_t period    = (uint64_t)d->tcor[i] + 1;
+			uint64_t remaining = (uint64_t)step - cnt - 1;
+
+			d->tcnt[i] = d->tcor[i] - (uint32_t)(remaining % period);
+
 			d->tcr[i] |= TCR_UNF;
 
+			/*
+			 *  One pending interrupt per call, which is what the
+			 *  previous code did and is UNCHANGED here rather than
+			 *  corrected: a call spanning several periods still counts
+			 *  one. Whether the emulator should queue N or coalesce is
+			 *  a separate design question that this source cannot
+			 *  settle, so it is recorded rather than decided.
+			 */
 			if (d->tcr[i] & TCR_UNIE)
 				d->timer_interrupts_pending[i] ++;
-
-			/*
-			 *  Set tcnt[i] to tcor[i]. Note: Since this function
-			 *  is only called now and then, adding tcor[i] to
-			 *  tcnt[i] produces more correct values for long
-			 *  running timers.
-			 */
-			d->tcnt[i] += d->tcor[i];
-
-			/*  At least make sure that tcnt is non-negative...  */
-			if ((int32_t)d->tcnt[i] < 0)
-				d->tcnt[i] = 0;
 		}
 	}
 }

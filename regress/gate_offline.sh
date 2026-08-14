@@ -264,5 +264,44 @@ check     "readiness: full-mark byte count tracks the nonce" "$(rbytes full-mark
 check     "readiness: late-echo byte count tracks the nonce" "$(rbytes late-echo)" "$((60 + RLEN))"
 check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT=6/6' "$RLOG")" "1"
 
+# ---- #400: the SH-4 TMU tick arithmetic -----------------------------------------
+# Same shape as the float_emul differential above, and for the same reason: the driver
+# stubs fatal() and #includes dev_sh4.c, so the sh4_timer_tick() that runs IS the one
+# that ships. sh4_timer_tick is static, so there is no way to link it without including
+# the file -- which is precisely what makes a transcription impossible here.
+#
+# The rows are exact values, not "did it move". The defect being guarded pinned TCNT at
+# zero permanently on a booting OpenBSD/landisk guest after 515.4 s; the no-freeze row
+# reproduces that in milliseconds instead of a 9.5-minute boot.
+#
+# The three-timer row exists because a measure seat found two wrong variants -- tcor[0]
+# for tcor[i], and cnt from tcnt[0] -- that are BIT-IDENTICAL to correct code across all
+# 824288 single-timer cases, because every other row starts timer 0 only. They are the
+# typo this rewrite newly risks. Measured: that row alone kills both.
+TMUBIN=$LOGDIR/diff_sh4_tmu
+TMULOG=$LOGDIR/diff_sh4_tmu.log
+if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$TMUBIN" "$HERE/diff_sh4_tmu.c" > "$TMULOG" 2>&1; then
+    note "SH-4 TMU differential compile failed:"; sed 's/^/       /' "$TMULOG" | head -12
+    check "SH-4 TMU: compiles against the real dev_sh4.c" "no" "yes"
+else
+    check "SH-4 TMU: compiles against the real dev_sh4.c" "yes" "yes"
+    "$TMUBIN" > "$TMULOG" 2>&1
+    sed 's/^/       /' "$TMULOG"
+    #  Assert the verdict AND the row count. The verdict alone would stay green if the
+    #  table were emptied; a floor on the rows is what stops that.
+    check     "SH-4 TMU: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$TMULOG" | grep -oE '^[0-9]+')" "0"
+    check_min "SH-4 TMU: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 11
+    check     "SH-4 TMU: offline verdict" "$(grep -c 'SH4_TMU_PASS' "$TMULOG")" "1"
+    #  Named rows, so that deleting one is visible rather than silent.
+    check     "SH-4 TMU: the freeze row is present" \
+              "$(grep -c 'no freeze past 515.4 s' "$TMULOG")" "1"
+    check     "SH-4 TMU: the three-timer row is present" \
+              "$(grep -c 'three timers at once' "$TMULOG")" "1"
+fi
+
 gate_end
 exit $?

@@ -4192,6 +4192,88 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fortieth round (#400) — the SH-4 timer pinned itself at zero, and a booting guest's clock stopped
+
+`sh4_timer_tick()` detected underflow and reloaded in `int32_t`, then clamped a negative
+result to zero. Once a reload could not lift the counter back above the sign boundary,
+`TCNT` pinned at 0 and every later tick re-underflowed and re-clamped.
+
+Measured on a booting guest before anything was changed: OpenBSD/landisk's `date -u`,
+sampled every 30 s, tracked host UTC exactly for seventeen samples — second for second —
+then froze at `00:52:10` and returned that identical value for seventeen more. 8m43s of
+divergence and still growing, while the guest stayed fully alive and answered all 34
+debugger prompts. An offline replication pre-registered the freeze at 515.4 s; a measure
+seat then reproduced it on the real function at call 56693, and the committed test now
+reproduces it at call 56694 in milliseconds.
+
+**Why it survived.** TMU0, the hardclock, is unaffected: its reload stays positive, so
+scheduling keeps working perfectly while only the timecounter dies. Every obvious symptom
+of a broken timer is absent. It took deliberately comparing the guest's clock against the
+host's to see it at all.
+
+**Three findings overturned the original diagnosis, and each one mattered.**
+
+*`TCOR = 0xffffffff` is not required.* The 515.4 s delay comes from the **initial**
+`TCNT = 0xffffffff`, the emulator's own reset default. `TCOR = 20833` — the hardclock
+value everyone called safe — freezes too at the P4 prescaler, because the step (75757) is
+larger than `TCOR`, so one `+= tcor` cannot undo a wrap of that size. The real trigger is
+"a guest starts a fast timer without writing TCNT", which is far more reachable than "a
+guest programs a maximum-period timer". This also reconciled a panel split: one seat had
+assumed P4 and another P16, and each was right about its own configuration.
+
+*The signed comparison is not the bug.* It differs from an unsigned borrow test only at
+`step >= 0x80000001`, and the largest step either SH machine can produce is 113636. A fix
+that keeps signed detection and repairs only the reload is measurably identical — so no
+test row may assert the unsigned rewrite, or it would fail correct code.
+
+*The old code did not implement its own comment.* At `step == cnt + 1` it landed on
+`TCOR - 1`, not `TCOR`. The comment said "Set tcnt[i] to tcor[i]". That off-by-one is
+present for every `TCOR`; the clamp is what turns it into a freeze for the top slice.
+
+**The arithmetic now is all-unsigned**: borrow, then reload modulo the period. The 64-bit
+cast around `TCOR + 1` is load-bearing — computed in `uint32_t`, `TCOR = 0xffffffff` makes
+the period 0 and the modulo divides by zero. Modulo rather than a loop, because a loop
+does not terminate for `TCOR = 0` or for a 32-bit period of 0.
+
+**The assumption is recorded rather than assumed away.** A period is `TCOR + 1` counts.
+There is no SH-4 manual in this source collection, and the only in-tree evidence was the
+comment this hunk replaced — `TCOR` appears nowhere else, and the hardclock's 20833 never
+appears in source at all. **The patch would have deleted the sole evidence for its own
+premise**, so `dev_sh4.c` now restates the convention deliberately. A seat also measured
+that the assumption is less load-bearing than feared: scored against a `TCOR`-period
+oracle, the "delete the clamp and keep `+= tcor`" variant is wrong 416,082 times out of
+507,904 — the old code is wrong under *both* conventions, so the assumption decides one
+count per period, not who is right.
+
+**Interrupt accounting is UNCHANGED, not corrected.** A call spanning several periods
+still counts one pending interrupt, exactly as before. Measured, it never regresses
+relative to the old code — identical wherever more than one underflow occurs, and exactly
+right wherever at most one does. Whether the emulator should queue N or coalesce is a
+separate design question this source cannot settle, so it is filed.
+
+**The test compiles the shipped function.** `regress/diff_sh4_tmu.c` stubs `fatal()` and
+`#include`s `dev_sh4.c`; `sh4_timer_tick()` is `static`, so there is no way to link it
+without including the file — which is exactly what makes the `diff_ieee_store.c` vacuity
+(transcribing both sides and never linking the code under test) structurally impossible
+here. Eleven rows, all exact values.
+
+**One row exists because two wrong variants survived everything else.** `tcor[0]` written
+where `tcor[i]` is meant, and `cnt` read from `tcnt[0]`, are bit-identical to correct code
+across all 824,288 single-timer cases — because every other row starts timer 0 only. They
+are precisely the typo this rewrite newly risks, since it introduced two locals and four
+`[i]` subscripts where the old code indexed inline, and a 9.5-minute live boot catches
+neither. The three-timer row kills both, and only that row does.
+
+Mutants, each scored by the row that caught it: the entire pre-#400 body (rejected by the
+test, not by the compiler — the harness distinguishes those); `tcor[0]` and `tcnt[0]`
+(three-timer row); `step < cnt` for `step <= cnt` (the boundary row, which the earlier
+design left unguarded); dropping the `-1` from `remaining` (five rows). Dropping the `+1`
+from the period is **detected by SIGFPE rather than by a row**, and is labelled that way:
+"a crashing mutant counts as detected" is a vacuity this project tracks in its own right,
+and the harness refuses to score a fault as an assertion.
+
+Gate 2 is green at 59 checks.
+
 ## One-hundred-and-thirty-ninth round (#399) — four gate scripts did not know which gate they were, and a shipped record repeated one of them
 
 `run.sh`'s `GATES` array and `regress/README.md`'s table agree on the numbering. Four
