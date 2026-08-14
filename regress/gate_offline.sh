@@ -294,8 +294,15 @@ else
     check     "SH-4 TMU: row failures" \
               "$(grep -oE '[0-9]+ failures' "$TMULOG" | grep -oE '^[0-9]+')" "0"
     check_min "SH-4 TMU: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 11
+              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 13
     check     "SH-4 TMU: offline verdict" "$(grep -c 'SH4_TMU_PASS' "$TMULOG")" "1"
+    #  #401: the multi-period rows are named because they are the ONLY rows that
+    #  make the modulo mean anything. Four seats independently found that dropping
+    #  `% period` passed all of #400's eleven rows -- none ever reached
+    #  remaining >= period, so the correction itself went untested. Deleting these
+    #  must be visible rather than silent.
+    check     "SH-4 TMU: the multi-period rows are present" \
+              "$(grep -c 'multi-period wrap' "$TMULOG")" "2"
     #  Named rows, so that deleting one is visible rather than silent.
     check     "SH-4 TMU: the freeze row is present" \
               "$(grep -c 'no freeze past 515.4 s' "$TMULOG")" "1"

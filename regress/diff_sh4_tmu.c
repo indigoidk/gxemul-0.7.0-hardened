@@ -4,11 +4,16 @@
  *  WHY THIS COMPILES THE DEVICE FILE INSTEAD OF TRANSCRIBING IT. gate 2 exists
  *  because its first version copied both sides of a differential into its own C
  *  file and compared the copy against itself -- it never linked the code it
- *  claimed to guard, so deleting the correction under test changed nothing. The
- *  same vacuity is structurally impossible here: sh4_timer_tick() is static, so
- *  this driver stubs fatal() and #includes dev_sh4.c, and the function that runs
- *  is the one that ships. A mutation to dev_sh4.c is seen by this test by
- *  construction, not by convention.
+ *  claimed to guard, so deleting the correction under test changed nothing.
+ *  sh4_timer_tick() is static, so this driver stubs fatal() and #includes
+ *  dev_sh4.c, and the function that runs is the one that ships.
+ *
+ *  #401 corrects how strongly that may be stated. #400 called the old vacuity
+ *  "structurally impossible" here; a seat pointed out it is not -- replace the
+ *  include with a pasted body and the test is green against a copy again. What
+ *  is true, and is enough, is that IT CANNOT HAPPEN SILENTLY WHILE THE INCLUDE
+ *  LINE REMAINS: deleting the include does not weaken the test, it fails to
+ *  compile.
  *
  *  THE DEFECT: underflow was detected and reloaded in int32_t and then clamped
  *  to zero, so once a reload could not lift the counter back above the sign
@@ -195,6 +200,31 @@ int main(void)
 	row1("TCOR=0 transient, no UNF",   0,    5,      1,  4,          0);
 
 	row1("step == 0 leaves it alone", 20833, 777,     0,  777,       0);
+
+	/*
+	 *  #401: THE ROWS THAT MAKE THE MODULO MEAN ANYTHING.
+	 *
+	 *  Four panel seats independently found that dropping `% period` passed
+	 *  every row of #400's table, because no row ever reached
+	 *  `remaining >= period`: three had remaining == 0, and the rest used a
+	 *  period (2^32, or 20834) far larger than any remaining they produced. The
+	 *  modulo IS the correction, and nothing exercised it. The original kill map
+	 *  asked which mutants each row catches and never asked which mutant NO row
+	 *  catches.
+	 *
+	 *  These two step past several whole periods, so `remaining % period` is not
+	 *  the identity. They also separate period == TCOR+1 from period == TCOR --
+	 *  a distinction the earlier rows could not make, which let a mutant that
+	 *  guards TCOR==0 to dodge the SIGFPE survive as well.
+	 *
+	 *    TCOR=5  (period 6):  3 -> 0 is 3 ticks, one more underflows to 5,
+	 *                         16 remain; 16 % 6 == 4; 5 - 4 == 1.
+	 *                         Period 5 would give 16 % 5 == 1 -> 4.  Distinct.
+	 *    TCOR=20833 (period 20834): remaining 99899, 99899 % 20834 == 16563,
+	 *                         20833 - 16563 == 4270.
+	 */
+	row1("multi-period wrap (small)",     5,   3,     20,  1,        1);
+	row1("multi-period wrap (hardclock)", 20833, 100, 100000, 4270,  1);
 	/*  The counter can legitimately sit far above TCOR -- that is the reset
 	    state, and it is what makes the freeze reachable with a small TCOR.
 	    Stepping past zero from there must bridge into the periodic regime.  */

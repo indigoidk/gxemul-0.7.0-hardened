@@ -4192,6 +4192,45 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-first round (#401) — the eleven rows never once exercised the modulo, which is the correction
+
+Panel pass 2 on the shipped #400 diff. **Four seats independently found a wrong
+implementation that passed all eleven rows**: delete `% period` and the test stays green.
+
+The reason is uncomfortable. No row ever reached `remaining >= period`. Three had
+`remaining == 0`; the rest used a period (2^32, or 20834) far larger than any remaining
+they produced. So the modulo — the thing the correction *is* — was never exercised, and
+#400's kill map did not notice because it asked which mutants each row catches and never
+asked **which mutant no row catches**.
+
+One seat found the subtler sibling: `period = tcor ? tcor : 1` dodges the SIGFPE that #400
+leaned on *and* passes all eleven rows. So the round's claim that the crash covers the
+missing `+1` was incomplete — a guarded variant escapes both the fault and the table.
+
+Two rows close it, and they were chosen to separate `TCOR+1` from `TCOR` as well:
+
+* `TCOR=5, TCNT=3, step=20` — three ticks to zero, one more underflows to 5, sixteen
+  remain; `16 % 6 == 4`, so `5 - 4 == 1`. With period `TCOR` it would be `16 % 5 == 1`
+  and land on 4. Measured: `no_modulo` gives `fffffff5`, `guarded_period` gives `4`.
+* `TCOR=20833, TCNT=100, step=100000` — `99899 % 20834 == 16563`, so `20833 - 16563 ==
+  4270`. Measured: `guarded_period` gives `10aa` against `10ae`.
+
+Both mutants now die, and by those rows specifically. The gate names them and requires two
+of them, so deleting one is visible rather than silent, and the row floor rises to 13.
+
+**A record was also too strong.** #400 said the transcription vacuity was *structurally
+impossible* here. It is not: replace the `#include` with a pasted body and the test is
+green against a copy again. What is true, and is enough, is that **it cannot happen
+silently while the include line remains** — deleting that line does not weaken the test,
+it fails to compile. Corrected in the file.
+
+Gate 2 is green at 60 checks.
+
+The general lesson is the one this round is named for. A kill map that lists a killer for
+every mutant you thought of still says nothing about the mutant you did not, and the
+mutant you do not think of is disproportionately likely to be *the deletion of the thing
+you just added* — because that is the edit whose absence you are least able to imagine.
+
 ## One-hundred-and-fortieth round (#400) — the SH-4 timer pinned itself at zero, and a booting guest's clock stopped
 
 `sh4_timer_tick()` detected underflow and reloaded in `int32_t`, then clamped a negative
