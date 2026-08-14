@@ -133,10 +133,37 @@ int64_t diskimage_getsize(struct machine *machine, int id, int type)
 	return (int64_t) stub_size;
 }
 
+/*
+ *  #409: THIS STUB HAD TO LEARN `id` TOO, AND SO DID getname BELOW.
+ *
+ *  #408 poisoned diskimage_getsize() and wrote the reason into this file -- "a
+ *  stub that answers correctly for an id nobody asked about is not a stub, it is
+ *  a second implementation" -- and then left the OTHER TWO stubs ignoring `id`.
+ *  Measured: with only getsize poisoned, `is_a_cdrom` and `getname` each SURVIVE
+ *  both an id-off-by-one and a dropped base_drive, four mutants in total.
+ *  #408's commit message claims it closed base_drive "at all three call sites".
+ *  It closed ONE.
+ *
+ *  The is_a_cdrom case is genuinely reachable: a machine with a disk at id 0 and
+ *  a CD-ROM at id 1 would make drive 0's IDENTIFY announce ATAPI/CDROM/removable.
+ *
+ *  POISON BY INVERSION, and the first attempt got this wrong. Putting the CD-ROM
+ *  at ONE specific id does not work: the correct id is drive+base_drive = 3, so
+ *  the "drop base_drive" mutant asks about id 1 and the "+1" mutant asks about
+ *  id 4 -- and with the CD-ROM at id 2 both simply MISS it and still read "not a
+ *  CD-ROM". Both survived. The stub must instead answer WRONGLY for every id
+ *  except the expected one: exactly one drive is not a CD-ROM, and any id error
+ *  therefore flips word 0 to ATAPI/removable.
+ */
+static int stub_cdrom_poison = 0;	/*  0 = nothing is a CD-ROM  */
+static int stub_noncdrom_id  = -1;	/*  the ONLY id that is not  */
+
 int diskimage_is_a_cdrom(struct machine *machine, int id, int type)
 {
-	(void)machine; (void)id; (void)type;
-	return 0;
+	(void)machine; (void)type;
+	if (!stub_cdrom_poison)
+		return 0;
+	return (id == stub_noncdrom_id) ? 0 : 1;
 }
 
 int diskimage_is_a_tape(struct machine *machine, int id, int type)
@@ -148,8 +175,10 @@ int diskimage_is_a_tape(struct machine *machine, int id, int type)
 int diskimage_getname(struct machine *machine, int id, int type,
 	char *buf, size_t bufsize)
 {
-	(void)machine; (void)id; (void)type;
-	snprintf(buf, bufsize, "%s", stub_name);
+	(void)machine; (void)type;
+	/*  #409: the name carries the id, so asking for the wrong drive is
+	    visible in the model-number field rather than silently identical.  */
+	snprintf(buf, bufsize, "%s id%d", stub_name, id);
 	return 1;
 }
 
@@ -177,15 +206,26 @@ static uint64_t sectors_from_block(struct wdc_data *d, int lo, int hi)
  *  flags were load-bearing for CORRECTNESS, and a future "build regress at -O0 to
  *  debug this" would have turned the gate red in a way that looks exactly like a
  *  capability regression.
+ *
+ *  #409: ZERO IT ONCE, NOT PER CALL. sizeof(struct cpu) is 60,821,568 bytes, and
+ *  #408 memset it on every call -- 65,535 times in the oracle below, roughly 4 TB
+ *  of memory traffic. MEASURED: 148,188 ms shipped versus 34 ms hoisted, a 4,358x
+ *  slowdown, with byte-identical output (verified by cmp). Both are static, so
+ *  they are already zero at program start; the explicit zeroing is kept only so
+ *  the intent survives someone making them automatic.
  */
 static struct machine stub_machine;
 static struct cpu     stub_cpu;
 
 static struct cpu *fake_cpu(void)
 {
-	memset(&stub_machine, 0, sizeof(stub_machine));
-	memset(&stub_cpu, 0, sizeof(stub_cpu));
-	stub_cpu.machine = &stub_machine;
+	static int done = 0;
+	if (!done) {
+		memset(&stub_machine, 0, sizeof(stub_machine));
+		memset(&stub_cpu, 0, sizeof(stub_cpu));
+		stub_cpu.machine = &stub_machine;
+		done = 1;
+	}
 	return &stub_cpu;
 }
 
@@ -321,6 +361,8 @@ static void row_base_drive(void)
 	uint64_t want = 500ULL * 16 * 63;
 	uint64_t got;
 
+	int bad = 0;
+
 	memset(&d, 0, sizeof(d));
 	d.drive = 0;
 	d.base_drive = 2;
@@ -338,11 +380,119 @@ static void row_base_drive(void)
 		printf("  FAIL %-38s got %llu, want %llu (base_drive ignored?)\n",
 		    "base_drive reaches the diskimage id",
 		    (unsigned long long)got, (unsigned long long)want);
+		bad = 1;
+	}
+
+	/*
+	 *  #409: THE GEOMETRY HALF, and it kills an OUT-OF-BOUNDS READ.
+	 *
+	 *  base_drive is the DISKIMAGE id, not an index into the per-drive arrays,
+	 *  which are `int cyls[2]`. A mutant indexing them as [d->drive +
+	 *  d->base_drive] reads element 2 of a 2-element array -- and it SURVIVED
+	 *  all five optimisation levels, because nothing asserted this drive's
+	 *  geometry. Only ASan caught it. Asserting the geometry here kills it
+	 *  without needing a sanitizer in the gate.
+	 */
+	if (word(&d, 1) != 500 || word(&d, 3) != 16 || word(&d, 6) != 63) {
+		printf("  FAIL %-38s c=%u h=%u s=%u, want 500/16/63"
+		    " (indexed by base_drive?)\n",
+		    "base_drive is a disk id, not an array index",
+		    word(&d, 1), word(&d, 3), word(&d, 6));
+		bad = 1;
+	}
+
+	if (bad)
 		failures ++;
-	} else {
-		printf("  ok   %-38s id 2 -> %llu sectors\n",
+	else
+		printf("  ok   %-38s id 2 -> %llu sectors, c=500 h=16 s=63\n",
 		    "base_drive reaches the diskimage id",
 		    (unsigned long long)got);
+}
+
+/*
+ *  #409: THE ROW THAT MAKES THE OTHER TWO STUBS' id-DEPENDENCE OBSERVABLE.
+ *
+ *  Teaching is_a_cdrom() and getname() about `id` accomplishes nothing on its
+ *  own -- no row read either answer, so all four id mutants still survived. This
+ *  row reads BOTH:
+ *
+ *    * word 0. The device sets 0x8580 (ATAPI/CDROM/removable) when the disk is a
+ *      CD-ROM and 0x0040 (fixed) otherwise. The CD-ROM here is a DIFFERENT id on
+ *      the same controller, so any id arithmetic error makes this drive announce
+ *      itself removable -- which is exactly the reachable configuration: a disk
+ *      at one id and a CD-ROM at the next.
+ *    * the model number (word 27, 40 bytes). getname() now embeds the id, so
+ *      fetching the wrong drive's name is visible as a wrong string rather than
+ *      as an identical one.
+ */
+static void row_identity(void)
+{
+	struct wdc_data d;
+	uint64_t want = 700ULL * 16 * 63;
+	char model[41];
+	int bad = 0;
+
+	memset(&d, 0, sizeof(d));
+	d.drive = 1;
+	d.base_drive = 2;			/*  so the wanted id is 3  */
+	d.cyls[1] = 700; d.heads[1] = 16; d.sectors_per_track[1] = 63;
+	memset(stub_size_for, 0, sizeof(stub_size_for));
+	stub_size_for[3] = want * 512;
+	stub_size = 0;
+	stub_size_for_active = 1;
+	stub_noncdrom_id = 3;		/*  ONLY id 3 is a plain disk  */
+	stub_cdrom_poison = 1;		/*  every other id is a CD-ROM  */
+	wdc_initialize_identify_struct(fake_cpu(), &d);
+	stub_cdrom_poison = 0; stub_noncdrom_id = -1;
+	stub_size_for_active = 0;
+
+	rows ++;
+	if (word(&d, 0) != 0x0040) {
+		printf("  FAIL %-38s word 0 = %04x, want 0040"
+		    " (0x8580 = it asked is_a_cdrom about the wrong id)\n",
+		    "this drive is not the CD-ROM next to it", word(&d, 0));
+		bad = 1;
+	}
+
+	memcpy(model, &d.identify_struct[2 * 27], 40);
+	model[40] = '\0';
+	if (strstr(model, "id3") == NULL) {
+		printf("  FAIL %-38s model \"%s\" lacks id3\n",
+		    "the model number names THIS drive", model);
+		bad = 1;
+	}
+
+	if (bad)
+		failures ++;
+	else
+		printf("  ok   %-38s word 0 = 0040, model names id3\n",
+		    "is_a_cdrom and getname get the right id");
+}
+
+/*
+ *  #409: EXERCISE THE HIGH BYTE OF THE GEOMETRY WORDS.
+ *
+ *  Every other fixture keeps heads and sectors-per-track below 256, so the
+ *  `>> 8` half of words 3 and 6 is never non-zero -- MEASURED: forcing either
+ *  high byte to a literal 0 SURVIVES the whole table. Cylinders were already
+ *  covered (300 > 255). These values are not reachable from the command line
+ *  today only because the geometry override is broken (a separate round), and
+ *  wdc copies whatever geometry the diskimage layer hands it.
+ */
+static void row_wide_geometry(void)
+{
+	struct wdc_data d;
+
+	build(&d, 4096ULL * 300 * 17, 4096, 300, 17);
+	rows ++;
+	if (word(&d, 1) != 4096 || word(&d, 3) != 300 || word(&d, 6) != 17) {
+		printf("  FAIL %-38s c=%u h=%u s=%u, want 4096/300/17\n",
+		    "geometry words carry their high byte",
+		    word(&d, 1), word(&d, 3), word(&d, 6));
+		failures ++;
+	} else {
+		printf("  ok   %-38s c=4096 h=300 (high byte 0x01)\n",
+		    "geometry words carry their high byte");
 	}
 }
 
@@ -441,6 +591,8 @@ int main(void)
 	row_anchor();
 	row_slave();
 	row_base_drive();
+	row_identity();
+	row_wide_geometry();
 	row_no_lba_claim();
 	row_selfconsistent();
 

@@ -348,7 +348,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 13
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 15
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -394,6 +394,19 @@ else
               "$(grep -c 'the SLAVE reports its own' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the base_drive row is present" \
               "$(grep -c 'base_drive reaches the diskimage id' "$WDCLOG")" "1"
+    #  #409: two further rows, each closing mutants that survived the thirteen.
+    #    identity  <- is_a_cdrom and getname still IGNORED `id`, so four mutants
+    #                 lived. The stub now poisons BY INVERSION: every id except
+    #                 this drive's is a CD-ROM. Pinning ONE specific id does not
+    #                 work -- a wrong id simply misses it and still reads "not a
+    #                 CD-ROM", which is how the first attempt at this row failed.
+    #    wide      <- no fixture pushed heads or spt past 255, so the `>> 8` half
+    #                 of words 3 and 6 was never non-zero and could be replaced by
+    #                 a literal 0 undetected.
+    check     "wdc IDENTIFY: the identity row is present" \
+              "$(grep -c 'the right id' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the wide-geometry row is present" \
+              "$(grep -c 'high byte' "$WDCLOG")" "1"
 fi
 
 # ---- #406: the autodev.c generator ----------------------------------------------

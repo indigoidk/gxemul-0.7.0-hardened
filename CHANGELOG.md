@@ -4192,6 +4192,59 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-ninth round (#409) — #408's UB fix cost 148 seconds, and it poisoned one stub out of three
+
+A compile-and-measure pass built **246 mutants across five optimisation levels** against
+#408's thirteen rows, plus ASan and UBSan. It began by making measurement possible at all.
+
+### #408 shipped a 4,358× slowdown
+
+`sizeof(struct cpu)` is **60,821,568 bytes**. #408's `fake_cpu()` — the correct fix for the
+`NULL`-`cpu` undefined behaviour — memset it **on every call**, and the self-consistency
+oracle calls it 65,535 times: roughly **4 TB of memory traffic**. Measured, hoisting the
+zeroing to first-call-only:
+
+```
+shipped: 148,188 ms      hoisted: 34 ms      output byte-identical (cmp)
+```
+
+The detector detected exactly the same things either way. *The fix was right; doing it per
+call was not*, and nothing in #408 measured the cost of its own correctness fix.
+
+### One stub poisoned, two left answering questions nobody asked
+
+#408 poisoned `diskimage_getsize()` and wrote the reason into the file — *"a stub that answers
+correctly for an id nobody asked about is not a stub, it is a second implementation"* — then
+left `diskimage_is_a_cdrom()` and `diskimage_getname()` ignoring `id`. **Four mutants survived**
+(each of those two, against both a dropped `base_drive` and an off-by-one id). #408's commit
+message claims it closed `base_drive` "at all three call sites". **It closed one.**
+
+The `is_a_cdrom` case is reachable: a machine with a disk at one id and a CD-ROM at the next
+would make the disk announce itself ATAPI/removable.
+
+**Poisoning it required inversion, and the obvious construction failed.** Putting the CD-ROM at
+one specific id does not work — the correct id here is 3, so the dropped-`base_drive` mutant
+asks about id 1 and the off-by-one asks about id 4, and both simply *miss* the CD-ROM and still
+read "not a CD-ROM". Both survived the first attempt. The stub now answers **wrongly for every
+id except the expected one**, so any id arithmetic error flips word 0 to `0x8580`.
+
+### An out-of-bounds read that only ASan could see, closed with a row instead
+
+`base_drive` is a diskimage id, not an array index, and the per-drive arrays are `int cyls[2]`.
+A mutant indexing them as `[d->drive + d->base_drive]` reads element 2 of a two-element array —
+and **survived all five optimisation levels**, because nothing asserted that drive's geometry.
+Asserting it in `row_base_drive()` kills it without putting a sanitizer in the gate.
+
+### Two more measured gaps
+
+No fixture pushed heads or sectors-per-track past 255, so the `>> 8` half of words 3 and 6 was
+never non-zero and could be replaced by a literal `0` undetected; a wide-geometry row now
+carries `h=300`. And the `-Os` crash was **understated** — #408's message named `-O0` and `-O1`,
+but `NULL` `cpu` gives `O0=CRASH O1=CRASH O2=SURVIVED O3=SURVIVED Os=CRASH`.
+
+Gate 2 PASS, **88 checks** (was 86); 15 rows, and the whole detector now runs in about a
+second. Every mutant above is killed **by the row that names it**.
+
 ## One-hundred-and-forty-eighth round (#408) — the round that corrected stale citations committed the identical error, and the detector was relying on the optimiser
 
 #407's headline record was that #405's line citations had gone **stale by exactly +31 — the
