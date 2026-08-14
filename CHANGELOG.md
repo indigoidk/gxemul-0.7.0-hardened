@@ -4192,6 +4192,49 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-first round (#411) — the stopping condition #410 wrote could be satisfied to the letter while still shipping a false pass
+
+#410 declared `regress/diff_wdc_identify.c` done against a written condition, precisely so that
+"done" would be checkable rather than felt. A measure seat was then asked to **attack that
+condition**, and found three ways through it — one of which #410 already contained. This round
+repairs the condition itself. **No rows changed; the detector is comment-only here.**
+
+**1. The row-name requirement was written as history, not as a rule.** It appeared under *"what
+was true when this file was declared done"*, so a later round could satisfy the mandatory rule
+— cite a mutant re-run against the shipped row — while the kill actually came from an
+*unrelated* row. That is the #409 shape one level up. It is now stated as a requirement.
+
+**2. The survivor classification carried no obligation to demonstrate anything.** The three
+buckets were self-assigned prose, so any future round could retire an inconvenient survivor
+into "accepted gap" with one sentence and satisfy the condition completely. Each entry must now
+name **a row, a measured mutant result, or an explicit blocker with a reproduction**.
+
+**3. "Checked, not assumed" was doing the work of a test while being prose.** #410 used it for
+the no-stack-leak claim. Measured: deleting `diskimage_getname`'s return-value check — the
+mutant that would expose a leak — **survives green at all five optimisation levels**, because
+this file's own stub returns 1 unconditionally and no row can observe the branch. The phrase is
+now permitted only where a row or a measured mutant backs it.
+
+### Two classification entries were wrong on the reasoning, and both are corrected
+
+**The "unreachable" blocker was incomplete.** #410 named `chs_override` as the only route to
+heads/spt above 255. It is not: **`-d f:` sets the type to FLOPPY at any file size**, before the
+recalc, with no override at all. Measured against the real `diskimage_recalc_size` — `-d f:` on
+a 20 MB file would give spt **256**, on a 100 MB file **1280**. It is masked *today* only by the
+very defect (#113) named as its blocker, so **fixing the override arm alone will not re-close
+that bucket** — the `-d f:` route opens at the same moment. Timing right, mechanism wrong.
+
+**The stack-leak conclusion holds, but not for the stated reason.** `snprintf`'s
+NUL-termination is *irrelevant* on that path. What actually carries it: `diskimage_getname` does
+not write `buf` at all when it fails — it returns 0 without touching it — so the protection is
+the **caller's** return-value check falling through to a string literal; and the failure path is
+unreachable anyway, because `wdc_command` returns ABRT when `!diskimage_exist` and
+`diskimage_exist` uses the *identical* id/type predicate. The original wording licensed exactly
+the wrong refactor: *"it always NUL-terminates, so the caller's check is redundant."*
+
+16 rows, 0 failures, unchanged. This is the difference between a criterion that reads well and
+one that resists being gamed — and the file's own history is the argument for caring.
+
 ## One-hundred-and-fiftieth round (#410) — the wdc detector is DONE, and this is the written condition it is done against
 
 Four rounds went into `regress/diff_wdc_identify.c` — #405 built it, #407, #408 and #409 each

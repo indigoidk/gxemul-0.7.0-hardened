@@ -102,10 +102,29 @@
  *    - a known-detectable mutant is carried as a positive control, and build
  *      failures and signals are scored as FAULTS, never as detections.
  *
- *  THE RULE THAT WOULD HAVE STOPPED #409, and the one to keep:
+ *  THE MANDATORY RULES. #411 added the second and third after a measure seat
+ *  demonstrated that #410's condition COULD BE SATISFIED TO THE LETTER WHILE
+ *  STILL SHIPPING A FALSE PASS -- and that #410 already contained one.
  *
- *    *** EVERY CLAIM OF THE FORM "X WAS UNCOVERED, THIS ROW COVERS IT" MUST
- *    CITE A MUTANT RE-RUN AGAINST THE SHIPPED ROW, NOT THE DESIGNED ONE. ***
+ *    *** 1. EVERY CLAIM OF THE FORM "X WAS UNCOVERED, THIS ROW COVERS IT" MUST
+ *    CITE A MUTANT RE-RUN AGAINST THE SHIPPED ROW, NOT THE DESIGNED ONE, AND
+ *    THE KILL MUST NAME THE ROW. *** (#410 wrote the row-name half as HISTORY,
+ *    under "what was true when this file was declared done", so a later round
+ *    could cite a kill that actually came from an UNRELATED row -- the #409
+ *    shape, one level up. It is a requirement, not a past observation.)
+ *
+ *    *** 2. EVERY ENTRY IN THE SURVIVOR CLASSIFICATION BELOW MUST NAME EITHER A
+ *    ROW, A MEASURED MUTANT RESULT, OR AN EXPLICIT BLOCKER WITH A REPRODUCTION.
+ *    *** Self-assigned prose is not a classification. Without this, any future
+ *    round can retire an inconvenient survivor into "accepted gap" with one
+ *    sentence and satisfy the condition completely.
+ *
+ *    *** 3. "CHECKED, NOT ASSUMED" MAY ONLY BE WRITTEN WHERE A ROW OR A MEASURED
+ *    MUTANT BACKS IT. *** #410 used that phrase for the no-stack-leak claim; the
+ *    corresponding mutant -- deleting diskimage_getname's return-value check --
+ *    SURVIVES GREEN AT ALL FIVE OPTIMISATION LEVELS, because this file's own
+ *    stub returns 1 unconditionally and no row can observe the branch. The
+ *    phrase was doing the work of a test while being prose.
  *
  *  #409 added a row named "geometry words carry their high byte" and gave it
  *  s = 17, so word 6's high byte stayed permanently zero while the row's name,
@@ -117,17 +136,37 @@
  *  that makes "done" checkable instead of hopeful. Roughly a dozen mutants
  *  survive the 16 rows, and NONE is guest-visible on a default configuration:
  *    (a) EQUIVALENT      -- /512 rewritten as >>9; no observable difference.
- *    (b) UNREACHABLE     -- heads/spt above 255 require chs_override, i.e. the
- *                           `-d gH;S` path, WHICH IS ITSELF BROKEN (queue #113
- *                           yields a zero-capacity disk). Blocker named and
- *                           filed; these become reachable when #113 lands.
+ *    (b) UNREACHABLE     -- heads/spt above 255. #410 named chs_override as the
+ *                           blocker; #411 CORRECTS THAT REASON, which was
+ *                           INCOMPLETE. `-d f:` sets the type to FLOPPY at ANY
+ *                           file size, BEFORE the recalc and with no override at
+ *                           all. Measured against the real diskimage_recalc_size:
+ *                           `-d f:` on a 20 MB file would give spt 256, and on a
+ *                           100 MB file 1280 -- both above 255. It is masked
+ *                           TODAY only by the very defect (#113) named as the
+ *                           blocker, so fixing the override arm alone will NOT
+ *                           re-close this bucket: the `-d f:` route opens at the
+ *                           same moment. Timing right, mechanism wrong.
  *    (c) ACCEPTED GAP    -- six unasserted constant fields (words 47/51/64/67/
  *                           68), two identify_struct memset variants already
  *                           covered by DEVINIT(wdc)'s own memset, and two
- *                           serial/firmware placements. Checked, not assumed:
- *                           diskimage_getname is snprintf, which always
- *                           NUL-terminates, so the padding loop always finds a
- *                           NUL and there is NO stack leak.
+ *                           serial/firmware placements.
+ *                           #411 CORRECTS #410's stack-leak reasoning. The
+ *                           CONCLUSION holds -- there is no leak -- but not for
+ *                           the stated reason, and snprintf's NUL-termination is
+ *                           IRRELEVANT on that path. The two facts that actually
+ *                           carry it: diskimage_getname does not write buf at all
+ *                           when it fails (it returns 0 without touching it), so
+ *                           what prevents the leak is the CALLER's return-value
+ *                           check falling through to a string literal; and the
+ *                           failure path is unreachable anyway, because
+ *                           wdc_command returns ABRT when !diskimage_exist and
+ *                           diskimage_exist uses the IDENTICAL id/type predicate
+ *                           as diskimage_getname. The original wording licensed
+ *                           exactly the wrong refactor -- "it always
+ *                           NUL-terminates, so the caller's check is redundant".
+ *                           NO ROW BACKS THIS: measured, deleting that check
+ *                           survives green at all five optimisation levels.
  *
  *  A future round may reopen this file, but it should first say which of those
  *  three buckets it is emptying, and why that outranks the guest-visible queue.
