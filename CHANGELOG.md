@@ -4192,6 +4192,93 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-sixth round (#406) — a word in a comment broke the build, and the comment is still there on purpose
+
+The first full battery run since #392 came back **`REGRESS_FAIL`**. Gate 1 failed 8 of 18
+checks, no binary was published, and **eleven downstream gates therefore skipped** — so the
+coverage debt that run was meant to pay is still open. All 358 pmax and 363 arc errors were in
+one file, `autodev.c`, with **zero** errors anywhere else.
+
+**The cause was a comment I wrote in the previous-but-one round.** `makeautodev.sh` scrapes
+device names out of the sources:
+
+```sh
+C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+for B in $C; do
+	printf "int devinit_$B(struct devinit *);\n" >> "$AD"
+```
+
+`for B in $C` is **unquoted**, so the shell applies word splitting *and pathname expansion*.
+`dev_rs5c313.c:144` is a prose line in #404's own record comment — `" *  gmtime being the
+right choice and consistent tree-wide, the DEVINIT defaults,"`. It matches `grep DEVINIT`; it
+has no `(`, and `cut` passes a line through unchanged when its delimiter is absent; so its
+leading `*` survived both cuts and became a glob over the whole directory.
+
+**319 declarations instead of 77.** 229 of the extras carry a `.` — `Makefile.skel`,
+`bus_isa.o`, and even this script's own in-flight temp file `autodev.c.new.NNNN` — and are
+syntax errors. The other 14 are valid C identifiers (`Makefile`, `README`, `fonts`, and the
+comment's own words) which would have failed at link time instead.
+
+**It hid for exactly two commits, and the reason is worth recording.** `autodev.c` is a
+*tracked generated file* and the committed copy is clean. The corruption only exists once the
+generator runs, which needed the make rule to fire — and it fired because #405 edited a
+`dev_*.c`. This is the tree's own "regenerate before believing a generated file" rule biting
+from the opposite direction: the stale artifact **concealed** a live break. #404 armed it,
+#405 tripped it.
+
+### The fix, and why it has two halves
+
+Anchored the four scrapes to `^DEVINIT(` / `^PCIINIT(`, and bracketed each inner loop with
+`set -f`. **These are not alternatives.** Measured: anchoring is what removes the prose words;
+noglob alone still emits all 14 of them and merely moves the failure from parse to link.
+
+`set -f` is scoped to the inner loops rather than set once at the top of the script, because a
+script-wide noglob would stop `for a in dev_*.c` from expanding at all — which fails
+*silently*, generating an empty device table.
+
+**Anchoring is exact, not a heuristic, and this was verified rather than assumed.** All 77
+`^DEVINIT(` sites and all 28 `^PCIINIT(` sites sit at column 1; none is indented and none sits
+under a nearby `#if`. The anchored name list is set- **and order-**identical to the committed
+`autodev.c` in both trees, and the hardened generator's output is **byte-identical** to the
+committed `src/devices/autodev.c`. So the change provably cannot alter the shipped device
+table.
+
+**`dev_rs5c313.c:144` was deliberately NOT reworded.** Rewording it was the obvious move and
+it is the wrong one: it would make the hardening deletable in silence — revert the generator
+and everything stays green. Left in place, the live tree *is* the hostile input, so the mutant
+lane below genuinely fails the moment the anchor goes.
+
+### The detector, and the mutant that would have slipped through
+
+`regress/diff_autodev_gen.sh` (8 rows, wired into gate 2, now 81 checks) runs the **real**
+generator in a scratch copy — never in the repo, which would write two tracked files — and
+derives its expectation from the declarations rather than from the committed artifact, since a
+tracked generated file is not evidence about its own generator.
+
+*** The load-bearing row is the ORDERED NAME LIST, not a character check, and the mutant lane
+proves why. *** Carried as a named case is the realistic half-repair — keep `set -f`, drop the
+anchor — which emits **27 extra names of which 26 are dotless**. Those are valid C identifiers
+that a "no identifier contains a stray character" row waves straight through. The full revert
+emits 265 extra, 24 dotless. Order is asserted alongside the set because `device_register()`
+order is the order devices are offered to a machine.
+
+A third mutant — anchor kept, noglob dropped — is **recorded as surviving** in an unasserted
+note rather than dressed up as a kill, because a valid C declaration cannot contain a glob
+character and a row that passes either way proves nothing.
+
+**Landing note, because a green row nearly hid this:** `gate_build.sh:95` syncs only `*.c`,
+`*.h` and `*.cc` into the compile trees, so `makeautodev.sh` does **not** travel. Editing it in
+the repo alone would have left both build trees running the old generator while "source tree
+fully synced into compile tree" stayed green. It was hand-propagated to `est/` and to both
+compile trees, and the corrupt `autodev.c` was **deleted** from each rather than overwritten
+from the tracked copy — overwriting would have reinstated exactly the stale artifact that hid
+the break.
+
+Filed, not fixed here: the `COMMENT` loop uses a filename as a `printf` **format string**
+(`printf "$a "`); `rm -f .index` may race under `make -j`; and `src/machines/makeautomachine.sh`
+plus `experiments/make_index.sh` share the same unquoted-scrape idiom, with zero live triggers
+today.
+
 ## One-hundred-and-forty-fifth round (#405) — the disk told the guest the wrong size, and the test that proves it had to be built backwards
 
 `wdc_initialize_identify_struct()` packs the ATA IDENTIFY capacity into eight byte

@@ -373,5 +373,48 @@ else
               "$(grep -c 'packing anchor' "$WDCLOG")" "1"
 fi
 
+# ---- #406: the autodev.c generator ----------------------------------------------
+# A prose mention of "DEVINIT" in a comment used to reach the generated C. It cost
+# 358 compiler errors, no binary, gate 1 red and eleven gates skipped -- from one
+# comment line, which is still in the tree DELIBERATELY (rewording it would have
+# made the hardening deletable in silence).
+#
+# The driver runs the REAL generator in a scratch copy, so it cannot drift from
+# what ships, and it carries its own mutant lane. The load-bearing row is the
+# ORDERED NAME LIST, not a character check: measured, the half-fix that keeps
+# noglob but drops the anchor emits 27 extra names of which 26 are DOTLESS --
+# valid C identifiers that a "no bad characters" row waves straight through, and
+# that fail at link time instead of parse time.
+AGLOG=$LOGDIR/diff_autodev_gen.log
+if [ ! -x "$HERE/diff_autodev_gen.sh" ]; then
+    check "autodev generator: driver is executable" "no" "yes"
+else
+    "$HERE/diff_autodev_gen.sh" > "$AGLOG" 2>&1
+    sed 's/^/       /' "$AGLOG"
+    check     "autodev generator: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$AGLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "autodev generator: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$AGLOG" | grep -oE '^[0-9]+')" 8
+    check     "autodev generator: offline verdict" \
+              "$(grep -c 'AUTODEV_GEN_PASS' "$AGLOG")" "1"
+    #  Named rows. The two mutants are what make the ordered-list assertion
+    #  load-bearing rather than decorative, so deleting either must be loud.
+    check     "autodev generator: the ordered devinit list is asserted" \
+              "$(grep -c 'devinit names == the .DEVINIT( declarations, in order' "$AGLOG")" "1"
+    check     "autodev generator: the full-revert mutant is present" \
+              "$(grep -c 'MUTANT killed: full revert' "$AGLOG")" "1"
+    check     "autodev generator: the HALF-FIX mutant is present" \
+              "$(grep -c 'MUTANT killed: noglob only' "$AGLOG")" "1"
+    #  If somebody rewords dev_rs5c313.c:144 the mutant lane stops proving
+    #  anything, so the driver asserts that live input still exists and this row
+    #  makes that assertion visible at gate level too.
+    check     "autodev generator: a live off-anchor mention still exists" \
+              "$(grep -c 'a live off-anchor DEVINIT mention still exists' "$AGLOG")" "1"
+    #  No mutant may SURVIVE. Named separately from the failure count because a
+    #  survivor is a statement about the DETECTOR, not about the generator.
+    check     "autodev generator: no mutant survives" \
+              "$(grep -c 'SURVIVES' "$AGLOG")" "0"
+fi
+
 gate_end
 exit $?

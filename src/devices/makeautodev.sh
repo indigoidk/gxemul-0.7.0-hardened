@@ -52,26 +52,59 @@ for a in *.c; do
 	fi
 done
 
+#  #406: ANCHOR the scrape, and SUPPRESS pathname expansion around the loops.
+#
+#  The four loops below used `grep DEVINIT` / `grep PCIINIT` UNANCHORED and then
+#  iterated the result with an UNQUOTED `for B in $C`, which the shell subjects
+#  to word splitting AND pathname expansion.  So any prose mention of the macro
+#  name -- in a comment, anywhere in the file -- reached the generated output.
+#  And because `cut` passes a line through unchanged when its delimiter is
+#  absent, a comment line's leading `*` survived both cuts and became a glob
+#  that expanded to the entire directory listing.
+#
+#  MEASURED, triggered by one prose line (dev_rs5c313.c:144, " *  ... the
+#  DEVINIT defaults,"): 319 declarations instead of 77.  229 of the extras carry
+#  a `.` in the name -- Makefile.skel, bus_isa.o, even this script's own
+#  in-flight temp file autodev.c.new.NNNN -- and are syntax errors.  The other
+#  14 are valid C identifiers (Makefile, README, fonts, and the comment's own
+#  words), so they fail at LINK time instead.  358 compiler errors, no binary.
+#
+#  *** BOTH HALVES ARE LOAD-BEARING, they are not alternatives.  Anchoring is
+#  what removes the prose words; `set -f` alone would leave all 14 of them and
+#  merely change the failure from a parse error to an undefined symbol. ***
+#
+#  Anchoring is exact rather than a heuristic: all 77 `^DEVINIT(` sites and all
+#  28 `^PCIINIT(` sites sit at column 1 (none indented, none under a nearby
+#  #if), and the anchored name list is set- AND order-identical to the committed
+#  autodev.c in both trees.  So this cannot change the shipped device table.
+#
+#  `set -f` is bracketed around each inner loop instead of being set once at the
+#  top of the script, because a script-wide noglob would stop `for a in dev_*.c`
+#  from expanding at all -- which would silently generate an EMPTY device table.
 printf "4"
 for a in dev_*.c; do
-	B=`grep DEVINIT $a`
+	B=`grep '^DEVINIT(' $a`
 	if [ z"$B" != z ]; then
-		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+		C=`grep '^DEVINIT(' $a | cut -d \( -f 2|cut -d \) -f 1`
+		set -f
 		for B in $C; do
 			printf "int devinit_$B(struct devinit *);\n" >> "$AD"
 		done
+		set +f
 	fi
 done
 
 printf "3"
 for a in bus_pci.c; do
-	B=`grep PCIINIT $a`
+	B=`grep '^PCIINIT(' $a`
 	if [ z"$B" != z ]; then
-		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+		C=`grep '^PCIINIT(' $a | cut -d \( -f 2|cut -d \) -f 1`
+		set -f
 		for B in $C; do
 			printf "void pciinit_$B(struct machine *, " >> "$AD"
 			printf "struct memory *, struct pci_device *);\n" >> "$AD"
 		done
+		set +f
 	fi
 done
 
@@ -79,25 +112,29 @@ cat autodev_middle.c >> "$AD"
 
 printf "2"
 for a in dev_*.c; do
-	B=`grep DEVINIT $a`
+	B=`grep '^DEVINIT(' $a`
 	if [ z"$B" != z ]; then
-		C=`grep DEVINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+		C=`grep '^DEVINIT(' $a | cut -d \( -f 2|cut -d \) -f 1`
+		set -f
 		for B in $C; do
 			printf "\tdevice_register(\""$B"\"," >> "$AD"
 			printf " devinit_$B);\n" >> "$AD"
 		done
+		set +f
 	fi
 done
 
 printf "1"
 for a in bus_pci.c; do
-	B=`grep PCIINIT $a`
+	B=`grep '^PCIINIT(' $a`
 	if [ z"$B" != z ]; then
-		C=`grep PCIINIT $a | cut -d \( -f 2|cut -d \) -f 1`
+		C=`grep '^PCIINIT(' $a | cut -d \( -f 2|cut -d \) -f 1`
+		set -f
 		for B in $C; do
 			printf "\tpci_register(\""$B"\"," >> "$AD"
 			printf " pciinit_$B);\n" >> "$AD"
 		done
+		set +f
 	fi
 done
 
