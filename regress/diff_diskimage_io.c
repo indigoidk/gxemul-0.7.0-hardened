@@ -182,10 +182,34 @@ static void section_write_return(void)
 	signal(SIGXFSZ, SIG_IGN);
 	getrlimit(RLIMIT_FSIZE, &old);
 
-	/*  --- case A: the write lands PARTIALLY (short count) ---  */
+	/*
+	 *  --- case A: the write lands PARTIALLY (short count) ---
+	 *
+	 *  *** #417: THE OFFSET MOVED FROM 8192 TO 4096, AND THAT IS THE WHOLE
+	 *  POINT OF THIS EDIT.
+	 *
+	 *  #416 added a capacity bound to diskimage__internal_access().  These
+	 *  two rows wrote at offset 8192 on an 8192-byte file -- exactly AT the
+	 *  backed extent -- so the BOUND refused them before fwrite() was ever
+	 *  called.  They kept passing and stopped testing anything: measured,
+	 *  deleting #416's entire short-write check left all 31 rows green, and
+	 *  the evidence line these rows print changed from "errno 27" to
+	 *  "errno 0" without anyone noticing.
+	 *
+	 *  Call the pattern COLLATERAL VACUITY: adding an EARLIER rejection
+	 *  silently disarms every row that depended on reaching a LATER
+	 *  failure.  Nothing turns red, no assertion changes, the coverage just
+	 *  evaporates.  The same commit that added the bound was the one whose
+	 *  CHANGELOG described this exact shape happening to a rejected design.
+	 *
+	 *  The write now lands at 4096..5120, comfortably INSIDE the 8192-byte
+	 *  extent, and RLIMIT_FSIZE is lowered to 4352 so the filesystem -- not
+	 *  the bound -- is what truncates it, absorbing 256 of the 1024 bytes.
+	 *  ***
+	 */
 	snprintf(path, sizeof(path), "%s/w2.img", WORK);
 	mkfile(path, 8192, 0x22);
-	lim = old; lim.rlim_cur = 8192 + 256;
+	lim = old; lim.rlim_cur = 4096 + 256;
 	if (setrlimit(RLIMIT_FSIZE, &lim) != 0) { perror("setrlimit"); faults++; return; }
 
 	mkdisk(&d, path, "r+", 1);
@@ -193,24 +217,40 @@ static void section_write_return(void)
 	memset(buf, 0xBB, 1024);
 	before = fsize(path);
 	errno = 0;
-	res = diskimage__internal_access(&d, 1, 8192, buf, 1024);
+	res = diskimage__internal_access(&d, 1, 4096, buf, 1024);
 	after = fsize(path);
 	printf("        (evidence: file %lld -> %lld bytes of the 1024 asked, errno %d)\n",
 	    before, after, errno);
 	check("[PROOF] short write (256 of 1024 absorbed) returns failure", res, 0);
 	fclose(d.f);
 
-	/*  --- case B: the write lands NOT AT ALL (zero count) ---  */
+	/*  --- case B: the write lands NOT AT ALL (zero count) ---
+	    #417: same relocation as case A, and for the same reason -- the
+	    rlimit is set exactly at the write's start offset, so nothing can be
+	    absorbed, while the write itself is well inside the backed extent
+	    and therefore reaches fwrite() rather than being refused early.  */
+	/*  ORDER MATTERS AND IT BIT ME: mkfile() FIRST, rlimit SECOND.  With the
+	    rlimit lowered first, mkfile()'s own writes are truncated too, the
+	    image ends up 4096 bytes instead of 8192, and the write at 4096 sits
+	    at the extent again -- the very masquerade this edit removes,
+	    reintroduced by a different route.  The evidence line caught it:
+	    "file 4096 -> 4096 ... errno 0".  */
 	snprintf(path, sizeof(path), "%s/w3.img", WORK);
-	lim = old; lim.rlim_cur = 8192;
-	setrlimit(RLIMIT_FSIZE, &lim);
+	/*  RESTORE the rlimit before creating the fixture: case A left it at
+	    4352, which truncated this mkfile() to 4352 bytes and put the write
+	    back at the extent -- the same masquerade a third time, now caused
+	    by a LEFTOVER limit rather than an early one.  The evidence line is
+	    what exposed each round of this: "file 4352 -> 4352 ... errno 0".  */
+	setrlimit(RLIMIT_FSIZE, &old);
 	mkfile(path, 8192, 0x33);
+	lim = old; lim.rlim_cur = 4096;
+	setrlimit(RLIMIT_FSIZE, &lim);
 	mkdisk(&d, path, "r+", 1);
 	setvbuf(d.f, NULL, _IONBF, 0);
 	memset(buf, 0xCC, 1024);
 	before = fsize(path);
 	errno = 0;
-	res = diskimage__internal_access(&d, 1, 8192, buf, 1024);
+	res = diskimage__internal_access(&d, 1, 4096, buf, 1024);
 	after = fsize(path);
 	printf("        (evidence: file %lld -> %lld bytes of the 1024 asked, errno %d)\n",
 	    before, after, errno);
@@ -667,6 +707,175 @@ static void section_boundary(void)
 }
 
 
+/*  ------------------------------------------------------------------  */
+/*  SECTION H (#417): the four regions a pass-2 mutation sweep found       */
+/*  UNREACHED after #416 shipped.  Each closed a MEASURED survivor.        */
+
+static void section_pass2_gaps(void)
+{
+	char path[256];
+	struct diskimage d;
+	struct machine *m;
+	struct cpu *c;
+	struct scsi_transfer xfer;
+	unsigned char cmd[16];
+	unsigned char buf[1024];
+	int res;
+	long long before;
+
+	printf("\nSECTION H -- regions a pass-2 mutation sweep found unreached\n");
+
+	/*
+	 *  H1. AN UNALIGNED BACKED EXTENT.
+	 *
+	 *  Every other fixture here is a whole number of 512-byte blocks, so
+	 *  `d->total_size` -> `d->total_size + 1` was MEASURED to survive the
+	 *  entire suite: the one byte of slack is only reachable when
+	 *  total_size % 512 != 0.  It falsifies the round's headline property
+	 *  -- "a guest can never grow the host file by even one byte" --
+	 *  literally by one byte.
+	 */
+	snprintf(path, sizeof(path), "%s/h1.img", WORK);
+	mkfile(path, 10240 - 1, 0x44);		/*  total_size % 512 == 511  */
+	mkdisk(&d, path, "r+", 1);
+	before = fsize(path);
+	memset(buf, 0x55, sizeof(buf));
+	res = diskimage__internal_access(&d, 1, 19 * 512, buf, 512);
+	check("[PROOF] WRITE ending 1 byte past an UNALIGNED extent is refused",
+	    res, 0);
+	check("[PROOF] ... and the host file did not grow by even one byte",
+	    fsize(path), before);
+	fclose(d.f);
+
+	/*
+	 *  H2. A NEGATIVE OFFSET.
+	 *
+	 *  Dropping `offset < 0` from the bound survived every other row.  It
+	 *  is reachable: diskimage_access()'s own negative guard only fires
+	 *  when override_base_offset != 0, and #204 records a guest seeking a
+	 *  flat CD/ISO handle to 0xffffffff.
+	 */
+	snprintf(path, sizeof(path), "%s/h2.img", WORK);
+	mkfile(path, 10240, 0x66);
+	mkdisk(&d, path, "r+", 1);
+	memset(buf, 0xEE, sizeof(buf));
+	res = diskimage__internal_access(&d, 0, -4096, buf, 512);
+	check("[PROOF] READ at a NEGATIVE offset is refused", res, 0);
+	check("[PROOF] ... and still zero-fills the caller's buffer",
+	    buf[0] == 0 && buf[511] == 0, 1);
+	res = diskimage__internal_access(&d, 1, -4096, buf, 512);
+	check("[PROOF] WRITE at a NEGATIVE offset is refused", res, 0);
+	fclose(d.f);
+
+	/*
+	 *  H3. A ZERO-BYTE IMAGE IS REFUSED IN BOTH DIRECTIONS.
+	 *
+	 *  This is the round's one deliberate behaviour change and nothing
+	 *  asserted it either way.  Shipped code allowed the write and grew the
+	 *  file.  No escape hatch was added on purpose: a
+	 *  `nr_of_logical_blocks > 0` exemption is the same shape #414 measured
+	 *  letting a zero-block disk skip a bound entirely, so this row also
+	 *  pins that no future round reintroduces it.
+	 *
+	 *  Note it is UNREADABLE as well as unwritable -- the record said only
+	 *  "unwritable", which understated it.
+	 */
+	snprintf(path, sizeof(path), "%s/h3.img", WORK);
+	mkfile(path, 0, 0);
+	mkdisk(&d, path, "r+", 1);
+	res = diskimage__internal_access(&d, 1, 0, buf, 512);
+	check("[PROOF] WRITE to a 0-byte image is refused", res, 0);
+	check("[PROOF] ... and the 0-byte file stays 0 bytes", fsize(path), 0);
+	res = diskimage__internal_access(&d, 0, 0, buf, 512);
+	check("[PROOF] READ from a 0-byte image is refused too", res, 0);
+	fclose(d.f);
+
+	/*
+	 *  H4. THE SENSE PATH -- NO ROW ISSUED REQUEST SENSE AT ALL.
+	 *
+	 *  Three separate one-character mutants therefore survived: masking the
+	 *  key with 0x00, dropping the latch, and dropping the clear.  A CHECK
+	 *  CONDITION whose sense says "no sense" tells a guest that something
+	 *  failed and then that nothing is wrong, which ARC can read as
+	 *  success -- so the status and its sense are one mechanism and must be
+	 *  tested together.
+	 */
+	snprintf(path, sizeof(path), "%s/h4.img", WORK);
+	mkfile(path, 10240, 0x77);		/*  20 backed blocks  */
+	mkdisk(&d, path, "r+", 1);
+	m = mkmachine(&d); c = mkcpu(m);
+
+	/*  A READ far past capacity -> CHECK CONDITION.  */
+	memset(cmd, 0, sizeof(cmd));
+	cmd[0] = SCSICMD_READ_10;
+	cmd[2] = 0x00; cmd[3] = 0x0f; cmd[4] = 0x42; cmd[5] = 0x40;  /* LBA 1e6 */
+	cmd[8] = 1;
+	xfer_init(&xfer, cmd, 10);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	check("[CONTROL] the failing READ really did set CHECK CONDITION",
+	    xfer.status[0], 0x02);
+	xfer_free(&xfer);
+
+	/*  ... and REQUEST SENSE must now say WHY.  */
+	memset(cmd, 0, sizeof(cmd));
+	cmd[0] = SCSICMD_REQUEST_SENSE;
+	cmd[4] = 18;
+	xfer_init(&xfer, cmd, 6);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	printf("        (evidence: key=0x%02x asc=0x%02x ascq=0x%02x)\n",
+	    xfer.data_in[2], xfer.data_in[12], xfer.data_in[13]);
+	check("[PROOF] REQUEST SENSE reports ILLEGAL REQUEST after the failure",
+	    xfer.data_in[2] & 0x0f, 0x05);
+	check("[PROOF] ... with LBA OUT OF RANGE as the additional code",
+	    xfer.data_in[12], 0x21);
+	xfer_free(&xfer);
+
+	/*  Sense is "current errors" and is CONSUMED by the read: a second
+	    query must not report the same failure again.  */
+	memset(cmd, 0, sizeof(cmd));
+	cmd[0] = SCSICMD_REQUEST_SENSE;
+	cmd[4] = 18;
+	xfer_init(&xfer, cmd, 6);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	check("[PROOF] a second REQUEST SENSE reports the sense CLEARED",
+	    xfer.data_in[2] & 0x0f, 0x00);
+	xfer_free(&xfer);
+
+	/*
+	 *  And a command that SUCCEEDS must retire the latch.  #416 latched
+	 *  without clearing on success, so a refused READ followed by a GOOD
+	 *  READ made the next REQUEST SENSE blame the command that worked --
+	 *  a regression #416 introduced and #417 fixes.
+	 */
+	memset(cmd, 0, sizeof(cmd));
+	cmd[0] = SCSICMD_READ_10;
+	cmd[2] = 0x00; cmd[3] = 0x0f; cmd[4] = 0x42; cmd[5] = 0x40;
+	cmd[8] = 1;
+	xfer_init(&xfer, cmd, 10);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	xfer_free(&xfer);
+
+	memset(cmd, 0, sizeof(cmd));		/*  now a GOOD read of LBA 0  */
+	cmd[0] = SCSICMD_READ_10;
+	cmd[8] = 1;
+	xfer_init(&xfer, cmd, 10);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	check("[CONTROL] the following in-range READ is GOOD", xfer.status[0], 0x00);
+	xfer_free(&xfer);
+
+	memset(cmd, 0, sizeof(cmd));
+	cmd[0] = SCSICMD_REQUEST_SENSE;
+	cmd[4] = 18;
+	xfer_init(&xfer, cmd, 6);
+	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	check("[PROOF] a SUCCESSFUL command retires the latched sense",
+	    xfer.data_in[2] & 0x0f, 0x00);
+	xfer_free(&xfer);
+
+	fclose(d.f); free(c); free(m);
+}
+
+
 static void section_real_images(void)
 {
 	static const char *imgs[] = {
@@ -784,6 +993,7 @@ int main(int argc, char *argv[])
 	section_read_capacity();
 	section_roundup_gap();
 	section_boundary();
+	section_pass2_gaps();
 	section_real_images();
 
 	printf("\n%d rows, %d failures, %d faults\n", rows, failures, faults);

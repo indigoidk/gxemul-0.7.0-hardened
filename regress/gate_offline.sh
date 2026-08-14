@@ -501,7 +501,7 @@ else
     #  28 rows to be deleted silently -- a minimum the current value exceeds
     #  tenfold is decoration, not evidence.
     check_min "diskimage I/O: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$IOLOG" | grep -oE '^[0-9]+')" 31
+              "$(grep -oE '^[0-9]+ rows' "$IOLOG" | grep -oE '^[0-9]+')" 45
     #  Named so that deleting the zero-block row is visible rather than silent.
     check     "diskimage I/O: the zero-block capacity row is present" \
               "$(grep -c 'zero-block disk does not announce' "$IOLOG")" "1"

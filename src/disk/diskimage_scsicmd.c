@@ -172,8 +172,21 @@ void scsi_transfer_allocbuf(size_t *lenp, unsigned char **pp, size_t want_len,
  *  to default values (msg_in = 0x00, status = 0x00).
  */
 static void diskimage__return_default_status_and_message(
-	struct scsi_transfer *xferp)
+	struct scsi_transfer *xferp, struct diskimage *d)
 {
+	/*
+	 *  #417: a command that SUCCEEDS clears any latched sense.
+	 *
+	 *  #416 added the latch but not this, which was a regression it
+	 *  introduced: a refused READ followed by a GOOD READ left key 0x05
+	 *  latched, so the next REQUEST SENSE attributed "logical block
+	 *  address out of range" to the command that had just worked.  Before
+	 *  #416 that query returned 0x00.  Sense describes the LAST command,
+	 *  so success must retire it.
+	 */
+	if (d != NULL)
+		d->sense_key = d->sense_asc = d->sense_ascq = 0;
+
 	scsi_transfer_allocbuf(&xferp->status_len, &xferp->status, 1, 0);
 	xferp->status[0] = 0x00;
 	scsi_transfer_allocbuf(&xferp->msg_in_len, &xferp->msg_in, 1, 0);
@@ -309,7 +322,7 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 		    diskimage_types[type], id);
 
 		// TODO: How to return suitable error?
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		xferp->status[0] = 0x02;	// ?
 		return 0;
 	}
@@ -340,7 +353,7 @@ if (xferp->cmd_len > 7 && xferp->cmd[5] == 0x11)
 			    "WARNING: TEST_UNIT_READY with cmd[1]=0x%02x"
 			    " not yet implemented", (int)xferp->cmd[1]);
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_INQUIRY:
@@ -452,7 +465,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			}
 		}
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSIBLOCKCMD_READ_CAPACITY:
@@ -528,7 +541,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		xferp->data_in[6] = (d->logical_block_size >> 8) & 255;
 		xferp->data_in[7] = d->logical_block_size & 255;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_MODE_SENSE:
@@ -587,7 +600,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		xferp->data_in[q+7] = d->logical_block_size & 255;
 		q += 8;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 
 		/*  descriptors, 8 bytes (each)  */
 
@@ -738,7 +751,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		if (size > SCSI_MAX_XFER_BYTES) {
 			fatal("[ SCSI READ: refusing oversized transfer, "
 			    "%lli bytes ]\n", (long long) size);
-			diskimage__return_default_status_and_message(xferp);
+			diskimage__return_default_status_and_message(xferp, d);
 			xferp->status[0] = 0x02;	/*  CHECK CONDITION  */
 			break;
 		}
@@ -753,7 +766,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		debug(" READ  ofs=%lli size=%i\n", (long long)ofs, (int)size);
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 
 		d->filemark = 0;
 
@@ -845,7 +858,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		if (size > SCSI_MAX_XFER_BYTES) {
 			fatal("[ SCSI WRITE: refusing oversized transfer, "
 			    "%lli bytes ]\n", (long long) size);
-			diskimage__return_default_status_and_message(xferp);
+			diskimage__return_default_status_and_message(xferp, d);
 			xferp->status[0] = 0x02;	/*  CHECK CONDITION  */
 			break;
 		}
@@ -874,7 +887,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			diskimage__return_check_condition(xferp, d,
 			    0x03, 0x0c, 0x00);	/*  MEDIUM ERROR, WRITE ERROR  */
 		else
-			diskimage__return_default_status_and_message(xferp);
+			diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_SYNCHRONIZE_CACHE:
@@ -892,7 +905,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		else
 			fatal("[ SYNCHRONIZE_CACHE: no open file to sync! ]\n");
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_START_STOP_UNIT:
@@ -906,7 +919,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 
 		/*  TODO: actualy care about cmd[]  */
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_REQUEST_SENSE:
@@ -959,7 +972,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		xferp->data_in[7] = retlen - 7;	/*  additional sense length  */
 		/*  TODO  */
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_READ_BLOCK_LIMITS:
@@ -992,7 +1005,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			xferp->data_in[5] =  min_limit        & 255;
 		}
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_REWIND:
@@ -1019,7 +1032,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		d->tape_filenr = 0;
 		d->filemark = 0;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_SPACE:
@@ -1071,7 +1084,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			    xferp->cmd[1] & 7);
 		}
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICDROM_READ_SUBCHANNEL:
@@ -1108,7 +1121,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		xferp->data_in[6] = (d->logical_block_size >> 8) & 255;
 		xferp->data_in[7] = d->logical_block_size & 255;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICDROM_READ_TOC:
@@ -1139,7 +1152,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		xferp->data_in[7] = 0x00;	/*  Reserved  */
 		/*  8..11 = absolute CDROM address  */
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICDROM_READ_DISCINFO:
@@ -1167,7 +1180,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		for (size_t j=16; j<=23; j++)
 			xferp->data_in[j] = 0xff;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICDROM_READ_TRACKINFO:
@@ -1212,7 +1225,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		for (size_t k=28; k<=35; k++)
 			xferp->data_in[k] = 0;
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_MODE_SELECT:
@@ -1253,7 +1266,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 	    a controller can supply a shorter DATA OUT buffer, so verify it is
 	    present and >= 12 bytes before indexing it.  */
 	if (xferp->data_out == NULL || xferp->data_out_len < 12) {
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 	}
 
@@ -1295,14 +1308,14 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		}
 
 		debug(" ]\n");
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_PREVENT_ALLOW_REMOVE:
 		debug("[ SCSI 0x%02x Prevent/allow medium removal: "
 		    "TODO ]\n", xferp->cmd[0]);
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case 0xbd:
@@ -1331,7 +1344,7 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		scsi_transfer_allocbuf(&xferp->data_in_len,
 		    &xferp->data_in, retlen, 1);
 
-		diskimage__return_default_status_and_message(xferp);
+		diskimage__return_default_status_and_message(xferp, d);
 
 		break;
 

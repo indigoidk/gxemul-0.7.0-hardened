@@ -4192,6 +4192,81 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-sixth round (#417) — #416's own bound disarmed the rows that tested it, and its sense latch outlived the failure it described
+
+Two defects in what #416 shipped, both found by a pass-2 mutation sweep on the committed diff, and
+both of a kind that leaves everything green.
+
+### The bound silently disarmed three of its own tests — call it COLLATERAL VACUITY
+
+#416 added a capacity check at the top of `diskimage__internal_access()`. Three rows in
+`diff_diskimage_io.c` wrote at offset **8192 on an 8192-byte file** — exactly *at* the backed extent
+— so the new bound refused them **before `fwrite()` was ever called**. They had been built to prove
+that a short or failed write is reported, using `RLIMIT_FSIZE` to make the store refuse the bytes.
+After the bound they proved nothing, and nothing went red.
+
+**Measured: deleting #416's entire short-write check left all 31 rows green.** That check is the one
+standing between a partial write and silent data loss, and it shipped untested.
+
+*The rows had been announcing this in their own output.* Each prints an evidence line, and it had
+changed from `errno 27` (EFBIG — the store refusing) to `errno 0` (nothing attempted). **A row that
+prints evidence it does not assert will tell you it is broken and be ignored.**
+
+The fixtures now write at 4096 inside an 8192-byte extent, with the rlimit doing the truncating.
+Getting there took three attempts, and each failure reproduced the same masquerade by a different
+route — the rlimit lowered *before* `mkfile()` truncated the fixture itself; then case A's rlimit
+*leaking* into case B and truncating that one. The evidence line caught all three. **Only a mutation
+test proved the rows finally reach the code they name**: deleting the check now fails
+`short write (256 of 1024 absorbed)` and `write that lands 0 of 1024 bytes`.
+
+The general shape is worth naming: **adding an EARLIER rejection can silently disarm every test that
+depended on reaching a LATER failure.** It is distinct from a check that cannot fail, and distinct
+from a row that computes evidence without asserting it — here the row and the code are each correct
+in isolation, and only their order changed. It is also the second appearance of the same idea in one
+round: #416's own CHANGELOG describes a rejected design scoring a deceptively *low* failure count
+for exactly this reason.
+
+### A regression #416 introduced: sense outlived the command that set it
+
+`diskimage__return_default_status_and_message()` did not clear the latched sense, so a refused READ
+followed by a **successful** READ left key `0x05` in place — and the next REQUEST SENSE blamed the
+command that had worked. Before #416 that query returned `0x00`. Sense describes the last command,
+so success must retire it. The helper now takes the disk and clears on success (23 call sites).
+
+### The sense path had no coverage at all
+
+**No row issued REQUEST SENSE**, so three separate one-character mutants survived: masking the key
+with `0x00`, dropping the latch, and dropping the clear. A CHECK CONDITION whose sense says "no
+sense" tells a guest that something failed and then that nothing is wrong — which ARC can read as
+success — so the status and its sense are one mechanism and must be tested as one.
+
+### Three more regions no row entered
+
+* **An unaligned backed extent.** Every fixture was a whole number of 512-byte blocks, so
+  `d->total_size` → `d->total_size + 1` survived: the slack is only reachable when
+  `total_size % 512 != 0`. It grew a 10,239-byte image by one byte — falsifying #416's headline
+  property literally by one byte, which is why that wording is corrected above.
+* **A negative offset.** Dropping `offset < 0` survived everything. It is reachable:
+  `diskimage_access()`'s own negative guard only fires when `override_base_offset != 0`, and #204
+  records a guest seeking a flat CD/ISO handle to `0xffffffff`.
+* **A 0-byte image**, which #416 changed deliberately and left unasserted in either direction.
+
+`regress/diff_diskimage_io.c` goes 31 → **45 rows**, 0 failures at `-O0/-O1/-O2/-O3/-Os`, 0
+UBSan/ASan runtime errors.
+
+### Assessed, not changed
+
+* **Sense-key classification is too coarse.** SCSI WRITE maps out-of-range, read-only and short
+  write all to MEDIUM ERROR / WRITE ERROR; an out-of-range WRITE should report LBA OUT OF RANGE, as
+  READ already does. An error-reason enum — plausibly the same `d->error` the ATA work needs — would
+  fix propagation and classification together.
+* **Signedness is safe for guest paths but not generically.** SCSI transfers are capped at 64 MiB,
+  but the public `size_t len` interface admits `len > INT64_MAX`, which casts negative.
+* **Short or errored READS still return success.** Only failures that make
+  `diskimage__internal_access()` return zero propagate; a genuinely short read does not.
+* **READ CAPACITY on a zero-sized medium** returns a successful, inherently ambiguous zero.
+* A naming drift: section 2's row says "past EOF" but asserts "past *advertised*".
+
 ## One-hundred-and-fifty-fifth round (#416) — one guest WRITE past the end of a 10 KB image grew it to 512 MB, and the guest was told it succeeded
 
 `diskimage__internal_access()` had no capacity check of any kind. The only limit on a guest LBA was
@@ -4226,7 +4301,9 @@ limit = writeflag ? d->total_size                                  /* backed ext
                   : nr_of_logical_blocks * logical_block_size;     /* advertised      */
 ```
 
-Writes stop at the backed extent, so **a guest can never grow the host file by even one byte**.
+Writes stop at the backed extent, so **a guest can never grow a non-tape image beyond that extent**.
+(#417 narrows this: tapes are exempt by design, overlay files still grow *within* the extent, and the
+original wording "by even one byte" was falsified literally by one byte — see #417.)
 Reads run to advertised capacity and zero-fill past EOF, so the round-up gap behaves exactly as the
 rig images have always relied on. The comparison avoids `offset + len`, which would overflow before
 it could be tested, and the read-side zero-fill is load-bearing rather than tidiness: `dev_wdc`'s
@@ -4237,10 +4314,18 @@ guest uninitialised host memory.
 Three lines of evidence settled the choice, the first decisive:
 
 * **The absence of a bound is itself the instrument.** The shipped code checked nothing, so a write
-  into the gap at any point in an image's history — including its install — would have grown the
-  file permanently, and `stat` would still show it. All five sit at exact round sizes: 300 MiB,
-  300 MiB, 1 GiB, 1 GiB, 2 GiB. **Nothing has ever written there.** A historical measurement, not a
-  prediction.
+  into the gap would have grown the file permanently, and `stat` would still show it. All five sit
+  at exact round sizes: 300 MiB, 300 MiB, 1 GiB, 1 GiB, 2 GiB.
+  *** #417 CORRECTS THE STRENGTH OF THIS CLAIM, AND IT MATTERS. "Nothing has ever written there, a
+  historical measurement" is more than the file sizes prove, and for `liveimage-luna88k` it is
+  STRUCTURALLY VACUOUS: that image is only ever opened under the `R:` prefix, so guest writes go to
+  an unlinked overlay and could never have changed it — measured, a gap write under the unbounded
+  binary DID land in the overlay and read back as 0x99. The gates also boot writable COPIES, so the
+  golden files are never what a guest writes to.
+  THE SOUND EVIDENCE, which is stronger anyway: `/tmp/rig.img` and `/tmp/rig_arc23.img`, the actual
+  writable copies from a pre-commit run under the UNBOUNDED binary, sit at exactly 314,572,800 and
+  1,073,741,824 bytes — a full OpenBSD boot grew neither. That measures the guest's real write
+  traffic rather than a read-only golden file. ***
 * Partition tables agree: the pmax `a` (root, ends 548856) and `b` (swap, ends 614392) both finish
   *inside* the file; only the raw whole-disk `c` reaches the gap. On arc, `d_secperunit = 196608`
   leaves every partition 1.9M blocks short of the file end.
@@ -4304,11 +4389,15 @@ rows ran by default; leaving it would have permitted 28 rows to be deleted silen
   a raw partition can issue exactly that. It **cannot** be fixed by advertising less: the pmax rig's
   on-disk label already records `d_secperunit = 614880`, so the advertised number is baked into
   guest-written data and is permanent. Recorded rather than papered over.
-* **A 0-byte image is now unwritable** (advertised capacity is 0, so every LBA is refused), where the
-  shipped code allowed the write and grew the file. This is a property of *any* bound, and no escape
-  hatch was added: a `nr_of_logical_blocks > 0` exemption is the same shape that was measured in
-  #414 to let a zero-block disk skip a bound entirely. The documented image-creation workflow
-  (`dd … seek=N`) produces a **sparse file with full `st_size`**, so it is unaffected.
+* **A 0-byte image is now unwritable AND unreadable** — `nr_of_logical_blocks` is 0, so both limits
+  are 0 and every LBA is refused in both directions. (#417 corrects two things here: the original
+  wording said only "unwritable", understating it; and "advertised capacity is 0" conflated the
+  block count with READ CAPACITY's convention of reporting the address of the LAST block, where a
+  field value of 0 describes one addressable block at LBA 0. The bound uses the block count, which
+  really is 0.) Shipped code allowed the write and grew the file. No escape hatch was added: a
+  `nr_of_logical_blocks > 0` exemption is the same shape #414 measured letting a zero-block disk
+  skip a bound entirely. The documented image-creation workflow (`dd … seek=N`) produces a **sparse
+  file with full `st_size`**, so it is unaffected. #417 adds rows pinning both directions.
 * **The misaligned overlay read is fixed by none of this.** `fread_helper` advances `buf` by
   `OVERLAY_BLOCK_SIZE` regardless of `lentoread`, while `fwrite_helper` guards both misalignments.
   No overlay rows exist in any detector — **do not read overlay correctness into the zero-filled
