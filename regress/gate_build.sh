@@ -162,7 +162,6 @@ build_tree() {   # label, source tree, compile tree, expected object count
 # is an exemption that LOOKS justified.
 DIVERGENT="devices/dev_jazz.c      arc-only EXT_IMASK IP3/IP4/IP6 interrupt-gating split; CHANGELOG.md:653-656 records it as not affecting pmax. That passage is in the #251/#252 round and carries no number of its own -- do NOT tag it #257, which is the unrelated R4030 interval-timer rate (CHANGELOG.md:726) and is present in BOTH trees.
 devices/Makefile.skel   mechanically tied to the SEC-only dev_ne2000.o
-disk/diskimage.c        SUSPECT: the whole diff is trailing whitespace on one blank line, from root import 39748e3. The #115 fix beneath it is byte-identical in both trees. Normalise it and drop this entry -- the stale-entry check below now makes that safe to do.
 machines/machine_arc.c  7 hunks, +33/-5. NOT wholly conditional: the ne2000 device_add at machine_arc.c:209-212 is UNCONDITIONAL inside machine_arc_init, and the fb_console rewrite applies to every ARC subtype; only :140-141 is PICA-gated. It is the SEC-only ARC/Jazz bring-up layer. Foundation commit 9d18d15.
 promemul/arcbios.c      SEC-only ARC/Jazz bring-up plus later hardening (9d18d15). NOT wholly MACHINE_ARC-gated: CHECK_ALLOCATION(boot_string) at arcbios.c:2654 sits in a SEC-only hunk outside that test, and other hunks key off vgaconsole / x11_md.in_use.
 devices/dev_ne2000.c    SEC-exclusive: the file does not exist in est at all
