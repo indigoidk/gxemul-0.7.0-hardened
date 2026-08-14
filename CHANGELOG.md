@@ -4192,6 +4192,69 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-forty-fourth round (#404) — the SH-4 RTC is not settable, and that is recorded rather than guessed
+
+A device audit flagged `dev_rs5c313.c` as re-reading host time before every access including
+writes, so a guest could never set the clock and was told the write succeeded. Both halves
+reproduce against the real `DEVICE_ACCESS(rs5c313)`: one write of 9 to `SEC1` from an
+all-zero register file moves **12 of 12** non-target time registers to host digits, and a
+readback at the *same instant* returns host time rather than the written value. The
+survivors are exactly `TINT`, `CTRL` and `TEST`.
+
+**Two measurements narrow what that means, and they are why this ships a record rather than
+a patch.** A variant that ignores writes to all thirteen clock registers outright is
+**guest-indistinguishable** from what ships today. So is one that refreshes only on reads —
+0 mismatches in 248,581 reads. This is therefore not corruption of a value a guest could
+otherwise rely on: **the clock is simply not settable, and never has been.** A missing
+feature, which is a different and lesser thing than the audit's original framing.
+
+That also disposes of the obvious repair. "Call `update_time` only on reads" is not merely
+insufficient, it is *unobservable* — shipping it would have been a false record.
+
+**A correct fix needs an offset model, and it is not attempted for measured reasons rather
+than cautious ones.** `rs5c313reg.h:64-67` names `CTRL_BSY`/`CTRL_ADJ` and
+`CTRL_XSTP`/`CTRL_WTEN` — a hold/busy protocol this device ignores entirely — but supplies
+**bit names only**. It does not say that `WTEN` gates writes, what event commits a staged
+time, or whether the counter holds meanwhile.
+
+The house pattern argues *against* guessing rather than for it. `dev_mk48txx.c:98-106` gates
+on a latch that **its own header documents** — `mk48txxreg.h:101` reads
+`/* want to read (freeze clock) */`. `dev_mc146818.c:532-540` does the same with
+`MC_REGB_SET`, in a comment that says so. `rs5c313reg.h` carries no equivalent, so reasoning
+across would be an analogy to a different chip. And the guess is not free: implementing
+"hold while `WTEN` is set" is guest-**distinguishable** from today, **64,687 divergent
+reads**, so a wrong guess can regress a machine that currently boots.
+`dev_dreamcast_rtc.c:70-74` already records the project's position on RTC writes —
+deliberately ignored, because setting the host's clock "would probably be very annoying".
+
+The record now sits in `dev_rs5c313.c` above the access function, where the next person
+finds it before re-deriving it. It also names the rest: `CTRL_24H` is accepted and never
+consulted (a read at 13:00 is identical with the bit set or clear), `TINT` is unimplemented,
+the two-digit year aliases so 2105 reads as "05", and a pre-1900 host clock yields non-BCD
+digits through C99's negative `%`, measured as `YEAR1 = 0xfa`.
+
+**`WDAY` is deliberately left alone.** Both siblings use `tm_wday + 1`
+(`dev_mc146818.c:196`, `dev_mk48txx.c:69`) and `mk48txxreg.h:75` documents
+`weekday (1..7)` — but that is a different chip and `rs5c313reg.h` says nothing. Changing it
+on analogy is exactly the guess the rest of the note declines to make, so upstream's
+"TODO: Is this correct?" stands, unanswered and honest.
+
+Checked and **correct**, so they are not re-investigated: `YEAR10`, `MON1`/`MON10` and every
+digit encoding (0 mismatches across ~170,000 samples spanning 1970–2105), `gmtime` being the
+right choice and consistent tree-wide, the `DEVINIT` defaults, and the register bounds.
+
+Two findings worth keeping beyond this device. A **compensating pair**: dropping the
+read-side `& 0x0f` is dead code because the write side already masks, so each mutation alone
+is invisible to every guest-visible row and only the pair is detectable — catching it needs
+a row that reads `d->reg[]` directly rather than through the device. And the differential
+harness itself had a bug that made both sides call the mutant, reporting INDISTINGUISHABLE
+for a mutation that plainly changes a read value. **It was caught only because a
+known-detectable mutant was carried as a positive control** — the strongest available form
+of asking whether a test failed for the reason under test.
+
+No behavioural change. Comment only; `dev_rs5c313.c` byte-identical in `est/` and
+`GXEMUL-SEC`, and it compiles clean.
+
 ## One-hundred-and-forty-third round (#403) — gcov said the interrupt line had never run, and fourteen wrong versions passed
 
 A measure seat replayed the #400/#401 table under gcov and found `dev_sh4.c`'s
