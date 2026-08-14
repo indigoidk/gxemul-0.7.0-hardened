@@ -25,6 +25,39 @@ if [ "${#GATES[@]}" -ne "$GATE_MANIFEST" ]; then
     exit 2
 fi
 
+#  #399: AND EACH SCRIPT MUST AGREE WITH ITS OWN POSITION. The count above proves the
+#  battery did not change SIZE; it says nothing about whether the scripts know which
+#  gate they are. Four of them did not: selftest_mutation was inserted at position 3 and
+#  gate_mips, gate_crossfamily, gate_hygiene and gate_ab were never renumbered, so each
+#  self-labelled one low while gate_upstream onward stayed correct.
+#
+#  That is not cosmetic. A shipped commit message cited "gate 5" for gate_hygiene because
+#  it read the number out of a comment, and the comment was wrong -- the project's rule is
+#  READ THE LINE BEFORE CITING IT, and the line itself lied. A self-label with nothing
+#  behind it is a fact-shaped string.
+#
+#  NAMED MUTANT, and it is why this compares the NUMBER rather than looking for a header:
+#  a check that merely greps for the EXISTENCE of a "GATE n" line passes on all four of
+#  the wrong files. A missing header is also a failure, not a pass -- selftest_mutation
+#  gained one in #399 rather than being exempted, because an exemption is a hole.
+_i=0
+for _g in "${GATES[@]}"; do
+    _i=$((_i+1))
+    _lbl=$(sed -n 's/^# GATE \([0-9][0-9]*\).*/\1/p' "$HERE/$_g.sh" | head -1)
+    if [ -z "$_lbl" ]; then
+        echo "GATE LABEL MISSING: $_g.sh has no '# GATE n' header (expected $_i)"
+        echo "  every gate must declare which gate it is, so a citation taken from its"
+        echo "  own comments is checkable. Refusing to run."
+        exit 2
+    fi
+    if [ "$_lbl" != "$_i" ]; then
+        echo "GATE LABEL MISMATCH: $_g.sh calls itself GATE $_lbl but is position $_i"
+        echo "  the array is the authority. A stale self-label has already put a wrong"
+        echo "  gate number into a shipped record. Refusing to run."
+        exit 2
+    fi
+done
+
 # Validate selectors up front. Without this, `./run.sh 99` matched nothing, ran zero
 # gates, and printed REGRESS_PASS -- one mistyped digit produced a green push.
 for i in "$@"; do

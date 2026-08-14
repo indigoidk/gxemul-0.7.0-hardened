@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE 4 -- non-MIPS CPU cores actually execute guest code.
+# GATE 5 -- non-MIPS CPU cores actually execute guest code.
 #
 # float_emul.c is shared by the alpha, m88k, mips, ppc and sh cores, but until this gate
 # existed only MIPS had ever executed it under test. Round 51 instrumented the old

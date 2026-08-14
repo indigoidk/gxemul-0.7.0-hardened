@@ -4192,6 +4192,56 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-thirty-ninth round (#399) — four gate scripts did not know which gate they were, and a shipped record repeated one of them
+
+`run.sh`'s `GATES` array and `regress/README.md`'s table agree on the numbering. Four
+scripts did not:
+
+```
+  gate_mips.sh          calls itself GATE 3   array position 4
+  gate_crossfamily.sh   calls itself GATE 4   array position 5
+  gate_hygiene.sh       calls itself GATE 5   array position 6
+  gate_ab.sh            calls itself GATE 6   array position 7
+```
+
+Everything from `gate_upstream.sh` onward is correct, and that is what localises the
+cause: `selftest_mutation` was inserted at position 3 and only the scripts between it and
+`gate_upstream` were never renumbered. `gate_upstream`'s correct "GATE 8" is also the
+proof that the scheme is *meant* to count `selftest_mutation` — without it one could argue
+the gate scripts number only themselves and are internally consistent. They are not.
+
+This is not cosmetic, and the evidence is a shipped commit. #395's message and CHANGELOG
+both said "gate 5" for `gate_hygiene.sh`, because the number was read out of a comment and
+the comment was wrong. The project's standing rule is READ THE LINE BEFORE CITING IT; the
+line was read, and **the line itself lied**. A self-label with nothing behind it is a
+fact-shaped string.
+
+`run.sh` already refused to run if the array's *size* disagreed with a manifest, on the
+principle that "a number nobody checks is not a fact". That proves the battery did not
+change size and says nothing about whether the scripts know their own position. It now
+also asserts, per gate, that the script's `# GATE n` header equals its 1-based index.
+
+**The named mutant is why the check compares the number rather than looking for a
+header.** A check that merely greps for the *existence* of a `# GATE n` line passes on all
+four of the wrong files — measured: `grep -c '^# GATE [0-9]'` returns 1 on a
+deliberately-mislabelled `gate_hygiene.sh`. A missing header is treated as a failure too,
+which is why `selftest_mutation.sh` gained the "GATE 3" label it never had rather than
+being exempted. An exemption is a hole.
+
+**One reference was deliberately left wrong-looking, and checking it was the point.**
+`gate_arm.sh:27` says "gate 3's mutant machinery … operates on float_emul.c". That is
+`selftest_mutation`, which genuinely *is* position 3. A blind renumber would have
+corrupted a correct citation — which is precisely the failure this round exists to fix,
+committed in the act of fixing it. Sixteen references were changed across four files;
+that one was not.
+
+Measured: baseline `run.sh 1` passes the manifest and reports `clean-build: PASS (18
+checks)` / `REGRESS_PASS`; relabelling `gate_hygiene` back to "GATE 5" produces
+`GATE LABEL MISMATCH: gate_hygiene.sh calls itself GATE 5 but is position 6`, exit 2, and
+**refuses before running any gate**; removing its header entirely produces
+`GATE LABEL MISSING … (expected 6)`, exit 2. That second mutant is an exact reconstruction
+of the tree as it stood before this round.
+
 ## One-hundred-and-thirty-eighth round (#398) — the guard I added fired after the thing it was meant to prevent, and withdrawing by deletion was a denial of service
 
 A measure seat replayed gate 1 in a scratch copy and falsified the claim #396 rests on.

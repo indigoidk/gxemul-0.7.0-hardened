@@ -1,5 +1,11 @@
 #!/bin/bash
-# SELF-TEST -- does gate 2 actually fail when the code it guards is broken?
+# GATE 3 -- SELF-TEST: does gate 2 actually fail when the code it guards is broken?
+#
+# #399 gave this file a "GATE 3" label it never had. It sits at position 3 of run.sh's
+# GATES array and run.sh runs it like any other gate, but it called itself only
+# "SELF-TEST" -- so the manifest check added in #399 would have needed an exemption for
+# it, and an exemption is a hole. Its insertion at position 3 is also what pushed the
+# four scripts after it out of step with their own headers.
 #
 # This exists because the honest answer, the first time it was asked, was NO. The original
 # gate 2 transcribed both sides of its differential into its own C file and compared the

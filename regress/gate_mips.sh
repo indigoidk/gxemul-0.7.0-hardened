@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE 3 -- the two primary MIPS rigs boot OpenBSD 2.2 to a root shell.
+# GATE 4 -- the two primary MIPS rigs boot OpenBSD 2.2 to a root shell.
 #
 # These rigs are the reason the fork's priorities are what they are: pmax (DECstation
 # 3MAX, R3000) and arc (Acer PICA, R4000) are the OSes the corrections are aligned to, so
@@ -16,7 +16,7 @@
 #    tokens that were printed underneath a similar token, so guest output must be read
 #    from a RECONSTRUCTED screen. Emulator diagnostics are the opposite case: fatal() and
 #    debugmsg() go straight to stdout and are garbled BY the screen rebuild, so those are
-#    counted from the raw log. Gate 5 does that half.
+#    counted from the raw log. Gate 6 does that half.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
@@ -35,7 +35,7 @@ echo
 
 # Delete the pty logs BEFORE the rigs run. They live in /tmp and survive until reboot, so
 # a rig that fails to start would otherwise leave the previous run's logs in place and
-# gate 5 would grade those -- output from a binary that no longer exists.
+# gate 6 would grade those -- output from a binary that no longer exists.
 rm -f /tmp/pD.log /tmp/aD.log
 
 # ---- pmax ----------------------------------------------------------------
@@ -72,8 +72,8 @@ else
     note "(raw pty log MISSED it -- differential repaint, exactly as expected)"
 fi
 
-# Publish the raw pty logs for gate 5. It reads THESE copies rather than /tmp, so that a
-# run in which this gate skipped or died cannot leave gate 5 grading stale output from a
+# Publish the raw pty logs for gate 6. It reads THESE copies rather than /tmp, so that a
+# run in which this gate skipped or died cannot leave gate 6 grading stale output from a
 # binary that no longer exists.
 cp -f /tmp/pD.log "$LOGDIR/pmax.ptylog" 2>/dev/null
 cp -f /tmp/aD.log "$LOGDIR/arc.ptylog"  2>/dev/null

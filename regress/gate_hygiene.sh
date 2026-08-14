@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE 5 -- no distress markers in the boot logs.
+# GATE 6 -- no distress markers in the boot logs.
 #
 # Cheap, and it has caught real regressions: round 40 found that #265's own diagnostic
 # flooded the log on a healthy boot, and that #261 was listing a subsystem it had not
@@ -7,7 +7,7 @@
 #
 # READS THE RAW PTY LOGS ON PURPOSE. fatal() and debugmsg() output is not guest console
 # output; it goes straight to stdout and interleaves into the pty stream, and the arc
-# screen reconstruction that gate 3 needs for GUEST tokens actively garbles it. Measured:
+# screen reconstruction that gate 4 needs for GUEST tokens actively garbles it. Measured:
 # '{ asc: data in' reads 0 from the arc screen rebuild and 5 from the raw log.
 #
 # TWO WAYS THIS GATE USED TO PASS WITHOUT PROVING ANYTHING, both now closed:
@@ -17,9 +17,9 @@
 #    each log must be substantial AND contain the guest's own uid=0(root), so absence of
 #    distress is only counted when presence of a real boot is proved.
 #  * STALE LOGS. Everything lives in /tmp and survives until reboot, so running this gate
-#    alone -- or after gate 3 skipped -- graded yesterday's logs, produced by a binary that
-#    no longer exists. Gate 3 now deletes them first and copies them into $LOGDIR when it
-#    finishes; this gate reads THOSE copies, which only exist if gate 3 actually ran.
+#    alone -- or after gate 4 skipped -- graded yesterday's logs, produced by a binary that
+#    no longer exists. Gate 4 now deletes them first and copies them into $LOGDIR when it
+#    finishes; this gate reads THOSE copies, which only exist if gate 4 actually ran.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
@@ -198,7 +198,7 @@ check "readiness: truth table keeps its good arms + leftover demo" \
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog
 [ -f "$PLOG" ] && [ -f "$ALOG" ] || \
-    gate_skip "no logs from this run -- gate 3 must run first (it publishes them here)"
+    gate_skip "no logs from this run -- gate 4 must run first (it publishes them here)"
 
 # ---- positive control --------------------------------------------------
 # Without this the gate cannot tell "nothing went wrong" from "nothing happened".
@@ -213,7 +213,7 @@ for pair in "pmax:$PLOG" "arc:$ALOG"; do
     check_min "$lab: log is substantial"   "$(wc -c < "$f")" 2000
 done
 # pmax sets the 8th bit on every console character; arc repaints differentially. Strip the
-# high bit for pmax and accept either the raw arc log or gate 3's screen rebuild.
+# high bit for pmax and accept either the raw arc log or gate 4's screen rebuild.
 check "pmax: log proves a real boot (uid=0)" \
       "$(tr '\200-\377' '\000-\177' < "$PLOG" | grep -qa 'uid=0(root)' && echo yes || echo no)" "yes"
 check "arc: log proves a real boot (uid=0)" \
@@ -251,12 +251,12 @@ echo
 
 # ---- the OTHER rigs' logs ----------------------------------------------
 # This gate used to read only the two MIPS pty logs, so a panic in the m88k or SuperH
-# guest left it green while the README claimed "any boot log". Gate 4's logs are scanned
+# guest left it green while the README claimed "any boot log". Gate 5's logs are scanned
 # here too when they exist -- they are the newer, less-exercised rigs, which is exactly
 # where a distress marker is most likely to be informative.
 for rig in luna88k landisk; do
     rlog=$LOGDIR/drive_$rig.log
-    [ -f "$rlog" ] || { note "$rig: no log from this run (gate 4 did not run it)"; continue; }
+    [ -f "$rlog" ] || { note "$rig: no log from this run (gate 5 did not run it)"; continue; }
     while IFS= read -r pat; do
         [ -n "$pat" ] || continue
         c=$(count "$rlog" "$pat")

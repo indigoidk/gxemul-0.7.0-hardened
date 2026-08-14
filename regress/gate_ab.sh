@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE 6 -- three-way A/B against pristine 0.7.0 and the pre-batch fork.
+# GATE 7 -- three-way A/B against pristine 0.7.0 and the pre-batch fork.
 #
 #   pristine   39748e3   unmodified upstream GXemul 0.7.0
 #   prebatch   2ffc91e   the fork immediately before the current batch
