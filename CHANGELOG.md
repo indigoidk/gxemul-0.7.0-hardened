@@ -4192,6 +4192,65 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fiftieth round (#410) — the wdc detector is DONE, and this is the written condition it is done against
+
+Four rounds went into `regress/diff_wdc_identify.c` — #405 built it, #407, #408 and #409 each
+repaired the last — and **every one of the first three shipped believing it was complete.**
+The scope was put to a review panel, which said stop. This round is the bounded close-out.
+
+**Why they were wrong every time, in one sentence:** each round's confidence rested on *"the
+mutants I thought of are dead"*, which is not a falsifiable claim. So the file now carries a
+condition that is:
+
+> **Every claim of the form "X was uncovered, this row covers it" must cite a mutant re-run
+> against the SHIPPED row, not the designed one.**
+
+#409 is exactly why. It added a row named *"geometry words carry their high byte"* and gave it
+`s = 17`, so **word 6's high byte stayed permanently zero** while the row's name, the file
+comment, the gate and the commit message all claimed words 3 *and* 6. The designed row covered
+both; the shipped row covered one. Measured: forcing word 6's high byte to `0` survived at all
+five optimisation levels, exactly as before the row existed. The fixture now carries
+**distinct** high bytes — 4096, 300, 770 → `0x10`, `0x01`, `0x03` — so a mutant that *swaps*
+two high bytes is caught as well. (A first attempt at the multi-drive fixture used heads 400
+and 271, both high byte `0x01`, and killed nothing.)
+
+**#409's inverted CD-ROM poison closed one direction and opened another.** Making the drive
+under test the *only* non-CD-ROM meant the row could observe nothing but the **negative**
+answer — so four mutants survived and **the entire ATAPI announcement was deletable with all
+fifteen rows green**: dropping the `if (cdrom)` branch, forcing `cdrom` to 0, `0x8580` →
+`0x8500`, and dropping word 0's high byte. A new row takes the other branch and requires
+`0x8580`. Reachability is real, not synthetic: `WDCC_IDENTIFY` is rejected for a CD-ROM before
+the switch, but `ATAPI_IDENTIFY_DEVICE` falls into the **same case** and calls the same
+initializer with `cdrom` set.
+
+**And #409 introduced a phantom-regression risk in the gate.** Its named-row check grepped
+`'the right id'`, which appears only in the *ok* line — so a genuinely failing row *also*
+reported "not present", turning one red row into two and making a failure indistinguishable
+from a deletion. It now matches text the row prints either way.
+
+### The scope, written down so a later round need not re-derive it
+
+> **This file is the oracle for what `wdc_initialize_identify_struct()` BUILDS. It is not an
+> oracle for what the guest RECEIVES.**
+
+Every row reads `identify_struct` directly, so the transmit loop between that array and the
+guest is invisible to all of them — swapping its two pushes byte-swaps every word a guest reads
+at **zero failures**. That boundary is assigned to a separate I/O harness (queue #112), not to
+more rows here. Measured: the content detector kills 64 of 93 `dev_wdc.c` mutants, a transport
+harness kills 20, together 80 — **neither subsumes the other.**
+
+The surviving mutants are now **classified rather than left implicit**, which is what makes
+"done" checkable: *equivalent* (`/512` as `>>9`); *unreachable* — heads/spt above 255 require
+`chs_override`, i.e. the `-d gH;S` path, **which is itself broken and files as queue #113**, so
+these become reachable only when that lands; and *accepted gaps* — six unasserted constant
+fields, two `memset` variants already covered by `DEVINIT(wdc)`'s own, two serial/firmware
+placements. Checked rather than assumed: `diskimage_getname` is `snprintf`, which always
+NUL-terminates, so the padding loop always finds a NUL and **there is no stack leak**.
+
+Gate 2 PASS, **89 checks** (was 88); 16 rows. Timing correction to #409's record: the commit
+said the detector "runs in ~1 s"; measured it is **0.024–0.042 s**. The 4,358× claim itself
+reproduced independently at ~4,100× (140,328 ms → 24-42 ms).
+
 ## One-hundred-and-forty-ninth round (#409) — #408's UB fix cost 148 seconds, and it poisoned one stub out of three
 
 A compile-and-measure pass built **246 mutants across five optimisation levels** against

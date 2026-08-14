@@ -348,7 +348,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 15
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 16
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -403,8 +403,19 @@ else
     #    wide      <- no fixture pushed heads or spt past 255, so the `>> 8` half
     #                 of words 3 and 6 was never non-zero and could be replaced by
     #                 a literal 0 undetected.
+    #  #410: grep a string the row prints WHETHER IT PASSES OR FAILS. The #409
+    #  version matched 'the right id', which appears only in the ok line -- so a
+    #  genuinely FAILING row also reported "not present", turning one red row into
+    #  two and making a failure indistinguishable from a deletion. That is the
+    #  phantom-regression shape this harness's own vacuity taxonomy warns about.
     check     "wdc IDENTIFY: the identity row is present" \
-              "$(grep -c 'the right id' "$WDCLOG")" "1"
+              "$(grep -c 'the right id\|not the CD-ROM next to it' "$WDCLOG")" "1"
+    #  #410: the ATAPI branch was DELETABLE with every row green -- #409's
+    #  inverted poison made the drive under test the only non-CD-ROM, so the row
+    #  could observe nothing but the negative answer. This row takes the other
+    #  branch and asserts word 0 == 0x8580.
+    check     "wdc IDENTIFY: the ATAPI-flags row is present" \
+              "$(grep -c 'announces itself as one' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the wide-geometry row is present" \
               "$(grep -c 'high byte' "$WDCLOG")" "1"
 fi

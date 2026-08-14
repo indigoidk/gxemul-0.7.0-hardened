@@ -70,6 +70,67 @@
  *  (otherwise: undefined debug, quiet_mode, diskimage_access, diskimage_exist,
  *  machine_add_tickfunction). gate_offline.sh passes them. Do not "simplify"
  *  them away.
+ *
+ *  ============================================================================
+ *  #410: THIS FILE IS DONE. THE STOPPING CONDITION, AND WHY IT IS WRITTEN DOWN.
+ *  ============================================================================
+ *
+ *  FOUR rounds went into this one file -- #405 built it, #407, #408 and #409
+ *  each repaired the last -- and every one of the first three shipped believing
+ *  it was complete. They were wrong every time for the SAME reason: each round's
+ *  confidence rested on "the mutants I thought of are dead", which is not a
+ *  falsifiable claim. The scope was put to a review panel, which said stop.
+ *
+ *  SCOPE, stated so a later round does not have to re-derive it:
+ *
+ *    *** THIS FILE IS THE ORACLE FOR WHAT wdc_initialize_identify_struct()
+ *    BUILDS. IT IS NOT AN ORACLE FOR WHAT THE GUEST RECEIVES. ***
+ *
+ *  Everything here reads d->identify_struct directly. The transmit loop between
+ *  that array and the guest is therefore invisible to every row -- swapping its
+ *  two pushes byte-swaps every word a guest reads at ZERO failures. That
+ *  boundary is assigned to a SEPARATE I/O harness (queue item #112) and is not a
+ *  gap to be closed by adding rows here. Measured: the content detector kills 64
+ *  of 93 dev_wdc.c mutants, a transport harness kills 20, and together they kill
+ *  80 -- neither subsumes the other.
+ *
+ *  WHAT WAS TRUE WHEN THIS FILE WAS DECLARED DONE:
+ *    - 16 rows, 0 failures, at -O0 -O1 -O2 -O3 -Os (the NULL-cpu UB that hid
+ *      behind -O2 for two rounds is why the sweep is part of the criterion);
+ *    - each row's mutant kill asserts the ROW NAME, not merely that something
+ *      failed, so a kill from an unrelated row cannot be mistaken for coverage;
+ *    - a known-detectable mutant is carried as a positive control, and build
+ *      failures and signals are scored as FAULTS, never as detections.
+ *
+ *  THE RULE THAT WOULD HAVE STOPPED #409, and the one to keep:
+ *
+ *    *** EVERY CLAIM OF THE FORM "X WAS UNCOVERED, THIS ROW COVERS IT" MUST
+ *    CITE A MUTANT RE-RUN AGAINST THE SHIPPED ROW, NOT THE DESIGNED ONE. ***
+ *
+ *  #409 added a row named "geometry words carry their high byte" and gave it
+ *  s = 17, so word 6's high byte stayed permanently zero while the row's name,
+ *  this comment, the gate and the commit message all claimed words 3 AND 6. The
+ *  designed row covered both; the shipped row covered one. #410 corrected it and
+ *  measured the word-6 mutant dying.
+ *
+ *  KNOWN SURVIVORS, classified rather than left implicit -- this is the part
+ *  that makes "done" checkable instead of hopeful. Roughly a dozen mutants
+ *  survive the 16 rows, and NONE is guest-visible on a default configuration:
+ *    (a) EQUIVALENT      -- /512 rewritten as >>9; no observable difference.
+ *    (b) UNREACHABLE     -- heads/spt above 255 require chs_override, i.e. the
+ *                           `-d gH;S` path, WHICH IS ITSELF BROKEN (queue #113
+ *                           yields a zero-capacity disk). Blocker named and
+ *                           filed; these become reachable when #113 lands.
+ *    (c) ACCEPTED GAP    -- six unasserted constant fields (words 47/51/64/67/
+ *                           68), two identify_struct memset variants already
+ *                           covered by DEVINIT(wdc)'s own memset, and two
+ *                           serial/firmware placements. Checked, not assumed:
+ *                           diskimage_getname is snprintf, which always
+ *                           NUL-terminates, so the padding loop always finds a
+ *                           NUL and there is NO stack leak.
+ *
+ *  A future round may reopen this file, but it should first say which of those
+ *  three buckets it is emptying, and why that outranks the guest-visible queue.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -470,12 +531,72 @@ static void row_identity(void)
 }
 
 /*
+ *  #410: THE POSITIVE HALF OF THE CD-ROM DECISION.
+ *
+ *  #409's inverted poison made the drive under test the ONLY non-CD-ROM, so
+ *  row_identity can observe nothing but the NEGATIVE answer -- and MEASURED,
+ *  four mutants therefore survived all fifteen rows: deleting the
+ *  `if (cdrom) flags = 0x8580` branch outright, forcing cdrom to 0, changing
+ *  0x8580 to 0x8500, and dropping word 0's high byte. *** The entire ATAPI
+ *  announcement was deletable with the whole table green. ***
+ *
+ *  A fix that only ever exercises one branch of a two-branch decision is half a
+ *  test. This row takes the other branch: the drive under test IS the CD-ROM,
+ *  and word 0 must read 0x8580 (ATAPI, CDROM, removable) rather than the plain
+ *  0x0040 fixed-disk flag.
+ *
+ *  Reachability, so this is not a synthetic configuration: wdc_command() rejects
+ *  WDCC_IDENTIFY for a CD-ROM before the switch, but ATAPI_IDENTIFY_DEVICE falls
+ *  into the SAME case and calls this same initializer with cdrom set -- so a
+ *  guest issuing ATAPI IDENTIFY reaches exactly this state.
+ */
+static void row_atapi_flags(void)
+{
+	struct wdc_data d;
+
+	memset(&d, 0, sizeof(d));
+	d.drive = 0;
+	d.cyls[0] = 50; d.heads[0] = 16; d.sectors_per_track[0] = 63;
+	memset(stub_size_for, 0, sizeof(stub_size_for));
+	stub_size_for[0] = 50ULL * 16 * 63 * 512;
+	stub_size = 0;
+	stub_size_for_active = 1;
+	stub_noncdrom_id = -1;		/*  nothing is exempt: THIS drive is a CD-ROM  */
+	stub_cdrom_poison = 1;
+	wdc_initialize_identify_struct(fake_cpu(), &d);
+	stub_cdrom_poison = 0;
+	stub_size_for_active = 0;
+
+	rows ++;
+	if (word(&d, 0) != 0x8580) {
+		printf("  FAIL %-38s word 0 = %04x, want 8580"
+		    " (ATAPI/CDROM/removable)\n",
+		    "a CD-ROM announces itself as one", word(&d, 0));
+		failures ++;
+	} else {
+		printf("  ok   %-38s word 0 = 8580\n",
+		    "a CD-ROM announces itself as one");
+	}
+}
+
+/*
  *  #409: EXERCISE THE HIGH BYTE OF THE GEOMETRY WORDS.
  *
  *  Every other fixture keeps heads and sectors-per-track below 256, so the
  *  `>> 8` half of words 3 and 6 is never non-zero -- MEASURED: forcing either
  *  high byte to a literal 0 SURVIVES the whole table. Cylinders were already
- *  covered (300 > 255). These values are not reachable from the command line
+ *  covered (300 > 255).
+ *
+ *  #410 CORRECTION, and it was a FALSE PASS in this very row. #409 shipped it
+ *  with s = 17, so word 6's high byte was STILL permanently zero while this
+ *  comment, the row's name, the gate and the commit all claimed words 3 AND 6.
+ *  Measured: forcing word 6's high byte to 0 survived at all five optimisation
+ *  levels, exactly as before the row existed. Word 3 was genuinely closed; word
+ *  6 was not. The three values now carry DISTINCT high bytes -- 4096 = 0x1000,
+ *  300 = 0x012c, 770 = 0x0302 -- so a mutant that SWAPS two high bytes is caught
+ *  as well. A fixture whose fields share a byte value proves less than it looks:
+ *  a first attempt at the multi-drive fixture used heads 400 and 271, both high
+ *  byte 0x01, and killed nothing. These values are not reachable from the command line
  *  today only because the geometry override is broken (a separate round), and
  *  wdc copies whatever geometry the diskimage layer hands it.
  */
@@ -483,15 +604,15 @@ static void row_wide_geometry(void)
 {
 	struct wdc_data d;
 
-	build(&d, 4096ULL * 300 * 17, 4096, 300, 17);
+	build(&d, 4096ULL * 300 * 770, 4096, 300, 770);
 	rows ++;
-	if (word(&d, 1) != 4096 || word(&d, 3) != 300 || word(&d, 6) != 17) {
-		printf("  FAIL %-38s c=%u h=%u s=%u, want 4096/300/17\n",
+	if (word(&d, 1) != 4096 || word(&d, 3) != 300 || word(&d, 6) != 770) {
+		printf("  FAIL %-38s c=%u h=%u s=%u, want 4096/300/770\n",
 		    "geometry words carry their high byte",
 		    word(&d, 1), word(&d, 3), word(&d, 6));
 		failures ++;
 	} else {
-		printf("  ok   %-38s c=4096 h=300 (high byte 0x01)\n",
+		printf("  ok   %-38s c/h/s high bytes 10/01/03\n",
 		    "geometry words carry their high byte");
 	}
 }
@@ -592,6 +713,7 @@ int main(void)
 	row_slave();
 	row_base_drive();
 	row_identity();
+	row_atapi_flags();
 	row_wide_geometry();
 	row_no_lba_claim();
 	row_selfconsistent();
