@@ -179,17 +179,20 @@ def main():
             else os.path.join(os.environ.get("LOGDIR") or "/tmp", "absorb_census"))
     os.makedirs(work, exist_ok=True)
     killed, survived, faults = [], [], []
-    for name, old, new, breaks in MUTANTS:
-        verdict, detail = run_one(work, name, old, new)
-        print("  %-9s %-28s %s" % (verdict, name, detail))
-        {"KILLED": killed, "SURVIVED": survived, "FAULT": faults}[verdict].append((name, breaks))
-    #  Remove only what this program made.  If that fails, SAY SO -- a silent
-    #  ignore_errors leaves residue nobody hears about, which is how the last round
-    #  polluted the shared log directory.
     try:
-        shutil.rmtree(os.path.join(work, "m"))
-    except OSError as e:
-        print("  NOTE  could not remove %s/m: %s" % (work, e))
+        for name, old, new, breaks in MUTANTS:
+            verdict, detail = run_one(work, name, old, new)
+            print("  %-9s %-28s %s" % (verdict, name, detail))
+            {"KILLED": killed, "SURVIVED": survived,
+             "FAULT": faults}[verdict].append((name, breaks))
+    finally:
+        #  A `finally`, because an INTERRUPTED run used to leave its copies behind -- measured
+        #  by killing one mid-census.  Residue from a measurement is how this project's shared
+        #  log directory got polluted twice.
+        try:
+            shutil.rmtree(os.path.join(work, "m"))
+        except OSError as e:
+            print("  NOTE  could not remove %s/m: %s" % (work, e))
 
     a, k, s, f = len(MUTANTS), len(killed), len(survived), len(faults)
     print("\nABSORB_CENSUS attempted=%d killed=%d survived=%d faults=%d" % (a, k, s, f))
