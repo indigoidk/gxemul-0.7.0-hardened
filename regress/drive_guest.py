@@ -299,8 +299,11 @@ def drive(rig, binary):
         expiry inconclusive because it boots pristine, prebatch and HEAD in one run, so
         prebatch reaching its marker is free evidence the host was healthy. THIS RIG BOOTS
         ONE GUEST. There is nothing to compare against, so "the host might have been slow"
-        is unfalsifiable -- and an unfalsifiable excuse must not be allowed to soften a
-        verdict. The differential-witness trick does not generalise.
+        is not falsifiable BY A COMPARABLE WITNESS -- and an excuse nothing can contradict
+        must not be allowed to soften a verdict. The differential-witness trick does not
+        generalise. ("Unfalsifiable" was an overclaim: NINSTRS at the backstop partially
+        falsifies host starvation, and the two rigs cross-witness. The decision stands; the
+        wording should not claim more than it has.)
         """
         nonlocal tail
         t0 = time.time()

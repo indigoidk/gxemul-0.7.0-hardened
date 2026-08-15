@@ -3928,3 +3928,72 @@ pass is a hypothesis until somebody mutates the committed code and watches the r
    7.316–7.786 G over eleven boots without splitting idle from loaded. Both are probably true of
    different populations, which is exactly why quoting them side by side without saying so is a
    record defect. Populations must be labelled wherever an extreme is cited.
+
+## 2026-08-15 — ADJUDICATION of the #418/#419/#420 residuals (Kimi holding the hat)
+
+Fable has failed five consecutive liveness tests, and the standing directive names a **Fable/Kimi**
+pass, so Kimi held it alone. This was an adjudication, not a review: the question was which
+candidates are worth doing and in what order, not whether the diffs are correct.
+
+### *** THE ORDERING VERDICT, WHICH OVERRIDES THE OBVIOUS ONE ***
+**Do the pure-function `absorb()` selftest (B1) BEFORE #27**, even though #27 halts the emulator on
+legal PPC guest code and sounds like it must dominate. The argument, which is accepted:
+
+> #27's evidence will be produced by the very driver whose mutants currently survive **13 of 18
+> gate rows**. Fixing the detector first makes #27's evidence worth something; fixing #27 first
+> spends the gate's weakest credit. And the two exposures move in opposite directions — #27's halt
+> is deterministic and known, so waiting costs nothing, while **the gate hole widens with every
+> round that trusts it.**
+
+It also matches the standing directive: accuracy first, bigger structural changes last, and #27 is
+the most structural item on the list.
+
+### FACTS THE ADJUDICATION CHECKED RATHER THAN JUDGED
+* ***#27 is a deliberate `fatal()`*** at `cpu_ppc_instr_loadstore.c:66` — **loud by construction,
+  not a silent hang.** The records had been carrying it as "halts the emulator", which is true but
+  implies mystery. Its severity is unchanged; its diagnosis is not.
+* ***#27 DEPENDS ON #47.*** #27's straddle fallback needs the translate-once fix
+  (`memory_rw.c:84-87`) to be right first. They are ONE round, and **#47 goes first** — a
+  dependency that was not previously recorded.
+* **D1 is worse than filed:** `drive_guest.py` hardcodes `/tmp/gxregress` and IGNORES `$LOGDIR`
+  entirely, so mutant runs cannot currently be isolated even if someone remembers to try.
+* A2 confirmed: the branch is rig-blind — the comment knows about landisk, the code does not.
+* A3 confirmed idle: no step pattern begins with `[`, so nothing can currently be withheld.
+* A5 confirmed: "unfalsifiable" was verbatim in the shipped docstring (now corrected in both
+  `gate_crossfamily.sh` and `drive_guest.py`).
+
+### WHICH PREDICTED FINDINGS EARN A MUTATION RUN
+* **A1 and A2: yes** — non-equivalent by construction, same surface, ONE batch, one fix commit.
+* **A3: no** — an equivalent mutant, folded into B1's selftest as a unit test rather than a boot.
+* **A4: no** — no code mutant exists; it is a claim about wall clock under load, to be answered
+  with per-run telemetry rather than a synthetic overload against a bound with 50× headroom.
+* **A5, A6: no** — *"prose has no mutants."* Settled by edit, in one record-hygiene commit.
+
+### *** WHAT THREE ROUNDS OF HARNESS WORK SHOULD HAVE SURFACED AND DID NOT ***
+These are new, and the first is the sharpest thing said all night:
+
+1. **THERE IS NO DEAD-MAN SWITCH.** The nightly battery is UNCONDITIONAL, yet **nothing makes the
+   ABSENCE of a terminal record a FAIL.** Every threshold shipped assumes the gate ran.
+   *"No VERDICT line by deadline → red"* is a false pass that no current row can see — and it is
+   exactly the shape of the open #125 check, generalised from one task into a missing mechanism.
+2. **NO STANDING CANARY.** The directive mandates one mutation pass per *new* detector, but nothing
+   carries a known-detectable mutant as a positive control in *every* run. The C probes already do
+   this (`diff_wdc_identify.c:100-102`); gates 5, 7 and crossfamily do not.
+   **Detector-alive must be proven per run, not per birth.**
+3. **THE MUTANT CENSUS IS UNGENERALISED.** The 13-of-18 figure exists for ONE driver. Gates 5, 7
+   and crossfamily have never had a survival census, and A1/A2 were found by panel reasoning rather
+   than measurement. **If 13/18 is typical, every "verified" claim in this harness is
+   over-credited.**
+4. **NO AUDIT COVERAGE LEDGER.** #82's "never audited" was discovered by accident, and m88k has
+   ZERO queue entries despite being booted nightly. A subsystem × family × last-audited ledger
+   would make the queue's shape deliberate instead of a product of what happened to be noticed.
+5. **HERMETIC RUN NAMESPACE AS POLICY.** D1 is one instance of a general gap: a run-id stamped into
+   every log header, with each gate asserting the id it grades, plus a host fingerprint
+   (load1/nproc/model) — which is also the permanent cure for the unlabelled-population confusion
+   behind the 7.517 G / 7.316 G inconsistency.
+
+### RESULTING ORDER
+B1 (absorb selftest, folding A3) → A1+A2 as one mutation batch → A4/A5/A6 as one record-hygiene
+commit → the disk batch → **#47 then #27 as one round, in that order** → #82 → #101 → #75.
+The five gaps above are filed as their own candidates; the dead-man switch is the one to raise
+first, because it is the only item whose absence hides every other row's failure.

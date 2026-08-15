@@ -66,7 +66,11 @@ run_rig() {
     # a wall-clock expiry as inconclusive because it boots three builds in one run, so
     # prebatch reaching its marker is free evidence the host was healthy. THIS GATE BOOTS ONE
     # GUEST PER RIG: there is nothing to compare against, "the host might have been slow" is
-    # unfalsifiable, and an unfalsifiable excuse must not soften a verdict.
+    # not falsifiable BY A COMPARABLE WITNESS, and an excuse nothing can contradict must not
+    # soften a verdict.  (An adjudicating seat corrected the earlier wording "unfalsifiable":
+    # NINSTRS at the backstop does PARTIALLY falsify host starvation, and the two rigs'
+    # relative slowdowns cross-witness each other.  The hard-FAIL decision stands -- a partial
+    # witness is not an A/B baseline -- but the justification should not overstate itself.)
     check "$rig: boot stopped at the milestone, not a budget or a hang" "$(v REASON)" "MARKER"
 
     # *** ASSERT THE COUNT, NEVER THE REASON. *** Removing -N leaves the guest booting
