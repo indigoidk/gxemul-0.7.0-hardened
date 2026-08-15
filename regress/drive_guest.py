@@ -33,9 +33,21 @@ RIGS = {
         # image and later runs inherit whatever filesystem state earlier ones left --
         # including an unclean unmount when a timeout kills a booted guest. That made
         # gate 7 fail non-deterministically; see the note in gate_ab.sh.
-        "args": ["-e", "luna-88k", "-d",
+        # #420: -N makes gxemul print "[ <ninstrs> instrs; ...]" every 2^25 instructions.
+        # That stream is the progress oracle; see boot_progress() below.
+        "args": ["-N", "-e", "luna-88k", "-d",
                  "R:" + IMAGES + "/liveimage-luna88k-raw-20250518.img", "boot"],
-        "boot_wait": 600,
+        "boot_wait": 2400,
+        # #420, each measured. The 600 s that used to sit in boot_wait was the defect:
+        # a healthy, fully-correct boot under 8 busy loops on 8 cores took 742 s and
+        # reached login with every marker and both computed values right. It scored
+        # BOOT_REACHED=0 and three red rows -- a capability regression that never was.
+        # 12 G is the same budget gate 7 uses (observed max 7.786 G over eleven boots,
+        # +54%); it bounds only the failure path, since a healthy boot stops at the
+        # marker long before it. 120 s of silence is 17x the worst inter-record gap
+        # measured on this path under saturation (7.06 s; n=219, median 3.86).
+        "budget": 12000000000,
+        "stall": 120,
         "boot_pat": r"login:",
         "tries": 4,
         # Markers split in the source so they can only come from guest OUTPUT, never from
@@ -66,9 +78,25 @@ RIGS = {
     # luna88k rig above exercises that shared arm from a non-MIPS caller with a checked
     # answer. What remains unproven for SuperH is only its own caller glue.
     "landisk": {
-        "args": ["-E", "landisk", "-M", "64",
+        "args": ["-N", "-E", "landisk", "-M", "64",
                  IMAGES + "/openbsd76-landisk-bsd.rd"],
-        "boot_wait": 420,
+        "boot_wait": 900,
+        # *** #420: NO INSTRUCTION BUDGET FOR LANDISK, AND THAT IS DELIBERATE. ***
+        # Six idle landisk boots span 2,046,965,550 to 2,852,740,381 -- a 39.4% spread,
+        # against luna88k's 3.57% over eight runs. A ceiling derived from that would be
+        # either uselessly loose or a false-FAIL waiting to happen, and inventing one
+        # from six samples would be exactly the "mean quoted as a worst case" error #419
+        # pass 4 corrected. Landisk relies on the stall detector and the backstop until
+        # somebody measures its rate properly; that is FILED, not fixed.
+        #
+        # Note also that landisk had no measured false-FAIL to begin with: it reaches its
+        # prompt in 7.2-8.3 s against the old 420 s budget, 50x headroom. Converting it
+        # buys DISTINGUISHABILITY -- a hung SH4 core now reports STALLED instead of a
+        # timeout indistinguishable from load -- not headroom.
+        "budget": 0,
+        # Its -N records are ~20x denser than luna88k's (median gap 0.04 s, 62-87 records
+        # in an 8 s boot), so 60 s of silence is overwhelming evidence of a hang.
+        "stall": 60,
         "boot_pat": r"\(I\)nstall, \(U\)pgrade, \(A\)utoinstall or \(S\)hell\?",
         # This rig is INTERACTIVE again as of #293. It originally sent no input at all,
         # because typed lines vanished non-deterministically -- measured at 10 of 12
@@ -108,8 +136,15 @@ RIGS = {
 def drive(rig, binary):
     cfg = RIGS[rig]
     log_path = "/tmp/gxregress/drive_%s.log" % rig
+    raw_path = "/tmp/gxregress/drive_%s.raw.log" % rig
     os.makedirs("/tmp/gxregress", exist_ok=True)
     os.chdir(IMAGES)
+    # #420: TWO logs. The raw stream keeps everything for forensics; drive_<rig>.log is
+    # console-only, because gate_hygiene.sh greps THAT file for distress SUBSTRINGS and an
+    # instruction record embeds a guest symbol (e.g. "<sched_idle+0x8c>"). Measured over 527
+    # records across three runs there is no collision today -- but the mechanism is there,
+    # and splitting the streams removes it for nothing.
+    raw = open(raw_path, "wb")
     log = open(log_path, "wb")
 
     pid, fd = pty.fork()
@@ -118,9 +153,57 @@ def drive(rig, binary):
         os._exit(127)
 
     buf = ""
+    tail = ""          # bytes that may be the START of a record; see absorb()
+    ninstrs = 0
+
+    # *** THE STRIP MUST BE UNANCHORED AND MUST EAT THE TRAILING NEWLINE. ***
+    # cpu_show_cycles() printf's the record into the same stdout as the guest console with
+    # NO LEADING NEWLINE, so it lands at the cursor and TERMINATES THE GUEST'S PARTIAL LINE.
+    # Measured by injecting one record into the real logs at the place gxemul puts it:
+    #
+    #   assertion                 control     no strip   ANCHORED    unanchored
+    #   landisk HITACHI (\w+)     SH7751R     SH77       SH77        SH7751R
+    #   landisk boot_pat          MATCH       (none)     (none)      MATCH
+    #   luna88k GX_FP ...         values      (none)     (none)      values
+    #
+    # An anchored `(?m)^...` strip heals NOTHING, because the pty emits bare CRs as well as
+    # CRLF and Python's ^ only matches after \n. Worse, the landisk row then yields SH77 --
+    # not a miss but a WRONG ANSWER, which reads as an emulation defect. Eating the trailing
+    # newline is what rejoins the split line. Validated: free-stripping the -N logs
+    # reproduces the previous no--N log sizes exactly (6234 B, 3838 B), zero residual.
+    #
+    # The guest printing something of this shape was checked and does NOT happen: zero
+    # occurrences of "[ N instrs" in either complete no--N log.
+    REC = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n?")
+
+    def absorb(text):
+        """Split raw pty text into console text and instruction records.
+
+        A pty read can END IN THE MIDDLE OF A RECORD, so any trailing fragment that could
+        still become one is HELD BACK rather than classified -- otherwise half a record
+        leaks into the match buffer and the other half is stripped, which corrupts exactly
+        the assertions this rig makes. The hold is bounded: a newline or a ']' releases it,
+        so a guest line containing a bare '[' cannot stall the buffer.
+        """
+        nonlocal buf, tail, ninstrs
+        tail += text
+        out, pos = [], 0
+        for m in REC.finditer(tail):
+            out.append(tail[pos:m.start()])
+            ninstrs = int(m.group(1))
+            pos = m.end()
+        rest = tail[pos:]
+        i = rest.rfind("[")
+        if i != -1 and "]" not in rest[i:] and "\n" not in rest[i:] and len(rest) - i < 120:
+            out.append(rest[:i]); tail = rest[i:]
+        else:
+            out.append(rest); tail = ""
+        chunk = "".join(out)
+        buf += chunk
+        if chunk:
+            log.write(chunk.encode("latin1", "replace")); log.flush()
 
     def read_once(timeout):
-        nonlocal buf
         r, _, _ = select.select([fd], [], [], timeout)
         if fd not in r:
             return True
@@ -130,9 +213,9 @@ def drive(rig, binary):
             return False
         if not d:
             return False
-        log.write(d)
-        log.flush()
-        buf += d.decode("latin1", "replace")
+        raw.write(d)
+        raw.flush()
+        absorb(d.decode("latin1", "replace"))
         return True
 
     def expect(pat, timeout):
@@ -170,9 +253,55 @@ def drive(rig, binary):
     # The confirm patterns match only what the command PRINTS, never what was typed --
     # a pty echoes the master's writes back, so a naive marker is satisfied by the echo
     # alone and proves nothing about execution.
+    def boot_progress(pat, backstop, budget, stall):
+        """Wait for the boot milestone against a budget of GUEST WORK, and say why it stopped.
+
+        #420. The old form was `expect(boot_pat, 600)` -- a wall-clock budget, which is a
+        LOAD-SENSITIVE ORACLE: under load the guest does less inside the same seconds, the
+        milestone never arrives, and the rig reports a capability regression. Reproduced:
+        the unmodified driver under 8 busy loops on 8 cores gave BOOT_REACHED=0 and three
+        red rows at 601 s, with panic/FATAL/trap all zero and the log ending on ordinary
+        late rc output -- 63.4% of the way to login. The same load with room to finish
+        reached login at 720.8 s with every marker and both computed values correct.
+
+        *** BACKSTOP IS A HARD FAIL HERE, unlike gate 7. *** Gate 7 can call a wall-clock
+        expiry inconclusive because it boots pristine, prebatch and HEAD in one run, so
+        prebatch reaching its marker is free evidence the host was healthy. THIS RIG BOOTS
+        ONE GUEST. There is nothing to compare against, so "the host might have been slow"
+        is unfalsifiable -- and an unfalsifiable excuse must not be allowed to soften a
+        verdict. The differential-witness trick does not generalise.
+        """
+        t0 = time.time()
+        last_n, last_change = ninstrs, t0
+        while True:
+            if re.search(pat, buf):
+                return "MARKER"
+            if not read_once(0.3):
+                return "EXITED"      # the emulator died; a crash is not a timeout
+            now = time.time()
+            if ninstrs != last_n:
+                last_n, last_change = ninstrs, now
+            if budget and ninstrs > budget:
+                return "BUDGET"      # a full allowance of WORK, still no milestone
+            if now - last_change >= stall:
+                return "STALLED"     # a slow host still executes; a hung guest does not
+            if now - t0 >= backstop:
+                return "BACKSTOP"
+
     settle = cfg.get("settle", 0)
     tries = cfg.get("tries", 1)
-    reached = expect(cfg["boot_pat"], cfg["boot_wait"])
+    reason = boot_progress(cfg["boot_pat"], cfg["boot_wait"],
+                           cfg.get("budget", 0), cfg.get("stall", 120))
+    # An absent oracle stream is a HARNESS fault and must be red: removing -N leaves the
+    # guest booting perfectly, every marker matching and every value correct, while the
+    # budget and stall detectors are silently unarmed. Measured on landisk, which has no
+    # race to hide behind (8 s boot against a 60 s stall): every row stayed green.
+    # THE KILL ROW ASSERTS THE COUNT, NEVER THE REASON.
+    if ninstrs == 0 and reason != "MARKER":
+        reason = "ABSENT"
+    print("REASON=%s" % reason)
+    print("NINSTRS=%d" % ninstrs)
+    reached = (reason == "MARKER")
     if reached:
         for step in cfg["steps"]:
             text, wait = step[0], step[1]
@@ -198,7 +327,16 @@ def drive(rig, binary):
         os.waitpid(pid, 0)
     except Exception:
         pass
+    # #420: flush whatever absorb() was holding. A fragment held back as a possible record
+    # prefix is real console text if the run ended before it resolved, and dropping it would
+    # silently truncate the log the verdict is computed from -- the same class of defect as
+    # the lost 4 KB block that once faked a capability regression.
+    if tail:
+        log.write(tail.encode("latin1", "replace"))
+        buf += tail
+        tail = ""
     log.close()
+    raw.close()
 
     txt = open(log_path, "rb").read().decode("latin1", "replace")
     ok = True

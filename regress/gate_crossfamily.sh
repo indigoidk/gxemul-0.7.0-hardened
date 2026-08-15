@@ -46,6 +46,33 @@ run_rig() {
     check "$rig: reached boot milestone" "$(v BOOT_REACHED)" "1"
     check "$rig: computed answer"        "$(v VALUES)"       "$want"
     check "$rig: verdict"                "$(v VERDICT)"      "PASS"
+
+    # #420: the boot milestone is now waited for against a budget of GUEST WORK rather than
+    # host seconds, and the driver reports WHY it stopped. The old 600 s wall budget was a
+    # LOAD-SENSITIVE ORACLE: reproduced under 8 busy loops on 8 cores, the unmodified driver
+    # gave BOOT_REACHED=0 and three red rows at 601 s on a boot that was entirely healthy --
+    # panic/FATAL/trap all zero, ordinary late rc output, 63.4% of the way to login. With
+    # room to finish, the same load reached login at 720.8 s with every marker and both
+    # computed values correct.
+    #
+    # EVERY non-MARKER reason is a hard FAIL here, and BACKSTOP especially. Gate 7 can treat
+    # a wall-clock expiry as inconclusive because it boots three builds in one run, so
+    # prebatch reaching its marker is free evidence the host was healthy. THIS GATE BOOTS ONE
+    # GUEST PER RIG: there is nothing to compare against, "the host might have been slow" is
+    # unfalsifiable, and an unfalsifiable excuse must not soften a verdict.
+    check "$rig: boot stopped at the milestone, not a budget or a hang" "$(v REASON)" "MARKER"
+
+    # *** ASSERT THE COUNT, NEVER THE REASON. *** Removing -N leaves the guest booting
+    # perfectly: every marker matches, every value is right, and REASON is legitimately
+    # MARKER -- there is nothing wrong with the boot. The only observable difference is that
+    # the budget and stall detectors were never armed. Measured on landisk, which has no race
+    # to hide behind (8 s boot against a 60 s stall): every other row stayed green.
+    local n; n=$(v NINSTRS)
+    if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+        check "$rig: -N instruction stream was actually observed" present present
+    else
+        check "$rig: -N instruction stream was actually observed" "${n:-none} records" present
+    fi
     echo
 }
 

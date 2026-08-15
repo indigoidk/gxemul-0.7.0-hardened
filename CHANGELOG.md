@@ -4192,6 +4192,90 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-ninth round (#420) — the load witness was the first instrument to break, and it broke into the shape of a regression
+
+#419 converted gate 7 to a budget of guest work. **Gate 5 had the same defect and broke under load
+*before* gate 7 did**, which matters more than the ordering suggests: `nightly_battery.sh` prints
+gate 5's `BOOT_REACHED` under the banner *"gate 5 boots the same luna88k with the same binary and
+is the independent witness"* — it is the instrument used to tell host load from a real regression
+in gate 7. The witness fails first, and it fails in the same direction, so it corroborates the
+wrong conclusion.
+
+### Reproduced, one script, both runs at 8 busy loops on 8 cores
+
+| | unmodified `drive_guest.py` | same load, room to finish |
+|---|---|---|
+| `BOOT_REACHED` | **0** | 1 |
+| markers | 0 : 0 : 0 | 2 : 1 : 1 |
+| computed values | **(none)** | `0.500000,1.414214` ✓ |
+| verdict | **FAIL (exit 1)**, three rows red | PASS |
+
+*"Did it fail for the reason under test?"* — checked, not assumed. The failing log ends on ordinary
+late rc output (`MARKING FILE SYSTEM CLEAN`) with `panic`, `FATAL`, `trap` and `Stopped at` all
+**zero**, at **63.4 % of the instruction path to login**. The boot was entirely healthy;
+`drive_guest.py:38`'s 600 s ended it. With room, the same load reached `login:` at 720.8 s — and
+that run's instruction count landed **3,498 instructions** from #419's independently measured
+7,349,301,148, across two sessions and two completely different drivers (file-polling vs pty).
+
+### What did NOT port from gate 7, and why the round is not a copy
+
+**BACKSTOP is a hard FAIL here.** Gate 7 can treat a wall-clock expiry as inconclusive because it
+boots pristine, prebatch and HEAD in one run, so prebatch reaching its marker is free evidence the
+host was healthy. **Gate 5 boots one guest per rig.** There is nothing to compare against, "the
+host might have been slow" is unfalsifiable, and an unfalsifiable excuse must not soften a verdict.
+
+**A per-step progress oracle cannot exist.** The ten step waits of 5–15 s looked like the same
+defect at smaller scale. Measured across five healthy runs, 25 step windows: **16 saw zero
+instruction records and none saw more than two**, because at a prompt the rate collapses from
+63.5 M to 1.53 M instr/s. "Require zero records" false-FAILs healthy runs 16 times in 25; scaling
+by the observed rate applies a boot-phase figure **40× wrong** for the phase it gates. They are
+also not verdict-bearing individually — `drive_guest.py` retries and the verdict comes from the log
+scan — and under the same 6× load **every step confirmed on attempt 0**. Left as wall clock, filed.
+
+**Landisk gets no instruction budget at all.** Six idle boots span 2,046,965,550–2,852,740,381, a
+**39.4 %** spread against luna88k's 3.57 %. A ceiling from six samples that scattered would repeat
+the exact "mean quoted as a worst case" error #419 pass 4 corrected. It relies on the stall
+detector and backstop until its rate is measured properly. Landisk also had no false-FAIL to fix —
+7.2–8.3 s to prompt against a 420 s budget, 50× headroom — so converting it buys
+**distinguishability**, not headroom: a hung SH4 core now reports STALLED instead of a timeout
+indistinguishable from load.
+
+### The interleaving hazard, where the brief was wrong in both directions
+
+The design brief worried that a guest might print something shaped like an instruction record.
+**Zero occurrences** in either complete log. The real hazard is the reverse: `cpu_show_cycles()`
+writes the record into the same stdout as the console with **no leading newline**, so it lands at
+the cursor and *terminates the guest's partial line*. That already happened **without `-N`** —
+landisk had 7 of 20 bracketed messages mid-line, two splitting a guest word, one immediately after
+`HITACHI SH7751R`, the exact string this gate asserts.
+
+***And the anchored strip the brief proposed heals nothing***, because the pty emits bare CRs as
+well as CRLF and Python's `^` only matches after `\n`:
+
+| assertion | control | anchored strip | unanchored |
+|---|---|---|---|
+| `HITACHI (\w+)` | `SH7751R` | **`SH77`** | `SH7751R` |
+| landisk boot pattern | MATCH | **(none)** | MATCH |
+| `GX_FP …` | values | **(none)** | ✓ |
+
+`SH77` is not a miss — it is a **wrong answer that reads as an SH4 emulation defect.** The shipped
+form is unanchored and eats the trailing newline, which is what rejoins the split line. Validated
+five ways including a record **split across two pty reads mid-record**, which no regex fixes: the
+absorb loop holds a possible record prefix back rather than classifying it, and the hold is bounded
+by a newline or a `]` so a guest line containing a bare `[` cannot stall the buffer.
+
+The streams are also split now — `drive_<rig>.raw.log` keeps everything, `drive_<rig>.log` is
+console-only — because `gate_hygiene.sh` greps that file for distress **substrings** and a record
+embeds a guest symbol (`<sched_idle+0x8c>`). No collision measured today across 527 records; the
+mechanism is removed for free.
+
+### The mutant, again
+
+Removing `-N` leaves the guest booting perfectly: every marker matches, every value is right, and
+`REASON` is legitimately `MARKER` — there is nothing wrong with the boot. On landisk there is not
+even a race to hide behind (8 s boot against a 60 s stall). The only observable difference is that
+the count stayed at zero. **The kill row asserts the count, never the reason.**
+
 ## One-hundred-and-fifty-eighth round (#419) — a gate that could not tell a slow host from a broken build, and a cure that measured worse than the disease
 
 `gate_ab` gave each luna88k boot 300 seconds of **host wall clock** and then counted semantic

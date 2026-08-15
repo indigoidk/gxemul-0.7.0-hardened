@@ -3797,3 +3797,42 @@ worse than the defect that was fixed.**
    SIGTERM. `cpu.c:418`'s forced `cpu_show_cycles()` never runs. So the count must be scraped from
    the periodic `-N` records, which is why the oracle is quantised to 2^25 instructions (0.44 % of
    a luna88k boot — far below the 3.57 % run-to-run spread, so it costs nothing).
+
+## 2026-08-15 — #420 residuals (the gate 5 progress-oracle round)
+
+1. *** THE TEN PER-STEP WALL-CLOCK WAITS IN `drive_guest.py` ARE NOT CONVERTED, AND CANNOT BE
+   WITH THE PRESENT ORACLE. *** Measured across five healthy runs, 25 step windows: **16 saw
+   ZERO instruction records and none saw more than two**, because at a prompt the guest's rate
+   collapses from 63.5 M to 1.53 M instr/s. So "require zero records" false-FAILs a healthy run
+   16 times in 25, and scaling a step budget by the boot-phase rate applies a figure **40× wrong
+   for the phase it gates**. They are also not verdict-bearing individually — the driver retries
+   and the verdict comes from the log scan — and under the same 6× load that broke `boot_wait`,
+   every step confirmed on attempt 0. **Residual stated honestly: if the retries are ever
+   exhausted, the original defect returns with a much smaller trigger.** Any future scheme needs
+   its own measurement first; do not port the boot-phase reasoning down to a 5 s window.
+
+2. **LANDISK'S INSTRUCTION RATE IS UNCALIBRATED, AND ITS COUNT IS A POOR ORACLE.** Six idle boots
+   span 2,046,965,550–2,852,740,381 — a **39.4 %** spread, against luna88k's 3.57 % over eight
+   runs. #420 therefore gives landisk **no instruction budget at all**, relying on the stall
+   detector and the backstop. Deriving a ceiling from six samples that scattered would be the same
+   "mean quoted as a worst case" error #419 pass 4 corrected. To close this properly, measure the
+   landisk rate across enough boots to bound the high side, then set a budget.
+
+3. **`gate_crossfamily.sh`'s `v()` TAKES `head -1`**, so a rig declaring two `expect_values` has
+   only the FIRST compared literally. Landisk's `GX_ANS 42` currently rides on `VERDICT` alone.
+   Not a live false pass today — landisk declares one value — but the shape is a latent one: a
+   second value can be added and silently not checked.
+
+4. **gxemul's OTHER bracketed messages already splice guest lines, with no `-N` involved.**
+   Measured in the last pre-#420 gate logs: landisk 7 of 20 bracketed messages were not at line
+   start, two splitting a guest word (`RS5C313 real t`+msg+`ime clock`), one landing immediately
+   after `HITACHI SH7751R` — the exact string this gate asserts. #420's strip removes only
+   `instrs` records. The general mechanism — `cpu_show_cycles()` and friends printf-ing into the
+   same stdout as the console with no leading newline — remains, and a future message could land
+   mid-token in an asserted string. Assessed, not changed.
+
+5. **A backstop expiry in gate 5 is now a hard FAIL with no way to say "the host was slow".** That
+   is deliberate — one guest per rig means no A/B witness, so the excuse is unfalsifiable — but it
+   is a real behavioural difference from gate 7, and a genuinely overloaded host will produce a red
+   gate 5 rather than a skip. The backstop is 2400 s against a measured worst boot of 742 s, so it
+   takes a host ~3× worse than full saturation to reach it.
