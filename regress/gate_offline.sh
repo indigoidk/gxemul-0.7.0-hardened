@@ -90,14 +90,17 @@ check_min "absorb: rows actually run" \
 #  missed by name.)
 check     "absorb: the hold invariant row is present" \
           "$(grep -c 'tail invariant held at every step' "$ABLOG")" "1"
-check     "absorb: the body-landing rows are present" \
-          "$(grep -c 'lands in BODY' "$ABLOG")" "3"
+#  A FLOOR: three today, and adding a fourth guest-text fixture must not red the gate.
+check_min "absorb: the body-landing rows are present" \
+          "$(grep -c 'lands in BODY' "$ABLOG")" 1
 
 #  THE POSITIVE CONTROL IS THE NAMED SURVIVOR ITSELF, applied to COPIES -- never the repo.
 #  An in-process wrong-expectation row would only prove the reporter can print FAIL; this
-#  proves THE ROW KILLS THE MUTANT.  Three states stay distinguishable: never ran (empty log,
-#  every row below red), ran and crashed (nonzero status, NO verdict token), ran and caught
-#  (the token plus the killing row's name).
+#  proves THE ROW KILLS THE MUTANT.  Three states stay distinguishable IN AGGREGATE: never
+#  ran (empty log -- rows 1, 3 and 4 red; note that row 2 asks only for a nonzero status and
+#  a never-run python3 also exits nonzero, so THAT ROW ALONE DOES NOT SEPARATE THEM, which a
+#  review seat measured), ran and crashed (nonzero status, NO verdict token), ran and caught
+#  (the token plus the killing row's name).  The gate is red in all three failure shapes.
 ACDIR=$LOGDIR/absorb_control
 rm -rf "$ACDIR"; mkdir -p "$ACDIR"
 python3 - "$HERE" "$ACDIR" <<'PYCTL' > "$ACDIR/apply.log" 2>&1
@@ -127,7 +130,9 @@ check     "absorb control: it failed rather than crashed" \
 #  THAT NAMED ROW and not from some unrelated collapse.
 check_min "absorb control: the kill is by the named row" \
           "$(grep -c 'FAIL  lands in BODY' "$ACDIR/run.log")" 1
-rm -rf "$ACDIR"
+#  KEEP THE LOGS WHEN THE CONTROL FAILS.  Removing them unconditionally deleted the only
+#  evidence at exactly the moment it was needed.
+[ "$ACRC" -ne 0 ] && grep -q SELFTEST_ABSORB_FAIL "$ACDIR/run.log" && rm -rf "$ACDIR"
 
 command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || \
     gate_skip "no C compiler on PATH"

@@ -10,7 +10,10 @@ narrowed to the ones that died.
 *** THE DENOMINATOR RULE, enforced by this file rather than remembered. ***
   * the header prints the identity  attempted = killed + survived + faults, and this program
     EXITS NONZERO if that identity does not hold -- a census that cannot count itself is not
-    evidence;
+    evidence.  HONESTLY: with today's dispatch every mutant lands in exactly one list, so the
+    identity cannot currently fail; a review seat named that plainly.  It is a guard against a
+    future edit that adds a verdict and forgets a list, not a live check, and it is documented
+    as such rather than counted as one;
   * every survivor is NAMED, with a disposition from a closed vocabulary: EQUIVALENT (with the
     argument) or FILED (with a queue id).  "Survivors: none" prints even when there are none,
     because absence must be stated rather than inferred from silence;
@@ -29,6 +32,12 @@ that provision is for: an interrupted in-place run leaves the tree mutant and po
 later measurement.
 
 Usage:  absorb_census.py [workdir]      (default: $LOGDIR/absorb_census, else /tmp/absorb_census)
+
+*** THE WORKDIR IS NEVER DELETED, ONLY THE PER-MUTANT SUBDIRECTORIES THIS PROGRAM CREATES. ***
+An earlier version removed the whole directory it was given.  Measured by a review seat:
+`absorb_census.py $LOGDIR` destroyed /tmp/gxregress -- the pty logs gate 6 grades -- and the
+usage line above was the thing that invited it.  A census that can delete the evidence of
+other gates is worse than no census.
 """
 import os
 import re
@@ -139,7 +148,8 @@ MUTANTS = [
 
 def run_one(work, name, old, new):
     """Apply one mutant to a COPY and grade it. Returns (verdict, detail)."""
-    d = os.path.join(work, name)
+    #  Per-mutant subdirectory ONLY.  Never the caller's directory (see the header).
+    d = os.path.join(work, "m", name)
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     src = open(os.path.join(HERE, "drive_guest.py"), encoding="utf-8").read()
@@ -173,10 +183,21 @@ def main():
         verdict, detail = run_one(work, name, old, new)
         print("  %-9s %-28s %s" % (verdict, name, detail))
         {"KILLED": killed, "SURVIVED": survived, "FAULT": faults}[verdict].append((name, breaks))
-    shutil.rmtree(work, ignore_errors=True)
+    #  Remove only what this program made.  If that fails, SAY SO -- a silent
+    #  ignore_errors leaves residue nobody hears about, which is how the last round
+    #  polluted the shared log directory.
+    try:
+        shutil.rmtree(os.path.join(work, "m"))
+    except OSError as e:
+        print("  NOTE  could not remove %s/m: %s" % (work, e))
 
     a, k, s, f = len(MUTANTS), len(killed), len(survived), len(faults)
     print("\nABSORB_CENSUS attempted=%d killed=%d survived=%d faults=%d" % (a, k, s, f))
+    #  EXCLUSION IS A DISPOSITION, NOT A DISAPPEARANCE.  This census covers REC, not
+    #  REC_EOF (drive_guest.py:155, used once at the end-of-run flush).  A review seat
+    #  measured that replacing REC_EOF with a pattern that matches nothing SURVIVES every
+    #  row, so the gap is real and named rather than implied by its absence.
+    print("  EXCLUDED  REC_EOF (end-of-run flush)      FILED (b1w-2): no row reaches it")
     if survived:
         for name, breaks in survived:
             #  A survivor entry names a disposition or it is not an entry.  Until one is

@@ -46,10 +46,22 @@ def check(name, got, want):
 #  the SUM -- and a mutant that only MOVES text between the two halves preserves the sum, so
 #  27 of 29 rows could not see it.  A measured census found five such survivors, one of which
 #  makes the boot marker unreachable while every row stays green.  I2 restates the parser's
-#  own hold guard as a POSTCONDITION checked after EVERY step, so it applies on all ~1200
-#  calls this file already makes, including the offset sweeps; I3 is finality, and it is why
-#  the sum idiom is gone from this file entirely.  400 is a LITERAL for the reason section F
-#  records -- a fixture derived from the constant under test moves with it and pins nothing.
+#  own hold guard as a POSTCONDITION checked after EVERY step, so it covers every call that
+#  goes through feed() -- 685 of them today, including both offset sweeps; the pure-regex rows
+#  do not stream and are not covered by design.  I3 is finality: every newline-terminated row
+#  now pins the PAIR.
+#
+#  *** ONE SUM SURVIVES ON PURPOSE, AND SAYING OTHERWISE WAS WRONG. ***  Section B's sweep
+#  still compares body + tail, because that row is about CONTENT PRESERVATION across a split
+#  and the concatenation is the honest expression of it; the row immediately after it pins the
+#  pair at every offset, so the relocation class is still caught.  An earlier version of this
+#  comment, and the commit message with it, claimed the idiom was "gone from this file
+#  entirely" -- two review seats read the file and found the line.  A round about a detector
+#  that overstated its coverage must not overstate its own.
+#
+#  400 is a LITERAL, and it is NOT the shipped bound: it is a sanity ceiling, chosen for the
+#  reason section F records -- a fixture derived from the constant under test moves with it and
+#  pins nothing.  The shipped bound is HOLD_MAX (256), pinned exactly by the two K rows.
 I2_VIOLATIONS = []
 I2_STEPS = 0
 
@@ -200,10 +212,14 @@ print("--- K. the EDGES the invariants cannot reach (each named by the census) -
 #  classes, and no invariant covers them.
 #  K1: the hold bound, AT the boundary.  Section F uses 400 -- far past the shipped 256 -- so
 #  a `<` -> `<=` mutant sat comfortably inside it and survived.
+#  COUNT THE BRACKET.  "[" + "x"*254 is 255 characters, and the guard is
+#  len(rest) - i < HOLD_MAX with HOLD_MAX 256 -- so 255 is the last held length and 256 is
+#  the first released one.  The first version of these rows called them 254 and 256; a
+#  review seat caught it, and a round about testing a bound must not misname the bound.
 body, tail, _ = feed(["[" + "x" * 254])
-check("254-char '[' run is still held (just inside the bound)", tail, "[" + "x" * 254)
+check("255-char '[' run is still held (the last length that fits)", tail, "[" + "x" * 254)
 body, tail, _ = feed(["[" + "x" * 255])
-check("256-char '[' run is released (AT the bound, not near it)", tail, "")
+check("256-char '[' run is released (the first that does not)", tail, "")
 #  K2: a missing '[' must not hold.  Dropping the `i != -1` guard holds the last character of
 #  every bracket-free read for ever, and every sum row stayed green.
 body, tail, _ = feed(["plain text with no bracket"])
@@ -230,6 +246,9 @@ check("...with no count invented", n, None)
 print("--- THE INVARIANTS, over every call this file made ---")
 check("tail invariant held at every step (of %d)" % I2_STEPS, I2_VIOLATIONS, [])
 
-print("\n%d rows, %d failures" % (ROWS, FAILS))
-print("SELFTEST_ABSORB_%s" % ("PASS" if FAILS == 0 else "FAIL"))
-sys.exit(1 if FAILS else 0)
+#  The invariant count goes in the SUMMARY as well as in its own row, because the row runs
+#  where it sits: a section appended BELOW it would feed the parser without ever being
+#  checked, while the row above stayed green.  The summary is written last by construction.
+print("\n%d rows, %d failures, %d tail violations" % (ROWS, FAILS, len(I2_VIOLATIONS)))
+print("SELFTEST_ABSORB_%s" % ("PASS" if FAILS == 0 and not I2_VIOLATIONS else "FAIL"))
+sys.exit(1 if (FAILS or I2_VIOLATIONS) else 0)
