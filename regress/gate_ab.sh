@@ -92,11 +92,16 @@ LUNA_IMG="R:$IMAGES/liveimage-luna88k-raw-20250518.img"
 #                      maximally-precise usleep host would reach (~8.06 G).
 #   LUNA_STALL  120 s  At the SLOWEST rate measured here (9.9 M instr/s -- 7,349,301,148
 #                      instructions in 742 s, host saturated) one -N record arrives every
-#                      3.4 s. 120 s of silence is 35 missed
-#                      records. That is a HANG, not a slow host -- but the claim is
-#                      empirical, not absolute: this detector still reads `date +%s`, so a
-#                      host that SUSPENDS or starves the process for two minutes would look
-#                      identical. It is 35x the worst observed gap, not a proof.
+#                      3.4 s. That is a HANG, not a slow host -- but the claim is empirical,
+#                      not absolute: this detector still reads `date +%s`, so a host that
+#                      SUSPENDS or starves the process for two minutes looks identical.
+#                      *** THE MULTIPLIER WAS OVERSTATED AS 35x. 3.4 s is a MEAN derived from
+#                      total instructions over total wall time; the WORST observed gap is what
+#                      matters, and measured directly on the pty path under saturation it is
+#                      7.06 s (n=219: min 0.47, median 3.86, p90 5.54, p99 6.23). So the
+#                      honest multiplier is 17x, not 35x. Still ample -- but a mean is not a
+#                      worst case, and quoting one as the other is how a margin gets believed
+#                      to be twice its real size. ***
 #   LUNA_BACKSTOP 1800 s  2.4x the worst boot ever measured here (742 s, 8 busy loops on 8
 #                      cores, which still reached login 1:1:1).
 LUNA_BUDGET=12000000000
@@ -185,6 +190,16 @@ selftest_progress() {
     n=${o#*ninstrs=}; n=${n%% *}
     check "progress selftest: a boot with no -N stream still reads MARKER" "$r" "MARKER"
     check "progress selftest: ...and is caught only by a zero instruction count" "$n" "0"
+
+    # A CRASH IS NOT A TIMEOUT. Measured on the previously shipped code: a fake emitting one
+    # record then exiting 3 reported BACKSTOP -- putting a dead build into the single reason
+    # a caller is allowed to excuse as host load. timeout(1) returns 124 if and only if IT
+    # fired, so the exit status is what separates the two.
+    printf '#!/bin/sh\necho "[ 100000000 instrs; i/s=1 avg=1]"\nexit 3\n' > "$d/f_crash"
+    chmod +x "$d/f_crash"
+    o=$(run_emu_progress 20 500000000 10 'login:' "$d/o_crash.log" "$d/f_crash")
+    r=${o#reason=}; r=${r%% *}
+    check "progress selftest: a crashed emulator is EXITED, not BACKSTOP" "$r" "EXITED"
 }
 selftest_progress
 

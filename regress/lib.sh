@@ -139,7 +139,7 @@ run_emu() {
 # from interactive greps. This runs the emulator against a budget of GUEST WORK instead, and
 # -- the part that actually fixes the defect -- it REPORTS WHY IT STOPPED.
 #
-# Echoes one line: "reason=<MARKER|BUDGET|STALLED|BACKSTOP|ABSENT> ninstrs=<N> wall=<S>"
+# Echoes one line: "reason=<MARKER|BUDGET|STALLED|BACKSTOP|EXITED|ABSENT> ninstrs=<N> wall=<S>"
 #
 #   MARKER    the regex matched. Stop AT ONCE: today's run burns its whole budget AFTER
 #             login because the guest never exits, so this is also where the speed-up is.
@@ -151,6 +151,9 @@ run_emu() {
 #             and it is upstream 0.7.0's exact signature on luna88k.
 #   BACKSTOP  wall clock expired while instructions were still advancing. The only genuinely
 #             load-ambiguous outcome, and the only one a caller may treat as inconclusive.
+#   EXITED    the emulator ended under its own power -- exited or crashed -- rather than
+#             being stopped. A CRASH IS NOT A TIMEOUT, and reporting one as BACKSTOP would
+#             put a dead build into the single reason a caller may excuse as load.
 #   ABSENT    no -N record ever appeared. A HARNESS FAULT, and it must be scored RED: drop
 #             `-N` from the args, or break the extraction by one character, and every leg
 #             would otherwise fall to BACKSTOP for ever while the battery stayed green and
@@ -229,13 +232,21 @@ run_emu_progress() {
     # `pkill -f <pattern>` for this -- the pattern appears in the invoking shell's own
     # command line, so pkill SIGTERMs itself before finishing the job (measured: it exited
     # 15 having killed nothing).
-    local kid
-    for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -TERM "$kid" 2>/dev/null; done
-    kill -TERM "$pid" 2>/dev/null
-    sleep 1
-    for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -9 "$kid" 2>/dev/null; done
-    kill -9 "$pid" 2>/dev/null
-    wait "$pid" 2>/dev/null
+    local kid exitst=0
+    if [ -n "$reason" ]; then
+        # We stopped it deliberately, so its exit status carries no information.
+        for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -TERM "$kid" 2>/dev/null; done
+        kill -TERM "$pid" 2>/dev/null
+        sleep 1
+        for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -9 "$kid" 2>/dev/null; done
+        kill -9 "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    else
+        # The poll loop ended because the process is GONE. Collect its status before
+        # touching it: that status is the only thing that distinguishes `timeout`
+        # firing (124) from the emulator exiting or crashing under its own power.
+        wait "$pid" 2>/dev/null; exitst=$?
+    fi
 
     if [ -z "$reason" ]; then
         # *** RE-CHECK THE LOG BEFORE DEFAULTING TO BACKSTOP.  Measured 3/3,
@@ -245,8 +256,15 @@ run_emu_progress() {
         # simultaneously passed on 1:1:1.  Two contradictory rows from one run. ***
         if grep -aq "$marker" "$log" 2>/dev/null; then
             reason=MARKER
+        elif [ "$exitst" != 124 ]; then
+            # *** A CRASH IS NOT A TIMEOUT.  The loop also ends when the emulator DIES,
+            # and reporting that as BACKSTOP puts a crashed build into the one reason a
+            # caller may treat as load-ambiguous.  timeout(1) returns 124 if and only if
+            # IT fired; anything else means the emulator ended on its own.  Measured on
+            # the shipped code: a fake emitting one record then `exit 3` returned
+            # reason=BACKSTOP ninstrs=100000000 wall=2. ***
+            reason=EXITED
         else
-            # The process ended on its own or the backstop's timeout(1) reaped it.
             reason=BACKSTOP
         fi
         # Same race on the count: a run that finishes inside one poll interval has a
@@ -254,9 +272,11 @@ run_emu_progress() {
         n=$(tail -c 65536 "$log" 2>/dev/null | grep -ao '\[ *[0-9]\+ instrs' | tail -1 | tr -dc '0-9')
         [ -n "$n" ] && [ "${n:-0}" -gt "${last_n:-0}" ] 2>/dev/null && last_n=$n
     fi
-    # An absent oracle stream outranks every other reason: if -N produced nothing then
-    # nothing was measured, whatever else the run appeared to do.
-    [ "${last_n:-0}" -eq 0 ] && [ "$reason" != MARKER ] && reason=ABSENT
+    # An absent oracle stream outranks most other reasons: if -N produced nothing then
+    # nothing was measured, whatever else the run appeared to do.  It does NOT outrank
+    # EXITED -- a build that died is a defect in its own right, and the caller's
+    # instruction-count row catches a dropped `-N` independently of the reason.
+    [ "${last_n:-0}" -eq 0 ] && [ "$reason" != MARKER ] && [ "$reason" != EXITED ] && reason=ABSENT
 
     echo "reason=$reason ninstrs=$last_n wall=$(( $(date +%s) - t0 ))"
 }
