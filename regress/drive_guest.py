@@ -199,7 +199,12 @@ def drive(rig, binary):
     #  os.environ.get(LOGDIR, default): with LOGDIR set but EMPTY the two-argument form
     #  returns "" and these paths become "/drive_<rig>.log" -- the filesystem root.  The
     #  `or` form matches lib.sh's own ${LOGDIR:-...}, which also treats empty as unset.
-    logdir = os.environ.get("LOGDIR") or "/tmp/gxregress"
+    #  ABSOLUTE, and resolved BEFORE the os.chdir(IMAGES) below: makedirs runs in the
+    #  caller's cwd while the two open() calls run in IMAGES, so a RELATIVE $LOGDIR would
+    #  create the directory in one place and try to write the logs in another -- and gate 6
+    #  would then grade a path neither of them used.  The old hardcode was absolute, so
+    #  this hazard arrived with the fix; three review seats caught it.
+    logdir = os.path.abspath(os.environ.get("LOGDIR") or "/tmp/gxregress")
     log_path = "%s/drive_%s.log" % (logdir, rig)
     raw_path = "%s/drive_%s.raw.log" % (logdir, rig)
     os.makedirs(logdir, exist_ok=True)

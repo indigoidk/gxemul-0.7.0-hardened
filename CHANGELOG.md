@@ -4199,10 +4199,12 @@ grades. Nine review seats assessed and researched both; the round is recorded he
 panel settled it, because two of its conclusions were settled *against* the majority.
 
 **#422 — `drive_guest.py` ignored `$LOGDIR`, and `lib.sh` never exported it.**
-`regress/drive_guest.py:197-199` built both pty log paths from the literal `/tmp/gxregress`, and
+`regress/drive_guest.py` built both pty log paths from the literal `/tmp/gxregress`, and
 `regress/lib.sh:24` assigned `LOGDIR` without `export`, so even a driver that read the environment
-would have seen nothing. Both halves ship together (`lib.sh:24-30`, `drive_guest.py:197-203`);
-neither works alone. Three findings worth keeping:
+would have seen nothing. Both halves ship together (`lib.sh:24-31`, `drive_guest.py:202-210`);
+the export is what a caller who writes `LOGDIR=x; ./run.sh` needs -- the census shape -- while a
+caller who had already exported would have been served by the driver half alone, so the defect was
+CONDITIONALLY, not uniformly, silent. Three findings worth keeping:
 - **The obvious form is wrong.** Eight of nine seats proposed `os.environ.get("LOGDIR", <default>)`.
   Measured: with `LOGDIR` set but **empty** that returns `""` and the paths become
   `/drive_<rig>.log` — the filesystem root. The shipped form is
@@ -4229,9 +4231,9 @@ directions: `no/no → FAIL` on the unfixed tree before the edit, `yes/yes → P
 **#423 — no wall time was recorded anywhere.** The record block printed five values and no
 duration, so the landisk load-sensitivity fact (counts nearly halve under host load) could never
 accrue calibration data. `t_start` is taken immediately **before** `pty.fork()`
-(`drive_guest.py:209-212`) — `boot_progress()`'s own `t0` starts after the exec and cannot see
-process startup — and `BOOT_WALL=%.1f` prints beside `NINSTRS` (`:400-410`), which is the count at
-that same instant, so the pair yields instructions-per-second. Because the record block runs before
+(`drive_guest.py:222-224`) — `boot_progress()`'s own `t0` is taken after the fork, so it cannot
+cover process startup — and `BOOT_WALL=%.1f` prints beside `NINSTRS` (`:406-421`), which is the
+count at that same instant, so the pair yields instructions-per-second. Because the record block runs before
 the interactive steps, the window is the boot leg **by construction** and cannot silently grow.
 
 **`BOOT_WALL` is telemetry and must never become an oracle** — a wall-clock threshold is
@@ -4242,8 +4244,11 @@ the row holds under any load — both dilate together. Stated limit, not hidden:
 below the ceiling survives both rows; wrong telemetry costs a wrong calibration note, not a wrong
 verdict.
 
-**Records corrected with the fix** (`CLAUDE.md:326`, `OUTSTANDING_BUGS.md:3772-3774`, and the D1
-entry at `:3958`): all cited `drive_guest.py:110`, a line the code left years ago.
+**Records corrected with the fix** (`OUTSTANDING_BUGS.md:3772-3774` and the D1 entry at `:3958`):
+both cited `drive_guest.py:110`, a line the code left long ago. The project-root `CLAUDE.md:326`
+carried the same stale citation and was corrected in the same pass, but it is OUTSIDE this
+repository, so no hunk here touches it -- the first commit message named it as if it were in the
+diff, which a review seat caught.
 **`CHANGELOG.md:4455` is deliberately NOT corrected** — `git log -L` confirms `log_path` really was
 at `:110` when that block was written, so it is accurate history and rewriting it would falsify the
 record. **This fix does not license concurrent gates**: the producer/consumer orderings
@@ -4251,6 +4256,36 @@ record. **This fix does not license concurrent gates**: the producer/consumer or
 untouched, and `gate_hygiene.sh:259` still answers a missing rig log with `note` + `continue` rather
 than `degrade`, so a writer/grader divergence would be silent coverage loss inside a green gate —
 which is why both resolutions now come from one exported variable.
+
+**Follow-up in the same round, after the final-review panel (nine seats: one NO-GO, five
+GO-WITH-CHANGES).** The review found three defects in the change itself, and the first two are
+recorded here because they are the interesting kind — a fix that introduced a hazard the original
+did not have, and a detector that certified half of what it claimed.
+- **A relative `$LOGDIR` would have broken.** `os.makedirs()` runs in the caller's directory while
+  the two `open()` calls run after `os.chdir(IMAGES)`, so a relative value created the directory in
+  one place and wrote the logs in another — and gate 6 would then grade a path neither used. The
+  old hardcode was absolute, so the hazard arrived with the fix. `logdir` is now resolved with
+  `os.path.abspath()` before the `chdir` (`drive_guest.py:207`, `:211`). Three seats caught it
+  independently.
+- ***The detector tested one half of the defect and certified the other.*** The first
+  `selftest_logdir.py` set `os.environ` in-process and called `drive()` directly, so deleting
+  `export LOGDIR` from `lib.sh` left both gate rows GREEN. That is precisely the trap the file's own
+  comment warned about for `env LOGDIR=...`, walked into one level down. It now runs the driver the
+  way the battery does — a child shell makes a BARE ASSIGNMENT, sources `lib.sh`, and execs python —
+  and both halves are covered: measured, removing the export turns both rows red, and reverting the
+  driver read turns both rows red.
+- **Gate 2 no longer fails where the image directory is absent.** `drive()` chdirs to a hardcoded
+  absolute image path; the selftest needs no image CONTENTS but cannot run without the directory, so
+  it now prints `SELFTEST_LOGDIR_SKIP` with a distinguishable token rather than failing as though
+  the driver were broken. A named coverage gap beats a red row that blames the wrong thing.
+
+**Claims the review corrected, recorded rather than quietly dropped:** "neither half works alone"
+was overbroad (above); "`boot_progress()`'s `t0` starts after the exec" was imprecise — parent and
+child run concurrently, so it is guaranteed only after the fork; and the first commit message named
+a `CLAUDE.md` correction that no hunk in this repository made. One packet-fed seat argued the record
+block sits after the interactive steps and therefore times the whole run; checked against the file,
+the prints are at `:406-421` and `for step in cfg["steps"]` is at `:435`, so the boot-leg claim
+stands.
 
 **Verified:** gate 2 PASS, 122 checks, including the two new rows; the detector negative-controlled
 before and after; both edited gate scripts pass `bash -n`; the containment arithmetic checked at
