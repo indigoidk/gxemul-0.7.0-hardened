@@ -511,15 +511,37 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 		 *
 		 *  #413 NARROWED THIS CLAIM.  #412 said "every floppy", which
 		 *  is wrong: DISKIMAGE_FLOPPY is a WRITE-ONLY TYPE in this
-		 *  codebase.  It occurs in exactly seven places, all inside
-		 *  diskimage.c/diskimage.h and NONE in any device; every
-		 *  controller hard-codes its type argument (six pass
-		 *  DISKIMAGE_SCSI, one DISKIMAGE_IDE) and both lookups match on
-		 *  d->type == type.  A floppy-typed disk therefore never
-		 *  reaches this function at all -- it is invisible to every
-		 *  controller, which is a DIFFERENT and separately filed
-		 *  defect.  The gate row below is unaffected: it uses a 0-byte
-		 *  image, which is a genuinely reachable zero-block SCSI disk.
+		 *  codebase.  NO DEVICE REFERENCES IT.  Every controller
+		 *  hard-codes its type argument (six diskimage_scsicommand()
+		 *  sites pass DISKIMAGE_SCSI, the ATAPI one passes
+		 *  DISKIMAGE_IDE) and both lookups match on d->type == type, so
+		 *  a floppy-typed disk never reaches this function at all -- it
+		 *  is invisible to every controller.  The gate row below is
+		 *  unaffected: it uses a 0-byte image, which is a genuinely
+		 *  reachable zero-block SCSI disk.
+		 *
+		 *  #418 STATED THE COUNT AND THE COUNT WAS THE BUG.  This
+		 *  paragraph used to read "it occurs in exactly seven places,
+		 *  all inside diskimage.c/diskimage.h" -- and it was wrong the
+		 *  moment it was written, twice over: SPELLING THE IDENTIFIER
+		 *  HERE MADE THE COUNT EIGHT, and "all inside
+		 *  diskimage.c/diskimage.h" is falsified by the file this
+		 *  sentence lives in.  The SAME sentence was duplicated in
+		 *  CHANGELOG.md and is corrected there too -- found by a review
+		 *  seat, not here, because this file's own census had silently
+		 *  scoped itself to src/ (8 hits) when the tree carries 16.
+		 *  That omitted scope is the very failure being corrected.  No
+		 *  OTHER construct in the tree uses the pattern, so it is a
+		 *  one-off rather than a class, but the cheap rule it earns is
+		 *  worth keeping: A COMMENT MAY NOT STATE A COUNT OF AN
+		 *  IDENTIFIER IT ALSO SPELLS.  State the structural property
+		 *  instead -- it stays true across edits.
+		 *
+		 *  #418 also fixed HALF of the reachability defect: the
+		 *  documented `d:` prefix now assigns the machine's default
+		 *  disk type, so `-d d:floppy.img` gives a reachable disk.  A
+		 *  BARE floppy-sized image is still typed FLOPPY and still
+		 *  invisible; that half remains open.
 		 *
 		 *  0xffffffff is also the ATA/SCSI "capacity too large for this
 		 *  command" sentinel, so reporting it for an EMPTY disk is the

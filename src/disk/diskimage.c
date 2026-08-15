@@ -1916,6 +1916,40 @@ int diskimage_add(struct machine *machine, char *fname)
 	if (d->type == DISKIMAGE_UNKNOWN)
 		d->type = get_default_disk_type_for_machine(machine);
 
+	/*
+	 *  #418: 'd:' means "an ordinary disk for this machine".  The manual
+	 *  offers it as the override (gxemul.1: "d: DISK (this is the default)"
+	 *  and "the default for disks can be either SCSI or IDE"), but nothing
+	 *  acted on it, so a floppy-sized image stayed DISKIMAGE_FLOPPY -- a
+	 *  type no controller ever asks for, leaving the guest with no disk.
+	 *
+	 *  POSITION IS LOAD-BEARING, and this is measured, not reasoned:
+	 *
+	 *  It runs AFTER diskimage_recalc_size() so the heuristic has already
+	 *  computed the EXACT floppy geometry (1.44M -> CHS 80,2,18 = 2880
+	 *  sectors).  Doing it earlier, up in the prefix block, hands the image
+	 *  to the generic 63/16 geometry instead and rounds the advertised
+	 *  capacity UP: 720K 1440 -> 2016 blocks (+40%), 1.2M 2400 -> 3024,
+	 *  1.44M 2880 -> 3024, 2.88M 5760 -> 6048.  Those extra blocks are not
+	 *  inert.  Reads are bounded by advertised capacity and writes by
+	 *  d->total_size (see the asymmetric bound in this file), so the guest
+	 *  would be offered blocks that read back as zeroes and refuse every
+	 *  write -- a fresh instance of the residual #416 recorded as unfixable
+	 *  for the rig images, manufactured here for no benefit.
+	 *
+	 *  The i/f/s guard is equally load-bearing: the mutual-exclusion check
+	 *  above tests only i+f+s > 1 and does not know about 'd', so 'id:' and
+	 *  'fd:' are accepted today.  Without the guard this assignment would
+	 *  silently override an explicitly requested type.
+	 *
+	 *  NOT FIXED HERE, deliberately: a BARE floppy-sized image with no
+	 *  prefix is untouched and remains invisible to every controller.  That
+	 *  is the size heuristic's doing and a separate defect; this change only
+	 *  makes the documented escape hatch work.
+	 */
+	if (prefix_d && !prefix_i && !prefix_f && !prefix_s)
+		d->type = get_default_disk_type_for_machine(machine);
+
 	d->rpms = 3600;
 
 	if (prefix_b)

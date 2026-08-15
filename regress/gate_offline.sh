@@ -579,5 +579,58 @@ else
               "$(grep -c 'must not fold to 1 in the SPT position' "$GEOMLOG")" "1"
 fi
 
+# ---------------------------------------------------------------------------
+# #418: the `-d` PREFIX PARSER differential.  Offline, no binary, no guest.
+#
+# `d:` is documented as the escape hatch out of the size heuristic, but nothing
+# acted on it, so a floppy-sized image stayed DISKIMAGE_FLOPPY -- a type NO
+# controller ever passes -- and the guest got no disk at all.
+#
+# WHY THE [SIZE] ROWS BELOW ARE NAMED INDIVIDUALLY.  Measured, six variants
+# built and run: a placement in the prefix block ALSO makes `d:` work and is
+# killed by NOTHING ELSE IN THE FILE -- only the four exactness rows fail it,
+# because that placement runs before diskimage_recalc_size() and rounds the
+# advertised capacity up (720K 1440 -> 2016 blocks, +40%).  Delete those four
+# rows and the wrong placement ships green.
+PARSELOG=$LOGDIR/diff_diskimage_parse.log
+if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$LOGDIR/diff_diskimage_parse" "$HERE/diff_diskimage_parse.c" > "$PARSELOG" 2>&1; then
+    note "disk parser differential compile failed:"; sed 's/^/       /' "$PARSELOG" | head -12
+    check "disk parser: compiles against the real diskimage.c" "no" "yes"
+else
+    check "disk parser: compiles against the real diskimage.c" "yes" "yes"
+    "$LOGDIR/diff_diskimage_parse" > "$PARSELOG" 2>&1
+    sed 's/^/       /' "$PARSELOG"
+    check     "disk parser: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$PARSELOG" | grep -oE '^[0-9]+')" "0"
+    #  37 = the 36 the identity row asserts, plus the identity row itself.
+    check_min "disk parser: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$PARSELOG" | grep -oE '^[0-9]+')" 37
+    check     "disk parser: the identity row is present" \
+              "$(grep -c 'row count -- guards against a stale copy' "$PARSELOG")" "1"
+    #  The grep text appears whether a row PASSES OR FAILS, so a failing row
+    #  cannot read as a missing row.  Each of these closed a mutant that
+    #  survived every other row in the file.
+    check     "disk parser: all four exactness rows are present" \
+              "$(grep -c 'advertised blocks exact' "$PARSELOG")" "4"
+    check     "disk parser: the IDE-default rows are present" \
+              "$(grep -c 'on IDE-default -> IDE\|exists as IDE (dev_wdc)\|NOT visible as SCSI' "$PARSELOG")" "3"
+    #  The 'sd:' row is the SEVENTH mutant's ONLY kill: deleting `&& !prefix_s`
+    #  survives every other row in the file, because `sd:` on a SCSI-default
+    #  machine changes SCSI to SCSI.  It has to run on an IDE-default machine,
+    #  and it has to be named here or deleting it is silent.
+    check     "disk parser: the explicit-prefix precedence rows are present" \
+              "$(grep -c "'fd:' stays FLOPPY\|'id:' stays IDE\|'sd:' stays SCSI" "$PARSELOG")" "3"
+    check     "disk parser: the d:*.iso rows are present" \
+              "$(grep -c 'd:\*.iso is not a CD-ROM\|d:\*.iso is writable' "$PARSELOG")" "2"
+    #  Records, not endorsements: both pin defects this round did NOT fix, so
+    #  the round that does fix them cannot land silently.
+    check     "disk parser: the bare-floppy unreachability records are present" \
+              "$(grep -c 'unreachable by dev_asc' "$PARSELOG")" "4"
+    check     "disk parser: the FLOPPY-typed-ISO record is present" \
+              "$(grep -c 'is FLOPPY-typed (filed defect)' "$PARSELOG")" "1"
+fi
+
 gate_end
 exit $?

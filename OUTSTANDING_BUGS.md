@@ -3689,3 +3689,54 @@ corruption without a clear host-OOB path.
 > a new flake surface that does not belong on this commit's green path); its zeros
 > will be filed "unreached under the committed rigs" + expected_zero_reason, NEVER
 > "dead"; install-without-fire stays the normal state for multi_*_2..4.
+
+## 2026-08-14 — #418 residuals (the `d:` prefix round)
+
+**THE HALF THIS ROUND DID NOT FIX, stated first because a reader of the diff could
+believe otherwise.** #418 made the documented `d:` escape hatch work. It did NOT touch
+the size heuristic that creates the unreachable type, so **a BARE floppy-sized image
+with no prefix is still typed `DISKIMAGE_FLOPPY` and still invisible to every
+controller** — no device references that type, and both selectors match on
+`d->type == type`. That is the default path, the one a user hits without reading the
+manual. Four `[RECORD] no prefix <size> unreachable by dev_asc` rows in
+`regress/diff_diskimage_parse.c` pin it, and `gate_offline` checks them by name, so the
+round that does fix it cannot land silently — but it is open.
+
+**Two sub-defects found while measuring, FILED not folded in** (the stopping rule admits
+only a measured false pass or a wrong record in-round, and neither of these is either;
+harness task #126 carries them as one round because they share the same code):
+
+1. **A small ISO becomes a `FLOPPY CD-ROM`, doubly unreachable.** Measured on the
+   shipping binary: `-e 3max -d cd.iso` on a 1.44 MB ISO prints
+   `FLOPPY CD-ROM id 0, read-only, 1440 KB (CHS=80,2,18)`. The heuristic tests only
+   `type == DISKIMAGE_UNKNOWN` and ignores `d->is_a_cdrom`. **1.2 MB and 1.44 MB are
+   standard El Torito floppy-emulation sizes**, so this is an ordinary shape of file.
+   The candidate one-liner (`&& !d->is_a_cdrom`) touches the size heuristic, which is
+   the collision surface with #414 and #418 — design it, do not patch it in passing.
+   *** The `[RECORD] bare 1.44M *.iso is FLOPPY-typed (filed defect)` row asserts
+   TODAY'S WRONG BEHAVIOUR on purpose and MUST be updated by the round that fixes it. ***
+
+2. **`d:` is consulted for `.iso`/`.cdr` but not `.cue`.** The pass-1 panel split 2–2 on
+   fix-vs-record. A seat corrected the brief on the substance, and the correction is the
+   useful part: a `d:`-prefixed cue is **not** "additionally" unwritable — the unprefixed
+   one is equally read-only, because `is_a_cdrom` forces `writable = 0` for both.
+   Measured: `-d d:disc.cue`, `-d disc.cue` and `-d c:disc.cue` are byte-identical. So
+   the asymmetry is real but costs nothing measurable today. Second argument for
+   recording: a cue sheet is a multi-track *text descriptor* whose data lives in a
+   separate `.bin`, so forcing it to "disk" would present the descriptor as a disk.
+
+**Assessed, not changed — an offline parser detector cannot cover the controller side.**
+Every row in `diff_diskimage_parse.c` asserts the PARSER's output. If a later round
+taught `dev_asc.c` to also accept `DISKIMAGE_FLOPPY`, all 35 rows would stay green while
+the reachability story flipped completely. That needs a call-site row or a booting rig.
+Stated in the detector's own header rather than left to be discovered.
+
+**Records rule earned this round:** `diskimage_scsicmd.c` claimed `DISKIMAGE_FLOPPY`
+*"occurs in exactly seven places"* — and spelling the identifier in a sentence that
+counts occurrences of that identifier **made the count eight the moment it was written**;
+its "all inside `diskimage.c`/`diskimage.h`" clause was falsified by the file the sentence
+lives in. The duplicate in `CHANGELOG.md` was found by a seat, not by the main loop, whose
+grep had silently scoped itself to `src/` — the same omitted-scope failure it was
+correcting. A tree-wide sweep found no other instance, so this is a one-off, not a class.
+**A record may not state a count of an identifier it also spells.** State the structural
+property instead; it survives edits.

@@ -4192,6 +4192,113 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-seventh round (#418) — the documented `d:` override did nothing, and the obvious place to fix it was measurably the wrong one
+
+`DISKIMAGE_FLOPPY` is a write-only type. No device references it: every controller hard-codes its
+type argument — six `diskimage_scsicommand()` sites pass `DISKIMAGE_SCSI`, the ATAPI one passes
+`DISKIMAGE_IDE` — and both selectors match on `d->type == type`. So a floppy-typed image is
+invisible to every controller, while the console prints a confident `FLOPPY DISK id 0, read/write`.
+
+The manual offers `d:` as the way out (`d: DISK (this is the default)`; *"the default for disks can
+be either SCSI or IDE"*). Nothing acted on it. Measured on the shipping binary before any edit:
+
+```
+-d   fl144.img   FLOPPY DISK id 0, read/write, 1440 KB (CHS=80,2,18)
+-d d:fl144.img   FLOPPY DISK id 0, read/write, 1440 KB (CHS=80,2,18)   <- byte-identical
+```
+
+### The placement is the whole round, and the design brief was wrong about it
+
+The brief said the fix belonged in the prefix block, next to `i:`/`f:`/`s:`. A measure seat built
+seven variants and ran them. That placement **also** makes `d:` work — and is killed by nothing in
+the detector except one property. Because it assigns the type *before* `diskimage_recalc_size()`
+runs, the image gets the generic 63/16 geometry instead of the exact floppy one, and the advertised
+capacity rounds **up**:
+
+| size | file blocks | prefix-block placement | after `recalc` (shipped) |
+|---|---|---|---|
+| 720 K | 1440 | **2016 (+40%)** | 1440 exact |
+| 1.2 M | 2400 | 3024 (+26%) | 2400 exact |
+| 1.44 M | 2880 | 3024 (+5%) | 2880 exact |
+| 2.88 M | 5760 | 6048 (+5%) | 5760 exact |
+
+Those phantom blocks are not inert. Under the asymmetric bound this file already carries, **reads**
+are bounded by advertised capacity and **writes** by `d->total_size`, so the guest would be offered
+blocks that read back as zeroes and refuse every write — a fresh instance of the residual #416
+recorded as unfixable for the rig images, manufactured here for no benefit. Placing the assignment
+after `recalc` keeps the geometry the heuristic already computed correctly.
+
+The guard `!prefix_i && !prefix_f && !prefix_s` is equally load-bearing and equally measured. The
+pre-existing mutual-exclusion check tests only `i+f+s > 1` and knows nothing about `d`, so `id:` and
+`fd:` are accepted arguments; without the guard, `-d id:big.img` returned SCSI where the shipping
+binary returns IDE. A live regression, not a hypothetical.
+
+### The detector, and the mutation matrix that proves its rows reach the code
+
+New `regress/diff_diskimage_parse.c` — 35 rows, fully offline, no binary and no guest. Six variants
+built and run; every kill names its row, and no variant failed to build (a build fault is not a
+detection):
+
+```
+base(FIXED)     0 failures   SURVIVES
+revert         10   all [PROOF] type + reachability rows
+noguard         2   [PREC] 'fd:' stays FLOPPY, [PREC] 'id:' stays IDE
+hardscsi        3   the three IDE-default (malta) rows
+prefixblock     4   ONLY the four [SIZE] rows
+delprefixd      2   the two d:*.iso rows -- a TEN-CHARACTER deletion
+```
+
+Two of those deserve naming. **`prefixblock` is killed only by the four exactness rows** — delete
+them and the wrong placement ships green, which is why they are checked individually in the gate.
+**`delprefixd`** removes `&& !prefix_d`, the *only* pre-existing use of `prefix_d` in the file — so
+the round that gives `prefix_d` a second use is precisely the round in which someone deletes the
+first as redundant. Its effect is that `d:*.iso` becomes an unwritable CD-ROM, and a row set using
+only `.img` filenames — which is what the design brief specified — passes it 100%.
+
+`hardscsi` matters for a structural reason: `get_default_disk_type_for_machine()` returns SCSI for
+exactly PMAX, ARC, SGI, LUNA88K and MVME88K, and IDE for everything else. Those five are precisely
+the rigs this project can boot, so hard-coding `DISKIMAGE_SCSI` passes every row on every bootable
+rig. `MACHINE_EVBMIPS` needs no image or kernel offline and is the only thing that distinguishes it.
+
+Gate 2 went 110 → 120 checks.
+
+### Not fixed, and said plainly so a reader of the diff is not misled
+
+**A bare floppy-sized image with no prefix is still typed `DISKIMAGE_FLOPPY` and still invisible to
+every controller.** This round makes the documented escape hatch work; it does not address the size
+heuristic that creates the unreachable type in the first place. That is the default path — what a
+user hits without reading the manual — and it remains broken. Four `[RECORD]` rows pin it so the
+round that does fix it cannot land silently.
+
+Two sub-defects found while measuring, filed rather than folded in, because the stopping rule admits
+only a measured false pass or a wrong record: a small ISO at El Torito floppy sizes becomes a
+`FLOPPY CD-ROM`, doubly unreachable (the heuristic tests only `type == DISKIMAGE_UNKNOWN` and ignores
+`is_a_cdrom`); and `d:` is consulted for `.iso`/`.cdr` but not `.cue`. A seat corrected the brief on
+the second: a `d:`-prefixed cue is *not* "additionally" unwritable — the unprefixed one is equally
+read-only, since `is_a_cdrom` forces it in both cases.
+
+### A record that invalidated itself the moment it was written
+
+`diskimage_scsicmd.c` stated that `DISKIMAGE_FLOPPY` *"occurs in exactly seven places, all inside
+`diskimage.c`/`diskimage.h`"*. Both halves were wrong on arrival: **spelling the identifier in a
+sentence that counts occurrences of that identifier made the count eight**, and the location clause
+is falsified by the file the sentence lives in. The same sentence was duplicated in this changelog —
+found by a seat, not by the main loop, whose grep had silently scoped itself to `src/`. Both are
+corrected to the structural form, which survives edits: *no device references it*. A tree-wide sweep
+found no other instance, so this is a one-off rather than a class; the cheap rule it earns is that
+**a record may not state a count of an identifier it also spells.**
+
+### Seats
+
+Pass 1 fired seven scriptable seats plus the Opus measure seat; **six of seven answered** — minimax
+produced 203 bytes and is recorded as a seat failure, never as agreement. **Kimi 3 returned after
+being quota-dead since ~08-12**, ran its own probe, and beat the main loop twice: it found the
+duplicated count in the changelog and caught that `prefix_d` is absent from the mutual-exclusion
+guard. Q7 was unanimous across all six. Q6 split 2–2 and was settled by the stopping rule rather
+than by vote. The measure seat overturned the brief's central instruction, as it has in four of the
+last five rounds; the four placement variants above are its work, re-run independently before the
+edit was made. Pass 2 fired **two seats, Codex and Opus** — recorded as two seats, not as a panel.
+
 ## One-hundred-and-fifty-sixth round (#417) — #416's own bound disarmed the rows that tested it, and its sense latch outlived the failure it described
 
 Two defects in what #416 shipped, both found by a pass-2 mutation sweep on the committed diff, and
@@ -4577,11 +4684,19 @@ nothing.
 drove the shipping binary and the shipped parser and established that **a floppy answers
 nothing at all.**
 
-**`DISKIMAGE_FLOPPY` is a write-only type in this codebase.** It occurs in exactly seven
-places, all inside `diskimage.c`/`diskimage.h`, and **none in any device**. Every controller
-hard-codes its type argument — six call sites pass `DISKIMAGE_SCSI`, one passes
+**`DISKIMAGE_FLOPPY` is a write-only type in this codebase.** ~~It occurs in exactly seven
+places, all inside `diskimage.c`/`diskimage.h`, and~~ **no device references it**. Every
+controller hard-codes its type argument — six call sites pass `DISKIMAGE_SCSI`, one passes
 `DISKIMAGE_IDE` — and both `diskimage_access()` and `diskimage_scsicommand()` select on
 `d->type == type`. A floppy-typed disk is therefore never reached by any controller.
+
+> **CORRECTED BY #418, struck through above rather than deleted.** The count was wrong on
+> arrival and wrong in two independent ways: spelling `DISKIMAGE_FLOPPY` in a sentence that
+> counts occurrences of `DISKIMAGE_FLOPPY` made the count eight, and "all inside
+> `diskimage.c`/`diskimage.h`" was falsified by the sibling copy of this same sentence living
+> in `diskimage_scsicmd.c`. The structural claim — no device references it — was and remains
+> true, and is the form that survives edits. Rule earned: **a record may not state a count of
+> an identifier it also spells.**
 
 Measured, not read:
 
