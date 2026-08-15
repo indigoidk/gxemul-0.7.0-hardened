@@ -333,6 +333,23 @@ def drive(rig, binary):
     # The confirm patterns match only what the command PRINTS, never what was typed --
     # a pty echoes the master's writes back, so a naive marker is satisfied by the echo
     # alone and proves nothing about execution.
+    #  #425: THE GATE MUST GRADE THE VALUES THAT GOVERNED THE RUN.  Until this round the
+    #  driver read the constants TWICE -- once in the call below, once in the record block --
+    #  and nothing tied the two reads together.  MEASURED: mutating only the call site
+    #  (`budget * 1000` in argument position) left every printed key identical and every gate
+    #  row green, while the run went from REASON=BUDGET at 13 G to REASON=STALLED at 20 G.
+    #  The oracle was disarmed and the record said otherwise.
+    #
+    #  Sharing a LOCAL between the two sites is not enough, and four review seats proposed it:
+    #  the mutation rewrites the ARGUMENT EXPRESSION, so the local -- and the print taken from
+    #  it -- stays honest.  A local proves what the caller INTENDED TO PASS.  Only the callee's
+    #  own parameters prove what it RECEIVED, so boot_progress records them here.
+    #
+    #  Residual, stated rather than hidden: a mutation strictly INSIDE boot_progress, below
+    #  this line, still escapes the print.  selftest_budget.py is what covers that -- it
+    #  straddles the printed budget with a run that must not stop and a run that must.
+    used = {}
+
     def boot_progress(pat, backstop, budget, stall):
         """Wait for the boot milestone against a budget of GUEST WORK, and say why it stopped.
 
@@ -355,6 +372,7 @@ def drive(rig, binary):
         wording should not claim more than it has.)
         """
         nonlocal tail
+        used["backstop"], used["budget"], used["stall"] = backstop, budget, stall
         t0 = time.time()
         last_n, last_change = ninstrs, t0
 
@@ -396,8 +414,12 @@ def drive(rig, binary):
 
     settle = cfg.get("settle", 0)
     tries = cfg.get("tries", 1)
+    #  NO .get DEFAULTS.  Both rigs declare all three keys, and the naive unification is a
+    #  trap a review seat named: `.get("stall", 120)` on BOTH paths would make an omitted key
+    #  print a PASSING 120 where today it prints a FAILING 0.  A rig that omits a key must die
+    #  loudly here rather than run under an invented constant.
     reason = boot_progress(cfg["boot_pat"], cfg["boot_wait"],
-                           cfg.get("budget", 0), cfg.get("stall", 120))
+                           cfg["budget"], cfg["stall"])
     # An absent oracle stream is a HARNESS fault and must be red: removing -N leaves the
     # guest booting perfectly, every marker matching and every value correct, while the
     # budget and stall detectors are silently unarmed. Measured on landisk, which has no
@@ -427,9 +449,11 @@ def drive(rig, binary):
     # INSTANCE than they appeared to. These live in a Python dict that no shell row can
     # see, which is the same shape one layer further away, so the driver has to hand them
     # over or they are unguardable.
-    print("BUDGET=%d" % cfg.get("budget", 0))
-    print("STALL=%d" % cfg.get("stall", 0))
-    print("BACKSTOP=%d" % cfg["boot_wait"])
+    #  #425: from `used`, NOT from cfg -- see the note at boot_progress.  A second lookup
+    #  here is exactly the hole this round measured.
+    print("BUDGET=%d" % used["budget"])
+    print("STALL=%d" % used["stall"])
+    print("BACKSTOP=%d" % used["backstop"])
     reached = (reason == "MARKER")
     if reached:
         for step in cfg["steps"]:

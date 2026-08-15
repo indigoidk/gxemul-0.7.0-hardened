@@ -31,6 +31,30 @@ LOGDIR=${LOGDIR:-/tmp/gxregress}
 export LOGDIR
 mkdir -p "$LOGDIR"
 
+#  #426: classify a rig's reported budget.  IT LIVES HERE, NOT IN THE GATE, so the branch
+#  logic can be exercised offline by a selftest instead of only under a weekly rig boot.
+#  Echoes ONE DISTINGUISHABLE TOKEN per case:
+#    absent      the rig deliberately has no budget (landisk: its count nearly halves under
+#                host load, so any ceiling would be invented rather than measured)
+#    calibrated  a value inside the range measured for that rig
+#    zeroed      ZERO ON A RIG THAT IS CALIBRATED -- the case that used to print a green
+#                "deliberately absent".  MEASURED: a luna88k run reporting BUDGET=0 passed
+#                11/11 while the row said something false about a 12 G rig, and the driver's
+#                own ceiling went falsy at the same time.  RED, not a skip: the gate HOLDS the
+#                calibration, so a skip would claim an ignorance it does not have.
+#    out-of-range / unreported  as they say.
+budget_class() {
+    case "$1:$2" in
+    landisk:0)   echo absent ;;
+    luna88k:0)   echo zeroed ;;
+    *:)          echo unreported ;;
+    luna88k:*)   if [ "$2" -ge 8174849291 ] 2>/dev/null && [ "$2" -le 15571141508 ]
+                 then echo calibrated; else echo out-of-range; fi ;;
+    *:0)         echo absent ;;
+    *)           echo uncalibrated-rig ;;
+    esac
+}
+
 C_OK=$'\033[32m'; C_BAD=$'\033[31m'; C_SKIP=$'\033[33m'; C_OFF=$'\033[0m'
 [ -t 1 ] || { C_OK=""; C_BAD=""; C_SKIP=""; C_OFF=""; }
 

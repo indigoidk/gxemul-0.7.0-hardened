@@ -155,16 +155,19 @@ run_rig() {
     # a bound on another, and landisk's own numbers are an order of magnitude lower.
     if [ -z "$bg" ]; then
         check "$rig: budget was reported at all" "not reported" "a value"
-    elif [ "$bg" -eq 0 ] 2>/dev/null; then
-        check "$rig: budget is deliberately absent (uncalibrated rig)" absent absent
-    elif [ "$rig" = luna88k ]; then
-        check "$rig: budget bounds the failure path (1.05-2x luna88k's observed max)" \
-              "$([ "$bg" -ge 8174849291 ] && [ "$bg" -le 15571141508 ] && echo yes || echo "no: $bg")" yes
     else
-        # A rig that has grown a budget without anyone extending this row is worth saying
-        # out loud rather than passing silently.
-        check "$rig: budget present but this gate has no calibrated range for it" \
-              "uncalibrated range for $bg" "a calibrated range"
+        #  #426: ONE classifier, in lib.sh, and the CALIBRATED case is decided before the
+        #  zero case -- the old order tested `-eq 0` first, so a luna88k run reporting zero
+        #  matched "deliberately absent" and printed a GREEN ROW STATING A FALSEHOOD while
+        #  the calibrated range never ran.  MEASURED: 11/11 PASS on exactly that input.
+        #  Now the class is named and the row wants the class the rig should have.
+        local want
+        case "$rig" in
+        luna88k) want=calibrated ;;
+        landisk) want=absent ;;
+        *)       want=absent ;;
+        esac
+        check "$rig: budget class" "$(budget_class "$rig" "$bg")" "$want"
     fi
     echo
 }

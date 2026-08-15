@@ -94,6 +94,37 @@ check     "absorb: the hold invariant row is present" \
 check_min "absorb: the body-landing rows are present" \
           "$(grep -c 'lands in BODY' "$ABLOG")" 1
 
+#  #425/#426: the budget the driver PRINTS must be the budget it ENFORCES, and the gate's
+#  budget classifier must be exercisable without a rig.  Both are offline.
+#
+#  The straddle (selftest_budget.py) reads BUDGET=N from the driver's OWN OUTPUT and then
+#  runs one leg under N and one over it.  MEASURED against three mutants in copies: a
+#  call-site multiply, a multiply at the COMPARISON, and a deleted stop -- all three go red,
+#  and the unmutated copy passes.  The comparison mutant is the one NO printing scheme can
+#  catch, which is why this row exists at all.
+BULOG=$LOGDIR/selftest_budget.log
+python3 "$HERE/selftest_budget.py" > "$BULOG" 2>&1 || true
+check     "budget: no row failed" \
+          "$(grep -oE '[0-9]+ failures' "$BULOG" | grep -oE '^[0-9]+')" "0"
+check     "budget: verdict present" "$(grep -c SELFTEST_BUDGET_PASS "$BULOG")" "1"
+check_min "budget: rows actually run" \
+          "$(grep -oE '^[0-9]+ rows' "$BULOG" | grep -oE '^[0-9]+')" 7
+check     "budget: the over-budget leg stops for the budget" \
+          "$(grep -c 'ok    a run PAST the printed budget stops' "$BULOG")" "1"
+check     "budget: the under-budget leg does not" \
+          "$(grep -c 'ok    a run UNDER the printed budget does not stop' "$BULOG")" "1"
+
+#  budget_class lives in lib.sh precisely so this truth table can run here rather than only
+#  under a weekly rig boot.  `zeroed` is the case that used to print a GREEN "deliberately
+#  absent" for a rig whose budget is 12 G -- measured at 11/11 PASS before this round.
+check "budget class: calibrated value"    "$(budget_class luna88k 12000000000)" "calibrated"
+check "budget class: ZERO on a calibrated rig is not 'absent'" \
+                                          "$(budget_class luna88k 0)"           "zeroed"
+check "budget class: out of range"        "$(budget_class luna88k 5)"           "out-of-range"
+check "budget class: a deliberate zero stays absent" \
+                                          "$(budget_class landisk 0)"           "absent"
+check "budget class: missing is never zero" "$(budget_class luna88k '')"        "unreported"
+
 #  THE POSITIVE CONTROL IS THE NAMED SURVIVOR ITSELF, applied to COPIES -- never the repo.
 #  An in-process wrong-expectation row would only prove the reporter can print FAIL; this
 #  proves THE ROW KILLS THE MUTANT.  Three states stay distinguishable IN AGGREGATE: never
