@@ -43,8 +43,15 @@ run_rig() {
     sed 's/^/       /' "$out"
 
     v() { grep -E "^$1=" "$out" | head -1 | cut -d= -f2-; }
+    # *** vall() EXISTS BECAUSE v() TAKES head -1. *** A rig declaring two expect_values had
+    # only its FIRST compared literally: landisk prints VALUES=SH7751R and VALUES=42, and the
+    # second rode on the aggregate VERDICT alone. The records claimed this was "not a live
+    # false pass today -- landisk declares one value"; landisk declares TWO, so the record
+    # contradicted itself and the false half was the exculpatory one. Comparing the joined
+    # list makes every declared answer load-bearing.
+    vall() { grep -E "^$1=" "$out" | cut -d= -f2- | paste -sd, -; }
     check "$rig: reached boot milestone" "$(v BOOT_REACHED)" "1"
-    check "$rig: computed answer"        "$(v VALUES)"       "$want"
+    check "$rig: every computed answer"  "$(vall VALUES)"    "$want"
     check "$rig: verdict"                "$(v VERDICT)"      "PASS"
 
     # #420: the boot milestone is now waited for against a budget of GUEST WORK rather than
@@ -113,15 +120,31 @@ run_rig() {
           "$([ "${st:-0}" -ge 30 ] && [ "${st:-0}" -le $(( ${bs:-1} / 4 )) ] && echo yes || echo "no: $st")" yes
     check "$rig: backstop exceeds the worst boot measured, with margin" \
           "$([ "${bs:-0}" -ge 900 ] && [ "${bs:-0}" -le 3600 ] && echo yes || echo "no: $bs")" yes
-    # A budget of 0 means "deliberately none" -- landisk, whose six idle boots span 39.4%,
-    # so any ceiling from that sample would be invented rather than measured. A NON-zero
-    # budget must actually bound something: above the observed max for the rig it guards,
-    # and not so far above that it can never fire.
-    if [ "${bg:-0}" -eq 0 ] 2>/dev/null; then
+    # *** MISSING AND DELIBERATELY-ZERO ARE DIFFERENT, AND CONFLATING THEM PRINTED A LIE.
+    # The presence row above now turns the gate red when BUDGET= is missing -- but the
+    # branch below still printed, GREEN, "budget is deliberately absent (uncalibrated rig)"
+    # for a rig whose budget is 12 G. Making the VERDICT safe is not the same as making
+    # every ROW true: a red gate with a lying green row inside it is still a record someone
+    # reads and believes. An empty value is now its own case. ***
+    #
+    # A budget of literal 0 means "deliberately none" -- landisk, whose instruction count
+    # nearly halves under load, so any ceiling would be invented rather than measured.
+    #
+    # THE RANGE IS luna88k's AND IS SCOPED TO IT. Applied rig-generically it would
+    # false-FAIL the moment anyone calibrates landisk -- a bound derived from one rig is not
+    # a bound on another, and landisk's own numbers are an order of magnitude lower.
+    if [ -z "$bg" ]; then
+        check "$rig: budget was reported at all" "not reported" "a value"
+    elif [ "$bg" -eq 0 ] 2>/dev/null; then
         check "$rig: budget is deliberately absent (uncalibrated rig)" absent absent
-    else
-        check "$rig: budget bounds the failure path (1.05-2x the observed max)" \
+    elif [ "$rig" = luna88k ]; then
+        check "$rig: budget bounds the failure path (1.05-2x luna88k's observed max)" \
               "$([ "$bg" -ge 8174849291 ] && [ "$bg" -le 15571141508 ] && echo yes || echo "no: $bg")" yes
+    else
+        # A rig that has grown a budget without anyone extending this row is worth saying
+        # out loud rather than passing silently.
+        check "$rig: budget present but this gate has no calibrated range for it" \
+              "uncalibrated range for $bg" "a calibrated range"
     fi
     echo
 }
@@ -132,11 +155,16 @@ run_rig luna88k "$IMAGES/liveimage-luna88k-raw-20250518.img" "0.500000,1.414214"
     "m88k M88100, OpenBSD 7.7, in-guest FP with a checked result"
 
 # SuperH proves the SH4 core executes a full kernel boot through device attachment. It
-# sends NO guest input: the emulated SuperH console loses writes non-deterministically
+# was originally non-interactive because the emulated SuperH console lost writes
+# non-deterministically (#293 fixed that and the rig has sent guest input ever since; this
+# comment claimed otherwise for far longer than it was true). The measured history:
 # (measured), so any interactive check is intermittent, and an intermittent gate gets
 # ignored and then disabled. The checked answer is the chip identity the guest's own PCI
 # probe prints. See drive_guest.py and OUTSTANDING_BUGS.md.
-run_rig landisk "$IMAGES/openbsd76-landisk-bsd.rd" "SH7751R" \
+# BOTH declared answers, joined. Until #420's final pass this read just "SH7751R", so the
+# guest-computed $((6*7)) = 42 -- the only thing on this rig that proves the SH4 core executes
+# arithmetic rather than merely booting -- was never literally compared.
+run_rig landisk "$IMAGES/openbsd76-landisk-bsd.rd" "SH7751R,42" \
     "SuperH SH4, OpenBSD 7.6, full kernel boot with a checked probe result"
 
 gate_end

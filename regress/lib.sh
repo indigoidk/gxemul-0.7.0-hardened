@@ -147,7 +147,9 @@ run_emu() {
 #             allowance of WORK, not of host seconds, so LOAD CANNOT EXPLAIN IT -> the caller
 #             may score it FAIL with confidence.
 #   STALLED   no instruction progress for <stall_s>. A slow host still executes instructions;
-#             a hung guest does not. This is what makes a boot hang DISTINGUISHABLE from load,
+#             a WEDGED guest does not. Not universal -- a BUSY-LOOP hang executes for ever and
+#             keeps emitting records, so this detects a wedge, not every hang. It is what makes
+#             a wedged boot DISTINGUISHABLE from load,
 #             and it is upstream 0.7.0's exact signature on luna88k.
 #   BACKSTOP  wall clock expired while instructions were still advancing. The only genuinely
 #             load-ambiguous outcome, and the only one a caller may treat as inconclusive.

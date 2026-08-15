@@ -179,7 +179,10 @@ def drive(rig, binary):
     # CRLF and Python's ^ only matches after \n. Worse, the landisk row then yields SH77 --
     # not a miss but a WRONG ANSWER, which reads as an emulation defect. Eating the trailing
     # newline is what rejoins the split line. Validated: free-stripping the -N logs
-    # reproduces the previous no--N log sizes exactly (6234 B, 3838 B), zero residual.
+    # reproduces the previous no--N log content. NOTE: an earlier version of this line said
+    # the log SIZES reproduce "exactly (6234 B, 3838 B)". That holds for luna88k and NOT for
+    # landisk, which gives 3837 because the guest prints a variable CPU speed. The records
+    # were corrected and this comment was not -- grep for siblings when correcting a claim.
     #
     # The guest printing something of this shape was checked and does NOT happen: zero
     # occurrences of "[ N instrs" in either complete no--N log.
@@ -332,7 +335,10 @@ def drive(rig, binary):
             if budget and ninstrs > budget:
                 return stop("BUDGET")   # a full allowance of WORK, still no milestone
             if now - last_change >= stall:
-                return stop("STALLED")  # a slow host still executes; a hung guest does not
+                # A slow host still emits records; a guest that has stopped executing does
+                # not. NOT a universal: a BUSY-LOOP hang executes indefinitely and keeps
+                # emitting, so this detects a WEDGED guest, not every hang.
+                return stop("STALLED")
             if now - t0 >= backstop:
                 return stop("BACKSTOP")
 
@@ -345,7 +351,10 @@ def drive(rig, binary):
     # budget and stall detectors are silently unarmed. Measured on landisk, which has no
     # race to hide behind (8 s boot against a 60 s stall): every row stayed green.
     # THE KILL ROW ASSERTS THE COUNT, NEVER THE REASON.
-    if ninstrs == 0 and reason != "MARKER":
+    # EXITED outranks ABSENT, as it does in lib.sh: an emulator that died before its first
+    # record is a dead build, not a harness fault, and relabelling it ABSENT would blame the
+    # wrong thing. Only a run that neither died nor reached the milestone is a harness fault.
+    if ninstrs == 0 and reason not in ("MARKER", "EXITED"):
         reason = "ABSENT"
     print("REASON=%s" % reason)
     print("NINSTRS=%d" % ninstrs)

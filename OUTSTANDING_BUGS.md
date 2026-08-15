@@ -3888,3 +3888,43 @@ detector nearly useless while staying green. Accepted looseness, recorded so it 
 containing no instruction records for roughly a minute. A `gate_hygiene` run in that window would
 have graded the MUTANT's console log. Mutant runs must write to a scratch LOGDIR, never the
 shared one.
+
+## 2026-08-15 — #420 final-panel residuals (all seven scriptable seats, second full roster)
+
+**Filed rather than fixed, because a seat labelled them PREDICTED AND NOT EXECUTED and said so
+plainly.** That distinction is the reason they are here instead of in the diff: a predicted false
+pass is a hypothesis until somebody mutates the committed code and watches the rows stay green.
+
+1. **`boot_progress()` is free to ignore a constant the gate scores.** The gate range-checks
+   `BUDGET`, `STALL` and `BACKSTOP` as *printed by the driver*, not as *used by the driver*. A
+   mutant that keeps printing the right numbers while using different ones would pass every row.
+   Closing it needs the values to be read from a single place the driver actually consumes, or a
+   fake-rig row that drives the constant to a value whose effect is observable.
+
+2. **A luna88k `BUDGET=0` would still print green.** The "deliberately absent (uncalibrated rig)"
+   branch does not care WHICH rig it is describing, so zeroing luna88k's budget — disarming its
+   only work-based ceiling — is reported as a deliberate design decision. The rig-scoped range row
+   added this pass covers a *wrong* budget but not a *removed* one.
+
+3. **`expect()` does not see `tail`.** `stop()` was taught to search `buf + tail` so a milestone
+   held as a possible record prefix still wins, but the ordinary `expect()` used for the
+   interactive steps still searches `buf` alone. A step confirmation whose text begins with `[`
+   would be withheld until a newline released it. Latent: no step pattern currently starts that way.
+
+4. **Landisk's runaway bound is 900 s of wall clock, and the "it cannot have a ceiling" reason is
+   overclaimed.** The 49% load swing makes a *fixed* instruction ceiling unsafe; it does not make
+   the wall-clock fallback load-independent. A sufficiently overloaded but healthy landisk boot can
+   still exceed 900 s and fail. Closing this needs a different observable — emulated timer
+   progress, phase markers, or a comparative witness — not a bigger number.
+
+5. **"BACKSTOP is unfalsifiable" is an overclaim.** A seat pointed out that `NINSTRS` at the
+   backstop does partially falsify host starvation, and that the gate runs two rigs whose relative
+   slowdowns cross-witness each other. The design decision (hard FAIL) stands — a partial witness
+   is not an A/B baseline — but the justification should say "no *comparable* witness", not "no
+   witness at all".
+
+6. **The 7.517 G / 7.316 G figures read as inconsistent.** The floor comment cites luna88k's lowest
+   observed instructions-to-milestone as 7.517 G *idle*, while the design header quotes
+   7.316–7.786 G over eleven boots without splitting idle from loaded. Both are probably true of
+   different populations, which is exactly why quoting them side by side without saying so is a
+   record defect. Populations must be labelled wherever an extreme is cited.
