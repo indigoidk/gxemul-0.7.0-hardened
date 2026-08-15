@@ -4269,6 +4269,42 @@ console-only — because `gate_hygiene.sh` greps that file for distress **substr
 embeds a guest symbol (`<sched_idle+0x8c>`). No collision measured today across 527 records; the
 mechanism is removed for free.
 
+### Pass 2: the round reintroduced a bug the previous round had already fixed
+
+***`MARKER` did not always win.*** The milestone is tested at the top of the poll loop, but
+`BUDGET`, `STALLED` and `BACKSTOP` are tested *after* `read_once()` without re-checking the newly
+absorbed output — so a milestone arriving in the very read that crossed a threshold lost to the
+failure reason, and a healthy run false-failed.
+
+That is precisely the defect #419 pass 3 fixed in `lib.sh` (BACKSTOP reported with the marker
+already in the log, measured 3/3 deterministic). Porting the loop's *shape* into the pty driver
+carried the bug across and left the fix behind. **"A correct draft is not a correct implementation"
+applies to porting an already-corrected implementation, too** — the corrected version is exactly the
+one that looks safe to copy.
+
+Fixed with a tie-break that re-checks before returning any failure reason, and which flushes
+whatever `absorb()` is holding first — a milestone whose text begins with `[` would otherwise still
+be inside the hold. Proven with the unfixed loop as a negative control, and with two controls
+showing hang detection is not weakened:
+
+| scenario | unfixed | fixed |
+|---|---|---|
+| marker arrives in the threshold-crossing read | **STALLED** (healthy run failed) | **MARKER** |
+| marker arrives well before the threshold | MARKER | MARKER |
+| genuine hang, no marker ever | STALLED | STALLED |
+
+Two numeric records of this round's own also corrected. **"landisk's records are ~20× denser"** was
+wrong twice over: the stated medians give 96×, and "denser" is the wrong word entirely — per guest
+instruction both streams fire at the same 2²⁵ cadence, so what differs is how fast landisk executes,
+not how often gxemul prints. And the 742 s figure **conflated two different runs**: 742 s was gate
+7's file-polling driver reaching login with markers only, while this gate's pty driver reached it at
+720.8 s *with* both computed values. Attributing one run's evidence to the other is the same class
+of error as quoting a mean for a worst case.
+
+The reviewing seat disclosed that it executed only arithmetic and source reads — the boot, gap and
+log-size measurements were read rather than reproduced — which is why the tie-break was given its
+own executed test instead of being accepted on the finding alone.
+
 ### The mutant, again
 
 Removing `-N` leaves the guest booting perfectly: every marker matches, every value is right, and

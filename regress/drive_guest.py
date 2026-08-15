@@ -39,9 +39,12 @@ RIGS = {
                  "R:" + IMAGES + "/liveimage-luna88k-raw-20250518.img", "boot"],
         "boot_wait": 2400,
         # #420, each measured. The 600 s that used to sit in boot_wait was the defect:
-        # a healthy, fully-correct boot under 8 busy loops on 8 cores took 742 s and
-        # reached login with every marker and both computed values right. It scored
-        # BOOT_REACHED=0 and three red rows -- a capability regression that never was.
+        # under 8 busy loops on 8 cores a healthy, fully-correct boot needs far longer
+        # than 600 s. Two runs, and they are DIFFERENT runs -- do not merge them: gate 7's
+        # file-polling driver reached login at 742 s (markers only), and this gate's pty
+        # driver reached it at 720.8 s with every marker AND both computed values correct.
+        # Against the old budget that boot scored BOOT_REACHED=0 and three red rows -- a
+        # capability regression that never was.
         # 12 G is the same budget gate 7 uses (observed max 7.786 G over eleven boots,
         # +54%); it bounds only the failure path, since a healthy boot stops at the
         # marker long before it. 120 s of silence is 17x the worst inter-record gap
@@ -94,8 +97,14 @@ RIGS = {
         # buys DISTINGUISHABILITY -- a hung SH4 core now reports STALLED instead of a
         # timeout indistinguishable from load -- not headroom.
         "budget": 0,
-        # Its -N records are ~20x denser than luna88k's (median gap 0.04 s, 62-87 records
-        # in an 8 s boot), so 60 s of silence is overwhelming evidence of a hang.
+        # Its -N records arrive far more often in WALL TIME than luna88k's (median gap
+        # 0.04 s against 3.86 s; 62-87 records in an 8 s boot), so 60 s of silence is
+        # overwhelming evidence of a hang.
+        #
+        # NOTE THE FRAMING, because an earlier version of this comment got it wrong twice:
+        # it said "~20x denser" when the stated medians give 96x, and "denser" is the wrong
+        # word anyway -- PER GUEST INSTRUCTION both streams fire at the same 2^25 cadence.
+        # What differs is how fast landisk executes, not how often gxemul prints.
         "stall": 60,
         "boot_pat": r"\(I\)nstall, \(U\)pgrade, \(A\)utoinstall or \(S\)hell\?",
         # This rig is INTERACTIVE again as of #293. It originally sent no input at all,
@@ -271,22 +280,42 @@ def drive(rig, binary):
         is unfalsifiable -- and an unfalsifiable excuse must not be allowed to soften a
         verdict. The differential-witness trick does not generalise.
         """
+        nonlocal tail
         t0 = time.time()
         last_n, last_change = ninstrs, t0
+
+        def stop(why):
+            """*** THE MILESTONE MUST WIN A TIE. ***
+
+            The marker is tested at the TOP of the loop, but every failure condition is
+            tested AFTER read_once() -- so a milestone absorbed by the very read that also
+            crossed a threshold would lose to the failure reason and false-FAIL a healthy
+            run.  This is the same defect #419 pass 3 fixed in lib.sh (BACKSTOP reported
+            with the marker already in the log, measured 3/3 deterministic); porting the
+            loop's SHAPE across carried the bug rather than the fix.  Re-check before
+            returning anything else, and flush whatever absorb() is holding first: a
+            milestone whose text begins with '[' would otherwise still be in the hold.
+            """
+            if tail and re.search(pat, buf + tail):
+                return "MARKER"
+            if re.search(pat, buf):
+                return "MARKER"
+            return why
+
         while True:
             if re.search(pat, buf):
                 return "MARKER"
             if not read_once(0.3):
-                return "EXITED"      # the emulator died; a crash is not a timeout
+                return stop("EXITED")   # the emulator died; a crash is not a timeout
             now = time.time()
             if ninstrs != last_n:
                 last_n, last_change = ninstrs, now
             if budget and ninstrs > budget:
-                return "BUDGET"      # a full allowance of WORK, still no milestone
+                return stop("BUDGET")   # a full allowance of WORK, still no milestone
             if now - last_change >= stall:
-                return "STALLED"     # a slow host still executes; a hung guest does not
+                return stop("STALLED")  # a slow host still executes; a hung guest does not
             if now - t0 >= backstop:
-                return "BACKSTOP"
+                return stop("BACKSTOP")
 
     settle = cfg.get("settle", 0)
     tries = cfg.get("tries", 1)
