@@ -4192,6 +4192,104 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## One-hundred-and-fifty-eighth round (#419) — a gate that could not tell a slow host from a broken build, and a cure that measured worse than the disease
+
+`gate_ab` gave each luna88k boot 300 seconds of **host wall clock** and then counted semantic
+markers. That is a load-sensitive oracle: under load the guest makes less progress in the same
+seconds, `login:` never appears, and the row FAILs **indistinguishably from a real capability
+regression.** It happened twice — once from panel seats loading the host, once from my own greps.
+
+### The decisive measurement
+
+Under **8 busy loops on 8 cores**, luna88k still reaches `login:` — at **7,349,301,148 instructions
+in 742 s**, markers `1:1:1`, at 9.96 M instr/s. That is the same run which scored `1:1:0` and FAILed
+against the 300 s budget. The build was never broken; the clock was the wrong ruler.
+
+Eleven boots, instructions-to-login:
+
+| condition | instrs@login | achieved i/s |
+|---|---|---|
+| 8 busy loops, saturated | 7,349,301,148 | 9.96 M |
+| 2–4 busy loops | 7,315,767,413 – 7,315,778,918 | 38.9–47.9 M |
+| idle (6 runs) | 7,517,144,375 – 7,785,570,754 | 60.7–67.2 M |
+| page cache dropped | 7,550,703,750 | 64.9 M |
+
+**3.57 % across eight idle runs; 6.42 % across an 8× host-speed range.** Dropping the page cache did
+not widen it. Load moves the count *down* ~4 %, because the m88k idle fold credits 8191 instructions
+per wall-paced `usleep(500)` main-loop iteration, so a busy host credits fewer — the count is not
+pure guest work, but it errs in the safe direction for a ceiling.
+
+### What the round actually changes
+
+`run_emu_progress()` in `lib.sh` runs against a budget of **guest work** and — the part that fixes
+the defect — **reports why it stopped**: `MARKER` (got there), `BUDGET` (executed a full allowance
+and did not), `STALLED` (stopped executing at all), `BACKSTOP` (wall clock expired while still
+advancing), `ABSENT` (no instruction stream ever). Only `BACKSTOP` is load-ambiguous, and even that
+is inconclusive only when prebatch was hit too — gate_ab already boots all three builds, so the load
+signal is free. If prebatch reached its marker, the host was fine and HEAD alone failing is a
+regression.
+
+Three constants, each measured: budget **12 G** (+54 % over the observed max; it bounds only the
+failure path, since a healthy boot stops at the marker long before it), stall **120 s** (at the
+slowest rate ever measured here a record arrives every 3.4 s, so 120 s of silence is 35 missed
+records — no amount of load produces that), backstop **1800 s** (2.4× the worst boot measured).
+
+### Four things the panel killed, all of which would have shipped
+
+1. ***The naive "backstop → INCONCLUSIVE" was measured to be strictly worse than the defect.***
+   Running the real `lib.sh` under synthetic gates: both `degrade` and `gate_skip` exit 77 → SKIP →
+   `REGRESS_PASS_WITH_GAPS` (exit 3). A HEAD that hangs before `login:` exits 1 today. The cure
+   would have turned a hard failure into a green-ish pass, and green is what gets read.
+2. ***Scoring pristine by instruction budget would have made a long-standing PASS a permanent
+   not-run.*** Upstream 0.7.0 emits **zero** `-N` records on luna88k (five runs, 768-byte logs):
+   under 111,848 instr/s, so 12 G would take over 29 hours. It does not exit and does not idle — it
+   **spins**, burning 100 % of one core, so "the process is alive" carries no information. The stall
+   detector catches it in ~30 s. Row-scoped end conditions: the signal that means *hung* for HEAD is
+   the *expected* state for pristine.
+3. **The naive design was 2.3× SLOWER, not faster** (~2074 s vs 900 s), because nothing stopped a
+   healthy boot at the marker. Stopping at the marker is where the speed-up is — today's run burns
+   its whole budget *after* login, since the guest never exits.
+4. **Piping gxemul's stdout into a reader re-creates the bug `lib.sh` rule 1 exists for.**
+   `stdbuf -o0` fixes gxemul's buffering; a `gxemul | grep` reader block-buffers its *own* stdout,
+   one process later. Worse, a SIGPIPE-based stop fires only on the emulator's next write — which
+   never comes for a wedged guest, exactly the case the stop exists to catch. The implementation
+   polls a file instead; the log is complete on disk however the run ends.
+
+### The selftest, and why it is not optional
+
+The `BUDGET` and `STALLED` branches are **only ever entered by a failing run**, so nothing on a
+green run exercises them. Break the instruction extraction by one character and every leg falls to
+`BACKSTOP` for ever while the battery stays green and the capability rows test nothing. Four fake
+emulators drive all four reasons in seconds without the rig; the load-bearing one prints every
+marker but no instruction record — the exact shape a dropped `-N` produces — and must read `ABSENT`.
+
+### Corrections to this project's own records
+
+* **My reproduction claimed 0.877 % drift. It was two samples two print-quanta apart** — the quantum
+  is 2^25 (`emul.c:1026`), so instructions-to-login is only observable to ±0.44 %, and "0.877 %" was
+  the resolution floor, not a distribution. The real figure is 3.57 % idle.
+* **A review seat claimed 22 % from a log that was still being written.** It flagged its own doubt
+  and used the number anyway. The completed file reads 7,315,767,413, not 6.38 G. *A partially
+  flushed log is not a measurement.*
+* ***`CLAUDE.md` asserted for months that `selftest_mutation.sh` does `rm -rf` on the shared gate
+  workdir. It does not*** — `T=$LOGDIR/mutation` (`:27`), `rm -rf "$T"` (`:41`), scoped to one
+  subdirectory. Nor do the rig images serialise: both consumers open them read-only via `R:` with a
+  pid-unique overlay. The real serialisers are three producer/consumer orderings —
+  `gate_build.sh:64-65` withdraws a binary `gate_mips.sh:30` needs, `gate_hygiene.sh:198-258` grades
+  pty logs gates 4 and 5 produce, `gate_ab.sh:42` removes trees `gate_upstream.sh:46-47` reads — and
+  a per-gate `LOGDIR` would not help, because `drive_guest.py:110` hardcodes its path.
+
+### Scope, stated narrowly on purpose
+
+**This converts gate 7 only.** The battery carries roughly **37 wall-clock oracles** — 33
+`while time.time() - t < …` loops across 18 probe files, plus `gate_asan_sweep.sh:60,62`,
+`gate_upstream.sh:74`, and `run_emu` itself. Gate 5 has the same defect and worse: `drive_guest.py`
+allows luna88k 600 s, and the saturated boot measured here took 742 s, so **gate 5 breaks under load
+before gate 7 does.** No parallelism claim is made or earned. And the honest framing of the whole
+round is that wall clock cannot be removed — the stall detector is still a clock — but its margin
+moves from ~2.4× to ~200×, because it now needs one instruction record per window rather than a
+whole boot per budget.
+
 ## One-hundred-and-fifty-seventh round (#418) — the documented `d:` override did nothing, and the obvious place to fix it was measurably the wrong one
 
 `DISKIMAGE_FLOPPY` is a write-only type. No device references it: every controller hard-codes its

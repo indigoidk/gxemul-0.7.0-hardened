@@ -128,6 +128,101 @@ run_emu() {
     return 0
 }
 
+# run_emu_progress <backstop_s> <budget_instrs> <stall_s> <marker_re> <logfile> <binary> [args...]
+#
+# #419: run_emu()'s wall-clock budget is a LOAD-SENSITIVE ORACLE. Under host load the guest
+# makes less progress in the same seconds, the marker never appears, and the row FAILs
+# INDISTINGUISHABLY FROM A REAL CAPABILITY REGRESSION -- measured twice, from panel seats and
+# from interactive greps. This runs the emulator against a budget of GUEST WORK instead, and
+# -- the part that actually fixes the defect -- it REPORTS WHY IT STOPPED.
+#
+# Echoes one line: "reason=<MARKER|BUDGET|STALLED|BACKSTOP|ABSENT> ninstrs=<N> wall=<S>"
+#
+#   MARKER    the regex matched. Stop AT ONCE: today's run burns its whole budget AFTER
+#             login because the guest never exits, so this is also where the speed-up is.
+#   BUDGET    the guest executed <budget_instrs> and still never matched. It was given a full
+#             allowance of WORK, not of host seconds, so LOAD CANNOT EXPLAIN IT -> the caller
+#             may score it FAIL with confidence.
+#   STALLED   no instruction progress for <stall_s>. A slow host still executes instructions;
+#             a hung guest does not. This is what makes a boot hang DISTINGUISHABLE from load,
+#             and it is upstream 0.7.0's exact signature on luna88k.
+#   BACKSTOP  wall clock expired while instructions were still advancing. The only genuinely
+#             load-ambiguous outcome, and the only one a caller may treat as inconclusive.
+#   ABSENT    no -N record ever appeared. A HARNESS FAULT, and it must be scored RED: drop
+#             `-N` from the args, or break the extraction by one character, and every leg
+#             would otherwise fall to BACKSTOP for ever while the battery stayed green and
+#             the capability rows tested nothing.
+#
+# *** DELIBERATELY POLLS A FILE INSTEAD OF PIPING. Rule 1 at the top of this file exists
+# because a lost 4 KB block once scored a good boot as ZERO and it was reported as a
+# capability regression. `stdbuf -o0` fixes GXEMUL's buffering, but a `gxemul | grep` reader
+# block-buffers ITS OWN stdout and re-creates the identical bug one process later. Worse, a
+# SIGPIPE-based stop only fires on the emulator's NEXT WRITE -- which never comes for a wedged
+# guest, precisely the case the stop exists to catch. Polling a file has neither failure mode,
+# and the log is complete on disk however the run ends. ***
+#
+# MEASURED BASIS (eleven luna88k boots, 2026-08-14). Instructions-to-login spans
+# 7,315,767,413 (loaded) to 7,785,570,754 -- 3.57 % across eight idle runs, 6.42 % across an
+# 8x host-speed range. Dropping the page cache did NOT widen it. Load moves the count DOWN
+# ~4 %, because the m88k idle fold credits 8191 instructions per wall-paced usleep(500) main
+# loop iteration, so a busy host credits fewer -- i.e. the count is not pure guest work, but
+# it errs in the SAFE direction for a ceiling. The decisive run: under 8 busy loops on 8 cores
+# the guest STILL reached login, at 7,349,301,148 instructions in 742 s -- the same run that
+# scored 1:1:0 and FAILed at the old 300 s wall budget.
+run_emu_progress() {
+    local backstop=$1 budget=$2 stall=$3 marker=$4 log=$5; shift 5
+    local t0 last_n=0 last_change n now reason= pid
+
+    : > "$log"
+    t0=$(date +%s); last_change=$t0
+    # *** DO NOT WRAP THIS IN A SUBSHELL. `$!` would then be the SUBSHELL's pid, and killing
+    # it reaps the wrapper while ORPHANING the emulator. Measured on the first gate run of
+    # #419: the pristine leg was correctly classified STALLED at 120 s, its "kill" removed
+    # only the subshell, and the emulator was still burning 99.9 % of a core four minutes
+    # later while the next two legs measured themselves under that self-inflicted load.
+    # Starting `timeout` directly makes `$!` the process we actually need to signal. ***
+    local oldpwd=$PWD
+    cd "$IMAGES" 2>/dev/null || cd /
+    timeout "$backstop" stdbuf -o0 -e0 "$@" </dev/null > "$log" 2>&1 &
+    pid=$!
+    cd "$oldpwd" || true
+
+    while kill -0 "$pid" 2>/dev/null; do
+        # tail -c keeps this O(1) in log size rather than O(n) per poll.
+        n=$(tail -c 2048 "$log" 2>/dev/null | grep -ao '\[ *[0-9]\+ instrs' | tail -1 | tr -dc '0-9')
+        n=${n:-$last_n}
+        now=$(date +%s)
+        [ "$n" != "$last_n" ] && { last_n=$n; last_change=$now; }
+        if grep -aq "$marker" "$log" 2>/dev/null; then reason=MARKER; break; fi
+        if [ "${n:-0}" -gt "$budget" ] 2>/dev/null;  then reason=BUDGET; break; fi
+        if [ $((now - last_change)) -ge "$stall" ];  then reason=STALLED; break; fi
+        sleep 1
+    done
+
+    # The emulator outlives the poll loop unless it is killed here, and killing `timeout`
+    # alone is not enough to rely on: reap its children explicitly by pid. Do NOT use
+    # `pkill -f <pattern>` for this -- the pattern appears in the invoking shell's own
+    # command line, so pkill SIGTERMs itself before finishing the job (measured: it exited
+    # 15 having killed nothing).
+    local kid
+    for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -TERM "$kid" 2>/dev/null; done
+    kill -TERM "$pid" 2>/dev/null
+    sleep 1
+    for kid in $(pgrep -P "$pid" 2>/dev/null); do kill -9 "$kid" 2>/dev/null; done
+    kill -9 "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+
+    if [ -z "$reason" ]; then
+        # The process ended on its own or the backstop's timeout(1) reaped it.
+        reason=BACKSTOP
+    fi
+    # An absent oracle stream outranks every other reason: if -N produced nothing then
+    # nothing was measured, whatever else the run appeared to do.
+    [ "${last_n:-0}" -eq 0 ] && [ "$reason" != MARKER ] && reason=ABSENT
+
+    echo "reason=$reason ninstrs=$last_n wall=$(( $(date +%s) - t0 ))"
+}
+
 # count <logfile> <pattern>   -- number of matching lines, 0 if the file is absent.
 #
 # NOT `[ -f x ] && grep -ac ... || echo 0`. On zero matches grep prints "0" AND exits 1,

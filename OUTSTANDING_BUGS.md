@@ -3740,3 +3740,60 @@ grep had silently scoped itself to `src/` — the same omitted-scope failure it 
 correcting. A tree-wide sweep found no other instance, so this is a one-off, not a class.
 **A record may not state a count of an identifier it also spells.** State the structural
 property instead; it survives edits.
+
+## 2026-08-14 — #419 residuals (the gate_ab progress-oracle round)
+
+**#419 converted GATE 7 ONLY. Everything below is what it did not touch, and the first item is
+worse than the defect that was fixed.**
+
+1. *** GATE 5 HAS THE SAME DEFECT AND BREAKS UNDER LOAD BEFORE GATE 7 DOES. ***
+   `gate_crossfamily.sh:54,62` drives `drive_guest.py`, which allows luna88k a `boot_wait` of
+   **600 s** and landisk **420 s**, plus ten per-step timeouts of 5–15 s
+   (`drive_guest.py:41-52, 86-99`). The saturated luna88k boot measured in #419 took **742 s** and
+   still reached `login:` correctly. So gate 5 false-FAILs at a load level gate 7 now survives.
+   Converting it is the obvious next round; the machinery (`run_emu_progress()`) already exists.
+
+2. **ROUGHLY 37 WALL-CLOCK ORACLES REMAIN ACROSS THE BATTERY.** 33 `while time.time() - t < …`
+   wait loops spread over 18 probe `.py` files, plus `gate_asan_sweep.sh:60,62` (`timeout 25`),
+   `gate_upstream.sh:74` (`timeout 20`), and `run_emu()` itself. #419 replaced one. **No
+   battery-wide parallelism claim is earned until these are dispositioned**, and most of them are
+   probe-internal step waits rather than boot budgets, so they need a different remedy.
+
+3. **THREE PRODUCER/CONSUMER ORDERINGS SERIALISE THE BATTERY INDEPENDENTLY OF ANY CLOCK**, and
+   these are the real reason gates cannot run concurrently:
+   * `gate_build.sh:64-65` **withdraws** `/tmp/gxsec-gxemul` and `$RIG/gxsec-gxemul` at gate start
+     and republishes only at `:302-305`, while `gate_mips.sh:30` `need_exec`s it. A concurrent run
+     makes gate 4 `gate_skip` on a missing binary — **silent coverage loss scored as a SKIP**.
+   * `gate_hygiene.sh:198-199,220,258` grades `pmax.ptylog`, `arc.ptylog`, `arc.screen` and
+     `drive_*.log`, which gates 4 and 5 produce. Concurrency grades a **partial** log: a wrong
+     answer, not a crash.
+   * `gate_ab.sh:42` `rm -rf`s `/tmp/gx-pristine` and `/tmp/gx-prebatch`, which
+     `gate_upstream.sh:46-47` reads.
+   **A per-gate `LOGDIR` would not isolate them**, because `drive_guest.py:110` hardcodes
+   `/tmp/gxregress/drive_%s.log` instead of honouring `$LOGDIR`.
+
+4. **CORRECTION TO A STANDING NOTE, kept here because it was load-bearing for four months:**
+   `selftest_mutation.sh` does **NOT** `rm -rf` the shared gate workdir — it is `T=$LOGDIR/mutation`
+   (`:27`) and `rm -rf "$T"` (`:41`), scoped to one subdirectory. The rig images do not serialise
+   either: both consumers open them read-only with `R:` and the overlay is pid-unique. The reason
+   given for "never run two gates concurrently" was wrong; the *conclusion* was right for the three
+   different reasons in item 3.
+
+5. **THE m88k IDLE-PATTERN DETECTION IS A SILENT CROSS-VERSION DEPENDENCY.**
+   `cpu_m88k_instr.c:2584-2757` recognises the guest's idle loop **by pattern** and credits 8191
+   instructions per fold. If the guest OS ever changes that loop the detection fails **silently**
+   and instructions-to-login balloons — which would move #419's budget without any error anywhere.
+   This is safe today only because the image is pinned (`liveimage-luna88k-raw-20250518.img`).
+   Assessed, not changed; the budget's +54 % headroom absorbs ordinary drift but not this.
+
+6. **UPSTREAM 0.7.0 SPINS ON luna88k RATHER THAN EXITING — mechanism unexplained.** It burns 100 %
+   of one core (measured from `/proc/<pid>/stat` utime+stime over a 20 s window) while emitting
+   fewer than 33,554,432 instructions in 300 s (< 111,848 instr/s). Whatever it is doing, it is not
+   the dyntrans loop. Not investigated; recorded because it means **"the process is still alive"
+   carries no information** for that row.
+
+7. **THERE IS NO CLEAN WAY TO MAKE gxemul REPORT A FINAL INSTRUCTION COUNT.** SIGINT enters the
+   debugger and then blocks on absent stdin; the process survived SIGINT plus 6 s and needed
+   SIGTERM. `cpu.c:418`'s forced `cpu_show_cycles()` never runs. So the count must be scraped from
+   the periodic `-N` records, which is why the oracle is quantised to 2^25 instructions (0.44 % of
+   a luna88k boot — far below the 3.57 % run-to-run spread, so it costs nothing).
