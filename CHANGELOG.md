@@ -4206,8 +4206,11 @@ the export is what a caller who writes `LOGDIR=x; ./run.sh` needs -- the census 
 caller who had already exported would have been served by the driver half alone, so the defect was
 CONDITIONALLY, not uniformly, silent. Three findings worth keeping:
 - **The obvious form is wrong.** Eight of nine seats proposed `os.environ.get("LOGDIR", <default>)`.
-  Measured: with `LOGDIR` set but **empty** that returns `""` and the paths become
-  `/drive_<rig>.log` — the filesystem root. The shipped form is
+  Measured: with `LOGDIR` set but **empty** that returns `""`, and the paths become
+  `/drive_<rig>.log`. **Corrected by the review, because the mechanism matters more than the
+  slogan:** nothing actually lands at the filesystem root — `os.makedirs("")` raises
+  `FileNotFoundError` first, so the run dies before either `open()`. The defect is a crash on an
+  empty value where the shell's own idiom falls back, not a stray write to `/`. The shipped form is
   `os.environ.get("LOGDIR") or "/tmp/gxregress"`, which matches `lib.sh`'s own `${LOGDIR:-...}`
   treatment of an empty value. *A unanimous panel is not a measurement.*
 - **The defect was conditionally silent, which is worse than uniformly silent.** Measured across
@@ -4249,9 +4252,11 @@ both cited `drive_guest.py:110`, a line the code left long ago. The project-root
 carried the same stale citation and was corrected in the same pass, but it is OUTSIDE this
 repository, so no hunk here touches it -- the first commit message named it as if it were in the
 diff, which a review seat caught.
-**`CHANGELOG.md:4455` is deliberately NOT corrected** — `git log -L` confirms `log_path` really was
-at `:110` when that block was written, so it is accurate history and rewriting it would falsify the
-record. **This fix does not license concurrent gates**: the producer/consumer orderings
+**The #419 round block's own `drive_guest.py:110` sentence is deliberately NOT corrected** —
+`git log -L` confirms `log_path` really was at `:110` when that block was written, so it is accurate
+history and rewriting it would falsify the record. *It is named here without a line number on
+purpose: this round's own additions moved it twice (`:4455` → `:4519` → `:4554`), which is a
+self-invalidating citation demonstrating itself.* **This fix does not license concurrent gates**: the producer/consumer orderings
 (`gate_build` withdraw/republish, hygiene grading gates 4 and 5, `gate_ab` vs `gate_upstream`) are
 untouched, and `gate_hygiene.sh:259` still answers a missing rig log with `note` + `continue` rather
 than `degrade`, so a writer/grader divergence would be silent coverage loss inside a green gate —
@@ -4286,6 +4291,23 @@ a `CLAUDE.md` correction that no hunk in this repository made. One packet-fed se
 block sits after the interactive steps and therefore times the whole run; checked against the file,
 the prints are at `:406-421` and `for step in cfg["steps"]` is at `:435`, so the boot-leg claim
 stands.
+
+**Two further corrections from the measure seat's independent review**, recorded because both are
+about the record rather than the code. First, *the round's own negative control polluted the
+directory the round exists to protect*: running the detector against the unfixed driver wrote
+`drive_selftest.log` and `drive_selftest.raw.log` into the shared `/tmp/gxregress` — inert (nothing
+globs those names; the graders use literal rig names) and now removed, but it is exactly the
+pollution #422 prevents, produced while proving #422. Second, the `CLAUDE.md` correction left a
+**non sequitur**: the sentence read "a per-gate `LOGDIR` would NOT isolate them, *because* the
+driver now honours `$LOGDIR`" — the number was updated and the reasoning was not. It now says what
+is true: the ORDERINGS serialise the gates, and removing the driver's hardcode changed nothing about
+them.
+
+**The containment row, swept rather than argued.** The seat evaluated 8000 (start-fraction,
+duration) pairs assuming the driver consumed the entire gate window: minimum slack exactly 1.000 s,
+so `+1` would have sufficed and `+2` cannot false-fail from truncation or from load. The only
+false-fail route is a boot leg under 0.05 s printing `0.0` against the `b > 0` guard — reachable
+only when the emulator dies instantly, which is already red elsewhere.
 
 **Verified:** gate 2 PASS, 122 checks, including the two new rows; the detector negative-controlled
 before and after; both edited gate scripts pass `bash -n`; the containment arithmetic checked at
