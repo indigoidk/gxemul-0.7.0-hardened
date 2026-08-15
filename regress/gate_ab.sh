@@ -91,9 +91,10 @@ LUNA_IMG="R:$IMAGES/liveimage-luna88k-raw-20250518.img"
 #                      maximally-precise usleep host would reach (~8.06 G).
 #   LUNA_STALL  120 s  At the SLOWEST rate ever measured here (9.96 M instr/s, host saturated)
 #                      one -N record arrives every 3.4 s. 120 s of silence is 35 missed
-#                      records: the guest is not executing, and no amount of host load can
-#                      produce that. This is the constant that makes a HANG distinguishable
-#                      from a SLOW HOST.
+#                      records. That is a HANG, not a slow host -- but the claim is
+#                      empirical, not absolute: this detector still reads `date +%s`, so a
+#                      host that SUSPENDS or starves the process for two minutes would look
+#                      identical. It is 35x the worst observed gap, not a proof.
 #   LUNA_BACKSTOP 1800 s  2.4x the worst boot ever measured here (742 s, 8 busy loops on 8
 #                      cores, which still reached login 1:1:1).
 LUNA_BUDGET=12000000000
@@ -102,15 +103,18 @@ LUNA_BACKSTOP=1800
 
 # #419 SELFTEST. The classifier decides whether a row is a regression, a hang, a harness fault
 # or merely a slow host, so it needs its own rows -- and they must NOT need the rig, or they
-# would cost 15 minutes and never be run. Four fake "emulators" drive all four reasons in a
-# few seconds each.
+# would cost 15 minutes and never be run. Fake "emulators" drive every reason in seconds.
 #
-# THE ROW THAT MATTERS MOST IS `absent`. Delete `-N` from the real invocation, or break the
-# instruction extraction by one character, and every leg falls to BACKSTOP for ever: the
-# capability rows would then test NOTHING while the battery stayed green. That mutant is
-# invisible to every other row in this gate, because the happy path stops at MARKER long
-# before any of this is reached -- the BUDGET and STALLED branches are only ever entered by a
-# FAILING run, so nothing on a green run exercises them.
+# WHY THIS IS NOT OPTIONAL: the BUDGET and STALLED branches are ONLY EVER ENTERED BY A FAILING
+# RUN, because a healthy boot stops at MARKER long before either. So nothing on a green run
+# exercises them, and a mutation that breaks them is invisible to every capability row here.
+#
+# *** AND THE HARDEST CASE IS THE ONE THAT LOOKS HEALTHY. Remove `-N` and the guest still
+# boots, still prints every marker, and still classifies as MARKER -- there is nothing wrong
+# with the boot. What is wrong is that the budget and stall protections were never armed, and
+# the ONLY observable difference is that the instruction count stayed at zero. Pass 2 caught
+# this surviving: the fake originally written for it never printed `login:`, so it had been
+# built to match the guard rather than the threat. ***
 selftest_progress() {
     local d=$LOGDIR/r419fake; mkdir -p "$d"
 
@@ -120,12 +124,17 @@ selftest_progress() {
     printf '#!/bin/sh\ni=1\nwhile :; do echo "[ $((i*100000000)) instrs; i/s=1 avg=1]"; i=$((i+1)); sleep 0.2; done\n' > "$d/f_budget"
     # One record, then silence while staying alive. -> STALLED
     printf '#!/bin/sh\necho "[ 100000000 instrs; i/s=1 avg=1]"\nsleep 60\n' > "$d/f_stall"
-    # *** Prints every marker but NO instruction record, and outlives the backstop. This is
-    # the shape a dropped `-N` produces, and it must NOT be mistaken for a good run. ***
+    # Prints two markers but NO instruction record, and never reaches the milestone. -> ABSENT
     printf '#!/bin/sh\necho "LUNA-88K BOOT"\necho "M88100"\nsleep 60\n' > "$d/f_absent"
+    # *** THE ONE THAT MATTERS: a guest that BOOTS PERFECTLY with no instruction stream --
+    # exactly what removing `-N` produces. It reaches the milestone, so `reason` is MARKER and
+    # every reason-based check passes; only the instruction COUNT reveals that the budget and
+    # stall protections were never armed. Pass 2 found this surviving; the fake above had been
+    # written to match the guard rather than the threat, because it never printed `login:`. ***
+    printf '#!/bin/sh\necho "LUNA-88K BOOT"\necho "M88100"\necho "login: "\nsleep 30\n' > "$d/f_nostream"
     chmod +x "$d"/f_*
 
-    local o r
+    local o r n
     o=$(run_emu_progress 20 500000000 5 'login:' "$d/o_marker.log" "$d/f_marker")
     r=${o#reason=}; r=${r%% *}
     check "progress selftest: marker stops the run" "$r" "MARKER"
@@ -143,6 +152,16 @@ selftest_progress() {
     o=$(run_emu_progress 8 500000000 30 'login:' "$d/o_absent.log" "$d/f_absent")
     r=${o#reason=}; r=${r%% *}
     check "progress selftest: markers without an instruction stream are ABSENT" "$r" "ABSENT"
+
+    # A guest that BOOTS with no instruction stream is the dropped-`-N` shape, and its reason
+    # is legitimately MARKER -- there is nothing wrong with the boot. The only signal that the
+    # oracle was never armed is that the count stayed at zero, so THAT is what the real rows
+    # assert. This row exists to keep the two facts nailed together: reason MARKER, count 0.
+    o=$(run_emu_progress 20 500000000 10 'login:' "$d/o_nostream.log" "$d/f_nostream")
+    r=${o#reason=}; r=${r%% *}
+    n=${o#*ninstrs=}; n=${n%% *}
+    check "progress selftest: a boot with no -N stream still reads MARKER" "$r" "MARKER"
+    check "progress selftest: ...and is caught only by a zero instruction count" "$n" "0"
 }
 selftest_progress
 
@@ -162,7 +181,7 @@ if [ ! -f "$IMAGES/liveimage-luna88k-raw-20250518.img" ]; then
     degrade "luna88k image absent -- the only cross-build behavioural comparison did not run"
 else
     note "luna88k (m88k): stop reason + 'LUNA-88K BOOT':'M88100':'login:' marker counts"
-    luna_run "$PRISTINE_DIR/gxemul" pristine; PRI=$R_MARKERS; PRI_R=$R_REASON
+    luna_run "$PRISTINE_DIR/gxemul" pristine; PRI=$R_MARKERS; PRI_R=$R_REASON; PRI_N=$R_INSTRS
     luna_run "$PREBATCH_DIR/gxemul" prebatch; PRE=$R_MARKERS; PRE_R=$R_REASON; PRE_N=$R_INSTRS
     luna_run "$ROOT/build/gxemul"   head;     HD=$R_MARKERS;  HD_R=$R_REASON;  HD_N=$R_INSTRS
 
@@ -178,18 +197,28 @@ else
     # (measured, five runs, 768-byte logs), so it can never complete an instruction budget --
     # scoring it by budget would turn a long-standing PASS into a permanent not-run.
     check "pristine 0.7.0 does not boot luna88k (expected)" "$PRI" "0:0:0"
-    case "$PRI_R" in
-    ABSENT|STALLED) check "pristine produces no instruction stream (expected)" yes yes ;;
-    *)              check "pristine produces no instruction stream (expected)" "$PRI_R" "ABSENT" ;;
-    esac
+    # #419 pass 2: assert the COUNT, not the reason. Scoring this by reason accepted STALLED
+    # too, so "one instruction record followed by silence" would have passed a row whose name
+    # claims there is no instruction stream at all. The row now says what it means.
+    check "pristine emits no instruction records at all" "$PRI_N" "0"
 
     # An absent stream from a build that is supposed to RUN is a harness fault -- the `-N`
     # argument or the extraction broke -- and a harness fault must be red, never inconclusive.
-    for pair in "prebatch:$PRE_R" "HEAD:$HD_R"; do
-        case "${pair#*:}" in
-        ABSENT) check "${pair%%:*}: -N oracle stream present" ABSENT present ;;
-        *)      check "${pair%%:*}: -N oracle stream present" present present ;;
-        esac
+    #
+    # *** #419 pass 2: THIS ASSERTS THE COUNT BECAUSE ASSERTING THE REASON DID NOT WORK.
+    # `reason` is only ABSENT when the run did NOT reach the marker, so a build that boots
+    # normally with `-N` removed classifies as MARKER and sailed straight through the previous
+    # spelling of this check. Dropping `-N`, or breaking the extraction by one character, would
+    # then leave every capability row green while the budget and stall protections this round
+    # exists for were silently gone. A seat found it; the selftest had missed it because the
+    # fake built for this case omitted `login:` -- it was written to match the guard rather
+    # than the threat. ***
+    for pair in "prebatch:$PRE_N" "HEAD:$HD_N"; do
+        if [ "${pair#*:}" -gt 0 ] 2>/dev/null; then
+            check "${pair%%:*}: -N instruction stream was actually observed" present present
+        else
+            check "${pair%%:*}: -N instruction stream was actually observed" "0 records" present
+        fi
     done
 
     # BUDGET means the guest was given a full allowance of WORK and still never booted. Host
@@ -227,7 +256,9 @@ else
     # not idle -- it SPINS, burning 100 % of one core, emitting fewer than 33,554,432
     # instructions in 300 s (< 111,848 instr/s). So "the process is still alive" carries no
     # information here, and an instruction budget could never complete: 12 G would take over
-    # 29 hours. It is caught by the stall detector in ~30 s instead.
+    # 29 hours. The stall detector catches it in LUNA_STALL seconds (120) instead -- a
+    # prototype used 30 s and this note claimed that figure for months longer than it was
+    # true; the shipped gate uses one constant for all three legs.
 fi
 echo
 

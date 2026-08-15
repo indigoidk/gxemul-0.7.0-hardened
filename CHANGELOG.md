@@ -4279,6 +4279,50 @@ marker but no instruction record — the exact shape a dropped `-N` produces —
   pty logs gates 4 and 5 produce, `gate_ab.sh:42` removes trees `gate_upstream.sh:46-47` reads — and
   a per-gate `LOGDIR` would not help, because `drive_guest.py:110` hardcodes its path.
 
+### Pass 2 found the mutant this round was built to catch, still alive
+
+Two seats reviewed the shipped diff — **Codex and Opus, and that is two seats, not a panel.**
+
+***The dropped-`-N` mutant survived.*** The guard asserted `reason != ABSENT`, but `ABSENT` is
+only assigned when the run did *not* reach the marker. A guest that boots perfectly with `-N`
+removed therefore classifies as **MARKER** — there is nothing wrong with the boot — and every
+reason-based check passed while the budget and stall protections were silently unarmed. The
+selftest missed it because the fake written for that case never printed `login:`: **it had been
+built to match the guard rather than the threat.**
+
+Fixed by asserting the instruction **count** instead of the reason — zero records for pristine,
+non-zero for prebatch and HEAD — and by adding a fake that boots cleanly with no instruction
+stream, which pins `reason=MARKER` and `ninstrs=0` together so the two facts cannot drift apart.
+
+The seat that found it disclosed that it had executed only `rev-parse`, status, arithmetic and
+source counts — the gate, the mutant and the reaping tests were **read, not run**. So the mutant
+was built and executed rather than taken on trust: `-N` removed from the real luna invocation,
+against the fixed gate.
+
+```
+       pristine   ABSENT    instrs=0    0:0:0
+       prebatch   MARKER    instrs=0    1:1:1     <- a PERFECT boot, oracle unarmed
+       head       ABSENT    instrs=0    1:1:0
+  FAIL prebatch: -N instruction stream was actually observed  got=0 records want=present
+  FAIL HEAD:     -N instruction stream was actually observed  got=0 records want=present
+  a-b-baselines: FAIL (4 of 14 checks)
+```
+
+That `prebatch` line is the whole finding in one row: markers `1:1:1`, reason `MARKER`, nothing
+wrong with the boot at all — and the previous spelling of the check passed it.
+
+Also corrected, both mine: the comment claiming pristine is caught "in ~30 s" (it uses the same
+120 s constant — a prototype figure that outlived its truth), and "no amount of host load can
+produce 120 s without progress", which is empirical rather than absolute since the detector reads
+`date +%s` and a suspended or starved process looks identical. It is 35× the worst observed gap,
+not a proof. And the pristine row previously accepted `STALLED` as well as `ABSENT`, so "one
+instruction record followed by silence" would have passed a row whose name says there is no
+instruction stream at all.
+
+Filed rather than fixed: the differential witness assumes prebatch's success proves the host was
+healthy for HEAD, but the three legs run **sequentially**, so that is not established — load
+arriving between them defeats it.
+
 ### Scope, stated narrowly on purpose
 
 **This converts gate 7 only.** The battery carries roughly **37 wall-clock oracles** — 33
