@@ -4192,6 +4192,69 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R2 (#424) — the parser selftest ran nowhere, and could not see a mutant that moves text
+`regress/selftest_absorb.py` shipped in r421 to test the pty record parser and was invoked by NO
+GATE: dead coverage. The deeper defect was in its shape. Its helper returned `body + tail` and 27 of
+its 29 rows compared that SUM, so **any mutant that merely RELOCATES text between the two halves
+preserved the sum and stayed invisible** — including one that leaves a completed line in the tail,
+where the boot loop never looks, so a guest that reached its milestone is reported as not reaching
+it. Nine review seats assessed and researched the round; a measured census settled it.
+
+**THE CENSUS CAME FIRST, IN RESEARCH, NOT AFTER THE FIX.** 22 mutants across the parser's decision
+axes — the three hold clauses, which string the hold is taken from, the bound, the record regex, the
+strip loop, the return — each applied to a COPY with its substitution asserted to apply EXACTLY
+ONCE. Against the SHIPPED selftest: **17 killed, 5 SURVIVED, 0 faults**, and every survivor was
+non-equivalent with an executed witness, so none could be retired as equivalent. Naming them, which
+is the point: the newline clause (marker unreachable); the `i != -1` guard (a bracket-free read
+holds its last character for ever); `<` → `<=` at the bound (the existing row used 400, far past the
+shipped 256, so the boundary was never tested); `rest.rfind` → `tail.rfind` (a second record leaks
+unstripped at one cut); and the ` instrs` literal (a look-alike line is eaten and a count INVENTED).
+
+**The fix is two invariants and four edges, and it needed both.** The panel split: one seat wanted
+rows added and the 27 sum rows left alone (rewrite = churn); another wanted every newline-terminated
+row converted so the blind idiom stops existing. Settled by execution — a probe walked every cut
+point of eleven streams, 2,575 parser steps, against the shipped parser: zero violations of either
+proposed invariant, so the conversion is safe and the objection was about diff size, not
+correctness. Both are adopted, because the invariants catch the CLASS but do not kill the edges: the
+bound mutant still satisfies the length test, and the regex-literal mutant never touches the tail at
+all.
+- **I2, the hold shape**, checked inside `feed()` after EVERY step and reported as one row with its
+  step count (685 today): the tail is empty, or a `[`-headed, newline-free run shorter than the
+  bound. This is the parser's own guard restated as a postcondition, so it applies to all the
+  file's existing calls including the offset sweeps.
+- **I3, finality**: an input whose concatenation ends in a newline must leave the tail EMPTY. Every
+  newline-terminated row now pins the pair instead of the sum, and the sum idiom is gone from the
+  file.
+- **Section K**, the edges the census named: the hold bound AT 254/255 rather than near it; a
+  bracket-free read holding nothing; a multi-record split sweep pinning body, tail and count
+  separately at every offset; and the regex literal (`[ 100 frobs; p]` must not parse).
+
+**Result, measured: 52 rows, and the census now reports 22 of 22 killed, 0 survived, 0 faults.**
+
+**`regress/absorb_census.py` is COMMITTED, because a detector's worth is what it kills and that must
+be re-runnable by someone who was not here.** It carries the mutant table and enforces THE
+DENOMINATOR RULE, which exists because the record once said "10/10 parser mutants killed" over a
+census in which five of twenty-two survived: the header prints the identity `attempted = killed +
+survived + faults` and the program EXITS NONZERO if it does not hold; every survivor is NAMED with a
+disposition from a closed vocabulary; "Survivors: none" prints even when empty; A CRASH IS A FAULT,
+NEVER A DETECTION; a substitution that does not apply exactly once is a FAULT, not a survivor. The
+repository is never mutated — copies only, which is what the `.MUTANT` history is for.
+
+**Wired into gate 2 BEFORE the compiler check**, since the selftest needs only python3 and a machine
+without `cc` must not silently lose parser coverage as well as the differentials. **The positive
+control is the named survivor mutant itself**, applied to copies: it proves THE ROW KILLS THE
+MUTANT, where an in-process wrong-expectation row would only prove the reporter can still print
+FAIL. Its rows separate three states — never ran, ran and crashed, ran and caught — because exit
+status alone cannot tell a crash from a catch.
+
+**One row was written too tight and the gate caught it**: the control asserted the kill came from
+exactly ONE named row, but the mutant strands every bracket-carrying line and fails all three. It is
+now a floor, with the reason recorded — pinning the exact number would turn a legitimately added row
+into a red gate.
+
+**Verified:** gate 2 PASS, 131 checks (was 122); selftest 52 rows / 0 failures on the shipped
+parser; census 22/22 with the identity self-check green; `bash -n` clean.
+
 ## R1 (#422, #423) — the harness could not be pointed anywhere else, and it kept no wall time
 Two harness corrections in one file, taken first because **#422 gates every mutation census**: a
 census that cannot be given a private directory writes into the shared logs `gate_hygiene.sh`

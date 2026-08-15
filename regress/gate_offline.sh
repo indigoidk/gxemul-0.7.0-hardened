@@ -71,6 +71,64 @@ for arr in mips32_loadstore mips_loadstore; do
         "$([ "$(ls_entry $arr 5)" != "$(ls_entry $arr 21)" ] && echo differ || echo same)" "differ"
 done
 
+#  b1w: the pty record parser's selftest, and a POSITIVE CONTROL that proves the selftest can
+#  still catch something.  Placed BEFORE the compiler check on purpose: it needs only python3,
+#  and a machine without cc must not silently lose parser coverage as well as the
+#  differentials.  A measured census (absorb_census.py, 22 mutants) is what set the row floor;
+#  the shipped selftest before this round killed 17 of those 22 while reporting every row
+#  green, because its rows compared body+tail and a mutant that only MOVES text between the
+#  halves preserves the sum.
+ABLOG=$LOGDIR/selftest_absorb.log
+python3 "$HERE/selftest_absorb.py" > "$ABLOG" 2>&1 || true
+check     "absorb: no row failed" \
+          "$(grep -oE '[0-9]+ failures' "$ABLOG" | grep -oE '^[0-9]+')" "0"
+check     "absorb: verdict present" "$(grep -c SELFTEST_ABSORB_PASS "$ABLOG")" "1"
+check_min "absorb: rows actually run" \
+          "$(grep -oE '^[0-9]+ rows' "$ABLOG" | grep -oE '^[0-9]+')" 52
+#  Name the two rows the census showed were load-bearing, so deleting either is a red row
+#  rather than a quieter file.  (#410's lesson: a row that can only be counted cannot be
+#  missed by name.)
+check     "absorb: the hold invariant row is present" \
+          "$(grep -c 'tail invariant held at every step' "$ABLOG")" "1"
+check     "absorb: the body-landing rows are present" \
+          "$(grep -c 'lands in BODY' "$ABLOG")" "3"
+
+#  THE POSITIVE CONTROL IS THE NAMED SURVIVOR ITSELF, applied to COPIES -- never the repo.
+#  An in-process wrong-expectation row would only prove the reporter can print FAIL; this
+#  proves THE ROW KILLS THE MUTANT.  Three states stay distinguishable: never ran (empty log,
+#  every row below red), ran and crashed (nonzero status, NO verdict token), ran and caught
+#  (the token plus the killing row's name).
+ACDIR=$LOGDIR/absorb_control
+rm -rf "$ACDIR"; mkdir -p "$ACDIR"
+python3 - "$HERE" "$ACDIR" <<'PYCTL' > "$ACDIR/apply.log" 2>&1
+import os, shutil, sys
+here, out = sys.argv[1], sys.argv[2]
+src = open(os.path.join(here, "drive_guest.py"), encoding="utf-8").read()
+old = 'if i != -1 and "\\n" not in rest[i:] and len(rest) - i < HOLD_MAX:'
+new = 'if i != -1 and len(rest) - i < HOLD_MAX:'
+if src.count(old) != 1:
+    print("CONTROL_STALE applies %d times" % src.count(old)); sys.exit(1)
+open(os.path.join(out, "drive_guest.py"), "w", encoding="utf-8",
+     newline="\n").write(src.replace(old, new))
+shutil.copyfile(os.path.join(here, "selftest_absorb.py"),
+                os.path.join(out, "selftest_absorb.py"))
+print("CONTROL_APPLIED")
+PYCTL
+check     "absorb control: the mutant still applies to today's parser" \
+          "$(grep -c CONTROL_APPLIED "$ACDIR/apply.log")" "1"
+python3 "$ACDIR/selftest_absorb.py" > "$ACDIR/run.log" 2>&1; ACRC=$?
+check     "absorb control: the mutant is REJECTED (nonzero status)" \
+          "$([ "$ACRC" -ne 0 ] && echo rejected || echo "accepted rc=$ACRC")" "rejected"
+check     "absorb control: it failed rather than crashed" \
+          "$(grep -c SELFTEST_ABSORB_FAIL "$ACDIR/run.log")" "1"
+#  A FLOOR, not an exact count.  The mutant strands every bracket-carrying line in the tail,
+#  so it fails EVERY "lands in BODY" row -- three today.  Pinning the exact number would turn
+#  a legitimately added row into a red gate; what must be true is that the kill comes from
+#  THAT NAMED ROW and not from some unrelated collapse.
+check_min "absorb control: the kill is by the named row" \
+          "$(grep -c 'FAIL  lands in BODY' "$ACDIR/run.log")" 1
+rm -rf "$ACDIR"
+
 command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || \
     gate_skip "no C compiler on PATH"
 CC=$(command -v cc || command -v gcc)

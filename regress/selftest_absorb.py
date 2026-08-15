@@ -17,7 +17,10 @@ WHAT THE PARSER MUST DO, and every one of these was a real defect or a real near
   * a record SPLIT ACROSS TWO READS must not corrupt anything, at any offset;
   * a bracket-complete but UNTERMINATED record must be held, not consumed -- consuming it
     was the shipped defect, reachable at 1 of 138 LF offsets and 2 of 81 CRLF;
-  * a guest line containing a bare '[' must never be swallowed or held forever.
+  * a guest line containing a bare '[' must never be swallowed or held forever;
+  * and the two INVARIANTS below, added by R2 after a census found five mutants that this file
+    could not see because its rows compared body + tail -- the SUM -- and a mutant that only
+    MOVES text between the halves preserves it.
 """
 import os
 import sys
@@ -39,11 +42,31 @@ def check(name, got, want):
         print("  FAIL  %-58s\n          got  %r\n          want %r" % (name, got, want))
 
 
+#  *** THE INVARIANTS, AND WHY THEY EXIST. ***  Every row below used to compare body + tail,
+#  the SUM -- and a mutant that only MOVES text between the two halves preserves the sum, so
+#  27 of 29 rows could not see it.  A measured census found five such survivors, one of which
+#  makes the boot marker unreachable while every row stays green.  I2 restates the parser's
+#  own hold guard as a POSTCONDITION checked after EVERY step, so it applies on all ~1200
+#  calls this file already makes, including the offset sweeps; I3 is finality, and it is why
+#  the sum idiom is gone from this file entirely.  400 is a LITERAL for the reason section F
+#  records -- a fixture derived from the constant under test moves with it and pins nothing.
+I2_VIOLATIONS = []
+I2_STEPS = 0
+
+
 def feed(chunks):
-    """Run chunks through the real parser; return (console_text, final_tail, last_count)."""
+    """Run chunks through the real parser; return (console_text, final_tail, last_count).
+
+    Enforces I2 after every step: the held tail is either empty or a '['-headed, newline-free
+    run shorter than the bound.  Anything else is a relocation the sum would have hidden.
+    """
+    global I2_STEPS
     tail, out, n = "", [], None
     for c in chunks:
         chunk, tail, got = split_stream(tail, c)
+        I2_STEPS += 1
+        if not (tail == "" or (tail.startswith("[") and "\n" not in tail and len(tail) < 400)):
+            I2_VIOLATIONS.append((chunks[0][:32], repr(tail[:48])))
         out.append(chunk)
         if got is not None:
             n = got
@@ -58,8 +81,9 @@ print("--- A. a record spliced mid-token must rejoin the guest's line ---")
 for label, rec in (("LF", REC_LF), ("CRLF", REC_CRLF)):
     text = "shpcic0 at mainbus0: HITACHI SH77" + rec + "51R, rev 1\n"
     body, tail, n = feed([text])
-    check("%s: whole read, line rejoined" % label, body + tail,
+    check("%s: whole read, line rejoined" % label, body,
           "shpcic0 at mainbus0: HITACHI SH7751R, rev 1\n")
+    check("%s: whole read, nothing left holding" % label, tail, "")
     check("%s: count parsed" % label, n, 33554432)
 
 print("--- B. SPLIT AT EVERY OFFSET -- the case no regex alone survives ---")
@@ -67,16 +91,23 @@ for label, rec in (("LF", REC_LF), ("CRLF", REC_CRLF)):
     text = "shpcic0 at mainbus0: HITACHI SH77" + rec + "51R, rev 1\n"
     ideal = "shpcic0 at mainbus0: HITACHI SH7751R, rev 1\n"
     bad = []
+    held = []
     for cut in range(1, len(text)):
         body, tail, _ = feed([text[:cut], text[cut:]])
         if body + tail != ideal:
             bad.append(cut)
+        #  I3 at every offset: this input ends in a newline, so the parser must have
+        #  released.  A mutant that merely relocates text keeps the sum and is caught HERE.
+        if body != ideal or tail != "":
+            held.append(cut)
     check("%s: no split offset corrupts the line (of %d)" % (label, len(text) - 1), bad, [])
+    check("%s: no split offset leaves text holding (of %d)" % (label, len(text) - 1), held, [])
 
 print("--- C. byte-at-a-time, the most hostile chunking there is ---")
 text = "cpu0: HITACHI SH77" + REC_LF + "51R\n"
 body, tail, n = feed(list(text))
-check("byte-at-a-time: line intact", body + tail, "cpu0: HITACHI SH7751R\n")
+check("byte-at-a-time: line intact", body, "cpu0: HITACHI SH7751R\n")
+check("byte-at-a-time: nothing left holding", tail, "")
 check("byte-at-a-time: count parsed", n, 33554432)
 
 print("--- D. an unterminated record must be HELD, never consumed ---")
@@ -87,7 +118,8 @@ check("bracket-complete, no newline: nothing leaked to console", body, "cpu0: HI
 check("bracket-complete, no newline: held for the next read", tail, "[ 33554432 instrs; x]")
 body2, tail2, n2 = feed(["cpu0: HITACHI SH77[ 33554432 instrs; x]", "\n51R\n"])
 check("...and resolves correctly when the newline arrives",
-      body2 + tail2, "cpu0: HITACHI SH7751R\n")
+      body2, "cpu0: HITACHI SH7751R\n")
+check("...and releases the hold when it does", tail2, "")
 check("...with the count picked up", n2, 33554432)
 
 print("--- E. guest text containing '[' must survive untouched ---")
@@ -96,7 +128,11 @@ for name, s in (("bracketed word", "mem [avail] 64MB\n"),
                 ("gxemul's OTHER bracketed messages",
                  "[ using 516580 bytes of bsd ELF symbol table ]\n")):
     body, tail, n = feed([s])
-    check("preserved: %s" % name, body + tail, s)
+    #  "lands in BODY" is the named survivor's regression row: dropping the newline clause
+    #  from the parser's hold guard leaves this whole line in the TAIL, where the boot loop
+    #  never looks -- while body + tail stays equal to s and the old row stayed green.
+    check("lands in BODY: %s" % name, body, s)
+    check("...nothing held after it: %s" % name, tail, "")
     check("...and no count invented: %s" % name, n, None)
 
 print("--- F. the hold is BOUNDED -- a '[' must not stall the buffer forever ---")
@@ -110,14 +146,16 @@ check("a 400-char '[' run is released, not held (HOLD_MAX must stay sane)", tail
 check("HOLD_MAX is within the range the measurements justify",
       106 < HOLD_MAX <= 400, True)
 body, tail, _ = feed(["[ 33554432 inst", "rs; y]\n"])
-check("a genuine record split mid-word still parses", body + tail, "")
+check("a genuine record split mid-word still parses", body, "")
+check("...and leaves nothing held", tail, "")
 
 print("--- I. the hold must start at the LAST '[', not the first ---")
 # `rfind` -> `find` survived every other row: with `find`, an earlier bracket that already has
 # its newline suppresses the hold, and the REAL partial record behind it leaks to the console.
 body, tail, _ = feed(["mem [avail] 64MB\ncpu0: SH[ 33554432 inst", "rs; z]\n7751R\n"])
 check("an earlier resolved '[' does not suppress the hold",
-      body + tail, "mem [avail] 64MB\ncpu0: SH7751R\n")
+      body, "mem [avail] 64MB\ncpu0: SH7751R\n")
+check("...and the hold is released at the end", tail, "")
 
 print("--- J. a record body must not span past its own ']' ---")
 # `[^\]]*` -> `.*` survived everything: a greedy body eats from the first '[' to the LAST ']'
@@ -128,15 +166,18 @@ two = "cpu0: A[ 100 instrs; p]\nMIDDLE[ 200 instrs; q]\nB\n"
 # is what rejoins a line the record split. So both newlines vanish along with their records.
 body, tail, n = feed([two])
 check("two records keep the guest text between them",
-      body + tail, "cpu0: AMIDDLEB\n")
+      body, "cpu0: AMIDDLEB\n")
+check("...with nothing held", tail, "")
 same_line = "X[ 100 instrs; p]\nKEEP[ 200 instrs; q]\n"
 body, tail, _ = feed([same_line])
-check("greedy body would swallow KEEP; it must not", body + tail, "XKEEP")
+check("greedy body would swallow KEEP; it must not", body, "XKEEP")
+check("...and KEEP is not left holding", tail, "")
 
 print("--- G. records back to back, and the LAST count is the one kept ---")
 body, tail, n = feed(["a" + REC_LF.replace("33554432", "100") +
                       "b" + REC_LF.replace("33554432", "200") + "c\n"])
-check("both records stripped", body + tail, "abc\n")
+check("both records stripped", body, "abc\n")
+check("both records stripped: nothing held", tail, "")
 check("last count wins", n, 200)
 
 print("--- H. the shipped regex must REQUIRE the terminator ---")
@@ -152,6 +193,42 @@ check("REC matches a terminated one", bool(REC.search("[ 33554432 instrs; q]\n")
 m = REC.search("[ 100 instrs; p][ 200 instrs; q]\n")
 check("REC body stops at its own ']' rather than the line's last",
       m.group(1) if m else None, "200")
+
+print("--- K. the EDGES the invariants cannot reach (each named by the census) ---")
+#  The two invariants above kill the relocation CLASS.  These four rows kill the specific
+#  mutants a measured 22-mutant census found surviving the shipped file: they are edges, not
+#  classes, and no invariant covers them.
+#  K1: the hold bound, AT the boundary.  Section F uses 400 -- far past the shipped 256 -- so
+#  a `<` -> `<=` mutant sat comfortably inside it and survived.
+body, tail, _ = feed(["[" + "x" * 254])
+check("254-char '[' run is still held (just inside the bound)", tail, "[" + "x" * 254)
+body, tail, _ = feed(["[" + "x" * 255])
+check("256-char '[' run is released (AT the bound, not near it)", tail, "")
+#  K2: a missing '[' must not hold.  Dropping the `i != -1` guard holds the last character of
+#  every bracket-free read for ever, and every sum row stayed green.
+body, tail, _ = feed(["plain text with no bracket"])
+check("a bracket-free read holds nothing", tail, "")
+check("...and all of it reaches the console", body, "plain text with no bracket")
+#  K3: the hold must be taken from the UNPARSED remainder, not the whole read.  `rest.rfind`
+#  -> `tail.rfind` is invisible on a whole read and leaks a second record at one cut.
+two_rec = "A[ 100 instrs; p]\nB[ 200 instrs; q]\nC\n"
+leaked = []
+for cut in range(1, len(two_rec)):
+    b2, t2, n2 = feed([two_rec[:cut], two_rec[cut:]])
+    if b2 != "ABC\n" or t2 != "" or n2 != 200:
+        leaked.append(cut)
+check("no split offset leaks a record or loses the last count (of %d)" % (len(two_rec) - 1),
+      leaked, [])
+#  K4: the regex must require its own literal.  Dropping ` instrs` makes the parser eat
+#  "[ 100 frobs; p]" and INVENT a count from guest text that merely looks bracketed.
+check("REC does not match a look-alike without ' instrs'",
+      bool(REC.search("[ 100 frobs; p]\n")), False)
+body, tail, n = feed(["cpu0: [ 100 frobs; p]\n"])
+check("...and such a line survives as console text", body, "cpu0: [ 100 frobs; p]\n")
+check("...with no count invented", n, None)
+
+print("--- THE INVARIANTS, over every call this file made ---")
+check("tail invariant held at every step (of %d)" % I2_STEPS, I2_VIOLATIONS, [])
 
 print("\n%d rows, %d failures" % (ROWS, FAILS))
 print("SELFTEST_ABSORB_%s" % ("PASS" if FAILS == 0 else "FAIL"))
