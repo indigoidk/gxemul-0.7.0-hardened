@@ -142,6 +142,56 @@ RIGS = {
 }
 
 
+# *** THE TERMINATOR IS MANDATORY WHILE STREAMING. ***
+# It used to be optional (`\]\r?\n?`), and that recreated the very wrong answer the strip
+# exists to prevent: the instant `]` arrived the record matched WITHOUT its newline, the hold
+# emptied, and the newline turned up on the next read as ordinary console text -- rejoining
+# nothing and leaving `HITACHI SH77\n51R`. Measured at 1 of 138 split offsets for LF and 2 of
+# 81 for CRLF. Not reachable on today's rigs (zero of 740 real pty reads landed inside a
+# record) but a WRONG ANSWER rather than a miss.
+REC = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n")
+# At end of run there is no next read, so a final record that never got its newline is
+# matched terminator-less rather than left in the log.
+REC_EOF = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n?")
+# The longest record actually observed is 106 chars (landisk,
+# <sh4_emode_dcache_wbinv_range_index+0x62>); luna88k's run 45-66 and carry no symbol at all.
+HOLD_MAX = 256
+
+
+def split_stream(tail, text):
+    """Split pty text into console output and instruction records.
+
+    Returns (console_chunk, new_tail, last_ninstrs_or_None).
+
+    AT MODULE SCOPE ON PURPOSE. The gate can only observe this driver's OUTPUT, so it cannot
+    reach this function through any row -- 13 of 18 driver mutants were measured surviving
+    every gate row. regress/selftest_absorb.py calls THIS function, not a copy: a
+    re-implementation would test the copy and leave the shipped code unguarded, which is the
+    same "a row guards a different instance than it appears to" trap this harness has now hit
+    twice.
+
+    HOLD ON A MISSING NEWLINE, not merely on a missing ']'. Both are unfinished records:
+    "[ 123 inst" and "[ 123 instrs; ...]" alike. Testing only for ']' let a bracket-complete
+    but unterminated record through, which is exactly the defect REC above closes. A newline
+    always releases the hold, so a guest line containing a bare '[' cannot stall the buffer.
+    """
+    tail += text
+    out, pos, n = [], 0, None
+    for m in REC.finditer(tail):
+        out.append(tail[pos:m.start()])
+        n = int(m.group(1))
+        pos = m.end()
+    rest = tail[pos:]
+    i = rest.rfind("[")
+    if i != -1 and "\n" not in rest[i:] and len(rest) - i < HOLD_MAX:
+        out.append(rest[:i])
+        tail = rest[i:]
+    else:
+        out.append(rest)
+        tail = ""
+    return "".join(out), tail, n
+
+
 def drive(rig, binary):
     cfg = RIGS[rig]
     log_path = "/tmp/gxregress/drive_%s.log" % rig
@@ -195,11 +245,6 @@ def drive(rig, binary):
     # Measured at 1 of 138 split offsets for LF and 2 of 81 for CRLF. Not reachable on
     # today's rigs -- zero of 740 real pty reads landed inside a record -- but it is a WRONG
     # ANSWER rather than a miss, and it costs one character to close.
-    REC = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n")
-    # At end of run there is no next read, so a final record that never got its newline is
-    # matched terminator-less rather than left in the log.
-    REC_EOF = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n?")
-
     def absorb(text):
         """Split raw pty text into console text and instruction records.
 
@@ -208,28 +253,17 @@ def drive(rig, binary):
         leaks into the match buffer and the other half is stripped, which corrupts exactly
         the assertions this rig makes. The hold is bounded: a newline or a ']' releases it,
         so a guest line containing a bare '[' cannot stall the buffer.
+
+        The splitting itself lives in split_stream() at module scope, so a selftest can
+        exercise it directly. That is not tidiness: the GATE CAN ONLY SEE THIS DRIVER'S
+        OUTPUT, so it physically cannot reach this logic, and a measured 13 of 18 driver
+        mutants survive every gate row. A canned-stream test of the real function kills 10
+        of them -- but only if it calls the REAL function, not a copy of it.
         """
         nonlocal buf, tail, ninstrs
-        tail += text
-        out, pos = [], 0
-        for m in REC.finditer(tail):
-            out.append(tail[pos:m.start()])
-            ninstrs = int(m.group(1))
-            pos = m.end()
-        rest = tail[pos:]
-        i = rest.rfind("[")
-        # HOLD ON A MISSING NEWLINE, not merely on a missing ']'. Both states are unfinished
-        # records: "[ 123 inst" and "[ 123 instrs; ...]" alike. Testing only for ']' let a
-        # bracket-complete but unterminated record through, which is the defect above.
-        # The bound is 256 because the longest record actually observed is 106 chars (landisk,
-        # <sh4_emode_dcache_wbinv_range_index+0x62>); luna88k's run 45-66 and carry no symbol
-        # at all. A newline always releases the hold, so a guest line containing a bare '['
-        # cannot stall the buffer.
-        if i != -1 and "\n" not in rest[i:] and len(rest) - i < 256:
-            out.append(rest[:i]); tail = rest[i:]
-        else:
-            out.append(rest); tail = ""
-        chunk = "".join(out)
+        chunk, tail, n = split_stream(tail, text)
+        if n is not None:
+            ninstrs = n
         buf += chunk
         if chunk:
             log.write(chunk.encode("latin1", "replace")); log.flush()
