@@ -236,6 +236,18 @@ check     "verdict"                                "$(grep -c 'DIFF_PASS' "$LOG"
 #  rather than rushed; see the queue entry on binding this test to real work.
 #  Recorded here rather than quietly weakened, because a check that overstates
 #  what it proves is worse than one that states its limit.
+#  d1: the driver must put BOTH pty logs where $LOGDIR says.  This cannot be a gate-5 row:
+#  in the default battery $LOGDIR IS the string the driver used to hardcode, so such a row
+#  passes on the unfixed code -- measured.  selftest_logdir.py points LOGDIR somewhere else
+#  and runs a stub in place of the emulator, so it needs no rig and no boot.  It sets the
+#  variable itself rather than being invoked as `env LOGDIR=... `, which would export from
+#  OUTSIDE and stay green with lib.sh's export missing (half the defect).
+DLOG=$LOGDIR/selftest_logdir.log
+python3 "$HERE/selftest_logdir.py" > "$DLOG" 2>&1 || true
+dlv() { grep -m1 -oE "$1=[a-z]+" "$DLOG" | cut -d= -f2; }
+check     "driver honours \$LOGDIR for the console log" "$(dlv console_log_in_logdir)" "yes"
+check     "driver honours \$LOGDIR for the raw log"     "$(dlv raw_log_in_logdir)"     "yes"
+
 RNONCE="n$$"
 RLEN=${#RNONCE}
 RLOG=$LOGDIR/readiness_predicate.log

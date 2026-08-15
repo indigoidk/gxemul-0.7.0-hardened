@@ -4192,6 +4192,70 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R1 (#422, #423) — the harness could not be pointed anywhere else, and it kept no wall time
+Two harness corrections in one file, taken first because **#422 gates every mutation census**: a
+census that cannot be given a private directory writes into the shared logs `gate_hygiene.sh`
+grades. Nine review seats assessed and researched both; the round is recorded here in the order the
+panel settled it, because two of its conclusions were settled *against* the majority.
+
+**#422 — `drive_guest.py` ignored `$LOGDIR`, and `lib.sh` never exported it.**
+`regress/drive_guest.py:197-199` built both pty log paths from the literal `/tmp/gxregress`, and
+`regress/lib.sh:24` assigned `LOGDIR` without `export`, so even a driver that read the environment
+would have seen nothing. Both halves ship together (`lib.sh:24-30`, `drive_guest.py:197-203`);
+neither works alone. Three findings worth keeping:
+- **The obvious form is wrong.** Eight of nine seats proposed `os.environ.get("LOGDIR", <default>)`.
+  Measured: with `LOGDIR` set but **empty** that returns `""` and the paths become
+  `/drive_<rig>.log` — the filesystem root. The shipped form is
+  `os.environ.get("LOGDIR") or "/tmp/gxregress"`, which matches `lib.sh`'s own `${LOGDIR:-...}`
+  treatment of an empty value. *A unanimous panel is not a measurement.*
+- **The defect was conditionally silent, which is worse than uniformly silent.** Measured across
+  eleven invocation shapes: a driver-side read alone is dead for `LOGDIR=x; ./run.sh` but live for
+  `export LOGDIR=x` or `LOGDIR=x ./run.sh` — it works when tested by hand and fails in the census
+  that motivates it.
+- **A gate-5 row would have been vacuous, measured.** In the default battery `$LOGDIR` *is* the old
+  hardcoded string, so such a row finds the logs whether or not the driver honours the variable.
+
+**Detector: `regress/selftest_logdir.py`, wired into gate 2** (`gate_offline.sh`, alongside the
+`readiness_predicate_test.py` precedent). It imports the shipped `drive()`, injects a rig named
+`selftest` so its basenames cannot collide with the `drive_<rig>.log` files gate 6 grades, points
+`LOGDIR` at a private directory and runs a one-line stub in place of the emulator — no gxemul, no
+image, no boot, no rig, no serialisation. Two rows, asserting **the files**: a measured half-fix
+(console log relocated, raw log still hardcoded) printed a `LOG=` line pointing into the private
+directory while the raw log escaped, so reading the driver's own claim would have called it fixed.
+The selftest sets the variable itself rather than being invoked as `env LOGDIR=... `, which would
+export from *outside* and pass even with `lib.sh`'s export missing. Negative-controlled in both
+directions: `no/no → FAIL` on the unfixed tree before the edit, `yes/yes → PASS` after.
+
+**#423 — no wall time was recorded anywhere.** The record block printed five values and no
+duration, so the landisk load-sensitivity fact (counts nearly halve under host load) could never
+accrue calibration data. `t_start` is taken immediately **before** `pty.fork()`
+(`drive_guest.py:209-212`) — `boot_progress()`'s own `t0` starts after the exec and cannot see
+process startup — and `BOOT_WALL=%.1f` prints beside `NINSTRS` (`:400-410`), which is the count at
+that same instant, so the pair yields instructions-per-second. Because the record block runs before
+the interactive steps, the window is the boot leg **by construction** and cannot silently grow.
+
+**`BOOT_WALL` is telemetry and must never become an oracle** — a wall-clock threshold is
+load-sensitive, and this battery has already lost a 45-minute run to one. Its two gate-5 rows
+assert presence and **containment**: the gate brackets its own call to the driver with `date +%s`
+and requires `0 < BOOT_WALL <= elapsed+2`. The gate's interval strictly contains the driver's, so
+the row holds under any load — both dilate together. Stated limit, not hidden: a constant value
+below the ceiling survives both rows; wrong telemetry costs a wrong calibration note, not a wrong
+verdict.
+
+**Records corrected with the fix** (`CLAUDE.md:326`, `OUTSTANDING_BUGS.md:3772-3774`, and the D1
+entry at `:3958`): all cited `drive_guest.py:110`, a line the code left years ago.
+**`CHANGELOG.md:4455` is deliberately NOT corrected** — `git log -L` confirms `log_path` really was
+at `:110` when that block was written, so it is accurate history and rewriting it would falsify the
+record. **This fix does not license concurrent gates**: the producer/consumer orderings
+(`gate_build` withdraw/republish, hygiene grading gates 4 and 5, `gate_ab` vs `gate_upstream`) are
+untouched, and `gate_hygiene.sh:259` still answers a missing rig log with `note` + `continue` rather
+than `degrade`, so a writer/grader divergence would be silent coverage loss inside a green gate —
+which is why both resolutions now come from one exported variable.
+
+**Verified:** gate 2 PASS, 122 checks, including the two new rows; the detector negative-controlled
+before and after; both edited gate scripts pass `bash -n`; the containment arithmetic checked at
+0.0, 12.4, 999.9 and missing (missing resolves to `-1`, never to zero).
+
 ## One-hundred-and-fifty-ninth round (#420) — the load witness was the first instrument to break, and it broke into the shape of a regression
 
 #419 converted gate 7 to a budget of guest work. **Gate 5 had the same defect and broke under load

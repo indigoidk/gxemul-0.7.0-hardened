@@ -194,9 +194,15 @@ def split_stream(tail, text):
 
 def drive(rig, binary):
     cfg = RIGS[rig]
-    log_path = "/tmp/gxregress/drive_%s.log" % rig
-    raw_path = "/tmp/gxregress/drive_%s.raw.log" % rig
-    os.makedirs("/tmp/gxregress", exist_ok=True)
+    #  d1: honour $LOGDIR (lib.sh exports it) so a mutation census can be given a private
+    #  directory instead of poisoning the shared logs gate 6 grades.  `or`, not
+    #  os.environ.get(LOGDIR, default): with LOGDIR set but EMPTY the two-argument form
+    #  returns "" and these paths become "/drive_<rig>.log" -- the filesystem root.  The
+    #  `or` form matches lib.sh's own ${LOGDIR:-...}, which also treats empty as unset.
+    logdir = os.environ.get("LOGDIR") or "/tmp/gxregress"
+    log_path = "%s/drive_%s.log" % (logdir, rig)
+    raw_path = "%s/drive_%s.raw.log" % (logdir, rig)
+    os.makedirs(logdir, exist_ok=True)
     os.chdir(IMAGES)
     # #420: TWO logs. The raw stream keeps everything for forensics; drive_<rig>.log is
     # console-only, because gate_hygiene.sh greps THAT file for distress SUBSTRINGS and an
@@ -205,6 +211,10 @@ def drive(rig, binary):
     # and splitting the streams removes it for nothing.
     raw = open(raw_path, "wb")
     log = open(log_path, "wb")
+
+    #  a4: start the wall clock BEFORE the fork.  boot_progress()'s own t0 begins after
+    #  exec, so it cannot see process startup, and it is scoped to that nested function.
+    t_start = time.time()
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -395,6 +405,15 @@ def drive(rig, binary):
         reason = "ABSENT"
     print("REASON=%s" % reason)
     print("NINSTRS=%d" % ninstrs)
+    #  a4: TELEMETRY, NEVER AN ORACLE.  No gate row may fail on this value: a wall-clock
+    #  threshold is a LOAD-SENSITIVE oracle, and this battery has already lost a 45-minute
+    #  run to one (gate_ab, when subagents loaded the host).  Rows may assert that the key
+    #  is PRESENT and that it is contained by the gate's own measured interval -- never a
+    #  magnitude.  Paired with NINSTRS above, which is the count at this same instant, it
+    #  gives instructions-per-second, which is the datum the landisk load note needs and
+    #  today cannot accrue.  On a run that never reaches its marker this is time-to-REASON,
+    #  not time-to-milestone.
+    print("BOOT_WALL=%.1f" % (time.time() - t_start))
     # #420 pass 2: report the constants so the GATE can range-check them.
     #
     # Gate 7 had exactly this hole and #419 pass 3 closed it: its selftest exercised the

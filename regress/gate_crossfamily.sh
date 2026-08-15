@@ -39,7 +39,12 @@ run_rig() {
 
     note "$rig -- $note_txt"
     local out=$LOGDIR/rig_$rig.out
+    #  a4: bracket the driver so the gate knows an interval that STRICTLY CONTAINS the
+    #  driver's own.  A containment row holds under any host load -- both intervals dilate
+    #  together -- which is how BOOT_WALL gets a real check without a wall-clock THRESHOLD.
+    local t0w=$(date +%s)
     python3 -u "$HERE/drive_guest.py" "$rig" "$GX" > "$out" 2>&1
+    local t1w=$(date +%s)
     sed 's/^/       /' "$out"
 
     v() { grep -E "^$1=" "$out" | head -1 | cut -d= -f2-; }
@@ -120,6 +125,17 @@ run_rig() {
     # default safely (they go red), but a default that happens to be safe is not a check.
     check "$rig: driver reported all three progress constants" \
           "$([ -n "$st" ] && [ -n "$bs" ] && [ -n "$bg" ] && echo yes || echo "missing: st='$st' bs='$bs' bg='$bg'")" yes
+    #  a4: BOOT_WALL is TELEMETRY -- these two rows assert presence and containment, NEVER
+    #  a magnitude.  A row of the form "BOOT_WALL <= <constant>" is the load-sensitive
+    #  oracle that cost this battery 45 minutes; do not add one.  Stated limit: a constant
+    #  value below the ceiling survives both rows.  Accepted -- wrong telemetry costs a
+    #  wrong calibration note, not a wrong verdict.
+    local bw=$(v BOOT_WALL)
+    check "$rig: driver reported wall telemetry (never a threshold)" \
+          "$([ -n "$bw" ] && echo yes || echo "missing: bw='$bw'")" yes
+    check "$rig: wall telemetry is contained by the gate's own interval" \
+          "$(awk -v b="${bw:--1}" -v e="$(( t1w - t0w + 2 ))" \
+                 'BEGIN { print (b > 0 && b <= e) ? "contained" : "outside: " b " vs " e }')" contained
     check "$rig: stall threshold is many record intervals, well under the backstop" \
           "$([ "${st:-0}" -ge 30 ] && [ "${st:-0}" -le $(( ${bs:-1} / 4 )) ] && echo yes || echo "no: $st")" yes
     check "$rig: backstop exceeds the worst boot measured, with margin" \

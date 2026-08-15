@@ -3769,8 +3769,9 @@ worse than the defect that was fixed.**
      answer, not a crash.
    * `gate_ab.sh:42` `rm -rf`s `/tmp/gx-pristine` and `/tmp/gx-prebatch`, which
      `gate_upstream.sh:46-47` reads.
-   **A per-gate `LOGDIR` would not isolate them**, because `drive_guest.py:110` hardcodes
-   `/tmp/gxregress/drive_%s.log` instead of honouring `$LOGDIR`.
+   **A per-gate `LOGDIR` still would not isolate them**, and the reason is now the ORDERINGS
+   ALONE: the driver's own hardcode was removed (`drive_guest.py:197-199` honours `$LOGDIR`,
+   `lib.sh:24` exports it), but the producer/consumer edges above are untouched.
 
 4. **CORRECTION TO A STANDING NOTE, kept here because it was load-bearing for four months:**
    `selftest_mutation.sh` does **NOT** `rm -rf` the shared gate workdir — it is `T=$LOGDIR/mutation`
@@ -3957,6 +3958,11 @@ the most structural item on the list.
   dependency that was not previously recorded.
 * **D1 is worse than filed:** `drive_guest.py` hardcodes `/tmp/gxregress` and IGNORES `$LOGDIR`
   entirely, so mutant runs cannot currently be isolated even if someone remembers to try.
+  **[FIXED, round R1: the driver reads `$LOGDIR` (`:197-199`) and `lib.sh:24` exports it —
+  neither half works alone, and the panel measured that the obvious `os.environ.get(K, dflt)`
+  form writes to the filesystem root when `LOGDIR` is set but empty. Detector:
+  `selftest_logdir.py`, wired into gate 2; a gate-5 row would have been vacuous because in the
+  default battery `$LOGDIR` IS the old hardcoded string.]**
 * A2 confirmed: the branch is rig-blind — the comment knows about landisk, the code does not.
 * A3 confirmed idle: no step pattern begins with `[`, so nothing can currently be withheld.
 * A5 confirmed: "unfalsifiable" was verbatim in the shipped docstring (now corrected in both

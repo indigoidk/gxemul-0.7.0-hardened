@@ -22,6 +22,13 @@
 ROOT=${ROOT:-/mnt/c/DocumentNoSnc/CC/GXEMUL}
 IMAGES=$ROOT/_images
 LOGDIR=${LOGDIR:-/tmp/gxregress}
+#  d1: EXPORT, or the driver cannot see it.  A plain assignment here reaches the gates'
+#  own shell redirections but NOT a python child, so drive_guest.py kept writing its two
+#  pty logs to the hardcoded default while every other artefact relocated -- a mutation
+#  census then poisoned the shared logs gate 6 grades.  Measured: without this line a
+#  caller who writes `LOGDIR=x ./run.sh` propagates (env-prefixed vars are exported) but a
+#  caller who writes `LOGDIR=x; ./run.sh` does not, so the defect was CONDITIONALLY silent.
+export LOGDIR
 mkdir -p "$LOGDIR"
 
 C_OK=$'\033[32m'; C_BAD=$'\033[31m'; C_SKIP=$'\033[33m'; C_OFF=$'\033[0m'
