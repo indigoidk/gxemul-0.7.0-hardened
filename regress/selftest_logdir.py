@@ -40,9 +40,12 @@ WRAPPER = '''\
 import sys
 sys.path.insert(0, %r)
 import drive_guest
+#  budget and stall are DECLARED here because #425 removed the driver's .get defaults: a
+#  rig that omits them now raises KeyError.  This rig omitted both, and the consequence is
+#  the reason they are here -- see the note below.
 drive_guest.RIGS["selftest"] = {
     "args": [], "boot_wait": 5, "boot_pat": r"NEVER_MATCHES_selftest",
-    "tries": 1, "steps": [], "markers": [],
+    "budget": 0, "stall": 5, "tries": 1, "steps": [], "markers": [],
 }
 try:
     drive_guest.drive("selftest", %r)
@@ -73,16 +76,28 @@ def main():
         #  shape that fails when lib.sh does not export.  NOT `env LOGDIR=...`, which would
         #  export from outside and pass with the export missing.
         script = ('LOGDIR="$1"; . "$2/lib.sh"; exec python3 "$3"')
-        subprocess.run(["bash", "-c", script, "_", private, HERE, wrapper],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        #  *** GRADE THE WRAPPER'S OUTPUT.  IT USED TO GO TO DEVNULL, AND THAT IS HOW THIS
+        #  CHECK WENT ON PASSING WHILE THE DRIVER NO LONGER RAN. ***  #425 dropped the
+        #  driver's .get defaults; this file's rig declared neither key, so drive() began
+        #  raising KeyError immediately -- and BOTH rows below stayed GREEN, because the two
+        #  log files are opened BEFORE the raise.  A measure seat caught it by timing: the
+        #  run fell from 1.573 s and fifteen driver lines to 0.062 s and one.  The wrapper
+        #  already reported the exception; nobody was listening.  Now it is a row.
+        run = subprocess.run(["bash", "-c", script, "_", private, HERE, wrapper],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        caught = [ln for ln in (run.stdout or "").splitlines() if "wrapper_caught=" in ln]
 
         console = os.path.isfile(os.path.join(private, "drive_selftest.log"))
         raw = os.path.isfile(os.path.join(private, "drive_selftest.raw.log"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print("SELFTEST_LOGDIR console_log_in_logdir=%s raw_log_in_logdir=%s"
-          % ("yes" if console else "no", "yes" if raw else "no"))
+    print("SELFTEST_LOGDIR console_log_in_logdir=%s raw_log_in_logdir=%s driver_ran=%s"
+          % ("yes" if console else "no", "yes" if raw else "no",
+             "no: " + caught[0] if caught else "yes"))
+    if caught:
+        print("SELFTEST_LOGDIR_FAIL")
+        return 1
     if console and raw:
         print("SELFTEST_LOGDIR_PASS")
         return 0

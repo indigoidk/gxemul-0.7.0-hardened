@@ -44,7 +44,10 @@ mkdir -p "$LOGDIR"
 #                calibration, so a skip would claim an ignorance it does not have.
 #    out-of-range / unreported  as they say.
 budget_class() {
-    case "$1:$2" in
+    #  ${2-} because every gate here runs under `set -u`, where a one-argument call would
+    #  abort the gate with "$2: unbound variable" instead of classifying.  A classifier that
+    #  kills its caller on a malformed call is worse than one that says `unreported`.
+    case "${1-}:${2-}" in
     landisk:0)   echo absent ;;
     luna88k:0)   echo zeroed ;;
     *:)          echo unreported ;;
