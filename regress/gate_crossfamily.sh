@@ -73,6 +73,36 @@ run_rig() {
     else
         check "$rig: -N instruction stream was actually observed" "${n:-none} records" present
     fi
+
+    # #420 pass 2: RANGE-CHECK THE CONSTANTS THEMSELVES.
+    #
+    # Gate 7 shipped with exactly this hole and #419 pass 3 closed it: multiplying its real
+    # budget by 1000, or disabling its real stall threshold, left every check green, because
+    # the selftest exercised the helper with LITERAL arguments. The rows guarded a different
+    # INSTANCE than they appeared to. Here the constants live in a Python dict a shell row
+    # cannot see at all, so the driver prints them and these rows bound them.
+    #
+    # The bounds are derived, not taste. The stall threshold must be many -N record
+    # intervals (worst measured gap on this path under saturation: 7.06 s) and must stay
+    # well under the backstop, or a hang is indistinguishable from a slow host. The backstop
+    # must exceed the worst boot measured -- 720.8 s here under 8 busy loops on 8 cores --
+    # with real margin, and must not be so large that a wedged rig ties up the battery.
+    local st bs bg
+    st=$(v STALL); bs=$(v BACKSTOP); bg=$(v BUDGET)
+    check "$rig: stall threshold is many record intervals, well under the backstop" \
+          "$([ "${st:-0}" -ge 30 ] && [ "${st:-0}" -le $(( ${bs:-1} / 4 )) ] && echo yes || echo "no: $st")" yes
+    check "$rig: backstop exceeds the worst boot measured, with margin" \
+          "$([ "${bs:-0}" -ge 900 ] && [ "${bs:-0}" -le 3600 ] && echo yes || echo "no: $bs")" yes
+    # A budget of 0 means "deliberately none" -- landisk, whose six idle boots span 39.4%,
+    # so any ceiling from that sample would be invented rather than measured. A NON-zero
+    # budget must actually bound something: above the observed max for the rig it guards,
+    # and not so far above that it can never fire.
+    if [ "${bg:-0}" -eq 0 ] 2>/dev/null; then
+        check "$rig: budget is deliberately absent (uncalibrated rig)" absent absent
+    else
+        check "$rig: budget bounds the failure path (1.05-2x the observed max)" \
+              "$([ "$bg" -ge 8174849291 ] && [ "$bg" -le 15571141508 ] && echo yes || echo "no: $bg")" yes
+    fi
     echo
 }
 

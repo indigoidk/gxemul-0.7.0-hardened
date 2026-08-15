@@ -330,6 +330,17 @@ def drive(rig, binary):
         reason = "ABSENT"
     print("REASON=%s" % reason)
     print("NINSTRS=%d" % ninstrs)
+    # #420 pass 2: report the constants so the GATE can range-check them.
+    #
+    # Gate 7 had exactly this hole and #419 pass 3 closed it: its selftest exercised the
+    # helper with LITERAL arguments, so multiplying the real budget by 1000 or disabling
+    # the real stall threshold left every check green -- the rows guarded a different
+    # INSTANCE than they appeared to. These live in a Python dict that no shell row can
+    # see, which is the same shape one layer further away, so the driver has to hand them
+    # over or they are unguardable.
+    print("BUDGET=%d" % cfg.get("budget", 0))
+    print("STALL=%d" % cfg.get("stall", 0))
+    print("BACKSTOP=%d" % cfg["boot_wait"])
     reached = (reason == "MARKER")
     if reached:
         for step in cfg["steps"]:
