@@ -8,7 +8,10 @@
 #     guest that produced 3 KB of perfectly good boot output scores ZERO bytes while one
 #     that produced 5 KB scores 4096. An early version of this harness compared those
 #     numbers across builds and "found" a capability regression that was pure buffering.
-#     Every emulator invocation goes through run_emu(), which forces stdbuf -o0 -e0.
+#     Every emulator invocation goes through run_emu() or run_emu_progress(), both of which
+#     force stdbuf -o0 -e0.  (#419 note: run_emu() itself now has NO CALLERS -- gate 7 was
+#     its last one.  It is kept because the rule is general and a future gate will want the
+#     simple form, but do not cite it as the universal path: run_emu_progress() is.)
 #
 #  2. A MISSING INPUT IS A HARD ERROR, NEVER A ZERO SCORE. The same early version had no
 #     existence check on the baseline binaries, so a wrong path looked exactly like a
@@ -159,16 +162,29 @@ run_emu() {
 # block-buffers ITS OWN stdout and re-creates the identical bug one process later. Worse, a
 # SIGPIPE-based stop only fires on the emulator's NEXT WRITE -- which never comes for a wedged
 # guest, precisely the case the stop exists to catch. Polling a file has neither failure mode,
-# and the log is complete on disk however the run ends. ***
+# and the log is complete on disk however the run ends.
+#
+# IT HAS A THIRD, THOUGH, AND THE FIRST WINDOW SIZE HIT IT: a tail window smaller than the
+# gap between two -N records loses the oracle entirely and reports ABSENT for a perfectly
+# healthy guest. See the window comment below. ***
 #
 # MEASURED BASIS (eleven luna88k boots, 2026-08-14). Instructions-to-login spans
 # 7,315,767,413 (loaded) to 7,785,570,754 -- 3.57 % across eight idle runs, 6.42 % across an
 # 8x host-speed range. Dropping the page cache did NOT widen it. Load moves the count DOWN
-# ~4 %, because the m88k idle fold credits 8191 instructions per wall-paced usleep(500) main
-# loop iteration, so a busy host credits fewer -- i.e. the count is not pure guest work, but
-# it errs in the SAFE direction for a ceiling. The decisive run: under 8 busy loops on 8 cores
-# the guest STILL reached login, at 7,349,301,148 instructions in 742 s -- the same run that
-# scored 1:1:0 and FAILed at the old 300 s wall budget.
+# ~4 %, so the count is not pure guest work, but it errs in the SAFE direction for a ceiling.
+#
+# *** THE MECHANISM FOR THAT ~4 % IS NOT ESTABLISHED, and an earlier version of this comment
+# asserted one that the source contradicts. It claimed the m88k idle fold credits 8191
+# instructions per wall-paced usleep(500) iteration. The constant is real
+# (N_DYNTRANS_IDLE_BREAK = N_SAFE_DYNTRANS_LIMIT = (1<<13)-1 = 8191, added at
+# cpu_m88k_instr.c:2611 and :2660) but it is SUBTRACTED BACK at cpu_dyntrans.c:377 before
+# n_instrs is accumulated at :392, so the net credit per fold is ~0, not 8191. The DIRECTION
+# is measured and the conclusion rests on the measurement; the explanation does not. Do not
+# re-assert a mechanism here without reading both sites. ***
+#
+# The decisive run: under 8 busy loops on 8 cores the guest STILL reached login, at
+# 7,349,301,148 instructions in 742 s -- the same run that scored 1:1:0 and FAILed at the old
+# 300 s wall budget. That is 9.9 M instr/s, which is the slowest rate measured here.
 run_emu_progress() {
     local backstop=$1 budget=$2 stall=$3 marker=$4 log=$5; shift 5
     local t0 last_n=0 last_change n now reason= pid
@@ -189,7 +205,16 @@ run_emu_progress() {
 
     while kill -0 "$pid" 2>/dev/null; do
         # tail -c keeps this O(1) in log size rather than O(n) per poll.
-        n=$(tail -c 2048 "$log" 2>/dev/null | grep -ao '\[ *[0-9]\+ instrs' | tail -1 | tr -dc '0-9')
+        #
+        # *** THE WINDOW WAS 2048 AND THAT WAS TOO SMALL -- measured, not reasoned.
+        # A guest emitting one -N record per 2 s with ~6 KB of console output between
+        # records scored ABSENT with instrs=0: a healthy executing build reported as a
+        # harness fault AND a capability regression, which is exactly the misclassification
+        # this function exists to remove.  On the real luna88k log the max inter-record gap
+        # is 2334 bytes -- ALREADY LARGER THAN THE OLD WINDOW.  It did not bite only because
+        # the miss must persist for the whole stall period.  64 KB is ~28x the observed
+        # worst gap and still O(1) per poll. ***
+        n=$(tail -c 65536 "$log" 2>/dev/null | grep -ao '\[ *[0-9]\+ instrs' | tail -1 | tr -dc '0-9')
         n=${n:-$last_n}
         now=$(date +%s)
         [ "$n" != "$last_n" ] && { last_n=$n; last_change=$now; }
@@ -213,8 +238,21 @@ run_emu_progress() {
     wait "$pid" 2>/dev/null
 
     if [ -z "$reason" ]; then
-        # The process ended on its own or the backstop's timeout(1) reaped it.
-        reason=BACKSTOP
+        # *** RE-CHECK THE LOG BEFORE DEFAULTING TO BACKSTOP.  Measured 3/3,
+        # deterministic: the poll period is ~1006 ms, so a marker landing in the final
+        # poll window was scored BACKSTOP even though the guest had reached it -- the
+        # caller then called a SUCCESSFUL BOOT a regression while the marker-count row
+        # simultaneously passed on 1:1:1.  Two contradictory rows from one run. ***
+        if grep -aq "$marker" "$log" 2>/dev/null; then
+            reason=MARKER
+        else
+            # The process ended on its own or the backstop's timeout(1) reaped it.
+            reason=BACKSTOP
+        fi
+        # Same race on the count: a run that finishes inside one poll interval has a
+        # valid record on disk that no poll ever observed.
+        n=$(tail -c 65536 "$log" 2>/dev/null | grep -ao '\[ *[0-9]\+ instrs' | tail -1 | tr -dc '0-9')
+        [ -n "$n" ] && [ "${n:-0}" -gt "${last_n:-0}" ] 2>/dev/null && last_n=$n
     fi
     # An absent oracle stream outranks every other reason: if -N produced nothing then
     # nothing was measured, whatever else the run appeared to do.

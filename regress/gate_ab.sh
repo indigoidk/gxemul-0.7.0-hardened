@@ -20,7 +20,8 @@
 #
 # METHOD NOTES, both learned the hard way:
 #
-#  * Every run goes through run_emu(), which forces stdbuf -o0. On a pipe, gxemul's stdout
+#  * Every run goes through run_emu_progress() (#419; run_emu() no longer has any caller),
+#    which forces stdbuf -o0. On a pipe, gxemul's stdout
 #    is 4 KB block-buffered and `timeout`'s SIGTERM discards a partial block -- so a guest
 #    that produced 3 KB of good output scores ZERO. An earlier version of this comparison
 #    reported a "capability regression" on luna88k that was entirely a lost buffer.
@@ -89,8 +90,9 @@ LUNA_IMG="R:$IMAGES/liveimage-luna88k-raw-20250518.img"
 #                      costs nothing on the success path and removes per-host recalibration.
 #                      8.5 G was rejected: it sits only ~5 % above the theoretical ceiling a
 #                      maximally-precise usleep host would reach (~8.06 G).
-#   LUNA_STALL  120 s  At the SLOWEST rate ever measured here (9.96 M instr/s, host saturated)
-#                      one -N record arrives every 3.4 s. 120 s of silence is 35 missed
+#   LUNA_STALL  120 s  At the SLOWEST rate measured here (9.9 M instr/s -- 7,349,301,148
+#                      instructions in 742 s, host saturated) one -N record arrives every
+#                      3.4 s. 120 s of silence is 35 missed
 #                      records. That is a HANG, not a slow host -- but the claim is
 #                      empirical, not absolute: this detector still reads `date +%s`, so a
 #                      host that SUSPENDS or starves the process for two minutes would look
@@ -100,6 +102,27 @@ LUNA_IMG="R:$IMAGES/liveimage-luna88k-raw-20250518.img"
 LUNA_BUDGET=12000000000
 LUNA_STALL=120
 LUNA_BACKSTOP=1800
+
+# *** THE CONSTANTS NEEDED THEIR OWN ROWS.  Measured in pass 2: multiplying LUNA_BUDGET by
+# 1000, or LUNA_BACKSTOP by 4000, or disabling LUNA_STALL entirely, left ALL FOURTEEN CHECKS
+# GREEN.  The selftest below exercises run_emu_progress() with LITERAL arguments, so it proves
+# the function works while proving nothing about the values this gate actually passes it --
+# the rows guard a different instance of the thing they appear to guard.
+#
+# These bounds are derived, not taste: the observed maximum instructions-to-login is
+# 7,785,570,754, so a budget below ~1.05x that would false-FAIL a healthy boot and one above
+# ~2x stops bounding anything.  The stall threshold must exceed several -N record intervals
+# (~3.4 s at the slowest rate measured) and stay far below the backstop.  The backstop must
+# exceed the worst boot measured (742 s) with margin.  A static check costs no boot. ***
+LUNA_OBSERVED_MAX=7785570754
+check_min "budget is above the observed max instructions-to-login" \
+          "$LUNA_BUDGET" "$(( LUNA_OBSERVED_MAX * 105 / 100 ))"
+check     "budget still bounds something (<= 2x observed max)" \
+          "$([ "$LUNA_BUDGET" -le "$(( LUNA_OBSERVED_MAX * 2 ))" ] && echo yes || echo "no: $LUNA_BUDGET")" yes
+check     "stall threshold is many -N intervals but well under the backstop" \
+          "$([ "$LUNA_STALL" -ge 30 ] && [ "$LUNA_STALL" -le $(( LUNA_BACKSTOP / 4 )) ] && echo yes || echo "no: $LUNA_STALL")" yes
+check     "backstop exceeds the worst boot measured (742 s) with margin" \
+          "$([ "$LUNA_BACKSTOP" -ge 1200 ] && [ "$LUNA_BACKSTOP" -le 3600 ] && echo yes || echo "no: $LUNA_BACKSTOP")" yes
 
 # #419 SELFTEST. The classifier decides whether a row is a regression, a hang, a harness fault
 # or merely a slow host, so it needs its own rows -- and they must NOT need the rig, or they
@@ -201,6 +224,11 @@ else
     # too, so "one instruction record followed by silence" would have passed a row whose name
     # claims there is no instruction stream at all. The row now says what it means.
     check "pristine emits no instruction records at all" "$PRI_N" "0"
+    # PRI_R was assigned and never read after pass 2 removed its only consumer -- a seat
+    # caught the dead variable. It is worth asserting rather than deleting: ABSENT proves
+    # the no-stream path classified it, whereas BACKSTOP would mean the run sat for the full
+    # 1800 s and nothing noticed.
+    check "pristine is classified by the absent-stream path, not the backstop" "$PRI_R" "ABSENT"
 
     # An absent stream from a build that is supposed to RUN is a harness fault -- the `-N`
     # argument or the extraction broke -- and a harness fault must be red, never inconclusive.
@@ -248,7 +276,8 @@ else
     check "HEAD boots luna88k to a login prompt"            "$HD"  "1:1:1"
 
     # Upstream 0.7.0 does NOT boot OpenBSD/luna88k -- measured, unbuffered: it emits its
-    # 699-byte banner and no guest output whatsoever. That is the expected baseline, so it is
+    # banner -- 768 bytes of log, measured across five runs -- and no guest output whatsoever.
+    # That is the expected baseline, so it is
     # asserted rather than treated as a failure. If it ever starts booting, the check above
     # fires and this note needs revisiting.
     #

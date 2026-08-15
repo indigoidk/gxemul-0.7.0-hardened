@@ -4323,6 +4323,53 @@ Filed rather than fixed: the differential witness assumes prebatch's success pro
 healthy for HEAD, but the three legs run **sequentially**, so that is not established — load
 arriving between them defeats it.
 
+### Pass 3: seventeen gate runs found five more mutants alive, and two live defects
+
+A measure seat built a mutation testbed — a fake gxemul honouring `-N`, a fake `_images`,
+scaled constants — that reproduces the shipped gate exactly in 35 s. It confirmed independently
+that the two mutants alive at `ec30813` are dead at `ce9c0bc`, then found five more.
+
+***Three of them were the measured constants themselves, and the cause is a vacuity shape worth
+naming.*** Multiplying `LUNA_BUDGET` by 1000, or `LUNA_BACKSTOP` by 4000, or disabling
+`LUNA_STALL` outright, left **all fourteen checks green**. The selftest exercises
+`run_emu_progress()` with *literal* arguments, so it proves the function works while proving
+nothing about the values the gate actually passes it — **the rows guard a different instance of
+the thing they appear to guard.** Fixed with static range rows derived from the measurements
+(budget within 1.05–2× the observed max, stall between 30 s and a quarter of the backstop,
+backstop 1200–3600 s); each mutant now dies naming its row, at no boot cost.
+
+A fourth was mine from pass 2: the fix deleted the only consumer of `PRI_R`, leaving a variable
+assigned and never read, so nothing asserted that pristine is caught by the *absent-stream* path
+rather than sitting out the full 1800 s backstop. Asserted rather than deleted.
+
+**Two live defects in what this round shipped, both measured end-to-end:**
+
+*The `tail -c 2048` window loses the oracle under output pressure.* A guest emitting one record
+per 2 s with ~6 KB of console output between records scored `ABSENT`, `instrs=0` — a healthy
+executing build reported as a harness fault **and** a capability regression, which is exactly the
+misclassification this round exists to remove. The margin was thinner than the comment claimed:
+**the maximum inter-record gap on the real luna88k log is 2334 bytes, already larger than the
+window.** It failed to bite only because the miss must persist for the whole stall period. Now
+64 KB, ~28× the observed worst gap, still O(1) per poll.
+
+*`BACKSTOP` was reported with the marker already in the log* — 3/3, deterministic. The poll loop
+never re-checked after exiting, and the measured poll period is ~1006 ms, so a marker landing in
+the final window scored `BACKSTOP`: a successful boot called a regression, **while the marker-count
+row simultaneously passed on `1:1:1`.** Two contradictory rows from one run. It now re-greps
+before defaulting, and recovers a final count the same way.
+
+**A mechanism claim of ours contradicted by the source.** The comment explained the ~4 % load
+effect by "the m88k idle fold credits 8191 instructions per wall-paced `usleep(500)` iteration".
+The constant is real (`cpu_m88k_instr.c:2611`, `:2660`) but it is **subtracted back** at
+`cpu_dyntrans.c:377` before `n_instrs` accumulates at `:392`, so the net credit per fold is ~0.
+The measured direction stands; the explanation did not, and has been replaced with a note saying
+so. Also corrected: "9.96 M instr/s" was not derivable from the cited run (7,349,301,148 / 742 s
+= 9.9 M), and the same file gave both "699-byte" and "768-byte" for one measurement.
+
+**`run_emu()` now has no callers at all** — gate 7 was its last — while two comments still cited
+it as the path every emulator invocation takes. Kept, because the rule is general and a future
+gate will want the simple form, but no longer described as universal.
+
 ### Scope, stated narrowly on purpose
 
 **This converts gate 7 only.** The battery carries roughly **37 wall-clock oracles** — 33
