@@ -10,7 +10,7 @@ driver print what the callee received, which closes the two-reads hole -- but no
 PRINT can prove what a COMPARISON does, so this file proves it behaviourally instead.
 
 THE STRADDLE.  Run the driver three times against a stub in place of the emulator:
-  1. read `BUDGET=N` FROM THE DRIVER'S OWN OUTPUT -- never a literal.  Passing literals is
+  1. a probe leg, only to read `BUDGET=N` FROM THE DRIVER'S OWN OUTPUT -- never a literal.  Passing literals is
      exactly the precedent (gate_ab.sh) that left this hole open: a test that supplies its own
      constants cannot notice that the code under test is using different ones;
   2. a leg whose record reports N-1 instructions MUST NOT stop for the budget;
@@ -19,8 +19,12 @@ Together those bind the printed number to the enforced threshold FROM BOTH SIDES
 at the comparison (`ninstrs > budget * 1000`) or a deleted stop survives every printing scheme
 and dies here.
 
-NO EMULATOR, NO IMAGE, NO RIG, NO BOOT: the stub is a shell one-liner that prints one record
-and then sleeps, so the driver's parser and its stopping logic run against the shipped code.
+NO EMULATOR, NO RIG, NO BOOT: the stub is a shell one-liner that prints one record and then
+sleeps, so the driver's parser and its stopping logic run against the shipped code.  It does
+need the image DIRECTORY to exist, because the shipped drive() chdirs there before it opens
+anything -- a review seat caught the first version of this file claiming otherwise while gate
+2, the OFFLINE gate, would have gone red on a machine without it.  When the directory is
+absent this prints a distinguishable SKIP rather than a failure that blames the driver.
 """
 import os
 import re
@@ -67,6 +71,11 @@ def check(name, got, want):
         print("  FAIL  %-58s\n          got  %r\n          want %r" % (name, got, want))
 
 
+#  The shipped drive() chdirs here before opening anything; this check needs no image
+#  CONTENTS, only the directory.  Same guard, same reason, as selftest_logdir.py.
+IMAGES = getattr(drive_guest, "IMAGES", "")
+
+
 def run_leg(tmp, instrs):
     """Drive the shipped driver against a stub that reports `instrs` and then waits."""
     stub = os.path.join(tmp, "stub_%s.sh" % instrs)
@@ -100,11 +109,18 @@ def run_leg(tmp, instrs):
 
 
 def main():
+    if not os.path.isdir(IMAGES):
+        print("SELFTEST_BUDGET images_dir_absent=yes")
+        print("SELFTEST_BUDGET_SKIP")
+        return 0
     tmp = tempfile.mkdtemp(prefix="selftest_budget.")
     try:
-        #  Leg 1 also supplies the number the other two legs straddle.  Read it from the
-        #  OUTPUT, not from the config: that is the whole point of the exercise.
-        reason, ninstrs, printed = run_leg(tmp, BUDGET + 1)
+        #  THREE LEGS, and the first exists only to LEARN THE NUMBER.  The straddle's two
+        #  legs are then built from what the driver PRINTED, never from this file's own
+        #  constant -- the first version used BUDGET + 1 for the over-leg, which is exactly
+        #  the literal-passing the docstring forbids, and a review seat caught the file
+        #  breaking its own rule.
+        _, _, printed = run_leg(tmp, 1)
         check("the driver reports a budget at all", printed is not None, True)
         if printed is None:
             print("\n%d rows, %d failures" % (ROWS, FAILS))
@@ -112,14 +128,17 @@ def main():
             return 1
         n = int(printed)
         check("the printed budget is the one this rig declared", n, BUDGET)
-        check("a run PAST the printed budget stops for the budget", reason, "BUDGET")
-        check("...and reports the count that crossed it", ninstrs, str(BUDGET + 1))
 
-        reason2, ninstrs2, printed2 = run_leg(tmp, n - 1)
+        reason, ninstrs, printed_over = run_leg(tmp, n + 1)
+        check("a run PAST the printed budget stops for the budget", reason, "BUDGET")
+        check("...and reports the count that crossed it", ninstrs, str(n + 1))
+
+        reason2, _, printed2 = run_leg(tmp, n - 1)
         check("a run UNDER the printed budget does not stop for the budget",
               reason2 != "BUDGET", True)
         check("...and it stopped for a stated reason", reason2 in ("STALLED", "BACKSTOP"), True)
-        check("the printed budget is stable across legs", printed2, printed)
+        check("the printed budget is stable across legs", (printed_over, printed2),
+              (printed, printed))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

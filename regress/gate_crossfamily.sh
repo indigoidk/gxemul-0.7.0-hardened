@@ -156,16 +156,25 @@ run_rig() {
     if [ -z "$bg" ]; then
         check "$rig: budget was reported at all" "not reported" "a value"
     else
-        #  #426: ONE classifier, in lib.sh, and the CALIBRATED case is decided before the
-        #  zero case -- the old order tested `-eq 0` first, so a luna88k run reporting zero
-        #  matched "deliberately absent" and printed a GREEN ROW STATING A FALSEHOOD while
-        #  the calibrated range never ran.  MEASURED: 11/11 PASS on exactly that input.
-        #  Now the class is named and the row wants the class the rig should have.
+        #  #426: ONE classifier, in lib.sh, and A CALIBRATED RIG'S ZERO IS ITS OWN CLASS.
+        #  (Precisely: budget_class matches `luna88k:0` before the generic `luna88k:*`, so
+        #  the rig is identified before the value is ranged -- the old gate tested `-eq 0`
+        #  first and never reached the rig at all.)  That old order made a luna88k run
+        #  reporting zero match "deliberately absent" and print a GREEN ROW STATING A
+        #  FALSEHOOD while the calibrated range never ran.  MEASURED: 11/11 PASS on exactly
+        #  that input.  Now the class is named and the row wants the class the rig should
+        #  have.
+        #  A rig this gate has never been told about must NOT be auto-blessed.  The first
+        #  version defaulted to `absent`, which a review seat measured as a way for the very
+        #  defect this round closed to come back: a future CALIBRATED rig whose `rig:0` case
+        #  nobody added to budget_class would report BUDGET=0, classify as `absent`, and
+        #  print GREEN again.  Defaulting to a class no rig can currently produce means an
+        #  unknown rig is RED until somebody states what it should be.
         local want
         case "$rig" in
         luna88k) want=calibrated ;;
         landisk) want=absent ;;
-        *)       want=absent ;;
+        *)       want=stated-for-this-rig ;;
         esac
         check "$rig: budget class" "$(budget_class "$rig" "$bg")" "$want"
     fi

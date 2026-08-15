@@ -217,6 +217,13 @@ def drive(rig, binary):
     raw = open(raw_path, "wb")
     log = open(log_path, "wb")
 
+    #  Read the three progress constants BEFORE anything is spawned.  With the .get
+    #  defaults gone (see boot_progress), a rig that omits one must fail -- and a review
+    #  seat pointed out that it used to fail AFTER pty.fork(), which leaves an emulator
+    #  child running behind the traceback.  Touch them here so a config error kills the
+    #  run before it costs a process.
+    _ = cfg["budget"], cfg["stall"], cfg["boot_wait"]
+
     #  a4: start the wall clock BEFORE the fork.  boot_progress()'s own t0 begins after
     #  exec, so it cannot see process startup, and it is scoped to that nested function.
     t_start = time.time()
@@ -345,9 +352,16 @@ def drive(rig, binary):
     #  it -- stays honest.  A local proves what the caller INTENDED TO PASS.  Only the callee's
     #  own parameters prove what it RECEIVED, so boot_progress records them here.
     #
-    #  Residual, stated rather than hidden: a mutation strictly INSIDE boot_progress, below
-    #  this line, still escapes the print.  selftest_budget.py is what covers that -- it
-    #  straddles the printed budget with a run that must not stop and a run that must.
+    #  Residual, stated rather than hidden -- and stated PRECISELY, because the first
+    #  version of this comment claimed more than the detector delivers and a review seat
+    #  MEASURED it false twice.  A mutation strictly INSIDE boot_progress, below this line,
+    #  escapes the print.  What selftest_budget.py then covers:
+    #    * an in-body change to the BUDGET, to within one instruction -- `budget = budget - 1`
+    #      inserted here passes the straddle 7/0, because the straddle admits any threshold
+    #      in {N-1, N}.  At 12 G that is one instruction in twelve billion;
+    #    * an in-body change to STALL or BACKSTOP: NOT AT ALL.  `stall = stall * 10` passes
+    #      7/0, because the under-budget leg accepts BACKSTOP as a stated reason and nothing
+    #      straddles either constant.  That gap is FILED, not closed here.
     used = {}
 
     def boot_progress(pat, backstop, budget, stall):
