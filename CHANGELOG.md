@@ -4305,6 +4305,61 @@ The reviewing seat disclosed that it executed only arithmetic and source reads �
 log-size measurements were read rather than reproduced — which is why the tie-break was given its
 own executed test instead of being accepted on the finding alone.
 
+### Pass 2c: a live wrong answer in the strip, and a guard row that stated a falsehood
+
+A measure seat ran three real boots, 1,100+ `absorb()` invocations with byte-exact chunk control,
+and eighteen driver mutants across five chunkings. Three defects, all measured.
+
+***The record terminator was optional, and that recreated the exact corruption the code above it
+claims to prevent.*** `\[ *(\d+) instrs[^\]]*\]\r?\n?` matches the instant `]` arrives — so a read
+boundary between `]` and its newline consumed the record *without* its terminator, emptied the
+hold, and delivered the newline on the next read as ordinary console text. Result:
+`HITACHI SH77\n51R`. The hold could not help, because it only engaged when the fragment contained
+no `]` at all. Measured at 1 of 138 split offsets for LF and 2 of 81 for CRLF; **not reachable on
+today's rigs** — zero of 740 real pty reads landed inside a record — but a wrong answer rather than
+a miss. The terminator is now mandatory while streaming, optional only at end of run, and the hold
+triggers on a missing newline rather than a missing bracket. Verified at every split offset with
+the old code as control: old fails at offset 111 (and 112 for CRLF), new fails at none.
+
+***A guard row that passed while stating a falsehood.*** Deleting the driver's
+`print("BUDGET=%d")` produced **zero red rows**, and the gate then printed, green, *"budget is
+deliberately absent (uncalibrated rig)"* for a rig whose budget is 12 G — because `${bg:-0}` turns
+*missing* into *deliberately zero*. That is worse than an undetected mutant: the row asserts
+something untrue and is believed. The three constants' presence is now asserted before any of them
+is interpreted. `STALL` and `BACKSTOP` happened to default safely; a default that happens to be
+safe is not a check.
+
+***One bit of coverage, and three mutants walked through it.*** `NINSTRS > 0` was satisfied by
+setting the count to a constant 1, by incrementing per record instead of parsing, and by keeping
+only the first record — each silently disarming the budget oracle while every row stayed green.
+Replaced with a per-rig floor from measured minima.
+
+### The round stated a general property that holds for exactly one rig
+
+"A budget of guest work is load-insensitive" is established for luna88k: two independent
+measurements, different sessions and different drivers, **3,498 instructions apart** across load
+levels. **For landisk it is false.** Measured under 8 busy loops on 8 cores, instructions to
+milestone: **1,040,286,129 under load against 2,046,960,827 idle — a 49 % drop**, because the SH4
+boot waits on host-clock-driven emulated timers. Its instruction count tracks the host nearly as
+badly as wall clock does.
+
+Giving landisk no budget was therefore right, but for a far stronger reason than this round gave;
+the quoted 39.4 % spread was idle-host variation only, and the real spread across host conditions
+is at least 2.74×. Any future landisk budget must be derived from loaded runs. Recorded, along with
+the measurement that makes residual item 1 concrete: **the largest post-milestone inter-record gap
+under load was 56.97 s against a 60 s stall** — a 5 % margin, latent only because the step phase is
+not progress-checked.
+
+Three further records corrected. `OUTSTANDING_BUGS.md` said the `head -1` issue was *"not a live
+false pass today — landisk declares one value"*; landisk declares **two**, and the seat measured
+both being printed, so the record contradicted itself and the false half was the exculpatory one.
+The claim that free-stripping reproduces the previous log sizes *"exactly (6234 B, 3838 B)"* holds
+for luna88k and not landisk, which gave 3837 because the guest prints a variable CPU speed — log
+size was a coincidence that nearly became a fixture. And the anchored-vs-unanchored table was
+produced by injecting into whole logs, whereas through `absorb()` an anchored pattern also matches
+at position 0 of every chunk; the conclusion stands, the cited evidence does not describe the
+shipped code.
+
 ### The mutant, again
 
 Removing `-N` leaves the guest booting perfectly: every marker matches, every value is right, and

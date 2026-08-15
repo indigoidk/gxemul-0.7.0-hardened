@@ -67,8 +67,19 @@ run_rig() {
     # MARKER -- there is nothing wrong with the boot. The only observable difference is that
     # the budget and stall detectors were never armed. Measured on landisk, which has no race
     # to hide behind (8 s boot against a 60 s stall): every other row stayed green.
-    local n; n=$(v NINSTRS)
-    if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    # *** A FLOOR, NOT MERELY NON-ZERO. *** `> 0` was one bit of coverage, and three separate
+    # mutants walked through it: setting ninstrs to a constant 1, incrementing by 1 per record
+    # instead of parsing, and keeping only the first record. Each silently disarms the budget
+    # oracle while every row stays green. The floors are measured minima with room: luna88k's
+    # lowest observed instructions-to-milestone is 7.517 G idle, landisk's is 1.040 G UNDER
+    # LOAD -- see the load note in drive_guest.py, landisk's count nearly halves under load.
+    local n floor; n=$(v NINSTRS)
+    case "$rig" in
+    luna88k) floor=4000000000 ;;
+    landisk) floor=100000000 ;;
+    *)       floor=1 ;;
+    esac
+    if [ "${n:-0}" -ge "$floor" ] 2>/dev/null; then
         check "$rig: -N instruction stream was actually observed" present present
     else
         check "$rig: -N instruction stream was actually observed" "${n:-none} records" present
@@ -89,6 +100,15 @@ run_rig() {
     # with real margin, and must not be so large that a wedged rig ties up the battery.
     local st bs bg
     st=$(v STALL); bs=$(v BACKSTOP); bg=$(v BUDGET)
+
+    # *** ASSERT THE KEYS ARE PRESENT BEFORE INTERPRETING THEM. ***
+    # Deleting the driver's `print("BUDGET=...")` produced ZERO red rows and then printed,
+    # green, "budget is deliberately absent (uncalibrated rig)" for a rig whose budget is
+    # 12 G -- because `${bg:-0}` turns MISSING into DELIBERATELY ZERO. That is worse than a
+    # missed mutant: a guard row that states a falsehood while passing. STALL and BACKSTOP
+    # default safely (they go red), but a default that happens to be safe is not a check.
+    check "$rig: driver reported all three progress constants" \
+          "$([ -n "$st" ] && [ -n "$bs" ] && [ -n "$bg" ] && echo yes || echo "missing: st='$st' bs='$bs' bg='$bg'")" yes
     check "$rig: stall threshold is many record intervals, well under the backstop" \
           "$([ "${st:-0}" -ge 30 ] && [ "${st:-0}" -le $(( ${bs:-1} / 4 )) ] && echo yes || echo "no: $st")" yes
     check "$rig: backstop exceeds the worst boot measured, with margin" \

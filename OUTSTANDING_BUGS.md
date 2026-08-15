@@ -3820,8 +3820,12 @@ worse than the defect that was fixed.**
 
 3. **`gate_crossfamily.sh`'s `v()` TAKES `head -1`**, so a rig declaring two `expect_values` has
    only the FIRST compared literally. Landisk's `GX_ANS 42` currently rides on `VERDICT` alone.
-   Not a live false pass today — landisk declares one value — but the shape is a latent one: a
-   second value can be added and silently not checked.
+   *** THIS ENTRY ORIGINALLY SAID "not a live false pass today — landisk declares one value".
+   THAT WAS FALSE, and the false half was the exculpatory one. Landisk declares TWO
+   (`drive_guest.py`, `expect_values`) and the driver prints both — measured from the gate's own
+   `rig_landisk.out`: `VALUES=SH7751R` and `VALUES=42`, each with its matching `VALUES_WANT`.
+   So the literal comparison covers the first and `GX_ANS 42` is protected by the aggregate
+   VERDICT only. IT IS LIVE. *** Fix `v()` to compare every reported value, not `head -1`.
 
 4. **gxemul's OTHER bracketed messages already splice guest lines, with no `-N` involved.**
    Measured in the last pre-#420 gate logs: landisk 7 of 20 bracketed messages were not at line
@@ -3836,3 +3840,51 @@ worse than the defect that was fixed.**
    is a real behavioural difference from gate 7, and a genuinely overloaded host will produce a red
    gate 5 rather than a skip. The backstop is 2400 s against a measured worst boot of 742 s, so it
    takes a host ~3× worse than full saturation to reach it.
+
+## 2026-08-15 — #420 pass 2 residuals (the measure seat's second sweep)
+
+*** THE ROUND STATED A GENERAL PROPERTY THAT IS ONLY TRUE FOR ONE RIG. ***
+"A budget of GUEST WORK is load-insensitive" is established for luna88k — two independent
+measurements 3,498 instructions apart across load levels — and is **FALSE for landisk**.
+Measured under 8 busy loops on 8 cores: landisk reaches its milestone at **1,040,286,129
+instructions under load against 2,046,960,827 idle — a 49% drop.** The SH4 boot waits on
+host-clock-driven emulated timers, so its instruction count tracks the host almost as badly as
+wall clock does. Three consequences, all now recorded rather than assumed:
+  * giving landisk NO instruction budget is right, for a far stronger reason than the round gave;
+  * the quoted 39.4% landisk spread is IDLE-HOST VARIATION ONLY — across host conditions the
+    real spread is at least 2.74x;
+  * any future landisk budget MUST be derived from LOADED runs or it will be nonsense.
+
+**The largest POST-milestone inter-record gap under load was 56.97 s against a 60 s stall.** The
+step phase is not progress-checked today, so this is latent — but it is a 5% margin, and anyone
+extending progress checking into the interactive phase will false-FAIL immediately. This is the
+concrete number residual item 1 above was missing.
+
+**Log size is not a stable oracle.** The claim that free-stripping reproduces the previous
+no-`-N` log sizes "exactly (6234 B, 3838 B)" holds for luna88k (6234 exact) but landisk gave
+**3837**, because the guest prints a variable CPU speed (`916.685 MHz` vs `550.11 MHz`). The
+content-level comparison is the real evidence; the byte count was a coincidence that nearly
+became a fixture.
+
+**The anchored-vs-unanchored evidence does not describe the shipped code.** That table was
+produced by injecting a record into WHOLE LOGS. Through `absorb()`, `(?m)^` also matches at
+position 0 of every `tail`, i.e. at every chunk boundary, so the anchored variant behaves
+differently in the streaming path than the table shows — and it passes every gate row on both
+real streams. The conclusion (use unanchored) is unchanged; the cited measurement is not
+evidence for the code as written.
+
+**Landisk's stated minimum was breached by the next boot.** 2,046,965,550 was quoted as a range
+floor; the following idle run measured 2,046,960,827. It is a sample, not a bound, and the
+records should stop presenting sampled extremes as limits.
+
+**A rig-generic budget bound will false-FAIL a legitimate landisk budget.** The pass-2b row
+checks `[8174849291, 15571141508]`, which are luna88k's numbers. Closing the landisk calibration
+residual will trip that row unless the bound is scoped per rig first.
+
+**`STALL=500` survives the range row** (`30 <= st <= backstop/4`), which would make the stall
+detector nearly useless while staying green. Accepted looseness, recorded so it is a decision.
+
+**Housekeeping, and a real hazard:** the `-N`-removed mutant run left `/tmp/gxregress/drive_*.log`
+containing no instruction records for roughly a minute. A `gate_hygiene` run in that window would
+have graded the MUTANT's console log. Mutant runs must write to a scratch LOGDIR, never the
+shared one.

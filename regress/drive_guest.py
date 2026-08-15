@@ -183,7 +183,19 @@ def drive(rig, binary):
     #
     # The guest printing something of this shape was checked and does NOT happen: zero
     # occurrences of "[ N instrs" in either complete no--N log.
-    REC = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n?")
+    # *** THE TERMINATOR IS MANDATORY WHILE STREAMING. ***
+    # It used to be optional (`\]\r?\n?`), and that recreated the very wrong answer the
+    # comment above says it prevents: the instant `]` arrived the record matched WITHOUT its
+    # newline, `tail` emptied, and the newline turned up on the next read as ordinary console
+    # text -- rejoining nothing and leaving `HITACHI SH77\n51R`. The hold below could not
+    # help, because it only engages when the fragment contains NO `]`.
+    # Measured at 1 of 138 split offsets for LF and 2 of 81 for CRLF. Not reachable on
+    # today's rigs -- zero of 740 real pty reads landed inside a record -- but it is a WRONG
+    # ANSWER rather than a miss, and it costs one character to close.
+    REC = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n")
+    # At end of run there is no next read, so a final record that never got its newline is
+    # matched terminator-less rather than left in the log.
+    REC_EOF = re.compile(r"\[ *(\d+) instrs[^\]]*\]\r?\n?")
 
     def absorb(text):
         """Split raw pty text into console text and instruction records.
@@ -203,7 +215,14 @@ def drive(rig, binary):
             pos = m.end()
         rest = tail[pos:]
         i = rest.rfind("[")
-        if i != -1 and "]" not in rest[i:] and "\n" not in rest[i:] and len(rest) - i < 120:
+        # HOLD ON A MISSING NEWLINE, not merely on a missing ']'. Both states are unfinished
+        # records: "[ 123 inst" and "[ 123 instrs; ...]" alike. Testing only for ']' let a
+        # bracket-complete but unterminated record through, which is the defect above.
+        # The bound is 256 because the longest record actually observed is 106 chars (landisk,
+        # <sh4_emode_dcache_wbinv_range_index+0x62>); luna88k's run 45-66 and carry no symbol
+        # at all. A newline always releases the hold, so a guest line containing a bare '['
+        # cannot stall the buffer.
+        if i != -1 and "\n" not in rest[i:] and len(rest) - i < 256:
             out.append(rest[:i]); tail = rest[i:]
         else:
             out.append(rest); tail = ""
@@ -372,8 +391,14 @@ def drive(rig, binary):
     # silently truncate the log the verdict is computed from -- the same class of defect as
     # the lost 4 KB block that once faked a capability regression.
     if tail:
-        log.write(tail.encode("latin1", "replace"))
-        buf += tail
+        # A final record that never received its newline is still a record; strip it with the
+        # terminator-less pattern rather than writing it into the console log.
+        m = REC_EOF.fullmatch(tail)
+        if m:
+            ninstrs = int(m.group(1))
+        else:
+            log.write(tail.encode("latin1", "replace"))
+            buf += tail
         tail = ""
     log.close()
     raw.close()
