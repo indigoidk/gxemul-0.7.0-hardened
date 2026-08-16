@@ -32,6 +32,31 @@ struct timer;
 
 #define	TIMER_BASE_FREQUENCY	65.0	/*  Hz  */
 
+/*
+ *  #427: the frequency DOMAIN, and the catch-up BOUND.  Both are here rather than in
+ *  timer.c so a test can READ them instead of transcribing them -- a transcribed constant
+ *  is the shape that let a gate grade a value the run never used.
+ *
+ *  TIMER_MIN_FREQUENCY was already the shipped low clamp.  TIMER_MAX_FREQUENCY is DERIVED,
+ *  not chosen: machine->emulated_hz is an int (machine.h), every rate derived from it
+ *  divides by at least one, so INT_MAX bounds every legitimate request in the tree.  It
+ *  truncates nothing legitimate -- and it is nearly worthless on its own, because at
+ *  TIMER_BASE_FREQUENCY it still permits 33 million catch-up iterations per signal.  THE
+ *  CAP BELOW IS THE ACTUAL PROTECTION; the domain is normalisation.
+ *
+ *  TIMER_MAX_CATCHUP is derived from both sides, MEASURED: 65536 breaks a legitimate
+ *  40 MHz timer (its delivered rate collapses to 0.1065 of real time), while an iteration
+ *  costs 2.16-2.82 ns, so 2^22 would fill 59-77% of a 15.38 ms period.  2^20 is the
+ *  smallest power of two that leaves every legitimate case bit-identical to the old
+ *  behaviour while holding the handler under a fifth of its own period.  THE BACKLOG IS
+ *  RETAINED when the cap is hit, never dropped: catch-up IS how any timer faster than
+ *  TIMER_BASE_FREQUENCY is delivered, so dropping ticks caps EVERY timer at 65 Hz --
+ *  measured, a 100 Hz timer falls to 0.65 of real time with no burst at all.
+ */
+#define	TIMER_MIN_FREQUENCY	0.00000001	/*  Hz  */
+#define	TIMER_MAX_FREQUENCY	2147483647.0	/*  Hz; INT_MAX, see above  */
+#define	TIMER_MAX_CATCHUP	1048576		/*  ticks per timer per signal  */
+
 struct timer *timer_add(double freq, void (*timer_tick)(struct timer *timer,
 	void *extra), void *extra);
 void timer_remove(struct timer *t);

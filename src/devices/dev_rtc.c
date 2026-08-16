@@ -109,7 +109,32 @@ DEVICE_ACCESS(rtc)
 		if (writeflag == MEM_READ) {
 			odata = d->hz;
 		} else {
-			d->hz = idata;
+			/*
+			 *  #429: RANGE-CHECK BEFORE NARROWING, not after.
+			 *
+			 *  The defect is the narrowing itself, not the value.  idata is 64
+			 *  bits and d->hz is an int, so a guest write of 2^32 -- or of
+			 *  0x8000000000000000 -- truncates to ZERO and takes the branch
+			 *  below: an ADD silently becomes a REMOVE, and the timer core is
+			 *  handed a lie it cannot detect.  Measured: both of those values
+			 *  remove the timer today.  A guest write with bit 31 set becomes a
+			 *  NEGATIVE int, which the core's floor then turns into one tick per
+			 *  three years -- the guest asked for the fastest rate available and
+			 *  got the slowest.
+			 *
+			 *  So the test is on idata, in its own width.  ZERO KEEPS ITS
+			 *  MEANING: it is the documented way to stop the timer, and it must
+			 *  not be clamped into something else.
+			 */
+			if (idata == 0)
+				d->hz = 0;
+			else if (idata > (uint64_t) TIMER_MAX_FREQUENCY) {
+				fatal("[ rtc: rate %" PRIu64 " is above the "
+				    "timer domain; clamped ]\n",
+				    (uint64_t) idata);
+				d->hz = (int) TIMER_MAX_FREQUENCY;
+			} else
+				d->hz = (int) idata;
 
 			if (d->hz == 0) {
 				/*  Remove the timer, if any:  */

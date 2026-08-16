@@ -384,6 +384,41 @@ check     "readiness: offline verdict"              "$(grep -c 'READINESS_RESULT
 # for tcor[i], and cnt from tcnt[0] -- that are BIT-IDENTICAL to correct code across all
 # 824288 single-timer cases, because every other row starts timer 0 only. They are the
 # typo this rewrite newly risks. Measured: that row alone kills both.
+#  #427-#429: the timer core's frequency domain and its catch-up bound, driven OFFLINE.
+#  The driver #includes the shipped src/core/timer.c (timer_tick is static), stubs only
+#  gettimeofday, and never installs a signal handler -- so no host clock enters and these
+#  rows are not load-sensitive.  MEASURED against six mutants in copies: no ceiling,
+#  clamp-below-the-early-out, unbounded catch-up, both-clamps-written-plainly, and the
+#  drop-the-backlog policy all go red; the shipped file passes.
+TIMBIN=$LOGDIR/diff_timer
+TIMLOG=$LOGDIR/diff_timer.log
+#  -D_POSIX_C_SOURCE, because strict c99 hides struct sigaction and SA_RESTART, which the
+#  shipped timer.c uses -- the driver never calls that code, but it still has to compile.
+if ! $CC -O1 -std=c99 -D_POSIX_C_SOURCE=200809L -I"$SEC/src/include" \
+        -o "$TIMBIN" "$HERE/diff_timer.c" -lm > "$TIMLOG" 2>&1; then
+    note "timer differential compile failed:"; sed 's/^/       /' "$TIMLOG" | head -12
+    check "timer: compiles against the real timer.c" "no" "yes"
+else
+    check "timer: compiles against the real timer.c" "yes" "yes"
+    "$TIMBIN" > "$TIMLOG" 2>&1
+    sed 's/^/       /' "$TIMLOG"
+    check     "timer: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$TIMLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "timer: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$TIMLOG" | grep -oE '^[0-9]+')" 13
+    check     "timer: offline verdict" "$(grep -c 'DIFF_TIMER_PASS' "$TIMLOG")" "1"
+    #  Name the three rows that carry the round, so deleting one is a red row rather than
+    #  a quieter file: the NaN floor (the only row that catches a plainly-written clamp),
+    #  the idempotence row (the only one that catches a clamp below the early-out), and
+    #  the anti-regression row (the only one that catches dropping the backlog).
+    check "timer: the NaN row is present" \
+          "$(grep -c 'NaN lands on the FLOOR' "$TIMLOG")" "1"
+    check "timer: the idempotence row is present" \
+          "$(grep -c 'five identical requests reset the schedule' "$TIMLOG")" "1"
+    check "timer: the anti-regression rows are present" \
+          "$(grep -c 'still delivers ~' "$TIMLOG")" "2"
+fi
+
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
 if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
