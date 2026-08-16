@@ -4024,13 +4024,31 @@ Ranked, because the first is a live host crash.
    MEASURED as SIGFPE, core dumped (exit 136).** `TIMER_1_LOAD` (`:417`) accepts
    `idata & TIMER_MAX_VAL` including 0 and calls `reload_timer_value()` directly. The guards
    are `TIMER_ENABLE` and `pending_timer_interrupts[i] > 0`.
-   *** THIS ROUND MADE IT REACHABLE SOONER, AND THAT MUST BE SAID PLAINLY: *** before
-   #427/#428, `cycles == 0` gave `freq = +INF` → `interval = 0.0` → the catch-up loop never
-   advanced → a guest-reachable HANG inside the SIGALRM handler, so the machine froze before
-   the division could run. The clamp bounds the loop, the callback now bumps `pending`
-   2^20 times in the first signal, and the guard is satisfied almost at once — **#427/#428
-   convert a hang into a SIGFPE on this path.** Neither is acceptable; the crash is the more
-   visible of the two and is the strongest single reason to take this next. The trap is
+   *** CORRECTION, 2026-08-15, AND IT LETS THIS ROUND OFF A HOOK IT PUT ITSELF ON. *** This
+   filing originally said "#427/#428 convert a hang into a SIGFPE on this path". **HALF
+   WRONG**, found by the measuring seat re-deriving the reproduction instead of citing its own
+   earlier run. There are TWO routes to the division:
+
+   * **Route 1**, as filed: `cycles == 0` → `freq = +INF` → before #427 that meant
+     `interval = 0.0` and a catch-up loop that never advanced, so the machine froze before
+     `DEVICE_TICK` ran. #427 clamps, #428 bounds, `pending` reaches `TIMER_MAX_CATCHUP` in one
+     signal and the guard opens. This route IS opened by our hardening.
+   * **Route 2 PREDATES BOTH.** `TIMER_1_LOAD` (`:413-424`) does NOT clear
+     `pending_timer_interrupts[]` — contrast `TIMER_1_CONTROL` (`:447`), which does. So an
+     ORDINARY LEGAL timer accrues a backlog (measured: 384 at 50 kHz), the guest then writes
+     load = 0, and the next tick divides. No `+INF`, no clamp involved. **Measured against
+     `git show 863d238^`, the pre-#427/#428 core: it crashes there too, exit 136.**
+
+   The mechanism is that `DEVICE_TICK(footbridge)` is dispatched from `machine_run()`
+   (`machines/machine.c:726-738`) — the MAIN EXECUTION LOOP, not the SIGALRM handler — so the
+   CPU reaches the divide between signals, before any handler hang. Third route:
+   `cpu_run_deinit()` (`cpus/cpu.c:411-415`) ticks every device twice at shutdown, so quitting
+   with a zero load and a live backlog crashes on the way out.
+
+   **So the honest statement is: the crash is PRE-EXISTING and guest-reachable on its own;
+   #427/#428 added a second, faster route.** The original wording took blame this round had
+   not earned — and a record that overstates a self-inflicted harm is no more true than one
+   that hides it. The trap is
    CONFIRMED (a seat reproduced the core dump directly); the reachability is MANUAL —
    settling it needs a booted netwinder rig writing 0 to `TIMER_1_LOAD` and then enabling the
    timer. **Test-first is available here without a rig: the division is the subject, and an
