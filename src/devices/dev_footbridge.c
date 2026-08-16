@@ -140,9 +140,17 @@ static void timer_tick3(struct timer *t, void *extra)
  *  draft omitted: read mechanically, PERIODIC mode with a zero load reloads zero and interrupts
  *  every prescaled clock -- a max-rate storm, the DANGEROUS branch rather than the silent one.
  *  Full-period is the only choice that survives all three, so the argument was understating its
- *  own robustness.  The second support is arithmetic: the 24-bit mask at the LOAD write aliases a
- *  legitimate guest write of 0x1000000 -- "one full wrap" -- to zero, so this mapping is also the
- *  unique choice that keeps the rate continuous across the register's own truncation.
+ *  own robustness.
+ *
+ *  A SECOND SUPPORT WAS ALSO WITHDRAWN, for the same reason as the third and by a seat whose
+ *  answer sat unread for a day.  It said the 24-bit mask aliases "a legitimate guest write of
+ *  0x1000000 -- one full wrap -- to zero, so this mapping keeps the rate continuous across the
+ *  register's own truncation".  The datasheet closes it: SS 7.3.39 gives TimerNLoad as bits 23:0
+ *  R/W with "31:24 -- R Read only as 0", so bit 24 is not a truncated write at all, it is OUTSIDE
+ *  THE WRITABLE FIELD.  There is no wrap to be continuous across, and continuity beyond a
+ *  register's own width is a modelling preference dressed up as arithmetic.  Zero -> 2^24 stands
+ *  on the three-way argument above and on nothing else; what silicon does with a zero load
+ *  remains UNKNOWN, and SS 7.3.39 is silent on it.
  *
  *  A THIRD ARGUMENT WAS WITHDRAWN WHEN THE DATASHEET ARRIVED, and it is recorded because the
  *  withdrawal matters more than the argument did.  An earlier draft of this comment said

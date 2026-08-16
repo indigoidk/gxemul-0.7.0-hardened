@@ -4212,7 +4212,7 @@ and GXemul implements only set 0, so a cache-flush loop over the four sets walks
 handled set. **Tempering that one honestly, from reading the header rather than the report:** the
 line above CSSP1 says *"the following only exist on 88204"*, so a guest driving an 88200 would not
 touch them and this particular example is weaker than it first looks. It does not rescue the
-site — the gap is 21 handled offsets in a 1024-word window, and CDP0-3/CTP0-3 carry no such
+site — the gap is 18 handled offsets in a 1024-word window, and CDP0-3/CTP0-3 carry no such
 caveat — but the CSSP example should not be quoted without the qualifier. Whether OpenBSD 7.7 actually does that is BELIEVED, not confirmed (no driver source
 in tree, nothing booted for the audit) — but the register-map gap is CONFIRMED from the two files.
 Ruled out while checking: `regs[]` is sized `M8820X_LENGTH/sizeof(uint32_t)`, so the unconditional
@@ -4566,3 +4566,27 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   non-event. The sweep is committed and wired into gate 6 as a two-row class ratchet (the count
   AND the denominator, so a sweep that silently stopped finding anything cannot read green), and
   negative-controlled in both directions: planting one instance moves it to 3/25.
+
+- **RECORDS CORRECTED from the R6 pass-2 codex answer, which had gone unread for a day.** Three
+  findings, each CHECKED rather than judged, with three different outcomes — which is itself the
+  argument for reading a seat instead of scoring it.
+  1. **"21 handled offsets" was wrong — it is 18** (`CONFIRMED`; the `DEVICE_ACCESS(m8820x)`
+     switch has 18 `case` labels). Corrected above. The measured survival counts are a *third*
+     set of numbers and do not contradict it: pre-fix, 17 of 1024 offsets survived a READ and 15
+     survived a WRITE, because some labelled offsets still exited — `CMMU_SCR` on read, `CMMU_IDR`
+     and `CMMU_SSR` on write. Case labels, surviving reads and surviving writes are three
+     different quantities and this record now names all three so it cannot be re-broken.
+  2. **"A legitimate guest write of 0x1000000 — one full wrap" was overstated** — withdrawn,
+     `CONFIRMED` against the local datasheet rather than accepted on the seat's word: §7.3.39
+     gives TimerNLoad as bits 23:0 R/W with **"31:24 — R Read only as 0"**, so bit 24 is not a
+     truncated write, it is outside the writable field. There is no wrap to be continuous across.
+     Zero → 2^24 now rests on the three-way argument alone; silicon behaviour stays UNKNOWN.
+  3. **The 8253 aliasing finding was ALREADY FIXED** in `84f442d`, one commit after the `35302f2`
+     the seat reviewed. Its citation landed on the retraction rather than the claim — the same
+     shape as the grok "of each kind" finding earlier the same day, and the second time in one
+     round that a seat cited a correction as the defect. Worth naming as a pattern: **when a
+     comment quotes its own earlier wording in order to disclaim it, that quotation is a
+     grep-magnet.** No action.
+  The seat also disclosed its own conflict unprompted (it was one of the original one-helper
+  advocates) and graded every number it had not run as `UNKNOWN` rather than asserting it — the
+  honest form, and the reason its three findings were worth checking one at a time.
