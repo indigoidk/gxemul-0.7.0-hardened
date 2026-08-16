@@ -138,6 +138,14 @@ int main(void)
 	struct cpu *cpu;
 	struct machine *machine;
 
+	/*  LINE-BUFFERED ON PURPOSE.  gate_offline.sh redirects this binary's stdout to a file,
+	    which makes it FULLY buffered -- so when a mutant re-introduces the crash, the log is
+	    0 BYTES and the operator gets a red row with nothing in it.  Measured: line-buffered,
+	    the same run leaves 943 bytes naming A1/B2/D1 as FAIL before it dies.  The gate's
+	    greps fail either way, so this is legibility rather than detection -- but it is this
+	    project's own recorded stdout-buffering trap, in a new place.  */
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
 	cpu = calloc(1, sizeof(struct cpu));
 	machine = calloc(1, sizeof(struct machine));
 	d = calloc(1, sizeof(struct footbridge_data));
@@ -196,6 +204,25 @@ int main(void)
 		}
 		check_u("D2 20000 ticks leave the 24-bit counter in range", over, 0);
 	}
+	/*  D3 EXISTS BECAUSE D2 WAS NOT ENOUGH, and the review measured why: every tick-path
+	    row above uses load == 0, and for load == 0 the constant 16777216 is exactly the
+	    right answer -- so replacing the whole helper call with that literal passed the
+	    entire file.  The counter must TRACK THE GUEST'S LOAD, not merely stay in range.  */
+	{
+		int i, over = 0;
+		struct footbridge_data *e = calloc(1, sizeof(*e));
+		arm_irqs(e);
+		e->timer_load[0] = 1000;
+		e->timer_control[0] = TIMER_ENABLE;
+		e->pending_timer_interrupts[0] = 1;
+		for (i = 0; i < 20000; i++) {
+			dev_footbridge_tick(cpu, e);
+			if (e->timer_value[0] >= 1000)
+				over++;
+		}
+		check_u("D3 the counter stays below the guest's OWN load", over, 0);
+		free(e);
+	}
 
 	printf("--- E. the rate the device asks the timer core for ---\n");
 	memset(d, 0, sizeof(*d));
@@ -224,6 +251,19 @@ int main(void)
 	check(  "E3 a zero load asks for a few Hz, not the ceiling",
 	    (last_freq > 1.0 && last_freq < 100.0) ? "serviceable" : "OUT OF RANGE",
 	    "serviceable");
+	/*  E4 EXISTS BECAUSE E2 WAS A SIGN-ONLY ORACLE, and the review measured the cost of
+	    that: changing the `1` in reload_timer_value()'s helper call to a `0` -- ONE
+	    CHARACTER -- silently deletes the prescaler from the RATE domain for every guest,
+	    and all fifteen rows stayed green.  Sections B and C prove the HELPER prescales;
+	    D1/D2 prove the COUNTER consumer does not; nothing pinned the RATE consumer to
+	    prescaling, which is the round's headline design decision.  100 MHz / (1000 * 256)
+	    is 390.625 Hz; the mutant asks for 100000, a rate 256x too fast.  */
+	d->timer_load[0] = 1000;
+	d->timer_control[0] = TIMER_ENABLE | TIMER_FCLK_256;
+	last_freq = -1.0;
+	reload_timer_value(cpu, d, 0);
+	check_u("E4 the RATE consumer really applies the x256 prescaler",
+	    (uint64_t) (last_freq * 1000.0 + 0.5), 390625);
 
 	printf("--- F. END TO END: the shipped tick survives route 2, in a forked child ---\n");
 	/*  ROUTE 2, the one that PREDATES #427/#428 and is the reason this round does not get
@@ -282,11 +322,45 @@ int main(void)
 		}
 	}
 
+	printf("--- H. the LOAD register reads back EXACTLY what the guest wrote ---\n");
+	/*  THE FIFTH-VACUITY-CLASS ROW, and the adjudicating seat found it by attacking its own
+	    design: "timer_load[] is never rewritten -- the guest reads back exactly what it
+	    wrote" is a shipped, load-bearing claim, and it had NO DETECTOR.  Reinstating
+	    normalize-at-write -- `timer_load = idata ? idata : 1`, precisely the alternative
+	    this round REJECTED -- passed all fifteen rows, because nothing in this file ever
+	    drove TIMER_1_LOAD through the access handler; every other row pokes struct fields
+	    directly.  These two rows go through dev_footbridge_access in both directions.  */
+	{
+		struct footbridge_data *h = calloc(1, sizeof(*h));
+		unsigned char buf[4];
+		uint64_t back;
+		arm_irqs(h);
+
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_LOAD, buf, 4, MEM_WRITE, h);
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_LOAD, buf, 4, MEM_READ, h);
+		back = memory_readmax64(cpu, buf, 4);
+		check_u("H1 a guest write of 0 reads back as 0, not normalised", back, 0);
+
+		/*  H2 pins the 24-bit MASK as well: 0x1000000 is "one full wrap", and the mask
+		    aliases it to zero -- which is the arithmetic that makes the full-period
+		    mapping the continuous choice in the first place.  */
+		memset(buf, 0, sizeof(buf));
+		memory_writemax64(cpu, buf, 4, 0x1000000);
+		dev_footbridge_access(cpu, NULL, TIMER_1_LOAD, buf, 4, MEM_WRITE, h);
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_LOAD, buf, 4, MEM_READ, h);
+		back = memory_readmax64(cpu, buf, 4);
+		check_u("H2 0x1000000 is masked to 0, and stays 0 on read-back", back, 0);
+		free(h);
+	}
+
 	/*  IDENTITY, as every differential here carries.  */
 	{
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%d", rows + 1);
-		check("IDENTITY row count -- guards against a stale copy", buf, "15");
+		check("IDENTITY row count -- guards against a stale copy", buf, "19");
 	}
 
 	printf("\n%d rows, %d failures\n", rows, fails);

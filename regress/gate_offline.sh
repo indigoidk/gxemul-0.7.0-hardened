@@ -519,10 +519,22 @@ fi
 #  -Wl,--gc-sections is LOAD-BEARING: without it the link needs eleven more symbols.  The
 #  trade-off, stated so it is not mistaken for coverage: it drops DEVINIT, so this file cannot
 #  test devinit.  -D_DEFAULT_SOURCE is required for random() under -std=c99.
-#  MEASURED against four mutants in copies: the zero guard removed (dies BY SIGNAL 8, the crash
-#  itself), the prescaler back to a signed shift, the tick site prescaling, and TIMER_EXTERNAL
-#  falling through as a bare x16 -- all red, control passes.  A fifth (the x16 prescaler as a
-#  signed shift) is EQUIVALENT and deliberately not counted: 2^24<<4 cannot overflow an int.
+#  MEASURED against seven mutants in copies -- all red, control passes: the zero guard removed
+#  (dies BY SIGNAL 8, the crash itself), the prescaler back to a signed shift, the tick site
+#  prescaling, TIMER_EXTERNAL falling through as a bare x16, and the three that PASS 2 found
+#  surviving the first fifteen rows -- one character deleting the prescaler from the RATE domain,
+#  the tick counter replaced by a constant, and normalize-at-write (the design this round
+#  REJECTED).  An eighth is EQUIVALENT and deliberately not counted: on a uint64_t, `<<= 4` and
+#  `*= 16` are the same operation for every value in range -- it is the TYPE that makes it
+#  equivalent, not the magnitude.
+#
+#  ON THE FORKS, CORRECTED: two rows fork, and the first version of this comment said that made
+#  a re-crashing mutant a named-row KILL rather than a census FAULT.  MEASURED FALSE by two seats
+#  independently -- D2 is UNFORKED and reaches the divide first, so an unconditional
+#  re-introduction of the crash takes the binary down there, before F1's fork.  G1's fork IS
+#  load-bearing (the CONTROL-arm exit(1) is reachable nowhere else in-process) and F1's contains
+#  a narrower class (a zero-guard conditioned on the prescaler bits survives D2 and dies in F1).
+#  Detection is unaffected either way: every grep below fails on a truncated log.
 FBBIN=$LOGDIR/diff_footbridge
 FBLOG=$LOGDIR/diff_footbridge.log
 if ! $CC -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
@@ -538,7 +550,7 @@ else
     check     "footbridge: row failures" \
               "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
     check_min "footbridge: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 15
+              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 19
     check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
     #  Name each row that is the SOLE detector of something.
     check "footbridge: the zero-load row is present" \
@@ -549,6 +561,17 @@ else
           "$(grep -c 'not silently read as x16' "$FBLOG")" "1"
     check "footbridge: the counter-domain row is present" \
           "$(grep -c 'leave the 24-bit counter in range' "$FBLOG")" "1"
+    #  The three rows PASS 2 added, each the SOLE detector of a mutant that survived the first
+    #  fifteen: the rate consumer really prescaling (one character defeated it), the counter
+    #  tracking the guest's OWN load (every earlier tick row used load 0, for which a constant
+    #  is the right answer), and the LOAD register reading back unmodified (nothing drove the
+    #  access handler at all, so the design this round REJECTED passed).
+    check "footbridge: the rate-prescaler row is present" \
+          "$(grep -c 'RATE consumer really applies' "$FBLOG")" "1"
+    check "footbridge: the counter-tracks-load row is present" \
+          "$(grep -c "below the guest's OWN load" "$FBLOG")" "1"
+    check "footbridge: the LOAD read-back rows are present" \
+          "$(grep -cE 'reads back as 0, not normalised|stays 0 on read-back' "$FBLOG")" "2"
     #  The two forked end-to-end rows: these are the ones that prove the HOST SURVIVES, and
     #  they are forked so a mutant that re-crashes is a named-row KILL rather than a census
     #  FAULT that takes the gate binary with it.

@@ -121,19 +121,28 @@ static void timer_tick3(struct timer *t, void *extra)
  *  ZERO MEANS FULL PERIOD (2^24), and it is a CHOICE UNDER A DOCUMENTED UNKNOWN, not a fact.
  *
  *  The 21285 datasheet was obtained for this round (_scratchpad/dc21285.pdf, Intel order
- *  278115-001, Sept 1998) and it is SILENT on a zero load: SS 7.3.39 (p. 7-50) specifies
- *  TimerNLoad and its reset value without saying what a count of zero does, and a search of the
- *  full extraction for "minimum count" / "nonzero" / "reaches zero" turns up no equivalent of
- *  the 8254's Figure 22.  So the absence is MEASURED, not assumed -- which is a stronger thing
- *  to be able to say than the guess it replaces.
+ *  278115-001, Sept 1998).  SS 7.3.39 (p. 7-50) specifies TimerNLoad and its reset value without
+ *  saying what a count of zero does, and a search of the full extraction for "minimum count" /
+ *  "nonzero" / "reaches zero" turns up no equivalent of the 8254's Figure 22.  So the absence is
+ *  MEASURED, not assumed -- a stronger thing to say than the guess it replaces.
  *
- *  The choice therefore rests on failure asymmetry: implement full-period when the truth is
- *  "disabled" and a guest gets a few unwanted interrupts on a timer it explicitly enabled --
- *  noisy, visible, recoverable.  Implement "disabled" when the truth is full-period and the
- *  guest waits forever on a tick that never comes -- silent, and it hangs at boot.  The second
- *  support is arithmetic: the 24-bit mask at the LOAD write aliases a legitimate guest write of
- *  0x1000000 -- "one full wrap" -- to zero, so this mapping is the unique choice that makes the
- *  rate continuous across the register's own truncation.
+ *  BUT "SILENT" OVERSTATES IT BY HALF, and the pass-2 review caught that in this round's favour.
+ *  SS 7.3.41 bit 6 says a FREE-RUNNING timer "will wrap to FFFFFFh and continue to decrement",
+ *  which together with SS 6.4's 24-bit down counter DETERMINES the free-run case: a load of zero
+ *  gives a period of exactly 2^24, i.e. the mapping below is datasheet-IMPLIED there -- and
+ *  free-running is bit 6 == 0, the reset mode.  It is genuinely unknown only for PERIODIC.
+ *
+ *  The choice therefore rests on failure asymmetry, and there are THREE candidate truths rather
+ *  than the two first written here.  Implement full-period when the truth is "disabled" and a
+ *  guest gets a few unwanted interrupts on a timer it explicitly enabled -- noisy, visible,
+ *  recoverable.  Implement "disabled" when the truth is full-period and the guest waits forever
+ *  on a tick that never comes -- silent, and it hangs at boot.  And the third, which the first
+ *  draft omitted: read mechanically, PERIODIC mode with a zero load reloads zero and interrupts
+ *  every prescaled clock -- a max-rate storm, the DANGEROUS branch rather than the silent one.
+ *  Full-period is the only choice that survives all three, so the argument was understating its
+ *  own robustness.  The second support is arithmetic: the 24-bit mask at the LOAD write aliases a
+ *  legitimate guest write of 0x1000000 -- "one full wrap" -- to zero, so this mapping is also the
+ *  unique choice that keeps the rate continuous across the register's own truncation.
  *
  *  A THIRD ARGUMENT WAS WITHDRAWN WHEN THE DATASHEET ARRIVED, and it is recorded because the
  *  withdrawal matters more than the argument did.  An earlier draft of this comment said
@@ -151,8 +160,13 @@ static void timer_tick3(struct timer *t, void *extra)
  *  removes.  Hence uint64_t, and multiplication rather than a signed shift.  Found independently
  *  by three seats.
  *
- *  (8253 maps a zero divisor to "disabled" instead.  That divergence is deliberate and not an
- *  inconsistency: its 16-bit counter has no equivalent of the 24-bit aliasing above.)
+ *  (8253 maps a zero divisor to "disabled" instead -- and a pass-2 seat caught that an earlier
+ *  version of this parenthetical argued the point BACKWARDS.  It said the 8253's 16-bit counter
+ *  "has no equivalent of the 24-bit aliasing above", but writing 0x10000 to a 16-bit latch aliases
+ *  to zero in exactly the same way -- which is precisely WHY the Intel 8254 datasheet defines a
+ *  programmed count of 0 as 2^16 (231164-005, p. 17).  So the aliasing argument REINFORCES this
+ *  mapping rather than distinguishing it, and dev_8253.c's "disabled" is the one that looks wrong
+ *  against its own hardware.  Filed as its own item; not changed here.)
  */
 /*
  *  with_prescaler distinguishes the two consumers, and it is NOT a convenience flag -- getting

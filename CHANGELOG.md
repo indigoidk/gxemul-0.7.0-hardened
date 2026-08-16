@@ -4195,9 +4195,11 @@ there means the optimisation is skipped, not that anything faults.
 ## R6 (#432) — a guest-written zero made the footbridge timer divide by zero, and killed the host
 `DEVICE_TICK(footbridge)` computed `random() % timer_load[i]`, and `TIMER_x_LOAD` accepts a
 guest-written zero. Integer division by zero: the HOST process dies. Two seats reproduced it
-independently — the exact signal depends on the build (SIGFPE at -O0, SIGILL at -O2, where the
-compiler turns the UB into `ud2`), which is worth stating because the round's own census reports
-whichever it sees.
+independently, and it is **SIGFPE (exit 136) at every optimisation level** — measured at -O0, -O1,
+-O2 and -O3 with gcc 15.2.1. An earlier draft of this block said "SIGILL at -O2, where the compiler
+turns the UB into `ud2`"; that is wrong for this code. The divisor here is a runtime
+`d->timer_load[i]`, so nothing is constant-folded and a real `div` is emitted — the `ud2` behaviour
+needs a divisor the compiler can PROVE is zero, which is a standalone repro rather than this path.
 
 **NINE SEATS ANSWERED THE DESIGN BRIEF — the first full roster since #420**, and two of the nine
 had been believed down when the round opened. Kimi revived mid-panel with no calendar signal and
@@ -4243,11 +4245,21 @@ ships: **one helper, both consumers, the stored register untouched.**
 
 **THE DATASHEET WAS OBTAINED MID-ROUND** (`_scratchpad/dc21285.pdf`, Intel 278115-001, Sept 1998,
 with a `pdftotext -layout` twin beside `ddi0100i`), and it did two things. It CONFIRMED the
-`TIMER_EXTERNAL` encoding above. And it is **SILENT on a zero load** — §7.3.39 specifies
-`TimerNLoad` without saying what a count of zero does, and a search of the full extraction for
-"minimum count" / "nonzero" / "reaches zero" finds no equivalent of the 8254's Figure 22. So the
-zero mapping remains **UNKNOWN, now measured rather than assumed**, which is a stronger thing to
-be able to say. The choice rests on failure asymmetry (wrong-and-noisy beats wrong-and-silent: a
+`TIMER_EXTERNAL` encoding above. And it carries no direct statement about a zero load — §7.3.39
+specifies `TimerNLoad` without saying what a count of zero does, and a search of the full
+extraction for "minimum count" / "nonzero" / "reaches zero" finds no equivalent of the 8254's
+Figure 22. So the mapping is **UNKNOWN by search rather than by assumption**, which is a stronger
+thing to be able to say.
+
+**Except that "silent" overstates it by half, and pass 2 caught that too — in the round's own
+favour.** §7.3.41 bit 6 says a free-running timer "will wrap to FFFFFFh and continue to decrement",
+which with §6.4's 24-bit down counter DETERMINES the free-run case: a load of 0 gives a period of
+exactly 2^24, i.e. the shipped mapping is datasheet-IMPLIED there, and free-running is bit 6 == 0,
+the reset mode. Genuinely unknown only for periodic. And the failure-asymmetry argument as written
+weighs two alternatives when there are three: read mechanically, periodic mode with a zero load
+reloads zero and interrupts every prescaled clock — a max-rate storm, which is the DANGEROUS
+branch, not the silent one. The shipped mapping avoids that too. The conclusion is unchanged and
+the argument was understating its own robustness. The choice rests on failure asymmetry (wrong-and-noisy beats wrong-and-silent: a
 guest that gets a few unwanted interrupts limps visibly, a guest waiting on a tick that never
 comes hangs at boot) and on arithmetic (the 24-bit mask aliases a legitimate write of `0x1000000`
 to zero, so full-period is the unique choice that keeps the rate continuous across the register's
@@ -4262,19 +4274,44 @@ is filed, and the withdrawal is recorded here because it matters more than the a
 **The detector is offline because it is the ONLY thing it can be:** there is no netwinder or cats
 rig anywhere in this tree, so nothing here boots a machine that has a footbridge.
 `regress/diff_footbridge.c` `#include`s the shipped device exactly as `diff_sh4_tmu.c` does, needs
-seven stubs, and runs **15 rows**. Two of them fork, so a mutant that re-crashes is a named-row
-KILL rather than a census FAULT that takes the gate binary with it. `-Wl,--gc-sections` is
+seven stubs, and runs **19 rows** (15 as first shipped; pass 2 added four). `-Wl,--gc-sections` is
 load-bearing (eleven more symbols without it) and its cost is stated: it drops `DEVINIT`, so this
 file cannot test devinit.
 
+*** THE FORK RATIONALE AS FIRST WRITTEN WAS FALSE, and two seats measured it independently. ***
+This block originally said "two of them fork, so a mutant that re-crashes is a named-row KILL
+rather than a census FAULT that takes the gate binary with it." **D2 is UNFORKED and reaches the
+divide first**, so any unconditional re-introduction of the crash kills the binary there, before
+F1's fork — including the very mutant this round exists to prevent. What is true and narrower:
+G1's fork IS load-bearing (the CONTROL-arm `exit(1)` is reachable nowhere else in-process), and
+F1's contains one constructible class (a zero-guard conditioned on the prescaler bits survives D2,
+whose control carries FCLK_256, and dies only in F1, whose control is bare ENABLE). Detection was
+never at risk — every gate grep fails on a truncated log — so this was a WRONG RECORD rather than
+a coverage gap, which is exactly the class the stopping rule says to fix rather than file.
+
 **Census: 5 attempted, 4 killed, 0 survived, 0 faults**, control passes — the zero guard removed
 (dies by signal, the crash itself), the prescaler back to a signed shift, the tick site
-prescaling, and `TIMER_EXTERNAL` falling through as a bare ×16. A fifth mutant, the ×16 prescaler
-as a signed shift, is **EQUIVALENT and deliberately not counted**: 2^24 << 4 is 2^28 and cannot
-overflow an `int`, so calling it a survivor would overstate the detector's weakness exactly as
-calling it a kill would overstate its strength.
+prescaling, and `TIMER_EXTERNAL` falling through as a bare ×16. A further mutant, the ×16 prescaler
+as a signed shift, is **EQUIVALENT and deliberately not counted** — calling it a survivor would
+overstate the detector's weakness exactly as calling it a kill would overstate its strength. The
+REASON first given here was wrong even though the verdict was right: it said "2^24 << 4 cannot
+overflow an `int`", but `cycles` is a `uint64_t`, so `int` overflow was never the question. **It is
+the TYPE that makes it equivalent, not the magnitude** — on a `uint64_t`, `<<= 4` and `*= 16` are
+the same operation for every value in range.
 
-**Verified:** differential 15 rows / 0 failures; gate 2 **PASS at 181 checks** (was 171); both
+**Pass 2 then found three mutants that DID survive all fifteen rows**, and each is now killed by a
+row written for it. (1) Changing the `1` to a `0` in `reload_timer_value()`'s helper call — **one
+character** — silently deletes the prescaler from the RATE domain for every guest, asking for
+100000 Hz where the correct answer is 390.625. Sections B and C proved the HELPER prescales and
+D1/D2 proved the COUNTER consumer does not, but nothing pinned the RATE consumer, which is this
+round's headline design decision; E2 was a sign-only oracle. (2) Replacing the tick's helper call
+with the constant 16777216 passed everything, because every tick-path row used `load == 0` — for
+which that constant is exactly right. (3) Reinstating normalize-at-write, **the precise alternative
+this round rejected**, passed everything, because no row drove `TIMER_1_LOAD` through the access
+handler at all: "the guest reads back exactly what it wrote" was a shipped, load-bearing claim with
+no detector — the fifth vacuity class. Census now: **8 attempted, 7 killed, 0 survived, 0 faults.**
+
+**Verified:** differential **19 rows / 0 failures**; gate 2 **PASS at 184 checks** (was 171); both
 build trees rebuilt and the arc binary republished; **`gate_mips.sh` PASS 6/6** — pmax 15/15 and
 arc 13/13, both to `uid=0(root)`. `dev_footbridge.c` byte-identical in `GXEMUL-SEC`, `est/` and
 both build trees.

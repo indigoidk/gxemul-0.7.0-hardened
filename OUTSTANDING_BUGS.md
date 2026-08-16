@@ -4203,8 +4203,9 @@ footbridge was written, and they found a guest-reachable host kill on a rig that
 **`dev_m8820x.c:220` — `DEVICE_ACCESS(m8820x)` has a `default:` arm that calls `exit(1)` on ANY
 unhandled offset, on READS as well as writes, in a 4 KB window — and `dev_m8820x` is
 memory-mapped on LUNA88K, which is one of the three rigs that actually boots in this tree.**
-`M88`20X_LENGTH` is 0x1000 (`cpu_m88k.h:229`) — 1024 word offsets — and the switch handles 21 of
-them. Everything else terminates the host. That includes registers the CMMU header itself
+`M8820X_LENGTH` is 0x1000 (`cpu_m88k.h:229`) — 1024 word offsets — and the switch handles **18** of
+them (a pass-2 seat counted the labels; the first filing said 21, which UNDERSTATED the gap, so the
+finding is stronger than it was written). Everything else terminates the host. That includes registers the CMMU header itself
 defines: `CMMU_CDP0-3` (0x800-0x80c), `CMMU_CTP0-3` (0x840-0x84c), and pointedly
 **`CMMU_CSSP1/2/3` (0x890/0x8a0/0x8b0)** — `m8820x.h:86-91` defines `CMMU_CSSP(n)` for sets 0..3
 and GXemul implements only set 0, so a cache-flush loop over the four sets walks straight off the
@@ -4224,7 +4225,11 @@ read-only `CMMU_IDR`), `:169` (write to the read-only `CMMU_SSR`), plus `:125` t
 
 **Tree-wide inventory, for the first time:** 220 `exit(`/`abort(` hits across `src/devices/`, of
 which **114 are directly inside a `DEVICE_ACCESS` handler**, 17 are init-time, and 89 are in
-helpers mostly called from `DEVICE_ACCESS`. No `abort()` is guest-reachable. Two deliberate
+helpers mostly called from `DEVICE_ACCESS`. **These counts are PATTERN-DEPENDENT and are marked
+UNKNOWN until the round that acts on them re-derives them with its pattern stated**: the audit
+stripped comments and strings before attributing each hit to its enclosing function, while a naive
+`grep -c` over the same files gives 304. Both numbers can be right about different questions, which
+is exactly why the pattern has to travel with the count. No `abort()` is guest-reachable. Two deliberate
 exclusions, both checked: `dev_cons.c:80` is the testmachine's documented halt port (`exit(0)`,
 intended), and `dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is set at init).
 **The rig question dominates the ranking**: arc and pmax have ZERO `DEVICE_ACCESS` exit sites
@@ -4253,6 +4258,12 @@ a genuine negative-reachability datum that caps every plausibility claim above.
 
 The 21285 datasheet (`_scratchpad/dc21285.pdf`, Intel 278115-001) closes three questions that were
 blocked on it:
+
+*A caveat that travels with every §7.3.41 citation here:* the register table is COLUMN-MANGLED in
+the `pdftotext -layout` extraction — it prints "5:4" beside the prescaler decode list. The "bits
+3:2" reading is right, but it is right by RECONSTRUCTION: `dc21285reg.h`'s 0x04/0x08/0x40/0x80 pin
+the prescaler at bits 3:2, Mode at 6 and Enable at 7. Said here because a future reader of the
+`.txt` will hit "5:4" and reasonably doubt the record.
 
 1. **FREERUN vs PERIODIC is ignored.** §7.3.41 bit 6: free-running wraps to `FFFFFFh` and keeps
    decrementing; periodic reloads `TimerNLoad`. The clock source is bits 3:2 alone, identical in
