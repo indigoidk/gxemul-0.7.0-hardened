@@ -4471,3 +4471,45 @@ actually claimed.
 * `regress/diff_m8820x.c` only links because of `-Wl,--gc-sections` (it pulls in `devinit_m8820x`
   → `memory_device_register`). On a linker without it the gate row goes **red, not skipped** —
   and the sibling `diff_sh4_tmu` compile in the same gate does not use those flags.
+
+### ns16550: the divide-by-zero is REAL but DOES NOT FIRE IN THE SHIPPED BUILD
+
+Filed by two seats as a guest-reachable host kill on the live arc rig, and ranked as the cheapest
+remaining host kill. **Measured test-first, that ranking is wrong.**
+
+`dev_ns16550.c:181` computes `(int)(115200 / d->divisor)` as an ARGUMENT to `debug()`, and both
+divisor bytes are guest-writable (`:154` low, `:179` high). An offline driver reproduced the exact
+guest sequence — set DLAB via `com_lctl` 0x80, write 0 to the low byte, write 0 to the high byte —
+and confirmed by read-back that `dlab == 1` and `divisor == 0` at the division, with `debug()`
+reached twice, so the path is genuinely exercised rather than skipped.
+
+| optimisation | result |
+|---|---|
+| `-O0` | **SIGFPE, core dumped** |
+| `-O1` | **SIGFPE, core dumped** |
+| `-O2` | survives |
+| `-O3` | survives |
+| `-Os` | survives |
+| **the tree's own flags** (`-fgnu89-inline -O3 -DNDEBUG`) | **survives** |
+
+**So the host does not die in the configuration this project actually builds.** At `-O2` and above
+gcc exploits the undefined behaviour and elides the division; the guest gets a garbage bps figure
+in a debug message nobody reads at default verbosity.
+
+This does NOT make it a non-defect. It is undefined behaviour on a guest-reachable path, and which
+way it resolves is a property of the compiler rather than of the code — a `-O0` debug build, a
+different gcc, or a different compiler can restore the crash at any time. But it is **not** the
+cheapest remaining host kill, and it should not be worked ahead of items whose severity does not
+depend on build flags.
+
+*** THIS IS THE `optrow` CLASS AGAIN, ON THE OTHER SIDE OF THE GLASS. *** `optrow` recorded that a
+row measuring a RESOURCE is only as good as the optimisation it pins — a detector following the
+compiler. Here it is the DEFECT that follows the compiler: the same UB is fatal at `-O1` and
+invisible at `-O2`. Any severity claim about undefined behaviour has to name the build flags it
+was measured under, and neither of the two seats that filed this one did.
+
+**And the reproduction caught its own harness first**, which is why the numbers above can be
+trusted: the first run reported all three probes dying, INCLUDING the control with a legal divisor
+of 12. The cause was `d->addrmult` left 0 by `calloc`, and `dev_ns16550_access:138` divides
+`relative_addr` by it — so the harness produced **SIGFPE for the wrong reason**, indistinguishable
+from the defect under test. The control row is the only thing that separated them.
