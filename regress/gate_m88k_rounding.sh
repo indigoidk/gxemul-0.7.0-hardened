@@ -222,4 +222,52 @@ ires=$(grep -o "M380_RESULT=[0-9]*/[0-9]*" "$ILOG" | tail -1 | cut -d= -f2)
 check "idle rows run"     "${ires#*/}" 3
 check "idle rows correct" "${ires%/*}" "${ires#*/}"
 
+# ---------------------------------------------------------------------------
+#  #433: the M8820x CMMU's five former exit(1) sites, each driven by ONE REAL GUEST
+#  INSTRUCTION on the real memory path.  Before that round, 1007 of 1024 word offsets in
+#  the device's window terminated the HOST process on a plain read.
+#
+#  WHY THIS IS HERE AND NOT ONLY IN GATE 2.  regress/diff_m8820x.c calls the access
+#  function DIRECTLY, so it proves behaviour but cannot prove the site is REACHABLE -- it
+#  would stay green under a change that unmapped the device.  This probe goes through the
+#  real address decode and memory_rw plumbing, and it is structurally immune to the harness
+#  artifact that corrupted this round's first offline reproduction: a harness fault emits no
+#  `m8820x:` diagnostic at all, so a real detection and a broken probe are distinguishable
+#  by construction.
+#
+#  COST: measured 3.6 s for 9 rows on a COLD DEBUGGER -- no boot.  A full luna88k rig drive
+#  is 182-233 s.  A booting-rig row was deliberately NOT added: the fix is measured
+#  boot-neutral, so it could only re-assert what gate_ab already asserts, at ~200 s of
+#  load-sensitive wall clock in a battery already carrying ~37 such oracles.
+SLOG=$LOGDIR/m8820x_sites.log
+python3 m8820x_sites_probe.py "$PMAX" "$IMAGES" > "$SLOG" 2>&1 || true
+grep -E "^(VALUE|CONTROL|site)" "$SLOG" | sed 's/^/       /'
+
+if ! grep -q "M8820X_SITES_" "$SLOG"; then
+    note "m8820x site probe produced no verdict; last lines follow"
+    tail -5 "$SLOG" | sed 's/^/       /'
+    check "m8820x site probe completed" "no" "yes"
+else
+    check "m8820x: every site survives a real guest instruction" \
+          "$(grep -c 'M8820X_SITES_PASS' "$SLOG")" "1"
+    #  A FLOOR, not an exact count, so adding a row later is not a red gate.
+    check_min "m8820x: rows actually driven" \
+          "$(grep -oE 'SURVIVED=[0-9]+' "$SLOG" | grep -oE '[0-9]+' | head -1)" 9
+    #  VALUES, NOT SURVIVAL (rounds 79/80): the seeded 88200 rev-9 id can only have come
+    #  back through this device, so a "fix" that stopped faulting without writing the
+    #  result back is red here and green under any survival-only row.
+    check "m8820x: CMMU_IDR still reads 0x00a90000 through a guest load" \
+          "$(grep -c 'VALUE ld CMMU_IDR.*r4=0x00a90000' "$SLOG")" "1"
+    #  EVERY planted word was disassembled and matched before being stepped -- the defence
+    #  against the hand-assembled-encoding trap this project has been bitten by.
+    check "m8820x: no planted word failed its disassembly check" \
+          "$(grep -c 'dis_ok=False' "$SLOG")" "0"
+    #  The fold, end to end: command 0x34 is HANDLED now, so it must survive WITHOUT a
+    #  complaint, while 0x24 (a real PROBE) still complains once.
+    check "m8820x: the folded command 0x34 survives silently" \
+          "$(grep -A1 'st SCR cmd 0x34' "$SLOG" | grep -c 'emulator said')" "0"
+    check "m8820x: an unimplemented command still complains once" \
+          "$(grep -c 'unimplemented command 0x24; ignored (reported once)' "$SLOG")" "1"
+fi
+
 gate_end
