@@ -4536,3 +4536,16 @@ and the census is now **14 mutants, 14 killed, 0 survived, 0 faults**.
 
 **The rule this yields: a panel is not complete when its seats have answered, only when they have
 been READ.** Firing nine seats and reading four is a four-seat review reported as nine.
+
+- **m8seg — SEGMENT flush maps to ALL, and the over-invalidation is guest-visible.** (filed
+  2026-08-16 from the R7 pass-2 grok seat, which attacked its OWN pass-1 advice.) The fold sends
+  `CMMU_FLUSH_{USER,SUPER}_SEGMENT` to the `all = 1` arm. That is the safe direction — under-
+  invalidation is the one that leaves a stale translation — but it is **not** free of guest-
+  visible effect, and the shipped comment said it was. `memory_m88k.c:356-365` writes `PG_U`
+  (and `PG_M` on a write) back into the page descriptor **in emulated memory** on every walk,
+  while a PATC hit sets those bits only in the PATC copy (`:348-350`). So a guest that clears U
+  on a page in segment B, issues a segment-A flush, and then touches B observes a U bit that a
+  correctly-scoped flush would have left clear. The tighter mapping needs no manual: match on
+  the walker's own 4 MB segment size, `(sar ^ vaddr) & 0xffc00000`. Not done in R7 because it is
+  a behaviour change and the round's claim was only that the host stops dying. The comment at
+  `dev_m8820x.c:161` is corrected; what real silicon does at segment granularity is UNKNOWN.

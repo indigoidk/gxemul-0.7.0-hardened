@@ -157,8 +157,17 @@ static void m8820x_command(struct cpu *cpu, struct m8820x_data *d)
 		 *
 		 *  LINE takes PAGE's settings and SEGMENT takes ALL's.  A line lies within a
 		 *  page and the PATC is page-granular, so LINE is exactly PAGE here; SEGMENT
-		 *  over-invalidates, which is architecturally safe in a model that re-walks the
-		 *  tables on a miss -- the cost is performance, never correctness.  What real
+		 *  over-invalidates, which is the SAFE DIRECTION in a model that re-walks the
+		 *  tables on a miss -- but "the cost is performance, never correctness" was an
+		 *  earlier version of this sentence and it was WRONG, corrected after a review
+		 *  seat attacked its own pass-1 advice.  A re-walk is not free of guest-visible
+		 *  effect: memory_m88k.c:356-365 writes PG_U (and PG_M on a write) back into the
+		 *  page descriptor IN EMULATED MEMORY, whereas a PATC hit only sets those bits in
+		 *  the PATC copy (:348-350).  So evicting an entry that a narrower flush would
+		 *  have spared can set a U bit the guest had cleared.  The direction is still
+		 *  right -- under-invalidation is the dangerous one and this cannot cause a stale
+		 *  translation -- but the cost is not purely performance.  A 4 MB match on the
+		 *  walker's own segment size is filed as the tighter mapping.  What real
 		 *  silicon does at segment granularity is UNKNOWN (there is no 88200/88204
 		 *  manual in this project) and the safe direction does not depend on it.
 		 */

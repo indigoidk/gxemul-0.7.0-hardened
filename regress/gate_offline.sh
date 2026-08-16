@@ -605,17 +605,21 @@ else
     check     "m8820x: row failures" \
               "$(grep -oE '[0-9]+ failures' "$M8LOG" | grep -oE '^[0-9]+')" "0"
     check_min "m8820x: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 24
+              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 25
     check     "m8820x: offline verdict" "$(grep -c 'DIFF_M8820X_PASS' "$M8LOG")" "1"
     #  The whole-window sweep, and the harness-fault rows that keep its number honest.
     check "m8820x: the whole-window sweep rows are present" \
           "$(grep -cE 'kills the host' "$M8LOG")" "2"
     check "m8820x: the harness-fault rows are present" \
           "$(grep -c 'harness faults' "$M8LOG")" "2"
-    #  The latch, which is what stops a guest-drivable stderr flood on a path a real boot
+    #  The latches -- plural, and that is the point.  There are TWO independent flags
+    #  (reported_offset and reported_command), and for a while only the first had a row:
+    #  the command control issues ONE command, and one command complains exactly once
+    #  whether the flag is latched or not.  Both must be present, or the gate greens an
+    #  unlatched command path -- a guest-drivable stderr flood on a path a real boot
     #  exercises 640,016 times per boot.
-    check "m8820x: the latch row is present" \
-          "$(grep -c 'complain exactly once' "$M8LOG")" "1"
+    check "m8820x: BOTH latch rows are present (offset and command)" \
+          "$(grep -c 'complain exactly once' "$M8LOG")" "2"
     #  THE ROW THAT DEFENDS THE FOLD.  Without the folded PATC flushes, this round's own
     #  complain-and-continue would have turned FLUSH_SUPER_LINE into a silently ignored TLB
     #  flush -- a defect worse than the crash it removed.  Checked white-box, plus its control.

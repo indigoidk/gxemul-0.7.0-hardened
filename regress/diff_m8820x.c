@@ -206,6 +206,21 @@ int main(void)
 		access_word(CMMU_SCR * 4, MEM_WRITE, 0x2a, NULL);
 		check_u("C2 CONTROL: an undefined command still complains once",
 		    fatal_calls, 1);
+		/*
+		 *  C3 is the SECOND blind spot the R7 pass-2 agy seat named, and it is a
+		 *  different latch from B1's.  B1 exercises reported_OFFSET; the command
+		 *  path has its own reported_COMMAND flag, and C2 cannot see it, because
+		 *  C2 issues ONE command -- and one command complains exactly once whether
+		 *  the latch is set or not.  Deleting `d->reported_command = 1;` therefore
+		 *  passes every other row while making a guest-drivable stderr flood: a
+		 *  guest that writes an undefined command in a loop gets one line each.
+		 *  Two commands is the smallest input that separates the two behaviours.
+		 */
+		fresh();
+		access_word(CMMU_SCR * 4, MEM_WRITE, 0x2a, NULL);
+		access_word(CMMU_SCR * 4, MEM_WRITE, 0x2b, NULL);
+		check_u("C3 two undefined commands still complain exactly once",
+		    fatal_calls, 1);
 	}
 
 	printf("--- D. THE ROW THAT DEFENDS THE FOLD: the PATC really is invalidated ---\n");
@@ -429,7 +444,7 @@ int main(void)
 	check_u("E4 SCR reads back the last command written", v, CMMU_FLUSH_SUPER_ALL);
 
 	snprintf(buf, sizeof(buf), "%d", rows + 1);
-	check("IDENTITY row count -- guards against a stale copy", buf, "24");
+	check("IDENTITY row count -- guards against a stale copy", buf, "25");
 
 	printf("\n%d rows, %d failures\n", rows, fails);
 	printf("DIFF_M8820X_%s\n", fails == 0 ? "PASS" : "FAIL");

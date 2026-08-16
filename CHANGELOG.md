@@ -4192,6 +4192,51 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R7 addendum — the panel had already found both, and nobody had read it
+
+R7's pass-2 panel fired seven scriptable seats. Every one answered; **only one was read.**
+An audit of the day's eight panels found the same shape elsewhere: no seat failures anywhere,
+but codex and kimi unread on two panels and this entire seven-seat panel unread except for the
+Opus agent. That is worse than a seat failure. A failure is recorded and counted as absence; an
+unread answer is discarded silently while the round is reported as reviewed.
+
+Reading them cost one turn and produced three corrections.
+
+**agy named two surviving mutants; the census had run neither.** Both are now killed by rows
+that name them.
+- Deleting the SEGMENT terms from the `all = 1` set makes a segment flush page-granular. It
+  survived all 23 rows, because every flush-scope row drove a SUPER command except one, and that
+  one was USER *ALL*, not USER SEGMENT — the property was pinned on the supervisor side and open
+  on the user side. Row **D6b** closes it.
+- Deleting `d->reported_command = 1;` unlatches the command complaint. It survived because the
+  control issues ONE command, and one command complains exactly once whether the flag latches or
+  not. Two is the smallest input that separates the behaviours. Row **C3** closes it, and the
+  gate now requires BOTH latch rows — there are two independent flags and only one had a row.
+
+**grok attacked its own pass-1 advice, and was right.** It advised `SEGMENT ≡ ALL` on pass 1,
+then argued on pass 2 that the shipped comment's "the cost is performance, never correctness"
+is overstated. Checked, not judged: `memory_m88k.c:356-365` writes `PG_U` (and `PG_M` on a write)
+back into the page descriptor **in emulated memory** on every walk, while a PATC hit sets those
+bits only in the PATC copy (`:348-350`). So over-invalidation can set a U bit the guest cleared.
+The direction is still the safe one — under-invalidation is what leaves a stale translation — but
+the cost is not purely performance. The comment is corrected; the tighter 4 MB mapping
+(`(sar ^ vaddr) & 0xffc00000`, the walker's own segment size, no manual needed) is filed as
+`m8seg` rather than done, because it is a behaviour change.
+
+**One grok finding did NOT survive checking, and that is recorded too.** It graded the
+`dev_m8820x.c:54` comment "Wrong" for claiming the first unmodelled access "of each kind" is
+reported. But that phrase appears at `:56` *inside its own disclaimer* — the shipped comment
+quotes the earlier wording and states it was measured false, in the very commit grok reviewed.
+grok cited the correction as the defect. Mechanical rule 5 in the mirror: read the line before
+citing it, including when the line is a retraction.
+
+Census after: **15 mutants, 15 killed, 0 survived, 0 faults.** Differential 25 rows / 0 failures;
+gate 2 PASS at 198 checks. No device behaviour changed — one comment, two detector rows, two gate
+floors.
+
+**THE RULE: a panel is not complete when its seats have ANSWERED, only when they have been READ.**
+Firing nine seats and reading four is a four-seat review reported as nine.
+
 ## R7 (#433) — an ordinary guest register read terminated the host, on the rig that boots
 `DEVICE_ACCESS(m8820x)` and its command helper carried five `exit(1)` calls. Measured before any
 edit, driving every word offset in the mapped window with each probe forked so one host kill did
