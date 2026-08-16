@@ -4824,3 +4824,37 @@ so in one command.
   but share one dyntrans cache. Nothing to fix; recorded because the cost of not reading it was two
   rounds of rediscovery, and because it is the sharpest available answer to "what does a reading
   seat buy that a measuring seat does not" — it buys the class, before the instance.
+
+### Full panel on every stage (owner directive, 2026-08-16) — and it is now mechanical
+
+**The rule:** every stage — assess, research **and** review — runs all nine seats before the round
+moves on. If a seat cannot be run, **stop and ask the owner**. This SUPERSEDES the carrier's
+"ONE full panel per ROUND, pass 2 = Codex + Opus".
+
+**Why the old rule expired:** it was written around two dead seats. Grok's free tier had died after
+~4 substantial invocations and Kimi was 403-quota-dead, so a second panel in a round could not be
+staffed. **Both are healthy now** — all seven scriptable seats answered the last three panels — and
+the only live constraint is the Ollama seats' ~20-minute 429 window, which real stages already
+exceed. The caution was right for its moment and outlived its moment by about a week.
+
+**Grandfathering, forward-only by owner decision.** 13 stages ran short under the old policy,
+including three on closed rounds (`m8sarpurge` review at 2/9, `b47` and `b27` at 3/9). They are not
+re-panelled; each carries an explicit annotation entry naming the policy and the missing seats, so
+the dashboard does not render them as seat failures. A blank cell and a seat failure must never
+look alike.
+
+**Enforced by `pipeline/check_stage_panels.py`**, wired into `precommit_check.sh` as hard section H,
+negative-controlled both ways (a planted 8/9 stage fails; restoring it passes).
+
+**It complements section G rather than duplicating it, and the distinction is load-bearing:**
+
+> **G verifies that a seat which ANSWERED was recorded. H verifies the seat was FIRED at all.**
+> Neither catches the other's failure — a seat that never ran leaves no file for G to notice, and a
+> seat that ran and went unread is fully staffed as far as H can see.
+
+**One honest carve-out, reported rather than waved through:** a stage with exactly ONE seat is a
+FILING, not a panel that came up short. Items enter the queue when a seat raises them during some
+other round's panel, leaving a one-seat `assess` entry; the item has not started. The check counts
+these separately and prints the count (48 today), because "filed, awaiting its panel" and "we ran a
+panel and it came up short" are different states, and the entire purpose of this layer is that
+different states must not render the same.
