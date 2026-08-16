@@ -50,9 +50,18 @@ struct m8820x_data {
 	/*
 	 *  #433: COMPLAIN ONCE, NOT ONCE PER ACCESS.
 	 *
-	 *  Per DEVICE INSTANCE -- there are two CMMUs per CPU and up to eight in a machine --
-	 *  so the first unmodelled access of each kind is reported in full, naming the
-	 *  instance, and the rest go to debug().  Measured basis: a real OpenBSD/luna88k boot
+	 *  Per DEVICE INSTANCE -- there are two CMMUs per CPU and up to eight in a machine.
+	 *
+	 *  SAID ACCURATELY, because the first version of this comment was measured false: it
+	 *  claimed the first unmodelled access "of each kind" is reported in full.  There is ONE
+	 *  reported_offset latch covering FOUR kinds (unhandled offset, IDR write, SCR read, SSR
+	 *  write), so a guest that writes IDR once permanently demotes the diagnostic for every
+	 *  unmodelled OFFSET it later touches -- measured, 1 of 4 kinds reported.  That is a
+	 *  deliberate trade (one flag, bounded output) but it is NOT what the comment said.  A
+	 *  per-kind latch is filed rather than done, because widening it is a behaviour change
+	 *  and this round's claim is only that the host stops dying.
+	 *
+	 *  Measured basis for latching at all: a real OpenBSD/luna88k boot
 	 *  writes CMMU_SCR 640,016 times in 132 s, about 4,850 per second, so an unlatched
 	 *  fatal() on that path is a guest-drivable unbounded stderr write -- the `cflood`
 	 *  class -- at roughly a quarter of a megabyte per second.
@@ -269,9 +278,16 @@ DEVICE_ACCESS(m8820x)
 
 	case CMMU_SSR:
 		if (writeflag == MEM_WRITE) {
-			/*  #433: SSR is the probe-status register, written by the MODEL
-			    rather than by the guest, so ignoring a guest write corrupts
-			    nothing the model maintains.  */
+			/*  #433: ignoring a guest write to SSR corrupts nothing the model
+			    maintains -- but the first version of this comment gave a WRONG
+			    REASON, saying SSR is "written by the MODEL".  Measured: NOTHING
+			    in the tree ever writes reg[CMMU_SSR]; the model writes only PFSR
+			    and PFAR (memory_m88k.c:382-405).  The right reason is stronger:
+			    SSR reads as zero, V-bit clear, so DROPPING the write is what makes
+			    the command arm's own argument true -- if a guest could store here
+			    it could set the V bit, and a dropped PROBE would then read back a
+			    plausible-looking VALID translation instead of a deterministic
+			    miss.  The two decisions are coupled, and row D10 pins them.  */
 			m8820x_unimplemented(d, "write to CMMU_SSR");
 		}
 		break;

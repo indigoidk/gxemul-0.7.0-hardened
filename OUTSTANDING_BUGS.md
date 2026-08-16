@@ -4418,3 +4418,56 @@ smallest edit that breaks the property while passing a survival-only row: replac
 `return 1` but drop the `memory_writemax64` — the guest gets garbage and the row goes green. Pin
 the control at `r4 == 0x00a90000`, and carry a row for ALL FIVE sites, since a fix that repairs
 the default arm and leaves the four in-arm exits passes any detector that only probes `0x800`.
+
+### R7 pass 2: the fold is CONFIRMED correct, and the detector defending it was weak
+
+The measuring seat white-boxed the fold with a fixture the committed row does not have — seven
+PATC entries spanning {SAR page, same segment/other page, other segment} x {supervisor, user},
+with **SAR deliberately not page-aligned** so a LINE address is actually exercised. Result:
+
+* **LINE = PAGE is EXACT, not merely safe.** A LINE flush drops only the entry on the SAR page;
+  same-segment-different-page and other-segment entries survive. The PATC is page-granular, so
+  PAGE is the minimum representable unit and LINE over-invalidates by nothing at all.
+* **SEGMENT = ALL over-invalidates, in the safe direction only** — a strict superset, never a
+  subset, across all eight commands.
+* **The supervisor extension is correct**: zero wrong-privilege invalidations in any command.
+
+*** BUT ELEVEN OF TWENTY-ONE MUTANTS SURVIVED THE FIFTEEN SHIPPED ROWS, and the cheapest was ONE
+DELETED CHARACTER. *** Removing the `!` from `if (!all && ...)` turns every `FLUSH_*_ALL` into a
+single-page flush — the exact under-invalidating TLB the fold exists to prevent — and every row
+passed, because D1 seeds ONE entry at the flushed address and so can only ever show that a
+MATCHING entry goes away. Second worst: deleting the `invalidate_translation_caches()` call
+leaves the PATC correct while the emulator's OWN dyntrans cache keeps the torn-down mapping,
+reaching the same failure by another route — **and the differential was already counting that
+callback and never asserting on it.**
+
+Eight rows now close it (D3-D10): flush scope in both privilege directions, the superset
+property, the dyntrans purge and its control, and the two coupled write-drop rows. Census after:
+**12 mutants, 12 killed, 0 survived, 0 faults.**
+
+**One row of mine went red on correct code and was fixed as a TEST defect**, not a code change:
+D6 first asserted that a SEGMENT flush spares another segment's entry. It does not, and is not
+meant to — SEGMENT is deliberately mapped to ALL. "Did it fail for the reason under test?" It did
+not. The row now pins the safe direction (SEGMENT is a superset of PAGE), which is the property
+actually claimed.
+
+### Two records in the shipped source were wrong, and are corrected
+
+1. The latch comment claimed the first unmodelled access "of each kind" is reported in full.
+   **Measured, 1 of 4 kinds**: one `reported_offset` flag covers unhandled offsets, IDR writes,
+   SCR reads and SSR writes, so a guest that writes IDR once permanently demotes the diagnostic
+   for every offset it later touches. A per-kind latch is FILED, not done — widening it is a
+   behaviour change and this round's claim is only that the host stops dying.
+2. The SSR arm said SSR is "written by the MODEL". **Nothing in the tree ever writes
+   `reg[CMMU_SSR]`** — only PFSR and PFAR are model-written. The conclusion held; the reason did
+   not, and the right reason is stronger: dropping the write is what makes the command arm's
+   argument true, because a guest that could store there could set the V bit and turn a dropped
+   PROBE into a plausible-looking valid translation.
+
+### Two residuals filed from the same pass
+
+* The unhandled-access message is built with `snprintf` on EVERY access even when latched and
+  discarded — measured 27.7 ns/read and 54.7 ns/write on the latched path.
+* `regress/diff_m8820x.c` only links because of `-Wl,--gc-sections` (it pulls in `devinit_m8820x`
+  → `memory_device_register`). On a linker without it the gate row goes **red, not skipped** —
+  and the sibling `diff_sh4_tmu` compile in the same gate does not use those flags.

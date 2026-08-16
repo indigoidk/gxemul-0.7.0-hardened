@@ -605,7 +605,7 @@ else
     check     "m8820x: row failures" \
               "$(grep -oE '[0-9]+ failures' "$M8LOG" | grep -oE '^[0-9]+')" "0"
     check_min "m8820x: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 15
+              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 23
     check     "m8820x: offline verdict" "$(grep -c 'DIFF_M8820X_PASS' "$M8LOG")" "1"
     #  The whole-window sweep, and the harness-fault rows that keep its number honest.
     check "m8820x: the whole-window sweep rows are present" \
@@ -626,6 +626,20 @@ else
     #  Values, not survival (rounds 79/80).
     check "m8820x: the seeded-IDR value rows are present" \
           "$(grep -c 'seeded 88200 rev-9 id\|does not corrupt it' "$M8LOG")" "2"
+    #  The rows PASS 2 forced.  D1 seeds ONE entry at the flushed address, so it can only
+    #  show that a MATCHING entry goes away -- eleven of twenty-one mutants survived it,
+    #  the cheapest being ONE DELETED CHARACTER (`!all` -> `all`) that turns every
+    #  FLUSH_*_ALL into a single-page flush: the exact under-invalidating TLB this round
+    #  exists to prevent.  D3-D6 seed a SPREAD and assert which entries SURVIVE.
+    check "m8820x: the flush-scope rows are present"           "$(grep -cE 'drops exactly one entry|drops every supervisor entry|leaves every supervisor entry|drops at least what a PAGE flush' "$M8LOG")" "4"
+    #  D7 uses a counter that was already in the file and never asserted on: clearing the
+    #  PATC while leaving the emulator's OWN translation cache is the same failure by
+    #  another route.
+    check "m8820x: the dyntrans-purge row and its control are present"           "$(grep -cE "purges the emulator's own cache|a cache command purges nothing" "$M8LOG")" "2"
+    #  D9/D10 are coupled: if a guest could store to SSR it could set the V bit, and then a
+    #  dropped PROBE would read back a plausible-looking VALID translation instead of a
+    #  deterministic miss -- which is the command arm's own stated argument.
+    check "m8820x: the write-is-dropped rows are present"           "$(grep -cE 'dropped, not stored|cannot fake a valid translation' "$M8LOG")" "2"
     check "m8820x: the identity row is present" \
           "$(grep -c 'IDENTITY row count' "$M8LOG")" "1"
 fi

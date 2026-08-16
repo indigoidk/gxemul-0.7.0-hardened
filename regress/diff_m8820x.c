@@ -247,6 +247,147 @@ int main(void)
 		    (cmmu->patc_v_and_control[0] & PG_V) ? "kept" : "WRONGLY FLUSHED", "kept");
 	}
 
+	printf("--- D3-D8. the fold's SEMANTICS, which D1/D2 do not reach ---\n");
+	/*
+	 *  D1 SEEDS ONE ENTRY AT THE FLUSHED ADDRESS, so it can only ever show that a matching
+	 *  entry goes away.  Pass 2 measured what that misses: ELEVEN of twenty-one mutants
+	 *  survived the first fifteen rows, and the cheapest was ONE DELETED CHARACTER --
+	 *  removing the `!` from `if (!all && ...)` turns every FLUSH_*_ALL into a single-page
+	 *  flush, which is precisely the silently-under-invalidating TLB the fold exists to
+	 *  prevent.  These rows seed a SPREAD of entries and assert which ones SURVIVE, which
+	 *  is the half D1 cannot see.
+	 *
+	 *  The fixture, with SAR deliberately NOT page-aligned so a LINE address is exercised:
+	 *      e0  the SAR page, supervisor      e1  the SAR page, user
+	 *      e2  same 4 MB segment, other page, supervisor
+	 *      e3  same segment, other page, user
+	 *      e4  a different segment, supervisor
+	 *      e5  a different segment, user
+	 */
+	{
+		int i;
+		uint32_t surv;
+		static const uint32_t SEG = 0xffc00000;	/*  memory_m88k.c:121, vaddr >> 22  */
+
+		/*  seed(): rebuild the fixture before each command.  */
+#define M8_SEED()							\
+		do {							\
+			fresh();					\
+			cmmu->reg[CMMU_SAR] = 0x12345010;	/*  a LINE address  */ \
+			cmmu->patc_v_and_control[0] = 0x12345000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[0] = 0x90000000 |	\
+			    M8820X_PATC_SUPERVISOR_BIT;				\
+			cmmu->patc_v_and_control[1] = 0x12345000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[1] = 0x91000000;		\
+			cmmu->patc_v_and_control[2] = 0x12346000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[2] = 0x92000000 |	\
+			    M8820X_PATC_SUPERVISOR_BIT;				\
+			cmmu->patc_v_and_control[3] = 0x12346000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[3] = 0x93000000;		\
+			cmmu->patc_v_and_control[4] = 0x56789000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[4] = 0x94000000 |	\
+			    M8820X_PATC_SUPERVISOR_BIT;				\
+			cmmu->patc_v_and_control[5] = 0x56789000 | PG_V;	\
+			cmmu->patc_p_and_supervisorbit[5] = 0x95000000;		\
+		} while (0)
+
+		/*  surviving(): a bitmap of which of the six entries still have PG_V.  */
+#define M8_SURV()	({ uint32_t _m = 0; int _i;				\
+			for (_i = 0; _i < 6; _i++)				\
+				if (cmmu->patc_v_and_control[_i] & PG_V)	\
+					_m |= 1u << _i;				\
+			_m; })
+
+		/*  D3: a SUPER LINE flush must drop ONLY the supervisor entry on the SAR
+		    page.  Under the deleted-`!` mutant and under LINE-treated-as-ALL this
+		    changes, so it kills both.  Expected survivors: e1..e5 = 0x3e.  */
+		M8_SEED();
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_LINE, NULL);
+		surv = M8_SURV();
+		check_u("D3 a SUPER LINE flush drops exactly one entry", surv, 0x3e);
+
+		/*  D4: a SUPER ALL flush must drop EVERY supervisor entry and no user one.
+		    This is the row that kills the one-character mutant: with `!` deleted,
+		    e2 and e4 survive.  Expected survivors: e1,e3,e5 = 0x2a.  */
+		M8_SEED();
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_ALL, NULL);
+		surv = M8_SURV();
+		check_u("D4 a SUPER ALL flush drops every supervisor entry", surv, 0x2a);
+
+		/*  D5: and a USER ALL flush is its mirror -- privilege is respected in both
+		    directions, so a single wrong comparison cannot pass both rows.  */
+		M8_SEED();
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_USER_ALL, NULL);
+		surv = M8_SURV();
+		check_u("D5 a USER ALL flush leaves every supervisor entry", surv, 0x15);
+
+		/*
+		 *  D6: SEGMENT is mapped to ALL, so it over-invalidates ACROSS segments.
+		 *
+		 *  THIS ROW WENT RED ON CORRECT CODE WHEN IT FIRST ASSERTED THE NAIVE THING --
+		 *  that a SEGMENT flush spares another segment's entry.  It does not, and it is
+		 *  not meant to: the fold deliberately maps SEGMENT onto ALL because
+		 *  over-invalidation is safe in a model that re-walks the tables on a miss,
+		 *  while under-invalidation is the defect the whole round exists to prevent.
+		 *  "Did it fail for the reason under test?" -- it did not; the row was wrong.
+		 *
+		 *  So the property actually worth pinning is the SAFE DIRECTION: a SEGMENT
+		 *  flush must be a strict SUPERSET of a PAGE flush and must still respect
+		 *  privilege.  A mutant that narrowed SEGMENT to a genuine segment scope would
+		 *  be an improvement in fidelity, not a defect -- but one that narrowed it
+		 *  below PAGE would be exactly the under-invalidation this guards.
+		 */
+		M8_SEED();
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_PAGE, NULL);
+		{
+			uint32_t page_surv = M8_SURV();
+			M8_SEED();
+			access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_SEGMENT, NULL);
+			surv = M8_SURV();
+			/*  superset: every entry the SEGMENT flush left must also have been left
+			    by the PAGE flush, i.e. SEGMENT's survivors are a subset of PAGE's.  */
+			check("D6 a SEGMENT flush drops at least what a PAGE flush drops",
+			    (surv & ~page_surv) == 0 ? "superset" : "UNDER-INVALIDATES",
+			    "superset");
+		}
+		(void) SEG;
+
+		/*  D7: THE EMULATOR'S OWN TRANSLATION CACHE MUST BE PURGED TOO, and the
+		    counter for it was already in this file and never asserted on.  Deleting
+		    the invalidate_translation_caches() call leaves the PATC correct while the
+		    dyntrans fast path keeps the torn-down mapping -- the round's stated
+		    failure mode reached by another route.  */
+		M8_SEED(); invalidate_calls = 0;
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_ALL, NULL);
+		check_u("D7 a PATC flush also purges the emulator's own cache",
+		    invalidate_calls, 1);
+		/*  ...and a CACHE command must NOT: the control that stops D7 passing under
+		    a mutant that invalidates unconditionally.  */
+		M8_SEED(); invalidate_calls = 0;
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_CACHE_INV_ALL, NULL);
+		check_u("D8 CONTROL: a cache command purges nothing", invalidate_calls, 0);
+
+		/*  D9: the default arm DROPS a write rather than storing it.  Storing would
+		    make regs[] RAM-like and could satisfy a guest's write-then-verify probe
+		    for a register the model does not implement.  */
+		fresh();
+		access_word(0x800, MEM_WRITE, 0xdeadbeef, NULL);
+		access_word(0x800, MEM_READ, 0, &v);
+		check_u("D9 an unhandled write is dropped, not stored", v, 0);
+
+		/*  D10: and the SSR write is dropped for the same reason, which is what makes
+		    the command arm's own argument true -- if a guest could set SSR's V bit,
+		    a dropped PROBE would read back a plausible-looking VALID translation
+		    instead of a deterministic miss.  The two decisions are coupled.  */
+		fresh();
+		access_word(CMMU_SSR * 4, MEM_WRITE, 0xffffffff, NULL);
+		access_word(CMMU_SSR * 4, MEM_READ, 0, &v);
+		check_u("D10 a guest SSR write cannot fake a valid translation", v, 0);
+		i = 0; (void) i;
+#undef M8_SEED
+#undef M8_SURV
+	}
+
 	printf("--- E. values, not survival ---\n");
 	/*  Rounds 79/80: a survival-only row cannot tell a repaired access from one that
 	    merely stopped faulting.  The IDR value is the seed luna88k writes -- it can only
@@ -267,7 +408,7 @@ int main(void)
 	check_u("E4 SCR reads back the last command written", v, CMMU_FLUSH_SUPER_ALL);
 
 	snprintf(buf, sizeof(buf), "%d", rows + 1);
-	check("IDENTITY row count -- guards against a stale copy", buf, "15");
+	check("IDENTITY row count -- guards against a stale copy", buf, "23");
 
 	printf("\n%d rows, %d failures\n", rows, fails);
 	printf("DIFF_M8820X_%s\n", fails == 0 ? "PASS" : "FAIL");
