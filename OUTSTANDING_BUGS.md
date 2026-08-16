@@ -4685,3 +4685,72 @@ of the first two were found by a person noticing a blank square on a web page.
   so #435 removes nothing that was protecting against it. Worth a round of its own: the fix is a
   PATC invalidation on those two writes, which is a behaviour change in the *safe* direction and
   needs its own detector rows and its own argument.
+
+### The Fable regression adjudication (R1–R9, 2026-08-16): a green battery, read honestly
+
+REGRESS_PASS, 16/16, 0 failed, **0 skipped**, 1,043 `ok` rows — and the flagship seat verified the
+arithmetic: 1,043 is exactly the sum of the sixteen per-gate counts, so there are no phantom rows.
+It also confirmed the chain that lets offline rows speak for rig binaries is closed: the diffs
+compile SEC repo source, gate 1 proves both build trees are byte-synced to SEC, and the rigs run
+the build binaries.
+
+Its verdict is deliberately deflationary, and it is the useful kind:
+
+> This green licenses *"every R1–R9 detector still passes against today's source, and the normal
+> boot paths of four rigs still work"*. It does **not** license *"every R1–R9 fix is still
+> present"* — two shipped hunks can be reverted under a green battery — and it does **not**
+> license *"the new detectors can still fail"*.
+
+**#431 IS A SECOND `rtcgate`, AND IT WAS NOT FILED.** R5's second hunk deleted a PPC page-crossing
+halt in `LS_GENERIC_N`. Gates 13 and 15 drive FP encodings only; `gate_ppc_halt.sh` and
+`ppc_halt_probe.py` contain **zero** references to alignment or page-crossing (grepped and
+confirmed here), and nothing else in the battery executes a PPC unaligned crossing. **Reinstating
+the halt — the exact guest-reachable `cpu->running = false` that #431 exists to prevent — passes
+all sixteen gates.** Filed below as `pcchalt`.
+
+**The lesson is sharper than the finding: `rtcgate`'s own reasoning catches this only when applied
+PER-HUNK, not per-round.** The audit that filed `rtcgate` stopped one commit short, and my brief
+for this very adjudication reproduced the error by tabulating R1–R9 *by round* — which hid both
+naked hunks behind round names that were otherwise well covered. R4's timer half is among the
+best-covered code in gate 2 while its RTC half has nothing; calling "R4 weak" would smear a strong
+detector and calling it strong would bury a hole. **The unit of coverage is the hunk.**
+
+**THE BATTERY RE-PROVES THAT DETECTORS PASS; IT NEVER RE-PROVES THEY CAN FAIL.** Gate 3 is the
+only failability control, and all seven of its mutants target `float_emul.c` — none of the five
+harnesses R4–R9 added. Every one of those censuses ran **once, at round time, and never again**.
+Presence checks and identity row counts guard deletion and stale copies; they do not guard stub
+drift, which is exactly the class `m8invground` instantiates. Gate 3's name reads as
+"gate 2 is falsifiable" while it demonstrates that for 7 mutants against 213 checks — **an
+overclaim that grows every time gate 2 gains a check.**
+
+**Coverage growth tracks volume, not risk.** Gate 2 went 157 → 171 → 198 → 213 across these
+rounds; every one of those ~56 checks attached to the file the round had just touched. Zero went
+to `dev_rtc.c`, the hole the project had already confirmed. Zero went to gate 3's roster. R8/R9
+added 27 rows to a device that already had 34; `dev_rtc.c` has 0. Good coverage accumulating
+where the last round made it easy.
+
+Ranked least-defended, by hunk: **#429 (nothing) ≈ #431 (nothing) > R6** (the only code round with
+no reachability witness of any kind — no rig, no probe, ASAN constructs footbridge machines but
+runs no guest code) **> R8/R9** (deep rows, but spy-level observable) **> R5 flavoured text**
+(the `MEM_MIPS`/`MEM_M88K`/`MEM_ALPHA` blocks compile *different text* than the diff build, so
+they ride on boots that sat green over this very bug for months) **> R1–R3 > R7**, which is the
+best-defended of the nine: three independent layers including nine real guest instructions through
+the real address decode.
+
+- **`pcchalt` — #431's deleted PPC page-crossing halt has NO detector; reinstating it passes all
+  sixteen gates.** (filed 2026-08-16 from the Fable regression adjudication.) Same class as
+  `rtcgate`, found only by asking the question per-hunk. A real detector needs a testppc unaligned
+  page-crossing probe. Moderate cost; can ride the next PPC round. The ship-time record for #431
+  already said "no gate, probe or record mentions it" — the sentence was written and its
+  implication was not acted on, which is its own lesson about honest records being necessary but
+  not sufficient.
+
+- **`gate3scope` — the battery's only failability control covers 7 float mutants out of 213
+  checks, and its name implies more.** (filed 2026-08-16.) Not vacuous today; an overclaim that
+  widens with every check gate 2 gains. Two fixes, and the second is the real one: rename it to
+  what it demonstrates, and add ONE in-battery self-mutant row per new diff harness — the pattern
+  gate 2 already owns for absorb and autodev — so the five new detectors re-prove failability on
+  every run instead of once at birth, for a few seconds of battery time.
+
+- **`m8invground` is BROADER than filed: it covers `diff_m8820x.c` D7/D8 too**, which use the same
+  `noop_invalidate` callback-counting spy (`:72-74, 158, 396-404`). One filing, two harnesses.
