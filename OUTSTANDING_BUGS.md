@@ -4144,3 +4144,30 @@ straddling access beginning inside a device, which the late split leaves returni
    does), so the split does not introduce it; on a failing READ the new behaviour is strictly
    better — head kept, tail deterministically zeroed, and FAILED returned, where the old code
    returned OK with the wrong bytes. Atomicity is a separate question.
+
+### R5 pass 2 added two more, both from the measuring seat's fuzz run
+
+7. **An absurd length now GRINDS instead of mis-copying.** The overflow-safe loop test
+   (`len > granule - offset`) is correct, but a length near `SIZE_MAX` iterates about 2^54
+   times rather than being rejected — measured, a fuzz watchdog fired at two million chunks.
+   Before the rewrite the same input silently under-split. No caller passes anything close
+   (the largest transfers are `PHYSICAL` and exempt), so the code comment now says plainly
+   that the case is declined rather than serviced. A length ceiling would close it.
+8. **A straddling STORE whose second chunk faults leaves the first chunk written**, and the
+   instruction then restarts — so an MMIO device at the head of the access sees the write
+   TWICE. The read side of partial completion is recorded honestly in the differential's E4
+   comment; this is the store side and it is the one with a visible consequence. Not
+   introduced by #430 (the memblock split has had the property all along), but newly easier
+   to reach now that the split fires 256x more often.
+
+### And one method note, because it cost a vacuous row
+
+**A row that measures an OPTIMISATION-DEPENDENT property must pin the optimisation.** "The
+split is a loop, not recursion" was asserted by measuring stack growth — and gcc 15.2.1
+eliminates the tail call at -O2, so the recursion mutant measured 96 bytes and the row passed
+under the exact defect it existed to catch. One compile flag
+(`-fno-optimize-sibling-calls`, on that differential only) turns it into a real detector:
+loop 0 bytes, recursion 1,572,768. **Every row in `regress/` that measures a resource —
+stack, allocation count, iteration count — has this shape and none of the others has been
+checked for it.** Sibling of the `constblind` finding: there the row followed the constant,
+here it follows the compiler.
