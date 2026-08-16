@@ -4192,6 +4192,93 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R6 (#432) — a guest-written zero made the footbridge timer divide by zero, and killed the host
+`DEVICE_TICK(footbridge)` computed `random() % timer_load[i]`, and `TIMER_x_LOAD` accepts a
+guest-written zero. Integer division by zero: the HOST process dies. Two seats reproduced it
+independently — the exact signal depends on the build (SIGFPE at -O0, SIGILL at -O2, where the
+compiler turns the UB into `ud2`), which is worth stating because the round's own census reports
+whichever it sees.
+
+**NINE SEATS ANSWERED THE DESIGN BRIEF — the first full roster since #420**, and two of the nine
+had been believed down when the round opened. Kimi revived mid-panel with no calendar signal and
+reproduced the crash itself; the Fable seat health-tested clean on the way in and then held the
+adjudication alone.
+
+**THE ROUND DOES NOT GET TO BLAME ITS OWN HARDENING, and finding that out was the review's best
+work.** The filing said "#427/#428 convert a hang into a SIGFPE". Half wrong. There are two
+routes, and the measuring seat found the second by RE-DERIVING the reproduction rather than
+citing its own earlier run: `TIMER_x_LOAD` does not clear `pending_timer_interrupts` — `TIMER_x_CONTROL`
+does — so an ORDINARY LEGAL timer accrues a backlog and a later write of zero divides, with no
+`+INF` and no clamp involved. Measured against `863d238^`, the pre-#427 core: it crashes there
+too. `DEVICE_TICK` runs from `machine_run()`, the main loop, not the signal handler, so the CPU
+reaches the divide between signals. **The crash is pre-existing; our hardening added a second,
+faster route.** Corrected in `213b56d` before this fix shipped.
+
+**NONE OF THE THREE OBVIOUS FIX SITES IS SUFFICIENT, and that was settled by measurement rather
+than by the 8-to-1 majority.** Guarding only `reload_timer_value()` still crashes by route 2 —
+and it is the most dangerous option precisely because it passes the obvious test. Guarding only
+the modulo leaves the backlog growing 1,048,576 per signal, reaching `INT_MAX` in ~31 s. Rejecting
+at the guest write corrupts read-back: `TIMER_x_LOAD` returns the stored value, so the guest would
+read something it never wrote — inventing an answer to a question the documentation has to settle.
+Three seats (Codex, Opus, Fable) independently proposed the same fourth option, and that is what
+ships: **one helper, both consumers, the stored register untouched.**
+
+- **The zero-guard and the width fix are ONE fix or neither works.** The old `int cycles` with
+  `cycles <<= 8` overflowed for exactly half the legal 24-bit range (first bad load `0x800000`),
+  giving a NEGATIVE frequency that the core's floor clamp silently turned into one tick per ~3.2
+  years — reachable with NO load write at all, since a single write of `ENABLE|FCLK_256` reaches
+  it. And mapping zero to 2^24 while leaving `int` gives `2^24 << 8 == 2^32 == 0`, i.e. `+INF`
+  again: **the obvious zero-guard RE-CREATES the bug it removes.** Three seats found the overflow
+  independently. Hence `uint64_t` and multiplication, never a signed shift.
+- **The two consumers live in different domains**, which a tenth reading caught. `timer_value` is
+  a 24-bit GUEST-READABLE register; feeding it the PRESCALED span would store values far above 24
+  bits — the measuring seat's own first proposal did exactly that and put 19,833 of 20,000 ticks
+  out of range. The prescaler slows the RATE; it does not widen the COUNTER. The helper takes an
+  explicit flag and the differential asserts the distinction.
+- **`TIMER_EXTERNAL` no longer kills the host.** Both prescaler bits set is `0x0C`, and the
+  datasheet obtained for this round gives bits 3:2 as 00/01/10/11 = fclk / fclk÷16 / fclk÷256 /
+  **External event** (§7.3.41, p. 7-51) — a CONFORMING guest selecting the external clock source
+  was reaching `fatal()` + `exit(1)`. The rate an external source would give depends on a pin this
+  model has no signal for, so it is not invented; the encoding gets a defined, survivable meaning.
+
+**THE DATASHEET WAS OBTAINED MID-ROUND** (`_scratchpad/dc21285.pdf`, Intel 278115-001, Sept 1998,
+with a `pdftotext -layout` twin beside `ddi0100i`), and it did two things. It CONFIRMED the
+`TIMER_EXTERNAL` encoding above. And it is **SILENT on a zero load** — §7.3.39 specifies
+`TimerNLoad` without saying what a count of zero does, and a search of the full extraction for
+"minimum count" / "nonzero" / "reaches zero" finds no equivalent of the 8254's Figure 22. So the
+zero mapping remains **UNKNOWN, now measured rather than assumed**, which is a stronger thing to
+be able to say. The choice rests on failure asymmetry (wrong-and-noisy beats wrong-and-silent: a
+guest that gets a few unwanted interrupts limps visibly, a guest waiting on a tick that never
+comes hangs at boot) and on arithmetic (the 24-bit mask aliases a legitimate write of `0x1000000`
+to zero, so full-period is the unique choice that keeps the rate continuous across the register's
+own truncation).
+
+*** AND THE DATASHEET WITHDREW ONE OF THIS ROUND'S OWN ARGUMENTS. *** An earlier draft justified
+the mapping partly with "devinit resets every load to `TIMER_MAX_VAL`, so the model's own
+convention is full width". The datasheet says `TimerNLoad` and `TimerNControl` BOTH reset to 0 —
+so that line was citing a MODEL BUG as evidence. The argument is withdrawn, the reset divergence
+is filed, and the withdrawal is recorded here because it matters more than the argument did.
+
+**The detector is offline because it is the ONLY thing it can be:** there is no netwinder or cats
+rig anywhere in this tree, so nothing here boots a machine that has a footbridge.
+`regress/diff_footbridge.c` `#include`s the shipped device exactly as `diff_sh4_tmu.c` does, needs
+seven stubs, and runs **15 rows**. Two of them fork, so a mutant that re-crashes is a named-row
+KILL rather than a census FAULT that takes the gate binary with it. `-Wl,--gc-sections` is
+load-bearing (eleven more symbols without it) and its cost is stated: it drops `DEVINIT`, so this
+file cannot test devinit.
+
+**Census: 5 attempted, 4 killed, 0 survived, 0 faults**, control passes — the zero guard removed
+(dies by signal, the crash itself), the prescaler back to a signed shift, the tick site
+prescaling, and `TIMER_EXTERNAL` falling through as a bare ×16. A fifth mutant, the ×16 prescaler
+as a signed shift, is **EQUIVALENT and deliberately not counted**: 2^24 << 4 is 2^28 and cannot
+overflow an `int`, so calling it a survivor would overstate the detector's weakness exactly as
+calling it a kill would overstate its strength.
+
+**Verified:** differential 15 rows / 0 failures; gate 2 **PASS at 181 checks** (was 171); both
+build trees rebuilt and the arc binary republished; **`gate_mips.sh` PASS 6/6** — pmax 15/15 and
+arc 13/13, both to `uid=0(root)`. `dev_footbridge.c` byte-identical in `GXEMUL-SEC`, `est/` and
+both build trees.
+
 ## R5 (#430, #431) — memory_rw translated the first page and then copied straight past it
 `memory_rw()` translated the START vaddr once and then copied the whole length from the host
 pointer for that one page. `memory_paddr_to_hostaddr()` returns a pointer INTO a 1 MB

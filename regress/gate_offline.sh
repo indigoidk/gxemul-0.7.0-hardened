@@ -511,6 +511,53 @@ else
           "$(grep -c 'IDENTITY row count' "$MRWLOG")" "1"
 fi
 
+#  #432: the footbridge timer divided by a guest-written zero -- a guest-reachable HOST CRASH,
+#  reproduced independently by two seats.  Driven OFFLINE because THERE IS NO NETWINDER OR CATS
+#  RIG ANYWHERE IN THIS TREE: nothing here boots a machine that has a footbridge, so this is not
+#  the cheapest detector, it is the only possible one.  The driver #includes the shipped device,
+#  exactly as diff_sh4_tmu.c does.
+#  -Wl,--gc-sections is LOAD-BEARING: without it the link needs eleven more symbols.  The
+#  trade-off, stated so it is not mistaken for coverage: it drops DEVINIT, so this file cannot
+#  test devinit.  -D_DEFAULT_SOURCE is required for random() under -std=c99.
+#  MEASURED against four mutants in copies: the zero guard removed (dies BY SIGNAL 8, the crash
+#  itself), the prescaler back to a signed shift, the tick site prescaling, and TIMER_EXTERNAL
+#  falling through as a bare x16 -- all red, control passes.  A fifth (the x16 prescaler as a
+#  signed shift) is EQUIVALENT and deliberately not counted: 2^24<<4 cannot overflow an int.
+FBBIN=$LOGDIR/diff_footbridge
+FBLOG=$LOGDIR/diff_footbridge.log
+if ! $CC -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+        -I"$SEC/src" -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$FBBIN" "$HERE/diff_footbridge.c" -lm > "$FBLOG" 2>&1; then
+    note "footbridge differential compile failed:"; sed 's/^/       /' "$FBLOG" | head -12
+    check "footbridge: compiles against the real dev_footbridge.c" "no" "yes"
+else
+    check "footbridge: compiles against the real dev_footbridge.c" "yes" "yes"
+    "$FBBIN" > "$FBLOG" 2>&1
+    sed 's/^/       /' "$FBLOG"
+    check     "footbridge: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "footbridge: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 15
+    check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
+    #  Name each row that is the SOLE detector of something.
+    check "footbridge: the zero-load row is present" \
+          "$(grep -c 'load 0 becomes the full 24-bit span' "$FBLOG")" "1"
+    check "footbridge: the prescaler-overflow rows are present" \
+          "$(grep -c 'does not overflow\|does not wrap to zero' "$FBLOG")" "2"
+    check "footbridge: the TIMER_EXTERNAL row is present" \
+          "$(grep -c 'not silently read as x16' "$FBLOG")" "1"
+    check "footbridge: the counter-domain row is present" \
+          "$(grep -c 'leave the 24-bit counter in range' "$FBLOG")" "1"
+    #  The two forked end-to-end rows: these are the ones that prove the HOST SURVIVES, and
+    #  they are forked so a mutant that re-crashes is a named-row KILL rather than a census
+    #  FAULT that takes the gate binary with it.
+    check "footbridge: the end-to-end survival rows are present" \
+          "$(grep -c 'does not kill the host\|does not exit()' "$FBLOG")" "2"
+    check "footbridge: the identity row is present" \
+          "$(grep -c 'IDENTITY row count' "$FBLOG")" "1"
+fi
+
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
 if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \

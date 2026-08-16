@@ -4189,3 +4189,95 @@ loop 0 bytes, recursion 1,572,768. **Every row in `regress/` that measures a res
 stack, allocation count, iteration count — has this shape and none of the others has been
 checked for it.** Sibling of the `constblind` finding: there the row followed the constant,
 here it follows the compiler.
+
+---
+
+## 2026-08-15 — the fbdiv round's residuals, and a bigger fish the audit found
+
+#432 shipped the footbridge zero-load crash. Two read-only sub-agents ran in parallel with the
+implementation; between them they obtained a datasheet this project has lacked since the
+footbridge was written, and they found a guest-reachable host kill on a rig that **boots today**.
+
+### *** THE HIGHEST-PRIORITY ITEM IS NO LONGER FOOTBRIDGE ***
+
+**`dev_m8820x.c:220` — `DEVICE_ACCESS(m8820x)` has a `default:` arm that calls `exit(1)` on ANY
+unhandled offset, on READS as well as writes, in a 4 KB window — and `dev_m8820x` is
+memory-mapped on LUNA88K, which is one of the three rigs that actually boots in this tree.**
+`M88`20X_LENGTH` is 0x1000 (`cpu_m88k.h:229`) — 1024 word offsets — and the switch handles 21 of
+them. Everything else terminates the host. That includes registers the CMMU header itself
+defines: `CMMU_CDP0-3` (0x800-0x80c), `CMMU_CTP0-3` (0x840-0x84c), and pointedly
+**`CMMU_CSSP1/2/3` (0x890/0x8a0/0x8b0)** — `m8820x.h:86-91` defines `CMMU_CSSP(n)` for sets 0..3
+and GXemul implements only set 0, so a cache-flush loop over the four sets walks straight off the
+handled set. **Tempering that one honestly, from reading the header rather than the report:** the
+line above CSSP1 says *"the following only exist on 88204"*, so a guest driving an 88200 would not
+touch them and this particular example is weaker than it first looks. It does not rescue the
+site — the gap is 21 handled offsets in a 1024-word window, and CDP0-3/CTP0-3 carry no such
+caveat — but the CSSP example should not be quoted without the qualifier. Whether OpenBSD 7.7 actually does that is BELIEVED, not confirmed (no driver source
+in tree, nothing booted for the audit) — but the register-map gap is CONFIRMED from the two files.
+Ruled out while checking: `regs[]` is sized `M8820X_LENGTH/sizeof(uint32_t)`, so the unconditional
+`odata = regs[relative_addr/4]` is in bounds — there is no OOB read hiding behind the exit.
+
+Four more on the same booting rig, all CONFIRMED: `dev_luna88k.c:816` (write to `INT_ST_MASK0..3`
+with any of bits 25..0 set), and `dev_m8820x.c:159` (**read** of `CMMU_SCR`), `:152` (write to the
+read-only `CMMU_IDR`), `:169` (write to the read-only `CMMU_SSR`), plus `:125` transitively via
+`m8820x_command()`.
+
+**Tree-wide inventory, for the first time:** 220 `exit(`/`abort(` hits across `src/devices/`, of
+which **114 are directly inside a `DEVICE_ACCESS` handler**, 17 are init-time, and 89 are in
+helpers mostly called from `DEVICE_ACCESS`. No `abort()` is guest-reachable. Two deliberate
+exclusions, both checked: `dev_cons.c:80` is the testmachine's documented halt port (`exit(0)`,
+intended), and `dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is set at init).
+**The rig question dominates the ranking**: arc and pmax have ZERO `DEVICE_ACCESS` exit sites
+between them, so luna88k's five are the only ones reproducible today.
+
+Useful for whoever writes the fixes: `memory_rw.c:572-578` already snapshots `cpu->running` around
+the handler call and returns `MEMORY_ACCESS_FAILED` if the handler cleared it — so the `#220`
+`cpu->running = 0` pattern is fully plumbed and needs nothing new.
+
+### The eight footbridge sites (`#432` removed the ninth)
+
+Addressability settled: the window is `[0x42000000, 0x42000400)` on BOTH machines
+(`machine_cats.c:63-64`, `machine_netwinder.c:58-59`), `DEV_FOOTBRIDGE_LENGTH` is 0x400, and all
+eight offsets fall inside it. Ranked by how likely a booting guest is to hit them, the top two are
+**reads**: `IRQ_ENABLE_SET` (0x188) — which `dc21285reg.h:334-335` also names plain `IRQ_ENABLE`,
+the register a spl save/restore reads — and `IRQ_ENABLE_CLEAR` (0x18c). In both cases GXemul
+computes `odata = d->irq_enable` and then exits anyway. Then `IRQ_STATUS` (write-to-ack),
+`SDRAM_BA_MASK` (read), `SDRAM_BA_OFFSET` (read), `FIQ_STATUS`, `IRQ_RAW_STATUS`, `FIQ_RAW_STATUS`.
+The recommendation is to fix all eight rather than the plausible subset: the property being
+restored is "no guest register access terminates the host", and the implausible ones are exactly
+what a *wrong* guest reaches, which is the population the fix exists for. Note a real NetBSD/cats
+guest has run this driver here without hitting any of them (`REVIEW_FINDINGS.md:171`, `:186`) —
+a genuine negative-reachability datum that caps every plausibility claim above.
+
+### Datasheet-backed defects, newly specifiable
+
+The 21285 datasheet (`_scratchpad/dc21285.pdf`, Intel 278115-001) closes three questions that were
+blocked on it:
+
+1. **FREERUN vs PERIODIC is ignored.** §7.3.41 bit 6: free-running wraps to `FFFFFFh` and keeps
+   decrementing; periodic reloads `TimerNLoad`. The clock source is bits 3:2 alone, identical in
+   both modes. `reload_timer_value()` computes one rate and hands it to a repeating timer, i.e.
+   the PERIODIC cadence unconditionally — so a FREERUN timer's interrupt rate is too fast by up to
+   `2^24 / load`.
+2. **`TimerNValue` is READ-ONLY** (§7.3.38/7.3.40) but `dev_footbridge.c` accepts a guest write to
+   it; and `case TIMER_1_CLEAR:` has **no `writeflag` test at all**, so a guest READ of a
+   write-only register reloads the counter and deasserts the IRQ. Both one-line, safe under any
+   semantics.
+3. **Reset values diverge.** Hardware resets `TimerNControl` to 0x00 (free-running, fclk, disabled)
+   and `TimerNLoad` to 0; the model sets `TIMER_MODE_PERIODIC` and `TIMER_MAX_VAL`. A guest reading
+   `TimerNControl` before writing it sees 0x40 where hardware gives 0x00. **This is the model bug
+   that #432's first draft mistakenly cited as evidence for its own zero mapping** — see that
+   round's block.
+4. **The `random()` counter model is now fully specified** and can be replaced: §7.3.40 plus
+   §7.3.41 bit 7 give a 24-bit down-counter, readable at any time, RETAINED across disable and
+   resuming from its current value on re-enable. The author's TODO is discharged; only a rig is
+   missing.
+
+### And the 8253 question is settled from a real document
+
+`i8253reg.h` says nothing about a zero count (read in full, 102 lines). The Intel **8254**
+datasheet (`_scratchpad/i8254.pdf`, 231164-005) does, twice on p. 17: *"The largest possible
+initial count is 0; this is equivalent to 2^16 for binary counting and 10^4 for BCD counting."*
+So `dev_8253.c:125`'s `else hz = 0` — which the timer core then floor-clamps to 1e-8 Hz, i.e.
+never fires — is wrong against the hardware convention: count 0 means 65536. Cite it as the 8254,
+not the 8253; the count-0 convention was verified in the 8254 document only.

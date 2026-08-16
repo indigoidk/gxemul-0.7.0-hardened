@@ -92,17 +92,120 @@ static void timer_tick3(struct timer *t, void *extra)
 { ((struct footbridge_data *)extra)->pending_timer_interrupts[3] ++; }
 
 
+/*
+ *  #432: ONE interpretation of the load register, used by BOTH consumers.
+ *
+ *  THE CRASH.  DEVICE_TICK computed `random() % timer_load[i]`, and TIMER_x_LOAD accepts a
+ *  guest-written zero (`idata & TIMER_MAX_VAL`), so a guest could divide by zero and take the
+ *  HOST process down -- reproduced as SIGFPE, exit 136, by two seats independently.
+ *
+ *  THERE ARE TWO ROUTES TO IT, and only one is ours.  Route 1: a zero load makes the rate
+ *  +INF, which before #427/#428 meant interval 0.0 and a catch-up loop that never advanced,
+ *  so the machine froze before this function ran; the clamp and the bound opened that path.
+ *  ROUTE 2 PREDATES BOTH: TIMER_x_LOAD does not clear pending_timer_interrupts (TIMER_x_CONTROL
+ *  below does), so an ORDINARY LEGAL timer accrues a backlog and a later write of zero divides
+ *  -- measured on the pre-#427 core, it crashes there too.  DEVICE_TICK runs from machine_run(),
+ *  the main loop, not from the signal handler, so the CPU reaches the divide between signals.
+ *
+ *  WHY A HELPER RATHER THAN TWO GUARDS.  Three seats converged on this independently, and the
+ *  measuring seat REFUTED each single-site alternative: guarding only this function still
+ *  SIGFPEs by route 2 (and is the most dangerous option precisely because it passes the obvious
+ *  test); guarding only the modulo leaves the backlog growing 1048576 per signal, reaching
+ *  INT_MAX in ~31 s; and normalising at the guest write corrupts read-back -- TIMER_x_LOAD
+ *  returns the stored value, so the guest would read something it never wrote, which invents an
+ *  answer to a question the hardware documentation we lack would have to settle.
+ *
+ *  THE REGISTER STAYS RAW.  timer_load[] keeps exactly what the guest wrote, masked to 24 bits.
+ *  Only the DERIVED quantities are interpreted here, and they are model-internal.
+ *
+ *  ZERO MEANS FULL PERIOD (2^24), and it is a CHOICE UNDER A DOCUMENTED UNKNOWN, not a fact.
+ *
+ *  The 21285 datasheet was obtained for this round (_scratchpad/dc21285.pdf, Intel order
+ *  278115-001, Sept 1998) and it is SILENT on a zero load: SS 7.3.39 (p. 7-50) specifies
+ *  TimerNLoad and its reset value without saying what a count of zero does, and a search of the
+ *  full extraction for "minimum count" / "nonzero" / "reaches zero" turns up no equivalent of
+ *  the 8254's Figure 22.  So the absence is MEASURED, not assumed -- which is a stronger thing
+ *  to be able to say than the guess it replaces.
+ *
+ *  The choice therefore rests on failure asymmetry: implement full-period when the truth is
+ *  "disabled" and a guest gets a few unwanted interrupts on a timer it explicitly enabled --
+ *  noisy, visible, recoverable.  Implement "disabled" when the truth is full-period and the
+ *  guest waits forever on a tick that never comes -- silent, and it hangs at boot.  The second
+ *  support is arithmetic: the 24-bit mask at the LOAD write aliases a legitimate guest write of
+ *  0x1000000 -- "one full wrap" -- to zero, so this mapping is the unique choice that makes the
+ *  rate continuous across the register's own truncation.
+ *
+ *  A THIRD ARGUMENT WAS WITHDRAWN WHEN THE DATASHEET ARRIVED, and it is recorded because the
+ *  withdrawal matters more than the argument did.  An earlier draft of this comment said
+ *  "devinit resets every load to TIMER_MAX_VAL, so the model's own convention is full width".
+ *  The datasheet says TimerNLoad and TimerNControl BOTH reset to 0 (SS 7.3.39, SS 7.3.41), so
+ *  this model's reset values are themselves wrong -- that line was citing a model bug as
+ *  evidence.  The divergence is filed; it is not fixed here.
+ *
+ *  THE WIDTH FIX IS NOT SEPARABLE FROM THE ZERO FIX.  The old `int cycles` with `cycles <<= 8`
+ *  overflowed for exactly half the legal 24-bit range (first bad load 0x800000), yielding a
+ *  NEGATIVE frequency that the core's floor clamp silently turned into one tick per ~3.2 years
+ *  -- reachable with NO load write at all, since the reset load is TIMER_MAX_VAL and a single
+ *  write of ENABLE|FCLK_256 gets there.  And mapping zero to 2^24 while leaving `int` gives
+ *  2^24 << 8 == 2^32 == 0, which is +INF AGAIN: the obvious zero-guard RE-CREATES the bug it
+ *  removes.  Hence uint64_t, and multiplication rather than a signed shift.  Found independently
+ *  by three seats.
+ *
+ *  (8253 maps a zero divisor to "disabled" instead.  That divergence is deliberate and not an
+ *  inconsistency: its 16-bit counter has no equivalent of the 24-bit aliasing above.)
+ */
+/*
+ *  with_prescaler distinguishes the two consumers, and it is NOT a convenience flag -- getting
+ *  it wrong is a defect the measuring seat caught in its own first proposal.  The prescaler
+ *  slows the RATE; it does not widen the COUNTER.  Feeding the prescaled period to the modulo
+ *  put values up to 0x7fffca11 into a 24-bit register that the guest can read back -- measured,
+ *  19833 of 20000 ticks out of range.  So: the rate consumer prescales, the counter consumer
+ *  does not, and both get their never-zero span from this one function.
+ */
+static uint64_t footbridge_effective_cycles(uint32_t load, uint32_t control,
+	int with_prescaler)
+{
+	uint64_t cycles = load;
+
+	if (cycles == 0)
+		cycles = (uint64_t)TIMER_MAX_VAL + 1;	/*  0x1000000 == 2^24  */
+
+	if (!with_prescaler)
+		return cycles;
+
+	/*  The prescaler scales the PERIOD.  It must not be a signed shift, and the order
+	    matters: TIMER_EXTERNAL is FCLK_16|FCLK_256, so test the pair first or 0x0C reads
+	    as a bare FCLK_16 by luck of the `else if`.  */
+	if ((control & (TIMER_FCLK_16 | TIMER_FCLK_256))
+	    == (TIMER_FCLK_16 | TIMER_FCLK_256)) {
+		/*  TIMER_EXTERNAL (0x0C): a LEGAL encoding, and this is now DATASHEET-BACKED
+		    rather than inferred from the header.  The 21285 datasheet obtained for this
+		    round gives TimerNControl bits 3:2 as 00=fclk_in, 01=fclk_in/16,
+		    10=fclk_in/256, 11=External event (SS 7.3.41, p. 7-51; SS 6.4, p. 6-11 lists
+		    the same four).  It used to reach fatal()+exit(1) below, so a CONFORMING guest
+		    selecting the external clock source killed the host -- the same defect class as
+		    the divide and arguably likelier, being a documented mode rather than a
+		    malformed value.  The RATE an external source would give depends on a pin this
+		    model has no signal for (irq_in_l), so it is genuinely not derivable here and
+		    is NOT invented: the unprescaled period keeps the timer sane and the emulator
+		    alive.  Modelling the external event properly is filed.  */
+		;
+	} else if (control & TIMER_FCLK_16)
+		cycles *= 16;
+	else if (control & TIMER_FCLK_256)
+		cycles *= 256;
+
+	return cycles;
+}
+
+
 static void reload_timer_value(struct cpu *cpu, struct footbridge_data *d,
 	int timer_nr)
 {
 	double freq = (double)cpu->machine->emulated_hz;
-	int cycles = d->timer_load[timer_nr];
 
-	if (d->timer_control[timer_nr] & TIMER_FCLK_16)
-		cycles <<= 4;
-	else if (d->timer_control[timer_nr] & TIMER_FCLK_256)
-		cycles <<= 8;
-	freq /= (double)cycles;
+	freq /= (double) footbridge_effective_cycles(d->timer_load[timer_nr],
+	    d->timer_control[timer_nr], 1);
 
 	d->timer_value[timer_nr] = d->timer_load[timer_nr];
 
@@ -138,7 +241,13 @@ DEVICE_TICK(footbridge)
 	for (i=0; i<N_FOOTBRIDGE_TIMERS; i++) {
 		if (d->timer_control[i] & TIMER_ENABLE) {
 			if (d->pending_timer_interrupts[i] > 0) {
-				d->timer_value[i] = random() % d->timer_load[i];
+				/*  #432: the same never-zero span, WITHOUT the
+				    prescaler -- this is a 24-bit counter, and the
+				    prescaler slows the rate rather than widening
+				    it.  */
+				d->timer_value[i] = random() %
+				    footbridge_effective_cycles(d->timer_load[i],
+				    d->timer_control[i], 0);
 				INTERRUPT_ASSERT(d->timer_irq[i]);
 			}
 		}
@@ -435,12 +544,17 @@ DEVICE_ACCESS(footbridge)
 			odata = d->timer_control[timer_nr];
 		else {
 			d->timer_control[timer_nr] = idata;
-			if (idata & TIMER_FCLK_16 &&
-			    idata & TIMER_FCLK_256) {
-				fatal("TODO: footbridge timer: "
-				    "both 16 and 256?\n");
-				exit(1);
-			}
+			/*  #432: both prescaler bits set is TIMER_EXTERNAL
+			    (0x0C, dc21285reg.h:364) -- a LEGAL named encoding,
+			    and it used to reach fatal()+exit(1) right here, so a
+			    guest selecting the external clock source KILLED THE
+			    HOST.  Arguably likelier than the zero load, since it
+			    is a documented mode rather than a malformed value.
+			    The rate an external clock would actually give is
+			    UNKNOWN and is NOT invented: footbridge_effective_cycles()
+			    now gives the encoding a defined, survivable meaning
+			    (the unprescaled period), and the real semantics are
+			    filed for a round that has a datasheet.  */
 			if (idata & TIMER_ENABLE) {
 				reload_timer_value(cpu, d, timer_nr);
 			} else {
