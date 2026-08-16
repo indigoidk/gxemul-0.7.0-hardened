@@ -648,6 +648,85 @@ else
           "$(grep -c 'IDENTITY row count' "$M8LOG")" "1"
 fi
 
+#  #434 -- a guest READ of six CMMU registers purged the whole translation cache.
+#
+#  THE ROWS THAT MATTER HERE ARE THE ARGUMENT ROWS, and that is not a stylistic
+#  preference.  A measuring seat built the one-identifier mutant
+#  INVALIDATE_ALL -> INVALIDATE_VADDR as a real emulator and BOOTED THE luna88k RIG
+#  WITH IT: 1:1:1 to `login:`, no diagnostics.  The purge is gutted to virtual page
+#  0 -- under-invalidation, the dangerous direction -- while the CALL COUNT stays
+#  bit-identical.  A count-based offline row cannot catch it, and THAT THREE-RUN
+#  BOOT-TO-LOGIN TRIAL did not; a different workload or assertion on the same rig
+#  might.  The likely masking mechanism is that the guest issues ~603,000 SCR
+#  flushes per boot, each doing its own INVALIDATE_ALL -- BELIEVED, since a
+#  successful boot alongside a plausible mechanism is not established attribution.
+#  ARGUMENT-INSPECTING ROWS are what catch it, F1 AND F2 both, which is why the
+#  named checks below pin the ARGUMENT rows and the cpu/cmmu rows and not the
+#  totals.
+#
+#  *** THESE THREE SENTENCES WERE RETRACTED IN diff_m8invread.c AND SURVIVED HERE
+#  VERBATIM FOR ONE PASS. ***  A pass-2 seat grepped and found each phrase alive in
+#  exactly one file -- this one.  That is the project's own "when correcting a
+#  claim, grep for its siblings" rule failing on its first application, in the very
+#  round that wrote the corrections.  A retraction that lives in one file is half a
+#  retraction.
+IVBIN=$LOGDIR/diff_m8invread
+IVLOG=$LOGDIR/diff_m8invread.log
+#  WHICH FLAGS ARE ACTUALLY LOAD-BEARING, ABLATED ONE AT A TIME RATHER THAN ASSUMED.
+#  The first version of this comment said "-I$SEC/src and -lm are BOTH load-bearing";
+#  a pass-2 seat compiled all four variants and measured:
+#      -I"$SEC/src"          LOAD-BEARING -- without it, `fatal error: include/misc.h`
+#      -Wl,--gc-sections     LOAD-BEARING -- without it, `undefined reference to
+#                            memory_device_register` from DEVINIT(m8820x).  It was NOT
+#                            named, which is the worst case: the one nobody knew about.
+#      -lm                   NOT load-bearing -- links and passes 21/21 without it.
+#  The command was right and the explanation was wrong, which is the failure mode a
+#  comment has that code does not.  Fitting, since this block's whole point is a lesson
+#  about copying a neighbouring block: it was copied from the SH-4 TMU block, whose
+#  differential includes nothing from src/, and the gate caught THAT loudly -- a compile
+#  failure is a FAIL here, never a skip.
+if ! $CC -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE         -I"$SEC/src" -I"$SEC/src/include" -I"$SEC/src/include/thirdparty"         -ffunction-sections -fdata-sections -Wl,--gc-sections         -o "$IVBIN" "$HERE/diff_m8invread.c" -lm > "$IVLOG" 2>&1; then
+    note "m8invread differential compile failed:"; sed 's/^/       /' "$IVLOG" | head -12
+    check "m8invread: compiles against the real dev_m8820x.c" "no" "yes"
+else
+    check "m8invread: compiles against the real dev_m8820x.c" "yes" "yes"
+    "$IVBIN" > "$IVLOG" 2>&1
+    sed 's/^/       /' "$IVLOG"
+    check     "m8invread: row failures"               "$(grep -oE '[0-9]+ failures' "$IVLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "m8invread: rows actually run"               "$(grep -oE '^[0-9]+ rows' "$IVLOG" | grep -oE '^[0-9]+')" 21
+    check     "m8invread: offline verdict" "$(grep -c 'DIFF_M8INVREAD_PASS' "$IVLOG")" "1"
+    #  The defect row and its per-register twin: an aggregate alone misses a mutant
+    #  that moves a purge between registers, which a seat named explicitly.
+    check "m8invread: the read-side rows are present"           "$(grep -cE 'reads that purge, summed|registers whose READ purges' "$IVLOG")" "2"
+    #  THE ARGUMENT ROWS.  See the comment above -- these are the only defence
+    #  against a mutant that keeps the count and guts the flags.
+    check "m8invread: the purge-ARGUMENT rows are present"           "$(grep -cE 'passes INVALIDATE_ALL \(mutant A\)|flags, named rather than counted|passes addr 0' "$IVLOG")" "3"
+    #  The two-cpu row.  repro_m8invread.c and diff_m8820x.c are both single-cpu and
+    #  are structurally blind to the wrong-receiver mutant; this row is not.
+    check "m8invread: the two-cpu receiver rows are present"           "$(grep -cE "targets the CMMU's OWNER|NOT the accessing cpu" "$IVLOG")" "2"
+    #  G3/G4/G5 and E10, all four from mutants a pass-2 seat BUILT AND RAN against the
+    #  17-row version.  Three survived it: a read purge gated on the register's VALUE
+    #  (which restores HALF the removed purges and boots the rig 1:1:1), the same
+    #  one-identifier swap applied to the REGS pointer rather than the callback receiver,
+    #  and cmmu[d->cmmu_nr] -> cmmu[0].  All three were invisible because the fixture had
+    #  ONE cmmu object, cmmu_nr always 0, and a memset-zero register file on every read.
+    check "m8invread: the register-file and second-cmmu rows are present"           "$(grep -cE "STORE lands in the OWNER's register file|not in the accessor's|addresses the DATA cmmu" "$IVLOG")" "3"
+    check "m8invread: the nonzero-READ row is present"           "$(grep -c 'read of a NONZERO register still owes no purge' "$IVLOG")" "1"
+    #  Idempotency: the brace-drop mutant makes a READ zero the register, and only a
+    #  SECOND read can see it because odata is snapshotted before the switch.
+    check "m8invread: the idempotency and read-back rows are present"           "$(grep -cE 'is IDEMPOTENT|stores and reads back its own value' "$IVLOG")" "2"
+    #  E9, and it is NOT redundant with E8.  A pass-2 seat appended ONE token to the
+    #  production condition -- `&& idata` -- and it survived all sixteen rows: a zero
+    #  write then neither purges nor stores, so writing 0 to a previously nonzero SAPR
+    #  silently fails to disable that context.  Every other write row used nonzero data,
+    #  and E8's single zero goes to a register fresh() had already zeroed, so it was
+    #  never a TRANSITION.  A value table that merely CONTAINS zero proves nothing.
+    check "m8invread: the nonzero->zero transition row is present"           "$(grep -c 'nonzero->ZERO write still purges once' "$IVLOG")" "1"
+    #  The neighbouring arm, ~603,000 purges/boot: nothing above would notice its loss.
+    check "m8invread: the SCR-arm control rows are present"           "$(grep -cE 'an SCR flush command still purges|and it too passes INVALIDATE_ALL' "$IVLOG")" "2"
+    check "m8invread: identity row present"           "$(grep -c 'IDENTITY row count' "$IVLOG")" "1"
+fi
+
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
 if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \

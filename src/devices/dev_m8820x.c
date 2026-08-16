@@ -307,10 +307,65 @@ DEVICE_ACCESS(m8820x)
 	case CMMU_SCTR:
 	case CMMU_SAPR:		/*  TODO: Invalidate something for  */
 	case CMMU_UAPR:		/*  SAPR and UAPR writes?  */
-		/*  TODO: Don't invalidate everything.  */
-		c->invalidate_translation_caches(c, 0, INVALIDATE_ALL);
-		if (writeflag == MEM_WRITE)
+		/*
+		 *  #434: A READ OWES NO PURGE.  The call used to sit one line above the
+		 *  writeflag test, so a plain guest READ of any of these six dropped the
+		 *  emulator's entire dyntrans mapping.  Measured on the luna88k rig that
+		 *  boots: ~286,500-292,000 such reads per boot-to-login, 16.5% of every
+		 *  INVALIDATE_ALL in the machine.  A RANGE, NOT A POINT, and deliberately:
+		 *  two independent instrumented boots reported 291,807 (all six registers)
+		 *  and 286,519 (PFSR alone), and an all-six count can never be below a
+		 *  PFSR-only count, so they are different boots and boot-to-boot variation
+		 *  is real.  An earlier draft quoted one of them as if it were the quantity.
+		 *
+		 *  THE REASON IS "A READ CHANGES NO TRANSLATION", NOT PERFORMANCE, AND THE
+		 *  DISTINCTION WAS MEASURED RATHER THAN ASSUMED.  A count that large reads
+		 *  like a performance case and was very nearly written up as one; the A/B
+		 *  found NO MEASURABLE IMPROVEMENT ON THIS RIG AT THIS RESOLUTION -- 59.3 vs
+		 *  60.2 Minstr/s across six boots, against a documented 3.57% idle-run
+		 *  spread, and 127.3 s vs 127.0 s to `login:`.  That is not the same as "no
+		 *  performance effect on any guest or workload", and a pass-2 seat was right
+		 *  to make us say which one we measured.  The justification that stands
+		 *  alone is the semantic one.
+		 *
+		 *  NO GUEST-VISIBLE DIFFERENCE WAS DETECTED, which needed settling because a
+		 *  sibling round proved an over-broad flush of the guest's PATC IS visible.
+		 *  Note the wording: the first version of this comment said "IT IS ALSO NOT
+		 *  GUEST-VISIBLE", and a pass-2 seat pointed out that the paragraph then
+		 *  proceeds to describe a reachable chain by which the timing DOES change --
+		 *  a comment cannot both assert categorical invisibility and explain the
+		 *  mechanism of visibility.
+		 *
+		 *  What is defensible is narrower: this callback does not directly modify the
+		 *  PATC.  It is NOT true that it touches "the dyntrans arrays and nothing
+		 *  else" -- the INVALIDATE_ALL loop (cpu_dyntrans.c:1276-1289) calls
+		 *  DYNTRANS_INVALIDATE_TLB_ENTRY, whose header at :1000-1006 says it removes
+		 *  the ENTIRE translation and whose BODY at :1028-1034 is the direct evidence,
+		 *  clearing host_load, host_store, phys_addr, phys_page and vaddr_to_tlbindex.
+		 *  So a later store CAN be pushed down the slow path and reach a walk.  (Cite
+		 *  the body, not only the doc comment: a header is an intention, the body is
+		 *  the behaviour, and this project has been burned by the difference.)  That is exactly
+		 *  the chain: a read installs a WRITABLE fast-path entry, because
+		 *  m88k_translate_v2p returns 2 for any non-RO page (memory_m88k.c:233,370)
+		 *  even on a read, so a later store takes host_store[] directly and never
+		 *  reaches m8820x_mark_page_as_modified(); a purge in between forces that
+		 *  slow path and writes PG_M into emulated memory.  MEASURED ACROSS SIX
+		 *  BOOTS: guest-visible U/M bit writes 24,285 before vs 24,293 after (means),
+		 *  within-group spread ~62, distributions fully overlapping and the sign not
+		 *  even in the predicted direction.  Below the noise floor of that experiment
+		 *  -- which is what was established, and all that was established.
+		 *
+		 *  The write side is deliberately UNCHANGED, including its over-broad scope
+		 *  and the TODO above -- but see the filed residual: 98% of the write-side
+		 *  purges are CMMU_SAR, which the translation path never consults, so those
+		 *  are gratuitous by exactly this round's argument.  Not folded in here,
+		 *  because that is a second behaviour change and this one is measured.
+		 */
+		if (writeflag == MEM_WRITE) {
+			/*  TODO: Don't invalidate everything.  */
+			c->invalidate_translation_caches(c, 0, INVALIDATE_ALL);
 			regs[relative_addr / sizeof(uint32_t)] = idata;
+		}
 		break;
 
 	case CMMU_BWP0:

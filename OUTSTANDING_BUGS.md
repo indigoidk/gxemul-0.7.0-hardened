@@ -4590,3 +4590,41 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   The seat also disclosed its own conflict unprompted (it was one of the original one-helper
   advocates) and graded every number it had not run as `UNKNOWN` rather than asserting it — the
   honest form, and the reason its three findings were worth checking one at a time.
+
+- **`m8sarpurge` — 98% of the CMMU register arm's write-side purges are gratuitous, and the
+  biggest one is `CMMU_SAR`.** (filed 2026-08-16 from the #434 measure seat, which instrumented
+  a luna88k boot per register rather than in aggregate.) Measured, per boot-to-login:
+
+  | register | reads | writes |
+  |---|---:|---:|
+  | **PFSR** | **292,281** | 2 |
+  | PFAR | **0** | 0 |
+  | **SAR** | 0 | **612,186** |
+  | SCTR | 0 | 2 |
+  | SAPR | 0 | 5 |
+  | UAPR | 2 | 13,026 |
+
+  Three things fall out, and the second is the item:
+  1. **The read side is 99.999% `PFSR`, and the cost really is TWICE per fault — but not for
+     the reason first given, and the correction to it was ALSO wrong.** Draft 1 said "a fault
+     handler reads PFSR and PFAR, so twice"; `PFAR` is read **zero** times, which refutes the
+     REASON. Draft 2 therefore said "once" — an over-correction a second seat caught, because
+     PFAR's absence rules out the reason, not the count. Measured: `PFSR` is read 286,519 times
+     and **49.98% of those return nonzero**. The mechanism is `memory_m88k.c:382-384`, which on
+     every fault sets the faulting CMMU's PFSR and **explicitly zeroes the other CMMU's**
+     (`CMMU_PFSR_SUCCESS` is 0) so the handler can tell them apart — so it must read **both**,
+     and exactly half of those reads see zero. Right number, wrong reason; then right reason,
+     wrong number. **A correction is a claim too, and needs the same evidence as the claim it
+     replaces.**
+  2. **The write side is 98% `SAR` — 612,186 purges per boot — and `SAR` is never consulted by
+     the translation path.** `m88k_translate_v2p` reads only `SAPR`/`UAPR` (`memory_m88k.c:135,137`),
+     BATC and PATC. `SAR` is read at exactly one place, `dev_m8820x.c:110`, as the *address
+     operand of a flush command* — and that command's own arm already purges at `:187`. So a
+     write to `SAR` owes no purge, **by exactly the argument #434 makes for reads**.
+  3. Registers that genuinely can change a translation — `SAPR` + `UAPR` + `SCTR` writes — are
+     **13,033 of 917,504** accesses to this arm, i.e. **1.4%**. #434 removes 32% of the arm's
+     purges; this item is worth **2.1× as much** and is the same one-line shape.
+
+  Not folded into #434 because it is a second behaviour change on the write side, and #434's
+  claim is the one that was A/B measured. The detector rows already exist (`diff_m8invread.c`
+  section E) and would need their per-register expectations re-pinned rather than rewritten.

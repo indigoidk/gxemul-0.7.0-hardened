@@ -4192,6 +4192,81 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R8 (#434) — a guest READ of six CMMU registers purged the whole translation cache
+
+`dev_m8820x.c` grouped `PFSR`, `PFAR`, `SAR`, `SCTR`, `SAPR` and `UAPR` and called
+`invalidate_translation_caches(c, 0, INVALIDATE_ALL)` **one line above** the `writeflag` test
+that stores. So a plain guest read of any of the six dropped the emulator's entire dyntrans
+mapping. Measured on the luna88k rig that boots: **~286,500–292,000 such reads per boot-to-login,
+16.5% of every `INVALIDATE_ALL` in the machine.** The fix moves the call under the write test.
+
+**The panel changed the round three times, and each change was a measurement, not an argument.**
+
+**1. The reason for shipping was measured and replaced.** A count that large reads like a
+performance case, and it very nearly shipped as one. The A/B says otherwise: 59.3 vs 60.2
+Minstr/s over six boots against a documented 3.57% idle spread, 127.3 s vs 127.0 s to `login:`.
+So the record claims only what holds — a read changes no translation — and explicitly does *not*
+claim a speedup.
+
+**2. The guest-visibility question was settled empirically after two seats reasoned to opposite
+conclusions.** A sibling round proved an over-broad flush of the guest's PATC *is* guest-visible.
+The measure seat found a chain neither seat had named: a *read* installs a **writable** fast-path
+entry, because `m88k_translate_v2p` returns 2 for any non-RO page even on a read
+(`memory_m88k.c:233,370`), so a later store takes `host_store[]` directly and never reaches
+`m8820x_mark_page_as_modified()` — a purge in between forces the slow path and writes `PG_M` into
+emulated memory. Measured across six boots: **24,285 vs 24,293** U/M bit writes, within-group
+spread ~62, distributions fully overlapping, sign not even in the predicted direction.
+
+**3. The detector went 4 → 21 rows, because five mutants survived earlier versions and two of
+them boot the rig.** This is the part worth remembering.
+
+| mutant | why it survived | row that kills it |
+|---|---|---|
+| `INVALIDATE_ALL`→`INVALIDATE_VADDR` | call **count** is bit-identical; **boots 1:1:1** | F1, F2 |
+| read purge under `odata != 0` | every read row ran against a `memset`-zero register file; **restores half the removed purges and boots 1:1:1** | E10 |
+| `&& idata` on the write condition | every write row used nonzero data; E8's one zero was not a *transition* | E9 |
+| `c`→`cpu` on the **regs pointer** | both cpus shared one CMMU object, so it landed in the same array | G3, G4 |
+| `cmmu[d->cmmu_nr]`→`cmmu[0]` | `fresh()` left `cmmu_nr` 0 in every row | G5 |
+
+Census: **11 attempted, 11 killed, 0 survived, 0 faults**, every kill naming its row.
+
+**A 1:1:1 rig boot is not evidence that this removal is safe** — two of the five mutants boot
+cleanly, one of them restoring half the defect. The support is the semantic argument plus the
+rows, and the file now says so.
+
+**Records corrected in this round, all of them ours:**
+- **"IT IS ALSO NOT GUEST-VISIBLE"** → *no guest-visible difference was **detected*** by that
+  six-boot measurement. The paragraph then described the mechanism of visibility; a comment
+  cannot both assert categorical invisibility and explain how it could be visible.
+- **"walks `vph_tlb_entry[]` and nothing else"** → false; `DYNTRANS_INVALIDATE_TLB_ENTRY` clears
+  `host_load`/`host_store`/`phys_addr`/`phys_page`/`vaddr_to_tlbindex` (`cpu_dyntrans.c:1028-1034`
+  — cite the **body**, not just the doc header at `:1000-1006`).
+- **"F1 is the only thing that catches mutant A"** → false, and the census printed directly
+  beneath it recorded `mutA_vaddr → F1/F2`. Nobody read them together until a seat did.
+- **"the rig cannot catch it"** → *that three-run trial* did not.
+- **"twice per fault"** → wrong reason (`PFAR` is read **zero** times) → corrected to "once" →
+  **that correction was itself wrong.** It is twice: `memory_m88k.c:382-384` zeroes the
+  *non-faulting* CMMU's PFSR on every fault so the handler can discriminate, so it reads **both**
+  — hence 49.98% of the 286,519 PFSR reads return nonzero. Right number/wrong reason, then right
+  reason/wrong number. **A correction is a claim too.**
+- **Three retracted sentences survived verbatim in `gate_offline.sh`** for one pass — the
+  project's own "grep for its siblings" rule failing on its first application, in the very round
+  that wrote the corrections. A retraction that lives in one file is half a retraction.
+- **The gate comment named the wrong load-bearing flags.** Ablated one at a time: `-I$SEC/src`
+  load-bearing, **`-Wl,--gc-sections` load-bearing and unnamed**, `-lm` **not** load-bearing
+  (links and passes 21/21 without it). The command was right and the explanation was wrong.
+- **Two different numbers for one quantity** (291,807 all-six vs 292,281 PFSR-only) — impossible
+  in one boot, so now recorded as a range across two boots rather than a false point value.
+
+Gates: offline-differential **PASS, 211 checks**; site probe **9/9**; luna88k **1:1:1 to
+`login:`** with zero `m8820x` diagnostics, on the final built binary.
+
+Filed rather than done: **`m8sarpurge`** — 98% of this arm's *write*-side purges are `CMMU_SAR`
+(612,186/boot), and the translation path never consults `SAR`, so those are gratuitous by exactly
+this round's argument. Worth 2.1× what this round removed; deferred because it is a second
+behaviour change and this round's is the one that was A/B measured. `diff_m8invread.c` warns that
+E3/E4/F1 pin *today's* write side and must be re-pinned when it lands, not read as invariant.
+
 ## R7 addendum — the panel had already found both, and nobody had read it
 
 R7's pass-2 panel fired seven scriptable seats. Every one answered; **only one was read.**
