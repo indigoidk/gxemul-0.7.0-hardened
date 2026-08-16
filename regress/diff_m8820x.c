@@ -352,6 +352,27 @@ int main(void)
 		}
 		(void) SEG;
 
+		/*
+		 *  D6b: THE USER SIDE OF THE SAME PROPERTY, and it exists because a seat
+		 *  named a mutant my own census had not run.
+		 *
+		 *  Every other flush-scope row here drives a SUPER command except D5, which is
+		 *  USER *ALL* -- so deleting just `cmd == CMMU_FLUSH_USER_SEGMENT` from the
+		 *  `all = 1` set made USER_SEGMENT page-granular instead of full-table and
+		 *  SURVIVED all twenty-three rows.  The supervisor half was covered; the user
+		 *  half was not.  A property worth pinning in one privilege direction is worth
+		 *  pinning in both, and the asymmetry is exactly the kind a single-sided row
+		 *  hides.
+		 *
+		 *  Expected: a USER SEGMENT flush drops every USER entry (e1, e3, e5) and no
+		 *  supervisor one, i.e. survivors are e0, e2, e4 = 0x15 -- the same answer as
+		 *  USER ALL in D5, which is what "SEGMENT takes ALL's settings" means.
+		 */
+		M8_SEED();
+		access_word(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_USER_SEGMENT, NULL);
+		surv = M8_SURV();
+		check_u("D6b a USER SEGMENT flush drops every user entry", surv, 0x15);
+
 		/*  D7: THE EMULATOR'S OWN TRANSLATION CACHE MUST BE PURGED TOO, and the
 		    counter for it was already in this file and never asserted on.  Deleting
 		    the invalidate_translation_caches() call leaves the PATC correct while the
@@ -408,7 +429,7 @@ int main(void)
 	check_u("E4 SCR reads back the last command written", v, CMMU_FLUSH_SUPER_ALL);
 
 	snprintf(buf, sizeof(buf), "%d", rows + 1);
-	check("IDENTITY row count -- guards against a stale copy", buf, "23");
+	check("IDENTITY row count -- guards against a stale copy", buf, "24");
 
 	printf("\n%d rows, %d failures\n", rows, fails);
 	printf("DIFF_M8820X_%s\n", fails == 0 ? "PASS" : "FAIL");

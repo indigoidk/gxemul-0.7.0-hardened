@@ -605,7 +605,7 @@ else
     check     "m8820x: row failures" \
               "$(grep -oE '[0-9]+ failures' "$M8LOG" | grep -oE '^[0-9]+')" "0"
     check_min "m8820x: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 23
+              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 24
     check     "m8820x: offline verdict" "$(grep -c 'DIFF_M8820X_PASS' "$M8LOG")" "1"
     #  The whole-window sweep, and the harness-fault rows that keep its number honest.
     check "m8820x: the whole-window sweep rows are present" \
@@ -631,7 +631,7 @@ else
     #  the cheapest being ONE DELETED CHARACTER (`!all` -> `all`) that turns every
     #  FLUSH_*_ALL into a single-page flush: the exact under-invalidating TLB this round
     #  exists to prevent.  D3-D6 seed a SPREAD and assert which entries SURVIVE.
-    check "m8820x: the flush-scope rows are present"           "$(grep -cE 'drops exactly one entry|drops every supervisor entry|leaves every supervisor entry|drops at least what a PAGE flush' "$M8LOG")" "4"
+    check "m8820x: the flush-scope rows are present"           "$(grep -cE 'drops exactly one entry|drops every supervisor entry|leaves every supervisor entry|drops at least what a PAGE flush|drops every user entry' "$M8LOG")" "5"
     #  D7 uses a counter that was already in the file and never asserted on: clearing the
     #  PATC while leaving the emulator's OWN translation cache is the same failure by
     #  another route.

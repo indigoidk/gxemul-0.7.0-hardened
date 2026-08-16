@@ -4513,3 +4513,26 @@ trusted: the first run reported all three probes dying, INCLUDING the control wi
 of 12. The cause was `d->addrmult` left 0 by `calloc`, and `dev_ns16550_access:138` divides
 `relative_addr` by it — so the harness produced **SIGFPE for the wrong reason**, indistinguishable
 from the defect under test. The control row is the only thing that separated them.
+
+### A panel-completeness audit found a surviving mutant, and the audit is the finding
+
+Asked what remained to complete the panels, I audited all eight fired today rather than asserting
+they were done. **Every seat produced a substantial answer in every panel — no seat failures.**
+But several answers had never been READ: codex and kimi on two panels, and **the entire seven-seat
+script panel for R7 pass 2**, where I had acted only on the Opus agent's report.
+
+An unread answer is worse than a seat failure. A failure is recorded honestly and counted as
+absence; an unread answer is silently discarded while the round is reported as reviewed.
+
+Reading them changed something. All seven independently traced the fold and confirmed it correct,
+converging with the measuring seat — but **agy named a mutant my own census had never run**:
+deleting `cmd == CMMU_FLUSH_USER_SEGMENT` from the `all = 1` set, which makes a USER segment flush
+page-granular instead of full-table. Run against the 23-row differential it **SURVIVED**.
+
+The cause is an asymmetry worth remembering: every flush-scope row drove a SUPER command except
+one, which was USER *ALL* rather than USER SEGMENT. The supervisor half of the property was
+pinned and the user half was not — exactly the shape a single-sided row hides. Row D6b closes it,
+and the census is now **14 mutants, 14 killed, 0 survived, 0 faults**.
+
+**The rule this yields: a panel is not complete when its seats have answered, only when they have
+been READ.** Firing nine seats and reading four is a four-seat review reported as nine.
