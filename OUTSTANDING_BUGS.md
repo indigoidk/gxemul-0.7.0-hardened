@@ -4292,3 +4292,44 @@ initial count is 0; this is equivalent to 2^16 for binary counting and 10^4 for 
 So `dev_8253.c:125`'s `else hz = 0` — which the timer core then floor-clamps to 1e-8 Hz, i.e.
 never fires — is wrong against the hardware convention: count 0 means 65536. Cite it as the 8254,
 not the 8253; the count-0 convention was verified in the 8254 document only.
+
+### m8820x: REPRODUCED test-first, and it is worse than the audit filed
+
+Before any edit, an offline driver (`_scratchpad`, not committed) drove **every word offset in the
+mapped window** through the shipped `dev_m8820x_access`, each probe in a forked child so one host
+kill did not end the run. Measured on the committed build:
+
+| | |
+|---|---|
+| word offsets in the 4 KB window | **1024** |
+| offsets whose **READ** kills the host | **1013** |
+| offsets whose **WRITE** kills the host | **1015** |
+| offsets whose READ survives | **11** |
+
+So **99.0% of the window terminates the host process on a plain read.** The audit filed this as a
+`default:`-arm problem; the measurement shows the in-arm exits add to it — there are four `exit(1)`
+calls inside the handler, and only 11 of the 18 handled offsets survive a read.
+
+The count of handled offsets is **18**, confirmed by listing the case labels
+(`CMMU_IDR SCR SSR SAR SCTR PFSR PFAR SAPR UAPR BWP0-7 CSSP0`). The first filing said 21; a
+pass-2 seat caught it and the correction makes the finding stronger, not weaker.
+
+**This is the first item in this sequence whose detector can be ONLINE** — luna88k boots in this
+tree — but the offline driver above already reproduces it, so the fix is test-first-able today
+either way. `memory_rw.c:572-578` already plumbs the `#220` `cpu->running = 0` return path.
+
+### Seat health: minimax-m3 is an UPSTREAM OUTAGE, and the three failure modes are now separable
+
+`minimax-m3:cloud` returned `HTTPError 500` on the R6 pass-2 brief and again on a single-seat
+resend. Diagnosed rather than assumed, because this seat has three historically distinct failure
+modes that look identical in the output file:
+
+* **the endpoint is alive** — `glm-5.2:cloud` answered a one-line ping immediately;
+* **the model is still served** — `minimax-m3:cloud` is present in `/api/tags`;
+* **so it is neither a quota wall nor the file-reading stall** that used to characterise this seat
+  (it had answered four consecutive packet briefs before this).
+
+That leaves a server-side fault in the model backend. Recorded by name, never counted as
+agreement, and **re-test before pruning** — this project has now been wrong three times about a
+seat being permanently dead. Note `minimax-m2.7:cloud` is also served and could stand in; if it
+is ever used it must be recorded as a SUBSTITUTE, never as "the minimax seat".
