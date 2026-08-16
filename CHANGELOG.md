@@ -4192,6 +4192,116 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R4 (#427, #428, #429) — the timer core clamped one end of a frequency and left the other unbounded
+The first round in this sequence to touch the EMULATOR rather than the harness, so all three
+source files land byte-identical in `GXEMUL-SEC`, `est/` and both build trees, and the round states
+which of its claims are proven now and which wait for a rig.
+
+**The panel's own disagreement was the finding.** Seven seats proposed a frequency ceiling between
+32,768 Hz and 10 MHz — a factor of three hundred — and that spread is what a wrong instrument looks
+like. The measured harm is not "a high frequency" but ITERATIONS PER SIGNAL in a handler with no
+cap: even the largest proposed ceiling leaves ~153,846 of them per signal, while the smallest alters
+requests a guest is entitled to make. The ceiling is therefore demoted to domain normalisation and
+**the catch-up bound is the protection**.
+
+- **#427, the domain, derived not chosen.** `machine->emulated_hz` is an `int` and every rate derived
+  from it divides by at least one, so INT_MAX bounds every legitimate request in the tree;
+  `TIMER_MAX_FREQUENCY` is the least clamp that truncates nothing. Both clamps are NaN-safe **by
+  negation** — and precisely, because a census measured it: THE FLOOR'S NEGATION IS THE ONE THAT
+  CATCHES NaN, since a NaN never reaches the ceiling test at all. The ceiling is negated anyway so
+  the two read as one idiom and neither can later be reordered into a hole. The floor is tested
+  first, so a NaN lands SLOW rather than fast.
+- **#428, the catch-up bound, with the backlog RETAINED.** `TIMER_MAX_CATCHUP` = 2^20 ticks per timer
+  per signal, derived from both sides: 65,536 breaks a legitimate 40 MHz timer (delivered rate
+  1.0000 → 0.1065), and an iteration costs 2.16–2.82 ns, so 2^22 would fill 59–77% of a host period.
+  Dropping missed ticks was rejected BY MEASUREMENT: catch-up *is* the delivery mechanism above
+  65 Hz, so dropping caps every timer at 65 Hz and a 100 Hz timer falls to 0.65 of real time with no
+  burst at all. The cap hit is recorded in a `sig_atomic_t` and reported from `timer_stop()`, never
+  from the signal handler.
+- **#429, the RTC narrowing.** `dev_rtc` range-checks in the uint64 domain BEFORE narrowing to `int`,
+  because the narrowing is the defect: a guest write of 2^32 — or of 0x8000000000000000 — truncated
+  to zero and turned an ADD into a silent REMOVE (both measured), and a write with bit 31 set became
+  negative, so a guest asking for the fastest rate got one tick per three years. `idata == 0` keeps
+  its documented meaning. `timer_update_frequency` now clamps ABOVE its early-out: clamping at the
+  store alone is not merely insufficient but a REGRESSION, measured to lose idempotence on five of
+  six input classes because the early-out would then compare a clamped record against a raw request.
+
+**The detector is OFFLINE, which was the round's open question.** `regress/diff_timer.c` drives the
+SHIPPED `timer.c` — `timer_tick` is static, so the driver `#include`s the repo file; the one stub is
+`gettimeofday`; no signal handler is ever installed, so no host clock enters and the rows are not
+load-sensitive. Every constant is READ FROM THE HEADER, never transcribed. 14 rows in gate 2.
+
+**Measured against six mutants in copies:** no ceiling, clamp-below-the-early-out, unbounded
+catch-up, both-clamps-written-plainly, and the drop-the-backlog policy all go RED; the shipped file
+passes. Two further mutants survived and are recorded as understood rather than waved away: a
+plainly-written CEILING survives because the negated FLOOR catches NaN first, and a drop applied
+only at cap-hit is inert because the schedule is already ahead of the clock there.
+
+**Three of the round's own test rows went red on correct code** and were fixed as TEST defects, not
+code changes — a per-signal bound asserted against a two-period run, and two exact-count rows that a
+floating-point period sum lands a hair under. They are floors now, with the arithmetic recorded.
+
+**The pre-commit check caught two things the commit message would otherwise have claimed past:** the
+new differential had no IDENTITY row, and all three source files DIFFERED FROM THE BUILD TREES —
+the "measuring a stale binary" class. Both are fixed; the affected `.o` files were removed so the
+next build is a real one. *(Correction to `863d238`'s message: it says 13 rows; the identity row
+makes 14, and it predates the build-tree propagation.)*
+
+**Waits for the battery, stated plainly:** this proves the ARITHMETIC and the POLICY, not the
+INTEGRATION. Only a booted rig can show that the twelve untouched callers still boot and keep time,
+that a guest writing 0x7fffffff leaves the emulator responsive, and that boot times do not regress.
+
+**Verified:** gate 2 PASS at 148 checks (was 141); diff_timer 14 rows / 0 failures; both changed
+source files compile clean; `est/` and both build trees byte-identical on all three.
+
+## R3 (#425, #426) — the gate graded constants the run never used, and a green row said so
+Gate 5 range-checks the progress constants the driver reports, and the driver read them TWICE — once
+for the call that ENFORCES them, once for the record block the gate GRADES — with nothing tying the
+two reads together.
+
+**The hole was observed before it was fixed**, because a predicted false pass is a hypothesis.
+Mutating only the call site left control and mutant outputs byte-identical apart from telemetry and
+the gate's rows PASSING 11/11, while the run went from stopping at `REASON=BUDGET` with 13 G to
+running on to `REASON=STALLED` at 20 G — both printing the same BUDGET. And a luna88k output with
+`BUDGET=0` printed, literally, `ok luna88k: budget is deliberately absent (uncalibrated rig)` at
+11/11: a GREEN ROW STATING A FALSEHOOD about a rig whose calibrated budget is 12 G, while the
+calibrated range never ran. Negative-controlled both ways — landisk's legitimate zero stays green
+under both orders.
+
+- **#425** `boot_progress` records its FORMAL PARAMETERS and the record block prints those. Sharing a
+  local is NOT enough, and four review seats proposed it: the mutation rewrites the ARGUMENT
+  EXPRESSION, so a local — and any print taken from it — stays honest. A local proves what the caller
+  INTENDED TO PASS; only the callee's parameters prove what it RECEIVED. The `.get` defaults are
+  dropped with it, since `.get("stall", 120)` on both paths would make an omitted key print a PASSING
+  120 where today it prints a FAILING 0.
+- **#426** `budget_class()` moves to `lib.sh` — which is what makes the branch exercisable offline
+  instead of only under a weekly boot — and the gate asks for a CLASS with the calibrated case
+  decided before the zero case. Zero on a calibrated rig is `zeroed` and RED, not a skip: the gate
+  HOLDS the calibration, so a skip would claim an ignorance it does not have.
+
+**`selftest_budget.py` is the straddle**: it reads `BUDGET=N` from the driver's OWN OUTPUT — never a
+literal, because passing literals is the precedent that left this hole open — then runs one leg under
+N and one over it. Measured to kill three mutants in copies: the call-site multiply, a multiply AT
+THE COMPARISON, and a deleted stop, with the unmutated copy passing. The comparison mutant is the one
+no printing scheme can catch.
+
+**The review found five defects, four of them in the file the round added** — the "offline" gate
+required the image directory; the straddle passed a LITERAL, the exact practice its own docstring
+forbids; an omitted rig key raised after `pty.fork()`; the comment claiming the straddle covers
+in-body mutations was measured false twice; and the gate's default want-mapping would auto-bless an
+unknown rig's zero. All fixed in `48b36b0`.
+
+**And a defect that SURVIVED that follow-up** (`521085b`): dropping the `.get` defaults decapitated
+gate 2's OTHER driver selftest, because a third rig dict declared neither key — and both its rows
+kept passing, since the log files are opened before the raise. The wrapper had been reporting the
+exception all along, into `DEVNULL`. Caught by TIMING: 1.573 s and fifteen driver lines became
+0.062 s and one, still PASS. The wrapper's output is now GRADED, and the negative control states the
+defect better than prose: with the keys removed the two log rows STILL read yes/yes while
+`driver_ran` reports the KeyError.
+
+**Verified:** gate 2 PASS at 141 checks; selftest_budget 7 rows / 0 failures; selftest_logdir PASS
+with `driver_ran=yes` and FAIL under the negative control.
+
 ## R2 (#424) — the parser selftest ran nowhere, and could not see a mutant that moves text
 `regress/selftest_absorb.py` shipped in r421 to test the pty record parser and was invoked by NO
 GATE: dead coverage. The deeper defect was in its shape. Its helper returned `body + tail` and 27 of
