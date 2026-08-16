@@ -4549,3 +4549,20 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   the walker's own 4 MB segment size, `(sar ^ vaddr) & 0xffc00000`. Not done in R7 because it is
   a behaviour change and the round's claim was only that the host stops dying. The comment at
   `dev_m8820x.c:161` is corrected; what real silicon does at segment granularity is UNKNOWN.
+
+- **ASSESSED, NOT CHANGED — the ns16550 shape is singular in this tree.** A task the R6 pass-2
+  kimi seat named, in an answer that had gone unread for a day: *"a one-grep sweep for other
+  divisions in `debug()`/`fatal()` argument position with guest-writable operands — ns16550 is
+  unlikely to be the only instance of that specific shape."* A grep cannot answer it — the
+  operator has to be in ARGUMENT position with literals and comments already stripped, and the
+  call may span lines — so `regress/diag_div_sweep.py` balances the parens and does it properly.
+  **MEASURED: 24 sites, 22 with a compile-time-constant divisor (which cannot be zero, so are
+  not the shape), 2 non-constant.** Those two are `dev_ns16550.c:79` (`115200 / d->divisor`, the
+  known one, filed as `ns16550`) and `diskimage.c:543` (`bytes_left % ct->sector_size`), and the
+  second is **not drivable**: every unrecognised TRACK mode does `goto fail` at `:819` while
+  `nr_of_pt` is incremented only at `:823`, so a counted track always carries 2048/2336/2352 —
+  and the plain division at `:974` would fault first regardless of any diagnostic. So kimi's
+  hypothesis is **refuted by measurement**, which is a result worth having rather than a
+  non-event. The sweep is committed and wired into gate 6 as a two-row class ratchet (the count
+  AND the denominator, so a sweep that silently stopped finding anything cannot read green), and
+  negative-controlled in both directions: planting one instance moves it to 3/25.

@@ -41,7 +41,7 @@ gate_begin "log-hygiene"
 #  way (MIPS, PPC, SH, m88k all do).
 #
 #  THE CONVERSION HAS LANDED (#392), so EXPECT_BARE is now 0 and this is a
-#  RATCHET AGAINST REGRESSION rather than against spread.  All 14 sites now take
+#  RATCHET AGAINST REGRESSION rather than against spread.  All 15 sites now take
 #  a fresh mark before the write, require the FULL prompt in that slice, and
 #  require the command's own echo first.
 #
@@ -115,12 +115,20 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  the ABSENCE of the bad spelling is not enough: a site could be deleted, or
 #  reverted to something that is neither the old form nor the new one, and the two
 #  checks above would both stay green.  So count the three constructs the
-#  conversion introduced and require all fourteen of each.
+#  conversion introduced and require all fifteen of each.
 #
 #  Exact equality again, and for the same reason as EXPECT_BARE: a ">=" would let
 #  a site quietly disappear.  If a probe legitimately gains or loses a wait site,
 #  this number is edited deliberately, in the same commit, by someone who looked.
-EXPECT_CONVERTED=14
+#
+#  14 -> 15 on 2026-08-16: m8820x_sites_probe.py.  It shipped in 9494c6a with the
+#  anchored form and the echo guard but NOT the pinned call form -- so two of the
+#  three counts went to 15 and this gate went red, correctly, on a commit that had
+#  never been run past it.  The probe is converted rather than exempted, and the
+#  conversion was not free: reordering wait()'s parameters turned an existing
+#  positional wait(120) into mark=120, which is a real behaviour change and is
+#  fixed in the same commit.  That is the argument for the exact-equality pin.
+EXPECT_CONVERTED=15
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not
@@ -194,6 +202,42 @@ check "readiness: truth table keeps its 2 bad arms" \
 #  give the ECHO conjunct its behavioural coverage, and the leftover demo.
 check "readiness: truth table keeps its good arms + leftover demo" \
       "$( [ -f "$rpt" ] && rpt_code | grep -o 'endswith("GXemul>")' | wc -l || echo missing)" "5"
+
+#  ---------------------------------------------------------------------------
+#  A CLASS RATCHET, not a bug fix.  Task from the R6 pass-2 kimi seat, whose
+#  answer had gone unread for a day: "sweep for other divisions in
+#  debug()/fatal() argument position with guest-writable operands -- ns16550 is
+#  unlikely to be the only instance of that shape."
+#
+#  The shape is worth a ratchet because C evaluates an argument whether or not
+#  the callee prints it, so a division there runs at EVERY verbosity.  A grep
+#  cannot find it: the operator has to be in argument position with literals and
+#  comments already stripped, and the call may span lines.  diag_div_sweep.py
+#  balances the parens and does that; it also splits constant divisors (which
+#  cannot be zero, so are not the shape) from drivable ones.
+#
+#  MEASURED 2026-08-16: 24 sites, 22 constant, 2 non-constant -- so kimi's
+#  hypothesis is REFUTED, and the ratchet is what keeps the refutation true.
+#    * dev_ns16550.c:79   115200 / d->divisor  -- the live one, filed `ns16550`
+#    * diskimage.c:543    bytes_left % ct->sector_size -- NOT drivable: every
+#      unrecognised TRACK mode does `goto fail` (:819) and nr_of_pt is
+#      incremented only after (:823), so a counted track always carries
+#      2048/2336/2352.  The plain division at :974 would fault first regardless.
+#  A THIRD site means someone added a new instance of the class: read it before
+#  raising this number.
+DIVSWEEP=$HERE/diag_div_sweep.py
+if [ -f "$DIVSWEEP" ] && command -v python3 > /dev/null 2>&1; then
+    dsout=$(python3 "$DIVSWEEP" 2>/dev/null)
+    check "class ratchet: drivable divisions in diagnostic argument position" \
+          "$(printf '%s\n' "$dsout" | grep -oE 'DIAG_DIV_NONCONST=[0-9]+' | cut -d= -f2)" "2"
+    #  The denominator too: if the sweep silently stopped finding ANYTHING the
+    #  count above would still read 2 only by luck, and a zero total is the
+    #  classic vacuous green.
+    check "class ratchet: the sweep still sees the whole call set" \
+          "$(printf '%s\n' "$dsout" | grep -oE 'DIAG_DIV_TOTAL=[0-9]+' | cut -d= -f2)" "24"
+else
+    note "diag_div_sweep.py or python3 missing -- class ratchet NOT run"
+fi
 
 PLOG=$LOGDIR/pmax.ptylog
 ALOG=$LOGDIR/arc.ptylog

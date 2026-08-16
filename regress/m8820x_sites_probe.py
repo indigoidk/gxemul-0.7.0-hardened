@@ -68,7 +68,13 @@ def run_row(name, is_store, imm16, r4val, note):
         buf += d.decode("latin1", "replace")
         return True
 
-    def wait(timeout=60, mark=0, echo=None):
+    #  Signature order is not free choice: gate_hygiene.sh pins the CANONICAL
+    #  #392 call form as a literal `return wait(mark=_mark, echo=<x> if <x>
+    #  else None)`, deliberately tightened three times because every looser
+    #  prefix was a substring of the broken form too.  Written any other way,
+    #  a probe is simply not covered by that ratchet -- which is worse than
+    #  failing it.  So timeout goes last, and send() ends on the pinned form.
+    def wait(mark=0, echo=None, timeout=60):
         t = time.time()
         while time.time() - t < timeout:
             if not rd():
@@ -90,10 +96,15 @@ def run_row(name, is_store, imm16, r4val, note):
         except OSError:
             dead[0] = True
             return False
-        return wait(timeout, mark=_mark, echo=x if x else None)
+        return wait(mark=_mark, echo=x if x else None)
 
     status, dis, fatal, r4got = "?", "", "", None
-    if not wait(120):
+    #  KEYWORD, and this is not style.  Reordering wait()'s parameters to the
+    #  pinned #392 form silently turned this positional 120 into mark=120 --
+    #  the probe would have waited on a slice of an empty buffer with a 60 s
+    #  budget instead of 120 s for the cold prompt.  A conversion done for a
+    #  detector's benefit is still a code change.
+    if not wait(timeout=120):
         status = "NO-PROMPT"
     else:
         send("r5=0x%08x" % CMMU_D0)
@@ -151,7 +162,4 @@ ROWS = [
 results = [run_row(*r) for r in ROWS]
 print("SURVIVED=%d of %d" % (results.count("SURVIVED"), len(results)))
 print("M8820X_SITES_%s" % ("PASS" if results.count("SURVIVED") == len(results) else "FAIL"))
-ok = 0
-for r in ROWS:
-    pass
 print("PROBE_WALL=%.1fs for %d rows" % (time.time() - t0, len(ROWS)))
