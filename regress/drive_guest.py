@@ -273,8 +273,17 @@ def drive(rig, binary):
         A pty read can END IN THE MIDDLE OF A RECORD, so any trailing fragment that could
         still become one is HELD BACK rather than classified -- otherwise half a record
         leaks into the match buffer and the other half is stripped, which corrupts exactly
-        the assertions this rig makes. The hold is bounded: a newline or a ']' releases it,
-        so a guest line containing a bare '[' cannot stall the buffer.
+        the assertions this rig makes. The hold is bounded: A NEWLINE releases it, or the
+        held fragment reaching HOLD_MAX -- so a guest line containing a bare '[' cannot
+        stall the buffer.
+
+        NOT a ']'.  This sentence used to say "a newline or a ']' releases it", and a
+        review seat caught that split_stream()'s OWN docstring thirty lines below says the
+        opposite in as many words: "HOLD ON A MISSING NEWLINE, not merely on a missing
+        ']'.  Testing only for ']' let a bracket-complete but unterminated record through."
+        The code is right and agrees with the lower docstring; this one was left behind
+        when the condition was tightened.  Same shape as three other corrections this
+        week: when a claim is fixed, its siblings have to be grepped for.
 
         The splitting itself lives in split_stream() at module scope, so a selftest can
         exercise it directly. That is not tidiness: the GATE CAN ONLY SEE THIS DRIVER'S

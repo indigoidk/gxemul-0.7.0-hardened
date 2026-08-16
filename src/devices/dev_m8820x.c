@@ -322,8 +322,12 @@ DEVICE_ACCESS(m8820x)
 		 *  DISTINCTION WAS MEASURED RATHER THAN ASSUMED.  A count that large reads
 		 *  like a performance case and was very nearly written up as one; the A/B
 		 *  found NO MEASURABLE IMPROVEMENT ON THIS RIG AT THIS RESOLUTION -- 59.3 vs
-		 *  60.2 Minstr/s across six boots, against a documented 3.57% idle-run
-		 *  spread, and 127.3 s vs 127.0 s to `login:`.  That is not the same as "no
+		 *  60.2 Minstr/s across six boots, against a documented run-to-run spread
+		 *  of 3.57% ACROSS EIGHT IDLE RUNS -- 6.42% once an 8x host-speed range is
+		 *  included (regress/lib.sh:211).  Both populations are named because two
+		 *  review seats found the bare "3.57%" being quoted elsewhere without saying
+		 *  which runs it came from; the conclusion here holds under either figure,
+		 *  and holds more strongly under the wider one.  That is not the same as "no
 		 *  performance effect on any guest or workload", and a pass-2 seat was right
 		 *  to make us say which one we measured.  The justification that stands
 		 *  alone is the semantic one.

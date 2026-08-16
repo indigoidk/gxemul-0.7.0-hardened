@@ -4628,3 +4628,43 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
   Not folded into #434 because it is a second behaviour change on the write side, and #434's
   claim is the one that was A/B measured. The detector rows already exist (`diff_m8invread.c`
   section E) and would need their per-register expectations re-pinned rather than rewritten.
+
+### The dashboard rendered three different failures as one blank cell, and one of them was real
+
+The owner spotted blank cells and asked. Three distinct causes, only findable by looking at each:
+
+1. **A rendering bug, and the worst-placed one possible.** 59 ledger entries were keyed `opus`
+   while the column is declared `opus5`, so `cell()`'s `x["seat"] == seat["id"]` matched nothing
+   and **every one of them rendered nowhere** — the measure seat, the one that overturns
+   conclusions by compiling and running. Its work was simply not on the dashboard, and the blanks
+   read as "that seat never answered", the exact opposite of the truth. `gen_dashboard.py` now
+   REFUSES to render and exits 2 when any entry names an undeclared seat, listing each offender
+   and its entry count. Negative-controlled both ways.
+2. **Legitimately blank, now said out loud.** `tfreq` has no assessment phase because it was
+   raised *during* the n2/n4 assessment and folded into that round. Recorded as an explicit
+   entry, because a blank cell and a seat failure must never look alike.
+3. **THREE PANELS WHOSE SEATS ANSWERED AND WERE NEVER RECORDED.** The dangerous class. Two were
+   caught by the owner's eye; the third by the check written in response.
+
+**What the three unread panels contained, all real:**
+- `panel_20260815_202720` / kimi, 192 KB → **gate 2 has ZERO coverage of `dev_rtc.c`** (no
+  compile, no row, `grep -c rtc gate_offline.sh` = 0), so #429's fix can be reverted and gate 2
+  stays green. Filed `rtcgate`. The vacuity class in its purest form, proven by construction.
+- `panel_20260816_024410` / kimi, 99 KB, **in a round that had already shipped** →
+  `diff_m8invread`'s spy counts *callback calls*, so a mutant clearing the dyntrans arrays
+  directly passes all 21 rows. Filed `m8invground`.
+- `panel_20260815_020427` / **six seats** on the closed `r420` → `drive_guest.py`'s `absorb()`
+  docstring claimed "a newline or a `]` releases it" while `split_stream()`'s docstring thirty
+  lines below says the opposite explicitly and the code agrees with the lower one. **Fixed.**
+  Two seats independently found the `3.57 %` spread quoted without its population; `lib.sh:211`
+  states both figures correctly (3.57 % over eight idle runs, 6.42 % over an 8× host-speed
+  range) but downstream citations drop the qualifier — **including two I wrote in R8 this week**,
+  now corrected. Filed `xfamscope` for two smaller crossfamily residuals.
+
+**The fix that makes it not recur:** `pipeline/check_seats_read.py`, wired into
+`precommit_check.sh` as a HARD section G. Once a ledger entry cites a panel directory, every
+seat in it that produced a substantial answer (≥ 800 b, the same threshold `panel.sh` uses) must
+be cited by some entry for that seat. It found the `r420` case within a minute of being written.
+
+**The rule:** *a check a human has to remember is a check that eventually does not happen.* Both
+of the first two were found by a person noticing a blank square on a web page.

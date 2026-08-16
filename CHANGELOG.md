@@ -4204,7 +4204,10 @@ mapping. Measured on the luna88k rig that boots: **~286,500–292,000 such reads
 
 **1. The reason for shipping was measured and replaced.** A count that large reads like a
 performance case, and it very nearly shipped as one. The A/B says otherwise: 59.3 vs 60.2
-Minstr/s over six boots against a documented 3.57% idle spread, 127.3 s vs 127.0 s to `login:`.
+Minstr/s over six boots against a documented run-to-run spread of **3.57% across eight idle
+runs** (6.42% once an 8x host-speed range is included, `regress/lib.sh:211` — both populations
+named, because two seats found the bare figure quoted without saying which runs it came from),
+127.3 s vs 127.0 s to `login:`.
 So the record claims only what holds — a read changes no translation — and explicitly does *not*
 claim a speedup.
 
