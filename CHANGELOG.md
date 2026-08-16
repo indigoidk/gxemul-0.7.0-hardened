@@ -4192,6 +4192,134 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R9 (#435) — half of this device's translation-cache purges were for registers nothing reads
+
+`dev_m8820x.c` grouped six CMMU registers and purged the emulator's whole dyntrans mapping on
+any write to any of them. Only **two** of the six are read by `m88k_translate_v2p` — `SAPR` and
+`UAPR` (`memory_m88k.c:135,137`). The arm is split: those two purge and store, the other four
+store only.
+
+Measured on the luna88k rig, baseline instrumented run: **627,383 purges from this arm per
+boot-to-login, of which 614,266 (97.9%) were for registers the translator never reads — 49.9% of
+every `INVALIDATE_ALL` the device issued in that run, of any kind.**
+
+**The panel changed the design twice, and both were my errors.**
+
+**1. "No consumer reads these" is FALSE for `SAR`,** which two seats caught. `SAR` *is* read — at
+`dev_m8820x.c:110`, by `m8820x_command()`. The four registers qualify for **three different
+reasons**, and the comment now gives all three: `PFSR`/`PFAR` have no translation consumer at
+all; `SAR` has one, but it is the flush command, and *that arm purges itself*; `SCTR` is dead in
+this model. A filing of mine that put `SCTR` in the translation-changing bucket is also corrected.
+
+**2. A seat supplied the strongest evidence in the round, which I had not articulated:** the
+model *already* relies on "a PFSR write owes no purge". The fault path writes `PFSR` and `PFAR`
+**directly through `reg[]`** with no purge (`memory_m88k.c:382-405`), ~10⁵ times per boot, against
+2 guest writes per boot through this handler. If that owed a purge the model would already be
+wrong, five orders of magnitude more often than here.
+
+**The detector needed re-pinning, and the forward note that predicted it was off by one.**
+`diff_m8invread.c` is gated, and this change makes four of its rows false — **not the three my own
+note in that file predicted**. E9 was the extra one, because it welded a purge assertion to a
+store assertion and only the purge half moved; it is now split into E9a (store, all six) and E9b
+(purge, per-`owes`). The note is kept, corrected, because a prediction you can check beats a rule
+you have to remember — but it is why the rule is *re-pin in the same commit and re-run*.
+
+**The census, and three ways it was nearly wrong:**
+
+| mutant | outcome |
+|---|---|
+| drop the store as well as the purge | killed by E9a — it is the natural over-reading of this round's own argument |
+| silently reintroduce purge-on-**read** (undo #434) | killed by E1/E2 |
+| equality guard on **SAPR** | killed by F4 |
+| equality guard on **UAPR only** | **survived**, until F4 was generalised |
+| split applied to the wrong group | killed by E3/E4 |
+
+At that point: **10 attempted, 10 killed, 0 survived, 0 faults** — which pass 2 then
+showed was measuring the wrong thing entirely. See below.
+
+The UAPR one is worth the detail. A pass-2 seat **predicted it while unable to compile anything**
+— read-only sandbox, no compiler — reasoning that F4 repeated a same-value write to `SAPR` alone
+while every other `UAPR` write in the file changes its value. My first attempt to test that
+prediction anchored the mutant on `if (writeflag == MEM_WRITE) {`, **which occurs five times in
+the file**, so it patched a different case arm and reported SURVIVED without ever touching
+`UAPR`. A non-unique anchor silently mutates the wrong site and the result is indistinguishable
+from a real survivor — *mechanical rule 4 applies to a census as much as to a gate*. Re-anchored
+on the unique arm text, then run against the row set **as it was**: `DIFF_M8INVREAD_PASS`, 23
+rows, 0 failures. Prediction confirmed, and only then was F4 generalised to both area pointers.
+
+**Records corrected, all of them ours, all found by pass 2:**
+- the #434 block still said the write side was "deliberately UNCHANGED" and this item "not folded
+  in here" — true when written, false one round later;
+- a claim that dropping the handler store would make PFSR reads return zero — **false**, the fault
+  path writes PFSR directly and never through this handler;
+- "no pointer is ever taken into `reg[]`" — literally false; the two local `regs` bases at `:108`
+  and `:251` are pointers, and the defensible claim is that neither escapes;
+- "the only code that iterates a CMMU" — overbroad; it is the only code iterating the `cmmu[]`
+  *pointer array*;
+- `SCTR`'s "real bits are parity/snoop/arbitration" — exceeds the declared UNKNOWN silicon grade;
+  what is confirmed is that the local *header* gives those names;
+- **the "F1 is the only row that catches mutant A" claim, a SECOND copy**, in the same file, one
+  round after the first was retracted — the grep-for-siblings rule failing twice on one sentence;
+- the cross-boot subtraction (614,634) presented as if it were the baseline's 614,266 — it is an
+  *observed cross-boot reduction*, and the control that does not depend on boot variation is the
+  **within-run identity**: post-split `arm_purges` 12,749 == SAPR 5 + UAPR 12,744, exactly;
+- F4's rationale, honestly downgraded: an unchanged APR word changes no translation input, so
+  skipping that purge is **not** under-invalidation in this model. F4 is a **shape pin**, not a
+  proof of harm, and calling it dangerous was too strong.
+
+**A gate check that worked by accident**, also from pass 2: the E9 presence check grepped
+`purges exactly as much as it owes` and expected 3 — which matched E9a, E9b **and E4**. Now
+anchored on the `E9a`/`E9b` identifiers with an expected count of 2. That is the title-string
+dependency the surrounding comment criticises, committed in the same edit that criticised it.
+
+**THE PASS-2 FINDING THAT MATTERED MOST: splitting an arm silently narrows every row that
+pinned a property of it.** The re-pinning above handled the rows that went RED. The measure seat
+then drove **seven mutants through the rows that stayed GREEN, five of them real defects.** The
+root cause is one sentence: **#435 created a second store site, and G1–G5 — the rows that exist
+specifically to pin store-site selectors — all drive `CMMU_SAPR`, which the split left in the
+*other* arm.** So the new store-only arm had zero owner/CMMU coverage. Symmetrically, every
+purge-asserting row runs with `cpu_nr` and `cmmu_nr` at 0 because `fresh()` memsets `dev`, so a
+purge gated on either selector was invisible.
+
+The smallest survivor was one appended clause — `if (writeflag == MEM_WRITE && d->cmmu_nr == 0)`
+— **structurally the same attack as the historical `&& idata` mutant this file already records
+as having survived sixteen rows.** Adding a second `if (writeflag == MEM_WRITE)` re-opened it on
+a *selector* instead of on data.
+
+Not theoretical, and measured: `dev_luna88k.c:1001-1004` registers `cmmu_nr` 0 and 1 on **every**
+boot including the single-CPU rig, and the data CMMU — the one `memory_m88k.c:112` uses for every
+data access — takes **318,457 of the 613,342 SAR writes, 51.9%**. A witness driving SAR *through
+the handler* shows the consequence directly: **the wrong page is flushed and a stale supervisor
+translation is kept.** Rows **G6–G9** close all five; the census is now **15 attempted, 15 killed,
+0 survived, 0 faults**, each selector mutant dying to a named G6–G9 row.
+
+Two honest exclusions from that count: a purge-order mutant survives but is **inert**
+(`DYNTRANS_INVALIDATE_TC` never reads `reg[]`), and "the BATC arm's purge is untested" is
+**pre-existing**, not introduced here — filed, not counted as this round's.
+
+**A third title-string break, and the systematic fix.** Three presence checks in `gate_offline.sh`
+broke in this one round — E9 (row split), F4 (row generalised), and the register-file check (a new
+row's prose happened to match its pattern) — each reddening a *presence* check while the rows
+themselves were fine. **Every m8invread presence check is now anchored on row identifiers**
+(`^  (ok|FAIL) +E1 `) rather than on prose. A presence check keyed to a title is a string
+dependency on a file it does not own; row identifiers are stable by construction.
+
+**Two more records defects, both from pass 2:**
+- `PFAR (:399-405)` — a bare line range after a `dev_luna88k.c` citation **inherits that
+  filename**, and `dev_luna88k.c:399-405` is a keyboard scancode switch. It is
+  `memory_m88k.c:399,405`, two discrete lines, not a range.
+- "`SCTR` appears nowhere in `src/` outside its own case label" — **literally false**, and the
+  next sentence relies on the header it denies. `CMMU_SCTR` is defined at
+  `thirdparty/m8820x.h:64` with its bit macros at `:118-120`. The substantive claim holds and is
+  now said precisely: *no code in `src/` ever reads `reg[CMMU_SCTR]`*.
+
+Gates: offline-differential **PASS, 213 checks**; luna88k **1:1:1 to `login:`** with zero
+`m8820x` diagnostics, on the final built binary.
+
+Filed rather than done: **`m8patc`** — a `SAPR`/`UAPR` write does not invalidate the *guest's*
+PATC either. Pre-existing, and `SAR`'s purge never covered it, so this round removes nothing that
+was guarding against it.
+
 ## R8 (#434) — a guest READ of six CMMU registers purged the whole translation cache
 
 `dev_m8820x.c` grouped `PFSR`, `PFAR`, `SAR`, `SCTR`, `SAPR` and `UAPR` and called

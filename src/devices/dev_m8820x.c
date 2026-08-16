@@ -301,12 +301,71 @@ DEVICE_ACCESS(m8820x)
 		}
 		break;
 
-	case CMMU_PFSR:
-	case CMMU_PFAR:
-	case CMMU_SAR:
-	case CMMU_SCTR:
-	case CMMU_SAPR:		/*  TODO: Invalidate something for  */
-	case CMMU_UAPR:		/*  SAPR and UAPR writes?  */
+	/*
+	 *  #435: THE ARM IS SPLIT, BECAUSE ONLY TWO OF THE SIX CAN CHANGE A TRANSLATION.
+	 *
+	 *  Measured on the luna88k rig that boots, BASELINE RUN (instrumented, pre-split):
+	 *  this arm issued 627,383 whole-cache purges per boot-to-login, of which 614,266
+	 *  (97.9%) were for registers the translator never reads -- 49.9% of every
+	 *  INVALIDATE_ALL the device issued IN THAT RUN, of any kind.
+	 *  
+	 *  The post-split run gives arm_purges 12,749, an observed CROSS-BOOT reduction of
+	 *  97.97%.  That subtraction (614,634) is NOT the same quantity as the baseline's
+	 *  614,266, because boot-to-boot variation is real and documented here, and a
+	 *  pass-2 seat was right to say so.  The control that does not depend on it is
+	 *  WITHIN-RUN: in the post-split run arm_purges == 12,749 == SAPR 5 + UAPR 12,744,
+	 *  EXACTLY.  A within-run identity survives variation a differential cannot.
+	 *
+	 *  THE JUSTIFICATION IS THREE DIFFERENT REASONS, NOT ONE, and the first draft of
+	 *  this comment collapsed them into "no consumer reads these", which two review
+	 *  seats showed is FALSE for SAR:
+	 *
+	 *    PFSR, PFAR   no translation consumer at all.  m88k_translate_v2p never reads
+	 *                 them; they are status OUTPUTS.  The strongest evidence in the
+	 *                 round is that THE MODEL ITSELF already relies on this: the fault
+	 *                 path writes PFSR (memory_m88k.c:382-384, dev_luna88k.c:614) and
+	 *                 PFAR (memory_m88k.c:399,405 -- TWO DISCRETE LINES, and the file has
+	 *                 to be named again: a bare ":399-405" after a dev_luna88k.c citation
+	 *                 reads as dev_luna88k.c:399-405, which is a keyboard scancode switch)
+	 *                 DIRECTLY through reg[], with no purge, ~10^5
+	 *                 times per boot -- against 2 guest writes per boot through this
+	 *                 handler.  If a PFSR write owed a purge the model would already
+	 *                 be wrong, five orders of magnitude more often than here.
+	 *    SAR          IS read -- at dev_m8820x.c:110, as the address operand of an SCR
+	 *                 flush command.  So "nothing reads it" would be wrong.  What is
+	 *                 true is that its only reader is that command, and THAT ARM DOES
+	 *                 ITS OWN INVALIDATE_ALL at :187, so the SAR write owes nothing.
+	 *                 It carries 614,262 of the 627,383 writes: the whole volume.
+	 *    SCTR         dead in this model -- it appears nowhere in src/ outside its own
+	 *                 case label -- said precisely, NO CODE IN src/ EVER READS reg[CMMU_SCTR];
+	 *                 the only other occurrences are the definitions at
+	 *                 thirdparty/m8820x.h:64,118-120.  ("Appears nowhere outside its own
+	 *                 case label" was the earlier wording and is literally false -- and the
+	 *                 very next sentence relies on the header it denies.)  CONFIRMED for
+	 *                 this model, UNKNOWN for silicon.  An
+	 *                 earlier draft asserted "its real bits are parity/snoop/
+	 *                 arbitration"; what is CONFIRMED is only that THE LOCAL HEADER
+	 *                 GIVES THOSE NAMES.  There is no 88200/88204 manual in this
+	 *                 project, so a claim about real silicon bits cannot be graded
+	 *                 above UNKNOWN whatever a header calls them.
+	 *
+	 *  The consumer table was CONFIRMED complete by a constant census rather than a
+	 *  sampled grep, plus closure of the indirect paths three seats asked about: no
+	 *  memcpy/memmove/bcopy touches a cmmu struct; the only pointers taken into reg[]
+	 *  are the two local `regs` bases at :108 and :251, NEITHER OF WHICH ESCAPES -- an
+	 *  earlier draft said "no pointer is ever taken into reg[]", which a pass-2 seat
+	 *  showed is literally false, and the narrower claim is the one the argument needs;
+	 *  reg[] is exactly M8820X_LENGTH/4 words and relative_addr is bounded by
+	 *  M8820X_LENGTH at registration, so the computed index cannot reach batc[] or
+	 *  patc_*[]; and the only code that iterates the cmmu[] POINTER ARRAY
+	 *  (cpu_m88k.c:354-355) touches batc[] and patc_*[] and never reg[] -- not "the
+	 *  only code that iterates a CMMU", since PATC and BATC are iterated elsewhere.
+	 *
+	 *  NOT FOLDED IN, filed instead: a SAPR/UAPR write does not invalidate the guest's
+	 *  PATC either, which is pre-existing and which SAR's purge never covered.
+	 */
+	case CMMU_SAPR:
+	case CMMU_UAPR:
 		/*
 		 *  #434: A READ OWES NO PURGE.  The call used to sit one line above the
 		 *  writeflag test, so a plain guest READ of any of these six dropped the
@@ -359,17 +418,46 @@ DEVICE_ACCESS(m8820x)
 		 *  even in the predicted direction.  Below the noise floor of that experiment
 		 *  -- which is what was established, and all that was established.
 		 *
-		 *  The write side is deliberately UNCHANGED, including its over-broad scope
-		 *  and the TODO above -- but see the filed residual: 98% of the write-side
-		 *  purges are CMMU_SAR, which the translation path never consults, so those
-		 *  are gratuitous by exactly this round's argument.  Not folded in here,
-		 *  because that is a second behaviour change and this one is measured.
+		 *  THE WRITE SIDE WAS DELIBERATELY UNCHANGED BY #434 AND HAS SINCE BEEN
+		 *  CHANGED BY #435 -- this paragraph said "not folded in here", which was true
+		 *  when written and false one round later.  A pass-2 seat caught it still
+		 *  standing.  What #434 established remains: it removed the READ-side purge on
+		 *  the semantic argument that a read changes no translation.  #435 then applied
+		 *  the same argument to the four WRITE-side registers no translation consumer
+		 *  reads, which is the split above.  A comment that describes a deliberate
+		 *  omission has to be revisited by the round that stops omitting it.
 		 */
 		if (writeflag == MEM_WRITE) {
 			/*  TODO: Don't invalidate everything.  */
 			c->invalidate_translation_caches(c, 0, INVALIDATE_ALL);
 			regs[relative_addr / sizeof(uint32_t)] = idata;
 		}
+		break;
+
+	case CMMU_PFSR:
+	case CMMU_PFAR:
+	case CMMU_SAR:
+	case CMMU_SCTR:
+		/*
+		 *  #435: STORE, BUT DO NOT PURGE.  See the three reasons above the SAPR/UAPR
+		 *  arm -- they are three DIFFERENT reasons and the distinction is load-bearing.
+		 *
+		 *  THE STORE STAYS FOR ALL SIX, and that is not cosmetic: a measure seat built
+		 *  the natural over-reading of this round's own justification -- dropping the
+		 *  store as well as the purge -- and it PASSED every row the round first
+		 *  planned to ship.  It is a real defect: SAR would stop steering
+		 *  m8820x_command(), so a flush command would match against a stale address.
+		 *  
+		 *  AN EARLIER VERSION OF THIS SENTENCE ALSO CLAIMED the guest's PFSR reads
+		 *  would return zero, and a pass-2 seat showed that is FALSE: the fault path
+		 *  writes PFSR DIRECTLY through reg[] at memory_m88k.c:382-384, never through
+		 *  this handler, so dropping the handler's store would not touch it at all.
+		 *  The SAR consequence stands on its own; the PFSR one was reasoning by
+		 *  analogy from the register beside it.  Removing a purge and removing a
+		 *  store are different changes and only the first is argued for here.
+		 */
+		if (writeflag == MEM_WRITE)
+			regs[relative_addr / sizeof(uint32_t)] = idata;
 		break;
 
 	case CMMU_BWP0:

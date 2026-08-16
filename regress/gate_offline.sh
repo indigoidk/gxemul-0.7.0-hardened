@@ -693,37 +693,69 @@ else
     "$IVBIN" > "$IVLOG" 2>&1
     sed 's/^/       /' "$IVLOG"
     check     "m8invread: row failures"               "$(grep -oE '[0-9]+ failures' "$IVLOG" | grep -oE '^[0-9]+')" "0"
-    check_min "m8invread: rows actually run"               "$(grep -oE '^[0-9]+ rows' "$IVLOG" | grep -oE '^[0-9]+')" 21
+    check_min "m8invread: rows actually run"               "$(grep -oE '^[0-9]+ rows' "$IVLOG" | grep -oE '^[0-9]+')" 27
     check     "m8invread: offline verdict" "$(grep -c 'DIFF_M8INVREAD_PASS' "$IVLOG")" "1"
     #  The defect row and its per-register twin: an aggregate alone misses a mutant
     #  that moves a purge between registers, which a seat named explicitly.
-    check "m8invread: the read-side rows are present"           "$(grep -cE 'reads that purge, summed|registers whose READ purges' "$IVLOG")" "2"
+    check "m8invread: the read-side rows are present"           "$(grep -cE '^  (ok|FAIL) +(E1|E2) ' "$IVLOG")" "2"
     #  THE ARGUMENT ROWS.  See the comment above -- these are the only defence
     #  against a mutant that keeps the count and guts the flags.
-    check "m8invread: the purge-ARGUMENT rows are present"           "$(grep -cE 'passes INVALIDATE_ALL \(mutant A\)|flags, named rather than counted|passes addr 0' "$IVLOG")" "3"
+    check "m8invread: the purge-ARGUMENT rows are present"           "$(grep -cE '^  (ok|FAIL) +(F1|F2|F3) ' "$IVLOG")" "3"
     #  The two-cpu row.  repro_m8invread.c and diff_m8820x.c are both single-cpu and
     #  are structurally blind to the wrong-receiver mutant; this row is not.
-    check "m8invread: the two-cpu receiver rows are present"           "$(grep -cE "targets the CMMU's OWNER|NOT the accessing cpu" "$IVLOG")" "2"
+    check "m8invread: the two-cpu receiver rows are present"           "$(grep -cE '^  (ok|FAIL) +(G1|G2) ' "$IVLOG")" "2"
     #  G3/G4/G5 and E10, all four from mutants a pass-2 seat BUILT AND RAN against the
     #  17-row version.  Three survived it: a read purge gated on the register's VALUE
     #  (which restores HALF the removed purges and boots the rig 1:1:1), the same
     #  one-identifier swap applied to the REGS pointer rather than the callback receiver,
     #  and cmmu[d->cmmu_nr] -> cmmu[0].  All three were invisible because the fixture had
     #  ONE cmmu object, cmmu_nr always 0, and a memset-zero register file on every read.
-    check "m8invread: the register-file and second-cmmu rows are present"           "$(grep -cE "STORE lands in the OWNER's register file|not in the accessor's|addresses the DATA cmmu" "$IVLOG")" "3"
-    check "m8invread: the nonzero-READ row is present"           "$(grep -c 'read of a NONZERO register still owes no purge' "$IVLOG")" "1"
+    check "m8invread: the register-file and second-cmmu rows are present"           "$(grep -cE '^  (ok|FAIL) +(G3|G4|G5) ' "$IVLOG")" "3"
+    check "m8invread: the nonzero-READ row is present"           "$(grep -cE '^  (ok|FAIL) +(E10) ' "$IVLOG")" "1"
     #  Idempotency: the brace-drop mutant makes a READ zero the register, and only a
     #  SECOND read can see it because odata is snapshotted before the switch.
-    check "m8invread: the idempotency and read-back rows are present"           "$(grep -cE 'is IDEMPOTENT|stores and reads back its own value' "$IVLOG")" "2"
+    check "m8invread: the idempotency and read-back rows are present"           "$(grep -cE '^  (ok|FAIL) +(E7|E8) ' "$IVLOG")" "2"
     #  E9, and it is NOT redundant with E8.  A pass-2 seat appended ONE token to the
     #  production condition -- `&& idata` -- and it survived all sixteen rows: a zero
     #  write then neither purges nor stores, so writing 0 to a previously nonzero SAPR
     #  silently fails to disable that context.  Every other write row used nonzero data,
     #  and E8's single zero goes to a register fresh() had already zeroed, so it was
     #  never a TRANSITION.  A value table that merely CONTAINS zero proves nothing.
-    check "m8invread: the nonzero->zero transition row is present"           "$(grep -c 'nonzero->ZERO write still purges once' "$IVLOG")" "1"
+    #  *** THE TITLE THIS GREPPED FOR NO LONGER EXISTS, AND THAT IS THE POINT. ***
+    #  It was 'nonzero->ZERO write still purges once'.  #435 SPLIT that row, because it
+    #  welded two properties together -- "still purges once AND still stores" -- and the
+    #  split moved one half and not the other.  A presence check keyed to a title is a
+    #  string dependency on a file it does not own, so a legitimate row edit reddens the
+    #  gate on a PRESENCE check while the row itself is fine.  This project has hit that
+    #  shape before under the name "the padded-column grep trap"; a pass-2 seat named it
+    #  again here, in advance, which is the only reason the gate and the row moved in the
+    #  same commit.  Both halves are required, so a future edit cannot quietly drop one.
+    #  ANCHORED ON THE ROW IDENTIFIERS, not on prose.  The first version of this check
+    #  grepped 'purges exactly as much as it owes' and expected 3 -- which worked only
+    #  because that phrase ALSO matches E4, so the count was two real rows plus an
+    #  accident.  A pass-2 seat pointed out that this is exactly the title-string
+    #  dependency the comment above criticises, committed in the same edit that
+    #  criticised it.  E9a/E9b are stable identifiers; the prose can now be reworded
+    #  without reddening a presence check.
+    check "m8invread: BOTH halves of the nonzero->zero row are present"           "$(grep -cE '^  (ok|FAIL) +E9[ab] ' "$IVLOG")" "2"
+    #  F4 is #435's one genuinely new row: purge-only-on-change is the likeliest mutant to
+    #  be written by accident, because the BATC arm does exactly that thirty lines away.
+    #  G6-G9.  #435 created a SECOND store site, and G1-G5 all drive CMMU_SAPR, which the
+    #  split left in the OTHER arm -- so the new arm had ZERO owner/cmmu coverage, and every
+    #  purge-asserting row ran with both selectors at 0 because fresh() memsets dev.  A
+    #  pass-2 measure seat drove FIVE REAL DEFECTS through that gap, the smallest being one
+    #  appended `&& d->cmmu_nr == 0`.  MEASURED: the data CMMU takes 51.9% of all SAR writes
+    #  per boot, and a witness driving SAR through the handler shows the WRONG PAGE flushed
+    #  and a stale supervisor translation kept.
+    #
+    #  WHEN A ROUND SPLITS AN ARM, EVERY ROW THAT PINNED A PROPERTY OF THE OLD ARM NOW PINS
+    #  IT FOR ONLY ONE HALF.  Re-pinning the rows that go RED is the obvious half; the rows
+    #  that stay GREEN while quietly covering less are the half that gets missed.
+    check "m8invread: the split-arm selector rows are present" \
+          "$(grep -cE '^  (ok|FAIL) +(G6|G7|G8|G9) ' "$IVLOG")" "4"
+    check "m8invread: the same-value-write row is present"           "$(grep -cE '^  (ok|FAIL) +(F4) ' "$IVLOG")" "1"
     #  The neighbouring arm, ~603,000 purges/boot: nothing above would notice its loss.
-    check "m8invread: the SCR-arm control rows are present"           "$(grep -cE 'an SCR flush command still purges|and it too passes INVALIDATE_ALL' "$IVLOG")" "2"
+    check "m8invread: the SCR-arm control rows are present"           "$(grep -cE '^  (ok|FAIL) +(H1|H2) ' "$IVLOG")" "2"
     check "m8invread: identity row present"           "$(grep -c 'IDENTITY row count' "$IVLOG")" "1"
 fi
 

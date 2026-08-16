@@ -4621,9 +4621,16 @@ been READ.** Firing nine seats and reading four is a four-seat review reported a
      BATC and PATC. `SAR` is read at exactly one place, `dev_m8820x.c:110`, as the *address
      operand of a flush command* — and that command's own arm already purges at `:187`. So a
      write to `SAR` owes no purge, **by exactly the argument #434 makes for reads**.
-  3. Registers that genuinely can change a translation — `SAPR` + `UAPR` + `SCTR` writes — are
-     **13,033 of 917,504** accesses to this arm, i.e. **1.4%**. #434 removes 32% of the arm's
-     purges; this item is worth **2.1× as much** and is the same one-line shape.
+  3. Registers that genuinely can change a translation are **`SAPR` and `UAPR` ONLY** — 13,028
+     of 917,504 accesses to this arm, about **1.4%**. #434 removes 32% of the arm's purges; this
+     item is worth **2.1× as much** and is the same one-line shape.
+
+     ***`SCTR` WAS LISTED HERE AND THAT WAS WRONG***, caught by a pass-1 seat on the round that
+     acted on this filing. `SCTR` appears **nowhere in `src/` outside its own case label** — the
+     translation path never reads it, so a write to it cannot change a translation and it belongs
+     with `SAR`/`PFSR`/`PFAR`, not with the area pointers. The error did not reach the code (the
+     round split the arm on the measured consumer table, not on this sentence), but it would have
+     put `SCTR` on the wrong side of the argument for anyone reading the filing afterwards.
 
   Not folded into #434 because it is a second behaviour change on the write side, and #434's
   claim is the one that was A/B measured. The detector rows already exist (`diff_m8invread.c`
@@ -4668,3 +4675,13 @@ be cited by some entry for that seat. It found the `r420` case within a minute o
 
 **The rule:** *a check a human has to remember is a check that eventually does not happen.* Both
 of the first two were found by a person noticing a blank square on a web page.
+
+
+- **`m8patc` — a `SAPR`/`UAPR` write does not invalidate the guest's PATC.** (filed 2026-08-16
+  from the #435 pass-1 grok seat.) The area pointers are what `m88k_translate_v2p` reads to find
+  the page tables (`memory_m88k.c:135,137`), so changing one re-points translation at a different
+  table — but only the emulator's dyntrans mapping is purged; the guest's 56-entry PATC keeps its
+  cached entries from the OLD tables. Pre-existing, and **`SAR`'s purge never covered it either**,
+  so #435 removes nothing that was protecting against it. Worth a round of its own: the fix is a
+  PATC invalidation on those two writes, which is a behaviour change in the *safe* direction and
+  needs its own detector rows and its own argument.
