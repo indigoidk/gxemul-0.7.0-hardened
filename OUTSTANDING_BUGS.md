@@ -4355,3 +4355,66 @@ That leaves a server-side fault in the model backend. Recorded by name, never co
 agreement, and **re-test before pruning** — this project has now been wrong three times about a
 seat being permanently dead. Note `minimax-m2.7:cloud` is also served and could stand in; if it
 is ever used it must be recorded as a SUBSTITUTE, never as "the minimax seat".
+
+### m8820x: the rig was BOOTED with instrumentation, and it reframed the round
+
+The measuring seat did what neither footbridge round could: it instrumented a scratch copy of the
+device, drove a **full boot to a root shell** with the repo's own `drive_guest.py`
+(`VERDICT=PASS`, login at 132.3 s, both FP values correct), and logged every offset and command a
+real OpenBSD/luna88k guest actually touches. It also proved the logger CAN fire before trusting a
+zero — the same binary emits an `EXITSITE` line the moment a probe reaches the default arm.
+
+**A real guest touches 17 of 1024 words and 7 of 256 command bytes. Every one is already handled.
+Zero of the five `exit(1)` sites is reached on a boot.**
+
+*** BUT THE MOST REACHABLE EXIT IS NOT THE DEFAULT ARM, AND THAT IS THE FINDING. ***
+Commands `0x34` and `0x24` reach `exit(1)` through **`CMMU_SCR` — an offset the model FULLY
+HANDLES, and which this guest writes 640,016 times per boot.** `0x34` (FLUSH_SUPER_LINE) is ONE
+BIT away from `0x35` (FLUSH_SUPER_PAGE), which the guest issues 158,664 times. Nine of the 22
+commands defined in `m8820x.h` fall to `exit(1)`. So the exposure is not obscure reserved
+offsets; it is a one-bit-different command on the hottest path in the device.
+
+**Reachability is one instruction**, measured by a cold-debugger probe with every word
+disassembled before stepping and every death attributed to its own diagnostic:
+
+| probe | result |
+|---|---|
+| `ld r4,r5,0x0` (IDR read, control) | **SURVIVED, r4 = 0x00a90000** — the real IDR value |
+| `st r4,r5,0x4` command 0x35 (control) | SURVIVED |
+| `ld r4,r5,0x4` (SCR read) | HOST DIED — `read from CMMU_SCR: TODO` |
+| `st r4,r5,0x0` (IDR write) | HOST DIED — `write to CMMU_IDR: TODO` |
+| `st r4,r5,0x8` (SSR write) | HOST DIED — `write to CMMU_SSR: TODO` |
+| `st r4,r5,0x4` command 0x34 / 0x24 | HOST DIED — `unimplemented command` |
+| `st r4,r5,0x840` (CTP0) | HOST DIED — `unimplemented write to offset 0x840` |
+
+The control returning `0x00a90000` is what makes it airtight: that value can only have come
+through `dev_m8820x_access`. **`/dev/mem` from the guest userland is refused** (`Operation not
+permitted`, securelevel 1), so OpenBSD userland is not a route — an honest negative that removed
+the most convenient online-gate design.
+
+**THE FIX IS BOOT-NEUTRAL, which means the rig CANNOT be the detector.** All three candidate
+behaviours boot identically, because the arm is never reached on a boot. The choice has to be
+argued on other grounds, and the detector has to be something sharper than "it still boots".
+
+**The `#220` precedent reads AGAINST halting**, on a closer look than the brief gave it:
+`dev_footbridge.c:348-349` uses `cpu->running = 0` because the GUEST ASKED THE MACHINE TO HALT
+(GP16 reset) — that is the correct model, not a failure mode — while `:379-380` uses
+complain-and-continue for an out-of-range PCI bus. The tree assigns the two shapes to two
+MEANINGS. Neither m8820x site is a halt request.
+
+**Detector shape, and it overturns this brief's own premise:** measured on this host, a full rig
+drive costs 182-233 s while the cold-debugger probe costs **3.1 s for 8 rows** — 60-75x cheaper,
+because reaching this device needs a constructed machine and one `step`, not an operating system.
+The online probe is also structurally immune to the artifact that fooled the offline driver above:
+a harness fault produces no `m8820x:` diagnostic at all, so the two are distinguishable BY
+CONSTRUCTION rather than by remembering to check an exit status. Keep an offline differential for
+breadth (1024 offsets x 2 directions x 256 commands is not a pty job). Build NO booting-rig row —
+it could only assert "luna88k still boots", which `gate_ab` and `gate_crossfamily` already assert,
+at ~200 s of load-sensitive wall clock added to a battery already carrying ~37 such oracles.
+
+**And the rows must assert VALUES, not survival.** Rounds 79/80 taught this project that a
+survival-only row cannot tell a repaired instruction from one that merely stopped faulting. The
+smallest edit that breaks the property while passing a survival-only row: replace `exit(1)` with
+`return 1` but drop the `memory_writemax64` — the guest gets garbage and the row goes green. Pin
+the control at `r4 == 0x00a90000`, and carry a row for ALL FIVE sites, since a fix that repairs
+the default arm and leaves the four in-arm exits passes any detector that only probes `0x800`.
