@@ -4192,6 +4192,103 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R4 follow-up — the round's detector certified six things it could not see, and its census entry was wrong
+Nine seats were asked for R4's review; eight answered (the Fable seat was deliberately not
+fired — the owner had warned of its hourly limit and it is reserved for the Sunday
+regression batch, so that cell is a DEFERRAL, not a seat failure). **Every one of the eight
+found a defect in the round's own instrument, and three of them MEASURED it.** No emulator
+behaviour changes here: this is the detector, the gate wiring, and four wrong records.
+
+**The finding that matters most is the shape of the others.** Every row in the differential
+took its expected value FROM THE HEADER — the rule #425 established, because a transcribed
+constant cannot notice drift. But a row that reads the constant is **green for any value of
+it**. Three seats independently measured the consequence: `TIMER_MAX_CATCHUP` → 65536,
+`TIMER_MAX_FREQUENCY` → 32768.0, and `TIMER_MIN_FREQUENCY` → 1e-300 each break a property
+the round claims and pass every row. Reading the constant defeats transcription drift; it
+cannot notice the constant being WRONG. **The answer is both** — read it, and also assert an
+absolute consequence derived from outside the header. Hence a 40 MHz row (the pmax rate, so
+it is the offline half of a case the battery boots), a structural
+`TIMER_MAX_FREQUENCY == (double) INT_MAX`, and a floor-is-a-reachable-duration row.
+
+**The stall was inert, and the row named for it still passed.** `run_periods()` advanced a
+local the handler never reads: `timer_current_time` is advanced by `timer_tick()` itself,
+and the `gettimeofday` stub was never called because `fresh()` had disabled the resync.
+One seat measured `stall=0.0` and `stall=100000.0` as byte-identical output. The stall now
+arms the SHIPPED resync path, and a row asserts the clock really moved — so it cannot go
+inert again silently. It must also be DISARMED after one period: `timer_freq` is 0 in this
+driver (`timer_start()` is deliberately never called), so the re-arm computes 0 and the
+resync would otherwise fire every tick, injecting fresh lag and hiding the very difference
+the next row exists to see. That was found by measurement, not by reading — the first
+corrected version still let the drop mutant survive.
+
+**The census entry R4 shipped was wrong, and three seats traced the same arithmetic.** It
+recorded the drop-at-cap-hit survivor as "inert because the schedule is already ahead of the
+clock there". At cap-hit a timer at the ceiling has advanced `next_tick_at` by ~4.88e-4 s
+against a `timer_current_time` of ~1.54e-2 s — the schedule is **behind**, by a factor of
+about thirty. The mutant survived because the DETECTOR was weak, not because the mutation
+was harmless: one seat measured the real cost at **951,424 ticks — 9.51 s of guest time —
+silently lost** on a 100 kHz timer after a 20 s stall. There is now a row that tells deduct
+from drop, and it needs a case where one signal owes more than the cap and the next owes
+less; a maximum-rate timer cannot show it, because both policies saturate.
+
+**The gate's floor was one below the row count, which is the same class the identity row
+exists to prevent.** `check_min` stood at 13 while the driver ran 14, so DELETING THE
+IDENTITY ROW LEFT THE GATE FULLY GREEN. Two seats read it independently and a third measured
+it. A floor set one under the count is not a weaker check; it is no check. It is now the
+exact count, and eleven named-row checks make each sole-detector row's deletion a red row.
+
+- **The reporting path had no detector at all.** Deleting `timer_catchup_hit = 1;` from the
+  handler passed everything, measured by two seats. `timer_stop()` is now called by the
+  driver (it only disarms a timer that was never armed), with a report-once row, a
+  flag-cleared row, and a negative control — the last because the first two would pass under
+  a mutant that simply reports every time.
+- **A row that was green at zero.** "The complaint is made once, not once per write"
+  asserted only the delta, so deleting `*was_clamped = 1` — the line that makes the clamp
+  complain at all — passed the whole file. An absolute row now comes first.
+- **A floor cannot catch a value that is too big.** `interval = 0.5 / freq` doubles every
+  timer's rate and sails over every anti-regression floor. A reciprocal-exactness row.
+
+**Measured: 24 rows / 0 failures, gate 2 PASS at 157 checks (was 148). A census of thirteen
+mutants in copies kills thirteen and leaves no survivors** — the seven from R4's original
+list plus the six the seats measured as passing it, with the unmutated control passing and
+the denominator self-checked.
+
+**Four wrong records corrected in the source, none of them behavioural.**
+1. *"every rate derived from `emulated_hz` divides by at least one"* — FALSE.
+   `dev_footbridge`'s `reload_timer_value()` divides by a guest-written `timer_load` that
+   `TIMER_1_LOAD` accepts as ZERO. The conclusion survives and is stronger than the premise:
+   before the clamp, `+INF` made `interval` 0.0 and the catch-up loop never advanced — **a
+   guest-reachable HANG inside the signal handler, which #427/#428 fix.** That is the
+   strongest justification the round has and it was not in the record.
+2. *"the remainder is delivered by the signals that follow"* — true only for a RECOVERABLE
+   backlog. Above `TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY` = 68,157,440 Hz the debt grows
+   forever; measured, a ceiling-rate timer sits 0.9683 s behind after one simulated second.
+   The domain admits 32x more than the cap can serve. Recorded, filed, not answered.
+3. *"the caller reports once per timer"* — measured false: 1000 alternating INFINITY/1000 Hz
+   updates give 1000 complaints, because the suppressor is the `t->freq == new_freq`
+   early-out, not a latch. A guest alternating two rates drives an unbounded stderr write.
+4. *"NOTHING IS PRINTED HERE, in a signal handler"* — true of `timer.c`, and it was being
+   read as a claim about the handler. `dev_sh4.c`'s `sh4_timer_tick()` is a callback this
+   loop invokes and it calls `fatal()` then `exit(1)` from inside SIGALRM. Pre-existing;
+   named so the comment cannot be read as covering it.
+
+**Two properties this instrument cannot reach, now stated in the file rather than implied
+as covered:** downgrading `volatile sig_atomic_t` to `int` passes every row because no
+signal handler is ever installed (no row *can* catch it), and #429 lives in `dev_rtc.c`,
+which the driver does not compile — reverting it entirely leaves the gate green, measured.
+
+**Filed, not fixed here** (the stopping rule: only a measured false pass or a wrong record is
+fixed in-round): the `dev_footbridge.c:141` `random() % 0` SIGFPE, which a seat reproduced as
+a host core dump and which this round's clamp converts a hang INTO — the highest-priority
+residual; the 32x domain-versus-cap gap; the per-timer budget against a four-timer device
+(measured at 69% of a host period, inside the band the header's own reasoning rejects); the
+complaint flood; `dev_sh4`'s `exit(1)` from a handler; and a `dev_rtc` detector, which needs
+the guest-rate narrowing to move into the timer core and so belongs in its own round.
+
+**Verified:** gate 2 PASS at 157 checks; diff_timer 24 rows / 0 failures; census 13/13
+killed, 0 survived, 0 faults; `timer.c` and `timer.h` byte-identical in `GXEMUL-SEC`, `est/`
+and both build trees, with the stale objects removed.
+
 ## R4 (#427, #428, #429) — the timer core clamped one end of a frequency and left the other unbounded
 The first round in this sequence to touch the EMULATOR rather than the harness, so all three
 source files land byte-identical in `GXEMUL-SEC`, `est/` and both build trees, and the round states

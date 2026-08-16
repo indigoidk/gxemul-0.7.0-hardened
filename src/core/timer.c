@@ -85,7 +85,14 @@ static volatile sig_atomic_t timer_catchup_hit;
  *
  *  Callers are device-access and devinit code, never the signal handler, so complaining
  *  here is safe.  The complaint is the caller's business: this returns whether it clamped
- *  at the top, and the caller reports once per timer rather than once per write.
+ *  at the top, and the caller reports once per CHANGE rather than once per write.
+ *
+ *  CORRECTION (review of 2026-08-16): this said "once per timer", which a seat MEASURED to
+ *  be false -- 1000 alternating INFINITY/1000 Hz updates produce 1000 complaints, because
+ *  the guard that suppresses them is the `t->freq == new_freq` early-out, not a per-timer
+ *  latch.  A guest that alternates two rates therefore drives an unbounded stderr write,
+ *  the same class as #265's flood.  dev_rtc is immune because it pre-clamps; dev_footbridge
+ *  is not.  Filed as its own item; only the wrong sentence is corrected here.
  */
 static double timer_clamp_freq(double f, int *was_clamped)
 {
@@ -255,10 +262,21 @@ static void timer_tick(int signal_nr)
 		 *  second of lag, and an interval of zero never advances at all.
 		 *
 		 *  So: stop after TIMER_MAX_CATCHUP ticks for this timer in this signal and
-		 *  leave next_tick_at where it is.  The remainder is delivered by the signals
-		 *  that follow, so a recoverable burst loses nothing but its promptness.  The
-		 *  hit is recorded for timer_stop() to report; NOTHING IS PRINTED HERE, in a
-		 *  signal handler.
+		 *  leave next_tick_at where it is.  A RECOVERABLE burst then loses nothing but
+		 *  its promptness -- the remainder is delivered by the signals that follow.
+		 *
+		 *  Said precisely, because the first draft of this comment was not: that holds
+		 *  for a backlog the timer's own rate can pay off, i.e. below
+		 *  TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY = 68,157,440 Hz.  Above it the debt
+		 *  grows every signal and is never repaid; see timer.h, where the gap between
+		 *  that figure and the domain ceiling is recorded and filed.
+		 *
+		 *  The hit is recorded for timer_stop() to report.  NOTHING IN THIS FILE PRINTS
+		 *  FROM THE HANDLER -- which is a claim about timer.c and NOT about the handler
+		 *  as a whole: a review seat traced dev_sh4.c's sh4_timer_tick(), a callback this
+		 *  loop invokes, calling fatal() and exit(1) from inside SIGALRM.  That is
+		 *  pre-existing and filed; it is named here so this comment is not read as
+		 *  covering it.
 		 */
 		int budget = TIMER_MAX_CATCHUP;
 

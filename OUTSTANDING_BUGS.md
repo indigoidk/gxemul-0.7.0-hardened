@@ -4008,3 +4008,82 @@ B1 (absorb selftest, folding A3) → A1+A2 as one mutation batch → A4/A5/A6 as
 commit → the disk batch → **#47 then #27 as one round, in that order** → #82 → #101 → #75.
 The five gaps above are filed as their own candidates; the dead-man switch is the one to raise
 first, because it is the only item whose absence hides every other row's failure.
+
+---
+
+## 2026-08-16 — residuals from R4's review (eight seats; the Fable seat deliberately not fired)
+
+The R4 review found nothing wrong with the three shipped fixes — every seat that could trace
+the code confirmed the domain clamp, the catch-up bound, the RTC narrowing and the
+above-the-early-out placement. What it found was in the *instrument* and the *records*, all
+fixed in the R4 follow-up. These are the items that were FILED rather than fixed, under the
+standing stopping rule (only a measured false pass or a wrong record is fixed in-round).
+Ranked, because the first is a live host crash.
+
+1. **`dev_footbridge.c:141` — `random() % d->timer_load[i]` divides by a guest-written zero.
+   MEASURED as SIGFPE, core dumped (exit 136).** `TIMER_1_LOAD` (`:417`) accepts
+   `idata & TIMER_MAX_VAL` including 0 and calls `reload_timer_value()` directly. The guards
+   are `TIMER_ENABLE` and `pending_timer_interrupts[i] > 0`.
+   *** THIS ROUND MADE IT REACHABLE SOONER, AND THAT MUST BE SAID PLAINLY: *** before
+   #427/#428, `cycles == 0` gave `freq = +INF` → `interval = 0.0` → the catch-up loop never
+   advanced → a guest-reachable HANG inside the SIGALRM handler, so the machine froze before
+   the division could run. The clamp bounds the loop, the callback now bumps `pending`
+   2^20 times in the first signal, and the guard is satisfied almost at once — **#427/#428
+   convert a hang into a SIGFPE on this path.** Neither is acceptable; the crash is the more
+   visible of the two and is the strongest single reason to take this next. The trap is
+   CONFIRMED (a seat reproduced the core dump directly); the reachability is MANUAL —
+   settling it needs a booted netwinder rig writing 0 to `TIMER_1_LOAD` and then enabling the
+   timer. **Test-first is available here without a rig: the division is the subject, and an
+   offline driver in the shape of `diff_timer.c` can reach it.**
+
+2. **The domain ceiling and the catch-up cap do not meet, by a factor of 32.** The domain
+   admits 2,147,483,647 Hz; the cap can deliver at most
+   `TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY` = 68,157,440 ticks/s. Between them a guest can
+   permanently request a rate the core can never serve, and the debt then grows without bound
+   — MEASURED at 0.9683 s behind after one simulated second, delivered ratio 0.0317. Reached
+   through an untouched caller: `cpu_mips_coproc.c` requests `emulated_hz / compare_diff`,
+   which at `compare_diff == 1` is 166.56 MHz on Algor and 360 MHz on VoCore. **So the R4
+   claim "every legitimate case is bit-identical" is false for those two machines** — two
+   seats found this independently. Not made worse by R4 (the old code spun 33 million
+   iterations per signal at the same rate), but unstated until now. The design question is
+   whether an unserviceable rate should be rejected, dropped, or left to lag.
+
+3. **The catch-up budget is per timer, and its derivation assumed one timer.** `timer.h`
+   rejects 2^22 because it "would fill 59-77% of a 15.38 ms period" — but MEASURED, four
+   timers at the ceiling take 10.65-10.74 ms of that period (69.2-69.8%), landing inside the
+   very band that reasoning rejected. `dev_footbridge` has exactly four guest-controllable
+   timers. The `#define`'s label ("ticks per timer per signal") is accurate; the derivation
+   beside it is single-timer. Candidate fix: make the budget global across one signal.
+
+4. **`timer_update_frequency`'s complaint is once per CHANGE, not once per timer**, so a guest
+   alternating two out-of-domain rates drives an unbounded stderr write — MEASURED at 1000
+   complaints for 1000 alternating updates. Same class as #265's flood. `dev_rtc` is immune
+   (it pre-clamps); `dev_footbridge` is not. Candidate fix: a per-timer latch.
+
+5. **`dev_sh4.c:191` `sh4_timer_tick()` calls `fatal()` then `exit(1)` from inside SIGALRM.**
+   Pre-existing, not introduced here, and `_exit()` is the async-signal-safe one.
+   `pcc_timer_tick()` (`dev_pcc2.c:106` is its opening line, not the assert itself) likewise
+   reaches interrupt work from the handler. Also pre-existing and
+   worth recording together: `timer_stop()` does not block SIGALRM while disarming and
+   replacing the disposition, so a pending signal can race that transition (harmless today —
+   it delays one message by one stop), and `timer_init()` never clears `timer_catchup_hit`.
+
+6. **#429 has no detector at all, and this is the fifth vacuity class in the taxonomy.**
+   MEASURED: reverting `dev_rtc.c`'s range check entirely — or flipping its `>` to `<` —
+   leaves gate 2 fully green, because nothing under `regress/` compiles or mentions
+   `dev_rtc.c`. The differential cannot simply `#include` it: `dev_rtc.c` pulls in `cpu.h`,
+   `machine.h`, `emul.h` and `device.h`. **The clean fix is to move the guest-rate narrowing
+   into the timer core** — where the driver already reaches it, and where it belongs anyway,
+   because `dev_footbridge`, `dev_vr41xx` and `dev_jazz` all derive a rate from a guest value
+   and none of them range-check in the wide domain. That is a shipped-code change touching
+   four devices, so it is a round of its own with a full panel, not a follow-up.
+
+7. **A note on method, worth keeping because it generalises past the timer.** #425 established
+   "read the constant from the header, never transcribe it". R4 followed it, and three seats
+   independently MEASURED the consequence: a row that reads the constant is green for **any**
+   value of it, so all three timer constants could be changed to values that break the round's
+   claims with every row still passing. **Reading the constant defeats transcription drift and
+   creates blindness to the constant itself. Both are needed: read it, and also assert an
+   absolute consequence derived from outside the header.** Every differential in `regress/`
+   that reads a `#define` for its expected value has this blind spot and none of the others
+   has been checked for it.

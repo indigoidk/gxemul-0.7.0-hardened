@@ -404,19 +404,49 @@ else
     sed 's/^/       /' "$TIMLOG"
     check     "timer: row failures" \
               "$(grep -oE '[0-9]+ failures' "$TIMLOG" | grep -oE '^[0-9]+')" "0"
+    #  THE FLOOR MUST EQUAL THE ROW COUNT, and it did not: it stood at 13 while the driver
+    #  ran 14, so DELETING THE IDENTITY ROW LEFT THE GATE FULLY GREEN -- the one defect the
+    #  identity row exists to prevent.  Two review seats read it independently and a third
+    #  measured it.  A floor set one below the count is not a weaker check, it is no check.
     check_min "timer: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$TIMLOG" | grep -oE '^[0-9]+')" 13
+              "$(grep -oE '^[0-9]+ rows' "$TIMLOG" | grep -oE '^[0-9]+')" 24
     check     "timer: offline verdict" "$(grep -c 'DIFF_TIMER_PASS' "$TIMLOG")" "1"
-    #  Name the three rows that carry the round, so deleting one is a red row rather than
-    #  a quieter file: the NaN floor (the only row that catches a plainly-written clamp),
-    #  the idempotence row (the only one that catches a clamp below the early-out), and
-    #  the anti-regression row (the only one that catches dropping the backlog).
+    #  Name every row that is the SOLE detector of something, so deleting one is a red row
+    #  rather than a quieter file.  Each line below names a mutant that survived the first
+    #  version of this differential and was killed by adding that row.
     check "timer: the NaN row is present" \
           "$(grep -c 'NaN lands on the FLOOR' "$TIMLOG")" "1"
     check "timer: the idempotence row is present" \
           "$(grep -c 'five identical requests reset the schedule' "$TIMLOG")" "1"
     check "timer: the anti-regression rows are present" \
           "$(grep -c 'still delivers ~' "$TIMLOG")" "2"
+    #  The rows that defend the CONSTANTS.  Every other row reads them from the header and
+    #  is therefore green for any value; these two are derived from outside it.
+    check "timer: the ceiling-is-INT_MAX row is present" \
+          "$(grep -c 'the ceiling IS INT_MAX' "$TIMLOG")" "1"
+    check "timer: the floor-is-reachable row is present" \
+          "$(grep -c "the floor's interval is still a reachable" "$TIMLOG")" "1"
+    #  The absolute floor that defends TIMER_MAX_CATCHUP's value: 40 MHz is the pmax rate,
+    #  so this is the offline half of a case the weekly battery boots.
+    check "timer: the 40 MHz keeps-time row is present" \
+          "$(grep -c 'a 40 MHz timer' "$TIMLOG")" "1"
+    #  The bound's EXACT count, and the policy it protects.
+    check "timer: the exact-bound row is present" \
+          "$(grep -c 'delivers exactly the bound' "$TIMLOG")" "1"
+    check "timer: the backlog-retained row is present" \
+          "$(grep -c 'the retained backlog' "$TIMLOG")" "1"
+    #  The instrument's own self-check: without it the stall above can go inert again, as
+    #  it silently was when this differential first shipped.
+    check "timer: the stall-is-real row is present" \
+          "$(grep -c 'arming the resync really moves' "$TIMLOG")" "1"
+    #  The reporting path, which had no row at all: deleting the flag assignment from the
+    #  signal handler passed everything.
+    check "timer: the cap-is-reported row is present" \
+          "$(grep -c 'reports it exactly once' "$TIMLOG")" "1"
+    check "timer: the complaint-is-made row is present" \
+          "$(grep -c 'complains exactly once' "$TIMLOG")" "1"
+    check "timer: the interval-is-reciprocal row is present" \
+          "$(grep -c 'the interval is exactly 1/freq' "$TIMLOG")" "1"
 fi
 
 TMUBIN=$LOGDIR/diff_sh4_tmu

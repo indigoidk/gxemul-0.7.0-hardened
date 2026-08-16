@@ -38,20 +38,44 @@ struct timer;
  *  is the shape that let a gate grade a value the run never used.
  *
  *  TIMER_MIN_FREQUENCY was already the shipped low clamp.  TIMER_MAX_FREQUENCY is DERIVED,
- *  not chosen: machine->emulated_hz is an int (machine.h), every rate derived from it
- *  divides by at least one, so INT_MAX bounds every legitimate request in the tree.  It
- *  truncates nothing legitimate -- and it is nearly worthless on its own, because at
+ *  not chosen: machine->emulated_hz is an int (machine.h), so INT_MAX bounds every
+ *  legitimate request in the tree.  It is nearly worthless on its own, because at
  *  TIMER_BASE_FREQUENCY it still permits 33 million catch-up iterations per signal.  THE
  *  CAP BELOW IS THE ACTUAL PROTECTION; the domain is normalisation.
+ *
+ *  CORRECTION (review of 2026-08-16).  The premise first written here -- "every rate
+ *  derived from it divides by at least one" -- IS FALSE, and two seats found the site:
+ *  dev_footbridge.c's reload_timer_value() divides emulated_hz by a guest-written
+ *  timer_load that TIMER_1_LOAD accepts as ZERO, giving +INF.  The CONCLUSION survives and
+ *  is in fact stronger than the premise was: before this clamp, +INF made interval 0.0 and
+ *  the catch-up loop never advanced -- a guest-reachable HANG inside the signal handler.
+ *  The clamp turns that into a bounded 68 MHz.  (The same guest write reaches a division
+ *  by zero at dev_footbridge.c:141, which is filed separately; this clamp does not fix it.)
  *
  *  TIMER_MAX_CATCHUP is derived from both sides, MEASURED: 65536 breaks a legitimate
  *  40 MHz timer (its delivered rate collapses to 0.1065 of real time), while an iteration
  *  costs 2.16-2.82 ns, so 2^22 would fill 59-77% of a 15.38 ms period.  2^20 is the
  *  smallest power of two that leaves every legitimate case bit-identical to the old
- *  behaviour while holding the handler under a fifth of its own period.  THE BACKLOG IS
- *  RETAINED when the cap is hit, never dropped: catch-up IS how any timer faster than
- *  TIMER_BASE_FREQUENCY is delivered, so dropping ticks caps EVERY timer at 65 Hz --
- *  measured, a 100 Hz timer falls to 0.65 of real time with no burst at all.
+ *  behaviour while holding the handler under a fifth of its own period.
+ *
+ *  THE BOUND IS PER TIMER PER SIGNAL, AND THAT DERIVATION ASSUMED ONE TIMER.  Two seats
+ *  caught it and one MEASURED the cost: four timers at the ceiling take 10.65-10.74 ms of
+ *  a 15.38 ms period -- 69%, inside the very band that reasoning rejected 2^22 for -- and
+ *  dev_footbridge has exactly four guest-controllable timers.  The label on the #define is
+ *  accurate; the "under a fifth" figure above is the SINGLE-timer case and nothing more.
+ *  Making the budget global across one signal is filed as its own question.
+ *
+ *  THE BACKLOG IS RETAINED when the cap is hit, never dropped: catch-up IS how any timer
+ *  faster than TIMER_BASE_FREQUENCY is delivered, so dropping ticks caps EVERY timer at
+ *  65 Hz -- measured, a 100 Hz timer falls to 0.65 of real time with no burst at all.
+ *  Retention is right for a RECOVERABLE backlog, which is the case it was designed for.
+ *  It does not rescue an UNSERVICEABLE rate: above TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY
+ *  = 68,157,440 Hz the debt grows without bound and "delivered by the signals that follow"
+ *  is simply untrue -- measured, a timer at the domain ceiling sits 0.9683 s behind after
+ *  one simulated second and falls further every period.  The domain admits 32x more than
+ *  the cap can ever serve.  That gap is real, it is not made worse by this change (the old
+ *  code spun 33 million iterations per signal at the same rate), and closing it is a policy
+ *  question filed rather than answered here.
  */
 #define	TIMER_MIN_FREQUENCY	0.00000001	/*  Hz  */
 #define	TIMER_MAX_FREQUENCY	2147483647.0	/*  Hz; INT_MAX, see above  */
