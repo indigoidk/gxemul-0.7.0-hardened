@@ -4192,6 +4192,85 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R7 (#433) — an ordinary guest register read terminated the host, on the rig that boots
+`DEVICE_ACCESS(m8820x)` and its command helper carried five `exit(1)` calls. Measured before any
+edit, driving every word offset in the mapped window with each probe forked so one host kill did
+not end the run: **1007 of 1024 reads and 1009 of 1024 writes terminated the host process** — and
+`dev_m8820x` is memory-mapped twice per CPU on **luna88k, which boots in this tree**. Unlike the
+footbridge rounds, this one had a rig.
+
+**Nine seats on the design. The measuring seat BOOTED the guest with instrumentation** — the
+first time in this sequence that the central question could be settled empirically rather than
+argued. A real OpenBSD/luna88k boot touches **17 of 1024 words and 7 of 256 commands, every one
+already handled, and reaches none of the five exit sites**. The instrumentation was
+vacuity-checked first: the same binary emits an `EXITSITE` line the moment a probe does reach the
+default arm.
+
+*** THE MOST REACHABLE EXIT WAS NOT THE DEFAULT ARM, and that reframed the round. *** Commands
+`0x34` and `0x24` reach `exit(1)` through **`CMMU_SCR` — an offset the model FULLY HANDLES, and
+which this guest writes 640,016 times per boot.** `0x34` (FLUSH_SUPER_LINE) is ONE BIT from
+`0x35` (FLUSH_SUPER_PAGE), which the guest issues 158,664 times. The exposure was a
+one-bit-different command on the hottest path in the device, not an obscure reserved offset.
+Reachability is one supervisor-mode instruction, measured with every probe word disassembled
+before stepping; the control row returns `r4 = 0x00a90000`, the real IDR value, which can only
+have come through the device.
+
+*** AND THE ADJUDICATION CAUGHT THAT THE FIX WOULD HAVE INTRODUCED A WORSE DEFECT. *** Converting
+the default arm to complain-and-continue — which is the rest of this round — would have turned
+`FLUSH_SUPER_LINE` into a **silently ignored TLB flush**. Before this round it died loudly, so no
+silent path existed. `memory_m88k.c:190-234` is the translation fast path and a valid matching
+PATC entry SHORT-CIRCUITS the table walk, so a guest that edited a PTE and issued the flush would
+keep translating through the torn-down mapping. **So the fix and the fold are one change**, and
+the seven commands that were falling through are folded in the same diff: the four PATC variants
+(`0x30 0x32 0x34 0x36`) into the flush arm — LINE takes PAGE's settings since a line lies within a
+page and the PATC is page-granular, SEGMENT takes ALL's since over-invalidation is safe in a model
+that re-walks on a miss — and the three cache variants (`0x16 0x1a 0x1b`) into the no-op group,
+for the same reason as the nine already there.
+
+- **All five sites become complain-once-and-continue.** The default arm returns the `regs[]` value
+  on a read and drops the write; `CMMU_IDR` write, `CMMU_SCR` read and `CMMU_SSR` write are
+  access-SHAPE refusals rather than model gaps and are ignored; the command default — now exactly
+  the two PROBEs and undefined values — complains and drops.
+- **Nothing halts, and that is precedent, not preference.** The tree already assigns two shapes to
+  two MEANINGS: `#220` uses `cpu->running = 0` at `dev_footbridge.c:348` because THE GUEST ASKED
+  THE MACHINE TO HALT, and complain-and-continue at `:379` for a model gap. Neither m8820x site is
+  a halt request. The adjudicating seat had proposed halting on the command default and **revised
+  on the measurement**, because that would have parked session-death one flipped bit from a
+  command issued 158,664 times a boot.
+- **The MMU objection was answered by measurement, not argument.** Every register the emulator's
+  own translation consults — `SAPR`/`UAPR` read at `memory_m88k.c:135,137`, `PFSR`/`PFAR` written
+  at `:382-405` — is a HANDLED case label. Nothing reaching the default arm can alter what the
+  emulator translates. The defined-but-unhandled registers are all cache diagnostics against a
+  model with no cache, and the neighbouring `CSSP0` arm already answers exactly this way, silently,
+  on a path a real boot exercises 1024 times.
+- **The complaint is LATCHED, per device instance.** 640,016 SCR writes in 132 s is ~4,850/s, so an
+  unlatched `fatal()` is a guest-drivable stderr flood — the `cflood` class — at roughly a quarter
+  of a megabyte per second. First hit reports in full and names the instance; the rest go to
+  `debug()` so `-v` keeps the stream.
+
+**The detector is offline for BREADTH and the kill criterion is the EXIT STATUS.** That is not a
+detail: the first reproduction of this defect got its headline number wrong by exactly six in each
+direction, because the register-file arm calls `invalidate_translation_caches()` BEFORE the
+writeflag check — so it fires on READS — and the driver had left that callback NULL. Six offsets
+crashed in the HARNESS and were counted as device kills. A review seat derived 1007/1009/17 from
+the source alone and named the mechanism; re-measuring with the callback installed and status 1
+distinguished from a signal matched it to the offset. `regress/diff_m8820x.c` installs the callback
+and reports a signal death as a FAULT, never as a detection.
+
+**Verified:** differential **15 rows / 0 failures**, including the whole-window sweep (0 kills, 0
+harness faults, against 1007/1009 before), the latch row, the white-box PATC row that defends the
+fold, and both fold controls. **The re-run reproduction goes 1007 → 0.** Gate 2 **PASS at 195
+checks** (was 184). **luna88k boots to a shell: `VERDICT=PASS`, both FP values correct, and ZERO
+m8820x complaints** — the latch never fires on a clean boot, which is the census confirmed from the
+other side. `gate_mips.sh` PASS 6/6. `dev_m8820x.c` byte-identical in `GXEMUL-SEC`, `est/` and both
+build trees. **`mvme187` instantiates the same device and inherits the fix for free.**
+
+**Filed, not fixed:** real PROBE semantics (`0x20`/`0x24`) — a dropped probe leaves `SSR` at zero,
+V-bit clear, a deterministic "no valid translation" rather than a plausible-looking valid answer,
+and the measured guest issues no probes at all; the register-file arm invalidating every
+translation on a plain READ; and the `exitsweep` inventory, which this round now supplies a worked
+exemplar and a detector template for.
+
 ## R6 (#432) — a guest-written zero made the footbridge timer divide by zero, and killed the host
 `DEVICE_TICK(footbridge)` computed `random() % timer_load[i]`, and `TIMER_x_LOAD` accepts a
 guest-written zero. Integer division by zero: the HOST process dies. Two seats reproduced it

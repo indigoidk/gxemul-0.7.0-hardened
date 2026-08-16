@@ -581,6 +581,55 @@ else
           "$(grep -c 'IDENTITY row count' "$FBLOG")" "1"
 fi
 
+#  #433: the M8820x CMMU terminated the HOST process on an ordinary guest register access --
+#  measured at 1007 of 1024 word offsets on a plain READ, on luna88k, which BOOTS in this tree.
+#  Driven offline for BREADTH (1024 offsets x 2 directions x 256 commands is not a pty job);
+#  the online cold-debugger probe that proves guest-instruction reachability is filed separately.
+#  THE KILL CRITERION IS THE EXIT STATUS, not "the child died": the first reproduction of this
+#  defect overcounted by exactly six in each direction because six offsets crashed in the
+#  HARNESS (the register-file arm invalidates before the writeflag check, so it fires on reads,
+#  and the driver had left that callback NULL).  A signal death is reported as a FAULT here,
+#  never counted as a detection.
+M8BIN=$LOGDIR/diff_m8820x
+M8LOG=$LOGDIR/diff_m8820x.log
+if ! $CC -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+        -I"$SEC/src" -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$M8BIN" "$HERE/diff_m8820x.c" -lm > "$M8LOG" 2>&1; then
+    note "m8820x differential compile failed:"; sed 's/^/       /' "$M8LOG" | head -12
+    check "m8820x: compiles against the real dev_m8820x.c" "no" "yes"
+else
+    check "m8820x: compiles against the real dev_m8820x.c" "yes" "yes"
+    "$M8BIN" > "$M8LOG" 2>&1
+    sed 's/^/       /' "$M8LOG"
+    check     "m8820x: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$M8LOG" | grep -oE '^[0-9]+')" "0"
+    check_min "m8820x: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$M8LOG" | grep -oE '^[0-9]+')" 15
+    check     "m8820x: offline verdict" "$(grep -c 'DIFF_M8820X_PASS' "$M8LOG")" "1"
+    #  The whole-window sweep, and the harness-fault rows that keep its number honest.
+    check "m8820x: the whole-window sweep rows are present" \
+          "$(grep -cE 'kills the host' "$M8LOG")" "2"
+    check "m8820x: the harness-fault rows are present" \
+          "$(grep -c 'harness faults' "$M8LOG")" "2"
+    #  The latch, which is what stops a guest-drivable stderr flood on a path a real boot
+    #  exercises 640,016 times per boot.
+    check "m8820x: the latch row is present" \
+          "$(grep -c 'complain exactly once' "$M8LOG")" "1"
+    #  THE ROW THAT DEFENDS THE FOLD.  Without the folded PATC flushes, this round's own
+    #  complain-and-continue would have turned FLUSH_SUPER_LINE into a silently ignored TLB
+    #  flush -- a defect worse than the crash it removed.  Checked white-box, plus its control.
+    check "m8820x: the PATC-invalidation row is present" \
+          "$(grep -c 'folded PATC flushes invalidate' "$M8LOG")" "1"
+    check "m8820x: both fold controls are present" \
+          "$(grep -cE 'CONTROL: an undefined command|CONTROL: a CACHE command' "$M8LOG")" "2"
+    #  Values, not survival (rounds 79/80).
+    check "m8820x: the seeded-IDR value rows are present" \
+          "$(grep -c 'seeded 88200 rev-9 id\|does not corrupt it' "$M8LOG")" "2"
+    check "m8820x: the identity row is present" \
+          "$(grep -c 'IDENTITY row count' "$M8LOG")" "1"
+fi
+
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
 if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
