@@ -4192,6 +4192,123 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R5 (#430, #431) — memory_rw translated the first page and then copied straight past it
+`memory_rw()` translated the START vaddr once and then copied the whole length from the host
+pointer for that one page. `memory_paddr_to_hostaddr()` returns a pointer INTO a 1 MB
+memblock, so the copy walked host memory that is contiguous PHYSICALLY while the guest's span
+is contiguous VIRTUALLY. Those coincide only by luck, and the moment the length ran past the
+page boundary the guest read — or wrote — the physical page that happened to follow.
+
+**The split that was already there is not this guard**, and it is easy to mistake for it: the
+one at the end of the function fires at `BITS_PER_MEMBLOCK` (1 MB) granularity — one boundary
+in 256 — and its job is to stop the `memcpy` running off a host allocation. It is a
+host-bounds guard, never a page guard.
+
+**The write side was worse than the read side, and the round nearly missed it.** The design
+brief described #47 as reading the wrong page. Driven offline, a straddling STORE leaves the
+guest's intended page unmodified and writes into an unrelated one instead. And a third
+consequence nobody had named: when the tail page had no valid translation the old code
+returned `MEMORY_ACCESS_OK` and wrote anyway — so this was a MISSING FAULT as well as a wrong
+page. Both were found by building the instrument, not by reading.
+
+- **#430, the split, placed BEFORE device dispatch.** The shipped body becomes a `static`
+  one-page worker; a wrapper of the same external name loops over page-sized chunks. Placing
+  it here rather than at the memblock check is not a preference — it was MEASURED. A late
+  split leaves a straddling access that begins inside a device broken: the device length clamp
+  truncates the length and the zero-fill supplies the rest, so the guest gets `d0 d0 00 00`
+  where the correct answer is `d0 d0 bb bb`. One review seat dissented for the late split and
+  that row is what settled it, rather than a vote.
+- **A LOOP, not recursion** — the right implementation, for a reason the round had to correct.
+  The first draft said "gcc does not turn the tail call into a loop at -O2". **Measured, it
+  does**: gcc 15.2.1 performs the sibling-call optimisation at -O2 and -O3, leaving a 96-byte
+  span. The loop is still correct — it does not depend on an optimisation being applied, and
+  -O0 builds and other compilers are real, where a recursive split measured 1,834,896 bytes of
+  stack for a 16 MB access — but **the row certifying it was VACUOUS**, passing under the very
+  mutation it existed to catch, until the differential was given
+  `-fno-optimize-sibling-calls`. With that flag: loop 0 bytes, recursion 1,572,768, row RED.
+  One compile flag turned a decorative row into a detector.
+- **Only when a translation actually happened.** Under `PHYSICAL`, or with no `translate_v2p`,
+  `paddr == vaddr` and there is no per-page mapping to redo, so those go straight through.
+  Without that exemption a 16 MB DMA would turn one call into four thousand; with it, the
+  memblock split stays alive and load-bearing instead of becoming dead code.
+- **The page size moved to one macro**, and the SPLIT GRANULE turned out to be a different
+  number again. The mask is the HOST-page granule (8 KB under `MEM_ALPHA`, not 4 KB — one seat
+  caught that the brief had said "4 KB page" throughout). But the granule the split needs is
+  the smallest unit at which a translator here can send adjacent virtual addresses to unrelated
+  physical ones, and **that is 1 KB**: `memory_arm.c:198-207` is a 1 KB page on any non-XScale
+  core, `memory_sh.c:116` has `SH4_PTEL_SZ_1K`, and the VR41xx MIPS path likewise. A pass-2 seat
+  produced the counterexample against the first draft — a four-byte read at `0x13fe` crosses a
+  translation boundary but not a 4 KB one, so the loop never fired and the defect survived
+  **exactly where `MEMORY_NOT_FULL_PAGE` says it is most likely**. Splitting finer is always
+  safe; the cost is more worker calls on a slow path that large transfers do not use. A bonus
+  the same seat noted: ARM *permissions* also change every 1 KB inside a 4 KB page
+  (`memory_arm.c:210-232` picks `ap0..ap3` from `vaddr & 0xc00`), so each chunk is now
+  permission-checked separately too.
+- **The worker's name is derived from `MEMORY_RW`**, because `cpu_alpha.c` includes this file
+  TWICE in one translation unit — `alpha_userland_memory_rw`, then `alpha_memory_rw` via
+  `tmp_alpha_tail.c`. A plainly named static would have been a redefinition. The
+  per-inclusion macros are `#undef`'d at the end of the file.
+- **#431, the PPC halt is deleted, not replaced.** `LS_GENERIC_N` printed a TODO and set
+  `cpu->running = false` for any access whose bytes crossed a page — legal guest code stopped
+  the emulator, and the fast path guaranteed it was reached, because `LS_N` punts every
+  unaligned non-byte access there before any page test. It is deleted rather than given a
+  local split because the other producers of straddling accesses — `lvx`/`stvx`,
+  `lwarx`/`stwcx.`, and the ARM `arm_pop` path — call `cpu->memory_rw` DIRECTLY and never
+  passed through this function, so the halt never covered them. `memory_rw` is the choke
+  point and #430 fixes it once.
+  Checked before deleting, because a loud stub can be load-bearing: no gate, probe, CHANGELOG
+  or OUTSTANDING_BUGS entry mentions the message or `LS_GENERIC_N`, and there is no PPC
+  alignment exception in this tree to fall back to — `cpu_ppc.h` defines DSI/ISI/EI/FPU/DEC/SC
+  and no alignment vector. What real 601-versus-later silicon does is **UNKNOWN**: there is no
+  PowerPC manual in this project and none was reconstructed.
+
+**The detector is OFFLINE, and that was the round's open question.** The defect needs two
+pages adjacent virtually and NOT adjacent physically, which no rig here can be made to produce
+on demand — so the map comes from a stub. `regress/diff_memory_rw.c` `#include`s the shipped
+`memory_rw.c` with `MEMORY_RW` defined to a test name and no family macro (the flavour
+PPC/ARM/SH/RISC-V/i960 actually ship), and needs six stubs. The expected values are painted
+bytes, ABSOLUTE consequences of the fixture — deliberately not constants re-read from the code
+under test, which is the `constblind` shape filed the same day.
+
+**PASS 2 FOUND THREE DEFECTS IN THE FIX ITSELF, and they are the reason this block reads the
+way it does.** Two were code, one was the detector. (1) The split broke **#244's promise** that
+a failed read leaves the caller's WHOLE buffer zeroed: the worker zeroes only the chunk it was
+handed, so a fault before the last chunk left the rest as uninitialised host stack — measured,
+a 12,288-byte read faulting on its first page left **8,192 bytes untouched**, where the
+unsplit code zeroed all of them. The wrapper now zeroes the remainder. (2) `offset + len >
+granule` can WRAP for an absurd length, skipping the loop entirely; it is now
+`len > granule - offset`, which cannot. (3) The 4 KB granule, above. A seat also FUZZED the
+final arithmetic — 40,000 reads and 20,000 writes against a per-byte reference over a random
+page *permutation*, **0 divergences**, with the pre-change file as a negative control at
+**39,388** — and found a one-line off-by-one (`granule - offset + 1`) that passed all
+twenty-one rows while diverging 1,089 times, because no row had a tail of exactly one byte.
+Two rows now do.
+
+**Verified:** differential **23 rows / 0 failures**; against the pre-change file
+(`git show b9daca1:src/cpus/memory_rw.c`) the SAME differential fails **15 of 23** rows,
+including the reproduction, the write into the wrong page, the device case and the missing
+fault. Gate 2 **PASS at 171 checks** (was 157). The emulator builds across all eight flavours
+including the Alpha double-inclusion, with no warnings naming either changed file. And the
+integration half is not left for later this time: **`gate_mips.sh` PASS 6/6** — pmax (R3000)
+15/15 harness steps and arc (R4000) 13/13, both reaching `uid=0(root)` on freshly built
+binaries. Both changed sources are byte-identical in `GXEMUL-SEC`, `est/` and both build trees.
+
+**A compile-time assert covers what the test cannot reach.** `MEM_ALPHA` is never compiled by
+the differential (its fixture is 4 KB-specific), so a seat measured that widening
+`MRW_OFFSET_MASK`, or hardcoding the worker's local back to `0xfff` — precisely the drift the
+macro exists to prevent — leaves every row green. `MRW_SPLIT_MASK <= MRW_OFFSET_MASK` is now
+asserted at compile time, in every flavour including the one the test cannot build.
+
+**Filed, not fixed here:** an absurd length (near `SIZE_MAX`) now grinds rather than
+mis-copying — the comment says so plainly instead of implying it is serviced; a straddling
+STORE whose second chunk faults leaves the first written, so an MMIO device at the head sees
+the write twice when the instruction restarts; this tree's `lvx`/`stvx` apply no alignment mask at all, which is
+arguably its own defect rather than evidence for this one; a partial `stwcx.` still holding a
+reservation; the ARM 1 KB / mixed-AP subpage sibling; and the observation that every surviving
+straddle producer needs an UNALIGNED base, in a tree that models no alignment exception — which
+makes #430 latent-but-real rather than routinely hit, and is the honest way to state its
+severity.
+
 ## R4 follow-up — the round's detector certified six things it could not see, and its census entry was wrong
 Nine seats were asked for R4's review; eight answered (the Fable seat was deliberately not
 fired — the owner had warned of its hourly limit and it is reserved for the Sunday

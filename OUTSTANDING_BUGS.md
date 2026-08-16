@@ -4095,3 +4095,52 @@ Ranked, because the first is a live host crash.
    constant encoding a THRESHOLD or POLICY, where a different value IS different behaviour.
    **`diff_timer.c` was the only differential exposed and it is fixed.** What remains is the
    RULE, for any future differential that reads a tunable.
+
+---
+
+## 2026-08-15 — residuals from R5 (#430/#431), the page-crossing memory split
+
+Eight seats reviewed the design; codex hit a CONTENT-POLICY FLAG after ~35 K tokens
+("flagged for possible cybersecurity risk") and produced no verdict — a SEAT FAILURE of a
+kind this project has not recorded before, and NOT a quota wall. Recorded by name so it is
+not read as agreement. Six seats answered with a verdict; the Fable seat was deliberately
+not fired (reserved for the batched regression review).
+
+The design fork was settled by MEASUREMENT rather than by the 5-to-1 majority: one seat
+argued for the late (memblock-generalising) split, and the row that decided it was a
+straddling access beginning inside a device, which the late split leaves returning
+`d0 d0 00 00` against a correct `d0 d0 bb bb`.
+
+1. **`lvx`/`stvx` apply NO alignment mask at all** (`cpu_ppc_instr.c:3769`, `:3801`) — 16-byte
+   accesses straight to `cpu->memory_rw`. Since 16 divides 4096, a properly masked effective
+   address could never straddle; these straddle only because the mask is missing. That makes
+   it arguably its own defect rather than evidence for #430. Whether real silicon masks the
+   EA to 16 bytes is **BELIEVED, uncitable** — there is no PowerPC manual here.
+2. **A partial `stwcx.` can leave a reservation held.** `lwarx`/`stwcx.` call
+   `cpu->memory_rw` DIRECTLY (`:2309`, `:2357`), never through `LS_GENERIC_N`, so #431's halt
+   never covered them; and the reservation is set in the instruction handler after
+   `memory_rw` returns, so the split inside `memory_rw` is reservation-NEUTRAL (grep: zero
+   references to `ll_bit`/`ll_addr` in `memory_rw.c`). It can only arise from an
+   architecturally illegal unaligned `lwarx`. Filed as the missing alignment-exception model,
+   not as a #430 question.
+3. **The ARM 1 KB / mixed-AP subpage sibling.** `memory_arm.c:235` is the tree's only producer
+   of `MEMORY_NOT_FULL_PAGE`. Under the split each half now gets its OWN `ok`, which is
+   strictly better than one `ok` from the start page governing a two-page span — but the
+   subpage case deserves its own rows.
+4. **Every surviving straddle producer needs an UNALIGNED base**, in a tree that models no
+   alignment exception. The scalar ARM slow path is NOT a producer (`cpu_arm_instr_loadstore.c:229`
+   masks `addr &= ~(datalen - 1)` before the call); `lmw`/`stmw` issue one 4-byte access per
+   register, not one large one; `arm_pop` (`cpu_arm_instr.c:1512`) IS a producer. **This is
+   the honest way to state #430's severity: latent-but-real rather than routinely hit** — and
+   it is the argument for fixing it once at the choke point instead of per caller.
+5. **Device handlers now see two calls for a >1-page access into a multi-page device.** No
+   handler was found that rejects an unexpected length except register-width devices
+   (`dev_sgi_gbe.c:726`, `dev_sgi_ip32.c:698`, `dev_kn01.c:89`, ~15 in `dev_pcc2.c`), and a
+   naturally aligned ≤4-byte register access cannot cross a page. MANUAL for the reading,
+   **UNKNOWN for reachability** — the committed differential's D1/D2 rows are the standing
+   check.
+6. **Partial completion is RECORDED, not fixed.** A straddling write whose tail faults leaves
+   the head written. The pre-change code had this property too (its memblock split still
+   does), so the split does not introduce it; on a failing READ the new behaviour is strictly
+   better — head kept, tail deterministically zeroed, and FAILED returned, where the old code
+   returned OK with the wrong bytes. Atomicity is a separate question.

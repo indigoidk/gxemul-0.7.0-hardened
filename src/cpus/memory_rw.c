@@ -62,14 +62,161 @@
  *
  *  (MEMORY_ACCESS_FAILED is 0.)
  */
+
+/*
+ *  #430: THE PAGE SIZE, IN ONE PLACE.
+ *
+ *  It was a local inside the function.  The wrapper below needs the same number, and two
+ *  copies of a page size that can silently diverge is the shape this tree has been bitten
+ *  by before -- so it is hoisted to a macro and the local now reads it.  Note the Alpha
+ *  value: it is 8 KB, not 4 KB, so anything that splits at "the page boundary" must use
+ *  THIS and never a literal 4096.  A review seat caught exactly that hazard in the design
+ *  brief, which had said "4 KB page" throughout.
+ */
+#ifdef MEM_ALPHA
+#define	MRW_OFFSET_MASK		0x1fff
+#else
+#define	MRW_OFFSET_MASK		0xfff
+#endif
+
+/*
+ *  #430: THE SPLIT GRANULE IS 1 KB, AND IT IS NOT THE SAME NUMBER AS THE MASK ABOVE.
+ *
+ *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+ *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+ *  thing -- the smallest unit at which a translator in this tree can send two adjacent
+ *  virtual addresses to unrelated physical ones -- and it is SMALLER:
+ *
+ *      memory_arm.c:198-207   descriptor type 3 on a non-XScale core is a 1 KB page,
+ *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+ *      memory_sh.c:116        SH4_PTEL_SZ_1K gives mask 0xfffffc00
+ *      memory_mips_v2p.c      the VR41xx path likewise has 1 KB logic
+ *
+ *  A first draft of this split used the 4 KB mask and a review seat produced the
+ *  counterexample: with a 1 KB mapping, a four-byte access at 0x13fe crosses a translation
+ *  boundary but NOT a 4 KB one, so the loop never fired and the defect survived exactly
+ *  where MEMORY_NOT_FULL_PAGE says it is most likely.  Splitting finer is always SAFE --
+ *  each chunk is then inside one mapping for every translator here, and the worker's own
+ *  host-page arithmetic is unchanged -- so the only cost is more worker calls on the slow
+ *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+ *  and exempt).  Correctness at a known granule beats a faster one that is wrong on ARM.
+ */
+#define	MRW_SPLIT_MASK		0x3ff
+
+/*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+    this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+    via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+#ifndef MRW_CAT2
+#define	MRW_CAT2(a,b)		a##b
+#define	MRW_CAT(a,b)		MRW_CAT2(a,b)
+#endif
+#define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+
+/*
+ *  The one relationship between the two that MUST hold, asserted at COMPILE TIME because it
+ *  cannot be asserted at run time by the offline differential.
+ *
+ *  MEM_ALPHA is never compiled by that differential -- its fixture is 4 KB-specific -- so a
+ *  review seat MEASURED that widening MRW_OFFSET_MASK, or hardcoding the worker's local back
+ *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+ *  static assertion costs nothing and covers the Alpha build the test cannot reach.  The
+ *  name is derived because this file is included twice per translation unit.
+ */
+typedef char MRW_CAT(MEMORY_RW, _split_le_page)
+    [(MRW_SPLIT_MASK) <= (MRW_OFFSET_MASK) ? 1 : -1];
+
+static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+	unsigned char *data, size_t len, int writeflag, int misc_flags);
+
+
+/*
+ *  #430: TRANSLATE ONCE PER PAGE, NOT ONCE PER ACCESS.
+ *
+ *  The worker below translates the START vaddr and then copies the whole length from the
+ *  host pointer for THAT page.  memory_paddr_to_hostaddr() returns a pointer into a 1 MB
+ *  memblock, so the copy walks host memory that is contiguous PHYSICALLY while the guest's
+ *  span is contiguous VIRTUALLY.  Those coincide only by luck, and the moment the length
+ *  carries past the page boundary the guest reads -- or OVERWRITES -- whatever physical
+ *  page happens to follow.  Measured offline against a deliberately non-monotonic map: a
+ *  straddling read returned the physically-following page's bytes, and a straddling WRITE
+ *  left the guest's intended page untouched while corrupting an unrelated one.  Measured
+ *  too: when the tail page had no valid translation the old code returned
+ *  MEMORY_ACCESS_OK anyway, so this was a MISSING FAULT as well as a wrong page.
+ *
+ *  The existing split at the end of the worker is NOT this guard and must not be mistaken
+ *  for it: it fires at BITS_PER_MEMBLOCK (1 MB) granularity -- one boundary in 256 -- and
+ *  its job is to stop the memcpy running off the end of a host allocation.
+ *
+ *  A LOOP, not recursion.  A recursive split costs a real frame per chunk when the compiler
+ *  does NOT eliminate the tail call -- measured at -O0, 1,834,896 bytes of stack for a 16 MB
+ *  access -- and a large enough access then dies on the stack rather than returning an
+ *  answer.
+ *
+ *  CORRECTION, and it is the reason this paragraph is worded carefully: the first draft said
+ *  "gcc does not turn the tail call into a loop at -O2".  MEASURED, IT DOES -- gcc 15.2.1
+ *  performs the sibling-call optimisation at -O2 and -O3, leaving a 96-byte span.  So the
+ *  loop is still the right implementation (it does not depend on an optimisation being
+ *  applied, and -O0 builds and other compilers are real), but the justification was wrong,
+ *  and the row that certified it was VACUOUS until the differential was given
+ *  -fno-optimize-sibling-calls.  No caller in the tree passes an access large enough for
+ *  this to bite today; it is insurance, and it costs about fifteen lines.
+ *
+ *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+ *  paddr == vaddr, there is no per-page mapping to redo, and splitting would buy nothing
+ *  while turning one large DMA into thousands of calls -- so those go straight through and
+ *  the memblock split keeps doing its job unchanged.
+ */
 int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
 	unsigned char *data, size_t len, int writeflag, int misc_flags)
 {
-#ifdef MEM_ALPHA
-	const int offset_mask = 0x1fff;
-#else
-	const int offset_mask = 0xfff;
-#endif
+	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+
+		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+		    the loop and hand the whole thing to the worker.  The subtraction
+		    cannot wrap, because offset < granule always.
+
+		    STATED EXACTLY, because the first version of this comment implied more
+		    than it delivers: this form does not SERVICE such a length, it declines
+		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+		    at two million chunks.  No caller passes anything remotely like it (the
+		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+		    and filed rather than handled.  */
+		while (len > granule - offset) {
+			size_t head = granule - offset;
+
+			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+			    writeflag, misc_flags)) {
+				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+				    THAT: the worker zeroes only the chunk IT was given, so a
+				    failure before the last chunk used to leave the caller's
+				    remaining bytes untouched -- uninitialised host stack, for
+				    a caller that ignores the return value.  Unsplit, one call
+				    covered the whole length.  Zero the rest here so the
+				    guarantee is the same as it was.  */
+				if (writeflag == MEM_READ)
+					memset(data, 0, len);
+				return MEMORY_ACCESS_FAILED;
+			}
+
+			vaddr += head;
+			data += head;
+			len -= head;
+			offset = 0;
+		}
+	}
+
+	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+}
+
+
+static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+	unsigned char *data, size_t len, int writeflag, int misc_flags)
+{
+	const int offset_mask = MRW_OFFSET_MASK;
 
 	int ok = 2;
 	uint64_t paddr;
@@ -623,4 +770,11 @@ not just the device in question.
 do_return_ok:
 	return MEMORY_ACCESS_OK;
 }
+
+/*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+    the per-inclusion macros must not leak into the next inclusion.  MRW_CAT/MRW_CAT2 are
+    inclusion-independent and are left defined behind their own guard.  */
+#undef MEMORY_RW_ONE_PAGE
+#undef MRW_OFFSET_MASK
+#undef MRW_SPLIT_MASK
 

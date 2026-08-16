@@ -449,6 +449,68 @@ else
           "$(grep -c 'the interval is exactly 1/freq' "$TIMLOG")" "1"
 fi
 
+#  #430-#431: memory_rw() translated the START vaddr once and then copied the whole length
+#  from that page's host pointer, so a page-crossing access walked PHYSICALLY contiguous
+#  host bytes across a VIRTUALLY contiguous guest span.  Driven OFFLINE, because the defect
+#  needs two pages adjacent virtually and NOT adjacent physically and no rig in this tree can
+#  be made to produce that on demand -- the map comes from a stub instead.
+#  MEASURED against the pre-fix file (git show b9daca1:src/cpus/memory_rw.c): 11 of these
+#  rows go red, including the reproduction (a straddling read returning the physically-
+#  following page), the straddling WRITE corrupting an unrelated page, the device case, and
+#  the missing fault.  -I"$SEC/src" because the driver includes "include/misc.h" the way the
+#  cpu files do.
+MRWBIN=$LOGDIR/diff_memory_rw
+MRWLOG=$LOGDIR/diff_memory_rw.log
+#  -fno-optimize-sibling-calls IS LOAD-BEARING, and only for the stack row.  gcc 15.2.1
+#  DOES eliminate the tail call at -O2, so a recursion mutant measured a 96-byte span and
+#  the "it is a loop" row passed under the very defect it exists to catch -- vacuous.
+#  With the flag: loop 0 bytes, recursion 1,572,768.  Measured both ways by a review seat.
+if ! $CC -O2 -fno-optimize-sibling-calls -std=c99 -D_POSIX_C_SOURCE=200809L \
+        -D_DEFAULT_SOURCE -I"$SEC/src" \
+        -o "$MRWBIN" "$HERE/diff_memory_rw.c" -lm > "$MRWLOG" 2>&1; then
+    note "memory_rw differential compile failed:"; sed 's/^/       /' "$MRWLOG" | head -12
+    check "memory_rw: compiles against the real memory_rw.c" "no" "yes"
+else
+    check "memory_rw: compiles against the real memory_rw.c" "yes" "yes"
+    "$MRWBIN" > "$MRWLOG" 2>&1
+    sed 's/^/       /' "$MRWLOG"
+    check     "memory_rw: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$MRWLOG" | grep -oE '^[0-9]+')" "0"
+    #  The floor is the EXACT count, not one below it: a floor set under the count makes the
+    #  identity row deletable with the gate still green, which is what #430's sibling round
+    #  had to fix in the timer differential.
+    check_min "memory_rw: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$MRWLOG" | grep -oE '^[0-9]+')" 17
+    check     "memory_rw: offline verdict" "$(grep -c 'DIFF_MEMORY_RW_PASS' "$MRWLOG")" "1"
+    #  Name each row that is the SOLE detector of something, so deleting one is a red row
+    #  rather than a quieter file.
+    check "memory_rw: the straddling-read row is present" \
+          "$(grep -c 'straddling read takes the VIRT-next page' "$MRWLOG")" "1"
+    check "memory_rw: the write-corruption rows are present" \
+          "$(grep -c 'the PHYS-next page was NOT corrupted' "$MRWLOG")" "1"
+    check "memory_rw: the device-straddle row is present" \
+          "$(grep -c 'device head, RAM tail' "$MRWLOG")" "1"
+    check "memory_rw: the faulting-tail rows are present" \
+          "$(grep -c 'bad tail returns FAILED' "$MRWLOG")" "2"
+    #  The two rows that defend the DESIGN rather than the fix: PHYSICAL must not be split,
+    #  and the split must not consume stack per page.
+    check "memory_rw: the PHYSICAL-not-split row is present" \
+          "$(grep -c 'splits per MEMBLOCK, not per page' "$MRWLOG")" "1"
+    check "memory_rw: the loop-not-recursion row is present" \
+          "$(grep -c 'stack does not grow per page' "$MRWLOG")" "1"
+    #  The two rows the pass-2 review forced, each covering a defect IN THE FIX: a 4 KB
+    #  split granule silently misses a 1 KB mapping (ARM tiny pages, SH SZ_1K), and the
+    #  split broke #244's promise that a failed read leaves the WHOLE buffer zeroed.
+    check "memory_rw: the 1 KB-granule row is present" \
+          "$(grep -c 'across a 1 KB mapping boundary' "$MRWLOG")" "1"
+    check "memory_rw: the first-chunk-fault rows are present" \
+          "$(grep -c 'first-chunk fault' "$MRWLOG")" "1"
+    check "memory_rw: the one-byte-tail rows are present" \
+          "$(grep -c '1-byte tail across' "$MRWLOG")" "2"
+    check "memory_rw: the identity row is present" \
+          "$(grep -c 'IDENTITY row count' "$MRWLOG")" "1"
+fi
+
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
 if ! $CC -O2 -std=c99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \

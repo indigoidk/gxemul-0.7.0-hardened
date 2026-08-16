@@ -60,16 +60,29 @@ void LS_GENERIC_N(struct cpu *cpu, struct ppc_instr_call *ic)
 	cpu->pc &= ~((PPC_IC_ENTRIES_PER_PAGE-1) << PPC_INSTR_ALIGNMENT_SHIFT);
 	cpu->pc += (low_pc << PPC_INSTR_ALIGNMENT_SHIFT);
 
-#ifndef LS_B
-	if ((addr & 0xfff) + LS_SIZE-1 > 0xfff) {
-		debugmsg_cpu(cpu, SUBSYS_CPU, "ppc", VERBOSITY_ERROR,
-		    "PPC LOAD/STORE misalignment across page boundary: TODO"
-		    " (addr=0x%08x, LS_SIZE=%i)\n", (int)addr, LS_SIZE);
-		cpu->running = false;
-		cpu->cd.ppc.next_ic = &nothing_call;
-		return;
-	}
-#endif
+	/*
+	 *  #431: the page-crossing HALT is gone, because #430 made the thing it was
+	 *  standing in for actually work.
+	 *
+	 *  What was here: an access whose bytes crossed a page boundary printed a TODO and
+	 *  set cpu->running = false -- legal guest code STOPPED THE EMULATOR.  The fast path
+	 *  guarantees it was reached: LS_N punts every unaligned non-byte access to
+	 *  LS_GENERIC_N before any page test, so a warm translation was no protection.
+	 *
+	 *  It is DELETED rather than replaced with a split here, because a PPC-local split
+	 *  would leave the other producers of straddling accesses untouched -- lvx/stvx,
+	 *  lwarx/stwcx. and the ARM arm_pop path all call cpu->memory_rw DIRECTLY and never
+	 *  passed through this function, so this halt never covered them.  memory_rw is the
+	 *  choke point and #430 fixes it once.
+	 *
+	 *  Checked before deleting, because a loud stub can be load-bearing: no gate, probe,
+	 *  CHANGELOG entry or OUTSTANDING_BUGS entry mentions this message or LS_GENERIC_N
+	 *  (gate_ppc_halt.sh is an FP-encoding sweep reaching `goto bad`, a different
+	 *  mechanism).  And there is no PPC alignment exception in this tree to fall back to:
+	 *  cpu_ppc.h defines DSI/ISI/EI/FPU/DEC/SC and no alignment vector at all.  What real
+	 *  601-versus-later silicon does on an unaligned page-crossing access is UNKNOWN --
+	 *  there is no PowerPC manual in this project and none is reconstructed here.
+	 */
 
 #ifdef LS_LOAD
 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
