@@ -4754,3 +4754,37 @@ the real address decode.
 
 - **`m8invground` is BROADER than filed: it covers `diff_m8820x.c` D7/D8 too**, which use the same
   `noop_invalidate` callback-counting spy (`:72-74, 158, 396-404`). One filing, two harnesses.
+
+### A dissent recorded as agreement, and an item filed only in this file
+
+The owner looked at the dashboard and said deepseek "didn't run or didn't get marked off that it
+ran". Neither, exactly — and what it actually was is worse than either.
+
+**deepseek ran, answered 8.3 KB, and returned HOLD. I recorded it as "BELIEVED safe."** That is a
+dissent softened into agreement in the record, by me, in the round it was written. It answered in
+all six of the most recent panels (2.6–8.3 KB, with real verdicts: HOLD, SHIP-WITH-FIX,
+FIX-AS-PROPOSED, FIX-DIFFERENTLY), so nothing was wrong with the seat at all.
+
+**Its objection was a genuine contradiction in my own brief.** Packet §2 said `PFSR` is
+*"WRITTEN by the fault path; never read"*, while packet §3's measured table, in the same document,
+reported **PFSR reads = 320,243**. Both sentences were mine. The resolution — which I knew and the
+packet never said — is that `PFSR` is never read **by the translation path** but is read 320,243
+times **by the guest through this handler**. Two different senses of "read", written with the same
+word. **A packet-fed seat can only see what the packet says, and what the packet said contradicted
+itself, so HOLD was the correct verdict on the evidence supplied.**
+
+It graded honestly throughout, which is why the HOLD was worth reading rather than discounting:
+CONFIRMED for the arithmetic (it re-added the six write counts to 627,383 itself), UNKNOWN for
+consumer-table completeness — naming `memcpy`, pointer arithmetic, indexed access through
+`cd.m88k.cmmu[]`, and aliasing, the same four shapes glm and minimax raised and the measure seat
+later closed — and BELIEVED for the SAR ordering *while noting the packet never showed the SCR arm*
+to confirm the purge is unconditional and per-CMMU. That request was also correct: it had not.
+
+**The lesson for packet construction:** when a brief uses one word in two senses, the seats that
+cannot read the repo are the ones that will catch it, and they will catch it as a HOLD rather than
+as a question. That is the packet-fed class working as designed, and softening the result throws
+away the only signal they can give.
+
+**Separately, `m8patc` had been filed in this file and never added to `pipeline/ledger.json`.**
+The dashboard is the guide; an item that lives only here is an item the guide cannot show. Now in
+both. A sweep of every item filed by the bullet convention found no others missing.
