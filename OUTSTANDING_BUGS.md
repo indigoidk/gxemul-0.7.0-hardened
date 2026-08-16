@@ -4788,3 +4788,39 @@ away the only signal they can give.
 **Separately, `m8patc` had been filed in this file and never added to `pipeline/ledger.json`.**
 The dashboard is the guide; an item that lives only here is an item the guide cannot show. Now in
 both. A sweep of every item filed by the bullet convention found no others missing.
+
+
+### CORRECTION: backgrounding does NOT kill the grok seat. I diagnosed that wrong and shipped it.
+
+Committed in `840de82` and written into `panel.sh`, `CHECKPOINT.md` and this file: *"a backgrounded
+launch loses the waiter and truncates at least the grok seat"*, with 523 and 265 byte files as the
+evidence and a 10,431-byte foreground run as the control.
+
+**The files finished.** Timestamps on `panel_20260816_024410`: `grok.txt` completed at 02:53:27 at
+**10,226 bytes**, `grok_retry.txt` at 02:57:00 at **12,579 bytes**, both ending in real verdicts. I
+read them at ~02:4x, mid-stream, and called a partial file a truncated one. The foreground run
+finished at 02:54:34 — *between the two backgrounded runs it was supposed to disprove*.
+
+**What actually happened, and it is a different defect:** double-backgrounding (`nohup ./panel.sh &`
+inside a tool call) killed **`panel.sh` itself** — the waiter — not the seats. The seats ran to
+completion unattended. With the waiter dead, the seat check never printed, so nothing told me the
+answers were still arriving, and I read files that were still being written.
+
+**The `SEATS.txt` fix stands and is worth more, not less.** The real failure mode is "the waiter
+died, so nothing reported the seats' state" — which is precisely what a persisted verdict plus a
+`PANEL_COMPLETE` sentinel fixes. Absent that sentinel, a partial file is indistinguishable from a
+finished one. What was wrong was only the *causal story* attached to it.
+
+**The lesson: a control run does not license a causal claim when the thing it controls for is TIME.**
+Foreground vs background differed by launch mode *and* by when I looked. I attributed the whole
+difference to the first and never checked the second, though the file's own mtime would have said
+so in one command.
+
+- **`m8invpred` — grok's pass-1 answer on `panel_20260816_024410` PREDICTED the mutant class that
+  later cost two rounds, and went unread.** It said the planned detector was *"too clean and will
+  green-light state-dependent mutants that still purge on the only path a guest takes"* — which is
+  exactly the value-guard family (E9/E10) and the selector family (G6–G9) that pass-2 seats found
+  the hard way across #434 and #435. It also observed that the I and D CMMUs have separate PATCs
+  but share one dyntrans cache. Nothing to fix; recorded because the cost of not reading it was two
+  rounds of rediscovery, and because it is the sharpest available answer to "what does a reading
+  seat buy that a measuring seat does not" — it buys the class, before the instance.

@@ -137,8 +137,25 @@ int main(void)
 		else purge_not_owed += inv_calls;
 	}
 
-	/*  THE DEFECT ROW.  Four registers no consumer reads, each purging the whole cache.  */
-	check_u("writes that purge although NO consumer reads them", purge_not_owed, 4);
+	/*
+	 *  *** THIS IS A PRE-FIX REPRODUCTION AND #435 HAS SINCE LANDED, SO THE HEALTHY OUTCOME
+	 *  IS NOW THE OPPOSITE OF THE ONE IT WAS WRITTEN TO SEE. ***
+	 *
+	 *  Kept committed because a round's evidence should stay readable -- but a committed file
+	 *  that prints a red verdict on correct code is a trap for whoever reads it next: they
+	 *  cannot tell "the defect is fixed" from "the reproduction is broken".  So it reports
+	 *  WHICH OF THREE STATES it is in, and only the third is a failure:
+	 *
+	 *      purge_not_owed == 4   the defect is PRESENT  (pre-#435 code)
+	 *      purge_not_owed == 0   the defect is GONE     (post-#435 code -- expected today)
+	 *      anything else         neither shape; the harness itself is wrong
+	 */
+	if (purge_not_owed == 4)
+		printf("  --    STATE: the pre-#435 defect is PRESENT (4 gratuitous purges)\n");
+	else if (purge_not_owed == 0)
+		printf("  --    STATE: the pre-#435 defect is GONE (0 gratuitous purges)\n");
+	check_u("the four non-consumer registers purge 4 (pre-fix) or 0 (post-fix)",
+	    (uint64_t) (purge_not_owed == 4 || purge_not_owed == 0), 1);
 
 	/*  THE CONTROL.  SAPR/UAPR genuinely do change translation and must keep purging;
 	    a fix that silenced these too would be over-applying the argument.  */
@@ -156,8 +173,19 @@ int main(void)
 	acc(CMMU_SCR * 4, MEM_WRITE, CMMU_FLUSH_SUPER_PAGE);
 	check_u("CONTROL: an SCR flush command still purges", inv_calls, 1);
 
-	printf("\n%s\n", fails == 0 ? "REPRO_M8SARPURGE_CONFIRMED"
-	                            : "REPRO_M8SARPURGE_NOT_REPRODUCED");
+	printf("\n%s\n", fails != 0 ? "REPRO_M8SARPURGE_HARNESS_FAULT"
+	                  : purge_not_owed == 4 ? "REPRO_M8SARPURGE_DEFECT_PRESENT"
+	                                        : "REPRO_M8SARPURGE_DEFECT_GONE");
 	printf("%d rows, %d failures\n", rows, fails);
-	return 0;
+	/*
+	 *  RETURN THE FAILURE COUNT, as every gated differential in this directory does.
+	 *  This said `return 0;` -- so a caller that checked the exit status would have been
+	 *  told SUCCESS on a run whose rows failed.  Nothing consumes it today (this file is a
+	 *  reproduction, not a gated detector), which is exactly why it survived: an exit status
+	 *  nobody reads is wrong for as long as nobody reads it, and then it is wrong at the
+	 *  moment somebody does.  Found by a pass-1 seat whose 491 KB answer went unread for a
+	 *  day, because the seats-read gate keyed on (panel, seat) and the same seat's pass-2
+	 *  file had been cited.
+	 */
+	return fails != 0;
 }
