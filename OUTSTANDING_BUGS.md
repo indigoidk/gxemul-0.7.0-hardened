@@ -4085,5 +4085,13 @@ Ranked, because the first is a live host crash.
    claims with every row still passing. **Reading the constant defeats transcription drift and
    creates blindness to the constant itself. Both are needed: read it, and also assert an
    absolute consequence derived from outside the header.** Every differential in `regress/`
-   that reads a `#define` for its expected value has this blind spot and none of the others
-   has been checked for it.
+   that reads a `#define` for its expected value has this blind spot.
+   **AUDITED the same evening, and the audit BOUNDS it:** all seven `regress/diff_*.c` were
+   checked for macros on the expected side of a row. Four use none (`diskimage_geom`,
+   `ieee_store`, `sh4_tmu`, `wdc_identify`). The two disk differentials use only TYPE TAGS and
+   OPCODES — `DISKIMAGE_SCSI/FLOPPY/IDE`, `SCSICMD_READ_10`, `SCSICMD_REQUEST_SENSE`,
+   `MACHINE_PMAX/EVBMIPS` — which do NOT carry the risk, because changing such a value is a
+   rename that code and test follow together and no behaviour breaks. The risk is specific to a
+   constant encoding a THRESHOLD or POLICY, where a different value IS different behaviour.
+   **`diff_timer.c` was the only differential exposed and it is fixed.** What remains is the
+   RULE, for any future differential that reads a tunable.
