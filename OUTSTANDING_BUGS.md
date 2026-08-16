@@ -4302,13 +4302,35 @@ kill did not end the run. Measured on the committed build:
 | | |
 |---|---|
 | word offsets in the 4 KB window | **1024** |
-| offsets whose **READ** kills the host | **1013** |
-| offsets whose **WRITE** kills the host | **1015** |
-| offsets whose READ survives | **11** |
+| offsets whose **READ** kills the host | **1007** |
+| offsets whose **WRITE** kills the host | **1009** |
+| offsets whose READ survives | **17** |
 
-So **99.0% of the window terminates the host process on a plain read.** The audit filed this as a
-`default:`-arm problem; the measurement shows the in-arm exits add to it — there are four `exit(1)`
-calls inside the handler, and only 11 of the 18 handled offsets survive a read.
+So **98.3% of the window terminates the host process on a plain read.**
+
+*** THE FIRST VERSION OF THIS TABLE WAS WRONG, AND IT WAS WRONG IN MY OWN HARNESS. *** It said
+1013 / 1015 / 11. A review seat derived 1007 / 1009 / 17 from the source alone and named the exact
+mechanism: the `PFSR PFAR SAR SCTR SAPR UAPR` arm calls
+`c->invalidate_translation_caches(c, 0, INVALIDATE_ALL)` **before** the `writeflag` check, so it
+fires on READS too — and my offline driver left that callback NULL. Six offsets SIGSEGV'd in the
+DRIVER and I counted them as device kills, in both directions, which is the symmetric +6 signature
+the seat spotted. Re-measured with a no-op callback installed and with the child's exit status
+DISCRIMINATED (status 1 = the real `exit(1)` path, a signal = a harness fault): **1007 / 1009 / 17,
+matching the source-derived prediction exactly.**
+
+This is mechanical rule 4 — *"did it fail for the reason under test?"* — violated inside the
+reproduction that was supposed to establish the defect. The defect is unaffected and still
+overwhelming; the number was not. The committed detector must discriminate exit status the same
+way, or it will enshrine the artifact.
+
+The in-arm exits do add to the default arm, but by ONE on the read side, not seven: the only
+in-arm READ exit is `CMMU_SCR` (`:157-159`), so 18 handled offsets minus that one gives the 17
+survivors. On the write side `CMMU_IDR` and `CMMU_SSR` add two more, plus `CMMU_SCR` with an
+unimplemented command value.
+
+There are **five** `exit(1)` calls in the file, not "four inside the handler": four lexically inside
+`DEVICE_ACCESS` (`:152` IDR-write, `:159` SCR-read, `:169` SSR-write, `:220` the default arm) and
+one in the static helper `m8820x_command()` (`:125`), reachable from the SCR-write arm.
 
 The count of handled offsets is **18**, confirmed by listing the case labels
 (`CMMU_IDR SCR SSR SAR SCTR PFSR PFAR SAPR UAPR BWP0-7 CSSP0`). The first filing said 21; a
