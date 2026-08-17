@@ -818,14 +818,19 @@ fi
 #  is not wholly inert and that one named row still fires.  It is not a census
 #  and must never be read as "the detector is fine".  Going from 0 to 1 is not
 #  false comfort; CALLING 1 "the detector works" is.
-selfmutant_one() {   # harness subject stem row-id
-    local h="$1" subj="$2" stem="$3" row="$4"
+selfmutant_one() {   # harness subject stem row-id [extra-cc-flags]
+    local h="$1" subj="$2" stem="$3" row="$4" xflags="${5:-}"
     local o="$HERE/selfmutants/$stem.old" n="$HERE/selfmutants/$stem.new"
     if [ ! -f "$o" ] || [ ! -f "$n" ]; then
         check "selfmutant $stem: fragments present" "no" "yes"; return
     fi
     local out
-    out=$(python3 "$HERE/selfmutant.py" "$h" "$subj" "$o" "$n" "$row" 2>&1)
+    #  The extra flags are the caller's, because the caller owns the real compile line.
+    #  memory_rw needs -fno-optimize-sibling-calls, which THIS FILE calls load-bearing for
+    #  the loop-not-recursion row; the helper hardcoded one flag set and so compiled that
+    #  harness differently from the battery, which the pristine control arm cannot detect
+    #  because both arms are then consistently wrong.
+    out=$(SELFMUTANT_EXTRA_FLAGS="$xflags"           python3 "$HERE/selfmutant.py" "$h" "$subj" "$o" "$n" "$row" 2>&1)
     printf '%s\n' "$out" | grep -E '^       ' | sed 's/^/    /'
     #  ASSERT THE OK TOKEN IS PRESENT, never "FAIL is absent": a setup error emits
     #  neither, so a negative form is satisfied by a control that never ran.
@@ -852,8 +857,8 @@ check "SELFCHECK: every one of the five detectors ran its comparator sentinel" \
       "${sc_missing:-none}" "none"
 
 selfmutant_one diff_timer.c      src/core/timer.c            timer      "NaN"
-selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "1 KB"
-selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "zero"
+selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "G1 " "-fno-optimize-sibling-calls"
+selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "A1 "
 selfmutant_one diff_m8820x.c     src/devices/dev_m8820x.c    m8820x     "D3"
 selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
 

@@ -64,6 +64,19 @@ CC = ("gcc -O2 -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE "
       "-I../src -I../src/include -I../src/include/thirdparty "
       "-ffunction-sections -fdata-sections -Wl,--gc-sections")
 
+#  *** PER-HARNESS FLAGS, BECAUSE ONE HARDCODED SET IS A LANE THAT COMPILES SOMETHING
+#  ELSE. ***  gate 2 builds diff_memory_rw.c with -fno-optimize-sibling-calls, and its own
+#  comment calls that LOAD-BEARING: gcc 15.2.1 eliminated the tail call and the
+#  loop-not-recursion row passed under the very defect it exists for.  This helper hardcoded
+#  a single CC line without it, so for that harness the self-mutant lane compiled DIFFERENTLY
+#  from the battery.
+#
+#  The pristine control arm cannot catch that: both arms are consistently wrong, so it agrees
+#  with itself.  A control that compares two copies of the same mistake is the shape this
+#  whole round exists to remove.  A reading seat named it; the flag now comes in as an
+#  argument so the caller -- which owns the real compile line -- supplies it.
+EXTRA_FLAGS = os.environ.get("SELFMUTANT_EXTRA_FLAGS", "")
+
 
 def out(tag, *msg):
     print("       %-9s %s" % (tag, " ".join(str(m) for m in msg)))
@@ -92,7 +105,7 @@ def io_write(path, text):
 
 def build_and_run(tree, harness):
     binp = os.path.join(tree, "d")
-    cmd = "cd %s/regress && %s -o %s %s -lm" % (tree, CC, binp, harness)
+    cmd = "cd %s/regress && %s %s -o %s %s -lm" % (tree, CC, EXTRA_FLAGS, binp, harness)
     p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     if p.returncode != 0:
         return None, (p.stderr.strip().splitlines() or ["?"])[0]
@@ -149,7 +162,40 @@ def main(argv):
                     out("SETUP", "pristine arm did not PASS through the mutant tree shape")
                     print("SELFMUTANT_SETUP")
                     return 1
-                out("ok", "pristine arm through the same tree: %s" % passtok.group(1))
+
+                #  *** (5) THE ROW ID MUST NAME EXACTLY ONE ROW. ***  Same trap as the code
+                #  anchor, on the other side of the fence, and a reading seat found TWO of
+                #  the five shipped pins wrong: footbridge's "zero" does not appear in A1
+                #  ("A1 load 0 becomes the full 24-bit span") at all -- it matches B2 and F1,
+                #  so that mutant vouched for rows it was not chosen for -- and memory_rw's
+                #  "1 KB" matches FOUR rows (G1, G2, Z1, F3), a family rather than a row.
+                #  A pin that names a family is satisfied while the row it names is dead.
+                named = [l for l in stdout.splitlines()
+                         if (l.strip().startswith("ok") or l.strip().startswith("FAIL"))
+                         and rowid in l and "@@SELFCHECK@@" not in l]
+                if len(named) != 1:
+                    out("SETUP", "row id %r names %d rows in the pristine run (must be 1)"
+                        % (rowid, len(named)))
+                    for l in named[:5]:
+                        out("", "  matches: " + l.strip()[:66])
+                    print("SELFMUTANT_SETUP")
+                    return 1
+
+                #  *** (6) AND IT MUST NOT ALREADY BE FAILING. ***  The helper only checked
+                #  that pristine PASSes overall.  A detector carrying a permanent or stray
+                #  FAIL line that matches the row id would satisfy the mutant arm's pin
+                #  WITHOUT THE MUTANT CAUSING ANYTHING -- a decoy, and the mirror image of
+                #  the sentinel-pollution defect this same round had to fix.  Same seat.
+                stray = [l.strip() for l in stdout.splitlines()
+                         if l.strip().startswith("FAIL") and rowid in l
+                         and "@@SELFCHECK@@" not in l]
+                if stray:
+                    out("SETUP", "the named row ALREADY fails on pristine code: %s"
+                        % stray[0][:60])
+                    print("SELFMUTANT_SETUP")
+                    return 1
+                out("ok", "pristine arm through the same tree: %s, row id unique and green"
+                    % passtok.group(1))
             else:
                 #  (1) FAIL PRESENT, not PASS ABSENT.
                 if not failtok:

@@ -4987,3 +4987,51 @@ All eight fixes are negative-controlled in both directions, and one of those con
 **passed for the wrong reason** — the healthy and deleted cases produced identical output because
 my test tree omitted `config.h` and every build failed. Rule 4 applies to a control as much as to a
 gate: *did it pass for the reason under test?*
+
+### The agy seat ran a gate, deadlocked, and its failure was the most useful of the pass
+
+**The seat failure first, because the cause was fixable and the fix generalises.** Given a
+diff-review brief, agy decided to run `gate_offline.sh` itself, backgrounded it, and then printed
+*"I am waiting for `gate_offline.sh` to complete"* eleven times until its own timeout killed it at
+657 bytes. No review in it. Re-fired with one added instruction — **do not run the gates, the
+measurements are inlined** — it returned 11.6 KB and said so explicitly in its conflict
+disclosure.
+
+Two harms, and the second is worse than the lost seat:
+- a gate takes minutes, longer than a seat's response budget, so the seat deadlocks itself;
+- **it ran concurrently with my own gate 2 in the same `$LOGDIR`**, which is the one thing this
+  harness cannot survive. The `PASS (222 checks)` I had already committed was read from a log
+  directory another process was writing. Re-run alone with an isolated `LOGDIR` it was identical
+  — **so the claim held by luck rather than by process**, which is not a thing to leave standing.
+
+`panel.sh` now appends an operational rule to a **derived** copy of every brief it sends (the
+caller's file is never modified, and the derived copy is kept in the panel directory so what each
+seat was actually sent stays recoverable). Building one detector or mutant in a private temp
+directory is explicitly still encouraged; driving the harness is not.
+
+**Then the review itself found three defects the other seats had not, all confirmed:**
+
+**Two of the five shipped row-id pins were wrong, and it is the anchor-uniqueness trap on the
+other side of the fence.** The helper matched row ids by substring:
+- footbridge's `"zero"` **does not appear in row A1 at all** (`A1 load 0 becomes the full 24-bit
+  span` — the digit, not the word). It matched **B2, E3 and F1**, so that mutant vouched for rows
+  it was never chosen for, and A1 could have been dead with the control green.
+- memory_rw's `"1 KB"` matched **four** rows (G1, G2, Z1, F3) — a family, not a row.
+
+The fix is the same shape as the code-anchor rule that already exists: **a row id must name
+exactly ONE row in the pristine run, or it is `SETUP`.** It caught `"zero"` naming three rows on
+its first execution.
+
+**The pristine arm never checked that the named row was GREEN.** It only checked the run PASSed
+overall. A detector carrying a stray or permanent `FAIL` line matching the row id would satisfy
+the mutant arm's pin **without the mutant causing anything** — a decoy, and the mirror image of
+the sentinel-pollution defect this same round had already fixed. Now `SETUP`.
+
+**The helper compiled `memory_rw` differently from the battery.** gate 2 builds it with
+`-fno-optimize-sibling-calls`, which this gate's own comment calls load-bearing: gcc 15.2.1
+eliminated the tail call and the loop-not-recursion row passed *under the very defect it exists
+for*. The helper hardcoded one flag set. **The pristine control arm cannot detect that** — both
+arms are consistently wrong, so the control agrees with itself, which is exactly the shape this
+round exists to remove. Flags now come from the caller, which owns the real compile line.
+
+Gate 2 re-run alone: **PASS, 222 checks**, all five pins green on the corrected row ids.
