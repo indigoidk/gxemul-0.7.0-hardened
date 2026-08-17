@@ -4863,8 +4863,9 @@ different states must not render the same.
   2026-08-16 with #436, deliberately named rather than fixed silently.) #436 gave five
   differentials a self-mutant and added a manifest so a twelfth cannot arrive uncovered. The
   remaining six are **`ieee_store`, `sh4_tmu`, `wdc_identify`, `diskimage_io`, `diskimage_geom`,
-  `diskimage_parse`**, carried on a dated exemption list that the gate asserts is **6 and
-  shrinking, not growing**.
+  `diskimage_parse`**, carried on a dated exemption list. **Deadlines are 2026-08-31, set by the owner and
+  tighter than the Oct/Nov I proposed** -- asked, they judged 148 uncovered rows a fortnight's
+  work rather than a Q4 item. The gate reddens on that date whether or not the work is done.
 
   `ieee_store` is a genuine exemption — gate 3 covers it, and it is the only differential that
   has ever had a failability control. **The other five are real debt**: each is a detector whose

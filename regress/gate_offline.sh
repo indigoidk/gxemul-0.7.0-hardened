@@ -875,7 +875,11 @@ selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
 SM_COVERED="timer memory_rw footbridge m8820x m8invread"
-SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-10-01 wdc_identify:2026-10-01 diskimage_io:2026-10-01 diskimage_geom:2026-11-01 diskimage_parse:2026-11-01"
+#  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
+#  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
+#  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
+#  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
+SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31 wdc_identify:2026-08-31 diskimage_io:2026-08-31 diskimage_geom:2026-08-31 diskimage_parse:2026-08-31"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
