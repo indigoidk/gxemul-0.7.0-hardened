@@ -27,7 +27,12 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LEDGER = os.path.join(HERE, "ledger.json")
+#  Overridable so controls run against COPIES.  Added 2026-08-17 after a negative control
+#  for the CLOSED-WHILE-HELD clause silently tested NOTHING: it wrote a mutated ledger to a
+#  temp file, passed $GXLEDGER, and this script -- which had no such override -- read the real
+#  ledger and reported PASS.  A VOID CONTROL AND A PASSING CONTROL ARE INDISTINGUISHABLE in
+#  the output, which is the failure mode the whole harness is built against.
+LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
 
 CUTOFF = "2026-08-16"          # stages dated on or after this must be complete
 FABLE_ONLY = {"regress"}       # owner directive: only the flagship reviews regression
@@ -79,7 +84,16 @@ def main(argv):
                 continue
             if HELD in ent.get("note", ""):
                 d = by_stage.setdefault(ent.get("phase"), {})
-                d["_held"] = ent.get("note", "")
+                #  A LIST, NOT A SLOT.  This assigned a single value until 2026-08-17, so a
+                #  stage held for TWO seats kept only the LAST marker and reported one.
+                #  Found the day it first mattered: exitsweep's assess stage is held for BOTH
+                #  codex (a measured quota wall) and fable5 (deliberate conservation), and the
+                #  gate printed "awaiting: fable5" -- silently dropping codex.
+                #
+                #  It UNDER-REPORTS THE DEBT, which is the one direction this gate must never
+                #  fail in: a stage that looks like it waits for one seat gets completed a
+                #  seat early, and the missing seat's blank then reads as agreement.
+                d.setdefault("_held", []).append(ent.get("note", ""))
                 continue
             d = by_stage.setdefault(ent.get("phase"), {})
             d.setdefault("seats", set()).add(ent.get("seat"))
@@ -103,8 +117,14 @@ def main(argv):
                     violations.append((row["id"], "CLOSED-WHILE-HELD", stage, len(got),
                                        ["a round may not close while a stage awaits a seat"]))
                 else:
-                    awaited = info["_held"].split(HELD, 1)[1].split("]", 1)[0].strip()
-                    held.append((row["id"], stage, len(got), awaited))
+                    #  Every marker, de-duplicated, order preserved -- so two holds report
+                    #  two seats and the operator sees the whole debt.
+                    names = []
+                    for mark in info["_held"]:
+                        nm = mark.split(HELD, 1)[1].split("]", 1)[0].strip()
+                        if nm and nm not in names:
+                            names.append(nm)
+                    held.append((row["id"], stage, len(got), ", ".join(names)))
                 continue
             if len(got) == 1:
                 filed.append((row["id"], stage))
