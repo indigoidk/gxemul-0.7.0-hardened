@@ -64,6 +64,21 @@ the queue is least likely to get written. Naming the three stages now means the 
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
 
+### 6. `fablequeue` (`c3d13e5`) and `carrier` (`1ba2cd4`) — regress review, queued BY THEIR OWN GATE
+Both are harness rounds authored by the main loop with **no panel at all** — single-seat filings
+carrying the `A` badge, which is why they must not read as reviewed. They are held `in work` rather
+than closed, because the clean battery at `1ba2cd4` had not finished when they were written and a
+row cannot honestly close on an unfinished battery.
+
+**They are queued here because `check_fable_queue.py` was asked, prospectively, whether it would
+fire when they close — and it does, naming both.** That was worth checking rather than assuming:
+the author of a gate is the person least likely to notice it exempting his own work.
+
+Worth Fable's attention specifically: rule 1's cutoff means a stage dated **before 2026-08-16 is
+never examined**, so the gate is blind by construction to most of the ledger's history. That is
+deliberate (a directive cannot judge work that predates it) but it does mean **the gate's green is
+about recent rows only**, and nothing on the dashboard says so.
+
 ---
 
 ## HOW TO RUN ONE
