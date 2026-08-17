@@ -101,6 +101,44 @@ cd "$SEC" || { say "no repo at $SEC"; exit 9; }
 #  If a seat cannot be run, the round STOPS AND THE OWNER IS ASKED.  Degrading
 #  quietly is precisely what this replaces -- and note G alone would not catch it:
 #  G verifies that a seat which ANSWERED was recorded, not that the seat was FIRED.
+#  ---- J ---------------------------------------------------------------------------
+#  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
+#
+#  Owner decision, 2026-08-17, asked as a question: track `CLAUDE.md` and `PIPELINE.md`
+#  rather than leave the files that direct every session outside version control.
+#
+#  The literal answer was "track them at the project root" -- and that is not possible,
+#  because the git root is GXEMUL-SEC/, one level BELOW the project root where the carrier
+#  must sit to be auto-loaded.  (The question's own diagram drew GXEMUL/ as the repo.  It
+#  was wrong.)  So the tracked form is a COPY under tools/, and the copy reintroduces
+#  exactly the divergence risk the owner rejected when rejecting the dated snapshot.
+#
+#  This check is what makes the copy safe: byte-identity, HARD, using check A's own `cmp`
+#  idiom.  A carrier edit that never reaches the repo is then a red commit rather than a
+#  copy that silently describes last week's process.
+#
+#  tools/ and not GXEMUL-SEC/ deliberately: Claude Code auto-loads CLAUDE.md from the cwd
+#  upward, and the session cwd DRIFTS -- it has sat in GXEMUL-SEC/regress for whole rounds.
+#  A copy at GXEMUL-SEC/CLAUDE.md would then load ALONGSIDE the root original, putting two
+#  copies of a 38 KB carrier in one context.  tools/ is never a cwd ancestor in practice.
+#
+#  An ABSENT original is not a failure: on a fresh clone the repo copy is the only one
+#  there is, and demanding a file that version control cannot deliver would make the check
+#  fail hardest in the one situation it exists to serve.
+say ""; say "J. tracked carrier copies match the originals"
+for _c in CLAUDE.md PIPELINE.md; do
+	if [ ! -f "$SEC/tools/$_c" ]; then
+		bad "$_c has no tracked copy at tools/$_c -- the carrier is untracked again"
+	elif [ ! -f "$ROOT/$_c" ]; then
+		good "tools/$_c tracked; no project-root original (fresh clone -- repo copy is it)"
+	elif cmp -s "$ROOT/$_c" "$SEC/tools/$_c"; then
+		good "tools/$_c is byte-identical to the project-root original"
+	else
+		bad "tools/$_c HAS DRIFTED from $ROOT/$_c -- the tracked carrier is stale."
+		bad "     cp \"$ROOT/$_c\" \"$SEC/tools/$_c\"   (the root file is the live one)"
+	fi
+done
+
 #  ---- I ---------------------------------------------------------------------------
 #  Owner directive 2026-08-17: "make sure to gate and queue up any fable work; don't skip it."
 #
