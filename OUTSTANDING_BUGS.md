@@ -4078,8 +4078,20 @@ Ranked, because the first is a live host crash.
    complaints for 1000 alternating updates. Same class as #265's flood. `dev_rtc` is immune
    (it pre-clamps); `dev_footbridge` is not. Candidate fix: a per-timer latch.
 
-5. **`dev_sh4.c:191` `sh4_timer_tick()` calls `fatal()` then `exit(1)` from inside SIGALRM.**
+5. **`dev_sh4.c:193` `sh4_timer_tick()` calls `fatal()` then `exit(1)` from inside SIGALRM.**
+   *(Line corrected 2026-08-17: this said `:191`, which is the `fatal()`; the `exit(1)` is
+   `:193`. Cited three times before anyone read the line — the "read the line before citing
+   it" rule, applied to a citation this file made about itself.)*
    Pre-existing, not introduced here, and `_exit()` is the async-signal-safe one.
+   **`exitsweep` MUST NOT TOUCH THIS SITE, and the dependency runs the opposite way to the
+   obvious guess.** It is tick-only — reached from the SIGALRM handler via `timer.c:284`
+   (`timer->timer_tick(timer, timer->extra)`, inside the catch-up loop opened at `:283`), not
+   from any `DEVICE_ACCESS` — so it is not in `exitsweep`'s class at all. Landing the generic
+   complain-and-continue shape here first would make things *worse*: it keeps the
+   async-signal-unsafe `fatal()` and **adds** a plain-`int` latch written from both the handler
+   and the main loop, a data race this item would then have to undo. The right idiom is already
+   in-tree at `timer.c:65` — `volatile sig_atomic_t timer_catchup_hit`, set in the handler and
+   reported outside it.
    `pcc_timer_tick()` (`dev_pcc2.c:106` is its opening line, not the assert itself) likewise
    reaches interrupt work from the handler. Also pre-existing and
    worth recording together: `timer_stop()` does not block SIGALRM while disarming and
@@ -4234,6 +4246,55 @@ exclusions, both checked: `dev_cons.c:80` is the testmachine's documented halt p
 intended), and `dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is set at init).
 **The rig question dominates the ranking**: arc and pmax have ZERO `DEVICE_ACCESS` exit sites
 between them, so luna88k's five are the only ones reproducible today.
+
+#### CORRECTED 2026-08-17 by the `exitsweep` assess panel (7 seats) — read this, not the above
+
+The paragraph above is left standing rather than rewritten, because what it got right matters as
+much as what it got wrong. **Its hedge was correct and load-bearing**: it marked the counts
+PATTERN-DEPENDENT and UNKNOWN "until the round that acts on them re-derives them with its pattern
+stated". That round has now happened, and the hedge is what made the correction cheap.
+
+- **220 was not wrong. It was STALE BY ONE ROUND.** It reproduces *exactly* at `84f442d`, the HEAD
+  it was recorded on, and is **215** today because `#433` removed the five `dev_m8820x.c` sites.
+  Six of seven panel seats concluded "denominator unsound"; the measure seat compiled the scan and
+  showed they were too strong. **Nothing could tell stale from wrong, because the METHOD was gone**
+  — which is why the census now ships as `tools/pipeline/census_exits.py` instead of as a number.
+  Re-run it; its output is authoritative and this text is not.
+- **The in-handler count is 115 today** (119 at the record's own HEAD), not 114.
+- **"17 init-time" undercounts by 8**: it counted only the `DEVINIT()` macro form and missed the
+  longhand `dev_*_init` functions. The instrument reports **25**.
+- **"89 helpers, *mostly* called from `DEVICE_ACCESS`" — `mostly` was doing a lot of work, and it
+  has now been resolved**: **50 of 82** are genuinely reachable from a handler, 31 are not, and 1
+  is tick-only. Corrected guest-reachable total: **170**, not 114.
+- **A whole class was missing.** `CHECK_ALLOCATION` → `FAILURE` → `exit(1)` (`src/include/misc.h`)
+  is invisible to every `exit(`/`abort(` pattern, and there are **183** such sites — the majority
+  of all terminators here — **5 of them inside a `DEVICE_ACCESS` handler**, including
+  `dev_wdc.c:873` `malloc(512 * count)` where the count is guest-set. Full total: **398**.
+- ***"No `abort()` is guest-reachable" is FALSE.*** `dev_sgi_ip30.c:127` sits inside
+  `case 0x10020: /* Set ISR */ d->isr = idata;` — an ordinary guest register write — and
+  `dev_sgi_ip22.c:315` is the same shape in a mask-register write path. `abort()` is *worse* than
+  `exit(1)`: SIGABRT and a core dump. (`bus_pci.c:222` genuinely is host-side and was classified
+  correctly.)
+- ***"luna88k's five" is a misreading of this file's own sentence.*** `dev_luna88k.c` has **ONE**
+  `DEVICE_ACCESS` and two exit sites: `:816` guest-reachable and `:998` init-time. The five were
+  `dev_m8820x.c`'s, and **`#433` already fixed them** — not `#435`, which is the translation-cache
+  purge round.
+- ***"arc and pmax have zero, so luna88k is the only reproducible one" omits a rig.***
+  **`landisk` boots here** (`regress/gate_crossfamily.sh:199` runs `openbsd76-landisk-bsd.rd`), and
+  `dev_sh4.c` carries 21 in-handler plus 7 reachable-helper sites. Honest negative result: no kill
+  was demonstrated there — all eight one-value guards in `sh4_pcic_access` are written by the
+  healthy guest with exactly the hardcoded constant on every boot, and `-M` is ignored because
+  `machine_landisk.c:84` hardcodes 64 MB.
+
+**And the doctrine gained a third arm, which BOUNDS this item rather than enabling it** — see the
+`exitsweep` ledger row. Complain-and-continue is safe only when the dropped write's only observable
+consequence is the register's own value. Where the write's PURPOSE is to change how the emulator
+decodes, translates, transfers or invalidates, dropping it makes the model **lie** rather than
+**lag**: at `sh4_dmac_transfer` the only implemented `CHCR_RS` mode transfers nothing, so a latched
+drop means no bytes moved, `CHCR_TE` never set, and the guest polls forever — strictly harder to
+diagnose than the `exit(1)` it replaced, **and the latch actively suppresses the evidence**.
+`#433`'s own adjudication hit this once (`FLUSH_SUPER_LINE`) and fixed it locally without writing
+the rule down. **A mechanical sweep over the 170 would ship it again.**
 
 Useful for whoever writes the fixes: `memory_rw.c:572-578` already snapshots `cpu->running` around
 the handler call and returns `MEMORY_ACCESS_FAILED` if the handler cleared it — so the `#220`
