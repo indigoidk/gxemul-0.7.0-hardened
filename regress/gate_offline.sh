@@ -484,13 +484,19 @@ else
     #  17 against a harness printing 23.  A reading seat noticed it; a measuring seat then
     #  DEMONSTRATED it rather than arguing it -- deleted six unpinned rows (A1, B2, B3, C1,
     #  C2, D2, none named by any presence check), retuned the identity constant 23 -> 17 as a
-    #  legitimate edit would, and ran this gate's own memory_rw block verbatim: 13 of 13
-    #  GREEN with six rows gone, identity row included.
+    #  legitimate edit would, and ran this gate's own memory_rw block verbatim: 14 OF 14
+    #  GREEN with six rows gone, identity row included.  (The first record of this said
+    #  "13 of 13"; a pass-2 seat reproduced the experiment and counted 14.  Substance
+    #  identical, number off by one, and it appeared in two places.)
     #
     #  Rows were added in later rounds and the pin was not moved with them.  Every other
-    #  floor in this gate was then swept the same way -- timer 24/24, footbridge 19/19,
-    #  m8820x 25/25, m8invread 27/27, TMU 16/16, wdc 16/16, io 45/45, parser 37/37 -- so the
-    #  drift is bounded to this one.  A DOCTRINE STATED IN A COMMENT IS NOT A MECHANISM:
+    #  floor in this gate was then swept the same way.  THERE ARE THIRTEEN, and the first
+    #  version of this list named NINE -- a pass-2 seat measured all thirteen and named the
+    #  four omitted: absorb 52/52, budget 7/7, autodev generator 8/8 and DISK GEOMETRY 34/34,
+    #  the last of which is a diff_*.c and so the omission a reader would notice.  In full:
+    #  absorb 52, budget 7, timer 24, memory_rw 23 (this one, after the fix), footbridge 19,
+    #  m8820x 25, m8invread 27, TMU 16, wdc 16, autodev 8, io 45, geom 34, parser 37 -- all
+    #  exact, so the drift is bounded to this one.  A DOCTRINE STATED IN A COMMENT IS NOT A MECHANISM:
     #  nothing in the battery compares a floor to the count it claims to pin, which is why
     #  this went six rounds unnoticed while the sentence above kept asserting otherwise.
     check_min "memory_rw: rows actually run" \
@@ -783,10 +789,17 @@ fi
 #  their identity rows, keep their verdict tokens -- and detect NOTHING, with
 #  every assertion in this file green.
 #
-#  The reason is structural, not an oversight in any one row: EVERY assertion
-#  here greps the detector's own stdout, and all of that stdout is downstream of
-#  the single comparison the stub removes.  They are one equivalence class, and
-#  the stub steps over all of it at once.  Only a check that VARIES THE INPUT and
+#  The reason was structural, not an oversight in any one row: every assertion in
+#  this file grepped the detector's own stdout, and all of that stdout is downstream
+#  of the single comparison the stub removes.  They were ONE EQUIVALENCE CLASS, and
+#  the stub stepped over all of it at once.
+#
+#  PAST TENSE ON PURPOSE.  A pass-2 seat pointed out that this sentence was written
+#  in the PRESENT tense by the very hunk that falsified it: the five selfmutant_one
+#  checks grep the HELPER's output (varied input) and the manifest checks grep the
+#  FILESYSTEM, so a handful of this gate's assertions are now outside the class.
+#  That is the whole point of adding them, and stating it as a present fact would
+#  have made the comment wrong the moment it landed.  Only a check that VARIES THE INPUT and
 #  demands the output track it escapes.
 #
 #  TWO CONTROLS, COVERING DIFFERENT FAILURES, NEITHER SUBSTITUTING FOR THE OTHER:
@@ -819,6 +832,25 @@ selfmutant_one() {   # harness subject stem row-id
     check "selfmutant $stem: the detector still detects, via its named row" \
           "$(printf '%s' "$out" | grep -c 'SELFMUTANT_OK')" "1"
 }
+#  *** F1: THE SELFCHECK ROW NEEDED A PRESENCE CHECK, AND NOT HAVING ONE WAS THE WORST
+#  DEFECT IN THE FIRST VERSION OF THIS ROUND. ***  A pass-2 seat deleted the whole SELFCHECK
+#  block from all five detectors and measured: gate 2 stayed PASS at the SAME check count with
+#  ZERO red rows, byte-identical to baseline, and all five self-mutants still OK.
+#
+#  It is unprotected PRECISELY BECAUSE THE BOOKKEEPING IS CORRECT: the row restores `rows`, so
+#  it is invisible to the only mechanism this gate has for noticing a deleted row -- the
+#  `rows actually run` floor.  A few hundred lines above, this file already says "Name each row
+#  that is the SOLE detector of something, so deleting one is a red row rather than a quieter
+#  file."  The SELFCHECK row is the sole detector of comparator death in five files and was
+#  named nowhere.  The doctrine was written down and then not applied to the next row added.
+sc_missing=""
+for _f in diff_timer diff_memory_rw diff_footbridge diff_m8820x diff_m8invread; do
+    grep -q 'SELFCHECK the comparator can still fail' "$LOGDIR/$_f.log" 2>/dev/null \
+        || sc_missing="$sc_missing $_f"
+done
+check "SELFCHECK: every one of the five detectors ran its comparator sentinel" \
+      "${sc_missing:-none}" "none"
+
 selfmutant_one diff_timer.c      src/core/timer.c            timer      "NaN"
 selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "1 KB"
 selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "zero"
@@ -838,21 +870,55 @@ selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
 SM_COVERED="timer memory_rw footbridge m8820x m8invread"
-SM_EXEMPT="ieee_store sh4_tmu wdc_identify diskimage_io diskimage_geom diskimage_parse"
+SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-10-01 wdc_identify:2026-10-01 diskimage_io:2026-10-01 diskimage_geom:2026-11-01 diskimage_parse:2026-11-01"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
-    case " $SM_COVERED $SM_EXEMPT " in
-        *" $stem "*) ;;
-        *) sm_missing="$sm_missing $stem" ;;
-    esac
+    #  Match the STEM, not the whole token: exemptions now carry ":date" suffixes, and a
+    #  substring match against the raw string would silently accept a stem that is merely a
+    #  prefix of another one.
+    _found=no
+    for _c in $SM_COVERED; do [ "$_c" = "$stem" ] && _found=yes; done
+    for _e in $SM_EXEMPT; do [ "${_e%%:*}" = "$stem" ] && _found=yes; done
+    [ "$_found" = yes ] || sm_missing="$sm_missing $stem"
 done
 check "selfmutant manifest: every differential is covered or dated-exempt" \
       "${sm_missing:-none}" "none"
-#  ieee_store is exempt because GATE 3 already covers it -- the one differential
-#  that has a failability control.  The other five are uncovered debt.
-check "selfmutant manifest: the exemption list is 6, shrinking not growing" \
-      "$(printf '%s' "$SM_EXEMPT" | wc -w)" "6"
+#  *** F3: THE MANIFEST VERIFIED THE LEDGER, NOT THE WORK. ***  SM_COVERED is a hand-written
+#  string and nothing cross-checked it against the selfmutant_one calls, so a pass-2 seat
+#  measured BOTH directions green: delete a selfmutant_one call and leave SM_COVERED intact ->
+#  GREEN; move a stem from EXEMPT to COVERED, retune the count, write no mutant -> GREEN, with
+#  the gate then PRINTING the paper shrink as evidence.
+#
+#  Same G-vs-H distinction this project already wrote into precommit_check.sh: the manifest was
+#  a G with no H.  It verified that a name appeared in a list, never that work stood behind it.
+sm_unbacked=""
+for _stem in $SM_COVERED; do
+    grep -qE "^selfmutant_one +[^ ]+ +[^ ]+ +$_stem +" "$HERE/gate_offline.sh" \
+        || sm_unbacked="$sm_unbacked $_stem"
+done
+check "selfmutant manifest: every COVERED stem has a real selfmutant_one call" \
+      "${sm_unbacked:-none}" "none"
+#  ieee_store carries a far-future date because GATE 3 covers it -- against TOTAL comparator
+#  death only, and by the vacuity-prone `grep -c PASS == 0` form this helper was written to
+#  avoid, so it is a weaker exemption than it looks.  The other five are uncovered debt with
+#  real deadlines.
+#
+#  DATED ENTRIES, NOT A COUNT.  The first version asserted `wc -w == 6` under a row named
+#  "6, shrinking not growing" -- and a seat measured that SHRINKING IT IS RED (got=5 want=6),
+#  so the pin actively obstructed the thing its own name claimed to want, and the name embedded
+#  the constant so a legitimate shrink would print "the exemption list is 6 ...   5".  A count
+#  pins; a date expires.  Shrinking is now green by construction: there is nothing to retune.
+sm_expired=""
+_today=$(date +%Y-%m-%d)
+for _e in $SM_EXEMPT; do
+    case "${_e##*:}" in
+        "") ;;
+        *) [ "${_e##*:}" \< "$_today" ] && sm_expired="$sm_expired ${_e%%:*}" ;;
+    esac
+done
+check "selfmutant manifest: no exemption is past its dated deadline" \
+      "${sm_expired:-none}" "none"
 
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log

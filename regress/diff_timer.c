@@ -175,27 +175,68 @@ int main(void)
 		/*
 		 *  SELFCHECK -- CAN THIS FILE'S COMPARATOR STILL FAIL?
 		 *
-		 *  Feed check() a mismatch and require the failure counter to move, then un-record
-		 *  it so the row is free.  If check() has been stubbed, neutered, or had its
-		 *  comparison edited away, EVERY other row in this file is silently inert and the
-		 *  gate cannot tell -- measured: 118 rows across five detectors stayed green under
-		 *  exactly that stub, row counts, identity rows and verdict tokens intact.
+		 *  Feed check() deliberate mismatches and require the failure counter to move,
+		 *  then un-record them so the rows are free.  If check() has been stubbed,
+		 *  neutered, or had its comparison edited away, EVERY other row in this file is
+		 *  silently inert and the gate cannot tell -- measured: 118 rows across five
+		 *  detectors stayed green under exactly that stub, row counts, identity rows and
+		 *  verdict tokens all intact.
 		 *
-		 *  This does NOT prove any particular row is correct.  It proves the file can still
-		 *  say FAIL.  Read it as a liveness sentinel and nothing more; the per-harness
-		 *  self-mutant in gate 2 covers a different failure (a fixture that stops reaching
-		 *  the code), and neither substitutes for the other.
+		 *  TWO MISMATCHES, ONE ALPHABETIC AND ONE DIGIT-LEADING, and the second is not
+		 *  padding.  The first version fed only "a" vs "b", and a pass-2 seat defeated it
+		 *  with one line -- `isdigit(got[0]) || strcmp(...) == 0` -- because EVERY REAL ROW
+		 *  IN THIS FILE COMPARES NUMBERS.  118 rows went inert, this sentinel stayed blind,
+		 *  and four of the five gate-2 self-mutants stayed green too.  A sentinel whose
+		 *  input does not resemble the rows it vouches for is a sentinel with a whitelist.
+		 *
+		 *  THE HEALTHY PATH PRINTS AN ok-SHAPED LINE, DELIBERATELY.  The first version
+		 *  printed nothing on success and a FAIL line only on failure, which broke two
+		 *  things at once: there was no stable string for gate 2 to grep, so DELETING THIS
+		 *  WHOLE BLOCK FROM ALL FIVE FILES left the gate at PASS with the same 220 checks
+		 *  and zero red rows -- and the FAIL text it printed on the HEALTHY path polluted
+		 *  the gate's kill attribution, so a self-mutant pinned to a row id like "fail"
+		 *  matched this line and reported OK for a mutant nothing had caught.
+		 *
+		 *  `>` not `== +1`: a comparator that double-counts compares perfectly well, and
+		 *  the exact form printed "no longer compares" at it.  Direction was safe, the
+		 *  diagnosis was wrong.
+		 *
+		 *  This does NOT prove any row is correct.  It proves the comparator still fails on
+		 *  inputs shaped like the ones the rows use.  A comparator that compares
+		 *  SELECTIVELY -- or that special-cases this row by name -- is still invisible to
+		 *  it, and only a census would see that.  Liveness sentinel, nothing more.
+		 *
+		 *  THE PROBE ROWS ARE NAMED @@SELFCHECK@@ SO THEY CANNOT BE MISTAKEN FOR A ROW.
+		 *  They are deliberate mismatches, so check() prints FAIL for them on the HEALTHY
+		 *  path -- and a pass-2 seat measured that a self-mutant pinned to a row id like
+		 *  "fail" matched one of those lines and reported OK for a mutant nothing caught.
+		 *  The obvious cure is worse than the disease: suppressing the print INSIDE check()
+		 *  would need a name test in the comparator, which is precisely the whitelist the
+		 *  same seat showed defeats this sentinel (`strncmp(name,"SELFCHECK",9)`).  So the
+		 *  comparator is left alone and the probe rows carry a token no real row would use;
+		 *  selfmutant.py filters it, and gate 2 greps the SUMMARY line below for presence.
 		 */
-		int selfcheck_f = fails, selfcheck_r = rows;
-		check("SELFCHECK the comparator can still fail", "a", "b");
-		if (fails != selfcheck_f + 1) {
-			printf("  FAIL  SELFCHECK: check() no longer compares -- every row in "
-			    "this file is inert\n");
+		int selfcheck_f = fails, selfcheck_r = rows, selfcheck_bad = 0;
+
+		check("@@SELFCHECK@@/str", "a", "b");
+		if (fails <= selfcheck_f)
+			selfcheck_bad++;
+		fails = selfcheck_f; rows = selfcheck_r;
+
+		check("@@SELFCHECK@@/num", "1", "2");
+		if (fails <= selfcheck_f)
+			selfcheck_bad++;
+		fails = selfcheck_f; rows = selfcheck_r;
+
+		if (selfcheck_bad) {
+			printf("  FAIL  SELFCHECK the comparator no longer compares (%d of 2 "
+			    "mismatches went unnoticed) -- every row in this file is inert\n",
+			    selfcheck_bad);
 			fails = selfcheck_f + 1;
 			rows = selfcheck_r;
 		} else {
-			fails = selfcheck_f;
-			rows = selfcheck_r;
+			printf("  ok    SELFCHECK the comparator can still fail       "
+			    "str+num\n");
 		}
 	}
 

@@ -97,6 +97,12 @@ def build_and_run(tree, harness):
     if p.returncode != 0:
         return None, (p.stderr.strip().splitlines() or ["?"])[0]
     r = subprocess.run([binp], capture_output=True, text=True)
+    #  F5: A SIGNAL DEATH IS SETUP, NEVER A VERDICT.  The first version discarded
+    #  returncode, so a mutant that died by SIGFPE before printing its verdict was scored
+    #  "the detector did NOT report a failure" -- right colour, wrong diagnosis, and the
+    #  same class as gate 3's filed #55.  A negative returncode is a signal on POSIX.
+    if r.returncode < 0:
+        return None, "killed by signal %d before printing a verdict" % (-r.returncode)
     return r.stdout, None
 
 
@@ -151,8 +157,14 @@ def main(argv):
                     print("SELFMUTANT_FAIL")
                     return 1
                 #  (2) THE NAMED ROW must be among the kills.
+                #  EXCLUDE THE SENTINEL'S OWN PROBE ROWS.  They are deliberate mismatches,
+                #  so they print FAIL on the HEALTHY path -- and a pass-2 seat measured that
+                #  a rowid as ordinary as "fail" matched one of them and returned OK for a
+                #  mutant nothing had caught.  The two controls this round added INTERFERED,
+                #  re-opening a defeat the same commit claimed to close.
                 killed = [l.strip() for l in stdout.splitlines()
-                          if l.strip().startswith("FAIL") and rowid in l]
+                          if l.strip().startswith("FAIL") and rowid in l
+                          and "@@SELFCHECK@@" not in l]
                 if not killed:
                     allfails = [l.strip()[:70] for l in stdout.splitlines()
                                 if l.strip().startswith("FAIL")]

@@ -4931,3 +4931,59 @@ claim now lives in the manifest, where it is **checked** rather than asserted. A
 manifest verifies.
 
 Gate 2: **PASS, 220 checks** (was 213). Filed rather than folded: `selfmutant6`.
+
+
+### #436 pass 2 — four defeats, and the worst one was in the control I had just added
+
+Pass 2 attacked the round's own controls and found **four ways they could be vacuous**, all measured
+on private copies. Every one is a defect in work committed hours earlier, and the sharpest is a
+defect in the design the same seat had helped shape on pass 1 — which is the direction worth having.
+
+**F1 — the SELFCHECK row had no presence check, and this is the bad one.** Deleting the block from
+all five detectors left gate 2 at **PASS with the same check count and zero red rows, byte-identical
+to baseline**, and all five self-mutants still OK. It is unprotected *precisely because the
+bookkeeping is correct*: restoring `rows` is what makes the row free, and the row floor is the only
+mechanism this gate has for noticing a deleted row. This file already says *"name each row that is
+the SOLE detector of something, so deleting one is a red row rather than a quieter file"* — and the
+row added by #436 is the sole detector of comparator death in five files and was named nowhere.
+**The doctrine was written down and then not applied to the next row added.**
+
+**F2 — the round's two new controls interfered, re-opening a defeat the same commit claimed to
+close.** The sentinel's probe rows are deliberate mismatches, so `check()` prints `FAIL` for them on
+the **healthy** path — and `selfmutant.py` selected kills by `startswith("FAIL") and rowid in l`. A
+rowid as ordinary as `fail` matched the sentinel's own line and returned **`SELFMUTANT_OK` for a
+mutant nothing had caught.** The obvious cure was worse than the disease: suppressing the print
+inside `check()` requires a name test in the comparator, which is exactly the whitelist the same
+seat demonstrated defeats the sentinel. So the comparator is untouched, the probe rows carry a
+`@@SELFCHECK@@` token no real row would use, and the helper filters it.
+
+**F3 — the manifest verified the ledger, not the work.** `SM_COVERED` was a hand-written string
+never cross-checked against the `selfmutant_one` calls, so **both** directions measured green:
+delete a call and leave the name → GREEN; promote an exempt stem, retune the count, write no mutant
+→ GREEN, *with the gate printing the paper shrink as evidence*. Same G-vs-H distinction this project
+already wrote into `precommit_check.sh`: **the manifest was a G with no H.**
+
+**F4 — the sentinel fed alphabetic strings while every real row compares numbers.** One line
+(`isdigit(got[0]) || strcmp(...)`) left 118 rows inert, the sentinel blind, and four of five
+self-mutants green. It now feeds both `"a"/"b"` and `"1"/"2"`.
+
+**F5 — a mutant that died by signal was scored as a verdict.** Right colour, wrong diagnosis, and
+the same class as filed `#55`. A negative return code is now `SETUP`.
+
+**The exemption count actively obstructed its own stated goal:** shrinking the list was RED
+(`got=5 want=6`) under a row named *"6, shrinking not growing"*, and the name embedded the constant
+so a legitimate shrink would print *"the exemption list is 6 … 5"*. Replaced with dated deadlines.
+**A count pins; a date expires.**
+
+**THE DENOMINATOR THE FIRST RECORDS OMITTED.** #436 reported 118 rows covered without saying out of
+how many. A seat measured it: the eleven differentials carry **290 rows**; the six exempt carry
+**172**; excluding `ieee_store`'s 24 (which gate 3 covers, against total comparator death only and
+by the vacuity-prone form this helper avoids), **148 rows across five differentials remain in exactly
+the pre-#436 condition**. Demonstrated rather than inferred — stubbing `diskimage_io` and
+`diskimage_parse` left **82 rows inert with the whole battery green**. So the round fixed **118 of
+266 coverable rows, under half**, and the honest sentence is the one with both numbers in it.
+
+All eight fixes are negative-controlled in both directions, and one of those controls initially
+**passed for the wrong reason** — the healthy and deleted cases produced identical output because
+my test tree omitted `config.h` and every build failed. Rule 4 applies to a control as much as to a
+gate: *did it pass for the reason under test?*
