@@ -4858,3 +4858,76 @@ other round's panel, leaving a one-seat `assess` entry; the item has not started
 these separately and prints the count (48 today), because "filed, awaiting its panel" and "we ran a
 panel and it came up short" are different states, and the entire purpose of this layer is that
 different states must not render the same.
+
+- **`selfmutant6` — six of eleven differentials still have no failability control.** (filed
+  2026-08-16 with #436, deliberately named rather than fixed silently.) #436 gave five
+  differentials a self-mutant and added a manifest so a twelfth cannot arrive uncovered. The
+  remaining six are **`ieee_store`, `sh4_tmu`, `wdc_identify`, `diskimage_io`, `diskimage_geom`,
+  `diskimage_parse`**, carried on a dated exemption list that the gate asserts is **6 and
+  shrinking, not growing**.
+
+  `ieee_store` is a genuine exemption — gate 3 covers it, and it is the only differential that
+  has ever had a failability control. **The other five are real debt**: each is a detector whose
+  rows could all be inert with the battery green, which is the exact defect #436 measured and
+  closed for the first five. They inherit the in-detector `SELFCHECK` row for free once it is
+  added to them (it needs no mutant design work), so the cheap half can land in one edit; the
+  self-mutants need one anchor and one named row each.
+
+  Filed rather than folded because doing them silently in the round that built the helper would
+  break the stopping rule, and leaving them unnamed after building it would repeat the
+  "grep for its siblings" miss this project keeps making. A seat said both of those out loud
+  before I could get them wrong.
+
+### #436 — the detectors could all have stopped detecting, and nothing in the battery would say
+
+**MEASURED, not argued.** Gate 3 is the battery's only failability control and it mutates one
+file, `src/core/float_emul.c`. Eleven differentials live in `regress/`; gate 3 names one. Stub
+`check()` so it never compares — keeping the row names the gate greps for, the row counts, the
+identity rows, the failure counts and the verdict tokens — and **118 rows across five detectors
+print `ok` and detect nothing, with every gate-2 assertion green.**
+
+The reason is structural rather than an oversight in any one row, and a seat put it better than the
+reproduction did: **every assertion in gate 2 greps the detector's own stdout, and all of that
+stdout is downstream of the single comparison the stub removes.** They are one equivalence class,
+and the stub steps over all of it at once. Only a check that VARIES THE INPUT and demands the
+output track it escapes.
+
+**Two controls, covering different failures, neither substituting for the other:**
+
+| control | covers | scope |
+|---|---|---|
+| in-detector `SELFCHECK` row | the comparator dying | **every row** in its file |
+| gate-2 self-mutant | a fixture that has stopped reaching the code | **one named row** |
+
+Measured as genuinely complementary: the `SELFCHECK` is blind to a row rewritten to compare the
+subject against itself; a mutant pinned to that row is not.
+
+**THE HONEST SCOPE, which is the part most likely to rot.** A measure seat stubbed every row
+*except* the ones each mutant kills, and **both gate 2 and the self-mutant stayed green** — 23 of
+24 rows inert for `timer`, 25 of 27 for `m8invread`. So a self-mutant licenses *"one named row
+still fires"*, never *"the detector is fine"*. Going from 0 to 1 is not false comfort; **calling 1
+"the detector works" is.** The rows are named and commented as liveness sentinels for that reason.
+
+**Three ways the control could have been vacuous, all found by seats and all closed:**
+1. Asserting *"the PASS token is absent"* rather than *"the FAIL token is present"* — a build
+   failure emits **neither**, so the negative form is satisfied by a control that never ran.
+2. Asserting the **verdict** rather than the **named row** — vacuous on 4 of 5 harnesses: stub the
+   row the mutant was chosen to certify and other rows still kill it, so the control stays green
+   while the row it vouches for is dead.
+3. A **non-unique anchor** — `count() != 1` is scored `SETUP`, never a detection. Gate 3's applier
+   tests membership and replaces the first hit, so a future duplication would silently mutate the
+   wrong site; that exact trap produced a false result on this project earlier the same day.
+
+**The manifest is the part that makes it more than a five-instance fix.** Every `diff_*.c` must
+have a self-mutant or a dated exemption, or gate 2 reddens by name. Negative-controlled: dropping
+a twelfth differential in makes the gate fail and print its name. Without it, differential #12
+arrives uncovered exactly as R4–R9 added five without once touching gate 3.
+
+Also in this round: **`memory_rw`'s floor 17 → 23** (six rows silently deletable under a comment
+insisting the floor is exact — a seat demonstrated it by deleting them and getting 13/13 green),
+and **gate 3 renamed to its true scope** — it claimed "does gate 2 actually fail" while proving it
+for one of eleven differentials, a gap that widened every time gate 2 gained a check. The general
+claim now lives in the manifest, where it is **checked** rather than asserted. A name asserts; a
+manifest verifies.
+
+Gate 2: **PASS, 220 checks** (was 213). Filed rather than folded: `selfmutant6`.

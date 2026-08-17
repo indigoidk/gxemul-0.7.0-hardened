@@ -1,5 +1,18 @@
 #!/bin/bash
-# GATE 3 -- SELF-TEST: does gate 2 actually fail when the code it guards is broken?
+# GATE 3 -- SELF-TEST: can the FLOAT_EMUL differential fail when float_emul.c is broken?
+#
+# *** THE SCOPE IN THIS LINE USED TO READ "does gate 2 actually fail", UNQUALIFIED, AND
+# THAT WAS A FACT-SHAPED STRING THIS PROJECT BELIEVED. ***  This gate mutates exactly one
+# file -- src/core/float_emul.c -- and builds exactly one detector, diff_ieee_store.c.
+# Gate 2 compiles ELEVEN differentials and carries 220 checks.  So the honest claim is
+# one-eleventh of the one the old header made, and the gap widened every time gate 2
+# gained a check while nobody re-read this line.
+#
+# Measured consequence, 2026-08-16: five differentials added by rounds R4-R9 were never
+# added here, and stubbing their comparators left 118 rows printing `ok` and detecting
+# nothing with gate 2 green.  The general claim now lives where it can be CHECKED rather
+# than asserted -- gate 2's selfmutant manifest, which reddens if any diff_*.c has neither
+# a self-mutant nor a dated exemption.  A name asserts; a manifest verifies.
 #
 # #399 gave this file a "GATE 3" label it never had. It sits at position 3 of run.sh's
 # GATES array and run.sh runs it like any other gate, but it called itself only
@@ -26,7 +39,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SEC=$ROOT/GXEMUL-SEC
 T=$LOGDIR/mutation
 
-gate_begin "selftest-can-gate-2-fail"
+gate_begin "selftest-float-emul-can-fail"
 
 command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1 || gate_skip "no C compiler"
 CC=$(command -v cc || command -v gcc)

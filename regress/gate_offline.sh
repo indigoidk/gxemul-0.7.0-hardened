@@ -479,8 +479,22 @@ else
     #  The floor is the EXACT count, not one below it: a floor set under the count makes the
     #  identity row deletable with the gate still green, which is what #430's sibling round
     #  had to fix in the timer differential.
+    #
+    #  *** AND THIS PIN HAD DRIFTED SIX BELOW ITS OWN COUNT, UNDER THAT VERY SENTENCE. ***
+    #  17 against a harness printing 23.  A reading seat noticed it; a measuring seat then
+    #  DEMONSTRATED it rather than arguing it -- deleted six unpinned rows (A1, B2, B3, C1,
+    #  C2, D2, none named by any presence check), retuned the identity constant 23 -> 17 as a
+    #  legitimate edit would, and ran this gate's own memory_rw block verbatim: 13 of 13
+    #  GREEN with six rows gone, identity row included.
+    #
+    #  Rows were added in later rounds and the pin was not moved with them.  Every other
+    #  floor in this gate was then swept the same way -- timer 24/24, footbridge 19/19,
+    #  m8820x 25/25, m8invread 27/27, TMU 16/16, wdc 16/16, io 45/45, parser 37/37 -- so the
+    #  drift is bounded to this one.  A DOCTRINE STATED IN A COMMENT IS NOT A MECHANISM:
+    #  nothing in the battery compares a floor to the count it claims to pin, which is why
+    #  this went six rounds unnoticed while the sentence above kept asserting otherwise.
     check_min "memory_rw: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$MRWLOG" | grep -oE '^[0-9]+')" 17
+              "$(grep -oE '^[0-9]+ rows' "$MRWLOG" | grep -oE '^[0-9]+')" 23
     check     "memory_rw: offline verdict" "$(grep -c 'DIFF_MEMORY_RW_PASS' "$MRWLOG")" "1"
     #  Name each row that is the SOLE detector of something, so deleting one is a red row
     #  rather than a quieter file.
@@ -758,6 +772,87 @@ else
     check "m8invread: the SCR-arm control rows are present"           "$(grep -cE '^  (ok|FAIL) +(H1|H2) ' "$IVLOG")" "2"
     check "m8invread: identity row present"           "$(grep -c 'IDENTITY row count' "$IVLOG")" "1"
 fi
+
+# ---------------------------------------------------------------------------
+#  CAN THESE DETECTORS STILL FAIL?  (#436)
+#
+#  Gate 3 is the battery's only failability control and it mutates ONE file,
+#  src/core/float_emul.c.  Eleven differentials live here; gate 3 names one.  A
+#  measuring seat reproduced the consequence: stub check() so it never compares,
+#  and 118 rows across five detectors print `ok`, keep their row counts, keep
+#  their identity rows, keep their verdict tokens -- and detect NOTHING, with
+#  every assertion in this file green.
+#
+#  The reason is structural, not an oversight in any one row: EVERY assertion
+#  here greps the detector's own stdout, and all of that stdout is downstream of
+#  the single comparison the stub removes.  They are one equivalence class, and
+#  the stub steps over all of it at once.  Only a check that VARIES THE INPUT and
+#  demands the output track it escapes.
+#
+#  TWO CONTROLS, COVERING DIFFERENT FAILURES, NEITHER SUBSTITUTING FOR THE OTHER:
+#    * the in-detector SELFCHECK row (in the .c files) -- feeds check() a
+#      mismatch and requires the failure counter to move.  Covers EVERY row in
+#      its file against the comparator dying.  Free, no extra compile.
+#    * the self-mutants below -- break the code the detector watches and require
+#      the NAMED row to catch it.  Covers ONE site against a fixture that has
+#      stopped reaching the code.  Measured: the SELFCHECK is blind to a row
+#      rewritten to compare the subject against itself; a pinned mutant is not.
+#
+#  WHAT THIS DOES NOT PROVE, said plainly because the honest scope is the whole
+#  point.  A seat stubbed every row EXCEPT the ones each mutant kills and both
+#  this gate and the self-mutant stayed green -- 23 of 24 rows inert for timer,
+#  25 of 27 for m8invread.  So this is a LIVENESS CONTROL: it proves the detector
+#  is not wholly inert and that one named row still fires.  It is not a census
+#  and must never be read as "the detector is fine".  Going from 0 to 1 is not
+#  false comfort; CALLING 1 "the detector works" is.
+selfmutant_one() {   # harness subject stem row-id
+    local h="$1" subj="$2" stem="$3" row="$4"
+    local o="$HERE/selfmutants/$stem.old" n="$HERE/selfmutants/$stem.new"
+    if [ ! -f "$o" ] || [ ! -f "$n" ]; then
+        check "selfmutant $stem: fragments present" "no" "yes"; return
+    fi
+    local out
+    out=$(python3 "$HERE/selfmutant.py" "$h" "$subj" "$o" "$n" "$row" 2>&1)
+    printf '%s\n' "$out" | grep -E '^       ' | sed 's/^/    /'
+    #  ASSERT THE OK TOKEN IS PRESENT, never "FAIL is absent": a setup error emits
+    #  neither, so a negative form is satisfied by a control that never ran.
+    check "selfmutant $stem: the detector still detects, via its named row" \
+          "$(printf '%s' "$out" | grep -c 'SELFMUTANT_OK')" "1"
+}
+selfmutant_one diff_timer.c      src/core/timer.c            timer      "NaN"
+selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "1 KB"
+selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "zero"
+selfmutant_one diff_m8820x.c     src/devices/dev_m8820x.c    m8820x     "D3"
+selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
+
+#  THE MANIFEST -- the part that stops this being a five-instance fix.
+#
+#  Without it, differential #12 arrives with no control and nobody notices, which
+#  is EXACTLY how R4-R9 added five differentials without once touching gate 3.
+#  Same idiom as run.sh's GATE_MANIFEST: adding a differential means adding a
+#  control or naming it on the exemption list, deliberately.  That is the point.
+#
+#  The exemptions are DATED and NAMED rather than silent.  They are real debt:
+#  each is a differential whose rows could all be inert with this gate green.
+#  Filed as `selfmutant6` -- doing them silently in this round would break the
+#  stopping rule, and leaving them unnamed after writing the helper would repeat
+#  the "grep for its siblings" miss this project keeps making.
+SM_COVERED="timer memory_rw footbridge m8820x m8invread"
+SM_EXEMPT="ieee_store sh4_tmu wdc_identify diskimage_io diskimage_geom diskimage_parse"
+sm_missing=""
+for f in "$HERE"/diff_*.c; do
+    stem=$(basename "$f" .c); stem=${stem#diff_}
+    case " $SM_COVERED $SM_EXEMPT " in
+        *" $stem "*) ;;
+        *) sm_missing="$sm_missing $stem" ;;
+    esac
+done
+check "selfmutant manifest: every differential is covered or dated-exempt" \
+      "${sm_missing:-none}" "none"
+#  ieee_store is exempt because GATE 3 already covers it -- the one differential
+#  that has a failability control.  The other five are uncovered debt.
+check "selfmutant manifest: the exemption list is 6, shrinking not growing" \
+      "$(printf '%s' "$SM_EXEMPT" | wc -w)" "6"
 
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log

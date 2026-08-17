@@ -158,6 +158,34 @@ int main(void)
 	cpu->invalidate_translation_caches = noop_invalidate;
 	fresh();
 
+	{
+		/*
+		 *  SELFCHECK -- CAN THIS FILE'S COMPARATOR STILL FAIL?
+		 *
+		 *  Feed check() a mismatch and require the failure counter to move, then un-record
+		 *  it so the row is free.  If check() has been stubbed, neutered, or had its
+		 *  comparison edited away, EVERY other row in this file is silently inert and the
+		 *  gate cannot tell -- measured: 118 rows across five detectors stayed green under
+		 *  exactly that stub, row counts, identity rows and verdict tokens intact.
+		 *
+		 *  This does NOT prove any particular row is correct.  It proves the file can still
+		 *  say FAIL.  Read it as a liveness sentinel and nothing more; the per-harness
+		 *  self-mutant in gate 2 covers a different failure (a fixture that stops reaching
+		 *  the code), and neither substitutes for the other.
+		 */
+		int selfcheck_f = fails, selfcheck_r = rows;
+		check("SELFCHECK the comparator can still fail", "a", "b");
+		if (fails != selfcheck_f + 1) {
+			printf("  FAIL  SELFCHECK: check() no longer compares -- every row in "
+			    "this file is inert\n");
+			fails = selfcheck_f + 1;
+			rows = selfcheck_r;
+		} else {
+			fails = selfcheck_f;
+			rows = selfcheck_r;
+		}
+	}
+
 	printf("--- A. NO offset in the window may terminate the host, either direction ---\n");
 	for (off = 0; off < M8820X_LENGTH; off += 4) {
 		switch (probe(off, MEM_READ))  { case 1: killed_r++; break;
