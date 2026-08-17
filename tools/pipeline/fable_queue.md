@@ -79,6 +79,37 @@ never examined**, so the gate is blind by construction to most of the ledger's h
 deliberate (a directive cannot judge work that predates it) but it does mean **the gate's green is
 about recent rows only**, and nothing on the dashboard says so.
 
+### 7. The five zero-seat triage rows — `b118L`, `b120r`, `ovsync`, `dfreq`, `armbdt`
+Each is at **6/9** after the 2026-08-17 triage panel, held for **fable5, codex and grok**. These
+had *no* seat entries at all before that panel — they were the emptiest cells in the matrix, and
+the deepseek blanks the owner kept noticing were mostly rows of this kind.
+
+**Fable's pass here is cheap and unusually well-prepared**, because the measure seat already did
+the verification legwork and left four decided questions to adjudicate rather than investigate:
+
+- **`b120r` is where the panel split, and it is worth Fable's judgement specifically.** Both
+  file-reading seats say it is NOT a duplicate of the shipped ASC work (different layer, opposite
+  direction: length fields inside the DATA_IN payload, not HBA transfer counts). Both packet seats
+  voted DROP as a likely duplicate — **agreeing with the suspicion the brief itself planted.** The
+  reading seats should win on repo fact, and the code confirms them, but the disagreement is on the
+  record deliberately.
+- **`b118L` is TRUE and INERT** — both call sites abort the process, so nothing consumes the broken
+  entry. Recommended drop-as-a-round, keep-as-a-rider. That is a judgement call, which is Fable's.
+- **`dfreq`** — unanimous close-as-design across all six seats that reached a verdict.
+- **`armbdt`** ranks first, and its "zero seats" was a **ledger artifact**: the full analysis has
+  been sitting in `OUTSTANDING_BUGS.md:2698+` all along.
+
+### 8. `reprowitness` — a standing-rule challenge, and the highest-leverage item here
+Raised unprompted by the measure seat: **the reproducibility rule asks "can this MACHINE boot?"
+when it should ask "can this CODE PATH be executed?"** `armbdt` is the proof — no bootable ARM rig
+exists here, yet gate 14 already scores 261 checks on `testarm` through the cold debugger with a
+four-byte raw file. Machine-granularity would have demoted the best item on the triage list.
+
+This needs the flagship seat because **it reopens `exitsweep`'s scope**, which was settled on rig
+availability. If probe witnesses count equally, sites in devices no rig boots may still be
+fixable-with-a-detector. It is a filing (one seat), not a short stage, so it is not blocking —
+but it should be adjudicated before `exitsweep` implements anything.
+
 ---
 
 ## HOW TO RUN ONE
