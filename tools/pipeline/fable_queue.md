@@ -41,6 +41,29 @@ the honest answer is probably *"a little, in one narrow way"*, and that is worth
 Six differentials still have no failability control (`ieee_store` genuinely covered by gate 3; the
 other five are real debt). When that round starts it needs a full nine-seat assess stage.
 
+### 4. `m8online` (`9494c6a`) — regression review never done, found mechanically
+**FABLE-ONLY, and this entry is the first thing `check_fable_queue.py` caught.** The row is closed,
+it changed code, and it has no `regress` entry. I first assumed the batched R1–R9 pass had covered
+it and was about to write the attribution in — then read the brief's scope table, which lists R7 as
+`#433`, a *different* commit. `9494c6a` appears nowhere in it. **So this is a real gap, and the
+comfortable reading of it would have produced a rubber stamp on an unreviewed commit.**
+
+Nearby and worth contrasting: `b47`/`b27` looked identical to this case and were **not** queued,
+because their commit `2458cfb` *is* R5 and the brief does name it. They only ever lacked the
+attribution, which is now written in. Two rows that look the same to the gate, two different
+honest answers — which is why the gate names rows and does not decide them.
+
+### 5. `exitsweep` — all three stages, PRE-EMPTIVELY QUEUED before the round starts
+The next round by the owner's choice: `dev_luna88k.c:815` calls `exit(1)` on a guest write to
+`INT_ST_MASK0-3` with any of bits 25..0 set (verified live). Under the full-panel rule its
+**assess, research and review** stages each need all nine seats.
+
+This is queued *before* the round exists on purpose. Every silent Fable gap in the ledger was
+created mid-round, at the moment the stage was ready and the seat was not — which is exactly when
+the queue is least likely to get written. Naming the three stages now means the round starts with
+the obligation already recorded rather than discovering it at the point of maximum temptation
+to proceed with eight.
+
 ---
 
 ## HOW TO RUN ONE

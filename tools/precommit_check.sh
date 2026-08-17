@@ -101,6 +101,28 @@ cd "$SEC" || { say "no repo at $SEC"; exit 9; }
 #  If a seat cannot be run, the round STOPS AND THE OWNER IS ASKED.  Degrading
 #  quietly is precisely what this replaces -- and note G alone would not catch it:
 #  G verifies that a seat which ANSWERED was recorded, not that the seat was FIRED.
+#  ---- I ---------------------------------------------------------------------------
+#  Owner directive 2026-08-17: "make sure to gate and queue up any fable work; don't skip it."
+#
+#  H proves a stage did not proceed short.  It does NOT prove that the work a short stage
+#  still owes was ever written down: H reads a HELD marker as "waiting", and waiting is
+#  indistinguishable from forgotten once the round scrolls out of view.  On its first run
+#  this check found a closed row (`m8online`) whose regression review had never happened
+#  and was recorded nowhere -- and, next to it, two rows that looked identical and had
+#  merely lost their attribution.  A held job and a dropped job must not look alike.
+say ""; say "I. flagship work that is owed is written down"
+FQCHK=$_HERE/pipeline/check_fable_queue.py
+if [ ! -f "$FQCHK" ]; then
+	warn "check_fable_queue.py MISSING -- owed flagship work NOT verified"
+elif out=$(python "$FQCHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'FABLE_QUEUE_PASS|check_fable_queue:' | tr '
+' ' ')"
+else
+	bad "FLAGSHIP WORK IS OWED AND NOT QUEUED:"
+	printf '%s
+' "$out" | sed 's/^/          /'
+fi
+
 say ""; say "H. every stage ran the full panel"
 STAGECHK=$_HERE/pipeline/check_stage_panels.py
 if [ ! -f "$STAGECHK" ]; then
