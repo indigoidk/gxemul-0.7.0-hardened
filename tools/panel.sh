@@ -278,8 +278,27 @@ check() {   # name file
     #  worth keeping: THE ECHOED BRIEF CONTAINS THE TOKENS, because a brief that tells
     #  seats to open with "VERDICT:" necessarily has the word "VERDICT" in it.  Every
     #  future brief will too.  So payload size, not content, is the discriminator.
+    #  *** ONLY APPLY THE PAYLOAD TEST TO A FILE THAT ACTUALLY CONTAINS THE BRIEF. ***
+    #  The first version of this test did not check, and it was WORSE THAN THE BUG IT FIXED.
+    #  `sz - BSZ` is negative for any seat that does not echo -- grok reads the brief from a
+    #  file, the Ollama seats return only their answer -- so every real answer SHORTER than
+    #  the brief was declared ECHO-ONLY. Measured on the very next panel: four genuine
+    #  answers mislabelled, deepseek's and glm's verdicts among them. One false negative
+    #  traded for four false positives.
+    #
+    #  It survived four negative controls because ALL FOUR USED THE SAME LARGE BRIEF, whose
+    #  real answers all happened to exceed it. A control suite that varies only the seat and
+    #  never the brief cannot see a bug that lives in the brief-to-answer RATIO.
+    #
+    #  The discriminator is possession, not arithmetic: an echoing seat reproduces the brief
+    #  verbatim, so look for a distinctive line from it.
+    local marker echoed=""
+    marker=$(awk 'length($0) > 55 && $0 !~ /^[#*|> -]/ { print; exit }' "$BRIEF" 2>/dev/null)
+    if [ -n "$marker" ] && grep -qF "$marker" "$f" 2>/dev/null; then
+        echoed="yes"
+    fi
     local payload=$((sz - BSZ))
-    if [ "$payload" -lt 800 ]; then
+    if [ -n "$echoed" ] && [ "$payload" -lt 800 ]; then
         say "  $name: ECHO-ONLY (${sz}b = brief ${BSZ}b + ${payload}b) -- NOT A REVIEW"
         #  Name the wall if the file says what it was, so the operator does not have to
         #  guess whether this was a quota, an auth failure or a crash.
@@ -384,8 +403,13 @@ for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
     if grep -qsiE "429|too many requests|rate.?limit|quota|usage limit|billing|reached your .*limit|Argument list too long|401|403|unknown effort level|unknown model|no such model" "$f"; then
         #  Guard against a REVIEW that merely discusses quotas (this project's own
         #  briefs do).  A real wall leaves almost no payload: the file is the echoed
-        #  brief plus an error line.  Require BOTH the pattern and a thin payload.
-        if [ -s "$f" ] && [ $(( $(wc -c < "$f") - BSZ )) -lt 800 ]; then
+        #  brief plus an error line.  Require BOTH the pattern and a thin payload -- and,
+        #  as above, only treat the payload arithmetic as meaningful when the file actually
+        #  CONTAINS the brief, or a short genuine answer that happens to discuss quotas gets
+        #  called a wall on nothing but being shorter than the prompt.
+        _mk=$(awk 'length($0) > 55 && $0 !~ /^[#*|> -]/ { print; exit }' "$BRIEF" 2>/dev/null)
+        if [ -s "$f" ] && [ -n "$_mk" ] && grep -qF "$_mk" "$f" 2>/dev/null \
+           && [ $(( $(wc -c < "$f") - BSZ )) -lt 800 ]; then
             _wall="yes"
         fi
     fi
