@@ -266,6 +266,28 @@ check() {   # name file
         return
     fi
     if [ "$sz" -lt 800 ]; then say "  $name: SUSPECT (only ${sz}b -- may be thinking-only or a tool-call misfire)"; return; fi
+    #  *** THE ECHO TEST, WHICH THIS FUNCTION'S OWN COMMENT PROMISED SINCE THE FIRST
+    #  VERSION AND WHICH DID NOT EXIST.  Measured 2026-08-17: codex printed its banner,
+    #  echoed the 9,375-byte brief, then ended with "ERROR: You've hit your usage limit
+    #  ... try again at Aug 22nd".  It produced NO REVIEW and was scored "10063b
+    #  answered".  BSZ was computed at the top of the script for exactly this test and
+    #  then never used -- a documented check that cannot fail, which is worse than no
+    #  check because it reassures.
+    #
+    #  The verdict-token heuristic below could not save it either, and the reason is
+    #  worth keeping: THE ECHOED BRIEF CONTAINS THE TOKENS, because a brief that tells
+    #  seats to open with "VERDICT:" necessarily has the word "VERDICT" in it.  Every
+    #  future brief will too.  So payload size, not content, is the discriminator.
+    local payload=$((sz - BSZ))
+    if [ "$payload" -lt 800 ]; then
+        say "  $name: ECHO-ONLY (${sz}b = brief ${BSZ}b + ${payload}b) -- NOT A REVIEW"
+        #  Name the wall if the file says what it was, so the operator does not have to
+        #  guess whether this was a quota, an auth failure or a crash.
+        local why
+        why=$(grep -ioE "You've hit your usage limit[^.]*|usage limit[^.]*|quota[^.]*|rate.?limit[^.]*|reached your [a-z0-9 ]*limit" "$f" | head -1)
+        [ -n "$why" ] && say "        wall: $why"
+        return
+    fi
     # ASSESS/REAL/NOT-A-BUG etc. are the assessment-phase verdict tokens; without
     # them two correct packet answers were false-flagged CHECK on 2026-08-15.
     if grep -qiE "GO-WITH-CHANGES|NO-GO|\bGO\b|verdict|refut|confirm|ASSESS [a-z0-9#()]+:|NOT-A-BUG|ALREADY-FIXED|PARTLY-FIXED|\bREAL\b|\bUNKNOWN\b" "$f"; then
@@ -348,7 +370,29 @@ for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
          deepseek:ollama_deepseek minimax:ollama_minimax; do
     n=${s%%:*}; f="$OUT/${s##*:}.txt"
     total=$((total+1))
-    if [ -s "$f" ] && [ "$(wc -c < "$f")" -ge 800 ]; then
+    #  *** THE WALL SCAN RUNS FIRST, FOR EVERY SEAT, AND UNTIL 2026-08-17 IT COULD NOT
+    #  RUN AT ALL FOR THE CASE THAT MATTERS.  It lived only in the `else` arm below, so
+    #  any file >= 800 bytes was counted OK and never scanned.  Codex then produced a
+    #  10,063-byte file that was the echoed 9,375-byte brief plus
+    #  "ERROR: You've hit your usage limit" -- the pattern was ALREADY in the regex and
+    #  the regex was simply never applied.  A detector behind a size test cannot see the
+    #  failure mode where the file is big BECAUSE nothing was reviewed.
+    #
+    #  A seat that hit a wall did NOT consider the question and must never be counted as
+    #  agreement.  So: wall first, size second.
+    _wall=""
+    if grep -qsiE "429|too many requests|rate.?limit|quota|usage limit|billing|reached your .*limit|Argument list too long|401|403|unknown effort level|unknown model|no such model" "$f"; then
+        #  Guard against a REVIEW that merely discusses quotas (this project's own
+        #  briefs do).  A real wall leaves almost no payload: the file is the echoed
+        #  brief plus an error line.  Require BOTH the pattern and a thin payload.
+        if [ -s "$f" ] && [ $(( $(wc -c < "$f") - BSZ )) -lt 800 ]; then
+            _wall="yes"
+        fi
+    fi
+    if [ -n "$_wall" ]; then
+        miss="$miss $n"
+        rated="$rated $n"
+    elif [ -s "$f" ] && [ "$(wc -c < "$f")" -ge 800 ]; then
         ok=$((ok+1))
     else
         miss="$miss $n"
