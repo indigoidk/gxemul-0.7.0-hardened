@@ -3717,6 +3717,78 @@
      "verdict": "REAL",
      "evidence": "MANUAL",
      "note": "Ranked 3rd, and adds a scoping judgement the others did not: 'do not fold back into b120' -- it is its own item, not a rider on the SCSI length work.  [panel_20260817_174701]"
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "PASS 1 MEASURE SEAT -- built a private tree, BOOTED THE RIG, and refuted three of my own measurements.\n* REACHABILITY, MEASURED POSITIVE, so this is a FIX not a document: instrumented the SCSI dispatch and booted luna88k UNMODIFIED to login:. The guest issues SYNCHRONIZE CACHE (0x35) ONCE, immediately after the log line '/dev/sd0a: MARKING FILE SYSTEM CLEAN' -- the exact moment the command exists for, and the worst moment to lose a write tail. pmax runs OpenBSD 2.2 whose scsi/ contains no 0x35 at all; landisk is ATA, not SCSI.\n* THE DETECTOR IT BUILT AND THEN ATTACKED: 34 rows, 17 fail on shipping code, 0 with the fix, identical at -O0 and -O2, 0 faults. THREE OF ITS FOUR ATTACKS DEFEATED IT: nblk 4->16 (ONE DIGIT -- one whole buffer flushes completely), exit() instead of _exit(), and the one my brief did not list -- ONE MORE SCSI READ AFTER THE SYNC, whose my_fseek flushes the pending write. Any realistic-looking test that does anything at all after the sync is silently green.\n* THE VACUITY CLASS THAT WOULD HAVE SUNK THE ROUND: run the same binary with its workdir on /mnt/c (drvfs, st_blksize=512 -- where _scratchpad, _images and BOTH RIGS live) and EVERY byte row passes with the defect fully present, because each 512-byte fwrite reaches the kernel immediately. Its [VACUITY CONTROL] row fires and declares the section meaningless. The --wrap=fsync/fflush call-recording rows stay red on drvfs -- filesystem-independent, and the ONLY rows that can see defect (b) at all.\n* Q1 NO do_fsync GATE, with costs: dirty fflush+fsync 5.85 ms ext4, clean 0.56 ms. The flood surface ALREADY SHIPS (the handler fsyncs unconditionally today); the fix makes it at most ~3x, synchronous and single-threaded, so a guest cannot get asynchronous amplification. Not the cflood shape -- there the cost is a diagnostic, here the cost IS the semantics.\n* Q2 YES, same class as #286, and #416/#417 already settled the harder half: :907-910 already returns MEDIUM ERROR for HOST-side failures, and #417 tested it against a real errno (RLIMIT_FSIZE -> EFBIG). Honest UNKNOWN: Linux >=4.13 reports an fsync failure ONCE and drops the dirty pages, so a LATER sync returns success after data was already lost.\n* Q3 DO NOT sync d->f under overlays, and it is worse than pointless: diskimage.c:1984 opens d->f in mode r whenever prefix_R is set while :1971 sets writable=1, so R: -- WHAT BOTH RIGS USE -- gives a writable disk whose base handle is READ-ONLY, and the temp overlay is already unlinked. fflush on a read-mode stream is UB in C99 7.21.5.2p2; fsync on O_RDONLY is rc=0 on glibc but UNKNOWN on NetBSD/OpenBSD/Solaris, where it would turn every R:/CD-ROM sync into a spurious MEDIUM ERROR. Plus 14.34 ms to fsync a 512 MB untouched file on drvfs.\n* Q5 ONE COMMAND: luna88k issued START STOP UNIT 5x, ALL with cmd[4]=0x01 (START, no LOEJ, no STOP). The durability-adjacent case was never observed.\n* ADVERSARIAL -- THREE DEFECTS IN MY PROPOSED FUNCTION, one measured into silent corruption: (i) int ok = 1 returns SUCCESS for a disk with nothing open, losing the #134 diagnostic; (ii) THE ORDERING HOLE -- it sets ok=0 on a failed overlay-data fsync AND THEN FSYNCS THE BITMAP ANYWAY, publishing 'the overlay owns block N' while N's bytes are not durable. It BUILT that state and drove the shipping read path: the guest reads 0x00 from the overlay's HOLE and the base's good 0xBB bytes are GONE -- silent corruption of data the guest never touched, reported as a successful read. It does NOT fall through to the base. Honest counterweight: NOT reproducible in the current write path (BIT_SET_BUT_DATA_MISSING=0 across n=1..129; the per-block fseeks keep them in lockstep), so it is a hole the FIX would INTRODUCE, not a live defect; (iii) directory-entry durability CHECKED AND NOT A HOLE -- user overlays open r+ and must pre-exist, and the only created file is the unlinked temp overlay. An honest negative.\n* Also found: there is NO fclose of d->f or the overlays at shutdown anywhere. A clean exit() flushes stdio so a normal quit is safe, but a SIGKILLed emulator loses the tail regardless.\n* ITS OWN ERROR, reported rather than dropped: its first detector left c.nblk UNINITIALIZED, so every overlay row went red -- AGREEING WITH ITS HYPOTHESIS -- and at -O2 malloc(512*garbage) SIGSEGVd into 4 FAULTS it nearly reported as an overlay-path defect. Its own words: a red row that confirms your hypothesis is the dangerous kind.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "grok",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "*** NAMED A MEASUREMENT NOBODY HAD RUN AND TOLD ME TO RUN IT BEFORE WRITING THE CHANGELOG SENTENCE: an fflush-ONLY (no fsync) arm. Its words: 'If that arm persists after _exit, the kill-and-check row is not an fsync test.' I RAN IT AND IT WAS RIGHT. *** MEASURED, one 512-byte write: fflush only -> 512 bytes DURABLE to a separate reader; fsync only (what ships today) -> 0. So _exit() simulates PROCESS death, not host death -- the page cache belongs to the KERNEL and outlives the process -- and a kill-and-check test therefore measures the missing FFLUSH, never the missing FSYNC. This SPLITS THE DEFECT: (a) missing fflush is byte-testable and bounded; (b) overlays never fsynced at all is NOT byte-testable by ANY process-kill test, needs the --wrap rows, and is unbounded on real power loss. It also placed the detector correctly (beside diff_diskimage_io.c, NOT on the #411 write-fail fixtures) and filed six things explicitly NOT to do this round.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "agy",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "MANUAL",
+     "note": "GO-WITH-CHANGES. diskimage_sync() with fflush+fsync covering overlays and base, propagate CHECK CONDITION on sync failure, and keep scope bounded to SYNCHRONIZE CACHE.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "kimi",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "MANUAL",
+     "note": "GO-WITH-CHANGES with two REQUIRED changes: (1) the handler must report sync failure as CHECK CONDITION -- Q2 = yes, same class as #286; (2) the detector needs both a no-fix and a with-fix arm, or it cannot show it can fail.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "glm",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "BELIEVED",
+     "note": "PACKET. Flush+fsync all DIRTY files, report failure to the guest, one command this round -- and, unprompted and exactly right, 'detector must write <= one stdio buffer then _exit', which is precisely the boundary the measure seat later defeated with nblk 4->16.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "deepseek",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "BELIEVED",
+     "note": "PACKET, and it independently reached the read-only-base point the measure seat then proved from the open modes: 'skip read-only base when overlays exist'. Also report sync failure, and the detector must use _exit and check all bytes. The sharpest packet answer of the round, from the seat whose blank column started this whole audit.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "minimax",
+     "date": "2026-08-17",
+     "verdict": "REAL",
+     "evidence": "BELIEVED",
+     "note": "PACKET. The TODO is right in SHAPE but incomplete: the fix must ALSO report failure to the guest, same defect class as the shipped ASC work.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "codex",
+     "date": "2026-08-17",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third consecutive panel, payload 688 bytes over the brief -- the identical signature every time, which is exactly what the corrected seat check keys on. panel.sh correctly reported 6/7 and named it rate-limited rather than counting it as agreement. Re-fire after Aug 22.  [panel_20260817_215052]"
+    },
+    {
+     "phase": "research",
+     "seat": "fable5",
+     "date": "2026-08-17",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: fable5] DELIBERATE CONSERVATION by owner directive, not an outage. Queued in fable_queue.md. Distinct from codex's wall above.  [panel_20260817_215052]"
     }
    ]
   },
