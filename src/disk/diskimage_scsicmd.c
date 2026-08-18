@@ -919,15 +919,22 @@ xferp->data_in[4] = 0x2c - 4;	/*  Additional length  */
 			debug(" (weird len=%i)", xferp->cmd_len);
 
 		/*  TODO: actualy care about cmd[]  */
-		/*  TODO: Move to diskimage.cc and make sure that both
-			d->f is fsynced AND any overlays and overlay bitmap
-			files are fsynced too!  */
-		if (d->f != NULL)	/*  #134: d->f can be NULL after a failed (tape) reopen  */
-			fsync(fileno(d->f));
-		else
-			fatal("[ SYNCHRONIZE_CACHE: no open file to sync! ]\n");
+		/*  #437: was fsync(fileno(d->f)) inline, which flushed no
+		    stdio buffer and, with an overlay, synced the one file the
+		    guest's data was NOT in.  The TODO that stood here named
+		    both faults; diskimage_sync() is that TODO carried out.
 
-		diskimage__return_default_status_and_message(xferp, d);
+		    The status is now REPORTED.  Returning GOOD after a failed
+		    sync is the same defect #416/#417 corrected for writes --
+		    telling the guest a store succeeded when it did not -- and
+		    the sense machinery already exists for it.  #134's NULL
+		    d->f is preserved by diskimage_sync() returning 0.  */
+		if (!diskimage_sync(d)) {
+			fatal("[ SYNCHRONIZE_CACHE: sync failed on disk id %i ]\n", d->id);
+			diskimage__return_check_condition(xferp, d,
+			    0x03, 0x0c, 0x00);	/*  MEDIUM ERROR, WRITE ERROR  */
+		} else
+			diskimage__return_default_status_and_message(xferp, d);
 		break;
 
 	case SCSICMD_START_STOP_UNIT:

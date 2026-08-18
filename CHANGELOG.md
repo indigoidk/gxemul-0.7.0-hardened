@@ -4192,6 +4192,91 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R10 (#437) — SYNCHRONIZE CACHE told the guest its data was safe and synced the wrong file
+
+The guest issues SCSI `SYNCHRONIZE CACHE` for exactly one reason: to be told its writes are
+durable before it does something irreversible. **MEASURED on the unmodified luna88k rig:
+OpenBSD issues it once per boot, immediately after `/dev/sd0a: MARKING FILE SYSTEM CLEAN`** —
+the moment it has just repaired a filesystem, and the worst possible moment to lose the tail
+of a write. The handler was `fsync(fileno(d->f))` and nothing else, wrong in two independent
+ways that its own `TODO` had named for years.
+
+**(a) It fsynced without flushing.** Writes go through stdio (`fwrite_helper`), and `fsync()`
+flushes the KERNEL's buffers — it knows nothing about stdio's userspace buffer. The tree
+already knew: `overlay_set_block_in_use()` does `fflush`-then-`fsync` at `:1207-1211` with a
+comment stating the reason. `do_fsync` is 0 by default, so nothing flushed at write time
+either.
+
+**(b) With an overlay it synced the wrong file entirely.** `fwrite_helper` writes **only** to
+`d->overlays[nr].f_data`, so `d->f` held none of the guest's data and the overlay and its
+bitmap were never synced at all. **Measured before the fix: one fsync — on the base fd — and
+no fflush anywhere.** (b) is the larger half: on real power loss it costs everything the guest
+wrote, not one buffer's worth.
+
+`diskimage_sync()` in `diskimage.c` carries out the TODO, and the handler now REPORTS the
+result: a failed sync returns `CHECK CONDITION` / MEDIUM ERROR instead of GOOD. That is the
+same defect `#416`/`#417` corrected for writes — telling the guest a store succeeded when it
+did not — and the sense machinery already existed. The owner was asked before shipping the
+guest-visible half and chose to report the failure.
+
+**Three design points that came from measurement, not preference:**
+
+- **Order is load-bearing.** A bitmap bit says "the overlay owns this block". Publishing it
+  while the block's bytes are not durable makes a later read take the overlay's HOLE rather
+  than the base's good bytes — **built by hand and driven through the shipping read path: the
+  guest reads zeros where the base still held data, reported as a successful read, and it does
+  NOT fall through to the base.** So a data-side failure stops without syncing that bitmap.
+  Honest limit: the per-block `fseek`s already push both to the page cache, so this declines
+  to FORCE publication rather than preventing it — a mitigation, not a guarantee.
+- **`d->f` is synced only when there are no overlays.** Under `R:` — what every rig uses —
+  `d->f` is opened `"r"` while the disk is writable, so it is a read-only handle holding no
+  dirty data. Same reason a non-writable flat disk returns early: `fflush` on a stream whose
+  last operation was input is undefined (C99 7.21.5.2p2) and `fsync` on an `O_RDONLY` fd is
+  unspecified across platforms — and now that the result is CHECKED, a platform returning
+  nonzero would turn every CD-ROM's sync into a spurious MEDIUM ERROR.
+- **No `do_fsync` gate.** `-f` is about ordinary writes; this is the guest asking explicitly.
+  Measured cost: a clean `fflush`+`fsync` is 0.56 ms and the handler already fsynced
+  unconditionally, so the fix is at most ~3x an exposure that already shipped, synchronous and
+  single-threaded.
+
+**THE DETECTOR TOOK THREE ATTEMPTS AND THE FIRST TWO WERE VACUOUS.** This is the part worth
+keeping.
+
+1. The first pre-fix control **reported a clean pass while testing the fix twice**: a quoted
+   relative `#include "../src/disk/diskimage.c"` resolves against the INCLUDING FILE's
+   directory, so compiling the detector from its own tree pulled in the fixed source no matter
+   what `-I` said. The detector must live INSIDE the tree under test.
+2. Moved there, it **failed to compile**, because a row called `diskimage_sync()` directly — a
+   SETUP result, never a detection. Every row now drives `diskimage_scsicommand()` and the file
+   names `diskimage_sync()` nowhere, which is what makes it a differential at all.
+3. The third version counted `fflush`/`fsync` CALLS via `-Wl,--wrap` — and a review seat killed
+   it with **four mutants that all passed green**, because a count cannot see WHICH FILE:
+   renaming `f_bitmap` to `f_data` (bitmap never synced), inverting the order, deleting the
+   ordering `continue`, and syncing `d->f` instead of the bitmap each keep the totals at 2 and
+   2. The row names even said "data and bitmap" while the bitmap went untouched.
+   **And the fixture had never written a byte**: `SCSICMD_WRITE` is `0x0a` (WRITE(6)) driven
+   with a 10-byte CDB, and `data_out_offset` was never set, so the handler refused the
+   transfer. With nothing written there was no durability property to check — only counts.
+
+The shipped rows assert an ordered FILE TRACE (`F(data) S(data) F(bitmap) S(bitmap)`) plus two
+rows proving the guest's sector actually arrived. Verified in every direction: **7 rows / 0
+failed with the fix, 7 / 5 against the pre-fix sources from git, and the two wrong-file mutants
+that beat the count-only version are now killed.** `SELFMUTANT_OK` on a mutant that drops the
+overlay-data `fflush` while KEEPING the `fsync`, chosen because it leaves the counts intact and
+only the trace can see it. Gate 2: `PASS (231 checks)`.
+
+**Also corrected: four comments that were measured FALSE**, two of them written in this round's
+own first pass — the gate claimed dropping `--wrap` would "still pass against nothing" (it fails
+closed, 4 rows red), and the self-mutant comment claimed the `-fno-optimize-sibling-calls`
+hazard shape, when omitting the flags actually yields `SELFMUTANT_SETUP`, which is never scored
+as a detection.
+
+**Not fixed here, filed:** the ordering `continue` has no gate row (it needs fault injection);
+a multi-overlay disk reports CHECK CONDITION if a non-last overlay's fsync fails even though
+all guest data is durable; under `R:` both overlay files are unlinked at open, so they are
+anonymous temporaries no post-crash reader can open; and IDE `FLUSH CACHE` has no durability
+path at all.
+
 ## R9 (#435) — half of this device's translation-cache purges were for registers nothing reads
 
 `dev_m8820x.c` grouped six CMMU registers and purged the emulator's whole dyntrans mapping on

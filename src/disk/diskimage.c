@@ -2207,6 +2207,100 @@ int diskimage_is_a_tape(struct machine *machine, int id, int type)
 
 
 /*
+ *  diskimage_sync():
+ *
+ *  #437: make a guest's SYNCHRONIZE CACHE actually durable.  The handler in
+ *  diskimage_scsicmd.c did fsync(fileno(d->f)) and nothing else, which was
+ *  wrong in two independent ways -- and its own TODO said so.
+ *
+ *  (a)  fsync() flushes the KERNEL's buffers.  Writes here go through stdio,
+ *       so the userspace buffer was never flushed.  The tree already knew:
+ *       overlay_set_block_in_use() does fflush-then-fsync under do_fsync at
+ *       :1207-1211 and its comment states the reason.  fwrite_helper()'s own
+ *       do_fsync blocks carry no such comment.  (The first version of this
+ *       note attributed the comment to fwrite_helper, which does not have it.)
+ *
+ *  (b)  With an overlay, fwrite_helper() writes ONLY to the overlay -- so
+ *       d->f, the file being fsynced, held none of the guest's data, and the
+ *       overlay and its bitmap were never synced at all.  Measured before the
+ *       fix: fsync_n=1 on the base fd, fflush_n=0 anywhere.
+ *
+ *  ORDER IS LOAD-BEARING, and getting it wrong is worse than the bug.  A
+ *  bitmap bit says "the overlay owns this block".  Publishing that bit while
+ *  the block's bytes are not durable makes a later read take the overlay's
+ *  HOLE instead of the base's good bytes -- measured: the guest reads zeros
+ *  where the base still held data, reported as a successful read, and it does
+ *  NOT fall through to the base.  So on a data-side failure we stop and do
+ *  NOT sync that overlay's bitmap.  (Not reachable in the current write path,
+ *  whose per-block fseeks keep the two in lockstep -- this is a constraint on
+ *  THIS function, not a pre-existing defect.)
+ *
+ *  d->f is synced only when there are NO overlays.  Under the R: prefix -- what
+ *  every rig uses -- d->f is opened "r" while the disk is writable, so d->f is
+ *  a READ-ONLY handle holding no dirty data: fflush() on it is undefined per
+ *  C99 7.21.5.2p2, fsync() on an O_RDONLY fd is unspecified across platforms,
+ *  and it costs a real fsync of a possibly huge untouched file.
+ *
+ *  Returns 1 if everything that could hold dirty data was flushed and synced,
+ *  0 otherwise.  A disk with nothing open returns 0 rather than 1: answering
+ *  "durable" for a disk that cannot be synced is the failure this fixes.
+ */
+int diskimage_sync(struct diskimage *d)
+{
+	int ok = 1, i;
+
+	if (d == NULL)
+		return 0;
+
+	if (d->nr_of_overlays == 0) {
+		if (d->f == NULL)
+			return 0;
+
+		/*  A disk with no overlay and no write permission holds nothing
+		    dirty, so there is nothing to make durable and the request is
+		    already satisfied.  Skipping is not an optimisation: this is
+		    the "r"-mode handle the comment above refuses to touch under
+		    R:, and doing it here anyway would apply fflush to a stream
+		    whose last operation was input (undefined, C99 7.21.5.2p2)
+		    and fsync to an O_RDONLY fd (rc 0 on glibc, unspecified
+		    elsewhere).  Now that the result is CHECKED, a platform
+		    returning nonzero would turn every CD-ROM's sync into a
+		    spurious MEDIUM ERROR.  */
+		if (!d->writable)
+			return 1;
+
+		if (fflush(d->f) != 0)
+			ok = 0;
+		if (fsync(fileno(d->f)) != 0)
+			ok = 0;
+		return ok;
+	}
+
+	for (i = 0; i < d->nr_of_overlays; i++) {
+		if (d->overlays[i].f_data == NULL) {
+			ok = 0;
+			continue;
+		}
+
+		if (fflush(d->overlays[i].f_data) != 0 ||
+		    fsync(fileno(d->overlays[i].f_data)) != 0) {
+			/*  Data is not durable, so do NOT publish the bitmap
+			    that claims this overlay owns those blocks.  */
+			ok = 0;
+			continue;
+		}
+
+		if (d->overlays[i].f_bitmap != NULL &&
+		    (fflush(d->overlays[i].f_bitmap) != 0 ||
+		    fsync(fileno(d->overlays[i].f_bitmap)) != 0))
+			ok = 0;
+	}
+
+	return ok;
+}
+
+
+/*
  *  diskimage_dump_info():
  *
  *  Debug dump of all diskimages that are loaded for a specific machine.

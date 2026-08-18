@@ -230,6 +230,7 @@ int diskimage_getname(struct machine *machine, int id, int type,
 	char *buf, size_t bufsize);
 int diskimage_is_a_cdrom(struct machine *machine, int id, int type);
 int diskimage_is_a_tape(struct machine *machine, int id, int type);
+int diskimage_sync(struct diskimage *d);		/*  #437  */
 void diskimage_dump_info(struct machine *machine);
 
 

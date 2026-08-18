@@ -4247,6 +4247,30 @@ intended), and `dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is
 **The rig question dominates the ranking**: arc and pmax have ZERO `DEVICE_ACCESS` exit sites
 between them, so luna88k's five are the only ones reproducible today.
 
+### `#437` residuals (2026-08-18) — filed by the pass-2 panel, not fixed in that round
+
+The stopping rule admits a MEASURED FALSE PASS or a WRONG RECORD into the round that finds it.
+These are neither, so they are filed rather than chased — the rule exists because an earlier
+item ran six follow-up passes without converging.
+
+- **`m437ord` — the ordering rule is reasoned and reviewed, but NOT gated.** `diskimage_sync()`
+  declines to sync an overlay's bitmap after its data fsync fails. Deleting that `continue` is
+  the one mutant the shipped detector does not catch: the measure seat verified a row CAN catch
+  it by injecting an fsync failure and asserting the bitmap fd is ABSENT from the trace
+  (shipped syncs fds `[4 5 6]`; the mutant syncs `[4 5 6 7]`). One row, not yet built.
+- **`m437multi` — a spurious CHECK CONDITION on a multi-overlay disk.** `fwrite_helper` writes
+  only to the LAST overlay, so earlier ones hold no guest data — yet a failed fsync on overlay 0
+  fails the whole command with sense 3-0c-00 while every guest byte is durable. Conservative,
+  but wrong, and it costs two extra fsyncs per additional overlay.
+- **`m437rtmp` — under `R:` the durability claim does not mean what it sounds like.**
+  `diskimage_add_overlay(d, tmpname, true)` unlinks BOTH overlay files immediately after
+  opening (`diskimage.c:177-184`; measured: `fstat(f_data).st_nlink == 0`). Syncing them makes
+  bytes durable in files no post-crash reader can open. `R:` is meant to be ephemeral so this is
+  not a defect, but `#437`'s framing presents `R:` as the motivating case and should not.
+- **`idesync` — IDE has no durability path at all.** The `#437` fix is SCSI-only;
+  `grep -i flush src/devices/dev_wdc.c` returns nothing, so a guest's ATA `FLUSH CACHE` is not
+  merely unflushed, it is unimplemented. Reachability unknown — landisk is the ATA rig.
+
 #### CORRECTED 2026-08-17 by the `exitsweep` assess panel (7 seats) — read this, not the above
 
 The paragraph above is left standing rather than rewritten, because what it got right matters as

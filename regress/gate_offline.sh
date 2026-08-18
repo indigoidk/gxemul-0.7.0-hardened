@@ -861,6 +861,19 @@ selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "G1 " "-
 selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "A1 "
 selfmutant_one diff_m8820x.c     src/devices/dev_m8820x.c    m8820x     "D3"
 selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
+#  #437.  The mutant drops the fflush of the OVERLAY DATA file and KEEPS the fsync --
+#  chosen over the obvious whole-function revert for a measured reason: it leaves the
+#  fsync count at 2, so any test counting fsync alone stays GREEN, and only the fflush
+#  row goes red (1, want 2).  It is also the edit a maintainer might make in good faith,
+#  since "fsync already flushes, the fflush is redundant" is the reasoning that produced
+#  the original defect -- which diskimage.c:1207-1211 exists to refute.  The --wrap flags
+#  are load-bearing here, but NOT in the way -fno-optimize-sibling-calls is for memory_rw,
+#  and the difference matters.  memory_rw's flag makes BOTH arms consistently wrong, so the
+#  control cannot see it.  Here, omitting the flags makes the pristine arm fail to PASS, so
+#  selfmutant.py reports SELFMUTANT_SETUP -- which its own header says is NEVER scored as a
+#  detection.  Measured both ways.  The earlier comment asserted the memory_rw shape and
+#  taught the wrong hazard class.
+selfmutant_one diff_diskimage_sync.c src/disk/diskimage.c   diskimage_sync "overlay: sync flushes+syncs data" "-Wl,--wrap=fsync -Wl,--wrap=fflush"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -874,7 +887,7 @@ selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
@@ -1133,6 +1146,62 @@ fi
 # (short/failed writes reported as success, reads past EOF, and a single WRITE(10) that
 # grew a 10 KB image to 512 MB with status GOOD). Build with -DDISKIMAGE_IO_UNFIXED to
 # see them fail; the round that fixes them deletes the guard.
+#  ---------------------------------------------------------------------------
+#  #437: SYNCHRONIZE CACHE durability.
+#
+#  --wrap=fsync,--wrap=fflush is NOT optional decoration.  The bigger half of #437 is that
+#  an overlaid disk never fsynced the file holding the guest's data, and NO byte comparison
+#  can see that: measured this round, a plain fflush with no fsync leaves the bytes fully
+#  visible to a separate reader after _exit(), because the page cache is the kernel's and
+#  outlives the process.  Only real power loss distinguishes fsync, so the CALL COUNTS are
+#  the evidence.  The flags FAIL CLOSED, which was measured rather than assumed: drop both
+#  and the harness still links but reports 7 rows / 4 failed; drop only --wrap=fflush and it
+#  reports 2 failed.  An earlier version of this comment claimed it would "still pass against
+#  nothing", which is the opposite of the truth and would have taught the next reader to
+#  distrust a red row.
+#
+#  Differential verified BOTH WAYS before this block was written: 7 rows / 0 failed against
+#  the fix, 7 rows / 4 failed against the pre-fix sources taken from git.  The pre-fix arm
+#  had to be built with the detector INSIDE the pre-fix tree: a quoted relative
+#  #include "../src/disk/diskimage.c" resolves against the including file's own directory,
+#  so compiling it from $SEC pulled in the FIXED source and reported a meaningless pass.
+SYNCLOG=$LOGDIR/diff_diskimage_sync.log
+if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -Wl,--wrap=fsync -Wl,--wrap=fflush \
+        -o "$LOGDIR/diff_diskimage_sync" "$HERE/diff_diskimage_sync.c" > "$SYNCLOG" 2>&1; then
+    note "diskimage sync differential compile failed:"; sed 's/^/       /' "$SYNCLOG" | head -12
+    check "diskimage sync: compiles against the real diskimage.c" "no" "yes"
+else
+    check "diskimage sync: compiles against the real diskimage.c" "yes" "yes"
+    ( cd "$LOGDIR" && "$LOGDIR/diff_diskimage_sync" ) > "$SYNCLOG" 2>&1
+    sed 's/^/       /' "$SYNCLOG"
+    check     "diskimage sync: row failures" \
+              "$(grep -oE '[0-9]+ failed' "$SYNCLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "diskimage sync: rows actually run" \
+              "$(grep -oE '^ *[0-9]+ rows' "$SYNCLOG" | grep -oE '[0-9]+')" 7
+    #  Each named so that deleting one is VISIBLE rather than silent.  The overlay pair is
+    #  the only evidence for the half of #437 that no byte test can reach.
+    #  The overlay TRACE row NAMES THE FILE rather than counting calls, and it is the only
+    #  row that catches a wrong-file mutant.  Its count-only predecessor let FOUR data-losing
+    #  mutants pass green, so deleting this row must be visible rather than silent.
+    check     "diskimage sync: the overlay file-order trace row is present" \
+              "$(grep -c 'overlay: sync flushes+syncs data, THEN bitmap' "$SYNCLOG")" "1"
+    check     "diskimage sync: the overlay trace is data-then-bitmap" \
+              "$(grep -c 'F(data) S(data) F(bitmap) S(bitmap)' "$SYNCLOG")" "1"
+    #  Without these, the trace rows are satisfied by a fixture that never wrote a byte --
+    #  which is exactly how the first version of this detector passed against four mutants.
+    check     "diskimage sync: the guest-data-arrived rows are present" \
+              "$(grep -c 'actually reached the' "$SYNCLOG")" "2"
+    check     "diskimage sync: the failed-sync status row is present" \
+              "$(grep -c 'nothing open: sync reports CHECK CONDITION' "$SYNCLOG")" "1"
+    #  The buffer-size note is a DIAGNOSTIC, never a row: scoring it would fail the gate on
+    #  drvfs for a filesystem reason unrelated to the code, and a false FAIL costs as much
+    #  as a false pass.  Checked for PRESENCE so the warning cannot be quietly deleted.
+    check     "diskimage sync: the stdio-buffer diagnostic is present" \
+              "$(grep -c 'stdio buffer' "$SYNCLOG")" "1"
+fi
+
 IOLOG=$LOGDIR/diff_diskimage_io.log
 if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
