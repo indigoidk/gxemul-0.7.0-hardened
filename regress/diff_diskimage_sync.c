@@ -51,10 +51,18 @@
  *  pending write.  Any realistic-looking test that does anything at all after the sync is
  *  silently green.  This file therefore does not rest its verdict on byte survival.
  *
- *  KNOWN GAP, stated rather than papered over: deleting the ordering `continue` in
- *  diskimage_sync() is NOT caught here.  Detecting it needs a row that injects an fsync
- *  failure on the overlay data file and then asserts the bitmap fd is ABSENT from the trace.
- *  Filed, not built -- so the ordering rule is reasoned and reviewed, not yet gated.
+ *  THE ORDERING RULE IS GATED, and this paragraph used to say plainly that it was not.
+ *  SECTION 1b injects an fsync failure on one overlay data file and asserts that THAT
+ *  overlay bitmap is absent from the trace while the NEXT overlay is still synced.
+ *  MEASURED on four trees before those rows existed: the whole file passed 8 rows / 0
+ *  failed against the shipped source AND against every one of `continue` deleted,
+ *  `continue` -> `break`, and `continue` -> `return 0`.  Nothing else here separates them.
+ *
+ *  IT TAKES TWO OVERLAYS, and that is the part worth remembering.  With one overlay the
+ *  three mutants above are INDISTINGUISHABLE -- deleting the `continue`, breaking out of
+ *  the loop and returning early all produce the same trace, because there is no next
+ *  iteration to observe.  A single-overlay version of this row was built first and
+ *  measured: it caught the deletion and let the other two through green.
  */
 
 #include <stdio.h>
@@ -96,7 +104,43 @@ static void trace_add(char op, int fd)
 {
 	if (trace_n < TRACE_MAX) { trace[trace_n].op = op; trace[trace_n].fd = fd; trace_n++; }
 }
-int __wrap_fsync(int fd)   { trace_add('S', fd);          return __real_fsync(fd); }
+/*
+ *  FAULT INJECTION -- one changed RETURN VALUE, and the mechanism is chosen, not default.
+ *
+ *  The ordering rule in diskimage_sync() is only OBSERVABLE when an overlay data file fsync
+ *  FAILS: until it does, the `continue` has nothing to skip and every mutant of it executes
+ *  identically to the shipped code.  So a row for it must make an fsync fail.
+ *
+ *  Rejected mechanisms, and why:
+ *    - a genuinely failing fsync needs a failing device (dm-error, a full filesystem, a
+ *      pulled stick).  Root, non-portable, and it would make this gate depend on the
+ *      machine rather than on the code -- the same class of defect as the drvfs trap in
+ *      note 3 above.
+ *    - close()ing the descriptor under the live FILE* does make fsync fail, but it corrupts
+ *      stdio state and can later hit a RECYCLED fd.  That is a FAULT, and a fault is never
+ *      a detection -- this file already carries one such lesson, at xfer_init().
+ *    - an O_RDONLY fd is not a failure at all on glibc (rc 0), so it would prove nothing.
+ *
+ *  The wrapper is already here and already linked by the gate build line, so the injection
+ *  costs one comparison and disturbs NOTHING else: no signal, no freed memory, no closed
+ *  descriptor, no byte changed on disk.  The rows below therefore fail on VALUES -- a red
+ *  row is a printed string that differs, not a dead process.
+ *
+ *  The call is recorded BEFORE the failure is returned, deliberately: the trace has to show
+ *  that the data fsync was ATTEMPTED, or "the bitmap was not synced" could not be told
+ *  apart from "nothing was synced at all".
+ */
+static int fail_fsync_fd = -1;		/*  -1 = disarmed  */
+
+int __wrap_fsync(int fd)
+{
+	trace_add('S', fd);
+	if (fd == fail_fsync_fd) {
+		errno = EIO;
+		return -1;
+	}
+	return __real_fsync(fd);
+}
 int __wrap_fflush(FILE *f) { trace_add('F', f ? fileno(f) : -1); return __real_fflush(f); }
 
 /*  Render the trace with fds replaced by role names, so a row's expected value is readable
@@ -111,6 +155,28 @@ static const char *trace_str(int fd_data, int fd_bitmap, int fd_base)
 		if (trace[i].fd == fd_data)        who = "data";
 		else if (trace[i].fd == fd_bitmap) who = "bitmap";
 		else if (trace[i].fd == fd_base)   who = "base";
+		snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "%s%c(%s)",
+		    i ? " " : "", trace[i].op, who);
+	}
+	return buf[0] ? buf : "(none)";
+}
+
+/*  The same rendering for TWO overlays.  trace_str() above cannot express what the ordering
+    rule actually says -- "stop syncing THIS overlay, then carry on with the NEXT one" --
+    because with a single overlay the loop has no next iteration to observe, and MEASURED:
+    `continue` deleted, `continue` -> `break` and `continue` -> `return 0` then all produce
+    byte-identical traces.  Two overlays separate all three.  */
+static const char *trace_str2(int d0, int b0, int d1, int b1)
+{
+	static char buf[512];
+	int i;
+	buf[0] = 0;
+	for (i = 0; i < trace_n; i++) {
+		const char *who = "other";
+		if (trace[i].fd == d0)      who = "d0";
+		else if (trace[i].fd == b0) who = "b0";
+		else if (trace[i].fd == d1) who = "d1";
+		else if (trace[i].fd == b1) who = "b1";
 		snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "%s%c(%s)",
 		    i ? " " : "", trace[i].op, who);
 	}
@@ -265,8 +331,15 @@ static int xfer_status(struct scsi_transfer *x)
 	return x->status == NULL ? -1 : x->status[0];
 }
 
-/*  Issue a WRITE(10) of one sector, then SYNCHRONIZE CACHE, counting the sync calls.  */
-static int sync_after_write(struct diskimage *d)
+/*  Issue a WRITE(10) of one sector, then SYNCHRONIZE CACHE, counting the sync calls.
+    fail_fd, when not -1, makes fsync() on that one descriptor return EIO.  It is armed
+    AFTER the write and disarmed the instant the command returns, for two reasons.  The
+    injection must reach ONLY the handler under test: the write path has its own
+    fflush/fsync pair at diskimage.c:1315-1317 behind do_fsync, which is 0 here -- so it
+    emits nothing today, but a row must not quietly depend on that staying true.  And an
+    armed fd number outliving this call could fail a LATER sync once the descriptor had
+    been recycled, which would be a false red somewhere else entirely.  */
+static int sync_after_write(struct diskimage *d, int fail_fd)
 {
 	struct machine *m = mkmachine(d);
 	struct cpu *c = mkcpu(m);
@@ -293,10 +366,12 @@ static int sync_after_write(struct diskimage *d)
 	xfer_free(&xfer);
 
 	trace_n = 0;
+	fail_fsync_fd = fail_fd;
 
 	cdb10(cmd, SCSICMD_SYNCHRONIZE_CACHE, 0, 0);
 	xfer_init(&xfer, cmd, 10);
 	diskimage_scsicommand(c, 0, DISKIMAGE_SCSI, &xfer);
+	fail_fsync_fd = -1;
 	status = xfer_status(&xfer);
 	xfer_free(&xfer);
 
@@ -411,7 +486,7 @@ int main(int argc, char *argv[])
 		fd_bitmap = fileno(d.overlays[0].f_bitmap);
 		fd_base   = fileno(d.f);
 
-		status = sync_after_write(&d);
+		status = sync_after_write(&d, -1);
 		/*
 		 *  THE ORDERED SEQUENCE OF FILES, not a count.  This one row replaces two
 		 *  counting rows and kills the mutants they could not see: renaming
@@ -428,6 +503,81 @@ int main(int argc, char *argv[])
 		    exactly how the first version of this file passed against four mutants. */
 		checkn("overlay: the guest's sector actually reached the overlay",
 		    first_byte_of(ovl), 0xDD);
+
+		/*
+		 *  SECTION 1b -- THE ORDERING RULE.  #437 shipped it reasoned and reviewed but
+		 *  NOT GATED, and the header above used to say so in as many words.
+		 *
+		 *  A bitmap bit means "this overlay owns this block".  Publishing that bit while
+		 *  the block bytes are not durable makes a later read take the overlay HOLE
+		 *  instead of the good bytes still in the base -- measured during #437: the guest
+		 *  read zeros where the base still held data, reported as a SUCCESSFUL read, with
+		 *  no fall-through to the base.  So a data-side failure must skip THAT overlay
+		 *  bitmap and go on to the next overlay, which is exactly what the `continue` at
+		 *  diskimage.c:2290 does.
+		 *
+		 *  A SECOND OVERLAY IS WHAT MAKES THE ROW WORK, and it is not decoration.  With one
+		 *  overlay there is no next iteration, so `continue`, `break` and `return 0` all
+		 *  trace identically -- MEASURED: a single-overlay version of this row caught the
+		 *  deletion and let the other two through green.  Two overlays separate all three:
+		 *      shipped          F(d0) S(d0)       F(d1) S(d1) F(b1) S(b1)
+		 *      continue deleted F(d0) S(d0) F(b0) S(b0) F(d1) S(d1) F(b1) S(b1)
+		 *      break / return 0 F(d0) S(d0)
+		 */
+		{
+			char ovl2[256], bfn2[300];
+			FILE *f2;
+			int d0, b0, d1, b1;
+
+			snprintf(ovl2, sizeof(ovl2), "diff_dis_sync_ovl2");
+			snprintf(bfn2, sizeof(bfn2), "%s.map", ovl2);
+			unlink(ovl2); unlink(bfn2);
+			f2 = fopen(ovl2, "w+b"); if (f2) fclose(f2);
+			f2 = fopen(bfn2, "w+b"); if (f2) fclose(f2);
+			if (!diskimage_add_overlay(&d, ovl2, false)) {
+				printf("  FAIL  could not attach the 2nd overlay -- "
+				    "SETUP, not a result\n");
+				return 2;
+			}
+
+			/*  Re-read all four: the array is realloc()ed by the call above.  */
+			d0 = fileno(d.overlays[0].f_data);
+			b0 = fileno(d.overlays[0].f_bitmap);
+			d1 = fileno(d.overlays[1].f_data);
+			b1 = fileno(d.overlays[1].f_bitmap);
+
+			status = sync_after_write(&d, d0);
+			checks("overlay: failure skips only ITS OWN bitmap",
+			    trace_str2(d0, b0, d1, b1),
+			    "F(d0) S(d0) F(d1) S(d1) F(b1) S(b1)");
+			/*
+			 *  NOT the discriminator, and recording that is the point.  Every
+			 *  mutant above sets ok = 0 too, so this row is GREEN on all of
+			 *  them.  It earns its place as the independent witness THAT THE
+			 *  INJECTION FIRED: if the --wrap flags were dropped from the build
+			 *  line, or fail_fsync_fd never matched, this would read 0 (GOOD)
+			 *  and the row above would go red for a SETUP reason.  MEASURED:
+			 *  two rows red together says "instrument", the row above red
+			 *  ALONE says "code".
+			 */
+			checkn("overlay: a failed sync reports CHECK CONDITION",
+			    status, 0x02);
+			/*
+			 *  CONTROL, same disk, immediately after, injection disarmed: every
+			 *  file syncs again.  This is what makes the row above a MEASUREMENT
+			 *  rather than the observation that some trace was short -- an edit
+			 *  that simply stopped syncing bitmaps, or an f_bitmap gone NULL,
+			 *  would satisfy the row above and fails here.  It also proves the
+			 *  arm/disarm does not LEAK into the flat section below, where a
+			 *  recycled fd number could fail a sync never meant to fail.
+			 */
+			status = sync_after_write(&d, -1);
+			checks("overlay: control -- disarmed, all files sync",
+			    trace_str2(d0, b0, d1, b1),
+			    "F(d0) S(d0) F(b0) S(b0) F(d1) S(d1) F(b1) S(b1)");
+
+			unlink(ovl2); unlink(bfn2);
+		}
 
 		if (d.f) fclose(d.f);
 		unlink(path);
@@ -452,7 +602,7 @@ int main(int argc, char *argv[])
 		mkdisk(&d, path, "r+b", 1);
 
 		fd_base = fileno(d.f);
-		status = sync_after_write(&d);
+		status = sync_after_write(&d, -1);
 		checks("flat: sync flushes+syncs the base, and nothing else",
 		    trace_str(-1, -1, fd_base), "F(base) S(base)");
 		checkn("flat: a successful sync reports GOOD status", status, 0);
@@ -502,7 +652,7 @@ int main(int argc, char *argv[])
 	 *  only ever describe a file that no longer exists.  `rows + 1` because this row
 	 *  is not counted until checkn() itself increments.
 	 */
-	checkn("[IDENTITY] row count -- guards against a stale copy", rows + 1, 8);
+	checkn("[IDENTITY] row count -- guards against a stale copy", rows + 1, 11);
 
 	printf("\n  %d rows, %d failed\n", rows, fails);
 	printf("%s\n", fails ? "DIFF_DISKIMAGE_SYNC_FAIL" : "DIFF_DISKIMAGE_SYNC_PASS");

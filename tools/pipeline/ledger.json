@@ -6838,7 +6838,7 @@
   },
   {
    "id": "m437ord",
-   "state": "in work",
+   "state": "closed",
    "commits": "",
    "title": "m437ord  The #437 ordering rule is reviewed but NOT gated -- it needs one fault-injection row",
    "entries": [
@@ -6849,6 +6849,14 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "Deleting the ordering `continue` in diskimage_sync() is the one mutant the shipped detector does not catch. The pass-2 measure seat VERIFIED a row can catch it: inject an fsync failure on the overlay data file and assert the bitmap fd is ABSENT from the trace -- shipped syncs fds [4 5 6], the mutant syncs [4 5 6 7]. One row, not built.  [panel_20260818_095322]"
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "BUILT AND CLOSED, and it IMPROVED ON THE RECIPE IT WAS GIVEN. Told to build the single-overlay row a prior pass had specified, it built that, then probed two SIBLING mutants and measured that the single-overlay row catches ONLY the deletion: `continue` -> `break;` and `continue` -> `return 0;` both pass it GREEN, because with one overlay there is no next iteration and all three mutants trace identically. A SECOND OVERLAY separates them and one row kills all three. It supplied both patches and recommended the stronger, which also perturbs no existing gate check where the fallback would have forced one from \"1\" to \"2\".\n* Mechanism: __wrap_fsync consults a static fail_fsync_fd, sets errno=EIO and returns -1 without calling __real_fsync; armed after the WRITE, disarmed when the command returns. It rejected, with reasons written into the file, a real failing fsync (needs dm-error/root, non-portable -- same class as the drvfs trap), close()ing the fd under the live FILE* (a FAULT, and can hit a recycled fd) and an O_RDONLY fd (rc 0 on glibc, proves nothing).\n* A CRASH IS NOT WHAT MAKES IT FAIL, measured four ways: rc is 1 never >=128; the mutant printed all 11 rows plus the verdict line so it reached the end of main; ASan+UBSan produced 0 bytes on both arms; and exactly one row differs, by a printed string.\n* INSTRUMENT-SABOTAGE CONTROL (`if (0 && fd == fail_fsync_fd)`) turns TWO rows red, so a dead injection fails loudly and the signatures are distinguishable: two red together = the instrument, the ordering row red alone = the code.\n* VERIFIED INDEPENDENTLY BY THE MAIN LOOP, and MY FIRST THREE ATTEMPTS WERE ALL VOID -- the loop variable was eaten before reaching WSL and the printed rc was grep's status; then the anchor took 'the first continue in a range' when the loop has TWO and the f_data==NULL branch never executes, so all three mutants 'passed' and would have discredited the row; then anchoring on the fsync call matched :1211 in overlay_set_block_in_use, a different function. Only a context printout of the line about to be mutated caught it. Correctly anchored on the unique 'Data is not durable' comment: ALL THREE MUTANTS KILLED, traces distinguishable -- deleted publishes b0 anyway, break/return0 stop at F(d0) S(d0).\n* Gate 2: PASS 235 checks (was 231). Honest limits recorded in the file: the CHECK-CONDITION row is a WITNESS not a discriminator (green on every code mutant); an fflush failure on the data file is not injected, only fsync; and the injection skips the real fsync, so a partially-successful sync is UNTESTED and UNKNOWN.  [agent m437ord 2026-08-19]"
     }
    ]
   },

@@ -1179,7 +1179,7 @@ else
     check     "diskimage sync: row failures" \
               "$(grep -oE '[0-9]+ failed' "$SYNCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "diskimage sync: rows actually run" \
-              "$(grep -oE '^ *[0-9]+ rows' "$SYNCLOG" | grep -oE '[0-9]+')" 7
+              "$(grep -oE '^ *[0-9]+ rows' "$SYNCLOG" | grep -oE '[0-9]+')" 11
     #  Each named so that deleting one is VISIBLE rather than silent.  The overlay pair is
     #  the only evidence for the half of #437 that no byte test can reach.
     #  The overlay TRACE row NAMES THE FILE rather than counting calls, and it is the only
@@ -1189,6 +1189,32 @@ else
               "$(grep -c 'overlay: sync flushes+syncs data, THEN bitmap' "$SYNCLOG")" "1"
     check     "diskimage sync: the overlay trace is data-then-bitmap" \
               "$(grep -c 'F(data) S(data) F(bitmap) S(bitmap)' "$SYNCLOG")" "1"
+    #  #437 ORDERING.  The `continue` on a failed overlay-DATA sync is what stops the
+    #  bitmap from claiming blocks whose bytes are not durable, AND what keeps the
+    #  remaining overlays being synced.  MEASURED before these rows existed: the whole
+    #  differential passed 8 rows / 0 failed against the shipped source AND against each
+    #  of `continue` deleted, `continue`->`break` and `continue`->`return 0`.  The rule
+    #  was reasoned and reviewed but UNGATED, and the detector said so in its header.
+    check     "diskimage sync: the ordering row is present" \
+              "$(grep -c 'overlay: failure skips only ITS OWN bitmap' "$SYNCLOG")" "1"
+    #  The VALUE, not merely the name, and it needs TWO overlays to be worth asserting:
+    #  d0 is skipped from its own bitmap onward while d1 is synced in full.  With one
+    #  overlay the three mutants above are indistinguishable -- MEASURED, a single
+    #  -overlay version of this row caught only the deletion.  The regex is anchored
+    #  because a failing run prints the same row name followed by "(want ...)".
+    check     "diskimage sync: a failed data sync skips that bitmap only" \
+              "$(grep -cE 'ITS OWN bitmap +F\(d0\) S\(d0\) F\(d1\) S\(d1\) F\(b1\) S\(b1\)$' "$SYNCLOG")" "1"
+    #  The two rows that keep the one above HONEST, and neither is a discriminator.
+    #  Without the witness, a dead --wrap hook would turn the ordering row red for a
+    #  SETUP reason that reads exactly like a code defect (MEASURED: with the injection
+    #  disabled, BOTH go red together -- that pair is the signature to look for, and a
+    #  lone red on the ordering row is the one that means the CODE changed).  Without
+    #  the disarmed control, "the trace was short" could not be told from "the bitmap is
+    #  never synced at all" -- a mutant this file has already had to catch once.
+    check     "diskimage sync: the injection-fired witness row is present" \
+              "$(grep -c 'overlay: a failed sync reports CHECK CONDITION' "$SYNCLOG")" "1"
+    check     "diskimage sync: the disarmed control row is present" \
+              "$(grep -c 'overlay: control -- disarmed, all files sync' "$SYNCLOG")" "1"
     #  Without these, the trace rows are satisfied by a fixture that never wrote a byte --
     #  which is exactly how the first version of this detector passed against four mutants.
     check     "diskimage sync: the guest-data-arrived rows are present" \
