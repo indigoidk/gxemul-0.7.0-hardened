@@ -3631,6 +3631,14 @@
      "verdict": "REAL",
      "evidence": "MANUAL",
      "note": "*** THIRD FILE-READING SEAT TO REFUTE THE DUPLICATE SUSPICION, independently: 'b120r is a distinct residual, not a duplicate of #281/#286' and 'do not drop b120r'. *** agy, grok and opus5 all read the code and all three agree; the two packet seats that voted DROP could not check and sided with the brief's own suspicion. On repo fact the reading seats win, and this is now 3-0 among seats that could actually look.  [panel_20260817_174701]"
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "*** MEASURED ACROSS THREE GUESTS AND FIVE INSTRUMENTED ARMS. The lie is real, it REACHES the guest, the guest DOES read the field -- and on the shipping value no guest on any rig is harmed. Priority drops; the fix does not become unnecessary. ***\n* TRAFFIC: pmax/OpenBSD 2.2 (old-style rz driver) issues ZERO MODE SENSE across a full multiuser boot plus disklabel, mount and raw dd -- a clean negative. arc/OpenBSD 2.2 issues 5x MODE SENSE(6) page 4: asked 32, got 32, TOLD 132, true 36. That reproduces the brief's capture exactly. luna88k/OpenBSD 7.7 issues 11x across pages 0/4/8: asked 254, got 254, TOLD 98.\n* *** THE WRAP IS ALREADY EXERCISED IN NORMAL OPERATION: luna88k asks 254, so 254+100=354 WRAPS to 98. *** It merely lands on a value the guest tolerates. Measured sweep: reported==0 at exactly alloc==156, and reported < true-1 for alloc in [156,190]. No rig asks 156, so the defect is ONE allocation-length change away from the arm-C behaviour below, not a hypothetical.\n* THE CHANNEL IS LIVE, proved by a POSITIVE CONTROL rather than assumed: sending cyl=1234/heads=9 changes arc's attach line from '2081 cyl, 16 head, 63 sec' to '1234 cyl, 9 head, 188 sec'. The response body IS consumed.\n* AND IT REFUTED ITS OWN DRAFT: it had written that a page-4 rpm change proves consumption; arm D showed disklabel still printed 3600 because that value comes from the ON-DISK LABEL, not from MODE SENSE. The control killed its own claim before it shipped.\n* HARM, MEASURED: luna88k told-98 vs told-35/11 produce ORDERED TRANSCRIPTS IDENTICAL, 0 diff lines across 97 lines each. But told-0 FLIPS CONTROL FLOW -- 32 MODE SENSE instead of 11, including MODE SENSE(10) fallbacks and page 5. OpenBSD 7.7 branches on this byte. So 98 and 132 sit in a tolerated 'nonzero and >= true' region; 0 does not.\n* *** THE OBVIOUS FIX IS WRONG: `retlen -= 100` writes the ALLOCATION LENGTH. *** The spec wants true_len-1, measured as 11/23/35/35/43 for pages 0/1/3/4/5 -- the allocation length is correct only by coincidence at alloc==191. The true value is not known at :607 because the page is written later at :630+, so the write must MOVE AFTER the pagecode switch.\n* BLAST RADIUS: nothing reads retlen after :607 (next use :746 is an assignment in the READ case), and data_in[0] is read NOWHERE outside diskimage_scsicmd.c across all of src/ -- every HBA sizes from data_in_len, so the guest is the only consumer. No overflow: max write is q+29 = 45 against a >=100-byte buffer.\n* DETECTOR built and feasible offline. TWO DESIGN POINTS THAT MATTER: the rows MUST SPAN PAGES {0,1,3,4,5}, because every page-4 case has true_len 36 and a mutant hardcoding 35 would pass a page-4-only test; and an INVARIANCE row -- the reported length must not vary with the allocation length -- NAMES THE DEFECT RATHER THAN A VALUE, so a '+100 -> +0' half-fix cannot pass it. -ffunction-sections/-Wl,--gc-sections is required or mymkstemp/debug_indentation fail to link.\n* ADJACENT, measured en route: MODE SENSE(10) writes the 6-BYTE header layout, so a conformant guest parses block_desc_len=0 while 8 real descriptor bytes sit at offset 8 -- STRICTLY WORSE than b120r, and unreached today only because no rig issues MS10. And data_in_len is set to the FULL allocation length even when far less data exists (alloc 255 -> 255 bytes, 219 of them zeros) where a real drive transfers 36, which affects residual logic.\n* HONEST UNKNOWN, stated by the seat: three guests measured, ALL OpenBSD. Whether a NetBSD/Ultrix/Linux driver asks an allocation length in [156,190] was not measured.\n* It also caught a citation error of mine: REQUEST SENSE forcing is :964-967, not the :957-960 my brief claimed. Verified and corrected above.  [agent b120r 2026-08-19]"
     }
    ]
   },
@@ -6913,6 +6921,78 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "grep -i flush src/devices/dev_wdc.c returns NOTHING, so a guest's ATA FLUSH CACHE is not merely unflushed but unimplemented. Reachability UNKNOWN; landisk is the ATA rig and it boots, so a probe witness is likely available.  [panel_20260818_095322]"
+    },
+    {
+     "phase": "research",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "*** THE BRIEF'S FRAMING WAS HALF WRONG, AND THE HALF IT GOT WRONG CHANGES WHAT SHOULD BE FIXED. *** Verdict FIX-not-document, but not for the reason I gave it.\n* 0xE7 WDCC_FLUSHCACHE is DEFINED at wdcreg.h:130 and NEVER REFERENCED in dev_wdc.c; 0xEA has no constant anywhere in src/. Both fall to wdc_command()'s default:, which sets WDCE_ABRT, emits an UNLATCHED fatal(), and -- the part that matters -- does NOT set d->int_assert. MEASURED offline against the shipping wdc_command(): 0xE7 -> err=0x04 irq=0 fatal=1, status 0x51 (DRDY|DSC|ERR), against the 0x10 RECAL control at err=0x00 irq=1.\n* NO REAL GUEST ISSUES IT, and the negative is WELL CONTROLLED. With an IDE disk attached and a full filesystem lifecycle (MAKEDEV, fdisk, disklabel, newfs 64 MB FFS, mount, write, sync, umount, halt -p) OpenBSD 7.6 issues exactly: 0xEC 0xF5 0x10 0x91 0xC6 0x20 0xC4 0x30 0xC5 0xE0. No 0xE7, no 0xEA.\n* IT REFUTED ITS OWN LEADING HYPOTHESIS rather than resting on it: 'the drive does not advertise FLUSH CACHE' was tested with TWO discriminating IDENTIFY variants (word 83=0x5000 and 0x7000). The guest DEMONSTRABLY READ the new IDENTIFY -- it began issuing 0xEF SET FEATURES, which it never did before -- and STILL never flushed. Why OpenBSD declines is an honest UNKNOWN: there is no OpenBSD source in this tree, and reconstructing wd_flushcache from memory is exactly the trap the SH-manual rule exists to prevent.\n* *** THE LIVE DEFECT IS THE ARM, NOT THE OPCODE: 0xE0 STANDBY IMMEDIATE hits the same default: on EVERY `halt -p`, measured 4 of 4 shutdown runs. *** ABRT to the guest, no interrupt, unlatched host warning, and the guest swallows it silently. So the IDE side has a reachable reproducible fall-through TODAY, and FLUSH CACHE is an unreached member of the same set.\n* THE FIX IS NOT A ONE-LINER. diskimage_sync() takes a struct diskimage *, but dev_wdc.c only ever holds (machine, id, type) -- and THERE IS NO EXPORTED (machine,id,type) -> struct lookup; every public function in diskimage.c open-codes the same 6-line walk. Needs a diskimage_sync_id() wrapper, a WDCC_FLUSHCACHE_EXT constant, and a case arm that also sets int_assert. Built privately: 0xE7/0xEA become err=0x00 irq=1 fatal=0 with trace F(data) S(data), matching the SCSI sibling.\n* DETECTOR BUILT, and it COMPILES AGAINST BOTH TREES because the rows pass a RAW OPCODE INTEGER rather than the WDCC_ constant -- deliberately sidestepping the exact trap diff_diskimage_sync.c's header records, where naming the new symbol made the pre-fix arm a SETUP result. 9 rows / 0 failed pre-fix; 8 of 9 flip post-fix. Needs only two extra stubs given the flags gate_offline.sh already passes.\n* SCOPE: all three files are byte-identical between est/ and GXEMUL-SEC/. And wdc is far from landisk-only -- bus_isa, bus_pci, dev_pcic, dev_ps2_spd, machine_arc.c:235, machine_landisk.c:87 and promemul/of.c all instantiate it, so ARC IS A SECOND ATA RIG THAT WAS NOT TESTED.  [agent idesync 2026-08-19]"
+    }
+   ]
+  },
+  {
+   "id": "wdcnoirq",
+   "state": "in work",
+   "commits": "",
+   "title": "wdcnoirq  wdc_command()'s default: arm asserts no interrupt, so an interrupt-driven guest waits for a completion that never comes",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "MEASURED. The arm sets WDCE_ABRT and returns without setting d->int_assert, and dev_wdc_tick() raises the IRQ only when that flag is set. A polling driver sees ABRT; an interrupt-driven one sees nothing at all. Live TODAY via 0xE0 on every halt -p, not only via the unimplemented flush. That an interrupt-waiting driver would then hit a wdc timeout is READ/inference -- no guest was observed doing it.  [agent idesync 2026-08-19]"
+    }
+   ]
+  },
+  {
+   "id": "wdcflood",
+   "state": "in work",
+   "commits": "",
+   "title": "wdcflood  wdc_command()'s default: fatal() is unlatched -- 100 commands, 100 host log lines",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "MEASURED: 100 repeats of 0xE7 produced 100 fatal() calls. Same guest-drivable stderr flood class as #265/#269 and the cflood rule. dev_wdc.c ALREADY CARRIES THREE warned_* latches added by #337 -- this path was simply missed by that round.  [agent idesync 2026-08-19]"
+    }
+   ]
+  },
+  {
+   "id": "wdcstandby",
+   "state": "in work",
+   "commits": "",
+   "title": "wdcstandby  0xE0 STANDBY IMMEDIATE is unimplemented and a real guest issues it on every powerdown",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "MEASURED 4 of 4 shutdown runs on OpenBSD 7.6/landisk. Falls to default:, ABRT with no interrupt and an unlatched warning; the guest swallows it silently. The nearby 'POWEROFF FAILED!' is UNRELATED -- it comes from a missing landisk power register at paddr 0x10000003, not from the ATA abort. This is the reachable member of the fall-through set.  [agent idesync 2026-08-19]"
+    }
+   ]
+  },
+  {
+   "id": "landiskdisk",
+   "state": "in work",
+   "commits": "",
+   "title": "landiskdisk  the landisk rig attaches NO DISK, so dev_wdc.c has zero rig coverage in the whole battery",
+   "entries": [
+    {
+     "phase": "assess",
+     "seat": "opus5",
+     "date": "2026-08-19",
+     "verdict": "REAL",
+     "evidence": "CONFIRMED",
+     "note": "MEASURED: gate_crossfamily.sh:199 -> drive_guest.py:84 boots `-N -E landisk -M 64 <bsd.rd>` with no disk image, and across a full boot to the installer prompt NOT ONE ATA opcode is written to the command register. wdc0 attaches and is never driven. Adding `-d i:` to that rig would cover 10 real opcodes (IDENTIFY, RECAL, IDP, SETMULTI, READ, READMULTI, WRITE, WRITEMULTI, SEC_FREEZE_LOCK, STANDBY_IMMED) at roughly no cost. Cheapest coverage gain identified this round.  [agent idesync 2026-08-19]"
     }
    ]
   }
