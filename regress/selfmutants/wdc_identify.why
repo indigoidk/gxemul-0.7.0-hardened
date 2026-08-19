@@ -1,0 +1,27 @@
+Force word 6's HIGH byte to zero -- "sectors per track is an 8-bit field" -- keeping the low
+byte, so the block still reports a plausible geometry rather than nothing.
+
+Chosen over reverting the `% 255` capacity packing, which is the obvious mutant and reddens
+SEVEN rows at once; and over the byte-order and whole-struct mutants, which the file's own
+header records as already covered.  This one reddens exactly ONE -- measured, 16 rows / 1
+failure -- because every other fixture in the file keeps sectors-per-track below 256 (17, 63,
+1), so only row_wide_geometry (s=770) can observe it.  The self-consistency oracle uses S=63
+and stays green, which is the point: a mutant five rows can see proves little.
+
+It is the mutant #410 measured SURVIVING AT ALL FIVE OPTIMISATION LEVELS.  #409 shipped
+row_wide_geometry with s = 17, so word 6's high byte was permanently zero while the row's
+name, this file's header, the gate and the commit message all claimed words 3 AND 6.  Word 3
+was genuinely closed; word 6 was not.  That row is the sole detector of this byte, and this
+control is what makes the claim checkable instead of historical.
+
+The maintainer's premise is false, and dev_wdc.c's own KNOWN SURVIVORS bucket (b) says why:
+`-d f:` sets FLOPPY at any file size, before the recalc and with no override, and
+diskimage_recalc_size() then gives a 20 MB image spt 256 and a 100 MB image spt 1280 -- both
+above 255.  wdc copies whatever geometry the diskimage layer hands it.  "spt can never exceed
+255" is exactly the kind of true-sounding invariant that gets written into a cleanup commit.
+
+It fails on VALUES, never by crashing: the guest is told 2 sectors per track instead of 770,
+and the block then contradicts its own capacity.  IDENTIFY fields are read by real guests --
+another agent this round reports (READ, not measured here) that changing words 80/83 made
+OpenBSD start issuing SET FEATURES 0xEF, which it had never issued before -- so a corrupted
+geometry word is guest-visible, not cosmetic.

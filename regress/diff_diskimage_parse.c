@@ -241,5 +241,22 @@ int main(void)
 	check("[IDENTITY] row count -- guards against a stale copy", counted, 36);
 
 	printf("\n%d rows, %d failures\n", rows, failures);
+	/*
+	 *  THE VERDICT TOKEN, and it is not decoration.
+	 *
+	 *  regress/selfmutant.py asserts a *_PASS token on its PRISTINE arm and a
+	 *  *_FAIL token on its MUTANT arm -- the positive form, deliberately, because
+	 *  a build failure emits NEITHER, so "the PASS token is absent" would be
+	 *  satisfied by a control that never ran.  Without these two lines this
+	 *  detector cannot carry a self-mutant at all: MEASURED, the helper reports
+	 *  SELFMUTANT_SETUP, which its own header says is NEVER scored as a detection.
+	 *
+	 *  The row count above guards the TABLE against a stale copy; this guards the
+	 *  VERDICT against a run that produced no verdict.
+	 */
+	if (failures == 0)
+		printf("DISKIMAGE_PARSE_PASS\n");
+	else
+		printf("DISKIMAGE_PARSE_FAIL\n");
 	return failures ? 1 : 0;
 }

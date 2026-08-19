@@ -874,6 +874,31 @@ selfmutant_one diff_m8invread.c  src/devices/dev_m8820x.c    m8invread  "F1 "
 #  detection.  Measured both ways.  The earlier comment asserted the memory_rw shape and
 #  taught the wrong hazard class.
 selfmutant_one diff_diskimage_sync.c src/disk/diskimage.c   diskimage_sync "overlay: sync flushes+syncs data" "-Wl,--wrap=fsync -Wl,--wrap=fflush"
+#  selfmutant6, part 1 of 3.  Both mutants were chosen so that exactly ONE row sees them --
+#  measured, 1 of 37 and 1 of 16 -- which is the diskimage_sync criterion: a mutant that
+#  reddens five rows proves little beyond "deleting code breaks tests".
+#
+#  diskimage_parse drops `&& !prefix_s` from #418's escape-hatch guard.  THIS IS THE SEVENTH
+#  MUTANT OF #418 PASS 2: a reading seat proposed it, it was executed, and it SURVIVED all 35
+#  rows -- the row it now dies on was added to kill it.  On every rig this project boots the
+#  term genuinely is redundant, because get_default_disk_type_for_machine() returns SCSI for
+#  PMAX/ARC/SGI/LUNA88K/MVME88K, so `sd:` resolves to SCSI either way.  It bites only on an
+#  IDE-default machine -- which is exactly what makes "this term is redundant" a plausible
+#  good-faith edit rather than sabotage.
+#
+#  -std=gnu99 is the memory_rw hazard class, found by reading the compile lines rather than
+#  by being bitten: gate_offline.sh builds this harness with -std=gnu99 while selfmutant.py's
+#  hardcoded CC uses -std=c99, and EXTRA_FLAGS is appended so the trailing one wins.  MEASURED
+#  green BOTH ways, so it is belt-and-braces -- but it makes the control compile what the
+#  battery compiles, which is the entire reason that flag argument exists.
+selfmutant_one diff_diskimage_parse.c src/disk/diskimage.c    diskimage_parse "'sd:' stays SCSI" "-std=gnu99"
+#  wdc_identify zeroes word 6's high byte on the premise that sectors-per-track is an 8-bit
+#  field.  THIS IS THE MUTANT #410 MEASURED SURVIVING AT ALL FIVE OPTIMISATION LEVELS: #409
+#  shipped row_wide_geometry with s=17, so word 6's high byte was permanently zero while the
+#  row's name claimed words 3 AND 6.  The maintainer's premise is false for the reason
+#  dev_wdc.c's own bucket (b) gives -- `-d f:` yields spt 256 and 1280.  Deliberately NOT the
+#  `% 255` revert, which reddens seven rows.
+selfmutant_one diff_wdc_identify.c    src/devices/dev_wdc.c   wdc_identify    "geometry words carry their high byte"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -887,12 +912,12 @@ selfmutant_one diff_diskimage_sync.c src/disk/diskimage.c   diskimage_sync "over
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
 #  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
-SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31 wdc_identify:2026-08-31 diskimage_io:2026-08-31 diskimage_geom:2026-08-31 diskimage_parse:2026-08-31"
+SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31 diskimage_io:2026-08-31 diskimage_geom:2026-08-31"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
