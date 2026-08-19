@@ -954,6 +954,19 @@ selfmutant_one diff_diskimage_io.c    src/disk/diskimage.c   diskimage_io   "ref
 #                            header and the dangerous one of the three.
 #    * RELATIVE path      -> SELFMUTANT_OK.
 selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "must not fold to 1 in the SPT position" "-std=gnu99 ../src/disk/diskimage.c"
+#  selfmutant6, the last of the five.  ONE CHARACTER: `step <= cnt` -> `step < cnt` in
+#  sh4_timer_tick().  Kills exactly 1 of 16 rows, and it is plausible in good faith --
+#  dev_sh4.c:208-216 says TCNT counts TCOR..0 and underflows AFTER 0, so reading "reaching
+#  zero IS the underflow" gives `<` directly.  That comment exists to refute exactly this,
+#  the same shape as diskimage_sync's "fsync already flushes".
+#
+#  The obvious alternative was BUILT AND RUN rather than reasoned about: `period = tcor[i]
+#  + 1` -> `tcor[i]` DIES BY SIGNAL 8, because the TCOR=0 steady state reaches the `%
+#  period`.  Guard F5 scores that SETUP -- a crash is a FAULT, never a detection.  And
+#  `<=` -> `>=` reddens all 16 rows, the "deleting arithmetic breaks its tests" shape the
+#  .why files warn against.  No extra CC flags: built under both the gate's line and
+#  selfmutant.py's and the outputs are byte-identical.
+selfmutant_one diff_sh4_tmu.c        src/devices/dev_sh4.c       sh4_tmu    "boundary"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -967,12 +980,12 @@ selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "mus
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
 #  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
-SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31"
+SM_EXEMPT="ieee_store:2099-01-01"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}

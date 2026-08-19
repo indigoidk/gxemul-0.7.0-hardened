@@ -1,0 +1,35 @@
+Flip `if (step <= cnt)` to `if (step < cnt)` in sh4_timer_tick() (dev_sh4.c:231).
+
+step == cnt is the single input where the two arms of the tick swap.  Under the mutant it
+takes the underflow arm with remaining = (uint64_t)cnt - cnt - 1 = 0xFFFFFFFFFFFFFFFF, so TCNT
+lands on 00001fa6/UNF1 instead of 00000000/UNF0 -- wrong value AND a spurious underflow flag.
+
+MEASURED: exactly ONE row of sixteen goes red, and it is the row written for this boundary --
+`step == cnt (boundary)`, whose own comment says "the step == cnt case is the one the
+comparison itself turns on, so it is asserted rather than approached from one side".  Every
+other row is byte-identical between the arms: both multi-period rows, the three-timer row, the
+interrupt row, the stopped-timer row and the 70000-call freeze row.  So this mutant certifies
+that row and nothing else, which is what the pin claims.
+
+It is the edit a maintainer might plausibly make in good faith, and the code's own comment at
+dev_sh4.c:208-216 exists to refute it: TCNT counts TCOR..0 and underflows AFTER 0, so landing
+exactly on 0 is not yet an underflow.  Read that as "reaching zero IS the underflow" and
+`step < cnt` follows directly.  It is also the same off-by-one family as the defect #400 fixed,
+which landed on TCOR-1 rather than TCOR.
+
+DELIBERATELY NOT `period = (uint64_t)d->tcor[i] + 1` -> `(uint64_t)d->tcor[i]`, the other
+obvious off-by-one.  With TCOR == 0 that makes period 0 and `remaining % period` at :237 is a
+divide by zero; the `TCOR=0 steady state` row reaches it, so the mutant dies by SIGNAL 8 before
+printing a verdict.  A crash is a FAULT, never a detection -- selfmutant.py's F5 scores it
+SETUP, and footbridge.why records the same rejection for the same reason.  This mutant keeps
+the host alive and fails on VALUES.
+
+Also not a whole-branch revert: that reddens several rows at once and proves only that deleting
+arithmetic breaks the tests of that arithmetic.
+
+The row id is "boundary", which names exactly one row in the pristine table.  "step == cnt"
+would have named TWO ("step == cnt (boundary)" and "step == cnt+1 -> TCOR") and selfmutant.py's
+guard 5 reports that as SETUP; measured both ways before choosing.  No extra CC flags: the gate
+builds this harness without -D_POSIX_C_SOURCE and without -I../src, and both arms were built
+under BOTH flag sets and produced byte-identical output, so the self-mutant lane is not
+compiling something else.

@@ -959,4 +959,59 @@ for v in "390 be data +12" "390 le data +12" \
     check "  endian row: $v" "$n" 1
 done
 
+# ---------------------------------------------------------------------------
+#  #432: THE FOOTBRIDGE'S FIRST REACHABILITY WITNESS OF ANY KIND.
+#
+#  Recorded before this probe existed: R6 was the ONLY code round in this tree with no
+#  reachability witness -- no rig boots a footbridge machine and there is no m8online analog.
+#  regress/diff_footbridge.c calls the device functions DIRECTLY, so it proves BEHAVIOUR and
+#  would stay green under a change that unmapped the device entirely.  This drives real guest
+#  ldr/str through the real address decode and the real memory_rw plumbing on a COLD DEBUGGER:
+#  measured 1.9 s for three arms, against a rig boot this tree does not have at all.
+#
+#  IT LIVES HERE, in the ARM gate, for the same reason m8820x_sites_probe.py lives in
+#  gate_m88k_rounding.sh: `cats` is an ARM machine and this gate already writes the four-byte
+#  raw stub that makes such a machine construct.  A new gate script would move GATE_MANIFEST,
+#  which is a bigger claim than one probe is worth.
+#
+#  THE TRAP IT GUARDS, and it nearly produced a confident wrong answer.  machine_cats.c:131
+#  maps only the low 256 MB and the footbridge is at PA 0x42000000, so under the boot-time MMU
+#  every device row reads 0x0 WITH A RAM LIVENESS ROW STILL GREEN -- which is exactly what an
+#  absent device looks like.  The probe's arm T runs the same program with the MMU-disable
+#  instructions replaced by nops and requires that it CANNOT produce the device's answer; arm L
+#  reads CP15 c1 back and requires bit 0 clear.  Negative-controlled in both directions.
+FBLOG=$LOGDIR/footbridge_sites.log
+python3 footbridge_sites_probe.py "$PMAX" "$STUB" > "$FBLOG" 2>&1 || true
+grep -E "^(  arm |C[0-9]|A[0-9]|I1|K1|D1)" "$FBLOG" | sed 's/^/       /'
+
+if ! grep -q "FOOTBRIDGE_SITES_" "$FBLOG"; then
+    note "footbridge probe produced no verdict; last lines follow"
+    tail -5 "$FBLOG" | sed 's/^/       /'
+    check "footbridge probe completed" "no" "yes"
+else
+    #  THE CONTROL FIRST, and separately from the verdict.  A probe whose controls failed has
+    #  measured NOTHING, and this one has a control that a liveness row cannot substitute for.
+    check "footbridge: controls prove the probe measures" \
+          "$(grep -c 'FOOTBRIDGE_SITES_CONTROL=OK' "$FBLOG")" "1"
+    check "footbridge: every row green" \
+          "$(grep -c 'FOOTBRIDGE_SITES_PASS' "$FBLOG")" "1"
+    #  VALUES, NOT SURVIVAL.  0x1011 is DC21285_VENDOR_ID (dev_footbridge.c:423) and can only
+    #  have come back through this device; an unmapped read survives too, it just returns 0.
+    check "footbridge: VENDOR_ID 0x1011 through a real guest ldr" \
+          "$(grep -cE '^A1 .*got=0x00001011 .*ok$' "$FBLOG")" "1"
+    #  The vanishing top byte IS the handler's signature: :548 stores idata & TIMER_MAX_VAL.
+    #  RAM, or any decode that merely absorbed the store, returns 0x12345678 unchanged.
+    check "footbridge: TIMER_1_LOAD masked to 24 bits by the handler" \
+          "$(grep -cE '^A2 .*got=0x00345678 .*ok$' "$FBLOG")" "1"
+    #  THE PROBE'S OWN FAILABILITY CONTROL.  Arms L and K differ by ONE instruction; K reads
+    #  IRQ_ENABLE_SET, an UNFIXED fatal()+exit(1) at :495-497.  Without it, "SURVIVED" on every
+    #  row is satisfied by a probe whose guest code never reached the device at all.
+    check "footbridge: the one-instruction kill arm still dies" \
+          "$(grep -cE '^K1 .*ok$' "$FBLOG")" "1"
+    #  The defence against the hand-assembled-encoding trap: every planted word is compared
+    #  against the disassembly the emulator printed AS IT STEPPED IT.
+    check "footbridge: no planted word failed its disassembly check" \
+          "$(grep -c 'DISASSEMBLY MISMATCH' "$FBLOG")" "0"
+fi
+
 gate_end

@@ -128,7 +128,14 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  conversion was not free: reordering wait()'s parameters turned an existing
 #  positional wait(120) into mark=120, which is a real behaviour change and is
 #  fixed in the same commit.  That is the argument for the exact-equality pin.
-EXPECT_CONVERTED=15
+#  15 -> 16 on 2026-08-19: footbridge_sites_probe.py, the first reachability witness this tree
+#  has ever had for a footbridge machine.  MEASURED with this gate's own probe_code() census on
+#  a staged copy: conv_anchor, conv_echo and conv_mark all move 15 -> 16 while bare, unknown and
+#  whole_full do not move at all.  The probe ships WITH the pinned #392 call form rather than
+#  being converted afterwards -- which is the lesson of the m8820x entry above, where a probe
+#  landed in 9494c6a carrying two of the three constructs and turned this gate red on a commit
+#  that had never been run past it.
+EXPECT_CONVERTED=16
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not
