@@ -996,6 +996,17 @@ int main(int argc, char *argv[])
 	section_pass2_gaps();
 	section_real_images();
 
+	/*
+	 *  IDENTITY GUARD.  Two files with this name once differed only by the
+	 *  case of a parent directory, and the stale one encoded a REVERSED
+	 *  design decision.  A row count is the cheapest proof that the file
+	 *  which ran is the file that was reviewed.  Last, so it counts every
+	 *  row above it.
+	 */
+	check("[IDENTITY] row count -- guards against a stale copy", rows + 1, 46);
+
 	printf("\n%d rows, %d failures, %d faults\n", rows, failures, faults);
+	printf("%s\n", (failures == 0 && faults == 0) ?
+	    "DISKIMAGE_IO_PASS" : "DISKIMAGE_IO_FAIL");
 	return 0;
 }

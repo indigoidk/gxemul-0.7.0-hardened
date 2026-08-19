@@ -648,9 +648,26 @@ int main(void)
 	    1, 16, 63, 2009);
 #endif
 
+	/*
+	 *  IDENTITY GUARD.  Two files with this name once differed only by the
+	 *  case of a parent directory, and the stale one encoded a REVERSED
+	 *  design decision.  A row count is the cheapest proof that the file
+	 *  which ran is the file that was reviewed.  Last, so it counts every
+	 *  row above it.
+	 */
+	rows++;
+	if (rows == 35)
+		printf("  ok    [IDENTITY] row count -- guards against a stale copy   %d\n", rows);
+	else {
+		printf("  FAIL  [IDENTITY] row count -- guards against a stale copy   %d (want 35)\n", rows);
+		failures++;
+	}
+
 	printf("================================================================\n");
 	printf("%d rows, %d failures\n", rows, failures);
 	if (failures == 0)
 		printf("DISKIMAGE_GEOM_PASS\n");
+	else
+		printf("DISKIMAGE_GEOM_FAIL\n");
 	return failures ? 1 : 0;
 }

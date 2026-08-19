@@ -899,6 +899,61 @@ selfmutant_one diff_diskimage_parse.c src/disk/diskimage.c    diskimage_parse "'
 #  dev_wdc.c's own bucket (b) gives -- `-d f:` yields spt 256 and 1280.  Deliberately NOT the
 #  `% 255` revert, which reddens seven rows.
 selfmutant_one diff_wdc_identify.c    src/devices/dev_wdc.c   wdc_identify    "geometry words carry their high byte"
+#  selfmutant6, part 2.  THE I/O AND GEOMETRY DIFFERENTIALS, 79 rows between them.
+#
+#  *** BOTH NEEDED A VERDICT TOKEN BEFORE THEY COULD BE CONTROLLED AT ALL, and that is a
+#  FINDING rather than a chore. ***  selfmutant.py asserts the FAIL token is PRESENT --
+#  never that PASS is absent -- so a differential printing only a row table can be broken
+#  in every row without the helper being able to say so.  diff_diskimage_geom.c printed
+#  DISKIMAGE_GEOM_PASS and NOTHING on failure; diff_diskimage_io.c printed no token in
+#  either direction.  MEASURED with the tokens missing: geom's mutant arm reported
+#  SELFMUTANT_FAIL, "the detector did NOT report a failure", while its named row was in
+#  fact RED -- the helper blaming the detector for an apparatus gap -- and io could not
+#  get past its pristine arm at all (SELFMUTANT_SETUP).
+#
+#  I/O.  The mutant drops the READ-SIDE ZERO-FILL from #416's bound and KEEPS the bound,
+#  so the 43 rows that assert "the access was refused" all stay GREEN and only the two
+#  that assert what happens to the CALLER'S BYTES go red (MEASURED: 45 rows / 0 failures
+#  pristine, 45 / 2 mutant).  Every mutant of the bound ITSELF -- advertised capacity
+#  instead of the backed extent, a start-only bound, dropping `offset < 0` -- reddens four
+#  to six rows across three sections and proves only that deleting a bound breaks the rows
+#  written for it.  diskimage.c:1469-1473 exists to refute this mutant's premise ("we
+#  return failure, so the caller must not look at the buffer"): dev_wdc's read path
+#  discards this function's return value and copies a 32 KB STACK buffer to the guest.
+#  -std=gnu99 is the memory_rw hazard class again -- MEASURED green both ways, supplied so
+#  the lane compiles what the battery compiles rather than something adjacent to it.
+#
+#  The one-row alternative that was measured and NOT taken is recorded in the .why file:
+#  `lendone < (ssize_t)len` -> `lendone <= 0` kills exactly one row, but its kill depends
+#  on RLIMIT_FSIZE producing a genuine PARTIAL write, so on a host that absorbs 0 bytes
+#  instead of 256 the mutant survives and the control goes red for an environmental
+#  reason that reads exactly like a dead detector.  gate_ab's wall-clock oracle in
+#  miniature; determinism was preferred to a one-row pin.
+selfmutant_one diff_diskimage_io.c    src/disk/diskimage.c   diskimage_io   "refused read leaves NO caller bytes" "-std=gnu99"
+#  GEOMETRY.  strtoll -> strtoull at the SPT parse site ONLY; the heads field five lines
+#  above keeps strtoll, which is what makes it a plausible half-done edit rather than a
+#  rewrite.  strtoull applies a leading minus in UNSIGNED arithmetic, so
+#  `-d g16;-18446744073709551615:` folds to spt=1 and is ACCEPTED.  The premise -- "heads
+#  and sectors per track are counts, they cannot be negative, use the unsigned parse" --
+#  is the good-faith kind.  diff_diskimage_geom.c's own FAMILY C note (:605) records that
+#  this passed all 30 rows of that file's previous version.  MEASURED here: 34 rows / 0
+#  failures pristine, 34 / 1 mutant -- one red row, and it is the pinned one.
+#
+#  *** THE EXTRA ARGUMENT IS A SOURCE FILE, NOT A FLAG, AND IT IS A THIRD HAZARD CLASS
+#  THAT NEITHER OF THE TWO ALREADY RECORDED IN THIS FILE COVERS. ***  Alone among these
+#  differentials, geom does NOT #include its subject: the battery compiles it against
+#  "$SEC/src/disk/diskimage.c" as a second translation unit, so the helper must be told to
+#  do the same, and the path must be RELATIVE because it is resolved from the mutant
+#  tree's own regress/ directory.  MEASURED all three ways:
+#    * omitted            -> link error -> SELFMUTANT_SETUP.  The diskimage_sync class:
+#                            the pristine arm cannot PASS, and SETUP is never a detection.
+#    * ABSOLUTE $SEC path -> the PRISTINE subject is compiled into BOTH arms, the mutant
+#                            survives, and the helper prints SELFMUTANT_FAIL -- red, but
+#                            blaming the DETECTOR for an APPARATUS error.  Right colour,
+#                            wrong diagnosis, which is the F5 shape in selfmutant.py's own
+#                            header and the dangerous one of the three.
+#    * RELATIVE path      -> SELFMUTANT_OK.
+selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "must not fold to 1 in the SPT position" "-std=gnu99 ../src/disk/diskimage.c"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -912,12 +967,12 @@ selfmutant_one diff_wdc_identify.c    src/devices/dev_wdc.c   wdc_identify    "g
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
 #  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
-SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31 diskimage_io:2026-08-31 diskimage_geom:2026-08-31"
+SM_EXEMPT="ieee_store:2099-01-01 sh4_tmu:2026-08-31"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
@@ -1267,6 +1322,14 @@ else
               "$(grep -oE '[0-9]+ failures' "$IOLOG" | grep -oE '^[0-9]+')" "0"
     check     "diskimage I/O: faults" \
               "$(grep -oE '[0-9]+ faults' "$IOLOG" | grep -oE '^[0-9]+')" "0"
+    #  selfmutant6: the token this differential had never printed in EITHER
+    #  direction.  Without it a detector that dies before its summary line is
+    #  indistinguishable from one that ran clean, and selfmutant.py cannot
+    #  control the file at all -- it asserts the FAIL token is PRESENT, and
+    #  there was none to find.  The geometry block a few hundred lines down has
+    #  carried the equivalent row since #414; this one did not.
+    check     "diskimage I/O: verdict token" \
+              "$(grep -c 'DISKIMAGE_IO_PASS' "$IOLOG")" "1"
     #  #416: was `>= 3`, written when only three rows ran by default.  The
     #  guard that hid the other four sections is now gone, so 3 would permit
     #  28 rows to be deleted silently -- a minimum the current value exceeds

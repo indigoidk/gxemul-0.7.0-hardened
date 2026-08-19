@@ -1,0 +1,35 @@
+Parse the SECTORS-PER-TRACK field with strtoull() instead of strtoll().
+
+ONE INSERTED CHARACTER at diskimage.c:1698, inside `case 'g':` of the -d prefix parser.
+The heads field five lines above keeps strtoll, which is what makes it a plausible
+half-done edit rather than a rewrite.
+
+This is the mutant diff_diskimage_geom.c documents as FAMILY C (:605) and records as a
+MEASURED evasion: it "passed all 30 rows" of that file's previous version, because every
+other geometry vector in the file is non-negative.  strtoull() applies a leading minus
+in UNSIGNED arithmetic, so `-d g16;-18446744073709551615:` converts to spt = 1 and is
+ACCEPTED, while strtoll() underflows to LLONG_MIN and the range check rejects it.  A
+plain "-1" does NOT discriminate -- both parses land below 1 and both reject -- which is
+why the row's vector is -ULLONG_MAX and why nothing cheaper can stand in for it.
+
+It is the edit a maintainer might make in good faith: "heads and sectors per track are
+counts, they cannot be negative, so use the unsigned parse."  The reasoning is wrong
+only because of a C library surprise, which is precisely the kind of defect a
+differential exists to catch.
+
+Chosen because it is the tightest control available for this file: MEASURED, 34 rows /
+0 failures pristine and 34 rows / 1 failure mutant, and the single red row is the one
+this control is pinned to.  Witness line from the mutant arm:
+  FAIL bound: -ULLONG_MAX must not fold to 1 in the SPT position ACCEPTED (want
+  reject); C/H/S=1280/16/1 blocks=20480
+
+Deliberately NOT the two other single-row candidates the file documents: `if (prefix_g)`
+-> `if (prefix_g && !prefix_f)` (killed only by the fg2;9 row) and the floppy divisor
+512 -> 511 (killed only by the "NOT a multiple of 81920" row).  Both would work; this
+one was preferred because it is a one-character edit in the SUBJECT and because the row
+it pins guards a parse defect that no boot gate can reach.
+
+Deliberately NOT anything in diskimage_recalc_size()'s shared cylinder block: mutants
+there are caught by six or more rows at once, and the file's own header already records
+five of them as PROVABLY EQUIVALENT -- an equivalent mutant would report SELFMUTANT_FAIL
+forever for a reason that is not a defect.

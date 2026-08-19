@@ -1,0 +1,33 @@
+Drop the READ-SIDE ZERO-FILL from #416's bound, keeping the bound itself.
+
+Two deleted lines inside diskimage__internal_access() (diskimage.c:1481-1482).  A
+refused access still returns 0; the caller's buffer is simply left as it was.
+
+Chosen over the more obvious mutants for a measured reason: it leaves the REFUSAL
+intact, so all 43 rows that assert "the access was refused" stay GREEN, and only the
+two rows that assert what happens to the CALLER'S BYTES go red.  MEASURED, 45 rows /
+0 failures pristine, 45 rows / 2 failures mutant, and the two are the same property at
+two sites -- the past-EOF read in SECTION 2 and the negative-offset read in H2.
+
+It is the edit a maintainer might make in good faith: "we return failure, so the caller
+must not look at the buffer -- the memset is wasted work on an error path."  The code's
+own comment at diskimage.c:1469-1473 exists to refute exactly that, because dev_wdc's
+read path declares a 32 KB buffer ON THE STACK, discards this function's return value
+and copies the whole buffer to the guest.  Same shape as the diskimage_sync mutant,
+whose "fsync already flushes, the fflush is redundant" produced a real shipped defect.
+
+Deliberately NOT the bound itself.  Measured on three variants -- writes bounded by
+ADVERTISED capacity rather than the backed extent, a START-ONLY bound, and dropping
+`offset < 0` -- each turns four to six rows red across three sections, which proves
+only that deleting a bound breaks the rows written for it.
+
+THE ALTERNATIVE THAT WAS MEASURED AND NOT CHOSEN, recorded so it is not rediscovered:
+`lendone < (ssize_t)len` -> `lendone <= 0` at diskimage.c:1537 -- the pre-#416 shape
+that the comment directly above it names.  It kills EXACTLY ONE row ("[PROOF] short
+write (256 of 1024 absorbed) returns failure") and is equally plausible in good faith,
+so on row count alone it is the better pin.  It was rejected because its kill depends
+on RLIMIT_FSIZE producing a genuine PARTIAL write: on a host where the store absorbs 0
+bytes instead of 256 the mutant SURVIVES and the control reports SELFMUTANT_FAIL -- a
+red row that reads exactly like a dead detector when it is the fixture that failed.
+A control whose colour depends on the environment is the gate_ab wall-clock lesson in
+miniature; determinism was preferred to a one-row pin.
