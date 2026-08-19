@@ -848,13 +848,21 @@ selfmutant_one() {   # harness subject stem row-id [extra-cc-flags]
 #  that is the SOLE detector of something, so deleting one is a red row rather than a quieter
 #  file."  The SELFCHECK row is the sole detector of comparator death in five files and was
 #  named nowhere.  The doctrine was written down and then not applied to the next row added.
-sc_missing=""
-for _f in diff_timer diff_memory_rw diff_footbridge diff_m8820x diff_m8invread; do
-    grep -q 'SELFCHECK the comparator can still fail' "$LOGDIR/$_f.log" 2>/dev/null \
-        || sc_missing="$sc_missing $_f"
-done
-check "SELFCHECK: every one of the five detectors ran its comparator sentinel" \
-      "${sc_missing:-none}" "none"
+#
+#  *** THE LIST THAT STOOD HERE WAS FIVE HARDCODED NAMES WITH NO MANIFEST BEHIND IT, and it
+#  has moved to the end of this file (selfcheck7). ***  It asserted that five detectors ran
+#  their sentinel and said NOTHING AT ALL about the other seven differentials, so a
+#  differential arriving without a comparator control was declared nowhere -- the same
+#  G-with-no-H shape the selfmutant manifest below was written to close, in this same file,
+#  a few hundred lines apart.
+#
+#  IT COULD NOT BE FIXED IN PLACE, AND THE REASON IS A STALE-ARTEFACT TRAP RATHER THAN
+#  TIDINESS.  Six of the twelve differentials do not compile or run until several hundred
+#  lines further down, and $LOGDIR PERSISTS BETWEEN RUNS: a manifest-driven grep of
+#  diff_sh4_tmu.log FROM HERE would read the PREVIOUS run's log and report a sentinel this
+#  run never executed.  That is "regenerate before grepping a generated file" wearing
+#  different clothes.  The whole control now lives in the SC_COVERED block just above
+#  gate_end, where every log is this run's.
 
 selfmutant_one diff_timer.c      src/core/timer.c            timer      "NaN"
 selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "G1 " "-fno-optimize-sibling-calls"
@@ -1050,7 +1058,11 @@ else
     #  table were emptied; a floor on the rows is what stops that.
     check     "SH-4 TMU: row failures" \
               "$(grep -oE '[0-9]+ failures' "$TMULOG" | grep -oE '^[0-9]+')" "0"
-    #  Floor raised 16 -> 17 with the UNIE-clear row.  A minimum the current value already
+    #  Floor raised 16 -> 18: 17 for the UNIE-clear row, 18 once the identity row was
+    #  added and counted itself.  (This comment said "16 -> 17" for half an hour while
+    #  the value below read 18 -- a number matching neither, caught by the ninth review
+    #  seat.  A comment that names a constant goes stale the moment the constant moves.)
+    #  A minimum the current value already
     #  exceeds is decoration rather than evidence -- the reason #416 raised the diskimage
     #  I/O floor from 3 to 45.
     check_min "SH-4 TMU: rows actually run" \
@@ -1485,6 +1497,119 @@ else
     check     "disk parser: the FLOPPY-typed-ISO record is present" \
               "$(grep -c 'is FLOPPY-typed (filed defect)' "$PARSELOG")" "1"
 fi
+
+# ---------------------------------------------------------------------------
+#  THE SELFCHECK MANIFEST (selfcheck7).  The SECOND failability control, brought up to the
+#  standard the self-mutant manifest above already reached.
+#
+#  The two controls cover DIFFERENT failures and neither substitutes for the other; the long
+#  form is at the head of the selfmutant section.  In one line each: the self-mutant breaks
+#  the SUBJECT and demands a NAMED row notice, so it catches a fixture that has stopped
+#  reaching the code; the @@SELFCHECK@@ sentinel breaks nothing and feeds the detector's OWN
+#  comparator a deliberate mismatch, so it catches a comparator edited into always-passing --
+#  a state in which every row prints `ok`, and the row count, the identity row and the verdict
+#  token ALL SURVIVE, so the self-mutant and every other assertion here stay green.
+#
+#  WHY IT IS HERE AND NOT BESIDE ITS SIBLING: three of the four assertions read the
+#  FILESYSTEM and could live anywhere, but the fourth reads each differential's LOG, and six
+#  of the twelve do not run until after the selfmutant block.  $LOGDIR persists between runs,
+#  so asserting it there would grade the previous run's logs.
+#
+#  *** THE THIRD ASSERTION IS THE H, AND IT IS THE WHOLE POINT OF THE ROUND. ***  A name in
+#  SC_COVERED is a LEDGER ENTRY; sc_unbacked greps the differential's OWN SOURCE for a real
+#  @@SELFCHECK@@ block, so moving a stem from EXEMPT to COVERED and writing no sentinel is
+#  RED.  Without it this would be another G -- a check that a name appears in a list -- which
+#  is precisely the defect being corrected here.
+SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu"
+#  *** COVERED IS NOT UNIFORM, AND THE MANIFEST CANNOT SEE THE DIFFERENCE -- READ THIS BEFORE
+#  TREATING A GREEN ROW AS "the file is vouched for". ***  Seven of the ten route every row
+#  through one or two shared helpers, so the sentinel covers the file.  Three do not:
+#    * sh4_tmu   -- 12 of 18 rows.  row1() is the only comparator in the file that takes an
+#                   expected value; row_three_timers/row_interrupt/row_interrupt_unie_clear/
+#                   row_stopped/row_no_freeze each hardcode their own, and cannot be probed.
+#    * geom      -- every row but the identity row, via BOTH geom() and parse(), which are
+#                   two separate comparators and are probed separately for that reason.
+#    * sync      -- both checks() and checkn(), for the same reason.
+#  The per-file comments carry the scope; this is a LIVENESS control, never a census, and
+#  "going from 0 to 1 is not false comfort; calling 1 `the detector works` is".
+#
+#  THE EXEMPTIONS, DATED AND REASONED.  A FORTNIGHT, matching the deadline the owner chose
+#  over the Q4 one I proposed for the selfmutant list: 2 uncovered differentials, 1311 and 766
+#  lines, whose every row could be inert with this gate green.
+#
+#    ieee_store    HAS NO COMPARATOR TO SENTINEL.  No check(), no `rows`, no `failures`: each
+#                  section carries its own counter (abs_bad, rm_rn_bad, rm_rz_bad, rm_d_bad,
+#                  rm_vec_bad, interp_bad) with the comparison written inline dozens of times,
+#                  and this gate greps one summary line per counter for 0.  There is no single
+#                  point to feed a mismatch to.  A probe through a comparator NO REAL ROW USES
+#                  would prove nothing while reading exactly like coverage, so none was
+#                  written -- a forced control is worse than none.  Gate 3 does cover this file
+#                  against TOTAL comparator death, which is this control's own failure mode,
+#                  but by the vacuity-prone `grep -c PASS == 0` form its SM_EXEMPT comment
+#                  already flags, so it is a weaker cover than it looks.
+#    wdc_identify  NOTHING TO FEED A MISMATCH TO.  Read every row function: row_anchor,
+#                  row_slave, row_base_drive, row_identity, row_atapi_flags, row_wide_geometry,
+#                  row_no_lba_claim and row_selfconsistent are ZERO-ARGUMENT with the expected
+#                  value hardcoded in the body, and row(why, sectors) derives its expectation
+#                  FROM ITS INPUT (`got57 != sectors`), so changing the input changes the
+#                  answer too and no mismatch can be produced.  Injecting one means mutating
+#                  dev_wdc.c -- which is the OTHER control, already present.  This one needs
+#                  the nine row functions refactored onto a shared helper first: a round, not
+#                  a line.
+SC_EXEMPT="ieee_store:2026-09-02 wdc_identify:2026-09-02"
+
+sc_missing=""
+for f in "$HERE"/diff_*.c; do
+    stem=$(basename "$f" .c); stem=${stem#diff_}
+    #  Match the STEM, not the whole token -- exemptions carry ":date" suffixes, and a
+    #  substring match would silently accept a stem that is merely a prefix of another.
+    _found=no
+    for _c in $SC_COVERED; do [ "$_c" = "$stem" ] && _found=yes; done
+    for _e in $SC_EXEMPT; do [ "${_e%%:*}" = "$stem" ] && _found=yes; done
+    [ "$_found" = yes ] || sc_missing="$sc_missing $stem"
+done
+check "SELFCHECK manifest: every differential is covered or dated-exempt" \
+      "${sc_missing:-none}" "none"
+
+#  THE H.  Grep the SOURCE, not the ledger and not the log: a stem can only be COVERED if
+#  its own file contains the block.  @@SELFCHECK@@ rather than the summary text, because the
+#  token is what selfmutant.py filters and what the probe rows are named with, so a block
+#  gutted down to its printf still fails this.
+sc_unbacked=""
+for _stem in $SC_COVERED; do
+    grep -q '@@SELFCHECK@@' "$HERE/diff_$_stem.c" 2>/dev/null \
+        || sc_unbacked="$sc_unbacked $_stem"
+done
+check "SELFCHECK manifest: every COVERED stem has a real sentinel block" \
+      "${sc_unbacked:-none}" "none"
+
+#  DATED ENTRIES, NOT A COUNT -- the selfmutant list learned this the hard way: `wc -w == 6`
+#  under a row named "shrinking not growing" made SHRINKING IT RED.  A count pins; a date
+#  expires, and shrinking is green by construction.
+sc_expired=""
+_sctoday=$(date +%Y-%m-%d)
+for _e in $SC_EXEMPT; do
+    case "${_e##*:}" in
+        "") ;;
+        *) [ "${_e##*:}" \< "$_sctoday" ] && sc_expired="$sc_expired ${_e%%:*}" ;;
+    esac
+done
+check "SELFCHECK manifest: no exemption is past its dated deadline" \
+      "${sc_expired:-none}" "none"
+
+#  THE G -- and it is not made redundant by the H above.  The H proves the block EXISTS in the
+#  source; this proves it RAN, which is a different failure: a block behind a dead #ifdef, a
+#  differential whose compile failed, or a driver that died before reaching it all satisfy the
+#  H and fail this.  Assert the OK-token is PRESENT rather than "no FAIL line", because a
+#  detector that never started prints neither and a negative form is satisfied by a control
+#  that never ran.
+sc_notrun=""
+for _stem in $SC_COVERED; do
+    grep -q 'SELFCHECK the comparator can still fail' "$LOGDIR/diff_$_stem.log" 2>/dev/null \
+        || sc_notrun="$sc_notrun $_stem"
+done
+check "SELFCHECK manifest: every COVERED detector ran its sentinel" \
+      "${sc_notrun:-none}" "none"
 
 gate_end
 exit $?

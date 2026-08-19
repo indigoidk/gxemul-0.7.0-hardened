@@ -388,6 +388,57 @@ int main(int argc, char *argv[])
 	(void)argc; (void)argv;
 	printf("=== #437 diff_diskimage_sync: SYNCHRONIZE CACHE durability ===\n");
 
+	{
+		/*
+		 *  SELFCHECK -- CAN THIS FILE'S COMPARATORS STILL FAIL?
+		 *
+		 *  Feed checks() and checkn() deliberate mismatches and require the failure
+		 *  counter to move, then un-record them so the rows are free.  If either has
+		 *  been stubbed or had its comparison edited away, every row that uses it is
+		 *  silently inert and the gate cannot tell -- the row count, the identity row
+		 *  and the verdict token all survive that edit unchanged.  diff_timer.c holds
+		 *  the full rationale and the four measurements behind this shape.
+		 *
+		 *  BOTH HELPERS ARE PROBED, because they are two comparators and not one: this
+		 *  file's trace rows go through checks() and its status rows through checkn(),
+		 *  so a sentinel that exercised only one would vouch for rows it never touched.
+		 *  The numeric probe uses 2^32 against 0 -- EQUAL in their low 32 bits -- so a
+		 *  checkn() narrowed to int passes it while the string probe still catches the
+		 *  comparator dying outright.
+		 *
+		 *  This does NOT prove any row is correct, and a comparator that special-cases
+		 *  these rows BY NAME is still invisible to it.  Liveness sentinel, nothing
+		 *  more.
+		 *
+		 *  @@SELFCHECK@@ IN THE ROW NAMES IS LOAD-BEARING: these are deliberate
+		 *  mismatches, so the helpers print FAIL for them on the HEALTHY path, and
+		 *  selfmutant.py filters exactly that token when it looks for the row its
+		 *  mutant killed.  gate_offline.sh greps the SUMMARY line below for presence.
+		 */
+		int sc_f = fails, sc_r = rows, sc_bad = 0;
+
+		checks("@@SELFCHECK@@/str", "a", "b");
+		if (fails <= sc_f)
+			sc_bad++;
+		fails = sc_f; rows = sc_r;
+
+		checkn("@@SELFCHECK@@/wide", 4294967296L, 0);
+		if (fails <= sc_f)
+			sc_bad++;
+		fails = sc_f; rows = sc_r;
+
+		if (sc_bad) {
+			printf("  FAIL  SELFCHECK the comparator no longer compares (%d of 2 "
+			    "mismatches went unnoticed) -- every row in this file is inert\n",
+			    sc_bad);
+			fails = sc_f + 1;
+			rows = sc_r;
+		} else {
+			printf("  ok    SELFCHECK the comparator can still fail       "
+			    "str+wide\n");
+		}
+	}
+
 	/*
 	 *  VACUITY CONTROL, load-bearing rather than decoration.
 	 *

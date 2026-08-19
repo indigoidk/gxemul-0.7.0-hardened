@@ -330,6 +330,69 @@ int main(void)
 {
 	printf("SH-4 TMU tick arithmetic (#400), against the REAL dev_sh4.c\n");
 
+	{
+		/*
+		 *  SELFCHECK -- CAN THIS FILE'S COMPARATOR STILL FAIL?
+		 *
+		 *  Drive row1() with a real row's input and a deliberately WRONG expectation,
+		 *  require the failure counter to move, then un-record it so the row is free.
+		 *  If row1()'s comparison has been stubbed or edited away, every row that goes
+		 *  through it is silently inert and the gate cannot tell -- the row count, the
+		 *  identity row and the SH4_TMU_PASS token all survive that edit unchanged.
+		 *  diff_timer.c holds the full rationale and the four measurements behind this
+		 *  shape.
+		 *
+		 *  *** ITS SCOPE IS 12 OF THE 18 ROWS, NOT ALL OF THEM, AND SAYING SO IS THE
+		 *  POINT. ***  This file has no shared check(): row_three_timers(),
+		 *  row_interrupt(), row_interrupt_unie_clear(), row_stopped() and
+		 *  row_no_freeze() each carry their own inline comparison with the expectation
+		 *  hardcoded, so no mismatch can be fed to them from here.  row1() is the only
+		 *  comparator in the file that takes an expected value, and this sentinel
+		 *  vouches for it alone.  A sentinel read as covering the file would be worse
+		 *  than none.
+		 *
+		 *  TWO PROBES, ONE PER HALF OF THE COMPOUND CONDITION, and the second is not
+		 *  padding -- it is this file's own hardest-won lesson.  row1() compares
+		 *  `got != want_tcnt || unf != want_unf`; #403 records that deleting the
+		 *  TCR_UNIE guard left all sixteen rows green because the counter still landed
+		 *  on the right number and only the FLAG differed.  A value-only sentinel would
+		 *  vouch for a comparator that had stopped looking at UNF entirely.
+		 *
+		 *  This does NOT prove any row is correct, and a comparator that special-cases
+		 *  these rows BY NAME is still invisible to it.  Liveness sentinel, nothing
+		 *  more.
+		 *
+		 *  @@SELFCHECK@@ IN THE ROW NAMES IS LOAD-BEARING: these are deliberate
+		 *  mismatches, so row1() prints FAIL for them on the HEALTHY path, and
+		 *  selfmutant.py filters exactly that token when it looks for the row its
+		 *  mutant killed -- this file's pinned row id is the bare word "boundary".
+		 *  gate_offline.sh greps the SUMMARY line below for presence.
+		 */
+		int sc_f = failures, sc_r = rows, sc_bad = 0;
+
+		/*  "step < cnt" inputs: the true answer is tcnt 1, UNF 0.  */
+		row1("@@SELFCHECK@@/tcnt", 20833, 100, 99, 2, 0);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		row1("@@SELFCHECK@@/unf", 20833, 100, 99, 1, 1);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		if (sc_bad) {
+			printf("  FAIL SELFCHECK the comparator no longer compares (%d of 2 "
+			    "mismatches went unnoticed) -- row1()'s rows are all inert\n",
+			    sc_bad);
+			failures = sc_f + 1;
+			rows = sc_r;
+		} else {
+			printf("  ok   SELFCHECK the comparator can still fail       "
+			    "tcnt+unf (row1, 12 of 18 rows)\n");
+		}
+	}
+
 	/*  Boundaries around the <= that decides the two arms. The step == cnt
 	    case is the one the comparison itself turns on, so it is asserted
 	    rather than approached from one side.  */

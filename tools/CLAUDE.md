@@ -28,7 +28,8 @@ Ethos (non-negotiable): terse portable C99, minimal surgical changes, `/* #NNN: 
 a CHANGELOG.md round block per correction (REVIEW_FINDINGS.md is frozen at #290 — see its
 scope banner, added by #385; rows #291+ live in the CHANGELOG round blocks), honest
 "assessed, not changed" records. **Test-first:** reproduce on the committed build before
-any edit; a fix whose effect cannot be measured gets documented instead. No session URLs
+any edit — where *reproduce* is defined by the WITNESS LADDER below; a defect
+with no witness gets documented instead. No session URLs
 in commit messages (keep `Co-Authored-By`).
 
 ## SEAT LEDGER — which seats were USED, which were NOT, and why (keep this current)
@@ -357,10 +358,62 @@ chain. The goal is NO MISTAKE SURVIVES UNCHALLENGED**, which is achievable and w
 panel already delivers: every error made on 2026-08-13 was caught, usually within one pass.
 What failed was scope control, not correctness.
 
+## THE WITNESS LADDER — what "reproduce" means (adopted by adjudication, 2026-08-19)
+
+The old rule asked "can this MACHINE boot?"; the right question is "can this CODE PATH be
+executed?" — with `armbdt` as the proof (no ARM rig exists, yet gate 14 runs 261 real-decode
+checks on `testarm`). But only executions that preserve the committed hardware selection and
+routing count. The ladder, and what each rung licenses:
+
+1. **`#include`/direct-call harness — NEVER a reproduction.** The discriminator is mechanical:
+   *if it still compiles and still fails after the machine description and CPU/device dispatch
+   are removed, leaving only a direct call, it was never a reproduction* — it is a restatement
+   of the source. (It measurably distorts, too: m8820x's offline repro reported 1013/1015/11
+   where the true numbers were 1007/1009/17, a NULL-callback stub artefact.) Such harnesses are
+   DETECTORS and still ship as regression rows — graded by the vacuity taxonomy (must fail on a
+   mutant), never by the witness clauses.
+2. **Machine construction** (gate 9's mechanism, 23 types) — a reproduction ONLY for defects in
+   code construction itself executes (init-time, e.g. the macppc heap OOB #23). Never for
+   access-path defects: registration proves presence, not reachability.
+3. **Cold-debugger probe** — a real guest instruction through real address decode and real
+   `memory_rw`, on an UNMODIFIED in-tree machine description. EQUAL to a boot in admissibility.
+   Exemplar: `regress/footbridge_sites_probe.py`.
+4. **Boot** — a real driver reaches the path unaided. SUPERIOR for ranking: a probe proves a
+   path CAN be reached; a boot proves it IS travelled (#437's SYNCHRONIZE CACHE is boot-only
+   knowledge).
+
+**A rung-2–4 witness is INVALID unless all of:** (i) it shows the defect symptom on the pre-fix
+committed HEAD and goes green post-fix with the same script — this is test-first itself, restated
+per-probe; (ii) it carries a LIVENESS control (a known value returns through the same decode) AND
+a DEVICE-SIGNATURE control (the observed value could only have come from the device — RAM would
+answer differently; **the footbridge probe's first draft returned 0x0 everywhere WITH ITS RAM
+CONTROL GREEN**, so one control is not enough); (iii) the machine description and dispatch are
+committed and unmodified — a machine or `device_add` introduced IN ORDER TO reach the site is
+laundering, not witnessing.
+
+**Witness vs detector — the timing line:** a REPRODUCTION licenses a fix and exists BEFORE the
+edit. A DETECTOR defends the fix and may ship with or after it (`m8820x_sites_probe.py` shipped
+three commits post-fix; **its own commit title says "detector"**). Grading a detector by the
+witness clauses is a category error in either direction. Round prose saying "reproduced" without
+naming the artefact is a records defect; the ledger `witness` field is the fix.
+
+**Ranking:** order items by the strongest witness that exists TODAY — boot > probe > construction
+> none. **"No witness of either kind" is a CHECKABLE claim and must be checked, not asserted:**
+dfreq's was measured false by building the witness in one session.
+
+**Round scope (the reopening rule):** a witness makes a site ELIGIBLE, never mandatory. A round
+takes ONE site; a second joins only if it is witnessed, in the SAME device and SAME semantic class
+under the third doctrine arm (so one fix design covers both), and covered by the SAME detector
+with no new oracle. **More witnesses create more candidate ROUNDS, never bigger rounds.**
+
+**Ledger:** a row that closes with commits names its witness: `boot:<rig/gate>`, `probe:<path>`,
+`construction:<gate>`, or `none` (documented-only). Forward-only from 2026-08-19.
+
 ## Round lifecycle, with the end-of-round parallel step
 
 1. Claim the top TaskList item (or top of OUTSTANDING_BUGS "OPEN LIST").
-2. Reproduce on the committed build. No reproduction → document instead, stop.
+2. Reproduce on the committed build per the WITNESS LADDER. No witness at rung
+   2–4 → document instead, stop.
 3. Design brief → **panel pass 1** → converge (empirically where split).
 4. Implement (byte-identical in both trees for shared files); propagate to build trees.
 5. **Panel pass 2** on the real diff.

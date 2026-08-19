@@ -105,6 +105,68 @@ int main(void)
 	static const long long sizes[4] = { 737280, 1228800, 1474560, 2949120 };
 	static const char *names[4] = { "720K", "1.2M", "1.44M", "2.88M" };
 
+
+	{
+		/*
+		 *  SELFCHECK -- CAN THIS FILE'S COMPARATOR STILL FAIL?
+		 *
+		 *  Feed check() deliberate mismatches and require the failure counter to
+		 *  move, then un-record them so the rows are free.  If check() has been
+		 *  stubbed, neutered, or had its comparison edited away, EVERY other row in
+		 *  this file is silently inert and the gate cannot tell -- the row count, the
+		 *  identity row and the verdict token all survive that edit unchanged.
+		 *  MEASURED once, on the five detectors that already carry this block: 118
+		 *  rows stayed green under exactly that stub.  diff_timer.c holds the full
+		 *  rationale and the four measurements behind this shape; it is not repeated
+		 *  here.
+		 *
+		 *  ONE TYPE, TWO MAGNITUDES -- AND THE SECOND PROBE IS NOT PADDING.  timer's
+		 *  sentinel needs a string probe AND a numeric one because its check() takes
+		 *  strings and a seat defeated a string-only probe with `isdigit(got[0])`.
+		 *  check() here takes long long, so a string probe cannot be written at all;
+		 *  the two probes instead straddle the 32-bit boundary.  2^32 and 0 are EQUAL
+		 *  in their low 32 bits, so a comparator narrowed to int -- the plausible
+		 *  good-faith edit in a file whose rows compare 64-bit block counts and byte
+		 *  offsets -- passes that probe while the small pair still catches it.  A
+		 *  sentinel whose inputs do not resemble the rows it vouches for is a sentinel
+		 *  with a whitelist.
+		 *
+		 *  This does NOT prove any row is correct.  It proves the comparator still
+		 *  fails on inputs shaped like the ones the rows use.  A comparator that
+		 *  compares SELECTIVELY -- or that special-cases these rows BY NAME -- is
+		 *  still invisible to it, and only a census would see that.
+		 *
+		 *  @@SELFCHECK@@ IN THE ROW NAMES IS LOAD-BEARING.  These are deliberate
+		 *  mismatches, so check() prints FAIL for them on the HEALTHY path;
+		 *  selfmutant.py filters exactly that token when it looks for the row its
+		 *  mutant killed, and without it a row id as ordinary as "fail" matches one of
+		 *  these lines and reports OK for a mutant nothing caught.  gate_offline.sh
+		 *  greps the SUMMARY line below for presence.
+		 */
+		int sc_f = failures, sc_r = rows, sc_bad = 0;
+
+		check("@@SELFCHECK@@/small", 1, 2);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		check("@@SELFCHECK@@/wide", 4294967296LL, 0);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		if (sc_bad) {
+			printf("  FAIL  SELFCHECK the comparator no longer compares (%d of 2 "
+			    "mismatches went unnoticed) -- every row in this file is inert\n",
+			    sc_bad);
+			failures = sc_f + 1;
+			rows = sc_r;
+		} else {
+			printf("  ok    SELFCHECK the comparator can still fail       "
+			    "small+wide\n");
+		}
+	}
+
 	snprintf(cmd, sizeof(cmd), "mkdir -p %s", WORK); if (system(cmd)) {}
 
 	printf("--- A. no-prefix CONTROL: the size heuristic must survive ---\n");

@@ -21,7 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LEDGER = os.path.join(HERE, "ledger.json")
-OUT = os.path.join(HERE, "dashboard.html")
+OUT = os.path.join(HERE, "matrix.html")
 
 L = json.load(open(LEDGER, encoding="utf-8"))
 seats = L["seats"]

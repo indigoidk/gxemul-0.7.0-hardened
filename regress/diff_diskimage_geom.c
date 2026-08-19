@@ -339,6 +339,75 @@ int main(void)
 	printf("diskimage geometry, against the REAL diskimage.c\n");
 	printf("================================================================\n");
 
+	{
+		/*
+		 *  SELFCHECK -- CAN THIS FILE'S COMPARATORS STILL FAIL?
+		 *
+		 *  Drive geom() and parse() with a real row's input and a deliberately WRONG
+		 *  expectation, require the failure counter to move, then un-record the rows so
+		 *  they are free.  If either comparison has been stubbed or edited away, every
+		 *  row that goes through it is silently inert and the gate cannot tell -- the
+		 *  row count, the identity row and the DISKIMAGE_GEOM_PASS token all survive
+		 *  that edit unchanged.  diff_timer.c holds the full rationale and the four
+		 *  measurements behind this shape.
+		 *
+		 *  BOTH ROW FUNCTIONS ARE PROBED, because this file has no shared check() and
+		 *  they are two comparators: geom() calls diskimage_recalc_size() directly,
+		 *  parse() goes through diskimage_add(), and between them they carry every row
+		 *  in the file bar the identity row.  A sentinel through one would vouch for
+		 *  rows it never touched.
+		 *
+		 *  THREE PROBES, PLACED ON DIFFERENT TERMS ON PURPOSE.  geom()'s comparison is
+		 *  a four-way disjunction over C, H, S and blocks; a probe on the FIRST term
+		 *  alone would be satisfied by a comparator that had stopped looking at the
+		 *  block count, which is the field the round-up rows exist for.  So one probe
+		 *  perturbs the cylinder count and one perturbs the blocks.  parse()'s probe
+		 *  takes its REJECT arm -- an argument the parser accepts, asserted as rejected
+		 *  -- because that arm's comparison is not the tuple compare at all.
+		 *
+		 *  This does NOT prove any row is correct, and a comparator that special-cases
+		 *  these rows BY NAME is still invisible to it.  Liveness sentinel, nothing
+		 *  more.
+		 *
+		 *  @@SELFCHECK@@ IN THE ROW NAMES IS LOAD-BEARING: these are deliberate
+		 *  mismatches, so both helpers print FAIL for them on the HEALTHY path, and
+		 *  selfmutant.py filters exactly that token when it looks for the row its
+		 *  mutant killed.  gate_offline.sh greps the SUMMARY line below for presence.
+		 */
+		int sc_f = failures, sc_r = rows, sc_bad = 0;
+
+		/*  The control row's own inputs: 10 MB with no override is 21/16/63, 21168.  */
+		geom("@@SELFCHECK@@/cyls", 10485760, 0, 0, 0, 0, 512,
+		    22, 16, 63, 21168);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		geom("@@SELFCHECK@@/blocks", 10485760, 0, 0, 0, 0, 512,
+		    21, 16, 63, 21169);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		/*  g16;63: is the default geometry and IS accepted; asserted as rejected.  */
+		parse("@@SELFCHECK@@/reject", 10485760, "g16;63:", 0,
+		    0, 0, 0, 0);
+		if (failures <= sc_f)
+			sc_bad++;
+		failures = sc_f; rows = sc_r;
+
+		if (sc_bad) {
+			printf("  FAIL SELFCHECK the comparator no longer compares (%d of 3 "
+			    "mismatches went unnoticed) -- every row in this file is inert\n",
+			    sc_bad);
+			failures = sc_f + 1;
+			rows = sc_r;
+		} else {
+			printf("  ok   SELFCHECK the comparator can still fail       "
+			    "cyls+blocks+reject\n");
+		}
+	}
+
 	/*
 	 *  POSITIVE CONTROL.  Passes on the code as shipped TODAY, before any
 	 *  #113 change.  If this row ever fails, the harness is broken, not
