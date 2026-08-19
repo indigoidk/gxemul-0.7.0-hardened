@@ -256,6 +256,49 @@ static void row_interrupt(void)
 }
 
 /*
+ *  THE OTHER HALF OF THIS FILE'S OWN CLAIM.  The header says the count is raised "only when
+ *  UNIE is set", and until now nothing asserted the "only" -- MEASURED: deleting the
+ *  `if (d->tcr[i] & TCR_UNIE)` guard at dev_sh4.c:249-250 left ALL SIXTEEN ROWS GREEN.
+ *  row_interrupt covers "raised" and "on the right timer"; this covers the condition.
+ *
+ *  It is deliberately the SAME underflow as row_interrupt with ONE bit changed, so a failure
+ *  can only mean the guard: same TCOR, same TCNT, same step, same started timer.  UNF must
+ *  still be set -- the underflow HAPPENS, it simply must not raise an interrupt -- which is
+ *  what separates "the guard was deleted" from "the timer stopped working".
+ */
+static void row_interrupt_unie_clear(void)
+{
+	struct sh4_data d;
+	int bad = 0;
+
+	reset(&d);
+	d.tcor[0] = 20833;
+	d.tcnt[0] = 100;
+	d.timer_hz[0] = 101.0 * SH4_PSEUDO_TIMER_HZ;   /*  step 101 -> one underflow  */
+	d.tcr[0] = TCR_TPSC_P16;                       /*  UNIE deliberately CLEAR  */
+	d.tstr = TSTR_STR0;
+
+	sh4_timer_tick(NULL, &d);
+	rows ++;
+
+	if (d.timer_interrupts_pending[0] != 0) {
+		printf("  FAIL unie-clear: pending[0] = %d, want 0 -- the underflow raised an"
+		    " interrupt with UNIE CLEAR\n", d.timer_interrupts_pending[0]);
+		bad = 1;
+	}
+	if (!(d.tcr[0] & TCR_UNF)) {
+		printf("  FAIL unie-clear: TCR_UNF not set -- the underflow itself did not"
+		    " happen, so this row is not testing the guard\n");
+		bad = 1;
+	}
+	if (bad)
+		failures ++;
+	else
+		printf("  ok   %-34s pending=0, UNF still set\n",
+		    "UNIE clear raises no interrupt");
+}
+
+/*
  *  #403: a timer whose TSTR bit is CLEAR must not move at all. Without this,
  *  deleting the started-check is invisible: every other row starts the timers it
  *  inspects, so a body that ignores TSTR produces identical answers.
@@ -347,8 +390,23 @@ int main(void)
 
 	row_three_timers();
 	row_interrupt();
+	row_interrupt_unie_clear();
 	row_stopped();
 	row_no_freeze();
+
+	/*
+	 *  IDENTITY GUARD.  Two files with this name once differed only by the case of a
+	 *  parent directory, and the stale one encoded a REVERSED design decision.  A row
+	 *  count is the cheapest proof that the file which RAN is the file that was
+	 *  REVIEWED.  Last, so it counts every row above it.
+	 */
+	rows ++;
+	if (rows == 18)
+		printf("  ok   [IDENTITY] row count -- guards against a stale copy  %d\n", rows);
+	else {
+		printf("  FAIL [IDENTITY] row count = %d, want 18 -- this is not the file that was reviewed\n", rows);
+		failures ++;
+	}
 
 	printf("\n%d rows, %d failures\n", rows, failures);
 	if (failures == 0)

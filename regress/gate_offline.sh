@@ -1050,8 +1050,11 @@ else
     #  table were emptied; a floor on the rows is what stops that.
     check     "SH-4 TMU: row failures" \
               "$(grep -oE '[0-9]+ failures' "$TMULOG" | grep -oE '^[0-9]+')" "0"
+    #  Floor raised 16 -> 17 with the UNIE-clear row.  A minimum the current value already
+    #  exceeds is decoration rather than evidence -- the reason #416 raised the diskimage
+    #  I/O floor from 3 to 45.
     check_min "SH-4 TMU: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 16
+              "$(grep -oE '^[0-9]+ rows' "$TMULOG" | grep -oE '^[0-9]+')" 18
     check     "SH-4 TMU: offline verdict" "$(grep -c 'SH4_TMU_PASS' "$TMULOG")" "1"
     #  #401: the multi-period rows are named because they are the ONLY rows that
     #  make the modulo mean anything. Four seats independently found that dropping
@@ -1072,6 +1075,10 @@ else
     #  visible. Name them so removing one is loud.
     check     "SH-4 TMU: the interrupt row is present" \
               "$(grep -c 'underflow raises one interrupt' "$TMULOG")" "1"
+    #  The OTHER HALF of this harness's own claim.  MEASURED: without this row, deleting
+    #  the `if (d->tcr[i] & TCR_UNIE)` guard at dev_sh4.c:249 left all sixteen rows GREEN.
+    check     "SH-4 TMU: the UNIE-clear row is present" \
+              "$(grep -c 'UNIE clear raises no interrupt' "$TMULOG")" "1"
     check     "SH-4 TMU: the stopped-timer row is present" \
               "$(grep -c 'stopped timer' "$TMULOG")" "1"
     check     "SH-4 TMU: the reset-default row is present" \
