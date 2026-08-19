@@ -4253,6 +4253,25 @@ The stopping rule admits a MEASURED FALSE PASS or a WRONG RECORD into the round 
 These are neither, so they are filed rather than chased — the rule exists because an earlier
 item ran six follow-up passes without converging.
 
+#### `exitsweep` scope: "reproducible — ONE" is NOT what the table says (2026-08-19)
+
+The inventory row reads **"reproducible by BOOTING a rig we have — ONE"**, and that is correct
+as written. It has since been read as the broader claim *"reproducible — ONE"*, and used as the
+justification for keeping the round at one site. **A measure seat has now witnessed a SECOND
+site with a probe rather than a boot**: `dev_footbridge.c:495-497`, `case IRQ_ENABLE_SET:` on a
+READ, reached from a `cats` cold-debugger probe — two arms of one script differing by a single
+instruction, the isolation arm surviving with both controls green and the kill arm exiting 1.
+
+**The round should still implement one site, but NOT for that reason.** The real bound is the
+third doctrine arm, which is already written down above and is far stronger: complain-and-continue
+is safe only when the dropped write's sole observable consequence is the register's own value.
+That bounds the round on SEMANTICS, and semantics do not evaporate when someone writes a probe.
+
+Proposed reopening rule, naming a condition rather than a number: add a second site only when it
+is (a) witnessed by boot or probe, (b) in the **same device and same semantic class** so one fix
+design covers both, and (c) covered by the **same detector** without a new oracle. Under it the
+eight footbridge sites are **one candidate round, not eight**.
+
 - **`m437ord` — the ordering rule is reasoned and reviewed, but NOT gated.** `diskimage_sync()`
   declines to sync an overlay's bitmap after its data fsync fails. Deleting that `continue` is
   the one mutant the shipped detector does not catch: the measure seat verified a row CAN catch
