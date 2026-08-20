@@ -975,6 +975,7 @@ selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "mus
 #  .why files warn against.  No extra CC flags: built under both the gate's line and
 #  selfmutant.py's and the outputs are byte-identical.
 selfmutant_one diff_sh4_tmu.c        src/devices/dev_sh4.c       sh4_tmu    "boundary"
+selfmutant_one diff_rtc_range.c      src/devices/dev_rtc.c       rtc_range  "2^32: timer NOT removed"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -988,7 +989,7 @@ selfmutant_one diff_sh4_tmu.c        src/devices/dev_sh4.c       sh4_tmu    "bou
 #  Filed as `selfmutant6` -- doing them silently in this round would break the
 #  stopping rule, and leaving them unnamed after writing the helper would repeat
 #  the "grep for its siblings" miss this project keeps making.
-SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu"
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu rtc_range"
 #  DEADLINES SET BY THE OWNER, 2026-08-17, TIGHTER THAN THE ONES I PROPOSED.  I had picked
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
@@ -1095,6 +1096,54 @@ else
               "$(grep -c 'stopped timer' "$TMULOG")" "1"
     check     "SH-4 TMU: the reset-default row is present" \
               "$(grep -c 'reset default must not underflow' "$TMULOG")" "1"
+fi
+
+# ---- #429: the RTC frequency range check ----------------------------------------------
+# *** THIS ROW SAT HELD FOR DAYS ON A RECORDED OBSTACLE THAT WAS MEASURABLY FALSE. ***  The
+# filing said a differential "cannot simply #include the device (it pulls in cpu.h,
+# machine.h, emul.h, device.h)".  FOUR differentials in this very file already do exactly
+# that, and dev_sh4.c -- included by one of them a few hundred lines above -- pulls a strict
+# superset of dev_rtc.c's headers.  The obstacle cost more than the round did.
+#
+# WHAT IT DEFENDS.  #429 shipped with NO detector: nothing under regress/ compiled or even
+# mentioned dev_rtc.c, so reverting the range check whole, or flipping its comparison, was
+# green here.  That is the fifth vacuity class -- a shipped fix whose mutant passes
+# everything.  Measured 2026-08-19: the true pre-#429 revert now fails 4 rows and the
+# flipped comparison fails 5, both on VALUES rather than by crashing.
+RTCBIN=$LOGDIR/diff_rtc_range
+RTCLOG=$LOGDIR/diff_rtc_range.log
+if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -o "$RTCBIN" "$HERE/diff_rtc_range.c" > "$RTCLOG" 2>&1; then
+    note "RTC range differential compile failed:"; sed 's/^/       /' "$RTCLOG" | head -12
+    check "RTC range: compiles against the real dev_rtc.c" "no" "yes"
+else
+    check "RTC range: compiles against the real dev_rtc.c" "yes" "yes"
+    "$RTCBIN" > "$RTCLOG" 2>&1
+    sed 's/^/       /' "$RTCLOG"
+    check     "RTC range: row failures" \
+              "$(grep -oE '[0-9]+ failures' "$RTCLOG" | grep -oE '^[0-9]+')" "0"
+    check_min "RTC range: rows actually run" \
+              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 9
+    check     "RTC range: offline verdict" "$(grep -c 'RTC_RANGE_PASS' "$RTCLOG")" "1"
+    #  NAMED ROWS, because each is the SOLE detector of one arm and the row-count floor
+    #  cannot see a deletion that also drops the floor.  -F throughout: the row names carry
+    #  `^`, which is literal here but is a metacharacter one careless quote away.
+    #
+    #  2^32 and 2^63 are the two values MEASURED to turn an ADD into a REMOVE before #429.
+    #  bit31 is the third arm and the quietest: it survives as a NEGATIVE int, which the
+    #  timer core's floor turns into roughly one tick per three years -- the guest asked
+    #  for the fastest rate available and got the slowest.  The zero rows are the CONTROL
+    #  in the other direction: zero is the documented way to stop the timer, so a fix that
+    #  clamped it into something else would be a regression this table must refuse.
+    check     "RTC range: the 2^32 truncation row is present" \
+              "$(grep -c -F '2^32: timer NOT removed' "$RTCLOG")" "1"
+    check     "RTC range: the 2^63 truncation row is present" \
+              "$(grep -c -F '2^63: timer NOT removed' "$RTCLOG")" "1"
+    check     "RTC range: the bit-31 sign row is present" \
+              "$(grep -c -F 'bit31: hz is positive' "$RTCLOG")" "1"
+    check     "RTC range: the zero-keeps-its-meaning rows are present" \
+              "$(grep -c -F 'zero: ' "$RTCLOG")" "2"
 fi
 
 # ---- #405: the ATA IDENTIFY capacity bytes --------------------------------------
@@ -1520,7 +1569,7 @@ fi
 #  @@SELFCHECK@@ block, so moving a stem from EXEMPT to COVERED and writing no sentinel is
 #  RED.  Without it this would be another G -- a check that a name appears in a list -- which
 #  is precisely the defect being corrected here.
-SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu"
+SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range"
 #  *** COVERED IS NOT UNIFORM, AND THE MANIFEST CANNOT SEE THE DIFFERENCE -- READ THIS BEFORE
 #  TREATING A GREEN ROW AS "the file is vouched for". ***  Seven of the ten route every row
 #  through one or two shared helpers, so the sentinel covers the file.  Three do not:
@@ -1530,6 +1579,9 @@ SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage
 #    * geom      -- every row but the identity row, via BOTH geom() and parse(), which are
 #                   two separate comparators and are probed separately for that reason.
 #    * sync      -- both checks() and checkn(), for the same reason.
+#  rtc_range is in the UNIFORM group: every row goes through chk(), its single comparator.
+#  Named here rather than left to be re-derived, because the three-file exception list above
+#  is only trustworthy if additions are classified as they arrive.
 #  The per-file comments carry the scope; this is a LIVENESS control, never a census, and
 #  "going from 0 to 1 is not false comfort; calling 1 `the detector works` is".
 #

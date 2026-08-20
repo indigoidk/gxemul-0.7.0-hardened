@@ -1,0 +1,25 @@
+WHY THIS MUTANT, AND WHY THIS ROW.
+
+The anchor is #429's own comparison, `else if (idata > (uint64_t) TIMER_MAX_FREQUENCY)`, at
+src/devices/dev_rtc.c:131.  Flipping `>` to `<` leaves the file compiling and the clamp
+present -- it clamps the WRONG SIDE, so every ordinary rate is forced to TIMER_MAX_FREQUENCY
+and every out-of-range one is narrowed exactly as the pre-#429 code did.
+
+MEASURED, both arms, 2026-08-19:
+  pristine                      9 rows, 0 failures, RTC_RANGE_PASS
+  `>` flipped to `<`            9 rows, 5 failures, RTC_RANGE_FAIL
+  the true pre-#429 revert      9 rows, 4 failures, RTC_RANGE_FAIL
+    (the whole if/else-if/else replaced by the bare `d->hz = (int) idata;` that stood there
+     before the round -- a stronger model of the defect than an `if (0)`, and it is the arm
+     that proves the table sees the ORIGINAL bug rather than merely some edit.)
+
+THE PIN IS "2^32: timer NOT removed" AND THE SUBSTRING MATTERS.  "timer NOT removed" alone
+matches TWO rows (2^32 and 2^63) and would name a family rather than a row -- the exact
+defect a reading seat found in two of the five original pins.  The 2^32 row is the one that
+carries the defect's own mechanism: a guest write of 2^32 truncates to zero in the int, the
+zero branch is taken, and an ADD silently becomes a REMOVE.
+
+THE ONE-LINE FORM WAS CHOSEN OVER THE FULL REVERT because selfmutant.py requires a UNIQUE
+anchor and both qualify, but the one-liner is the form every other fragment here uses and it
+survives reindentation of the block around it.  The revert arm is not lost: it is recorded
+above, and it is what the round's own measurement ran.
