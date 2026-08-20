@@ -16,47 +16,41 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
-### THE CODEX WALL — one outage, nineteen held stages
+<!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
+### THE CODEX WALL -- one outage, 34 held stages
 
-**`wdcflood` · `wdcnoirq` · `wdcstandby` · `idesync` · `landiskdisk` · `smnotland` · `smhang` ·
-`m437multi` · `m437rtmp` · `m8sarseq` · `m8invpred` · `capgap` · `capN` · `cflood` · `rtcflood`
-· `sigunsafe` · `i8253zero` · `fbpending` · `fbextrate`** — plus the `rtcgate`/`rtcdet` review
-stage.
+`armbdt` (assess) · `b118L` (assess) · `b120r` (assess) · `capN` (assess) · `capgap` (assess) · `cflood` (assess) · `dfreq` (assess) · `exitsweep` (assess) · `fbextrate` (assess) · `fbpending` (assess) · `gcsections` (assess) · `i8253zero` (assess) · `idesync` (assess) · `landiskdisk` (assess) · `m437multi` (assess) · `m437rtmp` (assess) · `m8invground` (assess) · `m8invpred` (assess) · `m8latch` (assess) · `m8patc` (assess) · `m8probe` (assess) · `m8sarseq` (assess) · `m8seg` (assess) · `m8snprintf` (assess) · `ovsync` (assess,research,review) · `reprowitness` (assess) · `rtcflood` (assess) · `rtcgate` (review) · `sigunsafe` (assess) · `smhang` (assess) · `smnotland` (assess) · `wdcflood` (assess) · `wdcnoirq` (assess) · `wdcstandby` (assess)
 
-**This is ONE outage, not nineteen decisions, and it is written once rather than once per
-panel.** Codex hit its usage limit and is walled to **2026-08-22 12:12**. Across five panels in
-a single evening it produced the identical signature every time — the echoed brief followed by
-the usage-limit error — in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 bytes.
+**This is ONE outage, not 34 decisions, and it is written once rather than once per panel.**
+Codex hit its usage limit and is walled to **2026-08-22 12:12**. Across six panels in a single
+evening it produced the identical signature every time -- the echoed brief followed by the
+usage-limit error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 bytes.
 *A size check alone scores those as the largest answers in their panels;* `panel.sh`'s seat
 check caught each as RATE-LIMITED rather than counting the blank as agreement.
 
 **Every other seat answered every panel.** agy, grok, kimi, glm, deepseek and minimax each
-produced a substantive answer on all five, and both Agent seats answered where fired. So
-nothing here is waiting on Codex to be ACTIONABLE — it is waiting on Codex to be COMPLETE under
-the full-panel rule.
+produced a substantive answer on all six. So nothing here is waiting on Codex to be ACTIONABLE
+-- it is waiting on Codex to be COMPLETE under the full-panel rule.
 
-**Two closures are blocked by this and are the only real cost:**
-
-* `m8invpred` — DROP, unanimous among the six seats that answered. I closed it and section H
-  refused as CLOSED-WHILE-HELD, correctly: *"unanimous among the seats that answered"* is how a
-  six-seat verdict gets reported as a nine-seat one. Its LESSON has already moved into the
-  carrier, so the wait costs nothing that matters.
-* `fbextrate` (three seats) and `sigunsafe` (two seats) — DROP recommended, not executed, for
-  the same reason.
+**The closures this wall is blocking**, and they are the only real cost: `m8invpred` (DROP,
+unanimous), `fbextrate` (DROP, three seats), `sigunsafe` (DROP, two seats), `gcsections` (DROP,
+two seats). Each was recommended by the seats that answered and NOT executed, because a drop is
+a closure and *"unanimous among the seats that answered"* is how a six-seat verdict gets
+reported as a nine-seat one. Section H already refused one such closure tonight, correctly.
 
 **This entry is not about Fable.** The queue is where a held stage is named regardless of which
-seat holds it — the rule section I of `precommit_check.sh` enforces, and the rule that caught
-these sitting held-but-unqueued in the first place.
+seat holds it -- the rule section I enforces, and the rule that caught these sitting
+held-but-unqueued in the first place.
 
 **Standing authority for proceeding meanwhile:** the owner directed *"if there is anything else
 in the matrix that can be ran by any other model other than codex; please proceed"*. Recorded,
 never silent.
 
-**Action after 2026-08-22:** re-fire codex against `_scratchpad/brief_wdcarm.md`,
-`brief_smharness.md`, `brief_triage4.md`, `brief_timerdomain.md` and `brief_m88k.md`; record
-its answer on each, or record explicitly that it added nothing beyond the confirmed set. **A
-blank cell and a seat failure must not look alike.** Then execute the three held drops.
+**Action after 2026-08-22:** re-fire codex against the briefs under `_scratchpad/brief_*.md`,
+record its answer on each or record explicitly that it added nothing beyond the confirmed set
+-- **a blank cell and a seat failure must not look alike** -- then execute the held drops.
 
+<!-- END GENERATED: codex-wall -->
 
 ### `selfcheckman` — regress stage — **HELD, batched**
 

@@ -107,6 +107,26 @@ cd "$SEC" || { say "no repo at $SEC"; exit 9; }
 #  If a seat cannot be run, the round STOPS AND THE OWNER IS ASKED.  Degrading
 #  quietly is precisely what this replaces -- and note G alone would not catch it:
 #  G verifies that a seat which ANSWERED was recorded, not that the seat was FIRED.
+#  ---- I2 --------------------------------------------------------------------------
+#  I proves every HELD marker is NAMED IN THE QUEUE.  It cannot prove the queue's own summary
+#  of those markers is CURRENT -- and that summary was maintained BY HAND until it drifted:
+#  the entry said "nineteen held stages" when the ledger held THIRTY-FOUR.  Caught the moment
+#  the section was mechanised, which is the whole argument for mechanising it.
+#
+#  gen_codex_wall.py DERIVES the row list and the count from the ledger's markers; the prose
+#  stays human, because a generator that wrote the reasoning too is a generator nobody reads.
+say ""; say "I2. the queue's held-stage summary matches the ledger"
+WALLCHK=$_HERE/pipeline/gen_codex_wall.py
+if [ ! -f "$WALLCHK" ]; then
+	warn "gen_codex_wall.py MISSING -- the queue summary is NOT verified"
+elif out=$(python "$WALLCHK" --check 2>&1); then
+	good "$(printf '%s' "$out" | tr '\n' ' ')"
+else
+	bad "THE QUEUE'S HELD-STAGE SUMMARY IS STALE:"
+	printf '%s\n' "$out" | sed 's/^/          /'
+	say "          fix: python tools/pipeline/gen_codex_wall.py"
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #
