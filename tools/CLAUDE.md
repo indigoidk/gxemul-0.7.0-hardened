@@ -175,8 +175,9 @@ Panel rules, learned the hard way:
   the measuring seat as its next assignment rather than waiting to rediscover the members.**
   Honest limit, because one instance cannot settle it: whether that prediction was load-bearing
   or merely lucky is not decidable from a single case. It is recorded as a heuristic worth
-  acting on, not as a law. *(Was ledger row `m8invpred`, dropped 2026-08-20 by unanimous panel
-  verdict — a real lesson that was never a defect, and that nothing would ever have closed.)*
+  acting on, not as a law. *(From ledger row `m8invpred`. The lesson was moved here FIRST and the row's closure held
+  behind a seat — an earlier draft of this line said "dropped", which ran ahead of the gate
+  that had refused the closure. The adjudicator caught it. Record the move, not the outcome.)*
 - **Verify every seat actually answered** — one 246 KB "answer" was the echoed prompt.
 - **Disagreements are settled empirically** (instrument and boot), never by vote — the
   majority has been wrong on mechanism repeatedly (≥6 recorded cases; round 100's Opus

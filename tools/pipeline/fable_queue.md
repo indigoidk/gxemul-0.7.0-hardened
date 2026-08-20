@@ -16,39 +16,73 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
+### The AGENT seats on the cluster panels — **held by OWNER ALLOCATION, not by outage**
+
+The nine cluster panels of 2026-08-19/20 fired panel.sh's **seven scriptable seats**. The two
+Agent seats — `opus5` and `fable5` — were **not fired on them**, so those assess stages are 7/9
+or 8/9, not complete.
+
+**Both seats are ALIVE and answering.** This is an allocation, and the owner made it: *Opus
+drives* (it is implementing the `pitlatch` round) and *Fable adjudicates* (it delivered the drop
+docket on 2026-08-20), with Fable separately deprioritised as a review seat. Recorded per row by
+seat name rather than left blank, because **a blank cell and a seat failure must not look
+alike** — which is the whole reason this file exists.
+
+**It surfaced only when the codex wall was discharged.** With a `[HELD AWAITING SEAT: codex]`
+marker present each stage read as HELD and was accepted; removing the marker revealed the true
+count. That is worth keeping: *one held marker can mask another gap*, and section H cannot see a
+shortfall that a different hold is covering.
+
+**Action:** fire `opus5` and `fable5` against the cluster briefs under `_scratchpad/brief_*.md`
+(`wdcarm`, `smharness`, `triage4`, `timerdomain`, `m88k`, `harness`, `access`, `records`,
+`last3`, `pit`) when the allocation frees them. Nothing is blocked on it — every disposition
+those panels produced had six or seven seats behind it.
+
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
-### THE CODEX WALL -- one outage, 64 held stages
+### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess) · `b118L` (assess) · `b120r` (assess) · `capN` (assess) · `capgap` (assess) · `carrier` (assess) · `census` (assess) · `cflood` (assess) · `cmtattr` (assess) · `constblind` (assess) · `devexit` (assess) · `dfreq` (assess) · `es438` (assess) · `exitsweep` (assess) · `fablequeue` (assess) · `fbextrate` (assess) · `fbpending` (assess) · `fbwitness` (assess) · `floodclass` (assess) · `gateflr` (assess) · `gcsections` (assess) · `hlen` (assess) · `i8253zero` (assess) · `idesync` (assess) · `ieeeupgrade` (assess) · `isaorder` (assess) · `landiskdisk` (assess) · `ledgerwitness` (assess) · `m437multi` (assess) · `m437rtmp` (assess) · `m8invground` (assess) · `m8invpred` (assess) · `m8latch` (assess) · `m8patc` (assess) · `m8probe` (assess) · `m8sarseq` (assess) · `m8seg` (assess) · `m8snprintf` (assess) · `mrwgrind` (assess) · `mrwstore2` (assess) · `ns16550` (assess) · `optrow` (assess) · `ovsync` (assess,research,review) · `pcchalt` (assess) · `pcheck` (assess) · `pitflip` (assess) · `pitlatch` (assess) · `pitlsb` (assess) · `reprowitness` (assess) · `rtcflood` (assess) · `rtcgate` (review) · `rtcnarrow` (assess) · `scunbacked` (assess) · `seam` (assess) · `sigunsafe` (assess) · `smdatefmt` (assess) · `smhang` (assess) · `smnotland` (assess) · `strad` (assess) · `tfreq` (assess) · `wdcflood` (assess) · `wdcnoirq` (assess) · `wdcstandby` (assess) · `xfamscope` (assess)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `capN` (assess:opus5) · `capgap` (assess:opus5) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cflood` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5,opus5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbpending` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5,opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5,opus5) · `m8snprintf` (assess:fable5) · `mrwgrind` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5,opus5) · `optrow` (assess:opus5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5,opus5) · `pcheck` (assess:opus5) · `pitflip` (assess:fable5) · `pitlatch` (assess:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sigunsafe` (assess:opus5) · `smdatefmt` (assess:opus5) · `strad` (assess:fable5) · `tfreq` (assess:opus5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
-**This is ONE outage, not 64 decisions, and it is written once rather than once per panel.**
-Codex hit its usage limit and is walled to **2026-08-22 12:12**. Across six panels in a single
-evening it produced the identical signature every time -- the echoed brief followed by the
-usage-limit error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 bytes.
-*A size check alone scores those as the largest answers in their panels;* `panel.sh`'s seat
-check caught each as RATE-LIMITED rather than counting the blank as agreement.
+*** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
-**Every other seat answered every panel.** agy, grok, kimi, glm, deepseek and minimax each
-produced a substantive answer on all six. So nothing here is waiting on Codex to be ACTIONABLE
--- it is waiting on Codex to be COMPLETE under the full-panel rule.
+* **codex** -- a genuine OUTAGE, now DISCHARGED. It hit its usage limit and echoed eleven
+  briefs; on 2026-08-20 it answered a health test and all eleven were re-fired against
+  byte-identical briefs and verified real. Only the older 08-17/08-18 panels remain.
+* **opus5 / fable5** -- NOT an outage. Both are alive and answering. They are held by an
+  **owner allocation**: Opus DRIVES (implementing rounds) and Fable ADJUDICATES (it delivered
+  the drop docket), with Fable deprioritised as a review seat. The nine cluster panels fired
+  panel.sh's seven scriptable seats only, so those assess stages are 7/9 or 8/9.
 
-**The closures this wall is blocking**, and they are the only real cost: `m8invpred` (DROP,
-unanimous), `fbextrate` (DROP, three seats), `sigunsafe` (DROP, two seats), `gcsections` (DROP,
-two seats). Each was recommended by the seats that answered and NOT executed, because a drop is
-a closure and *"unanimous among the seats that answered"* is how a six-seat verdict gets
-reported as a nine-seat one. Section H already refused one such closure tonight, correctly.
+**That second kind surfaced only when the first was discharged**: with a codex marker present
+each stage read HELD and was accepted, and removing it revealed the true count. *One held
+marker can mask another gap* -- section H cannot see a shortfall that a different hold covers.
 
-**This entry is not about Fable.** The queue is where a held stage is named regardless of which
-seat holds it -- the rule section I enforces, and the rule that caught these sitting
-held-but-unqueued in the first place.
+**Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
+allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**Standing authority for proceeding meanwhile:** the owner directed *"if there is anything else
-in the matrix that can be ran by any other model other than codex; please proceed"*. Recorded,
-never silent.
+**This is ONE outage plus one allocation, not 62 decisions, and it is written once rather than once per panel.**
+**THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
+produced the identical signature every time -- the echoed brief followed by the usage-limit
+error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
+19,649 / 21,348 bytes. *A size check alone scores those as the largest answers in their panels.*
+`panel.sh`'s seat check caught each as RATE-LIMITED rather than counting the blank as agreement,
+and the discharge re-verified every rerun the same way: delta over the brief, and the absence of
+the usage-limit string in the tail.
 
-**Action after 2026-08-22:** re-fire codex against the briefs under `_scratchpad/brief_*.md`,
-record its answer on each or record explicitly that it added nothing beyond the confirmed set
--- **a blank cell and a seat failure must not look alike** -- then execute the held drops.
+**A DISCHARGED CODEX FINDING IS HISTORICAL UNLESS RE-CHECKED.** Each rerun answered the brief AS
+IT WAS FIRED -- byte-identical, so its answer is comparable with the seats that answered live --
+and the tree has moved since. Measured example: its rtcdet verdict was DEFECTIVE on a `+1`
+mutant that "admits UINT64_MAX while all nine rows remain green" -- correct against the 9-row
+table it was shown, and MEASURED CLOSED against today's 18-row table. Three further codex
+recommendations are already settled by measurements on the record (`tfreq` is fixed;
+`mrwstore2`'s "produce a real-guest witness" was measured impossible; `constblind`'s drop was
+rejected after a live instance was found).
+
+**Action for the remaining rows:** the older 08-17/08-18 panels (`exitsweep`, `ovsync`,
+`armbdt`, `b118L`, `b120r`, `dfreq`, `reprowitness`) were NOT re-fired and still carry genuine
+codex holds. For `opus5`/`fable5`, fire them against the cluster briefs when the owner's
+allocation frees them. **A blank cell, a seat failure and an allocation are three different
+things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
