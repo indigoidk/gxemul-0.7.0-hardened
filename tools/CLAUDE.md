@@ -368,6 +368,35 @@ halves land on different resources, and that is the whole point:
 * **RATE-LIMITED — spend once, at the convergence point.** Measured 2026-08-13: the three
   Ollama cloud seats return HTTP 429 if two panels fire within ~20+ minutes (21 was not
   enough); Grok 4.6's free tier died after ~4 substantial invocations; Kimi is 403-dead.
+
+  *** ALL THREE OF THOSE ARE NOW STALE, AND THE FIRST WAS MEASURED FALSE ON 2026-08-20. ***
+  FIVE full panels fired in one evening, with gaps of 66, 33, 13, **5** and **11** minutes --
+  two of them far inside the "~20+ minutes" threshold -- and **all six non-codex seats
+  answered every one**, substantively:
+
+  | panel | agy | grok | kimi | glm | deepseek | minimax |
+  |---|---|---|---|---|---|---|
+  | 22:20 | 15k | 9k | 87k | 8k | 3k | 10k |
+  | 23:26 | 12k | 9k | 45k | 13k | 4k | 16k |
+  | 23:59 | 12k | 11k | 72k | 19k | 5k | 11k |
+  | 00:12 | 11k | 7k | 37k | 6k | 3k | 8k |
+  | 00:17 | 14k | 13k | 61k | 14k | 5k | 9k |
+
+  No 429, no degradation, no shrinking answers. Grok is PAID now and Kimi is back, so those
+  two clauses expired months ago; the Ollama one expired without anyone re-testing it. **The
+  "ONE full panel per ROUND" policy rested on this constraint, and the constraint is gone** --
+  which is the same failure this file already records one paragraph below: *"A policy written
+  around two dead seats outlived both of them by a week."* It happened again, to the paragraph
+  that says it.
+
+  **The rule that replaces it: fire a panel whenever there is a brief worth panelling, and let
+  the seat check report a wall if one comes.** Do not ration against a limit nobody has
+  observed. The one real cost is CONTENTION -- panel seats are CPU-heavy and must not run
+  during a gate, which is a scheduling constraint and not a quota.
+
+  **The single genuinely walled seat is CODEX**, and its wall is loud and unmistakable: five
+  identical echoed-brief-plus-429 files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 bytes.
+  *A size check alone scores those the largest answers in their panels* -- verify CONTENT.
   **So: ONE full panel per ROUND, not one per pass.** Four panels in one afternoon exhausted
   every rate-limited seat and left two reviews resting on two seats each.
 
