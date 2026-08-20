@@ -33,6 +33,15 @@
  *	result in anything meaningful.
  *
  *  (Split counter[] into reset value and current value.)
+ *
+ *  #439: A consequence of the above, stated here because it is what a guest
+ *  actually notices: the counter-latch command has nothing to latch, so a
+ *  latched read returns 0 -- NOT the reload value.  Sub-tick interpolation,
+ *  which is why guests issue the latch at all, is therefore unmodelled.
+ *  Returning the reload value instead would be worse than useless: a guest
+ *  that calibrates by dividing by (reload - latched_count), as OpenBSD's
+ *  findcpuspeed() does, would divide by zero.  The latch is accepted and, as
+ *  of #439, leaves the counter's programming intact.
  */
 
 #include <stdio.h>
@@ -65,6 +74,7 @@ struct pit8253_data {
 
 	int		mode[3];
 	int		counter[3];
+	int		latched[3];	/*  #439: latch command pending  */
 
 	int		hz[3];
 
@@ -150,6 +160,18 @@ DEVICE_ACCESS(8253)
 				    relative_addr);
 				break;	/*  #223: (Codex/Fable) don't exit() the host  */
 			}
+		} else if (d->latched[relative_addr]) {
+			/*  #439: Reading a counter that the latch
+			    command latched.  gxemul models this timer's
+			    RATE, not a count that decrements (see the
+			    TODO at the top of this file), so there is no
+			    captured count to hand back.  Return 0 to say
+			    so, rather than returning the reload value,
+			    which would look like a count that has not
+			    started -- guests divide by (reload - this).  */
+			odata = 0;
+			break;	/*  no counter byte was consumed, so
+			    leave the LSB/MSB selector below alone  */
 		} else {
 			switch (d->mode_byte & 0x30) {
 			case I8253_TIMER_LSB:
@@ -174,8 +196,6 @@ DEVICE_ACCESS(8253)
 
 	case I8253_TIMER_MODE:
 		if (writeflag == MEM_WRITE) {
-			d->mode_byte = idata;
-
 			d->counter_select = (idata >> 6) & 3;
 			if (d->counter_select > 2) {
 				debug("[ 8253: attempt to select counter 3,"
@@ -183,6 +203,20 @@ DEVICE_ACCESS(8253)
 				d->counter_select = 0;
 			}
 
+			/*  #439: The counter-latch command (RW == 00) latches a
+			    counter so it can be read; it does NOT reprogram it, so
+			    the RW format in mode_byte and the counting mode in
+			    mode[] have to survive it.  Writing idata through here
+			    unconditionally used to destroy both.  */
+			if ((idata & 0x30) == I8253_TIMER_LATCH) {
+				d->latched[d->counter_select] = 1;
+				debug("[ 8253: latch counter %i ]\n",
+				    d->counter_select);
+				break;
+			}
+
+			d->mode_byte = idata;
+			d->latched[d->counter_select] = 0;
 			d->mode[d->counter_select] = idata & 0x0e;
 
 			debug("[ 8253: select=%i mode=0x%x ",

@@ -152,7 +152,18 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  same commit as its gate wiring cannot skip this pin, because the wiring forces a gate run.
 #  cf4b083 shipped the probe UNWIRED, so nothing made gate 6 fire.  See the luna88k block in
 #  gate_arm.sh, added with this bump.
-EXPECT_CONVERTED=17
+#  17 -> 18 on 2026-08-20: pit8253_latch_probe.py, #439's witness for pitlatch/pitclobber.
+#  MEASURED read-only with this gate's OWN probe_code()/py_code() definitions, run before and
+#  after staging the file: conv_anchor, conv_echo and conv_mark all move 17 -> 18 while bare,
+#  unknown and whole_full do not move at all (0 / 0 / 2 both times) -- the same signature the
+#  footbridge entry above records.  Bumped in the SAME edit that added the probe, which is the
+#  coupling the three entries above went red for.
+#  The probe ships UNWIRED.  Per the structural note directly above, that means nothing forces
+#  gate 6 to fire, and an unwired probe is exactly what shipped latent in cf4b083 -- so this pin
+#  is doing the whole job here and was verified by recomputation rather than by a gate run.
+#  Wiring it into gate_arm.sh alongside footbridge_sites_probe.py is the follow-up, and it wants
+#  an operator who can run that gate.
+EXPECT_CONVERTED=18
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not
