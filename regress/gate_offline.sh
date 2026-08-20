@@ -1129,7 +1129,7 @@ else
     #    12 -> 17 the threshold was pinned only from ABOVE, and the timer core's own input
     #             was never read.  Both MEASURED at 12 of 12 green.
     check_min "RTC range: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 17
+              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 18
     check     "RTC range: offline verdict" "$(grep -c 'RTC_RANGE_PASS' "$RTCLOG")" "1"
     #  NAMED ROWS, because each is the SOLE detector of one arm and the row-count floor
     #  cannot see a deletion that also drops the floor.  -F throughout: the row names carry
@@ -1171,6 +1171,13 @@ else
     #  start and no row ever read it.
     check     "RTC range: the timer core's own input is asserted" \
               "$(grep -c -F 'timer core got' "$RTCLOG")" "2"
+    #  THE CONSTBLIND GUARD.  The three clamp rows READ TIMER_MAX_FREQUENCY, so they are
+    #  green for any value of it; this row asserts the ceiling IS INT_MAX, derived from
+    #  outside timer.h.  Named because deleting it silently restores the blindness -- and
+    #  because five seats voted to DROP the constblind row as "already fixed" while THIS
+    #  file, added after that audit, was a live instance of it.
+    check     "RTC range: the constant-blindness guard is present" \
+              "$(grep -c -F 'ceiling IS INT_MAX' "$RTCLOG")" "1"
 fi
 
 # ---- #405: the ATA IDENTIFY capacity bytes --------------------------------------

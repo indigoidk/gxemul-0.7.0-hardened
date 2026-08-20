@@ -90,6 +90,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <inttypes.h>
+#include <limits.h>
 
 void fatal(const char *fmt, ...)
 { va_list ap; va_start(ap, fmt); vfprintf(stderr, fmt, ap); va_end(ap); }
@@ -258,8 +259,30 @@ int main(void)
 	chk("update: existing timer updated, not re-added", timer_updates, 1);
 	chk("update: timer core got the new rate", (long long) last_timer_hz, 500);
 
+	/*
+	 *  *** THE THREE CLAMP ROWS READ TIMER_MAX_FREQUENCY FOR THEIR EXPECTED VALUE, WHICH
+	 *  MAKES THEM GREEN FOR ANY VALUE OF IT. ***  That is the `constblind` shape, and #425
+	 *  established the rule that creates it: "read the constant, never transcribe it".
+	 *  Reading defeats transcription drift and creates blindness to the constant ITSELF --
+	 *  three seats once measured that all three timer constants could be changed to values
+	 *  breaking a round's claims with every row still passing.  BOTH are needed: read it,
+	 *  AND assert an absolute consequence derived from OUTSIDE the header.
+	 *
+	 *  The ceiling's whole claim is that it is INT_MAX, so say that structurally rather than
+	 *  trusting the literal in timer.h to still be that number.  diff_timer.c:276-280 does
+	 *  the same, for the same reason; this file needed it and did not have it.
+	 *
+	 *  HOW THIS WAS FOUND IS THE PART WORTH KEEPING.  Five seats voted to DROP the
+	 *  `constblind` row as "already audited and fixed" -- and every one of them was reading
+	 *  the same sentence in the row's own hold, an audit that covered SEVEN differentials and
+	 *  named diff_timer.c as the only exposed one.  There are THIRTEEN now.  A unanimous
+	 *  verdict derived from one stale record is one stale record, not five confirmations.
+	 */
+	chk("ceiling IS INT_MAX, not merely some large literal",
+	    TIMER_MAX_FREQUENCY == (double) INT_MAX, 1);
+
 	/*  IDENTITY: this table asserts its own row count.  */
-	chk("IDENTITY: row count", rows + 1, 17);
+	chk("IDENTITY: row count", rows + 1, 18);
 
 	printf("%d rows, %d failures\n", rows, failures);
 	printf(failures ? "RTC_RANGE_FAIL\n" : "RTC_RANGE_PASS\n");

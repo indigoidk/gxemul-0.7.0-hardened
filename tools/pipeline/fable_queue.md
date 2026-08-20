@@ -17,11 +17,11 @@ reason the queue is written down rather than remembered.
 ## QUEUED — in priority order
 
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
-### THE CODEX WALL -- one outage, 34 held stages
+### THE CODEX WALL -- one outage, 42 held stages
 
-`armbdt` (assess) · `b118L` (assess) · `b120r` (assess) · `capN` (assess) · `capgap` (assess) · `cflood` (assess) · `dfreq` (assess) · `exitsweep` (assess) · `fbextrate` (assess) · `fbpending` (assess) · `gcsections` (assess) · `i8253zero` (assess) · `idesync` (assess) · `landiskdisk` (assess) · `m437multi` (assess) · `m437rtmp` (assess) · `m8invground` (assess) · `m8invpred` (assess) · `m8latch` (assess) · `m8patc` (assess) · `m8probe` (assess) · `m8sarseq` (assess) · `m8seg` (assess) · `m8snprintf` (assess) · `ovsync` (assess,research,review) · `reprowitness` (assess) · `rtcflood` (assess) · `rtcgate` (review) · `sigunsafe` (assess) · `smhang` (assess) · `smnotland` (assess) · `wdcflood` (assess) · `wdcnoirq` (assess) · `wdcstandby` (assess)
+`armbdt` (assess) · `b118L` (assess) · `b120r` (assess) · `capN` (assess) · `capgap` (assess) · `census` (assess) · `cflood` (assess) · `constblind` (assess) · `dfreq` (assess) · `exitsweep` (assess) · `fbextrate` (assess) · `fbpending` (assess) · `gateflr` (assess) · `gcsections` (assess) · `i8253zero` (assess) · `idesync` (assess) · `landiskdisk` (assess) · `m437multi` (assess) · `m437rtmp` (assess) · `m8invground` (assess) · `m8invpred` (assess) · `m8latch` (assess) · `m8patc` (assess) · `m8probe` (assess) · `m8sarseq` (assess) · `m8seg` (assess) · `m8snprintf` (assess) · `optrow` (assess) · `ovsync` (assess,research,review) · `pcheck` (assess) · `reprowitness` (assess) · `rtcflood` (assess) · `rtcgate` (review) · `seam` (assess) · `sigunsafe` (assess) · `smhang` (assess) · `smnotland` (assess) · `strad` (assess) · `wdcflood` (assess) · `wdcnoirq` (assess) · `wdcstandby` (assess) · `xfamscope` (assess)
 
-**This is ONE outage, not 34 decisions, and it is written once rather than once per panel.**
+**This is ONE outage, not 42 decisions, and it is written once rather than once per panel.**
 Codex hit its usage limit and is walled to **2026-08-22 12:12**. Across six panels in a single
 evening it produced the identical signature every time -- the echoed brief followed by the
 usage-limit error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 bytes.
