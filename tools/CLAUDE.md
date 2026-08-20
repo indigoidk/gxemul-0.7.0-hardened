@@ -164,6 +164,19 @@ seats **concurrently** (independent processes / one Agent batch), then collect.
 | Claude (Fable 5) | the Agent tool with `model: "fable"` — an independent Fable seat, separate from the main loop. Same framing rules. NOTE Fable wears two hats: this review seat, and (as the main loop) the ADJUDICATOR of the panel's task suggestions. **QUOTA-DEAD since 2026-08-13** ("You've reached your Fable 5 limit"; two consecutive relaunches failed identically — the Kimi pattern, a quota not a wedge, so a retry cannot clear it). **RE-HEALTH-TESTED 2026-08-14 ~09:4x, ON THE DAY THE TOKEN RESET WAS EXPECTED: STILL THE IDENTICAL LIMIT MESSAGE.** Third consecutive failure, so the reset either has not landed or the allowance is still exhausted — do NOT assume a calendar date restores a seat, TEST IT. The test is cheap (one Agent call told to open with a liveness token) and it is the only thing that distinguishes "dead" from "assumed dead". The ADJUDICATOR hat is unaffected while the main loop still runs. Substitute used meanwhile: an Agent seat with `model: "sonnet"` carrying the same static/records lens, **always recorded as a SUBSTITUTE, never as "the Fable seat"**. Health-test before re-adding. |
 
 Panel rules, learned the hard way:
+- *** A READING SEAT BUYS THE CLASS; A MEASURING SEAT BUYS THE INSTANCE — AND THE CLASS ARRIVES
+  FIRST, FOR FREE. *** On #434's pass 1 a reading seat wrote that the planned detector was *"too
+  clean and will green-light state-dependent mutants that still purge on the only path a guest
+  takes."* **Nobody read it for a day.** Over the next two rounds measuring seats independently
+  BUILT that exact class twice — value guards (`&& idata`, `odata != 0`, a UAPR-only equality
+  guard) and selector guards (`&& d->cmmu_nr == 0`) — each discovery costing a full pass-2
+  cycle. The measuring seats were necessary to PROVE the instances; the reading seat had already
+  named the family. **So when a reading seat names a FAMILY of mutants, hand that sentence to
+  the measuring seat as its next assignment rather than waiting to rediscover the members.**
+  Honest limit, because one instance cannot settle it: whether that prediction was load-bearing
+  or merely lucky is not decidable from a single case. It is recorded as a heuristic worth
+  acting on, not as a law. *(Was ledger row `m8invpred`, dropped 2026-08-20 by unanimous panel
+  verdict — a real lesson that was never a defect, and that nothing would ever have closed.)*
 - **Verify every seat actually answered** — one 246 KB "answer" was the echoed prompt.
 - **Disagreements are settled empirically** (instrument and boot), never by vote — the
   majority has been wrong on mechanism repeatedly (≥6 recorded cases; round 100's Opus

@@ -16,6 +16,32 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
+### The triage panel's four rows — **codex-held**
+
+`m437multi` · `m437rtmp` · `m8sarseq` · `m8invpred`
+
+Reviewed 2026-08-20 by six scriptable seats plus both Agent seats; **codex was walled** (fourth
+panel of the evening with the same echoed-brief-plus-429 signature). Each carries a
+`[HELD AWAITING SEAT: codex]` marker on its assess stage.
+
+**What the panel already decided, so re-firing codex is confirmation and not discovery:**
+
+* **`m8invpred` — DROP, unanimous.** A process observation with no code defect, and nothing
+  would ever have closed it. **Its closure is HELD behind codex** — I closed it on the
+  six-seat verdict and section H refused it as CLOSED-WHILE-HELD, correctly: *"unanimous among
+  the seats that answered"* is exactly how a six-seat verdict gets reported as a nine-seat one.
+  The **lesson has already been moved into the carrier**, so the wait costs nothing.
+* **`m437multi` first** (three packet seats) versus **`m8sarseq` first** (agy, the file-reading
+  seat) — a genuine split on ORDERING, recorded rather than voted. Note the seat-class doctrine
+  does **not** settle it: it gives the file-reading seat priority on repo FACT, and every seat
+  agrees on the facts here. What differs is whether a comment-only fix earns a round.
+* **`m437rtmp`** — all seats agree the CODE IS CORRECT and only #437's comment overstates
+  durability under `R:`. agy would drop it; the others would merge it into `m437multi` as that
+  round's documentation half. Merging is cheaper and loses nothing.
+
+**Action after 2026-08-22:** re-fire codex against `_scratchpad/brief_triage4.md`, record its
+answer or record explicitly that it added nothing, then close `m8invpred`.
+
 ### The CODEX-held assess stages — **seven rows, one seat, one wall**
 
 `wdcflood` · `wdcnoirq` · `wdcstandby` · `idesync` · `landiskdisk` · `smnotland` · `smhang`
