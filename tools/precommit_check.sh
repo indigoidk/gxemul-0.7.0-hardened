@@ -37,6 +37,12 @@ say  () { printf '%s\n' "$*"; }
 bad  () { fail=$((fail+1)); printf '  FAIL  %s\n' "$*"; }
 soft () { warn=$((warn+1)); printf '  WARN  %s\n' "$*"; }
 good () { printf '  ok    %s\n' "$*"; }
+#  `warn` is called at the four "checker MISSING" branches and was DEFINED NOWHERE -- so a
+#  missing pipeline checker printed `warn: command not found` on stderr and its gate was
+#  silently disabled, which is the exact failure those branches exist to announce.  Measured
+#  by renaming check_stage_panels.py and check_seats_read.py away: both gates vanished and the
+#  run still said PRECOMMIT_PASS.
+warn () { soft "$@"; }
 
 cd "$SEC" || { say "no repo at $SEC"; exit 9; }
 # ---------------------------------------------------------------- F
@@ -237,8 +243,28 @@ else
 	bad "Run it, then append a line to regress/pass2_ledger.tsv."
 fi
 
-CHANGED=$(git status --porcelain | awk '{print $2}')
-[ -z "$CHANGED" ] && { say "nothing staged or modified -- nothing to check."; exit 0; }
+#  -z + strip the status columns, and take the RIGHT-hand side of a rename.  The old form
+#  was `awk '{print $2}'`, which is not a path extractor: `R  old -> new` yields the OLD
+#  path so the new file is never checked, and a quoted path containing a space is truncated
+#  at the space, silently skipping checks A, B and E for it.
+CHANGED=$(git status --porcelain -z | tr '\0' '\n' | sed -e 's/^...//' -e 's/.* -> //')
+if [ -z "$CHANGED" ]; then
+	say "nothing staged or modified -- no per-file checks."
+	#  *** DO NOT exit 0 HERE.  *** Sections F/G/H/I/J/K have already run above and may have
+	#  set `fail`.  The old form discarded them: measured on a clean tree with a stale carrier
+	#  and a missing pass-2 receipt, it printed SIX `FAIL` lines, no verdict line at all, and
+	#  exited 0.  A clean tree is precisely the state in which those checks are meaningful --
+	#  F was deliberately moved above this exit for that reason, and then the exit threw its
+	#  answer away.
+	if [ $fail -gt 0 ]; then
+		say ""
+		say "=========================================================="
+		say "PRECOMMIT_FAIL   $fail hard, $warn soft"
+		exit 1
+	fi
+	say "PRECOMMIT_PASS   0 hard, $warn soft"
+	exit 0
+fi
 
 say "=== #418-era PRE-COMMIT REWORK CHECK ==="
 say "files in play:"; printf '    %s\n' $CHANGED
@@ -250,7 +276,21 @@ say "files in play:"; printf '    %s\n' $CHANGED
 #  skipped once -- and the gate that should have caught it named two files when
 #  the truth was three, because an allowlist entry had gone stale.
 say ""; say "A. twin-tree propagation (the #415 class -- FULLY mechanical)"
-DIVERGENT_OK="src/include/misc.h src/devices/dev_ne2000.c"
+#  DERIVED, NOT PINNED -- because a pinned list has now gone stale TWICE, by one file and
+#  then by five.  Measured 2026-08-19: the tree has SEVEN divergent paths (.index,
+#  Makefile.skel, autodev.c, dev_jazz.c, machine_arc.c, arcbios.c, and SEC-only
+#  dev_ne2000.c) while this list named TWO.  The consequence was not a missed check but an
+#  ACTIVELY HARMFUL one: touching any unlisted ARC/Jazz file hard-failed and instructed the
+#  operator to overwrite the SEC-only ARC layer with est/'s version.  And `misc.h` was listed
+#  while NOT being divergent, so it false-passed a genuine unpropagated edit.
+#
+#  The tracked file is the declaration; this recomputes reality and compares.  A drift in
+#  either direction is then a red row naming the path, instead of a silent wrong instruction.
+DIVERGENCE_FILE=$SEC/tools/est_divergence.txt
+DIVERGENT_OK=$(grep -vE '^\s*(#|$)' "$DIVERGENCE_FILE" 2>/dev/null | tr '\n' ' ')
+if [ -z "$DIVERGENT_OK" ]; then
+	warn "tools/est_divergence.txt missing or empty -- twin-tree allowlist NOT derived"
+fi
 for f in $CHANGED; do
 	case "$f" in
 	src/*) ;;
