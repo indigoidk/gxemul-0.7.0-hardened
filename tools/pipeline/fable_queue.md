@@ -16,59 +16,47 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
-### The triage panel's four rows — **codex-held**
+### THE CODEX WALL — one outage, nineteen held stages
 
-`m437multi` · `m437rtmp` · `m8sarseq` · `m8invpred`
+**`wdcflood` · `wdcnoirq` · `wdcstandby` · `idesync` · `landiskdisk` · `smnotland` · `smhang` ·
+`m437multi` · `m437rtmp` · `m8sarseq` · `m8invpred` · `capgap` · `capN` · `cflood` · `rtcflood`
+· `sigunsafe` · `i8253zero` · `fbpending` · `fbextrate`** — plus the `rtcgate`/`rtcdet` review
+stage.
 
-Reviewed 2026-08-20 by six scriptable seats plus both Agent seats; **codex was walled** (fourth
-panel of the evening with the same echoed-brief-plus-429 signature). Each carries a
-`[HELD AWAITING SEAT: codex]` marker on its assess stage.
+**This is ONE outage, not nineteen decisions, and it is written once rather than once per
+panel.** Codex hit its usage limit and is walled to **2026-08-22 12:12**. Across five panels in
+a single evening it produced the identical signature every time — the echoed brief followed by
+the usage-limit error — in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 bytes.
+*A size check alone scores those as the largest answers in their panels;* `panel.sh`'s seat
+check caught each as RATE-LIMITED rather than counting the blank as agreement.
 
-**What the panel already decided, so re-firing codex is confirmation and not discovery:**
+**Every other seat answered every panel.** agy, grok, kimi, glm, deepseek and minimax each
+produced a substantive answer on all five, and both Agent seats answered where fired. So
+nothing here is waiting on Codex to be ACTIONABLE — it is waiting on Codex to be COMPLETE under
+the full-panel rule.
 
-* **`m8invpred` — DROP, unanimous.** A process observation with no code defect, and nothing
-  would ever have closed it. **Its closure is HELD behind codex** — I closed it on the
-  six-seat verdict and section H refused it as CLOSED-WHILE-HELD, correctly: *"unanimous among
-  the seats that answered"* is exactly how a six-seat verdict gets reported as a nine-seat one.
-  The **lesson has already been moved into the carrier**, so the wait costs nothing.
-* **`m437multi` first** (three packet seats) versus **`m8sarseq` first** (agy, the file-reading
-  seat) — a genuine split on ORDERING, recorded rather than voted. Note the seat-class doctrine
-  does **not** settle it: it gives the file-reading seat priority on repo FACT, and every seat
-  agrees on the facts here. What differs is whether a comment-only fix earns a round.
-* **`m437rtmp`** — all seats agree the CODE IS CORRECT and only #437's comment overstates
-  durability under `R:`. agy would drop it; the others would merge it into `m437multi` as that
-  round's documentation half. Merging is cheaper and loses nothing.
+**Two closures are blocked by this and are the only real cost:**
 
-**Action after 2026-08-22:** re-fire codex against `_scratchpad/brief_triage4.md`, record its
-answer or record explicitly that it added nothing, then close `m8invpred`.
-
-### The CODEX-held assess stages — **seven rows, one seat, one wall**
-
-`wdcflood` · `wdcnoirq` · `wdcstandby` · `idesync` · `landiskdisk` · `smnotland` · `smhang`
-
-All seven carry a `[HELD AWAITING SEAT: codex]` marker on their assess stage. **This is one
-outage, not seven decisions.** Codex hit its usage limit and is walled to **2026-08-22 12:12**;
-it produced the identical signature on three separate panels in one evening — an echoed brief
-followed by the usage-limit error, in files of 26,992 / 11,180 / 10,036 bytes. *A size check
-alone scores those as the largest answers in their panels.*
-
-**Every other seat answered.** The wdc cluster was reviewed by six scriptable seats plus both
-Agent seats, and their verdict on the question that decides the work was **unanimous (SPLIT)**,
-so nothing here is waiting on Codex to be actionable — it is waiting on Codex to be *complete*
-under the full-panel rule.
+* `m8invpred` — DROP, unanimous among the six seats that answered. I closed it and section H
+  refused as CLOSED-WHILE-HELD, correctly: *"unanimous among the seats that answered"* is how a
+  six-seat verdict gets reported as a nine-seat one. Its LESSON has already moved into the
+  carrier, so the wait costs nothing that matters.
+* `fbextrate` (three seats) and `sigunsafe` (two seats) — DROP recommended, not executed, for
+  the same reason.
 
 **This entry is not about Fable.** The queue is where a held stage is named regardless of which
-seat holds it; that is the rule section I of `precommit_check.sh` enforces, and it is the rule
-that caught these seven sitting held-but-unqueued.
+seat holds it — the rule section I of `precommit_check.sh` enforces, and the rule that caught
+these sitting held-but-unqueued in the first place.
 
 **Standing authority for proceeding meanwhile:** the owner directed *"if there is anything else
 in the matrix that can be ran by any other model other than codex; please proceed"*. Recorded,
-not silent.
+never silent.
 
-**Action after 2026-08-22:** re-fire Codex against
-`_scratchpad/brief_wdcarm.md` and `_scratchpad/brief_smharness.md`, then either record its
-answer or record explicitly that it added nothing beyond the confirmed set. A blank cell and a
-seat failure must not look alike.
+**Action after 2026-08-22:** re-fire codex against `_scratchpad/brief_wdcarm.md`,
+`brief_smharness.md`, `brief_triage4.md`, `brief_timerdomain.md` and `brief_m88k.md`; record
+its answer on each, or record explicitly that it added nothing beyond the confirmed set. **A
+blank cell and a seat failure must not look alike.** Then execute the three held drops.
+
 
 ### `selfcheckman` — regress stage — **HELD, batched**
 
@@ -85,24 +73,6 @@ One thing for the reviewer to confirm: the row's original premise line, *"ELEVEN
 have a gate-2 self-mutant, not twelve"*, is **stale** — `SM_COVERED` now lists 13 and all are
 backed by real `selfmutant_one` calls. The closure records this; please sanity-check the count
 against the tree at review time rather than against the closure note.
-
-### `rtcgate` / `rtcdet` (#429 detector) — review stage — **HELD ON CODEX ONLY**
-
-Eight of nine seats reviewed `17de78a` + `cd32ed2` and the round shipped a third pass on what
-they found. **Codex is the only missing seat**, and it is a measured quota wall rather than a
-non-answer: its 26,992-byte file is the echoed brief plus *"You've hit your usage limit … try
-again at Aug 22nd, 2026 12:12 PM"*. A size check alone would have scored it the largest answer
-in the panel.
-
-**The flagship seat DID review this round** — it is recorded on `rtcgate`, and it found six
-wrong records the round had shipped, all corrected. So this entry is not waiting on Fable; it is
-waiting on Codex, and it is written down here because the queue is where a held stage is named
-regardless of which seat it is held on.
-
-**Standing authority for the degrade:** the owner directed *"if there is anything else in the
-matrix that can be ran by any other model other than codex; please proceed"*. Recorded, not
-silent. Re-fire Codex after **2026-08-22** and either record its answer or note that it added
-nothing beyond the confirmed set.
 
 ### 1. ~~`gate3scope` (#436) — review stage~~ — **DISCHARGED 2026-08-19, round CLOSED at 9/9.**
 The ninth seat voted CLOSE and still found three MEASURED holes: `selfmutant.py` has **no
