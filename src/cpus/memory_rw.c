@@ -147,21 +147,16 @@ static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vadd
  *  for it: it fires at BITS_PER_MEMBLOCK (1 MB) granularity and its job is to stop the memcpy
  *  running off the end of a host allocation.
  *
- *  *** THAT SENTENCE SAID "one boundary in 256" AND THE NUMBER WAS WRONG -- corrected
- *  2026-08-20 after a measuring seat walked the offsets rather than reading them. ***  It is
- *  ONE BOUNDARY IN 1024: MRW_SPLIT_MASK is 0x3ff, so the split granule is 1024 bytes, and
- *  1 MB / 1024 = 1024.  The old figure came from comparing 1 MB against a 4 KB page
- *  (1048576/4096 = 256) -- the granule this split does NOT use, and the comment fifty lines
- *  above says so explicitly: "The granule the SPLIT needs is a different one."  The wrong
- *  number then propagated: a ledger row repeated "256x" as a severity argument, so ONE
- *  mis-derived constant became two records defects.
+ *  It is ONE BOUNDARY IN 1024, not 256: MRW_SPLIT_MASK is 0x3ff, so the split granule is
+ *  1024 bytes and 1 MB / 1024 = 1024.  The old "256" came from dividing 1 MB by a 4 KB page
+ *  -- a granule this split does not use, as the note above says: "The granule the SPLIT
+ *  needs is a different one."  (And per that note the real page here is 8 KB anyway.)
  *
- *  Two more properties of the memblock split, MEASURED at rung 3 rather than reasoned, and
- *  recorded here because a ledger row asserted the opposite of both:
- *    - post-#430 it can only fire on PHYSICAL accesses.  A translated 4 KB write across a
- *      1 MB boundary costs 4 translations and 4 host lookups (the PAGE split); PHYSICAL costs
- *      0 and 2 (the memblock split).  A chunk of at most one granule, granule-aligned, cannot
- *      cross 1 MB.
+ *  Two properties of the memblock split, both MEASURED:
+ *    - post-#430 it fires only on PHYSICAL accesses.  A TRANSLATED 4096-byte write across a
+ *      1 MB boundary is chunked at the 1024-byte SPLIT granule, so it costs 4 translations
+ *      and 4 host lookups and never reaches here; PHYSICAL costs 0 and 2.  A chunk of at
+ *      most one granule, granule-aligned, cannot cross 1 MB.
  *    - its head can NEVER be a device, in either version: device dispatch `goto
  *      do_return_ok`s first.  Measured with a device straddling the memblock boundary --
  *      one device call, offset 0xffe, len 4, zero host lookups.

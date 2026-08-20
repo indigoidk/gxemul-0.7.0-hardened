@@ -7026,6 +7026,68 @@
      "note": "*** REPRODUCED AT RUNG 3, AND MY OWN PREMISE FOR THE TASK WAS WRONG. ***  I briefed the measure seat that NO rig reaches the 8253 -- only algor/cobalt/evbmips/iyonix via bus_isa -- and that a rung-4 witness therefore almost certainly did not exist. HALF FALSE, and the false half is what made rung 3 reachable. `bus_isa_init` has SIX callers outside src/machines/: bus_pci.c:476 and :1060, dev_eagle.c:160,172, dev_lca.c:376, dev_prep.c:80. My grep looked only at src/machines/ and bus_*.c and I reported the subset as the whole. **cats** reaches the 8253 through machine_cats.c -> dev_footbridge.c:730 (bus_pci_add \"ali_m1543\") -> bus_pci.c:459/476, at isa_portbase 0x7c000000. Verified here independently.\n\nTHE WITNESS: a cold-debugger probe on UNMODIFIED `-E cats`, the same mechanics as footbridge_sites_probe.py. Pre-fix and post-fix binaries from the same tree, same script:\n  C1 liveness            0x11223344 both     RAM through the same decode\n  A1 device signature    0xAA both           see below\n  T1 negative control    halts at paddr=0x0c000043, MMU-on cannot reach it\n  D0 count 0 -> hz       0 Hz  ->  18 Hz     the device's own report\n  G0 guest-visible       IRR 0x0 -> 0x1      after a 1.9 s free-run\n  D1 positive control    count 4608 -> 259 Hz, IRR=0x1, identical both ways\nAll four controls green in BOTH runs; only the two symptom rows move.\n\nTHE DEVICE SIGNATURE IS A VALUE RAM CANNOT PRODUCE, and it was designed against the exact trap that ate the footbridge probe's first draft. The guest writes 0xAA then 0x55 to the SAME address in 16-bit mode, writes the MODE register (a different address), then reads back and gets 0xAA -- the byte from two writes ago. RAM returns 0x55. Nonzero deliberately, because 0x0 is what an ABSENT device looks like.\n\nTWO CAVEATS THE SEAT OWNED RATHER THAN HID: G0/G1 use a WALL-CLOCK window (1.9 s against a 55 ms correct period, ~34 chances), which is why the post-fix green is the settlement and not the window size; and its first T1 draft reported FAIL through a string-equality bug in its own script, which it found and fixed. All 27 instruction encodings were checked against the emulator's own disassembler before use -- the hand-assembled-encoding trap this project has hit four times.\n\nREACHABILITY, MEASURED: no guest in this tree programs count 0. Every PIT write in _guest-src-openbsd22/sys/ is TIMER_DIV(x) (never 0) or 0xff/0xff, and no rig image boots an 8253 machine. A recollection that Linux's pit_shutdown() writes 0,0 was flagged RECALLED, UNVERIFIED rather than cited -- the right handling. *** BUT FINDING `pitflip` BELOW MANUFACTURES COUNT 0 FROM A GUEST THAT NEVER ASKS FOR IT, which changes the reachability picture entirely. ***\n\nMAPPINGS, measured not read: cats and netwinder 0x7c000040; malta/maltabe 0x18000040; cobalt 0x10000040; iyonix 0x90000040; absent on prep, mvmeppc, algor, arc.\n\nTHE FIX is one line -- hz = (int)(I8253_TIMER_FREQ / 65536.0 + 0.5) -> 18 -- and d->hz[] is read only at :133/137/140, all inside the MSB arm, so the blast radius is that arm. *** DO NOT GENERALISE BY ANALOGY: dev_rtc.c:129 and dev_mc146818.c:409 look identical and are CORRECT -- for those devices zero genuinely means 'off', and dev_rtc.c's comment records a prior round reasoning that through. The 8254 is the opposite case. *** Minor: int hz[3] rounds 18.2065 to 18 (-1.1%) while timer_add takes a double.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this panel. THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this panel. THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this panel. THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "8253/8254 PIT CLUSTER: five MEASURED defects at one site, brought to the panel with the scope question promoted to Q0 -- the brief did not ask whether they are real (a rung-3 reproduction had settled that) but WHICH IS THE ROUND and how many may travel together.\n\n*** Q0 ANSWERED UNANIMOUSLY: NO MERGES. FIVE SEPARATE ROUNDS. ***  agy: 'split pitflip, pitlatch, pitlsb and isaorder into separate candidate rounds'. glm: 'none merge under the one-fix-design test'. deepseek: 'no merges'. minimax sequenced them rather than combining. **This OVERRULES the measure seat's own suggestion that pitflip was 'the natural companion' to i8253zero** -- it argued same-device and same-semantic-class (counter-load byte routing), and the panel applied the remaining prongs and said no. The measuring seat found the defects; the panel scoped them, and the two jobs came apart cleanly.\n\nWHAT IS FIRST -- pitlatch, 3 to 1:\n  pitlatch    deepseek, glm, minimax. glm's clause is the decisive one: 'a real guest reaches it in microtime()'. That is this project's ordering rule applied exactly -- severity and reachability, never rung, never vote -- and pitlatch is the only one of the five demonstrated to be on a path a shipped guest actually takes (_guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209).\n  i8253zero   agy alone, as a standalone fix round.\nMINIMAX GAVE THE MOST REASONED SEQUENCE and it is worth keeping: pitlatch, then pitflip, then **i8253zero THIRD 'once pitflip closes its door'** -- because pitflip is what MANUFACTURES count 0 from a guest that never asks for it, so fixing pitflip removes i8253zero's main reachability route and lowers its rank. That is a dependency between rounds, not a merge.\n\nDROP isaorder AS A ROUND -- deepseek and glm ('latent, unmeasured, different file'); minimax puts it 'filed-only pending a reproduction', which is the same disposition in gentler words. It is the one item recorded at READ, NOT MEASURED, and the panel treated that grade as the reason. NOT EXECUTED: codex-held.\n\nSeats: 6 of 7 (agy 17.7 KB, grok 11.2 KB, kimi 89.0 KB, glm 10.1 KB, deepseek 4.7 KB, minimax 12.7 KB). Codex ECHO-ONLY, tenth consecutive wall, arithmetic again: '19649b = brief 18961b + 688b'.\n\nFOR THIS ROW: THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this panel. THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this panel. THIRD by the panel's most reasoned sequence, not first -- and the reason is a dependency worth recording: pitflip MANUFACTURES count 0 from a guest that never asks for it, so closing pitflip removes this row's main reachability route. agy alone would do it first, as a standalone round. It keeps its rung-3 witness either way.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, tenth consecutive wall, proven arithmetically: '19649b = brief 18961b + 688b'. Walled to Aug 22. Recorded by name. [panel_20260820_093038]"
     }
    ]
   },
@@ -10876,6 +10938,68 @@
      "note": "MEASURED at rung 3. dev_8253.c:170-171 CLEARS I8253_TIMER_LSB and nothing ever sets it back; a real 8254's flip-flop ALTERNATES on every access. Two full LSB/MSB pairs after one mode write produced THREE recomputes -- 97 Hz, **0 Hz**, 97 Hz -- where hardware does two. TWO CONSEQUENCES, and the first is what makes it matter: it transiently drives the counter to ZERO, i.e. straight into the i8253zero defect, FROM A GUEST THAT NEVER PROGRAMS COUNT 0. That inverts the reachability finding on i8253zero, where no available guest asks for count 0 directly. Second: if the second pair's LSB is nonzero it is SILENTLY LOST -- intending 0x3055 the device holds 0x3000. Same device and the same semantic class as i8253zero (counter-load byte routing), so it is the natural companion if a round takes a second site.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this panel. SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this panel. SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this panel. SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "8253/8254 PIT CLUSTER: five MEASURED defects at one site, brought to the panel with the scope question promoted to Q0 -- the brief did not ask whether they are real (a rung-3 reproduction had settled that) but WHICH IS THE ROUND and how many may travel together.\n\n*** Q0 ANSWERED UNANIMOUSLY: NO MERGES. FIVE SEPARATE ROUNDS. ***  agy: 'split pitflip, pitlatch, pitlsb and isaorder into separate candidate rounds'. glm: 'none merge under the one-fix-design test'. deepseek: 'no merges'. minimax sequenced them rather than combining. **This OVERRULES the measure seat's own suggestion that pitflip was 'the natural companion' to i8253zero** -- it argued same-device and same-semantic-class (counter-load byte routing), and the panel applied the remaining prongs and said no. The measuring seat found the defects; the panel scoped them, and the two jobs came apart cleanly.\n\nWHAT IS FIRST -- pitlatch, 3 to 1:\n  pitlatch    deepseek, glm, minimax. glm's clause is the decisive one: 'a real guest reaches it in microtime()'. That is this project's ordering rule applied exactly -- severity and reachability, never rung, never vote -- and pitlatch is the only one of the five demonstrated to be on a path a shipped guest actually takes (_guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209).\n  i8253zero   agy alone, as a standalone fix round.\nMINIMAX GAVE THE MOST REASONED SEQUENCE and it is worth keeping: pitlatch, then pitflip, then **i8253zero THIRD 'once pitflip closes its door'** -- because pitflip is what MANUFACTURES count 0 from a guest that never asks for it, so fixing pitflip removes i8253zero's main reachability route and lowers its rank. That is a dependency between rounds, not a merge.\n\nDROP isaorder AS A ROUND -- deepseek and glm ('latent, unmeasured, different file'); minimax puts it 'filed-only pending a reproduction', which is the same disposition in gentler words. It is the one item recorded at READ, NOT MEASURED, and the panel treated that grade as the reason. NOT EXECUTED: codex-held.\n\nSeats: 6 of 7 (agy 17.7 KB, grok 11.2 KB, kimi 89.0 KB, glm 10.1 KB, deepseek 4.7 KB, minimax 12.7 KB). Codex ECHO-ONLY, tenth consecutive wall, arithmetic again: '19649b = brief 18961b + 688b'.\n\nFOR THIS ROW: SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this panel. SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this panel. SECOND in the panel's sequence, and NOT merged with i8253zero despite the measure seat proposing exactly that. It is the row that makes i8253zero reachable at all, which is why it precedes it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, tenth consecutive wall, proven arithmetically: '19649b = brief 18961b + 688b'. Walled to Aug 22. Recorded by name. [panel_20260820_093038]"
     }
    ]
   },
@@ -10899,6 +11023,68 @@
      "note": "MEASURED at rung 3. Writing mode 0x00 (the counter-latch command) and then reading the counter falls to dev_8253.c's `default:` arm, which emits fatal(\"[ 8253: huh? reading from counter 0 ... ]\") and returns 0. That is the STANDARD on-the-fly counter read, not an error. *** A REAL GUEST IN THIS TREE DOES EXACTLY THIS: _guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209, in microtime(). *** So a guest asking the time gets 0 and an unlatched host log line -- which is also an instance of the `floodclass` shape filed earlier. The measure seat ranks this at or above i8253zero on severity-and-reachability, because an ordinary driver reaches it.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this panel. *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this panel. *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this panel. *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "8253/8254 PIT CLUSTER: five MEASURED defects at one site, brought to the panel with the scope question promoted to Q0 -- the brief did not ask whether they are real (a rung-3 reproduction had settled that) but WHICH IS THE ROUND and how many may travel together.\n\n*** Q0 ANSWERED UNANIMOUSLY: NO MERGES. FIVE SEPARATE ROUNDS. ***  agy: 'split pitflip, pitlatch, pitlsb and isaorder into separate candidate rounds'. glm: 'none merge under the one-fix-design test'. deepseek: 'no merges'. minimax sequenced them rather than combining. **This OVERRULES the measure seat's own suggestion that pitflip was 'the natural companion' to i8253zero** -- it argued same-device and same-semantic-class (counter-load byte routing), and the panel applied the remaining prongs and said no. The measuring seat found the defects; the panel scoped them, and the two jobs came apart cleanly.\n\nWHAT IS FIRST -- pitlatch, 3 to 1:\n  pitlatch    deepseek, glm, minimax. glm's clause is the decisive one: 'a real guest reaches it in microtime()'. That is this project's ordering rule applied exactly -- severity and reachability, never rung, never vote -- and pitlatch is the only one of the five demonstrated to be on a path a shipped guest actually takes (_guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209).\n  i8253zero   agy alone, as a standalone fix round.\nMINIMAX GAVE THE MOST REASONED SEQUENCE and it is worth keeping: pitlatch, then pitflip, then **i8253zero THIRD 'once pitflip closes its door'** -- because pitflip is what MANUFACTURES count 0 from a guest that never asks for it, so fixing pitflip removes i8253zero's main reachability route and lowers its rank. That is a dependency between rounds, not a merge.\n\nDROP isaorder AS A ROUND -- deepseek and glm ('latent, unmeasured, different file'); minimax puts it 'filed-only pending a reproduction', which is the same disposition in gentler words. It is the one item recorded at READ, NOT MEASURED, and the panel treated that grade as the reason. NOT EXECUTED: codex-held.\n\nSeats: 6 of 7 (agy 17.7 KB, grok 11.2 KB, kimi 89.0 KB, glm 10.1 KB, deepseek 4.7 KB, minimax 12.7 KB). Codex ECHO-ONLY, tenth consecutive wall, arithmetic again: '19649b = brief 18961b + 688b'.\n\nFOR THIS ROW: *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this panel. *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this panel. *** THE ROUND, 3 to 1. ***  The only one of the five demonstrated on a path a shipped guest actually takes: OpenBSD's microtime() issues the counter-latch command, and dev_8253.c treats it as an error, returns 0, and emits an unlatched fatal(). Ranked first on severity-and-reachability, not on count.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, tenth consecutive wall, proven arithmetically: '19649b = brief 18961b + 688b'. Walled to Aug 22. Recorded by name. [panel_20260820_093038]"
     }
    ]
   },
@@ -10922,6 +11108,68 @@
      "note": "MEASURED at rung 3. A legal single-byte counter load in LSB-only mode produces ZERO hz recomputes and timer0 is never created or retimed; dev_8253.c:117-121 breaks before the hz block. The IDENTICAL byte through MSB-only gives `counter 0 set to 13312 (90 Hz)`. The 16-bit arm needs nothing -- it routes its recompute through MSB, correctly -- so this is a DIFFERENT defect from i8253zero, in a different arm, and must not be folded into it.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this panel. SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this panel. SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this panel. SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "8253/8254 PIT CLUSTER: five MEASURED defects at one site, brought to the panel with the scope question promoted to Q0 -- the brief did not ask whether they are real (a rung-3 reproduction had settled that) but WHICH IS THE ROUND and how many may travel together.\n\n*** Q0 ANSWERED UNANIMOUSLY: NO MERGES. FIVE SEPARATE ROUNDS. ***  agy: 'split pitflip, pitlatch, pitlsb and isaorder into separate candidate rounds'. glm: 'none merge under the one-fix-design test'. deepseek: 'no merges'. minimax sequenced them rather than combining. **This OVERRULES the measure seat's own suggestion that pitflip was 'the natural companion' to i8253zero** -- it argued same-device and same-semantic-class (counter-load byte routing), and the panel applied the remaining prongs and said no. The measuring seat found the defects; the panel scoped them, and the two jobs came apart cleanly.\n\nWHAT IS FIRST -- pitlatch, 3 to 1:\n  pitlatch    deepseek, glm, minimax. glm's clause is the decisive one: 'a real guest reaches it in microtime()'. That is this project's ordering rule applied exactly -- severity and reachability, never rung, never vote -- and pitlatch is the only one of the five demonstrated to be on a path a shipped guest actually takes (_guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209).\n  i8253zero   agy alone, as a standalone fix round.\nMINIMAX GAVE THE MOST REASONED SEQUENCE and it is worth keeping: pitlatch, then pitflip, then **i8253zero THIRD 'once pitflip closes its door'** -- because pitflip is what MANUFACTURES count 0 from a guest that never asks for it, so fixing pitflip removes i8253zero's main reachability route and lowers its rank. That is a dependency between rounds, not a merge.\n\nDROP isaorder AS A ROUND -- deepseek and glm ('latent, unmeasured, different file'); minimax puts it 'filed-only pending a reproduction', which is the same disposition in gentler words. It is the one item recorded at READ, NOT MEASURED, and the panel treated that grade as the reason. NOT EXECUTED: codex-held.\n\nSeats: 6 of 7 (agy 17.7 KB, grok 11.2 KB, kimi 89.0 KB, glm 10.1 KB, deepseek 4.7 KB, minimax 12.7 KB). Codex ECHO-ONLY, tenth consecutive wall, arithmetic again: '19649b = brief 18961b + 688b'.\n\nFOR THIS ROW: SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this panel. SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this panel. SPLIT OUT, separate round. A different arm (LSB-only recomputes nothing); no seat argued to fold it and no seat prioritised it.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, tenth consecutive wall, proven arithmetically: '19649b = brief 18961b + 688b'. Walled to Aug 22. Recorded by name. [panel_20260820_093038]"
     }
    ]
   },
@@ -10945,6 +11193,68 @@
      "note": "READ, NOT MEASURED, and recorded at that grade deliberately. bus_isa.c:224-225 copies machine->isa_pic_data.pending_timer_interrupts at line 225, but dev_8253.c:248 -- the ONLY writer of that field -- runs from the device_add at line 244. machine.c's memset(m, 0, ...) means the field is always NULL at the copy, so the timer-interrupt ack at bus_isa.c:134-138 can never run. LATENT TODAY only because nothing ever deasserts isa.0. The same shape sits at dev_v3.c:298. An ordering bug of this kind is exactly what a construction-time (rung 2) witness is for, since it is a defect in what construction itself does.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this panel. DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this panel. DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this panel. DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "8253/8254 PIT CLUSTER: five MEASURED defects at one site, brought to the panel with the scope question promoted to Q0 -- the brief did not ask whether they are real (a rung-3 reproduction had settled that) but WHICH IS THE ROUND and how many may travel together.\n\n*** Q0 ANSWERED UNANIMOUSLY: NO MERGES. FIVE SEPARATE ROUNDS. ***  agy: 'split pitflip, pitlatch, pitlsb and isaorder into separate candidate rounds'. glm: 'none merge under the one-fix-design test'. deepseek: 'no merges'. minimax sequenced them rather than combining. **This OVERRULES the measure seat's own suggestion that pitflip was 'the natural companion' to i8253zero** -- it argued same-device and same-semantic-class (counter-load byte routing), and the panel applied the remaining prongs and said no. The measuring seat found the defects; the panel scoped them, and the two jobs came apart cleanly.\n\nWHAT IS FIRST -- pitlatch, 3 to 1:\n  pitlatch    deepseek, glm, minimax. glm's clause is the decisive one: 'a real guest reaches it in microtime()'. That is this project's ordering rule applied exactly -- severity and reachability, never rung, never vote -- and pitlatch is the only one of the five demonstrated to be on a path a shipped guest actually takes (_guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209).\n  i8253zero   agy alone, as a standalone fix round.\nMINIMAX GAVE THE MOST REASONED SEQUENCE and it is worth keeping: pitlatch, then pitflip, then **i8253zero THIRD 'once pitflip closes its door'** -- because pitflip is what MANUFACTURES count 0 from a guest that never asks for it, so fixing pitflip removes i8253zero's main reachability route and lowers its rank. That is a dependency between rounds, not a merge.\n\nDROP isaorder AS A ROUND -- deepseek and glm ('latent, unmeasured, different file'); minimax puts it 'filed-only pending a reproduction', which is the same disposition in gentler words. It is the one item recorded at READ, NOT MEASURED, and the panel treated that grade as the reason. NOT EXECUTED: codex-held.\n\nSeats: 6 of 7 (agy 17.7 KB, grok 11.2 KB, kimi 89.0 KB, glm 10.1 KB, deepseek 4.7 KB, minimax 12.7 KB). Codex ECHO-ONLY, tenth consecutive wall, arithmetic again: '19649b = brief 18961b + 688b'.\n\nFOR THIS ROW: DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this panel. DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this panel. DROP AS A ROUND -- two seats explicitly, a third as 'filed-only pending a reproduction'. It is the one item filed at READ, NOT MEASURED, and the panel treated that grade as the reason: latent, unmeasured, different file. NOT EXECUTED: codex-held. If it survives, it needs its own reproduction first -- an ordering bug in what construction itself does is what a rung-2 witness is for.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260820_093038/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, tenth consecutive wall, proven arithmetically: '19649b = brief 18961b + 688b'. Walled to Aug 22. Recorded by name. [panel_20260820_093038]"
     }
    ]
   }
