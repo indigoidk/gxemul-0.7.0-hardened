@@ -4276,7 +4276,7 @@ eight footbridge sites are **one candidate round, not eight**.
   declines to sync an overlay's bitmap after its data fsync fails. Deleting that `continue` is
   the one mutant the shipped detector does not catch: the measure seat verified a row CAN catch
   it by injecting an fsync failure and asserting the bitmap fd is ABSENT from the trace
-  (shipped syncs fds `[4 5 6]`; the mutant syncs `[4 5 6 7]`). One row, not yet built.
+  (shipped syncs fds `[4 5 6]`; the mutant syncs `[4 5 6 7]`). **BUILT AND SHIPPED in `e051fc5`, and it took TWO overlays** — with one, `continue` deleted / `break` / `return 0` all trace identically. It ran green in the battery at `6014b7e`. *(This line read "One row, not yet built" for a day after the row existed — the dated-tail-carries-no-resolution-markers class, caught by the regress adjudication.)*
 - **`m437multi` — a spurious CHECK CONDITION on a multi-overlay disk.** `fwrite_helper` writes
   only to the LAST overlay, so earlier ones hold no guest data — yet a failed fsync on overlay 0
   fails the whole command with sense 3-0c-00 while every guest byte is durable. Conservative,

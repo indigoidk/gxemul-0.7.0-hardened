@@ -92,6 +92,10 @@ struct luna88k_data {
 	uint32_t	interrupt_enable[MAX_CPUS];
 	uint32_t	interrupt_status;
 	uint32_t	software_interrupt_status[MAX_CPUS];
+	/*  #438: latched PER CPU, not per instance -- a per-instance latch
+	    demotes the second register's first report, which is the
+	    "1 of 4 kinds reported" hazard #435's own comment records.  */
+	int		intmask_lowbits_reported[MAX_CPUS];
 
 	/*  Timer stuff  */
 	struct timer	*timer;
@@ -812,8 +816,44 @@ DEVICE_ACCESS(luna88k)
 		cpunr = (addr - INT_ST_MASK0) / 4;
 		if (writeflag == MEM_WRITE) {
 			if ((idata & 0x03ffffff) != 0x00000000) {
-				fatal("[ TODO: luna88k interrupts, idata = 0x%08x, what to do with low bits? ]\n", (uint32_t)idata);
-				exit(1);
+				/*
+				 *  #438: was fatal() + exit(1) -- an ordinary guest
+				 *  store to INT_ST_MASK0-3 with any of bits 25..0
+				 *  set ended the emulator process.
+				 *
+				 *  STORE AS-IS, and the reason is not that the low
+				 *  bits are dead.  They are not: interrupt_enable[]
+				 *  has two readers, and while the interrupt path can
+				 *  only ever see bits 26..31, the read path below
+				 *  echoes bits 25..8 back at odata[17..0].  Store-as-is
+				 *  drops nothing BECAUSE IT STORES EVERYTHING, and the
+				 *  echo lands outside both fields this file's own
+				 *  comment says a driver reads (31..29, 23..18).
+				 *
+				 *  Masking would invent a hardware behaviour the tree
+				 *  has no source for; INT_SET_LV0..LV7 are defined and
+				 *  never read anywhere, the TIMER_EXTERNAL trap again.
+				 *  And returning without storing would drop the LEGAL
+				 *  prefix in 31..26 too -- a real SPL change -- which
+				 *  the guest can read back stale at odata[23..18].
+				 *
+				 *  The latch is MANDATORY as a capability bound, not
+				 *  because a boot pays it: a real boot-to-login makes
+				 *  ZERO guarded writes, but the register takes 29,960
+				 *  writes/s, so an unlatched complaint is guest-drivable
+				 *  at ~2.3 MB/s.
+				 */
+				if (!d->intmask_lowbits_reported[cpunr]) {
+					d->intmask_lowbits_reported[cpunr] = 1;
+					fatal("[ luna88k: INT_ST_MASK%i: unimplemented "
+					    "low bits in write 0x%08x; stored as-is "
+					    "(reported once per cpu) ]\n",
+					    cpunr, (uint32_t)idata);
+				} else {
+					debug("[ luna88k: INT_ST_MASK%i: unimplemented "
+					    "low bits in write 0x%08x ]\n",
+					    cpunr, (uint32_t)idata);
+				}
 			}
 
 			d->interrupt_enable[cpunr] = idata;

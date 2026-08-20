@@ -16,8 +16,15 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
-### 1. `gate3scope` (#436) — review stage, pass 2 on the diff
-**Status: BLOCKING the round's closure.** Eight of nine seats have answered the *research* stage
+### 1. ~~`gate3scope` (#436) — review stage~~ — **DISCHARGED 2026-08-19, round CLOSED at 9/9.**
+The ninth seat voted CLOSE and still found three MEASURED holes: `selfmutant.py` has **no
+timeout**, so a hanging mutant emits no verdict token at all and wedges gate 2; the helper never
+verifies the mutation LANDED in the tree it compiled (which unifies all three recorded
+extra-flags hazards as one missing postcondition); and a malformed or absent `SM_EXEMPT` date
+never expires, silently. Filed as `smhang`, `smnotland`, `smdatefmt`.
+
+*Original entry, kept for the reasoning:*
+**Status: was BLOCKING the round's closure.** Eight of nine seats have answered the *research* stage
 and the implementation is done and gated, but the **review stage has not run at all**. Under the
 full-panel rule this round cannot close until all nine review it, Fable included.
 
@@ -31,15 +38,28 @@ What Fable specifically should attack, given what the other seats already found:
   which counts a crash as a detection (filed `#55`). Is the new helper's contract airtight, or does
   it have its own version of that bug?
 
-### 2. Regression review of the next full battery
+### 2. ~~Regression review of the next full battery~~ — **DISCHARGED 2026-08-19.**
+Adjudicated `verdict_20260819_135703` at `6014b7e` (REGRESS_PASS 16/16, 0 skipped). It
+**refuted the main loop's own suspicion using the battery's own log** — gate 2 does assert the
+guest-visible CHECK CONDITION, fault-injected through the real `diskimage_scsicommand()` — and
+corrected the framing in both directions: the battery is not what proves the harness commits
+were harmless (git is), but it IS the first end-to-end execution of their product. Named three
+vacuity paths, the sharpest being that **#437's new code has never run under ASan**, because
+gate 9 is a construction sweep. One cheap condition: run gate 3 once at HEAD, per
+`selftest_mutation.sh`'s own header rule.
+
+*Original entry:*
 **FABLE-ONLY by directive.** The last one (R1–R9, three green batteries) is complete and committed.
 The next battery — scheduled **23 Aug 18:00**, or any manual run before it — needs its own Fable
 adjudication. It should specifically re-examine whether #436 changed what a green battery licenses:
 the honest answer is probably *"a little, in one narrow way"*, and that is worth saying precisely.
 
-### 3. `selfmutant6` — assess stage, when the round is taken
-Six differentials still have no failability control (`ieee_store` genuinely covered by gate 3; the
-other five are real debt). When that round starts it needs a full nine-seat assess stage.
+### 3. ~~`selfmutant6`~~ — **DISCHARGED 2026-08-19.** All five controls built; `SM_EXEMPT` is `ieee_store:2099-01-01` alone, 11 days before the deadline. Kept struck-through rather than deleted so the queue shows what was done, not only what is left.
+
+*Original entry, now false and kept only as the record of what was owed:* six differentials had
+no failability control. Five were built on 2026-08-19; the sixth (`ieee_store`) is covered by
+gate 3's weaker form and carries a far-future date — see `ieeeupgrade`, which argues that date
+entrenches the weakest control on the largest differential.
 
 ### 4. `m8online` (`9494c6a`) — regression review never done, found mechanically
 **FABLE-ONLY, and this entry is the first thing `check_fable_queue.py` caught.** The row is closed,
