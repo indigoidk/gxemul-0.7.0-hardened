@@ -38,6 +38,47 @@ in commit messages (keep `Co-Authored-By`).
 seat that was deliberately not fired is a different thing again — conflating the two is how a
 two-seat review gets reported as a panel. State both, by name, in the round record.
 
+*** CURRENT AS OF 2026-08-19 ~23:0x — READ THIS BLOCK BEFORE THE TABLE BELOW IT, which is
+the 08-14 snapshot and is kept for its reasoning, not its status. ***
+
+**EIGHT OF NINE ANSWERING. The only seat down is CODEX — the one this table calls "USED, every
+pass".** Two full panels ran today (rtcdet review, smharness assess) and every seat except codex
+produced a substantive answer:
+
+| seat | 2026-08-19 | what it did today |
+|---|---|---|
+| **Codex 5.6-SOL** | *** DOWN — quota, walled to Aug 22 12:12 *** | See below; this is the one that inverted. |
+| **Opus 5** (Agent) | ALIVE, and again the highest-yield seat | Found the cheapest escape on record: `TIMER_MAX_FREQUENCY` -> `TIMER_MAX_CATCHUP`, ONE identifier, passing 12 of 12 rows. It COMPILED AND MEASURED, as usual. |
+| **Fable 5** (Agent) | ALIVE — liveness token returned, twice in one session | Found SIX wrong records the round had shipped. One of its own calls was then overturned by the preprocessor; see the note on measurement below. |
+| **Kimi 3** | ALIVE — 60 KB | Found the clamp escape INDEPENDENTLY and scoped it exactly. Gave no VERDICT line despite the brief asking for one — a FORMAT miss, recorded as such, not a seat failure. |
+| **agy 3.7** | ALIVE — 15.7 KB | Named the clamp-value gap. |
+| **Grok 4.6** | ALIVE — 2.5 KB | Short but substantive; named three gaps in one line, two of which measured true. |
+| **glm-5.2** | ALIVE — 8.2 KB | Packet-fed, correct on the defect and honest about scope. |
+| **deepseek-v4-pro** | ALIVE — 3.6 KB | The only dissenting verdict, and its headline was wrong for a reason worth keeping. |
+| **minimax-m3** | ALIVE — 10.9 KB | The inlined-brief rule continues to hold. |
+
+*** THE SEAT MOST RELIED ON IS THE ONE THAT FAILED, AND IT FAILED IN THE SHAPE THIS FILE WARNS
+ABOUT. ***  Codex's panel file was **26,992 bytes — the LARGEST in the panel** — and it was the
+ECHOED BRIEF followed by "You've hit your usage limit ... try again at Aug 22nd, 2026 12:12 PM",
+twice. A size check alone scores that the best answer of the nine. `panel.sh`'s seat check caught
+it as RATE-LIMITED. **Verify the CONTENT, never the size; the failure mode is a big file.**
+
+**A SHORT ANSWER AND A DEAD SEAT ARE NOT THE SAME THING.** Grok's file was 119 bytes when first
+sampled — opening line only, "I'll read the full offloaded packet first" — and looked exactly
+like the minimax stall this file spent days mis-attributing. It was MID-ANSWER. Sample twice
+before calling a seat dead; the size check cannot distinguish slow from dead.
+
+**SEAT RANK DOES NOT SETTLE FACT — measured twice today, in both directions.** The flagship seat
+corrected a false "strict superset" claim about header closures and its correction was ALSO
+false; `gcc -E -H` settled it (two exceptions, not the one either of us named). And a reading
+seat's claim that production `fatal()` exits — which would have made a shipped correction into
+guest-reachable process death — was refuted by opening `debugmsg.c:384`, where `fatal()` is
+byte-for-byte `debug()`. **Both were settled in under two minutes by looking.**
+
+---
+
+*The 2026-08-14 snapshot follows, kept because the reasoning outlived the statuses:*
+
 | seat | status (2026-08-14) | evidence |
 |---|---|---|
 | **Codex 5.6-SOL** (xhigh) | **USED, every pass** | answered 400–600 KB each time. *But on the #416 pass 2 it stated plainly it COULD NOT EXECUTE (read-only session) — a READING, not a measurement. Its mutants were predictions; the measure seat settled them.* |
