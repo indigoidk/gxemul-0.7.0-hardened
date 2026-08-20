@@ -1033,16 +1033,51 @@ check "selfmutant manifest: every COVERED stem has a real selfmutant_one call" \
 #  so the pin actively obstructed the thing its own name claimed to want, and the name embedded
 #  the constant so a legitimate shrink would print "the exemption list is 6 ...   5".  A count
 #  pins; a date expires.  Shrinking is now green by construction: there is nothing to retune.
-sm_expired=""
-_today=$(date +%Y-%m-%d)
-for _e in $SM_EXEMPT; do
-    case "${_e##*:}" in
-        "") ;;
-        *) [ "${_e##*:}" \< "$_today" ] && sm_expired="$sm_expired ${_e%%:*}" ;;
-    esac
-done
-check "selfmutant manifest: no exemption is past its dated deadline" \
-      "${sm_expired:-none}" "none"
+#  *** A MALFORMED EXEMPTION DATE NEVER EXPIRED, AND IT STILL SATISFIED THE COVERAGE CHECK.
+#  ***  REPRODUCED against the shipped loop, with both controls green (a well-formed past date
+#  DID expire; a well-formed future one did not):
+#
+#      ieee_store            no date at all   -> never expires
+#      ieee_store:2026-8-1   unpadded, 19 days past -> never expires
+#      ieee_store:garbage    not a date       -> never expires
+#
+#  MECHANISM.  `${e##*:}` strips to the LAST colon -- and with NO colon it strips nothing and
+#  returns the whole entry, so `ieee_store` was compared as a date: 's' > '2', false, unexpired.
+#  The `""` arm only catches `stem:` with an empty tail, which is the one malformed case that
+#  was handled.  For the unpadded form the compare is worse than useless: `2026-8-1` against
+#  `2026-08-20` matches through `2026-`, then '8' > '0', so a date 19 days PAST sorts as
+#  FUTURE.  And the coverage check keys on `${e%%:*}` -- the stem -- so the exemption is
+#  honoured throughout.  The teeth of the exempt arm depended on a format NOTHING VALIDATED.
+#
+#  THE FIX IS TO REFUSE, NOT TO GUESS.  A malformed entry is now RED and names itself; it is
+#  never silently treated as unexpired.  A `case` glob rather than a regex, because this runs
+#  under POSIX sh and `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]` needs no external process.
+#
+#  ONE HELPER FOR BOTH MANIFESTS.  SM_EXEMPT and SC_EXEMPT carried byte-identical loops a few
+#  hundred lines apart, so a fix to one would have left the other -- which is this project's
+#  "grep for the siblings before calling it fixed" rule, and the reason both are converted
+#  here in one edit.
+exempt_expired () {          # exempt_expired <today> <entries...>
+    local today="$1"; shift
+    local out="" e d
+    for e in "$@"; do
+        case "$e" in
+            *:*) ;;
+            *) out="$out $e(NO-DATE)"; continue ;;
+        esac
+        d=${e##*:}
+        case "$d" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+            *) out="$out ${e%%:*}(BAD-DATE:${d:-empty})"; continue ;;
+        esac
+        [ "$d" \< "$today" ] && out="$out ${e%%:*}"
+    done
+    printf '%s' "${out:-none}"
+}
+
+sm_expired=$(exempt_expired "$(date +%Y-%m-%d)" $SM_EXEMPT)
+check "selfmutant manifest: no exemption is past its dated deadline OR malformed" \
+      "$sm_expired" "none"
 
 TMUBIN=$LOGDIR/diff_sh4_tmu
 TMULOG=$LOGDIR/diff_sh4_tmu.log
@@ -1676,16 +1711,10 @@ check "SELFCHECK manifest: every COVERED stem has a real sentinel block" \
 #  DATED ENTRIES, NOT A COUNT -- the selfmutant list learned this the hard way: `wc -w == 6`
 #  under a row named "shrinking not growing" made SHRINKING IT RED.  A count pins; a date
 #  expires, and shrinking is green by construction.
-sc_expired=""
-_sctoday=$(date +%Y-%m-%d)
-for _e in $SC_EXEMPT; do
-    case "${_e##*:}" in
-        "") ;;
-        *) [ "${_e##*:}" \< "$_sctoday" ] && sc_expired="$sc_expired ${_e%%:*}" ;;
-    esac
-done
-check "SELFCHECK manifest: no exemption is past its dated deadline" \
-      "${sc_expired:-none}" "none"
+#  The SM manifest's twin, and it carried the identical defect -- see exempt_expired() above.
+sc_expired=$(exempt_expired "$(date +%Y-%m-%d)" $SC_EXEMPT)
+check "SELFCHECK manifest: no exemption is past its dated deadline OR malformed" \
+      "$sc_expired" "none"
 
 #  THE G -- and it is not made redundant by the H above.  The H proves the block EXISTS in the
 #  source; this proves it RAN, which is a different failure: a block behind a dead #ifdef, a
