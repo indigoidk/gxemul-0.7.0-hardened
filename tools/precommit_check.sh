@@ -150,6 +150,34 @@ else
 	printf '%s\n' "$out" | tail -n +2 | sed 's/^/          /'
 fi
 
+#  ---- N ---------------------------------------------------------------------------
+#  A row that MEASURES A RESOURCE is only as good as the optimisation it pins.
+#  diff_memory_rw.c asserts "the split is a loop, not recursion" by measuring stack growth --
+#  and gcc 15.2.1 eliminates the tail call at -O2, so the recursion mutant measured 96 bytes
+#  and THE ROW PASSED UNDER THE EXACT DEFECT IT EXISTED TO CATCH.  One flag makes it real:
+#  loop 0 bytes, recursion 1,572,768.
+#
+#  Where `constblind` is a row following the CONSTANT, this is a row following the COMPILER.
+#  The ledger asked for an AUDIT of every other resource-measuring row; the audit was done and
+#  its answer is "memory_rw is the only one" -- but there were SEVEN differentials at the last
+#  such audit and there are THIRTEEN now, and a five-seat panel voted to drop a row this week
+#  on the strength of a stale audit sentence.  An audit is a claim with a shelf life.
+#
+#  HARD, because the baseline is clean: exactly one differential measures stack and it is
+#  pinned.  The check reports its own blindness on every run -- it knows the stack-watermark
+#  idiom ONLY, not "measures a resource" in general.
+say ""; say "N. resource-measuring differentials pin their optimisation"
+OPTCHK=$_HERE/pipeline/check_optpin.py
+if [ ! -f "$OPTCHK" ]; then
+	warn "check_optpin.py MISSING -- optimisation pinning NOT verified"
+elif out=$(python "$OPTCHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'OPTPIN_PASS' | tr '\n' ' ')"
+	printf '%s\n' "$out" | grep -E '^  BLINDNESS' | sed 's/^/          /'
+else
+	bad "A RESOURCE-MEASURING ROW FOLLOWS THE COMPILER:"
+	printf '%s\n' "$out" | grep -E 'OPTPIN_FAIL|pin: \*\*\*' | sed 's/^/          /'
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #
