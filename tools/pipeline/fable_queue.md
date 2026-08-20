@@ -16,6 +16,22 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
+### `selfcheckman` — regress stage — **HELD, batched**
+
+Closed 2026-08-19 as **already fixed** by `7e3b120`, verified independently twice (the main
+loop from the manifest's contents, the flagship seat from `gate_offline.sh:1645-1694`). No new
+code shipped for it, and every battery run since `7e3b120` has already exercised the four
+SELFCHECK manifest assertions.
+
+That is exactly why it is queued rather than waived: *"already covered by earlier runs"* is a
+**claim**, and the batched regress review is where a claim like that gets checked instead of
+believed. Low priority — nothing is blocked on it.
+
+One thing for the reviewer to confirm: the row's original premise line, *"ELEVEN differentials
+have a gate-2 self-mutant, not twelve"*, is **stale** — `SM_COVERED` now lists 13 and all are
+backed by real `selfmutant_one` calls. The closure records this; please sanity-check the count
+against the tree at review time rather than against the closure note.
+
 ### `rtcgate` / `rtcdet` (#429 detector) — review stage — **HELD ON CODEX ONLY**
 
 Eight of nine seats reviewed `17de78a` + `cd32ed2` and the round shipped a third pass on what
