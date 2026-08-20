@@ -139,6 +139,32 @@ for _c in CLAUDE.md PIPELINE.md; do
 	fi
 done
 
+#  ---- K ---------------------------------------------------------------------------
+#  A ROW THAT CLOSES WITH COMMITS MUST NAME ITS WITNESS.
+#
+#  Specified by the flagship seat that adjudicated the WITNESS LADDER, and needed for a
+#  measured reason: asked whether the tightened rule would retroactively invalidate any
+#  shipped round, a measure seat could only answer by READING ROUND PROSE, because nothing
+#  in the schema names the witnessing artefact.  A rule that cannot be audited backwards or
+#  enforced forwards is a rule kept by memory.
+#
+#  It enforces the SHAPE, never the truth -- it cannot tell whether `probe:foo.py` really
+#  preserves routing, and a script that claimed to would be the false comfort the ladder was
+#  written against.  Its first run found a gap in the ladder itself: none of the four rungs
+#  fit a HARNESS round, which ships commits with no guest path to witness.
+say ""; say "K. a row that closed with commits names its witness"
+WITCHK=$_HERE/pipeline/check_witness.py
+if [ ! -f "$WITCHK" ]; then
+	warn "check_witness.py MISSING -- witness naming NOT verified"
+elif out=$(python "$WITCHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'WITNESS_PASS|check_witness:' | tr '
+' ' ')"
+else
+	bad "A ROW CLOSED WITH COMMITS AND NO ADMISSIBLE WITNESS:"
+	printf '%s
+' "$out" | sed 's/^/          /'
+fi
+
 #  ---- I ---------------------------------------------------------------------------
 #  Owner directive 2026-08-17: "make sure to gate and queue up any fable work; don't skip it."
 #
