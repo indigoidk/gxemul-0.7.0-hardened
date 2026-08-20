@@ -178,6 +178,37 @@ else
 	printf '%s\n' "$out" | grep -E 'OPTPIN_FAIL|pin: \*\*\*' | sed 's/^/          /'
 fi
 
+#  ---- O ---------------------------------------------------------------------------
+#  THE LEDGER CAN MANUFACTURE AGREEMENT, AND FOR 52 ROWS IT DID.
+#
+#  Found 2026-08-20 by a reviewing seat: on `wdcnoirq`, five seat cells differed ONLY in the
+#  leading seat name -- 378/379/379/383/382 bytes of the same paragraph.  THREE of those seats
+#  had argued in their own files that the round was too narrow, and one had not mentioned the
+#  opcode at issue at all.  The record showed five seats concurring.
+#
+#  Under the PIPELINE doctrine the ledger is the single source of truth, so this is not lost
+#  detail -- it converts "six seats ANSWERED" into "six seats AGREED", which is precisely the
+#  claim a panel exists to earn.  It is the seat-count analogue of the padded-column grep trap.
+#
+#  Complements G and H rather than duplicating them, and the three-way split is the point:
+#  H asks whether the seat was FIRED, G whether an answer was RECORDED, O whether the recorded
+#  answer is that seat's OWN.  A cell can pass both G and H while saying nothing the seat said.
+#
+#  FORWARD-ONLY BY DATE, not by allowlist: running it returned 57 clusters across 52 rows, so
+#  a per-row exemption list would be the check switched off with extra steps.
+say ""; say "O. each seat cell is that seat's own answer, not a stamped summary"
+BOILCHK=$_HERE/pipeline/check_boilerplate.py
+if [ ! -f "$BOILCHK" ]; then
+	warn "check_boilerplate.py MISSING -- seat-cell independence NOT verified"
+elif out=$(python "$BOILCHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'BOILERPLATE_PASS' | tr '
+' ' ')"
+else
+	bad "A POST-CUTOFF HARVEST STAMPED ONE NOTE ACROSS SEVERAL SEATS:"
+	printf '%s
+' "$out" | grep -E 'BOILERPLATE_FAIL|^  SHARED' | sed 's/^/          /'
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #

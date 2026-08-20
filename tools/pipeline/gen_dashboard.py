@@ -70,7 +70,10 @@ BADGE_TIP = {"A": "the author did this review (shown, not hidden)",
              "s": "a review by the same model family",
              "?": "attribution not confirmed"}
 
-STATE_ORDER = {"active": 0, "held": 1, "pending": 2, "closed": 9}
+#  `dropped` sorts BELOW closed. Any state not named here falls to 5 and lands in the
+#  in-work bucket -- which is how twelve adjudicated-off rows nearly published as "in
+#  work". Add new states HERE and to the section split below; the two must agree.
+STATE_ORDER = {"active": 0, "held": 1, "pending": 2, "closed": 9, "dropped": 10}
 
 
 def cell(row, phase, seat):
@@ -124,12 +127,27 @@ def fix_section(row):
 
 
 rows_sorted = sorted(L["rows"], key=lambda r: STATE_ORDER.get(r.get("state"), 5))
-open_rows = [r for r in rows_sorted if r.get("state") != "closed"]
+#  THREE buckets, not two. `dropped` is NOT `closed`: closed means the work shipped, dropped
+#  means the premise was refuted by measurement and no work is owed. Folding them together
+#  would erase the distinction the adjudication exists to record -- and leaving `dropped` out
+#  of the split entirely (the state it was in until 2026-08-20) silently counted twelve
+#  adjudicated-off rows as "in work", because open_rows was defined by NOT-closed.
+open_rows = [r for r in rows_sorted if r.get("state") not in ("closed", "dropped")]
 closed_rows = [r for r in rows_sorted if r.get("state") == "closed"]
-divider = (f'<tr class="divider"><th colspan="{len(seats)+1}">closed</th></tr>'
-           if closed_rows else "")
-sections = ("".join(fix_section(r) for r in open_rows) + divider
-            + "".join(fix_section(r) for r in closed_rows))
+dropped_rows = [r for r in rows_sorted if r.get("state") == "dropped"]
+
+
+def _divider(label, n):
+    return (f'<tr class="divider"><th colspan="{len(seats)+1}">{label}</th></tr>'
+            if n else "")
+
+
+sections = ("".join(fix_section(r) for r in open_rows)
+            + _divider("closed", len(closed_rows))
+            + "".join(fix_section(r) for r in closed_rows)
+            + _divider("dropped &mdash; premise refuted by measurement, no work owed",
+                       len(dropped_rows))
+            + "".join(fix_section(r) for r in dropped_rows))
 
 
 def summary():
@@ -215,7 +233,9 @@ th.seat {{ width:62px; }}
 tr.fixhead th {{ text-align:left; background:var(--fixbg);
   border:1px solid var(--line); border-left:none; border-right:none;
   padding:7px 10px; font-weight:600; font-size:13px; }}
-tr.fixhead.st-closed th {{ background:var(--closedbg); }}
+tr.fixhead.st-closed th, tr.fixhead.st-dropped th {{ background:var(--closedbg); }}
+tr.fixhead.st-dropped .ttl {{ opacity:.55; text-decoration:line-through; }}
+.state.st-dropped {{ color:var(--muted); border-color:var(--muted); }}
 tr.fixhead.st-closed .ttl {{ opacity:.7; }}
 /* ONE LINE: nothing in the header may wrap; long parts get an ellipsis. */
 .hline {{ display:flex; align-items:baseline; gap:8px; white-space:nowrap; overflow:hidden; }}
@@ -234,7 +254,8 @@ tr.ph th.phlabel {{ text-align:left; font-weight:400; color:var(--muted); font-s
   white-space:nowrap; }}
 tr.ph td {{ border:1px solid var(--line2); text-align:center; padding:4px 0;
   background:var(--panel); }}
-tr.ph.st-closed td, tr.ph.st-closed th.phlabel {{ background:var(--closedbg); }}
+tr.ph.st-closed td, tr.ph.st-closed th.phlabel,
+tr.ph.st-dropped td, tr.ph.st-dropped th.phlabel {{ background:var(--closedbg); }}
 td.c.ok {{ background:var(--okbg); }}
 td.c.hold {{ background:var(--holdbg); }}
 td.c.bad {{ background:var(--badbg); }}
@@ -277,7 +298,7 @@ footer code {{ color:var(--ink); }}
   <span class="chip pass"><span class="k">battery</span><b>{e(bat["verdict"])} {e(bat["coverage"])}</b>
     <span>{e(bat["when"])} @ {e(bat["head"])}</span></span>
   <span class="chip"><span class="k">flagship</span><b>{e(sid[L["flagship"]]["name"])} ({e(sid[L["flagship"]]["ver"])})</b></span>
-  <span class="chip"><span class="k">bugs</span><b>{len(open_rows)} in work · {len(closed_rows)} closed</b></span>
+  <span class="chip"><span class="k">bugs</span><b>{len(open_rows)} in work · {len(closed_rows)} closed · {len(dropped_rows)} dropped</b></span>
   <span class="chip"><span class="k">entries</span><b>{n["✓"]}✓ {n["✕"]}✕ {n["⏸"]}⏸ {n["…"]}…</b></span>
   <span class="chip"><span class="k">updated</span><b>{e(L["updated"])}</b></span>
 </div>

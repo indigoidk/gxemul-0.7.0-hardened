@@ -134,6 +134,32 @@ def records_only(h):
         for p in paths)
 
 
+#  A `commits` value that is neither a hash list nor a DELIBERATE non-repo note.  Two rows
+#  legitimately say "outside the repo (ops)" for work that has no commit at all, so demanding
+#  hashes would be wrong -- what must be caught is the PLACEHOLDER: a value written to be
+#  replaced later, which nobody replaced.
+#
+#  MEASURED 2026-08-20: two CLOSED rows carried the literal string "PENDING" and section K
+#  accepted them, because check_witness.py skips only an EMPTY commits field.  A field nothing
+#  validates is a field that drifts, and this one drifted the same day it was written.
+PLACEHOLDER = re.compile(r"^(pending|tbd|todo|xxx|\?+|-+)$", re.I)
+NONREPO = re.compile(r"outside the repo|\bops\b|no commit", re.I)
+
+
+def bad_commits(rows):
+    """Rows whose `commits` is a placeholder rather than hashes or a stated non-repo note."""
+    out = []
+    for rid, row in sorted(rows.items()):
+        c = (row.get("commits") or "").strip()
+        if not c or NONREPO.search(c):
+            continue
+        for tok in c.split():
+            if PLACEHOLDER.match(tok) or not re.fullmatch(r"[0-9a-f]{7,40}", tok):
+                out.append((rid, row.get("state", "?"), c))
+                break
+    return out
+
+
 def main(argv):
     listing = "--list" in argv
     ledger = json.load(io.open(LEDGER, encoding="utf-8"))
@@ -178,10 +204,27 @@ def main(argv):
                              subj))
             elif state == "closed":
                 hard.append((h, rid, state, "closed row does not name this code commit", subj))
-            else:
-                soft.append((h, rid, state, "open row, commits empty"
-                             if not commits else "open row, commits=%s" % " ".join(commits),
+            elif not commits:
+                #  *** HARD, NOT SOFT -- AND THIS BRANCH USED TO BE SOFT, WHICH IS HOW THE
+                #  CHECK MISSED ITS OWN MOTIVATING CASE. ***  A ninth-seat review measured
+                #  optrow, smdatefmt and constblind all sitting here at once, every one of
+                #  them genuinely shipped, and this tool reported ATTRIBUTION_PASS over the
+                #  top of them.  That is the newest vacuity class -- blindness reported as a
+                #  green line -- inside the check written against exactly that class.  It is
+                #  also the mechanism that produced a 5-0 mis-vote: five seats read a stale
+                #  sentence in a row whose record had not caught up with its code.
+                #
+                #  It is safe to be hard because `commits` is NOT closure-only: twelve OPEN
+                #  rows carry it.  So an open row with a CODE commit naming it and an EMPTY
+                #  field has no legitimate reading -- it is drift, whatever the state says.
+                #  (Records-only and documented-only commits are already filtered above, so
+                #  this fires on shipped CODE alone.)
+                hard.append((h, rid, state,
+                             "work shipped and the row does not name it (commits EMPTY)",
                              subj))
+            else:
+                soft.append((h, rid, state,
+                             "open row, commits=%s" % " ".join(commits), subj))
 
     for label, items in (("HARD", hard), ("SOFT", soft)):
         for h, rid, state, why, subj in items:
@@ -206,9 +249,20 @@ def main(argv):
           % (len(unnamed), " ".join(unnamed) if unnamed else "none"))
     print("  Those rows shipped work this check cannot see. It reads SUBJECTS, not diffs.")
 
-    if hard:
+    ph = bad_commits(rows)
+    if ph:
         print()
-        print("ATTRIBUTION_FAIL  %d hard, %d soft" % (len(hard), len(soft)))
+        for rid, st, c in ph:
+            print("  HARD   %-9s %-14s %-8s commits is not a hash: %r"
+                  % ("--", rid, st, c))
+        print("  A `commits` value that is neither hashes nor a stated non-repo note is a")
+        print("  PLACEHOLDER nobody came back to.  Section K accepts it -- it skips only an")
+        print("  EMPTY field -- so this is the only check that sees it.")
+
+    if hard or ph:
+        print()
+        print("ATTRIBUTION_FAIL  %d hard, %d soft, %d placeholder"
+              % (len(hard), len(soft), len(ph)))
         return 1
     print("ATTRIBUTION_PASS  0 hard, %d soft" % len(soft))
     return 0
