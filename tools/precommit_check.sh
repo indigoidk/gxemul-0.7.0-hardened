@@ -171,6 +171,34 @@ else
 ' "$out" | sed 's/^/          /'
 fi
 
+#  ---- L ---------------------------------------------------------------------------
+#  DOES THE LEDGER KNOW ABOUT THE WORK THAT SHIPPED?
+#
+#  G, H, I and K all ask whether a row's PROCESS was carried out -- seats fired, seats
+#  recorded, owed work queued, witness named.  None of them asks the blunter question:
+#  did the row notice that the code landed?  Measured on this check's first run: of the 40
+#  most recent commits 33 were named by no row at all, and two of those were sharp --
+#  6014b7e's subject reads "selfmutant6 CLOSED" against a row that read held with empty
+#  commits, and gate3scope's `commits` named 2a5bc48, the R9/#435 m8820x DEVICE round, which
+#  touches zero selfmutant lines.  The board renders from the ledger, so that drift shows
+#  finished work as open queue -- the direction that matters, because it is invisible.
+#
+#  It reports TWO blindnesses every run rather than hiding them: 13 row ids are too short to
+#  match safely, and 13 rows carry commits that no scanned subject ever names.  Both are
+#  printed on GREEN runs too.
+say ""; say "L. the ledger names the work that shipped"
+ATTRCHK=$_HERE/pipeline/check_commit_attribution.py
+if [ ! -f "$ATTRCHK" ]; then
+	warn "check_commit_attribution.py MISSING -- ledger attribution NOT verified"
+elif out=$(python "$ATTRCHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'ATTRIBUTION_PASS' | tr '\n' ' ')"
+	#  The blindnesses are part of the result, not a footnote -- echo them on green.
+	printf '%s\n' "$out" | grep -E 'NOT MATCHABLE|NEVER NAMED' | sed 's/^/          /'
+else
+	bad "THE LEDGER DISAGREES WITH WHAT SHIPPED:"
+	printf '%s\n' "$out" | grep -E '^  HARD' | sed 's/^/          /'
+fi
+
 #  ---- I ---------------------------------------------------------------------------
 #  Owner directive 2026-08-17: "make sure to gate and queue up any fable work; don't skip it."
 #

@@ -1123,13 +1123,13 @@ else
     sed 's/^/       /' "$RTCLOG"
     check     "RTC range: row failures" \
               "$(grep -oE '[0-9]+ failures' "$RTCLOG" | grep -oE '^[0-9]+')" "0"
-    #  Floor 9 -> 12 when the panel's MEASURED escape was closed: the clamp TARGET was
-    #  asserted nowhere, so `d->hz = 1;` passed all nine original rows -- a guest asking for
-    #  the fastest rate available would silently have got 1 Hz.  The value is named in this
-    #  comment on purpose, and this file already records what happens when such a comment
-    #  goes stale: the sh4_tmu floor comment said "16 -> 17" while the code read 18.
+    #  Floor 9 -> 12 -> 17, once per closed escape, and the value is named here on purpose
+    #  (this file records the sh4_tmu comment that said "16 -> 17" while the code read 18):
+    #    9 -> 12  the clamp TARGET was asserted nowhere, so `d->hz = 1;` passed all nine.
+    #    12 -> 17 the threshold was pinned only from ABOVE, and the timer core's own input
+    #             was never read.  Both MEASURED at 12 of 12 green.
     check_min "RTC range: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 12
+              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 17
     check     "RTC range: offline verdict" "$(grep -c 'RTC_RANGE_PASS' "$RTCLOG")" "1"
     #  NAMED ROWS, because each is the SOLE detector of one arm and the row-count floor
     #  cannot see a deletion that also drops the floor.  -F throughout: the row names carry
@@ -1156,6 +1156,21 @@ else
     #  Deleting these three rows restores that hole, so they are named here.
     check     "RTC range: the clamp-exactness rows are present" \
               "$(grep -c -F 'clamped to exactly TIMER_MAX_FREQUENCY' "$RTCLOG")" "3"
+    #  *** THE THRESHOLD WAS PINNED ONLY FROM ABOVE, AND THAT WAS A MEASURED FALSE PASS.
+    #  ***  Until this row the table sampled ONE in-range value (1000), so the bound could
+    #  be moved anywhere in [1000, INT_MAX] undetected.  The measure seat found the cheapest
+    #  form: TIMER_MAX_FREQUENCY -> TIMER_MAX_CATCHUP, ONE IDENTIFIER, and the two macros sit
+    #  two lines apart in timer.h -- 12 of 12 green while every guest rate above 2^20 was
+    #  boosted to INT_MAX, which timer.h:72-77 itself calls unserviceable.
+    check     "RTC range: the threshold is pinned from BELOW" \
+              "$(grep -c -F 'above CATCHUP: passed through, NOT clamped' "$RTCLOG")" "1"
+    check     "RTC range: the boundary value itself is tested" \
+              "$(grep -c -F 'INT_MAX exactly: passed through, not clamped' "$RTCLOG")" "1"
+    #  What the TIMER CORE is told, as opposed to what the device stored.  Deleting
+    #  timer_update_frequency() passed 12 of 12: the detector captured last_timer_hz from the
+    #  start and no row ever read it.
+    check     "RTC range: the timer core's own input is asserted" \
+              "$(grep -c -F 'timer core got' "$RTCLOG")" "2"
 fi
 
 # ---- #405: the ATA IDENTIFY capacity bytes --------------------------------------
@@ -1583,8 +1598,12 @@ fi
 #  is precisely the defect being corrected here.
 SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range"
 #  *** COVERED IS NOT UNIFORM, AND THE MANIFEST CANNOT SEE THE DIFFERENCE -- READ THIS BEFORE
-#  TREATING A GREEN ROW AS "the file is vouched for". ***  Seven of the ten route every row
-#  through one or two shared helpers, so the sentinel covers the file.  Three do not:
+#  TREATING A GREEN ROW AS "the file is vouched for". ***  All but three of the COVERED stems
+#  route every row through one or two shared helpers, so the sentinel covers the file.  The
+#  count used to be spelled out here as "seven of the ten" and went stale the first time a
+#  stem was added; a proportion that has to be re-derived on every addition is a comment that
+#  will be wrong more often than right, so it is stated as an exception list instead.  The
+#  three that do NOT route through shared helpers:
 #    * sh4_tmu   -- 12 of 18 rows.  row1() is the only comparator in the file that takes an
 #                   expected value; row_three_timers/row_interrupt/row_interrupt_unie_clear/
 #                   row_stopped/row_no_freeze each hardcode their own, and cannot be probed.

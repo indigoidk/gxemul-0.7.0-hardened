@@ -3,11 +3,27 @@
  *
  *  *** THIS ROW SAT HELD FOR DAYS ON A RECORDED OBSTACLE THAT WAS FALSE. *** The filing said
  *  a differential "cannot simply #include the device (it pulls in cpu.h, machine.h, emul.h,
- *  device.h)".  MEASURED: four differentials already do exactly this -- diff_footbridge.c:99,
- *  diff_m8820x.c:76, diff_sh4_tmu.c:57, diff_wdc_identify.c:192 -- and dev_sh4.c, already
- *  included by one of them, pulls a STRICT SUPERSET of dev_rtc.c's headers except emul.h.
- *  The round is ~100 lines and six stubs, not the four-device refactor the ledger recorded.
+ *  device.h)".  MEASURED: FIVE differentials already did exactly this before this one --
+ *  diff_footbridge.c:99, diff_m8820x.c:76, diff_m8invread.c:135, diff_sh4_tmu.c:57 and
+ *  diff_wdc_identify.c:192 (four distinct devices; m8invread and m8820x share one).  The
+ *  round is six stubs and one table, not the four-device refactor the ledger recorded.
  *  A MIS-RECORDED OBSTACLE IS WHY THIS SAT.
+ *
+ *  *** THE "STRICT SUPERSET" SENTENCE THAT USED TO STAND HERE WAS FALSE, AND SO WAS THE
+ *  FIRST CORRECTION OF IT. ***  It read "dev_sh4.c pulls a STRICT SUPERSET of dev_rtc.c's
+ *  headers except emul.h".  The flagship seat called that wrong and said emul.h IS pulled
+ *  transitively (cpu.h -> cpu_m88k.h -> emul.h) while testmachine/dev_rtc.h is the real
+ *  exception.  BOTH were settled by asking the preprocessor rather than reading include
+ *  lines, since nearly all of the closure is transitive:
+ *
+ *      gcc -E -H  ->  dev_rtc.c 23 project headers, dev_sh4.c 35
+ *      in dev_rtc.c and NOT in dev_sh4.c:  emul.h  AND  testmachine/dev_rtc.h
+ *
+ *  So there are TWO exceptions, the original named one of them, the correction named the
+ *  other and denied the first, and "strict superset" is false either way.  cpu_m88k.h and
+ *  cpu_mips.h mention only float_emul.h, and only in comments.  None of this changes the
+ *  conclusion -- the obstacle was refuted by the file COMPILING, not by a header argument --
+ *  which is why the sentence was load-bearing for nothing and wrong for three passes.
  *
  *  WHAT IT DEFENDS.  #429 added a range check to dev_rtc.c.  Two seats MEASURED that
  *  reverting it entirely, or flipping its comparison, passes gate 2 -- because NOTHING under
@@ -24,8 +40,8 @@
  *  the result is nonzero, positive, and did not remove the timer.  MEASURED: changing
  *  `d->hz = (int) TIMER_MAX_FREQUENCY;` to `d->hz = 1;` passed all nine rows.  A guest that
  *  asks for the fastest rate available would silently get 1 Hz.  The three
- *  "clamped to exactly TIMER_MAX_FREQUENCY" rows close that, and they are why the table is
- *  12 rows rather than 9.
+ *  "clamped to exactly TIMER_MAX_FREQUENCY" rows close that.  They took the table from 9 to
+ *  12; the measure seat's two further escapes (below) took it from 12 to 17.
  *
  *  TWO OTHER PANEL CLAIMS WERE MEASURED AND DID NOT SURVIVE, recorded because a refuted
  *  claim is a result:
@@ -33,13 +49,40 @@
  *      (TIMER_MAX_FREQUENCY, 0x7fffffff]" -- that interval is EMPTY.  timer.h:81 defines the
  *      constant as 2147483647.0, which IS 0x7fffffff, so the edit is a NO-OP and passing it
  *      is the correct answer.  A packet-fed seat reasoning about a constant it cannot read.
- *    * "the rows do not pin the bound" -- they do.  Raising the threshold past 2^31 revives
- *      the narrowing and fails THREE rows (both 2^32 rows and the bit-31 row).
+ *    * "the rows do not pin the bound" -- HALF REFUTED, AND PASS 2 GOT ITS OWN MEASUREMENT
+ *      WRONG.  Pass 2 wrote "raising the threshold past 2^31 fails THREE rows (both 2^32
+ *      rows and the bit-31 row)".  Re-measured at the exact value: raising the threshold to
+ *      2^31 kills TWO rows and BOTH ARE THE BIT-31 PAIR; the 2^32 rows do not die until the
+ *      threshold passes 2^32 (then 5).  Pass 2 had tested 2^36 and described it as "past
+ *      2^31" -- the intent, not the measurement, which is the very class this file's own
+ *      commit rules warn about.
  *
- *  MEASURED against the two mutants the filing names:
- *    revert (the pre-#429 narrowing cast)  -> 9 rows, 4 failures, RTC_RANGE_FAIL
- *    the flipped comparison                -> 9 rows, 5 failures, RTC_RANGE_FAIL
- *  Pristine: 9 rows, 0 failures, RTC_RANGE_PASS.
+ *      And the seat was RIGHT in the direction pass 2 did not test.  The bound was pinned
+ *      only from ABOVE.  See R6.
+ *
+ *  *** THE MEASURE SEAT THEN FOUND TWO MORE, AND THE FIRST IS THE CHEAPEST EDIT ON RECORD
+ *  HERE. ***  Both passed the 12-row table with ZERO failures:
+ *
+ *    TIMER_MAX_FREQUENCY -> TIMER_MAX_CATCHUP.  ONE IDENTIFIER, and the two macros sit two
+ *      lines apart in timer.h (:81 and :82).  The table sampled exactly ONE in-range value,
+ *      1000, so the threshold could be moved anywhere in [1000, INT_MAX] undetected.  Every
+ *      guest rate above 2^20 would be silently boosted to INT_MAX -- a rate timer.h:72-77
+ *      itself calls unserviceable, where "the debt grows without bound".  Closed by R6/R7.
+ *
+ *    timer_update_frequency() deleted.  The stubs captured last_timer_hz from the first
+ *      draft and NO ROW EVER READ IT, so the device could keep a correct d->hz and never
+ *      pass it on.  Closed by R8.
+ *
+ *  MEASURED, all arms, against the 17-row table (17 rows, 0 failures, RTC_RANGE_PASS
+ *  pristine).  Failure counts, not kill counts, so they can be reproduced by running it:
+ *    the true pre-#429 revert            -> 7 failures
+ *    the flipped comparison              -> 11 failures
+ *    clamp target -> 1 Hz                -> 3 failures
+ *    threshold -> TIMER_MAX_CATCHUP      -> 1 failure
+ *    threshold -> exactly 2^31           -> 2 failures  (both the bit-31 pair)
+ *    threshold -> exactly 2^32           -> 5 failures
+ *    timer_update_frequency deleted      -> 2 failures
+ *    threshold -> 0x7fffffff             -> 0 failures  (a genuine no-op; see above)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -174,9 +217,49 @@ int main(void)
 	wr_hz(&d, 1000);
 	chk("1000 Hz: hz passed through exactly", d.hz, 1000);
 	chk("1000 Hz: timer added once", timer_adds, 1);
+	chk("1000 Hz: timer core got that same rate", (long long) last_timer_hz, 1000);
+
+	/*
+	 *  R6: THE THRESHOLD IS PINNED FROM BELOW.  Until this row the table sampled exactly
+	 *  ONE in-range value, 1000, so the bound could be moved anywhere in [1000, INT_MAX]
+	 *  undetected.  MEASURED: changing TIMER_MAX_FREQUENCY to TIMER_MAX_CATCHUP -- ONE
+	 *  IDENTIFIER, and the two macros are two lines apart in timer.h -- passed all twelve
+	 *  rows while boosting every guest rate above 2^20 to INT_MAX.
+	 */
+	memset(&d, 0, sizeof d);
+	timer_adds = timer_removes = timer_updates = 0;
+	wr_hz(&d, 1048577);		/*  TIMER_MAX_CATCHUP + 1  */
+	chk("above CATCHUP: passed through, NOT clamped", d.hz, 1048577);
+
+	/*
+	 *  R7: THE BOUNDARY ITSELF, lower half.  The test is `>`, so the ceiling value must
+	 *  pass through untouched.  Its upper half is the bit-31 pair above: 0x80000000 is
+	 *  INT_MAX + 1 and must clamp.  Together they pin the comparison to the exact edge --
+	 *  a `>=` here would fail this row and nothing else.
+	 */
+	memset(&d, 0, sizeof d);
+	timer_adds = timer_removes = timer_updates = 0;
+	wr_hz(&d, 2147483647ULL);
+	chk("INT_MAX exactly: passed through, not clamped", d.hz, 2147483647LL);
+
+	/*
+	 *  R8: WHAT THE TIMER CORE IS ACTUALLY TOLD, on the update path.  The stubs captured
+	 *  last_timer_hz from the beginning and no row read it, so deleting
+	 *  timer_update_frequency() entirely passed twelve of twelve -- the device would keep
+	 *  a correct d->hz and never pass it on.  A detector that names a value as part of
+	 *  "the device's whole contact surface" and then never asserts it is describing its
+	 *  own apparatus, not the device.
+	 */
+	memset(&d, 0, sizeof d); d.hz = 100;
+	d.timer = (struct timer *)(void *)&rows;
+	timer_adds = timer_removes = timer_updates = 0;
+	last_timer_hz = -1.0;
+	wr_hz(&d, 500);
+	chk("update: existing timer updated, not re-added", timer_updates, 1);
+	chk("update: timer core got the new rate", (long long) last_timer_hz, 500);
 
 	/*  IDENTITY: this table asserts its own row count.  */
-	chk("IDENTITY: row count", rows + 1, 12);
+	chk("IDENTITY: row count", rows + 1, 17);
 
 	printf("%d rows, %d failures\n", rows, failures);
 	printf(failures ? "RTC_RANGE_FAIL\n" : "RTC_RANGE_PASS\n");

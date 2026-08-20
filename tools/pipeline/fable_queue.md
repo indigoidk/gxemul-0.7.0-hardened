@@ -16,6 +16,24 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
+### `rtcgate` / `rtcdet` (#429 detector) — review stage — **HELD ON CODEX ONLY**
+
+Eight of nine seats reviewed `17de78a` + `cd32ed2` and the round shipped a third pass on what
+they found. **Codex is the only missing seat**, and it is a measured quota wall rather than a
+non-answer: its 26,992-byte file is the echoed brief plus *"You've hit your usage limit … try
+again at Aug 22nd, 2026 12:12 PM"*. A size check alone would have scored it the largest answer
+in the panel.
+
+**The flagship seat DID review this round** — it is recorded on `rtcgate`, and it found six
+wrong records the round had shipped, all corrected. So this entry is not waiting on Fable; it is
+waiting on Codex, and it is written down here because the queue is where a held stage is named
+regardless of which seat it is held on.
+
+**Standing authority for the degrade:** the owner directed *"if there is anything else in the
+matrix that can be ran by any other model other than codex; please proceed"*. Recorded, not
+silent. Re-fire Codex after **2026-08-22** and either record its answer or note that it added
+nothing beyond the confirmed set.
+
 ### 1. ~~`gate3scope` (#436) — review stage~~ — **DISCHARGED 2026-08-19, round CLOSED at 9/9.**
 The ninth seat voted CLOSE and still found three MEASURED holes: `selfmutant.py` has **no
 timeout**, so a hanging mutant emits no verdict token at all and wedges gate 2; the helper never
