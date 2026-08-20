@@ -127,6 +127,29 @@ else
 	say "          fix: python tools/pipeline/gen_codex_wall.py"
 fi
 
+#  ---- M (soft) ---------------------------------------------------------------------
+#  CHECKPOINT.md carries its OWN staleness rule -- "if this HEAD disagrees with git log,
+#  re-derive and rewrite this file; it has no other authority" -- and that rule was enforced
+#  by NOTHING.  It drifted TWICE in one session: once by six commits, then again an hour after
+#  being rewritten.  The second time was caught by a REVIEW SEAT, which opened the file against
+#  its brief's own "do not read files" instruction and reported it before answering anything.
+#
+#  SOFT on purpose, and not out of timidity: the file is UNTRACKED and lives OUTSIDE the git
+#  root, so a hard failure would block a fresh clone that has none, and block the legitimate
+#  window between committing and rewriting it.  What it must not do is stay SILENT -- a stale
+#  checkpoint is indistinguishable from a current one to the next session, which is how it once
+#  cost 26 rounds.
+say ""; say "M. the checkpoint names the actual HEAD"
+CKPTCHK=$_HERE/pipeline/check_checkpoint.py
+if [ ! -f "$CKPTCHK" ]; then
+	warn "check_checkpoint.py MISSING -- checkpoint staleness NOT verified"
+elif out=$(python "$CKPTCHK" 2>&1); then
+	good "$(printf '%s' "$out" | head -1)"
+else
+	soft "$(printf '%s' "$out" | head -1)"
+	printf '%s\n' "$out" | tail -n +2 | sed 's/^/          /'
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #
