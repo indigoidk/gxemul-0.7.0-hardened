@@ -5156,3 +5156,100 @@ arms are consistently wrong, so the control agrees with itself, which is exactly
 round exists to remove. Flags now come from the caller, which owns the real compile line.
 
 Gate 2 re-run alone: **PASS, 222 checks**, all five pins green on the corrected row ids.
+
+
+## 2026-08-19 — residuals from the R4-detector round (#429), eight seats; codex rate-limited
+
+The round shipped a detector for a correction that had none, in **three passes**, because the
+panel broke the first two. Nothing was found wrong with #429 itself — every seat that could
+trace the code confirmed the range check. What they found was in the **instrument**, twice, and
+in the **records**, six times. These are the items FILED rather than fixed, under the standing
+stopping rule (only a measured false pass or a wrong record is fixed in-round).
+
+Ranked. The first is a live guest-drivable defect inside a shipped correction.
+
+1. **`rtcflood` — `dev_rtc.c:132`'s clamp diagnostic is unlatched, and a guest can drive it.**
+   MEASURED by the measure seat: **1000 alternating out-of-range / in-range guest writes
+   produced 1003 stderr lines.** This is the #265/#269 guest-drivable flood class and the
+   `cflood` rule, recurring *inside a correction that shipped four days earlier*. The precedent
+   is exact: `dev_wdc.c` already carried three `warned_*` latches added by #337 and one path was
+   simply missed — filed here as `wdcflood`. The fix is the established one-line latch idiom.
+   **The detector cannot see this today**: `diff_rtc_range.c` stubs `fatal()` to `vfprintf` and
+   no row counts the calls, so a latch needs a counting stub and a row — which is the cheap
+   part. A CODE change to a shipped correction, so it gets its own round with a reproduction,
+   not a fold-in.
+
+   *A claim about this path was REFUTED BY SOURCE and is recorded because it would have changed
+   the severity.* A reading seat wrote that production `fatal()` **exits**, which would make
+   #429's clamp a guest-reachable process death rather than a flood. `debugmsg.c:384` shows
+   `fatal()` is byte-for-byte `debug()` — `va_start`, `va_debug`, `va_end`, no exit. So the
+   detector's print-and-return stub is FAITHFUL, not a fidelity gap, and the flood is the whole
+   consequence. Two minutes of looking moved this from "process death" to "noise".
+
+2. **`rtcnarrow` — the guest-rate narrowing design item, whose three-device premise is STALE.**
+   The original filing argued the narrowing belongs in the timer core, naming `dev_footbridge`,
+   `dev_vr41xx` and `dev_jazz` as deriving a rate from a guest value with no wide-domain range
+   check. **Two seats re-derived that independently and it does not hold:** `dev_jazz.c:432-434`
+   computes `1000.0 / ((double) idata + 1.0)`, bounded above by 1000 and bounded BY CONSTRUCTION
+   since `b679170` (#257, 2026-07-18); `dev_vr41xx.c:604-612` is `int hz = RTCL1_L_HZ / idata`
+   with `RTCL1_L_HZ == 0x8000` (`vr_rtcreg.h:90`), an unsigned divide so `hz <= 32768`;
+   footbridge's `+INF` path is already fixed. **None of the three can exceed
+   `TIMER_MAX_FREQUENCY`,** so the four-device round that premise justified does not exist.
+
+   What they DO share is **the opposite end**: all three can land *below*
+   `TIMER_MIN_FREQUENCY`, which `timer_clamp_freq` floors **silently** — `timer.c:100-108` sets
+   `was_clamped` only on the ceiling. That is the surviving item, and it is smaller and
+   differently shaped than what was filed. Not reproduced; no witness at rung 2-4, so it stays
+   a design item.
+
+   *** THE COMMIT THAT FILED THIS ALSO MIS-CITED IT. *** `17de78a` said the residual was
+   "already filed as n2/n4/tfreq". Those three rows never mention `vr41xx` or `jazz` at all, and
+   are closed R4 rows about other sites. The only place the three-device sentence existed was
+   `rtcdet`'s own assess note — **the row the round was about to close**, which would have
+   orphaned it. The flagship seat caught that and insisted the residual be filed BEFORE the
+   closure. It was.
+
+3. **`scunbacked` — the SELFCHECK manifest's presence check is satisfied by an explanatory
+   COMMENT.** MEASURED: `gate_offline.sh`'s H greps each differential's source for the bare
+   token `@@SELFCHECK@@`; in `diff_rtc_range.c` that token also appears in the sentinel's own
+   explanatory comment, so **deleting the entire executable sentinel leaves the H green.** The
+   check's own comment claims "a block gutted down to its printf still fails this" — false for
+   any file whose comment names the token. **Not a live hole**: the G (the log grep for the
+   summary line) catches it, so the pair still holds. But the H is doing less than it says,
+   which is the "a check whose blindness is reported as a green line" class *in the gate built
+   to close that class*. The wrong COMMENT is the more urgent half. Candidate fix: grep for the
+   token in a CODE context (a `chk`/`check` call), not anywhere in the file.
+
+4. **`cmtattr` — the ledger did not know about work that had shipped.** Of the 40 most recent
+   commits, **33 were named by no ledger row**. Most legitimately (receipts, records fixes,
+   harness work that closes nothing); two sharply: `6014b7e`'s subject reads *"selfmutant6
+   CLOSED"* against a row that read `held` with empty commits, and `gate3scope`'s `commits`
+   named `2a5bc48` — the **R9/#435 m8820x device round**, which touches zero selfmutant lines
+   (`git show 2a5bc48 -- regress/gate_offline.sh | grep -c selfmutant` is 0). The board renders
+   from the ledger, so that drift shows finished work as open queue: the direction that matters,
+   because it is invisible. Both hard rows corrected; **12 soft rows remain and want per-row
+   adjudication, not a sweep.** Instrument shipped as
+   `tools/pipeline/check_commit_attribution.py` + precommit **section L**.
+
+### Two things this round did to itself, kept because they are cheaper to read than to repeat
+
+**The escape that forced pass 3 is a class already documented in CHANGELOG.md, three blocks
+below, about the SAME PAIR OF MACROS.** The `R4 follow-up` block records three seats measuring
+`TIMER_MAX_CATCHUP` → 65536 and `TIMER_MAX_FREQUENCY` → 32768.0 passing every row of
+`diff_timer.c`, and prescribes asserting an absolute consequence derived from outside the header.
+The new detector did not apply it, and `TIMER_MAX_FREQUENCY` → `TIMER_MAX_CATCHUP` — **one
+identifier, the macros two lines apart in `timer.h`** — passed 12 of 12 rows. This is the same
+failure `gate_offline.sh` names about its own SELFCHECK row: *"the doctrine was written down and
+then not applied to the next row added."*
+
+**A mutant that PASSES can be the correct answer.** The panel's only DEFECTIVE verdict rested on
+*"replace `TIMER_MAX_FREQUENCY` with `0x7fffffff` and the limit is gone for everything in
+`(TIMER_MAX_FREQUENCY, 0x7fffffff]`"*. That interval is **empty** — `timer.h:81` defines the
+constant AS `2147483647.0`. The mutant is a no-op and passing it is right. A packet-fed seat
+cannot read the constant; its *second* point, the clamp target, was correct and forced pass 2.
+Both halves in one 3.6 KB answer, which is the seat class stated in a single document.
+
+Final: detector **17 rows / 0 failures**, gate 2 **PASS at 258 checks** (245 before).
+`rtcgate` closed credited; `rtcdet` closed documented-only as its duplicate, so the work counts
+once. Codex was RATE-LIMITED — its 26,992-byte file was the echoed brief plus the 429, **the
+largest file in the panel** — recorded with a HELD marker and a queue entry.
