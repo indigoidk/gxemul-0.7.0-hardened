@@ -19,6 +19,23 @@
  *  timer_remove counters are what let a row say "the ADD became a REMOVE" rather than merely
  *  "something changed".
  *
+ *  *** THE PANEL FOUND A REAL ESCAPE AND THE FIRST NINE ROWS DID NOT CATCH IT. ***  Two
+ *  seats independently said the clamp TARGET is never asserted -- the rows only check that
+ *  the result is nonzero, positive, and did not remove the timer.  MEASURED: changing
+ *  `d->hz = (int) TIMER_MAX_FREQUENCY;` to `d->hz = 1;` passed all nine rows.  A guest that
+ *  asks for the fastest rate available would silently get 1 Hz.  The three
+ *  "clamped to exactly TIMER_MAX_FREQUENCY" rows close that, and they are why the table is
+ *  12 rows rather than 9.
+ *
+ *  TWO OTHER PANEL CLAIMS WERE MEASURED AND DID NOT SURVIVE, recorded because a refuted
+ *  claim is a result:
+ *    * "replace TIMER_MAX_FREQUENCY with 0x7fffffff and the limit is gone for everything in
+ *      (TIMER_MAX_FREQUENCY, 0x7fffffff]" -- that interval is EMPTY.  timer.h:81 defines the
+ *      constant as 2147483647.0, which IS 0x7fffffff, so the edit is a NO-OP and passing it
+ *      is the correct answer.  A packet-fed seat reasoning about a constant it cannot read.
+ *    * "the rows do not pin the bound" -- they do.  Raising the threshold past 2^31 revives
+ *      the narrowing and fails THREE rows (both 2^32 rows and the bit-31 row).
+ *
  *  MEASURED against the two mutants the filing names:
  *    revert (the pre-#429 narrowing cast)  -> 9 rows, 4 failures, RTC_RANGE_FAIL
  *    the flipped comparison                -> 9 rows, 5 failures, RTC_RANGE_FAIL
@@ -123,12 +140,16 @@ int main(void)
 	wr_hz(&d, 0x100000000ULL);
 	chk("2^32: timer NOT removed", timer_removes, 0);
 	chk("2^32: hz clamped, not zeroed", d.hz != 0, 1);
+	chk("2^32: clamped to exactly TIMER_MAX_FREQUENCY", d.hz,
+	    (long long) TIMER_MAX_FREQUENCY);
 
 	/*  R2: bit-31 value must not become a negative int.  */
 	memset(&d, 0, sizeof d);
 	timer_adds = timer_removes = timer_updates = 0;
 	wr_hz(&d, 0x80000000ULL);
 	chk("bit31: hz is positive", d.hz > 0, 1);
+	chk("bit31: clamped to exactly TIMER_MAX_FREQUENCY", d.hz,
+	    (long long) TIMER_MAX_FREQUENCY);
 
 	/*  R3: 0x8000000000000000 must not remove the timer.  */
 	memset(&d, 0, sizeof d); d.hz = 100;
@@ -136,6 +157,8 @@ int main(void)
 	timer_adds = timer_removes = timer_updates = 0;
 	wr_hz(&d, 0x8000000000000000ULL);
 	chk("2^63: timer NOT removed", timer_removes, 0);
+	chk("2^63: clamped to exactly TIMER_MAX_FREQUENCY", d.hz,
+	    (long long) TIMER_MAX_FREQUENCY);
 
 	/*  R4: zero KEEPS its documented meaning -- stop the timer.  */
 	memset(&d, 0, sizeof d); d.hz = 100;
@@ -153,7 +176,7 @@ int main(void)
 	chk("1000 Hz: timer added once", timer_adds, 1);
 
 	/*  IDENTITY: this table asserts its own row count.  */
-	chk("IDENTITY: row count", rows + 1, 9);
+	chk("IDENTITY: row count", rows + 1, 12);
 
 	printf("%d rows, %d failures\n", rows, failures);
 	printf(failures ? "RTC_RANGE_FAIL\n" : "RTC_RANGE_PASS\n");

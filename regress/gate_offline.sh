@@ -1123,8 +1123,13 @@ else
     sed 's/^/       /' "$RTCLOG"
     check     "RTC range: row failures" \
               "$(grep -oE '[0-9]+ failures' "$RTCLOG" | grep -oE '^[0-9]+')" "0"
+    #  Floor 9 -> 12 when the panel's MEASURED escape was closed: the clamp TARGET was
+    #  asserted nowhere, so `d->hz = 1;` passed all nine original rows -- a guest asking for
+    #  the fastest rate available would silently have got 1 Hz.  The value is named in this
+    #  comment on purpose, and this file already records what happens when such a comment
+    #  goes stale: the sh4_tmu floor comment said "16 -> 17" while the code read 18.
     check_min "RTC range: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 9
+              "$(grep -oE '^[0-9]+ rows' "$RTCLOG" | grep -oE '^[0-9]+')" 12
     check     "RTC range: offline verdict" "$(grep -c 'RTC_RANGE_PASS' "$RTCLOG")" "1"
     #  NAMED ROWS, because each is the SOLE detector of one arm and the row-count floor
     #  cannot see a deletion that also drops the floor.  -F throughout: the row names carry
@@ -1144,6 +1149,13 @@ else
               "$(grep -c -F 'bit31: hz is positive' "$RTCLOG")" "1"
     check     "RTC range: the zero-keeps-its-meaning rows are present" \
               "$(grep -c -F 'zero: ' "$RTCLOG")" "2"
+    #  *** THE SOLE DETECTOR OF THE CLAMP TARGET, and the first nine rows did not have it.
+    #  ***  Two panel seats said independently that no row asserts WHAT the clamp produces --
+    #  only that it is nonzero, positive, and did not remove the timer.  MEASURED rather than
+    #  predicted: `d->hz = (int) TIMER_MAX_FREQUENCY;` changed to `d->hz = 1;` passed 9 of 9.
+    #  Deleting these three rows restores that hole, so they are named here.
+    check     "RTC range: the clamp-exactness rows are present" \
+              "$(grep -c -F 'clamped to exactly TIMER_MAX_FREQUENCY' "$RTCLOG")" "3"
 fi
 
 # ---- #405: the ATA IDENTIFY capacity bytes --------------------------------------
