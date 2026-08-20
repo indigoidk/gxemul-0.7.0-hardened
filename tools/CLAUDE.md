@@ -397,8 +397,15 @@ three commits post-fix; **its own commit title says "detector"**). Grading a det
 witness clauses is a category error in either direction. Round prose saying "reproduced" without
 naming the artefact is a records defect; the ledger `witness` field is the fix.
 
-**Ranking:** order items by the strongest witness that exists TODAY — boot > probe > construction
-> none. **"No witness of either kind" is a CHECKABLE claim and must be checked, not asserted:**
+**Ranking — and the first version of this clause was WRONG, corrected 2026-08-19 by the
+same adjudication that wrote it.** It said *order items by the strongest witness that
+exists today*. **RUNG MEASURES REACHABILITY-PROOF STRENGTH, NOT HARM**, and using it to
+schedule promotes the benign item over the damaging one. The case that proved it: `b120r`
+has a rung-4 boot witness but a MEASURED guest-visible symptom of NIL (two transcripts
+byte-identical), while `armbdt` has only a rung-3 probe and CORRUPTS GUEST DATA. So:
+**a witness makes an item ELIGIBLE; SEVERITY and gate blind-spots order the queue.** Rung
+is a floor on admissibility, never a priority. Strongest witness today — boot > probe >
+construction **"No witness of either kind" is a CHECKABLE claim and must be checked, not asserted:**
 dfreq's was measured false by building the witness in one session.
 
 **Round scope (the reopening rule):** a witness makes a site ELIGIBLE, never mandatory. A round

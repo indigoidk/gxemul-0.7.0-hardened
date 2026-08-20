@@ -4247,6 +4247,22 @@ intended), and `dev_ram.c:132`'s `default:` is not guest-reachable (`d->mode` is
 **The rig question dominates the ranking**: arc and pmax have ZERO `DEVICE_ACCESS` exit sites
 between them, so luna88k's five are the only ones reproducible today.
 
+### `lunafuse` (2026-08-19) — filed properly, having existed only in a commit message
+
+`dev_luna88k.c:573`'s byte-write arm is an unlatched `fatal("TODO: luna88k byte write to
+fuse")` that **drops the write**, while the *word*-write arm directly above it stores. So the
+model both lies and is width-inconsistent, and it is guest-reachable by a byte store to
+`FUSE_ROM_ADDR`.
+
+**It is NOT part of #438 and could not have been**, under the reopening rule the witness ladder
+adopted: different semantic class (doctrine arm 3, where complain-and-continue may be exactly
+the wrong shape, since dropping a write that changes state makes the model *lie* rather than
+*lag*), and it needs a new oracle.
+
+*Filed here because the flagship review found the filing existed **only in `cf4b083`'s commit
+message** — no `OUTSTANDING_BUGS` line, no ledger row, no queue item. This project's own history
+is that a commit-message-only filing is how work is forgotten.*
+
 ### `#437` residuals (2026-08-18) — filed by the pass-2 panel, not fixed in that round
 
 The stopping rule admits a MEASURED FALSE PASS or a WRONG RECORD into the round that finds it.

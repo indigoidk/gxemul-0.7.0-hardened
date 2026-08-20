@@ -4192,6 +4192,69 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R11 (#438) — a guest store to INT_ST_MASK ended the emulator, and the new witness rule caught its own first round
+
+`dev_luna88k.c:816`. A guest store to `0x65000000`–`0x6500000c` with any of bits 25..0 set
+reached `fatal()` then `exit(1)` — the process ended. Now stores as-is and complains once,
+latched **per CPU**.
+
+**THE WITNESS LADDER, adopted the same day, immediately rejected this round's existing
+evidence.** Clause (i) demands the defect symptom on the pre-fix committed HEAD, and a pre-fix
+boot reaches `login:` with **zero hits** of the TODO string — *the rig boots precisely because
+the branch is never taken*. The 4,192,908-writes figure everyone had been citing, this record
+included, is heat on the **register**, not the **branch**: a reachability statistic, not a
+witness. **Four seats found that by reading before a measure seat proved it by booting.**
+
+So a rung-3 witness was built and shipped: `regress/luna_intmask_probe.py`. Both arms
+reproduced by the operator, same script — `PRE_FIX_SYMPTOM` on pre-fix HEAD (host dies, TODO
+text named), `PASS` after. It died **for the right reason**: the device-signature control
+passed *before* the death, so the probe demonstrably reached the device. Liveness controls
+bracket the guarded writes; every planted word is disassembled and text-compared before
+stepping, and an encoding mismatch exits SETUP rather than passing.
+
+**Store as-is, and the licensing argument in the design brief was wrong.** "Bits 25..0 are dead
+in the model" is over-broad — and it is the form that would have licensed *masking*.
+`interrupt_enable[]` has two readers: the interrupt path can only ever see bits 26..31 (that
+narrow claim is airtight, since registration is lines 1..6 only), but the read path echoes bits
+25..8 back at `odata[17..0]`. **Store-as-is drops nothing because it stores everything**, and
+the echo lands outside both fields this file's own comment says a driver reads. Masking would
+invent a hardware behaviour the tree has no source for — `INT_SET_LV0..LV7` are defined and
+never read, the `TIMER_EXTERNAL` trap again. Returning without storing would drop the *legal*
+prefix in 31..26 too, a real SPL change the guest can read back stale.
+
+**The latch is per-CPU, and "~296 MB per boot" was false.** A real boot makes **zero** guarded
+writes, so an unlatched fix emits zero bytes; the latch is mandatory as a guest-drivable
+*capability* bound at 29,960 writes/s, not as an observed cost. Per-instance latching was
+measured demoting the `INT_ST_MASK1` report — the "1 of 4 kinds reported" hazard `#435`'s own
+comment records — and costs one array subscript to avoid.
+
+Detector rows, each discriminating: D1 gives three different numbers for the three candidate
+shapes; D2 kills latch-then-exit-on-the-next; D3 proves bits 7..0 are unobservable and kills a
+narrowed guard; D4 uses a **second case label**, because the site has four and a one-label fix
+passes without it.
+
+**Recorded rather than tidied:** the panel's condition was capture the witness *first*, then
+implement. The operator implemented first and ran the pre-fix arm after. The flagship review
+ruled that this damages **the process record only, not the evidence** — clause (i)'s content is
+order-independent and there is no mechanism to fit a probe so a one-branch fix removes an
+unrelated death — but what is forfeited is the *licensing* semantics: the reproduction was
+meant to license the edit and instead verified it retroactively.
+
+**Two defects this round shipped, both found by the flagship review afterwards.** The probe
+shipped **unwired**, so nothing forced a gate run — which is why `gate_hygiene` went **latently
+red** (`EXPECT_CONVERTED` left at 16 while the probe's three `#392` constructs made it 17) and
+was never seen. That would have failed the weekly battery as a hygiene regression with a
+bookkeeping cause. **It is the third time that gate has gone red this way, and the second was
+one commit earlier the same day** — the footbridge probe had the identical coupling, the
+warning was given, it was handled correctly, the annotation was written, and then the same
+mistake was made with a different probe. Wiring the probe into gate 11 then immediately
+surfaced a second defect: `build/`'s **binary was four hours stale**, so measurements against
+that tree were of the wrong code.
+
+Filed, not fixed: `lunafuse` — `:573`'s byte-write arm is unlatched *and* silently drops the
+write while the word-write arm above it stores. Different semantic class, needs a new oracle,
+so it could not join this round under the reopening rule.
+
 ## R10 (#437) — SYNCHRONIZE CACHE told the guest its data was safe and synced the wrong file
 
 The guest issues SCSI `SYNCHRONIZE CACHE` for exactly one reason: to be told its writes are

@@ -669,8 +669,11 @@ int main(int argc, char *argv[])
 	 *
 	 *  This pins #134 (d->f can be NULL after a failed tape reopen) AND the status half:
 	 *  answering "durable" for a disk that cannot be synced is the same defect #416/#417
-	 *  corrected for writes.  Asserted through diskimage_sync() directly, because the
-	 *  handler path needs a machine and this is a property of the function.
+	 *  corrected for writes.  Asserted through diskimage_scsicommand(), NOT through
+	 *  diskimage_sync() directly -- this comment said otherwise for a day
+	 *  while the code did the right thing and this file's own header at
+	 *  the top says no direct call exists.  A local comment that
+	 *  contradicts both the code and the header is worse than none.
 	 */
 	{
 		struct diskimage d;

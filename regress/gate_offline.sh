@@ -1273,7 +1273,7 @@ fi
 #  distrust a red row.
 #
 #  Differential verified BOTH WAYS before this block was written: 7 rows / 0 failed against
-#  the fix, 7 rows / 4 failed against the pre-fix sources taken from git.  The pre-fix arm
+#  the fix, 7 rows / 5 failed against the pre-fix sources taken from git.  The pre-fix arm
 #  had to be built with the detector INSIDE the pre-fix tree: a quoted relative
 #  #include "../src/disk/diskimage.c" resolves against the including file's own directory,
 #  so compiling it from $SEC pulled in the FIXED source and reported a meaningless pass.

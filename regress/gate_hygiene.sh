@@ -135,7 +135,24 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  being converted afterwards -- which is the lesson of the m8820x entry above, where a probe
 #  landed in 9494c6a carrying two of the three constructs and turned this gate red on a commit
 #  that had never been run past it.
-EXPECT_CONVERTED=16
+#  16 -> 17 on 2026-08-19: luna_intmask_probe.py, #438's witness.  *** AND THIS ENTRY IS THE
+#  THIRD TIME THIS GATE HAS GONE RED FOR THE SAME REASON, ONE COMMIT AFTER THE SECOND. ***
+#  cf4b083 added the probe carrying all three pinned constructs and did NOT move this number.
+#  The commit ran gate 2 and the float selftest; GATE 6 NEVER FIRED, so the red was never seen
+#  and shipped latent -- it would have failed the Aug 22 weekly battery as a hygiene regression
+#  with a bookkeeping cause, which is the phantom-regression class this project already names.
+#  Found by the flagship seat recomputing this gate's own probe_code() census read-only.
+#
+#  The m8820x entry above records this shape, the footbridge entry directly above records it
+#  again, AND THE FOOTBRIDGE ENTRY WAS WRITTEN THE SAME DAY -- by the same operator, who was
+#  warned about the coupling for THAT probe, handled it correctly, and then repeated it for a
+#  different probe one commit later.  Reading a lesson is not the same as having it.
+#
+#  The structural fix, since three annotations have not been enough: a probe that ships in the
+#  same commit as its gate wiring cannot skip this pin, because the wiring forces a gate run.
+#  cf4b083 shipped the probe UNWIRED, so nothing made gate 6 fire.  See the luna88k block in
+#  gate_arm.sh, added with this bump.
+EXPECT_CONVERTED=17
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not

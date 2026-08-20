@@ -270,4 +270,47 @@ else
           "$(grep -c 'unimplemented command 0x24; ignored (reported once)' "$SLOG")" "1"
 fi
 
+#  ---------------------------------------------------------------------------
+#  #438: the INT_ST_MASK witness, wired here because this gate already depends on the
+#  luna88k binary and images -- a new gate script would move GATE_MANIFEST, a bigger claim
+#  than one probe is worth.
+#
+#  *** IT SHIPPED UNWIRED IN cf4b083, AND THAT IS WHY gate 6 WENT LATENTLY RED. *** With no
+#  gate invoking it, nothing forced a gate run, so its three #392 constructs never moved
+#  EXPECT_CONVERTED and the failure sat unseen until a review seat recomputed the census by
+#  hand.  A probe wired in the same commit cannot hide that way.
+#
+#  The probe is BOTH halves of the ladder: a rung-3 WITNESS (it shows the pre-fix symptom on
+#  a committed unmodified machine description) and a DETECTOR (D1-D4 separate store-as-is
+#  from masked from not-storing, kill a narrowed guard, and pin the SECOND case label because
+#  the site has four).  Only the detector half runs here -- the witness half needs a pre-fix
+#  binary, which a gate cannot build.
+LUNALOG=$LOGDIR/luna_intmask.log
+python3 luna_intmask_probe.py "$PMAX" "$IMAGES" > "$LUNALOG" 2>&1 || true
+grep -E "^  (C[0-9]|D[0-9]|E[0-9])" "$LUNALOG" | sed 's/^/       /'
+
+if ! grep -q "LUNA_INTMASK_WITNESS=" "$LUNALOG"; then
+    note "luna88k INT_ST_MASK probe produced no verdict; last lines follow"
+    tail -5 "$LUNALOG" | sed 's/^/       /'
+    check "luna88k INT_ST_MASK probe completed" "no" "yes"
+else
+    #  THE CONTROLS FIRST AND SEPARATELY.  C2 is the device-signature control: 0xfc000000
+    #  reads back 0x00fc0000 because the handler shifts by 8, and RAM cannot produce that.
+    #  A liveness row alone cannot substitute -- the footbridge probe's first draft returned
+    #  0x0 everywhere WITH ITS RAM CONTROL GREEN, which is why the ladder demands two.
+    check "luna88k intmask: device-signature control (the handler's own >>8)" \
+          "$(grep -c 'C2 read INT_ST_MASK0 after legal write' "$LUNALOG")" "1"
+    check "luna88k intmask: post-fix verdict" \
+          "$(grep -c 'LUNA_INTMASK_WITNESS=PASS' "$LUNALOG")" "1"
+    #  Named individually so deleting any one is visible rather than silent.  D2 is the row
+    #  that kills latch-once-then-exit-on-the-next; D4 uses the SECOND case label, because a
+    #  fix applied to cpunr 0 alone passes without it.
+    check "luna88k intmask: the second-write row is present (kills latch-then-exit)" \
+          "$(grep -c 'D2 readback' "$LUNALOG")" "1"
+    check "luna88k intmask: the second case label is exercised" \
+          "$(grep -c 'D4 readback from INT_ST_MASK1' "$LUNALOG")" "1"
+    check "luna88k intmask: row failures" \
+          "$(grep -cE '^  (C|D|E)[0-9].* (FAIL|MISMATCH)' "$LUNALOG")" "0"
+fi
+
 gate_end
