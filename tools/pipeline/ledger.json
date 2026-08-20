@@ -7008,6 +7008,15 @@
      "verdict": "",
      "evidence": "UNKNOWN",
      "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, fifth panel today, same echoed-brief-plus-429 signature; walled to Aug 22. Recorded by name. [panel_20260820_001711]"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** REPRODUCED AT RUNG 3, AND MY OWN PREMISE FOR THE TASK WAS WRONG. ***  I briefed the measure seat that NO rig reaches the 8253 -- only algor/cobalt/evbmips/iyonix via bus_isa -- and that a rung-4 witness therefore almost certainly did not exist. HALF FALSE, and the false half is what made rung 3 reachable. `bus_isa_init` has SIX callers outside src/machines/: bus_pci.c:476 and :1060, dev_eagle.c:160,172, dev_lca.c:376, dev_prep.c:80. My grep looked only at src/machines/ and bus_*.c and I reported the subset as the whole. **cats** reaches the 8253 through machine_cats.c -> dev_footbridge.c:730 (bus_pci_add \"ali_m1543\") -> bus_pci.c:459/476, at isa_portbase 0x7c000000. Verified here independently.\n\nTHE WITNESS: a cold-debugger probe on UNMODIFIED `-E cats`, the same mechanics as footbridge_sites_probe.py. Pre-fix and post-fix binaries from the same tree, same script:\n  C1 liveness            0x11223344 both     RAM through the same decode\n  A1 device signature    0xAA both           see below\n  T1 negative control    halts at paddr=0x0c000043, MMU-on cannot reach it\n  D0 count 0 -> hz       0 Hz  ->  18 Hz     the device's own report\n  G0 guest-visible       IRR 0x0 -> 0x1      after a 1.9 s free-run\n  D1 positive control    count 4608 -> 259 Hz, IRR=0x1, identical both ways\nAll four controls green in BOTH runs; only the two symptom rows move.\n\nTHE DEVICE SIGNATURE IS A VALUE RAM CANNOT PRODUCE, and it was designed against the exact trap that ate the footbridge probe's first draft. The guest writes 0xAA then 0x55 to the SAME address in 16-bit mode, writes the MODE register (a different address), then reads back and gets 0xAA -- the byte from two writes ago. RAM returns 0x55. Nonzero deliberately, because 0x0 is what an ABSENT device looks like.\n\nTWO CAVEATS THE SEAT OWNED RATHER THAN HID: G0/G1 use a WALL-CLOCK window (1.9 s against a 55 ms correct period, ~34 chances), which is why the post-fix green is the settlement and not the window size; and its first T1 draft reported FAIL through a string-equality bug in its own script, which it found and fixed. All 27 instruction encodings were checked against the emulator's own disassembler before use -- the hand-assembled-encoding trap this project has hit four times.\n\nREACHABILITY, MEASURED: no guest in this tree programs count 0. Every PIT write in _guest-src-openbsd22/sys/ is TIMER_DIV(x) (never 0) or 0xff/0xff, and no rig image boots an 8253 machine. A recollection that Linux's pit_shutdown() writes 0,0 was flagged RECALLED, UNVERIFIED rather than cited -- the right handling. *** BUT FINDING `pitflip` BELOW MANUFACTURES COUNT 0 FROM A GUEST THAT NEVER ASKS FOR IT, which changes the reachability picture entirely. ***\n\nMAPPINGS, measured not read: cats and netwinder 0x7c000040; malta/maltabe 0x18000040; cobalt 0x10000040; iyonix 0x90000040; absent on prep, mvmeppc, algor, arc.\n\nTHE FIX is one line -- hz = (int)(I8253_TIMER_FREQ / 65536.0 + 0.5) -> 18 -- and d->hz[] is read only at :133/137/140, all inside the MSB arm, so the blast radius is that arm. *** DO NOT GENERALISE BY ANALOGY: dev_rtc.c:129 and dev_mc146818.c:409 look identical and are CORRECT -- for those devices zero genuinely means 'off', and dev_rtc.c's comment records a prior round reasoning that through. The 8254 is the opposite case. *** Minor: int hz[3] rounds 18.2065 to 18 (-1.1%) while timer_add takes a double.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
     }
    ]
   },
@@ -10835,6 +10844,98 @@
      "verdict": "",
      "evidence": "UNKNOWN",
      "note": "[HELD AWAITING SEAT: codex] ECHO-ONLY, and the seat check proved it ARITHMETICALLY this time rather than by pattern: '16694b = brief 16006b + 688b'. Eighth consecutive wall today, walled to Aug 22. Recorded by name. [panel_20260820_004804]"
+    }
+   ]
+  },
+  {
+   "id": "pitflip",
+   "title": "pitflip  The 8253's 16-bit LSB/MSB selector is one-way, so it manufactures a count of 0 and silently loses bytes",
+   "state": "held",
+   "commits": "",
+   "hold": "Reachable by an ordinary driver; the measure seat ranks it and pitlatch ABOVE the count-0 item on severity-and-reachability.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "MEASURED at rung 3. dev_8253.c:170-171 CLEARS I8253_TIMER_LSB and nothing ever sets it back; a real 8254's flip-flop ALTERNATES on every access. Two full LSB/MSB pairs after one mode write produced THREE recomputes -- 97 Hz, **0 Hz**, 97 Hz -- where hardware does two. TWO CONSEQUENCES, and the first is what makes it matter: it transiently drives the counter to ZERO, i.e. straight into the i8253zero defect, FROM A GUEST THAT NEVER PROGRAMS COUNT 0. That inverts the reachability finding on i8253zero, where no available guest asks for count 0 directly. Second: if the second pair's LSB is nonzero it is SILENTLY LOST -- intending 0x3055 the device holds 0x3000. Same device and the same semantic class as i8253zero (counter-load byte routing), so it is the natural companion if a round takes a second site.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    }
+   ]
+  },
+  {
+   "id": "pitlatch",
+   "title": "pitlatch  The 8253 treats the standard LATCH command as an error, and a real guest issues it in microtime()",
+   "state": "held",
+   "commits": "",
+   "hold": "Reachable by an ordinary driver and demonstrated in local guest source.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "MEASURED at rung 3. Writing mode 0x00 (the counter-latch command) and then reading the counter falls to dev_8253.c's `default:` arm, which emits fatal(\"[ 8253: huh? reading from counter 0 ... ]\") and returns 0. That is the STANDARD on-the-fly counter read, not an error. *** A REAL GUEST IN THIS TREE DOES EXACTLY THIS: _guest-src-openbsd22/sys/arch/i386/isa/clock.c:207-209, in microtime(). *** So a guest asking the time gets 0 and an unlatched host log line -- which is also an instance of the `floodclass` shape filed earlier. The measure seat ranks this at or above i8253zero on severity-and-reachability, because an ordinary driver reaches it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    }
+   ]
+  },
+  {
+   "id": "pitlsb",
+   "title": "pitlsb  8253 LSB-only mode (RW=01) recomputes no frequency at all, so the timer is never created or retimed",
+   "state": "held",
+   "commits": "",
+   "hold": "Distinct arm from i8253zero; do not fold.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "MEASURED at rung 3. A legal single-byte counter load in LSB-only mode produces ZERO hz recomputes and timer0 is never created or retimed; dev_8253.c:117-121 breaks before the hz block. The IDENTICAL byte through MSB-only gives `counter 0 set to 13312 (90 Hz)`. The 16-bit arm needs nothing -- it routes its recompute through MSB, correctly -- so this is a DIFFERENT defect from i8253zero, in a different arm, and must not be folded into it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
+    }
+   ]
+  },
+  {
+   "id": "isaorder",
+   "title": "isaorder  bus_isa copies a pointer before the device that sets it is added, so the timer-interrupt ack can never run",
+   "state": "held",
+   "commits": "",
+   "hold": "READ only -- needs its own reproduction before any edit.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "READ, NOT MEASURED, and recorded at that grade deliberately. bus_isa.c:224-225 copies machine->isa_pic_data.pending_timer_interrupts at line 225, but dev_8253.c:248 -- the ONLY writer of that field -- runs from the device_add at line 244. machine.c's memset(m, 0, ...) means the field is always NULL at the copy, so the timer-interrupt ack at bus_isa.c:134-138 can never run. LATENT TODAY only because nothing ever deasserts isa.0. The same shape sits at dev_v3.c:298. An ordering bug of this kind is exactly what a construction-time (rung 2) witness is for, since it is a defect in what construction itself does.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/t8253/ (pit8253_count0_probe.py, pit8253_site_probe.py)"
     }
    ]
   }
