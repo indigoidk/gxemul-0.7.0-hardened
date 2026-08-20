@@ -7178,6 +7178,68 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "*** THE BRIEF'S FRAMING WAS HALF WRONG, AND THE HALF IT GOT WRONG CHANGES WHAT SHOULD BE FIXED. *** Verdict FIX-not-document, but not for the reason I gave it.\n* 0xE7 WDCC_FLUSHCACHE is DEFINED at wdcreg.h:130 and NEVER REFERENCED in dev_wdc.c; 0xEA has no constant anywhere in src/. Both fall to wdc_command()'s default:, which sets WDCE_ABRT, emits an UNLATCHED fatal(), and -- the part that matters -- does NOT set d->int_assert. MEASURED offline against the shipping wdc_command(): 0xE7 -> err=0x04 irq=0 fatal=1, status 0x51 (DRDY|DSC|ERR), against the 0x10 RECAL control at err=0x00 irq=1.\n* NO REAL GUEST ISSUES IT, and the negative is WELL CONTROLLED. With an IDE disk attached and a full filesystem lifecycle (MAKEDEV, fdisk, disklabel, newfs 64 MB FFS, mount, write, sync, umount, halt -p) OpenBSD 7.6 issues exactly: 0xEC 0xF5 0x10 0x91 0xC6 0x20 0xC4 0x30 0xC5 0xE0. No 0xE7, no 0xEA.\n* IT REFUTED ITS OWN LEADING HYPOTHESIS rather than resting on it: 'the drive does not advertise FLUSH CACHE' was tested with TWO discriminating IDENTIFY variants (word 83=0x5000 and 0x7000). The guest DEMONSTRABLY READ the new IDENTIFY -- it began issuing 0xEF SET FEATURES, which it never did before -- and STILL never flushed. Why OpenBSD declines is an honest UNKNOWN: there is no OpenBSD source in this tree, and reconstructing wd_flushcache from memory is exactly the trap the SH-manual rule exists to prevent.\n* *** THE LIVE DEFECT IS THE ARM, NOT THE OPCODE: 0xE0 STANDBY IMMEDIATE hits the same default: on EVERY `halt -p`, measured 4 of 4 shutdown runs. *** ABRT to the guest, no interrupt, unlatched host warning, and the guest swallows it silently. So the IDE side has a reachable reproducible fall-through TODAY, and FLUSH CACHE is an unreached member of the same set.\n* THE FIX IS NOT A ONE-LINER. diskimage_sync() takes a struct diskimage *, but dev_wdc.c only ever holds (machine, id, type) -- and THERE IS NO EXPORTED (machine,id,type) -> struct lookup; every public function in diskimage.c open-codes the same 6-line walk. Needs a diskimage_sync_id() wrapper, a WDCC_FLUSHCACHE_EXT constant, and a case arm that also sets int_assert. Built privately: 0xE7/0xEA become err=0x00 irq=1 fatal=0 with trace F(data) S(data), matching the SCSI sibling.\n* DETECTOR BUILT, and it COMPILES AGAINST BOTH TREES because the rows pass a RAW OPCODE INTEGER rather than the WDCC_ constant -- deliberately sidestepping the exact trap diff_diskimage_sync.c's header records, where naming the new symbol made the pre-fix arm a SETUP result. 9 rows / 0 failed pre-fix; 8 of 9 flip post-fix. Needs only two extra stubs given the flags gate_offline.sh already passes.\n* SCOPE: all three files are byte-identical between est/ and GXEMUL-SEC/. And wdc is far from landisk-only -- bus_isa, bus_pci, dev_pcic, dev_ps2_spd, machine_arc.c:235, machine_landisk.c:87 and promemul/of.c all instantiate it, so ARC IS A SECOND ATA RIG THAT WAS NOT TESTED.  [agent idesync 2026-08-19]"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this cluster panel. ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this cluster panel. ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this cluster panel. ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "CLUSTER PANEL on wdc_command()'s `default:` arm -- five rows, one code path, none of them previously reviewed by anyone but the seat that filed it. *** THE SEATS WERE UNANIMOUS ON THE QUESTION THAT DECIDES THE WORK: SPLIT. *** Four independent verdict lines said so (agy: 'four defects in one arm require three distinct oracles, cross subsystem boundaries'; deepseek: 'one default: arm yields at least three distinct semantic classes/oracles'; minimax: 'the four rows collapse to two distinct fix designs'; glm: 'one arm, three distinct oracles -- host-log count, IRQ assertion, fsync ordering'). The reopening rule's NO-NEW-ORACLE prong is what does the splitting, and the argument is mechanical rather than stylistic: a detector that counts host stderr lines cannot observe int_assert; one that observes int_assert cannot observe fsync ordering; one that observes fsync ordering cannot count log lines. THE AGREED SPLIT:\n  Round A  wdcflood alone            -- oracle: host-log line count; fix: the warned_* latch idiom, which #337 already applied THREE TIMES in this same file.\n  Round B  wdcnoirq + wdcstandby     -- oracle: IRQ assertion; ONE fix (set int_assert). They travel together because wdcstandby is the RUNG-4 WITNESS (a real OpenBSD driver reaching the path unaided, 4 of 4 halt -p runs) that grounds wdcnoirq, whose harm statement is otherwise inference.\n  Round C  idesync alone             -- oracle: fsync ordering; crosses a module boundary into diskimage.c and cannot be witnessed above rung 2, since no guest in this tree issues the opcode.\n  landiskdisk is NOT a behavioural defect -- a coverage gap. It files; it does not round.\nSeats: 6 of 7 scriptable answered (agy 12.6 KB, grok 11.7 KB, kimi 74 KB, glm 19.6 KB, deepseek 5.3 KB, minimax 11.6 KB). Codex RATE-LIMITED for the third time today, same echoed-brief-plus-429 signature. *** GROK WAS 200 BYTES WHEN FIRST SAMPLED AND FINISHED AT 11.7 KB -- the third time in one day that a small early sample was mid-answer, not a dead seat. ***\n\nFOR THIS ROW: ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this cluster panel. ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this cluster panel. ROUND C, alone. Different oracle (fsync ordering), different fix (a new diskimage_sync_id() export, a WDCC_FLUSHCACHE_EXT constant, new case arms), and it crosses into diskimage.c. Note the honest ceiling the filing already records: NO GUEST IN THIS TREE ISSUES 0xE7 OR 0xEA -- verified with two discriminating IDENTIFY variants where the guest demonstrably read the new IDENTIFY and still never flushed -- so this can only ever be construction-tested, never witnessed at rung 3 or 4.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third panel today with the identical signature: a 10,036-byte file that is the echoed brief plus the usage-limit error, walled to Aug 22. Recorded by name; the blank is not agreement. [panel_20260819_235917]"
     }
    ]
   },
@@ -7194,6 +7256,68 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "MEASURED. The arm sets WDCE_ABRT and returns without setting d->int_assert, and dev_wdc_tick() raises the IRQ only when that flag is set. A polling driver sees ABRT; an interrupt-driven one sees nothing at all. Live TODAY via 0xE0 on every halt -p, not only via the unimplemented flush. That an interrupt-waiting driver would then hit a wdc timeout is READ/inference -- no guest was observed doing it.  [agent idesync 2026-08-19]"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this cluster panel. ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this cluster panel. ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this cluster panel. ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "CLUSTER PANEL on wdc_command()'s `default:` arm -- five rows, one code path, none of them previously reviewed by anyone but the seat that filed it. *** THE SEATS WERE UNANIMOUS ON THE QUESTION THAT DECIDES THE WORK: SPLIT. *** Four independent verdict lines said so (agy: 'four defects in one arm require three distinct oracles, cross subsystem boundaries'; deepseek: 'one default: arm yields at least three distinct semantic classes/oracles'; minimax: 'the four rows collapse to two distinct fix designs'; glm: 'one arm, three distinct oracles -- host-log count, IRQ assertion, fsync ordering'). The reopening rule's NO-NEW-ORACLE prong is what does the splitting, and the argument is mechanical rather than stylistic: a detector that counts host stderr lines cannot observe int_assert; one that observes int_assert cannot observe fsync ordering; one that observes fsync ordering cannot count log lines. THE AGREED SPLIT:\n  Round A  wdcflood alone            -- oracle: host-log line count; fix: the warned_* latch idiom, which #337 already applied THREE TIMES in this same file.\n  Round B  wdcnoirq + wdcstandby     -- oracle: IRQ assertion; ONE fix (set int_assert). They travel together because wdcstandby is the RUNG-4 WITNESS (a real OpenBSD driver reaching the path unaided, 4 of 4 halt -p runs) that grounds wdcnoirq, whose harm statement is otherwise inference.\n  Round C  idesync alone             -- oracle: fsync ordering; crosses a module boundary into diskimage.c and cannot be witnessed above rung 2, since no guest in this tree issues the opcode.\n  landiskdisk is NOT a behavioural defect -- a coverage gap. It files; it does not round.\nSeats: 6 of 7 scriptable answered (agy 12.6 KB, grok 11.7 KB, kimi 74 KB, glm 19.6 KB, deepseek 5.3 KB, minimax 11.6 KB). Codex RATE-LIMITED for the third time today, same echoed-brief-plus-429 signature. *** GROK WAS 200 BYTES WHEN FIRST SAMPLED AND FINISHED AT 11.7 KB -- the third time in one day that a small early sample was mid-answer, not a dead seat. ***\n\nFOR THIS ROW: ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this cluster panel. ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this cluster panel. ROUND B, with wdcstandby. The seats were clear that this row must NOT travel alone: its harm statement ('an interrupt-driven guest waits forever') is INFERENCE, and wdcstandby supplies the only witness that a real driver reaches the arm at all. A round on the abstract defect without its witness would be fixing something nobody has seen happen.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third panel today with the identical signature: a 10,036-byte file that is the echoed brief plus the usage-limit error, walled to Aug 22. Recorded by name; the blank is not agreement. [panel_20260819_235917]"
     }
    ]
   },
@@ -7210,6 +7334,68 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "MEASURED: 100 repeats of 0xE7 produced 100 fatal() calls. Same guest-drivable stderr flood class as #265/#269 and the cflood rule. dev_wdc.c ALREADY CARRIES THREE warned_* latches added by #337 -- this path was simply missed by that round.  [agent idesync 2026-08-19]"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this cluster panel. ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this cluster panel. ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this cluster panel. ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "CLUSTER PANEL on wdc_command()'s `default:` arm -- five rows, one code path, none of them previously reviewed by anyone but the seat that filed it. *** THE SEATS WERE UNANIMOUS ON THE QUESTION THAT DECIDES THE WORK: SPLIT. *** Four independent verdict lines said so (agy: 'four defects in one arm require three distinct oracles, cross subsystem boundaries'; deepseek: 'one default: arm yields at least three distinct semantic classes/oracles'; minimax: 'the four rows collapse to two distinct fix designs'; glm: 'one arm, three distinct oracles -- host-log count, IRQ assertion, fsync ordering'). The reopening rule's NO-NEW-ORACLE prong is what does the splitting, and the argument is mechanical rather than stylistic: a detector that counts host stderr lines cannot observe int_assert; one that observes int_assert cannot observe fsync ordering; one that observes fsync ordering cannot count log lines. THE AGREED SPLIT:\n  Round A  wdcflood alone            -- oracle: host-log line count; fix: the warned_* latch idiom, which #337 already applied THREE TIMES in this same file.\n  Round B  wdcnoirq + wdcstandby     -- oracle: IRQ assertion; ONE fix (set int_assert). They travel together because wdcstandby is the RUNG-4 WITNESS (a real OpenBSD driver reaching the path unaided, 4 of 4 halt -p runs) that grounds wdcnoirq, whose harm statement is otherwise inference.\n  Round C  idesync alone             -- oracle: fsync ordering; crosses a module boundary into diskimage.c and cannot be witnessed above rung 2, since no guest in this tree issues the opcode.\n  landiskdisk is NOT a behavioural defect -- a coverage gap. It files; it does not round.\nSeats: 6 of 7 scriptable answered (agy 12.6 KB, grok 11.7 KB, kimi 74 KB, glm 19.6 KB, deepseek 5.3 KB, minimax 11.6 KB). Codex RATE-LIMITED for the third time today, same echoed-brief-plus-429 signature. *** GROK WAS 200 BYTES WHEN FIRST SAMPLED AND FINISHED AT 11.7 KB -- the third time in one day that a small early sample was mid-answer, not a dead seat. ***\n\nFOR THIS ROW: ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this cluster panel. ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this cluster panel. ROUND A, and the seats put it first for tractability rather than severity: one oracle, one line, and the precedent is already in this file three times over. It corrupts nothing -- it is host-log noise a guest can drive without limit.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third panel today with the identical signature: a 10,036-byte file that is the echoed brief plus the usage-limit error, walled to Aug 22. Recorded by name; the blank is not agreement. [panel_20260819_235917]"
     }
    ]
   },
@@ -7226,6 +7412,68 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "MEASURED 4 of 4 shutdown runs on OpenBSD 7.6/landisk. Falls to default:, ABRT with no interrupt and an unlatched warning; the guest swallows it silently. The nearby 'POWEROFF FAILED!' is UNRELATED -- it comes from a missing landisk power register at paddr 0x10000003, not from the ATA abort. This is the reachable member of the fall-through set.  [agent idesync 2026-08-19]"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this cluster panel. ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this cluster panel. ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this cluster panel. ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "CLUSTER PANEL on wdc_command()'s `default:` arm -- five rows, one code path, none of them previously reviewed by anyone but the seat that filed it. *** THE SEATS WERE UNANIMOUS ON THE QUESTION THAT DECIDES THE WORK: SPLIT. *** Four independent verdict lines said so (agy: 'four defects in one arm require three distinct oracles, cross subsystem boundaries'; deepseek: 'one default: arm yields at least three distinct semantic classes/oracles'; minimax: 'the four rows collapse to two distinct fix designs'; glm: 'one arm, three distinct oracles -- host-log count, IRQ assertion, fsync ordering'). The reopening rule's NO-NEW-ORACLE prong is what does the splitting, and the argument is mechanical rather than stylistic: a detector that counts host stderr lines cannot observe int_assert; one that observes int_assert cannot observe fsync ordering; one that observes fsync ordering cannot count log lines. THE AGREED SPLIT:\n  Round A  wdcflood alone            -- oracle: host-log line count; fix: the warned_* latch idiom, which #337 already applied THREE TIMES in this same file.\n  Round B  wdcnoirq + wdcstandby     -- oracle: IRQ assertion; ONE fix (set int_assert). They travel together because wdcstandby is the RUNG-4 WITNESS (a real OpenBSD driver reaching the path unaided, 4 of 4 halt -p runs) that grounds wdcnoirq, whose harm statement is otherwise inference.\n  Round C  idesync alone             -- oracle: fsync ordering; crosses a module boundary into diskimage.c and cannot be witnessed above rung 2, since no guest in this tree issues the opcode.\n  landiskdisk is NOT a behavioural defect -- a coverage gap. It files; it does not round.\nSeats: 6 of 7 scriptable answered (agy 12.6 KB, grok 11.7 KB, kimi 74 KB, glm 19.6 KB, deepseek 5.3 KB, minimax 11.6 KB). Codex RATE-LIMITED for the third time today, same echoed-brief-plus-429 signature. *** GROK WAS 200 BYTES WHEN FIRST SAMPLED AND FINISHED AT 11.7 KB -- the third time in one day that a small early sample was mid-answer, not a dead seat. ***\n\nFOR THIS ROW: ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this cluster panel. ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this cluster panel. ROUND B, with wdcnoirq, and it is the WITNESS half. Reached by a real OpenBSD 7.6/landisk driver on every `halt -p`, measured 4 of 4. Under the ladder, severity and reachability order the queue -- so of the four behavioural rows this is the one with a rung-4 witness and it anchors the round.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third panel today with the identical signature: a 10,036-byte file that is the echoed brief plus the usage-limit error, walled to Aug 22. Recorded by name; the blank is not agreement. [panel_20260819_235917]"
     }
    ]
   },
@@ -7242,6 +7490,68 @@
      "verdict": "REAL",
      "evidence": "CONFIRMED",
      "note": "MEASURED: gate_crossfamily.sh:199 -> drive_guest.py:84 boots `-N -E landisk -M 64 <bsd.rd>` with no disk image, and across a full boot to the installer prompt NOT ONE ATA opcode is written to the command register. wdc0 attaches and is never driven. Adding `-d i:` to that rig would cover 10 real opcodes (IDENTIFY, RECAL, IDP, SETMULTI, READ, READMULTI, WRITE, WRITEMULTI, SEC_FREEZE_LOCK, STANDBY_IMMED) at roughly no cost. Cheapest coverage gain identified this round.  [agent idesync 2026-08-19]"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "agy answered this cluster panel. NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "grok answered this cluster panel. NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "kimi answered this cluster panel. NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "CLUSTER PANEL on wdc_command()'s `default:` arm -- five rows, one code path, none of them previously reviewed by anyone but the seat that filed it. *** THE SEATS WERE UNANIMOUS ON THE QUESTION THAT DECIDES THE WORK: SPLIT. *** Four independent verdict lines said so (agy: 'four defects in one arm require three distinct oracles, cross subsystem boundaries'; deepseek: 'one default: arm yields at least three distinct semantic classes/oracles'; minimax: 'the four rows collapse to two distinct fix designs'; glm: 'one arm, three distinct oracles -- host-log count, IRQ assertion, fsync ordering'). The reopening rule's NO-NEW-ORACLE prong is what does the splitting, and the argument is mechanical rather than stylistic: a detector that counts host stderr lines cannot observe int_assert; one that observes int_assert cannot observe fsync ordering; one that observes fsync ordering cannot count log lines. THE AGREED SPLIT:\n  Round A  wdcflood alone            -- oracle: host-log line count; fix: the warned_* latch idiom, which #337 already applied THREE TIMES in this same file.\n  Round B  wdcnoirq + wdcstandby     -- oracle: IRQ assertion; ONE fix (set int_assert). They travel together because wdcstandby is the RUNG-4 WITNESS (a real OpenBSD driver reaching the path unaided, 4 of 4 halt -p runs) that grounds wdcnoirq, whose harm statement is otherwise inference.\n  Round C  idesync alone             -- oracle: fsync ordering; crosses a module boundary into diskimage.c and cannot be witnessed above rung 2, since no guest in this tree issues the opcode.\n  landiskdisk is NOT a behavioural defect -- a coverage gap. It files; it does not round.\nSeats: 6 of 7 scriptable answered (agy 12.6 KB, grok 11.7 KB, kimi 74 KB, glm 19.6 KB, deepseek 5.3 KB, minimax 11.6 KB). Codex RATE-LIMITED for the third time today, same echoed-brief-plus-429 signature. *** GROK WAS 200 BYTES WHEN FIRST SAMPLED AND FINISHED AT 11.7 KB -- the third time in one day that a small early sample was mid-answer, not a dead seat. ***\n\nFOR THIS ROW: NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "deepseek answered this cluster panel. NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "minimax answered this cluster panel. NOT A ROUND -- a coverage gap, and the seats agreed it files rather than rounds. It is nonetheless the cheapest coverage gain identified: the landisk rig boots with NO disk image, so dev_wdc.c has ZERO rig coverage in the entire battery, and `-d i:` would exercise ten real opcodes. The panel was asked whether adding a disk to a booting rig is safe or a trap; that question is the gating one and its answers are in the seat files.",
+     "grade": "BELIEVED",
+     "ev": "_scratchpad/panel_20260819_235917/"
+    },
+    {
+     "phase": "assess",
+     "seat": "codex",
+     "date": "2026-08-20",
+     "verdict": "",
+     "evidence": "UNKNOWN",
+     "note": "[HELD AWAITING SEAT: codex] QUOTA WALL, third panel today with the identical signature: a 10,036-byte file that is the echoed brief plus the usage-limit error, walled to Aug 22. Recorded by name; the blank is not agreement. [panel_20260819_235917]"
     }
    ]
   },
