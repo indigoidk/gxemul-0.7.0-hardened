@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Render pipeline/dashboard.html from pipeline/ledger.json.  NEVER hand-edit the output.
+"""Render pipeline/matrix.html from pipeline/ledger.json.  NEVER hand-edit the output.
+
+THE DOCSTRING SAID `dashboard.html` WHILE LINE 24 WROTE `matrix.html`, and an untracked,
+stale dashboard.html has been sitting beside the real output as a result -- smaller and
+hours older, and indistinguishable from the live board to anyone about to publish one.
+The file this script writes is matrix.html; that is the tracked one and the one to publish.
 
 Ledger-first (PIPELINE.md section 5): the JSON is the single source of truth; a cell without
 a ledger entry behind it is a defect.  Idempotent.

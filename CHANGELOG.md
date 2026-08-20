@@ -4192,6 +4192,92 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R4 detector (#429) — the fix shipped with nothing that could notice its removal, and the lesson was already written three blocks below
+No emulator behaviour changes. This is a detector for a correction that shipped four days
+earlier with none, plus the gate wiring, six wrong records this round created and corrected in
+the same session, and one new instrument.
+
+**#429 could be deleted and every gate stayed green.** Nothing under `regress/` compiled or even
+mentioned `dev_rtc.c`, so reverting the range check whole, or flipping its comparison, was
+invisible — the fifth vacuity class, a shipped fix whose mutant passes everything. Two seats
+filed it independently a day apart, as `rtcdet` and `rtcgate`, and both then sat **held for days
+on a recorded obstacle that was false**: *"cannot simply `#include` the device (it pulls in
+cpu.h, machine.h, emul.h, device.h)"*. Five differentials in the same gate already did exactly
+that. The obstacle cost more than the round did.
+
+**THE ROUND TOOK THREE PASSES BECAUSE THE PANEL BROKE THE FIRST TWO, AND EACH ESCAPE WAS THE
+SAME SHAPE: the table asserted that something happened, never WHAT.**
+
+| pass | what the seats measured passing the table | rows |
+|---|---|---|
+| 1 → 2 | `d->hz = (int) TIMER_MAX_FREQUENCY;` → `d->hz = 1;` — a guest asking for the fastest rate available silently gets 1 Hz | 9 → 12 |
+| 2 → 3 | `TIMER_MAX_FREQUENCY` → `TIMER_MAX_CATCHUP` — **one identifier**, and the macros sit two lines apart in `timer.h` | 12 → 17 |
+| 2 → 3 | `timer_update_frequency()` deleted — `last_timer_hz` was captured by the stubs from the first draft and **no row ever read it** | |
+
+The second is the cheapest edit on record here. The table sampled exactly ONE in-range value,
+1000, so the threshold could be moved anywhere in `[1000, INT_MAX]` undetected, boosting every
+guest rate above 2²⁰ to `INT_MAX` — a rate `timer.h:72-77` itself calls unserviceable, where
+*"the debt grows without bound"*.
+
+*** AND THAT EXACT CLASS IS DOCUMENTED IN THIS FILE, IN THE `R4 follow-up` BLOCK, ABOUT THIS
+SAME PAIR OF MACROS. *** It records three seats measuring `TIMER_MAX_CATCHUP` → 65536 and
+`TIMER_MAX_FREQUENCY` → 32768.0 passing every row of `diff_timer.c`, and its answer was to
+assert an absolute consequence derived from outside the header. The new detector did not apply
+it. This is the same failure `gate_offline.sh` names about its own SELFCHECK row — *"the
+doctrine was written down and then not applied to the next row added."* A lesson recorded in
+prose, three blocks away, in the file the author had open.
+
+Final: **17 rows, 0 failures, `RTC_RANGE_PASS`**; gate 2 **PASS at 258 checks** (245 before).
+Every arm re-measured against the final table — pre-#429 revert 7 failures, flipped compare 11,
+clamp→1 Hz 3, →`CATCHUP` 1, →2³¹ 2, →2³² 5, update deleted 2. Both failability controls added:
+a `selfmutant` fragment pair pinned to `2^32: timer NOT removed` (`SELFMUTANT_OK`), and an
+`@@SELFCHECK@@` sentinel — `rtc_range` goes in the UNIFORM group, since every row routes
+through the single comparator `chk()`.
+
+**A mutant that PASSES can be the correct answer, and one seat's whole verdict rested on
+missing that.** The only dissenting verdict (`DEFECTIVE`) named *"replace `TIMER_MAX_FREQUENCY`
+with `0x7fffffff` and the limit is gone for everything in `(TIMER_MAX_FREQUENCY, 0x7fffffff]`"*.
+That interval is **empty** — `timer.h:81` defines the constant AS `2147483647.0`. The mutant is
+a no-op and passing it is right. A packet-fed seat cannot read the constant, which is precisely
+why a packet seat is never a vote on repo fact — and its *second* point, the clamp target, was
+correct and forced pass 2. Both halves of one 3.6 KB answer.
+
+**SIX WRONG RECORDS, five found by the flagship seat, all created by this round.** The count of
+`#include`-ing differentials (four → **five**); *"filed a day apart"* (unsupported — both
+entries are dated the same day); the `.why` and the `.c` header both describing a superseded
+9-row table; *"~120 lines"* and *"~100 lines"* for one thing; pass 2's *"raising the threshold
+past 2³¹ fails THREE rows"* (it fails **two**, both the bit-31 pair — pass 2 tested 2³⁶ and
+wrote the intent); and a scope pointer citing `n2/n4/tfreq` for a three-device residual **none
+of them contains**.
+
+**The "strict superset" sentence was wrong, and so was the correction of it.** It claimed
+`dev_sh4.c` pulls a strict superset of `dev_rtc.c`'s headers *"except emul.h"*; the flagship
+seat called that backwards, saying `emul.h` IS pulled transitively and `testmachine/dev_rtc.h`
+is the real exception. Settled by asking the preprocessor instead of reading `#include` lines,
+since nearly all of the closure is transitive: `dev_rtc.c` 23 project headers, `dev_sh4.c` 35,
+and **two** are in the first and not the second — `emul.h` *and* `testmachine/dev_rtc.h`.
+Measurement over seat rank, in both directions.
+
+**One reading was refuted by the source.** A seat wrote that production `fatal()` exits, making
+#429's clamp guest-reachable process death. `debugmsg.c:384` shows `fatal()` is byte-for-byte
+`debug()` — `va_start`, `va_debug`, `va_end`, no exit. So the detector's stub is faithful, and
+the real consequence is an unlatched flood: 1000 guest writes produced 1003 stderr lines, filed
+as `rtcflood` in #429's own fix.
+
+**Seats: 8 of 9.** Codex was RATE-LIMITED — its 26,992-byte file is the echoed brief plus
+*"You've hit your usage limit … try again at Aug 22nd"*, which a size check alone would have
+scored the largest answer in the panel. Recorded by name with a HELD marker and a queue entry:
+a degrade under the owner's standing authority, never a silent one.
+
+Also this round: `tools/pipeline/check_commit_attribution.py` and precommit **section L**. The
+ledger is the single source of truth and the board renders from it, yet 33 of the 40 most recent
+commits were named by no row — most legitimately, two sharply: `6014b7e`'s subject reads
+*"selfmutant6 CLOSED"* against a row that read `held`, and `gate3scope`'s `commits` named
+`2a5bc48`, the R9/#435 **m8820x device round**, which touches zero selfmutant lines. Six
+negative controls found **three defects in the checker itself**, including one that let a row
+name a commit and still contradict it. It prints both of its blindnesses on every run, green or
+red.
+
 ## R11 (#438) — a guest store to INT_ST_MASK ended the emulator, and the new witness rule caught its own first round
 
 `dev_luna88k.c:816`. A guest store to `0x65000000`–`0x6500000c` with any of bits 25..0 set
