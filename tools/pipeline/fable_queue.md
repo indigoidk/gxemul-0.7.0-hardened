@@ -16,6 +16,34 @@ reason the queue is written down rather than remembered.
 
 ## QUEUED — in priority order
 
+### The CODEX-held assess stages — **seven rows, one seat, one wall**
+
+`wdcflood` · `wdcnoirq` · `wdcstandby` · `idesync` · `landiskdisk` · `smnotland` · `smhang`
+
+All seven carry a `[HELD AWAITING SEAT: codex]` marker on their assess stage. **This is one
+outage, not seven decisions.** Codex hit its usage limit and is walled to **2026-08-22 12:12**;
+it produced the identical signature on three separate panels in one evening — an echoed brief
+followed by the usage-limit error, in files of 26,992 / 11,180 / 10,036 bytes. *A size check
+alone scores those as the largest answers in their panels.*
+
+**Every other seat answered.** The wdc cluster was reviewed by six scriptable seats plus both
+Agent seats, and their verdict on the question that decides the work was **unanimous (SPLIT)**,
+so nothing here is waiting on Codex to be actionable — it is waiting on Codex to be *complete*
+under the full-panel rule.
+
+**This entry is not about Fable.** The queue is where a held stage is named regardless of which
+seat holds it; that is the rule section I of `precommit_check.sh` enforces, and it is the rule
+that caught these seven sitting held-but-unqueued.
+
+**Standing authority for proceeding meanwhile:** the owner directed *"if there is anything else
+in the matrix that can be ran by any other model other than codex; please proceed"*. Recorded,
+not silent.
+
+**Action after 2026-08-22:** re-fire Codex against
+`_scratchpad/brief_wdcarm.md` and `_scratchpad/brief_smharness.md`, then either record its
+answer or record explicitly that it added nothing beyond the confirmed set. A blank cell and a
+seat failure must not look alike.
+
 ### `selfcheckman` — regress stage — **HELD, batched**
 
 Closed 2026-08-19 as **already fixed** by `7e3b120`, verified independently twice (the main

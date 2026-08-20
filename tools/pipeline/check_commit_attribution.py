@@ -120,7 +120,18 @@ def records_only(h):
     Cheap and cached by the caller: only consulted for commits that already matched a row id,
     which is a handful per run rather than the whole log."""
     paths = [p for p in git("show", "--name-only", "--format=", h).splitlines() if p.strip()]
-    return bool(paths) and all(p.lower().endswith((".md", ".txt")) for p in paths)
+    #  *** THE LEDGER IS A RECORD, AND THE FIRST VERSION OF THIS DID NOT KNOW THAT. ***  It
+    #  recognised only .md/.txt, so a commit touching ONLY tools/pipeline/ledger.json and
+    #  fable_queue.md -- a pure bookkeeping commit that closes a row and queues its held
+    #  stage -- was scored as AUTHORSHIP and hard-failed.  Caught on this check's own first
+    #  week, by its own output, on a commit written to satisfy a sibling gate.
+    #
+    #  tools/pipeline/ is the ledger, the queue, the dashboard renderings and the checkers'
+    #  own manifests: writing there is recording, never shipping.  Anything OUTSIDE it that
+    #  is not .md/.txt is still authorship, so a fix that edits a checker's LOGIC still counts.
+    return bool(paths) and all(
+        p.lower().endswith((".md", ".txt")) or p.startswith("tools/pipeline/")
+        for p in paths)
 
 
 def main(argv):
