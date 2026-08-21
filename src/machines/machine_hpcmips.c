@@ -80,13 +80,41 @@ MACHINE_SETUP(hpcmips)
 		hpc_fb_bits = 15;
 		hpc_fb_encoding = BIFB_D16_0000;
 
-		/*  TODO: irq?  */
-		snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=0 addr=0x"
-		    "0a008680 addr_mult=4 in_use=%i", !machine->x11_md.in_use);
-		machine->main_console_handle = (size_t)
-		    device_add(machine, tmpstr);
-
 		dev_vr41xx_init(machine, machine->memory, 4131);
+
+		/*
+		 *  #444: "irq=0" is not an interrupt PATH.  device_add copies
+		 *  the value verbatim (device.c:336-339) and DEVINIT(ns16550)
+		 *  hands it to INTERRUPT_CONNECT (dev_ns16550.c:342), which
+		 *  abort()s on a name it cannot find (interrupt.c:190-198) --
+		 *  so this subtype could not be constructed at all.
+		 *
+		 *  MEASURED: the vrip.* names exist only once dev_vr41xx_init
+		 *  has run (dev_vr41xx.c:691-702 registers lines 0..25), which
+		 *  is why the device_add had to move below it; and the path
+		 *  FORM is what the lookup accepts -- vrip.9 connects, vrip.26
+		 *  aborts.  JUDGED, not measured: the LINE.  No VR41xx
+		 *  datasheet is available here and the old comment was unsure,
+		 *  but VRIP_INTR_SIU is the tree's own name for the serial
+		 *  unit and is the line dev_vr41xx.c:777-787 connects this
+		 *  chip's own UART to.
+		 *
+		 *  The x11 guard mirrors the Agenda VR3 arm below.  Without it
+		 *  the reorder would silently override dev_vr41xx_init's KIU
+		 *  console handle (dev_vr41xx.c:737-738), which used to win
+		 *  because it ran last.
+		 */
+		snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.cpu[%i]."
+		    "vrip.%i addr=0x0a008680 addr_mult=4 in_use=%i",
+		    machine->path, machine->bootstrap_cpu, VRIP_INTR_SIU,
+		    !machine->x11_md.in_use);
+		{
+			int x;
+			x = (size_t)device_add(machine, tmpstr);
+
+			if (!machine->x11_md.in_use)
+				machine->main_console_handle = x;
+		}
 
 		hpc_platid_cpu_arch = 1;	/*  MIPS  */
 		hpc_platid_cpu_series = 1;	/*  VR  */
@@ -110,13 +138,24 @@ MACHINE_SETUP(hpcmips)
 		hpc_fb_bits = 16;
 		hpc_fb_encoding = BIFB_D16_0000;
 
-		/*  TODO: irq?  */
-		snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=0 addr=0x"
-		    "0a008680 addr_mult=4 in_use=%i", !machine->x11_md.in_use);
-		machine->main_console_handle = (size_t)
-		    device_add(machine, tmpstr);
-
 		dev_vr41xx_init(machine, machine->memory, 4121);
+
+		/*  #444: exactly as the BE-300 arm above -- "irq=0" aborted
+		    at INTERRUPT_CONNECT, the vrip.* namespace only exists
+		    after dev_vr41xx_init, and the x11 guard preserves that
+		    call's KIU console handle across the reorder.  The line is
+		    judged, not measured; see the BE-300 comment.  */
+		snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.cpu[%i]."
+		    "vrip.%i addr=0x0a008680 addr_mult=4 in_use=%i",
+		    machine->path, machine->bootstrap_cpu, VRIP_INTR_SIU,
+		    !machine->x11_md.in_use);
+		{
+			int x;
+			x = (size_t)device_add(machine, tmpstr);
+
+			if (!machine->x11_md.in_use)
+				machine->main_console_handle = x;
+		}
 
 		hpc_platid_cpu_arch = 1;	/*  MIPS  */
 		hpc_platid_cpu_series = 1;	/*  VR  */
@@ -234,12 +273,22 @@ MACHINE_SETUP(hpcmips)
 
 		dev_vr41xx_init(machine, machine->memory, 4181);
 
-		/*  TODO: Hm... irq 17 according to linux, but
-		    VRIP_INTR_SIU (=9) here?  */
+		/*
+		 *  #444: this arm's ORDER was already right, but "irq=%i" with
+		 *  8+VRIP_INTR_SIU produced the bare name "17", which is not a
+		 *  registered path, so INTERRUPT_CONNECT abort()ed here too.
+		 *  The two halves of the old TODO named the SAME line under
+		 *  different bases -- 8+9 is exactly the 17 it attributed to
+		 *  Linux -- so vrip.VRIP_INTR_SIU is what is taken.  Still
+		 *  JUDGED and not measured: there is no datasheet here; only
+		 *  the path FORM was measured.  See the BE-300 arm above.
+		 */
 		{
 			int x;
 			snprintf(tmpstr, sizeof(tmpstr),
-			    "ns16550 irq=%i addr=0x0c000010", 8+VRIP_INTR_SIU);
+			    "ns16550 irq=%s.cpu[%i].vrip.%i addr=0x0c000010",
+			    machine->path, machine->bootstrap_cpu,
+			    VRIP_INTR_SIU);
 			x = (size_t)device_add(machine, tmpstr);
 
 			if (!machine->x11_md.in_use)

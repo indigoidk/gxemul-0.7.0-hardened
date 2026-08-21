@@ -4192,6 +4192,98 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R14 (#444) — three advertised machine subtypes core-dumped at construction, and no gate could say so
+
+`machine_hpcmips.c`. Three of eight `hpcmips` subtypes SIGABRT before any guest runs, via
+`interrupt_handler_lookup()` from `devinit_ns16550` ← `device_add` ← `machine_setup_hpcmips`. The
+binary advertises eight subtypes in `-H` and dies on three, and **`hpcmips` appears nowhere under
+`regress/`** — no construction row, no grep, nothing.
+
+Upstream defect, inherited: `git log --all` on the file shows exactly one commit, the 0.7.0 import,
+and `git blame` attributes all three sites to it.
+
+**Rung 2, and the rung is the ceiling rather than a shortcut** — a rung-3 probe needs a
+*constructed* machine and construction is what aborts; rung 4 needs an image and there is no
+hpcmips image in the tree. The rung-1 exclusion holds: strip the machine description and this
+measures nothing, because the machine description *is* the defect's carrier.
+
+### The fix design was measured, and two obvious fixes are measured WRONG
+
+Probed on a constructed z50 through the same `device_add` → `DEVINIT` → `INTERRUPT_CONNECT` path:
+
+```
+irq=machine[0].cpu[0].vrip.9    ACCEPTED, device added, rc=0
+irq=machine[0].cpu[0].vrip.26   ABORTS   <- boundary control: acceptance is a real lookup
+OMIT irq= entirely              ABORTS   <- device.c defaults to machine[0].cpu[0], which is
+                                            NOT registered on MIPS
+irq= (empty)                    ABORTS   <- interrupt.c's "No interrupt" branch has NO return;
+                                            it fills the template and falls into the scan loop
+```
+
+So "just delete the `irq=`" is not a fix, twice over. The tree's own in-file precedent settles the
+form: **`dev_vr41xx.c:777-787` already connects this chip family's UART to
+`%s.cpu[%i].vrip.%i` with `VRIP_INTR_SIU`.** And `8+VRIP_INTR_SIU` is exactly the `17` the old TODO
+attributed to Linux — both halves of that TODO named the same line under different bases.
+
+**BE-300 and E-105 also needed `device_add` moved after `dev_vr41xx_init`**, which is measured
+necessary: those two showed six handlers (no `vrip.`) where VR3 showed sixty-four. And the reorder
+**silently inverts an existing behaviour** unless guarded — `dev_vr41xx_init` sets
+`main_console_handle` to the KIU console under X11 and used to win *because it ran last*. All three
+arms now carry the same `in_use` guard the Agenda arm already had.
+
+### THE FIX EXPOSES A SECOND LAYER, and the abort was masking it
+
+| | be-300 / e-105 / agenda | other five |
+|---|---|---|
+| pre-fix | `rc=-6` SIGABRT | `rc=0` |
+| **fixed, default flags** | **`rc=1`** — *"More than one console input is in use"* | `rc=0` |
+| fixed, `-x` | `rc=0`, prompt reached | `rc=0` |
+
+`dev_vr41xx_init` already adds an ns16550 with `device_add`'s default `in_use = 1`, so these arms
+end up with two console inputs. Measured remedies: `-x` works 8/8, and `in_use=0` on the machine's
+own UART works without `-x` 8/8. **Neither was applied** — it needs a judgement this round cannot
+ground (which of the two UARTs is the console on real hardware) and touches a file outside the
+round. **Pinned, not hidden:** row R1 is a fail-closed allowlist derived from the source, sized
+`EXPECT_X_ONLY = 3`, to be edited to 0 by the commit that closes it.
+
+### The detector, and the mutant that compiles to an identical binary
+
+`regress/hpcmips_ctor_probe.py`, 26 rows, ~8 s. 26/26 fixed, 17/26 pre-fix.
+
+| mutant | score | rows that died |
+|---|---|---|
+| pre-fix | 17/26 | A3 A4 A5 B1 C5 S1 S2 S3 R1 |
+| only BE-300 corrected | 18/26 | the other two are seen |
+| string right, `device_add` not moved | 20/26 | A3 A4 A5 B1 S2 R1 |
+| `VRIP_INTR_SIU` → 26 (out of range) | 19/26 | A3 A4 A5 B1 C5 S1 R1 |
+| `machine->path` → `"machine[0]"` | 25/26 | **C5 only** |
+| **`VRIP_INTR_SIU + 1`** | 25/26 | **S1 only** |
+| **`VRIP_INTR_WRBERR` (= 10)** | 25/26 | **S1 only** |
+
+**The last two are the finding.** `vrip.10` *is* registered, so a wrong-but-well-formed line
+connects **in complete silence** — the first detector scored that mutant 26/26. **Those two mutants
+compile to the identical binary**, which is itself the proof that no run-based row could ever
+separate them from the fix. S1 was tightened from "mentions the symbol" to "passes
+`VRIP_INTR_SIU` itself, whole, as one argument, with no arithmetic on it" — justified historically
+rather than invented, since **the defect being fixed WAS an arithmetic adjustment of this
+constant**. Catching it behaviourally needs a guest load reading back which VRIP line latched: a
+rung-3 probe and separate work, and the file says so.
+
+### Two traps caught while building the detector
+
+**`MAX_CMD_BUFLEN = 72` (`debugger.c:107`) truncates a debugger command line in silence.** Two
+commands were 73 and 78 characters; the path's trailing digits were eaten and one row read as a
+failure *of the fix*. Only the row that compares the failing name against the exact string it sent
+caught it — which is why it does that.
+
+And a citation correction worth recording: the `-H` alias parser is at `gate_asan_sweep.sh:233-249`,
+not `:50-55` as a brief claimed. That widened alias class (`[A-Za-z0-9_.+/-]`) was adopted here.
+
+`EXPECT_CONVERTED` is **unchanged at 23**, recomputed read-only with gate 6's own definitions before
+and after staging: that census counts *pty readiness* sites and this probe drives the emulator with
+`subprocess.run`, so it deliberately contains zero `endswith(` — including in its docstring, which
+`py_code` would have counted.
+
 ## R13 (#442) — an unbounded counter stopped the emulated clock for 40 seconds in every 86
 
 `dev_footbridge.c`. The four timer callbacks incremented `pending_timer_interrupts[]` with no
