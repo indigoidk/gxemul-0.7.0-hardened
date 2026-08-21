@@ -4271,6 +4271,112 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R16 (#447) — four guards ended the host process on a guest STORE, and the store position differed three ways out of four
+
+`DEVICE_ACCESS(sh4)`. Four guards called `exit(1)` when a guest wrote a value the model does not
+implement, so **one ordinary guest store ended the host process**. Same class as R13 (`#443`),
+which did this for eleven *offset* sites; these four are reached by **value**.
+
+| site | guard | store vs guard |
+|---|---|---|
+| TCR0/1/2 | `idata & TCR_UNIMPLEMENTED` (0x02dc) | `tcr[]` downstream, but **`timer_hz` UPSTREAM** |
+| DMATCR0..7 | `idata & ~0x00ffffff` | downstream |
+| ICR | `idata & 0x80` | no store on any path |
+| RCR1 | `idata & 0x18` | **upstream** (the `#443` shape) |
+
+*** ONLY ONE OF THE FOUR HAS `#443`'s SHAPE, AND SAYING "THE STORE IS UPSTREAM" ONCE FOR THE FILE
+WOULD HAVE BEEN WRONG THREE TIMES OUT OF FOUR. *** TCR is a third case nobody had named:
+`timer_hz` is computed from `idata & 3` **before** the guard, so merely deleting `exit(1)` installs
+pclock/4 for a write asking for a clock source the model cannot provide — **turning a loud fault
+into a silent one.** That guard moved above the prescaler switch and `break`s out; RCR1's store
+moved below its guard; DMATCR needed no move.
+
+### The latch key is (class, INSTANCE, offending BIT) — three parts, each earned
+
+Per-class alone reports timer 0 and silences timers 1–2 and channels 1–7. Per-(class, instance)
+still swallows the second feature at one register, because **RCR1's single guard covers two
+features and TCR's covers six bits**. Bounded by construction: `val_reported` is a fixed
+`uint32_t[4][8]` `memset` at DEVINIT, and the output ceiling is set by the *masks* — 3×6 + 8×8 + 1
++ 2 = **at most 85 lines for the process lifetime**. No flood vector.
+
+A review seat settled a design question in the fix's favour by reading: `N_SH4_VAL_INST =
+N_SH4_DMA_CHANNELS` is **correct**, not sloppy over-allocation. An `N_SH4_TIMERS` cap would make
+`sh4_val_first` *silence* DMA channels 3–7, because its bounds guard returns 0 out of range.
+
+### Two mutants initially scored 32/32, and closing the second corrected a standing rule
+
+1. **All four fault classes collapsed into one** passed everything, because the first attempt at
+   the row hit all four sites with **disjoint** bit-sets, so a union latch had room for all four.
+   Rebuilt with bit-sets that **collide across classes**. It catches 5 of the 6 class pairs;
+   ICR↔RCR1 is unreachable because their bit-sets are disjoint by construction — recorded, not
+   papered over.
+2. **`fatal()` → `debug()` at all four sites** passed everything, and a standing project rule said
+   a probe *cannot* distinguish them. *** That rule is true only while single-stepping. ***
+   `src/core/debugmsg.c` computes `ss = single_step || about_to_enter_single_step`, decrements `v`
+   when `emul_executing` and increments it when stepping, then returns at `:375` on
+   `(quiet_mode && !ss) || v < 0`. `fatal()` (`:384-390`) has **no early-out at all**. So stepping
+   pushes `debug()` above the threshold and free-running drops it below. Measured on two builds:
+   under `continue`, the fix prints and the mutant is **absent**.
+
+**The carrier said `fatal()` was "byte-for-byte `debug()`" and that is false** — corrected in the
+same session, after two seats challenged it independently. The old claim's conclusion held, but it
+had already been reused once before anyone opened the file. **The new rule is conditional on
+`verbose == 0`**: run with `-v` (or `-i`/`-r`, which imply it) and free-running gives `v == 0`,
+`debug()` prints, and any row resting on the difference goes quiet without saying so.
+
+### The detector, and what it does NOT yet cover
+
+`regress/sh4_val_probe.py` — 33 rows, 42 sessions, 8 s, rung 3: real SH-4 guest instructions
+through real address decode, real `memory_rw` and real device dispatch, on an unmodified in-tree
+`-E landisk`. A separate rung-3 **witness** (`sh4_val_witness.py`, 15 rows) asserts the pre-fix
+symptom and is **deliberately not wired into any gate** — a gated witness goes red the day its fix
+lands, and `check_probe_wiring.py` treats that as a hard failure.
+
+Kill table, measured: pre-fix 8/33 · naive-drop-`exit(1)` 9/33 · latch-on-class-only 29/33 ·
+one-site-only 15/33 · `if (len==2) exit(1)` 19/33 · latch-key-whole-value 32/33 · TCR mask one bit
+short 32/33 · DMATCR stores laundered value 31/33 · latch drops the bit sub-key 26/33 · TCR `break`
+removed 31/33 · RCR1 store back above guard 31/33 · `fatal()`→`debug()` 32/33 · classes collapsed
+32/33.
+
+*** AND ITS PASS-2 PANEL MEASURED NINE MUTANTS THAT SCORE 33/33 — SEVEN OF THEM REAL DEFECTS,
+INCLUDING A GUEST-REACHABLE HOST DEATH. This is stated here rather than left for the reader to
+discover. *** The smallest is **one identifier** (`| TCR_UNIE`, which makes the timer interrupt
+permanently unenableable and prints nothing); the worst is
+`if (timer_nr == 2 && len == 4) exit(1);`, which survives because len 2 is the only width the
+census issues. Four structural holes: state read back at instance 0 only; read back on a first
+offence only except at RCR1; masks pinned only *from below*; width × instance covered only on the
+diagonal.
+
+**Filed as `sh4valrows` rather than fixed here, and the reason is a distinction this project has
+now had to make twice.** `#446`'s detector was **vacuous** — a 217-byte comment-only file passed
+it — so it was replaced in-round. This one is **weak**: it kills 25 of 33 rows pre-fix and kills
+six real mutants. Weak earns its own round; vacuous does not get to ship.
+
+*** THE FIX CHANGED ONE HOLE'S FAILURE MODE FROM LOUD TO SILENT, which is worth more than the row
+count. *** Pre-`#447`, widening a guard mask meant `exit(1)` on a legal write — unmissable.
+Post-`#447` it means a silently refused write. **The round improved the failure and degraded its
+own detectability in the same edit**, and no rule in this harness would have caught that.
+
+### Not claimed
+
+`len == 8` is stated unreachable and that is **read, not executed**: no `uint64_t data` is passed
+to `memory_rw` in `cpu_sh_instr.c`, and SZ=1 `fmov` is two 32-bit accesses. (An earlier draft said
+"zero `uint64_t` declarations in that file", which a seat measured false — there are many; none is
+a `data` argument. The conclusion survived, the sentence did not.) Whether a real landisk boot ever
+issues a narrow-width access to these registers is unmeasured, so the width rows are rung-3
+reachability rather than boot knowledge.
+
+**Six more guest-reachable `exit(1)` sites survive in this same file**, measured while reviewing
+this fix and filed as `sh4chcr` and `sh4rtcsr`. Essentially any guest CHCR write with TD=1 ends the
+host — **easier to reach than anything repaired here** — and a guest RTCSR write kills the host
+*milliseconds later* from a 110 Hz timer callback. The in-file wording "four value guards in
+`DEVICE_ACCESS(sh4)`" is literally true; **this file is not repaired.**
+
+Twin tree and both NO-VPATH build trees carry `dev_sh4.c` byte-identically; `build/` rebuilt from
+it, rc=0, zero warnings.
+
+Gate: `gate_sh_rounding` PASS (54 checks, was 52), run singly. Row floor pinned at 33.
+
 ## R15b (#446 pass 2) — the detector shipped with the fix was VACUOUS, and a comment-only file proved it
 
 The fix in R15 is correct and stands unchanged. **What shipped beside it did not.**

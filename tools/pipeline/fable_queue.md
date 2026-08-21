@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sgiarcbiosoob` (review:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sgiarcbiosoob` (review:fable5) · `sh4valguards` (review:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 54 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 55 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -339,7 +339,38 @@ availability. If probe witnesses count equally, sites in devices no rig boots ma
 fixable-with-a-detector. It is a filing (one seat), not a short stage, so it is not blocking —
 but it should be adjudicated before `exitsweep` implements anything.
 
-### 9. `probewiring` (`85bc6ab`) — regress review of a checker that now GATES every other detector
+### 9. `sh4valguards` (#447) — review stage held, and the round shipped SAYING its detector is escapable
+
+The review stage fired eight seats and not the flagship one. What it is owed for is unusually
+well defined, because the panel already did the hard part and the round shipped anyway with the
+gap named in its own CHANGELOG block.
+
+**The judgement call to adjudicate, which is the real question:** nine measured mutants score
+33/33 against the shipped detector, seven of them real defects, one a **guest-reachable host
+death**. The round **filed** that as `sh4valrows` instead of fixing it in-round, on the argument
+that this detector is **weak, not vacuous** — it kills 25 of 33 rows pre-fix and kills six real
+mutants — whereas `#446`'s detector was vacuous (a 217-byte comment-only file passed it) and so
+was replaced in-round.
+
+Is that distinction sound, or is it a rationalisation? The stopping rule says a MEASURED FALSE
+PASS gets fixed in-round, and these are measured false passes. The counter-argument is the
+reopening rule: more witnesses create more ROUNDS, not bigger rounds. **Both rules apply and they
+point opposite ways.** That is exactly an adjudication question and not a review question.
+
+Worth weighing alongside it:
+
+* *** The fix changed one hole's failure mode from LOUD to SILENT. *** Pre-`#447` a widened guard
+  mask meant `exit(1)` on a legal write — unmissable. Post-`#447` it means a silently refused
+  write. The round improved the failure and degraded its own detectability in the same edit, and
+  **no rule in this harness would have caught that.** Should there be one?
+* The round corrected a standing rule (`fatal()` vs `debug()` are distinguishable when
+  free-running) and the correction is **conditional on `verbose == 0`** — a probe run with `-v`
+  silently vacates the row that rests on it. Is a conditional rule in the carrier a liability?
+* Six more guest-reachable `exit(1)` sites survive in the same file (`sh4chcr`, `sh4rtcsr`),
+  measured during this pass. The in-file wording "four value guards in `DEVICE_ACCESS(sh4)`" is
+  literally true but the file is not repaired — is the round title honest enough?
+
+### 10. `probewiring` (`85bc6ab`) — regress review of a checker that now GATES every other detector
 
 Queued by its own gate the moment it closed, which is the mechanism working: `regress` is
 FABLE-ONLY, and a closed row owing a regress review reddens the next commit.
@@ -370,7 +401,7 @@ Specific things for the flagship seat, all measured rather than guessed:
 Not blocking: the checker is green, its 18-mutant selftest was re-run independently before the
 commit, and the four gaps it found are recorded as expiring debts rather than silence.
 
-### 10. `sgiarcbiosoob` — a detector REPLACED mid-round, with no adversarial review of the replacement
+### 11. `sgiarcbiosoob` — a detector REPLACED mid-round, with no adversarial review of the replacement
 
 The strongest reason on this list, because the round changed its own instrument after the panel
 and nothing has attacked what replaced it.

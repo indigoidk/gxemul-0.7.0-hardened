@@ -5672,3 +5672,106 @@ escape as a two-character argument interpreted at runtime, so nothing in the fil
 zero byte. **`git ls-files --eol` cannot be the oracle**: it reports `i/-text` for a PNG and
 for a corrupted text file identically, so deriving the domain from git would exempt exactly
 the broken files.
+
+## 2026-08-21 — reviewing #447's fix found six MORE guest-reachable host deaths in the same file
+
+### `sh4chcr` — held
+
+*** Essentially any guest CHCR write with TD=1 ends the host process. *** Five `exit(1)` sites,
+and this is **easier to hit than anything `#447` repaired** — those each needed the guest to
+write a specific unimplemented bit; this needs only that the guest enable a DMA channel.
+
+MEASURED, rung 3, unmodified `-E landisk`, shipped-fix binary, one ordinary guest store each,
+`started=True alive=False` with the matching diagnostic:
+
+| store | site | result |
+|---|---|---|
+| `CHCR0 = 0x0000c001` (DM=3) | `dev_sh4.c:445` | host dies |
+| `CHCR0 = 0x00003001` (SM=3) | `dev_sh4.c:454` | host dies |
+| `CHCR0 = 0x00000051` / `0x00000071` (TS=5/7) | `dev_sh4.c:436` | host dies |
+| `CHCR3 = 0x0000c001` | `dev_sh4.c:445` | host dies — all eight channels |
+| `CHCR0 = 0x00005141` — **a sane config** (TS=4byte, DM/SM=increment, TD=1) | `dev_sh4.c:491` | host dies |
+| `CHCR0 = 0x00000005` (IE\|TD) | `dev_sh4.c:491` | host dies |
+| `CHCR0 = 0x0000c000` (TD clear) | — | **survives — control** |
+
+**The mechanism is why it is broad:** only `RS == 0x200` survives the `CHCR_RS` switch, and
+`CHCR_IE` then kills at `:493`. The control is what makes this a measurement rather than a claim
+— clearing TD alone leaves the host alive through the identical store.
+
+Scope, stated so this does not read as a defect in `#447`'s record: that round's in-file wording
+is *"four value guards in `DEVICE_ACCESS(sh4)`"*, which is literally true. This is a **residual
+filed before any record claims the FILE is repaired.**
+
+### `sh4rtcsr` — held
+
+*** The store returns normally and the process dies milliseconds later, from a host timer. ***
+`RTCSR` (`0xff80001c`) is guest-writable (`d->bsc_rtcsr = idata & 0x00ff`), and
+`sh4_timer_tick()` reaches `exit(1)` at `dev_sh4.c:253-259` — at 110 Hz.
+
+MEASURED with a `dt`/`bf` spin loop under `continue`, every halfword checked against the
+emulator's own disassembler:
+
+```
+RTCSR CMIE 0x40  -> alive=False   "sh4: RTCSR_CMIE | RTCSR_OVIE: TODO"
+RTCSR OVIE 0x02  -> alive=False   same
+CONTROL   0x00   -> alive=True
+CONTROL CMF 0x80 -> alive=True    (different bit, SAME register and width)
+```
+
+**The second control is the one that matters:** a different bit of the same register at the same
+width leaves the host alive, so the kill is attributable to the *bit*, not to the access.
+
+**Why this is a distinct round rather than a `sh4chcr` sibling:** every SH-4 probe this project
+has written observes the *store site* — issue the store, see whether the host survived the
+instruction. **That design cannot see this.** The instruction completes, the prompt returns, and
+the host dies from a callback afterwards. Detecting it needs a free-running spin with a liveness
+check *after* the fact — a different probe shape and a different oracle.
+
+Also unmeasured, same family, filed here rather than lost: two more sites in `sh4_sci_cmd()` at
+`:518` and `:527`, reached on guest-written SCI bytes.
+
+### `sh4valrows` — held
+
+*** Nine measured mutants score 33/33 against `#447`'s shipped detector, seven of them real
+defects. *** Filed rather than fixed in-round for a stated reason: this detector is **weak, not
+vacuous** — it kills 25 of 33 rows on the pre-fix build and kills six real mutants. That is
+categorically unlike `#446`'s detector, which a 217-byte comment-only file passed and which was
+therefore replaced in-round.
+
+**Four structural holes, and they are a product rather than a list:**
+
+| hole | what it is | mutants |
+|---|---|---|
+| H1 | state is read back at **instance 0 only** — V11/V12 walk the others but only *count* lines | M23, M24, Mbrk |
+| H2 | read back on a **first offence only**, except at RCR1 | M21, M22 |
+| H3 | masks are pinned only **from below** — V28 proves six bits are IN, nothing proves others are OUT | M20, M20b, M25, Mdma |
+| H4 | width × instance is a **product**; the census covers only the diagonal | M33 |
+
+The two that matter most:
+
+- **`M20` — one identifier.** Adding `| TCR_UNIE` to `TCR_UNIMPLEMENTED`. On the fix, `TCR0=0x0022`
+  reads back `0x22` with a clock line at `520833.328125 Hz`; with M20 it reads back `0x00000000`
+  and there is **no clock line**. `TCR_UNIE` is modelled, so the guest can never enable the timer
+  interrupt.
+- **`M33` — a guest-reachable host death that scores full marks.**
+  `if (timer_nr == 2 && len == 4) exit(1);`. A `mov.l` to TCR2 gives `alive=False`. It survives at
+  len 2 — the only width V11 issues — which is *precisely why* it scores 33/33.
+
+*** The fix changed H3's failure mode from loud to silent, and that is the finding inside the
+finding. *** Pre-`#447`, a widened mask meant `exit(1)` on a legal write — unmissable. Post-`#447`
+it means a silently refused write. The round improved the failure and degraded its own
+detectability in the same edit.
+
+**One question is open rather than confirmed.** V28 writes all six unimplemented TCR bits *as a
+union* (`0x02dc`). Delete one bit and the union still trips on the other five, so V28 stays green
+while a **singleton** write of the deleted bit reaches the prescaler and the store. The seat that
+raised it was explicit that it could not confirm the score — it needs the fourteen
+mask-minus-one-bit mutants run. Note this is a **different test** from H3-from-above: one requires
+a *modelled* bit to be accepted, the other requires each unimplemented bit to be rejected *alone*,
+and they fail to different mutants.
+
+*** A process note worth more than the rows: the probe refused to pass in a half-edited state. ***
+An attempt at this work died mid-edit having bumped `EXPECT_ROWS` to 43 and registered three new
+opcodes without writing the rows that plant them. The probe reported `31/33 FAIL` through **two
+independent rows** — V31 caught the row-count intent, V30 caught the opcode intent. The tree was
+restored to a verified 33/33 rather than left broken.

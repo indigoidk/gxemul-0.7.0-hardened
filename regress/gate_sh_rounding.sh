@@ -210,4 +210,46 @@ else
     check_min "sh4_pcic: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$PCLOG")" 38
 fi
 
+# ------------------------------------------------------------------ #447 sh4 value guards
+#  A SIBLING OF THE BLOCK ABOVE, NOT AN EXTENSION OF IT -- and the reason is the row title
+#  three lines up.  That check is named "sh4_pcic: no offset kills the host".  Folding
+#  #447's rows under it would make the gate's own check name UNTRUE, because these are four
+#  DIFFERENT sites (TCR, DMATCR, ICR, RCR1) reached by VALUE rather than by offset.  A check
+#  whose title does not describe what it checks is the same defect as a green row that means
+#  nothing, and it is harder to see because the number still moves.
+#
+#  WHAT #447 FIXED: four guards in DEVICE_ACCESS(sh4) called exit(1) on a value the model
+#  does not implement.  A guest STORE of an unmodelled bit ended the host process.  They now
+#  DIAGNOSE AND SURVIVE, latched per (class, INSTANCE, offending BIT) -- three parts, each
+#  earned: per-class alone reports timer 0 and silences timers 1-2 and channels 1-7, and
+#  per-(class,instance) still swallows the second feature at one register, because RCR1's
+#  single guard covers TWO features and TCR's covers SIX.
+#
+#  THE STORE POSITION DIFFERS THREE WAYS OUT OF FOUR, which is why "move the store below the
+#  guard" is not a file-wide rule: DMATCR's store is already downstream, ICR has no store on
+#  any path, RCR1's was upstream (the #443 shape), and TCR is a third case -- `timer_hz` is
+#  set from `idata & 3` BEFORE the guard, so a naive fix would install pclock/4 for a write
+#  asking for a clock source the model cannot provide, turning a loud fault into a silent one.
+VALOG=$LOGDIR/gate_sh4_val.log
+python3 sh4_val_probe.py "$PMAX" "$KERNEL" > "$VALOG" 2>&1 || true
+
+if ! grep -q "SH4_VAL_RESULT=" "$VALOG"; then
+    note "sh4_val probe produced no result line; last lines follow"
+    tail -5 "$VALOG" | sed 's/^/       /'
+    check "sh4_val probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$VALOG" | sed 's/^/       /'
+    check "sh4_val: no guest VALUE kills the host"           "$(grep -c 'SH4_VAL_PASS' "$VALOG")" "1"
+    #  33, and the floor is pinned because two mutants initially scored 32/32 against an
+    #  earlier draft of this probe -- one collapsing all four fault classes into one, one
+    #  turning fatal() into debug() at every site.  Both are now killed by single rows, so
+    #  a row count that quietly drops is a real loss of coverage rather than tidying.
+    check_min "sh4_val: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$VALOG")" 33
+fi
+
+#  sh4_val_witness.py is DELIBERATELY NOT RUN HERE.  It asserts the PRE-FIX symptom -- that
+#  the host process dies -- so it correctly goes RED the moment the fix is present.  Wiring
+#  a witness into a gate manufactures a phantom regression on the day the fix lands, and
+#  check_probe_wiring.py treats a gated witness as a HARD failure for exactly that reason.
+
 gate_end

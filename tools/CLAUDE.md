@@ -72,8 +72,25 @@ before calling a seat dead; the size check cannot distinguish slow from dead.
 corrected a false "strict superset" claim about header closures and its correction was ALSO
 false; `gcc -E -H` settled it (two exceptions, not the one either of us named). And a reading
 seat's claim that production `fatal()` exits — which would have made a shipped correction into
-guest-reachable process death — was refuted by opening `debugmsg.c:384`, where `fatal()` is
-byte-for-byte `debug()`. **Both were settled in under two minutes by looking.**
+guest-reachable process death — was refuted by opening `src/core/debugmsg.c:384`. **Both were
+settled in under two minutes by looking.**
+
+*** AND THE REFUTATION'S REASON WAS ITSELF FALSE, corrected 2026-08-21 after TWO seats
+challenged it independently and a direct reading settled it. *** This paragraph said `fatal()`
+is "byte-for-byte `debug()`". **It is not.** `debug()` (`:365-381`) computes
+`ss = single_step || about_to_enter_single_step`, decrements `v` when `emul_executing`,
+increments it when stepping, and then **`if ((quiet_mode && !ss) || v < 0) return;` at `:375`**.
+`fatal()` (`:384-390`) has **no early-out at all** — it goes straight to `va_debug`. The
+conclusion held (neither exits), but the reason given was wrong, and a wrong reason gets reused:
+it was cited a second time before anyone opened the file.
+
+**Two live consequences, both measured:** `fatal()` cannot be silenced by `-q`, which is why a
+guest-drivable `fatal()` needs a latch and not a verbosity flag; and **a probe CAN distinguish
+the two, contrary to the older rule 6** — free-running gives `v < 0` so `debug()` returns while
+`fatal()` prints, whereas single-stepping raises `debug()` above the threshold and both print.
+**That distinction is conditional on `verbose == 0`**: run with `-v` (or `-i`/`-r`, which imply
+it) and free-running gives `v == 0`, `debug()` prints, and any row resting on the difference
+goes quiet without saying so.
 
 ---
 

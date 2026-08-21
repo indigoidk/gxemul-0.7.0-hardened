@@ -172,6 +172,8 @@ MANIFEST = {
     #  so it needs no exemption.  #446 wired its probe in the same commit as its fix.
     "sgi_eaddr_probe.py":          (CLASS_DETECTOR, "#446 SGI eaddr value oracle at arcbios_init"),
     "sh4_pcic_probe.py":           (CLASS_DETECTOR, "#443 sh4 PCIC exit sites"),
+    "sh4_val_probe.py":            (CLASS_DETECTOR, "#447 sh4 DEVICE_ACCESS value guards"),
+    "sh4_val_witness.py":          (CLASS_WITNESS,  "#447 pre-fix symptom: the host dies"),
     "sh_halt_probe.py":            (CLASS_DETECTOR, "SH halt path"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 

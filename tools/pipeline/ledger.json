@@ -14084,6 +14084,87 @@
      "note": "MEASURED with matched surviving controls, and RE-DERIVED because the line numbers in circulation were all wrong (#441 had shifted the file and they were copied rather than opened):\n    :1692  ICR bit 7 set            kills -- \"IRLM not yet supported\"\n    :1963  RCR1 mask 0x18           kills -- and the mask is bits 3 AND 4, not bit 3\n    :1453  DMATCR0 top 8 bits set   kills\n    :1369  TCR write with ICPF|ICPE1|ICPE0|CKEG1|CKEG0|TPSC2   kills\n\n*** TWO CLAIMS IN THE ORIGINAL FILING ARE REMOVED RATHER THAN CARRIED: ***  :1343 is `pclock == 0`, an INTERNAL error rather than a guest value guard, and unreachable on landisk which sets pclock at machine_landisk.c:81. And DEVICE_ACCESS(sh4)'s own default: at :1992 does NOT kill at all -- its exit(1) is inside `#ifdef SH4_DEBUG` and `grep -rn SH4_DEBUG src/` returns only the two #ifdefs, so it is defined NOWHERE. Measured: a read of 0xff000004 returns 0 and survives. #443's witness keeps that as a control row so the claim cannot drift back in.\n\nSo the sibling cluster is FOUR, not five or six. Different semantic class from #443 (value guards on known registers, not unimplemented offsets), so the reopening rule barred them from that round -- each needs its own 'what should this register do with an unexpected value' decision.",
      "grade": "CONFIRMED",
      "ev": "dev_sh4.c re-derived and measured; grep -rn SH4_DEBUG src/"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. The measuring seat, and the decisive answer: it BUILT AND SCORED the mutants the reading seats could only predict.\n\n*** NINE MUTANTS SCORE 33/33, SEVEN OF THEM MEASURED REAL DEFECTS. ***  The smallest is ONE IDENTIFIER: add `| TCR_UNIE` to TCR_UNIMPLEMENTED. Measured -- on the fix, TCR0=0x0022 reads back 0x22 with a clock line at 520833.328125 Hz; with the mutant it reads back 0x00000000 and there is NO clock line, so `d->tcr[i] & TCR_UNIE` can never be true and the guest can never enable the timer interrupt.\n\n*** AND ONE IS A GUEST-REACHABLE HOST DEATH THAT SCORES 33/33: *** `if (timer_nr == 2 && len == 4) exit(1);`. A mov.l to TCR2 gives alive=False. It survives at len 2 -- the only width V11 issues -- which is exactly WHY it scores full marks.\n\nFOUR STRUCTURAL HOLES, each with a cheap fix, and they are a PRODUCT rather than a list:\n  H1 state is read back at INSTANCE 0 only (V11/V12 walk the others but only COUNT lines)\n  H2 read back on a FIRST offence only, except at RCR1 -- V18 exists for exactly this shape and its sibling was never added at TCR or DMATCR\n  H3 the guard masks are pinned only FROM BELOW -- V28 proves the six bits are IN, nothing proves other bits are OUT\n  H4 width x instance is a product and the census covers only the DIAGONAL\n\n*** THE FIX CHANGED H3's FAILURE MODE FROM LOUD TO SILENT, which is the finding inside the finding: *** pre-fix, a widened mask meant exit(1) on a legal write -- unmissable. Post-fix it means a silently refused write. The round improved the failure and made its own blind spot worse.\n\nIt also confirmed by construction what the latch DOES do: val_reported is a fixed uint32_t[4][8], memset at DEVINIT, and output is bounded by the MASKS at <= 85 lines for the process lifetime. No flood vector. The bounds guard in sh4_val_first is genuinely unreachable -- honest dead code no row can cover, and a mutant confirms it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and *** IT FOUND THE SAME ONE-IDENTIFIER ESCAPE AS THE MEASURING SEAT, BY READING, WITHOUT COMPILING. ***  Two seats converging on `| TCR_UNIE` from opposite methods is the strongest signal this panel produced.\n\nIt stated the general fault better than the brief did: V28 pins DROPS from the six-bit union and is BLIND TO ADDS -- and the add that matters is a bit the model implements.\n\nONE FINDING NEITHER OTHER SEAT HAD, and it is an asymmetry in the source rather than in the probe: narrowing the DMATCR guard from ~0x00ffffff to ~0x04ffffff is ONE NIBBLE, and `sh4_dmac_transfer` consumes `dmac_tcr[] & 0x1fffffff` -- FIVE BITS WIDER than the guard rejects. So bits 24-28 are a region where a narrowed guard yields a silently wrong transfer count rather than a visible one.\n\nIt also CORRECTED a claim in my own brief: 'zero uint64_t declarations in cpu_sh_instr.c' is FALSE -- there are many; what is true is that none is a `uint64_t data` passed to memory_rw. The conclusion (len=8 unreachable from SH-4 instructions) survives; the sentence supporting it did not.\n\nAnd it settled a design question in the fix's favour by reading: N_SH4_VAL_INST = N_SH4_DMA_CHANNELS is CORRECT, not sloppy over-allocation. An N_SH4_TIMERS cap would make sh4_val_first SILENCE DMA channels 3-7, because its bounds guard returns 0 on out-of-range.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND on the fix -- and its contribution is an HONEST REFUSAL that turned into the sharpest open question of the panel.\n\nIt declined to name a 33/33 survivor, stating plainly: *'I cannot honestly claim that edit still scores 33/33'* -- because the packet never said WHICH bit the existing 'TCR mask one bit short' mutant removed, nor whether all six singletons are exercised. An honest UNKNOWN outranking a confident guess is the evidence ladder working.\n\n*** WHAT IT ASKED FOR IS THE QUANTIFIER-COLLAPSE SHAPE: V28 WRITES ALL SIX BITS AT ONCE. *** That pins the mask as a UNION. Delete one bit and the union write still trips on the other five, so V28 stays green while a SINGLETON write of the deleted bit now reaches the prescaler and the store. It named the sweep: TCR 0x0004/0x0008/0x0010/0x0040/0x0080/0x0200 individually, and each DMATCR high-byte bit individually -- fourteen mask-minus-one-bit mutants.\n\nNote how this composes with the measuring seat's H3 and is NOT the same test: H3 pins the mask FROM ABOVE (a modelled bit must be ACCEPTED); this pins it FROM BELOW, PER BIT (each unimplemented bit must be rejected alone). A mask is fully pinned only when both hold, and they fail to different mutants. Forwarded to the strengthening work as an open question to SETTLE BY MEASUREMENT rather than a confirmed escape.\n\nOne wording correction it supplied: 'once per bit' is imprecise -- a previously reported bit can appear again in a message when it arrives alongside a fresh one.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND. Read the shipped arms and confirmed the three-way store-position asymmetry independently. No escape offered.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND. Packet-fed and correct within that limit; offered no mutant. Its blindness is the point -- it cannot check a claim the packet states, and the two escapes that mattered both needed the SOURCE (TCR_UNIE's value, and dmac_tcr's consumer mask), which no packet carried.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND. Packet-fed, same limit as glm.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Packet-fed and reached the right verdict from the brief's own kill table, reasoning that mutants scoring 31-32/33 imply rows that are single points of failure. Right conclusion, and it could not name the instance -- which is the documented division of labour: a reading seat buys the class, a measuring seat buys the instance.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Verdict line given as 'acceptable' rather than one of the three requested tokens -- a FORMAT miss, recorded as such and NOT as a seat failure; 84 KB of substantive analysis behind it.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_171837"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation. A DELIBERATE OMISSION, not a seat failure -- the other eight answered. Owed for: the detector strengthening this pass triggered, which is being written AFTER the panel that judged the previous version and so has had no adversarial review of its own.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
     }
    ]
   },
@@ -14552,6 +14633,78 @@
      "note": "SELF-INFLICTED, BY ME, IN bcdbfb8 -- badge A. #446 wrote comments quoting the bad-fix mutant it had to defend against (a zero byte written as a C escape) into CHANGELOG.md and regress/gate_offline.sh THROUGH A SHELL HEREDOC, which interpreted the escape. Three literal NULs landed: CHANGELOG.md lines 4254 and 4260, gate_offline.sh line 1803.\n\n*** IT SURVIVED PRECOMMIT, A 265-CHECK GATE RUN, AND THE COMMIT ***, because bash does not care about a NUL inside a comment.\n\nWHAT IT BREAKS IS THE HARNESS'S CORE IDIOM. grep(1) auto-detects such a file as binary and answers \"Binary file ... matches\" -- ON STDOUT, WITH EXIT 0. So `grep -q` still works and `grep -c` still counts, while every check that PARSES A FIELD out of the matched line silently receives that sentence in place of the row. MEASURED: `grep 'sgi_eaddr: the buffer' gate_offline.sh` returned the sentence, exit 0. Not a wrong value -- a wrong SHAPE, through a channel no section watched.\n\n*** THE FIRST SWEEP I RAN TO SCOPE IT WAS ITSELF VOID and I reported its result. *** It found ZERO NULs -- including the one I had just located by hand -- because the nested bash -c ate its `$'\\x00'`. I said \"it is the only tracked file affected\" on the strength of a sweep that found nothing at all. The real sweep found THREE bytes across TWO files. A sweep that finds nothing and a sweep that cannot find anything are indistinguishable in the output.\n\nGUARD: precommit section S, negative-controlled both ways. Its own first draft used `grep -qU \"$(printf '\\000')\"` and PUT A FRESH NUL INTO precommit_check.sh -- the check forbidding the byte introduced the byte. `tr -d` takes the escape as a two-character argument interpreted at runtime, so nothing in the file is ever a zero byte.\n\nGIT'S OWN BINARY DETECTION CANNOT BE THE ORACLE: `git ls-files --eol` reports i/-text for a PNG and for a corrupted text file identically, so deriving the domain from git would exempt precisely the broken files. Circular. Hence an explicit skip list, plus two genuinely-binary paths that carry no extension (src/devices/fonts/*, test/FileLoader_*).",
      "grade": "CONFIRMED",
      "ev": "measured in-tree, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sh4chcr",
+   "title": "sh4chcr  Essentially ANY guest CHCR write with TD=1 ends the host process -- five exit(1) sites, MEASURED on all eight DMA channels",
+   "state": "held",
+   "commits": "",
+   "hold": "Its own round. Higher severity than the four #447 repaired: those each needed a specific unimplemented bit, this needs only TD=1.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "probe:measured rung-3 during the #447 pass 2 -- unmodified -E landisk, shipped-fix binary, one ordinary guest store, started=True alive=False with the matching diagnostic. Not yet committed as an artefact.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** FOUND BY REVIEWING #447's FIX, AND IT IS EASIER TO HIT THAN ANYTHING #447 REPAIRED. ***  #447 removed four exit(1) guards that each needed the guest to write a SPECIFIC unimplemented bit. These need only TD=1.\n\nMEASURED, rung 3, unmodified -E landisk, shipped-fix binary, one ordinary guest store each -- started=True alive=False with the matching diagnostic:\n    CHCR0 = 0x0000c001  (DM=3)              dev_sh4.c:445   host dies\n    CHCR0 = 0x00003001  (SM=3)              dev_sh4.c:454   host dies\n    CHCR0 = 0x00000051 / 0x00000071 (TS=5/7) dev_sh4.c:436  host dies\n    CHCR3 = 0x0000c001                      dev_sh4.c:445   host dies (all 8 ch)\n    CHCR0 = 0x00005141  A SANE CONFIG       dev_sh4.c:491   host dies\n        (TS=4byte, DM/SM=increment, TD=1 -- nothing exotic)\n    CHCR0 = 0x00000005  (IE|TD)             dev_sh4.c:491   host dies\n    CHCR0 = 0x0000c000  (TD clear)                          SURVIVES -- control\n\nTHE MECHANISM IS WHY IT IS BROAD: only RS == 0x200 survives the CHCR_RS switch, and CHCR_IE then kills at :493. So a guest that merely ENABLES a DMA channel reaches an exit(1) on nearly any configuration.\n\nThe control is the part that makes it a measurement rather than a claim: clearing TD alone leaves the host alive through the identical store.\n\nSCOPE, stated so this is not read as a defect in #447's record: #447's in-file wording is 'four value guards in DEVICE_ACCESS(sh4)', which is literally true. This is a RESIDUAL that must be filed before any record claims the FILE is repaired -- and #447's CHANGELOG block was written knowing it.",
+     "grade": "CONFIRMED",
+     "ev": "opus5 measuring seat, #447 pass 2, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sh4rtcsr",
+   "title": "sh4rtcsr  A guest RTCSR write kills the host MILLISECONDS LATER from a host timer callback -- a DELAYED shape no repaired site has",
+   "state": "held",
+   "commits": "",
+   "hold": "Its own round, and it is the more interesting shape rather than the more severe one: the store returns normally and the process dies later, so the store-site probes every SH-4 round has used are blind to it by construction.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "probe:measured rung-3 during the #447 pass 2 with a dt/bf spin loop under `continue`, every halfword checked against the emulator's own disassembler. Not yet committed as an artefact.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** THE STORE RETURNS NORMALLY AND THE PROCESS DIES MILLISECONDS LATER. ***  RTCSR at 0xff80001c is guest-writable (`d->bsc_rtcsr = idata & 0x00ff`), and sh4_timer_tick() reaches exit(1) at dev_sh4.c:253-259 -- at 110 Hz.\n\nMEASURED with a dt/bf spin loop under `continue`:\n    RTCSR CMIE 0x40   -> alive=False   'sh4: RTCSR_CMIE | RTCSR_OVIE: TODO'\n    RTCSR OVIE 0x02   -> alive=False   same\n    CONTROL   0x00    -> alive=True\n    CONTROL CMF 0x80  -> alive=True    (different bit, SAME register and width)\n\n*** THE SECOND CONTROL IS THE ONE THAT MATTERS: a different bit of the SAME register at the SAME width leaves the host alive, so the kill is attributable to the BIT and not to the access. ***\n\nWHY IT IS A DISTINCT ROUND RATHER THAN A CHCR SIBLING: every SH-4 probe this project has written observes the store site -- issue the store, see whether the host survived the instruction. THAT DESIGN CANNOT SEE THIS. The instruction completes, the debugger prompt returns, and the host dies from a callback afterwards. Detecting it needs a free-running spin with a liveness check AFTER the fact, which is a different probe shape and a different oracle.\n\nALSO UNMEASURED, same family, filed here rather than lost: two more sites in sh4_sci_cmd() at :518 and :527, reached on guest-written SCI bytes.",
+     "grade": "CONFIRMED",
+     "ev": "opus5 measuring seat, #447 pass 2, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sh4valrows",
+   "title": "sh4valrows  #447's detector is escapable by NINE measured mutants -- one is a one-identifier silent defect, one is a guest-reachable host death",
+   "state": "held",
+   "commits": "",
+   "hold": "Its own round, and it is fully specified below -- four structural holes, the mutants that exploit each, and the fix each seat recommended. Two attempts at it died to transient API 529s, NOT to any difficulty in the work.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "none needed -- this is detector work, and the escapes are already measured. The 13 mutant binaries and their logs are at WSL /tmp/mseat_bins_M* and /tmp/mseat_results.txt.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** NINE MUTANTS SCORE 33/33 AGAINST #447's SHIPPED DETECTOR, SEVEN OF THEM MEASURED REAL DEFECTS. ***  Filed rather than fixed in #447 for a stated reason: the detector is WEAK, not VACUOUS. It kills 25 of 33 rows on the pre-fix build and kills six real mutants. That is categorically unlike #446's detector, which a 217-byte comment-only file passed and which was therefore replaced in-round.\n\nTHE FOUR HOLES, and they are a PRODUCT rather than a list:\n  H1  state is read back at INSTANCE 0 ONLY. V17/V18 read RCR1, V19/V20 channel 0, V21 TCR0. V11/V12 walk the other instances but only COUNT diagnostic lines.\n  H2  state is read back on a FIRST offence only, EXCEPT at RCR1. V18 exists for exactly this shape -- its own comment cites #443's brace slip -- and the sibling row was never added at TCR or DMATCR.\n  H3  the guard masks are pinned only FROM BELOW. V28 proves the six bits are IN the mask; nothing proves any other bit is OUT.\n  H4  width x instance is a PRODUCT and the census covers only the DIAGONAL -- three widths at instance 0, one width everywhere else.\n\nTHE ESCAPES, all measured on built binaries:\n  M20  `| TCR_UNIE` added to TCR_UNIMPLEMENTED -- ONE IDENTIFIER. Fix: TCR0=0x0022 reads back 0x22 with a clock line at 520833.328125 Hz. M20: reads back 0x00000000, NO clock line. TCR_UNIE is modelled (`d->tcr[i] & TCR_UNIE` in sh4_timer_tick), so the guest can NEVER enable the timer interrupt.  [H3]\n  M20b `| TCR_TPSC0` -- same shape; makes TPSC_P16 and TPSC_P256 unusable.  [H3]\n  M25  `| SH_RCR1_CF` -- fix writes RCR1 0x80, reads back 0x80, 0 diagnostics; mutant reads back 0x01, STILL 0 diagnostics. Fully silent.  [H3]\n  Mdma DMATCR guard narrowed `~0x00ffffff` -> `~0x04ffffff`, ONE NIBBLE. Bit 26 is then stored, and *** sh4_dmac_transfer consumes dmac_tcr[] & 0x1fffffff, FIVE BITS WIDER than the guard rejects ***, so bits 24-28 give a silently wrong transfer count.  [H3]\n  M23  TCR stores the rejected value when timer_nr != 0. Fix: TCR1 reads 0x0002. Mutant: 0x0204.  [H1]\n  M24  DMATCR stores it when dma_channel != 0. Fix: 0x10. Mutant: 0xabcdef.  [H1]\n  Mbrk TCR `break;` -> `if (timer_nr == 0) break;` -- timers 1 and 2 then fall into `idata & 3` and install pclock/4, the exact naive-fix bug V22 was written for, on the two instances it does not watch.  [H1]\n  M21  DMATCR stores on a REPEAT offence. Fix: 0x10. Mutant: 0x123456. Both rejects carry bit 24, so the second is not 'fresh'.  [H2]\n  M22  TCR stores on a repeat offence. Fix: 0x0002. Mutant: 0x0004.  [H2]\n  M33  `if (timer_nr == 2 && len == 4) exit(1);` -- *** GUEST-REACHABLE HOST DEATH. ***  A mov.l to TCR2 gives alive=False. It SURVIVES at len 2, the only width V11 issues, which is precisely why it scores full marks.  [H4]\n\n*** THE FIX CHANGED H3's FAILURE MODE FROM LOUD TO SILENT, and that is the finding inside the finding. ***  Pre-#447 a widened mask meant exit(1) on a legal write -- unmissable. Post-#447 it means a silently refused write. The round improved the failure and made its own blind spot worse in the same edit.\n\nA THIRD SEAT ADDED THE QUANTIFIER-COLLAPSE QUESTION, and was honest that it could not confirm it: V28 writes all six unimplemented TCR bits AS A UNION (0x02dc). Delete one bit from the mask and the union write still trips on the other five, so V28 stays green while a SINGLETON write of the deleted bit reaches the prescaler and the store. UNSETTLED -- it needs the fourteen mask-minus-one-bit mutants run: TCR 0x0004/0x0008/0x0010/0x0040/0x0080/0x0200 and each DMATCR high-byte bit, each written alone.\n\nNOTE H3-from-above and the singleton sweep are DIFFERENT TESTS and both are wanted: one requires a MODELLED bit to be ACCEPTED, the other requires each unimplemented bit to be REJECTED ALONE. A mask is pinned only when both hold, and they fail to different mutants.\n\nTHE FIXES THE SEATS RECOMMENDED, each small: extend the TCR and DMATCR read-back rows to a NON-ZERO instance (H1); add a read-back after a REPEATED same-bit reject at TCR and DMATCR (H2); add rows writing a MODELLED bit-set and asserting it is ACCEPTED, with the clock line as the second witness (H3); make V11 issue len 4 as well as len 2 (H4).\n\n*** AND ONE PROCESS NOTE WORTH MORE THAN THE ROWS: THE PROBE REFUSED TO PASS IN A HALF-EDITED STATE. ***  An attempt at this work died mid-edit having bumped EXPECT_ROWS to 43 and registered three new opcodes, without writing the rows. The probe reported 31/33 FAIL through TWO INDEPENDENT ROWS -- V31 caught the row-count intent, V30 caught the opcode intent (mismatches for 2151, 2161, 4000, disassembler None). The identity-row discipline worked on its own author, and the tree was restored to a verified 33/33 rather than left broken.",
+     "grade": "CONFIRMED",
+     "ev": "opus5 + grok + codex, panel_20260821_171837, mutants built and scored"
     }
    ]
   }

@@ -83,6 +83,42 @@
 #define	SH4_PCIC_BADVAL			1	/*  known register, unexpected value      */
 #define	SH4_PCIC_NOCPU			2	/*  known register, CPU type not modelled */
 #define	SH4_PCIC_NCLASS			3
+/*
+ *  #447: DEVICE_ACCESS(sh4)'s OWN value guards -- a separate cluster from the PCIC
+ *  one above, in the switch #443 did not touch.  Four of them called exit(1) on one
+ *  ordinary guest store; the witness is regress/sh4_val_witness.py.
+ *
+ *  The latch key is (class, INSTANCE, offending BIT).  All three parts are load-bearing
+ *  and each was arrived at by a failure this project has already paid for:
+ *
+ *    - the CLASS is the kind of COMPLAINT, per #443's pass-2 finding.
+ *    - the INSTANCE is which register raised it.  Three TCRs reach one `case` through
+ *      fall-through and eight DMATCRs reach another, so a latch keyed on the class
+ *      alone would report timer 0 and silence timers 1 and 2 -- #443's measured half
+ *      fix, one level down and in a new dress.
+ *    - the BIT is which unimplemented feature was asked for.  RCR1's single guard
+ *      covers TWO independent features (SH_RCR1_CIE and SH_RCR1_AIE) and TCR's covers
+ *      SIX, so a latch keyed on (class, instance) reports the first feature a guest
+ *      asks for and silently swallows every other one at the same register.
+ *
+ *  Bounded by construction -- at most one line per (class, instance, bit) -- so a guest
+ *  looping on a rejected write cannot burn host CPU.  That bound is the reason the
+ *  latch exists at all: fatal() has no quiet_mode early-out, unlike debug(), so an
+ *  unlatched complaint could not be silenced even with -q.
+ */
+#define	SH4_VAL_TCRBITS			0	/*  TCR: control bits not modelled       */
+#define	SH4_VAL_DMATCR			1	/*  DMATCR: count wider than 24 bits     */
+#define	SH4_VAL_ICRIRLM			2	/*  ICR: IRLM mode not modelled          */
+#define	SH4_VAL_RCR1INT			3	/*  RCR1: RTC interrupt enable not modelled  */
+#define	SH4_VAL_NCLASS			4
+/*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
+#define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
+
+/*  #447: the six TCR bits this device does not model, spelled ONCE so the guard and
+    its diagnostic cannot drift apart.  thirdparty/sh4_tmureg.h:75-82.  */
+#define	TCR_UNIMPLEMENTED		(TCR_ICPF | TCR_ICPE1 | TCR_ICPE0 | \
+					 TCR_CKEG1 | TCR_CKEG0 | TCR_TPSC2)
+
 #define	PCI_VENDOR_HITACHI		0x1054
 #define	PCI_PRODUCT_HITACHI_SH7751	0x3505
 #define	PCI_PRODUCT_HITACHI_SH7751R	0x350e   
@@ -184,6 +220,10 @@ struct sh4_data {
 	uint32_t	tcr[N_SH4_TIMERS];
 	int		timer_interrupts_pending[N_SH4_TIMERS];
 	double		timer_hz[N_SH4_TIMERS];
+
+	/*  #447: [class][instance] -> the offending bits already reported.  See the
+	    SH4_VAL_* block near the top of this file for why the key has three parts.  */
+	uint32_t	val_reported[SH4_VAL_NCLASS][N_SH4_VAL_INST];
 
 	/*  RTC:  */
 	uint32_t	rtc_reg[14];	/*  Excluding rcr1 and rcr2  */
@@ -1245,6 +1285,55 @@ static int sh4_bsc16_report(struct sh4_data *d, int site, const char *name,
 }
 
 
+/*
+ *  sh4_val_first():
+ *
+ *  Non-zero the first time any of `bits` is reported for (cls, instance); records
+ *  them either way.  `bits` is the OFFENDING bits, not the whole written value --
+ *  passing the value would make every distinct write look like a fresh complaint and
+ *  hand a looping guest an unbounded host-CPU burn, which is the thing this latch is
+ *  here to prevent.
+ */
+static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits)
+{
+	uint32_t fresh;
+
+	/*  Unreachable by construction: every caller passes a class from the SH4_VAL_*
+	    list and an instance bounded by its own `case` fall-through.  Kept because
+	    getting it wrong would be an out-of-bounds WRITE, not a wrong message, and
+	    because it is free.  It SILENCES rather than reports, matching
+	    sh4_pcic_first(); an unbounded key must not become an unbounded print.  */
+	if (cls < 0 || cls >= SH4_VAL_NCLASS ||
+	    instance < 0 || instance >= N_SH4_VAL_INST)
+		return 0;
+
+	fresh = bits & ~d->val_reported[cls][instance];
+	d->val_reported[cls][instance] |= bits;
+
+	return fresh != 0;
+}
+
+
+/*
+ *  #447: four value guards in the switch below ended the host process with exit(1) on
+ *  ONE ordinary guest store -- TCR, DMATCR, ICR and RCR1.  MEASURED on an unmodified
+ *  -E landisk, each with a matched surviving control at the SAME address and the SAME
+ *  width, so it is the VALUE that kills and not the address or the access width.
+ *
+ *  Fixed in the #438/#441/#443 shape -- keep the diagnostic, drop the exit(1), ignore
+ *  the write -- and the four arms differ in a way that is invisible at the call site:
+ *
+ *    RCR1    the store was UPSTREAM of the guard.  Dropping exit(1) alone would have
+ *            turned a host kill into SILENT STATE CORRUPTION.  Moved below the guard.
+ *    TCR     `timer_hz` was set from `idata & 3` BEFORE the guard and the debug() line
+ *            had already announced it, so the naive fix installs a timer frequency the
+ *            guest never asked for.  The guard moved ABOVE the prescaler switch.
+ *    DMATCR  the store is already downstream; nothing to move.
+ *    ICR     nothing is stored on any path, so there is no state to corrupt.
+ *
+ *  Saying "the store is upstream" once for the file would have been wrong three times
+ *  out of four.  Check it per site.
+ */
 DEVICE_ACCESS(sh4)
 {
 	struct sh4_data *d = (struct sh4_data *) extra;
@@ -1502,6 +1591,36 @@ DEVICE_ACCESS(sh4)
 				exit(1);
 			}
 
+			/*
+			 *  #447: THIS GUARD MOVED UP, above the prescaler switch,
+			 *  and that is not tidy-up.  It used to sit below, by which
+			 *  time `timer_hz` had already been set from `idata & 3` --
+			 *  a divisor the guest did not ask for, because TPSC2 selects
+			 *  a clock source outside the two bits that switch decodes --
+			 *  and the debug() line had already announced it.  exit(1)
+			 *  hid that.  Drop the exit and leave the guard where it was
+			 *  and the write installs a WRONG timer frequency instead,
+			 *  which is a silent fault where the old one was loud.
+			 *
+			 *  The whole write is rejected, not just the bits we do not
+			 *  model: substituting a prescaler for a clock source we
+			 *  cannot provide would be inventing a rate.  The guest can
+			 *  see the rejection by reading TCR back.
+			 *
+			 *  `break` leaves the enclosing switch (relative_addr) -- no
+			 *  loop or inner switch is open at this point -- so nothing
+			 *  below runs and no state is touched.
+			 */
+			if (idata & TCR_UNIMPLEMENTED) {
+				if (sh4_val_first(d, SH4_VAL_TCRBITS, timer_nr,
+				    (uint32_t) (idata & TCR_UNIMPLEMENTED)))
+					fatal("[ sh4: timer %i: unimplemented TCR"
+					    " bits 0x%04x -- write ignored."
+					    "  (once per bit) ]\n", timer_nr,
+					    (int) (idata & TCR_UNIMPLEMENTED));
+				break;
+			}
+
 			switch (idata & 3) {
 			case TCR_TPSC_P4:
 				d->timer_hz[timer_nr] = cpu->cd.sh.pclock/4.0;
@@ -1519,14 +1638,6 @@ DEVICE_ACCESS(sh4)
 
 			debug("[ sh4 timer %i clock set to %f Hz ]\n",
 			    timer_nr, d->timer_hz[timer_nr]);
-
-			if (idata & (TCR_ICPF | TCR_ICPE1 | TCR_ICPE0 |
-			    TCR_CKEG1 | TCR_CKEG0 | TCR_TPSC2)) {
-				fatal("Unimplemented SH4 timer control"
-				    " bits: 0x%08" PRIx32". Aborting.\n",
-				    (int) idata);
-				exit(1);
-			}
 
 			INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
 
@@ -1605,14 +1716,33 @@ DEVICE_ACCESS(sh4)
 		if (writeflag == MEM_READ)
 			odata = cpu->cd.sh.dmac_tcr[dma_channel] & 0x00ffffff;
 		else {
+			/*
+			 *  #447: the store below is DOWNSTREAM of this guard, so
+			 *  dropping exit(1) already rejects the value -- unlike RCR1
+			 *  and unlike every arm of dev_sh4_pcic_access(), where the
+			 *  store runs first and a restore is needed.  Recorded because
+			 *  the difference is invisible at the call site and a reader
+			 *  generalising from #443 would add a restore that is not
+			 *  merely redundant but wrong.
+			 *
+			 *  A GUEST READ-BACK CANNOT SEE THIS REJECTION BY ITSELF: the
+			 *  read arm above masks with 0x00ffffff, so the top bits are
+			 *  invisible whether they were stored or not.  The consumer
+			 *  that would see them is sh4_dmac_transfer(), which masks with
+			 *  0x1fffffff -- FIVE BITS WIDER than the read arm.  A detector
+			 *  row here has to compare the LOW 24 bits against a value the
+			 *  device accepted earlier; a plain read-back is vacuous.
+			 */
 			if (idata & ~0x00ffffff) {
-				fatal("[ SH4 DMA: Attempt to set top 8 "
-				    "bits of the count register? 0x%08"
-				    PRIx32" ]\n", (uint32_t) idata);
-				exit(1);
-			}
-
-			cpu->cd.sh.dmac_tcr[dma_channel] = idata;
+				if (sh4_val_first(d, SH4_VAL_DMATCR, dma_channel,
+				    (uint32_t) ((idata >> 24) & 0xff)))
+					fatal("[ sh4: DMA channel %i: transfer"
+					    " count 0x%08" PRIx32" exceeds 24"
+					    " bits -- write ignored."
+					    "  (once per bit) ]\n", dma_channel,
+					    (uint32_t) idata);
+			} else
+				cpu->cd.sh.dmac_tcr[dma_channel] = idata;
 		}
 		break;
 
@@ -1844,12 +1974,21 @@ DEVICE_ACCESS(sh4)
 	/*  INTC:  Interrupt Controller  */
 
 	case SH4_ICR:
-		if (writeflag == MEM_WRITE) {
-			if (idata & 0x80) {
-				fatal("SH4 INTC: IRLM not yet "
-				    "supported. TODO\n");
-				exit(1);
-			}
+		/*
+		 *  #447: ICR is not modelled on ANY path -- no arm of this case
+		 *  stores anything, and a read answers the odata this function was
+		 *  entered with, i.e. 0.  So there is no state to corrupt and none
+		 *  to restore, and a detector row that writes ICR and reads it back
+		 *  is VACUOUS here by construction: it answers 0 before the fix,
+		 *  after it, and under every mutant.  The diagnostic is the only
+		 *  observable this arm has.
+		 */
+		if (writeflag == MEM_WRITE && (idata & 0x80)) {
+			if (sh4_val_first(d, SH4_VAL_ICRIRLM, 0,
+			    (uint32_t) (idata & 0x80)))
+				fatal("[ sh4: INTC: ICR IRLM bit 0x%04x not"
+				    " implemented -- write ignored."
+				    "  (once per bit) ]\n", (int) (idata & 0x80));
 		}
 		break;
 
@@ -2116,11 +2255,34 @@ DEVICE_ACCESS(sh4)
 		if (writeflag == MEM_READ)
 			odata = d->rtc_rcr1;
 		else {
-			d->rtc_rcr1 = idata;
-			if (idata & 0x18) {
-				fatal("SH4: TODO: RTC interrupt enable\n");
-				exit(1);
-			}
+			/*
+			 *  #447: *** THE STORE WAS UPSTREAM OF THE GUARD. ***  It ran
+			 *  first and the guard second, so a rejected value had ALREADY
+			 *  landed in rtc_rcr1 and exit(1) was the only thing stopping
+			 *  the guest reading it back.  Dropping the exit and nothing
+			 *  else turns a host kill into SILENT STATE CORRUPTION -- the
+			 *  guest writes CIE|AIE, reads CIE|AIE back, and believes the
+			 *  RTC will interrupt it.  It never will.  Same shape as #443
+			 *  found in dev_sh4_pcic_access(), and the ONLY one of #447's
+			 *  four sites that has it.  The store therefore moved below.
+			 *
+			 *  The mask is spelled from the header (thirdparty/sh4_rtcreg.h
+			 *  :72-73) rather than as 0x18, because it is TWO independent
+			 *  features and the latch keys on which one was asked for.
+			 *
+			 *  Values outside those two bits are accepted exactly as before.
+			 */
+			if (idata & (SH_RCR1_CIE | SH_RCR1_AIE)) {
+				if (sh4_val_first(d, SH4_VAL_RCR1INT, 0,
+				    (uint32_t) (idata &
+				    (SH_RCR1_CIE | SH_RCR1_AIE))))
+					fatal("[ sh4: RTC: RCR1 interrupt enable"
+					    " 0x%02x not implemented -- write"
+					    " ignored.  (once per bit) ]\n",
+					    (int) (idata &
+					    (SH_RCR1_CIE | SH_RCR1_AIE)));
+			} else
+				d->rtc_rcr1 = idata;
 		}
 		break;
 
