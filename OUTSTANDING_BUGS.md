@@ -5602,3 +5602,20 @@ compiles the real `memory_m88k.c` — deliberately, since that is what makes the
 translator rather than a re-implementation — and **ten of the census's kills land in the translator
 rather than the device**. A reader trusting the title would attribute translator coverage to the
 device file. One line.
+
+### `killedreports0` — held
+**A battery killed mid-run reported exit code 0.** It was started as `bash run.sh 2>&1 | tail -45`;
+a pipeline's status is the *last* command's, so the code belonged to `tail`, which succeeded in
+reading a truncated stream. Two failures compounded: the verdict was **false**, and `| tail` buffers
+until the pipeline ends, so the output file sat at **0 bytes** for the whole run and was still empty
+afterwards — no mid-run progress, no post-mortem.
+
+Same genus as `cmd | head` reporting head's status, which this project already records and which bit
+twice more the same day. What is new is the **scale**: not a check inside a gate, but the invocation
+of the entire 16-gate battery. Fixed in practice by `exec > log 2>&1`; the re-run gave `REGRESS_PASS`
+across all 16 gates in 48 minutes.
+
+**What would make it mechanical:** a verdict is believable only if its log ends in a terminal token.
+`nightly_check.sh` already treats a missing or stale verdict as failure — the same reasoning one
+level in would refuse a verdict whose log carries no `REGRESS_PASS`/`REGRESS_FAIL` line, which is
+exactly what a killed run leaves behind.
