@@ -99,6 +99,34 @@ MACHINE_SETUP(sgi)
 	char *eaddr_string;
 	CHECK_ALLOCATION(eaddr_string = (char *) malloc(ETHERNET_STRING_MAXLEN));
 
+	/*
+	 *  #446: FILL IT HERE, not only in the ip32 arm.
+	 *
+	 *  This buffer was malloc'ed and left UNINITIALISED, and only ONE subtype
+	 *  arm (ip32, below) ever wrote to it -- yet :633 hands it to
+	 *  arcbios_init() unconditionally, where set_env() -> strdup() scans for a
+	 *  NUL that is not there.  MEASURED under ASan: a 41-byte READ past a
+	 *  40-byte allocation, on ip12, ip28, ip30 and ip35; reading the 40
+	 *  in-bounds bytes at the point of use finds NO terminator anywhere in the
+	 *  region.  ip32 is correct today only because its own arm fills it.
+	 *
+	 *  *** THE OVERFLOW IS IN THE CALLEE'S strdup AND THE DEFECT IS HERE. ***
+	 *  set_env() is correct code: it cannot detect a missing terminator from
+	 *  the inside, so there is no callee-side hardening to prefer -- that is
+	 *  not a trade-off, it is an impossibility.  machine_arc.c passes a literal
+	 *  and machine.c forces machine->bootarg non-NULL, so this was the only
+	 *  defective caller of that path.
+	 *
+	 *  FIVE OTHER SUBTYPES WERE MASKING THIS by abort()ing before line 633
+	 *  (ip19/20/22/24/27).  If those aborts are fixed first the overflow grows
+	 *  from four subtypes to nine -- the coupling runs one way, and is recorded
+	 *  on `ctorabortclass`.
+	 */
+	snprintf(eaddr_string, ETHERNET_STRING_MAXLEN,
+	    "%02x:%02x:%02x:%02x:%02x:%02x",
+	    macaddr[0], macaddr[1], macaddr[2],
+	    macaddr[3], macaddr[4], macaddr[5]);
+
 	switch (machine->machine_subtype) {
 
 	case 10:

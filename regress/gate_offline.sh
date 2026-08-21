@@ -1793,5 +1793,30 @@ done
 check "SELFCHECK manifest: every COVERED detector ran its sentinel" \
       "${sc_notrun:-none}" "none"
 
+# ------------------------------------------------------------------ #446 sgi_eaddr
+#  A SOURCE-TEXT detector, wired here because it needs no binary and no rig -- it reads
+#  machine_sgi.c and asserts the ethernet-address buffer is filled AT THE ALLOCATION,
+#  before the subtype switch, so every arm inherits it.
+#
+#  *** WHY IT IS NOT AN ASan ROW.  ***  Gate 9 already sweeps every subtype under an
+#  instrumented build and would catch a regression of the OVERFLOW.  It cannot catch the
+#  most likely bad fix: `eaddr_string[0] = ' '` SILENCES ASan COMPLETELY -- the read
+#  stops at byte 0 -- while handing the guest an EMPTY MAC.  A pass-1 seat named that
+#  hole before the detector existed, and only a length/format oracle sees it.  Measured:
+#  that mutant scores 4/7 here.
+#
+#  Wired in the SAME COMMIT as the probe, per gate 6's structural note and per
+#  check_probe_wiring.py, which caught this file being unwired on the very next commit
+#  after it landed.
+EADDRLOG=$LOGDIR/sgi_eaddr.log
+if [ ! -f "$HERE/sgi_eaddr_probe.py" ]; then
+    check "sgi_eaddr: probe present" "no" "yes"
+else
+    python3 "$HERE/sgi_eaddr_probe.py" > "$EADDRLOG" 2>&1 || true
+    sed 's/^/       /' "$EADDRLOG"
+    check "sgi_eaddr: the buffer is filled at its allocation"           "$(grep -c 'SGI_EADDR_PASS' "$EADDRLOG")" "1"
+    check_min "sgi_eaddr: rows actually run"           "$(grep -cE '^  \[(ok|FAIL)\] ' "$EADDRLOG")" 7
+fi
+
 gate_end
 exit $?

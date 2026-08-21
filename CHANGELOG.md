@@ -4192,6 +4192,80 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R15 (#446) — a heap-buffer-overflow that no harness had ever executed, and it was not where ASan pointed
+
+`machine_sgi.c`. The ethernet-address buffer was `malloc`ed and left **uninitialised**. Exactly one
+subtype arm (ip32) ever wrote to it, yet `arcbios_init()` was handed it unconditionally, where
+`set_env()` → `strdup()` scans for a NUL that is not there. MEASURED under ASan: **a 41-byte read
+past a 40-byte allocation** on ip12, ip28, ip30 and ip35, with **no terminator anywhere in the
+region** (`first_NUL_at = -1`; the bytes are ASan's 0xbe malloc fill).
+
+### It was found only because fixing an unrelated gate made the machines visible
+
+Gate 9's awk required a machine's primary alias to match `[a-z0-9_.-]+`, and **SGI's is `"silicon
+graphics"` — with a space** — so SGI was dropped as a type and its ten subtypes were silently
+re-attributed to `rpi`. Nothing had ever executed them. Second time in one session that repairing an
+instrument surfaced a real defect its blindness was concealing.
+
+### Where the defect is NOT
+
+**ASan names `arcbios.c` and the first filing followed it there. That was wrong.** `set_env()` is
+correct code: its append branch grows both arrays before writing to either, and its `envstrings` is
+`malloc`+`memset` at the call site. **It cannot detect a missing terminator from the inside**, so
+"harden the callee instead" is not a trade-off here — it is an impossibility. The owner is the
+caller, and it is the only defective one: `machine_arc.c` passes a literal, and `machine.c` forces
+`machine->bootarg` non-NULL.
+
+The round brief hypothesised the linear search at the top of `set_env` was reading out of bounds
+before the reported line. **Measured false** — the search iterates over valid `strdup`'d names.
+
+### Ten = 5 + 1 + 4, and the coupling runs one way
+
+* **Five abort before reaching it** — ip19/20/22/24/27, rc=134, zero arcbios output.
+* **One is genuinely correct** — ip32, filled by its own arm.
+* **Four reach the hand-off unwritten** — ip12/28/30/35.
+
+*** THE FIVE ABORTERS WERE MASKING THE BUG, NOT IMMUNE TO IT. *** If `ctorabortclass` is fixed
+first, they reach the same line with the same uninitialised buffer and **the overflow grows from
+four subtypes to nine.** Recorded on that row; the items are coupled in one direction.
+
+### "Four hits" was one overflow
+
+Gate 9's `sanhit()` is `grep -acE`, counting **lines**: two UBSan `left shift` errors plus the
+`ERROR:` and `SUMMARY:` lines. `grep -ac 'ERROR: AddressSanitizer'` is **1** per subtype. ip32's
+"2" is the two UBSan lines alone. **Those two left-shift UB defects at `arcbios.c:737/784` are a
+separate, now-filed item** — they were hiding inside a count.
+
+### Rung 2, and it is the ceiling
+
+`main → emul_simple_init → emul_machine_setup → machine_setup → machine_setup_sgi → arcbios_init →
+set_env`. **No guest instruction executes** — the input is a dummy ELF that fails to load.
+Construction alone triggers it, unconditionally. The `macppc` heap OOB `#23` is the precedent. Rung
+3 is unavailable *and unnecessary*: it fires before any guest exists.
+
+Verified independently rather than inherited: I rebuilt the instrumented tree from my own edit and
+measured **`asan_err` 1 → 0 on all four**, with ip32 unchanged at 0.
+
+### The detector is source-text, and the reason is a hole an ASan oracle cannot see
+
+`regress/sgi_eaddr_probe.py`, 7 rows. Gate 9 already sweeps every subtype under ASan, so a
+regression of the *overflow* is its job. Two reasons that is not sufficient:
+
+1. *** `eaddr_string[0] = ' '` SILENCES ASan COMPLETELY *** — the read stops at byte 0, no
+   overflow occurs — **while handing the guest an empty MAC.** A pass-1 seat named that hole before
+   this detector existed. Only a length/format oracle sees it.
+2. Gate 9's instrumented binaries were **23 days stale** when this was found, so its green meant
+   "the July binary is clean" — a true statement about the wrong artefact (`asanstale`).
+
+Kill table, all measured: the pre-fix state 4/7; the `' '` mutant **4/7**; a four-octet MAC 6/7
+(E5 alone); the fill moved back inside one arm 4/7; clean tree 7/7. Honest note: the first and last
+of those are **the same mutant** — deleting the pre-switch fill — and are reported as two only
+because I generated them separately.
+
+**What this file does not claim:** anything about the bytes the guest sees. The string is copied
+into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
+probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
+
 ## R14 (#444) — three advertised machine subtypes core-dumped at construction, and no gate could say so
 
 `machine_hpcmips.c`. Three of eight `hpcmips` subtypes SIGABRT before any guest runs, via
