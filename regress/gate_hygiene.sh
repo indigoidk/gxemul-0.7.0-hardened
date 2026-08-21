@@ -163,7 +163,19 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  is doing the whole job here and was verified by recomputation rather than by a gate run.
 #  Wiring it into gate_arm.sh alongside footbridge_sites_probe.py is the follow-up, and it wants
 #  an operator who can run that gate.
-EXPECT_CONVERTED=18
+#  18 -> 19 on 2026-08-20: sh4_bsc_width_probe.py, #441's detector for sh4bcr.  MEASURED the
+#  same way -- this gate's own probe_code()/py_code(), run before and after staging: all three of
+#  conv_anchor, conv_echo and conv_mark move 18 -> 19 while bare, unknown and whole_full do not
+#  move (0/0/2).  The same signature every entry above records.
+#
+#  IT DID NOT START THAT WAY, and the near-miss is the part worth keeping.  The probe first named
+#  its local `mark` rather than `_mark`, so the fresh-mark guard was PRESENT but invisible to
+#  conv_mark, which keys on `return wait(mark=_mark, ...)`.  Two counts went green and the third
+#  went red -- and the first draft of THIS comment argued that was correct and blamed the census,
+#  on the reasoning that renaming a local to satisfy a grep is the tail wagging the dog.  Wrong:
+#  `_mark` is the idiom in every other pty probe in the tree, so the new file was the outlier.
+#  Teaching the census a second spelling would have made it count substrings of the first.
+EXPECT_CONVERTED=19
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not

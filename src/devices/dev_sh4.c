@@ -111,6 +111,12 @@ struct sh4_data {
 	uint32_t	bsc_bcr1;
 	uint16_t	bsc_bcr2;
 	uint16_t	bsc_bcr3;	/*  SH7751R  */
+	/*  #441: has the non-16-bit diagnostic been given for BCR2 / BCR3?
+	    PER SITE, NOT SHARED: a shared flag demotes the second register's
+	    FIRST report, which is #438's "1 of 4 kinds" hazard.  A two-character
+	    mutant ([site] -> [0]) passed a 13-row detector until the oracle was
+	    corrected -- see the comment on sh4_bsc16_report().  */
+	int		bsc16_reported[2];
 	uint32_t	bsc_wcr1;
 	uint32_t	bsc_wcr2;
 	uint32_t	bsc_wcr3;
@@ -982,6 +988,104 @@ DEVICE_ACCESS(sh4_sq)
 }
 
 
+/*
+ *  #441: BCR2 and BCR3 are 16-bit registers, and the committed code answered a
+ *  guest access of any other width with fatal() + exit(1) -- so TWO GUEST
+ *  INSTRUCTIONS ended the emulator, taking every emulated process and any
+ *  unflushed disk overlay with them.  Reproduced at rung 3 on an unmodified
+ *  in-tree landisk: a mov.l to 0xff800004 killed the host, while the SAME
+ *  4-byte width to BCR1 four bytes away survived, because BCR1 has no length
+ *  check.  The kill was the width test, not the device.
+ *
+ *  Fixed in the #438 shape: keep the diagnostic, drop the exit(1), service the
+ *  access.  Servicing rather than ignoring is deliberate for an access that
+ *  COVERS the register: these two were the only length checks in the file, and
+ *  PCR/RTCSR/RTCNT/RTCOR/RFCR (all "16bit" in sh4_bscreg.h) already accept any
+ *  width and service it.  A real boot reads BCR2 three times and BCR3 once,
+ *  all at the legal width, so a correct guest sees no change at all.
+ *
+ *  TWO LIMITS, both measured by a pass-2 seat and stated rather than papered
+ *  over.  (1) A PARTIAL access -- len 1 -- is dropped, so from the second one
+ *  onward these registers DO silently swallow a write, and free-running the
+ *  demoted line is invisible because debug() computes v = verbose - 1 = -1 and
+ *  returns.  An earlier draft of this comment argued against exactly that
+ *  behaviour while the code implemented it.  (2) The precedent registers named
+ *  above resolve BE lanes the OTHER way (they take the last two bytes of a
+ *  wide access, not the first) and they PROMOTE a 1-byte write rather than
+ *  dropping it, so this fix cites them for the principle and then differs from
+ *  them on both axes.  Tracked as `sh4bsclane`; not reopened here, because one
+ *  round takes one site and there is no SH-4 document in this tree to settle
+ *  which convention is right.
+ */
+static unsigned int sh4_bsc16_shift(struct cpu *cpu, size_t len)
+{
+	/*  Which bits of a len-byte access are the register's own two?
+	    memory_rw hands the WHOLE access to one handler (measured: one call,
+	    len=4, never split -- the 1024-byte page split cannot fire on a
+	    4-byte aligned access), so the byte lanes are ours to resolve.  The
+	    case label matched relative_addr exactly, so the register is always
+	    the FIRST two bytes: bits [15:0] little-endian, the top halfword big.
+
+	    The len <= 2 term must not be "simplified" away: len is a size_t, so
+	    8 * (len - 2) at len == 1 shifts by SIZE_MAX*8.  || short-circuits, so
+	    the subtraction is never evaluated for a short access.
+
+	    HONEST SCOPE, because an earlier draft of this comment overstated it
+	    and a review seat measured the overstatement: a 1-byte guest access IS
+	    reachable, but it never reaches THIS function -- sh4_bsc16_report()
+	    returns 0 for a partial access and the case arm breaks first.  The
+	    guard is defensive, not load-bearing today.  It is kept because the
+	    two are one edit apart, and a capitalised claim of reachability the
+	    code prevents is a records defect either way.  */
+	if (len <= sizeof(uint16_t) || cpu->byte_order != EMUL_BIG_ENDIAN)
+		return 0;
+	return 8 * (unsigned int) (len - sizeof(uint16_t));
+}
+
+
+static int sh4_bsc16_report(struct sh4_data *d, int site, const char *name,
+	int writeflag, size_t len)
+{
+	int partial;
+
+	if (len == sizeof(uint16_t))
+		return 1;
+
+	/*  A PARTIAL access does not cover the register, so it is diagnosed and
+	    NOT serviced -- servicing it would let a 1-byte store overwrite both
+	    halves.  Written the other way round first, and the D3 detector row
+	    caught it on the first run: a byte write of 0xa5 left the register
+	    holding 0xa5 instead of its reset 0x3ffc.  That is exactly the mutant
+	    a pass-1 seat had predicted and written D3 against.  */
+	partial = len < sizeof(uint16_t);
+
+	/*  LATCHED, and per site.  fatal() is NOT debug(): debug() returns early
+	    under quiet_mode, fatal() has no such early-out, so an unlatched
+	    complaint here could not be silenced even with -q.  A real
+	    OpenBSD/landisk boot makes ZERO non-16-bit BSC accesses (measured),
+	    so the latch costs a correct guest nothing and bounds a hostile one.
+
+	    THE ORACLE FOR THIS IS NOT THE REGISTER NAME.  A detector row that
+	    asked "does the string BCR3 appear?" was passed by a mutant sharing
+	    one flag between the sites, because the demoted debug() prints the
+	    same name -- and under the cold debugger single_step is true, so
+	    debug()'s quiet_mode early-out never fires and a probe cannot tell
+	    fatal() from debug() by presence at all.  Count the latched suffix.  */
+	if (!d->bsc16_reported[site]) {
+		d->bsc16_reported[site] = 1;
+		fatal("[ sh4: %i-byte %s of SH4_%s; it is a 16-bit register."
+		    "  %s.  (reported once per register) ]\n",
+		    (int) len, writeflag == MEM_WRITE ? "write" : "read", name,
+		    partial ? "Ignored" : "Servicing its own two bytes");
+	} else {
+		debug("[ sh4: %i-byte %s of SH4_%s ]\n", (int) len,
+		    writeflag == MEM_WRITE ? "write" : "read", name);
+	}
+
+	return !partial;
+}
+
+
 DEVICE_ACCESS(sh4)
 {
 	struct sh4_data *d = (struct sh4_data *) extra;
@@ -1406,25 +1510,24 @@ DEVICE_ACCESS(sh4)
 		break;
 
 	case SH4_BCR2:
-		if (len != sizeof(uint16_t)) {
-			fatal("Non-16-bit SH4_BCR2 access?\n");
-			exit(1);
-		}
+		if (!sh4_bsc16_report(d, 0, "BCR2", writeflag, len))
+			break;
 		if (writeflag == MEM_WRITE)
-			d->bsc_bcr2 = idata & 0x3ffd;
+			d->bsc_bcr2 = (idata >> sh4_bsc16_shift(cpu, len))
+			    & 0x3ffd;
 		else
-			odata = d->bsc_bcr2;
+			odata = (uint64_t) d->bsc_bcr2
+			    << sh4_bsc16_shift(cpu, len);
 		break;
 
 	case SH4_BCR3:
-		if (len != sizeof(uint16_t)) {
-			fatal("Non-16-bit SH4_BCR3 access?\n");
-			exit(1);
-		}
+		if (!sh4_bsc16_report(d, 1, "BCR3", writeflag, len))
+			break;
 		if (writeflag == MEM_WRITE)
-			d->bsc_bcr3 = idata;
+			d->bsc_bcr3 = (idata >> sh4_bsc16_shift(cpu, len));
 		else
-			odata = d->bsc_bcr3;
+			odata = (uint64_t) d->bsc_bcr3
+			    << sh4_bsc16_shift(cpu, len);
 		break;
 
 	case SH4_WCR1:
