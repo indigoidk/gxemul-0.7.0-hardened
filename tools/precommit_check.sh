@@ -267,6 +267,81 @@ else
 	rm -f "$_mx"
 fi
 
+#  ---- R ---------------------------------------------------------------------------
+#  A COMMITTED DETECTOR THAT NO GATE RUNS DEFENDS NOTHING BETWEEN BATTERIES.
+#
+#  Detector escapes in this project come in three shapes and TWO already had mechanical
+#  guards: gate_offline's SM/SC manifests catch a differential with no self-mutant control,
+#  and gate_hygiene's EXPECT_CONVERTED pin catches a probe that does not carry the #392 pty
+#  constructs.  The third had none -- NOBODY RUNS IT -- and it was the largest.  MEASURED at
+#  3d752b4: FOUR committed detectors totalling SIXTY-SIX rows executed in no gate at all.
+#    #439/#440 pit8253_latch_probe.py      18 rows         #441 sh4_bsc_width_probe.py  13
+#    #442      fbpending_drain_probe.py    11, report-only  #444 hpcmips_ctor_probe.py   24
+#  The finding that named the gap put it at 24 rows across two rounds; it is four rounds and
+#  66, because #444's detector landed after the census and nothing existed to notice.
+#
+#  THE MEASURE IS NAMED BECAUSE THE FIRST ONE WAS WRONG: `row()` call sites with a literal
+#  label, counted through python's `ast`.  A first pass grepped for 'row("R' and reported 56,
+#  having silently dropped every control row that is not R-prefixed.  The padded-column grep
+#  trap in another costume -- a number that looks right and counts the wrong set.
+#
+#  GATE 6's CENSUS PIN IS NOT THIS CHECK IN DIFFERENT CLOTHES, and the distinction is the
+#  same one this file already draws between G and H: the PIN asks whether the probe's SOURCE
+#  carries the right constructs, R asks whether anything EXECUTES it.  All four files above
+#  satisfy the pin today.  Neither catches the other's failure.
+#
+#  A MENTION IS NOT WIRING, and that is the whole difficulty.  gate_sh_rounding.sh:185
+#  mentions sh4_bsc_width_probe.py in a comment COMPLAINING that it is unwired; gate_hygiene
+#  mentions all four in its census annotations; and gate_hygiene.sh:331 carries a probe
+#  basename and the token `python3` on ONE non-comment line whose message is that the probe
+#  did NOT run.  A grep-for-the-name check scores every one of those as wired and prints
+#  green over the entire defect.  check_probe_wiring.py decides by COMMAND POSITION, derives
+#  the battery from run.sh's own GATES array, and PRINTS the file:line it found -- so the
+#  derivation is auditable rather than trusted.  It is the check_fable_queue substring bug
+#  from earlier the same day, refused in advance.
+#
+#  HARD, and retroactive rather than forward-only-by-date: the domain is 36 files in one
+#  flat directory, and a date cutoff would grandfather exactly the four files it exists for.
+#  Existing gaps are carried as DATED exemptions that EXPIRE (2026-09-20, chosen to fall due
+#  with gate_offline's fbpending_bound), never as silent grandfathering.
+#
+#  THE SELFTEST RUNS ONLY WHEN THE CHECKER ITSELF CHANGES.  --selftest applies 18 mutants to
+#  temp copies and asserts each exit status, which takes ~14 s -- too slow for every commit,
+#  and pointless when the checker did not move.  Firing it on the one commit that could break
+#  it is the section-E idea: a check nobody has to remember.
+say ""; say "R. every committed detector is run by a gate (or dated-exempt)"
+PWCHK=$_HERE/pipeline/check_probe_wiring.py
+if [ ! -f "$PWCHK" ]; then
+	warn "check_probe_wiring.py MISSING -- probe wiring is NOT verified"
+else
+	if out=$(python "$PWCHK" 2>&1); then
+		good "$(printf '%s' "$out" | grep -E 'PROBEWIRING_PASS')"
+		printf '%s\n' "$out" | grep -E '^  note ' | sed 's/^/        /'
+	else
+		bad "A COMMITTED DETECTOR IS RUN BY NO GATE (or an exemption expired):"
+		printf '%s\n' "$out" | grep -E 'PROBEWIRING_FAIL|^  FAIL ' | sed 's/^/          /'
+		bad "  wire it into a gate, or add a DATED line to EXEMPT naming the gate that owes it"
+	fi
+	#  UNTRACKED COUNTS AS TOUCHED.  The first version asked only `git diff` and
+	#  `git diff --cached`, and reported "checker unchanged" on the very commit that
+	#  INTRODUCED the checker -- it was untracked, so neither diff could see it, and the
+	#  one commit that most needed the selftest was the one that skipped it.  Measured on
+	#  this file's own first run.
+	_pwtouched=$( { git diff --cached --name-only; git diff --name-only;
+	                git ls-files --others --exclude-standard; } \
+	              | grep -c 'tools/pipeline/check_probe_wiring\.py' )
+	if [ "$_pwtouched" -gt 0 ]; then
+		if stout=$(python "$PWCHK" --selftest 2>&1); then
+			good "$(printf '%s' "$stout" | grep -E 'PROBEWIRING_SELFTEST_PASS')"
+		else
+			bad "THE PROBE-WIRING CHECKER CAN NO LONGER BE SHOWN TO FAIL:"
+			printf '%s\n' "$stout" | grep -E 'SELFTEST_FAIL|^  FAIL ' | sed 's/^/          /'
+		fi
+	else
+		good "checker unchanged -- selftest not re-run (fires when it is edited)"
+	fi
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #

@@ -339,6 +339,23 @@ still need all nine seats, per round, before that round proceeds.</footer>
 </div>
 """
 
-open(OUT, "w", encoding="utf-8").write(page)
+#  newline="\n" IS LOAD-BEARING, AND CHECK Q WAS INTERPRETER-DEPENDENT WITHOUT IT.
+#
+#  In text mode Windows Python translates every \n to \r\n while WSL python3 does not, so
+#  the SAME ledger rendered 1,448,409 bytes under one and 1,446,256 under the other -- a
+#  2,153-byte delta over ~2,153 lines.  precommit section Q renders to a temp file and
+#  `cmp`s it against the committed matrix.html, so whether Q passed depended entirely on
+#  whether the person who last regenerated used the same interpreter the gate does.
+#
+#  Both directions were wrong.  Regenerate with WSL python3 and Q is RED over a file that
+#  is perfectly current -- and a check that reddens on correct state gets worked around,
+#  which is how a gate stops meaning anything.  Regenerate with Windows python and Q goes
+#  green over CRLF content that no other tool in this tree writes.
+#
+#  MEASURED on this file's own output, which is why it is a one-word fix and not a
+#  tolerance in the comparison: the render is otherwise fully deterministic (two
+#  consecutive runs are byte-identical), so an exact cmp is the right test once the
+#  newline translation is off.
+open(OUT, "w", encoding="utf-8", newline="\n").write(page)
 sys.stdout.write("wrote %s (%d bytes, %d in work + %d closed, %d seats)\n"
                  % (OUT, os.path.getsize(OUT), len(open_rows), len(closed_rows), len(seats)))

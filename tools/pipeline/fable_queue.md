@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sgiarcbiosoob` (review:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 53 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 54 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -338,6 +338,41 @@ This needs the flagship seat because **it reopens `exitsweep`'s scope**, which w
 availability. If probe witnesses count equally, sites in devices no rig boots may still be
 fixable-with-a-detector. It is a filing (one seat), not a short stage, so it is not blocking —
 but it should be adjudicated before `exitsweep` implements anything.
+
+### 9. `sgiarcbiosoob` — a detector REPLACED mid-round, with no adversarial review of the replacement
+
+The strongest reason on this list, because the round changed its own instrument after the panel
+and nothing has attacked what replaced it.
+
+`bcdbfb8` shipped the fix. Its pass-2 panel then measured the **shipped detector vacuous**: the
+measuring seat built sixteen mutants and **all sixteen scored 7/7**, including
+`0*ETHERNET_STRING_MAXLEN` — two characters, zero compiler warnings, the full heap overflow
+restored and ASan-measured — and, decisively, **a 217-byte file containing nothing but a C
+comment**. Six of seven scriptable seats returned DEFECT-IN-DETECTOR.
+
+So the source-text detector was **replaced in the same round** by a runtime value oracle: break on
+`arcbios_init()` in a real construction of the five reaching subtypes and require the ethernet
+STRING to be the formatting of the MAC BYTES passed beside it. It kills every one of those
+mutants, and a discriminating mutant was built for the one row (V4/ip32) that the first kill table
+left unexercised.
+
+**None of that has been reviewed by anything.** The panel reviewed the file it replaced. Specific
+things worth attacking, all stated in the file rather than hidden:
+
+* It reads arguments from **SysV AMD64 registers** (`$rcx`, `$r8`) because `build/gxemul` carries
+  a symtab with no DWARF. That ties a committed gate row to one ABI. V6/V7 are supposed to make a
+  wrong register fail loudly rather than read as zero — is that actually true, or is there a
+  register whose garbage would pass?
+* It **moved from gate 2 to gate 9**, on the argument that gate 2 runs no emulator at all and
+  adding one would make its name untrue. Is gate 9 the right home, or does a non-instrumented run
+  inside the ASan sweep confuse that gate's contract?
+* `degrade()` was chosen over `gate_skip()` because gate_skip EXITS and would discard the sweep's
+  own eleven checks. Correct call, or does a degraded gate 9 now under-report?
+* The five-subtype scope (`REACHING`) is measured, not derived. If a subtype's fate changes, V8 is
+  the only row that would notice — is one row enough there?
+
+Not blocking: the fix is shipped and both gates are green. But this is precisely the
+instrument-quality question the regress directive reserves for the flagship seat.
 
 ---
 

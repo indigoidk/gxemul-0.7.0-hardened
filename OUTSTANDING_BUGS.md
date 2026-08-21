@@ -5619,3 +5619,56 @@ across all 16 gates in 48 minutes.
 `nightly_check.sh` already treats a missing or stale verdict as failure — the same reasoning one
 level in would refuse a verdict whose log carries no `REGRESS_PASS`/`REGRESS_FAIL` line, which is
 exactly what a killed run leaves behind.
+
+## 2026-08-21 — the #446 pass 2: a vacuous detector, and a class hiding inside a count
+
+### `arcbiosubsan` — held
+
+**Filed as two sites; it is ten.** The #446 round reported "TWO left-shift UB defects at
+`arcbios.c:737/784`", found because gate 9's `sanhit()` is a `grep -acE` and counts LINES
+rather than errors. Both halves of that filing were wrong.
+
+The measuring seat found ip32 never reaches `:737`/`:784` at all — its two lines are `:570`
+and `:590` — which made it four sites. A grep for the idiom then found **ten unguarded
+`(buf[3]<<24)` sites and four correctly cast `((uint32_t)buf[3]<<24)`**.
+
+*** Line 580 sits BETWEEN 570 and 590 and is the only one of the three that is cast. ***
+The author knew the idiom and applied it to 4 of 14 sites. `buf[]` is `unsigned char`,
+integer-promoted to `int`; `buf[3] << 24` with `buf[3] >= 0x80` is not representable in
+`int` — C99 6.5.7p4, real UB, not a sanitizer artefact.
+
+**`:737` is the damaging one, and it is not merely UB-on-paper.** The sign-extended low
+word is *added* to `((uint64_t)buf[4]<<32)` and higher terms, so the assembled 64-bit
+pointer's high word comes out **off by one for every address with bit 31 set** — i.e. for
+every KSEG0/KSEG1 address. `:784` is UB but value-benign: the following `tmp &= 0xfffff`
+discards the sign extension.
+
+Fix is one cast per site. Not started: a round should confirm each site's dest type before
+editing, because four of the fourteen are already correct and must not be "fixed" twice.
+
+### `nulheredoc` — held
+
+**A shell heredoc wrote three literal NUL bytes into two tracked text files**, and they
+survived precommit, a 265-check gate run and the commit, because bash does not care about a
+NUL inside a comment. Self-inflicted in `bcdbfb8`: comments quoting the mutant
+`eaddr_string[0] = '\0'` went in through a heredoc that interpreted the escape.
+`CHANGELOG.md` lines 4254/4260 and `regress/gate_offline.sh` line 1803.
+
+**What it breaks is this harness's core idiom.** `grep` auto-detects such a file as binary
+and answers `Binary file ... matches` — on stdout, **with exit 0**. So `grep -q` still works
+and `grep -c` still counts, while every check that parses a FIELD out of the matched line
+silently receives that sentence instead of the row. Measured: `grep 'sgi_eaddr: the buffer'
+gate_offline.sh` returned the sentence, exit 0. Not a wrong value — a wrong *shape*.
+
+*** The first sweep run to scope it was itself void, and its result was reported. *** It
+found ZERO NULs, including the one already located by hand, because the nested `bash -c` ate
+its `$'\x00'`. A sweep that finds nothing and a sweep that *cannot* find anything are
+indistinguishable in the output. The real sweep found three bytes across two files.
+
+Fixed in the working tree; guard shipped as precommit section **S**, negative-controlled both
+ways. Its own first draft used `grep -qU "$(printf '\000')"` and put a fresh NUL into
+`precommit_check.sh` — the check forbidding the byte introduced the byte. `tr -d` takes the
+escape as a two-character argument interpreted at runtime, so nothing in the file is ever a
+zero byte. **`git ls-files --eol` cannot be the oracle**: it reports `i/-text` for a PNG and
+for a corrupted text file identically, so deriving the domain from git would exempt exactly
+the broken files.

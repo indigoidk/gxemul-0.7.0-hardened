@@ -1,7 +1,7 @@
 {
  "project": "GXemul 0.7.0 hardened fork",
  "flagship": "fable5",
- "updated": "2026-08-17",
+ "updated": "2026-08-21",
  "language": "ASD-STE100 unless a technical name is necessary (owner directive 2026-08-15)",
  "battery": {
   "verdict": "REGRESS_PASS",
@@ -14153,6 +14153,15 @@
      "note": "MEASURED by sweeping every advertised type/subtype, so this is a census rather than a suspicion. Besides hpcmips's three, the identical interrupt_handler_lookup abort fires on:\n    decstation/5400   irq=\"irq? TODO\"\n    decstation/5500   irq=\"TODO: irq\"\n    mvmeppc/mvme2100  irq=\"0\"\n    sgi/ip19, sgi/ip27\n*** EIGHT SUBTYPES ACROSS FOUR MACHINES. ***  Inside hpcmips there are no latent copies -- the file has exactly three device_add calls and all three are in the aborting arms.\n\nOne genuinely LATENT instance worth distinguishing from the eight: machine_alpha.c:71 (z8530 with irq=0) sits in `case ST_DEC_3000_300:`, which -H never advertises, and all three alpha subtypes construct. Latent is not the same as reachable and the row says so.\n\nSeparate round from hpcabort under the reopening rule -- different machines, different files, and the correct interrupt path differs per machine, so one fix design does not cover them. But hpcabort's witness generalises: it enumerates subtypes from the binary's own -H rather than a hardcoded list, so pointing it at these costs almost nothing.",
      "grade": "CONFIRMED",
      "ev": "full type/subtype sweep of the committed binary"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** ORDERING CONSTRAINT, MEASURED, AND IT RUNS ONE WAY. ***  Five of this row's SGI subtypes -- ip19, ip20, ip22, ip24, ip27 -- abort() BEFORE reaching machine_sgi.c:633, where an uninitialised eaddr_string was handed to arcbios_init(). They were not immune to that overflow, THEY WERE MASKING IT.\n\nHad this row been fixed first, those five would have reached the same line with the same uninitialised buffer and #446's overflow would have grown FROM FOUR SUBTYPES TO NINE -- a fix creating five new memory-safety faults, each of which would have read as a regression of the abort fix rather than as what it was.\n\n#446 shipped first (bcdbfb8), so the constraint is DISCHARGED and this row is now free to proceed. Recorded because the reasoning is reusable: a row that removes an abort() is a row that EXTENDS reachability, and everything downstream of that abort must be checked before it lands, not after.",
+     "grade": "CONFIRMED",
+     "ev": "#446 diagnosis, 2026-08-21"
     }
    ]
   },
@@ -14282,10 +14291,10 @@
   },
   {
    "id": "sgiarcbiosoob",
-   "title": "sgiarcbiosoob  A heap-buffer-overflow in arcbios.c set_env() on FOUR SGI subtypes that no harness had ever executed",
+   "title": "sgiarcbiosoob  machine_sgi.c hands arcbios_init an UNINITIALISED 40-byte buffer on four SGI subtypes that no harness had ever executed",
    "state": "held",
-   "commits": "",
-   "hold": "Its own round. Needs the reachability question answered first -- construction-time OOB is rung-2 witnessable (the macppc heap OOB #23 shape), guest-reachable is not.",
+   "commits": "bcdbfb8",
+   "hold": "Fix SHIPPED as bcdbfb8 and gate-green. Held open only because the pass-2 panel measured the shipped DETECTOR vacuous (16/16 mutants passed it, and a comment-only file passed it), and the runtime value oracle that replaces it is not committed yet. Close when that lands.",
    "closure": {
     "by": "",
     "badge": "",
@@ -14300,6 +14309,87 @@
      "note": "*** FOUND ONLY BECAUSE FIXING THE GATE'S ALIAS PARSER MADE THESE MACHINES VISIBLE AT ALL. ***  sgi/ip12, ip28, ip30 and ip35 each report FOUR heap-buffer-overflow hits under ASan at arcbios.c:2391, in set_env() called from machine_setup_sgi().\n\nThey were invisible for a mechanical reason with nothing to do with the defect: gate 9's awk required a machine's primary alias to match [a-z0-9_.-]+, and *** SGI's is \"silicon graphics\" -- WITH A SPACE ***, so SGI was dropped as a type and its subtypes were silently re-attributed to the previous one (rpi). A reader asking 'is SGI covered' saw a type with no rows; a reader looking at rpi saw ten rows that were not rpi's. Neither reading was red.\n\nThis is a MEMORY-SAFETY defect rather than a records one, and it is the second time this session that fixing an instrument surfaced a real bug the instrument's blindness had been concealing (the first: gate 9 could not see an abort, and fifteen machines were dying while it reported PASS).\n\nNOT diagnosed here -- the round that found it was a harness round and stayed in its file. What is known: four subtypes, four hits each, one call site, and it reproduces under an ASan build from 2026-07-29, so it is at least three weeks old and probably upstream. Whether it is guest-reachable or construction-only is unmeasured.",
      "grade": "CONFIRMED",
      "ev": "gate_asan_sweep.sh full sweep, 2026-08-21"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** TITLE CORRECTED. It read \"A heap-buffer-overflow in arcbios.c set_env()\" and THAT IS THE WRONG FILE AND THE WRONG FUNCTION. ***  ASan reports the overflow at arcbios.c:2391 because that is where the READ happens, and the first filing -- mine -- followed the report there.\n\nset_env() is CORRECT CODE. Its append branch grows both arrays before writing to either, and its envstrings is malloc+memset at the call site. The buffer it is handed has no terminator, and *** A CALLEE CANNOT DETECT A MISSING TERMINATOR FROM THE INSIDE ***, so \"harden the callee instead\" is not a trade-off here, it is an impossibility. The owner is the caller, machine_sgi.c:100.\n\nMy own pass-1 hypothesis -- that the linear search read out of bounds BEFORE the reported line -- was MEASURED FALSE: the search iterates over valid strdup'd names.\n\nMEASURED at the point of use: first_NUL_at = -1 on ip12/ip28/ip30/ip35 (no terminator anywhere in the 40 in-bounds bytes; they are ASan's 0xbe fill) and 17 on ip32.\n\nKept here rather than silently overwritten, because the ledger row a reader trusts is the one whose corrections are visible.",
+     "grade": "CONFIRMED",
+     "ev": "ASan build, -E sgi -e <subtype>, 2026-08-21"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Fix bounds-correct; detector beatable by ONE CHARACTER.\n\n*** THE CHEAPEST ESCAPE ON RECORD FOR THIS ROUND: `ETHERNET_STRING_MAXLEN` -> `!ETHERNET_STRING_MAXLEN`. *** It is 40, so `!40` is 0, and `snprintf(..., 0, ...)` writes NOTHING -- not even a NUL. The exact original defect returns on all four subtypes, and every row still passes: the call text, the format literal, the six macaddr refs and the byte-offset ordering are all untouched. THE DETECTOR NEVER EXAMINES THE SIZE ARGUMENT.\n\nAlso caught TWO WRONG RECORDS in my own material:\n  (a) 'E5/E6 are a LENGTH/FORMAT oracle' is FALSE. They recognise INTENT-SHAPED TOKENS in the source, not the produced string. That sentence is the file's stated reason for existing and it does not hold.\n  (b) 'callee-side hardening is an IMPOSSIBILITY' overreaches. It is impossible THROUGH THE CURRENT UNBOUNDED `char *` SIGNATURE; an interface taking a length is a real alternative I did not consider.\n\nAnd: `macaddr[5]` -> `macaddr[4]` passes E6's occurrence count while producing a wrong address -- counting references is not checking them.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and the SHARPEST answer of the panel -- it attacked the detector at its stated purpose rather than at its edges.\n\n*** `snprintf(eaddr_string, 1, ...)` WRITES ONLY THE NUL. ASan IS SILENT. THE GUEST GETS AN EMPTY MAC. SCORE 7/7. *** That is byte-for-byte the `eaddr_string[0] = '\\0'` hole this detector was written to close, wearing an snprintf costume -- so the file fails at the one job it claims ASan cannot do. Gate 9 does not catch it either, so the DUAL-ORACLE argument fails on exactly the mutant that motivated the design.\n\nFurther escapes it named, none of which any row can see: `malloc(1)` in place of `malloc(ETHERNET_STRING_MAXLEN)` (E1 does not capture the SIZE) turning the read overflow into a WRITE overflow; a pointer reassignment inside an arm (E1 matches the FIRST malloc); and `if (machine->machine_subtype == 32)` wrapped round the pre-switch fill, which restores the original per-subtype distribution exactly.\n\nIt also stated the general fault better than I did: E4's ENGLISH says every arm inherits the fill; E4's CHECK is `malloc_off < snprintf_off < switch_off` in the file. The gap between those two sentences is where every escape lives.\n\n*** ITS ONE FACTUAL CHALLENGE WAS REFUTED BY EXECUTION, AND ITS MECHANISM CLAIM WAS SIMULTANEOUSLY RIGHT. *** It read the case arms and reported that ip27 has no `abort()`, so 'five call abort()' overstates. MEASURED (build/gxemul, all ten advertised subtypes): ip19/20/22/24/27 ALL return 134 = SIGABRT and ip12/28/30/32/35 return 1. The five ARE the five. But the MECHANISM is not what I wrote: ip22 has no body of its own and FALLS THROUGH into case 24, and ip27 dies under gdb at `interrupt_handler_lookup` <- `devinit_z8530` <- `device_add` <- `machine_setup_sgi` -- its own arm's `irq=0`. Grok predicted that exactly ('that is device_add, not abort()'). A source-token read of a switch cannot see fall-through, and both its reading and my own case-splitter had the identical blind spot.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Read the actual files and confirmed the completeness question independently: `eaddr_string` is assigned only at the malloc, nothing re-points it, there is no reaching `goto`, and the only `return` (`!prom_emulation`) sits AFTER the switch and skips `arcbios_init` entirely.\n\nIT ALONE CHECKED THE SIBLING CALL SITES BY OPENING THEM: `machine_arc.c:53` passes the string literal \"10:20:30:40:50:60\", and `machine.c:508-524` forces `boot_string_argument` non-NULL. So 'the only defective caller of that path' HOLDS -- but as a call-site audit someone performed, not as something the diff established.\n\nEscape named: a four-character `/*` ... `*/` around the fill. Every row is raw-text, so a commented-out fill scores 7/7.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Packet-fed, and correct within that limit.\n\nNamed `#if 0` / `#endif` and stated the root cause in the form worth keeping: *** ANY CONSTRUCT THAT MAKES TEXT PRESENT-BUT-DEAD DEFEATS EVERY ROW SIMULTANEOUSLY. *** Not a marginal gap -- the fundamental limit of source-text detection without preprocessing or AST liveness. It distinguished this correctly from `sizeof(eaddr_string)`, which is a TRUNCATION defect and NOT the memory-safety class, and said so rather than conflating them to strengthen its own answer.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Shortest answer, and it went straight to `snprintf(eaddr_string, 0, ...)` -- one token, no NUL written, exact defect restored, 7/7. Reached the same place as codex's `!ETHERNET_STRING_MAXLEN` by a different route.\n\nIt was the only seat to say the record does NOT materially overclaim, on the grounds that the file already acknowledges its source-text limits and gate 9's staleness. That reading is too generous: the file does not merely claim to be source-text, it claims to be the LENGTH/FORMAT ORACLE that sees what ASan cannot -- and grok's n=1 mutant is the counterexample. A packet-fed seat cannot check a claim the packet states.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (fix) with the detector named as the weaker link -- the only seat not to use the DEFECT-IN-DETECTOR label, though its reasoning matches the other six.\n\nNamed `#if 0` and, unprompted, the honest limit on its own strongest alternative: `sizeof(eaddr_string)` 'is a DIFFERENT defect (functional truncation, not a heap overflow) ... so it does not answer Q3 as posed'. A seat volunteering that its best example does not fit the question asked is the behaviour worth recording.\n\nIts closing framing is the fair one: the detector is a useful tripwire for a sloppy refactor -- someone deleting the fill, moving the switch above it, removing the malloc -- but it is not a soundness proof, and the record should not read as though it were.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. 69 KB, the longest, and the only seat to AUDIT MY KILL TABLE ARITHMETIC rather than the code.\n\nIt challenged the row 'a four-octet MAC 6/7 (E5 alone)' as internally inconsistent, reasoning that a four-octet mutant must fail BOTH E5 (six-field literal absent) and E6 (only four macaddr refs) and therefore score 5/7, not 6/7.\n\n*** MEASURED, AND THE CHALLENGE IS REFUTED -- BUT THE AMBIGUITY IT FOUND IS REAL. *** My mutant changed the FORMAT STRING ONLY and kept all six macaddr arguments: it scores 6/7 with E5 the sole failure. The seat's assumed mutant -- format AND arguments both cut to four -- scores 5/7 with E5 and E6 failing. Both numbers are right; they are different mutants. What sent a careful seat down the wrong path is that '(E5 alone)' does not say whether E5 alone FIRED or alone SURVIVED, and the two readings are opposite. A kill-table cell must name the direction.\n\nIt also confirmed by construction what E4 DOES check: moving the malloc BELOW the fill flips the offset order and E4 catches it. The row is not vacuous -- it is narrow.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_164002"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation of the flagship seat. This is a DELIBERATE OMISSION and not a seat failure, and the two must never render alike -- the other eight seats answered substantively (7of7 scriptable + opus5 measuring).\n\nWhat the flagship seat is owed FOR, specifically, so the hold is actionable: the round REPLACED its own detector mid-pass after the panel measured the shipped one vacuous. That replacement -- a gdb value oracle reading arcbios_init()'s arguments out of SysV AMD64 registers, moved from gate 2 to gate 9 -- has had NO adversarial review of its own. It is exactly the shape the regress directive reserves for the flagship seat, and it carries a stated ABI dependency that nobody has attacked yet.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
     }
    ]
   },
@@ -14415,6 +14505,52 @@
      "note": "*** THE SHARPEST FORM OF A TRAP THIS PROJECT ALREADY RECORDS, AND IT REACHED THE TOP-LEVEL HARNESS INVOCATION. ***  The full battery was started as\n    bash run.sh 2>&1 | tail -45\nin the background, and later killed. *** IT REPORTED EXIT CODE 0. ***  A pipeline's status is the LAST command's, so the exit code belonged to `tail`, which succeeded in reading a truncated stream.\n\nTwo things went wrong together and either alone would have been survivable:\n  1. THE VERDICT WAS FALSE -- a killed battery reported success.\n  2. THERE WAS NOTHING TO READ EITHER WAY. `| tail` buffers until the pipeline ends, so the output file sat at 0 BYTES for the whole run and was still 0 bytes afterwards. Mid-run progress was invisible and the post-mortem was empty.\n\nSame genus as `cmd | head` reporting head's status, which this project already writes down and which bit twice more the same day -- once hiding a compile failure, once mangling an object list through a `tr` inside nested quoting. What is NEW is the SCALE: this is not a check inside a gate, it is the invocation of the ENTIRE 16-GATE BATTERY.\n\nA SECOND TRAP RODE ALONG WITH IT, and it nearly did more damage: with the real output empty, the obvious place to look was the shared log directory -- which still held the PREVIOUS battery's verdicts. Those read `asan-machine-sweep: PASS (3 checks)` and `log-hygiene: PASS (38 checks)`, both plausible and both STALE (the current gates give 11 and 48). Reading them as this run's result would have been the 'a green row means nothing' class in its purest form, and the only thing that prevented it was the check counts having moved that day.\n\nTHE FIX USED: run under `exec > /tmp/battery.log 2>&1` so output streams to a file and the exit status is run.sh's own. The re-run produced REGRESS_PASS across all 16 gates in 48 minutes, with progress readable throughout.\n\nWHAT WOULD MAKE IT MECHANICAL: a verdict is believable only if its log ends in a terminal token. nightly_check.sh already treats a MISSING or STALE verdict as failure -- the same reasoning one level in would refuse a verdict whose log carries no REGRESS_PASS/REGRESS_FAIL line, which is exactly what a killed run leaves behind. That is checkable and is the part worth building.",
      "grade": "CONFIRMED",
      "ev": "measured: the killed invocation's own exit code and its 0-byte output file"
+    }
+   ]
+  },
+  {
+   "id": "arcbiosubsan",
+   "title": "arcbiosubsan  Two UBSan left-shift errors at arcbios.c:737 and :784, found only because a gate's hit-count counted LINES",
+   "state": "held",
+   "commits": "",
+   "hold": "Filed out of #446. Needs its own round: read both lines, decide whether the shift is real UB or a false positive, and only then design a fix.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** THESE WERE HIDDEN INSIDE A NUMBER, WHICH IS THE PART WORTH KEEPING. ***  #446 was filed as \"FOUR heap-buffer-overflow hits\" on each of four SGI subtypes. There is ONE overflow per subtype. gate_asan_sweep.sh's sanhit() is a `grep -acE`, so it counts LINES, and the four were: the ERROR: line, the SUMMARY: line, and TWO SEPARATE UBSan LEFT-SHIFT ERRORS at arcbios.c:737 and arcbios.c:784.\n\nThe discriminator that separated them: `grep -ac 'ERROR: AddressSanitizer'` is 1 per subtype. ip32's count of \"2\" is the two UBSan lines ALONE -- ip32 has no overflow at all, which is why its number never matched the other four and why the mismatch was the thread worth pulling.\n\nA COUNT IS NOT A CLASSIFICATION. Two distinct defect families were summed into one integer, and the integer looked consistent enough to file as a single row.\n\nNOT DIAGNOSED. Whether either shift is real UB (a signed value shifted into or past the sign bit) or a sanitizer false positive is unmeasured -- the lines have not been read.",
+     "grade": "CONFIRMED",
+     "ev": "gate_asan_sweep.sh output re-read, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "nulheredoc",
+   "title": "nulheredoc  A shell heredoc wrote three literal NUL bytes into two tracked text files, silently turning every grep against them binary",
+   "state": "held",
+   "commits": "",
+   "hold": "Fix and guard are written and negative-controlled; awaiting its commit.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SELF-INFLICTED, BY ME, IN bcdbfb8 -- badge A. #446 wrote comments quoting the bad-fix mutant it had to defend against (a zero byte written as a C escape) into CHANGELOG.md and regress/gate_offline.sh THROUGH A SHELL HEREDOC, which interpreted the escape. Three literal NULs landed: CHANGELOG.md lines 4254 and 4260, gate_offline.sh line 1803.\n\n*** IT SURVIVED PRECOMMIT, A 265-CHECK GATE RUN, AND THE COMMIT ***, because bash does not care about a NUL inside a comment.\n\nWHAT IT BREAKS IS THE HARNESS'S CORE IDIOM. grep(1) auto-detects such a file as binary and answers \"Binary file ... matches\" -- ON STDOUT, WITH EXIT 0. So `grep -q` still works and `grep -c` still counts, while every check that PARSES A FIELD out of the matched line silently receives that sentence in place of the row. MEASURED: `grep 'sgi_eaddr: the buffer' gate_offline.sh` returned the sentence, exit 0. Not a wrong value -- a wrong SHAPE, through a channel no section watched.\n\n*** THE FIRST SWEEP I RAN TO SCOPE IT WAS ITSELF VOID and I reported its result. *** It found ZERO NULs -- including the one I had just located by hand -- because the nested bash -c ate its `$'\\x00'`. I said \"it is the only tracked file affected\" on the strength of a sweep that found nothing at all. The real sweep found THREE bytes across TWO files. A sweep that finds nothing and a sweep that cannot find anything are indistinguishable in the output.\n\nGUARD: precommit section S, negative-controlled both ways. Its own first draft used `grep -qU \"$(printf '\\000')\"` and PUT A FRESH NUL INTO precommit_check.sh -- the check forbidding the byte introduced the byte. `tr -d` takes the escape as a two-character argument interpreted at runtime, so nothing in the file is ever a zero byte.\n\nGIT'S OWN BINARY DETECTION CANNOT BE THE ORACLE: `git ls-files --eol` reports i/-text for a PNG and for a corrupted text file identically, so deriving the domain from git would exempt precisely the broken files. Circular. Hence an explicit skip list, plus two genuinely-binary paths that carry no extension (src/devices/fonts/*, test/FileLoader_*).",
+     "grade": "CONFIRMED",
+     "ev": "measured in-tree, 2026-08-21"
     }
    ]
   }
