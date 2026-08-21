@@ -185,7 +185,30 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  reproduction that licensed the fix -- the mrwstore2 shape, whose probe left no artefact at all.
 #  All three counts move together (21/21/21): it uses the closure form and the `_mark` spelling,
 #  so neither of the two corrections the previous entry needed applies here.
-EXPECT_CONVERTED=21
+#  21 -> 22 on 2026-08-21: sh4_pcic_probe.py, #443's detector.  All three counts move together
+#  (22/22/22) and bare/unknown/whole_full do not move (0/0/2) -- the signature every prior entry
+#  records.
+#
+#  *** THIS PIN WAS LATENTLY RED AT HEAD BETWEEN 3f9ff56 AND THIS COMMIT, AND THE CAUSE WAS A
+#  CONCURRENCY SLIP RATHER THAN AN OVERSIGHT ABOUT THE COUPLING. ***  A `git add -A regress/`
+#  during the #442 pass-2 commit swept in a probe a background agent was still creating, so the
+#  file landed WITHOUT its pin and WITHOUT this annotation.  That is the FOURTH recurrence of the
+#  coupling these comments already document (m8820x, footbridge, luna_intmask, sh4_bsc_width) --
+#  and the first caused by staging rather than by forgetting.
+#
+#  The structural note above says a probe shipping in the same commit as its gate wiring cannot
+#  skip the pin, because the wiring forces a gate run.  `git add -A` defeats that by adding files
+#  the author did not choose.  STAGE BY EXPLICIT PATH when a background agent may be writing into
+#  the same directory.
+#  22 -> 23 in the SAME commit: sh4pcic_witness.py, #443's rung-3 reproduction, committed
+#  alongside its detector.  It is a SEPARATE artefact from sh4_pcic_probe.py and both belong in
+#  the tree: the witness asserts the PRE-FIX symptom (so it correctly reads 15/30 now) and the
+#  detector asserts the FIXED behaviour.  Grading one by the other's clauses is a category error.
+#
+#  Committing it is the mrwstore2 lesson: that round's rung-3 probe left NO ARTEFACT, so its
+#  witness became a remembered grep and a later row had to re-cost the work.  #442's witness had
+#  the same problem and was committed one commit ago for the same reason.
+EXPECT_CONVERTED=23
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not

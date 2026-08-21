@@ -176,4 +176,34 @@ for v in "movca.l" "fmovd @r1" "fmovd @r2" "fmovd xd st" "fmovd xd ld" \
     check "  round 80: $v" "$n" 1
 done
 
+# ------------------------------------------------------------------ #443 sh4_pcic
+#  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
+#  MEASURED census of all 137 word offsets in both directions found 116 killing on a read
+#  and 125 on a write; post-fix both are 0.
+#
+#  *** WIRED HERE IN THE SAME COMMIT AS THE PROBE, WHICH IS THE WHOLE POINT. ***  Both
+#  sh_halt_probe.py above and sh4_bsc_width_probe.py (#441) shipped UNWIRED, and gate 6's
+#  own structural note says a probe that ships with its wiring cannot skip its census pin,
+#  because the wiring forces a gate run.  #441's did not, and the pin then went latently
+#  red between two commits.
+#
+#  Note the existing halt probe is blind to this by construction: it classifies from the
+#  dyntrans HALT message, and exit(1) is not a halt.
+PCLOG=$LOGDIR/gate_sh4_pcic.log
+python3 sh4_pcic_probe.py "$PMAX" "$KERNEL" > "$PCLOG" 2>&1 || true
+
+if ! grep -q "SH4_PCIC_RESULT=" "$PCLOG"; then
+    note "sh4_pcic probe produced no result line; last lines follow"
+    tail -5 "$PCLOG" | sed 's/^/       /'
+    check "sh4_pcic probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$PCLOG" | sed 's/^/       /'
+    check "sh4_pcic: no offset kills the host"           "$(grep -c 'SH4_PCIC_PASS' "$PCLOG")" "1"
+    #  The census rows are the ONLY thing that sees a latch sharing one word between
+    #  offsets 32 apart -- a mutant a measuring seat built which passes both the
+    #  per-offset and the per-device rows.  So pin that they ran, not merely that the
+    #  verdict was green.
+    check_min "sh4_pcic: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$PCLOG")" 29
+fi
+
 gate_end
