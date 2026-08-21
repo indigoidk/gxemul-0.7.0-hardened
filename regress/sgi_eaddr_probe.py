@@ -1,132 +1,212 @@
 #!/usr/bin/env python3
-"""#446 DETECTOR: the SGI ethernet-address buffer is filled where it is ALLOCATED,
-not only in the one subtype arm that happened to write it.
+"""#446 DETECTOR: the ethernet-address string handed to arcbios_init() is the correctly
+formatted form of the MAC bytes handed alongside it -- read AT THE CALL SITE, from the
+running emulator.
 
-THE DEFECT.  `machine_setup_sgi()` malloc'ed ETHERNET_STRING_MAXLEN bytes and left
-them UNINITIALISED.  Exactly one subtype arm (ip32) ever wrote to the buffer, yet
-`arcbios_init()` was handed it UNCONDITIONALLY, where `set_env()` -> `strdup()`
-scans for a NUL that is not there.  MEASURED under ASan: a 41-byte READ past a
-40-byte allocation on ip12, ip28, ip30 and ip35, with NO terminator anywhere in
-the region.
+*** THIS FILE WAS A SOURCE-TEXT DETECTOR AND IT WAS VACUOUS.  THE REPLACEMENT IS HERE
+BECAUSE OF WHAT A MEASURING SEAT DID TO THE FIRST VERSION, NOT BECAUSE OF A REVIEW
+OPINION. ***
 
-*** WHERE THE DEFECT IS NOT.  ***  ASan names `arcbios.c` in the report, and the
-first filing followed it there.  `set_env()` is CORRECT CODE: its append branch
-grows both arrays before writing to either, and its `envstrings` is malloc+memset
-at the call site.  It cannot detect a missing terminator from the inside, so
-"harden the callee instead" is not a trade-off here -- it is an impossibility.
-The owner is the caller.
+The first version matched six regexes over machine_sgi.c: that the malloc existed, that an
+`snprintf(eaddr_string,` existed, that the subtype switch existed, that the snprintf's byte
+offset fell between the other two, that a six-field "%02x:..." literal appeared in that
+span, and that six `macaddr[N]` references appeared in it.  A pass-2 panel built SIXTEEN
+mutants against it and SIXTEEN SCORED 7/7, among them:
 
-WHY THIS FILE IS A SOURCE-TEXT DETECTOR, and what owns the other half.
+  * `0*ETHERNET_STRING_MAXLEN` as the size argument -- TWO CHARACTERS, compiles with ZERO
+    warnings, and `snprintf` with size 0 writes NOTHING, not even the NUL.  Measured under
+    ASan: the heap-buffer-overflow returns on ip12/ip28/ip30/ip35, exactly as before the
+    fix, while the gate row printed green.
+  * size `1` (writes only the NUL -> EMPTY MAC, ASan silent) and `sizeof(eaddr_string)`
+    (= 8 on this host -> the truncated "08:20:3").
+  * `#if 0`, `/* */`, `if (0)`, `if (subtype == 32)`, a second malloc, an arm re-pointing
+    the pointer, and `#define snprintf(b,l,...) ((void)(b))`.
 
-The behavioural oracle for a heap overflow is ASan, and gate 9
-(`gate_asan_sweep.sh`) already sweeps every machine/subtype under an instrumented
-build and greps for `AddressSanitizer` -- so a REGRESSION of the overflow itself
-is gate 9's job, and it will catch it there.  Two reasons that is not sufficient
-on its own, and both are recorded rather than assumed:
+*** AND THE REDUCTIO THAT SETTLES IT: A 217-BYTE FILE CONTAINING NOTHING BUT A C COMMENT
+SCORED 7/7. ***  No function, no MACHINE_SETUP, nothing that could ever be compiled into
+the emulator.  That is not a weak detector, it is a VACUOUS one under this project's own
+taxonomy, and no additional regex repairs it -- the failure is the medium, not the rows.
 
-  1. *** AN ASan-ONLY ORACLE CANNOT SEE THE MOST LIKELY BAD FIX. ***  Writing
-     `eaddr_string[0] = '\\0';` silences ASan COMPLETELY -- the read stops at
-     byte 0 and no overflow occurs -- while handing the guest an EMPTY MAC
-     address.  A pass-1 seat named that hole before this file existed.  Only a
-     LENGTH/FORMAT oracle sees it, and this file is that oracle.
-  2. Gate 9's instrumented binaries were 23 days stale when this defect was
-     found, so its green meant "the July binary is clean" -- a true statement
-     about the wrong artefact.  Tracked as `asanstale`.
+The old file's stated purpose made the gap sharper still.  Its docstring claimed to be "the
+LENGTH/FORMAT oracle" that sees what ASan cannot.  *** IT NEVER EXAMINED THE LENGTH
+ARGUMENT. ***  The size-1 mutant is precisely the `eaddr_string[0] = '\\0'` hole it named as
+its reason for existing, spelled with an snprintf, and it passed.
 
-WHAT THIS FILE DOES NOT CLAIM.  Nothing about the bytes the GUEST sees.  The
-string is copied into guest RAM by `add_environment_string()` and exposed through
-`GetEnvironmentVariable`, but reading it back needs a rung-3 cold-debugger probe
-on a machine that gets that far, and gxemul exits on a dummy ELF before any
-prompt.  There is no SGI rig in this tree.  That is READ, not measured, and this
-file asserts none of it.
+WHAT THIS VERSION DOES INSTEAD.  It breaks on arcbios_init() in a real run of a real
+subtype and reads the two arguments the fix is about:
 
-FIVE OTHER SUBTYPES WERE MASKING THIS.  ip19/20/22/24/27 abort() before the
-handing-off line, so they never reached the overflow.  *** THE COUPLING RUNS ONE
-WAY: fixing those aborts first would have grown the overflow from four subtypes
-to nine. ***  Recorded on `ctorabortclass`.
+    void arcbios_init(struct machine *machine, int is64bit, uint64_t sgi_ram_offset,
+                      const char *primary_ether_addr, uint8_t *primary_ether_macaddr)
 
-usage:  python3 regress/sgi_eaddr_probe.py [--source PATH]
+and requires the STRING to be the six-octet formatting of the BYTES.  That is a provenance
+check, not a shape check: RAM garbage, an empty string, a truncated string and a
+right-shaped-but-wrong-octet string all fail it, and none of them can be produced by
+editing a comment.  Every mutant listed above dies here.
+
+RUNG.  Machine CONSTRUCTION (rung 2), which is the ceiling for this defect and not a
+shortfall: no guest instruction executes, the input is a dummy ELF that fails to load, and
+the overflow happens while the machine is being built.  The macppc heap OOB (#23) is the
+precedent.  A rung-3 probe is unnecessary here, not missing.
+
+CLASS: DETECTOR (green once the defect is gone), so it must be run by a gate.
+
+HOW THE ARGUMENTS ARE READ, and its one real portability limit.  build/gxemul carries an
+ELF symtab but NO DWARF, so `primary_ether_addr` cannot be named.  They are read from the
+SysV AMD64 argument registers -- arg4 = RCX, arg5 = R8 -- and breaking without DWARF lands
+at the raw function entry, before any prologue moves them, which is exactly when they are
+still live.  *** THIS TIES THE FILE TO x86-64 SysV. ***  Stated rather than hidden; on
+another ABI it must be re-derived, and the liveness row below is what would catch it -- a
+wrong register yields an unreadable pointer or a mismatch, never a silent pass.  (This is
+the hand-assembled-encoding trap in another costume: a wrong field usually reads as zero,
+and a row that accepts zero accepts the mistake.  V6 and V7 exist so nothing here does.)
+
+usage:  python3 regress/sgi_eaddr_probe.py [--binary PATH]
 """
 
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SEC_SRC = os.path.join(os.path.dirname(HERE), "src", "machines", "machine_sgi.c")
+PROJ = os.path.dirname(os.path.dirname(HERE))
 
-#  The IDENTITY constant.  A probe copied into a tree where it no longer runs all
-#  of its rows must not report green over a shorter file.
-EXPECT_ROWS = 7
+#  Subtypes that REACH the hand-off.  Measured, not assumed: of the ten advertised
+#  subtypes these five return 1 and the other five return 134 (SIGABRT).
+REACHING = ["ip12", "ip28", "ip30", "ip32", "ip35"]
+
+#  The negative control, and the two are chosen for DIFFERENT MECHANISMS rather than for
+#  coverage: ip19 has a literal abort() in its own arm, while ip27 has none and dies inside
+#  its own device_add() at interrupt_handler_lookup() <- devinit_z8530(), on its `irq=0`.
+#  A control using two of the same kind would not show that the probe distinguishes
+#  "did not reach" from "reached and was fine".
+ABORTERS = ["ip19", "ip27"]
+
+#  The IDENTITY constant.  A probe copied into a tree where it no longer runs all of its
+#  rows must not report green over a shorter file.
+EXPECT_ROWS = 10
 
 _rows = []
 
 
 def row(name, ok, got, want):
     _rows.append((name, bool(ok)))
-    print("  [%s] %-56s got=%s want=%s" % ("ok" if ok else "FAIL", name, got, want))
+    print("  [%s] %-58s got=%s want=%s" % ("ok" if ok else "FAIL", name, got, want))
+
+
+PRINTF = (
+    'printf "EADDR=[%s] MAC=%02x:%02x:%02x:%02x:%02x:%02x\\n", (char *)$rcx, '
+    '*(unsigned char *)($r8+0), *(unsigned char *)($r8+1), *(unsigned char *)($r8+2), '
+    '*(unsigned char *)($r8+3), *(unsigned char *)($r8+4), *(unsigned char *)($r8+5)'
+)
+
+
+def peek(binary, subtype, timeout=60):
+    """Return (reached, eaddr, mac) for one subtype. eaddr/mac are None if not reached."""
+    cmd = ["gdb", "-batch", "-nx",
+           "-ex", "set confirm off",
+           "-ex", "break arcbios_init",
+           "-ex", "run",
+           "-ex", PRINTF,
+           "--args", binary, "-E", "sgi", "-e", subtype, "/dev/null"]
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return (None, None, None)
+    out = p.stdout.decode("utf-8", "replace")
+    reached = "Breakpoint 1, " in out
+    m = re.search(r"^EADDR=\[([^\]]*)\] MAC=([0-9a-f:]+)\s*$", out, re.M)
+    if not m:
+        return (reached, None, None)
+    return (reached, m.group(1), m.group(2))
 
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default=SEC_SRC)
+    ap.add_argument("--binary", default=os.path.join(PROJ, "build", "gxemul"))
     a = ap.parse_args(argv)
 
-    if not os.path.exists(a.source):
-        print("  OPERATIONAL FAILURE: no such source %s" % a.source)
+    #  An absent tool or binary is an OPERATIONAL FAILURE, never a pass.  A detector that
+    #  reports green because it could not run is the failure mode this harness names most
+    #  often, so it is refused explicitly here rather than left to a missing row.
+    if not os.path.isfile(a.binary):
+        print("  OPERATIONAL FAILURE: no emulator binary at %s" % a.binary)
+        print("SGI_EADDR_RESULT=0/%d" % EXPECT_ROWS)
+        print("SGI_EADDR_FAIL")
+        return 1
+    try:
+        subprocess.run(["gdb", "--version"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        print("  OPERATIONAL FAILURE: gdb is not available; this detector needs it")
         print("SGI_EADDR_RESULT=0/%d" % EXPECT_ROWS)
         print("SGI_EADDR_FAIL")
         return 1
 
-    src = open(a.source, encoding="utf-8", errors="replace").read()
+    seen = {}
+    for st in REACHING:
+        seen[st] = peek(a.binary, st)
 
-    #  ---- the allocation and the fill, and their ORDER -----------------------
-    m_alloc = re.search(r"eaddr_string\s*=\s*\(char\s*\*\)\s*malloc\s*\(", src)
-    row("E1 the buffer is still allocated where this file expects",
-        bool(m_alloc), bool(m_alloc), True)
+    #  ---- V1..V5: THE PROPERTY.  The string IS the formatting of the bytes. -----------
+    for st in REACHING:
+        reached, eaddr, mac = seen[st]
+        ok = bool(reached) and eaddr is not None and mac is not None and eaddr == mac
+        row("V%d %s: the eaddr string equals its own MAC bytes"
+            % (REACHING.index(st) + 1, st),
+            ok, "eaddr=%r mac=%r" % (eaddr, mac), "equal, and both read")
 
-    fills = [m.start() for m in
-             re.finditer(r"snprintf\s*\(\s*eaddr_string\s*,", src)]
-    row("E2 at least one snprintf targets the buffer", len(fills) >= 1,
-        len(fills), ">= 1")
+    #  ---- V6: LIVENESS.  A known value returned through the real path. ---------------
+    #  Without this a wrong register, a renamed function or a build that never reaches
+    #  construction would make V1-V5 fail for a reason that has nothing to do with the
+    #  defect -- and the run would look like a detection.
+    live = sum(1 for st in REACHING if seen[st][0])
+    row("V6 LIVENESS the breakpoint was reached on every subtype",
+        live == len(REACHING), live, len(REACHING))
 
-    #  *** THE ROW THE DEFECT WAS: a fill that exists only inside one subtype arm
-    #  is not a fill.  It must come BEFORE the subtype switch, so every arm
-    #  inherits it.  This is the property, and it is an ORDER property -- which
-    #  is why counting fills is not enough.
-    m_switch = re.search(r"switch\s*\(\s*machine->machine_subtype\s*\)", src)
-    row("E3 the subtype switch is still where this file expects",
-        bool(m_switch), bool(m_switch), True)
-    ok_order = bool(m_alloc) and bool(m_switch) and any(
-        m_alloc.start() < f < m_switch.start() for f in fills)
-    row("E4 the buffer is filled BEFORE the subtype switch, so every arm inherits it",
-        ok_order,
-        "fills at %s, switch at %s" % (fills, m_switch.start() if m_switch else None),
-        "at least one fill between the malloc and the switch")
+    #  ---- V7: LENGTH, named separately because it is the class the old file MISSED. --
+    #  size 0 -> unwritten garbage; size 1 -> ""; sizeof(ptr) -> "08:20:3".  All three
+    #  scored 7/7 against the source-text version.  Seventeen is the only right answer.
+    lens = {st: (len(seen[st][1]) if seen[st][1] is not None else -1) for st in REACHING}
+    row("V7 every eaddr string is exactly 17 characters",
+        all(v == 17 for v in lens.values()), lens, "all 17")
 
-    #  ---- the FORMAT, which is what an ASan-only oracle cannot see -----------
-    #
-    #  `eaddr_string[0] = '\0'` silences ASan completely and hands the guest an
-    #  EMPTY MAC.  So assert the SHAPE of what is written, not merely that
-    #  something is.  Six colon-separated 2-digit hex fields, i.e. 17 characters.
-    pre = src[m_alloc.start():m_switch.start()] if (m_alloc and m_switch) else ""
-    mac_fmt = "%02x:%02x:%02x:%02x:%02x:%02x"
-    row("E5 the pre-switch fill writes a full six-octet MAC format",
-        mac_fmt in pre, mac_fmt in pre, True)
-    row("E6 it is fed six macaddr octets, not a truncated list",
-        len(re.findall(r"macaddr\[\d\]", pre)) >= 6,
-        len(re.findall(r"macaddr\[\d\]", pre)), ">= 6")
+    #  ---- V8: NEGATIVE CONTROL.  The aborters must NOT reach the hand-off. -----------
+    #  If one did, this file's five-subtype scope would be wrong and V1-V5 would be
+    #  measuring an incomplete set while reporting green over it.
+    reached_abort = []
+    for st in ABORTERS:
+        r_, _e, _m = peek(a.binary, st)
+        if r_:
+            reached_abort.append(st)
+    row("V8 NEG-CTRL the aborting subtypes do not reach arcbios_init",
+        not reached_abort, reached_abort or "none reached", "none reached")
 
-    #  ---- IDENTITY ----------------------------------------------------------
-    row("E0 IDENTITY row count -- guards against a stale copy",
+    #  ---- V9: FAILABILITY.  Prove the comparison is live. ----------------------------
+    #  V1-V5 are equality tests, and an equality test that is never exercised against an
+    #  unequal pair is indistinguishable from `assert True`.  Compare the same real string
+    #  against a deliberately corrupted form of its own MAC and require INEQUALITY.
+    probe_str = seen[REACHING[0]][1]
+    probe_mac = seen[REACHING[0]][2]
+    if probe_str is None or probe_mac is None:
+        row("V9 FAILABILITY the comparison can report unequal", False,
+            "no value read -- cannot exercise", "an unequal pair is rejected")
+    else:
+        bad = probe_mac[:-1] + ("0" if probe_mac[-1] != "0" else "1")
+        row("V9 FAILABILITY the comparison can report unequal",
+            probe_str != bad, "%r vs corrupted %r" % (probe_str, bad),
+            "an unequal pair is rejected")
+
+    #  ---- IDENTITY -------------------------------------------------------------------
+    row("V0 IDENTITY row count -- guards against a stale copy",
         len(_rows) + 1 == EXPECT_ROWS, len(_rows) + 1, EXPECT_ROWS)
 
-    bad = sum(1 for _, ok in _rows if not ok)
+    bad_n = sum(1 for _, ok in _rows if not ok)
     print()
-    print("SGI_EADDR_RESULT=%d/%d" % (len(_rows) - bad, len(_rows)))
-    print("SGI_EADDR_PASS" if bad == 0 else "SGI_EADDR_FAIL")
-    return 1 if bad else 0
+    print("SGI_EADDR_RESULT=%d/%d" % (len(_rows) - bad_n, len(_rows)))
+    print("SGI_EADDR_PASS" if bad_n == 0 else "SGI_EADDR_FAIL")
+    return 1 if bad_n else 0
 
 
 if __name__ == "__main__":

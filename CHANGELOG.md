@@ -4251,13 +4251,18 @@ measured **`asan_err` 1 → 0 on all four**, with ip32 unchanged at 0.
 `regress/sgi_eaddr_probe.py`, 7 rows. Gate 9 already sweeps every subtype under ASan, so a
 regression of the *overflow* is its job. Two reasons that is not sufficient:
 
-1. *** `eaddr_string[0] = ' '` SILENCES ASan COMPLETELY *** — the read stops at byte 0, no
+1. *** `eaddr_string[0] = '\0'` SILENCES ASan COMPLETELY *** — the read stops at byte 0, no
    overflow occurs — **while handing the guest an empty MAC.** A pass-1 seat named that hole before
    this detector existed. Only a length/format oracle sees it.
+   *** CORRECTED IN R15b: the file this sentence describes was NOT that oracle. *** It matched
+   the format-string TEXT and never examined the length argument at all, so `snprintf(buf, 1, …)`
+   — the same empty MAC, spelled with a length — scored a clean pass on it. The claim is left in
+   place rather than edited away because the gap between what a detector says it checks and what
+   it checks is the finding; the replacement is a runtime value oracle.
 2. Gate 9's instrumented binaries were **23 days stale** when this was found, so its green meant
    "the July binary is clean" — a true statement about the wrong artefact (`asanstale`).
 
-Kill table, all measured: the pre-fix state 4/7; the `' '` mutant **4/7**; a four-octet MAC 6/7
+Kill table, all measured: the pre-fix state 4/7; the `'\0'` mutant **4/7**; a four-octet MAC 6/7
 (E5 alone); the fill moved back inside one arm 4/7; clean tree 7/7. Honest note: the first and last
 of those are **the same mutant** — deleting the pre-switch fill — and are reported as two only
 because I generated them separately.
@@ -4265,6 +4270,132 @@ because I generated them separately.
 **What this file does not claim:** anything about the bytes the guest sees. The string is copied
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
+
+## R15b (#446 pass 2) — the detector shipped with the fix was VACUOUS, and a comment-only file proved it
+
+The fix in R15 is correct and stands unchanged. **What shipped beside it did not.**
+
+`regress/sgi_eaddr_probe.py` matched six regexes over `machine_sgi.c`: that the `malloc`
+existed, that an `snprintf(eaddr_string,` existed, that the subtype switch existed, that the
+snprintf's **byte offset** fell between the other two, that a six-field `"%02x:..."` literal
+appeared in that span, and that six `macaddr[N]` references appeared in it.
+
+The pass-2 panel fired eight seats. **Six of the seven scriptable seats returned
+DEFECT-IN-DETECTOR**; the seventh said the fix was sound with the detector as the weaker link,
+which is the same finding under a different label. The measuring seat then **built sixteen
+mutants and all sixteen scored 7/7.**
+
+*** THE CHAMPION IS TWO CHARACTERS. *** `ETHERNET_STRING_MAXLEN` → `0*ETHERNET_STRING_MAXLEN`.
+`snprintf` with size 0 writes **nothing, not even the NUL**, so the heap-buffer-overflow returns
+on ip12/ip28/ip30/ip35 — ASan-measured back to the pre-fix numbers — and it compiles with **zero
+warnings** while the gate row prints green. Also 7/7: size `1` (writes only the NUL, so the guest
+gets an **empty MAC**, and ASan is silent), `sizeof(eaddr_string)` (8 on this host → `"08:20:3"`),
+`#if 0`, a comment wrapper, `if (0)`, `if (subtype == 32)`, a second `malloc`, an arm re-pointing
+the pointer, and `#define snprintf(b,l,...) ((void)(b))`.
+
+*** AND THE REDUCTIO THAT SETTLES IT: A 217-BYTE FILE CONTAINING NOTHING BUT A C COMMENT SCORED
+7/7. *** No function, no `MACHINE_SETUP`, nothing that could ever be compiled into the emulator.
+That is **vacuous** under this project's own taxonomy, not merely weak — and no additional regex
+repairs it, because the failure is the **medium**, not the rows.
+
+**The old file's stated purpose was the one thing it did not do.** Its docstring called itself
+*"the LENGTH/FORMAT oracle"* that sees what ASan cannot. **It never examined the length argument.**
+The size-1 mutant is precisely the `eaddr_string[0] = '\0'` hole it named as its reason for
+existing, spelled with an `snprintf`. Three tracked copies of that claim — probe docstring,
+CHANGELOG, gate comment — are corrected here under the grep-for-siblings rule.
+
+### The replacement: a runtime value oracle, 10 rows
+
+It breaks on `arcbios_init()` in a real construction of the five subtypes that reach it and
+requires the ethernet **string** to be the formatting of the **MAC bytes** passed beside it:
+
+```
+void arcbios_init(struct machine *machine, int is64bit, uint64_t sgi_ram_offset,
+                  const char *primary_ether_addr, uint8_t *primary_ether_macaddr)
+```
+
+That is a **provenance** check rather than a shape check: uninitialised garbage, an empty string,
+a truncated string and a right-shaped-wrong-octet string all fail it, and none of them can be
+produced by editing a comment.
+
+MEASURED kill table (**passing** rows out of 10 — the direction is stated, because the previous
+table's `(E5 alone)` did not say whether E5 alone *fired* or alone *survived*, and a careful seat
+read it the wrong way):
+
+| mutant | old detector | new |
+|---|---|---|
+| clean tree | 7/7 | **10/10** |
+| `0*ETHERNET_STRING_MAXLEN` (2 chars, 0 warnings) | **7/7 survived** | 5/10 |
+| size `1` | 7/7 | 5/10 |
+| `sizeof(eaddr_string)` | 7/7 | 5/10 |
+| `#if 0` … `#endif` | 7/7 | 5/10 |
+| comment wrapper | 7/7 | 5/10 |
+| pre-fix (fill deleted) | 4/7 | 5/10 |
+| wrong last octet | passes E6's count | 6/10 |
+
+*** V4 KILLED NOTHING IN THAT TABLE, AND THAT WAS CORRECT — SO A DISCRIMINATING MUTANT WAS BUILT
+FOR IT. *** ip32 has its own `snprintf` in its arm and is rescued from every mutation of the
+pre-switch fill. An untested row is indistinguishable from a vacuous one, so **both** fills were
+removed: 4/10, and V4 fires. No row now goes unexercised.
+
+### The gate moved, and the move is the point
+
+The old detector lived in `gate_offline` because source text needs no binary. The replacement
+needs `build/gxemul` and gdb — and **gate_offline runs no emulator at all** (zero references to
+the binary; it is the offline differential of the linked `float_emul.c`). Adding an emulator run
+there would have made the gate's own name untrue.
+
+It went to **gate 9**, which already constructs every machine and every subtype: ASan is that
+gate's instrument for the memory-safety class, and this probe is its instrument for the **value**
+class ASan cannot see. `check_probe_wiring.py` followed the move **with no edit**, because it
+derives wiring from `run.sh`'s `GATES` array rather than asserting it. Nothing was left behind in
+`gate_offline`: a stub row asserting the probe merely *exists* cannot fail for the reason it names.
+`degrade()` rather than `gate_skip()` on a missing gdb — `gate_skip` **exits**, and would have
+discarded the sweep's own eleven checks and reported the whole gate as SKIP.
+
+### Three wrong records in our own material
+
+1. The `:633` citation had drifted to **`:661`** — the read-the-line-before-citing-it rule.
+2. The added source comment said *"machine.c forces `machine->bootarg` non-NULL"*. `machine.c:559`
+   is a **debug print** whose local `has_bootarg` only selects which message is emitted; it forces
+   nothing, and `bootarg` is not on this path at all. The **conclusion** (only defective caller)
+   survives on the two-caller grep, which two seats performed independently. The argument for it
+   did not.
+3. *"Callee-side hardening is an impossibility"* overreached: impossible **at that signature**,
+   not categorically — an interface taking a length could check.
+
+### A seat's challenge refuted by execution, while its mechanism claim was right
+
+One seat read the arms and reported that ip27 has no `abort()`, so *"five call abort()"*
+overstates. MEASURED over all ten advertised subtypes: **ip19/20/22/24/27 return 134 (SIGABRT) and
+ip12/28/30/32/35 return 1** — the five are the five. But the mechanism was not what we wrote:
+**ip22 has no body of its own and falls through into `case 24`**, and **ip27 dies inside its own
+`device_add()`**, at `interrupt_handler_lookup()` ← `devinit_z8530()`, on its `irq=0` — which is
+exactly what that seat predicted. A token search of a switch cannot see fall-through, and reading
+for `abort()` misses an abort raised by a callee; our own case-splitter had the identical blind
+spot.
+
+### The UBSan follow-up undercounted itself five times over
+
+It was filed as *"two left-shift defects at `arcbios.c:737/784`"*. The measuring seat found **ip32
+never reaches those lines** — its two hits are `:570` and `:590` — making it four. A grep for the
+idiom then found **ten unguarded `(buf[3]<<24)` sites and four correctly cast
+`((uint32_t)buf[3]<<24)`**. *** Line 580 sits BETWEEN 570 and 590 and is the only one of the three
+that is cast: the author knew the idiom and applied it to 4 of 14 sites. *** `:737` is the
+damaging one — the sign-extended low word is *added* to `((uint64_t)buf[4]<<32)` and higher terms,
+so the assembled 64-bit pointer's high word comes out **off by one for every address with bit 31
+set**. Tracked as `arcbiosubsan`, not fixed here.
+
+### Not claimed
+
+Nothing about the bytes the **guest** reads back — that needs a rung-3 probe on a machine that
+gets that far, and there is no SGI rig. The probe reads arguments from **SysV AMD64 registers**
+because `build/gxemul` carries a symtab with no DWARF; that ties it to one ABI, stated in the file
+rather than hidden, with V6/V7 as the rows that would catch a wrong register rather than let it
+read as zero. The ip32 arm's own `snprintf` is now redundant; kept, because deleting it drops the
+buffer to a single write site and costs nothing to leave.
+
+Gates: `gate_offline` PASS (263), `gate_asan_sweep` PASS (13, was 11), each run singly.
 
 ## R14 (#444) — three advertised machine subtypes core-dumped at construction, and no gate could say so
 

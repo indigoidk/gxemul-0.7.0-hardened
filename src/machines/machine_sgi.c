@@ -103,24 +103,45 @@ MACHINE_SETUP(sgi)
 	 *  #446: FILL IT HERE, not only in the ip32 arm.
 	 *
 	 *  This buffer was malloc'ed and left UNINITIALISED, and only ONE subtype
-	 *  arm (ip32, below) ever wrote to it -- yet :633 hands it to
-	 *  arcbios_init() unconditionally, where set_env() -> strdup() scans for a
-	 *  NUL that is not there.  MEASURED under ASan: a 41-byte READ past a
-	 *  40-byte allocation, on ip12, ip28, ip30 and ip35; reading the 40
-	 *  in-bounds bytes at the point of use finds NO terminator anywhere in the
-	 *  region.  ip32 is correct today only because its own arm fills it.
+	 *  arm (ip32, below) ever wrote to it -- yet the arcbios_init() call after
+	 *  the switch is handed it unconditionally, and there set_env() ->
+	 *  strdup() scans for a NUL that is not there.  MEASURED under ASan: a
+	 *  41-byte READ past a 40-byte allocation, on ip12, ip28, ip30 and ip35;
+	 *  reading the 40 in-bounds bytes at the point of use finds NO terminator
+	 *  anywhere in the region.  ip32 is correct today only because its own arm
+	 *  fills it.
 	 *
 	 *  *** THE OVERFLOW IS IN THE CALLEE'S strdup AND THE DEFECT IS HERE. ***
-	 *  set_env() is correct code: it cannot detect a missing terminator from
-	 *  the inside, so there is no callee-side hardening to prefer -- that is
-	 *  not a trade-off, it is an impossibility.  machine_arc.c passes a literal
-	 *  and machine.c forces machine->bootarg non-NULL, so this was the only
-	 *  defective caller of that path.
+	 *  set_env() is correct code: it cannot detect a missing terminator
+	 *  through the `const char *` it is given, so there is no callee-side
+	 *  hardening to prefer at that signature.  (A review seat rightly noted
+	 *  that this is not a categorical impossibility -- an interface taking a
+	 *  LENGTH could check -- but changing set_env()'s signature to repair one
+	 *  caller is not the minimal fix.)
 	 *
-	 *  FIVE OTHER SUBTYPES WERE MASKING THIS by abort()ing before line 633
-	 *  (ip19/20/22/24/27).  If those aborts are fixed first the overflow grows
-	 *  from four subtypes to nine -- the coupling runs one way, and is recorded
-	 *  on `ctorabortclass`.
+	 *  A CALL-SITE AUDIT FOUND THIS THE ONLY DEFECTIVE CALLER, and the reason
+	 *  is the two-caller grep, not the argument an earlier draft gave here.
+	 *  arcbios_init() has exactly two callers: this one, and machine_arc.c,
+	 *  which passes the string literal "10:20:30:40:50:60".  (That draft said
+	 *  "machine.c forces machine->bootarg non-NULL"; machine.c:559 is a DEBUG
+	 *  PRINT whose local `has_bootarg` only selects which message is emitted.
+	 *  It forces nothing, and bootarg is not on this path at all.  The
+	 *  conclusion survived; the argument for it did not.)
+	 *
+	 *  FIVE OTHER SUBTYPES WERE MASKING THIS -- ip19, ip20, ip22, ip24 and
+	 *  ip27 -- and if their aborts are fixed first the overflow grows from
+	 *  four subtypes to nine.  The coupling runs one way; recorded on
+	 *  `ctorabortclass`.
+	 *
+	 *  *** THEY DO NOT ALL ABORT THE SAME WAY, AND AN EARLIER DRAFT OF THIS
+	 *  COMMENT SAID THEY DID.  ***  A seat read the arms, found no abort() in
+	 *  ip22's or ip27's, and challenged the claim.  MEASURED instead, over all
+	 *  ten advertised subtypes: ip19/20/22/24/27 return 134 (SIGABRT) and
+	 *  ip12/28/30/32/35 return 1.  The five are the five -- but ip22 has no
+	 *  body of its own and FALLS THROUGH into case 24, and ip27 dies inside
+	 *  its own device_add(), at interrupt_handler_lookup() <- devinit_z8530(),
+	 *  on its `irq=0`.  A token search of a switch cannot see fall-through,
+	 *  and reading for abort() misses an abort raised by a callee.
 	 */
 	snprintf(eaddr_string, ETHERNET_STRING_MAXLEN,
 	    "%02x:%02x:%02x:%02x:%02x:%02x",

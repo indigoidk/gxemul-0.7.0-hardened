@@ -503,6 +503,56 @@ else
     degrade "no ASan pristine build -- HEAD swept, but no three-way comparison"
 fi
 
+# ------------------------------------------------------------------ #446 sgi_eaddr
+#  THE VALUE CLASS, WHICH THIS GATE'S OWN INSTRUMENT CANNOT SEE.
+#
+#  This gate owns "every machine and every subtype is constructed correctly", and ASan is
+#  its instrument for one class of wrongness: memory safety.  #446 was exactly that class
+#  -- machine_sgi.c handed arcbios_init() a 40-byte buffer it never initialised, and
+#  set_env() -> strdup() read 41 bytes off the end on ip12/ip28/ip30/ip35.  ASan sees that,
+#  and this sweep would catch its return.
+#
+#  *** WHAT ASan CANNOT SEE IS A BUFFER THAT IS TERMINATED AND WRONG. ***  `snprintf(buf,
+#  1, ...)` writes only the NUL: no overflow, no report, and the guest is handed an EMPTY
+#  MAC address.  `sizeof(eaddr_string)` is 8 on this host and yields "08:20:3".  Both are
+#  silent here and both are real defects, so the sweep needs a second oracle of a different
+#  kind rather than another ASan row.
+#
+#  This probe is that oracle.  It breaks on arcbios_init() in a real construction of the
+#  five subtypes that reach it and requires the ethernet STRING to be the formatting of the
+#  MAC BYTES passed alongside it -- a provenance check, so uninitialised garbage, an empty
+#  string, a truncated string and a right-shaped wrong-octet string all fail.
+#
+#  IT RUNS THE NORMAL BINARY, NOT THE INSTRUMENTED ONE, and that is deliberate: the
+#  property is about the value the code computes, which does not depend on the sanitizer,
+#  and an ASan binary under gdb buys nothing here while costing startup time.
+#
+#  *** IT REPLACES A DETECTOR THAT WAS VACUOUS.  ***  The first version matched six regexes
+#  over machine_sgi.c.  A pass-2 panel built SIXTEEN mutants and ALL SIXTEEN SCORED 7/7 --
+#  among them `0*ETHERNET_STRING_MAXLEN` (two characters, zero compiler warnings, the full
+#  overflow restored and ASan-measured), `#if 0`, a comment wrapper, and -- decisively -- a
+#  217-BYTE FILE CONTAINING NOTHING BUT A C COMMENT.  Every one of those dies here.
+EADDRLOG=$LOGDIR/sgi_eaddr.log
+EADDRBIN=${GX:-$ROOT/build/gxemul}
+if [ ! -f "$HERE/sgi_eaddr_probe.py" ]; then
+    check "sgi_eaddr: probe present" "no" "yes"
+elif [ ! -x "$EADDRBIN" ] || ! command -v gdb > /dev/null 2>&1; then
+    #  degrade(), NOT gate_skip(), and the difference is load-bearing.  gate_skip() EXITS
+    #  (lib.sh:137) -- calling it here would throw away the eleven checks this sweep has
+    #  already recorded and report the whole gate as SKIP, which is worse than the gap it
+    #  announces.  degrade() records the gap and still reaches gate_end.  Either way the
+    #  missing coverage is NAMED: silent coverage loss scored green is the class this
+    #  harness exists to refuse.
+    degrade "sgi_eaddr: needs build/gxemul and gdb -- NOT run, so #446 is UNCOVERED here"
+else
+    python3 "$HERE/sgi_eaddr_probe.py" --binary "$EADDRBIN" > "$EADDRLOG" 2>&1 || true
+    sed 's/^/       /' "$EADDRLOG"
+    check "sgi_eaddr: the eaddr string is the formatting of its own MAC bytes" \
+          "$(grep -c 'SGI_EADDR_PASS' "$EADDRLOG")" "1"
+    check_min "sgi_eaddr: rows actually run" \
+          "$(grep -cE '^  \[(ok|FAIL)\] ' "$EADDRLOG")" 10
+fi
+
 #  RESIDUALS, recorded rather than fixed here (this round may edit only this file):
 #   * ab_expired() is a verbatim-in-behaviour copy of gate_offline.sh's exempt_expired().
 #     It belongs in lib.sh; two copies is exactly the "grep for its siblings" shape.

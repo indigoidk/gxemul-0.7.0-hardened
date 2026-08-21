@@ -339,7 +339,38 @@ availability. If probe witnesses count equally, sites in devices no rig boots ma
 fixable-with-a-detector. It is a filing (one seat), not a short stage, so it is not blocking —
 but it should be adjudicated before `exitsweep` implements anything.
 
-### 9. `sgiarcbiosoob` — a detector REPLACED mid-round, with no adversarial review of the replacement
+### 9. `probewiring` (`85bc6ab`) — regress review of a checker that now GATES every other detector
+
+Queued by its own gate the moment it closed, which is the mechanism working: `regress` is
+FABLE-ONLY, and a closed row owing a regress review reddens the next commit.
+
+It matters more than a typical regress entry because **this checker is now upstream of every
+other detector in the tree**. Section R fails a commit when a committed detector is run by no
+gate, so a fault in `check_probe_wiring.py` does not fail loudly — it *stops demanding gates*,
+and the harness quietly returns to the state it was written to fix.
+
+Specific things for the flagship seat, all measured rather than guessed:
+
+* **Command-position parsing is the whole defence** and it is a hand-written regex over
+  comment-stripped shell. It correctly rejects `gate_hygiene.sh:331` — a line carrying a probe
+  basename AND `python3` whose message is that the probe did NOT run. What else does it reject
+  that it should accept, or accept that it should reject? A false ACCEPT is the dangerous
+  direction: it marks an unwired probe as wired and the gap re-opens silently.
+* **One level of variable indirection is resolved** (`DIVSWEEP=$HERE/x.py` … `python3
+  "$DIVSWEEP"`). Two levels are not. Is one level the right cut, or an arbitrary one?
+* **The four dated exemptions expire 2026-09-20**, a date the checker's author chose and
+  explicitly flagged as a proposal. The owner has set these tighter before.
+* **A detector misfiled as class `tool` is undetectable** beyond a filename tooth that a rename
+  defeats. Stated in the file rather than hidden; is that residual acceptable?
+* The **duplicate-key guard** added after the MANIFEST silently held one key twice: it re-reads
+  the file's own source text because a dict literal cannot represent the fault it suffers from.
+  Measured exit 0 clean / exit 2 duplicate — but that measurement was **void three times first**,
+  through an eaten shell variable that read as 0.
+
+Not blocking: the checker is green, its 18-mutant selftest was re-run independently before the
+commit, and the four gaps it found are recorded as expiring debts rather than silence.
+
+### 10. `sgiarcbiosoob` — a detector REPLACED mid-round, with no adversarial review of the replacement
 
 The strongest reason on this list, because the round changed its own instrument after the panel
 and nothing has attacked what replaced it.

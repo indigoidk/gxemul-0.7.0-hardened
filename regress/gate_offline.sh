@@ -1794,29 +1794,24 @@ check "SELFCHECK manifest: every COVERED detector ran its sentinel" \
       "${sc_notrun:-none}" "none"
 
 # ------------------------------------------------------------------ #446 sgi_eaddr
-#  A SOURCE-TEXT detector, wired here because it needs no binary and no rig -- it reads
-#  machine_sgi.c and asserts the ethernet-address buffer is filled AT THE ALLOCATION,
-#  before the subtype switch, so every arm inherits it.
+#  MOVED TO GATE 9 (gate_asan_sweep) AND DELIBERATELY NOT REPLACED HERE.
 #
-#  *** WHY IT IS NOT AN ASan ROW.  ***  Gate 9 already sweeps every subtype under an
-#  instrumented build and would catch a regression of the OVERFLOW.  It cannot catch the
-#  most likely bad fix: `eaddr_string[0] = ' '` SILENCES ASan COMPLETELY -- the read
-#  stops at byte 0 -- while handing the guest an EMPTY MAC.  A pass-1 seat named that
-#  hole before the detector existed, and only a length/format oracle sees it.  Measured:
-#  that mutant scores 4/7 here.
+#  It was wired into this gate because the detector was pure SOURCE TEXT and so needed
+#  neither a binary nor a rig.  A pass-2 panel then built sixteen mutants against that
+#  detector and ALL SIXTEEN SCORED 7/7 -- including a two-character edit that restores
+#  the heap-buffer-overflow with no compiler warning, and a 217-byte file containing
+#  nothing but a C comment.  The replacement is a RUNTIME value oracle: it breaks on
+#  arcbios_init() in a real construction of five real subtypes and requires the ethernet
+#  string to BE the formatting of the MAC bytes passed beside it.
 #
-#  Wired in the SAME COMMIT as the probe, per gate 6's structural note and per
-#  check_probe_wiring.py, which caught this file being unwired on the very next commit
-#  after it landed.
-EADDRLOG=$LOGDIR/sgi_eaddr.log
-if [ ! -f "$HERE/sgi_eaddr_probe.py" ]; then
-    check "sgi_eaddr: probe present" "no" "yes"
-else
-    python3 "$HERE/sgi_eaddr_probe.py" > "$EADDRLOG" 2>&1 || true
-    sed 's/^/       /' "$EADDRLOG"
-    check "sgi_eaddr: the buffer is filled at its allocation"           "$(grep -c 'SGI_EADDR_PASS' "$EADDRLOG")" "1"
-    check_min "sgi_eaddr: rows actually run"           "$(grep -cE '^  \[(ok|FAIL)\] ' "$EADDRLOG")" 7
-fi
+#  That needs build/gxemul and gdb, and THIS GATE RUNS NO EMULATOR AT ALL -- it is the
+#  offline differential of the linked float_emul.c, and it references the binary nowhere.
+#  Adding an emulator run here would have made the gate's own name untrue, which is the
+#  same defect as a check whose title does not match what it checks.  Gate 9 already
+#  constructs every machine and every subtype, so the probe went there.
+#
+#  Nothing is left behind here on purpose: a stub row asserting the probe merely EXISTS
+#  would be a row that cannot fail for the reason it names.
 
 gate_end
 exit $?
