@@ -42,6 +42,23 @@ STAGES = ("assess", "research", "review")
 #  not be counted as one of the seats that answered -- otherwise marking a gap would close it.
 ANNOTATION = "[RUN UNDER THE PRE-2026-08-16 POLICY]"
 
+#  A SECOND, DIFFERENT EXEMPTION, and it is deliberately not folded into the first.
+#
+#  The token above asserts a specific historical fact: the stage ran before the full-panel
+#  directive.  On 2026-08-21 a batched flagship pass added a single entry to a row that had been
+#  FILED with one seat -- and one filing plus one re-read is counted here as a TWO-OF-NINE STAGE,
+#  so section H reddened for a row nobody had convened a panel on.
+#
+#  *** THE FIRST ATTEMPT AT CLEARING THAT USED THE TOKEN ABOVE, WHICH WOULD HAVE PUT A FALSE
+#  STATEMENT IN THE LEDGER TO TURN A GATE GREEN. ***  A 2026-08-21 re-read did not run under the
+#  pre-2026-08-16 policy.  Backed out; the honest fix is a token that says what actually
+#  happened, because the two situations are not the same and a reader must be able to tell them
+#  apart.
+#
+#  This is a real recurring category rather than a one-off: any pass that sweeps filed rows can
+#  promote a filing into a short stage without anyone deciding to.
+RE_READ = "[NOT A PANEL STAGE: SINGLE-SEAT RE-READ]"
+
 #  *** A STAGE DELIBERATELY HELD FOR A NAMED SEAT IS NOT A STAGE THAT MOVED ON. ***
 #
 #  Added 2026-08-17.  Fable usage ran high and the owner said to queue Fable work and carry on
@@ -79,7 +96,7 @@ def main(argv):
     for row in ledger["rows"]:
         by_stage = {}
         for ent in row.get("entries", []):
-            if ANNOTATION in ent.get("note", ""):
+            if ANNOTATION in ent.get("note", "") or RE_READ in ent.get("note", ""):
                 by_stage.setdefault(ent.get("phase"), {})["_annotated"] = True
                 continue
             if HELD in ent.get("note", ""):

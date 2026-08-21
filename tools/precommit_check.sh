@@ -435,7 +435,32 @@ fi
 #  was `awk '{print $2}'`, which is not a path extractor: `R  old -> new` yields the OLD
 #  path so the new file is never checked, and a quoted path containing a space is truncated
 #  at the space, silently skipping checks A, B and E for it.
-CHANGED=$(git status --porcelain -z | tr '\0' '\n' | sed -e 's/^...//' -e 's/.* -> //')
+#  *** SCOPED TO WHAT IS ACTUALLY BEING COMMITTED, NOT THE WHOLE WORKING TREE. ***
+#
+#  This was `git status --porcelain`, i.e. staged AND unstaged together.  That is correct for a
+#  single-writer session and WRONG the moment two rounds run in parallel: on 2026-08-21 a
+#  records-only commit (tools/ and OUTSTANDING_BUGS only) was blocked by sections A and B firing
+#  on `src/machines/machine_hpcmips.c` -- a file a CONCURRENT agent was editing and had not yet
+#  propagated, and which the commit did not touch.
+#
+#  Nothing is weakened by the narrowing.  The un-propagated file is still caught -- at the moment
+#  it is committed, because then it IS staged.  What changes is that it no longer blocks an
+#  unrelated commit, which is the difference between a gate and an obstacle.
+#
+#  The fallback matters: with nothing staged (an interactive run, or `git commit -a`), fall back
+#  to the full working tree, so a bare invocation still audits everything.  A check that silently
+#  audited nothing when run the ordinary way would be worse than the problem being fixed.
+CHANGED=$(git diff --cached --name-only)
+if [ -z "$CHANGED" ]; then
+	CHANGED=$(git status --porcelain -z | tr '\0' '\n' | sed -e 's/^...//' -e 's/.* -> //')
+fi
+
+#  ANNOUNCE what the narrowing means for this run, so a divergent file that is merely OUT OF
+#  SCOPE is never mistaken for one that was checked and passed.
+_unstaged_src=$(git diff --name-only -- 'src/*' | tr '\n' ' ')
+if [ -n "$_unstaged_src" ]; then
+	warn "UNSTAGED src/ edits NOT audited by this run (they are when committed): $_unstaged_src"
+fi
 if [ -z "$CHANGED" ]; then
 	say "nothing staged or modified -- no per-file checks."
 	#  *** DO NOT exit 0 HERE.  *** Sections F/G/H/I/J/K have already run above and may have

@@ -170,6 +170,32 @@ the queue is least likely to get written. Naming the three stages now means the 
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
 
+### 9. `sh4pcicexit` (`6bec468`) — regress review, and THE GATE SAID THIS WAS ALREADY QUEUED
+**FABLE-ONLY.** Closed, changed code, no `regress` entry.
+
+*** THIS ENTRY EXISTS BECAUSE `check_fable_queue.py` REPORTED IT AS QUEUED WHEN IT WAS NOT. ***
+Its membership test was a raw substring search over this whole file, and the only occurrence of
+`sh4pcicexit` was a parenthetical cross-reference inside the `sh4bcr` entry above. A *mention*
+satisfied "named in the queue". Found by the flagship seat in the batched pass; the check now
+matches entry headings only.
+
+Why it deserves real time, beyond the irony: **this round has the worst detector prior in the
+project's history.** Its first detector passed SEVEN of seven mutants — one of them reinstating the
+original host kill verbatim (`if (len == 2) exit(1);`), and three guest-visible. It is 38 rows now
+and all seven die, but the closing move was *completing a product* (adding the width axis to a
+census that only ever issued `len=4`), not adding spot rows. The question for a regress pass is
+whether any OTHER quantifier in that file is still sampled rather than covered.
+
+Two specific things:
+
+* **`pcicmergeA` is filed and unwritten** — the PCICONF0 latch-merge reproduction has no row, and
+  could not have had one before the third fault class landed, because a row written against the
+  two-class code would have *asserted the merged behaviour as correct*. Worth checking the reasoning
+  as much as the gap.
+* **The fault classes are "kinds of complaint, not kinds of register"** — that distinction is what
+  made the first two-class fix a half-fix. If a fourth complaint kind appears, does anything catch
+  it being folded into an existing class?
+
 ### 8. `fbpending` (`3193d56`) — regress review, and the round it belongs to shipped UNREVIEWED
 **FABLE-ONLY.** Closed, changed code, no `regress` entry.
 

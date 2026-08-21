@@ -5517,3 +5517,43 @@ requires the primary alias to match `[a-z0-9_.-]+`, and SGI's is `"silicon graph
 space. Verified in the gate's own output: rows read `S rpi ip12` through `S rpi ip35`, and the count
 for type `sgi` is **zero**. A reader checking "is SGI covered" sees a type with no rows; a reader
 checking `rpi` sees twelve rows that are not `rpi`'s. Both readings are wrong and neither is red.
+
+## 2026-08-21 — the flagship's batched regress pass
+
+*Fable fired on the queued backlog. Two entries DISCHARGED (`m8online`, `fbpending`), four HELD,
+and three new rows — one of which is a live gate defect it found in a checker I wrote.*
+
+### `queuesubstr` — held (fixed in the same pass; the row is the record)
+**`check_fable_queue.py` matched ids by SUBSTRING, so the gate was green over exactly the state it
+exists to redden.** It printed `ok sh4pcicexit regress owed and queued` while the only occurrence of
+that id in `fable_queue.md` was a **parenthetical cross-reference inside a different entry**. A
+*mention* satisfied "named in the queue" — for the round with the worst detector prior in this
+project's history (seven of seven mutants escaped, one reinstating a host kill verbatim).
+
+**The fix idiom already existed three files away and had already been paid for**: `gate_offline`'s
+SM/SC manifests match stems exactly in a loop, after being bitten by "a stem that is merely a prefix
+of another". Same genus, one directory up, never carried across.
+
+Tightening it revealed a second thing worth keeping: matching **headings alone** turned 0 unqueued
+holds into **35**, because most held stages are legitimately carried by the machine-generated wall
+block rather than prose entries. *A check that reddens on correct state is as useless as one that
+greens on wrong state.* The shipped matcher accepts entry headings and the generated block, nothing
+else. Negative-controlled both ways.
+
+### `probewiring` — held
+**Nothing makes "no gate runs this probe" a red row or a dated debt.** Measured against `run.sh`'s
+manifest: `#441`'s 13 rows and `#439`/`#440`'s 11 rows execute in **no gate**; `#442`'s rung-3 probe
+is report-only by default. **Twenty-four committed detector rows currently defend nothing between
+batteries.** Gate 6's structural note covers a probe's *census pin* — that the count moved — and says
+nothing about whether anything runs it.
+
+The proven pattern is three files away: a probe→gate **wiring manifest with dated exemptions**,
+exactly like `SM_EXEMPT`/`SC_EXEMPT`. That turns the silent unwired state into the same honest,
+expiring debt `fbpending_bound:2026-09-20` already is. Distinct from `witnessunwired` (which is about
+a *witness* artefact a ledger row names); both are real and the manifest closes both.
+
+### `smcovered12` — held (records-only)
+A closure note says `SM_COVERED` lists thirteen stems. Measured at two commits: **it lists twelve.**
+All twelve are backed by real `selfmutant_one` calls, and 12 covered + 2 dated-exempt = the 14
+differentials on disk — so the manifest is internally consistent and the closure's *direction* was
+right. Its **number** is wrong by one: a count nobody re-derived.

@@ -53,7 +53,39 @@ def main(argv):
     listing = "--list" in argv
     with open(LEDGER, encoding="utf-8") as f:
         ledger = json.load(f)
-    queue = io.open(QUEUE, encoding="utf-8").read() if os.path.exists(QUEUE) else ""
+    #  *** THIS WAS A RAW SUBSTRING TEST OVER THE WHOLE FILE, AND THE GATE WENT GREEN OVER
+    #  EXACTLY THE STATE IT EXISTS TO REDDEN. ***  Found 2026-08-21 by the flagship seat in a
+    #  batched regress pass: check_fable_queue printed
+    #        ok    sh4pcicexit    regress   owed and queued
+    #  while the ONLY occurrence of that id in fable_queue.md was a PARENTHETICAL CROSS-REFERENCE
+    #  on line 217, inside a different entry ("...one-instruction kills remain in the same file
+    #  (`sh4pcicexit`)").  A MENTION satisfied "named in the queue" -- so the round with the worst
+    #  detector prior in this project's history (seven of seven mutants escaped, one reinstating
+    #  a host kill) had its regress review silently recorded as owed-and-queued when nothing was
+    #  written down at all.
+    #
+    #  The fix idiom already existed three files away and had already been paid for: gate_offline's
+    #  SM/SC manifests match stems EXACTLY in a loop, after being bitten by "a stem that is merely
+    #  a prefix of another" (gate_offline.sh:1019-1023).  This is the same genus one directory up.
+    #
+    #  So an id counts as queued in exactly TWO places, and prose is not one of them:
+    #    * it HEADS a hand-written entry -- `### <n>. \`id\`` or `### \`id\``;
+    #    * or it appears inside the MACHINE-GENERATED wall block, which is a deliberate
+    #      enumeration written by gen_codex_wall.py from the ledger, not commentary.
+    #
+    #  Scoping to the generated block matters and was not obvious: tightening to headings ALONE
+    #  turned 0 unqueued holds into 35, because the bulk of held stages are legitimately carried
+    #  by that block rather than by prose entries.  A check that reddens on correct state is as
+    #  useless as one that greens on wrong state -- the first draft of this fix did exactly that
+    #  for one run, and the 35 are the reason this comment exists.
+    _raw = io.open(QUEUE, encoding="utf-8").read() if os.path.exists(QUEUE) else ""
+    _BEGIN = "<!-- BEGIN GENERATED: codex-wall"
+    _END = "<!-- END GENERATED: codex-wall -->"
+    _gen = ""
+    if _BEGIN in _raw and _END in _raw:
+        _gen = _raw[_raw.index(_BEGIN):_raw.index(_END)]
+    queue = set(re.findall(r"^###\s*(?:\d+\.\s*)?`([A-Za-z0-9_]+)`", _raw, re.M))
+    queue |= set(re.findall(r"`([A-Za-z0-9_]+)`", _gen))
     if not queue:
         print("check_fable_queue: FABLE_QUEUE_FAIL  no queue file at %s" % QUEUE)
         return 1
