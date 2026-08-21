@@ -209,6 +209,36 @@ else
 ' "$out" | grep -E 'BOILERPLATE_FAIL|^  SHARED' | sed 's/^/          /'
 fi
 
+#  ---- P ---------------------------------------------------------------------------
+#  A ROW THAT EXISTS ONLY IN THE LEDGER IS WORK A FRESH SESSION WILL NOT SEE.
+#
+#  This gap was hand-fixed one round ago -- f7eac43 is titled, in full, "OUTSTANDING_BUGS:
+#  the R4-detector round's residuals, which went to the ledger and not here" -- and it
+#  recurred IMMEDIATELY, at twenty-one open rows in a single day.  A catch-up commit is not
+#  a fix for that; it is the same fix twice.  A check a human has to remember is a check
+#  that eventually does not happen.
+#
+#  It complements the es438 direction rather than duplicating it, and this project has been
+#  bitten from BOTH: es438 was a round with no LEDGER row, invisible to section H and the
+#  dashboard; fixing it produced `lunafuse`, filed in OUTSTANDING_BUGS with no ledger row --
+#  the defect reproduced one layer in.  P closes the other direction.
+#
+#  Only OPEN rows are required.  The bug file's own charter says resolved items are REMOVED,
+#  not annotated, so demanding an entry for a closed row would push it toward the
+#  accumulating-index failure that #270 exists to prevent.
+say ""; say "P. every OPEN ledger row is findable in OUTSTANDING_BUGS.md"
+BUGSYNC=$_HERE/pipeline/check_bugfile_sync.py
+if [ ! -f "$BUGSYNC" ]; then
+	warn "check_bugfile_sync.py MISSING -- ledger/bugfile sync NOT verified"
+elif out=$(python "$BUGSYNC" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'BUGFILE_SYNC_PASS' | tr '
+' ' ')"
+else
+	bad "AN OPEN ROW EXISTS ONLY IN THE LEDGER:"
+	printf '%s
+' "$out" | grep -E 'BUGFILE_SYNC_FAIL|^  MISSING' | sed 's/^/          /'
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #

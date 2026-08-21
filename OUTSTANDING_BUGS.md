@@ -5318,3 +5318,86 @@ R12 block; what belongs in the queue is below.
   ethos calls for one per correction, and #440's is R12 with no R-numbered block for #439. Only
   that round's operator knows what it meant to record, so this is left as a note rather than
   written for them.
+
+## 2026-08-20 — twenty rounds' worth of residuals that went to the ledger and not here
+
+**This block exists because the same gap was hand-fixed one round ago and recurred immediately.**
+`f7eac43` is titled, in full, *"OUTSTANDING_BUGS: the R4-detector round's residuals, which went to
+the ledger and not here."* One round later, twenty-one open rows were filed into `ledger.json` and
+none into this file — so a fresh session following CLAUDE.md's own instruction to read this file
+first would have missed a day's work entirely.
+
+A catch-up commit is not a fix for that; it is the same fix twice. So this block ships alongside
+`tools/pipeline/check_bugfile_sync.py` and precommit section **P**, which fails on an OPEN ledger
+row that this file does not name. Forward-only by date, like section O — 66 older rows are
+reported and not failed, because a rule that retro-fails the archive gets switched off.
+
+**Why both files exist**, since the obvious reaction is to delete one: `ledger.json` is the
+pipeline's machine-read truth (per-seat, per-phase; a round with no row is invisible to section H)
+and this file is the human queue. This project has been bitten from *both* directions — `es438` was
+a round with no ledger row, and fixing it produced `lunafuse`, which was filed here and given no
+ledger row, reproducing the defect one layer in. Only OPEN rows are required here; the charter
+above says resolved items are removed, not annotated.
+
+Full per-seat detail for every row below is in `tools/pipeline/ledger.json` and the dashboard.
+
+### `sh4pcicexit` — held
+**Eight measured one-instruction kills remain in `dev_sh4.c` after #441.** `sh4_pcic` has ELEVEN `exit(1)` sites with ~116 word offsets reaching its `default:`, and `DEVICE_ACCESS(sh4)` itself carries five more value guards (ICR bit 7, RCR1 bit 3, DMATCR0's top 8 bits, plus two). Measured with matched surviving controls. Bigger than the round that found it and cheaper to reach -- ONE instruction, not two.
+
+### `m8batc` — held
+**A mutant that stops updating the shadow `batc[]` passes BOTH m88k differentials green, 27/27 and 25/25.** `dev_m8820x.c:479`; the shadow is read at `memory_m88k.c:152` BEFORE the PATC and before the walk, so a stale entry silently returns a wrong physical address for a 512 KB block. Of the three arms in that device touching translation inputs, two are covered and this one has ZERO executable rows.
+
+### `hpcabort` — held
+**Three of eight `hpcmips` subtypes core-dump at construction** (e105, be300, vr3 -- rc=134), from three bad `irq` arguments in `machine_hpcmips.c:84,114,242`, 1:1 with the aborting subtypes. Upstream defect, inherited. `hpcmips` appears NOWHERE under `regress/`, so the binary advertises eight subtypes and dies on three with no gate able to say so.
+
+### `pitcount` — held
+**The 8253 models no decrementing count, so OpenBSD's `delay()` never returns** -- under every design discussed for #439/#440 including the one that shipped. `clock.c:266-275` loops while `n > 0` subtracting `tick - otick`; a constant `gettick()` makes that zero forever. The five filed PIT rows are surface manifestations of this one.
+
+### `wdcoracle` — held
+**Deleting one line from `dev_wdc_tick()` leaves a controller that can never raise an interrupt, and a struct-reading opcode detector stays 100% green.** The oracle for `wdcnoirq` is the wrong variable: it must count real `INTERRUPT_ASSERT` calls through `d->irq.interrupt_assert`, not read `d->int_assert`. Two more escaping mutants recorded with it, including one that silently re-enables the interrupt `:559` deliberately suppresses.
+
+### `smfalsegreen` — held
+**The `smnotland` fix opened a false green**: with the detector ITSELF as subject, `selfmutant` returns OK while the code under test is untouched. Latent (all 12 lanes use `src/` subjects) but `selfmutant.py:221-225` advertises the capability, so the invitation is written down and the guardrail is not.
+
+### `m88kexit` — held
+`memory_m88k.c` still calls `exit(1)` on the `CMMU_PFSR_SUCCESS` internal-error branch -- the host-kill shape #433 removed from this same device family, left behind because that sweep was scoped to the device file rather than the translation path.
+
+### `hlen` — held
+**`hlen` and `devexit` intersect at 23 lines** and neither filing seat saw the other's row: `dev_pcc2.c` 11, `dev_sgi_re.c` 6, `dev_sh4.c` 2, three more at 1 each. A handler that cannot service a width whose failure mode is process termination is ONE defect on one line. #441 took the first two; the rest are siblings.
+
+### `smsetuprow` — held
+`selfmutant`'s three-way SETUP/OK/FAIL split is flattened back to two-way at the gate (`gate_offline.sh:833-838` greps `SELFMUTANT_OK == 1`), so an apparatus failure and a genuine detection failure print the SAME red row -- the shape the helper fixes internally, reproduced one layer up.
+
+### `witnessunwired` — held
+**Section K passes a row whose witness artefact no gate ever executes.** `pit8253_latch_probe.py` runs in no gate and two rows name it as their witness. Fourth recurrence of a pattern `gate_hygiene.sh` already logs three times.
+
+### `warnnotfail` — held
+Deleting a pipeline checker still yields `PRECOMMIT_PASS` -- the MISSING branches call `warn`, which increments `warn` and not `fail`. Announcing works; blocking does not. Filed rather than fixed because a missing checker in a FRESH CLONE is normal and one deleted from a working tree is a gate being switched off, and the branch cannot tell them apart.
+
+### `ledgerboiler` — held
+**The ledger recorded seats as AGREEING when it only knew they were FIRED** -- 52 rows carry one summary stamped across five seat cells. On `wdcnoirq` five cells differed only in the leading seat name, and three of those seats had argued the opposite in their own files. Check shipped (precommit O, forward-only); re-harvesting the 52 archived rows is the open part, and the seat files still exist under `_scratchpad/panel_*/`.
+
+### `stalecopies` — held
+**Three unpatched pre-#337 copies of `dev_wdc.c` live under the project root** (`./src/`, `./build-asan/src/`, `./_archive/...`), and a file-reading seat cited one as "root", producing line numbers that match no tracked file. Live for any seat given `--add-dir` at the project root. Needs an owner decision: retarget, delete, or amend the brief template.
+
+### `rtclen` — held
+**A one-token edit to `dev_rtc.c:92` (`len` -> `4`) re-creates #429's own ADD-becomes-REMOVE defect and passes all 18 detector rows.** Came out of a census that found TEN survivors, including a NULL-deref the table survives because no row writes 0 with `d.timer == NULL` -- the ordinary reset path.
+
+### `rtcbranch` — held
+`diff_rtc_range.c:239` claims a `>=` there "would fail this row and nothing else". Measured: it fails NOTHING, because the clamp target EQUALS the boundary and the row asserts the value rather than the branch.
+
+### `rtcstale18` — held
+Three records say the RTC table has 17 rows; it has 18 -- including `selfmutants/rtc_range.why:11`, INSIDE the paragraph that flags this staleness class.
+
+### `sh4partialread` — held
+#441 drops a partial READ of BCR2/BCR3 where it could be serviced exactly. Not a regression -- that access used to kill the host -- so it files rather than blocks.
+
+### `sh4bsclane` — held
+#441 cites PCR/RTCSR/RTCOR/RFCR as precedent for servicing, then differs from them on BOTH byte-lane resolution and partial-width promotion. No SH-4 document exists in this tree to settle which convention is right, so the divergence is recorded rather than guessed.
+
+### `sh4markspell` — held
+Gate 6's fresh-mark census keys on the exact local name `_mark`, so a correct guard spelled `mark` is PRESENT and uncounted -- two counts green, the third red, a signature that reads like a defect and is not one.
+
+### `pitlatch2` — held
+**Does a Counter Latch Command rewind the read flip-flop?** Codex says consuming the latch after one post-latch read contradicts p.8's "two bytes must be read"; the measuring seat reached the same fact and the opposite reading. BOTH agree the local `i8254.txt` does not settle it and there is no second source in the tree. An honest UNKNOWN, not decided by vote.
+

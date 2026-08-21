@@ -7519,8 +7519,108 @@
      "note": "*** RANKED FIRST OF THE TIMER CLUSTER, AND THE ONLY ROW IN IT WHOSE HARM IS GUEST-VISIBLE STATE RATHER THAN HOST LOG NOISE. ***  MEASURED at -O3, modelling dev_footbridge.c:86 against :265:\n    tick 1: pending= 2147483647  INTERRUPT_ASSERT=yes\n    tick 2: pending=-2147483648  INTERRUPT_ASSERT=NO   <-- guest clock is DEAD\n    -fsanitize=undefined: runtime error: signed integer overflow: 2147483647 + 1\nAfter the wrap, pending > 0 is false for 2^31 CONSECUTIVE TICKS. On cats at the maximum legal rate that is 42.9 s of dead emulated clock in every 85.9 s, repeating. Reached by two ordinary MMIO writes (TIMER_1_LOAD = 1, TIMER_1_CONTROL = TIMER_ENABLE) -- the same shape of guest-driven arithmetic defect #432 just closed IN THE SAME REGISTERS.\n\n*** THE FIX NEEDS NO INVENTION: *** dev_luna88k.c:252-260 already carries upstream's own idiom for this exact counter -- increment, then `if (pending > (int)HZ) pending = 1;` with a debugmsg. Of the EIGHT devices in the tree with a pending-timer counter, LUNA88K IS THE ONLY ONE THAT CAPS. That makes the design settled and the round small -- and it makes this a CLASS, so take one site (dev_footbridge) and file the sweep.\n\nA FILED FIGURE IS WRONG: '~7.9 s for four timers' is arithmetically impossible -- the counters are PER-TIMER (pending_timer_interrupts[i]), so four timers do not overflow one element four times faster. Each still takes 2^31/rate. The true floor anywhere in the tree is 33.7 s on netwinder; the 43 s cats figure is correct.\n\nGATE BLIND SPOT worth recording either way: no -fsanitize flag appears in gate_asan_sweep.sh, so this may be invisible to the one gate that could catch it.",
      "grade": "CONFIRMED",
      "ev": "dev_footbridge.c:86 vs :265, UBSan; dev_luna88k.c:252-260"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** THE ASan CLAIM IS REFUTED, AND THE CORRECTION MAKES THE GAP SHARPER RATHER THAN SMALLER. ***\n\nA review seat reported it 'found no -fsanitize flag' in gate_asan_sweep.sh and inferred fbpending may be invisible to the one gate that could catch it. The flag IS there -- just not in that file. regress/build_asan.sh:38-39:\n    export CFLAGS=\"-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined\"\n    export LDFLAGS=\"-fsanitize=address,undefined\"\nThe seat read the CONSUMER and drew a conclusion about the PRODUCER. Its own wording was careful ('in it'), so this is a scope error rather than a false statement -- but the inference did not survive opening the other file, which took under a minute.\n\n*** THE CONCLUSION SURVIVES ANYWAY, FOR A REASON WORTH MORE THAN THE ORIGINAL: UBSan IS ENABLED AND THE GATE STILL CANNOT REACH THIS DEFECT. ***  gate_asan_sweep.sh:57-63 runs each machine as `timeout 25 $bin -V -E $t $DUMMY </dev/null` -- a bare construction sweep with a dummy file and NO GUEST PROGRAM. Two independent reasons it cannot fire:\n  1. REACHABILITY: nothing ever writes TIMER_1_LOAD = 1 or TIMER_1_CONTROL = TIMER_ENABLE, so the timer never runs and pending_timer_interrupts never climbs.\n  2. RUNTIME: the overflow needs ~43 s of WALL CLOCK on cats (2^31 at 50M increments/s) and the sweep's own timeout is 25 s. Even a guest that programmed the timer could not reach it inside the window.\n\nSo the honest record is: the instrumentation is present, the coverage is absent, and the gap is one of REACHABILITY AND RUNTIME rather than build flags. That is a harder gap to close -- a construction sweep can never catch a defect that needs a driver and a minute -- and it means the fix must ship with its own detector rather than leaning on the sanitizer gate. Recorded because 'the gate has UBSan' would otherwise read as reassurance.\n\nSEPARATELY CONFIRMED, the seat's arithmetic correction: pending_timer_interrupts is declared `int pending_timer_interrupts[N_FOOTBRIDGE_TIMERS]` at dev_footbridge.c:73 and each of the four callbacks at :86-92 increments ITS OWN element, so four running timers do NOT overflow one element four times faster. The filed '~7.9 s for four timers' is arithmetically impossible. Floors: cats 2^31/50,000,000 = 42.9 s, netwinder 2^31/63,750,000 = 33.7 s. Both rates sit BELOW the delivery ceiling of TIMER_MAX_CATCHUP x TIMER_BASE_FREQUENCY = 1048576 x 65 = 68,157,440/s, so the full rate really is delivered and the figures hold.",
+     "grade": "CONFIRMED",
+     "ev": "regress/build_asan.sh:38-39; gate_asan_sweep.sh:57-63; dev_footbridge.c:73,86-92"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** WITNESS BUILT AND THE SYMPTOM REPRODUCED, three independent runs on the committed build. ***  _scratchpad/fbpending_witness.py, rung 3: real ARM guest instructions on an unmodified in-tree -E cats, real decode, real memory_rw, real device dispatch. No source edited, no device_add, no boot. Two MMIO writes arm it.\n\n    run        interpolated wrap   dead window        zero-tick slices   resumed\n    30 x 4 s   43.03 s             44.19 - 84.37 s    10  (40.2 s)       yes\n    11 x 5 s   43.10 s             45.18 - (run end)   2                 n/a\n    30 x 4 s   44.58 s             44.20 - 84.37 s    10  (40.2 s)       yes\nPredicted 42.95 s (2^31/50e6), return 85.90 s. `catch-up-bound messages: 0`, so the timer got its full rate and nothing was clamped. Host-load jitter moved run 3's INTERPOLATED estimate (it depends on the guest's instruction rate) but NOT the dead-window boundaries, which are SIGALRM/wall-clock driven and were identical to run 1 -- a distinction worth keeping.\n\nTWELVE CONTROLS GREEN, and three are stronger than the ladder requires:\n  * the NEGATIVE control is QUANTITATIVE rather than merely different -- MMU left on gives a tick/iteration ratio of 1.0000000, the exact absent-device signature, against 2064 in the live arm;\n  * a FAILABILITY control (K): the same prologue plus ONE instruction (read IRQ_ENABLE_SET) makes the host die, so something in this probe demonstrably can still fail;\n  * LIVENESS DURING THE FREEZE (L2): a fresh ldr of VENDOR_ID returned 0x1011 in 30/30 samples INCLUDING every frozen one, so the device stayed mapped and dispatching -- only the tick stopped. That is what separates 'the clock died' from 'the probe died'.\nTwo device signatures, both small and non-zero (VENDOR_ID 0x1011; a write of 0x12345678 to TIMER_1_LOAD reads back 0x00345678, the handler's own 24-bit mask, which RAM cannot produce). 30/30 planted offsets checked against the emulator's own disassembly AS THEY EXECUTED -- the loop words under test, not just the prologue.\n\n*** A REAL TRAP FOUND WHILE BUILDING IT, and it is 'absent data must fail' on an axis this project had not met: THE TIME AXIS. ***  At 11 x 5 s the probe printed SYMPTOM=ABSENT / VERDICT=PASS / exit 0 ON A DEFECTIVE BUILD -- the run reached the wrap but only 10 s of dead window fitted inside it, so the evidence of recovery was missing rather than absent. Fixed: FBPENDING_COVERAGE refuses to report ABSENT until free-run exceeds the predicted return (89.9 s), and a short run now says UNDETERMINED. A too-short run scoring PASS is the same class as a row comparing two -1 defaults, and it would have been invisible.\n\nCost: 128.7 s full; --slices 3 --slice-seconds 2 exercises every control in 12.5 s.\n\nNOT MEASURED, stated by the seat: the post-fix arm (no fix exists, so only the first witness clause is shown); UBSan firing on this line (the ASan artifact is from Jul 29 and predates #432's rate arithmetic, and rebuilding would mutate a shared gate artifact); rung 4 (no rig boots a footbridge machine); netwinder, which is arithmetic from a read constant.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/fbpending_witness.py + fbpending_witness_run.log"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "TWO SIDE QUESTIONS SETTLED, and both corrections went in the direction that keeps the substance.\n\n(1) THE ASan CLAIM: refuted on its premise, upheld on its conclusion, and a THIRD reason found that neither I nor the reporting seat had. build_asan.sh:38-39 does set -fsanitize=address,undefined, and the artifact carries eleven __ubsan_handle_* imports INCLUDING __ubsan_handle_add_overflow -- the exact handler an int++ overflow calls. So 'no -fsanitize flag' is false; the seat had grepped the CONSUMER (gate_asan_sweep.sh) rather than the PRODUCER. *** But gate 9 still cannot catch this, and the reason I gave (timeout 25 vs a 42.95 s floor) was only half of it: DEVINIT(footbridge) NEVER CREATES A struct timer AT ALL. ***  Only a guest write to TIMER_x_LOAD or TIMER_x_CONTROL|ENABLE does, and a construction sweep runs no guest -- so timer_tick0 is never called and the counter never increments, timeout or no timeout. Either reason alone is fatal.\n\n(2) THE '~7.9 s FOR FOUR TIMERS' FIGURE: confirmed impossible, and the seat found WHERE THE NUMBER CAME FROM, which is better than refuting it. 2^31 / (4 x 1048576 x 65) = 7.876 s -- the single-element floor divided by four. The counters are per-timer (:73), each callback increments its own element (:86-92), and the catch-up budget is per-timer too (timer.c:281, inside the per-timer loop), so four timers overflow four DIFFERENT elements at their own rates. True floors: 42.950 s cats (2^31/50,000,000, machine_cats.c:56-57) now measured three times at 43.03/43.10/44.58, and 33.686 s netwinder (2^31/63,750,000, machine_netwinder.c:56).\n\nONE REFINEMENT worth recording: a hard floor of 31.51 s exists from the catch-up ceiling (2^31/68,157,440), but it needs a timer at or above 68.16 MHz, which neither machine's emulated_hz permits. cats's is guarded by `if (== 0)` so a config-file emulated_hz word could reach it; netwinder's is unconditional. Neither is guest-reachable, so severity is unchanged.",
+     "grade": "CONFIRMED",
+     "ev": "build_asan.sh:38-39; nm of /tmp/gx-asan-head/gxemul; timer.c:281; machine_cats.c:56-57"
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: a callback-side, PRE-INCREMENT, per-timer one-emulated-second cap coalescing excess debt to one, with a latched debug diagnostic and a fast boundary detector.\n\n*** THE SHARPEST POINT OF THE PANEL, AND NO OTHER SEAT MADE IT: THE COMPARISON MUST PRECEDE THE INCREMENT. ***  An increment-then-check formulation reintroduces UB if the state ever reaches INT_MAX -- the check cannot save you, because the `++` has already executed. It also noted that signed overflow being UB means *** the observed two's-complement dead window is not guaranteed compiler behaviour ***, which is a fair correction to how the witness result has been described: what is measured is what THIS build does, not what the language promises.\n\nAnd on Q1 it gave the reason the unanimity rests on: capping in DEVICE_TICK leaves the overflowing increment untouched and merely limits what later code OBSERVES. The two positions bound different things.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: the luna88k pattern in the four tick callbacks via a shared static helper, cap = one second of ticks. 58 KB.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: clamp in place at the producer callbacks (dev_footbridge.c:85-92).",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: a saturating store of 1 in one helper used by all four tick callbacks; do NOT touch DEVICE_TICK. Short answer, and it named the shared-helper shape the other seats converged on.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT (PACKET-FED): cap in the four tick callbacks -- when pending > INT_MAX/2, reset to 1 and emit a debug at VERBOSITY_DEBUG. The only seat to propose a FIXED bound rather than a rate-derived one.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT (PACKET-FED): cap in the four timer_tickN callbacks at the timer's current one-second rate.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT (PACKET-FED): cap in the four tick callbacks at emulated_hz / footbridge_effective_cycles(load, control, 0) -- i.e. one second of the delivered rate, expressed through the device's own helper.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_223554/ (7/7 scriptable)"
+    },
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "PANEL CONVERGENCE, and it is unusually clean on one axis and split on the other.\n\n*** Q1 IS UNANIMOUS ACROSS ALL SEVEN SCRIPTABLE SEATS: cap in the four TICK CALLBACKS, not in DEVICE_TICK. ***  Codex gave the reason the others assumed: capping in DEVICE_TICK leaves the overflowing increment untouched and only limits what later code observes. The two positions bound different things, and only one of them bounds the counter.\n\nQ2 SPLITS 5-1-1 and the split tracks nothing useful about seat class -- codex, kimi, deepseek and minimax all land on ONE EMULATED SECOND OF THE TIMER'S DELIVERED RATE (minimax expressing it through the device's own footbridge_effective_cycles helper); grok proposes a saturating store of 1; glm alone proposes a FIXED bound, INT_MAX/2. Not settled by count -- handed to the measuring seat.\n\n*** AND CODEX'S PRE-INCREMENT POINT MEANS THE IN-TREE PRECEDENT THIS ROUND WAS ABOUT TO COPY HAS THE WRONG FORM. ***  Checked by opening it: dev_luna88k.c:252-256 reads\n    d->pending_timer_interrupts ++;\n    if (d->pending_timer_interrupts > (int)(LUNA88K_PSEUDO_TIMER_HZ)) {\n        d->pending_timer_interrupts = 1;\n-- increment FIRST, check second. It is SAFE THERE, because the reset to 1 keeps the counter far below INT_MAX so the increment can never overflow; but the FORM is the UB one, and copying it into footbridge would carry the shape into a device whose bound is the thing under dispute. The brief cited luna88k as 'the fix needs no invention'. It still does not -- but it needs the comparison moved, which is exactly the kind of detail that survives a copy-paste unexamined. Recorded against luna88k as well, since the form there is worth a note even though it is unreachable.",
+     "grade": "CONFIRMED",
+     "ev": "dev_luna88k.c:249-261, opened and read"
     }
-   ]
+   ],
+   "witness": "probe:_scratchpad/fbpending_witness.py (rung 3, unmodified -E cats; PRE-FIX SYMPTOM ONLY so far -- no fix exists yet, so only the first witness clause is shown, and the file says so)"
   },
   {
    "id": "fbextrate",
