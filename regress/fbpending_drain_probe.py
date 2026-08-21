@@ -29,9 +29,20 @@ THE TRICK: MEASURE THE COUNTER, DO NOT WAIT FOR IT TO OVERFLOW.
      (one decrement) and repeats.  When the spin budget expires with the sentinel
      intact, the backlog is 0 and the number of decrements IS the backlog.
 
-  The measured number is the whole verdict: pre-fix it is rate*T; post-fix it is the
-  cap.  No wrap, no 43 s, and the row reports a NUMBER rather than a boolean, so a cap
-  that is too high or too low is visible rather than merely "not the bug".
+  The measured number is the whole verdict: pre-fix it is rate*T.  No wrap, no 43 s,
+  and the row reports a NUMBER rather than a boolean.
+
+  *** POST-FIX IT IS **NOT** THE CAP, AND THE FIRST VERSION OF THIS PARAGRAPH SAID IT
+  WAS. ***  Measured by a pass-2 seat on ONE binary with ONE bound of 762: backlog 3 at
+  4 s, 100 at 46 s, 375 at 0.5 s.  Once the bound is first reached the number is a
+  MODULAR RESIDUE of the delivered tick count, not the bound itself.
+
+  That is why `--expect-cap` is a one-sided `bD <= CAP` and CANNOT distinguish a bound
+  of 762 from one of 7: the quantity it tests is structurally <= the bound whatever the
+  bound is.  The rows that actually pin the bound's VALUE live in
+  regress/diff_fbpending_bound.c (R5, an equality against the timer's own rate, and R6,
+  which re-arms at a different rate) -- and they exist because a one-token mutant
+  (`freq / 100.0`) destroyed 99% of the guest's clock while passing this probe.
 
 ARM X -- THE PLACEMENT DISCRIMINATOR, and the reason it is not merely a second run.
   dev_footbridge.c never calls timer_remove() and never lowers the core frequency when

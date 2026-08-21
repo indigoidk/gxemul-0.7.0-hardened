@@ -54,8 +54,8 @@ static int failures;
     MEASURED, not predicted.  The first draft carried 18/17 from counting the rows by hand
     and both were off by one -- which is the whole argument for this row existing: a count
     a human derives is a count that drifts, and here it was wrong before it ever shipped.  */
-#define IDENT_DEEP     19	/*  with R2, i.e. a depth argument was given  */
-#define IDENT_SHALLOW  18	/*  without  */
+#define IDENT_DEEP     28	/*  with R2, i.e. a depth argument was given  */
+#define IDENT_SHALLOW  27	/*  without  */
 
 static int rows;
 
@@ -191,6 +191,37 @@ int main(int argc, char *argv[])
 			    worst_peak <= ceiling && worst_trough >= 0,
 			    "%-28s rate %12.2f Hz  peak %11d trough %11d  (ceiling %d)",
 			    cases[c].what, f, worst_peak, worst_trough, ceiling);
+
+			/*
+			 *  R5 -- THE BOUND IS THE TIMER'S OWN RATE, AS AN EQUALITY.
+			 *
+			 *  *** R1 ABOVE IS AN INEQUALITY AGAINST A CONSTANT, AND A
+			 *  PASS-2 SEAT MEASURED FIVE MUTANTS WALKING THROUGH IT. ***  It
+			 *  computes `f` -- the case's own delivered rate -- PRINTS it,
+			 *  and then compares nothing to it, so ANY bound between R0's
+			 *  floor and the ceiling satisfies it.
+			 *
+			 *  The one that matters is `double bound = freq / 100.0;` -- ONE
+			 *  TOKEN.  Measured at rung 3 with a 0.5 s accrual: the shipped
+			 *  build owes the guest 375 interrupts and that mutant delivers
+			 *  FOUR.  It destroys 99% of the guest's clock and BOTH detectors
+			 *  said PASS.  That is exactly the failure timer.h's "THE BACKLOG
+			 *  IS RETAINED" paragraph exists to prevent.
+			 *
+			 *  An equality closes it, needs no new oracle, and costs nothing:
+			 *  `f` was already computed for the message above.
+			 */
+			{
+				int want = (int) f;
+				if (want < 1)
+					want = 1;
+				if (want > ceiling)
+					want = ceiling;
+				row("R5 the bound IS this timer's rate",
+				    worst_peak == want,
+				    "%-28s peak %11d  want %11d", cases[c].what,
+				    worst_peak, want);
+			}
 			/*
 			 *  R3 -- ONE INTERRUPT IS STILL OWED, and it is a separate row
 			 *  from R1 because a bound that resets to ZERO satisfies R1
@@ -228,6 +259,43 @@ int main(int argc, char *argv[])
 	} else {
 		printf("  --   R2 no signed overflow                       "
 		       "SKIPPED (pass a depth, e.g. 2147487744)\n");
+	}
+
+	/*
+	 *  R6 -- THE BOUND IS RECOMPUTED ON RE-ARM, AND IT IS PER TIMER.
+	 *
+	 *  *** THE CASE LOOP ABOVE ARMS ALL FOUR TIMERS WITH IDENTICAL PARAMETERS AND
+	 *  ARMS EACH EXACTLY ONCE, so it is structurally blind to two mutants a pass-2
+	 *  seat measured walking through everything: *** a bound FROZEN after the first
+	 *  arm (recomputation stops mattering) and a bound written to `[0]` instead of
+	 *  `[timer_nr]` (every timer shares timer 0's).  Neither can be seen by a table
+	 *  where all four timers always agree and nothing is ever re-armed.
+	 *
+	 *  So: arm two timers at DIFFERENT rates, then RE-ARM one at a third, and
+	 *  require each timer's bound to track its own current rate.  Same oracle as
+	 *  R5 -- the peak the counter reaches -- so no new oracle is introduced.
+	 */
+	{
+		int peak, trough;
+		struct footbridge_data *r6 =
+		    (struct footbridge_data *) calloc(1, sizeof(*r6));
+
+		fake_machine.emulated_hz = 50000000;
+		arm(r6, 0, 1, TIMER_ENABLE);			/*  50 MHz  */
+		arm(r6, 1, 256, TIMER_ENABLE | TIMER_FCLK_256);	/*  762 Hz  */
+
+		/*  RE-ARM timer 0 much slower.  A frozen bound keeps 50e6 here.  */
+		arm(r6, 0, 256, TIMER_ENABLE | TIMER_FCLK_256);
+		drive(r6, 0, 4096, &peak, &trough);
+		row("R6 a re-armed timer's bound follows its NEW rate",
+		    peak == 762, "timer 0 re-armed 50 MHz -> 762 Hz: peak %d want 762",
+		    peak);
+
+		/*  And timer 1 must carry ITS own bound, not timer 0's.  */
+		drive(r6, 1, 4096, &peak, &trough);
+		row("R6b each timer carries its OWN bound",
+		    peak == 762, "timer 1: peak %d want 762", peak);
+		free(r6);
 	}
 
 	/*

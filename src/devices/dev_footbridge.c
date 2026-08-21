@@ -283,14 +283,36 @@ static void reload_timer_value(struct cpu *cpu, struct footbridge_data *d,
 	 *  documented command-line flag.  Deleting these two lines is the
 	 *  smallest edit that still passes the rung-3 probe.
 	 *
-	 *  Floor 1, because a 0.0116 Hz timer would otherwise bound at 0 and the
-	 *  counter would be pinned there.  Comparisons are negated so a NaN freq
-	 *  lands on the ceiling rather than falling through, matching
-	 *  timer_clamp_freq()'s idiom.
+	 *  Floor 1.  *** ITS ORIGINAL JUSTIFICATION WAS MEASURED FALSE and is
+	 *  corrected here rather than quietly dropped: *** the comment claimed a
+	 *  0.0116 Hz timer "would otherwise bound at 0 and the counter would be
+	 *  pinned there".  With the floor PRESENT that case already reads peak 1,
+	 *  and with the floor DELETED the harness output is BYTE-IDENTICAL -- a
+	 *  bound of 0 and a bound of 1 both pin at 1.  The floor prevents nothing
+	 *  today; it is kept as a guard against a future bound expression that
+	 *  could go negative, and that is the honest reason.
 	 *
-	 *  Set BEFORE timer_add()/timer_update_frequency() below: the SIGALRM can
-	 *  land between them, and a callback that fires against a stale or zero
-	 *  bound is the window this whole round exists to close.
+	 *  The comparisons are negated, but NOT for the reason first written.
+	 *  timer_clamp_freq() puts its FLOOR first deliberately (timer.c:80-82:
+	 *  "the FLOOR is tested FIRST so a NaN lands SLOW rather than fast"), and
+	 *  this tests the CEILING first -- the inverse.  Harmless, because NaN is
+	 *  UNREACHABLE here: emulated_hz is an int (machine.h:191) and
+	 *  footbridge_effective_cycles() is >= 1 by construction, so this is
+	 *  finite / finite-nonzero.  The claim to "match timer_clamp_freq's idiom"
+	 *  was false in the one respect that idiom is about.
+	 *
+	 *  Set before timer_add()/timer_update_frequency() below.  *** THE REASON
+	 *  FIRST GIVEN HERE -- that a SIGALRM landing between them would find a
+	 *  zero bound -- IS NOT LOAD-BEARING, measured. ***  On the FIRST arm the
+	 *  timer is not in first_timer until timer_add() links it, and timer.c
+	 *  publishes fully-initialised (next stored before first_timer); on later
+	 *  arms the OLD bound is still a valid bound.  A mutant moving this store
+	 *  below the switch is a ZERO-BYTE object delta and passes every row.
+	 *
+	 *  Kept in this order because it reads correctly and costs nothing, not
+	 *  because it closes a window.  Note also that this and the DEVINIT seed
+	 *  are REDUNDANT WITH EACH OTHER -- either alone removes the zero-bound
+	 *  state -- and neither comment used to mention the other doing the work.
 	 */
 	{
 		double bound = freq;
@@ -736,12 +758,22 @@ DEVINIT(footbridge)
 	 *  reload_timer_value() sets the bound, and it is also the only thing that
 	 *  ever creates a struct timer, so no callback can fire before a bound
 	 *  exists.  Initialised here anyway, because that is a two-step argument
-	 *  about a signal handler and a later edit that adds a timer elsewhere would
-	 *  silently break it.  The ceiling is the safe default: it can never
-	 *  throttle, only bound.
+	 *  about a signal handler and a later edit adding a timer elsewhere would
+	 *  silently break it.
+	 *
+	 *  *** THE SEED IS 1, NOT THE CEILING, AND THE FIRST VERSION HAD THIS
+	 *  BACKWARDS. ***  It called the ceiling "the safe default: it can never
+	 *  throttle, only bound."  The ceiling is 68,157,440 -- at cats' 762.94 Hz
+	 *  that is TWENTY-FIVE HOURS of un-acked backlog, i.e. pre-fix behaviour
+	 *  for any run shorter than a day.  Measured: a mutant seeding exactly
+	 *  that value reads 3051 on the drain probe, indistinguishable from
+	 *  pre-fix.  If the scenario this seed exists for ever happened, it would
+	 *  hand that timer the LARGEST bound the fix permits.  1 can only
+	 *  under-deliver, which is the right direction for a value that should
+	 *  never be used.
 	 */
 	for (i = 0; i < N_FOOTBRIDGE_TIMERS; i++)
-		d->pending_bound[i] = TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY;
+		d->pending_bound[i] = 1;
 
 	/*  Connect to the CPU which this footbridge will interrupt:  */
 	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);

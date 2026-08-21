@@ -180,7 +180,12 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  `mark` -> `_mark` (the sh4markspell shape, one round old), and conv_mark's pattern was
 #  extended to see the METHOD form, because this is the first class-based pty probe in the
 #  tree and its guard was invisible to a pattern written for closures.
-EXPECT_CONVERTED=20
+#  20 -> 21 on 2026-08-21: fbpending_witness.py, #442's rung-3 reproduction, COMMITTED as part
+#  of that round's pass 2.  It had lived in _scratchpad/, so a clone could not re-run the
+#  reproduction that licensed the fix -- the mrwstore2 shape, whose probe left no artefact at all.
+#  All three counts move together (21/21/21): it uses the closure form and the `_mark` spelling,
+#  so neither of the two corrections the previous entry needed applies here.
+EXPECT_CONVERTED=21
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not

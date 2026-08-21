@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbpending` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 54 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 53 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -169,6 +169,30 @@ created mid-round, at the moment the stage was ready and the seat was not — wh
 the queue is least likely to get written. Naming the three stages now means the round starts with
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
+
+### 8. `fbpending` (`3193d56`) — regress review, and the round it belongs to shipped UNREVIEWED
+**FABLE-ONLY.** Closed, changed code, no `regress` entry.
+
+Why this is worth flagship time rather than a formality: **the round shipped with no pass 2, no
+CHANGELOG block, and a ledger row still reading `state=held` a day later.** The precommit gate
+caught it by refusing the *next* commit. When the pass 2 finally ran it built twelve mutants and
+found **five passing both detectors, eight passing the only detector any gate runs** — the smallest
+being one token (`freq / 100.0`) that destroys 99% of the guest's clock.
+
+R5 and R6 now close those, and were measured to. But the question a regress pass should ask is the
+one the first detector answered wrongly: **R1 asserted an inequality against a constant while
+printing the very number it should have compared against.** The same shape — an oracle that
+computes the right value and then tests something weaker — is worth looking for in the rows this
+round did *not* touch.
+
+Two specific things, both recorded as untested rather than as findings:
+
+* **`fbpending_drain_probe.py` runs in no gate at all**, and its assertion is opt-in
+  (`--expect-cap`), so wiring it in without the flag would be born vacuous. Choosing the flag's
+  value is choosing what the row asserts — and since the post-fix number is a *modular residue*,
+  not the cap, a one-sided bound cannot tell a cap of 762 from one of 7.
+* **The `fbpending_bound` self-mutant lane still does not run** (`fbsmlane`, dated `SM_EXEMPT` to
+  2026-09-20), so this differential has one failability control where two are intended.
 
 ### 7. `sh4bcr` (`9de16b7`) — regress review, and the reason is a number
 **FABLE-ONLY.** Closed, changed code, no `regress` entry.

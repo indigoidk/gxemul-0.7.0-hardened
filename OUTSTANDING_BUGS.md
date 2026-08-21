@@ -5401,3 +5401,42 @@ Gate 6's fresh-mark census keys on the exact local name `_mark`, so a correct gu
 ### `pitlatch2` — held
 **Does a Counter Latch Command rewind the read flip-flop?** Codex says consuming the latch after one post-latch read contradicts p.8's "two bytes must be read"; the measuring seat reached the same fact and the opposite reading. BOTH agree the local `i8254.txt` does not settle it and there is no second source in the tree. An honest UNKNOWN, not decided by vote.
 
+## 2026-08-21 — #442's residuals, and the first row section P ever caught
+
+*Four rows named in #442's commit message and filed nowhere a tool could see them — the
+`lunafuse` shape, one round after section P was written to stop exactly that. `check_bugfile_sync.py`
+flagged all four the moment they entered the ledger, which is the check earning its keep on its
+first real use rather than on a negative control.*
+
+### `fbdisabled` — held
+**A DISABLED footbridge timer keeps accruing ticks forever.** `dev_footbridge.c` never calls
+`timer_remove()` and never lowers the frequency on disable — `:583` zeroes the counter once and
+leaves the `struct timer` running at full rate. MEASURED: arm / disable / free-run 4 s / re-enable
+/ drain gives backlog **3051, identical to the enabled arm**.
+
+This is a second independent rung-3 reproduction, not a variant. It is also the measurement that
+turned #442's unanimous Q1 answer from a preference into a proof — a consumer-side bound is
+bypassed entirely, delivering **zero** ticks after a 46 s disabled interval. And **a guest that
+disables then re-enables gets an interrupt storm proportional to the gap — **100 pending after 46 s even with #442 shipped**.
+
+*CORRECTED 2026-08-21. This first read "2772 pending", which is arithmetically impossible: the bound is 762 and the counter cannot exceed it. The 2772 was a PRE-FIX projection carried into a post-fix sentence without re-measuring; the real figure is 100, measured on the shipped build. The clause that followed it — "because #442 bounds the rate and not a legitimately accrued debt" — was backwards too: `pending_timer_interrupts` **is** the accrued debt and #442 bounds exactly that. What survives is the defect itself, which #442 does not close: a disabled timer still accrues at full rate, so the storm on re-enable is real — just bounded.*
+
+### `fbclearread` — held
+`case TIMER_1_CLEAR:` never tests `writeflag`, so **a guest READ of the clear register acknowledges
+an interrupt**. A fidelity defect, and a hazard for probes: this project deliberately uses guest
+loads rather than debugger `dump` because `dump` does not route through device handlers — so a
+probe reading this register would silently drain the backlog it was measuring.
+
+### `fbvolatile` — held
+Two footbridge counters cross the SIGALRM boundary as plain `int` (#442 added the second) while
+`dev_mc146818.c:80` declares the identically-used counter `volatile int`. **The tree already holds
+both conventions for one hazard.** Nothing hoists today at -O3 because `random()` is a compiler
+barrier — which is luck, not design, since the fix does not control that call.
+
+### `fbsmlane` — held
+The `fbpending_bound` self-mutant lane does not run; shipped as a dated `SM_EXEMPT` (2026-09-20)
+rather than left red, because a registered-but-broken lane reports SETUP forever and trains the
+reader to ignore it. **Not untested:** the harness carries its own `@@SELFCHECK@@` control, and all
+four mutants were built and run by hand, each killed by a named row. It is the only differential
+that *links* against ~221 build objects rather than compiling standalone, and `selfmutant.py`
+builds in a mirrored tree — so it is a wiring job with a known shape.

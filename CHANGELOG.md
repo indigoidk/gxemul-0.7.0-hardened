@@ -4192,6 +4192,90 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R13 (#442) — an unbounded counter stopped the emulated clock for 40 seconds in every 86
+
+`dev_footbridge.c`. The four timer callbacks incremented `pending_timer_interrupts[]` with no
+bound. On overflow the `int` goes negative, `DEVICE_TICK`'s `> 0` is false, and **the emulated
+clock delivers nothing for 2^31 further ticks.** Two ordinary MMIO writes arm it.
+
+Reproduced at rung 3 before any edit, three runs on an unmodified `-E cats`: wrap at 43.03 /
+43.10 / 44.58 s against a predicted 42.95, ten consecutive zero-tick slices (44.19–84.37 s),
+resume at ~85.9 s. Twelve controls green, including a **quantitative** negative control (MMU-on
+gives a tick/iteration ratio of exactly 1.0000000 against 2064 live) and liveness *during* the
+freeze (VENDOR_ID answered 30/30 including every frozen sample).
+
+Fixed with a per-timer bound of one emulated second of that timer's delivered rate, clamped to
+`TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY` — **derived, not chosen**: the most the core can
+deliver to one timer in one wall second, so it cannot throttle a legitimately fast timer. The
+comparison precedes the increment, because increment-then-check reintroduces the UB at `INT_MAX`;
+the one in-tree precedent (`dev_luna88k.c:252`) does it the other way and is safe only because its
+own reset keeps the counter far below `INT_MAX`.
+
+### This block is late, and so was everything else about this round's records
+
+**The round shipped with no pass 2 and no CHANGELOG block, and the ledger still said the fix did
+not exist a day later.** The precommit gate caught the first — it refused the *next* commit with
+`NO PASS-2 RECEIPT for 3193d56` — and the pass 2, once it ran, found the rest. That is section F
+doing precisely what it was built for, and the round would otherwise have passed unreviewed.
+
+**The pass 2 measured FIVE of twelve mutants passing BOTH detectors**, and the smallest is one
+token:
+
+```
+double bound = freq;   ->   double bound = freq / 100.0;
+```
+
+At a 0.5 s accrual the shipped build owes the guest 375 interrupts and that mutant delivers
+**four** — 99% of the guest's clock destroyed, with both detectors green. The cause was structural:
+`R1` asserted `worst_peak <= ceiling`, an inequality against a *constant*. It computed the case's
+own rate `f`, **printed** it, and compared nothing to it — so any bound between the floor and the
+ceiling satisfied it.
+
+Closed by two rows that need no new oracle, since `f` was already being computed:
+
+| row | what it pins | kills |
+|---|---|---|
+| **R5** | the bound *is* the timer's rate — an equality, not an inequality | `freq/100` (6 rows), bound-is-ceiling (5 rows) |
+| **R6/R6b** | the bound is recomputed on re-arm, and is per timer | bound-frozen-after-first-arm, `[0]`-instead-of-`[nr]` |
+
+R6 exists because the case table **arms all four timers with identical parameters and arms each
+exactly once**, so it was structurally blind to both of those.
+
+### Four comments in the shipped code were measurably false, and are corrected here
+
+* The clamp claimed to match `timer_clamp_freq`'s NaN idiom. **It is the inverse.** `timer.c:80-82`
+  puts the floor first *deliberately* — *"so a NaN lands SLOW rather than fast"* — and this tested
+  the ceiling first. Harmless, because NaN is unreachable (`emulated_hz` is an `int`,
+  `footbridge_effective_cycles()` is ≥ 1 by construction), but the claim was false in the one
+  respect the idiom is about.
+* The floor's stated reason was false. It claimed a 0.0116 Hz timer *"would otherwise bound at 0
+  and the counter would be pinned there"*. With the floor present that case already reads peak 1,
+  and with it deleted the output is **byte-identical**.
+* The ordering comment called itself load-bearing. **It is not** — moving the store below the
+  switch is a zero-byte object delta that passes every row. It and the `DEVINIT` seed are
+  redundant with each other, and neither comment mentioned the other doing the work.
+* **The `DEVINIT` seed used the wrong constant.** It seeded the *ceiling* and called that "the safe
+  default: it can never throttle, only bound." At cats' 762.94 Hz the ceiling is **twenty-five
+  hours** of un-acked backlog — a mutant seeding it reads 3051 on the drain probe, indistinguishable
+  from pre-fix. Now seeded to 1, which can only under-deliver.
+
+### And a number filed twice that the fix makes impossible
+
+The commit message and `OUTSTANDING_BUGS.md` both said *"2772 pending after 46 s even with #442
+shipped"*. **The bound is 762; the counter cannot exceed it.** Measured on the shipped build: 100.
+The clause that followed — *"because #442 bounds the rate and not a legitimately accrued debt"* —
+was backwards as well: `pending_timer_interrupts` **is** the accrued debt. It was a pre-fix
+projection carried into a post-fix sentence without re-measuring. The defect it describes survives
+(`fbdisabled`); only the figure was wrong.
+
+The drain probe's own docstring claimed *"post-fix it is the cap"*. Also false: once the bound is
+first reached the number is a **modular residue** of the delivered tick count — 3 at 4 s, 100 at
+46 s, 375 at 0.5 s, one binary, one bound. That is why `--expect-cap` is one-sided and cannot tell
+a bound of 762 from one of 7, and why R5/R6 had to live in the offline harness instead.
+
+The witness is now **committed** as `regress/fbpending_witness.py`. It lived in `_scratchpad/`,
+so a clone could not re-run the reproduction that licensed the fix.
+
 ## R12 (#440) — the 16-bit LSB/MSB selector was one-way, so the device reprogrammed itself to zero
 
 `dev_8253.c`. The 16-bit read/write selector was a ONE-WAY clear:
