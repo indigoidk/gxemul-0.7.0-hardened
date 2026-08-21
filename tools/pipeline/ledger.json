@@ -13111,8 +13111,27 @@
      "note": "MEASURED on the committed build/gxemul while establishing reachability for the vr41xx site:\n    e105  rc=134 (SIGABRT, core dumped)      z50                   rc=0\n    be300 rc=134 (SIGABRT, core dumped)      mobilepro770          rc=0\n    vr3   rc=134 (SIGABRT, core dumped)      mobilepro780/800/880  rc=0\ngdb: interrupt_handler_lookup() -> abort(), 'interrupt_handler_lookup(\"0\") failed', from devinit_ns16550 <- device_add <- machine_setup_hpcmips.\n\nCAUSE IS IN THE SOURCE: machine_hpcmips.c:84 and :114 pass irq=0 -- a bare \"0\", not an interrupt path like machine[0].cpu[0].2 -- and :242 passes irq=%i with an integer. Those three lines map to exactly BE300 (:72), E105 (:102), VR3 (:223). *** THREE BAD SITES, THREE ABORTING SUBTYPES, 1:1. ***  The /* TODO: irq? */ above :114 is the author's own flag. Upstream defect, inherited: git log shows only 39748e3. Identical in est/ and SEC.\n\n*** GATE BLIND SPOT: hpcmips APPEARS NOWHERE UNDER regress/ *** -- no construction row, no grep, nothing. The shipped binary advertises eight subtypes in -H and core-dumps on three of them, and no gate can say so.\n\nRung 2 and VALID: this IS a construction-time defect, which is exactly the case rung 2 licenses. Already reproduced. FIX + DETECTOR (the first hpcmips construction row in regress/). Ranked SECOND behind the vr41xx narrowing, deliberately: the silent defect outranks the loud one by this project's own dev_footbridge.c:136-141 reasoning -- a guest waiting forever on a tick that never comes is worse than a loud recoverable fault.",
      "grade": "CONFIRMED",
      "ev": "build/gxemul -E hpcmips subtypes; machine_hpcmips.c:84,114,242"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** WITNESS BUILT AND REPRODUCED, 24/24, deterministic across two runs. ***  The failing call is INTERRUPT_CONNECT(devinit->interrupt_path, d->irq) at dev_ns16550.c:342, reached only via device_add() from the machine-setup switch.\n\nRUNG 2 IS THE CEILING, NOT A SHORTCUT, and the seat argued it rather than asserting it: a rung-3 cold-debugger probe needs a CONSTRUCTED machine and construction is what aborts; rung 4 needs that plus an image, and there is no hpcmips image in _images/. The rung-1 exclusion is respected -- nothing is #included, no function called directly, no stub substituted. Strip the machine description and this measures nothing, BECAUSE THE MACHINE DESCRIPTION IS THE DEFECT'S CARRIER. That is exactly the case the ladder licenses rung 2 for.\n\n    subtype                      rc            class           failing name\n    be-300                       -6 SIGABRT    ABORT_LOOKUP    \"0\"\n    e-105                        -6 SIGABRT    ABORT_LOOKUP    \"0\"\n    agenda (vr3)                 -6 SIGABRT    ABORT_LOOKUP    \"17\"\n    workpad, mobilepro770/780/800/880   0      CONSTRUCTED_OK  --\n\n*** THE STRONGEST CONTROL IS DERIVED FROM SOURCE CALL ORDER RATHER THAN HARDCODED, and it is also the fix-design measurement: ***  BE-300 and E-105 call device_add BEFORE dev_vr41xx_init, so the process prints SIX handlers (machine[0].cpu[0].2-7, no vrip.); VR3 calls dev_vr41xx_init first, so it prints SIXTY-FOUR including vrip.*. Both predictions matched. A DISCRIMINATION control also passes: -E mvmeppc -e mvme1600 really does SIGABRT, with a different message, and classifies ABORT_OTHER -- 'the process died' is not the same claim as 'it died HERE'.\n\n*** A BUFFERING TRAP BIT IT FIRST, and it is worth carrying: abort() does not flush stdio, so with output to a pipe the diagnostic VANISHED and be-300 produced a 43-BYTE FILE. ***  The probe now requires stdbuf -o0 -e0 and rows go red if an aborting run's diagnostic did not arrive. A probe that reads an empty file as 'no diagnostic' would have mis-attributed the defect entirely.\n\nLINE NUMBERS RE-DERIVED AT RUN TIME rather than remembered -- and this time the brief's were RIGHT (:84, :114, :242, cases :72, :102, :223), which is worth recording given that the previous round's brief had five wrong. Two corrections: the /* TODO: irq? */ appears above TWO of them (:83, :113), not one, and VR3 has a different TODO at :237-238. VRIP_INTR_SIU = 9 at vripreg.h:284, so VR3's 8+VRIP_INTR_SIU is 17.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/hpcabort_witness.py, 24/24"
+    },
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "THE FIX DESIGN IS MEASURED, NOT GUESSED -- and two obvious 'fixes' are measured WRONG.\n\nThe five working hpcmips subtypes are no model: THEY ADD NO ns16550 AT ALL. The tree's idiom is at 14 sibling sites (machine_cobalt.c:73 irq=%s.cpu[%i].5, machine_evbmips.c:74, machine_arc.c:156/161, machine_sgi.c:394/400). The registered names come from dev_vr41xx.c:691-702: \"%s.cpu[%i].vrip.%i\", i = 0..25. Probed on a CONSTRUCTED z50 through the same device_add -> DEVINIT -> INTERRUPT_CONNECT path:\n    irq=machine[0].cpu[0].vrip.9    ACCEPTED, device added, rc=0\n    irq=machine[0].cpu[0].vrip.25   accepted (last registered line)\n    irq=machine[0].cpu[0].vrip.26   ABORTS  <- boundary control, so acceptance is a real lookup\n    irq=0 / irq=17                  abort (matches construction)\n    omit irq= entirely              *** ABORTS *** -- device.c:281-282 defaults to\n                                    machine[0].cpu[0], which is NOT registered on MIPS\n    irq= (empty)                    *** ABORTS *** -- interrupt.c:174-179 has NO return; the\n                                    'No interrupt' branch fills the template and then FALLS\n                                    INTO the scan loop and aborts anyway\n\n*** SO 'JUST DELETE THE irq=' IS NOT A FIX, MEASURED TWICE OVER. ***  The fix is irq=%s.cpu[%i].vrip.%i with machine->path, machine->bootstrap_cpu, VRIP_INTR_SIU -- AND BE-300/E-105 MUST MOVE device_add AFTER dev_vr41xx_init, which the six-versus-sixty-four handler count proves is necessary rather than tidy.\n\nUPSTREAM, NOT THIS FORK: git log --all on machine_hpcmips.c shows exactly one commit, 39748e3 'Import GXemul 0.7.0', and git blame attributes every line of all three sites to that boundary commit.\n\nHONEST LIMIT the seat insisted on: whether vrip.9 is the CORRECT hardware line for these UARTs is NOT measurable here -- there is no VR41xx datasheet in _scratchpad/ (the same gap as SH). VRIP_INTR_SIU is the tree's own name for the serial unit and the source's TODO is explicitly unsure. Treat the line number as a judgement and the FORM as measured.",
+     "grade": "CONFIRMED",
+     "ev": "probed on a constructed z50; git blame machine_hpcmips.c"
     }
-   ]
+   ],
+   "witness": "construction:_scratchpad/hpcabort_witness.py (RUNG 2, and the rung is the CEILING here rather than a shortcut -- see the entry)"
   },
   {
    "id": "lunafuse",
@@ -13510,13 +13529,13 @@
   {
    "id": "sh4pcicexit",
    "title": "sh4pcicexit  sh4_pcic has ELEVEN exit(1) sites and ~116 word offsets reach its default:, plus five more value guards in DEVICE_ACCESS(sh4) itself",
-   "state": "held",
-   "commits": "",
-   "hold": "Bigger than #441 and cheaper to reach. Ranks with hlen/devexit as the exit(1) sweep.",
+   "state": "closed",
+   "commits": "6bec468",
+   "hold": "",
    "closure": {
-    "by": "",
-    "badge": "",
-    "note": ""
+    "by": "opus5",
+    "badge": "A",
+    "note": "Shipped as 6bec468. Badge A: the main loop implemented and the detector was built by a measuring seat under its direction.\n\nWHAT SHOULD BE WEIGHED: eight mutants, eight dead, and two of the eight are only caught by a handful of rows -- deleting the restores dies to EXACTLY TWO rows, and a latch that keeps the per-offset BIT while losing the per-offset WORD passes both the per-offset and per-device rows and is seen only by the census message-set rows. The detector declares one line of the fix as genuinely VOID rather than claiming coverage it does not have.\n\nAlso weighed: this round's brief carried five wrong line numbers copied from an earlier seat without opening the file, and the first implementation pass mangled nine message strings with regex surgery and was reverted."
    },
    "entries": [
     {
@@ -13617,9 +13636,99 @@
      "note": "*** DELIBERATELY NOT FIRED -- NOT A SEAT FAILURE AND NOT AGREEMENT. ***  Standing owner directive deprioritising this seat; it is alive and was withheld on instruction. 8 of 9 fired, 7/7 scriptable answered.",
      "grade": "UNKNOWN",
      "ev": "owner directive"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "DETECTOR SHIPPED AND WIRED. regress/sh4_pcic_probe.py, 29 rows, 17 s, wired into gate 10 IN THE SAME COMMIT -- which is the structural point: both sh_halt_probe and #441's sh4_bsc_width_probe shipped UNWIRED, and gate 6's own note says a probe that ships with its wiring cannot skip its census pin, because the wiring forces a gate run.\n\nEIGHT MUTANTS, EIGHT DEAD:\n    pre-fix                            10/29   19 rows\n    naive (drop exit(1) only)          16/29   P3, P3b, P2b + 10 more\n    the restores deleted               27/29   *** P3 and P3b, AND NOTHING ELSE ***\n    per-device latch                   25/29   P5, P1b, P1c, P1f\n    default: returns pcic_reg[]        28/29   *** P2b ONLY ***\n    latch never latches                26/29   P4, P1d, P1f\n    latch WORD index forced to 0       26/29   P1b, P1c, P1f -- P4 AND P5 SURVIVE\n    pcic_old captured after the store  27/29   P3, P3b\n\n*** THE NAIVE FIX IS THE INTERESTING ROW: at 16/29 the host GENUINELY STOPS DYING -- P1, P1e and P12a/b/c all go green -- and it is P3/P3b/P2b that catch the silent corruption it leaves behind. *** That is the measurement behind this round's central design point.\n\nTWO LINES OF THE FIX ARE ONLY TESTABLE THROUGH ADDRESS ALIASING, and the probe says so rather than quietly relying on it: PCIC_REG() indexes the WORD while the switch dispatches on the FULL ADDRESS, so 0xfe200015 reaches default: while sharing PCICONF5's slot. Without that, `odata = 0` and the default: restore are unobservable, since nothing else in the tree reads pcic_reg[].",
+     "grade": "CONFIRMED",
+     "ev": "regress/sh4_pcic_probe.py kill table, 8 mutants"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** VERDICT: SHIP WITH CHANGES, and it broke the detector seven times out of seven. ***  Every mutant it built scored 29/29, including one that reinstated the original host kill verbatim. It also found the shipped latch merging different faults, then measured MY FIX FOR THAT as half a fix -- two classes closed the aliasing case and left PCICONF0 open. Detector 29 -> 38; all seven now die; no new row vacuous.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Answered the pass-2 panel, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_015232/ + opus5"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "⏸",
+     "date": "2026-08-21",
+     "note": "*** DELIBERATELY NOT FIRED -- NOT A SEAT FAILURE AND NOT AGREEMENT. ***  Standing owner directive deprioritising this seat.",
+     "grade": "UNKNOWN",
+     "ev": "owner directive"
     }
    ],
-   "witness": "probe:_scratchpad/sh4pcic_witness.py (rung 3, unmodified -E landisk; 30/30 pre-fix with a 274-session census, 15/30 post-fix because it asserts the pre-fix symptom -- the detector is a separate artefact)"
+   "witness": "probe:regress/sh4pcic_witness.py (rung 3, unmodified -E landisk; 30/30 pre-fix with a 274-session census of all 137 offsets x both directions, 15/30 post-fix because it asserts the pre-fix symptom). Detector: regress/sh4_pcic_probe.py, 29 rows, wired into gate 10 in the same commit."
   },
   {
    "id": "sh4partialread",
@@ -13788,6 +13897,144 @@
      "note": "*** SHIPPED AS A DATED SM_EXEMPT (2026-09-20) RATHER THAN LEFT RED, and this row is the written-down half of that decision. ***  A registered-but-broken lane reports SETUP forever and trains the reader to ignore it, which is worse than a declared gap.\n\nWHAT IS NOT MISSING, so the exemption is not read as 'untested': the harness carries its own @@SELFCHECK@@ comparator control and the SC manifest covers it, and all four mutants were built and run BY HAND against the tracked tree on 2026-08-20, each killed by a named row -- pre-fix (R1 x7 and R2 trough -2147483648), reset-to-0 (R3 x7), one-callback (R1 x7), no-ceiling (R1 on the two high-hz cases). The .old/.new/.why fragments are committed and describe exactly that.\n\nWHY IT IS AWKWARD: diff_fbpending_bound.c is the ONLY differential that LINKS against ~221 build objects rather than compiling standalone, and selfmutant.py builds in a mirrored tree, so the object paths and the -I for the mirrored src/devices both have to be right at once. Getting the object list wrong is silent -- an early attempt passed a malformed list through a mangled `tr` and produced a link error inside reload_timer_value() that looked like a real defect.\n\nSo it is a WIRING job with a known shape, not a design question. Two failability controls are meant to exist here and only one does.",
      "grade": "CONFIRMED",
      "ev": "regress/selfmutants/fbpending_bound.why; gate_offline.sh SM_EXEMPT"
+    }
+   ]
+  },
+  {
+   "id": "sh4valguards",
+   "title": "sh4valguards  Four guest-reachable value-guard exit(1)s remain in DEVICE_ACCESS(sh4) itself -- the switch #443 did NOT touch",
+   "state": "held",
+   "commits": "",
+   "hold": "Same class as hlen/devexit/sh4bcr. Its witness is largely built: #443's probe machinery reaches these addresses already.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "MEASURED with matched surviving controls, and RE-DERIVED because the line numbers in circulation were all wrong (#441 had shifted the file and they were copied rather than opened):\n    :1692  ICR bit 7 set            kills -- \"IRLM not yet supported\"\n    :1963  RCR1 mask 0x18           kills -- and the mask is bits 3 AND 4, not bit 3\n    :1453  DMATCR0 top 8 bits set   kills\n    :1369  TCR write with ICPF|ICPE1|ICPE0|CKEG1|CKEG0|TPSC2   kills\n\n*** TWO CLAIMS IN THE ORIGINAL FILING ARE REMOVED RATHER THAN CARRIED: ***  :1343 is `pclock == 0`, an INTERNAL error rather than a guest value guard, and unreachable on landisk which sets pclock at machine_landisk.c:81. And DEVICE_ACCESS(sh4)'s own default: at :1992 does NOT kill at all -- its exit(1) is inside `#ifdef SH4_DEBUG` and `grep -rn SH4_DEBUG src/` returns only the two #ifdefs, so it is defined NOWHERE. Measured: a read of 0xff000004 returns 0 and survives. #443's witness keeps that as a control row so the claim cannot drift back in.\n\nSo the sibling cluster is FOUR, not five or six. Different semantic class from #443 (value guards on known registers, not unimplemented offsets), so the reopening rule barred them from that round -- each needs its own 'what should this register do with an unexpected value' decision.",
+     "grade": "CONFIRMED",
+     "ev": "dev_sh4.c re-derived and measured; grep -rn SH4_DEBUG src/"
+    }
+   ]
+  },
+  {
+   "id": "sh4pcicvoid",
+   "title": "sh4pcicvoid  One line of #443's fix is genuinely void: `odata = 0` in the unimplemented-CPU PCICONF0 arm cannot be distinguished from its absence",
+   "state": "held",
+   "commits": "",
+   "hold": "Records-only unless the restore logic changes. No round owed.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "DECLARED BY THE DETECTOR RATHER THAN DISCOVERED LATER, which is the point of recording it. dev_sh4.c's PCICONF0 read arm answers 0 for an unimplemented CPU type, and row P10 asserts alive + the named diagnostic + a zero answer -- but it CANNOT tell that assignment from its absence, because PCICONF0's array slot cannot be made non-zero while the restores hold.\n\nNot a defect in the fix; a gap in what any row can prove about it. Recorded so that a later reader does not count P10 as covering that line, and so a future change to the restore logic does not silently make the line matter again with nothing watching.\n\nRelated and also declared: `bit = 1u << (idx & 31)`'s `& 31` is UB-avoidance rather than behaviour on x86-64, so a mutant dropping it would be VOID. The measuring seat did not build one and said so, which is the right call -- an equivalent mutant scored as a survivor is worse than no mutant.",
+     "grade": "CONFIRMED",
+     "ev": "regress/sh4_pcic_probe.py row P10"
+    }
+   ]
+  },
+  {
+   "id": "bscunwired",
+   "title": "bscunwired  #441's sh4_bsc_width_probe.py still runs in no gate, two rounds after shipping",
+   "state": "held",
+   "commits": "",
+   "hold": "~15 lines in gate_sh_rounding.sh, copying #443's block. Wants one gate run to confirm, so it is not a zero-cost drive-by.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "#443 wired ITS probe into gate 10 in the same commit, which is what gate 6's structural note asks for. #441's did not get that treatment and is still referenced by nothing: gate_hygiene only COUNTS it in the probe census.\n\n*** THAT IS THE witnessunwired CLASS, AND THIS IS ITS FIFTH RECORDED INSTANCE. ***  The cost is concrete rather than theoretical: #441's row K passes on a witness artefact nothing executes, so a regression in dev_sh4.c's BCR2/BCR3 width handling would be caught by no gate at all. #443's wiring is a two-block template that applies almost verbatim -- the probe takes the same <binary> <kernel> arguments and prints the same RESULT/PASS token shape.\n\nCheap, and it is the kind of cheap that does not happen unless it is written down.",
+     "grade": "CONFIRMED",
+     "ev": "grep -rln sh4_bsc_width_probe regress/ -- comments only"
+    }
+   ]
+  },
+  {
+   "id": "ctorabortclass",
+   "title": "ctorabortclass  The same construction abort fires on EIGHT subtypes across FOUR machines, not three across one",
+   "state": "held",
+   "commits": "",
+   "hold": "Do hpcabort first; this is its sweep. The witness already enumerates from -H, so the marginal cost is small once the first fix design is settled.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "MEASURED by sweeping every advertised type/subtype, so this is a census rather than a suspicion. Besides hpcmips's three, the identical interrupt_handler_lookup abort fires on:\n    decstation/5400   irq=\"irq? TODO\"\n    decstation/5500   irq=\"TODO: irq\"\n    mvmeppc/mvme2100  irq=\"0\"\n    sgi/ip19, sgi/ip27\n*** EIGHT SUBTYPES ACROSS FOUR MACHINES. ***  Inside hpcmips there are no latent copies -- the file has exactly three device_add calls and all three are in the aborting arms.\n\nOne genuinely LATENT instance worth distinguishing from the eight: machine_alpha.c:71 (z8530 with irq=0) sits in `case ST_DEC_3000_300:`, which -H never advertises, and all three alpha subtypes construct. Latent is not the same as reachable and the row says so.\n\nSeparate round from hpcabort under the reopening rule -- different machines, different files, and the correct interrupt path differs per machine, so one fix design does not cover them. But hpcabort's witness generalises: it enumerates subtypes from the binary's own -H rather than a hardcoded list, so pointing it at these costs almost nothing.",
+     "grade": "CONFIRMED",
+     "ev": "full type/subtype sweep of the committed binary"
+    }
+   ]
+  },
+  {
+   "id": "asansweepblind",
+   "title": "asansweepblind  Gate 9 cannot see a construction abort at all, and its awk silently re-attributes SGI's twelve subtypes to rpi",
+   "state": "held",
+   "commits": "",
+   "hold": "Harness round. The awk fix is small; making the gate see aborts is a design question (a floor cannot express 'none of them died').",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "research",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** TWO INDEPENDENT DEFECTS IN ONE GATE, both measured while establishing that gate 9 does not cover hpcabort. ***\n\n(1) IT CANNOT SEE AN ABORT. sanhit() greps only for ASan/UBSan/SEGV text, so `Aborting.` scores ZERO hits. The only construction assertion is a FLOOR (check_min \"machine types constructed\" 20), which a few aborting types cannot breach. And it tries only each type's FIRST subtype -- so a defect in any later subtype is invisible by construction. Eight subtypes across four machines currently abort and gate 9 is green.\n\n(2) *** ITS awk AT :50-55 REQUIRES THE PRIMARY ALIAS TO MATCH [a-z0-9_.-]+, AND SGI'S IS \"silicon graphics\" -- WITH A SPACE. ***  So SGI is dropped as a type and its twelve subtypes are SILENTLY RE-ATTRIBUTED TO rpi. Verified in the gate's own output: rows read `S rpi ip12` through `S rpi ip35`, and the count for type `sgi` is ZERO.\n\nThat second one is worse than it looks: the gate reports coverage of twelve subtypes under the wrong machine name, so a reader checking 'is SGI covered' sees a type with no rows and a reader checking rpi sees twelve rows that are not rpi's. Both readings are wrong and neither is red.",
+     "grade": "CONFIRMED",
+     "ev": "gate_asan_sweep.sh:50-55 awk; sanhit(); its own output rows"
+    }
+   ]
+  },
+  {
+   "id": "pcicmergeA",
+   "title": "pcicmergeA  The PCICONF0 latch-merge reproduction has no detector row, and could not have had one until the third fault class landed",
+   "state": "held",
+   "commits": "",
+   "hold": "Three lines, but needs a probe run made AFTER the third class landed. Not a design question.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Of the two measured reproductions of #443's latch-merge defect, only ONE became a row.\n\n    A  -C SH7750: write PCICONF0, then READ it -- the 'read for unimplemented CPU type' line was ABSENT, though that read alone in a fresh process prints it.\n    B  byte-write 0xfe200015, then word-write 0xfe200014 -- 'PCICONF5 unknown value' was ABSENT, because PCIC_REG() maps both addresses to one word.\n\nP20 is built on B. *** A COULD NOT BECOME A ROW AT THE TIME, AND THE REASON IS THE PART WORTH KEEPING: writing it against the two-class code would have CEMENTED THE DEFECT *** -- the row would have asserted the merged behaviour as correct, and a future correct fix would then have looked like a regression. The seat named that and declined, rather than writing a row that passed.\n\nThe third class (SH4_PCIC_NOCPU) now exists, so the row is three lines. Filed rather than written because it needs a probe run made AFTER that class landed, and this round's last probe run predates it by one edit. An untested row is the same mistake in the other direction.",
+     "grade": "CONFIRMED",
+     "ev": "#443 pass-2 seat; dev_sh4.c SH4_PCIC_NOCPU"
     }
    ]
   }

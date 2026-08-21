@@ -5440,3 +5440,80 @@ reader to ignore it. **Not untested:** the harness carries its own `@@SELFCHECK@
 four mutants were built and run by hand, each killed by a named row. It is the only differential
 that *links* against ~221 build objects rather than compiling standalone, and `selfmutant.py`
 builds in a mirrored tree — so it is a wiring job with a known shape.
+
+## 2026-08-21 — #443's residuals: what the round did NOT do, and one line it cannot prove
+
+### `sh4valguards` — held
+**Four guest-reachable value-guard `exit(1)`s remain in `DEVICE_ACCESS(sh4)` itself** — the switch
+`#443` did not touch. Measured with matched surviving controls, and **re-derived, because every
+line number in circulation was wrong**: `#441` had shifted the file and the numbers had been
+copied rather than opened.
+
+```
+:1692  ICR bit 7 set                    kills -- "IRLM not yet supported"
+:1963  RCR1 mask 0x18                   kills -- bits 3 AND 4, not bit 3
+:1453  DMATCR0 top 8 bits set           kills
+:1369  TCR write with ICPF|ICPE1|...    kills
+```
+
+**Two claims removed rather than carried forward:** `:1343` is `pclock == 0`, an *internal* error
+rather than a guest value guard, unreachable on landisk which sets pclock at
+`machine_landisk.c:81`. And `DEVICE_ACCESS(sh4)`'s own `default:` **does not kill at all** — its
+`exit(1)` is inside `#ifdef SH4_DEBUG`, and `grep -rn SH4_DEBUG src/` returns only the two
+`#ifdef`s, so it is defined nowhere. A read of `0xff000004` returns 0 and survives. `#443`'s
+witness keeps that as a control row so the claim cannot drift back in. **The sibling cluster is
+four, not six.**
+
+### `bscunwired` — held
+**`#441`'s `sh4_bsc_width_probe.py` still runs in no gate**, two rounds after shipping — the fifth
+recorded instance of the `witnessunwired` class. `#443` wired *its* probe into gate 10 in the same
+commit; `#441`'s is referenced by nothing but the probe census. The cost is concrete: a regression
+in BCR2/BCR3 width handling would be caught by no gate. `#443`'s wiring is a two-block template
+that applies almost verbatim.
+
+### `sh4pcicvoid` — held (records-only)
+**One line of `#443`'s fix is genuinely void and the detector says so rather than claiming
+coverage**: `odata = 0` in the unimplemented-CPU PCICONF0 arm cannot be distinguished from its
+absence, because that slot cannot be made non-zero while the restores hold. Recorded so a later
+reader does not count row P10 as covering it, and so a future change to the restore logic does not
+silently make the line matter again with nothing watching. Likewise `& 31` in the latch is
+UB-avoidance rather than behaviour on x86-64 — a mutant dropping it would be an equivalent mutant,
+and the measuring seat correctly declined to build one and said why.
+
+### `pcicmergeA` — held
+Of the two measured reproductions of `#443`'s latch-merge defect, only one became a detector row.
+**The other could not have, and the reason is the interesting part: writing it against the
+two-class code would have *cemented* the defect** — the row would have asserted the merged
+behaviour as correct. The seat said so rather than writing a row that passed. The third fault class
+now exists, so the row is three lines; filed rather than written because it needs a probe run made
+*after* that class landed, and writing an untested row is the same mistake in the other direction.
+
+### `ctorabortclass` — held
+**The same construction abort fires on EIGHT subtypes across FOUR machines**, not three across one
+— measured by sweeping every advertised type/subtype rather than suspected. Besides `hpcmips`'s
+three: `decstation/5400` (`irq="irq? TODO"`), `decstation/5500` (`"TODO: irq"`),
+`mvmeppc/mvme2100` (`"0"`), `sgi/ip19`, `sgi/ip27`. Inside `hpcmips` there are no latent copies —
+the file has exactly three `device_add` calls and all three are in the aborting arms.
+
+One genuinely *latent* instance is worth distinguishing from the eight: `machine_alpha.c:71`
+(`z8530`, `irq=0`) sits in `case ST_DEC_3000_300:`, which `-H` never advertises, and all three
+alpha subtypes construct. Latent is not reachable, and the row says so.
+
+Separate round from `hpcabort` under the reopening rule — different machines, different files, and
+the correct interrupt path differs per machine — but `hpcabort`'s witness enumerates subtypes from
+the binary's own `-H` rather than a hardcoded list, so pointing it at these costs almost nothing.
+
+### `asansweepblind` — held
+**Two independent defects in gate 9**, both measured while establishing that it does not cover
+`hpcabort`.
+
+**It cannot see an abort at all.** `sanhit()` greps only for ASan/UBSan/SEGV text, so `Aborting.`
+scores zero hits. The only construction assertion is a *floor* (`check_min "machine types
+constructed" 20`), which a few aborting types cannot breach. And it tries only each type's **first**
+subtype. Eight subtypes across four machines currently abort and gate 9 is green.
+
+**Its awk silently re-attributes SGI's twelve subtypes to `rpi`.** `gate_asan_sweep.sh:50-55`
+requires the primary alias to match `[a-z0-9_.-]+`, and SGI's is `"silicon graphics"` — with a
+space. Verified in the gate's own output: rows read `S rpi ip12` through `S rpi ip35`, and the count
+for type `sgi` is **zero**. A reader checking "is SGI covered" sees a type with no rows; a reader
+checking `rpi` sees twelve rows that are not `rpi`'s. Both readings are wrong and neither is red.

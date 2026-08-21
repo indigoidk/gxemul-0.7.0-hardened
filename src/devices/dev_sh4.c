@@ -72,6 +72,17 @@
 #define	N_PCIC_REGS			(0x224 / sizeof(uint32_t))
 #define	N_PCIC_IRQS			16
 #define	PCIC_REG(addr)			((addr - SH4_PCIC) / sizeof(uint32_t))
+
+/*
+ *  #443 pass 2: the latch's FAULT CLASSES.  One offset can produce two genuinely
+ *  different complaints -- an unimplemented-offset access and a known register
+ *  rejecting a value -- and a single flag per offset reports whichever came first
+ *  and silently swallows the other.
+ */
+#define	SH4_PCIC_UNIMPL			0	/*  offset this device does not implement  */
+#define	SH4_PCIC_BADVAL			1	/*  known register, unexpected value      */
+#define	SH4_PCIC_NOCPU			2	/*  known register, CPU type not modelled */
+#define	SH4_PCIC_NCLASS			3
 #define	PCI_VENDOR_HITACHI		0x1054
 #define	PCI_PRODUCT_HITACHI_SH7751	0x3505
 #define	PCI_PRODUCT_HITACHI_SH7751R	0x350e   
@@ -148,7 +159,9 @@ struct sh4_data {
 	    ONCE and a second, DIFFERENT one is not hidden behind the first.  A
 	    per-device flag would hide it (the "1 of 4 kinds" hazard #438 recorded);
 	    137 named flags would be absurd.  This is five words.  */
-	uint32_t	pcic_reported[(N_PCIC_REGS + 31) / 32];
+	/*  #443 pass 2: [fault class][word].  TWO classes, not one -- see
+	    sh4_pcic_first().  */
+	uint32_t	pcic_reported[SH4_PCIC_NCLASS][(N_PCIC_REGS + 31) / 32];
 
 	/*  SCI (serial interface):  */
 	int		sci_bits_outputed;
@@ -837,23 +850,70 @@ DEVICE_ACCESS(sh4_utlb_da1)
  *  can become newly reachable"); in this file the assignment is not later, it is
  *  upstream, which is worse.  Every rejecting arm therefore restores the previous word.
  *
- *  (2) The complaint is latched PER WORD OFFSET.  fatal() has no quiet_mode early-out --
- *  unlike debug() -- so an unlatched complaint could not be silenced even with -q, and a
- *  guest looping on a rejected write would trade a host kill for a host-CPU burn.
+ *  (2) The complaint is latched PER WORD OFFSET *AND PER FAULT CLASS*.  fatal() has no
+ *  quiet_mode early-out -- unlike debug() -- so an unlatched complaint could not be
+ *  silenced even with -q, and a guest looping on a rejected write would trade a host
+ *  kill for a host-CPU burn.
+ *
+ *  *** THE FAULT CLASS WAS ADDED IN PASS 2, BECAUSE LATCHING PER OFFSET ALONE
+ *  REPRODUCED THE HAZARD THIS DESIGN EXISTS TO AVOID -- one level down. ***  #438
+ *  recorded a per-device latch hiding "1 of 4 kinds"; a per-offset latch hides one of
+ *  two kinds at the SAME offset, because one offset can raise two genuinely different
+ *  complaints.  Measured twice on the shipped binary, one process each:
+ *
+ *    -C SH7750: a write to PCICONF0 printed, and the later "PCICONF0 read for
+ *    unimplemented CPU type" was ABSENT -- though that read alone in a fresh process
+ *    does print it.
+ *
+ *    a byte-write at 0xfe200015 printed "unimplemented addr", and the later
+ *    "PCICONF5 unknown value" at 0xfe200014 was ABSENT, because PCIC_REG() maps both
+ *    addresses to one word.
+ *
+ *  Severity was diagnostic-only -- the restore sits OUTSIDE the `if`, so device state
+ *  stayed correct either way -- but the comment above claimed a property the code did
+ *  not have, and that is the kind of wrong record this project treats as a defect
+ *  rather than a wording nit.
+ *
+ *  *** AND TWO CLASSES WERE NOT ENOUGH: THE FIRST ATTEMPT AT THIS FIX WAS HALF A FIX,
+ *  MEASURED. ***  It closed the aliasing case and left the PCICONF0 one open, because
+ *  BOTH of that register's complaints -- a rejected write, and a read under a CPU type
+ *  this device does not model -- were SH4_PCIC_BADVAL at the same word index, so they
+ *  still shared one bit:
+ *
+ *    -C SH7750, read only        latched=1, "read for unimplemented CPU type" PRESENT
+ *    -C SH7750, write then read  latched=1, that line ABSENT   <- STILL MERGED
+ *
+ *  A third class fixes it, and the general lesson is worth more than the fix: the
+ *  classes are not "kinds of register", they are KINDS OF COMPLAINT, and one register
+ *  can raise several.  Counting them from the register's point of view is what produced
+ *  the half-fix.  Three classes cost thirty bytes.
+ *
+ *  THE RESTORE'S PLACEMENT OUTSIDE THE `if` IS LOAD-BEARING FOR THE SAME REASON: a
+ *  pass-2 mutant that braced it INSIDE -- a brace slip, the kind a tidy-up produces --
+ *  re-opened silent corruption on the second offence at all ten arms, and passed every
+ *  detector row.
  */
-static int sh4_pcic_first(struct sh4_data *d, uint32_t addr)
+static int sh4_pcic_first(struct sh4_data *d, uint32_t addr, int cls)
 {
 	size_t idx = PCIC_REG(addr);
 	uint32_t bit;
 
+	/*  #443 pass 2: this bounds check is NOT what protects the arrays, and a
+	    reader should not take it for that.  pcic_reg[] is indexed with the same
+	    expression at the top of dev_sh4_pcic_access() with NO check, so if the
+	    registered window ever grew, THAT out-of-range access would happen first
+	    and this one would never get the chance.  Kept because it is correct and
+	    free; the real guarantee is that memory_device_register() registers
+	    exactly N_PCIC_REGS words, MEASURED max index 136 of 137 across the full
+	    census plus byte/halfword/word accesses at the window's last bytes.  */
 	if (idx >= N_PCIC_REGS)
 		return 0;
 
 	bit = 1u << (idx & 31);
-	if (d->pcic_reported[idx >> 5] & bit)
+	if (d->pcic_reported[cls][idx >> 5] & bit)
 		return 0;
 
-	d->pcic_reported[idx >> 5] |= bit;
+	d->pcic_reported[cls][idx >> 5] |= bit;
 	return 1;
 }
 
@@ -884,7 +944,7 @@ DEVICE_ACCESS(sh4_pcic)
 
 	case SH4_PCICONF0:
 		if (writeflag == MEM_WRITE) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: write to SH4_PCICONF0 --"
 				    " ignored.  (once per offset) ]\n");
 			d->pcic_reg[PCIC_REG(relative_addr)] = pcic_old;
@@ -903,7 +963,8 @@ DEVICE_ACCESS(sh4_pcic)
 				    already-supported type.  Nothing to
 				    restore -- this is a READ, so the bad
 				    state would be odata.  */
-				if (sh4_pcic_first(d, relative_addr))
+				if (sh4_pcic_first(d, relative_addr,
+				    SH4_PCIC_NOCPU))
 					fatal("[ sh4_pcic: PCICONF0 read for"
 					    " unimplemented CPU type %s --"
 					    " reads as zero.  (once per"
@@ -929,7 +990,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCICONF5:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != 0xac000000) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCICONF5 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -941,7 +1002,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCICONF6:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != 0x8c000000) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCICONF6 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -953,7 +1014,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCILSR0:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != ((64 - 1) << 20)) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCILSR0 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -965,7 +1026,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCILAR0:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != 0xac000000) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCILAR0 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -977,7 +1038,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCILSR1:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != ((64 - 1) << 20)) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCILSR1 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -989,7 +1050,7 @@ DEVICE_ACCESS(sh4_pcic)
 	case SH4_PCILAR1:
 		/*  Hardcoded to what OpenBSD/landisk uses:  */
 		if (writeflag == MEM_WRITE && idata != 0xac000000) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: SH4_PCILAR1 unknown value"
 				    " 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -1000,7 +1061,7 @@ DEVICE_ACCESS(sh4_pcic)
 
 	case SH4_PCIMBR:
 		if (writeflag == MEM_WRITE && idata != SH4_PCIC_MEM) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: PCIMBR set to 0x%" PRIx32
 				    ", not 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -1012,7 +1073,7 @@ DEVICE_ACCESS(sh4_pcic)
 
 	case SH4_PCIIOBR:
 		if (writeflag == MEM_WRITE && idata != SH4_PCIC_IO) {
-			if (sh4_pcic_first(d, relative_addr))
+			if (sh4_pcic_first(d, relative_addr, SH4_PCIC_BADVAL))
 				fatal("[ sh4_pcic: PCIIOBR set to 0x%" PRIx32
 				    ", not 0x%" PRIx32" -- ignored."
 				    "  (once per offset) ]\n",
@@ -1045,7 +1106,7 @@ DEVICE_ACCESS(sh4_pcic)
 		    no modelled behaviour consumes and let a guest build state
 		    meaning nothing.  Zero-and-ignore is deterministic and has no
 		    side effect.  */
-		if (sh4_pcic_first(d, relative_addr)) {
+		if (sh4_pcic_first(d, relative_addr, SH4_PCIC_UNIMPL)) {
 			if (writeflag == MEM_READ)
 				fatal("[ sh4_pcic: read from unimplemented"
 				    " addr 0x%x -- reads as zero."

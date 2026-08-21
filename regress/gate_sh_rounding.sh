@@ -203,7 +203,11 @@ else
     #  offsets 32 apart -- a mutant a measuring seat built which passes both the
     #  per-offset and the per-device rows.  So pin that they ran, not merely that the
     #  verdict was green.
-    check_min "sh4_pcic: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$PCLOG")" 29
+    #  29 -> 38 in the same edit that grew the probe: a pass-2 seat measured SEVEN mutants
+    #  all scoring 29/29 -- including one that reinstated the original host kill -- and the
+    #  nine new rows are what kill them.  This is a FLOOR, so it would have stayed green at
+    #  38 with no edit at all, which is exactly how a floor stops noticing.
+    check_min "sh4_pcic: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$PCLOG")" 38
 fi
 
 gate_end

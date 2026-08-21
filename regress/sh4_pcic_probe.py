@@ -36,6 +36,27 @@ holds 0, and writes to unimplemented offsets are dropped, so `odata = 0` and
 `odata = pcic_reg[i]` agree EVERYWHERE until a labelled register has put a
 non-zero word into a slot that `default:` can reach.
 
+*** SEVEN MUTANTS PASSED THE FIRST 29 ROWS.  P14-P20 ARE WHAT CLOSES THEM. ***
+The 29-row file measured ONE access width, observed TWO of the ten `pcic_old`
+restores, never offered any arm a SECOND rejected write, and never wrote
+PCICONF0 before reading it.  Each of those blanks was a family of survivors,
+not a single mutant:
+
+  P14/P15  the WIDTH AXIS.  `if (len == 2) exit(1);` -- the original host kill
+           narrowed to one width -- passed 29/29, because len=2 was issued
+           NOWHERE in the file and len=1 at only two fixed addresses.
+  P16      one read-back per RESTORE.  Deleting a single restore (PCIMBR's,
+           say) passed 29/29 and let a guest read its own rejected word back.
+  P17/P18  the SECOND OFFENCE.  Bracing the restore INSIDE the latch -- a
+           brace slip, the shape a tidy-up produces -- restores the first
+           offence and silently corrupts every one after it.  29/29, ten arms.
+  P19      the MUTUALLY-MASKING PAIR in the PCICONF0 arm.  Each of the two
+           statements is void alone, so single-line mutation is blind to both;
+           delete both and the guest gets its own word back.
+  P20      the latch keyed on (offset, FAULT CLASS).  A per-offset latch merges
+           two different faults that share one array slot and drops the second
+           diagnostic entirely.
+
 P4 counts the LATCHED SUFFIX, never a register name.  Under a cold debugger
 `single_step` is true, so `debug()`'s quiet_mode early-out never fires and a
 probe run this way CANNOT distinguish `fatal()` from `debug()` by presence -- a
@@ -97,6 +118,37 @@ GUARD_MSG = {
     0x1c8: "PCIIOBR set to",
 }
 
+#  The EIGHT labelled arms that carry BOTH a value guard and a restore of the
+#  previous word, with the value each one accepts.  Read out of the guard
+#  expressions in DEVICE_ACCESS(sh4_pcic); the two symbolic ones are
+#  SH4_PCIC_MEM (sh4_pcicreg.h:44) and SH4_PCIC_IO (sh4_pcicreg.h:41).
+#
+#  There are TEN restores in that function -- these eight, plus PCICONF0's
+#  (unobservable by design; see P19) and `default:`'s (P3b, P18).  Before P16
+#  only TWO of the ten were observed by this file, and deleting any of the
+#  other eight was MEASURED to pass all 29 of its rows.
+RESTORE_ARMS = {
+    0x014: ("PCICONF5", 0xac000000),
+    0x018: ("PCICONF6", 0x8c000000),
+    0x104: ("PCILSR0", (64 - 1) << 20),
+    0x108: ("PCILSR1", (64 - 1) << 20),
+    0x10c: ("PCILAR0", 0xac000000),
+    0x110: ("PCILAR1", 0xac000000),
+    0x1c4: ("PCIMBR", 0xfd000000),
+    0x1c8: ("PCIIOBR", 0xfe240000),
+}
+
+#  One word every one of those eight arms rejects, and which no arm accepts.
+REJECT = 0x12345678
+
+#  The load/store pair for each ACCESS WIDTH, keyed by `len` as the device sees
+#  it.  Without this the census was one-dimensional -- see P14/P15.
+LDST = {
+    1: (0x6210, 0x2100),        # mov.b @r1,r2  /  mov.b r0,@r1
+    2: (0x6211, 0x2101),        # mov.w @r1,r2  /  mov.w r0,@r1
+    4: (0x6212, 0x2102),        # mov.l @r1,r2  /  mov.l r0,@r1
+}
+
 #  Guest scratch.  landisk RAM is 64 MB at 0x0c000000 (machine_landisk.c:84);
 #  0x8c010000 is its P1 (cached, unmapped) alias, past the 0x8c002000 entry
 #  point and inside the loaded image -- the same scratch #441's probe uses.
@@ -110,8 +162,12 @@ RAMSRC = 0x8c010200
 #  accident, which is why P7c also insists on a small NON-ZERO value.
 OPS = {
     0x0009: "nop",
+    0x6210: "mov.b @r1,r2",
+    0x6211: "mov.w @r1,r2",
     0x6212: "mov.l @r1,r2",
     0x6252: "mov.l @r5,r2",
+    0x2100: "mov.b r0,@r1",
+    0x2101: "mov.w r0,@r1",
     0x2102: "mov.l r0,@r1",
     0x2142: "mov.l r4,@r1",
     0x2322: "mov.l r2,@r3",
@@ -137,7 +193,7 @@ POISON = 0x11111111
 
 #  The IDENTITY constant.  A probe copied into a tree where it no longer runs
 #  all of its rows must not report a green verdict over a shorter file.
-EXPECT_ROWS = 29
+EXPECT_ROWS = 38
 
 DISASM = {}      # opcode halfword -> the mnemonic text the emulator printed
 STARTS = []      # (label, started) for every session this run ever opened
@@ -503,6 +559,91 @@ def main():
         "val=%s -- without the restore the byte store leaves %s in PCICONF5"
         % (le(0xac000000), le(0xff)))
 
+    # ================================= P16 / P17  EVERY RESTORE, BOTH OFFENCES
+    #  Ten arms restore `pcic_old`; until P16 this file observed exactly TWO of
+    #  them (P3 = PCICONF5, P3b = `default:`), so deleting any one of the other
+    #  eight was MEASURED to pass all 29 rows -- PCIMBR among them, where the
+    #  guest then reads its own rejected 0x12345678 back out of a register the
+    #  round claims is pinned to 0xfd000000.
+    #
+    #  P17 is the other half, and it is a DIFFERENT defect rather than more of
+    #  the same one.  The restore has to sit OUTSIDE the `sh4_pcic_first()`
+    #  latch.  Bracing it inside is a BRACE SLIP -- the shape a later tidy-up
+    #  produces -- and it still restores the FIRST offence, so it passes P3,
+    #  P3b and P16 while re-opening silent corruption on every offence after
+    #  that.  MEASURED at 29/29 against the previous file, all ten arms.
+    def offence(off, ntimes):
+        good = RESTORE_ARMS[off][1]
+        body = [0x2102] + [0x2142] * ntimes + [0x6212, 0x2322]
+        b, al, s = session(
+            ["put w 0x%x, 0x%08x" % (DEST, POISON), "r0=0x%08x" % good,
+             "r4=0x%08x" % REJECT, "r1=0x%x" % (SH4_PCIC + off),
+             "r3=0x%x" % DEST]
+            + poke(body) + ["pc=0x%x" % CODE], len(body),
+            "o%d%03x" % (ntimes, off), disasm_upto=2 * len(body), **kw)
+        return off, al, s, dumped(b), (b or "").count(LATCHED)
+
+    def sweep(ntimes):
+        out = {}
+        with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as ex:
+            for off, al, s, v, nl in ex.map(lambda o: offence(o, ntimes),
+                                            sorted(RESTORE_ARMS)):
+                out[off] = (al, s, v, nl)
+        return out
+
+    def armbad(d):
+        """The arms that did NOT read their own accepted value back.
+
+        `.get(..., (False, ...))` defaults to DEAD, so a MISSING measurement
+        can only ever turn the row red: absent data must not be able to
+        manufacture a survivor.
+        """
+        bad = []
+        for o in sorted(RESTORE_ARMS):
+            al, s, v, _ = d.get(o, (False, False, None, 0))
+            if not (s and al and v == le(RESTORE_ARMS[o][1])):
+                bad.append("%s(0x%03x) started=%s alive=%s val=%s want=%s"
+                           % (RESTORE_ARMS[o][0], o, s, al, v,
+                              le(RESTORE_ARMS[o][1])))
+        return bad
+
+    sw1 = sweep(1)
+    bad16 = armbad(sw1)
+    row("P16 ALL %d guarded arms: ONE rejected write does not persist"
+        % len(RESTORE_ARMS),
+        bad16 == [],
+        "failed=%d %s" % (len(bad16), bad16[:3]),
+        "every arm reads its own accepted value back through the guest -- P3 "
+        "covered ONE of the ten restores and P3b a second")
+
+    sw2 = sweep(2)
+    bad17 = armbad(sw2)
+    noisy = sorted(RESTORE_ARMS[o][0] for o in sorted(RESTORE_ARMS)
+                   if sw2.get(o, (0, 0, 0, 0))[3] != 1)
+    row("P17 ALL %d guarded arms: a SECOND rejected write does not persist "
+        "either" % len(RESTORE_ARMS),
+        bad17 == [],
+        "failed=%d %s (latched-lines != 1 at %s)"
+        % (len(bad17), bad17[:3], noisy),
+        "the restore is OUTSIDE the latch.  Braced inside it the first offence "
+        "is still restored and every later one is not")
+
+    #  P18: the same second-offence property in the `default:` arm, where P3b
+    #  sees only the first.  TWO byte stores at the 0xfe200015 alias, then
+    #  PCICONF5's word read back through the guest.
+    buf, alive, st = session(
+        ["put w 0x%x, 0x%08x" % (DEST, POISON), "r0=0xac000000", "r4=0xff",
+         "r1=0x%x" % (SH4_PCIC + 0x014), "r5=0x%x" % (SH4_PCIC + 0x015),
+         "r3=0x%x" % DEST]
+        + poke([0x2102, 0x2540, 0x2540, 0x6212, 0x2322]) + ["pc=0x%x" % CODE],
+        5, "P18", disasm_upto=10, **kw)
+    p18 = dumped(buf)
+    row("P18 the `default:` restore survives a SECOND dropped write too",
+        st and alive and p18 == le(0xac000000),
+        "started=%s alive=%s val=%s" % (st, alive, p18),
+        "val=%s -- P3b sees only the first offence, so a restore braced inside "
+        "the latch passes it" % le(0xac000000))
+
     # ------------------------------------------------------------ P6 survivor
     #  The SAME address, instruction and width as P3's second store; ONLY THE
     #  VALUE DIFFERS.  This is what proves the diagnostic belongs to the GUARD
@@ -578,6 +719,58 @@ def main():
            "PCICONF0 read for unimplemented CPU type SH7750" in p10msg),
         "alive=True val=%s with the named, latched diagnostic" % le(0))
 
+    # ===================================== P19  THE PAIR THAT MASK EACH OTHER
+    #  TWO statements keep pcic_reg[0] away from a guest: the restore in the
+    #  PCICONF0 WRITE arm, and `odata = 0` in the unimplemented-CPU READ arm.
+    #  *** EACH IS VOID ON ITS OWN. ***  Delete the restore and `odata = 0`
+    #  still hides the word; delete `odata = 0` and the restore means there is
+    #  nothing left to hide.  SINGLE-LINE MUTATION IS THEREFORE BLIND TO BOTH,
+    #  and a reader who removes both -- the natural tidy-up, since each looks
+    #  dead in isolation -- hands the guest its own word straight back.  A row
+    #  that only READS PCICONF0 (P7b, P10) can never reach this: the write has
+    #  to come first, and the read-back has to happen under a CPU type the arm
+    #  does not implement.  MEASURED: 00000000 shipped, 78563412 with both gone.
+    buf, alive, st = session(
+        ["put w 0x%x, 0x%08x" % (DEST, POISON), "r0=0x%08x" % REJECT,
+         "r1=0x%x" % (SH4_PCIC + 0x000), "r3=0x%x" % DEST]
+        + poke([0x2102, 0x6212, 0x2322]) + ["pc=0x%x" % CODE], 3, "P19",
+        extra=["-C", "SH7750"], disasm_upto=6, **kw)
+    p19 = dumped(buf)
+    row("P19 (-C SH7750) a written word does NOT leak back out of the PCICONF0 "
+        "read arm",
+        st and alive and p19 == le(0),
+        "started=%s alive=%s val=%s" % (st, alive, p19),
+        "val=%s -- write 0x%08x, then read it back.  BOTH guards have to be "
+        "gone to leak, which is why no single-line mutant reaches it"
+        % (le(0), REJECT))
+
+    # ================================== P20  THE LATCH IS PER (OFFSET, CLASS)
+    #  PCIC_REG() indexes on the WORD, so the byte alias 0xfe200015 -- an
+    #  UNIMPLEMENTED-OFFSET fault reaching `default:` -- and 0xfe200014 -- an
+    #  UNEXPECTED-VALUE fault at PCICONF5 -- share ONE array slot.  A latch
+    #  keyed on the offset alone merges two SEMANTICALLY DIFFERENT faults and
+    #  the second complaint never prints, which is the hazard the code comment
+    #  claims to avoid.  Count the SUFFIX, never a register name: under a cold
+    #  debugger `single_step` is true, so the quiet_mode early-out in debug()
+    #  never fires and presence alone cannot separate fatal() from debug().
+    buf, alive, st = session(
+        ["put w 0x%x, 0x%08x" % (DEST, POISON), "r4=0xff",
+         "r5=0x%x" % (SH4_PCIC + 0x015), "r0=0x%08x" % REJECT,
+         "r1=0x%x" % (SH4_PCIC + 0x014), "r3=0x%x" % DEST]
+        + poke([0x2540, 0x2102, 0x6212, 0x2322]) + ["pc=0x%x" % CODE], 4,
+        "P20", disasm_upto=8, **kw)
+    p20n = (buf or "").count(LATCHED)
+    p20msg = buf or ""
+    p20u = "write to unimplemented addr 0xfe200015: 0xff" in p20msg
+    p20b = "SH4_PCICONF5 unknown value 0x%x" % REJECT in p20msg
+    row("P20 the latch is per (OFFSET, FAULT CLASS): two different faults in "
+        "ONE slot each report",
+        st and alive and p20n == 2 and p20u and p20b,
+        "started=%s alive=%s latched-lines=%d unimpl=%s badval=%s"
+        % (st, alive, p20n, p20u, p20b),
+        "latched-lines=2 over both faults -- a per-OFFSET latch gives 1 and "
+        "still passes P4, P5 and every other row in this file")
+
     # ========================================== P1  THE CENSUS, IN ONE PROCESS
     #  137 offsets x BOTH directions -- 274 device accesses -- in ONE emulator
     #  process, in about a fifth of a second.  Pre-fix the host is gone by the
@@ -586,8 +779,9 @@ def main():
     #  The loop body is five instructions; r1 walks the window and r5 is the
     #  end, and the trailing stores of r1 AND r2 are what prove it ran to
     #  completion rather than stopping early with the host still alive.
-    def census_loop(order, label):
-        body = ([0x6212, 0x2102] if order == "rw" else [0x2102, 0x6212]) \
+    def census_loop(order, label, ln=4):
+        ld, st_ = LDST[ln]
+        body = ([ld, st_] if order == "rw" else [st_, ld]) \
                + [0x7104, 0x3510, 0x8bfa, 0x2312, 0x7304, 0x2322]
         return session(
             ["put w 0x%x, 0x%08x" % (DEST, POISON),
@@ -655,6 +849,45 @@ def main():
         % (len(p1e_writes), setcmp(p1e_writes, UNLABELLED), len(p1e_reads),
            len(p1e_guards)),
         "the same complement, no read reports behind them, all nine guards")
+
+    # ============================================== P14 / P15  THE WIDTH AXIS
+    #  *** THE CENSUS ABOVE IS ONE-DIMENSIONAL. ***  137 offsets x 2 directions
+    #  x ONE width.  An instrumented build reported the widths this file ever
+    #  issued as ['4'], and the only len=1 accesses anywhere in it were P2b and
+    #  P3b, at two fixed addresses; len=2 was issued NOWHERE.  So a kill keyed
+    #  on the width -- `if (len == 2) exit(1);` at the top of the access
+    #  function, the original defect narrowed to one width -- was MEASURED to
+    #  pass all 29 rows.
+    #
+    #  Both narrower widths do reach this device: memory_readmax64() hands the
+    #  arm a `len`-byte idata and PCIC_REG() indexes on the word regardless, so
+    #  every guard and every restore runs at every width.
+    for _ln, _tag, _wname in ((2, "P14", "16-bit"), (1, "P15", "8-bit")):
+        t0 = time.time()
+        wbuf, walive, wst = census_loop("rw", _tag, ln=_ln)
+        ww = dwords(wbuf)
+        wreads = sorted(int(x, 16) - SH4_PCIC for x in re.findall(
+            r"read from unimplemented addr 0x([0-9a-f]+)", wbuf or ""))
+        wwrites = re.findall(r"write to unimplemented addr 0x([0-9a-f]+)",
+                             wbuf or "")
+        wguards = sorted(o for o, m in GUARD_MSG.items() if m in (wbuf or ""))
+        row("%s WIDTH AXIS: the whole census again at len=%d (%s), host LIVES"
+            % (_tag, _ln, _wname),
+            wst and walive and len(ww) >= 2 and ww[0] == le(SH4_PCIC + 0x224),
+            "started=%s alive=%s r1=%s (%.1f s)"
+            % (wst, walive, ww[0] if ww else None, time.time() - t0),
+            "alive=True and r1 walked to %s -- `len` was a FREE VARIABLE in "
+            "every row above this one" % le(SH4_PCIC + 0x224))
+        row("%sb at len=%d the same %d unlabelled offsets report and all %d "
+            "value guards still reject"
+            % (_tag, _ln, len(UNLABELLED), len(GUARD_MSG)),
+            wreads == UNLABELLED and wwrites == []
+            and wguards == sorted(GUARD_MSG),
+            "reads=%d %s writes-behind=%d guards=%d"
+            % (len(wreads), setcmp(wreads, UNLABELLED), len(wwrites),
+               len(wguards)),
+            "the same complement, no write reports behind them, all %d guards"
+            % len(GUARD_MSG))
 
     # ================================ P12  THE CENSUS, ONE PROCESS PER ACCESS
     #  The direct post-fix mirror of the witness's headline -- 116 read-kills
@@ -730,7 +963,7 @@ def main():
     # ------------------------------------------------- P0, last: absent data
     n_ses = len(STARTS)
     n_ok = sum(1 for _, s in STARTS if s)
-    vals = [p7a, p7b, p7c, p8, p2, p2b, p3, p3b, p6, p10]
+    vals = [p7a, p7b, p7c, p8, p2, p2b, p3, p3b, p6, p10, p18, p19]
     row("P0 EVERY session reached the debugger prompt AND every arm produced "
         "data",
         n_ses > 0 and n_ok == n_ses and all(v is not None for v in vals)
