@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbpending` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitflip` (assess:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbpending` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 55 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 54 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -169,6 +169,28 @@ created mid-round, at the moment the stage was ready and the seat was not — wh
 the queue is least likely to get written. Naming the three stages now means the round starts with
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
+
+### 6. `pitflip` (`af4884c`) — regress review, and the round it belongs to ran NO PANEL AT ALL
+**FABLE-ONLY.** Closed, changed code, no `regress` entry — the `m8online` shape, caught the same
+mechanical way.
+
+What makes this one worth the flagship's time rather than a formality: **the round was implemented
+and gate-tested with no panel whatsoever**, which its implementing seat disclosed itself rather
+than letting a blank read as agreement. The pass-2 panel then found that one of the three
+mechanisms it adds — the control-word rewind — **shipped with zero detector coverage**, and two
+seats independently produced the same one-line mutant that passed all ten rows while handing a
+guest 265 Hz where it asked for 73. Rows R10/R11 close that, negative-controlled in both
+directions and against a sibling mutant.
+
+So the regress question here is not "does it still pass" but **whether R10/R11 are themselves
+enough** — the measuring seat noted that R4/R7/R8/R9's ability to catch the *read*-side rewind
+mutant is an accident of `PROLOGUE`'s A1 signature read leaving `rd_msb[0]` at 1, which nothing in
+the file states. A refactor of `PROLOGUE` would silently un-pin it. That is exactly the kind of
+latent-vacuity claim the batched regress pass exists to check.
+
+Also carries an open UNKNOWN that a flagship reading may be able to settle where two seats could
+not: `pitlatch2` — does a Counter Latch Command rewind the read flip-flop? The local `i8254.txt`
+does not say and there is no second 8253/8254 source in the tree.
 
 ### 6. `fablequeue` (`c3d13e5`) and `carrier` (`1ba2cd4`) — regress review, queued BY THEIR OWN GATE
 Both are harness rounds authored by the main loop with **no panel at all** — single-seat filings
