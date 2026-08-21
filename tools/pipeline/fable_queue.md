@@ -170,6 +170,21 @@ the queue is least likely to get written. Naming the three stages now means the 
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
 
+### 11. `m8batc` (`7849fad`) — regress review
+**FABLE-ONLY.** Closed, changed code, no `regress` entry.
+
+39 mutants, 39 killed — the strongest kill table of the campaign. Two things a regress pass should
+weigh rather than admire:
+
+* **A mutant escaped everything, and the round's own hardening created it.** The first fixture used
+  consecutive port addresses, catching a block-boundary mutant *by accident*; scattering them to
+  close a different hole silently removed that coverage. **F17 is currently the only row defending
+  that property.** Is any other row in either file similarly load-bearing-by-accident?
+* **`diff_m8820x.c` now `#include`s the real `memory_m88k.c`.** That is what makes the oracle
+  non-vacuous — but it means a differential named for a device now also compiles a CPU file, and
+  ten kills land in the translator. `m8lanecomment` files the stale gate title; the deeper question
+  is whether the file's *scope* is still what its name says.
+
 ### 10. `hpcabort` (`a29f87b`) — regress review
 **FABLE-ONLY.** Closed, changed code, no `regress` entry.
 
