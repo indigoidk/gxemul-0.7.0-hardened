@@ -12957,13 +12957,13 @@
   {
    "id": "sh4bcr",
    "title": "sh4bcr  A guest 4-byte store to SH4_BCR2/BCR3 terminates the host process -- rung-3 witnessed, 5/5 controls green, on an unmodified -E landisk",
-   "state": "held",
-   "commits": "",
-   "hold": "Ranked FIRST of the memory/device-access cluster. Two-site round (BCR2 + BCR3): same device, same class, one fix design, same detector, no new oracle -- measured 5/5.",
+   "state": "closed",
+   "commits": "9de16b7",
+   "hold": "",
    "closure": {
-    "by": "",
-    "badge": "",
-    "note": ""
+    "by": "opus5",
+    "badge": "A",
+    "note": "Shipped as 9de16b7. Badge A: the main loop implemented and wrote the detector.\n\n*** WHAT SHOULD BE WEIGHED AGAINST THAT: SEVEN OF EIGHT SEATS SAID SHIP, AND THE NINE-ROW DETECTOR THEY WERE APPROVING PASSED SIX MUTANTS -- one of which puts exit(1) back on a guest-reachable path. ***  The single dissent was the one seat that COMPILED AND RAN. That is the sharpest instance this ledger holds of a measuring seat buying the instance, and it argues the pass-2 panel should not be graded by its verdict count.\n\nFour of the round's own errors were caught by runs rather than reasoning: the first fix WAS mutant M1 (D3 caught it); D4's first version ran the two sites in separate processes so the shared-latch mutant passed; the positive control PASSED and turned out to be a real hole rather than a dead pipeline (now D10); and D7b's expected constant was lifted from another probe with a different input.\n\nNOT HARDENED, and the record says so: eight measured one-instruction kills remain in dev_sh4.c -- eleven exit(1) sites in sh4_pcic and five value guards in the very switch this round edited."
    },
    "entries": [
     {
@@ -12974,8 +12974,171 @@
      "note": "*** THE SHARPEST WITNESS OF THE SESSION, AND IT IS FILED NOWHERE: *** no BCR2, BCR3 or 'Non-16-bit' appears in OUTSTANDING_BUGS.md, CHANGELOG.md or ledger.json.\n\nMEASURED, stock build/gxemul, unmodified in-tree -E landisk, cold debugger, real SH-4 decode, real memory_rw, real device dispatch. No source edited, no device_add:\n    L_liveness_RAM               alive=True  val=efbeadde              ok\n    S_device_signature_BCR2      alive=True  val=fd3f0000              ok\n    N_neg_ctrl_BCR1_32bit_store  alive=True                            ok\n    A_DEFECT_BCR2_32bit_store    alive=False fatalmsg=True  HOST KILLED ok\n    A2_DEFECT_BCR3_32bit_store   alive=False fatalmsg=True  HOST KILLED ok\nA guest `mov.l r0,@r1` with r1 = 0xff800004 reaches dev_sh4.c:1409, prints 'Non-16-bit SH4_BCR2 access?' and calls exit(1). *** TWO GUEST INSTRUCTIONS, HOST GONE. ***  dev_sh4 is registered unconditionally by cpu_sh.c:200 over SH4_REG_BASE + 0x01000000, so the address is in range; being SH-4 P4 space it needs no MMU setup.\n\n*** THE NEGATIVE CONTROL IS THE SHARP ONE: SH4_BCR1 at 0xff800000 has NO len check at all (:1399), so the same device, the same 4-byte width, FOUR BYTES AWAY, SURVIVES. *** The kill is the width test, not the device. Device signature: writing 0xffff to BCR2 at legal width reads back 0x3ffd = idata & 0x3ffd (:1413) -- RAM would have returned 0xffffffff.\n\n*** AND THIS REFUTES THE hlen CENSUS'S OWN IMMUNITY CLAIM: *** it states 'SH-4 is provably immune', scoped to 8-byte accesses. SH-4 turns out to be the family where the host kill was MEASURED, using a 4-byte access, which SH-4 issues freely. The census's discriminator ('does it mention len') undercounts the class and so does its immunity argument.\n\nFIX SHAPE is the #438 shape: keep the fatal() diagnostic, drop the exit(1), service at the register's natural width. Note the existing regress/sh_halt_probe.py covers cpu->running = 0 halts ONLY, not exit(1), so it is blind to this by construction.",
      "grade": "CONFIRMED",
      "ev": "_scratchpad/_opusseat_sh4_bcr2_probe.py; dev_sh4.c:1399,1409,1413,1420"
+    },
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** FOUND THE BRIEF'S OWN PREMISE FALSE, AND IT WAS MINE. ***  The brief said BCR3 is at 0xff800006, adjacent to BCR2, 'so a 4-byte access spans BOTH registers'. sh4_bscreg.h:70 reads 0xff800050. No overlap exists and the whole Q2 dissolves.\n\nMEASURED the dispatch rather than assuming it: memory_rw hands the WHOLE access to ONE handler -- one call, len=4, never split; the 1024-byte page split cannot fire on a 4-byte aligned access. Reachable guest lengths are 1, 2, 4 (an fmov pair is two separate 4-byte calls, so 8 never arrives). So the handler owns the byte lanes.\n\n*** BIG-ENDIAN SH-4 IS CONSTRUCTIBLE TODAY, and the naive fix is measurably wrong on it: *** byte_order(big) with in-tree type(\"landisk\") gives a real BE CPU, and there `idata & 0x3ffd` takes the WRONG halfword -- the guest's 16 bits land in the top half and read back as 0. SH4_BCR1 four lines above already consults cpu->byte_order.\n\nDesign shipped as recommended: service the register's own two bytes in the guest's byte order, diagnose once PER SITE, len < 2 early-out. Rejected 'ignore the write' on measurement -- these two were the only length checks in the file, and PCR/RTCSR/RTCNT/RTCOR/RFCR all accept any width and service it, so ignoring would make these the only two registers that silently swallow a write.\n\nALSO MEASURED AND NOT IN THIS ROUND: sh4_pcic in the SAME FILE has ELEVEN exit(1) sites with ~116 word offsets reaching its default:, and DEVICE_ACCESS(sh4) itself carries five more value-guard exit(1)s. Filed as [[sh4pcicexit]].",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1 and CAUGHT THE BRIEF'S FALSE PREMISE by opening sh4_bscreg.h.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1 and CAUGHT THE BRIEF'S FALSE PREMISE by opening sh4_bscreg.h.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1 and CAUGHT THE BRIEF'S FALSE PREMISE by opening sh4_bscreg.h.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1. A FILE-READING seat that did NOT open sh4_bscreg.h, and so built on the brief's false adjacency premise like the packet-fed seats did. The distinction between 'cannot check' and 'did not check' is the whole point of the class split, and this is the case that shows they are different failures.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1, PACKET-FED. Proposed a 'span-splitting handler' that services a 4-byte access at BCR2 by splitting it across two registers -- a design that exists ONLY because the brief asserted an adjacency that does not exist. Not held against the seat: it had no way to check, which is precisely what its class means.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1, PACKET-FED. Converged on the shipped shape (drop exit(1), keep fatal(), let the 16-bit path service it) without needing the adjacency.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Answered pass 1, PACKET-FED. Proposed a 'paired-register fix that splits any 32-bit access into two 16-bit halves' -- the second design built entirely on the brief's error.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_205102/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** VERDICT: SHIP WITH CHANGES -- THE ONLY SEAT OF EIGHT THAT DID NOT SAY SHIP, AND IT WAS RIGHT. SIX MUTANTS ESCAPED THE 9-ROW DETECTOR. ***  All built, cmp-verified on disk, run:\n    X  `if (partial && writeflag == MEM_READ) exit(1);`   9/9   *** THE HOST DIES AGAIN ***\n    A  delete `& 0x3ffd` on BCR2's write                  9/9   reserved-bit mask gone\n    G  add    `& 0x3ffd` on BCR3's write                  9/9   BCR3 silently loses bits\n    B  `return 8*(len-2)` -> `return 0`                   9/9   the whole big-endian lane\n    F  swap the Ignored/Servicing ternary                 9/9   diagnostic states the opposite of what happened\nX is the answer to 'smallest edit': it reinstates exit(1) on a guest-reachable path -- the round's HEADLINE PROPERTY -- with every row green. Measured: one `mov.b @r1,r4` at 0xff800004 ends the process, exit status 1, output stops mid-instruction.\n\n*** BOTH ROOT CAUSES WERE STRUCTURAL, NOT CARELESS. ***  (1) The reachable shapes are (read|write) x len(1|2|4) = SIX and the detector covered FIVE -- NO ROW DID A 1-BYTE READ. (2) Both write-value oracles were MASK-TRANSPARENT: D1 wrote 0x89ab3ffd and 0x3ffd & 0x3ffd is 0x3ffd; D8 wrote 0x89ab1234 and 0x1234 & 0x3ffd is 0x1234. A row NAMED 'masked' could not see the mask. One constant (0xc003 -> 0x0001) kills both.\n\nIT ALSO MEASURED TWO OF MY COMMENTS FALSE. The `len < 2` guard's comment shouted that a 1-byte store is 'reachable -- measured'; the store is reachable but THIS FUNCTION IS NOT REACHED WITH IT, because report() returns 0 and the arm breaks first -- traced across all twelve report-calls. And the header comment argued against dropping a write while the code dropped one, which free-running is invisible because debug() computes v = verbose - 1 = -1 and returns.\n\nRESIDUALS it named and I filed rather than fixed: partial READS are dropped where they could be serviced exactly ([[sh4partialread]]), and the precedent registers resolve BE lanes the OTHER way and PROMOTE a 1-byte write ([[sh4bsclane]]). It also predicted, untested, that a function-static latch would pass -- the M3 shape at device-instance granularity.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP, with one requirement that matched the measuring seat's: *** 'Required before shipping: cover the big-endian 4-byte lane behavior. The code itself does not need a functional change.' ***  Verified the arithmetic by reading and got it right: the guard is correctly placed (|| short-circuits so len - 2 is never evaluated for a short access); nothing is lost or sign-extended because the uint64_t cast precedes the shift; no default: reachability changed, no shadowing.\n\nTWO OBSERVATIONS WORTH KEEPING. It noted the len==1 shift result 'should not be interpreted as a register-lane calculation -- it is harmless only because partial accesses are never serviced', which is exactly the overstatement the measuring seat measured in my comment, reached independently. And it named a residual nobody else did: the latch keys on SITE, so *** a byte read can demote a later 4-byte write's first report *** -- different violations coalescing at one register. That matches the stated 'once per register' policy, so it is recorded rather than treated as a defect.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP -- and *** IT INDEPENDENTLY FOUND MUTANT B BY READING ALONE, *** the same one the measuring seat built: replace sh4_bsc16_shift()'s body with `return 0;` and every row stays green while a BE 32-bit store to BCR2 corrupts the register with 0x0000. Same conclusion, different method, and it is the strongest single argument in this round's record for keeping both seat classes: the reading seat named the family, the measuring seat proved the instance and shipped the row.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP, 67 KB.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "VERDICT: SHIP, packet-fed.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260820_212308/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "⏸",
+     "date": "2026-08-20",
+     "note": "*** DELIBERATELY NOT FIRED -- NOT A SEAT FAILURE, AND NOT AGREEMENT. ***  Standing owner directive of 2026-08-20 deprioritising this seat. It is alive and was available; it was withheld on instruction. Recorded as its own state because a seat that did not answer, one never fired, and one that agreed are three different things.",
+     "grade": "UNKNOWN",
+     "ev": "owner directive"
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "⏸",
+     "date": "2026-08-20",
+     "note": "*** DELIBERATELY NOT FIRED *** -- same standing owner directive; see the review entry.",
+     "grade": "UNKNOWN",
+     "ev": "owner directive"
     }
-   ]
+   ],
+   "witness": "probe:regress/sh4_bsc_width_probe.py (rung 3, unmodified -E landisk; symptom on pre-fix HEAD at 2/13 and 13/13 after, same script; liveness, device-signature and BCR1 negative controls all green in both)"
   },
   {
    "id": "rtclen",
@@ -13158,6 +13321,98 @@
      "note": "RAISED BY CODEX as half of its DO-NOT-SHIP verdict on #440, and it is the half that survives scrutiny. If rd_msb is already 1 when the latch command arrives, the FIRST latched read has rw == MSB and #440 immediately clears the latch -- so only ONE byte has been read after the count was latched. *** A byte read BEFORE the latch command cannot be a byte of the newly latched value, *** which sits badly with p. 8's 'two bytes must be read'. On that reading R9 pins the implementation's assumption rather than the specification.\n\nTHE MEASURING SEAT REACHED THE SAME FACT AND THE OPPOSITE READING: at odd parity the first read takes the byte the format calls for and unlatches, which it argues is CLOSER to hardware, and it measured the values (0x9c00 where #439 gave 0x0000).\n\n*** BOTH SEATS AGREE ON WHAT THEY CANNOT SETTLE: the local i8254 text does not say whether a Counter Latch Command rewinds the read flip-flop, and there is no other 8253/8254 source in the tree. ***  So this is filed as an UNKNOWN and recorded in the source as one, rather than resolved 7-1. An honest UNKNOWN outranks a confident guess, and a majority has been wrong on mechanism in this project at least six times.\n\nCodex's proposed shape if it is ever settled against #440: track TWO POST-LATCH READS rather than reusing the format flip-flop -- a boolean `latched` is insufficient when the read phase can be MSB at latch time.",
      "grade": "UNKNOWN",
      "ev": "_scratchpad/panel_20260820_183311/ (7/7 scriptable) + opus5 measuring seat"
+    }
+   ]
+  },
+  {
+   "id": "sh4pcicexit",
+   "title": "sh4pcicexit  sh4_pcic has ELEVEN exit(1) sites and ~116 word offsets reach its default:, plus five more value guards in DEVICE_ACCESS(sh4) itself",
+   "state": "held",
+   "commits": "",
+   "hold": "Bigger than #441 and cheaper to reach. Ranks with hlen/devexit as the exit(1) sweep.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "*** MEASURED ON THE COMMITTED BASELINE WITH MATCHED SURVIVING CONTROLS, and it is STRICTLY LARGER THAN THE ROUND THAT FOUND IT -- one instruction, not two. ***\n    0xfe20000c  SH4_PCICONF3 (unlabelled -> default:)   alive=False\n    0xfe200014  SH4_PCICONF5, value != 0xac000000       alive=False\n    0xfe200014  SH4_PCICONF5, value == 0xac000000       alive=True   <- control\n    0xfe200104  SH4_PCILSR0, 'unknown value'            alive=False\n    0xfe200000  SH4_PCICONF0, any write                 alive=False\n21 case labels cover 137 words of the registered 0x224 window, so ~116 word offsets reach `default: ... exit(1)`.\n\nFIVE MORE INSIDE DEVICE_ACCESS(sh4) -- the very switch #441 edited -- three measured, each with a same-address surviving control: ICR bit 7 set (:1589), RCR1 bit 3 set (:1860), DMATCR0 top 8 bits set (:1349), plus :1265 and :1239.\n\n*** SO #441 LEFT EIGHT MEASURED ONE-INSTRUCTION KILLS IN A FILE IT JUST TOUCHED, and its record says so explicitly rather than claiming dev_sh4 is hardened. ***  Same class as [[hlen]]/[[devexit]]; different semantic class from #441 (value guards and address decode, not access width), so it could not have joined that round under the reopening rule -- each needs its own 'what does this register do' decision.",
+     "grade": "CONFIRMED",
+     "ev": "measured on committed build/gxemul, cold debugger, -E landisk"
+    }
+   ]
+  },
+  {
+   "id": "sh4partialread",
+   "title": "sh4partialread  #441 drops a partial READ of BCR2/BCR3 where it could be serviced exactly",
+   "state": "held",
+   "commits": "",
+   "hold": "",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Raised by the pass-2 measuring seat and FILED rather than fixed, because it is neither a measured false pass nor a wrong record -- it is a design improvement, and the stopping rule exists to keep those out of the round that found them.\n\nThe argument is good: dropping a partial WRITE has a corruption rationale (it would overwrite both halves), but a partial READ cannot corrupt anything, and the guest is handed 0 instead of the byte it asked for. MEASURED: 00000000, three runs. As shipped, the read half of the guard trades a correct answer for a wrong one with no safety gained.\n\nNOT A REGRESSION: pre-#441 that same access KILLED THE HOST, so 0 is strictly better. That is why it files rather than blocks.",
+     "grade": "CONFIRMED",
+     "ev": "measured, three runs, committed #441 build"
+    }
+   ]
+  },
+  {
+   "id": "sh4bsclane",
+   "title": "sh4bsclane  #441 cites PCR/RTCSR/RTCOR/RFCR as precedent for servicing, then differs from them on both byte-lane and partial-width behaviour",
+   "state": "held",
+   "commits": "",
+   "hold": "",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Found by the pass-2 measuring seat, and it is a fair hit on the round's own reasoning. PCR/RTCSR/RTCOR/RFCR all do `idata & mask` with NO byte_order term, so on big-endian a 4-byte access to them takes the LAST two bytes while BCR2/BCR3 now take the FIRST; and they PROMOTE a 1-byte write while BCR2/BCR3 now DROP it. The #441 comment cites them to justify servicing and then services differently on both axes.\n\nWHICH CONVENTION IS RIGHT IS NOT DECIDABLE HERE: there is no SH-4 document in this tree (sh4_manual.txt is ONE BYTE), so this is an honest UNKNOWN about the hardware and a real internal inconsistency about the model. One round takes one site, so #441 recorded the divergence in the source rather than silently unifying five registers on a guess.\n\nA related nit worth carrying: the round's claim that 'BCR1 already consults byte_order' is true but weak precedent -- BCR1 ORs in a strap bit, it does not place a lane.",
+     "grade": "CONFIRMED",
+     "ev": "pass-2 seat, read against dev_sh4.c"
+    }
+   ]
+  },
+  {
+   "id": "sh4markspell",
+   "title": "sh4markspell  Gate 6's fresh-mark census keys on the exact local name `_mark`, so a correct guard spelled `mark` is invisible to it",
+   "state": "held",
+   "commits": "",
+   "hold": "",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-20",
+     "note": "Hit while shipping #441 and worth a row because the SIGNATURE IS MISLEADING: two counts went green and the third went red, which reads like a defect and is not one. gate_hygiene.sh:203 greps for `return wait(mark=_mark, echo=...)`, so a probe whose send() names its local `mark` has the guard PRESENT and UNCOUNTED.\n\n*** THE FIRST FIX I WROTE WAS THE WRONG ONE, and the comment explaining it was worse: *** I bumped EXPECT_CONVERTED and wrote a paragraph arguing the census should be blamed, on the reasoning that renaming a local to satisfy a grep is the tail wagging the dog. Wrong -- `_mark` is the idiom in EVERY other pty probe in the tree, so the new file was the outlier. Teaching the census a second spelling would have made it count substrings of the first. Renamed; comment corrected to record the mistake rather than the rationalisation.\n\nThe residual is real though: the census cannot distinguish 'guard absent' from 'guard spelled differently', and it says so nowhere. A one-line note in the gate, or a check that a probe defining send() matches one of the accepted spellings, would close it.",
+     "grade": "CONFIRMED",
+     "ev": "gate_hygiene.sh:203; regress/sh4_bsc_width_probe.py"
     }
    ]
   }

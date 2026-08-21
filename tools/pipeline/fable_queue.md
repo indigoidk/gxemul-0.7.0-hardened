@@ -170,6 +170,28 @@ the queue is least likely to get written. Naming the three stages now means the 
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
 
+### 7. `sh4bcr` (`9de16b7`) — regress review, and the reason is a number
+**FABLE-ONLY.** Closed, changed code, no `regress` entry.
+
+Why this one is worth real flagship time rather than a formality: **its first nine-row detector
+passed six mutants**, and one of them (`if (partial && writeflag == MEM_READ) exit(1);`) reinstated
+the host kill this round exists to remove, with every row green. Seven of eight seats had said
+SHIP over that detector. The rows are now 13 and every mutant dies to a named row — but the
+question a regress pass should ask is whether **13 is enough**, given that 9 was confidently wrong.
+
+Two specific things to look at, both recorded as untested predictions rather than findings:
+
+* the pass-2 seat predicted, and did not build, that **a function-static latch instead of the
+  struct field would pass all 13** — the shared-latch shape at device-instance rather than
+  register granularity. It needs a two-machine config, which nothing in `regress/` currently
+  builds.
+* `D7a`/`D7b` construct a **big-endian machine from a config file**, a second invocation shape no
+  other probe in the tree uses. It writes and unlinks a temp conf beside itself. That is worth an
+  independent look for anything it leaves behind on a failure path.
+
+Also carries the honest caveat that the round did NOT harden `dev_sh4`: eight measured
+one-instruction kills remain in the same file (`sh4pcicexit`).
+
 ### 6. `pitflip` (`af4884c`) — regress review, and the round it belongs to ran NO PANEL AT ALL
 **FABLE-ONLY.** Closed, changed code, no `regress` entry — the `m8online` shape, caught the same
 mechanical way.
