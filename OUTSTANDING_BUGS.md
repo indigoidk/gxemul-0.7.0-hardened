@@ -5253,3 +5253,68 @@ Final: detector **17 rows / 0 failures**, gate 2 **PASS at 258 checks** (245 bef
 `rtcgate` closed credited; `rtcdet` closed documented-only as its duplicate, so the work counts
 once. Codex was RATE-LIMITED — its 26,992-byte file was the echoed brief plus the 429, **the
 largest file in the panel** — recorded with a HELD marker and a queue entry.
+
+
+---
+
+## 2026-08-20 — `pitflip` (#440): the 8253's 16-bit selector was one-way, and the latch never released
+
+Shipped as #440 (`dev_8253.c` + `regress/pit8253_latch_probe.py`). Full story in the CHANGELOG
+R12 block; what belongs in the queue is below.
+
+**Closed by this round**
+
+* `pitflip` — the 16-bit LSB/MSB selector cleared `I8253_TIMER_LSB` in `mode_byte` and nothing
+  set it back, so it stuck at MSB after one access and destroyed the programmed format with it.
+  Now a per-counter flip-flop that ALTERNATES, with separate read and write halves as the i8254
+  datasheet's p. 8 interleave requires. Witness: rung 3, `pit8253_latch_probe.py` arms P/Z/I.
+* The sticky latch in #439, found by **Codex 5.6-SOL on the #439 pass-2 panel** (six seats said
+  SOUND; glm gestured at it). `latched[]` was cleared only by a mode write, so one latch command
+  made every later read of that counter return 0. Now consumed per the programmed byte format.
+  Witness: arms L and M — M is the mid-pair case, where a latch lands BETWEEN the two halves of
+  a 16-bit read and both fixes have to agree.
+
+**STILL OPEN — and the first of these is why the round was ranked where it was**
+
+* **`i8253zero` is NOT fixed.** #440 removed the only known way a guest reaches count 0 — the
+  one-way selector reprogrammed the counter to 0 on its own, which arm Z measured as
+  `100 Hz, 0 Hz, 101 Hz` from a guest that only ever asked for `0x2e00`. The underlying defect
+  stands: `else d->hz[...] = 0` is wrong against the 8254 convention that a count of 0 means
+  65536 (p. 17, quoted in the 2026-08-1x entry above), and `timer_clamp_freq()` then floors it
+  to `TIMER_MIN_FREQUENCY`, i.e. a timer that never fires. **The door is closed, the hole is
+  not.** Anyone reopening it should note the reachability argument has changed: after #440 a
+  guest must write count 0 deliberately, and no in-tree guest does.
+* **`pitclobber` — `mode_byte` is still ONE global for all three counters.** A control word for
+  counter 2 changes the format counter 0's accesses are decoded under. #440 deliberately did not
+  touch it (different semantic class, and the fix is a per-counter `mode_byte[3]`). Note the
+  flip-flops #440 added ARE per counter, so they are already the right shape for that fix and
+  will not need redoing. Not witnessed by this round's probe.
+* **Does a COUNT write release the latch?** Not decided by #440, deliberately. i8254 p. 7 says
+  the OL holds "until it is read by the CPU (**or until the Counter is reprogrammed**)", and
+  #439 already clears `latched[]` on a control-word write. Whether a bare count write (no new
+  control word) also counts as "reprogrammed" is **not resolvable from the text I have**, so the
+  smallest defensible thing was done: it does not clear. Flagged rather than guessed, per the
+  round's own constraint against reconstructing a rule from memory. No guest is known to do it.
+* **`d->mode[]` remains behaviourally inert** — written in three places, read only inside a
+  `debug()` printf. Unchanged, re-confirmed by reading during this round.
+* **There is still no running count.** The file's own TODO says so. #439 and #440 both refuse to
+  synthesise one, and the latched read still returns 0 rather than the reload, because a guest
+  dividing by `(reload - latched)` would divide by zero — measured as candidate C1 in #439 and
+  still guarded by row R3.
+* **`pit8253_latch_probe.py` still ships UNWIRED** into any gate — carried forward from #439
+  unchanged, and `gate_hygiene.sh`'s own comment at its `EXPECT_CONVERTED` pin says why that
+  matters: nothing forces the probe to fire, so the pin is doing the whole job. Wiring it into
+  `gate_arm.sh` beside `footbridge_sites_probe.py` still wants an operator who can run gate 6.
+  #440 makes this MORE valuable, not less: the file now carries ten verdict rows and six
+  controls, six of the rows with measured kills.
+
+**Two records defects found while doing this, one fixed, one flagged**
+
+* **FIXED:** `pit8253_latch_probe.py` was committed with CRLF — the only such file in the repo
+  (`git ls-files --eol`). Its `#!/usr/bin/env python3` would die as `bad interpreter: ...^M`
+  under a direct exec; it works today only because the documented invocation is
+  `python3 <file>`. Normalised to LF, which is most of its diff.
+* **FLAGGED, not invented:** #439 (`020a672`) shipped with **no CHANGELOG round block**. The
+  ethos calls for one per correction, and #440's is R12 with no R-numbered block for #439. Only
+  that round's operator knows what it meant to record, so this is left as a note rather than
+  written for them.

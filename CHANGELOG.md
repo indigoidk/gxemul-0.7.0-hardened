@@ -4192,6 +4192,186 @@ the NULL test guards only `ic->f`, which is taken from the non-samepage half of 
 table; the same-page entry is used only under `samepage_function != NULL`, so a NULL
 there means the optimisation is skipped, not that anything faults.
 
+## R12 (#440) — the 16-bit LSB/MSB selector was one-way, so the device reprogrammed itself to zero
+
+`dev_8253.c`. The 16-bit read/write selector was a ONE-WAY clear:
+
+```c
+/*  Switch from LSB to MSB, if accessing as 16-bit word:  */
+if ((d->mode_byte & 0x30) == I8253_TIMER_16BIT)
+        d->mode_byte &= ~I8253_TIMER_LSB;
+```
+
+It cleared the LSB bit on the first counter access and nothing ever set it back. Worse, it
+cleared the bit *in `mode_byte`*, so `(mode_byte & 0x30) == I8253_TIMER_16BIT` could never
+match again either — the selector state and the record of the programmed format were the same
+bits, and advancing one destroyed the other. A real 8254's read/write flip-flop ALTERNATES.
+
+Two consequences, both measured rather than argued:
+
+* **A second 16-bit write pair puts BOTH bytes in the high half.** Intending `0x2e9c` twice,
+  the device recomputes THREE times for TWO pairs — `100 Hz`, `30 Hz`, `100 Hz` — and a
+  guest that programs a count whose low byte is `0x00` (arm Z, `0x2e00`) gets
+  `100 Hz`, **`0 Hz`**, `101 Hz`: **an emulated counter of exactly zero, reached by a guest
+  that never programs count 0.** That is the door onto the separately-filed `i8253zero`, and
+  it is why the adjudicator ranked this first. #440 closes the door; it does **not** fix
+  `i8253zero`, whose `else hz = 0` is still wrong against the 8254 convention that count 0
+  means 65536 (recorded in `OUTSTANDING_BUGS.md`, unchanged).
+* **A 16-bit read pair returns the high byte twice**, `0x2e2e` where the reload is `0x2e9c`.
+  This is also why a sibling round's candidate fix appeared to return the wrong reload — the
+  selector was stuck at MSB, not the value.
+
+**Reads and writes get SEPARATE flip-flops, and that is a MEASUREMENT, not a preference.**
+The i8254 datasheet (`_scratchpad/i8254.txt`, p. 8) offers as a valid sequence
+
+> 1) Read least significant byte  2) Write new least significant byte
+> 3) Read most significant byte   4) Write new most significant byte
+
+which one shared flip-flop cannot produce — step 1 would advance the selector past step 2's
+LSB. The smaller "one shared flip-flop" fix was **built and measured** (`mutantA`): it passes
+R4, R5, R6 and R8 and is caught **only** by R7, the row written for exactly this. That is the
+"what is the smallest edit that breaks this property and still passes?" check, answered by
+building it rather than by reasoning about it.
+
+**Also folded in, from the #439 pass-2 panel: the latch was never consumed.** Codex 5.6-SOL
+alone found it (glm gestured at it; six seats said SOUND) — #439 set `latched[]` and cleared it
+only on a mode write, so ONE latch command made every later read of that counter return 0 until
+the guest happened to rewrite the mode byte. It is not a regression (pre-#439 those reads fell
+to the `default:` arm and also returned 0, with a complaint flood), but it is a defect in the
+fix, so it ships with this one. The consume rule is the datasheet's, not a reconstruction:
+p. 8, *"the count must be read according to the programmed format ... if the Counter is
+programmed for two byte counts two bytes must be read"*, and p. 7, the count *"is held in the
+latch until it is read by the CPU (or until the Counter is reprogrammed) The count is then
+unlatched automatically"*. So the last byte the format calls for releases it.
+
+**This corrects #439's stated reasoning where the two fixes meet.** #439's read arm took an
+early `break` "so no counter byte was consumed, leave the selector alone". Under the datasheet
+a latched read DOES consume one of the format's bytes, so the flip-flop now advances for it —
+and across the ordinary two-read `gettick()` the two designs are indistinguishable (two toggles
+return the flip-flop to LSB), which is why #439's measured behaviour is unchanged and only the
+sticking stops. Verified: R1/R2/R3, #439's own rows, stay green throughout.
+
+**REPRODUCED at rung 3 before any edit**, on the committed build, by extending the round's own
+committed probe rather than starting a new one: `regress/pit8253_latch_probe.py` gains five
+arms (P, Z, I, L, M) on unmodified `-E cats`, real ARM guest instructions through real address
+decode. All six controls green in every run — RAM liveness, CP15 MMU-off readback, a device
+signature RAM cannot produce, an MMU-ON negative control, encodings checked against the
+emulator's own disassembly, and a new A2 that asserts the recompute stream leads with the
+signature's own write so the row that counts recomputes cannot silently count the wrong ones.
+
+| row | committed HEAD (pre-fix) | one shared flip-flop | #440 |
+|---|---|---|---|
+| R4 16-bit readback is the reload | **FAIL** `0x2e2e`/`0x2e2e` | ok | ok |
+| R5 one recompute per write pair | **FAIL** 3 and 3 | ok | ok |
+| R6 no transient count of zero | **FAIL** arm Z `(0, 0)` | ok | ok |
+| R7 read and write flip-flops are separate | **FAIL** `r7=0x11` | **FAIL** `r7=0x9c` | ok |
+| R8 the latch is released by reading it | **FAIL** stays `0x00 0x00` | ok | ok |
+| R9 a mid-pair latch completes the pair and lets go | **FAIL** `0x2e 0x00` then `0x00 0x00` | ok | ok |
+
+Every new row has a measured kill; R7 has two. The controls and #439's R0–R3 are green in all
+three builds, so the reds above are the rows moving, not the probe.
+
+**R9 is where the two fixes actually meet, so it was measured rather than reasoned about.** A
+latch landing BETWEEN the two halves of a 16-bit read: half 1 must still be the LSB (pre-fix the
+selector was stuck at MSB and returned `0x2e`), half 2 is the last byte the format calls for so
+it completes the guest's pair AND releases the latch, and the pair after it reads normally
+(pre-fix it stayed `0x00 0x00` for ever). Real hardware would hand back the latched count's high
+byte where this returns `0x00` — that is #439's documented "there is no live count" limit, not a
+state-machine defect, and R9 asserts the state machine only.
+
+**Also in this commit:** `pit8253_latch_probe.py` was committed with **CRLF** line endings —
+the only such file in the repository (`git ls-files --eol`: its sibling `footbridge_sites_probe.py`,
+`gate_hygiene.sh` and `dev_8253.c` are all `lf`). Its own `#!/usr/bin/env python3` would have
+died as `bad interpreter: ...^M` under a direct exec; it survives only because the documented
+invocation goes through `python3 <file>`. Normalised to LF, which is why its diff is large.
+
+**Gates:** `gate_hygiene.sh` PASS (48 checks) and `gate_offline.sh` PASS (259 checks), run
+singly, never concurrently. `EXPECT_CONVERTED` does **not** move: the census was recomputed
+read-only with the gate's own `probe_code()` and is unchanged at 18/18/18 with `whole_full` 2 —
+this round edits an existing probe rather than adding one. Build: 0 errors / 0 warnings under
+`-Wall -Wextra -Wshadow -Wstrict-aliasing`, in `GXEMUL-SEC`, `est`, `build/` and the WSL arc
+tree, all four cmp/md5-identical.
+
+**Records gap observed, not fixed here:** #439 (`020a672`) shipped with no CHANGELOG round
+block of its own — this block is R12 and there is no R-numbered block for #439. Flagged rather
+than invented, since only that round's operator knows what it intended to record.
+
+### Pass 2 — the panel that had not run, and it found the round shipping a mechanism with ZERO coverage
+
+**This round was implemented and gate-tested with NO PANEL AT ALL**, which the implementing seat
+flagged itself rather than let a blank read as agreement. The pass-2 panel then fired **eight
+seats: seven scriptable (codex, agy, kimi, grok, glm, deepseek, minimax — 7/7 answered) plus the
+Opus measuring seat.** `fable5` was DELIBERATELY NOT FIRED under the owner's standing
+deprioritisation directive — a deliberate omission, which is a different thing from a seat
+failure and is recorded here as its own thing rather than left to be read as agreement.
+
+**MEASURED FALSE PASS, and it is the reason pass 2 exists.** Of the three mechanisms #440 adds,
+the **control-word rewind shipped with zero coverage**. Two seats found the same one-line mutant
+independently — the Opus seat by building eight binaries, codex by reading alone:
+
+```c
+d->wr_msb[d->counter_select] = 0;      /*  delete this line  */
+```
+
+All ten rows stayed green while a legal guest sequence was measurably corrupted: the datasheet's
+own convention 1 (p. 8, *"the Control Word must be written before the initial count is written"*)
+applied to a counter left mid-pair — **Control Word, write LSB, Control Word, write LSB, write
+MSB** — read back `0x1140` instead of `0x4011`, and the guest was given **265 Hz where it asked
+for 73**. That is the exact symptom class this round exists to fix, reintroduced under a fully
+green detector. A sibling mutant (a literal `0` for `d->counter_select` in the rewind) also
+passed all ten and broke every counter except 0.
+
+Closed by arms **W** and **X** and rows **R10/R11**. The kill table, measured, and note that the
+second row is not redundant — it is the *only* row that sees the sibling:
+
+| build | R10 (counter 0) | R11 (counter 2) |
+|---|---|---|
+| #440 as staged | ok `0x4011` | ok `0x4011` |
+| drop the write rewind | **FAIL** `0x1140` | **FAIL** `0x1140` |
+| hardcode counter 0 in the rewind | ok `0x4011` | **FAIL** `0x1140` |
+
+*The first attempt at that kill test was a **VOID CONTROL that scored itself green**: run through
+`wsl -- bash -c` from git-bash, the shell ate `$M`, so no mutant was ever applied and both rows
+printed `ok` on unmodified source. `cp: cannot stat ''` was the only symptom and it did not stop
+the rows printing. Re-run from a script file on disk, which is this project's documented fix for
+exactly that.*
+
+**WRONG RECORD in the source, measured false by the Opus seat.** The comment claiming *"#439's
+measured behaviour is unchanged"*: two toggles preserve the starting phase, so a `gettick()`
+entered at **even** read parity is a no-op — but at **odd** parity the first read already has
+`rw == MSB`, consumes the latch, and the second returns the live counter LSB. `0x9c00` where #439
+gave `0x0000`. Corrected in place, with the honest note that this shape is *closer* to hardware
+and that #439's reason for existing survives either way (the divisor is non-zero in both).
+
+**A second wrong record, smaller and worth the hedge.** The struct comment read as though the
+datasheet describes read/write flip-flops. It does not — grepped, the local `i8254.txt` never uses
+the phrase, and its only `flip-flop` hits are the GATE edge detector. Two flip-flops is a correct
+*inference from an observable sequence*, and the comment now says so. Given this project's history
+with citations that came from model output, the distinction is worth the four lines.
+
+**CODEX DISSENTED — `VERDICT: DO NOT SHIP` — on two grounds, and both were settled by looking.**
+Its first blocker is that `mode_byte` is still global, so per-counter flip-flops sit underneath a
+shared format byte. **That is real, and it is `pitclobber`** — the Opus seat measured it on the
+most standard PC PIT init there is (CW `0x34`, counter 0 = `0x2e9c`, CW `0x54`, write counter 1,
+read counter 0 → `0x9c9c`) and measured it **identical on HEAD and #440**, so it is pre-existing
+and not a regression. Kimi reached the same conclusion independently. It is filed, it now has a
+witness it did not have this morning, and under the reopening rule it cannot join this round.
+Codex's second blocker — that consuming the latch after one post-latch read contradicts p. 8's
+*"two bytes must be read"* — is a genuine open question, and **both seats that examined it agree
+the local text does not settle whether a latch command rewinds the read flip-flop.** Recorded as
+an honest UNKNOWN in the source and filed as `pitlatch2`, not decided by vote.
+
+**Kimi raised an out-of-bounds concern** — an `SC=11` Read-Back Command indexing `latched[3]` /
+`rd_msb[3]` / `wr_msb[3]` — and reasoned at length about which field each would clobber.
+**Refuted by opening the file**: `dev_8253.c:269-272` clamps `counter_select > 2` back to 0, four
+lines above the first array write. The premise the whole chain rests on cannot occur. Settled in
+under a minute, which is the rule working.
+
+Gates after the pass-2 changes: `gate_hygiene` PASS (48), `gate_offline` PASS (259), each run
+singly. `dev_8253.c` byte-identical across `GXEMUL-SEC`, `est/`, `build/` and `/tmp/gxsec-build`,
+verified by `cmp` after the mutation test, and the `build/.MUTANT` sentinel was cleared only once
+that `cmp` — against the repo source, never against the script's own backup — had passed.
+
 ## R4 detector (#429) — the fix shipped with nothing that could notice its removal, and the lesson was already written three blocks below
 No emulator behaviour changes. This is a detector for a correction that shipped four days
 earlier with none, plus the gate wiring, six wrong records this round created and corrected in

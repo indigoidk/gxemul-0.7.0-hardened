@@ -42,6 +42,11 @@
  *  that calibrates by dividing by (reload - latched_count), as OpenBSD's
  *  findcpuspeed() does, would divide by zero.  The latch is accepted and, as
  *  of #439, leaves the counter's programming intact.
+ *
+ *  #440: ...and, as of #440, is CONSUMED by the reads that follow it, per the
+ *  programmed byte format.  #439 set the flag and cleared it only on a mode
+ *  write, so one latch command made every later read of that counter return 0
+ *  indefinitely.  Found by the #439 pass-2 review (Codex 5.6-SOL).
  */
 
 #include <stdio.h>
@@ -75,6 +80,23 @@ struct pit8253_data {
 	int		mode[3];
 	int		counter[3];
 	int		latched[3];	/*  #439: latch command pending  */
+
+	/*
+	 *  #440: the read/write flip-flops.  1 means "the MSB is the half the
+	 *  next access refers to".  READS AND WRITES GET SEPARATE ONES -- and
+	 *  that is INFERRED from an observable sequence, not quoted: the local
+	 *  i8254 text never uses the phrase "read/write flip-flop" at all (its
+	 *  only "flip-flop" hits are the GATE edge detector).  What it does
+	 *  give, at _scratchpad/i8254.txt p. 8, is
+	 *
+	 *	1) Read least significant byte	2) Write new least significant byte
+	 *	3) Read most significant byte	4) Write new most significant byte
+	 *
+	 *  as a valid sequence, and one shared flip-flop cannot produce it --
+	 *  step 1 would advance it past step 2's LSB.
+	 */
+	int		rd_msb[3];
+	int		wr_msb[3];
 
 	int		hz[3];
 
@@ -111,6 +133,7 @@ DEVICE_ACCESS(8253)
 {
 	struct pit8253_data *d = (struct pit8253_data *) extra;
 	uint64_t idata = 0, odata = 0;
+	int rw = 0;		/*  #440: the half THIS access refers to  */
 
 	if (writeflag == MEM_WRITE)
 		idata = memory_readmax64(cpu, data, len);
@@ -122,10 +145,33 @@ DEVICE_ACCESS(8253)
 	case I8253_TIMER_CNTR0:
 	case I8253_TIMER_CNTR1:
 	case I8253_TIMER_CNTR2:
+		/*
+		 *  #440: in the 16-bit format it is the counter's read/write
+		 *  flip-flop -- not mode_byte -- that says which half an access
+		 *  refers to, and it ALTERNATES: LSB, MSB, LSB, ...
+		 *
+		 *  The old code cleared I8253_TIMER_LSB in mode_byte instead,
+		 *  and nothing ever set it back, so the selector stuck at MSB
+		 *  after one access and took the record of the programmed
+		 *  format with it (the test below could then never match).  A
+		 *  second 16-bit write pair therefore put BOTH of its bytes in
+		 *  the high half: an extra, unasked-for reprogramming, and with
+		 *  a low byte of 0x00 a transient count of ZERO from a guest
+		 *  that never programmed one.
+		 *
+		 *  Resolving the half here means the switches below can no
+		 *  longer see I8253_TIMER_16BIT; their default arms still catch
+		 *  a counter touched before any control word (rw == LATCH == 0).
+		 */
+		rw = d->mode_byte & 0x30;
+		if (rw == I8253_TIMER_16BIT)
+			rw = (writeflag == MEM_WRITE ? d->wr_msb[relative_addr]
+			    : d->rd_msb[relative_addr]) ?
+			    I8253_TIMER_MSB : I8253_TIMER_LSB;
+
 		if (writeflag == MEM_WRITE) {
-			switch (d->mode_byte & 0x30) {
+			switch (rw) {
 			case I8253_TIMER_LSB:
-			case I8253_TIMER_16BIT:
 				d->counter[relative_addr] &= 0xff00;
 				d->counter[relative_addr] |= (idata & 0xff);
 				break;
@@ -170,12 +216,52 @@ DEVICE_ACCESS(8253)
 			    which would look like a count that has not
 			    started -- guests divide by (reload - this).  */
 			odata = 0;
-			break;	/*  no counter byte was consumed, so
-			    leave the LSB/MSB selector below alone  */
+
+			/*
+			 *  #440: CONSUME the latch.  i8254 p. 8: "the count
+			 *  must be read according to the programmed format
+			 *  specifically if the Counter is programmed for two
+			 *  byte counts two bytes must be read"; p. 7: the
+			 *  count "is held in the latch until it is read by
+			 *  the CPU (or until the Counter is reprogrammed)
+			 *  The count is then unlatched automatically".
+			 *
+			 *  So the last byte the format calls for releases it.
+			 *  #439 cleared the flag only on a mode write, which
+			 *  left one latch command making EVERY later read of
+			 *  that counter return 0.  This byte counts against
+			 *  the format, so the flip-flop below advances for it
+			 *  too.
+			 *
+			 *  #440 pass 2, and the sentence this replaces was
+			 *  MEASURED FALSE: it claimed "#439's measured
+			 *  behaviour is unchanged".  Two toggles preserve the
+			 *  starting phase, so a gettick() entered at EVEN read
+			 *  parity is indeed a no-op -- but at ODD parity the
+			 *  first read already has rw == MSB, consumes the
+			 *  latch, and the second returns the live counter LSB:
+			 *  0x9c00 where #439 gave 0x0000.  That is a change,
+			 *  and it is the shape closer to the hardware (the
+			 *  first read takes the byte the format calls for and
+			 *  unlatches).  #439's reason for existing survives
+			 *  either way -- the divisor is non-zero in both.
+			 *
+			 *  Left as a KNOWN OPEN QUESTION, not settled here: a
+			 *  byte read BEFORE the latch command cannot be a byte
+			 *  of the newly latched value, so consuming the latch
+			 *  after one post-latch read arguably contradicts
+			 *  p. 8's "two bytes must be read".  The local i8254
+			 *  text does not say whether a latch command rewinds
+			 *  the read flip-flop, and with no other 8253/8254
+			 *  source in the tree this is an honest UNKNOWN rather
+			 *  than a defect either way.  Tracked as `pitlatch2`.
+			 */
+			if ((d->mode_byte & 0x30) != I8253_TIMER_16BIT ||
+			    rw == I8253_TIMER_MSB)
+				d->latched[relative_addr] = 0;
 		} else {
-			switch (d->mode_byte & 0x30) {
+			switch (rw) {
 			case I8253_TIMER_LSB:
-			case I8253_TIMER_16BIT:
 				odata = d->counter[relative_addr] & 0xff;
 				break;
 			case I8253_TIMER_MSB:
@@ -188,9 +274,15 @@ DEVICE_ACCESS(8253)
 			}
 		}
 
-		/*  Switch from LSB to MSB, if accessing as 16-bit word:  */
-		if ((d->mode_byte & 0x30) == I8253_TIMER_16BIT)
-			d->mode_byte &= ~I8253_TIMER_LSB;
+		/*  #440: advance the flip-flop -- ALTERNATE, never latch.  This
+		    used to be `d->mode_byte &= ~I8253_TIMER_LSB', a one-way
+		    clear that also destroyed the programmed format.  */
+		if ((d->mode_byte & 0x30) == I8253_TIMER_16BIT) {
+			if (writeflag == MEM_WRITE)
+				d->wr_msb[relative_addr] ^= 1;
+			else
+				d->rd_msb[relative_addr] ^= 1;
+		}
 
 		break;
 
@@ -218,6 +310,15 @@ DEVICE_ACCESS(8253)
 			d->mode_byte = idata;
 			d->latched[d->counter_select] = 0;
 			d->mode[d->counter_select] = idata & 0x0e;
+
+			/*  #440: a Control Word programs "least significant
+			    byte first then most significant byte" (i8254
+			    Figure 7, RW1 RW0 = 1 1), so it rewinds this
+			    counter's flip-flops.  Per counter, like the
+			    hardware: Figure 8's sequences interleave control
+			    words and count bytes across all three.  */
+			d->rd_msb[d->counter_select] = 0;
+			d->wr_msb[d->counter_select] = 0;
 
 			debug("[ 8253: select=%i mode=0x%x ",
 			    d->counter_select, d->mode[d->counter_select]);

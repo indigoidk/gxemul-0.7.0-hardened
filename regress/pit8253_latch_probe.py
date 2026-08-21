@@ -26,6 +26,34 @@ makes F a discriminator rather than a second opinion:
                          this probe prints, not an argument.
   T  MMU left on         negative control
 
+#440 adds four more arms.  None of P/Z/I latches anything, so they measure the
+LSB/MSB selector alone; L measures the latch and the selector where they meet.
+
+  P  two 16-bit write pairs, count 0x2e9c   the selector was ONE-WAY, so it stuck
+                                            at MSB and pair 2 put BOTH bytes in
+                                            the high half: a third recompute the
+                                            guest never asked for, and a readback
+                                            of 0x2e2e instead of 0x2e9c
+  Z  the same with count 0x2e00             low byte 0x00, so that intermediate
+                                            counter is EXACTLY 0 -- the device is
+                                            driven to 0 Hz by a guest that never
+                                            programs count 0.  This is the door
+                                            onto the separately-filed count-0
+                                            defect, which is why it gets its own
+                                            arm rather than a comment.
+  I  the i8254 p. 8 interleave              "read LSB, write new LSB, read MSB,
+                                            write new MSB", a documented-valid
+                                            sequence.  It is the row that
+                                            separates TWO flip-flops (correct)
+                                            from ONE shared one -- the plausible
+                                            smaller fix, which passes P and Z.
+  L  latch, read, read, read, read          #439 set latched[] and cleared it only
+                                            on a mode write, so one latch command
+                                            made every later read return 0 for
+                                            ever.  Reads 3 and 4 must return the
+                                            counter again.  (Found by the #439
+                                            pass-2 review.)
+
 usage: pit8253_latch_probe.py <gxemul-binary> <four-byte-raw-stub> [--learn]
 """
 import os, pty, re, select, sys, time
@@ -51,13 +79,24 @@ MMU_NOP = [
 ]
 
 MOVR1 = lambda imm: (0xE3A01000 | imm)          # mov r1,#imm   (imm8, no rotate)
+#  #440: the disassembler prints a zero immediate as "#0", NOT "#0x0" -- the
+#  committed body() hardcoded that at 0x5c.  Arm Z writes a zero counter byte, so
+#  the formatting has to be shared rather than rediscovered.  Row E would have
+#  caught it, but as a DISASSEMBLY MISMATCH, i.e. as a probe bug wearing the
+#  costume of a device bug.
+MOVTXT = lambda imm: "mov r1,#0" if imm == 0 else "mov r1,#0x%x" % imm
 STRB43 = (0xE5C01043, "strb r1,[r0,#67]")       # MODE  <- r1
 STRB40 = (0xE5C01040, "strb r1,[r0,#64]")       # CNTR0 <- r1
 
 
-def body(lo, hi):
-    """The guest sequence.  `lo`/`hi` are the two counter bytes a driver writes."""
-    return [
+#  #440: controls C1/C2 and the A1 device signature, lifted VERBATIM out of body()
+#  so that every arm carries its own controls.  Arms D/F/T must go on measuring
+#  exactly what they measured before this was extracted -- that is the check.
+#
+#  A1 survives the flip-flop fix on purpose: the MODE<-0x34 at 0x38 rewinds the
+#  selector under BOTH the old one-way clear and the new flip-flop, so A1 stays a
+#  control and never doubles as the thing under test.
+PROLOGUE = [
     (0x0c, 0xEE113F10, "mrc 15,0,r3,cr1,cr0,0", "C2: read CP15 c1 BACK -- measures MMU state"),
     (0x10, 0xE3A0047C, "mov r0,#0x7c000000",    "ISA portbase (bus_pci.c:459/476)"),
     (0x14, 0xE3A04A09, "mov r4,#0x9000",        "scratch RAM"),
@@ -78,7 +117,12 @@ def body(lo, hi):
     (0x34, MOVR1(0x34), "mov r1,#0x34",         ""),
     (0x38, STRB43[0],   STRB43[1],              "MODE <- 0x34 again (rewind selector)"),
     (0x3c, 0xE5D08040,  "ldrb r8,[r0,#64]",     "A1: expect 0xAA (device) not 0x55 (RAM)"),
+]
 
+
+def body(lo, hi):
+    """The guest sequence.  `lo`/`hi` are the two counter bytes a driver writes."""
+    return PROLOGUE + [
     #  ---- program counter 0 the way a real driver does ----------------------
     (0x40, MOVR1(0x34), "mov r1,#0x34",         ""),
     (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x34"),
@@ -100,9 +144,174 @@ def body(lo, hi):
     ]
 
 
-TAIL = [(0x70, NOP, NOPTXT, "landing pad -- planted, never stepped")]
+def body_flip(lo, hi):
+    """#440 `pitflip`: ONE mode write, then TWO full 16-bit write pairs, then a
+    16-bit read pair.  Nothing latches, so #439's path is not involved at all and
+    this measures the selector by itself.
+
+    A real 8254's flip-flop ALTERNATES, so pair 2 lands LSB-then-MSB exactly as
+    pair 1 did: one recompute per pair, and the read pair returns the reload.
+    """
+    return PROLOGUE + [
+    (0x40, MOVR1(0x34), MOVTXT(0x34),           ""),
+    (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x34  (the ONLY mode write)"),
+    (0x48, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x4c, STRB40[0],   STRB40[1],              "pair 1 LSB"),
+    (0x50, MOVR1(hi),   MOVTXT(hi),             ""),
+    (0x54, STRB40[0],   STRB40[1],              "pair 1 MSB  -> recompute #1"),
+    (0x58, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x5c, STRB40[0],   STRB40[1],              "pair 2 LSB  <- lands in the HIGH half pre-fix"),
+    (0x60, MOVR1(hi),   MOVTXT(hi),             ""),
+    (0x64, STRB40[0],   STRB40[1],              "pair 2 MSB"),
+    (0x68, 0xE5D06040,  "ldrb r6,[r0,#64]",     "W1: readback low  byte"),
+    (0x6c, 0xE5D07040,  "ldrb r7,[r0,#64]",     "W2: readback high byte"),
+    (0x70, 0xE5D09043,  "ldrb r9,[r0,#67]",     "M1: mode_byte after all of it"),
+    ]
+
+
+def body_ilv(lo, hi):
+    """#440: the i8254 datasheet's own p. 8 interleave --
+
+        1) Read least significant byte   2) Write new least significant byte
+        3) Read most significant byte    4) Write new most significant byte
+
+    -- which it calls a valid sequence.  ONE shared read/write flip-flop cannot
+    produce it (step 1 would advance the selector past step 2's LSB), so this arm
+    is what makes two independent flip-flops a measurement rather than a taste.
+
+    Counter is programmed to (hi<<8)|lo, then steps 1-4 rewrite it to 0x4011.
+    """
+    return PROLOGUE + [
+    (0x40, MOVR1(0x34), MOVTXT(0x34),           ""),
+    (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x34  (rewinds both flip-flops)"),
+    (0x48, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x4c, STRB40[0],   STRB40[1],              "write LSB"),
+    (0x50, MOVR1(hi),   MOVTXT(hi),             ""),
+    (0x54, STRB40[0],   STRB40[1],              "write MSB -> counter = 0x2e9c"),
+    (0x58, 0xE5D06040,  "ldrb r6,[r0,#64]",     "I1: step 1, read LSB       expect 0x9c"),
+    (0x5c, MOVR1(0x11), MOVTXT(0x11),           ""),
+    (0x60, STRB40[0],   STRB40[1],              "I2: step 2, write new LSB -> 0x2e11"),
+    (0x64, 0xE5D07040,  "ldrb r7,[r0,#64]",     "I3: step 3, read MSB       expect 0x2e"),
+    (0x68, MOVR1(0x40), MOVTXT(0x40),           ""),
+    (0x6c, STRB40[0],   STRB40[1],              "I4: step 4, write new MSB -> 0x4011"),
+    (0x70, 0xE5D02040,  "ldrb r2,[r0,#64]",     "I5: readback LSB   expect 0x11"),
+    (0x74, 0xE5D09040,  "ldrb r9,[r0,#64]",     "I6: readback MSB   expect 0x40"),
+    ]
+
+
+def body_rewind(lo, hi, port, cw):
+    """#440 PASS 2: does a Control Word rewind the WRITE flip-flop, for THIS counter?
+
+    *** THE ONLY ARM THAT COVERS THE CONTROL-WORD REWIND.  Without it, deleting
+
+            d->wr_msb[d->counter_select] = 0;
+
+    passes every other row in this file. ***  Two seats found that mutant independently -- one
+    by building it (readback 0x1140 for 0x4011, and the guest gets 265 Hz where it asked for
+    73), one by reading -- and neither the write-pair arms nor the interleave arm can see it,
+    because a COMPLETE pair returns the flip-flop to LSB on its own.  Only an ABANDONED pair
+    leaves it at MSB where the rewind is the thing that matters.
+
+    The sequence is the datasheet's own convention 1 (p. 8: "the Control Word must be written
+    before the initial count is written"), applied to a counter left mid-pair:
+
+        Control Word, write LSB, Control Word, write LSB, write MSB
+
+    A correct model rewinds at the second Control Word, so the last two bytes are LSB then MSB
+    and the counter reads back 0x4011.  Without the rewind the third write is taken as an MSB
+    and the bytes land swapped.
+
+    PARAMETERISED BY COUNTER on purpose.  The sibling mutant replaces d->counter_select with a
+    literal 0 in the rewind, which a counter-0-only arm cannot see -- it too passed all ten
+    rows.  The comment in dev_8253.c claims the rewind is "per counter, like the hardware", so
+    the detector has to exercise a second counter or that sentence is unbacked.
+    """
+    strb = (0xE5C01000 | port, "strb r1,[r0,#%d]" % port)
+    ldrb = lambda rn: (0xE5D00000 | (rn << 12) | port, "ldrb r%d,[r0,#%d]" % (rn, port))
+    return PROLOGUE + [
+    (0x40, MOVR1(cw),   MOVTXT(cw),             ""),
+    (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x%02x  (16-bit, this counter)" % cw),
+    (0x48, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x4c, strb[0],     strb[1],                "write LSB -- pair now HALF DONE"),
+    (0x50, MOVR1(cw),   MOVTXT(cw),             ""),
+    (0x54, STRB43[0],   STRB43[1],              "MODE <- 0x%02x AGAIN: abandons the pair" % cw),
+    (0x58, MOVR1(0x11), MOVTXT(0x11),           ""),
+    (0x5c, strb[0],     strb[1],                "write LSB -- MSB iff the rewind happened"),
+    (0x60, MOVR1(0x40), MOVTXT(0x40),           ""),
+    (0x64, strb[0],     strb[1],                "write MSB -> counter = 0x4011"),
+    (0x68, ldrb(6)[0],  ldrb(6)[1],             "W1: readback LSB   expect 0x11"),
+    (0x6c, ldrb(7)[0],  ldrb(7)[1],             "W2: readback MSB   expect 0x40"),
+    ]
+
+
+def body_latch(lo, hi):
+    """#440: does a latch command RELEASE?  Program the counter, latch it, then
+    read FOUR times.  Reads 1-2 are the two bytes the 16-bit format calls for and
+    are 0 (there is no captured count -- #439, deliberately, unchanged here).
+    Reads 3-4 must be the counter again: i8254 p. 7, the count "is held in the
+    latch until it is read by the CPU ... then unlatched automatically".
+
+    #439 cleared latched[] only on a mode write, so reads 3-4 stayed 0 for ever.
+    """
+    return PROLOGUE + [
+    (0x40, MOVR1(0x34), MOVTXT(0x34),           ""),
+    (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x34"),
+    (0x48, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x4c, STRB40[0],   STRB40[1],              "CNTR0 LSB"),
+    (0x50, MOVR1(hi),   MOVTXT(hi),             ""),
+    (0x54, STRB40[0],   STRB40[1],              "CNTR0 MSB -> counter = 0x2e9c"),
+    (0x58, MOVR1(0x00), MOVTXT(0x00),           "TIMER_SEL0|TIMER_LATCH"),
+    (0x5c, STRB43[0],   STRB43[1],              "MODE <- 0x00  (LATCH counter 0)"),
+    (0x60, 0xE5D06040,  "ldrb r6,[r0,#64]",     "K1: latched byte 1   expect 0x00"),
+    (0x64, 0xE5D07040,  "ldrb r7,[r0,#64]",     "K2: latched byte 2   expect 0x00, RELEASES"),
+    (0x68, 0xE5D02040,  "ldrb r2,[r0,#64]",     "K3: AFTER the latch  expect 0x9c, not 0"),
+    (0x6c, 0xE5D09040,  "ldrb r9,[r0,#64]",     "K4: AFTER the latch  expect 0x2e"),
+    ]
+
+
+def body_mid(lo, hi):
+    """#440: the LATCH lands BETWEEN the two halves of a 16-bit read pair.
+
+    This is the one sequence where #439 and #440 actually meet, so it is measured
+    rather than reasoned about.  Read 1 takes the LSB and advances the read
+    flip-flop; the latch command then arrives mid-pair; read 2 is therefore the
+    MSB half, which is the last byte the format calls for, so it both completes
+    the guest's pair AND releases the latch.  The pair that follows must read
+    normally again.
+
+    Real hardware would hand back the latched count's high byte at read 2 where
+    this returns 0x00 -- that is the documented "there is no live count" limit
+    (#439), NOT a state-machine defect.  What this arm asserts is the STATE
+    MACHINE: that the pair completes and the latch lets go.
+    """
+    return PROLOGUE + [
+    (0x40, MOVR1(0x34), MOVTXT(0x34),           ""),
+    (0x44, STRB43[0],   STRB43[1],              "MODE <- 0x34"),
+    (0x48, MOVR1(lo),   MOVTXT(lo),             ""),
+    (0x4c, STRB40[0],   STRB40[1],              "CNTR0 LSB"),
+    (0x50, MOVR1(hi),   MOVTXT(hi),             ""),
+    (0x54, STRB40[0],   STRB40[1],              "CNTR0 MSB -> counter = 0x2e9c"),
+    (0x58, 0xE5D06040,  "ldrb r6,[r0,#64]",     "N1: first half of a read pair  expect 0x9c"),
+    (0x5c, MOVR1(0x00), MOVTXT(0x00),           ""),
+    (0x60, STRB43[0],   STRB43[1],              "MODE <- 0x00: LATCH, MID-PAIR"),
+    (0x64, 0xE5D07040,  "ldrb r7,[r0,#64]",     "N2: second half  expect 0x00, RELEASES"),
+    (0x68, 0xE5D02040,  "ldrb r2,[r0,#64]",     "N3: next pair LSB  expect 0x9c"),
+    (0x6c, 0xE5D09040,  "ldrb r9,[r0,#64]",     "N4: next pair MSB  expect 0x2e"),
+    ]
+
+
+def tail_for(b):
+    """#440: landing pad one word past whichever body was built -- the bodies are
+    no longer all the same length.  Planted, never stepped."""
+    return [(b[-1][0] + 4, NOP, NOPTXT, "landing pad -- planted, never stepped")]
+
+
 REGS_OF_INTEREST = (0, 1, 2, 3, 5, 6, 7, 8, 9)
 COMPLAINT = "huh? reading from counter"
+#  #440: every recompute the device logs.  The FIRST match in every body is the
+#  A1 signature's own 0x55AA; the ones under test follow it.
+RECOMPUTE = re.compile(r"8253: counter 0 set to (\d+) \((\d+) Hz\)")
+MMUOFF = ("D", "F", "P", "Z", "I", "L", "M")
 
 
 def run_arm(prog):
@@ -205,10 +414,25 @@ def run_arm(prog):
 
 
 ARMS = [
-    ("D", MMU_OFF, 0x9c, 0x2e, "MMU off, counter 0x2e9c = TIMER_DIV(100)"),
-    ("F", MMU_OFF, 0xff, 0xff, "MMU off, counter 0xffff = findcpuspeed() shape"),
-    ("T", MMU_NOP, 0x9c, 0x2e, "MMU LEFT ON -- negative control"),
+    ("D", MMU_OFF, body,       0x9c, 0x2e, "MMU off, counter 0x2e9c = TIMER_DIV(100)"),
+    ("F", MMU_OFF, body,       0xff, 0xff, "MMU off, counter 0xffff = findcpuspeed() shape"),
+    ("T", MMU_NOP, body,       0x9c, 0x2e, "MMU LEFT ON -- negative control"),
+    ("P", MMU_OFF, body_flip,  0x9c, 0x2e, "#440 pitflip: two write pairs, 0x2e9c"),
+    ("Z", MMU_OFF, body_flip,  0x00, 0x2e, "#440 pitflip: two write pairs, 0x2e00 (low byte 0)"),
+    ("I", MMU_OFF, body_ilv,   0x9c, 0x2e, "#440 pitflip: the i8254 p.8 read/write interleave"),
+    ("L", MMU_OFF, body_latch, 0x9c, 0x2e, "#440: is the counter latch ever RELEASED?"),
+    ("M", MMU_OFF, body_mid,   0x9c, 0x2e, "#440: a LATCH mid-way through a 16-bit read pair"),
+    #  #440 pass 2: TWO counters, because two DIFFERENT one-line mutants passed all ten rows
+    #  without them -- dropping the write rewind, and hardcoding counter 0 in it.  Counter 2
+    #  (port 66, Control Word 0xb6) is what makes "per counter" a measurement.
+    ("W", MMU_OFF, lambda lo, hi: body_rewind(lo, hi, 64, 0x34), 0x9c, 0x2e,
+     "#440 pass 2: Control Word rewinds the WRITE flip-flop, counter 0"),
+    ("X", MMU_OFF, lambda lo, hi: body_rewind(lo, hi, 66, 0xb6), 0x9c, 0x2e,
+     "#440 pass 2: ...and counter 2, so the rewind is per-counter"),
 ]
+
+#  #440: what each write-pair arm programmed, for the readback rows.
+EXPECT = {"P": 0x2e9c, "Z": 0x2e00}
 
 
 def main():
@@ -216,8 +440,9 @@ def main():
     print("pit8253 latch probe -- %s" % BIN)
     print("=" * 76)
     R = {}
-    for name, head, lo, hi, desc in ARMS:
-        st, regs, lines, bad, seen = run_arm(head + body(lo, hi) + TAIL)
+    for name, head, bodyfn, lo, hi, desc in ARMS:
+        b = bodyfn(lo, hi)
+        st, regs, lines, bad, seen = run_arm(head + b + tail_for(b))
         R[name] = (st, regs, lines, bad)
         print("\n--- arm %s : %s ---" % (name, desc))
         print("    status %s" % st)
@@ -235,6 +460,19 @@ def main():
     stD, rD, lD, badD = R["D"]
     stF, rF, lF, _    = R["F"]
     stT, rT, lT, _    = R["T"]
+    rP, rZ, rI, rL, rM = (R[a][1] for a in ("P", "Z", "I", "L", "M"))
+
+    def recomputes(a):
+        """#440: (count, hz) per recompute in arm `a`, A1's own signature DROPPED.
+
+        A1's write pair is always the first and always 0x55AA=21930 at 54 Hz.
+        That is ASSERTED rather than assumed: if it ever moves, every index here
+        silently shifts, and a row that counts recomputes would be counting the
+        wrong ones while still going green.  None means "did not lead with A1".
+        """
+        out = [(int(m.group(1)), int(m.group(2)))
+               for m in (RECOMPUTE.search(l) for l in R[a][2]) if m]
+        return out[1:] if out[:1] == [(21930, 54)] else None
 
     def gettick(r):
         return (r.get(7, 0) << 8) | r.get(6, 0)
@@ -249,15 +487,25 @@ def main():
         ok &= bool(good)
         print("  %-4s %-44s %s" % ("ok" if good else "FAIL", tag, detail))
 
-    row("C1 liveness", rD.get(5) == 0x11223344,
-        "RAM through the same decode = 0x%x" % rD.get(5, -1))
-    row("C2 MMU state", (rD.get(3, 1) & 1) == 0,
-        "CP15 c1 read BACK = 0x%x (bit0 must be 0)" % rD.get(3, -1))
-    row("A1 device signature", rD.get(8) == 0xAA,
-        "0x%x  (RAM would be 0x55, absent 0x00)" % rD.get(8, -1))
+    #  #440: the controls now cover EVERY MMU-off arm, not just D.  P/Z/I/L carry
+    #  new hand-assembled encodings and make their own device accesses; a control
+    #  proved only on arm D says nothing whatever about them.
+    def per_arm(fmt, f):
+        return " ".join(fmt % (a, f(R[a][1])) for a in MMUOFF)
+
+    row("C1 liveness", all(R[a][1].get(5) == 0x11223344 for a in MMUOFF),
+        "RAM through the same decode " + per_arm("%s=0x%x", lambda r: r.get(5, -1)))
+    row("C2 MMU state", all((R[a][1].get(3, 1) & 1) == 0 for a in MMUOFF),
+        "CP15 c1 bit0 " + per_arm("%s=0x%x", lambda r: r.get(3, -1)))
+    row("A1 device signature", all(R[a][1].get(8) == 0xAA for a in MMUOFF),
+        per_arm("%s=0x%x", lambda r: r.get(8, -1)) + "  (RAM 0x55, absent 0x00)")
     row("T  MMU-ON control", rT.get(8) != 0xAA and not lT,
         "r8=0x%x, 8253 log lines=%d" % (rT.get(8, -1), len(lT)))
-    row("E  encodings", not badD, "%d disassembly mismatches in arm D" % len(badD))
+    row("E  encodings", not any(R[a][3] for a in MMUOFF),
+        "disassembly mismatches " + " ".join("%s=%d" % (a, len(R[a][3])) for a in MMUOFF))
+    row("A2 recompute stream", all(recomputes(a) is not None for a in MMUOFF),
+        "A1's own 0x55AA recompute leads every arm: " +
+        " ".join("%s=%s" % (a, "y" if recomputes(a) is not None else "NO") for a in MMUOFF))
 
     print("\n" + "=" * 76)
     print("MEASURED")
@@ -277,6 +525,32 @@ def main():
                   % (d, "*** ZERO -> guest divide-by-zero ***" if d == 0 else "(nonzero, safe)"))
         print()
 
+    #  ---------------------------------------------------------- #440 arms
+    for a in ("P", "Z"):
+        r = R[a][1]
+        print("  arm %s   readback (r7<<8)|r6            0x%04x   (programmed 0x%04x)"
+              % (a, (r.get(7, 0) << 8) | r.get(6, 0), EXPECT[a]))
+        print("          mode_byte after 2 pairs        0x%02x" % r.get(9, -1))
+        print("          recomputes after A1's          %s" % (recomputes(a),))
+        print()
+    print("  arm I   step1 read LSB  r6=0x%02x  (expect 0x9c)" % rI.get(6, -1))
+    print("          step3 read MSB  r7=0x%02x  (expect 0x2e)" % rI.get(7, -1))
+    print("          readback        0x%04x  (expect 0x4011)"
+          % ((rI.get(9, 0) << 8) | rI.get(2, 0)))
+    print()
+    print("  arm L   latched bytes   r6=0x%02x r7=0x%02x  (expect 0x00 0x00)"
+          % (rL.get(6, -1), rL.get(7, -1)))
+    print("          AFTER the latch r2=0x%02x r9=0x%02x  (expect 0x9c 0x2e)"
+          % (rL.get(2, -1), rL.get(9, -1)))
+    print()
+    print("  arm M   pair half 1     r6=0x%02x  (expect 0x9c) <- BEFORE the latch"
+          % rM.get(6, -1))
+    print("          pair half 2     r7=0x%02x  (expect 0x00) <- latched, releases"
+          % rM.get(7, -1))
+    print("          next pair       r2=0x%02x r9=0x%02x  (expect 0x9c 0x2e)"
+          % (rM.get(2, -1), rM.get(9, -1)))
+    print()
+
     print("=" * 76)
     print("VERDICT ROWS")
     print("=" * 76)
@@ -285,10 +559,13 @@ def main():
     #  rD.get(9); when the emulator never started, both were the -1 default and the
     #  row reported ok on a run that had measured nothing.  Every value a row
     #  consults is required to be present first.
-    have = all(k in rD for k in (2, 9)) and stD == "SURVIVED" and stF == "SURVIVED"
+    #  #440: R0 now demands EVERY arm, not just D and F -- an arm that never ran
+    #  leaves .get() defaults behind, which is the same absent-data trap again.
+    have = (all(k in rD for k in (2, 9))
+            and all(R[a][0] == "SURVIVED" for a, *_ in ARMS)
+            and all(recomputes(a) is not None for a in MMUOFF))
     row("R0 the run produced data", have,
-        "arm D %s, arm F %s, registers %s"
-        % (stD, stF, "present" if all(k in rD for k in (2, 9)) else "MISSING"))
+        " ".join("%s=%s" % (a, R[a][0]) for a, *_ in ARMS))
     #  R1/R2 fail on the PRE-FIX build (that is the reproduction).  R3 passes pre-fix
     #  and post-fix but fails on the plausible OVER-fix -- un-clobbering mode_byte
     #  without also declining to hand back the reload value.  A detector that only
@@ -300,6 +577,54 @@ def main():
         "%d '%s' lines" % (nD, COMPLAINT))
     row("R3 latched read is not the reload", have and (0xffff - gettick(rF)) != 0,
         "findcpuspeed divisor = %d" % (0xffff - gettick(rF)))
+
+    #  ------------------------------------------------------ #440 pitflip rows
+    #  Every one of these FAILS on the committed pre-#440 build; that is the
+    #  reproduction.  R7 additionally fails on the plausible SMALLER fix (one
+    #  flip-flop shared by reads and writes), which R4/R5/R6 all pass -- so R7 is
+    #  the row that stops this being over-modelled by taste rather than measured.
+    rb = lambda a: (R[a][1].get(7, 0) << 8) | R[a][1].get(6, 0)
+    row("R4 16-bit readback is the reload",
+        have and all(rb(a) == EXPECT[a] for a in ("P", "Z")),
+        " ".join("%s=0x%04x/0x%04x" % (a, rb(a), EXPECT[a]) for a in ("P", "Z")))
+    row("R5 one recompute per write pair",
+        have and all(len(recomputes(a)) == 2 for a in ("P", "Z")),
+        " ".join("%s=%d" % (a, len(recomputes(a))) for a in ("P", "Z")))
+    row("R6 no transient count of zero",
+        have and not [x for a in ("P", "Z") for x in recomputes(a) if x[0] == 0],
+        "arm Z recomputes %s" % (recomputes("Z"),))
+    row("R7 read and write flip-flops are separate",
+        have and rI.get(6) == 0x9c and rI.get(7) == 0x2e
+        and ((rI.get(9, 0) << 8) | rI.get(2, 0)) == 0x4011,
+        "i8254 p.8 interleave: r6=0x%02x r7=0x%02x readback=0x%04x"
+        % (rI.get(6, -1), rI.get(7, -1), (rI.get(9, 0) << 8) | rI.get(2, 0)))
+    #  R9 is the ONE sequence where #439 and #440 meet, so it is measured.  Half 1
+    #  must still be the LSB (pre-fix the selector was stuck at MSB and returned
+    #  0x2e), half 2 completes the guest's pair AND releases, and the pair after it
+    #  must read normally -- pre-fix it stayed 0x00 for ever.
+    row("R9 a mid-pair latch completes the pair and lets go",
+        have and rM.get(6) == 0x9c and rM.get(7) == 0x00
+        and rM.get(2) == 0x9c and rM.get(9) == 0x2e,
+        "halves 0x%02x 0x%02x then next pair 0x%02x 0x%02x"
+        % (rM.get(6, -1), rM.get(7, -1), rM.get(2, -1), rM.get(9, -1)))
+    #  #440 pass 2.  R10/R11 are the ONLY rows covering the control-word rewind; two seats
+    #  independently produced one-line mutants that passed R0-R9 while swapping a legal
+    #  guest's counter bytes.  R11 exists separately from R10 because the sibling mutant
+    #  (a literal 0 for d->counter_select in the rewind) leaves counter 0 CORRECT and breaks
+    #  only the others -- so a single-counter row cannot see it.
+    rW, rX = R["W"][1], R["X"][1]
+    row("R10 a Control Word rewinds the write flip-flop",
+        all(k in rW for k in (6, 7)) and rW.get(6) == 0x11 and rW.get(7) == 0x40,
+        "counter 0 readback 0x%02x%02x (expect 0x4011)" % (rW.get(7, 0), rW.get(6, 0)))
+    row("R11 ...and it does so PER COUNTER, not just counter 0",
+        all(k in rX for k in (6, 7)) and rX.get(6) == 0x11 and rX.get(7) == 0x40,
+        "counter 2 readback 0x%02x%02x (expect 0x4011)" % (rX.get(7, 0), rX.get(6, 0)))
+
+    row("R8 the latch is released by reading it",
+        have and rL.get(6) == 0x00 and rL.get(7) == 0x00
+        and rL.get(2) == 0x9c and rL.get(9) == 0x2e,
+        "latched 0x%02x 0x%02x then 0x%02x 0x%02x (must not stay 0)"
+        % (rL.get(6, -1), rL.get(7, -1), rL.get(2, -1), rL.get(9, -1)))
 
     print("\n  %s" % ("PASS" if ok else "FAIL"))
     sys.exit(0 if ok else 1)
