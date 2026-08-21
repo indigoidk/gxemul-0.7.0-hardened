@@ -5557,3 +5557,48 @@ A closure note says `SM_COVERED` lists thirteen stems. Measured at two commits: 
 All twelve are backed by real `selfmutant_one` calls, and 12 covered + 2 dated-exempt = the 14
 differentials on disk — so the manifest is internally consistent and the closure's *direction* was
 right. Its **number** is wrong by one: a count nobody re-derived.
+
+## 2026-08-21 — fixing gate 9 surfaced a real memory-safety defect it had been hiding
+
+### `sgiarcbiosoob` — held
+**A heap-buffer-overflow in `arcbios.c:2391` `set_env()` ← `machine_setup_sgi()`, on four SGI
+subtypes no harness had ever executed.** `sgi/ip12`, `ip28`, `ip30`, `ip35`, four ASan hits each.
+
+They were invisible for a mechanical reason unrelated to the defect: gate 9's awk required a
+machine's primary alias to match `[a-z0-9_.-]+`, and **SGI's is `"silicon graphics"` — with a
+space** — so SGI was dropped as a type and its subtypes silently re-attributed to `rpi`.
+
+Second time this session that fixing an instrument surfaced a real bug its blindness was
+concealing. Not diagnosed here — the round that found it was a harness round and stayed in its
+file. Reachability (construction-only vs guest-reachable) is unmeasured and decides the rung.
+
+### `asanstale` — held
+**Both ASan binaries were built 2026-07-29**, many rounds behind HEAD. Every "HEAD" row gate 9
+prints is *HEAD-as-of-that-build*. It now **prints** the dates — which is how this was noticed —
+but nothing **asserts** freshness, so a year-old pair would read identically. Concretely: this
+session shipped `#440`–`#444` touching four devices and gate 9 graded **none** of that code. Its
+green means "the July binary is clean" — a true statement about the wrong artefact. Same class as
+the dead-man switch already built for the nightly battery.
+
+### `stdbufasan` — held (records-only)
+Two traps, each defeating a technique this project relies on. **`stdbuf`'s `LD_PRELOAD` preempts
+the ASan runtime**, so the obvious fix for `abort()`-not-flushing breaks the binary instead; it
+needs `verify_asan_link_order=0`, and that had to be proven *behaviourally* because **this ASan
+silently ignores bogus options** — so the pass-a-nonsense-value discriminator that CLAUDE.md
+prescribes for proving a flag is real **fails here**. And the shell's `Aborted (core dumped)` line
+is emitted at the *call site*, so `( … ) 2>/dev/null` does not suppress it.
+
+### `m8saprspy` — held
+The SAPR/UAPR arm has the **same callback-pointer blindness** J6 just closed for the BWP arm:
+`c->` → `cpu->` on the purge callback changes the *pointer*, not the argument, and with one spy on
+both cpus it is invisible. The two-spy fixture now exists, so this is **one row**. Grade it as J6
+was — a shape pin, not a live defect, since `cpu_m88k.c:121-122` gives every m88k cpu the same
+function — but note that is **not architectural**: `cpu_mips.c` and `cpu_ppc.c` install *different*
+callbacks per cpu width.
+
+### `m8lanecomment` — held (records-only)
+`gate_offline`'s m8820x lane is titled *"compiles against the real `dev_m8820x.c`"*. It now also
+compiles the real `memory_m88k.c` — deliberately, since that is what makes the oracle ask the real
+translator rather than a re-implementation — and **ten of the census's kills land in the translator
+rather than the device**. A reader trusting the title would attribute translator coverage to the
+device file. One line.

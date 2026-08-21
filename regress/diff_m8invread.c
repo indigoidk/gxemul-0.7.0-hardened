@@ -74,6 +74,33 @@
  *  SHAPE PIN, not a proof of harm, and an earlier draft calling it dangerous was too
  *  strong.  Contrast mutant G, which IS a defect: it drops a write of zero to a register
  *  holding something else, and that loses state.
+ *
+ *  *** THIS FILE IS A DETECTOR, NOT A REPRODUCTION. ***  It #includes the device and calls
+ *  dev_m8820x_access() directly; the machine description and the CPU/device dispatch are gone,
+ *  which is the project's mechanical discriminator for WITNESS LADDER rung 1.  Nothing below
+ *  reproduces anything.
+ *
+ *  ----------------------------------------------------------------------------------------
+ *  SECTION J -- THE BWP/BATC ARM'S OWNER AND SELECTOR, added alongside diff_m8820x.c's
+ *  section F.
+ *
+ *  THE ARM HAD ZERO EXECUTABLE COVERAGE IN EITHER FILE.  `grep -cE 'BWP|bwp|batc'` returned
+ *  TWO MATCHING LINES here -- grep -c counts LINES, and both are comment prose in the block
+ *  above, about the SAPR/UAPR arm's F4 -- and ZERO in diff_m8820x.c.  MEASURED in this round
+ *  against the PRE-CHANGE files: deleting `batc[i] = idata;` at dev_m8820x.c:479 while leaving
+ *  the register store in place left both differentials fully green, 27 rows 0 failures and
+ *  25 rows 0 failures.
+ *
+ *  THE SPLIT BETWEEN THE TWO FILES IS BY SCOPE, NOT BY CONVENIENCE.  The arm's VALUE half --
+ *  that the shadow word is what m88k_translate_v2p reads, per index, per flag bit -- belongs in
+ *  diff_m8820x.c, which owns "values, not survival" and now carries the real translator as its
+ *  oracle.  The arm's OWNER/SELECTOR half belongs here, because THIS is the file with the
+ *  two-cpu / two-CMMU fixture that G1-G9 were built for, and diff_m8820x.c is single-cpu and
+ *  structurally blind to `c` -> `cpu` on the batc pointer.  The BWP arm derives BOTH of its
+ *  base pointers on the same two lines as the register arm (dev_m8820x.c:251-252), so the
+ *  identical one-identifier attacks apply -- and every existing G row drives a REGISTER offset,
+ *  so none of them touches this arm.  Section G's own lesson, restated: a property pinned for
+ *  one arm is pinned for that arm only.
  */
 #include <inttypes.h>
 #include <stdarg.h>
@@ -122,7 +149,30 @@ static int inv_all_were_ALL, inv_all_addr_zero;
 static struct cpu *inv_all_same_cpu;
 static int inv_cpu_mismatch;
 
-static void spy_invalidate(struct cpu *c, uint64_t a, int flags)
+/*
+ *  *** TWO SPY FUNCTIONS, ONE PER CPU, BECAUSE ONE CANNOT SEE WHICH CALLBACK POINTER FIRED. ***
+ *
+ *  G1/G2 inspect the cpu the purge is CALLED WITH; nothing inspected the cpu the purge is CALLED
+ *  THROUGH.  With a single spy installed on both cpus, `c->invalidate_translation_caches(c, 0,
+ *  INVALIDATE_ALL)` -> `cpu->invalidate_translation_caches(c, 0, ...)` is invisible: same
+ *  function, same argument.  It was measured surviving BOTH differentials and every row in them.
+ *
+ *  THE HONEST GRADE IS SHAPE PIN, NOT DEMONSTRATED HARM.  For m88k today the two pointers are
+ *  provably identical -- cpu_m88k.c:121-122 assigns m88k_invalidate_translation_caches to every
+ *  m88k cpu with no branch -- so the mutant is EQUIVALENT and cannot change behaviour.  What
+ *  makes the row worth its line is that the shared-pointer property is NOT architectural in this
+ *  tree: cpu_mips.c:120-133 and cpu_ppc.c:122-135 assign DIFFERENT invalidate callbacks
+ *  depending on the cpu's width, so a family that gains a second dyntrans mode gets two
+ *  callbacks in one machine, and this arm would then purge through the wrong one while every
+ *  row here stayed green.  Recorded as a shape pin that becomes load-bearing on that change --
+ *  not dressed up as a live defect.
+ *
+ *  spy_core() holds the whole body, so both entry points feed the SAME counters and every
+ *  existing row keeps its meaning; only the new inv_which bitmap distinguishes them.
+ */
+static int inv_which;		/*  bit 0: cpu0's callback fired; bit 1: cpu1's  */
+
+static void spy_core(struct cpu *c, uint64_t a, int flags)
 {
 	inv_calls++;
 	inv_last_cpu = c; inv_last_addr = a; inv_last_flags = flags;
@@ -131,6 +181,10 @@ static void spy_invalidate(struct cpu *c, uint64_t a, int flags)
 	if (inv_all_same_cpu == NULL) inv_all_same_cpu = c;
 	else if (inv_all_same_cpu != c) inv_cpu_mismatch = 1;
 }
+static void spy_invalidate(struct cpu *c, uint64_t a, int flags)
+{ inv_which |= 1; spy_core(c, a, flags); }
+static void spy_invalidate_b(struct cpu *c, uint64_t a, int flags)
+{ inv_which |= 2; spy_core(c, a, flags); }
 
 #include "../src/devices/dev_m8820x.c"
 
@@ -194,6 +248,7 @@ static void fresh(void)
 	inv_last_cpu = NULL; inv_last_addr = 0; inv_last_flags = -1;
 	inv_all_were_ALL = 1; inv_all_addr_zero = 1;
 	inv_all_same_cpu = NULL; inv_cpu_mismatch = 0;
+	inv_which = 0;
 }
 
 static uint32_t acc(struct cpu *c, uint64_t off, int writeflag, uint32_t val)
@@ -204,6 +259,24 @@ static uint32_t acc(struct cpu *c, uint64_t off, int writeflag, uint32_t val)
 		memory_writemax64(c, buf, 4, val);
 	dev_m8820x_access(c, NULL, off, buf, 4, writeflag, &dev);
 	return (uint32_t) memory_readmax64(c, buf, 4);
+}
+
+/*  fresh() memsets only cpu0's INSTRUCTION cmmu -- the other two objects are calloc'd once and
+    carry state between rows, which every existing G row is careful to work around by writing a
+    distinct value and checking it in the same row.  Section J inspects an ARRAY rather than a
+    single word, so it clears the three shadows explicitly rather than widening fresh() and
+    changing what rows E-H see.  */
+static void zero_batcs(void)
+{
+	memset(cmmu->batc,   0, sizeof(cmmu->batc));
+	memset(cmmu_d->batc, 0, sizeof(cmmu_d->batc));
+	memset(cmmu_b->batc, 0, sizeof(cmmu_b->batc));
+}
+
+/*  A BWP port write, as a guest store would issue it.  */
+static uint32_t bwp_write(struct cpu *c, int n, uint32_t val)
+{
+	return acc(c, (uint64_t) (CMMU_BWP0 + n) * 4, MEM_WRITE, val);
 }
 
 int main(void)
@@ -229,7 +302,7 @@ int main(void)
 	cpu0->cd.m88k.cmmu[1] = cmmu_d;		/*  the DATA cmmu -- cmmu_nr 1     */
 	cpu1->cd.m88k.cmmu[0] = cmmu_b;		/*  NOT the same object as cpu0's  */
 	cpu0->invalidate_translation_caches = spy_invalidate;
-	cpu1->invalidate_translation_caches = spy_invalidate;
+	cpu1->invalidate_translation_caches = spy_invalidate_b;	/*  a DIFFERENT function  */
 	fresh();
 
 	{
@@ -612,8 +685,92 @@ int main(void)
 	check_u("H2 CONTROL: and it too passes INVALIDATE_ALL",
 	    (uint64_t) inv_all_were_ALL, 1);
 
+	printf("--- J. the BWP/BATC arm: WHICH object holds the shadow, WHICH cpu is purged ---\n");
+	/*
+	 *  Every row here drives a BWP PORT, which no row above does.  The arm takes its two
+	 *  base pointers from dev_m8820x.c:251-252 -- `regs` and `batc`, both `c->cd.m88k
+	 *  .cmmu[d->cmmu_nr]->...` with `c = cpu->machine->cpus[d->cpu_nr]` -- so it is open to
+	 *  the same two one-identifier substitutions section G was built for, and to the same
+	 *  selector-guard shape (`&& d->cmmu_nr == 0`) that a measure seat drove five real
+	 *  defects through when #435 split the register arm.
+	 *
+	 *  WHY THE SHADOW AND NOT THE REGISTER.  Deleting `batc[i] = idata;` leaves the register
+	 *  store intact, so a row reading the port back through the handler is green under the
+	 *  defect this section exists for.  These rows inspect the batc[] ARRAY -- the one
+	 *  m88k_translate_v2p consults at memory_m88k.c:152, ahead of the PATC and the walk.
+	 *  That the array is genuinely a translation input is pinned in diff_m8820x.c section F,
+	 *  which asks the real translator; asserting it twice here would not make it truer.
+	 */
+	{
+		uint32_t w1 = 0xba7c0001u, w2 = 0xba7c0002u, w3 = 0xba7c0003u,
+		         w5 = 0xba7c0005u, w6 = 0xba7c0006u;
+		int purge_cmmu1, purge_cpu1;
+
+		/*  J1 -- the OWNER's shadow, not the accessor's.  A single-cpu fixture aliases
+		    the two and cannot see `c` -> `cpu` on the batc pointer at all.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0;				/*  the CMMU belongs to cpu0 ...  */
+		bwp_write(cpu1, 3, w3);			/*  ... but cpu1 is accessing it  */
+		check_u("J1 a BWP write lands in the OWNER's shadow BATC",
+		    (uint64_t) (cmmu->batc[3] == w3 && cmmu_b->batc[3] == 0), 1);
+
+		/*  J2 -- the CMMU selector.  Every row above leaves cmmu_nr at 0, so
+		    `cmmu[d->cmmu_nr]` -> `cmmu[0]` on THIS arm is invisible to all of them.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0; dev.cmmu_nr = 1;
+		bwp_write(cpu0, 5, w5);
+		check_u("J2 cmmu_nr 1 selects the DATA CMMU's shadow BATC",
+		    (uint64_t) (cmmu_d->batc[5] == w5 && cmmu->batc[5] == 0), 1);
+
+		/*  J3 -- the purge receiver, the direct analogue of G1/G2 for this arm.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0;
+		bwp_write(cpu1, 1, w1);
+		check_u("J3 the BWP purge targets the OWNER, not the accessor",
+		    (uint64_t) (inv_calls == 1 && inv_last_cpu == cpu0 && inv_last_cpu != cpu1), 1);
+
+		/*  J4 -- neither selector may gate the purge.  This is the `&& d->cmmu_nr == 0`
+		    shape: measured on the rig for the register arm, the DATA CMMU carries 51.9%
+		    of the traffic, so a guard that looks harmless discards half of it.  Both
+		    selectors are driven nonzero, one at a time.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0; dev.cmmu_nr = 1;
+		bwp_write(cpu0, 2, w2);
+		purge_cmmu1 = inv_calls;
+		fresh(); zero_batcs();
+		dev.cpu_nr = 1; dev.cmmu_nr = 0;
+		bwp_write(cpu1, 2, w2);
+		purge_cpu1 = inv_calls;
+		check_u("J4 a BWP purge survives either selector being nonzero",
+		    (uint64_t) (purge_cmmu1 == 1 && purge_cpu1 == 1), 1);
+
+		/*  J5 -- the ARGUMENTS, not the count.  F1/F2 pin these for the SAPR/UAPR arm
+		    only; INVALIDATE_ALL -> INVALIDATE_VADDR applied HERE keeps the count
+		    bit-identical and guts the purge to virtual page 0, which is the mutant a
+		    measuring seat booted to `login:` 1:1:1 on the other arm.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0;
+		bwp_write(cpu0, 6, w6);
+		check_u("J5 the BWP purge passes INVALIDATE_ALL and addr 0",
+		    (uint64_t) (inv_calls == 1 && inv_all_were_ALL && inv_all_addr_zero &&
+		                inv_last_flags == (int) INVALIDATE_ALL), 1);
+
+		/*  J6 -- WHICH CALLBACK POINTER, as opposed to which cpu is passed to it.  The one
+		    mutant that survived the whole census of this round was
+		    `c->invalidate_translation_caches(c, 0, ...)` -> `cpu->...`: same argument, and
+		    with one spy installed on both cpus, the same function.  See the two-spy note
+		    above for why this is graded a SHAPE PIN and not a live defect -- for m88k the
+		    two pointers are provably equal today, and the row earns its line only because
+		    two other families in this tree already install per-cpu callbacks.  */
+		fresh(); zero_batcs();
+		dev.cpu_nr = 0;
+		bwp_write(cpu1, 7, 0xba7c0007u);
+		check_u("J6 the purge goes through the OWNER's callback pointer",
+		    (uint64_t) (inv_calls == 1 && inv_which == 1), 1);
+	}
+
 	snprintf(buf, sizeof(buf), "%d", rows + 1);
-	check("IDENTITY row count -- guards against a stale copy", buf, "27");
+	check("IDENTITY row count -- guards against a stale copy", buf, "33");
 
 	printf("\n%d rows, %d failures\n", rows, fails);
 	printf("%s\n", fails == 0 ? "DIFF_M8INVREAD_PASS" : "DIFF_M8INVREAD_FAIL");

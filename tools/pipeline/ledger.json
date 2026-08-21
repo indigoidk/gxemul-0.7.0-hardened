@@ -13041,11 +13041,11 @@
    "title": "m8batc  The BWP/BATC arm has ZERO detector rows, and a mutant that stops updating the shadow batc[] passes BOTH m88k differentials green",
    "state": "held",
    "commits": "",
-   "hold": "Detector round: add BATC rows to both differentials. No fix -- the model is correct, the coverage is absent.",
+   "hold": "Detector complete and gate-green (39 mutants, 39 killed); CLOSES in the follow-up commit that can name its hash. Held rather than closed with a placeholder, because the placeholder check refused exactly that -- correctly.",
    "closure": {
-    "by": "",
-    "badge": "",
-    "note": ""
+    "by": "opus5",
+    "badge": "A",
+    "note": "A detector round: nothing in the model was wrong, the BWP/BATC arm simply had ZERO executable rows. Measured before the change: the deleted-shadow mutant left both differentials at 25/0 and 27/0 -- zero red rows.\n\n39 real mutants plus a negative control, 39/39 killed. Split across BOTH files by SCOPE rather than convenience: diff_m8820x.c owns 'values, not survival' and now #includes the real memory_m88k.c so the oracle asks the REAL translator what an address resolves to; diff_m8invread.c owns 'which object, which cpu' and is the only file with the two-cpu fixture."
    },
    "entries": [
     {
@@ -13056,8 +13056,18 @@
      "note": "*** OUTRANKS ALL SEVEN ROWS OF THE M88K CLUSTER, AND IT WAS IN NONE OF THEM. ***  MEASURED by a seat that built the mutant.\n\ngrep -c for BWP|bwp|batc gives 2 in diff_m8invread.c (both PROSE IN COMMENTS) and 0 in diff_m8820x.c -- no executable row anywhere. The mutant: delete `batc[i] = idata;` at dev_m8820x.c:479, leaving regs[...] = idata so read-back still works. *** BOTH DIFFERENTIALS STAY FULLY GREEN, 27/27 and 25/25. ***\n\nThe shadow batc[] is what m88k_translate_v2p reads at memory_m88k.c:152 -- BEFORE the PATC and BEFORE the walk -- so a stale entry silently returns a wrong physical address for a 512 KB block. The guest programs it: pmap.c:761-772 pmap_map_batc(), live code.\n\nOf the THREE arms in this device that touch translation inputs, two are covered and the third has zero rows. This is the counter-vs-ground-truth class that m8invground claimed falsely, at the arm where it is ACTUALLY TRUE -- and the same seat measured both, which is why the pair is worth reading together.",
      "grade": "CONFIRMED",
      "ev": "dev_m8820x.c:479 mutant; memory_m88k.c:152"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** THE ORACLE DESIGN IS THE POINT: it asks the REAL m88k_translate_v2p() what an address resolves to, rather than re-implementing the BATC formula in the detector. ***  Computing the right answer in the harness and comparing it against the device's array asserts something STRICTLY WEAKER than 'the device's array is what translation reads' -- which is exactly the fixed-point-oracle shape the flagship pass named as escape family #1 this morning. Three controls rather than one, so 'the expected paddr came back' cannot be a constant.\n\n*** FINDING 1: A MUTANT ESCAPED EVERYTHING, AND THE ROUND'S OWN HARDENING CREATED IT. ***  Widening the translator's virtual match from 0xfff80000 to 0xfff00000 survived all 45 rows and both differentials. The first port table used CONSECUTIVE LBAs (0x100..0x107), which caught that mutant BY ACCIDENT -- port n's address hit port n-1's entry. Scattering the LBAs to close a DIFFERENT hole (a masked top bit no row could see) SILENTLY REMOVED THAT ACCIDENTAL COVERAGE, and only re-running the whole census after the fixture change surfaced it.\n\nThat is a general lesson worth more than the row: A FIXTURE CHANGE CAN DELETE COVERAGE NOBODY KNEW THEY HAD, and no row goes red to say so. Closed by F17, which asserts the block boundary EXPLICITLY -- first byte in, last byte in, byte below, byte above, per port -- instead of relying on an occupied neighbour. F17 is currently the ONLY row defending that property.\n\nFINDING 2: the seat's own chosen mutant escaped -- c-> vs cpu-> on the purge callback POINTER -- and it graded it honestly as an EQUIVALENT MUTANT and a SHAPE PIN rather than a live defect, because cpu_m88k.c:121-122 gives every m88k cpu the same function with no branch. But it checked whether that is ARCHITECTURAL and found it is not: cpu_mips.c:120-133 and cpu_ppc.c:122-135 install DIFFERENT callbacks per cpu width. Closed with a second spy and row J6.\n\nIt also SIMULATED selfmutant.py's tree shape exactly -- symlink mirror plus one real file -- to prove the new #include resolves and both row-ids still name exactly one row, WITHOUT running a gate. Build 0.74 s against a 120 s limit.",
+     "grade": "CONFIRMED",
+     "ev": "39 mutants + negative control; gate_offline PASS 263"
     }
-   ]
+   ],
+   "witness": "none -- DETECTOR ROUND. The model is correct and the coverage was absent, so there is no defect to reproduce. Both files are rung-1 direct-call harnesses and their headers now say so."
   },
   {
    "id": "m88kexit",
@@ -13131,13 +13141,13 @@
   {
    "id": "hpcabort",
    "title": "hpcabort  Three of eight hpcmips subtypes ABORT at construction, and no gate covers hpcmips at all",
-   "state": "held",
-   "commits": "",
-   "hold": "Pairs naturally with the vr41xx round: same machine family, and the detector would be the first hpcmips coverage of any kind.",
+   "state": "closed",
+   "commits": "a29f87b",
+   "hold": "",
    "closure": {
-    "by": "",
-    "badge": "",
-    "note": ""
+    "by": "opus5",
+    "badge": "A",
+    "note": "Shipped as a29f87b. *** THE ROUND DID NOT FULLY CLOSE THE MACHINES AND SAYS SO: *** fixing the abort exposed a second layer it had been masking -- the three subtypes now exit 1 with 'More than one console input is in use', because dev_vr41xx_init already adds an ns16550 with in_use=1. Two remedies are measured working (8/8 each) and NEITHER was applied, because choosing between them needs a judgement the round cannot ground: which of the two UARTs is the console on real hardware. Pinned by a fail-closed allowlist row (EXPECT_X_ONLY = 3), to be edited to 0 by whatever closes it -- pinned, not hidden.\n\nAlso weighed: VRIP_INTR_SIU is a JUDGEMENT, not a measurement -- there is no VR41xx datasheet in this tree, the same gap as SH. The FORM is measured; the line number is not, and the code comment says which is which."
    },
    "entries": [
     {
@@ -13166,6 +13176,105 @@
      "note": "THE FIX DESIGN IS MEASURED, NOT GUESSED -- and two obvious 'fixes' are measured WRONG.\n\nThe five working hpcmips subtypes are no model: THEY ADD NO ns16550 AT ALL. The tree's idiom is at 14 sibling sites (machine_cobalt.c:73 irq=%s.cpu[%i].5, machine_evbmips.c:74, machine_arc.c:156/161, machine_sgi.c:394/400). The registered names come from dev_vr41xx.c:691-702: \"%s.cpu[%i].vrip.%i\", i = 0..25. Probed on a CONSTRUCTED z50 through the same device_add -> DEVINIT -> INTERRUPT_CONNECT path:\n    irq=machine[0].cpu[0].vrip.9    ACCEPTED, device added, rc=0\n    irq=machine[0].cpu[0].vrip.25   accepted (last registered line)\n    irq=machine[0].cpu[0].vrip.26   ABORTS  <- boundary control, so acceptance is a real lookup\n    irq=0 / irq=17                  abort (matches construction)\n    omit irq= entirely              *** ABORTS *** -- device.c:281-282 defaults to\n                                    machine[0].cpu[0], which is NOT registered on MIPS\n    irq= (empty)                    *** ABORTS *** -- interrupt.c:174-179 has NO return; the\n                                    'No interrupt' branch fills the template and then FALLS\n                                    INTO the scan loop and aborts anyway\n\n*** SO 'JUST DELETE THE irq=' IS NOT A FIX, MEASURED TWICE OVER. ***  The fix is irq=%s.cpu[%i].vrip.%i with machine->path, machine->bootstrap_cpu, VRIP_INTR_SIU -- AND BE-300/E-105 MUST MOVE device_add AFTER dev_vr41xx_init, which the six-versus-sixty-four handler count proves is necessary rather than tidy.\n\nUPSTREAM, NOT THIS FORK: git log --all on machine_hpcmips.c shows exactly one commit, 39748e3 'Import GXemul 0.7.0', and git blame attributes every line of all three sites to that boundary commit.\n\nHONEST LIMIT the seat insisted on: whether vrip.9 is the CORRECT hardware line for these UARTs is NOT measurable here -- there is no VR41xx datasheet in _scratchpad/ (the same gap as SH). VRIP_INTR_SIU is the tree's own name for the serial unit and the source's TODO is explicitly unsure. Treat the line number as a judgement and the FORM as measured.",
      "grade": "CONFIRMED",
      "ev": "probed on a constructed z50; git blame machine_hpcmips.c"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "DETECTOR SHIPPED: regress/hpcmips_ctor_probe.py, 26 rows, ~8 s, 26/26 fixed and 17/26 pre-fix. Seven mutants; five die to behavioural rows.\n\n*** TWO OF THEM ARE THE FINDING, AND THEY COMPILE TO THE IDENTICAL BINARY. ***  vrip.10 IS registered, so a wrong-but-well-formed interrupt line connects IN COMPLETE SILENCE -- the first version of the detector scored that mutant 26/26. VRIP_INTR_SIU+1 and VRIP_INTR_WRBERR both resolve to 10 and produce byte-identical binaries, which is itself the proof that NO RUN-BASED ROW COULD EVER SEPARATE THEM FROM THE FIX.\n\nClosed by tightening S1 from 'mentions the symbol' to 'passes VRIP_INTR_SIU itself, whole, as one argument, with no arithmetic on it' -- a SOURCE-TEXT row, and the file says so. The justification is historical rather than invented: THE DEFECT BEING FIXED WAS AN ARITHMETIC ADJUSTMENT OF THIS CONSTANT (8+VRIP_INTR_SIU). Catching it behaviourally needs a guest load reading back which VRIP line latched -- a rung-3 probe and separate work.\n\n*** A TRAP WORTH CARRYING: MAX_CMD_BUFLEN = 72 (debugger.c:107) TRUNCATES A DEBUGGER COMMAND LINE IN SILENCE. ***  Two probe commands were 73 and 78 characters; the path's trailing digits were eaten and one row read as a failure OF THE FIX. Only the row that compares the failing name against the exact string it SENT caught it -- which is why it does that.\n\nEXPECT_CONVERTED unchanged at 23, recomputed read-only before and after staging: that census counts PTY readiness sites and this probe uses subprocess.run, so it deliberately contains zero `endswith(` INCLUDING IN ITS DOCSTRING, which py_code would have counted.",
+     "grade": "CONFIRMED",
+     "ev": "regress/hpcmips_ctor_probe.py, 7 mutants"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** VERDICT: SHIP WITH CHANGES -- and its mutant DEFEATED S1 ON S1'S OWN GROUND. ***  Move the wrongness from the ARGUMENT to the FORMAT: `vrip.%i` -> `vrip.10`, leaving VRIP_INTR_SIU exactly where it is. S1 inspects the argument list, sees the constant passed whole, reports 'plain', and passes -- so the row added specifically to close the wrong-but-registered-line class did not close it. It also named the X11 gap ('the detector never exercises X11') BEFORE producing a mutant that exploits it. Recovered from a 321-byte mid-answer sample to 6 KB, which is the sample-twice rule earning its keep again.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP WITH CHANGES (packet-fed). `addr_mult=4` -> `addr_mult=1`: the constructor still sees a successful device_add and no abort, but the UART registers map at the wrong offsets. Also the only seat to lead with the second-layer console defect as the thing it would not ship as-is.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP WITH CHANGES (packet-fed). Its mutant is the one that SURVIVED S4, because it is not in the device string at all: delete the console guard test so the assignment is unconditional. Closed by S5. Its framing is the one to quote -- 'ship it, but not as done.'",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP WITH CHANGES (packet-fed). Stated the class rather than one instance: 'nothing in the 26 rows touches the VALUE OF THE REST of the device string', and derived it from the round's own kill table -- S1 is a source check precisely because no behavioural row separates vrip.9 from vrip.10, and that argument generalises.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP WITH CHANGES. Verified every factual claim in the brief against the source rather than taking the inlined diff on trust.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP, 176 KB -- the largest seat answer of the campaign.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "The measuring seat for this round built the fix and the detector; its own kill table is in the round entry. What the pass-2 panel added is the class it could not see from inside: four seats, four fields of one string, one hole.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_112116/ (7/7 scriptable) + opus5"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "⏸",
+     "date": "2026-08-21",
+     "note": "*** DELIBERATELY NOT FIRED -- NOT A SEAT FAILURE AND NOT AGREEMENT. ***  Standing owner directive deprioritising this seat.",
+     "grade": "UNKNOWN",
+     "ev": "owner directive"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "PASS-2 OUTCOME: two rows added, all four seat mutants now die, clean tree 28/28.\n\nS4 pins each arm's WHOLE device string by EXACT MATCH against a table -- deliberately NOT a pattern, because a pattern is what S1 is and the lesson of this pass is that A PATTERN PINS WHAT ITS AUTHOR THOUGHT OF. A field-by-field row set would have had exactly the shape that just failed, and would need extending every time the string gains a term. The cost is accepted: a legitimate change to any arm's string turns S4 red and must update the table in the same edit.\n\nS4 killed three of four. GLM'S ESCAPED IT because the guard is not in the device string at all; S5 pins the guarded shape, and is a source-text row for a stated reason -- this probe never exercises X11 and a headless run cannot.\n\n*** A DEFECT IN MY OWN FIRST DRAFT OF S4, caught by running it rather than by reading: *** the extractor read device_add()'s arguments, and THE LITERAL IS NOT THERE -- every arm builds the string with snprintf into tmpstr and passes the buffer. It found nothing, compared empty lists, and went red FOR THE WRONG REASON. A row that fails for the wrong reason is the same class as one that passes for the wrong reason, and only running it distinguishes them.",
+     "grade": "CONFIRMED",
+     "ev": "4 seat mutants, measured 27/28 each; clean 28/28"
     }
    ],
    "witness": "construction:_scratchpad/hpcabort_witness.py (RUNG 2, and the rung is the CEILING here rather than a shortcut -- see the entry)"
@@ -14067,6 +14176,15 @@
      "note": "*** TWO INDEPENDENT DEFECTS IN ONE GATE, both measured while establishing that gate 9 does not cover hpcabort. ***\n\n(1) IT CANNOT SEE AN ABORT. sanhit() greps only for ASan/UBSan/SEGV text, so `Aborting.` scores ZERO hits. The only construction assertion is a FLOOR (check_min \"machine types constructed\" 20), which a few aborting types cannot breach. And it tries only each type's FIRST subtype -- so a defect in any later subtype is invisible by construction. Eight subtypes across four machines currently abort and gate 9 is green.\n\n(2) *** ITS awk AT :50-55 REQUIRES THE PRIMARY ALIAS TO MATCH [a-z0-9_.-]+, AND SGI'S IS \"silicon graphics\" -- WITH A SPACE. ***  So SGI is dropped as a type and its twelve subtypes are SILENTLY RE-ATTRIBUTED TO rpi. Verified in the gate's own output: rows read `S rpi ip12` through `S rpi ip35`, and the count for type `sgi` is ZERO.\n\nThat second one is worse than it looks: the gate reports coverage of twelve subtypes under the wrong machine name, so a reader checking 'is SGI covered' sees a type with no rows and a reader checking rpi sees twelve rows that are not rpi's. Both readings are wrong and neither is red.",
      "grade": "CONFIRMED",
      "ev": "gate_asan_sweep.sh:50-55 awk; sanhit(); its own output rows"
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** FIXED, AND THE MEASUREMENTS ARE WORSE THAN THE FILING. ***  Run against the unmodified gate first, so the defect is reproduced rather than assumed: `asan-machine-sweep: PASS (3 checks)`, 40 types, 38 constructed -- *** GREEN WHILE FIFTEEN MACHINES ARE DEAD. ***  It touched exactly TWO of the fifteen dying combos, and both produced the row `no 0 0`, BYTE-IDENTICAL to the row a machine that merely wants a -e produces. check_min 38 >= 20 absorbed them. It printed the string `sgi` ZERO times.\n\n*** AND THE ABORT MESSAGE WAS NOT ON DISK AT ALL, so the obvious fix would not have worked either: *** interrupt.c:191-198 does printf(\"Aborting.\\n\") then abort(), and abort() does not flush stdio -- with stdout redirected to a file the log of `-E decstation -e 5400` was ZERO BYTES. A grep for 'Aborting' could never have caught this. EXIT STATUS IS THE ONLY BUFFERING-PROOF SIGNAL, and that is what the new classifier keys on.\n\nIT IS FIFTEEN ABORTS, NOT EIGHT: alpha/3000/300, decstation/{3maxplus,maxine,5400,5500}, hpcmips/{be-300,e-105,agenda}, mvmeppc/{mvme1600,mvme2100}, sgi/{ip19,ip20,ip22,ip24,ip27}. All fifteen abort IDENTICALLY under pristine 39748e3, so pre-existing upstream, in three source shapes.\n\nDESIGN, and the directional question was the interesting one: a DIRECTIONAL row alone would have printed all fifteen as 'pre-existing' and PASSED -- papering them over -- so the gate gets BOTH a directional row and an ABSOLUTE dated manifest (AB_EXEMPT), each machine named individually and cited to its abort site. The floor survives only as a swept-nothing guard, deliberately slack: a floor of 20 was satisfiable with TWENTY-ONE TYPES DEAD.\n\nSweep is now ALL 99 combinations, both binaries, 198 launches, 55-58 s. Nothing bounded.\n\nEIGHT MUTANTS, ALL RUN. M0 is the shipped gate itself, reproducing the defect at PASS (3). The key one is M8: `i <= n` -> `i <= 2`, ONE TOKEN, the shipped B3 semantics -- under the fix the subtypes land under `?` and are REPORTED, where before they were silently filed under rpi.\n\n*** THE DATE 2026-11-30 IN AB_EXEMPT IS THE SEAT'S, NOT THE OWNER'S, and is flagged in the file as wanting confirmation. ***  Note also that when the hpcmips round lands, the 'no longer dies' check goes RED and the fix is deleting three lines -- that friction is deliberate.",
+     "grade": "CONFIRMED",
+     "ev": "gate_asan_sweep.sh, 8 mutants, full sweep"
     }
    ]
   },
@@ -14159,6 +14277,121 @@
      "note": "MEASURED by the flagship seat against git content at both 160998d and HEAD: SM_COVERED lists TWELVE stems, not the thirteen the selfcheckman closure note claims. All twelve are backed by real selfmutant_one calls (gate_offline.sh:867-978), and twelve covered plus two dated-exempt equals the fourteen differentials on disk -- so the manifest is INTERNALLY CONSISTENT and the closure's DIRECTION was right.\n\nIts NUMBER is wrong by one. A records defect, of exactly the kind this project treats as real rather than cosmetic: a count nobody re-derived. Correct it when selfcheckman is dequeued.",
      "grade": "CONFIRMED",
      "ev": "fable5 batched regress pass, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sgiarcbiosoob",
+   "title": "sgiarcbiosoob  A heap-buffer-overflow in arcbios.c set_env() on FOUR SGI subtypes that no harness had ever executed",
+   "state": "held",
+   "commits": "",
+   "hold": "Its own round. Needs the reachability question answered first -- construction-time OOB is rung-2 witnessable (the macppc heap OOB #23 shape), guest-reachable is not.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** FOUND ONLY BECAUSE FIXING THE GATE'S ALIAS PARSER MADE THESE MACHINES VISIBLE AT ALL. ***  sgi/ip12, ip28, ip30 and ip35 each report FOUR heap-buffer-overflow hits under ASan at arcbios.c:2391, in set_env() called from machine_setup_sgi().\n\nThey were invisible for a mechanical reason with nothing to do with the defect: gate 9's awk required a machine's primary alias to match [a-z0-9_.-]+, and *** SGI's is \"silicon graphics\" -- WITH A SPACE ***, so SGI was dropped as a type and its subtypes were silently re-attributed to the previous one (rpi). A reader asking 'is SGI covered' saw a type with no rows; a reader looking at rpi saw ten rows that were not rpi's. Neither reading was red.\n\nThis is a MEMORY-SAFETY defect rather than a records one, and it is the second time this session that fixing an instrument surfaced a real bug the instrument's blindness had been concealing (the first: gate 9 could not see an abort, and fifteen machines were dying while it reported PASS).\n\nNOT diagnosed here -- the round that found it was a harness round and stayed in its file. What is known: four subtypes, four hits each, one call site, and it reproduces under an ASan build from 2026-07-29, so it is at least three weeks old and probably upstream. Whether it is guest-reachable or construction-only is unmeasured.",
+     "grade": "CONFIRMED",
+     "ev": "gate_asan_sweep.sh full sweep, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "asanstale",
+   "title": "asanstale  The ASan binaries gate 9 grades against are three weeks and many rounds behind HEAD, and nothing asserts freshness",
+   "state": "held",
+   "commits": "",
+   "hold": "Small check, but the remedy interacts with build_asan.sh's cost -- rebuilding two instrumented trees is not free, so the right answer may be SKIP-loudly rather than fail.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "MEASURED: both ASan binaries were built 2026-07-29, against a HEAD that is now many rounds old. *** EVERY 'HEAD' ROW GATE 9 PRINTS IS HEAD-AS-OF-THAT-BUILD. ***  The gate now PRINTS both build dates -- which is how this was noticed -- but nothing ASSERTS freshness, so a year-old pair would read exactly the same.\n\nThat is the dead-man-switch class the project already fixed once for the nightly battery: a threshold that lives inside the run cannot observe the run being stale. The remedy shape is the same -- compare the binary's mtime against the HEAD commit's date and fail, or SKIP loudly, past a window.\n\nConsequence today, and it is not hypothetical: this session shipped #440-#444 touching dev_8253, dev_sh4, dev_footbridge and machine_hpcmips, and gate 9 graded NONE of that code. Its green means 'the July binary is clean', which is a true statement about the wrong artefact.",
+     "grade": "CONFIRMED",
+     "ev": "gate_asan_sweep.sh's own printed build dates"
+    }
+   ]
+  },
+  {
+   "id": "stdbufasan",
+   "title": "stdbufasan  `stdbuf` silently breaks an ASan binary, and this ASan ignores bogus flags so the usual accept/reject discriminator cannot detect it",
+   "state": "held",
+   "commits": "",
+   "hold": "Records-only. No fix owed; the value is that the next round does not rediscover it.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "TWO TRAPS from the gate-9 round, both worth carrying because each defeats a technique this project relies on.\n\n(1) *** stdbuf's LD_PRELOAD PREEMPTS THE ASan RUNTIME. ***  The obvious fix for abort()-not-flushing is stdbuf -o0, and on an ASan build it breaks the binary instead. It needs verify_asan_link_order=0 -- and this had to be proven BEHAVIOURALLY, because *** this ASan SILENTLY IGNORES bogus options ***, so the discriminator this project uses elsewhere (pass a nonsense value; a validated flag names its own list) FAILS HERE. That discriminator is written into CLAUDE.md as the way to prove a flag is real; this is a documented exception to it.\n\n(2) The shell's `Aborted (core dumped)` line is emitted AT THE CALL SITE, not inside the function, so wrapping the command in `( ... ) 2>/dev/null` does NOT suppress it. Measured. A harness that filters stderr expecting to have silenced it will still see the line and may classify on it.\n\nRecorded as a row rather than only a comment because both are general techniques, not gate-9 specifics, and the next probe that meets an aborting binary will reach for exactly these.",
+     "grade": "CONFIRMED",
+     "ev": "measured during the gate-9 round"
+    }
+   ]
+  },
+  {
+   "id": "m8saprspy",
+   "title": "m8saprspy  The SAPR/UAPR arm has the same callback-pointer blindness J6 just closed for the BWP arm, and the machinery to close it now exists",
+   "state": "held",
+   "commits": "",
+   "hold": "One row, and the two-spy fixture already exists. Cheap.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Named by the seat that closed the BWP half, and it could not file it itself -- its rule limited it to the two differentials.\n\n`c->invalidate_translation_caches(...)` -> `cpu->...` applied to dev_m8820x.c's REGISTER arm would still survive every row, for the same reason the BWP version did: it changes the callback POINTER, not the argument, and with one spy on both cpus it is invisible. J6 closed that for the BWP arm by installing a second spy on cpu1; the machinery is now in place, so the SAPR/UAPR half is ONE ROW.\n\nGrade it the same way J6 was: a SHAPE PIN, not a live defect. cpu_m88k.c:121-122 gives every m88k cpu the same function with no branch, so it is provably harmless today -- but that is not architectural, since cpu_mips.c and cpu_ppc.c install DIFFERENT callbacks per cpu width.",
+     "grade": "CONFIRMED",
+     "ev": "named by the m8batc round; cpu_m88k.c:121-122 vs cpu_mips.c:120-133"
+    }
+   ]
+  },
+  {
+   "id": "m8lanecomment",
+   "title": "m8lanecomment  gate_offline's m8820x lane says it 'compiles against the real dev_m8820x.c'; it now also compiles the real memory_m88k.c, and ten kills land there",
+   "state": "held",
+   "commits": "",
+   "hold": "Records-only, one line, in a file the round that caused it was not permitted to edit.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "A records defect created by the m8batc round and named by the seat that created it. The check's title says the lane compiles against the real dev_m8820x.c, which was complete when written. The lane now also compiles the real src/cpus/memory_m88k.c -- deliberately, because that is what makes the oracle ask the REAL translator instead of a re-implementation -- and TEN of the census's kills land in the translator rather than the device.\n\nSo a reader trusting the check's title would attribute translator coverage to the device file, and a future edit removing the translator include would not obviously contradict anything the gate says about itself. One line.",
+     "grade": "CONFIRMED",
+     "ev": "gate_offline.sh m8820x lane title vs diff_m8820x.c's includes"
     }
    ]
   }

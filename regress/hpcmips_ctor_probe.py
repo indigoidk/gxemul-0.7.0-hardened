@@ -101,7 +101,7 @@ MACHINE = "hpcmips"
 
 #  The IDENTITY constant.  A probe copied into a tree where it no longer runs
 #  all of its rows must not report a green verdict over a shorter file.
-EXPECT_ROWS = 26
+EXPECT_ROWS = 28
 
 #  FAIL-CLOSED ALLOWLIST for the residual described in the docstring: how many
 #  advertised subtypes still need `-x` because they end up with two console
@@ -318,6 +318,45 @@ def siu_form(code):
     if "VRIP_INTR_SIU" in code:
         return "other-use"
     return "absent"
+
+
+#  #444 pass 2: the exact device string each UART-adding arm must hand to
+#  device_add(), format included.  Written from the source AFTER the fix and
+#  verified by the row below failing when any character of it moves.  If a future
+#  round legitimately changes one, change it HERE in the same edit -- that is the
+#  friction this table exists to create.
+EXPECT_DEVSTR = {
+    "be-300": "ns16550 irq=%s.cpu[%i].vrip.%i addr=0x0a008680 addr_mult=4 in_use=%i",
+    "e-105": "ns16550 irq=%s.cpu[%i].vrip.%i addr=0x0a008680 addr_mult=4 in_use=%i",
+    "agenda": "ns16550 irq=%s.cpu[%i].vrip.%i addr=0x0c000010",
+}
+
+
+def device_strings(code):
+    """Every string literal an arm hands to device_add(), concatenated per call.
+
+    #444 pass 2.  S1 pinned one ARGUMENT token and left the FORMAT free, so a
+    literal written INTO the format -- `vrip.%i` -> `vrip.10` -- kept the
+    VRIP_INTR_SIU argument in place, read as "plain", and passed.  Four seats
+    produced that class independently; this returns the whole string so S4 can
+    pin it instead of one field of it.
+    """
+    #  THE LITERAL IS NOT IN THE device_add() CALL.  Every arm builds the string
+    #  with snprintf(tmpstr, sizeof(tmpstr), "...", ...) and then passes tmpstr,
+    #  so an extractor reading device_add()'s arguments finds NOTHING -- which is
+    #  what the first draft of this function did, and the row went red for the
+    #  wrong reason, reporting empty lists rather than a mismatch.  Read the
+    #  snprintf that FORMATS the ns16550 string, concatenating its adjacent
+    #  literals, since C string concatenation splits the format across lines.
+    out = []
+    for call in re.findall(r"snprintf\s*\((.*?)\)\s*;", code, re.S):
+        parts = re.findall(r'"((?:[^"\\]|\\.)*)"', call)
+        if not parts:
+            continue
+        joined = "".join(parts)
+        if joined.startswith("ns16550"):
+            out.append(joined)
+    return out
 
 
 def is_path_like(arg):
@@ -606,6 +645,85 @@ def main():
     #  separate piece of work.
     row("S1 every UART-adding arm passes VRIP_INTR_SIU itself, no arithmetic",
         not no_siu, sorted(no_siu), [])
+
+    #  ---- S4: the WHOLE device string, not one field of it -----------------
+    #
+    #  *** S1 ABOVE PINS AN ARGUMENT AND LEAVES THE FORMAT FREE, AND FIVE OF
+    #  SEVEN PASS-2 SEATS SAID SO -- four of them producing the same class of
+    #  escape independently. ***  The sharpest defeats S1 on its own ground:
+    #  write the wrong line as a LITERAL IN THE FORMAT (`vrip.%i` -> `vrip.10`)
+    #  and leave VRIP_INTR_SIU where it is.  S1 inspects the argument list, sees
+    #  the constant passed whole, and reports "plain".  The row added
+    #  specifically to close the wrong-but-registered-line class does not.
+    #
+    #  The siblings are the same hole one field over -- `addr_mult=4` ->
+    #  `addr_mult=1` maps the UART at wrong offsets while construction still
+    #  succeeds, and nothing here touched `addr=` either.  So this pins the
+    #  ENTIRE string per arm rather than adding a row per field: a field-by-field
+    #  row set would have exactly the shape that just failed, and would need
+    #  extending every time the string gains a term.
+    #
+    #  It is deliberately EXACT-MATCH against a table, not a pattern.  A pattern
+    #  is what S1 is, and the lesson of this pass is that a pattern pins what its
+    #  author thought of.  The cost is that a legitimate change to any arm's
+    #  device string turns this row red -- which is the intent: such a change
+    #  should be deliberate and should update the expectation in the same edit.
+    #
+    #  STILL A SOURCE-TEXT ROW, with S1's honest limit unchanged: it cannot say
+    #  the address, the multiplier or the interrupt line are right for the
+    #  HARDWARE.  No VR41xx datasheet exists in this tree.  It says only that
+    #  they are what this round deliberately chose, and that nothing has drifted.
+    dev_str_bad = []
+    for const, info in sorted(arms.items(), key=lambda kv: kv[1]["case_line"]):
+        prim = (const_aliases.get(const) or [None])[0]
+        if prim is None or not info["device_add_lines"]:
+            continue
+        got = device_strings(info["code"])
+        want = EXPECT_DEVSTR.get(prim)
+        if want is None:
+            dev_str_bad.append((prim, "NO EXPECTATION RECORDED"))
+        elif want not in got:
+            dev_str_bad.append((prim, got))
+    row("S4 each UART arm's WHOLE device string is the one recorded here",
+        not dev_str_bad, sorted(dev_str_bad), [])
+
+    #  ---- S5: the console-handle guard --------------------------------------
+    #
+    #  *** S4 CLOSED THREE OF THE FOUR MUTANTS FIVE PASS-2 SEATS PRODUCED; THIS
+    #  IS THE FOURTH, AND IT ESCAPED S4 BECAUSE IT IS NOT IN THE DEVICE STRING.
+    #  ***  Delete the guard TEST and leave the assignment:
+    #
+    #      if (!machine->x11_md.in_use)          ->      if (1)
+    #              machine->main_console_handle = x;
+    #
+    #  Measured: 27/27, every other row green.  Under X11 the ns16550 would then
+    #  take the console handle that dev_vr41xx_init's KIU console is supposed to
+    #  hold -- which is precisely the behaviour the #444 reorder was written to
+    #  PRESERVE, since dev_vr41xx_init used to win by running last.
+    #
+    #  It cannot be caught behaviourally here: THIS PROBE NEVER EXERCISES X11,
+    #  and a headless run cannot.  A pass-2 seat named that gap independently
+    #  before naming the mutant.  So this is a source-text row like S1 and S4,
+    #  and it is labelled one.
+    #
+    #  It pins the GUARDED SHAPE rather than an exact block, because the three
+    #  arms indent differently and an exact-text match would break on
+    #  reformatting alone -- the failure mode S4 accepts deliberately is not
+    #  worth accepting twice.
+    guard_bad = []
+    for const, info in sorted(arms.items(), key=lambda kv: kv[1]["case_line"]):
+        prim = (const_aliases.get(const) or [None])[0]
+        if prim is None or not info["device_add_lines"]:
+            continue
+        code = info["code"]
+        if "main_console_handle" not in code:
+            continue                      # an arm that never claims the console
+        if not re.search(r"if\s*\(\s*!\s*machine->x11_md\.in_use\s*\)\s*"
+                         r"machine->main_console_handle", code, re.S):
+            guard_bad.append((prim, "main_console_handle assigned without the "
+                                    "!x11_md.in_use guard"))
+    row("S5 the console handle is claimed only when X11 is not in use",
+        not guard_bad, sorted(guard_bad), [])
     row("S2 no arm calls device_add BEFORE dev_vr41xx_init",
         not unordered, sorted(unordered), [])
     row("S3 no arm passes a non-path irq argument", not bad_irq,

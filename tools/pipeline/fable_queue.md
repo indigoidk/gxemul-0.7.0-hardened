@@ -170,6 +170,20 @@ the queue is least likely to get written. Naming the three stages now means the 
 the obligation already recorded rather than discovering it at the point of maximum temptation
 to proceed with eight.
 
+### 10. `hpcabort` (`a29f87b`) — regress review
+**FABLE-ONLY.** Closed, changed code, no `regress` entry.
+
+Why it wants real time: its pass-2 panel had **five of seven seats say SHIP WITH CHANGES**, and
+**four produced an eighth mutant independently** — all one class, because the detector pinned one
+argument token and left every other field of the device string free. Two rows closed it. The
+question for a regress pass is the one that generalises: **S1, S4 and S5 are all SOURCE-TEXT rows**,
+and the round argues in each case that no behavioural row *can* catch the property. Is that argument
+sound three times over, or is the file drifting toward asserting its own source?
+
+Also carries a live residual pinned rather than fixed: `EXPECT_X_ONLY = 3`, three subtypes still
+needing `-x` because two console inputs exist. That number goes to 0 in the commit that settles
+which UART is the console.
+
 ### 9. `sh4pcicexit` (`6bec468`) — regress review, and THE GATE SAID THIS WAS ALREADY QUEUED
 **FABLE-ONLY.** Closed, changed code, no `regress` entry.
 
