@@ -239,6 +239,34 @@ else
 ' "$out" | grep -E 'BUGFILE_SYNC_FAIL|^  MISSING' | sed 's/^/          /'
 fi
 
+#  ---- Q ---------------------------------------------------------------------------
+#  THE MATRIX IS A GENERATED FILE AND NOTHING CHECKED THAT IT WAS REGENERATED.
+#
+#  matrix.html is rendered from ledger.json and is ALSO the source of the published
+#  artifact, so a ledger edit committed without a regenerate ships a stale rendering AND
+#  a stale artifact -- and the artifact is what the owner actually reads.  Every other
+#  generated-file relationship in this harness is checked (J for the carrier copies, I2
+#  for the queue summary); this one was not, purely because nobody had been bitten yet.
+#
+#  Deterministic and cheap: render to a temp path with --out and cmp.  It catches the
+#  half that lives in the repo.  It CANNOT catch the other half -- whether the artifact
+#  was republished -- because that lives outside git; that step stays manual, and this
+#  comment is the reminder that it exists.
+say ""; say "Q. matrix.html is current with ledger.json"
+GEND=$_HERE/pipeline/gen_dashboard.py
+if [ ! -f "$GEND" ]; then
+	warn "gen_dashboard.py MISSING -- matrix freshness NOT verified"
+else
+	_mx=$(mktemp)
+	if python "$GEND" --out "$_mx" >/dev/null 2>&1 && cmp -s "$_mx" "$_HERE/pipeline/matrix.html"; then
+		good "matrix.html matches a fresh render of ledger.json"
+	else
+		bad "matrix.html IS STALE -- run: python tools/pipeline/gen_dashboard.py"
+		bad "  (and REPUBLISH the artifact; this check cannot see that half)"
+	fi
+	rm -f "$_mx"
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #

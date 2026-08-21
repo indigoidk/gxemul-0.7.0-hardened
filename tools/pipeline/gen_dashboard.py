@@ -26,7 +26,13 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LEDGER = os.path.join(HERE, "ledger.json")
+#  `--out PATH` renders somewhere else WITHOUT touching the tracked file, so precommit
+#  section Q can regenerate into a temp path and cmp.  Added when it turned out NOTHING
+#  checked that matrix.html was current with ledger.json -- and the published artifact is
+#  generated from that file, so a stale rendering ships a stale artifact.
 OUT = os.path.join(HERE, "matrix.html")
+if "--out" in sys.argv:
+    OUT = sys.argv[sys.argv.index("--out") + 1]
 
 L = json.load(open(LEDGER, encoding="utf-8"))
 seats = L["seats"]
