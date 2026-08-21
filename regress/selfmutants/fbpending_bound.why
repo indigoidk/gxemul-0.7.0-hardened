@@ -1,0 +1,30 @@
+WHY THIS MUTANT, AND WHY THIS ROW.
+
+The anchor is #442's own reset, `d->pending_timer_interrupts[nr] = 1;` in
+footbridge_pending() at src/devices/dev_footbridge.c.  Changing the 1 to a 0 leaves the file
+compiling, leaves the BOUND intact, and leaves the overflow fixed -- it breaks only the
+"one interrupt is still owed" half, coalescing the debt to nothing instead of to one tick.
+
+WHY THAT MUTANT AND NOT A BIGGER ONE.  Deleting the bound entirely is caught by seven R1
+rows and is the pre-fix state, so it tests nothing the pre-fix arm does not.  This one is the
+narrowest edit that a reader would plausibly make -- "reset to zero" reads tidier than "reset
+to one" -- and it is invisible to every row except R3.
+
+MEASURED, 2026-08-20, all seven emulated_hz/load cases:
+  pristine            R3 lowest value the counter ever held: 1     FBBOUND_VERDICT=PASS
+  1 -> 0              R3 lowest value the counter ever held: 0     FBBOUND_VERDICT=FAIL, 7 rows
+  and R1 stays GREEN on all seven cases in the mutant arm, which is the point: the bound is
+  still doing its job, so a verdict-only or R1-only assertion would score this as fine.
+
+*** THE PIN IS "R4 every case bounded", NOT R3, AND THAT IS MECHANICAL. ***  selfmutant.py
+requires the pinned row id to name EXACTLY ONE row (it refuses ambiguity, having been bitten
+by a rowid as ordinary as "fail" matching several).  R1 and R3 each print SEVEN times, once
+per case, so neither can be pinned.  R4 is an aggregate row added for exactly this purpose
+and it goes red whenever any case above does.
+
+The rung-3 reproduction for this defect is regress/fbpending_drain_probe.py and it is a
+DIFFERENT artifact with a different job: it drives real guest MMIO on an unmodified -E cats.
+This harness calls timer_tickN() directly, which the witness ladder classes as never a
+reproduction.  Both ship because neither alone catches what the other does -- measured: a
+mutant deleting the absolute ceiling PASSES the rung-3 probe on every timer and is caught
+only here, at an emulated_hz above 68 MHz.

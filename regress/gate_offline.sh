@@ -976,6 +976,7 @@ selfmutant_one diff_diskimage_geom.c  src/disk/diskimage.c   diskimage_geom "mus
 #  selfmutant.py's and the outputs are byte-identical.
 selfmutant_one diff_sh4_tmu.c        src/devices/dev_sh4.c       sh4_tmu    "boundary"
 selfmutant_one diff_rtc_range.c      src/devices/dev_rtc.c       rtc_range  "2^32: timer NOT removed"
+' ' ') -lm -L/usr/X11R6/lib -lX11"
 
 #  THE MANIFEST -- the part that stops this being a five-instance fix.
 #
@@ -994,7 +995,23 @@ SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage
 #  Oct/Nov unilaterally; asked, the owner chose a fortnight -- 148 uncovered rows across five
 #  differentials is urgent, not a Q4 item.  Recorded because a deadline nobody chose is a
 #  deadline nobody owns, and this gate goes RED on that date whether or not the work is done.
-SM_EXEMPT="ieee_store:2099-01-01"
+#  fbpending_bound, dated 2026-09-20.  *** THE HARNESS HAS A FAILABILITY CONTROL -- its
+#  @@SELFCHECK@@ block is present and the SC manifest covers it -- but the SELF-MUTANT LANE
+#  DOES NOT RUN YET, and the two catch different failures, so this is a real gap and not a
+#  formality. ***  The lane builds in a MIRRORED tree and this harness is the only one that
+#  links against ~221 build objects rather than compiling standalone; its pristine arm builds
+#  in the mirror but does not emit the PASS token, and finding out why is its own piece of
+#  work rather than a flag.
+#
+#  WHAT IS NOT MISSING, so the exemption is not read as "untested": the mutants were built and
+#  run by hand against the tracked tree on 2026-08-20, and every one is killed by a named row.
+#    pre-fix          FAIL R1 x7 and R2 with trough -2147483648 (the overflow itself)
+#    reset to 0       FAIL R3 x7   (R1 stays green -- the bound still works, only the debt)
+#    one callback     FAIL R1 x7
+#    no ceiling       FAIL R1 on the two high-emulated_hz cases; R2 peak 2147483647
+#  The `.old`/`.new`/`.why` fragments are committed and describe exactly that, so the lane is
+#  a wiring job, not a design one.
+SM_EXEMPT="ieee_store:2099-01-01 fbpending_bound:2026-09-20"
 sm_missing=""
 for f in "$HERE"/diff_*.c; do
     stem=$(basename "$f" .c); stem=${stem#diff_}
@@ -1145,6 +1162,52 @@ fi
 # green here.  That is the fifth vacuity class -- a shipped fix whose mutant passes
 # everything.  Measured 2026-08-19: the true pre-#429 revert now fails 4 rows and the
 # flipped comparison fails 5, both on VALUES rather than by crashing.
+# ------------------------------------------------------------------ #442 fbpending
+#  THE FOOTBRIDGE PENDING-INTERRUPT COUNTER, bounded.  Unbounded, it overflowed INT_MAX and
+#  the emulated clock delivered NOTHING for 2^31 further ticks -- reproduced at rung 3 on an
+#  unmodified -E cats, three runs, wrap at ~43 s and a 40 s dead window.
+#
+#  THIS ROW IS A DETECTOR, NOT THE REPRODUCTION, and the distinction is load-bearing here.
+#  It #includes the shipped dev_footbridge.c and calls timer_tickN() directly, which the
+#  witness ladder's mechanical discriminator classes as never-a-reproduction.  The
+#  reproduction is regress/fbpending_drain_probe.py (rung 3) and it is NOT run here.
+#
+#  BOTH SHIP BECAUSE NEITHER ALONE IS ENOUGH -- measured, not assumed:
+#    * the rung-3 probe cannot reach the boundary.  The core delivers at most
+#      TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY = 68,157,440 increments per wall second, so
+#      2^31 of them take 31.5 s AT BEST and a gate row cannot spend that.  This harness does
+#      2^31 direct increments in ~4 s.
+#    * a mutant deleting the absolute ceiling (leaving the bound at the timer's own rate)
+#      PASSES the rung-3 probe on every timer and is caught only here, at emulated_hz above
+#      68 MHz -- reachable through the documented -I flag.
+#
+#  It links every object EXCEPT main.o and dev_footbridge.o, so it runs the REAL timer.c and
+#  the REAL footbridge rather than re-implementations.  Measured kills: pre-fix fails R1 x7
+#  and R2 with trough -2147483648 (the overflow itself); reset-to-0 fails R3 x7; a fix applied
+#  to one callback only fails R1 x7; no-ceiling fails R1 on the two high-hz cases and R2 with
+#  peak 2147483647.
+FBBIN=$LOGDIR/diff_fbpending_bound
+FBLOG=$LOGDIR/diff_fbpending_bound.log
+FBOBJS=$(find "$SEC/../build/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort)
+if [ -z "$FBOBJS" ]; then
+    note "fbpending bound: no build/ objects -- SKIPPED, not passed"
+else
+    if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty"             -I"$SEC/src/devices" -o "$FBBIN" "$HERE/diff_fbpending_bound.c"             $FBOBJS -lm -L/usr/X11R6/lib -lX11 > "$FBLOG" 2>&1; then
+        note "fbpending bound compile failed:"; sed 's/^/       /' "$FBLOG" | head -12
+        check "fbpending bound: links against the real timer.c" "no" "yes"
+    else
+        check "fbpending bound: links against the real timer.c" "yes" "yes"
+        #  The depth argument is what turns R2 on.  Without it R2 SKIPS -- and a skipped row
+        #  that reads as a pass is this project's fifth vacuity class, so the count below
+        #  pins that R2 actually ran.
+        "$FBBIN" 2147487744 > "$FBLOG" 2>&1
+        sed 's/^/       /' "$FBLOG" | tail -20
+        check "fbpending bound: offline verdict" "$(grep -c 'FBBOUND_VERDICT=PASS' "$FBLOG")" "1"
+        check "fbpending bound: R2 actually ran (not SKIPPED)"               "$(grep -c 'R2 no signed overflow.*direct ticks' "$FBLOG")" "1"
+        check_min "fbpending bound: rows actually run"               "$(grep -cE '^  (ok|FAIL) ' "$FBLOG")" 15
+    fi
+fi
+
 RTCBIN=$LOGDIR/diff_rtc_range
 RTCLOG=$LOGDIR/diff_rtc_range.log
 if ! $CC -O2 -std=gnu99 -I"$SEC/src/include" -I"$SEC/src/include/thirdparty" \
@@ -1638,7 +1701,7 @@ fi
 #  @@SELFCHECK@@ block, so moving a stem from EXEMPT to COVERED and writing no sentinel is
 #  RED.  Without it this would be another G -- a check that a name appears in a list -- which
 #  is precisely the defect being corrected here.
-SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range"
+SC_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound"
 #  *** COVERED IS NOT UNIFORM, AND THE MANIFEST CANNOT SEE THE DIFFERENCE -- READ THIS BEFORE
 #  TREATING A GREEN ROW AS "the file is vouched for". ***  All but three of the COVERED stems
 #  route every row through one or two shared helpers, so the sentinel covers the file.  The

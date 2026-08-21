@@ -71,6 +71,9 @@ struct footbridge_data {
 	struct interrupt timer_irq[N_FOOTBRIDGE_TIMERS];
 	struct timer	*timer[N_FOOTBRIDGE_TIMERS];
 	int		pending_timer_interrupts[N_FOOTBRIDGE_TIMERS];
+	/*  #442: the per-timer bound on the counter above, one emulated second of
+	    that timer's delivered rate, recomputed by reload_timer_value().  */
+	int		pending_bound[N_FOOTBRIDGE_TIMERS];
 
 	int		irq_asserted;
 
@@ -82,14 +85,48 @@ struct footbridge_data {
 };
 
 
+/*
+ *  #442: the counter above was incremented without a bound, so a guest that armed
+ *  a timer and never acked overflowed it -- and on overflow the int goes negative,
+ *  DEVICE_TICK's `> 0` is false, and THE EMULATED CLOCK DELIVERS NOTHING FOR 2^31
+ *  FURTHER TICKS.  Reproduced at rung 3 on an unmodified -E cats: two MMIO writes,
+ *  then 42.95 s to the wrap and a 40 s dead window, measured three times.
+ *
+ *  THE COMPARISON PRECEDES THE INCREMENT, and that is not a style choice.  An
+ *  increment-then-check form -- which is what the one in-tree precedent for this
+ *  (dev_luna88k.c:252) actually does -- reintroduces the UB it is meant to remove
+ *  if the counter ever reaches INT_MAX, because the ++ has already executed by the
+ *  time the check runs.  luna88k is safe only because its own reset keeps the
+ *  counter far below INT_MAX; the FORM is still the wrong one to copy.
+ *
+ *  Reset to 1 rather than 0, so one interrupt is still owed -- coalescing the debt
+ *  rather than discarding it.  MEASURED to matter: a reset-to-0 mutant survives the
+ *  rung-3 drain probe and two of the three offline rows; only the trough row
+ *  separates them (0 against 1).
+ *
+ *  NO MESSAGE FROM HERE.  These run in the SIGALRM handler and debugmsg() is
+ *  printf underneath, so copying luna88k's diagnostic would put four printf paths
+ *  inside a signal handler -- and timer.c:274-279 states that nothing in that file
+ *  prints from the handler.  (luna88k's own callback does, which is a defect there;
+ *  filed, not fixed here.)  If a diagnostic is ever wanted, latch a flag here and
+ *  report from DEVICE_TICK, which runs in the main loop.
+ */
+static void footbridge_pending(struct footbridge_data *d, int nr)
+{
+	if (d->pending_timer_interrupts[nr] >= d->pending_bound[nr])
+		d->pending_timer_interrupts[nr] = 1;
+	else
+		d->pending_timer_interrupts[nr] ++;
+}
+
 static void timer_tick0(struct timer *t, void *extra)
-{ ((struct footbridge_data *)extra)->pending_timer_interrupts[0] ++; }
+{ footbridge_pending((struct footbridge_data *)extra, 0); }
 static void timer_tick1(struct timer *t, void *extra)
-{ ((struct footbridge_data *)extra)->pending_timer_interrupts[1] ++; }
+{ footbridge_pending((struct footbridge_data *)extra, 1); }
 static void timer_tick2(struct timer *t, void *extra)
-{ ((struct footbridge_data *)extra)->pending_timer_interrupts[2] ++; }
+{ footbridge_pending((struct footbridge_data *)extra, 2); }
 static void timer_tick3(struct timer *t, void *extra)
-{ ((struct footbridge_data *)extra)->pending_timer_interrupts[3] ++; }
+{ footbridge_pending((struct footbridge_data *)extra, 3); }
 
 
 /*
@@ -230,6 +267,39 @@ static void reload_timer_value(struct cpu *cpu, struct footbridge_data *d,
 	    d->timer_control[timer_nr], 1);
 
 	d->timer_value[timer_nr] = d->timer_load[timer_nr];
+
+	/*
+	 *  #442: one emulated second of THIS timer's delivered rate, clamped.
+	 *
+	 *  The ceiling is DERIVED, not chosen: TIMER_MAX_CATCHUP ticks per timer
+	 *  per signal at TIMER_BASE_FREQUENCY signals per second is the most the
+	 *  timer core can ever deliver to one timer in one wall second, so a cap
+	 *  at that value can never throttle a legitimately fast timer.
+	 *
+	 *  IT IS ALSO NOT OPTIONAL, which a purely rate-relative bound hides.
+	 *  MEASURED: with `-I 2147483647` and load 1 the requested rate is
+	 *  2147483647.0, so (int)freq is INT_MAX and a bound of "the timer's own
+	 *  rate" never fires -- the overflow returns, reachable through a
+	 *  documented command-line flag.  Deleting these two lines is the
+	 *  smallest edit that still passes the rung-3 probe.
+	 *
+	 *  Floor 1, because a 0.0116 Hz timer would otherwise bound at 0 and the
+	 *  counter would be pinned there.  Comparisons are negated so a NaN freq
+	 *  lands on the ceiling rather than falling through, matching
+	 *  timer_clamp_freq()'s idiom.
+	 *
+	 *  Set BEFORE timer_add()/timer_update_frequency() below: the SIGALRM can
+	 *  land between them, and a callback that fires against a stale or zero
+	 *  bound is the window this whole round exists to close.
+	 */
+	{
+		double bound = freq;
+		if (!(bound <= (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY))
+			bound = (double)TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY;
+		if (!(bound >= 1.0))
+			bound = 1.0;
+		d->pending_bound[timer_nr] = (int) bound;
+	}
 
 	/*  printf("%i: %i -> %f Hz\n", timer_nr,
 	    d->timer_load[timer_nr], freq);  */
@@ -659,6 +729,19 @@ DEVINIT(footbridge)
 
 	CHECK_ALLOCATION(d = (struct footbridge_data *) malloc(sizeof(struct footbridge_data)));
 	memset(d, 0, sizeof(struct footbridge_data));
+
+	/*
+	 *  #442: the memset leaves pending_bound[] at 0, and a bound of 0 would pin
+	 *  the counter at 1 rather than bounding it.  That is UNREACHABLE today --
+	 *  reload_timer_value() sets the bound, and it is also the only thing that
+	 *  ever creates a struct timer, so no callback can fire before a bound
+	 *  exists.  Initialised here anyway, because that is a two-step argument
+	 *  about a signal handler and a later edit that adds a timer elsewhere would
+	 *  silently break it.  The ceiling is the safe default: it can never
+	 *  throttle, only bound.
+	 */
+	for (i = 0; i < N_FOOTBRIDGE_TIMERS; i++)
+		d->pending_bound[i] = TIMER_MAX_CATCHUP * TIMER_BASE_FREQUENCY;
 
 	/*  Connect to the CPU which this footbridge will interrupt:  */
 	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);

@@ -175,7 +175,12 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  on the reasoning that renaming a local to satisfy a grep is the tail wagging the dog.  Wrong:
 #  `_mark` is the idiom in every other pty probe in the tree, so the new file was the outlier.
 #  Teaching the census a second spelling would have made it count substrings of the first.
-EXPECT_CONVERTED=19
+#  19 -> 20 on 2026-08-20: fbpending_drain_probe.py, #442's rung-3 reproduction.  All three
+#  counts move together after two corrections made in the same edit: the probe was renamed
+#  `mark` -> `_mark` (the sh4markspell shape, one round old), and conv_mark's pattern was
+#  extended to see the METHOD form, because this is the first class-based pty probe in the
+#  tree and its guard was invisible to a pattern written for closures.
+EXPECT_CONVERTED=20
 #  One helper for all three, so they agree on WHAT they look at.  The first draft
 #  used py_code() for the anchored count and a raw grep for the other two, which
 #  meant a comment mentioning the echo guard would have inflated one count and not
@@ -201,7 +206,19 @@ conv_echo=$(probe_code 'echo is not None and echo not in resp' | grep -c .)
 #  "echo=", now at the full conditional. Each time the surviving prefix was a
 #  real substring of both the fixed and the broken code, which is exactly the
 #  property a detector must not have.
-conv_mark=$(probe_code 'return wait(mark=_mark, echo=[a-z][a-z]* if [a-z][a-z]* else None)' | grep -c .)
+#  *** EXTENDED 2026-08-20 FOR THE METHOD FORM, and narrowly on purpose given the history
+#  in the paragraph above. ***  Every probe until now wrote `send()` as a closure over a local
+#  `buf`, so the guard read `return wait(mark=_mark, ...)`.  fbpending_drain_probe.py is the
+#  first CLASS-BASED probe in the tree: its guard is `return self.wait(mark=_mark, ..., 
+#  timeout=timeout)`, which is not a spelling variation but a different construct, and the
+#  pattern could not see it AT ALL -- the guard was present, correct, and uncounted.
+#
+#  That is a wider blind spot than the `mark`/`_mark` one filed as sh4markspell: a whole probe
+#  STYLE was invisible.  The two additions here are `\(self\.\)\?` and an optional trailing
+#  argument.  Both are anchored -- `mark=_mark` and the full `echo=` conditional still have to
+#  be present and in order -- so neither re-opens the hole the three earlier tightenings closed:
+#  a site that passes the argument, or drops the conditional, still fails to match.
+conv_mark=$(probe_code 'return \(self\.\)\?wait(mark=_mark, echo=[a-z][a-z]* if [a-z][a-z]* else None[,)]' | grep -c .)
 
 #  THE HOLE A PASS-2 SEAT FOUND, and it is the sharpest finding of the review:
 #  the checks above catch a REVERT but not an ADDITION of the OTHER broken form.
