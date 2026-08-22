@@ -69,6 +69,31 @@ ECHOED BRIEF followed by "You've hit your usage limit ... try again at Aug 22nd,
 twice. A size check alone scores that the best answer of the nine. `panel.sh`'s seat check caught
 it as RATE-LIMITED. **Verify the CONTENT, never the size; the failure mode is a big file.**
 
+### *** A THIRD SEAT-FAILURE CLASS, MEASURED 2026-08-22: THE TRANSPORT, NOT THE SEAT. ***
+
+All THREE Ollama seats returned 155 bytes each in one firing —
+`ConnectionRefusedError(10061)` on `localhost:11434`. **The daemon was not running at all.**
+Not a wall, not a stall, not a brief defect: the models were available the whole time and one
+`ollama serve` recovered every one of them into the same panel dir.
+
+**It defeated every rule this file had.** It carries no quota keyword, so the wall rule passes
+it. It is 100% novel against the brief, so the echo rule passes it. It is short — but so is a
+stall, and this file already warns that short does not mean dead. `seat_verdicts.py` therefore
+filed all three under *"answered, NO VERDICT LINE (format miss)"*: **three DOWN seats recorded
+as live seats with bad formatting**, which is the seat-failure-counted-as-agreement shape in
+its purest form.
+
+Fixed in both places, and the two fixes are different on purpose: `seat_verdicts.py` reports
+`SEAT DOWN` and **separates "daemon refused the connection" from "transport/model error"
+because the remedies differ**, and `panel.sh` now PRE-FLIGHTS the daemon and starts it, since
+starting it is cheaper than losing three seats. If it still will not come up the script says
+so loudly rather than leaving it to be read out of three error files.
+
+**The general rule: a WALL is the seat refusing and you wait it out; a REFUSED CONNECTION is
+the transport being absent and one command fixes it. Reporting the second as the first
+silently gives up seats that were available all along.** Check the daemon before blaming the
+seat — `curl -s localhost:11434/api/tags` is the whole test.
+
 **A SHORT ANSWER AND A DEAD SEAT ARE NOT THE SAME THING.** Grok's file was 119 bytes when first
 sampled — opening line only, "I'll read the full offloaded packet first" — and looked exactly
 like the minimax stall this file spent days mis-attributing. It was MID-ANSWER. Sample twice
@@ -552,6 +577,36 @@ minutes, and a spare build is cheaper than a wrong reading.
 > under L1, done. **The cap IS the anti-#392 clause.** A second ask-again after an empty first
 > is exactly where the chain starts, and anything found past the cap is FILED, never fixed.
 
+> ### *** THE ORACLE-CORRECTION RULE — adopted 2026-08-22, and it is TEST-FIRST restated
+> for the case test-first did not cover. ***
+>
+> Sometimes the DETECTOR is the thing that is wrong: a shipped row pins the opposite of the
+> architecture, so correcting the code turns the row red. Re-pinning it is then necessary —
+> and it is also **observationally identical to fitting the test to the binary**, which is
+> the classic way to fake a green detector.
+>
+> **THE DISCRIMINATOR IS ORDER, AND IT IS MECHANICAL:**
+>
+> > **Re-pin the oracle FIRST. Measure the COMMITTED build RED under the new expectations.
+> > THEN change the code.** Same scripts, opposite colour. If you cannot show that red, you
+> > do not have test-first, and the re-pin collapses into laundering.
+>
+> Three further obligations, each from a seat that reached it independently:
+> * **PROVENANCE MUST SHOW.** The rewritten row comment quotes the source VERBATIM with
+>   file/line, so a future seat can re-derive it without trusting this round. The old pin's
+>   authority is the thing being overturned, so it cannot also be the warrant.
+> * **CORRECT THE FALSE RECORD IN PLACE**, never silently supersede it. A re-pinned oracle
+>   sitting next to an uncorrected claim of provenance is exactly what laundering looks like
+>   from outside.
+> * **A RE-PIN THAT REMOVES THE LAST FAILING ROW IS NOT FINISHED.** Ask what still faults
+>   after the correction. If the answer is "one row, and it observes the same value either
+>   way", the round owes a row on the OTHER observable channel before it may ship.
+>
+> *Provenance of the rule itself: the `sqreadtype` pass-1 panel. The brief proposed the
+> re-pin in the WRONG ORDER and no seat let it pass; one named the order fix, a second
+> supplied the provenance half, a third put it strongest — the re-pin **is** laundering
+> unless the new-channel row ships with it.*
+
 > ### THE FOUR REASONS THAT LICENSE AN IN-ROUND FIX OF DETECTOR MATERIAL
 >
 > Everything else is FILED. Named so no round has to re-argue it:
@@ -783,7 +838,20 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   **The shape that works, measured:** free-running with `sr=0x40000000`, `vbr` pointed into
   RAM, a `bra .` self-loop after the triggering store, a breakpoint at `VBR+0x600`, then
   `continue`. Interrupt levels are hardcoded (IRQ10 is level 5 at `cpu_sh.c:255-258`), so
-  IMASK must be low enough to admit the one under test. Instruction-combination work needs FREE-RUNNING execution: the
+  IMASK must be low enough to admit the one under test.
+  *** BUT "DELIVERY" IS THE EXACT WORD, AND READING THIS RULE MORE BROADLY COSTS A PROBE.
+  Refined 2026-08-22, verified by opening all three files. *** The guard suppresses the
+  EXCEPTION DISPATCH only. **The ASSERT path runs perfectly well while stepping**, by two
+  routes: a device handler asserts SYNCHRONOUSLY inside the guest's own store instruction
+  (nothing in `memory_rw` or device dispatch consults `single_step`), and **tick functions
+  run under stepping too** — `machine.c:726-728` is
+  `ticks_till_next[te] -= single_step ? 1 : N_SAFE_DYNTRANS_LIMIT;`, so they still fire, just
+  one tick at a time. So: **anything observable in the ASSERT path is visible to a cheap
+  step-based probe; only DELIVERY needs the free-running recipe above.** The case that
+  forced the distinction is `cpu_sh.c:312-316`, whose `exit(1)` sits in the assert path — the
+  host simply dies under `step`, and a scoping seat caught the main loop about to build the
+  full free-running rig for it because this bullet said "interrupts" where it meant
+  "delivery". Instruction-combination work needs FREE-RUNNING execution: the
   #340 two-pass loop driver, breakpoint AFTER the sequence, instruction tracing OFF
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the

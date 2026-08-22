@@ -77,7 +77,7 @@ def main():
         return 2
     d = sys.argv[1]
     bl = brief_lines(d)
-    answered = walled = absent = 0
+    answered = walled = absent = down = 0
     print("%-17s %8s %6s  %-22s %s" % ("seat", "bytes", "novel", "verdict", "state"))
     for s in SEATS:
         p = os.path.join(d, s + ".txt")
@@ -105,8 +105,32 @@ def main():
         #  nothing after it; a working seat that merely mentions a limit has it
         #  mid-reasoning and ends with substance.  Checked against both known
         #  walls and against a live seat that mentions limits.
+        #  *** A TRANSPORT FAILURE IS NOT A WALL AND IS NEVER AN ANSWER. ***
+        #  Added 2026-08-22 after this tool scored three DOWN seats "answered".
+        #  The whole Ollama daemon was not running -- localhost:11434 refused the
+        #  connection -- so panel_ollama.py wrote its 155-byte error file as the
+        #  ENTIRE seat output.  Every earlier rule missed it: the file is short
+        #  but so is a stall; it carries no quota keyword so the wall rule passes
+        #  it; and it is 100% novel against the brief so the echo rule passes it
+        #  too.  It then landed in the "answered, NO VERDICT LINE (format miss)"
+        #  bucket -- a DOWN seat recorded as a live seat with bad formatting,
+        #  which is exactly the "seat failure counted as agreement" this file
+        #  exists to prevent.
+        #
+        #  Kept separate from WALLED on purpose, because the REMEDY differs and
+        #  the round record should say which happened: a wall is the seat
+        #  refusing and you wait it out; a refused connection is the daemon not
+        #  running and one `ollama serve` fixes it, so a panel that reports it
+        #  as a wall silently gives up three seats it could have had.
+        err = t.lstrip()[:400] if t.lstrip().startswith("OLLAMA_SEAT_ERROR") else ""
         is_walled = bool(WALL_RE.search(t[-600:])) and not v
-        if is_walled:
+        if err:
+            state = ("*** SEAT DOWN -- daemon refused the connection; "
+                     "start ollama and re-fire ***"
+                     if "ConnectionRefused" in err or "refused it" in err
+                     else "*** SEAT DOWN -- transport/model error ***")
+            down += 1
+        elif is_walled:
             state, walled = "*** WALLED ***", walled + 1
         elif not novel:
             state, absent = "ECHO ONLY -- no answer", absent + 1
@@ -116,7 +140,13 @@ def main():
             state, answered = "answered, NO VERDICT LINE (format miss)", answered + 1
         print("%-17s %8d %5.0f%%  %-22s %s"
               % (s, len(t), ratio * 100, v or "-", state))
-    print("\n%d answered, %d walled, %d absent/echo-only" % (answered, walled, absent))
+    print("\n%d answered, %d walled, %d DOWN, %d absent/echo-only"
+          % (answered, walled, down, absent))
+    if down:
+        #  Loud on purpose.  A down seat that reads as a quiet row is how a
+        #  three-seat outage got recorded as a full panel.
+        print("*** %d SEAT(S) DOWN -- OPERATIONAL failure, never agreement."
+              "  Name them in the round record. ***" % down)
     return 0
 
 

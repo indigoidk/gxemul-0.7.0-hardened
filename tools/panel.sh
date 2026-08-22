@@ -96,6 +96,9 @@ CODEX="$HOME/AppData/Local/Programs/OpenAI/Codex/bin/codex"
 AGY="$HOME/AppData/Local/agy/bin/agy"
 KIMI="$HOME/.kimi-code/bin/kimi"
 GROK="$HOME/.grok/bin/grok.exe"
+#  The three cloud seats are proxied through a LOCAL daemon, so the binary matters
+#  even though the models are remote.  See the pre-flight below.
+OLLAMA_BIN="${OLLAMA_BIN:-$HOME/AppData/Local/Programs/Ollama/ollama.exe}"
 GROK_MODEL="grok-4.6"       # `grok models` lists exactly one model today, and
 GROK_EFFORT="xhigh"         # grok-4.6 is both it and the default. Re-check after
                             # any CLI upgrade -- a wrong ID is a SEAT FAILURE.
@@ -233,6 +236,36 @@ P_KIMI=$!
     --permission-mode plan --cwd "$PROJ" \
     </dev/null > "$OUT/grok.txt" 2>&1 &
 P_GROK=$!
+
+#  *** PRE-FLIGHT THE OLLAMA DAEMON.  Added 2026-08-22, after all THREE cloud seats
+#  came back in 155 bytes each -- ConnectionRefusedError(10061) on localhost:11434,
+#  because the daemon simply was not running.  Three seats lost in one firing.
+#
+#  This is a class the seat check could not name.  A quota WALL is the seat refusing
+#  and you wait it out; a refused CONNECTION is the transport being absent and one
+#  command fixes it.  Reporting the second as the first silently gives up three seats
+#  that were available the whole time -- and the panel still prints a tidy summary,
+#  which is the "a green row means nothing" shape.
+#
+#  Cheaper to start it than to lose the panel, so try; if it still will not come up,
+#  say so LOUDLY here rather than leaving it to be read out of three error files.
+if ! curl -s -m 4 http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo "*** ollama daemon is DOWN (localhost:11434 refused) -- starting it ***"
+    ( "$OLLAMA_BIN" serve >/dev/null 2>&1 & ) 2>/dev/null
+    for _i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        curl -s -m 4 http://localhost:11434/api/tags >/dev/null 2>&1 && break
+    done
+    if curl -s -m 4 http://localhost:11434/api/tags >/dev/null 2>&1; then
+        echo "*** ollama came up; the three cloud seats will be fired normally ***"
+    else
+        echo "*** !!! OLLAMA STILL DOWN -- THREE SEATS WILL FAIL OPERATIONALLY. !!!"
+        echo "*** !!! That is NOT agreement.  Start it by hand and re-fire those"
+        echo "*** !!! three seats into THIS panel dir before reading the result:"
+        echo "*** !!!   $OLLAMA_BIN serve &"
+        echo "*** !!!   python $TOOLS/panel_ollama.py <model> $OUT/<seat>.txt $PACKET_BRIEF"
+    fi
+fi
 
 python "$TOOLS/panel_ollama.py" "$OLLAMA1" "$OUT/ollama_glm.txt" "$PACKET_BRIEF" \
     > "$OUT/ollama_glm.err" 2>&1 &
