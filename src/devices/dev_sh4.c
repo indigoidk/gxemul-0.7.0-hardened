@@ -166,10 +166,15 @@ enum {
  *  built and measured at 10/10.
  *
  *  The CONCLUSION stands and the class stays separate, on the honest ground: the two
- *  operands are disjoint only by the accident of which bits these two registers happen to
- *  use, nothing enforces it, and a class shared on that basis becomes a silent collision
- *  the first time either mask grows.  That is a real reason; the original was not, and
- *  this project has already recorded what happens to a wrong reason -- it gets reused.
+ *  operands do not merely differ, their BIT SUPPORTS do not overlap -- RCR1 uses only
+ *  0x08|0x10 and RTCSR only 0x02|0x40, and `0x18 & 0x42 == 0` is the fact the algorithm
+ *  actually turns on.  Nothing enforces that; it is an accident of which bits these two
+ *  registers happen to use.  A class shared on that basis becomes a silent collision the
+ *  first time their bit supports OVERLAP -- which is not the same as "the first time
+ *  either mask grows", and an earlier draft of this comment said the latter.  A mask can
+ *  grow into bits the other never uses and nothing happens.  That precision was supplied
+ *  by the seat that refuted the original reason, and it matters for the same stated
+ *  cause: a wrong reason gets reused.
  */
 	SH4_VAL_RTCSRINT,		/*  RTCSR: refresh interrupt enables  */
 /*
@@ -2163,8 +2168,17 @@ DEVICE_ACCESS(sh4)
 
 	case SH4_RTCSR:
 		/*
-		 *  Refresh Time Control/Status Register. Called RTCSR in
-		 *  NetBSD, but RTSCR in the SH7750 manual?
+		 *  Refresh Timer Control/Status Register.
+		 *
+		 *  This comment used to ask whether the manual called it
+		 *  RTSCR while NetBSD called it RTCSR.  ANSWERED 2026-08-22
+		 *  against a real SH7750 Hardware Manual (Rev.7.00,
+		 *  REJ09B0366-0700), obtained by owner directive: the manual
+		 *  says RTCSR 32 times and RTSCR NOT ONCE.  Section 13.2.11
+		 *  is "Refresh Timer Control/Status Register (RTCSR)".  The
+		 *  two names never disagreed; the question rested on a false
+		 *  premise, which is what a question asked without the
+		 *  document tends to do.
 		 */
 		if (writeflag == MEM_WRITE) {
 			idata &= 0x00ff;
@@ -2780,7 +2794,10 @@ DEVINIT(sh4)
 	machine_add_tickfunction(devinit->machine, dev_sh4_tick, d,
 	    SH4_TICK_SHIFT);
 
-	/*  Initial Timer values, according to the SH7750 manual:  */
+	/*  Initial Timer values, according to the SH7750 manual.  VERIFIED 2026-08-22
+	    against a real copy: the register table gives TCOR0/TCNT0/TCOR1/TCNT1 an
+	    initial value of H'FFFFFFFF at H'FFD80008/000C/0014/0018, which matches both
+	    the values below and the addresses in thirdparty/sh4_tmureg.h.  */
 	d->tcor[0] = 0xffffffff; d->tcnt[0] = 0xffffffff;
 	d->tcor[1] = 0xffffffff; d->tcnt[1] = 0xffffffff;
 	d->tcor[2] = 0xffffffff; d->tcnt[2] = 0xffffffff;

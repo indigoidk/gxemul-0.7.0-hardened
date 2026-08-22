@@ -80,7 +80,7 @@ ST = {1: 0x2100, 2: 0x2101, 4: 0x2102}    # mov.b/w/l r0,@r1
 VAL_RE = re.compile(r"\[ sh4: DMA channel \d+: [a-z ]+ \d+ not implemented"
                     r" -- transfer declined\.  \(once per encoding\) \]")
 
-EXPECT_ROWS = 19
+EXPECT_ROWS = 20
 
 rows = []
 
@@ -229,6 +229,19 @@ def main():
             + P.poke([0x2102, 0x2142, 0x0009]) + ["pc=0x%x" % P.CODE],
             2, label, disasm_upto=6, **kw)
 
+    def three_stores(v1, v2, v3, addr, label):
+        """Three guest mov.l stores to `addr` in ONE process: r0, r4, then r5.
+
+        0x2152 (mov.l r5,@r1) is the only opcode here not already in
+        sh4_pcic_probe's validated OPS table, so disasm_upto covers all three
+        stores -- a wrong register field is silent and yields 0, which a
+        line-COUNTING oracle would accept by accident."""
+        return P.session(
+            ["put w 0x%x, 0x%08x" % (P.DEST, P.POISON),
+             "r0=0x%x" % v1, "r4=0x%x" % v2, "r5=0x%x" % v3, "r1=0x%x" % addr]
+            + P.poke([0x2102, 0x2142, 0x2152, 0x0009]) + ["pc=0x%x" % P.CODE],
+            3, label, disasm_upto=8, **kw)
+
     #  SAME offending encoding (DM=3), DIFFERENT other bits (TS 2-byte then 4-byte, both
     #  legal so both reach the DM switch).  A correct (class, channel, encoding) latch
     #  says it ONCE.  A whole-register latch sees two distinct words and says it twice.
@@ -248,14 +261,26 @@ def main():
     #  which prints nothing and now falls through to the `cause_interrupt` exit(1) that
     #  #448 removed.  Measured: alive=False, "TODO: sh4 dmac interrupt" present.
     #
-    #  Every R row stores ONCE, so they only ever exercise the FRESH path; the latched
-    #  path had no coverage at all.  L1/L2/L3 store twice but with DIFFERENT words, so
-    #  they check which KEY the latch uses -- not what happens after it suppresses.  This
-    #  row exists for the suppressed path itself, which is why it uses one identical word.
+    #  Every R row stores ONCE, so they only ever exercise the FRESH path.  L1/L2/L3
+    #  store twice but with DIFFERENT words, so their second store still carries FRESH
+    #  bits and `sh4_val_first` still returns true -- they check which KEY the latch uses.
+    #  What had NO coverage is the fully suppressed path, where the helper returns FALSE
+    #  and the caller continues.  (An earlier draft said L1/L2/L3 "never test what happens
+    #  after it suppresses", which is slightly too broad -- they exercise PARTIAL
+    #  suppression; a seat drew the distinction.)  This row uses one identical word so the
+    #  second call is fully suppressed, which is the only way to reach that path.
     #
     #  It is the same defect as the `return`->`break` variant the docstring already pins,
     #  DEFERRED BY ONE STORE, and it re-reaches the removed exit(1) -- vacuity-floor
     #  clause (b), found by the measuring seat against the SHIPPED file.
+    #  *** EVERY BIT OF THIS WORD IS LOAD-BEARING, and a pass-2 seat traced why. ***
+    #  CHCR_TD is what makes the store reach sh4_dmac_transfer() at all.  CHCR_IE is what
+    #  makes the mutant FATAL rather than merely wrong: the fall-through lands on
+    #  `if (cause_interrupt) { ... exit(1); }`, and cause_interrupt IS CHCR_IE -- so
+    #  dropping IE to "simplify" the row leaves the mutant falling harmlessly off the end
+    #  of the function, host alive, ROW GREEN, VACUOUS.  RS=1 is an unmodelled encoding
+    #  that reaches the `default:` arm; TE is clear and TS/DM/SM are all 0, which are
+    #  modelled, so this word raises exactly ONE complaint and no others.
     v = CHCR_IE | CHCR_TD | (1 << 8)            # RS=1, unmodelled; IE and TD set
     buf, alive, st = two_stores(v, v, SH4_CHCR0, "L0")
     d = diags(buf)
@@ -275,6 +300,39 @@ def main():
         "alive=%s lines=%d %s" % (alive, len(d), d),
         "exactly ONE -- two means the latch keys on the whole CHCR word, which lets a "
         "guest walk 32-bit values and draw an unsilenceable line for each")
+
+    #  ---- L4: A, B, A -- the accumulator itself, not the key ---------------------------
+    #  *** ONE DELETED CHARACTER IN THE SHARED HELPER DEFEATS THE LATCH FOR EVERY CLASS IN
+    #  THIS FILE, AND ALL 19 OTHER ROWS STAY GREEN. ***  Change sh4_val_first's
+    #  `d->val_reported[cls][instance] |= bits;` to `= bits;` and the accumulator stops
+    #  accumulating: it holds only the LAST reported set.
+    #
+    #  Nothing else here sees it, and the reason is exact.  R rows report A alone.  L0
+    #  reports A then A -- assignment still leaves A recorded.  L1/L2/L3 report A then B,
+    #  and B's freshness is computed BEFORE A is discarded.  No row ever returns to A.
+    #  A, B, A does, and under the mutant A is diagnosed TWICE.
+    #
+    #  MEASURED: clean gives resource-select lines ['1', '3']; the mutant gives
+    #  ['1', '3', '1'].  Severity is not merely cosmetic -- a guest alternating two
+    #  unmodelled encodings then draws a line PER STORE, and fatal() has no quiet_mode
+    #  early-out, so it cannot be silenced even with -q.  That is the unbounded burn the
+    #  latch exists to prevent.  Named by a pass-2 seat; built before it was believed.
+    #
+    #  RS=1 and RS=3 deliberately, and NOT RS=2: 0x200 is the one ACCEPTED encoding, and
+    #  with CHCR_IE set it reaches the sh4dmacie site that is still fatal by design -- an
+    #  earlier draft of this measurement used it and killed the BASELINE, which is a void
+    #  result rather than a negative one.
+    buf, alive, st = three_stores(
+        CHCR_IE | CHCR_TD | (1 << 8),
+        CHCR_IE | CHCR_TD | (3 << 8),
+        CHCR_IE | CHCR_TD | (1 << 8), SH4_CHCR0, "L4")
+    d = diags(buf)
+    row("L4 ACCUMULATOR: A, B, A -- the repeat of A is STILL suppressed",
+        st and alive and len(d) == 2,
+        "alive=%s lines=%d %s" % (alive, len(d), d),
+        "exactly TWO -- three means the latch records only the LAST set instead of "
+        "accumulating, so a guest alternating two encodings draws an unsilenceable line "
+        "per store")
 
     #  TWO DIFFERENT illegal RS encodings on one channel.  A correct latch says it TWICE
     #  -- they are different features.  A latch that dropped the encoding sub-key and kept

@@ -5857,6 +5857,13 @@ which is the exact failure this list exists to prevent.
 ### `detectorescapes` — open, MEASURED, ranked
 
 *** SEVEN ESCAPES, BUILT AND MEASURED AGAINST FOUR SHIPPED DETECTORS ON 2026-08-22. ***
+
+**A wording precision first, because it changes what the reader should be alarmed about.**
+These are escapes from the DETECTORS. The emulator itself never shipped with any of these
+defects -- each is a mutant built to test whether a detector would notice. "A safety breach
+in shipped material", said elsewhere about `C-M3`, means *the shipped detector had a
+safety-relevant escape*, not that the emulator shipped with a host death. A seat flagged the
+looser phrasing as risking exactly that misreading.
 Found by the measuring seat when it was fired on four review stages that had run 8-of-9
 without it. Fourteen mutants built, thirteen measured: seven escapes, four deaths, one
 provably equivalent, one that would not compile.
@@ -5880,10 +5887,38 @@ record was corrected the same way (`dev_sh4.c:159`, L4).
 **The class statement is worth more than any instance.** `arcbiosubsan`'s census pins
 **text**; its unstated gap is **text-preserving semantic change** — the declaration types of
 `buf` and of the destinations — which is neither "a rewrite that changes the statement" nor
-"a statement not in the table". No further regex closes it; it needs a type assertion or a
+"a statement not in the table". A lexical assertion pinning the `uint64_t` declaration WOULD
+catch this exact mutation, so "no regex can close it" would be too absolute -- a seat said
+so. What no regex closes is the CLASS, because the next text-preserving semantic change need
+not touch a declaration at all. It needs a type assertion or a
 behavioural row on a 64-bit ARC path. The flagship batch had just ruled the frozen-table
 form correct for idiom classes *within stated conditions*; this names a condition it did
 not state.
+
+#### The hole GENERALISES, and a keyword scan says where to look first
+
+`C-M3` was invisible for a structural reason, not an oversight: **every `R` row stores
+once, so they only ever take the FRESH path.** The fall-through happens on the LATCHED
+path, which by definition prints nothing — so an "exactly one diagnostic" oracle cannot see
+it. `L1`/`L2`/`L3` store twice but with *different* words, testing which KEY the latch uses,
+never what happens after it suppresses. **Any latched-diagnostic detector in this tree can
+have the same hole**, and the discriminator is cheap: does it drive the SAME offending value
+twice in one process and assert the host is still alive afterwards?
+
+A keyword scan across the five SH-4 detectors — a scan, NOT a proof, and recorded as such:
+
+| detector | same-word repeat rows | note |
+|---|---|---|
+| `sh4_sci_probe.py` (#451) | RPT, RPT1 | covered, and both assert `alive` |
+| `sh4_tlbda2_probe.py` (#452) | RPT, RPTu | covered, both assert `alive` |
+| `sh4_rtcsr_probe.py` (#449) | L1, F1 | covered — F1 is a many-tick flood on one condition |
+| `sh4_val_probe.py` (#447) | **none found** | **check it** |
+| `sh4_pcic_probe.py` (#443) | **none found** | **check it** |
+
+The two rounds that shipped *after* this hazard was understood happen to be covered; the two
+older ones are the ones to build `L0`-shaped rows against. That is a scan of row names, so it
+must be confirmed by reading before either is called a hole — but it says where to spend the
+two builds.
 
 **And two measured deaths are recorded because they are evidence too.** `R-M2` (an early
 `return` in `sh4_timer_tick`) scores 10/10 on its own probe — blind — and the SIBLING

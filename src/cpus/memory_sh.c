@@ -69,11 +69,28 @@ static int translate_via_mmu(struct cpu *cpu, uint32_t vaddr,
 
 	if (!(flags & FLAG_NOEXCEPTIONS)) {
 		/*
-		 *  Increase URC every time the UTLB is accessed. (Note:
-		 *  According to the SH4 manual, the URC should not be
-		 *  increased when running the ldtlb instruction. Perhaps this
-		 *  is a good place? Perhaps it is better to just set it to a
-		 *  random value? TODO: Find out.
+		 *  Increase URC every time the UTLB is accessed.
+		 *
+		 *  THE TODO THAT USED TO SIT HERE IS ANSWERED, 2026-08-22,
+		 *  against a real SH7750 Hardware Manual (Rev.7.00,
+		 *  REJ09B0366-0700) obtained by owner directive.  It asked
+		 *  whether URC should be left alone by `ldtlb`, wondered
+		 *  whether this was the right place, and floated setting it
+		 *  to a random value instead.  The MMUCR field definition
+		 *  settles all three:
+		 *
+		 *      "URC is incremented each time the UTLB is accessed.
+		 *       When URB > 0, URC is reset to 0 when the condition
+		 *       URC = URB occurs. ...  URC is not incremented by an
+		 *       LDTLB instruction."
+		 *
+		 *  So the suspicion was RIGHT and the random-value idea was
+		 *  WRONG -- and this code already conforms, by construction
+		 *  rather than by intent: X(ldtlb) in cpu_sh_instr.c reads
+		 *  URC out of MMUCR and indexes utlb_hi[]/utlb_lo[] itself,
+		 *  never entering this translation path, so no increment can
+		 *  happen there.  Nothing to change; the TODO simply never
+		 *  knew.  The wrap below also matches the quoted text.
 		 */
 		urb = (cpu->cd.sh.mmucr & SH4_MMUCR_URB_MASK) >>
 		    SH4_MMUCR_URB_SHIFT;

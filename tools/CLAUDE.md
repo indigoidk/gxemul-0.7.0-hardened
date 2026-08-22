@@ -1,6 +1,12 @@
 # GXemul 0.7.0 hardened fork — standing instructions (every session)
 
-`GXEMUL-SEC/` is the git repo (push from Windows git-bash, never WSL). `est/` is its
+`GXEMUL-SEC/` is the git repo. *** OWNER DIRECTIVE 2026-08-22: LOCAL GIT ONLY -- DO
+NOT PUSH. *** Commit as normal; do not run `git push`, and do not treat an unpushed
+commit as an exposure (the older "an unpushed round is the largest single exposure"
+line below is superseded for as long as this holds). The remote is left configured and
+untouched -- it is the owner's plumbing, and nothing here removes or rewrites it.
+(Historic note, still true if pushing ever resumes: push from Windows git-bash, never
+WSL.) `est/` is its
 non-git twin; `build/` (pmax) and WSL `/tmp/gxsec-build` (arc) are in-place build trees
 with **NO VPATH** — propagate every edit into them or you measure a stale binary.
 

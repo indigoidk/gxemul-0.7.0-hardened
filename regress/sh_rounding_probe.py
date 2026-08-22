@@ -128,7 +128,12 @@ VECTORS = [
 
     # ---- #299's organic default-mode witness: the fmac tie band ---------------------
     #  (0x3fc00003 * 0x33fffffc) + 1.0 lands just below the midpoint between
-    #  0x3f800001 and 0x3f800002. The manual says fmac rounds ONCE; the old
+    #  0x3f800001 and 0x3f800002. The manual says fmac rounds ONCE -- VERIFIED
+    #  2026-08-22 against a real copy obtained by owner directive, which this
+    #  project did not have when the claim was written: "Rounding is performed
+    #  once in FMAC, but twice in FADD, FSUB, and FMUL." (SH-4 Software Manual).
+    #  The claim was made from the source and measurements alone and it HELD.
+    #  The old
     #  two-rounding path collapsed onto the midpoint in double and ties-to-even then
     #  picked 0x3f800002. Correct under BOTH modes is 0x3f800001, so this row is
     #  mode-independent by value -- but the pre-#299 build fails its RN arm, which is
@@ -148,7 +153,10 @@ VECTORS = [
      instr(0xf010, 0),                       # fadd fr1,fr0
      {RN: 0x7f800000, RZ: 0x7f800000}),
 
-    # ---- #297: ftrc's value ladder. DELIBERATELY mode-independent -- the manual says
+    # ---- #297: ftrc's value ladder. DELIBERATELY mode-independent -- VERIFIED
+    #  2026-08-22 against a real manual: FTRC's own Description section says flatly
+    #  "The rounding mode is always truncation."  Another no-manual-era claim that
+    #  held.  the manual says
     #  "the rounding mode is always truncation", so these rows run under both modes and
     #  must agree; if someone ever wires ftrc to RM, the discriminating-count check
     #  catches the drift. Before #297 the conversion was a raw C cast (UB on the

@@ -112,7 +112,9 @@ int sh_cpu_new(struct cpu *cpu, struct memory *mem, struct machine *machine,
 	cpu->invalidate_code_translation =
 	    sh_invalidate_code_translation;
 
-	/*  Initial value of FPSCR (according to the SH4 manual):  */
+	/*  Initial value of FPSCR (according to the SH4 manual).  VERIFIED
+	    2026-08-22 against a real copy: "Floating-point status/control
+	    register, FPSCR (32 bits, initial value = H'0004 0001)".  Exact.  */
 	cpu->cd.sh.fpscr = 0x00040001;
 
 	/*  (Initial value of the program counter on reboot is 0xA0000000.)  */

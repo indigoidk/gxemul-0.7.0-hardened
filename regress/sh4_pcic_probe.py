@@ -63,9 +63,21 @@ probe run this way CANNOT distinguish `fatal()` from `debug()` by presence -- a
 #441 detector row was passed by a two-character mutant for exactly that reason.
 P5 is P4's other half: a PER-DEVICE latch passes P4 and fails P5.
 
-NO SH-4 MANUAL IS CITED ANYWHERE IN THIS FILE.  There is none in this tree
-(`_scratchpad/sh4_manual.txt` is one byte).  Every constant below is read out of
-a header in this repository, with the file and line named, or measured.
+NO SH-4 MANUAL IS CITED ANYWHERE IN THIS FILE, and every constant below is read
+out of a header in this repository -- with the file and line named -- or measured.
+
+*** THE REASON GIVEN FOR THAT CHANGED ON 2026-08-22, AND THE PRACTICE DID NOT. ***
+This paragraph used to say there was no SH-4 manual in the tree, which was true
+when it was written (`_scratchpad/sh4_manual.txt` is one byte) and is FALSE now:
+a real SH7750 Hardware Manual (Rev.7.00, REJ09B0366-0700) and SH-4 Software
+Manual were obtained by owner directive and extracted to
+`_scratchpad/sh7750_hardware.txt` and `_scratchpad/sh4_programming.txt`.
+
+The file still cites none, deliberately.  A probe's constants should come from
+the headers the CODE actually compiles against, because a probe that agrees with
+the manual while the code disagrees with both would be green and useless.  The
+manual is now available for deciding what the code OUGHT to do; the headers
+remain the authority on what it DOES.
 
 usage:  sh4_pcic_probe.py <gxemul-binary> <landisk-kernel> [--jobs N] [--fast]
 
