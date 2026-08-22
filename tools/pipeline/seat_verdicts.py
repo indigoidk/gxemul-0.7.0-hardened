@@ -46,11 +46,28 @@ def brief_lines(d):
     return set()
 
 
-def verdict_of(text):
-    """The seat's own verdict: a line carrying EXACTLY ONE verdict token."""
+def verdict_of(text, brief_lines=()):
+    """The seat's own verdict: a line carrying EXACTLY ONE verdict token.
+
+    *** ONE TOKEN PER LINE IS NOT ENOUGH, MEASURED 2026-08-22. ***  A brief that
+    lists its three options WRAPS, and the continuation line then carries a
+    single token -- so this returned the brief's own menu as a seat's answer,
+    which is the exact failure this whole file exists to stop.  Two further
+    guards: skip any line that also appears in the brief, and skip any line that
+    still reads as instruction rather than answer.
+    """
+    INSTRUCTIONAL = ("open with", "on line one", "then reasoning", "one line, then",
+                     "` or `", "or `verdict")
     for line in text.splitlines():
-        if len(VERDICT_RE.findall(line)) == 1:
-            return VERDICT_RE.search(line).group(1).upper()
+        if len(VERDICT_RE.findall(line)) != 1:
+            continue
+        st = line.strip()
+        if st in brief_lines:
+            continue
+        low = st.lower()
+        if any(k in low for k in INSTRUCTIONAL):
+            continue
+        return VERDICT_RE.search(line).group(1).upper()
     return None
 
 
@@ -72,8 +89,24 @@ def main():
         long_lines = [l.strip() for l in t.splitlines() if len(l.strip()) > 20]
         novel = [l for l in long_lines if l not in bl]
         ratio = (len(novel) / len(long_lines)) if long_lines else 0.0
-        v = verdict_of(t)
-        if WALL_RE.search(t) and not v:
+        v = verdict_of(t, bl)
+        #  *** A WALL IS A FILE THAT *ENDS* WITH THE NOTICE.  Both the naive rule
+        #  and my first correction of it were measured WRONG on 2026-08-22. ***
+        #
+        #  Keyword-anywhere reported a LIVE seat as walled, because its
+        #  chain-of-thought mentioned a quota word while it was still writing.
+        #  Replacing that with "a wall is a SHORT file" was worse: the carrier
+        #  already records that codex's wall produces the LARGEST file in the
+        #  panel -- the echoed brief plus the notice -- and a positive control
+        #  against two known-walled panels showed the size rule missing both.
+        #
+        #  What actually separates them is POSITION.  A walled run ends with
+        #  "ERROR: You've hit your usage limit ... try again at <date>" and
+        #  nothing after it; a working seat that merely mentions a limit has it
+        #  mid-reasoning and ends with substance.  Checked against both known
+        #  walls and against a live seat that mentions limits.
+        is_walled = bool(WALL_RE.search(t[-600:])) and not v
+        if is_walled:
             state, walled = "*** WALLED ***", walled + 1
         elif not novel:
             state, absent = "ECHO ONLY -- no answer", absent + 1

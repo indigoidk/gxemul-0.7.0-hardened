@@ -3301,11 +3301,44 @@ X(fsrra_frn)
 		    this file uses the mode-aware one, and that difference is
 		    deliberate rather than an oversight -- recorded here
 		    because it has been re-filed as a defect more than once.
-		    FSRRA is an APPROXIMATION instruction: the SH-4 manual
-		    specifies it only to within a relative error bound, not as
-		    a correctly-rounded result, so there is no rounding mode
-		    for it to honour and `1.0f / sqrt()` is already a different
-		    approximation from the silicon's table-driven one. Wiring
+		    FSRRA is an APPROXIMATION instruction, so there is no
+		    rounding mode for it to honour and `1.0f / sqrt()` is
+		    already a different approximation from the silicon's
+		    table-driven one.
+
+		    *** THIS COMMENT USED TO CITE "the SH-4 manual" FOR AN
+		    ERROR BOUND, AND THAT CITATION CANNOT BE CHECKED HERE --
+		    corrected 2026-08-22 when real manuals were obtained.
+		    FSRRA APPEARS IN NEITHER OF THEM. *** Zero hits in the
+		    SH-4 Software Manual (Rev. 5.0) and zero in the SH7750
+		    Hardware Manual (Rev. 7.00); the error-bound text those
+		    greps do find belongs to FIPR, a different instruction.
+		    FSRRA is an SH-4A addition, and the SH-4 opcode table has
+		    no entry for 1111nnnn01111101 at all, though its
+		    neighbours FSTS/FNEG/FABS/FSQRT are all listed.
+
+		    *** AND THE FIRST CORRECTION OF THIS COMMENT WAS ITSELF AN
+		    OVERCLAIM, caught by a review seat within the hour. ***  It
+		    said the DECISION still stands because it rests on FSRRA
+		    being an approximation rather than on any page number.  But
+		    that premise is unsupported by the SAME documents, for the
+		    SAME reason: they do not mention FSRRA at all.  Withdrawing
+		    a citation and keeping the belief it was offered to support
+		    is not a correction, it is the same claim with the evidence
+		    removed -- and this project has already recorded that a
+		    records-correction round tends to repeat the error it is
+		    correcting.
+
+		    THE HONEST STATE, then: the CODE is unchanged and has been
+		    unchanged since #339; what is UNSOURCED is the reason given
+		    for it.  Nothing in this tree documents FSRRA's accuracy
+		    either way.  Settling it needs an SH-4A manual, which is
+		    the document that actually defines the instruction.  Until
+		    one is here this comment claims no architectural fact, and
+		    the behaviour is recorded as a choice awaiting a source
+		    rather than as a conclusion drawn from one.  See the filed
+		    row `sh4a4gate` for the separate question of decoding it at
+		    all on a modelled SH7750. Wiring
 		    it to sh_fp_rm() would round a number that was never the
 		    architectural answer to begin with, which buys nothing and
 		    implies a precision the instruction does not have. The
@@ -3594,8 +3627,50 @@ X(fschg)
 /*
  *  pref_rn:  Prefetch.
  *
- *  TODO: According to the SH4 manual, "OTLBMULTIHIT or RADDERR may be
- *  delivered", so those things should be checked for. Not implemented yet.
+ *  *** THE TODO THAT USED TO SIT HERE WAS MIS-CITED, AND THE MANUAL SAYS THE
+ *  OPPOSITE OF WHAT IT ASKED FOR.  Checked 2026-08-22 against real copies. ***
+ *
+ *  It read: 'According to the SH4 manual, "OTLBMULTIHIT or RADDERR may be
+ *  delivered", so those things should be checked for.'  Neither term appears in
+ *  the SH-4 Software Manual, in the SH7750 Hardware Manual, or anywhere else in
+ *  this tree -- the manual's own names are "instruction/data TLB multiple hit
+ *  exception".  And PREF's own section says the reverse:
+ *
+ *      "This instruction does not generate address-related errors.  In the
+ *       event of an error, the PREF instruction is treated as an NOP (no
+ *       operation) instruction."     (SH-4 Software Manual, 9.74 PREF)
+ *
+ *  Which is exactly what the early-return below does for every address outside
+ *  the store-queue range.
+ *
+ *  The SQ case IS different and the hardware manual describes it separately --
+ *  4.7.4 SQ Protection lists "a TLB miss exception, protection violation
+ *  exception, or initial page write exception", plus an address error in user
+ *  mode when MMUCR.SQMD restricts access.  This function has code for both
+ *  halves: the SQMD/user-mode check below raises an exception itself, and
+ *  sh_translate_sq_v2p() raises translation faults.
+ *
+ *  *** WHAT IS AND IS NOT ESTABLISHED, because the first draft of this comment
+ *  said "nothing is outstanding" and "matching 4.7.4", and TWO review seats
+ *  named that independently as the load-bearing overclaim. ***
+ *
+ *  ESTABLISHED: the TODO's names appear in neither manual nor anywhere else in
+ *  this tree, and 9.74 says the opposite of what it asked for.  That much is a
+ *  measurement.
+ *
+ *  NOT ESTABLISHED, and NOT claimed: that the exceptions this function raises
+ *  are the ones 4.7.4 names.  The SQMD/user-mode arm below raises
+ *  EXPEVT_RES_INST -- illegal instruction -- where the manual says an ADDRESS
+ *  ERROR is flagged, and this tree defines EXPEVT_ADDR_ERR_LD/ST separately.
+ *  Nor is it shown that sh_translate_sq_v2p() raises all three of miss,
+ *  protection violation and initial page write rather than only some.  A seat
+ *  also observed that TLB multiple-hit is a property of the TLB ARRAY, not of
+ *  the access type, so its absence from 4.7.4's list does not prove it is
+ *  suppressed here.
+ *
+ *  Those are filed as `sh4sqexpevt`, unwitnessed.  The TODO was wrong; that
+ *  does not make the surrounding code right, and this comment no longer says
+ *  it does.
  *
  *  arg[1] = ptr to Rn
  */

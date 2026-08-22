@@ -5944,6 +5944,102 @@ The latch idiom that fixes an instance already exists in-tree and is cheap to re
 extended by `#448`/`#449`/`#451`/`#452`. Known instances are filed under their own names
 (`rtcflood`, `wdcflood`); this row is the class they belong to.
 
+### `sh4sqexpevt` — open, from the manual re-check, UNWITNESSED
+
+*** THE STORE-QUEUE PREF PATH MAY RAISE THE WRONG EXCEPTION KIND, AND THE TREE ALREADY HAS
+THE RIGHT CODE FOR IT. *** Two review seats named this independently while reviewing a
+different finding; neither built anything, and neither has this been witnessed.
+
+`cpu_sh_instr.c`, `X(pref_rn)`, the MMU-on SQMD arm:
+
+```c
+		if (cpu->cd.sh.mmucr & SH4_MMUCR_SQMD) {
+			if (!(cpu->cd.sh.sr & SH_SR_MD)) {
+				sh_exception(cpu, EXPEVT_RES_INST, 0, 0);
+				return;
+			}
+		}
+```
+
+`EXPEVT_RES_INST` is `0x180`, *Illegal instruction*. The SH7750 Hardware Manual §4.7.4 SQ
+Protection says, verbatim:
+
+> "However, if SQ access is enabled, in privileged mode only, by MMUCR.SQMD, **an address
+> error will be flagged** in user mode even if address translation is successful."
+
+This tree already defines `EXPEVT_ADDR_ERR_LD` (`0x0e0`) and `EXPEVT_ADDR_ERR_ST` (`0x100`)
+in `thirdparty/sh4_exception.h`. A guest dispatches on `EXPEVT`, so `0x180` and `0x0e0` send
+it down entirely different handlers.
+
+**A second question in the same function, and it may bear on the first.** §4.7.4 distinguishes
+the two directions:
+
+> "Write type exception judgment is performed for writes to the SQs, and **read type for
+> transfer from the SQs to external memory (PREF instruction)**"
+
+The code calls `sh_translate_sq_v2p(cpu, addr, &paddr, FLAG_WRITEFLAG)` — write type — for
+the PREF path. **That may be deliberate:** the `#318` comment immediately above it explains
+the flag choice in terms of what the translator returns ("with the write flag set this
+returns either 0, having raised the fault itself, or 2 — there is no read-only success to
+mishandle"), which is an argument about the helper's contract rather than about exception
+kind. Whether the resulting fault kind matches the manual is not addressed there.
+
+**Third, and softest:** it is not shown that `sh_translate_sq_v2p` raises all three of the
+exceptions §4.7.4 names — TLB miss, protection violation, initial page write — rather than
+some subset. The comment in the tree says "the translation faults raise themselves", which
+is a statement of intent.
+
+**Not a defect until witnessed, and stated that way deliberately.** Everything above is
+reading. A witness would need to reach the SQ range in user mode with `SQMD` set and observe
+the resulting `EXPEVT` — a different oracle from every SH probe in this tree, all of which
+observe stores and diagnostics rather than exception dispatch. That oracle is the same
+capability `sh4dmacie` needs, so the two should probably share a round.
+
+### `sh4a4gate` — open, found by the manual re-check, not yet witnessed
+
+*** THIS TREE MODELS NO SH-4A CPU, YET DECODES TWO SH-4A-ONLY INSTRUCTIONS FOR EVERY SH-4
+IT MODELS. *** Found 2026-08-22 while re-checking earlier SH claims against the manuals
+obtained by owner directive.
+
+`cpu_sh.h:61-67` defines exactly four CPU types: `SH7708R` (arch 3), `SH7750`, `SH7750R`
+and `SH7751R` (all arch 4). There is no SH-4A entry; the `SH5` line is commented out.
+
+`cpu_sh_instr.c` decodes both of these with no CPU-type gate at all:
+
+```c
+        } else if (lo8 == 0x7d) {
+                /*  FSRRA FRn  */
+                ic->f = instr(fsrra_frn);
+        ...
+                        ic->f = instr(fsca_fpul_drn);
+```
+
+**Neither instruction exists in either manual.** `FSRRA` and `FSCA` each appear ZERO times
+in the SH-4 Software Manual (Rev. 5.0) and ZERO times in the SH7750 Hardware Manual
+(Rev. 7.00) — and the SH-4 opcode table has no entry for `1111nnnn01111101`, although its
+immediate neighbours are all there:
+
+| encoding | instruction | in the SH-4 table? |
+|---|---|---|
+| `1111nnnn00001101` | FSTS | yes |
+| `1111nnnn01001101` | FNEG | yes |
+| `1111nnnn01011101` | FABS | yes |
+| `1111nnnn01101101` | FSQRT | yes |
+| `1111nnnn01111101` | **FSRRA** | **absent** |
+
+So a guest executing `0xF?7D` on a modelled SH7750 gets FSRRA semantics where real silicon
+would raise an illegal-instruction exception. That is guest-visible divergence in the
+*detection* of illegal instructions.
+
+**Severity is honestly low and stated as such:** no in-tree guest is known to execute either
+encoding, so nothing observed is wrong today. This is a fidelity gap, not a live defect, and
+it is filed rather than fixed because the fix is a design question — gate the decode on
+`cpu_type.arch`, or add an SH-4A type, or decide the tree deliberately models a superset and
+say so where a reader will find it. **Deciding needs a round; the evidence is already here.**
+
+Unmeasured and named as such: whether a witness is constructible. It would need the illegal
+-instruction path to be observable, which is a different oracle from every SH probe here.
+
 ### `sh4fmtcast` — open, a class, not yet started
 
 `dev_sh4.c` passes an `(int)`-cast argument to an `%x`-family conversion at **eighteen**
