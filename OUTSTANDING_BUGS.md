@@ -5990,10 +5990,36 @@ some subset. The comment in the tree says "the translation faults raise themselv
 is a statement of intent.
 
 **Not a defect until witnessed, and stated that way deliberately.** Everything above is
-reading. A witness would need to reach the SQ range in user mode with `SQMD` set and observe
-the resulting `EXPEVT` — a different oracle from every SH probe in this tree, all of which
-observe stores and diagnostics rather than exception dispatch. That oracle is the same
-capability `sh4dmacie` needs, so the two should probably share a round.
+reading.
+
+#### What a witness costs — MEASURED, and it is not what this row first said
+
+*** THE ORACLE ALREADY EXISTS, AND SAYING OTHERWISE WAS WRONG. *** This row first claimed a
+witness needs "a different oracle from every SH probe in this tree". It does not.
+`SH4_EXPEVT` is at `0xff000024` and `dev_sh4.c:1791` serves it, so an ORDINARY GUEST LOAD
+reads the exception code — the same `mov.l @r1,r2` shape every probe here already uses.
+Measured: a load from `0xff000024` into a pre-poisoned scratch word returns `00000000`,
+distinguishable from the `11111111` poison, so the read genuinely happened and the register
+genuinely is zero before any exception. `SH4_INTEVT` sits beside it at `0xff000028`.
+
+**That correction also applies to `sh4dmacie`,** which this project had been scheduling as
+"needs an interrupt-delivery oracle: a NEW capability". Its ORACLE is equally available; what
+that row actually lacks is interrupt DELIVERY in the device, which is the FIX, not a test
+capability. The two are different things and conflating them mis-ranked the queue.
+
+**What IS hard is reaching the path, and the first attempt to do it was VOID.** The arm needs
+all three of: MMU on (`MMUCR.AT`), `MMUCR.SQMD` set, and user mode (`SR.MD` clear). The
+attempt put the guest code at `0x8c010010` — which is **P1, privileged-only** — so in user
+mode the instruction FETCH faulted before `PREF` ever ran. The observed
+`[ exception 0x180, pc=0x8c000400 ]` was that fetch fault, not the SQMD arm, and `EXPEVT`
+read `0` in both the test and its control. Rule 4 caught it: *it did not fail for the reason
+under test.*
+
+So a real witness needs user-mode code in P0/U0, which with the MMU on needs a **UTLB entry**
+mapping it. That is buildable and the route is now well understood — `#452` established
+exactly how the memory-mapped UTLB windows at `0xf6000000`/`0xf7000000` behave — but it is a
+substantially bigger probe than any in this tree, and it is honest to say so rather than to
+imply the oracle was the obstacle.
 
 ### `sh4a4gate` — open, found by the manual re-check, not yet witnessed
 
