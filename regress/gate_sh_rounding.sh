@@ -115,7 +115,7 @@ check "halt-probe control proves it measures" "${hctrl:-missing}" "OK"
 
 hres=$(grep -o "SH_HALT_RESULT=[0-9]*/[0-9]*" "$HLOG" | tail -1 | cut -d= -f2)
 hgot=${hres%/*}; hwant=${hres#*/}
-check "halt rows run"     "$hwant" 26
+check "halt rows run"     "$hwant" 34
 check "halt rows correct" "$hgot"  "$hwant"
 
 # Named, so one encoding regressing cannot hide behind a total. Two spaces after
@@ -158,13 +158,51 @@ done
 # the translated page plus [9:5] with [4:0] zeroed -- an address that is neither
 # the operand nor the page base.
 #
-# `sq at1 clean` pins the WRITE-type judgement the panel split on: a clean page
-# owes an initial-page-write fault, so a build that judged this access as a read
-# would complete the copy and fail this row alone.
+# *** THIS BLOCK USED TO PIN THE OPPOSITE OF THE MANUAL, and it said so plainly:
+# "a build that judged this access as a read would complete the copy and fail
+# this row alone."  It would have.  Corrected in #454. ***
 #
-# `sq at0 qacr` is the regression guard: with the MMU off the QACR composition
-# must be exactly as before.
-for v in "sq at1 ok" "sq at1 miss" "sq at1 prot" "sq at1 clean" "sq at0 qacr"; do
+# SH7750 Hardware Manual Rev.7.00 4.7.4 "SQ Protection", p. 144 --
+# `_scratchpad/sh7750_hardware.txt:11744-11746`, identically in the SH-4
+# programming manual 4.6.4 at `sh4_programming.txt:3561-3563`:
+#
+#     "Write type exception judgment is performed for writes to the SQs, and
+#      read type for transfer from the SQs to external memory (PREF
+#      instruction), and a TLB miss exception, protection violation exception,
+#      or initial page write exception is generated."
+#
+# Quoted in full because these rows were previously pinned to a panel VERDICT
+# rather than to a document, and a future seat must be able to re-derive them
+# without trusting this round.  The manual was not in the tree when they were
+# first pinned; it is now.
+#
+# So `sq pr00 rdok` and `sq d0 rdok` FLUSH: privileged read is permitted by
+# PR=00 and is indifferent to D.  The three `evt` rows carry the exception
+# channel, which is the only channel that can see the change once the copy
+# completes either way -- and MEASURED, two one-token mutants scored full marks
+# without them, one of which lands the payload at PHYSICAL ZERO in silence.
+# The two `itlb` rows kill FLAG_INSTR, which escapes the value rows AND the
+# EXPEVT rows because it also yields 0x040.
+#
+# *** `sq at0 qacr` WAS CALLED "the regression guard: the QACR composition must be
+# exactly as before".  MEASURED FALSE in #454 -- the composition can be DELETED
+# OUTRIGHT and that row stays green. ***  It pins `addr & 0x03ffffe0` and nothing
+# more.  Two structural reasons, neither of them bad luck: no row in the probe ever
+# wrote QACR0 or QACR1 and dev_sh4.c seeds them nowhere, so the term under test was
+# identically ZERO in every row; and every SQ operand had bit 5 SET, so `sq_nr` was
+# 1 in all ten rows and QACR0 was never the register consulted, ever.
+#
+# The three `sq qacr*` rows are the real guard, and they were added because the
+# escape is WITNESSED guest-visible corruption rather than a hypothesis: with AT=0,
+# the ordinary store-queue mode without paging, the destination AREA comes entirely
+# from QACR, so dropping the term or swapping the two registers lands 32 bytes on
+# the wrong physical page.  Measured 34/34 on the fix, 31/34 on each mutant.
+#  Row names are capped at 13 CHARACTERS and that is not cosmetic: the probe
+#  prints them through %-14s and this pattern demands two spaces after the name,
+#  so a 14-character name leaves ONE and the check becomes unsatisfiable -- it
+#  counts 0 against an expected 1 and reddens for a reason unrelated to the code.
+#  Two of #454's first-draft names broke it.  Measure after any rename.
+for v in "sq at1 ok" "sq at1 miss" "sq pr00 rdok" "sq d0 rdok" "sq miss evt" "sq pr00 evt" "sq d0 evt" "sq itlb utlb" "sq itlb decoy" "sq qacr1 dst" "sq qacr1 neg" "sq qacr0 sel" "sq at0 qacr"; do
     n=$(count "$HLOG" "^$v  .*ok$")
     check "  round 81: $v" "$n" 1
 done

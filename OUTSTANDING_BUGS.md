@@ -415,6 +415,13 @@
 >   `sh_exception` had no case for EITHER delay-slot event, so `trapa` in a delay slot and an
 >   FP instruction in a delay slot with FD=1 both killed the process. Lazy-FPU kernels run
 >   user code with FD=1, so that one is plausibly reachable by a real guest.
+> - **[2026-08-22, #454: the load/store conclusion in the next bullet is REVERSED. It
+>   credits "the manual's own evidence" for a WRITE classification; no SH manual existed
+>   in this tree until 2026-08-22, and the real 4.7.4 says the PREF transfer is READ
+>   type. The `EXPEVT_ADDR_ERR_ST` in the "Adjacent store-queue model gaps" bullet below
+>   inherits the same presumption and owes the `_LD` form. The composition witness and
+>   the [25:6] withdrawal both STAND. See the Round 454 CHANGELOG block, `sh4sqwrite`
+>   and `sh4sqexpevt`.]**
 > - ~~**The store-queue prefetch with the MMU on STILL HALTS**~~ — **RESOLVED as #318
 >   (round 81)** via a dedicated entry point, `sh_translate_sq_v2p`, since the general one
 >   deliberately maps the range identically and must keep doing so for ordinary queue-filling
@@ -6224,6 +6231,37 @@ Leave `SH_INT_ASSERTED` set: masking blocks ACCEPTANCE, not the request.
 deassert rescan (`:343-351`) can never select a prio-0 entry, since `prio > int_level` is
 `0 > 0`.
 
+### `sh4tlbmulti` — open, NEW, and the same shape as `sh4prio0` in the same file.
+
+*** A GUEST UTLB WRITE THAT PRODUCES TWO MATCHING ENTRIES ENDS THE HOST PROCESS. ***
+`dev_sh4.c:1158-1159` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when an
+associative-array write finds `n_hits > 1`. `sh_exception()`'s switch has **no case for
+`EXPEVT_RESET_TLB_MULTI_HIT`** (`0x140`, `sh4_exception.h:59`), so it falls to the `default:`
+arm at `cpu_sh.c:768-770`:
+
+```c
+	default:fatal("sh_exception(): exception 0x%x is not yet implemented.\n", expevt);
+		exit(1);
+```
+
+**TLB multiple-hit is a documented SH-4 reset exception** — a legal, guest-triggerable
+hardware condition, reachable by storing to the UTLB address array so that two entries match
+one VPN/ASID. The model ends the host instead of vectoring the guest.
+
+Found by a records seat sweeping for siblings of `sh4prio0` rather than by looking for it,
+which is the argument for that sweep: **it is the same family** (a documented legal state
+reaching `exit(1)`) in the **same file**, and the `sh4prio0` brief had missed it entirely.
+
+Its own round under the scope rule: different exception, different detector, no shared
+oracle. Ranked with `sh4prio0` because a round that fixes one should not leave a reader
+believing the family is closed.
+
+**Also swept and found NOT to be kills, recorded so the blanks do not read as unchecked:**
+`cpu_sh.c:100-101` (SH64, construction-time), `cpu_sh.c:647` (`fatal()` with no exit),
+`dev_sh4.c:2703` (under `#ifdef SH4_DEBUG`, defined nowhere in the tree), `dev_sh4.c:2877-2890`
+(devinit wiring), all five `dev_irqc.c` sites and both `dev_mp.c` sites (`fatal()` only).
+`dev_sh4.c:1970` is a real kill but is already filed as `sh4pclock`.
+
 ### `sh4irq15` — open, NEW, and it must be filed WITH `sh4prio0` because that fix hides it
 
 `machine_test.c:99` selects `SH4_INTEVT_IRQ15`, the one line number that is priority 0 by
@@ -6232,7 +6270,7 @@ unusable**, which is strictly harder to notice — the de-escalation hazard in i
 One identifier: `SH4_INTEVT_IRQ14`. Separate file, separate device, so a separate round; the
 row exists now so the transition is not invisible.
 
-The manual supports the change independently: §19.2.2 (`:39913`) says an IRL value of 15
+The manual supports the change independently: §19.2.2 (`:39908`) says an IRL value of 15
 "indicates **no interrupt request** (interrupt priority level 0)", and Table 19.5 (`:40071`)
 tops out at `H'3C0`. **There is no `H'3E0` source in the SH7750 at all.**
 
@@ -6253,6 +6291,35 @@ nothing until the next assert/deassert edge. Pre-existing; `sh4prio0` makes it *
 rather than fatal, which is why it is filed in the same breath. The natural completion is to
 run the `:343-351` rescan at the end of the recompute — a second design question, its own
 round.
+
+### `shprotld` — open. #454's one un-fixed escape, filed rather than chased.
+
+*** EVERY SH TLB ROW IN THE TREE RUNS PRIVILEGED, so the READ-side protection code is
+never reached and corrupting it changes nothing any detector can see. *** Found by the
+ask-again on #454's pass 2, after the kill table was already clean.
+
+The mutant: change `EXPEVT_TLB_PROT_LD` at `memory_sh.c`'s `protection_violation:` label
+to any other value. It passes **all 31** rows of `sh_halt_probe.py`. The reason is
+structural rather than accidental — in privileged mode a read to a `PR=00` page is
+*permitted*, so `sq pr00 rdok` and `sq pr00 evt` both expect success and never reach the
+protection arm at all; `sq miss evt` pins only the miss code; the ITLB rows involve no
+protection case.
+
+**FILED, not fixed, and the three reasons are the floor rules doing their job:** the
+mutation is in the general TLB table rather than at #454's call site, so it is not this
+round's material; #454's detector is already ABOVE the vacuity floor with (a), (b) and
+(c) all measured green, which makes a measured escape coverage DEBT rather than a floor
+breach; and the row that would close it is a user-mode row, which carries a trap this
+project has already paid for once — *the instruction fetch needs a user-accessible page,
+and an earlier SQMD witness put its code at `0x8c010010`, which is P1 and
+privileged-only, so the fetch faulted before the access under test ever ran and the
+`0x180` it measured came from the fetch.*
+
+Closing it also closes a second escape a different seat named independently at pass 1
+("return 2 on any UTLB hit, skipping the PR/D logic"), which is invisible for the same
+reason: the caller treats 1 and 2 alike, so only a user-mode row separates them. **One
+row, two measured escapes** — which is what makes it worth its own entry rather than a
+footnote.
 
 ### `sh4sqwrite` — open. PROMOTED, not new: the archived audit already named it, and `sqreadtype` makes it the sole carrier.
 
@@ -6275,7 +6342,7 @@ The manual sentence covers both halves in one breath:
 > "**Write type exception judgment is performed for writes to the SQs**, and read type for
 > transfer from the SQs to external memory (PREF instruction), and a TLB miss exception,
 > protection violation exception, or initial page write exception is generated."
-> — SH7750 Hardware Manual Rev.7.00, §4.7.4, `_scratchpad/sh7750_hardware.txt:11744-11747`
+> — SH7750 Hardware Manual Rev.7.00, §4.7.4, `_scratchpad/sh7750_hardware.txt:11744-11746`
 
 `sqreadtype` fixes the **read** half. The **write** half has no judgement at all:
 `sh_translate_v2p()` maps `0xe0000000..0xe3ffffff` identically and unconditionally, because
@@ -6363,7 +6430,9 @@ were pinned to is one the manual does not license — so **six rows now REQUIRE 
 return a bit the hardware leaves undefined**: probe `A1`/`A3`/`A4i`/`R3`/`O` and witness `C1`,
 all against `ITLB_MASK = 0x1ffffdfa` (`regress/sh4_tlbda2_probe.py:71` and the witness).
 
-**Two detectors in one family now pin the model's behaviour rather than the architecture's**
+**Two detectors in one family pinned the model's behaviour rather than the architecture's**
+— *`gate 10`'s was corrected by `#454`; this ITLB one is the survivor, and it is why the
+pattern is recorded rather than the individual bit* —
 (this and gate 10's `sq at1 clean`), which is the pattern to watch for, not the individual
 bit. Fix under the ORACLE-CORRECTION RULE: re-pin the six rows to `0x1ffffdda` FIRST, measure
 the committed build RED, then narrow the device mask. Returning 0 for a reserved bit is a

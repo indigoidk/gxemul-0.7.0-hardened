@@ -1,3 +1,172 @@
+## Round 454 (#454) -- the store-queue flush is judged READ type, and a shipped gate row pinned the opposite
+
+`X(pref_rn)` passed `FLAG_WRITEFLAG` when flushing a store queue through the UTLB.
+The manual says read type. Two copies of it now sit in the tree and both say so in
+the same words -- SH7750 Hardware Manual Rev.7.00 4.7.4 "SQ Protection", p. 144
+(`_scratchpad/sh7750_hardware.txt:11744-11746`), and the SH-4 programming manual
+4.6.4 (`sh4_programming.txt:3561-3563`):
+
+> "Write type exception judgment is performed for writes to the SQs, and **read
+> type for transfer from the SQs to external memory (PREF instruction)**, and a TLB
+> miss exception, protection violation exception, or initial page write exception is
+> generated."
+
+The fix is one token: `FLAG_WRITEFLAG` becomes `0`. This tree has no `FLAG_READFLAG`;
+a read is the absence of the bit, exactly as `memory_rw.c:249` builds it.
+
+### The detector pinned the defect, so correcting the code would have turned it red
+
+`gate_sh_rounding.sh` said so in as many words: *"a build that judged this access as
+a read would complete the copy and fail this row alone."* It would have. That is a
+detector enforcing a defect, which is worse than no detector.
+
+*** RE-PINNING AN ORACLE IS OBSERVATIONALLY IDENTICAL TO FITTING THE TEST TO THE
+BINARY, so the order is the warrant. *** The rows were re-pinned FIRST and measured
+RED on the COMMITTED build, before any source edit existed:
+
+```
+COMMITTED build, re-pinned oracle:                    26/31
+  sq pr00 rdok   got 0xdeadbeef   want 0xa0000000,0xa0000001   FAIL
+  sq d0 rdok     got 0xdeadbeef   want 0xa0000000,0xa0000001   FAIL
+  sq miss evt    got 0x00000060   want 0x00000040              FAIL
+  sq pr00 evt    got 0x000000c0   want 0x00000999              FAIL
+  sq d0 evt      got 0x00000080   want 0x00000999              FAIL
+FIXED build, same rows:                               31/31
+```
+
+The pass-1 panel proposed that order after the brief proposed the reverse, and it is
+adopted generally as the ORACLE-CORRECTION RULE. The old pin had no provenance to
+overturn: its own comment says it pinned "the WRITE-type judgement the panel split
+on" -- a verdict, not a document.
+
+### It settled a filed question as a side effect
+
+`sh4sqexpevt` recorded, as reading rather than measurement, that all three of 4.7.4's
+exceptions are raised. The pre-fix EXPEVT column above is that measurement: 0x060
+(store-type miss), 0x0c0 (protection violation, store) and 0x080 (initial page write).
+
+### Two one-token escapes were MEASURED against the value rows, and both scored full marks
+
+The copy channel cannot see this change once the transfer completes either way, so
+the rows were extended to the exception channel and to the ITLB.
+
+| mutant at the call site | rows | killed by |
+|---|---|---|
+| the fix (`0`) | 31/31 | -- |
+| `FLAG_WRITEFLAG`, verbatim reinstatement | 26/31 | all five |
+| `FLAG_NOEXCEPTIONS` | 30/31 | `sq miss evt` alone |
+| `FLAG_INSTR` | 29/31 | the two `itlb` rows alone |
+| pristine 0.7.0, null medium | 4/31 | nine rows |
+
+`FLAG_NOEXCEPTIONS` is the one worth remembering: `translate_via_mmu`'s `exception:`
+label returns **2 with `*return_paddr = 0`**, which the caller reads as success, so a
+TLB miss lands the 32-byte payload at **physical address 0** in silence. Vacuity
+floor: (a), (b) and (c) all measured green.
+
+### The ask-again earned its keep three times over
+
+The rule is to ask the panel once more AFTER the kill table is clean, capped at one
+ask per detector per round. One ask, three escapes, all passing 31/31:
+
+* **The seed collision.** `sq pr00 evt`/`sq d0 evt` assert that the guest's seed
+  survives. Change the seed from `0x999` to `0x040` -- a plausible tidy-up -- and
+  `sq miss evt` can no longer tell a raised 0x040 from a surviving seed, silently
+  re-opening the payload-at-physical-zero escape. Fixed by an assertion rather than a
+  convention: every SH-4 EXPEVT code is a multiple of 0x20, so the seed must not be.
+  An enumerated list of codes would go stale the first time a row is added.
+* **The SQMD guard.** A maintainer starting on `sh4sqwrite` writes
+  `flags = (mmucr & SQMD) ? FLAG_WRITEFLAG : 0`. Every row left SQMD clear, so it
+  passed all 31. `sq pr00 rdok` now sets it; the row is privileged, so SQMD cannot bar
+  it, and the mutant reddens by judging PR=00 as a write.
+* **The read-side protection code.** Corrupting `EXPEVT_TLB_PROT_LD` is invisible
+  because every row is privileged and PR=00 permits a privileged read. FILED rather
+  than fixed: it is a mutation in the general TLB table rather than in this call site,
+  the detector is already above the vacuity floor, and a user-mode row carries a trap
+  this project has already paid for once (the instruction fetch needs a user-accessible
+  page, and an earlier witness measured a fetch fault instead of the access it meant).
+
+### *** AND THE ASK-AGAIN FOUND A FOURTH, WHICH WAS A SHIPPED WRONG RECORD WITH WITNESSED CORRUPTION BEHIND IT ***
+
+`gate_sh_rounding.sh` called `sq at0 qacr` *"the regression guard: with the MMU off the QACR
+composition must be exactly as before."* **Measured false: the composition can be DELETED
+OUTRIGHT and that row stays green.** It pins `addr & 0x03ffffe0` and nothing more.
+
+Two structural reasons, neither of them bad luck. **No row in the probe had ever written
+QACR0 or QACR1**, and `dev_sh4.c` seeds them nowhere, so `(((qacrN >> 2) & 7) << 26)` was
+identically **zero** in every row — the term under test contributed nothing to any expected
+value. And every SQ operand was `0xe00000e7`, bit 5 **set**, so `sq_nr` was 1 in all ten rows
+and **QACR0 was never the register consulted, ever.**
+
+The escape is **witnessed guest-visible corruption**, not a hypothesis: with AT=0 — the
+ordinary store-queue mode, without paging — the destination area comes entirely from QACR, so
+dropping the term or swapping the two registers lands 32 bytes on the wrong physical page.
+
+**#454 made that edit more likely, which is why the rows ship with it.** This round adds three
+comments saying that with the MMU on "QACR takes no part" and "the extaddr built above is
+discarded"; a maintainer reading those and tidying the now-dead-looking composition four lines
+above is exactly the six-months-later edit.
+
+Three rows, measured: `sq qacr1 dst` (the area bits arrive), `sq qacr1 neg` (load-bearing —
+without it a build writing to BOTH destinations passes), and `sq qacr0 sel`, which uses operand
+`0xe00000c7` and is **the first row in the file to drive `sq_nr == 0` at all**, so it pins the
+register selection and proves queue 0 is the source. Fixed build 34/34; composition deleted
+31/34; `qacr0`/`qacr1` swapped 31/34.
+
+Fixed in-round as L4 — prose claiming coverage a measurement refutes — rather than filed,
+because the wrong record was live in the shipped tree. Several further escapes the same seat
+measured are FILED rather than fixed: the two `itlb` rows carry no identity control (one
+`dev_sh4.c` edit restores `FLAG_INSTR` to 31/31 and nothing reddens), user mode is entirely
+unexercised, and the TEA/PTEH channel is unpinned.
+
+### What the fix costs, stated rather than glossed
+
+An SQ page now raises **the read-side faults only**: a TLB miss, and a protection
+violation for a PR/privilege combination that forbids reading. What disappears is the
+write-side pair -- the initial-page-write exception and write-side protection -- because
+3.6.7 defines the former as occurring on "a data access (write)". Those two are exactly
+what the STORE half owes, and this emulator does not judge the store half at all:
+`sh_translate_v2p` maps `0xe0000000..0xe3ffffff` identically so an ordinary guest store
+can reach the modelled queue SRAM. Measured, with liveness and device-signature controls
+green: a store into the window succeeds against a PR=00 read-only entry and a clean one
+alike. Filed as `sh4sqwrite`.
+
+*An earlier draft of that paragraph said "an SQ page raises no MMU fault of any kind."
+This round's own `sq miss evt` row disproves it, and a review seat caught it.*
+
+One pass-1 seat dissented from the scope, holding that fixing the read half without the
+write half is an unshippable intermediate state. Recorded by name rather than resolved
+by majority: the round-scope rule decided it, and that seat's own proposed witness needs
+a new oracle, which is the clause that excludes it.
+
+### The record this corrects, dated on both ends
+
+**2026-07-31 (#318, commit `6a2f41c`)** concluded *"It is a **write**, and the gate pins
+it."* **2026-08-01 (commit `161641c`)** re-asserted it in a retrospective: *"re-reviewed
+against the SH7750 manual and comes back **correct** ... the write classification is
+load-bearing rather than cosmetic."*
+
+**The "manual" in that sentence was not a manual.** No SH7750 document existed in this
+tree until 2026-08-22. What was consulted was model recollection of one -- the same
+citation class as #357/#362/#365. The first opening of the real 4.7.4 reversed it in one
+sentence.
+
+**The false premise, named because a wrong reason gets reused:** the argument assumed the
+PREF flush is the only access ever judged against an SQ page's entry, so a bit consulted
+only on writes had to be consumed by the flush. 4.7.4's first clause gives the write
+judgement to the other access. The dirty-bit observation was true; the exclusivity under
+it was invented.
+
+**What held -- do not overcorrect.** Three of that retrospective's conclusions were later
+CONFIRMED by the real manual and stand: translating the unmasked address and masking the
+result (which is what preserves bits [9:5]); exception-XOR-store; and the withdrawal of
+the false [25:6] bug entry. Only the classification failed -- and its follow-up inverted
+with it: the *"regression that swapped the store-family event codes for load-family"* it
+warned about was the fix, and `sq miss evt` now pins 0x040 where #318 required 0x060.
+
+Corrected by this dated block plus pointers at the three sites. Live assertions -- source
+comments, the gate, the probe -- are rewritten outright, because those are current claims
+rather than history.
+
 # GXemul 0.7.0 — `est/` Change Log
 
 Authoritative record of every change made to the `est/` working copy while
@@ -3803,6 +3972,8 @@ is fixed, and a new flag would have to live in the all-architectures namespace t
 serve one SuperH quirk.
 
 ### Read or write — the question the previous round could not settle
+
+> **[2026-08-22, #454: the write-type conclusion below is REVERSED by the real 4.7.4 -- see the Round 454 block at the top of this file. The address-composition, exception-XOR-store and [25:6] conclusions stand.]**
 
 The two round-80 seats split on whether the write-back's TLB fault is judged as a
 load or a store, and the answer decides three exception codes. This round put it to
@@ -13612,6 +13783,8 @@ exception-enable bits (OE/UE/VE) and the FPRF class field remain unmodelled, and
 the splice-letter divergence at ~2^129 stays a deliberate policy pin.
 
 ## Retrospective review of round 81 (#318) — the code stands, one bug record did not
+
+> **[2026-08-22, #454: the write-type conclusion below is REVERSED by the real 4.7.4 -- see the Round 454 block at the top of this file. The address-composition, exception-XOR-store and [25:6] conclusions stand.]**
 
 Part of the standing rule that shipped work gets a panel pass after the fact, not only
 before. #318 (the SH-4 store-queue flush with the MMU on) was re-reviewed against the

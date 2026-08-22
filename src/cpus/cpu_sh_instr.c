@@ -3736,13 +3736,29 @@ X(pref_rn)
 		 *  the smallest page is 1K, so the masked and unmasked
 		 *  addresses always resolve through the same entry.
 		 *
-		 *  With the write flag set this returns either 0, having
-		 *  raised the fault itself, or 2 -- there is no read-only
-		 *  success to mishandle.
+		 *  #454: JUDGED AS A READ, and the flag here used to say the
+		 *  opposite.  4.7.4: "read type for transfer from the SQs to
+		 *  external memory (PREF instruction)".  A read is the ABSENCE
+		 *  of FLAG_WRITEFLAG -- this tree has no FLAG_READFLAG, and
+		 *  memory_rw.c:249 builds the same thing as
+		 *  (writeflag? FLAG_WRITEFLAG : 0).
+		 *
+		 *  The claim that used to sit here -- "there is no read-only
+		 *  success to mishandle" -- was true only of the write flag.
+		 *  Read-type judgement returns 1 for a privileged PR=00 page
+		 *  and for a clean one, and the test below accepts 1 and 2
+		 *  alike, so both complete the transfer.  That is the intended
+		 *  behaviour and it is pinned by `sq pr00 rdok`/`sq d0 rdok`.
+		 *
+		 *  Passing FLAG_NOEXCEPTIONS here would be silent CORRUPTION,
+		 *  not a softer failure: memory_sh.c's exception: label returns
+		 *  2 with *return_paddr = 0, which this test reads as success,
+		 *  and the 32-byte payload then lands at physical zero.  The
+		 *  EXPEVT rows exist to catch exactly that.
 		 */
 		uint64_t paddr;
 
-		if (!sh_translate_sq_v2p(cpu, addr, &paddr, FLAG_WRITEFLAG))
+		if (!sh_translate_sq_v2p(cpu, addr, &paddr, 0))
 			return;
 
 		extaddr = (uint32_t) paddr & ~0x1fU;

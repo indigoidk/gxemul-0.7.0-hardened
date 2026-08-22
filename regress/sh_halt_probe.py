@@ -341,9 +341,39 @@ def run_seq(cmds, nwords, dumpat=DEST):
 #  neither the raw operand nor the page base. That is what proves the composition
 #  rather than merely proving the emulator survived.
 #
-#  The clean-page row is the one that pins the WRITE-type judgement: under a
-#  read-type reading the copy would simply complete, so a build that got that
-#  question wrong fails this row and only this row.
+#  *** THE JUDGEMENT IS READ TYPE, AND THIS COMMENT USED TO SAY THE OPPOSITE. ***
+#  Corrected in #454 against the manual, which was not in this tree when the rows
+#  were first pinned.  SH7750 Hardware Manual Rev.7.00 4.7.4 "SQ Protection",
+#  page 144 -- `_scratchpad/sh7750_hardware.txt:11744-11746`, and word for word
+#  again in the SH-4 programming manual 4.6.4 at `sh4_programming.txt:3561-3563`:
+#
+#      "Write type exception judgment is performed for writes to the SQs, and
+#       read type for transfer from the SQs to external memory (PREF
+#       instruction), and a TLB miss exception, protection violation exception,
+#       or initial page write exception is generated."
+#
+#  The quotation is carried here in full ON PURPOSE: the rows it pins were
+#  previously pinned to a panel VERDICT rather than to a document, so a future
+#  seat must be able to re-derive them without trusting this round.
+#
+#  4.7.4 still lists the initial page write exception because the sentence covers
+#  BOTH halves, and IPW belongs to the write half -- 3.6.7 defines it as occurring
+#  on "a data access (write)", so a read-type access cannot raise it at all.  That
+#  is what settles the alternative reading, under which "read type" would name
+#  only the EXPEVT variant while the permission bits were still judged as a write.
+#
+#  Hence `sq pr00 rdok` and `sq d0 rdok`: in privileged mode a read is permitted
+#  by PR=00 and is indifferent to D, so BOTH complete the copy.  They are named
+#  for what they now prove, because the old names -- "prot" and "clean" -- assert
+#  a protection case and a dirty-bit case that read-type judgement does not have.
+#
+#  The EXPEVT rows below are NOT decoration.  Post-correction the miss is the only
+#  faulting row left in privileged mode and it yields the same destination word
+#  either way, so the copy channel alone cannot see the change at all.  TWO
+#  one-token mutants were MEASURED to score full marks against the value rows:
+#  `FLAG_NOEXCEPTIONS`, which makes translate_via_mmu report SUCCESS with
+#  *return_paddr = 0 so the 32-byte payload lands at PHYSICAL ZERO in silence, and
+#  `FLAG_INSTR`, which is caught only by the two ITLB rows further down.
 SQ_AA = 0xf6000000
 SQ_DA1 = 0xf7000000
 MMUCR = 0xff000010
@@ -356,13 +386,19 @@ def sq_da1(pr=3, d=1):
     return (DESTPHYS & 0x1ffffc00) | (pr << 5) | 0x100 | (0x004 if d else 0)
 
 
-def sq_seq(da1val, install=True, operand=0xe00000e7):
+#  MMUCR bits, so a row can say which one it means.  SQMD is not decoration: see
+#  the `sq pr00 rdok` row.
+MMUCR_AT = 0x00000001
+MMUCR_SQMD = 0x00000200
+
+
+def sq_seq(da1val, install=True, operand=0xe00000e7, mmucr=MMUCR_AT):
     """Fill queue 1, install the UTLB entry + MMUCR from the guest, then pref."""
     c = ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
          for i in range(8)]
     c += ["r1=0x%x" % SQ_AA, "r2=0x%08x" % SQ_AA_VAL,
           "r3=0x%x" % SQ_DA1, "r4=0x%08x" % da1val,
-          "r5=0x%x" % MMUCR, "r6=0x00000001",
+          "r5=0x%x" % MMUCR, "r6=0x%08x" % mmucr,
           "r7=0x%08x" % operand,
           "put w 0x%x, 0xdeadbeef" % (DESTVIRT + 0xE0)]
     if install:
@@ -381,11 +417,198 @@ def sq_seq(da1val, install=True, operand=0xe00000e7):
 SENTINEL = [0xdeadbeef]
 FLUSHED = [0xa0000000, 0xa0000001]
 
+#  ---- the EXPEVT channel ------------------------------------------------------
+#  P4 is direct-mapped (memory_sh.c:373-377), so EXPEVT stays reachable with AT=1.
+SH4_EXPEVT = 0xff000024
+EVSCRATCH = 0x8c010200
+CODE2 = 0x8c010080
+NOEXC = [0x00000999]            # the seed, still there == nothing was raised
+
+#  *** THE SEED MUST NOT COLLIDE WITH ANY EXPEVT CODE, AND THAT IS AN ASSERTION
+#  RATHER THAN A CONVENTION. ***  Found by asking the panel for one more mutant
+#  AFTER the kill table was already clean -- which is exactly what that rule is
+#  for.  The mutant is a plausible tidy-up: change the seed to 0x040, "the value
+#  the row expects anyway".  All 31 rows stay GREEN, because `sq miss evt` then
+#  cannot tell a raised 0x040 from a surviving seed -- and `sq miss evt` is the
+#  ONLY row that kills FLAG_NOEXCEPTIONS, the mutant that lands the payload at
+#  physical zero in silence.  So a one-token edit to a CONSTANT would have
+#  re-opened the round's worst escape without reddening anything.
+#
+#  Every SH-4 EXPEVT code is a multiple of 0x20 (3.6, exception code table), so
+#  this catches a collision with ANY code, present or future.  An enumerated list
+#  of the codes these rows happen to raise would go stale the first time a row is
+#  added; this cannot.  It is the vacuity taxonomy's "a row must fail to a
+#  DISTINGUISHABLE token" made mechanical.
+assert NOEXC[0] % 0x20 != 0, (
+    "EXPEVT no-exception seed 0x%x is a multiple of 0x20 and so is every EXPEVT "
+    "code -- a raised exception would be indistinguishable from the seed and the "
+    "evt rows would pass vacuously" % NOEXC[0])
+
+
+def sq_seq_ev(da1val, install=True, operand=0xe00000e7):
+    """As sq_seq(), but SEEDS EXPEVT from the guest first and reads it back after.
+
+    The seed is what makes "no exception" a POSITIVE reading instead of a guess at
+    a reset value -- 0x999 can only be there because the guest put it there and
+    nothing overwrote it.
+    """
+    c = ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
+         for i in range(8)]
+    c += ["r1=0x%x" % SQ_AA, "r2=0x%08x" % SQ_AA_VAL,
+          "r3=0x%x" % SQ_DA1, "r4=0x%08x" % da1val,
+          "r5=0x%x" % MMUCR, "r6=0x00000001",
+          "r7=0x%08x" % operand,
+          "r10=0x%x" % SH4_EXPEVT, "r11=0x00000999",
+          "put w 0x%x, 0xdeadbeef" % (DESTVIRT + 0xE0),
+          "put w 0x%x, 0xdeadbeef" % EVSCRATCH]
+
+    ins = [0x2ab2]                                  # mov.l r11,@r10  (seed EXPEVT)
+    ins += [0x2122, 0x2342] if install else []      # UTLB AA, UTLB DA1
+    ins += [0x2562, 0x0783]                         # MMUCR.AT=1, pref @r7
+    c += ["put h 0x%x, 0x%04x" % (CODE + 2 * i, w) for i, w in enumerate(ins)]
+    c += ["pc=0x%x" % CODE, "step %d" % len(ins)]
+
+    #  *** READ BACK THROUGH r8/r9 ONLY, AND THAT IS NOT STYLE. ***  An exception
+    #  sets SR.RB (cpu_sh.c:688), so r0-r7 are THE OTHER BANK afterwards and a
+    #  register seeded before the pref would read back as someone else's.  r8-r15
+    #  are unbanked, so they survive the switch; r0 is written and consumed
+    #  entirely after it, which is safe.
+    c += ["r8=0x%x" % SH4_EXPEVT, "r9=0x%x" % EVSCRATCH,
+          "put h 0x%x, 0x6082" % CODE2,             # mov.l @r8,r0
+          "put h 0x%x, 0x2902" % (CODE2 + 2),       # mov.l r0,@r9
+          "pc=0x%x" % CODE2, "step 2"]
+    return c
+
+
+#  ---- the QACR composition, which nothing pinned -----------------------------
+#  *** THE GATE CLAIMED `sq at0 qacr` WAS "the regression guard: the QACR
+#  composition must be exactly as before".  MEASURED FALSE: the composition can be
+#  DELETED OUTRIGHT and that row stays green. ***
+#
+#  Two reasons it was blind, and both are structural rather than unlucky.  NO row
+#  in this file ever wrote QACR0 or QACR1 and `dev_sh4.c` seeds them nowhere, so
+#  `(((qacrN >> 2) & 7) << 26)` was identically ZERO in every row -- the term
+#  under test contributed nothing to any expected value.  And every SQ operand was
+#  `0xe00000e7`, bit 5 SET, so `sq_nr` was 1 in all ten rows and **QACR0 was never
+#  the register consulted, ever.**
+#
+#  The escape is guest-visible corruption, not a hypothetical: with AT=0 -- the
+#  ordinary store-queue mode, without paging -- the destination AREA comes entirely
+#  from QACR, so dropping the term or swapping the two registers lands 32 bytes on
+#  the wrong physical page.  Both mutants scored 31/31 before these rows existed.
+#
+#  #454 made that edit MORE likely, which is why the rows ship with it: this round
+#  adds three comments saying that with the MMU on "QACR takes no part" and "the
+#  extaddr built above is discarded", and a maintainer tidying the now-dead-looking
+#  composition four lines above is exactly the six-months-later edit.
+QACR0 = 0xff000038
+QACR1 = 0xff00003c
+QRIGHT = 0x8c0000e0             # P1 alias of 0x0c0000e0 -- area 3, from QACR
+QWRONG = 0x800000e0             # P1 alias of 0x000000e0 -- area 0, the composed-away one
+Q0RIGHT = 0x8c0000c0
+FLUSHED0 = [0xb0000000, 0xb0000001]
+
+
+def sq_seq_qacr(operand=0xe00000e7, q0=0x00, q1=0x0c):
+    """Seed BOTH queues and BOTH candidate destinations, then set QACR from the guest.
+
+    Both queues are seeded with distinguishable payloads so a row can say WHICH
+    queue was read, and both destinations carry distinct sentinels so a row can say
+    WHICH page was written. `q1=0x0c` selects external area 3, because
+    `(0x0c >> 2) & 7 == 3`.
+    """
+    c = ["put w 0x%x, 0x%08x" % (0xe0000000 + i * 4, 0xb0000000 + i)
+         for i in range(8)]
+    c += ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
+          for i in range(8)]
+    c += ["put w 0x%x, 0x11111111" % QRIGHT,
+          "put w 0x%x, 0x22222222" % QWRONG,
+          "put w 0x%x, 0x33333333" % Q0RIGHT,
+          "r1=0x%x" % QACR1, "r2=0x%08x" % q1,
+          "r3=0x%x" % QACR0, "r4=0x%08x" % q0,
+          "r7=0x%08x" % operand,
+          "put h 0x%x, 0x2122" % CODE,          # mov.l r2,@r1   QACR1
+          "put h 0x%x, 0x2342" % (CODE + 2),    # mov.l r4,@r3   QACR0
+          "put h 0x%x, 0x0783" % (CODE + 4),    # pref @r7
+          "pc=0x%x" % CODE, "step 3"]
+    return c
+
+
+#  ---- the ITLB divergence row -------------------------------------------------
+#  The ONLY thing that separates a read-type UTLB walk from an INSTRUCTION walk:
+#  FLAG_INSTR makes translate_via_mmu scan the ITLB first (memory_sh.c:113-122),
+#  so give the two arrays entries that cover the same VPN and disagree about the
+#  destination.  A correct build follows the UTLB; a FLAG_INSTR build follows the
+#  ITLB, and the two pages swap contents.
+SQ_ITLB_AA = 0xf2000000
+SQ_ITLB_DA1 = 0xf3000000
+DECOYPHYS = 0x0c030000
+DECOYVIRT = 0x8c030000
+
+
+def sq_seq_itlb():
+    """Install BOTH a UTLB and an ITLB entry for the SQ page, pointing elsewhere."""
+    c = ["put w 0x%x, 0x%08x" % (0xe0000020 + i * 4, 0xa0000000 + i)
+         for i in range(8)]
+    c += ["r1=0x%x" % SQ_AA, "r2=0x%08x" % SQ_AA_VAL,
+          "r3=0x%x" % SQ_DA1, "r4=0x%08x" % sq_da1(),
+          "r12=0x%x" % SQ_ITLB_AA, "r13=0x%08x" % SQ_AA_VAL,
+          "r14=0x%x" % SQ_ITLB_DA1,
+          "r15=0x%08x" % ((DECOYPHYS & 0x1ffffc00) | (3 << 5) | 0x100 | 0x004),
+          "r5=0x%x" % MMUCR, "r6=0x00000001",
+          "r7=0x%08x" % 0xe00000e7,
+          "put w 0x%x, 0xdeadbeef" % (DESTVIRT + 0xE0),
+          "put w 0x%x, 0xdeadbeef" % (DECOYVIRT + 0xE0)]
+    ins = [0x2122,          # mov.l r2,@r1    UTLB address array
+           0x2342,          # mov.l r4,@r3    UTLB data array 1
+           0x2cd2,          # mov.l r13,@r12  ITLB address array
+           0x2ef2,          # mov.l r15,@r14  ITLB data array 1
+           0x2562,          # mov.l r6,@r5    MMUCR.AT=1
+           0x0783]          # pref @r7
+    c += ["put h 0x%x, 0x%04x" % (CODE + 2 * i, w) for i, w in enumerate(ins)]
+    c += ["pc=0x%x" % CODE, "step %d" % len(ins)]
+    return c
+
 R81 = [
     ("sq at1 ok",   sq_seq(sq_da1()),          DESTVIRT + 0xE0, FLUSHED),
     ("sq at1 miss", sq_seq(sq_da1(), False),   DESTVIRT + 0xE0, SENTINEL),
-    ("sq at1 prot", sq_seq(sq_da1(pr=0)),      DESTVIRT + 0xE0, SENTINEL),
-    ("sq at1 clean", sq_seq(sq_da1(d=0)),      DESTVIRT + 0xE0, SENTINEL),
+    #  Both re-pinned in #454 from SENTINEL, and renamed: read-type judgement has
+    #  no protection case at PR=00 in privileged mode and no dirty-bit case at all.
+    #
+    #  *** SQMD IS SET HERE ON PURPOSE, and it is the whole reason this row can
+    #  see anything the other rows cannot. ***  A seat asked for one more mutant
+    #  after the kill table was already clean and produced a plausible one: a
+    #  maintainer starting on `sh4sqwrite` writes
+    #  `flags = (mmucr & SQMD) ? FLAG_WRITEFLAG : 0`, reasoning that SQMD means
+    #  "treat SQ accesses strictly".  It does not -- SQMD governs who may touch
+    #  the queue WINDOW, and it never reclassifies the external transfer from
+    #  read to write.  With every row leaving SQMD clear that mutant passed all
+    #  31.  Setting it here costs nothing (SQMD only bars USER access, and this
+    #  row is privileged, so a correct build still flushes) and reddens the
+    #  mutant, which now judges PR=00 as a write and takes a protection
+    #  violation.
+    ("sq pr00 rdok", sq_seq(sq_da1(pr=0), mmucr=MMUCR_AT | MMUCR_SQMD),
+     DESTVIRT + 0xE0, FLUSHED),
+    ("sq d0 rdok",  sq_seq(sq_da1(d=0)),       DESTVIRT + 0xE0, FLUSHED),
+    #  The exception channel.  Measured, all three observables move, not just the
+    #  miss: the miss changes its CODE while prot and clean stop faulting entirely.
+    #  The last two are the de-escalation clause's accept side -- they pin that a
+    #  legal transfer still lands AND that nothing was raised to make it land.
+    ("sq miss evt", sq_seq_ev(sq_da1(), False), EVSCRATCH, [0x040]),
+    ("sq pr00 evt", sq_seq_ev(sq_da1(pr=0)),   EVSCRATCH, NOEXC),
+    ("sq d0 evt",   sq_seq_ev(sq_da1(d=0)),    EVSCRATCH, NOEXC),
+    #  A correct build walks the UTLB, so the payload lands on the UTLB's page and
+    #  the ITLB's decoy keeps its sentinel.  FLAG_INSTR swaps the two.
+    ("sq itlb utlb", sq_seq_itlb(),            DESTVIRT + 0xE0, FLUSHED),
+    ("sq itlb decoy", sq_seq_itlb(),           DECOYVIRT + 0xE0, SENTINEL),
+    #  The QACR composition. `dst` pins that the area bits ARRIVE; `neg` is
+    #  load-bearing because without it a build writing to BOTH destinations passes;
+    #  `sel` is the first row in this file to drive `sq_nr == 0` at all, so it pins
+    #  the register SELECTION and proves queue 0 is the source.
+    ("sq qacr1 dst", sq_seq_qacr(),            QRIGHT, FLUSHED),
+    ("sq qacr1 neg", sq_seq_qacr(),            QWRONG, [0x22222222]),
+    ("sq qacr0 sel", sq_seq_qacr(operand=0xe00000c7, q0=0x0c, q1=0x00),
+     Q0RIGHT, FLUSHED0),
     #  AT=0 keeps the QACR composition: destination is addr & 0x03ffffe0, i.e.
     #  physical 0xE0, reachable through P1. This row is the regression guard.
     ("sq at0 qacr",

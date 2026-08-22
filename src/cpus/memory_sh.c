@@ -265,13 +265,50 @@ exception:
  *  rather than a flag on the general entry point -- which has one caller, the
  *  dyntrans hook, whose signature is fixed.
  *
- *  Judged as a WRITE. The store-queue chapter gives the UTLB entry covering an
- *  SQ page the same ASID/V/SZ/SH/PR/D meanings as any other page while saying C
- *  and WT mean nothing there, and the dirty bit is only consulted on a write --
- *  so a clean page owes an initial-page-write exception, which is what lets the
- *  guest kernel track the page at all. (A panel seat read this as a load, from
- *  the sentence describing PREF's ordinary prefetch role -- quoted in the
- *  comment above pref_rn -- which is true of every OTHER address range.)
+ *  #454: JUDGED AS A READ.  This paragraph used to say "Judged as a WRITE" and
+ *  argue it from the dirty bit; the manual says the opposite, and it was not in
+ *  this tree when that argument was made.  SH7750 Hardware Manual Rev.7.00 4.7.4
+ *  "SQ Protection", p. 144 -- `_scratchpad/sh7750_hardware.txt:11744-11746`, and
+ *  identically in the SH-4 programming manual 4.6.4 at
+ *  `sh4_programming.txt:3561-3563`:
+ *
+ *	"Write type exception judgment is performed for writes to the SQs, and
+ *	 read type for transfer from the SQs to external memory (PREF
+ *	 instruction), and a TLB miss exception, protection violation
+ *	 exception, or initial page write exception is generated."
+ *
+ *  The old argument had ONE false premise, and it is worth naming because a
+ *  wrong reason gets reused: it assumed the PREF is the only access judged
+ *  against an SQ page's entry.  4.7.4's FIRST clause supplies the other one.
+ *  The dirty bit does stay meaningful, and a guest kernel does track the page --
+ *  but at the STORE INTO the queue, not at the flush out of it.  4.7.4 can list
+ *  the initial-page-write exception and still call the PREF a read because the
+ *  sentence covers both halves; 3.6.7 defines that exception as occurring on
+ *  "a data access (write)", so a read-type access cannot raise it at all.
+ *
+ *  *** WHAT THIS COSTS, STATED RATHER THAN GLOSSED: this emulator does not judge
+ *  the write half AT ALL. ***  sh_translate_v2p() maps 0xe0000000..0xe3ffffff
+ *  identically and unconditionally, because that is how an ordinary guest store
+ *  reaches the modelled queue SRAM.
+ *
+ *  Precisely which faults go away, because an earlier draft of this paragraph
+ *  said "an SQ page raises no MMU fault of any kind" and THIS ROUND'S OWN
+ *  DETECTOR DISPROVES THAT -- `sq miss evt` observes a read-type TLB miss
+ *  (0x040) on the fixed build.  What the PREF can still raise is the READ-side
+ *  set: TLB miss, and a protection violation for a PR/privilege combination that
+ *  forbids reading.  What disappears is the WRITE-side set: the initial-page-
+ *  write exception (3.6.7 requires "a data access (write)", so read-type
+ *  judgement cannot produce it) and write-side protection.  Those are exactly
+ *  the two the store half owes, and the store half never runs.
+ *
+ *  Measured, with liveness and device-signature controls: a store into the
+ *  window succeeds against a PR=00 read-only entry and against a clean one
+ *  alike.  Filed as `sh4sqwrite`, which #454 makes the sole carrier of the
+ *  WRITE-side SQ-page semantics -- not of all of them -- rather than a footnote
+ *  in an archived audit.
+ *
+ *  (A panel seat read this as a load back when the tree had no manual, and was
+ *  overruled.  It was right.)
  *
  *  Same return values as sh_translate_v2p().
  */
