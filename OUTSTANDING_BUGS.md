@@ -5835,6 +5835,42 @@ standing batching directive, and section H refuses a CLOSED row with a HELD stag
   having:** an asymmetry between two handlers is evidence of a question, not of a defect,
   and this one was one download away from being answered.
 
+### Rows adjudicated by the 2026-08-22 flagship batch, still open
+
+These are live queue items, each with a verdict from that batch recorded in
+`tools/pipeline/ledger.json`. They are listed here because the bug file is half of the
+live queue by charter, and a row that exists only in the ledger is invisible from here --
+which is the exact failure this list exists to prevent.
+
+| row | state | the batch's ruling, in one line |
+|---|---|---|
+| `gcsections` | held | Real and small -- a linker-behaviour dependence that would present as a PHANTOM RED, the 'green row means nothing' class inverted. Ride the next m8820x round. |
+| `isaorder` | held | READ-only, reproduction first; init-order defects are witnessable at rung 2/3. |
+| `landiskdisk` | in work | **RANK IT UP** -- an instrument gap that BLOCKS four other rows' witnesses (idesync, wdcflood, wdcnoirq, wdcstandby). Attaching a scratch disk to the landisk rig is cheap and must precede any wdc round. |
+| `ledgerwitness` | in work | CLOSE WITH NOTE -- nothing MECHANICALLY requires the witness field on a row closing with commits after the cutover. An optional field on an auditability rule re-creates the gap the row exists to close: wire a one-line post-cutover check, or record the decision not to. |
+| `m8latch` | held | Filed-not-widened-mid-round was right; the fix shape already exists in-tree as #447's (class, instance, bit) three-part latch key. |
+| `m8sarseq` | held | Legitimate coverage debt on a closed round; the two composed-sequence rows ride the next m88k round. |
+| `pitlatch` | in work | The 8253 treats the standard LATCH command as an error, and a real guest issues it in microtime() |
+| `strad` | held | Filing the three mutant shapes NAMED, not implied, is the doctrine's FILE arm done properly. |
+| `wdcstandby` | in work | Real (every powerdown issues it), small (accept + status + IRQ). Same wdc round, same witness vehicle. |
+
+### `floodclass` — held
+
+**A guest that loops on a rejected operation can burn host CPU through an unlatched
+`fatal()`, and the class spans many device files.** Filed as a class rather than a sweep
+because the fix is per-path POLICY -- which of those `fatal()` paths are genuinely
+guest-drivable -- and that needs a panel per path, not a regex.
+
+**Severity was raised after this row was first filed**, by a measurement from a different
+round: `fatal()` has no `quiet_mode` early-out (unlike `debug()`, which returns at
+`debugmsg.c:375`), so an unlatched complaint **cannot be silenced even with `-q`**. A guest
+looping on a rejected write therefore trades a host kill for an unstoppable host-CPU burn.
+
+The latch idiom that fixes an instance already exists in-tree and is cheap to reuse:
+`sh4_val_first()`'s three-part `(class, instance, bits)` key, as shipped by `#447` and
+extended by `#448`/`#449`/`#451`/`#452`. Known instances are filed under their own names
+(`rtcflood`, `wdcflood`); this row is the class they belong to.
+
 ### `sh4fmtcast` — open, a class, not yet started
 
 `dev_sh4.c` passes an `(int)`-cast argument to an `%x`-family conversion at **eighteen**

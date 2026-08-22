@@ -145,6 +145,34 @@ has worked — but the rule that made it work is unchanged and applies to whoeve
 **anything checkable in under about two minutes gets CHECKED, not judged.** Every useful drop on
 2026-08-13 was settled by a grep, a run, or a five-rig spelling check.
 
+*** BATCHING THE FLAGSHIP SEAT IS RIGHT FOR CLOSURES AND WRONG FOR RULE QUESTIONS —
+measured 2026-08-22 on a 46-row batch, by the seat that was being batched. ***
+
+Its finding, and the evidence is inside the batch: **the closures lost nothing by waiting.**
+Every row was gate-green with its record written, and five days of delay produced exactly one
+hold text overtaken by events (`sgiarcbiosoob` still said "not committed yet" after its oracle
+landed) and one state-vs-substance mismatch (`es438` marked "dropped" on shipped, witnessed,
+reviewed work — *a future reader who trusts states reads that as "not done", which is false*).
+
+**But the RULE questions did not wait safely.** #451 had to answer its own accept-row question
+locally, by building both mutant forms, because the seat that adjudicates that rule was
+batched; and the failability rule was minted, corrected and re-corrected across #448/#449 with
+the flagship signature arriving days later. Nothing broke — the measuring seats covered it —
+but *that is the panel silently absorbing a missing seat's function*, which is the thing the
+seat ledger exists to refuse to count as agreement.
+
+> **SPLIT THE QUEUE BY QUESTION TYPE.** CLOSE / KEEP-OPEN sign-offs on shipped work batch
+> freely; weekly is fine, and a 46-row batch proved it. Rows raising a **RULE QUESTION** get
+> the seat at the next round boundary, cap about a day — they change how future rounds run, so
+> every day they wait is rounds executed under an unadjudicated rule. The cost is small: rule
+> questions were 6 of 46, and they are the short ones.
+
+> **A STAGE HELD *FOR* A SEAT MUST CARRY THE QUESTION IT IS HELD FOR.** Three of the four
+> meta-rows in that batch carried identical boilerplate with no question in them, and the
+> question had to be reconstructed from the row's subject. The two rows that named their
+> question explicitly were the easiest to answer *accurately*. One habit, and it makes the
+> batch both faster and safer.
+
 *** SUPERSEDED 2026-08-16 BY OWNER DIRECTIVE: FULL PANEL ON EVERY STAGE. ***
 
 **THE RULE NOW: every stage — assess, research AND review — runs all nine seats before the round
@@ -484,12 +512,39 @@ one level too shallow** — #449's guest *did* write CMF=1 at the interface; the
 it before the predicate ever saw it. The measured kill subsumes reachability, and it catches
 wrong-regex, wrong-register and wrong-width vacuities in the same row for free.
 
-*** THE WORD "JOINT" IS LOAD-BEARING AND COMES FROM A MEASUREMENT. *** #449's guard-only
-widening was measured **EQUIVALENT** — the latch argument still masked to the original bits, so
-nothing observable happened — and A1's kill only appears when guard and latch widen together.
-Without that word the rule bounces off the first predicate whose latch operand masks
-independently. Cost is one mutant per de-fatalised predicate, not per row (#448 = 4 builds,
-#449 = 1).
+*** "JOINT" WAS THE FIRST MEASURED INSTANCE OF THE RULE, NOT THE RULE — restated 2026-08-22
+by the flagship seat after #452 measured the opposite case. *** #449's guard-only widening was
+measured **EQUIVALENT** (the latch argument still masked to the original bits, so nothing
+observable happened) and A1's kill only appears when guard and latch widen together. But at
+#451's SCI site the latch operand is a compile-time constant the guard cannot feed, so
+guard-only and joint redden the accept rows byte for byte — and guard-only ADDITIONALLY
+silences its own growth, printing one diagnostic where joint prints two. **There, guard-only is
+the HARDER mutant, and building only the joint form is the WEAKER test.**
+
+> **THE RULE, BY ITS DISCRIMINATOR:** the accept row must redden under the **least-observable
+> growth form that is measured NON-EQUIVALENT at that site**. Find it by the reading the rule
+> already mandates — read the latch/store arm and cite its line. Where the latch operand CAN
+> mask the guard, guard-only is equivalent and JOINT is that form. Where the latch operand is a
+> constant the guard cannot feed, guard-only is non-equivalent AND quieter, so it is that form.
+> **"Build the form the latch operand does not mask"** is the generalisation, and it is not a
+> new rule — it is this rule's own reason made explicit.
+
+Cost stays one mutant per de-fatalised predicate, not per row (#448 = 4 builds, #449 = 1).
+**Where the reading is uncertain, build BOTH** — #451 proved both directions measurable in
+minutes, and a spare build is cheaper than a wrong reading.
+
+> ### *** THE ASK-AGAIN, ADOPTED 2026-08-22, AND ITS CAP IS THE WHOLE SAFETY. ***
+>
+> **Once a detector's kill table is CLEAN, ask the panel once more for another mutant.**
+> Measured yield: 2 of the 5 rows #451 added, and 6 of the 15 in #452, came only from that
+> second ask — after the first table was already green. The mechanism is real: a clean table
+> redirects seats away from the shapes the author already thought of.
+>
+> **CAPPED AT ONE ASK-AGAIN PER DETECTOR PER ROUND.** This is not the #392 chain — #392 was
+> unbounded fix-of-fix passes with no stop condition; this is a single extra adversarial query
+> against a clean table with a measured stop: nothing found, done; something found, row added
+> under L1, done. **The cap IS the anti-#392 clause.** A second ask-again after an empty first
+> is exactly where the chain starts, and anything found past the cap is FILED, never fixed.
 
 > ### THE FOUR REASONS THAT LICENSE AN IN-ROUND FIX OF DETECTOR MATERIAL
 >
