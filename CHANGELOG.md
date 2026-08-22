@@ -4271,6 +4271,117 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R18 (#449) — the host died nine milliseconds after the guest store, in a timer callback
+
+`sh4_timer_tick()` read `bsc_rtcsr` and called `exit(1)`. The guest write to RTCSR
+(`0xff80001c`) **lands and returns normally** — the handler stores it, the debugger prompt
+comes back — and the process is killed afterwards by a host timer callback running at
+`SH4_PSEUDO_TIMER_HZ` (110.0).
+
+*** THIS IS A SHAPE NO OTHER PROBE IN THIS TREE COULD SEE, AND THE REASON IS STRUCTURAL. ***
+Every SH-4 probe here observes the **store site**: issue one guest store, ask whether the host
+survived that instruction. `#443`, `#447` and `#448` are all built that way, correctly, because
+their defects die *on* the store. This one does not, so all three are blind to it by
+construction. The witness keeps row **S0** recording exactly that: the store alone leaves the
+host alive.
+
+### The witness, and two measurements that cost real time
+
+`regress/sh4_rtcsr_witness.py`, rung 3, **8/8 on the committed build**: two delayed kills
+(CMIE, OVIE), three survivals, a device-signature read, and S0.
+
+C2 is the decisive control — `RTCSR_CMF`, a **different bit of the same byte**, at the same
+address and width, through the same free run, and the host lives. So the kill is attributable
+to the *bits*, not to the register, the width, or a long free run.
+
+Two things are recorded so nobody re-derives them:
+
+1. *** THE SPIN COUNT IS MEASURED, NOT CHOSEN, AND THE FIRST ATTEMPT FOUND NOTHING. *** At
+   `0x60000` and `0x200000` iterations every arm survived — the guest never ran long enough for
+   one 110 Hz tick. `0x2000000` kills in ~0.2 s. **A reproduction that finds nothing because it
+   did not wait is not evidence of absence.**
+2. *** THE READ-BACK OPCODE WAS WRONG AND RETURNED ZERO. *** `0x6121` is `mov.w @r2,r1`, not
+   `mov.w @r1,r2`; the correct encoding is `0x6211`. A wrong register field yields zero, and
+   zero looks exactly like "the store never landed" — the hand-assembled-encoding trap for the
+   fifth recorded time. The row now wants a small **non-zero**.
+
+### Four design corrections from pass 1, all of them followed
+
+1. *** FALL THROUGH — AN EARLY `return` IS A SECOND DEFECT. *** The rest of the tick is the TMU
+   channel update and never reads `bsc_rtcsr`. Returning would skip the TMU on every tick while
+   a DRAM-refresh enable stays set: the `#400` landisk wall-clock freeze, newly gated on an
+   unrelated register.
+2. `SH4_VAL_RTCSRINT` **did not exist** (`NCLASS` was 8, slots 0–7 used), and reusing
+   `SH4_VAL_RCR1INT` would have collided.
+3. **Do not mask the enables out of the store** — the `#447` RCR1 design. RTCSR is *mixed*: CKS,
+   LMTS and the CMF write-1-to-keep share the byte, so stripping the enables would refuse
+   clock-select too **and** leave the tick guard permanently false, making any surviving
+   `exit(1)` a latent bomb no free-run row could reach. Row **A3** exists for this.
+4. Not *"write ignored"* — the RCR1 sentence, and a lie here. The write **did** land.
+
+### Two detectors, covering different halves
+
+**`regress/sh4_rtcsr_probe.py`** — 10 rows, rung 3, wired into gate 10 (58 checks).
+**F1 is the row the round exists for**: the diagnostic comes from a callback that fires many
+times in one free run, and `fatal()` has no `quiet_mode` early-out, so an unlatched complaint is
+a flood `-q` cannot stop. F1 spins over many ticks and requires **exactly one** line — a
+measurement no store-site row can make, because none lets the callback run twice.
+
+**`regress/diff_sh4_tmu.c` row `rtcsr_falls_through`** — **offline**, in gate 2 (263 checks).
+Sets CMIE, requires the timer to keep counting. MEASURED: clean **0 failures**, early-`return`
+mutant **1 failure**, `exit(1)` reinstated **kills the differential outright**. No pty, no
+binary, microseconds. A pass-1 seat proposed it *and* caught that the file's own comment — "a
+non-zero CMIE fatal()s and exit(1)s" — had become false. Corrected in the same commit.
+
+### Three rows were measured vacuous and rebuilt, and one mutant is equivalent
+
+| row | why it could not do its job |
+|---|---|
+| **A1** | written against `RTCSR_CMF` — **write-1-to-keep, and nothing in the device ever sets it**, so a guest cannot set it and the accept row could never trip a widened guard. Re-valued to CKS\|LMTS. |
+| **L1** | **flaky**: one spin, so the second diagnostic needed a tick to race into the gap before the breakpoint. It passed once and failed once on the *same binary*. Two spins now. |
+| **guard-only widening** | **equivalent, not surviving** — the latch argument still computes `bsc_rtcsr & (CMIE\|OVIE)`, zero for an LMTS write, so nothing prints and the branch does nothing. |
+
+**A2 is an unexercised control** — its discriminating mutant would remove the outer guard.
+Stated rather than claimed.
+
+Kill table, no survivors: `exit(1)` restored → R1 R2 R3 F1 L1 · latch always fires → same ·
+enables stripped at the store → same **+ A3** · latch drops the bit key → **L1** ·
+`fatal`→`debug` → same · guard **and** latch widened → **A1**.
+
+### *** THREE SEATS CAUGHT ONE DEFECT IN MY OWN BRIEF, BY THREE DIFFERENT ROUTES ***
+
+The pass-2 brief inlined the diff through `grep -vE '^\+\s*\*'` to save space. That strips
+comment **continuation** lines while keeping the `/*` that opens them, so the shown patch could
+not compile. Two seats returned **DEFECT** — codex and kimi independently traced C comment
+semantics through translation phase 3 to the unmatched brace — and grok noticed the hunk header
+line counts did not match the text, declined to treat the snippet as complete, and read the
+repository instead.
+
+Codex's conclusion is the one to keep: *"the reported clean measurements must come from
+different source text."* **That is the correct response to a brief that claims measurements
+against source a reader can see will not build**, and the fault is the brief's, not the seats'.
+The shipped file compiles with zero warnings and both gates are green. **Do not filter a diff to
+save space: a corrupted diff makes every measurement claim in the packet unverifiable.**
+
+### Filed, not fixed
+
+`sh4rtcflags` — CMF and OVF are never set on any path and RTCNT has no `case` at all, so a guest
+polling for a compare-match waits forever. `#449` does not make that worse; it only lets a guest
+with the enables *set* survive to wait the same way. Setting CMF as a consolation would invent a
+match with no RTCNT to match against.
+
+`sh4latchcollide` — a pass-2 seat named a class-swap mutant that scores 10/10. **Measured
+equivalent**: the two classes' bit sets are disjoint (`0x18` vs `0x42`) and the latch keys on
+bits, so no suppression is possible and its stated condition is not met. The residual worth
+keeping is the *fragility*: nine classes now share one array, and the separation is guaranteed
+by nothing but the accident of disjoint constants — with no row able to see a wrong assignment,
+because while they stay disjoint there is nothing observable to assert.
+
+Twin tree and both NO-VPATH build trees carry `dev_sh4.c` byte-identically; `build/` rebuilt from
+it, rc=0, **zero warnings**.
+
+Gates: `gate_sh_rounding` PASS (58 checks, was 56), `gate_offline` PASS (263), each run singly.
+
 ## R17 (#448) — a legal DMA configuration ended the host on its resource-select alone
 
 `sh4_dmac_transfer()`. Four `default:` arms called `exit(1)` when a guest wrote a CHCR field

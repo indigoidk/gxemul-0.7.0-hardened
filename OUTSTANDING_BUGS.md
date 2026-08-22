@@ -5824,3 +5824,41 @@ Two consequences, and the second is why this is filed rather than shrugged at:
 **Honest limit: READ, not executed.** No guest here has been observed waiting — landisk's kernel
 may never enable a DMA channel at all. Whether any guest this project boots reaches it is
 unmeasured, so this is a capability gap of unknown reachability rather than a witnessed defect.
+
+## 2026-08-21 — #449 shipped, and its pass 2 found a defect in the brief rather than the code
+
+### `sh4rtcflags` — held
+
+RTCSR's **CMF and OVF are never set on any path**, and **RTCNT (`0xff800020`) has no `case`** in
+the device at all. The tick increments `bsc_rfcr` and stores CKS/LMTS/RTCOR without consulting
+them. So a guest polling for a refresh compare-match waits forever.
+
+*** `#449` does not make this worse and deliberately does not fix it. *** A guest polling CMF
+already waits forever with the enables **clear**; `#449` only stops the host dying, so a guest
+with them **set** now survives to wait the same way. Setting CMF as a consolation would be
+inventing a compare-match with no RTCNT to match against — a pass-1 seat argued that explicitly.
+
+Honest limit: **READ, not executed.** Whether any guest this project boots ever polls CMF is
+unmeasured.
+
+### `sh4latchcollide` — held
+
+A pass-2 seat named the smallest undetected mutation: swap `#449`'s latch class from
+`SH4_VAL_RTCSRINT` to `SH4_VAL_RCR1INT`. It **conditioned the claim correctly** — it matters
+only if an earlier RCR1 complaint with an *overlapping bit* suppressed the RTCSR one.
+
+MEASURED: the mutant scores 10/10. But the bit sets are **disjoint** — RCR1 `CIE|AIE = 0x18`,
+RTCSR `CMIE|OVIE = 0x42` — and `sh4_val_first` keys on **bits**, so a shared class slot cannot
+suppress anything. *** The mutant is EQUIVALENT, not surviving, and that is a different
+diagnosis from "the detector is weak". ***
+
+**The fragility is what is worth keeping.** Nine classes now share one `val_reported[cls][inst]`
+array, and the correctness of every class assignment is guaranteed by nothing except that no two
+classes' bit sets overlap. Renumber one header constant, or add a tenth class sharing bits with
+an existing one, and a wrong assignment becomes a **silent suppression of a real diagnostic** —
+with no row able to see it, because while the sets stay disjoint there is nothing observable to
+assert.
+
+Candidates for a round to weigh: a compile-time assertion that the class bit-domains are
+disjoint; or making the class a property of the register rather than a hand-written argument at
+each call site.

@@ -281,6 +281,46 @@ else
     check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 18
 fi
 
+# ------------------------------------------------------------------ #449 RTCSR refresh
+#  A FOURTH SIBLING, and it is the first in this file whose defect is NOT at a store.
+#
+#  *** THE GUEST WRITE LANDS AND RETURNS NORMALLY.  THE HOST DIED ~9 ms LATER, INSIDE
+#  sh4_timer_tick() AT 110 Hz. ***  Every other probe wired above -- #443's, #447's, #448's
+#  -- observes the STORE SITE: issue one store, ask whether the host survived that
+#  instruction.  All three are blind to this by construction, and the witness keeps a row
+#  (S0) recording exactly that: the store alone leaves the host alive.
+#
+#  F1 IS THE ROW THAT NEEDED THE NEW SHAPE.  The diagnostic comes from a callback that
+#  fires many times during one free run, and fatal() has no quiet_mode early-out, so an
+#  unlatched complaint is a flood -q cannot stop.  F1 spins long enough for many ticks and
+#  requires EXACTLY ONE line.  No store-site row can measure that: none lets the callback
+#  run twice.
+#
+#  The TMU half is covered OFFLINE instead, in gate 2: regress/diff_sh4_tmu.c's
+#  `rtcsr_falls_through` row sets CMIE and requires the timer to keep counting, which is
+#  what catches an early `return` -- the obvious fix, and the wrong one.  Measured there:
+#  clean 0 failures, early-return 1 failure.  It costs microseconds and needs no pty.
+RTLOG=$LOGDIR/gate_sh4_rtcsr.log
+python3 sh4_rtcsr_probe.py "$PMAX" "$KERNEL" > "$RTLOG" 2>&1 || true
+
+if ! grep -q "SH4RTCSR_RESULT=" "$RTLOG"; then
+    note "sh4_rtcsr probe produced no result line; last lines follow"
+    tail -5 "$RTLOG" | sed 's/^/       /'
+    check "sh4_rtcsr probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$RTLOG" | sed 's/^/       /'
+    check "sh4_rtcsr: a refresh-interrupt enable does not kill the host"           "$(grep -c 'SH4RTCSR_PASS' "$RTLOG")" "1"
+    #  10, and two of those rows exist because the round's own mutation run measured them
+    #  needed: L1 (two stores in ONE process) after a latch mutant scored a clean 9/9
+    #  against every single-session row, and A1 re-valued after it was written against
+    #  RTCSR_CMF -- a bit that is write-1-to-KEEP and that nothing in the device ever sets,
+    #  so a guest cannot set it and the row could never trip a widened guard.
+    check_min "sh4_rtcsr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$RTLOG")" 10
+fi
+
+#  sh4_rtcsr_witness.py is DELIBERATELY NOT RUN HERE: 8/8 pre-fix, 6/8 after, the two
+#  differences being the two kill rows.  A gated witness reddens the day its fix lands.
+
 #  sh4_chcr_witness.py is DELIBERATELY NOT RUN HERE, for the same reason as #447's:
 #  it asserts the PRE-FIX symptom (13/13 pre-fix, 8/13 post-fix, the five differences
 #  being exactly the five sites repaired) and would go red the day its fix landed.

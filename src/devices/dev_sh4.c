@@ -134,7 +134,19 @@
 #define	SH4_VAL_DMACDM			5	/*  CHCR: destination address mode    */
 #define	SH4_VAL_DMACSM			6	/*  CHCR: source address mode         */
 #define	SH4_VAL_DMACRS			7	/*  CHCR: resource select             */
-#define	SH4_VAL_NCLASS			8
+/*
+ *  #449: the refresh-timer interrupt enables, and this one is NOT reached from a store.
+ *  The guest write to RTCSR lands and returns normally; sh4_timer_tick() then read the
+ *  enable bits and called exit(1) -- about nine milliseconds later, at 110 Hz.  Every
+ *  SH-4 probe in this tree observes the STORE SITE, so all of them were blind to it.
+ *
+ *  *** IT NEEDS ITS OWN CLASS AND MUST NOT REUSE SH4_VAL_RCR1INT. ***  That class is the
+ *  nearest neighbour -- also "an interrupt enable this device does not model" -- and
+ *  sharing it would make an earlier RCR1 complaint silence RTCSR, and the reverse.  A
+ *  review seat named the collision before it was written.
+ */
+#define	SH4_VAL_RTCSRINT		8	/*  RTCSR: refresh interrupt enables  */
+#define	SH4_VAL_NCLASS			9
 /*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
 #define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
 
@@ -260,6 +272,15 @@ struct sh4_data {
 #define	SH4_PSEUDO_TIMER_HZ	110.0
 
 
+/*  #448/#449: the latch helper is defined far below, and BOTH sh4_timer_tick() and
+    sh4_dmac_transfer() are above it, so the prototype lives here -- immediately after
+    `struct sh4_data` and before the first user.
+    It must not sit beside the SH4_VAL_* defines: a prototype naming a struct the compiler
+    has not seen yet declares a NEW type in PARAMETER SCOPE.  That compiles, warns, and
+    then mismatches the real definition.  Measured while writing #448.  */
+static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+
+
 /*
  *  sh4_timer_tick():
  *
@@ -276,10 +297,56 @@ static void sh4_timer_tick(struct timer *t, void *extra)
 
 	/*  Fake RAM refresh:  */
 	d->bsc_rfcr ++;
+	/*
+	 *  #449: this called exit(1), and it is reached from a HOST TIMER CALLBACK rather
+	 *  than from a guest store.  A guest write to RTCSR lands, the handler returns
+	 *  normally, and the process dies here about nine milliseconds later.  MEASURED on
+	 *  an unmodified -E landisk: the store alone leaves the host alive (which is why
+	 *  every store-site probe in this tree was blind to it), and a bounded free run
+	 *  after it kills the host with this diagnostic.  Two controls survive the same
+	 *  free run -- RTCSR 0x00, and RTCSR_CMF, a DIFFERENT bit of the SAME byte.
+	 *
+	 *  *** FALL THROUGH.  DO NOT RETURN. ***  The rest of this function is the TMU
+	 *  channel 0-2 update, which never reads bsc_rtcsr; the refresh work above is
+	 *  already done.  Returning early would make every tick skip the TMU while a
+	 *  DRAM-refresh enable bit stays set -- the #400 wall-clock freeze, newly gated on
+	 *  an unrelated register.  A review seat named that before it was written, and
+	 *  regress/diff_sh4_tmu.c now carries the row that catches it offline.
+	 *
+	 *  THE LATCH IS LOAD-BEARING HERE IN A WAY IT WAS NOT ON THE STORE-SITE ROUNDS.
+	 *  This runs at SH4_PSEUDO_TIMER_HZ, and timer.c can burst several ticks inside one
+	 *  signal; fatal() has no quiet_mode early-out, so an unlatched complaint is a
+	 *  flood that -q cannot stop.  The key is (class, instance 0, enable bits), and
+	 *  sh4_val_first() never clears -- so a guest that writes 0 and re-sets CMIE gets
+	 *  no second line, deliberately.  At most one line per bit for the device lifetime.
+	 *
+	 *  THE WORDING IS NOT "write ignored", WHICH IS THE RCR1 SENTENCE AND WOULD BE A
+	 *  LIE HERE: the write DID land, and the guest can read it back.  What is missing
+	 *  is the delivery of the interrupt.
+	 */
 	if (d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)) {
-		fatal("sh4: RTCSR_CMIE | RTCSR_OVIE: TODO\n");
+		/*
+		 *  TWO WORDINGS HERE WERE CORRECTED BY A PASS-2 SEAT, and both were
+		 *  wrong in the same direction -- more specific than the code earns.
+		 *
+		 *  "the interrupt is NOT delivered" reads as though a refresh interrupt
+		 *  becomes pending and is then dropped.  Nothing becomes pending: CMF and
+		 *  OVF are never set on any path in this device, and RTCNT has no `case`
+		 *  at all, so there is no compare-match to raise.  The honest statement is
+		 *  that the GENERATION of the interrupt is not implemented.
+		 *
+		 *  "(once per bit)" is not quite what the latch does either: a single
+		 *  store that sets BOTH enables for the first time yields ONE coalesced
+		 *  line naming 0x42, not two.  Row R3 of sh4_rtcsr_probe.py measures
+		 *  exactly that, so the comment and the row now agree.
+		 */
+		if (sh4_val_first(d, SH4_VAL_RTCSRINT, 0,
+		    d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)))
+			fatal("[ sh4: refresh interrupt enable(s) 0x%02x stored,"
+			    " but refresh-interrupt generation is not implemented"
+			    " -- each enable is reported once ]\n",
+			    (int) (d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)));
 		/*  TODO: Implement refresh interrupts etc.  */
-		exit(1);
 	}
 
 	/*  Timer interrupts:  */
@@ -426,12 +493,6 @@ DEVICE_TICK(sh4)
  *  Called whenever a DMA transfer is to be executed.
  *  Clears the lowest bit of the corresponding channel's CHCR when done.
  */
-/*  #448: the latch helper is defined below this function, so it needs a prototype here.
-    Placed AFTER `struct sh4_data` rather than beside the SH4_VAL_* defines, because a
-    prototype naming a struct the compiler has not seen declares a NEW type in parameter
-    scope -- it compiles, warns, and then mismatches the real definition.  */
-static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
-
 void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
 {
 	/*  According to the SH7760 manual, bits 31..29 are ignored in  */

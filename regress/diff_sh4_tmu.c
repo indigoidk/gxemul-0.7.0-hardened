@@ -62,8 +62,18 @@ static int rows = 0;
 static void reset(struct sh4_data *d)
 {
 	memset(d, 0, sizeof(*d));
-	/*  bsc_rtcsr must stay 0: a non-zero CMIE/OVIE takes the refresh
-	    branch at the top of the tick, which fatal()s and exit(1)s.  */
+	/*  #449: bsc_rtcsr is left 0 here, but the REASON changed and this comment used to
+	    state the old one as fact.  It said a non-zero CMIE/OVIE "fatal()s and exit(1)s".
+	    *** THAT exit(1) IS GONE. ***  The refresh branch now latches a diagnostic and
+	    FALLS THROUGH, so a non-zero bsc_rtcsr would no longer end this differential --
+	    it would only add one line of output.
+
+	    Kept at 0 so the rows below measure the TMU alone, which is what this file is
+	    for.  Row `rtcsr_falls_through` covers the other side: it sets CMIE and requires
+	    the timer to keep counting, which is the cheapest possible check that the fix
+	    FELL THROUGH rather than returning early.  An early return here would freeze the
+	    TMU on every tick while a DRAM-refresh enable bit stays set -- the #400 wall-clock
+	    freeze, newly gated on an unrelated register -- and no pty is needed to see it.  */
 }
 
 /*
@@ -99,6 +109,60 @@ static void row1(const char *name, uint32_t tcor, uint32_t tcnt, uint32_t step,
 		printf("  ok   %-34s %08x/UNF%d\n", name, got, unf);
 	}
 }
+
+/*
+ *  #449: THE REFRESH BRANCH MUST FALL THROUGH INTO THE TMU UPDATE.
+ *
+ *  Before #449 this could not be written at all: a non-zero CMIE ended the PROCESS at the
+ *  top of the tick, so the differential died rather than failed.  Now the branch latches a
+ *  diagnostic and continues, and this row pins the CONTINUING part.
+ *
+ *  *** THE DESIGN ERROR IT CATCHES IS AN EARLY `return`, WHICH IS THE OBVIOUS FIX AND IS
+ *  WRONG. ***  The rest of sh4_timer_tick() is the TMU channel update; it never reads
+ *  bsc_rtcsr, and the refresh work above it is already done.  Returning early would make
+ *  every tick skip the TMU while a DRAM-refresh enable bit stays set -- the #400 landisk
+ *  wall-clock freeze, newly gated on an unrelated register.  A pass-1 seat named that
+ *  before the fix was written and proposed exactly this row.
+ *
+ *  It costs microseconds and needs NO pty, NO rig image and NO emulator binary -- the file
+ *  already #includes the device.  The rung-3 probe (sh4_rtcsr_probe.py) proves the host
+ *  survives; only this row proves the TIMERS survive with it.
+ *
+ *  Claim under test: WITH A REFRESH INTERRUPT ENABLED, THE TIMER STILL COUNTS.
+ */
+static void row_rtcsr_falls_through(void)
+{
+	struct sh4_data d;
+	uint32_t got;
+
+	reset(&d);
+	d.tcor[0] = 20833;
+	d.tcnt[0] = 100;
+	d.timer_hz[0] = 99.0 * SH4_PSEUDO_TIMER_HZ;
+	d.tstr = TSTR_STR0;
+
+	/*  The bit that used to end the process here.  */
+	d.bsc_rtcsr = RTCSR_CMIE;
+
+	sh4_timer_tick(NULL, &d);
+
+	got = d.tcnt[0];
+	rows ++;
+
+	/*  Same arithmetic as row1's tcnt row: 100 - 99 = 1, no underflow.  A frozen
+	    counter still reads 100, which is exactly what an early `return` leaves.  */
+	if (got != 1) {
+		printf("  FAIL %-34s CMIE set -> tcnt=%08x want %08x  (a frozen "
+		    "counter means the refresh branch RETURNED instead of falling "
+		    "through, and the TMU is dead while CMIE stays set)\n",
+		    "rtcsr_falls_through", got, 1u);
+		failures ++;
+	} else {
+		printf("  ok   %-34s CMIE set, timer still counts (%08x)\n",
+		    "rtcsr_falls_through", got);
+	}
+}
+
 
 /*
  *  THE ROW THAT EXISTS BECAUSE A SEAT FOUND TWO SURVIVING MUTANTS.
@@ -452,6 +516,7 @@ int main(void)
 	     0xffffffffU, 0xffffffffU, 75757, 0xfffed812U, 0);
 
 	row_three_timers();
+	row_rtcsr_falls_through();
 	row_interrupt();
 	row_interrupt_unie_clear();
 	row_stopped();
@@ -464,10 +529,10 @@ int main(void)
 	 *  REVIEWED.  Last, so it counts every row above it.
 	 */
 	rows ++;
-	if (rows == 18)
+	if (rows == 19)
 		printf("  ok   [IDENTITY] row count -- guards against a stale copy  %d\n", rows);
 	else {
-		printf("  FAIL [IDENTITY] row count = %d, want 18 -- this is not the file that was reviewed\n", rows);
+		printf("  FAIL [IDENTITY] row count = %d, want 19 -- this is not the file that was reviewed\n", rows);
 		failures ++;
 	}
 

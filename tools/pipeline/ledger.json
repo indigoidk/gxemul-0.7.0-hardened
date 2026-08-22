@@ -14641,8 +14641,8 @@
    "id": "sh4chcr",
    "title": "sh4chcr  Essentially ANY guest CHCR write with TD=1 ends the host process -- five exit(1) sites, MEASURED on all eight DMA channels",
    "state": "held",
-   "commits": "",
-   "hold": "Its own round. Higher severity than the four #447 repaired: those each needed a specific unimplemented bit, this needs only TD=1.",
+   "commits": "a636a33",
+   "hold": "Fix SHIPPED as a636a33 and gate-green. Held open, not closed: the review stage awaits the flagship seat, and section H refuses a CLOSED row carrying a HELD stage. The queue entry asks whether rows A1-A4 discharge the de-escalation clause that seat itself wrote.",
    "closure": {
     "by": "",
     "badge": "",
@@ -14816,7 +14816,7 @@
     "badge": "",
     "note": ""
    },
-   "witness": "probe:measured rung-3 during the #447 pass 2 with a dt/bf spin loop under `continue`, every halfword checked against the emulator's own disassembler. Not yet committed as an artefact.",
+   "witness": "probe:regress/sh4_rtcsr_witness.py (rung 3, 8 rows, unmodified -E landisk; 8/8 pre-fix and 6/8 post-fix, the two differences being exactly the two kill rows). Row S0 is the one that names the shape: the STORE ALONE leaves the host alive, which is why every store-site probe in this tree was blind to this defect by construction.",
    "entries": [
     {
      "seat": "opus5",
@@ -14826,6 +14826,150 @@
      "note": "*** THE STORE RETURNS NORMALLY AND THE PROCESS DIES MILLISECONDS LATER. ***  RTCSR at 0xff80001c is guest-writable (`d->bsc_rtcsr = idata & 0x00ff`), and sh4_timer_tick() reaches exit(1) at dev_sh4.c:253-259 -- at 110 Hz.\n\nMEASURED with a dt/bf spin loop under `continue`:\n    RTCSR CMIE 0x40   -> alive=False   'sh4: RTCSR_CMIE | RTCSR_OVIE: TODO'\n    RTCSR OVIE 0x02   -> alive=False   same\n    CONTROL   0x00    -> alive=True\n    CONTROL CMF 0x80  -> alive=True    (different bit, SAME register and width)\n\n*** THE SECOND CONTROL IS THE ONE THAT MATTERS: a different bit of the SAME register at the SAME width leaves the host alive, so the kill is attributable to the BIT and not to the access. ***\n\nWHY IT IS A DISTINCT ROUND RATHER THAN A CHCR SIBLING: every SH-4 probe this project has written observes the store site -- issue the store, see whether the host survived the instruction. THAT DESIGN CANNOT SEE THIS. The instruction completes, the debugger prompt returns, and the host dies from a callback afterwards. Detecting it needs a free-running spin with a liveness check AFTER the fact, which is a different probe shape and a different oracle.\n\nALSO UNMEASURED, same family, filed here rather than lost: two more sites in sh4_sci_cmd() at :518 and :527, reached on guest-written SCI bytes.",
      "grade": "CONFIRMED",
      "ev": "opus5 measuring seat, #447 pass 2, 2026-08-21"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES, and it supplied FOUR corrections that all landed in the shipped fix.\n\n1. *** FALL THROUGH, DO NOT RETURN -- an early return is a SECOND defect. ***  The rest of the tick is the TMU channel update and never reads bsc_rtcsr. Returning would skip the TMU on every tick while a DRAM-refresh enable stays set: the #400 landisk wall-clock freeze, newly gated on an unrelated register.\n2. *** SH4_VAL_RTCSRINT DID NOT EXIST *** -- NCLASS was 8 with slots 0-7 used -- and reusing SH4_VAL_RCR1INT would COLLIDE. Verified by grep before the edit.\n3. DO NOT mask the enables out of the store (the #447 RCR1 design). RTCSR is MIXED: CKS, LMTS and the CMF write-1-to-keep share the byte, so stripping the enables would refuse clock-select too AND leave the tick guard permanently false, making any surviving exit(1) a latent bomb no free-run row could reach. Row A3 exists for this.\n4. THE WORDING: '-- ignored' is the RCR1 sentence and is a LIE here, because the write DID land and is readable back.\n\n*** AND IT FOUND A WRONG RECORD IN AN EXISTING FILE THAT THE FIX WOULD HAVE MADE FALSE. ***  regress/diff_sh4_tmu.c #includes this device and its reset() comment said a non-zero CMIE 'fatal()s and exit(1)s'. It proposed the row that fixes it: set CMIE, one tick, require tcnt to still move -- an OFFLINE check needing no pty, no binary and no rig. MEASURED after implementing: clean 0 failures, early-return mutant 1 failure, exit(1) reinstated kills the differential outright.\n\nAlso named, and separately checked true: RTCNT (0xff800020) has NO `case` in this device at all.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Agreed independently on fall-through and on the latch key, and stated the flood argument in the sharpest form: this is a capability diagnostic, not an event log, so it must NEVER re-arm on a guest clearing and re-setting the bit -- re-arming would hand the guest a flood.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed and correct on all six questions. It raised the guest-hang question independently: CMF/OVF are never set, so a polling driver may wait forever -- and recommended DOCUMENTING rather than setting the flags, since setting them without an RTCNT to match against would be inventing a compare-match. That is the disposition taken.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SHIP / SHIP-WITH-CHANGES (pass 1); no dissent on the design.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SHIP / SHIP-WITH-CHANGES (pass 1); no dissent on the design.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SHIP / SHIP-WITH-CHANGES (pass 1); no dissent on the design.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SHIP / SHIP-WITH-CHANGES (pass 1); no dissent on the design.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_205143"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT -- *** AND IT WAS RIGHT ABOUT WHAT IT WAS SHOWN, WHICH IS THE POINT. ***\n\nIt traced C comment semantics through the INLINED DIFF and concluded the patch cannot compile: two stray `/*` openers, the second swallowing the new `if` block up to the pre-existing TODO's `*/`, leaving an unmatched `}` that closes the function early. Its conclusion followed exactly: *'the reported clean measurements must come from different source text.'*\n\n*** THAT IS A DEFECT IN MY BRIEF, NOT IN THE SOURCE, AND THE BRIEF IS MINE. ***  I filtered the diff through `grep -vE '^\\+\\s*\\*'` to save space, which strips comment CONTINUATION lines while keeping the `/*` that opens them. The shipped file compiles with zero warnings and both gates are green. But a seat that accepts measurements against source it can see cannot build would be the failure; refusing them is correct. kimi reached the identical conclusion independently, and grok noticed the hunk line counts did not match the text and went to read the repo instead. THREE seats caught one brief defect by three different routes.\n\nITS SUBSTANTIVE FINDING, and it named the condition precisely: the smallest undetected mutation is swapping the latch class SH4_VAL_RTCSRINT -> SH4_VAL_RCR1INT, which would matter *'if an earlier RCR1 complaint with an OVERLAPPING BIT'* suppressed the RTCSR one. MEASURED: the mutant scores 10/10 -- but the bit sets are DISJOINT (RCR1 CIE|AIE = 0x18, RTCSR CMIE|OVIE = 0x42), and the latch keys on bits, so no suppression is possible and the mutant is EQUIVALENT. Its condition is not met. *** THE USEFUL RESIDUAL IS THAT THE CLASS SEPARATION IS DEFENDED BY THE ACCIDENT OF DISJOINT CONSTANTS, NOT BY ANY ROW -- and a cross-class row cannot be written while that holds, because there is nothing observable to assert. *** Filed as `sh4latchcollide`.\n\nTWO WORDING CORRECTIONS, both applied: '(once per bit)' is imprecise -- two newly observed bits coalesce into ONE line, which is what row R3 measures; and 'the interrupt is NOT delivered' implies something becomes pending and is dropped, when nothing ever becomes pending. Now 'refresh-interrupt generation is not implemented'.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT, reached INDEPENDENTLY of codex and by the same route -- it traced the inlined diff through translation phase 3, showed that C comments do not nest, and walked both sites line by line to the unmatched brace. Same finding, same correctness, same cause: MY BRIEF's filtered diff. Recorded as a seat doing its job, not as a dissent to be resolved.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND. *** IT DETECTED THE SAME BRIEF DEFECT BY A THIRD ROUTE AND THEN ROUTED AROUND IT: *** it noticed the hunk header line counts did not match the displayed text, declined to treat the truncated snippet as complete, and read the shipped dev_sh4.c and both detectors from the repository instead. That is the file-reading seat class doing exactly what it is for -- and it is why its verdict differs from codex's and kimi's on identical input.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). No escape offered.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). No escape offered.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). No escape offered.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). No escape offered.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_211546"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure. Owed for the question this round raises about its own de-escalation clause: A1 here had to be RE-VALUED because its first version tested RTCSR_CMF, a bit that is write-1-to-keep and that the device never sets, so the accept row could not fire on any mutant. Does the clause need a companion rule -- that an accept-side row must use a value the guest can actually PRODUCE?",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Not fired on the design pass either, same standing deprioritisation. Seven seats answered.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
     }
    ]
   },
@@ -14898,6 +15042,54 @@
      "note": "*** THE FUNCTION CALLED sh4_dmac_transfer() DOES NOT TRANSFER. ***  Found while settling a pass-1 seat's question about body ordering, and it refuted the question rather than answering it.\n\n`sar`, `dar`, `count` and `chcr` are LOCAL copies; there is no `cpu->cd.sh.dmac_*` assignment anywhere in the function; and the only arm that returns normally, `case 0x200:`, is literally `(void)sar; (void)dar;` under the comment 'Note: No transfer is done here! It is up to the external device to do the transfer itself!'. So no bytes move, SAR/DAR/DMATCR are never advanced, and TE is never set.\n\nTWO CONSEQUENCES, and the second is why this is filed rather than shrugged at. (1) It made #448 trivially safe -- every site is side-effect-free before it dies, so there is nothing to un-commit and no store had to move. (2) *** A GUEST THAT ENABLES DMA AND POLLS FOR COMPLETION ALREADY WAITS FOREVER, ON THE ONE CONFIGURATION THE MODEL ACCEPTS, BEFORE AND AFTER #448 ALIKE. ***  Two pass-1 seats raised the hang risk as something #448 might CREATE; measurement shows it PRE-EXISTS and #448 neither causes nor worsens it.\n\nHonest limit: READ, not executed. No guest here has been observed waiting -- landisk's kernel may never enable a DMA channel at all. Whether any guest this project boots reaches it is unmeasured, so this is a capability gap of unknown reachability rather than a witnessed defect.",
      "grade": "MANUAL",
      "ev": "source read, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sh4rtcflags",
+   "title": "sh4rtcflags  RTCSR's CMF and OVF are never set on any path, and RTCNT has no `case` at all -- a guest polling for a refresh compare-match waits forever",
+   "state": "held",
+   "commits": "",
+   "hold": "Filed out of #449's pass 1. A capability gap, and it predates every SH-4 round here.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "none -- established by READING the device and the header, not executed.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Named by two pass-1 seats and checked against the header. `sh4_bscreg.h` defines CMF, CMIE, CKS, OVF, OVIE and LMTS. The device increments `bsc_rfcr` every tick and stores CKS/LMTS/RTCOR without consulting them; it NEVER sets CMF or OVF on any path, and SH4_RTCNT (0xff800020) has no `case` in the register switch at all.\n\n*** #449 DOES NOT MAKE THIS WORSE AND DELIBERATELY DOES NOT FIX IT. ***  A guest polling CMF already waits forever with the enables CLEAR. #449 only stops the host dying, so a guest with the enables SET now survives to wait in the same way. Setting CMF as a consolation would be INVENTING a compare-match with no RTCNT to match against -- a pass-1 seat argued that explicitly and the round agreed.\n\nHonest limit: READ, not executed. Whether any guest this project boots ever polls CMF is unmeasured.",
+     "grade": "MANUAL",
+     "ev": "source + header read, 2026-08-21"
+    }
+   ]
+  },
+  {
+   "id": "sh4latchcollide",
+   "title": "sh4latchcollide  The sh4_val_first latch classes are kept apart by the ACCIDENT of disjoint bit constants, and no row can detect a wrong class",
+   "state": "held",
+   "commits": "",
+   "hold": "Filed out of #449's pass 2. Not a live defect -- a fragility. Needs a design answer rather than a fix.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "none -- the condition for the defect is not currently met, by measurement.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "A pass-2 seat named the smallest undetected mutation: swap #449's latch class from SH4_VAL_RTCSRINT to SH4_VAL_RCR1INT. It CONDITIONED the claim correctly -- it matters only 'if an earlier RCR1 complaint with an OVERLAPPING BIT' suppressed the RTCSR one.\n\nMEASURED: the mutant scores 10/10 against the shipped detector. But the bit sets are DISJOINT -- RCR1 CIE|AIE = 0x18, RTCSR CMIE|OVIE = 0x42 -- and sh4_val_first keys on BITS, so a shared class slot cannot suppress anything. *** THE MUTANT IS EQUIVALENT, NOT SURVIVING, and that is a different diagnosis from 'the detector is weak'. ***  The seat's condition is simply not met.\n\n*** WHAT IS WORTH KEEPING IS THE FRAGILITY. ***  Nine classes now share one `val_reported[cls][inst]` array, and correctness of the class assignment is currently guaranteed by nothing except that no two classes' bit sets overlap. Renumber one header constant, or add a tenth class that shares bits with an existing one, and a wrong class assignment becomes a SILENT suppression of a real diagnostic -- with no row able to see it, because while the sets are disjoint there is nothing observable to assert.\n\nCandidate answers for a round to weigh: a compile-time assertion that the classes' bit domains are disjoint; or making the class a property of the register rather than a hand-written argument at each call site.",
+     "grade": "CONFIRMED",
+     "ev": "measured, panel_20260821_211546"
     }
    ]
   }
