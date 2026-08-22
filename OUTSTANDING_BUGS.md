@@ -6021,6 +6021,114 @@ exactly how the memory-mapped UTLB windows at `0xf6000000`/`0xf7000000` behave �
 substantially bigger probe than any in this tree, and it is honest to say so rather than to
 imply the oracle was the obstacle.
 
+### `landiskdisk` — SCOPED and measured. Cheap, zero-edit, and a harder blocker than filed.
+
+*** THE FOUR BLOCKED ROWS ARE NOT MERELY UNDRIVEN — THEY ARE STRUCTURALLY UNREACHABLE. ***
+`dev_wdc.c:461-468` returns from `wdc_command()` **before the opcode switch** when no IDE
+image exists. Measured at rung 3, one guest `mov.b` into the ATA command register at
+`0xb400000e`, real SH-4 decode, unmodified `-E landisk`:
+
+| opcode | no disk | with an IDE disk |
+|---|---|---|
+| `0xE0` STANDBY | `[ wdc: command 0xe0 drive 0, but no disk image ]` | `[ wdc: WARNING! Unimplemented command 0xe0 … ]` |
+| `0xE7` FLUSH | same no-disk line | same `Unimplemented` line |
+| `0xEC` IDENTIFY | same no-disk line | `[ wdc: IDENTIFY drive 0 ]` |
+
+**And the no-disk arm sets `int_assert = 1`** — the *opposite* of `wdcnoirq`'s symptom. A
+diskless witness would have measured the wrong thing and looked green.
+
+#### The change is ZERO-EDIT for the probes, which is the part worth knowing
+
+`sh4_pcic_probe.py:227`'s shared `session()` already places `extra` before the kernel, so a
+new probe attaches a disk with **no edit to that line at all**:
+
+```python
+P.write_arm(0xb400000e, 0xe0, "E0", kw, op=0x2100,
+            extra=["-d", "i:/…/landisk-wd0-63M.img"])
+```
+
+That matters because **one `session()` is shared by eleven artefacts** — the `sh4_val`,
+`sh4_chcr`, `sh4_rtcsr`, `sh4_sci` and `sh4_tlbda2` probes plus their five witnesses. None
+of them acquires a dependency on an image file existing.
+
+For the boot rig, `drive_guest.py:84` takes `"-d", "R:" + IMAGES + "/landisk-wd0-63M.img"`.
+`R:` for the reason `images.md` already gives for luna88k. `i:` is *redundant* on landisk —
+`get_default_disk_type_for_machine()` omits landisk from the SCSI list, so a bare `-d`
+already yields IDE — but keep it for explicitness. The `prefix_d` gap at `diskimage.c:1763`
+does not bite unless someone spells `di:`.
+
+#### The image must be created, and CYLINDER-ALIGNED
+
+```
+dd if=/dev/zero of=_images/landisk-wd0-63M.img bs=512 count=129024   # 66,060,288 B
+```
+
+Non-floppy geometry is heads=16, spt=63 → 516,096 B per cylinder, and advertised capacity
+rounds **up**. Measured: a plain 64 MiB image (131,072 blocks) advertises **132,048** — 976
+phantom blocks that read zero and refuse writes, which is the `#416` residual showing up
+again. 129,024 advertises exactly 129,024, and the guest agrees:
+`wd0: … 63MB, 128 cyl, 16 head, 63 sec, 129024 sectors`.
+
+**Avoid 737280 / 1228800 / 1474560 / 2949120 bytes exactly** — measured, a 1.44M image with
+a bare `-d` becomes a FLOPPY and is invisible to `wdc`.
+
+#### Risk to the eleven green probes: MEASURED NIL, with a negative control
+
+Eight probes and five witnesses, run with and without a disk against one **pinned** binary:
+every row **byte-identical**. And the control that makes that a measurement rather than a
+no-op: pointing the same argv at a *nonexistent* image collapses `sh4_pcic` to **3/38 FAIL**,
+so the argument really does reach gxemul.
+
+**The boot rig also passes with a disk** — `BOOT_REACHED=1`, `VALUES=SH7751R,42`,
+`VERDICT=PASS`, all eight `gate_hygiene` distress patterns still 0 — which refutes the
+2026-08-19 panel's "trap" prediction *for the rig as it stands*, because its oracle is
+markers and values rather than a transcript diff. Honest limit: **n=1** on the disk boot.
+
+One real transcript delta: unmapped byte writes to `paddr=0x1400002c` go 6 → 12 and
+**interleave into guest text** — `wd0 at wdc0 chan[ memory WRITE… ]nel 0 drive 0:`. Any
+future marker must survive that splitting.
+
+#### What each blocked row then needs
+
+* **`wdcstandby` — cheapest, and the anchor.** With a disk `0xE0` reaches `default:` and
+  emits its `Unimplemented command` line; a rung-3 witness is one store. A rung-4 boot
+  witness needs `MAKEDEV`+`newfs`+`halt -p`, because the current rig conversation stops
+  short: a plain boot drives **14 command writes over 7 opcodes** (`0xEC 0xF5 0x10 0x91 0xC6
+  0x20 0xC4`) and **zero** without a disk. A prior panel line — *"`-d i:` does not replay
+  `0xE0`"* — is measured **TRUE**; that seat's 10-opcode figure is the full-lifecycle number
+  and its first seven reproduce exactly.
+* **`wdcnoirq` — a rung-3 oracle now EXISTS and its mutant kill is MEASURED.**
+  *** INTERRUPTS ARE SUPPRESSED WHILE SINGLE-STEPPING *** (`cpu_dyntrans.c:206`,
+  `if (!single_step)`), so a `step`-based PC oracle cannot see delivery at all — every arm
+  reads "no". **Free-running works**: `sr=0x40000000` (IRQ10's level is 5, hardcoded at
+  `cpu_sh.c:255-258`), `vbr` in RAM, a `bra .` self-loop after the store, a breakpoint at
+  `VBR+0x600`, then `continue`. Clean build: RECAL → delivered; `0xE0` with a disk → not
+  delivered. Deleting `INTERRUPT_ASSERT(d->irq)` from `dev_wdc.c:113` flips the RECAL row to
+  not-delivered while leaving `0xE0` unchanged — **a measured kill of the exact escape
+  `wdcoracle` names**, needing no offline harness.
+* **`wdcflood`** — 100 guest stores of `0xE7` give **100** lines with a disk and **0**
+  without; host alive throughout. A one-line `warned_*` latch matches `#337`'s three
+  existing ones. **Sibling worth its own row: the NO-DISK arm floods identically** (100 `but
+  no disk image` lines) through `debug()` — invisible free-running at verbosity 0, visible in
+  every cold-debugger probe.
+* **`idesync`** — lowest value of the four. `0xE7` is defined at `wdcreg.h:130` and never
+  referenced; no OpenBSD 7.6 path issues it, and a `dd`-through-`/dev/rwd0c` attempt failed
+  because the ramdisk has no node. Reachability stays where the earlier seat left it.
+
+### `landiskaux` — open, NEW, and adjacent to `wdcnoirq`
+
+**The wdc device-control register is unmapped on landisk.** `dev_wdc.c:1056` places
+alt-status/device-control at `addr + 0x206` under a machine switch covering MACPPC, HPCMIPS
+and IQ80321 — **not landisk**. OpenBSD writes `0x1400002c` via `obio_iomem_write_1` and it
+lands nowhere: 6 unmapped writes diskless, 12 with a disk. **So the guest's nIEN and SRST
+are no-ops today**, which bears directly on `wdcnoirq`'s interrupt behaviour.
+
+### `imagesmd` — records only
+
+`regress/images.md`'s landisk section still says *"the rig deliberately sends no input"*,
+which `#293` fixed; `gate_crossfamily.sh:186-192` already annotates it as having been untrue
+for far longer than it was true.
+
 ### `shsweep` — the exhaustive manual audit, ranked. Several items are LIVE.
 
 *** ~250 SuperH architectural claims graded against the two real manuals, 2026-08-22, at

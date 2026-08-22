@@ -771,7 +771,19 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
 - est/ and GXEMUL-SEC differ by exactly 5 named files + SEC-only `dev_ne2000.c`; any
   other file must land byte-identical in both. Commit only GXEMUL-SEC files.
 - Debugger `dump`/`examine` do NOT route through device handlers — read device state with
-  guest loads via `step`. Instruction-combination work needs FREE-RUNNING execution: the
+  guest loads via `step`.
+- *** A SINGLE-STEPPING PROBE CANNOT OBSERVE INTERRUPT DELIVERY, EVER. *** `cpu_dyntrans.c:204-206`
+  reads `/* Do not cause interrupts while single-stepping. It is so horribly annoying. */`
+  followed by `if (!single_step) {`. **Every SH probe in this tree single-steps**, so none of
+  them can see an interrupt arrive — a step-based oracle reads "not delivered" on a correct
+  build and on a mutant alike, which is the vacuous shape in its purest form. This is why
+  `sh4dmacie` was mis-ranked for weeks as needing "a new capability": the EXPEVT/INTEVT
+  registers were readable by an ordinary guest load all along (`0xff000024`/`0xff000028`, served
+  by `dev_sh4.c`); what was missing was a probe SHAPE, not emulator support.
+  **The shape that works, measured:** free-running with `sr=0x40000000`, `vbr` pointed into
+  RAM, a `bra .` self-loop after the triggering store, a breakpoint at `VBR+0x600`, then
+  `continue`. Interrupt levels are hardcoded (IRQ10 is level 5 at `cpu_sh.c:255-258`), so
+  IMASK must be low enough to admit the one under test. Instruction-combination work needs FREE-RUNNING execution: the
   #340 two-pass loop driver, breakpoint AFTER the sequence, instruction tracing OFF
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the
