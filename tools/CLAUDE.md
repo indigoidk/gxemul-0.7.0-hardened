@@ -846,12 +846,26 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   (nothing in `memory_rw` or device dispatch consults `single_step`), and **tick functions
   run under stepping too** — `machine.c:726-728` is
   `ticks_till_next[te] -= single_step ? 1 : N_SAFE_DYNTRANS_LIMIT;`, so they still fire, just
-  one tick at a time. So: **anything observable in the ASSERT path is visible to a cheap
-  step-based probe; only DELIVERY needs the free-running recipe above.** The case that
-  forced the distinction is `cpu_sh.c:312-316`, whose `exit(1)` sits in the assert path — the
-  host simply dies under `step`, and a scoping seat caught the main loop about to build the
-  full free-running rig for it because this bullet said "interrupts" where it meant
-  "delivery". Instruction-combination work needs FREE-RUNNING execution: the
+  one tick at a time.
+  *** AND THAT IS STILL NOT THE WHOLE RULE — corrected AGAIN the same day, by a panel seat,
+  after the paragraph above had already been written into the carrier and a witness designed
+  on it. VERIFY BEFORE REUSING EITHER HALF. *** A tick function RUNS under stepping but does
+  no work if what it consumes is produced by a HOST TIMER: `debugger.c:800` calls
+  `timer_stop()` "while interacting with the user", and the step command returns at
+  `:835-836` **before** `timer_start()` at `:840`, so `timer_add`/SIGALRM callbacks are
+  stopped for the entire `step N`. `sh4_timer_tick()` therefore never runs, `DEVICE_TICK`
+  finds `timer_interrupts_pending == 0`, and nothing asserts.
+  > **THE RULE, BY ITS DISCRIMINATOR:** a step-based probe sees an assert that is
+  > **SYNCHRONOUS** — a device handler reached inside the guest's own load or store. It does
+  > NOT see one that depends on a host-timer callback, however much the tick loop appears to
+  > run. Ask *"what produces the thing the tick consumes?"* — if the answer is `timer_add`,
+  > the probe must free-run.
+  The case that forced the first correction was `cpu_sh.c:312-316`, whose `exit(1)` sits in
+  the assert path; the case that forced the second was the WITNESS for that same defect,
+  where the TMU route is a host-timer route and only the `testsh` IPI route is synchronous.
+  **Three passes over one sentence, each narrower than the last — the general lesson is that
+  "runs under stepping" and "does its work under stepping" are different claims, and this
+  file conflated them twice.** Instruction-combination work needs FREE-RUNNING execution: the
   #340 two-pass loop driver, breakpoint AFTER the sequence, instruction tracing OFF
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the
