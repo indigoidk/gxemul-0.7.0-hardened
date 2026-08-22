@@ -5854,6 +5854,44 @@ which is the exact failure this list exists to prevent.
 | `strad` | held | Filing the three mutant shapes NAMED, not implied, is the doctrine's FILE arm done properly. |
 | `wdcstandby` | in work | Real (every powerdown issues it), small (accept + status + IRQ). Same wdc round, same witness vehicle. |
 
+### `detectorescapes` — open, MEASURED, ranked
+
+*** SEVEN ESCAPES, BUILT AND MEASURED AGAINST FOUR SHIPPED DETECTORS ON 2026-08-22. ***
+Found by the measuring seat when it was fired on four review stages that had run 8-of-9
+without it. Fourteen mutants built, thirteen measured: seven escapes, four deaths, one
+provably equivalent, one that would not compile.
+
+**One was fixed in-round and is not in this list**: `C-M3` moved a `return;` inside the
+latch guard at `sh4_chcr`'s RS arm — two characters, 18/18, and it RE-REACHED the `exit(1)`
+that `#448` removed, on the second store of the same word. That is vacuity-floor clause (b),
+so L2 licensed the in-round fix (row `L0`, measured: clean 19/19, mutant 18/19). One wrong
+record was corrected the same way (`dev_sh4.c:159`, L4).
+
+**The rest are coverage debt, in the seat's own ranking:**
+
+| # | escape | detector score | what it admits |
+|---|---|---|---|
+| 1 | `S-M3` delete `net_generate_unique_mac` (`machine_sgi.c:97`) | 10/10 | The guest is handed an **uninitialised-stack MAC**. Green because the string and the bytes agree *with each other* — the check is RELATIVE and nothing pins arg5. Needs an ABSOLUTE row. |
+| 2 | `A-M2` `uint64_t` → `uint32_t` at `arcbios.c:707` | 2/2, **zero warnings** | A 64-bit ARC peer pointer stored with its high word zeroed — the round's own headline class, worsened. |
+| 3 | `C-M1` `SH4_VAL_DMACSM` → `SH4_VAL_DMACDM` (`dev_sh4.c:634`) | 18/18 | One identifier, a copy-paste between adjacent identical blocks. Both arms' only unmodelled encoding is 3, so both keys collide exactly. **TS and SM have no latch row at all.** |
+| 4 | `R-M4` whole-register latch key | 10/10 | The repeat-flood the latch exists to prevent, breaking the "reported once" contract the diagnostic asserts. |
+| 5 | `R-M3` joint growth into `RTCSR_OVF` | 10/10 | An unpinned accept-side bit, and the *more* realistic growth: OVF/OVIE is an adjacent flag/enable pair. Severity low — the guard only prints. |
+
+**The class statement is worth more than any instance.** `arcbiosubsan`'s census pins
+**text**; its unstated gap is **text-preserving semantic change** — the declaration types of
+`buf` and of the destinations — which is neither "a rewrite that changes the statement" nor
+"a statement not in the table". No further regex closes it; it needs a type assertion or a
+behavioural row on a 64-bit ARC path. The flagship batch had just ruled the frozen-table
+form correct for idiom classes *within stated conditions*; this names a condition it did
+not state.
+
+**And two measured deaths are recorded because they are evidence too.** `R-M2` (an early
+`return` in `sh4_timer_tick`) scores 10/10 on its own probe — blind — and the SIBLING
+offline row in `diff_sh4_tmu.c` catches it, so that two-detector split is verified rather
+than asserted. `S-M1` (a shrunk `malloc`) reddens its gate but **not for the reason under
+test**: gcc caught it at compile time and glibc `_FORTIFY_SOURCE` killed the process before
+`arcbios_init` ran, so the allocation size is outside that detector's field of view.
+
 ### `floodclass` — held
 
 **A guest that loops on a rejected operation can burn host CPU through an unlatched

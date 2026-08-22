@@ -287,7 +287,7 @@ else
     #  that the latch DISTINGUISHES channels, so L3 was added.  And R1 had R2's exact
     #  defect, fixed at R2/R3 in the same session and not carried across -- with a comment
     #  left behind claiming it was covered.  A pass-2 seat found that one.
-    check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 18
+    check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 19
 fi
 
 # ------------------------------------------------------------------ #449 RTCSR refresh

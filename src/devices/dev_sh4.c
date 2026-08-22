@@ -156,10 +156,20 @@ enum {
  *  enable bits and called exit(1) -- about nine milliseconds later, at 110 Hz.  Every
  *  SH-4 probe in this tree observes the STORE SITE, so all of them were blind to it.
  *
- *  *** IT NEEDS ITS OWN CLASS AND MUST NOT REUSE SH4_VAL_RCR1INT. ***  That class is the
- *  nearest neighbour -- also "an interrupt enable this device does not model" -- and
- *  sharing it would make an earlier RCR1 complaint silence RTCSR, and the reverse.  A
- *  review seat named the collision before it was written.
+ *  *** IT NEEDS ITS OWN CLASS AND MUST NOT REUSE SH4_VAL_RCR1INT -- BUT THE REASON THIS
+ *  COMMENT ORIGINALLY GAVE WAS FALSE, and a measuring seat refuted it on 2026-08-22. ***
+ *  It said sharing the class "would make an earlier RCR1 complaint silence RTCSR, and the
+ *  reverse".  It would not, TODAY: RCR1's latch operand is `idata & (CIE|AIE)`, so it is
+ *  one of {0x08, 0x10, 0x18}, while RTCSR's is `bsc_rtcsr & (CMIE|OVIE)`, one of {0x02,
+ *  0x40, 0x42}.  Those sets are DISJOINT for every guest input, so `fresh = bits &
+ *  ~reported` can never interfere and the mutant that shares the class is EQUIVALENT --
+ *  built and measured at 10/10.
+ *
+ *  The CONCLUSION stands and the class stays separate, on the honest ground: the two
+ *  operands are disjoint only by the accident of which bits these two registers happen to
+ *  use, nothing enforces it, and a class shared on that basis becomes a silent collision
+ *  the first time either mask grows.  That is a real reason; the original was not, and
+ *  this project has already recorded what happens to a wrong reason -- it gets reused.
  */
 	SH4_VAL_RTCSRINT,		/*  RTCSR: refresh interrupt enables  */
 /*

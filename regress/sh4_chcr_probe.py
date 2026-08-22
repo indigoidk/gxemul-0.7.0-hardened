@@ -80,7 +80,7 @@ ST = {1: 0x2100, 2: 0x2101, 4: 0x2102}    # mov.b/w/l r0,@r1
 VAL_RE = re.compile(r"\[ sh4: DMA channel \d+: [a-z ]+ \d+ not implemented"
                     r" -- transfer declined\.  \(once per encoding\) \]")
 
-EXPECT_ROWS = 18
+EXPECT_ROWS = 19
 
 rows = []
 
@@ -240,6 +240,32 @@ def main():
     #  correct latch.  TS 2-byte (0x20) IS a subset of 4-byte (0x30), so writing the wide
     #  one first hid the mutant at 15/15.  Narrow first, wide second: the second store
     #  carries bit 4 the first lacks, and the mutant has to speak.
+    #  ---- L0: THE SAME WORD TWICE, AND IT IS A SAFETY ROW, NOT A LATCH ROW ------------
+    #  *** MEASURED 2026-08-22: WITHOUT THIS ROW, TWO CHARACTERS RESTORE A GUEST-REACHABLE
+    #  HOST DEATH AND THIS FILE STILL SCORES 18/18. ***  Move the `return;` at the RS
+    #  default arm INSIDE the `if (sh4_val_first(...))` body -- one brace pair -- and the
+    #  FIRST store still diagnoses and returns, while the SECOND takes the LATCHED path,
+    #  which prints nothing and now falls through to the `cause_interrupt` exit(1) that
+    #  #448 removed.  Measured: alive=False, "TODO: sh4 dmac interrupt" present.
+    #
+    #  Every R row stores ONCE, so they only ever exercise the FRESH path; the latched
+    #  path had no coverage at all.  L1/L2/L3 store twice but with DIFFERENT words, so
+    #  they check which KEY the latch uses -- not what happens after it suppresses.  This
+    #  row exists for the suppressed path itself, which is why it uses one identical word.
+    #
+    #  It is the same defect as the `return`->`break` variant the docstring already pins,
+    #  DEFERRED BY ONE STORE, and it re-reaches the removed exit(1) -- vacuity-floor
+    #  clause (b), found by the measuring seat against the SHIPPED file.
+    v = CHCR_IE | CHCR_TD | (1 << 8)            # RS=1, unmodelled; IE and TD set
+    buf, alive, st = two_stores(v, v, SH4_CHCR0, "L0")
+    d = diags(buf)
+    row("L0 SAFETY: the SAME word twice -- host ALIVE on the suppressed second store",
+        st and alive and len(d) == 1,
+        "alive=%s lines=%d %s" % (alive, len(d), d),
+        "alive with exactly ONE line.  The second store is silenced by the latch, so a "
+        "`return` moved inside the latch guard falls through it into the exit(1) this "
+        "round removed -- and no single-store row can see that")
+
     buf, alive, st = two_stores(
         CHCR_DM | RS_ACCEPTED | (2 << 4) | CHCR_TD,
         CHCR_DM | RS_ACCEPTED | (3 << 4) | CHCR_TD, SH4_CHCR0, "L1")
