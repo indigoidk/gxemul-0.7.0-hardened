@@ -6129,6 +6129,247 @@ are no-ops today**, which bears directly on `wdcnoirq`'s interrupt behaviour.
 which `#293` fixed; `gate_crossfamily.sh:186-192` already annotates it as having been untrue
 for far longer than it was true.
 
+### `sh4prio0` — open, WITNESSABLE, and worse than the sweep ranked it. One guest store, unpreventable.
+
+`src/cpus/cpu_sh.c:312-316` ends the host process when any interrupt is asserted at priority 0:
+
+```c
+	if (prio == 0) {
+		/*  Interrupt not implemented? Hm.  */
+		fatal("[ SH interrupt 0x%x, prio 0 (?), aborting ]\n", irq_nr);
+		exit(1);
+	}
+```
+
+**The comment is a wrong record in its own right: nothing is unimplemented.** Priority 0 is a
+documented, guest-selectable, RESET-DEFAULT state. Quoted verbatim, and corroborated four
+separate ways in the same manual:
+
+> "Each interrupt has a priority level (16-0) ... **When level 0 is set, the interrupt is
+> masked and interrupt requests are ignored.**" — §19.2, `_scratchpad/sh7750_hardware.txt:39886`
+
+> "**IPRA to IPRC are initialized to H'0000** and IPRD is to H'DA74 by a reset."
+> — §19.3.1, `:40192`
+
+So **every on-chip source is priority 0 out of reset**, and the model's own init agrees:
+`cpu_sh.c:204-218` sets `intc_iprd`, the INTPRI/INTMSK words and comments *"All others are
+zero"*, then bakes that into the array at `:220`.
+
+#### TWO ROUTES, and the second is the one that changes the ranking
+
+**Route A — `-E landisk`, ordinary driver ordering.** Enable the TMU0 underflow interrupt
+(`TCR0 = 0x0020` — and note it PASSES `#447`'s guard, because `TCR_UNIMPLEMENTED` is `0x02DC`
+and `TCR_UNIE` is `0x0020`, not in the mask), set TCOR0/TCNT0, start it with `TSTR = 1`, and
+never touch IPRA. The host timer underflows, `dev_sh4.c:585` asserts, `prio = (0 >> 12) & 0xf
+= 0`, and the process dies. A guest that enables before prioritising is doing something
+perfectly ordinary.
+
+*** Route B — `-E testsh`, ONE STORE, AND NO GUEST WRITE CAN PREVENT IT. ***
+`machine_test.c:98-99` wires the **entire test-machine interrupt tree** to
+`SH4_INTEVT_IRQ15` (`0x3e0`, array index 31). `sh_update_interrupt_priorities()`'s IRQ loop
+(`cpu_sh.c:255`) is bounded `i <= SH4_INTEVT_IRQ14`, so index 31 is **never assigned** — and
+extending the loop would not help, because the formula `15 - ((i - IRQ0)/0x20)` gives
+`15 - 15 = 0` for that very line. `dev_irqc.c:185` defaults to all interrupts enabled, so one
+store to `0x110000a0` (`DEV_MP_IPI_ONE`) reaches `dev_mp.c:206` → `dev_irqc.c:63` → the prio-0
+kill, synchronously, inside the store instruction.
+
+**In practice: the SH test machine's interrupt controller cannot be used at all** — any
+interrupt it delivers ends the emulator. All three line numbers checked by hand.
+
+#### *** THE WITNESS IS CHEAP, AND THE REASON CORRECTS THIS PROJECT'S OWN RULE ***
+
+The carrier said a stepping probe cannot observe interrupts. **The exact word is DELIVERY.**
+`cpu_dyntrans.c:204-206` guards the exception DISPATCH; this `exit(1)` sits in the **assert**
+path, upstream of it. And asserts reach it while stepping by two routes: a device handler
+asserts synchronously inside the guest's own store, and **tick functions run under stepping
+too** — `machine.c:726-728` is `ticks_till_next[te] -= single_step ? 1 : N_SAFE_DYNTRANS_LIMIT`.
+
+So the host simply dying IS the observable, and rows P1-P3 need no `vbr`, no handler, no
+breakpoint and no `continue`. The carrier bullet has been corrected. *A scoping seat caught
+the main loop about to build the full free-running rig for a defect that a `step` would show.*
+
+Probe `regress/sh_intprio_probe.py`, rung 3, on unmodified `-E landisk`, importing `session()`
+/ `write_arm()` / `row()` from `sh4_pcic_probe.py` rather than copying them — `gate_hygiene.sh`
+pins the count of the three `#392` readiness idioms across `regress/*.py`, so a copy silently
+needs that pin bumped.
+
+| row | pre-fix | post-fix |
+|---|---|---|
+| **P1 witness** — TCR0/TCOR0/TCNT0/TSTR stores, then `step 40000` | session dies, `[ SH interrupt 0x400, prio 0 (?), aborting ]` | alive and answering |
+| **P2 liveness** — known word to scratch, read back through the same decode | — | `0x5a5a5a5a` returns |
+| **P3 device signature** — read TCR0 back as `0x0020`, TSTR as 1 | — | proves the stores reached `DEVICE_ACCESS(sh4)`, not a hole |
+| **P4 accept row** — IPRA first, then the prologue; free-running; handler reads INTEVT | — | INTEVT reads `0x400`: selected AND delivered |
+
+**P4 is the de-escalation clause's cost, not future strengthening.** Enumerated from the diff,
+`prio == 0` is the only predicate that gated death, so exactly one accept row is owed.
+**Failability, per the accept-row rule:** the growth mutant is `if (prio <= 1) return;`. The
+store arm at `dev_sh4.c:2389` stores `intc_ipra = idata` **unmasked** and `cpu_sh.c:263-264`
+loads `(intc_ipra >> 12) & 0xf` straight into the predicate's operand, so a guest can place
+any value 0..15 there and guard-only growth is non-equivalent. Pin P4 at **prio 1**
+(`IPRA = 0x1000`) so it reddens. There is no latch operand, so the JOINT form does not exist
+here and guard-only is the least-observable non-equivalent form.
+
+#### THE FIX IS A BARE `return`, AND THE LATCH IDIOM DELIBERATELY DOES NOT APPLY
+
+The `sh4_val_first` family (`#438`/`#441`/`#443`/`#447`/`#449`) exists for one shape: *the
+guest asked for a feature this model does not implement, so say so once and decline.*
+**Priority 0 is not an unmodelled feature — it is a modelled state whose defined meaning is
+"masked".** A latched diagnostic would fire on correct guest behaviour, and `fatal()` has no
+`quiet_mode` early-out (`debugmsg.c:384-390`), so it could not even be silenced. Three more
+reasons: the latch array lives in `struct sh4_data`, a DEVICE, while this is `cpu_sh.c`, the
+CPU; the existing comment is itself false; and the manual prescribes silence.
+
+Leave `SH_INT_ASSERTED` set: masking blocks ACCEPTANCE, not the request.
+`sh_update_interrupt_priorities()` preserves that bit on purpose (`cpu_sh.c:250-253`) and the
+deassert rescan (`:343-351`) can never select a prio-0 entry, since `prio > int_level` is
+`0 > 0`.
+
+### `sh4irq15` — open, NEW, and it must be filed WITH `sh4prio0` because that fix hides it
+
+`machine_test.c:99` selects `SH4_INTEVT_IRQ15`, the one line number that is priority 0 by
+construction. **After `sh4prio0` lands, `-E testsh` goes from LOUDLY unusable to SILENTLY
+unusable**, which is strictly harder to notice — the de-escalation hazard in its literal form.
+One identifier: `SH4_INTEVT_IRQ14`. Separate file, separate device, so a separate round; the
+row exists now so the transition is not invisible.
+
+The manual supports the change independently: §19.2.2 (`:39913`) says an IRL value of 15
+"indicates **no interrupt request** (interrupt priority level 0)", and Table 19.5 (`:40071`)
+tops out at `H'3C0`. **There is no `H'3E0` source in the SH7750 at all.**
+
+### `sh4iprbcd` — open, NEW. Three registers are stored and never read.
+
+`sh_update_interrupt_priorities()` (`cpu_sh.c:246-281`) consults only `intc_ipra` and
+`intc_intpri08`. `dev_sh4.c:2394-2418` stores `intc_iprb`, `intc_iprc` and `intc_iprd` and
+calls the recompute, which ignores all three. **So WDT, REF, SCI, GPIO, DMAC, H-UDI and the
+IRL lines are priority 0 permanently, and IPRB/IPRC/IPRD writes are inert.** Latent only
+because nothing asserts those lines in-tree today — which is precisely the condition
+`sh4prio0` shows can change.
+
+### `sh4prioraise` — open, NEW. Raising a priority does not re-examine a pending request.
+
+`sh_update_interrupt_priorities()` rewrites the priority nibbles but never recomputes
+`int_to_assert` / `int_level`. A guest that asserts while masked and then raises IPRA gets
+nothing until the next assert/deassert edge. Pre-existing; `sh4prio0` makes it *reachable*
+rather than fatal, which is why it is filed in the same breath. The natural completion is to
+run the `:343-351` rescan at the end of the recompute — a second design question, its own
+round.
+
+### `sh4sqwrite` — open. PROMOTED, not new: the archived audit already named it, and `sqreadtype` makes it the sole carrier.
+
+*** THIS ROW IS NOT A DISCOVERY AND SAYING SO MATTERS. *** A records seat caught an earlier
+draft of this entry calling itself NEW. The gap is already named, one clause deep inside the
+archived audit block at the head of this file (`:441-443`): *"queue-filling stores under AT=1
+take the identity map and skip UTLB judgment entirely, where real hardware exception-judges
+SQ-area writes too."* What changes today is its RANK, not its existence — `sqreadtype` makes
+it the **sole carrier of SQ-page IPW and protection semantics**, so a clause buried in an
+archive is no longer the right home for it.
+
+**A sibling in the same archived bullet, from the same seat's sweep:** `:437-439` writes the
+SQMD address error as `EXPEVT_ADDR_ERR_ST`. Under read-type judgement the PREF path owes the
+**`_LD`** form (H'0E0). That parenthesis silently presumed the write direction, so it is part
+of this correction's sibling set and not a separate finding.
+
+*** 4.7.4 GIVES THE STORE-QUEUE TWO JUDGEMENTS AND THIS MODEL PERFORMS NEITHER CORRECTLY. ***
+The manual sentence covers both halves in one breath:
+
+> "**Write type exception judgment is performed for writes to the SQs**, and read type for
+> transfer from the SQs to external memory (PREF instruction), and a TLB miss exception,
+> protection violation exception, or initial page write exception is generated."
+> — SH7750 Hardware Manual Rev.7.00, §4.7.4, `_scratchpad/sh7750_hardware.txt:11744-11747`
+
+`sqreadtype` fixes the **read** half. The **write** half has no judgement at all:
+`sh_translate_v2p()` maps `0xe0000000..0xe3ffffff` identically and unconditionally, because
+that identity mapping is how an ordinary guest store reaches the modelled queue SRAM.
+
+**So the interim state this round deliberately ships is: an SQ page raises NO MMU fault of any
+kind.** Before `sqreadtype` the model raised IPW and protection faults at the PREF, which was
+the wrong instruction with the wrong semantics but did fault; after it, the read half
+*correctly cannot* raise IPW (§3.6.7 requires "a data access (write)") and the write half
+still never runs. A guest kernel tracking the D bit on an SQ page through PREF-time IPW loses
+that until this row lands. **Stated out loud so the next round is motivated by a named gap
+rather than rediscovered by a confused seat** — five panel seats reached that conclusion
+independently and one (codex) dissented, holding that C1 is an "unshippable intermediate
+state". Its dissent is recorded here rather than resolved: the round-scope rule decided this,
+not a majority.
+
+**Why it could not join `sqreadtype`'s round**, by the rule's own clauses — grok's table,
+which codex's own answer confirms against codex's own recommendation, because the witness it
+proposes IS a new oracle:
+
+| clause | the PREF flag (shipped) | the SQ-write judgement (this row) |
+|---|---|---|
+| witnessed | yes — the five R81 rows | **NO** — nothing in the tree witnesses a guest store to the window |
+| same class | 4.7.4 PREF half | 4.7.4 store half — related, not the same site |
+| same detector, no new oracle | re-pins existing rows | **new** sequence AND new observation. FAILS |
+
+**The smallest correct implementation, recorded now so the next round does not re-derive it**
+(three seats converged on the same shape): on a store into `0xe0000000..0xe3ffffff` with
+`MMUCR.AT` set, run `translate_via_mmu()` with `FLAG_WRITEFLAG` against the SQ virtual
+address; on fault, return without touching queue SRAM; on success **discard the translated
+PPN and deposit into the identity-mapped queue SRAM as today** — the PPN is PREF's
+destination, and writing it here would corrupt the destination at fill time. Do not apply the
+check when AT is clear, nor to PREF's own `PHYSICAL` reads of the queue.
+
+**The witness that would license it** (rung 3, and note it needs a REAL guest store — the
+existing `sq_seq()` fills the queue with debugger `put w`, which bypasses translation
+entirely and therefore cannot witness this): privileged, UTLB entry PR=11 D=0, a guest store
+into the SQ window. Pre-fix the word lands and no EXPEVT is set; post-fix `EXPEVT` reads
+`H'080` (`EXPEVT_TLB_MOD`) and the queue word is unchanged. Liveness control: a D=1 neighbour
+entry through the same decode. Same machine description, no `device_add`.
+
+**Fold in with it — the SQMD exception type, same semantic class.** 4.7.4's last sentence
+says that with `MMUCR.SQMD` set, user mode takes an **address error** even when translation
+succeeds. `X(pref_rn)` HAS that arm and raises `EXPEVT_RES_INST` (illegal instruction)
+instead. *A panel seat claimed the check was absent entirely; that is refuted — it is present,
+and only its exception code is wrong.* Already filed as `sh4sqexpevt`; cross-referenced here
+because one round should close both.
+
+### `sh4itlbpr` — open, NEW. One bit too wide, and SIX shipped rows require it.
+
+`dev_sh4_itlb_da1()` (`src/devices/dev_sh4.c:999-1001`) builds its field mask by reusing the
+**UTLB's** two-bit PR mask:
+
+```c
+uint32_t mask = SH4_PTEL_SH | SH4_PTEL_C | SH4_PTEL_SZ_MASK |
+    SH4_PTEL_PR_MASK | SH4_PTEL_V | 0x1ffffc00;
+```
+
+`SH4_PTEL_PR_MASK` is `0x00000060` — bits [6:5] (`include/thirdparty/sh4_mmu.h:54`). **The
+ITLB has only one PR bit.** Two independent manual sentences:
+
+> "In the data field, PPN is indicated by bits [28:10], V by bit [8], SZ by bits [7] and [4],
+> **PR by bit [6]**, C by bit [3], and SH by bit [1]."
+> — §3.7.2 ITLB Data Array 1, `_scratchpad/sh7750_hardware.txt:10035-10036`
+
+> "There is only one PR bit, corresponding to the upper of the PR bits in the UTLB."
+> — §3.4.2 ITLB Configuration, `:9402`
+
+Union of the documented fields: `0x1ffffc00 | 0x100 | 0x90 | 0x40 | 0x08 | 0x02` =
+**`0x1ffffdda`**. The model uses `0x1ffffdfa`. The difference is exactly **bit 5**, which is
+reserved in ITLB data array 1 with an undefined read value. Both directions are affected: the
+write path stores it (`:1060`) and the read path returns it (`:1076`).
+
+*** SEVERITY IS LOWER THAN THE SWEEP RANKED IT, AND THE REASON IS WORTH KEEPING: NO
+TRANSLATION DECISION DEPENDS ON THE BIT. *** Traced rather than assumed. `itlb_lo` IS live —
+`memory_sh.c:113-122` scans the ITLB first for instruction accesses via the negative-index
+hack — but the instruction arm tests only `if (!(pr & 2))`, i.e. bit 1 of the extracted
+field, i.e. **bit 6**, the real PR bit. Data accesses start at `i_start = 0` and never reach
+the ITLB entries at all. So bit 5 in `itlb_lo` is inert everywhere: storable, readable, and
+without effect.
+
+**The live cost is therefore the ORACLE, and it is the same shape as `sqreadtype`.** `#452`
+strengthened these rows to EQUALITY precisely to make them falsifiable, and the value they
+were pinned to is one the manual does not license — so **six rows now REQUIRE the emulator to
+return a bit the hardware leaves undefined**: probe `A1`/`A3`/`A4i`/`R3`/`O` and witness `C1`,
+all against `ITLB_MASK = 0x1ffffdfa` (`regress/sh4_tlbda2_probe.py:71` and the witness).
+
+**Two detectors in one family now pin the model's behaviour rather than the architecture's**
+(this and gate 10's `sq at1 clean`), which is the pattern to watch for, not the individual
+bit. Fix under the ORACLE-CORRECTION RULE: re-pin the six rows to `0x1ffffdda` FIRST, measure
+the committed build RED, then narrow the device mask. Returning 0 for a reserved bit is a
+legitimate reading of "undefined"; modelling it as storage is a fiction that a probe then
+enforced.
+
 ### `shsweep` — the exhaustive manual audit, ranked. Several items are LIVE.
 
 *** ~250 SuperH architectural claims graded against the two real manuals, 2026-08-22, at
