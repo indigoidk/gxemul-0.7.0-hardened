@@ -5779,6 +5779,165 @@ outside the sweep's view. Filed with that reason rather than papered over with a
 check — this project replaced `sgi_eaddr_probe.py`'s source-text census for being exactly that
 kind of substitute.
 
+### `sh4tlbda2` — held
+
+*** A DEVICE ANSWERED FOR EIGHT MEGABYTES IT COULD NOT SERVICE, AND ENDED THE HOST THERE. ***
+`dev_sh4.c`. Both TLB data-array devices register `0x01000000` -- SIXTEEN megabytes -- and
+each handler opened with `if (relative_addr & 0x800000) { fatal(...); exit(1); }`. That bit
+is EIGHT megabytes: the upper half of the range the device itself claimed. The guard sat
+above the `writeflag` test, so a load and a store both died.
+
+MEASURED on an unmodified `-E landisk`, one guest access each:
+
+```
+mov.l @r1,r2   r1 = 0xf3800000  -> alive=False  "sh4_itlb_da1: TODO: da2 area"
+mov.l @r1,r2   r1 = 0xf7800000  -> alive=False  "sh4_utlb_da1: TODO: da2 area"
+mov.l r0,@r1   r1 = 0xf3800000  -> alive=False  same (direction does not matter)
+same store+load at 0xf3000000   -> alive=True,  readback EXACTLY 0x1ffffdfa
+same store+load at 0xf7000000   -> alive=True,  readback EXACTLY 0x1ffffdff
+```
+
+**The discriminator is a single address bit** -- sharper than any earlier SH-4 round here.
+The controls are the SAME device at the SAME width, and they assert EQUALITY with the value
+each device's own mask folds `0xffffffff` to. Those two values DIFFER, so neither control
+can be satisfied by the other device.
+
+**FIXED and gate-green** (R21 round block): diagnostic kept and latched, `exit(1)` dropped,
+the access consumed with a defined result -- reads produce 0, stores discarded, and
+explicitly NOT serviced as array 1, because `e` comes from the same masked bits and
+aliasing would let a guest probing array 2 corrupt real translation entries.
+
+Held open, not closed: both stages carry a deliberate `fable5` omission per the owner's
+standing batching directive, and section H refuses a CLOSED row with a HELD stage.
+
+#### Assessed and NOT changed, with the measurement
+
+* **`e` is bounded across the whole window.** `SH4_ITLB_E_MASK = 0x300 >> 8` gives 0..3
+  against a 4-entry array; `0x3f00 >> 8` gives 0..63 against 64. Neither mask contains bit
+  23, so the bound holds for all 16 MB and not merely the serviced half. No second defect.
+* **The `aa` windows (`0xf2000000`, `0xf6000000`) do NOT share the defect.** Also 16 MB,
+  but their handlers carry no guard and no `exit(1)`. Their upper halves alias the lower
+  ones silently. That is a different and much milder question -- an aliasing read, not a
+  host death -- so it is NOT filed as a defect: nothing measured says the aliasing is
+  wrong, and with no usable SH-4 manual in this tree nothing here can say what bit 23 of
+  an `aa` window is supposed to mean.
+
+  **`sh4aaalias` WAS FILED HERE AND IS WITHDRAWN — the manual says both handlers are
+  right.** The reasoning was that `da1` treats bit 23 as selecting a second array while
+  `aa` ignores it, so one must be wrong. A real SH7750 Hardware Manual was obtained the
+  same day (`_scratchpad/sh7750_hardware.txt`, Rev.7.00 REJ09B0366-0700) and its P4 map
+  settles it: `H'F200 0000`–`H'F2FF FFFF` is the instruction TLB **address** array as ONE
+  undivided 16 MB region, while `H'F300 0000`–`H'F3FF FFFF` holds data arrays **1 AND 2**,
+  split at `H'F380 0000`. The address windows are not split; the data windows are. The
+  emulator matches the hardware at both.
+
+  **Kept as a record rather than deleted, because the shape of the mistake is worth
+  having:** an asymmetry between two handlers is evidence of a question, not of a defect,
+  and this one was one download away from being answered.
+
+### `sh4fmtcast` — open, a class, not yet started
+
+`dev_sh4.c` passes an `(int)`-cast argument to an `%x`-family conversion at **eighteen**
+call sites. `%x` requires `unsigned int`; passing `int` is a varargs type mismatch. Found
+by a pass-2 seat on `#452`'s two new sites, then grepped for siblings per the standing
+rule — and the siblings are the point:
+
+```
+:413 :648 :649 :650 :651 :733 :766 :957 :1129 :1448 :1453 :1914 :2205 :2286 :2576 :2593
+:2602 :2605
+```
+
+Most predate this project's work (`:648`-`:651`, `:1448`, `:1453`, `:2205`, `:2593`,
+`:2602`, `:2605` are upstream or early). `fatal()` is declared `void fatal(const char *fmt,
+...)` in `misc.h:262` with **no format attribute**, so no compiler warns and the build is
+clean at zero warnings.
+
+**Filed as a class rather than fixed in-round, on the `#450` precedent.** That round found
+fourteen `buf[3] << 24` sites, four already cast correctly, and did all ten remaining
+*together* — because fixing a subset of an idiom leaves the file inconsistent and the next
+reader unable to tell which spelling is intended. Fixing 2 of 18 here would be exactly that
+half-fix.
+
+Nothing observable is at stake on any ABI this tree builds for — `int` and `unsigned int`
+are the same width and pass identically — so this is correctness-by-the-standard, not a
+measurable defect. It needs no witness; it needs one mechanical sweep and a census row.
+
+### `sh4pclock` — open, MEASURED, not started
+
+*** A GUEST STORE ENDS THE HOST ON `hpcsh`, AND THE SITE READS LIKE IT CANNOT BE REACHED. ***
+`dev_sh4.c:1813-1817`, in the `SH4_TCR0` write handler:
+
+```c
+			if (cpu->cd.sh.pclock == 0) {
+				fatal("INTERNAL ERROR: pclock must be set"
+				    " for this machine. Aborting.\n");
+				exit(1);
+			}
+```
+
+"INTERNAL ERROR ... Aborting" is the wording of a construction fault, and that is why this
+site survived four rounds of SH-4 `exit(1)` work — it does not look guest-drivable. It is.
+
+**The chain, all four links checked:**
+
+1. `cpu_sh.c:200` adds the device from the **CPU**, not from any machine:
+   `if (cpu->cd.sh.cpu_type.arch == 4) cpu->cd.sh.pcic_pcibus = device_add(machine, "sh4");`
+   — unconditional for every SH-4, so the TCR handler exists on every SH-4 machine.
+2. Only **two** machines ever assign `pclock`: `machine_dreamcast.c:51` (50000000) and
+   `machine_landisk.c:81` (33333333). A tree-wide grep finds no third.
+3. `machine_hpcsh.c` sets `machine->cpu_name = strdup("SH7750")` at `:89`, and `SH7750` is
+   **arch 4** (`cpu_sh.h:63`). So hpcsh constructs an SH-4, gets the device, and never sets
+   `pclock`.
+4. MEASURED, one guest instruction, on an unmodified `-e jornada680`:
+
+```
+GXemul> r1=0xffd80010          <- SH4_TCR0, sh4_tmureg.h:54
+GXemul> r0=1
+GXemul> put w 0x8c010000, 0x00092102
+GXemul> pc=0x8c010000
+GXemul> step 2
+8c010000:  2102        mov.l	r0,@r1	; r1 = 0xffd80010
+INTERNAL ERROR: pclock must be set for this machine. Aborting.
+```
+
+Both hpcsh subtypes are affected (`jornada680`, `jornada690`) — the `pclock` assignment is
+absent from the whole file, not from one subtype.
+
+**This is NOT a sibling of `sh4tlbda2` and must not be folded into that round.** Different
+semantic class: `da2` is a device answering for an address range it cannot service, fixed by
+declining the access; this is a machine constructing a device without a parameter the device
+requires. It also needs a different oracle — `-e jornada680` rather than `-E landisk` — so it
+fails the reopening rule on both arms.
+
+**The fix is a design question, not an obvious edit,** which is why this is filed rather than
+done: setting `pclock` in `machine_hpcsh.c` invents a clock rate for hardware nobody here has
+documentation for (there is no usable SH-4 manual in this tree, and the Jornada's actual
+peripheral clock is not derivable from the source). Declining the TCR write instead keeps the
+model honest but silently changes timer behaviour. The panel should choose.
+
+**THREE machines are affected, not one — `testsh` reproduces as well.** `machine_test.c:512`
+also names `SH7750` and `default_test()` never assigns `pclock`. That matters more than one
+more machine: `testsh` is a machine THIS HARNESS drives, so the defect sits inside the
+project's own test surface.
+
+```
+GXemul> pc=0x80010000
+GXemul> step 2
+80010000:  2102        mov.l	r0,@r1	; r1 = 0xffd80010
+INTERNAL ERROR: pclock must be set for this machine. Aborting.
+```
+
+*** THE FIRST testsh ATTEMPT WAS VOID AND IS RECORDED HERE BECAUSE IT NEARLY READ AS A
+CLEAN RESULT. *** It reused landisk's scratch address `0x8c010000`; testsh has its RAM at
+`0x00000000`, so the emulator answered `memory READ: from non-existant paddr=0x0c010000` and
+the store never executed. Nothing died, and "testsh does not reproduce" would have been the
+obvious and wrong conclusion. Rule 4 — *did it fail for the reason under test?* — is what
+caught it; the retry at `0x80010000` and at `0x00010000` both reproduce.
+
+**And the CONTROL is what makes the attribution sound:** the identical store on `-E landisk`,
+which does set `pclock`, prints `[ sh4 timer 0 clock set to 2083333.312500 Hz ]` and runs on.
+Same instruction, same address, same width — only the machine differs.
+
 ### `sh4valrows` — held
 
 *** Nine measured mutants score 33/33 against `#447`'s shipped detector, seven of them real

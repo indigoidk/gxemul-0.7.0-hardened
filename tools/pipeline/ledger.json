@@ -15407,6 +15407,159 @@
     }
    ],
    "fable_queue": "HELD for the batch per the owner's standing deprioritisation -- a DELIBERATE omission on both stages, never a seat failure. The two questions are in `hold`."
+  },
+  {
+   "id": "sh4pclock",
+   "title": "sh4pclock  One guest TCR store ends the host on hpcsh AND testsh -- the sh4 device is added by the CPU, but only 2 of 4 SH machines set pclock",
+   "state": "open",
+   "commits": "",
+   "hold": "",
+   "witness": "probe:manual cold-debugger session on unmodified `-e jornada680` (rung 3). Reproduced on -e jornada680 AND -E testsh. One `mov.l r0,@r1` with r1 = 0xffd80010 (SH4_TCR0) prints 'INTERNAL ERROR: pclock must be set for this machine. Aborting.' and the process ends. Not yet a committed probe -- the existing sh4 probe harness hardcodes `-E landisk`, so a committed witness needs the machine to be a parameter.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "FOUND BY CHECKING A SITE THAT READS AS UNREACHABLE, at the owner's explicit request. 'INTERNAL ERROR ... Aborting' is construction-fault wording, which is why four rounds of SH-4 exit(1) work passed over it.\n\nThe chain has four links and all four were checked rather than assumed: the device is added from cpu_sh.c:200 by the CPU (so every arch-4 CPU has the TCR handler, whatever the machine); only machine_dreamcast.c:51 and machine_landisk.c:81 assign pclock; machine_hpcsh.c:89 names SH7750, which is arch 4; and one guest store then ends the host on -e jornada680.\n\n*** THE FIX IS NOT OBVIOUS AND THAT IS WHY THIS IS FILED. *** Setting pclock in machine_hpcsh.c invents a clock rate for hardware this tree has no documentation for; declining the write keeps the model honest but silently changes timer behaviour. A panel should choose, not the finder.\n\nTHREE machines, not one: testsh reproduces too (machine_test.c:512 also names SH7750), which puts the defect inside the harness's own test surface. The first testsh attempt was VOID -- it reused landisk's scratch address and the store never executed, so 'testsh does not reproduce' was the obvious wrong conclusion; rule 4 caught it. The control is the same store on landisk, which prints '[ sh4 timer 0 clock set to 2083333.312500 Hz ]' and runs on."
+    }
+   ]
+  },
+  {
+   "id": "sh4tlbda2",
+   "title": "sh4tlbda2  Both TLB data-array devices claimed 16 MB and ended the host on the upper 8 MB -- one guest access, and the discriminator is ONE ADDRESS BIT",
+   "state": "held",
+   "commits": "",
+   "hold": "Fix and detector SHIPPED; gate 10 PASS at 62 checks run singly; build rc=0 zero warnings. Held open, not closed: both stages carry a deliberate fable5 omission and section H refuses a CLOSED row with a HELD stage. The question is in the fable5 cells.\n\nTWO THINGS THIS ROUND MEASURED THAT ARE WORTH MORE THAN THE FIX:\n\n1. M1 -- dropping the declined read's memory_writemax64 -- was predicted by THREE pass-1 seats to hand the guest stale host bytes. Built, and it does NOT: memory_rw.c:484-491, correction #95 in this same tree, already zeroes the caller's buffer before every device read as the root-cause fix for that exact class. Measured identical in five contexts. It carries NO row, because a row that cannot fail is decoration. NOTE the precision a seat added: that is equivalence UNDER the current universal pre-zeroing invariant, not equivalence in principle.\n\n2. A REAL SH7750 HARDWARE MANUAL was obtained mid-round by owner directive and immediately REFUTED a finding this round had filed (sh4aaalias). The loop argued the `aa` handlers ignoring bit 23 while `da1` treats it as an array selector meant one must be wrong; the P4 map says both are right, because the address windows are undivided 16 MB and the data windows hold arrays 1 AND 2 split at the 8 MB mark. The manual also confirms the entry is selected by bits [9:8] and that array 2 holds SA and TC -- DIFFERENT fields from array 1 -- which is exactly why declining is right and aliasing would have been wrong.",
+   "witness": "probe:regress/sh4_tlbda2_witness.py (rung 3, 7 rows, unmodified -E landisk; 7/7 pre-fix and 4/7 post-fix, the three differences being exactly the three kill rows -- an ITLB load, a UTLB load, and an ITLB store, since the guard sits above the writeflag test). Its controls were STRENGTHENED mid-round: they asserted INEQUALITY against three wrong values, which any fourth wrong value passes, and a seat said so. They now assert EQUALITY with the value each device's own mask folds 0xffffffff to -- 0x1ffffdfa and 0x1ffffdff, which DIFFER because the UTLB mask adds WT|D -- so neither row can be satisfied by the other device.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "entries": [
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Prescribed the shipped design almost exactly: return 1, zero-fill reads, drop stores, and one class with two explicit SITE bits -- while naming the hazard that made the site bits necessary. `relative_addr & 0x800000` is the SAME non-zero value at both sites, so a key derived from it lets whichever site complains first silence the other for the device lifetime. It also refused to assert what it could not check: it said plainly it had not verified the array bounds or the `aa` handler bodies, and named the exact checks required -- including the stricter form (check through r < 0x01000000, and whether either entry mask contains 0x00800000) that the loop then ran."
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Worked the whole thing from source with line citations and got the disposition right, but its most useful contribution was a prediction that turned out FALSE and was built anyway. Separately confirmed the registration lengths and the guard's position above the writeflag test."
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "*** READ THE DISPATCH ARMS INSTEAD OF THE SUMMARY, AND CORRECTED A CLAIM THE ROUND WAS ABOUT TO SHIP. *** The brief and an early comment draft said `return 0` raises an architecture-specific bus-error exception. It does not: memory_rw.c's failure block has MEM_MIPS and MEM_M88K arms ONLY, `MEM_SH` appears nowhere in the file, and cpu_sh_instr.c's X(load_l_rm_rn) then returns WITHOUT assigning the destination register -- leaving it stale, under a comment of its own that claims an Exception. The conclusion (do not return 0) survived and got stronger; the reason was wrong. It also reached the #95 pre-zeroing conclusion by reading, which the loop reached by measuring, and prescribed the same disposition: write the zero anyway so the arm does not depend on a guarantee two files away."
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Verified the C line by line and was the seat that questioned the WITNESS rather than the fix: its controls asserted INEQUALITY against three wrong values, which any fourth wrong value passes -- a mutated mask included. Correct, and the controls were rebuilt to assert EQUALITY with the value each device's own mask folds 0xffffffff to. Also flagged the `(int)` cast feeding `%08x` as a principle-level nit that changes nothing observable, which is exactly how it was then dispositioned."
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Packet-fed and explicit about it. Reached the return-1 / zero-fill / drop-stores answer independently and refused to guess about the `aa` handlers whose bodies it had not been given -- naming that as the check to run rather than inferring from window size."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Gave the cleanest statement of why `return 0` is wrong even before the SH-specific correction landed, and caught an overclaim in the BRIEF itself: 'an unbounded key is a flood' is false, a full-byte key is bounded at 256; the objection is bounded-but-excessive amplification. Also refused to rule on the `aa` windows without their bodies."
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "Named the mutant three seats converged on -- dropping the declined read's memory_writemax64 -- and was the first to state the reasoning precisely: `odata = 0` alone is not enough because the caller's buffer is what the guest receives. The prediction was MEASURED FALSE (see the row's hold), but the reasoning was sound C and the disposition it implied (write the zero explicitly) is what shipped."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: DEFECT-IN-FIX, the only one this session, and TWO of its findings were measured true at 10/10. `relative_addr & 0x800100` -- one character -- falsely declines array-1 entry 1 while every declined probe sits at exactly +0x800000 and every accept probe at 0 or +0x400000. And `== 0x800000` narrows the guard so the REST of array 2 silently aliases array 1. It prescribed both killing rows (+0x7ffffc accept, +0x800100 decline) and they work. It also caught the round's third overclaim: R1/R2 were NAMED 'array 1 answered ... in the same session' when that value lands in r2 and is overwritten by the da2 load before anything stores it -- a name, not a check."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: SOUND, and the seat that got the least out of this pass -- its pass-1 prediction had already been built and refuted, and it raised no new mutant. Recorded as such rather than padded: a seat that agrees and adds nothing is a real datum about the diff, not a failure."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and it found the STRUCTURAL half: R3, RPT and A3 were ALL built on the ITLB site, so the UTLB copies of three already-known mutants had no coverage. Its sharpest instance is a WRITE-ONLY fallthrough -- `return 1` moved inside the MEM_READ arm -- which is read-clean and therefore invisible to every read row, while a declined store lands in utlb_lo[e] for the entry array 1 just used. It said plainly it had not built these. All three were built and all three died on the rows added for them. *** THIS IS #451'S PASS-2 LESSON MIRRORED: there the FIRST site was under-exercised, here the second. A two-site round builds its rows on whichever site it wrote first, and that is now twice. ***"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and it GENERALISED past every other seat's instance. The guard is a bitwise-OR predicate, so single-bit growth into ANY of bits 8..22 is as realistic an edit as G1's growth into bit 22 and just as invisible -- and bits 8..13 are the ENTRY SELECTOR, so such a growth silently refuses REAL translation entries. Its own instance (`& 0x802000` at UTLB, declining entries 32-63) was built and died. It also gave the cheap general fix -- one accept row per device whose offset has every probeable low bit SET, tripping on growth into any of them at once -- which is what A4i/A4u are, and it caught that 'G1 discharges the de-escalation clause' was itself an overclaim: G1 discharged one bit position at one site, and there are two predicates."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: SOUND. Confirmed the fix shape against the family and raised no new mutant; its pass-1 asks were already built in by then."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: SOUND. Its 238 KB answer was almost entirely reasoning-in-the-open rather than findings; recorded as answered-without-new-material."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-22",
+     "note": "VERDICT: SOUND. Confirmed the corrected MEM_SH analysis and the equivalence finding; raised no new mutant."
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "",
+     "date": "2026-08-22",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure. Seven scriptable seats answered this stage.\n\n*** THE QUESTION THIS STAGE IS HELD FOR (per that seat's own process note: a stage held FOR a seat should carry the question it is held for): *** this round's pass 2 found the SAME structural hole as #451's -- rows built on one site of a two-site fix -- and that is now twice in consecutive rounds. Is 'a two-site round builds its rows on whichever site it wrote first' worth a mechanical check (e.g. a detector whose rows never mention the second site's base address fails), or is it judgement that the ask-again cap already covers?",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-22",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure. Seven scriptable seats answered this stage.\n\n*** THE QUESTION THIS STAGE IS HELD FOR (per that seat's own process note: a stage held FOR a seat should carry the question it is held for): *** this round's pass 2 found the SAME structural hole as #451's -- rows built on one site of a two-site fix -- and that is now twice in consecutive rounds. Is 'a two-site round builds its rows on whichever site it wrote first' worth a mechanical check (e.g. a detector whose rows never mention the second site's base address fails), or is it judgement that the ask-again cap already covers?",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
+    }
+   ]
   }
  ]
 }

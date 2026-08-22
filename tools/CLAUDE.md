@@ -666,12 +666,35 @@ with no new oracle. **More witnesses create more candidate ROUNDS, never bigger 
 `pdftotext -layout` — grep that), `idt_r30xx.pdf`, `mc88100.pdf`, `mips-iv.pdf`,
 `mips32_volII.pdf`, `mips64_volII.pdf`, `mips_r4000.pdf`.
 
-**THERE IS NO USABLE SH DOCUMENTATION** (checked 2026-08-13): `sh4_manual.txt` is ONE
-BYTE and `sh4_err.txt` records zero extracted characters. So an SH round must cite the
-SOURCE and measurements only — never an SH manual, and never a reconstructed-from-memory
-page number. This is the same trap the ARM manual's absence set before 2026-08-11, and it
-is the reason #357/#362/#365 shipped citations that came from model output. If SH work
-needs the architecture, obtain a real copy first.
+*** SH DOCUMENTATION NOW EXISTS — OBTAINED 2026-08-22 BY OWNER DIRECTIVE, AND THE FIRST
+THING IT DID WAS REFUTE A FINDING THIS PROJECT WAS ABOUT TO FILE. ***
+
+`_scratchpad/sh7750_hardware.txt` (2.4 MB, 50,853 lines, from `sh7750_hardware.pdf`,
+Renesas SH7750/SH7750S/SH7750R Hardware Manual Rev.7.00, REJ09B0366-0700, 1074 pages) and
+`_scratchpad/sh4_programming.txt` (661 KB, from `sh4_programming.pdf`). Extracted with
+git-bash `/mingw64/bin/pdftotext -layout` — the same tool that made `ddi0100i.txt`; note
+WSL Gentoo has NO poppler, so run the extractor from git-bash.
+
+**The old note said there was none, and that note was load-bearing for four SH rounds.**
+It is kept below in substance because its CAUTION still holds even though its FACT does
+not: cite only what you have READ in these files. `#357`/`#362`/`#365` shipped DDI 0100I
+page numbers that came from panel LLM output rather than a local manual, and the same
+temptation exists here — a web SEARCH RESULT summarising a manual is not the manual, and
+on 2026-08-22 a search summary and the real page agreed only by luck.
+
+**WHAT IT SETTLED IMMEDIATELY** (`#452`, and it went AGAINST the main loop's reasoning):
+the loop had argued that `dev_sh4.c`'s `aa` handlers ignoring address bit 23 while the
+`da1` handlers treat it as selecting a second array meant "one of those is wrong". The
+manual says both are right — P4 gives `H'F200 0000`–`H'F2FF FFFF` to the instruction TLB
+ADDRESS array as ONE undivided 16 MB region, while `H'F300 0000`–`H'F3FF FFFF` holds
+instruction TLB data arrays **1 AND 2**, split at `H'F380 0000`. Same for `H'F600 0000`
+(UTLB address, undivided) versus `H'F700 0000` (UTLB data 1 and 2, split). §3.7.3 also
+confirms the entry is "selected by bits [9:8]", matching `SH4_ITLB_E_MASK`, and that array
+2 holds SA and TC — **different fields from array 1**, which is why `#452` declines those
+accesses rather than aliasing them onto array 1.
+
+A filed item (`sh4aaalias`) was withdrawn on that reading. **Obtaining the manual cost one
+download and refuted a wrong finding in the same session it was raised.**
 
 **The ARM manual was ABSENT until 2026-08-11.** Rounds #357/#362/#365 cite DDI 0100I page
 numbers that came from **panel LLM output, not a local manual** — the load-bearing ones were

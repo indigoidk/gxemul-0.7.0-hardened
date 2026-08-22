@@ -4271,6 +4271,179 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R21 (#452) — a device answered for eight megabytes it could not service
+
+`src/devices/dev_sh4.c`. Both TLB data-array devices are registered for **16 MB**:
+
+```c
+	memory_device_register(machine->memory, "sh4_itlb_da1", SH4_ITLB_DA1,
+	    0x01000000, dev_sh4_itlb_da1_access, d, DM_DEFAULT, NULL);
+	memory_device_register(machine->memory, "sh4_utlb_da1", SH4_UTLB_DA1,
+	    0x01000000, dev_sh4_utlb_da1_access, d, DM_DEFAULT, NULL);
+```
+
+and each handler opened by ending the host process on `relative_addr & 0x800000` — **8 MB,
+the upper half of the range the device itself had claimed.** The guard sat above the
+`writeflag` test, so a load and a store both died.
+
+*** THE DISCRIMINATOR IS A SINGLE ADDRESS BIT, WHICH IS SHARPER THAN ANY EARLIER SH-4
+ROUND HERE. *** `#443` needed a particular PCIC transaction, `#447` a particular register
+value, `#448` a particular field encoding, `#451` an entire clocked-in byte. Here the same
+device at the same width answers at `0xf3000000` and died at `0xf3800000`.
+
+Fixed on the family pattern: keep the diagnostic, latch it, drop `exit(1)`, and consume the
+access with a defined result — reads produce 0, stores are discarded. Explicitly NOT
+serviced as array 1: `e` comes from the same masked bits, so aliasing would let a guest
+probing array 2 read and **corrupt real translation entries**.
+
+### Three questions the round answered by measuring instead of asking
+
+* **`e` is bounded, so there is no second defect.** `SH4_ITLB_E_MASK = 0x300 >> 8` gives
+  0..3 against a 4-entry array; `0x3f00 >> 8` gives 0..63 against 64. Neither mask contains
+  bit 23, so the bound holds across the whole 16 MB window and not merely the lower half —
+  which is the stricter form a seat asked for.
+* **The `aa` windows do NOT share the defect.** Also 16 MB, but their handlers carry no
+  guard and no `exit(1)`; they alias silently. Two-site round, not four.
+* **The latch key must not come from the address.** A seat warned, before the edit existed,
+  that `relative_addr & 0x800000` is the SAME value at both sites, so whichever complained
+  first would silence the other for the device lifetime. Two explicit site bits instead;
+  ceiling two lines per device lifetime.
+
+### The mutant that refuted three seats
+
+All three pass-1 seats that proposed a mutant proposed the same one: drop the
+`memory_writemax64(cpu, data, len, 0)` call on the declined-read path, and the guest gets
+stale host bytes. **It was built, and it does not.**
+
+`memory_rw.c:484-491` — **correction `#95` in this same tree** — already zeroes the caller's
+buffer before every device read, described there as the *"root-cause fix for the uninit-read
+class"*. Measured in five contexts: a bare read; one primed by a non-zero array-1 read; one
+with the destination register pre-set to `0xdeadbeef`; one primed through RAM; one primed
+through the **other** TLB device. All returned `00000000` on the mutant and on the fix
+alike.
+
+So the call stays — a handler should not lean on a guarantee enforced two files away — but
+it carries **no detector row**, because a mutant measured equivalent cannot be killed and a
+row written as though it could is decoration. **Both the source comment and the detector
+docstring had asserted the stale-bytes claim as fact, and both were corrected.** The three
+seats were reasoning correctly about C; they simply could not know this tree had already
+closed the class four hundred corrections earlier.
+
+### And a second reason was wrong in the same way
+
+An earlier draft of the comment said `return 0` "raises an architecture-specific bus-error
+exception". A pass-1 seat read the arms rather than the summary: `memory_rw.c`'s failure
+block has `MEM_MIPS` and `MEM_M88K` only, and **`MEM_SH` appears nowhere in that file**. On
+SH nothing is raised — the access returns `MEMORY_ACCESS_FAILED` and `cpu_sh_instr.c`'s
+`X(load_l_rm_rn)` (`:739`) returns without ever assigning the destination register, leaving
+it stale, under a comment of its own that claims an Exception.
+
+The conclusion survived and got stronger — a silently stale register is worse than a clean
+fault — but the reason was wrong, and this project has already recorded what happens to a
+wrong reason: *it gets reused.* The kill table then confirmed the corrected mechanism from
+the other side, because M3 (`return 0`) reddens R1 by leaving the register holding the
+earlier array-1 value, which is what a stale register looks like and not what an exception
+looks like.
+
+### The detector, and the row that carries the de-escalation obligation
+
+`regress/sh4_tlbda2_probe.py`, 15 rows, wired into gate 10.
+`regress/sh4_tlbda2_witness.py` asserts the PRE-FIX symptom and is deliberately ungated:
+**7/7 before, 4/7 after**, the three differences being exactly the three kill rows.
+
+**The witness's controls were strengthened mid-round after a seat called them weak, and it
+was right.** They had asserted *inequality* against three wrong values — which any fourth
+wrong value passes, a mutated mask included. They now assert **equality** with the value
+each device's own mask folds `0xffffffff` to, and the two DIFFER (`0x1ffffdfa` for ITLB,
+`0x1ffffdff` for UTLB, because the UTLB mask adds `WT|D`), so neither row can be satisfied
+by the other device.
+
+| mutant | result | rows that redden |
+|---|---|---|
+| V1/V2 `exit(1)` restored, each site | DIES | R1,R3,X,RPT / R2,X |
+| M1 `memory_writemax64` dropped | **EQUIVALENT** (see above) | — |
+| M2 early `return 1` dropped | DIES | R1,R3 |
+| M3 `return 0` instead of 1 | DIES | R1 |
+| M4 key derived from the address | DIES | X |
+| M5 latch guard removed | DIES | RPT |
+| M6 only the ITLB site fixed | DIES | R2,X |
+| M7 declined read returns `mask` | DIES | R1 |
+| C1 guard `& 0x800100` (ITLB) | DIES | A4i |
+| C2 guard `== 0x800000` (ITLB) | DIES | R4 |
+| K1 guard `& 0x802000` (UTLB) | DIES | A4u |
+| G1u growth at the UTLB site only | DIES | A4u |
+| W1 write-only fallthrough at UTLB | DIES | R3u |
+| M5u latch guard removed at UTLB only | DIES | RPTu |
+| G1 guard grown to `0xc00000`, JOINT | DIES | A3, A4i |
+
+### Pass 2 found the same shape as #451 did, mirrored — and then generalised past it
+
+**Six of those rows did not exist when the diff was reviewed.** Three seats found two
+independent holes, and the second one is a class rather than an instance.
+
+**The structural half is #451's lesson with the sites swapped.** R3, RPT and A3 were all
+built on the **ITLB** site, so the UTLB copies of three already-known mutants had no
+coverage — including a *write-only fallthrough* (`return 1` moved inside the `MEM_READ`
+arm) that is read-clean and therefore invisible to every read row, while a declined store
+lands in `utlb_lo[e]` for the entry array 1 just used. In #451 the FIRST site was
+under-exercised; here the second. **A two-site round builds its rows on whichever site it
+wrote first**, and that is now twice.
+
+**The general half is sharper.** The guard is a bitwise-OR predicate, so growth into ANY
+bit is as realistic an edit as G1's growth into bit 22 — and A3, sitting at `+0x400000`,
+trips on bit 22 and *only* bit 22. Three measured instances all passed ten rows: `&
+0x800100` and `== 0x800000` at the ITLB site, and `& 0x802000` at the UTLB site. The middle
+one is the nastiest — it declines nothing extra, it *narrows* the guard to one address so
+the rest of array 2 silently aliases array 1.
+
+**Bits 8–13 are the entry selector** (SH7750 manual §3.7.3: *"the entry is selected by bits
+[9:8]"*, six bits for the UTLB), so a growth into that span silently refuses **real
+translation entries**. The fix is one row per device at offset `+0x7ffffc` — bits 2..22 all
+set, entry 3 of the ITLB and entry 63 of the UTLB, both legal — which trips on OR-growth
+into any of them at once. `A4i` and `A4u` are those rows, and they killed four of the six
+new mutants between them.
+
+**"G1 discharges the de-escalation clause" was itself an overclaim, and a seat said so.**
+It discharged the clause for one bit position at one site. The obligation is per-predicate,
+and there are two predicates.
+
+### Two more of this round's own claims were measured false
+
+* R1/R2 were named *"array 1 answered 0x1ffffdfa in the same session"*. **It does not.**
+  The array-1 result lands in `r2` and the array-2 load overwrites it before anything
+  stores `r2` — so the value was never observed in those sessions. Two seats caught it
+  independently. The name now says what the row checks; A1/A2/O prove array 1 works, in
+  their own sessions.
+* *"M1 is equivalent"* is true only **under the current universal pre-zeroing invariant**.
+  Five measurements establish survival in five contexts, not equivalence in principle. If
+  `#95` were ever narrowed, the mutant would become live and this detector would not see
+  it.
+
+### And the manual arrived mid-round, which settled a question and refuted a finding
+
+By owner directive, a real **SH7750 Hardware Manual** (Rev.7.00, REJ09B0366-0700, 1074
+pages) was obtained and extracted to `_scratchpad/sh7750_hardware.txt`. It is the first SH
+documentation this project has ever had; the carrier's standing note said flatly that there
+was none.
+
+It confirmed the fix and **refuted a finding this round had already filed.** The loop had
+argued that the `aa` handlers ignoring bit 23, while the `da1` handlers treat it as
+selecting a second array, meant one of them must be wrong. §3.3.1's P4 map says both are
+right: `H'F200 0000`–`H'F2FF FFFF` is the instruction TLB **address** array as one
+undivided 16 MB region, while `H'F300 0000`–`H'F3FF FFFF` holds instruction TLB data arrays
+**1 and 2**, split at `H'F380 0000`. The `aa` windows are not split; the `da1` windows are.
+
+§3.7.3 also confirms two things the fix depends on: the entry is *"selected by bits [9:8]"*
+— matching `SH4_ITLB_E_MASK` — and array 2 holds **SA and TC**, which are *different
+fields* from array 1's PPN/V/SZ/PR/C/SH. That is precisely why declining is right and
+aliasing array 2 onto array 1 would have been wrong.
+
+`sh4aaalias` was withdrawn on that reading. **One download refuted a wrong finding in the
+same session it was raised** — which is the argument for the standing rule that an SH round
+must cite the source, and now may also cite this manual, but never a search result about it.
+
+Build rc=0, zero warnings. Gate 10 PASS, 62 checks (was 60), run singly.
+
 ## R20 (#451) — the first SH-4 host death a single store cannot reach
 
 `src/devices/dev_sh4.c`, `sh4_sci_cmd()`. Two `exit(1)` calls ended the HOST PROCESS on a

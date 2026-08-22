@@ -195,8 +195,26 @@ enum {
  *  with -q.
  */
 	SH4_VAL_SCICMD,			/*  SCI: command byte not implemented  */
+/*
+ *  #452: the two TLB data-array-2 sites.  Both `da1` devices are registered for
+ *  0x01000000 -- SIXTEEN megabytes -- and each handler ended the host process on
+ *  `relative_addr & 0x800000`, which is EIGHT megabytes: the upper half of an address
+ *  range the device itself claimed.  A single guest load or store there was enough.
+ *
+ *  *** ONE CLASS, TWO SITE BITS, AND THE KEY MUST NOT COME FROM THE ADDRESS. ***  The
+ *  offending quantity is `relative_addr & 0x800000`, which is the SAME non-zero value at
+ *  both sites -- so keying on it would let whichever site complained first silence the
+ *  other for the device lifetime.  A review seat named that collision before the edit was
+ *  written; it is the #451 M5 shape, one level up.  Two explicit site bits cannot alias.
+ *
+ *  Ceiling: TWO lines per device lifetime, whatever a guest accesses.
+ */
+	SH4_VAL_TLBDA2,			/*  ITLB/UTLB data array 2 not implemented  */
 	SH4_VAL_NCLASS			/*  count, by construction -- never assign it  */
 };
+
+#define	SH4_VAL_TLBDA2_ITLB		(1u << 0)
+#define	SH4_VAL_TLBDA2_UTLB		(1u << 1)
 /*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
 #define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
 
@@ -894,15 +912,58 @@ DEVICE_ACCESS(sh4_itlb_aa)
 
 DEVICE_ACCESS(sh4_itlb_da1)
 {
+	struct sh4_data *d = (struct sh4_data *) extra;
 	uint32_t mask = SH4_PTEL_SH | SH4_PTEL_C | SH4_PTEL_SZ_MASK |
 	    SH4_PTEL_PR_MASK | SH4_PTEL_V | 0x1ffffc00;
 	uint64_t idata = 0, odata = 0;
-	int e = (relative_addr & SH4_ITLB_E_MASK) >> SH4_ITLB_E_SHIFT;
+	int e;
 
+	/*
+	 *  #452: this ended the host process on one guest access.  What the model can
+	 *  honestly say is only what the code says: array 2 is not implemented.  So the
+	 *  access is CONSUMED with a defined result -- reads produce zero, writes are
+	 *  discarded -- rather than aliased onto array 1, which would let a guest probing
+	 *  da2 read and CORRUPT real translation entries through the shared `e`.
+	 *
+	 *  `return 1` and not 0, and the REASON is not the obvious one.  memory_rw.c:595
+	 *  turns a 0 into -1 and :603 raises an architecture-specific fault -- but that block
+	 *  has arms for MEM_MIPS and MEM_M88K ONLY.  `MEM_SH` appears nowhere in that file,
+	 *  so on this architecture nothing is raised: the access just returns
+	 *  MEMORY_ACCESS_FAILED, and cpu_sh_instr.c's load path (X(load_l_rm_rn), :739) then
+	 *  returns WITHOUT ever assigning the destination register, leaving whatever it held.
+	 *  Its own comment there claims an Exception, and no SH exception runs.
+	 *
+	 *  So `return 0` here would be worse than a fault, not equivalent to one: a silently
+	 *  stale register plus a debug() line that free-running at verbose 0 does not print.
+	 *  A review seat read the arms and the load path and corrected an earlier draft of
+	 *  this comment, which had asserted the bus-error outright.
+	 *
+	 *  The memory_writemax64() call is EXPLICIT rather than load-bearing, and saying so
+	 *  costs nothing while claiming otherwise would be false.  Three review seats
+	 *  predicted that dropping it hands the guest stale host bytes; that was MEASURED and
+	 *  it does NOT happen, because memory_rw.c:484-491 -- correction #95 -- already
+	 *  zeroes the caller's buffer before every device read, as the root-cause fix for
+	 *  exactly this class.  Five different contexts, including one that pre-set the
+	 *  destination register to 0xdeadbeef and one that primed the path through the OTHER
+	 *  TLB device, all returned 0 on the mutant and on the fix alike.
+	 *
+	 *  It stays because a handler should not depend on a guarantee enforced two files
+	 *  away, and because `odata = 0` alone genuinely would not be enough if #95 were ever
+	 *  narrowed.  But it carries NO detector row: a mutant measured equivalent cannot be
+	 *  killed, and a row that cannot fail is decoration.
+	 */
 	if (relative_addr & 0x800000) {
-		fatal("sh4_itlb_da1: TODO: da2 area\n");
-		exit(1);
+		if (sh4_val_first(d, SH4_VAL_TLBDA2, 0, SH4_VAL_TLBDA2_ITLB))
+			fatal("[ sh4: ITLB data array 2 (0x%08x) is not implemented"
+			    " -- reads return 0, writes are ignored.  (once) ]\n",
+			    (int) (SH4_ITLB_DA1 + relative_addr));
+		if (writeflag == MEM_READ)
+			memory_writemax64(cpu, data, len, 0);
+		return 1;
 	}
+
+	/*  Below the guard on purpose: array 2 accesses index nothing at all.  */
+	e = (relative_addr & SH4_ITLB_E_MASK) >> SH4_ITLB_E_SHIFT;
 
 	if (writeflag == MEM_WRITE) {
 		uint32_t old_lo = cpu->cd.sh.itlb_lo[e];
@@ -1054,15 +1115,26 @@ DEVICE_ACCESS(sh4_utlb_aa)
 
 DEVICE_ACCESS(sh4_utlb_da1)
 {
+	struct sh4_data *d = (struct sh4_data *) extra;
 	uint32_t mask = SH4_PTEL_WT | SH4_PTEL_SH | SH4_PTEL_D | SH4_PTEL_C
 	    | SH4_PTEL_SZ_MASK | SH4_PTEL_PR_MASK | SH4_PTEL_V | 0x1ffffc00;
 	uint64_t idata = 0, odata = 0;
-	int e = (relative_addr & SH4_UTLB_E_MASK) >> SH4_UTLB_E_SHIFT;
+	int e;
 
+	/*  #452: see the matching block in sh4_itlb_da1() above.  The SITE BIT differs and
+	    that is the whole point of the two-bit key -- one class, two sites, and neither
+	    can silence the other.  */
 	if (relative_addr & 0x800000) {
-		fatal("sh4_utlb_da1: TODO: da2 area\n");
-		exit(1);
+		if (sh4_val_first(d, SH4_VAL_TLBDA2, 0, SH4_VAL_TLBDA2_UTLB))
+			fatal("[ sh4: UTLB data array 2 (0x%08x) is not implemented"
+			    " -- reads return 0, writes are ignored.  (once) ]\n",
+			    (int) (SH4_UTLB_DA1 + relative_addr));
+		if (writeflag == MEM_READ)
+			memory_writemax64(cpu, data, len, 0);
+		return 1;
 	}
+
+	e = (relative_addr & SH4_UTLB_E_MASK) >> SH4_UTLB_E_SHIFT;
 
 	if (writeflag == MEM_WRITE) {
 		uint32_t old_lo = cpu->cd.sh.utlb_lo[e];

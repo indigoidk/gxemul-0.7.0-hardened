@@ -363,6 +363,44 @@ else
     check_min "sh4_sci: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$SCILOG")" 14
 fi
 
+#  #452: the two TLB data-array-2 sites.  Both `da1` devices are registered for SIXTEEN
+#  megabytes and each handler ended the host on `relative_addr & 0x800000` -- EIGHT
+#  megabytes, the upper half of a range the device itself claimed.  One guest load or
+#  store was enough, and the guard sat ABOVE the writeflag test so direction did not
+#  matter.  The discriminator is a single ADDRESS BIT, sharper than any earlier SH-4
+#  round here: the same device at the same width answers at 0xf3000000 and died at
+#  0xf3800000.
+#
+#  MEASURED KILL TABLE, 10 mutants: 9 die, 1 is EQUIVALENT.  Two are worth the lines:
+#    *  M1 -- dropping the declined-read's memory_writemax64() -- was predicted by THREE
+#       seats to hand the guest stale host bytes.  It does not, and the reason is in this
+#       tree: memory_rw.c:484-491, correction #95, already zeroes the caller's buffer
+#       before every device read.  Measured in five contexts, identical on both builds.
+#       It carries NO row, because a row that cannot fail is decoration.
+#    *  G1 -- the guard grown from 0x800000 to 0xc00000, with its latch operand widened
+#       jointly -- reddens A3 and NOTHING ELSE.  A1/A2 sit at offset 0 and cannot see it;
+#       A3 sits at +0x400000, bit 22 set, which is exactly the range such a growth starts
+#       refusing.  That is the de-escalation clause discharged by measured kill.
+DA2LOG=$LOGDIR/gate_sh4_tlbda2.log
+python3 sh4_tlbda2_probe.py "$PMAX" "$KERNEL" > "$DA2LOG" 2>&1 || true
+
+if ! grep -q "SH4TLBDA2_RESULT=" "$DA2LOG"; then
+    note "sh4_tlbda2 probe produced no result line; last lines follow"
+    tail -5 "$DA2LOG" | sed 's/^/       /'
+    check "sh4_tlbda2 probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$DA2LOG" | sed 's/^/       /'
+    check "sh4_tlbda2: a TLB data-array-2 access does not kill the host"           "$(grep -c 'SH4TLBDA2_PASS' "$DA2LOG")" "1"
+    check_min "sh4_tlbda2: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$DA2LOG")" 10
+fi
+
+#  sh4_tlbda2_witness.py is DELIBERATELY NOT RUN HERE -- same rule as the four below it.
+#  7/7 pre-fix and 4/7 after, the three differences being exactly the three kill rows
+#  (an ITLB load, a UTLB load, and an ITLB store).  Its two controls assert EQUALITY with
+#  the value each device's own mask folds 0xffffffff to -- 0x1ffffdfa and 0x1ffffdff,
+#  which DIFFER -- after a panel seat pointed out that the first draft asserted only
+#  INEQUALITY against three wrong values, which any fourth wrong value would have passed.
+
 #  sh4_sci_witness.py is DELIBERATELY NOT RUN HERE -- same rule as the three below it.
 #  8/8 pre-fix, 5/8 after, the three differences being exactly the three bytes that used
 #  to end the host (0x00, 0x80 and 0xb0).  0xb0 was NOT in the first draft of that witness:
