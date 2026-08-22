@@ -465,6 +465,59 @@ adjacency, and the existing "what is the smallest edit that breaks this and stil
 invocation already FINDS the instances. What was missing was never detection; it was
 DISPOSITION.
 
+> ### *** ACCEPT-ROW FAILABILITY — the companion rule, adopted 2026-08-21 after #449's accept
+> row was MEASURED VACUOUS. ***
+>
+> An accept-side row is **not discharged by existing** — it is discharged by a **MEASURED
+> KILL**. For each predicate the clause enumerates from the diff, build the smallest
+> **realistic JOINT** guard-growth mutant — widen the predicate **and** its diagnostic/latch
+> operand together, the way adjacent code actually evolves — and the accept row must REDDEN
+> under it. A row green under its own growth mutant is vacuous whatever the chosen bit's
+> legality.
+>
+> Choose the pinning value so a guest store can leave it **in the predicate's OPERAND**: read
+> the store arm, and cite its line in the row's comment. **Write-1-to-keep, write-to-clear,
+> read-only and never-set-by-device bits cannot carry an accept row.**
+
+**"Reaches the predicate's operand" is the checkable notion, and "the guest can produce it" is
+one level too shallow** — #449's guest *did* write CMF=1 at the interface; the store arm filtered
+it before the predicate ever saw it. The measured kill subsumes reachability, and it catches
+wrong-regex, wrong-register and wrong-width vacuities in the same row for free.
+
+*** THE WORD "JOINT" IS LOAD-BEARING AND COMES FROM A MEASUREMENT. *** #449's guard-only
+widening was measured **EQUIVALENT** — the latch argument still masked to the original bits, so
+nothing observable happened — and A1's kill only appears when guard and latch widen together.
+Without that word the rule bounces off the first predicate whose latch operand masks
+independently. Cost is one mutant per de-fatalised predicate, not per row (#448 = 4 builds,
+#449 = 1).
+
+> ### THE FOUR REASONS THAT LICENSE AN IN-ROUND FIX OF DETECTOR MATERIAL
+>
+> Everything else is FILED. Named so no round has to re-argue it:
+>
+> * **L1 — pre-ship construction.** The row is part of the deliverable still being built. A row
+>   measured vacuous before commit is unfinished, not a reopening. **The stopping rule governs
+>   findings against SHIPPED material only.**
+> * **L2 — floor breach.** The shipped detector fails vacuity-floor clause (a), (b) or (c) —
+>   replace in-round however late it is found.
+> * **L3 — undischarged obligation.** The row is the sole carrier of something the round OWES
+>   (a de-escalation accept row; the "shipped a detector" claim itself). A vacuous sole carrier
+>   makes the round's record false.
+> * **L4 — wrong record.** Prose or comments claiming coverage a measurement refutes.
+
+This resolves an apparent inconsistency: #447's escapes were FILED while #448's and #449's were
+fixed in-round. #447's were measured against a **shipped** detector sitting above the floor —
+coverage debt. #448's and #449's were caught **inside their own construction** (L1), and #448's
+`return`→`break` variant additionally re-reached the removed `exit(1)`, which is L2.
+
+**A disjointness assertion over the latch classes was REJECTED, on three measured grounds** — the
+class bit-domains overlap pervasively today, so the general form is unsatisfiable; separation
+rests on the array INDICES rather than on the constants, so the assert would guard the wrong
+invariant; and for the one disjoint pair the values are hardware register layouts that cannot
+legitimately change, so it could never fire. **The real hazard is a duplicate class ID**, and its
+zero-cost structural fix is converting the `SH4_VAL_*` defines to a C99 enum ending in
+`_NCLASS`, where duplicates are impossible by construction. Apply that when a tenth class arrives.
+
 This applies to the whole #438 / #441 / #443 / #447 family, and #447's own probe already *stated*
 the hazard in its constants block ("a mask pinned only from BELOW … cannot see a guard that
 GREW") while shipping no row for it. **The file knew. The rows just did not exist.**

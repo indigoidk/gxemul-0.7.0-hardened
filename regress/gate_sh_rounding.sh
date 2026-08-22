@@ -273,11 +273,20 @@ if ! grep -q "SH4CHCR_RESULT=" "$CHCRLOG"; then
 else
     grep -E "^  (ok|FAIL) " "$CHCRLOG" | sed 's/^/       /'
     check "sh4_chcr: no guest CHCR ENCODING kills the host"           "$(grep -c 'SH4CHCR_PASS' "$CHCRLOG")" "1"
-    #  16, and the floor is pinned because TWO rows were MEASURED VACUOUS during the
-    #  round.s own mutation run and had to be rebuilt, and a PASS-2 SEAT then found THREE MORE
-    #  `return`->`break` mutant printed one line either way; and L1's second store was a
+    #  *** THIS COMMENT WAS CORRUPTED BY A CARELESS sed AND SHIPPED THAT WAY. ***  A
+    #  flagship review found it: it said "16" against the floor of 18 one line below, "TWO
+    #  rows" against a record of five, "round.s" (the `.` in the pattern matched the
+    #  apostrophe), and it spliced two sentences into one that says nothing.  A wrong
+    #  record in a committed gate file, caused by editing prose with a regex.
+    #
+    #  What it should have said: the floor is 18, and FIVE rows were measured vacuous
+    #  across this round and rebuilt.  R2 carried the ACCEPTED resource select, so a
+    #  `return`->`break` mutant printed one line either way.  L1's second store was a
     #  BIT-SUBSET of its first, so a whole-register latch computed fresh==0 and stayed
-    #  silent.  Both scored a clean 15/15 before they were fixed.
+    #  silent.  R5 was byte-identical to R4.  R6 proves channel 3 REACHES the guard, not
+    #  that the latch DISTINGUISHES channels, so L3 was added.  And R1 had R2's exact
+    #  defect, fixed at R2/R3 in the same session and not carried across -- with a comment
+    #  left behind claiming it was covered.  A pass-2 seat found that one.
     check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 18
 fi
 

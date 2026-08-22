@@ -375,13 +375,27 @@ made guard growth self-announcing, so the detector shipping with the fix must pi
 of every predicate that used to gate death.* `#448` is the first round to owe that, and rows
 **A1–A4** are the attempt.
 
-**The question is whether they discharge the clause or merely gesture at it.** A1 asserts a fully
-legal CHCR runs with zero diagnostics; A2/A3/A4 vary one field at a time across its other legal
-encodings. Measured: widening the DM mask reddens A1, widening TS reddens A4. But no accept row
-covers the **RS** field — `RS=0x200` is the only accepted encoding, so "vary it to its other legal
-values" has no other values to vary to. **Is a guard with exactly one accepted encoding
-pinnable from above at all, or is the clause silent there?** That gap is real and is not recorded
-anywhere else.
+**ANSWERED 2026-08-21 by the flagship seat: A1–A4 substantially DISCHARGE the clause, and the
+"RS gap" recorded here was itself a WRONG RECORD.**
+
+*** This entry claimed "no accept row covers the RS field". That is FALSE, and the seat checked
+it against the file. ***  A1's value `CHCR_LEGAL` carries `RS_ACCEPTED` (0x200) and requires ZERO
+diagnostics, so narrowing or deleting `case 0x200:` makes the RS default print "resource select 2
+… declined" — which matches the probe's own regex, and A1 reddens. A guard with exactly one
+accepted encoding is the **easiest** to pin from above, not impossible: "a row per adjacent legal
+value" degenerates to the single row carrying the lone member, and that row exists. The other
+direction is pinned by R4/R5/R7.
+
+The correct statement, which replaces the wrong one: *no accept row **varies** RS, because its
+variation set is empty; A1 carries its only member.*
+
+**THE REAL RESIDUAL, found by reading every row: the accept side is pinned at CHANNEL 0 ONLY,
+uniformly across all four fields.** A1–A4 and X1 all write CHCR0; R6 and L3 reach channel 3 but
+are reject rows. So a channel-conditional narrowing of any accept arm — `case 0x200: if (channel
+== 0) break; else decline;`, the selector-guard family a reading seat named two rounds ago —
+**passes all 18 rows**. This is `#447`'s H1 hole recurring in the very file built to answer
+`#447`'s review. One row closes the instance axis for all four fields at once: CHCR3 =
+`CHCR_LEGAL`, expect silence. Above the floor, so FILED as `sh4chcraccept` rather than reopened.
 
 Also worth this seat's attention:
 

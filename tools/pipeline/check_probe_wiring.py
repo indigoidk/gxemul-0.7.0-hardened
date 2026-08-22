@@ -254,10 +254,22 @@ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def _refuse_duplicate_keys():
     with open(os.path.abspath(__file__), "r", encoding="utf-8", errors="replace") as fh:
         src = fh.read()
-    for name, start in (("MANIFEST", "MANIFEST = {"), ("EXEMPT", "EXEMPT = {")):
-        i = src.find(start)
-        if i < 0:
-            continue
+    #  *** AN ANCHOR THAT NO LONGER MATCHES IS ITSELF A SETUP FAULT, NOT A REASON TO SKIP,
+    #  AND THE FIRST VERSION OF THIS GUARD DID `continue`. ***  A flagship review MEASURED
+    #  the consequence: `MANIFEST =  {` -- one extra space, valid Python, invisible to a
+    #  reader -- makes a literal find() miss, the guard skips, and a planted duplicate key
+    #  runs GREEN.  That is this file's own thesis turned on itself: a fault in a guard does
+    #  not fail loudly, it stops guarding.  The regex tolerates whitespace, and a miss is
+    #  now reported rather than shrugged at.
+    for name in ("MANIFEST", "EXEMPT"):
+        m = re.search(r"^%s\s*=\s*\{" % re.escape(name), src, re.M)
+        if m is None:
+            print("PROBEWIRING_SETUP_FAULT  the %s literal could not be located in this"
+                  " file's own source." % name)
+            print("  The duplicate-key guard cannot run, and a duplicate would pass"
+                  " UNSEEN.  Fix the anchor, do not delete the check.")
+            sys.exit(2)
+        i = m.start()
         j = src.find("\n}", i)
         seen, dupes = set(), []
         for k in re.findall(r'^\s*"([^"]+)"\s*:', src[i:j], re.M):
@@ -275,8 +287,15 @@ _refuse_duplicate_keys()
 
 #  A python interpreter token.  Bare python/python3, or the $PY-style indirections other
 #  harnesses in this tree use.  Anchored so python3.12 and mypython do not match.
+#  *** THE TRAILING BOUNDARY IS LOAD-BEARING AND THE FIRST VERSION LACKED IT. ***  A
+#  flagship review MEASURED that `"$PYLINT" probe.py` scored as WIRING: the alternation
+#  had no boundary after the group, so ANY $PY-prefixed variable read as an interpreter
+#  and a linter invocation would have marked a probe wired.  That is the FALSE ACCEPT
+#  direction -- the one that silently stops demanding a gate.  Latent rather than live:
+#  no such variable exists in the battery today.  `$PYTHON` and `$PY` still match;
+#  `$PYLINT` and `$PYTEST` no longer do.
 INTERP_RE = re.compile(
-    r'"?\$\{?(?:PY|PY3|PYTHON|PYTHON3)\}?"?'
+    r'"?\$\{?(?:PY|PY3|PYTHON|PYTHON3)\}?"?(?![A-Za-z0-9_])'
     r'|(?<![\w./-])python3?(?![\w.-])'
 )
 
@@ -356,8 +375,33 @@ def exec_sites(regress, scripts):
             a = ASSIGN_RE.match(ln)
             if a and ".py" in a.group(2):
                 varmap[a.group(1)] = unquote(a.group(2))
+        #  *** HEREDOC BODIES ARE NOT CODE, AND COUNTING THEM IS A FALSE ACCEPT. ***  A
+        #  flagship review MEASURED it: an invocation-shaped line inside a
+        #  `cat <<'USAGE' ... USAGE` body scored as WIRING, so with the exemption removed
+        #  the checker printed GREEN over a genuinely unwired detector.  Usage text quoting
+        #  its own invocation is an entirely natural shape.  Latent rather than live -- every
+        #  `<<` site in the battery today is a data table or a python program body, none
+        #  carrying an interpreter plus a probe in body position -- but this is the
+        #  dangerous direction: it does not fail loudly, it stops demanding a gate.
+        #
+        #  Skipping is the CONSERVATIVE choice and it has a cost worth naming: a heredoc
+        #  that GENERATES a script the gate then runs is genuine wiring one level away, and
+        #  skipping the body reports it UNWIRED -- a false red, which a human then reads.
+        #  That is the right error to make.
+        body = set()
+        pend = None
         for no, ln in enumerate(lines, 1):
-            if ln.lstrip().startswith("#"):
+            if pend is not None:
+                body.add(no)
+                if ln.strip() == pend:
+                    pend = None
+                continue
+            h = re.search(r"<<-?\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?", ln)
+            if h and not ln.lstrip().startswith("#"):
+                pend = h.group(1)
+
+        for no, ln in enumerate(lines, 1):
+            if ln.lstrip().startswith("#") or no in body:
                 continue
             for m in INTERP_RE.finditer(ln):
                 if not CMDPOS_RE.match(ln[: m.start()]):
