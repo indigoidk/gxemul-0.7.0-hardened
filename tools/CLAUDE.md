@@ -418,6 +418,57 @@ halves land on different resources, and that is the whole point:
   **So: ONE full panel per ROUND, not one per pass.** Four panels in one afternoon exhausted
   every rate-limited seat and left two reviews resting on two seats each.
 
+## THE VACUITY FLOOR AND THE DE-ESCALATION CLAUSE (flagship adjudication, 2026-08-21)
+
+**"Weak earns its own round; vacuous does not get to ship" IS A RATIONALISATION UNTIL A FLOOR IS
+ATTACHED** — the adjudicating seat said so about the main loop's own call, and it was right:
+*weak* has no lower bound, so any detector that kills one mutant can claim it.
+
+> **THE FLOOR.** A detector is VACUOUS — replace it IN-ROUND — unless it (a) fails on the
+> pre-fix build, (b) fails on a **VERBATIM REINSTATEMENT of the removed defect at EVERY fixed
+> site**, and (c) fails on a null medium (a stale copy, a comment-only file — i.e. it carries
+> identity rows). Below the floor, the round's own claim to have "shipped a detector with the
+> fix" is a WRONG RECORD, which the stopping rule already fixes in-round.
+>
+> **Above floor, measured escapes are COVERAGE DEBT: FILE them**, with the escape list recorded,
+> ranked by what they would admit — and ranked BELOW live defects in the same file.
+
+The floor is not invented: it is what four earlier rounds already did. `sh4bcr`'s first detector
+passed a mutant reinstating the very host kill its round removed; `sh4pcicexit`'s passed the
+original kill verbatim; `pitflip`'s rewind had zero coverage; #446's passed a **217-byte
+comment-only file**. All four strengthened or replaced IN-ROUND, and all four were below this
+floor. #447's detector is above it, checked row by row — so filing its nine escapes was right.
+
+**Reading "MEASURED FALSE PASS" as "any measured mutant escape" would reproduce #392**: the
+measuring seat finds escapes essentially every round and the mutation space is unbounded. The
+severity rule settles the ordering — #447's escapes are *hypothetical edits in uncovered product
+cells*, while `sh4chcr` is a **measured live host death in the shipped tree**.
+
+> ### *** THE DE-ESCALATION CLAUSE — the one genuinely new rule, and it names a hazard this
+> project created for itself four times. ***
+>
+> **A fatal→survive fix DELETES THE ACCIDENTAL TRIPWIRE that made guard-mask growth
+> self-announcing.** Before #447, adding `| TCR_UNIE` to a guard mask meant `exit(1)` on the
+> first legal write — unmissable. After it, the same edit means a **silently refused write** and
+> nothing anywhere notices.
+>
+> So: **when a fix removes a host-fatal guard, enumerate from the diff every predicate that used
+> to gate death, and the detector shipping with that fix must pin the ACCEPT SIDE of each** — a
+> row per adjacent modelled bit or value, proving legal writes still land. Those rows are part
+> of the FIX'S COST, not future strengthening, because the fix itself destroyed the old
+> (accidental) detector for that class.
+
+It is bounded (the class is exactly "edits the old `exit(1)` would have announced"), and it is
+checkable at review time by one question: **does this diff delete `exit(` from a device? then
+look for accept rows.** Deliberately NOT mechanised — the enumeration needs judgement about
+adjacency, and the existing "what is the smallest edit that breaks this and still passes?" seat
+invocation already FINDS the instances. What was missing was never detection; it was
+DISPOSITION.
+
+This applies to the whole #438 / #441 / #443 / #447 family, and #447's own probe already *stated*
+the hazard in its constants block ("a mask pinned only from BELOW … cannot see a guard that
+GREW") while shipping no row for it. **The file knew. The rows just did not exist.**
+
 **THE STOPPING RULE, and it is the one that was missing.** #392 ran SIX follow-up passes,
 each finding defects in the previous pass's fixes, and the chain did not converge.
 > A review finding gets FIXED IN THIS ROUND only if it is a MEASURED FALSE PASS or a WRONG

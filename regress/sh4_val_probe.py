@@ -179,9 +179,22 @@ SH_RCR1_CF, SH_RCR1_AF = 0x80, 0x01
 PCLOCK = 33333333
 HZ_P64 = "520833"
 HZ_P4 = "8333333"
-#  The other two prescaler codes, so V34 can demand the frequency the guest ASKED
-#  for rather than merely "a frequency": 33333333/16 and /256.  No two of the four
-#  strings are a prefix of another, so `startswith` discriminates all four.
+#  The other two prescaler codes.  *** THESE THREE CONSTANTS ARE UNUSED TODAY AND ARE KEPT
+#  DELIBERATELY, which is a claim that needs saying rather than leaving to be discovered. ***
+#  They are residue of an aborted 33->43 row edit that a transient API failure killed
+#  mid-write, and the comment here originally described row V34 IN THE PRESENT TENSE as
+#  though it existed.  It does not; nor do V33, V37 or V39.  Those rows are PLANNED, in
+#  `sh4valrows`, and the constants are left in place because that round needs them.
+#
+#  *** THE RESTORE THAT FOLLOWED THAT ABORT WAS CALLED "VERIFIED 33/33" AND THE PHANTOM
+#  REFERENCES SURVIVED IT. ***  They survived because the identity rows -- V30 on planted
+#  opcodes, V31 on the row count -- are the two things that caught the half-edit, and
+#  NEITHER CAN SEE A COMMENT OR AN UNUSED CONSTANT.  A flagship-seat read found them.  The
+#  lesson is not that the identity discipline failed; it is that "verified" means verified
+#  BY SOMETHING, and naming what that something cannot see is part of the claim.
+#
+#  No two of the four strings are a prefix of another, so `startswith` discriminates all
+#  four when the rows do land.
 HZ_P16 = "2083333"
 HZ_P256 = "130208"
 HZ_TPSC = (HZ_P4, HZ_P16, HZ_P64, HZ_P256)      # indexed by `idata & 3`
@@ -334,8 +347,13 @@ def clklines(txt):
     An ACCEPTED control word prints exactly one of these and a REJECTED one
     prints none, so the count is a second, independent witness of the guard's
     disposition -- and the only witness of `timer_hz`, which is not a guest
-    register.  V22 is the row that first needed it; V33/V34/V37/V39 need it in
-    both directions.
+    register.  V22 is the row that first needed it.
+
+    V33/V34/V37/V39 are PLANNED, in `sh4valrows`, and DO NOT EXIST IN THIS FILE.
+    An earlier draft of this sentence named them in the present tense; that was
+    residue of an aborted edit and is corrected here rather than deleted, because
+    the accept-side rows they stand for are the ones a flagship review called the
+    in-round carve-out this round owes.
     """
     return CLK_RE.findall(txt)
 

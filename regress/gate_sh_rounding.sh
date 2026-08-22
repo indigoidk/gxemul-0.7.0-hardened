@@ -247,6 +247,44 @@ else
     check_min "sh4_val: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$VALOG")" 33
 fi
 
+# ------------------------------------------------------------------ #448 CHCR decoders
+#  A THIRD SIBLING, and the same reasoning that kept #447 out of #443's block keeps this
+#  out of both: the checks above are named "no offset kills the host" and "no guest VALUE
+#  kills the host", and these four sites are reached by neither -- they are CHCR FIELD
+#  ENCODINGS decoded inside sh4_dmac_transfer(), on the far side of a call.
+#
+#  *** THIS WAS EASIER TO REACH THAN ANYTHING #447 REPAIRED. ***  Only `case 0x200:`
+#  survives the CHCR_RS switch, so fifteen of the sixteen resource-select encodings ended
+#  the host -- and a wholly legal configuration (4-byte transfers, both addresses
+#  incrementing) died on its resource-select alone.
+#
+#  THE ACCEPT-SIDE ROWS (A1-A4) ARE THE DE-ESCALATION CLAUSE, and this is the first round
+#  to owe them: a fatal->survive fix DELETES the accidental tripwire that made guard growth
+#  self-announcing, so the detector must pin that legal encodings are still ACCEPTED, not
+#  merely that illegal ones are declined.  #447 shipped without those rows and a review
+#  seat then found a ONE-IDENTIFIER escape scoring full marks.
+CHCRLOG=$LOGDIR/gate_sh4_chcr.log
+python3 sh4_chcr_probe.py "$PMAX" "$KERNEL" > "$CHCRLOG" 2>&1 || true
+
+if ! grep -q "SH4CHCR_RESULT=" "$CHCRLOG"; then
+    note "sh4_chcr probe produced no result line; last lines follow"
+    tail -5 "$CHCRLOG" | sed 's/^/       /'
+    check "sh4_chcr probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$CHCRLOG" | sed 's/^/       /'
+    check "sh4_chcr: no guest CHCR ENCODING kills the host"           "$(grep -c 'SH4CHCR_PASS' "$CHCRLOG")" "1"
+    #  16, and the floor is pinned because TWO rows were MEASURED VACUOUS during the
+    #  round.s own mutation run and had to be rebuilt, and a PASS-2 SEAT then found THREE MORE
+    #  `return`->`break` mutant printed one line either way; and L1's second store was a
+    #  BIT-SUBSET of its first, so a whole-register latch computed fresh==0 and stayed
+    #  silent.  Both scored a clean 15/15 before they were fixed.
+    check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 18
+fi
+
+#  sh4_chcr_witness.py is DELIBERATELY NOT RUN HERE, for the same reason as #447's:
+#  it asserts the PRE-FIX symptom (13/13 pre-fix, 8/13 post-fix, the five differences
+#  being exactly the five sites repaired) and would go red the day its fix landed.
+
 #  sh4_val_witness.py is DELIBERATELY NOT RUN HERE.  It asserts the PRE-FIX symptom -- that
 #  the host process dies -- so it correctly goes RED the moment the fix is present.  Wiring
 #  a witness into a gate manufactures a phantom regression on the day the fix lands, and

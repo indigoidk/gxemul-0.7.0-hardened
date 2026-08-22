@@ -14648,7 +14648,7 @@
     "badge": "",
     "note": ""
    },
-   "witness": "probe:measured rung-3 during the #447 pass 2 -- unmodified -E landisk, shipped-fix binary, one ordinary guest store, started=True alive=False with the matching diagnostic. Not yet committed as an artefact.",
+   "witness": "probe:regress/sh4_chcr_witness.py (rung 3, 13 rows, unmodified -E landisk; 13/13 on the pre-fix build -- six kills and three survivals -- and 8/13 post-fix, where the five failures are EXACTLY the five sites repaired and the one that stays green is the IE site this round deliberately excludes. The scope decision is visible in the artefact rather than only in prose.)",
    "entries": [
     {
      "seat": "opus5",
@@ -14658,6 +14658,150 @@
      "note": "*** FOUND BY REVIEWING #447's FIX, AND IT IS EASIER TO HIT THAN ANYTHING #447 REPAIRED. ***  #447 removed four exit(1) guards that each needed the guest to write a SPECIFIC unimplemented bit. These need only TD=1.\n\nMEASURED, rung 3, unmodified -E landisk, shipped-fix binary, one ordinary guest store each -- started=True alive=False with the matching diagnostic:\n    CHCR0 = 0x0000c001  (DM=3)              dev_sh4.c:445   host dies\n    CHCR0 = 0x00003001  (SM=3)              dev_sh4.c:454   host dies\n    CHCR0 = 0x00000051 / 0x00000071 (TS=5/7) dev_sh4.c:436  host dies\n    CHCR3 = 0x0000c001                      dev_sh4.c:445   host dies (all 8 ch)\n    CHCR0 = 0x00005141  A SANE CONFIG       dev_sh4.c:491   host dies\n        (TS=4byte, DM/SM=increment, TD=1 -- nothing exotic)\n    CHCR0 = 0x00000005  (IE|TD)             dev_sh4.c:491   host dies\n    CHCR0 = 0x0000c000  (TD clear)                          SURVIVES -- control\n\nTHE MECHANISM IS WHY IT IS BROAD: only RS == 0x200 survives the CHCR_RS switch, and CHCR_IE then kills at :493. So a guest that merely ENABLES a DMA channel reaches an exit(1) on nearly any configuration.\n\nThe control is the part that makes it a measurement rather than a claim: clearing TD alone leaves the host alive through the identical store.\n\nSCOPE, stated so this is not read as a defect in #447's record: #447's in-file wording is 'four value guards in DEVICE_ACCESS(sh4)', which is literally true. This is a RESIDUAL that must be filed before any record claims the FILE is repaired -- and #447's CHANGELOG block was written knowing it.",
      "grade": "CONFIRMED",
      "ev": "opus5 measuring seat, #447 pass 2, 2026-08-21"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES on the design, and it OVERTURNED THE ROUND'S SCOPE.\n\n*** IT RULED :486 (the interrupt-enable site) OUT OF THE ROUND, and the reason is the project's own round rule rather than taste: *** the other four arms are UNIMPLEMENTED ENCODINGS, while RS=0x200|IE is a LEGAL request the model has not implemented. Different semantic class, different oracle (interrupt delivery, not decline). 'The same five exit(1)s' is a SYMPTOM class, not a semantic class -- that sentence is the one worth keeping.\n\nIt also refused to let the brief's phrase 'decline the transfer' stand for all five, and named the measurement that would settle it: THE BODY ORDER of sh4_dmac_transfer() between :454 and :491. If a copy loop sat before the RS switch, an unimplemented RS would already have mutated guest memory and 'return without performing a transfer' would be FALSE.\n\n*** MEASURED, AND BOTH OF ITS HYPOTHESES WERE WRONG IN THE SAME DIRECTION: THERE IS NO COPY LOOP AT ALL. ***  sar/dar/count/chcr are local copies, no cpu->cd.sh.dmac_* assignment exists anywhere in the function, and `case 0x200:` is literally `(void)sar; (void)dar;` with the comment 'No transfer is done here!'. So every site is side-effect-free before it dies and diagnose-and-return is trivially safe -- for a reason neither the seat nor the brief had stated. Its CONCLUSION (four sites, not five) survived; its stated reason for excluding :486 -- 'the copy SHOULD happen' -- did not.\n\nIts TE-spin warning is real but PRE-EXISTING: since the accepted arm transfers nothing and never sets TE, a driver polling for completion already waits forever today. The fix does not create that class. Filed as sh4dmanop.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES. Reached the SAME scope conclusion independently -- four sites, :486 in its own round, 'missing interrupt delivery after an otherwise supported request ... not equivalent to rejecting an unsupported field encoding'.\n\nGave the exact latch ceiling: TS has 3 unmodelled encodings, DM 1, SM 1, RS 15 = 20 per channel, 160 per eight-channel controller. That number is now in the source comment.\n\nTWO WARNINGS NOBODY ELSE GAVE, both acted on: 'normalize fields before indexing -- using raw values such as 0xc000 as array indices would be dangerous' (the shipped key is `1u << ((chcr & MASK) >> shift)`, bounded by the mask by construction); and 'the latch must survive guest-driven device resets, or repeated reset-and-trigger cycles restore unbounded logging'.\n\n*** AND IT NAMED THE ESCAPE THAT DOMINATED PASS 2: `return;` -> `break;`. ***  'The diagnostic and latch still execute, and an alive-plus-diagnostic detector passes.' The detector was built around that sentence -- and pass 2 then measured that it was built AROUND IT INCOMPLETELY at two of the four sites.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Read the shipped arms and confirmed the store-position claim independently.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "SHIP-WITH-CHANGES (pass 1), 44 KB.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and *** IT FOUND THE ROUND REPEATING ITS OWN MISTAKE AT TWO SITES IT HAD JUST FIXED AT A THIRD. ***\n\nThe round's own mutation run measured R2 vacuous -- it used the ACCEPTED RS (0x200), so after a `return`->`break` fall-through the RS arm was happy and exactly one diagnostic printed either way. R2 and R3 were rebuilt with an illegal RS. *** R1 WAS NOT, AND THE COMMENT LEFT ON THE TS ARM CLAIMED IT WAS COVERED: *** 'a `break` here falls through to the RS switch, which for most values complains too' -- true of most values, and R1 was using the one that does not. A WRONG RECORD, in the same file, in the same session.\n\n*** ITS RS VARIANT IS THE SERIOUS ONE AND IT PUTS exit(1) BACK. ***  With `return` at the RS default the function leaves before `if (cause_interrupt)`. Replace it with `break` and that site becomes reachable from ALL SIXTEEN resource-select encodings instead of the one X1 pins -- host death this diff removed, restored by one keyword. No reject row could see it because every one had IE clear.\n\nMEASURED, both predictions confirmed after the seat said plainly 'not recompiled here': TS `break` 16/16 SURVIVED, RS `break` 16/16 SURVIVED. Its third remark, `fatal`->`debug` as 'one identifier and also 16/16', measured true as well.\n\nCLOSED IN-ROUND rather than filed, and the floor is why: the RS variant re-exposes exit(1) on a guest-reachable path, so the detector fails the 'verbatim reinstatement at every fixed site' clause for that site in its `break` form. Three rows answer it -- R1 re-valued, R7 added (illegal RS with IE SET: alive when the arm returns, dead the moment it falls through), F1 added (free-running, so debug() goes silent where fatal() does not). Re-measured: TS break -> R1, RS break -> R7, fatal->debug -> F1, and the earlier eight mutants unchanged. No survivors.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR (pass 2), same family as grok's finding.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR (pass 2). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2) -- and being the seat that NAMED the `return`->`break` class at pass 1 and then judged the pass-2 detector sound is the honest limit of a reading seat on a packet: the kill table it was shown reported that class as caught, and it was, at the one site the table had mutated. The gap was WHICH SITES the run covered, which the packet did not say.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). Packet-fed; could not check which sites the mutation run actually covered, which is where the defect was.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (pass 2). Packet-fed, same limit.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Verdict given as 'keep' rather than one of the three requested tokens -- a FORMAT miss, recorded as such and NOT as a seat failure; 45 KB behind it.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_185116"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired, per the owner's standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure; the other eight answered across two panels.\n\nOwed for one thing specifically: THIS ROUND IS THE FIRST TO APPLY THE DE-ESCALATION CLAUSE that this seat's own #447 adjudication established, and rows A1-A4 are that application. Whether they discharge the clause or merely gesture at it is exactly the question the clause's author should answer.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired on the DESIGN pass either, per the owner standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure. The other seven answered and two of them independently overturned the round scope, so the design was not short of scrutiny; it was short of THIS seat.\n\nRecorded separately from the review hold because they are different questions. The design question this seat is owed: was FOUR SITES the right cut, or should the round have taken all five and accepted a second oracle? Two seats said four on the round rule. The queue entry asks the review question, which is whether rows A1-A4 discharge the de-escalation clause this seat itself wrote.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
     }
    ]
   },
@@ -14706,6 +14850,54 @@
      "note": "*** NINE MUTANTS SCORE 33/33 AGAINST #447's SHIPPED DETECTOR, SEVEN OF THEM MEASURED REAL DEFECTS. ***  Filed rather than fixed in #447 for a stated reason: the detector is WEAK, not VACUOUS. It kills 25 of 33 rows on the pre-fix build and kills six real mutants. That is categorically unlike #446's detector, which a 217-byte comment-only file passed and which was therefore replaced in-round.\n\nTHE FOUR HOLES, and they are a PRODUCT rather than a list:\n  H1  state is read back at INSTANCE 0 ONLY. V17/V18 read RCR1, V19/V20 channel 0, V21 TCR0. V11/V12 walk the other instances but only COUNT diagnostic lines.\n  H2  state is read back on a FIRST offence only, EXCEPT at RCR1. V18 exists for exactly this shape -- its own comment cites #443's brace slip -- and the sibling row was never added at TCR or DMATCR.\n  H3  the guard masks are pinned only FROM BELOW. V28 proves the six bits are IN the mask; nothing proves any other bit is OUT.\n  H4  width x instance is a PRODUCT and the census covers only the DIAGONAL -- three widths at instance 0, one width everywhere else.\n\nTHE ESCAPES, all measured on built binaries:\n  M20  `| TCR_UNIE` added to TCR_UNIMPLEMENTED -- ONE IDENTIFIER. Fix: TCR0=0x0022 reads back 0x22 with a clock line at 520833.328125 Hz. M20: reads back 0x00000000, NO clock line. TCR_UNIE is modelled (`d->tcr[i] & TCR_UNIE` in sh4_timer_tick), so the guest can NEVER enable the timer interrupt.  [H3]\n  M20b `| TCR_TPSC0` -- same shape; makes TPSC_P16 and TPSC_P256 unusable.  [H3]\n  M25  `| SH_RCR1_CF` -- fix writes RCR1 0x80, reads back 0x80, 0 diagnostics; mutant reads back 0x01, STILL 0 diagnostics. Fully silent.  [H3]\n  Mdma DMATCR guard narrowed `~0x00ffffff` -> `~0x04ffffff`, ONE NIBBLE. Bit 26 is then stored, and *** sh4_dmac_transfer consumes dmac_tcr[] & 0x1fffffff, FIVE BITS WIDER than the guard rejects ***, so bits 24-28 give a silently wrong transfer count.  [H3]\n  M23  TCR stores the rejected value when timer_nr != 0. Fix: TCR1 reads 0x0002. Mutant: 0x0204.  [H1]\n  M24  DMATCR stores it when dma_channel != 0. Fix: 0x10. Mutant: 0xabcdef.  [H1]\n  Mbrk TCR `break;` -> `if (timer_nr == 0) break;` -- timers 1 and 2 then fall into `idata & 3` and install pclock/4, the exact naive-fix bug V22 was written for, on the two instances it does not watch.  [H1]\n  M21  DMATCR stores on a REPEAT offence. Fix: 0x10. Mutant: 0x123456. Both rejects carry bit 24, so the second is not 'fresh'.  [H2]\n  M22  TCR stores on a repeat offence. Fix: 0x0002. Mutant: 0x0004.  [H2]\n  M33  `if (timer_nr == 2 && len == 4) exit(1);` -- *** GUEST-REACHABLE HOST DEATH. ***  A mov.l to TCR2 gives alive=False. It SURVIVES at len 2, the only width V11 issues, which is precisely why it scores full marks.  [H4]\n\n*** THE FIX CHANGED H3's FAILURE MODE FROM LOUD TO SILENT, and that is the finding inside the finding. ***  Pre-#447 a widened mask meant exit(1) on a legal write -- unmissable. Post-#447 it means a silently refused write. The round improved the failure and made its own blind spot worse in the same edit.\n\nA THIRD SEAT ADDED THE QUANTIFIER-COLLAPSE QUESTION, and was honest that it could not confirm it: V28 writes all six unimplemented TCR bits AS A UNION (0x02dc). Delete one bit from the mask and the union write still trips on the other five, so V28 stays green while a SINGLETON write of the deleted bit reaches the prescaler and the store. UNSETTLED -- it needs the fourteen mask-minus-one-bit mutants run: TCR 0x0004/0x0008/0x0010/0x0040/0x0080/0x0200 and each DMATCR high-byte bit, each written alone.\n\nNOTE H3-from-above and the singleton sweep are DIFFERENT TESTS and both are wanted: one requires a MODELLED bit to be ACCEPTED, the other requires each unimplemented bit to be REJECTED ALONE. A mask is pinned only when both hold, and they fail to different mutants.\n\nTHE FIXES THE SEATS RECOMMENDED, each small: extend the TCR and DMATCR read-back rows to a NON-ZERO instance (H1); add a read-back after a REPEATED same-bit reject at TCR and DMATCR (H2); add rows writing a MODELLED bit-set and asserting it is ACCEPTED, with the clock line as the second witness (H3); make V11 issue len 4 as well as len 2 (H4).\n\n*** AND ONE PROCESS NOTE WORTH MORE THAN THE ROWS: THE PROBE REFUSED TO PASS IN A HALF-EDITED STATE. ***  An attempt at this work died mid-edit having bumped EXPECT_ROWS to 43 and registered three new opcodes, without writing the rows. The probe reported 31/33 FAIL through TWO INDEPENDENT ROWS -- V31 caught the row-count intent, V30 caught the opcode intent (mismatches for 2151, 2161, 4000, disassembler None). The identity-row discipline worked on its own author, and the tree was restored to a verified 33/33 rather than left broken.",
      "grade": "CONFIRMED",
      "ev": "opus5 + grok + codex, panel_20260821_171837, mutants built and scored"
+    }
+   ]
+  },
+  {
+   "id": "sh4dmacie",
+   "title": "sh4dmacie  CHCR_IE on the one ACCEPTED resource select still ends the host -- deliberately excluded from #448, and PINNED by a detector row",
+   "state": "held",
+   "commits": "",
+   "hold": "Its own round by panel ruling: an unimplemented FEATURE, not an unimplemented ENCODING. Needs an interrupt-delivery oracle, which #448's decline oracle cannot express.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "probe:regress/sh4_chcr_witness.py row S5 (rung 3, measured host death)",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "MEASURED: a guest `mov.l` of 0x00000205 to CHCR0 (RS=0x200 | IE | TD) ends the host at dev_sh4.c's `if (cause_interrupt)` arm. Its control survives: the same store WITHOUT IE (0x00000201) leaves the host alive, so the kill is attributable to IE and not to the transfer.\n\n*** TWO PASS-1 SEATS INDEPENDENTLY RULED IT OUT OF #448, and the reasoning is the round rule rather than convenience. ***  The other four sites are unimplemented ENCODINGS -- the right answer is to decline. This one is a LEGAL request (RS=0x200 is the one configuration the model accepts) asking for a notification the model does not implement. Declining it is not correct behaviour, it is a different unimplemented feature, and the oracle is interrupt delivery rather than absence-of-transfer. 'The same five exit(1)s' is a SYMPTOM class, not a semantic class.\n\n*** THE EXCLUSION IS PINNED RATHER THAN MERELY STATED: *** sh4_chcr_probe.py's row X1 REQUIRES this site to still be fatal, so the day it is repaired the gate reddens and names this row. A scope decision no row asserts is indistinguishable from an oversight.\n\nA pass-1 seat noted the guest-visible trade honestly: pre-fix the host dies before any driver can wait; post-fix an interrupt-driven driver could wait forever. Better for the host, and a real change -- which is why raising a fake interrupt was explicitly rejected as out of scope.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_182222"
+    }
+   ]
+  },
+  {
+   "id": "sh4dmanop",
+   "title": "sh4dmanop  sh4_dmac_transfer() never transfers anything on ANY path, so a guest polling for DMA completion waits forever",
+   "state": "held",
+   "commits": "",
+   "hold": "Filed out of #448's pass 1. A capability gap rather than a crash, and it predates every SH-4 round here.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "none yet -- established by READING the whole function, not by executing a guest that waits. A witness would need a driver-shaped poll loop.",
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "*** THE FUNCTION CALLED sh4_dmac_transfer() DOES NOT TRANSFER. ***  Found while settling a pass-1 seat's question about body ordering, and it refuted the question rather than answering it.\n\n`sar`, `dar`, `count` and `chcr` are LOCAL copies; there is no `cpu->cd.sh.dmac_*` assignment anywhere in the function; and the only arm that returns normally, `case 0x200:`, is literally `(void)sar; (void)dar;` under the comment 'Note: No transfer is done here! It is up to the external device to do the transfer itself!'. So no bytes move, SAR/DAR/DMATCR are never advanced, and TE is never set.\n\nTWO CONSEQUENCES, and the second is why this is filed rather than shrugged at. (1) It made #448 trivially safe -- every site is side-effect-free before it dies, so there is nothing to un-commit and no store had to move. (2) *** A GUEST THAT ENABLES DMA AND POLLS FOR COMPLETION ALREADY WAITS FOREVER, ON THE ONE CONFIGURATION THE MODEL ACCEPTS, BEFORE AND AFTER #448 ALIKE. ***  Two pass-1 seats raised the hang risk as something #448 might CREATE; measurement shows it PRE-EXISTS and #448 neither causes nor worsens it.\n\nHonest limit: READ, not executed. No guest here has been observed waiting -- landisk's kernel may never enable a DMA channel at all. Whether any guest this project boots reaches it is unmeasured, so this is a capability gap of unknown reachability rather than a witnessed defect.",
+     "grade": "MANUAL",
+     "ev": "source read, 2026-08-21"
     }
    ]
   }

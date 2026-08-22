@@ -110,9 +110,34 @@
 #define	SH4_VAL_DMATCR			1	/*  DMATCR: count wider than 24 bits     */
 #define	SH4_VAL_ICRIRLM			2	/*  ICR: IRLM mode not modelled          */
 #define	SH4_VAL_RCR1INT			3	/*  RCR1: RTC interrupt enable not modelled  */
-#define	SH4_VAL_NCLASS			4
+/*
+ *  #448: the four CHCR field decoders in sh4_dmac_transfer().  Each guarded a `default:`
+ *  arm that called exit(1), so ONE ordinary guest store ended the host process -- and it
+ *  was EASIER TO REACH THAN ANY #447 SITE, because only `case 0x200:` survives the RS
+ *  switch.  A wholly legal configuration (4-byte transfers, both addresses incrementing)
+ *  still died, on its resource-select alone.
+ *
+ *  *** THE KEY IS A NORMALISED FIELD VALUE, NOT A BIT AND NOT THE WHOLE REGISTER. ***
+ *  TS, DM, SM and RS are ENCODINGS: `TS=5` is one value, not three set bits, so a per-bit
+ *  latch would report the same rejected encoding several times over.  The other extreme is
+ *  worse: latching the whole CHCR word lets a guest walk 32-bit values with TD set and
+ *  draw a fresh unsilenceable line for each -- the flood this latch exists to prevent.
+ *
+ *  The normalised value is used as a SHIFT AMOUNT into the existing uint32_t latch, and
+ *  the field mask bounds it BY CONSTRUCTION: RS >> 8 is 0..15, TS >> 4 is 0..7, DM >> 14
+ *  and SM >> 12 are 0..3.  A raw field value such as 0xc000 as an index would not be.
+ *
+ *  The resulting ceiling is exact and small: TS has 3 unmodelled encodings, DM 1, SM 1 and
+ *  RS 15 -- 20 per channel, 160 for an eight-channel controller.
+ */
+#define	SH4_VAL_DMACTS			4	/*  CHCR: transmit size encoding      */
+#define	SH4_VAL_DMACDM			5	/*  CHCR: destination address mode    */
+#define	SH4_VAL_DMACSM			6	/*  CHCR: source address mode         */
+#define	SH4_VAL_DMACRS			7	/*  CHCR: resource select             */
+#define	SH4_VAL_NCLASS			8
 /*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
 #define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
+
 
 /*  #447: the six TCR bits this device does not model, spelled ONCE so the guard and
     its diagnostic cannot drift apart.  thirdparty/sh4_tmureg.h:75-82.  */
@@ -401,6 +426,12 @@ DEVICE_TICK(sh4)
  *  Called whenever a DMA transfer is to be executed.
  *  Clears the lowest bit of the corresponding channel's CHCR when done.
  */
+/*  #448: the latch helper is defined below this function, so it needs a prototype here.
+    Placed AFTER `struct sh4_data` rather than beside the SH4_VAL_* defines, because a
+    prototype naming a struct the compiler has not seen declares a NEW type in parameter
+    scope -- it compiles, warns, and then mismatches the real definition.  */
+static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+
 void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
 {
 	/*  According to the SH7760 manual, bits 31..29 are ignored in  */
@@ -431,27 +462,53 @@ void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
 	case CHCR_TS_2BYTE: transmit_size = 2; break;
 	case CHCR_TS_4BYTE: transmit_size = 4; break;
 	case CHCR_TS_32BYTE: transmit_size = 32; break;
-	default: fatal("Unimplemented transmit size?! CHCR[%i] = 0x%08x\n",
-	    channel, chcr);
-	exit(1);
+	/*
+	 *  #448: RETURN, NEVER `break`.  A review seat named `return;` -> `break;` as the
+	 *  smallest edit that reintroduces a defect while a naive detector still passes:
+	 *  the diagnostic and the latch both still run, so an alive-plus-diagnostic row
+	 *  goes green, and execution falls out of the switch with transmit_size left at
+	 *  its initialiser -- an unmodelled encoding SILENTLY TREATED AS 1 BYTE.
+	 *
+	 *  It is detectable, and the detector row is built on this: a `break` here falls
+	 *  through to the RS switch, which for most values complains too, so the escape
+	 *  shows up as a SECOND diagnostic from a single store.  Exactly one is correct.
+	 */
+	default:
+		if (sh4_val_first(d, SH4_VAL_DMACTS, channel,
+		    1u << ((chcr & CHCR_TS) >> 4)))
+			fatal("[ sh4: DMA channel %i: transmit size %i not"
+			    " implemented -- transfer declined.  (once per"
+			    " encoding) ]\n", channel,
+			    (int) ((chcr & CHCR_TS) >> 4));
+		return;
 	}
 
 	switch (chcr & CHCR_DM) {
 	case CHCR_DM_FIXED:       dst_delta = 0; break;
 	case CHCR_DM_INCREMENTED: dst_delta = 1; break;
 	case CHCR_DM_DECREMENTED: dst_delta = -1; break;
-	default: fatal("Unimplemented destination delta?! CHCR[%i] = 0x%08x\n",
-	    channel, chcr);
-	exit(1);
+	default:
+		if (sh4_val_first(d, SH4_VAL_DMACDM, channel,
+		    1u << ((chcr & CHCR_DM) >> 14)))
+			fatal("[ sh4: DMA channel %i: destination address mode"
+			    " %i not implemented -- transfer declined.  (once"
+			    " per encoding) ]\n", channel,
+			    (int) ((chcr & CHCR_DM) >> 14));
+		return;
 	}
 
 	switch (chcr & CHCR_SM) {
 	case CHCR_SM_FIXED:       src_delta = 0; break;
 	case CHCR_SM_INCREMENTED: src_delta = 1; break;
 	case CHCR_SM_DECREMENTED: src_delta = -1; break;
-	default: fatal("Unimplemented source delta?! CHCR[%i] = 0x%08x\n",
-	    channel, chcr);
-	exit(1);
+	default:
+		if (sh4_val_first(d, SH4_VAL_DMACSM, channel,
+		    1u << ((chcr & CHCR_SM) >> 12)))
+			fatal("[ sh4: DMA channel %i: source address mode %i"
+			    " not implemented -- transfer declined.  (once per"
+			    " encoding) ]\n", channel,
+			    (int) ((chcr & CHCR_SM) >> 12));
+		return;
 	}
 
 	src_delta *= transmit_size;
@@ -481,9 +538,20 @@ void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
 		    external device to do the transfer itself!  */
 		break;
 
-	default:fatal("Unimplemented SH4 RS DMAC: 0x%08x\n",
-		    (int) (chcr & CHCR_RS));
-		exit(1);
+	/*
+	 *  *** THIS ARM IS WHY THE DEFECT WAS BROAD.  Only `case 0x200:` above returns
+	 *  normally, so FIFTEEN of the sixteen resource-select encodings reached exit(1)
+	 *  -- and a wholly legal transfer configuration (4-byte, both addresses
+	 *  incrementing) still ended the host, on its resource-select alone. ***
+	 */
+	default:
+		if (sh4_val_first(d, SH4_VAL_DMACRS, channel,
+		    1u << ((chcr & CHCR_RS) >> 8)))
+			fatal("[ sh4: DMA channel %i: resource select %i not"
+			    " implemented -- transfer declined.  (once per"
+			    " encoding) ]\n", channel,
+			    (int) ((chcr & CHCR_RS) >> 8));
+		return;
 	}
 
 	if (cause_interrupt) {

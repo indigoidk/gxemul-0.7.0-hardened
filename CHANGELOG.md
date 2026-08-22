@@ -4271,6 +4271,109 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R17 (#448) — a legal DMA configuration ended the host on its resource-select alone
+
+`sh4_dmac_transfer()`. Four `default:` arms called `exit(1)` when a guest wrote a CHCR field
+encoding the model does not implement. **Easier to reach than anything `#447` repaired**: those
+four guards each needed a *specific* unimplemented bit; these need only that the guest enable a
+DMA channel.
+
+*** ONLY `case 0x200:` SURVIVES THE `CHCR_RS` SWITCH. *** Fifteen of the sixteen resource-select
+encodings reached `exit(1)` — so a wholly legal configuration (4-byte transfers, both addresses
+incrementing) still ended the host, on its resource-select alone.
+
+MEASURED, rung 3, unmodified `-E landisk`, one ordinary guest `mov.l` each. The witness
+(`regress/sh4_chcr_witness.py`) scores **13/13 on the pre-fix build**: six kills and three
+survivals. The decisive control is C1 — the *same* address, *same* width, *same* illegal `DM=3`
+field, with only `TD` cleared, and the host lives. So the kill is attributable to `TD` reaching
+the transfer, not to the address, the width, or the illegal field.
+
+### The scope: four sites, not five — a panel ruling, not a preference
+
+Two pass-1 seats independently ruled `:486` (the interrupt-enable arm) **out of this round**. The
+other four are unimplemented **encodings**, where declining is the right answer. `RS=0x200 | IE`
+is a **legal request** for a notification the model has not implemented — a different semantic
+class with a different oracle. *"The same five `exit(1)`s is a SYMPTOM class, not a semantic
+class."* Filed as `sh4dmacie`, and **pinned**: detector row X1 requires it to still be fatal, so
+the day it is repaired the gate reddens and names the row. *A scope decision no row asserts is
+indistinguishable from an oversight.*
+
+### A pass-1 question that refuted itself, and found a separate defect
+
+A seat asked whether a copy loop runs before the RS switch — which would make "return without
+performing a transfer" false, since an unimplemented RS would already have mutated guest memory.
+Both of its hypotheses were wrong in the same direction:
+
+*** THERE IS NO COPY LOOP. `sh4_dmac_transfer()` WRITES NOTHING TO GUEST STATE ON ANY PATH. ***
+`sar`, `dar`, `count` and `chcr` are local copies, no `cpu->cd.sh.dmac_*` assignment exists
+anywhere in the function, and the one arm that returns normally is literally
+`(void)sar; (void)dar;` under the comment *"No transfer is done here!"*.
+
+That made the fix trivially safe at all four sites — nothing to un-commit, no store to move — for
+a reason neither the seat nor the brief had stated. It also surfaced a **separate pre-existing
+defect**: a guest that enables DMA and polls for completion **already waits forever**, on the one
+configuration the model accepts, before and after this fix alike. Two seats raised that hang as
+something this round might *create*; measurement shows it *pre-exists*. Filed as `sh4dmanop`.
+
+### The latch: a normalised field value, not a bit and not the whole register
+
+`TS`, `DM`, `SM` and `RS` are **encodings**: `TS=5` is one value, not three set bits, so a per-bit
+latch would report one rejected encoding several times. The other extreme is worse — latching the
+whole CHCR word lets a guest walk 32-bit values with `TD` set and draw a fresh **unsilenceable**
+line for each. The key is `1u << ((chcr & FIELD_MASK) >> shift)`, and the mask bounds the shift
+**by construction**. Ceiling: 3 + 1 + 1 + 15 = **20 per channel, 160 per controller**.
+
+### THE DETECTOR — 18 rows, and five of them exist because a mutant beat an earlier draft
+
+`regress/sh4_chcr_probe.py`. R1–R7 reject side, **A1–A4 accept side**, L1–L3 latch key, F1
+free-running, X1 the pinned exclusion, W0/W-id controls.
+
+**A1–A4 are the de-escalation clause, and this is the first round to owe it.** A flagship
+adjudication of `#447` established it hours earlier: *a fatal→survive fix deletes the accidental
+tripwire that made guard growth self-announcing*, so the detector must pin that legal encodings
+are still **accepted**, not merely that illegal ones are declined.
+
+*** FIVE ROWS WERE MEASURED VACUOUS DURING THIS ROUND AND REBUILT. *** Each had confident
+reasoning written beside it, and each was wrong:
+
+| row | why it scored a clean pass on the mutant it was written to catch |
+|---|---|
+| R2 | used the **accepted** RS, so after a `break` fell through, the RS arm was happy — one diagnostic either way |
+| L1 | second store was a **bit-subset** of the first, so a whole-register latch computed `fresh == 0` and stayed silent |
+| R5 | was **byte-identical to R4** — a duplicate killing nothing R4 did not |
+| R1 | *** the same defect as R2, fixed at R2/R3 in the same session and not carried to R1 *** — and the comment left on the TS arm **claimed it was covered** |
+| R6 | proves channel 3 *reaches* the guard, not that the latch *distinguishes* channels; L3 was added for that |
+
+The R1 case is the one worth keeping: **fixing two of three siblings and writing a comment
+asserting the third was covered is how a wrong record ships.** A pass-2 seat found it, predicted
+two escapes, said plainly *"not recompiled here"* — and both measured true at 16/16, along with a
+third (`fatal`→`debug`, which every row missed because they all single-step, where `debug()`
+prints exactly like `fatal()`).
+
+*** THE RS VARIANT IS WHY THOSE WERE FIXED IN-ROUND RATHER THAN FILED. *** `return;` → `break;`
+at the RS arm makes `if (cause_interrupt)` reachable from **all sixteen** resource-select
+encodings instead of the one X1 pins — putting back host death this round removed, for one
+keyword. That fails the vacuity floor's *"verbatim reinstatement at every fixed site"* clause, so
+it is not coverage debt. R7 answers it (an illegal RS **with IE set**: alive when the arm returns,
+dead the moment it falls through) and F1 answers the `debug()` one.
+
+MEASURED kill table, eleven mutants, **no survivors**: TS/DM/SM/RS `return`→`break` → R1/R2/R3/R7 ·
+`fatal`→`debug` → F1 · TS/SM/RS `exit(1)` restored → R1/R3/R4 R5 R7 L2 F1 · DM and TS mask growth →
+R4 R5 A1 L2 and A4 L1 · latch whole-register / no-encoding / no-channel → L1 / L2 / L3 · IE site
+repaired → X1. Clean tree 18/18.
+
+### Not claimed
+
+Nothing here says a transfer happens — it cannot, see `sh4dmanop`. F1's discriminating power is
+**conditional on `verbose == 0`**: run the probe with `-v` and free-running gives `v == 0`,
+`debug()` prints, and the row goes quietly green on the mutant. The session helper passes `-V` and
+never `-v`; that precondition is stated in the row rather than assumed.
+
+Twin tree and both NO-VPATH build trees carry `dev_sh4.c` byte-identically; `build/` rebuilt from
+it, rc=0, **zero warnings**.
+
+Gate: `gate_sh_rounding` PASS (56 checks, was 54), run singly. Row floor pinned at 18.
+
 ## R16 (#447) — four guards ended the host process on a guest STORE, and the store position differed three ways out of four
 
 `DEVICE_ACCESS(sh4)`. Four guards called `exit(1)` when a guest wrote a value the model does not

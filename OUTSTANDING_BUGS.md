@@ -5775,3 +5775,52 @@ An attempt at this work died mid-edit having bumped `EXPECT_ROWS` to 43 and regi
 opcodes without writing the rows that plant them. The probe reported `31/33 FAIL` through **two
 independent rows** — V31 caught the row-count intent, V30 caught the opcode intent. The tree was
 restored to a verified 33/33 rather than left broken.
+
+## 2026-08-21 — #448 shipped, and reviewing it found two more things in the same function
+
+### `sh4dmacie` — held
+
+*** `CHCR_IE` on the one **accepted** resource select still ends the host, and `#448`
+deliberately left it. *** MEASURED: a guest `mov.l` of `0x00000205` to CHCR0
+(`RS=0x200 | IE | TD`) dies at the `if (cause_interrupt)` arm. Its control survives — the same
+store **without IE** (`0x00000201`) leaves the host alive — so the kill is attributable to `IE`
+and not to the transfer.
+
+**Two pass-1 seats independently ruled it out of `#448`, on the round rule rather than on
+convenience.** The other four sites are unimplemented **encodings**, where declining is correct.
+This is a **legal request** — `RS=0x200` is the one configuration the model accepts — asking for a
+notification the model has not implemented. Declining it isn't correct behaviour; it's a different
+unimplemented feature, with interrupt delivery as its oracle rather than absence-of-transfer.
+*"The same five `exit(1)`s" is a symptom class, not a semantic class.*
+
+*** The exclusion is PINNED, not merely stated: *** `sh4_chcr_probe.py` row **X1 requires this
+site to still be fatal**, so the day it is repaired the gate reddens and names this row. A scope
+decision no row asserts is indistinguishable from an oversight.
+
+One honest trade, named by a pass-1 seat: pre-fix the host dies before any driver can wait;
+post-fix an interrupt-driven driver could wait forever. Better for the host, and a real change —
+which is why raising a *fake* interrupt was explicitly rejected as out of scope.
+
+### `sh4dmanop` — held
+
+*** The function called `sh4_dmac_transfer()` does not transfer. *** Found while settling a
+pass-1 seat's question about body ordering — and it refuted the question rather than answering it.
+
+`sar`, `dar`, `count` and `chcr` are **local copies**; there is no `cpu->cd.sh.dmac_*` assignment
+anywhere in the function; and the only arm that returns normally, `case 0x200:`, is literally
+`(void)sar; (void)dar;` under the comment *"Note: No transfer is done here! It is up to the
+external device to do the transfer itself!"*. No bytes move, SAR/DAR/DMATCR are never advanced,
+and TE is never set.
+
+Two consequences, and the second is why this is filed rather than shrugged at:
+
+1. It made `#448` trivially safe — every site is side-effect-free before it dies, so there is
+   nothing to un-commit and no store had to move.
+2. *** A guest that enables DMA and polls for completion already waits forever, on the one
+   configuration the model accepts, before and after `#448` alike. *** Two pass-1 seats raised
+   that hang as something `#448` might **create**; measurement shows it **pre-exists**, and the
+   round neither causes nor worsens it.
+
+**Honest limit: READ, not executed.** No guest here has been observed waiting — landisk's kernel
+may never enable a DMA channel at all. Whether any guest this project boots reaches it is
+unmeasured, so this is a capability gap of unknown reachability rather than a witnessed defect.
