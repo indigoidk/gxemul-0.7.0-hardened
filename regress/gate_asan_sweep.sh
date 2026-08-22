@@ -163,18 +163,21 @@ ulimit -c 0 2>/dev/null || true
 #  because these are whole machine ports rather than one-line fixes -- it is not a
 #  judgement that they may wait that long.
 #
-#  hpcmips/{be-300,e-105,agenda} are being worked in a concurrent round. When that lands,
-#  the "no longer die" check goes RED and the fix is to DELETE those three lines. That
-#  friction is the point: it is how the inventory stays true.
+#  hpcmips/{be-300,e-105,agenda} WERE here, and their removal is this ratchet's first
+#  discharge -- exactly as the previous version of this comment predicted ("when that
+#  lands, the 'no longer die' check goes RED and the fix is to DELETE those three lines").
+#  #444 (a29f87b) fixed their constructor deaths, but the check stayed GREEN for a further
+#  day because this gate's instrumented binary was built on 2026-07-29 -- the July binary
+#  still died, so the exemptions still "held".  *** THE RED ARRIVED ONLY WHEN #450's round
+#  REBUILT the binary from current HEAD. ***  A ratchet graded against a stale artefact
+#  ratchets nothing; that is `asanstale`, measured live, and the second time in one day the
+#  same staleness converted a real result into a wrong one.
 AB_EXEMPT="
     alpha/3000/300:2026-11-30
     decstation/3maxplus:2026-11-30
     decstation/maxine:2026-11-30
     decstation/5400:2026-11-30
     decstation/5500:2026-11-30
-    hpcmips/be-300:2026-11-30
-    hpcmips/e-105:2026-11-30
-    hpcmips/agenda:2026-11-30
     mvmeppc/mvme1600:2026-11-30
     mvmeppc/mvme2100:2026-11-30
     sgi/ip19:2026-11-30
@@ -606,8 +609,14 @@ check "arcbios shifts: five reaching SGI subtypes construct AND give ZERO ubsan+
 #  WHOLE statement (#444's S4 precedent) and exact-matches the multiset, so a mask insert,
 #  a cast swap, a wrapper or a reorder reddens whether or not anyone predicted it.  The
 #  probe strips comments and strings first, closing v1's loud false-positive too.
+#  *** $HERE/../src, NOT $SEC: this gate never defines SEC, and the first committed
+#  version of this line killed the WHOLE GATE at runtime with "SEC: unbound variable"
+#  under set -u -- after the behavioural row had already printed ok, and with the wrapper
+#  invocation still reporting rc=0.  A gate that dies between its rows and gate_end leaves
+#  no verdict line, and rc=0 over a missing verdict is the killed-battery class in a
+#  single gate.  bash -n cannot see an unbound variable; only a RUN can. ***
 ARCSLOG=$LOGDIR/arcbios_shift.log
-python3 "$HERE/arcbios_shift_probe.py" "$SEC/src/promemul/arcbios.c" > "$ARCSLOG" 2>&1 || true
+python3 "$HERE/arcbios_shift_probe.py" "$HERE/../src/promemul/arcbios.c" > "$ARCSLOG" 2>&1 || true
 grep -E '^  (ok|FAIL) ' "$ARCSLOG" | sed 's/^/       /'
 check "arcbios shifts: every assembly statement matches its frozen form" \
       "$(grep -c 'ARCSHIFT_PASS' "$ARCSLOG")" "1"
