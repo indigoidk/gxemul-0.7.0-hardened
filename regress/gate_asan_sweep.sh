@@ -553,6 +553,67 @@ else
           "$(grep -cE '^  \[(ok|FAIL)\] ' "$EADDRLOG")" 10
 fi
 
+# ------------------------------------------------------------------ #450 arcbios shifts
+#  TEN uncast `buf[3]<<24` sites in arcbios.c -- C99 6.5.7p4 UB whenever buf[3] >= 0x80,
+#  and at three 64-bit-branch sites the sign-extension makes the assembled pointer's high
+#  word one too small.  Fixed by width-matched casts at all ten (four sites already had
+#  them: the author knew the idiom and applied it to 4 of 14).
+#
+#  *** WHY THE EXISTING THREE-WAY CANNOT PIN THIS. ***  sanhit() already counts
+#  `runtime error:` lines, so these shifts fed the HEAD column above -- but the gate's
+#  assertion is DIRECTIONAL, and reverting the casts lands on dirty-upstream/dirty-HEAD,
+#  which is scored "pre-existing, reported but not failed".  A revert is INVISIBLE to it.
+#  These two rows are the pin.
+#
+#  Row 1 is BEHAVIOURAL: the five SGI subtypes that reach arcbios construction must
+#  produce ZERO left-shift lines (and zero ASan, which re-pins #446 through the same
+#  fresh binary).  It inherits gate 9's staleness caveat -- the binary is built from git
+#  HEAD by build_asan.sh, and nothing yet asserts its age (tracked as `asanstale`).
+#  MEASURED while building this round: a sweep against the stale binary reported the
+#  PRE-fix counts with rc=0, exactly the void that caveat names.
+#
+#  Row 2 is a STATIC census, deliberately binary-independent so it stays load-bearing
+#  even when the instrumented binary is stale: every `buf[3] << 24` in the file must be
+#  cast (14 casts, 0 uncast).  It is also the ONLY row that can see the six sites no
+#  current image drives with buf[3] >= 0x80 -- the sweep cannot witness those, which two
+#  pass-1 seats named as the reason a UBSan-only oracle is not enough.  And it catches
+#  the mutant the sweep cannot: `(buf[3]&0x7f)<<24` kills the UB, silently drops bit 31,
+#  and passes every sanitizer -- but drops the cast count to 13.
+#  KNOWN LOUD FALSE-POSITIVE: a comment quoting the uncast idiom reddens the census.
+#  That is the safe direction; #446's NUL-byte lesson says never quote mutant syntax
+#  verbatim in comments anyway.
+#  *** THE LIVENESS TERM IS LOAD-BEARING, added after a pass-2 seat named the hole: ***
+#  zero matching lines from a run that never CONSTRUCTED the machine is not a clean run,
+#  it is an absent measurement -- a binary that dies at startup would have scored green.
+#  Each subtype must show its own model line, so "never ran" reads RED, not clean.
+UB450=0
+for s in ip12 ip28 ip30 ip32 ip35; do
+    timeout 60 "$ASAN_HEAD" -E sgi -e "$s" /dev/null > "$LOGDIR/ub450.txt" 2>&1
+    sh450=$(grep -ac 'left shift of' "$LOGDIR/ub450.txt")
+    as450=$(grep -ac 'ERROR: AddressSanitizer' "$LOGDIR/ub450.txt")
+    live450=$(grep -ac 'model: SGI-' "$LOGDIR/ub450.txt")
+    if [ "$sh450" != 0 ] || [ "$as450" != 0 ] || [ "$live450" = 0 ]; then
+        UB450=$((UB450+1))
+        note "#450 $s: shift=$sh450 asan=$as450 constructed=$live450 -- sites: $(grep -oE 'arcbios\.c:[0-9]+' "$LOGDIR/ub450.txt" | sort -u | tr '\n' ' ')"
+    fi
+done
+check "arcbios shifts: five reaching SGI subtypes construct AND give ZERO ubsan+asan lines" "$UB450" "0"
+
+#  *** THE FIRST VERSION OF THIS ROW WAS TWO GREPS AND A PASS-2 SEAT KILLED IT WITH ONE
+#  TOKEN. ***  `(((uint32_t)buf[3]<<24) & 0x7fffffff)` keeps the cast SPELLING, passes
+#  every sanitizer, and silently drops bit 31 -- both #450 rows stayed green over a real
+#  value defect.  A pattern pins what its author thought of; the replacement freezes the
+#  WHOLE statement (#444's S4 precedent) and exact-matches the multiset, so a mask insert,
+#  a cast swap, a wrapper or a reorder reddens whether or not anyone predicted it.  The
+#  probe strips comments and strings first, closing v1's loud false-positive too.
+ARCSLOG=$LOGDIR/arcbios_shift.log
+python3 "$HERE/arcbios_shift_probe.py" "$SEC/src/promemul/arcbios.c" > "$ARCSLOG" 2>&1 || true
+grep -E '^  (ok|FAIL) ' "$ARCSLOG" | sed 's/^/       /'
+check "arcbios shifts: every assembly statement matches its frozen form" \
+      "$(grep -c 'ARCSHIFT_PASS' "$ARCSLOG")" "1"
+check_min "arcbios shifts: census rows actually run" \
+      "$(grep -cE '^  (ok|FAIL) ' "$ARCSLOG")" 2
+
 #  RESIDUALS, recorded rather than fixed here (this round may edit only this file):
 #   * ab_expired() is a verbatim-in-behaviour copy of gate_offline.sh's exempt_expired().
 #     It belongs in lib.sh; two copies is exactly the "grep for its siblings" shape.

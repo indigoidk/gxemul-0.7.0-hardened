@@ -5862,3 +5862,23 @@ assert.
 Candidates for a round to weigh: a compile-time assertion that the class bit-domains are
 disjoint; or making the class a property of the register rather than a hand-written argument at
 each call site.
+
+## 2026-08-21 — #450 shipped the shift-UB class; reviewing it found the walker reads the wrong field
+
+### `arcbioswalk64` — held
+
+*** The 64-bit component walker reads `peeraddr + 0x34` for "IdentifierLength", and that offset
+is a slice of AffinityMask. ***  In-RAM layout: a 0x18-byte pointer header
+(`ptr_peer/ptr_child/ptr_parent`) then `arcbios_component64` — Class `+0x18`, Key `+0x28`,
+**AffinityMask `+0x30`**, ConfigurationDataSize `+0x38`, **IdentifierLength `+0x40`**,
+Identifier `+0x48`, total `0x50` — which is exactly the walker's own step, corroborating the
+arithmetic. The walker masks the mis-read with `0xfffff` and skips accordingly; with
+AffinityMask `0xffffffff` that is a **~1 MiB skip per node**, so the walk leaves the component
+list after the first node.
+
+**One-way coupling, recorded before anyone trips it:** `#450`'s mis-link hazard at `:751` is a
+counterfactual *partly because this bug keeps the walk from ever reaching a node that would
+exercise it*. Fixing this row may make that site live — the `ctorabortclass` shape again.
+
+**Honest limit: layout arithmetic, not execution.** And the 32-bit walker's offsets (`+0x28`
+read, `+0x30` step) should be checked in the same round rather than trusted by symmetry.

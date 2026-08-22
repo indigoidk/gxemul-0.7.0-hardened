@@ -133,6 +133,13 @@ OLLAMA2="deepseek-v4-pro:cloud"   # DeepSeek is BACK: v3.2 was retired 2026-07-1
                                   # but v4-pro is live (verified answering). NOTE
                                   # the exact tag -- "deepseek-v4:cloud" does NOT
                                   # resolve, only "-pro".
+                                  # 2026-08-21 owner directive: the upstream alias
+                                  # moved preview -> release. `ollama pull
+                                  # deepseek-v4-pro:cloud` refreshed it; the wire
+                                  # tag here is UNCHANGED, and the health test
+                                  # returned its token with model reported as the
+                                  # release build. Re-pull after upstream bumps;
+                                  # the tag in this file only names the alias.
 OLLAMA3="minimax-m3:cloud"        # all three are THINKING models; send no
                                   # num_predict cap (panel_ollama.py doesn't) or
                                   # the budget is eaten by hidden reasoning and

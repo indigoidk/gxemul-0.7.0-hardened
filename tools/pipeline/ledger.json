@@ -14593,7 +14593,7 @@
   },
   {
    "id": "arcbiosubsan",
-   "title": "arcbiosubsan  Two UBSan left-shift errors at arcbios.c:737 and :784, found only because a gate's hit-count counted LINES",
+   "title": "arcbiosubsan  Ten uncast buf[3]<<24 sites in arcbios.c -- UB at all ten, and the 64-bit assemblies put the pointer's high word one too small",
    "state": "held",
    "commits": "",
    "hold": "Filed out of #446. Needs its own round: read both lines, decide whether the shift is real UB or a false positive, and only then design a fix.",
@@ -14611,8 +14611,153 @@
      "note": "*** THESE WERE HIDDEN INSIDE A NUMBER, WHICH IS THE PART WORTH KEEPING. ***  #446 was filed as \"FOUR heap-buffer-overflow hits\" on each of four SGI subtypes. There is ONE overflow per subtype. gate_asan_sweep.sh's sanhit() is a `grep -acE`, so it counts LINES, and the four were: the ERROR: line, the SUMMARY: line, and TWO SEPARATE UBSan LEFT-SHIFT ERRORS at arcbios.c:737 and arcbios.c:784.\n\nThe discriminator that separated them: `grep -ac 'ERROR: AddressSanitizer'` is 1 per subtype. ip32's count of \"2\" is the two UBSan lines ALONE -- ip32 has no overflow at all, which is why its number never matched the other four and why the mismatch was the thread worth pulling.\n\nA COUNT IS NOT A CLASSIFICATION. Two distinct defect families were summed into one integer, and the integer looked consistent enough to file as a single row.\n\nNOT DIAGNOSED. Whether either shift is real UB (a signed value shifted into or past the sign bit) or a sanitizer false positive is unmeasured -- the lines have not been read.",
      "grade": "CONFIRMED",
      "ev": "gate_asan_sweep.sh output re-read, 2026-08-21"
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES, and it CORRECTED THE ROUND'S CONSEQUENCE TRACE by measurement-grade reading. The claimed 'mis-linked component tree' was a COUNTERFACTUAL: the witnessed 64-bit site (:737) is consumed only by `echild == 0`, which a corrupted value cannot alias (corruption forces low word >= 2^31). The load-bearing site :751 is UNREACHED on current images -- and the REASON is a separate defect grok found while checking: *** the 64-bit walker reads peeraddr+0x34, a slice of AffinityMask, where IdentifierLength is at +0x40 *** -- so after the first node the walk is in the weeds. Layout confirmed against sgi_arcbios.h plus the +0x50 step (0x18 pointer header + 0x38 component). Filed as arcbioswalk64. It also corrected the brief's 'zero uint64_t declarations' echo and the addchild64 parent-type claim (uint64_t, not promoted uint32_t).",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES, scope FOUR witnessed sites under the round rule's witness clause -- overruled by adjudication, but its two demands SHAPED THE SHIPPED DETECTOR: (1) 'do not scope to value-wrong sites only; removal of UB is itself the correction' -- followed; (2) fixing unwitnessed sites 'requires a new static/source oracle' -- that oracle is the census row, and the kill table's M2 (revert an unwitnessed cast -> sweep green, census red) is the measurement that answers its coverage objection rather than arguing with it. It also tightened the wording the record now uses: four sites are UBSan-WITNESSED, not 'reached' -- another site may execute with buf[3] < 0x80.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES, scope ALL TEN, and its argument was the one adjudication adopted: the cast is provably value-neutral where the UB is not firing, so there is nothing per-site for a witness to adjudicate -- 'a class gets fixed as a class'. Three further contributions, all landed: (1) the house-idiom correction -- the four existing casts split 3-to-1, not 2-and-2, and the real rule is 'the cast matches the assembled width'; (2) the sanitizer-invisible mutant `(buf[3]&0x7f)<<24`, which the census kills at 13/0; (3) the completed consequence trace -- BOTH mis-link directions (false negative at true high word 0, false positive at 1). Its one named missing read (the Get* enclosing conditional vs the :1367 guard) was performed: same arc_64bit condition, benignity stands.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "GO-WITH-CHANGES (pass 1). No dissent on the class or the fix form.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed. Seat answered post alias-refresh (preview -> release), health-verified the same hour.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SHIP-WITH-CHANGES (pass 1). Packet-fed.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_220346"
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, and FIRST to kill the census v1: `(((uint32_t)buf[3]<<24) & 0x7fffffff)` keeps the cast spelling, passes every sanitizer, silently drops bit 31 -- both v1 rows green over a real value defect. MEASURED dead against v2 (C1). Also pressed the staleness point: a behavioural row that can read a stale binary 'cannot be trusted as verification' -- conceded; the census is the binary-independent load-bearing row by design, and the behavioural row says so.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Two more escapes in the same class -- `~(uint32_t)` one character before a cast, and a comma-expression smuggling a signed shift behind a cast match -- both MEASURED dead against v2. Its liveness finding LANDED AS A ROW CHANGE: the behavioural row now requires each subtype's own construction banner, so a binary that dies at startup reads RED, not clean. Its overclaim list (grep counts lines not casts; 're-pins #446' needs provenance) is answered by v2 for the first and conceded-with-caveat-stated for the second.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR. Found the [^)t] class hole: ANY signed cast whose text ends in `)` evaded both v1 regexes -- `(int)buf[3]<<24` reintroduces the exact UB. Its smallest mutant was an ADDED dead statement, which v1 could never see and v2 catches as a multiset EXTRA. Measured dead (C1).",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: DEFECT-IN-DETECTOR, same class (a suffix on a still-cast shift). Confirmed the product diff sound with a per-arm width table, confirmed buf[1]<<8/buf[2]<<16 cannot hit 6.5.7p4 (max 0xFF0000 -- out of scope, not a miss), and completed the arcbioswalk64 picture: the misaligned +0x34 read is WHY 64-bit construction witnesses :784 -- the decoded bytes are AffinityMask 0xffffffff, which supplies buf[3] >= 0x80.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND (68 KB). No escape beyond the classes the other seats named.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "VERDICT: SOUND.",
+     "grade": "CONFIRMED",
+     "ev": "_scratchpad/panel_20260821_223445"
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Deliberately not fired on the review pass, per the owner's standing deprioritisation -- a DELIBERATE OMISSION, not a seat failure; seven scriptable seats answered. Owed for: whether the frozen-table census (S4 form) is the right standing answer for idiom-class fixes, or whether it over-freezes.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "",
+     "date": "2026-08-21",
+     "note": "[HELD AWAITING SEAT: fable5] Not fired on the design pass either; seven seats answered and the scope split was adjudicated in the main loop.",
+     "grade": "UNKNOWN",
+     "ev": "not fired"
     }
-   ]
+   ],
+   "witness": "construction:gate-9 mechanism -- a freshly rebuilt instrumented tree shows 2 UBSan left-shift lines on each of the five reaching SGI subtypes pre-fix and 0 post-fix, ASan 0 throughout (independently re-confirming #446). The rebuild was load-bearing: the stale July binary reported the pre-#446 pattern."
   },
   {
    "id": "nulheredoc",
@@ -15090,6 +15235,30 @@
      "note": "A pass-2 seat named the smallest undetected mutation: swap #449's latch class from SH4_VAL_RTCSRINT to SH4_VAL_RCR1INT. It CONDITIONED the claim correctly -- it matters only 'if an earlier RCR1 complaint with an OVERLAPPING BIT' suppressed the RTCSR one.\n\nMEASURED: the mutant scores 10/10 against the shipped detector. But the bit sets are DISJOINT -- RCR1 CIE|AIE = 0x18, RTCSR CMIE|OVIE = 0x42 -- and sh4_val_first keys on BITS, so a shared class slot cannot suppress anything. *** THE MUTANT IS EQUIVALENT, NOT SURVIVING, and that is a different diagnosis from 'the detector is weak'. ***  The seat's condition is simply not met.\n\n*** WHAT IS WORTH KEEPING IS THE FRAGILITY. ***  Nine classes now share one `val_reported[cls][inst]` array, and correctness of the class assignment is currently guaranteed by nothing except that no two classes' bit sets overlap. Renumber one header constant, or add a tenth class that shares bits with an existing one, and a wrong class assignment becomes a SILENT suppression of a real diagnostic -- with no row able to see it, because while the sets are disjoint there is nothing observable to assert.\n\nCandidate answers for a round to weigh: a compile-time assertion that the classes' bit domains are disjoint; or making the class a property of the register rather than a hand-written argument at each call site.",
      "grade": "CONFIRMED",
      "ev": "measured, panel_20260821_211546"
+    }
+   ]
+  },
+  {
+   "id": "arcbioswalk64",
+   "title": "arcbioswalk64  The 64-bit component walker reads peeraddr+0x34 -- a slice of AffinityMask -- where IdentifierLength is at +0x40",
+   "state": "held",
+   "commits": "",
+   "hold": "Filed out of #450's pass 1. Wrong-offset defect, different semantic class from the shift UB; its own round.",
+   "closure": {
+    "by": "",
+    "badge": "",
+    "note": ""
+   },
+   "witness": "none yet -- established by LAYOUT ARITHMETIC (0x18-byte pointer header + sgi_arcbios.h offsets, corroborated by the walker's own +0x50 step), not by execution. Needs a measured witness before a fix round.",
+   "entries": [
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "✓",
+     "date": "2026-08-21",
+     "note": "Found while checking #450's consequence trace: the reason the load-bearing shift site :751 never fires is that *** THE WALK ITSELF IS BROKEN. ***  The 64-bit walker reads 4 bytes at peeraddr+0x34 as 'IdentifierLength'. In-RAM layout: ptr_peer/ptr_child/ptr_parent (0x18) then arcbios_component64 -- Class +0x18, Key +0x28, AffinityMask +0x30, ConfigurationDataSize +0x38, IdentifierLength +0x40, Identifier +0x48, total 0x50 = exactly the walker's step. So +0x34 is the HIGH HALF OF AFFINITYMASK. The walker masks the read with 0xfffff and skips accordingly -- with AffinityMask 0xffffffff that is a ~1 MiB skip per node, and the walk leaves the component list after the first node.\n\nCONSEQUENCE FOR #450's record, stated there too: :751's mis-link hazard is a counterfactual PARTLY BECAUSE this bug prevents the walk from ever reaching a node whose parent pointer would exercise it. Fixing this row may make that site live -- the coupling runs one way, like ctorabortclass before it.\n\nHONEST LIMIT: layout arithmetic and one corroborating step constant, no execution. The 32-bit walker's offset (+0x28 read, +0x30 step) should be checked in the same round rather than assumed correct by symmetry.",
+     "grade": "MANUAL",
+     "ev": "_scratchpad/panel_20260821_220346"
     }
    ]
   }

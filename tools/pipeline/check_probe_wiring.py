@@ -172,6 +172,7 @@ MANIFEST = {
     #  so it needs no exemption.  #446 wired its probe in the same commit as its fix.
     "sgi_eaddr_probe.py":          (CLASS_DETECTOR, "#446 SGI eaddr value oracle at arcbios_init"),
     "sh4_pcic_probe.py":           (CLASS_DETECTOR, "#443 sh4 PCIC exit sites"),
+    "arcbios_shift_probe.py":      (CLASS_DETECTOR, "#450 arcbios exact-statement census"),
     "sh4_chcr_probe.py":           (CLASS_DETECTOR, "#448 sh4 CHCR field decoders"),
     "sh4_rtcsr_probe.py":          (CLASS_DETECTOR, "#449 sh4 RTCSR refresh-interrupt enables"),
     "sh4_rtcsr_witness.py":        (CLASS_WITNESS,  "#449 pre-fix symptom: a DELAYED host death"),

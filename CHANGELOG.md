@@ -4271,6 +4271,119 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R19 (#450) — ten uncast shifts, and the author had already cast four of them
+
+`src/promemul/arcbios.c`. `buf[]` is `unsigned char`; `buf[3] << 24` promotes to `int`, and with
+`buf[3] >= 0x80` the result is unrepresentable — C99 6.5.7p4, undefined behaviour. **Fourteen
+sites, four already cast correctly** — and line 580 sits between two uncast siblings at 570 and
+590, so the author knew the idiom and applied it to 4 of 14. A class, not a typo.
+
+At the three 64-bit-assembly sites the wrapped-negative `int` converts to `uint64_t` before the
+high-byte terms are added, so the assembled pointer is **`V − 2^32`: low word correct, high word
+one too small**. Concrete witnessed value: `FIRST_ARC_COMPONENT` is `0xffffffffbfca8000`, whose
+swapped `buf[3]` is `0xBF = 191` — the exact number in the UBSan message.
+
+MEASURED on a freshly rebuilt instrumented tree: 2 shift lines on each reaching subtype
+(`:570/:590` on ip12/ip32/ip35, `:737/:784` on ip28/ip30), ASan 0 everywhere — the rebuild also
+independently re-confirmed `#446`.
+
+### Scope was contested in pass 1, and adjudicated ALL TEN
+
+One seat argued for the four witnessed sites only, under the round rule's witness clause. Two
+argued all ten, and the decisive form of the argument: **the cast is provably value-neutral
+wherever the UB is not firing, so there is nothing per-site for a witness to adjudicate** — and
+leaving six known-UB sites means the next image or subtype reopens the identical round. The
+coverage objection (six fixes no sweep can exercise) is answered by the census row below, and the
+kill table proves that answer rather than asserting it.
+
+Width-matched casts per the house idiom. A seat corrected the brief's arithmetic here: the four
+pre-existing casts split **3-to-1** (`(uint64_t)` at `:1349/:1400/:1449`, `(uint32_t)` only at
+`:580`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
+value being assembled*, and the fix follows it.
+
+### Two gate-9 rows, because the existing three-way CANNOT pin this
+
+`sanhit()` already counted these `runtime error:` lines — but gate 9's assertion is
+**directional**, and reverting the casts lands on dirty-upstream/dirty-HEAD, which is scored
+"pre-existing, reported but not failed". A revert is invisible to it.
+
+* **Behavioural**: the five reaching SGI subtypes must produce ZERO left-shift lines and zero
+  ASan (which re-pins `#446` through the same fresh binary). Inherits gate 9's staleness caveat
+  (`asanstale`), stated in the row rather than hidden.
+* **Static census**: every `buf[3] << 24` in the file carries a width-matched cast — 14 casts,
+  0 uncast. Deliberately binary-independent, so it stays load-bearing when the instrumented
+  binary is stale, and it is the only row that can see the six sites no current image drives
+  with `buf[3] >= 0x80`. It also kills the mutant no sanitizer can: `(buf[3]&0x7f)<<24` is
+  UB-free, silently drops bit 31, and passes every sweep — the census counts 13 and reddens.
+
+KILL TABLE, measured (census cast/uncast; sweep5 = shift lines over the five reaching subtypes):
+clean 14/0, 0 · revert witnessed `:737` → 13/1 **and** sweep 2 (both rows) · revert unwitnessed
+`:1413` → 13/1, sweep 0 (**census only — the measurement that proves it load-bearing**) ·
+`&0x7f` at `:570` → 13/0, sweep 0 (census only).
+
+### *** A VOID MEASUREMENT CAUGHT MID-ROUND: build_asan.sh BUILDS FROM GIT HEAD ***
+
+Its first "post-fix" sweep reported the PRE-fix counts with rc=0 — because `build_one` runs
+`git archive "$src"`, so an uncommitted fix silently measures the committed source. Rule 4
+("did it fail for the reason under test?") caught it: the UBSan lines still named the OLD
+sites. The real verification used a private tree with the working-tree file installed and
+**verified by cmp before building**. Recorded here because rc=0 from that script means "HEAD
+built", never "your edit built".
+
+### Per-site truth table, as corrected by the panel
+
+The round's own pass-1 analysis was WRONG twice and the seats fixed it: the claimed
+"mis-linked component tree" was a **counterfactual about `:751`** (the witnessed site `:737`
+feeds only `== 0` tests, which sign extension cannot change — corruption forces the low word
+≥ 2^31, so a corrupted value can never alias zero); and the 64-bit `parent` parameter is
+`uint64_t`, not a promoted `uint32_t`. A seat also completed the trace: both mis-link
+directions exist (false negative at true-high-word 0, **false positive at true-high-word 1**),
+data-dependent. The Get* trio (`:1362/:1413/:1462`) is value-benign because the 4-byte branch
+and the `(int64_t)(int32_t)` truncation are keyed on the SAME `arc_64bit` condition — read and
+confirmed, not assumed.
+
+### Residual filed, not fixed: `arcbioswalk64`
+
+The 64-bit component walker reads `peeraddr + 0x34` for "IdentifierLength". With the
+0x18-byte pointer header (`ptr_peer/ptr_child/ptr_parent`) ahead of `arcbios_component64`
+(which is why the walker steps `+0x50`), **`+0x34` falls inside AffinityMask (+0x30..0x37);
+IdentifierLength is at `+0x40`.** The walker reads a slice of the wrong field, masks it, and
+skips accordingly — a wrong-offset defect, different semantic class, its own round.
+
+Gates: gate 9's two new rows green post-commit (behavioural row requires the committed tree by
+construction); census + kill table measured pre-commit. Twin tree and both NO-VPATH trees carry
+`arcbios.c` byte-identically; `build/` rebuilt, rc=0, zero warnings.
+
+### Pass 2: FOUR seats killed the census v1 with one token each, and v2 is a frozen table
+
+The first census was two greps ("14 cast spellings, 0 uncast"). Four seats independently
+returned DEFECT-IN-DETECTOR against it, each with a concrete escape: `& 0x7fffffff` appended
+after a cast (keeps the spelling, passes every sanitizer, silently drops bit 31);
+`~(uint32_t)` one character before it; a comma-expression smuggling a signed shift behind a
+cast match; and an ADDED dead statement `(int)buf[3]<<24` that reintroduces the exact UB while
+both counts hold. *** A PATTERN PINS WHAT ITS AUTHOR THOUGHT OF. ***
+
+The replacement is `regress/arcbios_shift_probe.py` — the `#444` S4 precedent: every
+buf[]-assembly statement, whitespace-normalised and comment/string-stripped, exact-matched as a
+multiset against a **frozen table of 14 canonical statements** (generated from the reviewed
+file, not typed — the hand-assembled-encoding trap has five recorded incidents). MEASURED: all
+four seat escapes, plus the earlier three mutants, die to C1; a comment quoting the uncast
+idiom no longer false-positives (v1's known loud cost, closed by the stripper). The accepted
+trade is S4's: a legitimate edit to any of the fourteen must update the table in the same
+commit.
+
+A fifth seat point landed on the behavioural row: **zero matching lines from a run that never
+constructed is an absent measurement, not a clean one** — so each subtype must now show its own
+`model: SGI-` banner or the row reddens. *** THE FIRST TOKEN CHOSEN FOR THAT CHECK WAS ITSELF
+MEASURED WRONG BEFORE SHIPPING *** — it returned 0 on a live construction because the probe run
+lacked gate 9's `detect_leaks=0` environment; verified present on all five subtypes under the
+gate's exact env before landing. A liveness token nobody verified is how a row goes
+permanently red — or worse, how "never ran" reads as clean.
+
+Grok also completed the `arcbioswalk64` picture: the misaligned `+0x34` read is WHY 64-bit
+construction witnesses `:784` at all — the bytes it decodes are AffinityMask `0xffffffff`,
+which is what supplies a `buf[3] >= 0x80`.
+
 ## R18 (#449) — the host died nine milliseconds after the guest store, in a timer callback
 
 `sh4_timer_tick()` read `bsc_rtcsr` and called `exit(1)`. The guest write to RTCSR

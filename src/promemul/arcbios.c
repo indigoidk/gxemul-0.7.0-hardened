@@ -567,7 +567,7 @@ static uint64_t arcbios_addchild(struct cpu *cpu,
 			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
 		}
-		epeer   = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
+		epeer   = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint32_t)buf[3]<<24);
 
 		cpu->memory_rw(cpu, cpu->mem, peeraddr + 1 *
 		    machine->md.arc->wordlen,
@@ -587,7 +587,7 @@ static uint64_t arcbios_addchild(struct cpu *cpu,
 			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
 		}
-		eparent = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
+		eparent = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint32_t)buf[3]<<24);
 
 		/*  debug("  epeer=%x echild=%x eparent=%x\n",
 		    (int)epeer,(int)echild,(int)eparent);  */
@@ -616,7 +616,7 @@ static uint64_t arcbios_addchild(struct cpu *cpu,
 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
 		}
 		
-		tmp = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
+		tmp = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint32_t)buf[3]<<24);
 		peeraddr += 0x30;
 		peeraddr += tmp + 1;
 		peeraddr = ((peeraddr - 1) | 3) + 1;
@@ -720,7 +720,7 @@ static uint64_t arcbios_addchild64(struct cpu *cpu,
 			tmp2 = buf[2]; buf[2] = buf[5]; buf[5] = tmp2;
 			tmp2 = buf[3]; buf[3] = buf[4]; buf[4] = tmp2;
 		}
-		epeer   = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24)
+		epeer   = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint64_t)buf[3]<<24)
 		    + ((uint64_t)buf[4] << 32) + ((uint64_t)buf[5] << 40)
 		    + ((uint64_t)buf[6] << 48) + ((uint64_t)buf[7] << 56);
 
@@ -734,7 +734,7 @@ static uint64_t arcbios_addchild64(struct cpu *cpu,
 			tmp2 = buf[2]; buf[2] = buf[5]; buf[5] = tmp2;
 			tmp2 = buf[3]; buf[3] = buf[4]; buf[4] = tmp2;
 		}
-		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24)
+		echild  = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint64_t)buf[3]<<24)
 		    + ((uint64_t)buf[4] << 32) + ((uint64_t)buf[5] << 40)
 		    + ((uint64_t)buf[6] << 48) + ((uint64_t)buf[7] << 56);
 
@@ -748,7 +748,7 @@ static uint64_t arcbios_addchild64(struct cpu *cpu,
 			tmp2 = buf[2]; buf[2] = buf[5]; buf[5] = tmp2;
 			tmp2 = buf[3]; buf[3] = buf[4]; buf[4] = tmp2;
 		}
-		eparent = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24)
+		eparent = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint64_t)buf[3]<<24)
 		    + ((uint64_t)buf[4] << 32) + ((uint64_t)buf[5] << 40)
 		    + ((uint64_t)buf[6] << 48) + ((uint64_t)buf[7] << 56);
 
@@ -781,7 +781,7 @@ static uint64_t arcbios_addchild64(struct cpu *cpu,
 			tmp2 = buf[0]; buf[0] = buf[3]; buf[3] = tmp2;
 			tmp2 = buf[1]; buf[1] = buf[2]; buf[2] = tmp2;
 		}
-		tmp = buf[0] + (buf[1]<<8) + (buf[2]<<16) + (buf[3]<<24);
+		tmp = buf[0] + (buf[1]<<8) + (buf[2]<<16) + ((uint64_t)buf[3]<<24);
 
 		tmp &= 0xfffff;
 
@@ -1359,7 +1359,7 @@ int arcbios_emul(struct cpu *cpu)
 					buf[2] = tmp;
 				}
 				peer = buf[0] + (buf[1]<<8) + (buf[2]<<16)
-				    + (buf[3]<<24);
+				    + ((uint64_t)buf[3]<<24);
 			}
 
 			cpu->cd.mips.gpr[MIPS_GPR_V0] = peer?
@@ -1410,7 +1410,7 @@ int arcbios_emul(struct cpu *cpu)
 					buf[2] = tmp;
 				}
 				child = buf[0] + (buf[1]<<8) + (buf[2]<<16) +
-				    (buf[3]<<24);
+				    ((uint64_t)buf[3]<<24);
 			}
 
 			cpu->cd.mips.gpr[MIPS_GPR_V0] = child?
@@ -1459,7 +1459,7 @@ int arcbios_emul(struct cpu *cpu)
 					buf[2] = tmp;
 				}
 				parent = buf[0] + (buf[1]<<8) +
-				    (buf[2]<<16) + (buf[3]<<24);
+				    (buf[2]<<16) + ((uint64_t)buf[3]<<24);
 			}
 
 			cpu->cd.mips.gpr[MIPS_GPR_V0] = parent?
