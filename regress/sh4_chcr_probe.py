@@ -57,8 +57,13 @@ import sys
 
 import sh4_pcic_probe as P
 
+SH4_SAR0 = 0xffa00000           # src/include/sh4_dmacreg.h:37
+SH4_DAR0 = 0xffa00004           # :38
+SH4_DMATCR0 = 0xffa00008        # :39
 SH4_CHCR0 = 0xffa0000c          # src/include/sh4_dmacreg.h:40
+SH4_CHCR1 = 0xffa0001c          # :45
 SH4_CHCR3 = 0xffa0003c          # :55
+SH4_CHCR7 = 0xffa0008c          # :85  -- NOT a stride from CHCR3; 4..7 restart at 0xffa00050
 CHCR_DM = 0x0000c000            # :117
 CHCR_SM = 0x00003000            # :121
 CHCR_TS_4BYTE = 3 << 4          # :131
@@ -80,7 +85,7 @@ ST = {1: 0x2100, 2: 0x2101, 4: 0x2102}    # mov.b/w/l r0,@r1
 VAL_RE = re.compile(r"\[ sh4: DMA channel \d+: [a-z ]+ \d+ not implemented"
                     r" -- transfer declined\.  \(once per encoding\) \]")
 
-EXPECT_ROWS = 20
+EXPECT_ROWS = 27
 
 rows = []
 
@@ -96,8 +101,78 @@ def wr(addr, val, label, kw):
     return P.write_arm(addr, val, label, kw, op=ST[4])
 
 
+#  *** TWO FAMILIES OF DIAGNOSTIC NOW EXIST IN THIS DEVICE, AND A ROW THAT COUNTS ONLY
+#  ONE OF THEM IS BLIND TO THE OTHER. ***  VAL_RE matches #448's "encoding N not
+#  implemented"; IE_RE matches #453's transfer-end-interrupt line.  A pass-2 seat found
+#  that the ACCEPT rows -- whose whole claim is "ZERO diagnostics" -- counted only VAL_RE,
+#  so `cause_interrupt = 1` (one token) made every legal transfer print the #453 line on
+#  the path A1 names as silent, and all 25 rows stayed green.
+IE_RE = re.compile(r"sh4: DMA channel (\d+): a transfer-end interrupt was requested")
+
+
 def diags(txt):
     return VAL_RE.findall(txt or "")
+
+
+def any_diag(txt):
+    """EVERY diagnostic this device can emit, both families."""
+    return VAL_RE.findall(txt or "") + IE_RE.findall(txt or "")
+
+
+def arm_then_read(chcr_val, read_addr, label, kw,
+                  sar=0x0c001000, dar=0x0c002000, tcr=0x00000042):
+    """Write NON-RESET values to SAR/DAR/DMATCR, then CHCR, then read one back.
+
+    *** THE NON-RESET VALUES ARE THE WHOLE POINT, AND THE FIRST VERSION OF THESE ROWS WAS
+    MEASURED VACUOUS WITHOUT THEM. ***  They asserted SAR/DAR/DMATCR were 0 after the
+    declined request -- but 0 is also their RESET value, so a mutant that ZEROES them was
+    indistinguishable from correct behaviour and passed at 24/24.  Arming each register
+    with a distinct non-zero value first makes "unchanged" a claim that can fail.
+
+    One session throughout: the state lives in the emulator process, so a fresh-emulator
+    readback would show the reset value on clean and mutant alike.
+
+    All ten opcodes were checked against the emulator's own disassembler.
+    """
+    ops = [0x2102,      # mov.l r0,@r1   SAR   <- r0
+           0x7104,      # add #4,r1
+           0x2142,      # mov.l r4,@r1   DAR   <- r4
+           0x7104,      # add #4,r1
+           0x2162,      # mov.l r6,@r1   DMATCR<- r6
+           0x7104,      # add #4,r1
+           0x2152,      # mov.l r5,@r1   CHCR  <- r5   (this is the declined request)
+           0x6272,      # mov.l @r7,r2   read the register under test
+           0x2322,      # mov.l r2,@r3   park it where the row can see it
+           0x0009]
+    return P.session(
+        ["put w 0x%x, 0x%08x" % (P.DEST, P.POISON),
+         "r1=0x%x" % SH4_SAR0, "r0=0x%x" % sar, "r4=0x%x" % dar, "r6=0x%x" % tcr,
+         "r5=0x%x" % chcr_val, "r7=0x%x" % read_addr, "r3=0x%x" % P.DEST]
+        + P.poke(ops) + ["pc=0x%x" % P.CODE],
+        len(ops) - 1, label, disasm_upto=20, **kw)
+
+
+def store_then_read(store_addr, store_val, read_addr, label, kw):
+    """Store to one register and read another back IN THE SAME PROCESS.
+
+    *** THE SINGLE SESSION IS THE WHOLE POINT AND A SEPARATE-SESSION READ WOULD BE
+    VACUOUS. ***  These rows exist to catch a mutant that writes DMA state on the
+    declined path -- setting CHCR.TE just before the diagnostic, say.  That state lives
+    in the emulator process, so reading it back from a FRESH emulator would show the
+    reset value on the clean build and on the mutant alike, and the row could never fail.
+
+    r0/r1 carry the store, r4/r3 the load and its destination.
+    """
+    ops = [0x2102,      # mov.l r0,@r1   -- the store under test
+           0x6242,      # mov.l @r4,r2   -- read the register back
+           0x2322,      # mov.l r2,@r3   -- park it where the row can see it
+           0x0009]
+    return P.session(
+        ["put w 0x%x, 0x%08x" % (P.DEST, P.POISON),
+         "r0=0x%x" % store_val, "r1=0x%x" % store_addr,
+         "r4=0x%x" % read_addr, "r3=0x%x" % P.DEST]
+        + P.poke(ops) + ["pc=0x%x" % P.CODE],
+        len(ops) - 1, label, disasm_upto=8, **kw)
 
 
 def main():
@@ -188,7 +263,7 @@ def main():
     #  and one of these reddens -- which is the tripwire the fix itself destroyed. ***
     buf, alive, st = wr(SH4_CHCR0, CHCR_LEGAL, "A1", kw)
     row("A1 ACCEPT: a fully legal CHCR runs with ZERO diagnostics",
-        st and alive and len(diags(buf)) == 0,
+        st and alive and len(any_diag(buf)) == 0,
         "alive=%s lines=%s" % (alive, diags(buf)),
         "alive and NO diagnostic: TS=4byte, DM/SM=increment, RS=0x200, TD set are all "
         "modelled, so any complaint means a guard mask GREW")
@@ -209,7 +284,7 @@ def main():
         bad = []
         for v in vals:
             buf, alive, st = wr(SH4_CHCR0, v, name.split()[0], kw)
-            if not (st and alive and len(diags(buf)) == 0):
+            if not (st and alive and len(any_diag(buf)) == 0):
                 bad.append((hex(v), alive, diags(buf)))
         row(name, not bad, bad or "all accepted silently",
             "every one alive with NO diagnostic")
@@ -413,11 +488,91 @@ def main():
     #  which is correct: that day the row must be deleted and `sh4dmacie` closed, and a
     #  gate that goes red is how anyone finds out the exclusion has expired.
     buf, alive, st = wr(SH4_CHCR0, RS_ACCEPTED | CHCR_IE | CHCR_TD, "X1", kw)
-    row("X1 EXCLUSION: the IE site is STILL fatal -- #448 deliberately omits it",
-        st and not alive and "sh4 dmac interrupt" in (buf or ""),
-        "alive=%s diagnostic=%s" % (alive, "sh4 dmac interrupt" in (buf or "")),
-        "NOT alive: this is `sh4dmacie`, a different semantic class.  If this row "
-        "reddens, that round has landed -- delete the row rather than the fix.")
+    #  *** X1 USED TO ASSERT THIS SITE WAS STILL FATAL, AND ITS OWN MESSAGE SAID WHAT TO
+    #  DO WHEN IT REDDENED: "delete the row rather than the fix".  #453 landed, so it is
+    #  gone and these three replace it. ***
+    #
+    #  What #453 changed: a guest CHCR write of 0x00000205 -- RS=2, the ONE resource
+    #  select this model accepts, with IE and TD set -- used to reach
+    #  `fatal("TODO: sh4 dmac interrupt!"); exit(1)`.  MEASURED across all sixteen RS
+    #  encodings: exactly that one reached it; the other fifteen decline at the RS switch.
+    #
+    #  Why the interrupt is NOT generated instead, which is the part a reader will
+    #  question: the only arm that reaches the site performs no transfer at all -- the
+    #  external device is expected to move the data and this model does not simulate it --
+    #  so DMATCR has not been consumed and the manual conditions DMTE on exactly that.
+    #  Asserting it would report a completion that did not happen.
+    #  The #453 diagnostic has its OWN wording, so VAL_RE -- which matches the
+    #  "... encoding N not implemented" family -- does not see it.  Counting with the
+    #  wrong pattern reported zero lines on a build that was printing one, which is the
+    #  vacuous-row shape in miniature: the row would have passed a mutant that removed
+    #  the diagnostic entirely.
+    x = CHCR_IE | CHCR_TD | RS_ACCEPTED
+    buf, alive, st = wr(SH4_CHCR0, x, "X1", kw)
+    d = IE_RE.findall(buf or "")
+    row("X1 IE on the ACCEPTED resource select -- ALIVE, ONE line, NAMING channel 0",
+        st and alive and d == ["0"],
+        "alive=%s lines=%d %s" % (alive, len(d), d),
+        "alive with one diagnostic.  This is the last guest-reachable host death that was "
+        "in this file; pre-#453 the same store ended the process")
+
+    #  ---- X2: the mutant a pass-1 seat named, and it is why X1 alone is not enough ------
+    #  Add `dmac_chcr[ch] |= CHCR_TE;` just before the diagnostic and the host still
+    #  survives and still prints once -- while falsely reporting an unperformed transfer
+    #  COMPLETE, and making the next call return early at the `chcr & CHCR_TE` test.
+    #  Nothing on that path may write ANY dma state: SAR, DAR, DMATCR and CHCR are all
+    #  read-only there, checked line by line.
+    for nm, addr, want in [("CHCR", SH4_CHCR0, x),
+                           ("DMATCR", SH4_DMATCR0, 0x00000042),
+                           ("SAR", SH4_SAR0, 0x0c001000),
+                           ("DAR", SH4_DAR0, 0x0c002000)]:
+        b2, a2, s2 = arm_then_read(x, addr, "X2" + nm, kw)
+        got = P.dumped(b2)
+        row("X2 %s still holds the value the guest armed it with (0x%08x)" % (nm, want),
+            s2 and a2 and got == P.le(want),
+            "%s readback=%s want=%s" % (nm, got, P.le(want)),
+            "the declined path writes NOTHING -- SAR, DAR, DMATCR and CHCR are all "
+            "read-only there.  Each is armed with a DISTINCT NON-RESET value first, "
+            "because an earlier draft checked for 0 and a mutant that zeroes them passed "
+            "at 24/24: 0 is also the reset value, so the row could not fail")
+
+    #  ---- X3: the same request TWICE -- the latch, and the third round to need this ----
+    #  X1 stores once, so an UNLATCHED fatal() is invisible to it: one store, one line,
+    #  either way.  MEASURED as a survivor at 24/24 before this row existed.  #451 and
+    #  #452 each learned the same thing about their own detectors; a latched diagnostic
+    #  needs a repeat row or the latch is untested.
+    buf3, alive3, st3 = two_stores(x, x, SH4_CHCR0, "X3")
+    d3 = IE_RE.findall(buf3 or "")
+    row("X3 the SAME declined request twice -- ONE line, still naming channel 0",
+        st3 and alive3 and d3 == ["0"],
+        "alive=%s lines=%d %s" % (alive3, len(d3), d3),
+        "one line for two identical requests.  Two means the guard is gone and a guest "
+        "looping on a legal DMA draws an unsilenceable line per store, which fatal() "
+        "cannot be quieted out of")
+
+    #  ---- X4: the SAME request on OTHER CHANNELS ---------------------------------------
+    #  *** EVERY OTHER ROW IN THIS FILE DRIVES CHANNEL 0, AND A MUTANT THAT RESTORES THE
+    #  HOST DEATH ON CHANNELS 1..7 PASSED ALL TWENTY-FIVE OF THEM. ***  Measured:
+    #  `if (channel != 0) { fatal("TODO: sh4 dmac interrupt!"); exit(1); }` inserted ahead
+    #  of the latch scored 25/25.  A pass-2 seat named it, and it is the FOURTH round
+    #  running to find a detector covering one instance of a multi-instance thing --
+    #  #451's two SCI sites, #452's two TLB devices, this round's eight channels.
+    #
+    #  It also makes the enum comment's "eight in total" a measurement rather than an
+    #  assertion: without this row only one of the eight latch instances was ever used.
+    #
+    #  Channel 7 is at 0xffa0008c and NOT a stride past channel 3 -- registers for
+    #  channels 4..7 restart at 0xffa00050 (sh4_dmacreg.h:67-85).
+    for nm, addr, ch in [("X4a channel 1", SH4_CHCR1, "1"),
+                         ("X4b channel 7", SH4_CHCR7, "7")]:
+        b4, a4, s4 = wr(addr, x, nm.split()[0], kw)
+        d4 = IE_RE.findall(b4 or "")
+        row("%s -- host ALIVE, one line, and it NAMES that channel" % nm,
+            s4 and a4 and d4 == [ch],
+            "alive=%s lines=%s" % (a4, d4),
+            "alive with exactly one diagnostic naming channel %s.  Every other row here "
+            "drives channel 0, so a mutant that keeps channel 0 correct and kills the "
+            "host on the rest is invisible without this" % ch)
 
     #  ---- W0 / identity ---------------------------------------------------------------
     n_ses = len(P.STARTS)

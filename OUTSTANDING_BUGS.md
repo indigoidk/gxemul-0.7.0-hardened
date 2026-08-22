@@ -6217,13 +6217,84 @@ restored to a verified 33/33 rather than left broken.
 
 ## 2026-08-21 — #448 shipped, and reviewing it found two more things in the same function
 
-### `sh4dmacie` — held
+### `sh4dmacintr` — open, filed by #453 with everything the round needs
+
+*** THE SH-4 DMAC CANNOT DELIVER A TRANSFER-END INTERRUPT AT ALL, AND
+`sh4_exception.h` DEFINES NO DMAC VECTOR. *** Split out of `#453` deliberately, on an
+argument two review seats made independently, and filed with the facts so the round does not
+have to re-derive them.
+
+**The manual's codes** (SH7750 Hardware Manual, interrupt table):
+
+| source | meaning | INTEVT |
+|---|---|---|
+| DMTE0 | CH0 transfer-end interrupt | `H'640` |
+| DMTE1 | CH1 transfer-end interrupt | `H'660` |
+| DMTE2 | CH2 transfer-end interrupt | `H'680` |
+| DMTE3 | CH3 transfer-end interrupt | `H'6A0` |
+| DMTE4..7 | CH4..7 transfer-end | `H'780/7A0/7C0/7E0` |
+| DMAE | Address error interrupt | `H'6C0` |
+
+> "Note: DMTE4–DMTE7: These codes are not used in the SH7750 or SH7750S."
+
+**The rule to implement**, verbatim: *"Bit 1 — Transfer End (TE): This bit is set to 1 after
+the number of transfers specified in DMATCR. If the IE bit is set to 1 at this time, an
+interrupt request (DMTE) is generated."*
+
+**Why it was NOT done in `#453`.** The helper's only consumer would be `dev_pvr.c:300` — the
+Dreamcast PVR DMA, which already sets `CHCR_TE` by hand and carries its own
+`// TODO: _EXACTLY_ what happens at the end of a transfer?`. That is a **different device**,
+which the reopening rule excludes. Two seats put it the same way: *if the infrastructure's
+only consumer is out of scope, the infrastructure is out of scope too, or it ships as dead
+code to satisfy a completeness instinct.*
+
+**Resolutions already settled by the pass-1 panel, so the round need not re-argue them:**
+
+* **Look up four lines, indexed 0–3.** Do not alias channels 4–7 to another DMTE code or to
+  DMAE — DMAE has a different meaning. Use an explicit implemented-channel count rather than
+  assuming `N_SH4_DMA_CHANNELS` (which is 8, "4 on 7750, 8 on 7760") equals the interrupt
+  count. If a completion path meets an IRQ-unmapped channel, bounds-check, leave the line
+  inactive, and emit a latched modelling-gap diagnostic rather than fabricating a code.
+* **DMTE4–7 only with a CPU subtype whose manuals establish them.** The obtained manual does
+  not establish channel capabilities for every modelled SH7750R/SH7751R variant.
+* **An `IE` snapshot taken at function entry is NOT equivalent to `IE` at completion** for an
+  asynchronous external transfer. A completion helper must inspect live CHCR state — a seat
+  named this and it is easy to get wrong.
+* **Deassert-on-TE-clear is plausible but NOT established** by the quoted text; interrupt-line
+  lifetime when `IE` is cleared or changed after completion needs settling in that round.
+
+**Related and separate:** the guest `CHCR` write is a plain assignment
+(`cpu->cd.sh.dmac_chcr[dma_channel] = idata;`), so a guest can set `TE` to 1 directly, which
+the manual forbids — *"The TE bit can only be written with 0 after being read as 1, to clear
+the flag."* A seat noted that enforcing this is more than masking a written 1: "read 1 before
+write 0" needs per-channel read-observed state. **Filed as `sh4tewrite`, its own defect with
+its own witness.**
+
+### `sh4dmacie` — FIXED by #453 (kept for the record)
 
 *** `CHCR_IE` on the one **accepted** resource select still ends the host, and `#448`
 deliberately left it. *** MEASURED: a guest `mov.l` of `0x00000205` to CHCR0
 (`RS=0x200 | IE | TD`) dies at the `if (cause_interrupt)` arm. Its control survives — the same
 store **without IE** (`0x00000201`) leaves the host alive — so the kill is attributable to `IE`
 and not to the transfer.
+
+**And the reachability is now EXHAUSTIVE rather than sampled.** All sixteen RS encodings were
+driven with `IE | TD` set, on the shipped binary, one guest store each:
+
+```
+  RS  chcr      alive  what came out
+   0  00000005  True   declined at the RS switch (latched diagnostic)
+   1  00000105  True   declined at the RS switch
+   2  00000205  False  *** REACHED THE INTERRUPT SITE ***
+   3..15        True   declined at the RS switch
+```
+
+Exactly one of sixteen reaches the site, and it is the one the model ACCEPTS. That confirms by
+measurement what was previously a reading of the `switch`, and it is the fact the fix design
+turns on: **the only arm that reaches `if (cause_interrupt)` is `case 0x200:`, which performs
+no transfer at all** — *"Note: No transfer is done here! It is up to the external device to do
+the transfer itself!"* So at the `exit(1)`, DMATCR's count has not been consumed, while the
+manual conditions DMTE on exactly that count completing.
 
 **Two pass-1 seats independently ruled it out of `#448`, on the round rule rather than on
 convenience.** The other four sites are unimplemented **encodings**, where declining is correct.
@@ -6232,9 +6303,18 @@ notification the model has not implemented. Declining it isn't correct behaviour
 unimplemented feature, with interrupt delivery as its oracle rather than absence-of-transfer.
 *"The same five `exit(1)`s" is a symptom class, not a semantic class.*
 
-*** The exclusion is PINNED, not merely stated: *** `sh4_chcr_probe.py` row **X1 requires this
-site to still be fatal**, so the day it is repaired the gate reddens and names this row. A scope
+*** The exclusion was PINNED, not merely stated: *** `sh4_chcr_probe.py` row **X1 required this
+site to still be fatal**, so the day it was repaired the gate reddened and named this row. A scope
 decision no row asserts is indistinguishable from an oversight.
+
+**AND THAT IS EXACTLY HOW IT PLAYED OUT.** `#453` landed, X1 went red, and its own message said
+what to do: *"delete the row rather than the fix"*. Five rows replaced it. The pin did the job it
+was built for — the repair could not land silently.
+
+**FIXED by `#453`:** the diagnostic is latched and the `exit(1)` is gone, and the interrupt is
+deliberately NOT generated, because the only arm reaching the site performs no transfer and the
+manual conditions DMTE on the transfer having happened. The deferred interrupt infrastructure is
+filed as `sh4dmacintr` above.
 
 One honest trade, named by a pass-1 seat: pre-fix the host dies before any driver can wait;
 post-fix an interrupt-driven driver could wait forever. Better for the host, and a real change —

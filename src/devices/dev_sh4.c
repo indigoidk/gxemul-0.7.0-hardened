@@ -225,6 +225,24 @@ enum {
  *  Ceiling: TWO lines per device lifetime, whatever a guest accesses.
  */
 	SH4_VAL_TLBDA2,			/*  ITLB/UTLB data array 2 not implemented  */
+/*
+ *  #453: the LAST guest-reachable host death in this file, and the one #448 deliberately
+ *  left behind -- CHCR.IE on the one resource select the model ACCEPTS.
+ *
+ *  *** THE KEY IS PER CHANNEL AND CARRIES A SINGLE BIT, because the fault has exactly one
+ *  kind. ***  The other DMAC classes key on an unimplemented ENCODING and there are many
+ *  of those; here the guest asked for a transfer-end interrupt, and there is only one way
+ *  to ask.  Keying on anything finer would be inventing distinctions the code does not
+ *  make.  Ceiling: one line per channel per device lifetime, so eight in total for an
+ *  eight-channel controller -- and that is MEASURED for channels 0, 1 and 7, not for all
+ *  eight.  A pass-2 seat caught the earlier flat "eight in total" as an overclaim: every
+ *  row in the detector drove channel 0, so seven of the eight latch instances had never
+ *  been used, and a mutant restoring the host death on channels != 0 passed all
+ *  twenty-five rows.  Rows X4a/X4b now drive channels 1 and 7 -- 7 because registers for
+ *  channels 4..7 restart at 0xffa00050 rather than continuing the stride, so it exercises
+ *  the far end of both the address map and the instance array.
+ */
+	SH4_VAL_DMACIE,			/*  CHCR.IE: no completion event to signal  */
 	SH4_VAL_NCLASS			/*  count, by construction -- never assign it  */
 };
 
@@ -698,9 +716,60 @@ void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
 		return;
 	}
 
+	/*
+	 *  #453: this ended the host process on a LEGAL request.  MEASURED across all
+	 *  sixteen RS encodings on the shipped binary, one guest store each: exactly ONE
+	 *  reaches here -- RS=2, `chcr = 0x00000205` -- and it is the one configuration
+	 *  the model accepts.  The other fifteen decline at the RS switch above and the
+	 *  host lives.
+	 *
+	 *  *** AND HARDWARE ACCURACY HERE MEANS NOT GENERATING THE INTERRUPT, WHICH IS THE
+	 *  OPPOSITE OF WHAT IT LOOKS LIKE. ***  The SH7750 manual conditions the
+	 *  transfer-end interrupt on the transfer having HAPPENED:
+	 *
+	 *      "Bit 1 -- Transfer End (TE): This bit is set to 1 after the number of
+	 *       transfers specified in DMATCR.  If the IE bit is set to 1 at this time, an
+	 *       interrupt request (DMTE) is generated."
+	 *
+	 *      "Bit 2 -- Interrupt Enable (IE): When this bit is set to 1, an interrupt
+	 *       request (DMTE) is generated after the number of data transfers specified in
+	 *       DMATCR (when TE = 1)."
+	 *
+	 *  The single arm that reaches this point is `case 0x200:` -- single address mode,
+	 *  external address space -- and it performs NO TRANSFER: the external device is
+	 *  expected to move the data itself, which this model does not simulate.  So at this
+	 *  point DMATCR has not been consumed and TE is not set, and asserting DMTE would
+	 *  tell a guest driver that a transfer completed when none occurred.  A review seat
+	 *  named that precisely: it is not a harmless courtesy, it is a data-integrity lie a
+	 *  driver would act on.
+	 *
+	 *  THE HONEST TRADE, stated rather than hidden: before this change the host died
+	 *  before any driver could wait; after it, an interrupt-driven driver waits forever.
+	 *  That is better for the host and it is a real behavioural change, and the
+	 *  diagnostic says which of the two situations the guest is in.
+	 *
+	 *  DELIBERATELY NOT DONE HERE, and filed as its own round: the DMTE/DMAE interrupt
+	 *  vectors (the manual gives H'640/660/680/6A0 and H'6C0; sh4_exception.h defines
+	 *  none), the interrupt-line lookups, and a completion helper.  Their only consumer
+	 *  would be dev_pvr.c:300 -- a DIFFERENT device, which the reopening rule excludes
+	 *  from this round -- so shipping them now would be unused infrastructure added to
+	 *  satisfy a completeness instinct rather than to fix the defect.  Two seats made
+	 *  that argument independently.
+	 *
+	 *  NOTHING is written here on purpose: not TE, not DMATCR, not SAR, not DAR.  Every
+	 *  one of those is read-only on this path, and a mutant that sets TE just before the
+	 *  diagnostic keeps the host alive and prints once while falsely reporting an
+	 *  unperformed transfer complete -- and makes the NEXT call return early at the
+	 *  `chcr & CHCR_TE` test above.  A seat named that mutant; the detector pins all four.
+	 */
 	if (cause_interrupt) {
-		fatal("TODO: sh4 dmac interrupt!\n");
-		exit(1);
+		if (sh4_val_first(d, SH4_VAL_DMACIE, channel, 1u << 0))
+			fatal("[ sh4: DMA channel %i: a transfer-end interrupt was"
+			    " requested (CHCR.IE), but single-address-mode transfers"
+			    " are performed by the external device, which this model"
+			    " does not simulate -- there is no completion event, so"
+			    " TE stays clear and no DMTE is generated.  (once per"
+			    " channel) ]\n", channel);
 	}
 }
 

@@ -4271,6 +4271,134 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R22 (#453) — the last one, and hardware accuracy meant NOT sending the interrupt
+
+`src/devices/dev_sh4.c`. `sh4_dmac_transfer()` ended with
+
+```c
+	if (cause_interrupt) {
+		fatal("TODO: sh4 dmac interrupt!\n");
+		exit(1);
+	}
+```
+
+`cause_interrupt` is `chcr & CHCR_IE`. This is the site `#448` deliberately left behind,
+and it was the **last guest-reachable host death in the file**.
+
+**MEASURED EXHAUSTIVELY, not sampled.** All sixteen RS encodings were driven with `IE|TD`
+set, one guest store each, on the shipped binary:
+
+```
+  RS  chcr      alive  what came out
+   0  00000005  True   declined at the RS switch (latched diagnostic)
+   1  00000105  True   declined at the RS switch
+   2  00000205  False  *** REACHED THE INTERRUPT SITE ***
+   3..15        True   declined at the RS switch
+```
+
+Exactly one of sixteen reaches it — and it is the one configuration the model **accepts**.
+Every other encoding was already declined by `#448`.
+
+### The interesting part is that the fix does NOT send the interrupt
+
+The owner's instruction for this round was *match hardware accuracy if possible, and note
+any discrepancy*. Taken naively that means "deliver the DMTE interrupt". The manual says
+otherwise, because it conditions the interrupt on the transfer having **happened**:
+
+> **Bit 1 — Transfer End (TE):** "This bit is set to 1 after the number of transfers
+> specified in DMATCR. **If the IE bit is set to 1 at this time, an interrupt request (DMTE)
+> is generated.**"
+
+> **Bit 2 — Interrupt Enable (IE):** "When this bit is set to 1, an interrupt request (DMTE)
+> is generated after the number of data transfers specified in DMATCR (when TE = 1)."
+
+And the single arm that reaches this point — `case 0x200:`, single address mode — performs
+**no transfer at all**: *"Note: No transfer is done here! It is up to the external device to
+do the transfer itself!"* So DMATCR has not been consumed and TE is not set. A review seat
+named the consequence exactly: asserting DMTE there is *"not a harmless courtesy, it is a
+data-integrity lie"* — a driver would proceed on data that never moved.
+
+**So hardware accuracy at this site IS the latched decline**, and the discrepancy to record
+is that this model does not simulate the external device that would perform the transfer.
+The diagnostic says precisely that.
+
+### What was deliberately NOT built, and why two seats had to argue it
+
+The obvious "complete" fix adds the DMTE/DMAE vectors (the manual gives `H'640/660/680/6A0`
+and `H'6C0`; `sh4_exception.h` defines **none**), the interrupt-line lookups, and a
+completion helper. Two seats independently argued that out of the round, on the same
+ground: the helper's only consumer would be `dev_pvr.c:300` — a **different device**, which
+the reopening rule excludes — and *"if steps 1–3 produce infrastructure whose only consumer
+is step 4, and step 4 is out of scope, then steps 1–3 are also out of scope. Adding unused
+interrupt vectors would be dead code shipped to satisfy a completeness instinct."*
+
+Filed as its own round with the codes and the channel-count resolution recorded, so it
+starts unambiguous rather than being re-derived.
+
+**The honest trade is stated in the comment rather than hidden:** before this change the
+host died before any driver could wait; after it, an interrupt-driven driver waits forever.
+Better for the host, and a real behavioural change.
+
+### The detector, and two of its own rows were measured vacuous first
+
+`X1` used to assert this site was still fatal — a deliberate exclusion pin from `#448` —
+and its own message said what to do when it reddened: *"delete the row rather than the fix."*
+It reddened. Five rows replace it, and `sh4_chcr_probe.py` goes 20 → 25.
+
+| mutant | result | rows that redden |
+|---|---|---|
+| V `exit(1)` restored verbatim | DIES | X1, X2 ×4, X3 |
+| M1 sets `CHCR_TE` before the diagnostic | DIES | X2 |
+| M2 latch guard removed (flood) | DIES | X3 |
+| M3 diagnostic removed entirely | DIES | X1, X3 |
+| M4 sets `DMATCR` to 0 | DIES | X2 |
+| D1 fatal restored on channels != 0 | DIES | X4a, X4b |
+| G1 `cause_interrupt = 1` always | DIES | A1..A4 |
+| C1 diagnostic reports `!channel` | DIES | X1, X3, X4a, X4b |
+
+**FIVE of those eight survived a version of the rows, and every one was the rows' fault,
+not the fix's.** Three were caught by pass-2 seats after the first five had been measured
+clean -- which is the ask-again working exactly as `#451` adopted it.
+
+* **D1 -- `if (channel != 0) exit(1);` passed all 25 rows.** Every row drove channel 0, so
+  seven of the eight latch instances had never been used. **This is the FOURTH consecutive
+  round to find a detector covering one instance of a multi-instance thing** -- `#451`'s two
+  SCI sites, `#452`'s two TLB devices, and now eight DMA channels. `X4a`/`X4b` drive
+  channels 1 and 7; **7 because registers for channels 4..7 restart at `0xffa00050`** rather
+  than continuing the stride, so it exercises the far end of both the address map and the
+  instance array.
+* **G1 -- `cause_interrupt = 1`, one token, printed the new diagnostic on the path the
+  ACCEPT rows call SILENT.** They counted with `VAL_RE`, which matches `#448`'s "encoding N
+  not implemented" family and cannot see `#453`'s line at all. **Two diagnostic families now
+  exist in this device and a row counting one of them is blind to the other**; the accept
+  rows now use `any_diag()`, which counts both.
+* **C1 -- the diagnostic reporting `!channel`, one character.** `X1` and `X3` asserted the
+  COUNT (`len(d) == 1`) and never the identity, so a line naming the wrong channel passed.
+  They now assert `d == ["0"]`.
+
+**Two of those five survived the first version of the rows, and both were the rows' fault.**
+
+* **M2 survived because `X1` stores ONCE**, so an unlatched `fatal()` is invisible to it —
+  one store, one line, either way. **This is the third consecutive round to learn that a
+  latched diagnostic needs a repeat row**; `#451` and `#452` each found it in their own
+  detectors. `X3` repeats the request.
+* **M4 survived because the `X2` rows asserted `SAR`/`DAR`/`DMATCR` were `0`** — which is
+  also their **reset** value, so a mutant zeroing them was indistinguishable from correct
+  behaviour and passed at 24/24. The rows now arm each register with a distinct **non-reset**
+  value first, so "unchanged" is a claim that can fail.
+
+`X1` also had to be taught its own diagnostic's wording: it first counted with `VAL_RE`,
+which matches the `#448` "encoding N not implemented" family, and reported **zero lines on a
+build that was printing one** — a row that would have passed a mutant deleting the
+diagnostic entirely.
+
+The `X2` rows read state back **in the same process** as the store, deliberately: that state
+lives in the emulator, so a fresh-emulator readback would show the reset value on the clean
+build and the mutant alike. All ten opcodes in the new helper were checked against the
+emulator's own disassembler before use.
+
+Build rc=0, zero warnings. Gate 10 PASS, 62 checks, run singly.
+
 ## R21 (#452) — a device answered for eight megabytes it could not service
 
 `src/devices/dev_sh4.c`. Both TLB data-array devices are registered for **16 MB**:
