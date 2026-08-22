@@ -6021,6 +6021,132 @@ exactly how the memory-mapped UTLB windows at `0xf6000000`/`0xf7000000` behave �
 substantially bigger probe than any in this tree, and it is honest to say so rather than to
 imply the oracle was the obstacle.
 
+### `shsweep` — the exhaustive manual audit, ranked. Several items are LIVE.
+
+*** ~250 SuperH architectural claims graded against the two real manuals, 2026-08-22, at
+the owner's direction. *** The CONFIRMED mass is large and mostly uninteresting — **all 17
+EXPEVT constants, every INTEVT but one, every FPSCR/SR bit position, every TMU/RTC/SCIF/
+SCI/DMAC/BSC register address and width, the whole `#297` FTRC ladder, `#300`, `#315`,
+`#317`, and `#318`'s address composition all hold exactly**, several of them written when
+no manual was in the tree. What follows is only what did not hold.
+
+#### 1. *** A SHIPPED GATE ROW PINS THE OPPOSITE OF THE MANUAL AND WOULD REDDEN A CORRECT
+BUILD. *** This is the one to fix first.
+
+`regress/gate_sh_rounding.sh:161-163`:
+
+> `# `sq at1 clean` pins the WRITE-type judgement the panel split on: a clean page`
+> `# owes an initial-page-write fault, so a build that judged this access as a read`
+> `# would complete the copy and fail this row alone.`
+
+SH7750 Hardware Manual §4.7.4, verbatim:
+
+> "Write type exception judgment is performed for writes to the SQs, and **read type for
+> transfer from the SQs to external memory (PREF instruction)**, and a TLB miss exception,
+> protection violation exception, or initial page write exception is generated."
+
+**The PREF transfer is READ type.** `cpu_sh_instr.c:3745` passes `FLAG_WRITEFLAG`. So a
+clean page owes nothing, `sq at1 prot` (PR=00, "can be read only, in privileged mode") is
+likewise wrong, and **the row is written so that correcting the code turns it red**. A
+detector that enforces a defect is worse than no detector.
+
+The same reasoning is asserted in `CHANGELOG.md:13600-02`, in a retrospective saying it was
+*"re-reviewed against the SH7750 manual"* — **at a date when no SH manual was in the tree.**
+That is the `#357`/`#362`/`#365` shape again, and this time it reached a gate.
+
+`sh4sqexpevt` (below) already quotes the same passage CORRECTLY, so the tree currently holds
+both readings and the gate implements the wrong one.
+
+#### 2. A shipped oracle constant is one bit too wide — and it is `#452`'s
+
+`sh4_tlbda2_probe.py:71` and `sh4_tlbda2_witness.py` use `ITLB_MASK = 0x1ffffdfa`. The
+manual gives the ITLB data-array-1 layout as *"PPN … V by bit [8], SZ by bits [7] and [4],
+**PR by bit [6]**, C by bit [3], and SH by bit [1]"*, and separately: *"There is only one PR
+bit, corresponding to the upper of the PR bits in the UTLB."* **Bit 5 is reserved with an
+undefined read value.** The correct mask is `0x1ffffdda`.
+
+**BUT THE PRECISE STATEMENT MATTERS, AND THE SUMMARY ABOVE OVERSTATES IT — corrected here
+rather than repeated.** `#452`'s rows do not claim to be a hardware oracle. Their comment
+says the expected value is *"the value THIS DEVICE'S OWN MASK folds 0xffffffff to"*, which
+is accurate and is the right thing for a REGRESSION detector to pin: it fails when the
+emulator changes, which is its job.
+
+So this is **not a wrong record in the probe**. It is a one-bit **fidelity gap in the
+device**: `dev_sh4.c`'s `sh4_itlb_da1` handler masks with `SH4_PTEL_PR_MASK` (`0x60`, both
+PR bits) where the manual gives the ITLB **one** PR bit at [6] — the UTLB is the one with
+two, *"PR by bits [6:5]"* at `:10180`. A guest can therefore store bit 5 into an ITLB entry
+and read it back, where hardware leaves it reserved with an undefined read value.
+
+Severity: low and stated as such. Nothing observed is wrong today, no in-tree guest writes
+that bit, and the six rows would simply move with the mask if the device is corrected. What
+it costs is that `#452`'s equality rows currently pin the emulator's behaviour at a point
+where the emulator and the hardware differ — which is fine for regression, and worth knowing
+before anyone cites those constants as architectural.
+
+#### 3. REFUTED and guest-reachable — these change behaviour
+
+| site | what it does | what the manual says |
+|---|---|---|
+| `cpu_sh.c:312-316` | priority 0 → `fatal()` + **`exit(1)`**, commented *"Interrupt not implemented? Hm."* | Priority 0 is **legal and documented** — *"When level 0 is set, the interrupt is masked and interrupt requests are ignored"* — and IPRA/IPRB/IPRC **reset to `H'0000`**, so everything is priority 0 out of reset. A guest-reachable host kill, latent only because landisk kernels program IPRA before starting the timer. |
+| `cpu_sh.c:653` | BL already set → `EXPEVT_RESET_POWER` (`0x000`) | *"a manual reset is executed. The value in EXPEVT at this time is **H'0000 0020**"* → `EXPEVT_RESET_MANUAL`. Found independently by two sweeps. |
+| `memory_sh.c:328-333` | user access ≥ `0x80000000` → `EXPEVT_TLB_MISS_LD/ST` | Listed under **Data Address Error**: *"Exception code H'0E0 (for a read access) or H'100"*. Guest kernels dispatch on EXPEVT. |
+| `cpu_sh_instr.c:3057` | `X(fcnvsd_fpul_drn)` does `cpu->cd.sh.fpul = (int32_t) op1.f;` | FCNVSD reads FPUL and never writes it. **The emulator destroys FPUL on every FCNVSD**, with the same UB `(int32_t)` cast `#297` removed from FTRC. New, unfiled, and the smallest fix in the list. |
+| `memory_sh.c:358-364` | kernel access to `0xe4000000..0xefffffff` → `fatal()` + `exit(1)` | *"Reserved area"*, and *"Operation is not guaranteed"*. Undefined is not process death. |
+| `dev_sh4.c:2899` | BSC reset `WCR3 = 0x77777777` | *"WCR3 is initialized to **H'07777777**"*. BCR2/WCR1/WCR2 on the same lines are correct. |
+| `dev_sh4.c:2023` | TCR write stores UNF verbatim | *"Writing 1 does not change the value."* A guest can fabricate an underflow and a spurious interrupt. |
+| `dev_sh4.c:596` | DMA count masked `0x1fffffff` | *"Bits 31-24 of these registers are reserved"* — DMATCR is 24-bit. (The 29-bit SAR/DAR masks are correct.) |
+
+#### 4. A claim this project made twice, refuted
+
+`cpu_sh_instr.c:150-151` and its sibling `float_emul.c:653` say the SH-4 never delivers a
+subnormal arithmetic result, and that with `DN=0` the silicon raises an FPU error instead.
+**Refuted:** *"When FPSCR.DN = 0, a denormalized number with the same sign as the unrounded
+value, or zero with the same sign as the unrounded value, is generated."* The FPU error is
+raised on a denormalized **input**, not a denormalized result. The **code is right and the
+justification is wrong** — `cpu_sh_instr.c:159-162` calls the DN=0 pass-through "a NAMED
+divergence" when the manual shows hardware doing the same thing.
+
+Rule 2 in action: the claim lives in two files, and only one carries the correction. The
+same happened to `#316`'s FSRRA claim at `cpu_sh_instr.c:3281`, whose sibling at `:3309`
+was corrected while it was not.
+
+#### 5. UNSUPPORTED — absent, which is not the same as contradicted
+
+**The entire PCIC** (`sh4_pcicreg.h`, `dev_sh4.c:2806`, both PCIC probes): *"PCI controller"*
+has **zero hits** in the hardware manual, and the programming manual footnotes it
+*"SH7751 exceptions only. Not provided in the SH7750 Series."* The register block lives in
+the SH7751 manual, which this tree does not hold. **So those probes' standing decision to
+cite headers rather than a manual is correct, and now verifiably so.**
+
+**SH7751R**: zero hits in both. `SH4_PVR_SH7751`, `SH4_PRR_7751R`, and
+`sh_halt_probe.py:21`'s *"the SH7751R this rig models"* are unsourceable here.
+
+**The SZ bit ordering** (`sh4_mmu.h:135-136`): both manuals say only *"SZ by bits [7] and
+[4]"* and label the field `SZ [1:0]`. **No sentence assigns SZ1 to a bit.** It is
+load-bearing — consumed by `memory_sh.c`, `cpu_sh_instr.c:2794` and five `dev_sh4.c` sites —
+so it needs an **empirical pin, not a citation**.
+
+#### 6. Other probe oracles pinning values the manual contradicts
+
+`sh4_bsc_width_probe.py` D8 expects `03c0ffff` where only bits 15/14/13/0 are R/W;
+`sh4_val_probe.py` V17/V18 write `0x01` to RCR1 and expect it back, but bit 0 is AF
+(*"Writing 1 does not change the value"*); `sh4_rtcsr_probe.py` A3 and its witness use a
+bare `mov.w` to RTCSR where the manual mandates a word access **with `B'10100101` in the
+upper byte** — which also settles the open question at `dev_sh4.c:1590` that says *"there is
+no SH-4 document in this tree to settle which convention is right"*.
+
+#### 7. Attribution slips worth one records pass
+
+`dev_sh4.c:592`, `:2891-2894` and `sh4_dmacreg.h:31-32` cite *"the SH7760 manual"* —
+`SH7760` appears **zero times** in either document. The "8 DMA channels on SH7760" claim is
+really **SH7750R**, at exactly the addresses the header uses. `CHCR_TD` names a bit the
+manual calls **DE**; `CHCR_CHSET` names one that is Reserved; `SH_RCR2_ENABLE` is **RTCEN**.
+
+**Ordering, from the sweep and endorsed here:** (1) the gate row, (2) the `ITLB_MASK` bit,
+(3) `cpu_sh.c:312` priority-0 host kill — it is the only *new* guest-reachable `exit(1)` in
+the list — then `cpu_sh.c:653` and `memory_sh.c:328`, then `fcnvsd`, then the single-token
+register corrections, then the records pass.
+
 ### `sh4a4gate` — open, found by the manual re-check, not yet witnessed
 
 *** THIS TREE MODELS NO SH-4A CPU, YET DECODES TWO SH-4A-ONLY INSTRUCTIONS FOR EVERY SH-4
