@@ -106,10 +106,26 @@
  *  latch exists at all: fatal() has no quiet_mode early-out, unlike debug(), so an
  *  unlatched complaint could not be silenced even with -q.
  */
-#define	SH4_VAL_TCRBITS			0	/*  TCR: control bits not modelled       */
-#define	SH4_VAL_DMATCR			1	/*  DMATCR: count wider than 24 bits     */
-#define	SH4_VAL_ICRIRLM			2	/*  ICR: IRLM mode not modelled          */
-#define	SH4_VAL_RCR1INT			3	/*  RCR1: RTC interrupt enable not modelled  */
+
+/*
+ *  #451: CONVERTED FROM #define TO A C99 enum, and the missing initialisers are the
+ *  entire point -- a hand-numbered list can be given a DUPLICATE id, and a duplicate is
+ *  not a wrong message but a SILENT one: two classes sharing an index means the first
+ *  complaint latches the second out forever.  A review seat proposed asserting the
+ *  classes disjoint instead; that was rejected because the bit-domains overlap
+ *  pervasively (separation rests on the array INDEX, not on the constants), so the
+ *  assert would have guarded the wrong invariant while looking like coverage.  Letting
+ *  the compiler number them removes the hazard rather than checking for it, and
+ *  SH4_VAL_NCLASS is then correct by construction instead of by maintenance.
+ *
+ *  The trigger for doing it now was fixed in advance: "when a tenth class arrives".
+ *  SH4_VAL_SCICMD is the tenth.
+ */
+enum {
+	SH4_VAL_TCRBITS,		/*  TCR: control bits not modelled       */
+	SH4_VAL_DMATCR,			/*  DMATCR: count wider than 24 bits     */
+	SH4_VAL_ICRIRLM,		/*  ICR: IRLM mode not modelled          */
+	SH4_VAL_RCR1INT,		/*  RCR1: RTC interrupt enable not modelled  */
 /*
  *  #448: the four CHCR field decoders in sh4_dmac_transfer().  Each guarded a `default:`
  *  arm that called exit(1), so ONE ordinary guest store ended the host process -- and it
@@ -130,10 +146,10 @@
  *  The resulting ceiling is exact and small: TS has 3 unmodelled encodings, DM 1, SM 1 and
  *  RS 15 -- 20 per channel, 160 for an eight-channel controller.
  */
-#define	SH4_VAL_DMACTS			4	/*  CHCR: transmit size encoding      */
-#define	SH4_VAL_DMACDM			5	/*  CHCR: destination address mode    */
-#define	SH4_VAL_DMACSM			6	/*  CHCR: source address mode         */
-#define	SH4_VAL_DMACRS			7	/*  CHCR: resource select             */
+	SH4_VAL_DMACTS,			/*  CHCR: transmit size encoding      */
+	SH4_VAL_DMACDM,			/*  CHCR: destination address mode    */
+	SH4_VAL_DMACSM,			/*  CHCR: source address mode         */
+	SH4_VAL_DMACRS,			/*  CHCR: resource select             */
 /*
  *  #449: the refresh-timer interrupt enables, and this one is NOT reached from a store.
  *  The guest write to RTCSR lands and returns normally; sh4_timer_tick() then read the
@@ -145,8 +161,42 @@
  *  sharing it would make an earlier RCR1 complaint silence RTCSR, and the reverse.  A
  *  review seat named the collision before it was written.
  */
-#define	SH4_VAL_RTCSRINT		8	/*  RTCSR: refresh interrupt enables  */
-#define	SH4_VAL_NCLASS			9
+	SH4_VAL_RTCSRINT,		/*  RTCSR: refresh interrupt enables  */
+/*
+ *  #451: the two command-byte validators in sh4_sci_cmd().  This site is not reached
+ *  DIRECTLY BY A SINGLE REGISTER STORE: the guest must CLOCK a byte in, bit by bit,
+ *  through SHREG_SCSPTR -- seventeen ordinary mov.b stores -- and only the eighth rising
+ *  edge calls sh4_sci_cmd(), which ended the host on a byte it does not implement.
+ *  (An earlier draft said "unlike every SH-4 site before it", which contradicts the
+ *  #449 block a few lines above: RTCSRINT is not reached from a store either.  It is
+ *  reached from a timer callback.  The distinction that actually holds is single-store
+ *  versus multi-store PROTOCOL.)
+ *
+ *  ONE class covers both sites, because the KEY separates them and a uint32_t has room:
+ *
+ *      bit 7      cmd bit 7 clear                  (site 1, one condition)
+ *      bit 0      transfer field 0x00, "neither"   (site 2)
+ *      bit 3      transfer field 0x30, "both"      (site 2)
+ *
+ *  *** THE SITE-1 KEY IS A TOKEN AND MUST NOT BE `cmd & 0x80`. ***  That expression is
+ *  ZERO on the only path that reaches the site, and sh4_val_first() computes
+ *  `bits & ~reported` and returns `fresh != 0` -- so a zero key can NEVER report and the
+ *  diagnostic would have been born permanently silent.  A review seat opened the helper
+ *  and caught it before the edit was written; nothing else in this file would have.
+ *
+ *  Site 2 key IS derived, `1u << ((cmd & 0x30) >> 4)`, so it cannot drift away from the
+ *  predicate it describes, and the field mask bounds the shift to 0..3 by construction --
+ *  the #448 rule.  Only 0 and 3 are reachable here: fields 0x10 and 0x20 are consumed by
+ *  the two arms above, so bits 1 and 2 stay clear and bit 7 cannot be aliased.
+ *
+ *  Ceiling: THREE lines for the device lifetime, whatever a guest clocks.  Keying on the
+ *  byte itself would have allowed 192 -- 128 bit-7-clear values at site 1 and 64 more at
+ *  site 2 -- all of them repeating the same two facts, and fatal() cannot be silenced
+ *  with -q.
+ */
+	SH4_VAL_SCICMD,			/*  SCI: command byte not implemented  */
+	SH4_VAL_NCLASS			/*  count, by construction -- never assign it  */
+};
 /*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
 #define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
 
@@ -628,7 +678,12 @@ void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
  *  Handle a SCI command byte.
  *
  *  Bit:   Meaning:
- *   7      Ignored (usually 1?)
+ *   7      Must be SET.  #451: this said "Ignored (usually 1?)" while the code below
+ *          ended the host process when it was CLEAR -- a comment and a guard that
+ *          contradicted each other, in a file where the comment is the only
+ *          documentation this project has for the encoding (there is no usable SH-4
+ *          manual in the tree).  The guard is now a declined command; the comment
+ *          now says what the guard does.
  *   6      0=Write, 1=Read
  *   5      AD: Address transfer
  *   4      DT: Data transfer
@@ -642,9 +697,24 @@ static void sh4_sci_cmd(struct sh4_data *d, struct cpu *cpu)
 
 	/*  fatal("[ CMD BYTE %02x ]\n", cmd);  */
 
+	/*
+	 *  #451: this ended the host process.  The command is DECLINED instead: no command
+	 *  is performed and no RTC transfer happens.  That is NOT the same as the byte never
+	 *  having been clocked -- it was, sci_curbyte holds it, and the framing state moved.
+	 *  What the caller then does is zero sci_bits_outputed immediately after this
+	 *  function returns (sh4_sci_access(), below), so a decline re-arms the shift
+	 *  register on the byte boundary and the guest stays framed.
+	 *
+	 *  The `return` is OUTSIDE the latch guard DELIBERATELY.  Moving it inside -- the
+	 *  natural typo, since the braces are right there -- would decline the FIRST bad
+	 *  byte and let every later one fall through, which a detector that drives each
+	 *  offender once in a fresh emulator cannot see.  A review seat named that mutant.
+	 */
 	if (!(cmd & 0x80)) {
-		fatal("SCI cmd bit 7 not set? TODO\n");
-		exit(1);
+		if (sh4_val_first(d, SH4_VAL_SCICMD, 0, 1u << 7))
+			fatal("[ sh4: SCI: command byte 0x%02x has the start bit"
+			    " clear -- command declined.  (once) ]\n", (int) cmd);
+		return;
 	}
 
 	if ((cmd & 0x30) == 0x20)
@@ -652,8 +722,34 @@ static void sh4_sci_cmd(struct sh4_data *d, struct cpu *cpu)
 	else if ((cmd & 0x30) == 0x10)
 		address_transfer = 0;
 	else {
-		fatal("SCI: Neither data nor address transfer? TODO\n");
-		exit(1);
+		/*
+		 *  #451: this ended the host process too, and its message was WRONG for half
+		 *  the values that reach it: the arm is taken for field 0x00 AND for field
+		 *  0x30, and 0x30 is "BOTH transfer bits", not "neither".  Both values are
+		 *  guest-reachable and both are witnessed (rows S2 and S3).
+		 *
+		 *  Returning is not merely the safe choice here, it is the only one:
+		 *  address_transfer is still UNINITIALISED, and it is read below at the
+		 *  `if (address_transfer)` and `if (writeflag && !address_transfer)` tests.
+		 *  Falling through is undefined behaviour, so no particular outcome is
+		 *  guaranteed -- but it was MEASURED here, not merely feared: with the return
+		 *  removed, bytes 0x80 and 0xb0 produce `[ SCI: write addr=f data=0 ]`, a real
+		 *  cpu->memory_rw() to the RS5C313 on a command the device does not implement.
+		 *  Defaulting the variable is the same invention with tidier syntax -- but the
+		 *  two defaults are NOT equivalent, and the difference is what a detector sees.
+		 *  `= 0` reaches the write arm and emits `[ SCI: write ... ]`, so any transfer
+		 *  oracle catches it.  `= 1` only re-latches sci_cur_addr, which prints NOTHING
+		 *  of its own: MEASURED as a clean 12/14 pass until row N2 was added.  A seat
+		 *  named the asymmetry after the first draft of this comment claimed they were
+		 *  the same invention.
+		 */
+		if (sh4_val_first(d, SH4_VAL_SCICMD, 0,
+		    1u << ((cmd & 0x30) >> 4)))
+			fatal("[ sh4: SCI: command byte 0x%02x selects AD/DT encoding"
+			    " %i, which is not implemented -- command declined."
+			    "  (once per encoding) ]\n", (int) cmd,
+			    (int) ((cmd & 0x30) >> 4));
+		return;
 	}
 
 	if (address_transfer)

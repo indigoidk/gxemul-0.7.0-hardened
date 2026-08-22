@@ -4271,6 +4271,224 @@ because I generated them separately.
 into guest RAM and exposed through `GetEnvironmentVariable`, but reading it back needs a rung-3
 probe on a machine that gets that far, and there is no SGI rig. That is READ, not measured.
 
+## R20 (#451) — the first SH-4 host death a single store cannot reach
+
+`src/devices/dev_sh4.c`, `sh4_sci_cmd()`. Two `exit(1)` calls ended the HOST PROCESS on a
+command byte the model does not implement. The reachability question here is not the usual
+one. `#443`, `#447` and `#448` are reached by ONE guest store and `#449` by one store plus a
+wait; this site is reached only by CLOCKING a byte in, bit by bit, through `SHREG_SCSPTR`
+(`0xffe0001c`) — seventeen ordinary `mov.b` stores, and only the **eighth rising edge**
+calls the function. Every SH-4 probe in this tree before it watches a store site.
+
+**THREE bytes kill, not two — and the third was found after the witness was written.** A
+pass-1 seat pointed out that `(cmd & 0x30)` reaches the else arm for BOTH `0x00` and
+`0x30`, so the second site has two reachable faults where the witness measured one. Byte
+`0xb0` kills on the committed build exactly as `0x80` does. The shipped diagnostic called
+`0x30` "Neither data nor address transfer" when it is in fact **both** transfer bits set.
+
+    S1  0x00   start bit clear
+    S2  0x80   transfer field 0x00 — "neither"
+    S3  0xb0   transfer field 0x30 — "both", and mis-described by the message it printed
+
+Fixed on the `#443`/`#447`/`#448`/`#449` pattern: keep the diagnostic, name the offending
+byte, latch it, drop `exit(1)`, and **decline the command with an unconditional `return`**.
+Returning is not merely the safe option at site 2 — `address_transfer` is still
+uninitialised there and is read twice below, so falling through is undefined behaviour that
+resolves into a real `cpu->memory_rw()` against the RS5C313 RTC that the committed landisk
+description instantiates at `SCI_DEVICE_BASE`.
+
+### A key that would have been born silent, caught by reading the helper
+
+The obvious key for site 1 is `cmd & 0x80`. **That expression is ZERO on the only path that
+reaches the site**, and `sh4_val_first()` computes `bits & ~reported` and returns
+`fresh != 0` — so a zero key can never report and the diagnostic would have been
+permanently silent. A pass-1 seat opened the helper rather than reasoning from the brief
+and caught it before the edit was written; nothing else in this round would have. The
+shipped key is the token `1u << 7`, with a comment saying why it is a token.
+
+Site 2's key IS derived — `1u << ((cmd & 0x30) >> 4)`, giving bit 0 and bit 3 — so it
+cannot drift from the predicate, and the field mask bounds the shift by construction (the
+`#448` rule). Ceiling: **three lines for the device lifetime**. Keying on the byte would
+have allowed 192.
+
+### The `SH4_VAL_*` list is now a C99 enum, and this round is why
+
+The standing disposition was "convert when a tenth class arrives". `SH4_VAL_SCICMD` is the
+tenth. The initialisers are gone deliberately: a hand-numbered list can be given a
+duplicate id, and a duplicate is not a wrong message but a **silent** one. `SH4_VAL_NCLASS`
+is now correct by construction rather than by maintenance. (A disjointness assertion was
+rejected earlier on three measured grounds; this removes the hazard instead of checking
+for it.)
+
+### Why the detector does not check survival
+
+The fix deletes two `exit(1)` calls and with them the accidental tripwire that made every
+later mistake in this function LOUD. After it, a missing `return` performs an invented
+transfer and says nothing, and a guard that grew declines a legal command and says nothing.
+So the oracle is the **transfer**, observed through the same protocol a guest uses: a legal
+pair (`0xa5` sets address 5, `0x9c` writes data c) prints `[ SCI: write addr=5 data=c ]`
+from `:685`, with the address and the data being values the probe chose. Row **O** asserts
+that line was seen at all — without it every "no transfer occurred" row would be
+unfalsifiable rather than true.
+
+`regress/sh4_sci_probe.py`, 14 rows, wired into gate 10. `regress/sh4_sci_witness.py`
+asserts the PRE-FIX symptom and is deliberately ungated: **8/8 before, 5/8 after**, the
+three differences being exactly S1/S2/S3 while the three controls do not move.
+
+**Kill table — 22 mutants built and run, NO SURVIVORS:**
+
+| mutant | result | rows that redden |
+|---|---|---|
+| V1/V2 `exit(1)` restored, each site separately | DIES | R1,X,RPT1,N / R2,R3,X,RPT,J |
+| M1/M2 the `return` deleted, each site | DIES | R2,R3,X,RPT,J / R1,X,RPT1,N |
+| M3 `address_transfer` defaulted instead of declining | DIES | R2,R3,X,RPT,J |
+| M4 latch guard removed (both sites) | DIES | RPT |
+| M5 latch collision — both sites key `1u << 0` | DIES | R3,X |
+| M6 the `return` moved INSIDE the latch guard, site 2 | DIES | RPT |
+| M6a the same slip confined to **site 1** | DIES | RPT1,N |
+| M7 decode loosened to `(cmd & 0x20)` | DIES | R3,X |
+| M8 site-1 key is `cmd & 0x80` | DIES | R1,X,RPT1,N |
+| M9 `sci_bits_outputed = 0` moved into the callee below the returns | DIES | R3,X,N,J |
+| M15a `sci_cur_addr` assigned BEFORE validation | DIES | N,A2,J,O |
+| M15d latch guard deleted at **site 1 only** | DIES | RPT1,N |
+| M16/M16b site 1 keyed `1u << 0` / `1u << 3` | DIES | X |
+| P1 start-bit guard widened to `!(cmd & 0xa0)` | DIES | N |
+| P2 site 2 falls through with `address_transfer = 1` | DIES | N2,CEIL |
+| P3 site-2 key mask `0x30` → `0xf0` (shift unbounded) | DIES | CEIL |
+| G1/G2/G3 joint growth on each de-fatalised predicate | DIES | N,N2,CEIL,A1,A2,J,O |
+
+### Pass 2 found ONE root cause and it admitted THREE escapes
+
+The first detector shipped nine rows and every one of the repeat and cross rows drove
+**site 2**. Site 1 was exercised exactly once, in a fresh session. Three seats found three
+different real-defect mutants through that single gap, independently and by different
+routes — the measuring seat built one of them against the shipped file and **scored it
+10/10 PASS**:
+
+* the latch guard deleted at site 1 only, which makes the word `(once)` in that message
+  false and the three-line ceiling unbounded (`M15d`);
+* the `return` moved inside the latch guard at site 1 only, which invents a transfer on
+  the *second* bad byte (`M6a`);
+* site 1 keyed to collide with a site-2 key (`M16`).
+
+Two rows close all three: `RPT1` drives a site-1 offender **twice**, and `X` drives all
+three fault categories in one session. **`X` had to be widened to three bytes, and the
+reason is worth keeping**: two seats independently proposed the collision mutant and
+*chose different bits* — `1u << 0` (site 2's field-`0x00` key) and `1u << 3` (its
+field-`0x30` key). A two-byte row catches one variant and misses the other. Only driving
+`0x10`, `0x80` and `0xb0` together catches both.
+
+### Two more escapes, measured rather than predicted — and the difference mattered
+
+Pass 2's remaining seats named three further mutants. Rather than fix on the prediction or
+file on it, all three were built. **One was already dead** — the widened start-bit guard
+`!(cmd & 0xa0)`, which the seat expected to survive because it reviewed the nine-row draft
+that had no row `N` yet. The other two survived at 12/12 and are therefore measured false
+passes, which the stopping rule fixes in-round:
+
+* **`address_transfer = 1` instead of `0` on the fall-through.** `M3` used `0`, which
+  reaches the write arm and emits a transfer line, so the oracle caught it. `1` only
+  re-latches `sci_cur_addr` and prints nothing at all. Row `N2` — the site-2 twin of `N` —
+  sees the write land at address 0 instead of 5.
+* **The site-2 key mask widened `0x30` → `0xf0`,** one character, which unbounds the
+  shift. Bytes `0x80` and `0xc0` are the *same* fault category, and the fix draws one line
+  for the pair; the mutant keys them apart and draws two. Row `RPT` could not see this — it
+  repeats the *same* byte, which is the weaker claim. Row `CEIL` drives two different bytes
+  of one category, and it is what turns the enum comment's "**THREE lines for the device
+  lifetime**" from an assertion into a measurement.
+
+### The transfer oracle had a structural blind spot
+
+Row `N` exists because `0x20` is declined at site 1 but its transfer field selects the
+**address arm** — which performs no `memory_rw` and therefore prints no transfer line at
+all. So `transfers == []` reads clean for a mutant that silently re-latches
+`sci_cur_addr`, and no amount of extra bad bytes would have shown it. The only shape that
+does is a legal address set, then the declined byte, then a legal data write: the write
+lands at the corrupted address. Named by the measuring seat, which drove it and got
+`[('write','0','c')]` where `[('write','5','c')]` was due.
+
+### An ACCEPT-ROW FAILABILITY refinement, measured, and it points the other way from #449
+
+The standing rule says build the **JOINT** growth mutant — predicate and latch operand
+widened together — because `#449`'s guard-only widening was measured *equivalent*. At this
+site the measuring seat found the opposite: the latch operand is a compile-time constant
+that cannot mask the guard, so guard-only and joint redden the accept rows **byte for
+byte**. What guard-only additionally does is silence its own growth (one diagnostic line
+where the joint form prints two). **Here the guard-only mutant is the harder test.** So
+the rule's real content is not "joint always": it is *"the harder form depends on whether
+the latch operand can mask the guard, and when that operand is a constant, guard-only is
+the one to build."* Recorded rather than acted on further; both forms die against these
+rows.
+
+### Filed, not fixed: one measured escape a runtime row cannot see
+
+`1u << (cmd & 0x30)` — the site-2 key without its `>> 4` normalisation — shifts by 48 for
+byte `0xb0`. That is undefined behaviour, and it **survives at 12/12**, because on x86 the
+count is masked to 5 bits and lands on bit 16, which collides with nothing: the observable
+behaviour is identical. A runtime row genuinely cannot distinguish it. UBSan could, but
+`gate_asan_sweep` constructs machines and never drives guest instructions, so nothing in
+this harness reaches the site under instrumentation. Filed as coverage debt with that
+reason, not papered over with a source-text check.
+
+### Four comment claims that outran the measurements, all corrected
+
+A pass-2 seat read the diff rather than the brief and caught them: "unlike every SH-4 site
+before it, this one is NOT reached by a store" **contradicts the `#449` block a few lines
+above it** (RTCSRINT is reached from a timer callback, not a store) — the distinction that
+holds is single-store versus multi-store protocol; calling bit 7 a "Start bit" names it
+from nowhere, in a tree with no usable SH-4 manual, where "must be set" is what the guard
+actually shows; "returning leaves the device exactly as an unclocked byte would have" is
+false, since the byte *was* clocked and the framing state moved; and undefined behaviour
+cannot be said to "resolve into" a real `memory_rw()` — though the measuring seat then
+*observed* exactly that (`[ SCI: write addr=f data=0 ]` on the fall-through mutants), so
+the claim now rests on a measurement instead of on a prediction.
+
+The same seat found a reporting defect in the detector: row `O`'s boolean correctly used
+the saved `landed`, but its failure message read `xf` after row `J` had overwritten it —
+so a red `O` would have printed the wrong evidence.
+
+A fifth was caught in the second cycle: the comment said defaulting `address_transfer`
+"is the same invention with tidier syntax". Measured, the two defaults are **not** the
+same — `0` is loud and `1` is silent, which is precisely why `1` survived and `0` never
+did. The comment now says so.
+
+**Both passes converged on the same lesson from opposite directions.** Pass 1's seats
+predicted mutants and one of their predictions was wrong (`M15a`, expected to survive,
+measured dead). Pass 2's seats predicted three more and one of *those* was wrong (`P1`,
+same reason — it was reviewing a draft that had since gained the row that kills it). In
+both cases building the mutant took minutes and settled what argument could not. The
+detector grew from 9 rows to 14 across the round, and **every one of the five added rows
+exists because a specific mutant was measured walking past the ones already there** — none
+was added on reasoning alone.
+
+**Row R1 uses byte `0x10`, not `0x00`, and that is not a detail.** `0x00` cannot see a
+missing `return` at site 1, because `0x00` also fails site 2 — the second guard catches
+what the first dropped and masks the defect. `0x10` has bit 7 clear but a *legal* transfer
+field, so the fall-through reaches the data-write arm and really writes. Three pass-1 seats
+converged on this independently, from different directions.
+
+**M9 was first built WRONG and reported as a survivor.** The zeroing went at the TOP of the
+callee, where it runs on every call including declines — an EQUIVALENT mutant. Rebuilt
+below the returns as the seat had actually described, it jams the shift register at 8 and
+rows R3 and J redden. Recorded because *a mutant that does not model the defect measures
+the detector's silence, not its blindness*, and scoring it as a survivor would have sent
+the round chasing a hole that was not there. Same trap `#449`'s guard-only widening fell
+into.
+
+G1/G2/G3 discharge ACCEPT-ROW FAILABILITY for the three predicates that used to gate death
+(`cmd & 0x80`, the `0x20` arm, the `0x10` arm): predicate and latch operand widened
+together, and each reddens an accept row. A1 and A2 are therefore discharged by measured
+kill, not by existing.
+
+### Also corrected: a comment that contradicted the code it documented
+
+The function header said bit 7 was `Ignored (usually 1?)` while the code ended the host
+when it was clear. In a file where that comment is the only documentation this project has
+for the encoding — there is no usable SH-4 manual in the tree — a wrong one is worse than
+none. It now says what the guard does.
+
+Build rc=0, zero warnings. Gate 10 PASS, 60 checks (was 58), run singly.
+
 ## R19 (#450) — ten uncast shifts, and the author had already cast four of them
 
 `src/promemul/arcbios.c`. `buf[]` is `unsigned char`; `buf[3] << 24` promotes to `int`, and with

@@ -5728,7 +5728,56 @@ the host dies from a callback afterwards. Detecting it needs a free-running spin
 check *after* the fact — a different probe shape and a different oracle.
 
 Also unmeasured, same family, filed here rather than lost: two more sites in `sh4_sci_cmd()` at
-`:518` and `:527`, reached on guest-written SCI bytes.
+`:518` and `:527`, reached on guest-written SCI bytes. **[2026-08-22: those are `sh4sci`, below.
+Measured, and there are THREE reachable bytes rather than the two this note assumed.]**
+
+### `sh4sci` — held
+
+*** The first SH-4 host death in this tree that a single guest store cannot reach. *** The two
+`exit(1)` calls in `sh4_sci_cmd()` are reached only by CLOCKING a byte in through
+`SHREG_SCSPTR` (`0xffe0001c`) — seventeen ordinary `mov.b` stores, one priming store and two per
+bit, with only the **eighth rising edge** calling the function. Every SH-4 probe written before
+this one observes a store site, so all of them were blind to it by construction, exactly as
+`sh4rtcsr` was blind for the opposite reason (it dies *after* the store, from a timer).
+
+MEASURED on an unmodified `-E landisk`, rung 3 — and there are **three** killing bytes, not the
+two the `sh4rtcsr` note assumed:
+
+```
+0x00  start bit clear                  -> alive=False  "SCI cmd bit 7 not set"
+0x80  transfer field 0x00 ("neither")  -> alive=False  "Neither data nor address transfer"
+0xb0  transfer field 0x30 ("BOTH")     -> alive=False  same message, and it is WRONG for 0xb0
+0xa0  bit 7 set, address transfer      -> alive=True   (same address, width, 17 stores)
+```
+
+The third was found by a pass-1 seat after the witness had already been written for two:
+`(cmd & 0x30)` reaches the else arm for BOTH `0x00` and `0x30`, so the site has two faults and
+one had never been driven. The shipped diagnostic called `0x30` "neither transfer bit" when it
+is in fact both.
+
+**Fixed and gate-green** (see the R20 round block): the diagnostic is kept and now names the
+byte, the command is DECLINED with an unconditional `return`, and the latch is keyed on the
+discriminating field — three lines for the device lifetime where the byte itself would have
+allowed 192. The round also fires the standing `sh4latchcollide` disposition, converting the
+`SH4_VAL_*` defines to a C99 enum, because `SH4_VAL_SCICMD` is the tenth class.
+
+**Held open, not closed:** both stages carry a deliberate `fable5` omission per the owner's
+standing batching directive, and section H refuses a CLOSED row with a HELD stage. The two
+questions queued for that seat are in `tools/pipeline/fable_queue.md`.
+
+#### Residual, MEASURED and deliberately FILED: one escape a runtime row cannot see
+
+`1u << (cmd & 0x30)` — the site-2 key with its `>> 4` normalisation dropped — shifts by 48 for
+byte `0xb0`. That is undefined behaviour, and it **survives the detector at 14/14**: on x86 the
+count is masked to five bits and lands on bit 16, which collides with nothing, so the observable
+behaviour is identical to the correct code. No runtime row can distinguish it.
+
+UBSan *could*, but `gate_asan_sweep.sh` constructs machines and never drives guest instructions,
+so nothing in this harness reaches this site under instrumentation. **That is the real gap, and
+it is wider than this one shift:** every UB site that needs a guest instruction to reach it is
+outside the sweep's view. Filed with that reason rather than papered over with a source-text
+check — this project replaced `sgi_eaddr_probe.py`'s source-text census for being exactly that
+kind of substitute.
 
 ### `sh4valrows` — held
 

@@ -327,6 +327,48 @@ else
     check_min "sh4_rtcsr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$RTLOG")" 10
 fi
 
+#  #451: the two command-byte validators in sh4_sci_cmd().  This is the first SH-4 site
+#  in this tree that a single store CANNOT reach -- the guest must clock a byte in through
+#  SHREG_SCSPTR, seventeen mov.b stores, and only the eighth rising edge calls the
+#  function.  Every SH-4 probe before it observes a store site, so all of them were blind.
+#
+#  *** THE ORACLE IS THE TRANSFER, NOT SURVIVAL, and that is the whole design. ***  This
+#  fix deleted two exit(1) calls, and with them the accidental tripwire that made a
+#  missing `return` or a grown guard LOUD.  After it, both are silent: a missing `return`
+#  performs an invented transfer against the RS5C313 and says nothing.  So the rows watch
+#  dev_sh4.c:664/:685's `[ SCI: read|write addr=.. data=.. ]` lines, with a legal pair
+#  (0xa5 sets address 5, 0x9c writes data c) proving the oracle is LIVE -- otherwise every
+#  "no transfer occurred" row would pass for the wrong reason rather than the right one.
+#
+#  MEASURED KILL TABLE, 14 mutants, no survivors.  Two carry a lesson worth the line:
+#    *  M2 (site 1 `return` deleted) is invisible to byte 0x00 -- 0x00 also fails site 2,
+#       which catches what site 1 dropped.  Row R1 uses 0x10 instead: bit 7 clear but a
+#       LEGAL transfer field, so the fall-through reaches the write arm and really writes.
+#       Three pass-1 seats converged on this independently.
+#    *  M9 (the `sci_bits_outputed = 0` moved into the callee below the returns) was first
+#       built at the TOP of the callee, where it runs on every call -- an EQUIVALENT
+#       mutant that "survived".  Rebuilt as described, it jams the shifter and row J
+#       reddens.  A mutant that does not model the defect measures the detector's silence,
+#       not its blindness.
+SCILOG=$LOGDIR/gate_sh4_sci.log
+python3 sh4_sci_probe.py "$PMAX" "$KERNEL" > "$SCILOG" 2>&1 || true
+
+if ! grep -q "SH4SCI_RESULT=" "$SCILOG"; then
+    note "sh4_sci probe produced no result line; last lines follow"
+    tail -5 "$SCILOG" | sed 's/^/       /'
+    check "sh4_sci probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$SCILOG" | sed 's/^/       /'
+    check "sh4_sci: a clocked-in command byte does not kill the host"           "$(grep -c 'SH4SCI_PASS' "$SCILOG")" "1"
+    check_min "sh4_sci: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$SCILOG")" 14
+fi
+
+#  sh4_sci_witness.py is DELIBERATELY NOT RUN HERE -- same rule as the three below it.
+#  8/8 pre-fix, 5/8 after, the three differences being exactly the three bytes that used
+#  to end the host (0x00, 0x80 and 0xb0).  0xb0 was NOT in the first draft of that witness:
+#  a pass-1 seat pointed out that `(cmd & 0x30)` reaches the else arm for BOTH 0x00 and
+#  0x30, so the second site had two reachable faults and only one of them was measured.
+
 #  sh4_rtcsr_witness.py is DELIBERATELY NOT RUN HERE: 8/8 pre-fix, 6/8 after, the two
 #  differences being the two kill rows.  A gated witness reddens the day its fix lands.
 

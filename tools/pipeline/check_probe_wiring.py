@@ -176,6 +176,8 @@ MANIFEST = {
     "sh4_chcr_probe.py":           (CLASS_DETECTOR, "#448 sh4 CHCR field decoders"),
     "sh4_rtcsr_probe.py":          (CLASS_DETECTOR, "#449 sh4 RTCSR refresh-interrupt enables"),
     "sh4_rtcsr_witness.py":        (CLASS_WITNESS,  "#449 pre-fix symptom: a DELAYED host death"),
+    "sh4_sci_witness.py":          (CLASS_WITNESS,  "#451 pre-fix symptom: a clocked-in byte kills"),
+    "sh4_sci_probe.py":            (CLASS_DETECTOR, "#451 SCI command byte declined, not fatal"),
     "sh4_chcr_witness.py":         (CLASS_WITNESS,  "#448 pre-fix symptom: TD=1 ends the host"),
     "sh4_val_probe.py":            (CLASS_DETECTOR, "#447 sh4 DEVICE_ACCESS value guards"),
     "sh4_val_witness.py":          (CLASS_WITNESS,  "#447 pre-fix symptom: the host dies"),

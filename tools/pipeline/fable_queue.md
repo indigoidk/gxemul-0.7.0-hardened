@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`arcbiosubsan` (assess:fable5; review:fable5) · `armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sgiarcbiosoob` (review:fable5) · `sh4chcr` (assess:fable5; review:fable5) · `sh4rtcsr` (assess:fable5; review:fable5) · `sh4valguards` (review:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
+`arcbiosubsan` (assess:fable5; review:fable5) · `armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (assess:fable5) · `census` (assess:opus5) · `cmtattr` (assess:fable5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (assess:fable5) · `exitsweep` (assess:codex,fable5) · `fablequeue` (assess:fable5) · `fbextrate` (assess:fable5) · `fbwitness` (assess:fable5) · `floodclass` (assess:fable5) · `gateflr` (assess:opus5) · `gcsections` (assess:fable5) · `hlen` (assess:fable5) · `i8253zero` (assess:fable5) · `idesync` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `isaorder` (assess:fable5) · `landiskdisk` (assess:fable5) · `ledgerwitness` (assess:fable5) · `m437multi` (assess:fable5) · `m437rtmp` (assess:fable5) · `m8invground` (assess:fable5) · `m8invpred` (assess:fable5) · `m8latch` (assess:fable5) · `m8patc` (assess:fable5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:fable5,opus5) · `m8seg` (assess:fable5) · `m8snprintf` (assess:fable5) · `mrwstore2` (assess:opus5) · `ns16550` (assess:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcchalt` (assess:fable5) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex; regress:fable5; review:fable5) · `pitlatch` (regress:fable5; review:fable5) · `pitlsb` (assess:fable5) · `reprowitness` (assess:codex) · `rtcflood` (assess:fable5) · `rtcnarrow` (assess:fable5) · `scunbacked` (assess:fable5) · `seam` (assess:opus5) · `selfcheckman` (regress:fable5) · `sgiarcbiosoob` (review:fable5) · `sh4chcr` (assess:fable5; review:fable5) · `sh4rtcsr` (assess:fable5; review:fable5) · `sh4sci` (assess:fable5; review:fable5) · `sh4valguards` (review:fable5) · `strad` (assess:fable5) · `wdcflood` (assess:fable5) · `wdcnoirq` (assess:fable5) · `wdcstandby` (assess:fable5) · `xfamscope` (assess:fable5,opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 58 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 59 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -509,6 +509,33 @@ things worth attacking, all stated in the file rather than hidden:
 
 Not blocking: the fix is shipped and both gates are green. But this is precisely the
 instrument-quality question the regress directive reserves for the flagship seat.
+
+## `sh4sci` -- #451, the SCI command-byte validators (assess + review both held)
+
+Two `exit(1)` calls in `sh4_sci_cmd()` ended the host on a guest-clocked command byte.
+Three bytes reach them (0x00, 0x80, 0xb0); the third was found by a pass-1 seat AFTER the
+witness had been written for two. Fixed by latching and declining; the round also fired
+the standing `sh4latchcollide` disposition, converting `SH4_VAL_*` to a C99 enum, because
+SCICMD is the tenth class.
+
+Eight seats answered each stage. Gate 10 PASS at 60 checks; 22 mutants, no survivors.
+
+**Two questions, both raised by measurement rather than by argument:**
+
+* **ACCEPT-ROW FAILABILITY says build the JOINT growth mutant**, because #449's guard-only
+  widening measured EQUIVALENT. At this site the measure seat found the OPPOSITE: the latch
+  operand is a compile-time constant that cannot mask the guard, so guard-only and joint
+  redden the accept rows byte for byte -- and guard-only ADDITIONALLY silences its own
+  growth (one diagnostic line where joint prints two). **Guard-only is the harder form
+  here.** Does the rule become "build the form the latch operand does not mask", or stay
+  "joint" with this recorded as an exception?
+* **The detector grew 9 -> 14 rows during pass 2, every added row forced by a MEASURED
+  escape.** Two of the five surfaced only because seats were asked for another mutant
+  AFTER fourteen were already dead. Is "ask again once the table is clean" worth making
+  standing practice, or is it the #392 six-pass chain wearing a better hat? It converged
+  here in two cycles and both cycles found real defects -- but that is one case.
+
+Not blocking: shipped and gate-green.
 
 ---
 
