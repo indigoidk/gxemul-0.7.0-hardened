@@ -151,6 +151,11 @@ def main():
             raw = "%s%s" % (reason, (", %s tokens" % ev.group(1)) if ev else "")
 
         err = t.lstrip()[:400] if t.lstrip().startswith("OLLAMA_SEAT_ERROR") else ""
+        #  MEASURED 2026-08-23: a wall can be a MOMENT, not a state.  Kimi walled
+        #  mid-answer at 23:01 with 36 KB already written, and answered a liveness
+        #  test an hour later.  So a WALLED row is not a verdict on the seat -- it
+        #  is a verdict on that invocation, and the seat should be RE-FIRED ONCE
+        #  before the round closes rather than recorded as gone.
         is_walled = bool(WALL_RE.search(t[-600:])) and not v
         if raw:
             state = ("*** SEAT DOWN -- NO ANSWER: spent its whole budget on hidden "

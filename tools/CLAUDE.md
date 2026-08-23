@@ -69,6 +69,32 @@ ECHOED BRIEF followed by "You've hit your usage limit ... try again at Aug 22nd,
 twice. A size check alone scores that the best answer of the nine. `panel.sh`'s seat check caught
 it as RATE-LIMITED. **Verify the CONTENT, never the size; the failure mode is a big file.**
 
+### *** A WALL IS A MOMENT, NOT A STATE — MEASURED 2026-08-23, and it CONTRADICTS the
+### "never by a date" line in the Fable row below. ***
+
+Kimi walled mid-panel at 23:01 with a `403 usage limit for this billing cycle`. **One hour
+later, across the date boundary, a liveness test returned its token on the first try.** No
+account-state change was made. So the sentence below — *"Both 'dead' Anthropic-side states
+this project has seen were revived by ACCOUNT-STATE CHANGES … never by a date"* — has a
+counter-example. **Cause is NOT established** (a billing cycle rolling at midnight is a
+guess, not a measurement); what is established is that the seat was walled and then was not.
+
+**The ADVICE in that row was right even though its stated reason was wrong**, which is worth
+keeping separate: *"DO NOT ASSUME A CALENDAR DATE RESTORES A SEAT — TEST IT"* is exactly what
+settled this, in one invocation and about four seconds.
+
+**Two harness consequences, both applied:**
+* **A WALLED SEAT IS RE-FIRED ONCE before the round closes.** It costs a minute and recovers
+  a seat the round would otherwise silently lose. The owner caught this one only because the
+  seat showed as available in their own UI — which is a human noticing, i.e. the thing this
+  harness exists to stop depending on.
+* ***`panel.sh` COULD NOT SEE THIS WALL AT ALL.*** Its check only caught the ECHO-ONLY shape
+  (brief echoed, tiny payload — the codex signature). Kimi's wall was **36 KB of real content,
+  98% novel, ending mid-sentence with the notice**: payload huge, echo absent, invisible to
+  every test it had, and printed as a healthy answer. It now also checks the TAIL, using the
+  same POSITION discriminator `seat_verdicts.py` already used — which is why the extractor
+  caught what the panel script missed.
+
 ### *** A THIRD SEAT-FAILURE CLASS, MEASURED 2026-08-22: THE TRANSPORT, NOT THE SEAT. ***
 
 All THREE Ollama seats returned 155 bytes each in one firing —

@@ -347,6 +347,32 @@ check() {   # name file
         [ -n "$why" ] && say "        wall: $why"
         return
     fi
+    #  *** A SEAT CAN ANSWER AT LENGTH AND THEN HIT THE WALL, and until 2026-08-23
+    #  nothing here saw that. ***  The branch above only catches the ECHO-ONLY shape --
+    #  brief echoed, tiny payload, the codex signature.  Kimi walled with **36 KB of
+    #  real content and 98% novel lines**, ending mid-sentence with a 403 usage-limit
+    #  notice.  Payload huge, echo absent: invisible to every test above, and the panel
+    #  printed it as a healthy answer.  The owner spotted it only because the seat
+    #  showed as available in their own UI.
+    #
+    #  The discriminator is POSITION, the same one seat_verdicts.py already uses: a
+    #  walled run ENDS with the notice and nothing after it, whereas a live seat that
+    #  merely mentions a limit has it mid-reasoning and ends with substance.
+    if tail -c 400 "$f" | grep -qiE "usage limit|quota will be refreshed|rate.?limit|\b403\b"; then
+        say "  $name: ${sz}b  *** WALLED MID-ANSWER -- content then a wall notice ***"
+        why=$(tail -c 400 "$f" | grep -ioE "[^.]*(usage limit|quota)[^.]*" | head -1)
+        [ -n "$why" ] && say "        wall: $why"
+        #  *** RE-FIRE ONCE.  A WALL IS A MOMENT, NOT A STATE. ***  Measured
+        #  2026-08-23: kimi walled at 23:01 and answered a liveness test an hour later,
+        #  across a date boundary.  The carrier says both previously-dead seats were
+        #  revived by ACCOUNT-STATE changes "never by a date" -- that half is now
+        #  contradicted, though the advice it carries (TEST IT, never assume) is what
+        #  caught this.  Cause not established; recovery measured.  One retry costs a
+        #  minute and recovers a seat the round would otherwise silently lose.
+        say "        re-firing once (a wall can be minutes long) ..."
+        return 2
+    fi
+
     # ASSESS/REAL/NOT-A-BUG etc. are the assessment-phase verdict tokens; without
     # them two correct packet answers were false-flagged CHECK on 2026-08-15.
     if grep -qiE "GO-WITH-CHANGES|NO-GO|\bGO\b|verdict|refut|confirm|ASSESS [a-z0-9#()]+:|NOT-A-BUG|ALREADY-FIXED|PARTLY-FIXED|\bREAL\b|\bUNKNOWN\b" "$f"; then

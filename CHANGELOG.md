@@ -268,8 +268,14 @@ reached that independently.
   by looking for it: `sh_exception()` has no case for `EXPEVT_RESET_TLB_MULTI_HIT`, so a
   guest UTLB write producing two matching entries falls to `default:` and ends the host.
   Same family, same file.
-* **`sh4iprbcd`** and **`sh4prioraise`**, both latent only because nothing asserts those
-  lines today -- which is the condition #455 shows can change.
+* **`sh4iprbcd`**, latent only because nothing asserts those lines today -- which is the
+  condition #455 shows can change.
+* **`sh4prioraise`**. *Corrected 2026-08-22: an earlier draft of this line called it
+  latent too. It is NOT.* TMU0-2 and SCIF DO assert in-tree, so a guest that asserts
+  while masked and then raises IPRA hits it today -- a periodic TMU degrades to a
+  one-period delay, but a one-shot like SCIF RXI withholds delivery until the next
+  byte arrives. The ledger's own per-row note had the careful form ("#455 makes it
+  reachable rather than fatal"); this sentence was the loose one.
 
 ## Round 454 (#454) -- the store-queue flush is judged READ type, and a shipped gate row pinned the opposite
 

@@ -6244,7 +6244,7 @@ CPU; the existing comment is itself false; and the manual prescribes silence.
 
 Leave `SH_INT_ASSERTED` set: masking blocks ACCEPTANCE, not the request.
 `sh_update_interrupt_priorities()` preserves that bit on purpose (`cpu_sh.c:250-253`) and the
-deassert rescan (`:343-351`) can never select a prio-0 entry, since `prio > int_level` is
+deassert rescan (`:373-386`) can never select a prio-0 entry, since `prio > int_level` is
 `0 > 0`.
 
 ### `sh4tlbmulti` — open, NEW, and the same shape as `sh4prio0` in the same file.
@@ -6299,13 +6299,53 @@ IRL lines are priority 0 permanently, and IPRB/IPRC/IPRD writes are inert.** Lat
 because nothing asserts those lines in-tree today — which is precisely the condition
 `sh4prio0` shows can change.
 
+
+> *** PASS-1 FINDINGS, 2026-08-22, and two of them change the round. ***
+>
+> **THE SCIF SOURCE IS SETTLED, and it is not INTPRI08.** Table 19.5 (`:40142`) gives the
+> per-source answer verbatim: `SCIF ERI H'700 ... IPRC (7-4)`. Table 19.6 agrees. And **the
+> only INTPRI register in the whole 1074-page manual is INTPRI00** (19.3.3, `:40348`,
+> "SH7750R Only"), which covers TMU3/TMU4 -- not SCIF. There is no INTPRI04/08/0C anywhere.
+> The code says where it came from: `cpu_sh.c:204-206` reads *"according to the SH7760
+> manual"*, and the machines emulated are SH7750 and SH7751R. Neither is an SH7760.
+>
+> **AND THE INTPRI CASES ARE UNREACHABLE DEAD CODE.** `dev_sh4.c:2421-2455` handles
+> `SH4_INTPRI00` and friends, but the only registered window is `SH4_REG_BASE` + 0x01000000
+> = `0xff000000`-`0xffffffff`, and `SH4_INTPRI00` is `0xfe080000` -- outside it. **So
+> `intc_intpri08` is its init value `0x33333333` forever, and SCIF's priority is a
+> guest-immutable constant 3 on every SH4 machine in this tree.** #456's round block already
+> measured the symptom without naming the mechanism: *"the register that would lower it is
+> unmapped -- non-existant paddr=0xfe080008"*. Verified: window and address both opened.
+>
+> **DO NOT "read all four registers per Table 19.6" -- IPRD IS A HAZARD.** Its only function
+> is per-pin IRL priorities in IRLM=1 mode, which this model deliberately refuses and latches
+> (`SH4_VAL_ICRIRLM`). Worse, the per-pin IRL slots **alias** encoded-mode IRQ slots
+> (`0x240`=IRQ2, `0x2a0`=IRQ5, `0x300`=IRQ8, `0x360`=IRQ11) that the hardwired 15..1 loop
+> already owns and that the dreamcast ASIC drives through today. Writing IPRD priorities into
+> aliased slots would fight the encoded loop, order-dependently. IPRD stays out, documented.
+>
+> **FIVE SOURCES HAVE NO INTEVT CONSTANT** -- RTC, REF, GPIO, DMAC, H-UDI -- and nothing
+> in-tree asserts any of them. So the only BEHAVIOURALLY WITNESSABLE payload here is the SCIF
+> re-source; the rest is honest state. The record must claim exactly that and no more.
+>
+> *** REGRESSION RISK, to be measured BEFORE the edit: *** re-sourcing SCIF to IPRC drops its
+> effective reset priority from the phantom 3 to the manual's 0 (IPRA-C reset `H'0000`). If a
+> rig's guest never writes IPRC, its SCIF interrupt path goes SILENT -- the de-escalation
+> shape. Cheap pre-check: log `SH4_IPRC` (`0xffd0000c`) writes during landisk and dreamcast
+> boots first.
+>
+> Two more L4s to fix in the same diff: the SH7760-attributed init comment
+> (`cpu_sh.c:204-206`) and the wrong-chip register table above the recompute (`:230-244`),
+> whose IPRA[3:0], IPRB[7:4] and IPRC[7:4] all say "Reserved" where the manual says RTC, SCI
+> and SCIF.
+
 ### `sh4prioraise` — open, NEW. Raising a priority does not re-examine a pending request.
 
 `sh_update_interrupt_priorities()` rewrites the priority nibbles but never recomputes
 `int_to_assert` / `int_level`. A guest that asserts while masked and then raises IPRA gets
 nothing until the next assert/deassert edge. Pre-existing; `sh4prio0` makes it *reachable*
 rather than fatal, which is why it is filed in the same breath. The natural completion is to
-run the `:343-351` rescan at the end of the recompute — a second design question, its own
+run the `:373-386` rescan at the end of the recompute — a second design question, its own
 round.
 
 ### `shprotld` — open. #454's one un-fixed escape, filed rather than chased.
