@@ -72,9 +72,56 @@ import sys
 #  (there is no real one-letter verdict, and it is the signature of a
 #  truncated match).
 VERDICT_RE = re.compile(
-    r"VERDICT\s*[*_`]{0,3}\s*[:—–-]"
+    #  *** THE DASH MUST BE SURROUNDED BY SPACE, AND THE FIRST VERSION OF
+    #  THIS LINE DID NOT SAY SO. ***  A bare [-] in the class matched the
+    #  hyphen inside a word, so "a verdict-driven review process" returned
+    #  "DRIVEN REVIEW PROCESS" -- a false positive introduced by the fix for
+    #  a false negative.  A colon needs no spacing; a dash does.
+    #  *** THE LABEL IS ANCHORED TO LINE START, AND WITHOUT THAT A SENTENCE OF
+    #  PROSE SWALLOWS A REAL VERDICT. ***  Measured by a review seat:
+    #
+    #      "My verdict: the code is fine and the records are honest."
+    #          ->  "THE CODE IS FINE"
+    #
+    #  Case-insensitive matching made every mid-sentence "verdict:" a
+    #  candidate, and first-qualifying-line-wins means one such sentence of
+    #  preamble outranks the seat's actual answer further down.  That is the
+    #  silent-wrong-answer class this file exists to prevent, arriving through
+    #  the fix for a silent-missing-answer class -- the second time in this
+    #  round that the loosening did that.
+    #
+    #  Only whitespace, emphasis, list and quote markers may precede the
+    #  label.  Checked against every row: none has prose before it.
+    #  *** AND THE ANCHOR MUST ALSO ADMIT A SENTENCE BOUNDARY, OR IT BLANKS
+    #  AN ENTIRE SEAT. ***  Measured: line-start-only rejected 52 of grok's
+    #  58 answers, because grok streams its reasoning with no newlines and
+    #  ends the giant first line with `...name the mutant.**VERDICT: SHIP
+    #  WITH CHANGES**`.  A check that silently blanks one seat in seven is
+    #  worse than the false positives it prevents -- that is a seat failure
+    #  manufactured by the tool.
+    #
+    #  So the label is admitted at LINE START or after SENTENCE-ENDING
+    #  punctuation, in both cases through optional emphasis and list
+    #  markers.  Mid-sentence prose ("My verdict: the code is fine") still
+    #  matches neither, which is the whole point.
+    r"(?:^[ \t]*[*_`#>|+-]{0,6}[ \t]*|[.!?][ \t]*[*_`]{0,3}[ \t]*)VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)"
     r"\s*[*_`\x22\x27]{0,3}\s*([A-Za-z][A-Za-z-]{1,}(?:\s+[A-Za-z][A-Za-z-]*){0,3})",
     re.I)
+#  *** TWO PATTERNS, BECAUSE ANCHORING THE EXTRACTOR BROKE THE OLDEST GUARD
+#  IN THIS FILE AND THE SELFTEST CAUGHT IT. ***
+#
+#  The count-per-line rule -- an INSTRUCTION line lists several tokens, an
+#  ANSWER line carries exactly one -- is the discriminator this whole file was
+#  built around.  Anchoring VERDICT_RE to line start made the SECOND token on
+#  "VERDICT: SHIP / VERDICT: DO NOT SHIP" unmatchable, so findall returned 1,
+#  the menu passed the guard, and three rows went red at once.
+#
+#  So: VERDICT_RE (anchored) EXTRACTS the value; MENU_RE (unanchored) COUNTS
+#  candidates on the line.  They must stay in step -- MENU_RE has to match
+#  everything VERDICT_RE does, or a real answer gets counted as zero and
+#  skipped.
+MENU_RE = re.compile(r"VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)", re.I)
+
 WALL_RE = re.compile(
     r"usage limit|rate.?limit|\b429\b|quota|too many requests|"
     r"unknown effort level|unknown model|not authenticated|invalid api key",
@@ -93,8 +140,24 @@ def brief_lines(d):
     return set()
 
 
-def verdict_of(text, brief_lines=()):
-    """The seat's own verdict: a line carrying EXACTLY ONE verdict token.
+def verdicts_of(text, brief_lines=()):
+    """EVERY distinct verdict this text offers, in order of appearance.
+
+    *** IT RETURNS A LIST BECAUSE PICKING ONE IS THE FAILURE MODE. ***  A
+    measuring seat scored this file over 953 real seat answers and found that
+    loosening the regex raised the count of SILENTLY WRONG verdicts from 57 to
+    79: the loosening did fix the shapes it targeted, and it converted loud
+    failures (a mangled token, a bare None -- a human sees those and checks)
+    into quiet ones, a plausible verdict lifted from the wrong line.
+
+    LAST-WINS IS NOT THE FIX, and that was measured too: on this round's own
+    pass 2, codex quotes `VERDICT: DO NOT SHIP` inside an ILLUSTRATIVE EXAMPLE
+    below its real answer, so last-wins reports codex as DO NOT SHIP.  Neither
+    end of the file is reliably the answer.
+
+    So the caller is told about the disagreement instead.  That is this file's
+    own doctrine -- never silently convert a failure into agreement -- applied
+    to itself, and it needs no guess about which line is the answer.
 
     *** ONE TOKEN PER LINE IS NOT ENOUGH, MEASURED 2026-08-22. ***  A brief that
     lists its three options WRAPS, and the continuation line then carries a
@@ -103,10 +166,22 @@ def verdict_of(text, brief_lines=()):
     guards: skip any line that also appears in the brief, and skip any line that
     still reads as instruction rather than answer.
     """
+    #  *** A SEAT RE-RENDERING THE BRIEF'S MENU AS A BULLET DEFEATS ALL THREE
+    #  GUARDS, AND IT IS LIVE ON A PANEL FROM TODAY. ***  Measured on
+    #  panel_20260823_085034/kimi.txt:4:
+    #
+    #      - VERDICT LINE FIRST: `VERDICT: SHIP` / `SHIP WITH CHANGES` / ...
+    #
+    #  Exactly ONE `VERDICT:` on the line, so the count rule passes; re-rendered
+    #  as a bullet so it is not byte-identical to any brief line; and it says
+    #  "LINE FIRST" rather than "on line one".  The extractor reported SHIP.
+    #  The seat had written SHIP WITH CHANGES three times further down.
+    out = []
     INSTRUCTIONAL = ("open with", "on line one", "then reasoning", "one line, then",
-                     "` or `", "or `verdict")
+                     "` or `", "or `verdict", "verdict line first",
+                     "line first")
     for line in text.splitlines():
-        if len(VERDICT_RE.findall(line)) != 1:
+        if len(MENU_RE.findall(line)) != 1:
             continue
         st = line.strip()
         if st in brief_lines:
@@ -114,13 +189,36 @@ def verdict_of(text, brief_lines=()):
         low = st.lower()
         if any(k in low for k in INSTRUCTIONAL):
             continue
-        v = VERDICT_RE.search(line).group(1).upper().strip()
+        #  *** THE TWO PATTERNS DELIBERATELY DISAGREE, so this cannot assume
+        #  a match. ***  MENU_RE is unanchored and counts candidates;
+        #  VERDICT_RE is anchored and extracts.  A prose line carrying
+        #  "My verdict:" mid-sentence passes the count rule and matches
+        #  nothing here -- which is exactly the rejection wanted, but it
+        #  arrives as None rather than as a skip.  The first version of
+        #  this pairing crashed on it.
+        m = VERDICT_RE.search(line)
+        if m is None:
+            continue
+        v = m.group(1).upper().strip()
         #  belt and braces: a one-character token is a truncated match,
         #  never a verdict, whatever the regex happens to allow today.
         if len(v) < 2:
             continue
-        return v
-    return None
+        if v not in out:
+            out.append(v)
+    return out
+
+
+def verdict_of(text, brief_lines=()):
+    """The FIRST distinct verdict, or None.
+
+    Kept because callers and rows read more clearly against a single value,
+    but *** ANY CALLER THAT ONLY USES THIS IS THROWING AWAY THE DISAGREEMENT
+    SIGNAL ***, which is the thing a measurement showed matters most here.
+    Use verdicts_of() and report a split.
+    """
+    v = verdicts_of(text, brief_lines)
+    return v[0] if v else None
 
 
 def main():
@@ -141,7 +239,15 @@ def main():
         long_lines = [l.strip() for l in t.splitlines() if len(l.strip()) > 20]
         novel = [l for l in long_lines if l not in bl]
         ratio = (len(novel) / len(long_lines)) if long_lines else 0.0
-        v = verdict_of(t, bl)
+        vs = verdicts_of(t, bl)
+        #  *** REPORT THE DISAGREEMENT; DO NOT RESOLVE IT. ***  Measured: on
+        #  406 modern real seat answers, 57 files offer two or more accepted
+        #  verdict lines that DISAGREE.  Taking the first is right often
+        #  enough to look fine and wrong often enough to matter, and taking
+        #  the last is measurably no better.
+        v = vs[0] if vs else None
+        if len(vs) > 1:
+            v = " | ".join(vs) + "   <- SPLIT, read the file"
         #  *** A WALL IS A FILE THAT *ENDS* WITH THE NOTICE.  Both the naive rule
         #  and my first correction of it were measured WRONG on 2026-08-22. ***
         #
@@ -260,6 +366,8 @@ ST = chr(42)    # asterisk
 US = chr(95)    # underscore
 DQ = chr(34)    # double quote
 EMDASH = chr(8212)
+BQ = chr(96)    # backtick
+NL = chr(10)
 ENDASH = chr(8211)
 
 CASES = [
@@ -292,8 +400,15 @@ CASES = [
     ("wrapped menu rejected",
      "VERDICT: DO NOT SHIP", ("VERDICT: DO NOT SHIP",), None),
 
+    #  *** EACH OF THESE ISOLATES ONE GUARD, and the first drafts did not. ***
+    #  Anchoring the label made four older guards redundant FOR THE ROWS AS
+    #  WRITTEN -- every one of those rows was rejected by the anchor before its
+    #  own guard was reached, so four mutants could not be made to fail and the
+    #  guards looked dead.  They are not dead; the rows were badly cut.  Each
+    #  now STARTS with the label, so the anchor passes and only the guard under
+    #  test can reject it.
     ("instruction rejected",
-     "Open with VERDICT: SHIP on line one, then reasoning.", (), None),
+     "VERDICT: SHIP -- one line, then reasoning.", (), None),
 
     #  A real answer sitting below an echoed brief must still be found --
     #  rejecting the echo must not also reject the answer.
@@ -319,6 +434,65 @@ CASES = [
     #  lowercase.  A silent WRONG answer, which is the failure this file exists
     #  to prevent, arriving through the fix for the failure it was built for.
     ("title case",      "VERDICT: Ship with changes", (), "SHIP WITH CHANGES"),
+
+    #  *** THREE ROWS FROM A MEASURED REGRESSION, not from imagination. ***
+    #  A measuring seat scored this file over 953 real seat answers and found
+    #  that the loosening above, while it cut hard failures from 97 to 36,
+    #  raised DISAGREEMENTS from 14 to 57 -- more accepted lines per file,
+    #  including echoed menus -- which first-wins then resolved silently.
+
+    #  The bullet form, from panel_20260823_085034/kimi.txt:4.  One VERDICT:
+    #  on the line, not byte-identical to any brief line, and it says LINE
+    #  FIRST rather than on line one -- so it defeated all three guards and
+    #  reported SHIP for a seat that wrote SHIP WITH CHANGES three times.
+    ("menu bullet rejected",
+     "VERDICT: SHIP -- verdict line first", (), None),
+
+    #  The dash separator matched INSIDE a hyphenated word -- a false
+    #  positive introduced by the fix for a false negative.
+    #  Starts WITH the label, so the anchor passes and only the separator's
+    #  space requirement can reject it.  (Its twin below is the prose-first
+    #  form, which isolates the anchor instead -- the two were swapped in the
+    #  first draft, so each was tested by the other's guard and M11 could not
+    #  be made to fail.)
+    ("hyphen not a separator", "verdict-driven review process here.",
+     (), None),
+
+    #  A seat that echoes the menu and THEN answers must not be resolved to
+    #  the menu's first option.  verdicts_of returns both; main() prints the
+    #  split.  This row pins that the real answer is among them.
+    ("menu then answer",
+     "VERDICT: SHIP / VERDICT: DO NOT SHIP -- one line" + NL
+     + "I read the diff." + NL + "VERDICT: SHIP WITH CHANGES",
+     (), "SHIP WITH CHANGES"),
+
+    #  *** NEGATIVE ROWS FOR THE LOOSENED CLASSES, WHICH HAD NONE. ***  A seat
+    #  pointed out that all five case-insensitivity rows tested the ACCEPT side
+    #  only -- so the selftest was 20/20 green while the extractor happily
+    #  turned a sentence of prose into a verdict.  A row set that only proves
+    #  what should match is half a detector.
+    ("prose verdict rejected",
+     "My verdict: the code is fine and the records are honest.", (), None),
+    ("hyphenated prose rejected",
+     "This is a verdict-driven review process.", (), None),
+
+    #  AND THE ONE THAT MATTERS MOST: prose ABOVE a real answer.  First-line-
+    #  wins means one sentence of preamble outranks the seat's verdict -- and
+    #  this round's own briefs are ABOUT the verdict extractor, so the very
+    #  next panel would have hit it.
+    ("prose above a real answer",
+     "Below is my VERDICT: SHIP as a summary." + NL + "VERDICT: DO NOT SHIP",
+     (), "DO NOT SHIP"),
+
+    #  *** THE FORM ONE WHOLE SEAT ACTUALLY USES. ***  grok streams its
+    #  reasoning with no newlines and ends the giant first line with the
+    #  verdict, so a line-start-only anchor rejected 52 of its 58 answers --
+    #  a seat blanked by the tool rather than by the seat.  This row is real
+    #  text from panel_20260823_140419/grok.txt.
+    ("verdict at a sentence boundary",
+     "That is enough to score the three attacks and name the mutant."
+     + ST * 2 + "VERDICT: SHIP WITH CHANGES" + ST * 2,
+     (), "SHIP WITH CHANGES"),
 ]
 
 #  Each mutant is applied to this module's own source; `rows` names the cases
@@ -335,7 +509,7 @@ MUTANTS = [
      ("multiword", "multiword bold", "title case", "en dash")),
 
     ("M3  per-line token count dropped",
-     [("if len(VERDICT_RE.findall(line)) != 1:", "if False:")],
+     [("if len(MENU_RE.findall(line)) != 1:", "if False:")],
      ("menu line rejected",)),
 
     ("M4  brief-line guard dropped",
@@ -356,8 +530,30 @@ MUTANTS = [
     #  still passes without it, which is the proof.  A mutant that cannot be
     #  made to fail is telling you the code it targets does nothing.
 
+    ("M12 label anchor dropped (prose becomes a verdict)",
+     [('(?:^[ \\t]*[*_`#>|+-]{0,6}[ \\t]*|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', '')],
+     ("prose verdict rejected", "prose above a real answer")),
+
+    ("M10 menu-bullet guard dropped (BOTH keywords)",
+     [('"verdict line first",', '"@@a@@",'),
+      ('"line first")', '"@@b@@")')],
+     ("menu bullet rejected",)),
+
+    ("M11 dash separator un-spaced (the hyphen false positive)",
+     #  BOTH patterns carry their own copy of the separator, and the count
+     #  rule (MENU_RE) is what actually rejects the hyphen row -- mutating
+     #  only the extractor left it green.
+     [('[ \\t]+[—–-][ \\t]+)', '[—–-])'),
+      ('[ \\t]+[—–-][ \\t]+)', '[—–-])')],
+     ("hyphen not a separator",)),
+
+    #  *** RE-AIMED: its old target text vanished when the separator was made
+    #  space-aware, and the selftest reported MUTANT TEXT NOT FOUND rather
+    #  than passing quietly.  That is the failure mode a measuring seat
+    #  warned about -- mutants anchored to regex substrings drift with the
+    #  next regex edit -- and it is why the not-found case is a FAIL here.
     ("M7  dash separators dropped",
-     [('[:—–-]', ":")],
+     [('(?::|[ \\t]+[—–-][ \\t]+)', ":")],
      ("em dash", "en dash")),
 
     #  *** THE HISTORICAL DEFECT, WHICH TAKES TWO EDITS TO RECONSTRUCT. ***

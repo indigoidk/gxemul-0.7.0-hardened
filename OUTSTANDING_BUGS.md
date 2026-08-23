@@ -7696,3 +7696,64 @@ conclude it is safe. It is not.
 
 Found by the pass-2 measuring seat while building mutants against the alias fix. Witness:
 none built yet; `gdrom_default_probe.py`'s `dma seed` row is one store away from being one.
+
+
+## 2026-08-23 — `verdictprose`: the extractor still sweeps prose into a verdict
+
+**FILED, not fixed — coverage debt against a detector that is now above the vacuity
+floor (24 rows, 11 mutants, every mutant red).**
+
+Two measured escapes, both from the pass-2 panel, both real and neither a false pass:
+
+```
+VERDICT: SHIP I think this is ready.        ->  SHIP I THINK THIS
+VERDICT: DO NOT SHIP is what I would say    ->  DO NOT SHIP IS
+```
+
+The value capture takes up to four whitespace-separated words, so a verdict followed by
+prose on the same line sweeps the prose in. It is visible in production today: codex's
+answer on `panel_20260823_173510` reports
+`SHIP WITH CHANGES | SHIP I THINK THIS | SHIP | DO NOT SHIP`.
+
+**Why it is filed rather than fixed, and the reason is not triage fatigue.** The obvious
+repairs each break something measured: stopping at sentence punctuation breaks nothing
+*here* but is untested against 406 real answers; matching a fixed verdict vocabulary
+would reject the real answers this project has actually recorded — `KEEP THE SPLIT`,
+`MEASUREMENT SOUND`, `PARTIALLY CORRECT`, `DEPENDS ON FINDINGS`, `OPTION A/B/C` — which
+are seats answering a question the brief asked, not malformed verdicts.
+
+**And the damage is bounded by the split reporting shipped alongside it.** A swept value
+now appears as one entry in a `SPLIT, read the file` list rather than as the answer, so
+it is loud rather than silent. That is the property that matters; the tidiness is not.
+
+Three more escapes measured and filed with it, none of which changes a verdict today:
+a verdict inside a markdown table row (`| VERDICT | SHIP |`) returns nothing; a seat that
+states its verdict twice with different values is reported as a split with no ordering
+preference (deliberate — last-wins was measured no better, and on this round's own pass 2
+it would have reported codex as DO NOT SHIP by reading an illustrative example); and
+`**Verdict:** **GO-WITH-CHANGES**`, two emphasis runs split by a space, still misses on
+nine pre-2026-08-19 agy files.
+
+## 2026-08-23 — `verdictstate`: the selftest covers `verdict_of` and nothing else
+
+**FILED. Named by the flagship seat, and it is the sharper of its two scope findings.**
+
+All 24 selftest rows exercise verdict extraction. The wall / DOWN / echo-only state
+machine has **zero** rows — and *** ALL THREE HISTORICAL MISCLASSIFICATION CLASSES THIS
+FILE RECORDS LIVED THERE ***: a walled codex producing the LARGEST file in the panel, a
+live seat reported as walled because its reasoning mentioned a quota word, and three
+Ollama seats filed as "answered, format miss" when the daemon was not running at all.
+
+So precommit section V can fire, pass, and prove nothing about the part of the file that
+has actually failed before. The rows are cheap — a synthetic tail carrying a quota notice,
+one with the notice mid-reasoning, one `ConnectionRefusedError` error file — and the
+positive controls already exist as committed panel directories.
+
+Related, same seat: **section V is edge-triggered with no level check.** It fires only
+when the extractor is staged, unstaged or untracked. Commit a defective revision in a
+session that skips precommit and every later run reports "extractor unchanged" forever,
+because the defect is now the baseline. The selftest is sub-second; the fix is to drop the
+condition and run it unconditionally, which dissolves the class rather than patching it.
+Also: a `git mv` of the extractor takes the `[ ! -f ]` branch, which is a **soft warn**,
+so precommit can still PASS with the selftest never having run. That branch should be
+hard.

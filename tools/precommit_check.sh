@@ -275,6 +275,27 @@ if [ ! -f "$SCORECHK" ]; then
 elif out=$(python "$SCORECHK" 2>&1); then
 	good "$(printf '%s' "$out" | grep -E 'SCORE_CLAIMS_PASS|check_score_claims:' | tr '
 ' ' ')"
+	printf '%s\n' "$out" | grep -E '^  note ' | sed 's/^/        /'
+	#  *** THE PROBE COUNT WAS A DISPLAY, NOT AN ASSERTION, SO NOTHING FAILED
+	#  WHEN IT DROPPED. ***  A measuring seat showed the whole check can be
+	#  disarmed for a probe with NO behaviour change at all: quote the pin
+	#  literal (`"32"` instead of `32`) and regress/lib.sh:82 compares it as a
+	#  string exactly as before, while this file silently stops governing that
+	#  probe.  A two-word label or a hoisted variable does the same.
+	#
+	#  So the count is PINNED and ratchets: raise the floor when it rises,
+	#  never lower it to make a commit pass.
+	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
+	if [ -z "$_spinned" ]; then
+		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
+	elif [ "$_spinned" -lt 16 ]; then
+		bad "SCORE-CLAIM COVERAGE DROPPED: $_spinned probes pinned, floor is 16."
+		bad "  A pin stops being seen when its literal is quoted, its label gains a"
+		bad "  word before the stem, or the count moves to a variable -- all of which"
+		bad "  leave the gate behaving identically.  Restore it; do not lower the floor."
+	else
+		good "coverage pinned: $_spinned probes (floor 16)"
+	fi
 else
 	bad "STALE SCORE CLAIMS -- prose disagrees with the gate pin:"
 	printf '%s

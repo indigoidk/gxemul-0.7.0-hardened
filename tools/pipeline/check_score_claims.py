@@ -23,7 +23,13 @@ enough to say so.
 
 A gate pins each probe's row count:
 
-    check "gdrom_default rows run"     "${gddres#*/}" 25
+    check "<stem> rows run"     "${res#*/}" <N>
+
+*** THE EXAMPLE HERE USED TO BE A REAL PIN WITH A REAL NUMBER, AND A SEAT
+POINTED OUT IT HAD ALREADY GONE STALE. ***  Nothing reads a docstring, so a
+concrete number in one rots -- inside the very tool built to stop numbers
+rotting.  It is a placeholder now: the example teaches the SHAPE, and the
+shape is what the regex matches.
 
 That pin is AUTHORITATIVE -- the gate fails immediately if it disagrees with the
 probe, so it cannot go stale the way prose can.  So: within the gate file, any
@@ -91,16 +97,45 @@ def docstring(path):
 
 def main():
     pins = {}          # stem -> (count, gatefile)
+    dupes = []
+    loose = []
+    stem_gates = {}
+    ambig = set()
     for f in sorted(os.listdir(REGRESS)):
         if not f.startswith("gate_") or not f.endswith(".sh"):
             continue
         p = os.path.join(REGRESS, f)
-        for m in PIN.finditer(io.open(p, encoding="utf-8",
-                                      errors="replace").read()):
-            pins[m.group(1)] = (int(m.group(2)), f)
+        txt = io.open(p, encoding="utf-8", errors="replace").read()
+        for i, ln in enumerate(txt.split(chr(10)), 1):
+            #  a `rows run` line the PIN regex cannot see governs NOTHING,
+            #  and the old version simply did not mention them
+            if "rows run" in ln and "check" in ln and not PIN.search(ln):
+                loose.append((f, i))
+        for m in PIN.finditer(txt):
+            stem, cnt = m.group(1), int(m.group(2))
+            #  *** LAST-WRITE-WINS SILENTLY CHECKED THE WRONG NUMBER, AND A
+            #  MEASURING SEAT FOUND A LIVE INSTANCE. ***  `idle` is pinned 9
+            #  in gate_arm.sh and 3 in gate_m88k_rounding.sh; sorted order put
+            #  m88k last, so every `idle` comment in gate_arm.sh was checked
+            #  against 3 and nothing said so.
+            #  *** KEYED BY (GATE, STEM), not by stem alone. ***  Comment
+            #  search is already scoped to the gate carrying the pin, so a
+            #  bare-stem key was simply wrong -- and it collided live:
+            #  `idle` is 9 in gate_arm.sh and 3 in gate_m88k_rounding.sh,
+            #  sorted order put m88k last, and every `idle` comment in
+            #  gate_arm.sh was checked against 3 with nothing saying so.
+            #  Two gates may legitimately pin the same stem; only the
+            #  DOCSTRING lookup is genuinely ambiguous, and that is reported
+            #  below rather than guessed.
+            if (f, stem) in pins and pins[(f, stem)][0] != cnt:
+                dupes.append((stem, pins[(f, stem)], (cnt, f)))
+            if stem in stem_gates and stem_gates[stem][0] != cnt:
+                ambig.add(stem)
+            stem_gates[stem] = (cnt, f)
+            pins[(f, stem)] = (cnt, f)
 
     bad = []
-    for stem, (want, gate) in sorted(pins.items()):
+    for (gate, stem), (want, _g) in sorted(pins.items()):
         #  1. comment lines in the gate that NAME this probe
         gp = os.path.join(REGRESS, gate)
         for lineno, ln in comment_lines(gp):
@@ -111,6 +146,12 @@ def main():
                     bad.append("%s:%d  names %s and claims %s/%s, pin is %d"
                                % (gate, lineno, stem, a, b, want))
         #  2. the probe's own docstring
+        if stem in ambig:
+            #  the same stem pinned to different counts in different gates:
+            #  its gate comments are still checked (scoped correctly above),
+            #  but which probe docstring it names is genuinely unknowable.
+            print("  note  stem %r is pinned to different counts in more than one gate; its DOCSTRING is not checked" % stem)
+            continue
         for cand in (stem + "_probe.py", stem + ".py"):
             pp = os.path.join(REGRESS, cand)
             if not os.path.exists(pp):
@@ -130,13 +171,35 @@ def main():
                     bad.append("%s docstring  claims %s/%s, pin is %d (if that is a deliberate historical quote, write '%s-row' on the same line)"
                                % (cand, a, b, want, b))
 
+    for stem, a, b in dupes:
+        bad.append("DUPLICATE STEM %r pinned %d in %s and %d in %s -- one of them is being checked against the other's number"
+                   % (stem, a[0], a[1], b[0], b[1]))
+    if loose:
+        #  visibility, not a failure: a single-probe gate legitimately writes
+        #  `check "rows run"` with no stem, and there is nothing to associate
+        #  it with.  But it must not look governed when it is not.
+        print("  note  %d `rows run` line(s) carry no probe stem, so no comment in their gate is checked: %s"
+              % (len(loose), ", ".join("%s:%d" % x for x in loose[:6])))
     print("  check_score_claims: %d probes pinned by a gate" % len(pins))
+    #  *** THE COUNT WAS A DISPLAY, NOT AN ASSERTION, SO NOTHING FAILED WHEN
+    #  IT DROPPED. ***  A measuring seat showed the whole check can be
+    #  disarmed with no behaviour change at all: quote the pin literal
+    #  (`"32"` instead of `32`) and regress/lib.sh:82 compares it as a string
+    #  exactly as before, while this file silently stops governing that
+    #  probe.  precommit section U now pins this number.
+    print("SCORE_CLAIMS_PINNED=%d" % len(pins))
     if bad:
         for b in bad:
             print("  STALE  " + b)
         print("SCORE_CLAIMS_FAIL  %d stale score claim(s)" % len(bad))
         return 1
-    print("SCORE_CLAIMS_PASS  every in-file score claim matches its gate pin")
+    #  Honest about coverage: only stems that resolve to a <stem>_probe.py
+    #  have their docstring checked at all.
+    with_ds = sum(1 for _g, st in pins
+                  if os.path.exists(os.path.join(REGRESS, st + "_probe.py"))
+                  or os.path.exists(os.path.join(REGRESS, st + ".py")))
+    print("SCORE_CLAIMS_PASS  %d gate comment set(s) checked; %d of %d stems also have a probe docstring checked"
+          % (len(pins), with_ds, len(pins)))
     return 0
 
 
