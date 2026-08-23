@@ -546,6 +546,45 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > identity rows). Below the floor, the round's own claim to have "shipped a detector with the
 > fix" is a WRONG RECORD, which the stopping rule already fixes in-round.
 >
+> ### *** CLAUSE (d) — NULL-REPAIR RED. Adopted 2026-08-23 by OWNER RULING, on the round
+> that measured its case. ***
+>
+> **(d) The detector must also fail when the fix is PRESENT but its REPAIR IS NULLED —
+> the guard kept, its effect removed.**
+>
+> **(b) DOES NOT IMPLY (d), and #461 measured both in the same hour on the same detector:**
+>
+> | mutant | shape | score |
+> |---|---|---|
+> | `m_dmarevert` | (b): reinstate the `exit(1)` verbatim | **22/31 — killed** |
+> | `m_align1` | (d): keep the guard, weaken `& 3` to `& 1` | **27/27 — ESCAPED** |
+>
+> The detector passed (a), (b) and (c) and was still blind to a ONE-CHARACTER edit that
+> re-opened the very defect the round had just closed. (b) restores the DEFECT; (d) neuters
+> the FIX. A detector can be sensitive to one and blind to the other, because they fail at
+> different sites: (b) fails where the old code was, (d) fails where the new code is.
+>
+> **HOW TO BUILD THE (d) MUTANT — and it is the same discriminator the accept-row rule
+> already uses.** Take each predicate the FIX introduced and weaken it to the
+> least-restrictive form that still *reads* like the same check: a mask narrowed
+> (`& 3` -> `& 1`), a condition qualified (`if (X)` -> `if (X && writeflag == MEM_WRITE)`),
+> a bound relaxed. **Not deletion** — deletion is (b) wearing (d)'s clothes and is usually
+> already covered. The test is whether a plausible future edit could produce it.
+>
+> **WHY THE ONE-CHARACTER FORM IS THE ONE THAT MATTERS.** `dma alias`, the row written
+> specifically to pin that repair, was **STRUCTURALLY BLIND** to it: it used an ODD address,
+> which both guard forms drop. *The row aimed at the defect could not see the defect return.*
+> A row written from the FIX's intent tests the intent, not the boundary — so (d)'s mutant
+> has to come from an adversary, which is exactly what the ask-again buys.
+>
+> **COST: one mutant per repair predicate**, the same order as the accept-row rule (#448 = 4,
+> #449 = 1, #461 = 4 across two arms). It is bounded by the diff, so it cannot become #392:
+> the predicates are the ones the fix ADDED, and that list is finite and visible.
+>
+> **IT IS A FLOOR CLAUSE, so a breach is L2 — replace IN-ROUND however late it is found.**
+> That is deliberate and it is the whole point: an escaped (d) mutant means the round's
+> claim to have "shipped a detector with the fix" is false about the fix's own repair.
+>
 > **Above floor, measured escapes are COVERAGE DEBT: FILE them**, with the escape list recorded,
 > ranked by what they would admit — and ranked BELOW live defects in the same file.
 
@@ -1007,5 +1046,38 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the
   arc screen (`r49_screen.py` pattern); never grep the raw arc pty log for tokens.
+*** A BASH-TOOL TIMEOUT DOES NOT KILL THE WSL-SIDE PROCESS, AND THE ORPHAN KEEPS
+WRITING THE TREE. Measured 2026-08-23, and it produced TWO CONCURRENT RUNS IN ONE
+MUTANT TREE. ***
+
+A kill-table script was launched in the foreground with `timeout 2400000`. **The Bash
+tool caps at 600000 ms**, so the wrapper died at ten minutes reporting exit 143 -- and
+the WSL-side script carried on building mutants. Re-launching it in the background then
+gave two scripts checking out different mutants into the SAME `/tmp/gx461`, each
+measuring a binary the other was overwriting. `ps aux` showed both, four minutes apart,
+and **neither measurement was worth anything**.
+
+It defeats the usual signal: the tool REPORTS a failure, so it does not look like a
+silent success -- but the failure it reports is *its own wrapper*, and nothing says the
+work is still running. **After any timed-out or interrupted WSL invocation, `ps aux`
+for the probe/emulator before starting anything else.** Never re-launch on the
+assumption that a timeout stopped the work.
+
+**Two consequences, both applied:**
+* Long measurements go to `run_in_background` from the start. 600000 ms is the ceiling,
+  and a six-probe kill table exceeds it by design, not by accident.
+* **THE SENTINEL RULE IS NOT OPTIONAL AND THIS SESSION'S OWN SCRIPT BROKE IT.**
+  `kill461b.sh` mutated `/tmp/gx461` with no `.MUTANT` file, so when it was killed
+  mid-mutant the tree was left mutated with nothing saying so. The dirt was found only
+  because a `cmp` against SEC was run by hand. A script that mutates a tree drops the
+  sentinel FIRST and clears it only after `cmp` against GXEMUL-SEC succeeds -- which is
+  what the carrier already said, and what the script did not do.
+
+*** AND `pkill -f <script>` KILLS THE SHELL RUNNING IT. ***  The cleanup command was
+itself a WSL bash invocation whose command line matched the pattern, so it terminated
+itself and reported exit 15 before printing its verification. Pattern-kill and then
+verify in a SEPARATE invocation; a cleanup that cannot report its own result is a
+cleanup you have to redo.
+
 - Invoke WSL scripts as `MSYS_NO_PATHCONV=1 wsl -d Gentoo -- bash /mnt/c/...`; write
   scripts to the session scratchpad, not git-bash `/tmp`.

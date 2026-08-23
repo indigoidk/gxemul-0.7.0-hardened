@@ -7479,7 +7479,19 @@ They were correct when written at pass 1. A pass-2 seat measured the drift: `:19
 OB-20 `break`) is now `:223`; `memory_writemax64` at `:451` is now `:529`; the paired reads
 at `:319-320` are now `:379-380`; `gdromoob`'s `:318-320`/`:89`/`:393`/`:401`/`:120`/`:194`
 are now `:378-380`/`:115`/`:471`/`:479`/`:146`/`:220`; `gdromdefault`'s `:439-447`/`:434`
-are now `:517-525`/`:510`.
+are now `:561-569`/`:556`.
+
+*** AND THE LINE ABOVE WAS ITSELF WRONG UNTIL 2026-08-23 -- THIS IS THE THIRD TIME A
+RECORDS CORRECTION HAS REPEATED THE ERROR IT CORRECTS. *** It read `:517-525`/`:510`,
+which matches **no committed tree**: both `#460` commits put the default arm at
+`:561-569` and COND's exit at `:556`. The numbers were measured against an uncommitted
+intermediate, before the round's final records pass grew the file again -- and the
+paragraph stamped the OLD revision while silently adopting coordinates from a state that
+was never committed, violating its own stated rule inside the same paragraph.
+
+**Every within-file coordinate in this file is now stamped `HEAD 16f06a0`.** A seat found
+it by re-deriving against three commits rather than trusting the annotation, which is the
+only method that catches this class.
 
 **This is the same trap `#459` recorded and it repeated one file over** — there the stale
 citations were in a source comment, here in the records file. The rule stands and now has a
@@ -7541,3 +7553,146 @@ silently left, because that row's own entry warns about exactly this drift.
 * The width latch can be **spent by an access that was declined anyway**, so a later *landing*
   narrow store is silent. Inherent to warn-once — `dev_wdc.c` has the same property. Document,
   do not fix.
+
+
+### `gdromdmadefault` — *** JOINED #461. Its own join condition was met, not waived.
+NOT YET SHIPPED: #461 is written, measured and HELD UNCOMMITTED by owner decision
+pending the Fable 5 seat. ***
+
+The entry below said: *"Add them, measure them RED on committed HEAD first."*  That is
+exactly what happened — the DMA rows were measured red on the pre-fix build before the
+arm was touched, and the round ships nine DMA rows (`dma rd`, `dma rd x1`, `dma two`,
+`dma shadow`, `dma seed`, `dma alias`, `dma alias x1`, `dma align16`, `dma rdleak`) plus
+`both windows`, which drives the two windows in one session.
+
+**Recorded here rather than left to be inferred from the CHANGELOG**, because an entry
+that states a condition and is never updated reads as a condition that was skipped.
+
+*The original entry follows, unaltered.*
+
+### `gdromdmadefault` — open, and it is the SIBLING THIS ROUND'S BRIEF MISSED
+
+*** `dev_dreamcast_gdrom.c` HAS A SECOND `default:` KILL OF EXACTLY THIS CLASS, IN THE
+ADJACENT WINDOW OF THE SAME DEVICE. *** `dreamcast_gdrom_dma`, registered separately at
+`0x005f7400` size `0x80`, implements five word offsets (`0x04`, `0x08`, `0x0c`, `0x14`,
+`0x18`) and sends everything else to a `default:` arm that prints and then `exit(1)`s — read
+or write, any width. Coordinates `:632-640` at HEAD `16f06a0`.
+
+**It was invisible.** It sits inside the census count of 14, and it is named in no filing and
+in no brief — the `gdromdefault` brief said *"two DMA sites"* when the file has **three**
+(`:611`, `:627`, `:640`), and the third is the only one in this round's semantic class. A seat
+found it by enumerating rather than by reading the filing.
+
+**A seat ruled it JOINS `gdromdefault`, conditionally**, and the condition is the witness
+ladder itself:
+
+* Same class, same device, same DEVINIT, one fix design — a second small bitmap, `2 × 1` word
+  for 32 word-keys. ***Do NOT share the control window's array*** — a cross-window duplicate
+  key is `#451`'s hazard one level up.
+* The detector extension is inside what `#460`'s `:334` join failed: **no new opcode, no new
+  loop shape, no new state manipulation.** Two trigger rows at `0xa05f7400 + {0x00, 0x7c}`
+  using the existing helpers, plus one regex literal, because the current pattern deliberately
+  will not match `dreamcast_gdrom_dma:` — the colon sits elsewhere.
+* **THE CONDITION: "same class" is an inference, not a witness.** The committed 5/16 witness
+  has no DMA rows. Add them, measure them RED on committed HEAD *first*, and only then does it
+  join.
+
+**If the round declines the join, it MUST still file this by name** — shipping the control
+window fixed beside an identical fatal arm in the adjacent window of the same device is
+`#460`'s *"safe in one state, lethal in another"* with **state** replaced by **window**.
+
+*Noted while checking:* `dma_reg[NREGS_GDROM_DMA]` is dimensioned `0x100/4` = 64 words while
+the registered window is `0x80` = 32 words — twice the size. Harmless today, and worth knowing
+**before anyone keys a latch off `NREGS_GDROM_DMA`**.
+
+
+## 2026-08-23 — two findings ABOUT THE HARNESS, both about work done this session
+
+### `probetimebased` — open, and it is bigger than the round that found it
+
+*** SIX PTY PROBES HAVE NO PROMPT DETECTION AT ALL, AND `gate_hygiene`'s RATCHET
+STRUCTURALLY CANNOT SEE THEM. EVERY ONE OF THEM WAS WRITTEN THIS SESSION. ***
+
+| probe | `endswith(` occurrences |
+|---|---|
+| `gdrom_data_probe.py` | **0** |
+| `gdrom_default_probe.py` | **0** |
+| `sh_intprio_probe.py` | **0** |
+| `sh_iprbcd_probe.py` | **0** |
+| `sh_pclock_probe.py` | **0** |
+| `sh_tlbmulti_probe.py` | **0** |
+| every other pty probe in `regress/` | 1 or more |
+
+They use fixed wall-clock reads — `settle=8.0`, `0.35` per command, a `spin` at the end —
+rather than the prompt-anchored `wait(mark=…, echo=…)` idiom the rest of the tree uses.
+
+**Why the ratchet misses them, and it is not a bug in the ratchet so much as an unstated
+boundary.** `gate_hygiene.sh:98` collects candidates with `grep -h "endswith("` and then
+partitions them. A file containing **zero** `endswith(` contributes to no counter, so all five
+of them sit still and the gate passes. Its own comment (`:72-74`) says the check is
+CLOSED-WORLD — *"every `.endswith()` in the tree must use…"* — and that is true as written.
+**It is closed over files that already use the idiom, and silent about files that never
+adopted it.**
+
+**Why it matters rather than being tidiness.** This project's own rule is that a wall-clock
+budget is a **load-sensitive oracle**; `gate_ab` once false-FAILed a 45-minute battery because
+subagents loaded the host. The rows most exposed here are exactly the `x1` diagnostic-count
+rows — under load a short read returns fewer bytes, the count reads 0, and a **correct build
+scores a false red**. Worse in the other direction: a `survived` row is timeout-based, so a
+**wedged** emulator reads as alive.
+
+*Nothing has miscounted yet* — every measurement this session reproduced across repeated runs,
+and the mutants' numbers matched two independent implementations. That is evidence the reads
+are currently generous, not evidence the shape is safe.
+
+**Two candidate repairs, and they are not equivalent.** (a) Convert the six to the
+prompt-anchored idiom — correct, and six files of work. (b) Extend the ratchet to count pty
+probes that have *no* prompt detection, so the blind spot becomes a red row rather than a
+silence — cheap, and it stops the set growing. **(b) first**: it is the one that prevents a
+seventh, and this session added six.
+
+### `makercfalse` — ASSESSED, cause NOT established
+
+A build that FAILED reported `MAKE_RC=0`. The compile errors were in the log
+(`'GDROM_NDIR' undeclared`, four of them, then `make: *** Error 2`), and the wrapper printed
+zero.
+
+The form that failed was `cd … && rm … && make > log 2>&1; echo "MAKE_RC=$?"`. The form that
+then reported correctly was `make > log 2>&1` followed by `rc=$?` on its own line. **I cannot
+explain the difference and am not going to invent one** — the honest record is that one form
+was observed lying once and the other was not.
+
+**What is cheap and independent: check the binary is newer than the source.**
+`[ build/gxemul -nt src/…/file.c ]` cannot be fooled by a status-propagation subtlety, and it
+answers the question the round actually cares about — *did my edit get compiled into the thing
+I am about to measure?* That check is now in the build wrapper.
+
+*This is worth more than the incident.* Every round this session has claimed "build clean,
+`MAKE_RC=0`, zero warnings" in its commit message. If that check can read 0 on a failure, the
+claim is weaker than it sounds — and the freshness check is the corroboration that makes it
+mean something again.
+
+
+## 2026-08-23 — `gdromdmawidth`: the DMA tail store ignores `len`
+
+**ASSESSED, FILED, NOT FIXED — pre-existing upstream and untouched by `#461`.**
+
+`dev_dreamcast_gdrom.c`'s DMA tail store is `d->dma_reg[relative_addr / sizeof(uint32_t)]
+ = idata;` with **no width discrimination**. An *aligned* byte or 16-bit write at `+0x04`
+matches `case 0x04`, reaches the store, and **clobbers all 32 bits** of `dma_reg[1]` with
+a value the guest only wrote 8 or 16 bits of.
+
+**Why it is filed rather than fixed, and the reason is the reopening rule, not triage
+fatigue.** `#461`'s semantic class is *unimplemented offset*; this is *implemented offset,
+wrong width*. It needs a different fix design (a read-modify-write honouring `len`, which
+raises an endianness question the default arm never has to answer) and a different oracle.
+One fix design does not cover both, so it is a separate round by the round-scope rule.
+
+**It is the same FAMILY as the alias `#461` did fix, and that is worth stating plainly:**
+the new rule *"alignment alone separates unimplemented word from misaligned access to an
+implemented one"* is true and does **not** cover this — an aligned narrow write to an
+implemented offset is neither. A future reader applying that rule to this site would
+conclude it is safe. It is not.
+
+Found by the pass-2 measuring seat while building mutants against the alias fix. Witness:
+none built yet; `gdrom_default_probe.py`'s `dma seed` row is one store away from being one.

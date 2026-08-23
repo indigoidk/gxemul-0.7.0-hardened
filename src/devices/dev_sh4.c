@@ -350,8 +350,11 @@ struct sh4_data {
 	    ONCE and a second, DIFFERENT one is not hidden behind the first.  A
 	    per-device flag would hide it (the "1 of 4 kinds" hazard #438 recorded);
 	    137 named flags would be absurd.  This is five words.  */
-	/*  #443 pass 2: [fault class][word].  TWO classes, not one -- see
-	    sh4_pcic_first().  */
+	/*  #443 pass 2: [fault class][word].  THREE classes -- UNIMPL, BADVAL and
+	    NOCPU; see sh4_pcic_first().  (This comment said TWO for months, beside
+	    an array dimensioned SH4_PCIC_NCLASS == 3.  A seat reading it for the
+	    gdromdefault round caught the mismatch: the third class was added and
+	    the count in the comment was not.)  */
 	uint32_t	pcic_reported[SH4_PCIC_NCLASS][(N_PCIC_REGS + 31) / 32];
 
 	/*  SCI (serial interface):  */

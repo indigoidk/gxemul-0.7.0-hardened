@@ -27,7 +27,33 @@ import os
 import re
 import sys
 
-VERDICT_RE = re.compile(r"VERDICT\s*:\s*([A-Za-z][A-Za-z-]*)")
+#  #461: TOLERATE MARKDOWN EMPHASIS AROUND THE VERDICT WORD.
+#
+#  MEASURED on the #460 pass-2 panel: minimax answered `VERDICT: **SHIP**` and grok
+#  answered `VERDICT: SHIP WITH CHANGES**`.  The old pattern required a LETTER
+#  immediately after the colon, so the `*` defeated it and BOTH correct answers
+#  landed under "answered, NO VERDICT LINE (format miss)".
+#
+#  *** THAT IS THE MIRROR IMAGE OF THE FAILURE THIS FILE EXISTS TO PREVENT. ***  It
+#  was built so a DEAD seat is never counted as agreement; here a LIVE seat with a
+#  correct verdict was being downgraded to a formatting failure, which is the same
+#  error pointing the other way and just as silent.
+#
+#  The leading class is OPTIONAL and bounded, so the findall-count discriminator
+#  below still works: the brief's own menu line still yields three matches and is
+#  still skipped.  Only the emphasis characters are new.
+#  AND IT KEEPS THE WHOLE PHRASE, WHICH THE OLD PATTERN DID NOT.  Capturing one
+#  word made `SHIP` and `SHIP WITH CHANGES` IDENTICAL in the report -- two
+#  materially different answers rendered the same -- and collapsed every
+#  OPTION A / OPTION B / OPTION C verdict to a bare "OPTION", so a pass-1 panel
+#  that SPLIT read as unanimous.  That defect predates the emphasis one and is
+#  worse: emphasis lost a seat, this lost the ANSWER while still reporting it.
+#
+#  Uppercase-only, up to four tokens: it takes "SHIP WITH CHANGES", "DO NOT
+#  SHIP", "OPTION A" and "SOMETHING ELSE", and stops dead at lowercase prose or
+#  punctuation, so "VERDICT: SHIP -- the code is fine" still yields just SHIP.
+VERDICT_RE = re.compile(
+    r"VERDICT\s*:\s*[*_`]{0,3}\s*([A-Z][A-Z-]*(?:\s+[A-Z][A-Z-]*){0,3})")
 WALL_RE = re.compile(
     r"usage limit|rate.?limit|\b429\b|quota|too many requests|"
     r"unknown effort level|unknown model|not authenticated|invalid api key",

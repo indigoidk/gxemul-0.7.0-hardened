@@ -256,6 +256,32 @@ fi
 #  A seat caught it spelled twice -- shell and Python -- which is the same drift the
 #  TCR_UNIMPLEMENTED mask exists to prevent, one file over.
 GRADING_CUTOFF_NOTE=2026-08-23
+say ""; say "U. score claims match their gate pin"
+#  Built after FOUR stale-score incidents in one session (#458 #459 #460 #461), all
+#  the same shape: a round measures a detector at N rows, writes x/N into a gate
+#  comment and a docstring, then GROWS the detector.  The pin gets updated because
+#  the gate fails without it; the prose does not, because nothing reads it.
+#
+#  The fourth was caught by a seat that hit its usage limit MID-ANSWER and got one
+#  sentence out.  That is the argument for mechanising it -- the catch depended on a
+#  seat surviving long enough to say so.
+#
+#  HARD, and negative-controlled in both directions on the day it was written: the
+#  #461 claim reintroduced makes it name the line and both stale numbers; restored,
+#  it passes, with the file byte-identical.
+SCORECHK=$_HERE/pipeline/check_score_claims.py
+if [ ! -f "$SCORECHK" ]; then
+	warn "check_score_claims.py MISSING -- stale score claims NOT verified"
+elif out=$(python "$SCORECHK" 2>&1); then
+	good "$(printf '%s' "$out" | grep -E 'SCORE_CLAIMS_PASS|check_score_claims:' | tr '
+' ' ')"
+else
+	bad "STALE SCORE CLAIMS -- prose disagrees with the gate pin:"
+	printf '%s
+' "$out" | sed 's/^/          /'
+	bad "  the pin is authoritative; fix the prose, or re-measure and fix both"
+fi
+
 say ""; say "T. seat outcomes: a CLOSED row's panel entries should be graded"
 #  SOFT ON PURPOSE, and the reason matters.  A hard gate here would force a grade at
 #  commit time, and a forced grade is a guessed grade -- which is precisely the recall
