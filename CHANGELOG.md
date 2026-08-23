@@ -1,3 +1,290 @@
+## Round 458 (#458) -- the interrupt priority table consulted two registers out of four
+
+`sh_update_interrupt_priorities()` read `intc_ipra` and `intc_intpri08` and nothing
+else. Table 19.6 (`_scratchpad/sh7750_hardware.txt:40231`) assigns four sources to each
+of IPRA-IPRD. So IPRB and IPRC were stored by the device, passed to this function, and
+ignored -- **and even IPRA was read incompletely**: TMU0/1/2 were handled and RTC in
+bits [3:0] was not, leaving a source in a register this function DOES consult
+permanently at priority 0.
+
+### SCIF was sourced from a register that does not exist, and five things say so
+
+The model took SCIF's priority from `intc_intpri08 >> 16`. It belongs in **IPRC[7:4]**:
+
+* Table 19.5 (`:40036`) gives it per-source at `:40142`: `SCIF ERI H'700 ... IPRC (7-4)`.
+* Table 19.6 (`:40231`) agrees.
+* The SH-4 programming manual 5.6 lists SCIF among the modules whose levels are set
+  "in the interrupt priority registers (IPRA-IPRC)".
+* **This tree's own header says so** -- `sh4_intcreg.h:91`, `IPRC_SCIF_MASK 0x00f0`.
+  The code contradicted a header sitting beside it.
+* A full enumeration of the manual returns `INTPRI00` **sixteen times and no other
+  INTPRI register at all**. INTPRI00 is SH7750R-only and covers TMU3/TMU4. The layout
+  the code used is the SH7760's, which `cpu_sh_init`'s own comment admits, and no
+  SH7760 appears in `SH_CPU_TYPE_DEFS`.
+
+**And the register was never even mapped.** `SH4_INTPRI00` is `0xfe080000`, outside the
+single registered window (`SH4_REG_BASE` + 0x01000000), so `dev_sh4.c`'s INTPRI cases
+are unreachable and `intc_intpri08` kept its init value forever. A guest store to it
+reports `non-existant paddr`. SCIF's priority was a guest-immutable constant 3.
+
+### The citations were re-read before shipping, and two were wrong
+
+`#457` shipped four wrong citations. This round checked every one against the file
+before commit, and **two of its own were wrong**:
+
+* The per-source table is **19.5** ("Interrupt Exception Handling Sources and Priority
+  Order", `:40036`), not 19.4. Table 19.4 is `:39965`, "SH7750 IRL3-IRL0 Pins and
+  Interrupt Levels (When IRLM = 1)" -- which turns out to be the *correct* citation for
+  the IPRD argument below, so the right reference was in hand and attached to the wrong
+  claim.
+* Table 19.6's heading is `:40231`; the comment said `:40230`, the line above it.
+
+**And one apparent error was not one.** `pdftotext -layout` staggers a vertically-centered
+table cell onto the wrong line, so Table 19.5 extracts as `ATI H'480 / H'4A0 / PRI H'4C0 /
+CUI` -- which reads as *PRI = H'4C0* and would have condemned three correct constants. The
+SCI block four rows below is the decoder: `sh4_exception.h:93-96` already pins SCI
+ERI/RXI/TXI/TEI at `0x4e0/0x500/0x520/0x540` in shipped code, and that reconciles with the
+extraction **only** if names and codes pair strictly in order down each column. Applying
+that rule to RTC gives `0x480/0x4a0/0x4c0`, which is what the code says. DMTE0 and DMAE are
+confirmed a second time by an unstaggered table at `:32655`.
+
+*This matters more than a wrong page number: a wrong INTEVT constant is invisible to the
+probe, because the probe reads the same constant. The check has to come from outside the
+code.* The rule is now in the carrier.
+
+### A rung-4 boot witness: the guest asks for 12 and gets 3
+
+Instrumenting a 90-second `-E landisk` boot of `openbsd76-landisk-bsd.rd`: the guest
+writes **`IPRC = 0x00c0`** -- SCIF priority **12** -- at the moment `scif0: cons`
+attaches, and the model delivered priority **3** on all fifteen SCIF asserts of that
+boot. Full IPR trace: `IPRA 0x0300 -> 0xe300`, `IPRC 0x00c0`, `IPRD 0x0000`, IPRB and
+INTPRI never written.
+
+That also answers the de-escalation question this round had to ask before touching
+anything: re-sourcing SCIF to IPRC is safe *because* the guest programs IPRC. Both
+builds boot to the installer prompt at ~2.886e9 instructions. Dreamcast is an honest
+UNKNOWN -- no image in `_images/`, and SCIF is not its console.
+
+### *** IPRD IS DELIBERATELY NOT READ, and that is measured rather than cautious ***
+
+"Read all four registers per Table 19.6" is the obvious design and it is **wrong**.
+IPRD sets per-pin IRL priorities in IRLM=1 mode, which `dev_sh4.c` refuses outright, so
+it can never be in effect. And its four nibbles ALIAS live slots: IRL0-3 are
+`0x240/0x2a0/0x300/0x360`, which are also IRQ2/5/8/11 -- owned by the hardwired loop and
+used today by the PCIC lines and the dreamcast ASIC.
+
+Measured: one guest `IPRD := 0` -- **the exact store OpenBSD/landisk 7.6 makes during
+boot** -- drops those four slots from `0xd/0xa/0x7/0x4` to zero, masking four PCIC lines
+permanently, while a control slot not in IPRD (IRQ10, the wdc) is untouched. A variant
+reading IPRD scores the same as this one, so reading it buys nothing and costs that.
+
+*** AND THE MANUAL CORROBORATES IT FROM AN ANGLE THE DESIGN DID NOT USE. *** IPRA-IPRC
+reset to `H'0000`, but **IPRD resets to `H'DA74`** -- stated three times independently
+(`:39856`, `:40194`, `:48567`). Those nibbles are `13/10/7/4`. The hardwired loop at
+`cpu_sh.c:352` computes `15 - ((i - SH4_INTEVT_IRQ0) / 0x20)`, which hands IRQ2/5/8/11 --
+the slots IRL0-3 alias -- exactly **13/10/7/4**. *The model is already sitting on the
+hardware's IPRD reset state for all four lines, matching nibble for nibble.*
+
+So reading IPRD could not improve the reset case even in principle; it could only let a
+guest write move the model AWAY from a correct default, which is precisely what the
+measured `IPRD := 0` does. Whether upstream chose that descending ramp to make the IRL
+defaults come out right, or whether it fell out, is not determinable from the code -- the
+agreement is recorded as measured, not as intent.
+
+### The naive witness is GREEN on the unfixed build
+
+The obvious row -- write one IPR, expect delivery -- **passes HEAD**. It fails vacuity
+floor clause (a) outright and has zero discriminating power. It ships as a LABELLED row
+so nobody re-invents it. What discriminates is IMASK BRACKETING: delivery needs
+`IMASK < int_level`, so a pair of rows at different IMASK pins the level to a range
+rather than to "nonzero".
+
+### Two mutants no behavioural row could ever catch
+
+```
+  the fix                                       18/18
+  m_iprconly    RTC + IPRB mapping dropped      10/12   iprb wdt; ipra rtc
+  m_nortc       three RTC lines dropped         11/12   ipra rtc
+  m_norescan    rescan call dropped             11/12   raise
+  m_iprdread    reads all four IPRs             13/14   iprd hold
+  m_sciftxonly  SCIF loop narrowed to TXI       15/18   scif eri; scif rxi; scif bri
+```
+
+*The denominators are the detector's size WHEN EACH WAS MEASURED, and they are not restated
+upward, because the mutants were not re-run at 18. The detector grew twice during pass 2 —
+the `iprd hold`/`iprd ctl` pair at 12->14, then the SCIF membership rows at 14->18 — and each
+growth was forced by a mutant the previous size could not see. `m_sciftxonly`'s own line
+records both facts: it scored a clean 14/14 before those four rows existed.*
+
+*`scif txi` stays GREEN under `m_sciftxonly`, which is the point — the mutant does still map
+TXI. Three of four red is what "the loop lost its other members" looks like.*
+
+Every mutant is reddened by exactly the row built for it and nothing else.
+
+`m_iprconly` (drop the RTC and IPRB blocks) and `m_nortc` (drop the three RTC lines)
+each scored a **clean 10/10** against every behavioural row -- not because the rows are
+weak, but because **WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have no `INTERRUPT_ASSERT`
+anywhere in this tree.** Nothing a guest can DO depends on their priorities.
+
+So `#458` exposes `int_prio_and_pending[]`, `int_to_assert` and `int_level` through the
+settings interface, and two rows read the table directly: after a guest `IPRB := 0xa000`
+the WDT slot must read `0xa`, and after `IPRA := 0x000c` the RTC slot must read `0xc`.
+**Those two rows are the reason the exposure exists**; without them it is an unused
+convenience.
+
+*The widths are matched to the declarations rather than guessed -- `int_to_assert` is
+`int16_t` and `int_level` is `unsigned int`. These macros take the variable's ADDRESS,
+so a mismatched width reads neighbouring bytes and reports a plausible wrong number.*
+
+### What this round does NOT claim
+
+`scifonly` and `ipronly` measured **byte for byte identical**, which means the entire
+behaviourally-witnessable payload of the register half is the SCIF re-source. IPRA[3:0],
+IPRB and the rest make the model's table agree with the manual for sources nothing can
+currently raise. That is worth doing -- a priority table that silently disagrees with the
+hardware is a trap for whoever next wires up a device -- but it is a judgement about
+scope, not a measurement, and this record says so rather than claiming those nibbles
+witnessed.
+
+### *** THE SCOPE RULING WAS OVERTAKEN BY AN IMPLEMENTATION FACT, and an earlier draft of
+this block recorded BOTH halves of the contradiction without noticing. ***
+
+The brief proposed merging `sh4iprbcd` with `sh4prioraise`; a pass-1 seat refused, on three
+grounds including that **the project had already adjudicated it** -- the `sh4prioraise`
+filing itself says "a second design question, its own round". That refusal was accepted, and
+this block said "sh4prioraise is NOT in this round" *in the same breath as* "the rescan half
+IS present" and "the row that isolates it, `raise`, is red on an IPR-only build". Both
+sentences were true. Together they say the round ships the fix, ships a row for it, and
+denies doing so.
+
+**A pass-2 seat named the implementation fact that settles it:** rewriting priority nibbles
+of a table that may already hold a pending request leaves `int_to_assert` stale, so the
+rescan is load-bearing *for the register fix itself*, not an optional companion. The two
+were separable as filings and are not separable as code. So `sh4prioraise` closes on this
+commit: the rescan call ships, `raise`/`raise_lo` pin it, and `m_norescan` reddens `raise`
+alone.
+
+*Recorded as a scope CHANGE rather than quietly merged, because the earlier ruling was
+correct on the evidence it had.* What it could not know was that `rescanonly` would measure
+identical to `pre` -- the rescan fixes nothing observable ALONE -- which is precisely why it
+cannot be deferred to a later round without leaving this one's table able to go stale.
+
+The standing-LOWER direction is NOT closed: no row asserts at a high priority and then
+lowers it while the request stands. Filed as `sh4standinglower` with the one-line kill row
+a seat supplied.
+
+### The ask-again earned its keep, on the round's own central decision
+
+Project rule: once a kill table is clean, ask the panel once more -- **capped at one ask
+per detector per round**. The first table was clean at 12/12, and the ask returned a
+finding that the round could not have reached alone:
+
+> *"None of the 12 rows writes IPRD except `devsig`, a read of the reset value. A
+> well-meaning 'read all four registers' mutant is predicted 12/12 and would still smash
+> landisk PCIC. That is the hole, not the design."*
+
+**The IPRD decision -- the most-argued call in this round -- was defended only by a
+comment.** `iprd hold` and `iprd ctl` now defend it: a guest `IPRD := 0` must leave
+IRQ2/IRL0 (`0x240`) at `0xd`, while IRQ10 (`0x340`), outside IPRD, stays `0x5` under fix
+and mutant alike. That control is what makes a red attributable to IPRD rather than to a
+broken session. **Measured, not predicted: `m_iprdread` scores 13/14, red on `iprd hold`
+alone.**
+
+Five seats separately named the other escape family -- delete any single mapping line for
+a slot no row reads, and the detector scores full marks (H-UDI, GPIO, RTC PRI/CUI, the REF
+pair, the DMAC loop, the SCI loop, `<=`->`<` on SCI TEI, and a wrong-DESTINATION variant
+that transposes the GPIO and H-UDI nibbles). All **FILED** as `sh4iprunpinned`, following
+`#447`: hypothetical edits in uncovered product cells, against a detector measured above
+the vacuity floor, are coverage debt. The cap is the anti-`#392` clause and it held.
+
+### *** THE ASK-AGAIN'S REAL PRIZE: ONE ESCAPE THAT WAS NOT COVERAGE DEBT. ***
+
+Every escape above reaches a slot nothing in this tree asserts. The measuring seat found
+one that does not, and **measured it at 14/14** — one identifier in the round's own IPRC
+block:
+
+```c
+for (i=SH4_INTEVT_SCIF_ERI; i<=SH4_INTEVT_SCIF_TXI; i+=0x20)   /* ship   */
+for (i=SH4_INTEVT_SCIF_TXI; i<=SH4_INTEVT_SCIF_TXI; i+=0x20)   /* mutant */
+```
+
+**SCIF RXI (`0x720`) is LIVE.** `dev_sh4.c:250-256` asserts `scif_rx_irq` whenever
+`SCSCR2.RIE && SCSSR2.DR`, connected at `:1912`. That is **console input on landisk** — the
+only SH machine this project boots. Measured at `IPRC=0x00f0`, `SCSCR2=0x40`, `SCSSR2=0x01`,
+`IMASK=3`:
+
+| | `iprio_720` | RX delivery |
+|---|---|---|
+| the fix | `0x1f` — asserted, priority 15 | **delivered** |
+| `m_sciftxonly` | `0x10` — asserted, priority **0** | **refused** |
+
+So the mutant silently deletes console input and the detector stays green. The ten
+behavioural rows all drive **TXI**: `scif_assert_code()` writes `SCSCR2.TIE` +
+`SCSSR2.TDFE|TEND`, which is the TX arm. Nothing ever touched the RX side.
+
+**This is a MEASURED FALSE PASS on live functionality, so the stopping rule licenses fixing
+it in-round** — and it is the de-escalation clause's own shape: the round was pinning the
+accept side of a four-member loop at exactly one member. Four rows now pin the loop's whole
+membership in one session, which kills *every* narrowing of it rather than the one measured.
+
+**A second measured result from the same seat is worth keeping:** `m_irqramp` (`15 -` ->
+`14 -` in the hardwired ramp, which masks IRQ14 and lowers every IRQ line by one) **passes
+the twelve-row detector** and scores 12/14 against the current one — killed by the two IPRD
+rows. Those rows earn their keep well beyond the IPRD question they were added for.
+
+### The gate caught a malformed edit to the gate, which is the safe direction
+
+The first run of the finished gate came back **FAIL, 1 of 111**, with all eighteen `#458`
+rows green and one failing check named **`n`**. A backslash-continuation written through a
+nested heredoc had produced the two characters `
+` in the `for v in ...` word list, adding
+a bogus word, so the gate dutifully checked for a row called `n` and did not find one.
+
+*Worth recording because it is the opposite of the padded-column trap this project already
+knows.* A name that is too long makes its check **unsatisfiable and silent**; a name list
+that gains junk fails **loudly and immediately**. Both are real, and this one is safe by
+construction. The word list is now one line with no continuations, and the two-second check
+— expand it in `bash -c` and count — is in the carrier.
+
+### Three things this round changes that are not the defect
+
+* **SCIF's reset priority moves from 3 to 0, and that is correct.** `intc_intpri08` was
+  initialised to `0x33333333`, so SCIF sat at priority 3 out of reset; IPRA-IPRC reset to
+  `H'0000`, which is what hardware does. Any SH4 guest that enables SCIF interrupts
+  *without* programming IPRC now gets nothing where it previously got delivery at 3. landisk
+  programs IPRC — the boot witness shows it — and `machine_test.c` is the only other SH
+  machine in the tree, so nothing under test regresses. Recorded now rather than discovered.
+* **The rescan lift is not behaviourally verbatim.** `sh_cpu_interrupt_assert()` selects with
+  `int_to_assert == 0 || prio > int_level`; the rescan selects with `prio > int_level` from a
+  zeroed base, ascending index. Running it on every IPR write therefore RE-ARBITRATES, and
+  ties resolve to the lowest INTEVT code. *Within* an IPR group that matches Table 19.5's
+  "Default Priority within IPR Setting Unit" column exactly; *across* groups it does not
+  (19.5 ranks SCIF `0x700` above WDT `0x560`; the scan picks WDT). Unwitnessable today, and
+  pre-existing in the deassert path — but this diff makes that path run far more often.
+* **The nine new `SH_INTEVT_*` are defined in `cpu_sh.c`, not in the header where they
+  belong.** Deliberate: `src/include/thirdparty/sh4_exception.h` is byte-identical to
+  pristine upstream and the fork has never edited it. Keeping a thirdparty header pristine
+  outweighs table locality.
+
+### One seat's headline was wrong, and checking it took two minutes
+
+A packet-fed seat required, as its condition to ship, that the SCIF loop be changed from
+`i<=SH4_INTEVT_SCIF_TXI` to `i<=SH4_INTEVT_SCIF_TEI`, calling the current form an
+off-by-one that leaves SCIF TEI at priority 0. **`SH4_INTEVT_SCIF_TEI` does not exist.**
+`sh4_exception.h:104-107` defines exactly four SCIF vectors -- ERI `0x700`, RXI `0x720`,
+**BRI** `0x740`, TXI `0x760` -- so the loop already covers all four and the suggested edit
+would not compile. The seat had transplanted SCI's vector set (which does end in TEI, at
+`0x540`) onto SCIF. Recorded because the seat was right about everything else, and a
+confident wrong headline from an otherwise-good seat is the failure mode the panel exists
+to absorb.
+
+### One new sibling, confirmed by arithmetic
+
+`dev_sh4.c` wires 16 PCIC lines as `SH4_INTEVT_IRQ0 + 0x20 * i`, so **line 15 lands on
+`0x3e0`** -- the line #456 established the priority loop never assigns and which appears
+nowhere in the manual. PCIC interrupt 15 can never be delivered. Same class as #456,
+different device.
+
 ## Round 457 (#457) -- three guest stores ended the host process
 
 `dev_sh4.c` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when a guest

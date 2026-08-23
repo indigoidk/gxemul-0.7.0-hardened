@@ -16340,6 +16340,94 @@
           "outcome": "UNVERIFIED"
         }
       ]
+    },
+    {
+      "id": "sh4pcic15",
+      "title": "sh4pcic15  PCIC interrupt line 15 can never be delivered -- it lands on 0x3e0, one slot past the priority loop's bound, and the obvious fix is a NO-OP",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[filed by the MAIN LOOP wearing the fable5 model -- seat and adjudicator are distinct hats; the seats that found it are named in the text] dev_sh4.c:73 sets N_PCIC_IRQS 16 and :2822-2836 wires every one as SH4_INTEVT_IRQ0 + 0x20*i, so line 15 lands on 0x3e0 (SH4_INTEVT_IRQ15, sh4_exception.h:157). The priority loop at cpu_sh.c:352 stops at SH4_INTEVT_IRQ14 (0x3c0), so that slot keeps priority 0 for the machine's life. *** EXTENDING THE BOUND FIXES NOTHING: the loop body is `15 - ((i - SH4_INTEVT_IRQ0) / 0x20)`, which yields priority 0 for IRQ15 -- exactly the state it is already in. The bound is not an off-by-one; it is where this formula runs out of nonzero priorities, so a round must decide what IRQ15's priority OUGHT to be. *** #455 also changed the symptom class: before it, an assert on a priority-0 line ran fatal() then exit(1), so this was a guest-reachable host kill; after it the interrupt is SILENTLY DROPPED. That is the de-escalation clause's own hazard arriving on schedule. HONEST LIMIT: header-and-loop-bound arithmetic across three files, NOT witnessed -- no probe has driven a PCIC line 15 assert."
+        }
+      ]
+    },
+    {
+      "id": "sh4iprunpinned",
+      "title": "sh4iprunpinned  #458's detector reads only four of the ~20 priority slots it maps, so deleting any single mapping line for an unread slot scores full marks",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[filed by the MAIN LOOP wearing the fable5 model -- seat and adjudicator are distinct hats; the seats that found it are named in the text] COVERAGE DEBT from #458, filed under #447's precedent: hypothetical edits in uncovered product cells against a detector measured ABOVE the vacuity floor. FIVE SEATS found the class independently. Eight shapes: drop SH_INTEVT_HUDI (0x600); drop SH_INTEVT_GPIOI (0x620); drop RTC_PRI/RTC_CUI (0x4a0/0x4c0 -- only ATI is read); drop the REF pair (0x580/0x5a0); drop the DMAC loop (0x640-0x6c0); drop the SCI loop (0x4e0-0x540); `i<=SH_INTEVT_SCI_TEI` -> `i<` (drops 0x540 alone); and a wrong-DESTINATION variant that TRANSPOSES the GPIO and H-UDI nibbles. Root cause is structural: none of those sources has an INTERRUPT_ASSERT in this tree, so no behavioural row can reach them. TWO FIXES, cheapest first: (a) one table-driven row writing each IPR to a distinct pattern and checking EVERY slot Table 19.6 assigns -- subsumes all eight; (b) a debugger interrupt-inject command (INTERRUPT_ASSERT by name on machine[0].cpu[0].irq[0x560], already registered at cpu_sh.c:210-223), which promotes them from table reads to real delivery rows and does not rot. Also file: the DMAC loop stops at DMAE and omits DMTE4-7 (H'780-H'7E0, also IPRC[11:8]), which exist on the SH7751R landisk runs."
+        }
+      ]
+    },
+    {
+      "id": "sh4standinglower",
+      "title": "sh4standinglower  No row asserts at a high priority and then LOWERS it while the request stands, so a rescan guarded by `int_to_assert == 0` is predicted to escape",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "grok",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "PREDICTED, NOT MEASURED -- the seat said so itself. Mutant: guard #458's new rescan as `if (cpu->cd.sh.int_to_assert == 0) sh_recalc_int_to_assert(cpu);`. It escapes because `raise` asserts at priority 0 so the guard still fires; `lower` writes both IPR values BEFORE asserting, so nothing is standing during either store; and `deassert` uses the other path entirely. Guest-visible miss: assert SCIF at 15, then IPRC[7:4] := 1 with IMASK=1 -- hardware must drop it, the mutant keeps a stale level 15. THE KILL ROW IS ONE LINE: `run_deliver(0x00f0, 1, raise_iprc(0x0010))` wanting `refused`. NOTE this is a DETECTOR gap, not a code defect: the shipped code calls the rescan unconditionally and handles standing-lower correctly."
+        }
+      ]
+    },
+    {
+      "id": "sh4irlm",
+      "title": "sh4irlm  ICR IRLM=1 is refused outright, and that refusal is what makes #458's decision to decline IPRD correct -- implementing one requires the other in the same commit",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "minimax",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "dev_sh4.c:2386-2388 refuses ICR IRLM=1 with a once-per-bit diagnostic. #458 links the two decisions in comments at BOTH sites because they are one decision in two files: implementing IRLM=1 makes declining IPRD wrong on the same day, and would need IPRD applied GATED ON THE LIVE IRLM BIT with an explicit policy for the IRQ2/5/8/11 aliasing (do those slots become the IRL pins, or coexist?). *** REOPEN TRIPWIRE FOR sh4iprbcd: if this lands, `iprd hold` flips from DEFENDING the decline to BLOCKING the feature, so its oracle must be re-pinned FIRST under the oracle-correction rule. *** Chip scope matters: IPRD is SH7750S/SH7750R only (Rev.7.00 note 3 at :39881 and :40248), and machine_dreamcast.c:165 asks for plain SH7750 where the register does not exist; :39956-39959 says IRL levels are FIXED on the SH7750 even in IRLM=1. Nothing mechanical enforces the cross-file coupling -- if IRLM=1 is implemented, no test fails."
+        }
+      ]
     }
   ]
 }

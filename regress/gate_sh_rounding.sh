@@ -303,6 +303,71 @@ else
     done
 fi
 
+# ------------------------------------------------------------------ #458 sh4_iprbcd
+#  sh_update_interrupt_priorities() read two of the four IPR registers, and took SCIF
+#  from INTPRI00 -- an SH7750R/SH7760 register this machine never even MAPS, so SCIF's
+#  priority was a guest-immutable 3 while the boot witness shows OpenBSD asking for 12.
+#
+#  Two of these rows read the priority TABLE rather than a delivery, and that is not
+#  decoration: WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have NO `INTERRUPT_ASSERT`
+#  anywhere in this tree, so a mutant dropping their mapping scores a clean 10/10
+#  against every behavioural row that can be written.  Nothing a guest can DO depends
+#  on those priorities -- only what the table SAYS.
+IBLOG=$LOGDIR/gate_sh_iprbcd.log
+python3 sh_iprbcd_probe.py "$PMAX" "$KERNEL" > "$IBLOG" 2>&1 || true
+
+if ! grep -q "IPRBCD_RESULT=" "$IBLOG"; then
+    note "sh_iprbcd probe produced no result line; last lines follow"
+    tail -5 "$IBLOG" | sed 's/^/       /'
+    check "sh_iprbcd probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$IBLOG" | sed 's/^/       /'
+    ibctrl=$(grep -o "IPRBCD_CONTROL=[A-Z]*" "$IBLOG" | tail -1 | cut -d= -f2)
+    check "sh_iprbcd control proves it measures" "${ibctrl:-missing}" "OK"
+    ibres=$(grep -o "IPRBCD_RESULT=[0-9]*/[0-9]*" "$IBLOG" | tail -1 | cut -d= -f2)
+    check "sh_iprbcd rows run"     "${ibres#*/}" 18
+    check "sh_iprbcd rows correct" "${ibres%/*}" "${ibres#*/}"
+    #  `naive` is pinned deliberately as a LABELLED row: writing one IPR and expecting
+    #  delivery is GREEN on the unfixed build, so it fails vacuity floor clause (a).  It
+    #  ships so nobody re-invents it; `iprc_hi`/`iprc_lo`/`iprc_lo1` are what discriminate,
+    #  by BRACKETING IMASK -- delivery needs IMASK < int_level, so a pair of rows at two
+    #  IMASK values pins the level to a range instead of to "nonzero".
+    #
+    #  `iprb wdt` / `ipra rtc` are the two table-reading rows.  MEASURED: dropping the
+    #  IPRB+RTC mapping reddens THESE TWO AND NOTHING ELSE (10/12 -- a TWELVE-ROW-ERA
+    #  number, measured before the iprd pair was added), and dropping only the
+    #  three RTC lines reddens `ipra rtc` alone.  Without them the settings exposure
+    #  added by #458 would be an unused convenience.
+    #
+    #  `raise` isolates the rescan half: it is the only row red on an IPR-only build.
+    #
+    #  `iprd hold` / `iprd ctl` defend the round's central DECISION rather than its
+    #  code.  #458 declines to read IPRD, and a pass-2 seat observed that the decision
+    #  lived only in a comment: the obvious "read all four registers per Table 19.6"
+    #  completion scored a clean pass against every other row while masking four landisk
+    #  PCIC lines.  MEASURED, not predicted -- `m_iprdread` (apply IPRD's nibbles to
+    #  IRL0-3) scores 13/14, red on `iprd hold` ALONE.  A guest `IPRD := 0` must leave
+    #  IRQ2/IRL0 (0x240) at 0xd; IRQ10 (0x340) is outside IPRD and stays 0x5 under fix
+    #  and mutant alike, which is what makes the red attributable to IPRD rather than to
+    #  a broken session.
+    #
+    #  *** `scif eri/rxi/bri/txi` ARE THE ONE ESCAPE THAT WAS NOT COVERAGE DEBT. ***
+    #  A measuring seat narrowed the IPRC SCIF loop to TXI alone -- one identifier --
+    #  and MEASURED 14/14.  Unlike every other escape this round, that one reaches a
+    #  LIVE line: SCIF RXI (0x720) is asserted by dev_sh4.c:250-256 on RIE && DR and
+    #  connected at :1912, which is CONSOLE INPUT on landisk.  Measured, the mutant
+    #  leaves iprio_720 at priority 0 with the line asserted, and RX delivery at
+    #  IMASK=3 goes from delivered to refused -- console input silently deleted, gate
+    #  green.  The ten behavioural rows all drive TXI, so nothing saw the RX side.
+    #  These four pin the loop's WHOLE membership, killing every narrowing of it.
+    for v in "live" "devsig" "naive" "iprc_hi" "iprc_lo" "iprc_lo1" \
+             "raise" "raise_lo" "lower" "deassert" "iprb wdt" "ipra rtc" \
+             "iprd hold" "iprd ctl" "scif eri" "scif rxi" "scif bri" "scif txi"; do
+        n=$(count "$IBLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read

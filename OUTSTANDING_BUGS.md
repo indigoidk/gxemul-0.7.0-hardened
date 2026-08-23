@@ -7001,3 +7001,109 @@ exercise it*. Fixing this row may make that site live — the `ctorabortclass` s
 
 **Honest limit: layout arithmetic, not execution.** And the 32-bit walker's offsets (`+0x28`
 read, `+0x30` step) should be checked in the same round rather than trusted by symmetry.
+
+## 2026-08-23 — #458 shipped the IPR table; its sibling is one line past the loop bound
+
+### `sh4pcic15` — open
+
+*** PCIC interrupt line 15 can never be delivered, and the obvious fix is a NO-OP. ***
+
+`dev_sh4.c:73` sets `N_PCIC_IRQS 16`, and `:2822-2836` wires every one of them:
+`SH4_INTEVT_IRQ0 + 0x20 * i` for `i` in `0..15`. With `SH4_INTEVT_IRQ0 = 0x200`
+(`sh4_exception.h:142`) line 15 lands on **`0x3e0`**, which the header names
+`SH4_INTEVT_IRQ15` at `:157`.
+
+The priority loop stops one slot short — `cpu_sh.c:352`, `i <= SH4_INTEVT_IRQ14` (`0x3c0`).
+So slot `0x3e0` keeps priority 0 for the life of the machine. Same class as `#456`, which
+established that this loop never assigns that slot; different device reaching it.
+
+**Why extending the bound fixes nothing.** The loop body is
+`prio = 15 - ((i - SH4_INTEVT_IRQ0) / 0x20)`, so it hands IRQ0 priority 15 and walks down to
+IRQ14 at priority 1. Feed it IRQ15 and the arithmetic yields **priority 0** — exactly the
+state the line is already in. *The bound is not an off-by-one; it is the point at which this
+formula runs out of nonzero priorities.* A round here has to decide what IRQ15's priority
+ought to BE, which is a hardware question, not an arithmetic one.
+
+**And `#455` changed the symptom class.** Before it, an assert on a priority-0 line ran
+`fatal()` then `exit(1)` — this line was a guest-reachable host kill. After it, the assert
+returns early and the interrupt is **silently dropped**. That is the de-escalation clause's
+own hazard arriving on schedule: the fix was right, and it removed the noise that would have
+announced this line. Recorded here so the trade is visible rather than inferred.
+
+**Honest limit: NOT witnessed.** This is header-and-loop-bound arithmetic, three files read
+directly. No probe has driven a PCIC line 15 assert, and whether any guest in `_images/` ever
+raises one is unmeasured. It is eligible for a round only once someone builds that witness —
+`dev_sh4.c`'s `sh4_pcic_interrupt_assert` is the entry point to aim at.
+
+### `sh4iprunpinned` — open (coverage debt from #458)
+
+*** FIVE SEATS INDEPENDENTLY FOUND THE SAME ESCAPE CLASS, AND IT IS A REAL LIMIT ON WHAT
+`sh_iprbcd_probe.py` CAN SEE. *** Filed, not fixed: `#447`'s precedent governs — these are
+hypothetical edits in uncovered product cells against a detector measured ABOVE the vacuity
+floor, which is coverage debt, and the round's ask-again is capped at one finding.
+
+`#458` maps every Table 19.6 source, but only three slots are ever READ by a row —
+`iprio_560` (WDT), `iprio_480` (RTC ATI) and, from the ask-again, `iprio_240` (IRQ2/IRL0).
+Delete any single mapping line for a slot no row reads and the detector scores full marks:
+
+| escape | what it leaves wrong | named by |
+|---|---|---|
+| drop `SH_INTEVT_HUDI` | H-UDI (`0x600`) stuck at 0 | grok, glm |
+| drop `SH_INTEVT_GPIOI` | GPIO (`0x620`) stuck at 0 | deepseek, agy |
+| drop `RTC_PRI` / `RTC_CUI` | `0x4a0`/`0x4c0` stuck at 0; `ipra rtc` reads only ATI | minimax, agy |
+| drop the `REF` pair | `0x580`/`0x5a0` stuck at 0; `iprb wdt` reads only WDT | agy |
+| drop the DMAC loop | DMTE0..DMAE (`0x640`-`0x6c0`) all 0 | minimax |
+| drop the SCI loop | SCI ERI/RXI/TXI/TEI (`0x4e0`-`0x540`) all 0 | minimax, codex |
+| `i<=SH_INTEVT_SCI_TEI` -> `i<` | SCI TEI (`0x540`) alone | codex |
+| map only `SCIF_TXI` | ERI/RXI/BRI untested; the probe drives TXI only | grok |
+
+**The root cause is structural, not sloppiness.** None of those sources has an
+`INTERRUPT_ASSERT` anywhere in this tree, so no behavioural row can reach them; and the
+probe reads the table only where a row was written to. The general fix is one of:
+
+* a **table-driven row** that writes each IPR to a distinct pattern and checks EVERY slot
+  Table 19.6 assigns — one session, ~30 reads, and it subsumes every line above; or
+* a debugger **interrupt-inject** command (`INTERRUPT_ASSERT` by name on
+  `machine[0].cpu[0].irq[0x560]`, which `cpu_sh.c:210-223` already registers), which would
+  promote these from table reads to real delivery rows. **grok notes this makes the probe's
+  "no behavioural test can ever replace these" claim too strong** — it is true only of the
+  Python probe as it stands, because no such command exists today.
+
+The first is cheap and should come first. The second is the one that does not rot.
+
+### `sh4standinglower` — open (predicted, NOT measured)
+
+grok's third mutant: guard the new rescan as `if (cpu->cd.sh.int_to_assert == 0)
+sh_recalc_int_to_assert(cpu);`. Predicted 12/12, because `raise` asserts at priority 0 so
+the guard still fires, `lower` writes both IPR values BEFORE asserting, and `deassert` uses
+the other path entirely. The guest-visible miss: assert SCIF at 15, then `IPRC[7:4] := 1`
+with IMASK=1 — hardware must drop it, the mutant keeps a stale level 15. **The kill row is
+one line**: `run_deliver(0x00f0, 1, raise_iprc(0x0010))` wanting `refused`. Standing-LOWER,
+which no current row performs. Reading, not measurement — grok said so itself.
+
+### `sh4irlm` — open
+
+`dev_sh4.c:2376-2382` refuses ICR IRLM=1 outright. `#458` links the two decisions in a
+comment because they are one decision: implementing IRLM=1 makes declining IPRD wrong on
+the same day, and would need IPRD applied *gated on the live IRLM bit* with an explicit
+policy for the IRQ2/5/8/11 aliasing. Note the chip scope while doing it — IPRD is
+**SH7750S/SH7750R only** (Rev.7.00 note 3, `:39881` and `:40247`), and
+`machine_dreamcast.c:165` asks for plain `SH7750`, where the register does not exist.
+
+**Escape list addendum (pass 2, fable5):** a mutant of a DIFFERENT SHAPE from the
+boundary-drops above — **transpose the GPIO and H-UDI nibbles** in the IPRC block, so
+`GPIOI` takes `intc_iprc & 0xf` and `HUDI` takes `(intc_iprc >> 12) & 0xf`. Predicted to
+pass all **14** rows: the table-reading rows touch only slots `0x560/0x480/0x240/0x340`,
+nothing in the tree asserts GPIO or H-UDI, and the ten behavioural rows drive SCIF[7:4],
+which a 15:12-with-3:0 swap does not reach. *It is the exact defect class `#458` corrects
+— a wrong Table 19.6 nibble mapping in the very register whose SCIF nibble the round fixes
+— but a wrong-DESTINATION rather than a dropped-source.* Same family: `<=SH_INTEVT_DMAE`
+-> `<` (drops DMAE `0x6c0`), and deleting the `TMU2_TICPI2` line (`0x460`).
+
+Two settings rows pinning `iprio_620` and `iprio_600` would close the IPRC family cheaply.
+Filing-grade under the stopping rule: the ask-again cap for this detector is spent.
+
+**Escape list addendum 2 (pass 2, opus5):** the DMAC loop stops at `DMAE` (`0x6c0`), omitting
+**DMTE4-7** (`H'780`-`H'7E0`, also IPRC[11:8]), which exist on SH7750R/SH7751R — the type
+landisk actually runs. Nothing asserts them, so it needs its own row rather than a silent
+loop extension. Same file, same register, different completion question from `sh4irlm`.

@@ -139,6 +139,38 @@ int sh_cpu_new(struct cpu *cpu, struct memory *mem, struct machine *machine,
 	CPU_SETTINGS_ADD_REGISTER32("tra", cpu->cd.sh.tra);
 	CPU_SETTINGS_ADD_REGISTER32("fpscr", cpu->cd.sh.fpscr);
 	CPU_SETTINGS_ADD_REGISTER32("fpul", cpu->cd.sh.fpul);
+
+	/*
+	 *  #458: EXPOSE THE INTERRUPT PRIORITY TABLE, and this is detector
+	 *  material rather than a convenience.
+	 *
+	 *  Two mutants of #458 -- dropping the IPRB/IPRC blocks, and dropping the
+	 *  three RTC lines -- were MEASURED escaping a ten-row behavioural detector
+	 *  with a clean 10/10, because the sources they affect have no
+	 *  INTERRUPT_ASSERT anywhere in this tree.  Nothing a guest can DO
+	 *  distinguishes them, so no behavioural row ever can.
+	 *
+	 *  Making the table readable is what closes that class: a row can then ask
+	 *  what priority a source WOULD have, without needing anything to raise it.
+	 *  Measured against the escapes -- after a guest `IPRB := 0xa000`,
+	 *  `iprio_560` (WDT) reads 0xa on the fix and 0x0 on the mutant that drops
+	 *  the IPRB block, which is the escape reddening.
+	 *
+	 *  int_to_assert and int_level are deliberately NOT exposed.  A draft did
+	 *  expose them, justified as "the arbitration state sh4prioraise is about" --
+	 *  but NO ROW IN THIS DETECTOR READS THEM.  `raise`, `raise_lo` and
+	 *  `deassert` observe delivery instead, which is the stronger oracle anyway.
+	 *  Detector surface no row uses is not a price worth paying: these are a
+	 *  software cache rather than architectural registers, so every name added
+	 *  here is a hostage to a later refactor that computes priority at assert
+	 *  time.
+	 */
+	for (i=0; i<0x1000/0x20; i++) {
+		char tmpstr[25];
+		snprintf(tmpstr, sizeof(tmpstr), "iprio_%x", i * 0x20);
+		CPU_SETTINGS_ADD_REGISTER8(tmpstr,
+		    cpu->cd.sh.int_prio_and_pending[i]);
+	}
 	for (i=0; i<SH_N_GPRS; i++) {
 		char tmpstr[5];
 		snprintf(tmpstr, sizeof(tmpstr), "r%i", i);
@@ -229,12 +261,25 @@ int sh_cpu_new(struct cpu *cpu, struct memory *mem, struct machine *machine,
  *  SH interrupts are a bit complicated; there are several intc registers
  *  controlling priorities for various peripherals:
  *
+ *  #458: THIS TABLE USED TO SAY "Reserved" IN THREE CELLS THAT ARE NOT
+ *  RESERVED -- ipra[3:0], iprb[7:4] and iprc[7:4] -- while the code below
+ *  mapped them.  A reader trusting the header would have put SCIF back on
+ *  INTPRI08.  Corrected here to SH7750 Hardware Manual Rev.7.00 Table 19.6
+ *  (_scratchpad/sh7750_hardware.txt:40231).
+ *
  *  Register:  Bits 15..12  11..8  7..4      3..0
  *  ---------  -----------  -----  ----      ----
- *  ipra       TMU0         TMU1   TMU2      Reserved
- *  iprb       WDT          REF    Reserved  Reserved
- *  iprc       GPIO         DMAC   Reserved  H-UDI
- *  iprd       IRL0         IRL1   IRL2      IRL3
+ *  ipra       TMU0         TMU1   TMU2      RTC
+ *  iprb       WDT          REF    SCI       Reserved
+ *  iprc       GPIO         DMAC   SCIF      H-UDI
+ *  iprd       IRL0         IRL1   IRL2      IRL3     <-- NOT READ, see below
+ *
+ *  *** THE intpri00..intpri0c TABLE BELOW IS THE SH7760's AND IS DEAD IN THIS
+ *  TREE. ***  It is kept for provenance only.  Its attribution lives thirty
+ *  lines away in the init block (:237-239), which is exactly the distance that
+ *  made the IPR table above misleading -- so it is marked here, at the point a
+ *  reader meets it.  No SH7760 is in SH_CPU_TYPE_DEFS, INTPRI00 is SH7750R-only
+ *  and unmapped, and #458 moved SCIF off it.
  *
  *  Register:  31..28  27..24  23..20  19..16  15..12  11..8   7..4   3..0
  *  ---------  ------  ------  ------  ------  ------  -----   ----   ----
@@ -243,6 +288,96 @@ int sh_cpu_new(struct cpu *cpu, struct memory *mem, struct machine *machine,
  *  intpri08   USB     LCDC    DMABRG  SCIF(0) SCIF(1) SCIF(2) SIM    HSPI
  *  intpri0c   Reserv. Reserv. MMCIF   Reserv. MFI     Rsrvd.  ADC    CMT
  */
+/*
+ *  #458: INTEVT codes for the Table 19.6 sources that thirdparty/sh4_exception.h
+ *  does not define.  SH7750 Hardware Manual Rev.7.00 *** Table 19.5 ***,
+ *  "Interrupt Exception Handling Sources and Priority Order", p. 833
+ *  (_scratchpad/sh7750_hardware.txt:40036; the source rows run :40081-40160 --
+ *  the block STARTS at H-UDI, one of the nine constants below, so an earlier
+ *  draft's :40083 excluded a row it was citing for).
+ *
+ *  NOT Table 19.4 -- that one is "SH7750 IRL3-IRL0 Pins and Interrupt Levels
+ *  (When IRLM = 1)" at :39965, and an earlier draft of this comment cited it by
+ *  mistake.  Every code below was then re-read against the manual, and the RTC
+ *  trio needed a decode: pdftotext staggers a vertically-centered cell onto the
+ *  wrong line, so Table 19.5 prints as "ATI H'480 / H'4A0 / PRI H'4C0 / CUI",
+ *  which reads as PRI = H'4C0 and would condemn three correct constants.  The
+ *  SCI block four rows down settles it -- sh4_exception.h:93-96 already pins SCI
+ *  ERI/RXI/TXI/TEI at 0x4e0/0x500/0x520/0x540, and that reconciles with the
+ *  extraction ONLY if names and codes pair strictly in order down each column.
+ *  DMTE0/DMAE are confirmed a second time by the unstaggered table at :32655,
+ *  and the WHOLE TRIO has a second in-manual confirmation at :12086-12140 --
+ *  the section-5 exception table, which lists 18 peripheral codes against 18
+ *  names in strict column order with an exact count match, giving ATI/PRI/CUI
+ *  = H'480/H'4A0/H'4C0 and RCMI/ROVI = H'580/H'5A0 independently of the
+ *  stagger decode above.
+ *
+ *  NOTE, so a later reader does not mistake breadth for coverage: NOTHING IN THIS
+ *  TREE ASSERTS ANY OF THESE.  A measured census of every INTERRUPT_ASSERT on an SH
+ *  line found exactly two files.  Of the Table 19.6 sources, SCIF is the only one
+ *  a device asserts SYNCHRONOUSLY INSIDE A GUEST STORE, which is what a stepping
+ *  probe can observe; TMU is also asserted (dev_sh4.c:585) but from a HOST TIMER,
+ *  and debugger.c:800 stops those across a `step`.  An earlier draft of this
+ *  sentence said "only SCIF is drivable at all", which is false -- the probe's own
+ *  header carried the accurate wording the whole time.
+ *
+ *  So these exist to make the model's priority table match the hardware's, not
+ *  because a witness can reach them, and the round's record says so rather than
+ *  claiming them witnessed.
+ */
+#define	SH_INTEVT_RTC_ATI	0x480
+#define	SH_INTEVT_RTC_PRI	0x4a0
+#define	SH_INTEVT_RTC_CUI	0x4c0
+#define	SH_INTEVT_REF_RCMI	0x580
+#define	SH_INTEVT_REF_ROVI	0x5a0
+#define	SH_INTEVT_HUDI		0x600
+#define	SH_INTEVT_GPIOI		0x620
+#define	SH_INTEVT_DMTE0		0x640
+#define	SH_INTEVT_DMAE		0x6c0
+
+
+/*
+ *  #458: set one source's priority nibble, leaving SH_INT_ASSERTED alone.
+ */
+static void sh_set_int_prio(struct cpu *cpu, int intevt, int prio)
+{
+	cpu->cd.sh.int_prio_and_pending[intevt / 0x20] &= ~SH_INT_PRIO_MASK;
+	cpu->cd.sh.int_prio_and_pending[intevt / 0x20] |=
+	    prio & SH_INT_PRIO_MASK;
+}
+
+
+/*
+ *  #458: recompute int_to_assert / int_level from the whole table.  Lifted
+ *  VERBATIM out of sh_cpu_interrupt_deassert(), which now calls it too, so the
+ *  two paths cannot drift apart.
+ *
+ *  No re-entrancy hazard: it touches only cpu->cd.sh.* and invokes no device
+ *  callback and no INTERRUPT_ASSERT.  At init it yields 0/0, which is correct --
+ *  but NOT because the table is empty: the hardwired loop has already written
+ *  priorities 15..1 into the IRQ slots.  It yields 0/0 because the scan requires
+ *  SH_INT_ASSERTED and nothing has asserted yet.  (Stated precisely because a
+ *  wrong reason gets reused, and a priority alone must never arbitrate.)
+ */
+static void sh_recalc_int_to_assert(struct cpu *cpu)
+{
+	int index;
+
+	cpu->cd.sh.int_to_assert = 0;
+	cpu->cd.sh.int_level = 0;
+
+	/*  NOTE/TODO: This is slow, but should hopefully work:  */
+	for (index=0; index<0x1000/0x20; index++) {
+		uint8_t x = cpu->cd.sh.int_prio_and_pending[index];
+		uint8_t prio = x & SH_INT_PRIO_MASK;
+		if (x & SH_INT_ASSERTED && prio > cpu->cd.sh.int_level) {
+			cpu->cd.sh.int_to_assert = index * 0x20;
+			cpu->cd.sh.int_level = prio;
+		}
+	}
+}
+
+
 void sh_update_interrupt_priorities(struct cpu *cpu)
 {
 	int i;
@@ -258,26 +393,130 @@ void sh_update_interrupt_priorities(struct cpu *cpu)
 		    SH4_INTEVT_IRQ0) / 0x20));
 	}
 
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU0_TUNI0 / 0x20] &=
-	    ~SH_INT_PRIO_MASK;
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU0_TUNI0 / 0x20] |=
-	    (cpu->cd.sh.intc_ipra >> 12) & 0xf;
+	/*  #458: IPRA -- TMU0 [15:12], TMU1 [11:8], TMU2 [7:4], RTC [3:0].  The
+	    RTC nibble was never read: a source in a register this function DOES
+	    consult, left permanently at priority 0.  */
+	sh_set_int_prio(cpu, SH_INTEVT_TMU0_TUNI0,
+	    (cpu->cd.sh.intc_ipra >> 12) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_TMU1_TUNI1,
+	    (cpu->cd.sh.intc_ipra >> 8) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_TMU2_TUNI2,
+	    (cpu->cd.sh.intc_ipra >> 4) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_TMU2_TICPI2,
+	    (cpu->cd.sh.intc_ipra >> 4) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_RTC_ATI, cpu->cd.sh.intc_ipra & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_RTC_PRI, cpu->cd.sh.intc_ipra & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_RTC_CUI, cpu->cd.sh.intc_ipra & 0xf);
 
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU1_TUNI1 / 0x20] &=
-	    ~SH_INT_PRIO_MASK;
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU1_TUNI1 / 0x20] |=
-	    (cpu->cd.sh.intc_ipra >> 8) & 0xf;
+	/*  #458: IPRB -- WDT [15:12], REF [11:8], SCI [7:4], reserved [3:0].  */
+	sh_set_int_prio(cpu, SH_INTEVT_WDT_ITI,
+	    (cpu->cd.sh.intc_iprb >> 12) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_REF_RCMI,
+	    (cpu->cd.sh.intc_iprb >> 8) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_REF_ROVI,
+	    (cpu->cd.sh.intc_iprb >> 8) & 0xf);
+	for (i=SH_INTEVT_SCI_ERI; i<=SH_INTEVT_SCI_TEI; i+=0x20)
+		sh_set_int_prio(cpu, i, (cpu->cd.sh.intc_iprb >> 4) & 0xf);
 
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU2_TUNI2 / 0x20] &=
-	    ~SH_INT_PRIO_MASK;
-	cpu->cd.sh.int_prio_and_pending[SH_INTEVT_TMU2_TUNI2 / 0x20] |=
-	    (cpu->cd.sh.intc_ipra >> 4) & 0xf;
+	/*
+	 *  #458: IPRC -- GPIO [15:12], DMAC [11:8], SCIF [7:4], H-UDI [3:0].
+	 *
+	 *  *** SCIF MOVES HERE FROM intc_intpri08, AND FIVE SOURCES AGREE. ***
+	 *  Table 19.5 (:40036) gives it per-source at :40144 as "IPRC (7-4)" -- and
+	 *  those four SCIF rows print UNSTAGGERED, names adjacent to codes, so this
+	 *  particular citation is immune to the layout artefact described above;
+	 *  Table 19.6 (:40231) agrees; the SH-4 programming manual 5.6 lists SCIF among the
+	 *  modules set "in the interrupt priority registers (IPRA-IPRC)"; and this
+	 *  tree's OWN header says so -- sh4_intcreg.h:91, `IPRC_SCIF_MASK 0x00f0`.
+	 *
+	 *  INTPRI08 does not exist.  A full enumeration of the 1074-page manual
+	 *  returns INTPRI00 sixteen times and no other INTPRI register at all;
+	 *  INTPRI00 is SH7750R-only and covers TMU3/TMU4.  The old layout came from
+	 *  the SH7760, which cpu_sh_init's own comment admits, and no SH7760 is in
+	 *  SH_CPU_TYPE_DEFS.
+	 *
+	 *  It was also unreachable: SH4_INTPRI00 is 0xfe080000, outside the single
+	 *  registered window (SH4_REG_BASE + 0x01000000), so dev_sh4.c's INTPRI
+	 *  cases are dead code and intc_intpri08 kept its init value forever.  A
+	 *  MEASURED landisk boot shows the cost: the guest writes IPRC = 0x00c0 --
+	 *  SCIF priority 12 -- as `scif0: cons` attaches, and the model delivered
+	 *  priority 3 on all fifteen SCIF asserts of that boot.
+	 */
+	sh_set_int_prio(cpu, SH_INTEVT_GPIOI,
+	    (cpu->cd.sh.intc_iprc >> 12) & 0xf);
+	for (i=SH_INTEVT_DMTE0; i<=SH_INTEVT_DMAE; i+=0x20)
+		sh_set_int_prio(cpu, i, (cpu->cd.sh.intc_iprc >> 8) & 0xf);
+	for (i=SH4_INTEVT_SCIF_ERI; i<=SH4_INTEVT_SCIF_TXI; i+=0x20)
+		sh_set_int_prio(cpu, i, (cpu->cd.sh.intc_iprc >> 4) & 0xf);
+	sh_set_int_prio(cpu, SH_INTEVT_HUDI, cpu->cd.sh.intc_iprc & 0xf);
 
-	for (i=SH4_INTEVT_SCIF_ERI; i<=SH4_INTEVT_SCIF_TXI; i+=0x20) {
-		cpu->cd.sh.int_prio_and_pending[i/0x20] &= ~SH_INT_PRIO_MASK;
-		cpu->cd.sh.int_prio_and_pending[i/0x20] |=
-		    ((cpu->cd.sh.intc_intpri08 >> 16) & 0xf);
-	}
+	/*
+	 *  *** IPRD IS DELIBERATELY NOT READ, AND THAT IS MEASURED, NOT CAUTIOUS. ***
+	 *
+	 *  It sets per-pin IRL priorities in IRLM=1 mode -- Table 19.4 at :39965,
+	 *  "SH7750 IRL3-IRL0 Pins and Interrupt Levels (When IRLM = 1)" -- which
+	 *  dev_sh4.c:2386-2388 REFUSES outright ("ICR IRLM bit 0x%04x not
+	 *  implemented -- write ignored"), so it can never be in effect.  And its four nibbles ALIAS live slots: IRL0-3 are
+	 *  0x240/0x2a0/0x300/0x360, which are also IRQ2/IRQ5/IRQ8/IRQ11 -- owned by
+	 *  the hardwired 15..1 loop above and used today by the PCIC lines and the
+	 *  dreamcast ASIC.
+	 *
+	 *  Measured: one guest `IPRD := 0` -- the exact store OpenBSD/landisk 7.6
+	 *  makes during boot -- drops those four slots from 0xd/0xa/0x7/0x4 to ZERO,
+	 *  masking four PCIC lines permanently, while a control slot not in IPRD
+	 *  (IRQ10, the wdc) is untouched.  A variant reading IPRD scored the same as
+	 *  this one -- 10/10, measured when the detector had ten rows -- so reading
+	 *  it buys nothing and costs that.
+	 *
+	 *  TWO STRONGER FACTS THAN THE ONES THIS COMMENT FIRST GAVE, both supplied by
+	 *  the pass-2 panel and both re-read here before use:
+	 *
+	 *  (a0) THE STRONGEST ARM, and the one an earlier draft left out: :39956-39959
+	 *      says that when independent interrupt requests are used, "in the SH7750
+	 *      the interrupt priority levels are FIXED (table 19.4)", and only "in the
+	 *      SH7750S or SH7750R" can they "be set in interrupt priority register D".
+	 *      So on plain SH7750 -- one of the four types in SH_CPU_TYPE_DEFS -- IPRD
+	 *      controls nothing EVEN IN IRLM=1.  The IRLM refusal below is the weaker
+	 *      arm; it covers SH7750R/SH7751R, while this covers SH7750 outright.
+	 *  (a) IPRD IS SH7750S/SH7750R ONLY -- Rev.7.00 note 3 at :39881, repeated at
+	 *      :40248.  machine_dreamcast.c:165 asks for "SH7750", on which the
+	 *      register does not exist at all, so reading it would invent one.
+	 *      machine_landisk.c:125 asks for "SH7751R", which does have it.
+	 *  (b) The disease is NON-CONFORMANCE, not the masking.  In IRLM=0 the
+	 *      hardware IGNORES IPRD outright, so consulting it would be wrong even
+	 *      if no line were masked; the four dead PCIC lines are the symptom.
+	 *
+	 *  And a third, weaker one -- suggestive, NOT load-bearing, and recorded that
+	 *  way because a panel seat objected to it carrying weight:
+	 *  IPRA-IPRC reset to H'0000 but *** IPRD resets to H'DA74 ***, stated three
+	 *  times independently (:39856, :40194, :48567).  Those nibbles are
+	 *  13/10/7/4, and the hardwired loop above hands IRQ2/IRQ5/IRQ8/IRQ11 -- the
+	 *  slots IRL0-3 alias -- exactly 13/10/7/4.  The model already sits on the
+	 *  hardware's IPRD reset state, nibble for nibble, so reading IPRD could not
+	 *  improve the reset case even in principle; it could only let a guest write
+	 *  move the model AWAY from a correct default, which is what the measured
+	 *  `IPRD := 0` does.  Whether upstream chose that ramp for this reason or it
+	 *  fell out is not determinable from the code.
+	 */
+
+	/*
+	 *  #458: a raised priority must be able to deliver a request that is already
+	 *  standing.  Rewriting the nibbles without this leaves int_to_assert stale,
+	 *  which is `sh4prioraise`.
+	 *
+	 *  THE LIFT IS NOT BEHAVIOURALLY VERBATIM, and that is recorded rather than
+	 *  changed.  sh_cpu_interrupt_assert() selects with `int_to_assert == 0 ||
+	 *  prio > int_level`; this rescan selects with `prio > int_level` from a
+	 *  zeroed base, ascending index -- so running it on every IPR write
+	 *  RE-ARBITRATES, and ties now resolve to the lowest INTEVT code.  WITHIN an
+	 *  IPR group that matches Table 19.5's "Default Priority within IPR Setting
+	 *  Unit" column exactly (RTC ATI>PRI>CUI, SCI ERI>RXI>TXI>TEI, SCIF
+	 *  ERI>..>TXI, TMU2 TUNI2>TICPI2 -- all "High" at the low code).  ACROSS
+	 *  groups it does not: 19.5 ranks SCIF 0x700 above WDT 0x560, and the scan
+	 *  picks WDT.  Unwitnessable today and PRE-EXISTING in the deassert path --
+	 *  but this diff makes that path run far more often, so it is written down.
+	 */
+	sh_recalc_int_to_assert(cpu);
 }
 
 
@@ -370,20 +609,10 @@ void sh_cpu_interrupt_deassert(struct interrupt *interrupt)
 	if (cpu->cd.sh.int_prio_and_pending[index] & SH_INT_ASSERTED) {
 		cpu->cd.sh.int_prio_and_pending[index] &= ~SH_INT_ASSERTED;
 
-		/*  Calculate new interrupt assertion:  */
-		cpu->cd.sh.int_to_assert = 0;
-		cpu->cd.sh.int_level = 0;
-
-		/*  NOTE/TODO: This is slow, but should hopefully work:  */
-		for (index=0; index<0x1000/0x20; index++) {
-			uint8_t x = cpu->cd.sh.int_prio_and_pending[index];
-			uint8_t prio = x & SH_INT_PRIO_MASK;
-			if (x & SH_INT_ASSERTED &&
-			    prio > cpu->cd.sh.int_level) {
-				cpu->cd.sh.int_to_assert = index * 0x20;
-				cpu->cd.sh.int_level = prio;
-			}
-		}
+		/*  Calculate new interrupt assertion:  #458 lifted this loop
+		    into sh_recalc_int_to_assert() so the recompute path and
+		    this one cannot drift apart.  */
+		sh_recalc_int_to_assert(cpu);
 	}
 }
 

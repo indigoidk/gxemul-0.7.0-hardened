@@ -2372,6 +2372,13 @@ DEVICE_ACCESS(sh4)
 		 *  is VACUOUS here by construction: it answers 0 before the fix,
 		 *  after it, and under every mutant.  The diagnostic is the only
 		 *  observable this arm has.
+		 *
+		 *  #458: THIS REFUSAL IS WHY cpu_sh.c DECLINES TO READ IPRD.  The two
+		 *  decisions are one decision, and they sit in different files, so a
+		 *  future change that accepts IRLM=1 here makes the other one wrong on
+		 *  the same day -- IPRD would then have to be applied, gated on the live
+		 *  IRLM bit, with an explicit policy for the IRQ2/5/8/11 aliasing.  See
+		 *  sh_update_interrupt_priorities().
 		 */
 		if (writeflag == MEM_WRITE && (idata & 0x80)) {
 			if (sh4_val_first(d, SH4_VAL_ICRIRLM, 0,

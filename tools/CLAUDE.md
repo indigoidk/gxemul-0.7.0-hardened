@@ -866,6 +866,66 @@ confirms the entry is "selected by bits [9:8]", matching `SH4_ITLB_E_MASK`, and 
 2 holds SA and TC — **different fields from array 1**, which is why `#452` declines those
 accesses rather than aliasing them onto array 1.
 
+*** THE EXTRACTED TABLES STAGGER NAMES AGAINST VALUES, AND THE STAGGER READS AS A
+CONTRADICTION. Decode it against a block the tree ALREADY PINS -- do not "correct" code
+from a raw table row. (2026-08-23, #458.) ***
+
+`pdftotext -layout` renders a vertically-centered table cell on a different line from its
+row's value. Table 19.4 comes out as `RTC ATI H'480` / `H'4A0` / `PRI H'4C0` / `CUI`,
+which reads as *PRI = H'4C0* and would have condemned three correct constants.
+
+**The decoder is the SCI block four rows below it**, because `sh4_exception.h:93-96`
+already pins SCI ERI/RXI/TXI/TEI at `0x4e0/0x500/0x520/0x540` in shipped, working code.
+That extraction shows `SCI ERI H'4E0` / `H'500` / `RXI H'520` / `H'540` / `TXI` / `TEI` --
+which reconciles with the header ONLY if names and values pair **strictly in order down
+each column**, the printed adjacency being an artefact. Apply that to RTC and ATI/PRI/CUI
+are `0x480/0x4a0/0x4c0`, which is what the code says.
+
+**The general rule: before citing a value from an extracted table, find a row in the SAME
+table whose answer this tree independently knows, and use it to calibrate the layout.** A
+second, unstaggered table elsewhere in the manual (here `:32655`, DMTE0/DMAE) is the other
+confirmation and is worth grepping for -- these manuals list most codes twice.
+
+**AND THE TOOL YOU CHECK WITH DECIDES WHETHER YOU CATCH IT.** `sed -n 'A,Bp'` prints the
+lines WITHOUT their numbers, so the number has to be counted by hand off the top of the
+range -- and on 2026-08-23 that produced a citation two lines off in a comment that had
+just been written to FIX a citation error. **Use `grep -n` or
+`awk 'NR>=A && NR<=B {print NR": "$0}'`**, which carry the number with the line. Three of
+that round's four wrong citations were found by a seat re-deriving them with `grep -n`.
+
+*** DO NOT BUILD A BACKSLASH-CONTINUED SHELL LINE THROUGH A NESTED HEREDOC. It mangled
+TWICE in one session (2026-08-23), and the second one shipped a RED GATE. ***
+
+Writing `'... "ipra rtc" ' + '\
+' + '  "scif eri" ...'` from inside
+`python - <<'PYEOF'` produced the two characters `
+` in the file instead of a backslash
+followed by a newline. In a `for v in ...` word list that adds a **bogus word `n`**, so the
+gate ran `check "  n"` against a row that does not exist and reported
+`FAIL n got=0 want=1` -- **1 of 111**.
+
+**Two lessons, and the second one is the reassuring half:**
+* **Write the word list on ONE line**, or edit line-by-line with `chr(92)` for the
+  backslash. Never assemble a continuation inside nested quoting.
+* **THE GATE CAUGHT IT, LOUDLY AND CORRECTLY.** A name list that gains a bogus entry fails
+  rather than silently skipping a real row -- the opposite of the padded-column trap, where
+  a too-long name makes a check UNSATISFIABLE and the row quietly stops being tested. Both
+  failure modes are real; this one is the safe direction, and it is safe by design.
+
+**Cheap check before running a 15-minute gate:** paste the `for v in ...` list into
+`bash -c '... echo "[$v]"; done' | nl` and count. It takes two seconds and it is the whole
+test.
+
+**A LINE NUMBER IN A COMMENT IS INVALIDATED BY YOUR OWN EDITS TO THAT FILE.** The same
+round cited `dev_sh4.c:2379-2381` correctly, then inserted a seven-line comment ABOVE it
+in a later step, moving the target to `:2386-2388` and making its own fresh citation
+wrong. **Re-grep every same-file citation AFTER the last edit to that file**, not when
+first written.
+
+This is the `#458` case of the same class as the hand-assembled-encoding trap: **a wrong
+constant is invisible when the probe reads the same constant**, so the check has to come
+from outside the code entirely.
+
 A filed item (`sh4aaalias`) was withdrawn on that reading. **Obtaining the manual cost one
 download and refuted a wrong finding in the same session it was raised.**
 
