@@ -247,15 +247,21 @@ else
     ipres=$(grep -o "SH_INTPRIO_RESULT=[0-9]*/[0-9]*" "$IPLOG" | tail -1 | cut -d= -f2)
     check "sh_intprio rows run"     "${ipres#*/}" 7
     check "sh_intprio rows correct" "${ipres%/*}" "${ipres#*/}"
-    #  Named individually, and three of the seven are not decoration.  `quiet`
-    #  kills a mutant that drops the exit() but keeps the fatal(), which leaves
-    #  the host alive while printing an un-silenceable line forever.  `tmu`/`tmuq`
-    #  kill a PARTIAL FIX that repairs only the route the testsh witness drives --
-    #  measured passing 4/4 before they existed.  `accept` is the de-escalation
-    #  clause's cost: it pins that a LEGAL priority-1 interrupt is still delivered,
-    #  and it is the only row that reddens under `if (prio <= 1) return;`
-    #  (measured 6/7).  Each was added because a mutant escaped without it.
-    for v in "prio0 kill" "prio0 quiet" "prio0 live" "prio0 devsig" "prio0 tmu" "prio0 tmuq" "prio0 accept"; do
+    #  Named individually, and every one earns its place against a MEASURED mutant.
+    #  `tmu`/`tmuq` (#455) kill a PARTIAL FIX that repairs only the route the witness
+    #  drives -- measured passing 4/4 before they existed -- and they carry #455's
+    #  priority-0 coverage now that #456 moved the testsh line off priority 0.
+    #  `accept` (#455) is the de-escalation clause's cost: it pins that a LEGAL
+    #  priority-1 interrupt is still delivered, and is the only row that reddens
+    #  under `if (prio <= 1) return;` (measured 6/7).
+    #
+    #  `irq14 deliv` / `irq14 imask` (#456) REPLACED #455's `prio0 kill`/`prio0 quiet`,
+    #  which #456 made vacuous -- silently, since they stayed green.  They kill
+    #  DIFFERENT families and neither covers the other's: reverting to IRQ15 is caught
+    #  by `deliv` alone (6/7), while IRQ13 and IRQ0 both still DELIVER and are caught
+    #  by `imask` alone (6/7 each), because only bracketing IMASK pins the level to
+    #  exactly 1.
+    for v in "irq14 deliv" "irq14 imask" "prio0 live" "prio0 devsig" "prio0 tmu" "prio0 tmuq" "prio0 accept"; do
         n=$(count "$IPLOG" "^$v  .*ok$")
         check "  $v" "$n" 1
     done

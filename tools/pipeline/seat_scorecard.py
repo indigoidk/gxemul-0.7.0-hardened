@@ -62,6 +62,7 @@ def main():
     per = collections.defaultdict(collections.Counter)
     acted = collections.Counter()
     ungraded = collections.defaultdict(list)
+    selfg = collections.Counter()
 
     for row in d.get("rows", []):
         for e in row.get("entries", []):
@@ -74,11 +75,13 @@ def main():
                 acted[s] += 1
             if g == "UNVERIFIED":
                 ungraded[s].append("%s/%s" % (row.get("id", "?"), e.get("phase", "?")))
+            if e.get("self_graded"):
+                selfg[s] += 1
 
-    print("%-12s %6s %7s %8s %8s %8s %9s %7s"
+    print("%-12s %6s %7s %8s %8s %8s %9s %7s %6s"
           % ("seat", "total", "graded", "upheld", "refuted", "partial",
-             "coverage", "acted"))
-    print("-" * 74)
+             "coverage", "acted", "self"))
+    print("-" * 82)
 
     #  Order by GRADED count, not by any rate.  Sorting by accuracy would put a seat
     #  with 1/1 above one with 40/44, which is the flattery this tool exists to refuse.
@@ -89,14 +92,28 @@ def main():
         graded = total - c["UNVERIFIED"]
         cov = (graded / total * 100) if total else 0.0
         rate = ("%.0f%%" % (c["UPHELD"] / graded * 100)) if graded else "--"
-        print("%-12s %6d %7d %8d %8d %8d %8.0f%% %7d   %s"
+        print("%-12s %6d %7d %8d %8d %8d %8.0f%% %7d %6d  %s"
               % (s, total, graded, c["UPHELD"], c["REFUTED"], c["PARTIAL"],
-                 cov, acted[s], ("upheld " + rate) if graded else ""))
+                 cov, acted[s], selfg[s], ("upheld " + rate) if graded else ""))
 
     tot = sum(sum(c.values()) for c in per.values())
     gtot = sum(sum(c.values()) - c["UNVERIFIED"] for c in per.values())
     print("-" * 74)
     print("%d entries, %d graded (%.1f%%)" % (tot, gtot, (gtot / tot * 100) if tot else 0))
+
+    #  *** WHO GRADED IT IS PART OF THE MEASUREMENT. ***  A review seat found the
+    #  first closed example was fable5 UPHELD on fable5, written by the fable5 main
+    #  loop -- the same family marking its own homework.  The project's `A` badge
+    #  covers a CLOSURE the author may not pretend was independently certified; it
+    #  does not attach to per-entry grades and does not forbid grader == seat.  So
+    #  the count is surfaced rather than silently folded into the rate, and a rate
+    #  resting mostly on self-grades is not an accuracy measurement.
+    if sum(selfg.values()):
+        print()
+        print("*** %d GRADE(S) ARE SELF-GRADED (grader and seat are the same family)."
+              % sum(selfg.values()))
+        print("    Disclosed, not excluded -- but a seat's rate that rests on them is")
+        print("    marking its own homework, and should not be read as accuracy. ***")
 
     if gtot < tot:
         print()

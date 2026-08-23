@@ -282,7 +282,14 @@ for r in d.get("rows", []):
     ents = [e for e in r.get("entries", []) if e.get("phase") in ("assess", "review")]
     if len(ents) <= 1:
         continue                      # filed, never panelled -- nothing to grade
-    if not any(e.get("outcome") for e in ents):
+    #  *** UNVERIFIED IS NOT A GRADE, AND COUNTING IT AS ONE MADE THIS CHECK
+    #  VACUOUS. ***  A review seat found it by reading the predicate rather than
+    #  the docstring: `any(e.get("outcome"))` is true of the string the design
+    #  defines as NOT a grade, so writing UNVERIFIED everywhere would green the
+    #  check.  Latent rather than live -- zero rows trip it today -- but a check
+    #  that CAN be satisfied without doing the thing is the shape this project
+    #  calls vacuous, and it was in the tool built to refuse exactly that.
+    if not any(e.get("outcome") not in (None, "UNVERIFIED") for e in ents):
         bad.append(r["id"])
 print(" ".join(bad[:8]))
 PYEOF

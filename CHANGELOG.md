@@ -1,3 +1,81 @@
+## Round 456 (#456) -- the SH test machine could not deliver an interrupt at all
+
+`machine_test.c` wired the ENTIRE SH test-machine interrupt tree to
+`SH4_INTEVT_IRQ15` (`0x3e0`). That line can never carry a priority: the loop in
+`sh_update_interrupt_priorities()` stops at `IRQ14`, and its own formula
+`15 - ((i - IRQ0) / 0x20)` yields **0** for `0x3e0` regardless -- so widening the loop
+would not help, it would only assign zero to the encoding the manual calls "no
+request". Priority 0 means masked. Nothing that machine raised could ever arrive.
+
+The hardware has no such source either. SH7750 Hardware Manual Rev.7.00 19.2.2
+(`_scratchpad/sh7750_hardware.txt:39908-39910`): *"A value of 15 (1111) indicates no
+interrupt request (interrupt priority level 0)"*, and Table 19.5's IRL block ends at
+`H'3C0`. **`H'3E0` appears nowhere in 50,853 lines.**
+
+The fix is one identifier: `SH4_INTEVT_IRQ14`, the lowest REAL level, which is the
+right tier for a catch-all -- least preemptive, and an IRL encoding is the honest
+namespace for an external `irqc`.
+
+### It ships immediately behind #455 because #455 made it SILENT
+
+Until yesterday this was loud: priority 0 ran `exit(1)`, so any interrupt on the test
+machine ended the host. `#455` correctly made priority 0 mean masked, per the manual --
+and the same defect went from **loudly unusable to silently unusable**. That is the
+de-escalation hazard in its literal form, which is why the row was filed in the same
+breath as `#455` rather than found later.
+
+### *** THE FIX INVALIDATED TWO OF #455's OWN ROWS, AND IT DID SO SILENTLY ***
+
+`#455`'s `prio0 kill` / `prio0 quiet` worked **because** the test machine's line was
+priority 0. Move it to priority 1 and a store there no longer reaches the priority-0
+arm at all -- while the rows go on passing.
+
+MEASURED, not predicted. A build carrying IRQ14 **and a verbatim reinstatement of
+#455's kill** scores **5/7 with both rows GREEN**; the same kill on an IRQ15 build
+scores **3/7 with both RED**. One identifier apart. And the fix itself is 7/7, so
+nothing would have forced anyone to notice.
+
+**Retargeting them to another priority-0 source is not available, and that was measured
+rather than assumed.** SCIF asserts synchronously inside a guest store but sits at
+priority 3 (`intc_intpri08` initialises to `0x33333333`) and the register that would
+lower it is unmapped -- `non-existant paddr=0xfe080008`. The TMU on `testsh` dies on
+*every* build with `pclock must be set for this machine`. **After #456 the test machine
+has no guest-reachable priority-0 interrupt source at all.**
+
+So the session machinery is kept and the rows' PURPOSE changes: they now pin that a
+legal priority-1 interrupt IS delivered, which is #456's own claim. `#455`'s
+priority-0 coverage moves to the landisk TMU rows, which still redden on that same
+reinstatement -- confirmed, so the vacuity floor still holds.
+
+### The kill table, and each row kills a family the other cannot
+
+```
+the fix (IRQ14)                     7/7
+M1  revert to IRQ15                 6/7   irq14 deliv ALONE
+M2  IRQ13 -- delivers, wrong level   6/7   irq14 imask ALONE
+M3  IRQ0  -- delivers, wrong level   6/7   irq14 imask ALONE
+pre-fix probe (IRQ15)               6/7   irq14 deliv
+```
+
+A delivery-only witness is passed by **any of IRQ0..IRQ13** -- a measuring seat built
+IRQ13 and watched it escape before `irq14 imask` existed. Delivery needs
+`IMASK < int_level`, so a level-1 line is admitted at IMASK 0 and refused at IMASK 1;
+running both brackets the level to exactly 1. That is what pins IRQ14 specifically
+rather than "some line delivered".
+
+### Records corrected in the same commit
+
+`sh_intprio_probe.py`'s header explained at length that the testsh route reaches the
+priority-0 kill *because* the tree is wired to IRQ15, and quoted the abort line. That
+became false the moment this shipped. The old text is KEPT rather than deleted, with
+the correction beside it, because a future reader who finds that explanation in a git
+log needs to see where it stopped being true.
+
+The probe's rows also hardcoded `#455` in their output column; the two new rows would
+have claimed a round they were never part of. Rows now name their own round.
+
+Gate 10 PASS at 80 checks. Build rc=0, zero warnings, all four trees cmp-identical.
+
 ## Round 455 (#455) -- an interrupt at priority 0 ended the host process
 
 `sh_cpu_interrupt_assert()` ran `fatal()` then `exit(1)` when the asserted line's
