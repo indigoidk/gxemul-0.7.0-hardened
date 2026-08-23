@@ -561,6 +561,34 @@ Not blocking: shipped and gate-green.
 
 Not blocking: shipped, gate-green at 80 checks, and the accept row's kill is measured.
 
+
+## `sh4irq15` (#456) and `sh4tlbmulti` (#457) — regress reviews, queued 2026-08-22
+
+Both shipped green; neither is blocking. Each carries a RULE question, so per the
+queue-splitting rule they want the seat at the next round boundary rather than a weekly batch.
+
+**`sh4irq15` — a fix that silently voided a previous round's rows.** #456 moved the SH test
+machine's interrupt line off priority 0, which made two of #455's seven rows exercise priority
+1 while still reading GREEN. Measured: IRQ14 + a verbatim reinstatement of #455's kill scores
+5/7 with both rows green; the same kill on IRQ15 scores 3/7 with both red. They were
+repurposed into #456's own witness and #455's priority-0 coverage moved to the landisk TMU
+rows. **Two questions.** Is repurpose-rather-than-drop right, or does the earlier round owe a
+replacement so its coverage does not silently migrate to another rig? And: *nothing in the
+harness noticed* — rows green, gate green. Is there a mechanical check for "a fix voided an
+earlier round's rows", or is this a class we accept and hunt by hand?
+
+**`sh4tlbmulti` — a no-op that only a pre-set state can see.** Three mutants are each killed
+by exactly one row; a survival-only oracle passes all six. The sharpest, mutC, writes its own
+reset arm setting `pc` and `vbr` and omitting the third statement — invisible to four of six
+rows, because that statement is a **no-op from the reset-default SR**. It is caught only
+because the row pre-sets SR. **Is "pre-set state so a no-op becomes observable" a general rule
+worth carrying?** It looks like a sibling of accept-row failability — both choose a pinning
+value the code path can actually reach — but the mechanism differs: failability is about the
+predicate's OPERAND, this is about the STARTING STATE. Second question: two residuals were
+filed rather than fixed (TEA never set, with a genuine UNKNOWN about which address is right;
+and `EXPEVT_RESET_POWER` where the manual says manual-reset for the BL-set case). Is the
+second — one identifier, in a function this round already touched — correctly filed?
+
 ---
 
 ## HOW TO RUN ONE

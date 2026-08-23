@@ -279,7 +279,12 @@ SCARD=$_HERE/pipeline/seat_scorecard.py
 if [ ! -f "$SCARD" ]; then
 	warn "seat_scorecard.py MISSING -- seat accuracy NOT tracked"
 else
-	_sc=$(python "$SCARD" 2>&1 | tail -n 8 | grep -E "entries, [0-9]+ graded")
+	#  Grep the WHOLE output, not a tail window.  The first version took `tail -n 8`
+	#  and broke the same day: adding the self-graded disclosure banner pushed the
+	#  summary line out of the window, so the check reported "produced no summary"
+	#  about a tool that was working perfectly.  A positional grep over another
+	#  program's output is a brittle check, and this one proved it within hours.
+	_sc=$(python "$SCARD" 2>&1 | grep -E "entries, [0-9]+ graded")
 	if [ -n "$_sc" ]; then
 		good "seat scorecard: $_sc"
 	else
