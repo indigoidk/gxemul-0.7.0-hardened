@@ -14,20 +14,33 @@ RESET-DEFAULT state -- SH7750 Hardware Manual Rev.7.00 19.2 (:39887): "When leve
 0 is set, the interrupt is masked and interrupt requests are ignored", and 19.3.1
 (:40193): "IPRA to IPRC are initialized to H'0000 ... by a reset".
 
-*** THE ROUTE THIS PROBE USES IS `-E testsh`, AND THE REASON IS THE WHOLE DESIGN. ***
+*** WHAT THIS FILE COVERS CHANGED IN #456, AND THE OLD TEXT IS KEPT BECAUSE THE
+CHANGE WAS SILENT. ***
 
-machine_test.c wires the entire test-machine interrupt tree to SH4_INTEVT_IRQ15
-(0x3e0, array index 31).  sh_update_interrupt_priorities()'s IRQ loop is bounded
-`i <= SH4_INTEVT_IRQ14`, so index 31 is NEVER assigned -- and extending the loop
-would not help, because its own formula `15 - ((i - IRQ0) / 0x20)` yields 0 for
-that very line.  dev_irqc.c defaults to all interrupts enabled.  So ONE guest
-store to the mp device's IPI register reaches the kill synchronously, inside the
-store instruction, and no guest register write can prevent it.
-
-Measured on the committed build, one `mov.l r0,@r1`:
+WHEN #455 SHIPPED, this paragraph read: machine_test.c wires the entire
+test-machine interrupt tree to SH4_INTEVT_IRQ15 (0x3e0, array index 31);
+sh_update_interrupt_priorities()'s IRQ loop is bounded `i <= SH4_INTEVT_IRQ14`, so
+index 31 is NEVER assigned; therefore ONE guest store to the mp device's IPI
+register reached the priority-0 kill synchronously.  Measured then, one
+`mov.l r0,@r1`:
 
     80010000:  2102        mov.l   r0,@r1  ; r1 = 0xb10000a0
     [ SH interrupt 0x3e0, prio 0 (?), aborting ]
+
+#456 MOVED THAT LINE TO IRQ14, priority 1 -- because a machine whose whole
+interrupt tree sits on a permanently-masked line cannot deliver anything, and
+#455 had just turned that from a loud exit(1) into silence.  So a store here no
+longer reaches the priority-0 arm at all, and the two rows that used to pin it
+would have gone on passing FOR THE WRONG REASON.  Measured, not predicted: a build
+carrying IRQ14 AND a verbatim reinstatement of the priority-0 kill scores 5/7 with
+both old rows GREEN, while the same kill on an IRQ15 build scores 3/7 with both
+RED.  One identifier apart.
+
+The rows were therefore repurposed rather than deleted -- see the block above them
+-- and #455's priority-0 coverage now rests on the landisk TMU rows, which still
+redden on that same reinstatement.  The old text stays because a future reader
+who finds "the testsh route reaches the priority-0 kill" in a git log needs to see
+where it stopped being true.
 
 *** WHY NOT THE TIMER ROUTE, WHICH IS THE OBVIOUS ONE. ***  A TMU underflow also
 reaches the kill, but it is produced by a HOST timer -- timer_add/SIGALRM ->
@@ -212,11 +225,15 @@ def dumped(transcript, died):
 rows = []
 
 
-def row(name, got, want):
+def row(name, got, want, tag="#455"):
+    """Each row names the round that OWNS it.  This file now carries two: #455's
+    priority-0 masking rows and #456's delivery rows, which replaced the two #455
+    rows that #456 made vacuous.  A single hardcoded tag would have said #455 on
+    rows #455 never had."""
     ok = (got == want)
     rows.append(ok)
     print("%-14s %-24s %-24s %-10s %s"
-          % (name, got, want, "#455", "ok" if ok else "FAIL"))
+          % (name, got, want, tag, "ok" if ok else "FAIL"))
 
 
 #  ---- control: the session comes up and answers at all ------------------------
@@ -231,9 +248,64 @@ if ctl_died:
 #  the exit() and leaves the fatal() -- and fatal() has no quiet_mode early-out
 #  (debugmsg.c:384-390), so it would print forever, un-silenceable, while the row
 #  went green.  A review seat named that mutant; this is what kills it.
-t, died, tail = session(ipi_store())
-row("prio0 kill", "died" if died else "alive", "alive")
-row("prio0 quiet", "abort" if ABORT_RE.search(tail) else "silent", "silent")
+#  *** THESE TWO ROWS USED TO PIN #455 AND NO LONGER CAN.  #456 TOOK THAT AWAY,
+#  AND IT DID SO SILENTLY. ***
+#
+#  #455's rows worked here BECAUSE the test machine's whole interrupt tree hung off
+#  a line whose priority was permanently 0.  #456 moved it to IRQ14, priority 1, so a
+#  store here no longer reaches the priority-0 arm at all.  MEASURED, not predicted:
+#  a build carrying IRQ14 AND a verbatim reinstatement of the priority-0 kill scores
+#  5/7 with both old rows GREEN, while the same kill on an IRQ15 build scores 3/7
+#  with both RED.  One identifier apart, and the fix itself stays 7/7 -- so nothing
+#  would have forced anyone to notice.
+#
+#  RETARGETING THEM TO SOME OTHER PRIORITY-0 SOURCE IS NOT AVAILABLE, and that was
+#  measured rather than assumed.  SCIF asserts synchronously inside a guest store but
+#  sits at priority 3 (`intc_intpri08` is initialised to 0x33333333) and the register
+#  that would lower it is unmapped -- `non-existant paddr=0xfe080008`.  The TMU on
+#  testsh dies on EVERY build with "pclock must be set for this machine", a different
+#  host death entirely.  **After #456 the test machine has no guest-reachable
+#  priority-0 interrupt source at all.**
+#
+#  So the SESSION machinery is kept and the rows' PURPOSE changes: they now pin that
+#  a legal priority-1 interrupt IS DELIVERED, which is #456's own claim.  #455's
+#  priority-0 coverage survives on the landisk TMU rows below, which still redden on
+#  that same reinstatement -- confirmed, so the vacuity floor still holds.
+TESTSH_VBR = 0x80020000
+TESTSH_HANDLER = TESTSH_VBR + 0x600
+
+
+def testsh_deliver(imask):
+    """Free-run one IPI store with SR.IMASK set, and see whether the vector is reached.
+
+    `imask` is what brackets the priority.  Delivery needs `IMASK < int_level`
+    (cpu_dyntrans.c), so a line at level 1 is admitted at IMASK 0 and refused at
+    IMASK 1.  Running BOTH pins the level to exactly 1 -- which is the whole point,
+    because a witness that only asks "did something deliver" is passed by any of
+    IRQ0..IRQ13.  That mutant was built and measured escaping before these rows
+    existed.
+    """
+    return ["put h 0x%x, 0x0009" % TESTSH_HANDLER,          # nop, so the fetch works
+            "put h 0x%x, 0xaffe" % (TESTSH_HANDLER + 2),    # bra .
+            "put h 0x%x, 0x0009" % (TESTSH_HANDLER + 4),    # nop (delay slot)
+            "r0=0x00000000", "r1=0x%x" % IPI,
+            "put h 0x%x, 0x%04x" % (CODE, MOV_L_R0_AT_R1),  # mov.l r0,@r1  (the IPI)
+            "put h 0x%x, 0xaffe" % (CODE + 2),              # bra .  -- park here if
+            "put h 0x%x, 0x0009" % (CODE + 4),              # nothing is delivered
+            "pc=0x%x" % CODE,
+            "sr=0x%08x" % (0x40000000 | (imask << 4)),      # MD=1, BL=0, IMASK=imask
+            "vbr=0x%x" % TESTSH_VBR,
+            "breakpoint add 0x%x" % TESTSH_HANDLER]
+
+
+t, died, tail = session(testsh_deliver(0) + ["continue"], spin=6.0, verify=True)
+row("irq14 deliv", "nodeliver" if died else "delivered", "delivered", "#456")
+#  verify=True on BOTH, and it is load-bearing on this one.  A refused interrupt
+#  leaves the guest spinning in `bra .` with the process perfectly alive, so "did the
+#  process survive" cannot tell refused from delivered.  Requiring the DEBUGGER to
+#  answer can: only a breakpoint hit returns to a prompt.
+t6, died6, _ = session(testsh_deliver(1) + ["continue"], spin=6.0, verify=True)
+row("irq14 imask", "delivered" if not died6 else "refused", "refused", "#456")
 
 #  ---- R2: LIVENESS control ----------------------------------------------------
 #  A known value through the same decode, in the same machine, so a dead or

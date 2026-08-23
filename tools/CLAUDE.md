@@ -239,6 +239,37 @@ seats **concurrently** (independent processes / one Agent batch), then collect.
 | Claude (Opus 5) | the Agent tool with `model: "opus"` — it has repo Read/Grep/Glob, and is the seat most likely to COMPILE AND MEASURE (it has overturned readings twice). Use plain bounds-/correctness-engineering framing, never offensive-security wording (refusal/flag risk); keep the adversarial instruction aimed at the engineering claim. There is no opus/fable CLI. |
 | Claude (Fable 5) | the Agent tool with `model: "fable"` — an independent Fable seat, separate from the main loop. Same framing rules. NOTE Fable wears two hats: this review seat, and (as the main loop) the ADJUDICATOR of the panel's task suggestions. **QUOTA-DEAD since 2026-08-13** ("You've reached your Fable 5 limit"; two consecutive relaunches failed identically — the Kimi pattern, a quota not a wedge, so a retry cannot clear it). **RE-HEALTH-TESTED 2026-08-14 ~09:4x, ON THE DAY THE TOKEN RESET WAS EXPECTED: STILL THE IDENTICAL LIMIT MESSAGE.** Third consecutive failure, so the reset either has not landed or the allowance is still exhausted — do NOT assume a calendar date restores a seat, TEST IT. The test is cheap (one Agent call told to open with a liveness token) and it is the only thing that distinguishes "dead" from "assumed dead". The ADJUDICATOR hat is unaffected while the main loop still runs. Substitute used meanwhile: an Agent seat with `model: "sonnet"` carrying the same static/records lens, **always recorded as a SUBSTITUTE, never as "the Fable seat"**. Health-test before re-adding. |
 
+*** THERE IS A FIFTH `src/` AT THE PROJECT ROOT AND IT IS PRISTINE UPSTREAM. A FILE-READING
+SEAT POINTED AT THE PROJECT ROOT WILL READ IT AND BE CONFIDENTLY, DETAILEDLY WRONG.
+Measured 2026-08-22. ***
+
+`C:\DocumentNoSnc\CC\GXEMUL\src\` is dated **April 2021**, is untracked, and is NOT the
+hardened fork. The four fork trees are `GXEMUL-SEC/`, `est/`, `build/`, `build-asan/` (plus
+WSL `/tmp/gxsec-build`). A brief that says only *"project root: C:\DocumentNoSnc\CC\GXEMUL"*
+lets a seat with `--cwd` there resolve `src/cpus/cpu_sh.c` to the 2021 file.
+
+**What that cost:** on the `sh4tlbmulti` pass 1, Kimi returned **80 KB, internally consistent,
+with a DO-NOT-SHIP verdict and a dramatic finding — that the defect family was far larger than
+the brief said, with `EXPEVT_RES_INST` itself ending in `exit(1)` and the `SLOT_INST`,
+`FPU_SLOT_DISABLE` and `ADDR_ERR_LD/ST` arms simply absent.** Every word of it is TRUE OF
+UPSTREAM and FALSE OF THIS FORK: `RES_INST` was fixed in **#217** and carries a comment saying
+so, and all four arms exist at `cpu_sh.c:780-796`. Its own line numbers were the tell — it
+reported the raise site at `dev_sh4.c:700-702` where the fork has it at `:1159`, and it said
+so out loud, attributing the difference to "maybe GXEMUL-SEC or est".
+
+**Two rules follow, and the second is the cheap one:**
+1. **NAME THE TREE IN THE BRIEF**, not just the project root: *"the tree under review is
+   `GXEMUL-SEC/src/`; ignore any other `src/` you find."*
+2. **A SEAT REPORTING LINE NUMBERS THAT DISAGREE WITH THE BRIEF HAS PROBABLY READ ANOTHER
+   COPY** — check that before crediting or dismissing the finding. Drift from an intervening
+   commit shifts lines by tens; reading a different tree shifts them by hundreds and changes
+   which arms exist.
+
+**Do not score this as a seat failure.** The seat did exactly what it was asked, found real
+defects in the file it was given, and flagged its own uncertainty about which tree it had.
+The defect is in the BRIEF, and it is the same shape as the "inline every fact" rule below:
+what the cloud seats cannot read, the file-reading seats can read too much of.
+
 Panel rules, learned the hard way:
 - *** A READING SEAT BUYS THE CLASS; A MEASURING SEAT BUYS THE INSTANCE — AND THE CLASS ARRIVES
   FIRST, FOR FREE. *** On #434's pass 1 a reading seat wrote that the planned detector was *"too

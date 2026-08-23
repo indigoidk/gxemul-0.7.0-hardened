@@ -95,8 +95,35 @@ static void default_test(struct machine *machine, struct cpu *cpu)
 		break;
 
 	case ARCH_SH:
+		/*
+		 *  #456: NOT IRQ15.  The whole SH test machine hangs off this
+		 *  one line, and 0x3e0 can never carry a priority: the loop in
+		 *  sh_update_interrupt_priorities() stops at IRQ14, and its own
+		 *  formula 15 - ((i - IRQ0) / 0x20) yields 0 for that line
+		 *  anyway -- so widening the loop would NOT help, it would
+		 *  merely assign zero to the encoding the manual calls "no
+		 *  request".  Priority 0 means masked, so nothing this machine
+		 *  raised could ever be delivered.
+		 *
+		 *  The hardware has no such source either.  SH7750 Hardware
+		 *  Manual Rev.7.00 19.2.2: "A value of 15 (1111) indicates no
+		 *  interrupt request (interrupt priority level 0)", and Table
+		 *  19.5's IRL block ends at H'3C0.  `H'3E0` does not appear
+		 *  anywhere in the manual.
+		 *
+		 *  IRQ14 is the lowest REAL level, which is the right tier for
+		 *  a test machine's catch-all: least preemptive, and an IRL
+		 *  encoding is the honest namespace for an external `irqc`.
+		 *  An on-chip INTEVT code would misattribute the interrupt to
+		 *  a peripheral a guest driver may legitimately claim.
+		 *
+		 *  Until #455 this was LOUD -- priority 0 ran exit(1), so any
+		 *  interrupt here ended the host.  #455 correctly made priority
+		 *  0 mean masked, which turned the same defect SILENT.  That is
+		 *  why this fix ships immediately behind it rather than later.
+		 */
 		snprintf(end_of_base_irq, sizeof(end_of_base_irq),
-		    ".irq[0x%x]", SH4_INTEVT_IRQ15);
+		    ".irq[0x%x]", SH4_INTEVT_IRQ14);
 		break;
 
 	default:

@@ -252,6 +252,49 @@ fi
 #  half that lives in the repo.  It CANNOT catch the other half -- whether the artifact
 #  was republished -- because that lives outside git; that step stays manual, and this
 #  comment is the reminder that it exists.
+say ""; say "T. seat outcomes: a CLOSED row's panel entries should be graded"
+#  SOFT ON PURPOSE, and the reason matters.  A hard gate here would force a grade at
+#  commit time, and a forced grade is a guessed grade -- which is precisely the recall
+#  bias seat_scorecard.py exists to replace.  What this does is make coverage VISIBLE
+#  every commit, so a seat's accuracy stops being something anyone has to remember.
+#  Introduced 2026-08-22 after the ledger, with 1525 entries across nine seats, could
+#  not answer "which seat is most accurate" -- it recorded participation and nothing
+#  else.  Promote to hard only after a real miss shows a soft warning was not enough.
+SCARD=$_HERE/pipeline/seat_scorecard.py
+if [ ! -f "$SCARD" ]; then
+	warn "seat_scorecard.py MISSING -- seat accuracy NOT tracked"
+else
+	_sc=$(python "$SCARD" 2>&1 | tail -n 8 | grep -E "entries, [0-9]+ graded")
+	if [ -n "$_sc" ]; then
+		good "seat scorecard: $_sc"
+	else
+		warn "seat_scorecard.py produced no summary -- check it by hand"
+	fi
+	#  The row that JUST closed is the one whose outcome is actually known, so name
+	#  closed rows whose panel entries are still ungraded.  That is the moment to grade.
+	_ug=$(python - "$_HERE/pipeline/ledger.json" <<'PYEOF'
+import json, io, sys
+d = json.load(io.open(sys.argv[1], encoding="utf-8"))
+bad = []
+for r in d.get("rows", []):
+    if r.get("state") != "closed":
+        continue
+    ents = [e for e in r.get("entries", []) if e.get("phase") in ("assess", "review")]
+    if len(ents) <= 1:
+        continue                      # filed, never panelled -- nothing to grade
+    if not any(e.get("outcome") for e in ents):
+        bad.append(r["id"])
+print(" ".join(bad[:8]))
+PYEOF
+)
+	if [ -n "$_ug" ]; then
+		warn "closed rows with panel entries but NO seat outcomes: $_ug"
+		warn "  grade them with an outcome + outcome_note; see seat_scorecard.py"
+	else
+		good "every closed-and-panelled row carries seat outcomes"
+	fi
+fi
+
 say ""; say "Q. matrix.html is current with ledger.json"
 GEND=$_HERE/pipeline/gen_dashboard.py
 if [ ! -f "$GEND" ]; then
