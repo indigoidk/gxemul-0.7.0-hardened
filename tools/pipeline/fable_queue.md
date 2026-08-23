@@ -86,6 +86,41 @@ things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
+### `sqreadtype` (#454, `3ff2138`) — regress stage — **QUEUED 2026-08-23**, and it
+carries a RECORDED DISSENT that was never resolved
+
+The round corrected a shipped gate row that pinned the OPPOSITE of the manual: the
+store-queue PREF transfer is judged READ type. Its order discipline is the cleanest
+instance of the oracle-correction rule on record -- re-pinned oracle **26/31 RED on
+the committed build**, then 31/31 fixed, and the pass-1 panel proposed that order
+after the brief proposed the reverse.
+
+**The question, and it is a dissent rather than a gap:**
+
+> The round shipped scope **C1**, which leaves the SQ **WRITE** half unjudged
+> entirely -- `sh_translate_v2p()` maps `0xe0000000..0xe3ffffff` identically and
+> unconditionally, because that is how an ordinary guest store reaches the modelled
+> queue SRAM. So the initial-page-write exception and write-side protection cannot
+> be raised at all, which the round states out loud and files as `sh4sqwrite`.
+>
+> **Codex dissented that C1 is an "unshippable intermediate state".** The
+> round-scope rule decided against it — codex's own proposed witness needs a NEW
+> oracle, and the rule says a second site joins only with no new oracle. That is a
+> rule applied correctly to its author; it is not the same as the dissent being
+> wrong.
+>
+> **Is "correct in one direction, silent in the other" a shippable state for a
+> protection check?**  The round's defence is that the silent half was ALREADY
+> silent before the fix, so nothing regressed and one named filing now carries it.
+> The counter is that a half-judged protection path reads as judged.
+
+Two further things worth a look, both from the round's own reviews: a seat found
+**four sibling locations beyond the three the design named** (seven in total), which
+is the corrected-in-one-place-survived-in-three failure caught before it shipped; and
+the measuring seat found **`FLAG_NOEXCEPTIONS` returns 2 with `*return_paddr = 0`**,
+landing the payload at PHYSICAL ZERO in silence, which scored full marks against the
+value rows. Both were fixed in-round.
+
 ### `verdictbold` — regress stage — **QUEUED 2026-08-23**, and it carries a RULE QUESTION
 
 Closed with a 17-row, 8-mutant selftest on `tools/pipeline/seat_verdicts.py`. Author
