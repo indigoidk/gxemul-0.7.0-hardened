@@ -72,6 +72,28 @@ it as RATE-LIMITED. **Verify the CONTENT, never the size; the failure mode is a 
 ### *** A WALL IS A MOMENT, NOT A STATE — MEASURED 2026-08-23, and it CONTRADICTS the
 ### "never by a date" line in the Fable row below. ***
 
+*** AND THE SAME DAY, THE OTHER HALF OF THAT RULE WAS CONFIRMED FOR THE THIRD TIME:
+AN ACCOUNT-STATE CHANGE REVIVED A SEAT THAT TWO FIRINGS HAD FOUND WALLED. ***
+
+The Fable seat failed twice on 2026-08-23 with `You've reached your Fable 5 limit` — the
+second firing deliberate, per the re-fire-a-walled-seat-once rule. **The owner then ran
+`/login`, and the next firing returned BOTH liveness tokens** (the prompt nonce and a
+verbatim quote from `CHECKPOINT.md`), so prompt delivery and file access were proven
+rather than assumed. It then produced the round's adjudication: seven wrong records and
+one undischarged obligation.
+
+**So both halves now have measured instances:** Kimi revived across a date boundary with
+no account change (cause NOT established), and Fable has now revived twice on a `/login`.
+The operational rule is unchanged and is the cheap one: **TEST THE SEAT, do not reason
+about why it might be back.** One Agent call with a liveness token settles it in seconds.
+
+**AND THE HOLD WAS WORTH IT, WHICH IS THE PART WORTH RECORDING.** The round was held
+uncommitted for this seat by owner decision across two failures. Waiting cost nothing —
+the work was checkpointed and unrelated work was split into its own commit — and the
+seat that eventually answered found the round's one L3 obligation, which no other seat
+had named across two full panels.
+
+
 Kimi walled mid-panel at 23:01 with a `403 usage limit for this billing cycle`. **One hour
 later, across the date boundary, a liveness test returned its token on the first try.** No
 account-state change was made. So the sentence below — *"Both 'dead' Anthropic-side states
@@ -971,9 +993,70 @@ gate ran `check "  n"` against a row that does not exist and reported
   a too-long name makes a check UNSATISFIABLE and the row quietly stops being tested. Both
   failure modes are real; this one is the safe direction, and it is safe by design.
 
+*** AND A COUNT CHECK CANNOT SEE THE LIST LANDING IN THE WRONG SECTION. Measured
+2026-08-23, and MY OWN VERIFICATION PASSED ON IT. ***
+
+A 32-name row list was written into `gate_sh_rounding.sh` with
+`re.search(r'^    for v in ("live".*?); do$', ...)` — and **every section's list
+starts with `"live" "devsig"`**, so it matched the FIRST one, which was the #459
+pclock section. The gdrom names were written over the pclock names, the real gdrom
+list was left at its old 27, and the pclock gate would have looked for 32 gdrom rows
+in `$PCLOG`. **A red gate, and a destroyed list.**
+
+**The cross-check I ran to confirm the edit reported `VERDICT: MATCH`** — because it
+used the same first-match regex, so it compared the list I had just written against
+the probe I had written it from. *A verification that shares the defect of the thing
+it verifies always passes.*
+
+**THE DISCRIMINATOR IS THE LOG VARIABLE ON THE NEXT LINE, and it is the only thing
+that identifies which section a row list belongs to:**
+
+```
+    for v in "live" "devsig" ... ; do
+        n=$(count "$GDDLOG" "^$v  .*ok$")     <-- THIS names the section
+```
+
+So: **anchor on `count "$XXLOG"`, never on the list's own first names**, and after
+editing, diff EVERY list in the file against `git show HEAD:` — expect exactly one to
+change. That check found it in seconds; the count check never could.
+
+*Related but distinct from the padded-column and bogus-word traps below: those make a
+row silently stop being tested. This one tests the right rows against the wrong log.*
+
 **Cheap check before running a 15-minute gate:** paste the `for v in ...` list into
 `bash -c '... echo "[$v]"; done' | nl` and count. It takes two seconds and it is the whole
 test.
+
+*** A SCORE CLAIM MUST NAME THE LOG THAT PRODUCED IT. Adopted 2026-08-23 after the
+FOURTH generation of the frozen-number defect appeared in one round -- inside the
+sentence memorialising the third. ***
+
+`#461` wrote `8/32 pre-fix ... both MEASURED at 32 rows` into a heading and a gate
+comment. The heading was written at 17:33; **the 32-row run started at 17:50.** The
+only pre-fix number on record was 8/31, and the 8 had been carried forward when the
+row count grew. A seat caught it by comparing mtimes.
+
+**Section U cannot catch this class and never will.** It checks DENOMINATORS against
+the gate pin, mechanically and well. The defect here is the NUMERATOR and the word
+*measured* -- and no comparison against a pin can tell a measured 8 from a carried 8.
+
+> **THE RULE: a score claim names its artifact — `8/32 pre-fix (kill461e.out)`.**
+> That makes the claim checkable BY EXISTENCE, which is the same witness discipline
+> the ledger already imposes on rows, and it is the only mechanical guard available
+> for a number that was never run.
+
+It is the oracle-correction rule's own order discriminator applied to prose: **a
+number written before the run that produces it cannot be told from a number fitted
+to the answer**, whatever it later turns out to be. Recording it as OWED costs
+nothing; asserting it costs the round's credibility on every other number it states.
+
+*** AND A CORRECTION IS NOT SAFER THAN THE THING IT CORRECTS. ***  In the same round
+a recount of "26 of 31 rows carry a measured kill" was itself wrong twice: the seat's
+recount gave 25 and six, and the draft correcting it listed `dma accept` among the
+unkilled rows *while also saying it had been discharged*. A correction carries more
+authority than the error, so it earns a second reading, not less of one -- which is
+what the existing "budget a second review pass for any records-correction round"
+note already says, now with a third instance.
 
 **A LINE NUMBER IN A COMMENT IS INVALIDATED BY YOUR OWN EDITS TO THAT FILE.** The same
 round cited `dev_sh4.c:2379-2381` correctly, then inserted a seven-line comment ABOVE it
