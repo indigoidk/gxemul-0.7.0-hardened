@@ -2,7 +2,11 @@
 """DETECTOR for sh4iprbcd (IPRB/IPRC/IPRD never read) + sh4prioraise (no rescan).
 
 Its rows assert the POST-fix state, which is why it is gated; the witness is the
-recorded 6/10 pre-fix measurement, not the rows themselves.
+recorded 6/10 (10-row era) pre-fix measurement, not the rows themselves.  That 6/10 was taken
+against the then 10-row pin and is quoted here as HISTORY -- the detector has
+since grown to 18 rows, and no pre-fix number has been measured at that count.
+Saying so is the point: `6/10 (10-row era)` and a stale claim are the same three characters,
+so the era has to be written down or a reader cannot tell them apart.
 
 Route: SCIF TXI (INTEVT 0x760) on landisk.  It is the ONE Table 19.6 source in
 this tree that a device asserts SYNCHRONOUSLY inside a guest store --
@@ -197,7 +201,7 @@ def row(name, got, want, note=""):
     `ok`/`FAIL`, and `gate_sh_rounding.sh`'s established idiom is
     `grep -E " ok$| FAIL$"` plus `count "$LOG" "^$v  .*ok$"`.  Against the
     note-last format BOTH match ZERO lines, so every row would have been reported
-    as absent while the probe itself printed a correct 6/10 and 10/10.  A gate
+    as absent while the probe itself printed a correct 6/10 (10-row era) and 10/10.  A gate
     that greps nothing scores the same as a gate whose rows all pass.
     """
     ok = (got == want)
@@ -283,7 +287,7 @@ row("deassert", run_deliver(0x00f0, 0, deassert_scif()), "refused",
 
 #  ---- the two rows NO BEHAVIOURAL TEST CAN REPLACE ---------------------------
 #  *** MEASURED: dropping the IPRB/IPRC blocks, and dropping the three RTC lines,
-#  each score a CLEAN 10/10 against every row above. ***  Not because those rows
+#  each score a CLEAN 10/10 (10-row era) against every row above. ***  Not because those rows
 #  are weak -- because WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have no
 #  INTERRUPT_ASSERT anywhere in this tree.  Nothing a guest can DO depends on
 #  their priorities, so no behavioural row can ever tell the difference.

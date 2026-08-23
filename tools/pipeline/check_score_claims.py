@@ -30,6 +30,21 @@ probe, so it cannot go stale the way prose can.  So: within the gate file, any
 COMMENT line that names that probe's stem and carries an `x/y` must use the same
 y.  The probe's own docstring is checked the same way.
 
+*** THE FIRST VERSION ONLY FLAGGED DENOMINATORS WITHIN 6 OF THE PIN, AND A PANEL
+SEAT MEASURED THAT IT MISSES THE VERY CASES THIS FILE WAS BUILT FOR. ***
+
+The window was meant to separate "this probe's own score" from a quote of some
+other measurement.  It does not:
+
+    pin=32  claims x/25   diff=7    silently ignored
+    pin=32  claims x/21   diff=11   silently ignored   <- #461's OWN numbers
+    pin=32  claims x/12   diff=20   silently ignored   <- #458's OWN numbers
+
+Detectors GROW, so a stale denominator is always SMALLER than the pin -- and the
+staler it is, the further away.  The window was backwards, filtering out exactly
+the worst cases while catching only the nearly-fresh ones.  Now every denominator
+must equal the pin unless its line names its era.
+
 *** WHAT IT DOES NOT CHECK, said plainly rather than left to be discovered. ***
 
 CHANGELOG round blocks and ledger notes are NOT checked, because there is no
@@ -52,7 +67,11 @@ REGRESS = os.path.join(ROOT, "regress")
 
 #  check "<stem> rows run"     "${x#*/}" N
 PIN = re.compile(r'check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)')
-SCORE = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
+#  *** A BARE d+/d+ MATCHES A DATE, AND A PANEL SEAT MEASURED IT. ***  On
+#  "measured 2026/08/23" the old pattern returned (2026, 08) and would have
+#  compared 08 against a row count.  The flanking guards reject anything that
+#  is part of a longer slash-run (a date, a path, a/b/c) or a percentage.
+SCORE = re.compile(r"(?<![\d/])(\d+)\s*/\s*(\d+)(?![\d/%])")
 
 
 def comment_lines(path):
@@ -96,14 +115,20 @@ def main():
             pp = os.path.join(REGRESS, cand)
             if not os.path.exists(pp):
                 continue
-            for a, b in SCORE.findall(docstring(pp)):
-                #  Only flag denominators that LOOK like this probe's own score:
-                #  a claim of x/y where y is within a few rows of the pin is
-                #  almost certainly this detector; anything far off is quoting
-                #  some other measurement (a mutant table, a manual page).
-                if int(b) != want and abs(int(b) - want) <= 6:
-                    bad.append("%s docstring  claims %s/%s, pin is %d"
-                               % (cand, a, b, want))
+            for ln in docstring(pp).split(chr(10)):
+                for a, b in SCORE.findall(ln):
+                    if int(b) == want:
+                        continue
+                    #  *** THE ESCAPE IS THE DOCUMENTATION. ***  A deliberate
+                    #  historical quote must NAME ITS ERA -- write
+                    #  "6/10 (the then 10-row pin)" and this accepts it,
+                    #  because a reader can then tell a quote from a stale
+                    #  claim.  Nothing else can: they are the same three
+                    #  characters.
+                    if ("%d-row" % int(b)) in ln:
+                        continue
+                    bad.append("%s docstring  claims %s/%s, pin is %d (if that is a deliberate historical quote, write '%s-row' on the same line)"
+                               % (cand, a, b, want, b))
 
     print("  check_score_claims: %d probes pinned by a gate" % len(pins))
     if bad:

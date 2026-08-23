@@ -52,8 +52,29 @@ import sys
 #  Uppercase-only, up to four tokens: it takes "SHIP WITH CHANGES", "DO NOT
 #  SHIP", "OPTION A" and "SOMETHING ELSE", and stops dead at lowercase prose or
 #  punctuation, so "VERDICT: SHIP -- the code is fine" still yields just SHIP.
+#  *** FOUR FORMS A LIVE SEAT WRITES THAT THE FIRST TWO VERSIONS MISSED, ALL
+#  NAMED BY PANEL SEATS AND THEN MEASURED. ***
+#
+#    **VERDICT**: SHIP          emphasis on the LABEL, not the value
+#    verdict: ship              lowercase
+#    VERDICT — SHIP             an em dash instead of a colon
+#    VERDICT: "SHIP"            a quoted value
+#
+#  And one that was worse than a miss: `VERDICT: Ship with changes` returned
+#  the single letter "S".  Not None -- an actual token, which would have been
+#  REPORTED as the seat's verdict, because [A-Z][A-Z-]* matched the S and
+#  stopped dead at the lowercase.  A silent wrong answer beats a silent
+#  missing answer for damage, and this file exists to prevent exactly that.
+#
+#  So: the label may carry emphasis, the separator may be a colon or a dash,
+#  the value may be quoted, and the value is matched CASE-INSENSITIVELY and
+#  upper-cased on the way out.  A one-character token is refused outright
+#  (there is no real one-letter verdict, and it is the signature of a
+#  truncated match).
 VERDICT_RE = re.compile(
-    r"VERDICT\s*:\s*[*_`]{0,3}\s*([A-Z][A-Z-]*(?:\s+[A-Z][A-Z-]*){0,3})")
+    r"VERDICT\s*[*_`]{0,3}\s*[:—–-]"
+    r"\s*[*_`\x22\x27]{0,3}\s*([A-Za-z][A-Za-z-]{1,}(?:\s+[A-Za-z][A-Za-z-]*){0,3})",
+    re.I)
 WALL_RE = re.compile(
     r"usage limit|rate.?limit|\b429\b|quota|too many requests|"
     r"unknown effort level|unknown model|not authenticated|invalid api key",
@@ -93,7 +114,12 @@ def verdict_of(text, brief_lines=()):
         low = st.lower()
         if any(k in low for k in INSTRUCTIONAL):
             continue
-        return VERDICT_RE.search(line).group(1).upper()
+        v = VERDICT_RE.search(line).group(1).upper().strip()
+        #  belt and braces: a one-character token is a truncated match,
+        #  never a verdict, whatever the regex happens to allow today.
+        if len(v) < 2:
+            continue
+        return v
     return None
 
 
@@ -213,5 +239,209 @@ def main():
     return 0
 
 
+
+#  ------------------------------------------------------------------ selftest
+#
+#  *** THE FIX THAT PROMPTED THIS FILE'S LAST TWO CORRECTIONS SHIPPED WITH NO
+#  DETECTOR, WHICH IS THE ONE THING THE ETHOS FORBIDS. ***  Both defects were
+#  found by a seat READING the regex, not by anything executing it -- and the
+#  second (single-word capture) had been live since the file was written, so
+#  every split panel this project ran was reported as unanimous.
+#
+#  Each row below is a MUTATION row: it names an edit a future round might
+#  plausibly make and asserts the answer CHANGES.  A row green under its own
+#  mutant is vacuous, and the driver proves that by applying the mutants and
+#  requiring red.
+#
+#  Run:  python tools/pipeline/seat_verdicts.py --selftest
+
+BQ = chr(96)    # backtick -- written as chr() so no quoting level can eat it
+ST = chr(42)    # asterisk
+US = chr(95)    # underscore
+DQ = chr(34)    # double quote
+EMDASH = chr(8212)
+ENDASH = chr(8211)
+
+CASES = [
+    #  (label, text, brief_lines, expected)
+    ("plain",          "VERDICT: SHIP", (), "SHIP"),
+
+    #  *** DEFECT 1, measured on the #460 pass-2 panel. ***  minimax answered
+    #  with markdown emphasis and was filed under "answered, NO VERDICT LINE
+    #  (format miss)" -- a LIVE seat with a correct verdict downgraded to a
+    #  formatting failure, the mirror image of what this file exists to prevent.
+    ("bold",           "VERDICT: " + ST * 2 + "SHIP" + ST * 2, (), "SHIP"),
+    ("underscore",     "VERDICT: " + US * 2 + "DO NOT SHIP" + US * 2, (),
+                       "DO NOT SHIP"),
+    ("backtick",       "VERDICT: " + BQ + "OPTION B" + BQ, (), "OPTION B"),
+
+    #  *** DEFECT 2, and it is the worse of the two. ***  The capture was a
+    #  SINGLE word, so SHIP WITH CHANGES read as SHIP and every OPTION A/B/C
+    #  collapsed to OPTION.  A dissent and an endorsement became one token.
+    ("multiword",      "VERDICT: SHIP WITH CHANGES", (), "SHIP WITH CHANGES"),
+    ("multiword bold", "VERDICT: " + ST * 2 + "SHIP WITH CHANGES" + ST * 2, (),
+                       "SHIP WITH CHANGES"),
+
+    #  The original failure: a brief lists its menu, a seat echoes the brief,
+    #  and a naive grep reports the LAST option as the seat's answer.
+    ("menu line rejected",
+     "VERDICT: SHIP / VERDICT: DO NOT SHIP -- one line", (), None),
+
+    #  A wrapped menu puts ONE token on the continuation line, so the
+    #  count-per-line rule alone is not enough; the brief-line guard catches it.
+    ("wrapped menu rejected",
+     "VERDICT: DO NOT SHIP", ("VERDICT: DO NOT SHIP",), None),
+
+    ("instruction rejected",
+     "Open with VERDICT: SHIP on line one, then reasoning.", (), None),
+
+    #  A real answer sitting below an echoed brief must still be found --
+    #  rejecting the echo must not also reject the answer.
+    ("answer after echo",
+     "VERDICT: SHIP / VERDICT: DO NOT SHIP -- one line\nI read the diff.\n"
+     "VERDICT: DO NOT SHIP", (), "DO NOT SHIP"),
+
+    ("silent seat", "I could not reach the repository.", (), None),
+
+    #  *** FIVE FORMS THREE PANEL SEATS NAMED AND A MEASUREMENT CONFIRMED,
+    #  AFTER the first 11 rows were already green. ***  That is the ask-again
+    #  earning its keep: a clean table redirects seats away from the shapes the
+    #  author already thought of.
+    ("label emphasis",  "" + ST * 2 + "VERDICT" + ST * 2 + ": SHIP", (), "SHIP"),
+    ("lowercase",       "verdict: ship", (), "SHIP"),
+    ("em dash",         "VERDICT " + EMDASH + " SHIP", (), "SHIP"),
+    ("en dash",         "VERDICT " + ENDASH + " DO NOT SHIP", (), "DO NOT SHIP"),
+    ("quoted value",    "VERDICT: " + DQ + "SHIP" + DQ, (), "SHIP"),
+
+    #  *** AND THE ONE THAT WAS WORSE THAN A MISS. ***  This returned the single
+    #  letter "S" -- not None, an actual token that would have been REPORTED as
+    #  the seat's verdict, because [A-Z][A-Z-]* matched the S and stopped at the
+    #  lowercase.  A silent WRONG answer, which is the failure this file exists
+    #  to prevent, arriving through the fix for the failure it was built for.
+    ("title case",      "VERDICT: Ship with changes", (), "SHIP WITH CHANGES"),
+]
+
+#  Each mutant is applied to this module's own source; `rows` names the cases
+#  that MUST redden under it.
+#  Each mutant is a LIST of (find, replace) edits applied to this module's own
+#  source, plus the case labels that MUST redden under it.
+MUTANTS = [
+    ("M1  value-emphasis class dropped (shipped defect, restored)",
+     [('[*_`\\x22\\x27]{0,3}', "")],
+     ("bold", "underscore", "backtick", "multiword bold", "quoted value")),
+
+    ("M2  capture narrowed to one word (the worse shipped defect)",
+     [('(?:\\s+[A-Za-z][A-Za-z-]*){0,3}', "")],
+     ("multiword", "multiword bold", "title case", "en dash")),
+
+    ("M3  per-line token count dropped",
+     [("if len(VERDICT_RE.findall(line)) != 1:", "if False:")],
+     ("menu line rejected",)),
+
+    ("M4  brief-line guard dropped",
+     [("if st in brief_lines:", "if False:")],
+     ("wrapped menu rejected",)),
+
+    ("M5  instructional guard dropped",
+     [("if any(k in low for k in INSTRUCTIONAL):", "if False:")],
+     ("instruction rejected",)),
+
+    #  *** THERE IS NO M6, AND ITS ABSENCE IS A RESULT. ***  It was written to
+    #  kill a LEADING emphasis class matching the `**` of `**VERDICT**: SHIP`,
+    #  and it measured GREEN -- because re.search is UNANCHORED, so the match
+    #  simply starts at VERDICT and the TRAILING class consumes the closing
+    #  `**`.  The leading class was dead the moment it was written.
+    #
+    #  It is deleted rather than kept-and-annotated: the `label emphasis` row
+    #  still passes without it, which is the proof.  A mutant that cannot be
+    #  made to fail is telling you the code it targets does nothing.
+
+    ("M7  dash separators dropped",
+     [('[:—–-]', ":")],
+     ("em dash", "en dash")),
+
+    #  *** THE HISTORICAL DEFECT, WHICH TAKES TWO EDITS TO RECONSTRUCT. ***
+    #  `re.I` supplies the case-insensitivity, so narrowing the class alone is
+    #  a NO-OP -- a one-edit mutant measured GREEN and reported these rows as
+    #  defended when nothing defended them.  Both edits together restore
+    #  exactly what shipped: "VERDICT: Ship with changes" -> the single letter
+    #  "S", the silent WRONG answer.
+    ("M8  case-sensitivity restored (class AND flag)",
+     [('([A-Za-z][A-Za-z-]{1,}(?:\\s+[A-Za-z][A-Za-z-]*){0,3})', '([A-Z][A-Z-]*(?:\\s+[A-Z][A-Z-]*){0,3})'),
+      ("    re.I)", "    0)")],
+     ("lowercase", "title case")),
+
+    #  With M8's regex in place the one-character guard is what turns that
+    #  "S" into a MISS instead of a WRONG ANSWER.  Dropping the guard on top
+    #  of M8 is the only way to reach it, which is why this mutant carries
+    #  three edits and why the guard is not dead code.
+    ("M9  one-character guard dropped (on top of M8)",
+     [('([A-Za-z][A-Za-z-]{1,}(?:\\s+[A-Za-z][A-Za-z-]*){0,3})', '([A-Z][A-Z-]*(?:\\s+[A-Z][A-Z-]*){0,3})'),
+      ("    re.I)", "    0)"),
+      ("        if len(v) < 2:", "        if False:")],
+     ("title case",)),
+]
+
+
+def selftest():
+    import types
+    src = io.open(__file__, encoding="utf-8").read()
+    fails = []
+
+    bad = []
+    for label, text, briefs, want in CASES:
+        got = verdict_of(text, set(briefs))
+        if got != want:
+            bad.append("%s: got %r want %r" % (label, got, want))
+    for b in bad:
+        fails.append("FAIL  " + b)
+    print("  %-50s %d/%d rows" % ("the shipped extractor",
+                                  len(CASES) - len(bad), len(CASES)))
+
+    for label, edits, must_redden in MUTANTS:
+        missing = [f for f, _ in edits if f not in src]
+        if missing:
+            #  *** A MUTANT WHOSE TEXT IS GONE SILENTLY STOPS TESTING.
+            #  ***  It happened here: the regex was rewritten and three
+            #  mutants kept pointing at text that no longer existed.
+            fails.append("FAIL  MUTANT TEXT NOT FOUND, so it never ran: "
+                         "%s -- missing %r" % (label, missing[0][:40]))
+            continue
+        m = types.ModuleType("m")
+        m.__dict__["__file__"] = __file__
+        try:
+            mut = src
+            for f, r in edits:
+                mut = mut.replace(f, r, 1)
+            exec(compile(mut, "<mutant>", "exec"), m.__dict__)
+        except Exception:
+            print("  %-50s did not compile (counts as red)" % label)
+            continue
+        red = set()
+        for lbl, text, briefs, want in CASES:
+            try:
+                if m.verdict_of(text, set(briefs)) != want:
+                    red.add(lbl)
+            except Exception:
+                red.add(lbl)
+        missed = [r for r in must_redden if r not in red]
+        if missed:
+            fails.append("FAIL  %s -- rows stayed GREEN under it, so they are "
+                         "VACUOUS: %s" % (label, ", ".join(missed)))
+        else:
+            print("  %-50s reddens %s" % (label, ", ".join(sorted(red))))
+
+    for f in fails:
+        print("  " + f)
+    if fails:
+        print("SEAT_VERDICTS_SELFTEST_FAIL  %d problem(s)" % len(fails))
+        return 1
+    print("SEAT_VERDICTS_SELFTEST_PASS  %d rows, %d mutants, every mutant red"
+          % (len(CASES), len(MUTANTS)))
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     sys.exit(main())

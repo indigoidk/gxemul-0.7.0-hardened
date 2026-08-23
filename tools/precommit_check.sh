@@ -478,6 +478,40 @@ else
 	fi
 fi
 
+#  ---- V ---------------------------------------------------------------------------
+#  THE VERDICT EXTRACTOR DECIDES WHETHER A PANEL WAS SPLIT OR UNANIMOUS, AND IT WAS
+#  WRONG ABOUT THAT FOR ITS WHOLE LIFE WITH NOTHING EXECUTING IT.
+#
+#  Two defects, both found by a seat READING the regex rather than running it: markdown
+#  emphasis made a LIVE seat's correct verdict read as a format miss, and a single-word
+#  capture collapsed SHIP against SHIP WITH CHANGES and every OPTION A/B/C into one
+#  token -- so every split panel this project ran was reported as unanimous.
+#
+#  Same shape as section R's selftest and wired the same way: it fires only when the
+#  extractor itself is touched, and UNTRACKED COUNTS AS TOUCHED, which is the lesson R
+#  paid for -- the first version reported "unchanged" on the very commit that
+#  introduced the file.
+say ""; say "V. the verdict extractor can still be shown to fail"
+SVCHK=$_HERE/pipeline/seat_verdicts.py
+if [ ! -f "$SVCHK" ]; then
+	warn "seat_verdicts.py MISSING -- panel verdicts are NOT extracted"
+else
+	_svtouched=$( { git diff --cached --name-only; git diff --name-only;
+	                git ls-files --others --exclude-standard; } \
+	              | grep -c 'tools/pipeline/seat_verdicts\.py' )
+	if [ "$_svtouched" -gt 0 ]; then
+		if svout=$(python "$SVCHK" --selftest 2>&1); then
+			good "$(printf '%s' "$svout" | grep -E 'SEAT_VERDICTS_SELFTEST_PASS')"
+		else
+			bad "THE VERDICT EXTRACTOR CAN NO LONGER BE SHOWN TO FAIL:"
+			printf '%s
+' "$svout" | grep -E 'SELFTEST_FAIL|^  FAIL ' | sed 's/^/          /'
+		fi
+	else
+		good "extractor unchanged -- selftest not re-run (fires when it is edited)"
+	fi
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #

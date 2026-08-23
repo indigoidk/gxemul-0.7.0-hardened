@@ -86,6 +86,36 @@ things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
+### `verdictbold` — regress stage — **QUEUED 2026-08-23**, and it carries a RULE QUESTION
+
+Closed with a 17-row, 8-mutant selftest on `tools/pipeline/seat_verdicts.py`. Author
+self-review disclosed (badge `A`) on the fix itself; the escapes came from four
+independent seats and were then measured.
+
+**The rule question, and it is the reason this is not batched with the closures:**
+
+> Two mutants in this detector could not be made to fail, and each one taught something
+> different. The first meant to restore a historical defect with ONE edit and measured
+> GREEN, because `re.I` supplied the case-insensitivity the class edit was targeting —
+> the defect needed BOTH edits. The second was aimed at a leading emphasis class and
+> could not fail because that class was DEAD (`re.search` is unanchored).
+>
+> **Is "a mutant that will not die" a first-class RESULT that a round must dispose of
+> explicitly, or is it noise to be silently re-aimed?**  This round treated them as
+> results: the first made mutants multi-part, the second DELETED the dead code and
+> recorded its own absence. That looks right, but it is a rule about how detectors are
+> built and nothing has adjudicated it.
+>
+> The narrower half: **should a multi-part mutant be the default form?**  A single-edit
+> mutant cannot express "restore what actually shipped" whenever two features combine
+> to defend a row, and it reports the row as defended when nothing defended it — which
+> is the vacuity shape this project already has four names for.
+
+Also worth a look: the detector verifies against PRODUCTION (41 of 42 real seat answers
+across six committed panel directories resolve). Is that a pattern other detectors here
+should adopt — grading against accumulated real artefacts rather than only synthetic
+rows — or is it a one-off that happens to be available for this file?
+
 ### `sh4iprbcd` + `sh4prioraise` (#458, `7e5c0f6`) — regress stage — **HELD, batched**
 
 `regress/sh_iprbcd_probe.py`, 18 rows, wired into `gate_sh_rounding.sh` (PASS, 110 checks).
