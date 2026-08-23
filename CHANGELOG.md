@@ -47,13 +47,24 @@ run it lower and `timer_hz` is already set from `idata & 3`, so with `pclock == 
 guest never asked for. Moving the decline down re-creates the silent-wrong-rate fault it
 exists to refuse. `m_below` measures exactly that.
 
-### *** THE HONEST COST IS THE LATCH, NOT THE STALL -- and the round had it wrong ***
+### THE HONEST COST HAS TWO HALVES, and the round demoted the first one too far
 
-The design brief, and an early draft of the shipped comment, both defended the trade as
-"a crash becomes a hang". A measuring seat corrected it on two grounds:
+The design brief defended the trade as "a crash becomes a hang". A measuring seat corrected
+that -- and then a pass-2 seat corrected the correction, which is the version that ships.
+
+**(a) The stall remains the PRIMARY behavioural cost.** A guest that programs TCR and waits
+for a TMU interrupt now waits forever where it used to die, and for automation that turns an
+immediate nonzero exit into a possible timeout. **(b) ADDITIONALLY**, the diagnostic degrades
+from unmissable to once-per-timer for the device lifetime. *(b) is an extra cost, not a
+replacement for (a)* -- an intermediate draft said "the honest cost is the latch, NOT the
+stall", which let the round off too easily.
+
+The two grounds that DO narrow (a)'s practical reach today:
 
 * **The hang is hypothetical in this tree.** `machine_hpcsh.c`'s `MACHINE_SETUP` body is
-  commented out at `:47-62` -- no console, no disk, no PROM. **No guest boots on hpcsh at
+  commented out at `:48-64` -- and only the `hpc_bootinfo` half; what remains registers RAM
+  mirrors and a dumb framebuffer, with no console wiring, no bootinfo and no disk, so **no
+  guest boots on hpcsh at
   all**, and `baresh`/`testsh` run hand-written test programs. The host death was measured;
   the hang has no guest to happen to.
 * **The real de-escalation cost is that the diagnostic degrades from unmissable to
@@ -113,9 +124,7 @@ place of `cpu->cd.sh.pclock` -- the row cannot tell "reads the machine's clock" 
 to agree with landisk". Dreamcast's 50 MHz is the discriminator.
 
 **The de-escalation clause, discharged by measured kill.** The predicate that used to gate
-death is exactly one, and a seat established it was **the last guest-reachable `exit(` in the
-device** (`:2772` is inside `#ifdef SH4_DEBUG`; `:2947/:2953/:2959` are construction-time
-lookup failures). Its accept rows redden under a guard-only growth mutant -- `|| (pclock %
+death is exactly one, and a seat established it was **the last guest-reachable `exit(` in the device.** *The line numbers are deliberately omitted here, and that is the finding rather than laziness:* an earlier draft cited four, and the 15-line paragraph correcting the false panel claim -- added later in the same round -- shifted every one of them. **A comment that cites line numbers in its own file invalidates them each time it is edited.** What is stable is the structure: exactly four `exit(1);` remain in `dev_sh4.c`, one wrapped in `#ifdef SH4_DEBUG` and three on `interrupt_handler_lookup` construction failures. None is reachable by a guest. Its accept rows redden under a guard-only growth mutant -- `|| (pclock %
 256) != 0`, in-idiom because it is `#447`'s own reasoning one level deeper. Guard-only is the
 correct form here by the `#451` discriminator: **the latch operand is the constant `1`, which
 the guard cannot feed**, so guard-only is non-equivalent AND quieter than the joint form.
@@ -128,8 +137,9 @@ the guard cannot feed**, so guard-only is non-equivalent AND quieter than the jo
 * **False POSITIVE.** The dreamcast accept row first read `died` -- **the same string the
   trigger rows produce**. Dreamcast brings up two console inputs (`SH4 SCIF` and `maple`) and
   `console.c:994-1007` makes that fatal without `-x`. Scored naively, a console-configuration
-  failure would have become a fourth reproduction. `-x` only sets `allow_slaves`
-  (`console.c:985`) and spawns no xterm for a console never used.
+  failure would have become a fourth reproduction. `-x` routes through
+  `console_allow_slaves()` (`console.c:943`); the early return it enables is `console.c:985`,
+  and no xterm is spawned for a console never used.
 
 *Both were caught by the same question -- did it fail for the reason under test -- and
 neither by a size or liveness check.*
@@ -141,10 +151,10 @@ neither by a size or liveness check.*
   nobody will mistake it for a Jornada measurement.
 * `sh4cpudevscope` -- **the class this round is one symptom of.** The SH-4 on-chip block is
   added per-CPU but is machine-scoped. Two more symptoms measured: `-n 2 -E landisk` refuses
-  to construct (`"sh4" collides with device 11`), and `dev_sh4.c:2943-2959` hardcodes
+  to construct (`"sh4" collides with device 11`), and `dev_sh4.c` hardcodes
   `machine[0].cpu[0].irq[...]` for the TMU lookup.
-* `sh4frqcr` -- `FRQCR` is modelled at `dev_sh4.c:2592-2596` as a bare latch with **no reset
-  value**, so a guest reads `0x0000`, which is not a legal FRQCR value (Table 10.3 gives
+* `sh4frqcr` -- `FRQCR` is modelled by `dev_sh4.c`'s `case SH4_CPG_FRQCR` as a bare latch
+  with **no reset value** (`cpg_frqcr` is never initialised), so a guest reads `0x0000`, which is not a legal FRQCR value (Table 10.3 gives
   `H'0E1A`/`H'0E23`/`H'0E13`/`H'0E0A`). That is the register real hardware derives the
   peripheral clock FROM, and it is the honest long-run answer to "where should pclock come
   from".

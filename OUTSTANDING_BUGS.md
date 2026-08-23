@@ -7132,14 +7132,17 @@ created once per CPU**. Three measured symptoms:
 1. `sh4pclock` — the CPU brings the TMU and the board brings the clock. Closed at the guard.
 2. **`-n 2 -E landisk` refuses to construct**: `ERROR! "sh4" collides with device 11 ("sh4")`.
    SMP is impossible on every SH machine, and this line is why.
-3. `dev_sh4.c:2943-2959` hardcodes `machine[0].cpu[0].irq[...]` for the TMU interrupt lookup
+3. `dev_sh4.c` hardcodes `machine[0].cpu[0].irq[...]` for the TMU interrupt lookup (the
+   three `interrupt_handler_lookup` failures near the end of `devinit`; line numbers are
+   omitted because same-file comment edits move them -- see the `#459` round block)
    — correct *only because* symptom 2 makes a second CPU impossible.
 
 Fixing 2 without 3 gives a device on CPU 1 whose timer interrupts route to CPU 0.
 
 ### `sh4frqcr` — open
 
-`dev_sh4.c:2592-2596` models FRQCR as a bare latch with **no reset value**, so a guest reads
+`dev_sh4.c`'s `case SH4_CPG_FRQCR` models it as a bare latch with **no reset value** --
+`cpg_frqcr` is never initialised, so a guest reads
 `0x0000` — not a legal value. Table 10.3 gives `H'0E1A`/`H'0E23`/`H'0E13`/`H'0E0A` by clock
 mode. **This is the honest long-run answer to `sh4pclock`:** real hardware derives the
 peripheral clock from FRQCR and the mode pins, and a seat measured that the CPU:peripheral
@@ -7162,3 +7165,50 @@ If it is ever settled as SH-3, note what arch-3 removes: the whole `dev_sh4` blo
 are `/* TODO */` stubs at `cpu_sh.c:527-533` that silently drop asserts; and `cpu_sh.c:224`
 uses a **leftover UTLB loop counter** as `templ.line`, latent today only because that handler
 is a stub. Obtain a source first.
+
+### `sh4pclockstatic` — open (ask-again escape, #459)
+
+codex's capped ask-again named a mutant that passes **all 16 rows**: replace `sh4_val_first()`
+in the pclock guard with a function-static per-timer bitmap.
+
+```c
+static unsigned pclock_reported;
+unsigned bit = 1U << timer_nr;
+if (!(pclock_reported & bit)) { pclock_reported |= bit; fatal(/* unchanged */); }
+break;
+```
+
+It preserves decline, `unlatch`, `once` and `pertmr` for a single device, so every row stays
+green — but it suppresses TCR0's diagnostic on a **second** SH4 device in the same process.
+The kill is two device instances and one TCR0 write to each, expecting two diagnostics.
+
+**FILED, not fixed, and it is currently EQUIVALENT IN PRACTICE** — `sh4cpudevscope`'s `-n 2`
+collision means a second SH4 device cannot be constructed today, so no probe can build the
+kill. *That is the argument for `sh4cpudevscope` rather than a reason to dismiss this:* the
+moment that collision is fixed, this mutant becomes live and the row becomes buildable. The
+two should be done in that order.
+
+### A METHODOLOGY FINDING worth more than any of the above
+
+*** A COMMENT THAT CITES LINE NUMBERS IN ITS OWN FILE INVALIDATES THEM EACH TIME IT IS
+EDITED, AND `#459` DID EXACTLY THAT TO ITSELF. ***
+
+The round enumerated the four remaining `exit(1);` sites in `dev_sh4.c` to support its claim
+of having closed the last guest-reachable one. Measured by a pass-2 seat:
+
+| tree | sites |
+|---|---|
+| pre-fix (`bb05ce7`) | `:1972` (removed), `:2710`, `:2885`, `:2891`, `:2897` |
+| shipped (`0bb8be2`) | `:2786`, `:2961`, `:2967`, `:2973` |
+| **cited** | `:2772`, `:2947`, `:2953`, `:2959` |
+
+The cited set matches **no committed tree** — it is an intermediate working state, and the
+15-line paragraph correcting the false panel claim is the late addition of exactly that size.
+**The correction invalidated the enumeration, and nobody re-derived it.** The same `+62`
+contamination reached `sh4cpudevscope`, and `sh4frqcr` cited a location its own commit had
+already moved — *a queue row born stale by the diff that filed it*.
+
+The substance was true throughout. **Line numbers are now omitted from these records in
+favour of structural descriptions** ("one wrapped in `#ifdef SH4_DEBUG`, three on
+`interrupt_handler_lookup` construction failures"), which cannot rot. Cite line numbers across
+files, never within one.

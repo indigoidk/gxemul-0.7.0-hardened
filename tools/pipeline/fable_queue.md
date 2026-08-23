@@ -144,6 +144,42 @@ request stands, so a rescan guarded by `int_to_assert == 0` is predicted to esca
 
 ---
 
+### `sh4pclock` (#459, `0bb8be2`) — regress stage — **HELD, batched**
+
+`regress/sh_pclock_probe.py`, 16 rows, wired into `gate_sh_rounding.sh` (PASS, 129 checks).
+6/16 pre-fix, 16/16 post-fix, same script both sides. Kill table: `m_silent` 12/15,
+`m_flat` 14/15, `m_nolatch` 14/15, `m_below` 14/15 — the last three each red on ONE row.
+
+**THE QUESTIONS THIS STAGE IS HELD FOR:**
+
+1. **A GATED PROBE THAT IS ALSO THE WITNESS.** `check_probe_wiring.py` refused this file
+   while it was labelled a witness, on the correct ground that a witness asserts the PRE-fix
+   symptom and goes red the day the fix lands. It is now labelled a detector, and the witness
+   is the *recorded* 6/16 measurement rather than the rows. **Is that relabelling honest, or
+   does it let a round claim a witness it no longer ships?** The same relabelling was applied
+   to `#458`'s probe. This is a rule question about the whole witness/detector boundary, not
+   a sign-off on one file.
+
+2. **THE ROUND SHIPPED A FALSE CLAIM ABOUT ITS OWN PANEL.** A draft comment said "a panel of
+   nine seats reached this 8-1" and was written while the ninth seat was still running; that
+   seat then dissented. It was caught by the miscounted seat itself. Corrected in place. **Is
+   in-place correction sufficient here, or does a false panel claim need a harder gate?** The
+   existing sections G and H check that a seat which ANSWERED was recorded, and that seats
+   were FIRED — neither can see a *count* asserted in prose before the answers arrive.
+
+3. **THE PRE-FIX BUILD WAS UNDEFINED FOR PART OF THIS ROUND.** A seat measured
+   `build/gxemul`'s mtime moving underneath it mid-review, so a run it believed was pre-fix
+   was post-fix and the output could not distinguish them. The round re-derived its witness
+   from `git show HEAD:`. **Should "rebuild the pre-fix from `git show HEAD:`, never from
+   `build/`" become a harness rule?** It costs one line in every kill script.
+
+*Sign-off only:* the four filed rows (`sh4testclock`, `sh4cpudevscope`, `sh4frqcr`,
+`hpcshcpu`) — confirm the split between what shipped and what was filed reads honestly, and
+in particular that `sh4cpudevscope` is correctly filed as the CLASS this round is one
+instance of rather than as a duplicate of it.
+
+---
+
 ### `selfcheckman` — regress stage — **HELD, batched**
 
 Closed 2026-08-19 as **already fixed** by `7e3b120`, verified independently twice (the main

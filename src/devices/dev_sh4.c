@@ -1989,7 +1989,11 @@ DEVICE_ACCESS(sh4)
 			 *  said "INTERNAL ERROR ... Aborting", which reads as a construction
 			 *  fault -- something that cannot happen -- and that is why four rounds
 			 *  of SH-4 exit(1) work walked past it.  It is reached by an ordinary
-			 *  store to 0xffd80010, and by nothing else.
+			 *  store to a TCR register, and by nothing else -- TCR0 at 0xffd80010,
+			 *  with TCR1 (0xffd8001c) and TCR2 (0xffd80028) reaching this same arm
+			 *  by fall-through.  An earlier draft said "0xffd80010, and by nothing
+			 *  else", which contradicted the detector's own `pertmr` row -- that row
+			 *  writes TCR1 on purpose, to prove the latch instance is per-timer.
 			 *
 			 *  *** IT IS A CLASS, NOT A MACHINE LIST. ***  cpu_sh.c:233-234 adds
 			 *  this device from `if (cpu->cd.sh.cpu_type.arch == 4)`, so the CPU
@@ -2008,14 +2012,22 @@ DEVICE_ACCESS(sh4)
 			 *  a fabricated rate makes every timer-using guest subtly wrong with no
 			 *  row able to see it, and loud-broken outranks silent-wrong.
 			 *
-			 *  PANEL, STATED EXACTLY, because an earlier draft of this comment said
-			 *  "a panel of nine seats reached this 8-1" AND WAS WRITTEN WHILE THE
-			 *  NINTH SEAT WAS STILL RUNNING.  That seat then did not vote B.  Counting
-			 *  a seat that has not answered is the exact shape the seat ledger exists
-			 *  to refuse, and it was caught by the seat being miscounted.
+			 *  PANEL, STATED EXACTLY -- because an earlier draft of this comment said
+			 *  "a panel of nine seats reached this 8-1", and that was WRONG IN THREE
+			 *  WAYS AT ONCE.  It was written while the ninth seat was still running,
+			 *  so (1) it counted a seat that had not answered, which is the exact
+			 *  shape the seat ledger exists to refuse; (2) its arithmetic SUMMED TO
+			 *  NINE VOTES when only eight seats had answered -- 8+1=9, and a reader
+			 *  could have closed that by hand; and (3) even among the eight the tally
+			 *  was 7-1, not 8-1.  The ninth seat then dissented, making the final 7-2.
 			 *
-			 *  All nine answered.  ALL NINE AGREE THIS DECLINE IS MANDATORY.  Seven
-			 *  say it is the whole fix.  Two would additionally assign a pclock to the
+			 *  The first error was caught by the seat being miscounted, the second and
+			 *  third by a later seat doing the arithmetic the draft invited.  A
+			 *  correction that does not itself close is the same defect one level up.
+			 *
+			 *  All nine answered.  ALL NINE AGREE THE DECLINE IS MANDATORY -- 9-0 on
+			 *  that question.  On whether it is the WHOLE fix the split is 7-2: seven
+			 *  say yes, two would additionally assign a pclock to the
 			 *  SYNTHETIC machines (baresh, testsh) on the ground that a fictional
 			 *  machine's parameters are the project's own definition rather than a
 			 *  hardware fact -- which is a real argument, and does NOT transfer to
@@ -2023,8 +2035,14 @@ DEVICE_ACCESS(sh4)
 			 *  different file and a different semantic class, per the round-scope
 			 *  rule, and filed.  Nothing in that dissent contradicts what ships here.
 			 *
-			 *  THE HONEST COST, named rather than buried: a guest that programs TCR
-			 *  and waits for a TMU interrupt now waits forever where it used to die.
+			 *  THE HONEST COST HAS TWO HALVES, and an earlier draft demoted the
+			 *  first one too far.  (a) A guest that programs TCR and waits for a TMU
+			 *  interrupt now waits forever where it used to die -- that remains the
+			 *  PRIMARY behavioural cost, and for automation it turns an immediate
+			 *  nonzero exit into a possible timeout.  (b) ADDITIONALLY, the
+			 *  diagnostic degrades from unmissable to once-per-timer for the device
+			 *  lifetime.  (b) is an extra cost, not a replacement for (a).
+			 *
 			 *  The trade is right here only because the counterfactual was never a
 			 *  working timer -- on these machines pclock is 0, so the write ALWAYS
 			 *  killed the host.  Nothing that worked is lost.  And the stall is not

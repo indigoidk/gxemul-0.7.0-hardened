@@ -17,10 +17,14 @@ THE CHAIN, four links, each read rather than assumed:
      -- so every arch-4 SH CPU carries the TCR handler whatever machine booted.
   2. Only TWO machines assign pclock: machine_dreamcast.c:51 (50000000) and
      machine_landisk.c:81 (33333333).
-  3. But FOUR machine sites name an arch-4 CPU: dreamcast and landisk (which set
-     it), plus machine_hpcsh.c:89 and machine_test.c:535/:541 (which do not).
-  4. So on -e jornada680, -E baresh and -E testsh, pclock is 0, and the TCR write
-     arm at dev_sh4.c:1969-1972 runs `fatal(...); exit(1);`.
+  3. But FIVE machine sites name an arch-4 CPU: dreamcast and landisk (which set
+     it), plus machine_hpcsh.c:89, and machine_test.c:535 and :541 -- which are
+     TWO SEPARATE MACHINES, baresh and testsh.  (An earlier draft of this line
+     said FOUR, two sentences above the paragraph that announces the correction.
+     Those two are the strdup lines; the MACHINE_DEFAULT_CPU labels are :533/:539.)
+  4. So on -e jornada680, -E baresh and -E testsh, pclock is 0, and BEFORE #459 the
+     TCR write arm ran `fatal(...); exit(1);`.  (Past tense on purpose: that code is
+     gone, and citing its old line numbers here would rot on the next edit.)
 
 *** THREE machine types, not two, and the brief that opened this round said two. ***
 Two pass-1 seats independently caught it: `machine_test.c:535` is

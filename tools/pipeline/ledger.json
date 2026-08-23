@@ -15551,14 +15551,14 @@
     {
       "id": "sh4pclock",
       "title": "sh4pclock  One guest TCR store ends the host on hpcsh AND testsh -- the sh4 device is added by the CPU, but only 2 of 4 SH machines set pclock",
-      "state": "open",
-      "commits": "",
+      "state": "closed",
+      "commits": "0bb8be2",
       "hold": "",
-      "witness": "probe:manual cold-debugger session on unmodified `-e jornada680` (rung 3). Reproduced on -e jornada680 AND -E testsh. One `mov.l r0,@r1` with r1 = 0xffd80010 (SH4_TCR0) prints 'INTERNAL ERROR: pclock must be set for this machine. Aborting.' and the process ends. Not yet a committed probe -- the existing sh4 probe harness hardcodes `-E landisk`, so a committed witness needs the machine to be a parameter.",
+      "witness": "probe:regress/sh_pclock_probe.py (rung 3, 16 rows, SHIPPED). MEASURED 6/16 on the true pre-fix build and 16/16 post-fix, SAME SCRIPT BOTH SIDES. The pre-fix build was made from `git show HEAD:src/devices/dev_sh4.c` into a private clone and grep-confirmed to still contain `INTERNAL ERROR: pclock`, NOT from build/ -- a seat measured build/gxemul's mtime moving underneath it mid-review, so a run it believed was pre-fix was post-fix and nothing in the output distinguished them. Controls: LIVENESS (guest store then guest load of an asymmetric 0x12345678) and DEVICE SIGNATURE (IPRD reset value 0xda74, which RAM cannot produce and an unmapped address answers with `non-existant paddr`), both green on both sides and both in their OWN sessions so neither touches TCR.",
       "closure": {
-        "by": "",
-        "badge": "",
-        "note": ""
+        "by": "fable5-mainloop",
+        "badge": "A",
+        "note": "*** THE DEFECT IS A CLASS, AND THE FIX IS AT THE GUARD FOR THAT REASON. *** cpu_sh.c:233-234 adds the sh4 device from `arch == 4`, so THE CPU BRINGS THE TMU AND THE BOARD BRINGS THE CLOCK, and nothing checked that the two agree. Five registered SH machine types name an arch-4 CPU; only machine_dreamcast.c:51 and machine_landisk.c:81 assign pclock. Fixing the three machine files would leave every FUTURE arch-4 machine inheriting the same host kill.\nTHE ROW'S TITLE SAID 'hpcsh AND testsh' AND THAT UNDERCOUNTS. Two pass-1 seats independently found that machine_test.c:535 is MACHINE_DEFAULT_CPU(baresh) and :541 is MACHINE_DEFAULT_CPU(testsh) -- two separately registered machines in one file -- so `baresh` was never named by the brief or the filing. Measured: it dies identically. THREE machine types, not two. A seat also measured -e jornada690 reproducing (the subtype is never read; same code path) and confirmed all five machines carry the device.\nTHE FIX follows #447's precedent twenty lines below in the same arm, and its stated reason: 'substituting a prescaler for a clock source we cannot provide would be inventing a rate'. Once-only diagnostic, break, no state touched, using the ELEVENTH SH4_VAL_* latch class -- free, because the tenth-class enum conversion was already discharged. The guard STAYS ABOVE the prescaler switch: run it lower and timer_hz is already set from `idata & 3`, so with pclock == 0 the debug() line announces 'clock set to 0.000000 Hz'. `m_below` measures exactly that and is caught by `unlatch` alone.\nDE-ESCALATION CLAUSE DISCHARGED BY MEASURED KILL. The predicate that gated death is exactly one, and a seat established it was THE LAST GUEST-REACHABLE exit( IN THE DEVICE (one wrapped in #ifdef SH4_DEBUG, three on interrupt_handler_lookup construction failures; LINE NUMBERS OMITTED DELIBERATELY -- an earlier draft cited four and the paragraph correcting the false panel claim shifted every one of them, which is the finding: a comment citing line numbers in its own file invalidates them when edited). Four accept rows across TWO machines and TWO channels each -- a single row pinned at landisk's 33.33 MHz is passed by a mutant that HARDCODES 33333333, and dreamcast's 50 MHz is the discriminator. They redden under a guard-only growth mutant `|| (pclock % 256) != 0`; guard-only is the correct form by the #451 discriminator because THE LATCH OPERAND IS THE CONSTANT 1, which the guard cannot feed.\nTHE HONEST COST IS THE LATCH, NOT THE STALL, and the round had that wrong until a seat corrected it: hpcsh's MACHINE_SETUP body is commented out, so NO GUEST BOOTS THERE and the 'hang' has no guest to happen to; what actually degrades is the diagnostic, from unmissable to once-per-timer-for-the-device-lifetime.\n*** THE ROUND SHIPPED A FALSE CLAIM ABOUT ITS OWN PANEL AND THE MISCOUNTED SEAT CAUGHT IT. *** An early draft of the shipped comment said 'a panel of nine seats reached this 8-1'; it was written WHILE THE NINTH SEAT WAS STILL RUNNING and that seat then did not vote B. Corrected in place. Accurate: all nine answered, ALL NINE AGREE THE DECLINE IS MANDATORY, seven say it is the whole fix, two would additionally give the SYNTHETIC machines a defined pclock -- filed as sh4testclock, not merged, per the round-scope rule."
       },
       "entries": [
         {
@@ -15567,6 +15567,105 @@
           "d": "✓",
           "date": "2026-08-22",
           "note": "FOUND BY CHECKING A SITE THAT READS AS UNREACHABLE, at the owner's explicit request. 'INTERNAL ERROR ... Aborting' is construction-fault wording, which is why four rounds of SH-4 exit(1) work passed over it.\n\nThe chain has four links and all four were checked rather than assumed: the device is added from cpu_sh.c:200 by the CPU (so every arch-4 CPU has the TCR handler, whatever the machine); only machine_dreamcast.c:51 and machine_landisk.c:81 assign pclock; machine_hpcsh.c:89 names SH7750, which is arch 4; and one guest store then ends the host on -e jornada680.\n\n*** THE FIX IS NOT OBVIOUS AND THAT IS WHY THIS IS FILED. *** Setting pclock in machine_hpcsh.c invents a clock rate for hardware this tree has no documentation for; declining the write keeps the model honest but silently changes timer behaviour. A panel should choose, not the finder.\n\nTHREE machines, not one: testsh reproduces too (machine_test.c:512 also names SH7750), which puts the defect inside the harness's own test surface. The first testsh attempt was VOID -- it reused landisk's scratch address and the store never executed, so 'testsh does not reproduce' was the obvious wrong conclusion; rule 4 caught it. The control is the same store on landisk, which prints '[ sh4 timer 0 clock set to 2083333.312500 Hz ]' and runs on."
+        },
+        {
+          "seat": "opus5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "*** THE ONLY SEAT THAT CAUGHT THE ROUND'S FALSE PANEL CLAIM, AND IT WAS THE SEAT BEING MISCOUNTED. *** It read the shipped comment's 'a panel of nine seats reached this 8-1', observed it was written while this seat was still running, and noted it does not vote B -- an L4 wrong record about the panel itself, inside a round about a guard nobody checked. It ALSO measured that build/gxemul's mtime moved underneath it mid-review, so its own 'pre-fix' run was post-fix and indistinguishable in the output; the round's witness was re-derived from `git show HEAD:` because of that. Further measured findings, all rebuilt in a private clone with build/ and est/ untouched: -E baresh reproduces (third machine); -e jornada690 reproduces; all five machines carry the device (IPRD=0xda74 on each); the accept coverage was ASYMMETRIC (dreamcast had frequency but no readback -- row added); the guard-only growth mutant reddens all four accept rows while every kill row stays green; and Option D works mechanically (-C SH7708R needs no rebuild, store hits non-existant paddr, banner byte-identical) but must be REJECTED because arch-3 removes the entire SH-4 register block, SH-3 interrupt handlers are /* TODO */ stubs at cpu_sh.c:527-533, and cpu_sh.c:224 uses a leftover UTLB loop counter as templ.line, inert only because that handler is a stub. Its verdict was OPTION C (B plus a synthetic clock for baresh/testsh); the B half shipped, the second half is filed as sh4testclock on the round-scope rule."
+        },
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": true,
+          "note": "Liveness token returned. Found the baresh error INDEPENDENTLY of grok, plus four more citation defects of mine: dev_sh4.c:1963-1973 is off by one (`case SH4_TCR0:` is :1964); 'five lines below' is ~3 for the comment and ~22 for the code; the probe cited machine_hpcsh.c:76 for RAM when the dev_ram_init calls are :77-80; and SCRATCH['testsh'] was a dead entry that reads like coverage. *** IT ALSO FOUND A STALE INSTRUCTION IN THE CARRIER *** -- the SH4_VAL_* enum conversion was still listed as an outstanding obligation and had already been discharged, which would have made a future round redo finished work. Supplied the pass-2 hazard that shaped the diff: the guard must stay ABOVE the prescaler switch or timer_hz is set to pclock/4 == 0 and debug() announces it. Verified fatal() does not exit, that break leaves the relative_addr switch before `d->tcr[timer_nr] = idata`, and that timer_hz is consumed only as a numerator (:461). Named the four concrete places the 'this machine cannot run timers' fact must live, following the machine_test.c:97-120 #456 precedent. Refused to settle the SH-3 question from memory after searching hpc_bootinfo.h, machine.h, HISTORY and doc/TODO.html."
+        },
+        {
+          "seat": "grok",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "First seat to catch that machine_test.c:535 is baresh, not testsh -- a THIRD affected machine the brief never named, which widened the defect. Verified the four-link chain against GXEMUL-SEC rather than accepting the brief. Verdict OPTION B. NOTE ON SEAT HEALTH: sampled at 123 bytes it looked exactly like a dead seat; it was MID-ANSWER and returned 12.7 KB. The carrier's sample-twice rule earned its keep again."
+        },
+        {
+          "seat": "codex",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION B with the sharpest single design catch of the round: a lone accept row pinned at landisk's 33.33 MHz is passed by a mutant that HARDCODES 33333333, so the detector cannot tell 'reads the machine's clock' from 'agrees with landisk' -- two clock values are required. Also refuted the testsh-clock proposal on scope: testsh's value is precisely as the regression case for an arch-4 CPU whose board omitted pclock, and giving it a clock would delete the only test of the missing-clock path. Named the guard-growth mutant (move `break` outside the block) and confirmed rung-3 admissibility."
+        },
+        {
+          "seat": "kimi",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "PARTIAL",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION C. Contributed the distinction the round kept: testsh and baresh are SYNTHETIC, so their parameters are the project's own DEFINITION rather than a hardware FACT, and assigning a pclock there invents nothing -- an argument that does NOT transfer to hpcsh. Graded PARTIAL rather than UPHELD because the scope half was refuted by two seats on the project's own round-scope rule and is filed rather than merged. It also asserted from memory that the real Jornada 680 used an SH-3; that is UNVERIFIABLE in this tree and was explicitly not acted on."
+        },
+        {
+          "seat": "agy",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION B, consistent with the majority; no separate finding acted on."
+        },
+        {
+          "seat": "glm",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION B. Framed the rejection of A cleanly in three angles (functional, aliasing, reset-value). No formatted VERDICT line at the head -- FORMAT miss, recorded as such and never as agreement."
+        },
+        {
+          "seat": "deepseek",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION B. Named the failure mode of A correctly. Recovered from the previous round's REFUTED headline."
+        },
+        {
+          "seat": "minimax",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Verdict OPTION B, with the strongest statement of the trade in the panel: 'loud-broken outranks silent-wrong, because silent-wrong is the kind of defect that ships to users and survives for years.' That sentence is in the shipped comment."
         }
       ]
     },
@@ -16525,6 +16624,94 @@
           "d": "✓",
           "date": "2026-08-23",
           "note": "dev_sh4.c:2386-2388 refuses ICR IRLM=1 with a once-per-bit diagnostic. #458 links the two decisions in comments at BOTH sites because they are one decision in two files: implementing IRLM=1 makes declining IPRD wrong on the same day, and would need IPRD applied GATED ON THE LIVE IRLM BIT with an explicit policy for the IRQ2/5/8/11 aliasing (do those slots become the IRL pins, or coexist?). *** REOPEN TRIPWIRE FOR sh4iprbcd: if this lands, `iprd hold` flips from DEFENDING the decline to BLOCKING the feature, so its oracle must be re-pinned FIRST under the oracle-correction rule. *** Chip scope matters: IPRD is SH7750S/SH7750R only (Rev.7.00 note 3 at :39881 and :40248), and machine_dreamcast.c:165 asks for plain SH7750 where the register does not exist; :39956-39959 says IRL levels are FIXED on the SH7750 even in IRLM=1. Nothing mechanical enforces the cross-file coupling -- if IRLM=1 is implemented, no test fails."
+        }
+      ]
+    },
+    {
+      "id": "sh4testclock",
+      "title": "sh4testclock  baresh and testsh have no pclock, so the harness cannot test the TMU path #459 just de-fatalised",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "Held out of #459 as a CAPABILITY change in a different file and a different semantic class, per the round-scope rule -- two seats proposed it and two refused the merge. THE ARGUMENT FOR: baresh and testsh are SYNTHETIC machines, so their parameters are the project's own definition rather than a hardware fact; assigning a pclock invents nothing, and it is the only way the tree gets a machine on which a future TMU round can build a witness at all. THE ARGUMENT AGAINST: testsh's value today is precisely as the regression case for 'an arch-4 CPU whose board omitted pclock', and giving it a clock deletes the only test of the missing-clock path -- so any round doing this MUST keep one machine clockless (baresh or hpcsh) and say which. A seat MEASURED 2^25 = 33554432 working, chosen because every TMU prescaler (/4, /16, /64, /256) divides it exactly and nobody will mistake it for a Jornada measurement; it produces 8388608.0 Hz at /4."
+        }
+      ]
+    },
+    {
+      "id": "sh4cpudevscope",
+      "title": "sh4cpudevscope  the SH-4 on-chip block is added PER-CPU but is machine-scoped, and sh4pclock is one symptom of three",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "*** THE CLASS #459 IS AN INSTANCE OF. *** cpu_sh.c:233-234 does device_add(machine, \"sh4\") from inside the CPU constructor, so a machine-scoped device is created once per CPU. Three measured symptoms: (1) sh4pclock -- the CPU brings the TMU and the board brings the clock, with nothing checking they agree, CLOSED in #459 at the guard; (2) `-n 2 -E landisk` REFUSES TO CONSTRUCT with `ERROR! \"sh4\" collides with device 11 (\"sh4\")`, so SMP is impossible on every SH machine and the reason is this line; (3) dev_sh4.c (near the end of devinit) hardcodes `machine[0].cpu[0].irq[...]` for the TMU interrupt lookup, which is only correct because (2) makes a second CPU impossible. Fixing (2) without (3) would produce a device on CPU 1 whose timer interrupts route to CPU 0."
+        }
+      ]
+    },
+    {
+      "id": "sh4frqcr",
+      "title": "sh4frqcr  FRQCR is a bare latch with no reset value, so a guest reads back 0x0000 -- not a legal value for the register hardware derives pclock FROM",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "dev_sh4.c's `case SH4_CPG_FRQCR` models FRQCR as a plain store/load with no initialisation, so a guest reads 0x0000. SH7750 Hardware Manual Rev.7.00 Table 10.3 gives the legal initial values as H'0E1A / H'0E23 / H'0E13 / H'0E0A depending on clock mode. THIS IS THE HONEST LONG-RUN ANSWER TO sh4pclock: real hardware derives the peripheral clock from FRQCR and the mode pins, and a seat measured that the CPU:peripheral ratio in that table is only ever 4 or 6 -- calibrated against dreamcast, whose 200 MHz / 50 MHz = 4 is a legal mode this tree independently knows. A round here could make pclock DERIVED rather than assigned. Note the bound is not enough on its own: machine_hpcsh.c sets no emulated_hz at all, so the tree does not even claim a Jornada CPU clock to divide."
+        }
+      ]
+    },
+    {
+      "id": "hpcshcpu",
+      "title": "hpcshcpu  the repo contradicts itself about whether hpcsh is an SH-3 or an SH-4 machine, and neither claim is settleable in this tree",
+      "state": "open",
+      "commits": "",
+      "hold": "",
+      "witness": "none",
+      "closure": {
+        "by": "",
+        "badge": "",
+        "note": ""
+      },
+      "entries": [
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "doc/TODO.html:322-323 lists 'SH3-specific devices: Pretty much everything!' immediately followed by 'NetBSD/evbsh3, hpcsh!', grouping hpcsh with an SH3 target; machine_hpcsh.c:89 names SH7750, which is arch 4. TWO SEATS INDEPENDENTLY REFUSED TO SETTLE THIS FROM MEMORY, which is the #357/#362/#365 citation failure NOT repeating -- there is no SH-3 manual in _scratchpad, hpcsh's platid/bootinfo block is entirely commented out, HISTORY never mentions hpcsh, and vripreg.h (included by machine_hpcsh.c) is NEC VR41xx MIPS, a copy-paste leftover from hpcmips. IF IT IS SETTLED as SH-3, note what changes: arch-3 removes the WHOLE dev_sh4 block (CCN/MMU, INTC, TMU, RTC, BSC, DMAC, SCIF, TLB arrays, PCIC), both SH-3 interrupt handlers are /* TODO */ stubs (cpu_sh.c:527-533) that silently drop asserts, and cpu_sh.c:224 uses a leftover UTLB loop counter as templ.line -- latent today only because that handler is a stub. Obtain a source first; the SH7750 precedent shows that costs one download."
         }
       ]
     }

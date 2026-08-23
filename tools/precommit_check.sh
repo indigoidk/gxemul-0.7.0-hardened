@@ -252,6 +252,7 @@ fi
 #  half that lives in the repo.  It CANNOT catch the other half -- whether the artifact
 #  was republished -- because that lives outside git; that step stays manual, and this
 #  comment is the reminder that it exists.
+GRADING_CUTOFF_NOTE=2026-08-23
 say ""; say "T. seat outcomes: a CLOSED row's panel entries should be graded"
 #  SOFT ON PURPOSE, and the reason matters.  A hard gate here would force a grade at
 #  commit time, and a forced grade is a guessed grade -- which is precisely the recall
@@ -294,8 +295,13 @@ else
 	#  closed rows whose panel entries are still ungraded.  That is the moment to grade.
 	_ug=$(python - "$_HERE/pipeline/ledger.json" <<'PYEOF'
 import json, io, sys
+GRADING_CUTOFF = "2026-08-23"   # seat_scorecard.py shipped MID-DAY on 2026-08-22 (8185920),
+                                # so rows closed ON that day are a boundary this cannot
+                                # resolve from dates alone -- grandfather the whole day
+                                # rather than guess intra-day ordering.  From 08-23 the
+                                # check is live and every closure carries its outcomes.
 d = json.load(io.open(sys.argv[1], encoding="utf-8"))
-bad = []
+bad, old = [], []
 for r in d.get("rows", []):
     if r.get("state") != "closed":
         continue
@@ -309,14 +315,44 @@ for r in d.get("rows", []):
     #  check.  Latent rather than live -- zero rows trip it today -- but a check
     #  that CAN be satisfied without doing the thing is the shape this project
     #  calls vacuous, and it was in the tool built to refuse exactly that.
-    if not any(e.get("outcome") not in (None, "UNVERIFIED") for e in ents):
-        bad.append(r["id"])
-print(" ".join(bad[:8]))
+    if any(e.get("outcome") not in (None, "UNVERIFIED") for e in ents):
+        continue
+    #  *** FORWARD-ONLY FROM THE DAY THE SCORECARD SHIPPED (8185920, 2026-08-22). ***
+    #
+    #  This check asked for something seat_scorecard.py's own banner FORBIDS: "Grade an
+    #  entry when its claim is CHECKED -- reconstructing grades later reproduces exactly
+    #  the recall bias this tool replaced."  Eight rows closed between 08-14 and 08-20,
+    #  before the tool existed, and every commit since has printed them as an ungraded
+    #  warning that CANNOT BE HONESTLY CLEARED -- only by the reconstruction the tool was
+    #  built to refuse.  A warning nobody can clear is a warning everybody learns to skip,
+    #  which is worse than not having it.
+    #
+    #  So they are GRANDFATHERED and COUNTED, in the idiom check_stage_panels.py already
+    #  uses -- named as a number rather than a to-do list, so the gap stays visible without
+    #  masquerading as an action item.  A row closed on or after the cutoff is still named
+    #  individually, because that IS the moment its outcome is known.
+    if max([e.get("date", "") for e in ents] or [""]) < GRADING_CUTOFF:
+        old.append(r["id"])
+        continue
+    bad.append(r["id"])
+#  Report the TOTAL, not just the first eight.  The original printed bad[:8]
+#  with no count, so 37 ungraded rows read as 8 -- a silent cap, which is the
+#  shape this project already refuses elsewhere ("silent truncation reads as
+#  covered-everything when it did not").
+print("%s|%d|%d" % (" ".join(bad[:8]), len(old), len(bad)))
 PYEOF
 )
-	if [ -n "$_ug" ]; then
-		warn "closed rows with panel entries but NO seat outcomes: $_ug"
+	_ugnames=$(printf '%s' "$_ug" | cut -d'|' -f1)
+	_ugold=$(printf '%s' "$_ug" | cut -d'|' -f2)
+	_ugtot=$(printf '%s' "$_ug" | cut -d'|' -f3)
+	if [ -n "$_ugnames" ]; then
+		warn "closed rows with panel entries but NO seat outcomes: $_ugtot total, first 8: $_ugnames"
 		warn "  grade them with an outcome + outcome_note; see seat_scorecard.py"
+		warn "  ($_ugold more are GRANDFATHERED pre-$GRADING_CUTOFF_NOTE and not counted above)"
+	elif [ "${_ugold:-0}" != "0" ]; then
+		good "every post-cutoff closed row carries seat outcomes ($_ugold grandfathered
+          -- closed before seat_scorecard.py existed; grading them now would be the
+          reconstruction its own banner forbids)"
 	else
 		good "every closed-and-panelled row carries seat outcomes"
 	fi
