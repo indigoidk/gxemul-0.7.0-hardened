@@ -1,3 +1,128 @@
+## Round 460 (#460) -- one register with no legal first touch
+
+`dev_dreamcast_gdrom.c`'s `GDROM_DATA` arm (physical `0x005f7080`) held FOUR reachable
+`exit(1)` sites. `cond` and `busy` are both zero on a freshly constructed device, so **every
+first touch of the register ended the host process**: any non-16-bit access in either
+direction, the first 16-bit read, and the first 16-bit write.
+
+MEASURED on an unmodified `-E dreamcast -x`: five distinct single-instruction accesses each
+died, each printing its own named text, so each failed for the reason under test.
+
+**The fix is not uniform, and the difference is measured rather than stylistic.** Three sites
+DECLINE -- `0xffff` for the two read paths, ignore for the write -- following `#447`/`#459`.
+The width guard **logs and CONTINUES**, because `len` appeared exactly once in the whole arm
+and removing the guard changes no bound; that is `dev_pvr.c:1577-1581`'s (`#187`) own stated
+warrant, on this same machine.
+
+*** OPTION C -- "emulate narrow access" -- WAS MEASURED ACTIVELY HARMFUL. *** Two pass-1
+seats voted for it. A build showed that letting `cmd_count` step by 1 makes eleven byte
+writes plus one word write go 11 -> 13, **skipping the `== 12` equality**, so `busy & 0x08`
+never clears and the next write reaches the "Too much GDROM_DATA" exit -- a site this round
+had assessed unreachable. It also writes `cmd[12]`, one past the array. *A fix that re-opens a
+dead site is worse than the defect it replaces, and only a build could have found it.*
+
+### The detector was INVERTED, and that was caught before a line of code was written
+
+A pass-1 seat ran the first probe against six builds of its own:
+
+| build | score |
+|---|---|
+| committed (the defect) | 3/13 |
+| **whole arm replaced by `odata = 0xffff; break;`** | **13/13** |
+| the brief's Option C | 11/13 |
+| **the intended decline+latch fix** | **8/13** |
+
+**It punished the correct fix and gave full marks to deleting the register arm.** Cause: six
+rows asserted the old `fatal()` text must be ABSENT -- but the agreed shape KEEPS the
+diagnostic and drops only `exit(1)`.
+
+Re-pinned in ORACLE-CORRECTION ORDER -- expectations written first, committed build measured
+**RED**, and only then the code. The discriminating shape is *drive the same site twice in
+one session*: pre-fix dies, the fix says it **exactly once**, a deleted arm says it **zero**
+times. A survival-only oracle cannot separate the last two.
+
+### Three further detector defects, each found only by measuring
+
+* **All four "same site twice" rows were running ONE access.** `pc` was set to the second
+  site and stepped once, so the second instruction never executed -- the rows read a count of
+  1 whether the latch worked or not. Caught only because the two-different-sites row wanted 2
+  and kept reading 1.
+* **The width rows lost their LOAD variants** in a rebuild. A seat immediately named the
+  mutant that walks the gap: restore `exit(1)` on **wrong-width READ only**, which scored a
+  clean 14/14 while one guest `MOV.B` from the register still ended the host.
+* **The accept row was survival-only** -- it opened a command and never read the register, so
+  a mutant stripping the whole success path scored full marks.
+
+### *** THE FOURTH DE-ESCALATED PREDICATE HAD NO ACCEPT ROW, AND ITS MUTANT SCORED 22/22 ***
+
+Four host-fatal predicates were removed. Three gained accept rows; **`len` gained none**. A
+seat built the shipped code with three lines added -- log, then `odata = 0xffff; break;`
+instead of continuing -- and measured it at **22/22 with a vector byte-identical to the
+shipped build**.
+
+That mutant is not an exotic edit. It is what the other three sites in the same arm do, and
+what `dev_wdc.c:155-167` does for its own bad-length case, so *"harmonise the four sites"*
+reproduces it verbatim. It is also **the round's own central claim** -- "this site logs and
+continues; the other three decline" -- sitting entirely unobservable to the round's own
+detector. L3, so fixed in-round: `accept w8` requires six 8-BIT stores to still assemble and
+dispatch the TOC packet. **Discharged by MEASURED KILL: `m_widthdecline` scores 22/23, red on
+`accept w8` alone.**
+
+### "Log and continue" is memory-safe but NOT width-transparent
+
+An earlier draft claimed six byte stores "assemble the 12-byte packet and dispatch the command
+exactly as six word stores do". Measured: **true for the TOC packet `0x14` only**, whose odd
+bytes are already zero -- which is precisely why the measurement that produced the claim did
+not see it. `idata >> 8` is zero for a byte store, so **every odd command byte is forged to
+zero**, and command `0x30` needs `cmd[1]` in `{0x20,0x24}`. A byte-store packet can never
+satisfy it and reaches `handle_command`'s own `exit(1)`: this build dies there, a declining
+build survives.
+
+**A relocation, not a regression** -- before the fix the same store died one step earlier, at
+the width guard. But it means "dropping the guard changes NO BOUND" is the MEMORY-SAFETY
+argument and not the whole safety story. Memory safety does hold: no index consults `len`,
+`cur_data_offset` advances by two regardless, and no mutant produced an out-of-bounds access.
+
+### The declined value, and what cannot be claimed for it
+
+`0xffff`, following `dev_wdc.c:155-167`'s `(uint64_t)-1` and the physical fact that a released
+ATA/ATAPI data bus reads as all-ones. **But no returned value is self-identifying here** --
+this device's TOC is `memset(0xff)`, so `0xffff` is legitimate payload. *That is why the
+DIAGNOSTIC is the truthfulness channel and why the latch is per-site*, and the code now says
+so where a reader will meet it.
+
+*The per-site decision is this round's own measured warrant and is NOT inherited from the
+precedent it cites: `dev_wdc.c` SHARES one flag between its two sites (`:731`, `:761`).*
+Measured here: a shared bit scores identically on every row that drives one site per session
+-- which was every row the detector had -- and diverges only when two sites run in one
+session, where it loses the second diagnostic permanently.
+
+### `:334` joined, and the join failed a test it is recorded as passing
+
+`:315` and `:334` are one predicate family -- "read when there is nothing to give" -- and
+shipping three of four would leave a device where a declined read is safe in one state and
+lethal in another. A pass-1 seat ruled it should be FILED because witnessing it needed a new
+probe shape; that was **overturned by measurement**, using the existing helpers plus a
+three-instruction loop under `step N`.
+
+**But the reopening rule prices "no new oracle", and this join failed that test.** Reaching
+`:334` needed a new opcode (`BRA_BACK3`), a new loop shape, and a new state manipulation
+(writing `CNTHI=0xff` *after* the command so `DATA_AVAIL` stays set past the buffer end).
+Recorded as **deliberately overridden**, not as met.
+
+*Residual, filed:* after the fix `cond` permanently lies -- it claims data with an empty
+buffer. Clearing `COND_DATA_AVAIL` at exhaustion would repair the state and is out of scope
+here.
+
+### Detector: 5/23 pre-fix, 23/23 post-fix; gate 10 PASS
+
+Same script both sides, the pre-fix build rebuilt from `git show HEAD:` into a private clone.
+Every row except the three controls has a measured kill. Four `exit(1)` calls removed from
+the file; the SH surface still holds roughly twenty, filed as `gdromdefault` and siblings.
+
+*One self-inflicted scare worth recording: deleting the dead `toc()` helper took the register
+constants with it and the probe failed to import. Caught by running it, not by reading it.*
+
 ## Round 459 (#459) -- the CPU brought the timer and the board brought the clock, and nothing checked that the two agreed
 
 `dev_sh4.c`'s TCR write arm opened with `if (cpu->cd.sh.pclock == 0) { fatal("INTERNAL

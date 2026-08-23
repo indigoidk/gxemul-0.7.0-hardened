@@ -418,6 +418,55 @@ else
     done
 fi
 
+# ------------------------------------------------------------------ #460 gdrom_data
+#  FOUR guest-reachable exit(1) sites in ONE register's access arm.  `cond` and `busy`
+#  are both zero on a fresh device, so THERE WAS NO LEGAL FIRST TOUCH of GDROM_DATA:
+#  any non-16-bit access in either direction, the first 16-bit read, and the first
+#  16-bit write each ended the host process.  Measured 5/23 pre-fix, 23/23 post-fix,
+#  the pre-fix build rebuilt from `git show HEAD:` and not from build/.
+#
+#  Dreamcast needs -x or it exits before the debugger prompt (two console inputs,
+#  console.c:994-1007).  Without it a session dies for a CONFIGURATION reason and
+#  prints the same "died" the defect prints -- that cost #459 a false positive.
+GDLOG=$LOGDIR/gate_gdrom_data.log
+python3 gdrom_data_probe.py "$PMAX" "$KERNEL" > "$GDLOG" 2>&1 || true
+
+if ! grep -q "GDROM_RESULT=" "$GDLOG"; then
+    note "gdrom_data probe produced no result line; last lines follow"
+    tail -5 "$GDLOG" | sed 's/^/       /'
+    check "gdrom_data probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$GDLOG" | sed 's/^/       /'
+    gdctrl=$(grep -o "GDROM_CONTROL=[A-Z]*" "$GDLOG" | tail -1 | cut -d= -f2)
+    check "gdrom_data control proves it measures" "${gdctrl:-missing}" "OK"
+    gdres=$(grep -o "GDROM_RESULT=[0-9]*/[0-9]*" "$GDLOG" | tail -1 | cut -d= -f2)
+    check "gdrom_data rows run"     "${gdres#*/}" 23
+    check "gdrom_data rows correct" "${gdres%/*}" "${gdres#*/}"
+    #  THE `x1` COUNT ROWS ARE THE POINT, not the survival rows.  The first oracle
+    #  asserted the OLD fatal text must be ABSENT -- but the fix KEEPS the diagnostic
+    #  and drops only exit(1), so DELETING the whole register arm scored 13/13 while
+    #  the real fix scored 8/13.  Re-pinned to "the diagnostic appears EXACTLY ONCE":
+    #  pre-fix dies, the fix says it once, a deleted arm says it zero times.
+    #
+    #  THE LOAD VARIANTS ARE LOAD-BEARING.  A rebuild once wrapped the width rows
+    #  around stores only, and a seat named the mutant that walks that gap: restore
+    #  exit(1) on WRONG-WIDTH READ ONLY, which scored a clean 14/14 while one guest
+    #  MOV.B read from the register still ended the host.
+    #
+    #  `two sites x2` is the ONLY row separating a per-site latch from ONE SHARED
+    #  BIT; every other row drives one site per session and cannot see the axis.
+    #
+    #  `accept d0`/`accept d1` are the de-escalation accept for four removed
+    #  predicates -- a legal TOC PIO returning 0x0010 then 0xffff9600 (mov.w
+    #  sign-extends, and 0x9600 has bit 15 set).  Without them, a mutant that strips
+    #  the whole success path scores full marks.  `declined val` pins what a DECLINED
+    #  read returns; without it 0xffff -> 0 passes while the diagnostic claims 0xffff.
+    for v in "live" "devsig" "gdrom map" "w8 store" "w8store x1" "w32 store" "w32store x1" "w8 load" "w8load x1" "w32 load" "w32load x1" "w16 load" "w16load x1" "w16 store" "w16store x1" "two sites" "two sites x2" "accept d0" "accept d1" "declined val" "overread" "overread x1" "accept w8"; do
+        n=$(count "$GDLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read

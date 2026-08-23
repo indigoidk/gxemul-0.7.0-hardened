@@ -7285,3 +7285,259 @@ ordinary guest-supplied value, no privilege or unusual state required.
 `console.c:994-1007` makes that fatal without it, which is the false-positive that nearly
 cost `#459` a fourth machine. **Not yet witnessed:** no dreamcast image exists in `_images/`,
 so the probe must drive the GDROM registers by planted guest stores rather than by booting.
+
+### `gdromoob` — ASSESSED, NOT A DEFECT (2026-08-23, during `sh4gdromexit` pass 1)
+
+Recorded so nobody re-raises it. The GDROM read path at `:318-320` looks like a heap
+over-read:
+
+```c
+if (d->cur_data_offset < d->data_len) {
+        odata  =  d->data[d->cur_data_offset ++];
+        odata |= (d->data[d->cur_data_offset ++] << 8);   /* second increment */
+```
+
+**The bound is checked once and the index advances twice.** At `cur_data_offset ==
+data_len - 1` the check passes and the second read is `d->data[data_len]` — one byte past a
+`malloc(data_len)` buffer. And `data_len` comes straight from `d->cnt` (`alloc_data`, `:89`),
+which is **fully guest-settable**: `GDROM_CNTLO` at `:393` and `GDROM_CNTHI` at `:401` let a
+guest write any 16-bit value.
+
+**It is not reachable, because both `alloc_data` call sites force an EVEN count:**
+
+* `:120` — Read TOC requires `d->cnt == 408` exactly, or it faults first.
+* `:194` — the sector read requires `sector_count * 2048 == d->cnt`, so `cnt` is a multiple
+  of 2048.
+
+With `data_len` even and `cur_data_offset` stepping by two from zero, the offset is always
+even, so `offset < data_len` implies `offset <= data_len - 2` and the second index is at most
+`data_len - 1`. In bounds.
+
+**What would make it live**, recorded because it is one edit away: any third `alloc_data`
+caller that does not constrain `cnt` to an even value, or relaxing either guard above. A
+round that adds a command to this device must check that before anything else. *The guards
+that make this safe are doing load-bearing work they do not advertise* — neither mentions
+the read path they protect.
+
+*Marginal, noted not filed:* `:191-194` admits `sector_count == 0` with `cnt == 0`, giving
+`malloc(0)`. Harmless on glibc (unique non-NULL), implementation-defined in principle, and it
+lands on the `:334` exit anyway, which this round's scope already covers.
+
+### In-tree precedent for the width question, which the pass-1 brief did not cite
+
+The panel split A/B/C on whether a wrong-width access should be DECLINED or EMULATED. **This
+project has already answered it twice, once in the same machine and once in the same file:**
+
+* `dev_pvr.c:1577-1581` — *the same class, on the Dreamcast* — carries `#187`'s note:
+  *"guest-reachable; the masked access below is bounded to the TA buffer, so log and
+  continue, don't exit(1)."* It neither declines nor emulates: it logs and **proceeds**.
+* `dev_dreamcast_gdrom.c:197` — *this very file* — already carries
+  `break;  /* OB-20: was exit(1) */`, so one site here has been de-fatalised before.
+
+**But `#187`'s warrant does not transfer unexamined.** Its reason was that *the continuation
+was bounded*. At `GDROM_DATA` the code below the width check assumes 16 bits throughout —
+`memory_writemax64(cpu, data, len, odata)` at `:451` and the paired byte reads at `:319-320`
+— so "log and continue" needs its own bounded-ness argument here, not an inherited one.
+Recorded as the question the fix must answer rather than as a precedent that settles it.
+
+### `gdromdefault` — open, and MEASURED BROADER THAN THE ROUND THAT FOUND IT
+
+`dev_dreamcast_gdrom.c:439-447`. The device registers a **0x100 window** at `0x005f7000` and
+its `switch` handles about eight offsets. The `default:` arm prints and then runs `exit(1)` —
+for a **read or a write**, at **any width**, at **every other offset in the window**.
+
+**MEASURED on an unmodified `-E dreamcast -x`**, one 32-bit guest load per offset:
+
+```
+  +0x00 +0x04 +0x08 +0x0c +0x10 +0x14 +0x1c +0x20 +0x30 +0x40
+  +0x50 +0x60 +0x70 +0x78 +0x7c +0xa0 +0xc0 +0xf0 +0xfc      -> DIED, "default: arm"
+  +0x90 +0x94                                                 -> alive
+
+  21 sampled, 19 DIED, 2 survived
+```
+
+*32-bit was chosen deliberately:* it reaches `default:` for unhandled offsets **without**
+first tripping `GDROM_DATA`'s own width guard, so a death is attributable to this arm and not
+to another. Each dead session printed `[ dreamcast_gdrom: read from addr 0x… ]` — its own
+named text, so each failed for the reason under test.
+
+*** THIS IS ONE PREDICATE WITH A LARGER BLAST RADIUS THAN THE ENTIRE `GDROM_DATA` ARM. ***
+That arm needs a specific register and, for two of its three sites, specific device state.
+This one needs **any address in a 256-byte window** that nobody implemented. A driver or a
+diagnostic that scans the device's register space — an ordinary thing to do — dies on its
+first unhandled offset.
+
+**Ordering note, recorded so the sequencing is deliberate rather than accidental.** The
+carrier says a witness makes an item *eligible* while **severity** orders the queue, and by
+severity this outranks `sh4gdromexit`. It is nevertheless queued *behind* it, for one
+concrete reason: `dev_dreamcast_gdrom.c` has **no once-only latch mechanism at all** today,
+and `sh4gdromexit` builds it. Once that ships, this row is a cheap follow-up — one predicate,
+one new latch instance, and a detector that samples the window exactly as above.
+
+`:434` is the third of the family: any `GDROM_COND` write outside `{0xa0, 0xef}` runs
+`exit(1)`, one instruction, no state required. Same disposition.
+
+## 2026-08-23 — `sh4gdromexit` pass 1: the detector was INVERTED, and Option C resurrects a host kill
+
+### The detector rewarded deleting the code it was written to defend
+
+A measuring seat ran the pass-1 probe against six builds of its own:
+
+| build | score |
+|---|---|
+| committed (the defect) | 3/13 |
+| **whole arm replaced by `odata=0xffff; break;`** | **13/13** |
+| the brief's Option C | 11/13 |
+| **the intended decline+latch fix** | **8/13** |
+
+*** The detector punished the correct fix and gave full marks to deleting the register arm. ***
+Cause: six rows asserted the old `fatal()` text must be **absent**, but the `#447`/`#459`
+shape this round agreed **keeps the diagnostic** and drops only `exit(1)`.
+
+**Re-pinned in oracle-correction order** — expectations written first, committed build
+measured **RED at 4/14**, and only then any code change. The discriminating shape is *drive
+the same site twice in one session*: pre-fix dies, the correct fix survives with the
+diagnostic **exactly once**, a deleted arm survives with **zero**. A survival-only oracle
+cannot separate the last two; a count can.
+
+### OPTION C IS NOT MERELY WRONG — IT RESURRECTS A HOST KILL, AND THAT IS MEASURED
+
+Two seats voted for emulating narrow accesses. Built and measured: allowing narrow writes
+lets `cmd_count` step by **1**, so eleven byte writes plus one word write goes 11 → 13,
+**skipping the `== 12` equality**. `busy & 0x08` never clears and the next write reaches
+`:340` — a site this round had assessed as unreachable. The Option C build **dies there**.
+It also writes `cmd[12]`, one past `uint8_t cmd[12]`.
+
+*A fix that re-opens a dead site is worse than the defect it replaces, and only a build
+found it.*
+
+### The width guard is BOUNDED — measured, so `#187`'s precedent transfers
+
+`len` appears **exactly once in the entire `GDROM_DATA` arm — the guard itself**. No index
+expression consults it. Confirmed behaviourally: byte, word and longword reads all consume
+exactly two bytes and return identical `odata`, and six *byte* stores assemble the 12-byte
+packet and dispatch the command exactly as six word stores do. Removing the guard changes
+**no bound**, which is precisely `dev_pvr.c` `#187`'s stated warrant — so "log once and
+continue" transfers, and that is *not* the brief's Option C.
+
+### Use `dev_wdc.c`'s precedent, not `sh4_val_first()`
+
+`dev_wdc.c` is this tree's **other ATA/ATAPI data port**, and `#337` fixed this exact class
+there with a plain `int warned_badlen` struct field. `sh4_val_first()` is an SH4 helper; the
+GD-ROM sits on the Holly/G1 bus, not the SH4. A `uint8_t warned` bitmask in the existing
+struct costs nothing and couples nothing.
+
+`dev_wdc.c:155-167` also settles the declined-read value: it returns `(uint64_t)-1` with a
+diagnostic and no exit. **But no value is self-identifying here** — this device's TOC is
+`memset(0xff)`, so `0xffff` is legitimate payload. *That is exactly why the diagnostic, not
+the value, is the truthfulness channel, and why the latch must be per-site.*
+
+### Census corrected: EIGHT single-access-fatal sites in this file, not three
+
+*(The list below names NINE and the heading says eight. `:334` is the one that does not
+belong: this document itself says it needs a legal command, 204 successful reads and a
+four-instruction loop under `step N` — that is not single-access. The other eight are
+right. Corrected rather than renumbered, because the discrepancy is the useful part.)*
+
+14 live `exit(1)` (17 textual, 3 disabled). Single-access-fatal on a fresh device:
+`:308`, `:315`, `:352` (this round), `:334`, `:374` (`GDROM_UNKNOWN_0x88`, one store of
+anything ≠ 0xb), `:434` (`GDROM_COND`), `:447` (`default:`), `:505` and `:518` (DMA).
+
+* **`:334` IS reachable AND needs no new probe shape** — measured, using the existing
+  helpers plus a four-instruction loop under `step N`. It joins on the merits: `:315` and
+  `:334` are the same predicate family ("read when there is nothing to give"), and fixing one
+  while the other stays fatal leaves a device where a declined read is safe in one state and
+  fatal in another.
+* **`:340` confirmed DEAD by measurement** — three constructed paths all reached `:352`.
+
+### The `default:` arm: SEQUENCE, and say plainly why
+
+**34 devices in `src/devices` have an `exit(1)`-ing `default:` arm; 218 live `exit(1)` calls
+in that directory.** `:447` belongs to that cross-cutting class — which this project has
+already named (`c677764`, "the class is 72 files wide") — not to the `GDROM_DATA` family. Its
+accept side is a *different oracle set*: all eight implemented registers, not one. So the
+"no new oracle" join test fails.
+
+**The round therefore ships the smaller defect first, and the reason is not severity.** It is
+that `:447`'s fix *design* is unsettled — what should an unimplemented offset return, and is
+a 0x100 window right when eight offsets are implemented? Bundling an undesigned fix into a
+designed round is how scope control fails.
+
+### Refinement to the closed `gdromoob` negative
+
+Rather than filing it against a hypothetical third `alloc_data` caller, **pair the check with
+the increments**: `cur_data_offset + 1 < data_len`. That removes the dependence on an
+invariant maintained two functions away, at zero cost.
+
+### `#460` records corrections, applied before commit
+
+*** ALL WITHIN-FILE LINE NUMBERS IN THE `sh4gdromexit` / `gdromoob` / `gdromdefault`
+ENTRIES ABOVE ARE PRE-FIX (at HEAD `e4390ea`), AND THE `#460` DIFF MOVED THEM BY +26 TO
++90 LINES. ***
+
+They were correct when written at pass 1. A pass-2 seat measured the drift: `:197` (the
+OB-20 `break`) is now `:223`; `memory_writemax64` at `:451` is now `:529`; the paired reads
+at `:319-320` are now `:379-380`; `gdromoob`'s `:318-320`/`:89`/`:393`/`:401`/`:120`/`:194`
+are now `:378-380`/`:115`/`:471`/`:479`/`:146`/`:220`; `gdromdefault`'s `:439-447`/`:434`
+are now `:517-525`/`:510`.
+
+**This is the same trap `#459` recorded and it repeated one file over** — there the stale
+citations were in a source comment, here in the records file. The rule stands and now has a
+second instance behind it: *cite line numbers across files, never within one, and where a
+records file must carry them, stamp the revision they were taken at.* Annotated rather than
+re-cited, because re-citing guarantees the next diff invalidates them again.
+
+**The `0xffff -> 0` escape is CLOSED, not filed.** A pass-2 seat named it — no row pinned
+what a declined read *returns*, so replacing `0xffff` with `0` passed everything while the
+diagnostic still claimed `0xffff`. The `declined val` row now pins it at `0xffffffff`
+(`mov.w` sign-extends), on a first-touch load, which is the one path the legal TOC sequence
+cannot explain.
+
+**The wrong-width READ escape was the sharper one.** The pass-2 rebuild wrapped the width
+rows around *stores* only, and restoring `exit(1)` on wrong-width **read** alone scored a
+clean **14/14** while one guest `MOV.B` from `0xa05f7080` still ended the host. `w8 load` and
+`w32 load` are back, and their loss is why they now carry a comment saying they are not
+decoration.
+
+**De-escalation, stated rather than left as a gap:** four host-fatal predicates were removed
+and the detector carries accept rows for **three**. The width predicate is **exempt** — it
+tests the access width against a compile-time constant and no guest store reaches its
+operand, the same failability carve-out this project applies to read-only and
+never-set-by-device bits. That exemption is now written at the site.
+
+**On the re-pointed regexes** — the detector's `SAYS` patterns were re-pointed at the new
+diagnostic strings after the fix landed. A seat ruled that the pre-fix-RED guard alone is
+**not** sufficient, and the reasoning is worth keeping: pre-fix the build reddens by *process
+death*, before any count is taken, so death-red cannot distinguish "the regex matches the
+correct diagnostic" from "the regex matches any survival". What actually defends the re-point
+is the **surviving-but-wrong** control — a deleted arm survives and emits nothing, so the
+exactly-once counts redden. Those rows are live, so the re-point is honest; the rule is that
+a re-pointed regex needs a surviving-wrong negative control, not just a pre-fix red.
+
+### `gdromcondlies` — open (residual of `#460`)
+
+After `#460`, `COND_DATA_AVAIL` **permanently lies** once a guest reads past the buffer: the
+device keeps advertising that data is available while returning `0xffff` for every subsequent
+read, announcing it once. Pre-fix that inconsistency was unmissable, because the same read
+ended the host.
+
+Clearing `COND_DATA_AVAIL` at exhaustion would repair the state. Deliberately out of scope for
+`#460` — that round's fix design is "decline and say so", and changing what the device
+*advertises* is a behaviour change with its own oracle.
+
+*Recorded because a de-escalation makes exactly this class quieter:* the fix removed the loud
+symptom of a state inconsistency without removing the inconsistency.
+
+### `hlen` census is now stale by one
+
+The ledger row `hlen` ("device handlers that ignore the access length") counts **8**
+warn-then-service handlers. `#460` makes `GDROM_DATA` the **ninth**. Noted here rather than
+silently left, because that row's own entry warns about exactly this drift.
+
+### `#460` residual escapes, filed as coverage debt
+
+* A declined **32-bit** read returns `0x0000ffff`, not `0xffffffff` — a small divergence from
+  the cited `dev_wdc.c` `(uint64_t)-1` precedent, unpinned by any row.
+* The width latch can be **spent by an access that was declined anyway**, so a later *landing*
+  narrow store is silent. Inherent to warn-once — `dev_wdc.c` has the same property. Document,
+  do not fix.

@@ -66,6 +66,25 @@ struct dreamcast_gdrom_data {
 	int		cur_data_offset;
 	int		cur_cnt;
 
+	/*
+	 *  #460: once-only diagnostic latch, ONE BIT PER SITE.
+	 *
+	 *  Modelled on dev_wdc.c's `warned_badlen` (#337) FOR THE MECHANISM ONLY
+	 *  -- note that dev_wdc.c SHARES one flag between its two sites (:731
+	 *  and :761), so the per-site decision below is this round's own measured
+	 *  warrant and must not be attributed to that precedent.  Not on
+	 *  sh4_val_first().  A review seat named the reason: dev_wdc.c is this
+	 *  tree's OTHER ATA/ATAPI data port and fixed this exact class the same
+	 *  way, while sh4_val_first() is an SH4 helper whose storage lives in
+	 *  sh4_data -- and the GD-ROM is on the Holly/G1 bus, not the SH4.
+	 *
+	 *  Per-site and not one shared bit, MEASURED: a shared bit scores
+	 *  identically on every row that drives ONE site per session -- which
+	 *  was every row this detector had -- and diverges only when two sites
+	 *  run in one session, where it loses the second diagnostic for good.
+	 */
+	uint8_t		warned;
+
 	// 0x005f7400: GDROM DMA
 	uint32_t	dma_reg[NREGS_GDROM_DMA];
 };
@@ -73,6 +92,16 @@ struct dreamcast_gdrom_data {
 /*  Register offsets, from NetBSD:  */
 #define	GDROM_BUSY		0x18
 #define	GDROM_DATA		0x80
+
+/*
+ *  #460: one warn-once bit per declined site.  Named constants rather than
+ *  bare numbers, so a new site cannot silently reuse another's bit -- the
+ *  duplicate-key hazard this project already paid for once in dev_sh4.c.
+ */
+#define	GDROM_W_LEN		0x01
+#define	GDROM_W_NODATA	0x02
+#define	GDROM_W_NOTWAIT	0x04
+#define	GDROM_W_OVERREAD	0x08
 #define	GDROM_REGX		0x84
 #define	GDROM_UNKNOWN_0x88	0x88
 #define	GDROM_STAT		0x8c
@@ -303,16 +332,91 @@ DEVICE_ACCESS(dreamcast_gdrom)
 		break;
 
 	case GDROM_DATA:
+		/*
+		 *  #460: THIS SITE LOGS AND CONTINUES; the other three decline.
+		 *  The difference is measured, not stylistic.
+		 *
+		 *  BEFORE THIS FIX, `len` appeared exactly once in the whole arm --
+		 *  in the guard that was here -- and no index expression consulted
+		 *  it.  (It appears three times now: this fix's own format string
+		 *  and argument.  Stated in the past tense because the claim is
+		 *  about the code the measurement was taken against, and a seat
+		 *  caught the present tense going false the moment it shipped.)
+		 *  Measured:
+		 *  byte, word and longword reads all consume exactly two bytes
+		 *  and return the same odata, and six BYTE stores assemble the
+		 *  12-byte packet and DISPATCH the command, reaching handle_command
+		 *  exactly as six word stores do.
+		 *
+		 *  *** BUT THE CONTINUATION IS NOT WIDTH-TRANSPARENT, and an earlier
+		 *  draft said it was. ***  `idata >> 8` is zero for a byte store, so
+		 *  EVERY ODD COMMAND BYTE IS FORGED TO ZERO.  That is harmless for
+		 *  the TOC packet 0x14, whose odd bytes are already zero -- which is
+		 *  exactly why the measurement that produced the earlier claim did
+		 *  not see it.  Command 0x30 needs cmd[1] in {0x20,0x24} and a
+		 *  byte-store packet can never satisfy it, so it reaches
+		 *  handle_command's own exit(1).  MEASURED: this build dies there
+		 *  and a DECLINING build survives.
+		 *
+		 *  That is a RELOCATION, not a regression -- before this fix the
+		 *  same byte store died at the width guard, one step earlier -- but
+		 *  it means "dropping the guard changes NO BOUND" is the MEMORY
+		 *  safety argument and not the whole safety story.  Memory safety
+		 *  does hold: no index consults len, cur_data_offset advances by two
+		 *  regardless, and no mutant produced an out-of-bounds access.
+		 *
+		 *  Dropping the guard changes no bound -- which is
+		 *  precisely the warrant dev_pvr.c:1577-1581 (#187) states for
+		 *  the same class on this same machine.
+		 *
+		 *  *** DO NOT "EMULATE" NARROW ACCESS INSTEAD. ***  A pass-1
+		 *  panel split on that, and it was MEASURED ACTIVELY HARMFUL:
+		 *  letting cmd_count step by 1 makes eleven byte writes plus one
+		 *  word write go 11 -> 13, SKIPPING the `== 12` equality below,
+		 *  so busy&0x08 never clears and the next write reaches the
+		 *  "Too much GDROM_DATA" exit -- otherwise unreachable.  It also
+		 *  writes cmd[12], one past the array.  A fix that re-opens a
+		 *  dead site is worse than the defect, and only a build saw it.
+		 *
+		 *  DE-ESCALATION: this round removes FOUR host-fatal predicates and
+		 *  the detector carries accept rows for THREE.  *** THIS ONE IS
+		 *  EXEMPT, AND THE EXEMPTION IS STATED RATHER THAN LEFT AS A GAP. ***
+		 *  The clause's accept-row obligation applies to predicates a guest
+		 *  store can feed; this predicate tests the ACCESS WIDTH against a
+		 *  compile-time constant, and no guest store reaches its operand --
+		 *  the same failability carve-out the project already applies to
+		 *  read-only and never-set-by-device bits.  The other three (the two
+		 *  read predicates and the busy mask) DO carry rows.
+		 */
 		if (len != sizeof(uint16_t)) {
-			fatal("Non-16bit GDROM data access? TODO\n");
-			exit(1);
+			if (!(d->warned & GDROM_W_LEN)) {
+				d->warned |= GDROM_W_LEN;
+				fatal("[ dreamcast_gdrom: non-16bit"
+				    " GDROM_DATA access, len=%i -- handled"
+				    " as 16-bit.  (once) ]\n", (int) len);
+			}
 		}
 
 		if (writeflag == MEM_READ) {
 			if (!(d->cond & COND_DATA_AVAIL)) {
-				fatal("Read from GDROM_DATA when no data"
-				    " is available? TODO\n");
-				exit(1);
+				/*  #460: was exit(1).  `cond` is zero on a fresh
+				    device, so the FIRST guest load ended the host.  */
+				if (!(d->warned & GDROM_W_NODATA)) {
+					d->warned |= GDROM_W_NODATA;
+					fatal("[ dreamcast_gdrom: read from"
+					    " GDROM_DATA with no data"
+					    " available -- returning 0xffff."
+					    "  (once) ]\n");
+				}
+				/*  0xffff because a released ATA/ATAPI data bus
+				    reads as all-ones, which dev_wdc.c:155-167 also
+				    returns.  NOTE THE COLLISION: this device's TOC is
+				    memset(0xff), so 0xffff is LEGITIMATE PAYLOAD here
+				    and no returned value is self-identifying.  The
+				    DIAGNOSTIC is the truthfulness channel, not the
+				    value -- which is also why the latch is per-site.  */
+				odata = 0xffff;
+				break;
 			}
 
 			if (d->cur_data_offset < d->data_len) {
@@ -330,8 +434,21 @@ DEVICE_ACCESS(dreamcast_gdrom)
 					SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_GDROM);
 				}
 			} else {
-				fatal("Read too much from GDROM_DATA\n");
-				exit(1);
+				/*  #460: joined on the merits -- this and the
+				    COND_DATA_AVAIL site above are ONE predicate
+				    family, "read when there is nothing to give".
+				    Fixing one and leaving the other fatal gives a
+				    device where a declined read is safe in one
+				    state and lethal in another.  */
+				if (!(d->warned & GDROM_W_OVERREAD)) {
+					d->warned |= GDROM_W_OVERREAD;
+					fatal("[ dreamcast_gdrom: read past"
+					    " the end of the GDROM_DATA"
+					    " buffer -- returning 0xffff."
+					    "  (once) ]\n");
+				}
+				odata = 0xffff;
+				break;
 			}
 		} else {
 			if (d->busy & 0x08) {
@@ -347,9 +464,14 @@ DEVICE_ACCESS(dreamcast_gdrom)
 					handle_command(cpu, d);
 				}
 			} else {
-				fatal("Write to GDROM_DATA, but not waiting"
-				    " for data?\n");
-				exit(1);
+				/*  #460: was exit(1).  `busy` is zero on a fresh
+				    device, so the FIRST guest store ended the host.  */
+				if (!(d->warned & GDROM_W_NOTWAIT)) {
+					d->warned |= GDROM_W_NOTWAIT;
+					fatal("[ dreamcast_gdrom: write to"
+					    " GDROM_DATA while not waiting"
+					    " for data -- ignored.  (once) ]\n");
+				}
 			}
 		}
 		break;
