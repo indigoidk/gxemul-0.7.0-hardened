@@ -259,7 +259,22 @@ say ""; say "T. seat outcomes: a CLOSED row's panel entries should be graded"
 #  every commit, so a seat's accuracy stops being something anyone has to remember.
 #  Introduced 2026-08-22 after the ledger, with 1525 entries across nine seats, could
 #  not answer "which seat is most accurate" -- it recorded participation and nothing
-#  else.  Promote to hard only after a real miss shows a soft warning was not enough.
+#  else.
+#
+#  *** OWNER DECISION 2026-08-22: STAYS SOFT, AND THE REVIEW IS SCHEDULED. ***
+#  The pass-2 panel argued HARD, and the argument is good: a soft check ignored for six
+#  months yields 1.3% coverage forever, which is indistinguishable from not having the
+#  tool at all.  The counter is that a hard gate forces a grade at commit time, and a
+#  forced grade is a guessed grade -- the exact bias this tool replaces.
+#
+#  Neither side is measured, so it is settled BY MEASUREMENT rather than by argument:
+#  leave it soft and RE-CHECK COVERAGE AFTER ROUGHLY TEN MORE ROUNDS.  If it has not
+#  moved off the floor, the panel was right and this goes hard -- preferably in the
+#  closed-rows-only form, since closing a row is the moment its outcome is actually
+#  known.  Write the coverage number down when you check, so the next reader sees a
+#  trend instead of re-arguing it.
+#
+#  BASELINE AT THE DECISION: 1558 entries, 20 graded, 1.3%.
 SCARD=$_HERE/pipeline/seat_scorecard.py
 if [ ! -f "$SCARD" ]; then
 	warn "seat_scorecard.py MISSING -- seat accuracy NOT tracked"

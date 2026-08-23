@@ -214,6 +214,42 @@ for v in "movca.l" "fmovd @r1" "fmovd @r2" "fmovd xd st" "fmovd xd ld" \
     check "  round 80: $v" "$n" 1
 done
 
+# ---- #457: a UTLB associative write matching two entries ended the host -------
+#  Wired in the SAME commit as the fix, per gate 6's structural note.
+#
+#  SIX ROWS, and two of them exist because a survival-only oracle was MEASURED
+#  passing six different mutants.  `expevt` + `pc` kills four of them; the other two
+#  need rows nothing else provides:
+#    * `tlbm sr` pre-sets SR to 0x40008000 so the reset transition's THIRD statement
+#      is observable.  From the reset-default SR that statement is a NO-OP, which is
+#      why an arm that sets pc and vbr and forgets it passes every other row.
+#    * `tlbm single` gives entry 1 a different VPN so nothing should fire.  It is the
+#      only row that sees a `n_hits >= 1` mutant, and it doubles as the liveness
+#      control -- it proves the three stores execute and the session survives them.
+#
+#  landisk and not testsh, deliberately: landisk's PROM leaves vbr = 0x8c000000, so
+#  `vbr == 0` is a real transition.  On testsh vbr is already 0 and that row would be
+#  vacuous.
+TMLOG=$LOGDIR/gate_sh_tlbmulti.log
+python3 sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
+
+if ! grep -q "SH_TLBMULTI_RESULT=" "$TMLOG"; then
+    note "sh_tlbmulti probe produced no result line; last lines follow"
+    tail -5 "$TMLOG" | sed 's/^/       /'
+    check "sh_tlbmulti probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$TMLOG" | sed 's/^/       /'
+    tmctrl=$(grep -o "SH_TLBMULTI_CONTROL=[A-Z]*" "$TMLOG" | tail -1 | cut -d= -f2)
+    check "sh_tlbmulti control proves it measures" "${tmctrl:-missing}" "OK"
+    tmres=$(grep -o "SH_TLBMULTI_RESULT=[0-9]*/[0-9]*" "$TMLOG" | tail -1 | cut -d= -f2)
+    check "sh_tlbmulti rows run"     "${tmres#*/}" 6
+    check "sh_tlbmulti rows correct" "${tmres%/*}" "${tmres#*/}"
+    for v in "tlbm alive" "tlbm expevt" "tlbm pc" "tlbm vbr" "tlbm sr" "tlbm single"; do
+        n=$(count "$TMLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ---- #455: an interrupt at priority 0 ended the host process -----------------
 #  Wired in the SAME commit as the fix.  Gate 6's structural note says a probe that
 #  ships with its wiring cannot skip its census pin, because the wiring forces a

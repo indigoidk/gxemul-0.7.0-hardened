@@ -185,6 +185,7 @@ MANIFEST = {
     "sh4_val_witness.py":          (CLASS_WITNESS,  "#447 pre-fix symptom: the host dies"),
     "sh_halt_probe.py":            (CLASS_DETECTOR, "SH halt path"),
     "sh_intprio_probe.py":         (CLASS_DETECTOR, "#455 SH interrupt priority 0"),
+    "sh_tlbmulti_probe.py":        (CLASS_DETECTOR, "#457 SH TLB multiple hit"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 
     # -- detectors that NOTHING RUNS.  Each carries a dated exemption below. --------------

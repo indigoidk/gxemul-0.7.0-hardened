@@ -1,3 +1,79 @@
+## Round 457 (#457) -- three guest stores ended the host process
+
+`dev_sh4.c` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when a guest
+ASSOCIATIVE write to the UTLB address array matches more than one entry.
+`sh_exception()` had no case for `0x140`, so it fell to `default:` and ran `exit(1)`.
+
+The fix is one `case` label joining the existing reset group. **Table 5.2 Exceptions**
+(`_scratchpad/sh7750_hardware.txt:11994`, rows at `:12006`/`:12010`) puts both TLB
+multiple-hit exceptions in Reset/Abort, vector `H'A000 0000`, code `H'140` -- the same
+rows as power-on and manual reset. `EXPEVT` survives grouping because the common code
+assigns it BEFORE the switch.
+
+**Deleting the detection was the brief's own favoured reading and is REFUTED** by
+3.7.4 (`:10141-10143`), which both raises the exception and supplies the ordering:
+*"D and V specified in the data field are written to that entry. If there is more than
+one matching entry, a data TLB multiple hit exception results."* Write first, then
+raise -- so update-before-count is faithful and a proposed scan-first rewrite would be
+less so.
+
+### 1/6 pre-fix, 6/6 post-fix, and the single-hit control is GREEN PRE-FIX
+
+That last part is what makes the deaths meaningful: the control runs the same three
+stores with a different VPN on entry 1, so it proves the program executes and the
+session survives it. The kill is the SECOND match, not the code.
+
+### Six mutants, and three are each killed by exactly ONE row
+
+```
+the fix                              6/6
+mutA  detection deleted              2/6   four rows
+mutB  own arm -> general vector      3/6   three rows
+mutC  own arm, pc + vbr only         5/6   tlbm sr     ALONE
+mutD  n_hits > 2                     2/6   four rows
+mutE  device raises RESET_MANUAL     5/6   tlbm expevt ALONE
+mutF  n_hits >= 1                    5/6   tlbm single ALONE
+```
+
+**A survival-only oracle passes all six.** `expevt` + `pc` kills four and is passed by
+mutC and mutF.
+
+`mutC` is the one worth remembering, and it is a likelier implementation than the fix
+itself -- a maintainer reading "a reset is executed" and writing their own arm that
+sets `pc` and `vbr`. It is invisible to `alive`, `expevt`, `pc` AND `vbr`, because the
+group's third statement is a **no-op from the reset-default SR** (IMASK already `0xf`,
+FD already clear). Only pre-setting SR to `0x40008000` makes it observable. Figure 5.2
+(`:12228`) specifies `SR.{MD,RB,BL,FD,IMASK} <- 11101111` for the transition, so that
+statement is required rather than decoration.
+
+**landisk, not testsh, and that is forced:** landisk's PROM leaves `vbr = 0x8c000000`
+(`promemul/sh_ipl_g.c:55`), so `vbr == 0` is a real transition. Cold-start `vbr` on
+testsh is already 0, which would make that row vacuous there.
+
+### The comment shipped wrong four times over, and a seat opened every citation
+
+FOURTH CONSECUTIVE ROUND where the code was right first time and the records were not.
+All four verified by opening the file:
+
+* **Table 5.1 -> Table 5.2.** `:12006` is in Table 5.2 Exceptions; Table 5.1 is
+  *Exception-Related Registers*. The rows were right, the table number sent a reader
+  to the wrong page.
+* **3.7.2 -> 3.7.4.** `:10143` is *UTLB Address Array*; 3.7.2 is *ITLB Data Array 1* --
+  which this session had already read, and mis-cited anyway.
+* **"Manual_reset() line for line" is false.** That routine is ten statements including
+  `Initialize_CPU()`; this arm is three. And NOT reinitialising is the faithful part:
+  3.6.4's software processing inspects the UTLB entries after the reset.
+* **The PPN sentence was the wrong warrant.** 3.6.4 says PPN *may* be corrupted; the
+  device loop writes V and D and never touches PPN. The conclusion held; the reason did
+  not, and a wrong reason gets reused.
+
+Two residuals FILED, not fixed: TEA is never set (3.6.4 step 1 says it should be, and
+*which* address is right for this route is a genuine UNKNOWN), and `cpu_sh.c` uses
+`EXPEVT_RESET_POWER` where the manual specifies manual-reset for the BL-set case.
+
+Gate 10 PASS at 89 checks -- 62 at the start of this session. Build rc=0, zero
+warnings, four trees cmp-identical.
+
 ## Round 456 (#456) -- the SH test machine could not deliver an interrupt at all
 
 `machine_test.c` wired the ENTIRE SH test-machine interrupt tree to

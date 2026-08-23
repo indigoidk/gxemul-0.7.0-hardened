@@ -733,8 +733,59 @@ void sh_exception(struct cpu *cpu, int expevt, int intevt, uint32_t vaddr)
 		cpu->pc = vbr + 0x600;
 		break;
 
+	/*
+	 *  #457: EXPEVT_RESET_TLB_MULTI_HIT joins this group, and joining it is
+	 *  the whole fix.  dev_sh4.c raises it when a guest ASSOCIATIVE write to
+	 *  the UTLB address array matches more than one entry; this switch had no
+	 *  arm for it, so it fell to the default below and ran exit(1).  Three
+	 *  ordinary privileged guest stores ended the host process.
+	 *
+	 *  The manual puts it in exactly this group.  **Table 5.2 Exceptions**
+	 *  (_scratchpad/sh7750_hardware.txt:11994, rows at :12006 and :12010) lists
+	 *  BOTH TLB multiple-hit exceptions as Reset / Abort category, vector
+	 *  H'A000 0000, code H'140 -- the same rows as power-on and manual reset.
+	 *
+	 *  The arm below is NOT Manual_reset() transcribed.  That routine (:12392)
+	 *  is ten statements and includes Initialize_CPU() and
+	 *  Initialize_Module(Manual); this arm is three, because EXPEVT and
+	 *  MD|RB|BL are already done by the common code above, and because NOT
+	 *  reinitialising the CPU is the faithful part here -- 3.6.4's software
+	 *  processing inspects the UTLB entries AFTER the reset, which a full
+	 *  re-init would destroy.
+	 *
+	 *  EXPEVT survives the grouping by construction: the common code above
+	 *  assigns cpu->cd.sh.expevt BEFORE this switch, so 0x140 is already
+	 *  latched and the guest's reset handler can tell a multiple hit from a
+	 *  power-on (0x000) or a manual reset (0x020).  A review seat asked
+	 *  whether grouping would clobber it; it does not.
+	 *
+	 *  *** DO NOT REWRITE THIS AS A SEPARATE ARM THAT SETS pc AND vbr ONLY. ***
+	 *  That is the likelier implementation than the fix itself, and it was
+	 *  MEASURED passing a witness that pins alive + expevt + pc + vbr -- because
+	 *  sh_update_sr() is a NO-OP from the reset-default SR (IMASK already 0xf,
+	 *  FD already clear).  It only becomes observable when the guest holds FD or
+	 *  a low IMASK at fault time, which is why the detector pre-sets SR and pins
+	 *  the result.  Figure 5.2 (:12228) specifies SR.{MD,RB,BL,FD,IMASK} <-
+	 *  11101111 for the reset transition, so the third statement is required,
+	 *  not decoration.
+	 *
+	 *  Deleting the detection instead was considered and is REFUTED by
+	 *  **3.7.4 UTLB Address Array** (:10111, sentence at :10141-10143), which
+	 *  both raises the exception AND supplies the ordering: "D and V specified
+	 *  in the data field are written to that entry.  If there is more than one
+	 *  matching entry, a data TLB multiple hit exception results."  Write first,
+	 *  then raise -- so dev_sh4.c's update-before-count is faithful and a
+	 *  scan-first rewrite would be less so.
+	 *
+	 *  (An earlier draft cited 3.6.4's "the contents of PPN ... may also be
+	 *  corrupted" as that warrant.  A review seat pointed out it is the wrong
+	 *  sentence: the device loop writes V and D, never PPN.  The conclusion was
+	 *  right and the reason was not, which is the kind of thing that gets
+	 *  reused.)
+	 */
 	case EXPEVT_RESET_POWER:
 	case EXPEVT_RESET_MANUAL:
+	case EXPEVT_RESET_TLB_MULTI_HIT:
 		cpu->pc = 0xa0000000;
 		cpu->cd.sh.vbr = 0x00000000;
 		sh_update_sr(cpu, (cpu->cd.sh.sr | SH_SR_IMASK) & ~SH_SR_FD);
