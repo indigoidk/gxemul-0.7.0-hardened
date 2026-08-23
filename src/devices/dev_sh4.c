@@ -2050,12 +2050,38 @@ DEVICE_ACCESS(sh4)
 			 *  prints rather than exits (debugmsg.c:384-390) and cannot be silenced
 			 *  by -q, and the guest can read TCR back and see the write never landed.
 			 *
-			 *  *** THE GUARD STAYS HERE, ABOVE THE PRESCALER SWITCH. ***  #447 moved
-			 *  it up for a reason recorded in its own block below: run it lower and
-			 *  `timer_hz` has already been set from `idata & 3`, so with pclock == 0
-			 *  the debug() line announces "clock set to 0.000000 Hz" and the write
-			 *  installs a frequency the guest never asked for.  Moving this decline
-			 *  down would re-create the silent-wrong-rate fault it exists to refuse.
+			 *  *** THAT READ-BACK IS ITSELF A FABRICATION, and calling it a channel
+			 *  overstates it. ***  On real SH-4 TCR ALWAYS latches, so a guest doing
+			 *  read-modify-write on TCR silently loses its update here -- and the
+			 *  detector's `unlatch` row PINS that fabrication as correct.  It is the
+			 *  lesser of two fabrications, not an architectural signal: a landed TCR
+			 *  with a dead timer is silent-wrong, and the refusal is loud-wrong.  A
+			 *  seat measured the third option (store idata, skip the prescaler switch,
+			 *  leave timer_hz at 0) as SAFE -- no division by zero, no UNF, no pending
+			 *  interrupt -- so this is a choice between two wrongs, made deliberately.
+			 *
+			 *  *** THE GUARD STAYS HERE, ABOVE THE PRESCALER SWITCH -- BUT FOR A
+			 *  SMALLER REASON THAN AN EARLIER DRAFT CLAIMED. ***
+			 *
+			 *  That draft said moving it lower would install "a frequency the guest
+			 *  never asked for", citing #447.  A pass-2 seat MEASURED that this cannot
+			 *  happen AT THIS PREDICATE: pclock == 0 makes all four prescaler cases
+			 *  yield 0.0, and timer_hz[] is ALREADY 0.0 -- DEVINIT memsets the whole
+			 *  struct, and those four cases are the only writes to it in this file.
+			 *  No frequency is installed; nothing changes.  #447's hazard is real where
+			 *  pclock is NON-ZERO, and it does not transfer here.
+			 *
+			 *  The real reason is diagnostic consistency.  Lower, the debug() line
+			 *  below announces "clock set to 0.000000 Hz" on a write that is then
+			 *  refused -- and it is UNLATCHED, so it prints once per STORE where this
+			 *  decline prints once per TIMER.  A seat built that mutant and it scores
+			 *  16/16: four stores produce four announcements of a rate that was never
+			 *  installed, and no row sees it.  FILED as sh4pclockquiet.
+			 *
+			 *  (The kill table's `m_below` is a DIFFERENT mutant -- the missing `break`,
+			 *  which lets the write land and is caught by `unlatch`.  An earlier record
+			 *  attached it to this paragraph; two mutants had one name, and NOTHING in
+			 *  the kill table measures the guard's POSITION.)
 			 */
 			if (cpu->cd.sh.pclock == 0) {
 				if (sh4_val_first(d, SH4_VAL_PCLOCK, timer_nr, 1))

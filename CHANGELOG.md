@@ -41,11 +41,24 @@ tenth class arrives" as an OUTSTANDING obligation. It was already discharged --
 `SH4_VAL_SCICMD`. A stale instruction in the carrier is a future round redoing finished work,
 so it is now marked complete.
 
-**The guard stays ABOVE the prescaler switch**, which `#447` moved it up for and recorded:
-run it lower and `timer_hz` is already set from `idata & 3`, so with `pclock == 0` the
-`debug()` line announces `clock set to 0.000000 Hz` and the write installs a frequency the
-guest never asked for. Moving the decline down re-creates the silent-wrong-rate fault it
-exists to refuse. `m_below` measures exactly that.
+### The guard stays above the prescaler switch — but for a SMALLER reason than first claimed
+
+An earlier draft of this block said moving the decline lower would install *"a frequency the
+guest never asked for"*, citing `#447`. **A pass-2 seat measured that this cannot happen at
+this predicate.** `pclock == 0` makes all four prescaler cases yield `0.0`, and `timer_hz[]`
+is *already* `0.0` — DEVINIT memsets the struct and those four cases are its only writes.
+Nothing is installed and nothing changes. `#447`'s hazard is real where `pclock` is
+**non-zero**; it does not transfer.
+
+The real reason is **diagnostic consistency**: lower, the `debug()` line announces
+`clock set to 0.000000 Hz` on a write that is then refused, and it is *unlatched*, so it
+prints once per STORE where the decline prints once per TIMER. The seat built that mutant and
+it scores **16/16** — four stores, four announcements of a rate never installed, no row sees
+it. Filed as `sh4pclockquiet`.
+
+*And `m_below` is a DIFFERENT mutant* — the missing `break`, which lets the write land and is
+caught by `unlatch`. An earlier record attached it to the guard-position claim: two mutants
+under one name, and **nothing in the kill table measures the guard's position**.
 
 ### THE HONEST COST HAS TWO HALVES, and the round demoted the first one too far
 
@@ -65,8 +78,11 @@ The two grounds that DO narrow (a)'s practical reach today:
   commented out at `:48-64` -- and only the `hpc_bootinfo` half; what remains registers RAM
   mirrors and a dumb framebuffer, with no console wiring, no bootinfo and no disk, so **no
   guest boots on hpcsh at
-  all**, and `baresh`/`testsh` run hand-written test programs. The host death was measured;
-  the hang has no guest to happen to.
+  all**. *That narrows (a) ON HPCSH ONLY, and an earlier draft generalised past its own
+  evidence:* `baresh` and `testsh` run hand-written test programs, and a program that
+  programs TCR and polls TCNT **is** the hang — this round's own detector plants exactly
+  such a program. The host death was measured everywhere; the stall is hypothetical on one
+  machine of the three.
 * **The real de-escalation cost is that the diagnostic degrades from unmissable to
   once-per-timer for the device lifetime.** A guest that spins programming TCR0 gets one
   line and then permanent silence, buried in a boot log. That is sharper and more accurate

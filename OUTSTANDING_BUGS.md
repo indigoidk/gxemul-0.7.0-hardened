@@ -7212,3 +7212,76 @@ The substance was true throughout. **Line numbers are now omitted from these rec
 favour of structural descriptions** ("one wrapped in `#ifdef SH4_DEBUG`, three on
 `interrupt_handler_lookup` construction failures"), which cannot rot. Cite line numbers across
 files, never within one.
+
+### `sh4pclockquiet` — open (five ask-again escapes, #459 pass 2, all MEASURED)
+
+A measuring seat built six mutants of `#459`'s guard and **five scored 16/16**. Filed as
+coverage debt — the detector is above the vacuity floor (6/16 pre-fix; that *is* the verbatim
+reinstatement, one site; `live`/`devsig` are real identity rows) — but the family has a single
+root cause worth naming.
+
+| mutant | one-line change | what no row sees |
+|---|---|---|
+| **`m_unie`** | `pclock == 0 && !(idata & TCR_UNIE)` | `TCR0 <- 0x0020` on jornada680: read-back `0x20`, the write LANDS, `clock set to 0.000000 Hz`, **zero** diagnostics |
+| `m_below_switch` | guard moved verbatim below the `debug()` line | 4 stores → **4** `clock set to 0.000000 Hz` lines (fix: 0) |
+| `m_valkey` | key `1` → `idata ? idata : 1u` | 4 different values to TCR0 → **3** lines (fix: 1) |
+| `m_tmr2` | `&& timer_nr != 2` | TCR2 silently accepted, 0 Hz installed, no diagnostic |
+| `m_wrongnr` | `fatal(…, timer_nr)` → `fatal(…, 0)` | every line says "timer 0" |
+| `m_valnarrow` | `&& (idata & 3) == 0` | **KILLED 15/16** by `unlatch` |
+
+*** THE ROOT CAUSE: the declining-write value set is exactly `{0x0000, 0x0001}`. *** The three
+`kill` rows and `says`/`once`/`pertmr` all write `0x0000`; `unlatch` writes `TCR_TPSC_P16`.
+**Any narrowing predicate that admits both escapes.** `m_valnarrow`'s death is the detector's
+real strength here and shows what fixes the family: a *second distinct value*.
+
+**`m_unie` is the one that reaches live functionality**, and it is the realistic narrowing —
+"if the guest isn't asking for an interrupt, refusing is fine; if it is, let the register latch
+so read-back works". It lands a TCR with `timer_hz == 0` for **exactly the value a guest must
+write to use a TMU at all**, while going *quieter* than the fix.
+
+**Four of the five rows cost ZERO extra sessions**, which is why this should be a short round:
+assert `clock set to` appears zero times in the existing `says` session (kills
+`m_below_switch`); capture the timer number from the diagnostic and check it is `["0"]` /
+`["0","1"]` (kills `m_wrongnr`); extend `pertmr` to TCR0/1/2 expecting **3** (kills `m_tmr2`);
+give `tcr_writes` a per-write value list so `once` stores two *different* values and still
+expects 1 (kills `m_valkey`). Only `unlatch2` at `TCR_UNIE|TCR_TPSC_P4` needs a new session,
+and it kills `m_unie` and the rest of the narrowing family.
+
+*Related record defect, already corrected:* the CHANGELOG cited "measured `0x0` versus `0x20`"
+for the read-back, but **no shipped row writes `0x20`** — `unlatch` and `accept tcr` both use
+`TCR_TPSC_P16` (`0x0001`). Adding `unlatch2` makes that citation true.
+
+*Probe hygiene, same seat:* `dumped()` is dead (never called), and `CODE["landisk"]` /
+`CODE["dreamcast"]` duplicate `LANDISK_CODE`/`DREAMCAST_CODE` — the same "dead weight that
+reads like coverage" the `SCRATCH` comment two lines below records a seat already pruning.
+
+### `sh4gdromexit` — open (census after #459)
+
+`#459` closed the last guest-reachable `exit(` in `dev_sh4.c`. **The SH surface as a whole is
+not clear.** Census of *code* exits — excluding `#ifdef` blocks and construction-time
+failures:
+
+| file | live exits |
+|---|---|
+| `dev_dreamcast_gdrom.c` | **14** |
+| `dev_dreamcast_g2.c` | 6 |
+| `dev_dreamcast_maple.c` | 3 |
+| `dev_dreamcast_asic.c` | 1 |
+| `cpu_sh_instr.c` | 2 |
+| `cpu_sh.c` | 1 (`sh_exception`) |
+
+*** COUNT CODE, NOT TEXT. *** `grep -c 'exit(1)'` scores `dev_sh4.c` at **21** and the truth
+is **0** — this tree's hardened comments discuss `exit(1)` constantly, and `#459`'s own
+comment mentions it four times. A census that does not strip comments ranks the *best*
+documented file as the worst.
+
+**The GDROM ones are the most guest-reachable in the tree.** `handle_command()` switches on
+`d->cmd[0]`, a byte the guest writes, and its arms call `exit(1)` on an unimplemented command,
+on a Read-TOC length that is not 408, and on a data format that is not `0x20` — each an
+ordinary guest-supplied value, no privilege or unusual state required.
+
+**The witness shape is already proven** by `#459`: a rung-3 cold-debugger probe on
+`-E dreamcast -x`. The `-x` is *required* — Dreamcast brings up two console inputs and
+`console.c:994-1007` makes that fatal without it, which is the false-positive that nearly
+cost `#459` a fourth machine. **Not yet witnessed:** no dreamcast image exists in `_images/`,
+so the probe must drive the GDROM registers by planted guest stores rather than by booting.

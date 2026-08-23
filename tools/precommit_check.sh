@@ -252,6 +252,9 @@ fi
 #  half that lives in the repo.  It CANNOT catch the other half -- whether the artifact
 #  was republished -- because that lives outside git; that step stays manual, and this
 #  comment is the reminder that it exists.
+#  ONE spelling of the cutoff, passed into the heredoc rather than repeated in it.
+#  A seat caught it spelled twice -- shell and Python -- which is the same drift the
+#  TCR_UNIMPLEMENTED mask exists to prevent, one file over.
 GRADING_CUTOFF_NOTE=2026-08-23
 say ""; say "T. seat outcomes: a CLOSED row's panel entries should be graded"
 #  SOFT ON PURPOSE, and the reason matters.  A hard gate here would force a grade at
@@ -293,9 +296,10 @@ else
 	fi
 	#  The row that JUST closed is the one whose outcome is actually known, so name
 	#  closed rows whose panel entries are still ungraded.  That is the moment to grade.
-	_ug=$(python - "$_HERE/pipeline/ledger.json" <<'PYEOF'
-import json, io, sys
-GRADING_CUTOFF = "2026-08-23"   # seat_scorecard.py shipped MID-DAY on 2026-08-22 (8185920),
+	_ug=$(GRADING_CUTOFF_NOTE="$GRADING_CUTOFF_NOTE" python - "$_HERE/pipeline/ledger.json" <<'PYEOF'
+import json, io, os, sys
+GRADING_CUTOFF = os.environ.get("GRADING_CUTOFF_NOTE", "2026-08-23")
+                                # seat_scorecard.py shipped MID-DAY on 2026-08-22 (8185920),
                                 # so rows closed ON that day are a boundary this cannot
                                 # resolve from dates alone -- grandfather the whole day
                                 # rather than guess intra-day ordering.  From 08-23 the
