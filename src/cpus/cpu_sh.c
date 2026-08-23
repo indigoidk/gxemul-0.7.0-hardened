@@ -309,11 +309,46 @@ void sh_cpu_interrupt_assert(struct interrupt *interrupt)
 	cpu->cd.sh.int_prio_and_pending[index] |= SH_INT_ASSERTED;
 	prio = cpu->cd.sh.int_prio_and_pending[index] & SH_INT_PRIO_MASK;
 
-	if (prio == 0) {
-		/*  Interrupt not implemented? Hm.  */
-		fatal("[ SH interrupt 0x%x, prio 0 (?), aborting ]\n", irq_nr);
-		exit(1);
-	}
+	/*
+	 *  #455: PRIORITY 0 IS A DOCUMENTED, GUEST-SELECTABLE STATE, and the
+	 *  comment that used to sit here -- "Interrupt not implemented? Hm."
+	 *  -- was wrong twice over: nothing is unimplemented, and ending the
+	 *  host process is not what the architecture asks for.
+	 *
+	 *  SH7750 Hardware Manual Rev.7.00 19.2, p. 828
+	 *  (_scratchpad/sh7750_hardware.txt:39887): "When level 0 is set, the
+	 *  interrupt is masked and interrupt requests are ignored."  And
+	 *  19.3.1 (:40193): "IPRA to IPRC are initialized to H'0000 ... by a
+	 *  reset" -- so EVERY on-chip source is priority 0 out of reset, which
+	 *  cpu_sh_init's own "All others are zero" already reproduces.  One
+	 *  ordinary guest store then ended the host.
+	 *
+	 *  SH_INT_ASSERTED IS DELIBERATELY LEFT SET.  "Ignored" is not
+	 *  "discarded": 19.4.1 says the controller selects the highest-priority
+	 *  request and "lower-priority interrupts are held pending"
+	 *  (19.4.1, sh7750_hardware.txt:40508).  Masking blocks ACCEPTANCE, not
+	 *  the request.  Stated narrowly on purpose: this entry point is
+	 *  generic, so the durable claim is only that masking must not clear
+	 *  the bit -- the line stays asserted until its matching deassert, and
+	 *  how any particular peripheral latches its own source flag is that
+	 *  device's business, not this function's.  Clearing the bit here would also make `sh4prioraise`
+	 *  unfixable -- a later rescan would find nothing to deliver -- so this
+	 *  is required rather than merely defensible.
+	 *
+	 *  Nothing is printed.  The sh4_val_first latch idiom used by #438,
+	 *  #441, #443, #447 and #449 does NOT apply: that family answers "the
+	 *  guest asked for a feature this model does not implement", whereas a
+	 *  masked interrupt is correct guest behaviour that a kernel performs
+	 *  routinely during early boot.  A diagnostic here would fire on it,
+	 *  and fatal() has no quiet_mode early-out (debugmsg.c:384-390) so it
+	 *  could not even be silenced with -q.
+	 *
+	 *  Selection below is already safe on its own terms: the deassert
+	 *  rescan cannot pick a prio-0 entry either, since `prio > int_level`
+	 *  is `0 > 0`.
+	 */
+	if (prio == 0)
+		return;
 
 	if (cpu->cd.sh.int_to_assert == 0 || prio > cpu->cd.sh.int_level) {
 		cpu->cd.sh.int_to_assert = irq_nr;

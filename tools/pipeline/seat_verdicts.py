@@ -122,9 +122,41 @@ def main():
         #  refusing and you wait it out; a refused connection is the daemon not
         #  running and one `ollama serve` fixes it, so a panel that reports it
         #  as a wall silently gives up three seats it could have had.
+        #  *** A THINKING MODEL CAN SPEND ITS WHOLE BUDGET AND SAY NOTHING. ***
+        #  Added 2026-08-22, the same day as the transport class below, and found the
+        #  same way: by this tool mis-scoring it.  deepseek returned a 214 KB file --
+        #  by far the largest in the panel -- consisting of raw JSON with
+        #  `"done_reason": "length"`, `"eval_count": 65536` and **`"response": ""`**.
+        #  It filled its entire context with hidden reasoning and never emitted an
+        #  answer.  panel_ollama.py's `resp.get("response") or json.dumps(resp)`
+        #  fallback then wrote the whole envelope to the file.
+        #
+        #  Every earlier rule passed it: no quota keyword, 100% novel against the
+        #  brief, and enormous rather than short.  It landed in "answered, NO VERDICT
+        #  LINE (format miss)" -- a seat that said NOTHING recorded as a live seat
+        #  with bad formatting.  That is the third distinct way this file has scored
+        #  a failure as agreement, after the big-file wall and the dead daemon.
+        #
+        #  The carrier already warns that these are thinking models and a num_predict
+        #  cap starves the response; panel_ollama.py correctly sends none.  This is
+        #  the model reaching its OWN limit, which no caller-side setting prevents.
+        raw = ""
+        st = t.lstrip()
+        if st.startswith('{"model"') and '"response": ""' in st[:4000]:
+            reason = "unknown"
+            m = re.search(r'"done_reason":\s*"([a-z_]+)"', st)
+            if m:
+                reason = m.group(1)
+            ev = re.search(r'"eval_count":\s*(\d+)', st)
+            raw = "%s%s" % (reason, (", %s tokens" % ev.group(1)) if ev else "")
+
         err = t.lstrip()[:400] if t.lstrip().startswith("OLLAMA_SEAT_ERROR") else ""
         is_walled = bool(WALL_RE.search(t[-600:])) and not v
-        if err:
+        if raw:
+            state = ("*** SEAT DOWN -- NO ANSWER: spent its whole budget on hidden "
+                     "reasoning (%s) ***" % raw)
+            down += 1
+        elif err:
             state = ("*** SEAT DOWN -- daemon refused the connection; "
                      "start ollama and re-fire ***"
                      if "ConnectionRefused" in err or "refused it" in err

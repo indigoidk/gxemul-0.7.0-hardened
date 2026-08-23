@@ -1,3 +1,122 @@
+## Round 455 (#455) -- an interrupt at priority 0 ended the host process
+
+`sh_cpu_interrupt_assert()` ran `fatal()` then `exit(1)` when the asserted line's
+priority nibble was zero, under the comment *"Interrupt not implemented? Hm."*
+
+**Nothing is unimplemented.** Priority 0 is documented, guest-selectable and the
+RESET DEFAULT. SH7750 Hardware Manual Rev.7.00 19.2, p. 828
+(`_scratchpad/sh7750_hardware.txt:39887`): *"When level 0 is set, the interrupt is
+masked and interrupt requests are ignored."* And 19.3.1 (`:40193`): *"IPRA to IPRC
+are initialized to H'0000 ... by a reset."* `cpu_sh_init` already reproduces that,
+commenting *"All others are zero"*. So every on-chip source is masked out of reset
+and one ordinary guest store ended the host.
+
+The fix is a bare `return`.
+
+### The witness is one store, and finding the right one took three corrections to this project's own rule
+
+Measured on the committed build, `-E testsh`, unmodified, under `step 1`:
+
+```
+80010000:  2102        mov.l   r0,@r1  ; r1 = 0xb10000a0
+[ SH interrupt 0x3e0, prio 0 (?), aborting ]
+```
+
+`machine_test.c` wires the entire test-machine interrupt tree to `SH4_INTEVT_IRQ15`
+(`0x3e0`, index 31). `sh_update_interrupt_priorities()`'s loop is bounded
+`i <= SH4_INTEVT_IRQ14`, so index 31 is never assigned -- and extending it would not
+help, because the loop's own formula `15 - ((i - IRQ0) / 0x20)` yields 0 for that
+line. `dev_irqc.c` defaults to all interrupts enabled. **So the SH test machine's
+interrupt controller could not be used at all, and no guest register write could
+prevent it.**
+
+*** THE OBVIOUS ROUTE WOULD HAVE PRODUCED A VACUOUS WITNESS, AND THE RULE THAT SAID
+OTHERWISE WAS THIS PROJECT'S OWN, WRITTEN THE SAME DAY. *** A TMU underflow also
+reaches the kill, and the carrier had just been updated to say that the assert path
+is visible under stepping -- true, and verified. But a TMU underflow is produced by a
+HOST timer, and `debugger.c:800` calls `timer_stop()` *"while interacting with the
+user"* with the step command returning at `:835-836` **before** `timer_start()` at
+`:840`. Host timers are stopped for the whole `step N`; the tick loop runs but finds
+nothing pending. **A step-based timer row would have scored a correct pre-fix build
+ALIVE and failed vacuity floor clause (a) in silence.** A review seat caught it in
+the design.
+
+> The rule now carries its discriminator: a step probe sees a **synchronous** assert
+> -- a device handler reached inside the guest's own load or store -- and not one fed
+> by a host-timer callback. Ask what produces the thing the tick consumes.
+
+Three passes over one sentence, each narrower than the last.
+
+### Two controls, and one of them exposed a defect in the probe's own parser
+
+Clause (ii) needs a LIVENESS control and a DEVICE-SIGNATURE control, because one is
+not enough -- the footbridge probe's first draft returned `0x0` everywhere with its
+RAM control green. Here the signature is a guest load of `DEV_MP_MEMORY`, which
+answers `ram_mb * 1048576` on the same device the witness pokes: a value RAM at that
+address cannot produce.
+
+**It caught a byte-order defect in the probe, and the liveness row had been hiding
+it.** `dump` prints bytes in memory order and this CPU is little-endian, so the
+digits must be swapped; the first draft compared the raw string. Its liveness row
+passed anyway, because the value chosen was `0x5a5a5a5a` -- **a palindrome under byte
+swap**. The device-signature row is what exposed it: `0x04000000` came back as
+`0x00000004`. The liveness value is now asymmetric.
+
+*A control value must be ASYMMETRIC or it cannot see this class at all. That is the
+hand-assembled encoding trap in a different disguise -- the same reason every
+instruction probe needs a row expecting a small nonzero value in a specific register.*
+
+The first draft also reused landisk's scratch address on `testsh`, whose RAM is at
+physical 0, so the liveness row read back `0x00000000`. **This project has now made
+that exact mistake twice on testsh**, the earlier one in a pclock witness.
+
+Pre-fix 2/4, post-fix 4/4, both controls green in both directions.
+
+### The kill table
+
+```
+the fix                             7/7
+M1  verbatim reinstatement          2/4   kill + quiet
+M2  drop exit(), keep the print     3/4   quiet ALONE
+M3' partial fix, only index 31      4/6   tmu + tmuq ONLY  (4/4 before they existed)
+M4  clears SH_INT_ASSERTED          4/4   ESCAPES -- filed
+M5  guard deleted entirely          4/4   ESCAPES -- filed
+G1  growth: prio <= 1               6/7   accept ALONE
+pristine 0.7.0, null medium         2/4
+```
+
+### What is deliberately NOT printed
+
+The `sh4_val_first` latch idiom that #438, #441, #443, #447 and #449 all use does not
+apply here, and the distinction is the point: that family answers *"the guest asked
+for a feature this model does not implement"*, while a masked interrupt is **correct
+guest behaviour** that a kernel performs routinely during early boot. A latched
+diagnostic would fire on it. And `fatal()` has no `quiet_mode` early-out
+(`debugmsg.c:384-390`), so it could not be silenced with `-q` either.
+
+### `SH_INT_ASSERTED` is left set, and that is required rather than merely defensible
+
+The manual settles it: 19.4.1 says the controller selects the highest-priority request
+and *"lower-priority interrupts are held pending"*, and the request is a level driven
+by the peripheral's source flag until software clears it. **"Ignored" is not
+"discarded."** Masking blocks acceptance, not the request.
+
+Clearing the bit would additionally make `sh4prioraise` -- filed, and a genuine defect
+-- **unfixable**, because a later rescan would find nothing to deliver. Two seats
+reached that independently.
+
+### Filed with the fix, because this fix makes one of them silent
+
+* **`sh4irq15`** -- `machine_test.c` selects the one INTEVT line that is priority 0 by
+  construction. After #455, `-E testsh` goes from LOUDLY unusable to SILENTLY unusable,
+  which is the de-escalation hazard in literal form. One identifier; its own round.
+* **`sh4tlbmulti`** -- NEW, found by a records seat sweeping for siblings rather than
+  by looking for it: `sh_exception()` has no case for `EXPEVT_RESET_TLB_MULTI_HIT`, so a
+  guest UTLB write producing two matching entries falls to `default:` and ends the host.
+  Same family, same file.
+* **`sh4iprbcd`** and **`sh4prioraise`**, both latent only because nothing asserts those
+  lines today -- which is the condition #455 shows can change.
+
 ## Round 454 (#454) -- the store-queue flush is judged READ type, and a shipped gate row pinned the opposite
 
 `X(pref_rn)` passed `FLAG_WRITEFLAG` when flushing a store queue through the UTLB.

@@ -6153,10 +6153,10 @@ documented, guest-selectable, RESET-DEFAULT state. Quoted verbatim, and corrobor
 separate ways in the same manual:
 
 > "Each interrupt has a priority level (16-0) ... **When level 0 is set, the interrupt is
-> masked and interrupt requests are ignored.**" — §19.2, `_scratchpad/sh7750_hardware.txt:39886`
+> masked and interrupt requests are ignored.**" — §19.2, `_scratchpad/sh7750_hardware.txt:39887-39888`
 
 > "**IPRA to IPRC are initialized to H'0000** and IPRD is to H'DA74 by a reset."
-> — §19.3.1, `:40192`
+> — §19.3.1, `:40193-40194`
 
 So **every on-chip source is priority 0 out of reset**, and the model's own init agrees:
 `cpu_sh.c:204-218` sets `intc_iprd`, the INTPRI/INTMSK words and comments *"All others are
@@ -6202,10 +6202,20 @@ needs that pin bumped.
 
 | row | pre-fix | post-fix |
 |---|---|---|
-| **P1 witness** — TCR0/TCOR0/TCNT0/TSTR stores, then `step 40000` | session dies, `[ SH interrupt 0x400, prio 0 (?), aborting ]` | alive and answering |
+| ~~**P1** — TCR0/TCOR0/TCNT0/TSTR stores, then `step 40000`~~ **REFUTED — see the correction below** | — | — |
 | **P2 liveness** — known word to scratch, read back through the same decode | — | `0x5a5a5a5a` returns |
 | **P3 device signature** — read TCR0 back as `0x0020`, TSTR as 1 | — | proves the stores reached `DEVICE_ACCESS(sh4)`, not a hole |
 | **P4 accept row** — IPRA first, then the prologue; free-running; handler reads INTEVT | — | INTEVT reads `0x400`: selected AND delivered |
+
+
+> *** CORRECTION, 2026-08-22, BEFORE ANY OF THIS WAS BUILT. *** The `step 40000` design
+> above is REFUTED and the shipped probe does not use it. A TMU underflow is produced by
+> a HOST timer, and `debugger.c:800` stops host timers with the step command returning at
+> `:835-836` before `timer_start()` at `:840` — so a step-based timer row scores a correct
+> PRE-FIX build ALIVE and fails vacuity floor clause (a) in silence. The shipped witness is
+> a SYNCHRONOUS one guest store on `-E testsh`; the TMU route is covered by two rows that
+> FREE-RUN. Left visible rather than deleted, because this entry is where the wrong design
+> was written down and a future reader needs to see it was caught, not quietly replaced.
 
 **P4 is the de-escalation clause's cost, not future strengthening.** Enumerated from the diff,
 `prio == 0` is the only predicate that gated death, so exactly one accept row is owed.

@@ -214,6 +214,53 @@ for v in "movca.l" "fmovd @r1" "fmovd @r2" "fmovd xd st" "fmovd xd ld" \
     check "  round 80: $v" "$n" 1
 done
 
+# ---- #455: an interrupt at priority 0 ended the host process -----------------
+#  Wired in the SAME commit as the fix.  Gate 6's structural note says a probe that
+#  ships with its wiring cannot skip its census pin, because the wiring forces a
+#  gate run -- #441's did not, and its pin then went latently red between two
+#  commits.
+#
+#  This probe drives BOTH SH rigs, and which row uses which is forced rather than
+#  stylistic.
+#
+#  The PRIMARY witness is `-E testsh`, where the kill is reached SYNCHRONOUSLY --
+#  one guest store to the mp device's IPI register -- because the test machine wires
+#  its whole interrupt tree to a line the priority loop never assigns.  Being
+#  synchronous is what lets a cheap `step` see it.
+#
+#  The SECONDARY rows (`prio0 tmu`, `prio0 tmuq`) drive the landisk TMU route and
+#  must FREE-RUN, because a TMU underflow is produced by a HOST timer and
+#  debugger.c stops those for the duration of a `step`.  They exist because a
+#  MEASURED mutant that repaired only the testsh route scored full marks without
+#  them.  See the probe header.
+IPLOG=$LOGDIR/gate_sh_intprio.log
+python3 sh_intprio_probe.py "$PMAX" "$KERNEL" > "$IPLOG" 2>&1 || true
+
+if ! grep -q "SH_INTPRIO_RESULT=" "$IPLOG"; then
+    note "sh_intprio probe produced no result line; last lines follow"
+    tail -5 "$IPLOG" | sed 's/^/       /'
+    check "sh_intprio probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$IPLOG" | sed 's/^/       /'
+    ipctrl=$(grep -o "SH_INTPRIO_CONTROL=[A-Z]*" "$IPLOG" | tail -1 | cut -d= -f2)
+    check "sh_intprio control proves it measures" "${ipctrl:-missing}" "OK"
+    ipres=$(grep -o "SH_INTPRIO_RESULT=[0-9]*/[0-9]*" "$IPLOG" | tail -1 | cut -d= -f2)
+    check "sh_intprio rows run"     "${ipres#*/}" 7
+    check "sh_intprio rows correct" "${ipres%/*}" "${ipres#*/}"
+    #  Named individually, and three of the seven are not decoration.  `quiet`
+    #  kills a mutant that drops the exit() but keeps the fatal(), which leaves
+    #  the host alive while printing an un-silenceable line forever.  `tmu`/`tmuq`
+    #  kill a PARTIAL FIX that repairs only the route the testsh witness drives --
+    #  measured passing 4/4 before they existed.  `accept` is the de-escalation
+    #  clause's cost: it pins that a LEGAL priority-1 interrupt is still delivered,
+    #  and it is the only row that reddens under `if (prio <= 1) return;`
+    #  (measured 6/7).  Each was added because a mutant escaped without it.
+    for v in "prio0 kill" "prio0 quiet" "prio0 live" "prio0 devsig" "prio0 tmu" "prio0 tmuq" "prio0 accept"; do
+        n=$(count "$IPLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read
