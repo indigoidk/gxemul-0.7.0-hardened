@@ -368,6 +368,56 @@ else
     done
 fi
 
+# ------------------------------------------------------------------ #459 sh4_pclock
+#  ONE ORDINARY GUEST STORE to 0xffd80010 ended the host process on every SH machine
+#  whose board never assigned a peripheral clock.  cpu_sh.c:233-234 adds the sh4 device
+#  from `arch == 4`, so the CPU brings the TMU and the BOARD brings the clock, and
+#  nothing checked that the two agree.  MEASURED dead on THREE machine types --
+#  -e jornada680, -E baresh and -E testsh -- while dreamcast and landisk, the only two
+#  that assign pclock, were fine.
+#
+#  This gate section is the de-escalation clause's cost, paid in full.  #459 removed a
+#  host-fatal guard, which DELETES the accidental tripwire that made the behaviour
+#  self-announcing, so the rows below rebuild it deliberately on both sides.
+PCLOG=$LOGDIR/gate_sh_pclock.log
+python3 sh_pclock_probe.py "$PMAX" "$KERNEL" > "$PCLOG" 2>&1 || true
+
+if ! grep -q "SH_PCLOCK_RESULT=" "$PCLOG"; then
+    note "sh_pclock probe produced no result line; last lines follow"
+    tail -5 "$PCLOG" | sed 's/^/       /'
+    check "sh_pclock probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$PCLOG" | sed 's/^/       /'
+    pcctrl=$(grep -o "SH_PCLOCK_CONTROL=[A-Z]*" "$PCLOG" | tail -1 | cut -d= -f2)
+    check "sh_pclock control proves it measures" "${pcctrl:-missing}" "OK"
+    pcres=$(grep -o "SH_PCLOCK_RESULT=[0-9]*/[0-9]*" "$PCLOG" | tail -1 | cut -d= -f2)
+    check "sh_pclock rows run"     "${pcres#*/}" 16
+    check "sh_pclock rows correct" "${pcres%/*}" "${pcres#*/}"
+    #  THREE machines, because the brief that opened the round said two.  Two pass-1
+    #  seats independently caught that machine_test.c:535 is MACHINE_DEFAULT_CPU(baresh),
+    #  not testsh -- so `baresh kill`/`baresh diag` pin a machine the round nearly missed.
+    #
+    #  `accept hz` / `accept dc hz` use TWO DIFFERENT CLOCK VALUES on purpose.  A single
+    #  row pinned at landisk's 33.33 MHz is passed by a mutant that HARDCODES 33333333
+    #  in place of cpu->cd.sh.pclock; dreamcast's 50 MHz is the discriminator, and no
+    #  hardcode satisfies both.  (dreamcast needs -x or it exits before the debugger
+    #  prompt -- two console inputs, console.c:994-1007.  Its first draft read "died",
+    #  the SAME STRING the trigger rows produce, which would have been scored as a
+    #  fourth reproduction.  The probe passes -x for that machine only.)
+    #
+    #  The last four are the rebuilt tripwire and none is decoration.  Without them a
+    #  mutant that declines SILENTLY passes every other row: `says` pins that the
+    #  refusal names itself, `once` that the same timer twice yields ONE line, `pertmr`
+    #  that TCR0 and TCR1 yield TWO (the latch instance is per-timer, not shared), and
+    #  `unlatch` that the refused write does NOT land -- #447's own comment cites that
+    #  read-back as how "the guest can see the rejection", so it is the guest's channel
+    #  where the diagnostic is the operator's.
+    for v in "live" "devsig" "hpcsh kill" "hpcsh diag" "baresh kill" "baresh diag" "testsh kill" "testsh diag" "accept hz" "accept tcr" "accept dc hz" "accept dc tcr" "hpcsh says" "hpcsh once" "hpcsh pertmr" "hpcsh unlatch"; do
+        n=$(count "$PCLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read

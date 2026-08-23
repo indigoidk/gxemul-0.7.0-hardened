@@ -7107,3 +7107,58 @@ Filing-grade under the stopping rule: the ask-again cap for this detector is spe
 **DMTE4-7** (`H'780`-`H'7E0`, also IPRC[11:8]), which exist on SH7750R/SH7751R — the type
 landisk actually runs. Nothing asserts them, so it needs its own row rather than a silent
 loop extension. Same file, same register, different completion question from `sh4irlm`.
+
+## 2026-08-23 — #459 closed the last guest-reachable host kill in dev_sh4.c; four rows filed
+
+### `sh4testclock` — open
+
+`baresh` and `testsh` have no `pclock`, so the harness cannot test the TMU path `#459` just
+de-fatalised. Held out of that round as a CAPABILITY change in a different file and semantic
+class — two seats proposed it, two refused the merge. **The argument for:** they are
+SYNTHETIC machines, so their parameters are the project's own *definition*, not a hardware
+*fact*; assigning a clock invents nothing. **The argument against, and any round here must
+answer it:** testsh's value today is precisely as the regression case for "an arch-4 CPU
+whose board omitted pclock", so giving it a clock deletes the only test of the missing-clock
+path. **Keep one machine clockless and say which.** A seat measured `2^25 = 33554432`
+working — every TMU prescaler divides it exactly, and nobody will mistake it for a Jornada
+measurement.
+
+### `sh4cpudevscope` — open
+
+*** The CLASS `#459` is an instance of. *** `cpu_sh.c:233-234` calls
+`device_add(machine, "sh4")` from inside the CPU constructor, so a **machine-scoped device is
+created once per CPU**. Three measured symptoms:
+
+1. `sh4pclock` — the CPU brings the TMU and the board brings the clock. Closed at the guard.
+2. **`-n 2 -E landisk` refuses to construct**: `ERROR! "sh4" collides with device 11 ("sh4")`.
+   SMP is impossible on every SH machine, and this line is why.
+3. `dev_sh4.c:2943-2959` hardcodes `machine[0].cpu[0].irq[...]` for the TMU interrupt lookup
+   — correct *only because* symptom 2 makes a second CPU impossible.
+
+Fixing 2 without 3 gives a device on CPU 1 whose timer interrupts route to CPU 0.
+
+### `sh4frqcr` — open
+
+`dev_sh4.c:2592-2596` models FRQCR as a bare latch with **no reset value**, so a guest reads
+`0x0000` — not a legal value. Table 10.3 gives `H'0E1A`/`H'0E23`/`H'0E13`/`H'0E0A` by clock
+mode. **This is the honest long-run answer to `sh4pclock`:** real hardware derives the
+peripheral clock from FRQCR and the mode pins, and a seat measured that the CPU:peripheral
+ratio there is only ever 4 or 6 — calibrated against dreamcast's 200/50 = 4, a legal mode this
+tree independently knows. Note the bound alone is not enough: `machine_hpcsh.c` sets no
+`emulated_hz`, so there is no CPU clock to divide.
+
+### `hpcshcpu` — open
+
+**The repo contradicts itself.** `doc/TODO.html:322-323` lists *"SH3-specific devices: Pretty
+much everything!"* immediately followed by *"NetBSD/evbsh3, hpcsh!"*, grouping hpcsh with an
+SH3 target; `machine_hpcsh.c:89` names SH7750, arch 4. **Two seats independently refused to
+settle it from memory** — which is the `#357`/`#362`/`#365` citation failure *not* repeating.
+There is no SH-3 manual in `_scratchpad`, hpcsh's platid block is entirely commented out,
+`HISTORY` never mentions it, and `vripreg.h` — included by `machine_hpcsh.c` — is NEC VR41xx
+**MIPS**, a copy-paste leftover from hpcmips.
+
+If it is ever settled as SH-3, note what arch-3 removes: the whole `dev_sh4` block
+(CCN/MMU, INTC, TMU, RTC, BSC, DMAC, SCIF, TLB arrays, PCIC); both SH-3 interrupt handlers
+are `/* TODO */` stubs at `cpu_sh.c:527-533` that silently drop asserts; and `cpu_sh.c:224`
+uses a **leftover UTLB loop counter** as `templ.line`, latent today only because that handler
+is a stub. Obtain a source first.

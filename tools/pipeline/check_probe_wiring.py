@@ -186,6 +186,7 @@ MANIFEST = {
     "sh_halt_probe.py":            (CLASS_DETECTOR, "SH halt path"),
     "sh_intprio_probe.py":         (CLASS_DETECTOR, "#455 SH interrupt priority 0"),
     "sh_tlbmulti_probe.py":        (CLASS_DETECTOR, "#457 SH TLB multiple hit"),
+    "sh_pclock_probe.py":          (CLASS_DETECTOR, "#459 SH pclock: declines instead of exit(1)"),
     "sh_iprbcd_probe.py":          (CLASS_DETECTOR, "#458 SH IPRB/IPRC/IPRA-RTC priority table"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 

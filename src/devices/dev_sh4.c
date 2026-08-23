@@ -243,6 +243,23 @@ enum {
  *  the far end of both the address map and the instance array.
  */
 	SH4_VAL_DMACIE,			/*  CHCR.IE: no completion event to signal  */
+/*
+ *  #459: the pclock guard in the TCR write arm.  The ELEVENTH class, and it cost
+ *  nothing, because the tenth-class conversion recorded above already made
+ *  SH4_VAL_NCLASS correct by construction.  A pass-1 seat checked that and found the
+ *  carrier still carrying the obligation as OUTSTANDING; it was already discharged.
+ *
+ *  The instance is `timer_nr` (0..2), so a guest that writes TCR0, TCR1 and TCR2 gets
+ *  three lines rather than one -- each names a different timer, and collapsing them
+ *  would hide which timer the guest wanted.  Re-writing the SAME timer stays silent.
+ *
+ *  The key is the constant 1, deliberately, and NOT anything derived from the register.
+ *  There is no value to report: the fault is that the MACHINE has no peripheral clock,
+ *  which is the same fault whatever the guest stored.  #451 is the warning that shaped
+ *  this -- a key of `cmd & 0x80` was zero on the only reaching path, and sh4_val_first()
+ *  computes `bits & ~reported` returning `fresh != 0`, so a zero key is born silent.
+ */
+	SH4_VAL_PCLOCK,		/*  TMU: no peripheral clock for this machine  */
 	SH4_VAL_NCLASS			/*  count, by construction -- never assign it  */
 };
 
@@ -1966,10 +1983,69 @@ DEVICE_ACCESS(sh4)
 		if (writeflag == MEM_READ) {
 			odata = d->tcr[timer_nr];
 		} else {
+			/*
+			 *  #459: ONE ORDINARY GUEST STORE ENDED THE HOST PROCESS on every SH
+			 *  machine whose board never assigned a peripheral clock.  The wording
+			 *  said "INTERNAL ERROR ... Aborting", which reads as a construction
+			 *  fault -- something that cannot happen -- and that is why four rounds
+			 *  of SH-4 exit(1) work walked past it.  It is reached by an ordinary
+			 *  store to 0xffd80010, and by nothing else.
+			 *
+			 *  *** IT IS A CLASS, NOT A MACHINE LIST. ***  cpu_sh.c:233-234 adds
+			 *  this device from `if (cpu->cd.sh.cpu_type.arch == 4)`, so the CPU
+			 *  brings the TMU and the BOARD brings the clock, and nothing checks
+			 *  that the two agree.  MEASURED dead on -e jornada680, -E baresh and
+			 *  -E testsh.  Five registered SH machine types name an arch-4 CPU and
+			 *  only machine_dreamcast.c:51 and machine_landisk.c:81 assign pclock.
+			 *  Every future arch-4 machine inherits the same trap unless its author
+			 *  knows a rule written down nowhere -- which is why the fix is here, at
+			 *  the guard, and not in the three machine files.
+			 *
+			 *  DECLINE THE WHOLE WRITE, exactly as the #447 arm below already does
+			 *  for unmodelled TCR bits, and for its stated reason: "substituting a
+			 *  prescaler for a clock source we cannot provide would be inventing a
+			 *  rate".  Assigning a plausible clock would be worse than the crash --
+			 *  a fabricated rate makes every timer-using guest subtly wrong with no
+			 *  row able to see it, and loud-broken outranks silent-wrong.
+			 *
+			 *  PANEL, STATED EXACTLY, because an earlier draft of this comment said
+			 *  "a panel of nine seats reached this 8-1" AND WAS WRITTEN WHILE THE
+			 *  NINTH SEAT WAS STILL RUNNING.  That seat then did not vote B.  Counting
+			 *  a seat that has not answered is the exact shape the seat ledger exists
+			 *  to refuse, and it was caught by the seat being miscounted.
+			 *
+			 *  All nine answered.  ALL NINE AGREE THIS DECLINE IS MANDATORY.  Seven
+			 *  say it is the whole fix.  Two would additionally assign a pclock to the
+			 *  SYNTHETIC machines (baresh, testsh) on the ground that a fictional
+			 *  machine's parameters are the project's own definition rather than a
+			 *  hardware fact -- which is a real argument, and does NOT transfer to
+			 *  hpcsh.  It is held out of this round as a CAPABILITY change in a
+			 *  different file and a different semantic class, per the round-scope
+			 *  rule, and filed.  Nothing in that dissent contradicts what ships here.
+			 *
+			 *  THE HONEST COST, named rather than buried: a guest that programs TCR
+			 *  and waits for a TMU interrupt now waits forever where it used to die.
+			 *  The trade is right here only because the counterfactual was never a
+			 *  working timer -- on these machines pclock is 0, so the write ALWAYS
+			 *  killed the host.  Nothing that worked is lost.  And the stall is not
+			 *  silent: the diagnostic names the timer once, fatal() in this tree
+			 *  prints rather than exits (debugmsg.c:384-390) and cannot be silenced
+			 *  by -q, and the guest can read TCR back and see the write never landed.
+			 *
+			 *  *** THE GUARD STAYS HERE, ABOVE THE PRESCALER SWITCH. ***  #447 moved
+			 *  it up for a reason recorded in its own block below: run it lower and
+			 *  `timer_hz` has already been set from `idata & 3`, so with pclock == 0
+			 *  the debug() line announces "clock set to 0.000000 Hz" and the write
+			 *  installs a frequency the guest never asked for.  Moving this decline
+			 *  down would re-create the silent-wrong-rate fault it exists to refuse.
+			 */
 			if (cpu->cd.sh.pclock == 0) {
-				fatal("INTERNAL ERROR: pclock must be set"
-				    " for this machine. Aborting.\n");
-				exit(1);
+				if (sh4_val_first(d, SH4_VAL_PCLOCK, timer_nr, 1))
+					fatal("[ sh4: timer %i: no peripheral"
+					    " clock configured for this machine"
+					    " -- TCR write ignored.  (once per"
+					    " timer) ]\n", timer_nr);
+				break;
 			}
 
 			/*

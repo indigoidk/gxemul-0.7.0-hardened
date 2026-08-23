@@ -1,3 +1,175 @@
+## Round 459 (#459) -- the CPU brought the timer and the board brought the clock, and nothing checked that the two agreed
+
+`dev_sh4.c`'s TCR write arm opened with `if (cpu->cd.sh.pclock == 0) { fatal("INTERNAL
+ERROR: pclock must be set for this machine. Aborting."); exit(1); }`. One ordinary guest
+store to `0xffd80010` ended the host process.
+
+**It is a CLASS, not a machine list.** `cpu_sh.c:233-234` adds this device from
+`if (cpu->cd.sh.cpu_type.arch == 4)`, so **the CPU brings the TMU and the BOARD brings the
+clock**. Five registered SH machine types name an arch-4 CPU; only `machine_dreamcast.c:51`
+(50 MHz) and `machine_landisk.c:81` (33.33 MHz) assign `pclock`. The other three inherit a
+guard that kills the host, and so does every future arch-4 SH machine whose author does not
+know a rule written down nowhere. That is why the fix is at the guard and not in three
+machine files.
+
+*Why four rounds of SH-4 `exit(1)` work walked past it:* the wording says
+`INTERNAL ERROR ... Aborting`, which reads as a construction fault -- something that cannot
+happen. It is reached by an ordinary store.
+
+### THE BRIEF SAID TWO MACHINES. IT IS THREE, AND TWO SEATS CAUGHT IT INDEPENDENTLY
+
+`machine_test.c:535` is `MACHINE_DEFAULT_CPU(baresh)`; `:541` is
+`MACHINE_DEFAULT_CPU(testsh)`. The brief cited both line numbers and attributed them to one
+machine, so **`baresh` -- a separately registered machine type -- was never named**.
+Measured: `-E baresh` dies identically. A third seat additionally measured `-e jornada690`
+reproducing (the subtype is never read, so it is the same code path) and confirmed all five
+machines carry the device by reading `IPRD = 0xda74` on each.
+
+The round's own prose said "2 of 4". The truth is **3 of 5**.
+
+### The fix: decline the write, which is what the same function already does twenty lines down
+
+`#447` had already answered the analogous question in this exact arm, and its comment is
+explicit: *"substituting a prescaler for a clock source we cannot provide would be inventing
+a rate. The guest can see the rejection by reading TCR back."* `#459` follows it -- once-only
+diagnostic, `break`, no state touched -- using the eleventh `SH4_VAL_*` latch class.
+
+**That eleventh class was free, and a seat found out why.** The carrier still carried
+"convert the `SH4_VAL_*` defines to a C99 enum ending in `_NCLASS` ... apply that when a
+tenth class arrives" as an OUTSTANDING obligation. It was already discharged --
+`dev_sh4.c:124` is the enum, and the file's own comment records the pre-set trigger firing on
+`SH4_VAL_SCICMD`. A stale instruction in the carrier is a future round redoing finished work,
+so it is now marked complete.
+
+**The guard stays ABOVE the prescaler switch**, which `#447` moved it up for and recorded:
+run it lower and `timer_hz` is already set from `idata & 3`, so with `pclock == 0` the
+`debug()` line announces `clock set to 0.000000 Hz` and the write installs a frequency the
+guest never asked for. Moving the decline down re-creates the silent-wrong-rate fault it
+exists to refuse. `m_below` measures exactly that.
+
+### *** THE HONEST COST IS THE LATCH, NOT THE STALL -- and the round had it wrong ***
+
+The design brief, and an early draft of the shipped comment, both defended the trade as
+"a crash becomes a hang". A measuring seat corrected it on two grounds:
+
+* **The hang is hypothetical in this tree.** `machine_hpcsh.c`'s `MACHINE_SETUP` body is
+  commented out at `:47-62` -- no console, no disk, no PROM. **No guest boots on hpcsh at
+  all**, and `baresh`/`testsh` run hand-written test programs. The host death was measured;
+  the hang has no guest to happen to.
+* **The real de-escalation cost is that the diagnostic degrades from unmissable to
+  once-per-timer for the device lifetime.** A guest that spins programming TCR0 gets one
+  line and then permanent silence, buried in a boot log. That is sharper and more accurate
+  than "waits forever", and neither the brief nor the first draft said it.
+
+What does survive: the counterfactual was never a working timer -- on these machines every
+TCR write died, so nothing that worked is lost -- the guest can see the rejection by reading
+TCR back (**measured `0x0` versus `0x20`**), and `fatal()` in this tree prints rather than
+exits (`debugmsg.c:384-390`) and cannot be silenced by `-q`.
+
+### THE ROUND SHIPPED A FALSE CLAIM ABOUT ITS OWN PANEL, AND THE MISCOUNTED SEAT CAUGHT IT
+
+An earlier draft of the shipped comment read *"A panel of nine seats reached this 8-1."*
+**It was written while the ninth seat was still running, and that seat then did not vote
+B.** Counting a seat that has not answered is precisely the shape the seat ledger exists to
+refuse, and it appeared inside a round whose whole subject is a guard nobody checked.
+
+Corrected in place rather than silently superseded. The accurate statement: **all nine
+answered, and all nine agree the decline is mandatory.** Seven say it is the whole fix. Two
+would additionally assign a `pclock` to the SYNTHETIC machines, on the ground that a
+fictional machine's parameters are the project's own *definition* rather than a hardware
+*fact* -- a real argument that does not transfer to hpcsh. Held out as a CAPABILITY change
+in a different file and semantic class, per the round-scope rule, and filed as
+`sh4testclock`.
+
+### The detector: 6/16 pre-fix, 16/16 post-fix
+
+*The pre-fix number is measured against `git show HEAD:src/devices/dev_sh4.c` rebuilt into a
+private tree, NOT against `build/`.* A seat reported that `build/gxemul`'s mtime moved
+underneath it mid-review, so a run it believed was pre-fix was post-fix and the output could
+not distinguish the two. **A seat asked to witness "on the committed build" while the loop is
+implementing is measuring an undefined binary.** Rebuild from `git show HEAD:` or stamp it.
+
+```
+  the fix                                          16/16
+  pre       HEAD, fatal + exit(1)                   6/16   all 6 kill/diag + all 4 observability
+  m_silent  decline, no diagnostic                 12/15   says; once; pertmr
+  m_flat    one latch instance for all timers      14/15   pertmr
+  m_nolatch always print, no once-only             14/15   once
+  m_below   declines but the write LANDS           14/15   unlatch
+```
+
+*The four mutants carry `/15` because they were measured before `accept dc tcr` was added;
+they are not restated as `/16`, because they were not re-run at 16. The two `/16` rows are
+the same script on both sides, which is what the witness clause requires.*
+
+**THREE OF THE FOUR OBSERVABILITY ROWS ARE EACH THE SOLE KILLER OF ONE MUTANT** -- `pertmr`
+alone catches a shared latch instance, `once` alone catches a missing latch, `unlatch` alone
+catches a decline that lets the write land. That is the strongest justification a row can
+carry, and none of the four existed until the round asked what a silent decline would cost.
+
+**Two clock values, not one, and the second is the point.** A seat observed that a single
+accept row pinned at landisk's 33.33 MHz is passed by a mutant that HARDCODES `33333333` in
+place of `cpu->cd.sh.pclock` -- the row cannot tell "reads the machine's clock" from "happens
+to agree with landisk". Dreamcast's 50 MHz is the discriminator.
+
+**The de-escalation clause, discharged by measured kill.** The predicate that used to gate
+death is exactly one, and a seat established it was **the last guest-reachable `exit(` in the
+device** (`:2772` is inside `#ifdef SH4_DEBUG`; `:2947/:2953/:2959` are construction-time
+lookup failures). Its accept rows redden under a guard-only growth mutant -- `|| (pclock %
+256) != 0`, in-idiom because it is `#447`'s own reasoning one level deeper. Guard-only is the
+correct form here by the `#451` discriminator: **the latch operand is the constant `1`, which
+the guard cannot feed**, so guard-only is non-equivalent AND quieter than the joint form.
+
+### Two near-misses, in opposite directions, both caught by asking rule 4
+
+* **False NEGATIVE.** The first probe run reported `testsh kill  survived` -- that testsh
+  does not reproduce. It reused hpcsh's scratch address on a machine whose RAM is at physical
+  0, so the instruction was never planted. A wrong address quietly NARROWS a live defect.
+* **False POSITIVE.** The dreamcast accept row first read `died` -- **the same string the
+  trigger rows produce**. Dreamcast brings up two console inputs (`SH4 SCIF` and `maple`) and
+  `console.c:994-1007` makes that fatal without `-x`. Scored naively, a console-configuration
+  failure would have become a fourth reproduction. `-x` only sets `allow_slaves`
+  (`console.c:985`) and spawns no xterm for a console never used.
+
+*Both were caught by the same question -- did it fail for the reason under test -- and
+neither by a size or liveness check.*
+
+### Filed, not fixed
+
+* `sh4testclock` -- give `baresh`/`testsh` a defined synthetic pclock. A seat measured
+  `2^25 = 33554432` working, chosen because every TMU prescaler divides it exactly and
+  nobody will mistake it for a Jornada measurement.
+* `sh4cpudevscope` -- **the class this round is one symptom of.** The SH-4 on-chip block is
+  added per-CPU but is machine-scoped. Two more symptoms measured: `-n 2 -E landisk` refuses
+  to construct (`"sh4" collides with device 11`), and `dev_sh4.c:2943-2959` hardcodes
+  `machine[0].cpu[0].irq[...]` for the TMU lookup.
+* `sh4frqcr` -- `FRQCR` is modelled at `dev_sh4.c:2592-2596` as a bare latch with **no reset
+  value**, so a guest reads `0x0000`, which is not a legal FRQCR value (Table 10.3 gives
+  `H'0E1A`/`H'0E23`/`H'0E13`/`H'0E0A`). That is the register real hardware derives the
+  peripheral clock FROM, and it is the honest long-run answer to "where should pclock come
+  from".
+* `hpcshcpu` -- **is hpcsh's CPU family even right?** `doc/TODO.html:322-323` groups hpcsh
+  with `NetBSD/evbsh3` under "SH3-specific devices", while `machine_hpcsh.c:89` names SH7750
+  (arch 4). *The repo contradicts itself and there is no SH-3 manual in `_scratchpad`.* Two
+  seats independently refused to settle it from memory -- which is the `#357`/`#362`/`#365`
+  citation failure not repeating. Obtain a source first.
+
+### Option D was measured and rejected, which is worth more than declining it on reasoning
+
+"Give hpcsh an arch-3 CPU so the device is never added" removes the defect at its root, and a
+seat measured that it works: `-C SH7708R -e jornada680` needs no rebuild, the store hits
+`non-existant paddr`, the host survives, and the startup banner is byte-identical except the
+CPU name.
+
+**Rejected anyway, on what arch-3 actually removes.** `dev_sh4.c` is not "the timer" -- it is
+CCN/MMU, INTC, TMU, RTC, BSC, DMAC, SCIF, the TLB arrays and the PCIC. An arch-3 hpcsh has
+none of it. `cpu_sh.c:527-533` shows both SH-3 interrupt handlers are `/* TODO */` stubs that
+silently drop asserts, and `cpu_sh.c:224` uses a **leftover UTLB loop counter** as
+`templ.line`, inert today only because that handler is a stub. `cpu_sh.c:33` says it plainly:
+*"TODO: This actually only works or SH4 so far, not SH3."* Changing a machine's modelled CPU
+family on contested evidence, to route around a device bug, is a much larger claim than the
+bug warrants.
+
 ## Round 458 (#458) -- the interrupt priority table consulted two registers out of four
 
 `sh_update_interrupt_priorities()` read `intc_ipra` and `intc_intpri08` and nothing

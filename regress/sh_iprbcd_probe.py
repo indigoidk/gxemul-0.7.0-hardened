@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Witness for sh4iprbcd (IPRB/IPRC/IPRD never read) + sh4prioraise (no rescan).
+"""DETECTOR for sh4iprbcd (IPRB/IPRC/IPRD never read) + sh4prioraise (no rescan).
+
+Its rows assert the POST-fix state, which is why it is gated; the witness is the
+recorded 6/10 pre-fix measurement, not the rows themselves.
 
 Route: SCIF TXI (INTEVT 0x760) on landisk.  It is the ONE Table 19.6 source in
 this tree that a device asserts SYNCHRONOUSLY inside a guest store --

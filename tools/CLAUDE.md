@@ -689,7 +689,13 @@ rests on the array INDICES rather than on the constants, so the assert would gua
 invariant; and for the one disjoint pair the values are hardware register layouts that cannot
 legitimately change, so it could never fire. **The real hazard is a duplicate class ID**, and its
 zero-cost structural fix is converting the `SH4_VAL_*` defines to a C99 enum ending in
-`_NCLASS`, where duplicates are impossible by construction. Apply that when a tenth class arrives.
+`_NCLASS`, where duplicates are impossible by construction.
+
+*** DISCHARGED -- DO NOT REDO IT. Verified 2026-08-23 by opening the file. *** The trigger
+was "when a tenth class arrives"; `SH4_VAL_SCICMD` was the tenth, the conversion happened,
+and `dev_sh4.c:124` is now `enum {` ending in `SH4_VAL_NCLASS`, with the file's own comment
+at `:119-122` recording that the pre-set trigger fired. An eleventh class is therefore free.
+This paragraph is kept for its reasoning; its instruction is complete.
 
 This applies to the whole #438 / #441 / #443 / #447 family, and #447's own probe already *stated*
 the hazard in its constants block ("a mask pinned only from BELOW … cannot see a guard that
@@ -892,6 +898,20 @@ range -- and on 2026-08-23 that produced a citation two lines off in a comment t
 just been written to FIX a citation error. **Use `grep -n` or
 `awk 'NR>=A && NR<=B {print NR": "$0}'`**, which carry the number with the line. Three of
 that round's four wrong citations were found by a seat re-deriving them with `grep -n`.
+
+*** THE GENERAL RULE, after THREE incidents in one session (2026-08-23): ONE BACKSLASH LEVEL IS CONSUMED on the Bash -> heredoc -> Python path, IN BOTH DIRECTIONS. ***
+
+Measured, same session, opposite failures:
+* `'...\\\n'` intended as backslash+newline produced the two characters `\n` in a
+  shell word list -- a bogus `for` word, and a RED GATE.
+* `'...\\n"'` intended as the two characters `\n` inside a C string literal produced a
+  REAL NEWLINE, splitting the literal and breaking the build.
+
+So do not reason about the level count -- **use `chr(92)` for any backslash that must
+survive into the file, and build the line by concatenation.** `BS = chr(92)` at the top
+of the script costs nothing and is immune in both directions. The same applies to shell
+regex arguments: `grep -n '\\n'` silently degrades to matching the letter `n` (it did,
+twice, once producing a false "the ledger is ascii-escaped" reading) -- use `grep -nF`.
 
 *** DO NOT BUILD A BACKSLASH-CONTINUED SHELL LINE THROUGH A NESTED HEREDOC. It mangled
 TWICE in one session (2026-08-23), and the second one shipped a RED GATE. ***
