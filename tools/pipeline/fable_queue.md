@@ -180,6 +180,50 @@ instance of rather than as a duplicate of it.
 
 ---
 
+### `sh4gdromexit` (#460, `98a3408`) — regress stage — **HELD, batched**
+
+`regress/gdrom_data_probe.py`, 23 rows, wired into `gate_sh_rounding.sh` (PASS, 155 checks).
+5/23 pre-fix, 23/23 post-fix, same script, pre-fix rebuilt from `git show HEAD:`. Kill table:
+`m_widthdecline` 22/23 red on `accept w8` alone; deleted-arm 12/22; shared latch 21/22;
+`0xffff`->`0` 21/22.
+
+**THE QUESTIONS THIS STAGE IS HELD FOR** — named, not boilerplate:
+
+1. **A DETECTOR THAT WAS INVERTED, AND WHAT THAT SAYS ABOUT THE ORACLE-CORRECTION RULE.** The
+   first probe asserted the old `fatal()` text must be ABSENT, so deleting the register arm
+   scored 13/13 and the intended fix 8/13 — it *rewarded* the vandalism it existed to
+   forbid. It was caught by a seat building six variants, not by reading. **Is there a
+   mechanical check for this class?** The vacuity floor tests (a) fails pre-fix, (b) fails on
+   verbatim reinstatement, (c) fails on a null medium — and this detector would have passed
+   (a) and (b). What it failed is something the floor does not name: *it did not fail on the
+   CORRECT FIX*, which is not a clause anywhere. That looks like a genuine gap in the floor.
+
+2. **RE-POINTED REGEXES.** A seat ruled that a pre-fix RED is NOT sufficient to make a
+   re-pointed regex honest, because pre-fix the build reddens by PROCESS DEATH before any
+   count is taken — death-red cannot distinguish "matches the correct diagnostic" from
+   "matches any survival". What defends it is a SURVIVING-BUT-WRONG control. **Should that
+   become a rule?** It is one sentence and it generalises past this round.
+
+3. **A JOIN THAT FAILED ITS OWN TEST AND WAS TAKEN ANYWAY.** `:334` joined because it and the
+   `COND_DATA_AVAIL` site are one predicate family. But the reopening rule prices "no new
+   oracle", and reaching `:334` needed a new opcode, a new loop shape and a new state
+   manipulation. It is recorded as **deliberately overridden**. **Is overriding that clause
+   ever legitimate, and if so, what is the test?** Shipping three of four would have left a
+   device where a declined read is safe in one state and lethal in another — which reads
+   like a real reason, but "it would be untidy otherwise" is exactly the argument the
+   reopening rule exists to refuse.
+
+4. **SEVERITY INVERSION, STATED PLAINLY.** `gdromdefault` is MEASURED broader than everything
+   this round fixed — 19 of 21 sampled offsets fatal, one predicate, ~248 of 256 byte
+   offsets — and it was sequenced BEHIND this round. The stated reason is not severity but
+   that its fix design is unsettled and this round builds the latch it needs. **Is that a
+   sound exception to "severity orders the queue", or a rationalisation?**
+
+*Sign-off only:* the shipped/filed split, and whether `gdromoob` reads correctly as
+assessed-not-a-defect rather than as an unfixed finding.
+
+---
+
 ### `selfcheckman` — regress stage — **HELD, batched**
 
 Closed 2026-08-19 as **already fixed** by `7e3b120`, verified independently twice (the main
