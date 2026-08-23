@@ -537,6 +537,30 @@ Eight seats answered each stage. Gate 10 PASS at 60 checks; 22 mutants, no survi
 
 Not blocking: shipped and gate-green.
 
+
+## `sh4prio0` — regress review, queued 2026-08-22 (closed at `dc0c9d5`)
+
+**Two questions, and the second is a RULE question, so it should not wait a week.**
+
+1. **Disposition of two measured escapes.** #455 filed rather than fixed M4 (clears
+   `SH_INT_ASSERTED` and returns) and M5 (deletes the guard outright). Both score 4/4 against
+   the shipped rows because no row reads the pending bit or the arbitration state. The
+   detector is above the vacuity floor — (a), (b), (c) all measured green — so the floor rules
+   say coverage debt. **But the round's own comment argues that leaving `SH_INT_ASSERTED` set
+   is REQUIRED, not merely correct**, because clearing it would make `sh4prioraise` unfixable.
+   A required property whose sole carrier is a comment, with no row, is the L3 shape. Is FILE
+   right for both, or does M4 owe a row?
+
+2. **A rule question about accept-row failability.** The rule asks for the least-observable
+   growth form that is measured non-equivalent at the site. I argued guard-only IS that form
+   here **because there is no latch operand at all** — the fix is a bare `return`, so the
+   JOINT form does not exist. Is "no latch operand, therefore guard-only" sound, or does the
+   absence of a latch mean the rule wants a different reading at de-fatalising sites? This
+   changes how future rounds of this shape are built, so per the queue-splitting rule it
+   should get the seat at the next round boundary rather than in a weekly batch.
+
+Not blocking: shipped, gate-green at 80 checks, and the accept row's kill is measured.
+
 ---
 
 ## HOW TO RUN ONE

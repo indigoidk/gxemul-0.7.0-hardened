@@ -6136,7 +6136,9 @@ are no-ops today**, which bears directly on `wdcnoirq`'s interrupt behaviour.
 which `#293` fixed; `gate_crossfamily.sh:186-192` already annotates it as having been untrue
 for far longer than it was true.
 
-### `sh4prio0` — open, WITNESSABLE, and worse than the sweep ranked it. One guest store, unpreventable.
+### `sh4prio0` — ~~open~~ **FIXED as #455 (`dc0c9d5`)**. One guest store, unpreventable.
+
+*Kept in full rather than trimmed, because the design recorded below was REFUTED before it was built and a future reader needs to see that it was caught. The state line is corrected here rather than left to the ledger alone: a row reading `open` on shipped, witnessed, gated work tells a future reader it was never done.*
 
 `src/cpus/cpu_sh.c:312-316` ends the host process when any interrupt is asserted at priority 0:
 
@@ -6195,15 +6197,19 @@ So the host simply dying IS the observable, and rows P1-P3 need no `vbr`, no han
 breakpoint and no `continue`. The carrier bullet has been corrected. *A scoping seat caught
 the main loop about to build the full free-running rig for a defect that a `step` would show.*
 
-Probe `regress/sh_intprio_probe.py`, rung 3, on unmodified `-E landisk`, importing `session()`
-/ `write_arm()` / `row()` from `sh4_pcic_probe.py` rather than copying them — `gate_hygiene.sh`
+Probe `regress/sh_intprio_probe.py`, rung 3. ~~on unmodified `-E landisk`, importing
+`session()` / `write_arm()` / `row()` from `sh4_pcic_probe.py`~~ **NEITHER HALF IS WHAT
+SHIPPED.** The primary rows run on `-E testsh`, not landisk, and the probe defines its
+OWN `session()` rather than importing one, because it needs a promptless free-running
+driver that `sh4_pcic_probe.py` has no notion of. Verified it does NOT trip
+`gate_hygiene.sh`'s readiness-idiom census, so the pin bump feared below was never owed — `gate_hygiene.sh`
 pins the count of the three `#392` readiness idioms across `regress/*.py`, so a copy silently
 needs that pin bumped.
 
 | row | pre-fix | post-fix |
 |---|---|---|
 | ~~**P1** — TCR0/TCOR0/TCNT0/TSTR stores, then `step 40000`~~ **REFUTED — see the correction below** | — | — |
-| **P2 liveness** — known word to scratch, read back through the same decode | — | `0x5a5a5a5a` returns |
+| **P2 liveness** — known word to scratch, read back through the same decode | — | `0x12345678` returns — **the value was changed from `0x5a5a5a5a` during construction: a palindrome under byte swap cannot see a byte-order defect, and one was hiding** |
 | **P3 device signature** — read TCR0 back as `0x0020`, TSTR as 1 | — | proves the stores reached `DEVICE_ACCESS(sh4)`, not a hole |
 | **P4 accept row** — IPRA first, then the prologue; free-running; handler reads INTEVT | — | INTEVT reads `0x400`: selected AND delivered |
 
