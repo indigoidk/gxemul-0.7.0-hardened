@@ -86,6 +86,64 @@ things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
+### `sh4iprbcd` + `sh4prioraise` (#458, `7e5c0f6`) — regress stage — **HELD, batched**
+
+`regress/sh_iprbcd_probe.py`, 18 rows, wired into `gate_sh_rounding.sh` (PASS, 110 checks).
+Measured 6/10 pre-fix, 18/18 post-fix. Kill table: `m_iprconly` 10/12, `m_nortc` 11/12,
+`m_norescan` 11/12, `m_iprdread` 13/14, `m_sciftxonly` 15/18 — each red on exactly the row
+built for it.
+
+**THE QUESTIONS THIS STAGE IS HELD FOR** — named rather than left to be reconstructed:
+
+1. **Is `iprd hold` an oracle or a veto?** It pins that a guest `IPRD := 0` does NOT move slot
+   `0x240`. That is correct *today* because IRLM=1 is refused. If `sh4irlm` is ever
+   implemented, the same row **blocks the feature** rather than defending a decision, and its
+   oracle must be re-pinned FIRST under the oracle-correction rule. The closure note carries
+   that tripwire. **Is a row whose correctness is contingent on another row staying open a
+   legitimate detector, or is it a latent false oracle?** This is a rule question, not a
+   sign-off.
+
+2. **The detector grew twice inside one pass 2** — 12 -> 14 (the IPRD pair) -> 18 (the SCIF
+   membership rows), each growth forced by a mutant the previous size could not see. Both
+   growths were licensed under L1 (pre-ship construction) and the second additionally as a
+   MEASURED FALSE PASS on live functionality (console input). **Is that the stopping rule
+   working, or the #392 chain with better paperwork?** The distinguishing claim is that the
+   ask-again cap was spent once and everything found after it was FILED — eight escape shapes
+   in `sh4iprunpinned`, none fixed. Check that claim against the diff.
+
+3. **Two table-reading rows (`iprb wdt`, `ipra rtc`) read CPU internals through the settings
+   interface**, because the sources they cover have no `INTERRUPT_ASSERT` anywhere in the
+   tree and no behavioural row can reach them. Two seats accepted the price; one asked for a
+   read-only variant; one named a debugger interrupt-inject command as the shape that does
+   not rot. **Is the settings channel the right home for detector-only observability?**
+
+*Not a rule question, just a sign-off:* `sh4prioraise` closed on the same commit after the
+assess-phase two-round ruling was overturned by an implementation fact. Recorded as a scope
+CHANGE. Confirm the record reads honestly to someone who was not here.
+
+---
+
+### `sh4prioraise` (#458, `7e5c0f6`) — regress stage — **HELD, batched**
+
+Closed on the SAME commit as `sh4iprbcd`, which the assess phase had ruled a separate round.
+Covered by `raise` and `raise_lo` in `regress/sh_iprbcd_probe.py`; isolated by `m_norescan`
+(11/12, red on `raise` alone).
+
+**THE QUESTION:** the two-round ruling was overturned mid-round on an implementation fact —
+rewriting priority nibbles of a table that may hold a pending request leaves `int_to_assert`
+stale, so the rescan is load-bearing for the register fix itself and `rescanonly` measured
+byte-identical to `pre`. **Was overturning an assess-phase scope ruling from inside the
+round it constrains legitimate, given the round is the party that benefits?** The defence on
+record is that the ruling was correct on its evidence, the change is recorded as a CHANGE
+rather than merged silently, and an earlier draft of the round block contained both halves
+of the contradiction ("is NOT in this round" beside "the rescan half IS present"). Check
+whether that defence is sufficient or whether this is scope creep with a good story.
+
+*Known gap, already filed as `sh4standinglower`:* no row asserts high then LOWERS while the
+request stands, so a rescan guarded by `int_to_assert == 0` is predicted to escape.
+
+---
+
 ### `selfcheckman` — regress stage — **HELD, batched**
 
 Closed 2026-08-19 as **already fixed** by `7e3b120`, verified independently twice (the main

@@ -15919,14 +15919,14 @@
     {
       "id": "sh4iprbcd",
       "title": "sh4iprbcd  IPRB/IPRC/IPRD are stored by the device and read by nothing -- WDT, REF, SCI, GPIO, DMAC and the IRL lines are priority 0 permanently",
-      "state": "open",
-      "commits": "",
+      "state": "closed",
+      "commits": "7e5c0f6",
       "hold": "",
-      "witness": "none",
+      "witness": "boot:landisk (rung 4) + probe:regress/sh_iprbcd_probe.py (rung 3, 14 rows, SHIPPED). The boot witness is load-bearing: an instrumented 90s `-E landisk` boot of openbsd76-landisk-bsd.rd shows the guest writing IPRC=0x00c0 (SCIF priority 12) as `scif0: cons` attaches, while the model delivered priority 3 on all fifteen SCIF asserts. Probe measured 6/10 pre-fix (vector 1,1,1,0,0,1,0,1,0,1, reproduced identically twice) and 14/14 post-fix, with a LIVENESS control (0x12345678 through a guest store) and a DEVICE-SIGNATURE control (IPRD reset value 0xda74 via P4) green in both directions. NOTE the `naive` row -- write one IPR, expect delivery -- is GREEN pre-fix and ships as a LABELLED row rather than a witness; what discriminates is IMASK BRACKETING.",
       "closure": {
-        "by": "",
-        "badge": "",
-        "note": ""
+        "by": "fable5-mainloop",
+        "badge": "A",
+        "note": "*** THE ROW'S TITLE NAMES IPRD; THE ROUND DECLINES TO READ IT, AND THAT IS THE FIX, NOT A RESIDUAL. *** Not-reading is the correct model: IPRD is SH7750S/SH7750R only (Rev.7.00 note 3, :39881 and :40248) while machine_dreamcast.c:165 asks for plain SH7750 where the register does not exist; it governs only IRLM=1, which dev_sh4.c:2386-2388 refuses outright; module priorities come from IPRA-IPRC per programming manual 5.6; and reading it is MEASURED HARM -- one guest `IPRD := 0`, the exact store OpenBSD/landisk 7.6 makes at boot, drops IRQ2/5/8/11 from 0xd/0xa/0x7/0x4 to zero and masks four PCIC lines, because IPRD's four nibbles ALIAS those slots (sh4_exception.h:137-140 vs :144-154). A row held open demanding a fix that would be a defect is queue pollution, so it closes.\n*** REOPEN TRIPWIRE, written now so it is not reconstructed later: IF THE IRLM=1 REFUSAL IS EVER LIFTED, THIS CLOSURE IS VOID. *** landisk's SH7751R does have IPRD, so implementing IRLM=1 makes declining it wrong on the same day; IPRD reading must land in that same commit, gated on the live IRLM bit, with an explicit policy for the IRQ2/5/8/11 aliasing -- and `iprd hold` flips from DEFENDING the decline to BLOCKING the feature, so its oracle must be re-pinned FIRST under the oracle-correction rule. The two decisions are cross-referenced in both files. Filed as sh4irlm.\nDETECTOR: the decision was defended only by a comment until the ask-again. `iprd hold`/`iprd ctl` now pin it -- MEASURED, `m_iprdread` (apply IPRD's nibbles to IRL0-3) scores 13/14, red on `iprd hold` alone, with the out-of-IPRD control green. Two further mutants (drop the RTC+IPRB mapping; drop the three RTC lines) had each scored a CLEAN 10/10 against every behavioural row, because WDT/REF/SCI/GPIO/DMAC/H-UDI/RTC have NO INTERRUPT_ASSERT in this tree; the settings exposure of int_prio_and_pending[] exists so two rows can read the TABLE, and it closes them exactly.\nWHAT THIS DOES NOT CLAIM: `scifonly` and `ipronly` build byte-for-byte identical binaries, so the entire behaviourally-witnessable payload is the SCIF re-source. The other nibbles make the model's table match the manual for sources nothing can currently raise -- worth doing, but a judgement about scope, not a measurement. Escapes FILED as sh4iprunpinned (eight shapes, five seats)."
       },
       "entries": [
         {
@@ -16023,20 +16023,119 @@
           "date": "2026-08-23",
           "outcome": "UNVERIFIED",
           "note": "HELD -- IN FLIGHT, not skipped. The measuring seat is building and running right now; it is the one seat a panel cannot parallelise, because it compiles. Its brief asks the two questions the reading seats could not settle between them: which sources a probe can actually DRIVE (synchronous vs host-timer, per #455's discriminator), and whether either rig's guest ever writes IPRC -- which decides whether re-sourcing SCIF silently kills its interrupt path, the de-escalation shape. Recorded as held rather than left blank, because in flight and never fired must not look alike. [answer: panel_20260822_230128]"
+        },
+        {
+          "seat": "grok",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "HIGHEST-YIELD SEAT OF THE ROUND. Three wrong records, each verified by opening the file: (1) the function's OWN header table still said Reserved in ipra[3:0], iprb[7:4] and iprc[7:4] -- the three cells the diff maps -- twenty lines above the new code, so a reader trusting it would put SCIF back on INTPRI08; (2) 'of all the Table 19.6 sources only SCIF is drivable at all' is false, TMU asserts at dev_sh4.c:585 from a host timer, and THE PROBE'S OWN HEADER had the accurate synchronous-vs-host-timer wording the whole time; (3) int_to_assert/int_level were exposed with a justification NO ROW HONOURS. It also nominated the ask-again mutant that measured true. Emitted no formatted VERDICT line at the top -- a FORMAT miss, recorded as such, not a seat failure."
+        },
+        {
+          "seat": "fable5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": true,
+          "note": "Liveness token returned. Caught FOUR citation errors in this round's own corrections, all verified: :40142 -> :40144; the source-row range :40083 excluded the H-UDI row at :40081 that it was citing; :40247 -> :40248; and dev_sh4.c:2379-2381 -> :2386-2388, WHICH THIS ROUND HAD SHIFTED ITSELF by inserting a comment above the line minutes after citing it correctly. Also made the scope call that closed sh4prioraise, and asked for a dead-marker on the SH7760 table whose attribution sits thirty lines away -- the same distance defect the round had just fixed one table higher."
+        },
+        {
+          "seat": "codex",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Answered substantively at 25,756 bytes -- squarely in the size range of its own quota-wall signature, so it was checked by CONTENT and found clean. Named the `i<=SH_INTEVT_SCI_TEI` -> `i<` escape (valid, FILED) and objected to raw mutable settings exposure; the two arbitration temporaries were removed on that objection plus minimax's."
+        },
+        {
+          "seat": "deepseek",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "REFUTED",
+          "acted": false,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "*** ITS HEADLINE SHIP CONDITION WAS WRONG AND TOOK TWO MINUTES TO CHECK. *** It required the SCIF loop change from `i<=SH4_INTEVT_SCIF_TXI` to `i<=SH4_INTEVT_SCIF_TEI`, calling the current form an off-by-one leaving SCIF TEI at priority 0. SH4_INTEVT_SCIF_TEI DOES NOT EXIST: sh4_exception.h:104-107 defines exactly four SCIF vectors, ERI/RXI/BRI/TXI, so the loop already covers all four and the edit would not compile. It had transplanted SCI's vector set (which does end in TEI at 0x540) onto SCIF. Its IPRD analysis and its GPIOI escape were both correct -- a confident wrong headline from an otherwise-good seat."
+        },
+        {
+          "seat": "glm",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Correctly demoted this round's own IPRD reset-value argument: the MEASURED variant score is load-bearing and the H'DA74 coincidence is secondary. Acted on -- the comment now records it as suggestive, NOT load-bearing. No formatted VERDICT line; FORMAT miss, not a seat failure."
+        },
+        {
+          "seat": "kimi",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Supplied the framing the round was missing: in IRLM=0 the hardware IGNORES IPRD, so reading it is NON-CONFORMANT even absent the measured PCIC masking -- the masking is the symptom, non-conformance the disease. Independently reached glm's conclusion that the reset-value coincidence is suggestive rather than load-bearing. Both are in the comment now."
+        },
+        {
+          "seat": "minimax",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Reached grok's conclusion independently on int_to_assert/int_level being unearned detector surface, and asked for the IRLM refusal in dev_sh4.c to be cross-referenced to the IPRD decline in cpu_sh.c so a future change that accepts IRLM=1 meets the linked decision. Both done. The inlined-brief rule continues to hold for this seat."
+        },
+        {
+          "seat": "opus5",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "*** THE HIGHEST-VALUE FINDING OF THE ROUND, AND THE ONLY ESCAPE THAT WAS NOT COVERAGE DEBT -- BECAUSE IT COMPILED AND MEASURED. *** `m_sciftxonly`, one identifier narrowing the IPRC SCIF loop to TXI alone, MEASURED 14/14 against the detector as it then stood. Unlike every other escape found this round it reaches a LIVE line: SCIF RXI (0x720) is asserted by dev_sh4.c:250-256 on RIE && DR and connected at :1912 -- console input on landisk. It measured the consequence rather than arguing it: iprio_720 = 0x1f/delivered on the fix versus 0x10/refused on the mutant. Fixed in-round as a MEASURED FALSE PASS on live functionality; four rows now pin the loop's whole membership. It ALSO independently rebuilt m_iprdread and reproduced 13/14 red-on-`iprd hold`, discharging vacuity-floor clause (b) for that pair from a second hand; found that `m_irqramp` passes the twelve-row detector and is killed only by the IPRD rows, proving they earn their keep beyond IPRD; supplied the SH7750 `fixed levels` footnote at :39956-39959 that is a STRONGER IPRD arm than either the round or any other seat had; noted that the SCIF rows print UNSTAGGERED and so are layout-immune corroboration of the headline claim; and caught that the rescan lift RE-ARBITRATES rather than being verbatim. Every mutant lived in a private WSL clone; build/ was never written and no .MUTANT sentinel was needed."
+        },
+        {
+          "seat": "agy",
+          "phase": "review",
+          "d": "✓",
+          "date": "2026-08-23",
+          "outcome": "UPHELD",
+          "acted": true,
+          "graded_by": "fable5-mainloop",
+          "self_graded": false,
+          "note": "Enumerated the uncovered-source escape family precisely and by slot -- RTC PRI 0x4a0, REF 0x580/0x5a0, the SCI block 0x4e0-0x540, H-UDI 0x600, GPIO 0x620, DMAC 0x640-0x6c0 -- with the correct reason each escapes. FILED as sh4iprunpinned rather than fixed, per the stopping rule."
         }
       ]
     },
     {
       "id": "sh4prioraise",
       "title": "sh4prioraise  Raising a priority never re-examines an already-pending request",
-      "state": "open",
-      "commits": "",
+      "state": "closed",
+      "commits": "7e5c0f6",
       "hold": "",
-      "witness": "none",
+      "witness": "probe:regress/sh_iprbcd_probe.py rows `raise` and `raise_lo` (rung 3). `raise` = assert SCIF while masked, then write IPRC[7:4]:=15 -> must deliver; red on an IPR-only build. The isolating mutant `m_norescan` (drop the rescan call) scores 11/12, red on `raise` alone.",
       "closure": {
-        "by": "",
-        "badge": "",
-        "note": ""
+        "by": "fable5-mainloop",
+        "badge": "A",
+        "note": "*** CLOSED IN #458, WHICH THE ASSESS PHASE HAD RULED A SEPARATE ROUND. THE RULING WAS OVERTAKEN BY AN IMPLEMENTATION FACT, AND THE CHANGE IS RECORDED RATHER THAN MERGED QUIETLY. *** The pass-1 seat refused the merge correctly on the evidence it had -- different semantic classes, witness shapes differing in ORDER, and this row's own filing saying 'a second design question, its own round'. What that ruling could not know: rewriting priority nibbles of a table that may already hold a pending request leaves int_to_assert STALE, so the rescan is load-bearing FOR THE REGISTER FIX ITSELF. Measured corroboration: `rescanonly` builds identical to `pre` -- the rescan fixes nothing observable ALONE -- which is exactly why it cannot be deferred without leaving #458's own table able to go stale. Separable as filings, not as code.\nThe round block records this as a SCOPE CHANGE, because an earlier draft said 'sh4prioraise is NOT in this round' in the same breath as 'the rescan half IS present' and 'the row that isolates it is red on an IPR-only build'. Both were true; together they denied shipping what shipped.\nNOT CLOSED: the standing-LOWER direction. No row asserts at a high priority and then lowers it while the request stands, so a mutant guarding the rescan with `if (int_to_assert == 0)` is predicted to escape. Filed as sh4standinglower with the one-line kill row a seat supplied."
       },
       "entries": [
         {
