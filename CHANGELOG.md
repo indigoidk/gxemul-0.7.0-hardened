@@ -185,7 +185,7 @@ still ends the host**.
 
 **The full census, so a reader of this section does not conclude the file is now clean:**
 **eight `exit(1)` sites remain live** in `dev_dreamcast_gdrom.c` after this round --
-`:283`, `:335`, `:413`, `:589`, `:628`, `:688`, `:771`, `:787`. Four are command-layer
+`:294`, `:346`, `:424`, `:600`, `:639`, `:699`, `:804`, `:820`. Four are command-layer
 (TOC length != 408, bad data format, unknown command, and the assessed-unreachable "too
 much GDROM_DATA"), reachable through `GDROM_DATA` packets; two are the DMA+0x18 pair; two
 
@@ -196,7 +196,21 @@ Re-derived against the file after the last edit, which is the carrier's own rule
 line number in a comment is invalidated by your own edits to that file") catching its
 author. The uniform offset is the tell: drift from an intervening commit shifts lines
 unevenly, while your own insertion shifts everything below it by the same amount.*
-are the BADVAL sites named above. All are filed under the `sh4gdromexit` umbrella. This
+are the BADVAL sites named above.
+
+*** THIS SAID "ALL ARE FILED UNDER THE `sh4gdromexit` UMBRELLA" AND THAT WAS FALSE
+IN TWO WAYS. ***  `sh4gdromexit` is CLOSED (at `98a3408 16f06a0`) and its scope is
+specifically `#460`'s GDROM_DATA arm — it was never an umbrella for the file. Of the
+eight survivors, `gdromcondlies` covers exactly two (`:639` and `:699`, the BADVAL
+pair); **the other six had no open carrier at all**, so a census that read as "filed"
+was really six live host-kill sites in nobody's queue. Filed as `gdromexitsix`.
+
+*The line numbers above have now been re-derived THREE times in this round, each time
+because a later comment insertion of my own moved them. The uniform offset is the
+tell every time — your own insertion shifts everything below it by the same amount,
+where someone else's commit shifts unevenly.*
+
+This
 round removed the two `default:` arms and nothing else, and the sections above are scoped
 correctly -- but they name only half the survivors, and half a census reads as a whole one.
 
@@ -6175,7 +6189,7 @@ kill table proves that answer rather than asserting it.
 
 Width-matched casts per the house idiom. A seat corrected the brief's arithmetic here: the four
 pre-existing casts split **3-to-1** (`(uint64_t)` at `:1349/:1400/:1449`, `(uint32_t)` only at
-`:589`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
+`:600`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
 value being assembled*, and the fix follows it.
 
 ### Two gate-9 rows, because the existing three-way CANNOT pin this

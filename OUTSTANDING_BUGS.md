@@ -7803,3 +7803,54 @@ condition and run it unconditionally, which dissolves the class rather than patc
 Also: a `git mv` of the extractor takes the `[ ! -f ]` branch, which is a **soft warn**,
 so precommit can still PASS with the selftest never having run. That branch should be
 hard.
+
+
+## 2026-08-23 — `gdromexitsix`: six live host-kill sites that had no open carrier
+
+**FOUND BY FOLLOWING A FLAGSHIP SEAT'S POINTER AND CHECKING IT RATHER THAN TAKING IT.**
+
+The `gdromdmawidth` adjudication said to let `sh4gdromexit` take this file's next round,
+describing it as OPEN. **It is CLOSED** (`98a3408 16f06a0`), and its scope is specifically
+`#460`'s GDROM_DATA arm — it was never an umbrella for the file. `#461`'s own CHANGELOG
+says twice that the eight surviving `exit(1)` sites are *"filed under the `sh4gdromexit`
+umbrella"*.
+
+**Checked, rather than assumed.**  Of the eight, `gdromcondlies` covers exactly TWO —
+`:639` (`GDROM_UNKNOWN_0x88`) and `:699` (`GDROM_COND`), the BADVAL pair. The other six
+had **no open carrier at all**.
+
+So a census that read as *filed* was really six live, guest-reachable host-kill sites
+sitting in nobody's queue. It is the "half a census reads as a whole one" hazard one
+level up: `#461` did the hard part — it enumerated all eight rather than naming the four
+it had touched — and then the QUEUE, not the census, was the incomplete half.
+
+### The six
+
+*Line numbers re-derived 2026-08-23 after the last edit to the file. They have now moved
+three times in this round, every time because a later comment insertion of my own sat
+above them — the uniform offset is the tell.*
+
+| line | site | class |
+|---|---|---|
+| `:294` | `GDROM Read TOC not 408 bytes?` | command layer |
+| `:346` | `unimplemented data format 0x%02x` | command layer |
+| `:424` | `handle_command` default, `unimplemented command 0x%02x` | command layer |
+| `:600` | `Too much GDROM_DATA?` | command layer |
+| `:804` | `DMA transfer but d->data is NULL` | DMA `+0x18` |
+| `:820` | DMA arming-mismatch report | DMA `+0x18` |
+
+### Why the DMA pair is the interesting half
+
+**`#461` made the surrounding window survivable**, so a guest can now reach `+0x18`
+without dying on the way — and **one nonzero store there still ends the host**. That is
+the de-escalation clause's shape read forwards: removing one host-fatal class makes the
+next one *easier* to reach, not harder.
+
+It is also the blocker `gdromdmawidth` is gated behind: the row that would pin that
+item's real contract — Linux's byte trigger arms, byte poll reads status — cannot be
+built until these two exits go. **So this is the round that unblocks that one**, which is
+a scheduling fact rather than a severity claim.
+
+*Not witnessed yet, and the claim is checkable rather than asserted: the DMA pair looks
+cheap now that the window survives, and the four command-layer sites need a GDROM_DATA
+packet sequence that `#460`'s probe already knows how to build.*
