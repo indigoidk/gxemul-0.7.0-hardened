@@ -533,6 +533,33 @@ else
 	fi
 fi
 
+#  ---- W ---------------------------------------------------------------------------
+#  A ROUND WAS NEARLY REDONE FROM SCRATCH BECAUSE A LEDGER ROW SAID `open` ON WORK
+#  THAT HAD SHIPPED HOURS EARLIER.
+#
+#  `sqreadtype` carried a witness field saying its warrant measurement was PENDING;
+#  the measurement is in its own CHANGELOG block and the round shipped as 3ff2138.
+#  It was caught by accident -- the row was picked as the next round and the source
+#  comment already said the fix was in.  The carrier names this class (a
+#  state-vs-substance mismatch) and nothing checked it.
+#
+#  *** THE FIRST DESIGN WAS VACUOUS AND ITS POSITIVE CONTROL SAID SO. ***  It looked
+#  for the row id in a commit SUBJECT; subjects here carry ROUND NUMBERS and name no
+#  row, so reinstating the defect did not flag it.  The association that works is the
+#  `witness` field, which exists for exactly this purpose: an open row naming a
+#  COMMITTED probe is claiming to be unstarted while its detector is in the tree.
+#  Negative-controlled both ways; opt out with a `state_note` that says what is left.
+say ""; say "W. a row's state agrees with what shipped"
+RSCHK=$_HERE/pipeline/check_row_states.py
+if [ ! -f "$RSCHK" ]; then
+	bad "check_row_states.py MISSING -- stale row states are NOT verified"
+elif rsout=$(python "$RSCHK" 2>&1); then
+	good "$(printf '%s' "$rsout" | grep -E 'ROW_STATES_PASS')"
+else
+	bad "A LEDGER ROW SAYS open ON WORK THAT SHIPPED:"
+	printf '%s\n' "$rsout" | grep -E 'STALE|ROW_STATES_FAIL|^ ' | sed 's/^/          /'
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #
