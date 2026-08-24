@@ -86,6 +86,36 @@ things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
+### `gdromdefault` (#461, `ba30e64`) — regress stage — **QUEUED 2026-08-23**
+
+Three panels ran on this round (pass 1, pass 2, pass 3) plus two flagship reviews, so
+the diff itself is well covered. The regress question is narrower and concerns the
+DETECTOR's shape rather than the fix.
+
+**The question, and it comes from this round's own measurement:**
+
+> `dma alias` — the row written specifically to pin the unaligned-store repair — was
+> **STRUCTURALLY BLIND** to the one-character mutant that re-opened that exact repair
+> (`& 3` -> `& 1`), because the row uses an ODD address and both guard forms drop it.
+> The escape was found by an adversary, not by the row.
+>
+> **Is there a general rule here — that a row written FROM A FIX'S INTENT tests the
+> intent rather than the boundary, and boundary rows must therefore come from
+> somewhere other than the fix's author?**  If so it is a stronger statement than the
+> existing ask-again, which asks the panel for another mutant AFTER a clean table;
+> this would say something about who may write the row in the first place.
+
+**Second, narrower:** `dma accept` and `accept8` are both READ-ONLY accept rows. A
+flagship seat has already asked whether a read-only accept row can discharge a
+de-escalation obligation, and kimi's M2 reached the same question independently
+(whether the accept rows jointly assert quiescence AND write/read-back at all five
+implemented DMA offsets). Two seats converging is usually this project's signal.
+
+Also worth checking: the round declined a `relative_addr & 3` guard on the CONTROL
+arm that two seats asked for, on the grounds it would be DEAD CODE there (no store
+tail), and recorded the invariant instead. Is declining a guard and documenting an
+invariant the right disposition, or does it just move the hazard into a comment?
+
 ### `sqreadtype` (#454, `3ff2138`) — regress stage — **QUEUED 2026-08-23**, and it
 carries a RECORDED DISSENT that was never resolved
 
