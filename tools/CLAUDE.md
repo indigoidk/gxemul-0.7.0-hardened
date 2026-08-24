@@ -725,6 +725,68 @@ minutes, and a spare build is cheaper than a wrong reading.
 > supplied the provenance half, a third put it strongest — the re-pin **is** laundering
 > unless the new-channel row ships with it.*
 
+> ### *** A MUTANT THAT WILL NOT DIE IS A RESULT, NOT NOISE. Adopted 2026-08-23 by the
+> regress seat, after one round produced three of them with three DIFFERENT causes. ***
+>
+> A mutant that cannot be made to fail has **exactly three explanations**, and silently
+> re-aiming it picks one without measuring which:
+>
+> 1. **The mutant is mis-built.** A single edit meaning to restore a historical defect
+>    measured GREEN because `re.I` supplied the case-insensitivity the edit targeted --
+>    the defect needed two edits, and the one-edit form reported a row as defended when
+>    nothing defended it.
+> 2. **The target is dead.** A class the regex no longer needed; deleting it changed
+>    nothing, which is a finding about the code, not the test.
+> 3. **The row is mis-cut.** Four rows were rejected by a newly-added anchor BEFORE
+>    their own guard was reached, so four live guards looked dead. Each row was re-cut
+>    to start with the label so only the guard under test can reject it.
+>
+> This is not a generalisation from two cases: the carrier already treats non-dying
+> mutants as results twice — #449's guard-only widening measured EQUIVALENT, #451's
+> measured the opposite — and equivalence-disposition is this same question one level
+> down.
+>
+> #### *** AN ABSENCE RECORD IS TIME-INDEXED, AND THIS ONE WENT FALSE WITHIN ONE
+> COMMIT. ***
+>
+> Case 2 above was recorded honestly: the class was measured dead, deleted, and its
+> absence written down **with its warrant** ("`re.search` is unanchored, so the match
+> starts at the label and the TRAILING class consumes the closing `**`").
+>
+> The very next commit **anchored the label and introduced a new leading class** —
+> broader than the one that died — and nothing re-ran the death measurement. A regress
+> seat checked out the earlier revision to verify the original warrant, then measured
+> HEAD: dropping the new class reddens a row. The class was alive, load-bearing, and
+> covered by no mutant at all.
+>
+> > **THE RULE: an absence record must NAME ITS WARRANT, and any edit touching that
+> > warrant RE-RUNS THE DEATH MEASUREMENT.**
+>
+> Naming the warrant is what made the record falsifiable — it is the only reason the
+> claim could be re-tested at all. *"Deleted, absence recorded as the result" was the
+> right disposition; the missing half was the expiry check.*
+>
+> #### MULTI-PART MUTANTS ARE LICENSED, NOT THE DEFAULT
+>
+> The main loop proposed making multi-part the default form. **The adjudicating seat
+> said no**, and gave the boundary: the default stays the SMALLEST SINGLE EDIT, with
+> multi-part licensed in exactly two shapes:
+>
+> * **(i) verbatim reinstatement of what shipped** — floor clause (b) applied to a
+>   harness tool, taking however many edits the historical diff took;
+> * **(ii) reach-the-guard composites where EVERY added edit is first measured GREEN
+>   ALONE** — e.g. a guard unreachable under the shipped regex, where the other edits
+>   are the only road to it.
+>
+> **That second condition is what answers the unfalsifiability objection**, which the
+> main loop had raised against its own proposal: an unconstrained composite can be
+> steered until it fails for an unrelated reason, while a composite whose parts are
+> proven inert can only fail through the interaction being claimed.
+>
+> Bonus property worth knowing: a driver that treats MUTANT-TEXT-NOT-FOUND as a FAIL
+> turns every find-text into a **presence pin**, so a multi-part mutant additionally
+> pins the existence of each feature it edits.
+
 > ### THE FOUR REASONS THAT LICENSE AN IN-ROUND FIX OF DETECTOR MATERIAL
 >
 > Everything else is FILED. Named so no round has to re-argue it:

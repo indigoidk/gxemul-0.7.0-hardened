@@ -48,8 +48,68 @@
 
 // #define debug fatal
 
+/*
+ *  #461 pass 2: NREGS_GDROM_DMA IS TWICE THE REGISTERED WINDOW, and that is
+ *  left alone deliberately rather than tidied.
+ *
+ *  The DMA window is registered at 0x80 (32 words) but this array is 0x100/4
+ *  = 64.  Two seats flagged the mismatch.  It is HARMLESS and shrinking it
+ *  would be a behaviour change with no witness: the largest index any guest
+ *  can produce is 31, because memory_rw gates on the registered range before
+ *  the device is entered.
+ *
+ *  *** DO NOT KEY A LATCH OFF THIS CONSTANT. ***  It does not describe the
+ *  window; the array's own sizeof does, via GDROM_UNIMPL_FIRST.
+ *
+ *  An earlier draft of this comment said a latch dimensioned from here
+ *  would make the extent and the guard "DIFFERENT identifiers again --
+ *  which is the one structural defence the bitmap has".  THAT DEFENCE DID
+ *  NOT EXIST WHEN THAT WAS WRITTEN: a seat measured that `bits` and `nkeys`
+ *  were two independent arguments, so a caller could pass a matching number
+ *  with a MISMATCHED array and write past it.  The macro made the sentence
+ *  true by construction; it was convention before, and it is recorded here
+ *  because the false version was written twice.
+ */
 #define	NREGS_GDROM_DMA		(0x100/sizeof(uint32_t))
 #define	GDROM_MAX_TRANSFER_BYTES	(64 * 1024)	/* OB-20 */
+
+/*
+ *  #461: the two `default:` arms -- unimplemented offsets in each window.
+ *
+ *  *** THE EXTENT AND THE GUARD ARE THE SAME IDENTIFIER, AND THAT IS THE ONLY
+ *  STRUCTURAL DEFENCE THERE IS. ***  A pass-1 seat measured that a bounds check
+ *  written as a bare literal is DEAD CODE here: memory_rw.c gates dispatch on
+ *  the registered range and then subtracts, so relative_addr < the window size
+ *  is guaranteed before this device is ever entered, and `if (off >= 0x100)`
+ *  can never fire.  #443 is safe only because its guard constant ALSO dimensions
+ *  its array -- its own comment says the check is not what protects it.  So the
+ *  macros below are used in BOTH places and nowhere is the number written twice.
+ *
+ *  WORD-GRANULAR KEYS, not per-byte.  The implemented offsets are ATA task-file
+ *  registers at 4-byte stride, so a word key matches the hardware's own register
+ *  granularity, and a byte scan yields 56 useful lines rather than 224.  It is
+ *  also what makes the raw-address indexing mutant DETECTABLE -- under per-byte
+ *  keying there is no granularity row to write and that mutant is invisible.
+ *
+ *  TWO DIRECTION CLASSES, and this was MEASURED against a 3-1 panel vote for
+ *  one.  A read pass then a write pass over the same 31 declined offsets gives
+ *  62 lines with direction keyed and 31 WITH ZERO WRITE DIAGNOSTICS without it:
+ *  the read pass latches every offset first, so a guest's stores into
+ *  unimplemented space are reported nowhere.  The write line is also the only
+ *  one carrying `idata`, which is the value needed to model the register later.
+ *
+ *  SEPARATE ARRAYS PER WINDOW, not one shared.  The two windows' relative_addr
+ *  ranges OVERLAP -- control is 0x00-0xff and DMA is 0x00-0x7f -- so a shared
+ *  key would make a declined access at control+0x00 silence one at DMA+0x00,
+ *  with the two keys being literally the same integer.  Invisible by
+ *  construction, which is #451's hazard one level up.
+ */
+#define	GDROM_RD		0
+#define	GDROM_WR		1
+#define	GDROM_NDIR		2
+#define	GDROM_NKEYS	(0x100 / sizeof(uint32_t))
+#define	GDROM_DMA_NKEYS	(0x80 / sizeof(uint32_t))
+#define	GDROM_BITWORDS(n)	(((n) + 31) / 32)
 
 struct dreamcast_gdrom_data {
 	// 0x005f7000: GDROM control registers
@@ -85,6 +145,18 @@ struct dreamcast_gdrom_data {
 	 */
 	uint8_t		warned;
 
+	/*
+	 *  #461: one bit per (direction, word) for each window's default arm.
+	 *  16 + 8 = 24 bytes.
+	 *
+	 *  KEPT SEPARATE FROM #460's `warned` ABOVE, deliberately: those four bits
+	 *  key on a CONDITION at a single offset (0x80), so an offset key cannot
+	 *  separate them.  #443 could unify its three classes only because all of
+	 *  them key on the register offset.  A reviewer will ask; this is why.
+	 */
+	uint32_t	unimpl_reported[GDROM_NDIR][GDROM_BITWORDS(GDROM_NKEYS)];
+	uint32_t	dma_unimpl_reported[GDROM_NDIR][GDROM_BITWORDS(GDROM_DMA_NKEYS)];
+
 	// 0x005f7400: GDROM DMA
 	uint32_t	dma_reg[NREGS_GDROM_DMA];
 };
@@ -92,6 +164,13 @@ struct dreamcast_gdrom_data {
 /*  Register offsets, from NetBSD:  */
 #define	GDROM_BUSY		0x18
 #define	GDROM_DATA		0x80
+
+#define	GDROM_REGX		0x84
+#define	GDROM_UNKNOWN_0x88	0x88
+#define	GDROM_STAT		0x8c
+#define	GDROM_CNTLO		0x90
+#define	GDROM_CNTHI		0x94
+#define	GDROM_COND		0x9c
 
 /*
  *  #460: one warn-once bit per declined site.  Named constants rather than
@@ -102,15 +181,79 @@ struct dreamcast_gdrom_data {
 #define	GDROM_W_NODATA	0x02
 #define	GDROM_W_NOTWAIT	0x04
 #define	GDROM_W_OVERREAD	0x08
-#define	GDROM_REGX		0x84
-#define	GDROM_UNKNOWN_0x88	0x88
-#define	GDROM_STAT		0x8c
-#define	GDROM_CNTLO		0x90
-#define	GDROM_CNTHI		0x94
-#define	GDROM_COND		0x9c
+
 
 // See the interrupt routine (gdrom_intr()) in NetBSD's dreamcast/dev/gdrom.c:
 #define	COND_DATA_AVAIL		0x08
+
+
+/*
+ *  #461: report an unimplemented offset ONCE per (direction, word).
+ *
+ *  `nkeys` is passed rather than assumed so the two windows cannot share a
+ *  bound by accident, and it is the SAME macro that dimensions the caller's
+ *  array.  The check is therefore live: it is not defending against a guest
+ *  (registration already does that) but against a future edit that changes
+ *  one window's size without the other -- and against the measured mutant
+ *  that indexes by raw address, which lands past the latch rows and
+ *  directly on dma_reg[].
+ *
+ *  *** THE MAGNITUDE WAS OVERSTATED AND A SEAT MEASURED IT. ***  This
+ *  said "five words past a [2][2] array ... the two fields that authorise
+ *  a transfer".  A guardless bits[k] reaches dma_reg[0..3] -- count,
+ *  destination and length -- but NOT dma_reg[5], the ENABLE, which needs
+ *  word index 11 against a reachable maximum of 9.  Three of the four,
+ *  not two; and the overreach is 4 words for the read row and 6 for the
+ *  write row, not five for both.  The defect is real either way; the
+ *  sentence was not.
+ */
+static int gdrom_unimpl_first(uint32_t *bits, size_t nkeys, uint32_t off)
+{
+	size_t k = off / sizeof(uint32_t);
+	uint32_t bit;
+
+	if (k >= nkeys)
+		return 0;
+
+	bit = 1u << (k & 31);
+	if (bits[k >> 5] & bit)
+		return 0;
+
+	bits[k >> 5] |= bit;
+	return 1;
+}
+
+/*
+ *  #461 pass 2: BIND THE EXTENT TO THE ARRAY, not merely to a number that
+ *  happens to match it.
+ *
+ *  The round claimed its structural defence was that GDROM_NKEYS both sizes
+ *  the array and guards the helper, so the number is never written twice.
+ *  *** A PASS-2 SEAT MEASURED THAT CLAIM TRUE OF THE NUMBER AND FALSE OF THE
+ *  BINDING. ***  `bits` and `nkeys` are two independent arguments, so pointing
+ *  the CONTROL arm at d->dma_unimpl_reported while keeping GDROM_NKEYS passes
+ *  every row AND writes one word past the shorter row -- onto dma_reg[0].
+ *  ASan cannot see it either: it is member-to-member inside one malloc.
+ *
+ *  sizeof(arr) * 8 derives the extent FROM the array named in the same
+ *  expression, so the two cannot disagree.  8 bytes * 8 = 64 keys for the
+ *  control window, 4 * 8 = 32 for DMA -- exact for both, and a future window
+ *  gets its own for free.  `arr` is evaluated twice but is side-effect-free
+ *  (a member selection and a constant-index subscript).
+ *
+ *  *** `arr` MUST BE A uint32_t[] -- TWO PASS-3 SEATS FLAGGED THIS
+ *  INDEPENDENTLY. ***  `sizeof(arr) * 8` is element-type-agnostic and would
+ *  compute the right BIT COUNT for any array, but gdrom_unimpl_first takes
+ *  `uint32_t *bits` and indexes `bits[k >> 5]` with `1u << (k & 31)`.  Hand
+ *  it a uint8_t[] and the count is right while the indexing is wrong -- the
+ *  worst combination, because the obvious sanity check passes.
+ *
+ *  Stated rather than asserted: `_Static_assert` is C11 and this tree is
+ *  C99.  The two existing callers both pass uint32_t[N][M] members declared
+ *  a few lines above, so the constraint is visible at every call site.
+ */
+#define	GDROM_UNIMPL_FIRST(arr, off)	\
+	gdrom_unimpl_first((arr), sizeof(arr) * 8, (off))
 
 
 static void alloc_data(struct dreamcast_gdrom_data *d)
@@ -558,15 +701,65 @@ DEVICE_ACCESS(dreamcast_gdrom)
 		}
 		break;
 
-	default:if (writeflag == MEM_READ) {
-			fatal("[ dreamcast_gdrom: read from addr 0x%x ]\n",
-			    (int)relative_addr);
-		} else {
-			fatal("[ dreamcast_gdrom: write to addr 0x%x: 0x%x ]\n",
-			    (int)relative_addr, (int)idata);
+	/*
+	 *  #461: EIGHT offsets are implemented and this arm took the other ~248 --
+	 *  a read OR a write, at any width -- and ended the host process.  MEASURED
+	 *  on an unmodified -E dreamcast: 21 offsets sampled, 19 died here.  A
+	 *  driver or diagnostic scanning the register space dies on its first
+	 *  unhandled address.
+	 *
+	 *  Declined reads return 0, and that is the value that claims LEAST rather
+	 *  than the value that reads best.  #452 already settled this shape in this
+	 *  tree for unimplemented sub-windows: reads return 0, writes are ignored.
+	 *  dev_wdc.c's all-ones is a claim about a RELEASED BUS with no responder;
+	 *  here a responder exists and simply does not model the register, so
+	 *  all-ones would be a strictly stronger claim and a false one.
+	 *
+	 *  `odata` is already 0 -- memory_rw.c memsets the caller's buffer before
+	 *  every device read (#95) and odata is initialised at the top -- so the
+	 *  assignment below is EXPLICIT BUT NOT LOAD-BEARING and deliberately
+	 *  carries no detector row: a mutant deleting it is equivalent.  #452
+	 *  records the same for its own site.
+	 */
+	/*
+	 *  *** WHY THIS WINDOW NEEDS NO ALIGNMENT GUARD, and why adding one was
+	 *  DECLINED rather than overlooked.  Two pass-3 seats asked for it. ***
+	 *
+	 *  The DMA arm below carries `if (relative_addr & 3) return 1;` because its
+	 *  tail STORES through a truncating index, so an unaligned access aliases an
+	 *  implemented word.  This arm has no tail at all: `odata` is a fresh local
+	 *  0, nothing here is indexed by `relative_addr` except the latch bitmap,
+	 *  and that is bounds-guarded from its own array's sizeof.
+	 *
+	 *  So the same guard here would be DEAD CODE, and this round has already
+	 *  rejected one dead bounds check for exactly that reason -- `if (off >=
+	 *  0x100)` can never fire, because memory_rw gates on the registered range
+	 *  and subtracts before the device is entered.  A guard that cannot fire is
+	 *  not insurance; it is a claim that something is checked when nothing is.
+	 *
+	 *  *** THE INVARIANT IS THE THING TO WATCH: if a store tail is ever added
+	 *  to this arm, the injectivity argument at the DMA site must be re-derived
+	 *  HERE and a guard added with it. ***  Written down because the safety is
+	 *  structural rather than guarded, and structure is what a later edit
+	 *  silently changes.
+	 */
+	default:if (GDROM_UNIMPL_FIRST(d->unimpl_reported[
+		    writeflag == MEM_READ ? GDROM_RD : GDROM_WR],
+		    relative_addr)) {
+			if (writeflag == MEM_READ)
+				fatal("[ dreamcast_gdrom: read from addr"
+				    " 0x%x -- unimplemented, returning 0."
+				    "  (once per offset per direction) ]\n",
+				    (int)relative_addr);
+			else
+				fatal("[ dreamcast_gdrom: write to addr"
+				    " 0x%x: 0x%x -- unimplemented, ignored."
+				    "  (once per offset per direction) ]\n",
+				    (int)relative_addr, (int)idata);
 		}
 
-		exit(1);
+		odata = 0;
+		break;
 	}
 
 	if (writeflag == MEM_READ)
@@ -629,15 +822,99 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 		}
 		break;			
 
-	default:if (writeflag == MEM_READ) {
-			fatal("[ dreamcast_gdrom_dma: read from addr 0x%x ]\n",
-			    (int)relative_addr);
-		} else {
-			fatal("[ dreamcast_gdrom_dma: write to addr 0x%x: "
-			    "0x%x ]\n", (int)relative_addr, (int)idata);
+	/*
+	 *  #461: the SIBLING ARM, and it joined this round on a measurement.  It
+	 *  was named in no filing and no brief until a seat enumerated the file --
+	 *  the round's own scope list said 'two DMA sites' when there are three,
+	 *  and this is the only one in the same semantic class as the arm above.
+	 *  MEASURED: a 32-bit read scan of this window died on the first offset on
+	 *  committed HEAD, and died again on a build that fixed only the control
+	 *  window.
+	 *
+	 *  *** ONE FIX DESIGN IS TRUE OF THE LATCH AND FALSE OF THE DECLINE. ***
+	 *  Above, `odata` is a local starting at 0, so declining means the tail
+	 *  returns 0 and a declined write does nothing.  HERE, odata is already
+	 *  loaded from the shadow register file before the switch, and the tail
+	 *  STORES a declined write into that file.  So 'decline' in this window
+	 *  means store-and-return, not discard -- which is what the five
+	 *  implemented cases already do, and is kept deliberately.
+	 *
+	 *  *** THAT NEARLY SHIPPED A WORSE DEFECT THAN THE ONE IT FIXES, AND A
+	 *  PASS-2 SEAT CAUGHT IT. ***  An earlier draft of this comment claimed
+	 *  "no declined offset can reach a load-bearing one".  THAT IS FALSE, and
+	 *  the reason is one character: the tail store indexes with TRUNCATING
+	 *  division, `dma_reg[relative_addr / sizeof(uint32_t)]`.
+	 *
+	 *  A byte access at +0x05 does not match `case 0x04` -- the switch tests
+	 *  the exact value -- so it reaches this arm, is declined and latched, and
+	 *  THEN the tail stores it into dma_reg[1].  The same alias exists at
+	 *  +0x09..0x0b -> dma_reg[2], +0x0d..0x0f -> dma_reg[3] and
+	 *  +0x15..0x17 -> dma_reg[5].
+	 *
+	 *  Those four ARE the transfer: `case 0x18` reads dma_reg[3] (count) and
+	 *  dma_reg[5] (enable) as its arming condition, then dma_reg[1] as the
+	 *  destination and dma_reg[2] as the length.  So a guest could arm and AIM
+	 *  a DMA transfer entirely through declined offsets, bypassing every check
+	 *  the implemented cases perform.  PRE-FIX each of those accesses exited
+	 *  instead, so this fix would have CREATED the capability -- the same shape
+	 *  as #460's Option C, which was rejected for exactly this reason.
+	 *
+	 *  THE RULE: an UNALIGNED access never stores.  Alignment alone separates
+	 *  "unimplemented word" from "misaligned access to an implemented one",
+	 *  and only the first keeps store-and-return.
+	 *
+	 *  WHY THAT IS SOUND, as a proof rather than an appeal to intuition about
+	 *  switch statements -- and INDEPENDENTLY RE-DERIVED by a review seat
+	 *  before it was believed.  On multiples of 4 the map off -> off/4 is
+	 *  INJECTIVE, so an aligned offset reaching this arm cannot share an index
+	 *  with any implemented case: if it did, it would BE that case and the
+	 *  switch would have matched it.  The implemented DMA offsets are
+	 *  0x04/0x08/0x0c/0x14/0x18, i.e. indices 1/2/3/5/6; every aligned offset
+	 *  reaching here yields 0, 4, or 7..31.  Disjoint by construction, not by
+	 *  inspection.  Truncation can only collide for UNALIGNED addresses, which
+	 *  is exactly what the guard rejects.
+	 *
+	 *  *** A FUTURE `case` AT AN ALIGNED OFFSET KEEPS THIS TRUE AUTOMATICALLY;
+	 *  ONE AT AN UNALIGNED OFFSET WOULD BREAK IT. ***  There is no such thing
+	 *  in this device, and the same seat checked the CONTROL window: its
+	 *  default arm has no store tail at all, so there is no aliasing channel
+	 *  there to guard, which is why the rule is stated only here.
+	 *
+	 *  The bitmap's own bounds guard does NOT help here -- it protects the
+	 *  latch array, and dma_reg is a different array reached by a different
+	 *  index.  Two arrays, two bounds problems, and only one of them was
+	 *  guarded before a seat read the tail.
+	 */
+	default:if (GDROM_UNIMPL_FIRST(d->dma_unimpl_reported[
+		    writeflag == MEM_READ ? GDROM_RD : GDROM_WR],
+		    relative_addr)) {
+			if (writeflag == MEM_READ)
+				fatal("[ dreamcast_gdrom_dma: read from"
+				    " addr 0x%x -- unimplemented, returning %s."
+				    "  (once per offset per direction) ]\n", (int)relative_addr,
+				    (relative_addr & (sizeof(uint32_t) - 1)) ?
+				    "0" : "the shadow value");
+			else
+				fatal("[ dreamcast_gdrom_dma: write to addr"
+				    " 0x%x: 0x%x -- unimplemented, %s."
+				    "  (once per offset per direction) ]\n",
+				    (int)relative_addr, (int)idata,
+				    (relative_addr & (sizeof(uint32_t) - 1)) ?
+				    "dropped" : "stored but inert");
 		}
 
-		exit(1);
+		/*  #461 pass 2: an UNALIGNED declined access must not reach the
+		    tail, whose truncating index would alias an implemented word.
+		    Returning here skips BOTH tails; a declined unaligned READ
+		    therefore also stops leaking the aliased word's value, which
+		    is the same defect pointing the other way.  */
+		if (relative_addr & (sizeof(uint32_t) - 1)) {
+			if (writeflag == MEM_READ)
+				memory_writemax64(cpu, data, len, 0);
+			return 1;
+		}
+
+		break;
 	}
 
 	/*  Default write:  */

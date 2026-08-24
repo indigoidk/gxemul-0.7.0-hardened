@@ -54,6 +54,7 @@ while it is genuinely still open -- a partial fix, or a sibling site left for a
 later round.  The note is required to say which; an empty opt-out is the silent
 exemption this harness keeps being bitten by.
 """
+import collections
 import io
 import json
 import os
@@ -67,6 +68,24 @@ LEDGER = os.path.join(ROOT, "tools", "pipeline", "ledger.json")
 #  `probe:regress/foo_probe.py` possibly followed by prose -- the witness field
 #  is free text after the artefact, and sqreadtype's ran to three sentences.
 WITNESS = re.compile(r"probe:(\S+?\.py)")
+
+#  *** A CITATION THAT STILL RESOLVES CAN STILL BE WRONG, AND THE WEAK TEST
+#  MISSES IT ENTIRELY. ***  Two stale ledger citations were found on the same
+#  day; NEITHER pointed past end-of-file.  `sh4pcic15` cited dev_sh4.c:2822-2836
+#  for interrupt wiring that had moved to :2951-2967, leaving the old range
+#  pointing at a default arm's fatal() block; `sh4itlbpr` cited :999-1001 for a
+#  PR-mask reuse now at :1020-1021, leaving the old range on translation-cache
+#  invalidation.  A past-EOF sweep over all 447 ledger citations found ZERO.
+#
+#  The checkable proxy is not the line, it is the FILE'S AGE against the note's:
+#  a citation into a file committed AFTER the entry was written may have drifted.
+#  Measured before shipping, because a noisy check gets ignored: across all OPEN
+#  rows that is 17 citations and ONE flag, which was a true positive.
+#
+#  SOFT by design.  Drift is likely, not certain -- an edit below the cited line
+#  moves nothing -- so this prints a note and does not fail.  The carrier's rule
+#  stands and cannot be mechanised: READ THE LINE BEFORE CITING IT.
+CITE = re.compile(r"\b([a-z0-9_]+\.(?:c|h|py|sh)):(\d+)")
 
 
 def commits_for(path):
@@ -100,6 +119,51 @@ def main():
                    "unstarted.  Close it, or add a \"state_note\" saying what "
                    "is genuinely left."
                    % (r["id"], m.group(1), len(c), c[0][:72]))
+
+    #  the soft citation-drift pass, over OPEN rows only -- those are the ones a
+    #  future round navigates by
+    index = {}
+    for root, dirs, files in os.walk(ROOT):
+        dirs[:] = [x for x in dirs if x != ".git"]
+        for f in files:
+            index.setdefault(f, os.path.join(root, f))
+    seen_mod, drift = {}, collections.Counter()
+    for r in d["rows"]:
+        if r.get("state") != "open":
+            continue
+        for e in r.get("entries", []):
+            when = e.get("date", "")
+            for m in CITE.finditer(e.get("note", "")):
+                p = index.get(m.group(1))
+                if not p or not when:
+                    continue
+                if p not in seen_mod:
+                    seen_mod[p] = subprocess.run(
+                        ["git", "-C", ROOT, "log", "-1", "--format=%ad",
+                         "--date=short", "--", p], capture_output=True,
+                        text=True, encoding="utf-8").stdout.strip()
+                if not (seen_mod[p] and seen_mod[p] > when):
+                    continue
+                #  *** AND IT MUST BE DISCHARGEABLE, OR IT CRIES WOLF
+                #  FOREVER. ***  Correcting a citation does not change the
+                #  entry's DATE, so the first version kept flagging a row
+                #  whose citation had just been re-derived -- a permanent
+                #  note is one nobody reads, which is the failure mode
+                #  check_score_claims already warns about.
+                #
+                #  A note that says it was RE-DERIVED on or after the
+                #  file's last commit has already done the work this
+                #  check asks for, and says so where a reader sees it.
+                note = e.get("note", "")
+                if "re-derived" in note.lower():
+                    stamps = re.findall(r"\d{4}-\d{2}-\d{2}", note)
+                    if any(x >= seen_mod[p] for x in stamps):
+                        continue
+                drift[(r["id"], m.group(1), seen_mod[p], when)] += 1
+    for (rid, f, mod, when), cnt in sorted(drift.items()):
+        print("  note  %s cites %s %d time(s) in a note dated %s; that file was"
+              " last committed %s -- RE-DERIVE the line before trusting it"
+              % (rid, f, cnt, when, mod))
 
     print("  check_row_states: %d open row(s) checked, %d exempt by state_note"
           % (checked, exempt))

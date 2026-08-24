@@ -6404,8 +6404,17 @@ The manual sentence covers both halves in one breath:
 `sh_translate_v2p()` maps `0xe0000000..0xe3ffffff` identically and unconditionally, because
 that identity mapping is how an ordinary guest store reaches the modelled queue SRAM.
 
-**So the interim state this round deliberately ships is: an SQ page raises NO MMU fault of any
-kind.** Before `sqreadtype` the model raised IPW and protection faults at the PREF, which was
+**So the interim state this round deliberately ships is: the WRITE half raises nothing,
+while the PREF still raises the READ-side set — TLB miss, and user-mode read
+protection.**
+
+*** THAT SENTENCE READ "an SQ page raises NO MMU fault of any kind" AND THE ROUND'S OWN
+DETECTOR DISPROVES IT: `sq miss evt` observes a read-type TLB miss (0x040) on the FIXED
+build. ***  The claim was corrected in `memory_sh.c:296-303` during the round and
+survived here and in the ledger row's TITLE — mechanical rule 2's
+corrected-in-one-place-survived-in-two, in the round that celebrated a seven-site sibling
+sweep. The sweep covered the OLD claim's sites; nobody grepped the round's own NEW claim.
+Found by the regress seat, which read the kill table rather than the prose.
 the wrong instruction with the wrong semantics but did fault; after it, the read half
 *correctly cannot* raise IPW (§3.6.7 requires "a data access (write)") and the write half
 still never runs. A guest kernel tracking the D bit on an SQ page through PREF-time IPW loses

@@ -520,15 +520,30 @@ MUTANTS = [
      [("if any(k in low for k in INSTRUCTIONAL):", "if False:")],
      ("instruction rejected",)),
 
-    #  *** THERE IS NO M6, AND ITS ABSENCE IS A RESULT. ***  It was written to
-    #  kill a LEADING emphasis class matching the `**` of `**VERDICT**: SHIP`,
-    #  and it measured GREEN -- because re.search is UNANCHORED, so the match
-    #  simply starts at VERDICT and the TRAILING class consumes the closing
-    #  `**`.  The leading class was dead the moment it was written.
+    #  *** M6 DIED AND THEN CAME BACK, AND THE ABSENCE RECORD WENT FALSE
+    #  WITHIN ONE COMMIT. ***
     #
-    #  It is deleted rather than kept-and-annotated: the `label emphasis` row
-    #  still passes without it, which is the proof.  A mutant that cannot be
-    #  made to fail is telling you the code it targets does nothing.
+    #  At e9f8c0c this slot held a note saying there was no M6: a mutant aimed
+    #  at a LEADING emphasis class could not be made to fail, because
+    #  re.search was UNANCHORED -- the match simply started at VERDICT and the
+    #  TRAILING class consumed the closing `**`.  That was measured, and true,
+    #  and the class was deleted with its absence recorded as the result.
+    #
+    #  Then 8eeeea2 ANCHORED the label and introduced a NEW leading class in
+    #  the anchor branch -- broader than the one that died, since it also
+    #  admits `-`, `>` and `#` list markers -- and nothing re-ran the death
+    #  measurement.  A regress seat re-tested it and found the class ALIVE,
+    #  load-bearing, and covered by no mutant at all: dropping it reddens
+    #  `label emphasis`, measured on HEAD.
+    #
+    #  *** THE CLAUSE THIS COST: AN ABSENCE RECORD IS TIME-INDEXED. ***  It
+    #  must name its warrant -- this one did, which is the only reason it could
+    #  be re-tested -- and ANY EDIT TOUCHING THAT WARRANT RE-RUNS THE DEATH
+    #  MEASUREMENT.  "Deleted, absence recorded as the result" was the right
+    #  disposition; the missing half was the expiry check.
+    ("M6  anchor-branch marker class dropped (died at e9f8c0c, alive again",
+     [('[*_`#>|+-]{0,6}', "")],
+     ("label emphasis",)),
 
     ("M12 label anchor dropped (prose becomes a verdict)",
      [('(?:^[ \\t]*[*_`#>|+-]{0,6}[ \\t]*|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', '')],
@@ -552,6 +567,14 @@ MUTANTS = [
     #  than passing quietly.  That is the failure mode a measuring seat
     #  warned about -- mutants anchored to regex substrings drift with the
     #  next regex edit -- and it is why the not-found case is a FAIL here.
+    #  The sentence-boundary branch had NO mutant, so the grok row's only
+    #  provable failure was via M2's multiword capture -- attributable to the
+    #  wrong feature.  Named by a regress seat.  This edit also documents the
+    #  52-of-58 seat-blanking incident as something a single edit can restore.
+    ("M13 sentence-boundary branch dropped (blanks a whole seat)",
+     [('|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', ')')],
+     ("verdict at a sentence boundary",)),
+
     ("M7  dash separators dropped",
      [('(?::|[ \\t]+[—–-][ \\t]+)', ":")],
      ("em dash", "en dash")),

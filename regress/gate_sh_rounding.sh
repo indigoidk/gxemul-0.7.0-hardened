@@ -467,6 +467,114 @@ else
     done
 fi
 
+# --------------------------------------------------------------- #461 gdrom_default
+#  dev_dreamcast_gdrom.c registers a 0x100 window and implements EIGHT offsets; every
+#  other address fell to a `default:` arm that printed then exit(1)ed -- a read OR a
+#  write, at any width.  MEASURED: 21 offsets sampled, 19 died.  One predicate, roughly
+#  248 of 256 byte offsets lethal, so a driver scanning the register space died on its
+#  first unhandled address.  The DMA window's own default arm joined the round on a
+#  measurement: it died on committed HEAD AND on a build that fixed only the control
+#  window.  *** 9/32 pre-fix, 32/32 post-fix, both measured AT 32 ROWS (pre461f.out).
+#  ***
+#
+#  This line asserted `8/32 ... BOTH MEASURED` before that run existed, and the carried
+#  8 was wrong as well as unmeasured -- the real figure is 9, because `dma accept`
+#  reads five IMPLEMENTED DMA offsets and those work on the pre-fix build.  A seat
+#  predicted 9 from the code and the measurement returned it.  Hence the carrier rule
+#  that a score claim names its log: section U checks the DENOMINATOR against this
+#  file's own pin, and nothing can check a NUMERATOR that was never run.
+#
+#  This line said "7/27 pre-fix, 27/27 post-fix -- both MEASURED at the final row
+#  count, not carried over" while citing the earlier carried-over incident as the
+#  thing it had learned from.  A seat found it FALSE THREE WAYS: the final count is
+#  32, not 27; NO 7/27 measurement ever existed (the runs on record are 7/21, 7/25
+#  and 8/32); and the honest pre-fix number is 8, not 7, because `dma seed` passes
+#  pre-fix -- the implemented +0x04 always worked.
+#
+#  Third generation of the frozen-number defect, inside the sentence memorialising
+#  the first two.  Section U now checks the DENOMINATOR against this file's own pin
+#  mechanically; the NUMERATOR and the word "measured" still cannot be checked by
+#  anything but a reader, which is exactly how this one survived.
+#  after the probe had grown to 25, which is the stale-score class a seat caught
+#  mid-answer and section U now checks mechanically.
+GDDLOG=$LOGDIR/gate_gdrom_default.log
+python3 gdrom_default_probe.py "$PMAX" "$KERNEL" > "$GDDLOG" 2>&1 || true
+
+if ! grep -q "GDROM_DEF_RESULT=" "$GDDLOG"; then
+    note "gdrom_default probe produced no result line; last lines follow"
+    tail -5 "$GDDLOG" | sed 's/^/       /'
+    check "gdrom_default probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$GDDLOG" | sed 's/^/       /'
+    gddctrl=$(grep -o "GDROM_DEF_CONTROL=[A-Z]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+    check "gdrom_default control proves it measures" "${gddctrl:-missing}" "OK"
+    gddres=$(grep -o "GDROM_DEF_RESULT=[0-9]*/[0-9]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+    check "gdrom_default rows run"     "${gddres#*/}" 32
+    check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
+    #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
+    #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
+    #  the fail-closed ratchet, equality and not >=.  It kills a capped counter (4 !=
+    #  56), a masked key (32 != 56), AND the raw-address indexing mutant (measured
+    #  18/21 -- it reddens `scan uniq` too).
+    #
+    #  *** AN EARLIER DRAFT OF THIS COMMENT SAID THE SCAN CANNOT SEE THE
+    #  RAW-ADDRESS MUTANT, 56/56 IDENTICAL TO CORRECT. That was the pass-1
+    #  analysis of a design WITHOUT the bounds guard, and the round's own kill
+    #  table refutes it. ***  With the guard, raw indexing pushes k to 255
+    #  against 64 keys, the guard rejects, most offsets never report, and the
+    #  count drops.  A seat caught the comment still carrying the pre-guard
+    #  number beside a table that measured otherwise.
+    #
+    #  `granularity` is the one that does: at 4-byte stride byte- and word-indexing
+    #  give equally many distinct keys, so only a SUB-WORD access exposes it.  That
+    #  `granularity` pins the per-word keying directly, which is a DESIGN COMMITMENT
+    #  worth one access.
+    #
+    #  *** THREE CLAIMS STOOD HERE AND A SEAT REFUTED ALL THREE. ***
+    #
+    #  It said the raw-address mutant "lands five words past the array, directly on
+    #  dma_reg[], setting the two fields that authorise a DMA transfer".  A guardless
+    #  bits[k] reaches dma_reg[0..3] -- count, destination and length -- but NOT
+    #  dma_reg[5], the ENABLE, which needs word index 11 against a reachable maximum
+    #  of 9.  Three of four, and the overreach is 4 words for the read row, 6 for the
+    #  write row.  It also stated the landing in the INDICATIVE, as something that
+    #  happens -- the shipped guard prevents any landing at all; it is a property of
+    #  the guardless counterfactual only.
+    #
+    #  It said that re-opens "a host kill that is otherwise unreachable".  Both DMA
+    #  +0x18 exits are reachable on the SHIPPED build through the front door: write
+    #  count=1 at +0x0c and enable=1 at +0x14, both implemented cases, then any
+    #  nonzero store to +0x18.
+    #
+    #  And it said "SHIP BOTH; neither subsumes the other, and that was measured".
+    #  The measurement says the opposite: across six mutants `scan uniq` kills every
+    #  one that anything kills, and `granularity`'s only kill (m_oob) reddens
+    #  `scan uniq` too, at 15 against 56.  SHIP BOTH ANYWAY -- but because the
+    #  granularity row states a commitment cheaply, not because it is a sole killer.
+    #  scored a perfect 16/16 before it existed -- including DELETING case GDROM_DATA,
+    #  which silently undoes #460.  Before this fix, deleting a case meant exit(1) on
+    #  first use; after it, silently wrong forever.
+    #
+    #  `rd then wr` expects TWO.  Three seats voted that the read/write split was
+    #  padding; a build measured offset-only keying producing ZERO write diagnostics
+    #  across 31 offsets, because the read pass latches every offset first.
+    #  *** THIS LIST HAD 27 NAMES AGAINST 32 ROWS, AND THE FIVE MISSING ONES WERE
+    #  THE HIGHEST-VALUE ROWS IN THE FILE. ***  A seat noticed that #460's gate
+    #  names all 23 of its rows while this one silently stopped at the pass-1 set --
+    #  so `dma alias x1`, `dma align16`, `dma rdleak`, `both windows` and
+    #  `dma accept`, every one of them added BECAUSE a mutant escaped, were pinned
+    #  by the count check alone.  A row absent from this list still runs; it just
+    #  stops being named, so a rename or a silent drop reads as green here.
+    #
+    #  ONE LINE, deliberately: assembling this with a backslash continuation through
+    #  a heredoc mangled TWICE in one session and shipped a red gate with a bogus
+    #  word `n` in it.
+    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept"; do
+        n=$(count "$GDDLOG" "^$v  .*ok$")
+        check "  $v" "$n" 1
+    done
+fi
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read

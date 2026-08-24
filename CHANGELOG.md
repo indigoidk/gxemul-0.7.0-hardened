@@ -1,3 +1,301 @@
+## Round 461 (#461) -- both `default:` arms, and roughly 248 of 256 offsets were lethal
+
+`dev_dreamcast_gdrom.c` registers a **0x100 window** at `0x005f7000` and implements **eight**
+offsets. Every other address fell to a `default:` arm that printed and then ran `exit(1)` --
+a read OR a write, at any width. **MEASURED: 21 offsets sampled, 19 died.** A driver or
+diagnostic scanning the register space died on its first unhandled address.
+
+One predicate, a wider blast radius than the entire `GDROM_DATA` arm `#460` fixed -- which
+needed a specific register and, for two of its three sites, specific device state.
+
+### THE SIBLING THE BRIEF MISSED, AND IT JOINED ON A MEASUREMENT
+
+The file has a **second** `default:` kill of exactly this class, in the adjacent window of the
+same device: `dreamcast_gdrom_dma`, separately registered at `0x005f7400`, five implemented
+offsets, everything else fatal. **The round's own scope list said "two DMA sites" when the
+file has three**, and the third was the only one in this semantic class -- named in no filing
+and no brief, sitting inside a census count and nowhere else. A seat found it by enumerating
+rather than by reading the filing.
+
+It joined because it was **measured**, not inferred: a 32-bit read scan of that window died on
+committed HEAD *and* died again on a build that fixed only the control window.
+
+*** "ONE FIX DESIGN" IS TRUE OF THE LATCH AND FALSE OF THE DECLINE, and the round says so. ***
+In the control window `odata` is a local starting at 0, so declining returns 0 and a declined
+write does nothing. In the DMA window `odata` is **already loaded from the shadow register
+file** before the switch, and the tail **stores** a declined write into it. So "decline" there
+means *store-and-return*. That is what the five implemented cases already do, and it is kept
+deliberately: it is what the tail already did before the round, and the five implemented
+cases behave identically.
+
+*** AND THE FIRST DRAFT OF THAT SENTENCE ENDED "so no declined offset can reach a
+load-bearing one", WHICH IS FALSE AND WOULD HAVE SHIPPED A WORSE DEFECT THAN THE ROUND
+FIXES. ***  A pass-2 seat returned DO NOT SHIP on it. The tail indexes with **truncating
+division**, so a BYTE access at `+0x05` does not match `case 0x04`, reaches the default arm,
+is declined -- and is then stored into `dma_reg[1]`. The same alias reaches `dma_reg[2]` and
+`[3]` from `+0x09` and `+0x0d`.
+
+Those are the transfer: `case 0x18` reads count and enable as its arming condition, then
+destination and length. A guest could aim a DMA transfer through declined offsets alone,
+bypassing every check the implemented cases perform -- and **pre-fix each of those accesses
+exited instead, so the fix would have CREATED the capability**, the same shape as `#460`'s
+Option C, which was rejected for exactly this reason.
+
+So an **unaligned access never stores**. Alignment alone separates "unimplemented word"
+from "misaligned access to an implemented one", because an aligned implemented word would
+have matched its own case. The early return skips **both** tails, which also stops a
+declined unaligned READ leaking the aliased word's value -- the same defect pointing the
+other way, and a second seat had to measure that half too before a row existed for it.
+
+*The bitmap's own bounds guard does not help here.* It protects the latch array; `dma_reg`
+is a different array reached by a different index. **Two arrays, two bounds problems, and
+only one of them was guarded until a seat read the tail.**
+
+### The latch: a measurement overturned a 3-1 panel vote
+
+The shape question was how to latch a diagnostic whose key space is 256 offsets by 2
+directions. `#443` had already solved it in this tree -- a per-word bitmap keyed by fault
+class, with its own comment recording why: *"A per-device flag would hide it ... 137 named
+flags would be absurd. This is five words."* And its FIRST class, `SH4_PCIC_UNIMPL`, is
+literally *"offset this device does not implement"* -- the same fault, not merely the same
+structure.
+
+**Three seats voted that the read/write split was padding**, reasoning from `#443`'s structure:
+its classes are kinds of complaint, not directions. A seat then built both and ran a read pass
+followed by a write pass over the same 31 declined offsets:
+
+```
+  direction x offset  ->  62 lines, 31 unique offsets
+  offset only         ->  31 lines, and ZERO WRITE DIAGNOSTICS
+```
+
+The read pass latches every offset first, so under offset-only keying **a guest's stores into
+unimplemented space are reported nowhere** -- and the write line is the only one carrying
+`idata`, the value needed to model the register later. The split ships.
+
+*The detector had already pre-answered that question the wrong way.* Its `rd then wr` row
+expected 2, was re-pinned to 1 on the vote, and then restored to 2 on the measurement. All
+three steps are recorded in the probe, because the project's rule is that disagreements are
+settled empirically and never by vote, and this is the case where the two pointed opposite
+ways.
+
+### *** THE BOUNDS CHECK IS THE ONLY STRUCTURAL DEFENCE, AND A LITERAL WOULD BE DEAD CODE ***
+
+A seat measured that `memory_rw.c` gates dispatch on the registered range and then subtracts,
+so `relative_addr` is already in range before this device is entered: a check written
+`if (off >= 0x100)` **can never fire**. `#443` is safe only because its guard constant *also
+dimensions its array* -- its own comment says the check "is NOT what protects the arrays".
+
+So the extent is derived from the array itself: `GDROM_UNIMPL_FIRST(arr, off)` passes
+`sizeof(arr) * 8`, which is 64 keys for the control window and 32 for DMA, exact for both.
+
+*** THE FIRST VERSION KEYED OFF A SHARED CONSTANT AND CLAIMED THAT WAS STRUCTURAL. ***
+It said `GDROM_NKEYS` is used in both the declaration and the guard so "the number is
+never written twice". A seat measured that TRUE OF THE NUMBER AND FALSE OF THE BINDING:
+`bits` and `nkeys` were two independent arguments, so pointing the CONTROL arm at
+`d->dma_unimpl_reported` while still passing `GDROM_NKEYS` passed every row **and** wrote
+one word past the shorter row, onto `dma_reg[0]` -- invisible to ASan too, being
+member-to-member inside one malloc. The macro makes the sentence true by construction.
+
+Under the raw-address mutant the guard then fires and the out-of-bounds write does not
+happen.
+
+*** ITS MAGNITUDE WAS ALSO OVERSTATED, AND THE CORRECTION SAT ONE SECTION BELOW WHILE THE
+CLAIM STOOD HERE. ***  It said the write lands "five words past the array ... setting
+exactly the two fields that authorise a DMA transfer". A guardless `bits[k]` reaches
+`dma_reg[0..3]` -- count, destination and length -- but **not** `dma_reg[5]`, the enable,
+which needs word index 11 against a reachable maximum of 9. Three of four; and the
+overreach is 4 words for the read row, 6 for the write row.
+
+Mechanical rule 2 -- grep for the siblings before calling a claim fixed -- was not run,
+so one refuted sentence stood in THREE files at once.
+
+### Two rows, and the "neither subsumes the other" claim was measured FALSE
+
+| mutant | `scan uniq` | `granularity` |
+|---|---|---|
+| counter capped at 4 | KILLS (4 != 56) | kills |
+| key masked to `0x7f` | **KILLS ALONE** (32 != 56) | survives |
+| indexed by raw address | kills (15 != 56) | **KILLS** (2 != 1) |
+| `case GDROM_CNTHI` deleted | kills | survives |
+
+`scan uniq` is an **identity row**: 64 word keys minus 8 implemented offsets is exactly 56, by
+equality and not `>=`, so a ninth implemented register moves it to 55 in the same commit.
+
+`granularity` pins the per-word keying, which the brief had chosen silently.
+
+*** THE SENTENCE THAT FOLLOWED WAS "under per-byte keying the raw-address mutant would be
+undetectable by any behavioural row", AND A PASS-2 SEAT MEASURED IT FALSE. ***  It rested on
+a pass-1 number -- `scan 56 == 56 SURVIVES` -- computed for a design **without** the bounds
+guard, and it survived into the shipped comment beside the table above, which already said
+`kills`. With the guard, raw indexing pushes every offset `>= 0x40` past the 64 keys, 41 of
+the 56 declined offsets never report, and **the scan reads 15**.
+
+The seat went further and measured the general claim: across six mutants, **`scan uniq` kills
+every one that anything kills, and `granularity` kills nothing `scan uniq` does not.** So the
+heading's "neither subsumes the other" is false. **The granularity row still ships** -- it
+pins a design commitment directly and costs one access -- but for that reason and not for the
+one this block gave. A row kept under a false rationale is a wrong record even when keeping it
+is right.
+
+*The magnitude claim was overstated too.* A guardless `bits[k]` reaches `dma_reg[0..3]`
+-- count, destination and length -- but **not** `dma_reg[5]`, the enable, which needs word
+index 11 against a reachable maximum of 9.
+
+### The de-escalation accept, and three narrowing mutants that scored 16/16 without it
+
+A seat built the fix and then deleted **one `case` label at a time** -- a one-line edit, the
+shape a "fold this stub into the default" tidy-up takes:
+
+```
+  delete case GDROM_STAT   ->  16/16   the register NetBSD polls before every command
+  delete case GDROM_DATA   ->  16/16   #460's ENTIRE ROUND SILENTLY UNDONE
+  delete case GDROM_CNTHI  ->  16/16   transfer-count high byte dead
+```
+
+This is the clause's own scenario at its sharpest: **before** this fix, deleting
+`case GDROM_STAT:` meant `exit(1)` on the first status poll -- unmissable. **After** it, a
+silently wrong status forever. The fix destroys the accidental tripwire for its own accept
+side, so `accept8` ships: all eight implemented offsets, and the default arm must
+have printed nothing.
+
+### The declined value: 0, and it claims the least
+
+`#452` already settled this shape in this tree for unimplemented sub-windows -- *reads return
+0, writes are ignored*. `dev_wdc.c`'s all-ones is a claim about a **released bus with no
+responder**; here a responder exists and simply does not model the register, so all-ones is a
+strictly stronger claim and a false one.
+
+`odata` is already 0 -- `memory_rw.c` memsets the caller's buffer before every device read
+(`#95`). So the assignment is **explicit but not load-bearing**, and deliberately carries no
+row: a mutant deleting it is equivalent, exactly as `#452` records for its own site.
+
+### What this round does NOT claim
+
+**A 32-bit WRITE scan of the window still dies on the fixed build** -- at `+0x88`, a different
+site (`GDROM_UNKNOWN_0x88`, which rejects any value except `0xb`). The fix moves that death
+rather than removing it, and the probe docstring said otherwise until a seat measured it.
+
+**Two `exit(1)` remain live at `DMA+0x18`, inside the window this round fixes** -- the
+`Unimplemented GDROM DMA start? TODO` arm and the `d->data is NULL` arm. They are *known*
+register, *unsupported operation*, not unimplemented offsets, and they fall under the
+`sh4gdromexit` umbrella. Said explicitly because a reader of this block would otherwise
+conclude the DMA window is no longer host-fatal, and **one nonzero store to `0x005f7418`
+still ends the host**.
+
+**The full census, so a reader of this section does not conclude the file is now clean:**
+**eight `exit(1)` sites remain live** in `dev_dreamcast_gdrom.c` after this round --
+`:283`, `:335`, `:413`, `:589`, `:628`, `:688`, `:771`, `:787`. Four are command-layer
+(TOC length != 408, bad data format, unknown command, and the assessed-unreachable "too
+much GDROM_DATA"), reachable through `GDROM_DATA` packets; two are the DMA+0x18 pair; two
+
+*Those eight line numbers were `:274 :326 :404 :580 :619 :679 :762 :778` when a seat
+supplied them, and every one was wrong by the time this block was written -- a uniform
+**+9**, because two later comment insertions of mine sat ABOVE them in the same file.
+Re-derived against the file after the last edit, which is the carrier's own rule ("a
+line number in a comment is invalidated by your own edits to that file") catching its
+author. The uniform offset is the tell: drift from an intervening commit shifts lines
+unevenly, while your own insertion shifts everything below it by the same amount.*
+are the BADVAL sites named above. All are filed under the `sh4gdromexit` umbrella. This
+round removed the two `default:` arms and nothing else, and the sections above are scoped
+correctly -- but they name only half the survivors, and half a census reads as a whole one.
+
+`GDROM_COND`'s bad-value kill and `GDROM_UNKNOWN_0x88` do **not** join: they are *known*
+registers rejecting a *value* -- `#443`'s BADVAL class, not UNIMPL -- with a different latch
+key and a fix that must decide what to DO with the rejected value, which a default arm never
+has to. One round for the pair.
+
+### Detector: 9/32 pre-fix, 32/32 post-fix, both measured AT 32 ROWS (`pre461f.out`); gate 10 PASS, 190 checks (`gate461f.log`)
+
+Same script both sides, the pre-fix build rebuilt from `git show HEAD:` into a private
+clone and grep-confirmed by the script's own guard before it ran.
+
+*** THE HEADING SAID `8/32 ... both MEASURED` BEFORE THE 32-ROW RUN EXISTED, and the
+carried number was wrong as well as unmeasured. ***  A seat checked the mtimes: the
+heading was written at 17:33 and the run started at 17:50. The only figure on record
+was 8/31, and the 8 was carried forward when the row count grew. The same seat
+predicted **9/32** from the code -- `dma accept` reads five IMPLEMENTED DMA offsets,
+which behave correctly pre-fix for the same reason `dma seed` does -- and the
+measurement returned exactly that.
+
+Fourth generation of the frozen-number defect in one round, inside the sentence
+memorialising the third, and the reason the carrier now requires a score claim to NAME
+ITS LOG. Section U checks denominators mechanically; no check can tell a measured 8
+from a carried 8, and this one was carried.
+
+The nine survivors are named rather than counted, because which rows pass pre-fix is
+the claim: `live`, `devsig` (the two controls), `impl ok`, `accept cnt`, `accept cond`,
+`accept8`, `data 0xffff`, `dma seed` and `dma accept`. Every one of them touches an
+IMPLEMENTED offset, which is exactly why the pre-fix build survives them -- the defect
+was in the `default:` arms and nowhere else.
+offsets, which behave correctly on the pre-fix build for the same reason `dma seed`
+does. That prediction is recorded as a prediction. **The number goes in this heading
+when the run produces it and not before**, and it will name its log.
+
+*** THIS HEADING READ `7/25 pre-fix, 25/25 post-fix` AND WAS WRONG IN EVERY FIELD. ***
+The shipped probe has 32 rows, not 25. The pre-fix number is **8**, not 7 -- `dma seed`
+passes pre-fix because the implemented `+0x04` always worked. And `gate 10 PASS` had only
+ever been observed at the **21-row** pin, so it was not true at any pin at or above 25.
+
+Fourth instance of the frozen-number defect in one round, which is why section U now
+checks score DENOMINATORS against the gate's own pin mechanically. It cannot check the
+NUMERATOR or the word "measured" -- those still need a reader, and a reader is exactly
+what caught this one.
+
+Same script both sides, the pre-fix build rebuilt from `git show HEAD:` into a private clone
+and grep-confirmed.
+
+*** THE SENTENCE HERE READ "every row except the three controls has a measured kill", AND
+IT WAS FALSE IN BOTH DIRECTIONS. ***  `impl ok` -- one of the three named controls -- IS
+killed by `m_delcase`, while `accept cnt`, `accept cond` and `data 0xffff` had **no** kill
+**26 of 32 rows carry a measured kill, and the six that do not are named** rather
+than absorbed into a rounder claim: `live`, `devsig`, `accept cnt`, `accept cond`,
+`data 0xffff` and `dma seed`.
+
+*The count said 26 of 31 with five unnamed. A seat recounted it from the kill tables
+rather than from the name list and found 25 and six -- with `dma seed`, the very row
+the adjacent correction discusses, as the unnamed sixth. `dma accept` then landed and
+was discharged by a measured kill (`m_deldma18`, 31/32, reddening that row alone), so
+at 32 rows it is 26 and six. Two corrections deep, and the first of them was wrong
+too: an earlier draft of THIS paragraph listed `dma accept` among the unkilled while
+also saying it was discharged.*
+
+**Ten DMA rows ship with the fix, not after it.** The DMA arm joined the round on a
+measurement and was then pinned by NOTHING -- every one of the first 21 rows drove the
+control window. A round that claims to fix two arms and covers one is making a claim its own
+detector cannot support. `dma shadow` pins the store-and-return asymmetry that was, until it
+existed, a claim in a comment and nothing else; `dma alias`, `dma alias x1`, `dma align16`
+and `dma rdleak` pin the aliasing repair below; `both windows` is the only row in the file
+that drives BOTH windows in one session, which is what makes the two-array separation
+checkable rather than merely asserted.
+
+*Four of those rows exist because a measuring seat attacked a table that was already clean.*
+At 27/27 it built `& (sizeof(uint32_t) - 1)` -> `& 1` (a 16-bit store at `+0x06` is 2-byte
+aligned, passes the weaker guard, and re-opens the alias -- while `dma alias`, which uses an
+ODD address, is structurally blind to it); the guard restricted to `MEM_WRITE` (the read half
+the comment claimed and no row pinned); and each arm keyed into the OTHER window's array,
+one of which additionally writes past the shorter row onto `dma_reg[0]`, invisible to ASan
+because it is member-to-member inside one malloc. **All four scored 27/27.** That last one
+is why `GDROM_UNIMPL_FIRST(arr, off)` now derives the extent as `sizeof(arr) * 8` from the
+array named in the same expression: the round's claim that "the number is never written
+twice" was true of the NUMBER and false of the BINDING, since `bits` and `nkeys` were two
+independent parameters. The macro makes it true by construction.
+
+*The DMA read diagnostic also lied.* It said "returning the shadow value" while the
+unaligned path returns 0 -- the write message got the ternary and the read message did not.
+
+*The DMA arm needed its own regex.* `SAYS` cannot match it -- after `dreamcast_gdrom` that
+pattern expects `: ` and the text has `_dma: ` -- so a shared pattern would have counted
+silently zero, which is the shape `#460` already paid for once.
+
+*Two self-inflicted probe defects, both caught by measuring rather than reading:* the `impl ok`
+control was **vacuous** -- it asserted only that the answer began `0x`, and `print r2` always
+prints hex, so it measured green on a build with the register it names deleted. And rebuilding
+it exposed that **two `run()` calls each emit their own `pc`/`step`, so the second silently
+overrides the first** and only one access executes -- `#460`'s vacuity bug in a new guise,
+which here turned a control red, the loud direction. Fifteen call sites now go through a `pair()`
+helper that makes the mistake unrepresentable.
+
 ## Round 460 (#460) -- one register with no legal first touch
 
 `dev_dreamcast_gdrom.c`'s `GDROM_DATA` arm (physical `0x005f7080`) held FOUR reachable
@@ -5877,7 +6175,7 @@ kill table proves that answer rather than asserting it.
 
 Width-matched casts per the house idiom. A seat corrected the brief's arithmetic here: the four
 pre-existing casts split **3-to-1** (`(uint64_t)` at `:1349/:1400/:1449`, `(uint32_t)` only at
-`:580`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
+`:589`), not 2-and-2 as the brief claimed — the house rule is *the cast matches the width of the
 value being assembled*, and the fix follows it.
 
 ### Two gate-9 rows, because the existing three-way CANNOT pin this
