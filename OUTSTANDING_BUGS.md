@@ -7349,7 +7349,14 @@ was bounded*. At `GDROM_DATA` the code below the width check assumes 16 bits thr
 — so "log and continue" needs its own bounded-ness argument here, not an inherited one.
 Recorded as the question the fix must answer rather than as a precedent that settles it.
 
-### `gdromdefault` — open, and MEASURED BROADER THAN THE ROUND THAT FOUND IT
+### `gdromdefault` — *** CLOSED, shipped as `ba30e64` + `a7b103d`. This heading said `open` for hours afterwards. ***
+
+*Caught by a measuring seat, not by a gate. The ledger said `closed`, a commit was
+titled "close gdromdefault", and a LATER commit touched this very file without fixing
+the heading — and **the carrier's first-stop procedure reads OUTSTANDING_BUGS.md as the
+live queue**, so this is the state-vs-substance mismatch pointing the expensive way: a
+fresh session would have picked shipped work as its next round. `check_row_states.py`
+checks the ledger against the repo; nothing checks this file against the ledger.*
 
 `dev_dreamcast_gdrom.c:439-447`. The device registers a **0x100 window** at `0x005f7000` and
 its `switch` handles about eight offsets. The `default:` arm prints and then runs `exit(1)` —

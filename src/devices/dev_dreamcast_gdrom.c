@@ -76,14 +76,29 @@
 /*
  *  #461: the two `default:` arms -- unimplemented offsets in each window.
  *
- *  *** THE EXTENT AND THE GUARD ARE THE SAME IDENTIFIER, AND THAT IS THE ONLY
+ *  *** THIS HEADING WAS TRUE WHEN WRITTEN AND IS FALSE AT HEAD. The fix is 150
+ *  lines below and nothing here pointed at it, so the false version sat on top
+ *  in stars while its own correction sat out of sight -- which is exactly how a
+ *  reader ends up trusting the wrong one.  A measuring seat caught it.
+ *
+ *  WHAT IT SAID: 'the extent and the guard are the same identifier, and that is
+ *  the only structural defence there is', with GDROM_NKEYS used in BOTH the
+ *  array declaration and the helper's guard.  At HEAD each NKEYS macro is used
+ *  in exactly ONE place, and the guard is bound by `sizeof(arr) * 8` inside
+ *  GDROM_UNIMPL_FIRST -- see the pass-2 block below, which explains why: the
+ *  same-identifier property was true of the NUMBER and false of the BINDING,
+ *  and a seat passed a matching count with a MISMATCHED array to prove it.
+ *
+ *  The reasoning below is kept because it is still correct and still the reason
+ *  the macro exists:
  *  STRUCTURAL DEFENCE THERE IS. ***  A pass-1 seat measured that a bounds check
  *  written as a bare literal is DEAD CODE here: memory_rw.c gates dispatch on
  *  the registered range and then subtracts, so relative_addr < the window size
  *  is guaranteed before this device is ever entered, and `if (off >= 0x100)`
  *  can never fire.  #443 is safe only because its guard constant ALSO dimensions
  *  its array -- its own comment says the check is not what protects it.  So the
- *  macros below are used in BOTH places and nowhere is the number written twice.
+ *  macros below each name a key count.  (The claim that they are used in BOTH
+ *  places belonged to the first design and is false at HEAD -- see above.)
  *
  *  WORD-GRANULAR KEYS, not per-byte.  The implemented offsets are ATA task-file
  *  registers at 4-byte stride, so a word key matches the hardware's own register
@@ -245,8 +260,18 @@ static int gdrom_unimpl_first(uint32_t *bits, size_t nkeys, uint32_t off)
  *  INDEPENDENTLY. ***  `sizeof(arr) * 8` is element-type-agnostic and would
  *  compute the right BIT COUNT for any array, but gdrom_unimpl_first takes
  *  `uint32_t *bits` and indexes `bits[k >> 5]` with `1u << (k & 31)`.  Hand
- *  it a uint8_t[] and the count is right while the indexing is wrong -- the
- *  worst combination, because the obvious sanity check passes.
+ *  it a uint8_t[] and the count would be right while the indexing is wrong.
+ *
+ *  *** THE 'SILENT' HALF OF THAT WARNING IS MEASURED FALSE ON THIS TOOLCHAIN,
+ *  and a seat built both forms to check. ***  An earlier draft called it 'the
+ *  worst combination, because the obvious sanity check passes'.  Both
+ *  uint8_t[] and uint64_t[] are HARD BUILD ERRORS at both call sites (GCC
+ *  15.2.1; -Wincompatible-pointer-types has been an error by default since
+ *  GCC 14), so the mistake cannot reach a running binary here.
+ *
+ *  The constraint is still worth stating -- it holds for a pre-GCC-14
+ *  compiler and this tree targets portable C99 -- but as a PORTABILITY
+ *  caution, not as a silent-corruption hazard on the compiler in use.
  *
  *  Stated rather than asserted: `_Static_assert` is C11 and this tree is
  *  C99.  The two existing callers both pass uint32_t[N][M] members declared
@@ -918,7 +943,6 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 	}
 
 	/*  Default write:  */
-	if (writeflag == MEM_WRITE)
 	/*
 	 *  *** THIS STORE IS WIDTH-BLIND, AND THAT IS ASSESSED-NOT-CHANGED RATHER
 	 *  THAN OVERLOOKED.  `gdromdmawidth`, adjudicated 2026-08-23. ***
@@ -958,6 +982,7 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 	 *  ship as a green row pinning 0x000000ff -- that would enshrine this
 	 *  model's own behaviour as an oracle.
 	 */
+	if (writeflag == MEM_WRITE)
 		d->dma_reg[relative_addr / sizeof(uint32_t)] = idata;
 
 	if (writeflag == MEM_READ)
