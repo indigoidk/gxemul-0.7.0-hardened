@@ -919,6 +919,45 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 
 	/*  Default write:  */
 	if (writeflag == MEM_WRITE)
+	/*
+	 *  *** THIS STORE IS WIDTH-BLIND, AND THAT IS ASSESSED-NOT-CHANGED RATHER
+	 *  THAN OVERLOOKED.  `gdromdmawidth`, adjudicated 2026-08-23. ***
+	 *
+	 *  `len` is used ONLY to marshal bytes (memory_readmax64 in, memory_writemax64
+	 *  out).  An ALIGNED narrow write to an IMPLEMENTED offset therefore widens
+	 *  to 32 bits zero-extended.  MEASURED on this build: seed +0x04 with
+	 *  0x11223344 (32-bit), then byte-write 0xff at +0x04, then read back ->
+	 *  0x000000ff.  Liveness control in the same run returned 0x12345678.
+	 *
+	 *  *** THE #461 ALIGNMENT RULE ABOVE NEITHER CAUSES NOR EXCUSES THIS. ***
+	 *  That rule says an ALIGNED offset reaching the DEFAULT arm is genuinely an
+	 *  unimplemented word.  It says nothing about an aligned NARROW access to an
+	 *  IMPLEMENTED offset, which is a separate WIDTH question -- address
+	 *  decoding and width validation are independent axes.  Written here
+	 *  because a reader who applies that rule to this store would conclude the
+	 *  site is safe.
+	 *
+	 *  NOT FIXED, and the reason is an ABSENT ORACLE, not laziness.  0x005f74xx
+	 *  is Sega's Holly ASIC, outside the SH7750 manual, and this project holds
+	 *  NO documentation for it -- so "real hardware preserves the upper bits"
+	 *  would be an oracle from plausibility, the #357/#362 shape this tree has
+	 *  already been burned by once.
+	 *
+	 *  *** AND MAINLINE LINUX CONSTRAINS ANY FUTURE FIX, WHICH IS THE FINDING
+	 *  THAT KILLED THE PANEL'S UNANIMOUS ANSWER. ***  drivers/cdrom/gdrom.c
+	 *  BYTE-WRITES this window's +0x18 to trigger every DMA transfer, and
+	 *  BYTE-READS it to poll for completion; the four VALUE registers it uses
+	 *  (+0x04/08/0c/14) are always 32-bit.  So the width-blind code delivers
+	 *  exactly what the one real narrow user needs, and a blanket "decline
+	 *  narrow writes" would BREAK a booting Linux.
+	 *
+	 *  THE DECIDED DESIGN, if a fix is ever warranted: decline with a latched
+	 *  diagnostic at the four VALUE registers ONLY, keeping +0x18 byte-capable.
+	 *  The discriminating row is seed 0x11223344 / byte 0xff / read back:
+	 *  0x000000ff today, 0x11223344 declined, 0x112233ff merged.  It must NOT
+	 *  ship as a green row pinning 0x000000ff -- that would enshrine this
+	 *  model's own behaviour as an oracle.
+	 */
 		d->dma_reg[relative_addr / sizeof(uint32_t)] = idata;
 
 	if (writeflag == MEM_READ)

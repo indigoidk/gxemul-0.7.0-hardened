@@ -17045,7 +17045,7 @@
       "id": "gdromdefault",
       "title": "gdromdefault  both `default:` arms of dev_dreamcast_gdrom.c ran exit(1) -- roughly 248 of 256 control offsets and 27 of 32 DMA offsets were host-fatal to a read OR a write at any width",
       "state": "closed",
-      "commits": "ba30e64",
+      "commits": "ba30e64 a7b103d",
       "hold": "",
       "witness": "probe:regress/gdrom_default_probe.py",
       "closure": {
@@ -17210,7 +17210,7 @@
       "state": "open",
       "commits": "",
       "hold": "",
-      "witness": "none",
+      "witness": "none committed -- MEASURED 2026-08-23 at rung 3 via a scratchpad probe (reported, not pinned): the row is DELIBERATELY not shipped, because pinning 0x000000ff would enshrine this model's own behaviour as an oracle",
       "closure": {
         "by": "",
         "badge": "",
@@ -17230,8 +17230,65 @@
           "d": "✓",
           "date": "2026-08-23",
           "note": "*** WITNESS CONSTRUCTIBLE AT RUNG 3, contrary to `witness: none`. Verified by READING the arm; flagged as a reading, since a probe run would have contended with a live gate. *** The carrier's rule is that 'no witness of either kind' is a CHECKABLE claim and must be checked rather than asserted. Checked: `len` appears exactly THREE times in DEVICE_ACCESS(dreamcast_gdrom_dma), and all three are byte marshalling -- memory_readmax64(cpu, data, len) on the way in and two memory_writemax64(..., len, ...) on the way out. The store itself, at dev_dreamcast_gdrom.c:889 (re-derived 2026-08-23), is `d->dma_reg[relative_addr / sizeof(uint32_t)] = idata;` -- a full 32-bit assignment with no width discrimination anywhere. THE WITNESS IS `dma seed` PLUS ONE STORE, exactly as the filing predicted: 32-bit store 0x11223344 at DMA+0x04, then a BYTE store of 0xff at DMA+0x04 (ALIGNED, so it matches `case 0x04` and is NOT the #461 alias), then read +0x04 back. Real hardware leaves the upper 24 bits; this model yields 0x000000ff. Ordinary guest instructions through real address decode on a committed machine -- rung 3, no new device and no machine edit, so no laundering. NO BUILD NEEDED EITHER: the defect is pre-existing upstream and untouched by #461, so it is in the current binary."
+        },
+        {
+          "seat": "grok",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] *** FOUND THE DECISIVE PRECEDENT, AND IT IS IN THIS VERY FILE FROM THE PREVIOUS ROUND. *** dev_dreamcast_gdrom.c:515-522, written by #460: 'DO NOT \"EMULATE\" NARROW ACCESS INSTEAD. A pass-1 panel split on that, and it was MEASURED ACTIVELY HARMFUL: letting cmd_count step by 1 makes eleven byte writes plus one word write go 11 -> 13, SKIPPING the == 12 equality, so busy&0x08 never clears and the next write reaches the \"Too much GDROM_DATA\" exit -- otherwise unreachable. It also writes cmd[12], one past the array.' VERIFIED BY READING. Option A is exactly that shape, ruled out by the file's own measured history one round ago. Its reachability line is the right distinction too: 'Reachable as a guest instruction; unobserved as a driver path. That is not Option C.' -- rung-3 reachability is established, driver reachability is not, and the ladder says a witness makes an item ELIGIBLE while severity orders it."
+        },
+        {
+          "seat": "agy",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] Found the OTHER in-tree precedent, independently: sh4_bsc16_report() at dev_sh4.c:1646, the tree's existing handling for a narrow access to a wide register. Its conclusion: 'in-tree precedent unequivocally supports Option B (decline partial/narrow writes with a latched warn-once diagnostic)'. Two seats finding two different precedents that agree is the strongest form this panel produces -- the answer was already in the tree twice and the brief invented a three-way choice that the tree had effectively made."
+        },
+        {
+          "seat": "codex",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] Supplied the discriminating row and the comment amendment, both adopted. The row -- W32 +0x04 = 0x11223344, then W8 +0x04 = 0xff, then R32 +0x04 -- separates all three options: A gives 0x112233ff little-endian (0xff223344 big-endian), B gives 0x11223344 preserved, C gives 0x000000ff. Its amendment text is the one to use: it SEPARATES ADDRESS DECODING FROM WIDTH VALIDATION, so #461's alignment rule cannot be misread as proof that implemented cases are width-safe."
+        },
+        {
+          "seat": "deepseek",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] Reached codex's discriminating row independently, with the same three expected values including the endianness split on Option A. Its amendment wording is the crisper of the two: 'An aligned offset reaching the default arm is genuinely an unimplemented word. This does not imply that an aligned narrow access to an IMPLEMENTED offset is safe; narrow accesses to implemented registers are a separate width question and are currently not width-discriminated.'"
+        },
+        {
+          "seat": "glm",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] Option B with the clearest cost/benefit statement: one branch on `len != 4` before the tail store; consistent with #461's decline-rather-than-corrupt philosophy; establishes the missing in-tree precedent for the WIDTH axis without committing to Option A's endianness-dependent merge; and it 'turns an unreachable silent-clobber into an unreachable LOUD no-op'. Explicitly ranked B over C: 'B is C plus a guard for the same engineering cost.'"
+        },
+        {
+          "seat": "minimax",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] *** THE ONLY SEAT THAT REFUSED TO PRETEND THE REACHABILITY QUESTION WAS SETTLED, and it is right. *** 'Probably not in well-behaved guest code, but the brief does not let us prove a negative.' It also caught a trap in the brief's own framing: adding the witness row makes the defect reachable IN CI, which 'is not the same as reachable' by a guest driver -- a distinction this project's witness ladder makes and the brief blurred. Its answer is correctly CONDITIONAL rather than confident."
+        },
+        {
+          "seat": "kimi",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "[panel_20260823_215652] Went furthest on the endianness question the brief called the real technical risk, working out what memory_readmax64 does to a narrow value and where a byte write at +0x04 lands in dma_reg[1]. Its answer is the reason Option A is unsafe to implement from the brief alone: the fact is derivable but was NOT established in the tree, and SH-4 runs either endianness."
+        },
+        {
+          "seat": "fable5",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "*** VERDICT: OPTION C, OVERTURNING A UNANIMOUS 7-OF-7 PANEL FROM SOURCE. *** The panel converged on Option B (decline narrow writes). This seat fetched mainline Linux drivers/cdrom/gdrom.c and read it line by line: :622 `__raw_writeb(1, GDROM_DMA_STATUS_REG)` is the DMA TRIGGER -- a BYTE WRITE to this window's +0x18 on every transfer -- and :618 byte-READS the same offset to poll for completion, while the four value registers at :585-589 are always __raw_writel. *** SO OPTION B WOULD BREAK A BOOTING LINUX, *** and the width-blind code delivers exactly the semantics the one real narrow user needs. The defect's actual content -- clobbering a value register's upper bits -- sits in cells no known guest reaches. It also checked NetBSD (never touches the DMA window) and promemul/dreamcast.c (zero references), and was explicit that KallistiOS widths are BELIEVED only. *** AND IT REFUTED OPTION A ON A DIFFERENT AXIS THAN THE BRIEF EXPECTED. *** The brief called endianness the real technical risk; the seat showed it is DERIVABLE (cpu_sh.c:96 sets EMUL_LITTLE_ENDIAN UNCONDITIONALLY, so there is no big-endian SH in this tree and the merge is always the low lane -- the brief's 'SH-4 can run either endianness' is true of silicon and FALSE of this tree, verified independently). The real objection is an ABSENT ORACLE: 0x005f74xx is Sega's Holly ASIC, outside the SH7750 manual, and this project holds NO documentation for it -- so the filing's own 'real hardware leaves the upper 24 bits' was an UNSOURCED CLAIM, the #357/#362 shape. A would ship an invented behaviour and pin the invention with a detector row. ON PRECEDENT it corrected the panel again: the BSC16 idiom (dev_sh4.c:1620-1680) is the direct shape-match, but *** IT TRANSFERS BY ITS WARRANT, NOT ITS SHAPE *** -- its warrant is 'a real OpenBSD/landisk boot makes ZERO non-16-bit BSC accesses (measured), so the latch costs a correct guest nothing', and that warrant FAILS here. Decided design recorded as B': decline at the four VALUE registers only, keep +0x18 byte-capable. It also flagged that the row pinning the REAL contract is currently UNBUILDABLE -- any nonzero store at +0x18 hits one of sh4gdromexit's filed exit(1) kills -- so this item is gated behind that round by probe-buildability rather than by ranking."
         }
-      ]
+      ],
+      "state_note": "ASSESSED-NOT-CHANGED under Option C. Code ships under this row's name at ba30e64's successor -- a documenting comment at the tail store -- but the defect is deliberately unfixed, so the row stays open. Gated behind sh4gdromexit by PROBE-BUILDABILITY, not priority: the row that would pin the real contract is unbuildable until that round removes the exit(1) kills at +0x18."
     },
     {
       "id": "gdromcondlies",

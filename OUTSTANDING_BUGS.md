@@ -7693,9 +7693,46 @@ a value the guest only wrote 8 or 16 bits of.
 
 **Why it is filed rather than fixed, and the reason is the reopening rule, not triage
 fatigue.** `#461`'s semantic class is *unimplemented offset*; this is *implemented offset,
-wrong width*. It needs a different fix design (a read-modify-write honouring `len`, which
-raises an endianness question the default arm never has to answer) and a different oracle.
-One fix design does not cover both, so it is a separate round by the round-scope rule.
+wrong width*, so it is a separate round by the round-scope rule.
+
+*** THE NEXT SENTENCE USED TO PRESUME THE FIX: "a read-modify-write honouring `len`,
+which raises an endianness question the default arm never has to answer".  THAT
+PRESUMPTION IS REFUTED ON BOTH FLANKS, and the pass-1 adjudication is recorded here so a
+future round re-derives nothing. ***
+
+**A seven-seat panel converged unanimously on declining narrow writes. The flagship seat
+then overturned that from source.**  Mainline Linux `drivers/cdrom/gdrom.c` BYTE-WRITES
+this window's `+0x18` to trigger every DMA transfer (`:622`) and BYTE-READS it to poll for
+completion (`:618`), while the four value registers it uses are always 32-bit (`:585-589`).
+So a blanket decline **would break a booting Linux**, and the width-blind code delivers
+exactly what the one real narrow user needs.
+
+**The read-modify-write is refuted differently — not by derivability but by an ABSENT
+ORACLE.**  The endianness question turns out to be answerable: `cpu_sh.c:96` sets
+`EMUL_LITTLE_ENDIAN` *unconditionally*, so there is no big-endian SH in this tree and the
+merge is always the low lane.  The real objection is that `0x005f74xx` is Sega's Holly
+ASIC, outside the SH7750 manual, and this project holds **no** documentation for it.  The
+original filing's own words — "real hardware leaves the upper 24 bits" — were an
+**unsourced claim**, the `#357`/`#362` shape this tree has already been burned by once.
+A read-modify-write would ship an invented behaviour and then pin the invention with a
+detector row.
+
+**THE DECIDED DESIGN, if a fix is ever warranted:** decline with a latched diagnostic at
+the four VALUE registers ONLY, keeping `+0x18` byte-capable.  The Linux byte-contract is a
+standing constraint on anything that ships here.
+
+**MEASURED on the committed build** (`dmawidth_measure.py`, reported not pinned): seed
+`+0x04` with `0x11223344`, byte-write `0xff` at `+0x04`, read back → `0xff`, i.e.
+`0x000000ff`; liveness control in the same run returned `0x12345678`.  The discriminating
+row is that sequence — `0x000000ff` today, `0x11223344` declined, `0x112233ff` merged —
+and **it must not ship as a green row pinning `0x000000ff`**, which would enshrine this
+model's own behaviour as an oracle.
+
+*Also noted by the seat, for whoever picks this up: the probe row that would pin the REAL
+contract (byte trigger arms, byte poll reads 0) is currently UNBUILDABLE — any nonzero
+store at `+0x18` today lands on one of `sh4gdromexit`'s filed `exit(1)` kills unless the
+full command path is staged.  So this item is gated behind that round by
+probe-buildability, not merely by priority.*
 
 **It is the same FAMILY as the alias `#461` did fix, and that is worth stating plainly:**
 the new rule *"alignment alone separates unimplemented word from misaligned access to an
