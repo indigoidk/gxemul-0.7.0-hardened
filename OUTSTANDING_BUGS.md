@@ -6247,7 +6247,12 @@ Leave `SH_INT_ASSERTED` set: masking blocks ACCEPTANCE, not the request.
 deassert rescan (`:373-386`) can never select a prio-0 entry, since `prio > int_level` is
 `0 > 0`.
 
-### `sh4tlbmulti` — open, NEW, and the same shape as `sh4prio0` in the same file.
+### `sh4tlbmulti` — *** CLOSED, shipped as `0678450`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 *** A GUEST UTLB WRITE THAT PRODUCES TWO MATCHING ENTRIES ENDS THE HOST PROCESS. ***
 `dev_sh4.c:1158-1159` raises `sh_exception(cpu, EXPEVT_RESET_TLB_MULTI_HIT, 0, 0)` when an
@@ -6278,7 +6283,12 @@ believing the family is closed.
 (devinit wiring), all five `dev_irqc.c` sites and both `dev_mp.c` sites (`fatal()` only).
 `dev_sh4.c:1970` is a real kill but is already filed as `sh4pclock`.
 
-### `sh4irq15` — open, NEW, and it must be filed WITH `sh4prio0` because that fix hides it
+### `sh4irq15` — *** CLOSED, shipped as `9d5fd69`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 `machine_test.c:99` selects `SH4_INTEVT_IRQ15`, the one line number that is priority 0 by
 construction. **After `sh4prio0` lands, `-E testsh` goes from LOUDLY unusable to SILENTLY
@@ -6290,7 +6300,12 @@ The manual supports the change independently: §19.2.2 (`:39908`) says an IRL va
 "indicates **no interrupt request** (interrupt priority level 0)", and Table 19.5 (`:40071`)
 tops out at `H'3C0`. **There is no `H'3E0` source in the SH7750 at all.**
 
-### `sh4iprbcd` — open, NEW. Three registers are stored and never read.
+### `sh4iprbcd` — *** CLOSED, shipped as `7e5c0f6 bb05ce7`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 `sh_update_interrupt_priorities()` (`cpu_sh.c:246-281`) consults only `intc_ipra` and
 `intc_intpri08`. `dev_sh4.c:2394-2418` stores `intc_iprb`, `intc_iprc` and `intc_iprd` and
@@ -6339,7 +6354,12 @@ because nothing asserts those lines in-tree today — which is precisely the con
 > whose IPRA[3:0], IPRB[7:4] and IPRC[7:4] all say "Reserved" where the manual says RTC, SCI
 > and SCIF.
 
-### `sh4prioraise` — open, NEW. Raising a priority does not re-examine a pending request.
+### `sh4prioraise` — *** CLOSED, shipped as `7e5c0f6 bb05ce7`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 `sh_update_interrupt_priorities()` rewrites the priority nibbles but never recomputes
 `int_to_assert` / `int_level`. A guest that asserts while masked and then raises IPRA gets
@@ -6702,7 +6722,12 @@ Nothing observable is at stake on any ABI this tree builds for — `int` and `un
 are the same width and pass identically — so this is correctness-by-the-standard, not a
 measurable defect. It needs no witness; it needs one mechanical sweep and a census row.
 
-### `sh4pclock` — open, MEASURED, not started
+### `sh4pclock` — *** CLOSED, shipped as `0bb8be2 2965aa1`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 *** A GUEST STORE ENDS THE HOST ON `hpcsh`, AND THE SITE READS LIKE IT CANNOT BE REACHED. ***
 `dev_sh4.c:1813-1817`, in the `SH4_TCR0` write handler:
@@ -7264,7 +7289,12 @@ for the read-back, but **no shipped row writes `0x20`** — `unlatch` and `accep
 `CODE["dreamcast"]` duplicate `LANDISK_CODE`/`DREAMCAST_CODE` — the same "dead weight that
 reads like coverage" the `SCRATCH` comment two lines below records a seat already pruning.
 
-### `sh4gdromexit` — open (census after #459)
+### `sh4gdromexit` — *** CLOSED, shipped as `98a3408 16f06a0`.  This heading said `open`. ***
+
+*Heading corrected 2026-08-23 in a sweep: **six** headings in this file said `open` on
+work the ledger recorded as closed.  The carrier's first-stop procedure reads THIS FILE
+as the live queue, so each one presented shipped work as available.  The body below is
+the original and is left as written.*
 
 `#459` closed the last guest-reachable `exit(` in `dev_sh4.c`. **The SH surface as a whole is
 not clear.** Census of *code* exits — excluding `#ifdef` blocks and construction-time
@@ -7842,7 +7872,26 @@ above them — the uniform offset is the tell.*
 | `:294` | `GDROM Read TOC not 408 bytes?` | command layer |
 | `:346` | `unimplemented data format 0x%02x` | command layer |
 | `:424` | `handle_command` default, `unimplemented command 0x%02x` | command layer |
-| `:600` | `Too much GDROM_DATA?` | command layer |
+| `:600` | `Too much GDROM_DATA?` | **NOT guest-reachable — keep fatal** |
+
+*** `:600` IS NOT REACHABLE AND SHOULD STAY FATAL, so the heading's "six
+guest-reachable" is wrong by one. ***  A flagship seat traced the invariant:
+`busy & 0x08` is set only by `COND=0xa0`, which zeroes `cmd_count`; the only
+increments are +2 per store; at exactly 12 the flag clears and the command
+dispatches. So `cmd_count >= 12 && (busy & 0x08)` cannot be reached from any guest
+input sequence — no witness can exist, and the ladder says document, not change.
+
+**And it has MEASURED value as an invariant tripwire**: `#460`'s rejected Option C
+(step-by-1 width emulation) was caught *precisely because* it made `:600` reachable.
+De-fatalising it would delete the one accidental detector of the `cmd_count`
+invariant while buying no guest-facing safety.
+
+**Census correction, also from that seat:** the file has **eight** live `exit(1)`,
+not six. `:639` and `:699` are each ONE store from death — more reachable than four
+of the six here — and are carried by the open `gdromcondlies` row. The arithmetic
+was defensible; **the exclusion was never stated**, and the seat had to consult the
+ledger to stop itself re-filing them. One sentence prevents the next seat repeating
+that.
 | `:804` | `DMA transfer but d->data is NULL` | DMA `+0x18` |
 | `:820` | DMA arming-mismatch report | DMA `+0x18` |
 

@@ -17405,8 +17405,8 @@
       "state": "open",
       "commits": "80700b3",
       "hold": "",
-      "witness": "probe:scratchpad exitsix_witness.py (rung 3) -- MEASURED TWICE: first on ba30e64, then RE-MEASURED on the current revision after a seat pointed out the first was a line-mapping inference, not a current-revision execution",
-      "title": "gdromexitsix  six guest-reachable exit(1) sites in dev_dreamcast_gdrom.c had NO open carrier, while the round's own census recorded them as filed",
+      "witness": "probe:scratchpad exitsix_witness.py + exit804_witness.py (rung 3, BOTH sites measured on the current revision, each with its own device-signature control)",
+      "title": "gdromexitsix  the DMA+0x18 pair ends the host from a protocol-correct guest, and the four command-layer exits split out",
       "closure": {
         "by": "",
         "badge": "",
@@ -17475,6 +17475,20 @@
           "d": "✓",
           "date": "2026-08-23",
           "note": "[panel_20260823_222813] SHIP WITH CHANGES, 49 KB. Longest analysis of the seven; converges on the scope split and the :804 postcondition question."
+        },
+        {
+          "seat": "fable5",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": "*** SETTLED THE codex/grok SPLIT EMPIRICALLY, AND BOTH SIDES WERE PARTLY WRONG. *** It re-fetched mainline drivers/cdrom/gdrom.c: the post-trigger wait is wait_event_interruptible_timeout(..., GDROM_DEFAULT_TIMEOUT) = HZ*7, and the pre-trigger poll is guarded by time_before(jiffies, timeout) with HZ/2. EVERY WAIT IN THE DMA PATH IS TIME-BOUNDED, so a decline lands on a 7-second timeout -> BLK_STS_IOERR -> EIO. Degraded and bounded, NOT a hang: codex's and glm's central fear does not materialise. *** BUT IT FOUND THE MECHANISM NEITHER SIDE NAMED, AND THE FOUR-ROUND IDIOM WALKS STRAIGHT INTO IT. *** The DMA window's tail store runs after every aligned break. The SUCCESS arm sets `idata = 0` before breaking -- which is why a completed transfer polls idle -- and both exits die BEFORE the tail. So 'keep the diagnostic, drop exit(1)', the shape #447/#459/#460/#461 all used, lets the guest's trigger value 1 flow into dma_reg[6] and *** +0x18 READS BUSY FOREVER. *** For Linux that is a bounded HZ/2 tax per transfer; for a guest that waits the NetBSD way -- its own control-window waits are unbounded spins, fetched verbatim -- it is a real hang. Fix is one line per declined arm: `idata = 0` before break, mirroring the success arm. *** AND FIRING THE COMPLETION EVENT IS THE ACTIVELY HARMFUL OPTION, the opposite of what the brief asked about. *** gdrom_dma_interrupt clears gd.transfer UNCONDITIONALLY and checks no error bit anywhere, so firing SYSASIC_EVENT_GDROM_DMA on an empty transfer exits the wait with BLK_STS_OK -- the block layer is told the read succeeded when zero bytes moved, and the guest consumes whatever was in the destination page AS DISK DATA. That is #460's invented-behaviour class reproduced at the block layer. The driver has exactly one error channel, the timeout, so 7-second EIO is not a compromise but the only honest signal available. IT ALSO STRENGTHENED THE ROUND'S WARRANT: :804 is a COMPLIANT-GUEST path today. gdrom_readdisk_dma writes the four DMA registers before sending packet 0x30; if diskimage_access fails on a short image, or OB-20's sector clamp rejects the request, handle_command leaves d->data == NULL and Linux -- told nothing it checks -- byte-writes 1 to +0x18. On committed HEAD that is host death from a protocol-correct guest with an imperfect disk image, i.e. two shipped defensive declines currently feed a host kill. CORRECTED THE WITNESS CLAIM, precisely: only :820 had been measured; :804 needs three stores and 'test-first is not satisfied by a sibling's witness'. Measured in response -- arming with no staged data kills the host, own diagnostic seen, control with trigger=0 survives. CORRECTED THE SCOPE AND THE TITLE: :600 is NOT guest-reachable (busy&0x08 is set only by COND=0xa0 which zeroes cmd_count; increments are +2; at exactly 12 the flag clears), so 'six guest-reachable' was false for it -- AND it should stay fatal because it has MEASURED value as an invariant tripwire: #460's rejected Option C was caught precisely because it made :600 reachable. De-fatalising it would delete the one accidental detector of the cmd_count invariant. The census is also EIGHT sites, not six; :639/:699 are carried by gdromcondlies, so the arithmetic was defensible but the brief never stated the exclusion and the seat had to consult the ledger to avoid re-filing them. L4 NIT FOR THE ROUND: the transfer diagnostic prints `length` (the guest's +0x08 value) while the code transfers d->data_len -- so it lies in exactly the sessions where the discrepancy matters. One word, inside the hunk being edited."
+        },
+        {
+          "seat": "opus5",
+          "phase": "assess",
+          "d": "✓",
+          "date": "2026-08-23",
+          "note": ":804 WITNESSED on the current revision, closing the gap the flagship seat named. Three stores to IMPLEMENTED offsets -- +0x0c=1, +0x14=1, +0x18=1 -- satisfy the arming condition, enter the transfer branch, and die on `d->data == NULL`. Host dies, its own diagnostic is seen, and the DEVICE-SIGNATURE CONTROL in the same run -- the identical three stores with the trigger left at 0 -- leaves the host alive, which isolates the trigger as the cause rather than the arming. Rung 3, unmodified machine, nothing added to reach the site. Both halves of the pair are now measured, each with its own control."
         }
       ]
     },

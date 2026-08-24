@@ -64,6 +64,25 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LEDGER = os.path.join(ROOT, "tools", "pipeline", "ledger.json")
+QUEUE = os.path.join(ROOT, "OUTSTANDING_BUGS.md")
+
+#  *** SECTION P CHECKS THE LEDGER -> FILE DIRECTION.  NOTHING CHECKED THE
+#  REVERSE, AND SEVEN HEADINGS HAD ROTTED. ***
+#
+#  `gdromdefault` read `### gdromdefault -- open` for hours after it shipped, on
+#  a day when a commit was literally titled 'close gdromdefault' and a LATER
+#  commit touched the same file without noticing.  A sweep then found SIX more.
+#
+#  This is the expensive direction of the state-vs-substance mismatch, because
+#  the carrier's first-stop procedure names OUTSTANDING_BUGS.md as the live
+#  queue: every stale heading offers SHIPPED WORK to a fresh session as though
+#  it were available, and the session has no reason to doubt it.
+#
+#  THE EXEMPTION IS REAL AND MEASURED: this file deliberately preserves original
+#  entries under a corrected heading ("*The original entry follows,
+#  unaltered.*"), and the sweep found exactly one such case against six genuine
+#  ones.  A heading whose preceding lines mark it as preserved is skipped.
+HEADING = re.compile(r"^#{2,4}\s*`([a-z0-9]+)`\s*[-—]+\s*(.{0,40})", re.M)
 
 #  `probe:regress/foo_probe.py` possibly followed by prose -- the witness field
 #  is free text after the artefact, and sqreadtype's ran to three sentences.
@@ -164,6 +183,29 @@ def main():
         print("  note  %s cites %s %d time(s) in a note dated %s; that file was"
               " last committed %s -- RE-DERIVE the line before trusting it"
               % (rid, f, cnt, when, mod))
+
+    #  ---- the queue file must not advertise shipped work ----
+    try:
+        qtxt = io.open(QUEUE, encoding="utf-8", errors="replace").read()
+    except OSError:
+        qtxt = ""
+    qlines = qtxt.split(chr(10))
+    for m in HEADING.finditer(qtxt):
+        rid, tail = m.group(1), m.group(2)
+        if rid not in {r["id"]: 1 for r in d["rows"]}:
+            continue
+        st = [r for r in d["rows"] if r["id"] == rid][0].get("state")
+        if st == "open" or not tail.lower().startswith("open"):
+            continue
+        ln = qtxt[:m.start()].count(chr(10))
+        near = " ".join(qlines[max(0, ln - 3):ln]).lower()
+        if "original entry follows" in near or "unaltered" in near:
+            continue          # a deliberately preserved original, marked as one
+        msg = ("OUTSTANDING_BUGS.md:%d says `%s -- open` but the ledger says %r."
+               % (ln + 1, rid, st))
+        msg += (chr(10) + "              That file is the carrier's FIRST-STOP live"
+                " queue, so this offers shipped work to a fresh session.")
+        bad.append(msg)
 
     print("  check_row_states: %d open row(s) checked, %d exempt by state_note"
           % (checked, exempt))

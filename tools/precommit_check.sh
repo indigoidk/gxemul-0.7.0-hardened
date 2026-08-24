@@ -549,6 +549,13 @@ fi
 #  `witness` field, which exists for exactly this purpose: an open row naming a
 #  COMMITTED probe is claiming to be unstarted while its detector is in the tree.
 #  Negative-controlled both ways; opt out with a `state_note` that says what is left.
+#  W ALSO CHECKS THE QUEUE FILE NOW.  Section P checks ledger -> file; nothing
+#  checked file -> ledger, and SEVEN headings in OUTSTANDING_BUGS.md said `open` on
+#  work the ledger recorded as closed.  That is the EXPENSIVE direction: the
+#  carrier's first-stop procedure names that file as the live queue, so each stale
+#  heading offers shipped work to a fresh session, which has no reason to doubt it.
+#  Deliberately preserved originals are exempt, and the sweep measured exactly one
+#  of those against six genuine cases.
 say ""; say "W. a row's state agrees with what shipped"
 RSCHK=$_HERE/pipeline/check_row_states.py
 if [ ! -f "$RSCHK" ]; then
