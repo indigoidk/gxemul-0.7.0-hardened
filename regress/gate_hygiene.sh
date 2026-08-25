@@ -110,6 +110,56 @@ unknown=$((allends - bare - full))
 check "readiness: bare-prompt sites frozen (#37)" "$bare" "$EXPECT_BARE"
 check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN"
 
+#  ---------------------------------------------------------------------------
+#  *** THE THREE COUNTS ABOVE ARE CLOSED-WORLD AND STRUCTURALLY CANNOT SEE A
+#  PROBE WITH NO PROMPT DETECTION AT ALL. ***  py_code() concatenates every
+#  `endswith(` line across the tree, so a file containing ZERO of them
+#  contributes to no counter and passes invisibly.  A ratchet built to catch
+#  probes with BAD prompt detection is blind to probes with NONE -- which is
+#  the larger set: SEVEN of the 33 pty-forking probes have no prompt
+#  detection whatever.
+#
+#  The fix is the one this project applies to every phantom-zero: ENUMERATE THE
+#  DENOMINATOR FIRST.  Count the pty-forking probes, then the promptless subset,
+#  and compare that subset against an explicit list.
+#
+#  *** IT IS A RATCHET, NOT A REJECT, AND THAT IS NOT A COMPROMISE. ***  EVERY
+#  current probe is promptless, so "reject any file lacking a predicate" would
+#  redden the whole battery PERMANENTLY -- a red no edit can clear, which this
+#  project has already paid for once and which destroys the credibility of every
+#  other row in the run.  The grandfathered set is named exactly, so it cannot
+#  quietly grow; a NEW promptless probe fails, and converting one is a
+#  ratchet-down that must edit this list.
+#
+#  Provenance: a codex seat named the enumerate-first shape on the
+#  probetimebased panel; the ratchet-not-reject refinement is the adjudication's,
+#  after it checked what a reject-all would do to the current set.
+EXPECT_PTY_PROBES=33
+GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
+sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py"
+
+_ptylist=$(cd "$HERE" && grep -l "pty.fork" *.py 2>/dev/null | sort)
+_ptyn=$(printf '%s' "$_ptylist" | grep -c . )
+_promptless=$(cd "$HERE" && printf '%s' "$_ptylist" | tr ' ' '
+' | xargs grep -L "endswith(" 2>/dev/null | sort)
+_want=$(printf '%s' "$GRANDFATHERED_PROMPTLESS" | tr ' ' '
+' | grep -c . )
+_got=$(printf '%s' "$_promptless" | grep -c . )
+
+check "readiness: pty-probe denominator (enumerate FIRST)" "$_ptyn" "$EXPECT_PTY_PROBES"
+check "readiness: promptless probes, grandfathered set only" "$_got" "$_want"
+
+#  Name the offender rather than only the count -- a bare number tells nobody
+#  WHICH file, and the whole point of the denominator is attribution.
+_new=$(comm -13 <(printf '%s' "$GRANDFATHERED_PROMPTLESS" | tr ' ' '
+' | grep . | sort)                 <(printf '%s' "$_promptless" | grep . | sort) 2>/dev/null)
+if [ -n "$_new" ]; then
+        echo "  NEW PROMPTLESS PTY PROBE(S) -- add prompt detection, or grandfather"
+        echo "  deliberately by editing GRANDFATHERED_PROMPTLESS above:"
+        printf '    %s
+' $_new
+fi
+
 #  THE POSITIVE HALF OF THE #392 CHECK, and it is the half that binds the offline
 #  truth table in gate_offline.sh to the code that actually ships.  Counting only
 #  the ABSENCE of the bad spelling is not enough: a site could be deleted, or

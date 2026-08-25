@@ -91,17 +91,45 @@ NOT CAUGHT, structurally:
 
   * *** THE SURVIVAL ROWS DETECT PROCESS TERMINATION ONLY. ***  `arm survive`,
     `nodata live` and `nodata stale` compute `"survived" if alive else "died"`,
-    and `alive` is False ONLY on EOF -- so they are true of an emulator that is
-    HUNG but has not exited.  Their claim is that the host does not END, which
-    is what their notes say and is weaker than "the host is healthy".
+    and `alive` is False ONLY when a read raises OSError or returns empty INSIDE
+    a budget window -- so they are true of an emulator that is HUNG, one that is
+    FROZEN, and, measured, one that has ALREADY BEEN KILLED.
+
+    *** THIS PARAGRAPH SAID "False ONLY on EOF ... true of an emulator that is
+    HUNG but has not exited", AND BOTH HALVES ARE MEASURABLY WRONG. ***
+
+      * `rd()` returns False on `except OSError` as well as on EOF, and on Linux
+        a pty-master read after the child dies gives EIO -- so the OSError arm is
+        the USUAL death path, not an exotic one.  "Only on EOF" mislabels the
+        common case.
+      * The defect is not on either False path.  It is on the THIRD path: the
+        loop is `while time.time() < end:`, so it returns True when the budget
+        expires having read nothing.  **A death that lands after the last budget
+        check is never read.**  Measured on a rig built from this file's own
+        session()/rd(): a process SIGKILLed just before its session's `quit`
+        scores `alive == True`.
+
+    So `alive` does not mean "hung but not exited".  It does not even mean
+    "not exited".  It means: no EOF and no OSError were observed inside the
+    sampled windows.  A red `alive == died` also cannot distinguish a clean exit
+    from a pty error.
     Hang-shaped regressions are the IDLE rows' subject, not theirs.
 
   * The `absent` path is DESIGNED to fire when a readback produces no output
     (e.g. a wedged handler).  It HAS fired once --
     `regress/artifacts/kill462/table3_58rows/probe_M11.raw`, row `stale idle`
     -- and that firing's CAUSE IS UNATTRIBUTED: a hang and a session
-    outrunning its spin budget are both consistent with it.  Detection is
-    proven; diagnosis is not claimed.
+    outrunning its spin budget are both consistent with it -- AND SO IS A THIRD
+    CAUSE THIS LIST OMITTED, WHICH A CLEAN REBUILD REPRODUCES DETERMINISTICALLY:
+    A HOST DEATH THIS PREDICATE MISSED.  The M11 session was re-run five times
+    on a tree synced byte-identical to SEC, and EVERY ONE OF THE FIVE gave a SIGSEGV
+    -- written out rather than as a ratio, because an `N/N` in a probe docstring
+    is indistinguishable from a stale ROW SCORE, and the score-claims gate
+    correctly flagged the ratio form against this probe's pin of 58.  Preceded by
+    `Transfering 408 bytes to 0x00000000 (guest asked for 0)`.  The shipped
+    table3 entry records `survived` for that session.  Detection is proven;
+    diagnosis is not claimed -- and the leading diagnosis is now the one the
+    original list did not contain.
 
   * No row observes interrupt ASSERTION.  The completion rows observe the
     SYSASIC pending register, which is a different channel.

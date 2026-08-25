@@ -290,6 +290,32 @@ asking of everything else all day.*
 
 **No mutant escaped.**  Every one reddened at least one row, and the 7 single-row kills each hit the row written for that mutant and nothing else.
 
+*** M11's CAPTION IS CORRECTED: THE LEADING EXPLANATION IS NO LONGER NON-DETERMINISM. A
+MEASURING SEAT REBUILT FROM SEC AND RAN THAT SESSION FIVE TIMES -- 5/5 DETERMINISTIC SIGSEGV.
+THE MODE DID NOT CHANGE; THE PREDICATE MISSED THE DEATH. ***
+
+The row `nodata stale` scores `"survived" if alive else "died"`, and `alive` is True whenever
+no EOF and no OSError land INSIDE a budget window -- `rd()`'s loop is `while time.time() <
+end:`, so **a death arriving after the last budget check is never read.** Measured on a rig
+built from this probe's own `session()`/`rd()`: a process SIGKILLed just before its session's
+`quit` scores `alive == True`.
+
+So the shipped `table3_58rows/probe_M11.raw` entry records **`survived` for a session that did
+not reach `print r2`** -- which is also why `stale idle` reads `absent` in that run rather than
+a value. The three rows are one session; the session died; one row could not tell.
+
+**What is measured:** the same one-line edit, applied to a tree synced byte-identical to SEC
+and rebuilt, gives 5/5 SIGSEGV, preceded by `Transfering 408 bytes to 0x00000000 (guest asked
+for 0)`. **What is NOT established:** `kill462/table462.results` names the tree for the table-3 run but
+the table-2 run's tree is not recorded, so it cannot be asserted that both shipped runs used
+identical binaries. *Non-determinism is not refuted; it is displaced as the leading
+explanation by one that reproduces deterministically.*
+
+**M11 is a STRONGER mutant than the table records**, not a flakier one -- a re-score is owed.
+
+*The superseded caption follows, kept because the reasoning it rests on is the thing that was
+wrong, and a corrected record that hides its predecessor teaches nothing:*
+
 *** M11's FAILURE MODE IS UNSTABLE, AND THE CAPTION SAYS SO BECAUSE CITING ONE LOG WOULD
 MISLEAD. ***
 
