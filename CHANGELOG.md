@@ -268,7 +268,7 @@ asking of everything else all day.*
 
 ### The kill table: 14 mutants, every score naming its log
 
-*Generated from `table462.results` and the archived per-mutant logs under `regress/artifacts/kill462/table3_58rows/`, not transcribed.  The generator REFUSES to emit if any mutant lacks a score, because a table with a silent gap cannot be told from one with an escape -- and it REFUSES to read the live `probe_<mutant>.raw` buffers at all, because those are truncated by the next run and a record citing them decays into saying something else.*
+*Generated from `kill462/table462.results` and the archived per-mutant logs under `regress/artifacts/kill462/table3_58rows/`, not transcribed.  The generator REFUSES to emit if any mutant lacks a score, because a table with a silent gap cannot be told from one with an escape -- and it REFUSES to read the live `probe_<mutant>.raw` buffers at all, because those are truncated by the next run and a record citing them decays into saying something else.*
 
 | mutant | what it does | score | rows it reddened |
 |---|---|---|---|
@@ -537,7 +537,7 @@ is `0x6312`, caught by computing the encoding instead of trusting the typing.  *
 hand-assembled constant in the probe was then audited against the SH encoding rules:
 seven checked, zero wrong.**
 
-*** THIS HEADING SAID `32 -> 41 rows, 41/41 measured (run462.out)`, AND IT WENT STALE
+*** THIS HEADING SAID `32 -> 41 rows, 41/41 measured (kill462/run462.out)`, AND IT WENT STALE
 INSIDE ITS OWN ROUND. ***  41/41 was real, and then pass 2 added three rows -- `nodata
 quiet`, `accept event`, `nodata idle` -- so both the count and the cited log describe a
 superseded detector.

@@ -106,6 +106,31 @@ def blocks(text):
         yield num, text[start:end]
 
 
+def basename_matches(name):
+    """How many files under the search roots share this basename.
+
+    *** AMBIGUITY IS THE DISCRIMINATOR, AND IT IS MECHANICALLY CHECKABLE. ***  Three seats
+    landed in three places on bare citations -- one wanted them to FAIL, one wanted a WARN,
+    and I had shipped a silent count.  The adjudication threads all three on ambiguity:
+    a bare name with ONE match is fine today and fragile tomorrow (warn); a bare name with
+    SEVERAL is arbitrary resolution and a real defect (fail).
+
+    It is the case that actually bit: `probe_Mb1.raw` and `probe_Mb2.raw`, cited bare one
+    line apart, resolved to table 2 and table ONE respectively -- a citation a reader
+    resolves correctly and a checker resolves wrongly.  A hard fail would have caught it
+    at commit instead of at a `--list` read.
+    """
+    base = os.path.basename(name)
+    seen = set()
+    for root in SEARCH:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            if base in filenames:
+                seen.add(os.path.realpath(os.path.join(dirpath, base)))
+    return len(seen)
+
+
 def tracked(path):
     """True if `path` is tracked by git in this repo.
 
@@ -177,7 +202,7 @@ def main(argv):
     #  certifies.  Same for bare names, whose ambiguity COMPOUNDS as each round adds an
     #  archive -- `probe_Mb1.raw` and `probe_Mb2.raw`, cited bare one line apart, once
     #  resolved to two DIFFERENT tables.
-    untracked, bare, loose = 0, 0, []
+    untracked, bare, loose, ambiguous = 0, 0, [], []
     for num, body in blocks(text):
         blocks_seen += 1
         if num < CUTOFF:
@@ -200,6 +225,8 @@ def main(argv):
                     untracked += 1
                 if "/" not in name:
                     bare += 1
+                    if basename_matches(name) > 1:
+                        ambiguous.append((num, name, basename_matches(name)))
                 if listing:
                     mark = "" if hit.startswith(TRACKED) else "   [machine-local]"
                     mark += "" if "/" in name else "   [bare: resolved by walk order]"
@@ -210,7 +237,7 @@ def main(argv):
         print("  note  %d citation(s) resolved from UNTRACKED roots -- machine-local, "
               "not clone-portable" % untracked)
     if bare:
-        print("  note  %d BARE citation(s) resolved by walk order -- stamp them "
+        print("  WARN  %d BARE citation(s) resolved by walk order -- stamp them "
               "(`tableN_Mrows/name.raw`) before a second table makes them ambiguous" % bare)
     print("check_cited_artifacts: %d citations checked at/after round %d, "
           "%d grandfathered, %d missing, %d artifact-like mentions NOT in enforced "
@@ -228,6 +255,14 @@ def main(argv):
         print("CITED_ARTIFACTS_FAIL  every artifact search root is ABSENT on this machine.")
         print("  This is a clone without `_scratchpad/`, not a decayed citation.  Set")
         print("  GX_ARTIFACT_DIR, or restore the archives, before trusting a red here.")
+        return 1
+    if ambiguous:
+        print("CITED_ARTIFACTS_FAIL  %d BARE citation(s) are AMBIGUOUS -- several files share"
+              % len(ambiguous))
+        print("  the basename, so resolution is by walk order and a reader and this checker")
+        print("  can disagree without either noticing.  Stamp them: `tableN_Mrows/name.raw`.")
+        for num, name, n in ambiguous:
+            print("    #%-4d %-30s %d candidates" % (num, name, n))
         return 1
     if loose:
         print("CITED_ARTIFACTS_FAIL  %d citation(s) resolve only to UNTRACKED paths -- they"
@@ -272,7 +307,16 @@ def selftest():
     import tempfile
     fails = []
 
+    #  *** THE CASE COUNT IS COUNTED, NOT TYPED. ***  It was a hardcoded literal and it
+    #  went stale the first time cases were added: the file printed "15 cases" while
+    #  containing 13 `check()` calls.  A codex seat caught it by counting the call sites.
+    #  That is the FROZEN-NUMBER defect inside the gate built to catch decayed claims --
+    #  and the fix is to DERIVE it, not to edit 15 to 13, because editing the literal
+    #  preserves the defect while appearing to fix it.
+    ran = []
+
     def check(name, got, want):
+        ran.append(name)
         if got != want:
             fails.append("%s: got %r, want %r" % (name, got, want))
 
@@ -322,11 +366,13 @@ def selftest():
     check("blocks: garbage yields none", len(list(blocks("no headings here"))), 0)
 
     if fails:
-        print("CITED_ARTIFACTS_SELFTEST_FAIL  %d case(s):" % len(fails))
+        print("CITED_ARTIFACTS_SELFTEST_FAIL  %d of %d case(s):"
+              % (len(fails), len(ran)))
         for f in fails:
             print("    " + f)
         return 1
-    print("CITED_ARTIFACTS_SELFTEST_PASS  15 cases, each a defect this checker actually had")
+    print("CITED_ARTIFACTS_SELFTEST_PASS  %d cases, each a defect this checker actually "
+          "had" % len(ran))
     return 0
 
 
