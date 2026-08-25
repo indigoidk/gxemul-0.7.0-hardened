@@ -69,7 +69,7 @@ def shared_notes(rows):
             note, seat = e.get("note") or "", e.get("seat") or "?"
             if len(note) < 80:
                 continue                      # too short to carry a claim either way
-            buckets[strip_seat(note, seat)[:PREFIX]].add((seat, e.get("date") or ""))
+            buckets[strip_seat(note, seat)[:PREFIX].casefold()].add((seat, e.get("date") or ""))
         for key, pairs in buckets.items():
             seats = sorted({s for s, _ in pairs})
             if len(seats) >= MIN_SEATS:

@@ -567,6 +567,65 @@ else
 	printf '%s\n' "$rsout" | grep -E 'STALE|ROW_STATES_FAIL|^ ' | sed 's/^/          /'
 fi
 
+#  ---- X ---------------------------------------------------------------------------
+#  A CITED MEASUREMENT MUST EXIST.  The rule "a score claim names its artifact" was
+#  already in force and already being followed when it failed TWICE in one day:
+#
+#    * `#462` cited `probe_base.raw` for 52/52; a later 57-row table REUSED that name,
+#      so the claim became CONTRADICTED BY ITS OWN EVIDENCE, not merely unverifiable.
+#    * `#461`'s lethal mutant `m_dmarevert` (22/31) has NO per-row artifact at all --
+#      0 candidate lines across every `.out` in both scratchpads.  A retrospective audit
+#      of that detector was ATTEMPTED on 2026-08-24 and could not run.
+#
+#  EXISTENCE ONLY, and the scope cut is the safety argument.  It does not parse the log
+#  or re-derive the score: section U already checks DENOMINATORS against the gate pin,
+#  nothing mechanical can tell a measured numerator from a carried one, and a checker
+#  that tried would grow without bound -- the #392 shape.  A gate that stats cited paths
+#  cannot creep into policing scratch directories.
+#
+#  Specified by the fable5 adjudication of #462, Decision 4c, which set both the altitude
+#  ("checks committed records, never scratchpad state") and the scope cut.  Forward-only
+#  from round 462; earlier blocks predate the rule, and a red that no edit can clear is
+#  its own hazard.  NEGATIVE-CONTROLLED ON ITS FIRST RUN: it reported two missing
+#  artifacts, both real, and went green only after they were archived to a durable path.
+say ""; say "X. every measurement cited in a round block still exists"
+CACHK=$_HERE/pipeline/check_cited_artifacts.py
+if [ ! -f "$CACHK" ]; then
+	bad "check_cited_artifacts.py MISSING -- cited measurements are NOT verified"
+elif caout=$(python "$CACHK" 2>&1); then
+	good "$(printf '%s' "$caout" | grep -E 'CITED_ARTIFACTS_PASS')"
+else
+	bad "A ROUND BLOCK CITES A MEASUREMENT THAT DOES NOT EXIST:"
+	printf '%s\n' "$caout" | grep -E 'CITED_ARTIFACTS_FAIL|^    #' | sed 's/^/          /'
+	bad "  restore the artifact, or correct the claim to say the log was not preserved"
+fi
+
+#  THE SELFTEST FIRES ONLY WHEN THE CHECKER ITSELF CHANGES -- the section-R idiom, and
+#  wired the same way.  A completeness check found that this gate shipped WITHOUT one
+#  while both its siblings have them: the gate enforcing "every score names verifiable
+#  evidence" had no evidence of its own correctness, and the three false-green fixes it
+#  went through had nothing pinning them.  ***  IT FAILED ON ITS FIRST RUN AND FOUND A
+#  REAL BUG: *** `LOOSE` had been compiled with a literal BACKSPACE byte where `\\b`
+#  belonged, so the unenforced-mentions denominator matched NOTHING and had been printing
+#  a PHANTOM ZERO all evening -- in the counter added specifically to make phantom zeros
+#  visible.  UNTRACKED COUNTS AS TOUCHED, per section R's own scar.
+#  DETECT THE TOUCH INLINE, exactly as section R does -- `$CHANGED` is not defined
+#  until much later in this file, so the first version of this block never fired.
+#  UNTRACKED COUNTS AS TOUCHED: section R's own scar is that a checker was untracked
+#  on the very commit that introduced it, so neither diff could see it and the one
+#  commit that most needed the selftest was the one that skipped it.
+_catouched=$( { git diff --cached --name-only; git diff --name-only; git ls-files --others --exclude-standard; } | grep -c 'tools/pipeline/check_cited_artifacts\.py' )
+if [ "$_catouched" -gt 0 ]; then
+	if stout=$(python "$CACHK" --selftest 2>&1); then
+		good "$(printf '%s' "$stout" | grep -E 'SELFTEST_PASS')"
+	else
+		bad "check_cited_artifacts.py SELFTEST FAILED -- the gate is not trustworthy:"
+		printf '%s\n' "$stout" | grep -E 'SELFTEST_FAIL|^    ' | sed 's/^/          /'
+	fi
+else
+	good "checker unchanged -- selftest not re-run (fires when it is edited)"
+fi
+
 #  ---- J ---------------------------------------------------------------------------
 #  THE CARRIER IS TRACKED BY COPY, AND A COPY THAT NOTHING CHECKS GOES STALE.
 #
