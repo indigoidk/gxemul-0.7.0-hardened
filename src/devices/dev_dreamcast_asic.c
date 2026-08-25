@@ -116,11 +116,61 @@ DEVICE_ACCESS(dreamcast_asic)
 		idata = memory_readmax64(cpu, data, len);
 
 	r = (relative_addr / 4) & 3;
-	if (r == 3) {
-		fatal("[ dreamcast_asic: Bad address ]\n");
-		r = 0;
-		exit(1);	// TODO?
-	}
+
+	/*  #463: the whole `if (r == 3)` block is gone, not just its exit(1).
+	    It ended the host process on a SINGLE GUEST LOAD at any of SIXTY-FOUR
+	    byte addresses -- `r == 3` is exactly (relative_addr & 0x0c) == 0x0c,
+	    the fourth word of every 16-byte group, and relative_addr need not be
+	    word-aligned (memory_rw.c passes the raw sub-word offset), so a byte
+	    access at +0x0d dies like +0x0c.  Not merely reserved space either:
+	    an SZ=1 fmov.d at +0x18 issues addr+4 FIRST (cpu_sh_instr.c:790-798),
+	    so it reached +0x1c and died before touching the register it names.
+
+	    All THREE parts had to go.  exit(1) is the kill.  fatal() has no
+	    early-out (core/debugmsg.c:384-390, against debug()'s at :375), so
+	    keeping it turns a host kill into an unsilenceable guest-drivable
+	    flood.  And `r = 0` is a latent clamp hazard: dead today, but it is
+	    exactly what a later widening would use to alias offsets silently.
+
+	    Deleting the block is a TRADE, not parity: r == 3 now falls to
+	    `default:` (:227), which prints the ADDRESS that "Bad address"
+	    never did -- but via debug(), so -q silences it and free-running at
+	    verbose 0 it says nothing, where fatal() printed unconditionally.
+
+	    THE INVARIANT.  r indexes uint32_t[3], and :54-57 declares
+	    pending_irq[3], mask_13[3], mask_11[3], mask_9[3] CONSECUTIVELY --
+	    so mask_13[4] IS mask_11[1] and a stray index corrupts a neighbour
+	    silently.  Staying in bounds needs BOTH:
+	      (i)  every `case` label satisfies (label & 0x0c) != 0x0c; and
+	      (ii) the WHOLE index expression `(relative_addr / 4) & 3` is
+	           preserved -- divisor AND mask, not the mask alone.
+	    Half (i) is ENUMERATED, not asserted: all twelve labels (0, 4, 8,
+	    0x10/14/18, 0x20/24/28, 0x30/34/38) give MAX r = 2.  Half (ii) is
+	    stated as the whole expression because three measured escapes keep
+	    (i) textually satisfied while breaking the mapping: `& 2` aliases
+	    +0x14 onto +0x10, `& 1` and `/ 2` both alias +0x18 onto +0x10, and
+	    `& 7` walks out of bounds.  Rows alias, alias2 and crossarr pin them.
+
+	    Note the exit(1) was ALSO doing bounds duty, and this is the first
+	    code here where r == 3 reaches the switch at all.  Computing r == 3
+	    is not itself out of bounds -- only array[r] would be -- and nothing
+	    on that path indexes: `default:` is two debug() calls.  A future
+	    edit adding an INDEXING case at an r == 3 offset would be a silent
+	    out-of-bounds access that no detector row sees; filed, `asicindexcase`.
+
+	    Deliberately a comment, not a runtime guard: configure:312-314 adds
+	    -DNDEBUG unless DEBUG=YES, so an assert() compiles out of every
+	    default build and protects nothing shipped.
+
+	    Governs THIS FILE ONLY.  SYSASIC_EVENT_TO_ADDR() reaches a fourth
+	    word via a header #define no comment here can reach:
+	    dreamcast_sysasicvar.h:74 is 4*((e)>>5), which lands on an r == 3
+	    offset exactly when (e>>5) & 3 == 3 -- e in [96,127] -> +0x0c, then
+	    [224,255] -> +0x1c, [352,383] -> +0x2c.  It is the SAME fourth-word
+	    pattern one level up, NOT a single range: an earlier draft said
+	    "any event >= 96", which is false ([128,159] -> +0x10, r == 0).
+	    Max over all 21 defines is 67 (:72) and 67>>5 == 2 -> +0x08, so it
+	    is LATENT, not live.  Filed as `asiceventaddr`.  */
 
 	switch (relative_addr) {
 

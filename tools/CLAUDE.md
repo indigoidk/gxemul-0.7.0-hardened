@@ -874,6 +874,45 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > That is deliberate and it is the whole point: an escaped (d) mutant means the round's
 > claim to have "shipped a detector with the fix" is false about the fix's own repair.
 >
+> ### *** (f) THE ANCHOR RULE -- adopted 2026-08-25 after a CLEAN 12/12 detector was escaped
+> ### by a ONE-TERM translation that three purpose-built rows could not see BY CONSTRUCTION. ***
+>
+> **Rows that assert only PAIRWISE DISTINCTNESS, or a same-path round-trip, test the decode
+> against ITSELF.** They are therefore invariant under any edit that re-maps addresses
+> INJECTIVELY over the probed set -- translations first among them -- and they catch a re-map
+> only where it COLLIDES on that set.
+>
+> `#463` shipped three rows built specifically to pin an index bound: `alias`, `alias2` and
+> `crossarr`. All three read back `+0x10` and together assert exactly
+> `cell(+0x10) != cell(+0x14), cell(+0x18), cell(+0x24)`. **They never assert WHICH cell any
+> offset names.** So `r = (relative_addr / 4) & 3` -> `((relative_addr / 4) + 1) & 3` slid the
+> whole window one word, every pair stayed distinct, and the detector scored a CLEAN SWEEP --
+> while every `+0x?8` register moved one past a `[3]` array and a documented register's store
+> landed on `int asserted_13`, making the device drop a legitimately pending interrupt.
+>
+> > **A DETECTOR CLAIMING TO PIN *WHERE* AN ACCESS LANDS MUST CARRY AT LEAST ONE ANCHORED ROW:
+> > an oracle tied to a SPECIFIC CELL by a channel OUTSIDE the decode under test** -- a side
+> > effect (a tick that zeroes the cell), an architectural reset value, or a second access path
+> > to the same cell. **One anchored row converts a whole distinctness suite from relative to
+> > absolute.**
+>
+> **THE REVIEWER CHECK, and it costs two seconds** -- it belongs beside *"does this diff delete
+> `exit(` from a device? then look for accept rows"*:
+>
+> > ***"If every address in this device shifted one word, which row reds?"*** If the answer is
+> > NONE, position is unpinned, whatever the row count.
+>
+> **This is not a new species.** It is the witness ladder's DEVICE-SIGNATURE control one level
+> down: RAM-vs-device needed a signature because a value-only read cannot tell them apart;
+> cell-vs-cell needs one for the same reason.
+>
+> Two cautions the same round measured, both worth carrying: a row that catches a re-map by
+> COLLISION is **layout-dependent** -- `crossarr` catches `-1` only because the probed cells
+> collide there, and a struct REORDER would silently unpin it, where an anchored row would not.
+> And **translations beyond the measured ones are not covered by having measured +/-1**: a
+> derivation says `+2` escapes both the distinctness rows and that round's anchored row. A
+> contract must claim the translations it MEASURED and disclose the rest.
+
 > **Above floor, measured escapes are COVERAGE DEBT: FILE them**, with the escape list recorded,
 > ranked by what they would admit — and ranked BELOW live defects in the same file.
 

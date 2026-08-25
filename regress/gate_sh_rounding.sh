@@ -587,6 +587,100 @@ else
     done
 fi
 
+#  ---------------------------------------------------------------- #463
+#  asic_badaddr: dev_dreamcast_asic.c ended the host process on a SINGLE
+#  guest load.  `r = (relative_addr / 4) & 3` then `exit(1)` when r == 3 --
+#  above the switch and above the writeflag test, so no store, no staging
+#  and no command sequence was needed.
+#
+#  THE DENOMINATOR IS 13.  FOUR OF THOSE ROWS EXIST BECAUSE A PANEL FOUND
+#  THE FIRST NINE INSUFFICIENT.  `alias`, `alias2` and `crossarr` pin the INDEXING
+#  half of the bound on r; the other nine pin the kill and the accept side.
+#  They are COMPLEMENTARY on purpose -- neither catches the other's mutant:
+#    & 3 -> & 2  aliases +0x14 onto +0x10   -> only `alias` sees it
+#    & 3 -> & 7  reaches mask_13[4], which IS mask_11[1] (the struct declares
+#                pending_irq[3], mask_13[3], mask_11[3], mask_9[3]
+#                CONSECUTIVELY) -> only `crossarr` sees it
+#    & 3 -> & 1  aliases +0x18 onto +0x10   -> only `alias2` sees it
+#    / 4 -> / 2  aliases +0x18 onto +0x10   -> only `alias2` sees it
+#  A same-array distinctness row CANNOT see `& 7`: under it the three mask_13
+#  words map to [4],[5],[6], three distinct cells that still round-trip.
+#
+#  THE UNIT OF COVERAGE IS THE COLLISION PAIR, not "aliasing" in the abstract.
+#  Three register words admit distinct pairs and ONE distinctness row pins ONE
+#  pair.  `alias` pins words 0 and 1; `& 1` and `/ 2` both collide words 0 and
+#  TWO, so it was blind to both until `alias2` was added.  Four seats found
+#  these four escapes against a table that was already green.
+#
+#  -u IS LOAD-BEARING, for the reason the gdrom section above records: with
+#  stdout redirected to a file it is block buffered, and a killed run then
+#  loses every row and looks like a run that produced nothing.
+ASLOG=$LOGDIR/gate_asic_badaddr.log
+python3 -u asic_badaddr_probe.py "$PMAX" "$KERNEL" > "$ASLOG" 2>&1 || true
+
+if ! grep -q "ASIC_BADADDR_RESULT=" "$ASLOG"; then
+    note "asic_badaddr probe produced no result line; last lines follow"
+    tail -5 "$ASLOG" | sed 's/^/       /'
+    check "asic_badaddr probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$ASLOG" | sed 's/^/       /'
+    asres=$(grep -o "ASIC_BADADDR_RESULT=[0-9]*/[0-9]*" "$ASLOG" | tail -1 | cut -d= -f2)
+
+    #  *** THE PARSE MUST BE CHECKED BEFORE THE SCORE IS READ. ***  Three panel
+    #  seats independently found the same false pass here: if the result line
+    #  exists but is MALFORMED (no slash, truncated digits), the outer grep -q
+    #  still succeeds, `asres` is EMPTY, and then `${asres%/*}` and
+    #  `${asres#*/}` BOTH expand to the empty string -- so
+    #  `check "rows correct" "" ""` PASSES while nothing was measured.  The
+    #  `rows run` sibling would still redden the gate, so this was never a
+    #  silent green overall; it was a false GREEN ROW, which is worse than
+    #  useless because a reader scanning check output is misled about which
+    #  part failed.  This is the project's own "a pattern that matched nothing
+    #  reports zero for everything" class, wearing shell-expansion clothes.
+    if [ -z "$asres" ]; then
+        note "asic_badaddr result line present but unparseable; last lines follow"
+        tail -3 "$ASLOG" | sed 's/^/       /'
+        check "asic_badaddr result parses" "no" "yes"
+    else
+        check "asic_badaddr result parses" "yes" "yes"
+        check "asic_badaddr rows run"     "${asres#*/}" 13
+        check "asic_badaddr rows correct" "${asres%/*}" "${asres#*/}"
+
+        #  Per-row presence.  A row that silently stops being tested is the
+        #  padded-column class; every name here is <= 10 chars against the
+        #  probe's %-14s column, so the two-space anchor cannot become
+        #  unsatisfiable.  The `count "$ASLOG"` on the NEXT line is what
+        #  identifies this section -- every section's list opens "live" "devsig".
+        #
+        #  `alias` IS A PREFIX OF `alias2`, which is the sibling of the
+        #  padded-column trap: one name's pattern matching two rows, or none.
+        #  CHECKED EMPIRICALLY against probe-formatted lines rather than reasoned
+        #  about -- each of alias / alias2 / crossarr matches EXACTLY ONE. The
+        #  two-space anchor cannot span the collision because the character after
+        #  `alias` is the digit 2, not a space. If a future row is named so that a
+        #  SPACE follows an existing name's prefix, re-run that check before
+        #  trusting this loop.
+        #
+        #  *** AND THERE IS A HARD LENGTH BOUND: ROW NAMES MUST BE <= 13 CHARS. ***
+        #  The probe's format is "%-14s " -- fourteen columns plus one literal
+        #  space -- so a name of length L is followed by (15 - L) spaces.  At L=13
+        #  that is two spaces and the anchor still matches; at L=14 it is ONE, the
+        #  `^$v  ` anchor can never match, and THE ROW SILENTLY STOPS BEING TESTED
+        #  while the gate stays green.  Longest name here is `kill store` (10), so
+        #  there are three characters of headroom.  Named by a panel seat, which
+        #  computed the threshold rather than just warning about the class.
+        for v in "live" "devsig" "asic ok" "safe 8" "kill word" "kill byte" "kill store" "safe 4" "kill far" "alias" "crossarr" "alias2" "mask9 rt"; do
+            n=$(count "$ASLOG" "^$v  .*ok$")
+            check "asic_badaddr $v" "$n" 1
+        done
+    fi
+fi
+
+#  NOTE ON CHECK NAMING: the sections above use `check "  $v"`, a bare padded
+#  row name. Every section has a `live` row, so those names COLLIDE in the
+#  gate's own output and a reader cannot tell which section a failing `live`
+#  belongs to. This section prefixes with `asic_badaddr` deliberately.
+
 # ------------------------------------------------------------------ #443 sh4_pcic
 #  A guest 32-bit LOAD to an unimplemented PCIC offset used to END THE HOST PROCESS.  A
 #  MEASURED census of all 137 word offsets in both directions found 116 killing on a read

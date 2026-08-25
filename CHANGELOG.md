@@ -1,3 +1,620 @@
+## Round 463 (#463) -- dev_dreamcast_asic.c: one guest load ended the host process
+
+`DEVICE_ACCESS(dreamcast_asic)` computed `r = (relative_addr / 4) & 3` and then ran
+`exit(1)` when `r == 3`, **above the switch and above the writeflag test**. So the kill
+needed no store, no staging and no command sequence: a single guest load did it.
+
+### The census in the pass-1 brief was wrong by 4x, and six of nine seats ratified it
+
+The brief said **sixteen** offsets reach the kill. The true number is **sixty-four**.
+`relative_addr` need not be word-aligned -- `memory_rw.c` computes
+`paddr -= mem->devices[i].baseaddr` with no sub-word mask -- so a BYTE access at `+0x0d`
+gives `0x0d / 4 == 3` and dies exactly like `+0x0c`. The sixteen cited were the
+word-aligned quarter.
+
+Four seats derived the correction independently. One **silently narrowed** the claim to
+"exactly 16 *word-aligned* offsets", inserting a qualifier the brief did not have -- a
+locally-true restatement that repairs the sentence and hides the defect, which is harder
+to catch than a plain wrong answer because it survives every check except asking what the
+qualifier was doing there. Four seats did not engage with alignment at all.
+
+And one of the four correctors put **the wrong number in its verdict line**, ratifying
+"the sixteen word-aligned killing offsets" while deriving 64 eight paragraphs down. The
+policy here is verdict-line-first so an answer survives truncation; here the surviving
+half would have been the wrong half.
+
+*Consequence, and it is why this is recorded rather than tidied away: a detector built
+from the wrong census walks sixteen addresses, covers a QUARTER of the defect, and reports
+full coverage.* `kill byte` (+0x0d) is the row that pins the correction.
+
+### The structural form, which is what a future edit actually needs
+
+`r == 3` is exactly `(relative_addr & 0x0c) == 0x0c` -- **the fourth word of every 16-byte
+group** -- while all twelve implemented cases are three CONSECUTIVE words at group bases
+`0x00/0x10/0x20/0x30`. An enumeration tells a future edit today's answer; the invariant
+tells it what it must not do.
+
+It is also not merely reserved space. An SZ=1 `fmov.d` at `+0x08` is 8-byte aligned and
+issues `addr+4` first, so it reached `0x0c` and died **before ever touching the implemented
+register it names** -- and likewise at `+0x18`, `+0x28`, `+0x38`, the third register of
+every implemented group.
+
+### All three parts of the block were removed, not just the `exit(1)`
+
+* Keeping `fatal()` converts a host kill into a **guest-drivable flood**. `fatal()` has no
+  early-out -- unlike `debug()`, which returns when `(quiet_mode && !ss) || v < 0` -- so
+  `-q` cannot silence it.
+* Keeping `r = 0` leaves a **latent aliasing hazard**: dead today, but a later widening
+  would send `0x08/0x18/0x28/0x38` here, clamp them to index 0 and alias them silently.
+* Deleting the block costs little diagnostically. `0x0c` is not a case label, so it falls
+  to `default:`, which prints the ADDRESS that "Bad address" never did. **This is a trade,
+  not parity** -- see the overclaim corrected below.
+
+The invariant is recorded as a **comment, deliberately not a runtime guard** -- a guard
+that cannot fire is not insurance. It is scoped to this file only: `SYSASIC_EVENT_TO_ADDR()`
+reaches a fourth word whenever `(e>>5) & 3 == 3`, and that edit adds a `#define` to a header, so no
+comment here can govern it. Filed as `asiceventaddr`.
+
+**The event ceiling is what makes that filing LATENT rather than live, so it gets a citation
+like every other number here** -- a consistency audit caught it as the one bare figure in the
+block. `dreamcast_sysasicvar.h:74` defines
+`SYSASIC_EVENT_TO_ADDR(e) = SYSASIC_BASE + 4*((e)>>5)`. **An audit seat refuted the form this
+round first wrote** -- "reaches 0x0c for any event >= 96" is FALSE, because `e` in `[128,159]`
+gives `+0x10`, which is r = 0. The true predicate is `(e>>5) & 3 == 3`: `[96,127]` -> `+0x0c`,
+`[224,255]` -> `+0x1c`, `[352,383]` -> `+0x2c`. **That makes the filing STRONGER, not weaker** --
+it is not one range but the SAME fourth-word-of-every-group pattern as the defect itself, one
+level up. Over all **21** `SYSASIC_EVENT_*` defines the maximum is **67**
+(`SYSASIC_EVENT_MATOUTOFMEM`, `:72`) -- computed over the set, not eyeballed -- and
+`67 >> 5 == 2` lands at `+0x08`. Two whole registers of headroom, and no defined event can
+reach the fourth word today.
+
+### Measured in both directions, same script, opposite colour
+
+| | |
+|---|---|
+| committed HEAD `6cae5e4`, pre-fix | **scored 5 of 9 -- FOUR rows red** (`regress/artifacts/asic463/witness_prefix_HEAD.raw`) |
+| with this diff | **scored 9 of 9 -- none red** (`regress/artifacts/asic463/witness_postfix.raw`) |
+
+The witness is rung 3: real guest instructions through real address decode and real
+`memory_rw`, on an unmodified in-tree machine description. It carries a liveness control
+(`live`, a known value through the same decode), a device-signature control (`devsig`) and
+an `asic ok` readback that RAM cannot fake.
+
+**The two accept rows were green BEFORE and AFTER.** `safe 8` (+0x08) and `safe 4` (+0x04)
+show the deletion removed the kill **without widening anything** -- a fix that had broken
+the accept side would show there, and does not.
+
+### The witness's first draft committed the sin its own header names
+
+Its three killing rows were `+0x0c`, `+0x0d` and `+0x0c` -- **all inside the single 16-byte
+group [0x0c,0x0f]**, group 0 of 16 -- while the header asserted the fourth word of EVERY
+group. A group-narrowing mutant (`if (r == 3 && relative_addr < 0x10)`) re-introduces the
+kill for 15 of the 16 groups and every row would have stayed green. `kill far` at `+0xfc`
+(group 15, the maximally distant one, and in the `default:` region so no case interaction
+can confound it) is the row that closes it. Caught in design review before the first run,
+which is the only reason it cost nothing.
+
+### The de-escalation obligation this fix incurred
+
+Removing a host-fatal guard **deletes the accidental tripwire** that made guard growth
+self-announcing: before, adding a selector to that guard meant `exit(1)` on the first legal
+access, unmissable. After, the same edit is silent. So `safe 8` and `safe 4` are ACCEPT
+rows, and an accept row is discharged by a **measured kill**, never by existing.
+
+### A seat read "5/9 RED" as *five rows red*, and it was right to
+
+The prose named FOUR reddening rows beside a headline of `5/9`. The measurement is
+sound -- the vector is `1,1,1,1,0,0,0,1,0`, five passed and four red -- but the
+notation is ambiguous, and a seat spent part of its answer asking which row was
+missing. **A round that criticised its predecessor for a wrong census cannot ship an
+ambiguous count.** Both directions are now written as "scored N of M -- K rows red".
+
+### The kill table: floor clauses (a), (b), (c) and (d), all measured
+
+Artifacts: `regress/artifacts/asic463/table1_9rows/`.
+
+| mutant | score | rows reddened | what it discharges |
+|---|---|---|---|
+| base | 9/9 | -- | baseline |
+| verbatim reinstatement of the whole block | 5/9 | kill word, kill byte, kill store, kill far | floor **(b)** |
+| kill rerouted to `r == 2` | 8/9 | **`safe 8` ALONE** | floor **(d)** + accept failability |
+| kill rerouted to `r == 1` | 8/9 | **`safe 4` ALONE** | accept failability |
+| device stubbed to answer 0 | 8/9 | **`asic ok` ALONE** | floor **(c)**, null medium |
+
+Clause (a) is the pre-fix run itself. Each accept row reddens **alone**, which is what
+makes the de-escalation obligation discharged rather than merely asserted: `r >= 2`
+would have reddened the kill rows too and attributed nothing to `safe 8`.
+
+The restore was verified by `cmp` against the repo source -- never against the
+script's own backup, because a crashed run once captured a mutant as its "original".
+
+### The pass-2 panel found four things the table could not
+
+Four packet-fed seats answered; none walled. Two named `& 3` -> `& 2` **independently**:
+it restricts `r` to {0,2}, so `+0x14` aliases onto `+0x10`, every row still reads
+"survived", and the round-trip agrees -- a clean escape. A third named `& 3` -> `& 7`:
+`r` reaches 4, and because `:54-57` declares `pending_irq[3]`, `mask_13[3]`,
+`mask_11[3]`, `mask_9[3]` **consecutively**, `mask_13[4]` IS `mask_11[1]` -- a mask_13
+write lands in mask_11 and still reads back.
+
+**And the same seat found the comment was only half a rule.** The invariant as first
+written constrained the `case` labels and said nothing about the `& 3` mask. Both
+escapes leave every label compliant, so *the comment would not even have been
+violated*. It now states both halves, and the two new rows `alias` and `crossarr` pin
+the second. They are deliberately complementary: under `& 7` the three mask_13 words
+map to three distinct cells that round-trip, so a same-array distinctness row cannot
+see it; only a cross-ARRAY read can.
+
+### Two premises were challenged and HELD, and one claim was overclaimed
+
+Seats challenged three of the brief's premises. Opening the files settled all three:
+
+* **`fatal()` does not exit** and has no early-out (`core/debugmsg.c:384-390`, against
+  `debug()`'s `if ((quiet_mode && !ss) || v < 0) return;` at `:375`). The
+  guest-drivable flood warrant HOLDS.
+* **`fmov.d` issues `addr + 4` first** -- the decoder says so in its own comment
+  (`cpu_sh_instr.c:790-791`, the read at `:798`, the first word only at `:811`). One
+  seat expected low-address-first from the architecture and was wrong for this tree.
+* **But "deleting the block removes no diagnostic" was OVERCLAIMED.** `default:` prints
+  via `debug()` (`:228`, `:231`), which the early-out silences under `-q` and when
+  free-running at verbose 0 -- where the deleted `fatal()` printed unconditionally.
+  The comment now states the TRADE rather than claiming parity.
+
+*The two premises that held cost one grep each. The one that did not was the one no
+seat could check and I had not either.*
+
+### A file-reading seat noticed the brief had gone stale under it
+
+The pass-2 brief inlined the diff; the two comment corrections above were then made
+**while the panel was still running**, so seats that read the tree saw a newer file than
+the packet described. One said so plainly -- *"the on-disk file already diverges from the
+brief's comment"* -- which is the seat doing its job.
+
+Comments only, so nothing measured changes. But it is worth recording as a process fact
+rather than leaving it to look like a discrepancy: **a brief is a snapshot, and correcting
+the tree mid-panel silently invalidates the packet for exactly the seats that can check
+it.** The cheap fix next time is to freeze the source during a pass, or to re-issue the
+hunk when it changes.
+
+### The adjudication re-labelled the work, and THAT is what bounded it
+
+I justified the three new mutants as **L1, pre-ship construction** -- the detector has not
+shipped, so improving it is not a reopening. The adjudicating seat rejected the LABEL while
+approving the work, and its reason is the useful part:
+
+> **"L1 -- still being built" has NO TERMINUS.** *"The detector hasn't shipped, so I can keep
+> improving it"* is exactly the sentence the six-pass runaway round told itself.
+
+The correct labels are **L2 (floor clause (d)) and L3 (undischarged obligation)**, and those
+are *bounded and enumerable from the diff today*: `& 2` and `& 7` both weaken
+`r = (relative_addr / 4) & 3`, a predicate the fix DEPENDS ON -- it dominates the deleted
+lines inside the enclosing function -- and the carrier's own canonical clause-(d) example is
+a narrowed mask. `asic ok` is the sole carrier of the r=0 accept side the de-escalation
+clause forces, so a vacuous sole carrier is L3.
+
+**The stopping point is therefore a finite list, not a judgement:** (a) pre-fix fail, (b)
+verbatim reinstatement, (c) null medium, (d) repair-null on the depended-on mask in its two
+distinct failure modes, (e) a contract header, plus the accept side r in {0,1,2} each
+discharged by a measured kill. *The line would be crossed the moment a mutant OUTSIDE that
+enumeration -- `/4` -> `/2`, `& 6`, `>>1`, a case-label relocation -- got fixed in-round
+instead of filed.*
+
+**Pre-committed here, in writing, so the cap is not a judgement call later: pass 2 was HUNT
+ONE. The ask-again is HUNT TWO. There is no hunt three.** A floor gap found by hunt two may
+be fixed and re-verified, because the floor is always fixable; anything above the floor from
+hunt two is FILED. Counting hunts rather than labels is what stops *"that was not really the
+ask-again either"* from becoming the door back in.
+
+### The deleted guard was ALSO a bounds check, and that is the thing this round nearly missed
+
+`r == 3` is out of range for `uint32_t[3]`. So the block did two jobs, and the round had
+only reasoned about one: **before this commit the switch had NEVER ONCE executed with
+r == 3**, because the `exit(1)` fired above it. That code path is brand new.
+
+The comment asserted the invariant; it had not shown it was CHECKED. It has been now, by
+enumeration rather than by argument:
+
+| all 12 case labels | 0, 4, 8, 0x10, 0x14, 0x18, 0x20, 0x24, 0x28, 0x30, 0x34, 0x38 |
+|---|---|
+| **max r** | **2** |
+| `default:` (`:227`), where r == 3 lands | indexes **nothing** -- two `debug()` calls, no `[r]` |
+
+So deleting the whole block is safe, and the recorded reason is now the right one. It is
+**not** "`r = 0` was dead code" -- it is *"the invariant is verified, so r == 3 addresses are
+genuine non-registers and the `default:` decline is the single correct handling."* Had the
+enumeration found an indexing case at an r == 3 offset, the correct ship would have been
+`if (r == 3) return;` instead -- bounds-safe regardless of the invariant.
+
+**And a clamp would have been actively harmful.** `if (r >= 3) r = 0;` neutralises the r == 4
+escape in product code and would have DEFEATED the `crossarr` row -- the detector would have
+gone green on a build that had silently absorbed the defect it was written to catch.
+
+### The detector went 9 -> 11 -> 12 rows, and every addition came from a seat, not from me
+
+Four escapes were named against a table that was already clean, by four different seats,
+and they are not variations on one idea -- they are four distinct ways to break the index:
+
+| escape | what it does | named by | caught by |
+|---|---|---|---|
+| `& 3` -> `& 2` | aliases +0x14 onto +0x10 | glm, deepseek, agy -- **independently** | `alias` |
+| `& 3` -> `& 7` | r reaches 4; `mask_13[4]` IS `mask_11[1]` | kimi, agy | `crossarr` |
+| `& 3` -> `& 1` | aliases **+0x18** onto +0x10 | grok | `alias2` |
+| `/ 4` -> `/ 2` | also aliases **+0x18** onto +0x10 | codex | `alias2` |
+
+**All four are MEASURED, not predicted.** The adjudication caught `/ 2` being carried as *"caught
+incidentally by `alias2`"* with **no artifact** -- a catch claimed without a log, which the
+score-claims rule does not allow. It was built and run: `Mdiv2` scores **11/12, reddening
+`alias2` alone** (`regress/artifacts/asic463/table4_div2/probe_Mdiv2.raw`), and the VALUE settles
+the mechanism rather than just the colour -- the row read `0xb2` where `0xa1` was written, which
+is the +0x18 store landing on `mask_13[0]`. Measuring a named prediction is not a new hunt.
+
+**The unit of coverage is the COLLISION PAIR, not "aliasing" in the abstract.** Three
+register words admit distinct pairs, and one distinctness row pins exactly one pair. My
+first aliasing row pinned words 0 and 1; `& 1` and `/ 2` both collide words 0 and **2**,
+so it was blind to both. `alias2` was added for grok's mutant and closed codex's for free
+-- and codex, arriving at it from the opposite direction, prescribed precisely that row:
+*"add a distinctness row for +0x10 versus +0x18."*
+
+**Said precisely, because the difference matters for the stopping rule: `alias2` was added
+for grok's `& 1`, which weakens the index expression and is INSIDE the depended-on
+enumeration. It catches codex's `/ 2` INCIDENTALLY.** No work was undertaken in-round for
+`/ 2`, and the round claims no credit for closing it -- a filed mutant that a row happens to
+kill is a bonus, not a fix.
+
+*** AND THAT EXPOSES AN INCONSISTENCY IN THE ADJUDICATION ITSELF, surfaced by a packet-fed
+seat with no file access. *** The adjudication classified `& 2` and `& 7` as INSIDE the
+enumeration because they "weaken `r = (relative_addr / 4) & 3`, a predicate the fix DEPENDS
+ON" -- and in the same answer listed `/4 -> /2` as an example of OUTSIDE it. **Both edits
+weaken the same expression.** Either both are inside or both are outside; the boundary
+cannot run between the mask and the divisor of one assignment. Referred back for
+adjudication rather than resolved here, because the round is not the right party to widen
+its own enumeration.
+
+### codex refuted the round's own framing twice, on precision
+
+**"`r == 3` is itself out of bounds" was wrong as written**, and both the round and the
+adjudicating seat had said it. Computing 3 is not an out-of-bounds access; only `array[r]`
+would be, and nothing on the r == 3 path indexes -- `default:` is two `debug()` calls. The
+substance survives (the deleted block *was* doing bounds duty, and that path is new), but
+the sentence overstated it and is now precise.
+
+**And the "two halves" invariant was itself incomplete.** `/ 2` keeps `& 3` *and* keeps
+every case label compliant -- it satisfies both stated halves textually while breaking the
+mapping. Half (ii) now pins the WHOLE index expression, divisor and mask together, because
+that is what the escapes actually attack.
+
+### The assert question was settled by source, not by aphorism
+
+The round argued "a guard that cannot fire is not insurance." A seat called that too broad
+-- correctly -- and supplied the real reason: `configure:312-314` adds `-DNDEBUG` unless
+`DEBUG=YES`, so **an `assert(r < 3)` compiles out of every default build and protects
+nothing shipped**. In a debug build it would abort the host on guest input, which is the
+defect being removed. Comment plus rows is the right form, for a checkable reason rather
+than a slogan.
+
+### Seat ledger for this round
+
+Panel dir `_scratchpad/panel_20260825_020219`. **SEVEN review seats fired and all seven
+answered, plus Fable in the adjudicator role. Opus 5 was NOT fired. One transport
+substitution recorded.**
+
+*An earlier draft said "nine seats fired, nine answered" -- contradicted by the table
+directly beneath it, which records Opus 5 as not fired. A records audit caught it. The
+ROSTER is nine; what a round may claim is what it FIRED, and a deliberately reserved seat
+is neither a seat failure nor agreement -- which is the distinction the seat ledger exists
+to keep.*
+
+| seat | bytes | contribution |
+|---|---|---|
+| codex 5.6-SOL | 894 K | the `/ 2` escape; both precision refutations; the `-DNDEBUG` reason |
+| agy 3.7 | 8.0 K | verified ALL FIVE premises against source with citations; `& 2` and `& 7` independently |
+| grok 4.6 | 9.4 K | the `& 1` escape, which both new rows missed; and the per-offset kill (filed) |
+| kimi-k3:cloud | 5.9 K | the `& 7` OOB; that the comment stated only half the bound; the `r == 0` gap |
+| minimax-m3 | 10.4 K | challenged the `fatal()` and `default:` warrants -- one held, one was overclaimed |
+| glm-5.2 | 4.8 K | the `& 2` escape |
+| deepseek-v4-pro | 3.5 K | the `& 2` escape, independently |
+| Fable (adjudicator) | -- | re-labelled L1 -> L2/L3, which is what BOUNDED the round |
+| Opus 5 | -- | not fired this pass; recorded as NOT FIRED, not as agreement |
+
+*** THE kimi CLI IS QUOTA-WALLED AND WAS RUN AS `kimi-k3:cloud` INSTEAD -- a DIFFERENT
+TRANSPORT, recorded as a substitute rather than counted as the CLI seat. *** That is the
+seat-failure class this project established this week: a seat can be walled on one
+transport and live on another, and the two must not be conflated in a ledger.
+
+### "Reddens ALONE" is a property of the ROW SET, and carrying it forward would be a false record
+
+Table 1's headline result was that each accept mutant reddened exactly one row: `r == 2` hit
+`safe 8` alone, `r == 1` hit `safe 4` alone, the null medium hit `asic ok` alone. That
+isolation is what proves a row carries something *by itself* -- it is the whole reason
+`r == 2` was chosen over `r >= 2`.
+
+**At twelve rows those same mutants no longer isolate**, and nothing went wrong: `alias2`
+writes +0x18 (r = 2), so `r == 2` legitimately kills it too; `alias` and `crossarr` write
++0x14 and +0x24 (r = 1), so `r == 1` kills them as well. The new rows exercise the same
+selectors on purpose.
+
+So the two claims have to be kept apart, because only one of them survives the row set
+growing:
+
+* **DISCHARGE** -- "this accept row dies under a guard-growth mutant" -- holds at 9 rows and
+  at 12. That is what the de-escalation clause actually requires.
+* **ISOLATION** -- "it dies ALONE" -- is a NINE-ROW result and is cited as such.
+
+*This is the same shape as the frozen-number defect: a number, or a qualifier, that was true
+of the artifact that produced it and is quietly restated about a different one.*
+
+### *** THE ADJUDICATION CORRECTED ITSELF, IN THE STRICTER DIRECTION, AND A PACKET-FED SEAT IS WHY ***
+
+The section above records the re-label of the three new mutants from **L1** to **L2/L3**. That
+re-label was **partly wrong, and the adjudicator withdrew it** after a seat with no file access
+found the inconsistency in it.
+
+**The inconsistency.** The adjudication called `& 2` and `& 7` INSIDE the depends-on
+enumeration because they "weaken `r = (relative_addr / 4) & 3`, a predicate the fix DEPENDS
+ON" -- and in the same answer listed `/4 -> /2` as an example of OUTSIDE it. Both edit the
+same assignment. **No principled line runs through the middle of one expression.**
+
+**The ruling, and the reason it is credible: it is STRICTER than what it replaces.** All four
+mask/divisor mutants are OUTSIDE the floor. The adjudicator's own diagnosis of its error is
+worth keeping: it had imported an earlier round's `& 3 -> & 1` example *without its licensing
+condition* -- there the mask was **ADDED by the fix**, so weakening it nulled a shipped repair;
+here `& 3` predates the fix, and this diff adds no predicate and keeps no guard, so that branch
+never applies. And the strictness point lands on cleaner ground than dominance: the assignment
+*is* a CFG predecessor of the deleted lines, but the bound clause enumerates **predicates**,
+and a definition is not one.
+
+> **THE RULE, FINAL FORM.** A mutant is INSIDE the depends-on enumeration iff it (1) weakens a
+> predicate the DIFF ADDED; (2) for a de-fatalisation, swaps the KEPT guard's operand to a
+> field the guarded body reads; or (3) for a pure deletion, re-introduces the REMOVED behaviour
+> under a different predicate over the same operands the deleted predicate read.
+> **Definitions feeding those predicates are NEVER inside -- even in the same statement.**
+> One-question test: *does this mutant restore the removed behaviour, or null a repair the diff
+> shipped?* If it instead changes address decode, value semantics or struct layout, it is
+> COVERAGE.
+
+**Applied to this round:** `Mb` is floor (b). `Md1`/`Md2`/`Mr0` are shape 3 -- floor-(d)
+reroutes doubling as the de-escalation accept kills. **`M2`/`M1`/`M7` and `/ 2` are COVERAGE**,
+added under L1 from the pass-2 harvest while the detector was unshipped. They carry no clause
+letter.
+
+*** AND THE SENTENCE THAT HAD TO BE RETRACTED IS THE DANGEROUS ONE. *** The earlier
+adjudication said a post-ship `M2`/`M7` escape would be an **"L2 floor breach"**. It would
+not -- it is **coverage debt, and it gets FILED**. A mislabelled floor is a standing licence to
+fix in-round, pre-authorised by the adjudicator, which is the worst possible place for a
+widened enumeration to live.
+
+**Credit, distributed accurately rather than flatteringly:** the round's ORIGINAL `L1` label
+for the three decode rows was **right**. The re-label was right only for `Mr0`/`asic ok` (L3,
+de-escalation) and for the reroutes' floor status.
+
+*And one observation that falls out of the corrected structure:* under `& 7` the **original
+guard would not have announced the out-of-bounds either** -- +0x10 gives r = 4, and `r == 3`
+never tested that. So the mask family is not even in the de-escalation clause's "edits the old
+`exit(1)` would have announced" class. **It is protection the pre-fix code also lacked**, which
+is the honest way to describe what `crossarr` adds.
+
+### 0 of 3, and the defect was in MY BRIEF, not in the seat
+
+A packet-fed seat raised three arithmetic objections. All three are the same conflation --
+applying one mutant's parameters inside another mutant's world -- and **two were already
+refuted by measurements in hand**: `Md1` reddened `alias2`, impossible had that write decoded
+to r = 0; `Md2` reddened exactly the r = 1 rows.
+
+**But the attribution is mine.** The adjudicator suggested splitting it -- brief defect for two
+claims, seat error for the third *if the draft had named +0x10*. It had not: the draft says only
+*"`r` reaches 4"*, in the prose and in the escape table both, so the seat had to infer the
+offset and inferred +0x14. **All three are brief defects. 0 of 3 seat errors.**
+
+> **THE MINT, and it is the inline-every-fact rule specialised: a brief presenting a mutant
+> table inlines each mutant's EXACT EDIT, verbatim -- never just its label.** "Md1: r==2"
+> invites exactly this conflation, because a reader cannot tell whether the mask travelled with
+> it.
+
+*Scored honestly, the seat was 0 for 3 on its challenges and still did adversarial work of
+nonzero value: it forced two measurements to be cited and a definitional gap to be closed. The
+ledger can record both without contradiction.*
+
+### The citation-goes-stale class bit FOUR times in one round, and the fourth was a CORRECTION
+
+The pattern is always the same: a line number is written, then a later edit to that same file
+moves the target. It happened to the `debug()` cite twice -- once when the `#463` comment was
+first inserted (`:200,:203` -> `:231,:234`), and **again when the comment was TRIMMED three lines
+shorter, moving the same calls to `:228,:231`**. The second time, the stale number was one this
+round had already corrected once.
+
+*It was caught only because an adjudicating seat insisted the corrections get a SECOND READING --
+"a correction is not safer than the thing it corrects", which this project has now measured four
+times. The rule the round kept re-learning: **re-derive every same-file citation AFTER the last
+edit to that file, and treat a correction as new material needing its own check, not as a fix
+that is finished because it was made.**
+
+### The de-escalation clause, discharged with its artifacts named
+
+This diff deletes `exit(` from a device, so the clause triggers mechanically. Naming what
+discharges it, because a claim that is checkable must be checked:
+
+| obligation | discharged by | artifact |
+|---|---|---|
+| accept side of `r == 0` | `asic ok` reddens under an `r == 0` reroute | `table3_12rows/probe_Mr0.raw` |
+| accept side of `r == 1` | `safe 4` reddens under `r == 1` (8/9 ALONE at nine rows) | `table5_13rows/probe_Md2.raw`, `table1_9rows/probe_Md2.raw` |
+| accept side of `r == 2` | `safe 8` reddens under `r == 2` (8/9 ALONE at nine rows) | `table5_13rows/probe_Md1.raw`, `table1_9rows/probe_Md1.raw` |
+| clause (d) for a PURE DELETION -- re-introduce the removed behaviour under a DIFFERENT predicate | the three reroutes above ARE that form: `r == 3` was removed, and `r == 2`/`r == 1`/`r == 0` re-introduce it over the same operand | as above |
+| clause (b) verbatim reinstatement | four kill rows | `table5_13rows/probe_Mb.raw` |
+| clause (c) null medium | `asic ok` + the four decode rows | `table5_13rows/probe_Mnull.raw` |
+| clause (e) contract | shipped in the probe's docstring, naming the four caught decode families AND disclosing `% 3`, case-label relocation and per-offset kills as out-of-contract | `regress/asic_badaddr_probe.py` |
+
+### THE HUNT CAP, stated once so no future round cites this one as precedent
+
+**Pass 2 was HUNT ONE. The single permitted ask-again was HUNT TWO. There was no hunt three.**
+
+This round also ran a records audit, a gate-wiring review and a matrix review. **None of those is
+a hunt, and the reason is structural rather than a matter of judgement: their findings are BARRED
+from adding mutants or rows.** A records audit corrects what was WRITTEN; a hunt adds COVERAGE.
+The fence that keeps them distinct: **any audit finding that implies new coverage is FILED
+unconditionally, never fixed** — the round's adversarial budget was spent by the ask-again.
+
+*That sentence exists so a later round cannot cite `#463` as precedent for a third adversarial
+pass. The runaway round this project still measures itself against ran six.*
+
+### Seats NOT fired, by name
+
+The standing directive is a full panel per stage, or stop and ask. These probes were not stages,
+but the ledger rule is that a partial firing may never be reported as a panel, so:
+
+* **Records audit** (3 seats: codex, agy, grok). **NOT FIRED: glm-5.2, deepseek-v4-pro,
+  minimax-m3, kimi-k3:cloud, Opus 5, Fable.** Deliberate — the task was re-deriving citations
+  against the tree, which packet-fed seats cannot do at all.
+* **Gate-wiring review** (3 seats: glm-5.2, minimax-m3, kimi-k3:cloud). **NOT FIRED: codex, agy,
+  grok, deepseek-v4-pro, Opus 5, Fable.** Deliberate — a 51-line block needs no file access, and
+  deepseek had just failed on a long task.
+* **Matrix review** (6 seats, all answered after one re-fire). **NOT FIRED: deepseek-v4-pro,
+  Opus 5, Fable.** Deliberate — deepseek for the reason above; Opus was reserved for the
+  ask-again; Fable adjudicates rather than reviews.
+
+**None of these is a seat failure and none is agreement.** The two that WERE failures are named
+above: the kimi CLI (403, all round, substituted by transport) and agy on the matrix panel
+(transport drop, re-fired successfully).
+
+### The N/M convention, stated once, because a seat spent 59 KB deciding which number was which
+
+**`N/M` throughout this record means N rows PASSED of M run.** The reddened count is `M - N`.
+
+That is not pedantry. An audit seat produced 59 KB of visible reasoning cycling between "N is
+the reddened count" and "N is the passing count", resolving it only by back-inference from a
+prose sentence. A second seat read a table row as an ENUMERATION of every reddened row when it
+named only the obligation-relevant one, and correctly reported the arithmetic as impossible.
+
+**Both are the same defect: a number whose meaning is inferable rather than stated.** This round
+already fixed one instance -- "5/9 RED" read by a seat as *five rows red* -- and did not
+generalise it. The obligation table above now names rows without a score beside them, so a row
+list is never read as a complete census; the full per-mutant scores live in the kill table, where
+the vectors make the count unambiguous.
+
+### *** THE CAPPED ASK-AGAIN BROKE THE CLEAN TABLE, AND THE REASON IS THE FINDING ***
+
+The detector was green: twelve rows, ten mutants, every prediction matched name-for-name. The one
+permitted ask-again then produced a **measured 12/12 escape** — and a second one alongside it.
+
+```diff
+-	r = (relative_addr / 4) & 3;
++	r = ((relative_addr / 4) + 1) & 3;
+```
+
+**Why all three purpose-built rows miss it, and this is worth more than the mutant:**
+
+> `alias`, `alias2` and `crossarr` are **distinctness** tests, and all three read back `+0x10`.
+> Together they assert only `cell(+0x10) != cell(+0x14), cell(+0x18), cell(+0x24)`. **They never
+> assert WHICH cell any offset names. Distinctness is invariant under any injective re-map, and a
+> translation is injective** — slide every address one word and all three pairs stay distinct.
+
+They were blind **by construction, not by omission** — which is precisely what a clean table
+cannot reveal and what the ask-again exists to find.
+
+**And it is a real defect, verified by compiling the declaration rather than reasoning about it.**
+`offsetof`: `pending_irq 0, mask_13 12, mask_11 24, mask_9 36, asserted_13 48`. Under `+1` every
+`+0x?8` register moves from r = 2 to r = **3** — one past a `[3]` array — and `mask_9[3]` **IS**
+`asserted_13`. So one aligned 32-bit guest store to `+0x38`, a documented register, writes the
+interrupt-assertion latch; the write arm's own `dev_dreamcast_asic_tick()` then recomputes and
+issues a spurious `INTERRUPT_DEASSERT`, dropping a legitimately pending IRQ13. ASan cannot see it
+— member-to-member inside one allocation.
+
+### The disposition turned on a membership test, not on how clean the sweep was
+
+A 12/12 escape outside every obligation is FILED however clean. The de-escalation clause carries
+its own membership test, and it is mechanical:
+
+> **Apply the candidate edit to the PRE-FIX code. Does the old `exit(1)` fire on legitimate
+> traffic?**
+
+| edit | pre-fix `exit(1)` fires on legal registers | in class? |
+|---|---|---|
+| `+1` | `+0x08`, `+0x18`, `+0x28`, `+0x38` | **YES** |
+| `-1` | `+0x00`, `+0x10`, `+0x20`, `+0x30` | **YES** — already killed by `crossarr` |
+| `& 2`, `& 1`, `& 7`, `/ 2`, array shrink | none | no |
+
+So `+1` is an edit the defect **used to announce** and this fix de-announced — the accidental
+tripwire, in the clause's own words. An accept obligation is discharged by a **measured kill,
+never by existing**, and *a fortiori* never by prose. **Words could not pay this debt.**
+
+`mask9 rt` ships as **L3**, and its oracle is ANCHORED rather than relative: it is tied to a
+specific cell by a channel outside the decode under test — the tick zeroes `asserted_13`, so the
+readback is `0x0` rather than merely different. **Measured: `Mplus1` scores 12/13, reddening
+`mask9 rt` ALONE** (`table5_13rows/probe_Mplus1.raw`); base is 13/13.
+
+*The adjudication's own membership table omitted `-1`, having used it only as an asymmetry
+control. Running the test exhaustively put it in the class too — already discharged, but it is
+why the contract now claims **±1 measured** rather than "translations".*
+
+### What was NOT taken, and why that matters more than what was
+
+The second escape — `uint32_t mask_13[3]` → `[2]`, also a clean 12/12 — is **FILED**. It fails
+the membership test (pre-fix, r = 2 passes the old guard and the out-of-bounds access is silent
+under the original code too), it edits the ARRAY BOUND rather than the bound on `r`, and the
+detector has shipped so L1 is unavailable. Its closing row was **already built and measured** —
+which is exactly why filing it took discipline. *"Built and works" was never a license*, and each
+shipped row enlarges the re-measure surface of every future table.
+
+### The gate wiring was reviewed before installation, and the review found a false green
+
+Three seats read the 51-line block before it went in. All three independently found the same
+defect:
+
+```sh
+check "asic_badaddr rows correct" "${asres%/*}" "${asres#*/}"
+```
+
+If the result line is present but MALFORMED, the outer `grep -q` still succeeds, `asres` is
+empty, and **both sides expand to the empty string — so the check PASSES while nothing was
+measured.** The sibling `rows run` check would still redden the gate, so it was never a silent
+green overall; it was a false green ROW, which is worse than useless because a reader scanning
+check output is misled about which part failed. It is the project's own *"a pattern that matched
+nothing reports zero for everything"* class wearing shell-expansion clothes.
+
+Fixed with a parse guard and **negative-controlled in five directions**, run rather than reasoned:
+
+| result line | outcome |
+|---|---|
+| `13/13` | 0 FAIL, all thirteen per-row checks pass |
+| `13` (no slash) | `result parses` FAILS — was a vacuous PASS |
+| `=` (empty) | `result parses` FAILS |
+| absent | `probe completed` FAILS |
+| **a row silently dropped** | **TWO FAILs — the denominator pin AND the per-row presence check** |
+
+One seat also computed a hard bound the block now documents: **row names must be <= 13 characters.**
+The probe's `%-14s ` leaves `15 - L` spaces after a name of length L, so at 14 the two-space grep
+anchor becomes unsatisfiable and **the row silently stops being tested while the gate stays
+green.** Longest name here is `kill store` at 10, so there are three characters of headroom.
+
+*A gate that reddens correctly on four kinds of broken input and on a missing row is worth the
+one invocation it cost to review.*
+
+### The final kill table -- THIRTEEN rows, TWELVE mutants, NO ESCAPES
+
+Artifacts: `regress/artifacts/asic463/table5_13rows/`. `N/M` is N passed of M run.
+
+| exact edit | score | rows reddened |
+|---|---|---|
+| unmutated fix | 13/13 | -- (baseline) |
+| verbatim reinstatement of the whole block | 9/13 | kill word, kill byte, kill store, kill far |
+| `if (r == 2)`, mask intact | 10/13 | safe 8, alias2, mask9 rt |
+| `if (r == 1)`, mask intact | 10/13 | safe 4, alias, crossarr |
+| `if (r == 0)`, mask intact | 9/13 | asic ok, alias, crossarr, alias2 |
+| device answers 0 for all reads | 8/13 | asic ok, alias, crossarr, alias2, mask9 rt |
+| `& 3` -> `& 2` | 12/13 | alias |
+| `& 3` -> `& 1` | 12/13 | alias2 |
+| `& 3` -> `& 7` | 12/13 | crossarr |
+| `/ 4` -> `/ 2` | 12/13 | alias2 |
+| `+1` translation | 12/13 | mask9 rt |
+| `-1` translation | 12/13 | crossarr |
+
+Every reddened count equals `M - N`, checked mechanically against the vectors rather than
+against this prose. The tree was restored and verified by `cmp` against the repo source -- never
+against the script's own backup -- and the sentinel cleared.
+
+**Five tables, twenty-eight mutant runs, fourteen distinct mutants.** The detector grew
+9 -> 11 -> 12 -> 13 rows, and **every growth was forced by a seat**, never by the author: three
+escapes from pass 2 and the decisive one from the single capped ask-again.
+
 ## Round 462 (#462) -- one guest store ended the host, and the obvious fix would have left `+0x18` busy forever
 
 `dev_dreamcast_gdrom.c`'s DMA window has one arm with a body, `case 0x18`, and both of its
@@ -15660,3 +16277,18 @@ into round 82, which is already building the user-mode witness those rows need.
   assembly is left (whack-a-mole across every core, no real bug).
 - a.out timeout signature — the emulator *running* a loaded garbage program until timeout
   (expected behaviour, not a loader bug).
+
+### The last thing a gate caught was a citation that decayed by MULTIPLYING
+
+Section X failed the round on four BARE artifact names -- `probe_Mb.raw`, `probe_Md1.raw`,
+`probe_Md2.raw`, `probe_Mnull.raw` -- each with **seven candidates**. Every one was
+unambiguous when written, because there was one table. Five tables later the same string
+names seven different measurements and picks none.
+
+**That is the citation-decay class arriving from a direction the round had not seen.** It had
+already been bitten by citations going stale because the FILE moved under them, five times.
+This one went stale because the NAMESPACE filled up underneath it -- the text never changed
+and stopped being true anyway.
+
+*The fix is the same one the rule already demands and this round applied everywhere else: a
+measurement cited in a durable record lives at a durable, QUALIFIED path.*

@@ -9620,3 +9620,103 @@ conflated them and read it as the detector getting worse.**
 `killartifacts`. Its one lethal mutant's per-row result was never preserved (0 candidate lines
 across every `.out` file in both scratchpads), so that round's detector cannot be checked for
 this class at all.
+
+## 2026-08-25 — `asicbadaddr`: one guest LOAD ended the host, and the detector needed four seats to finish it
+
+**DISPOSITION: FIXED, detector shipped, five residuals FILED.** `dev_dreamcast_asic.c` computed
+`r = (relative_addr / 4) & 3` and ran `exit(1)` when `r == 3` — **above the switch and above the
+writeflag test**, so the kill needed no store, no staging and no command sequence.
+
+**The census in the pass-1 brief was wrong by 4x and six of nine seats ratified it.** The brief
+said sixteen killing offsets; the true number is **sixty-four**, because `relative_addr` is a
+`uint64_t` raw sub-word offset (`memory_rw.c` subtracts `baseaddr` with no mask), so a BYTE access
+at `+0x0d` dies exactly like `+0x0c`. One seat "corrected" it by silently narrowing the claim to
+"sixteen *word-aligned*" — repairing the sentence while hiding the defect. `kill byte` is the row
+that pins the correction.
+
+### Measured in both directions, then defended by four tables
+
+| | |
+|---|---|
+| committed HEAD `3710d41` (recorded as `6cae5e4`; identical source) | **scored 5 of 9 — FOUR rows red** |
+| with the fix | **scored 9 of 9 — none red** |
+
+**Fourteen distinct mutants, twenty-eight runs, five tables**, artifacts under
+`regress/artifacts/asic463/`. Every prediction matched name-for-name.
+
+*** THE SINGLE CAPPED ASK-AGAIN BROKE A CLEAN TWELVE-ROW TABLE, and the reason is the
+finding: `alias`, `alias2` and `crossarr` are DISTINCTNESS tests, so they are invariant
+under any INJECTIVE re-map. *** `r = ((relative_addr / 4) + 1) & 3` slides every address one
+word, all three pairs stay distinct, and it scored a clean 12/12 -- while every `+0x?8`
+register moved one past a `[3]` array and `mask_9[3]` IS `int asserted_13` (verified by
+`offsetof`), so a documented register's store lands on the interrupt latch and the device
+drops a pending IRQ13.
+
+It ships a thirteenth row, `mask9 rt`, because it passes the de-escalation clause's own
+membership test -- apply the edit to the PRE-FIX code and the old `exit(1)` fires on
+legitimate traffic, so the defect used to announce this edit and the fix de-announced it.
+An accept obligation is discharged by a MEASURED KILL, never by prose. **Measured: 12/13,
+reddening `mask9 rt` ALONE.** Its oracle is ANCHORED -- tied to a cell by a channel outside
+the decode under test (the tick zeroes the latch), not to a neighbour by distance.
+
+The final table is **13 rows, 12 mutants, NO ESCAPES**. Generalised into the carrier as
+vacuity-floor clause **(f), the ANCHOR RULE**, with the two-second reviewer check: *"if every
+address in this device shifted one word, which row reds?"*
+
+| exact edit | score | reddened |
+|---|---|---|
+| verbatim reinstatement of the whole block | 8/12 | kill word, kill byte, kill store, kill far |
+| `if (r == 2)`, mask intact | 10/12 | safe 8, alias2 |
+| `if (r == 1)`, mask intact | 9/12 | safe 4, alias, crossarr |
+| `if (r == 0)`, mask intact | 8/12 | asic ok, alias, crossarr, alias2 |
+| device answers 0 for all reads | 8/12 | asic ok, alias, crossarr, alias2 |
+| `& 3` -> `& 2` | 11/12 | **alias** |
+| `& 3` -> `& 1` | 11/12 | **alias2** |
+| `& 3` -> `& 7` | 11/12 | **crossarr** |
+| `/ 4` -> `/ 2` | 11/12 | **alias2** |
+
+**THE UNIT OF COVERAGE IS THE COLLISION PAIR.** Three register words admit distinct pairs and one
+distinctness row pins exactly one. The first aliasing row pinned words 0 and 1; `& 1` and `/ 2`
+both collide words 0 and **2** and escaped it. Four seats found four escapes against a table that
+was already green — three of them after the round believed it was finished.
+
+**"Reddens ALONE" is a property of the ROW SET, not the mutant.** At 9 rows each accept mutant
+isolated one row, which is what proves a row carries something by itself. At 12 they no longer do,
+because the new rows legitimately share selectors. DISCHARGE survives the row set growing;
+ISOLATION does not, and is cited as a nine-row result.
+
+### The deleted guard was ALSO a bounds check
+
+`r == 3` is out of range for `uint32_t[3]`, so the block did two jobs and the round had reasoned
+about one. **Before this commit the switch had never once executed with `r == 3`.** Verified by
+enumeration rather than assertion: all twelve labels (three of them DECIMAL — `case 0:`, `case 4:`,
+`case 8:`, which a `case 0x` regex misses) give **max r = 2**, and `default:` indexes nothing.
+A seat corrected the round's wording here too — computing 3 is not an out-of-bounds access; only
+`array[r]` would be.
+
+### Residuals FILED
+
+* `asicpermute` — `% 3` permutes bijectively; no round-trip row can see it; needs a free-running
+  assertion probe.
+* `asicindexcase` — an INDEXING case added at an r==3 offset is now a silent OOB, and this fix
+  deleted the tripwire that made such an edit self-announcing.
+* `asicoffsetkill` — a per-offset kill (`if (relative_addr == 0x1c) exit(1)`) at an offset no row
+  touches.
+* `asickillsurvive` — the four `kill *` rows are SURVIVE-ONLY and do not check the returned value.
+* `asicarray4` — sizing the four arrays `[4]` would de-fang the whole OOB class for 16 bytes.
+* `asiceventaddr` — **corrected this round**: the header macro reaches a fourth word whenever
+  `(e>>5) & 3 == 3`, not "any event >= 96" as three records had it. Latent: max defined event is
+  67 and `67>>5 == 2`.
+
+### Two seat-failure notes
+
+**The kimi CLI was quota-walled (403) for this entire round** and ran as `kimi-k3:cloud` — a
+DIFFERENT TRANSPORT, recorded as a substitute, never as the CLI seat. `panel.sh` reported that
+403 as "RATE-LIMITED (HTTP 429)" and tallied `6/7 scriptable` while the substitute's 17 KB answer
+sat in the same directory. Filed as `panelseatlabel`.
+
+**And a fifth seat-failure class was measured**: `deepseek-v4-pro:cloud` returned an EMPTY
+response inside 265 KB of `thinking`, `done_reason: length`, `eval_count: 65536`. It is none of
+the four recorded classes, and **a size check scores it the panel's best answer**. Filed as
+`seatthinkburn`, with the contributing cause recorded honestly — the brief inlined an entire
+18 KB document and asked for an exhaustive audit of it.
