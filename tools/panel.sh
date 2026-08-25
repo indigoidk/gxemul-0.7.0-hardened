@@ -358,9 +358,16 @@ check() {   # name file
     #  The discriminator is POSITION, the same one seat_verdicts.py already uses: a
     #  walled run ENDS with the notice and nothing after it, whereas a live seat that
     #  merely mentions a limit has it mid-reasoning and ends with substance.
-    if tail -c 400 "$f" | grep -qiE "usage limit|quota will be refreshed|rate.?limit|\b403\b"; then
+    #  *** 402 WAS MISSING AND IT COST A SEAT ON 2026-08-24. ***  grok walled MID-ANSWER
+    #  with `API error (status 402 Payment Required): Grok Build usage balance exhausted`
+    #  -- which contains NO "usage limit", NO "quota", NO "billing" and NO 403, so every
+    #  pattern here missed it and the seat was scored `CHECK (no verdict token)`: a
+    #  FORMAT concern, not a wall.  The panel then reported 6/7 answered when it was 5/7.
+    #  A seat that did real work (12 model calls, 1.08M tokens) and then hit a paywall is
+    #  a WALL, and reading it as a format miss is the seat-failure-as-agreement shape.
+    if tail -c 400 "$f" | grep -qiE "usage limit|quota will be refreshed|rate.?limit|\b403\b|\b402\b|payment required|balance exhausted"; then
         say "  $name: ${sz}b  *** WALLED MID-ANSWER -- content then a wall notice ***"
-        why=$(tail -c 400 "$f" | grep -ioE "[^.]*(usage limit|quota)[^.]*" | head -1)
+        why=$(tail -c 400 "$f" | grep -ioE "[^.]*(usage limit|quota|payment required|balance exhausted)[^.]*" | head -1)
         [ -n "$why" ] && say "        wall: $why"
         #  *** RE-FIRE ONCE.  A WALL IS A MOMENT, NOT A STATE. ***  Measured
         #  2026-08-23: kimi walled at 23:01 and answered a liveness test an hour later,
@@ -466,7 +473,7 @@ for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
     #  A seat that hit a wall did NOT consider the question and must never be counted as
     #  agreement.  So: wall first, size second.
     _wall=""
-    if grep -qsiE "429|too many requests|rate.?limit|quota|usage limit|billing|reached your .*limit|Argument list too long|401|403|unknown effort level|unknown model|no such model" "$f"; then
+    if grep -qsiE "429|402|payment required|balance exhausted|too many requests|rate.?limit|quota|usage limit|billing|reached your .*limit|Argument list too long|401|403|unknown effort level|unknown model|no such model" "$f"; then
         #  Guard against a REVIEW that merely discusses quotas (this project's own
         #  briefs do).  A real wall leaves almost no payload: the file is the echoed
         #  brief plus an error line.  Require BOTH the pattern and a thin payload -- and,

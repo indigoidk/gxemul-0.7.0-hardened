@@ -112,6 +112,27 @@ def fix_section(row):
         tiplist.append("HOLD: " + hold)
     if clo.get("note"):
         tiplist.append(clo["note"])
+    #  *** `witness` AND `state_note` WERE RENDERED NOWHERE. ***  Filed as
+    #  `witnessinvisible` after a ledger edit changed matrix.html by ZERO BYTES twice:
+    #  this generator contained no reference to either field, so 34,712 bytes -- 3.0% of
+    #  ledger prose, and the six largest `state_note` fields were all written the same day
+    #  -- never reached the published artifact.  The proportion rises precisely because
+    #  `state_note` is where a round's own reasoning now goes.
+    #
+    #  THE COST WAS NOT COSMETIC.  `witness` is the field a RANKER reads, and twice this
+    #  week a fact was corrected in a seat entry and left stale in that field:
+    #  `gdrompionull` advertised a rung-3 cost of "four stores and a load" after it was
+    #  measured at 18 accesses, and `asicbadaddr` still said "none yet -- one constant
+    #  away" after its witness existed and had been reviewed -- under-rating, in that
+    #  second case, the row a ranking then placed FIRST.  A field nobody can see is a field
+    #  nobody re-reads.
+    #
+    #  Rendered into the TOOLTIP, not inline, per the owner's 2026-08-15 layout directive:
+    #  the header stays one line (id + title + state) and everything else is mouse-over.
+    if row.get("witness"):
+        tiplist.append("witness: " + str(row["witness"]))
+    if row.get("state_note"):
+        tiplist.append("note: " + str(row["state_note"]))
     lt = e(" — ".join(tiplist))
     badge = clo.get("badge", "")
     b = f'<sup class="b b-{badge}">{badge}</sup>' if badge else ""

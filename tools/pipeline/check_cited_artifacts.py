@@ -43,7 +43,10 @@ the altitude ("checks committed records, never scratchpad state") and the scope 
 """
 import os
 import re
+import subprocess
 import sys
+
+BSLASH = chr(92)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEC = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -103,6 +106,32 @@ def blocks(text):
         yield num, text[start:end]
 
 
+def tracked(path):
+    """True if `path` is tracked by git in this repo.
+
+    *** EXISTENCE WAS NEVER THE PROPERTY THIS GATE'S WARRANT NAMES. ***  The README says
+    a citation is re-derivable only if the artifact TRAVELS WITH THE RECORD -- but SEARCH
+    includes `_scratchpad/` and the project root, both OUTSIDE the git root and untracked.
+    A citation resolved from either PASSES on the author's machine and FAILS on a fresh
+    clone, which is the exact failure this gate was built to end.  The untracked roots
+    cannot MASK the tracked copy, which is true and beside the point: they can SUBSTITUTE
+    FOR ITS ABSENCE.
+
+    Found by the opus5 seat reading the SEARCH list against the README instead of reading
+    the PASS line.  *** IT IS THE THIRD INSTANCE OF ONE SHAPE IN THIS SINGLE FILE *** --
+    after the parenthesised-only regex that checked 2 of 8 while printing PASS, and the
+    basename fallback that would have greened a stamped path off another table's log.
+    """
+    rel = path.replace(BSLASH, "/")
+    i = rel.find("GXEMUL-SEC/")
+    if i < 0:
+        return False                      # outside the repo entirely
+    rc = subprocess.run(["git", "-C", SEC, "ls-files", "--error-unmatch",
+                         rel[i + len("GXEMUL-SEC/"):]],
+                        capture_output=True)
+    return rc.returncode == 0
+
+
 def find(name):
     """Resolve `name`, or None.
 
@@ -148,7 +177,7 @@ def main(argv):
     #  certifies.  Same for bare names, whose ambiguity COMPOUNDS as each round adds an
     #  archive -- `probe_Mb1.raw` and `probe_Mb2.raw`, cited bare one line apart, once
     #  resolved to two DIFFERENT tables.
-    untracked, bare = 0, 0
+    untracked, bare, loose = 0, 0, []
     for num, body in blocks(text):
         blocks_seen += 1
         if num < CUTOFF:
@@ -161,6 +190,11 @@ def main(argv):
             hit = find(name)
             if hit is None:
                 missing.append((num, name))
+            elif not tracked(hit):
+                #  Resolves on THIS machine only.  Reported separately from `missing`
+                #  because the remedy differs: a missing artifact must be restored or the
+                #  claim corrected; an untracked one must be `git add`ed.
+                loose.append((num, name, hit))
             else:
                 if not hit.startswith(TRACKED):
                     untracked += 1
@@ -194,6 +228,14 @@ def main(argv):
         print("CITED_ARTIFACTS_FAIL  every artifact search root is ABSENT on this machine.")
         print("  This is a clone without `_scratchpad/`, not a decayed citation.  Set")
         print("  GX_ARTIFACT_DIR, or restore the archives, before trusting a red here.")
+        return 1
+    if loose:
+        print("CITED_ARTIFACTS_FAIL  %d citation(s) resolve only to UNTRACKED paths -- they"
+              % len(loose))
+        print("  pass on this machine and FAIL on a fresh clone, which is the failure this")
+        print("  gate exists to end.  `git add` them, or correct the claim.")
+        for num, name, hit in loose:
+            print("    #%-4d %-30s -> %s" % (num, name, hit))
         return 1
     if missing:
         print("CITED_ARTIFACTS_FAIL  %d cited measurement(s) do not exist:" % len(missing))
