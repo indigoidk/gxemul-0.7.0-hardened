@@ -117,6 +117,61 @@ settled this, in one invocation and about four seconds.
   same POSITION discriminator `seat_verdicts.py` already used — which is why the extractor
   caught what the panel script missed.
 
+### *** A FOURTH CLASS, MEASURED 2026-08-24: ONE SHARED SERVICE BEHIND TWO SEATS.
+### THE ROSTER SAYS NINE; AVAILABILITY SAYS EIGHT. ***
+
+Opus 5 failed three consecutive times on `API Error: 529 Overloaded`. Fable 5 was
+then asked to do its job -- it is the only other seat with build and execute access
+-- and failed on **the same error**. Meanwhile all seven CLI/cloud seats answered
+normally inside the same window.
+
+So the diagnosis is not *"the Opus seat is overloaded"*. **The Agent-tool path is
+overloaded, and both Anthropic seats sit behind it.**
+
+It is none of the three classes already recorded: no quota text, so the wall rule
+passes it; substantive partial answers on two of the four attempts, so the stall rule
+passes it; and the CLI seats share no transport with these, so the daemon rule does
+not apply.
+
+> **THE CONSEQUENCE, which matters more than the diagnosis: the two Anthropic seats
+> are independent for REASONING and correlated for AVAILABILITY.**  They are the only
+> two that compile and run. A panel that counts nine seats and loses both to one
+> outage has lost **all** of its compile-and-measure capacity, and a round whose
+> remaining obligation is a MEASURED KILL then has no fallback anywhere in the
+> roster.
+
+That happened on `#462`: everything was measured except the mutant table, and the
+only seats that could produce one went down together. **A held round is the correct
+response** — the owner chose it — but the roster should not be read as nine
+independent chances at a measurement. It is seven readings and one measuring
+capability with two front ends.
+
+*** AND IT CAN. ESTABLISHED 2026-08-24, DURING THE OUTAGE THAT PROMPTED THE
+QUESTION. ***
+
+`agy` was given a bounded capability test -- build the tree unmodified, then build
+ONE mutant and score it -- with an explicit instruction to say so plainly and stop
+if it could not. It produced `/tmp/gxagy/gxemul` (6.1 MB), applied the mutant
+correctly (2 `idata = 0;` against the repo's 3), and ran the 44-row probe against
+its own binary. **It builds and it measures.**
+
+> **So the roster has THREE compile-and-measure front ends, not two, and only two of
+> them share the Agent-tool service.**  `agy` is on an entirely separate path, which
+> is exactly the property the fourth failure class showed was missing.
+
+Two cautions, both from how this test was set up rather than from anything agy did:
+* **It has no sandbox.** `codex` is read-only and `grok` is plan-mode by
+  construction; `agy` runs with `--dangerously-skip-permissions`, so the BRIEF is the
+  only thing keeping it out of the repo. Spell out "copy the tree, build the copy,
+  never write to GXEMUL-SEC" every time, and verify afterwards rather than trusting.
+* **Give it the build traps explicitly.** `-d Gentoo` (the default distro has no
+  `make`), `rm` the `.o` first, and check `[ binary -nt source ]` because `MAKE_RC`
+  has been observed reporting 0 on a failed build. It followed all three when told;
+  none of them are guessable.
+
+*The capability question sat unasked for months and cost this round its fallback.
+It took one bounded invocation to answer. Ask the cheap question early.*
+
 ### *** A THIRD SEAT-FAILURE CLASS, MEASURED 2026-08-22: THE TRANSPORT, NOT THE SEAT. ***
 
 All THREE Ollama seats returned 155 bytes each in one firing —
@@ -260,6 +315,32 @@ exactly what this replaces. `regress` remains FABLE-ONLY (separate standing dire
 that ran before 2026-08-16 are grandfathered forward-only and carry an explicit annotation entry so
 their blanks do not read as seat failures.
 
+*** EVERY LEDGER ENTRY WRITTEN FROM A PANEL MUST NAME ITS PANEL DIR. One field, and it
+is what makes section G work at all. Learned 2026-08-24 by breaking it for a whole day. ***
+
+Seven panels ran that day, all answering. The ledger recorded two or three seats per stage;
+about **forty seat-entries were missing**, and one seat's 7.6 KB answer had never been
+opened at all -- only its verdict line read.
+
+**The gates caught ONE of the seven, and the reason is structural.** Section G's scope
+trigger is an entry that CITES A PANEL DIRECTORY. The ledger cited six `panel_20260823_*`
+dirs and **zero** `panel_20260824_*` dirs -- so G never looked at any of that day's panels.
+Section H compounds it: it counts the per-stage seat union ACROSS DATES, so a new panel on
+a row that already had seats from an earlier one folds in invisibly.
+
+> **The defect was the PRACTICE, not the gates.** The day before, every panel got cited and
+> G enforced the rest mechanically. Nothing in the tooling changed.
+
+Each time the citation was added, that panel came under G's scope in one step -- and on the
+last one G immediately reported *"1 seat answers exist on disk and are recorded NOWHERE"*.
+Its wording is the rule worth keeping: **a seat that answered and was not recorded is NOT a
+seat failure and NOT agreement -- it is an UNREAD REVIEW**, and this project has twice found
+real defects sitting in one.
+
+**And a counting trap that costs exactly two seats every time:** the two Agent seats leave
+NO FILE in the panel dir. Any check that counts files under-counts by two, and they are
+precisely the two most likely to have found something.
+
 Mechanically enforced by `GXEMUL-SEC/tools/pipeline/check_stage_panels.py`, wired into `precommit_check.sh` as a
 hard section H. Note it complements rather than duplicates section G: **G verifies that a seat which
 ANSWERED was recorded; H verifies the seat was FIRED at all.** Neither catches the other's failure.
@@ -317,6 +398,103 @@ so out loud, attributing the difference to "maybe GXEMUL-SEC or est".
 defects in the file it was given, and flagged its own uncertainty about which tree it had.
 The defect is in the BRIEF, and it is the same shape as the "inline every fact" rule below:
 what the cloud seats cannot read, the file-reading seats can read too much of.
+
+### *** AND A WRONG FACT IN A BRIEF COMES BACK CONFIRMED. Measured 2026-08-24: six of
+### seven seats ratified a census that was wrong by 4x, including one that verified every
+### other claim against the source. ***
+
+The `asicbadaddr` pass-1 brief stated that **sixteen** offsets reach a host kill at
+`(relative_addr / 4) & 3 == 3`. The true number is **sixty-four**, because `relative_addr`
+is not necessarily word-aligned -- a BYTE access at `+0x0d` gives `0x0d / 4 == 3` and dies
+exactly like `+0x0c`. The sixteen cited were the word-aligned quarter.
+
+*** THE TALLY WAS REPORTED THREE TIMES BEFORE THE PANEL HAD FINISHED ANSWERING, AND ALL
+THREE WERE WRONG. ***  "One seat of seven", then "two of nine", then "three of eight" --
+each stated as fact while seats were still returning. **That is the frozen-number class
+wearing a different hat: a count written before the thing it counts has finished.** The
+score-claims rule already says a number names the artifact that produced it; the same
+applies to a tally of seats, and the artifact is *the completed panel*.
+
+Final, measured by grepping all nine answers for any engagement with alignment:
+
+| seats | what they did |
+|---|---|
+| **codex, grok, fable5, opus5** | **CORRECTED it** -- each derived that `relative_addr` need not be word-aligned and the killing set is 64 byte addresses, not 16 |
+| **agy** | **silently NARROWED the claim** to "Exactly 16 *word-aligned* offsets", inserting a qualifier the brief did not have. It verified every other claim against source, in detail and correctly |
+| **kimi, glm, deepseek, minimax** | did not engage with alignment at all |
+
+*** THE agy CASE IS THE ONE WORTH KEEPING, because it is neither agreement nor
+correction. ***  A locally-true restatement repairs the sentence and hides the defect: a
+reader sees a verified claim, and the fact that the true set is four times larger appears
+nowhere. **That is harder to catch than a plain wrong answer**, because it survives every
+check except asking what the qualifier was doing there.
+
+*** AND ONE OF THE FOUR CORRECTORS PUT THE WRONG NUMBER IN ITS VERDICT LINE. ***  Its
+verdict ratified "the sixteen word-aligned killing offsets" as verified; eight paragraphs
+down it derived 64 and called the brief's framing an understatement. **This project's
+policy is VERDICT LINE FIRST so the answer survives truncation** -- and here the surviving
+half would have been the wrong half. A verdict line is a summary written against the
+brief's own framing, so it is the LEAST likely part of an answer to hold the correction.
+Read the body of any seat whose verdict merely agrees.
+
+**And the strongest corrector gave the reason the enumeration could not:** `r == 3` is
+exactly `(relative_addr & 0x0c) == 0x0c` -- *the fourth word of every 16-byte group* --
+while all twelve implemented cases are three CONSECUTIVE words at group bases
+`0x00/0x10/0x20/0x30`. **A structural invariant tells a future edit what it must not do;
+an enumeration only tells you today's answer.** It also checked the one thing the brief
+asserted implicitly and nobody else tested -- the DOMAIN of `relative_addr` -- confirming
+from `memory_rw.c` and `core/memory.c` that it is exactly `[0, 0x100)` with no page
+rounding and no fast path.
+
+> **A STATED PREMISE IS LOAD-BEARING FOR EVERY SEAT, AND AGREEMENT WITH IT IS NOT
+> EVIDENCE.** The existing rule says packet-fed seats can only know what the brief inlines.
+> The sharper form is that they cannot know what it inlines WRONGLY -- and neither, in
+> practice, do the file-reading seats, because a brief that presents a derivation directs
+> them to check the arithmetic instead of the premise.
+
+**Two things follow, and the second is the cheap one:**
+* **Unanimity on a brief-supplied fact is worth nothing.** Score agreement only where a seat
+  says it re-derived the fact from something the brief did NOT give it. This is the same
+  distinction the seat ledger already draws between a READING and a MEASUREMENT, applied one
+  level up -- to the brief itself.
+* **State premises as questions where they are cheap to check.** Writing *"I believe these
+  are the only reachable offsets -- check whether `relative_addr` can be unaligned"* costs
+  one clause and converts a ratification into a test. The seat that found this was the only
+  one whose answer engaged with alignment at all.
+
+*Consequence in this instance, and it is why the class matters rather than being a tidy-up:
+a detector built from the wrong census walks sixteen addresses, covers a QUARTER of the
+defect, and reports full coverage.*
+
+### *** THE REMEDY MEASURED: PUT THE PREMISE-AUDIT INSTRUCTION IN THE BRIEF. Second
+### trial, 2026-08-24, and it found FOUR wrong premises in one brief. ***
+
+The next brief opened with: *"please do not simply ratify — a recent panel had seven of
+nine seats confirm a premise this brief stated wrongly. **Check the premises, not just the
+derivations.**"*  Four of its load-bearing premises were then refuted, each by a different
+seat, and **not one of them was refuted by argument — every refutation was a file opened
+or a command run:**
+
+| my premise | how it died |
+|---|---|
+| *"Site A is already half-fixed, so someone decided the kill was wrong"* | `git log -L 676,700:<file>` returns ONE commit — the upstream import. The fork never touched those lines |
+| *"quoted verbatim from"* over a condensed comment | the real comment is **thirteen lines**; the brief showed two, with no ellipsis |
+| *"nobody noticed"* | `#461`'s census had already counted the three disabled exits, and another row named the live one by its diagnostic |
+| *"removing the guard deletes a tripwire that announced itself loudly"* | the `fatal()` REMAINS — only process termination goes. The tripwire still fires, it just stops shooting |
+
+**And the corrections were BETTER ARGUMENTS than the claims they replaced**, which is the
+part worth internalising. The upstream-residue reading (*whichever exit the author happened
+to HIT while developing against one driver*) is a stronger warrant for de-fatalising than
+"someone decided", because it explains why the live kill survived: **that driver never
+wrote the bad value — not that such writes are unthinkable.**
+
+> **THE RULE: state a brief's load-bearing premises AS QUESTIONS, and say plainly that
+> ratification is not wanted.** Seats that would otherwise verify a derivation will
+> verify the assumption under it. Two trials, two catches, and the second found four.
+
+*Cost: one paragraph. It also produced the session's only finding that would have hidden a
+defect outright — a queue id covering TWO defects, where closing it on one would have
+buried the other.*
 
 Panel rules, learned the hard way:
 - *** A READING SEAT BUYS THE CLASS; A MEASURING SEAT BUYS THE INSTANCE — AND THE CLASS ARRIVES
@@ -587,7 +765,7 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > different sites: (b) fails where the old code was, (d) fails where the new code is.
 >
 > **HOW TO BUILD THE (d) MUTANT — and it is the same discriminator the accept-row rule
-> already uses.** Take each predicate the FIX introduced and weaken it to the
+> already uses.** Take each predicate the fix **DEPENDS ON** and weaken it to the
 > least-restrictive form that still *reads* like the same check: a mask narrowed
 > (`& 3` -> `& 1`), a condition qualified (`if (X)` -> `if (X && writeflag == MEM_WRITE)`),
 > a bound relaxed. **Not deletion** — deletion is (b) wearing (d)'s clothes and is usually
@@ -602,6 +780,95 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > **COST: one mutant per repair predicate**, the same order as the accept-row rule (#448 = 4,
 > #449 = 1, #461 = 4 across two arms). It is bounded by the diff, so it cannot become #392:
 > the predicates are the ones the fix ADDED, and that list is finite and visible.
+>
+> ### *** "THE PREDICATE THE FIX INTRODUCED" ENUMERATED THE EMPTY SET FOR MOST OF THIS
+> ### QUEUE, AND NOBODY NOTICED FOR THREE ROUNDS. Corrected 2026-08-24 -- clause (d) now
+> ### reads DEPENDS ON, not INTRODUCED. ***
+>
+> Clause (d) says *keep the guard, null its repair*. As written it enumerated only
+> predicates the diff ADDS -- and **the two commonest fix shapes here add none**:
+>
+> * a **pure deletion** introduces no predicate at all;
+> * a **DE-FATALISATION** introduces none either -- it changes what an EXISTING
+>   predicate's branch does. That is most of this project's queue.
+>
+> So for those rounds clause (d) enumerated **nothing**, and a round could satisfy the
+> floor while having built no (d) mutant whatever. `#461` measured (d) successfully only
+> because its fix happened to ADD a predicate (an alignment mask) for the mutant to weaken.
+>
+> **Reading it as DEPENDS ON fixes both cases at once**, and it is why this now replaces a
+> narrower deletion-only rule written earlier the same day: that rule was a special case of
+> this gap, and two overlapping statements of one rule is the accumulation this carrier is
+> supposed to refuse.
+>
+> **The two shapes, once the enumeration is right:**
+> * **fix ADDS a predicate** -> weaken the added one (unchanged; the original rule).
+> * **fix adds none** -> the (d) mutant reroutes an EXISTING guard's repair. For a
+>   de-fatalisation: **swap the guard's operand for a field the guarded BODY reads.**
+>   For a pure deletion: **re-introduce the removed behaviour under a DIFFERENT predicate**
+>   -- not the same one widened, which is (b) wearing (d)'s clothes.
+>
+> *** THE MEASURED CASE, and it is why this matters rather than being tidy: ***
+> `#462` de-fatalised two arms. Its guard reads `d->data`; the body it guards reads
+> `d->data` AND `d->data_len`; the two are set together in one place and cleared in two
+> places that touch only ONE of them. Swapping the guard's operand to `d->data_len == 0`
+> **scored a CLEAN SWEEP on a 52-row detector that had just passed twelve mutants**, and
+> restored a NULL-pointer read of 408 bytes. Under the old wording that was coverage debt;
+> under DEPENDS ON it is a **floor breach, L2, fix in-round** -- which is what the round
+> did, before the wording was corrected.
+>
+> #### *** THE BOUND, and it is not optional: "DEPENDS ON" INVITES TRANSITIVE DATA-FLOW
+> #### CHASING, which is unbounded and is how this becomes `#392`. Named 2026-08-24 by the
+> #### adjudicating seat, in the same breath as upholding the correction. ***
+>
+> > **DEPENDS ON enumerates exactly two things: (1) the predicates DOMINATING the diff's
+> > edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees
+> > or callers; and (2) for operand-swap forms, swaps drawn ONLY from fields the guarded
+> > BODY reads (the guard-field/body-field grep the pre-table check already mandates).**
+>
+> That is finite, derivable from the diff by reading, and **it provably contains the
+> measured case**: the `d->data == NULL` guard dominates the edited decline (clause 1), and
+> `data_len` is a body-read field (clause 2), so `M11` falls out mechanically rather than
+> by inspiration. It cannot become `#392` because the enumeration stays closed over the
+> diff's own hunks -- the same closure the INTRODUCED wording had, without the empty-set
+> defect that made INTRODUCED enumerate nothing for a de-fatalisation.
+
+> ### *** THE PRE-TABLE CHECK -- three greps, ~30 min, and it protects the ASK-AGAIN'S
+> ### CAP rather than the clock. Adopted 2026-08-24; two seats derived it independently. ***
+>
+> *** THE DIAGNOSIS THAT PROMPTED IT WAS WRONG, AND THE CORRECTION IS THE USEFUL PART. ***
+> `#462` ran a 12-mutant table clean, then one capped ask-again found escapes needing five
+> rows -- and adding rows changed other mutants' scores, forcing a **second four-hour
+> table**. The adjudicator blamed obligations caught too late. **A seat then checked the
+> preserved logs and refuted that: both "late" rows were in the FIRST table already.** They
+> cost nothing. What cost four hours was that **the probe cannot score one row** -- 39
+> `session()` calls, no row filter -- so re-measuring five rows meant re-running everything.
+>
+> **So the checklist does NOT save the table.** Its real value is narrower and it is worth
+> having: **the ask-again is capped at ONE, and every hole it spends itself naming is a
+> query not spent on coverage debt.** A detector arriving with visible holes wastes the cap.
+>
+> | check | how | catches |
+> |---|---|---|
+> | **SIBLING PARITY** | for each arm the diff de-fatalises, compare its observable channels against its nearest sibling arm. An asymmetry is a row you owe or a sentence you owe | a de-fatalised arm with NO completion-event row while its sibling had one |
+> | **CLAIM -> ROW** | grep the diff's ADDED comments for claim verbs -- *observes, controls, pins, proves, the X control* -- and check each against the row list | a "device-signature control" claimed in prose and implemented by nothing |
+> | **GUARD FIELD vs BODY FIELD** | list fields the PREDICATE reads and fields the guarded BODY reads; where they differ, grep whether they are written at the same sites. If not, the detector owes a state where they DISAGREE | the guard's operand swapped for a field whose third state no row built |
+>
+> **The third is the one that looked impossible and is the cheapest.** It only seemed
+> unreachable because it was approached from the mutant side -- *"what edit escapes?"*,
+> which is unbounded -- instead of the field side -- *"what states can these two fields be
+> in?"*, which is a grep. In `#462` that was three lines of output: `alloc_data` sets both
+> fields; two `free` sites clear only one.
+>
+> **DO NOT move the ask-again earlier.** It works BECAUSE a clean table redirects seats away
+> from shapes the author already covered; measured yield says so. And do not raise the cap
+> -- the cap is what stands between this and `#392`.
+
+> **(e) THE CONTRACT.** The probe header names which edits this detector is designed
+> to catch. *A detector that says so is falsifiable; one claiming completeness is
+> not* -- and a later escape becomes "outside the contract" or "a breach of it",
+> which are different dispositions, rather than an argument about overclaiming.
+> Two lines in a header.
 >
 > **IT IS A FLOOR CLAUSE, so a breach is L2 — replace IN-ROUND however late it is found.**
 > That is deliberate and it is the whole point: an escaped (d) mutant means the round's
@@ -1022,6 +1289,42 @@ just been written to FIX a citation error. **Use `grep -n` or
 `awk 'NR>=A && NR<=B {print NR": "$0}'`**, which carry the number with the line. Three of
 that round's four wrong citations were found by a seat re-deriving them with `grep -n`.
 
+*** AND A PATTERN THAT MATCHED NOTHING REPORTS ZERO FOR EVERYTHING. Twice in one
+session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
+
+* An **unanchored** `grep FAIL` over probe output matched the word FAILED inside a row's
+  own DESCRIPTION, on a GREEN run -- **a phantom failure**. The tell was that the row
+  printed `survived` against a wanted `survived`.
+* An **`awk` range whose start pattern did not match** returned 0 for every query, and the
+  0 was read as "the summary never mentions this" -- **a phantom absence**, which then had
+  a whole narrative built on it before one grep at the right anchor refuted it.
+
+> **CHECK THAT THE APPARATUS SELECTED SOMETHING BEFORE READING WHAT IT SAYS.** A range, a
+> regex or a filter that selects the empty set produces a clean, confident, wrong answer --
+> and unlike a crash it looks exactly like a measurement.
+
+**The cheap defence is a DENOMINATOR.** Print how many lines the range selected, or how
+many rows the grep considered, next to the answer. `0 of 0` and `0 of 41` are different
+claims and only one of them is evidence. This is the same discipline as *a score claim
+names its log*, one level down: the log makes the number checkable, the denominator makes
+the SEARCH checkable.
+
+*** AND A FOURTH, WITH THE OPPOSITE SHAPE: A CORRECT READING NEARLY DISCARDED BECAUSE A
+SECOND, BROKEN CHECK DISAGREED WITH IT. ***  `tasklist | grep` reported three panel CLI
+processes alive. `tasklist /v | grep` -- the follow-up meant to identify them -- reported
+none, because `/v` changes the column layout. **The three were real; the SECOND check was
+the broken one**, and I had already written "false positive" before looking at what
+matched.
+
+> **When two checks disagree, find out WHICH ONE IS BROKEN. Do not keep the one that
+> agrees with what you expected.** The first three incidents invented a failure or an
+> absence; this one nearly destroyed a true positive, and the disagreement itself was the
+> signal.
+
+*Both incidents were mine, in tooling I wrote that day, while applying rules about careful
+measurement. Neither was caught by a gate -- one by an impossible-looking row, one by a
+follow-up grep that happened to use a different anchor.*
+
 *** THE GENERAL RULE, after THREE incidents in one session (2026-08-23): ONE BACKSLASH LEVEL IS CONSUMED on the Bash -> heredoc -> Python path, IN BOTH DIRECTIONS. ***
 
 Measured, same session, opposite failures:
@@ -1103,6 +1406,31 @@ the gate pin, mechanically and well. The defect here is the NUMERATOR and the wo
 *measured* -- and no comparison against a pin can tell a measured 8 from a carried 8.
 
 > **THE RULE: a score claim names its artifact — `8/32 pre-fix (kill461e.out)`.**
+>
+> ### *** AND THE ARTIFACT MUST BE IMMUTABLE, OR THE CITATION DECAYS SILENTLY.
+> ### Measured on my own harness, 2026-08-24. ***
+>
+> A driver that writes `probe_<mutant>.raw` and truncates its results file **reuses those
+> names on every run**. So a record citing them is true only until the next run — and
+> then it is worse than uncited, because the named log now says something ELSE.
+>
+> Concretely: `#462`'s round block cited `probe_base.raw` for **52/52**. A second table
+> at 57 rows overwrote that file, and the citation now points at a 57-row log. **The
+> claim did not become unverifiable; it became CONTRADICTED BY ITS OWN EVIDENCE** —
+> exactly the shape that made the mislabelled "PRE-FIX" caption detectable, arrived at
+> from the opposite direction.
+>
+> **Two rules, and the second is the one that costs nothing:**
+> * **A measurement cited in a durable record must live at a durable path.** Stamp the
+>   run (`table_<n>/`, or a timestamp) or copy the log beside the record. A pointer into
+>   a buffer that gets reused is not a citation.
+> * **Before any re-run that reuses log names, PRESERVE the prior run's logs first.**
+>   Ten of twelve were saved here only because the question was asked while the re-run
+>   was still early; `probe_base.raw` and `probe_Mb1.raw` were already gone.
+>
+> *The scores themselves survived — because they had been written into the records at the
+> time. **The transcription outlived the evidence**, which is precisely the situation the
+> names-its-log rule exists to prevent, reached by a route the rule did not cover.*
 > That makes the claim checkable BY EXISTENCE, which is the same witness discipline
 > the ledger already imposes on rows, and it is the only mechanical guard available
 > for a number that was never run.
@@ -1191,6 +1519,27 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the
   arc screen (`r49_screen.py` pattern); never grep the raw arc pty log for tokens.
+*** AND THE OPPOSITE FAILURE ALSO EXISTS: A PLAIN `&` IN A BASH CALL DOES *NOT*
+SURVIVE, AND IT FAILS SILENTLY WITH A ZERO-BYTE LOG. Measured 2026-08-23. ***
+
+Two measurements were launched as `MSYS_NO_PATHCONV=1 wsl -d Gentoo -- bash ... &`
+inside a Bash tool call. Both produced **zero-byte output files**: the `wsl.exe`
+child is killed when that invocation's shell exits, so the run never happened.
+
+**It looks exactly like a run still in progress.** `ps aux` shows nothing, the log
+is empty, and the natural reading is "not finished yet" — which is how ~25 minutes
+went by twice before the zero byte count was noticed. The tell is the SIZE: a live
+run's log grows, and a dead one is exactly 0.
+
+**Use `run_in_background: true`** (the harness tracks it and notifies on exit) or
+`nohup ... &` if it must be inline — a `nohup`'d `panel.sh` in the same session
+survived fine, which is what isolates the cause to process teardown rather than to
+WSL.
+
+*Note this is the MIRROR of the hazard below, and the two want opposite reflexes: a
+TIMED-OUT foreground run keeps going invisibly, while a plain-`&` run dies
+invisibly. Check `ps aux` for the first; check the log's byte count for the second.*
+
 *** A BASH-TOOL TIMEOUT DOES NOT KILL THE WSL-SIDE PROCESS, AND THE ORPHAN KEEPS
 WRITING THE TREE. Measured 2026-08-23, and it produced TWO CONCURRENT RUNS IN ONE
 MUTANT TREE. ***

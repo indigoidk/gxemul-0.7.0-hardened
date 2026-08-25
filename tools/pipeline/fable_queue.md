@@ -86,6 +86,30 @@ things and this file names which is which.**
 
 <!-- END GENERATED: codex-wall -->
 
+### `lethalonly` (#462, `7c9dd9e` + `15c4b0a`) — regress stage — **QUEUED 2026-08-24**
+
+Closed by MEASUREMENT the same day it was filed, which is why the regress review matters more
+than usual: **the row that raised the class and the row that discharged it are the same
+round's work, reviewed by the adjudicating seat and by nobody else.**
+
+*What it closed on:* `Mf` — the ARMING arm's `fatal()` deleted, latch and `idata = 0` kept —
+scored **53/58** and reddened `arm says` at 0 against a wanted 1, plus `both decl`, `arm once`,
+`arm count2`, `arm enable2`, and no sixth row. So `arm says` observes a SILENCED DECLINE WITH
+THE HOST ALIVE (`regress/artifacts/kill462/table3_58rows/probe_Mf.raw`).
+
+*The rule question this carries*, and it is the reason to fire the seat rather than batch it:
+**the carve-out.** The class says a row whose only kill is a lethal mutant is not proven to
+observe what it claims — with the exception that a lethal-only kill is CORRECT when the row's
+predicate computes nothing but NON-TERMINATION, because for such a row a non-lethal kill is
+IMPOSSIBLE rather than merely absent. That exception was authored and adjudicated inside one
+round. **Ask whether it is sound or whether it is an author excusing three of their own rows**
+(`arm survive`, `nodata live`, `nodata stale`).
+
+*Evidence to hand it:* the Mb1/Mb2 cross-pattern at 58 rows (a clean diagonal — each survival
+row dies ONLY under the mutant re-fatalising its own arm), and the census correction from
+22/3/32 to 21/4/32, where the defect was classifying by MUTANT IDENTITY instead of by the row's
+OBSERVED failure mode. Lethality is PER-SESSION, not per-mutant.
+
 ### `gdromdefault` (#461, `ba30e64`) — regress stage — **QUEUED 2026-08-23**
 
 Three panels ran on this round (pass 1, pass 2, pass 3) plus two flagship reviews, so
