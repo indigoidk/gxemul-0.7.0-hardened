@@ -27,6 +27,20 @@ half would have been the wrong half.
 from the wrong census walks sixteen addresses, covers a QUARTER of the defect, and reports
 full coverage.* `kill byte` (+0x0d) is the row that pins the correction.
 
+### And SIXTY-FOUR is itself a FLOOR, which the assess stage found LAST
+
+The round stated `fmov.d` at +0x18 as a vivid example of why this was not merely reserved
+space. **It is a CLASS and was never counted as one.** A base OUTSIDE the 64 dies when any
+LANE of its transaction lands inside: **16 eight-byte bases** (0x08, 0x18, 0x28 ...) whose own
+offset is perfectly safe die on their high word, and **all 8 aligned 32-byte store-queue
+bases** span exactly two killing words -- base 0 hits 0x0c and 0x1c -- **dying MID-BURST, with
+earlier words already committed.** Verified independently before crediting.
+
+*Found by the seat filling the assess stage at 8/9 -- the stage this round nearly closed by
+exemption. The reachability was UNDERSTATED, which is the safe direction for a shipped fix, but
+the round's own "sixty-four" was a floor rather than a total and a future reader deserves the
+distinction.*
+
 ### The structural form, which is what a future edit actually needs
 
 `r == 3` is exactly `(relative_addr & 0x0c) == 0x0c` -- **the fourth word of every 16-byte
@@ -208,8 +222,15 @@ ask-again either"* from becoming the door back in.
 ### The deleted guard was ALSO a bounds check, and that is the thing this round nearly missed
 
 `r == 3` is out of range for `uint32_t[3]`. So the block did two jobs, and the round had
-only reasoned about one: **before this commit the switch had NEVER ONCE executed with
-r == 3**, because the `exit(1)` fired above it. That code path is brand new.
+only reasoned about one: **before this commit the switch had never once executed with
+r == 3**, because the `exit(1)` fired above it.
+
+*** CORRECTED: THE ROUND CALLED THAT CODE PATH "BRAND NEW" AND IT IS NOT. *** A research seat
+measured that `default:` was ALREADY reachable for **180 of the 256 offsets** pre-fix (256 minus
+12 case labels minus the 64 killing ones) -- confirmed here independently. What is new is not the
+PATH but the `(r, path)` PAIRING, and `default:` ignores `r` entirely. **So the shipped fix is
+SAFER than this round's own caution claimed**, and the correction cuts against the dissent the
+round had been crediting. The adjudicator applied the same correction to its own framing.
 
 The comment asserted the invariant; it had not shown it was CHECKED. It has been now, by
 enumeration rather than by argument:
@@ -314,7 +335,7 @@ to keep.*
 | glm-5.2 | 4.8 K | the `& 2` escape |
 | deepseek-v4-pro | 3.5 K | the `& 2` escape, independently |
 | Fable (adjudicator) | -- | re-labelled L1 -> L2/L3, which is what BOUNDED the round |
-| Opus 5 | -- | not fired this pass; recorded as NOT FIRED, not as agreement |
+| Opus 5 | -- | NOT FIRED on this pass -- reserved, and then FIRED as the ask-again, where it found the round's decisive escape. Recorded as not-fired-here, never as agreement |
 
 *** THE kimi CLI IS QUOTA-WALLED AND WAS RUN AS `kimi-k3:cloud` INSTEAD -- a DIFFERENT
 TRANSPORT, recorded as a substitute rather than counted as the CLI seat. *** That is the
@@ -16292,3 +16313,34 @@ and stopped being true anyway.
 
 *The fix is the same one the rule already demands and this round applied everywhere else: a
 measurement cited in a durable record lives at a durable, QUALIFIED path.*
+
+### Three pre-commit obligations, discharged and named
+
+An adjudication named three things owed before the commit. All three were done; naming them
+because *"if not, they are now record gaps for the next records audit to find, and it will."*
+
+* **A SECOND READING of the round's own corrections.** *"A correction is not safer than the thing
+  it corrects"* has four measured instances here. The re-read found a fifth: the `debug()`
+  citation, already corrected once from `:200,:203` to `:231,:234`, had gone stale AGAIN when the
+  comment was trimmed three lines shorter, and is now `:228,:231`. **A correction that goes stale
+  a second time is the strongest case for the rule.**
+* **The un-fired seat's disposition.** Opus 5 was not fired on pass 2 — deliberately reserved —
+  and was then fired as the single capped ask-again, where it produced the `+1` translation
+  escape. The gap closed by the seat being used, not by the record explaining its absence.
+* **The install-time list diff.** The gate section was installed and then EVERY `for v in` list in
+  `gate_sh_rounding.sh` was diffed against the pre-install file: **11 lists became 12, and the
+  only change was the new `$ASLOG` block.** That check exists because a first-match regex once
+  wrote one section's row names over another's, and the verification that shared the regex passed
+  on it. `bash -n` clean, and every other section's `count "$XXLOG"` discriminator untouched.
+
+### And the correction that reported five mis-counts contained a sixth
+
+The scope correction for `ledgerstatelies` reported **11 rows** while its own class column summed
+to **13**. Both are right and I never showed the arithmetic:
+
+> 13 instances − 1 dedup (`fbwitness` is in two classes: closed-no-witness AND closed-no-commits)
+> − 1 self (`ledgerstatelies` is the tracking row for the repair itself) = **11 rows to repair**
+
+An adjudicating seat refused to let either number be quoted until the reconciliation existed.
+*That is the second-reading rule applied to a correction about counting errors — and it was
+right to.*

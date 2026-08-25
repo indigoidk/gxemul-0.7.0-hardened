@@ -863,3 +863,26 @@ Delete an entry only when its answer is **recorded in the ledger** — not when 
 and not when it is skimmed. `check_stage_panels.py` is the mechanical backstop: it fails any
 post-cutoff stage that moved on without all nine seats, so a silently dropped Fable job reddens
 the next commit rather than passing quietly.
+
+### `asicbadaddr` -- REGRESS REVIEW OWED (closed at 6cae5e4 f1fa6a0, 2026-08-25)
+
+**The question this is queued for** -- a stage held for a seat must carry the question it is held
+for, or the question gets reconstructed from the subject later: the round shipped a 13-row
+detector whose last three rows were forced by seats, the final one (`mask9 rt`) by the capped
+ask-again AFTER the table was already clean. **Does the shipped detector defend what the fix's
+own comment calls load-bearing?** `alias`/`alias2`/`crossarr` are DISTINCTNESS rows and were
+measured blind BY CONSTRUCTION to a `+1` translation; `mask9 rt` closes that single case with an
+ANCHORED oracle. Is one anchored row enough, and is the contract's disclosure of `+2` as
+unmeasured honest, or an evasion dressed as disclosure?
+
+Artifacts: `regress/artifacts/asic463/table5_13rows/` -- 13/13 base, 12 mutants, no escapes.
+Carrier vacuity-floor clause (f), THE ANCHOR RULE, was minted from this round and should be
+reviewed alongside it.
+
+### `gdromdmadefault` -- REGRESS REVIEW OWED (closed at 7c9dd9e)
+
+**The question this is queued for:** this row joined #461/#462 on a MEASUREMENT rather than an
+inference, and its `commits` field was empty until 2026-08-25 because the work shipped under the
+joined round's id. **Is a duplicate-style close with the carrying commit now named the right
+disposition, or does the row owe regress evidence of its own?**
+

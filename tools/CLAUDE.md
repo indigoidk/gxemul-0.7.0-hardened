@@ -913,6 +913,117 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > derivation says `+2` escapes both the distinctness rows and that round's anchored row. A
 > contract must claim the translations it MEASURED and disclose the rest.
 
+> ### *** THE LATE-DISSENT RULE -- adopted 2026-08-25, after a panel stage fired AFTER a round
+> ### had committed returned 4-2 AGAINST the shipped fix. ***
+>
+> `#463` closed with its research stage at 3 of 9. An exemption was offered to the owner and
+> **DECLINED in favour of firing the missing seats** -- and the filled stage dissented on code
+> that had already shipped. There was no rule for that, so:
+>
+> > **A panel stage fired after a round closes adjudicates like any other finding. Closure
+> > changes the LICENSE, never the truth-value.** Three dispositions, exhaustive:
+> >
+> > 1. **WRONG RECORD -> L4, correct in place.** Closure is no shield for false prose.
+> > 2. **MEASURED FALSE PASS** against the shipped detector's floor, contract or obligations
+> >    -> L2/L3 per the existing rules, in a follow-up commit.
+> > 3. **EVERYTHING ELSE, design dissents included -> FILES AS A NEW QUEUE ITEM**, carrying the
+> >    dissent VERBATIM as provenance and ranked by severity like any filed item. The closed
+> >    round's record gains one line naming the dissent and where it went, **so a future reader
+> >    never sees false unanimity.**
+> >
+> > **Never amend shipped code under a closed round's number**, and never let "the round is
+> > closed" reduce a dissent to a footnote no queue item carries.
+>
+> **THE DISCRIMINATOR for whether a filed dissent earns a round is the universal one: CAN IT
+> STATE A MEASURABLE CONSEQUENCE?** `#463b` could -- a `+2` translation predicted to sweep the
+> shipped detector clean, and an added-`case` scenario that passes the de-escalation membership
+> test. A design dissent that can name no measurement files as documented-only.
+>
+> *** AND COUNT THE ARGUMENTS, NOT THE SEATS. *** That stage read 3-2 and then 4-2, and the
+> count was never the reason. One defending headline was **contradicted by the round's own L4
+> correction**; another's objections aimed at options the dissent had not proposed. Meanwhile
+> three DISSENTING seats proposed a one-line `return` that would have skipped the function's
+> common tail and handed a guest an untouched read buffer -- **none of them read nine lines
+> down**. What settled it was neither tally but asking *what the proposed line does to the
+> already-built mutants and rows*, which had empirical content the moment it was phrased that
+> way.
+>
+> **A corollary worth its own line, because it cost this round its best evidence:** a detector
+> can be green under EVERY candidate fix and therefore settle nothing between them. `#463`'s
+> thirteen rows leave the shipped fix, a bare decline, a decline-plus-latch and a latched
+> diagnostic all at 13/13, because every row touching the disputed offsets is SURVIVE-ONLY.
+> **"The gate is green" is not evidence for a disposition the gate cannot observe** -- which is
+> why a research panel cannot be replaced by re-running the battery.
+
+> ### *** THE SKETCH RULE -- adopted 2026-08-25, after FOUR independent readers wrote the same
+> ### broken line into a function none of them knew had a tail. ***
+>
+> Three panel seats and the ADJUDICATOR each proposed `if (r == 3) return;` as a defensive
+> decline. The function's last three lines are:
+>
+> ```c
+> 	if (writeflag == MEM_READ)
+> 		memory_writemax64(cpu, data, len, odata);
+> 	return 1;
+> ```
+>
+> An early `return` **skips that**, handing a guest read an untouched buffer -- a defect the
+> shipped code does not have. Four readers, nine lines, nobody looked.
+>
+> > **A PROPOSED EDIT IS A SKETCH, NOT A FIX, UNTIL IT HAS BEEN RUN AGAINST THE ENCLOSING
+> > FUNCTION'S REAL CONTROL FLOW -- and a brief that solicits or evaluates edits must INLINE THE
+> > FULL ENCLOSING FUNCTION: every exit path, and the common tail included.**
+>
+> **This is the dual of the mutant-table rule.** That one says a brief must inline the exact
+> EDIT, never just its label. This one says it must inline the exact CONTEXT the edit lands in.
+> Both failures look like seat error and are brief defects: the packet showed the guard and the
+> switch, the visible shape invited a per-case-return idiom, and four independent readers
+> produced the same wrong line. **When every reader makes the same mistake, suspect the brief.**
+>
+> Corollary, measured the same day and worth its own sentence: **a handler's RETURN VALUE is
+> itself a contract** (`return 1` = handled). What a `0` does to the caller was checked by
+> nobody in that entire exchange -- not the three seats, not the adjudicator, not me. An edit
+> that changes a return path owes that check.
+
+> ### *** THE THREE-MEMBERED OPTION SET -- adopted 2026-08-25, after a round chose between two
+> ### options while the third was already shipping ONE FILE UP ITS OWN CALL PATH. ***
+>
+> `#463` de-fatalised a device and framed the choice as *keep `fatal()` unlatched* versus
+> *delete it*. It deleted, and recorded honestly that this cost the unconditional diagnostic.
+> **But `src/cpus/memory_rw.c:495-523` -- in the file that DISPATCHES to that very device --
+> already bounds a guest-drivable diagnostic to 8 emissions via `n_trunc_msgs`**, reasoning that
+> *"probing at the end of a device's mapped range is common and benign."* Same phenomenon, and
+> the fork's own answer was BOUND THE COUNT, KEEP THE MESSAGE.
+>
+> Worse: **this carrier already said so.** *"A guest-drivable `fatal()` needs a latch and not a
+> verbosity flag"* was standing rule before that round, and the two-membered framing never
+> consulted it.
+>
+> > **A DE-FATALISATION'S OPTION SET HAS THREE MEMBERS: delete / decline / decline +
+> > bounded-announce. Before choosing, GREP THE FORK FOR AN EXISTING BOUNDED-DIAGNOSTIC IDIOM --
+> > the tree's own precedents are part of the design space.**
+>
+> This is the premise-audit discipline aimed at **option-space completeness** instead of at
+> factual premises. A brief that lists two options gets a panel arguing about two options;
+> nobody proposes the member that was never named. *Five seats and an adjudicator debated the
+> two-membered set; the seat that found the third had gone looking in the tree.*
+>
+> And it pays across a whole filed queue, not one device: every remaining `exit(` de-fatalisation
+> faces the same choice, and `floodclass` already records guest-drivable log floods as a CLASS.
+>
+> ### THE ADDITION LICENCE -- the discriminator against "one more line cannot hurt"
+>
+> > **Additions to product code in a hardening fork are licensed by MEASURED DELTAS or by a
+> > TRANSFERRED WARRANT -- never by "it cannot hurt."**
+>
+> The same round rejected three additions and each died on a measurement or a named defect:
+> sizing the arrays `[4]` was **measured to COST a mutant kill** (it makes `+1` escape `mask9 rt`,
+> because that row's kill works by a tick erasing the cell and `[4]` gives index 3 a real slot);
+> the `r = 0` clamp would have **defeated `crossarr`**; a disjointness assert **guarded the wrong
+> invariant**. The decline arrived with the opposite signature -- a measured delta (`+2`, which
+> escapes even `mask9 rt` today, reddens `safe 4` once the decline pins the refusal column) and a
+> transferred in-tree warrant. **"Cannot hurt" is not a licence; it is how dead guards accrete.**
+
 > **Above floor, measured escapes are COVERAGE DEBT: FILE them**, with the escape list recorded,
 > ranked by what they would admit — and ranked BELOW live defects in the same file.
 

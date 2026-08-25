@@ -7947,7 +7947,9 @@ correction rather than a footnote.* Superseded text: the two DISSENTING verdicts
 finding below**; the five approving seats were right about the code and wrong about
 what the detector proved, which is why verdicts are not counted here.*
 
-### `asicbadaddr` — open, and it is a SINGLE GUEST LOAD
+### `asicbadaddr` — CLOSED at f1fa6a0, and it was a SINGLE GUEST LOAD
+
+*Heading corrected 2026-08-25. It still read `open` after the fix, the 13-row detector and the gate wiring had all shipped — and **this file is the carrier's FIRST-STOP live queue**, so a fresh session would have been offered work that was already done. Section W exists because `gdromdefault` did exactly this, and it caught this one too.*
 
 `dev_dreamcast_asic.c:118-123`, verified by opening the file:
 
