@@ -134,7 +134,8 @@ DEVICE_ACCESS(dreamcast_asic)
 	    already committed.  So 64 is a FLOOR on reachability, not the total.
 
 	    All THREE parts had to go.  exit(1) is the kill.  fatal() has no
-	    early-out (core/debugmsg.c:384-390, against debug()'s at :375), so
+	    early-out (core/debugmsg.c:384-390, against debug()'s in that
+	    same file at core/debugmsg.c:375), so
 	    keeping it turns a host kill into an unsilenceable guest-drivable
 	    flood.  And `r = 0` is a latent clamp hazard: dead today, but it is
 	    exactly what a later widening would use to alias offsets silently.
@@ -178,7 +179,7 @@ DEVICE_ACCESS(dreamcast_asic)
 	    [224,255] -> +0x1c, [352,383] -> +0x2c.  It is the SAME fourth-word
 	    pattern one level up, NOT a single range: an earlier draft said
 	    "any event >= 96", which is false ([128,159] -> +0x10, r == 0).
-	    Max over all 21 defines is 67 (that header, :72) and 67>>5 == 2, so it
+	    Max over all 21 defines is 67 (dreamcast_sysasicvar.h:72) and 67>>5 == 2, so it
 	    is LATENT, not live.  Filed as `asiceventaddr`.  */
 
 	switch (relative_addr) {

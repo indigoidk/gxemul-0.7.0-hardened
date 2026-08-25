@@ -16344,3 +16344,50 @@ to **13**. Both are right and I never showed the arithmetic:
 An adjudicating seat refused to let either number be quoted until the reconciliation existed.
 *That is the second-reading rule applied to a correction about counting errors — and it was
 right to.*
+
+### *** THE LARGEST STATEMENT OF WHAT THIS ROUND ACTUALLY FIXED, ARRIVED LAST ***
+
+The round measured the kill as reachable at **64 byte addresses** by a probe census. The assess
+stage, filled after the commit, found TRANSACTION CLOSURE — and its consequence is bigger than a
+count:
+
+> **The kill was reachable through LEGAL 8-byte accesses to IMPLEMENTED registers.**
+
+Every implemented register at word 2 of a group (+0x08, +0x18, +0x28, +0x38) has a reserved word
+immediately above it, so an SZ=1 `fmov.d` to a documented register — ordinary, correct guest
+code — lands on a killing lane **by construction**. A 32-byte store-queue flush hits two, dying
+mid-burst with earlier words already committed. Not a probe. Not reserved-space poking. **Normal
+driver traffic.**
+
+That retroactively enlarges the severity: this was not "a guest that walks reserved space can end
+the host", it was "a guest that uses the device correctly can end the host."
+
+### And a wording pass the round owes, because it asserted C where it had only a measurement
+
+Throughout, this round wrote **`mask_13[4]` IS `mask_11[1]`** as a fact. It is not a fact of C —
+it is a *toolchain-measured aliasing outcome*, and the subscript is **undefined behaviour**
+regardless of member adjacency. Every seat, the adjudicator and I treated it as defined layout
+all round.
+
+The correction cuts TOWARD the fix rather than against it: the failure a broken invariant buys is
+not a defined overlap but UB a compiler is licensed to exploit, which is a stronger argument for
+enforcing the bound in control flow than any of the ones actually made. Corollary, said out loud
+because it was true of the tables anyway: **mutants whose kills route through an out-of-bounds
+subscript (`-1`, the array shrink) are toolchain-measured oracles**, not portable ones.
+
+### The latch: considered, and refuted BY THIS ROUND'S OWN EARLIER FINDING
+
+An in-tree precedent (a bounded diagnostic in the memory dispatcher) suggested replacing the
+deleted `fatal()` with a latched one. It was ruled in, and then refuted:
+
+* **The predicate is empty where it matters** — "latch only on offsets that are not a lane of a
+  legal multi-word access" selects the empty set inside the modelled groups.
+* **The information is absent, not merely awkward** — the decoder issues two independent 32-bit
+  accesses (this round's own finding 7, *"read second word first"*), so at the handler the second
+  half of a legal `fmov.d` and a direct probe of a reserved word are **byte-identical calls**.
+
+*The defeating fact was already in this round's record, filed under a different heading.* The
+transfer test checked whether the precedent's "common and benign" element carried — it did not —
+while the vulnerable element was "announces something REAL", and finding 7 had already answered
+it. **Before transferring a precedent, grep the round's own findings against each warrant
+element.**

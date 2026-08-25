@@ -1024,6 +1024,36 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > escapes even `mask9 rt` today, reddens `safe 4` once the decline pins the refusal column) and a
 > transferred in-tree warrant. **"Cannot hurt" is not a licence; it is how dead guards accrete.**
 
+> ### *** PROVISIONAL ADJUDICATION -- adopted 2026-08-25, MINTED BY THE ADJUDICATOR AGAINST
+> ### ITSELF after it issued a final-sounding ruling on 8 of 9 mandated seats. ***
+>
+> A round's research stage stood at 8/9. The ninth entry was a **HELD MARKER counted as an
+> answer** -- the gap-closes-itself shape -- so the adjudicator ruled as though the roster were
+> complete. The ninth seat then landed and **killed the ruling outright**, on a fact that
+> defeated its central warrant.
+>
+> > **AN ADJUDICATION NAMES ITS EVIDENCE BASIS -- "on N of M mandated seats" -- AND ANY RULING
+> > ISSUED SHORT OF THE ROSTER IS PROVISIONAL ON ITS FACE. The commit holds until the roster
+> > completes or the owner exempts.**
+>
+> This is section H's spirit applied to adjudication TIMING rather than to stages. And the
+> measured case is instructive about what waiting buys: three successive reversals landed
+> almost exactly where the position stood before the detour -- **but with the warrants
+> transformed**. The churn cost adjudication text and zero code, because nothing was committed
+> between reversals. *The hold discipline is what made the reversals free.*
+>
+> ### THE COMPANION, and it is the reason that ruling was defeatable at all
+>
+> The refuted warrant had three elements. The adjudicator checked the one it suspected
+> (*"is the announced event common and benign?"*), found it non-load-bearing, and shipped. The
+> vulnerable element was a different one (*"does the diagnostic announce something REAL?"*) --
+> **and the fact that defeated it was already in that round's own record, filed under another
+> heading four findings earlier.**
+>
+> > **BEFORE TRANSFERRING A PRECEDENT, GREP THE ROUND'S OWN FINDINGS AGAINST EACH WARRANT
+> > ELEMENT.** A warrant checked only against the facts you have in hand can be defeated by a
+> > fact you already hold under a different label.
+
 > **Above floor, measured escapes are COVERAGE DEBT: FILE them**, with the escape list recorded,
 > ranked by what they would admit — and ranked BELOW live defects in the same file.
 
