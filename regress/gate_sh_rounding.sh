@@ -231,7 +231,13 @@ done
 #  `vbr == 0` is a real transition.  On testsh vbr is already 0 and that row would be
 #  vacuous.
 TMLOG=$LOGDIR/gate_sh_tlbmulti.log
-python3 sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
+#  *** -u ON ALL SIX PROBES IN THIS GATE. ***  `probeslow` recorded the streaming
+#  mitigation as APPLIED and called it "the general fix" -- and it had been applied to
+#  NONE of them: the -u lived only in ad-hoc measurement scripts.  These six are exactly
+#  the six probes `probetimebased` names as having no prompt detection, so they are also
+#  the six whose runs are longest and most worth not losing.  Redirected to a file,
+#  stdout is block buffered and a killed run loses everything it had already measured.
+python3 -u sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
 
 if ! grep -q "SH_TLBMULTI_RESULT=" "$TMLOG"; then
     note "sh_tlbmulti probe produced no result line; last lines follow"
@@ -270,7 +276,7 @@ fi
 #  MEASURED mutant that repaired only the testsh route scored full marks without
 #  them.  See the probe header.
 IPLOG=$LOGDIR/gate_sh_intprio.log
-python3 sh_intprio_probe.py "$PMAX" "$KERNEL" > "$IPLOG" 2>&1 || true
+python3 -u sh_intprio_probe.py "$PMAX" "$KERNEL" > "$IPLOG" 2>&1 || true
 
 if ! grep -q "SH_INTPRIO_RESULT=" "$IPLOG"; then
     note "sh_intprio probe produced no result line; last lines follow"
@@ -314,7 +320,7 @@ fi
 #  against every behavioural row that can be written.  Nothing a guest can DO depends
 #  on those priorities -- only what the table SAYS.
 IBLOG=$LOGDIR/gate_sh_iprbcd.log
-python3 sh_iprbcd_probe.py "$PMAX" "$KERNEL" > "$IBLOG" 2>&1 || true
+python3 -u sh_iprbcd_probe.py "$PMAX" "$KERNEL" > "$IBLOG" 2>&1 || true
 
 if ! grep -q "IPRBCD_RESULT=" "$IBLOG"; then
     note "sh_iprbcd probe produced no result line; last lines follow"
@@ -380,7 +386,7 @@ fi
 #  host-fatal guard, which DELETES the accidental tripwire that made the behaviour
 #  self-announcing, so the rows below rebuild it deliberately on both sides.
 PCLOG=$LOGDIR/gate_sh_pclock.log
-python3 sh_pclock_probe.py "$PMAX" "$KERNEL" > "$PCLOG" 2>&1 || true
+python3 -u sh_pclock_probe.py "$PMAX" "$KERNEL" > "$PCLOG" 2>&1 || true
 
 if ! grep -q "SH_PCLOCK_RESULT=" "$PCLOG"; then
     note "sh_pclock probe produced no result line; last lines follow"
@@ -429,7 +435,7 @@ fi
 #  console.c:994-1007).  Without it a session dies for a CONFIGURATION reason and
 #  prints the same "died" the defect prints -- that cost #459 a false positive.
 GDLOG=$LOGDIR/gate_gdrom_data.log
-python3 gdrom_data_probe.py "$PMAX" "$KERNEL" > "$GDLOG" 2>&1 || true
+python3 -u gdrom_data_probe.py "$PMAX" "$KERNEL" > "$GDLOG" 2>&1 || true
 
 if ! grep -q "GDROM_RESULT=" "$GDLOG"; then
     note "gdrom_data probe produced no result line; last lines follow"
@@ -498,7 +504,13 @@ fi
 #  after the probe had grown to 25, which is the stale-score class a seat caught
 #  mid-answer and section U now checks mechanically.
 GDDLOG=$LOGDIR/gate_gdrom_default.log
-python3 gdrom_default_probe.py "$PMAX" "$KERNEL" > "$GDDLOG" 2>&1 || true
+#  -u IS LOAD-BEARING.  `probeslow` recorded the streaming mitigation as APPLIED;
+#  it was applied only in ad-hoc measurement scripts, never HERE -- and this is
+#  the invocation that runs weekly.  Redirected to a file, stdout is block
+#  buffered and the probe (no flush anywhere, a few KB of output) loses EVERY
+#  row if the run is killed.  A killed run then looks like a run that produced
+#  nothing, which is the silence this row was filed about.
+python3 -u gdrom_default_probe.py "$PMAX" "$KERNEL" > "$GDDLOG" 2>&1 || true
 
 if ! grep -q "GDROM_DEF_RESULT=" "$GDDLOG"; then
     note "gdrom_default probe produced no result line; last lines follow"
@@ -509,7 +521,7 @@ else
     gddctrl=$(grep -o "GDROM_DEF_CONTROL=[A-Z]*" "$GDDLOG" | tail -1 | cut -d= -f2)
     check "gdrom_default control proves it measures" "${gddctrl:-missing}" "OK"
     gddres=$(grep -o "GDROM_DEF_RESULT=[0-9]*/[0-9]*" "$GDDLOG" | tail -1 | cut -d= -f2)
-    check "gdrom_default rows run"     "${gddres#*/}" 32
+    check "gdrom_default rows run"     "${gddres#*/}" 58
     check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
     #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
     #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
@@ -569,7 +581,7 @@ else
     #  ONE LINE, deliberately: assembling this with a backslash continuation through
     #  a heredoc mangled TWICE in one session and shipped a red gate with a bogus
     #  word `n` in it.
-    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept"; do
+    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept" "arm survive" "arm says" "arm idle" "arm once" "nodata live" "nodata says" "accept dma" "accept idle" "accept quiet" "nodata quiet" "accept event" "nodata idle" "arm halfarm" "nodata notx" "arm quiet" "arm twice" "nodata len" "arm bytetrig" "accept data" "both decl" "arm count2" "arm enable2" "nodata stale" "stale says" "stale idle" "nodata twice"; do
         n=$(count "$GDDLOG" "^$v  .*ok$")
         check "  $v" "$n" 1
     done

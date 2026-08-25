@@ -1,3 +1,613 @@
+## Round 462 (#462) -- one guest store ended the host, and the obvious fix would have left `+0x18` busy forever
+
+`dev_dreamcast_gdrom.c`'s DMA window has one arm with a body, `case 0x18`, and both of its
+failure paths ran `exit(1)`. MEASURED on the committed build, each with its own
+device-signature control:
+
+* **the arming-mismatch arm** (`exit(1)` at `:845` on HEAD, the declining `else` at `:972` now) -- `r7 = 0xa05f7418; r8 = 1; mov.l r8,@r7`. **One guest store ends the host
+  process**, because count and enable are 0 on a fresh device so the arming test fails.
+  The identical store to the implemented `+0x04` leaves the host alive.
+* **the no-staged-data arm** (`exit(1)` at `:829` on HEAD, the decline at `:916` now) -- three stores arm the transfer correctly and it dies on `d->data == NULL`.
+  The identical three with the trigger left at 0 leave the host alive, which isolates the
+  trigger rather than the arming.
+
+*The second witness exists because a seat read the first one and found it drove only
+the arming-mismatch arm, while the filing claimed "the DMA pair is witnessed". Test-first is not satisfied
+by a sibling's witness.*
+
+### the no-staged-data arm IS A COMPLIANT-GUEST PATH, WHICH IS WHAT MAKES THIS MORE THAN TIDYING
+
+Mainline Linux's `gdrom_readdisk_dma` programs the four DMA registers **before** sending
+its packet. If `diskimage_access` fails on a short image -- or OB-20's own sector clamp
+refuses the request -- `handle_command` leaves `d->data` NULL, and the guest, told nothing
+it checks, triggers anyway. **Two shipped defensive declines were feeding a host kill.**
+
+### THE PANEL SPLIT THREE WAYS AND MEASUREMENT SETTLED IT
+
+| seat | position |
+|---|---|
+| codex, glm | de-fatalising the no-staged-data arm will HANG Linux in its poll loop -- do not |
+| grok | latch, keep the diagnostic, `break`, never reach the DMA IRQ |
+| flagship | **both incomplete** |
+
+The flagship seat re-fetched `drivers/cdrom/gdrom.c` and read the waits:
+`wait_event_interruptible_timeout(..., GDROM_DEFAULT_TIMEOUT)` is `HZ * 7`, and the
+pre-trigger poll is guarded by `time_before(jiffies, timeout)` with `HZ/2`. **Every wait in
+the DMA path is time-bounded**, so a decline lands on a timeout, `gd.transfer` stays 1, and
+the request ends `BLK_STS_IOERR`. Degraded, bounded, honest -- not a hang.
+
+### *** BUT A BARE `break` LEAVES THE SHADOW STICKY, AND NO PANEL SEAT NAMED THAT ***
+
+The window's tail store writes `idata` into `dma_reg[6]` after every aligned `break`, and
+the **success** arm sets `idata = 0` first -- which is exactly why a completed transfer
+polls idle. Both exits died *before* the tail, so nobody had to think about it.
+
+Drop the `exit(1)` and simply `break`, the shape `#447`, `#459`, `#460` and `#461` all used
+at their own sites, and the guest's trigger value 1 reaches the shadow: **`+0x18` then reads
+BUSY FOREVER.** Linux survives that -- its waits are bounded.
+
+*** THE NetBSD HALF OF THIS PARAGRAPH WAS WRONG, AND IS CORRECTED HERE RATHER
+THAN SILENTLY REPLACED. ***  It read: *"NetBSD's own status waits, fetched
+verbatim, are unbounded spins (`while ((GDROM_BUSY & 0x88) != 0x08) ;`),
+so a guest waiting that way hangs for real."*  **That spin is not a poll of
++0x18 and never was**, on two independent grounds:
+
+1. **Arithmetic, from the quoted line alone.**  It exits only when bit 3 is SET
+   and bit 7 CLEAR -- ATA status semantics.  `+0x18`'s value domain on a
+   healthy device is {0 idle, 1 busy}, and `0 & 0x88` and `1 & 0x88` are
+   both 0, never 0x08.  **The loop would hang on CORRECT hardware if it polled
+   +0x18.**
+2. **This tree already documented it, in code this round did not touch.**
+   `dev_dreamcast_gdrom.c:722-737` says NetBSD writes 0xa0 to `GDROM_COND`
+   to START A COMMAND and then *"expects (BUSY & 0x88) to be 0x08"*, and `:737`
+   sets `d->busy |= 0x08` in reply.  It is the command-start handshake on the
+   CONTROL window's BUSY register -- a different register, in a different phase,
+   from DMA completion.
+
+The exhibit was lifted from that comment and re-pointed at a register it says
+nothing about.  **The CONCLUSION survives and the REASON does not:** `idata = 0`
+is still load-bearing, on Linux, which this tree's own `gdromdmawidth` note
+records as byte-reading +0x18 to poll completion.  A wrong reason gets reused --
+this project already has the `fatal()`-is-byte-for-byte-`debug()` case on
+record -- and this one had reached FOUR records before a seat did the bit
+arithmetic.  Filed as `gdromdriverclaims`: no copy of either driver exists in
+this tree, so nothing here could be re-derived by a later reader.
+
+*** AND THE SHIP DECISION DOES NOT REST ON THEM, WHICH THIS RECORD OWED AND DID NOT SAY. ***
+A completeness check asked whether declining WITHOUT signalling completion depends on claims
+nobody has read.  It does not, on two independent grounds:
+
+* **Host safety.** If EVERY driver claim is wrong, the worst case is a guest that WAITS --
+  bounded or unbounded -- and a guest-local wait is strictly less severe than the host
+  `exit(1)` this round removes.  The unread sources bound how GRACEFUL the guest's experience
+  is; they cannot make the host less safe than it was.
+* **Failure-mode choice.** The alternative (fire the completion event) fails by handing the
+  guest garbage as disk data -- a SILENT corruption.  Declining fails by a detectable stall.
+  The round chose the loud failure over the quiet one, and *that choice holds whatever the
+  sources say*.
+
+So obtaining the two drivers is a FOLLOW-UP (`gdromdriverclaims`), not a blocker. **The
+pieces of this argument were scattered through the round and never assembled**, which left
+the honest disclosure reading as an unresolved dependency rather than a bounded one.
+
+One line per declined arm, `idata = 0` before `break`, mirroring the success arm. The row
+`arm idle` pins it, and it is the difference between the fix and the obvious fix.
+
+*** THE NO-DATA PREDICATE'S ACCEPT SIDE HAS NO MUTANT OF ITS OWN, AND CANNOT HAVE ONE --
+recorded here rather than left as a hole a future adjudicator would find. ***  The
+de-escalation clause de-fatalised TWO predicates, and the failability rule wants each one's
+accept side to redden under a measured growth mutant.  The ARMING predicate is discharged:
+`M5` reddens `accept dma`, `accept event`, `accept quiet` and `accept data`.  **The no-data
+guard is a null-check, and a legal transfer has data and a non-zero length, so it satisfies
+that guard's negation on every modelled operand** -- `M11`, the operand swap, leaves
+`accept dma` GREEN precisely because staged data makes `data_len != 0`.  Its accept side is
+therefore pinned by `accept dma`/`accept data` and failable via `M5` on the SHARED transfer
+path.  *That is a legitimate discharge and it is also exactly the "accept row whose
+failability rests on a sibling predicate's mutant" shape the failability rule exists to
+expose -- so it is written down as a considered exemption, not left to read as an oversight.*
+
+### AND FIRING THE COMPLETION EVENT IS THE ACTIVELY HARMFUL OPTION
+
+The brief asked whether `SYSASIC_TRIGGER_EVENT` might be *needed* on the declined path. It
+is the opposite. `gdrom_dma_interrupt()` clears `gd.transfer` **unconditionally** and
+inspects no error bit anywhere:
+
+```c
+gd.status = __raw_readb(GDROM_STATUSCOMMAND_REG);
+if (gd.transfer != 1)
+        return IRQ_HANDLED;
+gd.transfer = 0;
+wake_up_interruptible(&request_queue);
+```
+
+Fire it on an empty transfer and the wait exits with `BLK_STS_OK`: the block layer is told
+the read succeeded while zero bytes moved, and the guest consumes whatever was in the
+destination page **as disk data**. That is `#460`'s "invented behaviour, measured actively
+harmful" class reproduced at the block layer. This driver has exactly one error channel --
+the timeout -- so guest-visible EIO is not a compromise, it is the only honest signal.
+
+### Scope: the DMA pair only
+
+Same `case 0x18` arm, same switch, one semantic class ("a DMA start the model cannot
+honour"), one fix design, one detector, no new oracle -- the reopening rule's easiest pass
+in this family's history.
+
+The four command-layer exits do **not** join: different reach (a packet sequence through
+`COND=0xa0` and six data-port stores, versus single window stores), different semantic class
+(packet parameter validation), and a different fix idiom.
+
+**the `Too much GDROM_DATA?` site stays fatal, and that is a finding rather than a deferral.** `busy & 0x08` is set
+only by `COND=0xa0`, which zeroes `cmd_count`; the only increments are +2 per store; at
+exactly 12 the flag clears and the command dispatches. So `cmd_count >= 12 && (busy & 0x08)`
+is unreachable from any guest input -- no witness can exist. Better: it has **measured value
+as an invariant tripwire**, because `#460`'s rejected Option C was caught *precisely because*
+it made the `Too much GDROM_DATA?` site reachable. De-fatalising it would delete the one accidental detector of the
+`cmd_count` invariant and buy no guest-facing safety.
+
+### The de-escalation cost, paid rather than deferred
+
+Two host-fatal predicates were removed. Before the fix, narrowing either meant `exit(1)` on
+the first legal transfer -- unmissable. After it, the same edit means a **silently refused**
+transfer. So FOUR accept rows ship with the fix, staging real data through `#460`'s TOC
+sequence: the arming is still accepted, the completion event still fires, **neither**
+decline diagnostic fires, and the device's own TOC byte actually LANDS at the destination.
+
+*This said "three accept rows ... `+0x18` still polls idle afterwards", which the block's
+own later ruling refutes twice over: the obligation is discharged by FOUR rows, and
+`accept idle` -- the "+0x18 polls idle" one -- is NOT among them, because it cannot redden
+under growth of either de-fatalised predicate. Corrected here rather than left standing
+above its own correction, which is the failure the SIXTH-GENERATION note below describes.*
+
+*The TOC bytes are device-generated, so the accept group carries its own
+device-signature control.* *** BUT THAT CONTROL WAS CLAIMED AND NOT IMPLEMENTED UNTIL
+PASS 2. ***  A seat checked and found that **no row anywhere read the destination**, so
+the "RAM could not produce that pattern" sentence described a control that did not
+exist -- and mutants which neutered the transfer itself (`d->data_len` -> `0`, or a
+different `dst` mask) left every row green while moving nothing.  `accept data` reads
+`dst+0` back with a BYTE load, which needs no endianness assumption, and distinguishes
+three outcomes: `0x10` it ran, `0x0` it never ran, `0x5a` the load itself never
+executed.
+
+### Detector: 32 -> **58 rows**, and every score below names the log that produced it
+
+| what | score | log |
+|---|---|---|
+| PRE-**MOVE**, at 51 rows | **50/51**, `nodata notx` the SOLE red | `table2_57rows/probe_pre51.raw` |
+| POST-fix, at 57 rows | **57/57** | ARTIFACT LOST — the 57-row base log was overwritten by table 3's base run before it was archived; the figure is TRANSCRIBED, not citable |
+
+*** THE 52-ROW MEASUREMENT'S LOG NO LONGER EXISTS, AND THAT IS RECORDED RATHER
+THAN QUIETLY DROPPED. ***  This row cited the then-current base log (name deliberately not repeated in citable form: it is a QUOTATION of a decayed citation, not a live one) for **52/52**.  The
+57-row re-run OVERWROTE that file, so the citation would have pointed at a
+different measurement — **contradicted by its own evidence**, not merely
+unverifiable.  Ten of the first table's twelve logs were preserved under
+`table1_52rows/`; the base and Mb1 logs of that table were already gone when
+the question was asked.
+
+The 52-row table is SUPERSEDED by the 57-row one below, so nothing rests on the
+lost log — but the harness defect it exposed is real and is **NOT yet fixed**: it is
+MITIGATED BY HAND (`table1_52rows/`, `table2_57rows/`, `_scratchpad/kill462/`), because
+the driver cannot be edited while it is executing. `table462.sh` still contains zero
+archiving of any kind and bare-overwrites `probe_<M>.raw` on every run. The driver fix
+is owed after the run ends and is filed as `killdriverunTracked`.
+
+*** THIS SENTENCE SAID "is fixed: the driver now archives a run before truncating"
+UNTIL A RECORDS SWEEP OPENED THE DRIVER AND COUNTED ZERO ARCHIVE LINES. ***  It is
+precommit section W's own class -- advertising work that has not shipped -- and it is
+the one sentence here a future session would have relied on to its harm, since "logs
+are safe now" is exactly the belief that stops anyone preserving them. What shipped
+instead is precommit section **X**, which fails a commit whose cited artifacts do not
+resolve: that cannot stop a driver reusing a filename, but it makes the resulting decay
+LOUD at commit time rather than silent.
+
+*** THE FIRST ROW SAID "PRE-FIX" AND ITS OWN NAMED LOG REFUTES THAT. ***  A seat opened
+`table2_57rows/probe_pre51.raw` and found `arm survive  survived`, `nodata live  survived`, and **zero
+rows reporting `died`** — a genuinely pre-fix build dies on those, which is what the
+round's rung-3 witnesses measured. That log is the **fix-present, diagnostic-not-yet-moved**
+build, which is exactly why `nodata notx` is its sole red.
+
+**This is the defect the names-its-log rule exists to catch, and it caught it** — not by
+the number being wrong, which it is not, but by the LABEL contradicting the artifact. A
+score with no log attached could not have been checked at all.
+
+*No obligation is undischarged:* the de-fatalisation's test-first is carried by the round's
+rung-3 witnesses, recorded in the ledger's `witness` field. **The defect is purely the
+label, in exactly two score tables** — the prose elsewhere in this block says "pre-move"
+and "before the move" correctly, which is how the two came to disagree.
+
+*** THE TWO RUNS ARE AT DIFFERENT ROW COUNTS AND THAT IS STATED RATHER THAN
+SMOOTHED. ***  `both decl` was added AFTER the pre-fix run, so no pre-fix number
+exists at 52 and none is asserted here.  That row does not depend on the code fix --
+it pins that the two decline arms hold SEPARATE latches -- so it would very probably
+have been green pre-fix too.  **The resulting figure is deliberately NOT written here,
+even hedged:** a fraction with no artifact behind it is scannable, quotable, and
+indistinguishable at a glance from a measured one, which is the whole reason this
+project requires a score to name its log.
+
+The COUNT is a checked fact, RE-DERIVED after the last edit rather than updated:
+probe rows EMITTED by the base run, the gate's `$GDDLOG` name list, and the gate pin
+were measured together and **all three read 58**, with the longest name at 12 -- AT the
+limit the `%-14s` column imposes, not over it.
+
+*** THIS SENTENCE SAID 52 AND HAD ROTTED TWICE (52 -> 57 -> 58) WHILE ASSERTING THAT THE
+COUNT WAS VERIFIED. ***  A stale count is a wrong number; a stale CLAIM OF HAVING CHECKED
+the count is the green-row-means-nothing shape, because it tells a reader the comparison
+was made when what was actually carried forward was its answer. It is re-derived here --
+`grep -c` on the archived base log, the name list parsed out of the gate, and the pin read
+from its own line -- not edited from 52 to 58, which would have preserved the defect while
+appearing to fix it.
+
+### Gate 10: PASS (216 checks), 0 FAIL, 2197s -- run ALONE, on the rebuilt tree
+
+`gate_sh_rounding.sh`, nothing else running (`/tmp/gate10_462.log`). The two pins this round
+moves are green: **`gdrom_default rows run 58`** and **`gdrom_default rows correct 58`**, and
+the detector's own line inside the gate reads `GDROM_DEF_RESULT=58/58` with zero rows ending
+in FAIL anywhere in the gate.
+
+The previous run was **PASS (215 checks) in 2181s at the 57-row pin**; one added row gives one
+added check and **+16s**, which is the consistency the two numbers owe each other.
+
+*** THE ELAPSED FIGURE IS DERIVED FROM THE LOG'S OWN TIMESTAMPS (created 18:32:39, last
+written 19:09:16), NOT FROM THE HARNESS THAT WAS SUPPOSED TO MEASURE IT. *** The wrapper
+printed `GATE10_RC= ELAPSED=0s` -- its variables were empty when `tee` ran. Recorded this way
+because the number is real and its provenance is not what was intended: the gate measured
+itself; the instrumentation around it did not.
+
+**It measured the tree that ships, MINUS ONE COMMENT -- stated exactly, because the first
+draft of this paragraph claimed more.** The `:883` repair was propagated to all three NO-VPATH
+build trees and `build/` rebuilt BEFORE this run -- 0 errors, 0 warnings, verified by
+`binary -nt source` rather than `make`'s exit status, and by executing the binary. *** BUT A
+LATER REVIEW FOUND THAT REPAIR DUPLICATED AN ARGUMENT MADE 24 LINES BELOW IT, AND THE TRIM
+LANDED AFTER THE GATE. *** So the shipped source differs from what gate 10 measured by the
+text of one comment, and by nothing else; the tree was re-propagated and rebuilt again after
+the trim, with the same three checks.
+
+*This paragraph first said "it measured the tree that ships" flatly. That was the round's own
+recurring defect -- a true-sounding claim whose precondition had quietly expired -- caught here
+by asking when the trim happened relative to the run, which is the question the round has been
+asking of everything else all day.*
+
+### The kill table: 14 mutants, every score naming its log
+
+*Generated from `table462.results` and the archived per-mutant logs under `regress/artifacts/kill462/table3_58rows/`, not transcribed.  The generator REFUSES to emit if any mutant lacks a score, because a table with a silent gap cannot be told from one with an escape -- and it REFUSES to read the live `probe_<mutant>.raw` buffers at all, because those are truncated by the next run and a record citing them decays into saying something else.*
+
+| mutant | what it does | score | rows it reddened |
+|---|---|---|---|
+| `base` | unmodified -- the shipped fix | **58/58** | -- |
+| `M12` | **clause (d)**: NO-DATA repair moved INSIDE its latch block -- the `nodata twice` mutant | **57/58** | `nodata twice` |
+| `M11` | **clause (d)**: the NO-DATA guard's operand swapped -- `d->data == NULL` -> `d->data_len == 0` | **56/58** | `stale says`, `stale idle` |
+| `M10` | **accept boundary widened OUTWARD**: `count == 1 && enable == 1` -> `count && enable` | **56/58** | `arm count2`, `arm enable2` |
+| `Mb1` | **floor (b)**: NO-STAGED-DATA `exit(1)` reinstated verbatim | **47/58** | `both decl`, `nodata live`, `nodata says`, `nodata notx`, `nodata idle`, `nodata quiet`, `nodata twice`, `nodata len`, `nodata stale`, `stale says`, `stale idle` |
+| `Mb2` | **floor (b)**: ARMING-MISMATCH `exit(1)` reinstated verbatim | **47/58** | `arm survive`, `arm says`, `arm idle`, `arm halfarm`, `both decl`, `arm once`, `arm count2`, `arm enable2`, `arm quiet`, `arm twice`, `arm bytetrig` |
+| `M5` | de-escalation ACCEPT growth: `count == 1` -> `count == 2` | **50/58** | `both decl`, `nodata says`, `arm count2`, `stale says`, `accept dma`, `accept event`, `accept quiet`, `accept data` |
+| `M6` | **clause (d)**: repair conditioned on count/enable both 0 | **57/58** | `arm halfarm` |
+| `M7` | delete the SUCCESS arm's `idata = 0` | **57/58** | `accept idle` |
+| `M8` | fire SYSASIC completion on the NO-DATA decline | **57/58** | `nodata quiet` |
+| `M9` | fire SYSASIC completion on the ARMING decline | **57/58** | `arm quiet` |
+| `M1` | delete the ARMING arm's `idata = 0` | **54/58** | `arm idle`, `arm halfarm`, `arm twice`, `arm bytetrig` |
+| `M2` | collapse both arms onto ONE shared warn bit | **57/58** | `both decl` |
+| `M3` | move NO-DATA `idata = 0` AFTER its `break` (dead code) | **54/58** | `nodata idle`, `nodata twice`, `nodata len`, `stale idle` |
+| `M4` | arming latch becomes a counter allowing TWO prints | **57/58** | `arm once` |
+
+**No mutant escaped.**  Every one reddened at least one row, and the 7 single-row kills each hit the row written for that mutant and nothing else.
+
+*** M11's FAILURE MODE IS UNSTABLE, AND THE CAPTION SAYS SO BECAUSE CITING ONE LOG WOULD
+MISLEAD. ***
+
+> **M11: 56/58** (`table3_58rows/probe_M11.raw` — `stale says` 0 vs 1, `stale idle` `absent`
+> vs `0x0`). **Failure mode unstable:** the same mutant scored **54/57** in table 2 with all
+> three stale rows reading `died` (`table2_57rows/probe_M11.raw`); the NULL-source
+> `memory_rw` faults on some runs and not others; cause unattributed. **Kill stable across
+> both runs.**
+
+*"Kill stable, mode unstable" is the sentence that matters.* Citing only table 3's log is
+technically compliant with the names-its-artifact rule and still produces a wrong impression:
+a future reader re-running M11 has roughly even odds of the OTHER mode — different reds, a
+different score — and will conclude their rig or this record is broken. **A checkable pointer
+to an unstable phenomenon must say the phenomenon is unstable.**
+
+**THE NON-DETERMINISM IS ESTABLISHED, NOT SUPPOSED.** `nodata stale`, `stale says` and
+`stale idle` all read the SAME `t, alive` — one session, three rows (`:962`, `:964`, `:966`,
+the next session opening at `:1009`) — so in table 2 that session's emulator died and all
+three read `died` (one real observation, two collateral), while in table 3 the identical
+session lived. **The row added this round, `nodata twice`, sits at `:844` in a different and
+earlier session, so it cannot be the cause.**
+
+**AND THE CONTROL IS WHAT MAKES THIS PUBLISHABLE.** Six mutants — M10, Mb2, M5, M6, M7, M8 —
+reddened **byte-identical row sets** across the two runs, each scoring `(X+1)/58` against
+`X/57` exactly as an unchanged red set must when one row is added. Only two deviate: `Mb1`
+(47/57 → 47/58, one MORE red — the new `nodata twice`, correctly a no-data row) and M11.
+*Without those six beside it, "M11's mode changed" is indistinguishable from "this rig is
+flaky", and the second reading would discredit every score in all three tables rather than one
+cell in one of them.*
+
+*** AND M11 IS THIS ROUND'S BEST FROZEN-NUMBER CANDIDATE: it now carries THREE scores across
+three tables — 52/52 (the table-1 clean sweep that triggered the L2), 54/57, 56/58 — EACH TRUE
+OF ITS OWN ARTIFACT. Any prose mentioning M11 must bind its number to a table directory, or a
+later reader will "correct" it wrong. ***
+
+**Not owed, ruled explicitly:** a re-run — the floor requires the detector to fail under M11,
+and it failed in both observed runs — and a queue entry for the fault-instability mechanism,
+because the shipped tree cannot reach `memory_rw` with a NULL source: the guard under test is
+precisely what prevents it, so that question exists only in a mutant world.
+
+### A VACUITY CLASS THE ASK-AGAIN FOUND, AND THE AUDIT THAT SHARPENED IT
+
+The capped ask-again (`panel_20260824_055023`) produced one class none of the other SEVEN
+ANSWERING seats named -- `glm` was DOWN on that panel, no answer inside a 114,723-byte
+file, and a seat that never answered cannot be counted among seats that failed to name
+something -- from
+kimi: *** a row whose ONLY kill is a LETHAL mutant is not proven to observe what it claims. ***
+Under a mutant that kills the host every row IN THE DYING SESSION reads `died` (not every
+row in the probe -- 46 and 47 of 57 still PASS under `Mb2` and `Mb1`, because the probe
+forks a fresh emulator per session), so the red says only that the host
+died -- nothing about that row's subject.
+
+It nominated two rows. **Both were checked and they settled in OPPOSITE directions**, which is
+why the nomination alone was not the finding:
+
+* `nodata notx` -- **REFUTED.** It does have a non-lethal kill: `table2_57rows/probe_pre51.raw`, the pre-move
+  build, where `arm survive` and `nodata live` both read `survived` -- the host is alive -- and
+  `nodata notx` reads `1` against a wanted `0`. *The seat could not have known: that
+  measurement was absent from the kill table the brief inlined. The defect is in the brief, and
+  it is the standing "inline every fact" rule catching the main loop rather than a cloud seat.*
+* `arm says` -- **HOLDS.** Green on that same build, and its only red anywhere is `Mb2`, lethal.
+
+**The audit the class asks for was then run across all 57 rows** rather than the two nominated
+-- one script over the preserved logs in `table2_57rows/`, no builds, no host load. Of 57 rows:
+**21 have a non-lethal kill, 4 have only lethal kills, and 32 have no kill in THIS table**
+(their mutants live in the `#459`/`#461` tables, so that is not "no kill").
+
+| lethal-only row | its own claim | verdict |
+|---|---|---|
+| `arm survive` | *one store to +0x18 no longer ends the host* | **correctly covered** |
+| `nodata live` | *arming with no staged data no longer ends the host* | **correctly covered** |
+| `nodata stale` | *FAILED-COMMAND state: data NULL, data_len STALE* | **correctly covered** |
+| `arm says` | *and the decline SPEAKS* | **the real instance** |
+
+> **THE CARVE-OUT, which the seat's version does not have: a lethal-only kill is the CORRECT
+> pairing when the row's own PREDICATE COMPUTES NOTHING BUT NON-TERMINATION.** `arm survive`,
+> `nodata live` and `nodata stale` assert that
+> the host lives; the mutant that kills the host is precisely what must redden them. Condemning
+> them would be the rule misfiring on its two best-matched rows.
+
+So the usable form is **only-lethal kills AND the row's predicate computes more than
+NON-TERMINATION**, which in this table is exactly one row -- the row the seat named.
+
+*(That word was `liveness` until the adjudication corrected it. `rd()` returns False only on
+EOF, so the predicate is true of a HUNG emulator: green proves `did not terminate`, never `is
+healthy`. **The correction STRENGTHENS the carve-out** -- the row reddens iff the process
+terminated, so even the one interesting non-lethal failure, a hang, cannot redden it, and
+`a non-lethal kill is impossible for these rows` holds for a sharper reason than first given.
+What was overclaimed was the row NAMES and the adjudicating seat's own gloss `proves the host
+lives`, quoted here as corrected. The names are deliberately NOT changed: they are wired into
+`gate_sh_rounding.sh`'s 58-name list and a mid-round rename is the list-destruction trap this
+project has already paid for -- annotate, do not rename.)* *Its INSTANCE was
+right and its CRITERION was too wide; the criterion is the half that generalises, so the
+correction is the useful part.*
+
+*** AND THE MAIN LOOP GOT BOTH THE CENSUS AND THE DISPOSITION WRONG, corrected by the fable5
+adjudication before commit. Recorded because the SHAPE of each error outlasts this round. ***
+
+**The census was 21/4/32, not 22/3/32.** In table 2 (`table2_57rows/probe_M11.raw`,
+`table2_57rows/probe_Mb1.raw`) `nodata stale`'s only two kills are `M11` and `Mb1`
+and **both read `died`**, so it belongs in the lethal-only set. The audit classified by MUTANT
+IDENTITY (`Mb*` = lethal) rather than by the row's OBSERVED failure mode (the got column), and
+`M11` is lethal-in-effect -- its `data_len` guard-swap reaches `memory_rw(..., NULL, 408, ...)`
+-- without being named `Mb`. **The general defect: LETHALITY IS PER-SESSION, NOT PER-MUTANT.**
+The probe forks a fresh emulator per session, so a mutant can kill some sessions and leave
+others untouched; a per-mutant lethality flag cannot represent that, and the oracle used two
+fixed rows to decide a global property.
+
+**And the carve-out's first wording was SELF-CERTIFYING** -- "when the row's own SUBJECT is
+survival", adjudicated against descriptions the same author wrote. Replaced by two mechanical
+conditions: (i) the row's got-expression computes nothing but non-termination, which makes a
+non-lethal kill *impossible* rather than merely absent; and (ii) the kill must DISCRIMINATE --
+red under the lethal mutant at the row's own arm, GREEN under the sibling arm's. Condition (ii)
+is measured and clean: each survival row dies only under the mutant re-fatalising its own arm.
+
+*** RE-MEASURED AT 58 ROWS IN TABLE 3 AND IDENTICAL, so this evidence points at the table
+this round PUBLISHES rather than a superseded one (`table3_58rows/probe_Mb1.raw` 47/58,
+`table3_58rows/probe_Mb2.raw` 47/58). The diagonal holds exactly: ***
+
+| row | `Mb1` (exit at the NO-DATA arm) | `Mb2` (exit at the ARMING arm) |
+|---|---|---|
+| `arm survive` | **ok** | FAIL |
+| `arm says` | **ok** | FAIL |
+| `nodata live` | FAIL | **ok** |
+| `nodata stale` | FAIL | **ok** |
+
+*The adjudication required this re-check and named the alternative outcome plainly: had the
+pattern differed between tables, that would have been a FINDING and not a substitution. It
+did not differ -- but the check was owed either way, because evidence cited for a published
+claim must come from the published run.*
+
+**`arm says` is FIXED IN-ROUND, not filed.** The FILE call cited the stopping rule against
+material that rule does not govern -- its own text limits it to SHIPPED findings, and nothing
+here has shipped. Second ground: the repair at each arm is {latch + print, `idata = 0`}, and
+while the table nulls the `idata` effect four ways and the latch two ways, **no mutant nulls
+the PRINT**. The owed mutant `Mf` -- delete the arming arm's `fatal()`, keep latch and
+`idata = 0` -- runs after the driver prints RESTORED. *The sole-carrier premise was also
+overstated: five other rows assert that declines speak; `arm says` is the sole carrier of the
+ARMING-side message only.*
+
+**The audit costs one script and no builds, and it is derivable from any kill table already on
+disk.** Three tables were built in this round before anyone asked the question.
+
+### PASS 2 EARNED SEVEN ROWS AND A CODE FIX, and the dissenting seats carried all of it
+
+Nine seats fired, nine answered, none down (`panel_20260823_230930` and
+`panel_20260824_023342` -- TWO pass-2 panels, both full). *Each dir holds seven files,
+not nine: the two Agent seats (`opus5`, `fable5`) leave NO FILE in a panel dir, which is
+why any check counting files under-reports by exactly two -- and they are the two most
+likely to have measured something.*  Verdicts: **grok DO NOT SHIP**, **codex
+CHANGES REQUIRED**, **Fable 5 code-sound-but-do-not-commit-on-this-record**, Opus 5
+ship-the-code-fix-the-detector, agy GO, glm PASS, deepseek ACCEPT, minimax APPROVE,
+kimi PASS.
+
+**The five approving seats were right about the code and wrong about what the detector
+proved.**  The code needed one fix; the DETECTOR needed seven rows.  This is why this
+project settles disagreements by measurement and never by vote -- a 5-4 split in favour
+of shipping would have shipped a detector blind to every escape below.
+
+| row | closes | found by |
+|---|---|---|
+| `arm halfarm` | repair conditioned on count/enable -- a FRESH device satisfies it, and every existing row used a fresh device | deepseek |
+| `nodata len` | repair conditioned on the programmed LENGTH -- **no row wrote +0x08** | grok |
+| `arm bytetrig` | repair conditioned on access WIDTH -- no row byte-stored +0x18, and this tree already documented that Linux byte-writes it.  Also triggers with `0x5a`, since every other row triggers with `1` and `idata &= ~1u` would have passed the whole table | grok, Fable 5 |
+| `arm quiet` | **L3, undischarged obligation**: the arming arm had NO completion-event row, so firing SYSASIC on it swept the table | Opus 5 |
+| `arm twice` | repair moved INSIDE the latch block -- every idle row triggers exactly once in a freshly forked emulator, so the first and only decline still clears | Opus 5 |
+| `accept data` | **nothing anywhere observed the DMA's data movement**, so mutants neutering the transfer left every row green while moving nothing | Opus 5 |
+| `both decl` | the two arms collapsed onto ONE warn bit -- unobservable because no session reached both arms | Fable 5, predicted BEFORE the table ran |
+
+### The code fix: a declined transfer was announcing itself
+
+`fatal("[ ... Transfering %i bytes ... ]")` sat ABOVE the `d->data == NULL` test, so the
+DECLINED path printed a transfer it never ran -- while the comment attached to that very
+line claimed it prints *"the count actually transferred"*.  **Three seats found it
+independently, from opposite directions:** two by reading the control flow, one by asking
+what `accept dma` actually measures (the answer: that the ARMING test passed, not that
+the transfer ran).  Moved below the check, and deliberately left ABOVE the
+`dst &= 0x0fffffff` mask, so the ADDRESS it prints is unchanged by the move.
+
+*** "THIS ROUND IS ONLY FIXING WHEN IT SAYS IT" WAS THE FIRST DRAFT OF THAT SENTENCE AND
+THE DIFF REFUTED IT. ***  The round also changes WHAT the line says, in a separate hunk:
+`length` -> `d->data_len` plus a new `(guest asked for %i)` clause, because the printed
+count was the guest's `+0x08` register while `memory_rw` moves `d->data_len`.  The
+precise claim -- the one the diff supports -- is that leaving the line above the mask
+keeps the ADDRESS unchanged.  *Caught by writing the commit message FROM THE DIFF rather
+than from intent, which is the rule this project adopted after a message claimed a
+citation fix no hunk made.  It works on CHANGELOG prose too.*
+
+`nodata notx` is its witness and was **MEASURED RED before the move** (`table2_57rows/probe_pre51.raw`),
+which is test-first applied to a diagnostic rather than to behaviour.
+
+### `accept idle` is not an accept row, and four seats said so independently
+
+It cannot redden under growth of EITHER de-fatalised predicate, because all three arms --
+success, no-data and arming-mismatch -- clear `idata`.  Its own note admitted it: *"as the
+success arm has always done"*.  It is LIVE (deleting the success arm's `idata = 0` kills
+it) but it is a regression row for pre-existing behaviour, and counting it toward the
+de-escalation obligation was a wrong record.  **The obligation is discharged by
+`accept dma`, `accept event`, `accept quiet` and `accept data`.**
+
+*** "Nine rows" WAS TRUE OF A DRAFT AND IS THE THIRD STALE COUNT THIS BLOCK HAS
+CARRIED. ***  The round added **twenty-six** (32 -> 58). The list that followed named
+nine of them and read as though it were the whole set.
+
+The rows and what each pins are the table above and the pass-2 section below; naming a
+subset here in prose is what let the count rot three times. **Removed rather than
+re-counted** -- a prose list that duplicates a generated table has no way to stay true,
+and this block already carries a note condemning exactly that pattern.
+
+*(The `accept idle` finding is stated once, under its own heading above. A near-verbatim
+second copy stood here and is removed: two copies of one correction is the accumulation this
+block condemns elsewhere. **A case-sensitive `grep -c` reported it as unique** -- the heading
+says "is not", the stranded copy said "is NOT" -- which is why it survived a check that was
+run and believed.)*
+
+**The accept rows share ONE staging session, and the sharing is the point rather than
+the saving.**  They used to stage independently -- one full TOC sequence each, which is
+what pushed the probe past its 1800s budget -- and worse, they then observed SIMILAR
+transfers rather than the same one.  From one session they observe THE SAME transfer, so
+"the arming was accepted", "`+0x18` polls idle", "the event fired", "no decline fired"
+and "the bytes landed" are five facts about ONE event.  A row set describing one
+transfer can contradict itself and be caught; separate transfers can each be
+individually consistent and jointly wrong.
+
+*Two self-inflicted defects on the way there, both caught by mechanism rather than luck.*
+The restructuring script guarded a constant definition with `if "MOV_L_AT_R1_R3" not in
+s` -- but the code it had just inserted USES that symbol, so the check saw it and skipped
+the definition; the probe died with a `NameError` at row 41.  The streaming mitigation
+earned itself there:
+
+*** THAT MITIGATION IS `-u`, AND IT WAS ADDED TO ALL SIX PROBES IN THE GATE FILE -- FIVE OF
+WHICH BELONG TO OTHER ROUNDS. ***  `sh_tlbmulti`, `sh_intprio`, `sh_iprbcd`, `sh_pclock` and
+`gdrom_data` had none either, per `probeslow`: without `-u` a killed or timed-out run loses
+every measured row to Python's buffer.  It is a harness-robustness change riding in the gate
+file, recorded explicitly because **a future bisect landing here for a buffering change in
+`sh_tlbmulti_probe.py` would otherwise find nothing in this record explaining why `#462`
+touched it.**  (Also in this diff and easy to miss: `check_probe_wiring.py`'s manifest
+one-liner now reads "#461 both default: arms + #462 the DMA+0x18 pair", a required sync so
+the wiring gate knows the probe's scope grew.)
+
+Original note: the failing line was visible, where a capture-at-the-end would have
+given silence.  Then the replacement constant was written `0x6313`, which is
+`mov.l @Rm+,Rn` -- a DIFFERENT instruction that also post-increments.  The correct value
+is `0x6312`, caught by computing the encoding instead of trusting the typing.  **Every
+hand-assembled constant in the probe was then audited against the SH encoding rules:
+seven checked, zero wrong.**
+
+*** THIS HEADING SAID `32 -> 41 rows, 41/41 measured (run462.out)`, AND IT WENT STALE
+INSIDE ITS OWN ROUND. ***  41/41 was real, and then pass 2 added three rows -- `nodata
+quiet`, `accept event`, `nodata idle` -- so both the count and the cited log describe a
+superseded detector.
+
+**Fifth generation of the frozen-number defect in this session**, and the pattern is now
+clear enough to name: the number is written when the section is DRAFTED, the row count
+then changes, and the number rots. The rule this session adopted -- *a score claim names
+its log* -- lets a reader CATCH that, and did here, but it does not prevent it.
+
+> **The prevention is ordering: do not write a detector count until the round is ready to
+> commit.** A drafted section can carry the sentence "the measurement is owed" at no cost;
+> a drafted number is a hostage to every later row.
+
+*** AND THE SIXTH GENERATION WAS THIS PARAGRAPH ITSELF. ***  The heading was
+corrected and annotated -- and the SUPERSEDED BODY was left sitting directly BELOW
+its own correction notice, where a reader takes it as current.  It still said "nine
+rows" and "three de-escalation ACCEPT rows" after both numbers had moved twice.
+
+**Correcting a heading is not correcting a record.**  The oracle-correction rule
+already says a re-pin must correct the false record IN PLACE rather than silently
+supersede it; the same applies to prose, and half-applying it -- annotate the top,
+leave the body -- is worse than not annotating at all, because the annotation
+advertises that the section has been checked.
+
+*`#461`'s 32 rows were re-measured on the fixed build and are 32/32 -- TRANSCRIBED, not
+cited: no artifact is named for it, and this is the one score in this block that does not
+name its log, under a heading promising that every score does. Recorded as transcription
+rather than quietly left to read as measured -- both rounds edit
+the same device, so that is checked rather than assumed.*
+
+*One row name had to change before anything ran: `nodata survive` is 14 characters,
+exactly the `%-14s` column, leaving ZERO trailing spaces -- so the gate's `^$v  ` two-space
+match would have been UNSATISFIABLE and the row would have silently stopped being tested.
+Renamed to `nodata live`.  Caught by a name-length check, not by a confusing gate failure.*
+
+### Filed, not fixed: the warn bits are six of eight and the ninth fails SILENTLY
+
+This round took `d->warned` from four hand-assigned masks to six.  At nine,
+`warned |= (1u << 8)` truncates to 0 in a `uint8_t`: the latch never sets, the guard stays
+true forever, and **the diagnostic floods** -- the one behaviour every latch here exists to
+prevent, with no compile error and no runtime complaint.  A duplicate hand-assigned mask
+fails the same way for a different reason.
+
+`dev_sh4.c:124-263` already did the equivalent conversion for its `SH4_VAL_*` classes, and
+it landed on time because its trigger was set in advance.  Filed as `gdromwarnbits` with
+the same device: **at the seventh bit**, widen `warned` and convert to an enum of bit
+positions ending in a count.  Setting the trigger now costs nothing.
+
+### A records defect fixed inside the hunk
+
+The transfer diagnostic printed `length`, the guest's `+0x08` register, while `memory_rw`
+moves `d->data_len`. It lied in exactly the sessions where the two disagree. It now prints
+what was transferred and what the guest asked for.
+
+### A citation-drift note, because this is the fourth instance and the fix is general
+
+This block first cited the two arms as `:804` and `:820`. **Both numbers were wrong even
+as PRE-FIX positions** -- at HEAD those `exit(1)`s are at `:829` and `:845`; `:804`/`:820`
+came from a working tree that already carried earlier edits of this round. And they could
+not be repaired by shifting, because *the round removes the thing being cited*: after the
+fix neither line holds an `exit(1)` at all.
+
+> **So the arms are named by what they ARE, with line numbers as locators carrying an
+> explicit "on HEAD" / "now".**  A diagnostic string or an arm's condition survives an
+> edit; a line number does not, and a line number for code the round DELETES cannot
+> survive by construction.
+
+*Measured for the record: live `exit(1)` in this file goes 8 -> 6, and the two that leave
+are exactly this round's pair.*
+
 ## Round 461 (#461) -- both `default:` arms, and roughly 248 of 256 offsets were lethal
 
 `dev_dreamcast_gdrom.c` registers a **0x100 window** at `0x005f7000` and implements **eight**

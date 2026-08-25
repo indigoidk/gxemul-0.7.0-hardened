@@ -36,6 +36,81 @@ decode on an UNMODIFIED in-tree machine description.
 
 CONTROLS RUN IN THEIR OWN SESSIONS AND NEVER TOUCH AN UNIMPLEMENTED OFFSET,
 so a red trigger row cannot be confused with a broken session.
+
+*** CONTRACT (vacuity floor clause (e)) -- WHAT THESE ROWS ARE DESIGNED TO
+CATCH, WHAT THEY ARE NOT, AND WHAT IS KNOWN TO ESCAPE THEM. ***  A detector
+that says so is falsifiable; one claiming completeness is not, and a later
+escape then becomes an argument about overclaiming instead of a contract
+question with an answer.
+
+SCOPE.  This contract covers the #462 `case 0x18` DMA rows added below.  The
+#461 `default:`-arm rows are governed by the census header above; an escape
+against one of THOSE is adjudicated there, not here.
+
+DESIGNED TO CATCH -- each backed by a mutant that measurably reddens a row,
+not by intent:
+
+  * reinstatement of either `exit(1)`                        (Mb1, Mb2)
+  * loss, RELOCATION, CONDITIONING or LATCH-SCOPING of the
+    `idata = 0` shadow clear, at either declining arm or at
+    the success arm                          (M1, M3, M6, M7, M12)
+  * collapse of the two warn-bit latches onto ONE bit (M2), or
+    loosening of the ARMING latch into a counter (M4)
+  * a completion event SET on a declined transfer            (M8, M9)
+  * outward growth of the arming test                        (M10)
+  * an operand swap in the no-data guard                     (M11)
+  * REFUSAL OR CORRUPTION OF A LEGAL TRANSFER -- legal arming still enters
+    the path, the completion still fires, and the device's own TOC byte
+    still lands                                              (M5)
+
+*** THE `idata = 0` VERB LIST IS DELIBERATELY WIDE. ***  The mutants do not
+merely DELETE that clear: M3 relocates it after the `break`, M6 conditions it
+on fresh-device state, M12 scopes it inside the latch.  A contract saying only
+"loss" would let a future conditioning escape be argued outside it.
+
+*** AND THE LATCH CLAUSE IS DELIBERATELY NARROW. ***  M4 is anchored on
+`GDROM_W_DMAARM`, so only the ARMING latch is measured; NO mutant loosens the
+no-data latch alone.  Claiming "either latch" would be an overclaim inside a
+contract, which is worse than not writing one.
+
+KNOWN TO ESCAPE -- measured, filed, and named here so a rediscovery can be
+adjudicated instead of re-argued:
+
+  * `gdromdmaclear` -- a completion event CLEARED on a decline.  The SET
+    direction is caught (M8/M9); the CLEAR direction escapes every row.
+  * `gdromdmaguard` -- `count == 1` widened to `count <= 1`, so `(0,1)` is
+    accepted.  `arm halfarm` cannot see it.
+  * `gdromdmasilent` -- `if (idata != 0)` narrowed to `if (idata == 1)`.
+
+*** THAT LIST IS THE HALF THAT DOES THE ADJUDICATING. ***  Without it, the
+next reader to rediscover `gdromdmaclear` cannot tell a FLOOR BREACH (L2, fix
+in-round) from FILED COVERAGE DEBT -- which is exactly the distinction clause
+(e) exists to make mechanical.
+
+NOT CAUGHT, structurally:
+
+  * *** THE SURVIVAL ROWS DETECT PROCESS TERMINATION ONLY. ***  `arm survive`,
+    `nodata live` and `nodata stale` compute `"survived" if alive else "died"`,
+    and `alive` is False ONLY on EOF -- so they are true of an emulator that is
+    HUNG but has not exited.  Their claim is that the host does not END, which
+    is what their notes say and is weaker than "the host is healthy".
+    Hang-shaped regressions are the IDLE rows' subject, not theirs.
+
+  * The `absent` path is DESIGNED to fire when a readback produces no output
+    (e.g. a wedged handler).  It HAS fired once --
+    `regress/artifacts/kill462/table3_58rows/probe_M11.raw`, row `stale idle`
+    -- and that firing's CAUSE IS UNATTRIBUTED: a hang and a session
+    outrunning its spin budget are both consistent with it.  Detection is
+    proven; diagnosis is not claimed.
+
+  * No row observes interrupt ASSERTION.  The completion rows observe the
+    SYSASIC pending register, which is a different channel.
+
+Filed for the gaps rather than left implicit: `probetimebased` carries the
+liveness predicate's soundness defect and its fix shape (a three-state
+predicate -- terminated / responsive / unresponsive), and `lethalonly` carries
+the one row whose only kill is lethal.
+
 """
 import os
 import pty
@@ -55,6 +130,16 @@ SCRATCH = 0x8c001800
 
 BASE = 0xa05f7000              # the 0x100 window, via P2 (uncached)
 DMA = 0xa05f7400               # the DMA window, 0x80, SEPARATELY registered
+GDROM_CNTLO = 0xa05f7090      # #460's probe drives these to stage a TOC
+GDROM_CNTHI = 0xa05f7094
+GDROM_COND  = 0xa05f709c
+GDROM_DATAP = 0xa05f7080      # ...and the CONTROL window's data port (+0x80)
+SYSASIC_PEND = 0xa05f6900     # pending_irq[0], guest-READABLE (dev_dreamcast_asic.c:130)
+SYSASIC_DMA_BIT = 0x4000      # SYSASIC_EVENT_GDROM_DMA is 14, so bit 14
+DMA_DST_P1 = 0x8c008000       # the accept session's destination, via P1.
+#  The session writes 0x0c008000 into +0x04 and the device masks it with
+#  0x0fffffff, so physical 0x0c008000 is what the transfer targets.  CODE
+#  is 0x8c001000 and the TOC is 408 bytes, so the two never overlap.
 IMPLEMENTED_WORDS = (0x18, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94, 0x9c)
 IMPL_BUSY = BASE + 0x18        # implemented: returns d->busy
 IMPL_CNTLO = BASE + 0x90       # implemented: returns d->cnt & 0xff
@@ -76,7 +161,16 @@ MOV_W_AT_R3_R2 = 0x6231       # mov.w @r3,r2
 ADD_4_R1 = 0x7104             # add #4,r1
 MOV_B_R6_AT_R5 = 0x2560       # mov.b r6,@r5
 MOV_W_R6_AT_R5 = 0x2561       # mov.w r6,@r5
+MOV_L_AT_R1_R3 = 0x6312       # mov.l @r1,r3.  0110nnnnmmmm0010 with n=3 m=1;
+#  0x6313 -- which this line first said -- is `mov.l @Rm+,Rn`, a DIFFERENT
+#  instruction that also post-increments r1.  Caught by computing the encoding
+#  instead of trusting the typing, which is the hand-assembled-encoding trap the
+#  carrier records: a wrong field yields a plausible value and no error.  The
+#  sibling MOV_L_AT_R1_R2 = 0x6212 (n=2 m=1) is the cross-check.
+MOV_L_R2_AT_R1 = 0x2122       # mov.l r2,@r1  (n=1 m=2)
 MOV_L_R6_AT_R5 = 0x2562       # mov.l r6,@r5  (0010nnnnmmmm0010, n=5 m=6)
+MOV_L_R4_AT_R3 = 0x2342       # mov.l r4,@r3  (0010nnnnmmmm0010, n=3 m=4)
+MOV_B_AT_R1_R4 = 0x6410       # mov.b @r1,r4  (0110nnnnmmmm0000, n=4 m=1)
 BRA_SELF = 0xaffe
 NOP = 0x0009
 
@@ -583,6 +677,490 @@ for off in (0x04, 0x08, 0x0c, 0x14, 0x18):
     alive = alive and aa
 row("dma accept", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "0",
     "all five implemented DMA offsets stay off the default arm")
+
+#  ========================================================================
+#  #462: the DMA+0x18 pair.  Both sites ENDED THE HOST PROCESS on the
+#  committed build, each measured with its own device-signature control.
+#
+#  The design came out of a three-way disagreement that measurement settled:
+#  two seats said de-fatalising would HANG Linux in its poll loop; one said
+#  latch-and-break; the flagship seat read the driver and found BOTH
+#  incomplete -- every wait in that path is time-bounded (HZ*7 after the
+#  trigger, HZ/2 before it), so a decline gives bounded EIO rather than a
+#  hang, BUT a bare `break` leaves the trigger value in the shadow.
+DMA_ARM = re.compile(r"unsupported arming, declined")
+DMA_NOD = re.compile(r"DMA start with no staged data -- declined")
+
+#  --- the ARMING-MISMATCH arm (on HEAD :845), armed wrongly
+#  (count/enable not both 1 on a fresh device) ---
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1"],
+                        [MOV_L_R8_AT_R7]) + ["print r8"])
+row("arm survive", "survived" if alive else "died", "survived",
+    "one store to +0x18 no longer ends the host")
+row("arm says", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
+    "and the decline SPEAKS -- a silent decline is what this round argued against")
+
+#  *** THE ROW THAT MATTERS, and no panel seat named the defect it pins. ***
+#
+#  The window's tail store writes idata into dma_reg[6] after every aligned
+#  break, and the SUCCESS arm sets `idata = 0` first -- which is why a
+#  completed transfer polls idle.  Drop the exit(1) and simply break, the
+#  shape #447/#459/#460/#461 all used at their sites, and the guest's
+#  trigger value 1 reaches the shadow: +0x18 then reads BUSY FOREVER.
+#
+#  Linux survives that (bounded waits) -- and Linux is the guest this rests
+#  on: mainline byte-reads +0x18 to poll completion.  *** THE NetBSD HALF OF
+#  THIS COMMENT WAS WRONG AND IS CORRECTED HERE. ***  It cited
+#  `while ((GDROM_BUSY & 0x88) != 0x08) ;` as an unbounded poll of +0x18.
+#  That loop needs bit 3 SET and bit 7 CLEAR; +0x18 is {0, 1} and neither
+#  ANDs to 0x08, so it would hang on CORRECT hardware.  It is the
+#  command-start handshake on the CONTROL window's BUSY register, which
+#  dev_dreamcast_gdrom.c's GDROM_COND case documents outright.  This row is
+#  still the difference between the fix and the obvious fix.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=0"],
+                        [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
+row("arm idle", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 reads IDLE after a declined trigger, not busy-forever")
+
+#  *** A CLAUSE (d) ESCAPE, NAMED BY A PACKET-FED SEAT ON THE PASS-2 BRIEF
+#  AND CONFIRMED BY READING THIS FILE.  It keeps BOTH guards and BOTH
+#  diagnostics and nulls only the repair:
+#
+#      if (d->dma_reg[0x0c / sizeof(uint32_t)] == 0 &&
+#          d->dma_reg[0x14 / sizeof(uint32_t)] == 0)
+#              idata = 0;
+#
+#  `arm idle` above writes ONLY +0x18, so on a fresh device count and enable
+#  are both 0, that condition is TRUE, and the row stays green -- while every
+#  OTHER arming mismatch sticks busy-forever.  The row written to pin the
+#  repair could not see the repair being nulled, which is the same structural
+#  blindness `dma alias` had against the one-character `m_align1`.
+#
+#  This row arms HALF way: count=1 with enable still 0.  That is a real guest
+#  state -- a driver interrupted between its two arming stores -- and it makes
+#  the mutant's condition FALSE.
+#
+#  NOTE the poison preset `r2=0x5a`, which the two older idle rows do not use.
+#  They preset r2=0 and EXPECT 0x0, so a load that never executed would read
+#  as a pass; their measured kills discharge that, but the shape is fragile.
+#  0x5a is neither the expected 0x0 nor the sticky 0x1, so this row tells
+#  green, sticky and never-ran apart BY VALUE.
+t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
+                         "r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=0x5a"],
+                        [MOV_L_R4_AT_R3, MOV_L_R8_AT_R7, MOV_L_AT_R1_R2])
+                   + ["print r2"])
+row("arm halfarm", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 idle after a HALF-armed decline (count=1, enable=0)")
+
+#  *** ONE SESSION THAT DRIVES BOTH DECLINE ARMS. ***  A seat predicted, before
+#  the table ran, that a mutant collapsing the two arms onto a SHARED warn bit
+#  would escape every row -- because no session anywhere reaches both arms, so
+#  the first arm's latch silencing the second is unobservable.  This closes it:
+#  a bare trigger takes the ARMING arm, then arming properly and triggering
+#  again takes the NO-STAGED-DATA arm, and BOTH must speak.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r3=0x%x" % (DMA + 0x0c), "r4=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R4_AT_R3, MOV_L_R6_AT_R5,
+                         MOV_L_R2_AT_R1]))
+row("both decl",
+    ("%d" % (len(DMA_ARM.findall(t)) + len(DMA_NOD.findall(t)))) if alive else "died",
+    "2", "BOTH decline arms in one session must EACH speak (separate latches)")
+
+#  the latch: a guest that retries must not flood
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r5=0x%x" % (DMA + 0x18), "r6=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5]) + ["print r8"])
+row("arm once", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
+    "TWO triggers -> ONE line")
+
+#  --- the NO-STAGED-DATA arm (on HEAD :829).  NOTE the row name:
+#  `nodata survive` was 14 characters, exactly
+#  the %-14s column, leaving ZERO trailing spaces -- so the gate's `^$v  `
+#  two-space match becomes UNSATISFIABLE and the row silently stops being
+#  tested.  Caught by a name-length check before anything ran.  `nodata live`
+#  is 11.
+#  --- the NO-STAGED-DATA arm (on HEAD :829), armed correctly but
+#  nothing staged.  A COMPLIANT guest reaches
+#  this: Linux programs the four DMA registers BEFORE sending its packet, so
+#  a short image or a refused sector count leaves d->data NULL and the guest,
+#  told nothing it checks, triggers anyway.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1]))
+row("nodata live", "survived" if alive else "died", "survived",
+    "arming with no staged data no longer ends the host")
+row("nodata says", ("%d" % len(DMA_NOD.findall(t))) if alive else "died", "1",
+    "and it names itself exactly once")
+
+#  *** THE DECLINED PATH MUST NOT ANNOUNCE A TRANSFER IT DOES NOT RUN. ***
+#  Two seats found this independently from opposite directions: the
+#  `Transfering %i bytes` fatal sits ABOVE the `d->data == NULL` test, so the
+#  declined session printed "Transfering 0 bytes ..." and then "declined".  The
+#  round's own comment claimed that line "prints data_len, the count actually
+#  transferred" -- on this path nothing is transferred at all, so the claim was
+#  false about the very path the round adds.  This row costs nothing: it reads
+#  the transcript already in hand.
+row("nodata notx", ("%d" % t.count("Transfering")) if alive else "died", "0",
+    "a declined transfer must not ANNOUNCE itself as running")
+
+#  *** THE STRUCTURAL TWIN OF `arm idle`, AND TWO SEATS FOUND IT MISSING
+#  INDEPENDENTLY. ***  Without it the `idata = 0` at the
+#  NO-STAGED-DATA arm is UNPINNED, so the
+#  smallest possible regression -- deleting one line -- passes green.  The
+#  sibling site had its row from the start; this one did not, which is the
+#  asymmetry a reader of the fix would never notice.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1])
+                   + ["r1=0x%x" % (DMA + 0x18), "r2=0"]
+                   + run([MOV_L_AT_R1_R2], CODE + 0x200) + ["print r2"])
+row("nodata idle", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 reads IDLE after the no-data decline too")
+
+#  *** THE ROW THAT CLOSES THE ACTIVELY-HARMFUL MUTANT.  A seat measured that
+#  firing SYSASIC_TRIGGER_EVENT on a declined path passes every other row here,
+#  because nothing reads the pending register. ***
+#
+#  Why that mutant is worse than the defect this round fixes: the guest's
+#  gdrom_dma_interrupt() clears gd.transfer UNCONDITIONALLY and inspects no
+#  error bit, so a completion signalled on an EMPTY transfer ends the wait with
+#  BLK_STS_OK -- the block layer is told the read succeeded while zero bytes
+#  moved, and the guest consumes the destination page AS DISK DATA.  A host
+#  death is loud; that is silent.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1])
+                   #  poison 0x4000, NOT 0 -- these two quiet rows expect "clear",
+                   #  so with a 0 preset a load that never executed reads as a PASS
+                   #  BY VALUE.  Their M8/M9 kills discharge vacuity today, but the
+                   #  shape was fragile and it skipped this file's own 0x5a/0xa5
+                   #  poison discipline.  Presetting the FAILURE-reading value makes
+                   #  never-ran distinguishable at zero cost.
+                   + ["r1=0x%x" % SYSASIC_PEND, "r2=0x4000"]
+                   + run([MOV_L_AT_R1_R2], CODE + 0x200) + ["print r2"])
+_p = printed(t, "r2") if alive else "died"
+row("nodata quiet",
+    ("clear" if (_p != "died" and not (int(_p, 16) & SYSASIC_DMA_BIT))
+     else _p), "clear",
+    "a DECLINED trigger must NOT signal completion")
+
+
+#  *** THE ACCEPT BOUNDARY WAS ONLY EVER PROBED FROM THE NARROWING SIDE, and
+#  THREE SEATS FOUND THAT INDEPENDENTLY on the ask-again. ***
+#
+#  The arming test is `count == 1 && enable == 1`.  M5 moved the boundary IN
+#  (`== 2`) and the accept rows caught it.  Nothing moved it OUT.  Every row in
+#  this file drives (count, enable) at (0,0), (1,0) or (1,1) -- and at all three
+#  points `== 1` and `!= 0` agree, so widening to `count && enable`, `>= 1` or
+#  bare truthiness is INDISTINGUISHABLE to the whole table.
+#
+#  `arm halfarm` is the row built to probe this predicate off its canonical
+#  points, and it cannot see this: it half-arms by ZEROING a register, never by
+#  EXCEEDING one, so at (1,0) both forms are false.  Same structural blindness
+#  as `dma alias` against `m_align1`.
+#
+#  TWO rows, not one, because each comparison can be widened ALONE: a (2,1) row
+#  is green under an enable-only widening.
+t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=2",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r7=0x%x" % (DMA + 0x18), "r8=1"],
+                        [MOV_L_R4_AT_R3, MOV_L_R6_AT_R5, MOV_L_R8_AT_R7]))
+row("arm count2",
+    ("%d/%d" % (len(DMA_ARM.findall(t)), len(DMA_NOD.findall(t)))) if alive else "died",
+    "1/0", "count=2 enable=1 must still be REFUSED, not widened into accept")
+
+t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=2",
+                         "r7=0x%x" % (DMA + 0x18), "r8=1"],
+                        [MOV_L_R4_AT_R3, MOV_L_R6_AT_R5, MOV_L_R8_AT_R7]))
+row("arm enable2",
+    ("%d/%d" % (len(DMA_ARM.findall(t)), len(DMA_NOD.findall(t)))) if alive else "died",
+    "1/0", "enable=2 count=1 must still be REFUSED -- each half widens alone")
+
+#  *** THE NO-DATA ARM'S LATCH-SCOPED TWIN, AND `arm twice` DOES NOT COVER IT. ***
+#
+#  A seat found this on the capped ask-again and named the gap exactly: "that is
+#  the exact shape `arm twice` was written to close.  The row is arming-only.
+#  There is no `nodata twice`."  It then sat UNREAD for hours, because its
+#  verdict line was recorded and the answer behind it was not opened.
+#
+#  The mutant, which reads as tidying rather than as a change:
+#
+#      if (!(d->warned & GDROM_W_DMANODATA)) {
+#              d->warned |= GDROM_W_DMANODATA;
+#              fatal("[ ... no staged data -- declined ... ] (once) ]");
+#              idata = 0;        /* moved INSIDE */
+#      }
+#      break;
+#
+#  The FIRST no-data trigger still prints and still clears, so every existing
+#  row stays green -- they all trigger that arm exactly once in a freshly forked
+#  emulator.  Every LATER trigger leaves the guest's value in dma_reg[6] and
+#  +0x18 reads BUSY FOREVER.  Under the corrected clause (d) -- which enumerates
+#  the predicates a fix DEPENDS ON, not only those it adds -- that is
+#  guard-kept-repair-nulled: an L2 floor breach, fixed in-round however late.
+#
+#  Poison 0xa5 again, so never-ran (0xa5) is distinguishable from sticky (0x1).
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1",
+                         "r3=0x%x" % (DMA + 0x18), "r4=1"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1,
+                         MOV_L_R4_AT_R3])
+                   + ["r1=0x%x" % (DMA + 0x18), "r2=0xa5"]
+                   + run([MOV_L_AT_R1_R2], CODE + 0x220) + ["print r2"])
+row("nodata twice", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 idle after the SECOND no-data decline, not only the latched first")
+
+#  *** THE ARMING ARM'S OWN COMPLETION-EVENT ROW, and its absence was the
+#  round's one UNDISCHARGED OBLIGATION (L3).  `nodata quiet` above pins "a
+#  declined trigger must not signal completion" for ONE of the two declining
+#  arms.  The fix's own comment states that requirement as a design rule for
+#  BOTH.  Nothing carried it for the arming arm, so adding
+#  SYSASIC_TRIGGER_EVENT to that arm alone scored a clean sweep -- the round
+#  would have shipped its worst-case mutant half-closed.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r1=0x%x" % SYSASIC_PEND, "r2=0x4000"],
+                        [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
+_a = printed(t, "r2") if alive else "died"
+row("arm quiet",
+    ("clear" if (_a != "died" and not (int(_a, 16) & SYSASIC_DMA_BIT)) else _a),
+    "clear", "the ARMING decline must not signal completion either")
+
+#  *** THE LATCH-STATE MEMBER of the same family `arm halfarm` closes. ***  A
+#  seat pointed out that every idle row above triggers exactly ONCE in a
+#  freshly forked emulator, so moving `idata = 0` INSIDE the `if (!(d->warned
+#  & ...))` block passes all of them: the first and only observed decline still
+#  clears, and every later one sticks BUSY FOREVER.  `arm once` does trigger
+#  twice, but it counts diagnostics instead of reading +0x18.  This row reads
+#  +0x18 after the SECOND decline.
+t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+                         "r5=0x%x" % (DMA + 0x18), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=0x5a"],
+                        [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_AT_R1_R2])
+                   + ["print r2"])
+row("arm twice", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 idle after the SECOND decline, not only the latched first")
+
+#  *** THE LENGTH BLIND SPOT.  No row anywhere wrote DMA +0x08, so any repair
+#  conditioned on the guest's programmed length -- `if (!length) idata = 0;` --
+#  cleared on every row here (length is 0 throughout) while sticking BUSY for a
+#  Linux-shaped guest, which programs +0x08 BEFORE it triggers.
+t, alive = session(pair(["r3=0x%x" % (DMA + 0x08), "r4=0x800",
+                         "r7=0x%x" % (DMA + 0x0c), "r8=1",
+                         "r5=0x%x" % (DMA + 0x14), "r6=1",
+                         "r1=0x%x" % (DMA + 0x18), "r2=1"],
+                        [MOV_L_R4_AT_R3, MOV_L_R8_AT_R7, MOV_L_R6_AT_R5,
+                         MOV_L_R2_AT_R1])
+                   + ["r1=0x%x" % (DMA + 0x18), "r2=0x5a"]
+                   + run([MOV_L_AT_R1_R2], CODE + 0x200) + ["print r2"])
+row("nodata len", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 idle when a LENGTH was programmed first, as Linux does")
+
+#  *** THE WIDTH BLIND SPOT.  Every #462 store to +0x18 was 32-bit, so a repair
+#  conditioned on access width -- `if (len == 4) idata = 0;` -- passed the whole
+#  table.  This tree ALREADY established, in the `gdromdmawidth` assessment,
+#  that mainline Linux BYTE-writes this register, so that mutant is not
+#  hypothetical: it breaks the one guest whose behaviour the round documented.
+#
+#  *** AND THIS ROW ALSO CARRIES THE TRIGGER-VALUE CLOSE. ***  A seat observed
+#  that EVERY +0x18 trigger in every other row stores the value 1, so a repair
+#  written `idata &= ~1u;` or `idata -= 1;` -- both plausible as "clear the
+#  trigger bit" -- passed the whole table while any guest trigger >= 2 stuck.
+#  The arm fires on any nonzero and the diagnostic does not print the trigger,
+#  so triggering with 0x5a costs nothing and closes that family here.
+#
+#  NOTE the poison preset is 0xa5, NOT 0x5a as the other rows use.  The seat's
+#  suggestion was to trigger with 0x5a while keeping the 0x5a preset -- but then
+#  "the mutant left the trigger stuck" and "the load never executed" both read
+#  back 0x5a and the row could not tell them apart.  Trigger and poison must
+#  DIFFER, which is the same three-outcome discipline `accept data` uses.
+t, alive = session(pair(["r5=0x%x" % (DMA + 0x18), "r6=0x5a",
+                         "r1=0x%x" % (DMA + 0x18), "r2=0xa5"],
+                        [MOV_B_R6_AT_R5, MOV_L_AT_R1_R2]) + ["print r2"])
+row("arm bytetrig", printed(t, "r2") if alive else "died", "0x0",
+    "a BYTE trigger of 0x5a declines and clears -- not just a 32-bit 1")
+
+
+#  *** THE STATE THE FIX WAS WRITTEN FOR, AND UNTIL NOW NO ROW BUILT IT. ***
+#
+#  A seat observed that this detector sees `d->data` in TWO states and there are
+#  THREE:
+#      never-allocated      data == NULL, data_len == 0     <- every nodata row
+#      successfully-alloc   data != NULL, data_len == 408   <- the accept session
+#      FAILED COMMAND       data == NULL, data_len STALE    <- nothing, until now
+#
+#  The third is exactly what this round's own motivation describes: a command
+#  fails, `handle_command` frees `d->data` and leaves it NULL -- but NEVER resets
+#  `d->data_len`, which is assigned in `alloc_data` and nowhere else.
+#
+#  Why it matters beyond completeness: `if (d->data == NULL)` -> `if
+#  (d->data_len == 0)` reads as a tidy-up (the guard tests one field while the
+#  body it guards uses another) and scores a CLEAN SWEEP on the 52-row table,
+#  because in the only two states the table builds, both operands agree.  In the
+#  third state the mutated guard is FALSE and control reaches
+#  `memory_rw(..., d->data /* NULL */, d->data_len /* 408 */, ...)` -- a
+#  multi-kilobyte read from a NULL pointer.  The round's own defect class,
+#  restored through a different door.
+#
+#  CONSTRUCTION, and every constant is derived rather than guessed.  The data
+#  port fills the packet LOW BYTE FIRST (`cmd[n] = idata; cmd[n+1] = idata >> 8`),
+#  which is why the TOC staging writes 0x0014 to mean command 0x14.  So 0x2030
+#  gives cmd[0] = 0x30 (read sectors) and cmd[1] = 0x20 (the ONLY data format
+#  that does not itself exit).  cmd[8..10] stay zero, so sector_count is 0, and
+#  OB-20's clamp rejects and `break`s BEFORE `alloc_data` -- leaving data_len at
+#  the TOC's 408.
+t, alive = session(
+    ["r7=0x%x" % GDROM_CNTLO, "r8=0x98"] + run([MOV_W_R8_AT_R7])
+    + ["r7=0x%x" % GDROM_CNTHI, "r8=0x01"] + run([MOV_W_R8_AT_R7], CODE + 0x20)
+    + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x40)
+    + ["r7=0x%x" % GDROM_DATAP, "r8=0x0014"]
+    + run([MOV_W_R8_AT_R7] * 6, CODE + 0x60)
+    #  second command: 0x30 / format 0x20 / sector_count 0 -> OB-20 rejects
+    + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x100)
+    + ["r7=0x%x" % GDROM_DATAP, "r8=0x2030"]
+    + run([MOV_W_R8_AT_R7], CODE + 0x120)
+    + ["r8=0x0000"] + run([MOV_W_R8_AT_R7] * 5, CODE + 0x140)
+    #  arm correctly and trigger: data is NULL, data_len is STALE
+    + ["r7=0x%x" % (DMA + 0x0c), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1a0)
+    + ["r7=0x%x" % (DMA + 0x14), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1c0)
+    + ["r7=0x%x" % (DMA + 0x18), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1e0)
+    + ["r1=0x%x" % (DMA + 0x18), "r2=0xa5"]
+    + run([MOV_L_AT_R1_R2], CODE + 0x200) + ["print r2"])
+row("nodata stale", "survived" if alive else "died", "survived",
+    "FAILED-COMMAND state: data NULL, data_len STALE -- the fix's own path")
+row("stale says", ("%d" % len(DMA_NOD.findall(t))) if alive else "died", "1",
+    "and it declines by the NO-DATA arm, exactly once")
+row("stale idle", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 idle after the stale-length decline (0xa5 = the load never ran)")
+
+#  *** THE DE-ESCALATION ACCEPT ROW.  The fix removed TWO host-fatal
+#  predicates -- `d->data == NULL` and `count == 1 && enable == 1` -- and
+#  the clause says the detector must pin the ACCEPT SIDE of each, or the
+#  round has deleted a tripwire and shipped nothing in its place.
+#
+#  Before this fix, narrowing either predicate meant exit(1) on the first
+#  legal transfer: unmissable.  After it, the same edit means a SILENTLY
+#  REFUSED transfer and nothing anywhere notices.
+#
+#  *** ONE STAGING SESSION, FIVE ROWS -- and the sharing is the point, not the
+#  saving. ***  These rows used to stage independently, which cost five full TOC
+#  sequences and, worse, meant they observed five SIMILAR transfers.  Driven from
+#  one session they observe THE SAME transfer, so "the arming was accepted",
+#  "+0x18 polls idle", "no decline fired", "the event fired" and "the bytes
+#  landed" are five facts about ONE event.
+#
+#  A row set describing one transfer can contradict itself and be caught.  Five
+#  separate transfers can each be individually consistent and jointly wrong.
+#
+#  Staging is #460's sequence verbatim: CNTLO=0x98, CNTHI=0x01, COND=0xa0, then
+#  six halfword stores of 0x0014 into the data port.  The TOC command allocates
+#  d->data and fills it with DEVICE-GENERATED bytes (dev_dreamcast_gdrom.c:352-357
+#  writes 0x10,0x00,0x00,0x96 over a 0xff background).
+#
+#  *** THAT PATTERN IS THE DEVICE-SIGNATURE CONTROL, AND UNTIL `accept data` IT
+#  WAS CLAIMED AND NOT IMPLEMENTED. ***  The older wording here asserted "RAM
+#  could not produce that pattern" while NO row read the destination at all --
+#  a control named in prose and absent in fact, which is the shape this file
+#  exists to catch.  `accept data` below reads it back.
+#
+#  *** AND `accept idle` IS NOT AN ACCEPT ROW.  FOUR SEATS SAID SO INDEPENDENTLY.
+#  ***  It cannot redden under growth of EITHER de-fatalised predicate, because
+#  all three arms -- success, no-data and arming-mismatch -- clear `idata`.  Its
+#  own note admits it: "as the success arm has always done".  It is a LIVE row
+#  (deleting the success arm's `idata = 0` kills it) but it is a REGRESSION row
+#  for pre-existing success-arm behaviour, not an accept-side row, and counting
+#  it toward the de-escalation obligation was a wrong record.
+#
+#  The obligation is discharged by `accept dma`, `accept event`, `accept quiet`
+#  and `accept data`.
+t, alive = session(
+    ["r7=0x%x" % GDROM_CNTLO, "r8=0x98"] + run([MOV_W_R8_AT_R7])
+    + ["r7=0x%x" % GDROM_CNTHI, "r8=0x01"] + run([MOV_W_R8_AT_R7], CODE + 0x20)
+    + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x40)
+    + ["r7=0x%x" % GDROM_DATAP, "r8=0x0014"]
+    + run([MOV_W_R8_AT_R7] * 6, CODE + 0x60)
+    #  arm correctly and trigger: the path that must still work
+    + ["r7=0x%x" % (DMA + 0x04), "r8=0x0c008000"]
+    + run([MOV_L_R8_AT_R7], CODE + 0x100)
+    + ["r7=0x%x" % (DMA + 0x0c), "r8=1"]
+    + run([MOV_L_R8_AT_R7], CODE + 0x120)
+    + ["r7=0x%x" % (DMA + 0x14), "r8=1"]
+    + run([MOV_L_R8_AT_R7], CODE + 0x140)
+    + ["r7=0x%x" % (DMA + 0x18), "r8=1"]
+    + run([MOV_L_R8_AT_R7], CODE + 0x160)
+    #  and read BOTH observables from that one transfer
+    + ["r1=0x%x" % (DMA + 0x18), "r2=0"]
+    + run([MOV_L_AT_R1_R2], CODE + 0x180)
+    + ["r1=0x%x" % SYSASIC_PEND, "r3=0"]
+    + run([MOV_L_AT_R1_R3], CODE + 0x1a0)
+    #  *** AND READ THE DESTINATION.  Until this row, NO row anywhere observed
+    #  the DMA's data movement, so mutants that neutered the transfer itself --
+    #  `d->data_len` -> 0, or a different `dst` mask -- left every row green
+    #  while moving nothing.  The comment above ALSO claimed a device-signature
+    #  control that nothing implemented; this is that control.
+    #
+    #  handle_command's TOC arm fills d->data[0..3] with 0x10,0x00,0x00,0x96
+    #  over a 0xff background (dev_dreamcast_gdrom.c:352-357) and the DMA is a
+    #  byte copy, so dst+0 is 0x10 whatever the byte order -- a BYTE load needs
+    #  no endianness assumption, which a word load here would.
+    #
+    #  Three outcomes are distinguishable, which is the point:
+    #      0x10        the transfer ran and moved DEVICE-generated bytes
+    #      0xffffffea  it did NOT run -- see below
+    #      0x5a        the load itself never executed (the poison preset)
+    #
+    #  *** THE MIDDLE LINE SAID `0x0  it never ran (the destination page is
+    #  zero beforehand)` AND THE MUTANT TABLE MEASURED THAT FALSE. ***  Under
+    #  M5 (`count == 1` -> `count == 2`, so a legal transfer is refused) this
+    #  row read back 0xffffffea, not 0x0.  Two facts the original wording got
+    #  wrong, and only a mutant that stops the transfer could expose either:
+    #
+    #    * the destination page is NOT zero beforehand.  DMA_DST_P1 is
+    #      0x8c008000, 28 KB past CODE, and the session runs with a real
+    #      kernel image loaded -- so the byte already there is 0xea.
+    #    * `mov.b` SIGN-EXTENDS.  0xea has bit 7 set, so it arrives as
+    #      0xffffffea.  0x10 does not, which is why the ran-case is clean.
+    #
+    #  The row still discriminates -- 0x10, 0xffffffea and 0x5a are three
+    #  distinct values -- so the ROW is sound and only its stated REASON was
+    #  wrong.  That is worth separating: a green row with a false explanation
+    #  is a wrong record, not a vacuous row, and the fix is the comment.
+    #
+    #  Do NOT re-pin this row on 0xffffffea: that value is whatever the loaded
+    #  image happens to put at that address, so it is an artefact of the
+    #  KERNEL argument and not a property of the device.  The row asserts
+    #  0x10 -- the device's own TOC byte -- and everything else is a failure.
+    + ["r1=0x%x" % DMA_DST_P1, "r4=0x5a"]
+    + run([MOV_B_AT_R1_R4], CODE + 0x1c0)
+    + ["print r2", "print r3", "print r4"])
+
+#  NOTE the wording.  This row was recorded as proving "a LEGAL armed transfer
+#  with staged data still runs"; it proves the ARMING TEST passed and nothing
+#  more, because the `Transfering` fatal printed BEFORE the `d->data == NULL`
+#  check.  `accept data` below is the row that proves the transfer ran.
+row("accept dma", "yes" if ("Transfering" in t and alive) else "no", "yes",
+    "a LEGAL arming is still accepted and enters the transfer path")
+#  NOT an accept row -- see the block above.  Kept because it is live.
+row("accept idle", printed(t, "r2") if alive else "died", "0x0",
+    "+0x18 polls IDLE after a real transfer (success-arm regression row)")
+_q = printed(t, "r3") if alive else "died"
+row("accept event",
+    ("set" if (_q != "died" and (int(_q, 16) & SYSASIC_DMA_BIT)) else _q),
+    "set", "a REAL transfer DOES signal completion")
+row("accept quiet",
+    ("%d" % (len(DMA_ARM.findall(t)) + len(DMA_NOD.findall(t)))) if alive else "died",
+    "0", "with NEITHER decline diagnostic -- the accept side is not refused")
+row("accept data", printed(t, "r4") if alive else "died", "0x10",
+    "and the DEVICE's own TOC byte actually LANDED at the destination")
+
 
 n = sum(1 for _, ok in rows if ok)
 print("GDROM_DEF_RESULT=%d/%d" % (n, len(rows)))

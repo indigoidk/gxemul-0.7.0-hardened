@@ -188,7 +188,7 @@ MANIFEST = {
     "sh_tlbmulti_probe.py":        (CLASS_DETECTOR, "#457 SH TLB multiple hit"),
     "sh_pclock_probe.py":          (CLASS_DETECTOR, "#459 SH pclock: declines instead of exit(1)"),
     "gdrom_data_probe.py":         (CLASS_DETECTOR, "#460 GDROM_DATA: four exits, no legal first touch"),
-    "gdrom_default_probe.py":      (CLASS_DETECTOR, "#461 both default: arms, 32 rows"),
+    "gdrom_default_probe.py":      (CLASS_DETECTOR, "#461 both default: arms + #462 the DMA+0x18 pair"),
     "sh_iprbcd_probe.py":          (CLASS_DETECTOR, "#458 SH IPRB/IPRC/IPRA-RTC priority table"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 

@@ -196,6 +196,27 @@ struct dreamcast_gdrom_data {
 #define	GDROM_W_NODATA	0x02
 #define	GDROM_W_NOTWAIT	0x04
 #define	GDROM_W_OVERREAD	0x08
+#define	GDROM_W_DMANODATA	0x10
+#define	GDROM_W_DMAARM		0x20
+
+/*
+ *  *** SIX OF EIGHT BITS ARE USED, AND THE NINTH FAILS SILENTLY. ***  Filed
+ *  as `gdromwarnbits` with a PRE-SET TRIGGER: at the SEVENTH bit, widen
+ *  `warned` and convert these to an enum of bit POSITIONS ending in a
+ *  GDROM_W_NBITS count, with each mask defined as `1u << ..._B`.
+ *
+ *  Why it is worth a trigger rather than a note: `warned |= (1u << 8)`
+ *  truncates to 0 in a uint8_t, so the latch never sets, the guard stays
+ *  true forever, and the diagnostic FLOODS -- which is the one behaviour
+ *  every latch here exists to prevent, arriving with no compile error and
+ *  no runtime complaint.  A duplicate hand-assigned mask fails the same way
+ *  for a different reason: the second site is silenced by the first.
+ *
+ *  dev_sh4.c:124-263 already did the equivalent conversion for its
+ *  SH4_VAL_* classes -- 'correct by construction instead of by
+ *  maintenance' -- and it landed on time because ITS trigger was set in
+ *  advance too.  Setting this one now costs nothing.
+ */
 
 
 // See the interrupt routine (gdrom_intr()) in NetBSD's dreamcast/dev/gdrom.c:
@@ -822,12 +843,111 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 				// GDROM DMA transfer.
 				uint32_t dst = d->dma_reg[0x04 / sizeof(uint32_t)];
 				int length = d->dma_reg[0x08 / sizeof(uint32_t)];
-				fatal("[ dreamcast_gdrom_dma: Transfering %i bytes to 0x%08" PRIx32" ]\n", length, dst);
-
 				if (d->data == NULL) {
-					fatal("dreamcast_gdrom_dma: DMA transfer but d->data is NULL. TODO\n");
-					exit(1);
+					/*
+					 *  #462: was exit(1).  A guest can reach this WITHOUT
+					 *  doing anything wrong: Linux's gdrom_readdisk_dma
+					 *  programs the four DMA registers BEFORE sending its
+					 *  packet, so if diskimage_access fails on a short image
+					 *  -- or OB-20's sector clamp refuses the request --
+					 *  handle_command leaves d->data NULL and the guest,
+					 *  told nothing it checks, triggers anyway.  Two shipped
+					 *  defensive declines were feeding a host kill.
+					 *
+					 *  *** THE `idata = 0` IS LOAD-BEARING AND THE OBVIOUS
+					 *  FIX OMITS IT. ***  The tail store below writes idata
+					 *  into dma_reg[6] after every aligned break, and the
+					 *  SUCCESS arm clears it for exactly that reason -- which
+					 *  is why a completed transfer polls idle.  Drop the
+					 *  exit(1) and simply break, as #447/#459/#460/#461 all
+					 *  did at their sites, and the guest's trigger value 1
+					 *  reaches the shadow: +0x18 then reads BUSY FOREVER.
+					 *  Linux survives that (its waits are time-bounded), and it
+					 *  is the guest this claim rests on: mainline byte-reads
+					 *  +0x18 to poll completion, per this tree's own
+					 *  `gdromdmawidth` assessment.
+					 *
+					 *  *** THIS COMMENT USED TO CITE NetBSD, AND THAT CITATION
+					 *  WAS WRONG. ***  It said NetBSD's status waits are
+					 *  unbounded spins, exhibiting
+					 *  `while ((GDROM_BUSY & 0x88) != 0x08) ;`.  That loop exits
+					 *  only when bit 3 is SET and bit 7 CLEAR, and +0x18 is
+					 *  {0 idle, 1 busy} -- neither ANDs to 0x08, so it would
+					 *  hang on CORRECT hardware.  It is the command-start
+					 *  handshake on the CONTROL window's BUSY register: see
+					 *  the GDROM_COND case in this same file, which documents
+					 *  it and sets `d->busy |= 0x08` in reply.  The exhibit was
+					 *  lifted from there and re-pointed at a register it says
+					 *  nothing about.  Filed as `gdromdriverclaims`.
+					 *
+					 *  *** AND THE COMPLETION EVENT MUST NOT FIRE. ***  A
+					 *  completion on a DECLINED transfer would be a FALSE SUCCESS;
+					 *  the mechanism, and why a detectable stall is the honest
+					 *  failure, are in the `As reported` paragraph below.
+					 *  (This sentence was severed mid-word when that block was
+					 *  inserted after its opening `A`.  A first repair restated
+					 *  the whole argument here and duplicated it ~24 lines apart
+					 *  in one comment block; the words were right, they belong
+					 *  once.)
+					 *
+					 *  *** THE THREE DRIVER CLAIMS IN THIS COMMENT ARE
+					 *  SEAT-REPORTED, NOT VERIFIED LOCALLY.  There is no copy
+					 *  of Linux's drivers/cdrom/gdrom.c or NetBSD's
+					 *  sys/arch/dreamcast/dev/gdrom.c anywhere in this tree, so
+					 *  nothing here can be re-derived by a later reader. ***
+					 *  This is the #357/#362/#365 shape -- DDI 0100I page numbers
+					 *  that came from panel output rather than a local manual and
+					 *  held by luck.  If the claim below is wrong, the choice to
+					 *  decline WITHOUT signalling completion is wrong.  Filed as
+					 *  `gdromdriverclaims`; obtaining the two sources is cheap and
+					 *  is what settled the SH case.
+					 *
+					 *  As reported: gdrom_dma_interrupt() clears
+					 *  gd.transfer UNCONDITIONALLY and inspects no error
+					 *  bit, so signalling completion on an empty transfer
+					 *  ends the wait with BLK_STS_OK -- the block layer is
+					 *  told the read SUCCEEDED while zero bytes moved, and
+					 *  the guest consumes the destination page as disk data.
+					 *  That is #460's invented-behaviour class at the block
+					 *  layer.  The driver has ONE error channel, its 7-second
+					 *  timeout, so guest-visible EIO is not a compromise --
+					 *  it is the only honest signal available here.
+					 */
+					if (!(d->warned & GDROM_W_DMANODATA)) {
+						d->warned |= GDROM_W_DMANODATA;
+						fatal("[ dreamcast_gdrom_dma: DMA start with no"
+						    " staged data -- declined, the transfer does"
+						    " not run.  (once) ]\n");
+					}
+					idata = 0;
+					break;
 				}
+
+				/*
+				 *  *** AND IT SAT ABOVE THE `d->data == NULL` TEST, so the DECLINED
+				 *  path announced a transfer it never ran -- while the comment below
+				 *  claimed this line prints "the count actually transferred".  Three
+				 *  seats found it independently on the pass-2 diff.
+				 *
+				 *  Moved BELOW the check, and left ABOVE the `dst &= 0x0fffffff` mask,
+				 *  so the ADDRESS it prints is unchanged by the move.
+				 *
+				 *  (This said "the round is only fixing WHEN it says it", which the
+				 *  diff refutes: a separate hunk also changes WHAT it says, `length`
+				 *  -> `d->data_len` plus the `guest asked for` clause.  Corrected in
+				 *  the CHANGELOG first and HERE second -- the sibling this file's own
+				 *  grep-for-siblings rule exists to catch.)
+				 *
+				 *  Pinned by `nodata notx`, MEASURED RED on the pre-move build
+				 *  (50/51, sole red -- probe_pre51.raw).
+				 */
+				/*  #462: prints data_len, the count actually transferred.  It
+				    printed `length` -- the guest's +0x08 register -- while the
+				    memory_rw below moves d->data_len, so the line lied in
+				    exactly the sessions where the two disagree.  */
+				fatal("[ dreamcast_gdrom_dma: Transfering %i bytes to 0x%08"
+				    PRIx32 " (guest asked for %i) ]\n",
+				    (int) d->data_len, dst, length);
 
 				dst &= 0x0fffffff;	// 0x8c008000 => 0x0c008000
 				cpu->memory_rw(cpu, cpu->mem, dst,
@@ -837,12 +957,33 @@ DEVICE_ACCESS(dreamcast_gdrom_dma)
 
 				idata = 0;
 			} else {
-				fatal("Unimplemented GDROM DMA start? TODO\n");
-				fatal("  %08x\n", (int) d->dma_reg[4 / sizeof(uint32_t)]);
-				fatal("  %08x\n", (int) d->dma_reg[8 / sizeof(uint32_t)]);
-				fatal("  %08x\n", (int) d->dma_reg[0xc / sizeof(uint32_t)]);
-				fatal("  %08x\n", (int) d->dma_reg[0x14 / sizeof(uint32_t)]);
-				exit(1);
+				/*
+				 *  #462: was exit(1).  MEASURED on the pre-fix build:
+				 *  ONE guest store of 1 to +0x18 on a fresh device ends
+				 *  the host process, because count and enable are both 0
+				 *  and this arm runs.  The device-signature control --
+				 *  the identical store to the implemented +0x04 -- leaves
+				 *  the host alive.
+				 *
+				 *  Same `idata = 0` requirement as the sibling above, and
+				 *  the same reason: without it the trigger value sticks in
+				 *  the shadow and +0x18 reads busy forever.
+				 */
+				if (!(d->warned & GDROM_W_DMAARM)) {
+					d->warned |= GDROM_W_DMAARM;
+					fatal("[ dreamcast_gdrom_dma: DMA start with dst"
+					    " 0x%08x len 0x%x count %i enable %i --"
+					    " unsupported arming, declined.  (once) ]\n",
+					    /*  #462 pass 2: %x requires unsigned int; a seat pointed out
+					        that (int) is UB by the C format rules even though common
+					        ABIs print the expected bits.  The count and enable args
+					        below are %i and correctly stay int.  */
+					    (unsigned int) d->dma_reg[4 / sizeof(uint32_t)],
+					    (unsigned int) d->dma_reg[8 / sizeof(uint32_t)],
+					    (int) d->dma_reg[0xc / sizeof(uint32_t)],
+					    (int) d->dma_reg[0x14 / sizeof(uint32_t)]);
+				}
+				idata = 0;
 			}
 		}
 		break;			
