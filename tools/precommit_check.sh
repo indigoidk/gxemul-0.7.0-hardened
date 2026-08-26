@@ -306,7 +306,7 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  label gains a word before the stem, or when the count moves to a variable --
 	#  all of which leave the gate behaving identically.  That is why the count is
 	#  asserted at all.
-	SCORE_CLAIMS_MANIFEST=18
+	SCORE_CLAIMS_MANIFEST=19
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

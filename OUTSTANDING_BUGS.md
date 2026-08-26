@@ -8977,7 +8977,23 @@ ran `git log -L`. **The command took seconds.***
 has no `warned` bit, so a guest polling `0x88` floods stderr unboundedly today. Same at
 `:695`. If this round touches Site A it must latch the read branch too.
 
-### `gdrompionull` — open, NEW, and found while reviewing a different defect
+### `gdrompionull` — IN WORK: the fix and its detector shipped as #465
+
+*This heading read "open, NEW" until 2026-08-26, after the fix had shipped. The
+precommit row-state check caught it and its wording is the reason the check exists:
+**this file is the carrier's FIRST-STOP live queue, so a stale `open` here offers
+shipped work to a fresh session.** Same defect class as the `sh4dmacie` row settled
+earlier the same day — two records disagreeing about whether something is done.*
+
+**Shipped in `#465`:** the `free_data()` helper (releases `data` and `data_len`
+together, so the disagreeing state is unrepresentable), the re-pinned detector at
+13/13, and a `gate_sh_rounding.sh` section that actually runs it — it was wired into
+**no gate at all** before this round.
+
+**STILL OWED, recorded rather than quietly omitted:** the `:406`/`:415` tail-reach
+rows as L1. `m_ret415` — one word, `break;` → `return;` — sweeps the intent-only
+detector clean at 16/16, so the tail-bypass class is real coverage debt with a
+MEASURED escape.
 
 **A host death reachable with LEGAL VALUES ONLY, and with no diagnostic at all.**
 

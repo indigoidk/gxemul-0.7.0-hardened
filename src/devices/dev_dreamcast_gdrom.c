@@ -311,6 +311,22 @@ static void alloc_data(struct dreamcast_gdrom_data *d)
 }
 
 
+/*  #465: alloc_data()'s exact counterpart.  data and data_len are set together
+    above, but the two release sites cleared only the POINTER -- leaving data_len
+    describing a buffer that no longer exists.  Later readers test one field and
+    index with the other, so a stale length is a read of freed or absent memory.
+    Releasing both here makes the disagreeing state unrepresentable rather than
+    merely unreached.  */
+static void free_data(struct dreamcast_gdrom_data *d)
+{
+	if (d->data != NULL)
+		free(d->data);
+
+	d->data = NULL;
+	d->data_len = 0;
+}
+
+
 static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 {
 	int64_t sector_nr, sector_count;
@@ -321,9 +337,7 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		debug("%02x ", d->cmd[i]);
 	debug("(cnt=%i) ]\n", d->cnt);
 
-	if (d->data != NULL)
-		free(d->data);
-	d->data = NULL;
+	free_data(d);				/*  #465  */
 	d->cur_data_offset = 0;
 	d->cur_cnt = 0;
 
@@ -442,8 +456,7 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		    0, sector_nr * 2048, d->data, d->data_len);
 		if (!res) {
 			fatal("GDROM: diskimage_access failed? TODO\n");
-			free(d->data);
-			d->data = NULL;
+			free_data(d);			/*  #465  */
 		}
 
 		/* {

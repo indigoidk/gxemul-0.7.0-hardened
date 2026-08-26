@@ -282,7 +282,13 @@ A = Addr(CODE)
 t1, alive1, how1 = session(stage_readsectors(A) +
                            store16(GDROM_COND, 0xef, A) +
                            load16(GDROM_DATA, A))
-row("cheap trig", how1, "sig11", "9 accesses: SIGSEGV at the deref")
+#  WITNESS -> DETECTOR.  Pre-fix this pinned "sig11" and MEASURED it: the raw logs
+#  prefix_HEAD_13of13.raw and repin_HEAD_RED.raw both record the SIGSEGV on the
+#  committed build.  #465 removes it, so the row now pins the REPAIRED behaviour.
+#  The inversion is licensed by that preserved evidence, not by the new binary --
+#  which is the same order discipline the staged-quiet re-pin above follows.
+row("cheap trig", how1, "exit0",
+    "9 accesses: survives -- #465, was SIGSEGV at the deref")
 cheap_noise = noise(t1)
 
 #  Same eight accesses, 0xef store REMOVED.  The read is declined at :590.
@@ -304,9 +310,26 @@ t4, alive4, how4 = session(stage_toc(A) +
                            store16(GDROM_COND, 0xa0, A) + packet(CMD_MOUNT, A) +
                            store16(GDROM_COND, 0xef, A) +
                            load16(GDROM_DATA, A))
-row("staged trig", how4, "sig11", "18 accesses, TOC then Mount: SIGSEGV")
+row("staged trig", how4, "exit0",
+    "18 accesses, TOC then Mount: survives -- #465, was SIGSEGV")
+#  *** RE-PINNED 2026-08-26, AND THE ORDER IS THE WHOLE POINT. ***  This pinned
+#  "0 of 8" -- NO diagnostic on the silent route -- and the round's own prose said
+#  the fix "invents no new behaviour".  BOTH ARE FALSE once the fix lands: the
+#  repaired state routes into #460's once-latched GDROM_W_OVERREAD decline, so the
+#  silent route emits exactly ONE line.  Measured 16/16 vs 10/16 by the opus5 seat.
+#
+#  The oracle-correction rule says a re-pin is observationally identical to fitting
+#  the test to the binary UNLESS it is done in this order: re-pin FIRST, show the
+#  COMMITTED build RED under the new expectation, and only then change the code.
+#  The pre-fix run at 13/13 is preserved as prefix_HEAD_13of13.raw; the RED run
+#  under this new pin is what licenses the edit.
+#
+#  PROVENANCE, quoted rather than trusted -- dev_dreamcast_gdrom.c's overread arm
+#  is gated by sh4-style once-latching (#460), which is why the count is 1 and not
+#  a flood.  A future reader can re-derive this without trusting this round.
 row("staged quiet", "%d of %d" % (noise(t4), len(NOISE)),
-    "0 of %d" % len(NOISE), "NO diagnostic on the silent route")
+    "1 of %d" % len(NOISE),
+    "ONE latched decline on the silent route -- the fix IS louder, by design")
 row("cheap loud", "yes" if cheap_noise > 0 else "no", "yes",
     "cheap route IS loud (%d hits): premise-3 contrast" % cheap_noise)
 

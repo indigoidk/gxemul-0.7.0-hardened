@@ -1941,6 +1941,27 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
   *The trend matters more than the instance: every correction added here quotes what it
   refutes, so a naive stale-text grep gets steadily MORE wrong as the file improves.*
 
+* *** A SIXTH, 2026-08-26, AND IT IS THE FIRST WHERE TWO APPARATUS ERRORS STACKED INTO A
+  CONVINCING FALSE RESULT. *** A 30-minute gate was launched as
+  `timeout 1800 bash gate_sh_rounding.sh | grep -E ...`. Both halves were wrong and they
+  covered for each other:
+  * `timeout` killed the gate at exactly 30 minutes -- the last section finished at
+    `18:01:38` and the run died at `18:02`, **before reaching the section under test**;
+  * the **`| grep` made the reported exit status GREP's `0`**, not `timeout`'s `124`, so a
+    KILLED gate presented as a CLEAN COMPLETION.
+  The conclusion drawn was "my new gate section never ran, something is wrong with it." The
+  section was innocent and untouched by the failure.
+  > **NEVER PIPE A LONG-RUNNING GATE THROUGH A FILTER WHEN YOU NEED ITS EXIT STATUS**, and
+  > size the timeout from a measured run rather than a guess. `gate_sh_rounding.sh:615`
+  > already warns about the buffering half of this, one layer down: *"-u IS LOAD-BEARING ...
+  > with stdout redirected to a file it is block buffered, and a killed run then loses every
+  > row and looks like a run that produced nothing."*
+  **And the diagnosis itself produced two more phantoms before landing**, both caught only by
+  asking for a denominator: a `grep` for `gate_skip` that "found" `:618` -- an artifact of a
+  broken `awk` in the same pipeline, not a match -- and a log listing rendered with
+  `%H:%M:%S`, which **drops the date**, so logs from different days interleaved and read as
+  one chronological run. A story about an upstream skip was nearly built on each.
+
 > **CHECK THAT THE APPARATUS SELECTED SOMETHING BEFORE READING WHAT IT SAYS.** A range, a
 > regex or a filter that selects the empty set produces a clean, confident, wrong answer --
 > and unlike a crash it looks exactly like a measurement.

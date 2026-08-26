@@ -1,3 +1,72 @@
+## Round 465 (#465) -- dev_dreamcast_gdrom.c: `data` and `data_len` were released apart
+
+`alloc_data()` sets the two together -- `d->data_len = d->cnt;` then the allocation. **Both
+release sites cleared only the POINTER**, leaving `data_len` describing a buffer that no longer
+exists. Every later reader tests one field and indexes with the other, so a stale length is a
+read of freed or absent memory, and a guest PIO sequence reached it: nine accesses on the cheap
+route, eighteen on the staged route, both ending in SIGSEGV of the host process.
+
+**THE FIX IS OPTION B, THE `free_data()` HELPER -- and the ADDITION LICENCE governs it, not
+minimal-surgical.** A helper is an addition to product code, so it needs a measured delta or a
+transferred warrant. It has both. The measured delta: Option A cleared `data_len` at the
+function tail, and a mid-switch `return` bypasses that tail -- the opus5 seat built exactly
+that mutant (`m_ret415`, one word, `break;` -> `return;`) and it **swept a clean detector
+16/16**. The transferred warrant: `#182`'s rule that a pointer and its length must be updated
+together, which is the same defect class one device over.
+
+Releasing both fields in one place makes the disagreeing state **unrepresentable** rather than
+merely unreached. That is the whole argument for the helper over a second assignment.
+
+### The oracle correction, in the mandated order -- and it is why this round took four runs
+
+`staged quiet` pinned **`0 of 8`** -- *"NO diagnostic on the silent route"* -- and the round's
+own draft prose said the fix *"invents no new behaviour"*. **Both were false.** The repaired
+state routes into `#460`'s once-latched `GDROM_W_OVERREAD` decline, so the silent route emits
+exactly one line. The fix is louder, by design, and the detector had to say so.
+
+Re-pinning an oracle is observationally identical to fitting the test to the binary. The rule
+says the discriminator is ORDER, and this round has the four logs to prove it followed:
+
+| log | build | pin | score | what it establishes |
+|---|---|---|---|---|
+| `prefix_HEAD_13of13.raw` | committed | old | **13/13** | the defect reproduces, controls live |
+| `repin_HEAD_RED.raw` | committed | **new** | **12/13** | the re-pin measured RED *before* any edit |
+| `postfix_465.raw` | fixed | new | 11/13 | crash gone; witness rows still pin the defect |
+| `postfix_465_final.raw` | fixed | final | **13/13** | detector complete |
+
+Same scripts, opposite colour, and the RED came first. The two trigger rows were **witness**
+rows pinned to `sig11`; they are now **detector** rows pinned to `exit0`, and that inversion is
+licensed by the preserved pre-fix logs -- same script, same row names -- not by the new binary.
+
+### *** THE DETECTOR WAS WIRED INTO NO GATE, AND THE ROUND WOULD HAVE CLAIMED OTHERWISE ***
+
+Grepping the battery for the probe's own name returned **nothing**. The probe had been
+committed under `regress/artifacts/gdrompionull/` and **no gate executed it** -- so "shipped a
+detector with the fix" would have been a false record, an L3 undischarged obligation, in a
+round whose entire subject is fields that disagree.
+
+Now a section of `gate_sh_rounding.sh`, modelled on `wdc_flood` so the two read alike: PARSE
+BEFORE SCORE, the denominator pinned against a literal, per-row presence checks, and -- new
+here -- **CONTROLS ASSERTED SEPARATELY**. That last one is from a failure of mine this round: a
+run scored **1/13 with all five controls dead** and read as a catastrophic regression, when the
+real cause was a nonexistent image path I had invented. A dead-control run must announce itself
+as an APPARATUS failure, not as twelve product failures.
+
+*Wiring it also surfaced a collision: `GDLOG` was already taken by the `gate_gdrom_data`
+section, and reusing it would have silently overwritten that section's log. Caught by reading
+the variable definitions before writing, rather than by a confusing gate run afterwards.*
+
+### Assessed, not changed
+
+* **The `:406`/`:415` tail-reach rows are OWED and are NOT in this commit.** `m_ret415` sweeps
+  the intent-only detector clean at 16/16, so the tail-bypass class is real coverage debt with a
+  measured escape. It is recorded as such rather than quietly omitted.
+* **`m_free` and `m_top` escape COMPLEMENTARY halves** -- 13/16 each, and not the same 13. Each
+  witnessed route is the sole killer of one relocation mutant, so the two are **not redundant**,
+  and a future round tempted to drop one as duplicative is measured wrong.
+* The eight mutant binaries are not preserved (6.1 MB each, rebuildable from the recorded
+  edits); the 22 logs that are evidence are, under `killtable_20260826/`.
+
 ## Round 464 (#464) -- dev_wdc.c: six unlatched `fatal()`, each guest-drivable without bound
 
 `dev_wdc.c` held ten `fatal()` calls. Four were latched by `#337`; **six were not**, and

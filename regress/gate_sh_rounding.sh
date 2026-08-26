@@ -973,6 +973,80 @@ fi
 #  qualifier was not missing from the evidence but from the summary: the original
 #  filing already read "invisible free-running at verbosity 0".  Caught by the pass-2
 #  codex seat re-deriving from debugmsg.c what our own record already said.)
+#  ---------------------------------------------------------------- #465 gdrom PIO
+#
+#  A DETECTOR NO GATE RUNS IS NOT A DETECTOR.  The gdrompionull probe shipped under
+#  regress/artifacts/ and NOTHING IN THE BATTERY EXECUTED IT -- found by grepping the
+#  gates for the probe's own name before writing the round record, which is the check
+#  that should run on every "we shipped a detector" claim.
+#
+#  What it pins, and the evidence is four preserved logs beside the probe:
+#    prefix_HEAD_13of13.raw   pre-fix, OLD pin   13/13  the defect reproduces
+#    repin_HEAD_RED.raw       pre-fix, NEW pin   12/13  the re-pin measured RED first
+#    postfix_465.raw          post-fix           11/13  crash gone, witness rows stale
+#    postfix_465_final.raw    post-fix           13/13  detector complete
+#
+#  The two trigger rows were WITNESS rows pinned to "sig11" and are now DETECTOR rows
+#  pinned to "exit0".  That inversion is licensed by the preserved pre-fix logs -- same
+#  script, same row names, opposite colour -- and not by the new binary.
+#
+#  `staged quiet` was RE-PINNED from "0 of 8" to "1 of 8" in the mandated order: the
+#  oracle changed FIRST, the committed build measured RED under it, and only then did
+#  the code change.  The fix IS louder by one line, because the repaired state routes
+#  into #460's once-latched overread decline.  The round's earlier prose claimed it
+#  "invents no new behaviour"; that was false and is corrected in the probe header.
+GPNPROBE=artifacts/gdrompionull/gdrom_pio_null_probe.py
+if [ ! -f "$GPNPROBE" ]; then
+    gate_skip "gdrompio: $GPNPROBE absent"
+else
+    GPNLOG=$LOGDIR/gate_gdrom_pio.log
+    python3 -u "$GPNPROBE" "$PMAX" "$KERNEL" > "$GPNLOG" 2>&1 || true
+
+    if ! grep -q "GDROMPIO_RESULT=" "$GPNLOG"; then
+        note "gdrompio probe produced no result line; last lines follow"
+        tail -5 "$GPNLOG" | sed 's/^/       /'
+        check "gdrompio probe completed" "no" "yes"
+    else
+        grep -E " ok$| FAIL$" "$GPNLOG" | sed 's/^/       /'
+
+        #  *** CONTROLS FIRST, AND SEPARATELY. ***  A run whose five controls all died
+        #  scored 1/13 today and looked like a catastrophic regression; the real cause was
+        #  a nonexistent image path passed by the operator.  A dead-control run must
+        #  announce itself as an APPARATUS failure, not as twelve product failures.
+        if grep -q "GDROMPIO_CONTROL=OK" "$GPNLOG"; then
+            check "gdrompio controls live" "yes" "yes"
+        else
+            note "gdrompio CONTROLS DEAD -- the probe never reached the device."
+            note "Do not read the row scores below as product failures."
+            check "gdrompio controls live" "no" "yes"
+        fi
+
+        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+        #  leaving gdres empty so both halves expand to "" and the score row compares
+        #  "" with "" -- green on nothing.  This is the wdc_flood idiom, same reason.
+        gdres=$(grep -o "GDROMPIO_RESULT=[0-9]*/[0-9]*" "$GPNLOG" | tail -1 | cut -d= -f2)
+        case "$gdres" in
+            [0-9]*/[0-9]*)
+                check "gdrompio result parses" "yes" "yes"
+                #  the denominator against a LITERAL: a probe that loses rows cannot pass
+                check "gdrompio rows run"     "${gdres#*/}" 13
+                check "gdrompio rows correct" "${gdres%/*}" "${gdres#*/}"
+                ;;
+            *)
+                check "gdrompio result parses" "no" "yes"
+                ;;
+        esac
+
+        #  Per-row presence.  A row that silently stops being tested is the padded-column
+        #  class; these names are checked individually so a vanished row reds.
+        for v in "live" "devsig sh4" "gdrom map" "cheap trig" "staged trig" \
+                 "staged quiet" "cheap loud"; do
+            n=$(grep -c "^$v  .*ok$" "$GPNLOG")
+            check "gdrompio row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+        done
+    fi
+fi
+
 WDCIMG=$IMAGES/wdc-scratch-64m.img
 if [ ! -f "$WDCIMG" ]; then
     gate_skip "wdcflood: $WDCIMG absent (see regress/images.md -- it is a dd recipe, not a download)"
