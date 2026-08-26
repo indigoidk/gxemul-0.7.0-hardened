@@ -283,18 +283,47 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  string exactly as before, while this file silently stops governing that
 	#  probe.  A two-word label or a hoisted variable does the same.
 	#
-	#  So the count is PINNED and ratchets: raise the floor when it rises,
-	#  never lower it to make a commit pass.
+	#  *** THIS WAS A RATCHET WITH A FLOOR OF 16 AND THE MEASURED VALUE WAS 18.
+	#  A HAND-MAINTAINED RATCHET IS ITSELF AN UNRATCHETED NUMBER. ***
+	#
+	#  The old comment said "raise the floor when it rises, never lower it".  That
+	#  instruction was silently missed TWICE -- the count went 16 -> 17 -> 18 while
+	#  the floor stayed at 16 -- so two whole gate blocks carrying score-claim pins
+	#  could have been deleted with this check still printing `good`.  Measured
+	#  2026-08-26 by the seat answering `gateflr`.
+	#
+	#  So it is now an EQUALITY PIN, which is the idiom this harness already uses
+	#  one level up: run.sh's GATE_MANIFEST, whose comment reads "Adding a gate
+	#  means editing BOTH lines.  That is the point."  Equality fails in BOTH
+	#  directions -- shrinking means a pin was lost; growing means a new probe
+	#  arrived and the number becomes a deliberate edit rather than silent drift.
+	#
+	#  Cost, stated: one extra line to edit per new gated probe.  That trade has
+	#  already been accepted twice here (GATE_MANIFEST, and SM_COVERED in
+	#  gate_offline.sh), both times for exactly this reason.
+	#
+	#  A pin stops being SEEN when its literal is quoted (`"32"` for 32), when its
+	#  label gains a word before the stem, or when the count moves to a variable --
+	#  all of which leave the gate behaving identically.  That is why the count is
+	#  asserted at all.
+	SCORE_CLAIMS_MANIFEST=18
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
-	elif [ "$_spinned" -lt 16 ]; then
-		bad "SCORE-CLAIM COVERAGE DROPPED: $_spinned probes pinned, floor is 16."
+	elif [ "$_spinned" -lt "$SCORE_CLAIMS_MANIFEST" ]; then
+		bad "SCORE-CLAIM COVERAGE DROPPED: $_spinned probes pinned, manifest says $SCORE_CLAIMS_MANIFEST."
 		bad "  A pin stops being seen when its literal is quoted, its label gains a"
 		bad "  word before the stem, or the count moves to a variable -- all of which"
-		bad "  leave the gate behaving identically.  Restore it; do not lower the floor."
+		bad "  leave the gate behaving identically.  Restore it; do not lower the manifest."
+	elif [ "$_spinned" -gt "$SCORE_CLAIMS_MANIFEST" ]; then
+		bad "SCORE-CLAIM COVERAGE GREW: $_spinned probes pinned, manifest says $SCORE_CLAIMS_MANIFEST."
+		bad "  This is not a failure -- it means a new gated probe arrived.  Raise"
+		bad "  SCORE_CLAIMS_MANIFEST to $_spinned in tools/precommit_check.sh, deliberately."
+		bad "  Growth is caught on purpose: a floor that only catches shrinkage goes"
+		bad "  slack every time the count rises, which is how this check sat at 16"
+		bad "  against a real 18."
 	else
-		good "coverage pinned: $_spinned probes (floor 16)"
+		good "coverage pinned: $_spinned probes (manifest $SCORE_CLAIMS_MANIFEST, equality)"
 	fi
 else
 	bad "STALE SCORE CLAIMS -- prose disagrees with the gate pin:"

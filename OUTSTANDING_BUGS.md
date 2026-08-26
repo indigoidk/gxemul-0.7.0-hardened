@@ -119,6 +119,66 @@
 >   GOOD — so a guest gets GOOD with overlay and bitmap still unflushed. Either route `0x91`
 >   through the same helper, or narrow `ovsync` to SC(10) and transfer the `0x91` instance to
 >   `b120`; then it may close.
+> 
+> ### Six more held stages answered 2026-08-26 by opus5, one job per question
+> 
+> - **`gateflr`** — if a whole gate BLOCK is deleted, nothing outside it notices. **Premise
+>   refuted for part of the battery**: section R hard-fails for any block that is the sole
+>   invoker of a python detector (every detector has exactly one invoker, verified). It stays
+>   TRUE for log-grading blocks, source-grep blocks, per-row name lists, and all of
+>   `gate_ab`/`gate_build`/`gate_upstream` — 38 check sites with zero python detectors.
+>   **Its measured finding is already fixed**: section U's ratchet floor was 16 against a real
+>   18, so two gate blocks could have been deleted with the check printing `good`. Now an
+>   equality pin. Remaining proposal: a per-gate runtime check-count floor in `gate_end()`,
+>   placed AFTER the fails/degraded tests so a degraded run reports SKIP and is never falsely
+>   reddened. Honest limit recorded — a count floor cannot see a block hollowed while keeping
+>   its call count, and this tree has a measured instance of exactly that.
+> - **`seam`** — nothing goes red if the driver and the log grader disagree about the path.
+>   **The cause is gone (#422) and the detector is still missing, asymmetrically.**
+>   `drive_<rig>.log` is spelled twice: `drive_guest.py:250` is pinned by `selftest_logdir.py`,
+>   `gate_hygiene.sh:444` is pinned by nothing — and a missing log there is answered with
+>   `note` + `continue`, which increments nothing, **so two rigs' distress grading can silently
+>   not happen while gate 6 reports PASS.** Sibling parity fails against the pmax/arc half
+>   twelve lines up, where a missing log is `gate_skip`. Fix is one row in gate 5 (the
+>   producer, because `$LOGDIR` persists between runs and a gate-6 discriminator would read a
+>   stale log).
+> - **`pcheck`** — the pre-commit check's blind spots. Python half PARTLY closed by a separate
+>   tool (section R sees all 56 python artefacts; check E still cannot). Directory half
+>   UNCHANGED and now broader: check C's `(src|regress|man)` alternation predates the harness
+>   migration into git, **so the entire `tools/` tree is invisible** — `precommit_check.sh`
+>   cannot cross-check a message naming itself. **And a FOURTH blind spot the row never named:
+>   check D uses bare `git diff -U0` (unstaged only) while every other section uses both, so on
+>   the ordinary add-then-commit workflow both its sub-checks print green about a diff they
+>   never read.**
+> - **`census`** — the proposed "a round that touches a gate runs that gate's mutant census"
+>   rule is **REJECTED on three measured grounds**, and explicitly NOT as a clause-(b)
+>   duplicate (different denominators). Its warrant is a stale 13-of-18 when the census defines
+>   22 today; its trigger scales cost with the GATE rather than the diff, which is the `#392`
+>   shape; and the function already ships continuously as `gate_offline.sh`'s selfmutant
+>   manifest, with dated exemptions and an anti-paper check. **Adopt instead, bounded:** extend
+>   `SM_COVERED`/`SM_EXEMPT` to `*_probe.py` — 40 probes exist and only 4 carry a failability
+>   control. Section R checks a probe is RUN; nothing checks it CAN FAIL.
+> - **`mrwstore2`** — a straddling store whose tail faults makes an MMIO head see the write
+>   twice. **Keep filed/latent, but the blocking reason is REFUTED and was an L4.** Four
+>   PowerPC manuals are now in `_scratchpad/` (OEA Book III, VEA Book II, MPCFPE32B Rev 2, the
+>   2005 PEM): every one makes partial execution **PERMITTED, never REQUIRED**, so a fix that
+>   never partially executes cannot diverge — it is the intersection of both readings. The
+>   manuals **disagree** on the caching-inhibited+guarded head case (Book III says it must not
+>   be accessed; the PEM has no such rule), recorded as an honest UNKNOWN. Also found: a second
+>   straddling producer the row never named (`X(stvx)` does a raw 16-byte access with no
+>   `EA & ~0xF` mask), and that "memory_rw is the choke point" is FALSE for the class —
+>   `stmw`/`stswi`/`bdt_store` have the same property outside it, **so a memory_rw fix would be
+>   a partial fix that reads as a complete one.**
+> - **`m8probe`** — m8820x PROBE_USER/PROBE_SUPER are dropped. **LATENT — re-filed on the
+>   `gdrompiooddlen` precedent, reachability MEASURED NEGATIVE with controls both ways.** A full
+>   OpenBSD 7.7/luna88k boot to `login:` issues seven distinct CMMU commands and **zero**
+>   probes; a planted supervisor store fires the detector on 0x24/0x20 and not on 0x35, so the
+>   negative is real. OpenBSD's CMMU driver issues probes only from DDB display routines — a
+>   debugger feature, not an operating path. **The cost note was wrong**: the translation walk
+>   EXISTS and is already side-effect-free under `FLAG_NOEXCEPTIONS`, and the driving probe
+>   shape is already committed. What is missing is an ORACLE (no 88200/88204 manual), so the
+>   hold is now conditional on obtaining one. Current behaviour is the better one: a dropped
+>   probe leaves SSR zero — a defined miss — where an invented answer could steer guest paging.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
