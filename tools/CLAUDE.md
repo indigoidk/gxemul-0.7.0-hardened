@@ -1556,12 +1556,74 @@ naming the artefact is a records defect; the ledger `witness` field is the fix.
 same adjudication that wrote it.** It said *order items by the strongest witness that
 exists today*. **RUNG MEASURES REACHABILITY-PROOF STRENGTH, NOT HARM**, and using it to
 schedule promotes the benign item over the damaging one. The case that proved it: `b120r`
-has a rung-4 boot witness but a MEASURED guest-visible symptom of NIL (two transcripts
-byte-identical), while `armbdt` has only a rung-3 probe and CORRUPTS GUEST DATA. So:
+has a rung-4 boot witness but a guest-visible symptom measured NIL **on the pair that was
+compared**, while `armbdt` has only a rung-3 probe and CORRUPTS GUEST DATA. So:
+
+> #### *** THE EXEMPLAR OVERSTATED ITS OWN EVIDENCE, corrected 2026-08-26 by the codex seat
+> #### answering `b120r`'s held stage -- and the refutation was sitting in `b120r`'s own
+> #### ledger row the whole time. ***
+>
+> This clause used to read *"a MEASURED guest-visible symptom of NIL (two transcripts
+> byte-identical)"*. The row says something narrower: `told-98` vs `told-35/11` give ORDERED
+> TRANSCRIPTS IDENTICAL, 0 diff lines across 97 lines each -- **but `told-0` FLIPS CONTROL
+> FLOW, 32 MODE SENSE commands instead of 11, including MODE SENSE(10) fallbacks and page 5,
+> because OpenBSD 7.7 branches on that byte.**
+>
+> **So NIL was measured for a PAIR, and restated as a property of the PARAMETER.** That is the
+> dropped-qualifier class again, in the file that teaches it -- and note the qualifier was never
+> missing from the evidence, only from the summary, which is exactly how `#464`'s "floods
+> identically" went wrong on the same day.
+>
+> **THE RULE IS UNCHANGED AND THE EXEMPLAR IS WEAKER.** Rung still measures reachability-proof
+> strength and not harm; `armbdt` still corrupts guest data and still outranks `b120r`. What
+> changes is that the contrast is severity-versus-*small* severity rather than
+> severity-versus-nothing -- so this pair no longer makes the point as sharply as it reads, and
+> a future round wanting a clean illustration should find a better one rather than lean on this.
+>
+> *This is the anchor rule's lesson recurring: a rule minted from ONE instance carries that
+> instance's shape as if it were the class, and **a freshly minted rule's exemplar is a
+> hypothesis**. The instruction survived contact; the example did not.*
 **a witness makes an item ELIGIBLE; SEVERITY and gate blind-spots order the queue.** Rung
 is a floor on admissibility, never a priority. Strongest witness today — boot > probe >
-construction **"No witness of either kind" is a CHECKABLE claim and must be checked, not asserted:**
-dfreq's was measured false by building the witness in one session.
+construction **"No witness of either kind" is a CHECKABLE claim and must be checked, not
+asserted.**
+
+> #### *** THE EXEMPLAR THAT USED TO SIT HERE WAS WRONG, corrected 2026-08-26. The RULE is
+> #### untouched -- it is one of the most useful lines in this file -- but `dfreq` is not an
+> #### instance of it. ***
+>
+> This clause read *"dfreq's was measured false by building the witness in one session."*
+> Checked against the row and the probe: **`dfreq`'s `witness` field is `None`.** Its closure
+> names *"the MIPS compare write ... converts the distance to a deadline into a frequency"*,
+> i.e. MIPS CP0 Compare -- while the row mentions ARM Footbridge four times and MIPS CP0 not
+> once. **The probe that was actually built (`footbridge_sites_probe.py:111`) execs `-E cats`,
+> an ARM/SA110 machine that executes no MIPS instruction and cannot reach CP0 Compare.** It
+> returned entirely CORRECT values, and its own cited line has since gone stale
+> (`dev_footbridge.c:548` is `console_putchar`; the timer mask is at `:640`).
+>
+> So a witness was built and it witnesses a DIFFERENT PATH from the one the row's closure
+> defines. The row is internally conflated, which is the finding -- not the rule's failure.
+> Found by the codex seat answering `dfreq`'s held stage; every element re-verified here
+> before the edit.
+>
+> ### *** AND THIS IS THE THIRD EXEMPLAR IN THIS FILE TO FAIL IN A SINGLE DAY WHILE ITS RULE
+> ### HELD. That ratio is itself a finding about this file. ***
+>
+> The anchor rule's `mask9 rt` ("anchored to a cell, not to a neighbour by distance" -- it is
+> anchored by distance); `b120r`'s "MEASURED symptom of NIL" (NIL for the pair compared, and
+> `told-0` flips control flow); and now `dfreq`. **Three rules, three intact instructions,
+> three broken examples.**
+>
+> The reason is structural rather than careless. **A rule is a claim about a CLASS and ages
+> well; an exemplar is a frozen claim about ONE INSTANCE, and instances move** -- code is
+> edited, rows are re-scoped, line numbers drift, and a row can be silently conflated with a
+> second defect. Nothing re-checks an example once it is written down, because it reads as
+> illustration rather than as an assertion.
+>
+> **So: an exemplar in this file is a DATED MEASUREMENT wearing the clothes of an
+> illustration.** When a round leans on one, re-derive it rather than cite it -- and if it has
+> decayed, correct it in place and keep the rule. All three today were caught that way, and in
+> all three the instruction survived contact while the example did not.
 
 **Round scope (the reopening rule):** a witness makes a site ELIGIBLE, never mandatory. A round
 takes ONE site; a second joins only if it is witnessed, in the SAME device and SAME semantic class

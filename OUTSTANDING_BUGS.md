@@ -71,6 +71,54 @@
 >   stopping rule and not a floor breach (`#464`'s detector satisfies clauses (a)–(f)). First
 >   job is to build the mutant and score it. **Do not fold this into `wdcflagindep`**: that row
 >   is about which SITES share a flag, this is about which REGISTER can clear one.
+> 
+> ### Six rows whose HELD stage was answered 2026-08-26 by a codex farm, one job per row
+> 
+> *Each was fired against the row's own `hold_question` rather than a disposition note. Every
+> load-bearing claim below was re-verified against the source, the local DDI 0100I extraction,
+> or the row itself before being written down.*
+> 
+> - **`b118L`** — a disk that fails to be added stays on the list. **DOCUMENTED-ONLY**: no
+>   surviving caller exists. `emul_parse.c:558` exits at `:561`; `main.c:707` returns 1 at
+>   `:709`, never reaching `emul_simple_init()`. **And `exitsweep` cannot activate it** —
+>   `census_exits.py:59` scopes the census to `src/devices/` while both callers live in
+>   `src/core/`, so the two rows must not be ranked together. Keep the reopen trigger: any new
+>   caller, or any change to `:561`/`:709` that continues after failure.
+> - **`b120r`** — SCSI reports a length exceeding what the guest asked for. **NOT covered by
+>   `b120u`**: MODE SENSE is a known-command arm that already installs GOOD status, so a
+>   default-arm repair leaves it untouched. Allocation 156 → internal `retlen` 256 → reported
+>   length byte **0**. Ride it with `b120u` for economy but require its own hunk and an
+>   allocation-length-invariance test. Priority stays LOW: no recorded rig naturally requests
+>   156, and the full chain was not measured end to end.
+> - **`dfreq`** — a one-shot deadline modelled as a repeating rate. **The row is internally
+>   CONFLATED**: its closure names the MIPS CP0 Compare path while its assessment and the probe
+>   that was built concern the ARM Footbridge. `footbridge_sites_probe.py` execs `-E cats` and
+>   cannot reach CP0 Compare, and it returned correct values. The MIPS defect is real and
+>   source-demonstrable — an accumulated periodic callback count means a Compare write clears
+>   IP7 only momentarily, giving a wrong guest-readable Cause and an extra interrupt — but it
+>   is **not end-to-end measured**. Documented-only under the stopping rule.
+> - **`armbdt`** — ARM block transfer disagrees about an unaligned base. **REAL.** With
+>   `U=0`, the masked fast path is right and the raw slow path is wrong. Controlling text is
+>   **LDM(1) p. A4-37 and STM(1) p. A4-190**, read from `_scratchpad/ddi0100i.txt:7954`
+>   and `:14115` — *not* LDR p. A4-44, which governs LDR's rotation rule and does not apply to
+>   block transfers. **Fix shape:** mask ONLY the addresses passed to the two slow `memory_rw`
+>   calls; masking at function entry corrupts writeback, which Addressing Mode 4 computes from
+>   the raw `Rn`. Caveat for the record: `ARM_CONTROL_ALIGN` is initialised enabled but never
+>   enforced, so at the advertised `A=1` state **both** paths are wrong — an alignment
+>   exception is owed.
+> - **`reprowitness`** — **NOT DISCHARGED**, two gaps in the shipped witness ladder. (1) Rung 2
+>   admits construction witnesses, but the universal clause (ii) demands a device-signature
+>   control that a construction-time OOB cannot produce — the ladder's own named exemplar fails
+>   its own clause; scope (ii) to rungs 3–4. (2) `check_witness.py:56` already accepts
+>   `harness:` and its header says *"IS A GAP IN THE LADDER, FOUND BY THIS CHECK ON ITS FIRST
+>   RUN"*, which CLAUDE.md never absorbed. **The structure knew and the prose did not.**
+> - **`ovsync`** — **NO-GO for closure as worded.** `4d0981d` fully fixes SYNCHRONIZE
+>   CACHE(10) `0x35` — and did more than its filing claimed, since the base file was also
+>   unflushed (`fsync()` with no `fflush()`). But **SYNCHRONIZE CACHE(16) `0x91` is undefined**,
+>   falls to the unimplemented default, and `dev_asc.c:1287` converts absent status to `0x00`
+>   GOOD — so a guest gets GOOD with overlay and bitmap still unflushed. Either route `0x91`
+>   through the same helper, or narrow `ovsync` to SC(10) and transfer the `0x91` instance to
+>   `b120`; then it may close.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
