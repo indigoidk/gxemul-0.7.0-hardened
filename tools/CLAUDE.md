@@ -143,6 +143,38 @@ settled this, in one invocation and about four seconds.
   > not done**, because it is a behaviour change to the script every panel runs and it owes
   > two negative controls: prove the retry fires on a walled seat, and prove a seat that
   > answered is NOT retried.
+### *** THE CHECK-THAT-CANNOT-FAIL: TWO INSTANCES IN ONE DAY, AND THE HUNT FOR A THIRD
+### CAME BACK EMPTY IN THE PLACE YOU WOULD EXPECT IT. Measured 2026-08-26. ***
+
+Two shortcuts were found inert on the same day, and both had the same shape -- **a cheap
+substitute for a real test, which returns the same answer whether or not the thing it checks
+is true**:
+
+* `panel.sh` printed **"re-firing once (a wall can be minutes long) ..."** and re-fired
+  nothing; every caller discards the `return 2`.
+* The seat table called `grok models` **"itself a cheap tier check"** for whether the paid
+  subscription is live. Running it prints **`You are not authenticated.`** and lists both
+  models anyway -- the list is served without auth, so it answers identically in both states.
+
+**THE HUNT FOR A THIRD WENT TO THE GATES AND FOUND NOTHING, WHICH IS THE PART WORTH
+RECORDING.** 251 `check` rows were scanned for a want that is literally the got expression.
+Twenty matched -- and **all twenty are the GUARDED parse idiom**, where an `if` arm emits
+`"no" "yes"` and the `else` arm emits `"yes" "yes"` for the same label, so the row fails
+loudly when parsing fails. **Zero unguarded.** A row of mine that looked self-comparing
+(`"${wfres%/*}" "${wfres#*/}"`) was checked too: the two halves are the numerator and
+denominator of one probe string -- different quantities -- and it reds whenever the score is
+below its own denominator, with a companion row pinning that denominator to a literal.
+
+> **SO THE CLASS LIVES IN PROSE AND SHORTCUTS, NOT IN CHECK ROWS.** The gates are written by
+> people thinking about failure; the shortcuts are written by people trying to AVOID running
+> something. **A check that cannot fail is almost never a badly-written assertion here -- it
+> is a claim that some cheap observable stands in for an expensive one.** Ask of any such
+> shortcut: *what does it print when the thing is FALSE?* Both instances above answer "the
+> same thing", and neither had ever been asked.
+
+*Both were found by the exemplar audit, not by a gate, and neither could have been: one is a
+`say` in a shell script and the other is a sentence in a table.*
+
 * ***`panel.sh` COULD NOT SEE THIS WALL AT ALL.*** Its check only caught the ECHO-ONLY shape
   (brief echoed, tiny payload — the codex signature). Kimi's wall was **36 KB of real content,
   98% novel, ending mid-sentence with the notice**: payload huge, echo absent, invisible to
