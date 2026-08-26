@@ -961,10 +961,18 @@ fi
 #  as green-on-nothing.  An earlier form cited :461-468, which is wdc_status() and was
 #  wrong even before the fix moved every line in this file.
 #
-#  THAT EARLY RETURN'S OWN debug() FLOODS IDENTICALLY and is NOT latched here.  It is
-#  a DIFFERENT CHANNEL -- debug() has the early-out fatal() lacks, so -q silences it --
-#  which is why it is outside this round's scope rather than a missed site.  It rides
-#  with `floodclass`.
+#  THAT EARLY RETURN'S OWN debug() REPEATS ONCE PER FAILED COMMAND and is NOT latched
+#  here.  It is a DIFFERENT CHANNEL, and the reason is stronger than -q: debug()
+#  computes v = verbose - (emul_executing ? 1 : 0) + (stepping ? 1 : 0) and returns at
+#  core/debugmsg.c:375 when v < 0.  FREE-RUNNING AT DEFAULT VERBOSITY THAT IS v == -1,
+#  so the arm emits NOTHING AT ALL; it becomes one line per command only under -v or
+#  under stepping.  fatal() has no such early-out.  Outside this round's scope rather
+#  than a missed site; it rides with `floodclass`.
+#
+#  (An earlier wording said FLOODS IDENTICALLY, full stop -- an overstatement, and the
+#  qualifier was not missing from the evidence but from the summary: the original
+#  filing already read "invisible free-running at verbosity 0".  Caught by the pass-2
+#  codex seat re-deriving from debugmsg.c what our own record already said.)
 WDCIMG=$IMAGES/wdc-scratch-64m.img
 if [ ! -f "$WDCIMG" ]; then
     gate_skip "wdcflood: $WDCIMG absent (see regress/images.md -- it is a dd recipe, not a download)"

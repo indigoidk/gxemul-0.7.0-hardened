@@ -369,6 +369,34 @@ seat ledger exists to refuse to count as agreement.
 > question had to be reconstructed from the row's subject. The two rows that named their
 > question explicitly were the easiest to answer *accurately*. One habit, and it makes the
 > batch both faster and safer.
+>
+> ### *** THAT HABIT WAS AT 0 FOR 18 ON 2026-08-26, WHICH IS WHY THE RULE IS NO LONGER PROSE.
+> ### It is now `check_stage_panels.py` + a `hold_question` field. Owner-decided the same day. ***
+>
+> Every one of the eighteen held stages then in the ledger carried a DISPOSITION note where a
+> question belongs -- *"FILE - no measurable effect until a caller survives"*, *"a policy, not a
+> round"*, *"FILE - offer as a rider in b120u's first panel"*. Each is a true statement about
+> the row. **None is a question a seat can answer.**
+>
+> **This is the carrier diagnosing itself, exactly as the structure-first rule at the top of
+> this file predicts.** The rule was written down, it was minted from a measured incident, it
+> sat in an auto-loaded file -- and the very next population of held rows scored zero. *Knowing
+> a rule and having it fire on the right object are different problems, and only the second is
+> solved by writing more.*
+>
+> **Why it is worse than untidy:** a seat fired against a disposition note has to GUESS what it
+> is being asked, and a guessed question yields an answer to the wrong question **that still
+> looks like a discharged stage**. That is the seat-failure-counted-as-agreement shape moved
+> one step earlier -- earlier, and therefore harder to see, because the stage shows a real
+> answer from a real seat.
+>
+> **The check is dated-cutoff, the same shape `check_bugfile_sync.py` uses**: stages whose
+> newest entry postdates `HOLDQ_CUTOFF` FAIL; the eighteen older ones are reported every run
+> and not failed. That is deliberate and it is not timidity -- a rule that retro-fails
+> eighteen rows blocks the next commit on reconstruction nobody scheduled, and **a rule that
+> does that gets switched off**, which is worse than a rule that warns. Negative-controlled in
+> both directions on the day it landed: injecting a post-cutoff hold with no question turns it
+> red and names the row; adding the question turns it green again.
 
 *** SUPERSEDED 2026-08-16 BY OWNER DIRECTIVE: FULL PANEL ON EVERY STAGE. ***
 

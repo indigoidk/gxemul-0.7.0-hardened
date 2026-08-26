@@ -23,6 +23,7 @@ Novel-line ratio against the brief separates the two without reference to length
 usage:  seat_verdicts.py <panel_dir>
 """
 import io
+import json
 import os
 import re
 import sys
@@ -302,6 +303,7 @@ def main():
         #  cap starves the response; panel_ollama.py correctly sends none.  This is
         #  the model reaching its OWN limit, which no caller-side setting prevents.
         raw = ""
+        recovered = ""
         st = t.lstrip()
         if st.startswith('{"model"') and '"response": ""' in st[:4000]:
             reason = "unknown"
@@ -311,6 +313,34 @@ def main():
             ev = re.search(r'"eval_count":\s*(\d+)', st)
             raw = "%s%s" % (reason, (", %s tokens" % ev.group(1)) if ev else "")
 
+            #  *** AN EMPTY `response` IS NOT ALWAYS A LOST SEAT.  Measured
+            #  2026-08-26: kimi-k3:cloud returned `"response": ""` with
+            #  `done_reason: "stop"` and 18,002 chars of `thinking` holding a
+            #  COMPLETE answer, opening `<|open|>response<|sep|># VERDICT: ...`
+            #  and closing cleanly.  The rule above fired and called it DOWN.
+            #
+            #  THE DISCRIMINATOR IS `done_reason`:
+            #    "length" -> ran out mid-thought, no answer exists (the deepseek
+            #                case this rule was built from).  Genuinely DOWN.
+            #    "stop"   -> the model FINISHED.  If `thinking` carries a
+            #                channel-marked response block, the answer EXISTS and
+            #                recording the seat as down is the unread-review class
+            #                with extra steps -- the answer is on disk already.
+            if reason == "stop":
+                try:
+                    obj = json.loads(st)
+                    think = obj.get("thinking") or ""
+                except Exception:
+                    think = ""
+                mm = re.search(r"<\|open\|>response<\|sep\|>(.*?)(?:<\|close\|>|$)",
+                               think, re.S)
+                cand = (mm.group(1) if mm else "").strip()
+                #  Require real substance: a stray marker with a few words is not
+                #  an answer, and calling it one would be the mirror failure.
+                if len(cand) >= 400:
+                    recovered = cand
+                    raw = ""
+
         err = t.lstrip()[:400] if t.lstrip().startswith("OLLAMA_SEAT_ERROR") else ""
         #  MEASURED 2026-08-23: a wall can be a MOMENT, not a state.  Kimi walled
         #  mid-answer at 23:01 with 36 KB already written, and answered a liveness
@@ -318,7 +348,22 @@ def main():
         #  is a verdict on that invocation, and the seat should be RE-FIRED ONCE
         #  before the round closes rather than recorded as gone.
         is_walled = bool(WALL_RE.search(t[-600:])) and not v
-        if raw:
+        if recovered:
+            #  Write it beside the raw envelope so the answer is READABLE, not just
+            #  known to exist.  A seat whose answer nobody can open is, in practice,
+            #  a seat that did not answer.
+            rp = os.path.join(d, s + ".RECOVERED.md")
+            try:
+                io.open(rp, "w", encoding="utf-8", newline="\n").write(recovered + "\n")
+            except Exception:
+                pass
+            vv = verdict_of(recovered)
+            if vv:
+                v = vv
+            state = ("RECOVERED -- answer was in `thinking`, not `response` "
+                     "(%d chars -> %s.RECOVERED.md)" % (len(recovered), s))
+            answered += 1
+        elif raw:
             state = ("*** SEAT DOWN -- NO ANSWER: spent its whole budget on hidden "
                      "reasoning (%s) ***" % raw)
             down += 1

@@ -35,6 +35,29 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
 
 CUTOFF = "2026-08-16"          # stages dated on or after this must be complete
+
+#  ---- HOLD QUESTIONS -----------------------------------------------------------------
+#  A STAGE HELD *FOR* A SEAT MUST CARRY THE QUESTION IT IS HELD FOR.  That rule has been in
+#  CLAUDE.md since a 46-row batch measured it: the three meta-rows carrying identical
+#  boilerplate had their question RECONSTRUCTED from the row's subject, while the two that
+#  named it explicitly were the easiest to answer *accurately*.
+#
+#  *** IT WAS AT 0 FOR 18 ON 2026-08-26. ***  Every held stage in the ledger carried a
+#  DISPOSITION note where a question belongs -- "FILE - no measurable effect until a caller
+#  survives", "a policy, not a round".  Each is a true statement about the row.  None is a
+#  question a seat can answer.
+#
+#  This is the carrier diagnosing itself: the rule was PROSE in an auto-loaded file, it was
+#  known, and it still did not fire.  A seat given a disposition note must GUESS what it is
+#  being asked, and a guessed question yields an answer to the wrong question that still
+#  LOOKS like a discharged stage -- the seat-failure-counted-as-agreement shape, moved one
+#  step earlier.
+#
+#  DATED CUTOFF, owner decision 2026-08-26, and the same shape check_bugfile_sync.py uses:
+#  stages whose newest entry is on or before HOLDQ_CUTOFF are REPORTED and not failed.  A
+#  rule that retro-fails 18 pre-existing rows blocks the next commit on reconstruction work
+#  nobody scheduled, and a rule that does that gets switched off.  New holds are enforced.
+HOLDQ_CUTOFF = "2026-08-26"
 FABLE_ONLY = {"regress"}       # owner directive: only the flagship reviews regression
 STAGES = ("assess", "research", "review")
 
@@ -141,7 +164,8 @@ def main(argv):
                         nm = mark.split(HELD, 1)[1].split("]", 1)[0].strip()
                         if nm and nm not in names:
                             names.append(nm)
-                    held.append((row["id"], stage, len(got), ", ".join(names)))
+                    held.append((row["id"], stage, len(got), ", ".join(names),
+                                     newest, (row.get("hold_question") or "").strip()))
                 continue
             if len(got) == 1:
                 filed.append((row["id"], stage))
@@ -158,14 +182,40 @@ def main(argv):
     print("check_stage_panels: %d complete, %d grandfathered, %d filed-awaiting-panel, "
           "%d HELD, %d incomplete"
           % (complete, grandfathered, len(filed), len(held), len(violations)))
-    for rid, stage, n, awaited in held:
+    noq_new, noq_old = [], []
+    for rid, stage, n, awaited, newest, question in held:
         print("  HOLD  %-14s %-9s %d/%d  awaiting: %s" % (rid, stage, n, n_seats, awaited))
+        if question:
+            continue
+        #  Report by DATE, not by count: "18 rows lack a question" is a backlog, while
+        #  "this stage was held today and names no question" is an actionable defect.
+        (noq_new if newest > HOLDQ_CUTOFF else noq_old).append((rid, stage, awaited, newest))
+        print("        *** NO hold_question -- %s ***"
+              % ("FAIL, held after %s" % HOLDQ_CUTOFF if newest > HOLDQ_CUTOFF
+                 else "warn, held on/before %s" % HOLDQ_CUTOFF))
+    if noq_old:
+        print("  %d held stage(s) name no question and predate %s -- reported, not failed."
+              % (len(noq_old), HOLDQ_CUTOFF))
+        print("  They are real debt: a seat fired against a disposition note has to guess")
+        print("  the question, and a guessed question still looks like a discharged stage.")
     if listing and filed:
         for rid, stage in filed:
             print("  ..    %-14s %-9s 1/%d  filed, not yet panelled" % (rid, stage, n_seats))
-    if not violations:
+    if not violations and not noq_new:
         print("STAGE_PANELS_PASS  every post-cutoff stage ran the full panel")
         return 0
+
+    if noq_new:
+        print("STAGE_PANELS_FAIL  %d held stage(s) name no question:" % len(noq_new))
+        for rid, stage, awaited, newest in noq_new:
+            print("    %-14s %-9s held %s for %s -- no hold_question"
+                  % (rid, stage, newest, awaited))
+        print()
+        print("  Put the question the seat is being asked in the row's `hold_question`")
+        print("  field.  Not the disposition -- the QUESTION.  'FILE - a design change'")
+        print("  tells a seat nothing it can answer.")
+        if not violations:
+            return 1
 
     print("STAGE_PANELS_FAIL  %d stage(s) moved on without the full panel:" % len(violations))
     for rid, state, stage, n, miss in violations:

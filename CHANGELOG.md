@@ -109,10 +109,26 @@ four.
 ### The sibling this round does NOT fix, named because its own filing named it
 
 `wdc_command()`'s no-disk early return emits `[ wdc: command 0x%02x drive %i, but no disk
-image ]` through **`debug()`**, and floods identically. It is **outside this round's scope
-rather than a missed site**: `debug()` has the early-out `fatal()` lacks, so `-q` silences it,
-which makes it a different channel with a different remedy. It rides with `floodclass`. Saying
-so matters because the original filing named it, and closing the round silently would bury it.
+image ]` through **`debug()`**, once per failed command. It is **outside this round's scope
+rather than a missed site**, and the reason is stronger than `-q`: `debug()` computes
+`v = verbose - (emul_executing ? 1 : 0) + (stepping ? 1 : 0)` and returns at
+`core/debugmsg.c:375` when `v < 0`. **Free-running at the default verbosity that is
+`v == -1`, so the arm emits NOTHING AT ALL** -- it becomes one line per command only under
+`-v` or under stepping. `fatal()` has no such early-out, which is what made the six sites
+this round latched unavoidable. Different channel, different remedy; it rides with
+`floodclass`.
+
+*An earlier wording here said the sibling "floods identically", full stop. That is an
+OVERSTATEMENT and the qualifier was not missing from the evidence -- it was missing from my
+summary. The original filing in `OUTSTANDING_BUGS.md` already reads "floods identically
+(100 lines) through `debug()` -- **invisible free-running at verbosity 0**, visible in every
+cold-debugger probe." I kept the headline and dropped the scope. Caught by the pass-2 codex
+seat, which re-derived from `debugmsg.c` what this project's own record already said.*
+
+*This is the MIRROR of the dropped-qualifier failure the carrier records: there a seat
+silently NARROWED a brief's claim so a defect hid behind a locally-true sentence; here I
+silently WIDENED a filing's claim by deleting its scope. Both survive every check except
+comparing the summary against its source.*
 
 ### Filed rather than fixed
 

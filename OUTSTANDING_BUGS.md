@@ -56,6 +56,21 @@
 >   exactly what the default `devinit->addr + 0x206` already computes for `0x14000180`. It
 >   carries a `TODO: Fix` and does nothing. Not guest-reachable; it earns a line only because
 >   it sits on the two-instance route `wdcflagindep`'s probe would have to use.
+> - **`wdcsectorreset`** — a ONE-LINE latch reset on a NORMAL register write restores the
+>   `#464` width flood while leaving **all 26 detector rows green**. The edit, verbatim from the
+>   pass-2 codex seat: add `d->warned_nonbyte_write = 0;` to the `wd_sector` write arm after the
+>   existing `d->sector = ...`. A guest alternating a wide write to `wd_seccnt` with an ordinary
+>   8-bit write to `wd_sector` then floods at one host line per pair, forever.
+>   **Why every row misses it:** `interleave` pins reset-on-normal-operation at `:583` only,
+>   using a valid COMMAND opcode; no row writes `wd_sector` between two wide accesses, so none
+>   can see a reset keyed there. **It is SMALLER than the escape the capped ask-again found** —
+>   that was two lines at the guard, this is one line at a different register — which is a
+>   recorded limit of the ask-again rather than a failure of it: the ask-again asked about the
+>   GUARD, and this edit never touches a guard.
+>   SOURCE-PROVEN, **not measured** — the seat said so itself, so it is coverage debt under the
+>   stopping rule and not a floor breach (`#464`'s detector satisfies clauses (a)–(f)). First
+>   job is to build the mutant and score it. **Do not fold this into `wdcflagindep`**: that row
+>   is about which SITES share a flag, this is about which REGISTER can clear one.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
