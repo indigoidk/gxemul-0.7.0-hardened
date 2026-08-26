@@ -1745,18 +1745,23 @@ be stale in both directions, and a tool's own header is a primary source about t
 6. `GXEMUL-SEC/regress/run.sh` → `REGRESS_PASS`. **Never run two harness/gate invocations
    concurrently** — but *** THE REASON GIVEN HERE FOR FOUR MONTHS WAS WRONG, corrected by
    measurement 2026-08-14: `selftest_mutation.sh` does NOT `rm -rf` the shared workdir. It is
-   `T=$LOGDIR/mutation` (`:27`) and `rm -rf "$T"` (`:41`) — scoped to one subdirectory. *** Nor do
+   `T=$LOGDIR/mutation` and `rm -rf "$T"` -- scoped to one subdirectory. *(Cited as
+   `:27`/`:41` until 2026-08-26; they are `:40`/`:54` today. Re-keyed to the code itself:
+   `grep -n 'LOGDIR/mutation' selftest_mutation.sh` resolves it at any commit.)* *** Nor do
    the rig images serialise: both consumers open them read-only with `R:` and the overlay is
    pid-unique. **The real serialisers are three producer/consumer orderings and a load-sensitive
    oracle**, and they are worse than the wrong reason was: `gate_build.sh:64-65` WITHDRAWS
    `/tmp/gxsec-gxemul` and `$RIG/gxsec-gxemul` at gate start and republishes only at `:302-305`,
    while `gate_mips.sh:30` `need_exec`s it — concurrent runs make gate 4 `gate_skip` on a missing
-   binary, which is **silent coverage loss scored as SKIP**; `gate_hygiene.sh:198-258` grades pty
-   logs that gates 4 and 5 produce, so concurrency grades a partial log and yields **a wrong
-   answer, not a crash**; `gate_ab.sh:42` `rm -rf`s `/tmp/gx-pristine` and `/tmp/gx-prebatch`,
+   binary, which is **silent coverage loss scored as SKIP**; `gate_hygiene.sh` grades pty
+   logs that gates 4 and 5 produce (the block cited as `:198-258` has moved; its own header
+   comment says it "READS THE RAW PTY LOGS ON PURPOSE", which is the durable key), so concurrency grades a partial log and yields **a wrong
+   answer, not a crash**; `gate_ab.sh`'s `rm -rf "$dir"; mkdir -p "$dir"` (cited as `:42`, now `:43` --
+   grep the statement, not the line) removes `/tmp/gx-pristine` and `/tmp/gx-prebatch`,
    which `gate_upstream.sh:46-47` reads. A per-gate `LOGDIR` would NOT isolate them, because
    the ORDERINGS above are what serialise the gates — the driver's own hardcode is gone (#422:
-   `drive_guest.py:207-211` honours `$LOGDIR`, `lib.sh:31` exports it), and it changed nothing
+   `drive_guest.py` honours `$LOGDIR` -- `grep -n 'honour .LOGDIR' drive_guest.py`, at
+   `:239` today and cited as `:207-211` until 2026-08-26 -- and `lib.sh` exports it), and it changed nothing
    about them. **47 wall-clock oracles by direct census 2026-08-26** -- `while time.time() - t < ...`
    loops across **27** python files in `regress/`, where this line said 33 loops in 18
    files. *(An auditing seat counting slightly differently got 45; the number moves with
