@@ -2046,6 +2046,54 @@ row silently stop being tested. This one tests the right rows against the wrong 
 `bash -c '... echo "[$v]"; done' | nl` and count. It takes two seconds and it is the whole
 test.
 
+*** AND THE SAME RULE GOVERNS COUNTS, NOT ONLY SCORES. Adjudicated 2026-08-26 after an
+audit of this whole file found the transcribed count to be its single largest decayed class. ***
+
+> **A COUNT WRITTEN INTO A DURABLE RECORD NAMES ITS DERIVER** -- the command, script, manifest
+> or log that produces it -- **or carries its method and date inline. And a count being
+> CORRECTED may never land as a fresh bare literal: it lands as deriver-plus-demoted-prose.**
+>
+> **STOP CONDITION, in the same sentence because that is what keeps it from becoming `#392`:**
+> it fires only on NEW and CORRECTED counts, at writing time; it audits NOTHING retroactively;
+> it builds NO checker; and the ~70 legacy counts stay governed by the existing read-side rule
+> -- re-derive an exemplar before leaning on it, and FILE anything found decayed rather than
+> sweeping it.
+
+**THE HONEST SEVERITY, because the ruling turned on it: NO STALE COUNT HAS EVER CHANGED A
+DECISION.** The adjudicator hunted for one and came back negative, checking every candidate
+where a count sat near a decision -- `exitsweep`'s census (re-derived by a seven-seat panel
+BEFORE the round acted, and its bound deliberately written *"as a condition rather than a
+number"*), gate 9's 23-vs-41 (the gate already refuses the class in its own words), and the
+house-idiom's wrong marker spelling (all three sites predate the clause that misnamed them).
+**Transcribed counts have cost audit expense and reader distrust; they have cost zero
+decisions.** That is written down so nobody re-argues this class as though it were urgent.
+
+*And the near-misses are NOT in this class, which is the sharpest thing the hunt produced:* the
+one measured case of a stale number changing a decision was an **absence claim** -- a five-seat
+panel voting to drop a row on a sentence derived at 7 differentials and quoted at 13, resolved
+by a targeted CHECK (`check_optpin.py`, whose header states the maxim: *"An audit is a claim
+with a shelf life; a check is not"*). The other decision-costing stale facts on record are
+EXPIRED MEASUREMENTS AND ROSTERS -- the ~20-minute Ollama spacing that rationed panels for a
+week, the kimi substitute left unfired, "no SH manual" load-bearing for four rounds.
+
+**WHY NO CHECKER, and it is a measurement rather than a preference.** This file carries **33**
+digit+noun counts and **67 WORD-number forms** (`ONE LESSON`, `TWO INSTANCES`, `nine seats`) --
+**the blind spot is twice the visible population**, and the word forms are overwhelmingly
+rhetorical structure rather than facts. A checker policing the minority of a class while
+alarming on prose is the switched-off-check shape this file already names, and section U's own
+header states the principle: *guessing would produce false positives, which is how a check gets
+ignored.*
+
+> **PRE-SPECIFIED ESCALATION, so nobody re-argues it later: the FIRST measured decision that
+> consumed a stale count converts this writing rule into the `check_cited_artifacts.py` idiom**
+> -- existence-only, forward-only from a cutoff, carrier files only. **Until that trigger
+> fires, no machinery.**
+
+*The rule is prose and that is deliberate, against this file's own structure-first default: the
+adjudicator rejected both mechanical options on measurements, and a prose rule with a named
+stop condition and a pre-specified escalation trigger is what the evidence supports. Recorded
+here rather than as a checker because the evidence says a checker would be switched off.*
+
 *** A SCORE CLAIM MUST NAME THE LOG THAT PRODUCED IT. Adopted 2026-08-23 after the
 FOURTH generation of the frozen-number defect appeared in one round -- inside the
 sentence memorialising the third. ***
