@@ -60,9 +60,44 @@ FILE2SEAT = {
     "ollama_glm.txt": "glm",
     "ollama_deepseek.txt": "deepseek",
     "ollama_minimax.txt": "minimax",
+    #  *** ADDED 2026-08-25. Without this entry a kimi SUBSTITUTE answer was
+    #  INVISIBLE to section G -- an unread review BY CONSTRUCTION, in the very
+    #  check that exists to catch unread reviews. The kimi CLI is 403-walled and
+    #  `kimi-k3:cloud` is the live transport; both map to the same SEAT.
+    "ollama_kimi.txt": "kimi",
 }
 
 PANEL_RE = re.compile(r"panel_\d{8}_\d{6}")
+
+
+#  *** A CITED DIR WITH A DESCRIPTIVE SUFFIX WAS SILENTLY UNVERIFIABLE UNTIL 2026-08-25. ***
+#  PANEL_RE extracts the bare `panel_YYYYMMDD_HHMMSS` stem, but real panel dirs often carry a
+#  suffix naming what they reviewed -- `panel_20260825_094452_463research`,
+#  `..._463assess`, `..._0798b90_pass2`.  The exact-match `isdir` then failed, and this
+#  checker printed "cited but NOT ON DISK; cannot verify" and MOVED ON.
+#
+#  That is the gap-closes-itself shape: the check reports its own inability and continues,
+#  so every suffixed panel's seats were never scanned for unread reviews.  It was found the
+#  same hour this checker was taught about `ollama_kimi.txt` and immediately surfaced a
+#  17.7 KB answer recorded nowhere -- which is exactly the class it exists to catch.
+#
+#  Resolve by unique prefix.  AMBIGUITY IS REPORTED, never guessed: two dirs sharing a
+#  timestamp stem means the citation is the thing that is wrong.
+def resolve_dir(d):
+    p = os.path.join(PANELS, d)
+    if os.path.isdir(p):
+        return d
+    try:
+        cand = sorted(x for x in os.listdir(PANELS)
+                      if x.startswith(d) and os.path.isdir(os.path.join(PANELS, x)))
+    except OSError:
+        return d
+    if len(cand) == 1:
+        return cand[0]
+    if len(cand) > 1:
+        print("  --   %s: AMBIGUOUS -- %d dirs share this stem: %s"
+              % (d, len(cand), ", ".join(cand)))
+    return d
 
 
 def load():
@@ -122,7 +157,13 @@ def main(argv):
 
     violations = []
     checked = 0
-    for d in sorted(dirs):
+    for cited in sorted(dirs):
+        #  KEEP BOTH NAMES.  `cited` is the bare `panel_YYYYMMDD_HHMMSS` stem the ledger
+        #  wrote and is what `pairs`/`files` are keyed on; `d` is the real directory, which
+        #  may carry a descriptive suffix.  An earlier version of this fix rebound `d` and
+        #  then tested `(d, seat) in pairs`, so every suffixed dir reported ALL its seats
+        #  as unrecorded -- a fix that turned a silent miss into a loud false positive.
+        d = resolve_dir(cited)
         if not os.path.isdir(os.path.join(PANELS, d)):
             #  Stated, not silently skipped: a cited directory that is gone cannot be
             #  checked, and pretending otherwise is how a green row means nothing.
@@ -137,8 +178,9 @@ def main(argv):
             percount[seat] = percount.get(seat, 0) + 1
         for (seat, fn), sz in sorted(onhand.items()):
             checked += 1
-            named = (d, fn) in files
-            covered = named or (percount[seat] == 1 and (d, seat) in pairs)
+            named = (d, fn) in files or (cited, fn) in files
+            covered = named or (percount[seat] == 1
+                                and ((d, seat) in pairs or (cited, seat) in pairs))
             if not covered:
                 violations.append((d, seat, sz, fn))
             elif listing:

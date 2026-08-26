@@ -291,7 +291,9 @@ stall from deepseek and minimax, and it will look exactly like a quota failure.*
 | **Kimi 3** | *** BACK — USED AND ANSWERING, 2026-08-14 ~21:0x *** | Quota-dead since ~08-12 (403, 328-byte error file). On the #121 pass 1 it returned **128 KB** ending in a real verdict, and **it RAN ITS OWN PROBE** (`/tmp/t121`, `_scratchpad/t121_probe.c`) while re-checking `git status --porcelain` empty afterwards — so it is a MEASURING seat, not only a reading one. **It beat the main loop twice in that single pass:** it found the self-invalidating occurrence count at a SECOND site (`CHANGELOG.md:4580`) that a `src/`-only grep missed, and it caught that `prefix_d` is absent from the `prefix_i+prefix_f+prefix_s > 1` guard at `diskimage.c:1763`, so `ds:` is accepted and a naively-placed `d:` assignment would silently override an explicit `s:`. **A 128 KB substantive answer IS the health test.** Wire it back into panels AND into the #124 adjudication. |
 | **Fable 5** (Agent, `model: "fable"`) | *** ALIVE — REVIVED BY THE 2026-08-15 /login, NOT BY THE CALENDAR *** | Six consecutive quota failures (the sixth deliberately after the date rollover, proving the reset is not at local midnight) — then the owner's `/login` at ~10:4x restored it. The post-login ECHO-TEST returned **both nonces** (prompt token + verbatim file quote from CHECKPOINT.md), so prompt delivery AND file access are proven, not assumed. **Both "dead" Anthropic-side states this project has seen were revived by ACCOUNT-STATE CHANGES (Kimi: billing cycle; Fable: login), never by a date.** The owner also set the session model to Fable 5 (max) — the flagship hat and the main loop are one model again. Its first act back: the FABLE half of the FABLE/KIMI adjudication, reviewing Kimi's docket verdict item by item. Health-tested **five times** across 2026-08-13/14, including on the day its reset was expected and again at ~22:2x on 08-14. DO NOT ASSUME A CALENDAR DATE RESTORES A SEAT — TEST IT; the test is one Agent call told to open with a liveness token (`FABLE_SEAT_ALIVE_<date>`), which costs one call and cleanly separates "dead" from "assumed dead". Kimi revived with no calendar signal after five failures, so keep testing this one too — but ONCE PER SESSION, not per round. |
 
-**Nine seats by design; SEVEN answering as of 2026-08-14 ~21:0x. `panel.sh` fires seven scriptable
+**Nine seats by design. `panel.sh` fires EIGHT scriptable transports as of 2026-08-25 (the
+eighth is `kimi-k3:cloud`, the kimi SUBSTITUTE -- see the sixth seat-failure class). The
+count below is the 2026-08-14 snapshot: SEVEN answering, `panel.sh` firing seven scriptable
 seats, only ONE of which (minimax) now produces nothing.** Kimi came back with no warning and no
 calendar signal — which is the general lesson: **a dead seat is dead until a real invocation says
 otherwise, and it may revive the same way. Fire the full roster and let the seat-check sort it;
@@ -1058,6 +1060,34 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > factual premises. A brief that lists two options gets a panel arguing about two options;
 > nobody proposes the member that was never named. *Five seats and an adjudicator debated the
 > two-membered set; the seat that found the third had gone looking in the tree.*
+> #### *** AND THE FOUNDING STORY WAS WRONG. THE THIRD MEMBER *WAS* NAMED -- ON PASS 1, IN A
+> #### VERDICT LINE, BY A SEAT `panel.sh` HAD STOPPED FIRING. Discovered 2026-08-25, one day
+> #### after this rule was minted, by teaching a checker about that seat. ***
+>
+> The sentence above says *nobody proposes the member that was never named*. In the round this
+> rule was minted from, somebody did. `_scratchpad/panel_20260824_191634/ollama_kimi.txt`,
+> written at **19:36 on the FIRST pass**, says in its verdict line:
+>
+> > *"the latent index protection should be carried as a **point-of-use decline**, not only a
+> > comment."*
+>
+> That is the third member, proposed before any edit was made. **The 17.7 KB answer was
+> recorded nowhere.** It surfaced only when `check_seats_read.py` was taught that
+> `ollama_kimi.txt` maps to the kimi seat -- until then a substitute-transport answer was
+> invisible to the very check that exists to catch unread reviews.
+>
+> > **SO THE RULE STANDS AND ITS DIAGNOSIS CHANGES. The failure was not option-space
+> > blindness. It was an UNREAD REVIEW.** Widening the option set is still right; but the
+> > cheaper fix, and the one that would have worked here, is to READ WHAT THE SEATS ALREADY
+> > SENT before deciding the option set is complete.
+>
+> The same answer also named `asicindexcase` on pass 1 -- *"post-switch `r`-use audit before
+> the edit lands; absence admits converting a host kill into a silent OOB write on declined
+> offsets"* -- which the round later filed as a discovery.
+>
+> *Two rounds of design argument, one filed row and one carrier rule, all of which existed in
+> a file on disk the whole time. This is the third recorded instance of the unread-review
+> class and by some distance the most expensive.*
 >
 > And it pays across a whole filed queue, not one device: every remaining `exit(` de-fatalisation
 > faces the same choice, and `floodclass` already records guest-drivable log floods as a CLASS.

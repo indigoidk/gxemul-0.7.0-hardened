@@ -143,11 +143,23 @@ OLLAMA2="deepseek-v4-pro:cloud"   # DeepSeek is BACK: v3.2 was retired 2026-07-1
                                   # returned its token with model reported as the
                                   # release build. Re-pull after upstream bumps;
                                   # the tag in this file only names the alias.
-OLLAMA3="minimax-m3:cloud"        # all three are THINKING models; send no
+OLLAMA3="minimax-m3:cloud"        # all FOUR are THINKING models; send no
                                   # num_predict cap (panel_ollama.py doesn't) or
                                   # the budget is eaten by hidden reasoning and
                                   # the response comes back empty.
                                   # Recheck tags: curl -s localhost:11434/api/tags
+
+#  *** OLLAMA4 ADDED 2026-08-25: THE kimi SUBSTITUTE TRANSPORT. ***  The kimi CLI
+#  is 403-walled on its billing cycle, and for several panels this script fired ONLY
+#  the CLI -- so every one of those panels ran a seat short while `kimi-k3:cloud`
+#  sat LIVE on the same daemon already serving the other three.  Three earlier panel
+#  dirs hold a healthy hand-fired ollama_kimi.txt, so the substitute was known to work
+#  and simply stopped being used.  A walled transport is not a dead seat: check
+#  `curl -s localhost:11434/api/tags` for another road before recording any seat down.
+#
+#  NOTE this is the kimi SUBSTITUTE, never "the kimi seat".  Record it by transport --
+#  `kimi-k3:cloud` -- so a reader can tell which road answered.
+OLLAMA4="kimi-k3:cloud"
 
 # argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
 BSZ=$(wc -c < "$BRIEF")
@@ -201,7 +213,7 @@ fi
 #  Hence the line below, in every brief this script sends.  Briefs already inline the
 #  measurements precisely so no seat needs to run anything; this says it out loud,
 #  because a seat that CAN run a gate eventually will.
-echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) | + Opus via Agent tool"
+echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) ollama($OLLAMA4) | + Opus/Fable via Agent tool"
 
 # --- launch the five scriptable seats concurrently ---------------------------
 AGY_PROMPT="Read $BRIEF_ABS and review it adversarially exactly as its own \
@@ -279,9 +291,13 @@ python "$TOOLS/panel_ollama.py" "$OLLAMA3" "$OUT/ollama_minimax.txt" "$PACKET_BR
     > "$OUT/ollama_minimax.err" 2>&1 &
 P_O3=$!
 
-echo "launched: codex=$P_CODEX agy=$P_AGY kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3"
-echo "waiting for the seven scriptable seats..."
-wait $P_CODEX $P_AGY $P_KIMI $P_GROK $P_O1 $P_O2 $P_O3
+python "$TOOLS/panel_ollama.py" "$OLLAMA4" "$OUT/ollama_kimi.txt" "$PACKET_BRIEF" \
+    > "$OUT/ollama_kimi.err" 2>&1 &
+P_O4=$!
+
+echo "launched: codex=$P_CODEX agy=$P_AGY kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=$P_O4"
+echo "waiting for the eight scriptable seats..."
+wait $P_CODEX $P_AGY $P_KIMI $P_GROK $P_O1 $P_O2 $P_O3 $P_O4
 
 # --- verify each seat produced a real answer ---------------------------------
 # A seat "answered" if its file is non-trivial AND is not merely the brief
@@ -426,6 +442,7 @@ check "grok     " "$OUT/grok.txt"
 check "glm      " "$OUT/ollama_glm.txt"
 check "deepseek " "$OUT/ollama_deepseek.txt"
 check "minimax  " "$OUT/ollama_minimax.txt"
+check "kimi(sub)" "$OUT/ollama_kimi.txt"
 say "---------------------------"
 echo "SEATS 7 AND 8 -- launch BOTH now via the Agent tool, in the same turn:"
 echo "  Opus 5  (model: \"opus\")   reads the repo directly; the seat most likely"
@@ -459,7 +476,7 @@ echo
 #  banner that printed "agy(high)" while passing no flags.
 ok=0; miss=""; total=0; rated=""
 for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
-         deepseek:ollama_deepseek minimax:ollama_minimax; do
+         deepseek:ollama_deepseek minimax:ollama_minimax kimi_sub:ollama_kimi; do
     n=${s%%:*}; f="$OUT/${s##*:}.txt"
     total=$((total+1))
     #  *** THE WALL SCAN RUNS FIRST, FOR EVERY SEAT, AND UNTIL 2026-08-17 IT COULD NOT
@@ -515,8 +532,24 @@ for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
     fi
 done
 say "SEATS: $ok/$total scriptable produced output${miss:+ -- no answer from:$miss}"
-[ -n "$rated" ] && say "       *** RATE-LIMITED (HTTP 429), NOT a considered non-answer:$rated"
+#  *** DO NOT NAME A STATUS CODE THIS SCRIPT DID NOT OBSERVE. ***  This line read
+#  "RATE-LIMITED (HTTP 429)" for every match, and it printed that for a kimi failure
+#  whose actual text was "403 You've reached your usage limit for this billing
+#  cycle" -- twice, on two different panels.  The disposition was right and the
+#  LABEL was wrong, and the carrier draws a sharp line between failure classes that
+#  a mis-named status blurs: a WALL you wait out, a REFUSED CONNECTION one command
+#  fixes, a MISCONFIGURATION that exits 0 while printing its own error.
+[ -n "$rated" ] && say "       *** WALLED / RATE-LIMITED / MISCONFIGURED -- NOT a considered non-answer:$rated"
+[ -n "$rated" ] && say "       *** read each seat file for the ACTUAL status; do not assume 429."
 [ -n "$rated" ] && say "       *** re-run those seats before treating this panel as complete."
+
+#  A CLI WALL WITH A LIVE SUBSTITUTE IS ONE SEAT ANSWERED, NOT ONE LOST AND ONE
+#  GAINED.  Report it explicitly, because the tally above counts TRANSPORTS.
+if printf %s "$rated" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
+   && ! printf %s "$rated" | grep -qw kimi_sub; then
+    say "       NOTE: the kimi CLI is walled but kimi-k3:cloud ANSWERED -- that seat"
+    say "             is COVERED by its substitute transport, not lost."
+fi
 say "       (a non-answering seat is a SEAT FAILURE, never counted as agreement)"
 
 #  A FOREGROUND RUN IS PART OF THE CONTRACT.  See the SEATFILE comment above: a

@@ -128,7 +128,10 @@ WALL_RE = re.compile(
     re.I)
 
 SEATS = ("codex", "agy", "grok", "kimi",
-         "ollama_glm", "ollama_deepseek", "ollama_minimax")
+         "ollama_glm", "ollama_deepseek", "ollama_minimax",
+         #  the kimi SUBSTITUTE transport (added 2026-08-25). The CLI seat
+         #  "kimi" above is 403-walled; this is the road that answers.
+         "ollama_kimi")
 
 
 def brief_lines(d):
