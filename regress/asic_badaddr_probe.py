@@ -77,8 +77,13 @@ out.  Each is a limit a records panel would otherwise find. ***
   (ii) `-1` IS PINNED BY COLLISION, AND COLLISION IS LAYOUT-DEPENDENT.
        `crossarr` catches it because at -1 the probed cells collide; a
        struct REORDER could remove that collision and silently unpin it.
-       `mask9 rt` does not have this weakness -- it is anchored to a cell
-       by a side effect, not to a neighbour by distance.
+       `mask9 rt` IS ALSO LAYOUT-DEPENDENT, and an earlier draft of this
+       clause denied it.  It is anchored to a cell by a SIDE EFFECT (the
+       tick zeroes the latch), which makes it absolute with respect to
+       the DECODE -- but `mask_9[3]` lands on `asserted_13` at byte 48
+       purely by ADJACENCY (verified by offsetof further down this file),
+       so a struct REORDER unpins it exactly as it unpins `crossarr`.
+       Anchoring buys decode-absoluteness, not layout-independence.
   (iii) ARRAY GEOMETRY IS OUT OF CONTRACT.  `uint32_t mask_13[3]` ->
        `[2]` also scored a clean 12/12 against the then 12-row detector
        (measured; a historical quote, hence the 12-row marker).  It edits the ARRAY

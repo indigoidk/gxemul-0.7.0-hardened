@@ -9659,7 +9659,10 @@ membership test -- apply the edit to the PRE-FIX code and the old `exit(1)` fire
 legitimate traffic, so the defect used to announce this edit and the fix de-announced it.
 An accept obligation is discharged by a MEASURED KILL, never by prose. **Measured: 12/13,
 reddening `mask9 rt` ALONE.** Its oracle is ANCHORED -- tied to a cell by a channel outside
-the decode under test (the tick zeroes the latch), not to a neighbour by distance.
+the decode under test (the tick zeroes the latch). **It is NOT thereby independent of struct
+layout**, and an earlier version of this sentence said it was: `mask_9[3]` lands on
+`asserted_13` by adjacency, so a struct reorder unpins it like any collision row. Anchoring
+buys decode-absoluteness, not layout-independence.
 
 The final table is **13 rows, 12 mutants, NO ESCAPES**. Generalised into the carrier as
 vacuity-floor clause **(f), the ANCHOR RULE**, with the two-second reviewer check: *"if every

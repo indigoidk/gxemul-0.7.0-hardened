@@ -148,7 +148,8 @@ Four packet-fed seats answered; none walled. Two named `& 3` -> `& 2` **independ
 it restricts `r` to {0,2}, so `+0x14` aliases onto `+0x10`, every row still reads
 "survived", and the round-trip agrees -- a clean escape. A third named `& 3` -> `& 7`:
 `r` reaches 4, and because `:54-57` declares `pending_irq[3]`, `mask_13[3]`,
-`mask_11[3]`, `mask_9[3]` **consecutively**, `mask_13[4]` IS `mask_11[1]` -- a mask_13
+`mask_11[3]`, `mask_9[3]` **consecutively**, `mask_13[4]` LANDS ON `mask_11[1]` under this
+toolchain (the subscript is UB regardless of adjacency -- see the close-out) -- a mask_13
 write lands in mask_11 and still reads back.
 
 **And the same seat found the comment was only half a rule.** The invariant as first
@@ -258,7 +259,7 @@ and they are not variations on one idea -- they are four distinct ways to break 
 | escape | what it does | named by | caught by |
 |---|---|---|---|
 | `& 3` -> `& 2` | aliases +0x14 onto +0x10 | glm, deepseek, agy -- **independently** | `alias` |
-| `& 3` -> `& 7` | r reaches 4; `mask_13[4]` IS `mask_11[1]` | kimi, agy | `crossarr` |
+| `& 3` -> `& 7` | r reaches 4; `mask_13[4]` LANDS ON `mask_11[1]` (UB, not defined C) | kimi, agy | `crossarr` |
 | `& 3` -> `& 1` | aliases **+0x18** onto +0x10 | grok | `alias2` |
 | `/ 4` -> `/ 2` | also aliases **+0x18** onto +0x10 | codex | `alias2` |
 
@@ -16351,16 +16352,76 @@ The round measured the kill as reachable at **64 byte addresses** by a probe cen
 stage, filled after the commit, found TRANSACTION CLOSURE — and its consequence is bigger than a
 count:
 
-> **The kill was reachable through LEGAL 8-byte accesses to IMPLEMENTED registers.**
+> **A CPU-VALID INSTRUCTION AIMED AT A DOCUMENTED REGISTER, BUT USING THE WRONG DEVICE ACCESS
+> WIDTH, REACHES THE KILL.**
+>
+> *The width clause is not decoration and an earlier draft of this box dropped it. Without it
+> the sentence reads as a universal, and the universal is FALSE: no 32-bit access to any of the
+> twelve implemented registers kills — all twelve labels give r <= 2.*
 
-Every implemented register at word 2 of a group (+0x08, +0x18, +0x28, +0x38) has a reserved word
-immediately above it, so an SZ=1 `fmov.d` to a documented register — ordinary, correct guest
-code — lands on a killing lane **by construction**. A 32-byte store-queue flush hits two, dying
-mid-burst with earlier words already committed. Not a probe. Not reserved-space poking. **Normal
-driver traffic.**
+An 8-byte `fmov.d` is 8-byte aligned, so its base is a **word-0 or word-2** offset. Based at one
+of the four **word-2** registers (+0x08, +0x18, +0x28, +0x38) it touches words 2 and 3, and word
+3 is a killing lane — so the instruction never has to name a reserved address to reach one.
 
-That retroactively enlarges the severity: this was not "a guest that walks reserved space can end
-the host", it was "a guest that uses the device correctly can end the host."
+**The count is FOUR, not "every documented register", and the difference is checkable:** based
+at a word-0 register (+0x00, +0x10, +0x20, +0x30) an `fmov.d` touches words 0 and 1 and does NOT
+die; word-1 registers (+0x04 and siblings) are not 8-byte aligned, so they cannot be an `fmov.d`
+base at all. *A packet-fed seat refused to sign the "every"-shaped entailment and asked for it
+to be settled from source rather than from the arithmetic. It settles: the set is the four
+word-2 registers.*
+
+That enlarges the severity in KIND, not in count: this was not only "a guest that walks reserved
+space can end the host", it was "a guest aiming at a register it is entitled to use can end the
+host, without ever naming a reserved address."
+
+#### *** THE FIRST DRAFT OF THIS BLOCK SAID "LEGAL", "ordinary, correct guest code", "Normal
+#### driver traffic" AND "uses the device correctly". ALL FOUR ARE WITHDRAWN — pass 2 on this
+#### commit refuted them, and the refutation came with an external oracle. ***
+
+*** AND THE FIRST DRAFT OF THIS WITHDRAWAL COMMITTED THE ERROR IT WAS WITHDRAWING. ***
+It asserted, bolded, **"The Holly ASIC's documented access width is 32-bit"** — while this
+round's own commit message says *"This project holds no Holly ASIC documentation."* What was
+actually supplied is **two DRIVER IMPLEMENTATIONS**: Linux's `mach-dreamcast` IRQ model and
+KallistiOS, both using `inl`/`outl`, i.e. 32-bit accesses to three status words and three per
+mask group. **A driver's access width is strong implementation evidence; it is not a documented
+width**, and collapsing the two is this project's own evidence ladder (CONFIRMED versus
+BELIEVED) failing inside the paragraph that withdraws four unsupported words.
+
+**The withdrawal survives without that warrant, which is why the conclusion stands.** It was
+re-derived independently and mechanically from the file's own twelve `case` labels: every one
+gives r <= 2, so **no 32-bit access to any implemented register kills**. "Legal", "correct" and
+"normal driver traffic" were unsupported on the source alone, with no external oracle needed.
+An 8-byte `fmov.d` is CPU-valid but is not a 32-bit device access, and it necessarily includes
+a reserved address.
+
+*The rule that failed here is the PREMISE-AUDIT one — state a load-bearing premise as a
+question. An earlier draft blamed the WARRANT-ELEMENTS rule, which governs TRANSFERRING A
+PRECEDENT; this claim transferred nothing, it was a severity claim. Citing the wrong rule is how
+a carrier accretes rules nobody can test.*
+
+*This is the WARRANT-ELEMENTS rule failing on the round that minted it. The rule says: before
+transferring a precedent, grep the round's own findings against each element. The element never
+checked was the DEVICE's access width, and no amount of checking register adjacency or decoder
+splitting could substitute for it.*
+
+**Three further corrections in the same block, each from a different seat:**
+
+* **The store-queue flush SPANS two killing words and DIES ON THE FIRST.** It does not "hit two".
+  The burst commits +0x00, +0x04 and +0x08, then exits the host at +0x0c and never reaches the
+  second. "Dying mid-burst with earlier words already committed" is right for the SQ case and
+  WRONG for the `fmov.d` case, where the killing word is issued first and nothing commits.
+* **The `fmov.d` issue-order claim is OVER-GENERAL and is not load-bearing.** `cpu_sh_instr.c:790-798`
+  covers only `fmov_rm_frn`'s SZ=1 path; **three of the six SZ=1 encodings are low-word first**
+  (`fmov @Rm+,DRn` and `fmov @(R0,Rm),DRn` among them). The host dies either way — whichever half
+  lands on +0x0c — so the ORDER was never needed. It was cited as a warrant anyway.
+  *A seat had already recorded this on the `#463` pass 2, in the receipt for `f1fa6a0`, and it
+  was cited again here without being consulted.*
+* **"64 is a floor" was ambiguous between two different sets, and the two seats that argued about
+  it were counting different things.** Stated exactly: there are **64 killing BYTE ADDRESSES**
+  (four bytes of word 3 × sixteen groups), and that set is complete, not a floor. What is a floor
+  is the set of **transaction STARTS that end in death**, which additionally contains the sixteen
+  8-byte bases (+0x08, +0x18 … +0xf8) and the eight aligned 32-byte store-queue blocks — none of
+  which is itself one of the 64.
 
 ### And a wording pass the round owes, because it asserted C where it had only a measurement
 
@@ -16373,7 +16434,17 @@ The correction cuts TOWARD the fix rather than against it: the failure a broken 
 not a defined overlap but UB a compiler is licensed to exploit, which is a stronger argument for
 enforcing the bound in control flow than any of the ones actually made. Corollary, said out loud
 because it was true of the tables anyway: **mutants whose kills route through an out-of-bounds
-subscript (`-1`, the array shrink) are toolchain-measured oracles**, not portable ones.
+subscript are toolchain-measured oracles**, not portable ones — and there are **FIVE of them, not
+the two an earlier draft named**: `-1`, the array shrink `[3]`->`[2]`, `& 7` (max r = 6), and
+BOTH translations `+1` and `+2`. `& 2`, `& 1`, `/ 2` and `% 3` all keep r <= 2 and are not in
+the class. *Evidence for `& 7`: `table3_12rows/probe_M7.raw` shows `crossarr` reading **0xd4** where base
+reads **0xc3** — an out-of-bounds neighbour value, layout-dependent. **The two omissions that
+matter most are `+1` and `+2`, and nobody named them until now:** `+1` is `mask9 rt`'s own
+mutant — the thirteenth row, the anchored accept row, and the exemplar carrier clause (f) was
+minted from — while `+2` is the measured anchor cited in the `asicindexcase` warrant. None of
+this changes a shipped row; it changes what the probe's CONTRACT may claim under floor clause
+(e), because three of the detector's five aliasing kills are toolchain-measured rather than
+portable. That belongs in the probe header.*
 
 ### The latch: considered, and refuted BY THIS ROUND'S OWN EARLIER FINDING
 
@@ -16385,6 +16456,47 @@ deleted `fatal()` with a latched one. It was ruled in, and then refuted:
 * **The information is absent, not merely awkward** — the decoder issues two independent 32-bit
   accesses (this round's own finding 7, *"read second word first"*), so at the handler the second
   half of a legal `fmov.d` and a direct probe of a reserved word are **byte-identical calls**.
+
+#### *** BOTH BULLETS ARE TRUE ONLY FOR `len == 4`, AND AS WRITTEN THEY OVERCLAIM. Corrected in
+#### the pass 2 on this commit, by THREE seats independently — two file-reading, one packet-fed. ***
+
+The handler receives `len` as well as `relative_addr`. So:
+
+* a **byte** access at +0x0d, or a **word** access at +0x0e, is not a lane of any legal 8-byte
+  access, and is distinguishable by `len` alone;
+* an **unaligned** call is distinguishable by `relative_addr` alone.
+
+A predicate like **"not an aligned 4-byte subaccess"** is therefore *demonstrably nonempty*, and
+a bounded diagnostic on it would announce nothing a legal `fmov.d` or store-queue burst produces.
+**What the two bullets actually establish is narrower: an aligned 32-bit access at +0x0c cannot
+be told from the half of an `fmov.d`, so a latch cannot cover THAT case without false alarms.**
+
+*And the second bullet leans on the issue-order claim, which is over-general — see the correction
+above. Since the host dies on whichever half lands at +0x0c, indistinguishability never needed
+the order, and citing it made the argument look better-warranted than it was.*
+
+**PROVENANCE, corrected — an earlier draft of this very block got it wrong.** That draft said a
+seat had recorded the over-generality "in the receipt for `f1fa6a0`". **The receipt mentions
+`fmov` zero times.** What actually happened is worse and is a class this project already names:
+grok DID record it, in its seat answer on the earlier pass-2 panel
+(`_scratchpad/panel_20260825_020219/grok.txt`), naming `fmov @Rm+,DRn` at `:943-963` and
+`fmov @(R0,Rm),DRn` at `:866-890` as low-word-first — **and it was never transcribed into the
+receipt.** So the next round could not consult it. *That is the UNREAD REVIEW class: a seat that
+answered and was not recorded is neither a seat failure nor agreement. Third recorded instance,
+and the first where the unread finding was then independently re-derived a round later.*
+
+**DISPOSITION, and it is deliberately not a reversal.** Silent fall-through remains defensible as
+POLICY — declining to announce a class you can only partially discriminate is a real design
+choice. What this round may **not** claim is that it was FORCED: the commit said the option was
+refuted, and it was not. This is a DESIGN DISSENT against a record, not a measured false pass, so
+the code is unchanged and the record is corrected. The filed follow-up (`asicindexcase`) inherits
+a genuinely open question rather than a closed one.
+
+*Note what this does to the sentence below.* The warrant-elements rule was minted from the claim
+that "the defeating fact was already in the record". The fact was there; it just did not defeat
+as much as was claimed. **The rule survives its own founding example being weaker than stated** —
+which is worth recording, because a rule whose exemplar quietly erodes is how a carrier
+accumulates confident text nobody re-checks.
 
 *The defeating fact was already in this round's record, filed under a different heading.* The
 transfer test checked whether the precedent's "common and benign" element carried — it did not —

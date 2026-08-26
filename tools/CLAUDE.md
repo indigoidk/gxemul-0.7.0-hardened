@@ -197,6 +197,37 @@ the transport being absent and one command fixes it. Reporting the second as the
 silently gives up seats that were available all along.** Check the daemon before blaming the
 seat — `curl -s localhost:11434/api/tags` is the whole test.
 
+### *** A SIXTH CLASS, MEASURED 2026-08-25: ONE TRANSPORT WALLED, ANOTHER LIVE — AND THIS IS
+### THE ONLY CLASS WHERE THE SEAT IS AVAILABLE THE WHOLE TIME AND NOBODY ASKS. ***
+
+The kimi CLI returned `provider.auth_error: 403 You've reached your usage limit for this billing
+cycle`. That is a genuine wall, correctly detected, and it was recorded as a down seat.
+
+**kimi was never down.** `curl -s localhost:11434/api/tags` lists **`kimi-k3:cloud`** alongside
+the three named Ollama seats, and three earlier panel dirs each hold a healthy `ollama_kimi.txt`
+(17,684 / 17,382 / 9,227 bytes) — so the substitute was being fired BY HAND and then quietly
+stopped being. `panel.sh` launches exactly one kimi seat, the CLI; its Ollama seats are hardcoded
+to glm / deepseek / minimax.
+
+> **WHEN A SEAT WALLS, ASK WHETHER THE MODEL IS REACHABLE BY ANOTHER TRANSPORT BEFORE RECORDING
+> IT DOWN.** The wall rule says wait it out; the daemon rule says one command fixes it. This
+> class says **neither applies — the seat is answerable right now, on a different road.**
+
+**Why it is worse than an undercount, which is how the ledger row first described it.** A
+mis-tallied seat is a reporting defect a reader can correct. Here the roster records no failure
+to investigate at all: every panel since the CLI wall ran one seat short while a working
+transport sat idle. *That is the seat-failure-counted-as-agreement shape with an extra step,
+because the missing seat never even appears as missing.*
+
+**The cheap check is the same one the daemon rule already mandates**, read for a different fact:
+`api/tags` answers "is the transport up?" AND "which models can I reach?" — it was being used for
+only the first. A walled CLI seat costs one `grep` against that list to recover.
+
+*Recovered the same minute by hand onto the live panel dir. The `panel.sh` fix was deliberately
+NOT applied while a panel was running: bash reads a script incrementally, so editing a running
+script is its own defect class.*
+
+
 **A SHORT ANSWER AND A DEAD SEAT ARE NOT THE SAME THING.** Grok's file was 119 bytes when first
 sampled — opening line only, "I'll read the full offloaded packet first" — and looked exactly
 like the minimax stall this file spent days mis-attributing. It was MID-ANSWER. Sample twice
@@ -908,7 +939,27 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 >
 > Two cautions the same round measured, both worth carrying: a row that catches a re-map by
 > COLLISION is **layout-dependent** -- `crossarr` catches `-1` only because the probed cells
-> collide there, and a struct REORDER would silently unpin it, where an anchored row would not.
+> collide there, and a struct REORDER would silently unpin it.
+>
+> #### *** THE CLAUSE ABOVE ONCE ENDED "where an anchored row would not". THAT WAS MEASURED
+> #### FALSE 2026-08-25, AND IT WAS FALSE IN THE CARRIER, THE PROBE AND THE QUEUE FILE AT ONCE. ***
+>
+> The exemplar anchored row, `mask9 rt`, was described as *"anchored to a cell by a side effect,
+> **not to a neighbour by distance**"*. **It is anchored to a neighbour by distance.** The struct
+> declares `pending_irq[3], mask_13[3], mask_11[3], mask_9[3], int asserted_13` consecutively, so
+> `mask_9[3]` lands on `asserted_13` at byte 48 -- verified by `offsetof`, and the probe says so
+> itself two hundred lines below the clause that denies it. A struct reorder moving
+> `asserted_13` off that slot lets the `+1` store round-trip and `mask9 rt` goes GREEN, which is
+> the identical failure the clause attributes only to `crossarr`.
+>
+> > **THE CORRECT STATEMENT: anchoring makes an oracle absolute with respect to the DECODE --
+> > which is real, and is exactly what clause (f) buys -- but it does NOT make it independent of
+> > struct LAYOUT, because which cell an out-of-bounds index lands on is itself a layout fact.**
+>
+> *So the two cautions are not a contrast between a weak row and a strong one. Both rows are
+> layout-dependent; the anchored one is additionally decode-absolute. Stating it as a contrast
+> made the anchor rule sound like it bought more than it does -- in the carrier, where future
+> rounds apply it.*
 > And **translations beyond the measured ones are not covered by having measured +/-1**: a
 > derivation says `+2` escapes both the distinctness rows and that round's anchored row. A
 > contract must claim the translations it MEASURED and disclose the rest.
@@ -1010,6 +1061,45 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 >
 > And it pays across a whole filed queue, not one device: every remaining `exit(` de-fatalisation
 > faces the same choice, and `floodclass` already records guest-drivable log floods as a CLASS.
+>
+> #### *** THE RULE'S ADVICE WAS RIGHT AND ITS EXEMPLAR WAS THE TREE'S ONE OUTLIER.
+> #### Corrected 2026-08-25 -- and it was corrected BY FOLLOWING THE RULE. ***
+>
+> The rule says *grep the fork for the existing idiom rather than reason from first
+> principles*. The first round to obey it did exactly that, on `wdcflood`, and the census
+> came back against the rule's own example.
+>
+> **`memory_rw.c:495-523` is a bounded diagnostic, but it is the ONLY counter-style bound in
+> the tree, and every property that makes it a bad model was verified by reading it:**
+>
+> * it is **not a `fatal()`** -- `debugmsg_cpu(..., VERBOSITY_DEBUG, ...)`;
+> * it is **DOUBLE-GATED**: `ENOUGH_VERBOSITY(SUBSYS_MEMORY, VERBOSITY_DEBUG) && n_trunc_msgs < 8`,
+>   and because `&&` short-circuits, **the counter never increments at default verbosity**. The
+>   bound almost never engages, because the message is already invisible;
+> * `static int n_trunc_msgs` is function-local -- **GLOBAL, shared by every device and CPU**,
+>   not per-instance;
+> * it prints **no give-up notice**.
+>
+> > **THE HOUSE IDIOM IS NOT "FIRST N THEN QUIET". IT IS `N = 1`, PER DEVICE INSTANCE, PLUS AN
+> > EXPLICIT `(further occurrences suppressed)` IN THE MESSAGE TEXT** -- roughly 34 sites across
+> > 11 device files. So member 3 should be read as **DECLINE + LATCHED ANNOUNCE**, and the
+> > counter form is the exception that needs a warrant, not the template.
+>
+> **And the fork has a recorded warrant for KEEPING `fatal()` rather than downgrading it**, at
+> `dev_asc.c:250-257`: under `-q` verbosity settles at `VERBOSITY_ERROR`, so a WARNING-level
+> `debugmsg` would be **invisible to the boot-log hygiene grep**, and an ERROR-level one would
+> trip `#261`'s break-on-ERROR. The chronology runs one way and is worth trusting: `#245` chose
+> verbosity-gating; `#265`/`#269`, `#337`, `#460` and `#461` all chose **latch + `fatal()`**.
+>
+> *`dev_wdc.c` is the tree's REFERENCE implementation -- `dev_dreamcast_gdrom.c:147` says its own
+> latch is "Modelled on `dev_wdc.c`'s `warned_badlen` (#337)". The file the rule was about to be
+> applied to was already the exemplar it should have cited.*
+>
+> **The general lesson is not about this idiom.** A rule minted from ONE instance carries that
+> instance's shape as if it were the class. The instruction survived contact and the example did
+> not, which is the right way round -- but it means **a freshly minted rule's exemplar is a
+> hypothesis, and the first round to apply the rule should be asked to CHECK it, not just obey
+> it.** Here that cost one census and corrected the rule in the same pass that used it.
 >
 > ### THE ADDITION LICENCE -- the discriminator against "one more line cannot hurt"
 >

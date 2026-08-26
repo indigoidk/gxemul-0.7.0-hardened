@@ -123,8 +123,12 @@ DEVICE_ACCESS(dreamcast_asic)
 	    the fourth word of every 16-byte group, and relative_addr need not be
 	    word-aligned (memory_rw.c passes the raw sub-word offset), so a byte
 	    access at +0x0d dies like +0x0c.  Not merely reserved space either:
-	    an SZ=1 fmov.d at +0x18 issues addr+4 FIRST (cpu_sh_instr.c:790-798),
-	    so it reached +0x1c and died before touching the register it names.
+	    an SZ=1 fmov.d based at +0x18 reaches +0x1c and dies, whichever half
+	    it issues first.  ISSUE ORDER IS NOT UNIFORM and is NOT load-bearing:
+	    cpu_sh_instr.c:790-798 is the @Rm form only, which reads addr+4 first,
+	    while fmov @Rm+,DRn and fmov @(R0,Rm),DRn read the low word first.
+	    An earlier draft of this comment asserted addr+4-first as a general
+	    decoder fact and used it as a warrant; it is neither.
 
 	    THAT IS A CLASS, NOT ONE EXAMPLE -- TRANSACTION CLOSURE.  A base
 	    OUTSIDE the 64 dies when any LANE of its transaction lands inside:
@@ -147,7 +151,10 @@ DEVICE_ACCESS(dreamcast_asic)
 
 	    THE INVARIANT.  r indexes uint32_t[3], and the struct above declares
 	    pending_irq[3], mask_13[3], mask_11[3], mask_9[3] CONSECUTIVELY --
-	    so mask_13[4] IS mask_11[1] and a stray index corrupts a neighbour
+	    so mask_13[4] LANDS ON mask_11[1] under this toolchain -- the
+	    subscript is UNDEFINED BEHAVIOUR whatever the members' adjacency,
+	    so this is a measured layout outcome and not a fact of C -- and a
+	    stray index corrupts a neighbour
 	    silently.  Staying in bounds needs BOTH:
 	      (i)  every `case` label satisfies (label & 0x0c) != 0x0c; and
 	      (ii) the WHOLE index expression `(relative_addr / 4) & 3` is
