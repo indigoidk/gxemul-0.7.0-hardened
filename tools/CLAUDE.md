@@ -1930,6 +1930,16 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
 * An **`awk` range whose start pattern did not match** returned 0 for every query, and the
   0 was read as "the summary never mentions this" -- **a phantom absence**, which then had
   a whole narrative built on it before one grep at the right anchor refuted it.
+* *** A FIFTH, 2026-08-26, AND IT GETS WORSE AS THIS FILE GETS MORE HONEST. *** A grep
+  built to find STALE CLAIMS reported a defect that was really **an honest correction
+  quoting the text it refutes** -- the exact form this project mandates. It cannot tell an
+  ASSERTION from a QUOTATION OF ONE.
+  **The working form: search BACKWARD from the hit for a correction signal** (`said the
+  opposite`, `WAS FALSE`, `Corrected 20..`, `used to read`) before scoring it stale. With
+  that discriminator, seven audit items resolved to six gone, one quoted-by-its-correction,
+  **zero genuinely stale**; without it, one honest correction read as a live defect.
+  *The trend matters more than the instance: every correction added here quotes what it
+  refutes, so a naive stale-text grep gets steadily MORE wrong as the file improves.*
 
 > **CHECK THAT THE APPARATUS SELECTED SOMETHING BEFORE READING WHAT IT SAYS.** A range, a
 > regex or a filter that selects the empty set produces a clean, confident, wrong answer --
