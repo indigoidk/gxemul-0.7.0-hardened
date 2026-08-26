@@ -30,6 +30,35 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    from SEC (`rm src/cpus/*.o`, rebuild) before trusting ANY measurement.
 3. Commit+push at every green gate — an unpushed round is the largest single exposure.
 
+## *** WHERE A LESSON GOES: STRUCTURE FIRST, PROSE ONLY AS FALLBACK. ***
+## Owner-adopted 2026-08-26. Read this before adding anything to this file.
+
+> **Every incident must first propose a STRUCTURAL landing spot — a check, a gate section, a
+> brief-template line, a script practice. A carrier paragraph is the FALLBACK, used only when
+> no structure can hold the lesson. And a rule that earns its SECOND INSTANCE while sitting in
+> this file has thereby proven it was mis-filed as prose.**
+
+**The evidence is one day's own record, and it falls on both sides.** What changed outcomes was
+structure: `check_seats_read.py` was taught ONE filename mapping and surfaced three unread
+reviews the same day; `panel.sh` gained a fourth Ollama seat and it has answered in every panel
+since; a kill table now runs from a frozen copy. What failed *while written down here* was prose:
+the frozen-copy rule was violated by its own author hours after he wrote it, the
+guest-drivable-`fatal()`-needs-a-latch rule went unconsulted by a round that debated exactly that
+question, the unread-review class reached its third instance, and the frozen-number class its
+fourth generation.
+
+> **THIS FILE IS NOT FAILING AS MEMORY. IT IS FAILING AS A TRIGGER.** The frozen-copy rule was
+> *cited by the person breaking it*, on a different object, in the same hour. Knowing a rule and
+> having it fire on the right object are different problems, and only the second one is solved by
+> writing more.
+
+**The carve-out is real and must not be eroded:** judgment rules — option-set completeness,
+adjacency, severity ranking — cannot be mechanised and belong here. But note *why* the
+premise-audit paragraph is the one piece of prose that demonstrably works: it lives in the BRIEF
+TEMPLATE, the artifact present at the moment of decision. **That is structure in the sense that
+matters — text located where the decision happens, not text located where the reasoning was
+recorded.**
+
 Ethos (non-negotiable): terse portable C99, minimal surgical changes, `/* #NNN: */` tags,
 a CHANGELOG.md round block per correction (REVIEW_FINDINGS.md is frozen at #290 — see its
 scope banner, added by #385; rows #291+ live in the CHANGELOG round blocks), honest
@@ -44,30 +73,18 @@ in commit messages (keep `Co-Authored-By`).
 seat that was deliberately not fired is a different thing again — conflating the two is how a
 two-seat review gets reported as a panel. State both, by name, in the round record.
 
-*** CURRENT AS OF 2026-08-19 ~23:0x — READ THIS BLOCK BEFORE THE TABLE BELOW IT, which is
-the 08-14 snapshot and is kept for its reasoning, not its status. ***
+*** DO NOT LOOK FOR SEAT STATUS IN THIS FILE. *** Live status is `panel.sh`'s seat check and
+the ledger; both are generated and neither can go stale. **Two status snapshots used to live
+here — an 08-19 table headed "CURRENT" and an 08-14 one below it — and by 2026-08-26 the first
+was wrong about every seat it named while still calling itself current.** A status line in an
+auto-loaded file is a wrong record waiting for a calendar. The 08-14 table is kept below for its
+REASONING only; read no status out of it.
 
-**EIGHT OF NINE ANSWERING. The only seat down is CODEX — the one this table calls "USED, every
-pass".** Two full panels ran today (rtcdet review, smharness assess) and every seat except codex
-produced a substantive answer:
-
-| seat | 2026-08-19 | what it did today |
-|---|---|---|
-| **Codex 5.6-SOL** | *** DOWN — quota, walled to Aug 22 12:12 *** | See below; this is the one that inverted. |
-| **Opus 5** (Agent) | ALIVE, and again the highest-yield seat | Found the cheapest escape on record: `TIMER_MAX_FREQUENCY` -> `TIMER_MAX_CATCHUP`, ONE identifier, passing 12 of 12 rows. It COMPILED AND MEASURED, as usual. |
-| **Fable 5** (Agent) | ALIVE — liveness token returned, twice in one session | Found SIX wrong records the round had shipped. One of its own calls was then overturned by the preprocessor; see the note on measurement below. |
-| **Kimi 3** | ALIVE — 60 KB | Found the clamp escape INDEPENDENTLY and scoped it exactly. Gave no VERDICT line despite the brief asking for one — a FORMAT miss, recorded as such, not a seat failure. |
-| **agy 3.7** | ALIVE — 15.7 KB | Named the clamp-value gap. |
-| **Grok 4.6** | ALIVE — 2.5 KB | Short but substantive; named three gaps in one line, two of which measured true. |
-| **glm-5.2** | ALIVE — 8.2 KB | Packet-fed, correct on the defect and honest about scope. |
-| **deepseek-v4-pro** | ALIVE — 3.6 KB | The only dissenting verdict, and its headline was wrong for a reason worth keeping. |
-| **minimax-m3** | ALIVE — 10.9 KB | The inlined-brief rule continues to hold. |
-
-*** THE SEAT MOST RELIED ON IS THE ONE THAT FAILED, AND IT FAILED IN THE SHAPE THIS FILE WARNS
-ABOUT. ***  Codex's panel file was **26,992 bytes — the LARGEST in the panel** — and it was the
-ECHOED BRIEF followed by "You've hit your usage limit ... try again at Aug 22nd, 2026 12:12 PM",
-twice. A size check alone scores that the best answer of the nine. `panel.sh`'s seat check caught
-it as RATE-LIMITED. **Verify the CONTENT, never the size; the failure mode is a big file.**
+**THE ONE LESSON WORTH THE SPACE, and it cost a real panel to learn: VERIFY THE CONTENT, NEVER
+THE SIZE.** Codex once returned the **LARGEST file in its panel — 26,992 bytes** — and it was the
+echoed brief followed by "You've hit your usage limit", twice. *A size check scores that the best
+answer of the nine.* The failure mode is a big file, which is why every seat check in this
+project greps the content and the TAIL rather than measuring bytes.
 
 ### *** A WALL IS A MOMENT, NOT A STATE — MEASURED 2026-08-23, and it CONTRADICTS the
 ### "never by a date" line in the Fable row below. ***
@@ -200,14 +217,27 @@ seat — `curl -s localhost:11434/api/tags` is the whole test.
 ### *** A SIXTH CLASS, MEASURED 2026-08-25: ONE TRANSPORT WALLED, ANOTHER LIVE — AND THIS IS
 ### THE ONLY CLASS WHERE THE SEAT IS AVAILABLE THE WHOLE TIME AND NOBODY ASKS. ***
 
+*(Numbering, because a reader counting headings in this file finds third, fourth, then sixth:
+**the FIFTH is `seatthinkburn` in the ledger — an empty response wrapped in 260 KB of thinking,
+which every size check scores as the best answer in the panel — and it was never written up
+here.** The hole is in this file, not in the count. Filed, not lost.)*
+
 The kimi CLI returned `provider.auth_error: 403 You've reached your usage limit for this billing
 cycle`. That is a genuine wall, correctly detected, and it was recorded as a down seat.
 
 **kimi was never down.** `curl -s localhost:11434/api/tags` lists **`kimi-k3:cloud`** alongside
 the three named Ollama seats, and three earlier panel dirs each hold a healthy `ollama_kimi.txt`
 (17,684 / 17,382 / 9,227 bytes) — so the substitute was being fired BY HAND and then quietly
-stopped being. `panel.sh` launches exactly one kimi seat, the CLI; its Ollama seats are hardcoded
+stopped being. `panel.sh` launched exactly one kimi seat, the CLI, with its Ollama seats hardcoded
 to glm / deepseek / minimax.
+
+**FIXED IN THE SAME COMMIT THAT SHIPPED THIS PARAGRAPH (`faffad7`), AND THE PARAGRAPH DID NOT SAY
+SO — which made it a wrong record from the moment it landed.** `panel.sh` now fires `OLLAMA4 =
+kimi-k3:cloud` as a fourth Ollama seat, and its seat check reports a walled CLI with a live
+substitute as ONE SEAT COVERED rather than one lost. It has answered in every panel since.
+`check_seats_read.py` and `seat_verdicts.py` both learned the mapping in the same commit, so a
+substitute answer is no longer invisible to section G. *A present-tense description of a tool,
+written in the commit that changes the tool, is stale before anyone reads it.*
 
 > **WHEN A SEAT WALLS, ASK WHETHER THE MODEL IS REACHABLE BY ANOTHER TRANSPORT BEFORE RECORDING
 > IT DOWN.** The wall rule says wait it out; the daemon rule says one command fixes it. This
@@ -395,11 +425,11 @@ seats **concurrently** (independent processes / one Agent batch), then collect.
 |---|---|
 | Codex 5.6-SOL (xhigh/ultra) | `codex exec --sandbox read-only --skip-git-repo-check -m gpt-5.6-sol -c model_reasoning_effort="xhigh" "$(cat brief)" < /dev/null` — the `< /dev/null` is required. Windows argv caps ~32 KB: bigger briefs = short prompt pointing at the brief file. Never the trailing-`-` stdin form (died silently once). |
 | agy 3.7 (high) | `agy --dangerously-skip-permissions --add-dir <dir> --print-timeout 30m --model gemini-3.7-flash-high --effort high --print "<short prompt pointing at brief file>"` — reads files via `--add-dir`; no stdin prompt mode. **Model set by user directive 2026-08-13.** PASS BOTH `--model` and `--effort`: the effort tier is baked into the model name (`-high`/`-medium`/`-low`) AND there is a separate `--effort` flag, so naming only one leaves the other at its default. Before this, `panel.sh` passed NEITHER while printing "agy(high)" — the banner was an overclaim. **`agy models` is the authority on valid names** (it lists gemini-3.7/3.6/3.5-flash and 3.1-pro tiers, plus claude-sonnet-4-6 and claude-opus-4-6-thinking); a wrong name is a SEAT FAILURE, so re-check after any CLI upgrade. |
-| Kimi 3 | `kimi -p "$(cat brief)" -m kimi-code/k3` — rejects `--auto`/`--yolo` with `-p`. **QUOTA-DEAD since ~2026-08-12** (403 usage-limit-for-billing-cycle; five consecutive seat failures were this, not a wedge — the health test `kimi -p "say OK"` returns the 403). **RE-HEALTH-TESTED 2026-08-13: still the identical 403**, so it is out until the billing cycle refreshes — do not wire it into panels or adjudication meanwhile, and do not read its ~328-byte error file as a seat answer. Re-test before re-adding. |
+| Kimi 3 | **TWO TRANSPORTS, AND THE SEAT IS LIVE ON THE SECOND.** CLI: `kimi -p "$(cat brief)" -m kimi-code/k3` (rejects `--auto`/`--yolo` with `-p`) — **403-walled on its billing cycle; its ~348-byte error file is NOT a seat answer.** SUBSTITUTE: `kimi-k3:cloud`, fired automatically by `panel.sh` as `OLLAMA4` since `faffad7`, answering in every panel since. **Record it by transport (`kimi-k3:cloud`), never as "the kimi CLI seat".** *This row said QUOTA-DEAD / "do not wire it into panels" for days after the substitute was working — a FALSE ROSTER in the table a fresh session fires from. Fixed 2026-08-26.* |
 | Grok 4.6 (xhigh) | `grok --prompt-file <brief> -m grok-4.6 --effort xhigh --permission-mode plan --cwd <proj> < /dev/null` — **xhigh set 2026-08-13 by user directive and VERIFIED to be a real tier, not assumed: passing a bogus value makes the CLI name its own list, `use one of: xhigh, high, medium, low`, which proves the flag is validated AND that xhigh is the top of it.** That discriminator is the general technique — if a bad value were silently ignored, acceptance would prove nothing and the seat would quietly run at the default, which is precisely the trap the agy seat sat in. **A bad effort value EXITS 0 while printing its error**, so exit status cannot catch it; `panel.sh`'s seat check greps for "unknown effort level"/"unknown model" alongside the quota patterns. — binary at `~/.grok/bin/grok.exe`, **added 2026-08-13 by user directive.** *** `--prompt-file` TAKES THE BRIEF FROM A FILE, so the ~32 KB Windows argv cap DOES NOT APPLY — this is the only CLI seat immune to the failure that killed Codex on a 36 KB brief today, so it is the seat to trust with a large inlined diff. *** `--permission-mode plan` keeps it READ-ONLY (verified: it read a repo file and answered correctly, without prompting or hanging) and `--cwd` lets it consult source like Codex and agy do. `grok models` is the authority on IDs; today it lists exactly one, `grok-4.6`, which is also the default. **PAID (SuperGrok) as of 2026-08-13 — verified live, health test passes at xhigh.** Two independent confirmations that the subscription is active: the health test answers, and `grok models` now lists TWO models (`grok-4.6` default plus `grok-4.5`) where the free tier listed only one — so the model list is itself a cheap tier check. The paid cap is still not queryable (no `usage`/`quota` subcommand; `du` is disk usage), so DO NOT ASSUME IT IS UNLIMITED — a raised cap has the same failure mode further out. `panel.sh`'s seat check scans any non-answering seat for quota/rate/auth text generically, so a wall is reported as an OPERATIONAL failure rather than counted as agreement. **FREE-TIER HISTORY, kept because it calibrates expectations: the free tier died after ~4 substantial invocations, mid-way through its first real review — and even so it found a genuine defect in that partial output (three surviving "un-fakeable" overclaims that two other seats had missed).** |
 | Ollama cloud ×3 | POST `http://localhost:11434/api/generate` from **git-bash** python (WSL cannot reach the host API); write responses to utf-8 files, never `print()` (cp1252 crash). Three seats, verified live 2026-08-10: **`glm-5.2:cloud`**, **`deepseek-v4-pro:cloud`** (DeepSeek is back — v3.2 was retired 2026-07-15 but v4-pro is live; the exact tag needs `-pro`), **`minimax-m3:cloud`**. All three are THINKING models — send NO `num_predict` cap or hidden reasoning eats the budget and the response is empty. Recheck: `curl -s localhost:11434/api/tags`. |
 | Claude (Opus 5) | the Agent tool with `model: "opus"` — it has repo Read/Grep/Glob, and is the seat most likely to COMPILE AND MEASURE (it has overturned readings twice). Use plain bounds-/correctness-engineering framing, never offensive-security wording (refusal/flag risk); keep the adversarial instruction aimed at the engineering claim. There is no opus/fable CLI. |
-| Claude (Fable 5) | the Agent tool with `model: "fable"` — an independent Fable seat, separate from the main loop. Same framing rules. NOTE Fable wears two hats: this review seat, and (as the main loop) the ADJUDICATOR of the panel's task suggestions. **QUOTA-DEAD since 2026-08-13** ("You've reached your Fable 5 limit"; two consecutive relaunches failed identically — the Kimi pattern, a quota not a wedge, so a retry cannot clear it). **RE-HEALTH-TESTED 2026-08-14 ~09:4x, ON THE DAY THE TOKEN RESET WAS EXPECTED: STILL THE IDENTICAL LIMIT MESSAGE.** Third consecutive failure, so the reset either has not landed or the allowance is still exhausted — do NOT assume a calendar date restores a seat, TEST IT. The test is cheap (one Agent call told to open with a liveness token) and it is the only thing that distinguishes "dead" from "assumed dead". The ADJUDICATOR hat is unaffected while the main loop still runs. Substitute used meanwhile: an Agent seat with `model: "sonnet"` carrying the same static/records lens, **always recorded as a SUBSTITUTE, never as "the Fable seat"**. Health-test before re-adding. |
+| Claude (Fable 5) | the Agent tool with `model: "fable"`. **LIVE and answering** — it holds two hats and both are in use: this review seat, and (in the main loop) the ADJUDICATOR of the panel's suggestions. Same benign-framing rules as the Opus seat. Open every invocation with a liveness token plus a verbatim quote from a named file, so prompt delivery AND file access are proven rather than assumed. *This row read QUOTA-DEAD with three dated re-test failures long after the seat came back; the standing lesson survives and is the useful part — **a wall is a moment, not a state, and one Agent call settles it in seconds.** Do not reason about whether a seat is back; test it. Fixed 2026-08-26.* |
 
 *** THERE IS A FIFTH `src/` AT THE PROJECT ROOT AND IT IS PRISTINE UPSTREAM. A FILE-READING
 SEAT POINTED AT THE PROJECT ROOT WILL READ IT AND BE CONFIDENTLY, DETAILEDLY WRONG.
@@ -701,10 +731,13 @@ Each cycle of the loop, the main model (Fable) does:
 The loop ends only when the queue is empty or a task needs a human decision (destructive
 action, genuine scope change). It does not stop for a long session.
 
-**Panel roster for the loop — NINE seats by design, SEVEN live as of 2026-08-13** (Kimi 3
-and the Fable seat are both quota-dead; see their rows above. A dead seat is a SEAT
-FAILURE and is never counted as agreement — and never silently: say which seats answered
-in the round's record). `./panel.sh` fires seven, Grok 4.6 added 2026-08-13: Codex 5.6-SOL (xhigh —
+**Panel roster for the loop — NINE seats by design, and as of 2026-08-26 ALL NINE ANSWER.**
+The kimi CLI is 403-walled and its seat is covered by the `kimi-k3:cloud` substitute, which
+`panel.sh` fires automatically and reports as COVERED rather than lost. *A dead seat is a SEAT
+FAILURE and is never counted as agreement — and never silently: say which seats answered in the
+round's record. But do not read a stale status line as a dead seat either; this paragraph
+claimed two dead seats for over a week after both were answering.*
+`bash GXEMUL-SEC/tools/panel.sh` fires EIGHT scriptable transports: Codex 5.6-SOL (xhigh —
 the CLI's "ultra" intent), agy 3.7 (`gemini-3.7-flash-high`, `--effort high`), Kimi 3 (max
 effort), **Grok 4.6 (high, `--prompt-file` so no argv cap)**, Ollama glm-5.2:cloud,
 deepseek-v4-pro:cloud, minimax-m3:cloud. Two more are launched in the same turn via the
@@ -713,11 +746,10 @@ ADJUDICATES the panel's task suggestions in its main-loop role — seat and adju
 distinct hats; the adjudication happens in the main loop, not in the seat.
 
 **ADJUDICATION IS A MAIN-LOOP ROLE THAT FABLE HOLDS BY PREFERENCE, and that distinction is
-load-bearing: it DEGRADES rather than blocks.** With the Fable seat quota-dead on
-2026-08-13 the adjudication still ran, in the main loop, and worked — 9 of 13 candidates
-were dropped, folded or retired, two of which would have caused harm. User expects Fable
-back on the token reset (2026-08-14) and intends to adjudicate with it then; until then
-whoever holds the main loop adjudicates. What made it work was NOT the model: every one of
+load-bearing: it DEGRADES rather than blocks.** Proved on 2026-08-13 when the Fable seat was
+genuinely walled: the adjudication still ran, in the main loop, and worked — 9 of 13 candidates
+dropped, folded or retired, two of which would have caused harm. The seat has since been live
+for days and holds both hats. What made the degraded form work was NOT the model: every one of
 the five drops was settled by MEASUREMENT — a grep, a run, a five-rig spelling check — not
 by judgement. **So the rule that earns its keep is: any candidate checkable in under about
 two minutes gets CHECKED, not judged.** Keep that whichever model holds the hat.
@@ -761,11 +793,16 @@ halves land on different resources, and that is the whole point:
   observed. The one real cost is CONTENTION -- panel seats are CPU-heavy and must not run
   during a gate, which is a scheduling constraint and not a quota.
 
-  **The single genuinely walled seat is CODEX**, and its wall is loud and unmistakable: five
-  identical echoed-brief-plus-429 files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 bytes.
-  *A size check alone scores those the largest answers in their panels* -- verify CONTENT.
-  **So: ONE full panel per ROUND, not one per pass.** Four panels in one afternoon exhausted
-  every rate-limited seat and left two reviews resting on two seats each.
+  **VERIFY CONTENT, NEVER SIZE.** Codex's wall, when it had one, was five echoed-brief-plus-429
+  files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 bytes — *a size check alone scores those the
+  largest answers in their panels.* That lesson is permanent; the outage was not.
+
+  *This block used to END with "So: ONE full panel per ROUND, not one per pass" — the SUPERSEDED
+  conclusion, sitting after the rule that replaced it and holding the closing position of
+  authority. Which is this file's own "a policy written around two dead seats outlived both of
+  them" failure, happening a second time, inside the paragraph that records it. **When a rule is
+  superseded, delete its conclusion; do not demote it to a footnote that still reads as the
+  verdict.***
 
 ## THE VACUITY FLOOR AND THE DE-ESCALATION CLAUSE (flagship adjudication, 2026-08-21)
 
@@ -951,8 +988,11 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > declares `pending_irq[3], mask_13[3], mask_11[3], mask_9[3], int asserted_13` consecutively, so
 > `mask_9[3]` lands on `asserted_13` at byte 48 -- verified by `offsetof`, and the probe says so
 > itself two hundred lines below the clause that denies it. A struct reorder moving
-> `asserted_13` off that slot lets the `+1` store round-trip and `mask9 rt` goes GREEN, which is
-> the identical failure the clause attributes only to `crossarr`.
+> `asserted_13` off that slot **can let** the `+1` store round-trip so that `mask9 rt` goes GREEN,
+> which is the identical failure the clause attributes only to `crossarr`. *Existential, not
+> universal, and the distinction matters because a wrong reason gets reused: a reorder that puts
+> some OTHER tick-zeroed field at byte 48 keeps the kill. What is unsafe is relying on the
+> arrangement, not any particular rearrangement of it.*
 >
 > > **THE CORRECT STATEMENT: anchoring makes an oracle absolute with respect to the DECODE --
 > > which is real, and is exactly what clause (f) buys -- but it does NOT make it independent of
@@ -1071,15 +1111,28 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > > *"the latent index protection should be carried as a **point-of-use decline**, not only a
 > > comment."*
 >
-> That is the third member, proposed before any edit was made. **The 17.7 KB answer was
-> recorded nowhere.** It surfaced only when `check_seats_read.py` was taught that
-> `ollama_kimi.txt` maps to the kimi seat -- until then a substitute-transport answer was
-> invisible to the very check that exists to catch unread reviews.
+> **That is the SECOND member -- and an earlier version of this block called it the third,
+> which overcorrected the very story it was correcting.** Checked across all 70 lines of that
+> answer: what it proposes is `if (r > 2) break;`, described as *"decline-not-die, so if the
+> forbidden `case 0x0c:` ever arrives it fails safe instead of killing the host"* -- a SILENT
+> decline. It never proposes a bounded or latched announce; its only two mentions of `fatal()`
+> are to escalate the flood problem and to request a measurement about rate limiting.
 >
-> > **SO THE RULE STANDS AND ITS DIAGNOSIS CHANGES. The failure was not option-space
-> > blindness. It was an UNREAD REVIEW.** Widening the option set is still right; but the
-> > cheaper fix, and the one that would have worked here, is to READ WHAT THE SEATS ALREADY
-> > SENT before deciding the option set is complete.
+> **The 17.7 KB answer was recorded nowhere.** It surfaced only when `check_seats_read.py` was
+> taught that `ollama_kimi.txt` maps to the kimi seat -- until then a substitute-transport
+> answer was invisible to the very check that exists to catch unread reviews.
+>
+> > **SO THE DIAGNOSIS IS BOTH, ONE MEMBER EACH.** Member 2 WAS proposed on pass 1 and went
+> > unread -- that half is an UNREAD REVIEW and the fix is to read what the seats already sent.
+> > Member 3, the bounded announce, was genuinely never named by anyone until a seat went
+> > looking in the tree -- that half is real OPTION-SPACE BLINDNESS and the founding story
+> > survives for the member it was actually about.
+>
+> *An earlier draft replaced one wrong diagnosis with another wrong diagnosis, and it was
+> caught by a seat that read all seventy lines instead of the verdict line. That is the
+> read-the-body rule this file already states -- **a verdict line is written against the
+> brief's framing and is the LEAST likely part of an answer to carry a correction** -- turned
+> on a correction of my own.*
 >
 > The same answer also named `asicindexcase` on pass 1 -- *"post-switch `r`-use audit before
 > the edit lands; absence admits converting a host kill into a silent OOB write on declined
@@ -1609,6 +1662,18 @@ claims and only one of them is evidence. This is the same discipline as *a score
 names its log*, one level down: the log makes the number checkable, the denominator makes
 the SEARCH checkable.
 
+**ITS LIMIT, MEASURED 2026-08-25: A DENOMINATOR VALIDATES THE ARTIFACT, NOT THE PATTERN'S
+FITNESS FOR ITS FORMAT.** `grep -cE '^[+-][^+-]' nullfix.diff` returned **0** on a file
+holding exactly one added line -- in `diff` NORMAL format (`610a611` then `> ...`), not
+unified. The count was `0 of 2`, a nonzero denominator that looks like a real measurement
+of a real file. So `0 of 41` is NOT always evidence, and the sentence above overstates it:
+**the denominator catches selecting nothing FROM NOTHING, never selecting nothing from
+SOMETHING IN AN UNEXPECTED SHAPE.**
+
+> **WHEN A COUNT IS SURPRISING, OPEN THE ARTIFACT BEFORE BELIEVING THE COUNT.** "Zero
+> changed lines in a diff that exists" is a contradiction, not a result — and a
+> contradiction is the cheapest signal there is.
+
 *** AND A FOURTH, WITH THE OPPOSITE SHAPE: A CORRECT READING NEARLY DISCARDED BECAUSE A
 SECOND, BROKEN CHECK DISAGREED WITH IT. ***  `tasklist | grep` reported three panel CLI
 processes alive. `tasklist /v | grep` -- the follow-up meant to identify them -- reported
@@ -1866,6 +1931,33 @@ assumption that a timeout stopped the work.
   because a `cmp` against SEC was run by hand. A script that mutates a tree drops the
   sentinel FIRST and clears it only after `cmp` against GXEMUL-SEC succeeds -- which is
   what the carrier already said, and what the script did not do.
+
+*** EDITING A RUNNING SHELL SCRIPT CORRUPTS IT MID-EXECUTION. Documented for `panel.sh`
+at midday 2026-08-25, then committed by me against `killwdc.sh` the same evening. ***
+
+**Bash reads a script INCREMENTALLY, by byte offset.** Inserting lines into a file a shell is
+currently executing shifts every offset after the insertion point, and the shell resumes mid-
+token. The failure looks like a syntax error in a file that is perfectly valid:
+
+    killwdc.sh: line 90: syntax error near unexpected token `('
+    ...and `bash -n killwdc.sh` afterwards reports NO ERROR AT ALL.
+
+That disagreement is the diagnostic. **A script that fails to parse while running and parses
+clean afterwards was edited underneath itself** -- nothing else produces that signature.
+
+The cost here was an eight-mutant table killed on its first mutant, plus a tree left holding
+a sentinel. Cheap this time only because the sentinel discipline worked: the tree said what
+state it was in, and one restore-and-`cmp`-against-SEC settled it.
+
+> **LAUNCH LONG JOBS FROM A FROZEN COPY.** `cp script.sh script.run-<stamp>.sh` and run the
+> copy. Then the original is free to edit while the job runs, which is exactly when the urge
+> to edit it arrives -- because that is when you are watching it and thinking about it.
+
+*I knew this rule, had written it down hours earlier for a different script, correctly held
+off editing `wdc_flood_probe.py` for the same reason -- and then edited the driver. The
+probe was protected because the hazard was FRONT OF MIND FOR THE PROBE. Knowing a rule and
+having it fire on the right object are different things, which is the argument for making it
+STRUCTURAL (a frozen copy) rather than remembered.*
 
 *** AND `pkill -f <script>` KILLS THE SHELL RUNNING IT. ***  The cleanup command was
 itself a WSL bash invocation whose command line matched the pattern, so it terminated

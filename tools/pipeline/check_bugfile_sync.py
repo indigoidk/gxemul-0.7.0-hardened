@@ -40,12 +40,47 @@ LEDGER = os.path.join(HERE, "ledger.json")
 BUGS = os.path.join(HERE, os.pardir, os.pardir, "OUTSTANDING_BUGS.md")
 
 CUTOFF = "2026-08-20"
-OPEN_STATES = ("held", "in work", "active", "pending")
+#  *** `open` WAS MISSING FROM THIS TUPLE, AND IT IS THE SECOND-LARGEST STATE IN THE
+#  LEDGER -- 46 of 219 ROWS. ***  This function is named `unsynced` and documented as
+#  "for OPEN rows the bug file does not name", and it had never looked at a single row
+#  whose state is literally `open`.  Two of the four states it did list -- "active" and
+#  "pending" -- do not occur in the data at all, which is how the omission survived: the
+#  tuple LOOKED thorough.
+#
+#  Measured 2026-08-25: three rows filed that day (wdcringambig, asicannounce,
+#  gdrompiooddlen) were absent from OUTSTANDING_BUGS.md and this check reported
+#  BUGFILE_SYNC_PASS.  A fresh session reading the human queue would not have seen them.
+#
+#  *** THE SAME OMISSION THE LEDGER'S OWN `state_semantics` BLOCK MADE, FOUND
+#  INDEPENDENTLY THE SAME DAY IN A DIFFERENT TOOL. ***  Two pieces of infrastructure
+#  both enumerated four of five states and both dropped `open`.  When one enumeration is
+#  found short, GREP THE OTHERS -- the omission is a habit, not an accident.
+#
+#  Derived from the data rather than restated: the states that occur are closed, dropped,
+#  held, "in work" and open.  OPEN here means "still owes something", i.e. everything
+#  except the two terminal states.
+OPEN_STATES = ("held", "in work", "open")
+
+
+#  *** A ROW WITH NO ENTRIES IS THE NEWEST KIND OF ROW, NOT THE OLDEST, AND THIS
+#  FUNCTION USED TO SAY THE OPPOSITE. ***  It returned "" for an entry-less row, and
+#  "" sorts BEFORE every real date, so `date > CUTOFF` was false and the row was
+#  classified ARCHIVED and forgiven.  Measured 2026-08-25: three rows filed that day
+#  -- wdcringambig, asicannounce, gdrompiooddlen -- were absent from
+#  OUTSTANDING_BUGS.md and the check printed BUGFILE_SYNC_PASS.
+#
+#  A freshly filed row typically has a state_note and no entries yet, so the empty
+#  case is EXACTLY the case this check exists to catch.  The date-based forward-only
+#  rule inverts for it: no date means "not yet dated", which is later than any date,
+#  not earlier.  Returning a sentinel that sorts AFTER every real date is the whole
+#  fix, and it keeps the genuine archive behaviour for rows that do carry dates.
+UNDATED = "9999-99-99"
 
 
 def newest_date(row):
     ds = [e.get("date") or "" for e in row.get("entries", [])]
-    return max(ds) if ds else ""
+    ds = [x for x in ds if x]
+    return max(ds) if ds else UNDATED
 
 
 def unsynced(rows, text):
@@ -74,7 +109,8 @@ def main(argv):
 
     for rid, state, date in missing:
         tag = "MISSING" if (date > CUTOFF) else "ARCHIVED"
-        print("  %-9s %-16s %-8s newest entry %s" % (tag, rid, state, date or "(none)"))
+        shown = "(no entries -- treated as NEW)" if date == UNDATED else (date or "(none)")
+        print("  %-9s %-16s %-8s newest entry %s" % (tag, rid, state, shown))
 
     print()
     print("  An OPEN row nobody can find by reading OUTSTANDING_BUGS.md is work a fresh")

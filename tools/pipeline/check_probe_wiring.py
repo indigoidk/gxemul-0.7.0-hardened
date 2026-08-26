@@ -190,6 +190,7 @@ MANIFEST = {
     "gdrom_data_probe.py":         (CLASS_DETECTOR, "#460 GDROM_DATA: four exits, no legal first touch"),
     "gdrom_default_probe.py":      (CLASS_DETECTOR, "#461 both default: arms + #462 the DMA+0x18 pair"),
     "asic_badaddr_probe.py":       (CLASS_DETECTOR, "#463 dreamcast_asic: one guest LOAD ended the host"),
+    "wdc_flood_probe.py":          (CLASS_DETECTOR, "wdcflood dev_wdc.c: six unlatched fatal(), guest-drivable without bound"),
     "sh_iprbcd_probe.py":          (CLASS_DETECTOR, "#458 SH IPRB/IPRC/IPRA-RTC priority table"),
     "sh_rounding_probe.py":        (CLASS_DETECTOR, "SH FP rounding"),
 

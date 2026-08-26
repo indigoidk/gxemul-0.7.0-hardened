@@ -1,3 +1,139 @@
+## Round 464 (#464) -- dev_wdc.c: six unlatched `fatal()`, each guest-drivable without bound
+
+`dev_wdc.c` held ten `fatal()` calls. Four were latched by `#337`; **six were not**, and
+`fatal()` cannot be silenced -- `core/debugmsg.c:384-390` has no early-out, unlike `debug()`'s
+at `:375`. Measured pre-fix: **20 stores produced 20 host lines, with AND without `-q`**
+(`regress/artifacts/wdcflood/witness_20260825/fr_no__q.out`, `fr_with__q.out`), and the
+**over-read site** at 500 iterations produced **2000 lines / 158,449 bytes** (`n3.out`, same
+directory).
+
+*An earlier wording called that second figure "the read path", which points a reader at the
+non-8-bit READ guard. It is the ring over-read: `n3.out` is 2000x "reading too much". Same
+numbers, wrong site named -- and the wrong name had reached the source comment and the gate
+comment before it was caught.*
+
+The fix is six per-instance latch flags wrapping **only** the `fatal()`. Every guest-visible
+side effect stays outside the guard: `d->error |= WDCE_ABRT`, `return (uint64_t) -1`,
+`idata = data[0]`, and `data[0] = odata` -- the last inside the function's common `ret:` tail.
+
+**`fatal()` is kept rather than downgraded**, on this fork's own recorded warrant at
+`dev_asc.c:248-257`: under `-q` verbosity settles at `VERBOSITY_ERROR`, so a WARNING-level
+`debugmsg` would be invisible to the boot-log hygiene grep and an ERROR-level one would trip
+`#261`'s break-on-ERROR.
+
+### Test-first, and the denominators differ because the detector grew
+
+    pre-fix   8/14    committed HEAD, 14-row script  (table1_14rows/prefix_HEAD.raw)
+    post-fix  26/26   26-row script                  (table5_indep/probe_base26.raw)
+
+**Never write "8/26".** The two runs used different scripts. **Twelve** rows were added after
+the pre-fix run and have never measured against the unlatched build; five of the six sites take
+their clause-(b) evidence from the pre-fix run itself rather than from a mutant.
+
+### SIX flags, not four -- and the argument that settled it dissolved the conflict
+
+The panel split on pairing. Both sides cited precedent: `#337` shares one flag across two sites;
+`#460` records a measured warrant for per-site bits. **Neither is wrong** -- `#337`'s two sites
+are the two arms of ONE ENDIANNESS BRANCH, mutually exclusive at runtime, so sharing there loses
+nothing. These six can all fire in one session.
+
+### What the round had to correct about itself
+
+Nothing here was found by a gate. All of it was found by reading, and most of it by a seat
+rather than by me.
+
+* **Two detector rows were measured VACUOUS.** `r16 value`'s oracle passed on any echoed hex
+  value -- structurally incapable of failing while the emulator lived, and green under every one
+  of table 2's ten mutants. *(It did not exist for table 1, which measured a 14-row detector; an
+  earlier draft said "the first two tables", which is false.)* Both width value rows also checked
+  the **wrong fire**: the escape they cite corrupts the FIRST access, and they read once, after
+  both.
+* **An L2 FLOOR BREACH.** `:145` had no row, so the fix had six fixed sites and the detector saw
+  five. Until `overrun x2` existed, deleting that guard scored a clean sweep.
+* **Three shipped comment warrants were non-sequiturs**, and two more citations were simply
+  wrong. The no-disk warrant (`wdc_addtoinbuf` IS reachable from the DATA-write path); the
+  accept-section comment invoking the de-escalation clause, which this fix does not trigger; a
+  citation to `:709` landing on an `inbuf` line that **reads like a confirmation**;
+  `dev_wdc.c:597` for the `addr_mult` division, which was the PRE-FIX line; and an `i:R:`
+  warrant citing `diskimage.c:1700-1755`. That last one is instructive: the conclusion is right
+  and the mechanism is not. `strchr(fname, ':')` at `:1652` takes the FIRST colon and
+  `while (fname <= cp)` consumes only up to it, so `i:R:path` reads `i` as the sole prefix and
+  `R:path` becomes the FILENAME. It never reaches the invalid-prefix arm at `:1752` that the
+  comment blamed. **A wrong reason gets reused.**
+* **A contract bullet warranted a MEASURABLE claim on an UNMEASURABLE one.** Flag pairing was
+  disclosed as unmeasurable "because the rig has one controller". That explains the
+  process-global case only -- pairing survived because **no row fired two sites in one session**,
+  a property of the row set. Now `wr indep`, measured.
+* **The ask-again found a real escape against a clean 24-row table.** Keying the `:607` latch on
+  the access WIDTH sweeps clean while a guest alternating `mov.w`/`mov.l` floods at one line per
+  store. Invisible because 2 and 4 never co-occur in a session. Closed by `w mixed` / `r mixed`,
+  both measured killed (`Mwid`, `Mwidr`).
+
+### The site numbers in this round are PRE-FIX, and the probe now says so
+
+The fix adds ~97 lines, so `:145`, `:160`, `:583`, `:607`, `:704` and `:1025` all resolve to the
+wrong line in the shipped file -- `:145` reads as `DEVICE_TICK(wdc)`. They are kept because the
+ledger, this block and all five kill tables name the sites that way. **The probe's map is keyed
+on the FLAG NAME, not on a post-fix number**: a numeric column was written and went stale one
+edit later, when a six-line comment added to `dev_wdc.c` in the same session moved all six by
+four.
+
+### Evidence
+
+    tables      27 mutants across FIVE stamped directories.  Two more directories
+                hold no mutants: table6_null26/ (the 26-row null-medium pair) and
+                witness_20260825/ (the pre-fix flood logs).  Seven in all, and the
+                distinction matters -- only five of them measure a mutant.
+                39 of 39 logs internally consistent (score + anchored reds == that
+                log's own denominator).
+    coverage    23 of 26 rows redden under a product-code mutant or the pre-fix build.
+                The other three -- `live`, `accept w8`, `accept r8` -- redden ONLY on a
+                null medium.  `live` is a liveness control and cannot do more; the two
+                accept rows are coverage debt, NOT an undischarged obligation, because
+                the de-escalation clause is not triggered: this fix latches non-fatal
+                fatal() calls, it does not remove a host-fatal guard.  `accept ec` does
+                carry a kill (Mv1).
+    clause (a)  pre-fix red, post-fix green, same rows.
+    clause (b)  discharged at ALL SIX sites, by two routes -- five via the pre-fix run
+                (it IS the verbatim unlatched form), :145 via Mb2.  The per-site mapping
+                lives in the probe header and was verified row by row against its logs.
+    clause (c)  0/26 on TWO null media, an absent binary and a real non-emulator, at the
+                SHIPPED denominator (table6_null26/).  Every row fails, none survives.
+                An earlier 0/22 pair predated four rows and no longer described the
+                shipped script.
+    clause (d)  null-repair measured; repair-reroute measured; operand-swap measured;
+                width-keying measured; predicate-weakening measured and discriminating.
+    clause (e)  the contract states what it does NOT claim, with each unpinned site named.
+    clause (f)  NOT TRIGGERED -- no row claims where an access decodes.
+
+### The sibling this round does NOT fix, named because its own filing named it
+
+`wdc_command()`'s no-disk early return emits `[ wdc: command 0x%02x drive %i, but no disk
+image ]` through **`debug()`**, and floods identically. It is **outside this round's scope
+rather than a missed site**: `debug()` has the early-out `fatal()` lacks, so `-q` silences it,
+which makes it a different channel with a different remedy. It rides with `floodclass`. Saying
+so matters because the original filing named it, and closing the round silently would bury it.
+
+### Filed rather than fixed
+
+`wdcringambig`, `wdcperopcode`, `wdcexpecteddata`, `wdcflagindep`, `wdchpcmipsaddr` -- all five
+in the ledger AND in OUTSTANDING_BUGS.md. The four new ones were absent from the bug file until
+the readiness adjudication caught it, and `check_bugfile_sync.py` -- repaired earlier in this
+same round for exactly that shape -- reported `BUGFILE_SYNC_FAIL` on them.
+
+### The detector is wired into a gate
+
+It was in none -- `grep wdc_flood regress/*.sh` was empty, so the battery never ran it. Now in
+`gate_sh_rounding.sh`, with a **source-grep** guard: `fatal(` -> `debug(` scores a clean sweep
+against every row, because they all single-step and `debug()` always prints under stepping. A
+step-based probe cannot see channel semantics at all.
+
+### One numbering note, so the next reader does not repeat the search
+
+**There is no `Mp2`.** The independence mutants went `Mp1`, `Mp3`, `Mp4`; the frozen scripts and
+the seat's own file confirm the numbering never had one. It is not a silently lost mutant.
+
+
 ## Round 463 (#463) -- dev_dreamcast_asic.c: one guest load ended the host process
 
 `DEVICE_ACCESS(dreamcast_asic)` computed `r = (relative_addr / 4) & 3` and then ran

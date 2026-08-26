@@ -18,6 +18,72 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN — surfaced 2026-08-25 by fixing `check_bugfile_sync.py`, which had been blind to them
+>
+> **These thirteen rows were OPEN in the ledger and invisible here, and the check that exists
+> to prevent exactly that was reporting PASS.** Two independent defects in it: its
+> `OPEN_STATES` tuple omitted `open` — 49 rows, the second-largest state, and two of the four
+> states it *did* list do not occur in the data at all — and `newest_date()` returned `""` for a
+> row with no entries, which sorts *before* every date, so freshly filed rows were classified
+> ARCHIVED and forgiven. A row with no entries is the newest kind of row, not the oldest.
+>
+> *The `open` omission is the same one the ledger's own `state_semantics` block made, found
+> independently the same day in a different tool. When one enumeration is found short, grep the
+> others — the omission is a habit, not an accident.*
+>
+> - **`wdcringambig`** — the wdc inbuf ring uses `head == tail` for BOTH empty and full with no
+>   disambiguator; `:145`'s check is post-hoc, so the store that actually corrupts is the NEXT
+>   one and is silent; and the two BULK paths never compare the pointers at all, only against
+>   the array end. Four seats located it independently on the `wdcflood` pass-1 panel.
+> - **`wdcexpecteddata`** — the unexpected-DATA-write site is guarded by
+>   `!d->write_in_progress && !d->atapi_cmd_in_progress`. **Drop the first conjunct and it
+>   warns-and-latches on a perfectly LEGAL write during an active transfer** — and every row
+>   of the shipped detector stays green, because none of them stages a WRITE command. This is
+>   the accept-side hole the three quiet accept rows cannot cover: they pin a legal COMMAND, a
+>   legal narrow WRITE and a legal narrow READ, none of them a legal DATA write mid-transfer.
+>   Raised by the grok seat on the `wdcflood` pass-2 panel.
+> - **`wdcflagindep`** — `#464`'s contract lists reset-on-normal-operation and
+>   guest-resettable-operand under DESIGNED TO CATCH; each is measured at exactly ONE site of
+>   six. Unpinned and known-reachable: reset-on-normal at `:160`, `:704` and `:145`;
+>   operand-swap at `:583`, where the guard reads `warned_unimpl_cmd` while the body reads
+>   `d->seccnt` — a field the guest writes — so `if (!d->seccnt)` scores a clean sweep. Site
+>   numbers are PRE-FIX, the naming convention `wdcringambig` above already uses.
+> - **`wdcperopcode`** — `:583` latches one line per DEVICE, not per opcode; the deepseek seat
+>   argued for a per-opcode set. Explicitly OUTSIDE `#464`'s contract, not a floor breach.
+>   Filed because the probe header asserted this was filed while no row existed: **a contract
+>   line asserting a disposition is a WRONG RECORD until the disposition is a row.**
+> - **`wdchpcmipsaddr`** — `DEVINIT(wdc)`'s `MACHINE_HPCMIPS` branch assigns `0x14000386`,
+>   exactly what the default `devinit->addr + 0x206` already computes for `0x14000180`. It
+>   carries a `TODO: Fix` and does nothing. Not guest-reachable; it earns a line only because
+>   it sits on the two-instance route `wdcflagindep`'s probe would have to use.
+> - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
+>   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
+>   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
+>   both routes to it force an even value (`cnt != 408 -> exit(1)`, and
+>   `sector_count * 2048 != cnt -> break`). A guest CAN express an odd count at the CNTLO/CNTHI
+>   registers; it cannot get that value past either guard. The asymmetry is real and any future
+>   edit admitting an odd length makes it live immediately — but it is not a defect a guest can
+>   reach today, and this row must not be ranked as one.
+> - **`asicannounce`** — `#463` deleted the ASIC's only diagnostic on a warrant measured too
+>   broad; a bounded latched announce IS constructible, on a predicate that is not empty. Filed
+>   under the late-dissent rule with three seats' dissent carried verbatim.
+> - **`asicarraygeom`** — shrinking a modelled array to `[2]` scores a CLEAN SWEEP; no row
+>   verifies the struct declaration the whole invariant rests on.
+> - **`gdromkeyindex`** — five mutants score a full 32/32 against `#461`'s detector.
+> - **`probeabsentraise`** — three rows guard a THREE-state value with a TWO-state test and
+>   raise `ValueError` on `absent`.
+> - **`proberowsubset`** — the probes cannot score ONE row, so adding a row to a measured
+>   detector costs a full re-run. *This one bit the `wdcflood` round directly.*
+> - **`killdriverunTracked`** — the kill-table driver lives in a session temp dir, so the
+>   apparatus producing this project's most-cited numbers is untracked.
+> - **`citestale`** — a same-file line citation is invalidated by the round's OWN later edits.
+> - **`scoreclaimhex`** — `check_score_claims` reads a slash-separated HEX LIST as a score claim.
+> - **`sectionEnarrow`** — precommit section E sees only `regress/diff_*.c`, 14 of 52 detectors,
+>   and prints an unqualified verdict over that subset.
+> - **`ledgerstatelies`** — the ledger's `state` field had no written semantics; the block is now
+>   RATIFIED with the `open` definition added.
+> - **`ledgerclosureby`** — `closure.by` holds the wrong KIND of value on two rows.
+>
 > ### OPEN — post-2026-08-01 residuals (surfaced by the #385 re-audit; full detail in the dated tail)
 > - **#364 residuals** — the general-path writeback sites remain unmeasured beyond the
 >   shipped telemetry; four load/store translation units have no row (`p0_u0_w1`,

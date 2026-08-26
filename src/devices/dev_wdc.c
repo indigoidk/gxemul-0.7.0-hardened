@@ -76,6 +76,47 @@ struct wdc_data {
 	int		warned_atapi_err;
 	int		warned_atapi_dataout;
 
+	/*  #464 (wdcflood): the SIX fatal() this file still emitted without bound.
+	    #337 latched "each replaced exit(1)"; these were always fatal()
+	    and never exit(1), so they fell outside that round's enumeration.
+	    Measured: 20 stores -> 20 host lines with AND without -q, and the
+	    OVER-READ site at 500 iterations produced 2000 lines / 158,449
+	    bytes.  Artifacts: regress/artifacts/wdcflood/witness_20260825/
+	    {fr_no__q,fr_with__q,n3}.out.  (An earlier wording said "the read
+	    path", which points a reader at the non-8-bit READ guard instead;
+	    n3.out is 2000x "reading too much", i.e. the ring over-read.)
+	    fatal() has no early-out (core/debugmsg.c:384-390, against
+	    debug()'s at core/debugmsg.c:375), so -q cannot silence it.
+
+	    SIX FLAGS, NOT FOUR.  Pairing the ring halves or the two width
+	    checks was proposed and is wrong: #337's own shared warned_badlen
+	    spans the two arms of ONE ENDIANNESS BRANCH (the
+	    `cpu->byte_order == EMUL_LITTLE_ENDIAN` test in the wd_data write
+	    arm below, and its else),
+	    which are mutually exclusive at runtime, so sharing there loses
+	    nothing.  These six can all fire in one session.  Measured
+	    corroboration: in the session that produced the over-read, no
+	    PRODUCER operation ran at all, so no overrun could have preceded
+	    it -- the ring halves are causally independent.
+
+	    (An earlier draft warranted that with "it fires with NO DISK
+	    ATTACHED", which is a NON-SEQUITUR: wdc_addtoinbuf is reachable
+	    from the guest DATA-WRITE path below, so a diskless guest can
+	    fill the ring perfectly well.  The conclusion holds; the reason
+	    given for it did not, and a wrong reason gets reused.)
+
+	    fatal() is KEPT rather than downgraded, on this fork's own
+	    recorded warrant at dev_asc.c:248-257: under -q verbosity settles
+	    at VERBOSITY_ERROR, so a WARNING-level debugmsg would be INVISIBLE
+	    to the boot-log hygiene grep and an ERROR-level one would trip
+	    #261's break-on-ERROR.  */
+	int		warned_inbuf_overrun;
+	int		warned_inbuf_overread;
+	int		warned_unimpl_cmd;
+	int		warned_nonbyte_write;
+	int		warned_nonbyte_read;
+	int		warned_data_unexpected;
+
 	int		write_in_progress;
 	int		write_count;
 	int64_t		write_offset;
@@ -141,9 +182,20 @@ static void wdc_addtoinbuf(struct wdc_data *d, int c)
 	d->inbuf[d->inbuf_head] = c;
 
 	d->inbuf_head = (d->inbuf_head + 1) % WDC_INBUF_SIZE;
-	if (d->inbuf_head == d->inbuf_tail)
+	/*  #464: latch the announcement only.
+	    *** THIS BOUNDS THE WARNING; IT DOES NOT REPAIR THE RING. ***
+	    head == tail means BOTH empty and full here -- there is no
+	    disambiguator -- and this check is POST-HOC, so it fires as the
+	    ring becomes full while the store that actually CORRUPTS is the
+	    NEXT one, which is silent already.  The two bulk paths never
+	    compare the pointers at all.  Filed as `wdcringambig`; nothing in
+	    #464 touches it, and no detector row here claims ring
+	    health.  */
+	if (d->inbuf_head == d->inbuf_tail && !d->warned_inbuf_overrun) {
+		d->warned_inbuf_overrun = 1;
 		fatal("[ wdc_addtoinbuf(): WARNING! wdc inbuf overrun!"
 		    " Increase WDC_MAX_SECTORS. ]\n");
+	}
 }
 
 
@@ -157,8 +209,19 @@ static uint64_t wdc_get_inbuf(struct wdc_data *d)
 	int c = d->inbuf[d->inbuf_tail];
 
 	if (d->inbuf_head == d->inbuf_tail) {
-		fatal("[ wdc: WARNING! someone is reading too much from the "
-		    "wdc inbuf! ]\n");
+		/*  #464: the guard wraps the fatal() ONLY.
+		    *** THE `return` MUST STAY OUTSIDE IT. ***  Nested inside,
+		    the SECOND over-read falls through to the tail advance
+		    below and corrupts the ring pointer -- a fix strictly worse
+		    than the flood it removes.  Row `overread -1` pins it.
+		    See `wdcringambig`: after an overrun this predicate is
+		    unsound, because a FULL ring is indistinguishable from an
+		    empty one.  */
+		if (!d->warned_inbuf_overread) {
+			d->warned_inbuf_overread = 1;
+			fatal("[ wdc: WARNING! someone is reading too much "
+			    "from the wdc inbuf! ]\n");
+		}
 		return (uint64_t) -1;
 	}
 
@@ -579,11 +642,29 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 		break;
 
 	default:/*  TODO  */
+		/*  #464: `d->error |= WDCE_ABRT` STAYS OUTSIDE THE GUARD.
+		    Inside it, the second unimplemented command silently
+		    SUCCEEDS -- wdc_command() re-clears d->error per command,
+		    so the guest is told the command worked.  A line-counting
+		    oracle cannot see that; row `abrt 2nd` reads the status
+		    register after the second command and can.
+
+		    ONE LINE PER DEVICE, NOT PER OPCODE.  A per-opcode set was
+		    proposed and is FILED, not shipped: the scalar is what stops
+		    a guest cycling 0x00..0xff for 256 lines, which is the flood
+		    #464 exists to bound.  Row `unimpl 2op` pins the
+		    per-device spec by firing TWO different opcodes and
+		    demanding ONE line -- which also kills a
+		    "last-warned-opcode" latch, under which an alternating guest
+		    would flood forever.  */
 		d->error |= WDCE_ABRT;
-		fatal("[ wdc: WARNING! Unimplemented command 0x%02x (drive %i,"
-		    " head %i, cyl %i, sector %i, nsecs %i) ]\n",
-		    d->cur_command, d->drive, d->head, d->cyl_hi*256+d->cyl_lo,
-		    d->sector, d->seccnt);
+		if (!d->warned_unimpl_cmd) {
+			d->warned_unimpl_cmd = 1;
+			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "
+			    "(drive %i, head %i, cyl %i, sector %i, nsecs %i)"
+			    " ]\n", d->cur_command, d->drive, d->head,
+			    d->cyl_hi*256+d->cyl_lo, d->sector, d->seccnt);
+		}
 	}
 }
 
@@ -603,8 +684,13 @@ DEVICE_ACCESS(wdc)
 		if (relative_addr == wd_data)
 			idata = memory_readmax64(cpu, data, len);
 		else {
-			if (len != 1)
-				fatal("[ wdc: WARNING! non-8-bit access on WRITE! ]\n");
+			/*  #464: latch the announcement; `idata = data[0]`
+			    is the repair and stays outside the guard.  */
+			if (len != 1 && !d->warned_nonbyte_write) {
+				d->warned_nonbyte_write = 1;
+				fatal("[ wdc: WARNING! non-8-bit access on "
+				    "WRITE! ]\n");
+			}
 			idata = data[0];
 		}
 	}
@@ -699,8 +785,11 @@ DEVICE_ACCESS(wdc)
 				debug("[ wdc: write to DATA: ");
 				debug(s, (uint64_t) idata);
 			}
+			/*  #464: latched.  */
 			if (!d->write_in_progress &&
-			    !d->atapi_cmd_in_progress) {
+			    !d->atapi_cmd_in_progress &&
+			    !d->warned_data_unexpected) {
+				d->warned_data_unexpected = 1;
 				fatal("[ wdc: write to DATA, but not "
 				    "expecting any? (len=%i): 0x%08lx ]\n",
 				    (int)len, (long)idata);
@@ -1021,8 +1110,16 @@ ret:
 		if (relative_addr == wd_data)
 			memory_writemax64(cpu, data, len, odata);
 		else {
-			if (len != 1)
-				fatal("[ wdc: WARNING! non-8-bit access on READ! ]\n");
+			/*  #464: latch the announcement only.  This sits
+			    INSIDE the function's common `ret:` tail, so
+			    `data[0] = odata` and the `return 1` below must run
+			    regardless -- an early return here would hand the
+			    guest an untouched read buffer.  */
+			if (len != 1 && !d->warned_nonbyte_read) {
+				d->warned_nonbyte_read = 1;
+				fatal("[ wdc: WARNING! non-8-bit access on "
+				    "READ! ]\n");
+			}
 			data[0] = odata;
 		}
 	}

@@ -924,4 +924,116 @@ fi
 #  a witness into a gate manufactures a phantom regression on the day the fix lands, and
 #  check_probe_wiring.py treats a gated witness as a HARD failure for exactly that reason.
 
+
+#  ------------------------------------------------------------------ wdcflood
+#  Six unlatched fatal() in dev_wdc.c, each guest-drivable without bound.  Measured
+#  pre-fix: 20 stores -> 20 host lines with AND without -q, and the OVER-READ site at
+#  500 iterations produced 2000 lines / 158,449 bytes.  Artifacts live at
+#  regress/artifacts/wdcflood/witness_20260825/{fr_no__q,fr_with__q,n3}.out.
+#  (An earlier wording said "the read path", which points at the non-8-bit READ guard;
+#  n3.out is 2000x "reading too much", i.e. the ring over-read.  Same numbers, wrong
+#  site named.)  fatal() has no early-out (core/debugmsg.c:384-390 against debug()'s
+#  at :375), so -q cannot silence it.
+#
+#  THE DENOMINATOR IS 26 AND TWELVE OF THOSE ROWS EXIST BECAUSE A PANEL OR A KILL TABLE
+#  FOUND THE FIRST FOURTEEN INSUFFICIENT.  Every one of the twelve closes a MEASURED or
+#  PREDICTED escape, and each is the only row that sees its own:
+#    overrun x2  the :145 reinstatement -- an L2 FLOOR BREACH until this row existed
+#    interleave  a latch reset on a NORMAL operation, invisible to back-to-back rows
+#    w16 reset   a latch operand a guest can CLEAR between fires
+#    r16 reset   the same at the READ site -- sibling parity, and it was missing
+#    fire3       a period-N latch; a two-fire oracle cannot see period 2
+#    w32/r32     the width rows probed 16-bit only
+#    r16/w16 value  BOTH fires, because a `return` after a latched fatal() corrupts
+#                   the FIRST access and an earlier one-value form was VACUOUS
+#    wr indep    TWO SITES IN ONE SESSION -- the only row that can see flag pairing
+#    w mixed     a width-KEYED latch: alternating mov.w/mov.l floods forever, and no
+#    r mixed     single-width row can see it.  Both came from the capped ask-again,
+#                fired against a table that was already clean at 24 rows.
+#
+#  -u IS LOAD-BEARING, for the reason the gdrom section above records: with stdout
+#  redirected to a file it is block buffered, and a killed run then loses every row and
+#  looks like a run that produced nothing.
+#
+#  THE DISK IS REQUIRED AND ITS ABSENCE IS A SKIP, NEVER A PASS.  wdc_command()
+#  early-returns before the opcode switch when no IDE image exists (grep
+#  `but no disk image`), so without it the :583 rows cannot fire at all and would read
+#  as green-on-nothing.  An earlier form cited :461-468, which is wdc_status() and was
+#  wrong even before the fix moved every line in this file.
+#
+#  THAT EARLY RETURN'S OWN debug() FLOODS IDENTICALLY and is NOT latched here.  It is
+#  a DIFFERENT CHANNEL -- debug() has the early-out fatal() lacks, so -q silences it --
+#  which is why it is outside this round's scope rather than a missed site.  It rides
+#  with `floodclass`.
+WDCIMG=$IMAGES/wdc-scratch-64m.img
+if [ ! -f "$WDCIMG" ]; then
+    gate_skip "wdcflood: $WDCIMG absent (see regress/images.md -- it is a dd recipe, not a download)"
+else
+    WFLOG=$LOGDIR/gate_wdc_flood.log
+    python3 -u wdc_flood_probe.py "$PMAX" "$KERNEL" "$WDCIMG" > "$WFLOG" 2>&1 || true
+
+    if ! grep -q "WDC_FLOOD_RESULT=" "$WFLOG"; then
+        note "wdc_flood probe produced no result line; last lines follow"
+        tail -5 "$WFLOG" | sed 's/^/       /'
+        check "wdc_flood probe completed" "no" "yes"
+    else
+        grep -E " ok$| FAIL$" "$WFLOG" | sed 's/^/       /'
+        wfres=$(grep -o "WDC_FLOOD_RESULT=[0-9]*/[0-9]*" "$WFLOG" | tail -1 | cut -d= -f2)
+
+        #  *** PARSE BEFORE SCORE. ***  If the result line exists but is MALFORMED, the
+        #  outer grep still succeeds, `wfres` is EMPTY, and both `${wfres%/*}` and
+        #  `${wfres#*/}` expand to the empty string -- so `check "rows correct" "" ""`
+        #  PASSES while nothing was measured.  Three panel seats found that false pass
+        #  in the asic section above; it is the project's own "a pattern that matched
+        #  nothing reports zero for everything" class in shell-expansion clothes.
+        if [ -z "$wfres" ]; then
+            note "wdc_flood result line present but unparseable; last lines follow"
+            tail -3 "$WFLOG" | sed 's/^/       /'
+            check "wdc_flood result parses" "no" "yes"
+        else
+            check "wdc_flood result parses" "yes" "yes"
+            check "wdc_flood rows run"     "${wfres#*/}" 26
+            check "wdc_flood rows correct" "${wfres%/*}" "${wfres#*/}"
+
+            #  Per-row presence.  A row that silently stops being tested is the
+            #  padded-column class.  The probe's format is "%-14s " -- fourteen columns
+            #  plus one literal space -- so a name of length L is followed by (15 - L)
+            #  spaces; at L=13 that is two and the `^$v  ` anchor still matches, at L=14
+            #  it is ONE and THE ROW SILENTLY STOPS BEING TESTED while the gate stays
+            #  green.  Longest name here is `overread x2` / `unimpl 2op` (11), so there
+            #  are two characters of headroom.  Checked: no name is a prefix of another
+            #  followed by a space, so no pattern can match two rows.
+            #  The `count "$WFLOG"` on the next line is what identifies this section --
+            #  every section's list opens "live" "devsig".
+            for v in "live" "devsig" "unimpl x2" "unimpl 2op" "abrt 2nd" "overread x2" "overread -1" "w16 x2" "r16 x2" "datawr x2" "fire3" "interleave" "w16 reset" "wr indep" "w mixed" "r mixed" "r16 reset" "w32 x2" "r32 x2" "r16 value" "w16 value" "overrun x2" "accept ec" "accept w8" "accept r8" "disjoint"; do
+                n=$(count "$WFLOG" "^$v  .*ok$")
+                check "wdc_flood $v" "$n" 1
+            done
+        fi
+    fi
+fi
+
+#  *** A SOURCE GREP, BECAUSE A STEP-BASED PROBE CANNOT SEE CHANNEL SEMANTICS. ***
+#  `fatal(` -> `debug(` at any of the six sites scores a CLEAN SWEEP against every row
+#  above: they all single-step, and debug() always prints under stepping (its early-out
+#  at core/debugmsg.c:375 fires on `v < 0`, which free-running at verbose 0 gives and
+#  stepping does not).  A production guest would get SILENCE while the detector stayed
+#  green -- quietly reversing this fork's own warrant for keeping fatal() (dev_asc.c:248-257:
+#  under -q verbosity settles at VERBOSITY_ERROR, so a WARNING-level debugmsg is invisible
+#  to the boot-log hygiene grep and an ERROR-level one trips #261's break-on-ERROR).
+#  Named by a file-reading seat on the pass-2 panel.  Textual, cheap, and the only guard
+#  that exists for this class.
+#  *** PIN ON THE OPENING STRING LITERAL, AND THE REASON IS A NEAR MISS WORTH RECORDING. ***
+#  A first draft pinned `grep -c 'fatal('` at 12.  That counts COMMENT lines mentioning
+#  fatal() and gives 15 -- an UNSATISFIABLE check, red forever.  Narrowing to
+#  `^[[:space:]]+fatal\(` gives 12 and looks correct -- but TWO of those matches are
+#  comment CONTINUATION lines that happen to start with whitespace then "fatal()".  The
+#  number would have been right BY COINCIDENCE, and any edit to that comment block would
+#  have broken a check nobody would suspect.  `fatal("` cannot match a comment, and 10 is
+#  the true census: 4 call sites latched by #337, 6 by this round.
+check "wdcflood: ten fatal() call sites intact (channel not downgraded)" \
+      "$(grep -cE '^[[:space:]]+fatal\("' ../src/devices/dev_wdc.c)" 10
+check "wdcflood: six warned_ guards present (one set + one read each)" \
+      "$(grep -cE 'd->warned_(inbuf_overrun|inbuf_overread|unimpl_cmd|nonbyte_write|nonbyte_read|data_unexpected)' ../src/devices/dev_wdc.c)" 12
+
 gate_end
