@@ -83,6 +83,48 @@ RIGS = {
     "landisk": {
         "args": ["-N", "-E", "landisk", "-M", "64",
                  IMAGES + "/openbsd76-landisk-bsd.rd"],
+        #  *** landiskdisk: dev_wdc.c HAD ZERO RIG COVERAGE IN THE WHOLE BATTERY. ***
+        #  This rig booted a ramdisk with no disk image, so wdc0 attached and was never
+        #  driven -- measured: not one ATA opcode reaches the command register across a
+        #  full boot to the installer prompt.  With a disk attached the same boot issues
+        #  14 command-register writes across SEVEN opcodes (3x 0xEC IDENTIFY, 3x 0x20
+        #  READ, 2x 0xC6 SETMULTI, 2x 0x91 IDP, 2x 0x10 RECAL, 1x 0xF5 SEC_FREEZE_LOCK,
+        #  1x 0xC4 READMULTI).
+        #
+        #  SCOPE IT HONESTLY: this gives ZERO coverage of wdc_command()'s `default:` arm,
+        #  which is where every filed wdc defect lives -- "Unimplemented command" warnings
+        #  on a disked boot measured ZERO.  Its real value is 0xF5 as [[wdcnoirq]]'s
+        #  witness, plus general wdc exercise.  No 0xE0, no 0x30 WRITE, no 0xC5
+        #  WRITEMULTI: those need a full filesystem lifecycle through `halt -p`, which
+        #  this rig never performs.
+        #
+        #  MEASURED SAFE, 4 fixed windows, same host and binary:
+        #      no disk        prompt_reached=1  instrs=2,852,727,965
+        #      iR: 64MB       prompt_reached=1  instrs=1,879,394,907
+        #      no disk   (2)  prompt_reached=1  instrs=2,382,496,189
+        #      iR: 64MB  (2)  prompt_reached=1  instrs=1,711,379,982
+        #  Both reach the installer menu, wd0 attaches and is probed, and
+        #  gate_crossfamily.sh's SH7751R,42 token is unaffected.
+        #
+        #  *** TWO TRAPS, BOTH MEASURED. ***
+        #  (1) SYNTAX: `-d i:R:<path>` ABORTS.  diskimage_add() takes ALL prefix chars
+        #      before a SINGLE colon (diskimage.c:1700-1755), so the form is `-d iR:`.
+        #  (2) THE DISKED BOOT RETIRES 28-34% FEWER INSTRUCTIONS in the same wall time.
+        #      Harmless TODAY only because "budget": 0 below -- landisk deliberately has
+        #      no instruction ceiling.  But a NINSTRS floor is FILED, and a floor derived
+        #      from a diskless boot and applied to a disked one is a false-FAIL waiting
+        #      to happen.  Whoever calibrates that floor must calibrate the DISKED config.
+        #
+        #  The `R:` is not optional: plain `-d` opens the image read/write, so every boot
+        #  would mutate the shared file and later runs would inherit the previous run's
+        #  state.  R: discards guest writes into a pid-unique overlay.
+        #
+        #  OPTIONAL BY DESIGN.  _images/ is deliberately outside the repository, so on a
+        #  fresh clone this file does not exist.  Absent, the rig boots exactly as it did
+        #  before -- but it SAYS SO on stdout, because a silent revert to zero wdc
+        #  coverage is indistinguishable from coverage that ran, which is this project's
+        #  "silent coverage loss scored as a pass" class.
+        "optional_disk": IMAGES + "/wdc-scratch-64m.img",
         "boot_wait": 900,
         # *** #420: NO INSTRUCTION BUDGET FOR LANDISK, AND THAT IS DELIBERATE. ***
         # Six idle landisk boots span 2,046,965,550 to 2,852,740,381 -- a 39.4% spread,
@@ -228,9 +270,22 @@ def drive(rig, binary):
     #  exec, so it cannot see process startup, and it is scoped to that nested function.
     t_start = time.time()
 
+    #  landiskdisk: attach the optional scratch disk if it is present, and REPORT which
+    #  way it went.  The report is the point -- see the "optional_disk" comment above.
+    argv = list(cfg["args"])
+    od = cfg.get("optional_disk")
+    if od:
+        if os.path.exists(od):
+            argv += ["-d", "iR:" + od]
+            print("RIG_DISK=1 %s" % od, flush=True)
+        else:
+            print("RIG_DISK=0 absent:%s" % od, flush=True)
+    else:
+        print("RIG_DISK=n/a", flush=True)
+
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp(binary, [binary] + cfg["args"])
+        os.execvp(binary, [binary] + argv)
         os._exit(127)
 
     buf = ""

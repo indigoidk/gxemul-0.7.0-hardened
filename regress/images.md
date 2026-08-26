@@ -126,3 +126,44 @@ Closing the in-guest gap would need a staged binary that computes an overflowing
 single-precision value (`1e30f * 1e30f`) and prints its bits, on a rig whose media has a
 compiler or can carry a cross-built executable. None of the current images qualify: the
 OpenBSD 2.2 rig image has no working `cc`, and the landisk ramdisk has no tooling at all.
+
+## SuperH / landisk — the wdc scratch disk (`landiskdisk`)
+
+**This one you generate; there is nothing to download.**
+
+```
+cd _images
+dd if=/dev/zero of=wdc-scratch-64m.img bs=1M count=64
+```
+
+64 MiB of zeros, 67,108,864 bytes exactly. `drive_guest.py` attaches it to the landisk
+rig as `-d iR:<path>` when it is present, and boots exactly as before when it is not —
+printing `RIG_DISK=0 absent:<path>` so the difference is visible in the log. **A silent
+revert to zero wdc coverage would be indistinguishable from coverage that ran.**
+
+### Why it exists
+
+Without it `dev_wdc.c` has **zero rig coverage in the entire battery**. The landisk rig
+boots a ramdisk, so `wdc0` attaches and is never driven — measured: not one ATA opcode
+reaches the command register across a full boot to the installer prompt. With the disk,
+the same boot issues 14 command-register writes across seven opcodes.
+
+### Scope it honestly
+
+It gives **zero coverage of `wdc_command()`'s `default:` arm**, which is where every
+filed wdc defect lives — "Unimplemented command" warnings on a disked boot measured
+**zero**. Its real value is `0xF5 SEC_FREEZE_LOCK` as `wdcnoirq`'s witness, plus general
+wdc exercise. `0xE0`, `0x30 WRITE` and `0xC5 WRITEMULTI` need a full filesystem lifecycle
+through `halt -p`, which this rig never performs.
+
+### Two traps, both measured
+
+* **`-d i:R:<path>` ABORTS.** `diskimage_add()` takes all prefix chars before a SINGLE
+  colon (`diskimage.c:1700-1755`), so the correct form is **`-d iR:`**.
+* **The disked boot retires 28–34% fewer instructions in the same wall time.** Harmless
+  today only because landisk has `"budget": 0`. A NINSTRS floor is FILED for this rig,
+  and *a floor derived from a diskless boot and applied to a disked one is a false-FAIL
+  waiting to happen* — whoever calibrates it must calibrate the DISKED config.
+
+The `R:` is not optional: plain `-d` opens the image read/write, so every boot would
+mutate the shared file and later runs would inherit the previous run's state.
