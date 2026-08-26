@@ -188,6 +188,17 @@
 >   is FIXED** (it instructs rather than reports) and the carrier's "both applied" claim is
 >   corrected. **What is filed is the automatic retry**, which owes two negative controls: prove
 >   it fires on a walled seat, and prove a seat that ANSWERED is not retried.
+> - **`depsrm`** — the standing `rm src/cpus/*.o` before every build rests on a **false
+>   reason**. The carrier said the `#include`d `.c` files are "invisible to the dep rules";
+>   `src/cpus/Makefile:214` — the *generated* makefile make actually reads — names
+>   `cpu_sh_instr.c`, `cpu_dyntrans.c`, `memory_rw.c` and the `tmp_*.c` files as explicit
+>   prerequisites of `cpu_sh.o`. **Make tracks them.**
+>   **This is a throughput question, not a tidy-up:** the `rm` runs before every mutant build,
+>   and mutant tables are the dominant cost of a round — one round built nine binaries. **KEEP
+>   THE `rm` until measured**: an unnecessary rebuild costs minutes, a stale object costs a
+>   wrong measurement. Owed measurement is small — edit an `#include`d `.c`, rebuild without
+>   the rm, assert the binary changed; then repeat for a generated `tmp_*.c`, the case most
+>   likely to still need it.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and

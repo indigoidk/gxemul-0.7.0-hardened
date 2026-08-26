@@ -2064,8 +2064,22 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
 
 ## Build/measure quick facts
 
-- Build inside `wsl -d Gentoo` (default Ubuntu lacks make); `rm src/cpus/*.o` first (the
-  `#include`d `.c` files are invisible to the dep rules).
+- Build inside `wsl -d Gentoo` (default Ubuntu lacks make); `rm src/cpus/*.o` first.
+  *** THE STATED REASON FOR THAT `rm` WAS FALSE, and it has been repeated in every
+  round and every seat brief. Measured 2026-08-26. *** This said the `#include`d `.c`
+  files are "invisible to the dep rules". **They are not.** `src/cpus/Makefile:214`
+  -- the GENERATED makefile make actually reads -- contains
+  `cpu_sh.o: cpu_sh.c cpu_sh_instr.c cpu_dyntrans.c memory_rw.c tmp_sh_head.c
+  tmp_sh_tail.c`, and `Makefile.skel:194` is where it comes from. Make tracks them.
+
+  **The `rm` survives as a CONSERVATIVE CLEAN-BUILD precaution, not as a necessity**,
+  and nobody has measured whether it is needed at all. **That is worth measuring,
+  because it is not free:** a mutant table rebuilds per mutant (one round built NINE
+  binaries), and if incremental builds are sound there, mutant-table time -- the
+  dominant cost of a round -- drops substantially. Filed as `depsrm`.
+
+  Until it is measured, KEEP the `rm`: an unnecessary rebuild costs minutes, while a
+  stale object costs a wrong measurement, and this project has already paid that once.
 - est/ and GXEMUL-SEC differ by exactly 5 named files + SEC-only `dev_ne2000.c`; any
   other file must land byte-identical in both. Commit only GXEMUL-SEC files.
 - Debugger `dump`/`examine` do NOT route through device handlers — read device state with
