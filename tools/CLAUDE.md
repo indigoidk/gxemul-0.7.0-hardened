@@ -1539,11 +1539,12 @@ routing count. The ladder, and what each rung licenses:
 
 **A rung-2–4 witness is INVALID unless all of:** (i) it shows the defect symptom on the pre-fix
 committed HEAD and goes green post-fix with the same script — this is test-first itself, restated
-per-probe; (ii) it carries a LIVENESS control (a known value returns through the same decode) AND
-a DEVICE-SIGNATURE control (the observed value could only have come from the device — RAM would
-answer differently; **the footbridge probe's first draft returned 0x0 everywhere WITH ITS RAM
-CONTROL GREEN**, so one control is not enough); (iii) the machine description and dispatch are
-committed and unmodified — a machine or `device_add` introduced IN ORDER TO reach the site is
+per-probe; (ii) **for ACCESS witnesses (rungs 3–4)** it carries a LIVENESS control (a known value
+returns through the same decode) AND a DEVICE-SIGNATURE control (the observed value could only
+have come from the device — RAM would answer differently; **the footbridge probe's first draft
+returned 0x0 everywhere WITH ITS RAM CONTROL GREEN**, so one control is not enough); (iii) the
+machine description and dispatch are committed and unmodified — a machine or `device_add`
+introduced IN ORDER TO reach the site is
 laundering, not witnessing.
 
 **Witness vs detector — the timing line:** a REPRODUCTION licenses a fix and exists BEFORE the
@@ -1630,8 +1631,44 @@ takes ONE site; a second joins only if it is witnessed, in the SAME device and S
 under the third doctrine arm (so one fix design covers both), and covered by the SAME detector
 with no new oracle. **More witnesses create more candidate ROUNDS, never bigger rounds.**
 
+### *** TWO CORRECTIONS TO THIS LADDER, 2026-08-26, from `reprowitness`'s held stage. The
+### ladder failed its OWN exemplar, and its own checker had already written down the second gap. ***
+
+**(a) CLAUSE (ii) IS SCOPED TO ACCESS WITNESSES, RUNGS 3–4 — it was written as rung-2–4 and is
+UNSATISFIABLE AT RUNG 2.** Rung 2 admits machine construction for init-time defects and names the
+macppc heap OOB (#23). A construction-time OOB **performs no address decode and returns no device
+value**, so it cannot carry a control of the form "a known value returns through the same decode".
+The ladder's own exemplar could not satisfy the ladder's own clause, and had not been able to
+since the day both were written.
+
+> **A RUNG-2 WITNESS OWES CONSTRUCTION-SPECIFIC CONTROLS INSTEAD, and they are the same idea
+> aimed at a different channel:** a LIVENESS control that the construction under test actually
+> ran (the gate's own object count, or the machine type appearing in its list), and an
+> ATTRIBUTION control that the observed failure came from THIS construction rather than from the
+> harness or a neighbour (rebuild it alone; show the symptom follows the machine type). Same
+> two-control discipline; different observable, because there is no decode to route through.
+
+**(b) THERE IS A FIFTH WITNESS KIND, `harness:`, AND THIS FILE NEVER SAID SO WHILE ITS OWN
+CHECKER ENFORCED IT.** `check_witness.py:56` has accepted
+`^(boot:|probe:|construction:|harness:|none)` since its first run, and its header at `:24-28`
+states the finding outright: **none of the four rungs fits a defect in the TEST APPARATUS
+ITSELF**. `precommit_check.sh:678` repeats it. Meanwhile the prose above still said "no witness
+at rung 2–4 → document instead", with no exception.
+
+> **`harness:<what proved it>` is a valid witness EXACTLY WHEN THE ROUND'S SUBJECT IS THE TEST
+> APPARATUS** — a gate, a probe, a checker — and the proof is normally a MUTATION: the tool fails
+> on a mutant it should catch. **It never licenses an `#include`/direct-call witness for emulator
+> code**, which rung 1 rejects and which stays rejected; that boundary is what keeps this from
+> becoming a hole.
+
+*This is the structure-versus-prose failure INVERTED, and worth noticing in that form: the usual
+shape is a rule living in prose that never fires. Here the STRUCTURE knew — the checker had the
+category, enforced it, and documented why — and the PROSE never absorbed it. Auto-loaded text can
+be stale in both directions, and a tool's own header is a primary source about the tool.*
+
 **Ledger:** a row that closes with commits names its witness: `boot:<rig/gate>`, `probe:<path>`,
-`construction:<gate>`, or `none` (documented-only). Forward-only from 2026-08-19.
+`construction:<gate>`, `harness:<what proved it>`, or `none` (documented-only). Forward-only from
+2026-08-19.
 
 ## Round lifecycle, with the end-of-round parallel step
 
