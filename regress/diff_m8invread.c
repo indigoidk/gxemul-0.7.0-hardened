@@ -636,7 +636,7 @@ int main(void)
 	 *  already records as having survived sixteen rows.  Adding a second
 	 *  `if (writeflag == MEM_WRITE)` re-opened it on a selector instead of on data.
 	 *
-	 *  NOT THEORETICAL, measured on the rig: dev_luna88k.c:1001-1004 registers cmmu_nr 0 and
+	 *  NOT THEORETICAL, measured on the rig: dev_luna88k.c:926-957 (add_cmmu_for_cpu) registers cmmu_nr 0 and
 	 *  1 on EVERY boot including the single-CPU one, and the data CMMU (cmmu_nr 1, the one
 	 *  memory_m88k.c:112 uses for every data access) takes 318,457 of the 613,342 SAR writes
 	 *  -- 51.9%.  So `d->cmmu_nr == 0` silently discards half the SAR traffic, and a witness

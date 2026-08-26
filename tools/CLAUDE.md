@@ -1192,9 +1192,28 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > * it prints **no give-up notice**.
 >
 > > **THE HOUSE IDIOM IS NOT "FIRST N THEN QUIET". IT IS `N = 1`, PER DEVICE INSTANCE, PLUS AN
-> > EXPLICIT `(further occurrences suppressed)` IN THE MESSAGE TEXT** -- roughly 34 sites across
-> > 11 device files. So member 3 should be read as **DECLINE + LATCHED ANNOUNCE**, and the
-> > counter form is the exception that needs a warrant, not the template.
+> > EXPLICIT SUPPRESSION MARKER IN THE MESSAGE TEXT** -- roughly 34 latch sites across 11 device
+> > files. So member 3 should be read as **DECLINE + LATCHED ANNOUNCE**, and the counter form is
+> > the exception that needs a warrant, not the template.
+> >
+> > *** THE MARKER'S SPELLING WAS NAMED WRONG HERE: this clause used to say the idiom is
+> > `(further occurrences suppressed)`, which is the MINORITY form. Censused 2026-08-26 across
+> > `src/devices/*.c`, by message text: ***
+> >
+> >     (once)                            9
+> >     (further occurrences suppressed)  3
+> >     (reported once)                   2
+> >                                      --
+> >                                      14
+> >
+> > **`(once)` is the plurality and is what a new site should use.** The N=1 per-instance SHAPE
+> > is unaffected and unchanged -- only the words. Note the two quantities are different and the
+> > "roughly 34 sites" figure is probably a count of latch VARIABLES rather than of suppression
+> > markers; it is left standing because nobody has re-counted it, which is exactly the kind of
+> > unexamined number this file keeps having to correct.
+> >
+> > *Found while a seat was checking a DIFFERENT claim, which is how all four carrier
+> > corrections today were found. Nothing systematically re-derives these.*
 >
 > **And the fork has a recorded warrant for KEEPING `fatal()` rather than downgrading it**, at
 > `dev_asc.c:250-257`: under `-q` verbosity settles at `VERBOSITY_ERROR`, so a WARNING-level
@@ -1761,6 +1780,41 @@ are `0x480/0x4a0/0x4c0`, which is what the code says.
 table whose answer this tree independently knows, and use it to calibrate the layout.** A
 second, unstaggered table elsewhere in the manual (here `:32655`, DMTE0/DMAE) is the other
 confirmation and is worth grepping for -- these manuals list most codes twice.
+
+> ### *** ONE CALIBRATION POINT IS NOT ENOUGH, AND THE RULE ABOVE WOULD HAVE CERTIFIED A
+> ### TABLE THAT WAS WRONG FROM ITS FOURTH ROW DOWN. Measured 2026-08-26 on `sh4tlbda2`. ***
+>
+> Table 19.4's stagger was UNIFORM -- every name one row off from its value -- and that is
+> the only shape this rule was minted from. **Figure 3.4 at
+> `_scratchpad/sh7750_hardware.txt:9014-9029` is NOT uniform: it has a MISSING NAME CELL,
+> so the stagger BEGINS PARTWAY DOWN.**
+>
+> ```
+> 9017| H'F000 0000    Instruction cache address array     <- correct
+> 9018| H'F100 0000      Instruction cache data array      <- correct
+> 9019| H'F200 0000     Instruction TLB address array      <- correct
+> 9020| H'F300 0000                                        <- THE GAP: address, NO name
+> 9021| H'F400 0000  Instruction TLB data arrays 1 and 2   <- really F300 0000
+> 9025| H'F800 0000    Unified TLB data arrays 1 and 2     <- really F700 0000
+> ```
+>
+> **The first three rows pair CORRECTLY.** So a calibration point taken from above the gap
+> reports the table as sound, and everything below it is wrong by one. A reader trusting the
+> figure puts ITLB data at `F4000000` and UTLB data at `F8000000` -- and **`F8000000` is
+> RESERVED**; the prose jumps `F7000000` straight to `FF000000`. *The figure would have
+> condemned both shipped constants, and the calibration rule as written would have blessed
+> the figure.*
+>
+> > **THE REFINEMENT: calibrate on a row BELOW the value you are about to cite, or on TWO
+> > rows STRADDLING it. A single calibration point is only valid for a UNIFORM stagger, and
+> > you cannot tell which kind you have from one point.**
+>
+> **And prefer the PROSE.** The unstaggered section paragraphs at `:9052-9065` and the
+> per-array section heads gave the right answer at every one of the four windows this round
+> needed. Extracted FIGURES are the hazard; extracted PROSE is not.
+>
+> *This is the exemplar problem again, one level down: the rule was right about the class and
+> its single instance carried a property -- uniformity -- that the class does not have.*
 
 **AND THE TOOL YOU CHECK WITH DECIDES WHETHER YOU CATCH IT.** `sed -n 'A,Bp'` prints the
 lines WITHOUT their numbers, so the number has to be counted by hand off the top of the
