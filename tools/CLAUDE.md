@@ -2217,8 +2217,23 @@ child is killed when that invocation's shell exits, so the run never happened.
 
 **It looks exactly like a run still in progress.** `ps aux` shows nothing, the log
 is empty, and the natural reading is "not finished yet" — which is how ~25 minutes
-went by twice before the zero byte count was noticed. The tell is the SIZE: a live
-run's log grows, and a dead one is exactly 0.
+went by twice before the zero byte count was noticed.
+
+*** THE TELL IS THE PROCESS, NOT THE SIZE -- and this clause said the opposite until
+2026-08-26. *** It read *"a live run's log grows, and a dead one is exactly 0"*.
+**The ledger holds the counter-example in its own records:** `agy` writes NOTHING until
+it finishes -- its file sat at **EXACTLY 0 bytes for minutes with a live `agy.exe`
+(pid 23548)**, then landed 8,044 bytes in one shot. So for agy, a zero-byte file is the
+NORMAL mid-run state, and the size rule would have declared a healthy seat dead.
+
+> **Zero bytes alone proves neither live nor dead. Check the PROCESS** (`ps aux` for the
+> child, or `tasklist` for a Windows CLI seat) **and the completion sentinel.** Size is
+> evidence only where the tool is known to stream -- `grok` does, agy does not, and the
+> two demand opposite readings of the same observation.
+
+*The original rule was minted from a real incident and its ADVICE survives: a plain `&`
+inside a Bash call dies silently. What failed is the DISCRIMINATOR it offered, which is
+the exemplar problem again -- the incident's own shape taken for the class.*
 
 **Use `run_in_background: true`** (the harness tracks it and notifies on exit) or
 `nohup ... &` if it must be inline — a `nohup`'d `panel.sh` in the same session
