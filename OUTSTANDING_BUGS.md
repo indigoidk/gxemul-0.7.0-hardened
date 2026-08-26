@@ -179,6 +179,15 @@
 >   shape is already committed. What is missing is an ORACLE (no 88200/88204 manual), so the
 >   hold is now conditional on obtaining one. Current behaviour is the better one: a dropped
 >   probe leaves SSR zero — a defined miss — where an invented answer could steer guest paging.
+> - **`panelrefire`** — `panel.sh` printed **"re-firing once (a wall can be minutes long) ..."**
+>   and then `return 2`. Every caller is a bare `check "name" "$file"` whose exit status is
+>   discarded, and no seat command is re-invoked anywhere afterwards. **Nothing was ever
+>   relaunched.** Worse than a stale citation: it printed a claim of ACTION to the operator at
+>   the moment a seat was lost, so the one person who could re-fire by hand was told it had
+>   already been done — the failure `panel.sh` itself warns about sixty lines up. **The message
+>   is FIXED** (it instructs rather than reports) and the carrier's "both applied" claim is
+>   corrected. **What is filed is the automatic retry**, which owes two negative controls: prove
+>   it fires on a walled seat, and prove a seat that ANSWERED is not retried.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and

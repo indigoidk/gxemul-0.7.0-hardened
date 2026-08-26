@@ -103,6 +103,29 @@ DEPTH = int(os.environ.get("GXATTR_DEPTH", "60"))
 #  Below this length a row id is a word, not an identifier.  See the blindness note above.
 MIN_ID = 4
 
+#  *** A ROW ID THAT IS ORDINARY PROJECT VOCABULARY FALSE-POSITIVES ON PROSE. ***
+#  Measured 2026-08-26: commit 2e1e662's subject reads "...and two more carrier
+#  claims measured false", where "carrier" means the auto-loaded instruction file.
+#  It collided with the CLOSED row `carrier`, the commit carried real code, and this
+#  check hard-failed a commit that has nothing to do with that row.
+#
+#  THE HEADER ABOVE PREDICTS THIS FAILURE FOR THE OTHER FIELD: it declines to match
+#  commit BODIES because "bodies quote other rows constantly, which would trade this
+#  silent gap for loud false positives."  The unstated assumption was that SUBJECTS
+#  do not quote row names as prose.  In a project whose subjects are written in its
+#  own vocabulary, they do.
+#
+#  MIN_ID does not help -- it guards SHORT ids against general English, and this one
+#  is seven characters.  The problem is not length but that the token is a common
+#  word HERE.
+#
+#  So for these ids ONLY, a match requires the token to look like an IDENTIFIER --
+#  backticked or quoted -- never bare prose.  NOT a blanket exemption: a subject that
+#  names `carrier` in backticks still matches and is still graded.  The set is printed
+#  every run, because a check that silently skips subjects while printing a green line
+#  is the vacuity class this file's own header names.
+SUBJECT_STOPWORDS = {"carrier"}
+
 #  A commit subject claiming the work is finished.  Deliberately narrow -- "gate", "record"
 #  and "file" are progress verbs here, not closure verbs, and including them would turn every
 #  ordinary round into a hard failure.
@@ -167,7 +190,12 @@ def main(argv):
 
     short = sorted(i for i in rows if len(i) < MIN_ID)
     matchable = {i: r for i, r in rows.items() if len(i) >= MIN_ID}
-    pats = {i: re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i))
+    #  A stopword id must appear as an IDENTIFIER (backticked or quoted); every other
+    #  id keeps the word-boundary form.  See SUBJECT_STOPWORDS above for the measured
+    #  false positive that motivated this.
+    pats = {i: re.compile(
+                (r"[`\"']%s[`\"']" % re.escape(i)) if i in SUBJECT_STOPWORDS
+                else (r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(i)))
             for i in matchable}
 
     log = [l.split("\t", 1) for l in
@@ -237,6 +265,10 @@ def main(argv):
     print("  NOT MATCHABLE (id shorter than %d chars, would match English): %d -- %s"
           % (MIN_ID, len(short), " ".join(short) if short else "none"))
     print("  Rows with these ids are INVISIBLE to this check. Lengthen the id to cover one.")
+    #  ALWAYS printed too -- same doctrine as the line above.
+    _sw = sorted(i for i in matchable if i in SUBJECT_STOPWORDS)
+    print("  STOPWORD IDS (ordinary project vocabulary; matched only when written as\n        an identifier, e.g. backticked): %d -- %s"
+          % (len(_sw), " ".join(_sw) if _sw else "none"))
 
     #  The second blindness -- see the header.  A row that SHIPPED but that no commit subject
     #  ever names is never examined, so its attribution could be wrong indefinitely.  Only

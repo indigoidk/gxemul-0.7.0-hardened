@@ -127,6 +127,22 @@ settled this, in one invocation and about four seconds.
   a seat the round would otherwise silently lose. The owner caught this one only because the
   seat showed as available in their own UI — which is a human noticing, i.e. the thing this
   harness exists to stop depending on.
+  > *** THE RULE IS SOUND AND "BOTH APPLIED" WAS FALSE ABOUT THIS HALF. Measured 2026-08-26
+  > by an audit of this file. *** `panel.sh` printed **"re-firing once (a wall can be minutes
+  > long) ..."** and then `return 2` — and every caller is a bare `check "name" "$file"` whose
+  > exit status is discarded, with no seat command re-invoked anywhere afterwards. **Nothing
+  > was ever relaunched.**
+  >
+  > **That is worse than a stale citation.** A stale citation misleads a reader who follows
+  > it; this printed a claim of ACTION to the operator at the moment a seat was lost, so the
+  > one person who could re-fire it by hand was told it had already been done. It is the
+  > failure `panel.sh` itself warns about sixty lines earlier — *"a documented check that
+  > cannot fail, which is worse than no check because it reassures."*
+  >
+  > The message is now an INSTRUCTION, not a false report. **Automatic re-firing is FILED,
+  > not done**, because it is a behaviour change to the script every panel runs and it owes
+  > two negative controls: prove the retry fires on a walled seat, and prove a seat that
+  > answered is NOT retried.
 * ***`panel.sh` COULD NOT SEE THIS WALL AT ALL.*** Its check only caught the ECHO-ONLY shape
   (brief echoed, tiny payload — the codex signature). Kimi's wall was **36 KB of real content,
   98% novel, ending mid-sentence with the notice**: payload huge, echo absent, invisible to

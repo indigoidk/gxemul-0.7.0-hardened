@@ -392,7 +392,26 @@ check() {   # name file
         #  contradicted, though the advice it carries (TEST IT, never assume) is what
         #  caught this.  Cause not established; recovery measured.  One retry costs a
         #  minute and recovers a seat the round would otherwise silently lose.
-        say "        re-firing once (a wall can be minutes long) ..."
+        #  *** THIS USED TO PRINT "re-firing once ..." AND NOTHING RE-FIRED. ***
+        #  Found 2026-08-26 by an audit of the carrier: every caller of this
+        #  function is a bare `check "name" "$file"` whose exit status is
+        #  discarded, and no seat command is re-invoked anywhere after the seat
+        #  check.  The `return 2` below has never had a consumer.
+        #
+        #  A stale citation misleads a reader who follows it.  THIS printed a
+        #  claim of ACTION, to the operator, at the moment a seat was lost -- so
+        #  the one person who could re-fire it by hand was told it had already
+        #  been done.  That is the failure this file warns about sixty lines up:
+        #  "a documented check that cannot fail ... is worse than no check
+        #  because it reassures."
+        #
+        #  The message is now an INSTRUCTION rather than a false report.  Making
+        #  the retry automatic is a real improvement and a real behaviour change
+        #  to the script every panel runs, so it is FILED with the two negative
+        #  controls it owes: prove the retry fires on a walled seat, and prove a
+        #  seat that answered is NOT retried.
+        say "        A WALL IS A MOMENT, NOT A STATE -- RE-FIRE THIS SEAT ONCE"
+        say "        BY HAND before closing the round.  NOT done automatically."
         return 2
     fi
 
