@@ -138,6 +138,20 @@ run_rig() {
                  'BEGIN { print (b > 0 && b <= e) ? "contained" : "outside: " b " vs " e }')" contained
     check "$rig: stall threshold is many record intervals, well under the backstop" \
           "$([ "${st:-0}" -ge 30 ] && [ "${st:-0}" -le $(( ${bs:-1} / 4 )) ] && echo yes || echo "no: $st")" yes
+    #  *** THIS RANGE IS luna88k's, APPLIED TO EVERY RIG, AND landisk SITS EXACTLY ON THE
+    #  LOWER BOUND WITH ZERO MARGIN.  Noted 2026-08-26; not fixed here, deliberately. ***
+    #  luna88k is boot_wait 2400 / stall 120 and its worst measured boot is 720.8 s, which is
+    #  where `>= 900` comes from.  landisk is boot_wait 900 / stall 60 and reaches its prompt
+    #  in 7.2-8.3 s.  So the bound is derived from one rig and applied to another -- exactly
+    #  what the BUDGET comment below forbids, corrected there and left uncorrected here.
+    #
+    #  IT CANNOT PRODUCE A FALSE PASS, ONLY A FALSE FAIL, and both defaults fail safe.  What
+    #  it actually does is FORBID a legitimate future calibration: tightening landisk's
+    #  backstop to anything sensible for an 8-second boot reddens this gate for a bookkeeping
+    #  reason, which is the phantom-regression class and is how a gate gets switched off.
+    #  The fix is to class it the way `budget_class` already classes BUDGET -- real work with
+    #  a real negative control (per-rig stall/backstop mutants), so it is FILED, not smuggled
+    #  in as a bound widening with nothing proving the widened bound still reds.
     check "$rig: backstop exceeds the worst boot measured, with margin" \
           "$([ "${bs:-0}" -ge 900 ] && [ "${bs:-0}" -le 3600 ] && echo yes || echo "no: $bs")" yes
     # *** MISSING AND DELIBERATELY-ZERO ARE DIFFERENT, AND CONFLATING THEM PRINTED A LIE.
@@ -188,11 +202,25 @@ run_rig luna88k "$IMAGES/liveimage-luna88k-raw-20250518.img" "0.500000,1.414214"
 
 # SuperH proves the SH4 core executes a full kernel boot through device attachment. It
 # was originally non-interactive because the emulated SuperH console lost writes
-# non-deterministically (#293 fixed that and the rig has sent guest input ever since; this
-# comment claimed otherwise for far longer than it was true). The measured history:
-# (measured), so any interactive check is intermittent, and an intermittent gate gets
-# ignored and then disabled. The checked answer is the chip identity the guest's own PCI
-# probe prints. See drive_guest.py and OUTSTANDING_BUGS.md.
+# non-deterministically -- #293 fixed that, and the rig has sent guest input ever since.
+#
+# *** THIS COMMENT WAS HALF-CORRECTED AND THE RETRACTED PREMISE'S CONCLUSION SURVIVED FOR
+# LONGER THAN THE PREMISE DID.  Repaired 2026-08-26. ***  The original was ONE sentence
+# spanning two lines ("...loses writes non-deterministically / (measured), so any
+# interactive check is intermittent, and an intermittent gate gets ignored and then
+# disabled").  An earlier fix rewrote only the FIRST line, leaving a dangling "The measured
+# history:", an orphaned "(measured)", and -- the part that mattered -- the CONCLUSION
+# still standing as a live assertion.
+#
+# That assertion was refuted two lines below it, in this file: the expected answer is
+# "SH7751R,42", and drive_guest.py:172 types `echo GX_ANS $((6*7))` expecting `GX_ANS 42`,
+# noting in its own comment that the typed text does not contain "42" so the value can only
+# come from EXECUTION.  A comment calling interactive checks unreliable sat directly above a
+# row that depends on one and has been green since #293.
+#
+# The checked answer is BOTH declared answers joined: the chip identity the guest's own PCI
+# probe prints, and the guest-computed arithmetic result.  See drive_guest.py and
+# OUTSTANDING_BUGS.md.
 # BOTH declared answers, joined. Until #420's final pass this read just "SH7751R", so the
 # guest-computed $((6*7)) = 42 -- the only thing on this rig that proves the SH4 core executes
 # arithmetic rather than merely booting -- was never literally compared.
