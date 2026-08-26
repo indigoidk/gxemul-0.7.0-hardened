@@ -1576,8 +1576,10 @@ What failed was scope control, not correctness.
 ## THE WITNESS LADDER — what "reproduce" means (adopted by adjudication, 2026-08-19)
 
 The old rule asked "can this MACHINE boot?"; the right question is "can this CODE PATH be
-executed?" — with `armbdt` as the proof (no ARM rig exists, yet gate 14 runs 261 real-decode
-checks on `testarm`). But only executions that preserve the committed hardware selection and
+executed?" — with `armbdt` as the proof (no ARM rig exists, yet gate 14 runs **358** real-decode
+checks across `testarm`, `barearm` and `cats` -- this said "261 ... on `testarm`" until
+2026-08-26; commit `6014b7e`'s own message records "PASS 358 checks (was 261)", and
+`gate_arm.sh:561` carried the same stale number in its own comment). But only executions that preserve the committed hardware selection and
 routing count. The ladder, and what each rung licenses:
 
 1. **`#include`/direct-call harness — NEVER a reproduction.** The discriminator is mechanical:
@@ -1587,7 +1589,9 @@ routing count. The ladder, and what each rung licenses:
    where the true numbers were 1007/1009/17, a NULL-callback stub artefact.) Such harnesses are
    DETECTORS and still ship as regression rows — graded by the vacuity taxonomy (must fail on a
    mutant), never by the witness clauses.
-2. **Machine construction** (gate 9's mechanism, 23 types) — a reproduction ONLY for defects in
+2. **Machine construction** (gate 9's mechanism, **41 types / 58 subtypes**; this said
+   "23 types" until 2026-08-26, and `gate_asan_sweep.sh:11` keeps the 23 only as history
+   while `:26` reasons about "15 of the 41") — a reproduction ONLY for defects in
    code construction itself executes (init-time, e.g. the macppc heap OOB #23). Never for
    access-path defects: registration proves presence, not reachability.
 3. **Cold-debugger probe** — a real guest instruction through real address decode and real
@@ -1753,8 +1757,11 @@ be stale in both directions, and a tool's own header is a primary source about t
    which `gate_upstream.sh:46-47` reads. A per-gate `LOGDIR` would NOT isolate them, because
    the ORDERINGS above are what serialise the gates — the driver's own hardcode is gone (#422:
    `drive_guest.py:207-211` honours `$LOGDIR`, `lib.sh:31` exports it), and it changed nothing
-   about them. **~37 wall-clock oracles exist
-   across the battery** (33 `while time.time() - t < …` loops in 18 probe files, plus
+   about them. **47 wall-clock oracles by direct census 2026-08-26** -- `while time.time() - t < ...`
+   loops across **27** python files in `regress/`, where this line said 33 loops in 18
+   files. *(An auditing seat counting slightly differently got 45; the number moves with
+   the regex, so what matters is that it GREW rather than the exact value -- the
+   concurrency warning is more strongly supported now, not less.)* Plus
    `gate_asan_sweep.sh:60,62`, `gate_upstream.sh:74`, and `run_emu`), so converting one gate does
    not license concurrency anywhere.
 7. Docs (CHANGELOG round block, REVIEW_FINDINGS, OUTSTANDING_BUGS), commit, push.

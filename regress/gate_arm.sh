@@ -558,7 +558,10 @@ done
 # backwards, and it was recorded as a verified mechanism, so two shipped rounds
 # leaned on it: #357's general-path writeback and #362's general-path rotation
 # were both unmeasured, and each was independently confirmed DELETABLE with this
-# whole gate still green at 261 checks.
+# whole gate still green at 358 checks.  (This said 261 until 2026-08-26 -- the count
+# grew when the gate took on `barearm` and `cats`, and commit 6014b7e's message records
+# "PASS 358 checks (was 261)".  The carrier carried the same stale number; both were
+# corrected together, because a number with two homes rots in both.)
 #
 # TWO AXES, kept apart. The first draft of this correction conflated them and
 # claimed the new cold rows cover "general post-index writeback". They do NOT:
