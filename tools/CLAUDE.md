@@ -386,10 +386,23 @@ seat ledger exists to refuse to count as agreement.
 > question explicitly were the easiest to answer *accurately*. One habit, and it makes the
 > batch both faster and safer.
 >
-> ### *** THAT HABIT WAS AT 0 FOR 18 ON 2026-08-26, WHICH IS WHY THE RULE IS NO LONGER PROSE.
+> ### *** THAT HABIT WAS AT **ZERO** ON 2026-08-26, WHICH IS WHY THE RULE IS NO LONGER PROSE.
 > ### It is now `check_stage_panels.py` + a `hold_question` field. Owner-decided the same day. ***
 >
-> Every one of the eighteen held stages then in the ledger carried a DISPOSITION note where a
+> **THE NUMERATOR IS THE CLAIM AND IT IS ZERO. THE DENOMINATOR IS DELIBERATELY NOT A NUMBER
+> HERE, because writing one is what went wrong.** This clause read "0 FOR 18" and named no
+> UNIT -- and when the exemplar audit challenged it, FOUR counting methods gave FOUR answers:
+> the audit seat 21 stages / 18 rows; a bare entry-grep of mine 30 / 26 (it counted ENTRIES,
+> so two markers in one stage counted twice); the checker's phase rules 26 / 22; and its full
+> rule set, excluding closed rows, 24 / 21. **I could not reproduce the seat's figure, so I
+> am not writing any of them down** -- that is precisely how the original number got there.
+>
+> To re-derive it at any commit: `git show <rev>:tools/pipeline/ledger.json` and count held
+> markers **one per (row, phase), recognised phases only, excluding closed rows** -- which is
+> what `check_stage_panels.py` does. **STAGES AND ROWS ARE DIFFERENT UNITS and a count that
+> names neither cannot be checked.**
+>
+> Every held stage then in the ledger carried a DISPOSITION note where a
 > question belongs -- *"FILE - no measurable effect until a caller survives"*, *"a policy, not a
 > round"*, *"FILE - offer as a rider in b120u's first panel"*. Each is a true statement about
 > the row. **None is a question a seat can answer.**
