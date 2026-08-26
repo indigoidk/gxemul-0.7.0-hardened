@@ -2080,14 +2080,27 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
 
   Until it is measured, KEEP the `rm`: an unnecessary rebuild costs minutes, while a
   stale object costs a wrong measurement, and this project has already paid that once.
-- est/ and GXEMUL-SEC differ by exactly 5 named files + SEC-only `dev_ne2000.c`; any
-  other file must land byte-identical in both. Commit only GXEMUL-SEC files.
-- Debugger `dump`/`examine` do NOT route through device handlers — read device state with
-  guest loads via `step`.
+- est/ and GXEMUL-SEC differ by **SEVEN declared paths**, not "5 named files +
+  `dev_ne2000.c`" -- the omitted one is `src/devices/.index`. The list is
+  `tools/est_divergence.txt` and `precommit_check.sh` reads it, so **derive the
+  allowlist rather than quoting a count**; that is what this line got wrong.
+  Any other shared file must land byte-identical in both. Commit only GXEMUL-SEC files.
+- Debugger `dump` reads device state through `memory_rw`, so **read SH4 device state with
+  guest loads via `step`** -- but the REASON given here was a blanket claim and it is false.
+  *** CORRECTED 2026-08-26. *** `debugger_cmds.c:716` calls `memory_rw`, and
+  `memory_rw.c:585` DOES dispatch to handlers registered
+  `DM_READS_HAVE_NO_SIDE_EFFECTS`. What makes the advice true for SH4 is narrower and
+  better: **SH4 registers `DM_DEFAULT`** (`dev_sh4.c:2860`, `:2867`), so ITS handler is
+  bypassed. A device registered the other way WOULD be reached by `dump`. (There is also no
+  `examine` command in the tree today.)
 - *** A SINGLE-STEPPING PROBE CANNOT OBSERVE INTERRUPT DELIVERY, EVER. *** `cpu_dyntrans.c:204-206`
   reads `/* Do not cause interrupts while single-stepping. It is so horribly annoying. */`
-  followed by `if (!single_step) {`. **Every SH probe in this tree single-steps**, so none of
-  them can see an interrupt arrive — a step-based oracle reads "not delivered" on a correct
+  followed by `if (!single_step) {`. **Every SH probe in this tree single-stepped** when this was written, so none of
+  them could see an interrupt arrive -- *and that is no longer universally true, because the
+  tree then ADDED the free-running shape this very paragraph describes:*
+  `sh_intprio_probe.py` and `sh_iprbcd_probe.py` both breakpoint-and-`continue` today.
+  **The suppression rule below is unchanged and still governs any probe that DOES step**;
+  what expired is the claim that they all do — a step-based oracle reads "not delivered" on a correct
   build and on a mutant alike, which is the vacuous shape in its purest form. This is why
   `sh4dmacie` was mis-ranked for weeks as needing "a new capability": the EXPEVT/INTEVT
   registers were readable by an ordinary guest load all along (`0xff000024`/`0xff000028`, served
@@ -2099,8 +2112,13 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   *** BUT "DELIVERY" IS THE EXACT WORD, AND READING THIS RULE MORE BROADLY COSTS A PROBE.
   Refined 2026-08-22, verified by opening all three files. *** The guard suppresses the
   EXCEPTION DISPATCH only. **The ASSERT path runs perfectly well while stepping**, by two
-  routes: a device handler asserts SYNCHRONOUSLY inside the guest's own store instruction
-  (nothing in `memory_rw` or device dispatch consults `single_step`), and **tick functions
+  routes: a device handler asserts SYNCHRONOUSLY inside the guest's own store instruction.
+  *** THE PARENTHESIS HERE SAID "nothing in `memory_rw` or device dispatch consults
+  `single_step`", AND HALF OF IT IS FALSE. Corrected 2026-08-26. *** `memory_rw.c:284`
+  reads `!single_step && !about_to_enter_single_step &&` -- for WATCHPOINTS. **The
+  conclusion survives on the half that is true:** DEVICE DISPATCH carries no single-step
+  guard, which is what makes a synchronous assert visible while stepping. The watchpoint
+  path is a different mechanism and does not gate device access, and **tick functions
   run under stepping too** — `machine.c:726-728` is
   `ticks_till_next[te] -= single_step ? 1 : N_SAFE_DYNTRANS_LIMIT;`, so they still fire, just
   one tick at a time.
@@ -2126,7 +2144,20 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
   #340 two-pass loop driver, breakpoint AFTER the sequence, instruction tracing OFF
   (recipe in OUTSTANDING_BUGS.md, 2026-08-03 entry).
 - Probe harness: `_scratchpad/gxprobe.py` (don't hand-roll pty plumbing). Reconstruct the
-  arc screen (`r49_screen.py` pattern); never grep the raw arc pty log for tokens.
+  arc screen (`r49_screen.py` pattern) for BOOT-PROOF tokens.
+  *** "NEVER grep the raw arc pty log" IS TOO STRONG, and the two sources are
+  COMPLEMENTARY rather than one-right-one-wrong. Corrected 2026-08-26. ***
+  **Gate 4 obeys the rule and always did** -- `gate_mips.sh:62` rebuilds via
+  `r49_screen.py` and `:64`/`:66` grep the REBUILD, because arc's VGA console
+  repaints DIFFERENTIALLY and a raw grep misses tokens.
+  **Gate 6 deliberately accepts EITHER** (`gate_hygiene.sh:402`), and its own comment
+  at `:11` records the measured reason: `'{ asc: data in'` reads **0 from the screen
+  rebuild and 5 from the raw log**. *The rebuild is required to avoid
+  differential-repaint FALSE NEGATIVES; the raw log is required for content the
+  rebuild DROPS.* Choose by what you are looking for, not by a blanket ban.
+  *(An auditing seat reported that gate 4 greps the raw log. It does not -- it greps
+  `arc.screen`. The seat was right that "never" is false and wrong about which gate,
+  which is why this was re-derived rather than transcribed.)*
 *** AND THE OPPOSITE FAILURE ALSO EXISTS: A PLAIN `&` IN A BASH CALL DOES *NOT*
 SURVIVE, AND IT FAILS SILENTLY WITH A ZERO-BYTE LOG. Measured 2026-08-23. ***
 
