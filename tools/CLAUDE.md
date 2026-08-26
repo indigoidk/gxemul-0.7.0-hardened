@@ -452,6 +452,14 @@ Mechanically enforced by `GXEMUL-SEC/tools/pipeline/check_stage_panels.py`, wire
 hard section H. Note it complements rather than duplicates section G: **G verifies that a seat which
 ANSWERED was recorded; H verifies the seat was FIRED at all.** Neither catches the other's failure.
 
+> *** H's GUARANTEE IS NARROWER THAN "FIRED AT ALL", and the overclaim was measured
+> 2026-08-26. *** H reads LEDGER ENTRIES, not process execution. It **skips stages that
+> never started**, treats a one-seat stage as a filing rather than a short panel, and
+> accepts a seat entry without any proof a process ran. The honest statement is: **a
+> STARTED, non-filing stage must carry nine recorded seats.** A stage that was never begun,
+> and a seat entry written without firing anything, both pass. The policy is unchanged and
+> right; the mechanical guarantee is smaller than the sentence claimed.
+
 *The superseded rule, kept because the reasoning is the part that expired, not the caution:* it said
 ONE full panel per ROUND with pass 2 restricted to Codex + Opus, because the Ollama seats 429 if two
 panels fire within ~20 minutes and Grok's free tier died after ~4 substantial invocations. **Grok is
@@ -662,7 +670,8 @@ absent root original is NOT a failure — on a fresh clone the repo copy is the 
 
 `tools/` and not `GXEMUL-SEC/` deliberately: the cwd DRIFTS (it has sat in `GXEMUL-SEC/regress`
 for whole rounds), and a copy at `GXEMUL-SEC/CLAUDE.md` would auto-load *alongside* the root
-original, putting two copies of a 38 KB carrier in one context.
+original, putting two copies of the carrier in one context -- **151 KiB** as of 2026-08-26, and
+this line said 38 KB, which was true when it was written and has quadrupled since.
 
 ## Tooling that makes the panel automatic (the "always" layers)
 
@@ -670,15 +679,22 @@ original, putting two copies of a 38 KB carrier in one context.
 1a. **THE PIPELINE DOCTRINE** — `PIPELINE.md` (project root): the owner's portable multi-LLM
    fix-pipeline methodology, supplied 2026-08-15 and ADOPTED (pasted into the loop five times —
    that is a directive). Two seat CLASSES recorded on every dispatch: FILE-READING (Codex, agy,
-   Grok, Kimi, Opus, Fable — facts about the repo) vs PACKET-FED (the three Ollama seats —
+   Grok, Opus, Fable — facts about the repo) vs PACKET-FED (the Ollama transports —
    attack reasoning only; their blindness is a feature; NEVER equivalent votes on repo fact).
+   *** KIMI IS CLASSIFIED BY ITS TRANSPORT, NOT BY ITS NAME, and this line listed it as
+   FILE-READING until 2026-08-26. *** The CLI is file-reading; the live substitute
+   `kimi-k3:cloud` goes through `panel_ollama.py` with `PACKET_BRIEF` and is a **FOURTH
+   PACKET-FED transport**. Since the CLI is 403-walled, **the kimi answers actually
+   arriving today are PACKET-FED** -- so crediting one as a repo-fact reading is exactly
+   the conflation this doctrine forbids.
    Conflict-of-interest badges on every closure: `A` = author self-review disclosed, `s` =
    same-model replication (weaker than two-family, never passed off as it). Evidence ladder
    CONFIRMED > MANUAL > BELIEVED > UNKNOWN — an honest UNKNOWN outranks a confident guess.
    VERDICT LINE FIRST in every requested seat output (truncation survives). Echo-test = nonce in
    the prompt + nonce in a file, both required back. **The ledger**: `GXEMUL-SEC/tools/pipeline/ledger.json` is
-   the single source of truth; `GXEMUL-SEC/tools/pipeline/gen_dashboard.py` renders `dashboard.html` (published as
-   a claude.ai artifact) — write the ledger, regenerate, republish, NEVER hand-edit the output.
+   the single source of truth; `GXEMUL-SEC/tools/pipeline/gen_dashboard.py` renders **`matrix.html`** (published as
+   a claude.ai artifact; this line said `dashboard.html` until 2026-08-26 -- the
+   generator itself documents the stale name at its `OUT =`) — write the ledger, regenerate, republish, NEVER hand-edit the output.
    Two divergences held deliberately per newer owner directives, recorded in PIPELINE.md's
    adoption section: the loop does not halt at phase boundaries, and a dead seat degrades
    (recorded by name) rather than pausing the fix.
@@ -697,9 +713,11 @@ original, putting two copies of a 38 KB carrier in one context.
    Negative-controlled in both directions on the day it was written. **It generalises a check
    that was being tracked by hand — and a check a human has to remember is a check that
    eventually does not happen.**
-2. **One-command convening** — `./panel.sh <brief_file>` fires the five scriptable seats
-   concurrently, verifies each produced a real answer, and reminds you to launch the
-   sixth (Opus) via the Agent tool. `panel_ollama.py` is its cloud-seat helper. Low
+2. **One-command convening** — `./panel.sh <brief_file>` fires **EIGHT transports**
+   concurrently (seven logical scriptable seats, because the Kimi CLI and its
+   `kimi-k3:cloud` substitute are two transports for ONE seat), verifies each produced a
+   real answer, and reminds you to launch **Opus AND Fable** via the Agent tool. *This
+   read "five scriptable seats ... the sixth (Opus)" until 2026-08-26.* `panel_ollama.py` is its cloud-seat helper. Low
    friction is what makes "always" actually hold. **ALWAYS invoke it as
    `bash GXEMUL-SEC/tools/panel.sh <ABSOLUTE brief path>`, never `./panel.sh`:**
    the session cwd DRIFTS (it has sat in `GXEMUL-SEC/regress` for whole rounds), and from
@@ -750,7 +768,10 @@ Each cycle of the loop, the main model (Fable) does:
    once; before re-running a battery, explicitly stop any prior run (a rebuild does NOT
    stop it). One gate run, one gate log. **"Contending" includes CPU-heavy work that
    touches no tree at all** — panel seats, subagents, big greps. Gates carry wall-clock
-   oracles: `gate_ab` allows each luna88k boot 300 s against a ~100 s normal, and in
+   oracles. *`gate_ab`'s 300 s WALL budget was REPLACED by an accounting of GUEST WORK
+   in #419 (`LUNA_BUDGET`, `LUNA_STALL`, `LUNA_BACKSTOP`); this line said "300 s against
+   a ~100 s normal" until 2026-08-26. The contention hazard is unchanged -- only the
+   oracle's shape, and it is still load-sensitive.* In
    round 108 two research subagents plus interactive commands pushed HEAD past that
    budget, producing a FAIL indistinguishable from a real capability regression (a bare
    `ls` under WSL took >120 s in that window; re-run alone it passed 1:1:1). Serialize:
@@ -1518,7 +1539,11 @@ That rule alone would have ended #392 at pass-2c instead of 2f.
 to any of them.
 * every commit: its own TARGETED gate (~1 min), in the same commit as the fix;
 * WEEKLY (owner directive 2026-08-15: small unit tests any time, the full battery holds
-  off to weekly - Saturdays 03:00, scheduled task `GXemul-weekly-battery`), alone,
+  off to weekly -- **SUNDAYS 18:00**, scheduled task `GXemul-weekly-battery`; it was
+  moved there from Saturday 03:00 and this line said Saturday until 2026-08-26.
+  *`nightly_check.sh:45-52` had ALREADY RECORDED that a doc "still said ... Saturdays
+  03:00 afterwards" -- the tool noticed the drift and the carrier kept it, which is the
+  structure-knew-and-prose-did-not shape again*), alone,
   nothing else running: the FULL battery (~45 min, and `gate_ab` carries a load-sensitive
   wall-clock oracle, so it genuinely needs the machine to itself).
 
