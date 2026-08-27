@@ -1,3 +1,300 @@
+## Round 477 pass 2 (post-commit) -- a seat REASONED a sweep it could not build, and the build confirmed it
+
+`0922465` shipped, then its own pass-2 panel took it apart. Nine seats answered (the kimi
+CLI is 403-walled and its `kimi-k3:cloud` substitute carried the seat -- **its first panel
+since the `PACKET_PREAMBLE` fix, answering 6.3 KB where it had stalled at 127 bytes one
+panel earlier**). Verdicts were GO / REASONED / sound-on-the-packet, with **codex
+dissenting DO NOT CLOSE**. The dissent was right.
+
+### *** THE FLAG CONJUNCT IS LOAD-BEARING, AND `#477`'s COMMENT SAID IT WAS NOT ***
+
+codex reasoned that deleting `atapi_cmd_in_progress` from the dispatch guard -- leaving
+the phase test alone -- would sweep the detector while reopening spurious CDB dispatch.
+**It could not build the mutant**, saying so plainly: read-only workspace. Built here:
+
+```
+M_phaseonly against the shipped detector:   52 rows, 0 failures   CLEAN SWEEP
+```
+
+**The mechanism is a STALE PHASE, and it is a defect in its own right.**
+`wdc_command(ATAPI_PKT_CMD)` sets `PHASE_CMDOUT`. A following `wdc_command(WDCC_WRITE)`
+clears the flag at the top of that function and arms the write -- and **nothing resets the
+phase**. The device then sits with `phase == PHASE_CMDOUT`, `atapi_cmd_in_progress == 0`
+and a disk write armed: exactly the state a phase-only guard cannot tell from a real CDB
+collection. Six 16-bit payload stores reach occupancy 12, and the guest's own sector data
+is issued as a SCSI command.
+
+**`row_stale_phase_write` pins it, and the measurement is WORSE than the seat predicted:**
+
+```
+FAIL disk payload is not issued as a CDB    1 SCSI dispatch(es)
+FAIL the sector survives a stale phase      0 w, 0 b
+```
+
+The sector does not merely lose twelve bytes. **It never reaches the disk at all.** The
+row carries both halves deliberately -- a dispatch count alone would miss a mutant that
+eats the bytes without issuing them.
+
+**L4, corrected in place:** `#477`'s comment headline read *"THE DISPATCH MUST KEY ON THE
+PHASE, NOT ON THE FLAG"*. That is unsafe wording in product code. It now reads *"keys on
+the phase IN ADDITION TO the flag"*, with the measurement and the stale-phase mechanism
+recorded beside it.
+
+*Per the late-dissent rule: closure changes the licence, never the truth-value. A wrong
+record is corrected in place; the detector row is a follow-up commit, which this is. The
+shipped code is unchanged -- both conjuncts were already there and both were always
+correct. What was wrong was the file's explanation of why.*
+
+### What the panel confirmed rather than overturned
+
+* **The `atapi_st` NULL class IS closed.** codex went looking for a seventh dereference and
+  found none -- nine total, three dominated by the NULL-checking chain and six after an
+  allocation that cannot return NULL. That is now two seats reaching the same enumeration
+  independently.
+* **No legal sequence is rejected.** The dispatch difference concerns writes outside
+  `CMDOUT`; the read-arm difference concerns a DATA read while an outbound CDB is being
+  collected. Neither is part of the normal packet sequence.
+### *** AND THE `M2_curcmd` DISPOSITION WAS INVERTED -- BOTH FLAGSHIP SEATS MEASURED IT ***
+
+`#477` filed that escape as **real coverage debt**, and an earlier draft of THIS BLOCK
+repeated it. Measured on pass 2, through real register accesses, adding the conjunct is a
+**LIVE REGRESSION**:
+
+```
+L3   PKT + ALTCTL + CDB   shipped: dispatches=1   M2: dispatches=0, occ=12
+L3b  a second CDB         shipped: dispatches=2   M2: dispatches=0, occ=24
+L3c  a third CDB          shipped: dispatches=3   M2: dispatches=0, occ=36
+```
+
+**Zero of three LEGAL packet commands dispatch, and the wedge is permanent** -- the 12-byte
+residue blocks dispatch even after `cur_command` returns to `0xA0`. So the reachability of
+that state is what makes the conjunct **dangerous**, not what makes it valuable.
+
+**A "coverage debt" filing invites a future round to discharge the debt by ADDING the
+conjunct** -- shipping the exact wedge this device's rounds exist to prevent. That is why
+this is an L4 and not a wording preference: *the measurement was right both times, and the
+sentence drawn from it pointed the next round at a regression.*
+
+The two seats differed on the label -- one held the debt filing correct and sharpened it to
+*reset-oracle* debt, the other called for an ACCEPT ROW -- and **agreed on the
+measurement**. They are the same row. `row_altctl_cdb_accept` kills `M2_curcmd` BECAUSE it
+asserts that a legal CDB still dispatches; baseline 57 rows 0 failures, and M2 reds that
+row alone.
+
+One seat added what stops this being an artifact of another filed bug: **the divergence
+survives fixing `wdcaltctrlbit`**, because a real `WDCTL_RST` reaches the same state and
+`wdcsrstnoabort` shows the flag survives it.
+
+### And the dissent fed the next round
+
+The stale phase is the same sentence as two already-filed defects -- **a new command does
+not reset what the old one left** -- in the same function, under one fix design. That makes
+three sites for `#479`, and this is the most severe of them, because it silently destroys a
+legitimate sector write rather than merely corrupting or wedging.
+
+## Round 478 (#478) -- an empty ring was read as a full sector, and 512 stale bytes went to the disk image
+
+`inbuf_len == 0` satisfies `0 % 512 == 0`. So with a WRITE command live and NOTHING
+queued, the write-back block fired and handed `diskimage_access` 512 bytes of whatever
+the ring happened to hold, at the guest's own chosen LBA.
+
+The entrance is `#337`'s own de-fatalised arm. A 3- or 8-byte data-port store pushes
+nothing -- and **`break` leaves the WIDTH SWITCH, not the handler**, so execution falls
+straight through into occupancy-driven logic with an empty ring. **This is the
+de-escalation clause's predicted hazard exactly:** `#337` correctly converted a host kill
+into a survivable decline, and nothing examined what lay past the `break`.
+
+### A RUNG-3 WITNESS, and the brief said none existed
+
+The Opus seat built one on **unmodified `evbmips -e malta`** (5Kc, wdc via
+`bus_pci`/`piix4_ide`). The guest arms WRITE SECTORS through the ordinary registers and
+issues **one** `sd`:
+
+```
+shipped 0922465   target sector: 0x5a x0   clobbered 512   SPURIOUS DISK WRITE
+fixed             target sector: 0x5a x512 clobbered 0     CLEAN
+ACCEPT (256 halfword writes)   shipped True / fixed True -- guest bytes land byte-for-byte
+```
+
+Machine description and dispatch unmodified, symptom on pre-fix HEAD going green post-fix
+with the same script, liveness and device-signature controls present. **So this round is
+not rung-1 evidence**, and the brief's "honest scope" paragraph was out of date by the time
+the panel answered it.
+
+*And the product-code diagnostic is a WRONG RECORD: it says `unimplemented write len 8
+(ignored)` while the access destroyed a sector. `#478` is what finally makes "ignored" true.*
+
+### *** THE FIX NEEDED TWO CONDITIONS, AND A THIRD FORM WAS WORSE THAN THE DEFECT ***
+
+Every cell below is measured, not argued:
+
+| variant | empty | leftover | wr+pkt | **ACCEPT** |
+|---|---|---|---|---|
+| `inbuf_len > 0` only | CLOSED | **OPEN** | CLOSED | CLOSED |
+| bad-len decline only | CLOSED | CLOSED | **OPEN** | **OPEN** |
+| both, flag a **struct field** | CLOSED | CLOSED | CLOSED | **OPEN** |
+| both, flag a **per-access local** | CLOSED | CLOSED | CLOSED | CLOSED |
+
+Each half closes a door the other leaves open, for a structural reason:
+
+* **`inbuf_len > 0` misses the LEFTOVER door.** An unread payload leaves occupancy at a
+  genuine 512, so `512 > 0` passes and the guest's own returned data goes to the image.
+  MEASURED `first=0xbe`. Named by the **grok** seat.
+* **The bad-len decline misses the WRITE+PKT door**, because no bad-len access occurs
+  there: a CDB dispatch consumes the LOCAL `inbuf_len` to a **stale zero** while pushing
+  fresh DATA-IN into the ring. MEASURED `first=0x5a`. Named by **fable**, independently by
+  **opus**.
+
+**The panel converged on the one-line guard, and the one-line guard was not enough.** Had I
+shipped what four seats agreed on, a live disk-corruption door would have stayed open under
+a round recorded as complete.
+
+### The accept row caught a regression I was one edit from shipping
+
+My first two-condition build used a **struct field** for the bad-len flag. It latches for
+the life of the device: after one 8-byte store, **every later legal write is silently
+dropped** -- corruption traded for silent data loss, which is worse.
+
+**The 45-row baseline scored it "all green"**, because no pre-existing row performs a legal
+write AFTER a bad-len one. `row_badlen_then_legal` was written for exactly that, and
+`M9_persist` dies on it ALONE. *That is the de-escalation clause's accept side: a fix that
+removes a write owes a row proving the LEGAL write still lands.*
+
+### Kill table: 8 of 8, four sole carriers
+
+`regress/artifacts/wdcdataoutdrain/killtable_20260827/`, baseline 50 rows 0 failures.
+
+**Two mutants read as IMPROVEMENTS**, which is what made them dangerous, and both are
+invisible to every empty-ring row:
+
+* **`M3_ptr`** -- `inbuf_len > 0` becomes `d->inbuf_head != d->inbuf_tail`. Live pointers
+  instead of a stale local: it reads as *more* correct. The seat that named it warned it
+  would otherwise "ship green while writing the CD's payload to the IDE image".
+* **`M6_recompute`** -- recompute occupancy from the live pointers before the guard. The
+  intuitively correct fix, and measurably worse: it fires on a 2048-byte DATA-IN because
+  `2048 % 512 == 0`.
+
+Both die on `a CDB dispatch does not drain to disk` ALONE -- the row that exists only
+because two seats independently said it had to.
+
+### *** PREMISE 4 WAS MEASURED BACKWARDS, by two seats independently ***
+
+The brief argued the `else` (wrap) branch was the worse one -- advancing `inbuf_tail` past
+`inbuf_head` and latching DRQ. **It is the safe branch.** `wdc_get_inbuf` returns `-1`
+*without advancing the tail* when `head == tail` (`#464` deliberately put that `return`
+outside the latch), so the wrap arm writes 512 sentinel bytes and desyncs nothing.
+
+**The `if` branch is the harmful one**: it advances `inbuf_tail` by 512 unconditionally, so
+an empty ring makes the tail overtake the head, occupancy reads 262144, and `status_byte`
+asserts **DRQ permanently**. The predicted figure was right and belonged to the other arm.
+
+*Both seats called it the same thing: correct symptom, wrong arm -- **the same read-only
+arm-picking error as the previous round**, which is now a pattern rather than an incident.*
+
+### What this round does NOT close, stated because it was measured
+
+* **The ring alias survives.** With `#478` applied, a guest that issues WRITE SECTORS, then
+  a packet command returning 2048 bytes, then 256 ordinary 16-bit words of its own, still
+  has the image receive **512 CD-ROM payload bytes and ZERO of its own**. `wdccdbaccum`
+  stays open with that measurement attached.
+* **The alias root is identified and not fixed here:** `wdc_command()` clears
+  `atapi_cmd_in_progress` and does **not** clear `write_in_progress`. A one-line symmetric
+  fix closes that door; different site, different class, so it is FILED.
+* **The `write_count == 0` division is still a host SIGFPE** if it were reachable. It is
+  not, and `inbuf_len > 0` does not remove it. A `write_count > 0` co-guard would close it
+  for free -- which under the ADDITION LICENCE is exactly "it cannot hurt", so FILED.
+* **The decline is SILENT.** `#264` set an in-tree precedent for *decline **and announce***
+  on the identical question (`dev_asc.c`: a zero-length DATA_OUT must not kill the host --
+  `if (len == 0) { fatal(...); return 0; }`). Raised as an open question rather than added,
+  because it is product code and the licence wants a warrant.
+
+### DECLINE AND ANNOUNCE -- by owner ruling, and the rows are the interesting part
+
+`#478` first declined the spurious drain SILENTLY. The guest got **zero notice** that its
+write had vanished: no error bit, the handler returns 1, and the interrupt is still
+asserted. A seat found this fork had already set the opposite precedent in **`#264`** --
+`dev_asc.c` refuses a zero-length DATA_OUT and SAYS SO. Put to the owner, who ruled for
+the announce; `#264` is the transferred warrant the ADDITION LICENCE asks for.
+
+**The condition is the DIFFERENCE between this fix and the code it replaces, not the
+negation of the guard.** The old code drained on the modulus alone, so the announce fires
+exactly where a spurious sector used to reach the disk image. Negating the guard instead
+would fire on all 255 partial stores of an ordinary sector.
+
+`fatal()` and not `debugmsg()`, per `#245`/`#269`: under `-q` the verbosity settles at
+`VERBOSITY_ERROR`, so a WARNING would be invisible to the boot-log hygiene grep and an
+ERROR would trip `#261`'s break-on-ERROR. `(once)` per instance -- the plurality marker in
+the 2026-08-26 census.
+
+#### *** TWO FAULTS OF MINE, BOTH FOUND BECAUSE A ROW FAILED TO KILL SOMETHING ***
+
+**(a) The shared-latch mutant was mis-built.** It set the per-device field FROM a static,
+so the guard still read per-device state -- equivalent to the original, proving nothing. It
+applied cleanly and scored a clean escape.
+
+**(b) Then the correctly-built mutant ALSO escaped, and the fault was the ORACLE.**
+`stub_fatals` counted any `fatal()`, and the per-device bad-len notice fires for the second
+device too -- masking the missing announce. A shared latch showed a non-zero count and
+passed.
+
+> **The fix is the witness ladder's DEVICE-SIGNATURE control applied to a log line:** count
+> only messages the event under test could have produced. `stub_drain_msgs` matches the
+> announce specifically, and that alone turned `Mstatic` from a clean escape into two red
+> rows.
+
+*An emission count is also the right oracle rather than the latch field, which is a proxy: a
+fix that sets the flag without printing, or prints without setting it, satisfies a latch
+check and fails the property. Three rows -- it fires, it does not fire twice on the same
+device, and it DOES fire on a second device, which is what `per instance` means and what a
+`static` latch gets wrong.*
+
+### Two owner rulings landed with this round
+
+* **`build-asan/` joins the twin-tree propagation set.** It was measured four rounds stale
+  on 2 of 4 sampled files, and it is the tree that catches heap overflows -- this session
+  had two findings where an ASAN build was the discriminator, including one the ordinary
+  detector scored 52/52 GREEN. A stale sanitiser tree is a detector that has silently
+  stopped detecting. Now a `precommit_check.sh` section-B row, negative-controlled in both
+  directions; absence is SKIPPED, not failed, so nobody switches it off.
+* **A rung-3 probe must be ASKED FOR before a round is recorded as rung-1.** Three rounds
+  blamed the ladder for having no term that fits; then a seat was asked once and built a
+  rung-3 witness in a single invocation. **The gap was habit, not a hole**, so this is a
+  lifecycle step and deliberately NOT a new ladder term -- admitting differentials as their
+  own rung would legitimise the shortcut the ladder exists to discourage. The ATTEMPT is
+  recorded, so `none` means "tried and could not" rather than "did not think to".
+
+### The harness: a seat was lost to a wrapper that never existed
+
+`panel_ollama.py` was 24 lines and **POSTed the brief verbatim**. This carrier has asserted
+for weeks that it wraps briefs in a `PACKET_BRIEF` -- **there was no such thing.** So every
+cloud seat received instructions written for the file-reading seats (*"check the premises
+against the source"*, *"grep the fork"*), and a seat that tried to comply stalled.
+
+MEASURED: `kimi-k3:cloud` returned **127 bytes** -- *"I'll check the premises against the
+actual tree ... Starting by locating"* -- and stopped. With the CLI 403-walled, that lost
+the kimi seat entirely, and `seat_verdicts.py` filed it as *"answered, NO VERDICT LINE
+(format miss)"* rather than as the stall it was.
+
+**This is the carrier's own "it was never the seat, it was the BRIEF" recurring, for the
+documented reason: the remedy lived in PROSE instead of in the tool that fires every time.**
+A `PACKET_PREAMBLE` is now prepended to every cloud seat, telling it plainly that it cannot
+read files and asking it to NAME any premise it cannot settle from the packet -- so an
+uncheckable premise returns as an honest "not checkable" rather than as silence.
+
+Controlled in four states including the negative one (the pre-fix source must NOT carry the
+preamble -- without that control the other three measure nothing). **Then verified live: the
+same seat, same brief, same transport went 127 bytes -> 10,620 with a real verdict line.**
+
+### Apparatus faults of mine, all caught
+
+* I read a **stale three-column table as a result**, because a step whose output I had
+  suppressed failed inside an `&&` chain. Caught by the column count not matching.
+* Generating C through nested Python string fragments cost **three** quoting failures in a
+  row (a cooked `chr(92)n`, a mismatched paren, an unterminated literal). Switched to
+  writing the C directly, which is what the carrier prescribes.
+* My own padded-column assert caught a 39-character row label against a 38-wide column --
+  the fifth time this session that guard has fired.
+
 ## Round 477 (#477) -- a guest data-port WRITE could free the ATAPI transfer the device was still delivering
 
 `atapi_cmd_in_progress` is set when a packet command arrives and cleared only when the NEXT
@@ -50,8 +347,16 @@ suppressed every dispatch would have passed the entire table. Added `pkt_cdb_cas
 control (no stray read, must dispatch) and the regression row, so a red is attributable to
 the read rather than to the fixture.
 
-Kill table `regress/artifacts/wdccdbmidxfer/killtable2_20260827/`, baseline 44 rows 0
-failures (`base.out`): **five killed, two escapes classified.**
+Kill table `regress/artifacts/wdccdbmidxfer/killtable2_20260827/`, baseline **45 rows**
+0 failures (`killtable2_20260827/base.out`): **six killed, one escape.**
+
+*This sentence read "baseline 44 rows ... five killed, two escapes" until the same day.
+Both numbers were the state BEFORE the `occupancy above 12` row landed and killed
+`M7_ge12`; the verdict table and `killtable2_20260827/TABLE.txt` were corrected and this
+line was not.
+**The grep-for-siblings rule failing inside the session that applies it** -- and the
+bare filename-only citation went ambiguous the moment a second kill-table directory
+existed, which is the names-its-log rule needing a PATH and not just a filename.*
 
 `Mr_readarm` (revert only the read-arm repair) is killed by the new row ALONE -- the (a)
 clause for it. `M7_zerolen`, the seventh mutant **four seats proposed independently**

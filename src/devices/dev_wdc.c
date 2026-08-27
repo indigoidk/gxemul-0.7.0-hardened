@@ -73,6 +73,7 @@ struct wdc_data {
 	    loop cannot flood the host log -- the same flood #265 caused and
 	    #269 had to undo.  */
 	int		warned_badlen;
+	int		warned_empty_drain;
 	int		warned_atapi_err;
 	int		warned_null_xfer;
 	int		warned_atapi_dataout;
@@ -931,6 +932,12 @@ DEVICE_ACCESS(wdc)
 			}
 		} else {
 			int inbuf_len;
+			/*  #478: PER-ACCESS, and a struct field here is a REGRESSION.
+			    MEASURED: a latched field silences every later legal write,
+			    turning a corruption defect into silent data loss, which is
+			    worse.  The question is 'did THIS access push nothing', so the
+			    answer must not outlive the access.  */
+			int badlen_this = 0;
 			if (d->data_debug) {
 				const char *s = "0x%04" PRIx64" ]\n";
 				if (len == 1)
@@ -974,7 +981,11 @@ DEVICE_ACCESS(wdc)
 				    has no 3- or 8-byte access, but reachable
 				    from a 64-bit MIPS machine carrying wdc
 				    over bus_isa/bus_pci.)  */
-				default:if (!d->warned_badlen) {
+				default:/*  #478: `break` leaves the WIDTH SWITCH, not the
+				            handler -- execution falls through to the
+				            occupancy drain below with NOTHING pushed.  */
+				        badlen_this = 1;
+				        if (!d->warned_badlen) {
 						d->warned_badlen = 1;
 						fatal("wdc: unimplemented "
 						    "write len %i (ignored)\n",
@@ -1004,7 +1015,11 @@ DEVICE_ACCESS(wdc)
 				    has no 3- or 8-byte access, but reachable
 				    from a 64-bit MIPS machine carrying wdc
 				    over bus_isa/bus_pci.)  */
-				default:if (!d->warned_badlen) {
+				default:/*  #478: `break` leaves the WIDTH SWITCH, not the
+				            handler -- execution falls through to the
+				            occupancy drain below with NOTHING pushed.  */
+				        badlen_this = 1;
+				        if (!d->warned_badlen) {
 						d->warned_badlen = 1;
 						fatal("wdc: unimplemented "
 						    "write len %i (ignored)\n",
@@ -1018,7 +1033,29 @@ DEVICE_ACCESS(wdc)
 			while (inbuf_len < 0)
 				inbuf_len += WDC_INBUF_SIZE;
 
-			/*  #477: THE DISPATCH MUST KEY ON THE PHASE, NOT ON THE FLAG.
+			/*  #477: THE DISPATCH KEYS ON THE PHASE IN ADDITION TO THE FLAG.
+
+			    *** THIS HEADLINE READ "ON THE PHASE, NOT ON THE FLAG" UNTIL
+			    2026-08-27, AND THAT WORDING WAS UNSAFE.  The codex seat reasoned
+			    on #477's pass 2 that deleting the flag conjunct would sweep the
+			    detector; MEASURED, it swept all 52 rows clean. ***
+
+			    BOTH CONJUNCTS ARE LOAD-BEARING, and the reason is a STALE PHASE.
+			    `wdc_command(ATAPI_PKT_CMD)` sets PHASE_CMDOUT; a following
+			    `wdc_command(WDCC_WRITE)` clears the flag at the top of that
+			    function and arms the write -- and NOTHING RESETS THE PHASE.  The
+			    device then sits in exactly the state a phase-only guard cannot
+			    tell from a real CDB collection.
+
+			    Under a phase-only guard the guest's own sector payload reaches
+			    occupancy 12 and is issued as a SCSI command.  MEASURED, and worse
+			    than the seat predicted: the sector does not merely lose twelve
+			    bytes, it NEVER REACHES THE DISK -- `0 w, 0 b` against a wanted
+			    one write of 512.  `row_stale_phase_write` pins both halves.
+
+			    The stale phase is itself a defect; it is filed with
+			    `wdcwipclear` / `wdcringnoflush` -- a new command does not reset
+			    what the old one left.
 
 			    `atapi_cmd_in_progress` is set when a packet command arrives and
 			    cleared only when the NEXT command does -- so it stays 1 through the
@@ -1058,7 +1095,7 @@ DEVICE_ACCESS(wdc)
 			    edit as an IMPROVEMENT.  Four readers reasoned about the guard as a
 			    dispatch selector and none opened these nine lines.  Do not widen
 			    the equality; flush the ring instead (`wdcringnoflush`).  */
-			CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
+				CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
 
 				if (d->atapi_st != NULL)
 					scsi_transfer_free(d->atapi_st);
@@ -1151,11 +1188,34 @@ DEVICE_ACCESS(wdc)
 				d->int_assert = 1;
 			}
 
-			if (( d->write_in_progress == WDCC_WRITEMULTI &&
+			/*  #478: AN EMPTY RING MUST NOT BE READ AS A FULL SECTOR.
+
+			    `inbuf_len == 0` satisfies `0 % 512 == 0`, so this block fired
+			    with NOTHING queued and handed diskimage_access 512 bytes of
+			    whatever the ring held, at the guest's chosen LBA.  MEASURED:
+			    `1 write(s), 512 bytes to 0x8000, first=0xdd` -- the poison, so
+			    the bytes written were ones the guest never supplied.
+
+			    BOTH conditions are load-bearing and each closes a door the
+			    other leaves open -- measured, not argued:
+
+			      `inbuf_len > 0`   closes the empty ring, and the WRITE+PKT
+			                        door where a CDB dispatch has already
+			                        consumed the LOCAL inbuf_len to a stale 0
+			                        while pushing fresh DATA-IN into the ring.
+			      `!badlen_this`    closes the LEFTOVER door: an unread payload
+			                        leaves occupancy at 512, so `512 > 0` passes
+			                        and the guest's own returned data is written
+			                        to the image.  MEASURED first=0xbe.
+
+			    The drain is guarded rather than the `default:` arm because the
+			    WRITE+PKT door involves no bad-len access at all.  */
+			if (inbuf_len > 0 && !badlen_this &&
+			    (( d->write_in_progress == WDCC_WRITEMULTI &&
 			    inbuf_len % (512 * d->write_count) == 0)
 			    ||
 			    ( d->write_in_progress == WDCC_WRITE &&
-			    inbuf_len % 512 == 0) ) {
+			    inbuf_len % 512 == 0)) ) {
 				int count = (d->write_in_progress ==
 				    WDCC_WRITEMULTI)? d->write_count : 1;
 				unsigned char *buf, *b;
@@ -1185,6 +1245,34 @@ DEVICE_ACCESS(wdc)
 					d->write_in_progress = 0;
 
 				free(buf);
+			} else if ((( d->write_in_progress == WDCC_WRITEMULTI &&
+			    inbuf_len % (512 * d->write_count) == 0)
+			    ||
+			    ( d->write_in_progress == WDCC_WRITE &&
+			    inbuf_len % 512 == 0)) && !d->warned_empty_drain) {
+				/*  #478: DECLINE AND ANNOUNCE, per this tree's own #264
+				    precedent -- dev_asc.c refuses a zero-length DATA_OUT
+				    and SAYS SO rather than proceeding silently.
+
+				    The condition is the DIFFERENCE between this fix and the
+				    code it replaces, not the negation of the guard: the old
+				    code drained on the modulus alone, so this fires exactly
+				    where a spurious sector USED to reach the disk image.
+				    Announcing on every non-draining write would fire on all
+				    255 partial stores of an ordinary sector.
+
+				    Without this the guest had NO notice at all: no error
+				    bit, the handler returns 1, and the interrupt is still
+				    asserted -- a write silently vanishing.  N=1 per device
+				    instance with `(once)`, the tree's plurality marker.
+
+				    fatal() and not debugmsg(): under -q the verbosity
+				    settles at VERBOSITY_ERROR, so a WARNING would be
+				    invisible to the boot-log hygiene grep and an ERROR
+				    would trip #261's break-on-ERROR.  */
+				d->warned_empty_drain = 1;
+				fatal("[ wdc: data-port write with no sector "
+					"buffered; write dropped (once) ]\n");
 			}
 		}
 		break;

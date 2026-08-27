@@ -10648,14 +10648,46 @@ damaged the first to patch the second, breaking the ATAPI completion handshake.
   ```
 
   `WDCTL_4BIT` is `0x08` — *"use four head bits (wd1003)"*, a head-addressing mode
-  selector. The reset bit is **`WDCTL_RST`, `0x04`**. So a guest selecting 4-bit head
-  mode is treated as issuing a controller reset, and a guest issuing a **real** soft
-  reset is ignored. Two wrong behaviours from one wrong constant.
+  selector. The reset bit is **`WDCTL_RST`, `0x04`**.
 
-- **`wdcsrstnoabort`** — NEW, 2026-08-27, same arm, READ and UNMEASURED. It sets
+  *** MY FIRST FILING OF THIS SAID "a guest selecting 4-bit head mode is treated as
+  issuing a controller reset, and a guest issuing a real soft reset is ignored -- two
+  wrong behaviours from one wrong constant." THAT OVERSTATED IT, and I caught it by
+  reading what COMMAND_RESET actually drives instead of stopping at the constant. ***
+
+  **`COMMAND_RESET` is not a reset ACTION.** It is read at exactly two sites, and both
+  do the same thing: make CYL_LO return `0x14` and CYL_HI return `0xEB` *for a CDROM*.
+  That is the **ATAPI signature `0xEB14`**, which a real drive presents after a reset so
+  the driver can tell an ATAPI device from an ATA one. Nothing is reset; no state is
+  cleared; the latch only changes what two registers report.
+
+  **And the common path works by accident.** The conventional soft-reset sequence writes
+  `0x0C` (bit 3 | bit 2) and then `0x08` to release it — **bit 3 is set in both**, so the
+  signature is presented exactly when a real driver expects it. That is why this has
+  never been noticed.
+
+  **What is genuinely wrong:** a driver that writes `WDCTL_RST` (`0x04`) *alone*, with
+  bit 3 clear, performs a soft reset and is never shown the ATAPI signature — so it can
+  fail to detect the CDROM. And a driver writing `0x08` for its documented purpose gets
+  the signature latched without asking for a reset.
+
+  **Severity: LOW**, and lower than the constant makes it look. Filed below live defects.
+  `git log -L` on these lines returns ONE commit — the upstream import — so this is
+  inherited, not a fork regression.
+
+- **`wdcsrstnoabort`** — NEW, 2026-08-27, same arm, READ. It sets
   `cur_command = COMMAND_RESET` and does **not** clear `atapi_cmd_in_progress` (the only
-  clear is inside `wdc_command`). So an in-flight packet command survives what the device
-  itself calls a reset, and a CDB written afterwards still dispatches.
+  clear is inside `wdc_command`), so an in-flight packet command survives it.
+
+  *** RE-SCOPED THE SAME DAY, for the same reason as the row above: since `COMMAND_RESET`
+  is only a signature latch and not a reset action, "survives a reset" was the wrong
+  framing. The device performs NO reset here to survive. ***
+
+  The defensible statement is narrower and still real: **this device has no soft-reset
+  path at all.** ATA SRST should abort the in-flight command, clear the ring and reset the
+  phase; this arm does none of those, and no other code does either. The measured
+  consequence is [[wdcringnoflush]] — the Opus seat confirmed neither `ATAPI_SOFT_RESET`
+  nor this arm flushes the ring, so a guest has no way to recover a wedged device.
 
   **Provenance is worth recording, because it is the ask-again working as designed.** Both
   fell out of checking *why* `M2_curcmd` escaped `#477`'s table. The comfortable reading was
@@ -10684,3 +10716,315 @@ damaged the first to patch the second, breaking the ATAPI completion handshake.
 
   It also **upgrades `wdcsrstnoabort` from READ-and-UNMEASURED to MEASURED**: the same
   measurement shows the reset paths leaving both the flag and the ring untouched.
+
+- **`wdca0abort` — ASSESSED, NOT CHANGED. REFUTED by reading, 2026-08-27.** The kimi seat
+  raised a candidate use-after-free as a disjunction: writing `0xA0` mid-transfer either
+  (a) NULLs `atapi_st` while `atapi_len > 0`, so the next read derefs NULL in the
+  consume-copy at a LOWER offset than the `0x48` `#476` measured, or (b) leaves the pointer
+  **dangling**, in which case `#476`'s `atapi_st == NULL` test passes a freed pointer
+  straight through. Its sharpest point stands and is worth keeping: **the `0x48` crash
+  proves only that the consume-copy does not deref NULL when `atapi_len == 0`; it says
+  nothing about `len > 0 && st == NULL`.**
+
+  Both halves are refuted **by construction**, not by argument:
+
+  * **(b)** `scsi_transfer_free` occurs **exactly once** in the device, and the very next
+    statement is `d->atapi_st = scsi_transfer_alloc();`. No code runs between them, so the
+    pointer is never observable in a freed state. `0xA0` itself frees nothing — the
+    `ATAPI_PKT_CMD` arm assigns only the flag and the phase.
+  * **(a)** every assignment that makes `atapi_len` positive either **dereferences
+    `atapi_st` in the same expression** (so it is non-NULL by construction) or runs after
+    the allocation. The remaining writes only decrease it or set it to zero. So
+    `atapi_len > 0 && atapi_st == NULL` is not producible.
+
+  **READ, not MEASURED** — recorded as an enumeration a future reader can re-derive rather
+  than as an assurance. The stale-pointer consequence the seat was circling IS real and is
+  what `#477`'s read-arm repair addresses; it is staleness, not a dangling free.
+
+- **`wdcxferleak`** — NEW, 2026-08-27, READ. Falls directly out of the above, and the kimi
+  seat's premise named it without either of us noticing: *"something must free it
+  eventually, or every command leaks."* **Nothing does.** The only free is the
+  replace-on-next-dispatch, and the device has **no deinit path at all**, so the last
+  `atapi_st` of every wdc instance leaks along with its `data_in` and `cmd` buffers.
+
+  Benign — bounded at one transfer per device instance, at teardown, and this emulator is
+  not long-lived across many device instantiations. Filed below live defects, and noted
+  because it is the kind of thing a future `wdccdbaccum` restructuring should sweep up
+  rather than a round of its own.
+
+- **`wdcdataoutparity` — ASSESSED, NOT CHANGED. REFUTED as stated, 2026-08-27; its
+  INSTINCT redirects to two rows already filed.** The glm seat argued that `#476` fixed the
+  NULL-deref on the READ branch (DATAIN) and that *"the DATAOUT write path must also have
+  an `atapi_len == 0` check ... this is the same bug, one access type over."*
+
+  **There is no such path to guard.** `data_out` appears **zero times** in `dev_wdc.c`,
+  although `struct scsi_transfer` carries `data_out` and `data_out_len`. The device sets
+  `PHASE_DATAOUT`, latches a once-only *"ATAPI DATA OUT phase not implemented"*, and never
+  accumulates or dereferences anything. The write-side ATAPI epilogue that DOES dereference
+  `atapi_st` sits **inside the dispatch block, after `scsi_transfer_alloc()`**, so it is
+  non-NULL by construction — the same reasoning that closed the class in `#476`.
+
+  **But the instinct is sound and points at real rows.** A guest that writes data while in
+  `PHASE_DATAOUT` is not ignored: the data-port write arm pushes unconditionally, so those
+  bytes enter the SHARED `inbuf` ring. From there they are reachable by
+  [[wdcdataoutdrain]] (they can be written to the disk image) and are an instance of
+  [[wdccdbaccum]] (one ring aliasing CDB bytes, DATA-IN payload and disk-write payload).
+
+  *So the parity question was worth asking and the answer is that the sibling arm does not
+  exist — which is itself the reason the bytes end up somewhere worse.* **READ, not
+  MEASURED.**
+
+### *** `dev_asc` IS THE HARDENED SIBLING OF `dev_wdc`, AND THE FORK ALREADY ANSWERED
+### WDC'S OPEN QUESTION THERE UNDER `#265`. Found 2026-08-27 while checking a seat's
+### in-tree precedent, not by design reasoning. ***
+
+Both devices carry a byte FIFO fed by guest port writes and drained to a SCSI/IDE
+backend. `dev_asc` has been hardened three times; `dev_wdc` has the same three classes
+and has received only one of the fixes.
+
+| round | what `dev_asc` did | `dev_wdc` today |
+|---|---|---|
+| **`#265`** | *"fifo_in==fifo_out is also true when the FIFO is exactly full (16); test
+the CACHED COUNT so a full FIFO drains instead of being read as empty forever"* — an
+explicit `n_bytes_in_fifo` | **UNFIXED.** `inbuf_len = head - tail` has the identical
+ambiguity, and `#473`'s own comment in `dev_wdc.c` already states it: *"the latch fired
+one store EARLIER than the corruption, because head==tail cannot tell full from empty"* |
+| **`#197`** | an empty read must not drive the count NEGATIVE — a later path turned it
+into a huge `size_t` alloc and `exit()` | fixed in **`#475`** (the clamp), which is how
+`#476`'s NULL deref was woken |
+| **`#269`** | warn ONCE PER DEVICE; `fatal()` kept deliberately because under `-q` the
+verbosity settles at `VERBOSITY_ERROR` | has per-latch flags |
+
+**WHY THIS MATTERS FOR THE OPEN DESIGN QUESTION.** [[wdcdataoutdrain]]'s candidate fix is
+a one-line `inbuf_len > 0 &&`. The option set is wider than that and the fork has already
+chosen between them once:
+
+* **(A) one-line guard** — minimal, ships today, and is a FOURTH guard standing in for a
+  missing invariant.
+* **(B) an explicit cached occupancy count**, exactly `#265`'s answer. It removes the
+  head==tail ambiguity that `#473` documented and left standing, and it is the shape the
+  fork already reviewed and shipped in a sibling device.
+* **(C) a per-phase accumulator**, per `dev_mb89352.c` (`transfer_bufpos`, bounds-checked
+  `>= len` on BOTH the read and write arms before indexing) — this is [[wdccdbaccum]].
+
+**(B) was not in the brief's option set.** That is the option-space-completeness failure
+this project has now recorded three times: *a brief that lists N options gets a panel
+arguing about N options, and nobody proposes the member that was never named.* It was
+found by asking a seat to grep the fork rather than by reasoning — which is exactly what
+the rule prescribes.
+
+*Recorded as a finding, not a decision. The pass-1 panel is still running and its answer
+to Q1 should be read against this.*
+
+- **`wdcwipclear`** -- **REPRODUCED 2026-08-27 with a liveness control**, and it is the ROOT of
+  the ring alias rather than another symptom of it. `wdc_command()` clears
+  `atapi_cmd_in_progress` and does **not** clear `write_in_progress`, so a packet command
+  arriving mid-WRITE leaves both live and the shared ring serving two masters at once.
+
+  The seat built the one-line symmetric fix and measured that it closes the case outright.
+  **Not merged into `#478`**: different site, different class, and the stopping rule keeps a
+  new finding out of a round unless it is a measured false pass or a wrong record. It is the
+  cheapest thing on this list and should be its own round.
+
+  **REPRODUCTION BUILT (scratchpad only; the repo is untouched):**
+
+  ```
+  ok   LIVENESS: a WRITE arms write_in_prog   0x30
+  FAIL a new command clears write_in_prog     still 0x30 with ATAPI live
+  ```
+
+  `0x30` is `WDCC_WRITE`. After the packet command both flags are live at once.
+  Regression control clean: 1 failure of 54 rows, so the harness addition is inert.
+
+  **The liveness row is load-bearing and is not decoration.** `diskimage_exist` returns 0
+  hardcoded in the harness, so `wdc_command` takes the abort path at its
+  missing-image check and `write_in_progress` is NEVER SET -- a fixture without the
+  control would pass vacuously and read as a fix. A `stub_disk_exists` control (inert
+  by default, following the file's own `stub_datain_len` / `stub_cdrom_poison` idiom)
+  is what makes the question answerable at all.
+
+  **Deliberately NOT merged into `#478`.** The stopping rule keeps a new finding out of
+  a round that is already built, and this is a different site and a different class.
+
+  *Incidental records defect found while building it: `row_odd_bytecount`'s comment says
+  `diskimage_is_a_cdrom()` is one "which this harness does not stub". It IS stubbed, with
+  a `stub_cdrom_poison` control. The row's own behaviour is unaffected -- it keeps
+  `cur_command` at 0 for a reason that still holds -- but the stated warrant is wrong.*
+
+- **`wdcaliasmeasured`** -- 2026-08-27, evidence attached to [[wdccdbaccum]] rather than a
+  new row. **`#478` does NOT close the alias, and the round says so.** MEASURED with `#478`
+  applied: a guest issues WRITE SECTORS, then a packet command returning 2048 bytes, then
+  **256 ordinary 16-bit words of its own** -- and the disk image receives **512 CD-ROM
+  payload bytes and ZERO of the guest's own bytes**.
+
+  That is a cross-medium leak: CD content onto an IDE image, at a guest-chosen LBA, with no
+  wide access and no bad-len store anywhere in the sequence. It is the strongest argument
+  yet for the structural fix, and it is why `#478` is recorded as a point-guard.
+
+- **`wdcwritecountzero`** -- NEW, 2026-08-27, **ASAN-confirmed by the Opus seat as a host
+  SIGFPE** at the drain's `inbuf_len % (512 * d->write_count)`, and **UNREACHABLE**.
+
+  Two seats independently verified the warrant: `write_count` is set only in `wdc__write` as
+  `seccnt ? seccnt : 256` (so 1..256), decremented only in the drain, and the drain clears
+  `write_in_progress` the instant it reaches zero. No path leaves the flag live with a zero
+  count.
+
+  **`#478` does not remove it** -- `inbuf_len > 0` only short-circuits an empty ring, and a
+  one-byte push still evaluates the modulus. A `write_count > 0` co-guard would close it for
+  free, **which is precisely the ADDITION LICENCE's "it cannot hurt"**, so it is filed rather
+  than added. *Recorded here so a future round does not have to re-derive the unreachability
+  argument, and so that if a path ever IS found the co-guard is already designed.*
+
+- **`wdcdeclineannounce`** -- NEW, 2026-08-27, an OPEN QUESTION rather than a defect, and it
+  is the fourth member of `#478`'s option set that the brief never named.
+
+  `#478` declines the spurious drain **silently**. The Opus seat found that this fork already
+  set the opposite precedent in **`#264`**, on the identical question: `dev_asc.c` handles *a
+  DATA_OUT transfer with a zero-length buffer* as **decline AND announce** --
+  `if (len == 0) { fatal(...); return 0; }`.
+
+  Today the guest gets **zero notice** that its write vanished: `warned_badlen` fires at most
+  once per device, the WRITE+PKT door touches no latch at all, and the drain itself emits
+  nothing. Against adding it: it is product code, and the licence wants a measured delta or a
+  transferred warrant rather than "it cannot hurt" -- though `#264` arguably IS the
+  transferred warrant. **Put to the owner; not decided unilaterally.**
+
+### *** THE PANEL CONVERGED ON A FIX THAT WAS NOT ENOUGH, AND THAT IS THE FINDING WORTH
+### KEEPING FROM THIS ROUND. Measured 2026-08-27. ***
+
+Four seats independently answered `#478`'s Q1 with *ship `inbuf_len > 0`, file the
+structural fix*. It was the right disposition and **the wrong fix**: measured, that guard
+leaves the LEFTOVER door open, and the bad-len decline alone leaves the WRITE+PKT door open.
+Only both together close all four, and a third plausible form -- the same two conditions
+with a struct-field flag -- is **worse than the defect**, silently dropping every later
+legal write.
+
+**Unanimity was available for all three wrong answers.** What separated them was a variant
+table with an ACCEPT column, built after the panel had answered. *A panel is a source of
+candidate mechanisms and a check on premises; it is not a vote on which edit ships, and this
+round is the sharpest instance of that on record.*
+
+### *** `wdcwipclear` + `wdcringnoflush` ARE ONE ROUND, AND THE ROUND-SCOPE RULE'S TEST
+### WAS ANSWERED BY MEASUREMENT RATHER THAN ASSUMED. Built 2026-08-27. ***
+
+The rule says a second site joins a round only if it is **witnessed**, in the **same
+device and same semantic class** under one fix design, and covered by the **same detector
+with no new oracle**. All four conditions are now demonstrated rather than argued, because
+both reproductions were built against ONE detector:
+
+```
+ok   LIVENESS: a WRITE arms write_in_prog   0x30
+FAIL a new command clears write_in_prog     still 0x30 with ATAPI live
+ok   LIVENESS: the residue is really there  20
+FAIL a packet command flushes the ring      20 bytes survive the command
+FAIL a soft reset flushes the ring          20 bytes survive a soft reset
+```
+
+57 rows, 3 failures; the other 54 stay green, so neither harness control perturbs
+anything. **Both liveness rows pass**, which is what separates these from a fixture where
+nothing happened.
+
+* **Same function.** Both are `wdc_command()` failing to reset state the previous command
+  left behind -- one a flag, one a buffer.
+* **Same semantic class**, and it is a sentence rather than a family resemblance: *a new
+  command must reset what the old one left.*
+* **Same detector, no new oracle.** One reads a flag, one reads ring occupancy; both are
+  plain reads of `struct wdc_data` in the existing harness.
+
+**AND THE SOFT RESET IS THE PART THAT MAKES IT CRITICAL RATHER THAN UNTIDY.** A residue
+the packet command ignores would still be recoverable if the guest could reset its way
+out. It cannot: `ATAPI_SOFT_RESET` leaves all 20 bytes in place. Once occupancy can no
+longer EQUAL 12 the CDB dispatch is dead **for the life of the device**, and no sequence
+a guest can issue brings it back. Independently measured by the Opus seat as
+`occ 32 -> 44 -> 56 -> 68`.
+
+The in-tree idiom exists and is a transferred warrant, not a design: `dev_asc.c`'s
+`dev_asc_fifo_flush()`, called from `NCRCMD_FLUSH` and `NCRCMD_RSTCHIP`. *`dev_asc` is the
+hardened sibling of `dev_wdc` and has answered this device's open questions three times
+now -- `#265`, `#197`, `#269` -- which is worth remembering before designing a fourth.*
+
+- **`wdcstalephase`** — NEW, 2026-08-27, **MEASURED**, and it is the THIRD site of the
+  `#479` sentence: *a new command does not reset what the old one left.*
+
+  `wdc_command(ATAPI_PKT_CMD)` sets `PHASE_CMDOUT`. A following `wdc_command(WDCC_WRITE)`
+  clears `atapi_cmd_in_progress` and arms the write — and **nothing resets `atapi_phase`**.
+  So the device sits in `CMDOUT` with no packet command in progress and a disk write live.
+
+  **Found by the codex seat REASONING a mutant it could not build**, on `#477`'s pass 2. It
+  predicted that a phase-only dispatch guard would sweep the detector; built here, it swept
+  all 52 rows. `row_stale_phase_write` now pins it, and the consequence is worse than the
+  prediction: the guest's sector is not merely short by twelve bytes, it **never reaches the
+  disk** (`0 w, 0 b` against a wanted one write of 512).
+
+  **Today this is latent, not live** — the shipped guard tests the flag AND the phase, so
+  the stale phase alone dispatches nothing. It is filed because it is a loaded gun: any
+  future edit that trusts the phase alone re-opens it, and `#477`'s own comment ENCOURAGED
+  exactly that reading until it was corrected. *A latent defect whose documentation points
+  a future round straight at it is worth more than its severity suggests.*
+
+  Ships with `wdcwipclear` and `wdcringnoflush` — same function, same sentence, one fix
+  design, one detector. **Three sites now, and the round-scope rule is satisfied for all
+  three by measurement rather than assertion.**
+
+- **`wdcdatainnull`** — NEW, 2026-08-27, READ, found by the Fable seat on `#477`'s pass 2.
+  A structural asymmetry between two refill sites that do the same job:
+
+  * the **dispatch** refill checks `if (d->atapi_st->data_in != NULL)` before indexing;
+  * the **read-arm** refill indexes `d->atapi_st->data_in[...]` with **no NULL check at
+    all**.
+
+  `#476` closed `atapi_st == NULL`. **Nothing closes `atapi_st->data_in == NULL`**, and
+  `dev_wdc.c` holds no invariant coupling the two.
+
+  **Not currently reachable, and the warrant is CROSS-FILE — which is the point.** Both
+  flagship seats independently traced it to `diskimage_scsicmd.c`: `scsi_transfer_allocbuf()`
+  sets pointer and length together and `exit()`s rather than returning NULL, and
+  `data_in_len` is written outside it at exactly one site, where it only ever SHRINKS below
+  the allocation. So `data_in == NULL && data_in_len > 0` is unproducible **today, in
+  another file** — which is exactly the shape of warrant that decays without anyone
+  touching `dev_wdc.c`.
+
+  Filed below live defects. *The cheap disposition is not a guard but a sentence: record
+  the cross-file invariant at the unchecked site, so a future edit to `diskimage_scsicmd.c`
+  has something to break rather than nothing to notice.*
+
+### *** PREMISE 5 WAS WRONG IN BOTH DIRECTIONS AT ONCE, AND A PACKET-FED SEAT FOUND IT
+### FROM THE BRIEF'S OWN INLINED FACTS. Measured 2026-08-27. ***
+
+`#479`'s brief asserted the ring residue is **unrecoverable**, having measured that neither
+`ATAPI_PKT_CMD` nor `ATAPI_SOFT_RESET` flushes it. `ollama_kimi` -- which **cannot read the
+tree at all** -- replied that the brief's own inlined facts admit a drain path nobody had
+examined. It was right:
+
+```
+ok   P5: a write drains the residue         0
+FAIL P5: recovered sector is the guest's    first=0xaa, guest wrote 0x55
+```
+
+A guest holding 20 bytes of residue arms WRITE SECTORS and streams 492 of its own bytes.
+Occupancy reaches 512, the drain fires, the tail advances, **and the ring clears**. So
+"unrecoverable" is FALSE.
+
+**And the recovery corrupts the sector it recovers through.** The drain writes the ring's
+first 512 bytes, and the first 20 of those are the residue -- so the disk receives `0xaa`
+where the guest wrote `0x55`.
+
+> **RE-SCOPED: [[wdcringnoflush]] is not a pure denial-of-service. It is a DATA-INTEGRITY
+> defect with a denial-of-service face**, and the only way out of the denial runs through
+> the corruption. Both dispositions the round considered were wrong.
+
+*This is the packet-fed seats doing exactly what the doctrine says they are for: blind to
+the repository, so they attack the ARGUMENT. No file-reading seat produced it, and the two
+flagship seats did not either. **Their blindness is a feature** -- and the concrete lesson
+is that a brief which inlines its facts honestly gives them enough to refute it with.*
+
+**And the option set had the same shape of hole.** Four seats independently found that the
+brief added a THIRD site (`wdcstalephase`) to its header and never updated options A-E, so
+none of them fixes all three. The sixth member they converge on: **one helper clearing flag
++ ring + phase**, called from command entry and every reset path. *That is the
+grep-for-siblings rule failing inside a brief written to teach it.*
+
+The clause-(d) mutant for that fix is already named, by `deepseek`: **move the ring flush
+from the top of `wdc_command` to the end.** It passes every pinned row and destroys the
+IDENTIFY response, because IDENTIFY loads its 512-byte answer INTO the ring as part of the
+command.

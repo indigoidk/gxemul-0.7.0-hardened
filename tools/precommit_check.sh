@@ -927,6 +927,35 @@ for f in $CHANGED; do
 	else bad "$f DIFFERS from build/ -- the measured binary is not this source"; fi
 done
 
+#  *** build-asan/ JOINED THE PROPAGATION SET BY OWNER RULING, 2026-08-27. ***
+#
+#  It was measured FOUR ROUNDS STALE on 2 of 4 sampled files, and it is the tree
+#  that catches heap overflows.  Two findings in one session turned on an ASAN
+#  build: a heap-buffer-overflow mutant that the ordinary detector scored 52/52
+#  GREEN, and a NULL dereference.  A stale ASAN tree is a detector that has
+#  silently stopped detecting -- worse than no detector, because it reassures.
+#
+#  ABSENCE IS NOT A FAILURE.  On a machine that never built the tree the rows are
+#  skipped, exactly as section A treats a missing est/.  A gate that hard-fails on
+#  a tree someone chose not to build is a gate that gets switched off.
+ASAN=$ROOT/build-asan
+if [ -d "$ASAN/src" ]; then
+	if [ -f "$ASAN/.MUTANT" ]; then
+		bad ".MUTANT sentinel present in build-asan/ -- restore from SEC and REBUILD:"
+		sed 's/^/          /' "$ASAN/.MUTANT"
+	else
+		good "no .MUTANT sentinel in build-asan/"
+	fi
+	for f in $CHANGED; do
+		case "$f" in src/*) ;; *) continue ;; esac
+		[ -f "$ASAN/$f" ] || continue
+		if cmp -s "$SEC/$f" "$ASAN/$f"; then good "$f == build-asan/"
+		else bad "$f DIFFERS from build-asan/ -- the sanitiser tree is not this source"; fi
+	done
+else
+	say "      --    build-asan/ absent -- rows skipped, not failed"
+fi
+
 # ---------------------------------------------------------------- C
 #  A MESSAGE THAT OUTRUNS ITS DIFF.  A commit message once claimed a citation
 #  fix that no hunk made.  Write messages FROM THE DIFF.  Decidable half: a

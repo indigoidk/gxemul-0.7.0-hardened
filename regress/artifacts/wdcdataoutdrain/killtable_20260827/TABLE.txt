@@ -1,0 +1,86 @@
+#478 KILL TABLE -- 50 rows, baseline 0 failures (base.out)
+
+Driver kill478.sh, mutants mk478.py.  Scratch trees only; the repo was not written
+to.  Every log here is the run that produced its row, preserved before any re-run
+could reuse the names.
+
+  MUTANT         VERDICT   rows that carried the kill
+  ------         -------   --------------------------
+  M1_ge0         KILLED    1 red: a CDB dispatch does not drain to disk
+  M3_ptr         KILLED    1 red: a CDB dispatch does not drain to disk
+  M6_recompute   KILLED    1 red: a CDB dispatch does not drain to disk
+  M7_nolen       KILLED    1 red: a CDB dispatch does not drain to disk
+  M8_nobad       KILLED    1 red: leftover payload not written to disk
+  M9_persist     KILLED    1 red: a legal write after a bad-len lands
+  Mb_revert      KILLED    5 red (every corruption row plus the accept row)
+  Mc_null        KILLED    does not compile   (no .out by construction)
+
+Mc_null has no log on purpose: clause (c)'s null medium is a comment-only
+dev_wdc.c, so the kill is a COMPILE failure and there is no run to record.  Seven
+logs for eight mutants is not a lost file.
+
+FOUR SOLE CARRIERS.  No row here is redundant, and one row carries four kills.
+
+
+*** THE FIX NEEDED TWO CONDITIONS, AND A THIRD FORM WAS A REGRESSION.  All of this
+    is MEASURED (drainscore.sh, drainvar.py), not argued. ***
+
+    variant                          empty  empty8  leftover  wr+pkt  ACCEPT
+    -----------------------------    -----  ------  --------  ------  ------
+    inbuf_len > 0 only               CLOSED CLOSED  OPEN      CLOSED  CLOSED
+    bad-len decline only             CLOSED CLOSED  CLOSED    OPEN    OPEN
+    both, flag a STRUCT FIELD        CLOSED CLOSED  CLOSED    CLOSED  OPEN
+    both, flag a PER-ACCESS LOCAL    CLOSED CLOSED  CLOSED    CLOSED  CLOSED
+
+Each half closes a door the other leaves open, and the reason is structural:
+
+  * `inbuf_len > 0` misses the LEFTOVER door because an unread payload leaves
+    occupancy at a genuine 512, so `512 > 0` passes.  Named by the grok seat.
+  * the bad-len decline misses the WRITE+PKT door because no bad-len access
+    occurs there -- a CDB dispatch consumes the LOCAL inbuf_len to a stale 0
+    while pushing fresh DATA-IN into the ring.  Named by the fable seat, and
+    independently by opus.
+
+*** THE STRUCT-FIELD FORM IS WORSE THAN THE DEFECT IT FIXES, and the 45-row
+    baseline could not see it. ***  A latched flag silences every later legal
+    write -- corruption traded for silent data loss.  No pre-existing row performs
+    a legal write AFTER a bad-len one, so "all green" was measuring the wrong
+    thing.  `row_badlen_then_legal` was written for exactly that, and `M9_persist`
+    is killed by it ALONE.  This is the de-escalation clause's accept side: a fix
+    that removes a write owes a row proving the LEGAL write still lands.
+
+
+*** THE TWO MUTANTS THAT READ AS IMPROVEMENTS, both from the opus seat, and both
+    invisible to every empty-ring row. ***
+
+M3_ptr        `inbuf_len > 0`  ->  `d->inbuf_head != d->inbuf_tail`
+              Live pointers instead of a stale local.  It reads as MORE correct --
+              which is what makes it dangerous.  It is invisible to every
+              empty-ring row and dies only on the ATAPI fall-through.
+
+M6_recompute  recompute occupancy from the live pointers before the guard.
+              The intuitively CORRECT fix, and measurably worse: it fires on a
+              2048-byte DATA-IN because 2048 % 512 == 0.
+
+Both die on `a CDB dispatch does not drain to disk` ALONE.  The seat that named
+them warned that without such a row M3_ptr "ships green while writing the CD's
+payload to the IDE image".  That warning is discharged by measurement here.
+
+
+*** WHAT THIS ROUND DOES NOT CLOSE -- stated because a seat measured it. ***
+
+The RING ALIAS survives.  With #478 applied, a guest that issues WRITE SECTORS,
+then a packet command returning 2048 bytes, then 256 ordinary 16-bit words of its
+own, still has the image receive 512 CD-ROM payload bytes and ZERO of its own.
+`wdccdbaccum` stays open with that measurement attached.
+
+The alias root was also identified and is NOT fixed here: `wdc_command()` clears
+`atapi_cmd_in_progress` and does NOT clear `write_in_progress`.  A one-line
+symmetric fix closes that door, but it is a different site and a different class,
+so it is filed rather than merged into this round.
+
+The `write_count == 0` division is still a host SIGFPE if it were ever reachable.
+It is not (the count is set only as `seccnt ? seccnt : 256` and the flag clears the
+instant it reaches 0), and `inbuf_len > 0` does not remove it.  A `write_count > 0`
+co-guard would close it for free -- which under the ADDITION LICENCE is exactly
+"it cannot hurt", so it is FILED, not added.

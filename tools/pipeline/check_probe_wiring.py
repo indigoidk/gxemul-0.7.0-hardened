@@ -192,6 +192,30 @@ MANIFEST = {
         (CLASS_RESEARCH, "#465 pass-2 mutant applier, preserved as evidence"),
     "artifacts/wdccdbmidxfer/killtable2_20260827/mk477b.py":
         (CLASS_RESEARCH, "#477 pass-2 mutant applier, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/mk478.py":
+        (CLASS_RESEARCH, "#478 mutant applier, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/drainvar.py":
+        (CLASS_RESEARCH, "#478 fix-variant builder, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addpkt.py":
+        (CLASS_RESEARCH, "#478 detector row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addaccept.py":
+        (CLASS_RESEARCH, "#478 accept-row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addlocal.py":
+        (CLASS_RESEARCH, "#478 variant generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addaltctl.py":
+        (CLASS_RESEARCH, "#477 pass-2 accept-row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addannounce.py":
+        (CLASS_RESEARCH, "#478 announce-row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addflush.py":
+        (CLASS_RESEARCH, "#479 ring-flush repro generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addp5.py":
+        (CLASS_RESEARCH, "#479 premise-5 probe generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addpartial.py":
+        (CLASS_RESEARCH, "#478 partial-sector row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/addphaserow.py":
+        (CLASS_RESEARCH, "#477 pass-2 stale-phase row generator, preserved as evidence"),
+    "artifacts/wdcdataoutdrain/killtable_20260827/wiprepro.py":
+        (CLASS_RESEARCH, "#479 wdcwipclear repro generator, preserved as evidence"),
     #  CLASSIFIED WHILE ITS OWN ROUND WAS STILL IN THE INDEX, and that is the check working
     #  rather than an exception to it: this file was `git add`ed by a concurrent #446 round
     #  MINUTES after this checker was written, went straight into the domain, and was named

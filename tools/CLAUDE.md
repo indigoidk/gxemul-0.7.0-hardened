@@ -780,8 +780,29 @@ this line said 38 KB, which was true when it was written and has quadrupled sinc
    attack reasoning only; their blindness is a feature; NEVER equivalent votes on repo fact).
    *** KIMI IS CLASSIFIED BY ITS TRANSPORT, NOT BY ITS NAME, and this line listed it as
    FILE-READING until 2026-08-26. *** The CLI is file-reading; the live substitute
-   `kimi-k3:cloud` goes through `panel_ollama.py` with `PACKET_BRIEF` and is a **FOURTH
-   PACKET-FED transport**. Since the CLI is 403-walled, **the kimi answers actually
+   `kimi-k3:cloud` goes through `panel_ollama.py` and is a **FOURTH PACKET-FED
+   transport**.
+   *** THIS SENTENCE SAID THE SUBSTITUTE GOES THROUGH `panel_ollama.py` "with
+   `PACKET_BRIEF`".  THERE WAS NO SUCH THING.  Measured 2026-08-27 by opening the
+   file: it was 24 lines and POSTed the brief VERBATIM, with no preamble of any
+   kind. ***
+   The cost was a lost seat.  A brief written for the file-reading seats carries
+   instructions a packet-fed seat cannot obey -- *"check the premises against the
+   source"*, *"grep the fork"* -- and a seat that TRIES to comply stalls.  On the
+   `wdcdataoutdrain` pass 1 the substitute returned **127 bytes** (*"I'll check the
+   premises against the actual tree ... Starting by locating"*) and stopped; with the
+   CLI 403-walled that lost the kimi seat entirely, and `seat_verdicts.py` filed it as
+   *"answered, NO VERDICT LINE (format miss)"* rather than as the stall it was.
+   **This is the carrier's own "it was never the seat, it was the BRIEF" recurring,
+   for the documented reason: the remedy lived in PROSE (remember to inline every
+   fact) instead of in the tool that fires every time.**  `panel_ollama.py` now
+   prepends a `PACKET_PREAMBLE` telling the seat it cannot read files and asking it to
+   name any premise it cannot settle from the packet -- so an uncheckable premise comes
+   back as an honest "not checkable" instead of silence.  Controlled in four states,
+   including the negative one (the pre-fix source must NOT carry the preamble).
+   *A tool's own source is the primary authority about the tool; this row asserted a
+   wrapper that a 24-line file plainly did not have.*
+   Since the CLI is 403-walled, **the kimi answers actually
    arriving today are PACKET-FED** -- so crediting one as a repo-fact reading is exactly
    the conflation this doctrine forbids.
    Conflict-of-interest badges on every closure: `A` = author self-review disclosed, `s` =
@@ -1836,6 +1857,29 @@ be stale in both directions, and a tool's own header is a primary source about t
 1. Claim the top TaskList item (or top of OUTSTANDING_BUGS "OPEN LIST").
 2. Reproduce on the committed build per the WITNESS LADDER. No witness at rung
    2–4 → document instead, stop.
+   > ### *** BEFORE RECORDING A ROUND AS RUNG-1, ASK ONE SEAT TO TRY A RUNG-3 PROBE.
+   > ### Owner ruling 2026-08-27, and the evidence is that nobody had asked. ***
+   >
+   > Three rounds shipped on offline differential fixtures with `witness: none`, and
+   > the ladder was blamed for having no term that fits. Then a seat was asked, once,
+   > and **built a rung-3 witness for `wdcdataoutdrain` in a SINGLE invocation** — a
+   > guest arming WRITE SECTORS and issuing one `sd` on unmodified `evbmips -e malta`,
+   > with the sector clobbered pre-fix, clean post-fix, and an accept control.
+   >
+   > **So the gap was HABIT, not a hole in the ladder**, and the ruling is deliberately
+   > NOT a new ladder term: admitting differentials as their own rung would legitimise
+   > the shortcut the ladder exists to discourage. The ladder was always fine.
+   >
+   > **The ask costs one invocation and is the cheapest thing in this file.** A seat
+   > that reports it cannot build one has given a real answer and the round proceeds
+   > as documented-only — with the ATTEMPT recorded, so `none` means "tried and could
+   > not" rather than "did not think to". Those are different states and must not
+   > render the same, which is this project's oldest rule about blanks.
+   >
+   > *It sits HERE, in the lifecycle step, rather than in the ladder — the carrier's
+   > own finding is that the one piece of prose which demonstrably fires is the
+   > premise-audit line, because it lives in the artifact present at the moment of
+   > decision. This is that moment.*
 3. Design brief → **panel pass 1** → converge (empirically where split).
 4. Implement (byte-identical in both trees for shared files); propagate to build trees.
 5. **Panel pass 2** on the real diff.

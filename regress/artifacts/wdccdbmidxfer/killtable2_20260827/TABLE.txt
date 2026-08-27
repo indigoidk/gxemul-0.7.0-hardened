@@ -102,8 +102,40 @@ M2_curcmd  --  a `d->cur_command == ATAPI_PKT_CMD` conjunct added to the guard.
     sets cur_command = COMMAND_RESET and does NOT clear atapi_cmd_in_progress
     (the only clear is inside wdc_command).  So a guest can write A0h, touch
     ALT-CTRL, and arrive at `flag == 1 && cur_command == COMMAND_RESET` with
-    the phase still CMDOUT.  A REAL behavioural difference on a REACHABLE
-    path, so this is coverage debt and is FILED as such.
+    the phase still CMDOUT.  A REAL behavioural difference on a
+    REACHABLE path.
+
+    *** AND THE DISPOSITION DRAWN FROM THAT WAS INVERTED.  Both flagship seats
+    measured it on #477's pass 2, through real register accesses. ***
+
+    Adding the conjunct is not a missing test -- it is a LIVE REGRESSION:
+
+        L3   PKT + ALTCTL + CDB   shipped: dispatches=1   M2: dispatches=0, occ=12
+        L3b  a second CDB         shipped: dispatches=2   M2: dispatches=0, occ=24
+        L3c  a third CDB          shipped: dispatches=3   M2: dispatches=0, occ=36
+
+    ZERO of three LEGAL packet commands dispatch, and the wedge is PERMANENT --
+    the 12-byte residue blocks dispatch even after cur_command returns to 0xA0.
+    The reachability of that state is what makes the conjunct DANGEROUS, not
+    what makes it valuable.
+
+    Filing it as "coverage debt" INVITED A FUTURE ROUND TO DISCHARGE THE DEBT BY
+    ADDING THE CONJUNCT, which ships the exact wedge this device's rounds exist
+    to prevent.  The two seats differed on the LABEL -- one held the debt filing
+    correct, the other called for an ACCEPT ROW -- and agreed on the measurement.
+    They are the same row: `row_altctl_cdb_accept` kills M2 BECAUSE it asserts a
+    legal CDB still dispatches.
+
+    One seat added what stops this being an artifact of another filed bug: the
+    divergence SURVIVES fixing `wdcaltctrlbit`, because a real WDCTL_RST reaches
+    the same state and `wdcsrstnoabort` shows the flag survives it.
+
+    MEASURED with the row in place: baseline 57 rows 0 failures; M2_curcmd reds
+    `a CDB after altctl still dispatches` ALONE.
+
+    *A wrong disposition is worse than a wrong measurement.  The measurement was
+    right both times; the sentence drawn from it pointed the next round at a
+    regression.*
 
     Two live defects fell out of that check, both FILED:
 
