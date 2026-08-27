@@ -49,3 +49,107 @@ MEASURED HONEST COST OF fixA3 THAT fixB DOES NOT HAVE, to be named in the fix co
 WDC_INBUF_SIZE is 512*513, so the saturated occupancy 262655 is NEVER 0 (mod 512)
 while B's 262656 always is.  A saturated ring's pending write therefore stalls forever
 under A, where B commits the correct oldest sector.
+
+================================================================================
+PORTED INTO THE COMMITTED DETECTOR, AND RE-MEASURED THERE.  2026-08-27.
+
+The 16 assertions above lived in `score.c`, which SWAPPED main() -- so they ran
+INSTEAD of the 103 committed rows and no gate could ever run them.  A detector
+nothing runs is not a detector.  They are now rows in
+`regress/diff_wdc_identify.c`, wired into `gate_offline.sh` by NAME.
+
+  pre-fix  (git show HEAD:src/devices/dev_wdc.c)   119 rows,  9 failures
+  post-fix (the shipped edit)                      119 rows,  0 failures
+  gate                                             PASS (329 checks, was 321)
+
+  PREFIX_committed_9321749_119rows.out   the nine reds, in the committed detector
+  POSTFIX_119rows.out                    the same rows green
+
+*** BOTH R6 LIVENESS ROWS ARE GREEN ON BOTH BUILDS. ***  That is what makes the
+nine reds evidence rather than "the ring never worked at all".
+
+THE FIX WAS RE-MEASURED ON MY OWN BYTES, not accepted on the seat's report:
+
+  Mb_revert    clause (b) verbatim reinstatement          10/16  KILLED
+  Md_noret     clause (d) repair nulled, guard stands     10/16  KILLED
+  Md_inside    clause (d) return inside the latch         12/15  KILLED
+  Md_nominus   bulk bound loses its -1                    15/16  KILLED
+  Md_prodonly  producer guard only, bulk bound deleted    13/16  KILLED
+
+Md_prodonly is the one that matters for the ADDITION LICENCE: it is the fix three
+reading seats said was sufficient, and it dies on the DETECTOR.
+
+*** BUT THIS PARAGRAPH ONCE READ "the bulk hunk is load-bearing, NOT defensive",
+AND THAT CONTRADICTED dev_wdc.c AND THE CHANGELOG IN THE SAME STAGED COMMIT.
+Corrected 2026-08-27 after the pass-2 seat put all three artifacts side by side. ***
+
+The honest statement: the bulk hunk is DEFENSIVE.  `wdc__read()` has exactly one
+caller and it sits after `wdc_new_command_reset()`, so the ring is empty on every
+real invocation -- MEASURED by a second seat as well: 512 READ/READMULTI commands
+driven only through the guest register interface, ring pre-stuffed each time,
+reached the guard 1280 times and FIRED IT ZERO TIMES.  Md_prodonly's death shows
+the DETECTOR distinguishes the two hunks; it does not show the state is
+guest-reachable.  The licence is the caller invariant being written down nowhere
+else, not a live defect.
+
+*** AND THE GATE CAUGHT A DEFECT IN MY OWN CHECK. ***  I wrote
+`grep -c 'R2 anchor: inbuf[tail] survives'`.  `[tail]` is a CHARACTER CLASS, so
+it matches inbuft/inbufa/inbufi/inbufl and never the literal label.  It returned
+0 and the gate went red -- the loud direction.  Had the class happened to match,
+the row would have read as pinned while pinning nothing.  All eight labels now
+use `grep -cF`.
+
+A blind fix would have been worse than the bug: replacing `grep -c 'R` across the
+file matched FOURTEEN sites, six of them pre-existing checks unrelated to this
+round.  The assertion caught that, which is why anchor counts here are written as
+assertions rather than as replace(..., 1).
+
+================================================================================
+PASS 2 -- and it found a one-character escape that all 119 rows missed.
+
+*** THREE SEATS NAMED THE SAME MUTANT INDEPENDENTLY: `>` -> `>=` on the bulk
+bound. ***  codex, glm and deepseek, none of which could see the others.
+
+  M_bulk_ge   before R9   ESCAPED all 119 rows
+  M_bulk_ge   after  R9   122 rows, exactly 1 failure -- R9 IS THE SOLE CARRIER
+              `R9 exact fit: the refill is ACCEPTED  got 262143 want 262655`
+
+R8 pinned only the REFUSAL side (room 511, ask 512, refused).  A bound tightened
+by one character still refuses everything R8 asks, so R8 could not see it.  R9
+asks for EXACTLY the room available, which the shipped bound accepts and the
+tightened one refuses -- silently shortening the transfer.
+
+  A GUARD IS HALF-TESTED BY SHOWING IT REFUSES WHAT IT SHOULD.  The other half is
+  showing it ACCEPTS WHAT IT MUST, and that is the half a bound-tightening edit
+  escapes.  Same reasoning as the de-escalation clause's accept rows, reached from
+  the opposite direction: there the lost tripwire is a crash, here a refusal.
+
+deepseek named the settling fact exactly -- "whether the 119-row battery includes a
+case with free == 512*to_read".  It did not.  R9 was built from that sentence.
+
+--------------------------------------------------------------------------------
+FOUR L1 CORRECTIONS TO THIS ROUND'S OWN RECORD, all pre-ship:
+
+* *** "MEASURED REACHABLE" WAS AN OVERCLAIM (codex, verified). ***  wdc__read()
+  has exactly ONE caller and it sits AFTER wdc_new_command_reset(), so the ring is
+  EMPTY on every real invocation.  The prefilled state R7/R8 build is a FUNCTION
+  state, not a guest route.  The arm is occupancy-blind AS CODE and the hunk is
+  DEFENSIVE -- licensed by the caller invariant being unwritten anywhere else, not
+  by a live defect.  Corrected in the code comment.
+
+* *** A CITATION DEFECT CAUGHT BY A SEAT THAT COULD SEE NEITHER TABLE. ***  The
+  kimi-k3:cloud substitute noticed the comment cites 13/16 twice while this
+  round's table shows Md_inside 12/15 and NO drop-oldest mutant -- "different
+  denominators imply a stale citation".  Correct: both figures came from the panel
+  seat's table, not from my re-measurement.  Each figure now names its table.
+
+* The wrap-orientation question was framed as a possible FORMULA defect.  It is
+  not: 1,050,624 (head,tail) pairs across all 262,656 occupancies, both
+  orientations, ZERO mismatches.  What R7/R8 miss is the wrapped CASE -- a
+  coverage gap.  minimax reached the same correction independently.
+
+* "inexpressible as a single change" softened: the advance statement's modulo is
+  still removable on its own.  What the A3 form closes is the obvious
+  consolidation path, which is what a maintainer actually takes.
+
+Gate after R9: offline-differential PASS (330 checks).  Detector 122 rows.

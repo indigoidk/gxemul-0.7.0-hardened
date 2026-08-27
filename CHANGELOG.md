@@ -1,3 +1,165 @@
+## Round 484 (#484) -- a full ring reported itself empty, and the next push destroyed a byte
+
+`wdc_addtoinbuf()` advanced `head` unconditionally and checked `head == tail` **afterwards**.
+That predicate means BOTH empty and full, so a wrapped ring reported occupancy **0** while
+holding 262656 staged bytes, and the next push silently overwrote an unread one. The bulk
+`memcpy` refill bypassed the producer entirely and compared the two pointers nowhere.
+
+Closes `wdcringambig` and `wdcaddtoinbufbound` as one round: one invariant, one predicate,
+two sites. Detector **127 rows** (was 103), gate **PASS (333 checks)**, kill table **9 of 9**.
+
+### The invariant is OCCUPANCY IS SOUND, deliberately not "full is distinguishable from empty"
+
+**Six** sites read the emptiness predicate; only the producer implements it. Naming the weak
+property invites a later edit to trade the strong one away, so the fix comment names the one
+the other five depend on. (The adjudicating seat's point, adopted.)
+
+### Written as A3, and the difference is a memory-safety class
+
+My own brief proposed `int next = (head + 1) % SIZE; ... head = next;`. That **deletes the
+masked advance** and makes the mask inside `next` safety-critical -- and dropping a mask is a
+one-token simplification. Built as a mutant it aborts with `free(): invalid next size`: **a
+real heap overflow past the allocation.**
+
+> **A brief proposing a fix SHAPE can introduce a memory-safety class the defect never had.**
+
+The shipped form leaves both original statements byte-for-byte untouched and adds only the
+guard, which makes that edit inexpressible as a single change.
+
+### The measuring seat overturned three reading seats -- and pass 2 overturned it back, halfway
+
+On pass 1, codex, grok and the adjudicator all read the bulk arm as unreachable, and a
+measuring seat **measured** it stepping `head` past `tail`: occupancy `262156 -> 1548`, a
+plausible-looking number, with 1548 bytes of unread guest data replaced by disk contents.
+
+> *** ON PASS 2, CODEX REFUTED THE WORD *REACHABLE*, AND IT WAS RIGHT. ***  `wdc__read()` has
+> exactly ONE caller and it sits AFTER the unconditional ring reset, so the ring is EMPTY on
+> every real invocation. **The fixture built a function state, not a product route.**
+
+So the arm is occupancy-blind *as code* and the state that exposes it is not guest-reachable
+today. The hunk ships as **defensive**, licensed by the caller invariant being written down
+nowhere else -- not by a live defect. The code comment is corrected in place. *The reading
+seats were right about the product and the measuring seat was right about the function; the
+round's error was calling the second one the first.*
+
+The disk-image sink, by contrast, was
+measured reachable via **width-mixing**: mixed 2- and 4-byte stores hold occupancy at
+`2 (mod 4)`, which can never be `0 (mod 512)`, so the drain never fires and the ring wraps
+*with the writer armed*; two more stores steer occupancy onto 2048 and the drain commits 512
+bytes at the guest's LBA with `first=0x55` where the guest staged `0xA5`.
+
+Disagreements here are settled empirically, never by vote.
+
+### The anchored rows are not interchangeable with the rest
+
+Two mutants that keep occupancy **sound** while destroying **data** -- the `return` moved
+inside the warning latch, and drop-oldest -- are green under *every* occupancy-shaped and
+DRQ-shaped row. Only the marker byte at the tail cell and the real consumer's FIFO order kill
+them. That is clause (f) one level down: **an oracle computed the same way as the code under
+test cannot see an edit that preserves the computation.**
+
+The `return`-inside-the-latch mutant deserves its own line: it is exactly the structure
+`wdc_get_inbuf()` already forbids in the **consumer** (*"the `return` MUST STAY OUTSIDE it"*),
+so a maintainer copying that function's shape into the producer writes it by accident.
+
+### Witness
+
+**Rung 3**, on one ask -- second instance of the standing ruling that a round must *ask* for a
+rung-3 probe before recording itself rung-1. A guest program on **unmodified `evbmips -e
+malta`**, reached through the machine's own committed `piix4_ide` path with no `device_add` of
+ours, free-running, 34 hand-encoded MIPS instructions, shipped-vs-fixed 20/20, 1.53 s. Both
+controls: RAM liveness, **and** a device signature -- two reads of the *same address* return
+`0x5a` then `0xa5`, which a memory cell cannot do and only a FIFO can.
+
+Honest limit, kept: the route is the orphan ring. The witness proves the ambiguity is
+guest-**reachable**; it does not prove any real OS driver travels it.
+
+### Measured cost, named rather than discovered later
+
+`WDC_INBUF_SIZE` is `512*513`, so the saturated occupancy 262655 is never `0 (mod 512)` while
+the old 262656 always was. A saturated ring's pending sector write therefore **stalls** instead
+of committing its oldest sector. Reachable only through the width-mixing pathology that fills
+the ring in the first place, and a stalled write is strictly better than a write of bytes the
+guest did not supply.
+
+### Two defects of my own, both caught by the gate rather than by me
+
+* `grep -c 'R2 anchor: inbuf[tail] survives'` -- **`[tail]` is a character class**, so it
+  matched `inbuft`/`inbufa`/`inbufi`/`inbufl` and never the literal label. It returned 0 and
+  the gate went red, which is the loud direction; had the class matched anything, the row
+  would have read as pinned while pinning nothing. All eight labels now use `grep -cF`.
+* The blind fix was worse than the bug: replacing `grep -c 'R` across the file matched
+  **fourteen** sites, six of them pre-existing checks unrelated to this round. The anchor
+  assertion caught it.
+
+### Pass 2 found a one-character escape that all 119 rows missed
+
+**Three seats named the same mutant independently** -- codex, glm and deepseek, none able to
+see the others: tightening the bulk bound `>` to `>=`. It refuses a refill that *exactly*
+fits, silently shortening the transfer, and it **escaped every one of the 119 rows**, because
+R8 pins only the REFUSAL side. deepseek named the settling fact precisely -- *"whether the
+119-row battery includes a case with `free == 512*to_read`"*. It did not.
+
+> **A guard is half-tested by showing it refuses what it should. The other half is showing it
+> ACCEPTS WHAT IT MUST -- and that is the half a bound-tightening edit escapes.**
+
+That is the de-escalation clause's accept-row reasoning reached from the opposite direction:
+there the lost tripwire is a crash, here a refusal. Row `R9` was built from deepseek's
+sentence and codex's arithmetic, and it is the **sole carrier**: 122 rows, exactly 1 failure.
+
+### And pass 2 then found an L2 floor breach -- three escapes with ONE cause
+
+The measuring seat built three edits that scored **zero reds across all 122 rows**:
+
+| mutant | edit | measured harm |
+|---|---|---|
+| `M3_onesector` | `512 * to_read >` -> `512 >` (two tokens) | **275 integrity violations in 960 trials** -- at `head=0, tail=513, free=512, to_read=2` it admits 1024 bytes and destroys 511 unread ones |
+| `M2_breakinside` | move the bulk `break` inside the latch | the **second** `wdc__read()` falls through and head lands **on** tail -- the ambiguity this round removed, restored |
+| `M1_return` | `break` -> `return` | the completion interrupt is dropped |
+
+> **All three escape for one reason, and the seat said it in a sentence: no row had
+> `free >= 512` with `to_read >= 2`, so the multiplier `* to_read` was entirely unpinned;
+> and no row called `wdc__read()` twice, so the bulk arm's latch interaction and its common
+> tail were unpinned.**
+
+`M3` is clause (d) by the book -- a bound **relaxed** on the predicate this diff added -- so
+it was fixed in-round, not filed. Rows **R10** (the multiplier) and **R11** (the second call)
+close all three, each dying to exactly one row and to a *different* one.
+
+**R11's first cut did not work, and that is a result rather than an embarrassment.** It filled
+the ring to `free == 0`, where `head + 512*to_read` exceeds the buffer, so the fall-through
+takes the **byte-wise** arm whose per-byte producer guard saves the mutant -- which survived at
+126/126. The row was re-cut onto the memcpy arm (`head = 0, tail = 512, free = 511`) and the
+mutant died. *A mutant that will not die is a result: here the row was mis-cut, not the target
+dead.*
+
+### The dead check is now deleted, and the warrant is a measurement
+
+The old post-hoc `head == tail` test was kept at first on the warrant that dead code with a
+*true* comment costs nothing. **The comment was false in four separate claims** -- it said the
+ring has no disambiguator (this round added one), that the corrupting store is silent (it is
+now refused and announced), that the bulk paths never compare the pointers (one now does), and
+that no detector row claims ring health (R1-R11 claim exactly that). A maintainer reading it
+would have concluded the ring is still ambiguous. Measured dead as well: **true 0 times across
+12,232 producer refusals**.
+
+### And a citation defect caught by a seat that could see neither table
+
+The `kimi-k3:cloud` substitute noticed the fix comment cites `13/16` twice while this round's
+own table shows `Md_inside` at **12/15** and carries no drop-oldest mutant at all --
+*"different denominators imply a stale citation"*. Correct: both figures came from the panel
+seat's table, not from my re-measurement. Each figure now names the table that produced it.
+**Caught purely from the denominators, by a packet-fed seat holding neither table.**
+
+### Filed, not fixed
+
+`wdcfloodstale` -- `overrun x2` in `wdc_flood_probe.py` is **measured dead**
+(`overrun_msgs = 0, want 1`), killed by `#479` making every command reset the ring. It is a
+scored gate row, so it will go red on the next battery and be mis-attributed to whatever change
+triggered that run. It is also a live clause-(b) breach for `#464`, whose ring-producer
+reinstatement mutant it solely carried.
+
+
 ## Round 483 (#483) -- the sweep pinned the decode across 256 values and the purge at none
 
 A **harness round**: zero product code changed.

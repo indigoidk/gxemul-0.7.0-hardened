@@ -181,23 +181,98 @@ int wdc_set_io_enabled(struct wdc_data *d, int io_enabled)
  */
 static void wdc_addtoinbuf(struct wdc_data *d, int c)
 {
+	/*  #484: REFUSE BEFORE THE STORE.  The invariant this establishes is
+	    THE RING'S OCCUPANCY IS SOUND -- deliberately not the weaker "full is
+	    distinguishable from empty".  MANY sites depend on the first and only
+	    this function implements the second; the readers are derivable at any
+	    commit with
+	
+	        grep -n 'inbuf_head [=!]= d->inbuf_tail' dev_wdc.c   (and the
+	        reversed and subtractive forms; one site writes tail - head)
+	
+	    rather than from a number here.  An earlier draft wrote SIX while the
+	    checkpoint said FOUR, and the two cannot be reconciled without first
+	    deciding whether to count SITES or DECISIONS -- which is how the wrong
+	    number got written in the first place.  A count in a comment ages; a
+	    deriver does not.  Naming the WEAK property here would invite a later
+	    edit to trade the strong one away, which is the whole reason the
+	    invariant is stated as occupancy rather than as distinguishability.
+	
+	    One slot is sacrificed, so head == tail now means EMPTY, full stop, and
+	    every reader below becomes sound with no struct change and no new field.
+	    Modelled on dev_pckbc.c's pckbc_add_code(), which refuses at
+	    next == tail for exactly this defect (#288).
+	
+	    *** THE RETURN IS OUTSIDE THE LATCH, AND THAT IS NOT A STYLE CHOICE.
+	    ***  Nested inside it, the FIRST overflow is refused and every later
+	    push sees warned_inbuf_overrun == 1, skips the whole condition, and
+	    walks head onto tail -- the defect restored.  Measured as mutant Md3,
+	    13/16 in the panel seat's own table (its Md3), and 12/15 when I rebuilt
+	    it against these bytes as Md_inside -- DIFFERENT TABLES, and the figure is
+	    cited with the one that produced it rather than blended.  Both tables kill
+	    it, which is the claim.  wdc_get_inbuf() below already forbids the same
+	    shape in the
+	    CONSUMER for the same reason, so a maintainer copying that function's
+	    structure into this one writes the bug by accident.
+	
+	    Written WITHOUT an `int next` temporary on purpose.  The obvious form
+	    (`next = (head+1) % SIZE; ... head = next;`) deletes the masked advance
+	    below and makes the mask inside `next` safety-critical; dropping it is a
+	    one-token simplification and measured as an actual heap overflow
+	    (`free(): invalid next size`).  Keeping both statements untouched makes
+	    that edit inexpressible as a SINGLE change -- though not impossible: the
+	    modulo in the advance statement below is still removable on its own.
+	    What it closes is the obvious consolidation path, which is what a
+	    maintainer actually takes.
+	
+	    Drop-NEWEST, not drop-oldest, by reason: the surviving consumers key on
+	    the FRONT of the stream (the CDB dispatch reads bytes 0-11; the sector
+	    drain reads aligned runs from tail), so overwriting the oldest byte
+	    silently re-aims a 512-byte disk write at data the guest never staged
+	    there.  Both in-tree ring precedents drop newest.  Measured: drop-oldest
+	    scores 13/16 IN THE PANEL SEAT'S TABLE (its Md4) and is invisible to every
+	    occupancy- and DRQ-shaped row there.  I did NOT rebuild that mutant against
+	    these bytes, so it is cited as the seat's measurement and not as this
+	    round's -- artifacts/wdcringambig/killtable_20260827/.
+	
+	    COST, measured and named rather than discovered later: WDC_INBUF_SIZE is
+	    512*513, so the saturated occupancy 262655 is never 0 (mod 512) while the
+	    old 262656 always was.  A saturated ring's pending sector write therefore
+	    stalls instead of committing its oldest sector.  It is reachable only
+	    through the width-mixing pathology that fills the ring in the first
+	    place, and a stalled write is strictly better than a write of bytes the
+	    guest did not supply.  */
+	if ((d->inbuf_head + 1) % WDC_INBUF_SIZE == d->inbuf_tail) {
+		if (!d->warned_inbuf_overrun) {
+			d->warned_inbuf_overrun = 1;
+			fatal("[ wdc_addtoinbuf(): WARNING! wdc inbuf overrun!"
+			    " Increase WDC_MAX_SECTORS. ]\n");
+		}
+		return;
+	}
+
 	d->inbuf[d->inbuf_head] = c;
 
 	d->inbuf_head = (d->inbuf_head + 1) % WDC_INBUF_SIZE;
-	/*  #464: latch the announcement only.
-	    *** THIS BOUNDS THE WARNING; IT DOES NOT REPAIR THE RING. ***
-	    head == tail means BOTH empty and full here -- there is no
-	    disambiguator -- and this check is POST-HOC, so it fires as the
-	    ring becomes full while the store that actually CORRUPTS is the
-	    NEXT one, which is silent already.  The two bulk paths never
-	    compare the pointers at all.  Filed as `wdcringambig`; nothing in
-	    #464 touches it, and no detector row here claims ring
-	    health.  */
-	if (d->inbuf_head == d->inbuf_tail && !d->warned_inbuf_overrun) {
-		d->warned_inbuf_overrun = 1;
-		fatal("[ wdc_addtoinbuf(): WARNING! wdc inbuf overrun!"
-		    " Increase WDC_MAX_SECTORS. ]\n");
-	}
+	/*  #484: the #464 POST-HOC check that stood here is DELETED, and the
+	    warrant is a measurement rather than an argument.
+
+	    It tested `head == tail` AFTER the advance.  The guard at the top of
+	    this function makes `(head + 1) % SIZE != tail` a precondition of
+	    reaching the store, so after the advance head != tail always: the
+	    branch was unreachable.  MEASURED TRUE 0 TIMES across 12,232 producer
+	    refusals over the whole 122-row suite.
+
+	    *** IT WAS KEPT AT FIRST, ON THE WARRANT THAT DEAD CODE WITH A TRUE
+	    COMMENT COSTS NOTHING.  THE COMMENT WAS FALSE IN FOUR CLAIMS. ***  It
+	    said head == tail means both empty and full with no disambiguator
+	    (this round added one); that the corrupting store is the next one and
+	    is silent (it is now refused and announced); that the bulk paths never
+	    compare the pointers (one now does); and that no detector row claims
+	    ring health (R1-R9 claim exactly that).  A maintainer reading it would
+	    have concluded the ring is still ambiguous.  Removing code needs a
+	    warrant in this fork, and a measured-dead branch under a four-times-
+	    false comment is the clearest one there is.  */
 }
 
 
@@ -404,6 +479,52 @@ void wdc__read(struct cpu *cpu, struct wdc_data *d)
 		    max_sectors_per_chunk : count;
 
 		/*  TODO: result code from the read?  */
+
+		/*  #484: AN OCCUPANCY BOUND.  The test below is a BUFFER bound -- does
+		    the linear write fit inside the allocation -- and it is NOT an
+		    occupancy bound: this arm bypasses wdc_addtoinbuf() entirely and
+		    compares the two pointers nowhere, so it can step head past tail and
+		    overwrite unread bytes in silence.
+
+		    MEASURED, AND THE QUALIFIER IS PART OF THE MEASUREMENT: driving the
+		    FUNCTION with a prefilled ring gives occupancy 262156 -> 1548, a
+		    plausible-looking number, with 1548 bytes of unread data replaced by
+		    disk contents.
+
+		    *** BUT 'REACHABLE' IS THE WRONG WORD AND THE READING SEATS WERE RIGHT
+		    ABOUT THE PRODUCT. ***  `wdc__read()` has exactly ONE caller and it sits
+		    AFTER `wdc_new_command_reset()`, so the ring is EMPTY on every real
+		    invocation.  The prefilled state the rows build is a FUNCTION state, not
+		    a guest route.  The arm is occupancy-blind AS CODE; this guard is
+		    DEFENSIVE, and it is licensed by the caller invariant being unwritten
+		    anywhere else -- not by a live defect.  A second seat then MEASURED
+		    that too: 512 READ/READMULTI commands driven only through the guest
+		    register interface, ring pre-stuffed each time, reached this guard
+		    1280 times and FIRED IT ZERO TIMES.
+		
+		    The `- 1` is the sacrificed slot and is load-bearing: without it this
+		    guard admits a refill of exactly room+1 bytes, which is the ONLY input
+		    that distinguishes the two forms (measured 15/16, one row).
+		
+		    It is the SAME admission predicate as the producer's, and that is the
+		    reason both hunks are one round: split them and the two arms disagree
+		    about what "full" means, which is an incoherence the split itself
+		    creates.  */
+		if (512 * to_read > (d->inbuf_tail - d->inbuf_head - 1 +
+		    WDC_INBUF_SIZE) % WDC_INBUF_SIZE) {
+			if (!d->warned_inbuf_overrun) {
+				d->warned_inbuf_overrun = 1;
+				/*  #484: names THIS function, not the producer.  The
+				    shared latch already removes the only other way to
+				    tell the two sites apart, so a message pointing at
+				    a guard that did not fire is a wrong record in
+				    product output.  */
+				fatal("[ wdc__read(): WARNING! wdc inbuf would"
+				    " overrun; refill refused. Increase"
+				    " WDC_MAX_SECTORS. ]\n");
+			}
+			break;
+		}
 
 		if (d->inbuf_head + 512 * to_read <= WDC_INBUF_SIZE) {
 			diskimage_access(cpu->machine, d->drive + d->base_drive,

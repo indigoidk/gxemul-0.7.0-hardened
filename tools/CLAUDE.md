@@ -2591,6 +2591,47 @@ WSL.
 TIMED-OUT foreground run keeps going invisibly, while a plain-`&` run dies
 invisibly. Check `ps aux` for the first; check the log's byte count for the second.*
 
+> ### *** AND ON 2026-08-27 THE RULE'S OWN TELL FAILED, WHILE THE FALLBACK CHECK LIED IN THE
+> ### OTHER DIRECTION. TWO APPARATUS ERRORS, STACKED, PRODUCING A CONFIDENT WRONG READING
+> ### THAT PERSISTED ACROSS THREE SEPARATE CHECKS. ***
+>
+> An ASAN rebuild was launched as `wsl -d Gentoo -- bash -c '... nohup make -j4 > /tmp/x.log
+> 2>&1 & echo started'`.  It printed `started`.  **It never ran at all.**
+>
+> * **The size tell did not apply: THERE WAS NO LOG FILE.**  The rule above says a dead run
+>   leaves a log of exactly 0 bytes.  That presumes the redirect happened.  Here the child was
+>   torn down with the invocation's shell before the redirect took effect, so `/tmp/x.log`
+>   **did not exist** -- and `tail` on a missing file prints nothing, which reads exactly like
+>   a build that has produced no output yet.
+>
+> * **`pgrep -f "make -j4"` MATCHED ITS OWN WRAPPER.**  The pattern appeared in the
+>   `bash -c` command line running the check, so it found itself and reported RUNNING.  Three
+>   consecutive polls said RUNNING with zero make processes alive.  `ps -eo pid,args | grep`
+>   showed the truth immediately: the only match was the checking shell.
+>
+> **Neither error is new as a class** -- the carrier already records the check-that-cannot-fail
+> and the pattern-that-matches-nothing.  What is new is that the FIRST rule's remedy was
+> defeated by the SECOND rule's failure mode, so every reading agreed with every other reading
+> and nothing looked wrong.
+>
+> > **THE CHEAP DISCRIMINATOR IS THE REDIRECT TARGET, NOT THE PROCESS AND NOT ITS SIZE.**  A
+> > shell creates the redirect file *before* it execs the command, so:
+> >
+> >     log MISSING   -> the command NEVER STARTED
+> >     log 0 bytes   -> started; either mid-run on a non-streaming tool, or dead
+> >     log growing   -> alive and streaming
+> >
+> > `ls -la <log>` separates "never started" from "started", which is the distinction both
+> > older rules assume you have already made and neither one gives you.
+>
+> **And when a process check is genuinely needed, it must not be able to match itself:** use
+> `ps -eo pid,args | grep -E "[m]ake"` (the bracket trick), or grep for something only the
+> real process has -- never a literal that also appears in the command you are typing.
+>
+> *The operational rule is unchanged and is the one that was ignored here: long jobs go to
+> `run_in_background`, which the harness tracks and which notifies on exit.  Both of these
+> checks exist only because a plain `&` was used in the first place.*
+
 *** A BASH-TOOL TIMEOUT DOES NOT KILL THE WSL-SIDE PROCESS, AND THE ORPHAN KEEPS
 WRITING THE TREE. Measured 2026-08-23, and it produced TWO CONCURRENT RUNS IN ONE
 MUTANT TREE. ***

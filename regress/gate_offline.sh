@@ -1399,6 +1399,84 @@ else
     check     "wdc IDENTIFY: the packing anchor is present" \
               "$(grep -c 'packing anchor' "$WDCLOG")" "1"
 
+    #  #484: THE RING-OCCUPANCY ROWS.  Each is NAMED rather than counted, because
+    #  deleting any one returns the table to a state a measured mutant survives --
+    #  the same reason the four divergence rows above are named.
+    #
+    #  *** THE TWO ANCHORED ROWS ARE NOT INTERCHANGEABLE WITH THE REST. ***  Two
+    #  mutants that keep occupancy SOUND while destroying DATA -- the `return` moved
+    #  inside the warning latch, and drop-oldest -- are GREEN under every
+    #  occupancy-shaped and DRQ-shaped row here.  Only the marker byte at the tail
+    #  cell and the real consumer's FIFO order kill them.  An oracle computed the
+    #  same way as the code under test cannot see an edit that preserves the
+    #  computation -- clause (f) one level down.
+    #
+    #  MEASURED: 9 of these red on the pre-fix device and 0 after, with the two R6
+    #  liveness rows GREEN ON BOTH -- which is what makes the nine reds evidence
+    #  rather than a ring that never worked at all.  Kill table and logs in
+    #  regress/artifacts/wdcringambig/killtable_20260827/.
+    #
+    #  *** -cF, NOT -c, AND THE GATE CAUGHT ME OMITTING IT. ***  The label
+    #  `R2 anchor: inbuf[tail] survives` contains a BRACKET PAIR, which basic grep
+    #  reads as a CHARACTER CLASS -- `inbuf[tail]` matches inbuft / inbufa / inbufi /
+    #  inbufl and never the literal text.  It returned 0 and the gate went red, which
+    #  is the LOUD direction and the safe one.  Had the class happened to match
+    #  something, the row would have read as pinned while pinning nothing.
+    #
+    #  Fixed-string matching for every label in this block: a row NAME is literal
+    #  text, never a pattern.  Same class as this tree's existing `grep -nF` rule.
+    check     "wdc IDENTIFY: the ring liveness control" \
+              "$(grep -cF 'R6 liveness: SIZE-1 all land' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the wrap, in the file's own idiom" \
+              "$(grep -cF 'R1 full ring: pointer occupancy' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the guest-visible DRQ bit" \
+              "$(grep -cF 'R3 full ring: DRQ still set' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: ANCHORED -- the tail marker byte" \
+              "$(grep -cF 'R2 anchor: inbuf[tail] survives' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: ANCHORED -- the consumer's own order" \
+              "$(grep -cF 'R4 fifo: first pop is first push' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the disk-image sink" \
+              "$(grep -cF 'R5b sink: no MIS-SEQUENCED sector reaches the image' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the BULK arm (defensive; see the fix comment)" \
+              "$(grep -cF 'R7 memcpy arm: the anchor survives' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: pins the -1 in the bulk bound" \
+              "$(grep -cF 'R8 bulk edge: head never reaches tail' "$WDCLOG")" "1"
+
+    #  *** R9 IS THE ACCEPT SIDE, AND IT IS A SOLE CARRIER.  THREE SEATS NAMED THE
+    #  SAME ONE-CHARACTER ESCAPE INDEPENDENTLY ON PASS 2. ***  Tightening the bulk
+    #  bound `>` to `>=` refuses a refill that exactly fits, silently shortening the
+    #  transfer -- and it escaped ALL 119 rows, because R8 pins only the REFUSAL side.
+    #  MEASURED with R9 present: 122 rows, exactly 1 failure, and it is this row.
+    #
+    #  A guard is half-tested by showing it refuses what it should; the other half is
+    #  showing it ACCEPTS WHAT IT MUST, which is the half a bound-tightening edit
+    #  escapes.  Same reasoning as the de-escalation clause's accept rows, reached
+    #  from the opposite direction.
+    check     "wdc IDENTIFY: ACCEPT side -- an exactly-fitting refill lands" \
+              "$(grep -cF 'R9 exact fit: the refill is ACCEPTED' "$WDCLOG")" "1"
+
+    #  *** R10 AND R11 CLOSE AN L2 FLOOR BREACH FOUND ON PASS 2, and all three
+    #  escapes had ONE cause: no row had free >= 512 with to_read >= 2, so the
+    #  MULTIPLIER `* to_read` was unpinned; and no row called wdc__read() TWICE, so
+    #  the bulk arm's latch interaction and its common tail were unpinned. ***
+    #
+    #    M3  `512 * to_read >` -> `512 >`   two tokens, 0 reds of 122, 275 integrity
+    #                                       violations -- clause (d), a bound RELAXED
+    #    M2  break moved inside the latch   0 reds; the SECOND read falls through and
+    #                                       head lands ON tail -- the ambiguity back
+    #    M1  break -> return                0 reds; the completion irq is dropped
+    #
+    #  Each now dies to exactly ONE row, and to a DIFFERENT one.  R11's first cut
+    #  filled the ring to free == 0 and the mutant SURVIVED -- the fall-through then
+    #  takes the byte-wise arm, whose per-byte guard saves it.  A mutant that will not
+    #  die is a RESULT: that one was the row mis-cut, not the target dead.
+    check     "wdc IDENTIFY: the multiplier is pinned (two sectors, one sector of room)" \
+              "$(grep -cF 'R10 multiplier: two sectors into one sector of room is REFUSED' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: a SECOND refused read keeps the ring unambiguous" \
+              "$(grep -cF 'R11 second refusal: head has NOT landed on tail' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: a SECOND refused read still reaches the common tail" \
+              "$(grep -cF 'R11 second refusal: the completion irq still reaches the tail' "$WDCLOG")" "1"
+
     #  #480: THE THREE CALL-SITE ROWS ARE NAMED, BECAUSE THE COUNT PIN IS NOT ENOUGH.
     #
     #  This round first DECLINED to name them, reasoning that the detector's own identity

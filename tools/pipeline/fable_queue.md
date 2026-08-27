@@ -994,3 +994,20 @@ worse than no check, because it reassures.
 *Provenance: found by chasing a dangling citation (`_scratchpad/held_repro_rows.c`, a file
 that does not exist) that a read-only research subagent noticed while censusing something
 else entirely. Nothing systematically re-checks a citation after the thing it cites moves.*
+
+## wdcringambig / wdcaddtoinbufbound -- #484 regress stage (queued 2026-08-27)
+
+The fix and its 119-row detector are committed; **pass 2 on the real diff has not run.**
+The panel saw the pass-1 brief only.
+
+TWO QUESTIONS, both measurable:
+
+1. The round claims the bulk-arm hunk is licensed by a MEASURED delta -- the producer-only
+   variant (`Md_prodonly`) scores 13/16 and dies. **Verify that on the shipped bytes**,
+   not on my report. Three reading seats judged that arm unreachable and one measuring
+   seat refuted them; the disposition rests on the measurement being right.
+
+2. Is `512 * to_read > (tail - head - 1 + SIZE) % SIZE` correct at **both** wrap
+   orientations, or is there an orientation R7/R8 happen not to build? Those two rows
+   were written from one setup (`head < tail`), which is exactly the shape that hides an
+   asymmetry.

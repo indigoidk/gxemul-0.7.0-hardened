@@ -357,7 +357,13 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 	return 1;
 }
 
-static int stub_disk_exists = 0;	/*  inert by default  */
+static int stub_disk_exists = 0;
+
+/*  #484: a READ FILL for the bulk-refill rows.  R7/R8 have to tell DISK bytes
+    from RING bytes -- the defect is disk contents landing on unread guest data
+    -- and a stub that returns an untouched buffer cannot show that.  0 keeps it
+    inert, so every pre-existing row is unaffected.  */
+static int stub_read_fill = 0;	/*  inert by default  */
 
 int diskimage_exist(struct machine *machine, int id, int type)
 {
@@ -371,6 +377,8 @@ int diskimage_access(struct machine *machine, int id, int type, int writeflag,
 	(void)machine; (void)id; (void)type;
 	/*  OBSERVABLE: `wdcdataoutdrain` needs to know whether the device wrote to
 	    the IMAGE, and at what offset.  A silent stub cannot answer that.  */
+	if (!writeflag && stub_read_fill && buf != NULL)
+		memset(buf, stub_read_fill, len);
 	if (writeflag) {
 		stub_disk_writes ++;
 	if (stub_disk_first < 0 && len > 0 && buf != NULL)
@@ -4774,6 +4782,280 @@ static void row_reset_bit_iff(void)
 }
 
 
+/*
+ *  #484: the ring-occupancy rows.  MEASURED before they were ported --
+ *  7/16 on the committed build, 16/16 with the fix, and every mutant in
+ *  `artifacts/wdcringambig/killtable_20260827/` scored against them.
+ *
+ *  *** THE ANCHORED ROWS ARE R2 AND R4, AND THEY ARE NOT OPTIONAL. ***  Two
+ *  mutants that keep occupancy sound while destroying data -- the `return`
+ *  moved inside the latch, and drop-oldest -- are GREEN under every
+ *  occupancy-shaped and DRQ-shaped row here.  Only the marker byte at the
+ *  tail cell and the real consumer's FIFO order kill them.  That is clause
+ *  (f) one level down: an oracle computed the same way as the code under
+ *  test cannot see an edit that preserves the computation.
+ *
+ *  R7 and R8 cover the BULK arm, which bypasses wdc_addtoinbuf() entirely.
+ *  Three reading seats judged it unreachable AND THEY WERE RIGHT ABOUT THE
+ *  PRODUCT -- wdc__read()'s one caller resets the ring first, so this state is
+ *  a FUNCTION state, not a guest route.  What was MEASURED is the function
+ *  past tail -- occupancy 262156 -> 1548 with unread guest data overwritten.
+ *  Deleting the bulk bound scores 13/16, so those rows carry it.
+ */
+static int gx_occ(struct wdc_data *d)
+{
+	int o = d->inbuf_head - d->inbuf_tail;
+	while (o < 0)
+		o += WDC_INBUF_SIZE;
+	return o;
+}
+
+static void gx_push(struct wdc_data *d, int n, int w, unsigned char v)
+{
+	unsigned char b[8];
+	int i, k;
+	for (k = 0; k < n; k += w) {
+		for (i = 0; i < w; i++)
+			b[i] = v;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, b, w, MEM_WRITE, d);
+	}
+}
+
+/*  Each assertion is a ROW in this file's sense: it bumps `rows`, and a
+    mismatch bumps `failures`.  The seat's private counters are deliberately
+    NOT carried over -- a row this file does not count is a row the identity
+    pin cannot protect.  */
+static void chk(const char *name, long got, long want)
+{
+	rows ++;
+	if (got != want) {
+		failures ++;
+		printf("  FAIL %-40s got %ld want %ld\n", name, got, want);
+	} else
+		printf("  ok   %-40s %ld\n", name, got);
+}
+
+static void row_ring_occupancy_sound(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	/*  R6 LIVENESS -- one short of full must ALL land.  Without this every
+	    row below is satisfied by a ring that refuses everything.  */
+	altctl_fresh(&d);
+	for (i = 0; i < WDC_INBUF_SIZE - 1; i++) wdc_addtoinbuf(&d, 0x11);
+	chk("R6 liveness: SIZE-1 all land", gx_occ(&d), WDC_INBUF_SIZE - 1);
+	chk("R6 liveness: DRQ asserted",
+	    (status_byte(&d, fake_cpu()) & WDCS_DRQ) ? 1 : 0, 1);
+	free(d.inbuf);
+
+	/*  R1 -- THE WRAP ROW IN THE EXISTING (head-tail) IDIOM.  */
+	altctl_fresh(&d);
+	for (i = 0; i < WDC_INBUF_SIZE; i++) wdc_addtoinbuf(&d, 0x11);
+	chk("R1 full ring: pointer occupancy", gx_occ(&d), WDC_INBUF_SIZE - 1);
+	chk("R3 full ring: DRQ still set",
+	    (status_byte(&d, fake_cpu()) & WDCS_DRQ) ? 1 : 0, 1);
+	free(d.inbuf);
+
+	/*  R2 -- THE ANCHORED ROW.  A marker byte the ring did not compute.  */
+	altctl_fresh(&d);
+	wdc_addtoinbuf(&d, 0xA5);			/*  the anchor  */
+	for (i = 1; i < WDC_INBUF_SIZE + 64; i++) wdc_addtoinbuf(&d, 0x11);
+	chk("R2 anchor: inbuf[tail] survives", d.inbuf[d.inbuf_tail], 0xA5);
+	chk("R2 anchor: cell 0 untouched", d.inbuf[0], 0xA5);
+	free(d.inbuf);
+
+	/*  R4 -- FIFO ORDER through the real consumer.  */
+	altctl_fresh(&d);
+	wdc_addtoinbuf(&d, 0xA5);
+	for (i = 1; i < WDC_INBUF_SIZE + 64; i++) wdc_addtoinbuf(&d, 0x11);
+	chk("R4 fifo: first pop is first push",
+	    (long)(wdc_get_inbuf(&d) & 0xff), 0xA5);
+	free(d.inbuf);
+
+	/*  R5 -- THE DISK-IMAGE SINK (the rider's fifth consumer).  Wrap the ring
+	    while an ATA WRITE is armed, then land on a multiple of 512.
+	    THE ACCEPT LEG COMES FIRST: without it every refusing fix passes by
+	    writing nothing at all, which is the vacuity the de-escalation clause
+	    exists to refuse.  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1;
+	stub_disk_writes = 0; stub_disk_bytes = 0; stub_disk_first = -1;
+	d.seccnt = 1; d.sector = 1;
+	buf[0] = WDCC_WRITE;
+	dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+	gx_push(&d, 2, 2, 0xA5);
+	gx_push(&d, 510, 2, 0x11);
+	chk("R5a ACCEPT: an ordinary sector still lands", stub_disk_writes, 1);
+	chk("R5a ACCEPT: with the guest's own first byte", stub_disk_first, 0xA5);
+	stub_disk_exists = 0; free(d.inbuf);
+
+	altctl_fresh(&d);
+	stub_disk_exists = 1;
+	stub_disk_writes = 0; stub_disk_bytes = 0; stub_disk_first = -1;
+	d.seccnt = 1; d.sector = 1;
+	buf[0] = WDCC_WRITE;
+	dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+	gx_push(&d, 2, 2, 0xA5);			/*  the guest's FIRST bytes  */
+	{ int n = 0;
+	  while (n < WDC_INBUF_SIZE + 4096 && stub_disk_writes == 0) {
+		gx_push(&d, 4, 4, 0x55); n += 4; } }
+	gx_push(&d, 2, 2, 0x66);
+	{ int g = 0;
+	  while ((gx_occ(&d) % 512) != 0 && g < 2000 && stub_disk_writes == 0) {
+		gx_push(&d, 4, 4, 0x77); g++; } }
+	/*  Either the drain was refused, or it committed the guest's OWN first
+	    byte.  What it must never do is commit 0x55 -- a byte the guest wrote
+	    262000 stores later, at the LBA it chose for its first sector.  */
+	chk("R5b sink: no MIS-SEQUENCED sector reaches the image",
+	    (stub_disk_first < 0 || stub_disk_first == 0xA5) ? 1 : 0, 1);
+	stub_disk_exists = 0; free(d.inbuf);
+
+	/*  R7 -- THE BULK memcpy ARM (P4), AND THE ONE PLACE AN OCCUPANCY
+	    ORACLE IS GENUINELY BLIND.  Put head BELOW tail with a marker byte
+	    sitting at tail, then run a bulk refill whose length steps head PAST
+	    tail while still satisfying `head + 512*to_read <= WDC_INBUF_SIZE`.
+	    Occupancy goes 262156 -> 1548, a perfectly plausible number; only the
+	    marker says 1548 bytes of unread data were destroyed.  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+	for (i = 0; i < 1500; i++) wdc_addtoinbuf(&d, 0x11);
+	for (i = 0; i < 1500; i++) (void) wdc_get_inbuf(&d);	/*  h = t = 1500  */
+	wdc_addtoinbuf(&d, 0xA5);				/*  THE ANCHOR at [1500]  */
+	for (i = 1; i < 262156; i++) wdc_addtoinbuf(&d, 0x11);
+	chk("R7 setup: head is below tail",
+	    (d.inbuf_head < d.inbuf_tail) ? 1 : 0, 1);
+	chk("R7 setup: the anchor is at tail", d.inbuf[d.inbuf_tail], 0xA5);
+	{
+		int occ_before = gx_occ(&d);
+		d.seccnt = 4; d.sector = 1; d.head = 0; d.cyl_lo = 0; d.cyl_hi = 0;
+		wdc__read(fake_cpu(), &d);
+		chk("R7 memcpy arm: the anchor survives", d.inbuf[1500], 0xA5);
+		chk("R7 memcpy arm: occupancy did not COLLAPSE",
+		    (gx_occ(&d) >= occ_before) ? 1 : 0, 1);
+	}
+	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
+
+	/*  R8 -- THE BULK ARM MUST HONOUR THE SAME CAPACITY AS THE PRODUCER.
+	    A bulk refill of exactly `room + 1` bytes is the smallest input that
+	    tells a `> room` bound from a `> room - 1` one.  Without this row the
+	    `- 1` in the bulk bound is unpinned and its loss is invisible.  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+	wdc_addtoinbuf(&d, 0xA5);				/*  ANCHOR at [0]  */
+	for (i = 1; i < WDC_INBUF_SIZE - 512; i++) wdc_addtoinbuf(&d, 0x11);
+	{
+		d.seccnt = 1; d.sector = 1; d.head = 0; d.cyl_lo = 0; d.cyl_hi = 0;
+		wdc__read(fake_cpu(), &d);
+		chk("R8 bulk edge: the anchor survives a 512 refill",
+		    d.inbuf[0], 0xA5);
+		chk("R8 bulk edge: head never reaches tail",
+		    (d.inbuf_head == d.inbuf_tail) ? 0 : 1, 1);
+	}
+	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
+
+	/*  R9 -- THE ACCEPT SIDE OF THE SAME BOUND, and THREE SEATS NAMED THE
+	    ESCAPE INDEPENDENTLY on pass 2 (codex, glm, deepseek): `>` -> `>=`.
+
+	    R8 above pins only the REFUSAL side -- room 511, ask 512, refused.  A
+	    bound tightened by one character still refuses everything R8 asks, so
+	    R8 cannot see it.  This row asks for EXACTLY the room available, which
+	    the shipped bound accepts (512 > 512 is false) and the tightened one
+	    refuses, silently shortening the transfer.
+
+	    *** A GUARD IS HALF-TESTED BY SHOWING IT REFUSES WHAT IT SHOULD.  The
+	    other half is showing it ACCEPTS WHAT IT MUST, and that is the half a
+	    bound-tightening edit escapes. ***  Same reasoning as the de-escalation
+	    clause's accept rows, reached from the opposite direction: there the
+	    lost tripwire was a crash, here it is a refusal, and in both cases only
+	    the accept side can tell a correct bound from an over-restrictive one.
+
+	    Arithmetic: occupancy SIZE-513 leaves room SIZE-1-(SIZE-513) = 512; one
+	    sector is 512 bytes; acceptance takes occupancy to SIZE-1 exactly.  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+	wdc_addtoinbuf(&d, 0xA5);				/*  ANCHOR at [0]  */
+	for (i = 1; i < WDC_INBUF_SIZE - 513; i++) wdc_addtoinbuf(&d, 0x11);
+	{
+		chk("R9 setup: room is exactly one sector",
+		    (d.inbuf_tail - d.inbuf_head - 1 + WDC_INBUF_SIZE)
+		    % WDC_INBUF_SIZE, 512);
+		d.seccnt = 1; d.sector = 1; d.head = 0; d.cyl_lo = 0; d.cyl_hi = 0;
+		wdc__read(fake_cpu(), &d);
+		chk("R9 exact fit: the refill is ACCEPTED", gx_occ(&d),
+		    WDC_INBUF_SIZE - 1);
+		chk("R9 exact fit: the anchor is still intact", d.inbuf[0], 0xA5);
+	}
+	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
+
+	/*  R10 -- THE MULTIPLIER.  Every earlier bulk row asks for ONE sector, so
+	    `512 * to_read` is never distinguished from a bare `512`.  Deleting those
+	    two tokens scored 0 reds of 122 and caused 275 integrity violations.
+
+	    Same free space as R9 (512) but TWO sectors requested: the shipped bound
+	    refuses (1024 > 512) and the mutant admits (512 > 512 is false), then
+	    memcpys 1024 bytes over a ring with room for 512 and destroys 511 unread
+	    ones.  *** THAT IS CLAUSE (d) -- A BOUND RELAXED ON THE PREDICATE THIS
+	    DIFF ADDED -- so it was fixed in-round rather than filed. ***  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+	wdc_addtoinbuf(&d, 0xA5);				/*  ANCHOR at [0]  */
+	for (i = 1; i < WDC_INBUF_SIZE - 513; i++) wdc_addtoinbuf(&d, 0x11);
+	{
+		int occ_before = gx_occ(&d);
+		d.seccnt = 2; d.sector = 1; d.head = 0; d.cyl_lo = 0; d.cyl_hi = 0;
+		wdc__read(fake_cpu(), &d);
+		chk("R10 multiplier: two sectors into one sector of room is REFUSED",
+		    gx_occ(&d), occ_before);
+		chk("R10 multiplier: the anchor survives the refusal", d.inbuf[0], 0xA5);
+	}
+	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
+
+	/*  R11 -- THE SECOND CALL.  No row called wdc__read() twice, so the bulk
+	    arm's LATCH INTERACTION and its COMMON TAIL were both unpinned.
+
+	    Moving the bulk `break` inside the warning latch scored 0 reds of 122:
+	    the first refusal announces and breaks, and the SECOND falls straight
+	    through, landing head ON tail -- the exact ambiguity this round removed.
+	    It is the identical mutant to the producer's Md_inside, which IS pinned;
+	    the bulk twin was not.  Turning that `break` into a `return` also scored
+	    0 reds and drops the completion interrupt, because `int_assert` is set in
+	    the common tail AFTER the loop.
+
+	    So this row asserts BOTH: the ring stays unambiguous across two refused
+	    reads, and the interrupt still reaches the guest.  */
+	/*  *** THE SETUP IS THE ROW.  A first cut filled the ring to free == 0,
+	    and the mutant SURVIVED at 126/126 -- because head + 512*to_read then
+	    exceeds the buffer, so the fall-through takes the BYTE-WISE arm, whose
+	    per-byte producer guard refuses every push and saves it.  The mutant
+	    needs the MEMCPY arm, and that needs head low and tail just above it.
+	    A mutant that will not die is a RESULT: here it was the row mis-cut,
+	    not the target dead. ***
+
+	    push 512, pop 512, push SIZE-512  ->  head = 0, tail = 512, free = 511.
+	    One sector asks 512 > 511, so the guard fires; the fall-through memcpy
+	    then lands head exactly ON tail and occupancy reads 0.  */
+	altctl_fresh(&d);
+	stub_disk_exists = 1; stub_size = 512L*1024*1024; stub_read_fill = 0xEE;
+	for (i = 0; i < 512; i++) wdc_addtoinbuf(&d, 0x11);
+	for (i = 0; i < 512; i++) (void) wdc_get_inbuf(&d);	/*  h = t = 512  */
+	for (i = 0; i < WDC_INBUF_SIZE - 512; i++) wdc_addtoinbuf(&d, 0x11);
+	{
+		chk("R11 setup: head is 0 and tail is 512",
+		    (d.inbuf_head == 0 && d.inbuf_tail == 512) ? 1 : 0, 1);
+		d.seccnt = 1; d.sector = 1; d.head = 0; d.cyl_lo = 0; d.cyl_hi = 0;
+		d.int_assert = 0;
+		wdc__read(fake_cpu(), &d);
+		wdc__read(fake_cpu(), &d);		/*  the SECOND one is the test  */
+		chk("R11 second refusal: head has NOT landed on tail",
+		    (d.inbuf_head == d.inbuf_tail) ? 0 : 1, 1);
+		chk("R11 second refusal: the completion irq still reaches the tail",
+		    d.int_assert, 1);
+	}
+	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
+}
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -5127,6 +5409,7 @@ int main(void)
 	row_srst_purges_orphan_ring();
 	row_srst_aborts_pkt_empty_ring();
 	row_reset_bit_iff();
+	row_ring_occupancy_sound();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -5150,8 +5433,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 103) {
-		printf("  FAIL %-38s rows = %i, want 103\n",
+	if (rows != 127) {
+		printf("  FAIL %-38s rows = %i, want 127\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

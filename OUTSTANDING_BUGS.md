@@ -11722,3 +11722,39 @@ WRITE arm, which takes no `wdc_command()` and therefore no reset. `#473` already
 exactly this re-aiming once on this file's sibling row, recording *"a detector aimed at a
 primitive cannot verify a fix made in its caller: right defect, wrong instrument."* Here it
 is the reverse -- right instrument, a stimulus that no longer arrives.
+
+
+## 2026-08-27 -- a build tree the harness references does not build
+
+### `asanunbuildable` -- `build-asan/` has no binary, and a `.c` was propagated without its header
+
+Found while propagating `#484`. **It predates that round**: `dev_wdc` appears **zero** times
+in the failure log.
+
+```
+  make                 103 errors -- and it reported EXIT 0 (the documented false-zero)
+  build-asan/gxemul    DOES NOT EXIST
+  stale objects        222 .o files with no binary to link them into
+```
+
+**Root cause, verified rather than guessed:** `build-asan/src/disk/diskimage.c` is in sync
+with SEC while `build-asan/src/include/diskimage.h` is not. The new `.c` uses members the old
+`.h` does not declare -- `nr_of_tracks`, `total_disc_sectors`, `first_data_track_lba`,
+`DISKIMAGE_MAX_SPT`, `struct diskimage_track` -- each present in SEC's header and absent here.
+**A `.c` was propagated without its header**, which is the no-VPATH rule obeyed halfway.
+
+And it is not one file: **363 files under `build-asan/src` differ from SEC.**
+
+> **The consequence is silent coverage loss, the same class as a gate that skips.**
+> `gate_asan_sweep.sh` exists to run the machine-construction sweep under ASAN; with no binary
+> it cannot. This project has already been bitten once by a gate skipping on a missing binary
+> and the skip being read as a pass.
+
+**Not fixed in `#484`, deliberately.** The stopping rule fixes a finding in-round only if it is
+a measured false pass of that round or a wrong record. This is neither -- it is a pre-existing
+defect in a tree `#484` does not measure against. Folding a 363-file resync into a ring-buffer
+round is exactly how rounds stop converging.
+
+REMEDY when worked: **re-derive the tree from SEC rather than patching the header.** A tree 363
+files out of date has no property worth preserving, and a header-only fix would leave the other
+362 to be found one build at a time.

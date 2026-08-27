@@ -195,8 +195,26 @@ MENU_RE = re.compile(r"VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)"
 #  the historical kimi files are 92-357 KB ANSWERS from when that seat was live, and codex
 #  has a documented 26,992-byte WALL.  **A control set whose labels are invented validates
 #  nothing.**  The eight below were each read by hand.  OLD is wrong on 2 of 8; NEW on 0.
+#
+#  *** 2026-08-27: A 402 WALL WAS SCORED AS "answered, NO VERDICT LINE (format miss)".
+#  THAT IS THE SEAT-FAILURE-COUNTED-AS-AGREEMENT SHAPE, AND THE ROSTER READ 7 ANSWERED
+#  WHEN IT WAS 6. ***  The grok seat returned
+#
+#      Error: Internal error: {"message": "API error (status 402 Payment Required):
+#      Grok Build usage balance exhausted", "http_status": 402, ...}
+#
+#  and NOTHING here matched: "usage limit" is not "usage balance exhausted", and 402
+#  is not 429.  The seat had been PAID and answering all day, so the wall arrived
+#  mid-session with no warning -- which is precisely when a mis-scored wall does the
+#  most damage, because by then the roster is trusted.
+#
+#  Both phrases go in STRONG, not WEAK: each is an unambiguous billing notice rather
+#  than prose a seat would emit while DISCUSSING quotas, which is the false positive
+#  this file was bitten by twice in one day.  Still no bare numerics, per the
+#  line-number lesson above.
 WALL_STRONG = (r"you(?:'ve| have) (?:hit|reached) your|usage limit|429|"
                r"too many requests|quota will reset|unknown effort level|"
+               r"payment required|balance exhausted|"
                r"unknown model|not authenticated|invalid api key")
 WALL_WEAK   = r"rate.?limit|quota"
 WALL_MARK   = r"error|auth_error|HTTPError|ERROR:|failed to run"
@@ -205,9 +223,21 @@ _WEAK_RE = re.compile(WALL_WEAK, re.I)
 _MARK_RE = re.compile(WALL_MARK, re.I)
 
 
-def _is_wall(tail):
-    """A notice on its own, or a weak phrase standing next to an error marker."""
-    if WALL_RE.search(tail):
+def _is_wall(tail, wide=None):
+    """A notice on its own, or a weak phrase standing next to an error marker.
+
+    *** THE TWO TIERS GET DIFFERENT WINDOWS, AND THE REASON IS THE SAME ONE THAT
+    SPLIT THEM. ***  STRONG phrases are notices on their own, so WHERE they appear
+    does not change what they mean -- they get `wide`.  WEAK phrases appear in
+    PROSE about rate limiting, and the tight tail is what keeps that prose from
+    scoring a live seat as walled -- so they keep the narrow window.
+
+    Measured 2026-08-27: a grok 402 wall sat about 1400 bytes from EOF because the
+    CLI appends a usage-JSON dump AFTER its error.  A 600-byte window could never
+    see it, and the seat scored "answered, format miss" -- a seat failure counted
+    as an answer.  The pattern was already correct; only the window was wrong.
+    """
+    if WALL_RE.search(wide if wide is not None else tail):
         return True
     return bool(_WEAK_RE.search(tail) and _MARK_RE.search(tail))
 
@@ -436,7 +466,7 @@ def main():
         #  test an hour later.  So a WALLED row is not a verdict on the seat -- it
         #  is a verdict on that invocation, and the seat should be RE-FIRED ONCE
         #  before the round closes rather than recorded as gone.
-        is_walled = _is_wall(t[-600:]) and not v
+        is_walled = _is_wall(t[-600:], t[-4000:]) and not v
         if recovered:
             #  Write it beside the raw envelope so the answer is READABLE, not just
             #  known to exist.  A seat whose answer nobody can open is, in practice,
