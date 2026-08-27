@@ -232,6 +232,8 @@ MANIFEST = {
         (CLASS_RESEARCH, "#485 256-opcode sweep of the ABRT-implies-assert invariant, measured RED on ed3f9cc before any edit"),
     "artifacts/wdcringambig/rung3_20260827/wdcring_rung3_probe.py":
         (CLASS_RESEARCH, "#484 rung-3 witness: a guest program on unmodified evbmips malta, both controls, 20/20 shipped-vs-fixed"),
+    "artifacts/wdcfloodstale/measure_20260827/author_floodstale.py":
+        (CLASS_RESEARCH, "three-leg measurement of wdcfloodstale: the death, a harness control, and the remedy"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_mut483.py":
         (CLASS_RESEARCH, "#483 mutant applier, author-prefixed after a seat overwrote an unprefixed one"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483.py":
