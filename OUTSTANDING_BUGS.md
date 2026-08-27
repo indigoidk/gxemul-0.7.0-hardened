@@ -31,7 +31,26 @@
 > independently the same day in a different tool. When one enumeration is found short, grep the
 > others — the omission is a habit, not an accident.*
 >
-> - ✅ **FIXED in #473, 2026-08-27** (with `wdcrearmzero`, one diff).
+> - *** THIS ROW READ ✅ FIXED IN #473 UNTIL 2026-08-27, DIRECTLY ABOVE AN ENTRY
+>   SAYING THE AMBIGUITY IS STILL PRESENT.  TWO CONSECUTIVE LINES ASSERTING OPPOSITE
+>   STATES. ***
+>
+>   **STATE: OPEN.**  `#473` fixed the ATAPI DATA-IN CHUNKING -- it moved an existing 32768
+>   clamp before the push loop.  **It did not touch the ambiguity**, and the entry below says
+>   so in its own words: *`head == tail` for BOTH empty and full with no disambiguator*.
+>   Re-verified 2026-08-27 by reading `wdc_addtoinbuf()` and by MEASURING it -- a four-leg
+>   reproduction on this exact HEAD reports a full ring as occupancy 0 with DRQ CLEAR
+>   (`regress/artifacts/wdcringambig/repro_20260827/PREFIX_committed_ce75b1d.out`).
+>
+>   **THE CAUSE IS THE HAZARD THIS PROJECT HAS ALREADY NAMED: ONE QUEUE ID COVERING TWO
+>   DEFECTS, CLOSED ON ONE.**  The chunking overrun and the ring's full/empty ambiguity were
+>   filed under a single id; `#473` closed the id on the first.  The second was refiled as
+>   `wdcaddtoinbufbound`, so it was not LOST -- but the ✅ on the original was false,
+>   and a reader who trusts states read a live guest-reachable defect as done.
+>
+>   *The tick is the part that misleads.  A future reader scanning for open work skips a
+>   ticked row without reading the body that contradicts it -- which is why the correction
+>   goes HERE, in the state line, and not as a note further down.*
 >   **`wdcringambig`** — *** ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
 >   COMMAND DOES IT. *** The wdc inbuf ring uses `head == tail` for BOTH empty and full with
 >   no disambiguator; the overrun check is post-hoc, so **the store that actually corrupts is
