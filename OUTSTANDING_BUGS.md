@@ -247,8 +247,26 @@
 >   on, so counting all 94 would overstate the class ~4×.
 >   DISPOSITION: harvest the four dirs — read each answer, record what it found, cite the
 >   dir — after which G covers them mechanically forever. Bounded, with a definite end.
->   *Every unread-review instance recorded that day was a finding sitting in a seat answer
->   nobody had opened, twice costing a full round to rediscover.*
+>   **CORRECTED after adjudication: the set is EIGHT dirs, not four** — four more on
+>   08-25 that an exact-match filter could not see, one of them a **pass 2 on a shipped
+>   source-touching commit**. Census, suffix-aware: **174 dirs / 78 cited / 96 uncited**
+>   (deriver on the ledger row), so the gap is ~12×, not the ~4× first filed.
+>   *Filed first as 166/76/94 — the third wrong census in a row and by the OPPOSITE error
+>   to the second: a loose glob matched `.out` files, then an exact filter dropped eight
+>   suffixed dirs. `check_seats_read.py` already handles suffixes; I wrote a filter
+>   instead of reading the one that works.*
+>   **The cutoff is 2026-08-24 — the citation rule's own adoption date, forward-only** —
+>   re-warranted after an adjudicator checked three older dirs and found every finding
+>   absorbed. n=3 is not a proof: **if the harvest finds one live unacted finding, sample
+>   the 08-22/23 band before closing.**
+>   *Two defect shapes worth keeping. (1) The first draft named a dir in full, so a grep
+>   scored it CITED on the strength of the sentence saying it was uncited — and the first
+>   fix was defeated by its own explanation. A record naming an artifact it asserts is
+>   unrecorded must not write that name in the form the checker matches, prose included.
+>   (2) The claim that every unread-review instance that day was "a finding nobody had
+>   opened" is refuted by my own commit body: the largest was a review read thoroughly
+>   and left unrecorded. Today's were RECORDING gaps; the round-costing ones are
+>   historical.*
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
