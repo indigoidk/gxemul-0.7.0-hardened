@@ -11521,3 +11521,70 @@ one-byte address error by a guest now costs it the whole channel state).
 *The `0x3f7` Drive Address Register identification is READ from general ATA knowledge; there
 is no ATA document in this tree, and the seat flagged that itself. What is MEASURED is that
 the store lands in the Device Control handler and what it now does there.*
+
+### `wdcaltctrlcov` -- UPDATED by `#482`: four closed, and the two flagship seats RANK THE REST DIFFERENTLY
+
+`#482` closed the single-conjunct-qualifier family. **Both flagship seats ratified the four
+rows and both then built the SAME escape independently** -- Opus's `M1_disj` and Fable's
+`disj2` are the same edit, reached by different routes:
+
+```c
+if (d->write_in_progress || d->atapi_cmd_in_progress)
+        wdc_new_command_reset(d);
+```
+
+> *** IT IS PRECISELY THE REPAIR A MAINTAINER WRITES AFTER READING THE FOUR NEW ROWS ***
+> -- *"only abort if something is actually in flight"* -- **and it defeats all four**,
+> because every one of them arms at least one of those two flags.
+>
+> **The state that kills it -- ring non-empty, `wip == 0`, `flag == 0` -- has no row, and it
+> is GUEST-REACHABLE.** Verified by reading: the `#464` tenant test at the DATA write arm
+> gates ONLY the one-shot diagnostic; the `wdc_addtoinbuf()` calls sit OUTSIDE it and push
+> unconditionally. A guest can leave the ring dirty with nothing armed, then SRST.
+>
+> **So a row set can be individually correct and collectively misleading.** Each of the four
+> is right; together they teach the wrong property. Nothing in the vacuity floor catches
+> that, and it is the most useful thing this panel produced.
+
+**MEASURED** by both seats, escaping all 100 rows:
+
+```
+  pristine:   ok   an SRST purges an orphan ring   live 16 occ 0
+  disj2:    FAIL   an SRST purges an orphan ring   live 16 occ 16   (drq 1 vs 0)
+```
+
+#### *** THE TWO SEATS RANK THE REMAINDER DIFFERENTLY, AND BOTH ARE RIGHT ON THEIR OWN AXIS ***
+
+| seat | ranks first | argument |
+|---|---|---|
+| **opus** | the **orphan-ring** row (kills `disj2` + two more) | it is the edit *a maintainer is most likely to write*, and the round's own rows invite it |
+| **fable** | **`&& !d->lba`** | it defeats the abort on **every LBA-mode driver** -- essentially all modern ATA writes -- which is broader than the non-LBA path `#482` closed |
+
+**That is LIKELIHOOD versus BLAST RADIUS, and neither is wrong.** Recorded as a real tension
+rather than averaged into a single number, because the next round has to pick one and should
+know it is choosing between two defensible axes.
+
+*My reading, offered as a reading and not a ruling:* take the orphan-ring row first. `disj2`
+is the edit that gets written; `&& !d->lba` is bizarre enough that nobody writes it by
+accident. But `!d->lba` has the larger consequence if it ever lands, and `altctl_fresh()`
+pins `lba = 0`, so closing it needs a new fixture variant -- a legitimate scope boundary and
+a reason it was correctly filed rather than closed here.
+
+#### Still open after `#482`, with the escapes measured
+
+* **abort gating** -- `disj2` (both seats), `wipocc` / `M5_wip_or_ring` (both seats).
+  **The ring-alone disagreement cell is the uncovered one.**
+* **state qualifiers** -- `&& !d->lba` (fable, measured: `wip 0x30 occ 16` survives),
+  `d->drive == 0`, `d->head == 0`, `d->seccnt == 0`. **Four of these are guards on fields
+  `altctl_fresh()` PINS, and are unkillable by any row in the file by construction.**
+* **free mask bits** -- `0x40` escapes (fable's `hob6`); the `0x88` row pins bit 7 only.
+  **Opus's proposed 256-value sweep -- *the reset latches IFF bit 2 is set* -- replaces the
+  single-value pin, closes every mask widening, and REMOVES THE APPEAL TO ATA KNOWLEDGE THIS
+  TREE DOES NOT HOLD.** Best value of the four proposed rows.
+
+#### The pre-table-check question, resolved
+
+Fable had left open whether the guard-field/body-field disagreement row was OWED AT
+CONSTRUCTION or filable. **Its own answer, now that the rows exist: "owed, and now
+delivered."** But the matrix is not saturated -- the ring-alone cell remains, and `disj2`
+exploits exactly it. File ring-alone as the immediate companion.

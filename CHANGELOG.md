@@ -1,3 +1,89 @@
+## Round 482 (#482) -- the abort row could not say which state gated the abort
+
+A **harness round**: zero product code changed, `git diff --name-only src/` empty.
+
+`#481`'s sole-carrier abort row armed `write_in_progress`, `atapi_cmd_in_progress`, the phase
+**and** the ring simultaneously, then asserted all four were cleared. Both flagship seats
+independently measured the consequence: **any single-conjunct qualification of the helper
+call still passed it.** The worst leaves SRST no longer aborting a plain ATA write -- the
+majority reset path.
+
+The repair is not a better assertion. It is **four rows that arm one tenant each.**
+
+| mutant | reds | carried by |
+|---|---|---|
+| `Mo_abt_atapi` | 2 | ATA-write-alone; empty-ring |
+| `Mo_abt_wip` | 1 | packet-alone — **SOLE** |
+| `Mo_abt_ring` | 1 | empty-ring — **SOLE** |
+| `Mo_hob` | 1 | `0x88` control write — **SOLE** |
+| `Mb_revert` | 9 | clause (b) control |
+
+Baseline 100 rows / 0 failures; gate **PASS (318 checks)**. Fable supplied the stronger
+correctness proof: **all four mutants pass the committed 96-row detector and fail the
+100-row one**, so the new rows are the sole carriers of every kill.
+
+### The reason `#481`'s row was weak is the opposite of the intuition
+
+> **A row that arms more state is WEAKER against guard over-restriction, not stronger.**
+> More state satisfies more guards, so a composite row is maximally satisfying and minimally
+> discriminating.
+
+Measured twice, and **both went against my own reasoning**: `Md_nohelper` now reds four rows,
+so the composite row is no longer sole; and `Mo_conj` (abort only when both tenants are live)
+reds the three isolated rows and **not** the composite one -- because it arms both, satisfies
+the conjunction, and the abort runs.
+
+The row is **kept**: two shapes is not proof of general redundancy, the addition licence has
+a mirror, and it remains the only row asserting all four clears happen together. Both
+measurements are preserved so a future round starts from evidence.
+
+A sibling audit found this class has **exactly one member** in the file, and it is the one
+repaired here. The discriminator, cheap enough to apply at construction: *does this row
+assert something HAPPENED, and did I arm more than the minimum needed to make it happen?*
+
+### The panel ratified, then built the same escape twice
+
+Opus's `M1_disj` and Fable's `disj2` are the same edit, reached independently:
+`if (d->write_in_progress || d->atapi_cmd_in_progress)`.
+
+**It is precisely the repair a maintainer writes after reading these four rows**, and it
+defeats all four. The state that kills it -- ring non-empty, both flags clear -- has no row,
+and is guest-reachable: the `#464` tenant test gates only the one-shot diagnostic while the
+`wdc_addtoinbuf()` calls sit outside it and push unconditionally.
+
+> **A row set can be individually correct and collectively misleading.** Each of the four is
+> right; together they teach the wrong property. Nothing in the vacuity floor catches that,
+> and it is the most useful thing this panel produced.
+
+Filed as `wdcaltctrlcov` with the escape list. **The two seats rank the remainder
+differently** -- opus by likelihood (the orphan-ring row, since that is the edit that gets
+written), fable by blast radius (`&& !d->lba`, which defeats the abort on every LBA-mode
+driver). Both are recorded rather than averaged.
+
+### Two L-corrections from the panel
+
+* **L4 -- the witness kind is `harness:`, not a reproduction.** I wrote *"the reproduction is
+  the kill table"*. There was never a live defect; the defect was in the apparatus, and the
+  carrier's ladder has the term for exactly that. Both flagship seats named it. *I had
+  written about that term earlier the same day, in the correction that added it to the
+  carrier's prose, and did not reach for it here.*
+* **L1 -- `row_srst_aborts_pkt_only` armed `atapi_phase` and never asserted on it**: this
+  round's own discipline, broken inside the round that exists to enforce it. **My own sibling
+  audit flagged that row and I dismissed it as a heuristic false positive.** The heuristic was
+  right and my reading of it was wrong.
+
+### The generator was destroyed mid-round
+
+`mut482.py` was overwritten when a seat wrote its own file to the same path in the shared
+scratchpad. Rebuilt as `mut482_RECONSTRUCTED.py` -- the filename carries the fact -- and
+**verified rather than asserted**: re-running it reproduces the table exactly.
+
+> What was lost is not a number but the ability to **re-run** the table from its own driver.
+> That is the second time this session an artifact's value survived while its
+> re-derivability did not. Both have one cause: **a name reused by something that did not
+> know it was taken** -- once by my own script, once by another agent.
+
+
 ## Round 481 (#481) -- the reset bit was the head-count bit
 
 `dev_wdc.c`'s Device Control write arm was four lines:

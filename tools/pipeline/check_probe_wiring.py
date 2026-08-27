@@ -222,6 +222,10 @@ MANIFEST = {
         (CLASS_RESEARCH, "#480 call-site row generator, preserved as evidence"),
     "artifacts/wdcaltctrl/killtable_20260827/mkaltctrl.py":
         (CLASS_RESEARCH, "#481 ALT-CTRL reproduction generator, preserved as evidence"),
+    "artifacts/wdcaltctrlcov/killtable_20260827/mk482.py":
+        (CLASS_RESEARCH, "#482 tenant-isolation row generator, preserved as evidence"),
+    "artifacts/wdcaltctrlcov/killtable_20260827/mut482_RECONSTRUCTED.py":
+        (CLASS_RESEARCH, "#482 mutant applier, RECONSTRUCTED after a seat overwrote the original in the shared scratchpad; verified to reproduce the recorded table"),
     "artifacts/wdcaltctrl/killtable_20260827/fixaltctrl.py":
         (CLASS_RESEARCH, "#481 fix applier (A1+B4+C1), preserved as evidence"),
     "artifacts/wdcaltctrl/killtable_20260827/fixwarrant481.py":

@@ -1479,6 +1479,29 @@ else
               "$(grep -c 'an unreset CD-ROM does not sign' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the libata-SRST-form row is present" \
               "$(grep -c 'the libata SRST form signs too' "$WDCLOG")" "1"
+
+    #  #482: THE TENANT-ISOLATION ROWS.  #481's abort row armed the writer, the ATAPI
+    #  flag, the phase AND the ring together, so it could not say WHICH of them the
+    #  guard reads -- and any single-conjunct qualification of the helper call passed
+    #  it.  Each row below arms exactly ONE tenant, and each is a sole or near-sole
+    #  carrier:
+    #    ATA-write-alone   kills the atapi_cmd_in_progress qualification -- SRST
+    #                      otherwise stops aborting a plain ATA write, THE MAJORITY PATH
+    #    packet-alone      kills the write_in_progress qualification            SOLE
+    #    empty-ring        kills the occupancy qualification                    SOLE
+    #    0x88              kills the mask widened with bit 7                    SOLE
+    #
+    #  The empty-ring row was MISSED BY THE FIRST DRAFT and found by running the table:
+    #  both other rows stage bytes, so an occupancy-gated guard walked past them.  That
+    #  is this round's own defect one level down, and it is why the row exists.
+    check     "wdc IDENTIFY: the ATA-write-alone row is present" \
+              "$(grep -c 'an SRST aborts an ATA write alone' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the packet-alone row is present" \
+              "$(grep -c 'an SRST aborts a packet alone' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the empty-ring row is present" \
+              "$(grep -c 'an SRST clears a writer with no bytes' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the 0x88-control row is present" \
+              "$(grep -c 'a 0x88 control write is not a reset' "$WDCLOG")" "1"
     #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
     #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
     #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first

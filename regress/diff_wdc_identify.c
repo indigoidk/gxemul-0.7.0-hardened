@@ -4303,6 +4303,225 @@ static void row_srst_signature(void)
 }
 
 
+/*  #482: ONE TENANT EACH, because a row that arms them all cannot say which one
+ *  the guard reads.
+ *
+ *  #481's abort row sets write_in_progress, atapi_cmd_in_progress, the phase and
+ *  the ring together and asserts all four are cleared.  Both flagship seats
+ *  measured the same hole independently: putting ANY ONE of those fields in front
+ *  of the helper call still passes it.  The worst is the first -- a plain ATA
+ *  write is the majority reset path, and `if (d->atapi_cmd_in_progress)` leaves
+ *  its writer and 16 staged bytes alive across the reset.
+ *
+ *  These rows are ACCEPT-SIDE: green on the committed build, which aborts
+ *  correctly, and red under the qualifying mutants.
+ *
+ *  *** THE WITNESS KIND IS `harness:`, NOT A REPRODUCTION.  An earlier version of
+ *  this comment said "the reproduction is the kill table".  There was never a live
+ *  defect to reproduce -- the defect was in the APPARATUS, and the carrier's ladder
+ *  has a term for exactly that: `harness:` is valid when the round's subject is the
+ *  test apparatus, proven normally by a MUTATION.  Both flagship seats named this
+ *  independently.  "Reproduction" invites a reader to think a device misbehaviour
+ *  was observed, and none was. ***
+ *
+ *  The proof has the same shape test-first always has, applied one level up: the
+ *  mutants ESCAPE the 96-row form and DIE on the 100-row form, while the product
+ *  stays green through both.  The rows change the MUTANT's colour, not the
+ *  PRODUCT's -- which is the discriminator separating this from fitting a test to a
+ *  green binary.
+ */
+static void row_srst_aborts_ata_only(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP ata_only\n");
+		return;
+	}
+
+	/*  ONLY an ATA write is in flight.  No packet, no phase, and the ring
+	    holds a partial sector -- the commonest thing a guest resets out of.  */
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count = 1;
+	for (i = 0; i < 16; i++)
+		wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.write_in_progress != 0 || occ != 0) {
+		printf("  FAIL %-38s wip 0x%x occ %i\n",
+		    "an SRST aborts an ATA write alone",
+		    d.write_in_progress, occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "an SRST aborts an ATA write alone", occ);
+	}
+	altctl_free(&d);
+}
+
+
+static void row_srst_aborts_pkt_only(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP pkt_only\n");
+		return;
+	}
+
+	/*  ONLY a packet is in flight -- no ATA writer at all.  The mirror of the
+	    row above, and it is the one `if (d->write_in_progress)` walks past.  */
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 12; i++)
+		wdc_addtoinbuf(&d, 0x28);
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	/*  THE PHASE IS ASSERTED BECAUSE IT IS ARMED.  An earlier version set
+	    atapi_phase = PHASE_CMDOUT and never checked it -- THIS ROUND'S OWN
+	    "arm only what you assert" discipline, broken inside the round that
+	    exists to enforce it.  Named by the opus seat; my own sibling audit
+	    had flagged this row and I dismissed it as a heuristic false
+	    positive.  The heuristic was right and my reading of it was wrong.  */
+	if (d.atapi_cmd_in_progress != 0 || d.atapi_phase != 0 || occ != 0) {
+		printf("  FAIL %-38s flag %i phase %i occ %i\n",
+		    "an SRST aborts a packet alone",
+		    d.atapi_cmd_in_progress, d.atapi_phase, occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "an SRST aborts a packet alone", occ);
+	}
+	altctl_free(&d);
+}
+
+
+/*  #482: THE THIRD TENANT IS THE RING ITSELF, and the first draft of this round
+ *  missed it -- measured, not noticed.
+ *
+ *  The two rows above isolate the ATA writer and the packet flag, and they kill
+ *  the two mutants that gate the abort on those.  A THIRD mutant gates it on ring
+ *  OCCUPANCY -- and both rows above STAGE BYTES, so a non-empty ring satisfies it
+ *  and the mutant walked past them.
+ *
+ *  *** THAT IS THE SAME DEFECT THIS ROUND EXISTS TO FIX, ONE LEVEL DOWN: a row set
+ *  more state than the property needed, and so could not tell which piece the
+ *  guard read.  It was caught by running the table rather than by inspection. ***
+ *
+ *  An ARMED WRITER WITH AN EMPTY RING is a real state -- a guest issues WRITE and
+ *  resets before streaming a single byte -- and it is the only shape that pins
+ *  "the reset clears the writer even when there is nothing to purge".
+ */
+static void row_srst_aborts_empty_ring(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP empty_ring\n");
+		return;
+	}
+
+	/*  Armed, and NOTHING staged.  */
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count = 1;
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (d.write_in_progress != 0) {
+		printf("  FAIL %-38s wip 0x%x\n",
+		    "an SRST clears a writer with no bytes",
+		    d.write_in_progress);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x\n",
+		    "an SRST clears a writer with no bytes",
+		    d.write_in_progress);
+	}
+	altctl_free(&d);
+}
+
+
+/*  #482: THE MASK'S FREE BITS.  The predicate must contain bit 2 and exclude bits
+ *  1 and 3; bits 0, 4, 5, 6 and 7 are unconstrained by every row in this file,
+ *  because the whole control vocabulary here is {0x02, 0x06, 0x08, 0x0a, 0x0c}.
+ *
+ *  0x80 is the one with a real driver behind it, and a seat MEASURED `0x88`
+ *  latching a reset and destroying cur_command while escaping all 96 rows.
+ *
+ *  *** THIS ROW PINS THE MODEL, NOT A SPECIFICATION.  The identification of 0x80
+ *  as an HOB-style control bit is READ from general ATA knowledge and THERE IS NO
+ *  ATA DOCUMENT IN THIS TREE -- fifteen PDFs and not one of them covers it.  What
+ *  is measured is that a control byte carrying bit 7 must not be a reset, which
+ *  follows from the bit the round chose regardless of what 0x80 means. ***
+ */
+static void row_hob_is_not_a_reset(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ, before;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP hob\n");
+		return;
+	}
+
+	d.cur_command = WDCC_IDENTIFY;
+	before = d.cur_command;
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count = 1;
+	for (i = 0; i < 40; i++)
+		wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 0x80 | WDCTL_4BIT;			/*  0x88  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.cur_command != before || d.write_in_progress == 0 || occ != 40) {
+		printf("  FAIL %-38s 0x%x->0x%x wip 0x%x occ %i\n",
+		    "a 0x88 control write is not a reset",
+		    before, d.cur_command, d.write_in_progress, occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x occ %i\n",
+		    "a 0x88 control write is not a reset", d.cur_command, occ);
+	}
+	altctl_free(&d);
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -4649,6 +4868,10 @@ int main(void)
 	row_nien_is_not_a_reset();
 	row_srst_aborts();
 	row_srst_signature();
+	row_srst_aborts_ata_only();
+	row_srst_aborts_pkt_only();
+	row_srst_aborts_empty_ring();
+	row_hob_is_not_a_reset();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -4672,8 +4895,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 96) {
-		printf("  FAIL %-38s rows = %i, want 96\n",
+	if (rows != 100) {
+		printf("  FAIL %-38s rows = %i, want 100\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {
