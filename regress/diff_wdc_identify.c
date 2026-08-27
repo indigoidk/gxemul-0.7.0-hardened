@@ -300,6 +300,7 @@ void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len, uint64_t da
  *  fabricate exactly one DATA-IN transfer of that size.  */
 static int stub_datain_len = 0;
 static int stub_frees = 0;
+static int stub_scsi_cmds = 0;	/*  #477: dispatches ATTEMPTED  */
 static int stub_disk_writes = 0, stub_disk_bytes = 0;
 static long stub_disk_offset = 0;
 
@@ -321,6 +322,10 @@ int diskimage_scsicommand(struct cpu *cpu, int id, int type,
 	size_t i;
 
 	(void) cpu; (void) id; (void) type;
+
+	/*  counted BEFORE the inert early-out, so it records the DISPATCH
+	    regardless of whether this stub fabricates a transfer.  */
+	stub_scsi_cmds ++;
 
 	if (stub_datain_len <= 0)
 		return 0;
@@ -1512,6 +1517,454 @@ static void row_null_atapi_st(void)
 }
 
 
+/*
+ *  `wdccdbmidxfer`: a mid-DATAIN data-port WRITE can FREE THE IN-FLIGHT TRANSFER.
+ *
+ *  The packet dispatch fires on ring occupancy == 12, gated only by
+ *  `atapi_cmd_in_progress` -- which stays 1 for the whole of DATAIN.  The data-port WRITE
+ *  arm pushes guest bytes with NO PHASE CHECK, so a guest that writes twelve bytes while a
+ *  DATAIN transfer is live drives occupancy to exactly 12 and re-enters the dispatch:
+ *
+ *        if (d->atapi_st != NULL)
+ *                scsi_transfer_free(d->atapi_st);     <- the LIVE transfer
+ *        d->atapi_st = scsi_transfer_alloc();
+ *
+ *  *** AN EARLIER VERSION OF THIS COMMENT CALLED THAT A USE-AFTER-FREE.  A PANEL SEAT
+ *  READ IT FALSE AND IT IS RIGHT. ***  After the free the code allocates a replacement
+ *  and then RESETS `atapi_len = 0` and `atapi_received = 0` on both exits -- the reject
+ *  path and the normal one.  The cursor is re-based onto the NEW transfer inside the
+ *  same access, so no later read dangles through `data_in[atapi_received]`.
+ *
+ *  *A hazard inferred from a free site is a hypothesis about what happens NEXT, and what
+ *  happens next has to be read separately.  The reset is nine lines below the free.*
+ *
+ *  WHAT THE DEFECT ACTUALLY IS, and it is still worth fixing:
+ *    (1) the in-flight transfer is DESTROYED -- the guest's read stream is silently
+ *        aborted mid-delivery, with no error reported to it;
+ *    (2) a SPURIOUS SCSI COMMAND is executed against the disk image, and its opcode is
+ *        `scsi_cmd[0]` -- a leftover DATAIN PAYLOAD byte.  What command runs is
+ *        influenced by data the guest chose to have read back to it.
+ *
+ *  That is an integrity and spurious-command defect, NOT a host memory-safety
+ *  primitive.  Ranked accordingly.
+ *
+ *  THE ORACLE IS A FREE COUNT, not a sanitiser, so the row works in an ordinary build:
+ *  a mid-DATAIN write must not free the transfer the guest is still reading.
+ *
+ *  NOT A #475 DEFECT and not introduced by any round here -- the dispatch has always been
+ *  phase-blind.  Filed from reading, then measured.
+ */
+static void row_cdb_midxfer(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i, freed_during;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) { printf("  SETUP midxfer inbuf failed\n"); return; }
+
+	/*  arm a real DATAIN transfer through the packet path, as row_arm_overrun does  */
+	/*  #477 pass 2: the real device sets cur_command with the flag and the
+	    phase (`cur_command = idata`, then the ATAPI_PKT_CMD arm).  Without
+	    it a mutant conjoining `cur_command == ATAPI_PKT_CMD` kills this row
+	    by removing LEGAL dispatch -- a false-path kill.  */
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	/*  SETUP RE-PIN, and it is INERT on the committed build: the real
+	    device sets BOTH flags together when the packet command
+	    arrives, so a fixture setting only atapi_cmd_in_progress
+	    builds a state the device never produces.  A candidate fix
+	    that keys on the PHASE would then fail here for the fixture's
+	    reason rather than its own.  */
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 10; i++)
+		wdc_addtoinbuf(&d, 0x00);
+	stub_datain_len = 10;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	stub_datain_len = 0;
+
+	/*  the guest has drained nothing; the transfer is LIVE and data_in is in use  */
+	stub_frees = 0;
+
+	/*  *** THE ARITHMETIC THAT MAKES THIS REACHABLE, and my first fixture had
+	    it wrong. ***  During DATAIN the ring holds exactly `atapi_len` bytes,
+	    so occupancy == 12 means TEN UNDRAINED plus a two-byte write.  The
+	    first attempt armed 4096 bytes, so occupancy went 4096 -> 4108 and the
+	    `== 12` equality could never fire: the row was GREEN and the defect was
+	    simply not reached.
+
+	    A ten-byte transfer is the smallest live state that reaches it, and it
+	    is an ordinary one -- any DATAIN with ten bytes still queued.  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	freed_during = stub_frees;
+
+	rows ++;
+	if (freed_during != 0) {
+		printf("  FAIL %-38s freed %i live transfer(s)\n",
+		    "a mid-DATAIN write frees nothing", freed_during);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a mid-DATAIN write frees nothing", freed_during);
+	}
+
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+/*  OCCUPANCY ALREADY 12 -- the row that would have caught the fix I preferred.
+ *
+ *  A panel seat argued (REASONED) that guarding only the PUSH is not enough, because the
+ *  dispatch runs whether or not a push happened.  Arm a DATAIN whose queued occupancy is
+ *  ALREADY 12 -- a 12-byte INQUIRY response, or a larger chunk read down to twelve -- and
+ *  any data-port write reaches the dispatch with occupancy still 12.
+ *
+ *  The row above tests TEN QUEUED PLUS A TWO-BYTE WRITE, so a push-only guard would have
+ *  scored it GREEN while this case still freed the live transfer.  This row exists to make
+ *  that difference visible, and it converts the seat's reasoning into a measurement.
+ */
+static void row_cdb_already12(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) { printf("  SETUP already12 inbuf failed\n"); return; }
+
+	/*  arm a TWELVE-byte transfer: occupancy is then exactly 12 with nothing drained  */
+	/*  #477 pass 2: the real device sets cur_command with the flag and the
+	    phase (`cur_command = idata`, then the ATAPI_PKT_CMD arm).  Without
+	    it a mutant conjoining `cur_command == ATAPI_PKT_CMD` kills this row
+	    by removing LEGAL dispatch -- a false-path kill.  */
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	/*  SETUP RE-PIN, and it is INERT on the committed build: the real
+	    device sets BOTH flags together when the packet command
+	    arrives, so a fixture setting only atapi_cmd_in_progress
+	    builds a state the device never produces.  A candidate fix
+	    that keys on the PHASE would then fail here for the fixture's
+	    reason rather than its own.  */
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 10; i++)
+		wdc_addtoinbuf(&d, 0x00);
+	stub_datain_len = 12;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	stub_datain_len = 0;
+
+	stub_frees = 0;
+
+	/*  a ONE-byte write: the push is what a phase guard on the push arm would stop,
+	    and it is NOT what makes this reachable -- occupancy was 12 beforehand.  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_frees != 0) {
+		printf("  FAIL %-38s freed %i at occupancy 12\n",
+		    "a write at occupancy 12 frees nothing", stub_frees);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a write at occupancy 12 frees nothing", stub_frees);
+	}
+
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+/*  THE THREE ROWS THE BRIEF DID NOT HAVE, each named by a measuring seat and each the
+ *  SOLE carrier of a one-token escape past a DATAIN-only detector.
+ *
+ *    no-push    a len-3 write pushes ZERO bytes -- the width switch's `default:` arm only
+ *               latches -- and control falls straight through to the dispatch.  This is
+ *               the row that proves the defect is NOT "writes push foreign bytes"; the
+ *               dispatch runs on every data-port write regardless of what the write did.
+ *    DATAOUT    twelve DATA-OUT payload bytes are read as a CDB.
+ *    COMPLETED  the flag is never cleared at completion, so twelve bytes AFTER a finished
+ *               command still free the completed transfer and issue a garbage command.
+ *
+ *  A guard written `atapi_phase != PHASE_DATAIN` passes every DATAIN row and leaves all
+ *  three of these open.  A seat measured exactly that mutant sweeping the earlier table.
+ */
+static void midxfer_case(const char *name, int phase, int prefill,
+	int alen, int wlen)
+{
+	struct wdc_data d;
+	struct scsi_transfer *st;
+	unsigned char buf[8], *payload;
+	int i;
+
+	/*  *** THE TRANSFER MUST BE HEAP-ALLOCATED, and the first version of this
+	    fixture put it on the STACK. ***  On the unfixed build the dispatch calls
+	    scsi_transfer_free() on it -- so a stack object gave
+	    `double free or corruption (out)` and the run ABORTED partway, losing
+	    every row after it.  A measuring seat hit the identical flaw in its own
+	    first fixture.
+
+	    An abort is not a FAIL: the rows that never ran print nothing at all, and
+	    the verdict line is missing rather than red.  */
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	payload = (unsigned char *) calloc(1, 64);
+	if (d.inbuf == NULL || payload == NULL) {
+		printf("  SETUP %s alloc failed\n", name);
+		free(d.inbuf); free(payload); return;
+	}
+	st = (struct scsi_transfer *) calloc(1, sizeof(*st));
+	if (st == NULL) { free(d.inbuf); free(payload);
+		printf("  SETUP %s xfer alloc failed@", name); return; }
+	st->data_in = payload;  st->data_in_len = 64;
+
+	/*  a live transfer, in the phase under test, with `prefill` bytes queued  */
+	d.atapi_st = st;
+	/*  #477 pass 2, codex: THE REAL DEVICE SETS ALL THREE TOGETHER.
+	    `cur_command = idata` then the ATAPI_PKT_CMD arm sets the flag AND
+	    the phase, so a fixture setting only two builds a state the device
+	    never produces -- and a mutant adding `cur_command == ATAPI_PKT_CMD`
+	    then dies because LEGAL DISPATCH vanishes, not because of the defect.
+	    That is a FALSE-PATH KILL: the table scores it caught and it proves
+	    nothing.  (Inert on the committed build: the only other reads compare
+	    against COMMAND_RESET = 0x100, which 0xa0 is not.)  */
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = phase;
+	/*  `alen` is DECOUPLED from `prefill`: prefill is what the RING holds,
+	    alen is the transfer's remaining count.  They coincide in DATAIN and
+	    must NOT in COMPLETED -- see the caller.  */
+	d.atapi_len = alen;
+	d.atapi_received = 0;
+	for (i = 0; i < prefill; i++)
+		wdc_addtoinbuf(&d, 0x5a);
+
+	stub_frees = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, wlen, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_frees != 0) {
+		printf("  FAIL %-38s freed %i\n", name, stub_frees);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", name, stub_frees);
+	}
+	/*  the dispatch may have freed and replaced it; free whatever is there now  */
+	if (d.atapi_st != NULL && d.atapi_st != st) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	} else if (d.atapi_st == st) {
+		free(st);
+	}
+	free(payload);
+	free(d.inbuf);
+}
+
+static void row_midxfer_phases(void)
+{
+	/*  occupancy 12 already, then a len-3 write that pushes NOTHING  */
+	midxfer_case("no-push write does not dispatch", PHASE_DATAIN, 12, 12, 3);
+	/*  ten queued plus a two-byte write, in the two phases DATAIN rows miss  */
+	midxfer_case("a DATAOUT write does not dispatch", PHASE_DATAOUT, 10, 10, 2);
+	/*  *** THE COMPLETED FIXTURE USED TO SET atapi_len = 10, WHICH THE DEVICE
+	    CANNOT PRODUCE.  Found by the codex seat on #477 pass 2. ***
+
+	    EVERY real transition to PHASE_COMPLETED leaves atapi_len == 0: the
+	    reject path assigns zero explicitly, the ordinary path assigns zero
+	    before selecting its phase, and terminal DATAIN only completes once
+	    the count has reached zero.  So a guard widened by `|| atapi_len == 0`
+	    passed this row for the FIXTURE's reason and swept the table, while a
+	    real completed command plus twelve guest DATA writes still re-enters
+	    dispatch and frees the completed transfer.
+
+	    Ten bytes still sit in the RING (so the 2-byte write reaches occupancy
+	    12 and the dispatch is genuinely attempted); only the COUNT is zero.
+	    That is the state a real device is in, and it is the row codex named
+	    `row_completed_zero_len`.  */
+	midxfer_case("a COMPLETED write does not dispatch", PHASE_COMPLETED, 10, 0, 2);
+}
+
+
+/*  #477 pass 2 -- THE ACCEPT SIDE, WHICH THE SHIPPED TABLE DID NOT HAVE.
+ *
+ *  Two seats found this independently: NO row proved a legal CDB actually
+ *  DISPATCHES.  `row_cdb_already12` asserts nothing is FREED, which is a reject
+ *  assertion -- so a fix that suppressed every dispatch would have passed the
+ *  whole table.  The de-escalation clause calls these rows part of the FIX'S
+ *  COST, not future strengthening.
+ *
+ *  The stale state is the point.  ATAPI_PKT_CMD assigns only the flag and the
+ *  phase, so after a PRIOR COMPLETED command a new packet begins with
+ *  atapi_len == 0, atapi_received == data_in_len and atapi_st STALE NON-NULL.
+ *  Every fixture in this file is memset-fresh and none crosses a command
+ *  boundary, so that entire dimension was invisible.
+ */
+static void pkt_cdb_case(const char *name, int stray_read)
+{
+	struct wdc_data d;
+	struct scsi_transfer *st;
+	unsigned char buf[4], *payload;
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	payload = (unsigned char *) calloc(1, 64);
+	st = (struct scsi_transfer *) calloc(1, sizeof(*st));
+	if (d.inbuf == NULL || payload == NULL || st == NULL) {
+		printf("  SETUP %s alloc failed\n", name);
+		free(d.inbuf); free(payload); free(st); return;
+	}
+	st->data_in = payload;  st->data_in_len = 64;
+
+	/*  a PRIOR COMPLETED command: fully received, count exhausted, transfer
+	    still hanging off the device (it is freed at the NEXT dispatch and
+	    never NULLed).  */
+	d.atapi_st = st;
+	d.atapi_received = 64;
+	d.atapi_len = 0;
+
+	/*  then A0h arrives -- it assigns EXACTLY these three and resets nothing.  */
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+
+	if (stray_read) {
+		/*  ONE out-of-protocol data-port read in the CDB window.  Without the
+		    #477 read-arm guard this rewrites the phase to PHASE_COMPLETED.  */
+		memset(buf, 0, sizeof(buf));
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+	}
+
+	stub_scsi_cmds = 0;
+	/*  a legal twelve-byte CDB: six 16-bit writes from an empty ring.  */
+	for (i = 0; i < 6; i++) {
+		memset(buf, 0, sizeof(buf));
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	if (stub_scsi_cmds != 1) {
+		printf("  FAIL %-38s dispatched %i, want 1\n",
+			name, stub_scsi_cmds);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", name, stub_scsi_cmds);
+	}
+
+	if (d.atapi_st != NULL && d.atapi_st != st) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	} else if (d.atapi_st == st) {
+		free(st);
+	}
+	free(payload);
+	free(d.inbuf);
+}
+
+static void row_pkt_cdb_accept(void)
+{
+	/*  CONTROL first: the same fixture with no stray read MUST dispatch, so a
+	    red below is attributable to the read and not to the fixture.  */
+	pkt_cdb_case("completed, PKT then CDB dispatches", 0);
+	/*  THE SOLE CARRIER of the #477 read-arm guard.  MEASURED by the Fable seat:
+	    HEAD services this sequence; the phase guard alone wedges it FOREVER,
+	    because the 12-byte residue means occupancy can never EQUAL 12 again.  */
+	pkt_cdb_case("a stray read does not wedge the CDB", 1);
+}
+
+/*  #477 pass 2 -- THE ROW THAT PINS THE `malloc(12)` BOUND.
+ *
+ *  The kill table's `M7_ge12` mutant (`inbuf_len == 12` relaxed to `>= 12`) swept
+ *  44 rows clean, and the table's first draft classified it as an IMPROVEMENT --
+ *  dispatching on an overshoot beating never dispatching.  The Opus seat measured
+ *  it under ASAN instead and got a heap-buffer-overflow WRITE, because nine lines
+ *  below the guard:
+ *
+ *      CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
+ *      while (inbuf_len > 0) { scsi_cmd[x++] = wdc_get_inbuf(d); inbuf_len--; }
+ *
+ *  `x` is unbounded.  The equality is not only selecting the dispatch -- it is the
+ *  ONLY thing bounding that copy.  Four readers reasoned about it as a dispatch
+ *  predicate and none opened the tail it protects.
+ *
+ *  This row reds on `>= 12` WITHOUT needing a sanitiser: the oracle is the dispatch
+ *  count, so an ordinary build catches it.  Reaching occupancy 13 without passing
+ *  THROUGH 12 is the whole trick -- preload an odd count, then write one byte.
+ */
+static void row_cdb_overshoot(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) { printf("  SETUP overshoot inbuf failed\n"); return; }
+
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+
+	/*  THIRTEEN queued, so the one-byte write below lands on 14 and the ring
+	    never passes through 12.  A fixture that wrote its way up two bytes at
+	    a time would dispatch at 12 and never reach the overshoot at all.  */
+	for (i = 0; i < 13; i++)
+		wdc_addtoinbuf(&d, 0x5a);
+
+	stub_scsi_cmds = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_scsi_cmds != 0) {
+		printf("  FAIL %-38s dispatched %i at occupancy 14\n",
+			"occupancy above 12 does not dispatch", stub_scsi_cmds);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+			"occupancy above 12 does not dispatch", stub_scsi_cmds);
+	}
+
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -1530,7 +1983,18 @@ static void row_arm_overrun(void)
 	    ten are queued here and the 2-byte write below completes the packet.
 	    Queueing twelve gives 14 and the command silently never fires, which
 	    is what the first version of this row measured.  */
+	/*  #477 pass 2: cur_command too -- the arm below issues a REAL packet
+	    command, so without it a `cur_command` conjunct blocks the arm and
+	    reds these rows for the fixture's reason.  */
+	d.cur_command = ATAPI_PKT_CMD;
 	d.atapi_cmd_in_progress = 1;
+	/*  SETUP RE-PIN, and it is INERT on the committed build: the real
+	    device sets BOTH flags together when the packet command
+	    arrives, so a fixture setting only atapi_cmd_in_progress
+	    builds a state the device never produces.  A candidate fix
+	    that keys on the PHASE would then fail here for the fixture's
+	    reason rather than its own.  */
+	d.atapi_phase = PHASE_CMDOUT;
 	for (i = 0; i < 10; i++)
 		wdc_addtoinbuf(&d, 0x00);
 
@@ -1815,6 +2279,11 @@ int main(void)
 	row_identity();
 	row_arm_overrun();
 	row_null_atapi_st();
+	row_cdb_midxfer();
+	row_cdb_already12();
+	row_midxfer_phases();
+	row_pkt_cdb_accept();
+	row_cdb_overshoot();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -1838,8 +2307,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 37) {
-		printf("  FAIL %-38s rows = %i, want 37\n",
+	if (rows != 45) {
+		printf("  FAIL %-38s rows = %i, want 45\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

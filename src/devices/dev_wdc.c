@@ -792,12 +792,12 @@ DEVICE_ACCESS(wdc)
 				    0 leaves atapi_len AT 0, the test fires, and two guest register
 				    accesses from a fresh device -- write ATAPI_PKT_CMD to COMMAND, then
 				    read DATA -- reach `d->atapi_st->data_in_len` through NULL.
-				
+
 				    MEASURED: SIGSEGV at address 0x48, which is
 				    offsetof(struct scsi_transfer, data_in_len).  The pre-#475 blob
 				    survives the identical input, and the row for the defect #475 FIXED
 				    goes the OTHER way on the same pair -- so the bisect is unambiguous.
-				
+
 				    The clamp was right; the branch it woke was never NULL-safe.  Decline
 				    and say so once, per this file's latch idiom: a device that cannot
 				    service an access must not take the emulator with it (#337, #184,
@@ -808,7 +808,38 @@ DEVICE_ACCESS(wdc)
 						fatal("[ wdc: DATA read with no ATAPI "
 						    "transfer armed (once) ]\n");
 					}
-				} else if (d->atapi_len == 0) {
+				} else if (d->atapi_len == 0 &&
+				    d->atapi_phase != PHASE_CMDOUT) {
+					/*  #477: A STRAY DATA-PORT READ MUST NOT REWRITE THE PHASE WHILE A
+					    CDB IS BEING COLLECTED.  Measured by the Fable seat as a
+					    REGRESSION of the dispatch phase guard below: HEAD services
+					    `PKT, stray read, CDB` after a prior completed command, and
+					    without this arm's phase test the CDB never dispatches at all.
+
+					    The ATAPI_PKT_CMD arm of wdc_command() assigns only the flag and
+					    the phase, so a new packet starts with atapi_len == 0,
+					    atapi_received == data_in_len and atapi_st STALE NON-NULL (it is
+					    freed at the next dispatch and never NULLed).  A read then falls
+					    here, finds `received < data_in_len` false, and sets
+					    PHASE_COMPLETED -- moving the phase off CMDOUT before the CDB is
+					    complete.
+
+					    *** AND THE RESIDUE THAT MAKES IT UNRECOVERABLE IS A PROPERTY OF
+					    THE DEVICE, NOT OF THIS REGRESSION -- an earlier draft of this
+					    comment said otherwise, and the Opus seat MEASURED the
+					    difference. ***  ATAPI_PKT_CMD never flushes the ring, and
+					    neither reset path does either, so an under-drained DATA-IN
+					    leaves occupancy at 32 -> 44 -> 56 -> 68 and every later CDB is
+					    dropped forever.  That entrance is open with no stray read at
+					    all; it is filed as `wdcringnoflush`, and dev_asc.c's
+					    dev_asc_fifo_flush() is the in-tree idiom for closing it.
+
+					    In CMDOUT the atapi_len/atapi_received pair describes the
+					    PREVIOUS transfer, so no completion state may be derived from it
+					    -- the same statement the dispatch guard below makes about the
+					    flag, applied to the read arm.  Falling through BOTH arms is the
+					    correct disposition: the read pops the ring and changes no
+					    transfer state.  */
 					if (d->atapi_received < d->atapi_st->
 					    data_in_len) {
 						d->atapi_phase = PHASE_DATAIN;
@@ -987,11 +1018,47 @@ DEVICE_ACCESS(wdc)
 			while (inbuf_len < 0)
 				inbuf_len += WDC_INBUF_SIZE;
 
-			if (d->atapi_cmd_in_progress && inbuf_len == 12) {
+			/*  #477: THE DISPATCH MUST KEY ON THE PHASE, NOT ON THE FLAG.
+
+			    `atapi_cmd_in_progress` is set when a packet command arrives and
+			    cleared only when the NEXT command does -- so it stays 1 through the
+			    whole of DATAIN and past PHASE_COMPLETED.  It conflates two roles: 'a
+			    packet command is active' (read at four register sites through
+			    completion, and must stay set) and 'I am collecting a 12-byte CDB'
+			    (what this test actually wants).
+
+			    So a guest write during DATAIN that brought ring occupancy to exactly
+			    12 re-entered this block, FREED THE LIVE TRANSFER, and issued a SCSI
+			    command built from the guest's own returned DATA-IN payload.  MEASURED:
+			    `freed 1 live transfer(s)`.
+
+			    NOT guarding the data-port write instead, and two measuring seats
+			    agree: this check runs on EVERY data-port write regardless of what the
+			    write did -- the width switch's `default:` arm (len 3 or 8) pushes
+			    ZERO bytes and falls straight through to here.  Guarding the pushes
+			    was MEASURED WORSE THAN NO FIX: with occupancy already 12 the
+			    suppressed push leaves it at 12, so the guard CREATES a free on an
+			    input the unfixed code survives.
+
+			    Nor clearing the flag at completion: that leaves this window untouched
+			    (the flag is legitimately 1 here) and breaks the ATAPI handshake --
+			    ireason and the byte-count pair are read at PHASE_COMPLETED.  */
+			if (d->atapi_cmd_in_progress &&
+			    d->atapi_phase == PHASE_CMDOUT && inbuf_len == 12) {
 				unsigned char *scsi_cmd;
 				int x = 0, res;
 
-				CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
+				/*  #477: THE `inbuf_len == 12` IN THE GUARD ABOVE IS WHAT BOUNDS THE
+			    COPY BELOW.  `x` is not checked against 12, so the equality is not
+			    only selecting the dispatch -- it is the only thing keeping this
+			    12-byte allocation from overflowing with guest bytes.  A pass-2
+			    mutant relaxing it to `>= 12` was MEASURED under ASAN as a
+			    heap-buffer-overflow WRITE here, while the 44-row detector stayed
+			    green -- and this round's own kill table had first classified that
+			    edit as an IMPROVEMENT.  Four readers reasoned about the guard as a
+			    dispatch selector and none opened these nine lines.  Do not widen
+			    the equality; flush the ring instead (`wdcringnoflush`).  */
+			CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
 
 				if (d->atapi_st != NULL)
 					scsi_transfer_free(d->atapi_st);

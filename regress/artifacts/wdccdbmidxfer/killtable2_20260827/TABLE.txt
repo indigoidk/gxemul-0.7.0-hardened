@@ -1,0 +1,123 @@
+#477 PASS-2 KILL TABLE -- 45 rows, baseline 0 failures (base.out)
+
+Driver: kill477b.sh   Mutants: mk477b.py   Tree: scratch only; the repo was
+not written to.  Every log in this directory is the run that produced the row
+below it, preserved before any re-run could reuse the names.
+
+  MUTANT             VERDICT    rows that carried the kill
+  ------             -------    --------------------------
+  Mr_readarm         KILLED     1 red: a stray read does not wedge the CDB
+  M7_zerolen         KILLED     1 red: a COMPLETED write does not dispatch
+  M7_notcompleted    KILLED     3 red
+  Mb_revert          KILLED     4 red
+  Mc_null            KILLED     does not compile  (no .out by construction)
+  M2_curcmd          *ESCAPED*  classified below -- REAL debt, not equivalence
+  M7_ge12            KILLED     1 red: occupancy above 12 does not dispatch
+                                *** IT ESCAPED UNTIL THIS ROUND ADDED THAT
+                                ROW, and an earlier version of this file
+                                called the escape an IMPROVEMENT.  Both the
+                                classification and the gap are corrected
+                                below; the row is what closes it. ***
+
+Mc_null has no log on purpose: clause (c)'s null medium is a comment-only
+dev_wdc.c, so the kill is a COMPILE failure and there is no run to record.  A
+reader finding six logs for seven mutants is not looking at a lost file.
+
+
+*** L4 CORRECTION, 2026-08-27, MEASURED BY THE OPUS SEAT.  THIS FILE ASSERTED
+    THAT A ONE-CHARACTER EDIT PRODUCING AN UNBOUNDED GUEST-CONTROLLED HEAP
+    WRITE WAS "arguably MORE correct".  IT IS NOT. ***
+
+The superseded text is quoted here in full so this correction can be checked
+rather than trusted:
+
+    "M7_ge12 -- NOT a re-opening of the defect this round closes.  The phase
+     guard still stands, so >= 12 differs from == 12 only in PHASE_CMDOUT --
+     and there dispatching on an overshoot is arguably MORE correct than never
+     dispatching at all.  ... So this needs CLASSIFICATION, not a row."
+
+WHAT THAT MISSED IS NINE LINES BELOW THE GUARD:
+
+    :1039   CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
+    :1047   while (inbuf_len > 0) {
+    :1048           scsi_cmd[x++] = wdc_get_inbuf(d);
+    :1049           inbuf_len --;
+    :1050   }
+
+`x` is unbounded.  **`inbuf_len == 12` is not only selecting the dispatch --
+it is the ONLY thing bounding the copy into a 12-byte allocation.**  In
+PHASE_CMDOUT with a non-empty ring, `>= 12` copies as many guest bytes as the
+ring holds into 12.
+
+MEASURED (Opus seat, src md5 8f49a86caf70, detector md5 6edd1cc73978):
+
+    LIVE      44 rows, 0 failures    ASAN clean
+    >= 12     44 rows, 0 failures    ASAN heap-buffer-overflow, WRITE size 1,
+                                     dev_wdc.c:1048
+
+*** THE DETECTOR SEES NOTHING.  Both columns are 44/0. ***  That is what makes
+this an L4 rather than a tidy-up: a durable artifact blessed the edit, and no
+row contradicted it.
+
+**THIS IS THE CARRIER'S SKETCH RULE RECURRING VERBATIM.**  Four readers -- agy,
+kimi, Fable and me -- reasoned about `>= 12` as a DISPATCH-SELECTION predicate
+and not one opened the allocation.  A grep for `malloc(12)` and `scsi_cmd[x`
+across all sixteen files in this directory and the detector returns ZERO hits:
+the bound was never in anyone's field of view.  *"When every reader makes the
+same mistake, suspect the brief"* -- the packet showed the guard and never the
+tail it protects.
+
+DISPOSITION -- DONE, AND MEASURED.  The row `occupancy above 12 does not
+dispatch` was added and `M7_ge12` now DIES ON IT ALONE (see the verdict table
+above).  It reaches occupancy 14 by preloading THIRTEEN bytes and writing one,
+so the ring never passes through 12 -- a fixture writing two bytes at a time
+would dispatch at 12 and never reach the overshoot.  The oracle is the dispatch
+count, so it reds on an ORDINARY build and needs no sanitiser.  The overshoot objection that
+motivated the wrong classification is real but is answered AT THE RIGHT LAYER:
+by flushing the ring (filed as `wdcringnoflush`), never by widening a bound
+that guards a `malloc(12)`.  The shipped `== 12` is safe -- the bound holds --
+but it is IMPLICIT and REMOTE, so the allocation now carries a comment naming
+what bounds it.
+
+`inbuf_len == 12` sits on the diff's own edited line, so it was inside clause
+(d)'s "predicates dominating the edited lines" enumeration all along.  The
+enumeration was run; the consequence of weakening it was assessed by reading
+and got the wrong answer.  *A predicate can be correctly enumerated and still
+misjudged, and only a measurement separates the two.*
+
+
+*** THE OTHER ESCAPE ***
+
+M2_curcmd  --  a `d->cur_command == ATAPI_PKT_CMD` conjunct added to the guard.
+    On the shipped table it scored KILLED -- but by `row_arm_overrun`'s two
+    rows, because NO fixture set cur_command at all.  The real device assigns
+    cur_command, the flag and the phase together (`cur_command = idata`, then
+    the ATAPI_PKT_CMD arm), so every fixture was building a state the device
+    never produces, and the mutant died because LEGAL DISPATCH vanished rather
+    than because of the defect.  Found by the codex seat.
+
+    With cur_command set in all four active-packet fixtures it ESCAPES.  The
+    obvious reading is "redundant conjunct, provably equivalent" -- and that
+    reading is WRONG.  The discriminating state is reachable: the ALT-CTRL arm
+    sets cur_command = COMMAND_RESET and does NOT clear atapi_cmd_in_progress
+    (the only clear is inside wdc_command).  So a guest can write A0h, touch
+    ALT-CTRL, and arrive at `flag == 1 && cur_command == COMMAND_RESET` with
+    the phase still CMDOUT.  A REAL behavioural difference on a REACHABLE
+    path, so this is coverage debt and is FILED as such.
+
+    Two live defects fell out of that check, both FILED:
+
+      wdcaltctrlbit    the arm tests WDCTL_4BIT (0x08, "use four head bits
+                       (wd1003)") where the reset bit is WDCTL_RST (0x04).
+      wdcsrstnoabort   the same arm leaves atapi_cmd_in_progress set, so an
+                       in-flight packet command survives what the device
+                       itself calls a reset.  *** UPGRADED from READ to
+                       MEASURED by the Opus seat: it also confirmed neither
+                       ATAPI_SOFT_RESET nor the ALT-CTRL reset flushes the
+                       ring. ***
+
+**Both escapes were chased rather than classified, and both times the chase
+overturned the comfortable reading.**  M2 looked like an equivalence and was
+coverage debt hiding two defects; M7_ge12 looked like an improvement and was a
+heap overflow.  *The comfortable reading of an escape has now been wrong twice
+in one table.*

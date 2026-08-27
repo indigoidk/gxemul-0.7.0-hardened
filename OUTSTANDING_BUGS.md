@@ -10593,3 +10593,94 @@ Three reproduction rows — `row_cdb_midxfer`, `row_dataout_drain`, `row_cdb_alr
 A detector ships WITH its fix. The stub instrumentation they need (`stub_frees`,
 `stub_disk_writes`/`_bytes`/`_offset` and the counting bodies) **stays in the committed file** —
 inert without the rows, and the fiddly part to re-add.
+
+## 2026-08-27 — `wdccdbmidxfer` fixed as #477; the panel chose against my preference
+
+`atapi_cmd_in_progress` is set when a packet command arrives and cleared only when the **next**
+one does — so it stays 1 through the whole of DATAIN and past `PHASE_COMPLETED`. A guest write
+that brought ring occupancy to exactly 12 therefore re-entered the CDB dispatch, **freed the live
+transfer**, and issued a SCSI command built from the guest's own returned DATA-IN payload.
+
+Fixed by keying the dispatch on `atapi_phase == PHASE_CMDOUT`. Kill table 6/6, detector 42 rows,
+`regress/artifacts/wdccdbmidxfer/killtable_20260827/`.
+
+### The mechanism I stated was wrong, and one row settles it
+
+A **len-3 write pushes zero bytes** — the width switch's `default:` arm only latches — and
+control falls straight through to the dispatch, which frees the transfer anyway.
+
+> **The defect was never "writes push foreign bytes into the ring."** It is that *the dispatch
+> runs on every data-port write regardless of what the write did.*
+
+That is why **option A — guarding the pushes, which I preferred — was measured WORSE than no
+fix**: with occupancy already 12, the suppressed push leaves it at 12, so A creates a free on an
+input the unfixed code survives. A fix that makes a state worse is not coverage debt.
+
+And the sharper diagnosis, which I had missed: `atapi_cmd_in_progress` **conflates two roles** —
+"a packet command is active" (read at four register sites through completion, so it must stay
+set) and "I am collecting a 12-byte CDB" (what the dispatch actually wants). Option C would have
+damaged the first to patch the second, breaking the ATAPI completion handshake.
+
+### Residuals — open
+
+- **`wdccdbaccum`** — the structural fix, filed not shipped. `dev_mb89352.c` gives the CDB its
+  **own accumulator**, switching on phase to select a destination buffer and dispatching on
+  *"this phase's own buffer is full"* rather than a shared occupancy count. That removes the
+  aliasing which makes a phase guard necessary at all: `inbuf_len == 12` cannot tell CDB bytes
+  from DATA-IN payload from disk-write payload. **A seat measured its migration cost honestly:**
+  it relocates where a CDB lives, so every existing probe that fakes one stops working.
+
+- **`wdcdataoutdrain`** — still open, still unfixed, and its row stays held in
+  `_scratchpad/held_repro_rows.c`. Measured: `1 write(s), 512 bytes to 0x8000` **to the disk
+  image**. Option B does not touch it — different block, different flag (`write_in_progress`).
+  A seat found a **worse sibling** with no ATAPI involved at all: a single 3-byte data-port write
+  pushes nothing, `inbuf_len` is 0, `0 % 512 == 0`, and 512 bytes of an **empty ring** go to the
+  image — after which `inbuf_tail` has advanced 512 past `inbuf_head`, occupancy reads 262144 of
+  262656, and DRQ is asserted forever. **One guest write, no ATAPI command, no live transfer.**
+  Both reduce to one condition: `inbuf_len > 0 &&`.
+
+- **`wdcaltctrlbit`** — NEW, 2026-08-27, READ from source and UNMEASURED. The ALT-CTRL
+  write arm reads:
+
+  ```c
+  if (idata & WDCTL_4BIT)
+          d->cur_command = COMMAND_RESET;
+  ```
+
+  `WDCTL_4BIT` is `0x08` — *"use four head bits (wd1003)"*, a head-addressing mode
+  selector. The reset bit is **`WDCTL_RST`, `0x04`**. So a guest selecting 4-bit head
+  mode is treated as issuing a controller reset, and a guest issuing a **real** soft
+  reset is ignored. Two wrong behaviours from one wrong constant.
+
+- **`wdcsrstnoabort`** — NEW, 2026-08-27, same arm, READ and UNMEASURED. It sets
+  `cur_command = COMMAND_RESET` and does **not** clear `atapi_cmd_in_progress` (the only
+  clear is inside `wdc_command`). So an in-flight packet command survives what the device
+  itself calls a reset, and a CDB written afterwards still dispatches.
+
+  **Provenance is worth recording, because it is the ask-again working as designed.** Both
+  fell out of checking *why* `M2_curcmd` escaped `#477`'s table. The comfortable reading was
+  "redundant conjunct, provably equivalent" — and that reading is wrong: this arm is exactly
+  the reachable state that distinguishes the mutant. **An escape chased is worth more than an
+  escape classified**, and classifying it as an equivalence would have buried both defects.
+
+  They are the same conflation family the `#475`/`#476`/`#477` chain has been working:
+  a flag outliving the thing it describes. See `wdccdbaccum` for the structural closure.
+
+- **`wdcringnoflush`** — NEW, 2026-08-27, **MEASURED by the Opus seat**, pre-existing on
+  `d894e35`, `1cec2da` and the live tree. `ATAPI_PKT_CMD` **never flushes the input ring**.
+  Under-drain a DATA-IN transfer and every subsequent CDB is dropped forever, because
+  occupancy can never again EQUAL 12: measured `occ 32 -> 44 -> 56 -> 68`. Neither reset
+  path recovers it — **`ATAPI_SOFT_RESET` does not flush** (occ stays 32) and the ALT-CTRL
+  device reset does not flush (occ 44).
+
+  **This is the OTHER entrance to `#477`'s wedge, and `#477`'s own comment gets it wrong.**
+  That comment states *"the 12-byte residue means occupancy can never EQUAL 12 again"* as a
+  property of the regression it describes. It is a property of the **device** — reachable
+  without any stray read at all. Corrected in place; recorded here because a wrong reason
+  gets reused.
+
+  **The in-tree idiom already exists:** `dev_asc.c`'s `dev_asc_fifo_flush()`, called from
+  `NCRCMD_FLUSH` and `NCRCMD_RSTCHIP`. So the fix is a transferred warrant, not a design.
+
+  It also **upgrades `wdcsrstnoabort` from READ-and-UNMEASURED to MEASURED**: the same
+  measurement shows the reset paths leaving both the flag and the ring untouched.

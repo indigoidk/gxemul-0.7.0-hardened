@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (research:fable5,opus5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 24 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 25 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -930,3 +930,24 @@ question that still looks discharged):
 
 Note the rebuild was load-bearing in the original measurement -- a stale July binary reported
 the pre-fix pattern -- so any re-measurement must rebuild rather than reuse.
+
+## `wdccdbmidxfer` — research stage HELD at 7/9 (2026-08-27)
+
+Missing seats: **fable5, opus5**. The seven scriptable seats chose option B from a
+five-member set; both flagship seats then answered the same design questions at PASS 2
+and both found something the design pass had missed — fable5 MEASURED that option B alone
+wedges a legal CDB permanently, opus5 MEASURED that the round's kill-table classified a
+heap-buffer-overflow as an improvement.
+
+**Not backfilled on purpose.** Writing a pass-1 entry from a pass-2 answer would be a false
+record, and the stage genuinely ran seven seats.
+
+> **The question:** three separate guards now stand in for one missing structural
+> separation — the dispatch phase guard, the read-arm phase guard, and the occupancy bound
+> that turns out to be the only thing sizing a `malloc(12)`. **Is option F (give the CDB
+> its own accumulator, as `dev_mb89352.c` does) now the right call rather than a fourth
+> guard?** And was option C (clear the flag at completion) wrongly dismissed, given that
+> `#477`'s read-arm repair is a phase-scoped version of exactly that?
+
+Measured migration cost of F, from a seat: it relocates where a CDB lives, so every
+existing probe that fakes one stops working.

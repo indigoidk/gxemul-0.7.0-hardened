@@ -190,6 +190,8 @@ MANIFEST = {
         (CLASS_RESEARCH, "#465 pass-2 kill-table instrument, preserved as evidence"),
     "artifacts/gdrompionull/opus_p2_20260826/mutate.py":
         (CLASS_RESEARCH, "#465 pass-2 mutant applier, preserved as evidence"),
+    "artifacts/wdccdbmidxfer/killtable2_20260827/mk477b.py":
+        (CLASS_RESEARCH, "#477 pass-2 mutant applier, preserved as evidence"),
     #  CLASSIFIED WHILE ITS OWN ROUND WAS STILL IN THE INDEX, and that is the check working
     #  rather than an exception to it: this file was `git add`ed by a concurrent #446 round
     #  MINUTES after this checker was written, went straight into the domain, and was named

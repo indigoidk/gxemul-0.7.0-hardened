@@ -602,8 +602,18 @@ else
     #  were built and both were killed by these rows.
     check "footbridge: the fbclearread defect row is present" \
           "$(grep -c 'a READ of TIMER_1_CLEAR must NOT clear pending' "$FBLOG")" "1"
+    #  *** grep -cF, NOT grep -c: `[LIVE]` is a BRACKET EXPRESSION in a basic
+    #  regex, so `grep -c '[LIVE] a WRITE...'` looks for ONE of L/I/V/E followed
+    #  by ' a WRITE...' and can NEVER match a line whose label ends in ']'.
+    #  Both rows were PRESENT and GREEN while these two checks reported got=0,
+    #  so the offline gate was red from #474's second wave and the redness was
+    #  attributable to nothing.  A CHECK THAT CANNOT PASS -- the inverse of the
+    #  carrier's check-that-cannot-fail, and louder, but still a wrong record.
+    #  Sibling sweep at the time of the fix: 5 bracket patterns among 175
+    #  `grep -c` invocations across the gates; the other 3 (`^[XY]`, `^[<>]`)
+    #  are deliberate character classes and were left alone.
     check "footbridge: the fbclearread live control is present" \
-          "$(grep -c '[LIVE] a WRITE of TIMER_1_CLEAR decrements pending' "$FBLOG")" "1"
+          "$(grep -cF '[LIVE] a WRITE of TIMER_1_CLEAR decrements pending' "$FBLOG")" "1"
     check "footbridge: the common-tail row is present" \
           "$(grep -c 'a READ still runs the common tail' "$FBLOG")" "1"
     check "footbridge: the periodic-reload row is present" \
@@ -626,7 +636,7 @@ else
     #                   for the ordinary reason.  This row is the only one carrying BOTH
     #                   properties: which cell, and that the access is refused
     check "footbridge: the deassert ACCEPT row is present" \
-          "$(grep -c '[LIVE] a WRITE DOES deassert the irq' "$FBLOG")" "1"
+          "$(grep -cF '[LIVE] a WRITE DOES deassert the irq' "$FBLOG")" "1"
     check "footbridge: the deassert defect row is present" \
           "$(grep -c 'a READ must NOT deassert the irq' "$FBLOG")" "1"
     check "footbridge: the TIMER_ENABLE row is present" \
@@ -1365,7 +1375,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 37
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 42
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -1455,6 +1465,22 @@ else
     #  value.  Two guest register accesses from a fresh device reached it.
     check     "wdc IDENTIFY: the host-kill row is present" \
               "$(grep -c 'a DATA read with no transfer survives' "$WDCLOG")" "1"
+    #  #477: the phase rows.  Kill table 6/6; FOUR of the six die on a single
+    #  sole-carrier row.  Two exist only because a measuring seat named the escape:
+    #    `!= PHASE_DATAIN`  passes every DATAIN row -> the DATAOUT and COMPLETED rows
+    #    `& WDCI_CMD`       CMDOUT and COMPLETED both carry that bit, and the seat could
+    #                       NOT kill it -> the COMPLETED row is its sole carrier
+    #  The NO-PUSH row is the one that settles the mechanism: a len-3 write pushes ZERO
+    #  bytes and the dispatch frees the transfer anyway, so the defect was never "writes
+    #  push foreign bytes" -- which is why guarding the pushes measured WORSE than no fix.
+    check     "wdc IDENTIFY: the CDB re-dispatch row is present" \
+              "$(grep -c 'a mid-DATAIN write frees nothing' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the NO-PUSH row is present" \
+              "$(grep -c 'no-push write does not dispatch' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the DATAOUT phase row is present" \
+              "$(grep -c 'a DATAOUT write does not dispatch' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the COMPLETED phase row is present" \
+              "$(grep -c 'a COMPLETED write does not dispatch' "$WDCLOG")" "1"
     #  #473 pass 2: three rows added AFTER the round shipped, because two more
     #  clause-(d) mutants escaped a table that had already closed four.  Both hid for
     #  one structural reason -- every re-arm row sat where the remainder EXCEEDS 32768,

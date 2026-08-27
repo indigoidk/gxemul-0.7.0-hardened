@@ -1,3 +1,206 @@
+## Round 477 (#477) -- a guest data-port WRITE could free the ATAPI transfer the device was still delivering
+
+`atapi_cmd_in_progress` is set when a packet command arrives and cleared only when the NEXT
+command does, so it stays 1 through the whole of DATAIN and past `PHASE_COMPLETED`. The CDB
+dispatch keyed on that flag plus ring occupancy alone. A guest write during DATAIN that
+brought occupancy to exactly 12 therefore re-entered the dispatch, **freed the live
+transfer**, and issued a SCSI command assembled from the guest's own returned DATA-IN
+payload. MEASURED on the committed build: `freed 1 live transfer(s)`.
+
+THE FIX is option B, a phase guard: the dispatch additionally requires
+`atapi_phase == PHASE_CMDOUT`. The flag conflates two roles -- *a packet command is active*
+(read at four register sites through completion, so it must stay set) and *I am collecting a
+CDB* (what the test actually wants). The phase distinguishes them; clearing the flag would
+have broken the completion handshake.
+
+Option A -- guarding the data-port pushes -- was **MEASURED WORSE THAN NO FIX**: with
+occupancy already 12 a suppressed push leaves it at 12, so the guard CREATES a free on an
+input the unfixed code survives.
+
+### *** THE PHASE GUARD ALONE WAS A REGRESSION, AND A SEAT MEASURED IT ***
+
+I answered the brief's own question 5 -- *does this make anything worse?* -- by reading the
+WRITE path, confirming nothing there moves `atapi_phase` between the packet command and the
+twelfth byte, and concluding #477 could not block a legal CDB. **That was wrong, and the
+Fable seat measured it wrong.** A data-port READ moves the phase:
+
+| sequence | HEAD | phase guard alone |
+|---|---|---|
+| completed, PKT, CDB | DISPATCHED | DISPATCHED |
+| completed, PKT, **stray read**, CDB | DISPATCHED | **NO DISPATCH**, permanently |
+
+`ATAPI_PKT_CMD` assigns only the flag and the phase, so after a prior completed command a new
+packet starts with `atapi_len == 0`, `atapi_received == data_in_len`, and `atapi_st` **stale
+non-NULL** -- it is freed at the next dispatch and never NULLed. A read then falls into the
+`atapi_len == 0` arm, finds `received < data_in_len` false, and sets `PHASE_COMPLETED`.
+Recovery is unavailable: the twelve-byte residue means occupancy can never EQUAL 12 again.
+
+**That is worse than the unfixed code on an input the unfixed code survives -- the exact
+standard that rejected option A.** L1 (pre-ship), so it was repaired in-round rather than
+filed: the read arm now declines to derive completion state while a CDB is being collected
+(`atapi_len == 0 && atapi_phase != PHASE_CMDOUT`). In CMDOUT that pair describes the
+PREVIOUS transfer -- the same statement #477's own comment makes about the flag, applied one
+arm over.
+
+### The detector: 44 rows, and the accept side did not exist
+
+Two seats found independently that **no row proved a legal CDB actually dispatches.**
+`row_cdb_already12` asserts nothing is FREED -- a reject assertion -- so a fix that
+suppressed every dispatch would have passed the entire table. Added `pkt_cdb_case` with a
+control (no stray read, must dispatch) and the regression row, so a red is attributable to
+the read rather than to the fixture.
+
+Kill table `regress/artifacts/wdccdbmidxfer/killtable2_20260827/`, baseline 44 rows 0
+failures (`base.out`): **five killed, two escapes classified.**
+
+`Mr_readarm` (revert only the read-arm repair) is killed by the new row ALONE -- the (a)
+clause for it. `M7_zerolen`, the seventh mutant **four seats proposed independently**
+(`|| atapi_len == 0`), is killed by the COMPLETED row alone.
+
+### *** TWO FIXTURE DEFECTS OF MINE, AND FIXING THE SECOND TURNED A KILL INTO A FINDING ***
+
+**(a) The COMPLETED fixture set `atapi_len = 10`, which the device cannot produce.** Every
+real transition to `PHASE_COMPLETED` leaves the count at zero. So `M7_zerolen` passed that
+row for the FIXTURE's reason and swept the table, while a real completed command plus twelve
+guest writes still re-entered dispatch. `alen` is now decoupled from the ring prefill: ten
+bytes still sit in the ring so the dispatch is genuinely attempted; only the COUNT is zero.
+Found by the codex seat.
+
+**(b) No fixture set `cur_command`,** though the device assigns it with the flag and the
+phase in one arm. `M2_curcmd` was therefore scored KILLED **by `row_arm_overrun`, because
+legal dispatch vanished in an unreachable `cur_command == 0` state** -- a false-path kill. A
+table entry that proves nothing while reading as coverage.
+
+With the fixtures corrected it ESCAPES -- and the comfortable reading, *redundant conjunct,
+provably equivalent*, is **wrong**. The discriminating state is reachable, and chasing it
+produced two live defects, both FILED (neither is a measured false pass nor a wrong record,
+so the stopping rule keeps them out of this round):
+
+* **`wdcaltctrlbit`** -- the ALT-CTRL arm tests `WDCTL_4BIT` (`0x08`, *use four head bits
+  (wd1003)*) where the reset bit is `WDCTL_RST` (`0x04`). Selecting 4-bit head mode is
+  treated as a controller reset; a real soft reset is ignored.
+* **`wdcsrstnoabort`** -- the same arm leaves `atapi_cmd_in_progress` set, so an in-flight
+  packet command survives what the device itself calls a reset.
+
+**An escape chased is worth more than an escape classified.** Filing this one as an
+equivalence would have buried both.
+
+### *** AND THE NINTH SEAT KILLED THE ROUND'S OWN CLASSIFICATION. `M7_ge12` IS A HEAP
+### OVERFLOW, NOT AN IMPROVEMENT. ***
+
+This round closed its research stage at **eight of nine** and recorded the ruling as
+PROVISIONAL on its face. The Opus seat then landed with **DO NOT CLOSE**, and it was right
+on a measurable -- which is the provisional-adjudication rule earning its keep for the
+second time.
+
+An earlier draft of this block, and of the kill table, classified `M7_ge12`
+(`inbuf_len == 12` relaxed to `>= 12`) as *an improvement, not a re-opening* -- reasoning
+that under the phase guard it differs only in CMDOUT, where dispatching on an overshoot
+beats never dispatching. **That reasoning never looked nine lines down:**
+
+```c
+CHECK_ALLOCATION(scsi_cmd = (unsigned char *) malloc(12));
+while (inbuf_len > 0) { scsi_cmd[x++] = wdc_get_inbuf(d); inbuf_len--; }
+```
+
+`x` is unbounded. **`inbuf_len == 12` is not only selecting the dispatch -- it is the ONLY
+thing bounding that copy into a 12-byte allocation.** MEASURED under ASAN: `>= 12` gives a
+`heap-buffer-overflow` WRITE at `dev_wdc.c:1048`, **while the detector stays 44 rows
+0 failures on both sides.** The rows could not see it at all.
+
+**This is the carrier's SKETCH RULE recurring verbatim** -- *four readers, nine lines,
+nobody looked*. agy, kimi, Fable and I all reasoned about `>= 12` as a dispatch-selection
+predicate; a grep for `malloc(12)` and `scsi_cmd[x` across the whole artifact directory and
+the detector returns **zero hits**, so the bound was never in anyone's field of view. The
+brief showed the guard and never the tail it protects, and *when every reader makes the same
+mistake, suspect the brief.*
+
+L4, corrected in place in both records. The row **`occupancy above 12 does not dispatch`**
+now kills it ALONE. It reaches occupancy 14 by preloading thirteen bytes and writing one --
+a fixture writing two at a time would dispatch at 12 and never reach the overshoot -- and
+its oracle is the dispatch count, so it reds on an ordinary build with no sanitiser.
+
+The overshoot objection that motivated the wrong classification is real, and it is answered
+at the right layer: **flush the ring**, never widen a bound that guards a `malloc(12)`.
+
+*`inbuf_len == 12` sits on the diff's own edited line, so clause (d)'s "predicates
+dominating the edited lines" enumeration had already caught it. The enumeration was run;
+the consequence of weakening it was assessed BY READING and got the wrong answer. **A
+predicate can be correctly enumerated and still misjudged, and only a measurement separates
+the two.***
+
+### `wdcringnoflush` -- a measured live defect, and the other entrance to this round's wedge
+
+`ATAPI_PKT_CMD` **never flushes the input ring**, and neither reset path does either.
+MEASURED: under-drain a DATA-IN and occupancy climbs `32 -> 44 -> 56 -> 68`, so every later
+CDB is dropped forever; `ATAPI_SOFT_RESET` leaves it at 32 and the ALT-CTRL reset at 44.
+Pre-existing on `d894e35`, `1cec2da` and the live tree.
+
+**#477's own comment stated the residue as a property of the REGRESSION.** It is a property
+of the DEVICE -- reachable with no stray read at all. Corrected in place, because a wrong
+reason gets reused. `dev_asc.c`'s `dev_asc_fifo_flush()` is the in-tree idiom, so the fix
+is a transferred warrant rather than a design; filed, not shipped.
+
+It also upgrades `wdcsrstnoabort` from READ-and-unmeasured to MEASURED.
+
+### Three defects of my own in this diff, all found by seats, all fixed
+
+* **I silently dropped a tab.** My read-arm anchor was `T*3 + "} else if ..."`, and a run of
+  tabs is a SUFFIX of any longer run -- so it matched inside the real 4-tab line, consumed
+  three and emitted three. The `count == 1` assert passed and was still wrong, leaving the
+  brace misaligned with its own `if`. `git show 1cec2da:` settled the original depth.
+  **Anchors built from repeated whitespace now carry a leading newline.**
+* The `#477` comment block sat physically INSIDE the `#476` latch arm, so it read as
+  commentary on the latch. Rehoused into the arm it documents.
+* It cited `(:620-626)` -- a bare same-file line citation, the exact form the carrier's
+  citation-form rule prohibits. Replaced with the construct name.
+
+*A fourth was apparatus rather than product, and two of us hit it independently in the same
+session: **`wsl -d Gentoo -- bash -c '...'` from the Bash tool strips shell variables**, so
+`X=hello; echo "[$X]"` prints `[]`. It cost the Opus seat two wrong measurements that both
+looked like results, and it cost me a `0 of 0` that read as a missing log. Run scripts from
+files. Sibling of the documented backslash-mangling and plain-`&` teardown traps.*
+
+### Records
+
+The `#476` round block below was **owed and missing** -- `1cec2da` shipped without touching
+this file, against the standing rule of a round block per correction. Written now rather
+than backdated, and this sentence is the record of the gap.
+
+
+## Round 476 (#476) -- #475's clamp WOKE a NULL dereference, and two guest accesses killed the host
+
+**A regression I shipped one round earlier.** `#475` clamped `consumed` so the ATAPI byte
+counter could no longer step past zero. That was right -- and it made `atapi_len` STAY at 0
+where it had previously gone negative, so `if (d->atapi_len == 0)` began firing on a path the
+negative counter had kept dead. That path dereferences `atapi_st` without checking it.
+
+MEASURED: SIGSEGV at `0x48`, which is `offsetof(struct scsi_transfer, data_in_len)`. Two
+guest data-port accesses with no ATAPI transfer armed. The bisect is symmetric -- the kill
+appears exactly at `#475` and is absent before it.
+
+THE FIX: decline and latch, per this tree's own idiom -- a device that cannot service an
+access must not take the emulator with it (`#337`, `#184`, `#186`, `#315`, `#316`, `#326`).
+The guard reads `atapi_len == 0 && atapi_st == NULL`, and the message carries `(once)`, which
+the 2026-08-26 census established as the tree's plurality suppression marker.
+
+**DID IT CLOSE THE CLASS OR ONE INSTANCE?** `#475` taught that repairing a counter can wake
+dead code, so fixing one dereference proves nothing about the others. All nine `atapi_st`
+dereferences were enumerated: three (`:812`, `:877`, `:884`) are the reachable family and all
+three sit inside the arm this guard protects; the remaining six follow `scsi_transfer_alloc()`,
+which cannot return NULL -- it `exit(1)`s on OOM. **The class is closed**, verified
+independently by the codex seat, which reached the same enumeration.
+
+*What was NOT closed is the STALE-`atapi_st` class, and `#477` above is its measured
+consequence: the pointer is freed at the next dispatch and never NULLed, so a completed
+command leaves it non-NULL carrying the counts of a transfer that is over.*
+
+A note on the guard's shape, since the brief sold it short: the do-nothing disposition is
+load-bearing. At the latch there is no ATAPI command in flight -- the device sits between A0h
+and the CDB -- so completing-with-error would fabricate a completion for a command never
+issued, and under `#477` would wedge a still-deliverable CDB. The Fable seat measured that the
+brief's own "the command simply stalls" framing is false.
+
 ## Round 474 pass 2 (post-commit) -- FIVE one-token mutants swept the shipped detector, and two of my records were measured false
 
 `d894e35` shipped, then its own pass-2 panel took it apart. Nine seats answered; the verdicts
