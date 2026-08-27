@@ -8,10 +8,20 @@ route, eighteen on the staged route, both ending in SIGSEGV of the host process.
 
 **THE FIX IS OPTION B, THE `free_data()` HELPER -- and the ADDITION LICENCE governs it, not
 minimal-surgical.** A helper is an addition to product code, so it needs a measured delta or a
-transferred warrant. It has both. The measured delta: Option A cleared `data_len` at the
+transferred warrant. It has both. *** THE LICENCE'S MEASURED DELTA IS STRONGER THAN THIS BLOCK FIRST CITED, and the
+evidence was already committed. *** The delta is not a 16/16 sweep -- the sibling
+mutant reproduces that identically, so it measures nothing about A-vs-B. It is
+`E:mism how` in `killtable_20260826/`: the SAME one-word edit gives **sig11 on
+`m_ret415`** (the defect measurably returns under the rejected tail form) and **exit0
+on `m_helper_ret`** (it does not under the shipped helper). Same edit, both candidate
+fixes, opposite outcomes. Found by the pass-2 Fable seat in this round's own logs.
+
+The measured delta: Option A cleared `data_len` at the
 function tail, and a mid-switch `return` bypasses that tail -- the opus5 seat built exactly
-that mutant (`m_ret415`, one word, `break;` -> `return;`) and it **swept a clean detector
-16/16**. The transferred warrant: `#182`'s rule that a pointer and its length must be updated
+that mutant (`m_ret415`, one word, `break;` -> `return;`) and it scored **16/16 on the
+INTENT-ONLY 16-row table** (`killtable_20260826/gxo465_det_m_ret415.txt`). *This block
+first said "swept a clean detector 16/16", naming no table -- see the pass-2 correction
+below, which is why a count now names its deriver.* The transferred warrant: `#182`'s rule that a pointer and its length must be updated
 together, which is the same defect class one device over.
 
 Releasing both fields in one place makes the disagreeing state **unrepresentable** rather than
@@ -58,9 +68,41 @@ the variable definitions before writing, rather than by a confusing gate run aft
 
 ### Assessed, not changed
 
-* **The `:406`/`:415` tail-reach rows are OWED and are NOT in this commit.** `m_ret415` sweeps
-  the intent-only detector clean at 16/16, so the tail-bypass class is real coverage debt with a
-  measured escape. It is recorded as such rather than quietly omitted.
+* *** THE `m_ret415` FRAMING IN THIS BLOCK WAS WRONG, AND PASS 2 REFUTED IT TWICE,
+  INDEPENDENTLY, FROM THIS ROUND'S OWN LOGS. *** The claim that it "sweeps the detector
+  clean" is true only of the INTENT-ONLY subset. On the full table it is **23/26 -- three
+  rows kill it** -- and, decisively, **it attacks the REJECTED tail-assignment design, not
+  the shipped helper.**
+
+      m_ret415      INTENTONLY 16/16   FULL 23/26   the REJECTED tail form
+      m_helper_ret  INTENTONLY 16/16   FULL 25/26   the SHIPPED design: KILLED
+      m_swapcnt     INTENTONLY 10/16   FULL 14/26   the real clause-(d): STRONGLY KILLED
+
+  **So the shipped fix's own repair IS defended and there is no floor breach.** Filing the
+  missing tail rows was the right disposition; calling them **L1** was not, and the two
+  together were internally inconsistent -- **L1 means finish in-round.** They are
+  ABOVE-FLOOR COVERAGE DEBT, which is what they always were.
+
+  *Both refutations came from seats that re-derived the scores from the committed logs
+  rather than from the brief -- the distinction this project draws between a reading and a
+  ratification, and the whole reason pass 2 exists.*
+
+### Pass-2 residuals
+
+* **`alloc_data()` does not release before it allocates, and nothing enforces the pairing.**
+  Found by the grok seat, verified here: `free_data(d)` runs once at the function entry
+  (`:343`) and both `alloc_data(d)` sites (`:359`, `:435`) are downstream, so the buffer is
+  always released before replacement *today*. But `alloc_data()` overwrites `d->data`
+  unconditionally — **a future third call site not preceded by that entry release leaks the
+  previous buffer silently.** #465 added `free_data()` as `alloc_data()`'s counterpart
+  without making the pairing structural. Filed as `gdromallocpair`, deliberately not fixed:
+  a release inside `alloc_data()` is an ADDITION, and with no third caller there is no
+  mutant that can measure the delta the licence requires.
+* **`d->cnt` is guest-writable** at `GDROM_CNTLO`/`CNTHI` and reaches `data_len` only via
+  `alloc_data()`. Assessed by the grok seat as a related pair, not this defect.
+* **Device construction zeroes the whole struct** — a writer the round's "only two writers"
+  premise omitted, supplied by the codex seat. Safe, because it sets both fields; but the
+  premise as stated was incomplete, and a grep is not a proof.
 * **`m_free` and `m_top` escape COMPLEMENTARY halves** -- 13/16 each, and not the same 13. Each
   witnessed route is the sole killer of one relocation mutant, so the two are **not redundant**,
   and a future round tempted to drop one as duplicative is measured wrong.

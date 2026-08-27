@@ -1,15 +1,47 @@
 #!/usr/bin/env python3
-"""WITNESS for ledger row `gdrompionull`.
+"""DETECTOR for ledger row `gdrompionull`.  The defect it describes is FIXED by #465.
 
-The PIO data read at src/devices/dev_dreamcast_gdrom.c:611-613 dereferences
-d->data with no NULL test:
+*** THIS HEADER WAS AN L4 WRONG RECORD UNTIL 2026-08-26 AND THE PASS-2 CODEX SEAT CAUGHT IT.
+It called itself a WITNESS and described the defect in the PRESENT TENSE -- "data_len has
+exactly ONE writer", "handle_command() ... never clears data_len" -- after the fix had
+shipped.  A detector that narrates a repaired defect as live is the wrong-record class in the
+artifact whose whole job is to be believed.  Everything below the line is PRE-FIX PROVENANCE,
+kept because the rows only make sense against it. ***
+
+DETECTOR CONTRACT (vacuity floor clause (e)) -- what these rows are designed to catch, stated
+so a later escape is either "outside the contract" or "a breach of it" rather than an argument
+about overclaiming:
+
+  * a re-introduced NULL/stale-length dereference on EITHER the cheap (9-access) or the
+    staged (18-access) PIO route -- the `cheap trig` and `staged trig` rows;
+  * loss of the once-latched overread diagnostic on the silent route -- the `staged quiet`
+    row, which pins the count at exactly 1;
+  * loss of the device-vs-RAM distinction the five control rows establish.
+
+  NOT claimed: full coverage of the 26-row table.  Measured escapes are recorded in
+  killtable_20260826/README.md with their scores.
+
+--- PRE-FIX PROVENANCE (the state that motivated the rows; NOT current) ---
+
+*** EVERY LINE NUMBER BELOW THIS POINT IS PRE-FIX NUMBERING AND DOES NOT RESOLVE IN THE
+SHIPPED TREE.  #465's own edits moved them: the deref cited as :611-613 is :624-626 today,
+:720 is :733, :475-480 is :486-494.  `:307` (alloc_data) still resolves correctly, which is
+precisely what makes the stale ones look trustworthy. ***
+
+The pass-2 Fable seat flagged this, and noted that #464 solved the identical class ONE
+ROUND EARLIER with a single sentence -- so this is a rule that existed, was written down,
+and did not fire on the next probe to need it.  Stating the convention once is cheaper and
+more durable than re-chasing every citation, because the numbers will drift again.
+
+Before #465, the PIO data read dereferenced d->data with no NULL test:
 
     if (d->cur_data_offset < d->data_len) {
             odata  =  d->data[d->cur_data_offset ++];
             odata |= (d->data[d->cur_data_offset ++] << 8);
 
-`d->data_len` has exactly ONE writer, alloc_data() at :307.  handle_command()
-frees d->data and NULLs it at :324-326 but never clears data_len, and its tail
+`d->data_len` was written by alloc_data() alone (device construction also zeroes the whole
+struct, which the pass-2 seat pointed out and which is safe because it sets BOTH fields).
+handle_command() freed d->data and NULLed it but never cleared data_len, and its tail
 at :475-480 clears COND_DATA_AVAIL and zeroes d->cnt -- not data_len.  So
 data==NULL with data_len>0 is a reachable steady state, and one legal guest
 store of 0xef to GDROM_COND (:720, `d->cond = idata` sits OUTSIDE both arms)
@@ -304,7 +336,11 @@ t3, alive3, how3 = session(stage_readsectors(A) + store16(GDROM_COND, 0xef, A))
 row("cheap noread", how3, "exit0", "SAME 9 accesses minus the LOAD: survives")
 
 #  STAGED ROUTE -- 18 guest accesses, legal TOC then legal Mount.  No disk
-#  access is attempted at all, so the device emits NO diagnostic of any kind.
+#  access is attempted at all.
+#  *** PRE-FIX this emitted NO diagnostic, and that is what the row used to pin.
+#  POST-#465 it emits exactly ONE latched overread line.  The sentence claiming
+#  'NO diagnostic of any kind' sat directly above a row expecting one -- flagged
+#  by the pass-2 codex seat as self-contradictory. ***
 A = Addr(CODE)
 t4, alive4, how4 = session(stage_toc(A) +
                            store16(GDROM_COND, 0xa0, A) + packet(CMD_MOUNT, A) +
@@ -324,9 +360,22 @@ row("staged trig", how4, "exit0",
 #  The pre-fix run at 13/13 is preserved as prefix_HEAD_13of13.raw; the RED run
 #  under this new pin is what licenses the edit.
 #
-#  PROVENANCE, quoted rather than trusted -- dev_dreamcast_gdrom.c's overread arm
-#  is gated by sh4-style once-latching (#460), which is why the count is 1 and not
-#  a flood.  A future reader can re-derive this without trusting this round.
+#  PROVENANCE -- and it is now an ACTUAL QUOTE.  *** This comment said "quoted
+#  rather than trusted" and then PARAPHRASED, with no verbatim text and no line
+#  reference.  The pass-2 codex seat caught it: the oracle-correction rule requires
+#  verbatim provenance with file/line precisely because the old pin's authority is
+#  the thing being overturned, so it cannot also be the warrant. ***
+#
+#  src/devices/dev_dreamcast_gdrom.c, the overread arm of the PIO read:
+#
+#      if (!(d->warned & GDROM_W_OVERREAD)) {
+#              d->warned |= GDROM_W_OVERREAD;
+#              fatal("[ dreamcast_gdrom: read past ...
+#
+#  The `d->warned` bit is set before the fatal() and tested by it, so the arm emits
+#  ONE line per device instance and then goes quiet -- the tree's N=1 latch idiom
+#  (#460).  That is why this row pins 1 and not a flood, and a future reader can
+#  re-derive it from the source without trusting this round.
 row("staged quiet", "%d of %d" % (noise(t4), len(NOISE)),
     "1 of %d" % len(NOISE),
     "ONE latched decline on the silent route -- the fix IS louder, by design")

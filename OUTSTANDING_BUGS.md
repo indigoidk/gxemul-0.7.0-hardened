@@ -199,6 +199,25 @@
 >   wrong measurement. Owed measurement is small — edit an `#include`d `.c`, rebuild without
 >   the rm, assert the binary changed; then repeat for a generated `tmp_*.c`, the case most
 >   likely to still need it.
+> - **`gdromallocpair`** — `alloc_data()` does not release before it allocates, so #465's
+>   `free_data()` pairing is **conventional, not structural**. Found by the grok seat on
+>   #465's pass 2, verified by reading: `free_data(d)` runs once at the function entry
+>   (`:343`) and both `alloc_data(d)` sites (`:359`, `:435`) are downstream, so the buffer is
+>   always released before replacement *today* — but `alloc_data()` overwrites `d->data`
+>   unconditionally, and **a future third call site not preceded by that entry release leaks
+>   the previous buffer silently.** NOT fixed: a release inside `alloc_data()` is an ADDITION,
+>   and with no third caller there is no mutant that can measure the delta the licence
+>   requires. Recorded so a round that ADDS a third call site inherits the obligation.
+> - **`preserveinstrument`** — the durable-path rule preserves **measurements** but not
+>   **instruments**. #465 saved a seat's 22 artifacts (8 score logs, 8 build logs, source
+>   snapshot) and *not* the 26-row probe that produced them. When the pass-2 adjudication then
+>   recommended porting six of its rows — explicitly because "the construction and measurement
+>   cost is already paid" — the instrument was gone and the cost had to be paid again.
+>   **A score log makes a claim CHECKABLE; only the instrument makes it REPRODUCIBLE.**
+>   Proposed, not adopted: preserve the instrument alongside the output. One more `cp`.
+>   *Same shape as #465's own defect, one level up: that round fixed two fields SET together
+>   and RELEASED apart; here an output and its instrument are PRODUCED together and PRESERVED
+>   apart.*
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and

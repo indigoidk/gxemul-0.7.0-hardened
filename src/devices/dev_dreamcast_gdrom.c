@@ -315,8 +315,11 @@ static void alloc_data(struct dreamcast_gdrom_data *d)
     above, but the two release sites cleared only the POINTER -- leaving data_len
     describing a buffer that no longer exists.  Later readers test one field and
     index with the other, so a stale length is a read of freed or absent memory.
-    Releasing both here makes the disagreeing state unrepresentable rather than
-    merely unreached.  */
+    Releasing both here makes every release path restore the invariant before it
+    returns.  (#465's own record first claimed this made the disagreeing state
+    UNREPRESENTABLE.  The pass-2 seat corrected that overclaim: the two fields
+    stay independent, and alloc_data() itself sets the length before the
+    pointer, so a transient disagreement remains representable.)  */
 static void free_data(struct dreamcast_gdrom_data *d)
 {
 	if (d->data != NULL)

@@ -994,7 +994,10 @@ fi
 #  oracle changed FIRST, the committed build measured RED under it, and only then did
 #  the code change.  The fix IS louder by one line, because the repaired state routes
 #  into #460's once-latched overread decline.  The round's earlier prose claimed it
-#  "invents no new behaviour"; that was false and is corrected in the probe header.
+#  "invents no new behaviour"; that was false and is corrected in the probe's
+#  `staged quiet` row comment -- NOT its header, which is where this line first said
+#  it was.  A pass-2 seat caught the mislocation: a pointer naming the wrong place is
+#  a small wrong record, but it is the kind a future reader gives up on.
 GPNPROBE=artifacts/gdrompionull/gdrom_pio_null_probe.py
 if [ ! -f "$GPNPROBE" ]; then
     gate_skip "gdrompio: $GPNPROBE absent"
