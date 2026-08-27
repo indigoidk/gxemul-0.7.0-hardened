@@ -173,6 +173,8 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdarg.h>
@@ -297,6 +299,11 @@ void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len, uint64_t da
  *  count: zero (the default) keeps it inert for every other row, non-zero makes it
  *  fabricate exactly one DATA-IN transfer of that size.  */
 static int stub_datain_len = 0;
+static int stub_frees = 0;
+static int stub_disk_writes = 0, stub_disk_bytes = 0;
+static long stub_disk_offset = 0;
+
+
 struct scsi_transfer *scsi_transfer_alloc(void)
 {
 	return (struct scsi_transfer *) calloc(1, sizeof(struct scsi_transfer));
@@ -304,6 +311,7 @@ struct scsi_transfer *scsi_transfer_alloc(void)
 
 void scsi_transfer_free(struct scsi_transfer *p)
 {
+	stub_frees ++;
 	free(p);
 }
 
@@ -340,8 +348,15 @@ int diskimage_exist(struct machine *machine, int id, int type)
 int diskimage_access(struct machine *machine, int id, int type, int writeflag,
 	off_t offset, unsigned char *buf, size_t len)
 {
-	(void)machine; (void)id; (void)type; (void)writeflag;
-	(void)offset; (void)buf; (void)len;
+	(void)machine; (void)id; (void)type;
+	/*  OBSERVABLE: `wdcdataoutdrain` needs to know whether the device wrote to
+	    the IMAGE, and at what offset.  A silent stub cannot answer that.  */
+	if (writeflag) {
+		stub_disk_writes ++;
+		stub_disk_bytes += (int) len;
+		stub_disk_offset = (long) offset;
+	}
+	(void)buf;
 	return 0;
 }
 
@@ -1426,6 +1441,77 @@ static void row_odd_zerolen(void)
 }
 
 
+
+
+
+
+
+
+/*
+ *  *** `#475` SHIPPED A GUEST-REACHABLE HOST KILL, AND THIS ROW IS THE BISECT. ***
+ *
+ *  `#475`'s whole code change is `if (consumed > d->atapi_len) consumed = d->atapi_len;`.
+ *  Before it, a data-port READ with `atapi_len == 0` drove the counter NEGATIVE and the
+ *  `== 0` test never fired again.  After it, `consumed` clamps to 0, `atapi_len` STAYS 0,
+ *  the test FIRES -- and the next line is
+ *
+ *        if (d->atapi_received < d->atapi_st->data_in_len)
+ *
+ *  with `atapi_st == NULL`.  The only NULL check on this pointer anywhere in the file is
+ *  in the dispatch, hundreds of lines away.
+ *
+ *  TWO REGISTER ACCESSES FROM A FRESH DEVICE: write ATAPI_PKT_CMD to COMMAND, then read
+ *  DATA.  A panel seat measured `SEGV on unknown address 0x48` -- which is
+ *  `offsetof(struct scsi_transfer, data_in_len)` from NULL -- and confirmed the pre-`#475`
+ *  blob survives the same input.
+ *
+ *  *A fix that stops a counter going negative made a previously-unreachable branch
+ *  reachable.  The clamp is right; the branch it enabled was never NULL-safe.*
+ *
+ *  THE ROW FORKS, because the defect is a SIGNAL: an in-process oracle would take the
+ *  whole differential down with it and report nothing.
+ */
+static void row_null_atapi_st(void)
+{
+	pid_t pid;
+	int st = 0;
+
+	fflush(stdout);
+	pid = fork();
+	if (pid == 0) {
+		struct wdc_data d;
+		unsigned char buf[4];
+		memset(&d, 0, sizeof(d));
+		d.addr_mult  = 1;
+		d.io_enabled = 1;
+		d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+		d.irq.interrupt_assert = arm_sink;
+		/*  exactly what the two guest accesses leave behind: a packet command
+		    announced, no transfer yet allocated.  */
+		d.atapi_cmd_in_progress = 1;
+		d.atapi_phase = PHASE_DATAIN;
+		d.atapi_st = NULL;
+		d.atapi_len = 0;
+		d.atapi_received = 0;
+		memset(buf, 0, sizeof(buf));
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+		_exit(0);
+	}
+	if (pid < 0) { printf("  SETUP fork failed\n"); return; }
+	waitpid(pid, &st, 0);
+
+	rows ++;
+	if (WIFSIGNALED(st)) {
+		printf("  FAIL %-38s host killed, signal %i\n",
+		    "a DATA read with no transfer survives", WTERMSIG(st));
+		failures ++;
+	} else {
+		printf("  ok   %-38s exit %i\n",
+		    "a DATA read with no transfer survives", WEXITSTATUS(st));
+	}
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -1728,6 +1814,7 @@ int main(void)
 	row_base_drive();
 	row_identity();
 	row_arm_overrun();
+	row_null_atapi_st();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -1751,8 +1838,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 36) {
-		printf("  FAIL %-38s rows = %i, want 36\n",
+	if (rows != 37) {
+		printf("  FAIL %-38s rows = %i, want 37\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

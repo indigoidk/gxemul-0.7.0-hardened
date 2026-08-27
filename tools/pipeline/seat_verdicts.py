@@ -164,10 +164,52 @@ VERDICT_RE = re.compile(
 #  skipped.
 MENU_RE = re.compile(r"VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)", re.I)
 
-WALL_RE = re.compile(
-    r"usage limit|rate.?limit|\b429\b|quota|too many requests|"
-    r"unknown effort level|unknown model|not authenticated|invalid api key",
-    re.I)
+#  *** THE WALL TEST FIRED ON SEATS DISCUSSING RATE LIMITS. TWICE IN ONE DAY, BOTH
+#  ON 10 KB SUBSTANTIVE ANSWERS. Measured 2026-08-27. ***
+#
+#    agy         "...unrated non-quota CLI failures..."   -> scored WALLED
+#    ollama_kimi "...drop + rate-limited debug..."        -> scored WALLED
+#
+#  A LIVE SEAT SCORED DEAD IS THE SEAT-LEDGER FAILURE INVERTED, and it is the worse
+#  direction: a walled seat gets re-fired, while a seat RECORDED walled that actually
+#  answered becomes an unread review -- the class this project has three times found real
+#  defects sitting in.
+#
+#  POSITION CANNOT SEPARATE THEM, and that was the surprise.  This file already says "a
+#  wall is a file that ENDS with the notice", so the obvious fix was a tighter tail
+#  window.  MEASURED: the real CLI wall's keyword ends 56 chars from EOF; the false
+#  positive's ends 54.  The false one is CLOSER.  Shrinking the window separates nothing.
+#
+#  WHAT DOES SEPARATE THEM IS SHAPE.  A real notice is an ERROR:
+#      error: failed to run prompt: provider.auth_error: 403 You've reached your
+#      weekly (7-day) usage limit.
+#  while the false positives are PROSE ABOUT rate limiting.  So the phrases split:
+#  STRONG ones are a notice on their own; WEAK ones ("quota", "rate limit") need an
+#  error marker beside them.
+#
+#  NO BARE HTTP-STATUS NUMERICS in the marker: an earlier draft included 5[0-9][0-9]
+#  and agy's citation of `panel.sh:579-588` matched it.  A LINE NUMBER IS NOT AN ERROR.
+#
+#  CONTROLLED ON 8 HAND-VERIFIED FILES, and the smallness is deliberate.  A first attempt
+#  scored 708 files by ASSUMING every kimi.txt was a wall and every codex.txt an answer;
+#  the historical kimi files are 92-357 KB ANSWERS from when that seat was live, and codex
+#  has a documented 26,992-byte WALL.  **A control set whose labels are invented validates
+#  nothing.**  The eight below were each read by hand.  OLD is wrong on 2 of 8; NEW on 0.
+WALL_STRONG = (r"you(?:'ve| have) (?:hit|reached) your|usage limit|429|"
+               r"too many requests|quota will reset|unknown effort level|"
+               r"unknown model|not authenticated|invalid api key")
+WALL_WEAK   = r"rate.?limit|quota"
+WALL_MARK   = r"error|auth_error|HTTPError|ERROR:|failed to run"
+WALL_RE = re.compile(WALL_STRONG, re.I)          #  kept: callers that want the phrase
+_WEAK_RE = re.compile(WALL_WEAK, re.I)
+_MARK_RE = re.compile(WALL_MARK, re.I)
+
+
+def _is_wall(tail):
+    """A notice on its own, or a weak phrase standing next to an error marker."""
+    if WALL_RE.search(tail):
+        return True
+    return bool(_WEAK_RE.search(tail) and _MARK_RE.search(tail))
 
 SEATS = ("codex", "agy", "grok", "kimi",
          "ollama_glm", "ollama_deepseek", "ollama_minimax",
@@ -394,7 +436,7 @@ def main():
         #  test an hour later.  So a WALLED row is not a verdict on the seat -- it
         #  is a verdict on that invocation, and the seat should be RE-FIRED ONCE
         #  before the round closes rather than recorded as gone.
-        is_walled = bool(WALL_RE.search(t[-600:])) and not v
+        is_walled = _is_wall(t[-600:]) and not v
         if recovered:
             #  Write it beside the raw envelope so the answer is READABLE, not just
             #  known to exist.  A seat whose answer nobody can open is, in practice,

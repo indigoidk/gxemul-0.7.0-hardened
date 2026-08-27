@@ -74,6 +74,7 @@ struct wdc_data {
 	    #269 had to undo.  */
 	int		warned_badlen;
 	int		warned_atapi_err;
+	int		warned_null_xfer;
 	int		warned_atapi_dataout;
 
 	/*  #464 (wdcflood): the SIX fatal() this file still emitted without bound.
@@ -784,7 +785,30 @@ DEVICE_ACCESS(wdc)
 
 				d->atapi_len -= consumed;
 				d->atapi_received += consumed;
-				if (d->atapi_len == 0) {
+				/*  #476: `atapi_st` IS DEREFERENCED ON THE NEXT LINE AND WAS NEVER
+				    NULL-CHECKED.  #475's clamp made this branch REACHABLE: before it, a
+				    read with atapi_len already 0 drove the counter NEGATIVE and `== 0`
+				    never fired again, so the deref was dead code.  Clamping consumed to
+				    0 leaves atapi_len AT 0, the test fires, and two guest register
+				    accesses from a fresh device -- write ATAPI_PKT_CMD to COMMAND, then
+				    read DATA -- reach `d->atapi_st->data_in_len` through NULL.
+				
+				    MEASURED: SIGSEGV at address 0x48, which is
+				    offsetof(struct scsi_transfer, data_in_len).  The pre-#475 blob
+				    survives the identical input, and the row for the defect #475 FIXED
+				    goes the OTHER way on the same pair -- so the bisect is unambiguous.
+				
+				    The clamp was right; the branch it woke was never NULL-safe.  Decline
+				    and say so once, per this file's latch idiom: a device that cannot
+				    service an access must not take the emulator with it (#337, #184,
+				    #186, #315, #316, #326).  */
+				if (d->atapi_len == 0 && d->atapi_st == NULL) {
+					if (!d->warned_null_xfer) {
+						d->warned_null_xfer = 1;
+						fatal("[ wdc: DATA read with no ATAPI "
+						    "transfer armed (once) ]\n");
+					}
+				} else if (d->atapi_len == 0) {
 					if (d->atapi_received < d->atapi_st->
 					    data_in_len) {
 						d->atapi_phase = PHASE_DATAIN;

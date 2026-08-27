@@ -10553,3 +10553,43 @@ Each would have looked like tidying and each is wrong:
 - no clamping `received` to `data_in_len` as a companion to saturation — mid-chunk that
   completes **early** and drops the rest of the transfer;
 - no even-padding at the SCSI layer.
+
+## 2026-08-27 — `wdcnullxfer` (#476): `#475` shipped a host kill, found one commit later
+
+```
+d894e35 (before #475)   a DATA read with no transfer survives   exit 0
+d64a1fc (with #475)     a DATA read with no transfer survives   host killed, signal 11
+```
+
+**The mechanism is entirely `#475`'s.** Before it, a data-port read with `atapi_len` already 0
+drove the counter **negative**, so `if (atapi_len == 0)` never fired again and the
+`d->atapi_st->data_in_len` dereference on the next line was **dead code**. The clamp makes
+`atapi_len` *stay* 0. The test fires. `atapi_st` is NULL.
+
+Two guest register accesses from a fresh device — write ATAPI_PKT_CMD to COMMAND, then read
+DATA. Measured `SIGSEGV at address 0x48`, which is `offsetof(struct scsi_transfer,
+data_in_len)`. The seat's control (same command, no data read) survives on both blobs, so it is
+the **read**.
+
+> **A FIX THAT STOPS A COUNTER GOING NEGATIVE CAN MAKE A PREVIOUSLY-UNREACHABLE BRANCH
+> REACHABLE.** The clamp was right; the branch it woke was never NULL-safe. *Repairing a counter
+> can enable code that was only ever protected by the broken value.*
+
+**And `#475`'s own kill table could not have caught it.** Eleven mutants, every one attacking
+the clamp — none attacking what the clamp let *through*. A kill table asks "what edit breaks
+this fix"; it never asks "what does this fix now reach".
+
+Fixed by declining with this file's latch idiom. That is the `#337`/`#184`/`#186`/`#315`/`#316`/
+`#326` halt class the fork has spent many rounds closing, and which I had just reopened.
+
+*The row FORKS: the defect is a SIGNAL, and an in-process oracle would take the differential
+down with it and report nothing at all.*
+
+### Held out of the committed detector, deliberately
+
+Three reproduction rows — `row_cdb_midxfer`, `row_dataout_drain`, `row_cdb_already12` — are in
+`_scratchpad/held_repro_rows.c`, not in the tree. They reproduce `wdccdbmidxfer` and
+`wdcdataoutdrain`, which have **no fix yet**, so they are RED and a red detector blocks the gate.
+A detector ships WITH its fix. The stub instrumentation they need (`stub_frees`,
+`stub_disk_writes`/`_bytes`/`_offset` and the counting bodies) **stays in the committed file** —
+inert without the rows, and the fiddly part to re-add.

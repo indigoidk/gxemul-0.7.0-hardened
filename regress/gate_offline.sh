@@ -1365,7 +1365,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 36
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 37
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -1448,6 +1448,13 @@ else
               "$(grep -c 'guest byte count is not 0xffff' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the zero-length DATAIN row is present" \
               "$(grep -c 'zero-length DATAIN stays at zero' "$WDCLOG")" "1"
+    #  #476: the host-kill row.  It FORKS, because the defect is a SIGNAL -- an
+    #  in-process oracle would take the differential down with it and report nothing.
+    #  #475 clamped a counter that used to go NEGATIVE; that woke a branch whose
+    #  `d->atapi_st->data_in_len` deref had only ever been protected by the broken
+    #  value.  Two guest register accesses from a fresh device reached it.
+    check     "wdc IDENTIFY: the host-kill row is present" \
+              "$(grep -c 'a DATA read with no transfer survives' "$WDCLOG")" "1"
     #  #473 pass 2: three rows added AFTER the round shipped, because two more
     #  clause-(d) mutants escaped a table that had already closed four.  Both hid for
     #  one structural reason -- every re-arm row sat where the remainder EXCEEDS 32768,

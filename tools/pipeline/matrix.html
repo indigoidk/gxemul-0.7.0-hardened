@@ -128,7 +128,7 @@ footer code { color:var(--ink); }
   <span class="chip pass"><span class="k">battery</span><b>REGRESS_PASS 16/16</b>
     <span>2026-08-15 03:00-03:43, unattended @ 7580e2f</span></span>
   <span class="chip"><span class="k">flagship</span><b>Fable 5 (max)</b></span>
-  <span class="chip"><span class="k">bugs</span><b>158 in work · 75 closed · 18 dropped</b></span>
+  <span class="chip"><span class="k">bugs</span><b>159 in work · 75 closed · 18 dropped</b></span>
   <span class="chip"><span class="k">entries</span><b>1603✓ 17✕ 34⏸ 208…</b></span>
   <span class="chip"><span class="k">updated</span><b>2026-08-25</b></span>
 </div>
@@ -2277,6 +2277,40 @@ Which one is a real question -- saturating hides the over-count in `atapi_receiv
 `&lt;= 0` completes the command but still reports having delivered 4 of 3 bytes.  **The
 truthfulness half needs its own answer**, and this fork&#x27;s own precedents (`#283` ASC,
 `#338` mb89352, `#341` here) all say the count reported has to be the count that happened.
+</span></span><span class="state st-held">held</span></span></th></tr><tr class="ph st-held"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-held"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">wdcnullxfer</span><span class="ttl">wdcnullxfer  #475&#x27;s clamp WOKE a NULL dereference that the broken counter had been hiding -- two guest register accesses SIGSEGV the host.  FIXED in-round as #476</span><sup class="b b-A">A</sup><span class="tip">wdcnullxfer  #475&#x27;s clamp WOKE a NULL dereference that the broken counter had been hiding -- two guest register accesses SIGSEGV the host.  FIXED in-round as #476 — witness: none -- the row is a FORKING rung-1 fixture that reports the child&#x27;s signal.  It is a DETECTOR, not a reproduction, but note it observes the real harm (SIGSEGV) rather than a proxy for it, and it carries an attribution control: the pre-#475 blob survives the identical input. — note: *** A REGRESSION I SHIPPED, FOUND BY THE MEASURING SEAT ONE COMMIT LATER, FIXED THE SAME
+HOUR.  2026-08-27. ***
+
+```
+  d894e35 (before #475)   a DATA read with no transfer survives   exit 0
+  d64a1fc (with #475)     a DATA read with no transfer survives   host killed, signal 11
+```
+
+**THE MECHANISM IS ENTIRELY #475&#x27;s.**  Before it, a data-port read with `atapi_len` already
+0 drove the counter NEGATIVE, so `if (atapi_len == 0)` never fired again and the
+`d-&gt;atapi_st-&gt;data_in_len` deref on the next line was **dead code**.  The clamp makes
+`atapi_len` STAY 0.  The test fires.  `atapi_st` is NULL.
+
+&gt; **A FIX THAT STOPS A COUNTER GOING NEGATIVE CAN MAKE A PREVIOUSLY-UNREACHABLE BRANCH
+&gt; REACHABLE.**  The clamp was right; the branch it woke was never NULL-safe.  *Repairing a
+&gt; counter can enable code that was only ever protected by the broken value* -- and nothing
+&gt; in `#475`&#x27;s own kill table could see it, because every mutant there attacked the clamp
+&gt; rather than what the clamp let through.
+
+MEASURED `SIGSEGV at address 0x48` = `offsetof(struct scsi_transfer, data_in_len)`.  Two
+guest register accesses from a fresh device: write ATAPI_PKT_CMD to COMMAND, then read
+DATA.  The seat&#x27;s control -- the same command with NO data read -- survives on both blobs,
+so it is the READ.
+
+**THE BISECT IS UNAMBIGUOUS AND PLEASINGLY SYMMETRIC:** on the same pair of builds, the row
+for the defect `#475` FIXED goes one way and the row for the defect it CREATED goes the
+other.
+
+**FIXED** by declining with the file&#x27;s own latch idiom -- a device that cannot service an
+access must not take the emulator with it, which is the `#337`/`#184`/`#186`/`#315`/`#316`/
+`#326` class this fork has spent many rounds closing and which I had just reopened.
+
+*The row FORKS: the defect is a SIGNAL, and an in-process oracle would take the differential
+down with it and report nothing at all.*
 </span></span><span class="state st-held">held</span></span></th></tr><tr class="ph st-held"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-held"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">ovsync</span><span class="ttl">ovsync  SYNCHRONIZE CACHE does not flush overlay and bitmap files</span><span class="tip">ovsync  SYNCHRONIZE CACHE does not flush overlay and bitmap files — commits: 4d0981d — HOLD: FILE - the honest residual of b120&#x27;s stale third — The base file IS flushed (#134). The code&#x27;s own note admits that overlay data and the bitmap are not flushed by this command, and the inline flushes happen only when the sync option is on. This is what remains of the old row&#x27;s first third once the stale claim is deleted. — witness: none yet -- guest-reachable, but a witness needs a build. Note the LIVE half is reachable through the same path as [[b120]], so one probe can witness both. — note: *** ADJUDICATED 2026-08-27 (fable): the collapse onto [[b120]] is CONFIRMED **MEASURED**, but it is a collapse of the SAFETY HALF ONLY -- do NOT read it as &#x27;drop ovsync&#x27;. ***
 
 b120&#x27;s fix makes opcode 0x91 an honest CHECK CONDITION. **It does not implement SYNCHRONIZE CACHE(16), so it does not make the flush happen.** That residual -- implement 0x91, or formally decline it -- is NOT covered by b120 and is what this row should carry from now on.
@@ -3464,7 +3498,125 @@ selects timer indices 0-3; `#474`&#x27;s rows all use timer 1, so the four-addre
 round&#x27;s record rests on reading rather than measurement.  One nonzero alias row closes it.
 
 Filed rather than fixed because the fold is shared with every other timer case in the file
-and is not specific to `#474`&#x27;s repair.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">wdccdbmidxfer</span><span class="ttl">wdccdbmidxfer  `inbuf_len == 12` is an EQUALITY test reachable mid-transfer, so 12 bytes of guest payload can be dispatched as a SCSI CDB</span><span class="tip">wdccdbmidxfer  `inbuf_len == 12` is an EQUALITY test reachable mid-transfer, so 12 bytes of guest payload can be dispatched as a SCSI CDB — witness: none -- filed from READING by a panel seat, explicitly NOT measured. Check before acting. — note: *** FILED FROM READING BY THE OPUS SEAT ON `#473`&#x27;s PASS 2, WHICH FLAGGED IT AS NOT
+and is not specific to `#474`&#x27;s repair.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">wdccdbmidxfer</span><span class="ttl">wdccdbmidxfer  a guest data-port WRITE mid-DATAIN frees the IN-FLIGHT ATAPI transfer -- REPRODUCED, `freed 1 live transfer(s)`</span><span class="tip">wdccdbmidxfer  a guest data-port WRITE mid-DATAIN frees the IN-FLIGHT ATAPI transfer -- REPRODUCED, `freed 1 live transfer(s)` — witness: none -- filed from READING by a panel seat, explicitly NOT measured. Check before acting. — note: *** I TRIED TO MEASURE THE SEAT&#x27;S OPTION-A OBJECTION AND THE MEASUREMENT IS INVALID.
+Recorded as UNRESOLVED rather than banked. 2026-08-27. ***
+
+The seat argued (REASONED) that guarding only the PUSH leaves a reachable free: arm a
+DATAIN already at occupancy 12, then write -- the push is suppressed, occupancy stays 12,
+and the dispatch fires.
+
+I built a crude option A and ran it.  All three defect rows went GREEN, which looks like a
+refutation.  **It is not.**  Two ARM rows went RED in the same run
+(`occupancy = 10, want 32768`), because the guard also suppressed the CMDOUT-phase pushes
+that ASSEMBLE the packet -- so no transfer ever armed, and the three green rows are green
+because nothing was live.
+
+&gt; **A GREEN FOR THE WRONG REASON.**  This project&#x27;s rule is that every reproduction must
+&gt; answer *did it fail for the reason under test?* -- and the same question has to be asked
+&gt; of a PASS.  Here two other rows in the same output answered it: no.  Without them the
+&gt; run would have read as &#x27;A is sufficient&#x27;.
+
+**So the objection stands unrefuted and untested.**  A correct option A must permit pushes
+when the phase is CMDOUT *or* when no transfer is live (phase is 0 before the first
+packet), and that is a different mutant from the one I built.
+
+*Also worth keeping: the row I added for this -- `a write at occupancy 12 frees nothing` --
+is GREEN on the committed build and correctly so.  On unfixed code the write&#x27;s push is NOT
+suppressed, so occupancy goes 12 -&gt; 13 and the equality cannot fire.  It is an ANTI-ESCAPE
+row for a candidate fix, not a defect row, and its contract is green on the shipped tree
+and red under a push-only guard.*
+
+*** PASS 1 KILLED MY PREFERRED FIX, MY SEVERITY CLAIM, AND MY OPTION SET. 2026-08-27. ***
+
+**(1) THE USE-AFTER-FREE FRAMING IS READ-FALSE, and I withdrew it.**  After the free the
+code allocates a replacement and RESETS `atapi_len = 0` and `atapi_received = 0` on BOTH
+exits -- the reject path and the normal one.  The cursor is re-based onto the NEW transfer
+inside the same access, so no later read dangles.
+
+&gt; *A hazard inferred from a FREE SITE is a hypothesis about what happens NEXT, and what
+&gt; happens next has to be read separately.*  The reset is nine lines below the free.
+
+**WHAT THE DEFECT ACTUALLY IS:** the in-flight transfer is DESTROYED (the guest&#x27;s read
+stream silently aborted mid-delivery, no error reported), and a SPURIOUS SCSI COMMAND runs
+against the disk image whose opcode is `scsi_cmd[0]` -- **a leftover DATAIN PAYLOAD byte**,
+so which command executes is influenced by data the guest arranged to have read back.
+Integrity and spurious-command, NOT host memory safety.
+
+**(2) OPTION A WOULD HAVE SHIPPED A HOLE MY OWN DETECTOR CANNOT SEE.**  A guards only the
+PUSH; the dispatch runs regardless of whether a push happened.  So arm any DATAIN whose
+occupancy is ALREADY 12 -- a 12-byte INQUIRY response, or a larger chunk read down to 12 --
+and any data-port write still frees the live transfer.  **My row tests 10+2, so it would
+have scored A GREEN.**
+
+**(3) OPTION C IS ORTHOGONAL AND DANGEROUS.**  The defect fires DURING DATAIN, when the
+flag is legitimately 1, so clearing it at completion leaves the whole defect window
+untouched.  And it breaks the ATAPI handshake: the ireason and byte-count registers are
+read at PHASE_COMPLETED and would lose their override.
+
+*The seat&#x27;s diagnosis of the flag is sharper than mine: `atapi_cmd_in_progress` CONFLATES
+two roles -- &#x27;a packet command is active&#x27; (read through completion, must stay set) and &#x27;I
+am collecting a 12-byte CDB&#x27; (mis-used by the dispatch).  The dispatch should key on the
+PHASE, not the flag.*
+
+*** (4) A SIXTH OPTION WAS ALREADY IN THE TREE, TWICE.  VERIFIED BY OPENING BOTH FILES. ***
+
+```
+  dev_mb89352.c:223   switch (d-&gt;phase) { case PH_DATAOUT: ... case PH_CMD: ...
+                      default: debugmsg_cpu(..., VERBOSITY_ERROR, ...) }
+  dev_asc.c:842       if (!d-&gt;unknown_phase_warned) { ... fatal(&quot;... unknown/
+                      unimplemented phase ... (further occurrences suppressed)&quot;) }
+```
+
+**OPTION F: phase-dispatch the wdc data-port write arm** -- CDB bytes only in CMDOUT,
+DATAOUT data only in DATAOUT, decline + latch-announce otherwise.  It subsumes A, B and E,
+sits ABOVE both consumers, and is the only option that also closes `wdcdataoutdrain`.
+
+*Third time this session an option set was missing a member already shipping in the fork.
+The rule says grep the tree; the failure is not knowing the rule, it is remembering to fire
+it on this object.*
+
+**(5) THE ESCAPE AGAINST OPTION B**, if the round takes the minimal point-fix:
+`atapi_phase != PHASE_DATAIN &amp;&amp; inbuf_len == 12` blocks DATAIN and leaves COMPLETED,
+DATAOUT and ABORTED still freeing.  A DATAIN-only detector cannot see it, so the detector
+owes reject rows for the adjacent phases AND an ACCEPT row proving a real CDB dispatch
+still happens in CMDOUT.
+
+**ADJUDICATION HELD at 8 of 9 seats** pending the measuring seat, per the provisional rule.
+
+*** REPRODUCED 2026-08-27 ON THE COMMITTED BUILD: `freed 1 live transfer(s)`. ***
+
+Filed from READING by a panel seat, then MEASURED independently by another, then
+reproduced here with a row that needs no sanitiser.
+
+**THREE FACTS, each read from source:**
+* `atapi_cmd_in_progress` is set in ONE place and cleared in ONE other -- `wdc_command()`,
+  the arrival of the NEXT command.  So it outlives both the command and PHASE_COMPLETED.
+* the data-port WRITE arm has NO phase check and pushes guest bytes into the same ring the
+  DATAIN chunk occupies.  Its unexpected-write diagnostic is gated
+  `!atapi_cmd_in_progress`, so it is suppressed exactly when a command is in progress.
+* the dispatch fires on `inbuf_len == 12` and does `scsi_transfer_free(d-&gt;atapi_st)` on the
+  LIVE transfer, taking `data_in` with it while `atapi_received` still indexes into it.
+
+*** THE REACHABILITY ARITHMETIC, AND MY FIRST FIXTURE HAD IT WRONG -- WHICH IS THE PART
+WORTH RECORDING. ***  During DATAIN the ring holds exactly `atapi_len` bytes, so
+`occupancy == 12` means **ten undrained bytes plus a two-byte write**.  The first attempt
+armed 4096, so occupancy went 4096 -&gt; 4108, the `== 12` EQUALITY never fired, and the row
+was **GREEN**.
+
+**A green row there would have read as &#x27;not reachable&#x27;** -- a `0 of 0` in a different
+costume, where the apparatus never enters the state it is testing for.  The tell was that
+an equality trigger cannot fire from a ring holding thousands of bytes; nothing in the
+output said so.
+
+**THE ORACLE IS A FREE COUNT, not a sanitiser**, so the row works in an ordinary build and
+names the harm directly rather than waiting for a crash.
+
+**FIVE candidate fixes are on the pass-1 brief** and the design question is genuinely open:
+whether the root defect is the FLAG&#x27;S LIFETIME (it outlives its command) or the WRITE ARM&#x27;S
+MISSING PHASE GUARD.  Option A also closes `wdcaddtoinbufbound`&#x27;s live route; option C
+touches five other read sites.
+
+*** FILED FROM READING BY THE OPUS SEAT ON `#473`&#x27;s PASS 2, WHICH FLAGGED IT AS NOT
 MEASURED. Check it before acting. ***
 
 The ATAPI packet path fires on `inbuf_len == 12` -- an EQUALITY, not a threshold. In
@@ -3478,7 +3630,68 @@ at a time, hits this on a real driver.
 **This is the flip side of a property `#473` relied on.** That round&#x27;s safety argument used
 the same equality in the other direction -- a dirty ring cannot dispatch, because occupancy
 would not be 12 -- and used it correctly for the INITIAL arm. The equality that makes
-dispatch hard to reach accidentally also makes it reachable from a state nobody intended.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">wdcdataoutdrain</span><span class="ttl">wdcdataoutdrain  write_in_progress and atapi_cmd_in_progress can be live together, and the write-back block then drains 512 bytes of just-armed ATAPI data to the disk image</span><span class="tip">wdcdataoutdrain  write_in_progress and atapi_cmd_in_progress can be live together, and the write-back block then drains 512 bytes of just-armed ATAPI data to the disk image — witness: none -- filed from READING by a panel seat, explicitly NOT measured. Check before acting. — note: *** FILED FROM READING BY THE OPUS SEAT, EXPLICITLY NOT MEASURED. Check before acting. ***
+dispatch hard to reach accidentally also makes it reachable from a state nobody intended.</span></span><span class="state st-in work">in work</span></span></th></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">wdcdataoutdrain</span><span class="ttl">wdcdataoutdrain  after ANY ATAPI dispatch the local inbuf_len is 0, and `0 % 512 == 0` fires the write-back -- 512 stale ring bytes go to the DISK IMAGE</span><span class="tip">wdcdataoutdrain  after ANY ATAPI dispatch the local inbuf_len is 0, and `0 % 512 == 0` fires the write-back -- 512 stale ring bytes go to the DISK IMAGE — witness: none -- filed from READING by a panel seat, explicitly NOT measured. Check before acting. — note: *** REPRODUCED 2026-08-27: `1 write(s), 512 bytes to 0x8000`. ***
+
+The device wrote 512 STALE RING BYTES to the DISK IMAGE at a guest-chosen offset, from a
+two-step sequence: a WRITE command (which sets `write_in_progress`, and which the ATAPI
+path never clears), then an ordinary ATAPI packet command.
+
+**The oracle is an instrumented `diskimage_access` stub** -- writes, byte count and offset
+-- so the row names the harm directly.  The stub had been silent, which is why this sat
+unmeasured after being filed from reading: *a stub that discards its arguments cannot
+witness what the device did with them.*
+
+**INDEPENDENTLY CONFIRMED.**  The Fable seat traced the same stale-local aggravator while I
+was tracing it, from the opposite direction (it arrived at it via this round&#x27;s Q5).  Two
+readings, one mechanism.
+
+**RELATION TO `wdccdbmidxfer`, per that round&#x27;s adjudication:** they are SEPARATE defects --
+different blocks, gated by different flags (`atapi_cmd_in_progress` at the dispatch,
+`write_in_progress` at the drain).  A point-fix to either does not touch the other.  **Only
+the structural option F** -- phase-dispatching the whole data-port write arm, which is the
+house pattern in `dev_mb89352.c:223` and `dev_asc.c:842` -- sits above BOTH consumers and
+closes both.  *If F is chosen they are one round; if point-guards are chosen they are two.*
+
+The sibling&#x27;s own root is narrower and worth recording separately: `wdc_command()` clears
+`atapi_cmd_in_progress` at entry and **never clears `write_in_progress`**, so a WRITE left
+in progress survives into a later packet command.
+
+*** CONFIRMED BY READING THE CONTROL FLOW 2026-08-27, and it is worse than the filing
+said.  Still NOT MEASURED -- a reproduction is owed before any round opens. ***
+
+The filing (from a seat&#x27;s reading) said the two flags can be live together.  Tracing the
+arm shows the mechanism is tighter and needs no coincidence:
+
+```
+  :962   inbuf_len = head - tail;              &lt;- a LOCAL
+  :978   while (inbuf_len &gt; 0) {               &lt;- the ATAPI dispatch&#x27;s own drain loop
+  :980           inbuf_len --;                    decrements it to ZERO
+         ...nothing between recomputes it...
+  :1067  d-&gt;write_in_progress == WDCC_WRITE &amp;&amp; inbuf_len % 512 == 0
+  :1076          b = d-&gt;inbuf + d-&gt;inbuf_tail;  &lt;- STALE ring bytes
+  :1084          diskimage_access(..., 1, d-&gt;write_offset, b, 512);
+```
+
+**`0 % 512 == 0` is TRUE**, so after ANY ATAPI dispatch -- not a rare interleaving, every
+one -- a still-set `write_in_progress` sends **512 bytes of whatever the ring holds to the
+DISK IMAGE at a guest-chosen offset**.
+
+**Guest-reachable in two steps:** issue a WRITE command (sets `write_in_progress`), then
+issue an ATAPI packet command.  The dispatch zeroes the local and the write-back fires on
+the way out of the same access.
+
+*** THIS IS THE `#280`-`#285` FAMILY, WHICH CORRUPTED THE ARC DISK IMAGE. ***  A defect that
+writes to the IMAGE outranks one that corrupts a transfer in memory: the damage survives the
+emulator process.
+
+**Shares a root with `wdccdbmidxfer`:** a command-scoped flag outliving its command, plus an
+arm that acts on ring state without checking whose bytes are in the ring.  Whether ONE fix
+closes both is on that round&#x27;s pass-1 brief as question 5.
+
+*A local carrying a stale zero into a modulo test is the denominator trap in yet another
+costume: `0 % 512 == 0` reads as &#x27;a whole number of sectors is ready&#x27; and means &#x27;nothing is
+here&#x27;.*
+*** FILED FROM READING BY THE OPUS SEAT, EXPLICITLY NOT MEASURED. Check before acting. ***
 
 `write_in_progress` clears only when `write_count` reaches 0, and `ATAPI_PKT_CMD` does not
 clear it. So both flags can be set at once.
@@ -3492,7 +3705,7 @@ puts it in the same family as `#280`-`#285` (the ASC telling the guest a short t
 completed, which corrupted the arc disk image). Pre-existing; not introduced by `#473`.
 
 *Note the `% 512 == 0` guard was itself added deliberately -- the `#if 0` above it shows the
-unguarded form -- so this is a guard that admits the empty case rather than a missing one.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">bugfileledgerdir</span><span class="ttl">bugfileledgerdir  precommit section P checks ledger -&gt; OUTSTANDING_BUGS but NOTHING checks the reverse, and four rows were filed in prose only</span><span class="tip">bugfileledgerdir  precommit section P checks ledger -&gt; OUTSTANDING_BUGS but NOTHING checks the reverse, and four rows were filed in prose only — witness: harness: the subject IS the checking apparatus, so the ladder&#x27;s `harness:` term applies. Proof would be a mutation -- add a bugfile-only row and show the check reds. — note: *** FOUND BY THE codex SEAT ON `#473`&#x27;s PASS 2, and confirmed by grepping both files. ***
+unguarded form -- so this is a guard that admits the empty case rather than a missing one.*</span></span><span class="state st-in work">in work</span></span></th></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">bugfileledgerdir</span><span class="ttl">bugfileledgerdir  precommit section P checks ledger -&gt; OUTSTANDING_BUGS but NOTHING checks the reverse, and four rows were filed in prose only</span><span class="tip">bugfileledgerdir  precommit section P checks ledger -&gt; OUTSTANDING_BUGS but NOTHING checks the reverse, and four rows were filed in prose only — witness: harness: the subject IS the checking apparatus, so the ladder&#x27;s `harness:` term applies. Proof would be a mutation -- add a bugfile-only row and show the check reds. — note: *** FOUND BY THE codex SEAT ON `#473`&#x27;s PASS 2, and confirmed by grepping both files. ***
 
 Section P (`check_bugfile_sync.py`) fails when an OPEN LEDGER ROW has no entry in
 `OUTSTANDING_BUGS.md`. **Nothing checks the other direction.**  On 2026-08-27 four rows --
