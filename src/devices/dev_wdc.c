@@ -509,8 +509,16 @@ DEVICE_ACCESS(wdc_altstatus)
 /*
  *  wdc_new_command_reset():
  *
- *  #479: A NEW COMMAND STARTS WITHOUT THE PREVIOUS COMMAND'S WRITER, BUFFERED
- *  BYTES, OR PHASE.
+ *  #479: A COMMAND ENTERING wdc_command() STARTS WITHOUT THE PREVIOUS COMMAND'S
+ *  WRITER, BUFFERED BYTES, OR PHASE.
+ *
+ *  #480 L4: THE SCOPE IS THIS FUNCTION, NOT THE WORD "COMMAND".  An earlier
+ *  headline read "A NEW COMMAND STARTS WITHOUT..." with no qualifier, and the
+ *  device falsifies that in its own code: the ALT-CTRL arm assigns
+ *  cur_command = COMMAND_RESET WITHOUT CALLING THIS HELPER, so the most
+ *  reset-like operation the device has is deliberately not a caller.  The SCOPE
+ *  paragraph forty lines below said so; a universal headline with its qualifier
+ *  that far down is read as universal.  Named by the fable seat on #479 pass 2.
  *
  *  wdc_command() cleared the ATAPI flag and the error and nothing else, so three
  *  pieces of the previous command's state survived into the next one.  All three

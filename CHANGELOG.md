@@ -1,3 +1,188 @@
+## Round 480 (#480) -- the detector could not see its own call
+
+`#479` shipped `wdc_new_command_reset()` and a detector that kills **13 of 13** mutants of
+that helper's **body**. Three one-line edits to **whether it is called** swept all 80 rows
+with **byte-identical output**. Found and measured by the opus seat on `#479`'s own pass 2,
+after the commit -- an **L2 floor breach**, which the late-dissent rule dispositions as a
+follow-up commit rather than an amendment.
+
+`artifacts/wdccallsite/killtable_20260827/`, baseline **87 rows, 0 failures**
+(`artifacts/wdccallsite/killtable_20260827/base.out` -- path-qualified deliberately:
+four round directories now hold a baseline log of that name, so a bare filename names
+none of them. Section X refuses the bare form, which is `#478`'s lesson mechanised.)
+Eighteen logs, all verified at 87 before the table was written (`D1_renumber` reports 86
+because that is its mutation). Gate: offline-differential **PASS (305 checks)**. No product
+code behaviour changed -- one product comment corrected.
+
+| mutant | `#479` | `#480` | carried by |
+|---|---|---|---|
+| `M11_sameop` | **ESCAPED** | 3 red | same-opcode; refill; every-opcode |
+| `M4_afterguard` | **ESCAPED** | 2 red | rejected; absent-drive |
+| `M23_exemptfill` | **ESCAPED** | 4 red | rejected; refill; absent-drive; every-opcode |
+| `Mq_read` / `readmulti` / `atapiid` / `writemulti` / `idp` / `setfeat` / `softreset` | -- | 1 red each | **every-opcode, SOLE** |
+| `p1_belowguard1` | -- | 1 red | **absent-drive, SOLE** |
+| `Mq_pktretry` | -- | **0 -- ESCAPED** | filed as coverage debt |
+| `Mb_revert` | 6 red | 9 red | clause (b) control |
+
+**13 of 14, with two rows carrying eight sole kills between them.**
+
+### The blind spot was in how the rows were CUT, not in what they asserted
+
+Every `#479` reproduction row called `wdc_command()` **directly**, with
+`stub_disk_exists = 1`, using two **different** opcodes. Thirteen mutants of the body all
+die; the call itself was watched only by `Mb_revert`, which deletes it outright.
+
+The generalisation went through **three forms**, and the first two excluded this round's
+own headline mutant:
+
+* **v1** *"...reds if that call becomes conditional."* `M4` is a **relocation**, not a
+  condition -- so the headline mutant was not an instance of the rule. Named by the
+  kimi-k3:cloud seat.
+* **v2** *"...conditioned, or moved below a decision point."* Covers `M4`. Still
+  existential: *"at least one row"* is discharged by **any** single condition, and the
+  shipped detector satisfied it while fourteen other conditionalisations escaped.
+* **v3, the opus seat's, and the one to carry forward** -- a detector for a fix that adds
+  an unconditional call owes a row for each way the call can **stop running on a path the
+  fix claims**: *(i)* a condition in front of it, enumerated over **the classes the
+  enclosing function dispatches on** -- for a command dispatcher that is the switch's
+  arms, not the opcodes some row happens to use; and *(ii)* a **move below any early
+  return** in the same function, one row per return.
+
+For `wdc_command()` that enumerates 20 case labels plus default and 2 early returns, both
+readable straight off the source -- closed over the diff's own hunks, so it cannot become
+`#392`. **It is discharged by two rows.**
+
+### Why each of the two rows was necessary rather than tidy
+
+**`row_absent_drive_resets` -- the early return nobody covered.** Measured cause: all
+seventeen `wdc_command()` calls across all rows ran with `stub_disk_exists = 1`, so **the
+no-disk guard fired in no row anywhere**. Moving the call below that guard *only* --
+strictly smaller than `M4` -- escaped everything:
+
+```
+HEAD   ok    absent-drive command resets   0 cmd(s) flag 0 abrt 1
+PRE    ok    absent-drive command resets   0 cmd(s) flag 0 abrt 1
+p1     FAIL  absent-drive command resets   1 cmd(s) flag 1 abrt 1
+```
+
+Note the PRE column: a **would-be regression past the pre-`#479` baseline**, on the most
+common path there is -- every ATA bus scan probes absent drives.
+
+**`row_every_opcode_resets` -- because a killed mutant's family is not killed.**
+`M23_exemptfill` is scored KILLED and **three of its four conjuncts escaped alone**. Two
+seats reached this independently and named different smallest members (fable
+`!= WDCC_READ`, opus `!= ATAPI_IDENTIFY_DEVICE`). The structural reason, by reading:
+across all rows the only opcodes ever issued through `wdc_command()` over a *dirty* device
+were WRITE, IDENTIFY, ATAPI_PKT_CMD and ATAPI_SOFT_RESET -- READMULTI and
+ATAPI_IDENTIFY_DEVICE never passed through it at all.
+
+> **The table killed the measured mutants and not their families.**
+
+The oracle that collapses twenty rows into one is `occ % 512 == 0`: a command that
+legitimately fills the ring leaves exactly 512, one that does not leaves 0, and an
+unflushed 100-byte residue makes both impossible whatever the opcode does afterwards.
+
+### One escape survives, and is filed
+
+`Mq_pktretry` -- a PKT-retry skip -- passes all 87 rows. It is a **state** condition,
+neither a switch-arm exemption nor a move, so it falls outside v3's enumeration:
+above-floor coverage debt, filed with its escape recorded, per the `#447` precedent.
+**This panel was the capped ask-again**; anything past the cap is filed, never fixed.
+Filed alongside it: four state guards and a ring-pointer form, the last of which its
+finder states plainly was **not** established non-equivalent.
+
+### Q4 reversed by measurement
+
+The round first **declined** to name the rows in `gate_offline.sh`, reasoning that the
+detector's identity row already reds the gate on a deletion, so naming would guard a shut
+door. Two seats refuted that by different routes, and both refutations were built and run:
+
+```
+D1_renumber      (kimi)   delete the call AND renumber the pin  -> 86 rows, 0 fail, PASS
+D2_rowsplusplus  (codex)  replace the call with `rows ++;`      -> 87 rows, 0 fail, PASS
+```
+
+`D2` is the sharper: **no renumber at all, a single edit.** The pin binds row *count*,
+never row *identity*. Three named checks added and negative-controlled -- against `D2` the
+detector still reports `87 rows, 0 failures, PASS` while the new check reports
+`got 0  want 1`. Gate 302 -> 305.
+
+*A dissent worth recording rather than resolving:* the fable seat held the decline was
+correct under the project's own mutant policy, since a two-edit delete-plus-repin is
+outside the licensed single-edit shapes. That is fair against `D1` and **does not reach
+`D2`, which is one edit.** The naming stands on `D2`.
+
+**The honest scope:** naming closes deletion and replacement. It does not close an oracle
+**weakened while keeping its label** -- opus measured exactly that staying green. Kill-table
+territory. The kimi seat put it better than the round did: *"naming is insufficient"*, not
+*"the door is shut"*.
+
+### Three L1 construction defects in my own rows
+
+1. **A row green for the wrong reason.** `row_rejected_cmd_resets` asserted conditions that
+   hold whether or not the abort guard fires. Measured with `q3check.py`: green on a command
+   never rejected; with `!(d.error & WDCE_ABRT)` added, correctly red. It was never vacuous
+   -- it killed `M4` either way, which is why no mutant could have found it. **And opus
+   independently built the failure mode this predicts** -- a neighbouring row leaving
+   `stub_noncdrom_id` at this drive's id silently defuses the guard; it escaped against the
+   pre-fix version and reds against the fixed one. The conjunct is load-bearing.
+2. **The fixture manufactured the condition it was testing.** All three rows pre-set
+   `d.cur_command`, which `wdc_command()` assigns itself, making `M11`'s
+   `cur_command == idata` true by construction. Named by kimi-k3:cloud; measured 3 red with
+   the pre-sets, 2 without. **The fix is not simply deleting them** -- that left
+   `cur_command` 0, so the reissue stopped being same-opcode at all and the row built to
+   kill `M11` stopped killing it. The row now issues its first WRITE as a real command, so
+   the *device* sets `cur_command`.
+3. **Outcomes asserted without setup.** Named by codex: same-opcode now proves 100 bytes
+   were staged, refill proves 510 remained unread.
+
+### A process finding, about this panel
+
+**The detector was edited three times while the panel was in flight** -- brief fired
+12:48:10, detector last modified 13:02:14, gate 13:08. The eight scriptable seats reviewed
+v1; only the two Agent seats could see the tree, and both said so and re-ran everything
+against the current text.
+
+That is the carrier's editing-a-running-script hazard applied to a **deliverable**. Nothing
+was mismeasured -- every seat reporting numbers had rebuilt from source -- but a seat
+reasoning from the brief's inlined diff was reasoning about code that no longer existed.
+
+> **A stage record names which revision each seat saw, and a detector under panel review is
+> frozen for the duration or the panel is re-fired.**
+
+The brief also mis-rendered the enclosing function (`static void`, helper call first; it is
+`void`, and the call is the **third** statement). Both flagship seats caught it
+independently -- **a sketch-rule defect in a brief written to satisfy the sketch rule**.
+
+### `#479` pass 2 -- the receipt, and four record corrections
+
+**9 of 9 seats.** The kimi CLI is 403-walled on its billing cycle; its seat is covered by
+the `kimi-k3:cloud` substitute, which answered 7,566 bytes. **One seat covered, not one
+lost.**
+
+* **L4 -- a matrix OBSERVATION recorded as a shipped RED ROW.** The variant table's first
+  cell read `ctl-SRST still unflushed (1)` under a column headed *"non-reproduction rows
+  RED"*. **No such row exists** -- `WDCTL_RST` appears once in the detector, in a comment.
+  Corrected in both files.
+* **L4 -- the endianness paragraph, twice over.** codex found the coverage claim
+  overstated; opus **measured the stated reason false** (flipping the default gives 0
+  failures, byte-identical output). Corrected, with the palindrome census that explains it.
+* **L4 -- three more from codex, all checkable:** `M23` "reproduces both" W1 and W2 (its own
+  log says otherwise); "the call was watched by nothing" (overstated -- `Mb_revert` gave six
+  reds); "`#479` added no predicate" (false at commit scope -- it also added `!badlen_this`).
+* **A fourth piece of leftover state, confirmed four ways.** Named by grok, measured by opus
+  (`cyl=0f9c`), reproduced here (`wrote 0x800 read 0x600`) -- **and the fable seat, which had
+  dissented, conceded on its own unseeded reproduction.** Filed as `wdccylstale`.
+
+**deepseek's dissent was checked and refuted:** `atapi_len` and `atapi_received` are both
+cleared on **both** arms of the dispatch path before any consumer runs (`dev_wdc.c`, the two
+`d->atapi_len = 0; d->atapi_received = 0;` sites either side of the `res == 0` early break).
+
+*Citations here are given as grep anchors rather than line numbers: this round's own comment
+block moved those lines by eight, which is the carrier's re-grep-after-the-last-edit rule
+broken inside the commit that cites them. Both flagship seats caught it.*
+
+
 ## Round 479 (#479) -- a new command did not reset what the old one left
 
 `wdc_command()` cleared the ATAPI flag and the error and nothing else, so **three**
@@ -22,10 +207,26 @@ built the matrix:
 
 | variant | non-reproduction rows RED |
 |---|---|
-| helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (1) |
+| helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (matrix obs.) |
 | flush off `WDCTL_4BIT` | **ctl write mid-transfer `0 w, 0 b`** + 256 orphaned bytes |
 | flush off `WDCTL_RST` | **none -- the cleanest variant** |
 | flush at the **END** | **IDENTIFY destroyed 256/256 words**, READ destroyed |
+
+> #### *** L4, found by the codex seat on this round's own pass 2, AFTER the commit. ***
+>
+> That first cell read **`ctl-SRST still unflushed (1)`** under a column headed *"non-reproduction
+> rows RED"* -- which asserts a shipped row. **No such row exists.** The detector mentions
+> `WDCTL_RST` exactly once and it is a COMMENT inside `row_devctl_preserves_write`, warning a
+> future round off the wrong bit; no row writes `WDCTL_RST` and expects an abort or a flush.
+>
+> The observation itself is real -- it came from the variant matrix, on trees carrying the
+> reproduction rows -- but it is a **named outstanding condition, not a red row in the shipped
+> detector**, and the column header made it read as the second thing. Corrected in place rather
+> than superseded, per the oracle-correction rule's third obligation.
+>
+> *The seat also named the invariant better than the round did: this is the **command-register
+> boundary** invariant. ALT-CTRL is a sibling recovery interface, not another `wdc_command()`
+> entrance -- which is exactly why F-narrow is defensible and why the ALT-CTRL round is separate.*
 
 * **The end-flush form is a regression the shipped detector could not see.** Strip the new
   rows and top-flush and end-flush have IDENTICAL failure sets. Clean-up-on-exit reads as
@@ -57,10 +258,44 @@ And the rung-3 witness machine for this defect family, `evbmips -e malta`, is
 **little-endian**. The detector was testing the opposite arm from the machine the defect
 was witnessed on.
 
-Closed with a `stub_byte_order` control, an LE decline row, and a liveness control that
-proves the LE arm actually ran (the two arms push a 16-bit store in opposite byte order).
-**The default is deliberately unchanged** -- flipping it would silently re-point 80 rows at
-the other arm, and any row that then failed would be indistinguishable from a real defect.
+**Both arms of the rejected-width setter** are now covered, with a `stub_byte_order`
+control, an LE decline row, and a liveness control that proves the LE arm actually ran (the
+two arms push a 16-bit store in opposite byte order). The default is unchanged.
+
+> #### *** TWO L4 CORRECTIONS TO THIS PARAGRAPH, FROM TWO SEATS ON THIS ROUND'S OWN PASS 2.
+> #### The second is a MEASUREMENT against a reason I asserted without measuring. ***
+>
+> **(1) SCOPE, named by codex.** An earlier draft said **"Closed"**, which reads as the
+> endianness gap being shut. It is not. The LE opt-in proves the rejected-width setter ran and
+> checks **the first byte of one legal two-byte store**. End-to-end CDB dispatch, a complete
+> sector write, and second-byte behaviour remain **BE-only**.
+>
+> **(2) THE STATED REASON WAS FALSE, and opus measured it.** This paragraph justified keeping
+> the default by claiming a flip *"would silently re-point 80 rows at the other arm, and any row
+> that then failed would be indistinguishable from a real defect."*  **Flipped: 0 failures, 0 of
+> 80 result lines changed, output byte-identical.** No row fails, so the precaution guards a
+> hazard that does not exist.
+>
+> And the flip is REAL -- negative-controlled both ways (`Mbe_nobad` 2 red -> **0 red** against
+> the flipped detector; `Mle_nobad` 1 red -> 3 red). So both hold at once: **the code path
+> genuinely swaps, and no row's output can tell.** *"78 of 80 rows run one arm" understates it --
+> those 78 do not DISTINGUISH the arms at all.*
+>
+> **THE MECHANISM IS A PALINDROME CENSUS, and it is this file's own word-47 lesson recurring at
+> the data port.** Nearly every 2-byte payload in the suite is a byte-palindrome -- `0x7c7c`,
+> `0x6d6d`, `0x3333`, `0x7777`, `0x6b6b`, `0x5555` -- so a swap is invisible by construction. Two
+> further mutants escaped byte-identically on BOTH arms: `Mbe_swap` (swap the BE push order, the
+> arm 78 rows run) and `Mle_rdswap`/`Mbe_rdswap` (**the entire READ-side endianness branch, which
+> is pinned by nothing at all**). No oracle anywhere inspects the CDB bytes the dispatch
+> assembles, because `diskimage_scsicommand` ignores `xferp->cmd`.
+>
+> **Disposition:** the control and the LE row stay -- they are right. The prose is corrected here
+> rather than superseded. The coverage residue is filed as `wdcletwins`, carrying opus's own
+> measurement that **looping the suite over both arms costs nothing**, which is a cheaper and
+> stronger answer than adding LE twins row by row.
+>
+> *A precaution and a coverage claim are both claims about things that did NOT happen, which is
+> exactly the kind this project keeps asserting and not measuring. One flipped run settled both.*
 
 Verified against the mutant that was invisible: `base` md5 `83322ca4`, `le_nobad` md5
 `ce9e0551`, one row red, `first=0xbe` -- 512 bytes of unread payload reaching the guest's

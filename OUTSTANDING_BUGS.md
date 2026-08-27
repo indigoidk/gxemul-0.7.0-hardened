@@ -11136,7 +11136,7 @@ that disagreements are settled empirically, and the Fable seat built the matrix:
 
 | variant | non-P5 rows RED |
 |---|---|
-| `v1_narrow` — helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (1) |
+| `v1_narrow` — helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (matrix obs., not a shipped row) |
 | `v2_widecur` — flush off `WDCTL_4BIT` | **ctl write mid-transfer `0 w, 0 b`** + 256 orphaned bytes |
 | `v3_widerst` — flush off `WDCTL_RST` | **none — the cleanest variant** |
 | `v4_endflush` — flush at the **END** | **IDENTIFY destroyed 256/256 words**, READ destroyed, SRST |
@@ -11247,3 +11247,115 @@ three questions, one defect.*
 *Found by verifying a seat's measurement rather than transcribing it — the switch's own
 comment says "Special hacks for individual machines", which is what made the missing case
 obvious once the file was open.*
+
+---
+
+## 2026-08-27 -- three findings from `#479`'s pass 2, filed rather than fixed
+
+The round was already committed when this panel returned. Under the **late-dissent rule**
+that changes the licence, never the truth-value: wrong records were corrected in place, the
+floor breach became `#480`, and these three are **disposition 3 -- new queue items carrying
+the dissent verbatim**, so no future reader sees false unanimity.
+
+### `wdccylstale` -- the cylinder registers publish the PREVIOUS transfer's byte count
+
+**Named by the grok seat, measured independently by opus, and reproduced here. MEDIUM.**
+
+`dev_wdc.c`'s CYL_LO/CYL_HI read arms override the guest's own written byte-count limit
+whenever `atapi_cmd_in_progress` is set:
+
+```c
+if (d->atapi_cmd_in_progress) {
+        int x = d->atapi_len;
+        if (x > 32768)
+                x = 32768;
+        odata = x & 255;            /*  and (x >> 8) & 255 for CYL_HI  */
+}
+```
+
+`#479`'s helper clears the flag, the phase, the writer and the ring. It does **not** clear
+`atapi_len`, because `atapi_len` is cleared on the **dispatch** path -- and a packet sitting
+in `PHASE_CMDOUT` has not reached it yet. So the window is exactly *after `ATAPI_PKT_CMD`,
+before the twelfth CDB byte*, and in it the guest reads back the residue of a transfer it
+already abandoned.
+
+**Three measurements, two of them independent of this file:**
+
+| who | what it saw |
+|---|---|
+| opus, register-level witness probe | `phase=0x9 cyl=0f9c (want 0000) len=3996 recv=100` -- identical on PRE, HEAD, `M4`, `M11` |
+| this round, seeded reproduction | `wrote 0x800 read 0x600` -- the guest sets a 2048-byte limit and reads back 1536 |
+| grok, by reading | *"Cylinder registers still expose leftover `atapi_len` ... a new packet can publish the previous transfer's byte count"* |
+
+**The device already states the invariant it breaks here.** `dev_wdc.c` (grep `In CMDOUT the`), in the
+*read* arm's own comment:
+
+> *In CMDOUT the `atapi_len`/`atapi_received` pair describes the PREVIOUS transfer, so no
+> completion state may be derived from it*
+
+The read arm obeys that and falls through. The cylinder arms derive a guest-visible byte
+count from exactly that pair. **One arm of the device documents the rule the other breaks.**
+
+> *** THE FABLE SEAT DISSENTED, AND THE DISAGREEMENT IS RECORDED RATHER THAN AVERAGED. ***
+> It answered Q1 *"no fourth thing"*, holding that `atapi_len`/`atapi_received` are *"gated
+> by `atapi_cmd_in_progress`"* and therefore *"inert when stale"*. They are inert while the
+> flag is **clear** -- and a new `ATAPI_PKT_CMD` **re-sets** it before the CDB completes,
+> which is the whole window. That is a READING against two MEASUREMENTS, and the carrier
+> settles disagreements empirically. Recorded here because a dissent that turns out wrong is
+> still evidence about what the next reader will assume.
+
+**Opus's cautions, which are why this is not a blind one-line add:** the pair must be cleared
+**together** (clearing `atapi_received` alone makes the refill read from offset 0 of a stale
+transfer), and `M18_clearlen` -- the obvious fix -- **also sweeps all 80 rows
+byte-identically**, so the suite cannot observe this question *in either direction*. The
+round that takes it owes a row first.
+
+### `wdcatapisig` -- a stub default silences the ATAPI signature branch, on every row
+
+**Named and measured by the fable seat. MEDIUM, and it is the endianness defect's twin.**
+
+`stub_cdrom_poison = 0` is the memset default -- *"0 = nothing is a CD-ROM"* -- and it
+silences the CD-ROM branch exactly the way `byte_order = 0` silenced the little-endian one.
+Measured: `odata = 0x14;` -> `0x00;` (CYL_LO) and `odata = 0xeb;` -> `0x00;` (CYL_HI) **both
+escape all 80 rows, and both escape `#480`'s 83.**
+
+This is the ATAPI-detection signature a guest reads after reset, it is correct on the shipped
+build, and no row sets `cur_command == COMMAND_RESET` with a CD-ROM present and reads the
+cylinder registers with the flag clear. **A true coverage gap, not a dead branch.** Roughly
+ten lines closes it.
+
+*Honest reachability caveat, the seat's own:* reaching `COMMAND_RESET` live goes through the
+ALT-CTRL `WDCTL_4BIT` path, so it is entangled with `wdcaltctrlbit`/`landiskaux`; a rung-3
+probe reaches it directly.
+
+> **THE CLASS IS WORTH MORE THAN EITHER INSTANCE: A STUB'S DEFAULT VALUE IS AN UNTESTED
+> BRANCH SELECTOR.** Twice now a field left at its `memset` zero has hidden an entire arm
+> from every row in the file, and in both cases the escape was byte-identical -- invisible to
+> md5, to row counts, to everything except a mutant aimed at the silenced arm. **Any stub
+> whose value selects a branch owes at least one row on each side.** `stub_disk_exists` was
+> checked and is *not* an instance (rows set it to 1 deliberately).
+
+### `wdcletwins` -- the endianness coverage residue, both arms of the read path
+
+**codex, opus and fable independently. LOW-MEDIUM, and cheap.**
+
+`#478`'s two-arm coverage rests on **exactly two rows**, both write-side. Measured
+consequences:
+
+* **The read-side byte assembly is pinned by nothing on either arm** -- `LEread <<8 -> <<0`
+  and `BEread <<8 -> <<0` both escape.
+* **Whichever arm is the default gets the 78-row bulk; the other gets two rows.** Flipping
+  the default makes BE-arm `badlen` deletion escape while LE-arm deletion is killed by three
+  rows -- exactly reversed.
+* `Mbe_swap`, swapping the push order on the arm 78 rows actually run, escapes on **both**
+  defaults.
+
+**The mechanism is a palindrome census**, and it is the file's own word-47 lesson recurring
+at the data port: nearly every two-byte payload in the suite is a byte-palindrome -- `0x7c7c`,
+`0x6d6d`, `0x3333`, `0x7777`, `0x6b6b`, `0x5555` -- so a swap is invisible by construction.
+No oracle anywhere inspects the CDB bytes the dispatch assembles, because
+`diskimage_scsicommand` ignores `xferp->cmd`.
+
+**Opus measured the cheap disposition: looping the suite over both arms costs nothing** (a
+flipped run is 0 failures, byte-identical), which beats adding LE twins row by row. Keep the
+default; add non-palindromic anchored rows for the push order and one per read-side arm.

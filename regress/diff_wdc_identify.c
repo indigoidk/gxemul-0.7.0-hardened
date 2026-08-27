@@ -3457,6 +3457,418 @@ static void row_little_endian_arm(void)
 }
 
 
+/*  #480: THREE ROWS THAT WATCH THE HELPER'S CALL, NOT ITS BODY.
+ *
+ *  #479's thirteen mutants all edit what wdc_new_command_reset() DOES.  Every one
+ *  dies.  Three edits to WHETHER IT IS CALLED escape with byte-identical output,
+ *  because every #479 row calls wdc_command() directly with two DIFFERENT opcodes
+ *  and a disk that exists -- so no row is in a position to notice a condition
+ *  appearing in front of the call.
+ *
+ *  Each row below is aimed at one of them, and each asserts a value MEASURED on
+ *  the committed build by a register-level witness probe.
+ */
+static void row_same_opcode_resets(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP same_opcode inbuf failed\n");
+		return;
+	}
+	stub_disk_exists = 1;
+
+	/*  The guest ISSUES a WRITE -- as a real command, so the device sets
+	    cur_command and arms the transfer itself.  This is what makes the
+	    reissue below a genuine same-opcode reissue instead of a fixture
+	    that asserts one: a row that pre-sets cur_command makes M11's
+	    `cur_command == idata` true BY CONSTRUCTION, which is the artifact
+	    the kimi-k3:cloud seat named.  Here the device produces it.  */
+	d.seccnt = 1;
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+
+	/*  ...streams 100 bytes, then gives up.  */
+	for (i = 0; i < 50; i++) {
+		buf[0] = 0xaa; buf[1] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	/*  It re-issues THE SAME OPCODE.  A retry is a new command: the abandoned
+	    100 bytes are not part of it.  M11 reads this as "a repeated opcode is
+	    a retry, not a new command" and skips the reset.  */
+	/*  SETUP LIVENESS.  Without this the row asserts an outcome without
+	    proving its premise: if the staging loop stopped working, the ring
+	    would be empty and a clean 0xbb sector would land for a reason that
+	    has nothing to do with the reset.  Named by the codex seat.  */
+	{
+		int staged = d.inbuf_head - d.inbuf_tail;
+		while (staged < 0)
+			staged += WDC_INBUF_SIZE;
+		rows ++;
+		if (staged != 100) {
+			printf("  FAIL %-38s staged %i\n",
+			    "setup: 100 bytes are abandoned", staged);
+			failures ++;
+		} else {
+			printf("  ok   %-38s %i\n",
+			    "setup: 100 bytes are abandoned", staged);
+		}
+	}
+
+	stub_disk_writes = 0;
+	stub_disk_bytes = 0;
+	stub_disk_first = -1;
+	/*  NOT pre-set: wdc_command() assigns cur_command itself, and pre-setting
+	    it makes M11's `cur_command == idata` true BY CONSTRUCTION.  Here the
+	    same-opcode condition must come from the SCENARIO -- the previous
+	    WDCC_WRITE left it set -- not from the fixture.  */
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+
+	/*  Now a full, legal sector of its own.  */
+	for (i = 0; i < 256; i++) {
+		buf[0] = 0xbb; buf[1] = 0xbb;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (stub_disk_first != 0xbb || occ != 0) {
+		printf("  FAIL %-38s first 0x%02x residue %i\n",
+		    "a same-opcode reissue resets the ring",
+		    stub_disk_first, occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s first 0x%02x residue %i\n",
+		    "a same-opcode reissue resets the ring",
+		    stub_disk_first, occ);
+	}
+
+	stub_disk_exists = 0;
+	free(d.inbuf);
+}
+
+
+static void row_rejected_cmd_resets(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, before;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP rejected_cmd inbuf failed\n");
+		return;
+	}
+	stub_disk_exists = 1;
+	stub_cdrom_poison = 1;		/*  an ATAPI-only controller  */
+
+	/*  A packet command collects EIGHT of its twelve CDB bytes...  */
+	wdc_command(fake_cpu(), &d, ATAPI_PKT_CMD);
+	for (i = 0; i < 4; i++) {
+		buf[0] = 0x28; buf[1] = 0x00;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	/*  ...and the guest then issues IDENTIFY, which an ATAPI drive ABORTS.
+	    That is the single most routine probe any ATA driver makes, and ABRT
+	    is the correct answer -- but the command still HAPPENED, so the
+	    abandoned CDB must not survive it.  M4 moves the reset below the
+	    early-return guards, so a rejected command clears nothing.  */
+	before = stub_scsi_cmds;
+	/*  NOT pre-set.  A real guest reaching here has cur_command ==
+	    ATAPI_PKT_CMD, so IDENTIFY is a DIFFERENT opcode -- which is the
+	    scenario.  Pre-setting it made M11 skip the reset here too and
+	    contributed a red that was an artifact of the fixture rather than
+	    of the defect.  Named by the kimi-k3:cloud seat.  */
+	wdc_command(fake_cpu(), &d, WDCC_IDENTIFY);
+
+	/*  Four more stray bytes.  Under M4 these COMPLETE the abandoned CDB and
+	    the device issues a SCSI command assembled from it -- on a command it
+	    has just told the guest was aborted.  */
+	for (i = 0; i < 2; i++) {
+		buf[0] = 0xff; buf[1] = 0xff;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	/*  The WDCE_ABRT conjunct is NOT decoration.  MEASURED: with
+	    stub_cdrom_poison forced to 0 so the guard CANNOT fire, the other
+	    two conditions stay green -- a plain IDENTIFY on a non-CD-ROM runs
+	    the reset too and issues no SCSI command.  So without this the row
+	    passes on a command that was never rejected, which is not what its
+	    name claims.  It still killed M4 either way; a row that is green for
+	    the wrong reason is a row whose next edit is unattributable.  */
+	if (stub_scsi_cmds != before || d.atapi_cmd_in_progress != 0 ||
+	    !(d.error & WDCE_ABRT)) {
+		printf("  FAIL %-38s %i cmd(s) flag %i abrt %i\n",
+		    "a rejected command still resets",
+		    stub_scsi_cmds - before, d.atapi_cmd_in_progress,
+		    !!(d.error & WDCE_ABRT));
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i cmd(s) flag %i abrt %i\n",
+		    "a rejected command still resets",
+		    stub_scsi_cmds - before, d.atapi_cmd_in_progress,
+		    !!(d.error & WDCE_ABRT));
+	}
+
+	stub_cdrom_poison = 0;
+	stub_disk_exists = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+static void row_refill_cmd_resets(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP refill_cmd inbuf failed\n");
+		return;
+	}
+	stub_disk_exists = 1;
+
+	/*  IDENTIFY fills the ring with its 512-byte answer...  */
+	wdc_command(fake_cpu(), &d, WDCC_IDENTIFY);
+
+	/*  ...the guest reads one word and abandons it...  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	/*  ...and re-issues IDENTIFY.  The answer must be a FRESH block, not the
+	    old tail with a new block queued behind it.  M23 exempts exactly these
+	    refilling commands from the reset -- "they load their answer INTO the
+	    ring, so do not flush for them" -- which is a direct misreading of the
+	    round's own comment about why the helper runs at the TOP.  */
+	/*  SETUP LIVENESS.  510 bytes must actually be sitting there, or the
+	    final occupancy-512 assertion is satisfied by a ring that was empty
+	    all along and proves nothing about the flush.  Named by codex.  */
+	{
+		int left = d.inbuf_head - d.inbuf_tail;
+		while (left < 0)
+			left += WDC_INBUF_SIZE;
+		rows ++;
+		if (left != 510) {
+			printf("  FAIL %-38s left %i\n",
+			    "setup: 510 bytes remain unread", left);
+			failures ++;
+		} else {
+			printf("  ok   %-38s %i\n",
+			    "setup: 510 bytes remain unread", left);
+		}
+	}
+
+	wdc_command(fake_cpu(), &d, WDCC_IDENTIFY);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (occ != 512) {
+		printf("  FAIL %-38s occupancy %i\n",
+		    "a refill command starts from empty", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s occupancy %i\n",
+		    "a refill command starts from empty", occ);
+	}
+
+	stub_disk_exists = 0;
+	free(d.inbuf);
+}
+
+
+/*  #480: THE CALL CAN STOP RUNNING ON A PATH WITHOUT BEING "CONDITIONED".
+ *
+ *  wdc_command() has TWO early returns.  This round's first three rows covered the
+ *  second (the CD-ROM/IDENTIFY abort) and left the first -- the no-disk guard --
+ *  reachable by no row at all: every one of the seventeen wdc_command() calls in
+ *  the file runs with stub_disk_exists = 1.
+ *
+ *  So moving the helper call below the FIRST guard only, which is strictly smaller
+ *  than the M4 mutant this round was built for, escaped every row.  Measured worse
+ *  than pre-#479: a driver probing an absent drive -- which every ATA bus scan does
+ *  -- leaves an abandoned CDB live, and stray bytes then complete it into a SCSI
+ *  command on a command the device has just aborted.
+ */
+static void row_absent_drive_resets(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, before;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP absent_drive inbuf failed\n");
+		return;
+	}
+
+	/*  A packet command is in flight and has collected eight of twelve bytes.  */
+	stub_disk_exists = 1;
+	stub_cdrom_poison = 1;
+	wdc_command(fake_cpu(), &d, ATAPI_PKT_CMD);
+	for (i = 0; i < 4; i++) {
+		buf[0] = 0x28; buf[1] = 0x00;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	/*  The guest now addresses a drive that is not there.  The command is
+	    aborted at the FIRST guard -- but it still happened, so the abandoned
+	    CDB must not survive it.  */
+	before = stub_scsi_cmds;
+	stub_disk_exists = 0;
+	wdc_command(fake_cpu(), &d, WDCC_IDENTIFY);
+
+	/*  Stray bytes that would complete the abandoned CDB.  */
+	for (i = 0; i < 2; i++) {
+		buf[0] = 0xff; buf[1] = 0xff;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	if (stub_scsi_cmds != before || d.atapi_cmd_in_progress != 0 ||
+	    !(d.error & WDCE_ABRT)) {
+		printf("  FAIL %-38s %i cmd(s) flag %i abrt %i\n",
+		    "an absent-drive command still resets",
+		    stub_scsi_cmds - before, d.atapi_cmd_in_progress,
+		    !!(d.error & WDCE_ABRT));
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i cmd(s) flag %i abrt %i\n",
+		    "an absent-drive command still resets",
+		    stub_scsi_cmds - before, d.atapi_cmd_in_progress,
+		    !!(d.error & WDCE_ABRT));
+	}
+
+	stub_cdrom_poison = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+/*  #480: ONE ROW OVER EVERY DISPATCHED OPCODE, because a four-token exemption is
+ *  killed by a row that only exercises one of its tokens.
+ *
+ *  M23_exemptfill exempts IDENTIFY, READ, READMULTI and ATAPI_IDENTIFY_DEVICE and
+ *  is scored KILLED -- yet THREE OF ITS FOUR CONJUNCTS ESCAPE ON THEIR OWN.  The
+ *  sharpest is ATAPI_IDENTIFY_DEVICE, which shares a case label with WDCC_IDENTIFY
+ *  and fills the ring identically: it is the standard ATAPI probe, so it is the
+ *  MORE reachable half, and `row_refill_cmd_resets` uses WDCC_IDENTIFY only.
+ *
+ *  A row per opcode would be twenty rows.  The oracle that collapses them to one is
+ *  `occ % 512 == 0`: a command that legitimately FILLS the ring leaves exactly 512,
+ *  a command that does not leaves 0, and an unflushed 100-byte residue makes both
+ *  impossible whatever the opcode does afterwards.
+ *
+ *  The enumeration is the function's own switch arms, read off the source -- not the
+ *  opcodes some row happens to use.  That is what keeps it closed.
+ */
+static void row_every_opcode_resets(void)
+{
+	static const int op[] = {
+		WDCC_READ, WDCC_READMULTI, WDCC_WRITE, WDCC_WRITEMULTI,
+		WDCC_IDP, SET_FEATURES, WDCC_RECAL, WDCC_IDENTIFY,
+		ATAPI_IDENTIFY_DEVICE, WDCC_IDLE_IMMED, WDCC_SETMULTI,
+		ATAPI_SOFT_RESET, ATAPI_PKT_CMD
+	};
+	int k, bad = 0, firstbad = -1, badocc = -1;
+
+	for (k = 0; k < (int) (sizeof(op) / sizeof(op[0])); k++) {
+		struct wdc_data d;
+		unsigned char buf[8];
+		int i, occ;
+
+		memset(&d, 0, sizeof(d));
+		d.addr_mult  = 1;
+		d.io_enabled = 1;
+		d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+		d.irq.interrupt_assert = arm_sink;
+		if (d.inbuf == NULL)
+			continue;
+		stub_disk_exists = 1;
+
+		/*  An abandoned WRITE with a 100-byte residue -- the exact state
+		    #479 exists to clear.  */
+		d.seccnt = 1;
+		wdc_command(fake_cpu(), &d, WDCC_WRITE);
+		for (i = 0; i < 50; i++) {
+			buf[0] = 0xaa; buf[1] = 0xaa;
+			dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2,
+			    MEM_WRITE, &d);
+		}
+
+		/*  ...and then THIS opcode arrives.  */
+		d.seccnt = 1;
+		wdc_command(fake_cpu(), &d, op[k]);
+
+		occ = d.inbuf_head - d.inbuf_tail;
+		while (occ < 0)
+			occ += WDC_INBUF_SIZE;
+
+		if ((occ % 512) != 0) {
+			bad ++;
+			if (firstbad < 0) {
+				firstbad = op[k];
+				badocc = occ;
+			}
+		}
+
+		if (d.atapi_st != NULL) {
+			free(d.atapi_st->data_in);
+			free(d.atapi_st->cmd);
+			free(d.atapi_st);
+		}
+		free(d.inbuf);
+		stub_disk_exists = 0;
+	}
+
+	rows ++;
+	if (bad != 0) {
+		printf("  FAIL %-38s %i of 13, first 0x%02x occ %i\n",
+		    "every opcode clears the residue", bad, firstbad, badocc);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i of 13\n",
+		    "every opcode clears the residue", bad);
+	}
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -3793,6 +4205,11 @@ int main(void)
 	row_writemulti_moment();
 	row_leftover_second_badlen();
 	row_little_endian_arm();
+	row_same_opcode_resets();
+	row_rejected_cmd_resets();
+	row_refill_cmd_resets();
+	row_absent_drive_resets();
+	row_every_opcode_resets();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -3816,8 +4233,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 80) {
-		printf("  FAIL %-38s rows = %i, want 80\n",
+	if (rows != 87) {
+		printf("  FAIL %-38s rows = %i, want 87\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

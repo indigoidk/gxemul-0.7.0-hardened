@@ -1398,6 +1398,32 @@ else
     #  0x8080, a byte-swap palindrome, and would have been useless here.
     check     "wdc IDENTIFY: the packing anchor is present" \
               "$(grep -c 'packing anchor' "$WDCLOG")" "1"
+
+    #  #480: THE THREE CALL-SITE ROWS ARE NAMED, BECAUSE THE COUNT PIN IS NOT ENOUGH.
+    #
+    #  This round first DECLINED to name them, reasoning that the detector's own identity
+    #  row (`if (rows != 85)`) already reds the gate on any deletion, so naming would guard
+    #  a shut door -- which the ADDITION LICENCE refuses.  TWO SEATS REFUTED THAT BY
+    #  DIFFERENT ROUTES, and both refutations were then MEASURED:
+    #
+    #    D1_renumber      delete the call AND renumber the pin in the same edit
+    #                     -> 82 rows, 0 failures, WDC_IDENTIFY_PASS
+    #    D2_rowsplusplus  replace `row_rejected_cmd_resets();` with `rows ++;`
+    #                     -> 83 rows, 0 failures, WDC_IDENTIFY_PASS  <- no renumber at all
+    #
+    #  So the count pin binds the row COUNT and not row IDENTITY, and the SOLE CARRIER for
+    #  M4_afterguard could have been removed with this gate staying green.  These three
+    #  checks close exactly that mode.
+    #
+    #  WHAT THEY DO NOT CLOSE, stated because a guard whose scope is overclaimed is worse
+    #  than none: an oracle WEAKENED while keeping its label.  `rows` stays right, the
+    #  label still prints, and these greps still pass.  That remains kill-table territory.
+    check     "wdc IDENTIFY: the same-opcode reissue row is present" \
+              "$(grep -c 'a same-opcode reissue resets the ring' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the rejected-command row is present" \
+              "$(grep -c 'a rejected command still resets' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the refill-command row is present" \
+              "$(grep -c 'a refill command starts from empty' "$WDCLOG")" "1"
     #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
     #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
     #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first

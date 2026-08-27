@@ -218,6 +218,22 @@ MANIFEST = {
         (CLASS_RESEARCH, "#479 wdcwipclear repro generator, preserved as evidence"),
     "artifacts/wdccmdreset/killtable_20260827/mk479.py":
         (CLASS_RESEARCH, "#479 mutant applier, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/mk480.py":
+        (CLASS_RESEARCH, "#480 call-site row generator, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/mk480b.py":
+        (CLASS_RESEARCH, "#480 clause-(i)/(ii) row generator, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/mut480.py":
+        (CLASS_RESEARCH, "#480 call-site mutant applier, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/mut480b.py":
+        (CLASS_RESEARCH, "#480 full escape-set mutant applier, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/q3check.py":
+        (CLASS_RESEARCH, "#480 fixture-liveness control, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/q4check.py":
+        (CLASS_RESEARCH, "#480 detector-mutant applier (count-pin refutation), evidence"),
+    "artifacts/wdccallsite/killtable_20260827/fixrows480.py":
+        (CLASS_RESEARCH, "#480 row-construction repair, preserved as evidence"),
+    "artifacts/wdccallsite/killtable_20260827/gatename480.py":
+        (CLASS_RESEARCH, "#480 gate row-naming applier, preserved as evidence"),
     "artifacts/wdccmdreset/killtable_20260827/port479.py":
         (CLASS_RESEARCH, "#479 row-port generator, preserved as evidence"),
     "artifacts/wdccmdreset/killtable_20260827/add479rows.py":

@@ -1,0 +1,203 @@
+#480 KILL TABLE -- 87 rows, baseline 0 failures (base.out)
+
+Every .out here is from ONE detector state.  Verified before this table was written: all
+eighteen report 87 rows, except D1_renumber at 86 BECAUSE THAT IS ITS MUTATION.
+
+  MUTANT             FAILS  carried by
+  ------             -----  ----------
+  M11_sameop           3    same-opcode ; refill ; every-opcode
+  M4_afterguard        2    rejected ; absent-drive
+  M23_exemptfill       4    rejected ; refill ; absent-drive ; every-opcode
+  Mb_revert            9    (clause (b) control -- six pre-existing plus this round's three)
+  Mq_identify          4    rejected ; refill ; absent-drive ; every-opcode
+  Mq_read              1    every-opcode                      <- SOLE
+  Mq_readmulti         1    every-opcode                      <- SOLE
+  Mq_atapiid           1    every-opcode                      <- SOLE
+  Mq_writemulti        1    every-opcode                      <- SOLE
+  Mq_idp               1    every-opcode                      <- SOLE
+  Mq_setfeat           1    every-opcode                      <- SOLE
+  Mq_softreset         1    every-opcode                      <- SOLE
+  p1_belowguard1       1    absent-drive                      <- SOLE
+  Mq_pktretry          0    *** ESCAPED -- filed, see below ***
+
+13 of 14.  TWO ROWS CARRY EIGHT SOLE KILLS between them.
+
+Driver kill480b.sh, rows mk480.py + mk480b.py, product mutants mut480b.py, detector
+mutants and the Q2 candidate q4check.py + q4run.sh, the Q3 fixture control q3check.py,
+the gate negative control negrun.sh.  Scratch trees only (/tmp/gx480b, /tmp/gxq4).
+
+
+*** WHAT THIS ROUND IS FOR: #479's DETECTOR COULD NOT SEE ITS OWN CALL. ***
+
+#479 shipped wdc_new_command_reset() and a detector that kills 13 of 13 mutants of that
+helper's BODY.  Three one-line edits to WHETHER IT IS CALLED swept all 80 rows with
+BYTE-IDENTICAL output: M11_sameop (`if (!same_cmd)`), M4_afterguard (move below the two
+early-return guards), M23_exemptfill (exempt the ring-filling opcodes).
+
+THE STRUCTURAL REASON, and it is the transferable part: every #479 reproduction row
+called wdc_command() DIRECTLY, with stub_disk_exists = 1, using two DIFFERENT opcodes.
+No row was in a position to notice a condition appearing in front of the call.  The blind
+spot was a property of how the rows were CUT, not of what they asserted.
+
+
+*** THE GENERALISATION WENT THROUGH THREE FORMS.  The third is the opus seat's and it is
+    the one to carry forward, because the first two EXCLUDED THIS ROUND'S OWN HEADLINE
+    MUTANT. ***
+
+  v1  "...at least one row that reds if that call BECOMES CONDITIONAL."
+      M4 is a RELOCATION, not a condition -- so the round's headline mutant was not an
+      instance of the round's own rule.  Named by the kimi-k3:cloud seat.
+
+  v2  "...conditioned, OR MOVED BELOW A DECISION POINT."
+      Covers M4.  Still existential: "at least one row" is discharged by ANY single
+      condition, and the shipped detector satisfied it while FOURTEEN other
+      conditionalisations of the same call escaped.
+
+  v3  A detector for a fix that adds an unconditional call owes a row for each way the
+      call can STOP RUNNING ON A PATH THE FIX CLAIMS:
+        (i)  a condition in front of it, enumerated over THE CLASSES THE ENCLOSING
+             FUNCTION DISPATCHES ON -- for a command dispatcher that is the switch's
+             arms, not the opcodes some row happens to use; and
+        (ii) a MOVE BELOW ANY EARLY RETURN in the same function -- one row per return.
+
+v3 is what this round is built to.  For wdc_command() it enumerates 20 case labels plus
+default, and 2 early returns, both readable straight off the source -- so it stays closed
+over the diff's own hunks and cannot become #392.  It is discharged by TWO rows.
+
+
+*** THE TWO ROWS, AND WHY EACH WAS NECESSARY RATHER THAN TIDY. ***
+
+row_absent_drive_resets -- clause (ii), the early return nobody covered.
+
+  MEASURED CAUSE: all seventeen wdc_command() calls across all rows ran with
+  stub_disk_exists = 1, so THE NO-DISK GUARD FIRED IN NO ROW ANYWHERE.  Moving the call
+  below that guard ONLY -- strictly smaller than M4 -- escaped everything:
+
+      HEAD   ok    absent-drive command resets   0 cmd(s) flag 0 abrt 1
+      PRE    ok    absent-drive command resets   0 cmd(s) flag 0 abrt 1
+      p1     FAIL  absent-drive command resets   1 cmd(s) flag 1 abrt 1
+
+  Note the PRE column: this is a WOULD-BE regression past the pre-#479 baseline, on the
+  most common path there is -- every ATA bus scan probes absent drives.  An abandoned CDB
+  survives, stray bytes complete it, and a SCSI command is dispatched on a command the
+  device has just aborted.
+
+row_every_opcode_resets -- clause (i), and it exists because A KILLED MUTANT'S FAMILY IS
+  NOT KILLED.
+
+  M23_exemptfill is scored KILLED, and THREE OF ITS FOUR CONJUNCTS ESCAPED ALONE.  Two
+  seats reached this independently and named different smallest members -- fable
+  `!= WDCC_READ`, opus `!= ATAPI_IDENTIFY_DEVICE`.  The structural reason (fable, by
+  reading): across all rows the only opcodes ever issued through wdc_command() over a
+  DIRTY device were WRITE, IDENTIFY, ATAPI_PKT_CMD and ATAPI_SOFT_RESET.  READMULTI and
+  ATAPI_IDENTIFY_DEVICE never passed through it at all.
+
+      *** SO THE TABLE KILLED THE MEASURED MUTANTS AND NOT THEIR FAMILIES. ***
+
+  ATAPI_IDENTIFY_DEVICE is the sharper escape: it shares a case label with WDCC_IDENTIFY,
+  fills the ring identically, and is THE STANDARD ATAPI PROBE -- the more reachable half
+  of the mutant, while row_refill_cmd_resets uses WDCC_IDENTIFY only.
+
+  THE ORACLE THAT COLLAPSES TWENTY ROWS INTO ONE is `occ % 512 == 0`: a command that
+  legitimately FILLS the ring leaves exactly 512, one that does not leaves 0, and an
+  unflushed 100-byte residue makes both impossible whatever the opcode does afterwards.
+  Seven sole kills for one row.
+
+
+*** ONE ESCAPE SURVIVES AND IS FILED, NOT FIXED. ***
+
+Mq_pktretry (fable) -- `int was_pkt = (d->cur_command == ATAPI_PKT_CMD);` before the
+assignment, then `if (!(was_pkt && idata == ATAPI_PKT_CMD))`.  87 rows, 0 failures.
+
+It is a STATE condition, not a switch-arm exemption and not a move, so it falls outside
+v3's enumeration -- above-floor coverage debt, filed with its escape recorded, per the
+#447 precedent both seats cited.  THIS PANEL WAS THE CAPPED ASK-AGAIN; anything found
+past the cap is filed, never fixed, and that cap is the anti-#392 clause.
+
+Also filed, from the same seats: four STATE guards (`atapi_st == NULL`;
+`atapi_phase != PHASE_DATAIN`; `!= PHASE_DATAOUT`; `atapi_st == NULL || atapi_len == 0`)
+and a ring-pointer form (`d->inbuf_tail = d->inbuf_head;` instead of `head = tail = 0`).
+The seat that found the last one states plainly it did NOT establish it non-equivalent.
+
+
+*** Q4 REVERSED BY MEASUREMENT.  The round first DECLINED to name the rows in
+    gate_offline.sh, and the reasoning was wrong. ***
+
+The declined reasoning: the detector's identity row already reds the gate on a deletion,
+so naming would guard a shut door, which the ADDITION LICENCE refuses.  Two seats refuted
+it by different routes and both refutations were built and run:
+
+    D1_renumber      (kimi)   delete the call AND renumber the pin in one edit
+                              -> 86 rows, 0 failures, WDC_IDENTIFY_PASS
+    D2_rowsplusplus  (codex)  replace the call with `rows ++;`
+                              -> 87 rows, 0 failures, WDC_IDENTIFY_PASS
+
+D2 is the sharper: NO RENUMBER AT ALL, a single edit.  The pin binds the row COUNT, never
+row IDENTITY, so a sole carrier could be removed with the gate fully green.
+
+Three named checks added, NEGATIVE-CONTROLLED (negrun.sh): against D2 the detector still
+reports `87 rows, 0 failures, WDC_IDENTIFY_PASS` while the new check reports
+`got 0  want 1`.  Gate 302 -> 305 checks.
+
+  A DISSENT WORTH RECORDING RATHER THAN RESOLVING: the fable seat held the decline was
+  CORRECT under the project's own mutant policy, since a two-edit delete-plus-repin is
+  outside the licensed single-edit shapes.  That is a fair objection to D1 -- and it does
+  not reach D2, which is ONE edit.  The naming stands on D2.
+
+  THE HONEST SCOPE: naming closes DELETION and REPLACEMENT.  It does not close an oracle
+  WEAKENED while keeping its label -- `rows` stays right, the label still prints, the
+  greps still pass, and opus measured exactly that staying green.  Kill-table territory.
+  The kimi seat put the conclusion better than the round did: "naming is insufficient",
+  not "the door is shut".
+
+
+*** THREE L1 CONSTRUCTION DEFECTS IN MY OWN ROWS. ***
+
+(1) A ROW GREEN FOR THE WRONG REASON.  row_rejected_cmd_resets asserted stub_scsi_cmds
+    unchanged and atapi_cmd_in_progress == 0 -- both of which hold whether or not the
+    abort guard fires.  MEASURED with q3check.py (forces stub_cdrom_poison = 0 in that
+    row only): before, GREEN on a command never rejected; after adding
+    `!(d.error & WDCE_ABRT)`, correctly RED.  It was never vacuous -- it killed M4 either
+    way, which is why no mutant could have found it.  The defect is that it was green for
+    a reason other than the one its NAME states.
+
+    *** AND THE OPUS SEAT INDEPENDENTLY BUILT THE FAILURE MODE THIS PREDICTS: a
+    neighbouring row leaving stub_noncdrom_id at this drive's id would silently defuse
+    the guard.  Against the pre-fix version it ESCAPED at 0 failures; against the fixed
+    version it reds.  The conjunct is load-bearing, not decoration. ***
+
+(2) THE FIXTURE MANUFACTURED THE CONDITION IT WAS TESTING.  All three rows pre-set
+    `d.cur_command` before calling wdc_command(), which assigns it itself.  M11 tests
+    `cur_command == idata`, so the pre-set made `same_cmd` TRUE BY CONSTRUCTION.  Named
+    by kimi-k3:cloud; MEASURED at 3 red with the pre-sets and 2 without.
+
+    The fix is NOT simply deleting them: doing that alone left cur_command 0, the reissue
+    stopped being same-opcode at all, and the row that exists to kill M11 stopped killing
+    it (M11 fell to 1, carried only by refill).  The row now issues its FIRST WRITE as a
+    real wdc_command() call, so the DEVICE sets cur_command and the condition comes from
+    the scenario.
+
+(3) OUTCOMES ASSERTED WITHOUT SETUP.  Named by codex: same-opcode needed to prove 100
+    bytes were staged before the reissue, refill needed to prove 510 remained unread.
+    Both are now rows.
+
+
+*** A PROCESS FINDING, NAMED BY THE FABLE SEAT, AND IT IS ABOUT THIS PANEL. ***
+
+The detector was edited THREE TIMES while this panel was in flight -- brief fired
+12:48:10, detector last modified 13:02:14, gate 13:08.  The eight scriptable seats
+reviewed v1; only the two Agent seats could see the tree, and both said so explicitly and
+re-ran everything against the current text.
+
+That is the carrier's editing-a-running-script hazard applied to a DELIVERABLE instead of
+a script.  Nothing was mismeasured -- every seat that reported numbers had rebuilt from
+source -- but a seat reasoning from the brief's inlined diff was reasoning about code
+that no longer existed.
+
+    THE RULE THIS EARNS: a stage record names WHICH REVISION each seat saw, and a
+    detector under panel review is FROZEN for the duration or the panel is re-fired.
+
+The brief also mis-rendered the enclosing function (`static void`, helper call first; it
+is `void`, and the call is the THIRD statement after `cur_command` and `error`).  Both
+flagship seats caught it independently.  That is a SKETCH-RULE defect in a brief written
+to satisfy the sketch rule.
