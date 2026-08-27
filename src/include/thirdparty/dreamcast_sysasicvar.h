@@ -71,6 +71,24 @@
 #define	SYSASIC_EVENT_PRIMOUTOFMEM	66	/*  Out of primitive mem  */
 #define	SYSASIC_EVENT_MATOUTOFMEM	67	/*  Out of matrix mem  */
 
+/*  #466: THIS MACRO IS CORRECT ONLY FOR e IN [0,95].  Stated rather than
+    asserted: _Static_assert is C11 and this tree is C99, and an assert can
+    only name terms that already exist -- a new #define above would add a name
+    it does not mention and compile clean.
+
+    4*((e)>>5) walks OUT of the three words each register group owns:
+      e 96..127  -> +0x0c, +0x1c, ...  the fourth word of a group.  Declined
+                   by dev_dreamcast_asic.c's decode; the event is DROPPED.
+      e 128..159 -> +0x10, which is a LEGAL case: the raise is decoded as an
+                   ordinary write and CLOBBERS mask_13[0].  Same for 256..287
+                   -> +0x20.  No bounds check can see this -- the offset is
+                   valid and only the MEANING is wrong.
+      e >= 2048  -> +0x100 and beyond, outside the device window entirely.
+
+    Max over the 21 defines above is 67 (67>>5 == 2), so this is LATENT.
+    Adding an event >= 96 makes it live.  See dev_dreamcast_asic.c's #463
+    invariant comment, which reasons about the r == 3 half from the other
+    side.  Filed as `asiceventaddr`.  */
 #define	SYSASIC_EVENT_TO_ADDR(e)	(SYSASIC_BASE + 4*((e)>>5))
 #define	SYSASIC_EVENT_TO_BITMASK(e)	(1 << ((e) & 31))
 
