@@ -1,3 +1,126 @@
+## Round 473 (#473) -- the ATAPI DATAIN chunking pushed a whole transfer into a ring that cannot hold it, and then reported zero bytes left
+
+Two defects in one piece of machinery, closed by one diff.  The adjudication took them as ONE
+round with TWO row ids: the arm and the re-arm are the two halves of a single chunking protocol,
+and bounding the push WITHOUT repairing the re-arm would have injected new corruption into the
+(32K, 64K] band that works today.
+
+  `wdcringambig`  the initial arm pushed every byte of the transfer into a 513-block ring
+  `wdcrearmzero`  the re-arm reported ZERO bytes remaining and the command never completed
+
+### What was wrong
+
+`WDC_INBUF_SIZE` is `512 * (WDC_MAX_SECTORS + 1)` -- exactly 513 blocks, 262656 bytes.  The
+initial arm did `atapi_len = data_in_len`, pushed every byte, and clamped to 32768 **afterwards**.
+The clamp was not missing; it was on the wrong side of the loop.
+
+At the re-arm, `if (atapi_len > 32768) atapi_len = 0;` -- where the initial arm clamps to 32768
+under the identical condition.  With more than 32768 bytes left the guest is told zero remain
+while `received < data_in_len`, and there is no recovery: the next read decrements from 0, steps
+PAST zero, and `== 0` never fires again.  That is the `#341` class, reintroduced by the re-arm.
+
+**MEASURED on the committed build, before any edit**, by the same script that later ran green:
+
+    FAIL arm: pushes one chunk, not the whole   occupancy = 512, want 32768
+    FAIL arm: block 0 survives the push         first byte = 0xc3, want 0x5a
+    FAIL re-arm: >32768 left is not zeroed      atapi_len = 0, want 32768
+    ok   re-arm: the branch was actually taken  1
+    FAIL re-arm: the chunk is REFILLED          occupancy = 0, want 32768
+    FAIL re-arm: refill starts at received      first byte = 0x00, want 0x3c
+    22 rows, 5 failures  WDC_IDENTIFY_FAIL
+
+263168 bytes pushed into a 262656-byte ring reports **512** -- the ring cannot even say how much
+it lost -- and block 0's marker byte is gone, overwritten by block 514.  That second row is the
+corruption oracle: it shows data destroyed, not merely miscounted.
+
+### The fix -- three edits, all in the DATAIN chunking
+
+1. **initial arm:** move the existing 32768 clamp BEFORE the push loop, so one DRQ chunk is
+   pushed, which is what the re-arm already assumed.
+2. **re-arm:** clamp to 32768 instead of assigning 0.
+3. **re-arm:** refill the next chunk from `data_in[atapi_received + j]`.
+
+The refill is what makes the bounded push correct.  It is safe at that point because `atapi_len`
+is 0 -- the guest has drained the previous chunk and the ring is empty -- and `data_in` is still
+live, the transfer struct being freed only when the next command arrives.
+
+### The reproduction took three attempts, and the first two were red for the WRONG REASON
+
+Attempts 1 and 2 reddened on `atapi_len = 2`, the value the fixture itself had set, and both were
+REMOVED rather than shipped.  The cause was found with gdb: a NULL function pointer, because
+`dev_wdc_tick()` runs unconditionally after every access and calls `INTERRUPT_ASSERT(d->irq)`.
+DEVINIT wires that with `INTERRUPT_CONNECT` -- a **macro**, invisible to a scan for field
+assignments, which is why reading DEVINIT for field sets missed it twice.
+
+### *** A DETECTOR AIMED ONE LEVEL BELOW THE FIX, and it went red for a reason the fix does not address ***
+
+The first ring row called `wdc_addtoinbuf()` DIRECTLY, 514 blocks' worth.  It was red on the
+committed build, which made it look like a reproduction.  It is not: that primitive is unbounded
+and **the fix did not bound it** -- the repair is in the CALLER.  So the row pinned a property
+still true afterwards and could never go green.
+
+> **A detector aimed at a primitive cannot verify a fix made in its caller.**  Right defect,
+> wrong instrument -- the red-for-the-wrong-reason failure moved one level up, where it is harder
+> to see because the row is red on the correct build for a real reason.
+
+Replaced by a row that drives the ARM: `atapi_cmd_in_progress` plus ten queued bytes, then a
+2-byte `wd_data` write completes the 12-byte packet and calls `diskimage_scsicommand()`.  The
+SCSI stub was made **controllable rather than productive** -- a file-static byte count, zero by
+default -- because that file's own header correctly warns that a stub returning a fabricated
+transfer would overwrite the re-arm row's placed state.
+
+*The packet fires on `inbuf_len == 12` AFTER the access pushes its own bytes.  Queueing twelve
+gives 14 and the command silently never fires; the first version of the row measured exactly
+that, reporting occupancy 14.*
+
+### The kill table -- 8 of 8, and TWO clause-(d) escapes closed in-round
+
+    Mb_arm       KILLED  2/6   (b) clamp back after the push loop
+    Mb_rearm     KILLED  3/6   (b) = 0, no refill
+    Mb_both      KILLED  5/6   (b) both sites -- the full pre-fix code
+    Mc_null      KILLED        (c) null medium: comment-only source, caught at compile
+    Md_widenarm  KILLED  1/6   (d) arm clamp widened to the ring size
+    Md_armzero   KILLED  2/6   (d) arm clamp inverted to 0
+    Md_norefill  KILLED  2/6   (d) clamp kept, REFILL LOOP DELETED
+    Md_wrongoff  KILLED  1/6   (d) refill re-based to data_in[j]
+
+`regress/artifacts/wdcchunking/killtable_20260827/` -- `TABLE.txt`, one file per mutant run,
+the pre-fix source and `PREFIX_RUN.txt`.  Baseline 22 rows, 0 failures, `WDC_IDENTIFY_PASS`.
+
+*Five of the six rows red pre-fix; the sixth is the liveness control, which is green in BOTH
+builds by design -- it proves the fixture reached the re-arm branch rather than that the branch
+computed the right value.  The logs live at a durable path because a citation into a reused
+scratch buffer becomes CONTRADICTED BY ITS OWN EVIDENCE on the next run.*
+
+**The last two ESCAPED the first table**, and they are the dangerous pair: `Md_norefill` tells the
+guest 32768 bytes are ready while the ring is EMPTY, and `Md_wrongoff` returns chunk 0's bytes for
+every chunk -- silent data corruption.  Both kept the guard and nulled its repair, and the length
+check alone passes both.
+
+The arm row already carried a corruption oracle; the re-arm row carried only a length check.
+**The sibling-parity check exists precisely to catch that asymmetry and would have found it before
+the table ran.**  Closed under L1 -- pre-ship construction, the rows being part of a deliverable
+still being built -- though the same finding against shipped material would have been an L2 floor
+breach.
+
+### A padded-column near-miss
+
+FOUR of the six new labels were AT or OVER the `%-38s` column width (39, 38, 38, 39), which is
+the trap that has previously made a gate check unsatisfiable so a row silently stops being
+tested.  All four shortened below the boundary and re-measured.
+
+### Honest scope
+
+`wdc_addtoinbuf()` **remains unbounded** -- the fix bounds its caller, and no row here constrains
+the primitive.  Only the FIRST re-arm is pinned; a transfer crossing several re-arms is not walked
+end to end.  The fixture drives one packet command; interleaved commands, aborts and resets are
+outside the contract.  All three are written into the differential's clause-(e) contract block
+rather than left to be discovered.
+
+Rung-1 direct-call harness = DETECTOR, never a witness.  **`wdcrearmzero` still owes a rung-3/4
+witness**; that obligation is unchanged by this round and is recorded, not discharged.
+
+`est/`, `build/` and `build-asan/` carry `dev_wdc.c` byte-identically with GXEMUL-SEC.
 ## Round 472 (#472) -- an unaligned overlay read took its bytes from the wrong layer
 
 `fread_helper()` picks an overlay layer for the block containing `curofs`, then reads up to a

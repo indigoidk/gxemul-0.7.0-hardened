@@ -258,6 +258,93 @@ int64_t diskimage_getsize(struct machine *machine, int id, int type)
 static int stub_cdrom_poison = 0;	/*  0 = nothing is a CD-ROM  */
 static int stub_noncdrom_id  = -1;	/*  the ONLY id that is not  */
 
+/*  #473: dev_wdc_access() reaches the disk layer, which the IDENTIFY-only rows never
+ *  did -- --gc-sections had been dropping these paths entirely.  Stubbed rather than
+ *  linked: the re-arm row under test never performs real I/O, it only needs the call
+ *  to return without pulling in the whole disk subsystem.  A stub that SUCCEEDS would
+ *  be wrong here (it would fabricate data); these report 'no disk', which is the
+ *  honest answer for a fixture that has none.  */
+void debug(const char *fmt, ...) { (void) fmt; }
+/*  Little-endian and SELF-CONSISTENT, which is all that is required: the device
+ *  only ever reads back what this driver wrote.  Same bodies as diff_footbridge.c,
+ *  which drives its own access handler the same way.  */
+uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len)
+{
+	uint64_t x = 0; int i;
+	(void) cpu;
+	for (i = 0; i < len; i++)
+		x |= (uint64_t) buf[i] << (8*i);
+	return x;
+}
+
+void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len, uint64_t data)
+{
+	int i;
+	(void) cpu;
+	for (i = 0; i < len; i++)
+		buf[i] = (unsigned char) (data >> (8*i));
+}
+
+/*  The SCSI layer, reached only by the packet-command path.
+ *
+ *  DEFAULT INERT, SELECTIVELY PRODUCTIVE.  Most rows here never issue a command -- they
+ *  place the state machine one read from the arithmetic under test and then read.  For
+ *  those, a scsicommand returning 1 would fabricate a transfer the fixture never asked
+ *  for and would overwrite the atapi_st the row set up.
+ *
+ *  But `row_arm_overrun` MUST issue a real packet command, because the initial arm it
+ *  tests is reachable no other way.  So the stub is controlled by a file-static byte
+ *  count: zero (the default) keeps it inert for every other row, non-zero makes it
+ *  fabricate exactly one DATA-IN transfer of that size.  */
+static int stub_datain_len = 0;
+struct scsi_transfer *scsi_transfer_alloc(void)
+{
+	return (struct scsi_transfer *) calloc(1, sizeof(struct scsi_transfer));
+}
+
+void scsi_transfer_free(struct scsi_transfer *p)
+{
+	free(p);
+}
+
+int diskimage_scsicommand(struct cpu *cpu, int id, int type,
+	struct scsi_transfer *xferp)
+{
+	size_t i;
+
+	(void) cpu; (void) id; (void) type;
+
+	if (stub_datain_len <= 0)
+		return 0;
+
+	/*  One DATA-IN transfer, marked so the caller can tell WHICH bytes
+	    survived: byte 0 alone carries 0x5a, everything else 0xc3.  A ring
+	    overrun wraps block 514 onto block 0, so the first byte popped
+	    becomes 0xc3 and the marker is destroyed.  */
+	xferp->data_in = (unsigned char *) malloc(stub_datain_len);
+	if (xferp->data_in == NULL)
+		return 0;
+	for (i = 0; i < (size_t) stub_datain_len; i++)
+		xferp->data_in[i] = 0xc3;
+	xferp->data_in[0] = 0x5a;
+	xferp->data_in_len = stub_datain_len;
+	return 1;
+}
+
+int diskimage_exist(struct machine *machine, int id, int type)
+{
+	(void)machine; (void)id; (void)type;
+	return 0;
+}
+
+int diskimage_access(struct machine *machine, int id, int type, int writeflag,
+	off_t offset, unsigned char *buf, size_t len)
+{
+	(void)machine; (void)id; (void)type; (void)writeflag;
+	(void)offset; (void)buf; (void)len;
+	return 0;
+}
+
 int diskimage_is_a_cdrom(struct machine *machine, int id, int type)
 {
 	(void)machine; (void)type;
@@ -525,6 +612,265 @@ static void row_base_drive(void)
  *      fetching the wrong drive's name is visible as a wrong string rather than
  *      as an identical one.
  */
+/*
+ *  #473 `wdcrearmzero`: the DATAIN re-arm reports ZERO remaining mid-transfer.
+ *
+ *  `if (atapi_len > 32768) atapi_len = 0;` at the re-arm, where the INITIAL arm clamps
+ *  to 32768 in the identical condition.  With more than 32768 bytes remaining the guest
+ *  is told zero remain, and there is no recovery: the next read does
+ *  `atapi_len -= consumed` from 0, steps PAST zero, and `== 0` never fires again --
+ *  precisely the #341 class this file's own comment describes, reintroduced by the
+ *  re-arm.
+ *
+ *  MEASURED BAND [65537, 262655].  65536 completes (remaining is exactly 32768, so the
+ *  `> 32768` test is false); 262656 also trips the ring overrun, so it is not purely
+ *  this defect.
+ *
+ *  GUEST-VISIBLE at the first re-arm, read back through the handler: bytecount 0,
+ *  STATUS 0x58 (DRDY|DSC|DRQ), ireason 0x02 -- "data-in phase, DRQ asserted, zero bytes
+ *  to transfer".
+ *
+ *  THE IRQ SINK IS REQUIRED, and its absence is not a field omission: dev_wdc_tick() runs
+ *  unconditionally after every access and calls INTERRUPT_ASSERT(d->irq).  DEVINIT wires
+ *  that with INTERRUPT_CONNECT -- a macro, invisible to a scan for field assignments.
+ *  Two earlier attempts died there and were removed rather than shipped as false reds.
+ *
+ *  THE STATE IS SYNTHESISED AND SAYS SO.  Under the SHIPPED code the machine breaks at
+ *  the FIRST re-arm (received = 32768), so no real trajectory reaches these values; they
+ *  are the arithmetic under test placed one read from firing.  131070 is on the FIXED
+ *  code's trajectory (end of chunk 4), chosen so the row reads as a plausible state
+ *  rather than an arbitrary one.
+ */
+static int rearm_asserts = 0;
+static void rearm_sink(struct interrupt *a) { (void)a; rearm_asserts++; }
+
+static void row_rearm_zero(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[4];
+	unsigned char *payload;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;		/*  non-zero: :678 divides by it (SIGFPE otherwise)  */
+	d.io_enabled = 1;		/*  or :680 goto ret skips the whole switch  */
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = rearm_sink;	/*  what INTERRUPT_CONNECT would wire  */
+	if (d.inbuf == NULL) { printf("  SETUP inbuf alloc failed\n"); return; }
+
+	payload = (unsigned char *) calloc(1, 200000);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP payload failed\n"); return; }
+
+	/*  MARKERS, so the refill can be caught taking bytes from the WRONG place.
+	    atapi_received advances BEFORE the re-arm (`received += consumed`), so
+	    with 131070 received and 2 consumed the refill must start at 131072.
+	    A refill that ignores atapi_received starts at 0 and yields 0xaa.  */
+	payload[0]      = 0xaa;
+	payload[131072] = 0x3c;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 200000;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 131070;	/*  on the FIXED code's trajectory  */
+	d.atapi_len = 2;		/*  this read drains the chunk  */
+
+	wdc_addtoinbuf(&d, 0x5a);
+	wdc_addtoinbuf(&d, 0x5a);
+
+	rearm_asserts = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	/*  68930 remain, so a correct re-arm reports min(remaining, 32768) = 32768.
+	    The committed code reports 0 and the command never completes.  */
+	rows ++;
+	if (d.atapi_len != 32768) {
+		printf("  FAIL %-38s atapi_len = %i, want 32768\n",
+		    "re-arm: >32768 left is not zeroed", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "re-arm: >32768 left is not zeroed", d.atapi_len);
+	}
+
+	/*  FREE SECOND ORACLE: proves the re-arm BRANCH was taken, not merely that the
+	    call survived.  A fixture that silently missed the branch would otherwise
+	    look identical to one that took it and measured the wrong thing.  */
+	rows ++;
+	if (rearm_asserts != 1) {
+		printf("  FAIL %-38s asserts = %i, want 1\n",
+		    "re-arm: the branch was actually taken", rearm_asserts);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "re-arm: the branch was actually taken", rearm_asserts);
+	}
+
+	/*  *** THESE TWO ROWS CLOSE A MEASURED FLOOR CLAUSE (d) BREACH. ***  The length
+	    check above passes under BOTH of these mutants, each of which keeps the
+	    32768 guard and nulls its repair:
+	
+	      Md_norefill   delete the refill loop -- the guest is told 32768 bytes are
+	                    ready and the ring is EMPTY
+	      Md_wrongoff   refill from data_in[j] -- every chunk returns chunk 0 again,
+	                    which is silent data corruption
+	
+	    The arm row already carried a corruption oracle and this one did not: the
+	    sibling-parity check exists precisely to catch that asymmetry.  */
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 32768) {
+		printf("  FAIL %-38s occupancy = %i, want 32768\n",
+		    "re-arm: the chunk is REFILLED", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "re-arm: the chunk is REFILLED", occ);
+	}
+
+	rows ++;
+	if (d.inbuf[d.inbuf_tail] != 0x3c) {
+		printf("  FAIL %-38s first byte = 0x%02x, want 0x3c\n",
+		    "re-arm: refill starts at received", d.inbuf[d.inbuf_tail]);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x\n",
+		    "re-arm: refill starts at received", d.inbuf[d.inbuf_tail]);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*
+ *  *** CONTRACT (vacuity floor clause (e)) -- what the six #473 rows are DESIGNED to
+ *  catch, stated so a later escape is a breach or an exclusion rather than an argument
+ *  about overclaiming. ***
+ *
+ *  IN CONTRACT -- measured killed, 8 of 8, table in kill473_table.txt:
+ *    (b) the arm defect reinstated verbatim (clamp moved back after the push loop)
+ *    (b) the re-arm defect reinstated verbatim (= 0, no refill)
+ *    (b) both sites reinstated together -- the full pre-fix code
+ *    (c) a null medium: a comment-only dev_wdc.c (caught at COMPILE time)
+ *    (d) the arm clamp widened to the ring size, still reading as a bound
+ *    (d) the arm clamp inverted to 0, guard kept
+ *    (d) the re-arm clamp kept and the REFILL LOOP DELETED
+ *    (d) the refill re-based to data_in[j], ignoring atapi_received
+ *
+ *  OUT OF CONTRACT, stated rather than hidden:
+ *    - wdc_addtoinbuf() itself is still UNBOUNDED.  The fix bounds its CALLER, and no
+ *      row here constrains the primitive.  A future caller that pushes without a clamp
+ *      reproduces the same overrun and these rows will not see it.
+ *    - only TIMER-style single-chunk trajectories are exercised.  A transfer crossing
+ *      several re-arms is not walked end to end; the rows pin the FIRST re-arm.
+ *    - the fixture drives one packet command.  Interleaved commands, aborts and
+ *      resets are outside it.
+ */
+/*
+ *  #473 `wdcringambig`: the initial DATAIN arm pushed the WHOLE transfer into a ring
+ *  that cannot hold it.
+ *
+ *  WDC_INBUF_SIZE is 512*(WDC_MAX_SECTORS+1) -- exactly 513 blocks.  The arm did
+ *  `atapi_len = data_in_len`, pushed every byte, and clamped to 32768 AFTERWARDS, so a
+ *  514-block transfer wrapped block 514 onto block 0 and destroyed unread data.  The
+ *  clamp was not missing; it was on the wrong side of the loop.
+ *
+ *  *** THIS ROW REPLACES ONE AIMED A LEVEL TOO LOW, AND THAT IS THE LESSON WORTH
+ *  KEEPING.  ***  The first version called wdc_addtoinbuf() directly, 514 blocks' worth.
+ *  It went RED on the committed build, which made it look like a reproduction -- but the
+ *  primitive is unbounded and THE FIX DID NOT BOUND IT.  The repair is in the caller, so
+ *  the row pinned something still true afterwards and could never go green.  A detector
+ *  aimed at a primitive cannot verify a fix made in its caller: right defect, wrong
+ *  instrument.
+ *
+ *  SO THIS ONE DRIVES THE ARM.  atapi_cmd_in_progress plus exactly 12 bytes in the ring,
+ *  then a wd_data WRITE pops the packet and calls diskimage_scsicommand() -- and the
+ *  controllable stub fabricates a 514-block DATA-IN transfer for this row alone.
+ *
+ *  TWO ORACLES.  Occupancy separates the two builds arithmetically (263168 bytes into a
+ *  262656-byte ring reports 512, not 263168 and not 32768).  The marker byte is the
+ *  CORRUPTION oracle: it shows block 0's data actually destroyed rather than merely
+ *  miscounted, which is the guest-visible harm.
+ */
+static int arm_asserts = 0;
+static void arm_sink(struct interrupt *a) { (void)a; arm_asserts++; }
+
+static void row_arm_overrun(void)
+{
+	struct wdc_data d;
+	unsigned char buf[4];
+	int i, occ, first;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) { printf("  SETUP inbuf alloc failed\n"); return; }
+
+	/*  The packet fires when inbuf holds 12 bytes AFTER this access adds its
+	    own -- the test is `inbuf_len == 12` and the write pushes first.  So
+	    ten are queued here and the 2-byte write below completes the packet.
+	    Queueing twelve gives 14 and the command silently never fires, which
+	    is what the first version of this row measured.  */
+	d.atapi_cmd_in_progress = 1;
+	for (i = 0; i < 10; i++)
+		wdc_addtoinbuf(&d, 0x00);
+
+	/*  514 blocks: one more than the ring holds.  */
+	stub_datain_len = 514 * 512;
+	arm_asserts = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	stub_datain_len = 0;		/*  inert again for every later row  */
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	/*  FIXED: one DRQ chunk, 32768.  BROKEN: 263168 pushed into a 262656-byte
+	    ring reports 512 -- the ring cannot even tell you how much it lost.  */
+	rows ++;
+	if (occ != 32768) {
+		printf("  FAIL %-38s occupancy = %i, want 32768\n",
+		    "arm: pushes one chunk, not the whole", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "arm: pushes one chunk, not the whole", occ);
+	}
+
+	/*  THE CORRUPTION ORACLE.  Block 0's first byte carries 0x5a; an overrun wraps
+	    block 514 onto it and leaves 0xc3.  Occupancy alone says the count is wrong;
+	    this says the DATA is gone, which is the guest-visible harm.  */
+	first = d.inbuf[d.inbuf_tail];
+	rows ++;
+	if (first != 0x5a) {
+		printf("  FAIL %-38s first byte = 0x%02x, want 0x5a\n",
+		    "arm: block 0 survives the push", first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x\n",
+		    "arm: block 0 survives the push", first);
+	}
+
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
 static void row_identity(void)
 {
 	struct wdc_data d;
@@ -732,6 +1078,12 @@ static void row_selfconsistent(void)
 
 int main(void)
 {
+	/*  Unbuffered, so a crash mid-run still shows how far it got -- with stdout
+	    block-buffered a segfault loses every row and looks like a build failure.
+	    Same reason diff_diskimage_io.c does this; this file lacked it, and that
+	    cost a diagnostic cycle chasing an invisible crash.  */
+	setvbuf(stdout, NULL, _IONBF, 0);
+
 	printf("ATA IDENTIFY capacity packing (#405), against the REAL dev_wdc.c\n");
 
 	/*  Controls: below the divergence point these pass either way, and they
@@ -752,10 +1104,30 @@ int main(void)
 	row_slave();
 	row_base_drive();
 	row_identity();
+	row_arm_overrun();
+	row_rearm_zero();
 	row_atapi_flags();
 	row_wide_geometry();
 	row_no_lba_claim();
 	row_selfconsistent();
+
+	/*
+	 *  IDENTITY GUARD.  Two files with this name once differed only by the case of a
+	 *  parent directory, and the stale one encoded a REVERSED design decision.  A row
+	 *  count is the cheapest proof that the file which RAN is the file that was
+	 *  reviewed.  Last, so it counts every row above it.
+	 *
+	 *  It is also floor clause (c): against a null medium -- a stale copy, or a
+	 *  comment-only source -- this row is what refuses to report a pass.
+	 */
+	rows ++;
+	if (rows != 23) {
+		printf("  FAIL %-38s rows = %i, want 23\n",
+		    "[IDENTITY] row count", rows);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n", "[IDENTITY] row count", rows);
+	}
 
 	printf("\n%d rows, %d failures\n", rows, failures);
 	if (failures == 0)

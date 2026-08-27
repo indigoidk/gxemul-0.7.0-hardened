@@ -1320,7 +1320,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 16
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 23
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -1343,6 +1343,26 @@ else
     #  0x8080, a byte-swap palindrome, and would have been useless here.
     check     "wdc IDENTIFY: the packing anchor is present" \
               "$(grep -c 'packing anchor' "$WDCLOG")" "1"
+    #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
+    #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
+    #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first
+    #  table and are the reason the last two rows exist -- Md_norefill (keep the 32768
+    #  clamp, delete the refill: the guest is told a chunk is ready and the ring is
+    #  EMPTY) and Md_wrongoff (refill from data_in[j], so every chunk returns chunk 0).
+    #  The length row alone passes both, which is why an occupancy oracle and a source-
+    #  offset oracle ship beside it.
+    check     "wdc IDENTIFY: the arm bounds the push is present" \
+              "$(grep -c 'arm: pushes one chunk, not the whole' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the arm corruption oracle is present" \
+              "$(grep -c 'arm: block 0 survives the push' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm length row is present" \
+              "$(grep -c 're-arm: >32768 left is not zeroed' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm liveness control is present" \
+              "$(grep -c 're-arm: the branch was actually taken' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm refill row is present" \
+              "$(grep -c 're-arm: the chunk is REFILLED' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the re-arm offset row is present" \
+              "$(grep -c 're-arm: refill starts at received' "$WDCLOG")" "1"
     #  #407: three rows added after a measure seat found three mutants that passed
     #  the original ten. Each is named because each is the ONLY row that kills its
     #  mutant -- verified by asserting the row NAME in the kill, not just that

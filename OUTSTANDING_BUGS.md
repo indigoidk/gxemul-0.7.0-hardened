@@ -31,7 +31,8 @@
 > independently the same day in a different tool. When one enumeration is found short, grep the
 > others — the omission is a habit, not an accident.*
 >
-> - **`wdcringambig`** — *** ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
+> - ✅ **FIXED in #473, 2026-08-27** (with `wdcrearmzero`, one diff).
+>   **`wdcringambig`** — *** ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
 >   COMMAND DOES IT. *** The wdc inbuf ring uses `head == tail` for BOTH empty and full with
 >   no disambiguator; the overrun check is post-hoc, so **the store that actually corrupts is
 >   the NEXT one and is SILENT**; and the two BULK paths never compare the pointers at all,
@@ -10279,3 +10280,95 @@ WITH a warning, not the silent corruption round 472 closed.
 One row discharges all three: a truncated overlay data file forcing a short read in a
 non-final iteration.  Offline-buildable in the existing fixture -- no build, no rig, no timing
 oracle.
+
+## 2026-08-27 — #473 residuals, and a seat-roster finding made while it ran
+
+**#473 closed `wdcringambig` + `wdcrearmzero` with one diff.** Three edits in the ATAPI DATAIN
+chunking: move the existing 32768 clamp BEFORE the initial push loop, clamp the re-arm to 32768
+instead of 0, and refill the next chunk from `data_in[atapi_received + j]`. Kill table 8/8,
+`regress/artifacts/wdcchunking/killtable_20260827/`. Detector 22 rows, 0 failures.
+
+### Residuals -- open
+
+- **`wdcaddtoinbufbound`** — `wdc_addtoinbuf()` **is still unbounded**. #473 bounded its
+  CALLER; the primitive itself has no capacity check, and `head == tail` still means both
+  empty and full. Any future caller that pushes without its own clamp reproduces the same
+  overrun, and **no row in the shipped detector would see it** -- written into the
+  clause-(e) contract rather than left implicit. Filed, not fixed: the fix that exists is
+  correct and complete for every caller in the tree today.
+
+- **`wdcrearmwalk`** — the detector pins the FIRST re-arm only. A transfer crossing several
+  re-arms is not walked end to end, so a defect that appears on the second or third chunk
+  boundary is outside contract. A loop-to-exhaustion row is the obvious closer.
+
+- **`wdcrearmzero` still owes a rung-3/4 witness.** A rung-1 direct-call harness is a
+  DETECTOR, never a reproduction. Both ledger rows close with `witness: none`, which is the
+  honest value; the obligation is recorded, not discharged.
+
+### *** SEAT FINDING: ONE SEAT, BOTH TRANSPORTS DOWN AT ONCE, FOR TWO UNRELATED REASONS.
+### Measured 2026-08-27. ***
+
+The carrier's sixth seat-failure class says a walled CLI seat is usually reachable on another
+transport, and that the cheap check is `api/tags`. **Both halves held and the seat was still
+lost.**
+
+```
+  kimi (CLI)              403  You've reached your weekly (7-day) usage limit
+  kimi-k3:cloud           503  Service Unavailable
+  glm-5.2:cloud           SEAT_ALIVE_20260827
+  deepseek-v4-pro:cloud   SEAT_ALIVE_20260827
+  minimax-m3:cloud        SEAT_ALIVE_20260827
+```
+
+`api/tags` LISTED `kimi-k3:cloud` throughout -- the daemon was up and the model was
+advertised. **The listing answers "which models does this daemon know about", not "which
+models will answer"**, and those came apart here. The other three cloud seats answering in
+the same minute rules out the shared-transport class: this is one model's outage.
+
+> **A LISTING IS NOT A LIVENESS TEST.** The carrier already says this about walled seats --
+> *do not reason about whether a seat is back, fire it* -- and the substitute rule quietly
+> relies on `api/tags` for exactly the reasoning it forbids. One tiny prompt per cloud seat
+> settles it in seconds, and that is what settled it here.
+
+**AND THE FIRST FAILURE WAS NOT THIS ONE.** The substitute's original 346-byte non-answer was
+a STALL, not the 503: it opens *"I'll work the questions in the order given, reading the
+fork's actual post-fix tree"* and stops. The brief's question 4 said **"Read it rather than
+reasoning from the code"** about a datasheet file -- and a packet-fed transport cannot read
+files. That is the documented brief defect, mine, not a seat outage. The 503 appeared only
+on the re-fire. *Two different failures on one seat in one round, and the first was
+self-inflicted.*
+
+- **`panelsubcoverage`** — ✅ **FIXED the same day.** `panel.sh` printed *"the kimi CLI is
+  walled but kimi-k3:cloud ANSWERED -- that seat is COVERED by its substitute transport, not
+  lost"* **two lines after printing `kimi(sub): SUSPECT (only 346b)`**. The guard excluded
+  `kimi_sub` by grepping `$rated` -- the list of seats carrying QUOTA/AUTH text. A seat that
+  STALLS never enters `$rated`; it enters `$miss`. **So the exclusion was unreachable for the
+  commonest substitute failure**, which is the check-that-cannot-fail shape in its worst form:
+  a claim of COVERAGE asserted at the moment coverage was lost, telling the one person who
+  could re-fire the seat that it had already answered. Re-pointed at `$miss` and given an
+  explicit LOST branch; negative-controlled in both directions.
+
+- **`ollamaseatprefix`** — minor, filed. The liveness probe returned `AT_ALIVE_20260827` from
+  `minimax-m3:cloud` where the other two returned `SEAT_ALIVE_20260827` — **two leading
+  characters missing**. The seat answered, so this is not a seat failure, but a transport that
+  can drop leading characters would corrupt a VERDICT LINE, and this project's policy is
+  verdict-line-first precisely so the answer survives truncation. Worth one look at
+  `panel_ollama.py`'s stream assembly.
+
+## 2026-08-27 — `asanstaletree`: the ASan tree is silently behind the other three
+
+**`build-asan/` was measured FOUR ROUNDS STALE on 2 of 4 sampled device files** while
+`GXEMUL-SEC`, `est/` and `build/` were byte-identical. It was deliberately NOT synced, and
+that decision is the owner's to make -- syncing it silently would change what a sanitiser run
+measures without anyone asking for it.
+
+**Why it matters more than an out-of-date copy usually would:** the twin-tree rule exists
+because a NO-VPATH build tree measures whatever source it happens to hold. An ASan run against
+a four-round-old tree reports on code that is not shipping -- and it reports CLEAN, which reads
+as evidence about the current tree. *A stale sanitiser tree is a green row that means nothing,* 
+which is the vacuity class aimed at a whole build rather than at one detector.
+
+**OPEN QUESTION FOR THE OWNER, and work continues either way:** should `build-asan/` be brought
+into the twin-tree propagation set, so every shared-file edit lands in four trees instead of
+three? The cost is one more copy per edit. The alternative -- leaving it out -- is defensible
+only if nobody reads its results as current, and nothing enforces that today.

@@ -752,11 +752,26 @@ DEVICE_ACCESS(wdc)
 					if (d->atapi_received < d->atapi_st->
 					    data_in_len) {
 						d->atapi_phase = PHASE_DATAIN;
+						/*  #473: clamp to the chunk size, NOT zero, and REFILL.  This
+						    assigned 0 where the initial arm clamps to 32768 in the same
+						    condition, so a transfer with >32768 left reported ZERO
+						    remaining -- with no recovery, since the next read decrements
+						    from 0 and `== 0` never fires again.  MEASURED band
+						    [65537, 262655]; the guest saw bytecount 0 with DRQ asserted.
+						
+						    The refill is what makes the bounded push above correct: here
+						    atapi_len is 0, so the guest drained the previous chunk and the
+						    ring is empty; data_in is still live, being freed only when the
+						    next command arrives.  */
 						d->atapi_len = d->atapi_st->
 						    data_in_len -
 						    d->atapi_received;
 						if (d->atapi_len > 32768)
-							d->atapi_len = 0;
+							d->atapi_len = 32768;
+
+						for (int j=0; j<d->atapi_len; j++)
+							wdc_addtoinbuf(d, d->atapi_st->
+								data_in[d->atapi_received + j]);
 					} else
 						d->atapi_phase =
 						    PHASE_COMPLETED;
@@ -919,12 +934,20 @@ DEVICE_ACCESS(wdc)
 				if (res == 1) {
 					if (d->atapi_st->data_in != NULL) {
 						d->atapi_phase = PHASE_DATAIN;
+						/*  #473: CLAMP BEFORE THE PUSH.  This loop was unbounded and the
+						    clamp sat AFTER it, so a transfer larger than the ring was pushed
+						    whole: WDC_INBUF_SIZE is exactly 513 blocks, and block 514 wrapped
+						    onto unread data.  MEASURED: a 514-block transfer returned block
+						    513's bytes where block 0's should be, and the latch fired one
+						    store EARLIER than the corruption, because head==tail cannot tell
+						    full from empty.  The clamp is not new -- it was on the wrong side
+						    of the loop.  */
 						d->atapi_len = d->atapi_st->data_in_len;
-						for (int j=0; j<d->atapi_len; j++)
-							wdc_addtoinbuf(d, d->atapi_st->data_in[j]);
-
 						if (d->atapi_len > 32768)
 							d->atapi_len = 32768;
+
+						for (int j=0; j<d->atapi_len; j++)
+							wdc_addtoinbuf(d, d->atapi_st->data_in[j]);
 					} else {
 						d->atapi_phase =
 						    PHASE_COMPLETED;

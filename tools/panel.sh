@@ -564,10 +564,27 @@ say "SEATS: $ok/$total scriptable produced output${miss:+ -- no answer from:$mis
 
 #  A CLI WALL WITH A LIVE SUBSTITUTE IS ONE SEAT ANSWERED, NOT ONE LOST AND ONE
 #  GAINED.  Report it explicitly, because the tally above counts TRANSPORTS.
+#
+#  *** THIS GUARD READ THE WRONG LIST AND SO COULD NOT FAIL.  Measured 2026-08-27 on
+#  the #474 panel. ***  It excluded kimi_sub by grepping $rated -- the seats carrying
+#  QUOTA/AUTH text.  A substitute that STALLS (346 bytes of "I will read the tree",
+#  no error text) never enters $rated at all; it enters $miss.  So the exclusion was
+#  unreachable for the commonest substitute failure, and the script printed COVERED
+#  two lines after printing "kimi(sub): SUSPECT (only 346b)".
+#
+#  That is the check-that-cannot-fail shape the carrier names, in its worst form: a
+#  claim of COVERAGE asserted at the moment coverage was lost, so the one person who
+#  could re-fire the seat was told it had already answered.  $miss is the list that
+#  means "did not answer", whatever the reason, which is what this sentence is about.
 if printf %s "$rated" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
-   && ! printf %s "$rated" | grep -qw kimi_sub; then
+   && ! printf %s "$miss" | grep -qw kimi_sub; then
     say "       NOTE: the kimi CLI is walled but kimi-k3:cloud ANSWERED -- that seat"
     say "             is COVERED by its substitute transport, not lost."
+elif printf %s "$rated" | grep -qw kimi && printf %s "$miss" | grep -qw kimi_sub; then
+    say "       *** THE KIMI SEAT IS LOST, NOT COVERED: the CLI is walled AND the"
+    say "       *** kimi-k3:cloud substitute did not answer either.  Re-fire the"
+    say "       *** substitute with an INLINED brief -- a packet-fed seat stalls on"
+    say "       *** any instruction to read files, and that stall is not a wall."
 fi
 say "       (a non-answering seat is a SEAT FAILURE, never counted as agreement)"
 
