@@ -1,0 +1,71 @@
+==========================================================================================
+wdcringambig -- RUNG-3 WITNESS on unmodified `evbmips -e malta`
+==========================================================================================
+machine   evbmips -e malta   5Kc, little endian, 128 MB   (machine desc UNMODIFIED)
+wdc       physical 0x180001f0 via bus_pci piix4_ide; reached at KSEG1 0xffffffffb80001f0
+program   34 guest instructions at 0xffffffff80100000, parks at 0xffffffff80100080
+ring      WDC_INBUF_SIZE = 262656 ; bulk loop pushes 262654 bytes
+
+------------------------------------------------------------------------------------------
+LEG 1 -- SHIPPED build (source-identical to GXEMUL-SEC at HEAD)
+------------------------------------------------------------------------------------------
+  command   /tmp/gxwit/gxemul -V -E evbmips -e malta -d iR:/tmp/wdcscratch.img 0xffffffff80100000:/tmp/gxwit_probe/wdcring.bin
+  CONTROL 0 encodings: 34 of 34 words AND mnemonics agree with the emulator's disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  elapsed 1.53 s for 262666 guest device accesses -> 171467 accesses/second
+
+------------------------------------------------------------------------------------------
+LEG 2 -- FIXED build (capacity check in wdc_addtoinbuf), SAME guest program
+------------------------------------------------------------------------------------------
+  command   /tmp/gxfix/gxemul -V -E evbmips -e malta -d iR:/tmp/wdcscratch.img 0xffffffff80100000:/tmp/gxwit_probe/wdcring.bin
+  CONTROL 0 encodings: 34 of 34 words AND mnemonics agree with the emulator's disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  elapsed 1.53 s
+
+------------------------------------------------------------------------------------------
+RESULTS -- every value was produced by a guest load through real address decode
+------------------------------------------------------------------------------------------
+                                                       reg  SHIPPED          FIXED           
+  A  RAM LIVENESS     RAM readback, same sb/lbu shapes t8   want 55 got 55   want 55 got 55    ok
+  B  DEVICE SIGNATURE 1st read of the data port        s0   want 5a got 5a   want 5a got 5a    ok
+  B  DEVICE SIGNATURE 2nd read -- a FIFO, not a cell   s1   want a5 got a5   want a5 got a5    ok
+  C  LIVENESS         status, 1 byte staged: DRQ SET   s2   want 59 got 59   want 59 got 59    ok
+  D  LIVENESS         status at SIZE-1: DRQ still SET  s3   want 59 got 59   want 59 got 59    ok
+  E  *** DEFECT ***   status at SIZE: DRQ CLEAR        s4   want 51 got 51   want 59 got 59    ok
+  F  *** DEFECT ***   data read on a FULL ring         s5   want ff got ff   want 11 got 11    ok
+  G  *** DEFECT ***   status after one more push       s6   want 59 got 59   want 59 got 59    ok
+  G  *** DEFECT ***   data read: oldest byte destroyed s7   want 44 got 44   want 22 got 22    ok
+     loop counter drained                              t9   want 00 got 00   want 00 got 00    ok
+
+  20 of 20 predictions correct across both legs
+
+------------------------------------------------------------------------------------------
+THE DIFFERENTIAL -- the rows the defect owns, same script, opposite colour
+------------------------------------------------------------------------------------------
+  E  *** DEFECT ***   status at SIZE: DRQ CLEAR        s4    51 -> 59   AS PREDICTED
+  F  *** DEFECT ***   data read on a FULL ring         s5    ff -> 11   AS PREDICTED
+  G  *** DEFECT ***   data read: oldest byte destroyed s7    44 -> 22   AS PREDICTED
+
+------------------------------------------------------------------------------------------
+WHY THIS IS THE DEVICE AND NOT RAM  (device-signature control)
+------------------------------------------------------------------------------------------
+  s0/s1 read the SAME address twice and returned 0x5a then 0xa5.
+  A memory cell returns the last value written (0xa5) BOTH times; only a FIFO
+  returns them in push order.  This is the wdc inbuf, not a memory word.
+  Status reads returned 0x59/0x51 from +7.  DRDY|DSC|ERR = 0x51 is computed
+  by status_byte() (dev_wdc.c:462-478) out of diskimage_exist() and the
+  power-on d->error (dev_wdc.c:1655).  The guest never wrote any of it, and RAM
+  at 0x180001f7 would answer 0x00.
+
+  RAM liveness (t8=0x55) proves the sb/lbu shapes themselves work, so a
+  device row reading 0x00 could not have been blamed on a bad encoding.
+
+------------------------------------------------------------------------------------------
+EMULATOR DIAGNOSTICS DURING EACH RUN
+------------------------------------------------------------------------------------------
+  reading too much                 shipped x1   fixed x0
+  wdc inbuf full                   shipped x0   fixed x1
+  wdc inbuf overrun                shipped x1   fixed x0
+  write to DATA, but not           shipped x1   fixed x1
+
+  transcripts: /tmp/gxwit_probe/transcript_shipped.log , transcript_fixed.log

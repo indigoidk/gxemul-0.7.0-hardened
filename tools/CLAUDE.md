@@ -31,6 +31,36 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    > ### *** AND THE RESTORE IS NOT FINISHED UNTIL THE BINARY IS REBUILT. THE SENTINEL
    > ### PROTECTS THE SOURCE; THE THING MEASURED IS THE BINARY. Measured 2026-08-27. ***
    >
+   > ### *** AND IT IS NOT ONLY A MUTATION HAZARD. MEASURED AGAIN 2026-08-27, WITH NO
+   > ### MUTANT ANYWHERE IN THE STORY. ***
+   >
+   > `build/gxemul` was found at `05:52:15` sitting on a `dev_wdc.c` of `14:56:12` -- nine
+   > hours older than the only file that had changed, so it predated three shipped rounds.
+   > **No script mutated anything.** A round propagated its edit into `build/src/` (as the
+   > no-VPATH rule requires) and nobody rebuilt.
+   >
+   > **So part 1 passed and part 2 failed on a tree that was never mutant**, and the
+   > SENTINEL DISCIPLINE CANNOT CATCH THIS CLASS AT ALL -- sentinels are dropped around
+   > mutations, and there was no mutation. `CHECKPOINT.md` asserted `build/ CLEAN`,
+   > written that same afternoon by the same loop that had done the propagating.
+   >
+   > > **THE TWO-PART CLEARANCE IS A ROUND-BOUNDARY OBLIGATION, NOT A MUTATION-RESTORE
+   > > ONE. RUN IT; DO NOT ASSERT IT.** The checkpoint's build-tree section records the
+   > > OUTPUT of the check, never a remembered state:
+   > >
+   > >     cmp -s build/src/devices/<edited>.c GXEMUL-SEC/src/devices/<edited>.c
+   > >     [ build/gxemul -nt build/src/devices/<edited>.c ]
+   >
+   > Found by a rung-3 witness seat that noticed the impossible timestamp pair and
+   > measured against its own `/tmp` tree instead, saying so plainly. **Nothing in the
+   > harness would have reported it** -- and a `build/` measurement taken in that window
+   > would have tested pre-`#481` code against a tree that `cmp`s clean.
+   >
+   > *Note the checker to build here is NOT another sentinel. It is two lines in the
+   > checkpoint step, because the failure is a habit -- propagate, forget to rebuild --
+   > and the carrier's own finding is that a rule fires when it lives where the decision
+   > happens.*
+   >
    > A mutant script restored `dev_dreamcast_asic.c`, `cmp`'d it clean against SEC, and
    > cleared the sentinel — exactly as this rule says. **It left a MUTANT `gxemul` on
    > disk.** The tell was an impossible pair of timestamps: binary `05:47:23`, restored
