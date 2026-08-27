@@ -10181,3 +10181,22 @@ cannot be answered against a number that includes an intended clean exit on purp
 What would settle it is a classification of the sites into defect, non-defect and unreachable,
 with the rule for each written down and the classifier folded into the tool so the answer
 re-derives instead of being transcribed.  Read-only: no build, no rig, no timing oracle.
+
+
+### 2026-08-27 -- `sh4valm33`: the one escape that survived checking
+
+Carried out of `sh4valrows` as that row was dropped, so that dropping a wrong row did not drop
+a right finding inside it.
+
+The parent row claimed a shipped detector was escapable by nine measured mutants.  Re-reading
+the adjudication it drew from, the seat found it enumerates ten rather than nine -- a row whose
+entire content is a count of escapes, miscounting its own -- and that the escapes do not stand
+as a group.  So the row was dropped as titled.
+
+One member survived.  A guest long-word store to the third timer control register dispatches
+with the timer index set to two and reaches an embedded terminating site.  The observable is
+whether the emulator process is still alive after the store: binary, with no value to decode.
+
+It is cheap, because the apparatus already exists -- the detector carries a byte/word/long width
+census and a separate per-instance census for the three timer control registers, so this needs a
+row rather than new machinery.  Blocked only on a build.
