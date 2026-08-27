@@ -585,7 +585,7 @@ else
     check     "footbridge: row failures" \
               "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
     check_min "footbridge: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 19
+              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 24
     check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
     #  Name each row that is the SOLE detector of something.
     check "footbridge: the zero-load row is present" \
@@ -594,6 +594,22 @@ else
           "$(grep -c 'does not overflow\|does not wrap to zero' "$FBLOG")" "2"
     check "footbridge: the TIMER_EXTERNAL row is present" \
           "$(grep -c 'not silently read as x16' "$FBLOG")" "1"
+    #  #474: the five fbclearread rows.  Kill table 5/5 in
+    #  regress/artifacts/fbclearread/killtable_20260827/.  The last three exist ONLY
+    #  because the pass-2 codex seat returned DO NOT SHIP on a detector that was already
+    #  green: it named an early-`return` mutant (the very defect the fix comment claims to
+    #  avoid, and nothing tested it) and a guard widened to admit a PERIODIC read.  Both
+    #  were built and both were killed by these rows.
+    check "footbridge: the fbclearread defect row is present" \
+          "$(grep -c 'a READ of TIMER_1_CLEAR must NOT clear pending' "$FBLOG")" "1"
+    check "footbridge: the fbclearread live control is present" \
+          "$(grep -c '[LIVE] a WRITE of TIMER_1_CLEAR decrements pending' "$FBLOG")" "1"
+    check "footbridge: the common-tail row is present" \
+          "$(grep -c 'a READ still runs the common tail' "$FBLOG")" "1"
+    check "footbridge: the periodic-reload row is present" \
+          "$(grep -c 'a PERIODIC read must not reload the counter' "$FBLOG")" "1"
+    check "footbridge: the periodic-pending row is present" \
+          "$(grep -c 'a PERIODIC read must not clear pending either' "$FBLOG")" "1"
     check "footbridge: the counter-domain row is present" \
           "$(grep -c 'leave the 24-bit counter in range' "$FBLOG")" "1"
     #  The three rows PASS 2 added, each the SOLE detector of a mutant that survived the first
@@ -1320,7 +1336,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 23
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 26
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -1363,6 +1379,18 @@ else
               "$(grep -c 're-arm: the chunk is REFILLED' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the re-arm offset row is present" \
               "$(grep -c 're-arm: refill starts at received' "$WDCLOG")" "1"
+    #  #473 pass 2: three rows added AFTER the round shipped, because two more
+    #  clause-(d) mutants escaped a table that had already closed four.  Both hid for
+    #  one structural reason -- every re-arm row sat where the remainder EXCEEDS 32768,
+    #  so `atapi_len` and the constant 32768 were the same number.  Md_emptyguard is
+    #  the round own safety sentence as a predicate; Md5_chunkconst relaxes the refill
+    #  bound to that constant and is a heap-buffer-overflow READ under ASan.
+    check     "wdc IDENTIFY: the dirty-ring row is present" \
+              "$(grep -c 're-arm: refills a NON-EMPTY ring too' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the short-last-chunk length row is present" \
+              "$(grep -c 'last chunk: length is the REMAINDER' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the refill-bound row is present" \
+              "$(grep -c 'last chunk: refill is BOUNDED by it' "$WDCLOG")" "1"
     #  #407: three rows added after a measure seat found three mutants that passed
     #  the original ten. Each is named because each is the ONLY row that kills its
     #  mutant -- verified by asserting the row NAME in the kill, not just that

@@ -679,15 +679,31 @@ DEVICE_ACCESS(footbridge)
 		break;
 
 	case TIMER_1_CLEAR:
-		if (d->timer_control[timer_nr] & TIMER_MODE_PERIODIC) {
-			reload_timer_value(cpu, d, timer_nr);
-		}
+		/*  #474: a READ must not perform the clear.  This case carried no
+		    writeflag test at all, while TIMER_1_CONTROL immediately above it
+		    does -- so a guest READ reloaded the counter, decremented the
+		    pending count and DEASSERTED the interrupt.  A guest that merely
+		    read the register silently acknowledged a pending timer interrupt;
+		    the guest-visible consequence is a LOST interrupt, not a bad value.
 
-		if (d->pending_timer_interrupts[timer_nr] > 0) {
-			d->pending_timer_interrupts[timer_nr] --;
-		}
+		    FOUR addresses, not one: the fold above normalises 0x30C/0x32C/
+		    0x34C/0x36C onto this single case.
 
-		INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+		    GUARD THE BODY, KEEP THE break.  An early return here would skip
+		    the function's common tail, which writes odata back on a read, and
+		    would hand a guest an untouched buffer -- a defect this code does
+		    not currently have.  */
+		if (writeflag == MEM_WRITE) {
+			if (d->timer_control[timer_nr] & TIMER_MODE_PERIODIC) {
+				reload_timer_value(cpu, d, timer_nr);
+			}
+
+			if (d->pending_timer_interrupts[timer_nr] > 0) {
+				d->pending_timer_interrupts[timer_nr] --;
+			}
+
+			INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+		}
 		break;
 
 	case SDRAM_BA_MASK:

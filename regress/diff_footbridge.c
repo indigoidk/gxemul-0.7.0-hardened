@@ -425,11 +425,85 @@ int main(void)
 		free(h);
 	}
 
+	/*  fbclearread: `case TIMER_1_CLEAR:` carries NO writeflag test, while the case
+	    immediately above it (TIMER_1_CONTROL) does.  So a guest READ runs the whole
+	    body: it reloads the counter when periodic, decrements the pending count, and
+	    DEASSERTS the interrupt.  A guest that merely reads the register silently
+	    acknowledges a pending timer interrupt -- the likely guest-visible consequence
+	    is a LOST interrupt, not a corrupted value.
+
+	    FOUR addresses, not one: the timer fold normalises 0x30C/0x32C/0x34C/0x36C onto
+	    this single case.
+
+	    These rows drive the ACCESS HANDLER rather than poking struct fields, for the
+	    reason this file already records above: a struct-poking row cannot see a
+	    handler-level defect at all.  */
+	{
+		struct footbridge_data *h = calloc(1, sizeof(*h));
+		unsigned char buf[4];
+		uint64_t back;
+
+		arm_irqs(h);
+
+		/*  CONTROL first: a WRITE must decrement.  Without it a green defect row
+		    could equally mean the handler never ran.  */
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_WRITE, h);
+		check_u("[LIVE] a WRITE of TIMER_1_CLEAR decrements pending",
+		    h->pending_timer_interrupts[0], 1);
+
+		/*  THE DEFECT: a READ must leave the pending count alone.  */
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_READ, h);
+		check_u("a READ of TIMER_1_CLEAR must NOT clear pending",
+		    h->pending_timer_interrupts[0], 2);
+
+		/*  THE COMMON TAIL, and it is the row the fix's own comment needed.
+		    That comment says the `break` is deliberate because an early
+		    `return` would skip
+		        if (writeflag == MEM_READ)
+		                memory_writemax64(cpu, data, len, odata);
+		    and hand a guest an untouched buffer.  Nothing tested that: buf was
+		    memset to 0xff and never read, so `break` -> `return 1` passed both
+		    rows.  A stated rationale with no row behind it is a claim, not a
+		    property.  Same access as the row above -- the question is what that
+		    call LEFT IN THE BUFFER, not what it did to the device.
+
+		    Zero is the tail writing an untouched odata, which is also what the
+		    pre-fix code returned; the datasheet specifies no read value for a
+		    write-only register, so this pins DETERMINISM, not architecture.  */
+		back = memory_readmax64(cpu, buf, 4);
+		check_u("a READ still runs the common tail", back, 0);
+
+		/*  PERIODIC READ.  The rows above use control = 0, so the periodic arm
+		    of the guarded body never runs and a guard widened to admit a
+		    periodic read still passes them.  reload_timer_value() assigns
+		    timer_value = timer_load, so a value deliberately UNEQUAL to load
+		    makes the reload observable with no clock and no tick.
+
+		    This is the clause-(d) row for this fix: it keeps the guard and
+		    nulls its repair on the one path the other rows cannot reach.  */
+		h->timer_control[0] = TIMER_MODE_PERIODIC;
+		h->timer_load[0]    = 0x1234;
+		h->timer_value[0]   = 0x9999;	/*  deliberately != load  */
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_READ, h);
+		check_u("a PERIODIC read must not reload the counter",
+		    h->timer_value[0], 0x9999);
+		check_u("a PERIODIC read must not clear pending either",
+		    h->pending_timer_interrupts[0], 2);
+
+		free(h);
+	}
+
 	/*  IDENTITY, as every differential here carries.  */
 	{
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%d", rows + 1);
-		check("IDENTITY row count -- guards against a stale copy", buf, "19");
+		check("IDENTITY row count -- guards against a stale copy", buf, "24");
 	}
 
 	printf("\n%d rows, %d failures\n", rows, fails);

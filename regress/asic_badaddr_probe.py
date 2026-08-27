@@ -342,6 +342,39 @@ t, alive = session(ld(ASIC_FAR) + run([MOV_L_AT_R1_R2]) + ["print r2"])
 row("kill far", "survived" if alive else "died", "survived",
     "+0xfc -- r==3 in group 15, not group 0")
 
+#  --------------------------------------------------------------- the SWEEP
+#
+#  *** `asicoffsetkill`: NINE TOUCHED OFFSETS CANNOT DEFEND 256. ***  A grok seat on
+#  the #463 pass-2 panel pointed out that `if (relative_addr == 0x1c) exit(1)` scores
+#  CLEAN against every row above -- `kill far` defeats a GROUP-NARROWING mutant but
+#  cannot defeat a SINGLE-OFFSET one.
+#
+#  ONE SESSION, NOT SIXTEEN ROWS.  Every row here is a full emulator boot and
+#  `probeslow` is already filed about session cost, so the sweep re-points r1 between
+#  single steps inside a single session.  A kill planted at ANY offset kills this
+#  session, and the row reds.
+#
+#  ALL 256 BYTE OFFSETS, not the sixteen word-aligned r==3 ones.  The carrier records
+#  a census that was wrong by 4x because `relative_addr` need not be word-aligned: a
+#  BYTE access at +0x0d dies exactly like +0x0c, so the killing set is 64 byte
+#  addresses and not 16.  Sweeping the whole window costs the same single session and
+#  is immune to that arithmetic being re-derived wrongly a second time.  `mov.b` is
+#  legal at every address, so no offset is skipped for alignment.
+#
+#  SURVIVE-ONLY, deliberately, and it does NOT close `asickillsurvive`.  It proves no
+#  offset terminates the host; it says nothing about what a declined offset RETURNS.
+sweep_cmds = ["put h 0x%x, 0x%04x" % (CODE, MOV_B_AT_R1_R2),
+              "put h 0x%x, 0x%04x" % (CODE + 2, BRA_SELF)]
+for _off in range(0x100):
+    sweep_cmds += ["r1=0x%x" % (ASIC + _off), "pc=0x%x" % CODE, "step 1"]
+#  A liveness marker AFTER the sweep: reaching it proves the session survived all 256
+#  accesses rather than that the pty merely stayed open.
+sweep_cmds += ["r2=0x%x" % LIVE, "print r2"]
+
+t, alive = session(sweep_cmds, settle=12.0)
+row("sweep 256", (printed(t, "r2") if alive else "died"), "0x%x" % LIVE,
+    "every offset in the window, one session")
+
 #  --------------------------------------------- the INDEXING half of the bound
 #
 #  *** THE INVARIANT HAS TWO HALVES AND THE FIRST NINE ROWS ONLY PINNED ONE. ***

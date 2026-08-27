@@ -714,12 +714,12 @@ static void row_rearm_zero(void)
 	/*  *** THESE TWO ROWS CLOSE A MEASURED FLOOR CLAUSE (d) BREACH. ***  The length
 	    check above passes under BOTH of these mutants, each of which keeps the
 	    32768 guard and nulls its repair:
-	
+
 	      Md_norefill   delete the refill loop -- the guest is told 32768 bytes are
 	                    ready and the ring is EMPTY
 	      Md_wrongoff   refill from data_in[j] -- every chunk returns chunk 0 again,
 	                    which is silent data corruption
-	
+
 	    The arm row already carried a corruption oracle and this one did not: the
 	    sibling-parity check exists precisely to catch that asymmetry.  */
 	occ = d.inbuf_head - d.inbuf_tail;
@@ -745,6 +745,78 @@ static void row_rearm_zero(void)
 		    "re-arm: refill starts at received", d.inbuf[d.inbuf_tail]);
 	}
 
+	/*  *** THE REFILL IS NOT CONDITIONAL ON THE RING BEING EMPTY, AND A CLEAN
+	    12-MUTANT TABLE DID NOT SHOW THAT. ***  Two panel seats independently
+	    broke the shipped comment's claim that the ring IS empty here: the
+	    data-port WRITE arm pushes guest bytes with no phase guard, and its
+	    unexpected-write latch is suppressed precisely because
+	    atapi_cmd_in_progress is set.  So a guest that writes mid-DATAIN grows
+	    head without touching atapi_len.
+
+	    One seat then turned that sentence into a mutant -- `if (inbuf_head ==
+	    inbuf_tail)` around the refill -- and it SWEPT the detector clean, 23
+	    rows 0 failures, because every other row leaves the ring empty here.
+	    A guard built from a round's own safety argument is invisible to rows
+	    written under that same argument.
+
+	    This row is the only one that establishes a NON-EMPTY ring at the
+	    re-arm.  It pins behaviour, not desirability: whether refilling onto a
+	    dirty ring is RIGHT is a separate question, filed as
+	    `wdcaddtoinbufbound`.  What must not happen silently is the refill
+	    being skipped while the guest is still told 32768 bytes are ready.  */
+	{
+		struct wdc_data e;
+		struct scsi_transfer es;
+		unsigned char ebuf[4], *epay;
+		int eocc, i;
+
+		memset(&e, 0, sizeof(e));
+		e.addr_mult = 1;  e.io_enabled = 1;
+		e.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+		e.irq.interrupt_assert = rearm_sink;
+		epay = (unsigned char *) calloc(1, 200000);
+		if (e.inbuf == NULL || epay == NULL) {
+			printf("  SETUP dirty-ring alloc failed\n");
+			free(e.inbuf); free(epay);
+		} else {
+			memset(&es, 0, sizeof(es));
+			es.data_in = epay;  es.data_in_len = 200000;
+			e.atapi_st = &es;  e.atapi_phase = PHASE_DATAIN;
+			e.atapi_cmd_in_progress = 1;
+			e.atapi_received = 131070;
+			e.atapi_len = 2;
+
+			/*  the two chunk bytes the guest is about to drain...  */
+			wdc_addtoinbuf(&e, 0x5a);
+			wdc_addtoinbuf(&e, 0x5a);
+			/*  ...and FIVE bytes behind them that atapi_len knows nothing
+			    about, which is exactly what an interleaved data-port write
+			    leaves in the ring.  */
+			for (i = 0; i < 5; i++)
+				wdc_addtoinbuf(&e, 0x77);
+
+			memset(ebuf, 0, sizeof(ebuf));
+			dev_wdc_access(fake_cpu(), NULL, wd_data, ebuf, 2, MEM_READ, &e);
+
+			eocc = e.inbuf_head - e.inbuf_tail;
+			while (eocc < 0)
+				eocc += WDC_INBUF_SIZE;
+
+			/*  5 leftover + 32768 refilled.  A refill skipped on a non-empty
+			    ring leaves 5, and the guest is told 32768 are waiting.  */
+			rows ++;
+			if (eocc != 5 + 32768) {
+				printf("  FAIL %-38s occupancy = %i, want %i\n",
+				    "re-arm: refills a NON-EMPTY ring too", eocc, 5 + 32768);
+				failures ++;
+			} else {
+				printf("  ok   %-38s %i\n",
+				    "re-arm: refills a NON-EMPTY ring too", eocc);
+			}
+			free(epay);  free(e.inbuf);
+		}
+	}
+
 	free(payload);
 	free(d.inbuf);
 }
@@ -764,11 +836,21 @@ static void row_rearm_zero(void)
  *    (d) the arm clamp inverted to 0, guard kept
  *    (d) the re-arm clamp kept and the REFILL LOOP DELETED
  *    (d) the refill re-based to data_in[j], ignoring atapi_received
+ *    (d) the refill guarded by `head == tail` -- this round's own safety sentence
+ *        turned into a predicate; it swept 23 rows clean before the dirty-ring row
+ *    (d) the refill's bound relaxed to the CONSTANT 32768 instead of atapi_len; it
+ *        swept 24 rows clean and is a heap-buffer-overflow READ under ASan on a
+ *        short last chunk
  *
  *  OUT OF CONTRACT, stated rather than hidden:
  *    - wdc_addtoinbuf() itself is still UNBOUNDED.  The fix bounds its CALLER, and no
  *      row here constrains the primitive.  A future caller that pushes without a clamp
  *      reproduces the same overrun and these rows will not see it.
+ *    - THE PREMISE ITSELF: the shipped comment once said the ring IS empty at the
+ *      re-arm.  It is not -- the data-port WRITE arm pushes with no phase guard, and a
+ *      panel seat MEASURED one 2-byte store desynchronising an entire 32768-byte chunk
+ *      that walks clean pre-fix.  Tracked as `wdcaddtoinbufbound`.  Two of the mutants
+ *      above exist because every row here was written under that premise.
  *    - only TIMER-style single-chunk trajectories are exercised.  A transfer crossing
  *      several re-arms is not walked end to end; the rows pin the FIRST re-arm.
  *    - the fixture drives one packet command.  Interleaved commands, aborts and
@@ -802,6 +884,101 @@ static void row_rearm_zero(void)
  */
 static int arm_asserts = 0;
 static void arm_sink(struct interrupt *a) { (void)a; arm_asserts++; }
+
+/*  *** THE FIFTH CLAUSE-(d) MUTANT, AND IT ESCAPED THE TABLE THAT HAD ALREADY
+ *  CLOSED FOUR. ***  Supplied and MEASURED by the Opus seat on #473's pass 2, against
+ *  the working tree with the dirty-ring row already in it:
+ *
+ *      for (int j=0; j<d->atapi_len; j++)   ->   for (int j=0; j<32768; j++)
+ *
+ *  24 rows, 0 failures -- a CLEAN SWEEP -- and under ASan on a short last chunk it is a
+ *  heap-buffer-overflow READ past data_in.  The committed build is ASan-clean on the
+ *  same walk, which is the negative control.
+ *
+ *  WHY IT HID: every other re-arm row sits where the remainder EXCEEDS 32768, so
+ *  `atapi_len` and the constant 32768 are the same number and no row can tell them
+ *  apart.  The rows were not weak; they were all on one side of a boundary.
+ */
+/*  PROPOSED ROW -- kills the fifth (d) mutant, and it is a SINGLE-RE-ARM
+ *  trajectory, i.e. exactly the shape the shipped contract says IS in scope.
+ *
+ *  The four shipped re-arm rows all sit on a chunk where the remainder is
+ *  LARGER than 32768, so `atapi_len` and the constant 32768 are the same
+ *  number and nothing distinguishes them.  Put the re-arm on a SHORT last
+ *  chunk and the refill's bound becomes observable.
+ */
+static int q2_asserts = 0;
+static void q2_sink(struct interrupt *a) { (void)a; q2_asserts++; }
+
+static void row_q2_short_last_chunk(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[4];
+	unsigned char *payload;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = q2_sink;
+	if (d.inbuf == NULL) { printf("  SETUP q2 inbuf failed\n"); return; }
+
+	/*  EXACT allocation, no slack: an over-read past data_in_len is then a real
+	    heap-buffer-overflow rather than a read into padding.  */
+	payload = (unsigned char *) malloc(40000);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP q2 payload failed\n"); return; }
+	memset(payload, 0xc3, 40000);
+	payload[35002] = 0x7e;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 40000;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 35000;	/*  4998 will remain: a SHORT last chunk  */
+	d.atapi_len = 2;
+
+	wdc_addtoinbuf(&d, 0x5a);
+	wdc_addtoinbuf(&d, 0x5a);
+
+	q2_asserts = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.atapi_len != 4998) {
+		printf("  FAIL %-38s atapi_len = %i, want 4998\n",
+		    "last chunk: length is the REMAINDER", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "last chunk: length is the REMAINDER", d.atapi_len);
+	}
+
+	/*  THE DISCRIMINATOR.  A refill whose bound is the CONSTANT 32768 rather than
+	    atapi_len pushes 32768 here and reads 27770 bytes past data_in.  */
+	rows ++;
+	if (occ != 4998) {
+		printf("  FAIL %-38s occupancy = %i, want 4998 (refill bound is not atapi_len)\n",
+		    "last chunk: refill is BOUNDED by it", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "last chunk: refill is BOUNDED by it", occ);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
 
 static void row_arm_overrun(void)
 {
@@ -1106,6 +1283,7 @@ int main(void)
 	row_identity();
 	row_arm_overrun();
 	row_rearm_zero();
+	row_q2_short_last_chunk();
 	row_atapi_flags();
 	row_wide_geometry();
 	row_no_lba_claim();
@@ -1121,8 +1299,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 23) {
-		printf("  FAIL %-38s rows = %i, want 23\n",
+	if (rows != 26) {
+		printf("  FAIL %-38s rows = %i, want 26\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

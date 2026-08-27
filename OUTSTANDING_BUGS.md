@@ -10372,3 +10372,112 @@ which is the vacuity class aimed at a whole build rather than at one detector.
 into the twin-tree propagation set, so every shared-file edit lands in four trees instead of
 three? The cost is one more copy per edit. The alternative -- leaving it out -- is defensible
 only if nobody reads its results as current, and nothing enforces that today.
+
+## 2026-08-27 — #474 residuals
+
+**#474 closed `fbclearread`:** `case TIMER_1_CLEAR:` had no `writeflag` test, so a guest READ
+reloaded the counter, decremented the pending count and deasserted the interrupt. Guarded the
+body, kept the `break`. Kill table 5/5, `regress/artifacts/fbclearread/killtable_20260827/`.
+
+- **`fbclearidempotent`** — OPEN, and it is PRE-EXISTING rather than anything #474 introduced.
+  The DC21285 says a clear *"has no effect if the associated interrupt was already clear"*,
+  while the write arm reloads a periodic timer **unconditionally** — so a write to
+  TimerNClear with nothing pending still restarts the counter. Named by the pass-2 codex seat,
+  which explicitly said it *"deserves a separate filing, not an untested expansion of #474"*,
+  and that is the disposition taken. Needs a row of its own and a reading of what the reload
+  is actually for.
+
+- **`fbclearaliases`** — OPEN, coverage debt, low. The four-address fold
+  (0x30C/0x32C/0x34C/0x36C → this case, timer indices 0–3) is read from the code and is **not
+  detector-backed**: every row exercises timer 1. One nonzero alias row would close it. Filed
+  rather than fixed because the fold is shared with every other timer case in the file and is
+  not specific to this repair.
+
+### The process finding, recorded because it was measured rather than argued
+
+**#474 skipped pass 1, disclosed that in the pass-2 brief, and the panel found what a design
+pass would have caught.** The codex seat returned DO NOT SHIP on an already-green detector and
+named two live gaps — an untested early-`return` (the very defect the fix's own comment argues
+against) and a guard widened to admit a PERIODIC read. Both were built, both escaped the
+shipped rows, and both are now killed.
+
+> **A stated rationale with no row behind it is a claim, not a property.** The fix comment said
+> the `break` is deliberate because an early `return` would skip the common tail. Nothing tested
+> it: `buf` was memset to `0xff` and never examined. The mutant that exercises a fix's own
+> stated reason is a cheap and obvious row, and it was missing.
+
+*This is the second measured case for the same rule in two days — #473's re-arm row carried a
+length check where its sibling arm row carried a corruption oracle. Both gaps were asymmetries
+between a fix's claim and its rows, and both were found by asking what the OTHER arm already had.*
+
+## 2026-08-27 — `rung1exempt`: three rounds have shipped on rung-1 evidence and no witness term fits
+
+`b115` (#472), `wdcringambig`/`wdcrearmzero` (#473) and `fbclearread` (#474) each shipped a REAL
+FIX whose only evidence is an offline differential plus a measured kill table. The witness ladder
+classes a rung-1 direct-call harness as a **DETECTOR, never a reproduction**, and none of the five
+terms fits: `boot:`/`probe:`/`construction:` are false (and `probe:` is actively dangerous — the
+shape regex scores it rung-3, which its own header calls laundering); `harness:` is admitted only
+when the round's SUBJECT is the test apparatus, and all three fix emulator code; and `none` is
+defined as DOCUMENTED-ONLY, so on a round that shipped a fix it asserts that no code changed.
+
+So each round parks at `held` carrying a prose note — **the note doing work a schema value should
+do.** Survivable once; at three it is a pattern, and a fourth will copy whichever note it finds.
+
+**OWNER QUESTION:** per-round exemption, or a new ladder term? A candidate is `detector:<path>` —
+honest about what exists, structurally distinct from `probe:`, and it would let
+`check_witness.py` tell "fixed with a detector" from "documented only", which it cannot do today.
+**Not proposing it unilaterally:** adding a rung changes what every future round may claim, and
+the existing terms were adjudicated rather than invented. The three rows are `held` with honest
+notes meanwhile, which is correct under the current schema.
+
+## 2026-08-27 — #473 pass-2 findings (post-commit): one regression, one live floor breach, four new rows
+
+The pass-2 panel on `1f1a02b` ran after the round had shipped. Eight of nine seats answered;
+**the kimi seat was LOST on both transports** (CLI 403 weekly limit, `kimi-k3:cloud` HTTP 503)
+while glm/deepseek/minimax answered in the same minute, so it was that model's outage.
+
+- **`wdcoddstep`** — OPEN, and **MEASURED** on the committed tree. `atapi_len -= consumed` STEPS
+  PAST ZERO on an odd-length chunk: with `atapi_len = 3` and a four-byte read, `atapi_len` lands
+  on **-1** and `atapi_received` on **4 where `data_in_len` is 3**. So `== 0` never fires again
+  and the device claims it delivered more bytes than the transfer holds. This is the `#341` class
+  surviving at the same site — that round fixed `consumed` to match what is POPPED, but did not
+  make the subtraction saturate, and its own comment describes exactly this symptom as the thing
+  being fixed. **Pre-existing**: a small odd transfer reaches it with no re-arm at all. `#473`
+  adds a second road (an odd FINAL chunk of a multi-chunk transfer, which before that round could
+  never be walked to). *Strictly fewer transfers break than before.* The fix is one line —
+  saturate, or test `<= 0` — but **which one is a real question**, because saturating hides the
+  over-count in `atapi_received` while `<= 0` completes the command still reporting 4 of 3 bytes.
+  This fork's own precedents (`#283` ASC, `#338` mb89352, `#341` here) all say the count reported
+  has to be the count that happened, so the truthfulness half needs its own answer.
+
+- **`wdccdbmidxfer`** and **`wdcdataoutdrain`** — filed from READING by the Opus seat, which
+  flagged both as **not measured**. The first: `inbuf_len == 12` is an EQUALITY reachable
+  mid-transfer, so in PHASE_DATAOUT twelve bytes of guest payload can be dispatched as a SCSI
+  CDB. The second: `write_in_progress` and `atapi_cmd_in_progress` can be live together, and the
+  write-back block's `0 % 512 == 0` then drains 512 bytes of just-armed ATAPI data **to the disk
+  image** at a guest-chosen offset — the `#280`–`#285` family, which corrupted the arc image.
+
+### Two things the panel found in `#473` itself, both fixed in the follow-up commit
+
+**The "ring is empty at the re-arm" premise is FALSE, and it is a REGRESSION rather than merely
+an overclaim.** The data-port WRITE arm pushes guest bytes with no phase guard, and its
+unexpected-write latch is suppressed *precisely because* `atapi_cmd_in_progress` is set. Opus
+measured it end-to-end: one 2-byte guest store, 65536-byte transfer — committed build **32768 of
+32768 bytes wrong**, pre-fix build **0 wrong**. The comment is corrected in place and the case is
+tracked under `wdcaddtoinbufbound`.
+
+**A fifth and a sixth clause-(d) mutant escaped a table that had already closed four**, and both
+came from asking one more time after the table was clean:
+
+- `Md_emptyguard` (grok) — `if (head == tail)` around the refill: **this round's own safety
+  sentence turned into a predicate.** Swept 23 rows clean.
+- `Md5_chunkconst` (Opus) — the refill's bound relaxed to the constant `32768` instead of
+  `atapi_len`. Swept **24** rows clean — including the row just added for the first escape — and
+  under ASan on a short last chunk it is a **heap-buffer-overflow READ**.
+
+> **Both hid for the same structural reason: every re-arm row sat where the remainder EXCEEDS
+> 32768, so `atapi_len` and the constant were the same number, and every row was written under
+> the premise the mutants attack.** The rows were not weak. They were all on one side of a
+> boundary, and all downstream of one assumption.
+
+Kill table now **10 of 10**, detector 26 rows, 0 failures.

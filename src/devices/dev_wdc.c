@@ -758,11 +758,38 @@ DEVICE_ACCESS(wdc)
 						    remaining -- with no recovery, since the next read decrements
 						    from 0 and `== 0` never fires again.  MEASURED band
 						    [65537, 262655]; the guest saw bytecount 0 with DRQ asserted.
-						
+
 						    The refill is what makes the bounded push above correct: here
-						    atapi_len is 0, so the guest drained the previous chunk and the
-						    ring is empty; data_in is still live, being freed only when the
-						    next command arrives.  */
+						    atapi_len is 0, so the guest drained the previous chunk; data_in
+						    is still live, being freed only when the next command arrives.
+
+						    #473 L4: an earlier version of this comment said the ring is
+						    EMPTY here.  That is an overclaim and a panel seat broke it.
+						    atapi_len counts only what the DATAIN arms pushed, and the
+						    data-port WRITE arm above pushes guest bytes with no phase
+						    guard and no capacity check -- its unexpected-write latch is
+						    suppressed precisely because atapi_cmd_in_progress is set.  A
+						    guest that WRITES to the data port mid-DATAIN therefore grows
+						    head without touching atapi_len, and those bytes are still
+						    queued when the refill runs.
+
+						    What IS true: the ring is empty for any guest that only READS
+						    during DATAIN, which is every driver in this tree.  An
+						    adversarial interleaved write DESYNCHRONISES that guest's own
+						    transfer.  MEASURED by a panel seat: one 2-byte store placed so
+						    the ring still holds the tail of chunk 1 makes all 32768 bytes
+						    of chunk 2 wrong on this build, and ZERO wrong pre-fix -- so for
+						    that case this is a REGRESSION, not merely an overclaim.
+
+						    It is not a new HOST-memory capability, and the arithmetic here
+						    was stated BACKWARDS in the first draft of this comment: the
+						    refill route needs 229889 injected bytes and the direct write
+						    route needs 262657, so the refill route is cheaper by 32768 --
+						    FEWER, not more.  The conclusion survives because both routes
+						    are unbounded and a guest with either has the other; the stated
+						    reason was false, and a wrong reason gets reused.  Tracked as
+						    `wdcaddtoinbufbound`, which names that write path as the live
+						    unbounded route.  */
 						d->atapi_len = d->atapi_st->
 						    data_in_len -
 						    d->atapi_received;

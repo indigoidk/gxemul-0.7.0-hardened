@@ -1,3 +1,184 @@
+## Round 473 pass 2 (post-commit) -- the panel broke the fix's load-bearing premise, and one mutant swept the detector clean
+
+`1f1a02b` shipped, then its own pass-2 panel found four things wrong with it. None of them
+un-ships the fix; two of them are corrections to what the round CLAIMED, one is a floor breach,
+and one is an archive that contradicted itself.
+
+Eight of nine seats answered. **The kimi seat was LOST on both transports** -- CLI 403 on its
+weekly limit, and `kimi-k3:cloud` returning HTTP 503 -- while glm, deepseek and minimax all
+answered in the same minute, so it was that model's outage and not a shared-transport failure.
+
+### *** L4: "the ring is empty at the re-arm" IS AN OVERCLAIM. Two seats broke it independently. ***
+
+The shipped comment justified the refill by asserting the ring is empty when `atapi_len` reaches
+zero. **It is not an invariant.** Verified by reading before acting:
+
+* the unexpected-write latch is **suppressed** while `atapi_cmd_in_progress` is set;
+* the data-port WRITE arm then pushes guest bytes with **no phase guard and no capacity check**.
+
+So a guest that WRITES to the data port mid-DATAIN grows `head` without touching `atapi_len`,
+and those bytes are still queued when the refill runs.
+
+**My own trace missed it, and the reason is the useful part.** I proved the INITIAL arm is
+reachable only from an empty ring -- the packet path needs `inbuf_len == 12` EXACTLY, so a dirty
+ring cannot issue a packet command. That is true, and **it does not transfer**: the re-arm is not
+reached through the packet path at all. *A guard proved for one entry point was carried to a site
+that entry point does not dominate.*
+
+Severity, stated so it is not over-sold: the injected bytes are the guest's own, and overrunning
+the 262656-byte ring that way needs more than the same unbounded write path would already let it
+push directly. It corrupts that guest's transfer, not host memory. **The fix stands; the comment
+was false**, and closure is no shield for false prose.
+
+### *** A FIFTH CLAUSE-(d) MUTANT SWEPT THE DETECTOR CLEAN -- floor breach, closed here ***
+
+The capped ask-again asked for one more null-repair mutant. A grok seat supplied it, and it is
+this round's own safety sentence turned into a predicate:
+
+```c
+    if (d->inbuf_head == d->inbuf_tail)      /* <-- the mutant */
+            for (int j=0; j<d->atapi_len; j++)
+                    wdc_addtoinbuf(d, d->atapi_st->data_in[d->atapi_received + j]);
+```
+
+**MEASURED: 23 rows, 0 failures. A clean sweep**, because every other row leaves the ring empty
+at that point. On a dirty ring it skips the refill while the guest is still told 32768 bytes are
+ready.
+
+> **A guard built from a round's own argument is invisible to rows written under that same
+> argument.** The rows were not weak; they were all derived from one premise, and the mutant
+> attacks the premise rather than the arithmetic.
+
+Closed by one row that establishes a NON-EMPTY ring at the re-arm -- five bytes queued behind the
+chunk, exactly what an interleaved write leaves. Real code 32773, mutant 5. **Kill table now 9 of
+9**, baseline 24 rows 0 failures.
+
+### The archive contradicted itself, and a seat caught it
+
+codex checked the cited artifact against the shipped detector: every archived run said **22 rows**
+while the committed source had 23. The kill table was real, but it **was not produced from the
+final detector**.
+
+Worse than reported, on inspection: the per-mutant logs HAD been refreshed and only `TABLE.txt`
+was stale, because `TABLE.txt` was assembled by a `tee` at the CALL SITE while everything else was
+written by the script. **An artifact assembled by its caller is an artifact that can be
+half-updated.** The scorer now writes it itself, and the whole set was re-derived at 24 rows.
+
+### Four filed rows existed only in prose
+
+Also codex: `wdcaddtoinbufbound` and `wdcrearmwalk` were named in `OUTSTANDING_BUGS.md` and were
+**absent from the ledger**. So were `#474`'s two. Precommit section P checks ledger -> bugfile;
+nothing checks bugfile -> ledger, so the gap was unguarded. All four now filed properly.
+
+*The same seat noted that `witness: none` and `state: open` were wrong as committed. Both were
+already corrected before its answer landed -- see the `rung1exempt` filing.*
+
+### One claim of mine was too strong
+
+The round said the two defects were **inseparable**. codex showed a two-stage ordering does exist:
+change the re-arm's `0` to `32768` first while the initial arm still pre-queues everything, then
+bound the push and add the refill together. That retains the ring overrun until stage two, but it
+does separate them.
+
+**So "they shipped together for good reason" is right and "no separation was possible" is wrong.**
+The coupling argument itself was confirmed in both directions -- Fable checked the one I did not
+state, that refill-without-bound double-loads the ring -- so the ordering that shipped was correct
+and the one-site rule was honoured. Only the word *inseparable* was overstated.
+## Round 474 (#474) -- a guest READ of the footbridge timer-clear register performed the clear
+
+`case TIMER_1_CLEAR:` in `dev_footbridge.c` carried **no `writeflag` test at all**, while
+`case TIMER_1_CONTROL:` immediately above it does. So a guest READ ran the whole body: it
+reloaded the counter when periodic, decremented the pending-interrupt count, and DEASSERTED the
+interrupt. A guest that merely READ the register silently acknowledged a pending timer interrupt.
+
+**The guest-visible consequence is a LOST interrupt, not a bad value** -- which is why it survived:
+nothing returns wrong data, a timer just stops firing.
+
+FOUR addresses, not one: the timer fold normalises 0x30C / 0x32C / 0x34C / 0x36C onto this case.
+
+### Confirmed against the datasheet, not inferred from the code
+
+DC21285 section 7.3.42, verbatim:
+
+    Any write to the TimerNClear register (any data) clears the associated interrupt.
+    The write has no effect if the associated interrupt was already clear.
+    TimerNClear is a write-only register.
+
+    Dword Bit  Name    R/W  Description
+    31:0       Clear   W    Clears interrupt. Data is ignored.
+
+*The brief cited Table 7-10. That is the interrupt-controller table; a panel seat corrected it to
+the timer section / Table 7-12 and was right.* A read therefore has **no architecturally specified
+value**, so the rows pin DETERMINISM (a stable zero), not architecture.
+
+### The fix -- guard the body, keep the `break`
+
+The enclosing function ends with `if (writeflag == MEM_READ) memory_writemax64(...); return 1;`.
+An early `return` inside the case would skip that and hand a guest read an **untouched buffer** --
+a defect the current code does not have. That is the sketch-rule trap four readers walked into on
+an earlier round, so the fix was shaped to avoid it from the start.
+
+### *** THE ROUND SHIPPED NO PASS 1, AND THE PASS-2 PANEL RETURNED DO NOT SHIP ***
+
+The brief disclosed the skipped pass 1 and asked the panel to say if it mattered. It did. The
+codex seat returned **DO NOT SHIP** on a detector that was already green, with two live gaps.
+Every claim was verified before acting, and both gaps are now closed:
+
+| the seat's finding | verified how | disposition |
+|---|---|---|
+| the rows never examine `buf`, so `break` -> `return 1` passes both | read the rows: `memset(buf, 0xff, ...)` and no read-back | **CLOSED** -- common-tail row added |
+| the rows use `control = 0` only, so a guard widened to admit a PERIODIC read still passes | read the rows; built the mutant | **CLOSED** -- two periodic rows added |
+| four new trailing-whitespace lines | `git diff --check` names exactly 434/437 and 688/691 | **FIXED** |
+| the brief's datasheet table number is wrong | opened the datasheet | brief defect, corrected above |
+
+**The first is the sharpest, because the fix's own comment argues for the `break` and nothing
+tested it.** A stated rationale with no row behind it is a claim, not a property -- and the
+mutant that exercises it is exactly the edit the comment warns against.
+
+### The kill table -- 5 of 5
+
+    M_bare        KILLED  3/5   (b) drop the guard entirely -- the pre-fix code
+    M_earlyret    KILLED  1/5   (d) `return 1` instead of `break`
+    M_periodicor  KILLED  2/5   (d) guard widened to admit a PERIODIC read
+    M_null        KILLED        (c) null medium, caught at compile
+    M_notread    *ESCAPED 0/5   (d) `writeflag != MEM_READ` -- EQUIVALENT, see below
+
+`regress/artifacts/fbclearread/killtable_20260827/`. Baseline 24 rows, 0 failures,
+`DIFF_FOOTBRIDGE_PASS`.
+
+**`M_notread` is an EQUIVALENCE, not coverage debt -- but the seat's REASON for it was
+incomplete, and the reason is the part that gets reused.** It said the domain is
+`{MEM_READ, MEM_WRITE}`. `memory.h`'s own block headed *"Writeflag:"* documents a THIRD value,
+`MEM_DOWNGRADE 128`. What actually makes the mutant equivalent is narrower and checkable:
+**`MEM_DOWNGRADE` appears only in `cpu_dyntrans.c`'s TLB-invalidation path and never reaches a
+device handler.** Right conclusion, wrong warrant.
+
+### Scorer defects found while measuring, both self-announcing
+
+The first table read `M_bare KILLED (compile failed)` and two `*ESCAPED 0/0 red`. Neither was a
+result:
+
+* `M_bare` replaced the body but left `if (writeflag == MEM_WRITE) {` **with no closing brace**,
+  so the file failed to compile for a reason unrelated to the mutant -- and a build fault scored
+  as a detection is the exact confusion the mutant rules warn about.
+* the row regex was anchored at the start of the label, but every token appears MID-label, so it
+  selected **nothing**. `0/0` is not a measurement, and printing the denominator is the only
+  reason that was visible rather than convincing.
+
+*Both were caught by the apparatus-check discipline rather than by reading the numbers.*
+
+### Honest scope
+
+Rung-1 direct-call harness = DETECTOR, never a witness.  The ledger row is `held`, not closed,
+and its witness field carries the reason -- `none` alone would assert DOCUMENTED-ONLY, which is
+false of a round that shipped a fix. The rows exercise timer 1 only -- the four-address fold is read from the code and
+is **not** detector-backed, which is stated rather than implied.
+
+The datasheet also says clearing *"has no effect if the associated interrupt was already clear"*,
+while the write arm reloads a periodic timer unconditionally. **That is a separate, pre-existing
+question and is filed, not folded into this round.**
+
+`est/`, `build/` and `build-asan/` carry `dev_footbridge.c` byte-identically with GXEMUL-SEC.
 ## Round 473 (#473) -- the ATAPI DATAIN chunking pushed a whole transfer into a ring that cannot hold it, and then reported zero bytes left
 
 Two defects in one piece of machinery, closed by one diff.  The adjudication took them as ONE
@@ -119,6 +300,13 @@ rather than left to be discovered.
 
 Rung-1 direct-call harness = DETECTOR, never a witness.  **`wdcrearmzero` still owes a rung-3/4
 witness**; that obligation is unchanged by this round and is recorded, not discharged.
+
+*Both ledger rows are `held`, NOT closed, and their witness field carries the reason rather than
+the bare word `none`.  A draft of this block said `none` was the honest value; it is not.
+`state_semantics` defines `none` as DOCUMENTED-ONLY, and this round shipped a fix -- so the bare
+value asserts that no code changed.  `b115` (#472) set the precedent deliberately: no ladder term
+fits "fix shipped on rung-1 evidence", and that absence is the signal a round needs an owner
+exemption or a rung-3 probe.  THREE rounds now sit here, so it is filed as a standing question.*
 
 `est/`, `build/` and `build-asan/` carry `dev_wdc.c` byte-identically with GXEMUL-SEC.
 ## Round 472 (#472) -- an unaligned overlay read took its bytes from the wrong layer
