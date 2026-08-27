@@ -1907,7 +1907,44 @@ category, enforced it, and documented why — and the PROSE never absorbed it. A
 be stale in both directions, and a tool's own header is a primary source about the tool.*
 
 **Ledger:** a row that closes with commits names its witness: `boot:<rig/gate>`, `probe:<path>`,
-`construction:<gate>`, `harness:<what proved it>`, or `none` (documented-only). Forward-only from
+`construction:<gate>`, `harness:<what proved it>`, or `none` (documented-only).
+
+### *** A SIXTH TERM, `detector:<path>` -- OWNER DECISION 2026-08-27, WITH A BOUND THAT IS
+### PART OF THE ADOPTION AND NOT A FOOTNOTE TO IT. ***
+
+**The gap, and it took three rounds to become visible.** `b115` (#472),
+`wdcringambig`/`wdcrearmzero` (#473) and `fbclearread` (#474) each shipped a REAL FIX to
+emulator code whose only evidence is an offline differential plus a measured kill table.
+**None of the five terms fitted.** `boot:`/`construction:` are false. **`probe:` is actively
+DANGEROUS** -- `check_witness.py`'s shape regex scores it rung-3, which that file's own header
+calls laundering. `harness:` is admitted only when the round's SUBJECT is the test apparatus,
+and all three fix emulator code. And `none` is defined as DOCUMENTED-ONLY, so on a round that
+shipped a fix **it asserts that no code changed.**
+
+So each round parked at `held` carrying a prose note -- **the note doing work a schema value
+should do.** Survivable once; at three it is a pattern, and a fourth would have copied
+whichever note it found.
+
+> **THE BOUND: `detector:` IS NOT A RUNG.** It records that a fix shipped with a MEASURED
+> DETECTOR and no guest-path witness. It ranks BELOW every access witness, and it does NOT
+> satisfy the reproduce-before-you-edit step: **a round using it still owes the rung-3 ATTEMPT**
+> the 2026-08-27 lifecycle ruling requires, and must record that the attempt was made and what
+> it found. The one thing it may never mean is *we did not think to ask*.
+
+It exists so the checker can tell FIXED-WITH-A-DETECTOR from DOCUMENTED-ONLY, which it could
+not do before -- both had to be written `none`, and that conflation is what made three honest
+rounds look like three rounds that shipped nothing.
+
+*The alternative put to the owner was a per-round exemption. It was declined for a reason worth
+keeping: an exemption is a NOTE, and a note is exactly what had already failed three times. The
+cost the owner accepted is real and is written here rather than glossed -- **adding a term
+changes what every future round may claim** -- which is why the bound above is part of the
+adoption.*
+
+Controlled in both directions on the day it landed: `detector:<path>` passes, a bare
+`detector:` with no path is REFUSED, the near-miss `detectorish:` is REFUSED, and all five
+pre-existing terms still pass unchanged.
+ Forward-only from
 2026-08-19.
 
 ## Round lifecycle, with the end-of-round parallel step

@@ -23,6 +23,8 @@ and a guessed witness is worse than an absent one -- it reads as evidence.
     construction:<gate>      ONLY where construction is itself the defective path  (rung 2)
     harness:<what proved it> the round's subject IS the test apparatus, so there is
                              no guest path to witness -- see below
+    detector:<path>          a fix whose evidence is an offline differential plus a
+                             measured kill table -- see the BOUND below
     none                     documented-only; no code shipped, or explicitly filed
 
 **`harness:` IS A GAP IN THE LADDER, FOUND BY THIS CHECK ON ITS FIRST RUN.** The ladder's four
@@ -53,7 +55,36 @@ LEDGER = os.environ.get("GXLEDGER") or os.path.join(HERE, "ledger.json")
 
 #  The rule's start date. Rows whose newest entry predates it are grandfathered.
 CUTOFF = "2026-08-19"
-SHAPE = re.compile(r"^(boot:\S|probe:\S|construction:\S|harness:\S|none\b)")
+#  *** `detector:` ADOPTED 2026-08-27 BY OWNER DECISION, WITH A BOUND. ***
+#
+#  THE GAP IT FILLS.  Three rounds -- b115 (#472), wdcringambig/wdcrearmzero (#473) and
+#  fbclearread (#474) -- each shipped a REAL FIX to emulator code whose only evidence is an
+#  offline differential plus a measured kill table.  None of the five existing terms fits:
+#  boot:/construction: are false; `probe:` is ACTIVELY DANGEROUS because the shape regex
+#  scores it rung-3, which this file's own header calls laundering; `harness:` is admitted
+#  only when the round's SUBJECT is the test apparatus, and those three fix emulator code;
+#  and `none` means DOCUMENTED-ONLY, so on a round that shipped a fix it asserts that no
+#  code changed.  Each round parked at `held` carrying a prose note -- THE NOTE DOING WORK A
+#  SCHEMA VALUE SHOULD DO.  Survivable once; at three it is a pattern, and a fourth would
+#  have copied whichever note it found.
+#
+#  *** THE BOUND, AND IT IS NOT OPTIONAL: `detector:` IS NOT A RUNG. ***  It records that a
+#  fix shipped with a MEASURED DETECTOR and no guest-path witness.  It ranks BELOW every
+#  access witness and it does NOT satisfy the reproduce-before-you-edit step -- a round using
+#  it still owes the rung-3 ATTEMPT the 2026-08-27 lifecycle ruling requires, and must record
+#  that the attempt was made and what it found.  The one thing it may never mean is 'we did
+#  not think to ask'.
+#
+#  It exists so that `check_witness.py` can tell FIXED-WITH-A-DETECTOR from DOCUMENTED-ONLY,
+#  which it could not do before: both had to be written `none`, and that conflation is what
+#  made three honest rounds look like three rounds that shipped nothing.
+#
+#  WHY NOT A PER-ROUND EXEMPTION, which was the other option put to the owner: an exemption
+#  is a note, and a note is what already failed here three times.  The cost the owner
+#  accepted is real and is written down rather than glossed -- adding a term changes what
+#  EVERY future round may claim, which is why the bound above is part of the adoption and
+#  not a footnote to it.
+SHAPE = re.compile(r"^(boot:\S|probe:\S|construction:\S|harness:\S|detector:\S|none\b)")
 
 
 def main(argv):
