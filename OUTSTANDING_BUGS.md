@@ -10136,3 +10136,48 @@ broke the claim -- the status field is a POINTER, so zeroing the struct leaves N
 a GOOD status byte, and the original explanation was false for every controller -- and the
 corrected picture is four different wrong outcomes from one omitted completion step, of which
 this halt is the most severe.
+
+
+### 2026-08-27 -- `m8sarrows`: a one-identifier edit sweeps both m88k detectors 79/79
+
+Successor to `m8sarseq`, filed so a measured specification could stop living in one seat entry.
+
+Changing a single identifier in the CMMU command path -- indexing the register base by a fixed
+zero instead of the device's own CMMU number -- passes every row of both shipped offline
+detectors, seventy-nine of them. The controls are what make that evidence rather than an
+assertion: one mutant reddens the consumer-side rows and another reddens the producer-side
+rows, so both ends are covered and only the SEAM is blind. The reason is mechanical -- every
+flush row runs after a reset that zeroes both the CPU and CMMU numbers, and issues from CPU
+zero, and at that pair every candidate register base coincides.
+
+It is a live class on the shipped rig, not a shape pin: both CMMUs are registered on every
+boot, the CMMU number is guest-addressable from an address bit, and the data CMMU takes about
+fifty-two percent of the flush writes. Under the mutant, roughly half the machine's page-table
+flushes never dispatch.
+
+The fix is three rows with three measured kills on two INDEPENDENT axes -- neither subsumes the
+other, which is sharper than the original filing knew. About twenty lines, in the differential
+that already has the two-CPU two-CMMU fixture.  Ranked as coverage debt: the shipped code is
+correct.
+
+### 2026-08-27 -- `exitdenom`: the terminating-site census counts sites, not defects
+
+Rescued from `exitsweep` at the moment that row closed, because it was a question addressed to
+a future seat and closing a row retires every question inside it.
+
+The census reports three hundred and sixty terminating sites, ninety inside device access
+handlers, and its own output says it counts sites rather than defects.  It counts termination
+with any status rather than only failure, plus aborts and allocation-check macros, and it
+includes known non-defects: an intended clean exit in the console device, an unreachable site
+in the RAM device, and init-time failures where terminating is the correct behaviour.  It also
+does not resolve helper reachability, and helpers are the largest bucket.
+
+The number has had three generations -- one hundred and fourteen, then one hundred and seventy,
+then three hundred and sixty -- and two further superseded figures sit on a neighbouring row.
+Five numbers for one quantity, and the drift is mostly a changing definition rather than a
+changing tree.  That is the substantive point: the scheduling questions the parent row asked
+cannot be answered against a number that includes an intended clean exit on purpose.
+
+What would settle it is a classification of the sites into defect, non-defect and unreachable,
+with the rule for each written down and the classifier folded into the tool so the answer
+re-derives instead of being transcribed.  Read-only: no build, no rig, no timing oracle.
