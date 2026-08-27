@@ -10113,3 +10113,26 @@ still NOT FIXED -- one for want of a measured delta, one because correcting it o
 oracle-correction order and therefore a build. *Establishing that a row is true, latent and
 correctly deferred is a complete result for this class*; the failure mode being repaired is the
 blank note, not the open state.
+
+
+### 2026-08-27 -- `mb89352halt`: an unimplemented SCSI command stops the emulated CPU
+
+Found by an adversarial pass that was trying to REFUTE a different row's mechanism, and it did
+refute it -- then produced this as a by-product.
+
+On `dev_mb89352.c`, an unimplemented SCSI command leaves `data_in == NULL`, so the controller
+enters the status phase. The guest's status read then takes a NULL buffer of length 0 with the
+transfer position at 0, so the `read longer than buffer?` guard sees `0 >= 0`, fires, and sets
+`cpu->running = 0`. **A guest that issues an unimplemented command to that controller halts the
+emulated CPU.**
+
+It is the same omission as the unknown-opcode row -- no status buffer is ever populated -- but
+a worse outcome than that row's false success, so it ranks above it on harm. One fix covers
+both; two detectors are needed, because the observables differ (a status byte there, the CPU
+still running here).
+
+**The by-product is the point.** The pass was asked to break a claim, not to find defects. It
+broke the claim -- the status field is a POINTER, so zeroing the struct leaves NULL rather than
+a GOOD status byte, and the original explanation was false for every controller -- and the
+corrected picture is four different wrong outcomes from one omitted completion step, of which
+this halt is the most severe.
