@@ -1007,6 +1007,51 @@ if [ -z "$NEWDET" ]; then good "no detector added or modified"; else
 	soft "(a build fault is a FAULT, not a detection)."
 fi
 
+say ""; say "Y. no tracked TEXT file has gained a NUL byte"
+#
+#  WHY THIS EXISTS.  A shell heredoc once wrote three literal NUL bytes into two
+#  tracked text files (row `nulheredoc`).  The damage is not the bytes -- it is that
+#  grep then treats the file as BINARY and silently stops reporting matches.  Almost
+#  every gate here is grep-based, so one NUL can hollow out a whole gate while every
+#  row still reads green.
+#
+#  *** THIS CHECK WAS WRITTEN WRONG TWICE ON 2026-08-27 AND BOTH FAILURES ARE THE
+#  REASON IT LOOKS LIKE THIS. ***
+#
+#  (1) The first version used `LC_ALL=C grep -qm1 -P "\\x00"`.  **grep REFUSES to
+#      run -P under LC_ALL=C** -- "supports only unibyte and UTF-8 locales" -- and with
+#      -q plus 2>/dev/null that refusal is invisible.  Every file reported clean.  A
+#      check that cannot fail, built inside a checker.  The same mistake made an
+#      earlier 1161-file census inert: it reported 0 hits because grep never ran.
+#
+#  (2) Writing that pattern through a heredoc turned `\\x00` into an actual NUL
+#      byte in this script -- reproducing `nulheredoc`s exact mechanism inside the
+#      check meant to catch it.  Ordinary grep then called precommit_check.sh binary.
+#
+#  So: `tr -cd` and not grep.  No regex engine, no -P, no locale dependency, and no
+#  backslash to survive a quoting layer.  If you edit this line, re-run the negative
+#  control below; do not assume a pattern-based rewrite is equivalent.
+#
+#  Scoped to text extensions on purpose: a future tracked .pdf or .png carries NULs
+#  legitimately, and widening this to every tracked file would make it a check that
+#  has to be switched off, which is worse than no check.
+nulhits=0
+nulscanned=0
+for f in $(git -C "$SEC" ls-files -- "*.c" "*.h" "*.py" "*.sh" "*.md" "*.json" "*.txt" "*.tsv" 2>/dev/null); do
+	[ -f "$SEC/$f" ] || continue
+	nulscanned=$((nulscanned+1))
+	if [ "$(tr -cd "\000" < "$SEC/$f" | wc -c)" -gt 0 ]; then
+		bad "$f contains a NUL byte -- grep will treat it as BINARY and go quiet"
+		nulhits=$((nulhits+1))
+	fi
+done
+if [ "$nulscanned" -eq 0 ]; then
+	bad "NUL check scanned ZERO files -- the ls-files pattern selected nothing, so it"
+	bad "proved nothing.  A pattern that matches nothing reports 0 for everything."
+elif [ "$nulhits" -eq 0 ]; then
+	good "no NUL bytes in $nulscanned tracked text files"
+fi
+
 say ""
 say "=========================================================="
 if [ $fail -gt 0 ]; then
