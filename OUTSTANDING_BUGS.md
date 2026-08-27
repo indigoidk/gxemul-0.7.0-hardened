@@ -11758,3 +11758,35 @@ round is exactly how rounds stop converging.
 REMEDY when worked: **re-derive the tree from SEC rather than patching the header.** A tree 363
 files out of date has no property worth preserving, and a header-only fix would leave the other
 362 to be found one build at a time.
+
+
+## 2026-08-27 -- a seat outcome the taxonomy does not name
+
+### `seatunfinished` -- investigation without conclusion, filed as a formatting problem
+
+`panel_20260827_182018/codex.txt`: **462 KB, 7240 lines, 98% novel, no verdict anywhere**,
+and the answer **terminates inside a file it was quoting** -- its last line is a closing
+brace from a scratch generator it had opened. 1111 lines of real repository search preceded
+it. The seat worked and never landed.
+
+It is **none of the recorded classes**: no quota text (not a wall), 98% novel (not
+echo-only), substantial output (not the minimax stall), a CLI seat (not the deepseek
+thinking-burn), transport up (not a refused connection).
+
+> `seat_verdicts.py` reported it as *answered, NO VERDICT LINE (format miss)*. **That is the
+> daemon case's conflation repeated: a seat that produced no answer, recorded as a seat with
+> bad formatting.** Scoring it `answered` credits a verdict that does not exist.
+
+**The discriminator is cheap and is not the one already checked:** does the answer **end
+inside a quoted file or code block** rather than with a sentence? A finished answer ends in
+prose. *Is there a verdict line* is a FORMAT question; *did the seat finish* is a COMPLETION
+question -- and one check is answering both.
+
+**Not a claim about the seat.** The same seat produced a real verdict on `#484`'s pass 2 and
+the landisk unmapped-write finding on `#485`. One firing ran out mid-investigation; the
+value is the signature, not the seat.
+
+OWED BEFORE IT SHIPS, since it changes the tool every panel runs: **two negative controls**
+-- prove it fires on this file, and prove it does **not** fire on `#484`'s codex answer,
+which ends in prose. This project has already shipped one check that could not fail; a
+completion check that fires on every long answer would be worse than none.

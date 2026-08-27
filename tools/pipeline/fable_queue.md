@@ -1011,3 +1011,28 @@ TWO QUESTIONS, both measurable:
    orientations, or is there an orientation R7/R8 happen not to build? Those two rows
    were written from one setup (`head < tail`), which is exactly the shape that hides an
    asymmetry.
+
+## wdcfloodstale -- #486 research stage -- ANSWERED 2026-08-27, hold released
+
+The flagship seat answered: RE-AIM, one round, header correction inseparable, two mutations
+owed (M_relatch and M_silent, the second being the anti-fake control).  It also named THREE
+option-set members I had missed -- including re-pinning the want to 0, which it flagged as
+*the cheapest path to a green battery* and rejected as a check that cannot fail.
+
+*Original question, kept for the record:*
+
+## wdcfloodstale -- #486 research stage (queued 2026-08-27)
+
+Pass 1 is short two Agent seats and they are still running. **The question they carry is
+the one the whole disposition turns on: what is the wall-clock of the re-aimed row?**
+
+I settled by reading that the overrun `fatal()` is SYNCHRONOUS inside the data-port write
+handler, so a stepped probe can see it -- free-running is a SPEED choice, not a correctness
+one. So:
+
+* if `step 394202` is tolerable, the round shrinks to a count change plus a header
+  correction and needs no free-running conversion at all;
+* if it is not, the conversion is required, and the `kimi-k3:cloud` seat's SPLIT proposal
+  becomes right -- land the header fix now (immediately true) and the re-aim separately,
+  since the deciding variable is not *same file* but **same landing date**, and Sunday's
+  battery is the deadline.
