@@ -586,7 +586,35 @@ Measured 2026-08-22. ***
 
 `C:\DocumentNoSnc\CC\GXEMUL\src\` is dated **April 2021**, is untracked, and is NOT the
 hardened fork. The four fork trees are `GXEMUL-SEC/`, `est/`, `build/`, `build-asan/` (plus
-WSL `/tmp/gxsec-build`). A brief that says only *"project root: C:\DocumentNoSnc\CC\GXEMUL"*
+WSL `/tmp/gxsec-build`).
+
+> #### *** AND IT IS NOT THE ONLY ONE. `./src/` IS THE ONE THIS PARAGRAPH NAMES; THERE ARE
+> #### **THREE** PRISTINE-UPSTREAM COPIES UNDER THE PROJECT ROOT. Derived 2026-08-27 by
+> #### running the command below, not transcribed -- and two of them were undocumented. ***
+>
+> **THE DERIVER, because a hand-maintained inventory of files is a wrong record waiting for
+> someone to add a directory** -- this is the same failure the `_scratchpad/*.pdf` list made
+> twice:
+>
+> ```
+> find . -name 'dev_wdc.c' | while read f; do echo "$(md5sum "$f" | cut -c1-8) $f"; done
+> ```
+>
+> On that date it printed **four fork copies sharing one hash** and **three upstream copies
+> sharing another**, the extra two living under `_archive/audit-results-*/builds/`
+> (`est-asanonly/` and `orig-asan/`). A seat given `--add-dir` at the project root can reach
+> all of them.
+>
+> **THE SAVING GRACE, and it is worth knowing rather than relying on: these are PRISTINE
+> 2021 upstream, not partially-patched fork copies.** A seat reading one reports line
+> numbers off by hundreds and arms whose existence differs -- loud, and detectable by the
+> rule two paragraphs down. *A nearly-right stale FORK copy would be far worse and would
+> shift lines by tens.* So the hazard is bounded by luck, not by design; do not assume the
+> next stale copy will be as obvious.
+>
+> *Surfaced by the codex seat while answering an unrelated design brief, as a held queue
+> item (`stalecopies`). Its count was right and its characterisation -- "pre-#337 copies" --
+> was not; they predate the fork entirely. Re-derived here rather than transcribed.* A brief that says only *"project root: C:\DocumentNoSnc\CC\GXEMUL"*
 lets a seat with `--cwd` there resolve `src/cpus/cpu_sh.c` to the 2021 file.
 
 **What that cost:** on the `sh4tlbmulti` pass 1, Kimi returned **80 KB, internally consistent,
