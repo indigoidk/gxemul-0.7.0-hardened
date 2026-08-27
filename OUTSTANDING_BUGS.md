@@ -10080,3 +10080,36 @@ response inside 265 KB of `thinking`, `done_reason: length`, `eval_count: 65536`
 the four recorded classes, and **a size check scores it the panel's best answer**. Filed as
 `seatthinkburn`, with the contributing cause recorded honestly — the brief inlined an entire
 18 KB document and asked for an exhaustive audit of it.
+
+
+### 2026-08-27 -- `baretitle`: a fifth of the open queue is a TITLE with no evidence
+
+A census of the ledger found a large population of open rows whose `state_note` is empty or
+near-empty: a one-line title, no evidence, no witness, no disposition. They are not dormant
+because they were judged low -- **they were never assessed at all**, so nothing in the queue
+can rank them against the rows that were.
+
+**This is the unread-review class one level up.** A row with a title and no note reads, to any
+later session, exactly like a row that was looked at and found unimportant. Neither the ledger
+nor the gates can tell the two apart, so the queue silently reports coverage it does not have.
+
+**The class is cheap to work and it parallelises**, which is why it is filed as a class rather
+than as N separate rounds. Most of these are settleable by READING -- a source trace, a manual
+citation, a reachability argument -- so they need no build, no rig and no wall-clock oracle, and
+they can be farmed to read-only seats while the machine is embargoed for timing work.
+
+**Worked so far, each verified locally before recording rather than transcribed from the seat:**
+
+* `makercfalse` -- culprit read directly; the build gate asserts existence, never freshness.
+* `sh4pcic15` -- TRUE and LATENT. Sixteen PCIC lines registered, priority init stops at IRQ14,
+  so line 15 can never be delivered. Nothing connects to it today.
+* `sh4itlbpr` -- mask arithmetic confirmed exactly; severity DOWNGRADED, because the manual
+  makes the reserved bit's read value *undefined*, so the present behaviour is permitted. The
+  latent coupling was recorded instead: the bit is inert by one arm's specific test, not by
+  construction.
+
+**The disposition matters as much as the finding.** Two of the three came back TRUE and were
+still NOT FIXED -- one for want of a measured delta, one because correcting it owes the
+oracle-correction order and therefore a build. *Establishing that a row is true, latent and
+correctly deferred is a complete result for this class*; the failure mode being repaired is the
+blank note, not the open state.
