@@ -1,34 +1,44 @@
-"""#485 REPRODUCTION, test-first, against the COMMITTED build.  REPO IS NOT TOUCHED.
+"""#485 REPRODUCTION, test-first.  REPO IS NOT TOUCHED.
 
-`wdcnoirq`: `wdc_command()` has FOUR arms that terminate a command with `WDCE_ABRT`.  Two of
-them also set `d->int_assert = 1`; two do not.
+*** THIS DOCSTRING ONCE SAID "FOUR arms ... two do not" WITH LINE NUMBERS.  BOTH THE CENSUS
+AND THE CITATIONS WERE WRONG, AND THE ADJUDICATING SEAT CORRECTED THE CENSUS. ***
 
-    :686-687   no disk image                      ABRT + int_assert   <- asserts
-    :694-695   IDENTIFY on an ATAPI drive         ABRT + int_assert   <- asserts
-    :799-800   the five WDCC_SEC_* commands       ABRT, NO assert     <- DEFECT
-    :818       `default:` (unimplemented opcode)  ABRT, NO assert     <- DEFECT
+  FOUR was wrong: `wdc_command()` has FIVE arms that end a command with WDCE_ABRT.  My grep
+  used `^	case WDCC_|^	case ATAPI_` and MISSED `case SET_FEATURES:`, which carries neither
+  prefix -- 20 case labels, not 19.
 
-*** THE WARRANT IS TRANSFERRED FROM INSIDE THE SAME FUNCTION, which is the strongest range
-this project recognises: same function, same semantic (abort a command), opposite behaviour.
-No specification needs to be cited, and none is available -- there is no ATA document in this
-tree. ***
+  AND THE RIGHT CENSUS IS NOT ABOUT ABORT ARMS AT ALL.  It is ELEVEN OF THIRTEEN TERMINAL
+  ARMS: every arm that TERMINATES a command -- success or abort -- sets int_assert.  The only
+  ones that do not are WRITE and ATAPI_PKT_CMD, where the command is NOT OVER (PKT_CMD records
+  its "no" as a COMMENTED-OUT line), plus the two defect arms, which ARE terminal.  So the two
+  defect arms are the ONLY TERMINAL ARMS WITH NO INTERRUPT DECISION RECORDED AT ALL.
+
+  The line numbers are gone rather than corrected: same-file citations go stale on the next
+  edit, and this file's own round proved it.  The arms are named by their case labels.
+
+    no disk image                     ABRT + int_assert   <- asserts
+    IDENTIFY on an ATAPI drive        ABRT + int_assert   <- asserts
+    SET_FEATURES, unknown feature     ABRT + int_assert   <- asserts (the missed one)
+    the six WDCC_SEC_* commands       ABRT, NO assert     <- DEFECT
+    `default:` (unimplemented opcode) ABRT, NO assert     <- DEFECT
 
 THE ORACLE IS THE WIRE, NOT THE FIELD.  `d->int_assert` is only a request; `DEVICE_TICK(wdc)`
-is what turns it into `INTERRUPT_ASSERT(d->irq)`.  A row asserting the FIELD would pass a
-mutant that sets the field and breaks the tick.  So every leg below runs the real tick and
-counts real sink calls, and reports the field alongside it for diagnosis only.
+turns it into `INTERRUPT_ASSERT`.  A row asserting the FIELD would pass a mutant that sets the
+field and breaks the tick, so every leg runs the real tick and counts real sink calls.
 
-SHAPE: a 256-OPCODE SWEEP over the invariant **ABRT implies ASSERT**, with a fresh device per
-opcode.  Two observables, not one -- #483 measured that a sweep with a narrow oracle can be
-strictly WEAKER than a point pin, so this varies the input AND reads both effects.
+  CONTROL A (liveness, on an arm the fix does NOT touch): with no disk image every opcode
+  takes the no-disk arm, which asserts today.  If it reads 0, the harness cannot see an assert
+  and the defect legs mean nothing.
+  CONTROL B (denominator): the opcodes exercised are COUNTED, never written.
 
-  CONTROL A (liveness, and it uses an arm the fix does not touch): with NO disk image every
-  opcode takes the `:686` arm, which asserts today.  If this leg does not show asserts, the
-  harness cannot observe an assert at all and the defect legs mean nothing.
+MEASURED TWICE, at two revisions, because the adjudicator refused "almost certainly
+unaffected":
 
-  CONTROL B (denominator): the count of opcodes actually exercised is COUNTED, never written.
-  A literal denominator is a denominator that cannot fail -- shipped once in #483 and caught
-  by a seat.
+    ed3f9cc   ctl abrt=1 irq=1 | swept 256 | ABRT+irq 1 | ABRT+NO-irq 242 | no-ABRT 13
+    cf300c0   ctl abrt=1 irq=1 | swept 256 | ABRT+irq 1 | ABRT+NO-irq 242 | no-ABRT 13
+
+IDENTICAL.  #484 landed 135 dev_wdc.c lines in between and touched the ring producer, not the
+command switch -- which is now MEASURED rather than assumed.
 """
 import io
 import os
