@@ -131,7 +131,22 @@ VERDICT_RE = re.compile(
     #  punctuation, in both cases through optional emphasis and list
     #  markers.  Mid-sentence prose ("My verdict: the code is fine") still
     #  matches neither, which is the whole point.
-    r"(?:^[ \t]*[*_`#>|+-]{0,6}[ \t]*|[.!?][ \t]*[*_`]{0,3}[ \t]*)VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)"
+    #  *** A QUALIFYING WORD MAY SIT BETWEEN THE MARKUP AND THE LABEL, AND
+    #  OMITTING IT REPORTED A LIVE SEAT AS WALLED. ***  Measured 2026-08-27:
+    #  agy ended with "### **FINAL VERDICT: GO-WITH-CHANGES**".  The class here
+    #  allowed MARKUP before VERDICT but not a WORD, so the verdict was missed;
+    #  and because the wall test is "keyword in the tail AND no verdict", that
+    #  miss let the word "non-quota" -- which the seat used while DISCUSSING
+    #  panel.sh's own quota handling -- tip a 10.6 KB answer to *** WALLED ***.
+    #
+    #  A live seat scored dead is the seat-ledger failure inverted, and it is
+    #  the worse direction: a walled seat gets re-fired; a seat recorded walled
+    #  that actually ANSWERED becomes an unread review.
+    #
+    #  Added to the LINE-ANCHORED branch only.  The mid-sentence branch is left
+    #  alone deliberately -- that is where "My verdict: the code is fine"
+    #  produced a false positive, and widening it would reopen that.
+    r"(?:^[ \t]*(?:[*_`#>|+-]{1,6}[ \t]*)*(?:(?:FINAL|OVERALL|SEAT|PANEL)[ \t]*(?:[*_`]{1,3}[ \t]*)?)?|[.!?][ \t]*[*_`]{0,3}[ \t]*)VERDICT[ \t]*[*_`]{0,3}[ \t]*(?::|[ \t]+[—–-][ \t]+)"
     r"\s*[*_`\x22\x27]{0,3}\s*([A-Za-z][A-Za-z-]{1,}(?:\s+[A-Za-z][A-Za-z-]*){0,3})",
     re.I)
 #  *** TWO PATTERNS, BECAUSE ANCHORING THE EXTRACTOR BROKE THE OLDEST GUARD
@@ -649,12 +664,24 @@ MUTANTS = [
     #  be re-tested -- and ANY EDIT TOUCHING THAT WARRANT RE-RUNS THE DEATH
     #  MEASUREMENT.  "Deleted, absence recorded as the result" was the right
     #  disposition; the missing half was the expiry check.
+    #  *** THESE TWO MUTANTS ARE COUPLED TO THE PATTERN'S EXACT TEXT, AND AN EDIT TO
+    #  THE PATTERN SILENTLY TURNS THEM INTO MIS-BUILT MUTANTS. Measured 2026-08-27. ***
+    #  Widening the pattern left `[*_`#>|+-]{0,6}` present ONLY inside these mutant
+    #  definitions.  M6 then mutated ITS OWN definition line, changed nothing about the
+    #  regex, and the rows stayed GREEN -- which section V correctly reported as a
+    #  detector that can no longer be shown to fail.  M12's text vanished outright.
+    #
+    #  Both are now DERIVED from the live pattern line at runtime-authoring time rather
+    #  than transcribed, so the coupling is visible.  A find-text that no longer occurs
+    #  in the target is the driver's MUTANT-TEXT-NOT-FOUND fail; a find-text that occurs
+    #  only in the mutant's own definition is worse, because it applies cleanly and
+    #  proves nothing.
     ("M6  anchor-branch marker class dropped (died at e9f8c0c, alive again",
-     [('[*_`#>|+-]{0,6}', "")],
+     [('(?:[*_`#>|+-]{1,6}[ \\t]*)*', "")],
      ("label emphasis",)),
 
     ("M12 label anchor dropped (prose becomes a verdict)",
-     [('(?:^[ \\t]*[*_`#>|+-]{0,6}[ \\t]*|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', '')],
+     [('(?:^[ \\t]*(?:[*_`#>|+-]{1,6}[ \\t]*)*(?:(?:FINAL|OVERALL|SEAT|PANEL)[ \\t]*(?:[*_`]{1,3}[ \\t]*)?)?|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', '')],
      ("prose verdict rejected", "prose above a real answer")),
 
     ("M10 menu-bullet guard dropped (BOTH keywords)",

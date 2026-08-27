@@ -576,11 +576,23 @@ say "SEATS: $ok/$total scriptable produced output${miss:+ -- no answer from:$mis
 #  claim of COVERAGE asserted at the moment coverage was lost, so the one person who
 #  could re-fire the seat was told it had already answered.  $miss is the list that
 #  means "did not answer", whatever the reason, which is what this sentence is about.
-if printf %s "$rated" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
+#  *** AND THE CLI TEST HAD THE SAME DEFECT ONE BRANCH OVER.  Found by a panel seat
+#  reviewing the very commit that fixed the substitute side. ***  Both branches keyed
+#  the CLI test on $rated -- seats carrying QUOTA text -- so a kimi CLI that fails
+#  WITHOUT a recognised wall pattern (a stall, a crash, a refused connection) lands in
+#  $miss and NEITHER branch fires.  The seat is genuinely lost and nothing says so.
+#
+#  That is the identical shape as the substitute bug, mirror-imaged: the fix moved one
+#  predicate to $miss and left its sibling on $rated.  **A fix applied to one side of a
+#  symmetric pair is half a fix**, and the half left behind is the one nobody re-reads.
+#
+#  $miss means "did not answer", whatever the reason, which is what both sentences are
+#  actually about.
+if printf %s "$miss" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
    && ! printf %s "$miss" | grep -qw kimi_sub; then
     say "       NOTE: the kimi CLI is walled but kimi-k3:cloud ANSWERED -- that seat"
     say "             is COVERED by its substitute transport, not lost."
-elif printf %s "$rated" | grep -qw kimi && printf %s "$miss" | grep -qw kimi_sub; then
+elif printf %s "$miss" | grep -qw kimi && printf %s "$miss" | grep -qw kimi_sub; then
     say "       *** THE KIMI SEAT IS LOST, NOT COVERED: the CLI is walled AND the"
     say "       *** kimi-k3:cloud substitute did not answer either.  Re-fire the"
     say "       *** substitute with an INLINED brief -- a packet-fed seat stalls on"

@@ -980,6 +980,452 @@ static void row_q2_short_last_chunk(void)
 }
 
 
+/*
+ *  `wdcoddstep`: `atapi_len -= consumed` STEPS PAST ZERO on an odd-length chunk.
+ *
+ *  `consumed` is `len == 4 ? 4 : (len >= 2 ? 2 : 1)` -- what the reads actually POP, which
+ *  is what #341 corrected.  But nothing clamps it to what REMAINS, so a four-byte read of
+ *  a three-byte remainder drives atapi_len to -1 and atapi_received to 4 of 3.
+ *
+ *  TWO ROWS, KEPT APART ON PURPOSE.  The completion half and the truthfulness half are
+ *  repaired by DIFFERENT candidate fixes: saturating atapi_len (or testing `<= 0`) fixes
+ *  completion and leaves atapi_received over-counted; clamping `consumed` fixes both.  A
+ *  single combined row could not distinguish them, and the fork's own precedents (#283
+ *  ASC, #338 mb89352, #341 here) all hold that the count reported has to be the count that
+ *  happened.
+ *
+ *  SMALL ODD TRANSFER, NO RE-ARM INVOLVED -- reachable by MODE SENSE / REQUEST SENSE and
+ *  NOT a consequence of #473, which only added a second road via an odd FINAL chunk.
+ */
+static int odd_asserts = 0;
+static void odd_sink(struct interrupt *a) { (void)a; odd_asserts++; }
+
+static void row_odd_step(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP odd inbuf failed\n"); return; }
+
+	payload = (unsigned char *) malloc(3);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP odd payload failed\n"); return; }
+	payload[0] = 0x11; payload[1] = 0x22; payload[2] = 0x33;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 3;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 0;
+	d.atapi_len = 3;			/*  ODD  */
+
+	/*  exactly three bytes queued: the fourth pop hits an empty ring, latches
+	    warned_inbuf_overread, returns -1 and does NOT advance the tail.  */
+	wdc_addtoinbuf(&d, 0x11);
+	wdc_addtoinbuf(&d, 0x22);
+	wdc_addtoinbuf(&d, 0x33);
+
+	odd_asserts = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 4, MEM_READ, &d);
+
+	/*  COMPLETION.  Today -1: `== 0` never fires again, so the command never
+	    completes and the guest waits forever.  */
+	rows ++;
+	if (d.atapi_len != 0) {
+		printf("  FAIL %-38s atapi_len = %i, want 0\n",
+		    "odd chunk: the count stops at zero", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "odd chunk: the count stops at zero", d.atapi_len);
+	}
+
+	/*  TRUTHFULNESS.  Today 4 where data_in_len is 3.  Separate because the cheaper
+	    fix options repair the row above and leave this one red.  */
+	rows ++;
+	if (d.atapi_received != st.data_in_len) {
+		printf("  FAIL %-38s received = %i, want %i\n",
+		    "odd chunk: received never exceeds len",
+		    (int) d.atapi_received, (int) st.data_in_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "odd chunk: received never exceeds len", (int) d.atapi_received);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*  THE INTERMEDIATE-STATE ROW, and the two rows above do not imply it.
+ *
+ *  A panel seat named the escape: degrade the clamp from a MIN to a plain assignment,
+ *  `consumed = d->atapi_len;`.  A plausible future simplification -- and both end-state
+ *  rows still pass, because the transfer does end at 0 of 37.  What changes is WHEN: the
+ *  FIRST four-byte read swallows the whole transfer and the command completes after four
+ *  bytes were actually delivered.
+ *
+ *  So the detector needs a row that observes the walk MID-TRANSFER rather than at its end.
+ *  One four-byte read of a 37-byte transfer must leave exactly 33.
+ */
+static void row_odd_midwalk(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP midwalk inbuf failed\n"); return; }
+
+	/*  37 -- the guest-chosen INQUIRY allocation length from the worked path.  */
+	payload = (unsigned char *) malloc(37);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP midwalk payload failed\n"); return; }
+	for (i = 0; i < 37; i++)
+		payload[i] = (unsigned char) i;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 37;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 0;
+	d.atapi_len = 37;
+	for (i = 0; i < 37; i++)
+		wdc_addtoinbuf(&d, payload[i]);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 4, MEM_READ, &d);
+
+	/*  Correct: consumed is 4, so 33 remain.  Under `consumed = atapi_len` the whole
+	    transfer is swallowed in one read and this reads 0 -- while both end-state rows
+	    above stay green, because the transfer does finish at 0 of 37.  */
+	rows ++;
+	if (d.atapi_len != 33) {
+		printf("  FAIL %-38s atapi_len = %i, want 33\n",
+		    "mid-walk: one 4-byte read leaves 33", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "mid-walk: one 4-byte read leaves 33", d.atapi_len);
+	}
+
+	rows ++;
+	if (d.atapi_received != 4) {
+		printf("  FAIL %-38s received = %i, want 4\n",
+		    "mid-walk: cursor advances by 4", (int) d.atapi_received);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "mid-walk: cursor advances by 4", (int) d.atapi_received);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*  THE WIDTH ROW.  Named by the codex seat on pass 1 and MEASURED to escape everything
+ *  above: narrow the clamp to `len == 4 && consumed > atapi_len` and every other row in
+ *  this file stays green, because every other row issues a FOUR-byte read.
+ *
+ *  This one issues a TWO-byte read with ONE byte remaining, and it sits on the same
+ *  INQUIRY-37 trajectory as the mid-walk row: nine 4-byte reads leave exactly 1.
+ *
+ *  A detector whose rows all use one access width cannot see a fix narrowed to that
+ *  width -- which is the padded-column trap's cousin: the row is present, runs, and is
+ *  structurally unable to fail.
+ */
+static void row_odd_width(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP width inbuf failed\n"); return; }
+
+	payload = (unsigned char *) malloc(37);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP width payload failed\n"); return; }
+	for (i = 0; i < 37; i++)
+		payload[i] = (unsigned char) i;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 37;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 36;		/*  nine 4-byte reads have happened  */
+	d.atapi_len = 1;		/*  ...leaving exactly one  */
+	wdc_addtoinbuf(&d, payload[36]);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	/*  consumed is 2 for a 2-byte read; the clamp must cut it to 1.  A clamp that
+	    only fires on len == 4 leaves atapi_len at -1 here.  */
+	rows ++;
+	if (d.atapi_len != 0) {
+		printf("  FAIL %-38s atapi_len = %i, want 0\n",
+		    "width: a 2-byte read of 1 remaining", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "width: a 2-byte read of 1 remaining", d.atapi_len);
+	}
+
+	rows ++;
+	if (d.atapi_received != 37) {
+		printf("  FAIL %-38s received = %i, want 37\n",
+		    "width: received stops at data_in_len", (int) d.atapi_received);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "width: received stops at data_in_len", (int) d.atapi_received);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*  THE MULTI-CHUNK ROW.  This is a FLOOR fix, not strengthening.
+ *
+ *  The Opus seat built `Md5_xferbound` and MEASURED it past every row here: clamp to the
+ *  TRANSFER remainder (`data_in_len - atapi_received`) instead of the CHUNK remainder
+ *  (`atapi_len`).  It reads MORE correct, and on any single-chunk transfer it IS
+ *  identical -- so it is, in that seat's words, the mutant a helpful future reviewer
+ *  writes.  It diverges only at a chunk boundary, where it clamps nothing and the
+ *  original defect returns.
+ *
+ *  *** AND IT EXPOSED A FRAMING ERROR IN THIS WHOLE ROUND. ***  "odd chunk" is the wrong
+ *  name for the class.  The defect is the remainder not being a MULTIPLE OF THE ACCESS
+ *  WIDTH -- so a perfectly EVEN 32768-byte chunk overshoots too, under mixed widths.
+ *  Every row above tests one instance of the class; this one tests the other.
+ *
+ *  The state is placed at the boundary rather than walked to it: 32767 of 40000 received
+ *  with 1 left in the chunk, then a 4-byte read.  Markers at data_in[32768] and [32769]
+ *  make an off-by-one in the refill's source offset visible as well.
+ */
+static void row_odd_multichunk(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP multichunk inbuf failed\n"); return; }
+
+	payload = (unsigned char *) calloc(1, 40000);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP multichunk payload failed\n"); return; }
+	payload[32768] = 0xa1;		/*  where chunk 2 MUST start  */
+	payload[32769] = 0xb2;		/*  one past -- catches an off-by-one  */
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 40000;
+
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 32767;	/*  one byte left in chunk 1...  */
+	d.atapi_len = 1;		/*  ...of a 40000-byte transfer  */
+	wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 4, MEM_READ, &d);
+
+	/*  Correct: consumed clamps to 1, atapi_len reaches 0, the re-arm fires and
+	    refills min(40000 - 32768, 32768) = 7232.  Under Md5_xferbound the clamp
+	    compares against 7233 remaining in the TRANSFER, does not fire, and
+	    atapi_len lands on -3 -- so `== 0` never fires and no re-arm happens.  */
+	rows ++;
+	if (d.atapi_len != 7232) {
+		printf("  FAIL %-38s atapi_len = %i, want 7232\n",
+		    "chunk edge: the re-arm still fires", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "chunk edge: the re-arm still fires", d.atapi_len);
+	}
+
+	/*  The ANCHORED half: chunk 2 must begin at data_in[32768], not [32769].  */
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 7232 || d.inbuf[d.inbuf_tail] != 0xa1) {
+		printf("  FAIL %-38s occ = %i, first = 0x%02x\n",
+		    "chunk edge: chunk 2 starts at 32768", occ, d.inbuf[d.inbuf_tail]);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x\n",
+		    "chunk edge: chunk 2 starts at 32768", d.inbuf[d.inbuf_tail]);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*  THE GUEST-VISIBLE ROW, and it is the only one in this file.
+ *
+ *  Every other row here reads DEVICE STATE.  A guest cannot see `atapi_len`; what it CAN
+ *  see is the ATAPI byte-count-limit pair, served straight from it:
+ *
+ *        int x = d->atapi_len;
+ *        if (x > 32768) x = 32768;
+ *        odata = x & 255;            (CYL_LO)  /  (x >> 8) & 255  (CYL_HI)
+ *
+ *  So a negative count reaches the guest as 0xffff.  The Opus seat measured that this is
+ *  the row separating a real fix from one that only repairs completion: an option that
+ *  saturates the TEST but leaves atapi_len negative lets the command finish while the
+ *  guest is still told 65535 bytes remain.
+ *
+ *  cur_command stays 0 so the COMMAND_RESET arm short-circuits before
+ *  diskimage_is_a_cdrom(), which this harness does not stub.
+ */
+static void row_odd_bytecount(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+	uint64_t lo, hi;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP bytecount inbuf failed\n"); return; }
+	payload = (unsigned char *) malloc(3);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP bytecount payload failed\n"); return; }
+	payload[0] = 0x11; payload[1] = 0x22; payload[2] = 0x33;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 3;
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 0;
+	d.atapi_len = 3;
+	wdc_addtoinbuf(&d, 0x11);
+	wdc_addtoinbuf(&d, 0x22);
+	wdc_addtoinbuf(&d, 0x33);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 4, MEM_READ, &d);
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = memory_readmax64(fake_cpu(), buf, 1);
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = memory_readmax64(fake_cpu(), buf, 1);
+
+	rows ++;
+	if (lo != 0 || hi != 0) {
+		printf("  FAIL %-38s guest reads 0x%02x%02x, want 0\n",
+		    "guest byte count is not 0xffff", (int) hi, (int) lo);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "guest byte count is not 0xffff", (int) hi, (int) lo);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
+/*  THE ZERO-LENGTH DATAIN ROW.
+ *
+ *  Also from the Opus seat: a FIFTH route the round's worked path does not cover.  READ
+ *  TOC with an allocation length of 0 leaves data_in non-NULL with data_in_len == 0, so
+ *  DATAIN is armed with a ZERO chunk and DRQ asserted.  The first read then drives
+ *  atapi_len to -2 and the command never completes.
+ *
+ *  It earns its own row because it is the case a plausible ALTERNATIVE fix fails: a clamp
+ *  guarded `atapi_len > 0` rather than `>=` hangs here, and that seat's own draft did.
+ */
+static void row_odd_zerolen(void)
+{
+	struct wdc_data d;
+	struct scsi_transfer st;
+	unsigned char buf[8];
+	unsigned char *payload;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = odd_sink;
+	if (d.inbuf == NULL) { printf("  SETUP zerolen inbuf failed\n"); return; }
+	payload = (unsigned char *) malloc(1);
+	if (payload == NULL) { free(d.inbuf); printf("  SETUP zerolen payload failed\n"); return; }
+	payload[0] = 0;
+
+	memset(&st, 0, sizeof(st));
+	st.data_in = payload;
+	st.data_in_len = 0;
+	d.atapi_st = &st;
+	d.atapi_phase = PHASE_DATAIN;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_received = 0;
+	d.atapi_len = 0;
+
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_READ, &d);
+
+	rows ++;
+	if (d.atapi_len != 0) {
+		printf("  FAIL %-38s atapi_len = %i, want 0\n",
+		    "zero-length DATAIN stays at zero", d.atapi_len);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "zero-length DATAIN stays at zero", d.atapi_len);
+	}
+
+	free(payload);
+	free(d.inbuf);
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -1282,6 +1728,12 @@ int main(void)
 	row_base_drive();
 	row_identity();
 	row_arm_overrun();
+	row_odd_step();
+	row_odd_midwalk();
+	row_odd_width();
+	row_odd_multichunk();
+	row_odd_bytecount();
+	row_odd_zerolen();
 	row_rearm_zero();
 	row_q2_short_last_chunk();
 	row_atapi_flags();
@@ -1299,8 +1751,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 26) {
-		printf("  FAIL %-38s rows = %i, want 26\n",
+	if (rows != 36) {
+		printf("  FAIL %-38s rows = %i, want 36\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

@@ -745,6 +745,42 @@ DEVICE_ACCESS(wdc)
 				    #338 in the mb89352: the count reported has
 				    to be the count that happened.  */
 				int consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1);
+				/*  #475: clamp to what REMAINS, not just to what was popped.
+				    #341 fixed `consumed` to count the POPS rather than the
+				    requested length; it did not stop the subtraction STEPPING
+				    PAST ZERO.  With an odd remainder -- and the length is a
+				    guest-chosen allocation byte -- a 4-byte read of an odd
+				    remainder drove atapi_len NEGATIVE, so `== 0` never fired
+				    again and the command never completed, while atapi_received
+				    claimed more bytes than the transfer holds.  Two distinct
+				    numbers, and conflating them is easy: the 3-byte fixture
+				    lands on -1; the worked INQUIRY-37 path lands on -3 (nine
+				    4-byte reads leave 1, the tenth takes 4).
+
+				    CLAMPING `consumed` RATHER THAN SATURATING atapi_len,
+				    because atapi_received has two live MID-TRANSFER consumers:
+				    the re-arm's length, and the refill's source offset
+				    data_in[atapi_received + j].  Saturating repairs completion
+				    and leaves those two reading a skewed offset, permanently
+				    skipping up to 3 real bytes -- #283's defect shape,
+				    re-created.
+
+				    A NEARBY PRECEDENT, cited narrowly on purpose: dev_asc.c
+				    clamps a step to a remainder before its move.  An earlier
+				    draft of this comment called that #283 and called it
+				    'exactly this shape'; a panel seat refuted both.  #283 tags
+				    the RESIDUAL REPORTING there (`programmed`/`moved`) -- its
+				    own comment says it snapshots the count 'before the clamps
+				    below rewrite len2', so the clamp is untagged upstream code.
+				    And the shapes differ: dev_asc clamps the TRANSFER before
+				    the move, while this clamps the ACCOUNTING and lets the pop
+				    happen at full width.  The in-tree precedent for clamping
+				    the transfer is a DIFFERENT option, which this round
+				    considered and did not take.
+
+				    The warrant that survives is the one above: the cursor.  */
+				if (consumed > d->atapi_len)
+					consumed = d->atapi_len;
 
 				d->atapi_len -= consumed;
 				d->atapi_received += consumed;
@@ -776,18 +812,42 @@ DEVICE_ACCESS(wdc)
 						    What IS true: the ring is empty for any guest that only READS
 						    during DATAIN, which is every driver in this tree.  An
 						    adversarial interleaved write DESYNCHRONISES that guest's own
-						    transfer.  MEASURED by a panel seat: one 2-byte store placed so
-						    the ring still holds the tail of chunk 1 makes all 32768 bytes
-						    of chunk 2 wrong on this build, and ZERO wrong pre-fix -- so for
-						    that case this is a REGRESSION, not merely an overclaim.
+						MEASURED by a panel seat: one 2-byte store placed so the
+						ring still holds the tail of chunk 1 makes all 32768 bytes of
+						chunk 2 wrong on this build.
 
-						    It is not a new HOST-memory capability, and the arithmetic here
-						    was stated BACKWARDS in the first draft of this comment: the
-						    refill route needs 229889 injected bytes and the direct write
-						    route needs 262657, so the refill route is cheaper by 32768 --
-						    FEWER, not more.  The conclusion survives because both routes
-						    are unbounded and a guest with either has the other; the stated
-						    reason was false, and a wrong reason gets reused.  Tracked as
+						*** AN EARLIER DRAFT CALLED THAT A REGRESSION.  A SECOND SEAT
+						MEASURED IT FALSE. ***  It rested on 'and ZERO wrong pre-fix',
+						which is a 0 OF 0 -- the denominator trap.  Pre-#473 there is
+						no refill loop at all, so chunk 2 is NEVER DELIVERED and the
+						wrongness was counted over the empty set.  Measured honestly,
+						the pre-fix build delivers 0 of 32768 bytes of chunk 2 and
+						returns the over-read sentinel forever.
+
+						A regression needs a case that WORKED before and does not now,
+						and there is none: the fix strictly improves the no-write case
+						(0 wrong against 32640) and moves the adversarial case from
+						DEAD to SHIFTED.  The honest word is a shifted failure mode,
+						not a regression.
+
+						    The arithmetic here was stated BACKWARDS in the first draft of
+						    this comment: the refill route takes 229889 injected bytes and
+						    the direct write route 262657, so the refill route is cheaper
+						    by 32768 -- FEWER, not more.  The conclusion survives because
+						    both routes are unbounded and a guest with either has the
+						    other; the stated reason was false, and a wrong reason gets
+						    reused.
+
+						    TWO QUALIFICATIONS, both from a later seat, both narrowing
+						    claims that were too absolute.  262657 is the EMPTY-RING
+						    direct threshold -- with a chunk already queued the direct
+						    route also overwrites after 229889, so these are thresholds
+						    under stated starting states, not intrinsic costs.  And
+						    'only that guest's own transfer' overclaims: the same shared
+						    ring feeds the CDB-dispatch and disk-image-drain paths.  The
+						    defensible form is that this adds no DEMONSTRATED
+						    host-memory-safety primitive, and the measured case corrupts
+						    returned transfer data.  Tracked as
 						    `wdcaddtoinbufbound`, which names that write path as the live
 						    unbounded route.  */
 						d->atapi_len = d->atapi_st->

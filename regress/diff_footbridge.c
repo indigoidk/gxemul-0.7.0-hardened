@@ -457,8 +457,118 @@ int main(void)
 		h->pending_timer_interrupts[0] = 2;
 		memset(buf, 0xff, sizeof(buf));
 		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_READ, h);
+		/*  THE GUARD WRAPS THREE EFFECTS AND THE ROWS ABOVE OBSERVE TWO.
+		    reload_timer_value and the pending decrement are both pinned;
+		    INTERRUPT_DEASSERT was not.  A panel seat named the mutant that
+		    exploits the gap -- hoist the deassert OUT of the guard so a READ
+		    still deasserts:
+
+		        if (writeflag == MEM_WRITE) { reload; pending--; }
+		        INTERRUPT_DEASSERT(d->timer_irq[timer_nr]);
+
+		    Every other row passes -- the deassert touches neither the pending
+		    count nor timer_value -- while the guest READ once again
+		    acknowledges a pending interrupt.  **That is #474's headline
+		    symptom, reintroduced**: the round's own record calls the
+		    consequence a LOST interrupt, and a lost interrupt IS a spurious
+		    deassert.
+
+		    The counter was already armed by noop_deassert and NEVER READ.
+		    A counter nothing asserts on is a row that does not exist.  */
+		/*  THE ACCEPT COMPANION, and the row below is HALF A ROW without it.
+		    A row that wants ZERO can only fail UPWARD: delete
+		    INTERRUPT_DEASSERT from the guarded body outright and the READ
+		    row stays green, because zero deasserts is exactly what it
+		    asserts.  Measured by a panel seat against the version that
+		    shipped this row without its pair.
+
+		    This is the de-escalation clause's accept side in miniature:
+		    the fix made a channel CONDITIONAL, so the detector owes a row
+		    proving the channel still fires on the legal path.  */
+		irq_deasserts = 0;
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_WRITE, h);
+		check_u("[LIVE] a WRITE DOES deassert the irq", irq_deasserts, 1);
+
+		irq_deasserts = 0;
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_READ, h);
+		check_u("a READ must NOT deassert the irq", irq_deasserts, 0);
+
 		check_u("a READ of TIMER_1_CLEAR must NOT clear pending",
 		    h->pending_timer_interrupts[0], 2);
+
+		/*  ENABLE.  A measuring seat named this the worst of five one-token
+		    escapes: widen the guard with `|| (timer_control & TIMER_ENABLE)`
+		    and it sweeps the whole table, because every other row here uses
+		    control = 0 or PERIODIC and never TIMER_ENABLE.
+
+		    It is the worst because of WHICH state it re-opens: a DISABLED
+		    timer can never hold a pending interrupt, so the mutant re-opens
+		    the defect on precisely the state this round exists for.  */
+		h->timer_control[0] = TIMER_ENABLE;
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 4, MEM_READ, h);
+		check_u("an ENABLED timer READ does not clear",
+		    h->pending_timer_interrupts[0], 2);
+		h->timer_control[0] = 0;
+
+		/*  WIDTH.  `&& len == 4` sweeps every row above -- they all use a
+		    four-byte access.  The same shape as the wdc detector's own width
+		    hole, found the same day in a different file.  */
+		h->pending_timer_interrupts[0] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_1_CLEAR, buf, 2, MEM_READ, h);
+		check_u("a 2-byte READ does not clear either",
+		    h->pending_timer_interrupts[0], 2);
+
+		/*  *** THE ANCHOR ROWS, and the premise they correct is mine. ***
+		    This round's record said 'every row exercises timer 1'.  It does
+		    not: TIMER_1_CLEAR is 0x30C and (0x30C >> 5) & 3 == 0, so every
+		    row above is an INDEX-0 row.  That is exactly why `timer_nr = 0`
+		    and a widened fold mask each score a clean sweep -- the file
+		    claims FOUR addresses and carried no row distinguishing any of
+		    them.
+
+		    0x32C selects index 1 and 0x36C index 3.  Asserting the NEIGHBOUR
+		    is untouched is what makes these ANCHORED rather than merely
+		    distinct: a re-map that collides on one probed cell still reds.
+		    */
+		h->pending_timer_interrupts[0] = 5;
+		h->pending_timer_interrupts[1] = 2;
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_2_CLEAR, buf, 4, MEM_WRITE, h);
+		check_u("0x32C decrements timer index 1",
+		    h->pending_timer_interrupts[1], 1);
+		check_u("...and leaves index 0 untouched",
+		    h->pending_timer_interrupts[0], 5);
+
+		h->pending_timer_interrupts[3] = 2;
+		memset(buf, 0, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_4_CLEAR, buf, 4, MEM_WRITE, h);
+		check_u("0x36C decrements timer index 3",
+		    h->pending_timer_interrupts[3], 1);
+		check_u("...and index 0 is still untouched",
+		    h->pending_timer_interrupts[0], 5);
+
+		/*  A READ AT A NON-ZERO INDEX, and it is the row the anchor pair
+		    above could not be: those drive WRITES, so a guard widened by
+		    `|| timer_nr != 0` passes them for the ordinary reason and
+		    nothing reds.  MEASURED: that mutant escaped the 32-row table
+		    until this row existed.
+
+		    The general shape is worth naming: an ANCHOR row proves WHICH
+		    cell an access lands on, and a GUARD row proves the access is
+		    refused.  A mutant that widens the guard per-index needs both
+		    properties in ONE row, and neither existing row had them.  */
+		h->pending_timer_interrupts[1] = 2;
+		memset(buf, 0xff, sizeof(buf));
+		dev_footbridge_access(cpu, NULL, TIMER_2_CLEAR, buf, 4, MEM_READ, h);
+		check_u("a READ at index 1 does not clear",
+		    h->pending_timer_interrupts[1], 2);
 
 		/*  THE COMMON TAIL, and it is the row the fix's own comment needed.
 		    That comment says the `break` is deliberate because an early
@@ -503,7 +613,7 @@ int main(void)
 	{
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%d", rows + 1);
-		check("IDENTITY row count -- guards against a stale copy", buf, "24");
+		check("IDENTITY row count -- guards against a stale copy", buf, "33");
 	}
 
 	printf("\n%d rows, %d failures\n", rows, fails);

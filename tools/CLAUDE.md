@@ -28,6 +28,24 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    run once left the tree mutant, so the next run's "orig" backup captured the mutant
    and its restore restored it). A fresh session finding a `.MUTANT` sentinel restores
    from SEC (`rm src/cpus/*.o`, rebuild) before trusting ANY measurement.
+   > ### *** AND THE RESTORE IS NOT FINISHED UNTIL THE BINARY IS REBUILT. THE SENTINEL
+   > ### PROTECTS THE SOURCE; THE THING MEASURED IS THE BINARY. Measured 2026-08-27. ***
+   >
+   > A mutant script restored `dev_dreamcast_asic.c`, `cmp`'d it clean against SEC, and
+   > cleared the sentinel — exactly as this rule says. **It left a MUTANT `gxemul` on
+   > disk.** The tell was an impossible pair of timestamps: binary `05:47:23`, restored
+   > source `05:51:44` — *the binary was OLDER than the source it was supposedly built
+   > from.*
+   >
+   > A later probe would then have measured the mutant against a tree that `cmp`s clean
+   > and carries no sentinel — **the stale-binary trap reached from the other side, and
+   > with the sentinel discipline fully obeyed.**
+   >
+   > **THE CLEARANCE CONDITION IS TWO-PART: source `cmp`s clean against SEC AND
+   > `[ binary -nt source ]`.** Rebuild inside the restore, and leave the sentinel in
+   > place if the rebuild does not produce a fresh binary — a sentinel that outlives its
+   > mutant costs one restore; one cleared over a mutant binary costs a wrong
+   > measurement nobody suspects.
 3. Commit+push at every green gate — an unpushed round is the largest single exposure.
 
 ## *** WHERE A LESSON GOES: STRUCTURE FIRST, PROSE ONLY AS FALLBACK. ***

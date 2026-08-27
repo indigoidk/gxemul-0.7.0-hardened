@@ -1,3 +1,305 @@
+## Round 474 pass 2 (post-commit) -- FIVE one-token mutants swept the shipped detector, and two of my records were measured false
+
+`d894e35` shipped, then its own pass-2 panel took it apart. Nine seats answered; the verdicts
+were SHIP / RATIFY / GO-WITH-CHANGES / APPROVE with **codex dissenting DO NOT RATIFY** and
+**Opus SHIP-BUT-BELOW-FLOOR**. Both dissents were right on measurables and both are discharged
+here.
+
+### *** THE DETECTOR WAS BELOW CLAUSE (d) AND (f): FIVE CLEAN SWEEPS ***
+
+The Opus seat built and ran them against the shipped 24-row detector. Every one keeps the
+`writeflag == MEM_WRITE` guard and nulls its repair, or attacks the address decode:
+
+    Md1_enable     || (timer_control & TIMER_ENABLE)      0/24  CLEAN SWEEP
+    Md2_hoist      INTERRUPT_DEASSERT hoisted out         0/24  CLEAN SWEEP
+    Md5_timernr    || timer_nr != 0                       0/24
+    Md6_len        && len == 4                            0/24
+    Mf1_nr_const   timer_nr = 0                           0/24
+    Mf3_foldmask   fold mask narrowed                     0/24
+
+**`Md1_enable` is the worst, and the reason is which STATE it re-opens.** A DISABLED timer can
+never hold a pending interrupt -- so widening the guard by `TIMER_ENABLE` restores the defect on
+precisely the state this round exists for. Every shipped row used `control = 0` or `PERIODIC`,
+never that bit.
+
+**`Md2_hoist` is arguably worse in a different way:** the round's headline consequence is a
+silently acknowledged interrupt, and **no row observed the interrupt channel at all.** The
+harness had counted `irq_deasserts` since the file was written and nothing ever read it. *A
+counter that is incremented and never asserted on is a row that does not exist.*
+
+### The eight rows, and six are sole carriers
+
+Kill table now **9 of 9**, baseline 33 rows 0 failures --
+`regress/artifacts/fbclearread/killtable2_20260827/`.
+
+| mutant | killed by |
+|---|---|
+| `Md1_enable` | the TIMER_ENABLE row, alone |
+| `Md2_hoist` | the READ deassert row, alone |
+| `Ma2_delete` | its ACCEPT companion, alone |
+| `Md6_len` | the 2-byte row, alone |
+| `Md5_timernr` | the index-1 READ row, alone |
+| `Mf3_foldmask` | the 0x36C anchor, alone |
+| `Mf1_nr_const` | the anchor pair (4 rows) |
+| `Mb_revert` / `Mc_null` | 7 rows / compile |
+
+**MY FIRST DEASSERT ROW WAS HALF A ROW, and a seat measured it.** `check_u(..., irq_deasserts,
+0)` wants ZERO, so it can only fail UPWARD: delete `INTERRUPT_DEASSERT` from the guarded body
+outright and it stays green. It needed its accept-side companion -- a row proving a WRITE still
+deasserts. Measured both ways: the hoist mutant reds the READ row and passes the WRITE row; the
+delete mutant does the exact opposite. *Neither row can substitute for the other.*
+
+**AND ONE ESCAPE WAS MINE, caught by measuring instead of assuming.** After adding the anchor
+rows, `Md5_timernr` still escaped -- because those rows drive WRITES, so a guard widened by
+`|| timer_nr != 0` passes them for the ordinary reason.
+
+> **An ANCHOR row proves WHICH CELL an access lands on. A GUARD row proves the access is
+> REFUSED.** A mutant that widens the guard per-index needs both properties in ONE row, and
+> neither kind had them.
+
+### Two records of mine measured FALSE
+
+**(a) "REGRESSION" is wrong, and it is a `0 of 0`.** The `#473` L4 comment said an interleaved
+write makes all 32768 bytes of chunk 2 wrong on this build *"and ZERO wrong pre-fix -- so for
+that case this is a REGRESSION"*. Measured: **pre-`#473` there is no refill loop at all**, so
+chunk 2 is NEVER DELIVERED and the wrongness was counted over the empty set. Honestly counted,
+the pre-fix build delivers **0 of 32768** bytes of chunk 2 and returns the over-read sentinel
+forever. A regression needs a case that WORKED before and does not now, and there is none: the
+fix strictly improves the no-write case and moves the adversarial case from DEAD to SHIFTED.
+
+*The carrier's own denominator trap, inside a comment written to correct an L4 -- which is why
+the second-reading rule for records-correction rounds keeps earning its keep.*
+
+**(b) "every shipped row exercises timer 1" is false in a way that mattered.** `TIMER_1_CLEAR`
+is `0x30C`, and `(0x30C >> 5) & 3 == 0`. Every older row is an **INDEX-0** row. That is exactly
+why `timer_nr = 0` and a widened fold mask were invisible: the file claimed FOUR addresses and
+carried no row distinguishing any of them.
+
+*`Mf2_nr_plus1` IS caught by an older row -- but by COLLISION on index 0's cell, which the
+carrier already warns is layout-dependent and not anchoring.*
+
+### codex's findings, both measured and both fixed
+
+* **the CHANGELOG still carried the arithmetic the device comment had already been corrected
+  for** -- the refill route stated as needing MORE where it needs 32768 FEWER. *A wrong record
+  surviving its own fix in a sibling record, which is the grep-for-siblings rule failing in the
+  session that applied it.*
+* `git diff-tree --check d894e35^ d894e35` reported **16 trailing-whitespace errors** in the
+  newly committed artifact logs. The four source defects had been fixed; the commit was not
+  `diff --check` clean. Stripped -- the logs are captured stdout and their content is unchanged.
+
+Two wording qualifications adopted from the same seat: `262657` is the EMPTY-RING direct
+threshold rather than an intrinsic cost, and "corrupts only that guest's own transfer"
+overclaims, because the same shared ring feeds the CDB-dispatch and disk-image-drain paths filed
+as `wdccdbmidxfer` and `wdcdataoutdrain`. The defensible form is that this adds **no demonstrated
+host-memory-safety primitive** and the measured case corrupts returned transfer data.
+
+### `panel.sh` was HALF FIXED, and two seats found it independently
+
+The morning's fix re-pointed the SUBSTITUTE predicate at `$miss` and left the CLI predicate on
+`$rated`. So a kimi CLI failing WITHOUT a recognised wall pattern -- a stall, a crash, a refused
+connection -- lands in `$miss` and **neither branch fires**: the seat is genuinely lost and
+nothing says so.
+
+> **A fix applied to one side of a symmetric pair is half a fix, and the half left behind is the
+> one nobody re-reads.**
+
+Both predicates now key on `$miss`. Controlled in four states, with the fixtures corrected after
+the first attempt tested an impossible one (a walled seat in `$rated` but not `$miss`; checked
+against the live panel, walled seats land in both).
+
+### And the verdict extractor was reporting a LIVE seat as dead
+
+`seat_verdicts.py` scored agy `*** WALLED ***` on a **10.6 KB complete answer**. Two defects
+compounded: the verdict pattern allowed MARKUP before the label but not a WORD, so
+`### **FINAL VERDICT: GO-WITH-CHANGES**` went unrecognised -- and because the wall test is
+"quota keyword in the tail AND no verdict", that miss let the word **"non-quota"**, used while
+the seat was DISCUSSING `panel.sh`'s quota handling, tip the answer to walled.
+
+**A live seat scored dead is the seat-ledger failure inverted, and it is the worse direction:** a
+walled seat gets re-fired; a seat *recorded* walled that actually answered becomes an unread
+review. Fixed with three negative controls (including the documented `"My verdict: the code is
+fine"` false positive) and seven positive.
+
+*Fixing it then broke section V, and that is worth recording too: the self-test's mutants are
+coupled to the pattern's exact text, so the edit left `M6`'s find-string present ONLY inside its
+own definition. It mutated itself, changed nothing, and the rows stayed green -- **a mis-built
+mutant that applies cleanly and proves nothing**, which section V correctly reported as a
+detector that can no longer be shown to fail. Both mutants are now derived from the live pattern.*
+## Round 475 (#475) -- the ATAPI byte counter stepped past zero, and the transfer length is a guest-chosen byte
+
+`atapi_len -= consumed` had no bound against what REMAINS. With an odd remainder a four-byte
+data-port read drives the counter negative, so `if (atapi_len == 0)` never fires again and the
+command never completes -- while `atapi_received` ends up larger than `data_in_len`, so the
+device claims it delivered more bytes than the transfer holds.
+
+**MEASURED on the committed tree, before any edit:**
+
+    FAIL odd chunk: the count stops at zero      atapi_len = -1, want 0
+    FAIL odd chunk: received never exceeds len   received = 4, want 3
+
+### This is `#341`'s class surviving at `#341`'s own site
+
+`#341` fixed `consumed` to count what the reads actually POP (`len == 4 ? 4 : (len >= 2 ? 2 : 1)`)
+rather than what the guest asked for -- and **its own comment describes exactly this symptom** as
+the thing being fixed: *"let atapi_len step PAST zero, which its `== 0` test then never catches."*
+The mismatch it removed was len-vs-consumed. The mismatch that remained is consumed-vs-REMAINING.
+
+### *** THE LENGTH IS A SINGLE GUEST-CHOSEN BYTE. This is not an edge case. ***
+
+`diskimage_scsicmd.c` takes the transfer length straight from the command block -- INQUIRY's
+allocation length is `retlen = xferp->cmd[4]`, clamped to a MINIMUM of 36 and never to an even
+value -- and `scsi_transfer_allocbuf()` does `(*lenp) = want_len` with no rounding.
+
+**Worked path, no re-arm and no oversized transfer:** INQUIRY with allocation length 37. Nine
+four-byte reads consume 36 and leave 1; the tenth drives `atapi_len` to **-3**.
+
+*Two different numbers live in this round and conflating them is easy: the 3-byte fixture lands
+on -1, the worked 37-byte path on -3. A panel seat caught that conflation in the fix comment
+before it shipped.*
+
+**PRE-EXISTING, not introduced by `#473`.** A small odd transfer reaches it with no re-arm at
+all. `#473` added a SECOND road -- an odd FINAL chunk of a multi-chunk transfer, which before
+that round could never be walked to. Strictly fewer transfers break than before.
+
+### The fix, and it is the tree's own idiom rather than an invention
+
+```c
+        if (consumed > d->atapi_len)
+                consumed = d->atapi_len;
+```
+
+*** THE WARRANT I FIRST WROTE FOR THIS WAS WRONG TWICE, and a measuring seat refuted both.
+Corrected before commit. ***  I cited `dev_asc.c:610-614` as "`#283`'s clamp half ... exactly
+this shape".  **`#283` tags the RESIDUAL REPORTING there** (`programmed`/`moved`), and its own
+comment says it snapshots the count *"before the clamps below rewrite len2"* -- so the clamp is
+untagged upstream code with a bare `TODO` above it.  **And the shapes are not the same:**
+`dev_asc` clamps the TRANSFER before the move; this clamps the ACCOUNTING and lets the pop
+happen at full width.  *The in-tree precedent for clamping the transfer is option D* -- the one
+this round did not take.
+
+The precedent is now cited narrowly (a nearby clamp of a step to a remainder) and the warrant
+that carries the decision is the cursor argument below, which is measured.
+
+**WHY CLAMPING `consumed` AND NOT SATURATING `atapi_len`:** `atapi_received` has two live
+MID-TRANSFER consumers -- the re-arm's length and the refill's source offset
+`data_in[atapi_received + j]`. A guest can make the remainder odd mid-chunk with a single 1-byte
+read, then overshoot while `received < data_in_len` is still true. Saturating repairs completion
+and leaves those two reading a skewed offset, **permanently skipping up to 3 real transfer bytes
+that the guest was served as ring-empty 0xff**. That is `#283`'s defect shape re-created.
+
+### *** MY OWN STRONGEST ARGUMENT WAS FALSE, AND TWO OF FOUR CLOUD SEATS RATIFIED IT ***
+
+The pass-1 brief argued that options B and C would OPEN the re-arm's unsigned-underflow path
+(`int = size_t - size_t`). **It is false.** The subtraction sits INSIDE `if (received <
+data_in_len)`, and an over-count is exactly the condition that makes that test false:
+
+```c
+    if (d->atapi_len == 0) {                        /* B/C make THIS fire  */
+            if (d->atapi_received < data_in_len) {  /* ...but THIS still guards */
+                    atapi_len = data_in_len - atapi_received;   /* never reached */
+```
+
+| seat | on the claim |
+|---|---|
+| glm, kimi, grok, Fable | **REFUTED it**, each from the branch structure |
+| deepseek, minimax | ratified it |
+
+**Settled by reading, not by tally** -- and the brief carried the anti-ratification instruction
+and still drew two ratifications. Both ratifying seats verified the ARITHMETIC (the sign-and-width
+walk to `0xFFFFFFFF` is genuinely correct) and neither checked the CONTROL FLOW that makes it
+unreachable.
+
+> **A hazard found in TYPES is a hypothesis about control flow, and the control flow has to be
+> checked separately.** The guard that makes it unreachable was the line immediately above it,
+> and I had read that line -- for a different question.
+
+*The carrier already records that a brief presenting a DERIVATION directs seats to check the
+arithmetic instead of the premise. This is that, with the instruction present and losing 2-2 on
+raw count.*
+
+### The kill table -- 10 killed, 1 measured equivalence
+
+    Mb_revert      KILLED  8/10   (b) remove the clamp -- the pre-fix code
+    Mc_null        KILLED         (c) null medium, caught at compile
+    Md_plusone     KILLED  5/10   (d) predicate widened by one
+    Md6_const3     KILLED  5/10   (d) clamp to the constant 3            [Opus]
+    Md_saturate    KILLED  4/10   (d) option B instead
+    Md_lenonly     KILLED  4/10   (d) clamp the length, not the cursor
+    Md14_gt1       KILLED  4/10   (d) clamp skipped at remainder 1       [Opus]
+    Md_width       KILLED  3/10   (d) clamp narrowed to len == 4         [codex]
+    Md_assign      KILLED  2/10   (d) min degraded to assignment         [Fable]
+    Md5_xferbound  KILLED  2/10   (d) clamp to the TRANSFER remainder    [Opus]
+    Md_ge         *ESCAPED 0/10   (d) `>` -> `>=`  -- MEASURED EQUIVALENT
+
+`regress/artifacts/wdcoddstep/killtable_20260827/`.  Baseline 36 rows, 0 failures; 8 of the 10
+rows under test are RED pre-fix (`wdcoddstep/killtable_20260827/PREFIX_RUN.txt`).  The two that are green pre-fix are
+anti-escape rows, not defect rows, and their contract is green on both sides and red under
+their mutant.
+
+### *** THE FIRST DETECTOR WAS BELOW THE FLOOR, AND A MEASURING SEAT PROVED IT ***
+
+Four of those mutants came from panel seats, and **each was killed ONLY by the rows that seat
+prescribed** -- which is the measurement that says the rows were load-bearing rather than
+decorative:
+
+| escape | why the existing rows could not see it |
+|---|---|
+| `Md_assign` (`consumed = atapi_len`) | the transfer still ENDS at 0 of 37; only the moment changes |
+| `Md_width` (`len == 4 &&`) | **every row in the file issued a four-byte read** |
+| `Md5_xferbound` (transfer remainder) | identical on every SINGLE-CHUNK transfer |
+
+*** AND `Md5_xferbound` EXPOSED A FRAMING ERROR RUNNING THROUGH THE WHOLE ROUND. ***  "Odd
+chunk" is the wrong name for the class: the defect is the remainder not being a MULTIPLE OF
+THE ACCESS WIDTH, so a perfectly EVEN 32768-byte chunk overshoots under mixed widths.  Every
+row written before that tested one instance of the class.
+
+> It is also the most dangerous shape of the four, because it reads MORE correct than the fix.
+> Clamping to the transfer remainder is what a helpful future reviewer writes.
+
+**MEASURING BEAT ASSUMING, and it is worth recording which way.**  The seat measured its three
+mutants against the TWO-row detector the brief described.  Against the six-row detector that
+actually existed by then, `Md6_const3` and `Md14_gt1` were **already dead** on the width rows.
+Only `Md5_xferbound` was a live breach.  *Trusting the reported numbers would have added two
+rows for coverage already present.*
+
+**Two further rows came from the same seat and close things no mutant in the table reaches:**
+the GUEST-VISIBLE byte count (CYL_LO/CYL_HI are served straight from `atapi_len`, so a negative
+count reaches the guest as `0xffff` -- the only guest-visible channel in this file, and the row
+that separates a real fix from one repairing completion alone), and the ZERO-LENGTH DATAIN case
+(READ TOC with allocation length 0 arms DATAIN with a zero chunk; a clamp guarded `> 0` rather
+than `>=` hangs there).
+
+### A fifth option existed, and the reason for rejecting it was itself corrected
+
+**E: count successful pops**, transplanting `#338`'s `transfer_bufpos` idiom. The adjudicator
+rejected it partly because `wdc_get_inbuf`'s failure signal is in-band and "indistinguishable".
+**A later seat corrected that:** the `(uint64_t)-1` IS distinguishable inside the handler, where
+data bytes are 0..255 -- the masking objection applies to the guest-visible byte, not to a pop
+counter. **E is implementable.**
+
+Still rejected, on the warrants that survive: byte-identical to A on a clean ring, and on a dirty
+ring it advances a TRANSFER cursor over FOREIGN bytes -- corrupting the same two consumers that
+make B wrong -- at a cost of four pop sites across two endian branches against one line for A.
+
+*Same disposition, one of three warrants withdrawn. Recorded because a wrong reason gets reused,
+and this one was inside an adjudication.*
+
+### Honest scope
+
+Rung-1 offline differential = DETECTOR, never a reproduction; the row is `held`, not closed, and
+its witness field carries the reason rather than the bare word `none`. **A seat argues a rung-3
+cold-debugger probe is BUILDABLE for this defect** -- real guest stores of a CDB, then real
+four-byte data-port loads through decode on an in-tree wdc machine. That is filed against
+`rung1exempt`, and it sharpens the owner question: is the ladder gap real, or is it a habit of
+reaching for the one-second differential instead of the one-boot probe?
+
+Three constraints adopted from the panel and deliberately NOT implemented: no floor for an
+already-negative `atapi_len` (A maintains `>= 0` from a clean command, so extra saturates are
+unlicensed); no clamping of `received` to `data_in_len` as a companion to B (mid-chunk that
+completes EARLY and drops the rest); no even-padding at the SCSI layer.
+
+`est/`, `build/` and `build-asan/` carry `dev_wdc.c` byte-identically with GXEMUL-SEC.
 ## Round 473 pass 2 (post-commit) -- the panel broke the fix's load-bearing premise, and one mutant swept the detector clean
 
 `1f1a02b` shipped, then its own pass-2 panel found four things wrong with it. None of them
@@ -25,9 +327,18 @@ ring cannot issue a packet command. That is true, and **it does not transfer**: 
 reached through the packet path at all. *A guard proved for one entry point was carried to a site
 that entry point does not dominate.*
 
-Severity, stated so it is not over-sold: the injected bytes are the guest's own, and overrunning
-the 262656-byte ring that way needs more than the same unbounded write path would already let it
-push directly. It corrupts that guest's transfer, not host memory. **The fix stands; the comment
+adversarial interleaved write DESYNCHRONISES that guest's own transfer.  **The arithmetic
+here was stated BACKWARDS in the device comment and the correction did not reach this block --
+a panel seat caught the survivor.**  The refill route needs **229889** injected bytes and the
+direct write route **262657**: the refill route is cheaper by 32768, FEWER not more.
+
+*Two further qualifications from the same seat, both adopted.*  "Route needs" is too absolute:
+262657 is the EMPTY-RING direct threshold, and with 32768 DATAIN bytes already queued the direct
+route also overwrites after 229889.  And "corrupts only that guest's transfer" is too
+categorical -- the same shared ring feeds the CDB-dispatch and disk-image-drain paths filed as
+`wdccdbmidxfer` and `wdcdataoutdrain`.  The defensible claim is narrower: **this adds no
+demonstrated host-memory-safety primitive, and the measured case corrupts returned transfer
+data.**
 was false**, and closure is no shield for false prose.
 
 ### *** A FIFTH CLAUSE-(d) MUTANT SWEPT THE DETECTOR CLEAN -- floor breach, closed here ***
@@ -59,8 +370,9 @@ codex checked the cited artifact against the shipped detector: every archived ru
 while the committed source had 23. The kill table was real, but it **was not produced from the
 final detector**.
 
-Worse than reported, on inspection: the per-mutant logs HAD been refreshed and only `TABLE.txt`
-was stale, because `TABLE.txt` was assembled by a `tee` at the CALL SITE while everything else was
+Worse than reported, on inspection: the per-mutant logs HAD been refreshed and only
+`wdcchunking/killtable_20260827/TABLE.txt` was stale, because it was assembled by a `tee` at the
+CALL SITE while everything else was
 written by the script. **An artifact assembled by its caller is an artifact that can be
 half-updated.** The scorer now writes it itself, and the whole set was re-derived at 24 rows.
 
@@ -265,8 +577,8 @@ that, reporting occupancy 14.*
     Md_norefill  KILLED  2/6   (d) clamp kept, REFILL LOOP DELETED
     Md_wrongoff  KILLED  1/6   (d) refill re-based to data_in[j]
 
-`regress/artifacts/wdcchunking/killtable_20260827/` -- `TABLE.txt`, one file per mutant run,
-the pre-fix source and `PREFIX_RUN.txt`.  Baseline 22 rows, 0 failures, `WDC_IDENTIFY_PASS`.
+`regress/artifacts/wdcchunking/killtable_20260827/TABLE.txt`, one file per mutant run, the
+pre-fix source, and `regress/artifacts/wdcchunking/killtable_20260827/PREFIX_RUN.txt`.  Baseline 22 rows, 0 failures, `WDC_IDENTIFY_PASS`.
 
 *Five of the six rows red pre-fix; the sixth is the liveness control, which is green in BOTH
 builds by design -- it proves the fixture reached the re-arm branch rather than that the branch

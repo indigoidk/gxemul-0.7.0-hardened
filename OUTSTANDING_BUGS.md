@@ -10481,3 +10481,75 @@ came from asking one more time after the table was clean:
 > boundary, and all downstream of one assumption.
 
 Kill table now **10 of 10**, detector 26 rows, 0 failures.
+
+## 2026-08-27 — `bugfileledgerdir`: the sync check runs one way only
+
+Section P (`check_bugfile_sync.py`) fails when an OPEN **ledger** row has no entry in this
+file. **Nothing checks the reverse.** Found by the codex seat on `#473`'s pass 2 and confirmed
+by grepping both: four rows — `wdcaddtoinbufbound`, `wdcrearmwalk`, `fbclearidempotent`,
+`fbclearaliases` — existed as prose here with no ledger row at all.
+
+**That direction matters more than it looks.** The ledger is the single source of truth and
+`matrix.html` renders it, so a row filed only in prose is **invisible to every tool in the
+pipeline**: no seat-coverage tracking, no stage panel, no dashboard line, and section H never
+asks whether it ran a panel. *A row that exists only in prose is filed in the sense that a
+reader could find it, and unfiled in every sense a tool cares about.* It is the unread-review
+class one level up — the work is recorded, and the machinery that exists to act on records
+cannot see it.
+
+The check should reuse P's shape: scan this file for backticked row-id tokens and fail when one
+names no ledger row. **Dated-cutoff and forward-only**, like `check_bugfile_sync.py` itself — a
+rule that retro-fails the whole file blocks the next commit on reconstruction nobody scheduled,
+and a rule that does that gets switched off.
+
+**NOT BUILT YET, deliberately.** It changes the script every commit runs and owes two negative
+controls: red on a bugfile-only row, green once the ledger row exists. The four instances are
+already fixed by hand.
+
+## 2026-08-27 — #475 `wdcoddstep` fixed; two seat-named escapes were real
+
+`atapi_len -= consumed` had no bound against what REMAINS, so an odd remainder plus a four-byte
+read drove the counter negative — `== 0` never fired again, the command never completed, and
+`atapi_received` claimed more bytes than the transfer holds. **The length is a single
+guest-chosen byte** (INQUIRY's allocation length, clamped to a minimum of 36 and never to an
+even value), so this is not an edge case.
+
+Fixed by clamping `consumed` to the remainder before both updates — **the tree's own idiom**,
+verified: `dev_asc.c:610-614` is `#283`'s clamp half in the same shape. Kill table 7 killed +
+1 measured equivalence, detector 32 rows, `regress/artifacts/wdcoddstep/killtable_20260827/`.
+
+### The part worth carrying: two seats each named an escape the table did not have
+
+- **`consumed = d->atapi_len;`** (Fable) — the min degraded to a plain assignment. **Sweeps both
+  end-state rows**, because the transfer does still end at 0 of 37; what changes is *when*. Killed
+  only by the intermediate-state rows, which exist solely because a seat predicted this.
+- **`len == 4 && consumed > atapi_len`** (codex) — the clamp narrowed to one access width.
+  **Swept all six rows then present**, because every row in the file issued a four-byte read.
+
+> **A detector whose rows all use one access width cannot see a fix narrowed to that width.**
+> The rows were present, ran, and were structurally unable to fail — the padded-column trap's
+> cousin, and the padded-column assert in the gate patch caught a *literal* instance in the same
+> session (a 40-char label in a 38-wide column).
+
+### Residuals — open
+
+- **`wdcwidthmatrix`** — the detector now covers widths 4 and 2 at remainders {1,2,3} and {1}.
+  A panel seat recommended the full matrix plus exact-fit controls, and one-byte reads are still
+  unexercised. Filed rather than shipped: the two widths present are the ones that can overshoot
+  (a 1-byte read consumes 1 and cannot step past a remainder of ≥1), so the gap is completeness,
+  not a live hole. Worth one row if the fix is ever touched again.
+
+- **`wdcoddstep` still owes a rung-3 witness, and a seat says one is BUILDABLE** — real guest
+  stores of a CDB, then real four-byte data-port loads through decode on an in-tree wdc machine.
+  Recorded against `rung1exempt`, which it sharpens: the ladder gap may be a habit of reaching
+  for the one-second differential rather than a genuine hole. **Nobody has tried.**
+
+### Three constraints adopted from the panel and deliberately NOT implemented
+
+Each would have looked like tidying and each is wrong:
+
+- no floor for an already-negative `atapi_len` — from a clean command the fix maintains `>= 0`,
+  so an extra saturate is unlicensed by the addition rule;
+- no clamping `received` to `data_in_len` as a companion to saturation — mid-chunk that
+  completes **early** and drops the rest of the transfer;
+- no even-padding at the SCSI layer.

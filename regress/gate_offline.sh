@@ -585,7 +585,7 @@ else
     check     "footbridge: row failures" \
               "$(grep -oE '[0-9]+ failures' "$FBLOG" | grep -oE '^[0-9]+')" "0"
     check_min "footbridge: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 24
+              "$(grep -oE '^[0-9]+ rows' "$FBLOG" | grep -oE '^[0-9]+')" 33
     check     "footbridge: offline verdict" "$(grep -c 'DIFF_FOOTBRIDGE_PASS' "$FBLOG")" "1"
     #  Name each row that is the SOLE detector of something.
     check "footbridge: the zero-load row is present" \
@@ -610,6 +610,35 @@ else
           "$(grep -c 'a PERIODIC read must not reload the counter' "$FBLOG")" "1"
     check "footbridge: the periodic-pending row is present" \
           "$(grep -c 'a PERIODIC read must not clear pending either' "$FBLOG")" "1"
+    #  #474 second wave: eight rows added after a MEASURING seat showed FIVE
+    #  one-token mutants sweeping the 24-row detector clean.  All nine mutants now die,
+    #  and SIX of them die on a single sole-carrier row -- no row here is redundant:
+    #    TIMER_ENABLE   a DISABLED timer can never hold a pending interrupt, so a guard
+    #                   widened by it re-opens the defect on the exact state this round
+    #                   exists for -- and no other row ever sets that bit
+    #    deassert PAIR  the guard wraps THREE effects and the rows observed two.  A row
+    #                   wanting ZERO can only fail upward, so the defect row needs its
+    #                   ACCEPT companion or a deletion of the effect scores green
+    #    anchors        TIMER_1_CLEAR is 0x30C and (0x30C >> 5) & 3 == 0, so every older
+    #                   row is an INDEX-0 row.  0x32C and 0x36C pin indices 1 and 3, and
+    #                   assert the NEIGHBOUR is untouched so a colliding re-map still reds
+    #    index-1 READ   the anchors drive WRITES, so a guard widened per-index passes them
+    #                   for the ordinary reason.  This row is the only one carrying BOTH
+    #                   properties: which cell, and that the access is refused
+    check "footbridge: the deassert ACCEPT row is present" \
+          "$(grep -c '[LIVE] a WRITE DOES deassert the irq' "$FBLOG")" "1"
+    check "footbridge: the deassert defect row is present" \
+          "$(grep -c 'a READ must NOT deassert the irq' "$FBLOG")" "1"
+    check "footbridge: the TIMER_ENABLE row is present" \
+          "$(grep -c 'an ENABLED timer READ does not clear' "$FBLOG")" "1"
+    check "footbridge: the access-width row is present" \
+          "$(grep -c 'a 2-byte READ does not clear either' "$FBLOG")" "1"
+    check "footbridge: the index-1 anchor row is present" \
+          "$(grep -c '0x32C decrements timer index 1' "$FBLOG")" "1"
+    check "footbridge: the index-3 anchor row is present" \
+          "$(grep -c '0x36C decrements timer index 3' "$FBLOG")" "1"
+    check "footbridge: the non-zero-index READ row is present" \
+          "$(grep -c 'a READ at index 1 does not clear' "$FBLOG")" "1"
     check "footbridge: the counter-domain row is present" \
           "$(grep -c 'leave the 24-bit counter in range' "$FBLOG")" "1"
     #  The three rows PASS 2 added, each the SOLE detector of a mutant that survived the first
@@ -1336,7 +1365,7 @@ else
     check     "wdc IDENTIFY: row failures" \
               "$(grep -oE '[0-9]+ failures' "$WDCLOG" | grep -oE '^[0-9]+')" "0"
     check_min "wdc IDENTIFY: rows actually run" \
-              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 26
+              "$(grep -oE '^[0-9]+ rows' "$WDCLOG" | grep -oE '^[0-9]+')" 36
     check     "wdc IDENTIFY: offline verdict" \
               "$(grep -c 'WDC_IDENTIFY_PASS' "$WDCLOG")" "1"
     #  The four divergence rows. Deleting any one of them returns the table to the
@@ -1379,6 +1408,46 @@ else
               "$(grep -c 're-arm: the chunk is REFILLED' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the re-arm offset row is present" \
               "$(grep -c 're-arm: refill starts at received' "$WDCLOG")" "1"
+    #  #475: the six wdcoddstep rows.  Kill table 7 killed + 1 measured equivalence.
+    #  TWO of these groups exist ONLY because panel seats named escapes the table did not
+    #  have, and each escape is killed ONLY by its own group:
+    #    `consumed = atapi_len`      sweeps the two end-state rows -> the MID-WALK rows
+    #    `len == 4 && consumed > ..` swept all six then present -> the WIDTH rows, because
+    #                                every other row here issues a four-byte read
+    #  Deleting any one returns the table to a shape a one-token edit escapes.
+    check     "wdc IDENTIFY: the odd-step completion row is present" \
+              "$(grep -c 'odd chunk: the count stops at zero' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the odd-step truthfulness row is present" \
+              "$(grep -c 'odd chunk: received never exceeds len' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the mid-walk length row is present" \
+              "$(grep -c 'mid-walk: one 4-byte read leaves 33' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the mid-walk cursor row is present" \
+              "$(grep -c 'mid-walk: cursor advances by 4' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the width length row is present" \
+              "$(grep -c 'width: a 2-byte read of 1 remaining' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the width cursor row is present" \
+              "$(grep -c 'width: received stops at data_in_len' "$WDCLOG")" "1"
+    #  #475, second wave: four rows added after a MEASURING seat showed the detector
+    #  was below the vacuity floor.  Each closes something the others cannot see:
+    #    chunk edge  -- `Md5_xferbound` clamps to the TRANSFER remainder instead of the
+    #                  CHUNK remainder.  It is identical on every single-chunk transfer,
+    #                  so it swept all six earlier rows; it diverges only at a boundary.
+    #                  It also showed "odd chunk" was the wrong FRAME -- an EVEN 32768
+    #                  chunk overshoots too, under mixed access widths.
+    #    guest byte  -- the ONLY guest-visible channel here.  CYL_LO/CYL_HI are served
+    #                  from atapi_len, so a negative count reaches the guest as 0xffff.
+    #                  Without it, a fix that repairs completion but leaves the counter
+    #                  negative looks correct.
+    #    zero-length -- READ TOC with allocation length 0 arms DATAIN with a ZERO chunk.
+    #                  A clamp guarded `> 0` rather than `>=` hangs here.
+    check     "wdc IDENTIFY: the chunk-edge re-arm row is present" \
+              "$(grep -c 'chunk edge: the re-arm still fires' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the chunk-edge anchor row is present" \
+              "$(grep -c 'chunk edge: chunk 2 starts at 32768' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the GUEST-VISIBLE byte-count row is present" \
+              "$(grep -c 'guest byte count is not 0xffff' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the zero-length DATAIN row is present" \
+              "$(grep -c 'zero-length DATAIN stays at zero' "$WDCLOG")" "1"
     #  #473 pass 2: three rows added AFTER the round shipped, because two more
     #  clause-(d) mutants escaped a table that had already closed four.  Both hid for
     #  one structural reason -- every re-arm row sat where the remainder EXCEEDS 32768,
