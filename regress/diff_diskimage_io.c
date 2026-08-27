@@ -139,6 +139,177 @@ static void mkdisk(struct diskimage *d, const char *path, const char *mode,
 
 
 /*  ------------------------------------------------------------------  */
+/*  SECTION: an UNALIGNED read across an overlay boundary (row b115)     */
+/*
+ *  THE DEFECT.  fread_helper() picks an overlay layer for the block that
+ *  contains curofs, then reads up to a whole block from that layer without
+ *  clamping to what REMAINS in the block.  With an unaligned offset the read
+ *  runs past the block's end into blocks that may live in a different layer,
+ *  while buf advances on a fixed OVERLAY_BLOCK_SIZE stride.
+ *
+ *  THE ASYMMETRY THAT MAKES IT UNAMBIGUOUS: fwrite_helper() explicitly REFUSES
+ *  a non-multiple length and an unaligned offset (both under #164).
+ *  fread_helper() has no such guard anywhere.  The read path was simply never
+ *  given the check the write path has.
+ *
+ *  CONTRACT -- what these rows are designed to catch, so a later escape is either
+ *  outside the contract or a breach of it, rather than an argument about
+ *  overclaiming:  they catch a read that takes bytes from the WRONG LAYER, and a
+ *  read that leaves HOLES in the caller's buffer, for a SINGLE overlay whose
+ *  bitmap marks one block -- at BOTH len > OVERLAY_BLOCK_SIZE and len < it, and
+ *  at inblock in {0, 510, 511}.
+ *
+ *  THAT SPREAD IS NOT DECORATION.  An earlier version of this section had only
+ *  inblock in {0,511} and len > 512, and TWO floor-clause-(d) mutants were
+ *  MEASURED to survive it: `len > OVERLAY_BLOCK_SIZE ? remain : len` and
+ *  `remain = inblock ? 1 : OVERLAY_BLOCK_SIZE`.  The short-unaligned row below
+ *  reds on both.  The uncovered caller was real: bootblock_iso9660.c reads 256
+ *  bytes at an offset snapped only to 2048.
+ *
+ *  They do NOT cover: the short-read path (no row forces a short fread; that
+ *  debt is filed as `shortread`), or LAYER-SELECTION order (the fixture has one
+ *  overlay, so there is no order to get wrong).
+ *
+ *  ORACLE = A COUNT, NOT A VALUE.  Base is all 'B', overlay data is all 'V',
+ *  and the bitmap marks ONLY block 0.  A 1024-byte read from offset 511 covers
+ *  offset 511 (block 0 -> overlay) and 512..1534 (blocks 1-2 -> base), so it
+ *  must contain EXACTLY ONE 'V'.  A value-only oracle would be satisfied by
+ *  reading the same byte twice; a count cannot be.
+ */
+static void section_overlay_unaligned(void)
+{
+	char base[256], ovl[256], map[256];
+	struct diskimage d;
+	/*  buf is 2048 for a 1024-byte read ON PURPOSE, and it is load-bearing:
+	    under the clamp-only mutant the loop writes as far as buf[1534], so that
+	    mutant is a CALLER-BUFFER OVERFLOW of up to 511 bytes, not merely holes.
+	    A tight buffer here would turn a measurable row into a smashed stack.  */
+	unsigned char buf[2048];
+	FILE *f;
+	size_t got;
+	int i, nv, nb;
+
+	snprintf(base, sizeof(base), "%s/b115_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/b115_ovl.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/b115_ovl.img.map", WORK);
+
+	/*  Base image: 4096 bytes of 'B'.  */
+	f = fopen(base, "w+");
+	if (f == NULL) { perror(base); exit(1); }
+	for (i = 0; i < 4096; i++)
+		fputc('B', f);
+	fclose(f);
+
+	/*  Overlay DATA: 4096 bytes of 'V'.  A real overlay file is full-size;
+	    the bitmap, not the file length, says which blocks are live.  */
+	f = fopen(ovl, "w+");
+	if (f == NULL) { perror(ovl); exit(1); }
+	for (i = 0; i < 4096; i++)
+		fputc('V', f);
+	fclose(f);
+
+	/*  Overlay BITMAP: one bit per OVERLAY_BLOCK_SIZE block, LSB first.
+	    0x01 marks block 0 ONLY -- so every other block must come from base.  */
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x01, f);
+	fclose(f);
+
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP diskimage_add_overlay failed -- rows not run\n");
+		return;
+	}
+
+	/*  LIVENESS 1: an ALIGNED read of block 0 must be all overlay.  Without
+	    this a green defect row could mean "the overlay was never wired".  */
+	memset(buf, 0, sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 512);
+	for (i = 0, nv = 0; i < 512; i++)
+		if (buf[i] == 'V') nv++;
+	check("[LIVE] aligned read of block 0 is all overlay", nv, 512);
+	check("[LIVE] aligned read of block 0 reports success", (long long)got, 1);
+
+	/*  LIVENESS 2: an ALIGNED read of block 1 must be all base.  This is what
+	    proves the BITMAP discriminates rather than the overlay swallowing
+	    everything -- without it, liveness 1 alone is satisfied by an overlay
+	    that answers every block.  */
+	memset(buf, 0, sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 512, buf, 512);
+	for (i = 0, nb = 0; i < 512; i++)
+		if (buf[i] == 'B') nb++;
+	check("[LIVE] aligned read of block 1 is all base", nb, 512);
+
+	/*  THE DEFECT.  1024 bytes from offset 511: offset 511 is block 0 (overlay),
+	    512..1534 are blocks 1-2 (base).  Exactly ONE 'V' is correct.  The
+	    unclamped read takes 512 bytes of overlay starting at 511, so it yields
+	    512.  */
+	memset(buf, 0, sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 511, buf, 1024);
+	for (i = 0, nv = 0; i < 1024; i++)
+		if (buf[i] == 'V') nv++;
+	check("overlay unaligned: wrong-layer bytes in 1024 @ 511", nv, 1);
+
+	/*  AND NO ERROR SURFACES.  diskimage__internal_access() documents its return
+	    as "1 if the access completed successfully, 0 otherwise" -- see the header
+	    comment on diskimage__internal_access() (cited by CONSTRUCT, not line:
+	    that sentence moved +14 when this round inserted its own comment, and it
+	    occurs TWICE in the file, so no line number is both stable and unique)
+	    -- NOT a byte count, which an earlier draft of these rows assumed and was
+	    corrected by the measurement.  It reports SUCCESS while handing back
+	    wrong-layer bytes, which is exactly why this corrupts silently.  Pinned so
+	    a fix that starts reporting failure here is noticed too.  */
+	check("overlay unaligned: reports SUCCESS despite corruption", (long long)got, 1);
+
+	/*  THE HALF-FIX ROW, and pass 1 is why it exists.  Two seats independently named
+	    the same surviving mutant: apply the lentoread clamp and KEEP
+	    `buf += OVERLAY_BLOCK_SIZE`.  Someone fixes the length and never notices the
+	    stride.
+
+	    IT ESCAPES EVERY ROW ABOVE.  Under it, iteration 1 reads ONE byte into buf[0]
+	    and then advances buf by a whole block, so buf[1..511] are never written --
+	    and the 'V' count reads 1, which is the CORRECT answer.  The buffer does not
+	    receive wrong bytes; it receives HOLES.
+
+	    So this row counts bytes the read never wrote.  The buffer was memset to 0
+	    and neither 'B' nor 'V' is 0, so an untouched byte is unambiguous.  */
+	for (i = 0, nb = 0; i < 1024; i++)
+		if (buf[i] == 0) nb++;
+	check("overlay unaligned: bytes the read never wrote", nb, 0);
+
+	/*  THE SHORT-UNALIGNED ROW.  FLOOR CLAUSE (d): the fix INTRODUCES the
+	    predicate `len > remain`, and clause (d) says weaken it to the
+	    least-restrictive form that still READS like the same check.  Two were
+	    found, and BOTH pass every row above:
+	
+	      len > OVERLAY_BLOCK_SIZE ? remain : len   (bound relaxed)
+	      remain = inblock ? 1 : OVERLAY_BLOCK_SIZE (remainder faked)
+	
+	    They survive because the rows above only ever produce inblock in {0,511}
+	    and len > 512.  This row breaks both assumptions at once: an unaligned
+	    offset with a SHORT length that still crosses a block boundary.
+	
+	    THE CALLER IS REAL, not hypothetical: bootblock_iso9660.c:281-282 reads
+	    256 bytes at a dirofs snapped only to 2048 (:275-276), i.e. arbitrary
+	    mod 512.  This round's own census had already named that arm.
+	
+	    510..511 are block 0 (overlay); 512 is block 1 (base).  Exactly TWO
+	    overlay bytes is correct.  pristine and the relaxed-bound mutant both
+	    yield 3; the faked-remainder mutant yields 1.  */
+	memset(buf, 0, sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 510, buf, 3);
+	for (i = 0, nv = 0; i < 3; i++)
+		if (buf[i] == 'V') nv++;
+	check("overlay short-unaligned: 510+3 crosses into base", nv, 2);
+
+	fclose(d.f);
+	fclose(d.overlays[0].f_data);
+	fclose(d.overlays[0].f_bitmap);
+	free(d.overlays);
+}
+
+
+/*  ------------------------------------------------------------------  */
 /*  SECTION 1: does a failed write reach the caller?                     */
 
 static void section_write_return(void)
@@ -1054,6 +1225,7 @@ int main(int argc, char *argv[])
 	section_read_capacity();
 	section_roundup_gap();
 	section_boundary();
+	section_overlay_unaligned();
 	section_pass2_gaps();
 	section_real_images();
 
@@ -1064,7 +1236,7 @@ int main(int argc, char *argv[])
 	 *  which ran is the file that was reviewed.  Last, so it counts every
 	 *  row above it.
 	 */
-	check("[IDENTITY] row count -- guards against a stale copy", rows + 1, 46);
+	check("[IDENTITY] row count -- guards against a stale copy", rows + 1, 53);
 
 	printf("\n%d rows, %d failures, %d faults\n", rows, failures, faults);
 	printf("%s\n", (failures == 0 && faults == 0) ?

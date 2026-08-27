@@ -10200,3 +10200,82 @@ whether the emulator process is still alive after the store: binary, with no val
 It is cheap, because the apparatus already exists -- the detector carries a byte/word/long width
 census and a separate per-instance census for the three timer control registers, so this needs a
 row rather than new machinery.  Blocked only on a build.
+
+
+### 2026-08-27 -- `offlinescope`: the embargo was over-scoped, and it was my error
+
+Eleven of fourteen offline differentials compile and run in ten seconds total -- each one a
+single source file compiled by a single compiler invocation, including the real shipping
+source.  No emulator build, no build tree, no rig, no wall-clock oracle.  A full battery is
+three quarters of an hour and needs the machine to itself; this needs nothing.
+
+Six of the top eight ranked defects sit in source files those differentials already pull in.
+Only one of the eight has no differential covering it.  So most of the queue was workable all
+along, and the thing actually embargoed -- timing work -- was never what blocked it.
+
+The honest limit is the witness ladder's own: a direct-call harness is a DETECTOR, never a
+reproduction.  This unblocks measuring and detecting, not witnessing.
+
+THE APPARATUS LESSON COST FOUR WRONG ANSWERS.  There is no uniform flag set -- each
+differential has its own invocation.  A first sweep with one flag set reported half of them as
+failing to compile; two extra flags fixed most of that.
+
+Then one of them read as a genuine pre-existing red: five failures, identical under two
+different flag sets, which is exactly the pattern that normally means the apparatus is not at
+fault.  It was still the apparatus.  That harness is linked with symbol-wrapping flags, on a
+continuation line a narrow grep had dropped; without them the interception never installs, so
+every row expecting a call sequence saw nothing -- and the status row failed too, because the
+harness arms its injected failure through that same interception.  With the flags it exits
+clean.
+
+What stopped a false report was asking what would make it fail for a reason other than the one
+under test.  The tell was that every failing row wanted a call SEQUENCE while every row
+checking a value passed.  A set of failures that all share one shape is an apparatus failure
+until proven otherwise.
+
+
+### 2026-08-27 -- `b115` FIXED in round 472: an unaligned overlay read took the wrong layer
+
+The overlay read helper picked a layer for the block containing the current offset, then read
+up to a whole block from it without clamping to what REMAINED in that block.  With an unaligned
+offset it ran past the block's end into blocks belonging to a different layer, while the output
+pointer advanced on a fixed stride.
+
+Measured before any edit: a 1024-byte read at offset 511, on a disk whose overlay held only
+block 0, returned 512 overlay bytes where exactly one was correct -- and returned SUCCESS, so
+nothing surfaced to the caller.
+
+The asymmetry that makes it unambiguous: the WRITE helper explicitly refuses a non-multiple
+length and an unaligned offset.  The read helper never had that guard, and the loop's own
+advance expression rounds up to a block boundary -- which is only meaningful if unaligned
+starts were expected.
+
+Fixed by clamping to the block remainder and advancing by what was consumed.  Seven detector
+rows, two of which exist only because panel passes found mutants that escaped earlier drafts --
+one keeping the fixed stride, one relaxing the introduced predicate.  The second was a vacuity
+floor breach and was fixed in-round.
+
+Residual filed separately as `shortread`.
+
+### 2026-08-27 -- `shortread`: the short-read path in the overlay read helper
+
+Split out of the row above BEFORE it closed, because a row covering two defects buries one when
+the other closes.  Three related items, all previously inside it.
+
+On a short read the length counter is decremented by the amount REQUESTED while the total is
+grown by the amount ACTUALLY read, so a short read in a non-final iteration leaves the caller's
+zero-fill covering the wrong region.  Pre-existing; round 472 weakly helps -- the hole shrinks
+-- but does not close it.
+
+A one-identifier mutant of that round's fix -- advancing by the amount read rather than the
+amount requested -- is an IDENTITY outside a short read, so it escapes every row that round
+ships and diverges only here.
+
+And a seat claim about the flat, non-overlay path, recorded as unverified.
+
+Not silent: an incomplete-read diagnostic already announces the condition.  Wrong-region data
+WITH a warning, not the silent corruption round 472 closed.
+
+One row discharges all three: a truncated overlay data file forcing a short read in a
+non-final iteration.  Offline-buildable in the existing fixture -- no build, no rig, no timing
+oracle.

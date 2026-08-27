@@ -1359,7 +1359,7 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
 	for (curofs=offset; len != 0;
 	    curofs = (curofs | (OVERLAY_BLOCK_SIZE-1)) + 1) {
 		/*  Find the overlay, if any, that has this block:  */
-		off_t lenread, lentoread;
+		off_t lenread, lentoread, inblock, remain;
 		int overlay_nr;
 		for (overlay_nr = d->nr_of_overlays-1;
 		    overlay_nr >= 0; overlay_nr --) {
@@ -1367,7 +1367,19 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
 				break;
 		}
 
-		lentoread = len > OVERLAY_BLOCK_SIZE? OVERLAY_BLOCK_SIZE : len;
+		/*  #472: clamp to what REMAINS in the CURRENT block, not to the
+		    block size.  The layer above was chosen for the block containing
+		    curofs, so a read running past that block's end takes bytes from
+		    the WRONG LAYER.  (An earlier draft of this comment added "and with
+		    an unaligned offset it always does", which is FALSE: crossing needs
+		    len > remain, and a 3-byte read at offset 100 crosses nothing.)
+		    Measured: a 1024-byte read at offset 511 returned 512 overlay
+		    bytes where exactly one was correct, and reported SUCCESS, so
+		    nothing surfaced to the caller.  fwrite_helper() REFUSES an
+		    unaligned offset (#164); this path never had that guard.  */
+		inblock = curofs & (OVERLAY_BLOCK_SIZE - 1);
+		remain = OVERLAY_BLOCK_SIZE - inblock;
+		lentoread = len > remain? remain : len;
 
 		if (overlay_nr >= 0) {
 			/*  Read from overlay:  */
@@ -1398,7 +1410,11 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
 
 		len -= lentoread;
 		totallenread += lenread;
-		buf += OVERLAY_BLOCK_SIZE;
+		/*  #472: advance by what was CONSUMED.  A fixed stride paired with
+		    a clamped read leaves HOLES -- a half-fix keeping this line passes
+		    a wrong-layer check and still corrupts, which is why the detector
+		    carries a row counting bytes the read never wrote.  */
+		buf += lentoread;
 	}
 
 	return totallenread;

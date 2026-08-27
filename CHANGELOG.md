@@ -1,3 +1,125 @@
+## Round 472 (#472) -- an unaligned overlay read took its bytes from the wrong layer
+
+`fread_helper()` picks an overlay layer for the block containing `curofs`, then reads up to a
+whole block from that layer **without clamping to what remains in the block**.  With an
+unaligned offset the read runs past that block's end into blocks that may belong to a different
+layer, while `buf` advances on a fixed `OVERLAY_BLOCK_SIZE` stride.
+
+**MEASURED, on the committed build, before any edit:** a 1024-byte read at offset 511 of a disk
+whose overlay holds only block 0 returned **512 overlay bytes where exactly one was correct**,
+and returned **1 = success**, so nothing surfaced to the caller.  Silent wrong data.
+
+### The asymmetry is what makes it unambiguous
+
+`fwrite_helper()` explicitly REFUSES a non-multiple length and an unaligned offset, both under
+`#164`.  `fread_helper()` has no such guard anywhere.  The read path was never given the check
+the write path has -- and the loop's own advance expression proves unaligned starts were
+anticipated: `curofs = (curofs | (OVERLAY_BLOCK_SIZE-1)) + 1` rounds UP to the next boundary,
+which would simply be `curofs + OVERLAY_BLOCK_SIZE` if offsets were always aligned.
+
+A panel seat supplied the algebra that makes the clamp provably consistent with that advance:
+`curofs + remain` **is** `(curofs | (OVERLAY_BLOCK_SIZE-1)) + 1`, identically.
+
+### The fix
+
+Clamp `lentoread` to the current block's remainder, and advance `buf` by what was consumed.
+Same shape as `diskimage_access__cue()` in the same file, which already clamps to the remainder
+of the current sector and indexes the buffer by bytes actually delivered.
+
+**`buf += OVERLAY_BLOCK_SIZE` appears TWICE.** `fwrite_helper()` has it too, and there the
+fixed stride is CORRECT because that path refuses unaligned access outright.  Patching the
+first occurrence would have broken the write path; an anchor-count guard caught it.
+
+### The detector, and the mutant that pass 1 found
+
+Six rows in `regress/diff_diskimage_io.c`, which `#include`s the real `diskimage.c` and builds
+with one compiler invocation in under a second.  The oracle is a COUNT, not a value: a
+value-only oracle can be satisfied by reading the same byte twice.
+
+**Two seats independently named a mutant that ESCAPED the first draft** -- apply the length
+clamp and keep the fixed stride.  Under it the wrong-layer row reads 1, which is the CORRECT
+answer, because iteration 1 writes one byte and the stride then skips 511 positions.  The
+buffer does not receive wrong bytes; it receives HOLES.  So a second row counts bytes the read
+never wrote.
+
+**The kill table, measured in a copied tree so no repo file was mutated:**
+
+```
+  arm                        wrong-layer row      never-wrote row
+  PRISTINE (committed)       FAIL 512, want 1     ok 0
+  MUTANT   (clamp only)      ok 1  <- ESCAPES     FAIL 511, want 0
+  FIXED    (clamp + stride)  ok 1                 ok 0
+```
+
+The two rows are measurably non-redundant: each catches what the other misses.
+
+### The floor breach pass 2 found, and the panel I misread
+
+*** THE FIRST DETECTOR BREACHED VACUITY FLOOR CLAUSE (d), AND I ARGUED THE WRONG CLAUSE WHEN
+DECLINING TO FIX IT. ***
+
+The fix INTRODUCES the predicate `len > remain`.  Clause (d) says weaken an introduced
+predicate to the least-restrictive form that still READS like the same check.  Two such
+mutants passed all six rows:
+
+```
+  len > OVERLAY_BLOCK_SIZE ? remain : len     the bound relaxed
+  remain = inblock ? 1 : OVERLAY_BLOCK_SIZE   the remainder faked
+```
+
+Both survived because the section produced only `inblock` in {0,511} and `len > 512`.  **The
+uncovered caller is real, and this round's own census had named it**: `bootblock_iso9660.c`
+reads 256 bytes at an offset snapped only to 2048 -- arbitrary mod 512.
+
+I declined a fixture change on an L1 argument (*these rows are not vacuous*).  True, and the
+WRONG CLAUSE: this is (d)/L2, replaced in-round however late.  ONE row closes both, MEASURED:
+
+```
+  arm        short-unaligned row (510+3, want 2)   total
+  fixed      ok                                    53 rows, 0 failures
+  pristine   FAIL                                  2 failures
+  relaxed    FAIL  <- GREEN before this row        1 failure
+  faked      FAIL  <- GREEN before this row        1 failure
+```
+
+*** AND I REPORTED THE PANEL AS THREE RATIFICATIONS WHEN IT WAS NOT UNANIMOUS. ***  grok said
+**DETECTOR IS NOT DONE**; minimax said **NO RATIFICATION**, twice; codex said GO WITH CHANGES.
+I carried that misreading INTO A BRIEF, so a later seat was told the panel agreed.
+
+**The dissenting seats were right, and their objection IS the clause-(d) breach above.**  Not
+merely failing to read a dissent, but propagating the misreading forward.
+
+### Assessed, not changed
+
+* **The short-read path is UNCHANGED and still has a pre-existing concern**: on a short read in
+  a non-final iteration, `len` decrements by the requested amount while `totallenread` grows by
+  the actual, so the caller's zero-fill can cover the wrong region.  **The patch WEAKLY HELPS**
+  -- the hole shrinks from `BS - lenread` to `lentoread - lenread`.  An earlier draft said it
+  "neither helps nor worsens", which is wrong in the safe direction.  Filed as `shortread`.
+* **The aligned path is byte-for-byte unchanged**, proven rather than asserted: when `curofs` is
+  aligned, `remain` is the block size and both expressions reduce to the originals.
+* **RUNG 1 IS A DETECTOR, NEVER A WITNESS.**  This harness calls the function directly, so it
+  is graded by the vacuity taxonomy, not the witness clauses.  A rung-3 witness still needs a
+  real emulator run, which the machine embargo forbids.
+
+### Collateral, and a build tree I missed
+
+*** THE WSL ARC TREE WAS NEVER PROPAGATED TO, AND I REPORTED THE OPPOSITE. *** I said
+"both build trees byte-identical", counting `build/` and `build-asan/` and **forgetting
+the WSL arc tree at `/tmp/gxsec-build` entirely**.  It was still at 2386 lines with ZERO
+`#472` markers against SEC's 2400 and two.  Found by the adjudicating seat, verified, then
+propagated and confirmed by `cmp` against SEC -- never against a backup -- with the stale
+`.o` removed.
+
+**This is the no-VPATH rule's exact hazard**: any arc measurement taken meanwhile would
+have measured unfixed code and looked clean.  The correct statement is now FOUR trees --
+`est/`, `build/`, `build-asan/` and the WSL arc tree -- all byte-identical to SEC.
+
+Eleven offline differentials run in ten seconds total; all green afterwards.  One of them
+needs `-Wl,--wrap=fsync -Wl,--wrap=fflush` and reads as failing without them -- it passes
+clean with the fix and the right flags.
+
+
 ## Round 467 (#467) -- the pty deadline now means SILENCE, not elapsed time
 
 The owner asked whether Windows could ever be idle enough to trust the battery. The honest
