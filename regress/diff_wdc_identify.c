@@ -2470,10 +2470,16 @@ static void row_stale_phase_write(void)
 /*  THE ACCEPT ROW FOR THE `cur_command` ESCAPE -- and it exists because the round's
  *  own disposition was INVERTED.
  *
- *  `#477` filed that escape as REAL COVERAGE DEBT: the ALT-CTRL arm sets
+ *  `#477` filed that escape as REAL COVERAGE DEBT: the ALT-CTRL arm set
  *  `cur_command = COMMAND_RESET` without clearing `atapi_cmd_in_progress`, so the
- *  state that distinguishes the mutant is reachable.  That warrant is right.  The
+ *  state that distinguishes the mutant was reachable.  That warrant is right.  The
  *  conclusion drawn from it was backwards.
+ *
+ *  *** PAST TENSE SINCE `#481`: THE ALT-CTRL ARM NOW DOES CLEAR IT, via
+ *  `wdc_new_command_reset()`, but only on a REAL soft reset (WDCTL_RST).  The row is
+ *  unchanged and still green, because it writes the ROUTINE 0x08 that no longer
+ *  latches anything -- and it still reds under `Md_bitswap`, the mutant that swaps the
+ *  predicate back to the head-count bit.  Only the described mechanism moved. ***
  *
  *  MEASURED by a seat, through real register accesses: adding
  *  `&& cur_command == ATAPI_PKT_CMD` makes ZERO OF THREE legal packet commands
@@ -2687,10 +2693,16 @@ static void row_drain_announce(void)
  *  may write it at any moment, including mid-transfer.
  *
  *  So a future round that hangs a ring-flush or a writer-cancel off the ALT-CTRL arm
- *  -- which currently triggers on WDCTL_4BIT (0x08) rather than WDCTL_RST (0x04) --
+ *  -- while it still triggered on WDCTL_4BIT (0x08) rather than WDCTL_RST (0x04) --
  *  would cancel a legal transfer on a routine register write.  This row reds on that
- *  edit.  It is the de-escalation clause's accept side, built for a fix that has not
- *  shipped yet.
+ *  edit.  It is the de-escalation clause's accept side.
+ *
+ *  *** THAT FIX IS `#481`, AND THE PREDICTION HELD -- BUT ONLY BECAUSE THE ROUND DID
+ *  THE PREREQUISITE FIRST.  `#481` hung exactly this writer-cancel off the ALT-CTRL
+ *  arm, and this row is GREEN, because the same change corrected the bit: a routine
+ *  0x08 never reaches the cancel.  The row DOES red under `Md_bitswap` -- which is
+ *  that same edit WITHOUT the prerequisite.  So this row measured the ordering
+ *  argument rather than merely asserting it, which is what an accept row is for. ***
  */
 static void row_devctl_preserves_write(void)
 {
@@ -3869,6 +3881,428 @@ static void row_every_opcode_resets(void)
 }
 
 
+/*  THE ALT-CTRL HANDLER: FOUR LINES, AND THE PANEL MEASURED THREE DEFECTS AND A
+ *  MISSING FEATURE BEHIND THEM.
+ *
+ *      if (idata & WDCTL_4BIT)
+ *              d->cur_command = COMMAND_RESET;
+ *
+ *  WDCTL_4BIT is 0x08, "use four head bits (wd1003)".  The reset bit is WDCTL_RST,
+ *  0x04.  And COMMAND_RESET is not a reset ACTION at all -- it is read at exactly
+ *  two sites and both make the cylinder registers return the ATAPI signature
+ *  0xEB14 for a CD-ROM.  IT IS THE SIGNATURE LATCH.
+ *
+ *  Because it triggers on bit 3, which Linux libata holds as its steady-state
+ *  ap->ctl, the signature is on almost always and the defect has never shown.
+ *
+ *  EACH ROW BUILDS ITS OWN DEVICE.  An earlier draft ran three rows off one
+ *  struct and row 2's control write arrived carrying row 1's state -- its
+ *  independence compromised by its neighbour.  Named by a panel seat.
+ */
+static void altctl_fresh(struct wdc_data *d)
+{
+	memset(d, 0, sizeof(*d));
+	d->addr_mult  = 1;
+	d->io_enabled = 1;
+	d->inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d->irq.interrupt_assert = arm_sink;
+}
+
+
+static void altctl_free(struct wdc_data *d)
+{
+	if (d->atapi_st != NULL) {
+		free(d->atapi_st->data_in);
+		free(d->atapi_st->cmd);
+		free(d->atapi_st);
+	}
+	free(d->inbuf);
+}
+
+
+static void row_srst_is_a_reset(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP srst_is_a_reset\n");
+		return;
+	}
+
+	/*  0x06 = WDCTL_RST | WDCTL_IDS -- what older OpenBSD writes to assert a
+	    soft reset.  BIT 3 IS CLEAR, so today's handler does not see it.  */
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_IDS;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (d.cur_command != COMMAND_RESET) {
+		printf("  FAIL %-38s cur_command 0x%x\n",
+		    "a real SRST (0x06) is a reset", d.cur_command);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x\n",
+		    "a real SRST (0x06) is a reset", d.cur_command);
+	}
+	altctl_free(&d);
+}
+
+
+/*  *** THIS ROW IS THE ORACLE CORRECTION, and the reason is worth the space.
+ *
+ *  It first read `cur_command != COMMAND_RESET` -- "a routine 0x08 must not leave
+ *  the device in the reset state".  A seat MEASURED that going RED on CORRECT code
+ *  the moment a power-on signature is modelled, because then the device legitimately
+ *  IS in the reset state before any command runs.  The old oracle conflated "this
+ *  write did not latch" with "the device is not latched".
+ *
+ *  The delta form asks the question that actually matters and is robust to A4: DID
+ *  THIS WRITE CHANGE cur_command?  And the harm it states is the sharper one the
+ *  brief had understated -- `cur_command` is also the value assigned into
+ *  write_in_progress, so a routine Device Control write DESTROYS THE RECORD OF WHICH
+ *  COMMAND IS EXECUTING.  That is safe today only because wdc__write() has exactly
+ *  one caller, immediately after the assignment: an accident, not an invariant.  ***
+ */
+static void row_routine_ctl_preserves_cmd(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int before;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP routine_ctl\n");
+		return;
+	}
+
+	/*  A command is executing.  0xec is IDENTIFY -- an ordinary one.  */
+	d.cur_command = WDCC_IDENTIFY;
+	before = d.cur_command;
+
+	/*  ...and the driver writes its steady-state Device Control byte.  libata
+	    does this constantly; it is not a reset and must change nothing.  */
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (d.cur_command != before) {
+		printf("  FAIL %-38s 0x%x -> 0x%x\n",
+		    "a routine 0x08 preserves the command",
+		    before, d.cur_command);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x\n",
+		    "a routine 0x08 preserves the command", d.cur_command);
+	}
+	altctl_free(&d);
+}
+
+
+/*  The `m1` escape, built as a row before the fix exists.  A mask widened to
+ *  (WDCTL_RST | WDCTL_IDS) escaped every row a seat could throw at it -- because the
+ *  rows' entire control vocabulary was {0x06, 0x08, 0x0c} and nothing wrote an
+ *  IDS-without-RST value.  0x0a is libata's polled-mode staple and 0x02 is a bare
+ *  nIEN write, and NEITHER carries bit 2 (WDCTL_RST), so neither may latch.
+ *
+ *  *** ONLY 0x0a LATCHED ON THE COMMITTED DEVICE, NOT BOTH.  An earlier version of
+ *  this comment said "both carry bit 3 and so latch TODAY".  0x02 & 0x08 == 0, and
+ *  the round's own pre-fix log says so: `0x0a->0x100 0x02->0xec`.  The row is
+ *  unaffected -- it asserts NEITHER may latch, which is true before and after -- but
+ *  the stated reason was wrong and a wrong reason gets reused.  Named by the grok
+ *  seat reading the log against the comment. ***
+ */
+static void row_nien_is_not_a_reset(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int a, b;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP nien\n");
+		return;
+	}
+
+	d.cur_command = WDCC_IDENTIFY;
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_IDS | WDCTL_4BIT;		/*  0x0a  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	a = d.cur_command;
+
+	altctl_free(&d);
+	altctl_fresh(&d);
+	if (d.inbuf == NULL)
+		return;
+	d.cur_command = WDCC_IDENTIFY;
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_IDS;				/*  0x02  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	b = d.cur_command;
+
+	rows ++;
+	/*  (B) A DELTA, NOT AN ABSOLUTE.  This asked only whether the value BECAME
+	    COMMAND_RESET, where its sibling row asks whether the value CHANGED.
+	    A mutant that clobbers cur_command to 0 on an nIEN write -- which is
+	    this round's own defect #2, reached through a different bit -- walked
+	    straight through that gap and the row still reported ok.  Measured by
+	    the opus seat (`Mo_nienzero`, `Mo_nien4bit`).  The re-pin's own
+	    rationale applied to both rows; only one of them got it.  */
+	if (a != WDCC_IDENTIFY || b != WDCC_IDENTIFY) {
+		printf("  FAIL %-38s 0x0a->0x%x 0x02->0x%x\n",
+		    "an nIEN write is not a reset", a, b);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x 0x%x\n",
+		    "an nIEN write is not a reset", a, b);
+	}
+	altctl_free(&d);
+}
+
+
+static void row_srst_aborts(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP srst_aborts\n");
+		return;
+	}
+
+	/*  A write is armed, a packet is mid-CDB, and the ring holds 40 bytes.  */
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count  = 1;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+	for (i = 0; i < 40; i++)
+		wdc_addtoinbuf(&d, 0x5a);
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;		/*  0x0c -- assert  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (d.write_in_progress != 0 || d.atapi_cmd_in_progress != 0 || occ != 0) {
+		printf("  FAIL %-38s wip 0x%x flag %i occ %i\n",
+		    "an SRST aborts what was in flight",
+		    d.write_in_progress, d.atapi_cmd_in_progress, occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "an SRST aborts what was in flight", occ);
+	}
+	altctl_free(&d);
+}
+
+
+/*  THE SRST SIGNATURE ACCEPT ROWS.  THE POWER-ON CASE IS FILED AS `wdcponsig` AND
+ *  NO ROW HERE COVERS IT -- do not read these rows as power-on coverage.
+ *
+ *  ATA/ATAPI-4 has an ATAPI device post 0x14/0xEB after POWER-ON OR RESET.  This
+ *  model implements only the reset half, and it implemented that on the wrong bit.
+ *  Correcting the bit changes WHEN the signature appears, so these rows are the
+ *  de-escalation clause's accept side: a real reset must still produce it.
+ *
+ *  *** MEASURED, and it corrects TWO earlier claims in this very comment. ***  With a
+ *  CD-ROM attached, pre-fix vs post-fix:
+ *
+ *      ctl 0x08 alone (libata steady)     0xeb14 -> 0x0000   REMOVED
+ *      ctl 0x0a alone (polled mode)       0xeb14 -> 0x0000   REMOVED
+ *      LBA48 HOB traffic alone            0xeb14 -> 0x0000   REMOVED
+ *      ctl 0x06 (OpenBSD SRST)            0x0000 -> 0xeb14   GAINED
+ *      ctl 0x06 -> 0x02                   0x0000 -> 0xeb14   GAINED
+ *      power-on, no control write at all  0x0000 -> 0x0000   UNCHANGED
+ *
+ *  This header first said the rows were "folded in rather than filed", and that a
+ *  round fixing the bit and not the power-on case "ships a regression".  BOTH ARE
+ *  FALSE.  Power-on is dark on both sides, so nothing regresses; and the accident
+ *  was never power-on -- it was the signature being available after ANY
+ *  4BIT-carrying control write.  Removing that IS the repair, two real reset paths
+ *  GAINED a signature they never had, and `wdcponsig` stands on its own merits
+ *  rather than as this round's debt.  Named by the opus seat, which built the
+ *  matrix above at rung 3 on unmodified `evbmips -e malta`.
+ *
+ *  *** THE COMMENTS PIN THE MODEL'S OWN CONSTANTS, NOT A SPECIFICATION.  There is no
+ *  ATA document in this tree -- fifteen PDFs and none of them ATA -- and this project
+ *  shipped manual page numbers from panel output three times in #357/#362/#365 and
+ *  got away with it on luck.  The claim here is change-detection, not conformance. ***
+ */
+static void row_srst_signature(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int lo, hi;
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP srst_sig\n");
+		return;
+	}
+	stub_disk_exists = 1;
+	stub_cdrom_poison = 1;
+
+	/*  ACCEPT ROW.  A REAL soft reset must still produce the signature after
+	    the bit is corrected -- this is the de-escalation clause's accept side,
+	    and it is the row wdcatapisig was filed for.  BOTH assert forms are read
+	    here: 0x06 (OpenBSD) and 0x0c (libata).
+	
+	    *** THE 0x0c READ IS NEW, AND IT REPAIRS A FALSE CLAIM BY MAKING IT TRUE.
+	    This comment used to say the 0x0c form was "covered by the abort row
+	    above".  That row reads ZERO cylinder registers and cannot cover it --
+	    the comment was writing a cheque the row did not cash.  Named by the
+	    grok seat, which also proposed the repair: one more read is cheaper
+	    than deleting the claim, and it kills a mutant no other row kills. ***  */
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_IDS;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = buf[0];
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = buf[0];
+
+	rows ++;
+	if (lo != 0x14 || hi != 0xeb) {
+		printf("  FAIL %-38s 0x%02x%02x want 0xeb14\n",
+		    "a real SRST still signs the CD-ROM", hi, lo);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "a real SRST still signs the CD-ROM", hi, lo);
+	}
+
+	/*  CONTROL: the same registers on a NON-CD-ROM must not sign.  Without this
+	    a row demanding 0xeb14 is satisfied by a device that signs
+	    unconditionally -- a different defect wearing this one's clothes.  */
+	stub_cdrom_poison = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = buf[0];
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = buf[0];
+
+	rows ++;
+	if (lo == 0x14 && hi == 0xeb) {
+		printf("  FAIL %-38s an ATA disk signed 0xeb14\n",
+		    "control: a non-CD-ROM does not sign");
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "control: a non-CD-ROM does not sign", hi, lo);
+	}
+
+	/*  CONTROL: the signature the device DOES produce still works, so a failure
+	    above reads as "the power-on half is missing" and not "the signature is
+	    broken".  Two different repairs; the row has to say which.  */
+	stub_cdrom_poison = 1;
+	d.cur_command = COMMAND_RESET;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = buf[0];
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = buf[0];
+
+	rows ++;
+	if (lo != 0x14 || hi != 0xeb) {
+		printf("  FAIL %-38s 0x%02x%02x want 0xeb14\n",
+		    "control: the reset signature works", hi, lo);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "control: the reset signature works", hi, lo);
+	}
+
+	/*  (C) THE RESET CONJUNCT, pinned.  The "non-CD-ROM does not sign" control
+	    above tests the OTHER half of the read-site guard -- `is_a_cdrom` -- so
+	    dropping the `cur_command == COMMAND_RESET` conjunct entirely escaped
+	    every signature check this row had.  An UNRESET CD-ROM must read back
+	    the bytes the GUEST WROTE, not a signature.  Named and measured by the
+	    opus seat (`Mo_sigalways`).  */
+	altctl_free(&d);
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		stub_cdrom_poison = 0;
+		stub_disk_exists = 0;
+		return;
+	}
+	stub_cdrom_poison = 1;
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 0x55;
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_WRITE, &d);
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 0x66;
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_WRITE, &d);
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = buf[0];
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = buf[0];
+
+	rows ++;
+	if (lo != 0x55 || hi != 0x66) {
+		printf("  FAIL %-38s 0x%02x%02x want 0x6655\n",
+		    "an unreset CD-ROM does not sign", hi, lo);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "an unreset CD-ROM does not sign", hi, lo);
+	}
+
+	/*  (A) THE OTHER ASSERT FORM.  0x0c is what libata writes to assert SRST and
+	    differs from OpenBSD's 0x06 in BIT 3 -- the exact bit this round moved away
+	    from.  A predicate accepting 0x06 but not 0x0c would pass every other row
+	    in this file.  Proposed by the grok seat, which found this row's comment
+	    already CLAIMING 0x0c coverage that no row provided.  Fresh device, so it
+	    cannot inherit the latch set above.  */
+	altctl_free(&d);
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		stub_cdrom_poison = 0;
+		stub_disk_exists = 0;
+		return;
+	}
+	stub_cdrom_poison = 1;
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_lo, buf, 1, MEM_READ, &d);
+	lo = buf[0];
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_cyl_hi, buf, 1, MEM_READ, &d);
+	hi = buf[0];
+
+	rows ++;
+	if (lo != 0x14 || hi != 0xeb) {
+		printf("  FAIL %-38s 0x%02x%02x want 0xeb14\n",
+		    "the libata SRST form signs too", hi, lo);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x%02x\n",
+		    "the libata SRST form signs too", hi, lo);
+	}
+
+	stub_cdrom_poison = 0;
+	stub_disk_exists = 0;
+	altctl_free(&d);
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -4210,6 +4644,11 @@ int main(void)
 	row_refill_cmd_resets();
 	row_absent_drive_resets();
 	row_every_opcode_resets();
+	row_srst_is_a_reset();
+	row_routine_ctl_preserves_cmd();
+	row_nien_is_not_a_reset();
+	row_srst_aborts();
+	row_srst_signature();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -4233,8 +4672,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 87) {
-		printf("  FAIL %-38s rows = %i, want 87\n",
+	if (rows != 96) {
+		printf("  FAIL %-38s rows = %i, want 96\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

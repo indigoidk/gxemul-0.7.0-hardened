@@ -1,3 +1,204 @@
+## Round 481 (#481) -- the reset bit was the head-count bit
+
+`dev_wdc.c`'s Device Control write arm was four lines:
+
+```c
+if (idata & WDCTL_4BIT)
+        d->cur_command = COMMAND_RESET;
+```
+
+`WDCTL_4BIT` is `0x08` -- *"use four head bits (wd1003)"*, a head-addressing mode selector
+that Linux libata holds as its **steady-state `ap->ctl`**. The reset bit is `WDCTL_RST`,
+`0x04`. Three measured defects fell out of that one constant, and a fourth thing turned out
+not to be a defect at all.
+
+**And that latch value is not a reset action.** Its only readers are the two
+cylinder-register read arms, and both make them return the ATAPI signature `0xEB14` for a
+CD-ROM. **It is the signature latch** -- which is why the wrong bit survived: triggering on
+libata's steady state kept the signature on almost always.
+
+*(Stated structurally rather than as a count: a line that spells the identifier while
+counting it invalidates its own number, which is what section D refuses.)*
+
+### Test-first, with an oracle correction inside it
+
+`artifacts/wdcaltctrl/killtable_20260827/PREFIX_committed_device.out`, the committed device
+against this detector:
+
+```
+FAIL a real SRST (0x06) is a reset          cur_command 0x0
+FAIL a routine 0x08 preserves the command   0xec -> 0x100
+FAIL an nIEN write is not a reset           0x0a->0x100 0x02->0xec
+FAIL an SRST aborts what was in flight      wip 0x30 flag 1 occ 40
+FAIL a real SRST still signs the CD-ROM     0x0000 want 0xeb14
+94 rows, 5 failures
+```
+
+Post-fix: **94 rows, 0 failures**. Same scripts, opposite colour.
+
+**One row was re-pinned before any code changed.** It read `cur_command != COMMAND_RESET`,
+which conflates *"this write did not latch"* with *"the device is not latched"* -- and a
+seat **measured the old form going red on correct code** once a power-on signature is
+modelled. The delta form asks whether the write *changed* `cur_command`.
+
+> **The harm is sharper than this round's own brief claimed.** The brief called the wrong
+> bit *"a wrongly-timed signature rather than a wrongly-performed reset"*. Measured
+> `0xec -> 0x100`: **a routine Device Control write destroys the record of which command is
+> executing.** `cur_command` is also the value assigned into `write_in_progress`, harmless
+> today *only* because `wdc__write()` has exactly one caller immediately after the
+> assignment. An accident, not an invariant.
+
+### The one contested decision, settled against a flagship seat by measurement
+
+The two flagship seats split on the edge. One argued **B1** -- add `prev_ctl`, act on the
+0→1 assertion, borrowing `dev_sgi_mec.c`'s `prev_asserted` idiom. The other **built the
+edge-dropped mutant** and measured it escaping every row with a **byte-identical scenario
+differential**.
+
+A measured delta of zero is not a licence to add state, and the borrowed warrant does not
+transfer on inspection: `mec`'s `prev_asserted` suppresses spurious *interrupt*
+re-assertion, which has no analogue here.
+
+> **B4 removes a failure mode rather than adding one.** The same seat built `m7` -- a
+> `prev_ctl` update mis-scoped inside the `if` -- which escapes every row and makes **every
+> subsequent SRST be ignored**. Under B4 that mutant cannot be written.
+
+So the shipped arm is level-triggered on the corrected bit, and the abort calls `#479`'s
+helper rather than a second one:
+
+```c
+if (idata & WDCTL_RST) {
+        d->cur_command = COMMAND_RESET;
+        wdc_new_command_reset(d);
+}
+```
+
+`A3` (trigger on either bit) was **measured dead** -- identical to today on the only two
+scenarios that are wrong. The forward declaration that broke a seat's control mutant last
+round was measured to be one line that builds clean, so it is not a reason to prefer a
+second helper.
+
+### Kill table -- 7 of 7, with two sole carriers
+
+| mutant | reds | carried by |
+|---|---|---|
+| `Mb_revert` (b) | 5 | all five reproduction rows |
+| `Md_nohelper` (d) | 1 | `an SRST aborts what was in flight` — **SOLE** |
+| `Md_nolatch` (d) | 2 | the two signature rows |
+| `Md_widemask` (d) | 1 | `an nIEN write is not a reset` — **SOLE** |
+| `Md_bitswap` (d) | 8 | incl. **four pre-existing `#479`/`#480` rows** |
+| `Md_qualcmd` (d) | 3 | operand-swap, guard qualified by a body-read field |
+| `Mc_null` (c) | compile failure | by construction |
+
+**`Md_bitswap` is caught by four rows this round did not write** -- `altctl keeps packet
+live`, `a CDB after altctl still dispatches`, `a devctl write keeps the writer`, `a devctl
+write does not lose bytes`. Their own comments say they were *"built for a fix that has not
+shipped yet"*. **This is that fix.** The de-escalation clause paying out across rounds is
+the clearest evidence yet that the clause earns its cost.
+
+Gate: offline-differential **PASS (310 checks)**, 94 rows. Five rows named in
+`gate_offline.sh` on `#480`'s measured warrant — the identity row binds row *count*, never
+row *identity*, and both sole carriers are one row deep.
+
+### Filed rather than folded, and the second reason is what settled it
+
+**`wdcponsig` -- the device presents no ATAPI signature at power-on.** Measured separately:
+a freshly-built CD-ROM device answers `0x0000` where `0xeb14` is owed, with two controls
+green. It was nearly folded in, on the argument that `A1` removes the accident supplying
+the signature. Two measurements sent it the other way:
+
+1. A seat's scenario matrix shows power-on is dark **both** pre- and post-fix, so the fix
+   does not regress it.
+2. **The offline differential cannot witness it at all** — its rows build devices with
+   `memset` and never run `DEVINIT`, so an init-time repair is invisible to every row in
+   the file. Folding it in needs a **new oracle**, which the round-scope rule forbids.
+
+*The second reason was found by asking where the fix would have to go, rather than by
+arguing about scope.*
+
+Also filed: clearing `error` and releasing the interrupt on reset. A transferred warrant
+exists (`dev_asc_reset`'s `#266` clause) but nothing here measures it, and a seat measured
+a fixture trap behind it — `interrupt.h` calls through the deassert pointer
+unconditionally, so every row writing ctl would have to wire it or the harness segfaults in
+a way that reads as a detector defect.
+
+### A near miss, recorded because it is the carrier's own rule hit live
+
+The first pre-fix log went to `/tmp/gxalt/alt.out`. **Re-running the same script after
+applying the fix overwrote it**, so the preserved artifact showed `94 rows, 0 failures` --
+the post-fix result wearing the pre-fix label.
+
+Caught by printing every artifact's row count before writing the table, which is the check
+`#478`'s four-measurements-in-one-directory defect earned. **Re-derived, not transcribed:**
+`git show HEAD:` into a scratch tree, rebuilt, written to a name no post-fix run uses. The
+five reds reproduce exactly.
+
+> *A pre-fix and a post-fix run must never share a filename. The durable-path half of that
+> was already written down; the filename half had no rule, and I broke it.*
+
+### The panel changed this round substantially, and the first item is its own warrant
+
+**9 of 9.** The kimi CLI is 403-walled; `kimi-k3:cloud` covered it.
+
+> *** THE SHIPPED COMMENT'S REASON FOR B4 WAS MEASURED FALSE. *** It said edge and level are
+> *"indistinguishable here"* on a byte-identical scenario differential. A seat built the
+> discriminating case with **register writes only**:
+>
+> ```
+> assert 0x0e -> 8 guest stores to DATA -> rewrite 0x0e -> release
+>   LEVEL (shipped):  occ 0, DRQ 0   the ring is purged
+>   EDGE:             occ 8, DRQ 1   the bytes survive the entire reset
+> LIVENESS: same traffic, no reset -> occ 8   (so the 0 is the reset working)
+> SINGLE ASSERT:                   -> occ 8 BOTH   <- why the round saw no delta
+> ```
+>
+> **The round's differential only ever asserted SRST once.** The decision stands and its
+> warrant is now stronger: *the measurable difference favours level*, rather than there being
+> none. Two supporting claims also failed -- **idempotence of the helper does not licence the
+> inference** (it means repeating is harmless, not that skipping the repeat is), and the
+> scenario **issues no command at all**, so "no protocol-following driver issues commands
+> while holding SRST" does not reach it.
+
+**Eighteen mutants pass the 94-row form**, sixteen measured non-equivalent. Three were closed
+in-round by repairs the panel measured before they were built:
+
+* the nIEN row's oracle was **absolute** where its sibling is a **delta** — a mutant clobbering
+  `cur_command` on an nIEN write (this round's own defect #2, through a different bit) walked
+  straight through it;
+* the signature rows never pinned the **reset conjunct** — the pre-existing control tests the
+  *other* half of that guard;
+* and grok's `0x0c` read, which **repairs a false claim by making it true**.
+
+The remaining thirteen file as `wdcaltctrlcov`. **Root cause is how a row was cut**: the
+sole-carrier abort row sets writer, ATAPI flag, phase and ring *simultaneously*, so it cannot
+distinguish which gates the abort — and `altctl_fresh()` pins five stub defaults in which six
+of the eighteen escapes live. *A stub's default value is an untested branch selector,* which
+this tree wrote down four hours earlier.
+
+### This round is rung 3, not rung 1
+
+The lifecycle ask — *before recording a round rung-1, ask one seat to try a rung-3 probe* —
+**paid off the first time it was made.** One invocation built it on unmodified
+`evbmips -e malta`: symptom on pre-fix HEAD, green post-fix with the same script, with
+liveness (`0x55/0x66` written and read back through the same decode) and device-signature
+(`0xeb14` is a value the guest never wrote) controls. Witness: `probe:`.
+
+### "Filed" had shipped ahead of the filing
+
+`wdcponsig` was asserted **filed with measurements** in two commit-bound artifacts while
+appearing in **zero** queue files. The pending docs step is ordinary; the past tense running
+ahead of the action is not. Filed properly here, along with `wdcaltctrlcov`, `wdcresetirq`
+and `wdcaltdecode`.
+
+### The weekly battery was red for 91 hours
+
+`gate_build` failed on `no stale allowlist entries got=1 want=0`, and `gate_mips` skipped as a
+consequence — the documented silent-coverage-loss shape. Cause: `promemul/arcbios.c` no longer
+diverges between the trees. **The dangerous reading was checked first** — both carry the same
+ten fork tags, so no hardening was lost. The entry lived in **two files with different path
+conventions**; fixing one would have left the gate red.
+
+
 ## Round 480 (#480) -- the detector could not see its own call
 
 `#479` shipped `wdc_new_command_reset()` and a detector that kills **13 of 13** mutants of

@@ -478,6 +478,12 @@ static int status_byte(struct wdc_data *d, struct cpu *cpu)
 }
 
 
+/*  #481: forward-declared so the ALT-CTRL arm below can call it.  A panel seat's
+    control mutant failed to compile for want of exactly this line and the failure
+    was briefly read as a design constraint against calling the shared helper; it
+    is one line and it builds clean.  */
+static void wdc_new_command_reset(struct wdc_data *d);
+
 DEVICE_ACCESS(wdc_altstatus)
 {
 	struct wdc_data *d = (struct wdc_data *) extra;
@@ -494,8 +500,74 @@ DEVICE_ACCESS(wdc_altstatus)
 	else {
 		debug("[ wdc: write to ALT. CTRL: 0x%02x ]\n",
 		    (int)idata);
-		if (idata & WDCTL_4BIT)
+		/*  #481: THE RESET BIT IS WDCTL_RST (0x04), NOT WDCTL_4BIT (0x08).
+		
+		    WDCTL_4BIT is "use four head bits (wd1003)", a head-addressing
+		    mode selector that Linux libata holds as its STEADY-STATE ap->ctl.
+		    Testing it here meant three measured defects at once:
+		
+		      * a real soft reset was MISSED.  Older OpenBSD asserts with 0x06,
+		        which has bit 3 CLEAR -- measured `cur_command 0x0`.
+		      * a ROUTINE control write DESTROYED THE RECORD OF WHICH COMMAND IS
+		        EXECUTING -- measured `0xec -> 0x100`.  cur_command is also the
+		        value assigned into write_in_progress, so this is only harmless
+		        because wdc__write() has exactly ONE caller, immediately after
+		        the assignment.  An accident, not an invariant.
+		      * an nIEN write latched a reset.  0x0a is libata's polled-mode
+		        staple -- measured `0x0a->0x100`.
+		
+		    COMMAND_RESET IS NOT A RESET ACTION.  It is read at exactly two
+		    sites, both making the cylinder registers return the ATAPI signature
+		    0xEB14 for a CD-ROM.  It is the SIGNATURE LATCH -- which is why the
+		    wrong bit went unnoticed: triggering on libata's steady state kept
+		    the signature on almost always.
+		
+		    LEVEL-TRIGGERED, DELIBERATELY, AND THE MEASURED DIFFERENCE
+		    FAVOURS THIS FORM.  A channel held in reset must not carry bytes
+		    out the far side, and an edge-triggered abort lets it:
+		
+		        assert 0x0e, 8 guest stores to DATA, rewrite 0x0e, release
+		          LEVEL (this form):  occ 0, DRQ 0   -- the ring is purged
+		          EDGE:               occ 8, DRQ 1   -- the bytes survive the
+		                                                 whole reset, and the
+		                                                 status byte still
+		                                                 advertises DRQ
+		
+		    Measured through register writes only, with a liveness control (the
+		    same traffic without a reset leaves occ 8, so the 0 is the reset
+		    working and not a dead path).
+		
+		    *** AN EARLIER VERSION OF THIS COMMENT SAID edge and level were
+		    "indistinguishable here, because the abort is idempotent and no
+		    protocol-following driver issues commands while holding SRST".
+		    THAT WAS MEASURED FALSE.  Three things were wrong with it:
+		
+		      * the differential behind it only ever asserted SRST ONCE, and
+		        the forms differ only when a driver HOLDS it across two
+		        control writes with something accruing in between;
+		      * IDEMPOTENCE OF THE HELPER DOES NOT LICENCE THE INFERENCE.
+		        It means repeating the abort is harmless.  It says nothing
+		        about SKIPPING the repeat, which is what an edge does, and
+		        state accrues between the writes;
+		      * the scenario above ISSUES NO COMMAND.  Plain data-register
+		        stores suffice -- and in a hardening fork the guest need not
+		        be protocol-following at all.
+		
+		    The decision is unchanged and now rests on evidence that does not
+		    collapse when someone builds the discriminating case. ***
+		
+		    Note also that a prev_ctl update mis-scoped by one brace makes
+		    every LATER reset be ignored -- a failure this form cannot have --
+		    but that is a secondary argument, not the reason.
+		
+		    THE ABORT IS #479's HELPER, not a second one: a channel reset and a
+		    new command must not disagree about what gets cleared, and #479
+		    already reasoned out which latches must SURVIVE (see its comment --
+		    clearing warned_* would undo #337 and #464).  */
+		if (idata & WDCTL_RST) {
 			d->cur_command = COMMAND_RESET;
+			wdc_new_command_reset(d);
+		}
 	}
 
 	if (writeflag == MEM_READ)
@@ -514,9 +586,9 @@ DEVICE_ACCESS(wdc_altstatus)
  *
  *  #480 L4: THE SCOPE IS THIS FUNCTION, NOT THE WORD "COMMAND".  An earlier
  *  headline read "A NEW COMMAND STARTS WITHOUT..." with no qualifier, and the
- *  device falsifies that in its own code: the ALT-CTRL arm assigns
+ *  device falsified that in its own code: the ALT-CTRL arm assigned
  *  cur_command = COMMAND_RESET WITHOUT CALLING THIS HELPER, so the most
- *  reset-like operation the device has is deliberately not a caller.  The SCOPE
+ *  reset-like operation the device had was not a caller at all.  The SCOPE
  *  paragraph forty lines below said so; a universal headline with its qualifier
  *  that far down is read as universal.  Named by the fable seat on #479 pass 2.
  *
@@ -555,13 +627,25 @@ DEVICE_ACCESS(wdc_altstatus)
  *                    declarations: "Deliberately NOT cleared by dev_asc_reset() or
  *                    dev_asc_fifo_flush(): a guest could otherwise re-arm the flood."
  *
- *  SCOPE.  Called from wdc_command() only.  The ALT-CTRL register is a separately
- *  registered device that writes state without coming through here, so this does NOT
- *  establish the invariant on that path -- said out loud rather than implied, and a
- *  row is red against it.  Extending the helper to that arm AS IT STANDS was MEASURED
- *  to cancel a legal transfer on an ordinary 0x08 Device Control write, which real
- *  drivers hold as their steady state.  That extension needs the arm's bit test fixed
- *  first (WDCTL_RST, not WDCTL_4BIT) and is a separate round.
+ *  SCOPE.  TWO CALLERS: wdc_command(), and the ALT-CTRL arm on a real soft reset.
+ *
+ *  *** THIS PARAGRAPH SAID "Called from wdc_command() only" AND PRESCRIBED WHAT WOULD
+ *  HAVE TO HAPPEN FIRST BEFORE THE OTHER CALLER COULD EXIST.  #481 DID EXACTLY THAT,
+ *  so the prescription is DISCHARGED rather than merely stale. ***
+ *
+ *  It read: extending the helper to that arm AS IT STOOD was MEASURED to cancel a
+ *  legal transfer on an ordinary 0x08 Device Control write, which real drivers hold
+ *  as their steady state; so the extension "needs the arm's bit test fixed first
+ *  (WDCTL_RST, not WDCTL_4BIT) and is a separate round."
+ *
+ *  #481 is that round.  It corrected the bit AND made the call in one change, which
+ *  is why the accept rows this paragraph pointed at are GREEN on the shipped tree and
+ *  still RED under `Md_bitswap` -- the same extension WITHOUT the prerequisite.
+ *  Those four rows therefore MEASURED the ordering argument rather than asserting it.
+ *
+ *  The invariant is still not established on every path into the device: the ALT-CTRL
+ *  arm calls this only for WDCTL_RST, and other decode paths into that register are
+ *  filed rather than covered.  Said out loud rather than implied, as before.
  */
 static void wdc_new_command_reset(struct wdc_data *d)
 {

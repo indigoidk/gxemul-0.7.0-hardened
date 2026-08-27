@@ -220,6 +220,20 @@ MANIFEST = {
         (CLASS_RESEARCH, "#479 mutant applier, preserved as evidence"),
     "artifacts/wdccallsite/killtable_20260827/mk480.py":
         (CLASS_RESEARCH, "#480 call-site row generator, preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/mkaltctrl.py":
+        (CLASS_RESEARCH, "#481 ALT-CTRL reproduction generator, preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/fixaltctrl.py":
+        (CLASS_RESEARCH, "#481 fix applier (A1+B4+C1), preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/fixwarrant481.py":
+        (CLASS_RESEARCH, "#481 L4: the B4 warrant corrected after measurement, evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/rows481b.py":
+        (CLASS_RESEARCH, "#481 post-panel row repairs, preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/mutalt.py":
+        (CLASS_RESEARCH, "#481 mutant applier, preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/gatealt.py":
+        (CLASS_RESEARCH, "#481 gate row-naming applier, preserved as evidence"),
+    "artifacts/wdcaltctrl/killtable_20260827/gatealt2.py":
+        (CLASS_RESEARCH, "#481 gate naming of the four missed rows, evidence"),
     "artifacts/wdccallsite/killtable_20260827/mk480b.py":
         (CLASS_RESEARCH, "#480 clause-(i)/(ii) row generator, preserved as evidence"),
     "artifacts/wdccallsite/killtable_20260827/mut480.py":

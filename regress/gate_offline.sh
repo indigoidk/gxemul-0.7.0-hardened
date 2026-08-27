@@ -1424,6 +1424,61 @@ else
               "$(grep -c 'a rejected command still resets' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the refill-command row is present" \
               "$(grep -c 'a refill command starts from empty' "$WDCLOG")" "1"
+
+    #  #481: the ALT-CTRL rows, named for the reason #480 MEASURED rather than assumed.
+    #
+    #  The detector's identity row binds the row COUNT, never row IDENTITY: replacing a
+    #  row's call with `rows ++` keeps the count right, the verdict green and this gate
+    #  passing while a sole carrier vanishes.  Two seats found that independently on #480
+    #  and it was negative-controlled.
+    #
+    #  THIS ROUND HAS TWO SOLE CARRIERS and they are the ones that matter most:
+    #    Md_nohelper (guard kept, abort removed)  -> only `an SRST aborts what was in
+    #                                                flight` reds
+    #    Md_widemask (mask widened to include IDS) -> only `an nIEN write is not a
+    #                                                reset` reds
+    #
+    #  Same honest scope as #480's block: naming closes DELETION and REPLACEMENT.  It
+    #  does NOT close an oracle weakened while keeping its label -- that stays kill-table
+    #  territory, and saying so is what keeps this guard from being overclaimed.
+    check     "wdc IDENTIFY: the SRST-is-a-reset row is present" \
+              "$(grep -c 'a real SRST (0x06) is a reset' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the routine-ctl row is present" \
+              "$(grep -c 'a routine 0x08 preserves the command' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the nIEN row is present" \
+              "$(grep -c 'an nIEN write is not a reset' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the SRST-abort row is present" \
+              "$(grep -c 'an SRST aborts what was in flight' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the SRST-signature accept row is present" \
+              "$(grep -c 'a real SRST still signs the CD-ROM' "$WDCLOG")" "1"
+
+    #  *** THE BLOCK ABOVE NAMED FIVE OF SEVEN ROWS, AND THE TWO IT MISSED WERE BOTH
+    #      CONTROLS.  Found by the opus seat: deleting either kept this gate fully
+    #      green -- which is the precise failure the comment above says naming exists
+    #      to close.  A guard that covers most of its population is not a partial
+    #      guard; it is a guard with an unadvertised hole. ***
+    #
+    #  The two controls are load-bearing, not decoration:
+    #    non-CD-ROM        stops the signature assertion being satisfied by a device
+    #                      that signs unconditionally -- a different defect wearing
+    #                      this one's clothes
+    #    reset-signature   separates "the power-on half is missing" from "the
+    #                      signature is broken" -- two different repairs
+    #
+    #  The last two rows were added after the panel and are sole carriers:
+    #    unreset CD-ROM    SOLE carrier for Mo_sigalways (the reset conjunct dropped
+    #                      at the read site).  The non-CD-ROM control tests the OTHER
+    #                      conjunct, which is why that mutant escaped three checks
+    #    libata SRST form  0x0c differs from OpenBSD's 0x06 in BIT 3, the exact bit
+    #                      this round moved away from
+    check     "wdc IDENTIFY: the non-CD-ROM control is present" \
+              "$(grep -c 'control: a non-CD-ROM does not sign' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the reset-signature control is present" \
+              "$(grep -c 'control: the reset signature works' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the unreset-CD-ROM row is present" \
+              "$(grep -c 'an unreset CD-ROM does not sign' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the libata-SRST-form row is present" \
+              "$(grep -c 'the libata SRST form signs too' "$WDCLOG")" "1"
     #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
     #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
     #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first

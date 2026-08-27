@@ -1,0 +1,250 @@
+#481 KILL TABLE -- 96 rows, baseline 0 failures (base.out), 10 of 10
+
+*** READ THE POST-PANEL SECTION AT THE BOTTOM FIRST.  Everything above it describes
+    the 94-row / 7-mutant state the panel reviewed, and is KEPT because the panel's
+    findings are only legible against it.  Every number in the upper half is
+    superseded; none of it is wrong ABOUT THAT STATE. ***
+
+---- the state the panel reviewed: 94 rows, 7 of 7 ----
+
+  MUTANT             FAILS  carried by
+  ------             -----  ----------
+  Mb_revert   (b)      5    all five reproduction rows
+  Md_nohelper (d)      1    an SRST aborts what was in flight        <- SOLE
+  Md_nolatch  (d)      2    the two signature rows
+  Md_widemask (d)      1    an nIEN write is not a reset             <- SOLE
+  Md_bitswap  (d)      8    incl. FOUR PRE-EXISTING #479/#480 rows
+  Md_qualcmd  (d)      3    operand-swap (guard qualified by a body-read field)
+  Mc_null     (c)   COMPILE FAILURE by construction -- no .out, and that is not a lost log
+
+7 of 7.  Driver killalt.sh, mutants mutalt.py, rows mkaltctrl.py, fix fixaltctrl.py, gate
+naming gatealt.py, pre-fix rebuild prefixrun.sh.  Scratch trees only (/tmp/gxaltk,
+/tmp/gxprefix); the repo was not written to during any measurement.
+
+
+*** TEST-FIRST, AND THE ORACLE CORRECTION CAME FIRST WITHIN IT. ***
+
+PREFIX_committed_device.out -- the committed device, this detector, 94 rows 5 failures:
+
+    FAIL a real SRST (0x06) is a reset          cur_command 0x0
+    FAIL a routine 0x08 preserves the command   0xec -> 0x100
+    FAIL an nIEN write is not a reset           0x0a->0x100 0x02->0xec
+    FAIL an SRST aborts what was in flight      wip 0x30 flag 1 occ 40
+    FAIL a real SRST still signs the CD-ROM     0x0000 want 0xeb14
+
+base.out -- the same detector, the fix applied: 94 rows 0 failures.  Same scripts,
+opposite colour.
+
+ONE ROW WAS RE-PINNED BEFORE THE CODE CHANGED, which is the whole of the oracle-correction
+rule.  It read `cur_command != COMMAND_RESET` -- "a routine 0x08 must not leave the device
+in the reset state".  A seat MEASURED that going RED on CORRECT code the moment a power-on
+signature is modelled, because then the device legitimately IS in the reset state before
+any command runs.  The old oracle conflated "this write did not latch" with "the device is
+not latched".  The delta form asks whether the write CHANGED cur_command, which is robust
+to that, and its diagnostic states the harm rather than an internal state.
+
+  *** AND THE HARM IS SHARPER THAN THE ROUND'S OWN BRIEF CLAIMED. ***  The brief called
+  the wrong bit "a wrongly-timed SIGNATURE rather than a wrongly-performed reset".
+  Measured: `0xec -> 0x100` -- a routine Device Control write DESTROYS THE RECORD OF WHICH
+  COMMAND IS EXECUTING.  `cur_command` is also the value assigned into
+  `write_in_progress`, and that is harmless today ONLY because `wdc__write()` has exactly
+  one caller, immediately after the assignment.  An accident, not an invariant: a second
+  call site turns this into a data-path defect.
+
+
+*** THE ONE CONTESTED DECISION, AND IT WAS SETTLED BY MEASUREMENT AGAINST THE OTHER
+    FLAGSHIP SEAT'S RECOMMENDATION. ***
+
+The two flagship seats SPLIT on the edge:
+
+  * one argued B1 -- add `prev_ctl`, act on the 0->1 assertion, citing dev_sgi_mec.c's
+    `prev_asserted` idiom;
+  * the other BUILT the edge-dropped mutant and measured it escaping every row with a
+    BYTE-IDENTICAL scenario differential.
+
+A measured delta of ZERO is not a licence to add state.  And the borrowed warrant does not
+transfer on inspection: `mec`'s `prev_asserted` exists to suppress spurious INTERRUPT
+re-assertion, which has no analogue here -- the abort is idempotent and no
+protocol-following driver issues commands while holding SRST.
+
+  **B4 ALSO REMOVES A FAILURE MODE RATHER THAN ADDING ONE.**  The same seat built `m7`, a
+  `prev_ctl` update mis-scoped inside the `if`: it escapes every row, and it makes EVERY
+  SUBSEQUENT SRST BE IGNORED.  Under B4 that mutant cannot be written, because there is no
+  field to mis-scope.
+
+Two mutants a seat named are therefore DELIBERATELY ABSENT from this table, and their
+absence is a RESULT rather than an omission:
+
+  m2  (edge dropped)          IS THE SHIPPED DESIGN.  It was a mutant only against the
+                              B1 variant this round declined.
+  m7  (prev_ctl mis-scoped)   IMPOSSIBLE BY CONSTRUCTION under B4.
+
+*Recording that is what stops a future round re-adding `prev_ctl` without re-deriving the
+argument -- an absence record must name its warrant, and this is the warrant.*
+
+
+*** Md_bitswap IS CAUGHT BY FOUR ROWS THIS ROUND DID NOT WRITE, and that is the
+    de-escalation clause paying off ACROSS ROUNDS. ***
+
+`altctl keeps packet live`, `a CDB after altctl still dispatches`, `a devctl write keeps
+the writer`, `a devctl write does not lose bytes` -- all shipped by #479/#480, and their
+own comments say they were "built for a fix that has not shipped yet".  This is that fix,
+and they do exactly the job they were built for.
+
+That is the clause working as designed: a round that removes a host-fatal or otherwise
+self-announcing behaviour owes accept rows, and those rows pay out when the NEXT round
+touches the same arm.
+
+
+*** WHAT WAS FILED RATHER THAN FOLDED, with the measurement that decided it. ***
+
+`wdcponsig` -- THE DEVICE PRESENTS NO ATAPI SIGNATURE AT POWER-ON.  Measured separately
+(`_scratchpad/ponrepro.py`): a freshly-built CD-ROM device answers `0x0000` where `0xeb14`
+is owed, with two controls green (a non-CD-ROM does not sign; the reset signature works).
+
+It was nearly folded in, on the argument that A1 removes the accident that has been
+supplying the signature.  TWO MEASUREMENTS SENT IT THE OTHER WAY:
+
+  1. A seat's scenario matrix shows power-on is dark BOTH pre- and post-fix.  **The fix
+     does not regress it** -- it is a pre-existing gap, not a de-escalation debt.
+  2. THE OFFLINE DIFFERENTIAL CANNOT WITNESS IT AT ALL.  Its rows build devices with
+     `memset` and never run `DEVINIT`, so an init-time repair is invisible to every row in
+     the file.  Folding it in would require a NEW ORACLE, which the round-scope rule
+     forbids.
+
+*The second reason is the one that settles it, and it was found by asking where the fix
+would have to go rather than by arguing about scope.*
+
+Also filed: clearing `error` and releasing the interrupt on reset.  A transferred warrant
+exists (`dev_asc_reset`'s #266 clause) but nothing in this round measures it, and a seat
+measured a fixture trap behind it -- `interrupt.h` calls through the deassert pointer
+unconditionally, so every row that writes ctl would have to wire it or the harness
+segfaults in a way that reads as a detector defect.
+
+
+*** A NEAR MISS, RECORDED BECAUSE IT IS THE CARRIER'S OWN DURABLE-PATH RULE HIT LIVE. ***
+
+The first pre-fix log was written to `/tmp/gxalt/alt.out`.  Re-running the same script
+after applying the fix OVERWROTE IT, so the artifact preserved under that name showed
+`94 rows, 0 failures` -- the post-fix result wearing the pre-fix label.
+
+Caught by printing the row counts of every artifact before writing this table, which is
+the check `#478`'s four-measurements-in-one-directory defect earned.
+
+**It was RE-DERIVED, not transcribed:** `git show HEAD:src/devices/dev_wdc.c` into a
+scratch tree, rebuilt, and written to `PREFIX_committed_device.out` -- a name no post-fix
+run uses.  The five reds reproduce exactly.
+
+  *A measurement cited in a durable record must live at a durable path, and a pre-fix and
+  post-fix run must never share a filename.  Both halves of that were already written
+  down; only the second one had a rule and I broke the first.*
+
+
+================================================================================
+POST-PANEL: the table above was 7 of 7 at 94 rows.  IT IS NOW 10 OF 10 AT 96, and
+the three added mutants are ones the panel MEASURED ESCAPING the 94-row form.
+================================================================================
+
+  MUTANT             FAILS  carried by
+  ------             -----  ----------
+  Mb_revert   (b)      5    all five reproduction rows
+  Md_nohelper (d)      1    an SRST aborts what was in flight        <- SOLE
+  Md_nolatch  (d)      3    (was 2) + the libata SRST form
+  Md_widemask (d)      1    an nIEN write is not a reset             <- SOLE
+  Md_bitswap  (d)      8    incl. FOUR PRE-EXISTING #479/#480 rows
+  Md_qualcmd  (d)      4    (was 3) + the libata SRST form
+  Mo_nienzero          1    an nIEN write is not a reset             <- SOLE
+  Mo_nien4bit          2    routine-ctl + nIEN
+  Mo_sigalways         1    an unreset CD-ROM does not sign          <- SOLE
+  Mc_null     (c)   COMPILE FAILURE by construction
+
+10 of 10.  FOUR sole carriers.  base.out 96 rows 0 failures;
+PREFIX_committed_device.out re-derived at 96 and still exactly 5 red.
+
+*** ALL ELEVEN LOGS ARE AT ONE DETECTOR STATE. ***  The pre-fix log had to be re-derived
+TWICE -- once because a post-fix run overwrote it, once because the detector grew from 94
+to 96 after it was taken.  Both times from `git show HEAD:` rather than from memory.
+
+
+---- WHAT THE PANEL CHANGED, AND THE FIRST ITEM IS THE ROUND'S OWN WARRANT ----
+
+*** THE SHIPPED COMMENT'S REASON FOR B4 WAS MEASURED FALSE. ***  It said edge and level are
+"indistinguishable here", on a byte-identical scenario differential.  The opus seat built the
+discriminating case with REGISTER WRITES ONLY:
+
+    assert 0x0e -> 8 guest stores to DATA -> rewrite 0x0e -> release
+      LEVEL (shipped):  occ 0, DRQ 0     the ring is purged
+      EDGE:             occ 8, DRQ 1     the bytes survive the entire reset,
+                                          and the status byte still advertises DRQ
+    LIVENESS: the same traffic with no reset leaves occ 8, so the 0 is the reset working
+    SINGLE ASSERT: occ 8 BOTH  <- WHY THE ROUND SAW NO DELTA
+
+**The round's differential only ever asserted SRST ONCE.**  The forms differ exactly when a
+driver HOLDS it across two control writes with something accruing between them.
+
+THE DECISION STANDS AND ITS WARRANT IS NOW STRONGER: the measurable difference FAVOURS
+level, rather than there being none.  Two supporting claims also failed:
+
+  * "the abort is idempotent" is true of the helper and does NOT licence the inference.
+    Idempotence means REPEATING is harmless; it says nothing about SKIPPING the repeat,
+    which is what an edge does, and state accrues between the writes.
+  * "no protocol-following driver issues commands while holding SRST" -- the scenario
+    ISSUES NO COMMAND.  Plain data-register stores suffice, and a hardening fork does not
+    get to assume a protocol-following guest.
+
+And the option set was incomplete: `Mo_edgefree` is an edge form with NO NEW FIELD
+(`if (d->cur_command != COMMAND_RESET) ...`) which escapes all 94 rows and reproduces the
+same defect.  The prev_ctl/m7 argument never reached it.
+
+---- TWO ROW REPAIRS, BOTH MEASURED BY THE PANEL BEFORE THEY WERE BUILT ----
+
+`an nIEN write is not a reset` was an ABSOLUTE oracle (== COMMAND_RESET) where its sibling
+row is a DELTA.  A mutant clobbering cur_command to 0 on an nIEN write -- THE ROUND'S OWN
+DEFECT #2, reached through a different bit -- walked straight through and the row reported
+ok.  Re-cut as a delta; `Mo_nienzero` and `Mo_nien4bit` now die.
+
+`an unreset CD-ROM does not sign` is new.  The pre-existing "non-CD-ROM" control tests the
+OTHER conjunct of the read-site guard, so dropping the `cur_command == COMMAND_RESET`
+conjunct entirely escaped all three signature checks.  `Mo_sigalways` now dies.
+
+`the libata SRST form signs too` is grok's, and it REPAIRS A FALSE CLAIM BY MAKING IT TRUE:
+the row's comment promised 0x0c coverage that no row provided.
+
+---- THIRTEEN ESCAPES REMAIN AND ARE FILED, NOT FIXED ----
+
+The opus seat built EIGHTEEN mutants that pass the 94-row form, 16 measured non-equivalent.
+Three are closed above.  The other thirteen -- free mask bits (0, 4, 5, 6, 7), state
+qualifiers (`&& !d->lba` ignores SRST in LBA mode, which is every modern driver), abort
+gating, and the edge forms -- are COVERAGE DEBT under the stopping rule, filed as
+`wdcaltctrlcov` with the escape list.
+
+**ROOT CAUSE, and it is about how a row was CUT rather than what it asserts:** the
+sole-carrier abort row sets `write_in_progress`, `atapi_cmd_in_progress`, the phase AND the
+ring simultaneously, so it cannot distinguish WHICH one gates the abort -- three escapes
+live in that gap.  And `altctl_fresh()` pins `io_enabled=1, drive=0, lba=0, head=0,
+seccnt=0`, so **six of the eighteen escapes live in those stub defaults** -- a fresh
+instance of the class this tree wrote down four hours earlier: A STUB'S DEFAULT VALUE IS AN
+UNTESTED BRANCH SELECTOR.
+
+---- THE WITNESS: THIS ROUND IS RUNG 3, NOT RUNG 1 ----
+
+Per the owner ruling of 2026-08-27 a seat was asked to attempt a rung-3 probe, and ONE
+INVOCATION built it.  Unmodified `evbmips -e malta`, IDE CD-ROM attached, a raw MIPS program
+issuing real stores through real address decode:
+
+    CTL    BUILD  LIVENESS   cyl_hi:cyl_lo after the control write
+    ctl06  pre    0x6655     0x6655    <- SYMPTOM on committed HEAD: the reset is missed
+    ctl06  post   0x6655     0xeb14    <- same script, opposite colour
+    ctl08  pre    0x6655     0xeb14    <- ATTRIBUTION: pre-fix CAN sign, so the null above
+    ctl08  post   0x6655     0x6655       is a missed reset and not a dead path
+    ctl0c  pre/post          0xeb14    <- A3 measured dead, confirmed at rung 3
+    ctl02  pre/post          0x6655    <- nIEN is not a reset, both sides
+
+All three ladder clauses met: symptom on pre-fix HEAD and green post-fix with the same
+script; LIVENESS (the guest writes 0x55/0x66 and reads them back through the same decode --
+green in all eight runs) and DEVICE-SIGNATURE (0xeb14 is a value the guest never wrote; RAM
+returns 0x6655); machine description and dispatch committed and unmodified -- attaching a
+disk image is ordinary use, not a `device_add` introduced to reach the site.
+
+  *** THE LIFECYCLE ASK PAID OFF THE FIRST TIME IT WAS MADE ON THIS ROUND.  The ruling that
+  created it was minted three days ago from the observation that nobody had ever asked. ***

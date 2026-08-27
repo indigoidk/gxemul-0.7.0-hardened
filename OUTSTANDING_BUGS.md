@@ -11377,3 +11377,147 @@ No oracle anywhere inspects the CDB bytes the dispatch assembles, because
 **Opus measured the cheap disposition: looping the suite over both arms costs nothing** (a
 flipped run is 0 failures, byte-identical), which beats adding LE twins row by row. Keep the
 default; add non-palindromic anchored rows for the push order and one per read-side arm.
+
+---
+
+## 2026-08-27 -- `#481` filings, and one of them was ALREADY CLAIMED IN THE PAST TENSE
+
+> *** THE FABLE SEAT CAUGHT THIS BEFORE IT SHIPPED: `wdcponsig` was asserted as "filed with
+> measurements" in TWO commit-bound artifacts while appearing in ZERO queue files. Verified:
+> `OUTSTANDING_BUGS.md` 0, `CHANGELOG.md` 0, `ledger.json` 0. ***
+>
+> The docs step being pending is ordinary. **The defect is that the past tense shipped ahead
+> of the action** -- had the commit landed as written, two durable records would have
+> asserted a filing that did not exist. That is the score-claim rule one level up: *a record
+> may not assert a completed action in the past tense until the artifact exists.*
+
+### `wdcponsig` -- the device presents no ATAPI signature at power-on
+
+**MEASURED** (`_scratchpad/ponrepro.py` -> `_scratchpad/pon/`, against `7d0b63d`):
+
+```
+FAIL a CD-ROM signs itself at power-on      0x0000 want 0xeb14
+ok   control: a non-CD-ROM does not sign    0x0000
+ok   control: the reset signature works     0xeb14
+90 rows, 1 failures
+```
+
+Both controls are load-bearing and both green: the non-CD-ROM row stops the assertion being
+satisfied by a device that signs unconditionally, and the reset-signature row separates *"the
+power-on half is missing"* from *"the signature is broken"* -- two different repairs.
+
+**Mechanism, verified by reading:** `0x14` and `0xeb` appear once each in `dev_wdc.c`, both
+inside `if (d->cur_command == COMMAND_RESET && diskimage_is_a_cdrom(...))`. `DEVINIT(wdc)`
+memsets, so `cur_command` is 0 and never `COMMAND_RESET` at power-on. **Both signature sites
+are dark regardless of which bit the arm tests.**
+
+**WHY IT WAS FILED RATHER THAN FOLDED INTO `#481`, and the second reason is decisive:**
+
+1. A seat's scenario matrix shows power-on dark **both pre- and post-fix**
+   (`artifacts/wdcaltctrl/killtable_20260827/scenario_matrix/sig_cur.out` vs `sig_a1.out`,
+   row 1 in both). **The bit fix does not regress it.**
+2. **The offline differential cannot witness it at all.** Every row builds its device with
+   `memset` and none runs `DEVINIT`, so an init-time repair is invisible to the entire file.
+   Folding it in would require a NEW ORACLE, which the round-scope rule forbids.
+
+> **RIDER FROM THE FABLE SEAT, and it changes the ranking: `#481` NARROWS the accidental
+> supply window.** Before it, almost any Device Control write lit the signature by accident;
+> now only a real reset does. So a guest that reads the signature without ever resetting has
+> fewer accidental paths to it than before. **`wdcponsig` ranks HIGHER after this round than
+> before it**, even though the round did not regress it.
+
+**What it needs:** a construction (rung-2) or rung-3 witness, since the differential cannot
+see `DEVINIT`. Per the lifecycle's standing ask, one seat should be asked to attempt a rung-3
+probe before it is recorded rung-1 -- that ask produced a witness in a single invocation the
+last time it was made.
+
+### `wdcaltctrlcov` -- three edits that pass all 94 rows of `#481`'s detector
+
+**MEASURED by the fable seat**, each against the full detector and then against a defect demo
+with the shipped build as green control. Filed as COVERAGE DEBT: the detector is above the
+vacuity floor -- (a) five pre-fix reds, (b) `Mb_revert` killed, (c) `Mc_null` compile-fails,
+(d) every fix-predicate mutant killed -- and these are new adversarial finds against a clean
+table, which the stopping rule files rather than fixes.
+
+| mutant | edit | escape | defect re-opened |
+|---|---|---|---|
+| **`Mq_flag`** | qualify the helper call `if (d->atapi_cmd_in_progress)` | 94/0 | **SRST no longer aborts a plain ATA write -- the MAJORITY path.** wip `0x30`, occ 16 survive the reset |
+| `Mq_wip` | qualify by `write_in_progress` instead | 94/0 | SRST no longer aborts a packet-only CDB: flag 1, occ 6 survive |
+| `Mw_hob` | widen the mask to `(WDCTL_RST \| 0x80)` | 94/0 | routine-write-destroys-command, re-opened for HOB ctl values: `0x88` with `0xec` executing destroys `cur_command` |
+
+**Negative control that proves the table is not limp:** `Mn_hoist` -- the helper hoisted out
+of the guard -- is KILLED by four rows, exactly the `#479`/`#480` accept rows.
+
+> **ROOT CAUSE, and it is about how a row was CUT rather than what it asserts: the
+> sole-carrier abort row bundles `write_in_progress` + `atapi_cmd_in_progress` + phase + ring
+> into ONE assertion.** Any SINGLE-conjunct qualification of the call therefore still passes
+> it. Separately, the detector's whole ctl vocabulary is `{0x02, 0x06, 0x08, 0x0a, 0x0c}`, so
+> bits 0, 4, 5, 6 and 7 are unpinned on the accept side -- which is why `Md_widemask` catches
+> only the IDS widening and not the HOB one.
+>
+> **This is the pre-table check's guard-field/body-field clause arriving from the mutant side
+> instead of the field side.** The check asks which fields the guard reads versus which the
+> body reads, and owes a state where they DISAGREE. The abort row asserts them only in
+> agreement.
+
+**Closes with three rows, already shaped by the seat's demos:** an ATA-only-in-flight abort
+row, a packet-only-in-flight abort row, and an accept row `a 0x88 HOB write is not a reset`.
+**Rank `Mq_flag` first** -- its re-opened defect fires on the commonest reset scenario there
+is.
+
+*Recorded honestly: the seat notes a strict reading of the pre-table guard-field check would
+call the disagreement-state row OWED AT CONSTRUCTION rather than filed. Its own reading is
+that the check protects the ask-again cap and is not a floor clause. That is an adjudicator's
+call and is left open here rather than settled by the author of the row in question.*
+
+### `wdcresetirq` -- `error` and the interrupt line are not cleared by a reset
+
+Filed with its warrant and its trap, both from seats:
+
+* **Transferred warrant:** `dev_asc_reset()`'s `#266` clause -- a chip reset releases the
+  interrupt output. A channel reset legitimately clears more than a new command does, and
+  `error` is the other half (a new command must preserve the previous command's error until
+  the guest reads it; an SRST discards it).
+* **Measured trap, and it is why this is not a one-liner:** `interrupt.h` calls through the
+  deassert pointer **unconditionally**, so every detector row that writes ctl would have to
+  wire `irq.interrupt_deassert` or the harness segfaults -- **in a way that reads as a
+  detector defect rather than a fixture defect.** A seat hit exactly this.
+
+Nothing in `#481` measures either, so both stay filed rather than riding along.
+
+### `wdcaltdecode` -- THREE DECODE PATHS INTO THE CONTROL REGISTER THAT NO ROW COVERS
+
+**All three are PRE-EXISTING and none is introduced by `#481`. But `#481` ENLARGES ALL
+THREE**, and that is why they are filed together rather than separately.
+
+The alt-ctrl handler reads `idata = data[0]` and **never consults `len` or
+`relative_addr`**, while the main handler uses `memory_readmax64(cpu, data, len)`. Every one
+of the detector's altstatus calls is `len=1, offset=0`, so none of this is exercised.
+
+| # | finding | pre-fix | post-fix |
+|---|---|---|---|
+| 1 | **`wdc_altstatus` is registered with LENGTH 2**, so a guest store to the byte ABOVE it decodes as a Device Control write | inert for `0x06` | **latches the reset and performs a FULL CHANNEL ABORT** (`wip 0x30->0, occ 40->0`) |
+| 2 | a 2-byte write with the control byte in `data[1]` | silently dropped | silently dropped |
+| 3 | **`io_enabled` is checked in `DEVICE_ACCESS(wdc)` only, never in the alt-ctrl handler.** With the function disabled the taskfile goes dark and Device Control stays live | inert | **SRST still gives `wip 0x30->0, occ 40->0, atapi 1->0` on a function the guest has DISABLED** |
+
+All three MEASURED at rung 3 by the opus seat on unmodified `evbmips -e malta`.
+
+> **THE PATTERN, and it is the round's real cost: `#481` CONVERTS A BENIGN SIGNATURE-LATCH
+> TOGGLE INTO A DESTRUCTIVE STATE ABORT, on decode paths no row covers.** Before the fix
+> these paths set a latch that changed two register reads. After it they clear the writer,
+> the ATAPI flag, the phase and the ring.
+>
+> **That is the de-escalation clause's concern arriving from the OPPOSITE DIRECTION.** The
+> clause exists because removing a host-fatal makes guard growth silent. Here the round did
+> not remove a diagnostic -- it gave an existing predicate TEETH, and every path that
+> reaches that predicate inherited them. *A fix that makes a guard more powerful owes the
+> same enumeration as one that makes it quieter: which paths reach it, and are they all
+> intended?*
+
+**Not a floor breach** -- the seat that found them says so explicitly, and the round's
+detector is above the floor on all five clauses. Filing material, ranked by finding 1 (a
+one-byte address error by a guest now costs it the whole channel state).
+
+*The `0x3f7` Drive Address Register identification is READ from general ATA knowledge; there
+is no ATA document in this tree, and the seat flagged that itself. What is MEASURED is that
+the store lands in the Device Control handler and what it now does there.*
