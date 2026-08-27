@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (research:fable5,opus5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 25 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 26 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -951,3 +951,46 @@ record, and the stage genuinely ran seven seats.
 
 Measured migration cost of F, from a seat: it relocates where a CDB lives, so every
 existing probe that fakes one stops working.
+
+---
+
+## 2026-08-27 -- two rows closed as RECORDS CORRECTIONS, and both raise the SAME rule question
+
+### `wdcdataoutdrain`
+
+### `wdccdbmidxfer`
+
+*(Both ids head their own line above, because `check_fable_queue.py` counts an id as queued
+only when it HEADS an entry or sits in the generated wall block -- never from prose. That
+checker's own comment records being bitten by a parenthetical cross-reference satisfying
+"named in the queue", on the round with the worst regression risk in its batch. My first
+draft of this entry made exactly that mistake.)*
+
+`wdcdataoutdrain` and `wdccdbmidxfer` were found closed-in-fact and open-in-record: each
+fix shipped rounds ago under a full nine-seat pass-2 panel, each reproduction row is
+committed and green, and only the ledger state was stale. Verified before closing --
+`git log -S` on each fix text, each row DEFINED and REGISTERED in the detector, each
+reporting `ok` on the current 87-row baseline.
+
+**The gates refused both closures, and they were right to.** `check_fable_queue` wanted a
+regress entry; `check_stage_panels` refused a close while a research stage sat at 7 of 9.
+
+> **THE QUESTION, and it is one question wearing two row numbers: WHICH PANEL DISCHARGES A
+> ROW -- the row's own stage, or the stage of the round that actually fixed it?**
+
+Today the gates demand the first. If that is right, then **a row can never close on work
+done under another row's number** -- which is how most cross-filed fixes land here, and
+these two are only the instances that happened to be noticed. The two missing seats should
+then be fired, and the same audit run across the other cross-filed rows.
+
+If it is wrong, the checks need a **fixed-elsewhere** disposition that names the discharging
+commit and panel instead of demanding a fresh stage.
+
+**Please do not answer "fire the seats" without saying which of those the rule is.** A
+stage fired to satisfy a check, that measures nothing the fixing round did not already
+measure, is a stage that cannot fail -- and this project treats a check that cannot fail as
+worse than no check, because it reassures.
+
+*Provenance: found by chasing a dangling citation (`_scratchpad/held_repro_rows.c`, a file
+that does not exist) that a read-only research subagent noticed while censusing something
+else entirely. Nothing systematically re-checks a citation after the thing it cites moves.*

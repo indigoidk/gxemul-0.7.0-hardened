@@ -10587,9 +10587,24 @@ down with it and report nothing at all.*
 
 ### Held out of the committed detector, deliberately
 
-Three reproduction rows — `row_cdb_midxfer`, `row_dataout_drain`, `row_cdb_already12` — are in
-`_scratchpad/held_repro_rows.c`, not in the tree. They reproduce `wdccdbmidxfer` and
-`wdcdataoutdrain`, which have **no fix yet**, so they are RED and a red detector blocks the gate.
+> *** THIS PARAGRAPH WAS TRUE WHEN WRITTEN AND EVERY CLAUSE OF IT IS NOW FALSE.
+> Corrected 2026-08-27; the citation had been dangling for two rounds. ***
+>
+> It read: *"Three reproduction rows -- `row_cdb_midxfer`, `row_dataout_drain`,
+> `row_cdb_already12` -- are in `_scratchpad/held_repro_rows.c`, not in the tree. They
+> reproduce `wdccdbmidxfer` and `wdcdataoutdrain`, which have **no fix yet**, so they are RED
+> and a red detector blocks the gate."*
+>
+> **All three rows are DEFINED, REGISTERED and GREEN in the committed detector**, the file
+> `_scratchpad/held_repro_rows.c` **does not exist**, and both defects are FIXED:
+> `wdccdbmidxfer` by the phase conjunct in `0922465` (#477), `wdcdataoutdrain` by
+> `inbuf_len > 0 && !badlen_this` in `832bed7` (#478) -- the exact condition its own entry
+> names. Verified by `git log -S` on each fix text before the rows were closed.
+>
+> *Found by a read-only research subagent that noticed the dangling path while censusing
+> something else. Nothing systematically re-checks a citation after the thing it cites
+> moves -- which is the same class as the line numbers this file keeps correcting, one
+> level up: **a path is a citation too.***
 A detector ships WITH its fix. The stub instrumentation they need (`stub_frees`,
 `stub_disk_writes`/`_bytes`/`_offset` and the counting bodies) **stays in the committed file** —
 inert without the rows, and the fiddly part to re-add.
@@ -10630,8 +10645,11 @@ damaged the first to patch the second, breaking the ATAPI completion handshake.
   from DATA-IN payload from disk-write payload. **A seat measured its migration cost honestly:**
   it relocates where a CDB lives, so every existing probe that fakes one stops working.
 
-- **`wdcdataoutdrain`** — still open, still unfixed, and its row stays held in
-  `_scratchpad/held_repro_rows.c`. Measured: `1 write(s), 512 bytes to 0x8000` **to the disk
+- **`wdcdataoutdrain`** — *** CLOSED. The words "still open, still unfixed, and its row
+  stays held in `_scratchpad/held_repro_rows.c`" stood here for two rounds after the fix
+  shipped in `832bed7` (#478) and after `row_dataout_drain` was ported into the committed
+  detector, where it is green today. *** The measurement below is the PRE-FIX one and is
+  kept as the historical record of what was wrong. Measured: `1 write(s), 512 bytes to 0x8000` **to the disk
   image**. Option B does not touch it — different block, different flag (`write_in_progress`).
   A seat found a **worse sibling** with no ATAPI involved at all: a single 3-byte data-port write
   pushes nothing, `inbuf_len` is 0, `0 % 512 == 0`, and 512 bytes of an **empty ring** go to the
