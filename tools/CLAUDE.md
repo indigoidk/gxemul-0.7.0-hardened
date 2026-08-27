@@ -270,6 +270,40 @@ seat — `curl -s localhost:11434/api/tags` is the whole test.
 which every size check scores as the best answer in the panel — and it was never written up
 here.** The hole is in this file, not in the count. Filed, not lost.)*
 
+### *** THE FIFTH CLASS, WRITTEN UP AT LAST — AND THE 2026-08-26 INSTANCES SHOW IT IS DRIVEN BY
+### THE BRIEF, NOT BY THE SEAT. ***
+
+`deepseek-v4-pro:cloud` returns `"response": ""` inside a JSON object whose `thinking` field is
+hundreds of KB, with `done_reason: "length"` and `eval_count: 65536`. **It spends its entire
+output budget on hidden reasoning and never emits an answer.**
+
+It is none of the other four classes: no quota text (not a WALL), nothing echoed (not the
+echo-only shape), the daemon served it for minutes (not a REFUSED CONNECTION), and the other
+cloud seats answer normally in the same firing (not the shared-transport outage).
+
+*** AND IT DEFEATS EVERY SIZE-BASED CHECK: the burn is one of the LARGEST files in the panel. ***
+
+**THE CORRELATION, measured across four firings in one day:**
+
+    090604    4,032 b   normal      simple brief
+    190055    2,845 b   normal      simple brief
+    222557  142,525 b   BURNED      three-claim band-arithmetic audit
+    230207  222,981 b   BURNED      five questions across two rounds
+
+**Same seat, same transport, same day — the burns track BRIEF COMPLEXITY.** That is the
+carrier's oldest packet-fed lesson recurring: their behaviour is governed by the brief, and this
+project once spent DAYS misdiagnosing a brief defect as a seat outage.
+
+**WHAT IS LOST IS NOT NOISE.** The second burn ends mid-sentence — *"So verdict likely NOT
+RATIFY due to #467. But maybe the question is from a panel"* — **it had reached a verdict and was
+second-guessing itself when the budget ran out.** On that same panel the other dissenting seat
+found a live defect in code shipped an hour earlier, so a lost dissent is real cost.
+
+> **DETECTION IS SOLVED — `seat_verdicts.py` keys on `done_reason`, not size, and named both
+> burns correctly. THE MITIGATION IS THE BRIEF: keep a packet-fed brief to ONE question with its
+> facts inlined.** Splitting a complex audit across two firings costs one extra invocation and
+> preserves the answer.
+
 The kimi CLI returned `provider.auth_error: 403 You've reached your usage limit for this billing
 cycle`. That is a genuine wall, correctly detected, and it was recorded as a down seat.
 
