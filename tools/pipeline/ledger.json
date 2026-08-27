@@ -980,7 +980,7 @@
     {
       "id": "a1a2",
       "title": "a1a2  Gate 5 constants: the gate checks the PRINTED values, not the USED values",
-      "state": "held",
+      "state": "dropped",
       "commits": "a20ebc5 48b36b0 521085b",
       "closure": {
         "by": "fable5",
@@ -1261,7 +1261,9 @@
           "grade": "CONFIRMED"
         }
       ],
-      "hold": "review 9/9; all findings fixed; regression Sunday"
+      "hold": "review 9/9; all findings fixed; regression Sunday",
+      "witness": "none -- claim REFUTED by reading; nothing to witness.",
+      "state_note": "*** REFUTED 2026-08-27 and DROPPED. The claim is FALSE, and the code already contains the reasoning that refutes it. ***\n\nThe row says gate 5 *'checks the PRINTED values, not the USED values'*. `regress/drive_guest.py:429-431` defines `used = {}` and `def boot_progress(pat, backstop, budget, stall)`, and **records the callee's own formal parameters** -- so the printed values ARE the received ones.\n\n**The weaker design this row implicitly assumes was considered and rejected, in writing, at `:414-417`:**\n  > *\"Sharing a LOCAL between the two sites is not enough, and four review seats proposed it: the mutation rewrites the ARGUMENT EXPRESSION, so the local -- and the print taken from it -- stays honest. A local proves what the caller INTENDED TO PASS. Only the callee's own parameters prove what it RECEIVED.\"*\n\nAnd the residual is already stated rather than hidden (`:419-428`): a mutation strictly INSIDE `boot_progress` escapes the print, with the covered and uncovered cases named and the STALL/BACKSTOP gap explicitly FILED. **So the row's concern is answered AND its true residual is already booked elsewhere.**\n\n*Found by a farmed seat returning FALSE -- the outcome the brief explicitly asked for as the most valuable available -- and verified here by opening the file before dropping.*\n\n"
     },
     {
       "id": "n2",
@@ -2931,7 +2933,9 @@
           "grade": "CONFIRMED"
         }
       ],
-      "hold": "R7 - the o: half; the leak half is filed as b118L"
+      "hold": "R7 - the o: half; the leak half is filed as b118L",
+      "witness": "none -- host-side only. Reachable from the `-d` argument and the config file, never by a guest, so no rung-3/4 witness can exist. Pinning the exact truncated value needs a build.",
+      "state_note": "*** EVIDENCE 2026-08-27: TRUE, host-side only -- AND IT IS HALF OF A FAMILY, which neither seat could see from its own row. ***\n\n`src/disk/diskimage.c:1722` reads `override_base_offset = atoi(fname);`. **`atoi` returns `int`**, while the field is 64-bit -- `:1729-1730` prints it with `PRIi64`. A 64-bit-capable option is parsed by a 32-bit function.\n\nThe `< 0` check at `:1728` catches a result that lands negative, but **not a truncation that wraps to a plausible positive value**, which is the silent case.\n\n*** THE FAMILY: THIS IS A MISSED SITE FROM `#414`. *** `:1681` says *\"#414: strtoll, not atoi, and BOTH fields\"* -- that round converted the GEOMETRY fields at `:1693`/`:1698` and left the base offset on `atoi`. See [[b122]], the same round's OTHER residual (converted, but the endptr discarded). **Two rows, one incomplete conversion.**\n\n**NOT guest-reachable**: `diskimage_add()` has exactly two callers, `main.c:707` (`-d`) and `emul_parse.c:558` (config), both at startup. Severity is host-input robustness.\n\n"
     },
     {
       "id": "b122",
@@ -3044,7 +3048,9 @@
           "grade": "CONFIRMED"
         }
       ],
-      "hold": "R7 - the trailing-garbage half only"
+      "hold": "R7 - the trailing-garbage half only",
+      "witness": "none -- host-side only, same caller census as [[b118]]. A build is needed to run the parse, though the reading is unambiguous.",
+      "state_note": "*** EVIDENCE 2026-08-27: TRUE, host-side only. The other half of `#414`'s residual -- see [[b118]]. ***\n\n`src/disk/diskimage.c:1693` and `:1698` call `strtoll(fname, NULL, 10)` -- **NULL endptr, so the stop position is discarded** -- and the loops at `:1694` and `:1699` then skip *any* bytes until `;` or `:`. Trailing text after the digits is consumed silently: `g16abc;63:` and `g16;63abc:` both parse as 16/63.\n\n**This is an INCOMPLETE conversion, not an unconverted site.** `#414` replaced `atoi` with `strtoll` at these two fields precisely to fix a parsing defect (`:1681-1687`, *'turning g010 into 8 heads'*) -- but passing `NULL` for the endptr threw away the one thing `strtoll` offers over `atoi` for this purpose.\n\nA seat also noted a secondary host-only effect worth keeping: with letters after S, `g16;63b:` never sets the boot prefix, because the skip loop swallows them.\n\n**NOT guest-reachable** -- same two startup callers as [[b118]].\n\n"
     },
     {
       "id": "b120",
@@ -3157,7 +3163,9 @@
           "grade": "CONFIRMED"
         }
       ],
-      "hold": "R8 - the unknown-command half only"
+      "hold": "R8 - the unknown-command half only",
+      "witness": "none yet -- GUEST-REACHABLE and witnessable at rung 3/4, but building the probe needs a build, which the machine embargo forbids. First in line with the other build-blocked rows.",
+      "state_note": "*** EVIDENCE 2026-08-27: TRUE, GUEST-REACHABLE, and the highest-severity bare-title row worked so far. Established by reading; the fix idiom ALREADY EXISTS in this file. ***\n\n`src/disk/diskimage_scsicmd.c:1380-1388`, the dispatcher's `default:` arm:\n\n```c\ndefault:\n        debug(\"[ UNIMPLEMENTED SCSI command 0x%02x, disk id=%i\", xferp->cmd[0], id);\n        // exit(1);\n}\ndebug(\" ]\");\nreturn 1;\n```\n\n**Three things go wrong together:**\n1. it logs through `debug()`, which is verbosity-gated and normally invisible;\n2. **it never calls `diskimage__return_default_status_and_message()`** -- every implemented arm does (`:1212`, `:1257`, `:1298`, `:1340`, `:1347`, `:1376`);\n3. it falls through to **`return 1`, the same value a SUCCESSFUL command returns.**\n\n**And the status the guest reads is GOOD, which was checked rather than assumed:** `scsi_transfer_alloc()` ends with `memset(p, 0, sizeof(struct scsi_transfer))` (`diskimage_scsicmd.c:89`), and `dev_asc.c:326-330` frees and reallocates per command. Status 0x00 IS GOOD. **So an unsupported opcode is reported to the guest as a completed, successful command.**\n\n*** THE COMMENTED-OUT `exit(1)` IS THE TELL. *** This site was de-fatalised by commenting out the kill, which removed the death without adding an error path -- the incomplete form of the de-fatalisation this fork otherwise does carefully.\n\n*** THE FIX HAS A TRANSFERRED WARRANT ALREADY IN THIS FILE, found by grepping the tree for the existing idiom rather than reasoning from scratch. *** `diskimage__return_check_condition()` is defined at `:208` and already used for exactly this class at `:823-824` -- `0x05, 0x21`, ILLEGAL REQUEST -- and again at `:909`. **The correct refusal for an unknown opcode is CHECK CONDITION with ILLEGAL REQUEST / INVALID COMMAND OPERATION CODE, and the helper to do it sits three hundred lines above the defect.**\n\n**NOT FIXED: needs a build.** The detector must show the pre-fix build reporting GOOD for an unsupported opcode and CHECK CONDITION after -- and floor clause (b) needs the `return 1` reinstated verbatim. Both are measurements. Queued behind the embargo.\n\n"
     },
     {
       "id": "n5",
@@ -3591,7 +3599,9 @@
           "grade": "MANUAL"
         }
       ],
-      "hold": "R11 - last: latent for the landisk rig"
+      "hold": "R11 - last: latent for the landisk rig",
+      "witness": "none -- and none is needed: the state this row worries about was already MEASURED SAFE by an earlier round, with the analysis committed in-tree at `dev_sh4.c:2062-2064`.",
+      "state_note": "*** EVIDENCE 2026-08-27: the MECHANISM is TRUE, the SEVERITY IS NIL, and the tree already says so 600 lines from where the seat was looking. ***\n\n**True as stated:** the `SH4_TSTR` arm (`dev_sh4.c:1929-1948`) starts a timer on a write with no `timer_hz` guard anywhere in it.\n\n**But that state was already measured and recorded as harmless**, in this file, by the round that placed the guard (`:2062-2064`):\n  > *\"A seat measured the third option (store idata, skip the prescaler switch, leave timer_hz at 0) as SAFE -- no division by zero, no UNF, no pending interrupt.\"*\n\n**And it is safe STRUCTURALLY, not incidentally:** `timer_hz` is the NUMERATOR at `:481`, `step = (uint32_t)(d->timer_hz[i] / SH4_PSEUDO_TIMER_HZ)`, so a zero can only make `step` zero -- it can never be a divisor. `:2071-2073` adds that `timer_hz[]` is already 0.0 from DEVINIT's memset, and those four prescaler cases are its only writes in the file.\n\n**DISPOSITION: assessed, NOT a defect.** A started timer at 0 Hz that does not advance is the CORRECT behaviour, not a symptom -- so a detector keyed on TCNT0 failing to advance would pin the right answer as though it were a bug.\n\n*The farmed seat confirmed the mechanism and could not have known the disposition: the assessment lives ~600 lines away in the same file. This is why a seat answer is verified locally before it is recorded, never transcribed.*\n\n"
     },
     {
       "id": "b118L",
@@ -3686,7 +3696,9 @@
           "note": "*** VERDICT: NO SURVIVING IN-TREE CALLER EXISTS, AND `exitsweep` CREATES NONE. DOCUMENTED-ONLY, WITH AN EXPLICIT REOPEN TRIGGER. *** VERIFIED INDEPENDENTLY BEFORE RECORDING, because this is a CLOSE recommendation: both `diskimage_add` call sites abort -- `emul_parse.c:558` -> `exit(1)` at :561, and `main.c:707` -> `return 1` at :709, which never reaches `emul_simple_init()`. *** ITS SHARPEST FINDING IS THAT `exitsweep` IS MIS-NAMED FOR THIS PURPOSE: *** the census is scoped to `src/devices/` by `DEVDIR` in `census_exits.py:59` -- CONFIRMED by reading the file -- and BOTH disk-add callers live in `src/core/`. So the de-fatalisation programme cannot activate this row, and the two must not be ranked together. It also measured that neither `src/core/main.c` nor `src/core/emul_parse.c` changed between `exitsweep`'s assessment commit and HEAD. The defect itself is real and stays documented: `diskimage.c:1822` links `d` into `machine->first_diskimage` BEFORE six later `return -1` paths, and `diskimage_exist()` treats a matching node as present without checking `d->f`. So a future surviving caller activates it immediately -- which is exactly what the reopen trigger must name. One honest precision it volunteered: the premise 'both callers abort' is operationally right but lexically loose -- one `exit(1)`s, the other returns from `main()`. It also recorded UNKNOWN for out-of-tree callers rather than claiming the enumeration is universal."
         }
       ],
-      "hold_question": "A disk that fails to be added stays on the list. The hold reads 'no measurable effect until a caller survives'. QUESTION: is there ANY caller in the tree today that survives a failed disk add and then acts on the stale entry? Enumerate the callers rather than asserting there are none -- and say specifically whether `exitsweep`'s tree-wide de-fatalisation work CREATES such a caller, because if it does, this row becomes live the moment that work lands and should be ranked with it rather than filed behind it. If no caller exists and none is created, is documented-only the right disposition?"
+      "hold_question": "A disk that fails to be added stays on the list. The hold reads 'no measurable effect until a caller survives'. QUESTION: is there ANY caller in the tree today that survives a failed disk add and then acts on the stale entry? Enumerate the callers rather than asserting there are none -- and say specifically whether `exitsweep`'s tree-wide de-fatalisation work CREATES such a caller, because if it does, this row becomes live the moment that work lands and should be ranked with it rather than filed behind it. If no caller exists and none is created, is documented-only the right disposition?",
+      "witness": "none -- TRUE but NOT OBSERVABLE. Established by reading 2026-08-27: both call sites terminate the process on failure and nothing walks the disk list in between, so no witness at any rung can exist without first adding a caller that survives the error.",
+      "state_note": "*** EVIDENCE 2026-08-27, established by READING under the machine embargo -- no build needed, and none would help. ***\n\n**THE CLAIM IS TRUE, and the asymmetry is unmistakable rather than arguable.** `diskimage_add()` (`src/disk/diskimage.c:1631-2104`) links the new disk into the chain at `:1822-1830`. **Six `return -1` exits sit AFTER that link** -- `:1964`, `:1980`, `:1991`, `:2074`, `:2088`, `:2099` -- and not one of them unlinks `d`. The most reachable is the plain `fopen` failure at `:1984-1991`: a disk whose file cannot be opened is left on `machine->first_diskimage` with `d->f == NULL`.\n\n**What makes it clearly unintended rather than a design choice: the PRE-link failures clean up correctly.** `:1803` does `free(d)` before the link exists. So the function frees on early failure and leaks-onto-the-list on late failure -- the split falling exactly at the link point, which is the signature of checks added after the link rather than of a decision.\n\n*** BUT IT IS NOT OBSERVABLE, AND THE CENSUS IS COMPLETE RATHER THAN SAMPLED. *** `grep -rnw diskimage_add` over `src/` returns **8 references, of which exactly TWO are calls**:\n  * `main.c:707` -- on `< 0` prints `Aborting.` and `return 1` (`:708-709`), with NO disk cleanup between;\n  * `emul_parse.c:558` -- on `< 0` calls **`exit(1)`** (`:561`).\n**Both terminate the process immediately.** There is no debugger or runtime path that adds a disk to a live machine (0 hits in `src/core/debugger*.c`), so the stale entry cannot outlive the call.\n\n**The one second-order route was checked and is also closed:** a shutdown walker would dereference the half-built entry (`d->f == NULL`). `atexit` appears **once** in the whole tree -- `emul.c:913`, `atexit(fix_console)` -- which restores terminal state and never touches the disk chain. *That check is the reason this is recorded as latent rather than as a possible NULL dereference at exit.*\n\n**DISPOSITION: TRUE, LATENT, NOT FIXED.** Unlinking on the late failures is a few lines and would be tidier, but the addition licence wants a measured delta or a transferred warrant and there is neither: the entry is unreachable by construction, so no row could redden on it and no detector could be built that is not vacuous. **It becomes live the moment any caller survives a failed add** -- that is the trigger to re-open this, and it is the thing to check in any round that adds a runtime disk-attach path.\n\n"
     },
     {
       "id": "b120r",
