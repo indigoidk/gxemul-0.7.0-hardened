@@ -218,6 +218,24 @@
 >   *Same shape as #465's own defect, one level up: that round fixed two fields SET together
 >   and RELEASED apart; here an output and its instrument are PRODUCED together and PRESERVED
 >   apart.*
+> - **`probewiringscope`** — `check_probe_wiring.py` **cannot see any detector below
+>   `regress/`'s top level**, while its own docstring (`:2`) claims *"every committed
+>   DETECTOR under regress/"*. `:475` filters `f.endswith(".py") and "/" not in f`; `:481`
+>   uses `os.listdir` rather than `os.walk`.
+>   **This is the structural home #465's headline lesson should have had.** That round
+>   found its detector wired into no gate, discharged it by a HUMAN GREP, and wrote the
+>   lesson as prose — while the mechanical check for exactly that class sat one directory
+>   away, blind by scope. A check that cannot fail for a whole subtree; third instance of
+>   that class in one day, after `panel.sh`'s phantom re-fire and `grok models` as a tier
+>   check.
+>   **Exposure is ZERO today** — 1 of 57 tracked `regress/**.py` sat below top level and it
+>   is now gated by hand — so the defect is LATENT, which is why it is filed rather than
+>   fixed in-round. The fix re-keys `MANIFEST`/`EXEMPT` from basename to relative path and
+>   swaps `listdir` for `walk`; it **owes negative controls in both directions** (a
+>   subdirectory detector with no gate must go RED; a gated one must stay GREEN), and the
+>   file already carries an 18-mutant `--selftest` harness to hang them on. A basename→path
+>   re-key can silently collide when two directories hold the same basename, so that needs
+>   its own row. Found by the opus5 seat on #465's pass 2.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
@@ -9005,14 +9023,46 @@ shipped work to a fresh session.** Same defect class as the `sh4dmacie` row sett
 earlier the same day — two records disagreeing about whether something is done.*
 
 **Shipped in `#465`:** the `free_data()` helper (releases `data` and `data_len`
-together, so the disagreeing state is unrepresentable), the re-pinned detector at
-13/13, and a `gate_sh_rounding.sh` section that actually runs it — it was wired into
-**no gate at all** before this round.
+together, so every release path restores the invariant before it returns), the
+re-pinned detector at 13/13, and a `gate_sh_rounding.sh` section that actually runs
+it — it was wired into **no gate at all** before this round.
 
-**STILL OWED, recorded rather than quietly omitted:** the `:406`/`:415` tail-reach
-rows as L1. `m_ret415` — one word, `break;` → `return;` — sweeps the intent-only
-detector clean at 16/16, so the tail-bypass class is real coverage debt with a
-MEASURED escape.
+*** THIS ENTRY CARRIED TWO CLAIMS THE PASS-2 PANEL REFUTED, AND THEY SURVIVED THE
+COMMIT THAT CORRECTED THEM EVERYWHERE ELSE. *** It said the helper makes the state
+"unrepresentable" — an overclaim the source comment itself now disclaims — and it
+described the owed rows as **L1**, which is a category error since L1 means finish
+in-round. `5b5089d` fixed both in the README, CHANGELOG, probe header and source
+comment **and missed this file** — the one the carrier names as FIRST STOP each
+session. That is the project's own rule 2 (*grep for a claim's siblings before
+calling it fixed*) failing inside the commit that applies rule 2. Found by the opus5
+seat, which read the committed tree rather than the diff.
+
+**AND THE `m_ret415` FRAMING WAS WRONG IN A WAY ONLY A BUILD COULD SHOW.** It is not
+a one-word mutant against the shipped fix — against the shipped tree it takes THREE
+edits (drop the helper, restore the tail assignment, then `return`). The opus5 seat
+built the real one-word mutant directly against shipped code and measured:
+
+    Md_nolen   helper kept, only `d->data_len = 0;` deleted   10/13 + 7/9  KILLED
+    Mret429    shipped + `break;`->`return;`                  13/13 + 8/9  HARMLESS
+    Mtailret   the REJECTED tail design + the same `return`   13/13 + 6/9  SIGSEGV
+
+**Same one word, opposite outcome** — the addition licence's measured delta,
+reproduced against the shipped tree. `Md_nolen` is the real clause-(d) mutant AND
+clause (b) at once (verbatim reinstatement at every fixed site, since both go through
+the helper), and it is strongly killed. **`free_data()` runs at the ENTRY to
+`handle_command`, before any switch arm, so bypassing the tail cannot reach it.**
+
+**STILL OWED — above-floor coverage debt, now PRICED:** one anchor row per arm
+(`cnt post`: read CNTHI back, require 0). It is the only row of nine that reds under
+`Mret429`; every other row on that route is SURVIVE-ONLY and blind to the bypass by
+construction — vacuity-floor clause (f) exactly. ~30 s per arm. **The seat measured
+ONE of the two arms and said so: its `Mret420` came back clean because its probe has
+no row reaching that arm — target-not-reached, NOT equivalence.** The owed rows must
+cover both.
+
+Instruments preserved at `regress/artifacts/gdrompionull/opus_p2_20260826/` — 26
+artifacts including `mism_probe.py`, `mutate.py` and the frozen driver, so this table
+is reproducible rather than merely checkable.
 
 **A host death reachable with LEGAL VALUES ONLY, and with no diagnostic at all.**
 
