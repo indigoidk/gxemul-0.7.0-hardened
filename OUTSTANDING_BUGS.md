@@ -51,7 +51,36 @@
 >   *The tick is the part that misleads.  A future reader scanning for open work skips a
 >   ticked row without reading the body that contradicts it -- which is why the correction
 >   goes HERE, in the state line, and not as a note further down.*
->   **`wdcringambig`** — *** ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
+>   **`wdcringambig`** — *** THE 2026-08-26 ESCALATION BELOW IS STALE AND IS
+>   CORRECTED HERE, 2026-08-27.  ITS *AMBIGUITY* CLAIM IS TRUE; ITS *REACHABILITY* CLAIM IS
+>   NOT. ***
+>
+>   The escalation says ONE LEGAL COMMAND DOES IT, via a READ(10) whose guest-chosen transfer
+>   length walks block 514 onto block 0.  **`#473` closed that route** by moving the 32768
+>   clamp to the correct side of the push loop: a single ATAPI DATA-IN now stages at most
+>   32768 bytes = **64 blocks**, against a **513-block** ring.  It cannot lap.  And `#479`
+>   made every command reset the pointers, so it cannot accumulate across commands either.
+>
+>   **THE ONLY SURVIVING ROUTE IS THE GUEST DATA-PORT WRITE ARM** -- which takes no
+>   `wdc_command()` and therefore no reset -- and it needs on the order of **65,664
+>   uninterrupted 4-byte stores with no intervening command**.  A rung-3 witness on
+>   unmodified `evbmips -e malta` proves that route is guest-REACHABLE
+>   (`regress/artifacts/wdcringambig/rung3_20260827/`).  **It does NOT prove any real OS
+>   driver travels it, and that is NOT SETTLED.**
+>
+>   *** AND THIS IS A CORRECTION TO A CORRECTION, WHICH THIS PROJECT ALREADY WARNS IS THE
+>   DANGEROUS KIND. ***  Commit `ed3f9cc`, earlier the same day, removed a false
+>   ✅ FIXED tick from the line ABOVE this one and cited this entry's body as the
+>   authority -- *"the entry below says so in its own words"*.  That was right about the
+>   STATE (open) and inherited an overstatement about the REACHABILITY in the same breath.
+>   **A correction carries more authority than the error, so it earns a second reading, not
+>   less of one.**  Found by the fable adjudicating seat; both halves re-verified by reading
+>   the clamp and counting blocks before this edit.
+>
+>   *The original escalation text follows, kept because the AMBIGUITY half of it is exactly
+>   right and is what the round is fixing:*
+>
+>   ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
 >   COMMAND DOES IT. *** The wdc inbuf ring uses `head == tail` for BOTH empty and full with
 >   no disambiguator; the overrun check is post-hoc, so **the store that actually corrupts is
 >   the NEXT one and is SILENT**; and the two BULK paths never compare the pointers at all,

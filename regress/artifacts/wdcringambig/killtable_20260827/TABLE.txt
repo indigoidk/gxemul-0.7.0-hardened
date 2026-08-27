@@ -1,0 +1,51 @@
+#484 wdcringambig -- pass-1 kill table.  Built and measured by the opus panel seat;
+EVERY SCORE BELOW WAS RE-DERIVED FROM THE RAW sc_*.out LOGS BY THE MAIN LOOP, not
+transcribed from the seat's report.  They agree exactly.
+
+Detector: a NEW 16-row ring detector (opus_base.c + score.c), separate from the
+committed 103-row diff_wdc_identify.c.  All 103 existing rows stay green under every
+fix variant below -- so the 26-oracle rewrite cost that was feared is ZERO.
+
+  tag      score   what it is
+  ------------------------------------------------------------------------------
+  base      7/16   committed HEAD
+  fixA3    16/16   *** THE RECOMMENDATION *** guard added, both original statements
+                   kept, plus an occupancy bound on the bulk memcpy arm
+  fixA2    16/16   same but written with an `int next` temporary
+  fixB     14/16   occupancy counter (dev_asc.c's idiom, #265), 12 edit sites
+  fixA     13/16   producer only -- INCOMPLETE, the bulk arm escapes
+  Md1      ABORT   *** `free(): invalid next size` -- A REAL HEAP OVERFLOW ***
+  Md1b     10/16   mask dropped from the guard only (no OOB)
+  Md2      10/16   clause (d): guard kept, `return` deleted
+  Md3      13/16   clause (d): `return` moved INSIDE the latch
+  Md4      13/16   drop-oldest instead of refuse
+  Md5      15/16   bulk bound loses its `- 1`
+  Md6      13/16   producer-only, bulk arm left open
+  Md7      10/16   `next == inbuf_head` (never true)
+  Md8      11/16   DEPENDS-ON operand swap: `... && d->write_in_progress`
+
+*** Md1 IS THE FINDING THAT CHANGES THE FIX. ***  The design brief's OWN phrasing of
+option A was `int next = (head+1) % SIZE; ... head = next;`.  That DELETES the masked
+advance and makes the mask inside `next` safety-critical -- and dropping a mask is a
+one-token "simplification" a maintainer makes without thinking.  Built, it aborts with
+a genuine heap overflow past the allocation.
+
+fixA3 keeps BOTH original statements untouched and adds only the guard, which makes
+that mutant inexpressible as a single edit.  A brief that proposes a fix shape can
+introduce a memory-safety class that the defect never had.
+
+*** Md3 AND Md4 ARE KILLED ONLY BY THE MARKER AND FIFO-ORDER ROWS. ***  Every
+occupancy-shaped and DRQ-shaped row is GREEN under both.  An occupancy oracle is
+structurally blind to any edit that keeps occupancy sound while destroying data --
+and drop-oldest is exactly that edit.  This is clause (f) (the anchor rule) reaching
+the same conclusion one level down: the anchored channel is a marker byte at the tail
+cell and the real consumer's FIFO order, not the arithmetic under test.
+
+Md3 deserves its own note: it is the structure `dev_wdc.c`'s own CONSUMER comment
+already forbids -- "THE `return` MUST STAY OUTSIDE IT" -- so a maintainer copying the
+consumer's shape into the producer writes it by accident.
+
+MEASURED HONEST COST OF fixA3 THAT fixB DOES NOT HAVE, to be named in the fix comment:
+WDC_INBUF_SIZE is 512*513, so the saturated occupancy 262655 is NEVER 0 (mod 512)
+while B's 262656 always is.  A saturated ring's pending write therefore stalls forever
+under A, where B commits the correct oldest sector.
