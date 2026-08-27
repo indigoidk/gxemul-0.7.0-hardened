@@ -907,3 +907,26 @@ corrected, and the close then followed for consistency with `panelseatlabel`, wh
 same day on identical evidence. Section I refused the close until this review was queued, which
 is the gate working: a product-code closure owes regress evidence in a way a harness closure
 does not.*
+
+
+## `arcbiosubsan` -- REGRESS stage owed (queued 2026-08-27)
+
+Raised by the flagship-queue gate refusing a close: the row has both a full assess panel and a
+full review panel, and a sound construction-rung witness, but **no regress stage was ever
+fired**. It was closed in error during the closure sweep and immediately re-held.
+
+**THE QUESTION THIS STAGE IS HELD FOR** (stated explicitly, because a held stage carrying only a
+disposition note makes the seat guess, and a guessed question yields an answer to the wrong
+question that still looks discharged):
+
+> The fix removed undefined behaviour at ten uncast `buf[3]<<24` sites in `arcbios.c`. The
+> witness is `construction:gate-9` -- a freshly rebuilt instrumented tree showing two UBSan
+> left-shift lines on each of the five reaching SGI subtypes pre-fix and zero post-fix.
+> **Is a construction-rung witness sufficient here, or does the absence of any runtime probe
+> leave those ten sites uncovered against a future edit?**
+
+> Concretely: *what is the smallest edit that re-introduces the 64-bit assembly defect at one of
+> the ten sites and still shows zero UBSan lines on gate-9?*
+
+Note the rebuild was load-bearing in the original measurement -- a stale July binary reported
+the pre-fix pattern -- so any re-measurement must rebuild rather than reuse.
