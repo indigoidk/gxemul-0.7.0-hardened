@@ -1116,8 +1116,23 @@ fi
 #  number would have been right BY COINCIDENCE, and any edit to that comment block would
 #  have broken a check nobody would suspect.  `fatal("` cannot match a comment, and 10 is
 #  the true census: 4 call sites latched by #337, 6 by this round.
-check "wdcflood: ten fatal() call sites intact (channel not downgraded)" \
-      "$(grep -cE '^[[:space:]]+fatal\("' ../src/devices/dev_wdc.c)" 10
+#  *** THIS WAS AN EQUALITY PINNED AT 10 AND IT WAS RED FROM #476 UNTIL 2026-08-27,
+#      WHICH IS TWO ROUNDS AND NOBODY SAW IT.  The grep returns 12: #476 added the
+#      no-ATAPI DATA read, #478 added the refused-drain announce, and neither round
+#      moved the pin.  It hid because this row lives in the WEEKLY battery -- every
+#      commit since was green on its own targeted gate while this was failing. ***
+#
+#  IT IS A FLOOR NOW, AND THAT IS THE PIN THIS CHECK ALWAYS WANTED.  Read the reason
+#  above: it exists to catch a DOWNGRADE, `fatal(` -> `debug(`, which REDUCES the
+#  count.  An equality catches that -- and also breaks on every legitimate ADDITION,
+#  which is what actually happened.  A floor catches the downgrade it was built for and
+#  is immune to the growth that defeated it twice.
+#
+#  Negative-controlled both ways on the day it changed: deleting one call site reds it,
+#  adding one leaves it green.  The number is a FLOOR, not a census -- do not "correct"
+#  it upward when sites are added; that is the failure mode this replaces.
+check_min "wdcflood: fatal() call sites intact (channel not downgraded)" \
+      "$(grep -cE '^[[:space:]]+fatal\("' ../src/devices/dev_wdc.c)" 12
 check "wdcflood: six warned_ guards present (one set + one read each)" \
       "$(grep -cE 'd->warned_(inbuf_overrun|inbuf_overread|unimpl_cmd|nonbyte_write|nonbyte_read|data_unexpected)' ../src/devices/dev_wdc.c)" 12
 
