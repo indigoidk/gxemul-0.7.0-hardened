@@ -1489,7 +1489,10 @@ else
     #                      otherwise stops aborting a plain ATA write, THE MAJORITY PATH
     #    packet-alone      kills the write_in_progress qualification            SOLE
     #    empty-ring        kills the occupancy qualification                    SOLE
-    #    0x88              kills the mask widened with bit 7                    SOLE
+    #    0x88              kills the mask widened with bit 7   (was SOLE; the #483
+    #                      sweep now kills it too, so that SOLE is stale -- corrected
+    #                      here rather than left, since #483 edited nearby lines and
+    #                      did not re-check it)
     #
     #  The empty-ring row was MISSED BY THE FIRST DRAFT and found by running the table:
     #  both other rows stage bytes, so an occupancy-gated guard walked past them.  That
@@ -1502,6 +1505,43 @@ else
               "$(grep -c 'an SRST clears a writer with no bytes' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the 0x88-control row is present" \
               "$(grep -c 'a 0x88 control write is not a reset' "$WDCLOG")" "1"
+
+    #  #483: the three rows that close what #482 could not see.
+    #    orphan-ring   SOLE carrier for the disjunctive guard BOTH flagship seats built
+    #                  independently -- the repair a maintainer writes after reading
+    #                  #482's rows, which defeats all four of them
+    #    packet-empty  SOLE carrier for the wip-or-occupancy guard.  A PARITY row:
+    #                  #482 built the empty-ring case for the ATA writer and not for
+    #                  the packet, so an occupancy-gated guard walked past everything
+    #    bit-2 ACTS     all 256 control values, asserting BOTH effects -- the latch AND
+    #                   the purge.  SOLE for bit 6, for the too-NARROW direction a point
+    #                   pin cannot see, and for the whole abort-nulling family.
+    #
+    #  *** AN EARLIER VERSION SWEPT ONLY THE LATCH, AND THIS COMMENT CLAIMED IT
+    #      'SUBSUMES the 0x88 point pin'.  THAT WAS MEASURED FALSE. ***  A guard
+    #      qualifying the ABORT alone -- `if (idata & WDCTL_4BIT)` in front of the
+    #      helper -- escaped all 103 rows, and BOTH flagship seats built it
+    #      independently.  It is reachable by REAL DRIVER BEHAVIOUR: 0x04 is the
+    #      canonical soft-reset bit and 0x06 is what this tree's own row documents as
+    #      OpenBSD's, and neither carries bit 3.  A mutant aborting on a high bit
+    #      WITHOUT latching died to the 0x88 row and ESCAPED the sweep -- so the point
+    #      pin was a SOLE CARRIER for something the sweep could not see.
+    #
+    #      THE CLAIM CONFLATED INPUT COVERAGE (the sweep wins, 256 values vs 1) WITH
+    #      ORACLE BREADTH (the point pin won, three observables vs one).  Strengthening
+    #      the sweep to assert both effects MADE THE CLAIM TRUE rather than softening
+    #      it: that mutant now dies to seven rows including this one, diagnosing `h 4`
+    #      -- at value 0x04 it latches without purging, a HALF reset.
+    #
+    #                   The sweep also makes the 0x88 row's appeal to ATA knowledge
+    #                   NON-LOAD-BEARING -- not retired, since that row is kept and its
+    #                   own comment still carries the disclosure.
+    check     "wdc IDENTIFY: the orphan-ring row is present" \
+              "$(grep -c 'an SRST purges an orphan ring' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the packet-empty-ring row is present" \
+              "$(grep -c 'an SRST clears a packet with no bytes' "$WDCLOG")" "1"
+    check     "wdc IDENTIFY: the bit-2 ACTS sweep is present" \
+              "$(grep -c 'reset ACTS IFF bit 2 is set' "$WDCLOG")" "1"
     #  #473: the six DATAIN chunking rows.  ALL EIGHT mutants in that round were killed
     #  (kill473_table.txt): three clause-(b) reinstatements, four clause-(d) null-repair
     #  forms and one clause-(c) null medium.  TWO of the (d) mutants escaped the first

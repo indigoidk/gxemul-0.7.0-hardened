@@ -4522,6 +4522,258 @@ static void row_hob_is_not_a_reset(void)
 }
 
 
+/*  #483: THE ORPHAN RING -- the state no row reached, and the one that kills the
+ *  edit a maintainer is most likely to make.
+ *
+ *  `if (d->write_in_progress || d->atapi_cmd_in_progress)` in front of the helper
+ *  call reads as an obvious tidy-up: only abort if something is actually in
+ *  flight.  BOTH flagship seats built it independently against #482, and it
+ *  defeats all four of that round's rows, because every one of them arms one of
+ *  those two flags.
+ *
+ *  *** THE STATE IS GUEST-REACHABLE, and that is what makes this a row rather
+ *  than a curiosity.  The #464 unexpected-write test gates ONLY the one-shot
+ *  diagnostic; the wdc_addtoinbuf() calls sit OUTSIDE it and push
+ *  unconditionally.  So a guest can stage bytes with NEITHER tenant armed and
+ *  then assert SRST, and a disjunctively-guarded abort would leave them. ***
+ */
+static void row_srst_purges_orphan_ring(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, live, occ, benign, small_live, small;
+
+	/*  LIVENESS FIRST: the same traffic with NO reset must LEAVE the bytes.
+	    Without this the row is satisfied by a ring that was empty all along --
+	    the vacuity shape this file has been bitten by before.  */
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP orphan live\n");
+		return;
+	}
+	for (i = 0; i < 8; i++) {
+		buf[0] = 0x5a; buf[1] = 0x5a;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+	live = d.inbuf_head - d.inbuf_tail;
+	while (live < 0)
+		live += WDC_INBUF_SIZE;
+	altctl_free(&d);
+
+	/*  Now the same stores, with NEITHER tenant armed, followed by SRST.  */
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP orphan\n");
+		return;
+	}
+	for (i = 0; i < 8; i++) {
+		buf[0] = 0x5a; buf[1] = 0x5a;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	/*  THIRD LEG: A CONTROL WRITE WITH BIT 2 CLEAR MUST *NOT* PURGE.
+	    The liveness leg above proves the bytes were staged.  It does NOT prove
+	    the purge is specific to SRST -- it performs no altstatus access at all,
+	    so a mutant purging on ANY control write leaves it untouched and passes
+	    the reset leg as well.  This leg is the difference between "SRST purges"
+	    and "any control write purges", which is what the row claims.
+	    Named by the kimi-k3:cloud seat.  */
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP orphan benign\n");
+		return;
+	}
+	for (i = 0; i < 8; i++) {
+		buf[0] = 0x5a; buf[1] = 0x5a;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_4BIT;			/*  bit 2 CLEAR -- not a reset  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	benign = d.inbuf_head - d.inbuf_tail;
+	while (benign < 0)
+		benign += WDC_INBUF_SIZE;
+	altctl_free(&d);
+
+	/*  FOURTH LEG: A SMALLER RING, so a THRESHOLD guard cannot hide.  The row
+	    staged exactly 16 bytes, so `occ > 8` in front of the abort passed it
+	    while leaving every smaller orphan ring stale across a reset.  Two
+	    bytes is the least a single data-port store can produce, so any
+	    threshold at all is caught.  The escape space is multi-dimensional;
+	    pin a SPACE, not a point -- the same move the bit-2 sweep makes.  */
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP orphan small\n");
+		return;
+	}
+	buf[0] = 0x5a; buf[1] = 0x5a;
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	small_live = d.inbuf_head - d.inbuf_tail;
+	while (small_live < 0)
+		small_live += WDC_INBUF_SIZE;
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+	small = d.inbuf_head - d.inbuf_tail;
+	while (small < 0)
+		small += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (live != 16 || occ != 0 || benign != 16 ||
+	    small_live != 2 || small != 0) {
+		printf("  FAIL %-38s live %i occ %i benign %i sm %i/%i\n",
+		    "an SRST purges an orphan ring",
+		    live, occ, benign, small_live, small);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i/%i/%i/%i/%i\n",
+		    "an SRST purges an orphan ring",
+		    live, occ, benign, small_live, small);
+	}
+	altctl_free(&d);
+}
+
+
+/*  #483: THE PACKET WITH AN EMPTY RING -- the SIBLING of #482's empty-ring row,
+ *  and its absence was a parity miss the fable seat named before I measured it.
+ *
+ *  #482 built "an armed ATA writer with nothing staged" and did NOT build its
+ *  mirror.  So a guard reading `write_in_progress || ring-occupancy` survives
+ *  everything: the ATA rows arm the writer, and every other row stages bytes.
+ *
+ *  *** MEASURED: with only the orphan-ring and sweep rows added, `wipocc` STILL
+ *  ESCAPED all 102.  This row is what kills it, and it exists because the table
+ *  said so -- the same way #482's empty-ring row did.  The parity question ("I
+ *  built this shape for tenant A; did I build it for tenant B?") is cheaper to
+ *  ask than to measure, and I have now failed to ask it twice. ***
+ */
+static void row_srst_aborts_pkt_empty_ring(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+
+	altctl_fresh(&d);
+	if (d.inbuf == NULL) {
+		printf("  SETUP pkt_empty\n");
+		return;
+	}
+
+	/*  A packet is armed and NOTHING is staged -- a guest that issues PACKET
+	    and resets before sending a single CDB byte.  */
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_RST | WDCTL_4BIT;
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	rows ++;
+	if (d.atapi_cmd_in_progress != 0 || d.atapi_phase != 0) {
+		printf("  FAIL %-38s flag %i phase %i\n",
+		    "an SRST clears a packet with no bytes",
+		    d.atapi_cmd_in_progress, d.atapi_phase);
+		failures ++;
+	} else {
+		printf("  ok   %-38s flag %i phase %i\n",
+		    "an SRST clears a packet with no bytes",
+		    d.atapi_cmd_in_progress, d.atapi_phase);
+	}
+	altctl_free(&d);
+}
+
+
+/*  #483: THE WHOLE INPUT SPACE, and it retires an appeal this tree cannot support.
+ *
+ *  #482 pinned ONE high bit (0x88) and its comment had to disclose that reading
+ *  0x80 as an HOB-style control bit comes from general ATA knowledge -- there is
+ *  no ATA document anywhere in this tree.  A seat then measured bit 6 escaping,
+ *  which is exactly what a single-point pin cannot see.
+ *
+ *  This asserts the model's own decode across all 256 values: THE RESET LATCHES
+ *  IF AND ONLY IF BIT 2 IS SET.  No specification is cited or needed.
+ *
+ *  *** AND AN IFF IS STRICTLY STRONGER THAN A SET OF POINT PINS.  It fails on a
+ *  mask that is too WIDE (a value without bit 2 latches) and on one that is too
+ *  NARROW (a value with bit 2 does not), where each point pin sees one direction
+ *  only. ***
+ */
+static void row_reset_bit_iff(void)
+{
+	int v, ran = 0, wide = -1, narrow = -1, half = -1;
+
+	for (v = 0; v < 256; v++) {
+		struct wdc_data d;
+		unsigned char buf[8];
+		int i, occ, want, got;
+
+		altctl_fresh(&d);
+		if (d.inbuf == NULL)
+			continue;
+		ran ++;
+		d.cur_command = WDCC_IDENTIFY;
+
+		/*  STATE TO PURGE.  Without it this row could only ever observe
+		    the LATCH, and a guard qualifying the abort alone escaped all
+		    103 rows -- built independently by both flagship seats.  */
+		d.write_in_progress = WDCC_WRITE;
+		d.write_count = 1;
+		for (i = 0; i < 8; i++)
+			wdc_addtoinbuf(&d, 0x5a);
+
+		memset(buf, 0, sizeof(buf));
+		buf[0] = v;
+		dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1,
+		    MEM_WRITE, &d);
+
+		occ = d.inbuf_head - d.inbuf_tail;
+		while (occ < 0)
+			occ += WDC_INBUF_SIZE;
+
+		/*  BOTH EFFECTS, IFF BIT 2.  got == 1 is a HALF RESET and is
+		    wrong whichever way bit 2 went: a latch without a purge, or
+		    a purge without a latch.  */
+		want = (v & WDCTL_RST) ? 2 : 0;
+		got  = ((d.cur_command == COMMAND_RESET) ? 1 : 0)
+		     + ((d.write_in_progress == 0 && occ == 0) ? 1 : 0);
+
+		if (got == 1 && half < 0)
+			half = v;
+		else if (got == 2 && want == 0 && wide < 0)
+			wide = v;
+		else if (got == 0 && want == 2 && narrow < 0)
+			narrow = v;
+		altctl_free(&d);
+	}
+
+	/*  *** THE DENOMINATOR IS COUNTED, NOT WRITTEN.  An earlier version printed
+	    a LITERAL "256 of 256" after an unconditional rows++, with the NULL case
+	    doing `continue` rather than `return` -- so a sweep in which every
+	    allocation failed would have reported a full pass, and the row-count
+	    tripwire could not have caught it either.  The comment above warns about
+	    exactly that shape and the row reproduced it.  A hardcoded denominator is
+	    a denominator that cannot fail.  Named by the kimi-k3:cloud seat. ***
+
+	    The sentinels print as %i, not %02x: they are -1 when unset, and %02x
+	    rendered that as 0xffffffff in every one-sided failure line.  */
+	rows ++;
+	if (ran != 256 || wide >= 0 || narrow >= 0 || half >= 0) {
+		printf("  FAIL %-38s %i of 256 w %i n %i h %i\n",
+		    "reset ACTS IFF bit 2 is set", ran, wide, narrow, half);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i of 256\n",
+		    "reset ACTS IFF bit 2 is set", ran);
+	}
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -4872,6 +5124,9 @@ int main(void)
 	row_srst_aborts_pkt_only();
 	row_srst_aborts_empty_ring();
 	row_hob_is_not_a_reset();
+	row_srst_purges_orphan_ring();
+	row_srst_aborts_pkt_empty_ring();
+	row_reset_bit_iff();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -4895,8 +5150,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 100) {
-		printf("  FAIL %-38s rows = %i, want 100\n",
+	if (rows != 103) {
+		printf("  FAIL %-38s rows = %i, want 103\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

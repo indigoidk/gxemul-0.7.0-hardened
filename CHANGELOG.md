@@ -1,3 +1,76 @@
+## Round 483 (#483) -- the sweep pinned the decode across 256 values and the purge at none
+
+A **harness round**: zero product code changed.
+
+`#482`'s panel ratified its rows and then both flagship seats built the same escape
+independently. `#483` adds three rows for it — an **orphan ring** (bytes staged with neither
+tenant armed), a **packet/empty-ring parity** row, and a **bit-2 sweep** over all 256 control
+values. Kill table **11 of 11, five sole carriers**, baseline 103 rows / 0 failures, gate
+**PASS (321 checks)**.
+
+### And the panel found the same shape one observable over
+
+The sweep varied the *input* across 256 values and read only `cur_command`. So a guard
+qualifying the **abort** alone escaped all 103 rows — and both flagship seats built it
+independently:
+
+```c
+if (idata & WDCTL_RST) {
+        d->cur_command = COMMAND_RESET;
+        if (idata & WDCTL_4BIT)          /* the whole mutant */
+                wdc_new_command_reset(d);
+}
+```
+
+**Root cause: all six purge rows used the reset value `0x0c`**, so any guard keyed on a bit
+`0x0c` carries escaped every one of them. **And it is reachable by real driver behaviour** —
+`0x04` is the canonical soft-reset bit and `0x06` is what this tree's own row documents as
+OpenBSD's; neither carries bit 3. Under the mutant, `0x06` latches the signature and leaves a
+stale writer and a stale ring, which is `#479`'s corruption defect returning.
+
+The remedy is the opus seat's, measured before it was proposed: stage state before each of the
+256 writes and assert **both** effects IFF bit 2. A *half reset* is wrong whichever way bit 2
+went. Pristine stays 103/0, the whole abort-nulling family dies, and **every existing kill is
+preserved at its exact count.**
+
+### L4 — and the fix made the claim true rather than softening the prose
+
+The record said the sweep **subsumes** the `0x88` point pin. Measured false: a mutant aborting
+on a high bit *without* latching died to the point pin and **escaped the sweep**, so the pin
+was a sole carrier for something the sweep could not see.
+
+> **The claim conflated INPUT COVERAGE (the sweep wins, 256 values against 1) with ORACLE
+> BREADTH (the point pin won, three observables against one).**
+
+That is the round's most transferable finding: *a sweep is not automatically stronger than a
+pin — it is stronger along one axis and can be strictly weaker along the other.* After the
+strengthening that mutant dies to seven rows including the sweep, whose diagnostic names the
+exact failure (`h 4`: at `0x04` it latches without purging).
+
+### Three more L1s in this round's own rows
+
+* **The sweep printed a literal `"256 of 256"`** after an unconditional `rows++`, with the
+  NULL path doing `continue` rather than `return` — a sweep that tested nothing would have
+  reported a full pass, and the row-count tripwire could not have caught it. **The row's own
+  comment warns about that shape and the row reproduced it.** Now counted and asserted.
+* **The orphan row's liveness control guarded the wrong threat** — it excluded "never staged"
+  but not "purges on *any* control write", since the live leg performs no altstatus access.
+* **It pinned one occupancy value**, so `occ > 8` passed it while leaving smaller orphan rings
+  stale. The row now reports `16/0/16/2/0` — five failable observations.
+
+### Filed
+
+`wdcaltfixture` — **eleven** single-field qualifications escape every row, because
+`altctl_fresh()` memsets the struct and any predicate true at zero escapes the file. Filed as
+**one** item with a measured one-row remedy, not eleven; `&& !d->lba` is its exemplar, not a
+row. With an honest bound: a guard can be added on any of ~40 fields, so the principled scope
+is *the fields a real driver sets in ordinary operation* — **today every altctl row runs in a
+state no real driver is ever in.**
+
+`wdcaltwidth` — the control register's access width is unpinned; every row uses `len == 1`
+while the region is registered two bytes wide.
+
+
 ## Round 482 (#482) -- the abort row could not say which state gated the abort
 
 A **harness round**: zero product code changed, `git diff --name-only src/` empty.

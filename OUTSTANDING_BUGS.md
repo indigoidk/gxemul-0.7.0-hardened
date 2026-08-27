@@ -11588,3 +11588,50 @@ Fable had left open whether the guard-field/body-field disagreement row was OWED
 CONSTRUCTION or filable. **Its own answer, now that the rows exist: "owed, and now
 delivered."** But the matrix is not saturated -- the ring-alone cell remains, and `disj2`
 exploits exactly it. File ring-alone as the immediate companion.
+
+### `wdcaltfixture` -- the altctl fixture is a SINGLE POINT IN STATE SPACE
+
+**MEASURED by the opus seat: ELEVEN single-field qualifications escape every row in the
+file.** `altctl_fresh()` memsets the struct, so every altctl row runs at one point, and any
+predicate true at zero escapes the lot:
+
+```
+  !d->lba          d->atapi_st == NULL   !d->int_assert    d->drive == 0    d->head == 0
+  d->seccnt == 0   !d->error             d->sectorsize == 0                 d->atapi_len == 0
+  d->write_offset == 0                   d->cyl_lo == 0 && d->cyl_hi == 0
+```
+
+> **FILE AS ONE ITEM, NOT ELEVEN.** `&& !d->lba` -- the fable seat's blast-radius pick -- is
+> the measured EXEMPLAR of this class, not a row of its own. Closing it alone buys one of
+> eleven.
+
+**ONE "busy device" row kills all eleven, and the seat built and measured it**: every
+non-tenant field non-zero, both tenants armed, 16 bytes staged, assert the abort. Pristine
+104 rows / 0 failures; all eleven die at 1 failure each; `disj2` and `wipocc` kills unchanged.
+
+**The one real cost:** it needs `scsi_transfer_alloc()` inside an altctl row, because
+`altctl_free()` frees `atapi_st` and a stack struct will not do. That is the new-oracle
+boundary the round-scope rule names, and it is why `#483` deferred it correctly.
+
+#### AND THE HONEST BOUND, because this class has no natural end
+
+A guard can be added on ANY field in `struct wdc_data`, and a row can only see it by varying
+that field. There are roughly forty. **Varying all of them is the unbounded mutant-hunt the
+stopping rule exists to refuse.**
+
+> **THE PRINCIPLED SCOPE: vary the fields a REAL DRIVER SETS during ordinary operation.**
+> `lba`, `drive`, `head`, `seccnt`, `cyl_lo/hi`, `sector` are all written by ordinary
+> taskfile register writes before any command -- so a fixture in which they are non-zero is
+> not a synthetic state, **it is the normal one.** Today every altctl row runs in a state no
+> real driver is ever in.
+>
+> *That reframing is a better warrant than either seat's ranking, because it is a defect in
+> the harness independent of whether anyone would write any particular guard.*
+
+### `wdcaltwidth` -- the control register's ACCESS WIDTH is unpinned
+
+Secondary, lower confidence, from the opus seat: `idata = data[0]` -> `data[len - 1]` in the
+altstatus handler escapes all 103 rows. Every row uses `len == 1`, and the region is
+registered TWO BYTES WIDE. Whether a guest can issue a 16-bit control write depends on the
+bus, so this is filed rather than fixed -- and it is adjacent to `wdcaltdecode`, which
+already records that the handler consults neither `len` nor `relative_addr`.

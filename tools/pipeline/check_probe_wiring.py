@@ -224,6 +224,16 @@ MANIFEST = {
         (CLASS_RESEARCH, "#481 ALT-CTRL reproduction generator, preserved as evidence"),
     "artifacts/wdcaltctrlcov/killtable_20260827/mk482.py":
         (CLASS_RESEARCH, "#482 tenant-isolation row generator, preserved as evidence"),
+    "artifacts/wdcaltctrlfam/killtable_20260827/mk483.py":
+        (CLASS_RESEARCH, "#483 orphan-ring/parity/sweep row generator, preserved as evidence"),
+    "artifacts/wdcaltctrlfam/killtable_20260827/author_mut483.py":
+        (CLASS_RESEARCH, "#483 mutant applier, author-prefixed after a seat overwrote an unprefixed one"),
+    "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483.py":
+        (CLASS_RESEARCH, "#483 L1: the sweep's literal denominator, counted instead"),
+    "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483b.py":
+        (CLASS_RESEARCH, "#483 L1: the orphan row's benign-control and small-ring legs"),
+    "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483c.py":
+        (CLASS_RESEARCH, "#483 L1: the sweep asserts BOTH effects, not the latch alone"),
     "artifacts/wdcaltctrlcov/killtable_20260827/mut482_RECONSTRUCTED.py":
         (CLASS_RESEARCH, "#482 mutant applier, RECONSTRUCTED after a seat overwrote the original in the shared scratchpad; verified to reproduce the recorded table"),
     "artifacts/wdcaltctrl/killtable_20260827/fixaltctrl.py":

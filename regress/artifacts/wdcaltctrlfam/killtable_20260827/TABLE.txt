@@ -1,0 +1,100 @@
+#483 KILL TABLE -- 103 rows, baseline 0 failures (b483base.out).  A HARNESS ROUND:
+zero product code changed.
+
+  MUTANT      FAILS  carried by
+  disj2         1    orphan-ring                          <- SOLE
+  wipocc        1    packet-empty-ring                    <- SOLE
+  hob6          1    bit-2 ACTS sweep                     <- SOLE
+  hob7          2    0x88 point pin ; sweep
+  narrow        8    (mask too NARROW -- caught by the sweep)
+  abort4bit     1    sweep                                <- SOLE
+  abort_ids     1    sweep                                <- SOLE
+  abort_b0      1    sweep                                <- SOLE
+  abort_b5      1    sweep                                <- SOLE
+  hi_abort      7    (was 1 and SOLE to the 0x88 pin -- see below)
+  revert       12    clause (b) control
+
+11 of 11.  FIVE sole carriers.
+
+
+*** THE ROUND SHIPPED A SWEEP THAT PINNED THE DECODE ACROSS 256 VALUES AND THE PURGE AT
+    NONE -- AND BOTH FLAGSHIP SEATS BUILT THE SAME ONE-LINE ESCAPE INDEPENDENTLY. ***
+
+    if (idata & WDCTL_RST) {
+            d->cur_command = COMMAND_RESET;
+            if (idata & WDCTL_4BIT)          /* the whole mutant */
+                    wdc_new_command_reset(d);
+    }
+
+It escaped all 103 rows.  ROOT CAUSE, from the fable seat: ALL SIX purge/abort rows used the
+reset value 0x0c, so any guard keyed on a bit 0x0c carries escaped every one of them, while
+the row that DID vary the input read only `cur_command`.
+
+*** REACHABLE BY REAL DRIVER BEHAVIOUR, NOT ONLY BY A MAINTAINER'S EDIT. ***  0x04 is the
+canonical soft-reset bit; 0x06 is what this tree's own row documents as OpenBSD's.  Neither
+carries bit 3.  Under the mutant, 0x06 latches the signature and leaves
+`write_in_progress 0x30, occ 16` -- a stale writer and a stale ring across a reset, which is
+#479's corruption defect returning.
+
+THE REMEDY WAS THE OPUS SEAT'S AND IT MEASURED IT BEFORE PROPOSING IT: stage state before
+each of the 256 writes and assert BOTH effects IFF bit 2.  A HALF RESET -- latch without
+purge, or purge without latch -- is wrong whichever way bit 2 went.
+
+  Measured: pristine stays 103/0, the whole abort-nulling family dies, and EVERY EXISTING
+  KILL IS PRESERVED AT ITS EXACT COUNT.  Nothing traded.
+
+
+*** THE L4: "THE SWEEP SUBSUMES THE 0x88 POINT PIN" WAS MEASURED FALSE, AND THE FIX MADE IT
+    TRUE RATHER THAN THE PROSE BEING SOFTENED. ***
+
+`hi_abort` -- abort on a high bit, NO latch -- died to the 0x88 row and ESCAPED the weak
+sweep.  So the point pin was a SOLE CARRIER for something the sweep could not see, and
+"subsumes" was false when written.
+
+  THE CLAIM CONFLATED INPUT COVERAGE (the sweep wins, 256 values against 1) WITH ORACLE
+  BREADTH (the point pin won, three observables against one).
+
+That distinction is the round's most transferable finding.  A sweep is not automatically
+stronger than a pin: it is stronger along ONE axis, and can be strictly weaker along the
+other.
+
+After the strengthening `hi_abort` dies to SEVEN rows including the sweep, whose diagnostic
+names the exact failure: `256 of 256 w -1 n -1 h 4` -- at value 0x04 it latches without
+purging.  `w -1 n -1` says the DECODE is still correct and only the ACTION is half-done.
+
+
+*** THREE MORE L1s IN THIS ROUND'S OWN ROWS, all from the kimi-k3:cloud seat. ***
+
+1. THE SWEEP PRINTED A LITERAL DENOMINATOR.  `if (d.inbuf == NULL) continue;` then an
+   unconditional `rows++` and a hardcoded "256 of 256".  A sweep in which every allocation
+   failed would have reported a full pass -- and unlike both sibling rows it did not
+   `return`, so the row-count tripwire could not have caught it either.
+   *** THE ROW'S OWN COMMENT WARNS ABOUT THAT SHAPE AND THE ROW REPRODUCED IT. ***
+   Now counted and asserted.
+
+2. THE ORPHAN ROW'S LIVENESS CONTROL GUARDED THE WRONG THREAT.  It excluded "the bytes were
+   never staged" but not "the device purges on ANY control write" -- the live leg performs
+   no altstatus access at all.  A third leg was added: the same stores, a control write with
+   BIT 2 CLEAR, asserting the bytes SURVIVE.
+
+3. THE ORPHAN ROW PINNED ONE OCCUPANCY VALUE (16), so `occ > 8` passed it while leaving
+   every smaller orphan ring stale.  A fourth leg stages 2 bytes -- the least a single store
+   can produce.  *The escape space is multi-dimensional, not a single point: pin a SPACE.*
+
+The row now reports `16/0/16/2/0` -- five observations, each failable.
+
+
+*** A PRE-EXISTING GATE COMMENT WENT STALE AND THIS ROUND WALKED PAST IT. ***
+
+#482's block says "0x88 kills the mask widened with bit 7 -- SOLE".  With the sweep present
+`hob7` scores 2, so it is no longer sole.  #483 edited the lines twenty below and did not
+re-check it.  Corrected here.
+
+*Third instance this week of a comment true when written and falsified by a later round.
+The habit that catches it is not vigilance; it is re-reading the neighbours of every line
+you touch.*
+
+
+*** AND ONE OVERSTATEMENT WALKED BACK BY ONE STEP. ***  The round said the sweep "RETIRES an
+appeal this tree cannot support".  The honest form is MAKES IT NON-LOAD-BEARING: the 0x88
+row is kept and its comment still carries the ATA disclosure.
