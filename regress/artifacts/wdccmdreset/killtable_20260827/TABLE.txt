@@ -1,0 +1,81 @@
+#479 KILL TABLE -- 80 rows, baseline 0 failures (base.out)
+
+Every log in this directory is from ONE measurement at 80 rows -- deliberately, after
+#478's table directory was found holding four different runs at three row counts with
+no way to tell which belonged to what.
+
+  MUTANT         VERDICT   rows that carried the kill
+  ------         -------   --------------------------
+  MdNoPhase      KILLED    1 red: a new command does not leave CMDOUT      <- SOLE
+  MdNoWip        KILLED    1 red: a new command clears write_in_prog       <- SOLE
+  MdLatchReset   KILLED    1 red: a latch survives the next command        <- SOLE
+  M_lat          KILLED    1 red: leftover safe on the 2nd bad-len too     <- SOLE
+  M_le_nobad     KILLED    1 red: LE arm: leftover is not drained          <- SOLE
+  M_nodisp       KILLED    1 red: a rejected width issues no command       <- SOLE
+  M_wmfold       KILLED    1 red: WRITEMULTI partial does not drain        <- SOLE*
+  M_wmmod        KILLED    1 red: WRITEMULTI partial does not drain        <- SOLE*
+  MdNoRing       KILLED    4 red
+  MdEndRing      KILLED    5 red (incl. READ leaves a sector queued)
+  Mb_revert      KILLED    6 red
+  MdNotSame      KILLED    8 red
+  Mc_null        KILLED    does not compile  (no .out by construction)
+
+13 of 13.  SEVEN sole-carrier ROWS carrying EIGHT sole kills -- the two starred
+mutants share one row, which is why the two counts differ.  Both units are given
+because #478's table gave one bare number here and its commit message gave another.
+
+
+*** FIVE OF THESE MUTANTS WERE NAMED BY SEATS, NOT BY ME, AND EVERY ONE OF THEM DIES
+    ON A ROW THAT DID NOT EXIST WHEN THEY NAMED IT. ***
+
+A kill table built only from the author's own imagination measures the author's
+imagination.  The five, and what each cost to catch:
+
+M_le_nobad    delete `badlen_this = 1;` from the LITTLE-ENDIAN arm alone.
+              *** IT PRODUCED A BYTE-IDENTICAL DETECTOR RUN -- SAME md5 -- BECAUSE
+              EVERY ROW IN THIS FILE HAD ONLY EVER TESTED THE BIG-ENDIAN ARM. ***
+              `fake_cpu()` memsets `stub_cpu` and nothing set `byte_order`, so the
+              device's `== EMUL_LITTLE_ENDIAN` branch never ran.  Every kill table
+              measured this session was half-blind, and the rung-3 witness machine
+              for this defect family is LITTLE-endian -- the detector was testing
+              the opposite arm from the machine the defect was witnessed on.
+
+M_wmfold      fold the two drain arms, which differ only in a modulus.  READS AS
+              PURE DE-DUPLICATION and writes 131,072 bytes.
+
+M_wmmod       narrow the WRITEMULTI modulus to 512: it drains at the wrong MOMENT
+              with the right byte count.  A shape-only accept row PASSES it -- a
+              seat's first attempt did exactly that -- so the row pins 511 stores
+              producing zero writes, not just the final total.
+
+M_lat         move `badlen_this = 1;` inside `if (!d->warned_badlen)`.  One line,
+              and it looks like tidying the latch.  Because the latch holds for the
+              device's life, every bad-len store AFTER the first drains again.
+
+M_nodisp      drop `!badlen_this` from the CDB dispatch -- i.e. undo #479's own
+              repair of the defect #478 left.  A rejected-width store still issued
+              a SCSI command while announcing "(ignored)".
+
+
+*** BUILDING THIS TABLE FOUND THE DUPLICATION HAZARD BITING THE GENERATOR ITSELF. ***
+
+`M_wmmod` and `M_lat` both matched their anchors TWICE: the two endianness arms are
+byte-identical, and #478 wrote the drain modulus into two places.  A seat had flagged
+that duplication as a future hazard; it surfaced immediately, here.
+
+The generator's uniqueness assert was the wrong test:
+
+    A UNIQUENESS ASSERT REJECTS THE VERY MUTANT THAT PROVES A DUPLICATED SWITCH IS
+    SEPARATELY COVERED.
+
+Edits may now name WHICH occurrence, or "all" where a real tidy-up would touch both
+copies -- `M_lat` uses "all" because no author would move that line in one arm only,
+while `M_le_nobad` uses occurrence 1 precisely because a one-arm edit is the thing
+under test.
+
+
+*** THREE SOLE CARRIERS FOR THE THREE SITES, WHICH IS WHY THIS IS ONE ROUND. ***
+
+MdNoPhase, MdNoWip and MdNoRing each drop exactly one clear from the helper, and each
+is caught by exactly one row.  That is the round-scope rule's requirement demonstrated
+rather than argued: three sites, one fix design, one detector, no new oracle.

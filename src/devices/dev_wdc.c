@@ -505,6 +505,66 @@ DEVICE_ACCESS(wdc_altstatus)
 }
 
 
+
+/*
+ *  wdc_new_command_reset():
+ *
+ *  #479: A NEW COMMAND STARTS WITHOUT THE PREVIOUS COMMAND'S WRITER, BUFFERED
+ *  BYTES, OR PHASE.
+ *
+ *  wdc_command() cleared the ATAPI flag and the error and nothing else, so three
+ *  pieces of the previous command's state survived into the next one.  All three
+ *  were reproduced with liveness controls before this was written:
+ *
+ *    write_in_progress   an ATA write stayed armed across a packet command, so one
+ *                        shared ring served the disk-write path and the CDB path at
+ *                        once.  MEASURED: a guest's own sector write put 512 CD-ROM
+ *                        DATA-IN bytes and ZERO of its own on the image.
+ *    the input ring      residue from an under-drained transfer was never cleared.
+ *                        MEASURED: the drain then fires early and the guest's sector
+ *                        arrives with the previous transfer's bytes at its head.
+ *    atapi_phase         PHASE_CMDOUT survived an ordinary WRITE command.  Latent
+ *                        while the dispatch tests the flag AND the phase -- and #477's
+ *                        comment was pointing a future round straight at it.
+ *
+ *  WHY THE TOP, AND NOT THE END.  IDENTIFY loads its 512-byte response INTO the ring
+ *  as part of the command, and wdc__read() does the same for every ordinary READ.  A
+ *  seat measured the end-of-function form destroying both -- 256 of 256 IDENTIFY
+ *  words wrong, and a freshly-read sector gone -- while every row this round pins
+ *  stayed GREEN.  Clean-up-on-exit reads as the more principled placement and is the
+ *  more dangerous one.
+ *
+ *  WHAT THIS DELIBERATELY DOES NOT TOUCH:
+ *
+ *    cur_command     wdc__write() reads it, and the caller sets it immediately
+ *                    above.  Clearing it here would break the write it is about to
+ *                    set up.
+ *    the warned_*    latches.  Zeroing them alongside everything else reads as
+ *                    COMPLETING this helper and is the mutant to press: it undoes
+ *                    #337 and #464, and it is STRICTLY WORSE than the equivalent
+ *                    mistake in dev_asc.c, because wdc_command() runs far more often
+ *                    than a chip reset.  dev_asc.c says so at its own latch
+ *                    declarations: "Deliberately NOT cleared by dev_asc_reset() or
+ *                    dev_asc_fifo_flush(): a guest could otherwise re-arm the flood."
+ *
+ *  SCOPE.  Called from wdc_command() only.  The ALT-CTRL register is a separately
+ *  registered device that writes state without coming through here, so this does NOT
+ *  establish the invariant on that path -- said out loud rather than implied, and a
+ *  row is red against it.  Extending the helper to that arm AS IT STANDS was MEASURED
+ *  to cancel a legal transfer on an ordinary 0x08 Device Control write, which real
+ *  drivers hold as their steady state.  That extension needs the arm's bit test fixed
+ *  first (WDCTL_RST, not WDCTL_4BIT) and is a separate round.
+ */
+static void wdc_new_command_reset(struct wdc_data *d)
+{
+	d->atapi_cmd_in_progress = 0;
+	d->atapi_phase = 0;
+	d->write_in_progress = 0;
+
+	/*  pointer reset rather than a drain loop, matching dev_asc_fifo_flush()'s
+	    count-zeroing: there is no consumer to notify and nothing to hand back.  */
+	d->inbuf_head = d->inbuf_tail = 0;
+}
 /*
  *  wdc_command():
  */
@@ -513,8 +573,12 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 	size_t i;
 
 	d->cur_command = idata;
-	d->atapi_cmd_in_progress = 0;
 	d->error = 0;
+
+	/*  #479: this replaced a bare `d->atapi_cmd_in_progress = 0;`.  The flag
+	    was one of three pieces of the previous command's state, and clearing
+	    only the one that had been noticed is what left the other two.  */
+	wdc_new_command_reset(d);
 
 	/*
 	 *  Disk images that do not exist return an ABORT error.  This also
@@ -912,6 +976,36 @@ DEVICE_ACCESS(wdc)
 						if (d->atapi_len > 32768)
 							d->atapi_len = 32768;
 
+						/*  WHY THIS DEREFERENCE IS NOT NULL-CHECKED, and the dispatch
+						    refill below IS.  The asymmetry is real and the safety here
+						    rests on an invariant that lives in ANOTHER FILE, which is
+						    the reason it is written down rather than left to be
+						    re-derived:
+
+						      a LIVE scsi_transfer with data_in_len > 0 always has
+						      data_in != NULL.
+
+						    scsi_transfer_alloc() memsets the whole struct, so a fresh
+						    transfer is (NULL, 0).  scsi_transfer_allocbuf() either
+						    installs a buffer or exit()s -- it never returns having set a
+						    length without one.  The three later length mutations in the
+						    tree (MODE_SENSE, READ_TOC, and dev_asc's consumed-prefix
+						    subtraction) only SHRINK or preserve a live allocation.
+
+						    *** IT IS A FUNCTION-BOUNDARY INVARIANT, NOT A CONTINUOUS
+						    ONE, and an earlier draft of this note said the two fields
+						    are set together.  They are not: allocbuf writes the LENGTH
+						    first and the POINTER fourteen lines later, with a malloc
+						    between them.  Nothing observes that window -- no callback
+						    and no return to this device runs inside it -- but the
+						    distinction is the whole reason this is a comment and not a
+						    proof. ***
+
+						    NOT a guard: the ADDITION LICENCE wants a measured delta or a
+						    transferred warrant, and the state is not producible today.
+						    What was missing is a REASON an edit elsewhere can break,
+						    rather than a check that would silently never fire.  Filed
+						    as `wdcdatainnull`.  */
 						for (int j=0; j<d->atapi_len; j++)
 							wdc_addtoinbuf(d, d->atapi_st->
 								data_in[d->atapi_received + j]);
@@ -1080,7 +1174,23 @@ DEVICE_ACCESS(wdc)
 			    Nor clearing the flag at completion: that leaves this window untouched
 			    (the flag is legitimately 1 here) and breaks the ATAPI handshake --
 			    ireason and the byte-count pair are read at PHASE_COMPLETED.  */
-			if (d->atapi_cmd_in_progress &&
+			/*  #479: A REJECTED WIDTH MUST NOT DISPATCH EITHER.
+
+			    `#478` added `badlen_this` and guarded the sector DRAIN with
+			    it, and recorded that this finally made `#337`'s `(ignored)`
+			    message true.  It did not.  Two seats found it independently
+			    on `#478`'s pass 2 -- one by reading, one by measuring a
+			    3-byte store allocate an `atapi_st` -- and the row
+			    `a rejected width issues no command` reds without this.
+
+			    This dispatch runs on EVERY data-port write regardless of
+			    what the write did, so an access of an unimplemented width
+			    -- which pushes nothing and is announced as ignored -- still
+			    issued a 12-byte SCSI command whenever occupancy already
+			    stood at 12.  A rejected access with a side effect is worse
+			    than either accepting or refusing it cleanly, because the
+			    diagnostic says the opposite of what happened.  */
+			if (d->atapi_cmd_in_progress && !badlen_this &&
 			    d->atapi_phase == PHASE_CMDOUT && inbuf_len == 12) {
 				unsigned char *scsi_cmd;
 				int x = 0, res;
@@ -1271,8 +1381,28 @@ DEVICE_ACCESS(wdc)
 				    invisible to the boot-log hygiene grep and an ERROR
 				    would trip #261's break-on-ERROR.  */
 				d->warned_empty_drain = 1;
-				fatal("[ wdc: data-port write with no sector "
-					"buffered; write dropped (once) ]\n");
+				/*  *** THE TEXT SAID "no sector buffered; write dropped" AND BOTH HALVES
+				    COULD BE FALSE.  Measured by the Opus seat on #478 pass 2,
+				    end-to-end through the registers, no struct poking. ***
+
+				    `inbuf_len == 0` is reached by TWO routes: an empty ring, and a
+				    STALE LOCAL after a CDB dispatch has consumed it.  On the second
+				    the guest's bytes were USED, not dropped.  On the leftover door a
+				    whole 512-byte sector sits in the ring while the message claims
+				    none is buffered.
+
+				    THE HARM WAS NOT THE FALSE SENTENCE.  A spurious emission BURNS
+				    THE N=1 LATCH, so a later GENUINE drop is announced to nobody --
+				    this announce could defeat itself, which is exactly the state the
+				    decline-and-announce ruling exists to prevent.
+
+				    The CONDITION is kept: it fires where the unfixed code would have
+				    put a spurious sector on the disk image, which is worth saying
+				    however the ring reached that state.  The TEXT now describes what
+				    happened -- a drain was refused -- instead of asserting a buffer
+				    state it never checked.  */
+				fatal("[ wdc: refused a sector drain the buffer "
+					"cannot justify (once) ]\n");
 			}
 		}
 		break;

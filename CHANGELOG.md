@@ -1,3 +1,182 @@
+## Round 479 (#479) -- a new command did not reset what the old one left
+
+`wdc_command()` cleared the ATAPI flag and the error and nothing else, so **three**
+pieces of the previous command's state survived into the next one. One sentence, three
+sites, one helper:
+
+| site | what survived | measured consequence |
+|---|---|---|
+| `wdcwipclear` | `write_in_progress` | an ATA write stayed armed across a packet command, so ONE ring served the disk-write path and the CDB path at once |
+| `wdcringnoflush` | the input ring | residue from an under-drained transfer was never cleared; the drain then fires early and the guest's sector arrives with the previous transfer's bytes at its head |
+| `wdcstalephase` | `atapi_phase` | `PHASE_CMDOUT` survived an ordinary WRITE. Latent while the dispatch tests flag AND phase -- and `#477`'s comment was pointing a future round straight at it |
+
+All three were REPRODUCED with liveness controls **before** the fix was designed, and the
+round-scope rule's four conditions were then demonstrated rather than argued: same
+function, same semantic class, same detector, no new oracle.
+
+### *** F-NARROW WAS DECIDED BY A FIVE-VARIANT MATRIX, NOT BY THE 4-1 SPLIT ***
+
+Three seats said F-narrow; codex proposed a seventh option **G** (F-wide with the helper
+on a corrected `WDCTL_RST`). The carrier settles disagreements empirically, so a seat
+built the matrix:
+
+| variant | non-reproduction rows RED |
+|---|---|
+| helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (1) |
+| flush off `WDCTL_4BIT` | **ctl write mid-transfer `0 w, 0 b`** + 256 orphaned bytes |
+| flush off `WDCTL_RST` | **none -- the cleanest variant** |
+| flush at the **END** | **IDENTIFY destroyed 256/256 words**, READ destroyed |
+
+* **The end-flush form is a regression the shipped detector could not see.** Strip the new
+  rows and top-flush and end-flush have IDENTICAL failure sets. Clean-up-on-exit reads as
+  the more principled placement and destroys the answer IDENTIFY and READ load INTO the
+  ring further down the same function.
+* **F-wide on the current bit cancels a legal transfer.** A farmed seat had already
+  supplied CITED driver source -- libata holds `0x08` as its steady-state `ap->ctl`, older
+  OpenBSD resets with `0x06` (bit 3 CLEAR) and writes `0x08` separately -- and another seat
+  then MEASURED twelve Device Control writes in an unmodified OpenBSD 7.6 landisk probe,
+  **six of them `0x08`**, one between two commands.
+* **codex's G is not refuted; it is a bigger round.** `WDCTL_RST` is the cleanest end
+  state, and reaching it means fixing `wdcaltctrlbit` first. The matrix turned that from a
+  preference into a schedule.
+
+**Shipped: F-narrow**, with the ALT-CTRL gap recorded as a RED ROW rather than as silence.
+
+### *** THE DETECTOR HAD ONLY EVER TESTED ONE ENDIANNESS ARM ***
+
+Found on `#478`'s pass 2 by the Fable seat, and it is the largest coverage finding of the
+session. Deleting `badlen_this = 1;` from the **little-endian** default alone produced a
+detector run **byte-identical to the unmutated one -- same md5**. Not one row could tell
+them apart.
+
+`fake_cpu()` memsets `stub_cpu` and nothing ever set `byte_order`, while the device
+branches on `cpu->byte_order == EMUL_LITTLE_ENDIAN`. **Every row in the file, and every
+kill table measured against them this session, exercised only the big-endian switch.**
+
+And the rung-3 witness machine for this defect family, `evbmips -e malta`, is
+**little-endian**. The detector was testing the opposite arm from the machine the defect
+was witnessed on.
+
+Closed with a `stub_byte_order` control, an LE decline row, and a liveness control that
+proves the LE arm actually ran (the two arms push a 16-bit store in opposite byte order).
+**The default is deliberately unchanged** -- flipping it would silently re-point 80 rows at
+the other arm, and any row that then failed would be indistinguishable from a real defect.
+
+Verified against the mutant that was invisible: `base` md5 `83322ca4`, `le_nobad` md5
+`ce9e0551`, one row red, `first=0xbe` -- 512 bytes of unread payload reaching the guest's
+LBA through the arm nothing was watching.
+
+### A live defect `#478` left, found by two seats independently
+
+`#478` guarded the sector drain with `badlen_this` and **not** `#477`'s CDB dispatch, which
+runs on every data-port write regardless of what the write did. So a store of an
+unimplemented width -- announced as `(ignored)` -- still **issued a SCSI command** whenever
+occupancy already stood at 12. codex found it by reading; opus by measuring a 3-byte store
+allocate an `atapi_st`.
+
+**A rejected access with a side effect is worse than cleanly accepting or refusing it**,
+because the diagnostic then states the opposite of what happened. Closed here by giving the
+dispatch the same conjunct; `a rejected width issues no command` is its row.
+
+### And `#478`'s announce could silence itself
+
+Measured end-to-end through registers: a **legal, successful** packet command made the
+device print *"no sector buffered; write dropped"*. Nothing was dropped -- and the spurious
+emission **burns the N=1 latch**, so a later genuine drop is announced to nobody. `#478`'s
+announce could defeat `#478`'s announce, which is the state the decline-and-announce ruling
+exists to prevent.
+
+The CONDITION is kept -- it fires where the unfixed code put a spurious sector on the image
+-- and the TEXT now says what happened rather than asserting a buffer state it never
+checked. `inbuf_len == 0` is reached by two routes and only one is a dropped write.
+
+### `WRITEMULTI` had zero rows
+
+Every drain row used `WDCC_WRITE` with `write_count = 1`, so the multi-sector half of both
+the guard and the announce arm had no coverage. That single gap was the root cause of four
+sweeping mutants, one of which **reads as pure de-duplication** and writes 131,072 bytes.
+
+*And a shape-only accept row does not close it: a seat's first attempt asserted "one write,
+1024 bytes" and a mutant passed by draining at the wrong MOMENT with the right total. The
+row pins 511 stores producing zero writes.*
+
+### The kill table caught a gap in the round itself
+
+`regress/artifacts/wdccmdreset/killtable_20260827/`, baseline 73 rows 0 failures. **8 of 8,
+three SOLE CARRIERS -- one per site**, so dropping any single clear from the helper is
+caught by exactly one row.
+
+*** On the first run `MdNoRing` -- simply DELETING the ring flush -- swept a clean 66
+rows. *** The cause was not a subtle mutant: **the rows reproducing the three defects this
+round fixes were still in the scratchpad tree and had never been ported.** The round was
+about to ship a fix that tested its CONSEQUENCES and not its SUBJECT.
+
+*A detector assembled from consequence rows can be entirely green while the defect it
+exists for is untested. No gate could have said so; only a mutant aimed at the fix's own
+clause did.*
+
+**`MdLatchReset` is the mutant to keep.** It adds `warned_* = 0` to the helper, which reads
+as COMPLETING it -- and undoes `#337`/`#464`. It is strictly worse here than the same
+mistake would be in `dev_asc.c`, which states the rule at its own latch declarations:
+*"Deliberately NOT cleared by `dev_asc_reset()` or `dev_asc_fifo_flush()`: a guest could
+otherwise re-arm the flood."* `wdc_command()` runs far more often than a chip reset. Found
+by a seat obeying the brief's instruction to GREP THE FORK -- the constraint was already
+written down in the sibling device, by the round that learned it.
+
+### Two oracle situations, both identified before any product code changed
+
+* **`row_stale_phase_write` pinned the DEFECT.** Its liveness control asserted that the
+  phase is still `CMDOUT` after a WRITE -- correct when it shipped, since a phase-only
+  guard must be shown a stale phase or it proves nothing. This round inverts it. Handled
+  under the ORACLE-CORRECTION RULE in the prescribed order: **re-pinned first, the
+  committed build MEASURED RED (`phase 9 flag 0 wip 48`, exactly one row), then the code
+  changed.** Provenance quoted verbatim rather than summarised.
+* **`row_residue_recovery` was NOT an oracle correction**, and I called it one before
+  checking. It had never shipped -- scratchpad only -- so it is **L1 pre-ship
+  construction**, a lighter rule. Claiming the heavier one would have been a false record
+  in the safer-sounding direction.
+
+### Premise 5 was refuted twice, and the second refutation came from a blind seat
+
+The brief asserted the ring residue is **unrecoverable**. A PACKET-FED seat -- which cannot
+read the tree at all -- replied that the brief's own inlined facts admit a drain path
+nobody had examined. Measured: a guest that arms a WRITE and streams 492 bytes clears the
+ring **and the recovery hands the disk `0xaa` where the guest wrote `0x55`**.
+
+Then the sharper replacement -- *"no clean exit at all"* -- was measured false too, before
+it shipped: `wdc_get_inbuf()` pops unconditionally at the top of the read arm, so **a guest
+that reads the data port drains the residue** and receives 20 bytes of the previous
+transfer.
+
+> The defensible form: **`wdcringnoflush` is a DATA-INTEGRITY defect, not a denial of
+> service.** No sequence the ATAPI protocol prescribes recovers the ring; a guest that
+> drains the data port does. What is unrecoverable is the DRIVER'S situation, because
+> nothing reports occupancy.
+
+*Their blindness is a feature, and this is the clearest instance on record: two file-reading
+flagship seats had the tree and did not produce it.*
+
+### An L4 in code shipped an hour earlier, and a live operational hazard
+
+* **`row_devctl_preserves_write`'s warrant was wrong in the reassuring direction.** It said
+  the row is the only instrument that can see its regression because *no gate arms a
+  CDROM*. Verified against source: **the ALT-CTRL arm is unconditional** -- only the
+  signature reads are CDROM-gated -- so "no CDROM" never implied "not exercised". The
+  corrected warrant is narrower AND records that the row now rests on a SECOND defect
+  (`landiskaux`'s mapping error), a justification that expires the day that bug is fixed.
+* **`build/gxemul` was a STALE BINARY** -- binary `05:52`, source `10:43`, predating `#477`
+  and `#478`. It carried no sentinel and `cmp`'d clean against SEC, so the ONE-part
+  clearance would have passed it. Only `[ binary -nt source ]` caught it. A seat refused it
+  and built its own tree rather than measure against it. Marked, and the three build trees
+  re-propagated after a 30-line drift.
+
+### Filed, not fixed
+
+`wdcaltctrlbit` is re-scoped: **low as a standalone defect, LOAD-BEARING as a precondition**
+for F-wide. Those are different numbers for different questions and the row now carries
+both. It ships with `wdcsrstnoabort` as the follow-up round, which may CALL this helper --
+which is why F-narrow is not a compromise: it builds what that round will need.
+
 ## Round 477 pass 2 (post-commit) -- a seat REASONED a sweep it could not build, and the build confirmed it
 
 `0922465` shipped, then its own pass-2 panel took it apart. Nine seats answered (the kimi
@@ -122,7 +301,24 @@ not rung-1 evidence**, and the brief's "honest scope" paragraph was out of date 
 the panel answered it.
 
 *And the product-code diagnostic is a WRONG RECORD: it says `unimplemented write len 8
-(ignored)` while the access destroyed a sector. `#478` is what finally makes "ignored" true.*
+(ignored)` while the access destroyed a sector. `#478` makes it true ON THE DRAIN PATH ONLY.*
+
+> *** THAT SENTENCE ORIGINALLY READ "`#478` is what finally makes 'ignored' true", AND IT
+> WAS FALSE WHEN WRITTEN. Measured independently by two seats on `#478`'s pass 2 -- codex
+> by reading, opus by watching a 3-byte store allocate an `atapi_st`. ***
+
+`#478` guarded the sector DRAIN with `badlen_this`. It did not guard `#477`'s CDB
+dispatch, which by design runs on **every** data-port write regardless of what the write
+did. So a store of an unimplemented width -- announced as `(ignored)` -- still **issued a
+SCSI command** whenever occupancy already stood at 12, and still asserted the interrupt.
+
+**A rejected access with a side effect is worse than cleanly accepting or refusing it**,
+because the diagnostic then states the opposite of what happened. Closed in `#479` by
+giving the dispatch the same `!badlen_this` conjunct, with `a rejected width issues no
+command` as its row -- which reds without the fix.
+
+*Closure changes the licence, not the truth-value: the claim is corrected in place and
+re-scoped to the round that actually earns it.*
 
 ### *** THE FIX NEEDED TWO CONDITIONS, AND A THIRD FORM WAS WORSE THAN THE DEFECT ***
 

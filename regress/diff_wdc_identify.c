@@ -196,7 +196,7 @@ void fatal(const char *fmt, ...)
 {
 	va_list ap;
 	stub_fatals ++;
-	if (strstr(fmt, "no sector") != NULL)
+	if (strstr(fmt, "refused a sector drain") != NULL)
 		stub_drain_msgs ++;
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
@@ -441,6 +441,26 @@ static uint64_t sectors_from_block(struct wdc_data *d, int lo, int hi)
 static struct machine stub_machine;
 static struct cpu     stub_cpu;
 
+/*  *** EVERY ROW IN THIS FILE TESTED ONE ENDIANNESS ARM UNTIL 2026-08-27.
+ *
+ *  `stub_cpu` is memset to zero and nothing ever set `byte_order`, while the
+ *  device branches on `cpu->byte_order == EMUL_LITTLE_ENDIAN`.  So the BIG-endian
+ *  arm ran for every row -- and for every kill table measured against them.
+ *
+ *  A seat proved it the only way that settles it: deleting `badlen_this = 1;`
+ *  from the LITTLE-endian default alone produced a detector run BYTE-IDENTICAL
+ *  to the unmutated one, same md5.  Not one row could tell them apart.
+ *
+ *  The sting is that the rung-3 witness machine for this defect family,
+ *  `evbmips -e malta`, is LITTLE-endian.  The detector was testing the opposite
+ *  arm from the machine the defect was witnessed on.
+ *
+ *  THE DEFAULT IS DELIBERATELY UNCHANGED.  Flipping it would silently re-point
+ *  every existing row at the other arm, and any row that then failed would be
+ *  indistinguishable from a real defect.  New rows opt IN by setting this.
+ */
+static int stub_byte_order = 0;	/*  0 = the arm this file always ran  */
+
 static struct cpu *fake_cpu(void)
 {
 	static int done = 0;
@@ -450,6 +470,7 @@ static struct cpu *fake_cpu(void)
 		stub_cpu.machine = &stub_machine;
 		done = 1;
 	}
+	stub_cpu.byte_order = stub_byte_order;
 	return &stub_cpu;
 }
 
@@ -2359,17 +2380,46 @@ static void row_stale_phase_write(void)
 	    phase is NOT reset, which is the state under test.  */
 	wdc_command(fake_cpu(), &d, WDCC_WRITE);
 
+	/*  *** ORACLE CORRECTION, 2026-08-27.  THIS ROW USED TO PIN THE DEFECT.
+	    The old assertion was `LIVENESS: stale CMDOUT with a write`, wanting
+	    phase == PHASE_CMDOUT after a WRITE command -- and it was CORRECT WHEN
+	    IT SHIPPED.  A phase-only dispatch guard has to be shown a state where
+	    the phase is stale, or the row proves nothing. ***
+
+	    `#479` RESETS the phase at the top of `wdc_command`, so the assertion
+	    inverts: a new command must not leave the previous one's phase behind.
+	    A seat asked whether the fix would break this row BEFORE any code was
+	    written, which is the only reason this is an oracle correction rather
+	    than a laundering.
+
+	    PROVENANCE, quoted rather than summarised.  `wdc_command()` opens:
+
+	        d->cur_command = idata;
+	        d->atapi_cmd_in_progress = 0;
+	        d->error = 0;
+
+	    It clears the flag and the error and NOT the phase.  That is the
+	    defect, and this row is its oracle.
+
+	    `== PHASE_CMDOUT` as the FAILING condition, not a pin on a specific
+	    replacement value: what the round establishes is that the phase does
+	    not SURVIVE a new command.  Pinning which value it takes would
+	    over-specify a choice the fix has not made.
+
+	    THE OTHER TWO ASSERTIONS IN THIS ROW ARE UNCHANGED -- they concern the
+	    dispatch guard, not the phase, and must still red under the phase-only
+	    mutant.  A re-pin that removes the last failing row is not finished. */
 	rows ++;
-	if (d.atapi_phase != PHASE_CMDOUT || d.atapi_cmd_in_progress != 0 ||
+	if (d.atapi_phase == PHASE_CMDOUT || d.atapi_cmd_in_progress != 0 ||
 	    d.write_in_progress == 0) {
 		printf("  FAIL %-38s phase %i flag %i wip %i\n",
-		    "LIVENESS: stale CMDOUT with a write",
+		    "a new command does not leave CMDOUT",
 		    d.atapi_phase, d.atapi_cmd_in_progress,
 		    d.write_in_progress);
 		failures ++;
 	} else {
 		printf("  ok   %-38s phase 0x%x\n",
-		    "LIVENESS: stale CMDOUT with a write", d.atapi_phase);
+		    "a new command does not leave CMDOUT", d.atapi_phase);
 	}
 
 	/*  the guest streams one legal sector, 256 sixteen-bit stores  */
@@ -2601,6 +2651,808 @@ static void row_drain_announce(void)
 	}
 
 	free(e.inbuf);
+	free(d.inbuf);
+}
+
+
+/*  THE DEVICE-CONTROL ACCEPT ROW.
+ *
+ *  A pending sector write must SURVIVE an ordinary Device Control write.
+ *
+ *  *** THE WARRANT FIRST WRITTEN HERE WAS WRONG, and it was wrong in the
+ *  reassuring direction.  It said this row is "the only instrument in the tree
+ *  that can see the regression it guards against: MEASURED, no gate arms a CDROM,
+ *  so the ALT-CTRL/COMMAND_RESET path is never exercised by any rig."  Corrected
+ *  2026-08-27 after a seat refuted it. ***
+ *
+ *  The ALT-CTRL arm NEEDS NO CDROM.  `if (idata & WDCTL_4BIT) d->cur_command =
+ *  COMMAND_RESET;` is unconditional -- only the SIGNATURE BYTES read back at
+ *  wd_cyl_lo/wd_cyl_hi are CDROM-gated.  So "no CDROM" never implied "not
+ *  exercised", and the row's own justification did not follow.
+ *
+ *  The defensible statement is narrower and still supports the row: no RIG writes
+ *  Device Control, and on the fork's only SH4 wdc machine it CANNOT -- the driver
+ *  writes addr+0x2c while GXemul registers alt-status at addr+0x206, so twelve
+ *  probe writes land on unmapped memory (filed separately as `landiskaux`).  A
+ *  PROBE can write it, and a seat built one at rung 3.
+ *
+ *  *** THAT MAKES THIS ROW'S WARRANT REST ON A SECOND DEFECT. ***  Fix the
+ *  mapping and the ALT-CTRL arm goes live on that machine too.  A row justified by
+ *  another bug's existence is worth keeping and worth SAYING SO, because the
+ *  justification expires the day that bug is fixed.
+ *
+ *  0x08 is not an exotic value.  From cited driver source: Linux libata holds
+ *  ATA_DEVCTL_OBS (0x08) as `ap->ctl`, the STEADY STATE between commands, and older
+ *  OpenBSD resets with 0x06 (bit 3 clear) and then writes 0x08 separately.  A guest
+ *  may write it at any moment, including mid-transfer.
+ *
+ *  So a future round that hangs a ring-flush or a writer-cancel off the ALT-CTRL arm
+ *  -- which currently triggers on WDCTL_4BIT (0x08) rather than WDCTL_RST (0x04) --
+ *  would cancel a legal transfer on a routine register write.  This row reds on that
+ *  edit.  It is the de-escalation clause's accept side, built for a fix that has not
+ *  shipped yet.
+ */
+static void row_devctl_preserves_write(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP devctl inbuf failed\n");
+		return;
+	}
+
+	stub_disk_exists = 1;
+	d.seccnt = 1;
+	d.sector = 1;
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+
+	/*  half the sector, then a perfectly ordinary Device Control write  */
+	stub_disk_writes = 0;
+	stub_disk_bytes = 0;
+	stub_disk_first = -1;
+	for (i = 0; i < 128; i++) {
+		buf[0] = 0x6d; buf[1] = 0x6d;
+		buf[2] = 0; buf[3] = 0;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	memset(buf, 0, sizeof(buf));
+	buf[0] = WDCTL_4BIT;		/*  0x08 -- libata's steady state  */
+	dev_wdc_altstatus_access(fake_cpu(), NULL, 0, buf, 1, MEM_WRITE, &d);
+
+	/*  the transfer must still be armed and the queued bytes still queued  */
+	rows ++;
+	if (d.write_in_progress == 0) {
+		printf("  FAIL %-38s writer cancelled by 0x08\n",
+		    "a devctl write keeps the writer");
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x\n",
+		    "a devctl write keeps the writer", d.write_in_progress);
+	}
+
+	/*  finish the sector: it must land, and it must be the GUEST'S bytes  */
+	for (i = 0; i < 128; i++) {
+		buf[0] = 0x6d; buf[1] = 0x6d;
+		buf[2] = 0; buf[3] = 0;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	if (stub_disk_writes != 1 || stub_disk_bytes != 512 ||
+	    stub_disk_first != 0x6d) {
+		printf("  FAIL %-38s %i w, %i b, first=0x%02x\n",
+		    "a devctl write does not lose bytes",
+		    stub_disk_writes, stub_disk_bytes, stub_disk_first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i w, %i b\n",
+		    "a devctl write does not lose bytes",
+		    stub_disk_writes, stub_disk_bytes);
+	}
+
+	stub_disk_exists = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+/*  THE THREE ROWS `#479`'s OWN MUTANTS REQUIRE.  Each was named by a seat that
+ *  built the mutant and found the existing suite blind to it.
+ *
+ *  `#479` flushes the ring at the TOP of wdc_command() -- and IDENTIFY and READ
+ *  both load their answer INTO that ring further down the same function.  Move
+ *  only the RING FLUSH to the end and all three pinned reproductions stay GREEN
+ *  while the guest's data is destroyed.  That mutant reads as the more principled
+ *  placement, which is what makes it worth a row.
+ *
+ *  READ is deliberately here as well as IDENTIFY: a boot issues WDCC_READ far
+ *  more often than WDCC_IDENTIFY, so a round that rows only IDENTIFY has pinned
+ *  the rarer path.
+ */
+static void row_command_fills_ring(void)
+{
+	struct wdc_data d;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP fills_ring inbuf failed\n");
+		return;
+	}
+
+	stub_disk_exists = 1;
+
+	/*  IDENTIFY must leave its response queued for the guest to read back.  */
+	wdc_command(fake_cpu(), &d, WDCC_IDENTIFY);
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (occ != 512) {
+		printf("  FAIL %-38s %i queued, want 512\n",
+		    "IDENTIFY leaves its answer queued", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "IDENTIFY leaves its answer queued", occ);
+	}
+
+	/*  and the HOT path: an ordinary READ fills the ring the same way.  */
+	d.inbuf_head = d.inbuf_tail = 0;
+	d.seccnt = 1;
+	d.sector = 1;
+	wdc_command(fake_cpu(), &d, WDCC_READ);
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (occ != 512) {
+		printf("  FAIL %-38s %i queued, want 512\n",
+		    "READ leaves a sector queued", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "READ leaves a sector queued", occ);
+	}
+
+	stub_disk_exists = 0;
+	free(d.inbuf);
+}
+
+
+/*  A LATCH MUST SURVIVE THE NEXT COMMAND.
+ *
+ *  `#479`'s helper clears three things a new command must not inherit.  Adding the
+ *  `warned_*` flags to that list reads as COMPLETING it -- and undoes `#337` and
+ *  `#464`, because those latches exist to stop a guest-drivable log flood.
+ *
+ *  It is strictly worse here than the equivalent mistake would be in dev_asc.c,
+ *  which states the rule outright at its own latch declarations: the latches are
+ *  "Deliberately NOT cleared by dev_asc_reset() or dev_asc_fifo_flush(): a guest
+ *  could otherwise re-arm the flood."  `wdc_command()` runs far more often than a
+ *  chip reset, so a guest alternating two opcodes would flood forever.
+ *
+ *  The oracle counts EMISSIONS, not the flag: a mutant that clears the latch while
+ *  something else happens to suppress the message would pass a flag check.
+ */
+static void row_latch_survives_command(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int first, second;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP latch inbuf failed\n");
+		return;
+	}
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count  = 1;
+	d.write_offset = 0xe000;
+
+	/*  fire the drain announce once  */
+	stub_fatals = 0; stub_drain_msgs = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+	first = stub_drain_msgs;
+
+	/*  a new command arrives, then the same provoking access again.  The latch
+	    must NOT have been re-armed by the command.  */
+	stub_disk_exists = 1;
+	d.seccnt = 1;
+	d.sector = 1;
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+	stub_disk_exists = 0;
+
+	stub_fatals = 0; stub_drain_msgs = 0;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+	second = stub_drain_msgs;
+
+	rows ++;
+	if (first < 1) {
+		printf("  FAIL %-38s never armed (%i)\n",
+		    "LIVENESS: the announce fired once", first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "LIVENESS: the announce fired once", first);
+	}
+
+	rows ++;
+	if (second != 0) {
+		printf("  FAIL %-38s re-armed by a command (%i)\n",
+		    "a latch survives the next command", second);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a latch survives the next command", second);
+	}
+
+	free(d.inbuf);
+}
+
+
+/*  wdcwipclear -- REPRODUCTION.  `wdc_command()` clears `atapi_cmd_in_progress`
+ *  and `error`, and does NOT clear `write_in_progress`.
+ *
+ *  So a guest can issue WRITE SECTORS and then a packet command, and the device
+ *  holds BOTH flags live at once: the one shared input ring is then serving the
+ *  disk-write path and the CDB path simultaneously.  That is the root of the
+ *  alias -- #478 guards the sink, this is the source.
+ *
+ *  LIVENESS CONTROL FIRST.  The row asserts the flag IS set after the WRITE
+ *  command before asserting it is cleared by the next one, because otherwise a
+ *  fixture where nothing happened at all would pass and read as a fix.
+ */
+static void row_wip_not_cleared(void)
+{
+	struct wdc_data d;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP wip inbuf failed\n");
+		return;
+	}
+
+	/*  the command path aborts on a missing image, so the write would never be
+	    set up at all and the row would pass for the wrong reason.  */
+	stub_disk_exists = 1;
+	d.seccnt = 1;
+	d.sector = 1;
+
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+
+	rows ++;
+	if (d.write_in_progress == 0) {
+		printf("  FAIL %-38s flag never set -- row is vacuous\n",
+		    "LIVENESS: a WRITE arms write_in_prog");
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%x\n",
+		    "LIVENESS: a WRITE arms write_in_prog", d.write_in_progress);
+	}
+
+	/*  now a packet command supersedes it.  wdc_command clears the ATAPI flag
+	    here; it must clear this one too, or both are live at once.  */
+	wdc_command(fake_cpu(), &d, ATAPI_PKT_CMD);
+
+	rows ++;
+	if (d.write_in_progress != 0) {
+		printf("  FAIL %-38s still 0x%x with ATAPI live\n",
+		    "a new command clears write_in_prog",
+		    d.write_in_progress);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a new command clears write_in_prog", d.write_in_progress);
+	}
+
+	stub_disk_exists = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+/*  wdcringnoflush -- REPRODUCTION.  A new command does not flush the input ring.
+ *
+ *  MEASURED by a seat: under-drain a DATA-IN transfer and the residue is never
+ *  cleared.  ATAPI_PKT_CMD does not flush it, ATAPI_SOFT_RESET does not flush it,
+ *  and the ALT-CTRL device reset does not flush it -- so occupancy only ever
+ *  climbs, and once it can no longer EQUAL 12 the CDB dispatch is dead for the
+ *  life of the device.  There is no sequence a guest can issue to recover.
+ *
+ *  Same function and same semantic class as `wdcwipclear` -- "a new command must
+ *  reset what the old one left" -- and observable through the same oracle, which
+ *  is why both are built against one detector.
+ *
+ *  The in-tree idiom for the fix already exists: dev_asc.c's dev_asc_fifo_flush(),
+ *  called from NCRCMD_FLUSH and NCRCMD_RSTCHIP.
+ */
+static void row_ring_not_flushed(void)
+{
+	struct wdc_data d;
+	int occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP flush inbuf failed\n");
+		return;
+	}
+
+	stub_disk_exists = 1;
+
+	/*  an under-drained transfer: 20 bytes the guest never read back  */
+	{
+		int i;
+		for (i = 0; i < 20; i++)
+			wdc_addtoinbuf(&d, 0x5a);
+	}
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 20) {
+		printf("  FAIL %-38s occupancy %i, want 20\n",
+		    "LIVENESS: the residue is really there", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "LIVENESS: the residue is really there", occ);
+	}
+
+	/*  a fresh packet command.  A device that resets its command state must not
+	    carry the previous transfer's residue into the new CDB.  */
+	wdc_command(fake_cpu(), &d, ATAPI_PKT_CMD);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 0) {
+		printf("  FAIL %-38s %i bytes survive the command\n",
+		    "a packet command flushes the ring", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a packet command flushes the ring", occ);
+	}
+
+	/*  and a SOFT RESET is the guest's documented recovery.  If neither the
+	    command nor the reset clears it, nothing does.  */
+	wdc_command(fake_cpu(), &d, ATAPI_SOFT_RESET);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+	rows ++;
+	if (occ != 0) {
+		printf("  FAIL %-38s %i bytes survive a soft reset\n",
+		    "a soft reset flushes the ring", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a soft reset flushes the ring", occ);
+	}
+
+	stub_disk_exists = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+/*  THE RESIDUE ROW, RE-CUT.  L1 construction: this never shipped.
+ *
+ *  Its scratchpad form pinned the DEFECT'S SHAPE -- that a residue-contaminated
+ *  drain fires, leaving occupancy 0 with `first=0xaa`.  That form earned its keep:
+ *  it refuted this round's own "the residue is unrecoverable" premise and turned a
+ *  denial-of-service claim into a data-integrity one.
+ *
+ *  But it goes red under every candidate fix, for the FIXTURE's reason rather than
+ *  the code's, so it is replaced rather than kept alongside -- two rows disagreeing
+ *  about one behaviour is how a suite stops meaning anything.
+ *
+ *  The new pin is the round's actual claim: after a new command the residue is gone,
+ *  and the guest's next sector reaches the disk as the guest wrote it.
+ */
+static void row_residue_recovery(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i, occ;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP residue inbuf failed\n");
+		return;
+	}
+
+	stub_disk_exists = 1;
+	for (i = 0; i < 20; i++)
+		wdc_addtoinbuf(&d, 0xaa);
+
+	d.seccnt = 1;
+	d.sector = 1;
+	wdc_command(fake_cpu(), &d, WDCC_WRITE);
+
+	occ = d.inbuf_head - d.inbuf_tail;
+	while (occ < 0)
+		occ += WDC_INBUF_SIZE;
+
+	rows ++;
+	if (occ != 0) {
+		printf("  FAIL %-38s %i bytes survive the command\n",
+		    "a new command leaves an empty ring", occ);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a new command leaves an empty ring", occ);
+	}
+
+	/*  the guest-visible consequence: one sector, its OWN bytes.  A tree that
+	    keeps the residue drains 20 bytes early and puts 0xaa at the head.  */
+	stub_disk_writes = 0;
+	stub_disk_bytes = 0;
+	stub_disk_first = -1;
+	for (i = 0; i < 256; i++) {
+		buf[0] = 0x55; buf[1] = 0x55;
+		buf[2] = 0; buf[3] = 0;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	if (stub_disk_writes != 1 || stub_disk_bytes != 512 ||
+	    stub_disk_first != 0x55) {
+		printf("  FAIL %-38s %i w, %i b, first=0x%02x\n",
+		    "the sector after a command is guest's",
+		    stub_disk_writes, stub_disk_bytes, stub_disk_first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i w, %i b\n",
+		    "the sector after a command is guest's",
+		    stub_disk_writes, stub_disk_bytes);
+	}
+
+	stub_disk_exists = 0;
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+/*  A REJECTED ACCESS MUST HAVE NO SIDE EFFECT -- including the CDB dispatch.
+ *
+ *  Named by the codex seat on `#478`'s pass 2: `badlen_this` guards the sector
+ *  drain and NOT the CDB dispatch, so an access of an unimplemented width -- which
+ *  pushes nothing and is reported "(ignored)" -- can still issue a 12-byte SCSI
+ *  command when occupancy was already 12.
+ *
+ *  The existing `no-push write does not dispatch` row does not cover this: it sits
+ *  in PHASE_DATAIN, so `#477`'s phase guard blocks the dispatch for an unrelated
+ *  reason.  Here the phase is CMDOUT -- where a real CDB is collected -- which is
+ *  the state that makes the question live.
+ *
+ *  If this row is RED, `#478`'s claim that `#337`'s "(ignored)" became TRUE is a
+ *  wrong record in product code, and a rejected access still has a side effect.
+ */
+static void row_badlen_no_dispatch(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP badlen_cdb inbuf failed\n");
+		return;
+	}
+
+	/*  the real device sets all three together  */
+	d.cur_command = ATAPI_PKT_CMD;
+	d.atapi_cmd_in_progress = 1;
+	d.atapi_phase = PHASE_CMDOUT;
+
+	/*  a CDB's worth already queued -- occupancy is exactly 12 BEFORE the
+	    rejected access, so the access itself pushes nothing and changes it
+	    not at all.  */
+	for (i = 0; i < 12; i++)
+		wdc_addtoinbuf(&d, 0x12);
+
+	stub_scsi_cmds = 0;
+	stub_fatals = 0;
+
+	/*  an 8-byte store: the width switch rejects it and says so.  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_scsi_cmds != 0) {
+		printf("  FAIL %-38s dispatched %i\n",
+		    "a rejected width issues no command", stub_scsi_cmds);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a rejected width issues no command", stub_scsi_cmds);
+	}
+
+	/*  and it must SAY something -- a silently rejected access with a side
+	    effect is the worst of both.  */
+	rows ++;
+	if (stub_fatals < 1) {
+		printf("  FAIL %-38s emitted %i\n",
+		    "a rejected width is announced", stub_fatals);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "a rejected width is announced", stub_fatals);
+	}
+
+	if (d.atapi_st != NULL) {
+		free(d.atapi_st->data_in);
+		free(d.atapi_st->cmd);
+		free(d.atapi_st);
+	}
+	free(d.inbuf);
+}
+
+
+/*  WRITEMULTI -- the arm that had NO ROW AT ALL.
+ *
+ *  Every drain row in this file used WDCC_WRITE with write_count = 1, so the
+ *  multi-sector half of the guard AND of the announce arm `#478` added was
+ *  untested.  A seat measured FOUR mutants sweeping all 60 rows on that one gap,
+ *  including one that reads as pure de-duplication -- folding the two arms, since
+ *  they differ only in a modulus -- and writes 131,072 bytes.
+ *
+ *  THE MOMENT IS PINNED, NOT JUST THE SHAPE.  A first attempt asserted "one write,
+ *  1024 bytes" and a mutant passed it by draining at occupancy 512 with count=2:
+ *  the right shape at the wrong moment.  511 stores must drain NOTHING.
+ */
+static void row_writemulti_moment(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP writemulti inbuf failed\n");
+		return;
+	}
+
+	d.write_in_progress = WDCC_WRITEMULTI;
+	d.write_count  = 2;
+	d.write_offset = 0xf000;
+
+	stub_disk_writes = 0;
+	stub_disk_bytes = 0;
+	stub_disk_first = -1;
+
+	/*  511 two-byte stores = 1022 bytes: two bytes short of two sectors.  */
+	for (i = 0; i < 511; i++) {
+		buf[0] = 0x7c; buf[1] = 0x7c;
+		buf[2] = 0; buf[3] = 0;
+		dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+	}
+
+	rows ++;
+	if (stub_disk_writes != 0) {
+		printf("  FAIL %-38s %i w at occupancy 1022\n",
+		    "WRITEMULTI partial does not drain", stub_disk_writes);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "WRITEMULTI partial does not drain", stub_disk_writes);
+	}
+
+	/*  the completing store: exactly one write of BOTH sectors, guest bytes.  */
+	buf[0] = 0x7c; buf[1] = 0x7c;
+	buf[2] = 0; buf[3] = 0;
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_disk_writes != 1 || stub_disk_bytes != 1024 ||
+	    stub_disk_first != 0x7c) {
+		printf("  FAIL %-38s %i w, %i b, first=0x%02x\n",
+		    "WRITEMULTI drains both sectors once",
+		    stub_disk_writes, stub_disk_bytes, stub_disk_first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i w, %i b\n",
+		    "WRITEMULTI drains both sectors once",
+		    stub_disk_writes, stub_disk_bytes);
+	}
+
+	free(d.inbuf);
+}
+
+
+/*  THE LEFTOVER DOOR MUST STAY SHUT ON THE SECOND BAD-LEN STORE TOO.
+ *
+ *  Named by a seat as the highest-plausibility slip: move `badlen_this = 1;`
+ *  inside the `if (!d->warned_badlen)` block -- one line, and it looks like
+ *  tidying the latch.  Because `warned_badlen` latches for the device's life,
+ *  EVERY bad-length store after the first then drains 512 bytes of unread payload
+ *  to the guest's LBA.
+ *
+ *  The existing leftover row uses ONE bad-len store and cannot see it.
+ */
+static void row_leftover_second_badlen(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP second_badlen inbuf failed\n");
+		return;
+	}
+
+	/*  an unread payload, marked so the oracle names WHICH bytes escaped  */
+	for (i = 0; i < 512; i++)
+		wdc_addtoinbuf(&d, 0xbe);
+
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count  = 1;
+	d.write_offset = 0x11000;
+
+	/*  the FIRST bad-len store also arms #337's latch  */
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+
+	/*  the SECOND is the one under test: the latch is now set, so a fix that
+	    ties badlen_this to it stops declining here.  */
+	stub_disk_writes = 0;
+	stub_disk_first = -1;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_disk_writes != 0) {
+		printf("  FAIL %-38s %i write(s), first=0x%02x\n",
+		    "leftover safe on the 2nd bad-len too",
+		    stub_disk_writes, stub_disk_first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "leftover safe on the 2nd bad-len too", stub_disk_writes);
+	}
+
+	free(d.inbuf);
+}
+
+
+/*  THE LITTLE-ENDIAN ARM, which had ZERO coverage until now.
+ *
+ *  The width switch is duplicated once per endianness branch, and only the
+ *  big-endian copy was ever reached.  A one-line deletion in the little-endian
+ *  copy swept all 60 rows -- byte-identical output, same md5.
+ *
+ *  This runs the decline path through the OTHER arm.  It is not a duplicate of
+ *  the big-endian rows: it is the same assertion against a second copy of the
+ *  code, which is exactly what a duplicated switch requires.
+ *
+ *  `#337`'s comment records that `warned_badlen` is shared across the two arms
+ *  BECAUSE they are mutually exclusive at runtime -- true, and it is also why a
+ *  latch-based reading of the flag cannot distinguish them.  The rows must.
+ */
+static void row_little_endian_arm(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int i;
+
+	memset(&d, 0, sizeof(d));
+	d.addr_mult  = 1;
+	d.io_enabled = 1;
+	d.inbuf = (unsigned char *) calloc(1, WDC_INBUF_SIZE);
+	d.irq.interrupt_assert = arm_sink;
+	if (d.inbuf == NULL) {
+		printf("  SETUP le_arm inbuf failed\n");
+		return;
+	}
+
+	stub_byte_order = EMUL_LITTLE_ENDIAN;
+
+	/*  an unread payload, so a failed decline writes something identifiable  */
+	for (i = 0; i < 512; i++)
+		wdc_addtoinbuf(&d, 0xbe);
+
+	d.write_in_progress = WDCC_WRITE;
+	d.write_count  = 1;
+	d.write_offset = 0x12000;
+
+	stub_disk_writes = 0;
+	stub_disk_first = -1;
+	memset(buf, 0, sizeof(buf));
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 8, MEM_WRITE, &d);
+
+	rows ++;
+	if (stub_disk_writes != 0) {
+		printf("  FAIL %-38s %i w, first=0x%02x\n",
+		    "LE arm: leftover is not drained",
+		    stub_disk_writes, stub_disk_first);
+		failures ++;
+	} else {
+		printf("  ok   %-38s %i\n",
+		    "LE arm: leftover is not drained", stub_disk_writes);
+	}
+
+	/*  and a LIVENESS control -- prove the LE arm was actually taken, or the
+	    row above passes for the same reason it always did.  A 2-byte store
+	    on this arm pushes low byte first; on the other, high byte first.  */
+	d.inbuf_head = d.inbuf_tail = 0;
+	buf[0] = 0x34; buf[1] = 0x12;
+	buf[2] = 0; buf[3] = 0;
+	dev_wdc_access(fake_cpu(), NULL, wd_data, buf, 2, MEM_WRITE, &d);
+
+	rows ++;
+	if (d.inbuf[0] != 0x34) {
+		printf("  FAIL %-38s first pushed 0x%02x, want 0x34\n",
+		    "LIVENESS: the LE arm really ran", d.inbuf[0]);
+		failures ++;
+	} else {
+		printf("  ok   %-38s 0x%02x\n",
+		    "LIVENESS: the LE arm really ran", d.inbuf[0]);
+	}
+
+	stub_byte_order = 0;
 	free(d.inbuf);
 }
 
@@ -2931,6 +3783,16 @@ int main(void)
 	row_stale_phase_write();
 	row_altctl_cdb_accept();
 	row_drain_announce();
+	row_devctl_preserves_write();
+	row_command_fills_ring();
+	row_latch_survives_command();
+	row_wip_not_cleared();
+	row_ring_not_flushed();
+	row_residue_recovery();
+	row_badlen_no_dispatch();
+	row_writemulti_moment();
+	row_leftover_second_badlen();
+	row_little_endian_arm();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -2954,8 +3816,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 60) {
-		printf("  FAIL %-38s rows = %i, want 60\n",
+	if (rows != 80) {
+		printf("  FAIL %-38s rows = %i, want 80\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

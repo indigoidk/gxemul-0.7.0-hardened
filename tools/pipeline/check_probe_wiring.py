@@ -216,6 +216,26 @@ MANIFEST = {
         (CLASS_RESEARCH, "#477 pass-2 stale-phase row generator, preserved as evidence"),
     "artifacts/wdcdataoutdrain/killtable_20260827/wiprepro.py":
         (CLASS_RESEARCH, "#479 wdcwipclear repro generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/mk479.py":
+        (CLASS_RESEARCH, "#479 mutant applier, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/port479.py":
+        (CLASS_RESEARCH, "#479 row-port generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/add479rows.py":
+        (CLASS_RESEARCH, "#479 mutant-required row generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/fix479.py":
+        (CLASS_RESEARCH, "#479 fix applier, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/repin479.py":
+        (CLASS_RESEARCH, "#479 oracle re-pin, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/adddevctl.py":
+        (CLASS_RESEARCH, "#479 devctl accept-row generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/addle.py":
+        (CLASS_RESEARCH, "#479 little-endian coverage generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/addwm.py":
+        (CLASS_RESEARCH, "#479 WRITEMULTI row generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/addbadlencdb.py":
+        (CLASS_RESEARCH, "#479 rejected-width row generator, preserved as evidence"),
+    "artifacts/wdccmdreset/killtable_20260827/addmut479.py":
+        (CLASS_RESEARCH, "#479 seat-named mutant generator, preserved as evidence"),
     #  CLASSIFIED WHILE ITS OWN ROUND WAS STILL IN THE INDEX, and that is the check working
     #  rather than an exception to it: this file was `git add`ed by a concurrent #446 round
     #  MINUTES after this checker was written, went straight into the domain, and was named

@@ -10976,11 +10976,27 @@ now -- `#265`, `#197`, `#269` -- which is worth remembering before designing a f
   `#476` closed `atapi_st == NULL`. **Nothing closes `atapi_st->data_in == NULL`**, and
   `dev_wdc.c` holds no invariant coupling the two.
 
-  **Not currently reachable, and the warrant is CROSS-FILE — which is the point.** Both
-  flagship seats independently traced it to `diskimage_scsicmd.c`: `scsi_transfer_allocbuf()`
-  sets pointer and length together and `exit()`s rather than returning NULL, and
-  `data_in_len` is written outside it at exactly one site, where it only ever SHRINKS below
-  the allocation. So `data_in == NULL && data_in_len > 0` is unproducible **today, in
+  **Not currently reachable, and the warrant is CROSS-FILE — which is the point.**
+
+  *** MY FIRST FILING OF THAT WARRANT WAS WRONG IN TWO DETAILS, both corrected by a farmed
+  seat and then VERIFIED by reading. Recorded because the wrong version was the stronger-
+  sounding one, and a warrant that sounds stronger than it is will be leaned on harder. ***
+
+  * I wrote that `scsi_transfer_allocbuf()` **"sets pointer and length together"**. It does
+    not: `(*lenp) = want_len` at `:147`, `(*pp) = p` at `:161` — fourteen lines apart, with
+    a `malloc` and a possible `exit(1)` between them. **The invariant is a FUNCTION-BOUNDARY
+    property, not a continuous one.** Nothing observes that window (no callback and no
+    return to the device runs inside it), but "set together" was false.
+  * I wrote that `data_in_len` is mutated outside the helper **"at exactly one site"**.
+    There are **THREE**: `diskimage_scsicmd.c:599` (MODE_SENSE), `:1169` (READ_TOC), and
+    `dev_asc.c:529` — **which is a different device entirely**. All three only shrink or
+    preserve a live allocation, so the conclusion survives; the census did not.
+
+  **DISPOSITION: a COMMENT at the unchecked site, not a guard** — now written. The ADDITION
+  LICENCE wants a measured delta or a transferred warrant and there is neither, because the
+  state is not producible today. What was missing is not a check that would silently never
+  fire, but **a reason an edit in another file can break**. A guard would have hidden the
+  cross-file coupling; the comment names it. So `data_in == NULL && data_in_len > 0` is unproducible **today, in
   another file** — which is exactly the shape of warrant that decays without anyone
   touching `dev_wdc.c`.
 
@@ -11028,3 +11044,206 @@ The clause-(d) mutant for that fix is already named, by `deepseek`: **move the r
 from the top of `wdc_command` to the end.** It passes every pinned row and destroys the
 IDENTIFY response, because IDENTIFY loads its 512-byte answer INTO the ring as part of the
 command.
+
+### *** `wdcaltctrlbit` IS NOT LOW SEVERITY IN THE ROUND THAT MATTERS -- IT IS A
+### PRECONDITION. Settled 2026-08-27 by a farmed seat with CITED driver source. ***
+
+Re-scoped LOW this morning on the reasoning that the wrong bit works BY ACCIDENT, because
+the conventional reset value `0x0C` has bit 3 set anyway. **That reasoning was measured
+against the wrong question.**
+
+The grok seat was asked whether real drivers write `0x08` to Device Control, and answered
+with source rather than recollection:
+
+| driver | reset write | steady state |
+|---|---|---|
+| Linux libata (`ata_bus_softreset`) | `ap->ctl \| ATA_SRST` | `ap->ctl`, initialised to `ATA_DEVCTL_OBS` = **`0x08`** |
+| NetBSD `wdc_do_reset` | `WDCTL_RST\|WDCTL_IDS\|WDCTL_4BIT` = `0x0E` | — |
+| OpenBSD 3.4-era `__wdcdo_reset` | `WDCTL_4BIT\|WDCTL_RST` = `0x0C` | — |
+| **older OpenBSD** | **`WDCTL_RST\|WDCTL_IDS` = `0x06`** — bit 3 CLEAR | then `WDCTL_4BIT` = `0x08` |
+
+**Two consequences the LOW scoping did not see:**
+
+1. **An older-OpenBSD reset is MISSED ENTIRELY** (`0x06` has bit 3 clear), and the `0x08`
+   that follows is then treated AS the reset. The device latches the ATAPI signature on
+   the release rather than on the reset -- backwards, on a real driver.
+2. **libata holds `0x08` as its STEADY-STATE control value.** So `0x08` is not an unusual
+   write; it is the value the register spends most of its life holding.
+
+> *** THIS DECIDES `#479`'s SCOPE. *** Option F-wide -- extending the reset helper to the
+> ALT-CTRL arm -- would flush the ring and cancel a pending write **every time a driver
+> writes its ordinary control value**, possibly mid-transfer. That is a far worse
+> regression than the three defects being fixed, and it would pass any row that only
+> exercises the reset path.
+>
+> **So F-wide REQUIRES fixing this bit in the same round.** `wdcaltctrlbit` is low as a
+> standalone defect and LOAD-BEARING as a precondition, and those are different numbers
+> for different questions.
+
+*Recorded because the earlier LOW is still true of the standalone defect and would
+otherwise be read as settling the scope question too. **A severity is an answer to a
+question, and this row now carries two.***
+
+*And this is what the fan-out bought: a CITED answer about driver behaviour that no amount
+of reading the emulator source could produce. The emulator cannot tell you what a real
+driver writes.*
+
+### *** `#479` SCOPE SETTLED: F-NARROW. And a SHIPPED ROW WILL GO RED WHEN THE FIX LANDS,
+### which puts this round under the ORACLE-CORRECTION RULE before a line of code changes. ***
+
+**The scope.** Three seats converged on **F-narrow**, and the argument is better than the
+count. grok put it exactly: *"The three command-register sites are one round; **ALT-CTRL is
+not a fourth site of the same sentence.**"* Build one named abort helper, call it from the
+TOP of `wdc_command()` only, and let it absorb the existing `atapi_cmd_in_progress = 0`.
+Real SRST (`wdcaltctrlbit` + `wdcsrstnoabort`) becomes a LATER round that may **call** the
+same helper -- which is why F-narrow is not a compromise: it builds the thing the ALT-CTRL
+round will need.
+
+minimax named the obligation: **an accept row pinning that a legal `0x08` Device Control
+write does NOT flush the ring or clear `write_in_progress`.** That row is what stops a
+future round walking into the trap grok's driver citations identified.
+
+**AND THE ROUND'S OWN DETECTOR OPPOSES ITS FIX.** `row_stale_phase_write` -- shipped in
+`832bed7` -- carries a LIVENESS assertion that the phase is still `PHASE_CMDOUT` after a
+WRITE command. That is the DEFECT state, deliberately pinned so the row could not pass
+vacuously. **Option F resets the phase, so that assertion inverts and the row goes red.**
+
+> That is not a reason to weaken the row. It is the ORACLE-CORRECTION RULE's exact case, and
+> the rule is about ORDER:
+>
+> **Re-pin the oracle FIRST. Measure the COMMITTED build RED under the new expectation.
+> THEN change the code.** Same scripts, opposite colour. Without that red, re-pinning is
+> observationally identical to fitting the test to the binary.
+
+Three obligations follow, and they are cheap:
+
+* the re-pinned comment must quote the source VERBATIM with its construct name, so a future
+  seat can re-derive it without trusting this round;
+* the OLD pin's claim is corrected in place, not silently superseded;
+* **a re-pin that removes the last failing row is not finished** -- the row's other two
+  assertions (no CDB dispatch, the sector survives) stay valid and must still red under the
+  phase-only mutant, or the round has traded a real oracle for a tautology.
+
+*Recorded before any code is written. A seat asked whether the fix would break this row; the
+answer is yes, and finding that BEFORE the edit is the whole difference between an
+oracle correction and a laundering.*
+
+### *** `#479` DECIDED BY A FIVE-VARIANT MATRIX, NOT BY THE 4-1 SPLIT. Measured 2026-08-27. ***
+
+The panel divided: three seats for F-narrow, codex for a seventh option **G** (F-wide plus
+the accept row, with the helper hung off a CORRECTED `WDCTL_RST`). The carrier's rule is
+that disagreements are settled empirically, and the Fable seat built the matrix:
+
+| variant | non-P5 rows RED |
+|---|---|
+| `v1_narrow` — helper at the **TOP** of `wdc_command` | ctl-SRST still unflushed (1) |
+| `v2_widecur` — flush off `WDCTL_4BIT` | **ctl write mid-transfer `0 w, 0 b`** + 256 orphaned bytes |
+| `v3_widerst` — flush off `WDCTL_RST` | **none — the cleanest variant** |
+| `v4_endflush` — flush at the **END** | **IDENTIFY destroyed 256/256 words**, READ destroyed, SRST |
+
+**FOUR THINGS THIS SETTLES THAT ARGUMENT COULD NOT:**
+
+1. **The end-flush mutant is a regression the shipped detector CANNOT SEE.** Strip the new
+   rows and `v1_narrow` and `v4_endflush` have **identical failure sets**. It is the
+   reads-as-an-improvement shape — clean-up-on-exit looks *more* principled — and it
+   destroys the IDENTIFY response, which the command loads INTO the ring.
+2. **grok's citation-based warning is confirmed empirically.** `v2` cancels a legal
+   transfer on a routine `0x08` write. Reproduced independently by
+   `row_devctl_preserves_write` here: GREEN on HEAD, RED under the v2 shape.
+3. **F-narrow does NOT fully establish its own invariant** — Device-Control SRST bypasses
+   `wdc_command`. That **strengthens [[wdcringnoflush]]**: the canonical reset a real
+   driver uses does not recover either.
+4. **A new corruption path on the READ side** — a guest READ after an under-drain is handed
+   the previous transfer's residue at the head of its sector. The defect is not confined to
+   the write-drain.
+
+**DECISION: F-narrow this round**, with the accept rows, and **the SRST gap recorded as a
+RED ROW rather than as silence**. `wdcaltctrlbit` + F-wide-RST becomes the follow-up.
+
+*codex's G is not refuted — `v3` proves it is the cleanest end state. It is a BIGGER ROUND,
+and the matrix is what turns that from a preference into a schedule.*
+
+**AND THE BATTERY IS BLIND TO ALL OF IT.** Measured: no gate in this tree arms a CDROM, so
+the ALT-CTRL/`COMMAND_RESET` path is never exercised by any rig. The offline accept row is
+the ONLY instrument that will ever see this class — which is why it was built before the
+option was chosen rather than after.
+
+**A SECOND ORACLE CORRECTION IS OWED.** `row_residue_recovery`'s two P5 rows pin the
+DEFECT's shape and therefore go red under *every* fix, for the fixture's reason rather than
+the code's. They must be REPLACED by the re-cut form, not left beside it — the same
+order rule already applied to `row_stale_phase_write`. **Two oracle corrections in one
+round, both identified before any product code changed.**
+
+### *** THE FOLLOW-UP ROUND IS NOT `wdcaltctrlbit`. IT IS `SRST DOES NOT EXIST`, and the
+### bit is a rider. Sharpened 2026-08-27 by farmed research read late. ***
+
+A 2.1 MB farmed answer sat unread for two hours while the round it informs was being
+designed. **Third instance of the unread-review class this project has recorded, and the
+content changed the next round's scope.**
+
+**It CONFIRMS the LOW rank on the wrong bit** -- signature latching only, Linux and NetBSD
+reset sequences carry both bits, OpenBSD reaches the same endpoint accidentally, and no rig
+has IDE-CDROM coverage. So `wdcaltctrlbit` stays LOW as a standalone decode defect.
+
+**AND IT REFUSES TO LET THAT RANK SUBSUME THE REAL DEFECT:**
+
+> *"Do not let that LOW rank subsume the missing SRST behavior. A reset that cannot abort
+> or discard stale transfer state undermines the guest's recovery mechanism and deserves a
+> separate, higher-severity assessment -- likely medium impact."*
+
+**AND IT CORRECTS MY CLASSIFICATION.** I had SRST filed as a fourth instance of `#479`'s
+sentence -- *a new command does not reset what the old one left*. It is not:
+
+* the three `#479` sites belong to `wdc_command()` and **command-boundary initialisation**;
+* SRST enters through the **sibling ALT-CTRL handler**, is a **channel/device recovery**
+  operation, and has **assertion/deassertion semantics**;
+* **the code does not remember the previous Device Control value, so it cannot distinguish
+  assertion from deassertion at all.** SRST is a LEVEL signal -- asserted, then released --
+  and a device blind to the edge cannot implement it however much state it clears.
+
+*That last point is the one I had not considered, and it means the follow-up round is not
+"call the helper from the ALT-CTRL arm". It has to give the device an edge to act on first.*
+
+> **SCOPE FOR THE FOLLOW-UP: `wdcsrstnoedge` -- SRST is not implemented, only latched.**
+> The round owes an edge (remember the previous control value), an abort (what SRST must
+> discard), and only then the shared cleanup helper `#479` builds. `wdcaltctrlbit` rides
+> along as the predicate fix, because the edge cannot be detected on the wrong bit.
+
+*The decomposition itself is unchanged and now has two independent derivations: grok
+reached it from "ALT-CTRL is not a fourth site of the same sentence", codex from
+"it merits its own issue and tests, though it can share a cleanup helper". `#479` building
+the helper is what makes that round cheap.*
+
+### *** `landiskaux` AND `wdcaltctrlbit` MUST SHIP TOGETHER, OR THE CHEAP ONE ACTIVATES
+### THE OTHER'S BUG ON A REAL RIG. Verified by construction 2026-08-27. ***
+
+`landiskaux` looks like the easiest fix on the queue: `dev_wdc.c` computes
+`alt_status_addr = devinit->addr + 0x206` and then carries a switch labelled *"Special
+hacks for individual machines"* with cases for MACPPC (`+0x160`), HPCMIPS (a hardcoded
+address) and IQ80321 (`+0x402`). **There is no LANDISK case**, so it falls through to the
+default while a seat MEASURED the OpenBSD 7.6 driver writing `+0x2c` — twelve Device
+Control writes during probe, all landing on unmapped memory.
+
+One `case MACHINE_LANDISK:` line fixes it.
+
+> *** AND SHIPPING THAT LINE ALONE WOULD MAKE THE ALT-CTRL ARM LIVE ON THAT MACHINE, WITH
+> ITS PREDICATE STILL WRONG. ***
+>
+> Of the twelve measured writes, **six are `0x08`** — `WDCTL_4BIT`, the exact bit the arm
+> triggers on, and one of them falls between two commands. Today all twelve are unmapped,
+> so the wrong predicate is inert on landisk. Map the register and the device starts
+> latching `COMMAND_RESET` on six routine control writes per probe.
+
+**So the ranking inverts against intuition.** `landiskaux` is a one-line mapping fix and
+`wdcaltctrlbit` is LOW — and doing the cheap one first ships the LOW one's bug into a rig
+that currently cannot reach it. They are one round, and the bit fix is the prerequisite,
+not the rider.
+
+*This is the second time today a severity has turned out to be an answer to a question
+rather than a property of a row: `wdcaltctrlbit` is LOW standalone, LOAD-BEARING as a
+precondition for F-wide, and now a PREREQUISITE for a one-line mapping fix. Three numbers,
+three questions, one defect.*
+
+*Found by verifying a seat's measurement rather than transcribing it — the switch's own
+comment says "Special hacks for individual machines", which is what made the missing case
+obvious once the file was open.*
