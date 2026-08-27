@@ -77,7 +77,21 @@ PIN = re.compile(r'check\s+"(\S+)\s+rows\s+run"\s+"[^"]*"\s+(\d+)')
 #  "measured 2026/08/23" the old pattern returned (2026, 08) and would have
 #  compared 08 against a row count.  The flanking guards reject anything that
 #  is part of a longer slash-run (a date, a path, a/b/c) or a percentage.
-SCORE = re.compile(r"(?<![\d/])(\d+)\s*/\s*(\d+)(?![\d/%])")
+#  *** THE `x` IN THE LOOKBEHIND IS LOAD-BEARING AND WAS ADDED 2026-08-26 (`scoreclaimhex`).
+#  Without it this reads a SLASH-SEPARATED HEX LIST as a score claim: `bases
+#  0x00/0x10/0x20/0x30` -- one line of ordinary prose in asic_badaddr_probe.py's
+#  docstring -- yielded THREE stale-claim FAILs (`00/0`, `10/0`, `20/0`) against a pin of
+#  12, and NONE of them had ever been written. The `00` is preceded by `x`, which the old
+#  `(?<![\d/])` happily allowed.
+#
+#  A FALSE FAIL IS THE OPPOSITE OF THE FAILURE THIS SECTION EXISTS TO CATCH, AND IS STILL
+#  EXPENSIVE: a gate that reddens on prose trains its reader to explain away red rows,
+#  which is how a real one gets waved through.
+#
+#  Negative-controlled in BOTH directions before landing: five real score claims
+#  (13/13, 26/26, 8/32, "52 / 52", 16/16) all still match; two hex lists
+#  (0x00/0x10/0x20/0x30, 0x18/0x1c) no longer do. Zero regressions.
+SCORE = re.compile(r"(?<![\dx/])(\d+)\s*/\s*(\d+)(?![\d/%])")
 
 
 def comment_lines(path):
