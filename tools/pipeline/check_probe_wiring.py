@@ -130,7 +130,18 @@ HERE_DIRS = ("", ".", "$HERE", "${HERE}")
 CLASS_DETECTOR = "detector"
 CLASS_WITNESS = "witness"
 CLASS_TOOL = "tool"
-CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL)
+CLASS_RESEARCH = "research"
+#  #471: a NON-SHIPPING artefact preserved as EVIDENCE, not as a test.  It exists so a
+#  measurement can be re-run or audited; it is not owed a gate and must not be read as
+#  an unwired detector.
+#
+#  *** THIS CLASS EXISTS BECAUSE THE OBVIOUS FIX WOULD HAVE BROKEN SOMETHING. ***  Making
+#  the scan recursive immediately pulls in the instruments preserved beside a kill table
+#  under regress/artifacts/.  A `_probe.py` suffix trips the MISFILED rule if they are
+#  called tools, while calling them detectors demands a gate they should never have --
+#  a file with no honest class.  A farmed seat found this and said plainly: land the
+#  complete path-aware fix WITH this classification, or do not land it at all.
+CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 
 #  ---------------------------------------------------------------------------------------
 #  THE MANIFEST.  One line per python artefact in regress/.  The CLASS is the only thing a
@@ -165,6 +176,20 @@ MANIFEST = {
     "selftest_budget.py":          (CLASS_DETECTOR, "wall-clock budget selftest"),
     "selftest_logdir.py":          (CLASS_DETECTOR, "#422 $LOGDIR honouring selftest"),
     "selftest_inactivity.py":      (CLASS_DETECTOR, "#467 inactivity-deadline selftest"),
+
+    #  #471: THE NESTED FILES, now visible for the first time.  Keys are paths RELATIVE
+    #  to regress/ -- top-level entries above stay bare basenames and are unaffected.
+    #
+    #  The detector is GATED (gate_sh_rounding.sh, #465).  The other two are the
+    #  INSTRUMENTS preserved beside a kill table so its numbers can be re-run rather than
+    #  merely believed -- the `preserveinstrument` rule.  They are EVIDENCE, not tests:
+    #  owing them a gate would be demanding that an archive prove something.
+    "artifacts/gdrompionull/gdrom_pio_null_probe.py":
+        (CLASS_DETECTOR, "#465 gdrom PIO null-deref detector, run by gate_sh_rounding.sh"),
+    "artifacts/gdrompionull/opus_p2_20260826/mism_probe.py":
+        (CLASS_RESEARCH, "#465 pass-2 kill-table instrument, preserved as evidence"),
+    "artifacts/gdrompionull/opus_p2_20260826/mutate.py":
+        (CLASS_RESEARCH, "#465 pass-2 mutant applier, preserved as evidence"),
     #  CLASSIFIED WHILE ITS OWN ROUND WAS STILL IN THE INDEX, and that is the check working
     #  rather than an exception to it: this file was `git add`ed by a concurrent #446 round
     #  MINUTES after this checker was written, went straight into the domain, and was named
@@ -434,7 +459,20 @@ def exec_sites(regress, scripts):
                     if d in HERE_DIRS:
                         hits.setdefault(b, []).append("%s:%d" % (script, no))
                     else:
-                        ignored.append("%s:%d  %s" % (script, no, t))
+                        #  #471: a NESTED invocation is keyed by its RELATIVE PATH, not
+                        #  its basename.  Before this, a gate invoking
+                        #  `artifacts/.../gdrom_pio_null_probe.py` was filed as an
+                        #  EXTERNAL reference and IGNORED -- so the detector #465 wired
+                        #  by hand still reported UNWIRED once the scan could see it.
+                        #
+                        #  Path keys are also what makes the re-key SAFE: two detectors
+                        #  sharing a basename in different directories stay distinct,
+                        #  where basename keys would mark BOTH gated when only one is.
+                        rel = os.path.normpath(os.path.join(d, b)).replace(os.sep, "/")
+                        if os.path.isfile(os.path.join(regress, rel)):
+                            hits.setdefault(rel, []).append("%s:%d" % (script, no))
+                        else:
+                            ignored.append("%s:%d  %s" % (script, no, t))
                     break             # the first .py argument is the script
     return hits, ignored, missing
 
@@ -472,16 +510,32 @@ def domain(regress):
         p = subprocess.run(["git", "ls-files", "--", "*.py"], cwd=regress,
                            capture_output=True, text=True)
         if p.returncode == 0:
+            #  #471: NO `"/" not in f` FILTER.  Its docstring always claimed "every
+            #  committed DETECTOR under regress/", and the filter made that false --
+            #  the checker could not see below top level, which is exactly where
+            #  #465 shipped a detector that no gate ran.
+            #
+            #  `git ls-files` yields paths RELATIVE to regress/, so a top-level file
+            #  still arrives as a bare basename and every existing MANIFEST key keeps
+            #  matching unchanged.  Only nested files gain a path key.
             files = sorted(f for f in p.stdout.split()
-                           if f.endswith(".py") and "/" not in f
+                           if f.endswith(".py")
                            and os.path.isfile(os.path.join(regress, f)))
             if files:
                 return files, "tracked-or-staged"
     except OSError:
         pass
-    return (sorted(f for f in os.listdir(regress)
-                   if f.endswith(".py") and os.path.isfile(os.path.join(regress, f))),
-            "on-disk (git could not answer)")
+    #  #471: the FALLBACK must descend too.  Leaving it flat would re-create the blind
+    #  spot on any machine where git cannot answer -- a check whose coverage depends
+    #  on which branch it took is the shape this file exists to refuse.
+    found = []
+    for dirpath, dirnames, filenames in os.walk(regress):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
+        for f in filenames:
+            if f.endswith(".py"):
+                rel = os.path.relpath(os.path.join(dirpath, f), regress)
+                found.append(rel.replace(os.sep, "/"))
+    return sorted(found), "on-disk (git could not answer)"
 
 
 def self_label(path):
@@ -579,9 +633,25 @@ def selftest(verbose=False):
         work = tempfile.mkdtemp(dir=root)
         rg = os.path.join(work, "regress")
         os.makedirs(rg)
+        #  #471: THE COPY MUST MIRROR THE TREE, NOT FLATTEN IT.  This loop was
+        #  `os.listdir`, so once the checker could see nested detectors the selftest
+        #  copy still could not -- and every nested MANIFEST entry became a GHOST in
+        #  the copy, reddening the unmutated M0 control.
+        #
+        #  That is the SAME blind spot one level up, inside the harness that tests
+        #  for it: a flat copy cannot exercise a recursive scan.
         for f in os.listdir(src_regress):
-            if f.endswith(".sh") or (f.endswith(".py") and f in MANIFEST):
+            if f.endswith(".sh"):
                 shutil.copyfile(os.path.join(src_regress, f), os.path.join(rg, f))
+        for rel in MANIFEST:
+            if not rel.endswith(".py"):
+                continue
+            src = os.path.join(src_regress, rel.replace("/", os.sep))
+            if not os.path.isfile(src):
+                continue
+            dst = os.path.join(rg, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
         chk = os.path.join(work, "check_probe_wiring.py")
         shutil.copyfile(me, chk)
         return rg, chk
@@ -692,6 +762,42 @@ def selftest(verbose=False):
               _lit('"hpcabort_witness.py"', ':    ("2026-09-20"'))
     case("M12 exempting a WITNESS reddens", 1,
          "ORPHAN EXEMPTION  hpcabort_witness.py", chk, rg)
+
+    #  ---------------------------------------------------------------- #471
+    #  THE RECURSIVE SCAN NEEDS ITS OWN MUTANTS, or a future edit reverts it and every
+    #  mutant above stays green -- the vacuity this file exists to refuse.  The three
+    #  below were specified by the farmed design that scoped this fix.
+
+    #  M13: NESTED RED.  Delete the real invocation from the gate; the nested detector
+    #  must be named by its FULL RELATIVE PATH, not its basename.
+    rg, chk = fresh()
+    _st_apply(os.path.join(rg, "gate_sh_rounding.sh"),
+              'python3 -u "$GPNPROBE"', 'true "$GPNPROBE"')
+    case("M13 a NESTED detector loses its gate and reddens", 1,
+         "artifacts/gdrompionull/gdrom_pio_null_probe.py", chk, rg)
+
+    #  M14: THE SCAN ITSELF.  Restore the `"/" not in f` filter and the nested detector
+    #  becomes INVISIBLE -- which is exactly the #465 escape.  It reddens as a GHOST,
+    #  because the MANIFEST still names a file the scan can no longer see.
+    rg, chk = fresh()
+    _st_apply(chk, _lit('rel = os.path.relpath(', 'os.path.join(dirpath, f), regress)'),
+                   _lit('rel = ', 'f'))
+    case("M14 the walk flattened (the #465 blind spot returns)", 1,
+         "GHOST", chk, rg)
+
+    #  M15: THE COLLISION CONTROL.  Re-key exec sites to the bare name again.  A gate
+    #  invoking
+    #  one nested detector would then mark EVERY like-named file gated -- the silent
+    #  failure the path re-key exists to prevent.  (This comment deliberately avoids
+    #  quoting the mutant's own find-text: _st_apply saw it TWICE and refused the
+    #  edit, which is the harness correctly rejecting an ambiguous mutant.)
+    #  It reddens because the ignored
+    #  branch swallows the nested invocation instead.
+    rg, chk = fresh()
+    _st_apply(chk, _lit('hits.setdefault(', 'rel, []).append'),
+                   _lit('hits.setdefault(', 'b, []).append'))
+    case("M15 exec sites keyed by basename again (collision)", 1,
+         "artifacts/gdrompionull/gdrom_pio_null_probe.py", chk, rg)
 
     shutil.rmtree(root, ignore_errors=True)
     n_ok = sum(1 for r in results if r)
