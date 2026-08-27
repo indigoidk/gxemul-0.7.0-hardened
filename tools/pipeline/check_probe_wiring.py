@@ -228,6 +228,8 @@ MANIFEST = {
         (CLASS_RESEARCH, "#483 orphan-ring/parity/sweep row generator, preserved as evidence"),
     "artifacts/wdcringambig/repro_20260827/author_repro484.py":
         (CLASS_RESEARCH, "#484 four-leg reproduction of the ring full/empty ambiguity, measured RED on ce75b1d before any edit"),
+    "artifacts/wdcnoirq/repro_20260827/author_repro485.py":
+        (CLASS_RESEARCH, "#485 256-opcode sweep of the ABRT-implies-assert invariant, measured RED on ed3f9cc before any edit"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_mut483.py":
         (CLASS_RESEARCH, "#483 mutant applier, author-prefixed after a seat overwrote an unprefixed one"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483.py":

@@ -11654,3 +11654,42 @@ altstatus handler escapes all 103 rows. Every row uses `len == 1`, and the regio
 registered TWO BYTES WIDE. Whether a guest can issue a 16-bit control write depends on the
 bus, so this is filed rather than fixed -- and it is adjacent to `wdcaltdecode`, which
 already records that the handler consults neither `len` nor `relative_addr`.
+
+
+## 2026-08-27 -- `#484` pass 1: a committed detector row that cannot reach its target
+
+### `wdcfloodstale` -- `overrun x2` was silently invalidated by `#479`
+
+`regress/wdc_flood_probe.py` row **`overrun x2`** drives 1026 undrained IDENTIFY commands,
+states in its own comment that they *"lap the ring TWICE"*, and asserts the latched
+`wdc inbuf overrun` message appears **exactly once**. Its header records that the row closed
+an **L2 floor breach**: without it the fix had six fixed sites and the detector saw five.
+
+*** THE STIMULUS CAN NO LONGER REACH THE TARGET. ***
+
+`#479` made `wdc_command()` call `wdc_new_command_reset()` **unconditionally**, and that
+helper sets `inbuf_head = inbuf_tail = 0`. IDENTIFY is dispatched *after* that reset and
+stages `sizeof(identify_struct)` = 512 bytes. So occupancy after any command is at most 512,
+and 1026 commands cannot lap a 262656-byte ring. The message can never fire, so the row must
+read **0, want 1**.
+
+Found by the grok seat on `#484`'s pass 1 and **confirmed by reading both functions** before
+filing. **NOT RUN** -- the probe needs a built binary and a rig. Filed at BELIEVED, as a
+reading; the measurement is owed. *Two independent readings are not a run and are not
+recorded as one.*
+
+> **THE CLASS IS ONE THIS CARRIER ALREADY NAMES, REACHED FROM THE MIRROR SIDE.** The standing
+> rule is *an ABSENCE record must name its warrant, and any edit touching that warrant re-runs
+> the death measurement*. This is a **PRESENCE** row whose warrant -- "1026 undrained
+> IDENTIFYs lap the ring" -- was falsified by an edit in a **different function**, and nothing
+> re-ran anything. **The obligation is symmetric and the carrier states only half of it.**
+
+Consequence for the round in flight: `#484` fixes the very producer this row defends, and it
+must **not** read a green `overrun x2` as evidence its fix is sound. **A row that cannot
+reach its target is not a row that passes.**
+
+REMEDY, one line: re-aim the stimulus at the only surviving wrap route -- the guest data-port
+WRITE arm, which takes no `wdc_command()` and therefore no reset. `#473` already performed
+exactly this re-aiming once on this file's sibling row, recording *"a detector aimed at a
+primitive cannot verify a fix made in its caller: right defect, wrong instrument."* Here it
+is the reverse -- right instrument, a stimulus that no longer arrives.
