@@ -236,6 +236,19 @@
 >   file already carries an 18-mutant `--selftest` harness to hang them on. A basename→path
 >   re-key can silently collide when two directories hold the same basename, so that needs
 >   its own row. Found by the opus5 seat on #465's pass 2.
+> - **`panelcite0824`** — four uncited panel dirs from 2026-08-24 hold **~23 substantial
+>   seat answers** that section G has never scoped. `check_seats_read` verifies every seat
+>   in a **cited** dir is recorded; **an uncited dir is invisible to it by construction** —
+>   the second check-that-cannot-fail found on 2026-08-26, after `check_probe_wiring` being
+>   blind below `regress/`'s top level.
+>   MEASURED: 166 `panel_<date>_<time>` directories exist, 76 cited, 94 not. **Scoped
+>   deliberately to the last three days**, only five were uncited and one was that day's own
+>   panel (since cited). The older dirs belong to closed rounds whose findings *were* acted
+>   on, so counting all 94 would overstate the class ~4×.
+>   DISPOSITION: harvest the four dirs — read each answer, record what it found, cite the
+>   dir — after which G covers them mechanically forever. Bounded, with a definite end.
+>   *Every unread-review instance recorded that day was a finding sitting in a seat answer
+>   nobody had opened, twice costing a full round to rediscover.*
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and
