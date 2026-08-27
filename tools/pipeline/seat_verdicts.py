@@ -72,6 +72,32 @@ import sys
 #  upper-cased on the way out.  A one-character token is refused outright
 #  (there is no real one-letter verdict, and it is the signature of a
 #  truncated match).
+#  #470: A LINE THAT BEGINS `path:NNN:` IS TOOL OUTPUT THE SEAT STREAMED, NEVER ITS OWN
+#  PROSE.  The file-reading seats (codex, agy, grok) write their grep and read results
+#  into the same file as their answer, so a verdict quoted from ANOTHER PANEL'S RECORD
+#  arrives looking exactly like this seat's conclusion.
+#
+#  *** MEASURED, and this is not hypothetical. ***  On panel_20260826_222557 the
+#  extractor reported `codex ... SHIP-WITH ... answered` while codex had issued NO
+#  verdict and was STILL RUNNING -- its file grew 909,882 -> 965,763 bytes during the
+#  check.  The match was at codex.txt:924, inside a line codex had grepped out of
+#  regress/pass2_ledger.tsv: a receipt from 2026-08-18 recording a DIFFERENT panel.
+#  A FABRICATED RATIFICATION would have entered the round record.
+#
+#  SCOPE, measured across every panel dir on disk (1,310 seat files):
+#      5,341 lines contain "VERDICT"; 91 of those are grep-output lines.
+#      1,062 lines the extractor ACCEPTS as a verdict; this rule kills exactly TWO,
+#      both in codex.txt, both the same grepped ledger line, from which it would have
+#      taken the verdict "the DECLINE is the".  Zero packet-fed seats affected -- an
+#      Ollama seat cannot grep, so its output contains only its own words.
+#
+#  2 of 1,062 is the whole footprint: it removes the false-positive class and touches
+#  nothing else.  It does NOT address the other half of `verdictprose` -- extracting
+#  from a seat that has not finished -- which needs a COMPLETION RECORD and is filed
+#  with its nine designed controls.  A stable file size is NOT that record: a thinking
+#  model stalls its output while still running.
+GREP_OUTPUT_LINE = re.compile(r"^[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,5}[-:][0-9]+[-:]")
+
 VERDICT_RE = re.compile(
     #  *** THE DASH MUST BE SURROUNDED BY SPACE, AND THE FIRST VERSION OF
     #  THIS LINE DID NOT SAY SO. ***  A bare [-] in the class matched the
@@ -200,6 +226,12 @@ def verdicts_of(text, brief_lines=()):
         #  nothing here -- which is exactly the rejection wanted, but it
         #  arrives as None rather than as a skip.  The first version of
         #  this pairing crashed on it.
+        #  #470: skip tool output the seat streamed into its own file.  A line
+        #  beginning `path:NNN:` is a grep/read result, never the seat's prose --
+        #  and a verdict quoted from another panel's record looks identical to a
+        #  conclusion once the label anchor is satisfied.
+        if GREP_OUTPUT_LINE.match(line):
+            continue
         m = VERDICT_RE.search(line)
         if m is None:
             continue
@@ -416,11 +448,39 @@ DQ = chr(34)    # double quote
 EMDASH = chr(8212)
 BQ = chr(96)    # backtick
 NL = chr(10)
+BS = chr(92)    # backslash -- Windows path separator in grep output
 ENDASH = chr(8211)
 
 CASES = [
     #  (label, text, brief_lines, expected)
     ("plain",          "VERDICT: SHIP", (), "SHIP"),
+
+    #  *** #470, MEASURED on panel_20260826_222557: the extractor reported codex as
+    #  SHIP-WITH while codex had issued NO verdict and was still running.  The match
+    #  came from a line codex had GREPPED out of regress/pass2_ledger.tsv -- another
+    #  panel's verdict, from 2026-08-18, streamed into its own output file.  A
+    #  FABRICATED RATIFICATION would have entered the round record.
+    #
+    #  Both grep forms are covered: a MATCH line uses `path:NNN:` and a CONTEXT line
+    #  uses `path-NNN-`.  The real data carried both, side by side.
+    #  *** THESE FIXTURES ARE REAL LINES FROM REAL PANEL FILES, NOT SYNTHETIC. ***
+    #  The first synthetic attempt was MEASURED VACUOUS by M14: `path:NNN:  VERDICT:`
+    #  is rejected by the ANCHOR anyway, because a colon satisfies neither the
+    #  line-start branch nor the sentence-boundary branch.  It looked like the defect
+    #  and could not reproduce it.  The real lines carry EMPHASIS AND SENTENCE
+    #  PUNCTUATION after the grep prefix, which is what satisfies the anchor and is
+    #  precisely why the guard is needed.
+    ("grep match line with anchor",
+     "." + BS + "_scratchpad" + BS + "r52_kimi.txt:450:  " + ST * 2
+     + "1. VERDICT: DOCUMENT-ONLY" + ST * 2, (), None),
+    ("grep context line with anchor",
+     "_scratchpad" + BS + "r100_kimi.txt-1143-  x. VERDICT: unobservable", (), None),
+
+    #  AND THE RULE MUST NOT BLANK A SEAT THAT GREPS: a real verdict AFTER quoted
+    #  tool output is still the seat's own conclusion and must be found.
+    ("real verdict after grep output",
+     "regress/pass2_ledger.tsv:32:  x. VERDICT: DO NOT SHIP" + NL + "VERDICT: SHIP",
+     (), "SHIP"),
 
     #  *** DEFECT 1, measured on the #460 pass-2 panel. ***  minimax answered
     #  with markdown emphasis and was filed under "answered, NO VERDICT LINE
@@ -619,6 +679,12 @@ MUTANTS = [
     #  provable failure was via M2's multiword capture -- attributable to the
     #  wrong feature.  Named by a regress seat.  This edit also documents the
     #  52-of-58 seat-blanking incident as something a single edit can restore.
+    #  #470: without this guard a verdict QUOTED from another panel, inside tool
+    #  output the seat streamed into its own file, is read as the seat's conclusion.
+    ("M14 grep-output guard dropped (a quoted verdict becomes this seat's)",
+     [("if GREP_OUTPUT_LINE.match(line):", "if False and GREP_OUTPUT_LINE.match(line):")],
+     ("grep match line with anchor", "grep context line with anchor")),
+
     ("M13 sentence-boundary branch dropped (blanks a whole seat)",
      [('|[.!?][ \\t]*[*_`]{0,3}[ \\t]*)', ')')],
      ("verdict at a sentence boundary",)),
