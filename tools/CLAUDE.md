@@ -1866,6 +1866,84 @@ be stale in both directions, and a tool's own header is a primary source about t
 `pdftotext -layout` — grep that), `idt_r30xx.pdf`, `mc88100.pdf`, `mips-iv.pdf`,
 `mips32_volII.pdf`, `mips64_volII.pdf`, `mips_r4000.pdf`.
 
+*** AND `dc21285.pdf` / `dc21285.txt` (Intel 278115-001, the DC21285 'Footbridge' core logic
+controller) HAVE BEEN PRESENT SINCE 2026-08-15 AND THIS LIST DID NOT SAY SO UNTIL 2026-08-27. ***
+
+It was found by a seat that went looking for it rather than by this list, and it immediately
+settled a round that was about to transfer the wrong warrant: the `+0x188` read arm in
+`dev_footbridge.c` was being treated as an unimplemented register needing a decline, and Table
+7-10 (`dc21285.txt:6826`) plus the prose at `:6911-6915` say it is **IRQEnable, a documented
+read-only register** -- *"The value of this register can only be changed by writing to the
+EnableSet and EnableClear registers"*, reset value 0. The model already returns the right value
+and then calls `exit(1)` on it.
+
+**That produced a FOURTH member of the de-fatalisation option set, which the three-membered rule
+above does not contain: ACCEPT.** delete / decline / decline+bounded-announce all presume the
+access is unserviceable. Where the model already computes the correct answer and then discards
+it, the disposition is to delete the kill and KEEP THE VALUE -- no latch, no message, because
+there is no event to announce. *A bounded-announce here would ship a wrong record in product
+code: printing "unimplemented; ignored" about a read that is implemented and is not ignored.*
+
+**The general lesson is about this list, not about footbridge: an absent-source note is
+load-bearing and this one was wrong for twelve days.** The same failure is already recorded
+above for the SH manual, where 'there is no SH documentation' was load-bearing for four rounds.
+**Before reasoning from first principles about a device, `ls _scratchpad/*.pdf` -- do not trust
+this paragraph to be complete.**
+
+*** THE COMPLETE LIST, DERIVED 2026-08-27 BY `ls _scratchpad/*.pdf` RATHER THAN TRANSCRIBED.
+FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
+
+```
+  dc21285.pdf
+  ddi0100i.pdf
+  i8254.pdf
+  idt_r30xx.pdf
+  mc88100.pdf
+  mips-iv.pdf
+  mips32_volII.pdf
+  mips64_volII.pdf
+  mips_r4000.pdf
+  ppc_oea_book3_v201.pdf
+  ppc_pem32_rev2_2001.pdf
+  ppc_pem_32and64_2005.pdf
+  ppc_vea_book2_v201.pdf
+  sh4_programming.pdf
+  sh7750_hardware.pdf
+```
+
+**SIX were undocumented**, and two of them are load-bearing for work in flight the day this was
+derived: **`i8254.pdf`** (three PIT rows were worked this week arguing about counter behaviour
+from the source alone) and **four PowerPC manuals** -- `ppc_oea_book3_v201`, `ppc_pem32_rev2_2001`,
+`ppc_pem_32and64_2005`, `ppc_vea_book2_v201` -- while a PowerPC straddling-store defect
+(`mrwstore2`) was being recorded with no reference to any of them.
+
+Extracted text PAIRED with one of those manuals (grep these, not the PDFs):
+
+```
+  dc21285.txt
+  ddi0100i.txt
+  i8254.txt
+  idt_r30xx.txt
+  mc88100.txt
+  mips-iv.txt
+  mips32_volII.txt
+  mips64_volII.txt
+  mips_r4000.txt
+  ppc_oea_book3_v201.txt
+  ppc_pem32_rev2_2001.txt
+  ppc_pem_32and64_2005.txt
+  ppc_vea_book2_v201.txt
+  sh4_programming.txt
+  sh7750_hardware.txt
+```
+
+> **THE RULE THAT REPLACES MAINTAINING THIS LIST BY HAND: `ls _scratchpad/*.pdf` IS THE
+> AUTHORITY, AND IT COSTS ONE COMMAND.** This paragraph has now been wrong twice in the same
+> way -- 'there is no SH documentation' was load-bearing for four rounds, and the footbridge
+> datasheet sat unlisted for twelve days while a round reasoned around it. A hand-maintained
+> inventory of files is a wrong record waiting for someone to add a file.
+
+
 *** SH DOCUMENTATION NOW EXISTS — OBTAINED 2026-08-22 BY OWNER DIRECTIVE, AND THE FIRST
 THING IT DID WAS REFUTE A FINDING THIS PROJECT WAS ABOUT TO FILE. ***
 
