@@ -40,8 +40,13 @@ WHAT THIS FILE DOES NOT COVER, stated rather than left to be found:
     unimplemented FEATURE, not an unimplemented ENCODING: the transfer it guards is the
     one configuration the model accepts, and declining it needs a different oracle
     (interrupt delivery).  Two seats reached that scope conclusion independently.  It is
-    filed as `sh4dmacie`, and row X1 below PINS that it is still fatal, so the exclusion
-    is visible in the gate rather than silent.
+    filed as `sh4dmacie`, and row X1 below PINS the site's behaviour, so the exclusion is
+    visible in the gate rather than silent.
+    *** THIS SAID X1 PINS THAT THE SITE IS "STILL FATAL".  THAT WAS TRUE WHEN WRITTEN AND
+    IS FALSE AT HEAD: `#453` (f532bb6) de-fatalised it, and X1 now asserts the OPPOSITE --
+    `alive` plus exactly one latched diagnostic.  Corrected 2026-08-26 by the sh4dmacie
+    regress review, which found the probe's own X1 body contradicting its docstring five
+    hundred lines below. ***
   * Nothing here claims a transfer HAPPENS.  It cannot: `sh4_dmac_transfer()` writes
     nothing to guest state on any path -- `case 0x200:` is `(void)sar; (void)dar;` with
     the comment "No transfer is done here!".  MEASURED by reading the whole function.
@@ -394,7 +399,8 @@ def main():
     #  latch exists to prevent.  Named by a pass-2 seat; built before it was believed.
     #
     #  RS=1 and RS=3 deliberately, and NOT RS=2: 0x200 is the one ACCEPTED encoding, and
-    #  with CHCR_IE set it reaches the sh4dmacie site that is still fatal by design -- an
+    #  with CHCR_IE set it reaches the sh4dmacie site, which WAS fatal by design when this
+    #  comment was written and was de-fatalised by #453 (f532bb6) -- an
     #  earlier draft of this measurement used it and killed the BASELINE, which is a void
     #  result rather than a negative one.
     buf, alive, st = three_stores(

@@ -7253,7 +7253,13 @@ Better for the host, and a real behavioural change.
 
 `X1` used to assert this site was still fatal — a deliberate exclusion pin from `#448` —
 and its own message said what to do when it reddened: *"delete the row rather than the fix."*
-It reddened. Five rows replace it, and `sh4_chcr_probe.py` goes 20 → 25.
+It reddened. Five rows replace it, and `sh4_chcr_probe.py` grows — to **27**, the value
+`EXPECT_ROWS` pins in the probe and `gate_sh_rounding.sh` checks against.
+*(This said "goes 20 → 25". That was a MID-ROUND figure: the round added rows after it
+was written, and the final count is what the commit message, the probe's `EXPECT_ROWS`
+and the gate's `check_min` all agree on. Corrected 2026-08-26 by the `sh4dmacie` regress
+review, and landed per the count rule — deriver named, not a fresh bare literal:
+`grep -n 'EXPECT_ROWS' regress/sh4_chcr_probe.py` resolves it at any commit.)*
 
 | mutant | result | rows that redden |
 |---|---|---|

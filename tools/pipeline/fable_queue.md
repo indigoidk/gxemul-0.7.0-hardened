@@ -664,6 +664,11 @@ Also worth this seat's attention:
   that one. Is there a cheap mechanical check for "sibling rows that should have been edited
   together", or is this irreducibly judgement?
 * **X1 pins a defect that is NOT fixed** (`sh4dmacie`), so the gate reddens the day someone
+  *[OVERTAKEN BY EVENTS 2026-08-26: `sh4dmacie` WAS fixed, by `#453`/`f532bb6`, and X1 now
+  asserts survival plus one latched diagnostic rather than death.  A seat fired on this
+  brief as written would be reviewing a defect that no longer exists -- the `sgiarcbiosoob`
+  precedent, where a hold text outlived its own oracle.  Left in place with this bracket
+  rather than deleted, because the brief's OTHER points are unaffected.]*
   repairs it, with the instruction "delete the row rather than the fix". Sound, or a trap?
 * `fatal()` was kept for consistency with `#443`/`#447`. A pass-1 seat argued for `debug()` since
   the condition no longer terminates. `fatal()` ignores `-q`; `debug()` does not.
