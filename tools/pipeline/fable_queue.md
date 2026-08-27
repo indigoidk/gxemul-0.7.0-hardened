@@ -886,3 +886,19 @@ inference, and its `commits` field was empty until 2026-08-25 because the work s
 joined round's id. **Is a duplicate-style close with the carrying commit now named the right
 disposition, or does the row owe regress evidence of its own?**
 
+
+### `sh4dmacie` -- REGRESS REVIEW OWED (closed at f532bb6)
+
+**The question this is queued for:** the row was closed on RECORDS evidence, not on regress
+evidence -- the shipped source reads `if (sh4_val_first(d, SH4_VAL_DMACIE, channel, 1u << 0))`
+with zero `exit(` in that arm, and `OUTSTANDING_BUGS.md` has said "FIXED by #453" throughout.
+**Does the de-fatalisation carry a DETECTOR that would redden if the `exit(1)` were reinstated,
+or did #453 ship the fix without a row pinning it?** If the latter, this is vacuity-floor
+clause (b) undischarged on a closed row, and the close is premature rather than merely late.
+
+*Context worth having: the row sat `held` with an EMPTY commits field until 2026-08-26 while
+the bug file said FIXED -- two records disagreeing about whether a defect was fixed. That was
+corrected, and the close then followed for consistency with `panelseatlabel`, which closed the
+same day on identical evidence. Section I refused the close until this review was queued, which
+is the gate working: a product-code closure owes regress evidence in a way a harness closure
+does not.*
