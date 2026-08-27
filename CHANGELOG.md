@@ -31,9 +31,16 @@ The fix resets the clock whenever the buffer grows, so `timeout` means SILENCE. 
 report progress -- it returns `True` both when data arrives and when its `select()` times out
 quietly -- so progress is `len(self.buf)` changing.
 
-**SAFE BY CONSTRUCTION, and that is why it ships without a rig run:** the new deadline is
-strictly more permissive for any run that produces output, and identical for one that produces
-none. *It cannot turn a passing run into a failing one.* What it can do is let a genuinely hung
+**SAFE BY CONSTRUCTION FOR SUCCESSFUL RUNS, and the qualifier is load-bearing:** the new
+deadline is strictly more permissive for any run that produces output, and identical for one
+that produces none. *It cannot turn a passing run into a failing one.*
+
+*** BUT IT IS NOT FAILURE-SAFE, AND TWO PASS-2 SEATS REFUTED THE LEMMA AS FIRST WRITTEN. ***
+A run that FAILS WHILE PRODUCING OUTPUT never trips the deadline at all -- noisy failure
+defeats the bound. The original claim was correct and INCOMPLETE, which is worse than wrong
+because it reads as a proof. The property is: **monotonic for successful runs, unbounded for
+noisy failures.** A run that hangs SILENTLY is still caught, which is the case the deadline
+was written for. What it can do is let a genuinely hung
 run sit longer -- bounded, because silence still trips the same `timeout`.
 
 ### *** `free_run(seconds)` IS DELIBERATELY NOT CONVERTED ***

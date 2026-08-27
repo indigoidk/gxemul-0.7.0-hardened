@@ -118,12 +118,23 @@
     Adding an event >= 96 makes it live.  See dev_dreamcast_asic.c's #463
     invariant comment, which reasons about the r == 3 half from the other
     side.  Filed as `asiceventaddr`.  */
-/*  #468: evaluates to 0 for a legal event and fails to COMPILE otherwise.  The
+/*  #468/#469: evaluates to 0 for a legal event and fails to COMPILE otherwise.  The
+    domain is [0,95] and BOTH ENDS are enforced.
+
+    *** #468 GUARDED ONLY THE UPPER END, AND A PASS-2 SEAT MEASURED THE HOLE
+    WITHIN THE HOUR. ***  The first form tested `(e) < 96`, which -1 satisfies,
+    so `SYSASIC_EVENT_TO_ADDR(-1)` COMPILED CLEAN and produced 0x005f68fc --
+    four bytes BELOW SYSASIC_BASE, because `4*((-1)>>5)` is -4.  Reproduced
+    here before fixing: the guard passed and the address was out of range.
+
+    A guard written from the DEFECT (events too large) rather than from the
+    DOMAIN ([0,95]) covers one end and reads as if it covers both.  The
     bitfield form is preferred over a negative-size array because a runtime
     variable `e` silently degrades an array to a VLA, while a bitfield width
     must be an integer constant and hard-errors.  */
 #define	SYSASIC_EVENT_RANGE_OK(e)				\
-	((int)sizeof(struct { int sysasic_event_lt_96 : ((e) < 96) ? 1 : -1; }) * 0)
+	((int)sizeof(struct { int sysasic_event_in_range :\
+		((e) >= 0 && (e) < 96) ? 1 : -1; }) * 0)
 
 #define	SYSASIC_EVENT_TO_ADDR(e)				\
 	(SYSASIC_BASE + 4*((e)>>5) + SYSASIC_EVENT_RANGE_OK(e))

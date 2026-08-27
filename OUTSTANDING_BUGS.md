@@ -31,10 +31,25 @@
 > independently the same day in a different tool. When one enumeration is found short, grep the
 > others — the omission is a habit, not an accident.*
 >
-> - **`wdcringambig`** — the wdc inbuf ring uses `head == tail` for BOTH empty and full with no
->   disambiguator; `:145`'s check is post-hoc, so the store that actually corrupts is the NEXT
->   one and is silent; and the two BULK paths never compare the pointers at all, only against
->   the array end. Four seats located it independently on the `wdcflood` pass-1 panel.
+> - **`wdcringambig`** — *** ESCALATED 2026-08-26: GUEST-REACHABLE, NOT LATENT, AND ONE LEGAL
+>   COMMAND DOES IT. *** The wdc inbuf ring uses `head == tail` for BOTH empty and full with
+>   no disambiguator; the overrun check is post-hoc, so **the store that actually corrupts is
+>   the NEXT one and is SILENT**; and the two BULK paths never compare the pointers at all,
+>   only against the array end. Four seats located it independently on the `wdcflood` pass-1
+>   panel.
+>   **THE ESCALATION, found by a farmed codex job and re-verified by reading:** `dev_wdc.c`
+>   sets `atapi_len = data_in_len` and then loops `wdc_addtoinbuf()` over ALL of it **with no
+>   bound against ring capacity**, capping `atapi_len` only afterwards — and `READ(10)` takes
+>   a **guest-controlled** transfer length. `WDC_INBUF_SIZE = 512*(512+1) = 262,656` = exactly
+>   513 blocks, so **block 514 of a single READ(10) begins overwriting unread data.**
+>   DETECTOR DESIGNED, with the seat naming why the obvious oracle fails: fill the ring
+>   exactly, require DRQ still set, write marker `0x5a` to DATA, read one byte and require
+>   `0x40`. *"The marker is the crucial oracle: it proves the next producer did not overwrite
+>   the oldest queued byte. Merely counting the diagnostics does not."* The committed probe
+>   already reaches the exact-full path and does **not** measure the overwritten value, so the
+>   round costs one row on an existing probe rather than a new witness.
+>   Ranked above dormant debt, below a demonstrated boot-path corruption (stock-OS incidence
+>   is unmeasured). **Needs a build** — queued behind the machine embargo.
 > - **`wdcexpecteddata`** — the unexpected-DATA-write site is guarded by
 >   `!d->write_in_progress && !d->atapi_cmd_in_progress`. **Drop the first conjunct and it
 >   warns-and-latches on a perfectly LEGAL write during an active transfer** — and every row
