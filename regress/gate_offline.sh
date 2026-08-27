@@ -114,6 +114,21 @@ check     "budget: the over-budget leg stops for the budget" \
 check     "budget: the under-budget leg does not" \
           "$(grep -c 'ok    a run UNDER the printed budget does not stop' "$BULOG")" "1"
 
+#  #467: the deadline must fail on SILENCE, not on ELAPSED TIME.  Every pty probe used to
+#  spend a TOTAL-TIME budget, so a boot that took 90 s on a loaded host failed while bytes
+#  were arriving throughout -- slow was indistinguishable from stuck, and the battery could
+#  only be trusted on an idle machine.
+#
+#  THE TWO LEGS ARE OPPOSITE IN SIGN AND BOTH ARE CHECKED HERE.  A conversion that made the
+#  timeout UNREACHABLE would pass the slow-but-progressing leg and defend nothing; the
+#  genuinely-stuck leg is what refuses that.  Checking only the first would be the
+#  check-that-cannot-fail shape this tree keeps finding in its own work.
+IALOG=$LOGDIR/selftest_inactivity.log
+python3 "$HERE/selftest_inactivity.py" > "$IALOG" 2>&1 || true
+check     "inactivity: verdict present" "$(grep -c SELFTEST_INACTIVITY_PASS "$IALOG")" "1"
+check     "inactivity: the slow-but-progressing leg passes under the new shape" "$(grep -c 'NEW inactivity shape passes' "$IALOG")" "1"
+check     "inactivity: the genuinely-stuck leg STILL fails" "$(grep -c 'NEW inactivity shape STILL fails' "$IALOG")" "1"
+
 #  budget_class lives in lib.sh precisely so this truth table can run here rather than only
 #  under a weekly rig boot.  `zeroed` is the case that used to print a GREEN "deliberately
 #  absent" for a rig whose budget is 12 G -- measured at 11/11 PASS before this round.

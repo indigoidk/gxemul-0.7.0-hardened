@@ -1,3 +1,83 @@
+## Round 467 (#467) -- the pty deadline now means SILENCE, not elapsed time
+
+The owner asked whether Windows could ever be idle enough to trust the battery. The honest
+answer was **no** -- and that reframes the problem. Do not chase idleness; remove the
+load-sensitivity.
+
+### *** THE FIRST FRAMING WAS WRONG AND WAS CORRECTED BEFORE ANYTHING WAS TOUCHED ***
+
+The proposal was to convert the worst offenders to **work-accounting**, on `#419`'s precedent:
+`LUNA_BUDGET` counts guest instructions, so a loaded host executes the same work and the oracle
+holds. Classifying all 249 wall-clock references showed that is not the defect here:
+
+| kind | count |
+|---|---|
+| guest-side budgets, already work-accounted | 3 |
+| **pty TRANSPORT timeouts** | **245** |
+| true measurement oracles (the `#419` case) | 1 |
+
+**Work-accounting cannot fix a transport timeout.** While you wait for bytes there are no guest
+instructions to count -- the whole point is that you do not know whether the guest is running.
+Converting literally as proposed would have changed ONE thing.
+
+### The real defect is bigger: ZERO files used an inactivity deadline
+
+Every pty probe read `t = time.time()` once and looped `while time.time() - t < timeout` -- a
+**total-time** budget, spent by the clock rather than by the guest. A boot that normally takes
+40 s and takes 90 s on a loaded host FAILS, while bytes arrive steadily throughout. **Slow was
+indistinguishable from stuck**, which is precisely why the battery needed a quiet machine.
+
+The fix resets the clock whenever the buffer grows, so `timeout` means SILENCE. `rd()` cannot
+report progress -- it returns `True` both when data arrives and when its `select()` times out
+quietly -- so progress is `len(self.buf)` changing.
+
+**SAFE BY CONSTRUCTION, and that is why it ships without a rig run:** the new deadline is
+strictly more permissive for any run that produces output, and identical for one that produces
+none. *It cannot turn a passing run into a failing one.* What it can do is let a genuinely hung
+run sit longer -- bounded, because silence still trips the same `timeout`.
+
+### *** `free_run(seconds)` IS DELIBERATELY NOT CONVERTED ***
+
+It is not a timeout at all. It is an **exposure window**: it runs the guest for a set wall-clock
+period and then SIGINTs. Converting it would change the experiment rather than protect it --
+**and a naive sweep over `time.time()` sites would have eaten it.** That is why this round
+converts one NAMED METHOD rather than a pattern.
+
+### The detector, and why one leg is not enough
+
+`selftest_inactivity.py` ships with the fix, wired into gate 2 beside `selftest_budget`. Two
+legs, **opposite in sign**:
+
+| leg | old shape | new shape |
+|---|---|---|
+| slow-but-progressing (60 ticks, short deadline) | **FAILS** -- that IS the defect | PASSES |
+| genuinely stuck (no output at all) | fails | **must STILL fail** |
+
+**The second leg is the one that matters.** A conversion that made the timeout UNREACHABLE
+would sail through the first and defend nothing -- the check-that-cannot-fail shape this tree
+keeps finding in its own work. Both legs are separate gate rows, not just the verdict line, for
+the same reason. A third leg pins the reset's presence in each converted probe, catching a
+silent revert.
+
+Negative-controlled in both directions before landing: removing the reset from one probe turns
+the selftest RED and names the file; restoring it goes GREEN. No rig, no build, no wall-clock
+oracle of its own -- **as load-insensitive as the property it defends.**
+
+### Assessed, not changed
+
+* **Scope is two probes** -- the measured worst offenders, 7 tight budgets each. The remaining
+  ~245 sites are the same class and are FILED as `loadfragile` rather than swept, because each
+  needs the `free_run` distinction checked by hand. A sweep is exactly what would have broken
+  the exposure window.
+* **`fbpending_drain_probe.py` is one of only two CRLF files in the tree** and was converted
+  PRESERVING its line endings (+16/-0). Normalising would have produced the ~500-line churn diff
+  this session already had to justify once.
+* `check_probe_wiring.py` caught the new detector as unwired and refused the commit until a gate
+  ran it. That is the checker whose blind spot was filed the same day as `probewiringscope` --
+  it cannot see below `regress/`'s top level, and this detector sits at top level, so it saw it.
+  **The check working exactly where it can see, one round after `#465` shipped a detector
+  nothing ran.**
+
 ## Round 465 (#465) -- dev_dreamcast_gdrom.c: `data` and `data_len` were released apart
 
 `alloc_data()` sets the two together -- `d->data_len = d->cnt;` then the allocation. **Both

@@ -164,6 +164,7 @@ MANIFEST = {
     "selftest_absorb.py":          (CLASS_DETECTOR, "drive_guest.split_stream selftest"),
     "selftest_budget.py":          (CLASS_DETECTOR, "wall-clock budget selftest"),
     "selftest_logdir.py":          (CLASS_DETECTOR, "#422 $LOGDIR honouring selftest"),
+    "selftest_inactivity.py":      (CLASS_DETECTOR, "#467 inactivity-deadline selftest"),
     #  CLASSIFIED WHILE ITS OWN ROUND WAS STILL IN THE INDEX, and that is the check working
     #  rather than an exception to it: this file was `git add`ed by a concurrent #446 round
     #  MINUTES after this checker was written, went straight into the domain, and was named

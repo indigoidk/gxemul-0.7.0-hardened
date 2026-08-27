@@ -302,11 +302,27 @@ class Session:
         self.buf += d.decode("latin1", "replace")
         return True
 
+    #  #467: an INACTIVITY deadline, not a total-time one.  This used to read
+    #  `t = time.time()` once and loop `while time.time() - t < timeout`, so a boot
+    #  that normally takes 40 s and took 90 s on a LOADED HOST failed -- while bytes
+    #  were arriving the whole time.  Slow was indistinguishable from stuck, and the
+    #  battery could only be trusted on an idle machine.
+    #
+    #  `rd()` cannot report progress: it returns True both when data arrives and when
+    #  its select() times out quietly.  So progress is `len(self.buf)` changing.
+    #
+    #  STRICTLY MORE PERMISSIVE for a run that produces output, IDENTICAL for one that
+    #  does not -- it cannot turn a passing run into a failing one.  `timeout` now
+    #  means SILENCE, which is the thing actually worth failing on.
     def wait(self, mark=0, echo=None, timeout=60):
         t = time.time()
+        seen = len(self.buf)
         while time.time() - t < timeout:
             if not self.rd():
                 return False
+            if len(self.buf) != seen:
+                seen = len(self.buf)
+                t = time.time()
             resp = self.buf[mark:]
             if echo is not None and echo not in resp:
                 continue

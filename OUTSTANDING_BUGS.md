@@ -267,6 +267,21 @@
 >   opened" is refuted by my own commit body: the largest was a review read thoroughly
 >   and left unrecorded. Today's were RECORDING gaps; the round-costing ones are
 >   historical.*
+> - **`loadfragile`** — every pty probe waited on an **absolute** deadline, so a merely SLOW
+>   run failed identically to a STUCK one and the battery could only be trusted on an idle
+>   machine. **Zero files used an inactivity deadline.** `#467` resets the clock when the
+>   buffer grows, so `timeout` means SILENCE — strictly more permissive for a run that
+>   produces output, identical for one that does not.
+>   *The first framing was wrong and was corrected before acting: work-accounting (`#419`'s
+>   `LUNA_BUDGET`) cannot fix a TRANSPORT timeout, because while waiting for bytes there are
+>   no guest instructions to count. Classification of 249 references: **245 transport
+>   timeouts, 3 guest-side budgets, 1 true measurement oracle** — converting literally as
+>   first proposed would have changed one thing.*
+>   Detector `selftest_inactivity.py` ships with it, two legs OPPOSITE IN SIGN (the
+>   genuinely-stuck leg is the one that matters — a conversion making the timeout
+>   unreachable would sail through the other and defend nothing). **`free_run()` is
+>   deliberately NOT converted:** it is an exposure window, not a timeout, and a naive sweep
+>   over `time.time()` sites would have eaten it.
 > - **`gdrompiooddlen`** — the GDROM PIO read guards ONE byte and then reads TWO, and
 >   `alloc_data` mallocs exactly `data_len` with no padding. **LATENT, NOT LIVE:** the owed
 >   reachability check came back NEGATIVE the same day. `data_len` has exactly one writer, and

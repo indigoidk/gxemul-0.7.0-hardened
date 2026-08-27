@@ -71,25 +71,62 @@
 #define	SYSASIC_EVENT_PRIMOUTOFMEM	66	/*  Out of primitive mem  */
 #define	SYSASIC_EVENT_MATOUTOFMEM	67	/*  Out of matrix mem  */
 
-/*  #466: THIS MACRO IS CORRECT ONLY FOR e IN [0,95].  Stated rather than
-    asserted: _Static_assert is C11 and this tree is C99, and an assert can
-    only name terms that already exist -- a new #define above would add a name
-    it does not mention and compile clean.
+/*  #466/#468: THIS MACRO IS CORRECT ONLY FOR e IN [0,95], AND IT IS NOW ENFORCED
+    AT COMPILE TIME -- see SYSASIC_EVENT_RANGE_OK below.
 
-    4*((e)>>5) walks OUT of the three words each register group owns:
-      e 96..127  -> +0x0c, +0x1c, ...  the fourth word of a group.  Declined
-                   by dev_dreamcast_asic.c's decode; the event is DROPPED.
-      e 128..159 -> +0x10, which is a LEGAL case: the raise is decoded as an
-                   ordinary write and CLOBBERS mask_13[0].  Same for 256..287
-                   -> +0x20.  No bounds check can see this -- the offset is
-                   valid and only the MEANING is wrong.
-      e >= 2048  -> +0x100 and beyond, outside the device window entirely.
+    #466 shipped this as a COMMENT ONLY, on the rationale that _Static_assert is
+    C11 while this tree is C99, and that an assert can only name terms that
+    already exist -- so a new #define would add a name it does not mention and
+    compile clean.  *** BOTH LEGS WERE REFUTED BY MEASUREMENT on #466's pass 2,
+    independently by two seats, one of which BUILT ALL FOUR VARIANTS: ***
+      - the C11 leg ruled out one SPELLING, not compile-time checking.  The
+        negative-width bitfield idiom below needs only C89, and is clean under
+        -std=c89 -pedantic-errors -Wall -Wextra.  (The build compiler in fact
+        reports __STDC_VERSION__ 202311L, so "this tree is C99" was a
+        portability policy, not a fact about what compiles.)
+      - the shape leg analysed the wrong placement.  A STANDALONE assert does
+        compile clean on the feared edit -- MEASURED.  A check INSIDE the macro
+        does not: it fires at the RAISE, so it cannot be bypassed by adding a
+        name.  MEASURED: `#define SYSASIC_EVENT_FOO 96` plus a raise is a hard
+        compile error, while all 21 real events keep BYTE-IDENTICAL addresses.
+
+    HONEST CONTRACT: the guard fires at a CALL SITE, not at a definition.  A
+    define of 96 that is never raised still compiles -- which is benign by
+    construction, since an event never passed to this macro cannot reach the
+    defect.  That is a STRONGER domain than a name-based assert, not weaker.
+
+    STRUCTURALLY: the macro treats the event's high bits as a word index into the
+    WHOLE 64-word register file, when only words 0..2 -- the pending_irq group --
+    are what it means to address.  Enumerated over [0,8192) against the real
+    switch:
+         0..95   +0x00/04/08  CORRECT   pending_irq[0..2]
+        96..127  +0x0c        DROPPED   r == 3, falls to default:
+       128..223  +0x10/14/18  CLOBBER   mask_13[0..2]
+       224..255  +0x1c        DROPPED
+       256..351  +0x20/24/28  CLOBBER   mask_11[0..2]
+       352..383  +0x2c        DROPPED
+       384..479  +0x30/34/38  CLOBBER   mask_9[0..2]
+       480..2047              DROPPED
+        >= 2048  +0x100 up    leaves the device window (>= 6144 reaches MAPLE)
+    THE CLOBBER DOMAIN IS e IN [128,479] -- 352 values across NINE mask words.
+    A clobber is worse than a drop: the raise both FAILS and DESTROYS the guest's
+    programmed IRQ mask, because the mask cases carry no hack-bit discrimination
+    and the store is a wholesale replacement, with the tick called immediately.
+    No bounds check can see it -- the offset is VALID and only the MEANING is wrong.
 
     Max over the 21 defines above is 67 (67>>5 == 2), so this is LATENT.
     Adding an event >= 96 makes it live.  See dev_dreamcast_asic.c's #463
     invariant comment, which reasons about the r == 3 half from the other
     side.  Filed as `asiceventaddr`.  */
-#define	SYSASIC_EVENT_TO_ADDR(e)	(SYSASIC_BASE + 4*((e)>>5))
+/*  #468: evaluates to 0 for a legal event and fails to COMPILE otherwise.  The
+    bitfield form is preferred over a negative-size array because a runtime
+    variable `e` silently degrades an array to a VLA, while a bitfield width
+    must be an integer constant and hard-errors.  */
+#define	SYSASIC_EVENT_RANGE_OK(e)				\
+	((int)sizeof(struct { int sysasic_event_lt_96 : ((e) < 96) ? 1 : -1; }) * 0)
+
+#define	SYSASIC_EVENT_TO_ADDR(e)				\
+	(SYSASIC_BASE + 4*((e)>>5) + SYSASIC_EVENT_RANGE_OK(e))
 #define	SYSASIC_EVENT_TO_BITMASK(e)	(1 << ((e) & 31))
 
 #define	SYSASIC_TRIGGER_EVENT(e)	{				\

@@ -181,7 +181,8 @@ DEVICE_ACCESS(dreamcast_asic)
 
 	    Governs THIS FILE ONLY.  SYSASIC_EVENT_TO_ADDR() reaches a fourth
 	    word via a header #define no comment here can reach:
-	    dreamcast_sysasicvar.h:74 is 4*((e)>>5), which lands on an r == 3
+	    dreamcast_sysasicvar.h's SYSASIC_EVENT_TO_ADDR is 4*((e)>>5), which
+	    lands on an r == 3
 	    offset exactly when (e>>5) & 3 == 3 -- e in [96,127] -> +0x0c, then
 	    [224,255] -> +0x1c, [352,383] -> +0x2c.  It is the SAME fourth-word
 	    pattern one level up, NOT a single range: an earlier draft said
