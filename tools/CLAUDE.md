@@ -2171,6 +2171,42 @@ authority than the error, so it earns a second reading, not less of one -- which
 what the existing "budget a second review pass for any records-correction round"
 note already says, now with a third instance.
 
+> ### *** THE CITATION-FORM RULE -- STANDING as of 2026-08-26, after the same remedy was
+> ### adopted FOUR SEPARATE TIMES round-locally and never carried, while the class bit EIGHT
+> ### times. Adjudicated, and the mechanical check it was competing with was REJECTED ON
+> ### MEASUREMENT. ***
+>
+> > **Line numbers only ACROSS files, with the qualifier ON the citation. SAME-FILE references
+> > POSITIONAL or by CONSTRUCT NAME. Durable cross-file references as VERIFIED-UNIQUE GREP
+> > ANCHORS.**
+>
+> **It removes the measured population: 7 of the 8 recorded instances were same-file or bare
+> forms the rule eliminates outright.** And it is structure in the sense this file means --
+> it lives where citations are WRITTEN and it fails at the point of USE, because a grep anchor
+> that matches nothing is loud, while a wrong number is silent.
+>
+> *** THE CHECKER WAS REJECTED, AND ITS NUMBERS ARE THE REASON THIS RULE IS PROSE. *** The
+> proposal was: warn when an added `file.ext:NNN` names a file the same diff also edits.
+> Measured over 429 commits -- **it fires on 57 commits / 263 citations (~11 a week) and its
+> recall on the eight recorded instances is ZERO**, because every recorded instance is a BARE
+> `:NNN` that section D's `[a-z0-9_]+\.(c|h):[0-9]+` cannot see. On the motivating round
+> it emits 15 warns, none of them the stale one. **A checker policing the visible minority of
+> a class while blind to its dominant form is the check-that-cannot-fail shape** -- which is
+> what the proposal had accused section D of being.
+>
+> **AND THE CLASS IS WEAKER THAN THE COUNTS CLASS THAT WAS ALREADY DECLINED, for a structural
+> reason worth knowing: NO GATE, PROBE OR SCRIPT IN THIS TREE READS A LINE CITATION
+> FUNCTIONALLY.** Gates key on grep anchors and content. A citation is consumed only by a
+> READER -- and a reader using one opens the file, so **a drifted number self-refutes at the
+> point of use.** A carried count does not. That is why all eight instances were caught by a
+> seat or a re-read, and why the hunt for a consumed decision came back empty across 135
+> "stale" mentions in the CHANGELOG.
+>
+> **PRE-SPECIFIED ESCALATION:** the first MEASURED decision consumed by a stale line citation
+> -- a fix mis-aimed by one, a gate passing falsely, a seat verifying green against wrong
+> content -- converts this into an anchor-verification check bounded to ADDED citations,
+> forward-only from a cutoff. **Until that trigger fires, no machinery.**
+
 **A LINE NUMBER IN A COMMENT IS INVALIDATED BY YOUR OWN EDITS TO THAT FILE.** The same
 round cited `dev_sh4.c:2379-2381` correctly, then inserted a seven-line comment ABOVE it
 in a later step, moving the target to `:2386-2388` and making its own fresh citation
