@@ -1133,6 +1133,16 @@ fi
 #  it upward when sites are added; that is the failure mode this replaces.
 check_min "wdcflood: fatal() call sites intact (channel not downgraded)" \
       "$(grep -cE '^[[:space:]]+fatal\("' ../src/devices/dev_wdc.c)" 12
+#  *** AND THIS COMPANION PIN IS CORRECT, WHICH IS THE WHOLE LESSON.  It sits two
+#      lines below the one that was red for two rounds, counts the same kind of thing,
+#      and did not decay -- because it ENUMERATES SIX NAMED LATCHES in its regex
+#      instead of counting an open set.  The device carries ELEVEN warned_ latches
+#      today; this pin still reads 12 because growth cannot reach it.
+#
+#      A CENSUS PIN OVER AN OPEN SET BREAKS ON GROWTH.  A PIN OVER A NAMED SET DOES
+#      NOT.  Where the members can be named, name them; where they cannot -- as with
+#      bare fatal(" call sites -- use a floor.  Never an equality over a set the
+#      codebase is expected to add to. ***
 check "wdcflood: six warned_ guards present (one set + one read each)" \
       "$(grep -cE 'd->warned_(inbuf_overrun|inbuf_overread|unimpl_cmd|nonbyte_write|nonbyte_read|data_unexpected)' ../src/devices/dev_wdc.c)" 12
 
