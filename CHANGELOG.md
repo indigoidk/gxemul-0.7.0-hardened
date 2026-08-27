@@ -1,3 +1,33 @@
+## Records correction -- `b1526f7`'s commit message describes a fraction of its own diff
+
+**Written from intent, not from the diff -- the rule this project keeps because it has been
+broken before.**
+
+`b1526f7` is titled *"a seat that investigates and never concludes is scored as bad
+FORMATTING"* and its body describes only the `seatunfinished` filing. The diff also carries:
+
+* **`#486`'s full pass-1 adjudication** -- RE-AIM, one round, header correction inseparable,
+  and **three option-set members I had missed**, including re-pinning the want to `0`, which
+  the seat rejected as a check that cannot fail and flagged as *"the cheapest path to a green
+  battery"*;
+* **two owed mutations named** -- `M_relatch` and `M_silent`, the second being the anti-fake
+  control that catches a widened `P_OVERRUN` regex;
+* **an L4 correction against my own commit `6f39c95`** -- "free-running is a SPEED choice, not
+  a CORRECTNESS one" is true for the synchronous assert and **false at the mutant level**,
+  because under stepping `debug()` prints, so a `fatal(` -> `debug(` downgrade stays invisible
+  to a stepped row;
+* the seven `#486` scriptable seat records, and the release of a `fable5` hold.
+
+> **Why this is corrected here rather than by amending:** the commit is local and unpushed, so
+> amending was available and was declined. A rewritten message would leave no trace that the
+> record was ever wrong, and this file's whole discipline is that a correction quotes what it
+> corrects. The commit stands; its scope is stated here.
+
+*Cause, plainly: I reused a message file written for the earlier, smaller change after the
+gate blocked three successive attempts and I added material each time. The message was
+correct when written and stale by the time it landed -- which is the same shape as every
+frozen-number defect in this file, applied to prose.*
+
 ## Round 484 (#484) -- a full ring reported itself empty, and the next push destroyed a byte
 
 `wdc_addtoinbuf()` advanced `head` unconditionally and checked `head == tail` **afterwards**.
