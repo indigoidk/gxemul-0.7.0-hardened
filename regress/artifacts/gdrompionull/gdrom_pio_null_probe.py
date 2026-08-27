@@ -24,9 +24,28 @@ about overclaiming:
 --- PRE-FIX PROVENANCE (the state that motivated the rows; NOT current) ---
 
 *** EVERY LINE NUMBER BELOW THIS POINT IS PRE-FIX NUMBERING AND DOES NOT RESOLVE IN THE
-SHIPPED TREE.  #465's own edits moved them: the deref cited as :611-613 is :624-626 today,
-:720 is :733, :475-480 is :486-494.  `:307` (alloc_data) still resolves correctly, which is
-precisely what makes the stale ones look trustworthy. ***
+SHIPPED TREE.  DO NOT RE-NUMBER THEM -- GREP FOR THEM. ***
+
+    the PIO deref     grep -n 'cur_data_offset ++' <file>   (two hits: hi and lo byte)
+    the cond write    grep -n 'd->cond = idata;' <file>
+    the common tail   grep -n 'Any resulting data' <file>
+    alloc_data        grep -n 'static void alloc_data' <file>
+
+*** AN EARLIER VERSION OF THIS NOTE GAVE NUMBERS, AND IT WENT STALE INSIDE THE COMMIT
+THAT WROTE IT.  Caught by the opus5 seat's close-out, re-derived here before this edit. ***
+It said ":720 is :733, :475-480 is :486-494".  `d->cond = idata;` is at :736 -- :733 was
+true at 4d05cf0 and was invalidated by 5b5089d, the very commit carrying the note -- and
+the tail is :491-496, which was never right, since even at 4d05cf0 it began at :488.
+
+**That is the FOURTH generation of drift on this one file**: pre-fix numbers, invalidated
+by 4d05cf0; a note written against 4d05cf0, invalidated by 5b5089d.  Two carrier rules
+failed together -- *a correction is not safer than the thing it corrects*, and *re-grep
+every same-file citation AFTER the last edit to that file*.
+
+**And the remedy was already known and already applied elsewhere the same day**: six
+drifted carrier citations were re-keyed to grep tokens hours earlier, on the explicit
+reasoning that *a number replaced with a number decays again*.  It was not applied here.
+Knowing a rule and having it fire on the right object remain different problems.
 
 The pass-2 Fable seat flagged this, and noted that #464 solved the identical class ONE
 ROUND EARLIER with a single sentence -- so this is a rule that existed, was written down,
