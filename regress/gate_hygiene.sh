@@ -134,9 +134,30 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  Provenance: a codex seat named the enumerate-first shape on the
 #  probetimebased panel; the ratchet-not-reject refinement is the adjudication's,
 #  after it checked what a reject-all would do to the current set.
-EXPECT_PTY_PROBES=33
+#  *** BOTH PINS BELOW WERE RED AT HEAD UNTIL 2026-08-27, FOR THE SAME CAUSE, AND NOBODY
+#  HAD SEEN IT. ***  Derived with this gate's own commands, not estimated:
+#
+#      EXPECT_PTY_PROBES   pinned 33   actual 35
+#      grandfathered set   pinned  7   actual  9
+#
+#  The two extra files are `asic_badaddr_probe.py` (#463) and `wdc_flood_probe.py` (#464).
+#  Both were added AFTER the pins were last set and neither pin was bumped.  The weekly
+#  battery runs Sundays, so the red had not surfaced -- and when it did it would have been
+#  mis-attributed to whatever change triggered that run.  That is the same class #486 closed
+#  for `overrun x2` on the same day: a scored row red for an unrelated, already-diagnosed
+#  reason.  Found by a panel seat re-deriving the pin rather than reading it.
+#
+#  *** ADDING THEM TO THE GRANDFATHERED SET IS NOT A BYPASS, AND THE DISTINCTION IS THE
+#  WHOLE POINT OF THE ROW. ***  This list is not `probes we forgive`; it is `promptless
+#  probes we KNOW about`, and the check's job is to NAME any that appear unnoticed (the
+#  `comm -13` below).  Both new entries are promptless for exactly the reason the five
+#  already listed are -- they free-run to a breakpoint, and only a breakpoint hit returns a
+#  prompt, as `sh_intprio_probe.py` records in its own comment.  So they belong in the set,
+#  with the reason written down rather than the count quietly raised.
+EXPECT_PTY_PROBES=35
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
-sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py"
+sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
+asic_badaddr_probe.py wdc_flood_probe.py"
 
 _ptylist=$(cd "$HERE" && grep -l "pty.fork" *.py 2>/dev/null | sort)
 _ptyn=$(printf '%s' "$_ptylist" | grep -c . )
