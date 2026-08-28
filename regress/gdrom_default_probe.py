@@ -248,7 +248,21 @@ rows = []
 #  after every one of them.  `dma rd` cannot match the `dma rdleak` row
 #  because that row has an `l` where the pattern needs a space.
 #
-#  A row named 13 or 14 characters leaves fewer than two spaces and its
+#  *** #490 L4: THIS SAID "13 or 14" AND 13 IS FINE.  THE LIMIT IS 13. ***
+#  The format is `"%-14s %-12s ..."` -- a 14-column field PLUS a literal
+#  space -- so the padding and that space add up like this, measured:
+#
+#      12 chars -> 3 trailing spaces   `^name  ` MATCHES
+#      13 chars -> 2 trailing spaces   MATCHES  (the comment denied this)
+#      14 chars -> 1 trailing space    UNSATISFIABLE
+#
+#  Found by the codex seat on #490's pass 1, which also caught that I had
+#  copied the wrong bound ("<= 12") out of this comment and into a design
+#  brief -- so the error had already propagated once before it was read.
+#  The extra character is NOT slack to spend casually: at 13 the margin is
+#  exactly the two spaces the gate needs, with nothing left over.
+#
+#  A row named 14 characters leaves fewer than two spaces and its
 #  check becomes UNSATISFIABLE.  Checked, and this is the SAFE direction:
 #  the count reads 0 against a wanted 1, so the gate fails LOUDLY rather
 #  than quietly dropping the row -- the opposite of the padded-column trap
