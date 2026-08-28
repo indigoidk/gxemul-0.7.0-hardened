@@ -20496,9 +20496,100 @@
   {
    "id": "shortread",
    "title": "shortread  fread_helper's short-read path: len is decremented by the REQUESTED amount while the caller's zero-fill uses the ACTUAL, so a short read in a non-final iteration covers the wrong region",
-   "state": "open",
+   "state": "in work",
    "witness": "none yet -- no row forces a short read; the closing row is specified below and is offline-buildable (one truncated overlay data file).",
-   "entries": [],
+   "entries": [
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/opus5-mainloop.txt",
+     "grade": "CONFIRMED",
+     "note": "*** THIS ENTRY IS THE MAIN LOOP'S OWN WORK, NOT A SEAT ANSWER. ***  It is filed\nunder the opus5 column because the ledger declares no main-loop column, and the\nseat ledger's own rule is that seat and main-loop hat are DISTINCT -- so saying so\nhere is the only thing that keeps the column from lying.  The opus5 SEAT's entry\nis separate and was PENDING when this was written.\nREPRODUCED ON THE COMMITTED BUILD BEFORE ANY EDIT, which is what licenses the round.\n\n`fread_helper()` splits an overlayed read into 512-byte pieces and its three accounting\nlines disagree about which length they use -- `buf` and `len` move by the REQUESTED\namount, `totallenread` counts the ACTUAL one.  A short read in a NON-FINAL iteration\ntherefore leaves a stale HOLE at its own position while later iterations still land\ncorrectly, and the caller's tail `memset(buf + lendone, 0, len - lendone)` then destroys\nan equal number of VALID bytes at the far end.  The access returns 1.\n\nMEASURED, 1536 bytes at offset 0 over a 200-byte overlay claiming block 0:\n  caller bytes the read never wrote        312   want 0\n  base bytes surviving the tail zero-fill  712   want 1024\n  [ANCHOR] byte 200 is the first unbacked    88 ('X')  want 0\n  [ANCHOR] byte 1535 is still a base byte     0         want 66 ('B')\n  reports success either way [CONTROL]        1   (unchanged by the fix)\nLog: regress/artifacts/shortread/repro_20260827/PREFIX_committed_6faba0f.out\n\n*** THE ANCHOR ROWS EARNED THEIR PLACE IMMEDIATELY, AND THE ROW THAT PROVES IT IS ONE\nOF MINE THAT WENT GREEN ON THE BROKEN CODE. ***  `NUL fill covers exactly the unbacked\nhole = 312` passes SHIPPED, because the POPULATION of NULs is right and only their\nPOSITION is wrong.  A count is invariant under permutation; only clause (f)'s anchors\ncan see where a region actually is.\n\nPRE-TABLE SIBLING-PARITY CHECK, run before the mutant table and recorded in full at\n_scratchpad/shortread/SIBLING_PARITY.md.  Three other producers feed the same\n`lendone`, and only this one has the defect.  `diskimage_access__cue()` splits by CAUSE\n-- unbacked-by-design is zero-filled in place and counted, an unexpected short read\nstops -- and `git log -L` plus a grep of the pristine 2021 copy (0 hits) prove that path\nis FORK-AUTHORED (5ee491e), so it is a real decision and not inherited.  `fread_helper`'s\naccounting is upstream residue (39748e3) touched once by #472, which was aimed at the\nCLAMP.  *That is why it survived: the round that edited these exact lines was asking a\ndifferent question.*\n\nAND IT NARROWS MY OWN REACHABILITY CLAIM: the defect needs a short read FOLLOWED BY A\nSUCCESSFUL ONE.  Pure past-EOF cannot do it -- every later iteration is also short, so\nnothing is written past the hole and the caller's tail memset covers everything.  Today's\ncode is ACCIDENTALLY CORRECT there, which is why this has never been seen."
+    },
+    {
+     "seat": "glm",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/glm.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: premises on hole position and option A's loss are correct; MY CLAIMED NULL-REPAIR\nIS FALSE; not guest-reachable.\n\n*** IT REFUTED A MUTANT I HAD ASSERTED IN THE BRIEF. ***  I listed 'keep the memset,\nrevert `totallenread += lentoread` to `+= lenread`' as a clause-(d) null-repair that would\nescape.  It does not: the memset fills the hole, the caller's tail guard then goes live and\nzeroes the tail as well, giving 0 stale bytes and 624 NULs -- so the `base bytes 712 want\n1024` and `byte[1535]` rows both redden.  To reproduce the shipped behaviour takes TWO\nedits, not one.  Independently derived by minimax, grok and codex; four seats agree."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/deepseek.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: the defect is real as described, but the rows cannot catch a ONE-TOKEN regression.\n\nFOUND: `memset(buf + lenread, 0, lentoread - lenread)` -> `remain - lenread`.  **EQUIVALENT\nOVER MY PROBED SET**, because every iteration in the reproduction starts at an ALIGNED\noffset, so `inblock == 0`, `remain == 512 == lentoread`, and the two expressions are THE\nSAME NUMBER.  Off that set it zeroes past the requested length.\n\nIt also declined to certify two premises it could not settle from the packet ('fread_helper\nis static and the only caller shown is...') rather than agreeing with them -- the honest\nform for a packet-fed seat, and the reason its agreement elsewhere is worth something."
+    },
+    {
+     "seat": "agy",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/agy.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: GO-WITH-CHANGES.  Every line citation in the brief verified against the fork.\nTHREE mutant escapes, one of them a caller-buffer OVERFLOW.\n\n  M4 `remain - lenread`   -- same as deepseek's; agy quantifies the consequence: on an\n                             unaligned short read (offset 100, len 50, lenread 10) it\n                             memsets 402 bytes into a 50-byte request -- a 352-byte\n                             overrun of the CALLER's buffer.\n  M5 `if (lenread > 0)`   -- escapes because NO row probes an EMPTY overlay.  On a full\n                             block `lenread == lentoread` and `memset(...,0,0)` is a\n                             no-op, so the mutant is invisible there too.\n  M6 `len - lenread`      -- agy calls it an out-of-scope write; I read it as EQUIVALENT\n                             (later iterations rewrite everything it over-zeroes, and in\n                             the final iteration `len == lentoread`).  codex agrees with\n                             me.  SENT TO THE MEASURING SEAT AS A TIEBREAK.\n\nANSWERED MY Q2 BY GREPPING, which is what the option-completeness rule asks for: the fork\nDOES have a companion-file length idiom -- `diskimage_open_cue()` fstat()s each bin file\nand range-checks against `bin_size`.  Overlay add does neither.\n\nAND IT SETTLED Q1.3 MECHANICALLY: every caller of `diskimage_access()` -- dev_wdc.c,\narcbios.c, dec_prom.c -- treats the return as boolean 1/0.  None receives a byte count."
+    },
+    {
+     "seat": "kimi",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/kimi-k3:cloud.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: the arithmetic is sound and re-derived independently, BUT the whole narrative\nrests on a premise the packet nowhere states -- DOES `fatal()` RETURN?\n\n*** THE BEST QUESTION OF THE PANEL, AND IT WAS DECISIVE. ***  The corrupting accounting\nsits AFTER `fatal(\"[ INCOMPLETE READ ...\")`.  If `fatal()` exited -- upstream GXemul\nsemantics -- the defect would be dead code in the shipping binary, the measurement could\nonly have observed it by STUBBING `fatal()`, and 'the code that runs IS the code that\nships' would be true as text and false as behaviour AT EXACTLY THE TRIGGER POINT.\n\nSETTLED BY READING, not by argument: `src/core/debugmsg.c:384-391` is `va_start /\nva_debug / va_end` with ZERO occurrences of `exit(`, `abort(`, `longjmp`, `_Noreturn` or\nany attribute.  It returns.  So the defect is live and the harness's no-op stub is\nfaithful BECAUSE the real one also returns -- which is the fact that makes the stub\nlegitimate, and nobody had checked it.\n\nIt also re-derived every §4 number from scratch and named the non-obvious one: 712 = 512\nfrom block 1 + the 200 bytes of block 2's head that the 312-byte tail memset does not\nreach.  A genuinely independent re-derivation, not a restatement.\n\n*Recorded by TRANSPORT: the kimi CLI is 403-walled (new wording: 'weekly (7-day) usage\nlimit'); this is the kimi-k3:cloud substitute, which is PACKET-FED, not file-reading.*"
+    },
+    {
+     "seat": "minimax",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/minimax.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: names the memset-operand escape family, and finds an L4 IN SHIPPED CODE that\nevery file-reading seat walked past.\n\n*** THE #472 COMMENT DESCRIBES A FIX THAT WAS NOT MADE. ***  `src/disk/diskimage.c` reads:\n\n    /*  #472: advance by what was CONSUMED.  A fixed stride paired with\n        a clamped read leaves HOLES -- a half-fix keeping this line passes\n        a wrong-layer check and still corrupts, which is why the detector\n        carries a row counting bytes the read never wrote.  */\n    buf += lentoread;\n\n`lentoread` is what was REQUESTED; `lenread` is what was CONSUMED.  They are equal on a\nfull read and differ on exactly the short read this round is about -- so the comment is\nTRUE in the common case and FALSE in the only case it was written for.  #472 named the\nhazard class correctly ('leaves HOLES', 'bytes the read never wrote'), shipped a detector\nrow for it, named the fix -- and then advanced by the requested length anyway.\n\nL4 WRONG RECORD, licensed for in-round repair by the stopping rule.  **Found by a\nPACKET-FED seat that could not open the file**, from the inlined text alone, while four\nfile-reading seats had the whole tree.\n\nIt also named predicate-specialisation mutants (`if (lenread < 250)`, `if (lenread ==\n200)`).  The second dies to ROW U (lenread 50) and ROW Z (lenread 0).  The first survives\nall three but is a magic number that fails clause (d)'s own 'could a plausible future edit\nproduce this' test -- recorded as implausible rather than given a row, and recorded so the\njudgement is visible rather than silent."
+    },
+    {
+     "seat": "grok",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/grok.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: SHIP B, not A/C.  The option set is INCOMPLETE, C is not what its label says,\nthe ENOSPC construction is FALSE, and §4 does not catch the smallest B-breaks.\nThe single highest-yield seat of the panel.\n\n*** IT REFUTED A PREMISE I HAD WRITTEN INTO BOTH THE BRIEF AND THE DETECTOR COMMENT, by\nopening the function I had not. ***  I claimed 'a host that ran out of space while writing\nan overlay leaves exactly this state'.  It does not: `fwrite_helper()` returns 0 on a short\noverlay write BEFORE `overlay_set_block_in_use()`, so the bitmap never claims the block and\na later read takes the BASE.  GXemul's own writer cannot produce this state.  What can: a\nhand-made `.map`, a user `V:` overlay, truncation of an already-claimed overlay file, or a\ngenuine read-side I/O error.  `R:` cannot -- it starts empty+empty and unlinks both files.\n\n*** OPTION C IS NOT FAIL-STOP, WHICH IS WHY IT SHOULD NEVER HAVE BEEN ON THE LIST AS\nWRITTEN. ***  `fread_helper` returning 0 makes `lendone = 0`, the caller zeroes the ENTIRE\nbuffer, the write-only short check does not run, and it returns 1.  'Wipe everything the\ndisk does have, report success' -- strictly worse than A.\n\nTHREE MORE OPTION MEMBERS my four did not contain: E fail the ACCESS (not the helper);\nF fall through to base for the rest of a claimed block (wrong model -- a full overlay write\nclaims the whole 512); G compact (`buf += lenread` and CONTINUE, i.e. A without the break)\n-- which SHIFTS all later data left and is worse than the shipped defect.\n\n*** AND MY OPTION D NAMED THE WRONG CHECK. ***  'Compare data-file length against the\nimage' would refuse every SPARSE overlay and would refuse `R:` at creation.  The correct\nform is per-bit: every SET bitmap bit requires `data_file_size >= (block+1)*512`.  Empty +\nempty stays legal; bit 0 with a 200-byte file is refused.\n\nTWO ESCAPES NOBODY ELSE FOUND, and they are the same shape -- MY FIXTURE VARIES ONE\nDIMENSION AND THE MUTANT LIVES IN ANOTHER:\n  `&& overlay_nr >= 0`     every row shorts on the OVERLAY layer, so a BASE-layer short\n                           in a non-final iteration leaves the hole.  One conjunct.\n  `&& totallenread == 0`   every row shorts in ITERATION 1, so a short in iteration 2\n  (or `curofs == offset`)  leaves the hole.  One conjunct.\nClosed in-round by ROW L and ROW I (L1, pre-ship construction).\n\nON SEVERITY it is sharper than I was: 'not guest-reachable' is right about the\nCONSTRUCTION and easy to over-read about the TRIGGER.  A guest cannot truncate a host file,\nbut a guest can be the VICTIM -- `wdc__read` issues `diskimage_access(..., 512 * to_read)`\nwith `to_read` up to 64, and SCSI READ(10) issues `retlen * logical_block_size` in one\ncall.  **And WDC discards the 0/1 return entirely** (`/* TODO: result code from the read?\n*/`), so the corrupt buffer reaches the guest whatever the helper says."
+    },
+    {
+     "seat": "codex",
+     "phase": "assess",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031/codex.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: answered in full, no wall.  Converges with agy and grok on the escapes, and\nDESIGNS THE RUNG-3 WITNESS IT COULD NOT RUN.\n\n*** THE RUNG-3 ROUTE, VERIFIED BY SOURCE AND HANDED ON: ***  carrier `evbmips -e malta`;\nMalta installs PIIX4 IDE (machine_evbmips.c:97); attaching an IDE disk instantiates WDC at\nISA 0x180001f0 (bus_pci.c:868); the guest writes seccnt 3, sector 1, cyl/head 0, then\ncommand 0x20, and `wdc__read()` calls `diskimage_access()` ONCE with 1536 bytes at offset\n0 (dev_wdc.c:477) -- exactly the three-block crossing the offline fixture uses.  Reading\nthe data port 1536 times exposes the tail anchor: shipped returns 0 at byte 1535 where the\nbase holds 'B'.  Command line `-d base.img -d V0:overlay.img`.\n\n**It could not execute: this seat was denied WSL startup (`CreateInstance/E_ACCESSDENIED`).**\nIts own honest record: *'guest route verified by source; rung-3 execution attempted but not\ncompleted; keep documented-only until measured.'*  Handed to the measuring seat, which can\nrun WSL.  *A designed-but-unrun witness is a real contribution and is recorded as an\nATTEMPT, not as an absence -- 'tried and could not' and 'did not think to' are different\nstates and must not render the same.*\n\nTWO EQUIVALENCE RESULTS that save the mutant table work:\n  `lenread != lentoread` -> `lenread < lentoread` is EQUIVALENT, because `fread` cannot\n  return more than requested.\n  `inblock - lenread` and `totallenread - lenread` UNDERFLOW size_t on the aligned\n  200-byte case, so they produce an enormous memset and should FAULT -- and the harness\n  scores a fault separately from a detection, so the distinction matters.\nIt also flagged the identity pin moving 53 -> 66, which is by design."
+    },
+    {
+     "seat": "opus5",
+     "phase": "assess",
+     "d": "PENDING",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031",
+     "grade": "UNKNOWN",
+     "note": "SEAT IN FLIGHT at the time of writing -- fired as the MEASURING seat with the\nfull mutant table (M1..M10), both candidate fixes, the three-then-five new rows,\nand codex's rung-3 route to execute.  Not an answer yet; recorded so the stage\nshows a fired seat rather than a blank."
+    },
+    {
+     "seat": "fable5",
+     "phase": "assess",
+     "d": "DEFERRED",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_202031",
+     "grade": "UNKNOWN",
+     "note": "DELIBERATELY NOT FIRED on this brief -- it was still running the #487 landisk\nobio census when this panel convened, and the two Anthropic seats share one\nservice.  *** THIS IS A DEFERRAL, NOT A SEAT FAILURE, AND THE TWO MUST NOT\nRENDER THE SAME. ***  It is owed the pass-2 adjudication."
+    }
+   ],
    "closure": {
     "by": "",
     "badge": "",
