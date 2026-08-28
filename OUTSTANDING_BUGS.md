@@ -11982,6 +11982,41 @@ zero**, or it is red forever.
 **NOT STARTED.** Filed as a class with its census; the two INTC sites belong with `wdcnoirq`
 and the two board registers want their own reading first.
 
+### `asanbaselinedrift` -- the propagation check is INCREMENTAL, so a stale BASELINE is invisible
+
+`precommit_check.sh` enforces build-asan propagation for `$CHANGED` -- the files THIS commit
+touches.  That bound is deliberate and its own comment gives the reason: *a gate that
+hard-fails on a tree someone chose not to build is a gate that gets switched off.*
+
+**But a file no round happens to touch is never checked.**  build-asan/ was already stale when
+the 2026-08-27 propagation ruling landed, and nothing back-fills a baseline.  Measured
+2026-08-28: **111 divergent `.c`/`.h` files**, of which `diskimage.h` and `makeautodev.sh` broke
+the build outright -- neither touched by any recent round.
+
+> **The tree passed every commit's propagation check while compiling nothing at all.**  That is
+> worse than the gate comment's own fear of *a detector that has silently stopped detecting,
+> worse than no detector because it reassures* -- this one did not exist and still reassured.
+
+*And `make` reported `MAKE_RC=0` on every one of the failed builds.  It was caught only because
+the check was `[ -x gxemul ]` rather than the exit status.*
+
+**DECIDED (owner, 2026-08-28): a SOFT-WARNING full `diff -rq` over the `.c`/`.h` set, SKIPPED
+ENTIRELY when the tree is absent.**  Warn rather than hard-fail, and skip on absence, so the
+absence-is-not-a-failure property that keeps this gate switched on is preserved.  A hard fail
+was rejected as the exact shape the gate's author warned gets disabled; doing nothing was
+rejected because it leaves the next drift to be found the way this one was -- by someone trying
+to use the tree.
+
+**Two negative controls owed**, as for any gate change: (1) with one source file deliberately
+reverted in build-asan/, the check WARNS and names it; (2) with the tree absent, the check is
+SILENT and the gate stays green.  Ships as its own harness round -- a gate edit must not ride in
+on a diff reviewed for something else.
+
+*Scope: `Makefile`s legitimately differ (they carry the ASan `COPTIM`) and must be excluded --
+the measured expectation after a correct sync is **14 differing files, all Makefiles, zero
+others**.  `est/` is out of scope: it has a declared allowlist (`tools/est_divergence.txt`);
+build-asan has none, which is why any `.c`/`.h` divergence there is staleness by definition.*
+
 ### `hygienenonexistant` -- the boot-log hygiene gate does not look for this at all
 
 Checked while filing the above.  `gate_hygiene.sh` DOES scan `drive_landisk.log` -- at
