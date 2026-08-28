@@ -318,6 +318,18 @@ MANIFEST = {
                                     "200-byte data file plus a claiming .map) that no gate "
                                     "constructs, and a witness is checked for the ABSENCE of a "
                                     "gate call by design.  Preserved with all three transcripts."),
+    "artifacts/gdromexitsix/gdrom_toclen_witness.py": (CLASS_WITNESS,
+                                    "gdromexitsix rung-3 on the unmodified dreamcast machine: "
+                                    "nine guest accesses, cnt=407 and cnt=0 each end the host at "
+                                    "the case 0x14 TOC length guard (exit1), while cnt=408 "
+                                    "synthesizes a real TOC and survives.  MEASURED RED 8/8 on "
+                                    "the committed build before any edit to the site.  Not "
+                                    "gated, and a witness is checked for the ABSENCE of a gate "
+                                    "call by design -- its badlen/zerolen rows INVERT the day "
+                                    "the fix lands, so gating it manufactures a regression.  "
+                                    "Preserved under artifacts/ because this row's previous TWO "
+                                    "witnesses lived in a rotated scratchpad and no longer "
+                                    "exist, which is why its witness field had to read `none`."),
     "sh4_sci_witness.py":          (CLASS_WITNESS,  "#451 pre-fix symptom: a clocked-in byte kills"),
     "sh4_sci_probe.py":            (CLASS_DETECTOR, "#451 SCI command byte declined, not fatal"),
     "sh4_tlbda2_witness.py":       (CLASS_WITNESS,  "#452 pre-fix symptom: one TLB da2 access kills"),
