@@ -1050,6 +1050,70 @@ else
     fi
 fi
 
+#  ------------------------------------------------------------------ #489 gdrom TOC length
+#
+#  The `case 0x14` TOC length guard used to end the host on a GUEST-SUPPLIED cnt.  The
+#  WITNESS for it is deliberately NOT run here -- it pins the PRE-fix symptom, so gating it
+#  would manufacture a regression the day the fix landed.  It lives ungated at
+#  artifacts/gdromexitsix/gdrom_toclen_witness.py and is registered CLASS_WITNESS.
+#
+#  The row worth knowing about here is `bad cond`.  A survive-only row set is VACUOUS at this
+#  site: weakening the guard from `!= 408` to `> 408` lets cnt=407 reach alloc_data(407)
+#  while the TOC writer indexes byte 407, and that one-byte overflow need not fault -- so
+#  "did the host survive?" scores the mutant GREEN with the defect back.  `bad cond` reads
+#  COND_DATA_AVAIL instead: declined leaves it CLEAR (0xa0), the mutant SETS it (0xa8).
+TOCPROBE=gdrom_toclen_probe.py
+if [ ! -f "$TOCPROBE" ]; then
+    gate_skip "gdromtoclen: $TOCPROBE absent"
+else
+    TOCLOG=$LOGDIR/gate_gdrom_toclen.log
+    python3 -u "$TOCPROBE" "$PMAX" "$KERNEL" > "$TOCLOG" 2>&1 || true
+
+    if ! grep -q "TOCLEN_RESULT=" "$TOCLOG"; then
+        note "gdromtoclen probe produced no result line; last lines follow"
+        tail -5 "$TOCLOG" | sed 's/^/       /'
+        check "gdromtoclen probe completed" "no" "yes"
+    else
+        grep -E " ok$| FAIL$" "$TOCLOG" | sed 's/^/       /'
+
+        #  CONTROLS FIRST AND SEPARATELY.  A run whose controls all died is an APPARATUS
+        #  failure -- a bad image path, a load spike eating the settle window -- and must
+        #  not be read as product failures.  gdrompio scored 1/13 that way once.
+        if grep -q "TOCLEN_CONTROL=OK" "$TOCLOG"; then
+            check "gdromtoclen controls live" "yes" "yes"
+        else
+            note "gdromtoclen CONTROLS DEAD -- the probe never reached the device."
+            note "Do not read the row scores below as product failures."
+            check "gdromtoclen controls live" "no" "yes"
+        fi
+
+        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+        #  leaving tocres empty so both halves expand to "" and the score row compares
+        #  "" with "" -- green on nothing.  Same reason as the wdc_flood idiom above.
+        tocres=$(grep -o "TOCLEN_RESULT=[0-9]*/[0-9]*" "$TOCLOG" | tail -1 | cut -d= -f2)
+        if [ -z "$tocres" ]; then
+            note "gdromtoclen result line present but unparseable; last lines follow"
+            tail -5 "$TOCLOG" | sed 's/^/       /'
+            check "gdromtoclen result parses" "no" "yes"
+        else
+            check "gdromtoclen result parses" "yes" "yes"
+            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+            check "gdromtoclen rows run"     "${tocres#*/}" 19
+            check "gdromtoclen rows correct" "${tocres%/*}" "${tocres#*/}"
+        fi
+
+        #  Per-row presence.  A row that silently stops being tested is the padded-column
+        #  class; these names are checked individually so a vanished row reds.
+        for v in "live" "devsig sh4" "gdrom map" "ok data0" "ok data1" "ok surv" \
+                 "ok cond" "bad surv" "bad says" "zero surv" "bad cond" \
+                 "bad cnt" "bad event" "zero cond" "over surv" "over cond" \
+                 "latch once" "latch surv" "latch cond"; do
+            n=$(grep -c "^$v  .*ok$" "$TOCLOG")
+            check "gdromtoclen row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+        done
+    fi
+fi
+
 WDCIMG=$IMAGES/wdc-scratch-64m.img
 if [ ! -f "$WDCIMG" ]; then
     gate_skip "wdcflood: $WDCIMG absent (see regress/images.md -- it is a dd recipe, not a download)"

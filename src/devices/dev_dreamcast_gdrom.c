@@ -227,6 +227,7 @@ enum {
 	GDROM_W_OVERREAD_B,	/*  was 0x08  */
 	GDROM_W_DMANODATA_B,	/*  was 0x10  */
 	GDROM_W_DMAARM_B,	/*  was 0x20  */
+	GDROM_W_TOCLEN_B,	/*  #489: the SEVENTH, and the bit the trigger was set for  */
 	GDROM_W_NBITS
 };
 
@@ -236,6 +237,7 @@ enum {
 #define	GDROM_W_OVERREAD	(1u << GDROM_W_OVERREAD_B)
 #define	GDROM_W_DMANODATA	(1u << GDROM_W_DMANODATA_B)
 #define	GDROM_W_DMAARM	(1u << GDROM_W_DMAARM_B)
+#define	GDROM_W_TOCLEN	(1u << GDROM_W_TOCLEN_B)
 
 /*
  *  *** THE COUNT-FITS-ITS-CARRIERS BOUND, AS A COMPILE ERROR RATHER THAN A SENTENCE. ***
@@ -484,9 +486,57 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		 *
 		 *  See NetBSD's sys/arch/dreamcast/dev/gdrom.c: gdrom_read_toc().
 		 */
+		/*
+		 *  #489: was fatal() + exit(1).  `d->cnt` is GUEST-SUPPLIED -- two
+		 *  16-bit stores to GDROM_CNTLO/GDROM_CNTHI -- so an ordinary guest
+		 *  register access ended the host process.  MEASURED on the committed
+		 *  build before this edit: cnt=407 and cnt=0 both exit(1), while
+		 *  cnt=408 synthesizes a real TOC and survives
+		 *  (regress/artifacts/gdromexitsix/repro_20260828/).
+		 *
+		 *  *** THE GUARD IS LOAD-BEARING AND THIS IS A DECLINE, NOT A DELETION. ***
+		 *  alloc_data() mallocs `d->cnt`, but the writer below uses HARDCODED
+		 *  indices -- `grep -oE 'd->data\[[0-9]+\*4(\+[0-9])?\]'` gives a highest
+		 *  byte index of 407 -- so it needs 408 bytes REGARDLESS of cnt.  Deleting
+		 *  the exit(1) would turn a host kill into a GUEST-CONTROLLED HEAP OVERFLOW
+		 *  of up to 408 bytes, with malloc(0) at cnt == 0.  So the decline must come
+		 *  BEFORE the guarded statement, not after it.
+		 *
+		 *  *** THE PREDICATE IS THE ORIGINAL `!= 408` ON PURPOSE.  DO NOT "SIMPLIFY"
+		 *  IT TO `< 408`. ***  A de-fatalisation must not change the ACCEPT SET: this
+		 *  edit converts the DEATH into a decline and touches nothing else, so the
+		 *  values that produce a TOC are byte-for-byte what they were before.
+		 *  `< 408` would additionally start HONOURING over-length requests -- and
+		 *  note it is not a memory-safety question, which is why it is easy to talk
+		 *  yourself into: above 408 the malloc is larger than the writer needs and
+		 *  nothing overflows.  It changes the disposition of 65,527 of the 65,536
+		 *  possible values, silently.  `over cond` in the detector exists to catch it;
+		 *  `zero cond` catches the mirror form `!= 408 && != 0`, which re-opens the
+		 *  overflow above at cnt == 0 while the host stays alive.
+		 *
+		 *  `break` and not `return`: the common tail is load-bearing.  free_data()
+		 *  at the top of this function left d->data NULL, so the tail takes its else
+		 *  branch, sets d->cnt = 0, clears COND_DATA_AVAIL and still fires
+		 *  SYSASIC_TRIGGER_EVENT -- "the command produced no data", reported
+		 *  properly.  An early return would skip that event and leave the guest
+		 *  waiting forever.  `case 0x30` already ships this idiom twice -- grep
+		 *  this file for "OB-20: was exit(1)" -- so the shape is in-tree
+		 *  precedent in this very function, not something invented here.
+		 *
+		 *  LATCHED, per the house idiom -- N = 1 per device instance with an
+		 *  explicit (once) marker -- because fatal() cannot be silenced by -q and an
+		 *  unlatched guest-drivable diagnostic is a flood.  This is the SEVENTH warn
+		 *  bit, which is the condition gdromwarnbits' pre-set trigger was written
+		 *  for; the enum and its compile-time carrier bound landed first.
+		 */
 		if (d->cnt != 408) {
-			fatal("GDROM Read TOC not 408 bytes?\n");
-			exit(1);
+			if (!(d->warned & GDROM_W_TOCLEN)) {
+				d->warned |= GDROM_W_TOCLEN;
+				fatal("[ dreamcast_gdrom: Read TOC with"
+				    " cnt=%i, not 408 -- declined.  (once) ]\n",
+				    (int) d->cnt);
+			}
+			break;
 		}
 		alloc_data(d);
 

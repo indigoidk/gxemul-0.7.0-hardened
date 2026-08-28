@@ -1165,6 +1165,42 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > | **SIBLING PARITY** | for each arm the diff de-fatalises, compare its observable channels against its nearest sibling arm. An asymmetry is a row you owe or a sentence you owe | a de-fatalised arm with NO completion-event row while its sibling had one |
 > | **CLAIM -> ROW** | grep the diff's ADDED comments for claim verbs -- *observes, controls, pins, proves, the X control* -- and check each against the row list | a "device-signature control" claimed in prose and implemented by nothing |
 > | **GUARD FIELD vs BODY FIELD** | list fields the PREDICATE reads and fields the guarded BODY reads; where they differ, grep whether they are written at the same sites. If not, the detector owes a state where they DISAGREE | the guard's operand swapped for a field whose third state no row built |
+> | **CHANNEL** | for each row, name **the mutant it kills** and **the observable that differs under that mutant**. A row whose named channel cannot vary under its named mutant is VACUOUS BY CONSTRUCTION, and that is knowable at writing time, before any table runs | a survival oracle at a REFUSAL-EFFECT site: guarded and unguarded code both survive |
+>
+> ### *** THE CHANNEL LINE IS THE FOURTH CHECK, ADDED 2026-08-28 AFTER `#489` SHIPPED A
+> ### DETECTOR THREE TIMES AND A PANEL MEASURED FOUR ESCAPES OF ONE SHAPE. ***
+>
+> `#489` de-fatalised a guard, and **four separate mutants left the host ALIVE while the guard
+> was wrong** -- `> 408`, exempt-zero, `< 408`, and a latch-state collapse. Each was caught
+> only by a row reading a DECLINE channel (COND_DATA_AVAIL, the zeroed count, the fired event).
+> Each was predicted by a seat from the packet alone, and **each escaped a table that had
+> already come back CLEAN.** The round's own probe header carried the governing sentence before
+> three of the four were found.
+>
+> **THE COST WAS NOT MISSING KNOWLEDGE.  IT WAS KNOWLEDGE LIVING WHERE NOBODY CONSULTS IT AT
+> ROW-WRITING TIME** -- this file's trigger-versus-memory finding, again.
+>
+> #### AND THE OBVIOUS GENERALISATION IS UNBOUNDED, SO IT IS NOT THE ONE ADOPTED
+>
+> The tempting sentence is *"every VALUE and every STATE in which a guard refuses needs a
+> decline-channel row."*  **That licenses unbounded row growth -- the `#392` shape** -- and the
+> adjudication that produced this line rejected it for exactly that reason. The distinction:
+>
+> * **ROW DEMAND** -- *which* refusals need pinning -- is ALREADY bounded and is not touched:
+>   the floor clauses, the (d) DEPENDS-ON closure, one accept row per conditioned predicate,
+>   one anchor row per position claim, one ask-again. **Rows are owed PER ENUMERATED MUTANT,
+>   never per refusing state**; two states no enumerated mutant distinguishes collapse into one
+>   row. That enumeration is diff-closed and finite.
+> * **ROW VALIDITY** -- what `#489` actually measured -- is the CHANNEL line above, and it is a
+>   WRITE-TIME check on rows that already exist.
+>
+> > **A FILTER CAN REJECT OR REPAIR A ROW; IT CAN NEVER DEMAND A NEW ONE -- SO IT CANNOT GROW
+> > WITHOUT BOUND.**  That is the stop condition, and it is structural rather than a cap: the
+> > generator side is untouched.
+>
+> *Mechanising it -- a `# kills: <mutant> via <channel>` comment per row -- is FILED, not
+> adopted: it changes what every probe in the tree must carry, and that is an owner decision
+> rather than a round's.*
 >
 > **The third is the one that looked impossible and is the cheapest.** It only seemed
 > unreachable because it was approached from the mutant side -- *"what edit escapes?"*,
@@ -1575,6 +1611,30 @@ minutes, and a spare build is cheaper than a wrong reading.
 > against a clean table with a measured stop: nothing found, done; something found, row added
 > under L1, done. **The cap IS the anti-#392 clause.** A second ask-again after an empty first
 > is exactly where the chain starts, and anything found past the cap is FILED, never fixed.
+>
+> > ### *** THE CAP COUNTS **ASKS**, NEVER **FINDINGS**. Adjudicated 2026-08-28, because the
+> > ### singular in the sentence above ("row added", "something found") invited the opposite
+> > ### reading and that reading NEARLY FILED A FLOOR BREACH. ***
+> >
+> > Everything ONE ask returns is disposed of INDIVIDUALLY under L1–L4 and the floor — and **a
+> > floor breach among the findings is L2, repaired in-round however late it is found.** A
+> > second ASK is where the #392 chain starts; the number of rows one ask yields is not.
+> >
+> > **The founding measurement already said so and the wording contradicted it:** this block's
+> > own text records *"6 of the 15 in #452 came only from that second ask."* A reading under
+> > which #452 should have taken one row and filed five is refuted by the paragraph that mints
+> > the rule.
+> >
+> > **The live cost of the misreading, from `#488`:** three escapes were found by one ask; the
+> > author took one and filed two, reasoning "the cap says I may take only one". `E1` was
+> > `if (X)` -> `if (X && Y)` on the DOMINATING predicate — the canonical clause-(d) form, i.e.
+> > a floor breach, which the floor says must be repaired in-round. **So one rule's cap was
+> > about to silently override another rule's MUST.** A reading that produces that collision is
+> > wrong on its face.
+> >
+> > The anti-runaway property is untouched: the bounded resource was always the adversarial
+> > QUERY, and what it returns is bounded by being the findings of ONE query against ONE clean
+> > table.
 
 > ### *** THE ORACLE-CORRECTION RULE — adopted 2026-08-22, and it is TEST-FIRST restated
 > for the case test-first did not cover. ***
@@ -1977,6 +2037,35 @@ pre-existing terms still pass unchanged.
    > premise-audit line, because it lives in the artifact present at the moment of
    > decision. This is that moment.*
 3. Design brief → **panel pass 1** → converge (empirically where split).
+   > ### *** START FROM `GXEMUL-SEC/tools/BRIEF_TEMPLATE.md`.  DO NOT WRITE A BRIEF FROM
+   > ### MEMORY. *** Adopted 2026-08-28 by flagship adjudication.
+   >
+   > It carries the premise-audit opener, the tree-naming line, the **SETTLED PREMISES**
+   > section, the full-enclosing-function rule, and the three-question set — each with the
+   > measured incident that bought it.
+   >
+   > **THE RULING THAT CREATED IT, because the evidence is unusually clean:** the settled-
+   > premises block was invented on 2026-08-27 from `#488`'s loss of three seat-answers,
+   > **applied correctly that same evening at 22:21, and dropped at 11:55 the next morning by
+   > its own author in the next brief of the same campaign.**  Fourteen hours from minting to
+   > breaking, and nobody had forgotten it.  Two packet-fed seats then spent their entire
+   > answers re-deriving `fatal()` returns.
+   >
+   > That is this file's own structure-first test met exactly — *"a rule that earns its SECOND
+   > INSTANCE while sitting in this file has thereby proven it was mis-filed as prose"* — and
+   > it earned the second instance **before it was even filed**, against the person who
+   > proposed it.
+   >
+   > **The obligation is PER-PACKET and BROAD:** any packet-fed brief re-inlines every settled
+   > premise its own questions depend on, whatever pass or round settled it.  The narrow
+   > "pass 2 re-inlines pass 1" form was considered and **refuted by its own second instance**,
+   > which ran pass-1-to-pass-1 across two rounds with no pass 2 in the story.
+   >
+   > Stop condition, so it cannot become "inline everything": settled means a RECORDED
+   > resolution citable in a line or two with its warrant; a premise enters only if a question
+   > in THIS brief depends on it (test: could a seat build an "if X then A, else B" answer on
+   > it?); and scope is the CAMPAIGN, with cross-campaign premises escalating to the template
+   > skeleton — **never into `panel_ollama.py`, whose preamble stays semantic-free.**
 4. Implement (byte-identical in both trees for shared files); propagate to build trees.
 5. **Panel pass 2** on the real diff.
 6. `GXEMUL-SEC/regress/run.sh` → `REGRESS_PASS`. **Never run two harness/gate invocations

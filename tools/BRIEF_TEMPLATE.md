@@ -1,0 +1,187 @@
+# PANEL BRIEF SKELETON — copy this, do not write a brief from memory
+
+**Adopted 2026-08-28 by flagship adjudication.**  Every section below exists because a
+measured incident cost this project something, and the reason is recorded with it.  This file
+is the artifact present at the moment a brief is written, which is this project's own finding
+about where prose actually fires:
+
+> *"the premise-audit paragraph is the one piece of prose that demonstrably works ... it lives
+> in the BRIEF TEMPLATE, the artifact present at the moment of decision.  That is structure in
+> the sense that matters — text located where the decision happens, not text located where the
+> reasoning was recorded."*
+
+**THE FAILURE THIS FILE EXISTS TO STOP is not forgetting the rules.  It is remembering them
+and not applying them to the object in front of you.**  The `SETTLED PREMISES` section below
+was invented on 2026-08-27, applied correctly the same evening at 22:21, and **dropped at
+11:55 the next morning by its own author in the next brief of the same campaign** — fourteen
+hours from minting to breaking.  Nobody had forgotten it.
+
+---
+
+## §A — THE OPENER (copy verbatim, adjust the incident count)
+
+```
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly.  **Check the premises, not just the derivations.**  Where I state something as
+fact, ask whether it is true.  A seat that re-derives a premise from something this brief
+did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  There are THREE pristine-2021-upstream
+copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers
+disagree with mine by hundreds you are reading one of them — say so rather than
+reconciling.
+
+**If you cannot read files that is expected** — every fact you need is inlined.  Name any
+premise you cannot settle from this packet rather than guessing at it.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+```
+
+**Why each line is here:** the premise-audit instruction has two prior trials and caught
+something both times, the second finding FOUR wrong premises.  The tree-naming line exists
+because a seat once returned 80 KB of internally-consistent review of the WRONG `src/`.  The
+cannot-read-files line exists because a stalled packet-fed seat is indistinguishable from a
+quota wall in the output, and this project misdiagnosed that for days.  Verdict-line-first
+exists because answers get truncated and the verdict is what survives.
+
+> **AND THE WRONG-TREE HEURISTIC HAS A KNOWN HOLE:** it says *disagree by hundreds*.  A brief
+> written against a stale checkout can be off by ~170, which is neither "hundreds" nor zero,
+> and the heuristic then MISDIRECTS a seat reading the correct tree.  Prefer §B.
+
+## §B — CITE BY GREP ANCHOR, NOT BY LINE NUMBER
+
+**Same-file references: positional or by construct name.  Cross-file: a VERIFIED-UNIQUE grep
+anchor.**  Give the anchor, not the number:
+
+```
+    the site        grep -n 'GDROM Read TOC not 408' <file>
+    the common tail grep -n 'Any resulting data' <file>
+```
+
+*This is the citation-form rule, and it earned this section on 2026-08-28 when a brief shipped
+`:409`/`:486` from a three-commit-stale checkout — the FIFTH generation of numbered-citation
+drift on that one file, whose own probe header says in capitals **"DO NOT RE-NUMBER THEM —
+GREP FOR THEM."**  A grep anchor that matches nothing is LOUD; a wrong number is silent.*
+
+## §C — SETTLED PREMISES  *** MANDATORY.  COPY FORWARD.  THIS IS THE ONE THAT GETS DROPPED. ***
+
+```
+## N. PREMISES ALREADY SETTLED, RE-INLINED SO NOBODY SPENDS AN ANSWER RE-DERIVING THEM
+
+Settled by <which pass/round>, evidence <panel dir or file:construct>:
+
+* **<premise>** — <one line> — <its warrant>
+* ...
+```
+
+**Or, if genuinely none:** `## N. SETTLED PREMISES: none carried — first brief of this
+campaign.`  **Say that explicitly; a missing section and an empty one must not render the
+same.**
+
+**THE OBLIGATION IS PER-PACKET AND BROAD:** *any* packet-fed brief re-inlines every settled
+premise its own questions depend on — **whatever pass or round settled it.**  The narrow form
+("pass 2 re-inlines pass 1") was considered and REFUTED by its own second instance, which ran
+pass-1-to-pass-1 across two rounds with no pass 2 anywhere in the story.
+
+**HOW: copy forward.**  The previous brief's settled block in the same campaign is the
+starting point.  Copy it, prune what no question depends on, append what the latest pass
+settled, name the source panel dir.
+
+**THE STOP CONDITION, so this never becomes "inline everything":**
+
+1. **Settled means SETTLED** — a recorded resolution (a file/line reading, a measurement, a
+   panel convergence), citable in one or two lines WITH its warrant.  Premises and warrants;
+   never derivations.
+2. **A premise enters only if a question in THIS brief depends on it.**  Write-time test:
+   *could a seat build a conditional answer — "if X then A, else B" — on it?*  That is
+   exactly what a blocked seat produces (*"if `fatal()` exits, then `0x24` is also fatal and
+   the asymmetry disappears"*), so it is dependence seen from the packet side.
+3. **Scope is the CAMPAIGN.**  Blocks do not accrete across queue items.  A premise needed by
+   many campaigns escalates to §E of this skeleton — **never into `panel_ollama.py`.**
+
+> **WHY NEVER INTO THE TRANSPORT:** a tool that stamps a repo FACT onto every packet becomes a
+> wrong record the day the fact changes, applied by machinery nobody rereads.  The transport
+> preamble stays SEMANTIC-FREE.  (`panel_ollama.py` already asks seats to name premises they
+> cannot settle — that is the READ side of this loop, and it worked: two seats named the
+> missing premise plainly instead of guessing.  Only the WRITE side was broken.)
+
+**MEASURED COST OF OMITTING IT:** ~10 lines omitted; two packet-fed seats spent their ENTIRE
+answers re-deriving (3.4 KB and 9.7 KB), one built a sound-but-conditional defect report on
+the unsettled fork, and a rule question was queued.  The block does not compete with the
+inline-every-fact rule — **it displaces re-derivation, which is the most expensive thing a
+packet-fed seat does.**
+
+## §C2 — *** A PATH IS NOT EVIDENCE TO A PACKET-FED SEAT.  INLINE THE ARTIFACT. ***
+
+**Four of the nine seats CANNOT READ FILES.**  Citing `regress/artifacts/<row>/RESULTS.txt` or
+`src/include/thirdparty/wdcreg.h` tells them nothing — it tells them only that you had
+evidence and did not show it.  A path is a citation for the RECORD and for the file-reading
+seats; it is not a substitute for the bytes.
+
+**INLINE, in the packet, anything a question depends on:**
+
+* **constants you assert** — `WDCTL_RST` is `0x04`, not "the reset bit per `wdcreg.h`";
+* **measured tables** — paste the histogram, do not name the log that holds it;
+* **the body of any function whose EFFECTS you characterise** — if the brief says "it only
+  latches a signature", show the four assignments;
+* **negative claims** — "nothing else claims this address" is unverifiable from a packet
+  unless you show the device list.
+
+**MEASURED, 2026-08-28:** a brief did all four of these wrongly at once and the packet-fed
+`deepseek` seat returned **NOT RATIFY**, itemising exactly them — *"NOT CHECKABLE: the measured
+histogram is reported but not inlined; the artifact path is given but cannot be read from this
+packet."*  **That is not a seat failure and not an objection to the design; it is the seat
+doing precisely what the transport preamble asks.**  Score it as a BRIEF DEFECT.
+
+> **THE TELL, when you are writing:** if a sentence contains a file path and the fact matters,
+> ask *"what does a seat with no filesystem do with this line?"*  The answer is always
+> "nothing", and that is the whole rule.
+
+## §D — INLINE THE FULL ENCLOSING FUNCTION IF ANY EDIT IS PROPOSED OR EVALUATED
+
+Every exit path, and the common tail included.  *A proposed edit is a SKETCH until it has been
+run against real control flow: four independent readers once proposed the same `return` into a
+function whose common tail none of them had read, which would have handed a guest an untouched
+buffer.  When every reader makes the same mistake, suspect the brief.*
+
+## §E — THE FIXED QUESTION SET (ask all three; add round-specific ones after)
+
+Adopted on their PRIOR record, not on any single day's sample:
+
+1. **The premise audit**, with load-bearing premises stated AS QUESTIONS.
+   *Two trials, catches both times; the second found four.*
+2. **"What is the SMALLEST EDIT that breaks this and still passes?"**  Name the row you expect
+   to stay green.  *Highest recorded per-invocation yield in the project.*
+3. **Option-set completeness**, wherever a disposition is chosen: *"is there a member this
+   brief did not name?  Grep the fork for the existing idiom."*
+   *Two measured catches — a whole option-set member, and a bounded-diagnostic idiom the tree
+   already had.*
+
+**PLUS THE STANDING LICENSE, and it is not decoration:**
+
+```
+If, while verifying a claim, you found something ELSE — say so.
+```
+
+*That channel produced FOUR carrier corrections in one day and found the DC21285 datasheet
+that settled a round.  It came from seats with license to wander while verifying, not from any
+directed question.  A template that is 100% directed questions removes the slack it operates
+in.  The template guarantees the high-yield questions are ASKED; it must not imply they are
+the only way to answer.*
+
+## §F — BEFORE SENDING
+
+* [ ] §C present, or an explicit "none carried"
+* [ ] every citation is a grep anchor or a construct name
+* [ ] every quote marked *verbatim* IS verbatim — condensed quotes labelled as condensed
+      (*three seats in one day caught quotes labelled verbatim that were condensed; one made
+      it a VERDICT LINE, because the source shown could not have produced the output quoted
+      beside it*)
+* [ ] state claims are TRUE as of sending — "shipped" means committed
+      (*a brief claimed a round had shipped while its tree was dirty and its kill table still
+      running; two seats caught it independently*)
+* [ ] `bash -c 'wc -c <brief>'` — if a CLI seat will take it on argv, remember the ~32 KB
+      Windows cap; `grok --prompt-file` is the seat immune to it

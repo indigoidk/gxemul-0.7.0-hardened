@@ -1,3 +1,186 @@
+## Round 489 (#489) -- a guest-supplied length ended the host, and deleting the guard would have been worse than the kill
+
+`handle_command()`'s `case 0x14` (Read Table-Of-Contents) read:
+
+```c
+	if (d->cnt != 408) {
+		fatal("GDROM Read TOC not 408 bytes?\n");
+		exit(1);
+	}
+	alloc_data(d);
+```
+
+`d->cnt` is **GUEST-SUPPLIED** -- two 16-bit stores to `GDROM_CNTLO`/`GDROM_CNTHI` -- so an
+ordinary guest register access ended the host process.
+
+*** AND THE GUARD IS LOAD-BEARING, WHICH IS WHY THIS IS A DECLINE AND NOT A DELETION. ***
+`alloc_data()` mallocs `d->cnt` bytes, but the TOC writer below uses HARDCODED indices --
+`grep -oE 'd->data\[[0-9]+\*4(\+[0-9])?\]'` gives a highest byte index of **407** -- so it
+needs 408 bytes regardless of `cnt`. Deleting the `exit(1)` would have converted a host kill
+into a **GUEST-CONTROLLED HEAP OVERFLOW of up to 408 bytes**, with `malloc(0)` at `cnt == 0`.
+So the decline lands BEFORE the guarded statement, not after it.
+
+`break` and not `return`: `free_data()` at the top of the function left `d->data == NULL`, so
+the common tail takes its else branch -- `cnt = 0`, `COND_DATA_AVAIL` cleared -- and **still
+fires `SYSASIC_TRIGGER_EVENT`**. An early return would skip that event and hang the guest.
+`case 0x30` already ships that idiom twice in this same function -- its `sector_count` clamp
+and its `sector_count * 2048 != d->cnt` mismatch both `break`.
+
+> *** THAT SENTENCE CITED THE ANCHOR `OB-20: was exit(1)` AND THE CITATION WAS WRONG TWICE.
+> Corrected 2026-08-28; the measuring seat found both halves. ***
+>
+> **It is not unique** -- the anchor has ONE product hit, and the second "hit" is the
+> instruction TELLING you to grep, quoting itself.  A self-referential anchor counts itself,
+> which is the same shape as a `ps | grep` that matches its own command line.
+>
+> **And it misdescribes one of the two sites.**  The `sector_count <= 0` clamp **does not
+> exist in pristine 2021 upstream at all** (`grep -c 'rejecting sector_count'`: 0 upstream, 1
+> here), so it was never an `exit(1)` -- it is a guard this fork ADDED.  "Ships this idiom
+> twice" is true of the *break* idiom and false of the *"was exit(1)"* framing the anchor
+> spells.  Cited by CONSTRUCT now, per the citation-form rule, which is what that rule is for.
+
+Latched per the house idiom, N=1 per device instance with an explicit `(once)` marker, because
+`fatal()` cannot be silenced by `-q`. This is the SEVENTH warn bit -- the condition
+`gdromwarnbits`' pre-set trigger was written for, discharged one commit earlier.
+
+## Test-first, both directions, on the committed build
+
+Rung-3 witness on the UNMODIFIED `dreamcast` machine, nine guest accesses, with liveness and
+device-signature controls (`regress/artifacts/gdromexitsix/repro_20260828/`):
+
+```
+  PRE-FIX   (committed 84f6682)   8/8 RED   badlen=exit1  zerolen=exit1
+  POST-FIX  (same script)         6/8       badlen=exit0  zerolen=exit0
+```
+
+Exactly the two rows under test inverted; all six controls and accept rows unchanged. The
+witness is registered `CLASS_WITNESS` and is deliberately NOT gated -- gating it would
+manufacture a regression the day the fix landed.
+
+*** THE WITNESS BASE IS `84f6682` WHILE THE PRE-FIX HEAD IS `84765ec`, AND THE GAP IS CLOSED
+BY MEASUREMENT RATHER THAN LEFT FOR AN AUDITOR. ***  Two commits sit between them, both
+touching this file.  `git diff 84f6682 84765ec -- src/` is 113 added lines, and filtering out
+comment lines leaves EXACTLY THREE:
+
+```c
+typedef char gdrom_w_fits_its_carriers[
+    (GDROM_W_NBITS <= 8 * sizeof(((struct dreamcast_gdrom_data *)0)->warned) &&
+     GDROM_W_NBITS <= 8 * sizeof(1u)) ? 1 : -1];
+```
+
+A negative-array-size typedef **emits no object code** -- separately measured on this file
+with the filename held constant, where the object differed in exactly two bytes, both
+`__LINE__` immediates displaced by a comment block.  So nothing between the witness base and
+the pre-fix HEAD can alter what the witness observed, and the RED measurement transfers.
+
+## The detector, and the THREE rebuilds a panel forced on it
+
+*** THIS ROUND SHIPPED A DETECTOR THREE TIMES, AND TWICE A PANEL MEASURED AN ESCAPE AGAINST
+A TABLE THAT HAD ALREADY COME BACK CLEAN. ***  The row count is the story, so it is stated
+first: **13 -> 15 -> 19**, four kill tables, ten distinct mutants.
+
+```
+  13 rows   table 1, all six mutants killed, every floor clause discharged
+            -> a review seat then measured `break;` -> `return;` at 13/13.  TOTAL ESCAPE.
+  15 rows   table 2, seven mutants killed
+            -> pass 2 measured TWO more, both predicted to sweep 15/15:
+               `!= 408 && != 0` (RE-OPENS THE HEAP OVERFLOW at cnt=0) and `< 408`.
+  19 rows   table 4 (final), ten mutants
+            -> pass 2's adjudicator then found a THIRD, alone among nine seats:
+               the latch-state collapse, which sweeps even 18 rows clean.
+```
+
+**EVERY ONE OF THE FOUR ESCAPES HAS THE SAME SHAPE, and the round wrote the reason down
+before finding three of them: A SURVIVE-ONLY ROW IS VACUOUS AT THIS SITE.**  `> 408`,
+exempt-zero, `< 408` and the latch collapse all leave the host ALIVE while the guard is
+wrong -- the damage is either a non-faulting overwrite or no damage at all.  The round
+derived that for `cnt = 407`, shipped a decline-channel row for it, and then did not apply
+it to the other two ENDS of the same guard, nor to the latched STATE.
+
+> **The generalisation, at the level it actually holds:** every VALUE the guard refuses needs
+> a decline-channel row, **and so does every STATE in which it refuses.**  The latched state
+> had only a count row and a survival row -- the two shapes this file already documents as
+> vacuous.
+
+`regress/gdrom_toclen_probe.py`, **19 rows**, wired into `gate_sh_rounding.sh` with a literal
+denominator pin.  Final kill table at
+`regress/artifacts/gdromexitsix/killtable4_20260828/`; the superseded tables are preserved at
+`killtable_20260828/` (13 rows) and `killtable2_20260828/` (15 rows), because they are the
+evidence that each escape was real rather than an artefact of the later file.  The 15-row
+table, cited below, is reproduced from `killtable2_20260828/TABLE_SUMMARY.out`:
+
+```
+base             15/15   controls=OK   reds: none
+M1_reinstate      7/15   controls=OK   8 reds                      floor (a)+(b)
+M2_gt408         11/15   controls=OK   bad says/cond/cnt, latch    floor (d)
+M3_unlatched     14/15   controls=OK   latch once
+M4_silent        13/15   controls=OK   bad says, latch once
+M5_retarget       9/15   controls=OK   6 reds                      accept-row failability
+M7_return        13/15   controls=OK   bad cnt, bad event
+M6_nullmedium    controls=DEAD  0/15                               floor (c)
+```
+
+*** THAT MUTANT WAS LABELLED "M5_grow / guard growth" IN THREE PLACES AND THE LABEL
+MISDESCRIBED THE EDIT. ***  It is `!= 408` -> `!= 407`: a RETARGET that refuses the legal
+value and accepts an illegal one, not a widening.  It legitimately discharges accept-row
+failability -- the `ok` rows do redden, measured 9/15 -- and since the latch operand is a
+compile-time constant the guard cannot feed, guard-only is the correct non-equivalent form
+here.  **Label corrected; NO re-measurement, because the edit that RAN is the edit that was
+intended.**  Caught by the pass-2 adjudicator.
+
+*** THE ROUND SHIPPED A DETECTOR WITH A MEASURED ESCAPE AND A REVIEW SEAT FOUND IT. ***  The
+FIRST version had 13 rows and scored **13/13 against `break;` -> `return;`** -- a total escape.
+
+*** THAT SCORE HAS NO DIRECT ARTIFACT, AND THE RECORD SAYS SO RATHER THAN IMPLYING ONE. ***
+Table 1 contains no M7 run -- M7 did not exist when it was built, which is the whole point.
+The proof is INDIRECT but complete: `killtable2_20260828/M7_return.raw` shows all THIRTEEN
+legacy rows green under that mutant, and the 13-row detector consisted of exactly those rows,
+so a 13/13 sweep is entailed.  **Cite that artifact for the claim** -- a score whose log does
+not exist is the frozen-number class, and the honest form is to name the log that ENTAILS it.
+
+**`bad cond`, the clause-(d) carrier, is STRUCTURALLY BLIND to it**, and the reason is worth
+recording because it looks like the row that should catch it: the guest writes `0xa0` to start
+the command, and **bit 3 is already clear in `0xa0`**, so the tail's
+`d->cond &= ~COND_DATA_AVAIL` is a NO-OP on this path. `break` (tail runs, clears an
+already-clear bit) and `return` (tail never runs) both leave `0xa0`. A row can only separate
+them by observing something the TAIL WRITES.
+
+**And this round's own product comment CLAIMED that property** -- *"an early return would skip
+that event and leave the guest waiting forever"* -- **while shipping no row for it.** That is
+the CLAIM -> ROW pre-table check, unrun, on the round's own diff.
+
+On the decline path the tail writes exactly two things, so there is one row each, and both
+expectations were DERIVED FROM SOURCE AND THEN CONFIRMED -- not read off the binary:
+
+| row | derivation | correct | mutant |
+|---|---|---|---|
+| `bad cnt` | tail sets `d->cnt = 0`; `GDROM_CNTLO`'s read arm is `odata = d->cnt & 0xff`; 407 = 0x197 | `0x00` | `0x97` |
+| `bad event` | `SYSASIC_EVENT_GDROM` = 32, so `4*(32>>5)` puts it in `pending_irq[1]` bit 0 at guest `0xa05f6904`; the ASIC read arm is a plain `odata = d->pending_irq[r]` with no clear-on-read, so the bit LATCHES | set | clear |
+
+**M7 now scores 13/15 and the ONLY two reds are those rows** -- the other thirteen pass it,
+which is the point: the pair was built for a gap nothing else could see.
+
+**Classified L1 (pre-ship construction) rather than filed coverage debt**, because the detector
+was uncommitted when the escape was measured. Adding two rows changed every denominator, so
+the whole table re-ran; the 13-row table is preserved at `killtable_20260828/` as the evidence
+that the escape was real rather than an artefact of the 15-row file.
+
+## Records
+
+The `:662` site is **NOT guest-reachable** and KEEPS its `exit(1)` -- its `cmd_count >= 12`
+predicate is unsatisfiable, and the refutation already existed in two places including this
+file's own `#460` comment. `OUTSTANDING_BUGS.md`'s "six live guest-reachable" heading is
+corrected to five, with the round split recorded: `:357` alone here, `:409`+`:486` as Round 2,
+`:701`/`:761` carried by the open `gdromcondlies` row.
+
+Also corrected in place: `gdrom_pio_null_probe.py`'s header claimed a wrong `cmd[0]` or
+`cmd[1]` "both exit(1)", **false since the day it was written** for two single-bit flips off
+its own correct bytes (`0x30`->`0x70` hits the IMPLEMENTED mount arm; `0x20`->`0x24` warns and
+continues). Three seats found it independently.
+
+Propagated byte-identical to `est/`, `build/` and `build-asan/`; `build/` rebuilt and the
+two-part clearance re-run after every mutation.
+
 ## Round 488 (#488) -- a short read in a NON-FINAL iteration corrupted twice, and the round that touched these exact lines was asking a different question
 
 `fread_helper()` splits an overlayed read into 512-byte pieces, and three accounting

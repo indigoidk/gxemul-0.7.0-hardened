@@ -8224,6 +8224,58 @@ hard.
 
 ## 2026-08-23 — `gdromexitsix`: six live host-kill sites that had no open carrier
 
+> ### *** THE HEADING IS WRONG BY ONE, AND THE RECORD THAT REFUTES IT WAS ALREADY IN TWO
+> ### PLACES WHEN THE HEADING WAS WRITTEN.  Corrected 2026-08-28 after the pass-1 panel. ***
+>
+> **FIVE of the six are guest-reachable, not six.  `:662` IS NOT, AND IT KEEPS ITS
+> `exit(1)`.**  Its guard is `if (d->cmd_count >= 12)`, and the predicate is
+> **UNSATISFIABLE**: `busy |= 0x08` has exactly ONE writer, whose very next line is
+> `d->cmd_count = 0`; stores increment by TWO; and at `cmd_count == 12` the gate CLEARS.
+> So at the guard `cmd_count` is in {0,2,4,6,8,10} and the arm cannot be entered.  What
+> prevents the overflow is the busy gate plus the +2 stride landing exactly on 12 -- **not
+> the `exit(1)`.**
+>
+> Derived independently from HEAD by the grok and fable5 seats before either found the
+> record.  **And the record existed twice:** this file's own 2026-08-26 witness-design
+> entry concluded *"NO TRIGGER ROUTE -> `:662` -> document the invariant instead"*, and
+> `#460`'s in-file comment says the site is *"OTHERWISE UNREACHABLE"* and records a
+> proposed fix REJECTED for re-opening it (*"a fix that re-opens a dead site is worse than
+> the defect"*).
+>
+> **The census question that was asked was "is the `exit(1)` still in the file?"  The
+> question that matters is "can a guest reach it?"**  Those are different, and only the
+> first was asked -- then the answer to it was written into three committed records as
+> though it answered the second.  *That is the unread-review class turned on a product
+> comment: the refutation was sitting in the file being censused.*
+>
+> **DISPOSITION: `:662` KEEPS ITS `exit(1)`** -- it is the measured tripwire for the
+> cmd_count invariant, de-fatalising it buys no guest-facing safety, and it is the
+> detector that caught `#460`'s rejected Option C.
+>
+> ### ROUND SCOPE, settled by the same panel: THIS IS THREE ROUNDS, NOT ONE SWEEP
+>
+> | sites | round | why separate |
+> |---|---|---|
+> | `:357` TOC length | **Round 1 -- `#489`, IMPLEMENTED AND MEASURED, NOT YET COMMITTED** | a BOUNDS-dominating decline; guest-controlled heap overflow if merely deleted |
+>
+> *** "SHIPPED" WAS WRONG AND IS CORRECTED.  The ledger says `in work`, nothing is committed,
+> and the grok seat flagged this exact word on the previous pass -- so this is the SECOND time
+> a state claim about this round outran the tree. ***  "Shipped" is a state claim, and state
+> claims are checkable in one command; the discipline is to run it rather than to write what
+> the work feels like.
+> | `:409` + `:486` | Round 2 | protocol declines sharing ONE oracle -- a different semantic class |
+> | `:701` + `:761` | carried by the open **`gdromcondlies`** row, whose design already exists and is better |
+> | `:662` | **not a round** -- document the invariant |
+>
+> The round-scope rule permits a second site only in the SAME semantic class under one fix
+> design; a bounds decline and a protocol decline are not that, so the split is mandated
+> rather than chosen.
+>
+> **AND ROUND 1 DOES NOT DISTURB THE CLOSURE GATE, which is why it goes first.**
+> `gdrompionull`'s death-mode oracle validates its packet through `default:` (a wrong
+> `cmd[0]`) and the 0x30 format check (a wrong `cmd[1]`).  Neither is `:357`, so both
+> remain fatal and that oracle is untouched.  Re-pinning it is owed only by Round 2.
+
 **FOUND BY FOLLOWING A FLAGSHIP SEAT'S POINTER AND CHECKING IT RATHER THAN TAKING IT.**
 
 The `gdromdmawidth` adjudication said to let `sh4gdromexit` take this file's next round,
@@ -11825,3 +11877,187 @@ OWED BEFORE IT SHIPS, since it changes the tool every panel runs: **two negative
 -- prove it fires on this file, and prove it does **not** fire on `#484`'s codex answer,
 which ends in prose. This project has already shipped one check that could not fail; a
 completion check that fires on every long answer would be worse than none.
+
+
+## 2026-08-28 -- a second gated detector with the same dependency, and no residual channel
+
+### `gdromdefaultstatusless` -- `gdrom_default_probe.py` cannot tell a host kill from a survival
+
+Found by the opus seat on `gdromexitsix` Round 2's design panel, while checking whether the
+brief's dependency survey was complete. **It was not: the survey named one probe and there
+are two.**
+
+`regress/gdrom_default_probe.py` is COMMITTED and GATED (`gate_sh_rounding.sh` runs it and
+scores `GDROM_DEF_RESULT`). Its `nodata stale` triple stages a second command `0x2030` --
+`cmd[0]=0x30, cmd[1]=0x20` -- and its own comment says why that matters: *"the ONLY data
+format that does not itself exit"*. So it depends on the `case 0x30` format check being
+FATAL, exactly as `gdrompionull` does.
+
+**It is strictly worse off than `gdrompionull`, and the reason is structural.**
+
+*** THE MECHANISM WAS REPORTED AS "it never calls `os.waitpid` for a status" AND THAT IS
+NOT QUITE RIGHT.  Re-derived here by reading, because a wrong reason gets reused. ***  It
+DOES call `os.waitpid(pid, 0)` -- and **discards the status**, returning `buf, alive` with
+no `how`. The conclusion is unchanged and is the important half: **there is no
+`exit1`/`sig11`/`exit0` distinction available to any row in that file.**
+
+So:
+
+```
+  today          a mis-assembled 0x30 packet -> exit(1) -> pty EOF -> alive=False
+                 -> all three rows RED, loudly
+  after Round 2  -> declines and survives -> alive=True -> all three rows GREEN
+```
+
+And nothing else in the triple catches it: `stale says` counts the DMA no-data decline (1
+either way) and `stale idle` reads `+0x18 == 0x0` (either way). **No device-signature
+channel, no text channel, no residual.**
+
+> **THIS IS WHERE "IT GOES GREEN FOR A NEW REASON" IS FULLY TRUE.** For `gdrompionull` it
+> is only PARTLY true -- that probe keeps hard packet validation on its TOC half through
+> `devsig gd0`/`devsig gd1`, which demand synthesized bytes that exist nowhere in RAM, so
+> only its `0x30` packet goes unvalidated. Two flagship seats independently refused the
+> brief's blanket phrasing; the blanket claim turns out to be right about the OTHER probe,
+> which the brief had not looked at.
+
+**OWED BY `gdromexitsix` ROUND 2, not by `#489`.** Round 2 is the round that de-fatalises
+the format check, so it is the round that must strengthen this probe before doing so --
+under the STRENGTHENING order the same panel ratified: freeze the challenge set (mutant
+packets) BEFORE the edit, show them caught on the committed build, then show them still
+caught afterwards on the named replacement channel.
+
+**A SECOND FINDING FELL OUT OF READING IT, AND IT IS NOT ROUND 2'S FAULT.** The triple
+exists to build a third state -- `data == NULL` with `data_len` STALE -- and its comment
+says that state is what kills the `data == NULL` -> `data_len == 0` operand-swap mutant.
+But `git log -S` puts `nodata stale` in `#462` and `free_data(d)` at the top of
+`handle_command()` in `#465`, **after it**. Post-`#465` the second command's `free_data()`
+clears BOTH fields, so that route now produces the ordinary never-allocated state and the
+triple is a duplicate of the other nodata rows. *The rows still pass; their stated
+construction is no longer reachable.* Recorded as a LEAD, not a measurement -- the seat was
+read-only and did not run it, and neither have I.
+
+*This is the absence-record class from the mirror side, which this carrier already names:
+a row's warrant was falsified by an edit in a DIFFERENT function and nothing re-ran the
+measurement. It is the second instance this week.*
+
+
+## 2026-08-28 -- landisk drops FIVE address ranges per boot, and four had no carrier
+
+### `landiskunmapped4` -- the guest's whole external-interrupt setup lands nowhere
+
+Found by the opus seat on `landiskaux`'s pass-1 panel, which tallied the preserved census
+logs rather than reading its write-up.  **Re-derived here before filing**, and the counts are
+deterministic: A1/A2/A3 are three independent pristine boots and each totals **26**.
+
+```
+  paddr         n/boot  dir     len  guest symbol
+  0x1400002c      12    W        1   obio_iomem_write_1     <- landiskaux, IN HAND
+  0xfe080000       5    3W/2R    4   intc_init, intpri_intr_priority
+  0x10000003       5    W        1   rtc_ce
+  0x10000005       3    2W/1R    1   intr_init, extintr_establish
+  0xfe080040       1    W        4   intc_init
+                  --
+                  26   == grep -c 'non-existant' on each of A1, A2, A3
+```
+
+**`0xfe080000` and `0xfe080040` are SH7751R EXTENDED-INTC registers** -- the tree already
+knows about that window from the other side: `sh_intprio_probe.py` records
+`non-existant paddr=0xfe080008`.  `0x10000003` and `0x10000005` are landisk BOARD registers.
+
+> **So `intc_init`, `intpri_intr_priority`, `intr_init` and `extintr_establish` all write to
+> addresses nothing serves.  The guest's external-interrupt configuration is discarded in its
+> entirety, on every boot.**  That is directly adjacent to `wdcnoirq` and should be handed to
+> it: a round about a device that never raises its interrupt is working downstream of a
+> controller the guest could not configure.
+
+*** AND IT KILLS AN OVERCLAIM BEFORE ANYONE MAKES IT, which is why the census's omission
+mattered. ***  `RESULTS.txt` reported ONE of the five (`census.py` prints an "ALL paddrs"
+section; the write-up presented only the `0x14000000..0x14000040` window).  A reader with the
+one-site picture would reasonably conclude that fixing `landiskaux` makes `-T` -- *halt on
+non-existant memory accesses* -- usable on a landisk boot.  **It does not: four other sites
+still halt it.**  So any `-T`-based row for this machine is a PROBE row, never a boot row, and
+**a gate row counting `non-existant` on landisk must be ADDRESS-SCOPED rather than pinned at
+zero**, or it is red forever.
+
+**NOT STARTED.** Filed as a class with its census; the two INTC sites belong with `wdcnoirq`
+and the two board registers want their own reading first.
+
+### `hygienenonexistant` -- the boot-log hygiene gate does not look for this at all
+
+Checked while filing the above.  `gate_hygiene.sh` DOES scan `drive_landisk.log` -- at
+`for rig in luna88k landisk; do rlog=$LOGDIR/drive_$rig.log` -- but its `PATTERNS` list does
+**not** include `non-existant`.
+
+> *** A METHOD NOTE, BECAUSE I NEARLY UN-FILED A CORRECT ENTRY ON A BROKEN CHECK. ***  Trying
+> to verify the seat's claim rather than take it, I ran `grep -c 'drive_landisk'` on the gate.
+> It returned **0**, and I read that as a refutation.  **The filename is CONSTRUCTED
+> (`drive_$rig.log`), so a literal grep for it matches nothing** -- the
+> pattern-that-matched-nothing class, reached while applying the do-not-trust-a-seat rule.
+>
+> The tell was available and I walked past it: **a zero count for a gate that visibly scans
+> several rigs is surprising, and a surprising count means open the artifact before believing
+> it.**  What settled it was reading the loop, not refining the grep.
+>
+> *Both halves of the carrier's guidance fired here in sequence — check the seat's claim, AND
+> check that your check selected something. The second is the one that is easy to skip when the
+> first one appears to have paid off.*
+
+**So twenty-six guest stores per boot fall off the memory map and no gate says a word.**  A
+store that reaches no responder is precisely the class a boot-log hygiene gate exists to
+catch, and it is the one string that names it.
+
+*Not fixed here, and the reason is the one the gate itself would give: adding the pattern
+reddens every rig that currently has unmapped accesses, so it needs a census across the whole
+rig set first and probably an address-scoped allowlist with dated entries.  Filed with that
+named as its cost, rather than added as a one-liner that turns the battery red.*
+
+
+## 2026-08-28 -- two measured detector escapes from `#489`, FILED because neither costs memory safety
+
+### `gdromlatchreuse` -- reusing another site's warn bit scores 19/19 clean
+
+**MEASURED by the pass-2 measuring seat**, which built the mutant in its own scratch tree:
+change `#489`'s new `GDROM_W_TOCLEN` to the existing `GDROM_W_LEN` and the 19-row detector
+scores **19/19 -- no row reds.**
+
+The two sites then SILENCE EACH OTHER: whichever fires first sets the shared bit, and the
+other's diagnostic never appears for the life of the device instance.  Nothing in the detector
+observes latch IDENTITY -- every row asks whether a message appeared, never which bit gated it.
+
+> *** AND THE FILE CONTRADICTS ITSELF ABOUT EXACTLY THIS, IN TWO COMMENTS TWENTY LINES
+> APART. ***  `dev_dreamcast_gdrom.c` claims near the mask block that *"a new site cannot
+> silently reuse another's bit -- the duplicate-key hazard this project already paid for once
+> in dev_sh4.c"* -- while the correction added on 2026-08-28, immediately below it, already
+> concedes that C permits an explicit duplicate enumerator and that a raw `|= 0x40` at a new
+> site still collides.  **The stronger sentence is the older one and it is the false one.**
+
+**FILED, not fixed, and the reason is the severity ordering this project already uses:** the
+consequence is a LOST DIAGNOSTIC, not a memory-safety defect.  `#489`'s four other escapes all
+re-opened or admitted something; this one only makes the device quieter.  It ranks below every
+live defect in the same file.
+
+**COST TO CLOSE: one session.**  Fire `GDROM_W_LEN` first (a `mov.b` store to `GDROM_DATA`),
+then a bad TOC, and assert BOTH diagnostics appear.  That is a cross-site latch row, which is
+a shape this detector does not currently have at all.
+
+### `gdromonce` -- the `(once)` suppression marker is claimed in prose and pinned by nothing
+
+`#489`'s decline diagnostic ends `... -- declined.  (once) ]`, and the house idiom is N=1 per
+device instance **plus an explicit suppression marker** -- `(once)` being the plurality
+spelling.  But the detector's regex is
+
+```python
+DECLINE = re.compile(r"Read TOC with cnt=-?\d+, not 408 -- declined")
+```
+
+which **stops before the marker**.  Deleting `  (once)` from the product string scores 19/19.
+
+*Not a floor breach: the contract claims "loss of the once-latch", which `latch once` does pin,
+and the marker TEXT is not among the contract's claims.  So this is coverage debt in the honest
+sense -- an unclaimed gap, filed with its escape recorded, exactly as the floor's "above the
+floor, measured escapes are COVERAGE DEBT: FILE them" clause directs.*
+
+**COST TO CLOSE: one line** -- extend the regex to `declined\.  \(once\)`.  The measuring seat
+checked that this keeps `latch once` = 1, M3 = 2 and M4 = 0, so it does not disturb the three
+rows that depend on it.  **Deliberately NOT done in-round**, because changing the regex changes
+what two shipped rows measure and would have invalidated a kill table that was running.

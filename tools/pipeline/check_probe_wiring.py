@@ -318,6 +318,15 @@ MANIFEST = {
                                     "200-byte data file plus a claiming .map) that no gate "
                                     "constructs, and a witness is checked for the ABSENCE of a "
                                     "gate call by design.  Preserved with all three transcripts."),
+    "gdrom_toclen_probe.py":       (CLASS_DETECTOR,
+                                    "#489 case 0x14 TOC length: a guest-supplied cnt is "
+                                    "DECLINED with a latched (once) diagnostic instead of "
+                                    "ending the host.  19 rows, gated in gate_sh_rounding.sh "
+                                    "with a literal denominator pin.  Every value the guard "
+                                    "refuses carries a DECLINE-CHANNEL row (bad/zero/over "
+                                    "cond) and so does the latched STATE (latch cond) -- four "
+                                    "measured escapes across three earlier row sets all had "
+                                    "the same shape: a survive-only row is vacuous here."),
     "artifacts/gdromexitsix/gdrom_toclen_witness.py": (CLASS_WITNESS,
                                     "gdromexitsix rung-3 on the unmodified dreamcast machine: "
                                     "nine guest accesses, cnt=407 and cnt=0 each end the host at "
@@ -364,6 +373,25 @@ MANIFEST = {
 
     # -- tools: apparatus and libraries, not assertions about the emulator ----------------
     "drive_guest.py":              (CLASS_TOOL, "the pty driver library every rig probe imports"),
+
+    #  landiskaux's preserved census: MEASUREMENT INSTRUMENTS, not detectors and not
+    #  witnesses.  They produced the twelve-write histogram the row's warrant rests on, and
+    #  they are committed because that warrant previously lived in `_scratchpad/` -- the same
+    #  volatile path that already destroyed BOTH of gdromexitsix's witnesses.  Preserving an
+    #  instrument is not the same as gating it: none of these asserts anything, so gating one
+    #  would pin nothing.
+    #  #489's mutant applier, preserved beside its kill table.  A TOOL: it asserts nothing
+    #  and pins nothing -- it edits one guard predicate into one of three named forms.  It is
+    #  committed because the three mutants it applies FAILED to apply in table 4 (their
+    #  anchors were built through a bash->heredoc->python chain and one backslash level was
+    #  consumed), and this file is the repair: a real file with no shell in between, spelling
+    #  its tabs as chr(9).  Preserving it makes the table re-runnable.
+    "artifacts/gdromexitsix/killtable4_20260828/mut_common.py": (CLASS_TOOL, "#489 mutant applier: rewrites the case 0x14 guard predicate, no escaping chain"),
+    "artifacts/landiskaux/census_20260827/census.py":       (CLASS_TOOL, "landiskaux census: tallies guest accesses per paddr from a hooked build"),
+    "artifacts/landiskaux/census_20260827/analyse_hook.py": (CLASS_TOOL, "landiskaux census: reduces the hook log to the per-address table"),
+    "artifacts/landiskaux/census_20260827/devlist.py":      (CLASS_TOOL, "landiskaux census: dumps the constructed machine's device list"),
+    "artifacts/landiskaux/census_20260827/mk_censusB.py":   (CLASS_TOOL, "landiskaux census: builds the instrumented tree B"),
+    "artifacts/landiskaux/census_20260827/watch_2c.py":     (CLASS_TOOL, "landiskaux census: write-watchpoint on 0x1400002c"),
     "selfmutant.py":               (CLASS_TOOL, "differential mutation harness; gate 2 drives it"),
     "absorb_census.py":            (CLASS_TOOL,
                                     "measures selftest_absorb.py's KILL RATE by hand over 22 "

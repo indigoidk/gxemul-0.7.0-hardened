@@ -76,10 +76,40 @@ probe therefore reports HOW the process ended, not merely that it ended:
   sig11  = the deref                    (the defect)
   exit1  = some guarded refusal          (a mis-built packet, NOT the defect)
   exit0  = survived and quit cleanly
-That distinction is what makes "died" evidence here.  It also validates the
-hand-assembled packet for free: a wrong cmd[0] lands in handle_command's
-`default:` arm and a wrong cmd[1] in the 0x30 arm's format check -- both
-exit(1) -- so a coding error CANNOT be mistaken for the defect.
+That distinction is what makes "died" evidence here.  It also PARTLY validates
+the hand-assembled packet: most wrong cmd[0] values land in handle_command's
+`default:` arm and most wrong cmd[1] values in the 0x30 arm's format check --
+both exit(1) -- so most coding errors cannot be mistaken for the defect.
+
+*** THAT SENTENCE USED TO CLAIM A UNIVERSAL ("a wrong cmd[0] ... and a wrong
+cmd[1] ... -- both exit(1) -- so a coding error CANNOT be mistaken for the
+defect") AND IT HAS BEEN FALSE SINCE THE DAY IT WAS WRITTEN.  Corrected
+2026-08-28; found by the fable seat while checking a DIFFERENT premise on
+gdromexitsix Round 2, and confirmed here by reading both arms. ***
+
+There are exactly two holes, and both are a SINGLE BIT FLIP from this probe's
+own correct bytes -- which is the worst possible place for a hole, because a
+one-bit transcription slip is the likeliest coding error there is:
+
+    cmd[0] 0x30 -> 0x70   (bit 6)   `case 0x70:` is IMPLEMENTED -- Mount, and
+                                     the tree models it as a no-op `break`.
+                                     Silent exit0.  NOT a refusal at all.
+    cmd[1] 0x20 -> 0x24   (bit 2)   the 0x30 arm WARNS and CONTINUES into a
+                                     real sector read ("Continuing anway").
+                                     exit0, with data.
+
+So the validation frame covers the COMPLEMENT of {0x14, 0x30, 0x70} for cmd[0]
+and the complement of {0x20, 0x24} for cmd[1].  State it that way rather than
+universally: a frame that names its holes is falsifiable, and one that claims
+completeness is how a coding error gets read as a measurement.
+
+*** AND NOTE WHAT THIS DOES NOT TOUCH: NO ROW WAS EVER WRONG. ***  The rows
+send correct packets and always did; it is the HEADER's claim about what would
+happen to an incorrect one that overreached.  That distinction matters for the
+Round 2 re-keying: because no shipped row flips colour when the two exit(1)
+sites are de-fatalised, this is an oracle STRENGTHENING and not an oracle
+CORRECTION, and the thing frozen before that edit must be the CHALLENGE SET
+(these mutant packets) rather than an expectation.
 
 CONTROLS run in their own sessions and never reach the NULL path.
 DREAMCAST NEEDS -x (console.c:994-1007, two console inputs) or the session dies

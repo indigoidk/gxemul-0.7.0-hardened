@@ -306,7 +306,11 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  label gains a word before the stem, or when the count moves to a variable --
 	#  all of which leave the gate behaving identically.  That is why the count is
 	#  asserted at all.
-	SCORE_CLAIMS_MANIFEST=19
+	#  19 -> 20 on 2026-08-28: `#489` wired gdrom_toclen_probe.py into gate_sh_rounding.sh
+	#  with a literal denominator pin (`check "gdromtoclen rows run" ... 15`).  Raised
+	#  DELIBERATELY, which is what the growth arm below asks for -- the count is the
+	#  point, so it may not be nudged to silence a red.
+	SCORE_CLAIMS_MANIFEST=20
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

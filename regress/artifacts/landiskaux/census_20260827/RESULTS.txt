@@ -1,0 +1,311 @@
+================================================================================
+LANDISK wdc DEVICE-CONTROL REGISTER CENSUS  --  measured 2026-08-27
+tree under review: GXEMUL-SEC/src/  (ignore every other src/ on this machine;
+the project root holds pristine-2021 upstream copies that are NOT this fork)
+
+PROVENANCE, stated precisely because HEAD MOVED DURING THE MEASUREMENT.  Build A
+was copied from GXEMUL-SEC at HEAD 77b7c03.  A concurrent seat then committed
+6faba0f, 5cea266 and 772edb9.  `git diff --stat 77b7c03..HEAD -- src/` is EMPTY:
+those three commits touch only regress/artifacts/ and tools/pipeline/, so every
+number below still describes the source at current HEAD.  Checked, not assumed.
+
+The uncommitted paths visible in `git status --porcelain` at the end of this run
+(regress/artifacts/shortread/repro_20260827/*, tools/pipeline/ledger.json,
+tools/pipeline/matrix.html) belong to that other seat.  NONE of them are mine --
+this census wrote nothing inside GXEMUL-SEC.
+================================================================================
+
+VERDICT: CONFIRMED, AND THE PREVIOUS SEAT'S NUMBERS WERE RIGHT.  OpenBSD 7.6
+issues exactly TWELVE byte writes to paddr 0x1400002c and ZERO reads, reproduced
+on four independent runs.  Six carry 0x08 (WDCTL_4BIT), five carry 0x02
+(WDCTL_IDS), and the FIRST carries 0x0c = WDCTL_RST | WDCTL_4BIT -- so a real ATA
+SOFT RESET is among them and is silently discarded today.  The command block at
+0x14000000..0x1400000f SUCCEEDS: 12,718 accesses across all eight registers, and
+wd0 attaches with correct geometry, so devinit->addr is RIGHT and the defect is a
+missing offset case, not a wrong base.  Nothing else in the constructed machine
+claims 0x1400002c; the registered wdc_altstatus window at 0x14000206 receives
+ZERO accesses for the entire boot.
+
+--------------------------------------------------------------------------------
+Q1.  IS IT TWELVE WRITES, AND ARE SIX OF THEM 0x08?      YES to both.
+--------------------------------------------------------------------------------
+Four runs, two independent instruments, all agreeing:
+
+  A1_pristine_boot.log         12 writes   0 reads     (unmodified build)
+  A2_pristine_boot.log         12 writes   0 reads     (unmodified build)
+  A3_pristine_boot.log         12 writes   0 reads     (unmodified build)
+  B1_hook_full_window.log      12 writes   0 reads     (census-hook build)
+
+All twelve are len=1, all from pc=0x8c15f6e8 <obio_iomem_write_1+0x8>, all with
+no_exceptions=0 (real guest stores, not debugger reads).
+
+  *** THE COUNT WAS TAKEN AS OCCURRENCES, NOT LINES, ON PURPOSE.  The emulator's
+  warning interleaves with the guest console stream mid-word -- the transcript
+  literally reads "wd0 at wdc0 chan[ memory WRITE ... ]nel 0 drive 0".  In these
+  four runs both forms happened to give 12, so this is a precaution and NOT a
+  measured correction; tally_runs.sh prints both so a divergence would show. ***
+
+--------------------------------------------------------------------------------
+Q2.  WHAT ARE THE ACTUAL VALUES?   0x0c once, then 0x08/0x02 alternating.
+--------------------------------------------------------------------------------
+In order (bit names from the tree's own src/include/thirdparty/wdcreg.h --
+WDCTL_4BIT 0x08, WDCTL_RST 0x04, WDCTL_IDS 0x02):
+
+   1  0x0c   WDCTL_4BIT | WDCTL_RST      <-- SRST ASSERTED
+   2  0x08   WDCTL_4BIT                  <-- SRST released
+   3  0x02   WDCTL_IDS
+   4  0x08   WDCTL_4BIT
+   5  0x02   WDCTL_IDS
+   6  0x08   WDCTL_4BIT
+   7  0x02   WDCTL_IDS
+   8  0x08   WDCTL_4BIT
+   9  0x02   WDCTL_IDS
+  10  0x08   WDCTL_4BIT
+  11  0x02   WDCTL_IDS
+  12  0x08   WDCTL_4BIT
+
+  histogram:  0x0c x1   0x08 x6   0x02 x5      carrying WDCTL_RST: 1
+
+Shape: one assert/release soft-reset pair at the head of the channel probe, then
+five disable-interrupts / enable-interrupts pairs bracketing PIO commands.
+Window context around the 0x0c (from the hook log):
+
+      W  sdh              0xb0     (select drive 1)
+      R  status           0x01
+      W  sdh              0xa0     (select drive 0)
+      W  UNMAPPED +0x2c   0x0c     <<< SRST asserted, DISCARDED
+      W  UNMAPPED +0x2c   0x08     <<< SRST released, DISCARDED
+      W  sdh              0xa0
+      R  status           0x51
+
+CORROBORATED ON THE UNMODIFIED BINARY, with no instrumentation of any kind, by
+the tree's own committed write-watchpoint (#250, the debugger watchpoint
+command).  It reported paddr 0x1400002c, len 1, value 0x0c first and then the
+same {0x08, 0x02} set, from the same pc.  See A4_pristine_watchpoint.log.
+
+  *** THE WATCHPOINT RUN SAW 9 OF THE 12, AND THAT IS A PROPERTY OF THE METHOD,
+  NOT A DISAGREEMENT.  The check in MEMORY_RW_ONE_PAGE is guarded by
+  !single_step && !about_to_enter_single_step, and the hit itself SETS
+  about_to_enter_single_step -- so a write arriving before the debugger has been
+  entered and resumed is not reported.  It is a LOWER BOUND by construction.  It
+  confirms the VALUES; the COUNT of 12 rests on the other two instruments. ***
+
+WHAT MAPPING THE REGISTER WOULD THEN DO (read from DEVICE_ACCESS(wdc_altstatus)):
+  * on the 0x0c write, idata & WDCTL_RST is true, so the handler sets
+    d->cur_command = COMMAND_RESET and calls wdc_new_command_reset(), which
+    clears atapi_cmd_in_progress, atapi_phase and write_in_progress and purges
+    the inbuf ring (inbuf_head = inbuf_tail = 0).  The guard is LEVEL-triggered
+    by deliberate #481 design.
+  * the six 0x08 and five 0x02 writes reach no WDCTL_RST branch; they would
+    produce only a debug() line, invisible without -v.
+  * reads would return status_byte(), which is PURE (verified by reading it: it
+    derives from diskimage_exist, the ring pointers, write_in_progress, d->error
+    and the atapi phase, and assigns nothing).  Today they return 0 instead --
+    but the guest performs ZERO reads there in this boot, so that half is not
+    observable on this rig.
+  * cur_command = COMMAND_RESET (0x100) is a LATCH.  Its only two consumers are
+    the cyl_lo and cyl_hi read arms, and BOTH are gated on
+    diskimage_is_a_cdrom(), so on this IDE-disk rig they do not fire.
+
+  NOT SETTLED: whether delivering the reset changes the boot outcome, and what a
+  CD-ROM rig (-d ic:) would do -- both consumers of the latch are cdrom-gated and
+  this census used a plain IDE disk.  Those are fix-side measurements the round
+  still owes; this census does not answer them.
+
+--------------------------------------------------------------------------------
+Q3.  DO THE COMMAND-BLOCK ACCESSES SUCCEED?    YES -- decisively.
+--------------------------------------------------------------------------------
+THIS IS THE DISCRIMINATING CONTROL AND IT COMES OUT ON THE "MISSING OFFSET CASE"
+SIDE.  Full window census from B1_hook_full_window.log (landisk uses addr_mult=2,
+so device register N sits at paddr 0x14000000 + 2N):
+
+  paddr        wdc register           dir  len  count
+  0x14000000   0 data                 R    2    2560
+  0x14000002   1 error/features       R    1       6
+  0x14000002   1 error/features       W    1      12
+  0x14000004   2 seccnt               R    1       2
+  0x14000004   2 seccnt               W    1      13
+  0x14000006   3 sector               R    1       2
+  0x14000006   3 sector               W    1      12
+  0x14000008   4 cyl_lo               R    1       3
+  0x14000008   4 cyl_lo               W    1      13
+  0x1400000a   5 cyl_hi               R    1       2
+  0x1400000a   5 cyl_hi               W    1      13
+  0x1400000c   6 sdh                  W    1      33
+  0x1400000e   7 status/command       R    1   10033
+  0x1400000e   7 status/command       W    1      14
+  0x1400002c   *** NOT MAPPED ***     W    1      12
+                                              -------
+                                               12730   (12718 mapped + 12 not)
+
+Nothing at all in 0x14000010..0x1400002b or 0x1400002d..0x1400003f.
+
+DEVICE-SIGNATURE CONTROL (the value could only have come from the emulated wdc,
+not from RAM): the guest reads back the IDENTIFY data and prints
+
+    wd0 at wdc0 channel 0 drive 0: <wdc-scratch-64m.img>
+    wd0: 128-sector PIO, CHS, 64MB, 131 cyl, 16 head, 63 sec, 132048 sectors
+
+-- the model string is the host image's filename and the geometry is the one the
+emulator computed for it.  RAM cannot produce that.
+
+SECOND, INDEPENDENT CONFIRMATION: the pristine build run with -v prints the
+device's own DATA-register debug line, and it counts 2560 "wdc: read from DATA"
+-- byte-for-byte the same number as the hook's 2560 reads at 0x14000000.  Two
+instruments, one modified and one not, agreeing exactly.  Also from that run:
+0 "wdc: WARNING" of any kind (no flood), and 0 accesses to ALTSTATUS.
+
+--------------------------------------------------------------------------------
+Q4.  DOES ANYTHING ELSE CLAIM 0x1400002c?      NO.
+--------------------------------------------------------------------------------
+Answered on the CONSTRUCTED machine, not just by grep, via the debugger's
+device-list command (A5_device_list.log).  Complete map:
+
+   0:            ram @ 0x0c000000  len 0x4000000
+   1:            wdc @ 0x14000000  len 0x10        <-- 0x14000000..0x1400000f
+   2:  wdc_altstatus @ 0x14000206  len 0x2         <-- 0x14000206..0x14000207
+   3:            ram @ 0x1e000000  len 0x8000
+   4:         sh4_sq @ 0xe0000000  len 0x4000000
+   5..12:  ram / sh4_itlb_aa / sh4_itlb_da1 / sh4_utlb_aa / sh4_utlb_da1
+  13:       sh4_pcic @ 0xfe200000  len 0x224
+  14:            sh4 @ 0xff000000  len 0x1000000
+  15:        rs5c313 @ 0x110000000 len 0x10
+
+0x1400002c falls in no entry.  The command block ends 0x1c bytes below it and
+wdc_altstatus begins 0x1da bytes above it.  Static grep agrees: the only source
+reference to this range is machine_landisk.c's single device_add of
+"wdc ... addr_mult=2 addr=0x14000000", and DEVINIT(wdc) has cases for MACPPC,
+HPCMIPS and IQ80321 only.
+
+AND THE REGISTERED WINDOW IS DEAD: the -v run counts ZERO "read from ALTSTATUS"
+and ZERO "write to ALT. CTRL" for the whole boot.  So today the handler that
+exists is never reached, and the twelve writes that should reach it are discarded
+0x1da bytes lower down.
+
+================================================================================
+A TRAP WORTH RECORDING -- IT PRODUCED A CLEAN, CONFIDENT, HALF-EMPTY CENSUS
+================================================================================
+The first version of the census hook tested its window on paddr at do_return_ok.
+It reported 12 unmapped writes and ZERO command-block accesses, with no error and
+no missing denominator -- and that was wrong.  The device arm of
+MEMORY_RW_ONE_PAGE does "paddr -= mem->devices[i].baseaddr" BEFORE calling the
+handler, so a device access reaches do_return_ok carrying the RELATIVE offset
+(0x00..0x0f), never 0x14000000+.  A window predicate written on paddr is
+therefore blind to exactly the mapped half -- which is the half that answers Q3.
+The fix is the GXC_P0 latch, taken immediately after address translation.
+
+*** THIS IS PRECISELY HOW A REPORT COULD COME BACK WITH THE UNMAPPED WRITES AND
+NO COMMAND-BLOCK CONTROL AT ALL.  A censusing instrument must be shown to see the
+POSITIVE case before its negatives are believed; here the 2560/2560 DATA
+agreement against the tree's own -v output is that proof. ***
+
+================================================================================
+METHOD, AND HOW TO RE-RUN IT
+================================================================================
+Two builds, neither of them GXEMUL-SEC, neither of them ../build/, and neither
+under /tmp/gxwit* (another seat's trees):
+
+  BUILD A  /tmp/gxcensusA   pristine copy of GXEMUL-SEC.  Verified with cmp
+                            against SEC file-by-file and [ binary -nt source ]
+                            after the build (logs/buildA.log,
+                            verify_buildA.sh).  Every number attributed to
+                            "pristine" comes from this.
+  BUILD B  /tmp/gxcensusB   same tree + a census hook in memory_rw.c ONLY.
+                            The complete diff is buildB_census_hook.diff (3
+                            hunks); MAKE_RC=0 and FRESH_OK are both recorded in
+                            logs/buildB.log.
+
+The emulator is run on the UNMODIFIED -E landisk machine description, no
+device_add, no address overrides:
+
+  gxemul -E landisk -M 64 -d iR:_images/wdc-scratch-64m.img \
+         _images/openbsd76-landisk-bsd.rd
+
+iR: = IDE, read-only with a pid-unique discard overlay, so runs cannot inherit
+state.  Each run boots to the OpenBSD installer prompt ("(I)nstall, (U)pgrade,
+(A)utoinstall or (S)hell?") and is then killed; that is the whole probe/attach
+phase, and no install is performed.  SCOPE OF EVERY COUNT HERE IS THAT WINDOW.
+
+  run_boot.sh        one boot, output captured (no pty needed; the SCIF console
+                     works on a plain pipe)
+  census.py          tallies non-existant accesses by paddr, with denominators
+  analyse_hook.py    the build-B window census, values and bit decomposition
+  tally_runs.sh      cross-run agreement table
+  tally_verbose.sh   the -v instrument counts
+  watch_2c.py        pristine-build watchpoint capture (pty plumbing is
+                     gxprobe.Emu's; install_stubs() is overridden away because
+                     that layer is MIPS-specific and this rig is SH4)
+  devlist.py         device-list dump on the constructed machine
+  verify_buildA.sh   freshness + cmp-against-SEC for build A
+  mk_censusB.py      generates the build-B hook (refuses to patch on a
+                     non-unique anchor)
+  collect.sh         copies every log here
+
+WITNESS LADDER: rung 4 (boot).  A real OpenBSD 7.6 driver reaches the path
+unaided on a committed, unmodified machine description, with a liveness control
+(the command block answers and the guest completes autoconf) and a device-
+signature control (the IDENTIFY data carries the host image's name and geometry,
+which RAM cannot produce).
+
+NOT SETTLED, stated rather than guessed:
+  * whether delivering the reset changes the boot outcome (a fix-side
+    measurement, deliberately not taken here);
+  * CD-ROM rig behaviour, where COMMAND_RESET's two cdrom-gated consumers would
+    fire;
+  * anything past the installer prompt -- no install, no post-attach I/O;
+  * other landisk models (machine_landisk.c's own TODO 2) and other guest OS
+    versions.  Everything above is OpenBSD 7.6 RAMDISK #70 only.
+
+
+================================================================================
+*** CORRECTION APPENDED 2026-08-28.  THE TWO-INSTRUMENT VALIDATION CLAIM ABOVE
+*** IS NOT RECONSTRUCTIBLE FROM THE PRESERVED LOGS.  THE CONCLUSIONS SURVIVE;
+*** THE STATED PROOF DOES NOT.
+================================================================================
+
+Found by the opus seat on this row's pass-1 panel, and re-derived here before
+recording.
+
+This file rests its credibility on one methodological sentence -- "a censusing
+instrument must be shown to see the POSITIVE case before its negatives are
+believed; here the 2560/2560 DATA agreement against the tree's own -v output is
+that proof."  Measured against the logs preserved beside it:
+
+    logs/B1_hook_full_window.log        "read from DATA"  ->     0
+                                        non-existant ...2c ->   12
+    logs/A6_pristine_verbose_TRIMMED.log "read from DATA" ->    24
+                                        non-existant ...2c ->    6
+
+The hook's 2560 appears only in THIS FILE'S OWN TABLE, not as a grep-able count
+in B1; and the -v instrument the claim compares it against shows 24, not 2560.
+**A6 IS A SHORT RUN -- its own filename says TRIMMED -- and it is the only -v
+artifact preserved.**  So the "two independent instruments agreed" proof cannot
+be re-run by a later reader.  The -v run also shows 3 rather than 5 at
+0x10000003, for the same reason.
+
+WHAT SURVIVES, AND IT IS ENOUGH FOR EVERY CONCLUSION THIS FILE DRAWS: B1's
+12,718 mapped accesses across all eight command-block registers, and the
+`wd0 at wdc0 ... 131 cyl, 16 head, 63 sec` attach visible in A1, discharge the
+positive-case obligation ON THEIR OWN.  The instrument demonstrably sees the
+device.  Nothing in the twelve-write histogram depends on the 2560 comparison.
+
+*** WHY THIS IS RECORDED RATHER THAN QUIETLY DELETED: this row's panel gate was
+*** "ship, but not on this packet" PRECISELY BECAUSE the previous warrant rested
+*** on an unpreserved artifact.  The re-take preserved everything -- and then the
+*** write-up described something the preserved artifact does not show.  That is
+*** the same class one step further in: the evidence is there and does not say
+*** what the prose says.  Preservation is necessary and not sufficient. ***
+
+OWED, either one: re-take the -v instrument on the disk rig TO COMPLETION and
+preserve it, or leave this correction standing as the caption.  Do not let a
+round block cite the 2560 agreement until one of those is done.
+
+ALSO CORRECTED: this file reports 0x1400002c as the unmapped site.  It is one of
+FIVE per boot, and the other four are real queue items -- 0xfe080000 (5/boot) and
+0xfe080040 (1/boot), SH7751R extended-INTC registers reached from intc_init and
+intpri_intr_priority; and 0x10000003 (5/boot, rtc_ce) and 0x10000005 (3/boot,
+intr_init / extintr_establish), landisk board registers.  census.py PRINTS an
+"ALL paddrs" section; this write-up presented only the 0x14000000..0x14000040
+window.  Consequence worth stating: fixing 0x1400002c does NOT make `-T` usable
+on a landisk boot -- four other sites still halt it -- so any `-T`-based row is a
+PROBE row, not a boot row.
