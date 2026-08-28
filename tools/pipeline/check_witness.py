@@ -86,13 +86,79 @@ CUTOFF = "2026-08-19"
 #  not a footnote to it.
 SHAPE = re.compile(r"^(boot:\S|probe:\S|construction:\S|harness:\S|detector:\S|none\b)")
 
+#  *** AND THE SHAPE IS NOT THE CLAIM.  A witness field that names a file THAT DOES NOT
+#  EXIST passes every check above and is worse than a missing one, because it reads as
+#  evidence. ***
+#
+#  THE ESCALATION TRIGGER FIRED 2026-08-27.  The carrier's pre-specified rule is that the
+#  first MEASURED DECISION consumed by a bad citation converts the prose rule into a check.
+#  One was: `gdromexitsix` was carried as 'fully panelled and rung-3 witnessed', a round was
+#  designed on that basis, and its `probe:` field named two scratchpad scripts that a `find`
+#  over the entire project cannot locate.  A sibling grep then found `regress/diff_fb_clear.c`
+#  -- cited by TWO more rows, and never a real file.
+#
+#  MEASURED POPULATION rather than guessed: 73 file citations, THREE resolving to nothing.
+#  All three corrected before this landed, so the check is GREEN on arrival -- deliberately,
+#  because a rule that retro-fails the archive gets switched off and a switched-off rule
+#  protects nothing.
+#
+#  WHAT IT CANNOT DO, said plainly so a green line is not read as more than it is: it tests
+#  EXISTENCE, never whether the named artifact is any good or whether it measures what the
+#  row claims.  Those are readings; this is a filesystem test.  It resolves by BASENAME
+#  anywhere under the project root rather than by exact path, because artifacts legitimately
+#  move between regress/ and regress/artifacts/<row>/ -- a stricter test would fail on honest
+#  relocation, which is how a check earns the reputation that gets it disabled.
+#
+#  `harness:` and `none` are SKIPPED: harness routinely names a FACT rather than a file
+#  ('read', 'measured 2026-08-26'), and none names nothing by definition.
+CITED = re.compile(r"[A-Za-z0-9_./-]+[.](?:py|c|sh)")
+
+
+def _project_basenames():
+    """Every .py/.c/.sh basename under the project root (two levels up from here)."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [x for x in dirnames if x not in (".git", "__pycache__")]
+        for fn in filenames:
+            if fn.endswith((".py", ".c", ".sh")):
+                seen.add(fn)
+    return seen
+
+
+
 
 def main(argv):
     listing = "--list" in argv
     ledger = json.load(io.open(LEDGER, encoding="utf-8"))
 
     missing, malformed, ok, grandfathered = [], [], 0, 0
+    ghosts = []
+    names = _project_basenames()
+    #  *** THE EXISTENCE CHECK RUNS OVER **EVERY** ROW WITH A WITNESS FIELD, NOT ONLY
+    #  CLOSED ONES -- and that scope is the whole point.  MEASURED: scoped to closed rows
+    #  it did NOT fire on an injected ghost citation, because all three real defects sat on
+    #  rows that are `open` or `held`.  A check that cannot fail on the case that motivated
+    #  it is worse than no check, and this one nearly shipped that way. ***
     for row in ledger["rows"]:
+        #  *** SCAN ONLY THE OPERATIVE CLAUSE, NOT THE CORRECTION PROSE AFTER IT. ***
+        #  This project's corrections QUOTE the text they refute, and a naive scan cannot
+        #  tell an assertion from a quotation of one -- the carrier records that exact trap
+        #  ('a grep built to find STALE CLAIMS reported a defect that was really an honest
+        #  correction quoting the text it refutes').  MEASURED here: correcting two rows to
+        #  name their real detector left the check RED, because the correction note quotes
+        #  the dead filename.  Corrections in this tree are introduced by `***`, so the
+        #  operative citation is everything before the first one.
+        #
+        #  The cost is honest and bounded: a ghost introduced AFTER a `***` in the same
+        #  field is missed.  That is the right trade -- the alternative reds every corrected
+        #  row forever, and a check that punishes correction is a check that gets switched
+        #  off, which this project has watched happen.
+        w0 = (row.get("witness") or "").strip().split("***")[0]
+        if w0 and not w0.startswith(("harness:", "none")):
+            for m in CITED.findall(w0):
+                if m.split("/")[-1] not in names:
+                    ghosts.append((row["id"], m))
         if row.get("state") != "closed":
             continue
         if not (row.get("commits") or "").strip():
@@ -116,8 +182,13 @@ def main(argv):
     print("check_witness: %d closed-with-commits rows named a witness, %d grandfathered "
           "(pre-%s), %d missing, %d malformed"
           % (ok, grandfathered, CUTOFF, len(missing), len(malformed)))
-    if not missing and not malformed:
-        print("WITNESS_PASS  every row that closed with commits since the rule names its witness")
+    if ghosts:
+        print("    %d witness citation(s) name a file that exists NOWHERE:" % len(ghosts))
+        for rid, m in ghosts:
+            print("      %-14s cites %s" % (rid, m))
+    if not missing and not malformed and not ghosts:
+        print("WITNESS_PASS  every row that closed with commits since the rule names its "
+              "witness, and every cited artifact exists")
         return 0
 
     print("WITNESS_FAIL")
@@ -130,6 +201,11 @@ def main(argv):
     print("              harness:<what proved it>  none")
     print("  An #include/direct-call harness is a DETECTOR, never a witness -- naming one")
     print("  here is precisely the laundering this field exists to make visible.")
+    if ghosts:
+        print()
+        print("  A citation naming a file that does not exist is WORSE than a missing one,")
+        print("  because it reads as evidence.  Either restore the artifact, or correct the")
+        print("  field to say plainly that the measurement was not preserved.")
     return 1
 
 
