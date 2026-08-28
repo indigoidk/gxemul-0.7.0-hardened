@@ -1,0 +1,165 @@
+PRE-TABLE CHECK -- gdromexitsix Round 2
+=======================================
+Written 2026-08-28, BEFORE table 1 of this round has run.  This file's mtime is the
+order proof the mandate asks for; if a kill-table log in this directory predates it,
+the mandate was not met.
+
+THIS IS THE FIRST APPLICATION OF THE MANDATE (carrier, adopted 7084b36).  Under the
+freshly-minted-exemplar rule it therefore owes one extra thing, discharged at the
+bottom: it must CHECK the CHANNEL line's own write-time-knowability claim rather than
+simply obey it.
+
+THE DIFF THIS COVERS (not yet written):
+  Site A -- the case 0x30 data-format check.  Anchor: `unimplemented data format 0x%02x`
+            (the SECOND occurrence, the one followed by exit(1); the first is the 0x24
+            branch, which already survives).
+  Site B -- the default: arm.  Anchor: `handle_command: unimplemented command`
+  Both de-fatalised: keep the diagnostic behind a per-site latch bit, drop exit(1),
+  `break` to the function's common tail.  Site A's break goes INSIDE the else-if and
+  BEFORE `sector_nr =`, leaving the 0x24 branch byte-identical.
+
+
+1. SIBLING PARITY
+-----------------
+Site B's nearest sibling is `case 0x70` (MOUNT, per NetBSD's gdrom_mount_disk) -- the only
+implemented command that allocates no data, and a command a real driver ISSUES rather than a
+stub nobody calls.  VERIFIED by reading: the switch carries exactly three case labels
+(0x14, 0x30, 0x70) plus default:, and 0x70's body is a comment and a break.  Both it and a de-fatalised `default:` break to the same common tail:
+
+    if (d->data != NULL)  d->cond |= COND_DATA_AVAIL;
+    else                { d->cnt = 0;  d->cond &= ~COND_DATA_AVAIL; }
+
+*** SO THE PARITY CHECK FINDS A SYMMETRY, NOT AN ASYMMETRY, AND THAT IS THE WORSE
+FINDING.  After the edit, a DECLINED UNKNOWN COMMAND and a LEGITIMATE IMPLEMENTED
+NO-DATA COMMAND are observationally identical on the tail channel. ***  Any row whose
+oracle is "cnt == 0 and COND_DATA_AVAIL clear" therefore cannot attribute what it saw.
+The only thing that separates them is the LATCH -- the once-only diagnostic fires for
+the decline and never for 0x70.
+
+MEASURED GAP: `0x70` appears ZERO times in gdrom_default_probe.py (grep -c '0x70' = 0).
+So there is no sibling baseline row to compare against.
+
+ROW OWED (S1): a `0x70` row establishing that the tail channel reads identically for a
+legitimate no-data command.  Without it, the declined-default row's tail reading is
+un-attributable -- it proves the guest reached SOME no-data path, not that it was
+declined.
+
+
+2. CLAIM -> ROW
+---------------
+DEFERRED TO WRITE TIME, and recorded as owed rather than passed -- the diff's comments
+do not exist yet, and a check run against nothing is the check-that-cannot-fail shape.
+
+The trigger in force is the SEMANTIC one adopted in 7084b36, not the old verb list:
+every added sentence asserting an OBSERVABLE CONSEQUENCE owes a row or an explicit
+no-row sentence, counterfactual "would <consequence>" clauses included.  That repair
+exists precisely because #489's load-bearing comment contained none of the five verbs.
+
+TO RUN: after the comments are written, before table 1.
+
+
+3. GUARD FIELD vs BODY FIELD
+----------------------------
+Site A.  Guard reads d->cmd[1].  Guarded body reads d->cmd[2..4] and d->cmd[8..10].
+The fields DIFFER, so the check asks whether they are written at the same sites.
+
+    MEASURED: they are.  d->cmd[12] is filled two bytes per store
+    (`d->cmd[d->cmd_count++] = idata;` / `= idata >> 8;`) and handle_command dispatches
+    only at cmd_count == 12, so all twelve bytes arrive from the same six word-writes
+    before any dispatch.  No path writes a partial packet: the >= 12 arm exits, and
+    narrow access is DELIBERATELY not emulated -- with a measured reason recorded in
+    the file (letting cmd_count step by 1 makes 11 byte writes + 1 word write go
+    11 -> 13, skipping the == 12 equality and reaching an otherwise-dead exit).
+
+  => NO DISAGREEING STATE EXISTS.  N/A, with its reason recorded.  NO ROW OWED.
+
+Site B.  Guard reads d->cmd[0]; the fatal() argument reads d->cmd[0]; the switch
+dispatches on d->cmd[0].  Guard field == body field.
+
+  => N/A, no row owed.
+
+(Note this is the check that paid off at #485, where the default: arm's fatal()
+arguments WERE the guarded body's field reads and enumerated D1..D5 mechanically.  Here
+the same reading discharges rather than generates -- which is the check working, not
+the check idling, and the distinction is why N/A must carry its reason.)
+
+
+4. CHANNEL  -- the mutant each row kills, and the observable that differs
+------------------------------------------------------------------------
+*** THIS IS WHERE THE ROUND'S REAL OBLIGATION IS, AND IT IS MEASURED, NOT ARGUED. ***
+
+FROZEN CHALLENGE SET, run against the COMMITTED build before any edit
+(C0_correct.raw, C1_badcmd0.raw in this directory):
+
+    C0  correct packet 0x2030                    58/58     ctlOK=1   baseline
+    C1  cmd[0]=0x31 -> default: arm              55/58     ctlOK=1   CAUGHT
+    C2  cmd[1]=0x21 -> format check              55/58     ctlOK=1   CAUGHT
+
+FREEZE COMPLETE.  BOTH mutants are caught on the committed build, and caught by the SAME
+three rows -- so the two sites share one oracle and one blinding.
+
+The three rows that fall under C1, by diff of C0 against C1:
+
+    nodata stale     survived -> died
+    stale says       1        -> died
+    stale idle       0x0      -> died
+
+ALL THREE DETECT THE MUTANT BY THE HOST DYING.  Their named channel is process
+termination.
+
+    => AFTER ROUND 2 DE-FATALISES default:, THE HOST DOES NOT DIE.  All three revert to
+       their C0 values and the probe scores 58/58 ON A MIS-ASSEMBLED PACKET.
+
+That is the CHANNEL check's rejection criterion met exactly: a row whose named channel
+cannot vary under its named mutant is vacuous BY CONSTRUCTION.  Here it is not merely
+vacuous after the edit -- it is ACTIVELY MISLEADING, because 58/58 is also what a
+correct packet scores, so a future maintainer whose test packet rots gets a clean run.
+
+AND THE PROBE'S OWN HEADER ALREADY SAID SO, at :90-96, before this round existed:
+
+    "*** THE SURVIVAL ROWS DETECT PROCESS TERMINATION ONLY. ***  `arm survive`,
+     `nodata live` and `nodata stale` compute "survived" if alive else "died", and
+     `alive` is False ONLY when a read raises OSError or returns empty INSIDE a budget
+     window -- so they are true of an emulator that is HUNG, one that is FROZEN, and,
+     measured, one that has ALREADY BEEN KILLED."
+
+This is the #489 pattern repeating: the governing sentence was in the file before the
+defect was found, and nothing consulted it at row-writing time.
+
+ROWS OWED (C1..C3), all before the product edit:
+  C1  a DEATH-MODE channel.  gdrom_default_probe.py's session() calls waitpid and
+      DISCARDS the status (filed as gdromdefaultstatusless), so no row can distinguish
+      a clean exit from a signal from a decline.  Capture and expose it.
+  C2  a LATCH row: the declined default: fires its once-only diagnostic exactly once,
+      and 0x70 never fires it.  This is the only channel that survives the edit and
+      still separates decline from legitimate-no-data (see check 1).
+  C3  the S1 sibling row from check 1.
+
+STRENGTHENING, NOT ORACLE-CORRECTION -- and the discriminator was applied, not assumed.
+The mechanical trigger is "does any shipped row flip colour under the CORRECT new
+code?"  Here YES: the nodata stale triple flips green.  But they flip green because the
+code stopped doing the thing they observed, not because they pinned the wrong
+expectation -- so the challenge set is FROZEN FIRST and shown caught on the committed
+build (above), then the edit lands, then the same mutants must still be caught on the
+NAMED replacement channel.  Re-pinning after the edit would be indistinguishable from
+fitting the test to the binary.
+
+
+CHECKING THE CHANNEL LINE ITSELF (owed by the freshly-minted-exemplar rule)
+--------------------------------------------------------------------------
+CHANNEL's claim is that a row's channel-under-its-mutant is knowable AT WRITING TIME,
+before any table runs.
+
+VERDICT: THE CLAIM HELD HERE, and it is the strongest evidence available for it so far.
+The whole of check 4 was reached by reading the diff's two sites, the function's common
+tail, and the probe's existing rows.  The measurement (C0 vs C1) CONFIRMED what the
+reading predicted; it did not produce it.  No kill table was run, and none was needed.
+
+Two honest limits, because one application cannot settle a rule:
+  * This site is unusually favourable -- the rows' channel is literally named in the
+    probe's own header, so "what observable does this row read?" required no inference.
+    A row whose oracle is a computed value would be harder.
+  * The check told me the rows are vacuous AFTER the edit.  It did not, by itself, tell
+    me what to replace them with; that came from check 1's sibling reading.  So CHANNEL
+    is a rejection filter, exactly as its bounded form claims, and NOT a generator --
+    which is the property that keeps it from becoming #392.

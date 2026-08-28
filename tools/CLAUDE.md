@@ -2058,6 +2058,33 @@ be stale in both directions, and a tool's own header is a primary source about t
 **Ledger:** a row that closes with commits names its witness: `boot:<rig/gate>`, `probe:<path>`,
 `construction:<gate>`, `harness:<what proved it>`, or `none` (documented-only).
 
+### *** CLOSING A ROW AS **OVERTAKEN** -- THE THREE CONDITIONS. Adjudicated 2026-08-28. ***
+
+A row closed because SOMEONE ELSE'S fix removed the defect adds **no row of its own**, and that
+is correct rather than lazy: row demand is bounded PER ENUMERATED MUTANT, never per attribution
+need, and a row added so that coverage "is attributable" is the **addition licence's "cannot
+hurt" wearing detector clothes**. `#462` measured the real cost -- added rows perturb other
+mutants' scores and force a full re-table.
+
+> **But the disposition is only available on three conditions, and a copier must meet all
+> three:**
+> 1. **A DISCRIMINATING CONTROL, MEASURED AT HEAD** -- neutralise the overtaking fix and this
+>    row's OWN symptom figures come back.
+> 2. **THE CARRYING ROWS NAMED** by label and probe path, in the witness or closure field.
+> 3. **THE CONTROL MEASUREMENT PRESERVED AT A DURABLE PATH** -- not `_scratchpad/`.
+>
+> **A candidate that cannot meet (1) or (2) is NOT overtaken** -- it is either still live, or it
+> owes a carrier of its own. That sentence is the whole discriminator.
+
+**Attribution is a RECORDS property and lives in the witness field**, which is why no row is
+owed: `wdcoddstep`'s reads `detector:regress/diff_wdc_identify.c -- the two 'odd chunk:' rows
+shipped by #475 pin both halves`, and its control sits in `regress/artifacts/wdcoddstep/`.
+
+*Condition 3 is not decoration and the exemplar nearly failed it: that row's own `ev` field
+cited `_scratchpad/odd/out` and `_scratchpad/oddm/out`, **both since deleted**, while the durable
+copies had existed the whole time. The precedent-setting row was one `ls` away from being
+unverifiable.*
+
 ### *** A SIXTH TERM, `detector:<path>` -- OWNER DECISION 2026-08-27, WITH A BOUND THAT IS
 ### PART OF THE ADOPTION AND NOT A FOOTNOTE TO IT. ***
 
