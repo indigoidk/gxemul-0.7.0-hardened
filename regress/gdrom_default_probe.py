@@ -272,11 +272,26 @@ def session(cmds, settle=8.0, spin=2.0):
         os.close(fd)
     except OSError:
         pass
+    #  #490: DEATH-MODE CHANNEL.  `alive` is False only when a read raises OSError or
+    #  returns empty inside a budget window, so it is true of a HUNG emulator, a FROZEN
+    #  one, and -- measured -- one ALREADY KILLED after the last budget check.  It cannot
+    #  tell a clean exit from a signal from a decline.  Round 2 removes two exit(1) sites,
+    #  after which every mutant AND the correct decline are alike `exit0`, so a survival
+    #  oracle stops discriminating entirely.
+    #
+    #  Spelling COPIED VERBATIM from gdrom_toclen_probe.py rather than invented: two panel
+    #  seats independently said copy the existing oracle, and a third shape would make the
+    #  two gdrom probes disagree about what "died" means.
+    how = "nostatus"
     try:
-        os.waitpid(pid, 0)
+        _, stat = os.waitpid(pid, 0)
+        if os.WIFSIGNALED(stat):
+            how = "sig%d" % os.WTERMSIG(stat)
+        elif os.WIFEXITED(stat):
+            how = "exit%d" % os.WEXITSTATUS(stat)
     except OSError:
         pass
-    return buf, alive
+    return buf, alive, how
 
 
 def printed(t, reg):
@@ -314,12 +329,12 @@ def st(reg, val):
 
 
 #  ---------------------------------------------------------------- controls
-t, alive = session(st(SCRATCH, LIVE) + ld(SCRATCH)
+t, alive, how = session(st(SCRATCH, LIVE) + ld(SCRATCH)
                    + run([MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
 row("live", printed(t, "r2") if alive else "died", "0x%x" % LIVE,
     "RAM: guest store then guest load")
 
-t, alive = session(ld(SH4_IPRD) + run([MOV_L_AT_R1_R2]) + ["print r2"])
+t, alive, how = session(ld(SH4_IPRD) + run([MOV_L_AT_R1_R2]) + ["print r2"])
 g = printed(t, "r2") if alive else "died"
 row("devsig", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g,
     "0x%x" % IPRD_RESET, "SH4 IPRD reset value -- dispatch works")
@@ -337,12 +352,21 @@ row("devsig", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g,
 #  fresh device -- busy, cond, stat and cnt are all zero.  No value-only row
 #  can tell served from declined here.  So this is now store-then-read-back on
 #  CNTHI, which RAM cannot fake and a deleted case cannot satisfy.
-t, alive = session(pair(st(BASE + 0x94, 0x5a) + ld(BASE + 0x94),
+t, alive, how = session(pair(st(BASE + 0x94, 0x5a) + ld(BASE + 0x94),
                         [MOV_W_R8_AT_R7, MOV_W_AT_R1_R2]) + ["print r2"])
 row("impl ok", printed(t, "r2") if alive else "died", "0x5a",
     "CNTHI (+0x94) stores and reads back")
 
-print("GDROM_DEF_CONTROL=%s" % ("OK" if all(ok for _, ok in rows) else "DEAD"))
+#  #490: `rows and` IS LOAD-BEARING, and its absence was a CHECK THAT CANNOT FAIL.
+#  `all([])` is True, so an empty `rows` printed CONTROL=OK -- the control row whose
+#  entire job is to prove this probe MEASURED something would certify a run that
+#  measured nothing, and gate_sh_rounding.sh's `check "... control proves it
+#  measures" "OK"` would pass on it.  Latent today (all 58 rows always run) and
+#  reachable the moment any row selection exists, which is why it is closed BEFORE
+#  that lands rather than with it.  Found by the opus seat while attacking a row
+#  filter that was withdrawn -- the filter went, the hazard it exposed stayed.
+print("GDROM_DEF_CONTROL=%s"
+      % ("OK" if rows and all(ok for _, ok in rows) else "DEAD"))
 
 #  ---------------------------------------------------------------- triggers
 #  Each is ONE guest instruction at an UNIMPLEMENTED offset.  Post-fix every
@@ -362,7 +386,7 @@ for label, cmds, note in (
          "32-bit READ at +0xfc, far end"),
         ("rd w16", ld(UNIMPL_A) + run([MOV_W_AT_R1_R2]),
          "16-bit read: width must not matter here")):
-    t, alive = session(cmds)
+    t, alive, how = session(cmds)
     row(label, "survived" if alive else "died", "survived", note)
     row(label.replace(" ", "") + " x1",
         ("%d" % len(SAYS.findall(t))) if alive else "died", "1",
@@ -378,13 +402,13 @@ for label, cmds, note in (
 #  problem in the same tree.  Only rows that drive TWO DIFFERENT offsets, and
 #  the SAME offset in BOTH directions, can tell those apart.
 
-t, alive = session(ld(UNIMPL_A) + run([MOV_L_AT_R1_R2, MOV_L_AT_R1_R2]))
+t, alive, how = session(ld(UNIMPL_A) + run([MOV_L_AT_R1_R2, MOV_L_AT_R1_R2]))
 row("same twice", ("%d" % len(SAYS.findall(t))) if alive else "died", "1",
     "SAME offset twice -> one line")
 
 #  r1 then r3, so both loads have their own address register and both can be
 #  planted contiguously.
-t, alive = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % UNIMPL_B, "r2=0"],
+t, alive, how = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % UNIMPL_B, "r2=0"],
                         [MOV_L_AT_R1_R2, MOV_L_AT_R3_R2]))
 row("two offs", ("%d" % len(SAYS.findall(t))) if alive else "died", "2",
     "DIFFERENT offsets -> TWO lines, not one")
@@ -415,7 +439,7 @@ row("two offs", ("%d" % len(SAYS.findall(t))) if alive else "died", "2",
 #  disagreements are settled EMPIRICALLY and never by vote, and this is the
 #  case where the vote and the measurement pointed opposite ways -- a 3-1
 #  majority, overturned by one build.
-t, alive = session(pair(ld(UNIMPL_A) + st(UNIMPL_A, 0x1234),
+t, alive, how = session(pair(ld(UNIMPL_A) + st(UNIMPL_A, 0x1234),
                         [MOV_L_AT_R1_R2, MOV_L_R8_AT_R7]))
 row("rd then wr", ("%d" % len(SAYS.findall(t))) if alive else "died", "2",
     "SAME offset, both directions -> TWO lines")
@@ -428,7 +452,7 @@ row("rd then wr", ("%d" % len(SAYS.findall(t))) if alive else "died", "2",
 #  still printing exactly once -- every other row green, host memory corrupted.
 #  Under raw-byte indexing these two accesses latch different bits and print
 #  twice, so this row reddens where the others cannot see it.
-t, alive = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % (UNIMPL_A + 2), "r2=0"],
+t, alive, how = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % (UNIMPL_A + 2), "r2=0"],
                         [MOV_L_AT_R1_R2, MOV_W_AT_R3_R2]))
 row("granularity", ("%d" % len(SAYS.findall(t))) if alive else "died", "1",
     "+0x00 then +0x02 are ONE word -> one line")
@@ -440,12 +464,12 @@ row("granularity", ("%d" % len(SAYS.findall(t))) if alive else "died", "1",
 #  a mutant that turns the whole switch into `default:` -- or simply deletes
 #  the implemented arms -- scores full marks on every row above.
 
-t, alive = session(pair(st(IMPL_CNTLO, 0x98) + ld(IMPL_CNTLO),
+t, alive, how = session(pair(st(IMPL_CNTLO, 0x98) + ld(IMPL_CNTLO),
                         [MOV_W_R8_AT_R7, MOV_W_AT_R1_R2]) + ["print r2"])
 row("accept cnt", printed(t, "r2") if alive else "died", "0x98",
     "CNTLO (+0x90) still stores and reads back")
 
-t, alive = session(pair(st(IMPL_COND, 0xa0) + ld(IMPL_BUSY),
+t, alive, how = session(pair(st(IMPL_COND, 0xa0) + ld(IMPL_BUSY),
                         [MOV_W_R8_AT_R7, MOV_W_AT_R1_R2]) + ["print r2"])
 row("accept cond", printed(t, "r2") if alive else "died", "0x8",
     "COND=0xa0 (+0x9c) still sets BUSY bit 3")
@@ -491,7 +515,7 @@ row("accept cond", printed(t, "r2") if alive else "died", "0x8",
 ops = []
 for _ in range(0x100 // 4):
     ops += [MOV_L_AT_R1_R2, ADD_4_R1]
-t, alive = session(["r1=0x%x" % BASE, "r2=0"] + run(ops), settle=8.0, spin=3.0)
+t, alive, how = session(["r1=0x%x" % BASE, "r2=0"] + run(ops), settle=8.0, spin=3.0)
 hits = SAYS.findall(t)
 row("scan", "survived" if alive else "died", "survived",
     "all 64 words of the window, one run")
@@ -541,7 +565,7 @@ IMPLEMENTED = IMPLEMENTED_WORDS
 t = ""
 alive = True
 for i, off in enumerate(IMPLEMENTED):
-    tt, aa = session(pair(["r1=0x%x" % (BASE + off), "r2=0"], [MOV_W_AT_R1_R2]))
+    tt, aa, hh = session(pair(["r1=0x%x" % (BASE + off), "r2=0"], [MOV_W_AT_R1_R2]))
     t += tt
     alive = alive and aa
 row("accept8", ("%d" % len(SAYS.findall(t))) if alive else "died", "0",
@@ -549,7 +573,7 @@ row("accept8", ("%d" % len(SAYS.findall(t))) if alive else "died", "0",
 
 #  And GDROM_DATA's own accept side, which also closes an escape already filed
 #  against #460: no row there pinned what a declined DATA read returns.
-t, alive = session(ld(BASE + 0x80) + run([MOV_W_AT_R1_R2]) + ["print r2"])
+t, alive, how = session(ld(BASE + 0x80) + run([MOV_W_AT_R1_R2]) + ["print r2"])
 g = printed(t, "r2") if alive else "died"
 row("data 0xffff", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g,
     "0xffff", "+0x80 still declines with 0xffff, not via default")
@@ -561,13 +585,13 @@ row("data 0xffff", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g
 #  0x005f7400 was fixed and pinned by nothing.  A round that claims to fix two
 #  arms and covers one is making a claim its own detector cannot support, so
 #  these ship with the fix rather than after it.
-t, alive = session(pair(["r1=0x%x" % DMA, "r2=0"], [MOV_L_AT_R1_R2]))
+t, alive, how = session(pair(["r1=0x%x" % DMA, "r2=0"], [MOV_L_AT_R1_R2]))
 row("dma rd", "survived" if alive else "died", "survived",
     "32-bit READ at DMA+0x00")
 row("dma rd x1", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "1",
     "the DMA arm names itself EXACTLY once")
 
-t, alive = session(pair(["r1=0x%x" % (DMA + 0x00), "r3=0x%x" % (DMA + 0x7c), "r2=0"],
+t, alive, how = session(pair(["r1=0x%x" % (DMA + 0x00), "r3=0x%x" % (DMA + 0x7c), "r2=0"],
                         [MOV_L_AT_R1_R2, MOV_L_AT_R3_R2]))
 row("dma two", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "2",
     "DIFFERENT DMA offsets -> TWO lines, separate array")
@@ -578,7 +602,7 @@ row("dma two", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "2",
 #  STORES a declined write into it -- so "decline" means store-and-return, which
 #  is what the five implemented cases already do and is kept deliberately.
 #  Without this row that difference is a claim in a comment and nothing else.
-t, alive = session(pair(["r7=0x%x" % DMA, "r8=0x12345678", "r1=0x%x" % DMA, "r2=0"],
+t, alive, how = session(pair(["r7=0x%x" % DMA, "r8=0x12345678", "r1=0x%x" % DMA, "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
 row("dma shadow", printed(t, "r2") if alive else "died", "0x12345678",
     "a declined DMA write STORES and reads back")
@@ -594,13 +618,13 @@ row("dma shadow", printed(t, "r2") if alive else "died", "0x12345678",
 #  PRE-FIX those accesses exited instead, so the fix would have CREATED the
 #  capability.  This row pins that it does not: write 0xff at +0x05, then read
 #  +0x04 back and require it UNCHANGED.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
                          "r1=0x%x" % (DMA + 0x04), "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
 row("dma seed", printed(t, "r2") if alive else "died", "0x11223344",
     "the implemented +0x04 takes a known value")
 
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
                          "r5=0x%x" % (DMA + 0x05), "r6=0xff",
                          "r1=0x%x" % (DMA + 0x04), "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_B_R6_AT_R5, MOV_L_AT_R1_R2])
@@ -623,7 +647,7 @@ row("dma alias x1", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "1",
 #  The discriminator is WIDTH, not oddness.  This row uses mov.w at an EVEN but
 #  not word-aligned address, which is the cheapest access the weaker guard lets
 #  through -- and it is architecturally legal, so a real guest can issue it.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
                          "r5=0x%x" % (DMA + 0x06), "r6=0xffff",
                          "r1=0x%x" % (DMA + 0x04), "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_W_R6_AT_R5, MOV_L_AT_R1_R2])
@@ -636,7 +660,7 @@ row("dma align16", printed(t, "r2") if alive else "died", "0x11223344",
 #  seat restricted the guard to `&& writeflag == MEM_WRITE`, scored 27/27, and
 #  read dma_reg[1] out through a 16-bit load at +0x06.  An UNPINNED CLAIM IN A
 #  COMMENT IS NOT A PROPERTY.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x04), "r8=0x11223344",
                          "r3=0x%x" % (DMA + 0x06), "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_W_AT_R3_R2]) + ["print r2"])
 row("dma rdleak", printed(t, "r2") if alive else "died", "0x0",
@@ -659,7 +683,7 @@ row("dma rdleak", printed(t, "r2") if alive else "died", "0x0",
 #  counts a write diagnostic drives ONE window.  Four accesses in the same
 #  session cost nothing extra and expect 2/2, which additionally kills that
 #  variant (it would read 2/1).
-t, alive = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % (DMA + 0x00),
+t, alive, how = session(pair(["r1=0x%x" % UNIMPL_A, "r3=0x%x" % (DMA + 0x00),
                          "r7=0x%x" % UNIMPL_A, "r8=0x5a5a5a5a",
                          "r5=0x%x" % (DMA + 0x00), "r6=0x5a", "r2=0"],
                         [MOV_L_AT_R1_R2, MOV_L_AT_R3_R2,
@@ -700,7 +724,7 @@ row("both windows",
 t = ""
 alive = True
 for off in (0x04, 0x08, 0x0c, 0x14, 0x18):
-    tt, aa = session(pair(["r1=0x%x" % (DMA + off), "r2=0"], [MOV_L_AT_R1_R2]))
+    tt, aa, hh = session(pair(["r1=0x%x" % (DMA + off), "r2=0"], [MOV_L_AT_R1_R2]))
     t += tt
     alive = alive and aa
 row("dma accept", ("%d" % len(DMA_SAYS.findall(t))) if alive else "died", "0",
@@ -721,7 +745,7 @@ DMA_NOD = re.compile(r"DMA start with no staged data -- declined")
 
 #  --- the ARMING-MISMATCH arm (on HEAD :845), armed wrongly
 #  (count/enable not both 1 on a fresh device) ---
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1"],
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1"],
                         [MOV_L_R8_AT_R7]) + ["print r8"])
 row("arm survive", "survived" if alive else "died", "survived",
     "one store to +0x18 no longer ends the host")
@@ -745,7 +769,7 @@ row("arm says", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
 #  command-start handshake on the CONTROL window's BUSY register, which
 #  dev_dreamcast_gdrom.c's GDROM_COND case documents outright.  This row is
 #  still the difference between the fix and the obvious fix.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=0"],
                         [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
 row("arm idle", printed(t, "r2") if alive else "died", "0x0",
@@ -774,7 +798,7 @@ row("arm idle", printed(t, "r2") if alive else "died", "0x0",
 #  as a pass; their measured kills discharge that, but the shape is fragile.
 #  0x5a is neither the expected 0x0 nor the sticky 0x1, so this row tells
 #  green, sticky and never-ran apart BY VALUE.
-t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
+t, alive, how = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
                          "r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=0x5a"],
                         [MOV_L_R4_AT_R3, MOV_L_R8_AT_R7, MOV_L_AT_R1_R2])
@@ -788,7 +812,7 @@ row("arm halfarm", printed(t, "r2") if alive else "died", "0x0",
 #  the first arm's latch silencing the second is unobservable.  This closes it:
 #  a bare trigger takes the ARMING arm, then arming properly and triggering
 #  again takes the NO-STAGED-DATA arm, and BOTH must speak.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r3=0x%x" % (DMA + 0x0c), "r4=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1"],
@@ -799,7 +823,7 @@ row("both decl",
     "2", "BOTH decline arms in one session must EACH speak (separate latches)")
 
 #  the latch: a guest that retries must not flood
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r5=0x%x" % (DMA + 0x18), "r6=1"],
                         [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5]) + ["print r8"])
 row("arm once", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
@@ -816,7 +840,7 @@ row("arm once", ("%d" % len(DMA_ARM.findall(t))) if alive else "died", "1",
 #  this: Linux programs the four DMA registers BEFORE sending its packet, so
 #  a short image or a refused sector count leaves d->data NULL and the guest,
 #  told nothing it checks, triggers anyway.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1"],
                         [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1]))
@@ -842,7 +866,7 @@ row("nodata notx", ("%d" % t.count("Transfering")) if alive else "died", "0",
 #  smallest possible regression -- deleting one line -- passes green.  The
 #  sibling site had its row from the start; this one did not, which is the
 #  asymmetry a reader of the fix would never notice.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1"],
                         [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1])
@@ -861,7 +885,7 @@ row("nodata idle", printed(t, "r2") if alive else "died", "0x0",
 #  BLK_STS_OK -- the block layer is told the read succeeded while zero bytes
 #  moved, and the guest consumes the destination page AS DISK DATA.  A host
 #  death is loud; that is silent.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1"],
                         [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_R2_AT_R1])
@@ -896,7 +920,7 @@ row("nodata quiet",
 #
 #  TWO rows, not one, because each comparison can be widened ALONE: a (2,1) row
 #  is green under an enable-only widening.
-t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=2",
+t, alive, how = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=2",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r7=0x%x" % (DMA + 0x18), "r8=1"],
                         [MOV_L_R4_AT_R3, MOV_L_R6_AT_R5, MOV_L_R8_AT_R7]))
@@ -904,7 +928,7 @@ row("arm count2",
     ("%d/%d" % (len(DMA_ARM.findall(t)), len(DMA_NOD.findall(t)))) if alive else "died",
     "1/0", "count=2 enable=1 must still be REFUSED, not widened into accept")
 
-t, alive = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
+t, alive, how = session(pair(["r3=0x%x" % (DMA + 0x0c), "r4=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=2",
                          "r7=0x%x" % (DMA + 0x18), "r8=1"],
                         [MOV_L_R4_AT_R3, MOV_L_R6_AT_R5, MOV_L_R8_AT_R7]))
@@ -936,7 +960,7 @@ row("arm enable2",
 #  guard-kept-repair-nulled: an L2 floor breach, fixed in-round however late.
 #
 #  Poison 0xa5 again, so never-ran (0xa5) is distinguishable from sticky (0x1).
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x0c), "r8=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1",
                          "r3=0x%x" % (DMA + 0x18), "r4=1"],
@@ -954,7 +978,7 @@ row("nodata twice", printed(t, "r2") if alive else "died", "0x0",
 #  BOTH.  Nothing carried it for the arming arm, so adding
 #  SYSASIC_TRIGGER_EVENT to that arm alone scored a clean sweep -- the round
 #  would have shipped its worst-case mutant half-closed.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r1=0x%x" % SYSASIC_PEND, "r2=0x4000"],
                         [MOV_L_R8_AT_R7, MOV_L_AT_R1_R2]) + ["print r2"])
 _a = printed(t, "r2") if alive else "died"
@@ -969,7 +993,7 @@ row("arm quiet",
 #  clears, and every later one sticks BUSY FOREVER.  `arm once` does trigger
 #  twice, but it counts diagnostics instead of reading +0x18.  This row reads
 #  +0x18 after the SECOND decline.
-t, alive = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
+t, alive, how = session(pair(["r7=0x%x" % (DMA + 0x18), "r8=1",
                          "r5=0x%x" % (DMA + 0x18), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=0x5a"],
                         [MOV_L_R8_AT_R7, MOV_L_R6_AT_R5, MOV_L_AT_R1_R2])
@@ -981,7 +1005,7 @@ row("arm twice", printed(t, "r2") if alive else "died", "0x0",
 #  conditioned on the guest's programmed length -- `if (!length) idata = 0;` --
 #  cleared on every row here (length is 0 throughout) while sticking BUSY for a
 #  Linux-shaped guest, which programs +0x08 BEFORE it triggers.
-t, alive = session(pair(["r3=0x%x" % (DMA + 0x08), "r4=0x800",
+t, alive, how = session(pair(["r3=0x%x" % (DMA + 0x08), "r4=0x800",
                          "r7=0x%x" % (DMA + 0x0c), "r8=1",
                          "r5=0x%x" % (DMA + 0x14), "r6=1",
                          "r1=0x%x" % (DMA + 0x18), "r2=1"],
@@ -1010,7 +1034,7 @@ row("nodata len", printed(t, "r2") if alive else "died", "0x0",
 #  "the mutant left the trigger stuck" and "the load never executed" both read
 #  back 0x5a and the row could not tell them apart.  Trigger and poison must
 #  DIFFER, which is the same three-outcome discipline `accept data` uses.
-t, alive = session(pair(["r5=0x%x" % (DMA + 0x18), "r6=0x5a",
+t, alive, how = session(pair(["r5=0x%x" % (DMA + 0x18), "r6=0x5a",
                          "r1=0x%x" % (DMA + 0x18), "r2=0xa5"],
                         [MOV_B_R6_AT_R5, MOV_L_AT_R1_R2]) + ["print r2"])
 row("arm bytetrig", printed(t, "r2") if alive else "died", "0x0",
@@ -1045,7 +1069,7 @@ row("arm bytetrig", printed(t, "r2") if alive else "died", "0x0",
 #  that does not itself exit).  cmd[8..10] stay zero, so sector_count is 0, and
 #  OB-20's clamp rejects and `break`s BEFORE `alloc_data` -- leaving data_len at
 #  the TOC's 408.
-t, alive = session(
+t, alive, how = session(
     ["r7=0x%x" % GDROM_CNTLO, "r8=0x98"] + run([MOV_W_R8_AT_R7])
     + ["r7=0x%x" % GDROM_CNTHI, "r8=0x01"] + run([MOV_W_R8_AT_R7], CODE + 0x20)
     + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x40)
@@ -1109,7 +1133,7 @@ row("stale idle", printed(t, "r2") if alive else "died", "0x0",
 #
 #  The obligation is discharged by `accept dma`, `accept event`, `accept quiet`
 #  and `accept data`.
-t, alive = session(
+t, alive, how = session(
     ["r7=0x%x" % GDROM_CNTLO, "r8=0x98"] + run([MOV_W_R8_AT_R7])
     + ["r7=0x%x" % GDROM_CNTHI, "r8=0x01"] + run([MOV_W_R8_AT_R7], CODE + 0x20)
     + ["r7=0x%x" % GDROM_COND, "r8=0xa0"] + run([MOV_W_R8_AT_R7], CODE + 0x40)

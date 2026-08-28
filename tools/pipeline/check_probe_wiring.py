@@ -395,6 +395,24 @@ MANIFEST = {
     #  consumed), and this file is the repair: a real file with no shell in between, spelling
     #  its tabs as chr(9).  Preserving it makes the table re-runnable.
     "artifacts/gdromexitsix/killtable4_20260828/mut_common.py": (CLASS_TOOL, "#489 mutant applier: rewrites the case 0x14 guard predicate, no escaping chain"),
+    "artifacts/gdromexitsix/opus_r2table_20260828/mkfix.py": (CLASS_TOOL,
+                                    "#490 R2: applies the CANDIDATE product fix (both sites "
+                                    "de-fatalised) to a scratch clone.  Preserved because the "
+                                    "measured table's every number is relative to the tree it "
+                                    "builds -- without it the scores name no baseline."),
+    "artifacts/gdromexitsix/opus_r2table_20260828/mkmut.py": (CLASS_TOOL,
+                                    "#490 R2: builds the six mutants (M1ret, M2nolatch, "
+                                    "M3shared, M4nobreakA, M5outerA, M6cond) as single minimal "
+                                    "edits over the fix.  This is the file that makes the table "
+                                    "REPRODUCIBLE rather than merely reported."),
+    "artifacts/gdromexitsix/opus_r2table_20260828/tprobe2.py": (CLASS_TOOL,
+                                    "#490 R2: the measuring seat's own probe -- eight sessions, "
+                                    "reading COND / CNT / EVT32 / the two decline diagnostics, "
+                                    "with SESSION SELECTION and negative controls in both "
+                                    "directions (unknown token rc=2, bare prefix rc=2).  Ungated "
+                                    "by design: it is a research instrument, not a standing "
+                                    "detector, and the rows it justifies live in "
+                                    "gdrom_default_probe.py."),
     "artifacts/landiskaux/census_20260827/census.py":       (CLASS_TOOL, "landiskaux census: tallies guest accesses per paddr from a hooked build"),
     "artifacts/landiskaux/census_20260827/analyse_hook.py": (CLASS_TOOL, "landiskaux census: reduces the hook log to the per-address table"),
     "artifacts/landiskaux/census_20260827/devlist.py":      (CLASS_TOOL, "landiskaux census: dumps the constructed machine's device list"),

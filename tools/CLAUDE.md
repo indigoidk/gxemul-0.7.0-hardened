@@ -2468,6 +2468,31 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
 > regex or a filter that selects the empty set produces a clean, confident, wrong answer --
 > and unlike a crash it looks exactly like a measurement.
 
+> ### *** THREE MORE, ALL ONE SHAPE: A FAILURE LAUNDERED INTO A CLEAN COMPLETION.
+> ### 2026-08-28, two from a measuring seat and one of mine. ***
+>
+> * **A BUILD-AND-MEASURE SCRIPT MUST NOT END IN A COMPARISON.** A runner ended in `diff`,
+>   which exits 1 on differences; under `set -e` that killed the script **before its two
+>   probe runs**, and the wrapper still reported `rc=0`. No measurement happened and nothing
+>   said so.
+> * **A WINDOWS PATH PASSED TO `wsl -- bash` FAILS WHILE `wsl` ITSELF EXITS 0.** The error is
+>   `No such file or directory`; the exit status is success. (This is why the invocation rule
+>   is `MSYS_NO_PATHCONV=1 wsl -d Gentoo -- bash /mnt/c/...` -- the `/mnt/c` form, every time.)
+> * **PRESERVING A LOG FROM A STILL-RUNNING JOB CAPTURES A TRUNCATION, AND THE COPY LOOKS
+>   COMPLETE.** I copied a seat's `table2_targeted.txt` at 1402 bytes; the finished file is
+>   1529 ending `TARGETED_DONE`. The copy stopped at `SELECTED 1 of 8: S1 unkcmd` -- **so the
+>   last mutant read as a session that started and produced nothing, which is indistinguishable
+>   from a hang.** It was already staged for commit when the seat that wrote it noticed.
+>
+> > **THE RULE, and it costs one line: A PRESERVED LOG IS VERIFIED BY ITS COMPLETION SENTINEL,
+> > NOT BY ITS EXISTENCE.** Every probe in this tree emits one (`TPROBE2_DONE`, `TARGETED_DONE`,
+> > `FREEZE_DONE`, `REGRESS_PASS`). `tail -1` before citing, and re-copy if it is absent.
+>
+> *The volatile-path rule says copy the log before the record cites it. This is its missing
+> half: copy it AFTER the job finishes, or the durable artifact preserves a lie. The first rule
+> pushes you to copy EARLY and the second says not too early -- which is why the sentinel, not
+> the timing, is the test.*
+
 **The cheap defence is a DENOMINATOR.** Print how many lines the range selected, or how
 many rows the grep considered, next to the answer. `0 of 0` and `0 of 41` are different
 claims and only one of them is evidence. This is the same discipline as *a score claim
