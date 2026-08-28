@@ -1,3 +1,35 @@
+> ### *** #489's HEADLINE CLAIM IS NOW MEASURED, NOT DERIVED.  ASAN, 2026-08-28. ***
+>
+> The round's strongest result was the BARE-DELETION mutant: guard removed, host **survives**
+> while writing 408 bytes past an allocation the guest sized.  The measuring seat stated the
+> limit precisely -- *that shows the write does not FAULT, not that it is ABSENT* -- and named
+> the ASAN run as what would close it.  `build-asan/` had no binary; it was fixed the same day.
+>
+> `regress/artifacts/gdromexitsix/asan_m0_20260828/` -- M0 under the shipped 19-row detector:
+>
+>     TOCLEN_RESULT=8/19
+>     7 x ERROR: AddressSanitizer: heap-buffer-overflow
+>       5 x  0 bytes after 407-byte region   (cnt=407)
+>       2 x  0 bytes after 1-byte region     (the cnt=0 end of the same guard)
+>     every one a WRITE of size 1
+>
+> **And the stack is the finding**: `main -> emul_run -> machine_run -> sh_run_instr ->
+> sh_instr_mov_w_store_rm_rn -> sh_memory_rw_one_page -> dev_dreamcast_gdrom_access ->
+> handle_command`, onto a buffer from `alloc_data`'s `malloc(guest cnt)`.  A guest `mov.w`
+> store through real decode -- no harness, no direct call.
+>
+> **So the guard this round shipped is the only thing between a guest and an out-of-bounds
+> heap WRITE on that path.**  Survival was never the same claim as absence, and the round was
+> right to record its own limit rather than round it up.
+>
+> *** THE FIRST ASAN ATTEMPT REPORTED `6/19, ZERO REPORTS` AND THAT WAS NOISE, NOT A
+> NEGATIVE. ***  The tell was `ok surv` reading `exit1` on the LEGAL 408 length, which the
+> deleted guard cannot affect -- a number unexplainable by the thing under test is not evidence
+> about it.  Cause: LeakSanitizer fires at exit on every session and ASan's default exit code
+> is 1, so every survival row read as a death while the real reports went to a pty the probe
+> does not retain.  **An ASAN run through a pty needs `log_path=` AND `detect_leaks=0`; either
+> alone yields a confident wrong answer.**
+
 ## Round 489 (#489) -- a guest-supplied length ended the host, and deleting the guard would have been worse than the kill
 
 `handle_command()`'s `case 0x14` (Read Table-Of-Contents) read:

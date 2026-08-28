@@ -395,6 +395,15 @@ MANIFEST = {
     #  consumed), and this file is the repair: a real file with no shell in between, spelling
     #  its tabs as chr(9).  Preserving it makes the table re-runnable.
     "artifacts/gdromexitsix/killtable4_20260828/mut_common.py": (CLASS_TOOL, "#489 mutant applier: rewrites the case 0x14 guard predicate, no escaping chain"),
+    "artifacts/gdromexitsix/asan_m0_20260828/apply_m0.py": (CLASS_TOOL,
+                                    "#489 M0 applier: deletes the cnt!=408 guard for the ASAN "
+                                    "run that turned the round's headline claim from DERIVED "
+                                    "into MEASURED (7 heap-buffer-overflow WRITEs).  Preserved "
+                                    "because the measurement is meaningless without the exact "
+                                    "edit that produced it.  Written as a REAL FILE using "
+                                    "chr(92) after a nested-heredoc chain ate the anchor's "
+                                    "backslash -- it REFUSED with count=0 rather than mutating "
+                                    "nothing, which is the failure mode worth keeping."),
     "artifacts/gdromexitsix/opus_r2table_20260828/mkfix.py": (CLASS_TOOL,
                                     "#490 R2: applies the CANDIDATE product fix (both sites "
                                     "de-fatalised) to a scratch clone.  Preserved because the "
