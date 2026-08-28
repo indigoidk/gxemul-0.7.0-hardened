@@ -131,7 +131,20 @@ AGY_EFFORT="high"           # BOTH are passed on purpose. `agy models` lists the
                             #       --print "..."   ->  answered.
                             # `agy models` is the authority on valid names; a wrong
                             # one is a SEAT FAILURE, so re-check after any upgrade.
-OLLAMA1="glm-5.2:cloud"
+                            # OLLAMA1 MIGRATED 2026-08-28 by owner directive:
+                            # glm-5.2:cloud -> glm-5.3-flash:cloud.  VERIFIED
+                            # BEFORE THE EDIT, not after: `ollama pull` succeeded
+                            # for this tag and FAILED ("file does not exist") for
+                            # the near-miss `glm-5.3flash:cloud`, and an
+                            # api/generate liveness call returned its nonce
+                            # exactly (done_reason=stop, 25 bytes, no burn).
+                            # `curl -s localhost:11434/api/tags` is the authority;
+                            # a wrong name is a SEAT FAILURE.  Note the SEAT is
+                            # keyed by FILENAME (ollama_glm.txt) throughout the
+                            # harness, so check_seats_read.py and seat_verdicts.py
+                            # need no edit -- that is the kimi-substitute lesson
+                            # applied: record a seat by its transport, not its tag.
+OLLAMA1="glm-5.3-flash:cloud"
 OLLAMA2="deepseek-v4-pro:cloud"   # DeepSeek is BACK: v3.2 was retired 2026-07-15
                                   # but v4-pro is live (verified answering). NOTE
                                   # the exact tag -- "deepseek-v4:cloud" does NOT

@@ -82,7 +82,11 @@ echo "adjudicate: src=$SRC (tail ${TAILB}b)  out=$OUT"
 BSZ=$(wc -c < "$BRIEF")
 echo "brief: ${BSZ} bytes"
 
-for m in glm-5.2:cloud deepseek-v4-pro:cloud minimax-m3:cloud; do
+#  glm-5.2:cloud -> glm-5.3-flash:cloud, 2026-08-28 owner directive.  Kept in
+#  step with panel.sh's OLLAMA1 deliberately: two files naming the same seat is
+#  already one too many, and a migration that updates only one of them is the
+#  false-roster shape this project has paid for.
+for m in glm-5.3-flash:cloud deepseek-v4-pro:cloud minimax-m3:cloud; do
     short="${m%%:*}"
     python "$TOOLS/panel_ollama.py" "$m" "$OUT/$short.txt" "$BRIEF" \
         > "$OUT/$short.err" 2>&1 &
@@ -91,7 +95,12 @@ wait
 
 echo "---- seat check ----"
 ok=0; miss=""
-for m in glm-5.2 deepseek-v4-pro minimax-m3; do
+#  THESE MUST BE THE `${m%%:*}` OF THE FIRE LOOP ABOVE, because that is how the
+#  output filenames are built.  Updating the fire loop alone would leave this one
+#  looking for `glm-5.2.txt`, which the run never writes -- so a LIVE seat would
+#  be reported as a missing one.  That is the seat-failure-counted-as-agreement
+#  shape arriving through a rename rather than through a wall.
+for m in glm-5.3-flash deepseek-v4-pro minimax-m3; do
     f="$OUT/$m.txt"
     if [ -s "$f" ] && [ "$(wc -c < "$f")" -ge 800 ]; then
         echo "  $m: $(wc -c < "$f")b answered"
