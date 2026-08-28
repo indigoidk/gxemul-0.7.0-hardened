@@ -77,6 +77,36 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    > mutant costs one restore; one cleared over a mutant binary costs a wrong
    > measurement nobody suspects.
 3. Commit+push at every green gate — an unpushed round is the largest single exposure.
+4. *** KILL TABLES RUN IN A SCRATCH CLONE BY DEFAULT. Mutating `build/` is the EXCEPTION and
+   carries its stated reason in the checkpoint. Owner decision 2026-08-28, on measured
+   practice rather than on proposal. ***
+
+   `#489`'s pass-2 seat ran a nine-log table in `/tmp/gxopus489` (a relocatable `cp -a` of
+   `build/`) **CONCURRENTLY with the main loop's own table holding `build/.MUTANT`**, wrote
+   into no project tree, and left its scratch `cmp`-clean. **Two tables at once, zero commits
+   blocked, zero restores owed.** The relief is measured.
+
+   > **The obvious objection is backwards, and it is worth stating because I raised it: a
+   > mutant table NEVER measures the battery's binary.** Every measurement is of a MUTANT
+   > binary built over baseline sources. The load-bearing identity is SOURCE identity with the
+   > intended baseline, which `cmp` establishes in a clone exactly as in `build/` -- and
+   > `build/`'s own binary has twice been caught STALE over clean sources. *A clone that
+   > rebuilds its baseline before mutant 1 is more trustworthy than an in-place run inheriting
+   > whatever binary sat there.*
+
+   **The recipe that makes the default safe, each a checkpoint line:** (1) **NAME THE
+   BASELINE** -- HEAD or the round's post-fix working set -- and `cmp` the files-to-be-mutated
+   against it before mutant 1, since a clone inherits whatever `build/` held mid-round;
+   (2) **rebuild the baseline binary IN THE CLONE** and check `[ binary -nt source ]` -- the
+   base-table run doubles as the freshness proof; (3) clone-local sentinel plus the
+   frozen-copy driver rule, unchanged; (4) the volatile-path rule **with extra force** -- /tmp
+   evaporates, and copying any number a durable record will cite into `regress/artifacts/`
+   comes BEFORE the record is written.
+
+   **For the `build/`-mutating exception nothing is overturned: TOTAL blast radius, two-part
+   clearance.** Narrowed in population, unchanged in scope. *No checker -- there is no
+   mechanical observable for "should have cloned", and a check that cannot fail is worse than
+   none.*
 
 ## *** WHERE A LESSON GOES: STRUCTURE FIRST, PROSE ONLY AS FALLBACK. ***
 ## Owner-adopted 2026-08-26. Read this before adding anything to this file.
@@ -1148,6 +1178,50 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > ### *** THE PRE-TABLE CHECK -- three greps, ~30 min, and it protects the ASK-AGAIN'S
 > ### CAP rather than the clock. Adopted 2026-08-24; two seats derived it independently. ***
 >
+> > ## *** MANDATORY as of 2026-08-28, by flagship adjudication. It was RECOMMENDED prose for
+> > ## four days and TWO rounds skipped it -- which is this file's own structure-first trigger,
+> > ## met exactly. ***
+> >
+> > **SCOPE, and this is what answers the cost objection: it binds EXACTLY the population the
+> > vacuity floor already binds** -- any round shipping or EXTENDING a kill-table-backed
+> > detector. **Not every round.** Records-only, documented-only and table-less harness rounds
+> > are untouched.
+> >
+> > **FORM: recorded OUTPUT, never assertion** -- the two-part-clearance precedent, *run it, do
+> > not assert it*. One `PRETABLE.out` in the round's kill-table artifacts dir (or a probe-header
+> > section), **written BEFORE table 1 runs so its own mtime proves the order** -- the same
+> > order discriminator the oracle-correction rule uses. It carries: the sibling arms compared
+> > and any asymmetry; each enumerated claim sentence mapped to a row or an owed sentence; the
+> > guard-field/body-field lists and any disagreeing-state row owed; and per row, the mutant it
+> > kills and the observable that differs.
+> >
+> > **Any check may discharge `N/A` WITH ITS REASON RECORDED. An unrun check and an inapplicable
+> > one must not render the same** -- this project's oldest rule about blanks.
+> >
+> > **THE TRIGGER WAS MET TWICE IN FOUR DAYS, and the value at each was specific rather than
+> > general:** at `#485` the GUARD-FIELD grep enumerates `D1..D5` mechanically, because the
+> > `default:` arm's `fatal()` arguments ARE the guarded body's field reads; at `#489` the
+> > CHANNEL line names the one shape all four escapes shared -- **and the probe header carried
+> > the governing sentence before three of the four were found.** Knowledge present, unconsulted
+> > at row-writing time. *A recommended check is memory, and this file's finding is that memory
+> > does not fire.*
+> >
+> > **ENFORCEMENT is existence-only and FILED, not built:** a commit adding a killtable artifacts
+> > dir must add `PRETABLE.out` beside it, forward-only from a cutoff. That is a tooling change
+> > owing two negative controls, so it ships as its own harness round rather than as a rider.
+> > Until it lands the mandate lives HERE, in lifecycle steps 4-5, and in `/round`.
+> >
+> > *** AND THE FIRST MANDATED APPLICATION MUST **CHECK** THE CHANNEL LINE, NOT MERELY OBEY IT.
+> > *** CHANNEL is one day old, and this file's freshly-minted-exemplar rule says a new rule's
+> > example is a HYPOTHESIS. Its claim is that a row's channel-under-its-mutant is knowable at
+> > WRITING time, before any table runs. One sentence in the first `PRETABLE.out` says whether
+> > that held.
+> >
+> > *Provenance note, because the ruling corrected my own citation: the twice-skipped rounds are
+> > `#485` (wdcnoirq) and `#489`, **not `#486`** -- `#486` is wdcfloodstale's non-discriminating
+> > gate row. The substance was intact and the number was wrong, and a wrong number in a
+> > mandate's provenance gets reused.*
+>
 > *** THE DIAGNOSIS THAT PROMPTED IT WAS WRONG, AND THE CORRECTION IS THE USEFUL PART. ***
 > `#462` ran a 12-mutant table clean, then one capped ask-again found escapes needing five
 > rows -- and adding rows changed other mutants' scores, forcing a **second four-hour
@@ -1163,7 +1237,21 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > | check | how | catches |
 > |---|---|---|
 > | **SIBLING PARITY** | for each arm the diff de-fatalises, compare its observable channels against its nearest sibling arm. An asymmetry is a row you owe or a sentence you owe | a de-fatalised arm with NO completion-event row while its sibling had one |
-> | **CLAIM -> ROW** | grep the diff's ADDED comments for claim verbs -- *observes, controls, pins, proves, the X control* -- and check each against the row list | a "device-signature control" claimed in prose and implemented by nothing |
+> | **CLAIM -> ROW** | every ADDED comment sentence asserting an OBSERVABLE CONSEQUENCE owes a row or an explicit no-row sentence. Claim verbs (*observes, controls, pins, proves, the X control*) are EXAMPLES, not the test | a "device-signature control" claimed in prose and implemented by nothing |
+>
+> > *** THE VERB LIST WAS THE TEST UNTIL 2026-08-28, AND IT COULD NOT FIRE ON THE INCIDENT THAT
+> > MADE THIS CHECK MANDATORY. Caught by the adjudicating seat while ruling on the mandate. ***
+> >
+> > `#489`'s load-bearing added comment reads *"An early return would skip that event and hang the
+> > guest."* **It contains not one of the five verbs** -- it is a COUNTERFACTUAL-CONSEQUENCE claim
+> > about a hypothetical edit, and the grep form walks straight past it. Mandating the block
+> > unrepaired would have mandated a check that cannot fail on its own motivating case, which is
+> > this file's check-that-cannot-fail shape arriving inside the repair for it.
+> >
+> > **So the trigger is SEMANTIC: does this sentence assert something a row could observe?** A
+> > *"would &lt;consequence&gt;"* clause qualifies -- it names a channel (the event, the hang) and
+> > predicts a difference -- and `#489` shipped exactly that channel's row only after a panel
+> > found the escape three times.
 > | **GUARD FIELD vs BODY FIELD** | list fields the PREDICATE reads and fields the guarded BODY reads; where they differ, grep whether they are written at the same sites. If not, the detector owes a state where they DISAGREE | the guard's operand swapped for a field whose third state no row built |
 > | **CHANNEL** | for each row, name **the mutant it kills** and **the observable that differs under that mutant**. A row whose named channel cannot vary under its named mutant is VACUOUS BY CONSTRUCTION, and that is knowable at writing time, before any table runs | a survival oracle at a REFUSAL-EFFECT site: guarded and unguarded code both survive |
 >
@@ -2299,6 +2387,34 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
   **zero genuinely stale**; without it, one honest correction read as a live defect.
   *The trend matters more than the instance: every correction added here quotes what it
   refutes, so a naive stale-text grep gets steadily MORE wrong as the file improves.*
+
+  > *** AND THE SAME COLLISION HAS A SECOND, WORSE FORM: A QUOTED MARKER RE-ARMS THE TOOL
+  > THAT READS IT. Measured 2026-08-28, on a defect I created while fixing another. ***
+  >
+  > `gen_codex_wall.py` keys on the literal text `[HELD AWAITING SEAT: <seat>]`. A stale held
+  > marker was cleared -- and the clearing note **preserved the question verbatim**, exactly as
+  > the quote-what-you-refute rule requires. **The quote contained the marker, so the generator
+  > still counted the stage as held**, and the "cleared" edit changed nothing. The count sat at
+  > 27 through two regenerations and I read it as a stable number rather than a stuck one.
+  >
+  > **The grep case makes a READER wrong; this one makes a TOOL wrong**, silently and durably,
+  > because the record now *says* the thing was answered while the machinery keeps reporting it
+  > owed. That is the gap-closes-itself shape with the two halves disagreeing.
+  >
+  > > **QUOTING A MACHINE-READ MARKER REQUIRES DEFANGING IT.** Keep it human-legible and break
+  > > the pattern -- `(HELD-AWAITING-SEAT fable5 -- defanged)`. The rule generalises past this
+  > > one generator: **before quoting any string a tool matches on, ask what that tool will do
+  > > with your copy of it.**
+  >
+  > *Bounded, and the hunt is recorded: all 263 rows were scanned for answered entries still
+  > carrying a live marker. **Exactly one, the one made here.** The class is real and its
+  > population today is zero.*
+  >
+  > *Two of the three greps in this same repair also silently matched nothing --
+  > `"gdromwarnbits ("` (the list renders the id in BACKTICKS) and an `entries`-vs-`stages`
+  > field-name error that reported a volatile-path defect as absent when the adjudicating seat
+  > had correctly found it. **Both were caught only because a seat's answer disagreed with my
+  > check and I opened the artifact instead of keeping the check that agreed with me.***
 
 * *** A SIXTH, 2026-08-26, AND IT IS THE FIRST WHERE TWO APPARATUS ERRORS STACKED INTO A
   CONVINCING FALSE RESULT. *** A 30-minute gate was launched as

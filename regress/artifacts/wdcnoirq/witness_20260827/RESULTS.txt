@@ -1,0 +1,198 @@
+==========================================================================================
+#485 wdcnoirq -- RUNG-3 WITNESS, REBUILT AND PRESERVED.   2026-08-27
+==========================================================================================
+VERDICT:  the rung-3 witness EXISTS AGAIN AND IT MEASURES.  Same script, both builds:
+
+              PRE-FIX (d819188^ = cc27fdf)     7 / 9      the two defect rows RED
+              POST-FIX (d819188)               9 / 9      same script, all green
+
+The round's ledger field can move from `detector:` to
+`probe:_scratchpad/witness485/wdcnoirq_rung3_probe.py`.
+
+*** THESE ARE THIS FILE'S OWN NUMBERS, NOT THE LOST SEAT'S. ***  The seat reported 2/5
+pre-fix and 5/5 post-fix.  That row set no longer exists, so nothing here reproduces its
+denominator and no claim is made that it was the same test.  What is reproduced is the
+CONCLUSION: the two arms #485 fixed deliver no interrupt before the fix and do after it,
+on unmodified `-E landisk`, through real guest instructions and real address decode.
+
+==========================================================================================
+WHAT WAS BUILT, AND WHY IT IS A SINGLE VARIABLE BY CONSTRUCTION
+==========================================================================================
+Both trees are `git archive d819188` extracted twice; the PRE tree then has ONE file
+replaced with `git show d819188^:src/devices/dev_wdc.c`.  Building PRE as "the HEAD tree
+with one file reverted" rather than as a checkout of cc27fdf is deliberate: the two
+commits also differ in CHANGELOG.md, regress/ and tools/, none of which reach the
+emulator -- but a whole-tree checkout makes that a claim instead of a construction.
+
+  diff -rq PRE/src POST/src        ->  dev_wdc.c and nothing else
+  grep -c 'int_assert = 1;'        ->  PRE 17,  POST 19        (the two added statements)
+  md5 gxemul  PRE   b9ada1ae1ef09b97f6ed79fa1ea3dab9
+  md5 gxemul  POST  9f8b2ce816528767e2e356fb32c87051
+  binaries differ, and both are NEWER than their own dev_wdc.c (checked in the build
+  script, because MAKE_RC has been observed reporting 0 on a failed build)
+
+Neither tree is `C:\DocumentNoSnc\CC\GXEMUL\build\`, and nothing under GXEMUL-SEC was
+written.  Build trees: /tmp/gxw485pre and /tmp/gxw485post (WSL Gentoo), both scratch.
+
+  *** THE POST-FIX BUILD IS PINNED TO d819188, NOT TO TODAY'S HEAD, AND THAT IS CHECKED
+  RATHER THAN ASSUMED. ***  HEAD moved to 6faba0f (#487) while this ran.  dev_wdc.c
+  changed in 77b7c03 and 6faba0f -- COMMENTS ONLY: `gcc -fpreprocessed -E -P` gives 800
+  lines from each and `cmp` reports them IDENTICAL, and `int_assert = 1;` is 19 at both
+  revisions.  See check_head_drift.sh.  So the post-fix binary is behaviourally current.
+
+==========================================================================================
+THE MACHINE
+==========================================================================================
+  machine     -E landisk -M 64, UNMODIFIED machine description, nothing device_add'ed
+  wdc         machine_landisk.c: `wdc irq=...irq[SH4_INTEVT_IRQ10] addr_mult=2
+              addr=0x14000000`  ->  register N at 0x14000000 + 2N, reached through P2
+              ERROR   reg 1  ->  0xb4000002
+              COMMAND reg 7  ->  0xb400000e
+  RAM         physical 0x0c000000; guest code at 0x8c010000, VBR 0x8c020000,
+              vector 0x8c020600, scratch 0x8c011000, ERROR read-back 0x8c012000
+  interrupt   IRQ10 = INTEVT 0x340 -> LEVEL 5 by sh_update_interrupt_priorities()'s
+              `15 - ((intevt - IRQ0)/0x20)`; sr = 0x40000000 gives MD=1, BL=0, IMASK=0
+  disk        -d iR:/tmp/wdc485scratch.img  (a copy of _images/wdc-scratch-64m.img)
+
+  command (the exact one, from run_485_witness.sh):
+
+    python3 -u _scratchpad/witness485/wdcnoirq_rung3_probe.py \
+        /tmp/gxw485<pre|post>/gxemul \
+        /mnt/c/DocumentNoSnc/CC/GXEMUL/_images/openbsd76-landisk-bsd.rd \
+        /tmp/wdc485scratch.img <tag>
+
+  and each row's own emulator invocation, recorded in every transcript, is
+
+    gxemul -V -E landisk -M 64 -d iR:/tmp/wdc485scratch.img <kernel>
+
+==========================================================================================
+THE ROWS -- every value produced by a guest instruction through real address decode
+==========================================================================================
+                                                       PRE (cc27fdf)      POST (d819188)
+  sec f5 irq        *** DEFECT ***  0xF5 -> vector      silent      FAIL   0x8c020600  ok
+  sec f5 landed     stimulus proof  ERROR after store   0x04        ok     0x04        ok
+  unimpl aa irq     *** DEFECT ***  0xAA -> vector      silent      FAIL   0x8c020600  ok
+  unimpl aa warn    stimulus proof  fatal() count       1           ok     1           ok
+  unimpl aa landed  stimulus proof  ERROR after store   0x04        ok     0x04        ok
+  live ec irq       LIVENESS        0xEC -> vector      0x8c020600  ok     0x8c020600  ok
+  attrib noram      ATTRIBUTION     RAM store, silent   0x000000f5/silent ok   same    ok
+  devsig err        DEVICE SIG      ERROR 0x01 -> 0x04  0x01->0x04  ok     0x01->0x04  ok
+  ram live          ENCODING        mov.b pair on RAM   0x5a        ok     0x5a        ok
+                                                        ----------------   --------------
+                                                            7 / 9              9 / 9
+
+  THE DIFFERENTIAL -- the rows the defect owns, same script, opposite colour:
+
+    sec f5 irq        silent  ->  0x8c020600
+    unimpl aa irq     silent  ->  0x8c020600
+
+  and nothing else moved.
+
+==========================================================================================
+THE THREE CONTROLS
+==========================================================================================
+LIVENESS      `live ec irq`.  0xEC WDCC_IDENTIFY already asserted before #485, so it must
+              deliver on BOTH builds -- and it does, at the same vector, in the same
+              script.  That is what separates "the fix works" from "this script cannot
+              deliver anything", and it is the row that makes the two silences above
+              meaningful.
+
+ATTRIBUTION   `attrib noram`.  The same `mov.b r8,@r7`, the same sr/vbr/breakpoint, the
+              same free-run -- with r7 pointing at RAM instead of at the command
+              register.  Nothing is delivered on either build, so the deliveries above
+              are not the RTC, the SCIF or a timer.  It carries its own execution proof:
+              the store is STEPPED and DUMPED (0x000000f5 read back through the debugger)
+              before the pc is rewound and the identical instruction is free-run, so
+              "silent" here cannot mean "the guest never ran".
+
+DEVICE SIG    `devsig err`.  A guest load of the ERROR register before and after a 0xF5
+              store reads 0x01 then 0x04.  0x01 is DEVINIT's power-on `d->error = 1`;
+              0x04 is WDCE_ABRT.  RAM at 0xb4000002 answers 0x00 and cannot CHANGE as a
+              result of a command, so the responder is the device and not memory.
+              *** READ UNCONDITIONALLY. ***  It runs in its own stepped session on both
+              builds rather than inside the interrupt handler: reading it only when the
+              interrupt lands would make it unmeasurable on the build where the interrupt
+              does not land, and the row would then fail for two reasons at once.
+              `ram live` backs it up from the other side -- the identical mov.b store/load
+              pair against plain RAM returns 0x5a -- so a device row reading 0x00 could
+              not have been blamed on a bad hand-assembled encoding.
+
+==========================================================================================
+"SILENT" IS A POSITIVE READING HERE, NOT AN ABSENCE
+==========================================================================================
+An absence proves nothing until the stimulus is known to have arrived.  Each delivery leg
+is broken back into the debugger with SIGINT after its spin (emul.c installs
+debugger_activate as the SIGINT handler) and the ERROR register is then read BY A GUEST
+LOAD.  On the PRE-FIX build both defect legs report, in one session:
+
+    ERROR == 0x04   the free-running store reached wdc_command() and the arm set ABRT
+    no BREAKPOINT   and no interrupt was delivered
+
+The 0xAA leg carries a second, independent proof on a different channel: the
+un-silenceable `[ wdc: WARNING! Unimplemented command 0xaa ... ]` fatal() appears in the
+FREE-RUNNING transcript, count exactly 1.  Two channels, one fact.
+
+The delivery oracle is `BREAKPOINT: pc = 0x8c020600`, printed by cpu_dyntrans.c through
+fatal(), which has no quiet_mode early-out -- so it is un-silenceable and it NAMES THE
+ADDRESS.  The rows compare that address against the interrupt vector rather than asking
+the weaker question "did the process come back to a prompt", which a hundred other things
+also satisfy.
+
+==========================================================================================
+THE NEGATIVE CONTROL, AND IT IS THE TRAP THIS WITNESS MOST EASILY FALLS INTO
+==========================================================================================
+wdc_command() opens with a no-disk early return that ALREADY sets `d->int_assert = 1` on
+both builds.  Run the identical rows with no `-d` (WDCNOIRQ_NODISK=1), on the PRE-FIX
+binary:
+
+    sec f5 irq        0x8c020600  ok        <-- GREEN ON THE UNFIXED BUILD
+    unimpl aa irq     0x8c020600  ok        <-- GREEN ON THE UNFIXED BUILD
+    unimpl aa warn    0           FAIL      <-- and this is the row that says why
+    WDCNOIRQ_RESULT=8/9
+
+So a witness built without a disk image would have reported the unfixed binary as fixed on
+exactly the two rows the round is about, and only the fatal()-count row would have
+objected.  Measured, not reasoned: rows_pre_nodisk.out.
+
+==========================================================================================
+WHAT IS PRESERVED, AND WHERE
+==========================================================================================
+  _scratchpad/witness485/
+    wdcnoirq_rung3_probe.py        THE WITNESS.  Self-contained; takes binary, kernel,
+                                   disk, tag.  Its header carries every derivation.
+    run_485_witness.sh             drives both builds plus the no-disk negative control
+    build_485_witness_trees.sh     builds the two single-variable trees from the tar
+    check_head_drift.sh            proves d819188..HEAD is comment-only in dev_wdc.c
+    tree_d819188.tar               the exact tree both builds came from.  Regenerable
+                                   with `git archive d819188 -o tree_d819188.tar`
+    dev_wdc_PREFIX_cc27fdf.c       the one reverted file
+    dev_wdc_POSTFIX_d819188.c      the fixed file
+    dev_wdc_HEAD_6faba0f.c         today's HEAD, for the drift check
+    build_485_witness_trees.log    the build record (single-variable check, rc, mtimes)
+    configure_*.log  make_*.log    both builds
+    rows_*.out  transcript_*.log   the LIVE outputs -- a re-run OVERWRITES these
+
+    run_20260827/                  *** THE IMMUTABLE COPY THIS FILE CITES. ***
+      rows_pre.out  rows_post.out  rows_pre_nodisk.out
+      transcript_pre.log  transcript_post.log  transcript_pre_nodisk.log
+      run_485_witness.log
+      gxemul_pre_cc27fdf           b9ada1ae1ef09b97f6ed79fa1ea3dab9
+      gxemul_post_d819188          9f8b2ce816528767e2e356fb32c87051
+
+  The stamped copy exists because the driver reuses log names on every run: a citation
+  into a buffer that gets overwritten is not a citation, and this project has already had
+  a round block point at a log that had come to say something else.  Both BINARIES are
+  kept too, so the scores can be re-checked without a rebuild -- which is the whole point
+  of a task whose subject is a measurement whose artifact did not survive.
+
+==========================================================================================
+NOT SETTLED / OUT OF SCOPE
+==========================================================================================
+* Whether the lost seat's 5-row set measured the same things.  Its script is gone; this
+  is a rebuild of the conclusion, not of the test.
+* GUEST-DRIVEN reachability.  The witness drives the arms with a hand-placed guest
+  instruction, which is what rung 3 asks for.  It says nothing about how often a real
+  OpenBSD boot reaches them; the boot census that #485's comment once asserted is a
+  separate, still-unpreserved measurement and is not re-taken here.
+* nIEN / Device Control.  Not exercised.  #485's own note (WDCTL_IDS read nowhere in
+  dev_wdc.c; landisk's aux registers unmapped) is unaffected either way by these rows.

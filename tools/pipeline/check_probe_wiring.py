@@ -327,6 +327,14 @@ MANIFEST = {
                                     "cond) and so does the latched STATE (latch cond) -- four "
                                     "measured escapes across three earlier row sets all had "
                                     "the same shape: a survive-only row is vacuous here."),
+    "artifacts/wdcnoirq/witness_20260827/wdcnoirq_rung3_probe.py": (CLASS_WITNESS,
+                                    "#485 rung-3 witness, PRESERVED INTO THE REPO 2026-08-28.  "
+                                    "The ledger's witness field cited _scratchpad/witness485/ -- a "
+                                    "volatile path -- and the files were still there, so this is a "
+                                    "copy of a live witness rather than a reconstruction.  Its "
+                                    "pre/post rows and transcripts sit beside it.  Ungated by "
+                                    "design: a witness licenses a fix and is not a standing "
+                                    "detector; #485's standing coverage is its kill table."),
     "artifacts/gdromexitsix/gdrom_toclen_witness.py": (CLASS_WITNESS,
                                     "gdromexitsix rung-3 on the unmodified dreamcast machine: "
                                     "nine guest accesses, cnt=407 and cnt=0 each end the host at "
