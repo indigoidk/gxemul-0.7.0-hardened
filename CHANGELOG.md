@@ -1,3 +1,70 @@
+## Round 485 (#485) -- 242 of 256 opcodes ended a command and never raised its interrupt
+
+`wdc_command()` has five arms that terminate a command with `WDCE_ABRT`. Two never raised the
+completion interrupt: the six `WDCC_SEC_*` opcodes and `default:`. Two statements, two arms.
+Detector **128 rows**, gate **PASS (334 checks)**, kill table **7 of 7**.
+
+### The warrant is an invariant, not an analogy
+
+Derived over all 256 opcodes rather than from a few neighbours:
+
+> **Every command `wdc_command()` finishes raises the completion interrupt.** The only opcodes
+> that stay silent are the three that hand control back for a data phase — `WDCC_WRITE`,
+> `WDCC_WRITEMULTI`, `ATAPI_PKT_CMD` — and each asserts when its data phase drains.
+
+The 242 were the only violations. And the two defect arms were **the only terminal arms in the
+function with no interrupt decision recorded at all** — no assert, no comment. Six arms carry a
+`TODO … interrupt` hedge; in five the author asserted, and in the sixth he left the assert
+*commented out*, so that decision is visible in the source. A question never reached, not a
+decision to stay silent.
+
+No specification is cited and none is available. A sibling model settles the direction:
+`dev_mb89352.c` asserts on any non-zero interrupt status regardless of success.
+
+### My first detector was below the floor, and it took a seat to measure it
+
+I shipped a two-observable sweep — ABRT and assert-count, 256 opcodes. **Four of seven mutants
+read `ABRT+NO-irq = 0` and pass it entirely:**
+
+| mutant | killed by |
+|---|---|
+| `M5_inlatch` — assert moved inside the unimplemented-command latch | leg 2, a **second command on one device** |
+| `M4_hoist` — one assert after the switch | the **identity pin** on the silent set |
+| `M7_noclear` — STATUS read stops clearing the request | leg 3, **retraction** |
+| `M8_sfabortonly` — SET_FEATURES asserts only on abort | leg 4, **`precomp = WDSF_SET_MODE`** |
+
+`M4_hoist` is the sharp one: it "fixes" all 242 and starts asserting **at dispatch** for the
+three deferred opcodes — a spurious completion interrupt on every disk write a real guest
+issues. A count-only oracle passes it, so the silent set is pinned as an **identity**
+`{0x30, 0xa0, 0xc5}`, not a count.
+
+`M5` cannot be seen by a sweep at *any* oracle width: one fresh device per opcode means the
+latch is 0 on every leg. `M8` is the input-coverage lesson — the sweep varies the command byte
+and never `precomp`, so SET_FEATURES' success path never ran. **Input coverage in one dimension
+is not input coverage.**
+
+And `M9_notailtick` is the one my *reproduction* could not see: it called `wdc_command()` and
+ran the tick by hand, so a fix whose repair depends on `dev_wdc_access()`'s tail tick was
+invisible. Leg 1 now drives the real register path — a command store.
+
+### Severity, corrected downward against my own earlier record
+
+`WDCS_BSY` is **never set anywhere in `dev_wdc.c`**, so a polling driver's wait returns at once
+with `DRDY|DSC|ERR`. OpenBSD 7.6 reaches both arms routinely — `0xF5` on every attach, `0xE0` on
+every halt — and completes boot and shutdown against the old behaviour. **There is no measured
+hang.** Nine ledger entries carrying "waits forever" were corrected in place. The licence is
+protocol correctness at trivial cost.
+
+### Witness
+
+A seat built and measured a **rung-3** witness on unmodified `-E landisk`: 2/5 pre-fix, 5/5
+post-fix, with liveness, attribution and device-signature controls. **Its script was not
+preserved** — the seat's scratch directory did not survive — so the artifact this project's own
+rule requires does not exist. The round ships `detector:`, the term adopted the same day for
+exactly this case, and records that the rung-3 attempt was made and succeeded. `none` would be
+false; claiming `probe:` without the script would be laundering.
+
+
 ## Round 486 (#486) -- a scored gate row that was not merely red, but NON-DISCRIMINATING
 
 `regress/wdc_flood_probe.py`'s `overrun x2` drove 1026 undrained IDENTIFY commands and wanted

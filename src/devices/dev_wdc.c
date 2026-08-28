@@ -917,7 +917,41 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 	case WDCC_SEC_ERASE_UNIT:
 	case WDCC_SEC_FREEZE_LOCK:
 	case WDCC_SEC_DISABLE_PASSWORD:
+		/*  #485: A TERMINAL ARM RAISES ITS COMPLETION INTERRUPT.
+
+		    THE INVARIANT, derived over all 256 opcodes rather than from a
+		    few neighbours: every command wdc_command() FINISHES raises the
+		    completion interrupt.  The only opcodes that stay silent are the
+		    THREE that hand control back for a data phase -- WDCC_WRITE,
+		    WDCC_WRITEMULTI and ATAPI_PKT_CMD -- and each of those asserts
+		    when its data phase drains.  This arm and the `default:` arm
+		    below were the only violations.
+
+		    *** THEY WERE ALSO THE ONLY TERMINAL ARMS IN THE FUNCTION WITH NO
+		    INTERRUPT DECISION RECORDED AT ALL -- no assert, and no comment.
+		    ***  Six arms carry a `TODO ... interrupt` hedge; in five the
+		    author asserted, and in the sixth (ATAPI_PKT_CMD) he left the
+		    assert COMMENTED OUT, so that decision is visible in the source.
+		    A question never reached, not a decision to stay silent.
+
+		    NO SPECIFICATION IS CITED AND NONE IS AVAILABLE -- there is no ATA
+		    document in this tree.  The warrant is the invariant above plus a
+		    sibling model: dev_mb89352.c asserts on ANY non-zero interrupt
+		    status, without regard to whether the command succeeded.
+
+		    nIEN CANNOT CONTRADICT THIS: WDCTL_IDS (0x02) is defined in
+		    wdcreg.h and read NOWHERE in this file, so the model has no
+		    interrupt-disable state.  This arm is exactly as nIEN-blind as
+		    the ten arms that already assert.
+
+		    HARM, STATED HONESTLY: none measured.  WDCS_BSY is never set
+		    anywhere in this file, so a polling driver's wait returns at once
+		    with DRDY|DSC|ERR, and OpenBSD 7.6 completes boot and shutdown
+		    against the old behaviour.  0xF5 lands here on every attach and
+		    0xE0 on every halt, so the arm is on the normal path -- but the
+		    licence is protocol correctness at trivial cost, NOT a hang.  */
 		d->error |= WDCE_ABRT;
+		d->int_assert = 1;
 		break;
 
 	default:/*  TODO  */
@@ -936,7 +970,22 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 		    demanding ONE line -- which also kills a
 		    "last-warned-opcode" latch, under which an alternating guest
 		    would flood forever.  */
+		/*  #485: see the WDCC_SEC_* arm above for the invariant and the
+		    warrant.  This is the other terminal arm that never raised its
+		    completion interrupt.
+
+		    *** THE ASSERT IS OUTSIDE THE LATCH, AND THAT IS NOT A STYLE
+		    CHOICE. ***  Moved inside `if (!d->warned_unimpl_cmd)` below,
+		    only the FIRST unimplemented command per device would interrupt
+		    and every later one would go silent again.  It is what a tidying
+		    maintainer writes -- group the response with the warning -- and a
+		    sweep using one fresh device per opcode CANNOT SEE IT, because
+		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
+		    that mutant.  #464 already found the ABORT BIT wrongly inside
+		    this same guard and shipped `abrt 2nd` for it; the interrupt
+		    needed the same row.  */
 		d->error |= WDCE_ABRT;
+		d->int_assert = 1;
 		if (!d->warned_unimpl_cmd) {
 			d->warned_unimpl_cmd = 1;
 			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "

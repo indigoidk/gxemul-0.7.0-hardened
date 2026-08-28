@@ -234,6 +234,10 @@ MANIFEST = {
         (CLASS_RESEARCH, "#484 rung-3 witness: a guest program on unmodified evbmips malta, both controls, 20/20 shipped-vs-fixed"),
     "artifacts/wdcfloodstale/measure_20260827/author_floodstale.py":
         (CLASS_RESEARCH, "three-leg measurement of wdcfloodstale: the death, a harness control, and the remedy"),
+    "artifacts/wdcnoirq/killtable_20260827/author_mut485.py":
+        (CLASS_RESEARCH, "#485 mutant applier: seven edits, four of which pass the sweep leg entirely"),
+    "artifacts/wdcnoirq/killtable_20260827/author_rows485.py":
+        (CLASS_RESEARCH, "#485 four-leg detector generator, each leg from a measured escape"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_mut483.py":
         (CLASS_RESEARCH, "#483 mutant applier, author-prefixed after a seat overwrote an unprefixed one"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483.py":

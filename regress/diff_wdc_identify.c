@@ -5056,6 +5056,140 @@ static void row_ring_occupancy_sound(void)
 	stub_disk_exists = 0; stub_read_fill = 0; free(d.inbuf);
 }
 
+static int cmpl_de = 0;
+static void cmpl_desink(struct interrupt *a) { (void)a; cmpl_de++; }
+
+/*  #485: a command that TERMINATES must raise its completion interrupt.
+ *
+ *  THE INVARIANT, derived over all 256 opcodes: every command wdc_command()
+ *  FINISHES asserts.  The only silent opcodes are the THREE that hand control
+ *  back for a data phase -- WDCC_WRITE, WDCC_WRITEMULTI, ATAPI_PKT_CMD -- each
+ *  of which asserts when its data phase drains.
+ *
+ *  *** EVERY LEG BELOW EXISTS BECAUSE A MEASURED MUTANT ESCAPED THE
+ *  TWO-OBSERVABLE SWEEP THIS ROUND FIRST DESIGNED. ***  The reproduction called
+ *  wdc_command() directly and ran the tick by hand; that cannot see a fix whose
+ *  repair depends on dev_wdc_access()'s tail calling the tick.  So leg 1 drives
+ *  the REAL REGISTER PATH.
+ */
+static void row_completion_irq(void)
+{
+	struct wdc_data d;
+	unsigned char buf[8];
+	int v, ran = 0, abrt_noirq = 0, first_bad = -1;
+	int silent[8], nsilent = 0, i;
+	int second = -1, retract_de = -1, retract_field = -1, retract_re = -1;
+	int sf_irq = -1, sf_abrt = -1;
+
+	/*  LEG 1 -- THE SWEEP, THROUGH THE REGISTER PATH.  A command STORE, not a
+	    direct call, so dev_wdc_access's tail tick is inside the measurement.  */
+	for (v = 0; v < 256; v++) {
+		altctl_fresh(&d);
+		if (d.inbuf == NULL)
+			continue;
+		ran ++;
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		arm_asserts = 0;
+		buf[0] = v;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1,
+		    MEM_WRITE, &d);
+		if (arm_asserts == 0) {
+			if (nsilent < 8)
+				silent[nsilent] = v;
+			nsilent ++;
+			if ((d.error & WDCE_ABRT) && abrt_noirq ++ == 0)
+				first_bad = v;
+		}
+		altctl_free(&d);
+	}
+
+	/*  LEG 2 -- A SECOND UNIMPLEMENTED COMMAND ON *ONE* DEVICE.  Kills the
+	    edit that moves the assert inside the warned_unimpl_cmd latch, which a
+	    fresh-device-per-opcode sweep cannot see at any oracle width.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		buf[0] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		buf[0] = wd_command;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_READ, &d);
+		arm_asserts = 0;
+		buf[0] = 0xab;			/*  a DIFFERENT unknown opcode  */
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		second = arm_asserts;
+		altctl_free(&d);
+	}
+
+	/*  LEG 3 -- RETRACTION.  int_assert is a LEVEL: dev_wdc_tick re-raises it
+	    every tick until a STATUS read clears it, so a set-and-never-cleared
+	    request is asserted forever.  Only this leg sees that.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		buf[0] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		cmpl_de = 0;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_READ, &d);
+		retract_de = cmpl_de;
+		retract_field = d.int_assert;
+		arm_asserts = 0;
+		dev_wdc_tick(fake_cpu(), &d);
+		retract_re = arm_asserts;
+		altctl_free(&d);
+	}
+
+	/*  LEG 4 -- SET_FEATURES' *SUCCESS* SUB-CASE.  The sweep varies the command
+	    byte and never `precomp`, so this path never ran: input coverage in one
+	    dimension is not input coverage.  It must assert AND not abort.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		d.precomp = WDSF_SET_MODE;
+		arm_asserts = 0;
+		buf[0] = SET_FEATURES;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		sf_irq = arm_asserts;
+		sf_abrt = (d.error & WDCE_ABRT) ? 1 : 0;
+		altctl_free(&d);
+	}
+	stub_disk_exists = 0;
+
+	rows ++;
+	printf("  IRQ swept %i | ABRT+NO-irq %i first 0x%02x | silent %i:",
+	    ran, abrt_noirq, first_bad, nsilent);
+	for (i = 0; i < nsilent && i < 8; i++)
+		printf(" 0x%02x", silent[i]);
+	printf(" | 2nd %i | retract de=%i f=%i re=%i | sf irq=%i abrt=%i\n",
+	    second, retract_de, retract_field, retract_re, sf_irq, sf_abrt);
+
+	/*  THE SILENT SET IS PINNED AS AN IDENTITY, NOT A COUNT.  A single
+	    `int_assert = 1` hoisted after the switch reads ABRT+NO-irq == 0 and
+	    passes a count-only oracle, while starting to assert at DISPATCH for
+	    the three deferred opcodes -- a spurious completion interrupt on every
+	    disk write a real guest issues.  */
+	if (ran != 256 || abrt_noirq != 0 || nsilent != 3 ||
+	    silent[0] != WDCC_WRITE || silent[1] != ATAPI_PKT_CMD ||
+	    silent[2] != WDCC_WRITEMULTI ||
+	    second != 1 || retract_de != 1 || retract_field != 0 ||
+	    retract_re != 0 || sf_irq != 1 || sf_abrt != 0) {
+		printf("  FAIL %-38s see the IRQ line above\n",
+		    "a terminated command raises its irq");
+		failures ++;
+	} else {
+		printf("  ok   %-38s 256 swept, 3 deferred\n",
+		    "a terminated command raises its irq");
+	}
+}
+
+
 static void row_arm_overrun(void)
 {
 	struct wdc_data d;
@@ -5410,6 +5544,7 @@ int main(void)
 	row_srst_aborts_pkt_empty_ring();
 	row_reset_bit_iff();
 	row_ring_occupancy_sound();
+	row_completion_irq();
 	row_odd_step();
 	row_odd_midwalk();
 	row_odd_width();
@@ -5433,8 +5568,8 @@ int main(void)
 	 *  comment-only source -- this row is what refuses to report a pass.
 	 */
 	rows ++;
-	if (rows != 127) {
-		printf("  FAIL %-38s rows = %i, want 127\n",
+	if (rows != 128) {
+		printf("  FAIL %-38s rows = %i, want 128\n",
 		    "[IDENTITY] row count", rows);
 		failures ++;
 	} else {

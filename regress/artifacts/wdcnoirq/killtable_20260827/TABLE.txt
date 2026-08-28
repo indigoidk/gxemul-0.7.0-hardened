@@ -1,0 +1,57 @@
+#485 wdcnoirq -- kill table.  Detector 128 rows; the round's row has FOUR legs.
+
+  pre-fix (cc27fdf)   ABRT+NO-irq 242 | silent 245 | 2nd 0        FAIL
+  post-fix            ABRT+NO-irq   0 | silent   3 | 2nd 1 |
+                      retract de=1 f=0 re=0 | sf irq=1 abrt=0     ok
+  gate                offline-differential PASS (334 checks)
+
+  mutant            verdict   leg 1 reads      killed by
+  ---------------------------------------------------------------------------
+  M1_defonly        KILLED    ABRT+NO-irq 6    leg 1 count
+  M2_seconly        KILLED    ABRT+NO-irq 236  leg 1 count
+  M5_inlatch        KILLED    ABRT+NO-irq 0    LEG 2 -- the second command
+  M4_hoist          KILLED    ABRT+NO-irq 0    THE IDENTITY PIN (silent 0, want 3)
+  M7_noclear        KILLED    ABRT+NO-irq 0    LEG 3 -- retraction
+  M8_sfabortonly    KILLED    ABRT+NO-irq 0    LEG 4 -- SET_FEATURES success
+  M9_notailtick     KILLED    ABRT+NO-irq 243  leg 1's REGISTER PATH
+
+*** FOUR OF SEVEN READ ABRT+NO-irq = 0.  THEY PASS LEG 1 ENTIRELY. ***  That is the
+measured proof that the two-observable sweep this round FIRST designed was below the
+floor -- it would have shipped green against four plausible maintainer edits, one of
+which sends a spurious completion interrupt on every disk write a real guest issues.
+
+Each leg exists because of one measured escape:
+
+  M9  the repro called wdc_command() and ran the tick BY HAND, so it could not see a
+      fix whose repair depends on dev_wdc_access()'s tail tick.  Leg 1 drives the real
+      register path -- a command STORE.
+  M4  one `int_assert = 1` hoisted after the switch reads ABRT+NO-irq 0 and passes any
+      count oracle, while asserting at DISPATCH for the three DEFERRED opcodes.  So the
+      silent set is pinned as an IDENTITY {0x30, 0xa0, 0xc5}, not as a count.
+  M5  the assert moved inside `if (!d->warned_unimpl_cmd)`: only the FIRST unknown
+      command per device interrupts.  A sweep with one fresh device per opcode CANNOT
+      SEE IT at any oracle width -- the latch is 0 on every leg.
+  M7  the STATUS read stops clearing the request.  int_assert is a LEVEL, so the tick
+      re-raises it every ~16k instructions forever.
+  M8  SET_FEATURES asserts only on its abort sub-case.  The sweep varies the command
+      byte and never `precomp`, so its SUCCESS path never ran.  INPUT COVERAGE IN ONE
+      DIMENSION IS NOT INPUT COVERAGE.
+
+THE INVARIANT THE FIX RESTORES, derived over all 256 opcodes rather than from a few
+neighbours: every command wdc_command() FINISHES raises the completion interrupt.  The
+only silent opcodes are the three that hand control back for a data phase -- WDCC_WRITE,
+ATAPI_PKT_CMD, WDCC_WRITEMULTI -- each of which asserts when its data phase drains.
+
+WITNESS: a seat BUILT AND MEASURED a rung-3 witness on unmodified `-E landisk` --
+2/5 pre-fix, 5/5 post-fix, with liveness, attribution and device-signature controls.
+*** ITS SCRIPT WAS NOT PRESERVED: the seat's scratch directory did not survive, so the
+artifact this project's own rule requires does not exist. ***  The round therefore ships
+`detector:` -- the term adopted the same day for exactly this case -- and records that
+the rung-3 ATTEMPT was made and SUCCEEDED.  `none` would be false; claiming `probe:`
+without the script would be laundering.
+
+HARM, STATED HONESTLY AND DOWNWARD: none measured.  WDCS_BSY is never set anywhere in
+dev_wdc.c, so a polling driver's wait returns at once with DRDY|DSC|ERR, and OpenBSD 7.6
+completes boot and shutdown against the OLD behaviour.  0xF5 lands in the SEC arm on
+every attach and 0xE0 in the default arm on every halt, so both arms are on the normal
+path -- but the licence is PROTOCOL CORRECTNESS AT TRIVIAL COST, not a hang.

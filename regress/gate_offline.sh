@@ -1477,6 +1477,37 @@ else
     check     "wdc IDENTIFY: a SECOND refused read still reaches the common tail" \
               "$(grep -cF 'R11 second refusal: the completion irq still reaches the tail' "$WDCLOG")" "1"
 
+    #  *** #485: ONE ROW, FOUR LEGS, AND FOUR OF SEVEN MUTANTS PASS LEG 1 ENTIRELY. ***
+    #  The round first shipped a two-observable sweep (ABRT, assert-count) over 256
+    #  opcodes.  A seat built five edits that escaped it, and each surviving leg below
+    #  exists because of one of them:
+    #
+    #    M9  delete dev_wdc_access's TAIL TICK      the repro called wdc_command() and
+    #                                               ran the tick BY HAND, so it was blind;
+    #                                               leg 1 drives the real register path
+    #    M4  hoist ONE assert after the switch      reads ABRT+NO-irq 0 and passes a
+    #                                               count oracle, while asserting at
+    #                                               DISPATCH for the three DEFERRED
+    #                                               opcodes -- a spurious completion irq
+    #                                               on every disk write a guest issues.
+    #                                               The silent set is pinned as an
+    #                                               IDENTITY {0x30,0xa0,0xc5}, not a count
+    #    M5  assert moved INSIDE the unimpl latch   only the FIRST unknown command per
+    #                                               device interrupts.  A sweep with one
+    #                                               fresh device per opcode CANNOT see it
+    #    M7  STATUS read stops clearing the field   int_assert is a LEVEL; the tick
+    #                                               re-raises it forever
+    #    M8  SET_FEATURES asserts only on abort     the sweep varies the command byte and
+    #                                               never `precomp`, so its SUCCESS path
+    #                                               never ran.  Input coverage in ONE
+    #                                               dimension is not input coverage
+    #
+    #  Measured: all seven mutants die, and M4/M5/M7/M8 read ABRT+NO-irq 0 -- they pass
+    #  leg 1 and die only to the legs those escapes forced.  Pre-fix the row reads
+    #  ABRT+NO-irq 242, silent 245, 2nd 0.
+    check     "wdc IDENTIFY: a terminated command raises its irq" \
+              "$(grep -cF 'a terminated command raises its irq' "$WDCLOG")" "1"
+
     #  #480: THE THREE CALL-SITE ROWS ARE NAMED, BECAUSE THE COUNT PIN IS NOT ENOUGH.
     #
     #  This round first DECLINED to name them, reasoning that the detector's own identity
