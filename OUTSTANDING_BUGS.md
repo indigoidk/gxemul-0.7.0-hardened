@@ -11280,8 +11280,24 @@ reached it from "ALT-CTRL is not a fourth site of the same sentence", codex from
 "it merits its own issue and tests, though it can share a cleanup helper". `#479` building
 the helper is what makes that round cheap.*
 
-### *** `landiskaux` AND `wdcaltctrlbit` MUST SHIP TOGETHER, OR THE CHEAP ONE ACTIVATES
-### THE OTHER'S BUG ON A REAL RIG. Verified by construction 2026-08-27. ***
+### *** THE PAIRING BELOW IS DISCHARGED. `#481` FIXED THE PREREQUISITE, AND
+### `landiskaux` IS NOW SAFE TO SHIP ALONE. Corrected 2026-08-27. ***
+
+> The entry was right when written and its premise is now false. `#481` changed the
+> ALT-CTRL predicate from `WDCTL_4BIT` to `WDCTL_RST`, and **`0x08 & 0x04 == 0`** -- so
+> the six routine `0x08` Device Control writes that would have latched `COMMAND_RESET`
+> are now **inert**. Verified by reading the arm at HEAD, not by transcription.
+>
+> *Third stale severity of the day, and the same shape each time: a severity that was an
+> ANSWER TO A QUESTION rather than a property of a row, left standing after the question
+> changed. `wdcaltctrlbit` is now CLOSED as overtaken; `landiskaux` is open and
+> unblocked.*
+
+*The original entry follows, kept because its REASONING is exactly right and is what a
+future pairing should copy:*
+
+### `landiskaux` AND `wdcaltctrlbit` MUST SHIP TOGETHER, OR THE CHEAP ONE ACTIVATES
+### THE OTHER'S BUG ON A REAL RIG. Verified by construction 2026-08-27.
 
 `landiskaux` looks like the easiest fix on the queue: `dev_wdc.c` computes
 `alt_status_addr = devinit->addr + 0x206` and then carries a switch labelled *"Special

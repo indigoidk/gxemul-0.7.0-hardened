@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `wdcnoirq` (regress:fable5) · `wdcoddstep` (regress:fable5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 26 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 28 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1036,3 +1036,33 @@ one. So:
   becomes right -- land the header fix now (immediately true) and the re-aim separately,
   since the deciding variable is not *same file* but **same landing date**, and Sunday's
   battery is the deadline.
+
+## wdcoddstep -- regress stage (queued 2026-08-27)
+
+Closed as **OVERTAKEN** by `#475`'s clamp, measured at HEAD with a discriminating control
+(remove the clamp and the row's own figures return: `atapi_len -1`, `received 4` of 3).
+
+**The question is the PRECEDENT, not this row.** The closure adds NO ROW: eight committed
+rows already red on that control, two pinning exactly the saturation and truthfulness halves,
+so the addition licence refuses one. Is a zero-row overtaken-closure right, or does a row
+closed by someone else's fix owe a carrier of its own so the coverage is attributable?
+
+I argue no. But **three more queue items are candidates for overtaken-closure** and they will
+copy whatever this one does.
+
+## wdcnoirq -- regress stage (queued 2026-08-27)
+
+**A rule question, not a row question.** This round's detector was found below the floor
+**twice on the same pass**, by two seats, for two different reasons:
+
+* `M10` -- an invented predicate at the SEC arm, which you ruled **outside** clause (d)'s bound;
+* `D1..D5` -- task-file guards at the `default:` arm, which are **inside** it, because the
+  guarded body reads exactly those fields (they are literally the `fatal()` arguments).
+
+Both closed in-round. But **the pre-table GUARD-FIELD-vs-BODY-FIELD check exists precisely to
+enumerate `D1..D5` mechanically**, and this round ran no pre-table check at all — it went from
+design straight to a table.
+
+**Should that check be MANDATORY before any kill table rather than recommended?** It would have
+cost one grep and saved two floor breaches and a whole pass. I argue yes — but it adds a
+required step to every round, which needs your ruling rather than mine.

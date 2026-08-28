@@ -946,10 +946,23 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 
 		    HARM, STATED HONESTLY: none measured.  WDCS_BSY is never set
 		    anywhere in this file, so a polling driver's wait returns at once
-		    with DRDY|DSC|ERR, and OpenBSD 7.6 completes boot and shutdown
-		    against the old behaviour.  0xF5 lands here on every attach and
-		    0xE0 on every halt, so the arm is on the normal path -- but the
-		    licence is protocol correctness at trivial cost, NOT a hang.  */
+		    with DRDY|DSC|ERR.  The WDCS_BSY fact is FILE-SCOPED and this
+		    comment owns it: grep the file.
+		
+		    *** THE REST OF THIS PARAGRAPH ONCE ASSERTED A BOOT CENSUS -- that
+		    OpenBSD 7.6 completes boot and shutdown against the old behaviour,
+		    that 0xF5 lands here on every attach and 0xE0 on every halt.  A
+		    PANEL SEAT MEASURED ALL OF THAT AND ITS ARTIFACT WAS NOT PRESERVED,
+		    so the claim rested on evidence that no longer exists.  Named by a
+		    packet-fed seat on pass 2. ***
+		
+		    It is kept as an ATTRIBUTED REPORT rather than deleted, because the
+		    reachability it describes is why this arm was worth fixing at all --
+		    but it is a seat's measurement, not this comment's, and a reader
+		    who wants it must re-run a boot rather than cite this line.
+		
+		    The licence is protocol correctness at trivial cost, NOT a hang.
+		    That much stands on the WDCS_BSY reading alone.  */
 		d->error |= WDCE_ABRT;
 		d->int_assert = 1;
 		break;
@@ -981,7 +994,18 @@ void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
 		    maintainer writes -- group the response with the warning -- and a
 		    sweep using one fresh device per opcode CANNOT SEE IT, because
 		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
-		    that mutant.  #464 already found the ABORT BIT wrongly inside
+		    that mutant.
+		
+		    *** THAT SENTENCE NAMED A ROW `irq 2nd` THAT DOES NOT EXIST.
+		    Repo-wide it occurred in this comment and nowhere else. ***  The
+		    real artifact is an unnamed SUB-LEG of row_completion_irq(),
+		    printing a `2nd` field inside a row named "a terminated command
+		    raises its irq".  What makes the error dangerous rather than
+		    untidy is the company it kept: the SAME sentence cites `abrt 2nd`,
+		    which IS a real row -- so a true citation stood next to a
+		    fabricated one and lent it credibility.
+		
+		    #464 already found the ABORT BIT wrongly inside
 		    this same guard and shipped `abrt 2nd` for it; the interrupt
 		    needed the same row.  */
 		d->error |= WDCE_ABRT;

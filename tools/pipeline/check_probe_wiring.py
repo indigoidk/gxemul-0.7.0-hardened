@@ -238,6 +238,12 @@ MANIFEST = {
         (CLASS_RESEARCH, "#485 mutant applier: seven edits, four of which pass the sweep leg entirely"),
     "artifacts/wdcnoirq/killtable_20260827/author_rows485.py":
         (CLASS_RESEARCH, "#485 four-leg detector generator, each leg from a measured escape"),
+    "artifacts/wdcnoirq/killtable_20260827/author_mut11.py":
+        (CLASS_RESEARCH, "#485 pass-2: four representatives of the eleven measured escapes"),
+    "artifacts/wdcnoirq/killtable_20260827/author_legs3.py":
+        (CLASS_RESEARCH, "#485 pass-2: the three legs that close them -- task file, held level, ABRT"),
+    "artifacts/wdcoddstep/overtaken_20260827/author_odd.py":
+        (CLASS_RESEARCH, "the measurement that closed wdcoddstep as overtaken, with its clamp-removed control -- deliberately NOT shipped as a row"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_mut483.py":
         (CLASS_RESEARCH, "#483 mutant applier, author-prefixed after a seat overwrote an unprefixed one"),
     "artifacts/wdcaltctrlfam/killtable_20260827/author_fix483.py":

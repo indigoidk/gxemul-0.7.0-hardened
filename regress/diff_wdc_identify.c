@@ -5078,8 +5078,10 @@ static void row_completion_irq(void)
 	unsigned char buf[8];
 	int v, ran = 0, abrt_noirq = 0, first_bad = -1;
 	int silent[8], nsilent = 0, i;
-	int second = -1, retract_de = -1, retract_field = -1, retract_re = -1;
+	int second = -1, second_sec = -1;
+	int retract_de = -1, retract_field = -1, retract_re = -1;
 	int sf_irq = -1, sf_abrt = -1;
+	int tf_sec = -1, tf_def = -1, held = -1, abrt_sec = -1, abrt_def = -1;
 
 	/*  LEG 1 -- THE SWEEP, THROUGH THE REGISTER PATH.  A command STORE, not a
 	    direct call, so dev_wdc_access's tail tick is inside the measurement.  */
@@ -5121,6 +5123,36 @@ static void row_completion_irq(void)
 		buf[0] = 0xab;			/*  a DIFFERENT unknown opcode  */
 		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
 		second = arm_asserts;
+
+		/*  *** AND THE SECOND COMMAND MUST ALSO BE TRIED AT THE **OTHER**
+		    ARM.  A pass-2 seat that cannot read a single file named this
+		    gap, and the mutant it implied ESCAPED all four legs. ***
+
+		    M10_seclock: give the WDCC_SEC_* arm a latch of its own and put
+		    its assert inside it.  Leg 1 cannot see that -- one fresh device
+		    per opcode means the latch is 0 on every leg -- and the sub-leg
+		    above cannot either, because it replays only `default:` opcodes.
+		    Measured: 128 rows, 0 failures.  A CLEAN ESCAPE.
+
+		    So the SECOND command here is 0xF5, a WDCC_SEC_* opcode, on a
+		    device whose unimplemented latch is ALREADY SET by the 0xaa
+		    above.  Any qualification of the SEC arm by latch state now
+		    reds.  Same clause-(d) shape as the default arm's M5_inlatch,
+		    which the round DID catch -- at the other arm, which it did
+		    not.  */
+		/*  *** CLEAR THE PENDING REQUEST FIRST.  int_assert is a LEVEL, and
+		    a first cut of this sub-leg left it SET from the 0xab above -- so
+		    the next access's tail tick asserted from the STALE request and
+		    the sub-leg read 1 no matter what the SEC arm did.  M10 escaped a
+		    row written specifically to catch it.  A mutant that will not die
+		    is a RESULT: that one was the row mis-cut, not the target dead,
+		    and it is the same level-versus-edge subtlety leg 3 exists for. */
+		buf[0] = wd_command;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_READ, &d);
+		arm_asserts = 0;
+		buf[0] = WDCC_SEC_FREEZE_LOCK;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		second_sec = arm_asserts;
 		altctl_free(&d);
 	}
 
@@ -5160,6 +5192,96 @@ static void row_completion_irq(void)
 		sf_abrt = (d.error & WDCE_ABRT) ? 1 : 0;
 		altctl_free(&d);
 	}
+
+	/*  ROW F -- A TASK FILE THAT IS NOT ALL ZERO.  *** THE ROOT CAUSE OF
+	    ELEVEN MEASURED ESCAPES: altctl_fresh() memsets the device and every
+	    leg above writes ONLY the command register, so the whole task file is
+	    ZERO on every leg. ***  A guard added on ANY of those fields is then
+	    true by default and the fix looks intact.
+
+	    These are INSIDE clause (d)'s bound and are not invented predicates:
+	    the `default:` arm's guarded body reads drive, head, cyl_hi, cyl_lo,
+	    sector and seccnt -- they are literally the fatal() arguments -- so
+	    the GUARD-FIELD-vs-BODY-FIELD check enumerates them mechanically.
+
+	    Measured escapes closed here: the `default:` arm guarded on seccnt,
+	    head, cyl, sector or drive, and BOTH arms guarded on drive, seccnt,
+	    precomp or lba.  Nine variants, one leg.
+
+	    The round had already learned this for `precomp` -- 'input coverage
+	    in one dimension is not input coverage' -- and applied it only to
+	    SET_FEATURES, not to the two arms the diff edits.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		d.precomp = 0x5a; d.seccnt = 0x11; d.sector = 0x22;
+		d.cyl_lo = 0x33; d.cyl_hi = 0x44;
+		d.drive = 0; d.head = 0x0e; d.lba = 1;
+		arm_asserts = 0;
+		buf[0] = WDCC_SEC_FREEZE_LOCK;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		tf_sec = arm_asserts;
+		buf[0] = wd_command;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_READ, &d);
+		arm_asserts = 0;
+		buf[0] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		tf_def = arm_asserts;
+		altctl_free(&d);
+	}
+
+	/*  ROW D -- THE LEVEL IS HELD, WHICH IS THE DUAL OF LEG 3.  Leg 3 pins
+	    RETRACTION: a STATUS read lowers the line.  *** NOTHING PINNED THAT
+	    THE REQUEST SURVIVES UNTIL THAT READ, so an EDGE assert satisfies leg
+	    3 exactly. ***  Two measured escapes lived in that gap: asserting the
+	    macro directly instead of setting the field, and a tick that clears
+	    int_assert after asserting.  Both make the interrupt an edge.
+
+	    int_assert is a LEVEL: the tick re-raises it every tick until the
+	    STATUS read.  So: one command, then TWO ticks with NO read between,
+	    and the sink must count both.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		arm_asserts = 0;
+		buf[0] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		dev_wdc_tick(fake_cpu(), &d);
+		held = arm_asserts;		/*  the store's own tick, plus one more  */
+		altctl_free(&d);
+	}
+
+	/*  ROW E -- THE ABRT BIT, ON THE FIRST COMMAND, AT BOTH ARMS.  *** LEG 1
+	    COUNTS ABRT ONLY AMONG OPCODES THAT STAYED SILENT, so the moment the
+	    fix makes them assert, the ABRT half of the very same two-statement
+	    pair goes UNPINNED. ***  Deleting `d->error |= WDCE_ABRT;` from
+	    either arm escaped every leg, measured.  The fix added a statement
+	    beside an existing one and the detector stopped watching the one it
+	    did not add.  */
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		buf[0] = WDCC_SEC_FREEZE_LOCK;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		abrt_sec = (d.error & WDCE_ABRT) ? 1 : 0;
+		altctl_free(&d);
+	}
+	altctl_fresh(&d);
+	if (d.inbuf != NULL) {
+		stub_disk_exists = 1;
+		d.irq.interrupt_assert = arm_sink;
+		d.irq.interrupt_deassert = cmpl_desink;
+		buf[0] = 0xaa;
+		dev_wdc_access(fake_cpu(), NULL, wd_command, buf, 1, MEM_WRITE, &d);
+		abrt_def = (d.error & WDCE_ABRT) ? 1 : 0;
+		altctl_free(&d);
+	}
 	stub_disk_exists = 0;
 
 	rows ++;
@@ -5167,8 +5289,10 @@ static void row_completion_irq(void)
 	    ran, abrt_noirq, first_bad, nsilent);
 	for (i = 0; i < nsilent && i < 8; i++)
 		printf(" 0x%02x", silent[i]);
-	printf(" | 2nd %i | retract de=%i f=%i re=%i | sf irq=%i abrt=%i\n",
-	    second, retract_de, retract_field, retract_re, sf_irq, sf_abrt);
+	printf(" | 2nd %i secarm %i | retract de=%i f=%i re=%i | sf irq=%i abrt=%i"
+	    " | taskfile %i/%i held %i abrt %i/%i\n",
+	    second, second_sec, retract_de, retract_field, retract_re,
+	    sf_irq, sf_abrt, tf_sec, tf_def, held, abrt_sec, abrt_def);
 
 	/*  THE SILENT SET IS PINNED AS AN IDENTITY, NOT A COUNT.  A single
 	    `int_assert = 1` hoisted after the switch reads ABRT+NO-irq == 0 and
@@ -5178,8 +5302,11 @@ static void row_completion_irq(void)
 	if (ran != 256 || abrt_noirq != 0 || nsilent != 3 ||
 	    silent[0] != WDCC_WRITE || silent[1] != ATAPI_PKT_CMD ||
 	    silent[2] != WDCC_WRITEMULTI ||
-	    second != 1 || retract_de != 1 || retract_field != 0 ||
-	    retract_re != 0 || sf_irq != 1 || sf_abrt != 0) {
+	    second != 1 || second_sec != 1 ||
+	    retract_de != 1 || retract_field != 0 ||
+	    retract_re != 0 || sf_irq != 1 || sf_abrt != 0 ||
+	    tf_sec != 1 || tf_def != 1 || held != 2 ||
+	    abrt_sec != 1 || abrt_def != 1) {
 		printf("  FAIL %-38s see the IRQ line above\n",
 		    "a terminated command raises its irq");
 		failures ++;

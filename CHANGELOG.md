@@ -1,5 +1,25 @@
 ## Round 485 (#485) -- 242 of 256 opcodes ended a command and never raised its interrupt
 
+> ### *** THIS ROUND SHIPPED WITHOUT A PASS 2, AND A GATE CAUGHT IT RATHER THAN I DID. ***
+>
+> It went from pass-1 design straight to implementation and commit. `precommit_check.sh`
+> refused the **next** commit until a pass-2 receipt for `d819188` existed.
+>
+> **The pass then paid for the rule in one use.** It found three things, from three different
+> seats, one of them a substitute transport that cannot read a file:
+>
+> * **`M10_seclock`** -- the SEC arm's assert behind a latch of its own -- **escaped all four
+>   legs**, 128 rows, 0 failures. Fixed in-round with a fifth leg.
+> * an **L4 in the shipped comment**: a boot census resting on an artifact that was not
+>   preserved.
+> * a **second L4 in that same sentence**, which my correction quoted verbatim and so carried
+>   forward: **`0xE0` is `WDCC_STANDBY_IMMED` and has no case**, so it lands in `default:`,
+>   not in the SEC arm where the comment said *here*. One arm's comment claimed the other
+>   arm's traffic.
+>
+> *Recorded here and not only in the round's table, because the CHANGELOG is what a reader
+> consults, and without this the block reads as a normal lifecycle.*
+
 `wdc_command()` has five arms that terminate a command with `WDCE_ABRT`. Two never raised the
 completion interrupt: the six `WDCC_SEC_*` opcodes and `default:`. Two statements, two arms.
 Detector **128 rows**, gate **PASS (334 checks)**, kill table **7 of 7**.
