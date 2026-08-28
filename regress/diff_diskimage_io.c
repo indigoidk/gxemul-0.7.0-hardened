@@ -176,6 +176,599 @@ static void mkdisk(struct diskimage *d, const char *path, const char *mode,
  *  must contain EXACTLY ONE 'V'.  A value-only oracle would be satisfied by
  *  reading the same byte twice; a count cannot be.
  */
+/*  ------------------------------------------------------------------  */
+/*  SECTION: a SHORT READ in a NON-FINAL iteration (row shortread)       */
+/*
+ *  THE DEFECT.  fread_helper() splits an overlayed read into
+ *  OVERLAY_BLOCK_SIZE pieces.  When a piece comes up SHORT it advances by
+ *  the REQUESTED length while accumulating the ACTUAL one:
+ *
+ *      len          -= lentoread;   <- requested
+ *      totallenread += lenread;     <- actual
+ *      buf          += lentoread;   <- requested
+ *
+ *  so the shortfall becomes a HOLE at the position where it happened, and
+ *  every later iteration still lands at its correct final offset.  The
+ *  caller then zero-fills the TAIL:
+ *
+ *      if (lendone >= 0 && lendone < (ssize_t)len)
+ *              memset(buf + lendone, 0, len - lendone);
+ *
+ *  *** THAT ZERO-FILL IS CORRECT ONLY IF THE SHORTFALL WAS AT THE END. ***
+ *  For a short read in a NON-FINAL iteration it is wrong twice over: the
+ *  hole in the middle keeps whatever the caller buffer held, and the memset
+ *  destroys an equal number of VALID bytes at the tail.  The access returns
+ *  1, so nothing surfaces to the caller.
+ *
+ *  HOW THE SHORT READ IS PRODUCED -- a real construction, not an injected
+ *  failure: diskimage_add_overlay() does NOT check the data file length
+ *  against the image, and the bitmap alone decides which blocks are live.
+ *  So an overlay whose .map claims block 0 while its data file is 200 bytes
+ *  long is accepted silently, and reading block 0 returns 200.
+ *
+ *  *** AN EARLIER DRAFT OF THIS COMMENT SAID 'a host that ran out of space
+ *  while writing an overlay leaves exactly this state'.  THAT IS FALSE, and a
+ *  panel seat settled it by opening the function I had not: fwrite_helper()
+ *  returns 0 on a short overlay write BEFORE calling
+ *  overlay_set_block_in_use(), so the bitmap never claims the block and a
+ *  later read takes the BASE. ***  GXemul's own writer cannot produce this
+ *  state.  What can: a hand-made .map, a user-supplied V: overlay, truncation
+ *  of an already-claimed overlay file, or a genuine read-side I/O error.
+ *  R: cannot -- it starts empty+empty and unlinks both files.
+ *
+ *  ORACLE = TWO COUNTS AND A SENTINEL, NOT A VALUE.  The buffer is
+ *  pre-filled with X.  A correct read of 1536 bytes at offset 0 leaves 200
+ *  V (the overlay real bytes), 312 NUL (the unbacked remainder of block 0)
+ *  and 1024 B (blocks 1-2 from base), and NO X anywhere.  The shipping code
+ *  leaves 312 X in the middle and only 712 B, because the memset ate the
+ *  last 312 of them.
+ */
+/*  Release a diskimage opened by this section: the overlay FILE handles are
+    what matter, because ROW Z opens a SECOND overlay on the same struct and a
+    leaked handle would make its bitmap read from the first one.  */
+/*  IDEMPOTENT BY CONSTRUCTION, and that is the point rather than tidiness: this
+    section opens SEVEN disks and a review seat found four of them unfreed.  A
+    balancing pass that can double-free is worse than the leak -- I crashed the
+    binary that way once in this round -- so the helper NULLs what it closes and
+    a second call is a no-op.  */
+static void altctl_shortread_free(struct diskimage *d)
+{
+	int k;
+	for (k = 0; k < d->nr_of_overlays; k++) {
+		if (d->overlays[k].f_data != NULL)
+			fclose(d->overlays[k].f_data);
+		if (d->overlays[k].f_bitmap != NULL)
+			fclose(d->overlays[k].f_bitmap);
+	}
+	free(d->overlays);
+	d->overlays = NULL;
+	d->nr_of_overlays = 0;
+	if (d->f != NULL)
+		fclose(d->f);
+	d->f = NULL;
+}
+
+/*
+ *  ------------------------------------------------------------------
+ *  CONTRACT (vacuity-floor clause (e)) -- WHAT THIS SECTION IS DESIGNED
+ *  TO CATCH, and what it is NOT.  Stated so a later escape is either
+ *  OUTSIDE the contract or a BREACH of it, rather than an argument about
+ *  whether the round overclaimed.
+ *
+ *  IT CATCHES, each by a MEASURED kill recorded in the round block:
+ *    * the defect itself, at three positions -- overlay layer / base
+ *      layer / iteration 2 (the original rows, ROW L, ROW I);
+ *    * reinstating the defect verbatim -- M1_revert, which reddens the
+ *      original four rows AND ROW L, ROW I, ROW W and ROW T, because all
+ *      four fire on the REAL defect and not only on their own mutants.
+ *      ROW P, ROW U, ROW Z and ROW S do NOT: they are green pre-fix by
+ *      design and are discharged by their mutants instead.  The pre-fix
+ *      run (PREFIX_98rows.out, 18 failures) is the deriver;
+ *    * weakening the fill's dominating predicate     (M2, M5_gtzero);
+ *    * nulling the repair while keeping the guard   (M3_countonly);
+ *    * swapping the memset's length or destination for another in-scope
+ *      quantity            (M4_remain, M7_dst, M10, M12, M13);
+ *    * narrowing the fill to the OVERLAY layer          (M8_layer);
+ *    * narrowing the fill to the FIRST iteration    (M9_firstiter);
+ *    * narrowing the fill to the first SHORT per call    (E3, ROW S);
+ *    * narrowing the fill by a THRESHOLD on totallenread (E2, ROW S);
+ *    * narrowing the fill by WRITABILITY                 (E1, ROW W);
+ *    * narrowing the fill by disk TYPE                   (E4, ROW T).
+ *
+ *  *** THE FIRST THREE ARE STATED AT INSTANCE GRANULARITY ON PURPOSE. ***
+ *  An earlier draft said 'narrowing by ITERATION' as a CLASS while listing
+ *  a counter-instance of that same class two paragraphs down as NOT
+ *  caught.  A contract written at class granularity and discharged by one
+ *  instance each is an overclaim, and it contradicted itself in one
+ *  comment.  Caught by a review seat on pass 2.
+ *
+ *  IT DOES NOT CATCH, and these are MEASURED escapes filed as coverage
+ *  debt rather than hidden:
+ *    * NOTHING, as of ROW S and ROW T.  Every escape either pass found is
+ *      now killed -- E1 by ROW W, E4 by ROW T, and E2 AND E3 both by ROW S
+ *      (`mutant_E{1,2,3,4}_*_98rows.out`, 2/3/3/2 failures).
+ *
+ *  ONE CLASS STAYS OPEN AND IS FILED, and it is a class rather than an
+ *  escape: FITTED-THRESHOLD conjuncts.  ROW S kills `< 1024`'s instance,
+ *  but `< 2048` would escape, and so on -- the ladder's limit is the fix
+ *  itself, so NO FINITE ROW SET CLOSES IT and chasing it is the unbounded
+ *  fix-of-fix shape.  Filed as a class, deliberately, not as a gap.
+ *
+ *  IT CANNOT CATCH, by construction rather than by omission: anything
+ *  about REACHABILITY.  This is a rung-1 differential and every
+ *  precondition in it is hand-built.  The round's reachability evidence
+ *  is a separate rung-3 witness on unmodified landisk.
+ *
+ *  TWO MUTANTS ARE MEASURED **EQUIVALENT** and are recorded as results,
+ *  not as gaps -- a mutant that will not die is a finding about the code:
+ *    * `len - lenread` as the fill length: `buf + len` is invariant at the
+ *      original request's end (buf rises by lentoread exactly as len
+ *      falls by it), so it can never write past the request and only
+ *      over-zeroes bytes later iterations rewrite.  0 differing cases in
+ *      149,072.
+ *    * `lenread < lentoread` for `!=`: fread cannot return more than
+ *      requested.  0 differing cases in 149,072.
+ */
+static void section_short_read_midtransfer(void)
+{
+	char base[256], ovl[256], map[256];
+	struct diskimage d;
+	unsigned char buf[2048];
+	FILE *f;
+	size_t got;
+	int i, nv, nb, nx, nz;
+
+	snprintf(base, sizeof(base), "%s/shortread_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_ovl.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_ovl.img.map", WORK);
+
+	/*  Base image: 4096 bytes of B.  */
+	mkfile(base, 4096, 'B');
+
+	/*  Overlay DATA: TRUNCATED to 200 bytes of V.  This is the whole
+	    construction -- the bitmap below claims a 512-byte block the file
+	    cannot supply, and nothing in diskimage_add_overlay() objects.  */
+	mkfile(ovl, 200, 'V');
+
+	/*  Overlay BITMAP: 0x01 marks block 0 ONLY.  */
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x01, f);
+	fclose(f);
+
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP diskimage_add_overlay failed -- rows not run\n");
+		return;
+	}
+
+	/*  [LIVE] The overlay is wired: an aligned read of block 0 returns the
+	    200 bytes the file DOES have.  Without this a green defect row could
+	    mean the overlay was never consulted at all.  */
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 512);
+	for (i = 0, nv = 0; i < 512; i++)
+		if (buf[i] == 'V') nv++;
+	check("[LIVE] truncated overlay supplies its 200 real bytes", nv, 200);
+
+	/*  [LIVE] ... and this shortfall is at the END of the read, which is the
+	    case the caller tail memset was written for.  It is CORRECT here, and
+	    that is exactly why the defect below is invisible in normal use.  */
+	for (i = 0, nx = 0; i < 512; i++)
+		if (buf[i] == 'X') nx++;
+	check("[LIVE] a FINAL-iteration shortfall is zero-filled correctly", nx, 0);
+	check("[LIVE] and it still reports success", (long long)got, 1);
+
+	/*  [LIVE] The bitmap discriminates: block 1 comes from base.  Without
+	    this, liveness 1 is satisfied by an overlay answering every block.  */
+	memset(buf, 'X', sizeof(buf));
+	(void) diskimage__internal_access(&d, 0, 512, buf, 512);
+	for (i = 0, nb = 0; i < 512; i++)
+		if (buf[i] == 'B') nb++;
+	check("[LIVE] bitmap discriminates: block 1 is all base", nb, 512);
+
+	/*  THE DEFECT.  1536 bytes at offset 0 crosses THREE blocks: block 0 from
+	    the truncated overlay (200 of 512 bytes available), then blocks 1-2
+	    from base.  The shortfall is now in the FIRST of three iterations.  */
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1536);
+
+	for (i = 0, nx = 0; i < 1536; i++)
+		if (buf[i] == 'X') nx++;
+	check("short read: caller bytes the read never wrote", nx, 0);
+
+	for (i = 0, nb = 0; i < 1536; i++)
+		if (buf[i] == 'B') nb++;
+	check("short read: base bytes surviving the tail zero-fill", nb, 1024);
+
+	/*  The two above are the SAME defect counted at its two ends, and both
+	    are kept on purpose: a fix that only stops the loop early greens the
+	    first and leaves the second at 712.  */
+	for (i = 0, nv = 0; i < 1536; i++)
+		if (buf[i] == 'V') nv++;
+	check("short read: overlay bytes are the 200 that exist", nv, 200);
+
+	for (i = 0, nz = 0; i < 1536; i++)
+		if (buf[i] == 0) nz++;
+	check("short read: NUL fill covers exactly the unbacked hole", nz, 312);
+
+	/*  [CONTROL] The access reports SUCCESS either way.  This row does not
+	    change under the fix and is here to record that nothing surfaces --
+	    the fatal() inside fread_helper() prints, but the return value is 1
+	    and the guest sees a completed read.  */
+	check("short read: reports success either way [CONTROL]", (long long)got, 1);
+
+	/*  [ANCHOR] Position, not just population.  The four counts above are
+	    invariant under any permutation of the buffer, so they cannot tell a
+	    hole at 200 from a hole at 1224.  These pin WHERE each region is,
+	    which is what makes the section absolute rather than relative.  */
+	check("[ANCHOR] byte 199 is the last real overlay byte", buf[199], 'V');
+	check("[ANCHOR] byte 200 is the first unbacked byte", buf[200], 0);
+	check("[ANCHOR] byte 512 is the first base byte", buf[512], 'B');
+	check("[ANCHOR] byte 1535 is still a base byte", buf[1535], 'B');
+
+
+	/*  ROW P -- THE FILL IS BOUNDED BY THE REQUEST, NOT BY THE BLOCK.
+
+	    *** EVERY ROW ABOVE IS BLIND TO `lentoread - lenread` -> `remain -
+	    lenread` BY CONSTRUCTION: every iteration above starts at an ALIGNED
+	    offset, so inblock == 0, remain == 512 == lentoread, and the two
+	    expressions are THE SAME NUMBER. ***  An EQUIVALENT mutant over the
+	    probed set.  Found by two panel seats on pass 1 against a table that
+	    was otherwise clean.
+
+	    A PARTIAL-BLOCK request separates them.  300 bytes at offset 0 from
+	    a 200-byte overlay:
+
+	        inblock = 0   remain = 512   len = 300   lentoread = 300
+	        lenread = 200 (the file has no more)
+
+	        correct   memset(buf + 200, 0, 300 - 200) = 100  -> stops at 300
+	        mutant    memset(buf + 200, 0, 512 - 200) = 312  -> runs to 512
+
+	    so the mutant writes 212 bytes PAST THE END OF THE REQUEST.  That is
+	    an overrun of the caller's buffer, not a mis-count, which is why the
+	    oracle is THE SENTINEL SURVIVING past byte 300 rather than a total.  */
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 300);
+
+	for (i = 300, nx = 0; i < 512; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW P partial block: sentinel past the request untouched", nx, 212);
+
+	for (i = 0, nv = 0; i < 300; i++)
+		if (buf[i] == 'V') nv++;
+	check("ROW P partial block: the 200 real overlay bytes arrive", nv, 200);
+
+	for (i = 200, nz = 0; i < 300; i++)
+		if (buf[i] == 0) nz++;
+	check("ROW P partial block: shortfall inside the request filled", nz, 100);
+	check("ROW P partial block: reports success [CONTROL]", (long long)got, 1);
+
+	/*  ROW U -- THE SAME SEPARATION BY OFFSET, WHICH IS THE STRONGER FORM.
+	    ROW P has inblock == 0; here inblock != 0, so `remain` and
+	    `lentoread` differ for a SECOND independent reason and a mutant that
+	    survives one cannot survive both.  50 bytes at offset 150:
+
+	        inblock = 150   remain = 362   len = 50   lentoread = 50
+	        lenread = 50 of the overlay's first 200 bytes -> NOT short
+
+	    ... so the short case needs the read to start inside the backed
+	    region and run past it: 100 bytes at offset 150 gives lenread = 50
+	    (bytes 150..199 exist, 200..249 do not).
+
+	        correct   memset(buf + 50, 0, 100 - 50)  = 50  -> stops at 100
+	        mutant    memset(buf + 50, 0, 362 - 50)  = 312 -> runs to 362  */
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 150, buf, 100);
+
+	for (i = 100, nx = 0; i < 512; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW U unaligned: sentinel past the request untouched", nx, 412);
+
+	for (i = 0, nv = 0; i < 100; i++)
+		if (buf[i] == 'V') nv++;
+	check("ROW U unaligned: the 50 backed bytes arrive", nv, 50);
+
+	for (i = 50, nz = 0; i < 100; i++)
+		if (buf[i] == 0) nz++;
+	check("ROW U unaligned: the unbacked 50 are filled", nz, 50);
+	check("ROW U unaligned: reports success [CONTROL]", (long long)got, 1);
+
+	altctl_shortread_free(&d);
+
+	/*  ROW Z -- AN EMPTY OVERLAY, WHICH IS THE ONLY WAY TO REACH lenread == 0.
+
+	    *** THIS ROW IS GREEN BEFORE THE FIX AND AFTER IT, AND THAT IS
+	    CORRECT. ***  A whole-read shortfall IS a final-iteration shortfall,
+	    so the caller's tail memset already covers it.  The row exists to
+	    REDDEN under `if (lenread != lentoread)` -> `if (lenread > 0)`, which
+	    every other row in this file passes: on a full block lenread ==
+	    lentoread and memset(...,0,0) is a no-op, and on the short blocks
+	    above lenread is 200 or 50, both > 0.
+
+	    An accept-side row is not discharged by EXISTING -- it is discharged
+	    by a MEASURED KILL, and this one's kill is recorded in the round's
+	    mutant table.  */
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_empty.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_empty.img.map", WORK);
+	mkfile(ovl, 0, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x01, f);
+	fclose(f);
+
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP empty overlay failed -- ROW Z not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 512);
+	for (i = 0, nz = 0; i < 512; i++)
+		if (buf[i] == 0) nz++;
+	check("ROW Z empty overlay: all 512 bytes are zero-filled", nz, 512);
+	check("ROW Z empty overlay: reports success [CONTROL]", (long long)got, 1);
+
+	/*  ROW L -- A SHORT ON THE **BASE** LAYER.
+
+	    *** EVERY ROW ABOVE SHORTS ON THE OVERLAY, so `&& overlay_nr >= 0`
+	    on the fill is invisible to all of them. ***  One conjunct, and it
+	    reads like a plausible narrowing -- 'we only meant to handle the
+	    overlay case'.  Found by a panel seat on pass 1.
+
+	    Base TRUNCATED to 300 bytes; overlay claims block 1 ONLY (map 0x02).
+	    A 1024-byte read at 0 then shorts on the BASE in iteration 1 and
+	    succeeds on the OVERLAY in iteration 2:
+
+	        correct   300 B, 212 NUL, 512 V
+	        mutant    300 B, 212 SENTINEL, 512 V   (no fill: base layer)  */
+	snprintf(base, sizeof(base), "%s/shortread_basetrunc.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_ovlfull.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_ovlfull.img.map", WORK);
+	mkfile(base, 300, 'B');
+	mkfile(ovl, 4096, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x02, f);	/*  block 1 ONLY  */
+	fclose(f);
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP base-truncated overlay failed -- ROW L not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1024);
+	for (i = 0, nx = 0; i < 1024; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW L base-layer short: no sentinel survives", nx, 0);
+	for (i = 0, nv = 0; i < 1024; i++)
+		if (buf[i] == 'V') nv++;
+	check("ROW L base-layer short: the later overlay block arrives", nv, 512);
+	check("[ANCHOR] ROW L byte 300 is the first unbacked byte", buf[300], 0);
+	check("[ANCHOR] ROW L byte 512 is the first overlay byte", buf[512], 'V');
+	altctl_shortread_free(&d);
+
+	/*  ROW I -- A SHORT IN ITERATION **2**.
+
+	    *** EVERY ROW ABOVE SHORTS IN ITERATION 1, so `&& totallenread == 0`
+	    -- or the equivalent `&& curofs == offset` -- is invisible to all of
+	    them. ***  The other one-conjunct narrowing the seat named.
+
+	    Overlay data 700 bytes, bitmap claims blocks 0 AND 1 (map 0x03).
+	    A 1536-byte read at 0: block 0 reads its full 512, block 1 gets only
+	    the remaining 188, block 2 comes from base.
+
+	        correct   700 V, 324 NUL, 512 B
+	        mutant    700 V, 324 SENTINEL, 512 B  (no fill: not iteration 1)  */
+	snprintf(base, sizeof(base), "%s/shortread_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_ovl700.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_ovl700.img.map", WORK);
+	mkfile(base, 4096, 'B');
+	mkfile(ovl, 700, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x03, f);	/*  blocks 0 AND 1  */
+	fclose(f);
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP 700-byte overlay failed -- ROW I not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1536);
+	for (i = 0, nx = 0; i < 1536; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW I short in iteration 2: no sentinel survives", nx, 0);
+	for (i = 0, nv = 0; i < 1536; i++)
+		if (buf[i] == 'V') nv++;
+	check("ROW I short in iteration 2: all 700 overlay bytes arrive", nv, 700);
+	for (i = 0, nb = 0; i < 1536; i++)
+		if (buf[i] == 'B') nb++;
+	check("ROW I short in iteration 2: the later base block arrives", nb, 512);
+	check("[ANCHOR] ROW I byte 700 is the first unbacked byte", buf[700], 0);
+	check("[ANCHOR] ROW I byte 1024 is the first base byte", buf[1024], 'B');
+	check("ROW I short in iteration 2: reports success [CONTROL]", (long long)got, 1);
+
+	/*  ROW W -- A READ-ONLY DISK, and it is the one row taken from the
+	    capped ask-again.
+
+	    *** ADDING THE SINGLE CONJUNCT `&& d->writable` TO THE FILL GUARD
+	    PASSES ALL 86 ROWS ABOVE **AND** ALL 149,072 CASES OF AN
+	    EQUIVALENCE SWEEP. ***  The sweep is not weak -- it varied base
+	    size, overlay size, bitmap, offset and length, and it caught its
+	    two controls at 69,880 and 9,686 differing cases.  It is blind
+	    because NEITHER IT NOR ANY ROW EVER OPENS A DISK WITH
+	    d->writable == 0.
+
+	    Writability is not a length, an offset or a layer, so no amount of
+	    sweeping those three could ever reach it.  That is this round's own
+	    finding -- the fixture varies one dimension and the mutant lives in
+	    another -- turned on the instrument built to enforce it.
+
+	    Same truncated overlay, same 1536-byte read, one changed argument:
+	    the disk is opened NOT writable.  Under the mutant the fill is
+	    skipped and the 312 stale sentinel bytes come back.  */
+	snprintf(base, sizeof(base), "%s/shortread_ro_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_ro_ovl.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_ro_ovl.img.map", WORK);
+	mkfile(base, 4096, 'B');
+	mkfile(ovl, 200, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x01, f);
+	fclose(f);
+
+	/*  the ONE changed argument: mode "r" and writable 0  */
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r", 0);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP read-only overlay failed -- ROW W not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1536);
+
+	for (i = 0, nx = 0; i < 1536; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW W read-only disk: no sentinel survives", nx, 0);
+
+	for (i = 0, nb = 0; i < 1536; i++)
+		if (buf[i] == 'B') nb++;
+	check("ROW W read-only disk: all base bytes survive", nb, 1024);
+
+	/*  [LIVE] the disk really is read-only -- without this the row could go
+	    green because the mode argument was ignored.  */
+	check("[LIVE] ROW W the disk is not writable", d.writable, 0);
+	check("[ANCHOR] ROW W byte 200 is the first unbacked byte", buf[200], 0);
+
+
+	/*  ROW T -- AN IDE-TYPED DISK, and it is the sharpest of the three
+	    unvaried-field escapes because of WHERE its mutant fires.
+
+	    *** `&& d->type == DISKIMAGE_SCSI` ON THE FILL GUARD PASSES EVERY
+	    ROW IN THIS FILE AND ALL 149,072 SWEEP CASES, because mkdisk()
+	    hardcodes DISKIMAGE_SCSI and nothing ever varies it. ***
+
+	    That much it shares with the two escapes this round FILED.  What
+	    it does not share is its target: wdc__read() looks up
+	    DISKIMAGE_IDE, and landisk's default disk type is IDE -- so this
+	    conjunct RE-OPENS THE DEFECT ON THE ONLY GUEST PATH THE ROUND
+	    ACTUALLY DROVE.  The rung-3 witness would go red while every row
+	    here stayed green.  The two filed escapes do not do that; both
+	    still fill on the 3-sector witness read, which shorts once in
+	    iteration 1.
+
+	    Found by a review seat on pass 2 and taken under L1 (pre-ship
+	    construction), NOT under the ask-again, whose cap was already
+	    spent.  Same truncated overlay, same 1536-byte read; the one
+	    changed thing is the disk's TYPE.
+
+	    Scope, so the row is not read as covering more than it does:
+	    `&& d->id == 0` and `&& d->logical_block_size == 512` are the same
+	    unvaried-field class but would still fill for landisk drive 0 at
+	    512, so they do not re-open the witnessed path.  And
+	    `&& !d->is_a_cdrom` is NOT this class -- internal_access never
+	    reaches fread_helper with is_a_cdrom set, so it is EQUIVALENT
+	    inside this function.  */
+	snprintf(base, sizeof(base), "%s/shortread_ide_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_ide_ovl.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_ide_ovl.img.map", WORK);
+	mkfile(base, 4096, 'B');
+	mkfile(ovl, 200, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x01, f);
+	fclose(f);
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r+", 1);
+	d.type = DISKIMAGE_IDE;	/*  the ONE changed field  */
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP IDE overlay failed -- ROW T not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1536);
+
+	for (i = 0, nx = 0; i < 1536; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW T IDE-typed disk: no sentinel survives", nx, 0);
+
+	for (i = 0, nb = 0; i < 1536; i++)
+		if (buf[i] == 'B') nb++;
+	check("ROW T IDE-typed disk: all base bytes survive", nb, 1024);
+
+	/*  [LIVE] the type really is IDE -- without this the row could go green
+	    because the assignment was optimised away or overwritten.  */
+	check("[LIVE] ROW T the disk type is IDE", d.type, DISKIMAGE_IDE);
+	check("[ANCHOR] ROW T byte 200 is the first unbacked byte", buf[200], 0);
+
+
+	/*  ROW S -- TWO SHORTS IN ONE CALL, and it closes both of the escapes
+	    this round would otherwise have filed.
+
+	    Overlay data 200 bytes, bitmap 0x05 (blocks 0 AND 2), read 1536 at 0:
+
+	      iter 1  block 0 -> overlay, 200 of 512                  SHORT #1
+	      iter 2  block 1 -> base (bit 1 clear), 512 of 512       full
+	      iter 3  block 2 -> overlay, seek 1024 into a 200-byte
+	                         file, so lenread == 0                SHORT #2
+
+	    Correct: 200 V, 312 NUL, 512 B, 512 NUL.
+
+	    *** IT KILLS BOTH. ***  Under 'fill only the first short per call'
+	    the second short is never filled -- 512 stale bytes.  Under
+	    `&& totallenread < 1024` iteration 3 arrives with totallenread
+	    exactly 1024, so the conjunct is false and the fill is skipped --
+	    the same 512 stale bytes.
+
+	    The reason for taking it rather than filing it is not tidiness: this
+	    fatal() is unlatched and guest-floodable, the house idiom for such a
+	    site is latch-plus-fatal, and THE NATURAL BAD LATCH EDIT BRACES THIS
+	    MEMSET IN WITH THE FATAL -- which is precisely the first-short-only
+	    shape.  It is the most plausible future edit in the round.
+
+	    What it does NOT do is close the fitted-threshold CLASS.  Kill
+	    `< 1024` with this row and `< 2048` escapes; no finite row set closes
+	    that ladder, and chasing it is the unbounded-fix-chain shape.  This
+	    row closes that escape's INSTANCE, and the class stays filed.  */
+	snprintf(base, sizeof(base), "%s/shortread_two_base.img", WORK);
+	snprintf(ovl,  sizeof(ovl),  "%s/shortread_two_ovl.img",  WORK);
+	snprintf(map,  sizeof(map),  "%s/shortread_two_ovl.img.map", WORK);
+	mkfile(base, 4096, 'B');
+	mkfile(ovl, 200, 'V');
+	f = fopen(map, "w+");
+	if (f == NULL) { perror(map); exit(1); }
+	fputc(0x05, f);	/*  blocks 0 AND 2, block 1 from base  */
+	fclose(f);
+	altctl_shortread_free(&d);
+	mkdisk(&d, base, "r+", 1);
+	if (!diskimage_add_overlay(&d, ovl, false)) {
+		printf("  SETUP two-short overlay failed -- ROW S not run\n");
+		return;
+	}
+	memset(buf, 'X', sizeof(buf));
+	got = diskimage__internal_access(&d, 0, 0, buf, 1536);
+
+	for (i = 0, nx = 0; i < 1536; i++)
+		if (buf[i] == 'X') nx++;
+	check("ROW S two shorts in one call: no sentinel survives", nx, 0);
+
+	for (i = 0, nb = 0; i < 1536; i++)
+		if (buf[i] == 'B') nb++;
+	check("ROW S two shorts: the middle base block arrives", nb, 512);
+
+	/*  [ANCHOR] the SECOND hole specifically -- a population count cannot
+	    tell a hole at 1024 from one at 200, and both mutants leave the
+	    second one only.  */
+	check("[ANCHOR] ROW S byte 1024 is in the SECOND unbacked hole", buf[1024], 0);
+	check("[ANCHOR] ROW S byte 1535 is the last unbacked byte", buf[1535], 0);
+	altctl_shortread_free(&d);
+}
+
 static void section_overlay_unaligned(void)
 {
 	char base[256], ovl[256], map[256];
@@ -281,18 +874,18 @@ static void section_overlay_unaligned(void)
 	    predicate `len > remain`, and clause (d) says weaken it to the
 	    least-restrictive form that still READS like the same check.  Two were
 	    found, and BOTH pass every row above:
-	
+
 	      len > OVERLAY_BLOCK_SIZE ? remain : len   (bound relaxed)
 	      remain = inblock ? 1 : OVERLAY_BLOCK_SIZE (remainder faked)
-	
+
 	    They survive because the rows above only ever produce inblock in {0,511}
 	    and len > 512.  This row breaks both assumptions at once: an unaligned
 	    offset with a SHORT length that still crosses a block boundary.
-	
+
 	    THE CALLER IS REAL, not hypothetical: bootblock_iso9660.c:281-282 reads
 	    256 bytes at a dirofs snapped only to 2048 (:275-276), i.e. arbitrary
 	    mod 512.  This round's own census had already named that arm.
-	
+
 	    510..511 are block 0 (overlay); 512 is block 1 (base).  Exactly TWO
 	    overlay bytes is correct.  pristine and the relaxed-bound mutant both
 	    yield 3; the faked-remainder mutant yields 1.  */
@@ -1226,6 +1819,7 @@ int main(int argc, char *argv[])
 	section_roundup_gap();
 	section_boundary();
 	section_overlay_unaligned();
+	section_short_read_midtransfer();
 	section_pass2_gaps();
 	section_real_images();
 
@@ -1236,7 +1830,7 @@ int main(int argc, char *argv[])
 	 *  which ran is the file that was reviewed.  Last, so it counts every
 	 *  row above it.
 	 */
-	check("[IDENTITY] row count -- guards against a stale copy", rows + 1, 53);
+	check("[IDENTITY] row count -- guards against a stale copy", rows + 1, 98);
 
 	printf("\n%d rows, %d failures, %d faults\n", rows, failures, faults);
 	printf("%s\n", (failures == 0 && faults == 0) ?

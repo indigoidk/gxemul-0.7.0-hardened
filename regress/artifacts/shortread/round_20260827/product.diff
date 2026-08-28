@@ -1,0 +1,83 @@
+diff --git a/src/disk/diskimage.c b/src/disk/diskimage.c
+index 92ad080..6873bfb 100644
+--- a/src/disk/diskimage.c
++++ b/src/disk/diskimage.c
+@@ -1406,14 +1406,73 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
+ 		if (lenread != lentoread) {
+ 			fatal("[ INCOMPLETE READ from disk id %i, offset"
+ 			    " %lli ]\n", d->id, (long long)curofs);
++
++			/*  #488: ZERO-FILL THE SHORTFALL AT ITS OWN POSITION.  The three
++			    accounting lines below disagreed about which length they use:
++			    `buf` advanced by the REQUESTED amount while `totallenread`
++			    counted the ACTUAL one, so a short read left a HOLE where it
++			    happened while every later iteration still landed at its correct
++			    final offset.  The caller then zero-filled the TAIL, which is
++			    correct ONLY IF THE SHORTFALL WAS AT THE END.  For a NON-FINAL
++			    iteration it was wrong twice over: the hole kept whatever the
++			    caller's buffer held, and the memset destroyed an equal number
++			    of VALID bytes at the far end -- and the access still returned 1.
++
++			    MEASURED, 1536 bytes at offset 0 over a 200-byte overlay claiming
++			    block 0: 312 stale caller bytes in the middle, 712 of 1024 base
++			    bytes surviving.  In wdc__read those stale bytes are not abstract:
++			    the common arm reads straight into the persistent ring, so the
++			    hole is prior-sector data replayed to the guest; the wrap arm
++			    reads into an UNINITIALISED automatic array and then copies every
++			    byte into that ring regardless of what the read actually filled.
++
++			    THE ALTERNATIVE WAS BUILT AND MEASURED, AND IT IS WORSE.  Stopping
++			    the loop and reporting the contiguous prefix makes the caller's
++			    tail memset correct by construction, but it discards every healthy
++			    byte after the short one -- up to 63.5 sectors of a 64-sector
++			    wdc__read.  A rung-3 witness on unmodified landisk reads 0x0000
++			    where the disk holds 'B','B' under BOTH the old code and that
++			    variant, and 0x4242 under this one.  It is not fail-stop; it is
++			    fail-more.
++
++			    And this is the fork's own shape rather than a new one:
++			    diskimage_access__cue()'s first arm already zero-fills an unbacked
++			    chunk in place, counts it, and continues.  */
++			memset(buf + lenread, 0, lentoread - lenread);
+ 		}
+ 
+ 		len -= lentoread;
+-		totallenread += lenread;
+-		/*  #472: advance by what was CONSUMED.  A fixed stride paired with
+-		    a clamped read leaves HOLES -- a half-fix keeping this line passes
+-		    a wrong-layer check and still corrupts, which is why the detector
+-		    carries a row counting bytes the read never wrote.  */
++		totallenread += lentoread;
++		/*  #472/#488: buf, len and totallenread all advance by the size of the
++		    slice CLAIMED from the request (lentoread) -- never a fixed stride,
++		    which was #472's hole, and never fread's return value.
++
++		    *** #472's WORDING HERE WAS 'advance by what was CONSUMED', AND THAT
++		    WAS AN L4: `lentoread` is what was REQUESTED. ***  The two are equal
++		    on a full read and differ on exactly the short read #488 is about,
++		    so the comment was true in the common case and false in the only
++		    case it was written for.  #472 named the hazard class correctly,
++		    shipped a detector row for it, named the fix -- and then advanced by
++		    the requested length anyway.  Found by a seat that could not open
++		    this file, from inlined text alone, while four seats that could had
++		    the whole tree.
++
++		    The invariant is now CLAIMED AND MADE WHOLE: on a short read the
++		    missing tail of THIS block was zero-filled in place above, so the
++		    slice is complete by convention and the next block must land at its
++		    own position.  Counting `lenread` anywhere here re-opens the defect,
++		    because the caller reads the return value as a CONTIGUOUS-PREFIX
++		    length and zero-fills the tail, destroying good bytes at the far
++		    end.
++
++		    NOTE the consequence, recorded rather than left to be rediscovered:
++		    on the overlaid path this function now returns `len` or 0, so the
++		    caller's `lendone < len` memset is a deliberate no-op HERE.  It is
++		    NOT dead -- MEASURED by deleting it, which reddens the round-up-gap
++		    row on a flat no-overlay image that all five rig images rely on.  It
++		    has four live producers: this function's fast path, both in-loop
++		    fseek failures, and the no-overlay fseek failure.  Do not simplify
++		    it away, and do not assert lendone == len.  */
+ 		buf += lentoread;
+ 	}
+ 

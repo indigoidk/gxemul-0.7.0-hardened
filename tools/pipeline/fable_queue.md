@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `wdcnoirq` (regress:fable5) · `wdcoddstep` (regress:fable5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `shortread` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `wdcnoirq` (regress:fable5) · `wdcoddstep` (regress:fable5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 28 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 29 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1066,3 +1066,31 @@ design straight to a table.
 **Should that check be MANDATORY before any kill table rather than recommended?** It would have
 cost one grep and saved two floor breaches and a whole pass. I argue yes — but it adds a
 required step to every round, which needs your ruling rather than mine.
+
+## shortread (#488) -- regress stage (queued 2026-08-27)
+
+**A rule question the round produced by accident, and it is about BRIEFS rather than rows.**
+
+Three packet-fed seats refused to ratify pass 2 and all three named the SAME missing fact:
+the brief inlined a four-line window and not the function's `return`, so "the only consumer
+of `totallenread` is the tail memset" and "the overlaid path returns `len` or 0" were not
+checkable from the packet. Both are true. **But `fatal()` returning had been SETTLED IN
+PASS 1 of this same round, and I did not carry the settled fact into the pass-2 packet** --
+so three seats spent their answers re-deriving it, and one built a sound conditional defect
+report on top of it ("if `fatal()` does not return, the memset is dead code").
+
+**Should a pass-2 packet be REQUIRED to re-inline every premise pass 1 settled?** It costs a
+paragraph and it is mechanical -- the pass-1 record already lists them. I argue yes. What I
+cannot judge alone is whether that becomes a checkable brief-template line or stays prose,
+given this project's own finding that prose rules fire only when they sit in the artifact
+present at the moment of decision -- and a brief IS that artifact, which is the one place
+prose has demonstrably worked.
+
+**A second, smaller question in the same round.** The capped ask-again found three escapes.
+I took one and filed two, reasoning that "the cap says I may take only one". The adjudicator
+corrected the warrant: **the cap limits ASK-AGAINS, not FINDINGS** (`#452` took six rows from
+one ask), and `E1` was never discretionary anyway -- `if (X)` -> `if (X && Y)` on the
+dominating predicate is the canonical clause-(d) form, so it was a floor breach repaired
+in-round. Pass 2 then closed the other two as well. **Is "one ask, all its findings" the
+right reading, and should the carrier say so?** The cap's anti-runaway purpose survives
+either way, but the two readings differ by several rows per round.

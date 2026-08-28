@@ -18,6 +18,22 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed by #488, 2026-08-27: the FITTED-THRESHOLD mutant class
+>
+> **`shortthreshold`** -- `fread_helper()`'s in-place zero-fill can be narrowed by a
+> FITTED THRESHOLD on `totallenread` (`&& totallenread < 1024`), and **no finite row set
+> closes the class.**  `#488`'s ROW S kills the `< 1024` INSTANCE by shorting twice in one
+> call, with the second short landing at exactly `totallenread == 1024`; but `< 2048`
+> escapes, and so on up.  The ladder's limit is the fix itself.
+>
+> **Filed as a CLASS rather than as an escape, deliberately.**  Chasing it row by row is
+> the unbounded fix-of-fix shape this project has already paid for once.  What would close
+> it is a different KIND of oracle -- one asserting the fill happened on EVERY short rather
+> than at enumerated positions -- and nobody has designed one.
+>
+> *Recorded here because `#488`'s detector contract says this is filed, and a contract that
+> says FILED while nothing files it is false on arrival.  A review seat caught that.*
+>
 > ### OPEN — surfaced 2026-08-25 by fixing `check_bugfile_sync.py`, which had been blind to them
 >
 > **These thirteen rows were OPEN in the ledger and invisible here, and the check that exists
@@ -10299,7 +10315,10 @@ length and an unaligned offset.  The read helper never had that guard, and the l
 advance expression rounds up to a block boundary -- which is only meaningful if unaligned
 starts were expected.
 
-Fixed by clamping to the block remainder and advancing by what was consumed.  Seven detector
+Fixed by clamping to the block remainder and advancing by what was consumed.
+*** 'BY WHAT WAS CONSUMED' IS WRONG AND IS CORRECTED BY `#488`: `buf` advances by
+`lentoread`, the REQUESTED length.  Equal on a full read, different on the short read
+`#488` fixed. ***  Seven detector
 rows, two of which exist only because panel passes found mutants that escaped earlier drafts --
 one keeping the fixed stride, one relaxing the introduced predicate.  The second was a vacuity
 floor breach and was fixed in-round.

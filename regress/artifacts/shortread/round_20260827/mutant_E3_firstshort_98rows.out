@@ -1,0 +1,140 @@
+r411-C1 disk data-path differential (real diskimage.c + diskimage_scsicmd.c)
+  FAIL  @@SELFCHECK@@/small                                        = 1, want 2
+  FAIL  @@SELFCHECK@@/wide                                         = 4294967296, want 0
+  ok    SELFCHECK the comparator can still fail       small+wide
+
+SECTION 1 -- diskimage__internal_access(), write path
+  ok    [CONTROL] ordinary write returns success                   = 1
+  ok    [CONTROL] ordinary write actually landed                   = 1
+  ok    [CONTROL] write to non-writable disk returns failure       = 0
+        (evidence: file 8192 -> 8192 bytes of the 1024 asked, errno 27)
+  ok    [PROOF] short write (256 of 1024 absorbed) returns failure = 0
+        (evidence: file 8192 -> 8192 bytes of the 1024 asked, errno 27)
+  ok    [PROOF] write that lands 0 of 1024 bytes returns failure   = 0
+
+SECTION 2 -- diskimage__internal_access(), read path
+  ok    [CONTROL] in-range read returns success                    = 1
+  ok    [CONTROL] in-range read returns the real bytes             = 1
+        (evidence: buffer after the past-EOF read is ALL ZERO -- the guest cannot tell)
+  ok    [PROOF] read starting past EOF returns failure             = 0
+  ok    [PROOF] a refused read leaves NO caller bytes unwritten    = 1
+
+SECTION 3 -- SCSI READ / WRITE past the reported capacity
+        (disk is 10240 bytes; recalc says 1008 blocks of 512)
+  ok    [CONTROL] in-range SCSI READ(10) is accepted               = 1
+  ok    [CONTROL] in-range SCSI READ(10) status is GOOD            = 0
+  ok    [CONTROL] in-range SCSI READ(10) returns the real bytes    = 1
+        (evidence: handler returned 1, status 0x02, 512 bytes of data_in, first byte 0x00)
+  ok    [PROOF] SCSI READ(10) past capacity sets CHECK CONDITION   = 2
+        (evidence: image 10240 -> 10240 bytes; capacity 1008 -> 1008 blocks; handler returned 1, status 0x02)
+  ok    [PROOF] SCSI WRITE(10) past capacity does not grow the image = 10240
+  ok    [PROOF] SCSI WRITE(10) past capacity does not change the capacity = 1008
+  ok    [PROOF] SCSI WRITE(10) past capacity sets CHECK CONDITION  = 2
+
+SECTION 3b -- SCSI WRITE onto a backing store that is full
+        (evidence: image 10240 -> 10240 bytes, errno 0, status 0x02)
+  ok    [PROOF] SCSI WRITE onto a full store sets CHECK CONDITION  = 2
+
+SECTION 4 -- READ CAPACITY when the disk has zero blocks
+        (evidence: 1008 blocks -> announces last-block 1007)
+  ok    [CONTROL] normal disk announces blocks-1                   = 1007
+        (evidence: 0 blocks -> announces last-block 0x00000000 = 0 GB at 512 bytes/block)
+  ok    [PROOF] zero-block disk does not announce 0xffffffff       = 1
+
+SECTION 5 -- the gap between advertised capacity and the file
+        (evidence: file 10240 bytes, advertised 516096 bytes (1008 blocks) -- 505856 bytes of the advertised disk do not exist)
+        (evidence: reading block 1007 -- the last one READ CAPACITY advertises -- returns 1, buffer[0]=0x00)
+  ok    [CONTROL, and it is the warning] in-capacity read past EOF succeeds today = 1
+
+SECTION G -- the boundary, and the backed/advertised gap
+  ok    [CONTROL] WRITE of the last BACKED block is accepted       = 1
+  ok    [CONTROL] READ of the last BACKED block is accepted        = 1
+  ok    [CONTROL] READ inside the advertised gap still succeeds    = 1
+  ok    [CONTROL] ... and is zero-filled                           = 1
+  ok    [CONTROL] READ of the last ADVERTISED block succeeds       = 1
+  ok    [PROOF] WRITE into the advertised gap is refused           = 0
+  ok    [PROOF] ... and the host file did not grow                 = 512000
+  ok    [PROOF] WRITE one block past ADVERTISED is refused         = 0
+  ok    [PROOF] READ one block past ADVERTISED is refused          = 0
+  ok    [PROOF] WRITE starting in range but running off the end is refused = 0
+  ok    [PROOF] ... and that one did not grow the file either      = 512000
+  ok    [LIVE] aligned read of block 0 is all overlay              = 512
+  ok    [LIVE] aligned read of block 0 reports success             = 1
+  ok    [LIVE] aligned read of block 1 is all base                 = 512
+  ok    overlay unaligned: wrong-layer bytes in 1024 @ 511         = 1
+  ok    overlay unaligned: reports SUCCESS despite corruption      = 1
+  ok    overlay unaligned: bytes the read never wrote              = 0
+  ok    overlay short-unaligned: 510+3 crosses into base           = 2
+  ok    [LIVE] truncated overlay supplies its 200 real bytes       = 200
+  ok    [LIVE] a FINAL-iteration shortfall is zero-filled correctly = 0
+  ok    [LIVE] and it still reports success                        = 1
+  ok    [LIVE] bitmap discriminates: block 1 is all base           = 512
+  ok    short read: caller bytes the read never wrote              = 0
+  ok    short read: base bytes surviving the tail zero-fill        = 1024
+  ok    short read: overlay bytes are the 200 that exist           = 200
+  ok    short read: NUL fill covers exactly the unbacked hole      = 312
+  ok    short read: reports success either way [CONTROL]           = 1
+  ok    [ANCHOR] byte 199 is the last real overlay byte            = 86
+  ok    [ANCHOR] byte 200 is the first unbacked byte               = 0
+  ok    [ANCHOR] byte 512 is the first base byte                   = 66
+  ok    [ANCHOR] byte 1535 is still a base byte                    = 66
+  ok    ROW P partial block: sentinel past the request untouched   = 212
+  ok    ROW P partial block: the 200 real overlay bytes arrive     = 200
+  ok    ROW P partial block: shortfall inside the request filled   = 100
+  ok    ROW P partial block: reports success [CONTROL]             = 1
+  ok    ROW U unaligned: sentinel past the request untouched       = 412
+  ok    ROW U unaligned: the 50 backed bytes arrive                = 50
+  ok    ROW U unaligned: the unbacked 50 are filled                = 50
+  ok    ROW U unaligned: reports success [CONTROL]                 = 1
+  ok    ROW Z empty overlay: all 512 bytes are zero-filled         = 512
+  ok    ROW Z empty overlay: reports success [CONTROL]             = 1
+  ok    ROW L base-layer short: no sentinel survives               = 0
+  ok    ROW L base-layer short: the later overlay block arrives    = 512
+  ok    [ANCHOR] ROW L byte 300 is the first unbacked byte         = 0
+  ok    [ANCHOR] ROW L byte 512 is the first overlay byte          = 86
+  ok    ROW I short in iteration 2: no sentinel survives           = 0
+  ok    ROW I short in iteration 2: all 700 overlay bytes arrive   = 700
+  ok    ROW I short in iteration 2: the later base block arrives   = 512
+  ok    [ANCHOR] ROW I byte 700 is the first unbacked byte         = 0
+  ok    [ANCHOR] ROW I byte 1024 is the first base byte            = 66
+  ok    ROW I short in iteration 2: reports success [CONTROL]      = 1
+  ok    ROW W read-only disk: no sentinel survives                 = 0
+  ok    ROW W read-only disk: all base bytes survive               = 1024
+  ok    [LIVE] ROW W the disk is not writable                      = 0
+  ok    [ANCHOR] ROW W byte 200 is the first unbacked byte         = 0
+  ok    ROW T IDE-typed disk: no sentinel survives                 = 0
+  ok    ROW T IDE-typed disk: all base bytes survive               = 1024
+  ok    [LIVE] ROW T the disk type is IDE                          = 2
+  ok    [ANCHOR] ROW T byte 200 is the first unbacked byte         = 0
+  FAIL  ROW S two shorts in one call: no sentinel survives         = 512, want 0
+  ok    ROW S two shorts: the middle base block arrives            = 512
+  FAIL  [ANCHOR] ROW S byte 1024 is in the SECOND unbacked hole    = 88, want 0
+  FAIL  [ANCHOR] ROW S byte 1535 is the last unbacked byte         = 88, want 0
+
+SECTION H -- regions a pass-2 mutation sweep found unreached
+  ok    [PROOF] WRITE ending 1 byte past an UNALIGNED extent is refused = 0
+  ok    [PROOF] ... and the host file did not grow by even one byte = 10239
+  ok    [PROOF] READ at a NEGATIVE offset is refused               = 0
+  ok    [PROOF] ... and still zero-fills the caller's buffer       = 1
+  ok    [PROOF] WRITE at a NEGATIVE offset is refused              = 0
+  ok    [PROOF] WRITE to a 0-byte image is refused                 = 0
+  ok    [PROOF] ... and the 0-byte file stays 0 bytes              = 0
+  ok    [PROOF] READ from a 0-byte image is refused too            = 0
+  ok    [CONTROL] the failing READ really did set CHECK CONDITION  = 2
+        (evidence: key=0x05 asc=0x21 ascq=0x00)
+  ok    [PROOF] REQUEST SENSE reports ILLEGAL REQUEST after the failure = 5
+  ok    [PROOF] ... with LBA OUT OF RANGE as the additional code   = 33
+  ok    [PROOF] a second REQUEST SENSE reports the sense CLEARED   = 0
+  ok    [CONTROL] the following in-range READ is GOOD              = 0
+  ok    [PROOF] a SUCCESSFUL command retires the latched sense     = 0
+
+SECTION 6 -- the round-up gap on the REAL rig images (read-only)
+        disk.img                           file  314572800  adv  314818560  GAP  480 blk  internal_access->1  SCSI status 0x00
+        disk_comp.img                      file  314572800  adv  314818560  GAP  480 blk  internal_access->1  SCSI status 0x00
+        disk_comp.img                      file 1073741824  adv 1073995776  GAP  496 blk  internal_access->1  SCSI status 0x00
+        disk_comp2.img                     file 1073741824  adv 1073995776  GAP  496 blk  internal_access->1  SCSI status 0x00
+        liveimage-luna88k-raw-20250518.img file 2147483648  adv 2147991552  GAP  992 blk  internal_access->1  SCSI status 0x00
+  ok    [IDENTITY] row count -- guards against a stale copy        = 98
+
+98 rows, 3 failures, 0 faults
+DISKIMAGE_IO_FAIL

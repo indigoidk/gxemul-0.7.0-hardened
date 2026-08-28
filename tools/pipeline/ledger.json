@@ -20544,8 +20544,8 @@
   {
    "id": "shortread",
    "title": "shortread  fread_helper's short-read path: len is decremented by the REQUESTED amount while the caller's zero-fill uses the ACTUAL, so a short read in a non-final iteration covers the wrong region",
-   "state": "in work",
-   "witness": "none yet -- no row forces a short read; the closing row is specified below and is offline-buildable (one truncated overlay data file).",
+   "state": "closed",
+   "witness": "probe:regress/artifacts/shortread/round_20260827/shortread_witness.py -- rung 3 on UNMODIFIED `landisk`, real guest READ SECTORS through real decode, nothing device_add'ed. Committed RED (0x0000 where the disk holds 'B','B'), the rejected alternative RED and BYTE-IDENTICAL to it, the shipped fix GREEN (0x4242).  Transcripts witness_{committed,fixA,fixB}.txt beside the driver; live/devsig/ovl/accept controls.  *** SCOPE LIMIT, stated because the witness states it: it measures the TAIL-DESTRUCTION HALF ONLY -- the caller buffer there is the device's own d->inbuf, zeroed at devinit, so the stale hole is invisible from the guest on a FRESH device.  That is a property of the configuration, not of the defect. ***  The offline differential (regress/diff_diskimage_io.c, 98 rows) owns the other half.",
    "entries": [
     {
      "seat": "opus5",
@@ -20645,12 +20645,102 @@
      "ev": "_scratchpad/panel_20260827_202031 (Agent seat, adjudication)",
      "grade": "CONFIRMED",
      "note": "VERDICT: FIX B -- zero-fill the hole in place, count the requested length, continue.\nIt filled the ninth seat it had been deferred from, and it corrected me twice on facts I\nhad already checked once.\n\n*** (1) 'A IS NOT FAIL-STOP -- IT IS FAIL-MORE.'  THE SINGLE SENTENCE THAT SETTLES THE\nROUND. ***  The read path's system-level postcondition is FIXED by the caller whichever\nfix ships: the tail memset runs, the function returns 1, and the only read-side `return 0`\n(the bounds arm) is unreachable from a short read.  So the ONLY degree of freedom either\nfix controls is WHICH BYTES ARE FABRICATED ZEROS.  B fabricates exactly the lost bytes --\nthe minimum possible.  A fabricates the lost bytes PLUS every healthy byte after them, up\nto 63.5 sectors of a 64-sector wdc__read chunk.  'Stop and report the prefix' is a\nprincipled shape only where the report can change the outcome; here the caller converts\nthe report into more zeros and success either way.\n\n  And a non-reason, stated so nobody credits it later: A's larger zeroed region is NOT\n  'louder' to the guest.  Zeros carry no signal -- the fork's own #416 comment in\n  diskimage_scsicmd.c records exactly this, that a zero-filled short read 'reports a\n  successful read of zeros, which is why a short or refused transfer was invisible'.\n\n*** (2) I HAD READ HALF THE PRECEDENT.  diskimage_access__cue CONTAINS BOTH SHAPES, KEYED\nBY CAUSE -- AND ITS FIRST ARM IS FIX B. ***  The `t == NULL` arm zero-fills in place,\nCOUNTS THE CHUNK, and CONTINUES.  My sibling-parity write-up cited only the short-fread\narm and concluded 'precedent points at A'.  In-place-zero-and-continue is already the\nfork's house shape for 'this piece has no data but the access must proceed'.\n\n  AND THE DISANALOGY I OFFERED IS THE CORRECT READING, with a sharper warrant than mine:\n  arm 3's break is harmless AT ITS HOME SITE because a CUE track file spans tens of\n  megabytes while a guest access spans kilobytes -- the rest of the access almost always\n  resolves in the same broken file, so stopping discards nothing recoverable.  In\n  fread_helper the layers interleave at 512-byte granularity BY DESIGN, so the same shape\n  discards up to an access-full of healthy data.  *The warrant element that makes arm 3\n  safe -- 'what follows is probably in the same bad file' -- measurably fails to transfer.*\n  That is the carrier's transfer-a-precedent rule working: check each ELEMENT, not the\n  shape.\n\n*** (3) THE FIFTH DEAD PREMISE, WHICH I ASKED FOR AND GOT: 'THE READ PATH HAS NO FAILURE\nCHANNEL' IS FALSE AS A STATEMENT ABOUT THE SYSTEM. ***  diskimage__internal_access returns\n0 for reads on the bounds arm, and diskimage_scsicmd.c has a LIVE, FORK-BUILT (#416)\nconsumer that turns that 0 into CHECK CONDITION with sense data.  What is true is\nnarrower: the HELPER's shortfall is severed by the tail memset, and the wdc caller\ndiscards the result.  The round's conclusion survives -- neither fix can signal through\nthe severed link -- but the OPTION-SET consequence is real and is filed (below).\n\n*** (4) A SEVERITY ELEVATION I MISSED, AND I RE-VERIFIED IT BY READING BEFORE RECORDING\nIT.  '312 STALE CALLER BYTES' UNDERSELLS THE COMMITTED BEHAVIOUR. ***  In wdc__read the\nhole is not abstract caller memory:\n\n  COMMON ARM   reads directly into `d->inbuf + d->inbuf_head`, the PERSISTENT RING, so\n               the hole retains PREVIOUS RING CONTENTS -- stale prior-sector data replayed\n               to the guest.\n  WRAP ARM     reads into `unsigned char buf[512 * MAX_SECTORS_PER_CHUNK]`, a plain\n               UNINITIALISED automatic array, and then copies EVERY byte into the ring\n               with `for (i=0; i<512*to_read; i++) wdc_addtoinbuf(d, buf[i]);` --\n               unconditionally, regardless of what the read actually filled.  So the hole\n               is UNINITIALISED HOST STACK MEMORY handed to the guest.\n\n  Both verified in the tree by me before this was written down.  The class is therefore\n  corruption PLUS host-memory disclosure on the wrap arm, and BOTH FIXES CLOSE BOTH.  SCSI\n  holes read as zeros (its transfer buffer is allocated zeroed), so this is wdc-specific.\n\n(5) IT ATTACKED GROK'S ENOSPC REFUTATION AND REPORTED THAT IT SURVIVES, which is the right\nway to treat a refutation that favours one's own convenience.  `do_fsync` defaults off, but\nPOSIX fseek flushes unwritten output and the per-block fseek pattern flushes data before\nthe bitmap within every iteration -- so a crash loses the BIT while keeping the DATA, the\nbenign direction.  One residual narrow window (a deferred-ENOSPC whose data flush fails and\nis discarded at the next iteration's fseek while the already-durable bit stands) is\nfootnote-grade, and the clean-close path already orders data-before-bitmap deliberately.\n\n(6) A RECORD NOTE THE ROUND MUST CARRY IN PROSE, or a future reader files a defect against\nit: under B, fread_helper's return degenerates to FULL LENGTH OR 0, so BOTH the write-only\nshort-transfer check AND the read-side tail memset become no-ops for overlaid reads.  That\nis by design.  The caller's memset stays load-bearing for the no-overlay fast path (which\nstill returns a raw fread count) and for CUE, so it must NOT be deleted -- and saying so is\nwhat stops a later round 'simplifying' it away.\n\nFILED, NOT FIXED (riders on B, explicitly not competitors to it):\n  * propagate a loss-vs-conventional-gap distinction so SCSI guests get a real error.  Two\n    traps for whoever takes it: #416's hardcoded sense is ILLEGAL REQUEST / LBA OUT OF\n    RANGE, and a medium loss needs MEDIUM ERROR / UNRECOVERED READ ERROR -- reusing #416's\n    code would ship a wrong record IN SENSE DATA; and wdc discards the result anyway.\n  * the INCOMPLETE READ fatal() names disk id and offset but NOT THE LAYER, so a routine\n    base-EOF gap read and an actionable overlay truncation print identically.  The overlay\n    arm should name the overlay file, with the house per-instance latch and `(once)`.\n  * the open-time companion (per-bit: highest set bitmap bit vs data-file length) --\n    endorsed, and it cannot replace B because truncation can postdate open."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/agy.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: GO.  It audited every claim in the brief against the source with line\nreferences, and independently confirmed MAX_SECTORS_PER_CHUNK == 64 (which the\n'63.5 sectors' figure rests on) and that fatal() has no exit/abort/_Noreturn.\nThe only file-reading seat with no objection."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/glm.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: reasoned-correct CONDITIONALLY -- the load-bearing premise is not checkable\nfrom the packet.  It refused to certify 'the only consumer of totallenread is the tail\nmemset' and 'the overlaid path returns len or 0' because the brief inlined a four-line\nwindow and NOT the function's return.\n\nIt also independently derived that the in-loop fill cannot overrun the request, from the\nloop invariants alone -- the same constructive proof the equivalence sweep found for the\n`len - lenread` mutant."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/deepseek.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: NOT RATIFY -- same missing fact as glm, plus a REAL WRITING DEFECT in my brief.\n\nIt caught that §2 said the alternative 'makes the caller's tail memset correct by\nconstruction' AND 'fabricates the lost bytes plus every healthy byte after them', and\ncalled them contradictory.  They are compatible -- the memset becomes correct RELATIVE TO\nWHAT WAS READ, and less was read -- but 'correct' was doing double duty and it reads as a\ncontradiction.  A fair catch on the prose."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/minimax.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: NOT RATIFIABLE from the packet.  Its DEFECT 1 is a sound CONDITIONAL that I had\nfailed to close: 'if fatal() does not return, the memset is dead code and the fix repairs\nnothing.'  The condition is false in this fork -- but the packet did not say so.\n\n*** THAT IS A COMPOUNDING BRIEF DEFECT AND IT IS THE ROUND'S CLEAREST PROCESS LESSON: I\nSETTLED fatal() IN PASS 1 AND THEN DID NOT CARRY THE SETTLED FACT INTO THE PASS-2\nPACKET. ***  Three packet-fed seats spent their answers re-raising it.  A fact established\nin pass 1 must be re-inlined for pass 2."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/kimi.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: do not commit as-is -- and it was the best packet-fed answer of the pass, with\nTHREE findings, all correct and all against my records rather than the code.\n\n1. The fatal()-returns dependency was unstated (as above).  **Its proposed hardening --\n   move the memset ABOVE the fatal() -- was DECLINED and the decline recorded**: the\n   measured delta is zero and the tree's own sibling arm in diskimage_access__cue() puts\n   the diagnostic first, so the reorder buys nothing and diverges from the house shape.\n   The addition licence wants a measured delta or a transferred warrant; this had neither.\n   What the point DID earn is a sentence in the product comment naming the dependency and\n   the file that settles it.\n2. **`86` and `90` both appeared in one brief.**  The ask-again had run BEFORE ROW W\n   existed, so the two filed escapes were cleared against a suite that did not contain it.\n   Re-measured; both still escaped at 90, and both are now KILLED at 98 by ROW S.\n3. The contract's kill list for M1_revert omitted ROW W, which the round's own pre-fix\n   table says must fire.  Corrected.\n\n*Recorded by TRANSPORT: the kimi CLI is 403-walled (weekly limit); this is the\nkimi-k3:cloud substitute, which is PACKET-FED.*"
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/grok.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: SHIP the two product lines; do not ratify the packet.  It found the round's\nsharpest escape and its sixth false premise.\n\n*** THE THIRD ESCAPE: `&& d->type == DISKIMAGE_SCSI`. ***  mkdisk() hardcodes\nDISKIMAGE_SCSI and neither the rows nor the 149,072-case sweep ever varied it.  What makes\nit worse than the two already filed is WHERE it fires: wdc__read() looks up DISKIMAGE_IDE\nand landisk's default type is IDE, so it **re-opens the defect on the only guest path the\nround actually drove** -- the rung-3 witness would go red while the detector stayed green.\nClosed in-round as ROW T (L1); killed, mutant_E4_scsitype_98rows.out, 2 failures.\n\n*** THE SIXTH FALSE PREMISE: 'Every new row fires on the REAL DEFECT.' ***  FALSE -- ROW P,\nROW U and ROW Z are GREEN pre-fix.  Only L, I, W and T fire on the defect; P/U/Z/S are\naccept-row work discharged by their mutants.  I wrote that sentence from the INTENT of the\nrows rather than from the log they produce, which is the same failure the NUL-count row\ndemonstrates.  Corrected in the CHANGELOG with the pre-fix log named as deriver.\n\nAlso: 'six [ANCHOR] rows' is TEN; the contract mislabelled M10_lenminus (it edits the\nother accounting line); and it flagged that the CUE precedent must be cited AS AN ARM,\nnot as the file's policy -- the same function's short-fread arm does the opposite.  All\ncorrected."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/(Agent seat, review)",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: DO NOT RATIFY AS-IS -- the fix is CORRECT and premises 1 and 3 verified\nindependently; four things must change first.  It measured in a copied tree and confirmed\nSEC unchanged and est byte-identical.\n\n*** TWO L4s IN PRODUCT CODE, BOTH MINE, BOTH MEASURED: ***\n* the comment said deleting the caller's memset 'reddens the round-up-gap row'.  MEASURED:\n  exactly one row reddens and it is `[CONTROL] ... and is zero-filled` in\n  section_boundary().  section_roundup_gap() carries ONE check (res == 1) and is\n  STRUCTURALLY BLIND to the deletion -- the detector's own main() says it 'stays green\n  either way, deliberately'.  The refutation sat 200 lines away in this round's own file.\n* 'It has four live producers' UNDERCOUNTS.  Four is the count inside fread_helper; the\n  same caller memset is also fed by diskimage_access__cue (three short paths) and\n  diskimage_access__cdrom.  **Load-bearing, because the sentence exists to stop a future\n  deletion**: an editor who discharges the four named still breaks cue and cdrom.\n  Re-verified by me before correcting: :1580, :1582 and :1584 all assign lendone.\n\nIt found the SAME third escape as grok, independently, and named three more of the class\n(nr_of_overlays, id, logical_block_size) plus one TRUE equivalence (`&& !d->is_a_cdrom`,\nbecause internal_access dispatches cdroms away before fread_helper).\n\nAND IT ANSWERED Q2 AGAINST ME: a comment is NOT enough, because **the gate was pinning the\nINSENSITIVE row**.  `READ inside the advertised gap still succeeds` is the res == 1 row,\nblind to the deletion; the one row that reds was unpinned and silently deletable.  Fixed\nwith one more grep -cF.\n\nIt also found the grep-for-siblings rule broken by the round applying it: the #472\n'advancing by what was consumed' wording survived UNCORRECTED in CHANGELOG.md and\nOUTSTANDING_BUGS.md.  Both corrected.  And it judged my L4 verdict 'a shade stronger than\nthe evidence' -- 'consumed' is ambiguous, and what tips it is #472's own round block\npairing it with 'bytes actually delivered'.  The product comment now says that."
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/(Agent seat, adjudication)",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: SHIP AFTER RECORDS REPAIR.  It re-measured everything in its own workdir with\nfresh mutants and hashed inputs, and its numbers match mine exactly.\n\n*** IT CORRECTED MY WARRANT WHERE MY ACTIONS WERE RIGHT, WHICH IS THE HARDER CATCH: ***\n* the ask-again's cap limits ASK-AGAINS, not FINDINGS -- #452 added six rows from one ask\n  -- so 'the cap says I may take only one' is not a rule this project has;\n* and E1 was never discretionary.  `if (X)` -> `if (X && Y)` aimed at the predicate\n  DOMINATING the memset is the canonical clause-(d) qualification form, and it swept the\n  detector clean, so under DEPENDS-ON it is a FLOOR BREACH REPAIRED IN-ROUND, not a row I\n  chose to take.\n\n*** AND IT ARGUED E3's FILING WAS THE WEAKEST DISPOSITION, WITH THE ROW DESIGN: *** unlike\nthe threshold class, E3's class IS closable by ONE row -- overlay 200 bytes, bitmap 0x05\n(blocks 0 AND 2), read 1536, shorting in iterations 1 AND 3.  Its reason is what convinced\nme: this fatal() is unlatched and guest-floodable, the house idiom is latch-plus-fatal,\nand **the natural bad latch edit braces the memset in with the fatal** -- E3's exact\nshape.  Built as ROW S; it kills E3 AND E2's instance (3 failures each).\n\nIt independently rebuilt and killed E1 against ROW W, closing the one claim I had flagged\nas unverified in my own brief -- and noted my flag was already stale when I wrote it.\n\nIt also caught the scope limit nobody had checked: the rung-3 witness measures the\nTAIL-DESTRUCTION HALF ONLY, the witness script says so prominently, and the round block\ndid not.  **It does not weaken severity** -- the hole half's invisibility is a property of\nthe fresh-device configuration (d->inbuf is zeroed at devinit) and not of the defect.\nCarried into the round block with the transcripts cited."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "OK",
+     "date": "2026-08-27",
+     "ev": "_scratchpad/panel_20260827_212956/codex.txt",
+     "grade": "CONFIRMED",
+     "note": "VERDICT: reviewed in full, no wall, and it added TWO findings after seven other seats had\ngone over the same diff -- both checkable, both correct, and both fixed before commit.\n\n1. *** `git diff --check` REPORTS TRAILING WHITESPACE ON 19 ADDED LINES. ***  True, and\n   worse than reported once ROW T and ROW S landed: 62 flagged lines.  Stripped -- and the\n   strip then over-reached and removed SIX PRE-EXISTING whitespace-only lines in\n   diskimage.c, which I restored, because a fix must not touch lines it did not come for.\n   Final state: 9 such lines, exactly HEAD's count, and `git diff --check` clean.\n\n2. *** '`R:` cannot' IS TOO ABSOLUTE. ***  Normal `R:` WRITING cannot create the\n   persistent bitmap/data-length mismatch -- it starts empty+empty and unlinks both files\n   -- but a genuine read-side I/O error can short-read an `R:` overlay like any other.\n   **What `R:` rules out is the CONSTRUCTION route, not the defect.**  The round block\n   said it flatly; corrected with the distinction stated.\n\nIt explicitly recorded that it ran no gate, battery, detector or mutant -- a READING, and\nit said so rather than letting its findings read as measurements.  *Both of its catches\nare the kind only a fresh reader finds: seven seats had already reviewed this diff and\nneither ran `git diff --check` nor questioned an absolute.*"
+    },
+    {
+     "seat": "fable5",
+     "phase": "regress",
+     "d": "--",
+     "date": "2026-08-27",
+     "grade": "UNKNOWN",
+     "ev": "tools/pipeline/fable_queue.md",
+     "note": "[HELD AWAITING SEAT: fable5]  QUESTION, and it is about BRIEFS rather than rows:\n**should a pass-2 packet be REQUIRED to re-inline every premise that pass 1 settled?**\n\nThree packet-fed seats refused to ratify this round's pass 2, and all three named the SAME\nmissing fact.  One of them -- whether `fatal()` returns -- had been SETTLED IN PASS 1 OF\nTHIS SAME ROUND, and I did not carry it into the pass-2 packet.  So three seats spent their\nanswers re-deriving it and one built a sound conditional defect report on top of it.\n\nIt costs a paragraph and it is mechanical: the pass-1 record already lists the premises.\nWhat I cannot judge alone is whether it becomes a checkable brief-template line or stays\nprose -- this project's own finding is that prose fires only when it sits in the artifact\npresent at the moment of decision, and a BRIEF is that artifact, which is the one place\nprose has demonstrably worked (the premise-audit instruction).\n\nSECOND, SMALLER: the capped ask-again found three escapes.  I took one and filed two on the\nreasoning that the cap allowed only one.  The adjudicator corrected the warrant -- **the cap\nlimits ASK-AGAINS, not FINDINGS** (#452 took six rows from one ask) -- and pass 2 then\nclosed the other two anyway.  Is 'one ask, all its findings' the right reading, and should\nthe carrier say so?  The anti-runaway purpose survives either way, but the readings differ\nby several rows per round.\n\nQueued in fable_queue.md the same action, not as a second step."
     }
    ],
    "closure": {
-    "by": "",
-    "badge": "",
-    "note": ""
+    "badge": "A",
+    "by": "fable5",
+    "note": "Two product lines.  PRE-FIX 98 rows/18 failures, POST-FIX 98/0, same script (PREFIX_98rows.out, POSTFIX_98rows.out).  Floor (a)-(f) met; ALL FOUR escapes found across both passes are KILLED -- E1 by ROW W, E4 by ROW T, E2 and E3 both by ROW S (2/2/3/3 failures at 98 rows).  One CLASS filed rather than an escape: fitted thresholds, an unbounded ladder no finite row set closes (`shortthreshold`).  Pass 2 found TWO L4s in my own product comment and a sixth false premise; all corrected in place.  Witness promoted to probe: with its scope limit stated."
    },
    "state_note": "*** FILED 2026-08-27, SPLIT OUT OF [[b115]] BEFORE THAT ROW CLOSES -- and the split was demanded by b115's own record, which quotes the rule against exactly this: *a row covering two defects buries one when the other closes*. ***\n\n**THE FAMILY, three related items that were all sitting inside b115:**\n  1. **the zero-fill mismatch** -- on a short read `len` decrements by `lentoread` (requested) while `totallenread` grows by `lenread` (actual), so the caller's `memset(buf + lendone, ...)` can cover the wrong region. PRE-EXISTING; `#472` neither helped nor worsened it.\n  2. **the `buf += lentoread` -> `buf += lenread` escape** (deepseek, `#472` pass 2). Outside a short read the two are an IDENTITY, so it escapes all six of `#472`'s rows; it diverges only here.\n  3. **an unverified claim** from an opus pass about the FLAT (non-overlay) path short `fread` -- recorded as the seat's claim, NOT verified.\n\n**Not silent, which bounds the severity:** the pre-existing `INCOMPLETE READ` `fatal()` in `fread_helper` announces a short read. So this is wrong-region data WITH a diagnostic, not the silent corruption `#472` closed.\n\n**THE CLOSING ROW, already specified: one truncated overlay data file** forcing a short read in a NON-FINAL iteration, asserting the bytes land at the right offsets afterwards. **One row discharges all three items**, and it is offline-buildable in `regress/diff_diskimage_io.c`'s existing fixture -- no build, no rig, no timing oracle.\n",
    "commits": "772edb9"

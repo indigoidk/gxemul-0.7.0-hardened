@@ -310,6 +310,14 @@ MANIFEST = {
     "sh4_chcr_probe.py":           (CLASS_DETECTOR, "#448 sh4 CHCR field decoders"),
     "sh4_rtcsr_probe.py":          (CLASS_DETECTOR, "#449 sh4 RTCSR refresh-interrupt enables"),
     "sh4_rtcsr_witness.py":        (CLASS_WITNESS,  "#449 pre-fix symptom: a DELAYED host death"),
+    "artifacts/shortread/round_20260827/shortread_witness.py": (CLASS_WITNESS,
+                                    "#488 rung-3 on unmodified landisk: a guest READ SECTORS "
+                                    "reads 0x0000 where the disk holds 'B','B' on the committed "
+                                    "build AND on the rejected alternative, 0x4242 on the fix.  "
+                                    "Not gated: it needs a hand-built truncated overlay (a "
+                                    "200-byte data file plus a claiming .map) that no gate "
+                                    "constructs, and a witness is checked for the ABSENCE of a "
+                                    "gate call by design.  Preserved with all three transcripts."),
     "sh4_sci_witness.py":          (CLASS_WITNESS,  "#451 pre-fix symptom: a clocked-in byte kills"),
     "sh4_sci_probe.py":            (CLASS_DETECTOR, "#451 SCI command byte declined, not fatal"),
     "sh4_tlbda2_witness.py":       (CLASS_WITNESS,  "#452 pre-fix symptom: one TLB da2 access kills"),

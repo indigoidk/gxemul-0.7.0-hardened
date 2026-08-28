@@ -1406,14 +1406,108 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
 		if (lenread != lentoread) {
 			fatal("[ INCOMPLETE READ from disk id %i, offset"
 			    " %lli ]\n", d->id, (long long)curofs);
+
+			/*  #488: ZERO-FILL THE SHORTFALL AT ITS OWN POSITION.  The three
+			    accounting lines below disagreed about which length they use:
+			    `buf` advanced by the REQUESTED amount while `totallenread`
+			    counted the ACTUAL one, so a short read left a HOLE where it
+			    happened while every later iteration still landed at its correct
+			    final offset.  The caller then zero-filled the TAIL, which is
+			    correct ONLY IF THE SHORTFALL WAS AT THE END.  For a NON-FINAL
+			    iteration it was wrong twice over: the hole kept whatever the
+			    caller's buffer held, and the memset destroyed an equal number
+			    of VALID bytes at the far end -- and the access still returned 1.
+
+			    MEASURED, 1536 bytes at offset 0 over a 200-byte overlay claiming
+			    block 0: 312 stale caller bytes in the middle, 712 of 1024 base
+			    bytes surviving.  In wdc__read those stale bytes are not abstract:
+			    the common arm reads straight into the persistent ring, so the
+			    hole is prior-sector data replayed to the guest; the wrap arm
+			    reads into an UNINITIALISED automatic array and then copies every
+			    byte into that ring regardless of what the read actually filled.
+
+			    THE ALTERNATIVE WAS BUILT AND MEASURED, AND IT IS WORSE.  Stopping
+			    the loop and reporting the contiguous prefix makes the caller's
+			    tail memset correct by construction, but it discards every healthy
+			    byte after the short one -- up to 63.5 sectors of a 64-sector
+			    wdc__read.  A rung-3 witness on unmodified landisk reads 0x0000
+			    where the disk holds 'B','B' under BOTH the old code and that
+			    variant, and 0x4242 under this one.  It is not fail-stop; it is
+			    fail-more.
+
+			    *** THIS REPAIR DEPENDS ON `fatal()` RETURNING, and that is stated
+			    here rather than assumed because THREE packet-fed review seats
+			    independently raised it and could not settle it. ***  It does:
+			    `src/core/debugmsg.c`'s fatal() is va_start / va_debug / va_end
+			    with no exit(), no abort() and no _Noreturn.  A seat proposed
+			    moving this memset ABOVE the fatal() to be immune to the question;
+			    declined, because the measured delta is zero and the tree's own
+			    sibling arm in diskimage_access__cue() puts the diagnostic first
+			    -- so the reorder would buy nothing and diverge from the house
+			    shape.  If fatal() is ever made non-returning, THIS is the line
+			    that dies, and this sentence is how you find it.
+
+			    And this is the fork's own shape rather than a new one --
+			    diskimage_access__cue()'s FIRST arm (a sector belonging to no
+			    track) already zero-fills in place, counts the chunk, and
+			    continues.  *** SAY 'FIRST ARM', NOT 'THE FORK'S POLICY': that
+			    same function's SHORT-FREAD arm does the opposite -- records the
+			    contiguous prefix and breaks, which is the variant rejected
+			    above. ***  The file has TWO policies keyed by CAUSE, and a
+			    truncated overlay is closer to a no-track gap than to an I/O
+			    error.  Citing it as one policy is how a wrong warrant gets
+			    re-used.  */
+			memset(buf + lenread, 0, lentoread - lenread);
 		}
 
 		len -= lentoread;
-		totallenread += lenread;
-		/*  #472: advance by what was CONSUMED.  A fixed stride paired with
-		    a clamped read leaves HOLES -- a half-fix keeping this line passes
-		    a wrong-layer check and still corrupts, which is why the detector
-		    carries a row counting bytes the read never wrote.  */
+		totallenread += lentoread;
+		/*  #472/#488: buf, len and totallenread all advance by the size of the
+		    slice CLAIMED from the request (lentoread) -- never a fixed stride,
+		    which was #472's hole, and never fread's return value.
+
+		    *** #472's WORDING HERE WAS 'advance by what was CONSUMED', AND IT IS
+		    A WRONG RECORD -- though the word alone is AMBIGUOUS and the verdict
+		    needs the pairing to earn it: read from the REQUEST, 'consumed' is
+		    `lentoread`; read from the FILE it is `lenread`.  What settles it is
+		    #472's own round block, which pairs the phrase with 'indexes the
+		    buffer by bytes actually delivered' -- the file-side reading, which
+		    this line does not do. ***  The two are equal
+		    on a full read and differ on exactly the short read #488 is about,
+		    so the comment was true in the common case and false in the only
+		    case it was written for.  #472 named the hazard class correctly,
+		    shipped a detector row for it, named the fix -- and then advanced by
+		    the requested length anyway.  Found by a seat that could not open
+		    this file, from inlined text alone, while four seats that could had
+		    the whole tree.
+
+		    The invariant is now CLAIMED AND MADE WHOLE: on a short read the
+		    missing tail of THIS block was zero-filled in place above, so the
+		    slice is complete by convention and the next block must land at its
+		    own position.  Counting `lenread` anywhere here re-opens the defect,
+		    because the caller reads the return value as a CONTIGUOUS-PREFIX
+		    length and zero-fills the tail, destroying good bytes at the far
+		    end.
+
+		    NOTE the consequence, recorded rather than left to be rediscovered:
+		    on the overlaid path this function now returns `len` or 0, so the
+		    caller's `lendone < len` memset is a deliberate no-op HERE.  It is
+		    NOT dead -- MEASURED by deleting it: exactly one row reddens, and
+		    it is `[CONTROL] ... and is zero-filled` in regress/
+		    diff_diskimage_io.c's section_boundary().  *** AN EARLIER DRAFT
+		    OF THIS COMMENT NAMED 'the round-up-gap row', AND THAT WAS
+		    WRONG: section_roundup_gap() carries ONE check (res == 1) and is
+		    STRUCTURALLY BLIND to the deletion -- the detector's own main()
+		    says it 'stays green either way, deliberately'. ***
+
+		    AND THE PRODUCER COUNT WAS WRONG TOO, in the direction that
+		    matters: an earlier draft said FOUR, which is the count INSIDE
+		    this function (the fast path's short fread, the no-overlay fseek
+		    failure, and both in-loop fseek failures).  The caller's memset
+		    is ALSO fed by diskimage_access__cue() -- three short paths --
+		    and by diskimage_access__cdrom().  So an editor who discharges
+		    the four named here and deletes it still breaks cue and cdrom.
+		    Do not simplify it away, and do not assert lendone == len.  */
 		buf += lentoread;
 	}
 

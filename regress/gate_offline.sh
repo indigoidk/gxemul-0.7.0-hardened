@@ -1970,6 +1970,48 @@ else
     #  Named so that deleting the zero-block row is visible rather than silent.
     check     "diskimage I/O: the zero-block capacity row is present" \
               "$(grep -c 'zero-block disk does not announce' "$IOLOG")" "1"
+
+    #  #488: NAMED so that deleting any of these is visible rather than silent -- the
+    #  practice the zero-block row above already establishes.
+    #
+    #  *** grep -cF, NOT grep -c. ***  Several of these labels contain characters a regex
+    #  would eat, and the trap this project has already paid for is that a check which
+    #  CANNOT match reports 0 and reads as a deleted row rather than as a broken check.
+    #
+    #  ROW L, ROW I and ROW W each close a dimension the fixture had held constant --
+    #  layer, iteration and writability.  ROW W is the capped ask-again's single yield and
+    #  is the sharpest of the three: adding `&& d->writable` to the fill guard passed all
+    #  86 rows AND all 149,072 cases of an equivalence sweep, because neither ever opened a
+    #  disk that was not writable.
+    check     "diskimage I/O: the short-read defect row is present" \
+              "$(grep -cF 'short read: caller bytes the read never wrote' "$IOLOG")" "1"
+    check     "diskimage I/O: the tail-destruction row is present" \
+              "$(grep -cF 'short read: base bytes surviving the tail zero-fill' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW P (partial block) is present" \
+              "$(grep -cF 'ROW P partial block: sentinel past the request untouched' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW U (unaligned) is present" \
+              "$(grep -cF 'ROW U unaligned: sentinel past the request untouched' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW Z (empty overlay) is present" \
+              "$(grep -cF 'ROW Z empty overlay: all 512 bytes are zero-filled' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW L (base-layer short) is present" \
+              "$(grep -cF 'ROW L base-layer short: no sentinel survives' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW I (short in iteration 2) is present" \
+              "$(grep -cF 'ROW I short in iteration 2: no sentinel survives' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW W (read-only disk) is present" \
+              "$(grep -cF 'ROW W read-only disk: no sentinel survives' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW T (IDE-typed disk) is present" \
+              "$(grep -cF 'ROW T IDE-typed disk: no sentinel survives' "$IOLOG")" "1"
+    check     "diskimage I/O: ROW S (two shorts, one call) is present" \
+              "$(grep -cF 'ROW S two shorts in one call: no sentinel survives' "$IOLOG")" "1"
+
+    #  *** THE ROW THAT ACTUALLY FAILS WHEN THE CALLER'S TAIL memset IS DELETED. ***
+    #  A review seat measured the deletion: exactly ONE row reddens, and it is this one,
+    #  in section_boundary().  The neighbouring `READ inside the advertised gap still
+    #  succeeds` row is pinned a few lines below and is STRUCTURALLY BLIND to that
+    #  deletion -- it checks res == 1, which holds either way.  So the gate was pinning
+    #  the insensitive row and leaving the sensitive one deletable in silence.
+    check     "diskimage I/O: the caller-memset-sensitive row is present" \
+              "$(grep -cF 'and is zero-filled' "$IOLOG")" "1"
     #  #416: the four sections that used to sit behind -DDISKIMAGE_IO_UNFIXED
     #  now run unconditionally.  Named individually so that re-hiding any of
     #  them is visible; the grep text appears whether the row passes or fails,

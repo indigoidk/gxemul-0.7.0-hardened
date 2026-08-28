@@ -1,3 +1,286 @@
+## Round 488 (#488) -- a short read in a NON-FINAL iteration corrupted twice, and the round that touched these exact lines was asking a different question
+
+`fread_helper()` splits an overlayed read into 512-byte pieces, and three accounting
+lines disagreed about which length they use:
+
+```c
+	len          -= lentoread;      /*  REQUESTED  */
+	totallenread += lenread;        /*  ACTUAL     */
+	buf          += lentoread;      /*  REQUESTED  */
+```
+
+So a short read in a **non-final** iteration left a stale HOLE at its own position while
+every later iteration still landed correctly, and the caller's tail
+`memset(buf + lendone, 0, len - lendone)` -- correct only if the shortfall was at the END
+-- then destroyed an equal number of **valid** bytes at the far end. The access returned 1.
+
+**MEASURED on the committed build before any edit**, 1536 bytes at offset 0 over a
+200-byte overlay claiming block 0: **312 stale caller bytes in the middle, 712 of 1024
+base bytes surviving**
+(`regress/artifacts/shortread/repro_20260827/PREFIX_committed_6faba0f.out`).
+
+### The fix is two lines
+
+```c
+	if (lenread != lentoread) {
+		fatal(...);
+		memset(buf + lenread, 0, lentoread - lenread);   /*  ADDED  */
+	}
+	len -= lentoread;
+	totallenread += lentoread;                              /*  was += lenread  */
+	buf += lentoread;
+```
+
+### *** THE ALTERNATIVE WAS BUILT AND IT REPRODUCES THE DEFECT. ***
+
+The obvious alternative -- stop the loop, report the contiguous prefix, and let the
+caller's tail memset become correct by construction -- was built and measured. A **rung-3
+witness on unmodified `landisk`**, a guest `READ SECTORS` reading the data port:
+
+| build | halfword at byte 1534 |
+|---|---|
+| committed | `0x0000` -- FAIL (the disk holds `'B','B'`) |
+| the alternative | `0x0000` -- **FAIL, byte-identical to the defect** |
+| this fix | **`0x4242` -- ok** |
+
+The adjudicating seat had already reached it by argument -- *"A is not fail-stop, it is
+fail-more"*: the caller fixes the postcondition either way, so the only freedom is WHICH
+bytes are fabricated zeros, and the alternative fabricates the lost bytes plus every
+healthy byte after them, up to 63.5 sectors of a 64-sector `wdc__read`. **The measurement
+agreed and went further than the argument had.**
+
+### The severity is higher than "stale caller bytes", and it was verified before being written down
+
+In `wdc__read` the hole is not abstract memory. The common arm reads straight into the
+**persistent ring**, so the hole retains **previous ring contents** -- prior-sector data
+replayed to the guest. The wrap arm reads into `unsigned char buf[512 * MAX_SECTORS_PER_CHUNK]`,
+an **uninitialised automatic array**, and then copies *every* byte into that ring
+regardless of what the read filled -- so the hole is **uninitialised host stack memory
+handed to the guest**. SCSI holes read as zeros (its transfer buffer is allocated zeroed),
+so this is wdc-specific.
+
+**The precondition is host-side and the trigger is ordinary guest I/O.** A guest cannot
+truncate a host file; what produces the state is a hand-made `.map`, a user `V:` overlay,
+truncation of an already-claimed overlay, or a genuine read-side I/O error.
+**`R:` cannot CONSTRUCT it** -- it starts empty+empty and unlinks both files, so no
+persistent bitmap/data-length mismatch can accumulate there.  *An earlier draft said flatly
+"`R:` cannot", and a review seat called that too absolute: a genuine read-side I/O error
+can short-read an `R:` overlay like any other.  What `R:` rules out is the CONSTRUCTION
+route, not the defect.* But once the state exists, `wdc__read`
+issues up to 64 sectors in one `diskimage_access()` and the corrupt buffer reaches the
+guest -- and wdc **discards the boolean return entirely** (`/* TODO: result code from the
+read? */`), so nothing anywhere objects.
+
+### An L4 in shipped code, found by a seat that could not open the file
+
+`#472`'s comment sat directly above the defective line and read *"advance by what was
+CONSUMED"*. **`lentoread` is what was REQUESTED.** The two are equal on a full read and
+differ on exactly the short read this round is about -- so the comment was true in the
+common case and false in the only case it was written for. `#472` named the hazard class
+correctly (*"leaves HOLES"*, *"a row counting bytes the read never wrote"*), shipped a
+detector row for it, named the fix, and then advanced by the requested length anyway.
+
+*That is why this survived: the round that edited these exact lines was asking a different
+question.* Found by **minimax**, a packet-fed seat, from inlined text alone, while four
+file-reading seats had the whole tree. Corrected in place.
+
+### The detector: 98 rows
+
+```
+PRE-FIX   98 rows, 18 failures, 0 faults   DISKIMAGE_IO_FAIL
+POST-FIX  98 rows,  0 failures, 0 faults   DISKIMAGE_IO_PASS
+```
+`regress/artifacts/shortread/round_20260827/{PREFIX,POSTFIX}_98rows.out`
+
+> ### *** AN EARLIER DRAFT OF THIS BLOCK SAID 'every new row fires on the REAL defect'.
+> ### THAT IS FALSE, and the round's own pre-fix log refutes it. ***
+>
+> **ROW L, ROW I, ROW W and ROW T fire on the real defect.**  ROW P, ROW U, ROW Z and
+> ROW S are **green pre-fix by design** -- they probe positions where the caller's tail
+> memset already handled the shortfall correctly -- and are discharged by their own
+> mutants instead.  Deriver: `PREFIX_98rows.out`, 18 failures, none of them P/U/Z/S.
+>
+> *Found by three seats independently.  The sentence was written from the intent of the
+> rows rather than from the log they produce, which is the same failure the NUL-count row
+> demonstrates one paragraph down: `NUL fill covers exactly the unbacked hole = 312` is
+> **ok on the broken build**.  The anchors are what make position absolute.*
+
+**Pass 1 found SIX escapes against a detector that had just reproduced the defect
+cleanly, and every one was the same shape: the fixture varied one dimension and the mutant
+lived in another.**
+
+| escape | why the rows were blind | closed by |
+|---|---|---|
+| `remain - lenread` | every probed iteration had `inblock == 0`, so `remain == lentoread` -- **equivalent over the probed set** | ROW P, ROW U |
+| `if (lenread > 0)` | no row probed an **empty** overlay | ROW Z |
+| `&& overlay_nr >= 0` | every row shorted on the **overlay** layer | ROW L |
+| `&& totallenread == 0` | every row shorted in **iteration 1** | ROW I |
+
+### The vacuity floor, clause by clause
+
+(a) 13 rows red pre-fix. (b) `M1_revert` killed. (c) `[IDENTITY]` pinned at 90.
+(d) `M3_countonly` -- guard kept, count reverted -- killed, as `glm`, `minimax`, `grok` and
+`codex` all independently predicted. (e) contract in the section header. (f) **ten** `[ANCHOR]` rows --
+deriver `grep -c 'check("\[ANCHOR\]' regress/diff_diskimage_io.c`, because an earlier
+draft said six and a seat counted.
+
+**Mutant denominators, named because two of them are different artifacts:** the
+measuring seat's 17-mutant table was run at **86 rows** and is preserved verbatim at
+`round_20260827/seat_table_86rows/` (20 logs).  The four escape mutants were re-run
+against the **shipped 98-row** set and are `mutant_E{1,2,3,4}_*_98rows.out`.  *Adding
+rows cannot resurrect a mutant that already failed, so the 86-row kills stand -- but a
+score claim names the artifact that produced it, and these are two artifacts.*
+
+### Two mutants measured EQUIVALENT, recorded as results rather than gaps
+
+A 149,072-case sweep over base size x overlay size x bitmap x offset x length, hashing the
+whole buffer, with **two controls that DO fail** (69,880 and 9,686 differing cases):
+
+* `len - lenread` as the fill length -- **0 differing.** And provable rather than merely
+  measured: `buf` rises by `lentoread` exactly as `len` falls by it, so **`buf + len` is
+  invariant at the original request's end** and the fill can never write past it.
+* `lenread < lentoread` for `!=` -- **0 differing** (`fread` cannot return more than
+  requested).
+
+### The ask-again found three escapes; ONE row taken, TWO filed
+
+* **TAKEN -- `&& d->writable` (ROW W).** It passed all 86 rows **and all 149,072 sweep
+  cases**, because neither ever opened a read-only disk. Writability is not a length, an
+  offset or a layer, so no amount of sweeping those could reach it. *This round's own
+  finding, turned on the instrument built to enforce it.*
+  **Discharged by a MEASURED KILL, not by existing**: the mutant was built against the
+  **90**-row set (the seat had only measured it against 86) and ROW W reddens --
+  `mutant_E1_writable_98rows.out`, 2 failures, both ROW W's. Honestly: **2 of ROW W's 4
+  rows discriminate**; the base-byte count is unchanged under the mutant because only the
+  fill is skipped.
+* **THEN PASS 2 CLOSED BOTH OF THEM, AND ADDED A THIRD ESCAPE AND ITS ROW.**
+
+  **ROW T** -- `&& d->type == DISKIMAGE_SCSI`, found by `grok`.  `mkdisk()` hardcodes
+  `DISKIMAGE_SCSI` and neither the rows nor the sweep ever varied it.  **It is sharper
+  than the other two because of where it fires**: `wdc__read()` looks up `DISKIMAGE_IDE`
+  and landisk's default type is IDE, so this conjunct **re-opens the defect on the only
+  guest path the round actually drove** -- the rung-3 witness would go red while the
+  detector stayed green.  Killed by ROW T: `mutant_E4_scsitype_98rows.out`, 2 failures.
+
+  **ROW S** -- two shorts in ONE call (overlay 200 bytes, bitmap `0x05`, read 1536), and
+  it kills **both** previously-filed escapes: `mutant_E2_threshold_98rows.out` and
+  `mutant_E3_firstshort_98rows.out`, 3 failures each.  The adjudicating seat argued for
+  taking rather than filing it, and its reason is the one that convinced me: this
+  `fatal()` is unlatched and guest-floodable, the house idiom for such a site is
+  latch-plus-fatal, and **the natural bad latch edit braces this memset in with the
+  fatal** -- which is exactly the first-short-only shape.  Not a hypothetical future edit;
+  the most plausible one in the round.
+
+  **So no escape from either pass remains open.**  What stays filed is a CLASS rather than
+  an escape: **fitted-threshold conjuncts**.  ROW S kills `< 1024`'s instance, but
+  `< 2048` escapes, and so on -- the ladder's limit is the fix itself, so no finite row set
+  closes it and chasing it is the unbounded fix-of-fix shape.
+
+  *** AND MY WARRANT FOR TAKING ONE AND FILING TWO WAS WRONG EVEN WHERE THE ACTIONS WERE
+  RIGHT, which the adjudicator corrected: the ask-again's cap limits ASK-AGAINS, not
+  FINDINGS *** -- `#452` added six rows from a single ask.  And `E1` was never
+  discretionary: `if (X)` -> `if (X && Y)` aimed at the predicate dominating the memset is
+  the canonical clause-(d) qualification form, and it swept the detector clean, so under
+  DEPENDS-ON it is a **floor breach repaired in-round**, not a row I chose to take.
+
+### What pass 2 caught in the BRIEF rather than the code
+
+Two packet-fed seats refused to ratify, both naming the same missing fact: the brief
+inlined a four-line window and **not the function's `return`**, so "the only consumer of
+`totallenread` is the tail memset" and "the overlaid path returns `len` or 0" were **not
+checkable from the packet**. Both are true -- `return totallenread;`, one call site,
+consumed only by the tail memset and a write-only check -- and both were settled by
+reading. **The seats were right and the defect was mine**, and it is the "inline every fact
+a cloud seat needs" rule broken by the person who keeps citing it.
+
+`deepseek` additionally caught a real writing defect: §2 said the alternative "makes the
+tail memset correct by construction" *and* "fabricates every healthy byte after them".
+Both true -- the memset becomes correct *relative to what was read*, and less was read --
+but "correct" was doing double duty and it reads as a contradiction.
+
+### The rung-3 witness, cited -- and its scope limit stated
+
+Driver and all three transcripts are preserved beside the row logs:
+`round_20260827/shortread_witness.py`, `witness_{committed,fixA,fixB}.txt`. It carries
+`live`, `devsig`, `ovl` and `accept` controls; `ovl` proves the truncated overlay really is
+serving block 0, and `accept` (a 3-sector read crossing no overlay block) is green on all
+builds, so the failing row is a statement about the short read and not about reads in
+general.
+
+**SCOPE LIMIT, stated because the witness itself states it and the round block did not:**
+it measures the **tail-destruction half only**. The caller buffer there is the device's own
+`d->inbuf`, which is zeroed at devinit, so the stale hole at `[200,512)` is invisible from
+the guest on a *fresh* device. **That is a property of the fresh-device configuration, not
+of the defect** -- a ring with history replays prior data on the same arm, and the wrap
+arm's uninitialised stack buffer is a different path the witness never drove. The offline
+differential keeps that half because it owns the buffer.
+
+### And what pass 2 caught in the RECORDS, from the seat that could not read a file
+
+The `kimi-k3:cloud` substitute returned the best packet-fed answer of the pass and found
+**three** defects, all in my records rather than in the code, and all correct:
+
+1. **The repair's dependence on `fatal()` returning was never stated.**  Three packet-fed
+   seats raised it independently and none could settle it -- because I had settled it in
+   PASS 1 and then failed to carry the settled fact into the PASS-2 packet.  *A fact
+   established in pass 1 must be re-inlined for pass 2, or the packet-fed seats spend
+   their whole answer re-deriving it.*  Now stated in the product comment, with the file
+   that settles it named.
+   **Its proposed hardening -- move the memset ABOVE the fatal() -- was DECLINED**, and
+   recorded rather than ignored: the measured delta is zero and the tree's own sibling arm
+   in `diskimage_access__cue()` puts the diagnostic first, so the reorder would buy nothing
+   and diverge from the house shape.  The addition licence wants a measured delta or a
+   transferred warrant; this had neither.
+2. **`86` and `90` both appeared in one brief.**  The ask-again ran BEFORE ROW W existed,
+   so the two filed escapes had been cleared against a suite that did not contain it.
+   **Re-measured against the shipped 90-row set: both still escape**
+   (`mutant_E2_threshold_98rows.out`, `mutant_E3_firstshort_98rows.out`).  The disposition is
+   unchanged and the denominator is now the shipped one.  *A score names the artifact that
+   produced it, and two artifacts with different row counts are two different claims.*
+3. **The contract's kill list for `M1_revert` omitted ROW W**, which the round's own
+   pre-fix table says must fire.  Corrected: `M1_revert` reddens the original four rows AND
+   ROW L, ROW I and ROW W, because all three fire on the real defect and not only on their
+   mutants.
+
+*Three packet-fed seats declined to ratify and named the same missing facts rather than
+agreeing.  That is the honest form, and it is the reason their agreement elsewhere in this
+round is worth something.*
+
+### Recorded, not hidden
+
+Under this fix `fread_helper` returns **`len` or 0** on the overlaid path, so the caller's
+`lendone < len` memset is a deliberate **no-op there**. It is **not dead** -- measured by
+deleting it: exactly one row reddens, and it is `[CONTROL] ... and is zero-filled` in
+`section_boundary()`.
+
+> ### *** TWO THINGS I WROTE ABOUT THIS WERE WRONG, BOTH IN PRODUCT CODE, AND BOTH FOUND
+> ### BY REVIEW SEATS ON PASS 2. ***
+>
+> **The cited row was structurally blind.** I named `section_roundup_gap()`. That section
+> carries ONE check (`res == 1`) and cannot see the deletion at all -- the detector's own
+> `main()` says it *"stays green either way, deliberately"*. The refutation was 200 lines
+> away in this round's own file.
+>
+> **And 'four live producers' undercounts, in the direction that matters.** Four is the
+> count *inside* `fread_helper`. The same caller memset is also fed by
+> `diskimage_access__cue()` -- three short paths -- and by `diskimage_access__cdrom()`.
+> Since the sentence exists to stop a future deletion, **an editor who discharges the four
+> named and deletes it still breaks cue and cdrom.** Verified by reading: `:1580`, `:1582`
+> and `:1584` all assign `lendone`, and the memset is downstream of all three.
+
+Do not simplify it away and do not assert `lendone == len`. **And the gate now pins the row
+that actually fails** -- it was pinning the neighbouring `READ inside the advertised gap
+still succeeds` row, which is blind to the deletion, while the sensitive one was deletable
+in silence.
+
+*Three of my authoring scripts in this round had never been run and all three failed --
+one anchor indented a tab short (so **neither candidate fix had ever actually been applied
+by it**), two matching four sites where they needed one. Found by the measuring seat, which
+repaired them positionally. I then made the identical tab error again in the next script,
+after being told. The working form is to anchor on CONTENT and derive the indent from the
+line being replaced, never to retype it.*
+
+
 ## Round 485 (#485) -- 242 of 256 opcodes ended a command and never raised its interrupt
 
 > ### *** THIS ROUND SHIPPED WITHOUT A PASS 2, AND A GATE CAUGHT IT RATHER THAN I DID. ***
@@ -2315,6 +2598,16 @@ A panel seat supplied the algebra that makes the clamp provably consistent with 
 ### The fix
 
 Clamp `lentoread` to the current block's remainder, and advance `buf` by what was consumed.
+
+> *** 'WHAT WAS CONSUMED' IS CORRECTED BY `#488`, WHICH FOUND THE SAME WORDING IN THE
+> PRODUCT COMMENT THIS ROUND SHIPPED. ***  `buf` advances by `lentoread`, which is what was
+> REQUESTED.  The two are equal on a full read and differ on a SHORT one -- and the short
+> case is the defect `#488` fixed.  What tips this from ambiguity to a wrong record is the
+> sentence below pairing it with *"indexes the buffer by bytes actually delivered"*, which
+> is the file-side reading; the two halves of this block cannot both be right.  Corrected
+> here rather than only at the code, because `#488` corrected the code and left these
+> siblings standing for several hours -- the grep-for-siblings rule, broken by the round
+> that was applying it.
 Same shape as `diskimage_access__cue()` in the same file, which already clamps to the remainder
 of the current sector and indexes the buffer by bytes actually delivered.
 
