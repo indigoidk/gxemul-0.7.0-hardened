@@ -193,14 +193,24 @@ struct dreamcast_gdrom_data {
  *  duplicate-key hazard this project already paid for once in dev_sh4.c.
  */
 /*
- *  *** THE PRE-SET TRIGGER ABOVE HAS FIRED, AND THIS IS IT BEING DISCHARGED. ***  It was
+ *  *** THE PRE-SET TRIGGER BELOW HAS FIRED, AND THIS IS IT BEING DISCHARGED. ***  (It said
+ *  ABOVE until 2026-08-28; the trigger is BELOW, at the `SIX OF EIGHT BITS` block.  A
+ *  pointer naming the wrong direction is a small wrong record of the kind a future reader
+ *  gives up on -- the opus seat caught it on this row's assess panel.)  It was
  *  written as "at the SEVENTH bit"; `gdromexitsix` Round 1 adds THREE latches to the six
  *  below, so the NINTH would be `1u << 8` -- truncating to zero in a uint8_t, never
  *  setting, and letting the diagnostic it guards FLOOD.  No compile error, no runtime
  *  complaint.  Two review seats reached it independently on that round's pass 1.
  *
  *  BIT POSITIONS, not hand-assigned masks: GDROM_W_NBITS is then correct BY CONSTRUCTION
- *  rather than by maintenance, and a duplicate is impossible to write.  The masks below
+ *  rather than by maintenance, and an ACCIDENTAL duplicate position is impossible to write.
+ *  *** THAT CLAUSE READ "a duplicate is impossible to write" AND WAS TOO STRONG.  Corrected
+ *  on the assess panel, where the opus and fable seats objected to it independently. ***  C
+ *  permits an explicit duplicate enumerator, and nothing here stops a NEW SITE spelling a raw
+ *  `d->warned |= 0x40` that collides with the seventh enumerator when it arrives.  What
+ *  implicit numbering buys is that no two enumerators written in the normal way can collide,
+ *  and that the count stays synchronised with them -- which is worth having and is less than
+ *  the original sentence claimed.  The CAPACITY half is enforced separately, below.  The masks
  *  reproduce 0x01..0x20 exactly, in the same order -- checked mechanically by the script
  *  that made this edit, not asserted here.
  *
@@ -228,13 +238,91 @@ enum {
 #define	GDROM_W_DMAARM	(1u << GDROM_W_DMAARM_B)
 
 /*
- *  *** SIX OF EIGHT BITS ARE USED, AND THE NINTH FAILS SILENTLY. ***  Filed
- *  as `gdromwarnbits` with a PRE-SET TRIGGER: at the SEVENTH bit, widen
+ *  *** THE COUNT-FITS-ITS-CARRIERS BOUND, AS A COMPILE ERROR RATHER THAN A SENTENCE. ***
+ *  Added on the gdromwarnbits assess panel, where the OPUS and FABLE seats derived it
+ *  independently and each MEASURED the case against it.
+ *
+ *  The comment above says GDROM_W_NBITS is "correct BY CONSTRUCTION".  That is true of the
+ *  COUNT -- the compiler numbers the enumerators -- and it says nothing about whether those
+ *  positions FIT.  Nothing in the product build enforced that, and the offline
+ *  mask_equivalence_check.c cannot: it compiles a REPLICA of this enum, so adding bits to
+ *  the product leaves the artifact's private NBITS at six forever.  A drift that matters
+ *  therefore leaves the offline check completely GREEN.
+ *
+ *  *** THE OBVIOUS FORM WAS MEASURED WRONG AND IS NOT WHAT IS WRITTEN HERE. ***  A guard
+ *  spelled `GDROM_W_NBITS <= 32` COMPILES CLEAN over a `uint8_t warned` carrying a live
+ *  `1u << 8` truncation -- measured on this build's compiler at -std=c99 -pedantic-errors
+ *  -Wall -Wextra.  It is written from the DEFECT (too many bits) instead of from the DOMAIN
+ *  (the bits must fit the things that carry them), which is the exact failure
+ *  thirdparty/dreamcast_sysasicvar.h names for #466: "a guard written from the DEFECT
+ *  rather than from the DOMAIN covers one end and reads as if it covers both."
+ *
+ *  TWO clauses, because there are TWO carriers and storage width alone does not imply the
+ *  other:
+ *    1. `warned` must be able to HOLD the bit -- the half mask_equivalence_check.c is blind
+ *       to, and the half a one-token revert of this diff (uint32_t -> uint8_t) attacks.
+ *    2. `1u` must be able to PRODUCE it -- every mask above shifts `1u`, and `1u << 32` is
+ *       undefined however wide `warned` becomes.  A `uint64_t` field would satisfy clause 1
+ *       at 40 bits while clause 2 correctly refuses.
+ *
+ *  C99-legal and precedented in product code rather than invented here: the negative-size
+ *  typedef is #388's shape at cpus/cpu_mips.c (two sites) and cpus/memory_rw.c, whose own
+ *  licence sentence transfers verbatim -- "a static assertion costs nothing and covers the
+ *  build the test cannot reach."  The bitfield spelling used by dreamcast_sysasicvar.h is
+ *  needed only where the operand can be a runtime variable; an enum constant cannot be.
+ *  (And "this tree is C99" is a portability policy, not a fact about what compiles --
+ *  sysasicvar.h records the build compiler reporting __STDC_VERSION__ 202311L.)
+ *
+ *  *** AND THIS IS NOT AN ADDED GUARD.  IT IS GDROM_W_NBITS'S FIRST CONSUMER. ***  The
+ *  opus seat measured that the count had ZERO references anywhere -- it sized nothing and
+ *  bounded nothing, and DELETING it compiled clean.  So the "correct BY CONSTRUCTION"
+ *  claim above rested on a decorative symbol.  Under this project's addition licence that
+ *  matters: this is not accretion needing a warrant, it is the L4 repair that makes an
+ *  already-shipped claim true.
+ *
+ *  *** THE dev_sh4.c PRECEDENT TRANSFERS ON SHAPE AND NOT ON THIS PROPERTY, which the
+ *  comment above does not say. ***  SH4_VAL_NCLASS is load-bearing -- it SIZES
+ *  val_reported[SH4_VAL_NCLASS][...] and bounds a runtime check -- so its own
+ *  by-construction claim is true unaided.  GDROM_W_NBITS was not.  Same conversion, and
+ *  the property it is cited for was present in one case and absent in the other.
+ *
+ *  MEASURED, not asserted: a hard compile error at nine bits over a uint8_t and at
+ *  thirty-three over a uint32_t; CLEAN on the shipped source and at nine over uint32_t,
+ *  so it is not a check that cannot fail.  Controls preserved at
+ *  regress/artifacts/gdromwarnbits/bound_assert_controls{.sh,_20260828.out}.  It emits no
+ *  object code -- verified with the filename held constant: the object differs in exactly
+ *  two bytes, both __LINE__ immediates displaced by this comment block.
+ */
+typedef char gdrom_w_fits_its_carriers[
+    (GDROM_W_NBITS <= 8 * sizeof(((struct dreamcast_gdrom_data *)0)->warned) &&
+     GDROM_W_NBITS <= 8 * sizeof(1u)) ? 1 : -1];
+
+/*
+ *  *** THIS TRIGGER HAS FIRED AND IS DISCHARGED -- see the enum ABOVE.  EVERYTHING IN
+ *  THE PRESENT TENSE BELOW IS THE PRE-DISCHARGE STATE AND IS KEPT ONLY AS THE TRIGGER'S
+ *  ORIGINAL TEXT. ***
+ *
+ *  It read "SIX OF EIGHT BITS ARE USED, AND THE NINTH FAILS SILENTLY", and it survived
+ *  the discharge VERBATIM AND IN THE PRESENT TENSE -- so for one commit this file
+ *  asserted "six of eight" (it is now six of THIRTY-TWO) and "truncates to 0 in a
+ *  uint8_t" (the field is now uint32_t), sixty lines below a note saying the trigger had
+ *  fired.  Caught by the opus seat on the discharge's own assess panel; no other seat of
+ *  the nine mentioned it.
+ *
+ *  *** A DISCHARGED TRIGGER MUST BE RETIRED IN THE SAME EDIT THAT DISCHARGES IT. ***  A
+ *  trigger is written to be read by a FUTURE round, so leaving it live-sounding aims the
+ *  next reader at work that is already done -- and its numbers go false at exactly the
+ *  moment it stops applying.  That is the wrong-record class in the artifact whose whole
+ *  job is to be believed.
+ *
+ *  --- THE TRIGGER AS ORIGINALLY WRITTEN (historical; do not act on it) ---
+ *
+ *  Filed as `gdromwarnbits` with a PRE-SET TRIGGER: at the SEVENTH bit, widen
  *  `warned` and convert these to an enum of bit POSITIONS ending in a
  *  GDROM_W_NBITS count, with each mask defined as `1u << ..._B`.
  *
- *  Why it is worth a trigger rather than a note: `warned |= (1u << 8)`
- *  truncates to 0 in a uint8_t, so the latch never sets, the guard stays
+ *  Why it was worth a trigger rather than a note: `warned |= (1u << 8)`
+ *  truncated to 0 in the then-uint8_t field, so the latch never set, the guard stayed
  *  true forever, and the diagnostic FLOODS -- which is the one behaviour
  *  every latch here exists to prevent, arriving with no compile error and
  *  no runtime complaint.  A duplicate hand-assigned mask fails the same way
@@ -322,9 +410,25 @@ static int gdrom_unimpl_first(uint32_t *bits, size_t nkeys, uint32_t off)
  *  compiler and this tree targets portable C99 -- but as a PORTABILITY
  *  caution, not as a silent-corruption hazard on the compiler in use.
  *
- *  Stated rather than asserted: `_Static_assert` is C11 and this tree is
- *  C99.  The two existing callers both pass uint32_t[N][M] members declared
- *  a few lines above, so the constraint is visible at every call site.
+ *  Stated rather than asserted.  *** THE REASON GIVEN HERE WAS "`_Static_assert` is C11 and
+ *  this tree is C99", AND THAT IS REFUTED -- INSIDE THIS FILE'S OWN TRANSLATION UNIT.
+ *  Corrected 2026-08-28; found by the opus seat, which was the only one of nine to look. ***
+ *
+ *  `#include "thirdparty/dreamcast_sysasicvar.h"` at the top of this file brings in
+ *  SYSASIC_EVENT_RANGE_OK, a C99 compile-time bound assert, and every
+ *  SYSASIC_TRIGGER_EVENT() call here expands it -- FOUR of them, compiled on every build,
+ *  two hundred lines below this sentence claiming the technique is unavailable.  The
+ *  build also passes no `-std=` at all and the compiler reports __STDC_VERSION__ 202311L,
+ *  so "this tree is C99" is a PORTABILITY POLICY, not a fact about what compiles.
+ *  sysasicvar.h records both legs of exactly this rationale being refuted by measurement
+ *  on #466's pass 2 -- one day before this comment shipped.
+ *
+ *  The claim is therefore narrowed to what survives: an assert here is not IMPOSSIBLE,
+ *  it is merely NOT YET WRITTEN, and the constraint is visible at every call site because
+ *  the two existing callers both pass uint32_t[N][M] members declared a few lines above.
+ *  (The count-fits-its-carriers bound near the warn-bit enum IS now asserted; this
+ *  paragraph governs a DIFFERENT constraint -- GDROM_UNIMPL_FIRST's array type -- and the
+ *  two were conflated once already, in a brief that cited this comment for that bound.)
  */
 #define	GDROM_UNIMPL_FIRST(arr, off)	\
 	gdrom_unimpl_first((arr), sizeof(arr) * 8, (off))
