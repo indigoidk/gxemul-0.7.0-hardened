@@ -3331,67 +3331,30 @@ that is the disposition taken.
 Datasheet, section 7.3.42: *&quot;The write has no effect if the associated interrupt was
 already clear.&quot;*  The model reloads the counter whenever the periodic bit is set,
 regardless of whether anything was pending.  Needs a row of its own and a reading of what
-the reload is actually for.</span></span><span class="state st-open" title="BRIEF-READY, NOT STARTED.  Held behind `shortread`, which has two measuring seats in flight; starting a second round now would contend for the same seats.  The premise is settled (datasheet quoted, offsets straddle-calibrated, the defect located to one of three effects, existing rows proved blind by construction), so the round opens without re-deriving any of it.">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c pend"><span class="wrap" tabindex="0"><span class="g">OK</span><span class="tip">2026-08-27 — CONFIRMED — THE ROW&#x27;S CLAIM IS TRUE, AND THE RESEARCH LOCATES IT TO ONE OF THREE EFFECTS RATHER THAN
-TO THE ARM AS A WHOLE.  Brief-ready; no product code touched.
+the reload is actually for.</span></span><span class="state st-open" title="BRIEF-READY, NOT STARTED.  Held behind `shortread`, which has two measuring seats in flight; starting a second round now would contend for the same seats.  The premise is settled (datasheet quoted, offsets straddle-calibrated, the defect located to one of three effects, existing rows proved blind by construction), so the round opens without re-deriving any of it.">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c pend"><span class="wrap" tabindex="0"><span class="g">OK</span><span class="tip">2026-08-27 — CONFIRMED — THE OPTION-COMPLETENESS GREP IS DONE, AND ITS ANSWER IS A NEGATIVE ONE -- WHICH IS THE
+USEFUL KIND, because it stops the round from transferring a warrant that does not reach.
 
-PRIMARY SOURCE, quoted verbatim.  *** CITED BY GREP ANCHOR, NOT BY LINE NUMBER, because
-the extracted text is regenerable and a line number in it is a wrong record waiting for
-someone to re-run pdftotext. ***  Both anchors below are VERIFIED UNIQUE (grep -cF == 1):
+The rule says the fork&#x27;s own precedents are part of the design space, so I asked: what
+does this tree already do with a write-only ACKNOWLEDGE register?  110 INTERRUPT_DEASSERT
+sites across src/devices/*.c.  TWO devices carry a real idiom for &#x27;do nothing if the state
+did not change&#x27;, and both are EDGE DETECTION on a saved snapshot:
 
-  grep -nF &#x27;effect if the associated interrupt was already clear&#x27; _scratchpad/dc21285.txt
+  dev_dreamcast_asic.c   if (d-&gt;asserted_N != old_asserted_N) { assert or deassert }
+  dev_sh4.c              if (a &amp;&amp; !old_a) ASSERT;  else if (!a &amp;&amp; old_a) DEASSERT;
 
-    &#x27;Any write to the TimerNClear register (any data) clears the associated interrupt.
-     THE WRITE HAS NO EFFECT IF THE ASSOCIATED INTERRUPT WAS ALREADY CLEAR.  TimerNClear
-     is a write-only register.&#x27;
+*** SO THE IDIOM EXISTS AND IT DOES NOT COVER THIS ROW. ***  Both guard the INTERRUPT
+LINE, and the interrupt line is the one effect in the TIMER_x_CLEAR arm that is already
+harmless -- deasserting an already-clear level is a no-op.  Neither guards a SIDE EFFECT
+like `reload_timer_value()`, which is the effect that actually violates the datasheet.
 
-*** THE OFFSETS WERE STRADDLE-CALIBRATED, NOT GUESSED, AND THE TABLE NEEDED IT: TWO
-EXTRACTED LINES DISAGREE. ***  Table 7-12 renders with the NAME column shifted two rows
-against the ADDRESS column, so a naive read gives `Timer1Clear 324h` while the section
-head gives `30Ch`.  Pairing strictly in order down each column yields Timer1Load=300h,
-Timer1Value=304h, Timer1Control=308h, Timer1Clear=30Ch, Timer2Load=320h -- and
-`dc21285reg.h` pins exactly TIMER_1_LOAD 0x300 / TIMER_1_CONTROL 0x308 / TIMER_1_CLEAR
-0x30C / TIMER_2_LOAD 0x320.  Calibration points STRADDLE the value of interest, per the
-refined rule, and the UNSTAGGERED PROSE (&#x27;Offsets 30Ch, 32Ch, 34Ch, and 36Ch&#x27;) confirms
-independently.  The tree&#x27;s constants are right; 324h is the artefact.
+  So there is NO fourth option member to be had from the tree, and the round should say
+  so rather than leaving the member open as though a grep might still supply one.  The
+  choice really is between the three already named.
 
-THE CODE.  The `TIMER_1_CLEAR` arm fires three effects on a write, and only ONE of them
-is unfaithful:
-
-  pending_timer_interrupts[n] --     guarded by `&gt; 0`      ALREADY IDEMPOTENT
-  INTERRUPT_DEASSERT(...)            unguarded, but a LEVEL HARMLESS
-  reload_timer_value(cpu, d, n)      guarded ONLY by TIMER_MODE_PERIODIC -- NOT by
-                                     whether anything was pending      *** THE DEFECT ***
-
-So a guest writing TimerNClear with NOTHING PENDING restarts a periodic timer&#x27;s
-countdown, where the datasheet says the write has no effect.  The guest-visible symptom
-is a timer that SLIPS: the next tick arrives a full period late, and a guest that clears
-more often than the period could starve its own timekeeping indefinitely.
-
-NOT DETECTOR-BACKED, and this is the row&#x27;s second half confirmed: every #474 row in
-`diff_footbridge.c` and `fbpending_drain_probe.py` SETS UP A PENDING INTERRUPT and then
-clears it.  **Nothing exercises a clear with nothing pending** -- which is precisely the
-state the defect lives in.  The existing rows cannot see it by construction.
-
-*** WHAT THE ROUND MUST NOT ASSUME, AND IT IS THE REASON THIS IS FILED RATHER THAN FIXED:
-whether reload-at-CLEAR belongs in the model at all. ***  On real hardware a periodic
-timer reloads ITSELF at zero and needs no Clear write to do it.  The model&#x27;s
-reload-at-clear may therefore be a modelling shortcut standing in for the automatic
-reload, in which case hoisting it under a pending guard is right for a different reason
-than the datasheet sentence gives -- and if it is NOT a shortcut, the guard changes when
-periodic timers reload.  A panel question, not a reading question.
-
-THE OPTION SET AS I SEE IT, offered for completeness-audit rather than as a decision:
-  (1) hoist all three effects under `pending &gt; 0`, the literal datasheet reading;
-  (2) hoist ONLY the reload, leaving deassert unconditional (it is idempotent anyway);
-  (3) leave the code and correct the record, if reload-at-clear is load-bearing;
-  (4) something the fork already does elsewhere for a write-only acknowledge register --
-      NOT YET GREPPED FOR, and the option-completeness rule says it should be before any
-      round opens.
-
-SIBLING: `fbclearaliases` (the four-address fold 0x30C/0x32C/0x34C/0x36C is READ from the
-code and not detector-backed -- every #474 row exercises timer 1).  These two share a
-fixture and probably one round, but that is a round-scope judgement the panel should make,
-not an assumption: same device and same arm, but different semantic classes. — evidence: _scratchpad/dc21285.txt (grep anchor below) + dev_footbridge.c TIMER_1_CLEAR arm</span></span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">fbclearaliases</span><span class="ttl">fbclearaliases  the four-address timer fold is READ from the code and is not detector-backed -- every #474 row exercises timer 1</span><span class="tip">fbclearaliases  the four-address timer fold is READ from the code and is not detector-backed -- every #474 row exercises timer 1 — witness: none -- filed, no work done yet. — note: Coverage debt, low.  The fold normalises 0x30C / 0x32C / 0x34C / 0x36C onto one case and
+*A precedent that addresses the harmless two-thirds of an arm is not a precedent for the
+harmful third, and the way to find that out is to name which EFFECT each idiom guards
+rather than counting devices that &#x27;do the idempotent thing&#x27;.  A coarser census -- how many
+deasserts look guarded -- returns a number and answers nothing.* — evidence: grep census of INTERRUPT_DEASSERT across src/devices/*.c</span></span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">fbclearaliases</span><span class="ttl">fbclearaliases  the four-address timer fold is READ from the code and is not detector-backed -- every #474 row exercises timer 1</span><span class="tip">fbclearaliases  the four-address timer fold is READ from the code and is not detector-backed -- every #474 row exercises timer 1 — witness: none -- filed, no work done yet. — note: Coverage debt, low.  The fold normalises 0x30C / 0x32C / 0x34C / 0x36C onto one case and
 selects timer indices 0-3; `#474`&#x27;s rows all use timer 1, so the four-address claim in that
 round&#x27;s record rests on reading rather than measurement.  One nonzero alias row closes it.
 
