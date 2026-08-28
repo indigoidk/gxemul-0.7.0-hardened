@@ -3073,10 +3073,91 @@ Each is ONE `.c` compiled by ONE `cc`, `#include`ing the REAL shipping source. *
 **Not silent, which bounds the severity:** the pre-existing `INCOMPLETE READ` `fatal()` in `fread_helper` announces a short read. So this is wrong-region data WITH a diagnostic, not the silent corruption `#472` closed.
 
 **THE CLOSING ROW, already specified: one truncated overlay data file** forcing a short read in a NON-FINAL iteration, asserting the bytes land at the right offsets afterwards. **One row discharges all three items**, and it is offline-buildable in `regress/diff_diskimage_io.c`&#x27;s existing fixture -- no build, no rig, no timing oracle.
-</span></span><span class="state st-in work">in work</span></span></th></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c pend"><span class="wrap" tabindex="0"><span class="g">DEFERRED</span><span class="tip">2026-08-27 — UNKNOWN — DELIBERATELY NOT FIRED on this brief -- it was still running the #487 landisk
-obio census when this panel convened, and the two Anthropic seats share one
-service.  *** THIS IS A DEFERRAL, NOT A SEAT FAILURE, AND THE TWO MUST NOT
-RENDER THE SAME. ***  It is owed the pass-2 adjudication. — evidence: _scratchpad/panel_20260827_202031</span></span></td><td class="c pend"><span class="wrap" tabindex="0"><span class="g">PENDING</span><span class="tip">2026-08-27 — UNKNOWN — SEAT IN FLIGHT at the time of writing -- fired as the MEASURING seat with the
+</span></span><span class="state st-in work">in work</span></span></th></tr><tr class="ph st-in work"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c pend"><span class="wrap" tabindex="0"><span class="g">OK</span><span class="tip">2026-08-27 — CONFIRMED — VERDICT: FIX B -- zero-fill the hole in place, count the requested length, continue.
+It filled the ninth seat it had been deferred from, and it corrected me twice on facts I
+had already checked once.
+
+*** (1) &#x27;A IS NOT FAIL-STOP -- IT IS FAIL-MORE.&#x27;  THE SINGLE SENTENCE THAT SETTLES THE
+ROUND. ***  The read path&#x27;s system-level postcondition is FIXED by the caller whichever
+fix ships: the tail memset runs, the function returns 1, and the only read-side `return 0`
+(the bounds arm) is unreachable from a short read.  So the ONLY degree of freedom either
+fix controls is WHICH BYTES ARE FABRICATED ZEROS.  B fabricates exactly the lost bytes --
+the minimum possible.  A fabricates the lost bytes PLUS every healthy byte after them, up
+to 63.5 sectors of a 64-sector wdc__read chunk.  &#x27;Stop and report the prefix&#x27; is a
+principled shape only where the report can change the outcome; here the caller converts
+the report into more zeros and success either way.
+
+  And a non-reason, stated so nobody credits it later: A&#x27;s larger zeroed region is NOT
+  &#x27;louder&#x27; to the guest.  Zeros carry no signal -- the fork&#x27;s own #416 comment in
+  diskimage_scsicmd.c records exactly this, that a zero-filled short read &#x27;reports a
+  successful read of zeros, which is why a short or refused transfer was invisible&#x27;.
+
+*** (2) I HAD READ HALF THE PRECEDENT.  diskimage_access__cue CONTAINS BOTH SHAPES, KEYED
+BY CAUSE -- AND ITS FIRST ARM IS FIX B. ***  The `t == NULL` arm zero-fills in place,
+COUNTS THE CHUNK, and CONTINUES.  My sibling-parity write-up cited only the short-fread
+arm and concluded &#x27;precedent points at A&#x27;.  In-place-zero-and-continue is already the
+fork&#x27;s house shape for &#x27;this piece has no data but the access must proceed&#x27;.
+
+  AND THE DISANALOGY I OFFERED IS THE CORRECT READING, with a sharper warrant than mine:
+  arm 3&#x27;s break is harmless AT ITS HOME SITE because a CUE track file spans tens of
+  megabytes while a guest access spans kilobytes -- the rest of the access almost always
+  resolves in the same broken file, so stopping discards nothing recoverable.  In
+  fread_helper the layers interleave at 512-byte granularity BY DESIGN, so the same shape
+  discards up to an access-full of healthy data.  *The warrant element that makes arm 3
+  safe -- &#x27;what follows is probably in the same bad file&#x27; -- measurably fails to transfer.*
+  That is the carrier&#x27;s transfer-a-precedent rule working: check each ELEMENT, not the
+  shape.
+
+*** (3) THE FIFTH DEAD PREMISE, WHICH I ASKED FOR AND GOT: &#x27;THE READ PATH HAS NO FAILURE
+CHANNEL&#x27; IS FALSE AS A STATEMENT ABOUT THE SYSTEM. ***  diskimage__internal_access returns
+0 for reads on the bounds arm, and diskimage_scsicmd.c has a LIVE, FORK-BUILT (#416)
+consumer that turns that 0 into CHECK CONDITION with sense data.  What is true is
+narrower: the HELPER&#x27;s shortfall is severed by the tail memset, and the wdc caller
+discards the result.  The round&#x27;s conclusion survives -- neither fix can signal through
+the severed link -- but the OPTION-SET consequence is real and is filed (below).
+
+*** (4) A SEVERITY ELEVATION I MISSED, AND I RE-VERIFIED IT BY READING BEFORE RECORDING
+IT.  &#x27;312 STALE CALLER BYTES&#x27; UNDERSELLS THE COMMITTED BEHAVIOUR. ***  In wdc__read the
+hole is not abstract caller memory:
+
+  COMMON ARM   reads directly into `d-&gt;inbuf + d-&gt;inbuf_head`, the PERSISTENT RING, so
+               the hole retains PREVIOUS RING CONTENTS -- stale prior-sector data replayed
+               to the guest.
+  WRAP ARM     reads into `unsigned char buf[512 * MAX_SECTORS_PER_CHUNK]`, a plain
+               UNINITIALISED automatic array, and then copies EVERY byte into the ring
+               with `for (i=0; i&lt;512*to_read; i++) wdc_addtoinbuf(d, buf[i]);` --
+               unconditionally, regardless of what the read actually filled.  So the hole
+               is UNINITIALISED HOST STACK MEMORY handed to the guest.
+
+  Both verified in the tree by me before this was written down.  The class is therefore
+  corruption PLUS host-memory disclosure on the wrap arm, and BOTH FIXES CLOSE BOTH.  SCSI
+  holes read as zeros (its transfer buffer is allocated zeroed), so this is wdc-specific.
+
+(5) IT ATTACKED GROK&#x27;S ENOSPC REFUTATION AND REPORTED THAT IT SURVIVES, which is the right
+way to treat a refutation that favours one&#x27;s own convenience.  `do_fsync` defaults off, but
+POSIX fseek flushes unwritten output and the per-block fseek pattern flushes data before
+the bitmap within every iteration -- so a crash loses the BIT while keeping the DATA, the
+benign direction.  One residual narrow window (a deferred-ENOSPC whose data flush fails and
+is discarded at the next iteration&#x27;s fseek while the already-durable bit stands) is
+footnote-grade, and the clean-close path already orders data-before-bitmap deliberately.
+
+(6) A RECORD NOTE THE ROUND MUST CARRY IN PROSE, or a future reader files a defect against
+it: under B, fread_helper&#x27;s return degenerates to FULL LENGTH OR 0, so BOTH the write-only
+short-transfer check AND the read-side tail memset become no-ops for overlaid reads.  That
+is by design.  The caller&#x27;s memset stays load-bearing for the no-overlay fast path (which
+still returns a raw fread count) and for CUE, so it must NOT be deleted -- and saying so is
+what stops a later round &#x27;simplifying&#x27; it away.
+
+FILED, NOT FIXED (riders on B, explicitly not competitors to it):
+  * propagate a loss-vs-conventional-gap distinction so SCSI guests get a real error.  Two
+    traps for whoever takes it: #416&#x27;s hardcoded sense is ILLEGAL REQUEST / LBA OUT OF
+    RANGE, and a medium loss needs MEDIUM ERROR / UNRECOVERED READ ERROR -- reusing #416&#x27;s
+    code would ship a wrong record IN SENSE DATA; and wdc discards the result anyway.
+  * the INCOMPLETE READ fatal() names disk id and offset but NOT THE LAYER, so a routine
+    base-EOF gap read and an actionable overlay truncation print identically.  The overlay
+    arm should name the overlay file, with the house per-instance latch and `(once)`.
+  * the open-time companion (per-bit: highest set bitmap bit vs data-file length) --
+    endorsed, and it cannot replace B because truncation can postdate open. — evidence: _scratchpad/panel_20260827_202031 (Agent seat, adjudication)</span></span></td><td class="c pend"><span class="wrap" tabindex="0"><span class="g">PENDING</span><span class="tip">2026-08-27 — UNKNOWN — SEAT IN FLIGHT at the time of writing -- fired as the MEASURING seat with the
 full mutant table (M1..M10), both candidate fixes, the three-then-five new rows,
 and codex&#x27;s rung-3 route to execute.  Not an answer yet; recorded so the stage
 shows a fired seat rather than a blank. — evidence: _scratchpad/panel_20260827_202031</span></span></td><td class="c pend"><span class="wrap" tabindex="0"><span class="g">OK</span><span class="tip">2026-08-27 — CONFIRMED — VERDICT: answered in full, no wall.  Converges with agy and grok on the escapes, and
