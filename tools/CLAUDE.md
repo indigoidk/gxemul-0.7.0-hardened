@@ -2975,6 +2975,32 @@ state it was in, and one restore-and-`cmp`-against-SEC settled it.
 > copy. Then the original is free to edit while the job runs, which is exactly when the urge
 > to edit it arrives -- because that is when you are watching it and thinking about it.
 
+> ### *** AND THE SAME HAZARD HAS A PYTHON FORM THAT THE BASH RULE DOES NOT COVER: A
+> ### MULTI-RUN SCRIPT RE-READS ITS PROBE BETWEEN RUNS. Noticed 2026-08-28, before it bit. ***
+>
+> Bash reads a script INCREMENTALLY, so editing it mid-execution corrupts THAT run -- which is
+> the rule above. **Python is the opposite and it is not safer: the interpreter reads the whole
+> file at startup, so the RUNNING invocation is immune -- and the NEXT invocation loads
+> whatever the file says then.**
+>
+> So a comparison driver shaped like
+>
+>     for tree in base mutant; do python3 -u probe.py $tree/gxemul "$IMG"; done
+>
+> **gives run 1 and run 2 DIFFERENT INSTRUMENTS if the probe is edited between them**, and the
+> difference lands in the very output being diffed. An edit to a row's NOTE text is enough:
+> the note is printed in the row line, so a records-only correction shows up as an apparent
+> behavioural difference between base and mutant.
+>
+> > **A COMPARISON RUN OWES ONE INSTRUMENT. Freeze the probe (`cp`) for the duration, or make
+> > every edit BEFORE the driver starts and say so.** The bash rule protects the run in flight;
+> > this protects the COMPARISON, which is the thing the measurement actually rests on.
+>
+> *Recorded because it did not bite, not because it did: the edits happened to precede the
+> launch. The near-miss is the useful part -- the failure would have presented as a real
+> difference between two trees, which is exactly what the run exists to detect, and nothing
+> in the output would have said the instrument changed.*
+
 *I knew this rule, had written it down hours earlier for a different script, correctly held
 off editing `wdc_flood_probe.py` for the same reason -- and then edited the driver. The
 probe was protected because the hazard was FRONT OF MIND FOR THE PROBE. Knowing a rule and

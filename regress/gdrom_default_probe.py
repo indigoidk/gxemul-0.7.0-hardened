@@ -59,6 +59,39 @@ not by intent:
   * a completion event SET on a declined transfer            (M8, M9)
   * outward growth of the arming test                        (M10)
   * an operand swap in the no-data guard                     (M11)
+    *** #490: THIS CLAIM IS EXPIRED AND THE MEASUREMENT SAYS SO.  M11 IS NOW
+    EQUIVALENT -- NO ROW KILLS IT, BECAUSE THERE IS NOTHING LEFT TO KILL. ***
+      artifacts/gdromexitsix/m11_rescore_20260828/m11_58row.txt
+        fixed  GDROM_DEF_RESULT=58/58   nodata stale/stale says/stale idle all ok
+        M11    GDROM_DEF_RESULT=58/58   ... byte-identical
+
+    THE CHRONOLOGY, from git rather than memory, because every record here was
+    CORRECT WHEN WRITTEN and one of them was overtaken:
+      2026-08-25  abf665c  M11 measured DETERMINISTICALLY LETHAL -- five runs, five
+                           SIGSEGVs, written out in words rather than as a ratio
+                           because an N/N in this docstring is indistinguishable
+                           from a stale ROW SCORE against the gate's pin of 58.
+                           (The round that first measured it recorded exactly this
+                           remedy; I wrote the ratio anyway and section U caught it.)
+                           Preceded by
+                           `Transfering 408 bytes to 0x00000000` -- a real NULL read.
+                           That round recorded, honestly, that A RE-SCORE WAS OWED.
+      2026-08-26  4d05cf0  #465 `data and data_len were released apart` -- free_data
+                           now clears BOTH.  THE CRASH BECAME IMPOSSIBLE.
+      2026-08-28           the owed re-score, finally run: EQUIVALENT.
+    `git merge-base --is-ancestor` confirms the fix is NOT an ancestor of the SIGSEGV
+    measurement, so the two results do not contradict -- they are one day apart.
+
+    *** THE LESSON IS NOT ABOUT M11.  A KILL RECORD IS TIME-INDEXED EXACTLY AS AN
+    ABSENCE RECORD IS. ***  The carrier already requires that an absence record NAME
+    ITS WARRANT and that any edit touching that warrant RE-RUNS the death measurement.
+    Nothing said the same about a claim that a mutant IS caught -- so #465 edited the
+    warrant, the owed re-score was written down the day before, and three rounds ran
+    with this contract asserting coverage it no longer had.
+
+    KEPT, NOT DELETED: the mutant is still worth listing.  A future edit that
+    re-separates the two fields makes M11 lethal again, and this entry is where a
+    reader learns that -- which a deleted line could not do.
   * REFUSAL OR CORRUPTION OF A LEGAL TRANSFER -- legal arming still enters
     the path, the completion still fires, and the device's own TOC byte
     still lands                                              (M5)
@@ -1041,6 +1074,41 @@ row("arm bytetrig", printed(t, "r2") if alive else "died", "0x0",
     "a BYTE trigger of 0x5a declines and clears -- not just a 32-bit 1")
 
 
+#  *** #490 L4 -- READ THIS BEFORE THE BLOCK BELOW.  EVERYTHING IN IT WAS TRUE WHEN
+#  #462 WROTE IT AND WAS EXPIRED BY #465 THREE ROUNDS LATER.  THE ROWS ARE SOUND; THEIR
+#  STATED WARRANT IS NOT, AND A KILL CLAIM RODE ON IT. ***
+#
+#  THE CHRONOLOGY, from git rather than memory:
+#      7c9dd9e (#462)  wrote this block and its three-state model
+#      4d05cf0 (#465)  "data and data_len were RELEASED APART" -- the fix for exactly
+#                      the hazard this block describes
+#
+#  Post-#465 `free_data()` sets BOTH `d->data = NULL` and `d->data_len = 0`, and it is
+#  `handle_command`'s prologue.  So:
+#    * the THIRD state below (`data == NULL, data_len STALE`) is NOT CONSTRUCTIBLE by
+#      this route -- the session builds the FIRST state, both fields agreeing at zero;
+#    * "handle_command ... NEVER resets d->data_len" is FALSE -- free_data resets it;
+#    * "leaving data_len at the TOC's 408" is FALSE -- the prologue already zeroed it;
+#    * and the M11 claim -- that swapping the guard to `d->data_len == 0` reaches
+#      `memory_rw(..., NULL, 408, ...)` -- IS REFUTED BY MEASUREMENT, not by argument.
+#
+#  MEASURED 2026-08-28 (artifacts/gdromexitsix/opus_r2table_20260828/): the M11 mutant
+#  built as a single line over the R2 fix, both trees run, results BYTE-IDENTICAL --
+#      fixed:  alive=True  stale_says=1  stale_idle=0x0  Transfering=0
+#      M11:    alive=True  stale_says=1  stale_idle=0x0  Transfering=0
+#  M11 is EQUIVALENT.  No row can kill it because there is nothing left to kill.
+#
+#  *** THE GENERAL LESSON, and it is the reason this is written out rather than deleted:
+#  A KILL RECORD IS TIME-INDEXED EXACTLY AS AN ABSENCE RECORD IS. ***  The carrier already
+#  says an absence record must name its warrant and that any edit touching that warrant
+#  RE-RUNS the death measurement.  The same holds for a claim that a mutant IS killed:
+#  #465 edited the warrant, and nothing re-ran the test for three rounds.  The block is
+#  kept because its REASONING is still the right reasoning -- it is the WORLD that moved.
+#
+#  What the rows below actually pin, stated correctly: the NO-DATA decline path, with
+#  both fields at zero.  That is real, reachable, and worth a row.  It is simply not the
+#  third state.
+#
 #  *** THE STATE THE FIX WAS WRITTEN FOR, AND UNTIL NOW NO ROW BUILT IT. ***
 #
 #  A seat observed that this detector sees `d->data` in TWO states and there are
@@ -1080,14 +1148,27 @@ t, alive, how = session(
     + ["r7=0x%x" % GDROM_DATAP, "r8=0x2030"]
     + run([MOV_W_R8_AT_R7], CODE + 0x120)
     + ["r8=0x0000"] + run([MOV_W_R8_AT_R7] * 5, CODE + 0x140)
-    #  arm correctly and trigger: data is NULL, data_len is STALE
+    #  *** #490 L4: THIS SAID "data is NULL, data_len is STALE" AND THAT STATE HAS NOT
+    #  EXISTED SINCE #465. ***  handle_command's prologue is `free_data(d); /* #465 */`
+    #  and free_data sets BOTH `d->data = NULL` AND `d->data_len = 0`.  Before #465 the
+    #  prologue cleared only the POINTER, which is why the original evidence for this
+    #  row read `Transfering 408 bytes to 0x00000000` -- a pre-#465 artefact.
+    #  MEASURED, not argued: swapping the DMA arm's guard operand from `data == NULL`
+    #  to `data_len == 0` is BEHAVIOURALLY EQUIVALENT -- both trees return
+    #  `alive=True stale_says=1 stale_idle=0x0 Transfering=0`, byte for byte.
+    #  What the session actually builds is the NO-DATA state: both fields agree at
+    #  zero, and the DMA arm declines on that.  The row is sound; its description was
+    #  a wrong record.  (Found by the opus seat; the equivalence re-measured here
+    #  rather than inherited, because a KILL record is time-indexed exactly as an
+    #  absence record is -- #465 edited the warrant and nothing re-ran the test.)
+    #  arm correctly and trigger: data NULL and data_len 0 -- the no-data state
     + ["r7=0x%x" % (DMA + 0x0c), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1a0)
     + ["r7=0x%x" % (DMA + 0x14), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1c0)
     + ["r7=0x%x" % (DMA + 0x18), "r8=1"] + run([MOV_L_R8_AT_R7], CODE + 0x1e0)
     + ["r1=0x%x" % (DMA + 0x18), "r2=0xa5"]
     + run([MOV_L_AT_R1_R2], CODE + 0x200) + ["print r2"])
 row("nodata stale", "survived" if alive else "died", "survived",
-    "FAILED-COMMAND state: data NULL, data_len STALE -- the fix's own path")
+    "FAILED-COMMAND state: data NULL, data_len 0 -- the fix's own path")
 row("stale says", ("%d" % len(DMA_NOD.findall(t))) if alive else "died", "1",
     "and it declines by the NO-DATA arm, exactly once")
 row("stale idle", printed(t, "r2") if alive else "died", "0x0",

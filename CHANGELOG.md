@@ -4192,6 +4192,36 @@ explanation by one that reproduces deterministically.*
 
 **M11 is a STRONGER mutant than the table records**, not a flakier one -- a re-score is owed.
 
+> *** THE OWED RE-SCORE WAS RUN ON 2026-08-28 AND THE ANSWER IS THE OPPOSITE OF WHAT THIS
+> BLOCK EXPECTS: M11 IS NOW **EQUIVALENT**.  NOTHING ABOVE IS WRONG -- IT WAS OVERTAKEN
+> BY A FIX THAT LANDED THE FOLLOWING DAY. ***
+>
+> `artifacts/gdromexitsix/m11_rescore_20260828/` -- the 58-row detector, the one whose
+> contract makes the claim, run against a baseline and an M11 tree differing by that one
+> line: **58/58 on both**, with `nodata stale`, `stale says` and `stale idle` byte-identical.
+>
+> | date | event |
+> |---|---|
+> | 2026-08-25 (`abf665c`) | M11 measured at **5/5 deterministic SIGSEGV**, preceded by `Transfering 408 bytes to 0x00000000`.  This block, and the honest note that a re-score was owed. |
+> | 2026-08-26 (`4d05cf0`) | **#465** -- *"data and data_len were released apart"* -- `free_data` now clears BOTH fields.  The NULL read becomes unreachable. |
+> | 2026-08-28 | the re-score, run at last: **equivalent**. |
+>
+> The two measurements do not conflict: `git merge-base --is-ancestor` confirms #465 is NOT
+> an ancestor of the SIGSEGV commit.  **The mutant was lethal, and then a fix one day later
+> made it inert.**
+>
+> *** WHAT THIS COSTS, STATED PLAINLY: for three rounds the probe's contract listed M11 among
+> the edits it catches, and it caught nothing. ***  Not through carelessness -- the round that
+> measured the SIGSEGV did exemplary work and wrote its own obligation down.  The obligation
+> simply outlived the world it was written in.
+>
+> **A KILL RECORD IS TIME-INDEXED EXACTLY AS AN ABSENCE RECORD IS.**  The carrier requires an
+> absence record to name its warrant, and requires any edit touching that warrant to re-run
+> the death measurement.  It says nothing about a claim that a mutant IS caught -- and that
+> is the gap this instance found.  The contract entry is CORRECTED IN PLACE rather than
+> deleted: an edit that re-separates the two fields makes M11 lethal again, and a deleted
+> line teaches a future reader nothing.
+
 *The superseded caption follows, kept because the reasoning it rests on is the thing that was
 wrong, and a corrected record that hides its predecessor teaches nothing:*
 
