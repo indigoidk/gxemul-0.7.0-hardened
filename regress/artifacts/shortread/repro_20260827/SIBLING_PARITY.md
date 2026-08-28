@@ -17,6 +17,28 @@ Only one has the defect.
 | `diskimage_access__cdrom()` | `return 0` on a short sector read | — |
 | **`fread_helper()`** | **advance by REQUESTED, count ACTUAL** — the defect | **upstream** (`39748e3`) |
 
+> ### *** THIS SECTION READ HALF THE PRECEDENT AND DREW A CONCLUSION FROM IT.
+> ### Corrected 2026-08-27 by the adjudicating seat, which read the other arm. ***
+>
+> Below I cite the CUE path's SHORT-FREAD arm and conclude *"the fork's own warrant points
+> at A"*.  **The same function's FIRST arm is fix B.**  When no track covers a sector it
+> does `memset(buf + total_copied, 0, chunk)`, **counts the chunk, and continues** -- zero
+> in place and carry on, which is exactly what B does.
+>
+> So in-place-zero-and-continue is ALREADY the fork's house shape for *"this piece has no
+> data but the access must proceed"*, and the sentence below claiming precedent favours A
+> is false about the function it cites.  **The disanalogy I offered as a hedge turned out to
+> be the correct reading, and it has a sharper warrant than the one I gave it:** arm 3's
+> `break` is harmless AT ITS HOME SITE because a CUE track file spans tens of megabytes
+> while a guest access spans kilobytes, so the rest of the access almost always resolves in
+> the same broken file and stopping discards nothing recoverable.  In `fread_helper` the
+> layers interleave at 512-byte granularity BY DESIGN.
+>
+> *That is the transfer-a-precedent rule working as written -- check each WARRANT ELEMENT,
+> not the shape.  What I did instead was match the shape of one arm and stop reading.*
+>
+> **The text below is kept unedited so the correction has something to point at.**
+
 ### The CUE path is the load-bearing precedent, and it splits by cause
 
 ```c
