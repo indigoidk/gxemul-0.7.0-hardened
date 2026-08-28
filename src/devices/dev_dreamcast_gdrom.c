@@ -158,7 +158,7 @@ struct dreamcast_gdrom_data {
 	 *  was every row this detector had -- and diverges only when two sites
 	 *  run in one session, where it loses the second diagnostic for good.
 	 */
-	uint8_t		warned;
+	uint32_t	warned;
 
 	/*
 	 *  #461: one bit per (direction, word) for each window's default arm.
@@ -192,12 +192,40 @@ struct dreamcast_gdrom_data {
  *  bare numbers, so a new site cannot silently reuse another's bit -- the
  *  duplicate-key hazard this project already paid for once in dev_sh4.c.
  */
-#define	GDROM_W_LEN		0x01
-#define	GDROM_W_NODATA	0x02
-#define	GDROM_W_NOTWAIT	0x04
-#define	GDROM_W_OVERREAD	0x08
-#define	GDROM_W_DMANODATA	0x10
-#define	GDROM_W_DMAARM		0x20
+/*
+ *  *** THE PRE-SET TRIGGER ABOVE HAS FIRED, AND THIS IS IT BEING DISCHARGED. ***  It was
+ *  written as "at the SEVENTH bit"; `gdromexitsix` Round 1 adds THREE latches to the six
+ *  below, so the NINTH would be `1u << 8` -- truncating to zero in a uint8_t, never
+ *  setting, and letting the diagnostic it guards FLOOD.  No compile error, no runtime
+ *  complaint.  Two review seats reached it independently on that round's pass 1.
+ *
+ *  BIT POSITIONS, not hand-assigned masks: GDROM_W_NBITS is then correct BY CONSTRUCTION
+ *  rather than by maintenance, and a duplicate is impossible to write.  The masks below
+ *  reproduce 0x01..0x20 exactly, in the same order -- checked mechanically by the script
+ *  that made this edit, not asserted here.
+ *
+ *  `warned` widens from uint8_t to uint32_t in the same change, because an enum that can
+ *  count past 8 is no use if the field it indexes cannot hold the bit.
+ *
+ *  Precedent transferred rather than invented: dev_sh4.c did the equivalent conversion for
+ *  its value-class keys on its own pre-set trigger ("when a tenth class arrives").
+ */
+enum {
+	GDROM_W_LEN_B,	/*  was 0x01  */
+	GDROM_W_NODATA_B,	/*  was 0x02  */
+	GDROM_W_NOTWAIT_B,	/*  was 0x04  */
+	GDROM_W_OVERREAD_B,	/*  was 0x08  */
+	GDROM_W_DMANODATA_B,	/*  was 0x10  */
+	GDROM_W_DMAARM_B,	/*  was 0x20  */
+	GDROM_W_NBITS
+};
+
+#define	GDROM_W_LEN	(1u << GDROM_W_LEN_B)
+#define	GDROM_W_NODATA	(1u << GDROM_W_NODATA_B)
+#define	GDROM_W_NOTWAIT	(1u << GDROM_W_NOTWAIT_B)
+#define	GDROM_W_OVERREAD	(1u << GDROM_W_OVERREAD_B)
+#define	GDROM_W_DMANODATA	(1u << GDROM_W_DMANODATA_B)
+#define	GDROM_W_DMAARM	(1u << GDROM_W_DMAARM_B)
 
 /*
  *  *** SIX OF EIGHT BITS ARE USED, AND THE NINTH FAILS SILENTLY. ***  Filed

@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `shortread` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `wdcnoirq` (regress:fable5) · `wdcoddstep` (regress:fable5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `gdromwarnbits` (assess:fable5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `shortread` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `wdcnoirq` (regress:fable5) · `wdcoddstep` (regress:fable5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 29 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 30 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1094,3 +1094,32 @@ dominating predicate is the canonical clause-(d) form, so it was a floor breach 
 in-round. Pass 2 then closed the other two as well. **Is "one ask, all its findings" the
 right reading, and should the carrier say so?** The cap's anti-runaway purpose survives
 either way, but the two readings differ by several rows per round.
+
+## gdromwarnbits -- assess stage (queued 2026-08-27)
+
+**A rule question about PRE-SET TRIGGERS, raised by the gate refusing a closure.**
+
+`dev_dreamcast_gdrom.c` carried a trigger written in advance: *"at the SEVENTH bit, widen
+`warned` and convert these to an enum of bit POSITIONS ending in a GDROM_W_NBITS count."*
+`gdromexitsix` Round 1 needs three more latches against six in use, so it fired. I executed
+it: six masks became an enum, `warned` widened to uint32_t, and a compiled check confirms all
+six masks are BIT-IDENTICAL to the originals.
+
+Then I closed the row on a 2-seat stage and `precommit_check.sh` refused, correctly -- the
+owner's rule is FULL PANEL ON EVERY STAGE. The row is now `in work` with the code shipped.
+
+**The question: does discharging a pre-set trigger need a full panel?** The design decision
+was made when the trigger was WRITTEN; this round only detected the condition and executed
+it, and behaviour-preservation is measured rather than argued. Nine seats on a decided,
+mechanical, measured-equivalent refactor may be the wrong use of the roster -- or the rule
+may be exactly right that nothing closes without one, because "it was decided in advance" is
+what every unreviewed change says about itself.
+
+I lean toward: **a pre-set trigger discharge needs a panel only if it makes any choice the
+trigger did not already fix.** This one made none -- the trigger named the enum, the count
+suffix, and the mask form. But that test is mine and it is the kind of self-serving line a
+seat should check rather than accept.
+
+*Note the precedent it would set either way: `dev_sh4.c`'s equivalent conversion fired the
+same way on its own pre-set trigger and the carrier records it as discharged, so whatever is
+ruled here should be read back onto that one.*
