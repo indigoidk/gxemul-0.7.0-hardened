@@ -1,0 +1,66 @@
+#486 wdcfloodstale -- the re-aimed `overrun x2`, measured on the shipped bytes.
+
+Every number here was produced by the main loop on cf300c0-era HEAD, and every one of
+them was ALSO produced independently by a panel seat.  They agree.
+
+  build                                     WDC_FLOOD_RESULT   overrun x2
+  ---------------------------------------------------------------------------
+  shipped, BEFORE the re-aim                    25/26          0      want 1   RED
+  shipped, AFTER  the re-aim                    26/26          1,1,0  want 1,1,0  ok
+  Mb2 -- the producer's latch DELETED           25/26          1,145,0            FAIL
+
+*** THE OLD ROW WAS NON-DISCRIMINATING, NOT MERELY RED, AND THAT IS THE FINDING. ***
+Measured by a seat on the committed binary: the old stimulus reads OVERRUN = 0 on the
+shipped latch AND 0 on a build with the latch deleted.  Clause (b) was OPEN at the ring
+producer with nothing anywhere saying so.  The re-aimed row reads 1 against 145 -- it
+discriminates by a factor of 145.
+
+*** 145 WAS PREDICTED BEFORE IT WAS MEASURED, THREE TIMES INDEPENDENTLY. ***  My brief
+derived it, the timing seat measured it, and I then measured it again here on my own
+mutant.  Derivation, so the number carries its deriver: WDC_INBUF_SIZE = 512*513 =
+262,656; nothing drains, so tail stays 0; the producer refuses at head == 262,655, so
+push 262,656 is the first refusal -- the SECOND push of store 131,328.  At 2 pushes per
+mov.w that gives 1 + 2*(131,400 - 131,328) = 145.
+
+*** THE CLIFF, AND IT IS WHY THE COUNT IS NOT 131328. ***  Measured by the timing seat
+across four builds:
+
+      n              131328      131329      131400
+      shipped           1 ok        1 ok        1 ok
+      latch DELETED     1 VACUOUS   3 red     145 red
+
+At the exact fill point the unlatched mutant is GREEN.  "Tidying" 131400 down to the
+arithmetically exact 131328 makes the comment MORE precise and silently re-opens the L2
+breach.  The margin is a load-bearing product of the row, and the row comment says so.
+
+THE ANTI-FAKE CONTROL IS THE THIRD ORACLE VALUE.  The smallest way to fake this row is to
+re-anchor P_OVERRUN onto the `:704` DATA text: every build then reads 1, and `disjoint`
+CANNOT catch it because its own stimulus fires neither pattern.  So the row counts both
+sites and asserts NO SINGLE LINE is matched by both.  Asserting "1,1" alone does not close
+it -- a P_OVERRUN aimed at the DATA line still gives 1,1.
+
+WHY FREE-RUNNING, AND THE STATED REASON IS NOT THE OBVIOUS ONE.  It is not that ~394,000
+single-steps are too slow.  `dev_wdc.c` sets `d->data_debug = 1` at attach, so every
+data-port write calls `debug()` -- which PRINTS under stepping and is silent free-running
+at verbose 0.  Measured at full size by the timing seat:
+
+      step  mov.w x131400   30.684 s   131,400 debug lines   20,369,040 bytes of pty
+      fast  mov.w x131400    0.005 s         0 debug lines
+
+So the stepped form WORKS, at 30 s and 20 MB per row.  Free-running is also a CAPABILITY
+gain: a `fatal(` -> `debug(` downgrade at this site now REDS, which a stepped row could
+not see -- so the probe's own contract sentence about channel downgrades is narrowed.
+
+CAUSE OF DEATH, MEASURED BY SINGLE-VARIABLE CONTROL: revert ONLY #479's unconditional
+`wdc_new_command_reset()` and keep #484's ring -> OVERRUN goes 0 -> 1.  #479 is the
+killer.  The header had blamed a FUTURE ring fix; #484's repair changes the number of
+overrun EVENTS, not the LATCHED count this row asserts, so it would not have moved the
+answer at all.
+
+RECORDS CORRECTED IN THE SAME DIFF, because the re-aim falsified them:
+  * the header's re-pin trigger, which named the wrong round;
+  * `wr indep`'s census -- "Zero rows fire two sites" and "`overrun x2` uses legal 8-bit
+    writes" are both now false, deliberately: firing both sites is what kills the
+    flag-pairing mutant.
+
+`spin=25.0` removed: free-running finishes in ~0.02 s, so the gate reclaims ~25 s a run.

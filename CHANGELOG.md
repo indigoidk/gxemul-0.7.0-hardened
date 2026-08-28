@@ -1,3 +1,94 @@
+## Round 486 (#486) -- a scored gate row that was not merely red, but NON-DISCRIMINATING
+
+`regress/wdc_flood_probe.py`'s `overrun x2` drove 1026 undrained IDENTIFY commands and wanted
+the latched ring-overrun message once. **`#479` made every command reset the ring**, capping
+per-command occupancy at 512, so 1026 commands cannot lap a 262,656-byte ring.
+
+A harness round: no product code. Probe **26/26** (was 25/26), gate `gate_sh_rounding` row list
+unchanged at 26, and the clause-(b) mutant dies **145 to 1**.
+
+### It was worse than a red row
+
+Measured on the committed binary: the old stimulus reads `OVERRUN = 0` on the shipped latch
+**and 0 on a build with the latch deleted.**
+
+> **Clause (b) was OPEN at the ring producer, with nothing anywhere saying so.** A row that
+> reads the same on the fix and on its absence is not a failing detector; it is no detector.
+
+The re-aimed row reads **1 against 145** — it discriminates by a factor of 145.
+
+### 145 was predicted before it was measured, three times independently
+
+My brief derived it, the timing seat measured it, and I measured it again on my own mutant.
+`WDC_INBUF_SIZE = 512*513 = 262,656`; nothing drains so `tail` stays 0; the producer refuses at
+`head == 262,655`, so push 262,656 is the first refusal — the **second push of store 131,328**.
+At two pushes per `mov.w`: `1 + 2*(131,400 - 131,328) = 145`.
+
+### The count is 131,400 and it sits 72 stores above a cliff
+
+| n | 131,328 | 131,329 | 131,400 |
+|---|---|---|---|
+| shipped | 1 ok | 1 ok | 1 ok |
+| latch DELETED | **1 — VACUOUS** | 3 red | 145 red |
+
+**At the exact fill point the unlatched mutant is green.** Shrinking 131,400 to the
+arithmetically exact 131,328 reads like tightening a hand-waved number, makes the comment *more*
+precise, and silently re-opens the breach. The margin is a load-bearing product of the row and
+the comment says so.
+
+### Why free-running, and the obvious reason is the wrong one
+
+Not "394,200 single-steps are too slow". `dev_wdc.c` sets `d->data_debug = 1` at attach, so
+every data-port write calls `debug()` — which **prints** under stepping and is silent
+free-running at verbose 0. Measured at full size:
+
+```
+  step  mov.w x131400   30.684 s   131,400 debug lines   20,369,040 bytes of pty
+  fast  mov.w x131400    0.005 s         0 debug lines
+```
+
+The stepped form *works*, at 30 s and 20 MB per row. And free-running is a **capability gain**: a
+`fatal(` → `debug(` downgrade at this site now reds, which a stepped row could not see — so the
+probe's own contract sentence about channel downgrades is narrowed rather than left overclaiming.
+
+### The anti-fake control is the third oracle value
+
+The smallest way to fake this row is to re-anchor `P_OVERRUN` onto the `:704` DATA text: every
+build then reads 1, and **`disjoint` cannot catch it**, because its own stimulus fires neither
+pattern. So the row counts both sites and asserts that **no single line is matched by both**.
+Asserting `1,1` alone does not close it — a `P_OVERRUN` aimed at the DATA line still gives `1,1`.
+
+### The option set I posed was incomplete by three members
+
+The adjudicating seat named them, and one is aimed squarely at this round's own deadline
+pressure:
+
+* **re-pin the want to `0` and keep the dead stimulus** — one character, gate goes green.
+  Rejected as laundering *and* as a check that cannot fail: with a dead stimulus the shipped
+  bytes, the unlatched mutant and the silenced mutant all read 0. *"Named because it is the
+  cheapest path to a green battery and someone under Sunday pressure will think of it."*
+* **revive the stimulus by product edit** — rejected; a harness round does not edit product code
+  to keep a test alive.
+* **re-aim AND add a redundant carrier in the offline differential** — filed as its own item; it
+  is a second detector with its own oracle.
+
+### Cause of death, by single-variable control
+
+Reverting **only** `#479`'s unconditional `wdc_new_command_reset()`, keeping `#484`'s ring:
+`OVERRUN` goes 0 → 1. The header had blamed a *future* ring fix; `#484`'s repair changes the
+number of overrun **events**, not the **latched** count this row asserts, so it would not have
+moved the answer at all. Two killers, different clauses, and naming only the ring repair would
+have repeated the wrong-cause shape one generation on.
+
+### Records corrected in the same diff, because the re-aim falsified them
+
+`wr indep`'s census said *"Zero rows fire two sites"* and that `overrun x2` *"uses legal 8-bit
+writes"*. Both are now false — deliberately: firing `:704` and `:145` in one session is what
+kills a flag-pairing mutant the old row was blind to either way.
+
+`spin=25.0` removed; the gate reclaims ~25 s per run.
+
+
 ## Records correction -- `b1526f7`'s commit message describes a fraction of its own diff
 
 **Written from intent, not from the diff -- the rule this project keeps because it has been

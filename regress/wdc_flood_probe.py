@@ -102,9 +102,21 @@ WHAT THIS DETECTS, AND WHAT IT DOES NOT (floor clause (e), the CONTRACT).
       all**; the guard against it is a source-grep for `fatal(` at the six sites,
       in the gate rather than here.
     * That the ring is HEALTHY at the two ring sites -- see `wdcringambig`.  The
-      `overrun x2` row's 1026 x 512 arithmetic is the BROKEN ring's exact-fit
-      geometry, so it is marked for RE-PIN when that row lands: a waste-one-slot
-      or check-before-store repair changes when the announcement fires.
+      `overrun x2` row's 1026 x 512 arithmetic WAS the BROKEN ring's exact-fit
+      geometry.
+
+      *** THIS BULLET SAID THE ROW WAS "marked for RE-PIN when that row lands",
+      MEANING A FUTURE RING FIX.  THE RE-PIN TRIGGER FIRED ON THE WRONG ROUND. ***
+      #484's ring repair changes how many overrun EVENTS occur, not the LATCHED
+      count this row asserts, so it would not have moved the answer.  What killed
+      the row was #479 -- an unconditional `wdc_new_command_reset()` in
+      `wdc_command()`, capping per-command occupancy at 512 so the stimulus can no
+      longer lap the ring at all.  MEASURED by a single-variable control that
+      reverts only that reset: OVERRUN goes 0 -> 1.
+
+      Re-aimed by #486 at the guest data port.  Two killers, different clauses, and
+      naming only the ring repair would have repeated the wrong-cause shape one
+      generation on.
 
 CLAUSE (b) -- FAILS ON A VERBATIM REINSTATEMENT AT **EVERY** FIXED SITE -- BY TWO ROUTES,
 AND THE PER-SITE MAPPING IS WRITTEN OUT HERE BECAUSE NOBODY HAD WRITTEN IT ANYWHERE.
@@ -315,22 +327,52 @@ def st(reg, val):
 
 
 def runloop(body, count, at=CODE):
-    """Emit `body` in a hardware loop that runs `count` times, then step it out.
-
-    `:145` needs 262,656 bytes through wdc_addtoinbuf to lap the ring once, i.e.
-    513 undrained IDENTIFY commands (513 * 512 == WDC_INBUF_SIZE exactly).
-    Unrolling that would be 513 `put h` debugger commands; the loop is three.
+    """Emit `body` in a hardware loop of `count` iterations and FREE-RUN it.
 
         loop:  <body>
                dt   r3        decrement r3, T = (r3 == 0)
                bf   loop      disp from BF_BACK
+        end:   bra  end       breakpoint here
+
+    *** CONVERTED FROM `step N` TO breakpoint+continue BY #486, AND THE REASON IS NOT
+    THE ONE YOU WOULD GUESS. ***  The old form stepped `len(ops) * count + 2`
+    instructions.  At the counts this probe now needs that is ~394,000 steps -- but
+    raw step count was never the obstacle.  `dev_wdc.c` sets `d->data_debug = 1` at
+    attach, so EVERY data-port write calls `debug()`; `debug()` PRINTS under stepping
+    (single-stepping raises its verbosity above the threshold) and returns silently
+    when free-running at verbose 0.  MEASURED, full size:
+
+        step  mov.w x131400   30.684 s   131400 debug lines   20,369,040 bytes of pty
+        fast  mov.w x131400    0.005 s        0 debug lines
+
+    So the stepped form WORKS and costs 30 s and 20 MB of pty traffic per row.  Say
+    that rather than "394,200 steps is too slow", which is the wrong reason and a
+    future reader would act on it.
+
+    *** FREE-RUNNING IS ALSO A CAPABILITY GAIN, NOT ONLY A SPEED ONE. ***  Because
+    `debug()` goes quiet at verbose 0, a `fatal(` -> `debug(` channel downgrade at a
+    site this probe watches now REDS here.  Measured: that mutant is killed at all
+    three counts.  A stepped row could not see it -- the contract said as much, and
+    that sentence is narrowed by this change.
+
+    NOT ADDED AS A VARIANT.  `runloop` has exactly ONE caller in the tree, so a
+    `runloop_fast` beside it would leave a dead helper -- and this fork licenses
+    additions by measured deltas or a transferred warrant, never by "it cannot hurt".
+
+    *** THE `print r3` IS A COMPLETION CONTROL AND IS NOT OPTIONAL. ***  `session()`'s
+    reader returns True on a plain timeout, so a `continue` that never reaches the
+    breakpoint would leave the guest spinning in `bra .` with the process alive, and
+    the row would score whatever happened to be in the buffer.  Pinning r3 to 0 is
+    what makes "the loop ran" a measurement instead of an assumption.
     """
     ops = list(body) + [DT_R3, BF_BACK(len(body))]
+    end = at + 2 * len(ops)
     put = ["r3=%d" % count]
     put += ["put h 0x%x, 0x%04x" % (at + 2 * i, op) for i, op in enumerate(ops)]
-    put += ["put h 0x%x, 0x%04x" % (at + 2 * len(ops), BRA_SELF),
-            "put h 0x%x, 0x%04x" % (at + 2 * len(ops) + 2, NOP)]
-    return put + ["pc=0x%x" % at, "step %d" % (len(ops) * count + 2)]
+    put += ["put h 0x%x, 0x%04x" % (end, BRA_SELF),
+            "put h 0x%x, 0x%04x" % (end + 2, NOP)]
+    return put + ["breakpoint add 0x%x" % end, "pc=0x%x" % at, "continue",
+                  "print r3"]
 
 
 def n(pat, t, alive):
@@ -455,8 +497,18 @@ row("w16 reset", n(P_W8, t, alive), "1",
 #  PROCESS-GLOBAL case only.**  Pairing survives for a different reason entirely: NO ROW
 #  FIRES TWO DIFFERENT SITES IN ONE SESSION -- a property of the ROW SET, not of the rig,
 #  and therefore fixable in three lines.  (Checked across all 22 rows: `datawr x2` writes
-#  wd_data so the width check is never reached; `overrun x2` uses legal 8-bit writes;
-#  both value rows seed and read 8-bit.  Zero rows fire two sites.)
+#  wd_data so the width check is never reached;
+#  both value rows seed and read 8-bit.
+#
+#  *** TWO CLAIMS IN THIS PARAGRAPH WERE MADE FALSE BY #486, IN THE SAME DIFF THAT
+#  RE-AIMED THE ROW, AND BOTH ARE CORRECTED RATHER THAN LEFT TO BE FOUND. ***  It said
+#  `overrun x2` "uses legal 8-bit writes" and that "Zero rows fire two sites".  The
+#  re-aimed row writes SIXTEEN-bit to wd_data and fires BOTH `:704` and `:145` in one
+#  session -- measured DATA=1 OVERRUN=1.
+#
+#  That is deliberate, not incidental: firing both sites is what kills the flag-pairing
+#  mutant, and it is why that row's oracle carries a THIRD value asserting that no single
+#  line is matched by both patterns.)
 #
 #  This fires :607 and :1025 in ONE session.  A paired flag lets the first fire silence
 #  the second, giving "1,0".  Named by the compile-and-measure seat reading the final
@@ -569,15 +621,60 @@ _w = [lowbyte(x) for x in printed_all(t, "r2")]
 row("w16 value", (",".join(_w[:2]) if alive else "died"), "0x41,0x42",
     ":607 BOTH wide writes land data[0]")
 
-#  *** `:145`, AND IT CLOSES AN L2 FLOOR BREACH. ***  Until this row existed the fix had
-#  SIX fixed sites and the detector saw FIVE, so clause (b) -- fail on a verbatim
-#  reinstatement at EVERY fixed site -- was open at the ring producer.  1026 undrained
-#  IDENTIFY commands lap the ring TWICE, so an unlatched site announces twice and a
-#  latched one once.
-t, alive = session(st(WD_CMD, 0xec) + runloop([MOV_B_R8_AT_R7], 1026),
-                   settle=10.0, spin=25.0)
-row("overrun x2", n(P_OVERRUN, t, alive), "1",
-    ":145 ring lapped TWICE -> ONE line")
+#  *** `:145`, AND IT CLOSES AN L2 FLOOR BREACH -- WHICH #486 FOUND RE-OPENED. ***
+#
+#  THE ROW WAS DEAD, AND NOT MERELY RED.  It used to drive 1026 undrained IDENTIFY
+#  commands.  `#479` made `wdc_command()` call `wdc_new_command_reset()`
+#  UNCONDITIONALLY, which zeroes both ring pointers, so occupancy after any command is
+#  at most 512 and 1026 commands cannot lap a 262,656-byte ring.  MEASURED, by a
+#  single-variable control that reverts ONLY that reset and keeps #484's ring:
+#
+#      shipped build            OVERRUN = 0
+#      #479's reset reverted    OVERRUN = 1
+#
+#  *** AND IT WAS NON-DISCRIMINATING, WHICH IS WORSE THAN RED. ***  Measured on the
+#  committed binary: the old stimulus reads OVERRUN = 0 on the shipped latch AND 0 on a
+#  build with the latch DELETED.  Clause (b) was open at the ring producer with nothing
+#  saying so.
+#
+#  RE-AIMED at the guest DATA PORT, which takes no `wdc_command()` and therefore no
+#  reset -- the only surviving route that laps the ring.
+#
+#  *** THE COUNT IS 131400 AND IT SITS 72 STORES ABOVE A CLIFF.  DO NOT "TIDY" IT. ***
+#  Post-#484 the producer refuses at head == 262,655, so push 262,656 is the first
+#  refusal -- the SECOND push of store 131,328.  Measured, want == 1:
+#
+#      n            131328      131329      131400
+#      shipped         1 ok        1 ok        1 ok
+#      latch DELETED   1 VACUOUS   3 red     145 red
+#
+#  At the exact fill point the unlatched mutant is GREEN.  Shrinking 131400 to 131328
+#  reads like tightening a hand-waved number to what the arithmetic says, makes the
+#  comment MORE precise, and silently re-opens the L2 breach.  The margin is a
+#  load-bearing product of this row.
+#
+#  ORACLE IS THREE VALUES, and the third is the anti-fake control.  The smallest way to
+#  fake this row is to re-anchor P_OVERRUN onto the `:704` DATA text -- then every build
+#  reads 1 and `disjoint` cannot catch it, because its own stimulus fires neither
+#  pattern.  So this row counts BOTH sites and asserts that NO SINGLE LINE is matched by
+#  both.  Asserting "1,1" alone does not close it; a P_OVERRUN aimed at the DATA line
+#  still gives 1,1.
+#
+#  It fires `:704` and `:145` in ONE session, which additionally kills a flag-pairing
+#  mutant (the `:704` site's guard and assignment switched to `warned_inbuf_overrun`):
+#  measured DATA=1 OVERRUN=0 -> red, while the OLD row was blind to it either way.
+#
+#  `spin` is back to the default: free-running finishes in ~0.02 s, so the old 25 s wait
+#  was dead weight in every battery run.
+t, alive = session(st(WD_DATA, 0x1234) + runloop([MOV_W_R8_AT_R7], 131400),
+                   settle=10.0)
+_both = sum(1 for _l in t.splitlines()
+            if P_DATA.search(_l) and P_OVERRUN.search(_l))
+row("overrun x2",
+    ("%s,%s,%d" % (n(P_DATA, t, alive), n(P_OVERRUN, t, alive), _both)
+     if alive else "died"),
+    "1,1,0",
+    ":704 + :145 in one session, and NO line matched by both")
 
 
 #  ------------------------------------------------------------ the accept side
