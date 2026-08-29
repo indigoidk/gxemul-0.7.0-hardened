@@ -35,6 +35,24 @@
 > `nightly_check.sh` has reported NIGHTLY_CHECK_FAIL ever since, and the Windows task's
 > `LastTaskResult` is still 1.
 >
+> *** THE FIX FIRST FILED HERE WOULD HAVE REPRODUCED THIS DEFECT.  Refuted 2026-08-29 by
+> reading, before any code was written. ***  This row said: make gate_build READ
+> est_divergence.txt, citing the `.index` disagreement as drift.  **The disagreement is
+> CORRECT.**  `list_diffs()` is `find . \( -name '*.c' -o -name '*.h' -o -name '*.cc' -o
+> -name '*.skel' \)`, so it can NEVER produce `.index`; precommit iterates `$CHANGED` from
+> git, where any path can appear.  Different populations, legitimately different lists.
+>
+> **Reading the file verbatim would put `.index` into gate_build's expected set, where
+> list_diffs cannot produce it, and its own STALE-ENTRY check would flag it every run --
+> permanently red.  The exact failure that cost five days, reintroduced by its repair.**
+>
+> Two candidate fixes, neither taken: (a) read the file but FILTER to list_diffs's
+> extensions, so expected and actual are drawn from one population; (b) keep them separate
+> and check that the gate's list is exactly the extension-filtered SUBSET of the file's.
+>
+> The row's CORE finding is unchanged: the pinned copy went stale and cost a red battery
+> plus a skipped gate.  Only the remedy and its `.index` evidence are refuted.
+>
 > The surviving defect: `grep -n est_divergence regress/gate_build.sh` returns NOTHING,
 > and the two lists disagree TODAY (gate 5, file 6, differing by `devices/.index`).  Fix
 > is to make the gate READ the file; not taken, because changing a gate owes negative

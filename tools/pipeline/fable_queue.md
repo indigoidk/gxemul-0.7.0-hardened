@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (assess:opus5)
+`armbdt` (assess:codex) · `b118L` (assess:codex) · `b120r` (assess:codex) · `carrier` (regress:fable5) · `census` (assess:opus5) · `constblind` (assess:opus5) · `devexit` (assess:opus5) · `dfreq` (assess:codex) · `es438` (regress:fable5) · `exitsweep` (assess:codex) · `gateflr` (assess:opus5) · `ieeeupgrade` (assess:opus5) · `m8probe` (assess:opus5) · `m8sarseq` (assess:opus5) · `mrwstore2` (assess:opus5) · `ns16550` (regress:fable5) · `ovsync` (assess:codex; research:codex; review:codex) · `pcheck` (assess:opus5) · `pitclobber` (assess:codex) · `proberowsubset` (assess:codex) · `reprowitness` (assess:codex) · `seam` (assess:opus5) · `sh4sci` (regress:fable5) · `sh4tlbda2` (assess:fable5; review:fable5) · `wdccdbmidxfer` (regress:fable5; research:fable5,opus5) · `wdcdataoutdrain` (regress:fable5) · `xfamscope` (assess:opus5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 26 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 27 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1123,3 +1123,23 @@ seat should check rather than accept.
 *Note the precedent it would set either way: `dev_sh4.c`'s equivalent conversion fired the
 same way on its own pre-set trigger and the carrier records it as discharged, so whatever is
 ruled here should be read back onto that one.*
+
+## proberowsubset -- assess stage (queued 2026-08-29)
+
+**The 2026-08-29 adjudication moved the row-filter spec HERE and added a fifth guard**, so
+this row now carries a design that has never been panelled. The owner already ruled the
+filter "ships as its own round with its own panel and its own negative controls"; that panel
+has not run.
+
+**Is the five-guard spec sufficient, and is SESSION-gating the right granularity?**
+
+Guard 5 is the one the 08-28 spec dropped and the reason this is not a rubber stamp:
+`GDROM_DEF_CONTROL` prints OK on `all(rows)`, and **`all([])` is True** — so a filter
+excluding every control row passes guards 1–4 while the control line reports OK having
+measured nothing. **The first use of the feature would manufacture a vacuous liveness claim
+automatically.** Guard 5: controls are exempt from filtering, or the control line hard-fails
+on an empty control set.
+
+And a granularity constraint the panel should test rather than accept: selection must gate
+SESSIONS, because 36 of 39 are module-level — a `row()`-level filter passes all five guards
+and saves nothing.
