@@ -395,6 +395,29 @@ MANIFEST = {
     #  consumed), and this file is the repair: a real file with no shell in between, spelling
     #  its tabs as chr(9).  Preserving it makes the table re-runnable.
     "artifacts/gdromexitsix/killtable4_20260828/mut_common.py": (CLASS_TOOL, "#489 mutant applier: rewrites the case 0x14 guard predicate, no escaping chain"),
+    "artifacts/gdromexitsix/opus_r2full_20260828/mkfix.py": (CLASS_TOOL,
+                                    "#490 R2 pass 1: applies the candidate two-site fix to a "
+                                    "scratch clone.  The baseline every escape below is "
+                                    "measured RELATIVE TO."),
+    "artifacts/gdromexitsix/opus_r2full_20260828/mkmut3.py": (CLASS_TOOL,
+                                    "#490 R2 pass 1: builds M_retA / Ma_toclen / Mb_toclen / "
+                                    "M_growA / M_growB over the fix, one minimal edit each.  "
+                                    "Ma_toclen and Mb_toclen ESCAPED the committed 13-row "
+                                    "plan -- a latch-bit collision with GDROM_W_TOCLEN that "
+                                    "silences a whole site's diagnostic."),
+    "artifacts/gdromexitsix/opus_r2full_20260828/mkmut_brace.py": (CLASS_TOOL,
+                                    "#490 R2 pass 1: the brace slip -- Site A's `break` moved "
+                                    "inside the latch `if`, so the SECOND identical bad format "
+                                    "falls through into sector_nr.  ESCAPED the committed plan; "
+                                    "`fmt x2` reads 1 either way.  Kept separate from mkmut3 "
+                                    "because it is the mutant #489's own probe header records "
+                                    "sweeping an 18-row detector clean at the sibling arm."),
+    "artifacts/gdromexitsix/opus_r2full_20260828/tprobe3.py": (CLASS_TOOL,
+                                    "#490 R2 pass 1: the measuring seat's probe -- eight "
+                                    "sessions reading CNT / COND / EVT32 / rej / huh / the "
+                                    "per-site decline counts, with session selection.  Ungated "
+                                    "by design: a research instrument, not a standing detector; "
+                                    "the rows it justifies land in the shipped probes."),
     "artifacts/gdromexitsix/asan_m0_20260828/apply_m0.py": (CLASS_TOOL,
                                     "#489 M0 applier: deletes the cnt!=408 guard for the ASAN "
                                     "run that turned the round's headline claim from DERIVED "

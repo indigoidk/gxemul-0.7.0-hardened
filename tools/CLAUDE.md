@@ -1198,6 +1198,37 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > > **Any check may discharge `N/A` WITH ITS REASON RECORDED. An unrun check and an inapplicable
 > > one must not render the same** -- this project's oldest rule about blanks.
 > >
+> > ### *** AND A THIRD FAILURE MODE, MEASURED 2026-08-28: THE BLOCK WAS RUN, ITS ROWS WERE
+> > ### PRESCRIBED, AND THEY WERE LOST WHEN THE ROW LIST WAS REWRITTEN THREE HOURS LATER. ***
+> >
+> > `#490`'s `PRETABLE.out` named two mutants at **16:05** -- a latch-bit collision and a brace
+> > slip -- and prescribed a row for each (`crossbit`, `latch cond`). At **18:45** a nine-seat
+> > panel found a DIFFERENT defect (the row set was site-asymmetric), the addition list was
+> > rewritten to carry the panel's findings, and **both earlier rows silently vanished.** The
+> > measuring seat then BUILT both mutants and both escaped the committed 13-row detector --
+> > two clause-(d) floor breaches that the round's own artifact had predicted and specified.
+> >
+> > **Nothing was forgotten in the sense of never known.** The knowledge sat in the file that
+> > exists precisely to be consulted at row-writing time, and did not survive a rewrite in a
+> > DIFFERENT artifact. The new list was not careless -- it correctly added everything the
+> > panel had just found.
+> >
+> > > **A ROW LIST REWRITTEN FROM A PANEL'S FINDINGS IS DIFFED AGAINST THE PRE-TABLE BLOCK'S
+> > > OWN PRESCRIBED ROWS, NOT MERELY EXTENDED WITH THE NEW ONES.** The block PRESCRIBES rows;
+> > > a later list that does not contain them has dropped an obligation, and the diff is the
+> > > only thing that says so.
+> >
+> > *This is the block's own lesson turned on the block: it exists because a recommended check
+> > is memory and memory does not fire. Running it once does not make its OUTPUT durable --
+> > the output has to be carried forward, and nothing was checking that it was.*
+> >
+> > **AND THE GUARD-FIELD CHECK COULD NOT HAVE CAUGHT EITHER**, which is worth knowing before
+> > relying on it: it asks where the guard field and the body field DIFFER. For the latch
+> > collision they are the SAME field (`d->warned`). **For a shared bitfield the question is
+> > *"who else writes this field, and can they set my bit?"*** -- measured here as
+> > `grep -c 'd->warned |='` = 8 sites, **6 of them inside `DEVICE_ACCESS`**, so most bits are
+> > set by ordinary guest register reads and a collision would be silenced by benign traffic.
+>
 > > **THE TRIGGER WAS MET TWICE IN FOUR DAYS, and the value at each was specific rather than
 > > general:** at `#485` the GUARD-FIELD grep enumerates `D1..D5` mechanically, because the
 > > `default:` arm's `fatal()` arguments ARE the guarded body's field reads; at `#489` the
