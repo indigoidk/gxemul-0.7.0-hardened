@@ -144,7 +144,14 @@ AGY_EFFORT="high"           # BOTH are passed on purpose. `agy models` lists the
                             # harness, so check_seats_read.py and seat_verdicts.py
                             # need no edit -- that is the kimi-substitute lesson
                             # applied: record a seat by its transport, not its tag.
-OLLAMA1="glm-5.3-flash:cloud"
+#  *** MIGRATED AGAIN 2026-08-29 BY OWNER DIRECTIVE: glm-5.3-flash:cloud ->
+#  glm-5.3:cloud. ***  Verified BEFORE the edit, same discipline as the 08-28 move:
+#  `ollama pull glm-5.3:cloud` succeeded, and an api/generate call returned the
+#  liveness token EXACTLY -- done_reason=stop, eval_count=52, no thinking-burn.
+#  The seat is keyed by FILENAME (ollama_glm.txt) everywhere else, so
+#  check_seats_read.py and seat_verdicts.py need no edit; record a seat by its
+#  transport, not its tag.
+OLLAMA1="glm-5.3:cloud"
 OLLAMA2="deepseek-v4-pro:cloud"   # DeepSeek is BACK: v3.2 was retired 2026-07-15
                                   # but v4-pro is live (verified answering). NOTE
                                   # the exact tag -- "deepseek-v4:cloud" does NOT
@@ -172,7 +179,22 @@ OLLAMA3="minimax-m3:cloud"        # all FOUR are THINKING models; send no
 #
 #  NOTE this is the kimi SUBSTITUTE, never "the kimi seat".  Record it by transport --
 #  `kimi-k3:cloud` -- so a reader can tell which road answered.
-OLLAMA4="kimi-k3:cloud"
+#  *** WITHDRAWN 2026-08-29 BY OWNER DIRECTIVE: THE KIMI CLI IS BACK, SO THE SEAT
+#  RETURNS TO ITS OWN TRANSPORT. ***  Its 403 was a WEEKLY (7-day) limit, not a
+#  billing cycle, and it has cleared -- tested by a real invocation that returned
+#  the liveness token, never by reasoning about the date.
+#
+#  THIS IS A CAPABILITY GAIN, not a tidy-up.  The CLI is FILE-READING; the
+#  substitute went through panel_ollama.py and was PACKET-FED.  The doctrine
+#  classifies a seat by its TRANSPORT rather than its name, so for the whole time
+#  the substitute stood in, "the kimi seat" could not read the repo and any answer
+#  crediting it with a repo fact was the conflation the doctrine forbids.
+#
+#  KEPT, NOT DELETED, because the substitute is the documented recovery path: if the
+#  CLI walls again, set OLLAMA4 back to kimi-k3:cloud and the seat is COVERED rather
+#  than lost.  That is the sixth seat-failure class -- one transport walled while
+#  another is live -- and the whole point is that it is one line away.
+OLLAMA4=""
 
 # argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
 BSZ=$(wc -c < "$BRIEF")
@@ -226,7 +248,9 @@ fi
 #  Hence the line below, in every brief this script sends.  Briefs already inline the
 #  measurements precisely so no seat needs to run anything; this says it out loud,
 #  because a seat that CAN run a gate eventually will.
-echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) ollama($OLLAMA4) | + Opus/Fable via Agent tool"
+O4_BANNER="ollama($OLLAMA4)"
+[ -z "$OLLAMA4" ] && O4_BANNER="kimi-substitute:WITHDRAWN (CLI is the seat)"
+echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) $O4_BANNER | + Opus/Fable via Agent tool"
 
 # --- launch the five scriptable seats concurrently ---------------------------
 AGY_PROMPT="Read $BRIEF_ABS and review it adversarially exactly as its own \
@@ -304,12 +328,21 @@ python "$TOOLS/panel_ollama.py" "$OLLAMA3" "$OUT/ollama_minimax.txt" "$PACKET_BR
     > "$OUT/ollama_minimax.err" 2>&1 &
 P_O3=$!
 
-python "$TOOLS/panel_ollama.py" "$OLLAMA4" "$OUT/ollama_kimi.txt" "$PACKET_BRIEF" \
-    > "$OUT/ollama_kimi.err" 2>&1 &
-P_O4=$!
+#  *** CONDITIONAL, AND THE CONDITION IS LOAD-BEARING. ***  With OLLAMA4 blank an
+#  unguarded launch still runs panel_ollama.py with an EMPTY model name: it writes an
+#  error file and produces a seat that LOOKS fired.  That is worse than a missing seat,
+#  because a phantom answers the seat check.  When the kimi CLI walls again, set
+#  OLLAMA4 back to kimi-k3:cloud and this fires exactly as before.
+P_O4=""
+if [ -n "$OLLAMA4" ]; then
+    python "$TOOLS/panel_ollama.py" "$OLLAMA4" "$OUT/ollama_kimi.txt" "$PACKET_BRIEF" \
+        > "$OUT/ollama_kimi.err" 2>&1 &
+    P_O4=$!
+fi
 
-echo "launched: codex=$P_CODEX agy=$P_AGY kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=$P_O4"
-echo "waiting for the eight scriptable seats..."
+echo "launched: codex=$P_CODEX agy=$P_AGY kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=${P_O4:-withdrawn}"
+NSEATS=8; [ -z "$P_O4" ] && NSEATS=7
+echo "waiting for the $NSEATS scriptable seats..."
 wait $P_CODEX $P_AGY $P_KIMI $P_GROK $P_O1 $P_O2 $P_O3 $P_O4
 
 # --- verify each seat produced a real answer ---------------------------------
@@ -474,7 +507,15 @@ check "grok     " "$OUT/grok.txt"
 check "glm      " "$OUT/ollama_glm.txt"
 check "deepseek " "$OUT/ollama_deepseek.txt"
 check "minimax  " "$OUT/ollama_minimax.txt"
-check "kimi(sub)" "$OUT/ollama_kimi.txt"
+#  *** ONLY CHECKED IF IT WAS FIRED.  A WITHDRAWN SEAT IS NOT A DOWN SEAT. ***
+#  Unguarded, a missing ollama_kimi.txt scores as a seat failure -- which is the
+#  deliberately-not-fired / failed conflation the seat ledger refuses.
+if [ -n "$OLLAMA4" ]; then
+    check "kimi(sub)" "$OUT/ollama_kimi.txt"
+else
+    say "  kimi(sub)  WITHDRAWN -- the CLI is the kimi seat (owner directive 2026-08-29)."
+    say "             Not a failure.  Restore by setting OLLAMA4=kimi-k3:cloud."
+fi
 say "---------------------------"
 echo "SEATS 7 AND 8 -- launch BOTH now via the Agent tool, in the same turn:"
 echo "  Opus 5  (model: \"opus\")   reads the repo directly; the seat most likely"
@@ -507,8 +548,12 @@ echo
 #  stale the first time the thing it counts changes -- the same defect as the
 #  banner that printed "agy(high)" while passing no flags.
 ok=0; miss=""; total=0; rated=""
-for s in codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm \
-         deepseek:ollama_deepseek minimax:ollama_minimax kimi_sub:ollama_kimi; do
+#  The substitute joins the roster only when it was actually fired, so a withdrawal
+#  does not inflate `total` or land in `$miss`.
+SEATLIST="codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm"
+SEATLIST="$SEATLIST deepseek:ollama_deepseek minimax:ollama_minimax"
+[ -n "$OLLAMA4" ] && SEATLIST="$SEATLIST kimi_sub:ollama_kimi"
+for s in $SEATLIST; do
     n=${s%%:*}; f="$OUT/${s##*:}.txt"
     total=$((total+1))
     #  *** THE WALL SCAN RUNS FIRST, FOR EVERY SEAT, AND UNTIL 2026-08-17 IT COULD NOT
@@ -601,7 +646,14 @@ say "SEATS: $ok/$total scriptable produced output${miss:+ -- no answer from:$mis
 #
 #  $miss means "did not answer", whatever the reason, which is what both sentences are
 #  actually about.
-if printf %s "$miss" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
+#  The COVERED / LOST pair below is about the SUBSTITUTE, so it only speaks when the
+#  substitute is in the roster.  With it withdrawn, a walled CLI is simply a walled
+#  seat and the generic wall reporting above already says so.
+if [ -z "$OLLAMA4" ] && printf %s "$miss" | grep -qw kimi; then
+    say "       NOTE: the kimi CLI is walled and its kimi-k3:cloud substitute is"
+    say "             WITHDRAWN, so this seat is LOST rather than covered.  One line"
+    say "             restores it: OLLAMA4=kimi-k3:cloud in this script."
+elif printf %s "$miss" | grep -qw kimi && [ -s "$OUT/ollama_kimi.txt" ] \
    && ! printf %s "$miss" | grep -qw kimi_sub; then
     say "       NOTE: the kimi CLI is walled but kimi-k3:cloud ANSWERED -- that seat"
     say "             is COVERED by its substitute transport, not lost."

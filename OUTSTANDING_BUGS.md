@@ -18,6 +18,31 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: a RED weekly battery sat UNREAD for five days
+>
+> **`gatebuildallow`** -- `gate_build.sh` PINS its own twin-tree allowlist while
+> `tools/est_divergence.txt` exists to prevent exactly that.  One stale entry
+> (`promemul/arcbios.c`, listed as divergent while the files agreed) failed the
+> 2026-08-23 battery -- and because gate_build withdraws the shared arc binary at start
+> and republishes only on success, **`gate_mips` SKIPPED**: a whole gate's coverage lost,
+> scored as SKIP rather than FAIL.
+>
+> Everything else in gate_build passed -- both trees built, 223/224 objects, binaries
+> produced, zero errors.  **One line of text cost two gates.**
+>
+> Already fixed by accident in `867c697` (#481), which removed the entry.  Nothing re-ran
+> the battery, and **the dead-man switch cannot tell "fixed" from "never looked at"** --
+> `nightly_check.sh` has reported NIGHTLY_CHECK_FAIL ever since, and the Windows task's
+> `LastTaskResult` is still 1.
+>
+> The surviving defect: `grep -n est_divergence regress/gate_build.sh` returns NOTHING,
+> and the two lists disagree TODAY (gate 5, file 6, differing by `devices/.index`).  Fix
+> is to make the gate READ the file; not taken, because changing a gate owes negative
+> controls in both directions.
+>
+> *Found only because the owner asked about cron status.  No gate surfaces an unread
+> battery -- every threshold in this harness lives INSIDE the run.*
+>
 > ### OPEN -- filed by #488, 2026-08-27: the FITTED-THRESHOLD mutant class
 >
 > **`shortthreshold`** -- `fread_helper()`'s in-place zero-fill can be narrowed by a

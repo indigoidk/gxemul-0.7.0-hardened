@@ -86,7 +86,7 @@ echo "brief: ${BSZ} bytes"
 #  step with panel.sh's OLLAMA1 deliberately: two files naming the same seat is
 #  already one too many, and a migration that updates only one of them is the
 #  false-roster shape this project has paid for.
-for m in glm-5.3-flash:cloud deepseek-v4-pro:cloud minimax-m3:cloud; do
+for m in glm-5.3:cloud deepseek-v4-pro:cloud minimax-m3:cloud; do
     short="${m%%:*}"
     python "$TOOLS/panel_ollama.py" "$m" "$OUT/$short.txt" "$BRIEF" \
         > "$OUT/$short.err" 2>&1 &
