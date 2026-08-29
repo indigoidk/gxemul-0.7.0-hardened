@@ -183,5 +183,32 @@ the only way to answer.*
 * [ ] state claims are TRUE as of sending — "shipped" means committed
       (*a brief claimed a round had shipped while its tree was dirty and its kill table still
       running; two seats caught it independently*)
+* [ ] **PASS 2 ONLY — paste `git diff --numstat` for the round's files and mark each one
+      INLINED / SUMMARIZED / NOT SHOWN, with the reason on the line.**
+
+  > ### *** THIS IS THE ONE THE LAST THREE ROUNDS ALL MISSED, MEASURED 2026-08-29. ***
+  >
+  > A pass 2 is owed *on the round's own diff* — `regress/pass2_ledger.tsv`'s header says so,
+  > and every receipt is keyed to the SHA of the commit reviewed.  **Three consecutive rounds
+  > fired 9/9 on a brief that never named files their commit shipped:**
+  >
+  >     #488  09362f0   diff_diskimage_io.c +599, gate_offline.sh +42     brief mentions: 0
+  >     #489  095aa96   gdrom_toclen_probe.py +427, gate_sh_rounding +64  brief mentions: 0
+  >     #490  (pending) gdrom_default_probe.py +65, gate_sh_rounding +72  brief mentions: 0
+  >
+  > **A seat cannot flag a file it was never told exists.**  A packet-fed seat can name a
+  > premise it needs and cannot settle — that is `§C2`'s measured case, and it happened again
+  > on #490 — but omission is the one defect the consumer is *structurally blind* to.  That is
+  > exactly the property the two checkers this project REJECTED did not have, and it is why
+  > this one is worth having.
+  >
+  > **The item enforces DISCLOSURE, not inlining.**  A file marked `SUMMARIZED` or
+  > `NOT SHOWN -- <reason>` passes; the harm is silent narrowing, not brevity.  The precedent
+  > is the receipt that wrote *"this receipt says so rather than implying one"*.
+  >
+  > *And the temporal twin of this rule already existed and never generalised: `#480` adopted
+  > "freeze a detector under panel review, or re-fire" after a 4-row skew in 87 — then three
+  > rounds ran the SPATIAL version at far greater scale.  A rule earning its second and third
+  > instance while sitting in a receipt note is this project's own structure-first trigger.*
 * [ ] `bash -c 'wc -c <brief>'` — if a CLI seat will take it on argv, remember the ~32 KB
       Windows cap; `grok --prompt-file` is the seat immune to it

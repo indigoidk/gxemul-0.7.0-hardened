@@ -1,3 +1,181 @@
+## Round 490 (#490) -- two guest-reachable host kills in the GD-ROM command handler, and a detector that a capped ask-again then escaped three times
+
+`handle_command()` ended the host process on two ordinary guest writes.  `case 0x30` killed on any data format outside {0x20, 0x24}; the `default:` arm killed on any unimplemented command byte.  Both are reached by a guest assembling a 12-byte packet through the data port -- no harness, no direct call.
+
+Both are now DECLINE + LATCHED ANNOUNCE, the house idiom (`N = 1` per device instance, `(once)` in the message text), then `break` to the function's common tail.
+
+### The two things that were NOT obvious, and both are measured
+
+**TWO latch bits, not one.**  A one-bit form was built (`M3shared`) and it ESCAPED: a session declining at BOTH sites sees the second fall silent, because the first already latched.
+
+**`break`, not `return`, and the tail is why.**  The common tail zeroes `d->cnt`, clears `COND_DATA_AVAIL` and fires the completion event.  `M_retA`/`M_retB` measure a `return` leaving `cnt` at 0x98 with no event -- **two channels, both sites** -- so an early return leaves a guest waiting for a completion that never comes.  *That was a claim in a comment until the table made it two rows at two sites.*
+
+### Witness -- RUNG 3, and the evidence was already on disk
+
+`probe:regress/gdrom_decline_probe.py`.  All three ladder clauses: the pre-fix committed build shows `fmt surv`/`unk surv` at **exit1** against a want of exit0 and the SAME script goes green post-fix; both mandated access controls pass on that pre-fix run (`live` 0x12345678 through RAM, `devsig sh4` 0xda74 -- the SH4 IPRD reset value, which RAM would read as 0); unmodified in-tree machine.  **The round had been carrying the weaker `detector:`/`none` reading.**
+
+### `stale how` -- DISCHARGED, by two routes that answer different questions
+
+The row is the **wanted-equals-failure** shape three seats flagged: it wants
+`exit0` and a *broken* capture also yields `exit0`, so a green tells you
+nothing.  Only a measured red separates a working oracle from an inert one.
+
+| route | mutant | score | rows moved |
+|---|---|---|---|
+| main loop | rotted packet (`cmd[1]` 0x20->0x21) against `M0_exitA`, the
+reinstated `exit(1)` at Site A | 60/60 -> **56/60** | **four** |
+| opus5 seat | `src/core/main.c`'s final `return 0` -> `return 1` | 60/60 ->
+**59/60** | **one** |
+
+**THE SEAT'S IS THE DISCHARGE AND MINE IS NOT, which is worth stating
+plainly because mine ran first and looked like one.**  My mutant kills the
+session, so all four stale-family rows red together -- `nodata stale`,
+`stale says`, `stale idle` and `stale how`, every one of them reporting
+`died`.  That proves the row is FAILABLE, which is exactly what the
+wanted-equals-failure objection demanded; it does **not** prove `stale how`
+carries a channel of its own, because three siblings caught the same event.
+The seat's mutant moves ONE row and leaves the other three green, which is
+the sole-carriage claim measured.
+
+My control is the tight half and is why the pair is worth keeping: the SAME
+binary, differing only in the packet, is green at 60/60 -- so the red is
+attributable to the packet reaching Site A and not to the mutant binary
+being different.  *Two instruments, one bluntly failable and one
+discriminating; the round records which is which rather than citing the
+larger delta.*
+
+Honest limit, from the seat: its H1 is **harness-level**.  It looked for a
+plausible *product* edit in that channel and found none -- the session sends
+a correct packet reaching neither de-fatalised site, the device has no
+destructor, and any device-path death lands inside a budget window where
+`alive` already sees it.  The row defends a real but round-unrelated channel.
+
+Artifacts: `regress/artifacts/gdromexitsix/stalehow_20260829/` and
+`.../supp_p2_20260829/def_{base,H1_exit1}.log`.
+
+### THREE MEASURED ESCAPES IN THE ASSERT, and the form already landed closes all three
+
+The supplementary panel's ninth seat attacked the compile-time assert from
+the side no control had varied.  The shipped controls changed only the
+`#define` block, which pins `GDROM_W_NBITS` at 9 in every state and makes the
+equality a genuine pigeonhole.  **Vary the ENUM instead and it collapses**:
+an explicit enumerator initialiser renumbers every later enumerator, so
+`NBITS` falls in lockstep with the lost bit and the equality RE-BALANCES.
+
+Eight states x both operator forms, generated from the real file with md5s
+per source state (`supp_p2_20260829/bothstates_20260829.out`):
+
+| state | `|` (as first written) | `+` (shipped) |
+|---|---|---|
+| `enum CMD_B = FMT_B`, one token | **COMPILES -- ESCAPE** | REFUSED |
+| `enum FMT_B = OVERREAD_B`, relocated | **COMPILES -- ESCAPE** | REFUSED |
+| `FMT` redefined as a 2-bit superset | **COMPILES -- ESCAPE** | REFUSED |
+| `#define` aliases; completeness at front and back | correct | correct |
+
+The seat's own diagnosis is the sentence worth keeping: an OR test *"proves
+coverage relative to a count derived from the possibly aliased last enum
+value; it does not independently count masks."*  **That is vacuity-floor
+clause (f) -- the ANCHOR RULE -- one level down, inside a constant
+expression: a RELATIVE check where an ANCHORED one was needed.**  A sum
+cannot absorb a duplicate, so `+` is the anchored form.
+
+`+` had already landed from fable5's multi-bit finding, before this seat
+answered.  It is **strictly better than the seat's own proposal** -- its
+`SUM == OR` candidate would have lost the two completeness cases -- and the
+seat recorded its superseded suggestion rather than dropping it.
+
+**Note the in-place / relocated pair.**  The same alias is REFUSED in place
+and ESCAPES when moved, because an alias left where it was keeps `NBITS`
+unchanged.  A control that varies one and not the other reports a clean
+sweep.
+
+### L4 -- the assert comment cited controls for a declaration the file no longer had
+
+Three wrong records, all found by the same seat opening `controls.sh` and
+comparing its operator against the source:
+
+* **"MEASURED IN FIVE STATES, controls preserved at
+  `assert_controls_20260829/`"** -- that script tests `|`; the file ships
+  `+`.  *The cited controls backed a declaration the file no longer
+  contained.*
+* **"without extending the OR below"** -- the operator is no longer OR.
+* one table row read `REFUSED` for a shape that was refused only in its
+  `#define` spelling, while the **enum** spelling of the same shape compiled.
+
+Corrected in place, and the citation now points at the eight-state both-form
+record on the real file.  The superseded directory keeps a `README.md`
+naming the state it measured -- **an artifact directory is named for the DAY
+it was written, not for the code state it measured, so when the code moves a
+citation to it silently becomes a claim about the wrong thing.**
+
+### The detector and its table
+
+A NEW 20-row probe with its own gate section and its own denominator, deliberately not bolted onto the sibling 60-row probe -- that file's denominator is pinned in two places that must agree, so every added row edits both.
+
+**13 builds, ZERO escapes, all four floor clauses MEASURED rather than argued:**
+
+    (a) pre-fix          PREFIX        8/20   CONTROL=OK    12 rows red, both sites exit1
+    (b) verbatim exit(1) M0_exitA     13/20                 Site A, 7 rows
+                         M1_exitB     13/20                 Site B -- BOTH sites caught
+    (c) null medium      NULLMEDIUM    4/20   CONTROL=DEAD  identity controls fail
+    (d) null-repair      Md_nolatchA/B 19/20  Md_hoistannounce 18/20
+    base                              20/20   twice, on two instrument copies
+
+### *** AND THEN THE CAPPED ASK-AGAIN BUILT THREE MUTANTS THAT ESCAPED ALL TWENTY ROWS. ***
+
+Each mutant's whole row block byte-identical to base -- total escapes, not ties (`regress/artifacts/gdromexitsix/p2askagain_20260829/`):
+
+    E1_aliasover   a latch bit aliased onto an existing one        20/20
+    E2_assignA     `d->warned |= FMT` becomes `d->warned = FMT`    20/20
+    E3_widenA      the latch test widened to a sibling bit         20/20
+
+**E2 is ONE CHARACTER and is the worst.**  Site A still announces once so every Site-A row stays green -- but the assignment clears the other eight latches, and a guest alternating a short TOC with a bad format then re-announces #489's diagnostic **without bound**.  The structural gap: every latch row checks its OWN bit, and **no row observes a latch ACROSS a decline at the other site.**
+
+**E3 is invisible only because of row ORDER** -- both two-site rows run Site A before Site B, and the same edit at Site B would be caught.  Pass 1's `S3 both` ran the OPPOSITE order; the shipped rows inverted it and nothing recorded that.
+
+*A fourth was predicted to escape and REPORTED REFUTED rather than dropped: it escapes all twenty rows but a DIFFERENT probe catches it through a bare `unimplemented` regex -- a cross-probe catch nobody designed.*
+
+### E1 is closed BY CONSTRUCTION, on an owner decision
+
+A compile-time disjointness assert in the file's own idiom, `gdrom_w_masks_disjoint`, using `+` rather than `|`.  Measured in EIGHT states against BOTH operator forms, generated from the real file with md5s per source state (`supp_p2_20260829/bothstates_20260829.out`): the `+` form refuses every defect state and keeps both completeness cases, and **E1 with the assert REMOVED still COMPILES** -- the negative control that proves this declaration is what refuses.
+
+*** AN EARLIER DRAFT OF THIS PARAGRAPH CARRIED THE SAME L4 AS THE SOURCE COMMENT, AND SURVIVED THE CORRECTION OF IT. ***  It read *"Measured in five states ... `M3shared`'s shape REFUSED"*.  Both halves were wrong: those five states were synthetic and tested `|`, not the shipped `+`; and `M3shared`'s shape is refused only in its `#define` spelling -- **the ENUM spelling of the same shape COMPILES under `|`**, which is one of the three escapes that form found.  I corrected the source comment and did not grep for siblings, which is this project's mechanical rule 2 broken by the round that cites it: *when correcting a claim, grep for its siblings before calling it fixed.*  Found by a backward-search stale-text hunt over this block -- three other hits were honest quotations sitting inside their own correction, and this one had no correction signal near it, which is what made it visible.  Then re-verified on the real file, and measured to emit **NO OBJECT CODE** (byte-identical objects, filename held constant and the declaration blanked IN PLACE so no `__LINE__` moves) -- **so the 20-row table still stands and nothing needed re-running.**
+
+*** THE OPERATOR IS `+` AND NOT `|`, AND THAT TOO IS MEASURED. ***  A seat found that `|` misses a mask redefined as a MULTI-BIT LITERAL -- OR-ing a superset still yields all-ones.  The delta:
+
+    case                             with |     with +
+    correct single-bit masks         COMPILES   COMPILES
+    E1 alias                         REFUSED    REFUSED
+    multi-bit literal                COMPILES   REFUSED    <- the delta
+
+Under `|` single-bit-ness was carried by the `(1u << _B)` idiom; under `+` the assert carries it alone.  **E1 went from a measured 20/20 escape to not compiling.**
+
+*** AND THE SUPPLEMENTARY PANEL THEN FOUND THREE MORE ESCAPE SHAPES, EACH BY A DIFFERENT SEAT AND A DIFFERENT ROUTE.  `+` REFUSES ALL OF THEM; `|` ADMITTED EVERY ONE. ***
+
+    shape                                     found by     with |     with +
+    a mask redefined as a MULTI-BIT LITERAL    fable5       COMPILES   REFUSED
+    GDROM_W_CMD_B = GDROM_W_FMT_B              codex,kimi   COMPILES   REFUSED
+    GDROM_W_FMT_B = GDROM_W_TOCLEN_B           kimi         COMPILES   REFUSED
+    TRIPLE alias: TOCLEN_B = OVERREAD_B        kimi         COMPILES   REFUSED
+
+**The enum-door shapes are a DIFFERENT mechanism from the multi-bit one, and that is why `|` could not see them.**  Aliasing an ENUMERATOR drags `GDROM_W_NBITS` down with it, so the right-hand side shrinks in step with the OR and the two stay equal -- codex put it exactly: an OR test *"proves coverage relative to a count derived from the possibly aliased last enum value; it does not independently count masks."*  A SUM cannot be rebalanced that way, because the duplicated bit carries.
+
+*kimi measured the compile half of the triple alias and DECLINED to claim the runtime half, naming it as owed -- correctly, since the probe never exercises those paths before its decline tests.  Measured afterwards: under `+` the runtime question never arises, because the file stops compiling.*
+
+**Two seats correctly called the `|` form an exhaustiveness check rather than a disjointness proof, and the assert's own comment overclaimed** -- "closes it for ALL bits" and "FAILS CLOSED" were untrue of the enum door.  Under `+` they hold, and the comment now records the remaining limits: it is exact for disjointness-and-coverage of the masks AS WRITTEN, not a general one-hot proof, and at `NBITS == 32` the shift is undefined -- gcc warns, so it is loud but not fatal.
+
+### What this round got WRONG, recorded because the record is the point
+
+**PASS 2 REVIEWED HALF THE ROUND.**  Nine seats fired on a brief naming **2 of the 4** changed code files; the probe and gate changes were never shown.  Adjudicated NOT a completed pass 2 -- a round owes a pass-2 review OF ITS OWN DIFF -- and a supplementary panel was fired.  **It is a CLASS, not one slip:** #488 and #489 did the same, #489 omitting a 427-line new probe.  Adopted: a `§F` line in `BRIEF_TEMPLATE.md` requiring `git diff --numstat` with each file marked INLINED / SUMMARIZED / NOT SHOWN.
+
+**A `MEASURED` claim in product code went false when this diff landed.**  A comment said a byte-store packet *"reaches handle_command's own exit(1).  MEASURED: this build dies there"* -- and #490 removed every `exit(1)` from that function, making its own antecedent false.  Caught by a pass-2 seat; corrected in-round.
+
+**A row's kill attribution was false**, and **a rot-packet prediction was refuted by its own run**: the record said one run would discharge BOTH new sibling-probe rows; it discharged `stale quiet` (60/60 green, 59/60 with the row red, exactly one vector position moved) and **could not touch `stale how`**, which is the wanted-equals-failure shape -- it wants `exit0` and a broken capture also yields `exit0`.  Recorded UNPROVEN rather than claimed.
+
+**Four premises of the brief were false**, including one marked SETTLED: this file is not the tree's reference implementation for the latch idiom -- `dev_wdc.c` is, and the comment cited as warrant says so.  Four seats caught it independently.
+
+Residual escapes E2 and E3 are FILED as `gdromlatchcross`, ranked E2 first; the 0x24 arm's unsettleable correctness as `gdromfmt24`.
+
 > ### *** #489's HEADLINE CLAIM IS NOW MEASURED, NOT DERIVED.  ASAN, 2026-08-28. ***
 >
 > The round's strongest result was the BARE-DELETION mutant: guard removed, host **survives**

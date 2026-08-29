@@ -509,3 +509,53 @@ SEAT DISAGREEMENT, SETTLED BY MEASUREMENT RATHER THAN RANK: the measuring seat s
 row-name limit is <=12; codex says it is not 12.  The format string decides -- `%-14s` plus
 the literal space leaves 13 chars exactly two trailing spaces, which `^name  ` matches.
 **13 is the limit.**
+
+--------------------------------------------------------------------------------
+SIX CONSTRUCTION DEFECTS IN THE NEW DETECTOR, NONE FOUND BY A PASSING TABLE
+--------------------------------------------------------------------------------
+
+Found before the detector was trusted, by desk-checking against the DEVICE SOURCE and by
+one row that failed loudly.  Listed because the pattern is more useful than any one of them.
+
+ 1. `fmt event` PRE-CLEAR WAS A NO-OP.  I wrote the textbook "clear the bit, run, check it
+    is set".  dev_dreamcast_asic.c's write arm is `pending_irq[r] &= ~idata` -- WRITE-1-TO-
+    CLEAR -- so writing 0 clears nothing.  The row would have passed whether or not the
+    decline fired the event.  The correct form needs no clear: each session is a fresh
+    process.  gdrom_toclen_probe.py had already solved this.
+ 2. `fmt 0x24` SUMMED TWO COUNTS and wanted 1.  The mutant it names -- folding the upstream
+    0x24 arm into the decline -- converts one match into the other, so THE SUM STAYS 1.
+    Blind to its own target.  Now asserts the PAIR.
+ 3. `devsig sh4` READ 0x0 -- a CONTROL failing OPEN, which is worse than no control.
+ 4. `fmt cnt`'s STAGING WAS UNPROVEN, and its wanted value (0x0) EQUALLED its failure value.
+    A green reading proved nothing.  Added `fmt stage`, which reads the staged 0x98 back in
+    the same session BEFORE the command.
+ 5. `GDROM_DECL_CONTROL` WAS COMPUTED OVER ALL ROWS, so a single product-row failure printed
+    CONTROL=DEAD -- destroying the apparatus-vs-product distinction the gate section exists
+    to make.  Now covers the three identity rows only.
+ 6. *** `load16` HAD ITS OPERANDS REVERSED, AND THIS IS THE ONE THAT MATTERS. ***
+    MOVW_LD(n, m) is `mov.w @Rm, Rn`; I built MOVW_LD(1, dest) -- reading from the address in
+    Rdest (0) into R1, then printing Rdest, never written.  **EVERY load16 row returned 0x0
+    whatever the device held.**  Three rows passed on it: `gdrom map` (because "0x0" starts
+    with "0x"), `fmt cnt` and `unk cnt` (because they WANT 0x0).
+
+*** THE ROW THAT FOUND IT WAS THE ONE ADDED BECAUSE ITS WANTED VALUE DIFFERED FROM ITS
+FAILURE VALUE. ***  `fmt stage` wants 0x98.  It is the only load16 row that could see a
+helper returning a constant zero -- and I added it for an unrelated reason, to stop `fmt cnt`
+passing vacuously.
+
+    A ROW WHOSE WANTED VALUE EQUALS ITS FAILURE VALUE IS NOT AN ORACLE.  It is a coin that
+    lands the same way whichever side is up.
+
+AND IT CORRECTED A DIAGNOSIS ONE EDIT OLD.  `devsig sh4`'s 0x0 was blamed on a 16-bit access
+width the register would not serve.  FALSE -- the cause was the reversal.  Switching that row
+to load32 worked FOR A REASON THAT WAS NOT THE REASON GIVEN, and a wrong reason gets reused.
+
+*** THE CHECK THAT WOULD HAVE CAUGHT #6 IN SECONDS, run only AFTER six defects had been found
+one at a time: MECHANICALLY DIFF EVERY SHARED HELPER AGAINST THE SIBLING PROBE. ***  Ten
+shared helpers; the instruction builders (MOVW_LD/MOVW_ST/MOVL_ST), `run` and `printed` are
+byte-identical, and the differences that remain are an Addr.take() signature and a note-column
+width.  A new probe modelled on an existing one owes that diff BEFORE its first run, not after
+its sixth defect.
+
+*Three of the six were cases of inventing a variant where the sibling probe had already solved
+the problem.  The detector has not once been right on a first run.*

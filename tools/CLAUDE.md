@@ -2469,6 +2469,32 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
   > carrying a live marker. **Exactly one, the one made here.** The class is real and its
   > population today is zero.*
   >
+  > > ### *** THAT LAST SENTENCE WAS MEASURED **FALSE** ON 2026-08-29: THE POPULATION WAS
+  > > ### **TWENTY**, ACROSS SEVENTEEN ROWS, THE OLDEST NINE DAYS STALE. ***
+  > >
+  > > **The hunt was right about the class and wrong about its size, and the reason is the
+  > > CRITERION.**  Looking for *answered entries still carrying a live marker* asks whether
+  > > the entry HOLDING the marker was answered.  That finds one.  The question that finds
+  > > twenty is different and is the one that matters to the tools:
+  > >
+  > > > **does the marker name a seat that has SINCE ANSWERED ANYWHERE ON THIS ROW?**
+  > > > Mechanically: marker names seat S at date D, and S has a LATER entry on the same row
+  > > > of real length that is not itself a marker.
+  > >
+  > > **MEASURED COST, and it is not cosmetic: `gen_codex_wall.py` reported 27 HELD STAGES
+  > > and 15 of them were PHANTOM.**  Defanging the twenty took it to 12.  `check_stage_panels`
+  > > was telling the operator `wdccdbmidxfer` awaited *fable5, opus5* when fable5 had answered
+  > > that morning.  THREE tools read this literal -- `gen_codex_wall.py`,
+  > > `check_fable_queue.py`, `check_stage_panels.py` -- so a stale marker misleads all three.
+  > >
+  > > *And I read the stuck 27 as a STABLE number across two regenerations before asking why
+  > > it never moved.  A count that does not change is not thereby correct.*
+  > >
+  > > **Five markers were deliberately KEPT** -- `ieeeupgrade`, `pitclobber`, `proberowsubset`,
+  > > `probetimebased`, and `wdccdbmidxfer`/opus5 -- because those seats genuinely have not
+  > > answered.  The `wdccdbmidxfer` row is the discriminator working: its fable5 marker went
+  > > and its opus5 marker stayed, on the same row, in the same pass.
+  >
   > *Two of the three greps in this same repair also silently matched nothing --
   > `"gdromwarnbits ("` (the list renders the id in BACKTICKS) and an `entries`-vs-`stages`
   > field-name error that reported a volatile-path defect as absent when the adjudicating seat

@@ -196,6 +196,27 @@ MANIFEST = {
         (CLASS_RESEARCH, "#478 mutant applier, preserved as evidence"),
     "artifacts/wdcdataoutdrain/killtable_20260827/drainvar.py":
         (CLASS_RESEARCH, "#478 fix-variant builder, preserved as evidence"),
+    #  #490.  Four kill-table / measurement instruments and one HOOK CONTROL
+    #  SUITE.  All five are EVIDENCE: they exist so a measurement can be
+    #  re-run or audited, and none is owed a gate.
+    #
+    #  The seat that ran #490's supplementary pass predicted exactly this
+    #  debt before the gate reported it, and noted it had renamed its own
+    #  instrument off the `_probe.py` suffix -- which would otherwise have
+    #  tripped the MISFILED rule.  Two of the five predate that seat.
+    "artifacts/gdromexitsix/p2askagain_20260829/mut490p2.py":
+        (CLASS_RESEARCH, "#490 ask-again mutant applier, preserved as evidence"),
+    "artifacts/gdromexitsix/rot_20260829/probe.frozen.py":
+        (CLASS_RESEARCH, "#490 rotted-packet instrument, frozen copy, evidence"),
+    "artifacts/gdromexitsix/supp_p2_20260829/extend.py":
+        (CLASS_RESEARCH, "#490 supplementary 22-row extender, evidence"),
+    "artifacts/gdromexitsix/supp_p2_20260829/instrument_22row.frozen.py":
+        (CLASS_RESEARCH, "#490 supplementary frozen instrument, evidence"),
+    #  A control suite for a Claude-Code HOOK, not for emulator code -- so no
+    #  emulator gate can run it.  Whether the harness should gate its own
+    #  hook controls is FILED (`hookctlgate`), not answered here.
+    "artifacts/makercfalse/hook_controls_20260829/hookctl.py":
+        (CLASS_RESEARCH, "wsl-dollar hook control suite, 18 rows, evidence"),
     "artifacts/wdcdataoutdrain/killtable_20260827/addpkt.py":
         (CLASS_RESEARCH, "#478 detector row generator, preserved as evidence"),
     "artifacts/wdcdataoutdrain/killtable_20260827/addaccept.py":
@@ -395,6 +416,28 @@ MANIFEST = {
     #  consumed), and this file is the repair: a real file with no shell in between, spelling
     #  its tabs as chr(9).  Preserving it makes the table re-runnable.
     "artifacts/gdromexitsix/killtable4_20260828/mut_common.py": (CLASS_TOOL, "#489 mutant applier: rewrites the case 0x14 guard predicate, no escaping chain"),
+    "gdrom_decline_probe.py":      (CLASS_DETECTOR,
+                                    "#490: the two de-fatalised sites in handle_command -- "
+                                    "case 0x30's data-format guard and the default: arm.  20 "
+                                    "rows in gate_sh_rounding.sh's gdromdecline section with "
+                                    "its OWN denominator, deliberately not bolted onto the "
+                                    "60-row gdrom_default list.  (This entry said 19 and 58; "
+                                    "both were wrong -- 19 is the TOCLEN probe's count, copied "
+                                    "in, and gdrom_default grew to 60 in this same round.  "
+                                    "DERIVERS, because they differ per file: the decline probe "
+                                    "is `grep -c '^row('` = 20, which agrees with its measured "
+                                    "GDROM_DECL_RESULT=20/20.  **gdrom_default has NO sound "
+                                    "static deriver** -- `^row(` gives 52 and any-`row(` gives "
+                                    "55, because some rows are emitted from loops, so the "
+                                    "MEASURED GDROM_DEF_RESULT=60/60 is the only authority.  "
+                                    "A future reader counting row() by grep will get 52 and be "
+                                    "wrong.)  Three of its rows exist "
+                                    "because a measuring seat BUILT the escapes: `crossbit` "
+                                    "(a latch bit aliasing one of the eight others sharing "
+                                    "d->warned, six of which ordinary register reads set), "
+                                    "`latch cond` (the break slipping inside the latch if, "
+                                    "which the announce count cannot see), and `both sites` "
+                                    "(one bit for two sites)."),
     "artifacts/gdromexitsix/opus_r2full_20260828/mkfix.py": (CLASS_TOOL,
                                     "#490 R2 pass 1: applies the candidate two-site fix to a "
                                     "scratch clone.  The baseline every escape below is "

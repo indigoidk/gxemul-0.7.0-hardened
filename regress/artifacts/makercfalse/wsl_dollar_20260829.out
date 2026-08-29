@@ -1,0 +1,94 @@
+MAKERCFALSE -- what happens to $? and $VARS through 'wsl -- bash -c'
+Measured 2026-08-29 on this host.  Every line below is a real run, not a transcription.
+Git-bash -> wsl.exe -> Gentoo.  Each block states WANT so a reader can score it.
+
+== A. LOCAL isolation, no WSL at all -- establishes the ordinary shell behaviour ==
+   bare              : 1
+   bash -c SINGLE    : 1
+   bash -c DOUBLE    : 0
+   WANT 1 / 1 / 0.  The double-quoted form is the outer shell baking in a LITERAL.
+
+== B. THROUGH WSL -- and this is the part that is NOT ordinary shell behaviour ==
+   -c single, $? : 0
+   -c single, $X : []
+   WANT 1 and [hello].  Got 0 and [] -- SINGLE QUOTES DO NOT PROTECT through this path.
+
+== C. What DOES survive, so the diagnosis is not 'wsl mangles everything' ==
+   quoted 2 spaces: a  b$
+   Both spaces survive.  So it is not a naive re-split of the command string.
+
+== D. THE TWO WORKING FORMS, both measured ==
+   backslash-escaped \$?  : 1
+   backslash-escaped \$X  : [hello]
+   script FILE           : FILE_GOT=hello FILE_RC=1 
+   WANT 1 / [hello] / FILE_GOT=hello FILE_RC=1.  Both forms are sound.
+
+MAKERC_PROBE_DONE
+
+== E. IS build_asan.sh ACTUALLY DEFECTIVE?  The row's witness says yes.  Measured: NO. ==
+   It is invoked as a FILE, never through 'bash -c', so section B does not reach it.
+   :32  rm -rf "$dir"; mkdir -p "$dir"   <- FRESHLY WIPED every run
+   :41  make -j12 > build.log 2>&1
+   :42  echo "  make rc=$?  objs=$(find src -name '*.o' | wc -l)"
+   :43  if [ -x gxemul ]; then ... else BUILD FAILED; return 1
+
+   Two things the row assumed and neither holds:
+   (1) '$? inside an echo' is NOT clobbered by the $() later in the same word.
+       $? BEFORE $() : rc=1 objs=7   (want rc=1 -- build_asan.sh shape, SOUND)
+       measured in one word : rc=1  objs=7   <- want rc=1
+       the TRAP for contrast: objs=7  rc=0   <- want rc=0
+   (2) the existence check is a SOUND proxy here BECAUSE of the rm -rf at :32 --
+       a stale binary from an earlier run cannot survive into the decision.
+
+   HONEST RESIDUAL: :42's rc is INFORMATIONAL -- nothing asserts on it.  That is a
+   real weakness in the abstract, and it is not the reported defect: with the dir
+   wiped first, a failed make leaves no gxemul and :46 reports BUILD FAILED, rc 1.
+
+MAKERC_SECTION_E_DONE
+
+== F. THE DEFECT BIT ITS OWN DIAGNOSTICIAN, ~1 HOUR AFTER SECTION B WAS WRITTEN. ==
+   Checking for .MUTANT sentinels, I typed the BROKEN form out of habit:
+       wsl -- bash -c 'for f in /tmp/gx*/.MUTANT; do echo "--- $f"; ... done'
+   Every $f and $d came back EMPTY, so the loop ran four times over blank paths and
+   printed four lines of '(no binary)'.
+
+   *** THE PHANTOM WAS REASSURING, WHICH IS THE WORST DIRECTION. ***  It said the
+   trees hold no binaries and so cannot be measured by mistake.  Re-run with the
+   escaped form, ALL FOUR HOLD BINARIES, 6 MB to 107 MB, one to four days old.
+   A wrong answer that alarms gets checked; a wrong answer that reassures gets filed.
+
+   This is the carrier's own finding about itself: knowing a rule and having it fire
+   on the right object are different problems.  The rule was measured, written into
+   the ledger and into this file, and then not applied by its author within the hour.
+
+MAKERC_SECTION_F_DONE
+
+== G. A SIBLING TRAP, SAME FAMILY, FOUND 2026-08-29: git-bash `strings` RETURNS ZERO ==
+   ON A LINUX ELF, SILENTLY.
+
+   Checking whether build/gxemul carried the #490 fix:
+
+       strings build/gxemul | wc -l                    -> 0        (git-bash)
+       wsl -- strings /mnt/c/.../build/gxemul | wc -l  -> 44054    (WSL)
+
+   The binary is 6.1 MB, ELF 64-bit, NOT STRIPPED.  Zero strings is impossible.
+
+   *** AND THE WRONG ANSWER WAS THE ALARMING KIND, WHICH IS WHY IT WAS CAUGHT. ***
+   It said the binary contained NO decline strings while its SOURCE carried the fix and
+   its mtime was NEWER than the source -- i.e. it manufactured a textbook stale-binary
+   finding, the exact class this project has paid for twice.  I was one step from
+   recording it.
+
+   The control settled it in one command: the same probe on a known-post-fix clone,
+   through WSL, returned 14 `declined` and 24 `dreamcast_gdrom`.  Re-run against build/
+   through WSL: both #490 messages present, binary sound.
+
+   THE RULE, and it is the denominator rule again: **`0 of 0` is not a measurement.**
+   A tool that reports zero TOTAL on a 6 MB binary has failed, not answered.  Always
+   print the denominator -- `wc -l` on the whole extraction -- beside any grep of it.
+
+   Note this one differs from the dollar-stripping above in a way that matters: that trap
+   makes a wrong answer that REASSURES, this one makes a wrong answer that ALARMS.  The
+   alarming kind gets checked; the reassuring kind gets filed.
+
+MAKERC_SECTION_G_DONE

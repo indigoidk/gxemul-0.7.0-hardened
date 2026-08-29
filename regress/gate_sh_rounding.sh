@@ -521,7 +521,7 @@ else
     gddctrl=$(grep -o "GDROM_DEF_CONTROL=[A-Z]*" "$GDDLOG" | tail -1 | cut -d= -f2)
     check "gdrom_default control proves it measures" "${gddctrl:-missing}" "OK"
     gddres=$(grep -o "GDROM_DEF_RESULT=[0-9]*/[0-9]*" "$GDDLOG" | tail -1 | cut -d= -f2)
-    check "gdrom_default rows run"     "${gddres#*/}" 58
+    check "gdrom_default rows run"     "${gddres#*/}" 60
     check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
     #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
     #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
@@ -581,7 +581,7 @@ else
     #  ONE LINE, deliberately: assembling this with a backslash continuation through
     #  a heredoc mangled TWICE in one session and shipped a red gate with a bogus
     #  word `n` in it.
-    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept" "arm survive" "arm says" "arm idle" "arm once" "nodata live" "nodata says" "accept dma" "accept idle" "accept quiet" "nodata quiet" "accept event" "nodata idle" "arm halfarm" "nodata notx" "arm quiet" "arm twice" "nodata len" "arm bytetrig" "accept data" "both decl" "arm count2" "arm enable2" "nodata stale" "stale says" "stale idle" "nodata twice"; do
+    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept" "arm survive" "arm says" "arm idle" "arm once" "nodata live" "nodata says" "accept dma" "accept idle" "accept quiet" "nodata quiet" "accept event" "nodata idle" "arm halfarm" "nodata notx" "arm quiet" "arm twice" "nodata len" "arm bytetrig" "accept data" "both decl" "arm count2" "arm enable2" "nodata stale" "stale says" "stale idle" "nodata twice" "stale quiet" "stale how"; do
         n=$(count "$GDDLOG" "^$v  .*ok$")
         check "  $v" "$n" 1
     done
@@ -1110,6 +1110,76 @@ else
                  "latch once" "latch surv" "latch cond"; do
             n=$(grep -c "^$v  .*ok$" "$TOCLOG")
             check "gdromtoclen row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+        done
+    fi
+fi
+
+#  ---------------------------------------------------------------- #490 gdromdecline
+#
+#  The two de-fatalised sites in dev_dreamcast_gdrom.c's handle_command(): the case 0x30
+#  data-format guard and the default: arm.  Both were fatal() + exit(1) reached by an
+#  ordinary guest store.
+#
+#  ITS OWN SECTION AND ITS OWN DENOMINATOR, deliberately.  Bolting these rows onto the
+#  58-row gdrom_default probe would edit two coupled places -- a literal and a 58-name list
+#  that must agree -- for every row added.  #489 set that precedent and this follows it.
+#
+#  THE ROWS WORTH KNOWING ABOUT HERE ARE `crossbit` AND `latch cond`, because both were
+#  MEASURED escaping an earlier plan:
+#    * `crossbit` -- d->warned now has NINE writers sharing one field, and SIX of the
+#      pre-existing ones are set from inside DEVICE_ACCESS by ordinary guest register reads.
+#      If either new latch bit ALIASES an existing one, a prior TOC decline silences a whole
+#      site and the guest gets a mute refusal.  Measured as Ma_toclen / Mb_toclen.
+#    * `latch cond` -- moving the `break` INSIDE the latch `if` lets the SECOND identical bad
+#      format fall through into sector_nr.  The announce count reads 1 either way, so this
+#      row reads a DECLINE channel after the second command instead.  Measured as M_braceA.
+DECLPROBE=gdrom_decline_probe.py
+if [ ! -f "$DECLPROBE" ]; then
+    gate_skip "gdromdecline: $DECLPROBE absent"
+else
+    DECLLOG=$LOGDIR/gate_gdrom_decline.log
+    python3 -u "$DECLPROBE" "$PMAX" "$KERNEL" > "$DECLLOG" 2>&1 || true
+
+    if ! grep -q "GDROM_DECL_RESULT=" "$DECLLOG"; then
+        note "gdromdecline probe produced no result line; last lines follow"
+        tail -5 "$DECLLOG" | sed 's/^/       /'
+        check "gdromdecline probe completed" "no" "yes"
+    else
+        grep -E " ok$| FAIL$" "$DECLLOG" | sed 's/^/       /'
+
+        #  CONTROLS FIRST AND SEPARATELY -- a run whose controls died is an APPARATUS
+        #  failure and must not be read as product failures.
+        if grep -q "GDROM_DECL_CONTROL=OK" "$DECLLOG"; then
+            check "gdromdecline controls live" "yes" "yes"
+        else
+            note "gdromdecline CONTROLS DEAD -- the probe never reached the device."
+            note "Do not read the row scores below as product failures."
+            check "gdromdecline controls live" "no" "yes"
+        fi
+
+        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+        #  leaving declres empty so both halves expand to "" and the score row compares ""
+        #  with "" -- green on nothing.
+        declres=$(grep -o "GDROM_DECL_RESULT=[0-9]*/[0-9]*" "$DECLLOG" | tail -1 | cut -d= -f2)
+        if [ -z "$declres" ]; then
+            note "gdromdecline result line present but unparseable; last lines follow"
+            tail -5 "$DECLLOG" | sed 's/^/       /'
+            check "gdromdecline result parses" "no" "yes"
+        else
+            check "gdromdecline result parses" "yes" "yes"
+            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+            check "gdromdecline rows run"     "${declres#*/}" 20
+            check "gdromdecline rows correct" "${declres%/*}" "${declres#*/}"
+        fi
+
+        #  Per-row presence.  A row that silently stops being tested is the padded-column
+        #  class; these names are checked individually so a vanished row reds.
+        for v in "live" "devsig sh4" "gdrom map" "fmt surv" "fmt says" "fmt x2" \
+                 "latch cond" "fmt stage" "fmt cnt" "fmt event" "fmt 0x24" "unk surv" "unk says" \
+                 "unk x2" "unk cnt" "unk event" "both sites" "crossbit" "acceptA" \
+                 "accept sil"; do
+            n=$(count "$DECLLOG" "^$v  .*ok$")
+            check "gdromdecline row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
         done
     fi
 fi

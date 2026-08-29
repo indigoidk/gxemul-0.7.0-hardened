@@ -62,8 +62,11 @@ not by intent:
     *** #490: THIS CLAIM IS EXPIRED AND THE MEASUREMENT SAYS SO.  M11 IS NOW
     EQUIVALENT -- NO ROW KILLS IT, BECAUSE THERE IS NOTHING LEFT TO KILL. ***
       artifacts/gdromexitsix/m11_rescore_20260828/m11_58row.txt
-        fixed  GDROM_DEF_RESULT=58/58   nodata stale/stale says/stale idle all ok
-        M11    GDROM_DEF_RESULT=58/58   ... byte-identical
+      (a 58-row measurement: these are the counts AS MEASURED THEN, not today's
+       denominator.  The probe has since grown and the gate pin is authoritative;
+       rewriting these to match it would falsify the record they exist to preserve.)
+        fixed  GDROM_DEF_RESULT=58/58   nodata stale/stale says/stale idle all ok   [58-row denominator, as measured then]
+        M11    GDROM_DEF_RESULT=58/58   ... byte-identical   [58-row denominator, as measured then]
 
     THE CHRONOLOGY, from git rather than memory, because every record here was
     CORRECT WHEN WRITTEN and one of them was overtaken:
@@ -234,6 +237,12 @@ MOV_L_R4_AT_R3 = 0x2342       # mov.l r4,@r3  (0010nnnnmmmm0010, n=3 m=4)
 MOV_B_AT_R1_R4 = 0x6410       # mov.b @r1,r4  (0110nnnnmmmm0000, n=4 m=1)
 BRA_SELF = 0xaffe
 NOP = 0x0009
+
+#  #490: the two decline diagnostics the sibling round added.  ANCHORED on `-- declined`,
+#  because the bare `unimplemented data format` also matches the upstream 0x24
+#  warn-and-continue line -- measured, not assumed.
+FMT_DECL = re.compile(r"unimplemented data format 0x[0-9a-f]+ -- declined")
+CMD_DECL = re.compile(r"unimplemented command 0x[0-9a-f]+ -- declined")
 
 rows = []
 
@@ -1187,6 +1196,81 @@ row("stale says", ("%d" % len(DMA_NOD.findall(t))) if alive else "died", "1",
     "and it declines by the NO-DATA arm, exactly once")
 row("stale idle", printed(t, "r2") if alive else "died", "0x0",
     "+0x18 idle after the stale-length decline (0xa5 = the load never ran)")
+
+#  *** #490: `stale quiet` RESTORES WHAT THE SIBLING FIX BLINDED, AND THE LOSS WAS MEASURED
+#  BEFORE THE FIX LANDED RATHER THAN INFERRED AFTER. ***
+#
+#  The three rows above detect a mis-assembled packet only by the HOST DYING: each reads
+#  `... if alive else "died"`.  Frozen and measured on the committed build, a packet with
+#  cmd[0]=0x31 or cmd[1]=0x21 scored **55/58, CAUGHT** -- all three red, all via `died`.
+#
+#  #490 de-fatalised both of those sites.  Re-measured against the post-fix binary with the
+#  SAME two packets: **58/58 BOTH TIMES** -- the triple reverts and this probe reads exactly   [58-row denominator, as measured then]
+#  what a CORRECT packet reads.  Not merely vacuous: ACTIVELY MISLEADING, because a future
+#  maintainer whose packet rots gets a clean run.
+#      artifacts/gdromexitsix/challenge_freeze_20260828/  (pre-fix, 55/58 twice)
+#      artifacts/gdromexitsix/blinding_20260828/          (post-fix, 58/58 twice)   [58-row denominator, as measured then]
+#
+#  *** THOSE ARE 58-row FIGURES AND STAY THAT WAY. ***  They are what the probe
+#  measured when it had 58 rows; the gate pin is authoritative for TODAY's
+#  denominator, and restating a past measurement in a later denominator is exactly
+#  the frozen-number defect this project keeps correcting.  A score names the
+#  artifact that produced it, and these two name theirs.
+#
+#  This row reads the DECLINE TEXT instead, on the session that is supposed to send a
+#  CORRECT packet.  A mis-assembled one now reddens it whether or not the host survives.
+#  kills: a rotted test packet, and a deleted `case 0x30` (which would decline at default:)
+#  via:   the two anchored decline regexes, which cannot fire on a correct packet
+row("stale quiet", "%d" % (len(FMT_DECL.findall(t)) + len(CMD_DECL.findall(t))), "0",
+    "the packet is well-formed -- NEITHER new site declines it")
+
+#  *** #490: THE DEATH-MODE ORACLE.  `how` has been threaded through 37 call sites since
+#  ea97a10 and UNTIL NOW NO ROW READ IT -- that commit said so in its own message and the
+#  plumbing stayed inert. ***  `alive` is False only when a read fails INSIDE a budget
+#  window, so it is true of a HUNG emulator, a FROZEN one, and -- measured -- one already
+#  killed after the last budget check.  `how` is the exit status and cannot be fooled that
+#  way.
+#  *** THE kills: LINE HERE READ "floor clause (b) -- reinstating either exit(1) at the
+#  sibling sites", AND THAT IS FALSE.  Caught by a pass-2 seat, 2026-08-29. ***  This
+#  session sends a CORRECT packet, which reaches NEITHER de-fatalised site -- so under a
+#  reinstated exit(1) at either one the session never gets there, exits 0, and this row
+#  stays GREEN.  Its named channel cannot vary under its named mutant, which is exactly
+#  what the CHANNEL check calls vacuous BY CONSTRUCTION.  The claim was true only JOINTLY
+#  with packet rot, and `stale quiet` is the row that carries rot.
+#
+#  kills: a death the budget-window read pattern CANNOT SEE -- any build that exits after
+#         the last budget check, which `alive` reports as True.  That is a real and
+#         otherwise-unpinned channel: `how` had been threaded through 37 call sites since
+#         ea97a10 with NO row reading it.
+#  via:   the exit status, which `alive` structurally cannot see
+#
+#  *** THIS BLOCK PREDICTED "one rot-packet run reds `stale quiet` AND DISCHARGES BOTH".
+#  THE RUN HAPPENED AND REFUTED THE SECOND HALF.  Corrected 2026-08-29. ***
+#
+#  `regress/artifacts/gdromexitsix/rot_20260829/`, post-fix binary, one-line frozen-probe
+#  edit (packed format byte 0x20 -> 0x21):
+#
+#      base.log   GDROM_DEF_RESULT=60/60    stale quiet  0 vs 0      ok
+#      rot.log    GDROM_DEF_RESULT=59/60    stale quiet  1 vs 0    **FAIL**
+#
+#  The two `GDROM_DEF_VECTOR` lines differ in EXACTLY ONE POSITION, so the rot is
+#  discriminating rather than merely disruptive -- proven by the probe's own vector, not
+#  asserted.  **`stale quiet` is DISCHARGED by a measured kill.**
+#
+#  *** `stale how` IS NOT, AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT. ***  It
+#  stayed `exit0` under the rot because the fix DECLINES the bad format instead of dying, so
+#  the session still ends cleanly.  A rotted packet cannot red this row at all.
+#
+#  AND IT IS THE WANTED-EQUALS-FAILURE SHAPE, which the round's own PRETABLE addendum names:
+#  **this row WANTS `exit0`, and a BROKEN `how` capture also yields `exit0`.**  So a measured
+#  red is not a nicety here -- it is the only thing that distinguishes a working oracle from
+#  an inert one.  Killing it needs a mutant that makes the build EXIT AFTER the last budget
+#  check; the reinstated-`exit(1)` binaries in the pass-2 ask-again's bins are the obvious
+#  candidate, driven through the preserved rot instrument.
+#
+#  **UNTIL THAT IS MEASURED, TREAT THIS ROW AS UNPROVEN.**  Owed before the round closes.
+row("stale how", how, "exit0",
+    "and the session ended CLEANLY -- not merely answering when last asked")
 
 #  *** THE DE-ESCALATION ACCEPT ROW.  The fix removed TWO host-fatal
 #  predicates -- `d->data == NULL` and `count == 1 && enable == 1` -- and

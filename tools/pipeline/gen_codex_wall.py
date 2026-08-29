@@ -73,11 +73,25 @@ recommendations are already settled by measurements on the record (`tfreq` is fi
 `mrwstore2`'s "produce a real-guest witness" was measured impossible; `constblind`'s drop was
 rejected after a live instance was found).
 
-**Action for the remaining rows:** the older 08-17/08-18 panels (`exitsweep`, `ovsync`,
-`armbdt`, `b118L`, `b120r`, `dfreq`, `reprowitness`) were NOT re-fired and still carry genuine
-codex holds. For `opus5`/`fable5`, fire them against the cluster briefs when the owner's
-allocation frees them. **A blank cell, a seat failure and an allocation are three different
-things and this file names which is which.**
+*** THE PARAGRAPH THAT STOOD HERE WAS A FALSE ACTION-INSTRUCTION, RE-PRINTED INTO
+`fable_queue.md` ON EVERY REGENERATION.  Corrected 2026-08-29. ***  It said: *"the older
+08-17/08-18 panels (`exitsweep`, `ovsync`, `armbdt`, `b118L`, `b120r`, `dfreq`,
+`reprowitness`) were NOT re-fired and still carry genuine codex holds."*
+
+**Codex ANSWERED ALL SEVEN on 2026-08-26** -- verified by counting substantive codex entries
+dated on or after that day on each row (ovsync carries three).  Six of the seven had their
+stale markers defanged on 2026-08-29.  So this told the operator to re-fire seats that had
+already answered, which is worse than a stale comment: a stale comment misleads a reader,
+an action-instruction misdirects work.
+
+**Action for the remaining rows:** consult the generated list below rather than any names
+hardcoded here -- that is the whole point of generating it.  For `opus5`/`fable5`, fire them
+against the cluster briefs when the owner's allocation frees them.  **A blank cell, a seat
+failure and an allocation are three different things and this file names which is which.**
+
+*A hardcoded roster inside a GENERATOR is a wrong record waiting for the data to move, which
+is the same defect this project has now recorded for the `_scratchpad/*.pdf` inventory and the
+seat-status tables.  Name no rows here that the ledger can name for you.*
 """
 
 

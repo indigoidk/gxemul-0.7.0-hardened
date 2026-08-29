@@ -18,6 +18,120 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: the harness's own hooks are untested and half-untracked
+>
+> Both surfaced while REPAIRING the wsl-dollar guard, and neither is about the emulator.
+>
+> **`hookctlgate`** -- the guard fires on **every Bash call** and its 18-row control suite
+> (`artifacts/makercfalse/hook_controls_20260829/hookctl.py`, 9 must FIRE / 9 must stay
+> SILENT) is run by nothing.  It is classified `CLASS_RESEARCH` because no *emulator* gate
+> can sensibly run a Claude-Code hook's tests.
+>
+> **The case is measured, not hypothetical: the hook shipped 2026-08-29 with FOUR defects.**
+> Two FALSE NEGATIVES -- a multi-line `bash -c` block whose bare dollar sits below the `-c`,
+> which is the shape that actually bites, and which produced two confident wrong readings
+> the same day (a `cmp` reporting DIVERGED on an identical file, and gcc reporting
+> file-not-found).  And two FALSE POSITIVES **that line-scoping was adopted to fix and never
+> fixed** -- a control of the exact shape the hook's own comment cites as its motivating case
+> still fired.  14/18 before, 18/18 after.
+>
+> *Against gating it in `regress/`: an emulator gate running harness-tool controls is a
+> category mixture.  A `tools/`-level check is likelier right.  It owes the usual two
+> negative controls -- red on a broken hook, green on the shipped one.*
+>
+> **`hookdurability`** -- `.claude/` sits at the PROJECT ROOT, one level **above** the git
+> root, so anything there is outside version control.  `tools/install_hooks.sh` states the
+> same problem for git hooks in its own header and solves it by tracking an INSTALLER.
+>
+> The wsl-dollar guard was fixed by a better route: **settings point at a TRACKED path and
+> `.claude/` holds only a delegating shim, so there is exactly ONE copy and divergence is
+> structurally impossible rather than policed** -- which avoids the carrier's stated
+> antipattern (*"a copy nothing checks"*) without owing a section-J byte-divergence gate.
+>
+> **`round_reminder.sh` still lives only at the untracked path**, and it is the
+> SessionStart + TaskCompleted hook -- the thing that makes the panel directive and the
+> end-of-round triage fire at all.  Arguably the most load-bearing hook in the harness, and
+> a fresh clone gets none of it.  Same one-file remedy; it was not done in the same pass
+> only because editing the hook that injects the round directive, mid-session, is its own
+> documented defect class.
+>
+> ### OPEN -- filed 2026-08-29: the 0x24 arm's correctness is unsettleable locally
+>
+> **`gdromfmt24`** -- `#490` de-fatalised two sites in `handle_command` and deliberately left
+> the SIBLING data format `0x24` **byte-identical**: an unlatched, unbounded `fatal()` sitting
+> immediately beside an arm that is now latched, upstream's typo (`anway`) intact.
+>
+> **That was the right call and it is not the same as being settled.**  `0x24` is upstream's
+> gamble -- it announces and then CONTINUES into the read path.  Whether that is correct needs
+> SPI/GD-ROM command semantics, and `ls _scratchpad/*.pdf` shows fifteen manuals with **none**
+> covering GD-ROM, SPI or ATAPI packet commands.  Unsettleable locally is a reason to FILE,
+> not a reason to say nothing -- the device comment's "unsettleable here" was a disposition
+> note doing a schema value's work.
+>
+> The detector's `fmt 0x24` row pins the pair `1,0` -- upstream's text printed once, zero
+> decline matches.  It does **not** pin that `0x24` still CONTINUES (an edit converting it to
+> announce-then-`break` keeps `1,0` green), nor its unlatched character (one packet is sent,
+> so boundedness is unobserved either way).  Siblings in the same file -- the
+> `rejecting sector_count` diagnostic and the `Huh?` arm -- are the same class and fall under
+> `floodclass`.  *Note `latch cond` BORROWS its kill channel from the first of those, so a
+> future round de-fatalising it can silently turn that row permanently green.*
+>
+> ### OPEN -- MIPS Compare wrap-around: the timer is never set again
+>
+> **`n1`** -- a wrap-around `Compare` write never reprograms the timer, so a guest's timer
+> stops firing.  Eleven seats called it REAL.  **Filed here 2026-08-29 because recording work
+> on it moved it past the sync gate's archive cutoff and the gate then found it unfindable in
+> this file** -- an open row nobody can reach by reading the queue is work a fresh session
+> will not see.
+>
+> *** ITS REACHABILITY RECORD WAS WRONG AND IS CORRECTED. ***  The witness field said
+> "arc confirmed dormant; **pmax OPEN**".  pmax is NOT open, and this row's own panel closed
+> that two weeks ago -- four seats on 2026-08-15, two of which found the EXC3K scope limit
+> independently.  Re-verified at HEAD three ways: `machine_pmax.c` defaults the CPU to R3000A,
+> `mips_cpu_types.h` maps every R2000/R3000 variant to **EXC3K**, and `cpu_dyntrans.c` carries
+> `/* Update the count register (on everything except EXC3K): */` -- **so on pmax COUNT is
+> never updated, and a register that does not advance can never reach COMPARE.**
+>
+> **So it is LATENT: live only on algor/evbmips/vocore, dead on pmax by construction, unused
+> on arc.**  That is a RANKING fact -- it moves the row DOWN against anything reachable on a
+> rig this project boots.  The defect itself is unchanged and a witness still needs a build.
+>
+> ### OPEN -- filed 2026-08-29: TWO MEASURED escapes past #490's detector
+>
+> **`gdromlatchcross`** -- the capped ask-again BUILT and SCORED two mutants that pass all
+> twenty rows of `gdrom_decline_probe.py`, each mutant's row block **byte-identical to base**,
+> so they are total escapes rather than ties.  Artifacts:
+> `regress/artifacts/gdromexitsix/p2askagain_20260829/`.
+>
+> **E2 is ONE CHARACTER and is ranked first.**  `d->warned |= GDROM_W_FMT;` becomes
+> `d->warned = GDROM_W_FMT;`.  Site A still announces exactly once so every Site-A row stays
+> green -- **but the assignment clears the other eight latches**, and a guest alternating a
+> short TOC with a bad data format then re-announces #489's diagnostic **without bound**.
+> `fatal()` cannot be silenced by `-q`, so it reaches the host log every time.  *That is the
+> guest-drivable flood this campaign exists to remove, reintroduced by one character and
+> invisible to the detector written for it.*
+>
+> **THE STRUCTURAL GAP matters more than the instance: every latch row checks its OWN bit,
+> and no row observes any latch ACROSS a decline at the other site.**  `wdcsectorreset` is the
+> recorded twin, and its note says the first job is to build the mutant and score it -- here
+> the mutant arrives already measured.
+>
+> **E3** widens Site A's latch test to cover a sibling bit.  Invisible ONLY because both
+> two-site rows run Site A before Site B; the same edit at Site B *would* be caught.  Pass 1's
+> `S3 both` ran the OPPOSITE order and the shipped rows inverted it, so this coverage rests on
+> an ordering nobody chose deliberately and nothing pins.
+>
+> **DEBT, NOT A FLOOR BREACH** -- all four clauses measure clean ((a) 8/20 CONTROL=OK,
+> (b) 13/20 both sites, (c) 4/20 CONTROL=DEAD, (d) three forms).  #447's and #464's grading.
+>
+> *** THEIR SIBLING E1 WAS THE SAME CLASS AND IS CLOSED -- BY CONSTRUCTION, NOT BY ROWS. ***
+> A compile-time disjointness assert now refuses it, measured in five states plus a
+> multi-bit-literal delta that chose `+` over `|`.  **So the first question for E2/E3 is
+> whether a constructional bound exists, not which rows to add.**
+>
+> *Filed because contract-disclosed is not filed: a supplementary pass-2 seat found these
+> ranked nowhere -- zero hits here, one ledger mention buried inside the ask-again note.*
+>
 > ### OPEN -- filed 2026-08-29: a RED weekly battery sat UNREAD for five days
 >
 > **`gatebuildallow`** -- `gate_build.sh` PINS its own twin-tree allowlist while
@@ -89,6 +203,35 @@
 > *The `open` omission is the same one the ledger's own `state_semantics` block made, found
 > independently the same day in a different tool. When one enumeration is found short, grep the
 > others — the omission is a habit, not an accident.*
+>
+> *** THE GREP THAT SENTENCE ASKS FOR WAS RUN 2026-08-29.  RESULT: NEGATIVE -- the other
+> enumerations are SOUND.  Recorded so nobody runs this hunt a third time. ***
+>
+> Six state-enumerations across `tools/pipeline/*.py` were checked against the live census
+> (270 rows: closed 83, held 75, open 73, in work 21, dropped 18):
+>
+> * `check_bugfile_sync.py` `OPEN_STATES` -- **fixed**, covers all three non-terminal states.
+> * `check_witness.py`, `check_stage_panels.py`, `check_commit_attribution.py`,
+>   `check_fable_queue.py` -- binary `== "closed"` splits, correct for what each asks.
+> * `gen_dashboard.py` `STATE_ORDER` -- **carries the same SHAPE and none of the harm.**
+>   It names two states that do not occur (`active`, `pending`) and omits two that do
+>   (`open`, `in work`, 94 rows between them).
+>
+> **I first read that as the identical defect and it is not** -- checked by reproducing the
+> tool's own section split, which is `not in ("closed", "dropped")` and **never consults
+> `STATE_ORDER` at all**.  The buckets come out 169 / 83 / 18, and 169 is exactly
+> held + open + in work.  No row is misplaced; the two omitted states fall to the default of 5
+> and land in the bucket they belong in.  What remains is two DEAD KEYS in an enumeration whose
+> own comment says it must be kept in sync with the split.
+>
+> **Not changed.**  Additions and edits to working code are licensed by a measured delta or a
+> transferred warrant, and this has neither -- the delta is zero by measurement.  Filed as an
+> observation so a future reader knows the dead keys are known and harmless rather than
+> unexamined.
+>
+> *The generalisation in the sentence above is therefore WEAKER than it reads: one enumeration
+> was short and harmful, one is short and harmless, four are sound.  "Grep the others" was
+> still the right instruction -- it cost ten minutes and it retired the question.*
 >
 > - *** THIS ROW READ ✅ FIXED IN #473 UNTIL 2026-08-27, DIRECTLY ABOVE AN ENTRY
 >   SAYING THE AMBIGUITY IS STILL PRESENT.  TWO CONSECUTIVE LINES ASSERTING OPPOSITE
@@ -10804,8 +10947,32 @@ damaged the first to patch the second, breaking the ATAPI completion handshake.
   **own accumulator**, switching on phase to select a destination buffer and dispatching on
   *"this phase's own buffer is full"* rather than a shared occupancy count. That removes the
   aliasing which makes a phase guard necessary at all: `inbuf_len == 12` cannot tell CDB bytes
-  from DATA-IN payload from disk-write payload. **A seat measured its migration cost honestly:**
-  it relocates where a CDB lives, so every existing probe that fakes one stops working.
+  from DATA-IN payload from disk-write payload.
+
+  *** THE COST SENTENCE HERE READ "A seat MEASURED its migration cost honestly: it relocates
+  where a CDB lives, so every existing probe that fakes one stops working."  BOTH HALVES ARE
+  WRONG, and the GRADE is the worse error.  Corrected 2026-08-29 by the flagship seat. ***
+
+  **It was a READ, not a measurement.**  No build of F, no kill table, no log exists in any
+  panel dir or artifacts dir.  Design-pass seats REASONED about F -- codex called it the
+  "cleanest root repair, though larger than A+B".  Grading a reading as a measurement is the
+  exact distinction the seat ledger exists to draw.
+
+  *** AND IT HAS ECHOED, WHICH IS WHY THIS IS WORSE THAN A LOCAL SLIP. ***  The claim
+  originated HERE, was inlined into two briefs I wrote, and codex's pass-2 answer quotes the
+  diff back -- so `grep -rl 'migration cost' _scratchpad/panel_*` returns FIVE artifacts, and a
+  future reader finds "measured" sitting in a seat file and reads it as independent
+  confirmation.  **That is the wrong-fact-comes-back-confirmed class travelling one artifact
+  over**, and unanimity on a brief-supplied fact is worth nothing.
+
+  **The content is half wrong too:** the accept side ports nearly as-is (`pkt_cdb_case` is six
+  16-bit writes through the real handler from an empty ring).  The reject-side rows do not
+  "stop working" -- under F a mid-DATAIN write, a len-3 write and DATAOUT payload cannot reach
+  dispatch BY CONSTRUCTION, so those targets go DEAD and each owes a case-2 absence record with
+  its warrant named.  Migration and target-death are different dispositions.
+
+  The real cost is a **re-cut plus a full re-table** -- the #462 four-hour lesson applied to the
+  whole wdc CDB suite -- which is a stronger argument for filing than the wrong one was.
 
 - **`wdcdataoutdrain`** — *** CLOSED. The words "still open, still unfixed, and its row
   stays held in `_scratchpad/held_repro_rows.c`" stood here for two rounds after the fix

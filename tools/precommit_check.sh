@@ -310,7 +310,7 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  with a literal denominator pin (`check "gdromtoclen rows run" ... 15`).  Raised
 	#  DELIBERATELY, which is what the growth arm below asks for -- the count is the
 	#  point, so it may not be nudged to silence a red.
-	SCORE_CLAIMS_MANIFEST=20
+	SCORE_CLAIMS_MANIFEST=21
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
@@ -853,6 +853,42 @@ _unstaged_src=$(git diff --name-only -- 'src/*' | tr '\n' ' ')
 if [ -n "$_unstaged_src" ]; then
 	warn "UNSTAGED src/ edits NOT audited by this run (they are when committed): $_unstaged_src"
 fi
+say ""; say "Z. no tracked script invokes wsl -c with a bare dollar"
+#
+#  WSL DOLLAR RATCHET.  A wsl -c invocation does not deliver shell variables to the
+#  inner shell, EVEN INSIDE SINGLE QUOTES -- measured 2026-08-29 with controls in
+#  regress/artifacts/makercfalse/wsl_dollar_20260829.out.  A mutant never applied
+#  then scores the BASE binary and reports a clean kill table.
+#
+#  *** ITS RECALL ON THE RECORDED HISTORY IS ZERO, STATED HERE RATHER THAN
+#  DISCOVERED LATER. ***  The class bit FIVE times and every occurrence was an
+#  INTERACTIVE, ad-hoc command; the committed tree holds the form four times and all
+#  four are QUOTATIONS of the defect in prose.  This check would have caught NONE of
+#  them, and it is NOT the primary defence.
+#
+#  The primary defence is the PreToolUse hook at .claude/hooks/wsl_dollar_guard.py,
+#  which fires where all five happened -- at the keyboard.  THIS does the one thing
+#  the hook cannot: stop the form being COMMITTED into a script, to run unattended.
+#
+#  ZERO-POPULATION RATCHET: 229 tracked .sh/.py at introduction, NONE carrying the
+#  form, so it grandfathers nothing and needs no dated cutoff.  Controlled both ways
+#  on the day it landed: 9/9 line cases, a clean tree passing with its denominator,
+#  and an injected violation failing with file:line.
+#
+#  ABOVE THE EMPTY-CHANGED EXIT ON PURPOSE, for the reason recorded just below about
+#  F/G/H/I/J/K: it scans TRACKED files, so a clean tree is exactly when it matters.
+if [ -f "$SEC/tools/pipeline/check_wsl_dollar.py" ]; then
+	if wslout=$(python "$SEC/tools/pipeline/check_wsl_dollar.py" "$SEC" 2>&1); then
+		good "$(printf "%s" "$wslout" | sed -e "s/^ *//" | head -1)"
+	else
+		printf "%s\n" "$wslout" | while IFS= read -r l; do bad "$l"; done
+		fail=$((fail+1))
+	fi
+else
+	bad "check_wsl_dollar.py MISSING -- section Z proved nothing"
+	fail=$((fail+1))
+fi
+
 if [ -z "$CHANGED" ]; then
 	say "nothing staged or modified -- no per-file checks."
 	#  *** DO NOT exit 0 HERE.  *** Sections F/G/H/I/J/K have already run above and may have

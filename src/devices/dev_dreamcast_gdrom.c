@@ -228,6 +228,8 @@ enum {
 	GDROM_W_DMANODATA_B,	/*  was 0x10  */
 	GDROM_W_DMAARM_B,	/*  was 0x20  */
 	GDROM_W_TOCLEN_B,	/*  #489: the SEVENTH, and the bit the trigger was set for  */
+	GDROM_W_FMT_B,		/*  #490: case 0x30's data-format decline  */
+	GDROM_W_CMD_B,		/*  #490: the default: unimplemented-command decline  */
 	GDROM_W_NBITS
 };
 
@@ -238,6 +240,29 @@ enum {
 #define	GDROM_W_DMANODATA	(1u << GDROM_W_DMANODATA_B)
 #define	GDROM_W_DMAARM	(1u << GDROM_W_DMAARM_B)
 #define	GDROM_W_TOCLEN	(1u << GDROM_W_TOCLEN_B)
+#define	GDROM_W_FMT	(1u << GDROM_W_FMT_B)
+#define	GDROM_W_CMD	(1u << GDROM_W_CMD_B)
+
+/*
+ *  *** #490: TWO BITS, NOT ONE, AND THAT IS MEASURED RATHER THAN TIDY. ***
+ *
+ *  The measuring seat built the one-bit form (`M3shared`) and it ESCAPED a detector that
+ *  otherwise passed: a session declining at BOTH sites sees the second site fall silent,
+ *  because the first already latched.  Separate bits, and a row (`both sites`) that trips
+ *  both in one session.
+ *
+ *  *** AND THE COLLISION SURFACE IS WIDER THAN THIS PAIR.  `d->warned` now has NINE
+ *  writers sharing one field, and SIX of the pre-existing ones are set from inside
+ *  DEVICE_ACCESS by ordinary guest register reads *** -- `GDROM_W_OVERREAD` is set by the
+ *  benign TOC-then-Mount-then-read sequence a shipped probe already exercises.  So a bit
+ *  COLLISION here is not announced by anything: the wrong bit is simply already set, and
+ *  the decline goes silent under traffic that looks entirely normal.  `Ma_toclen` and
+ *  `Mb_toclen` measured exactly that, and `crossbit` is the row that sees it.
+ *
+ *  Note the pre-table GUARD-FIELD check cannot catch this class: it asks where the guard
+ *  field and the body field DIFFER, and here they are the SAME field.  For a shared
+ *  bitfield the question is "who else writes this field, and can they set my bit?"
+ */
 
 /*
  *  *** THE COUNT-FITS-ITS-CARRIERS BOUND, AS A COMPILE ERROR RATHER THAN A SENTENCE. ***
@@ -298,6 +323,130 @@ enum {
 typedef char gdrom_w_fits_its_carriers[
     (GDROM_W_NBITS <= 8 * sizeof(((struct dreamcast_gdrom_data *)0)->warned) &&
      GDROM_W_NBITS <= 8 * sizeof(1u)) ? 1 : -1];
+
+/*
+ *  #490: THE MASKS MUST BE PAIRWISE DISJOINT, AS A COMPILE ERROR RATHER THAN AS
+ *  A ROW.  Added on owner decision after the pass-2 ask-again MEASURED an escape
+ *  that no row could see.
+ *
+ *  THE ESCAPE, measured at 20/20 with the mutant's whole row block byte-identical
+ *  to base -- a total escape, not a tie:
+ *
+ *      E1_aliasover   #define GDROM_W_FMT (1u << GDROM_W_OVERREAD_B)
+ *
+ *  `crossbit` is the row written for exactly this class and it stages only a
+ *  short TOC, so it can see a collision with GDROM_W_TOCLEN and with nothing
+ *  else -- ONE of the seven pre-existing bits.  No session in the detector takes
+ *  the OVERREAD, LEN, NODATA, NOTWAIT, DMANODATA or DMAARM path, so an alias
+ *  onto any of those six is invisible to every row.
+ *
+ *  *** WHY A DECLARATION AND NOT TWELVE MORE MUTANTS. ***  Closing the class by
+ *  rows costs one build and one probe run per bit per site and still only
+ *  enumerates today's bits.  This closes it for ALL bits, present and future,
+ *  and it FAILS CLOSED: add a tenth bit without extending the sum below and
+ *  file stops compiling.  The addition-licence bar is a MEASURED DELTA, and the
+ *  delta here is E1 going from 20/20 (escaped) to not building at all.
+ *
+ *  MEASURED IN EIGHT STATES AGAINST BOTH OPERATOR FORMS, on the real file,
+ *  preserved at regress/artifacts/gdromexitsix/supp_p2_20260829/ (see its
+ *  README.md; the PRE/POST files carry md5s).  `|` is the form this
+ *  declaration ORIGINALLY shipped with; `+` is what is above.
+ *
+ *                                                    with |     with +
+ *      unmodified source ........................... COMPILES   COMPILES
+ *      #define FMT -> OVERREAD_B  (E1 as built) ..... REFUSED    REFUSED
+ *      enum CMD_B = FMT_B  (one token) ............... ESCAPES    REFUSED
+ *      enum FMT_B = OVERREAD_B, RELOCATED ............ ESCAPES    REFUSED
+ *      enum FMT_B = OVERREAD_B, in place ............. REFUSED    REFUSED
+ *      FMT redefined as a 2-bit SUPERSET ............. ESCAPES    REFUSED
+ *      tenth bit at BACK, sum not extended ........... REFUSED    REFUSED
+ *      tenth bit at FRONT, sum not extended .......... REFUSED    REFUSED
+ *
+ *  *** THE `|` FORM HAD THREE ESCAPES AND THIS COMMENT CLAIMED IT HAD NONE.
+ *  ***  The earlier table here listed five states, all synthetic and all
+ *  ***  against `|`, and read them as a clean sweep.  It missed the whole
+ *  ***  ENUM-side door: an explicit enumerator initialiser renumbers every
+ *  ***  later enumerator, so GDROM_W_NBITS falls in lockstep with the lost
+ *  ***  bit and the equality RE-BALANCES.  An OR test proves coverage
+ *  ***  relative to a bound derived from the same possibly-aliased enum it
+ *  ***  is checking -- both sides move together.  That is the vacuity
+ *  ***  floor's ANCHOR RULE (clause (f)) one level down, in a constant
+ *  ***  expression: a RELATIVE check where an ANCHORED one was needed.
+ *  ***  `+` is anchored because a sum cannot absorb a duplicate.
+ *
+ *  Note the third and fifth rows are the SAME SHAPE in two spellings, and
+ *  they disagree under `|`: the #define spelling was refused while the enum
+ *  spelling compiled.  A control that varies only the #define block cannot
+ *  see this class at all, which is why the earlier five-state table missed
+ *  it -- it was measuring the wrong half of the file.
+ *
+ *  The in-place-vs-relocated pair matters for the same reason: an alias left
+ *  in its original position keeps NBITS where it was, so the OR equality
+ *  still breaks.  Moving it is what lets the bound follow the bit down.
+ *
+ *  A NEGATIVE CONTROL was run in the earlier set and still holds: E1's alias
+ *  WITH THE ASSERT REMOVED compiles, proving this declaration is what
+ *  refuses and not something else in the file.  gcc's diagnostic is
+ *  "size of array 'gdrom_w_masks_disjoint' is negative".
+ *
+ *  Note the three grounds on which a disjointness assert was REJECTED for
+ *  dev_sh4.c do not hold here, and each was checked rather than assumed: those
+ *  classes had pervasively overlapping bit-domains (these are one-bit masks by
+ *  construction), their separation rested on array INDICES rather than on the
+ *  constants (this rests on the constants themselves), and for the one disjoint
+ *  pair the values were hardware register layouts that could not legitimately
+ *  change (these are private latch bits that change whenever a round adds one).
+ */
+/*
+ *  *** THE OPERATOR IS `+` AND NOT `|`, AND THAT IS A MEASURED CHOICE. ***  A
+ *  pass-2 seat found the gap and the delta was then measured:
+ *
+ *      case                                  with |     with +
+ *      correct single-bit masks              COMPILES   COMPILES
+ *      E1: FMT aliased onto OVERREAD_B       REFUSED    REFUSED
+ *      FMT as a MULTI-BIT LITERAL            COMPILES   REFUSED   <- the delta
+ *
+ *  With `|`, redefining a mask as a SUPERSET -- say
+ *  `((1u << GDROM_W_FMT_B) | (1u << GDROM_W_OVERREAD_B))` -- still ORs to
+ *  all-ones, so the assert passes while FMT quietly sets OVERREAD's bit too.
+ *  With `+` the duplicated bit carries and the sum overshoots all-ones.
+ *
+ *  So `sum == all-ones` is EXACT: it holds if and only if the masks are
+ *  pairwise disjoint AND cover every bit.  Overflow is impossible at these
+ *  widths -- nine bits sum to 511 against an unsigned int.
+ *
+ *  Under `|` the single-bit-ness was carried by the `(1u << _B)` IDIOM rather
+ *  than by the assert; under `+` the assert carries it alone, so a future edit
+ *  that abandons the idiom is caught rather than trusted.
+ *
+ *  *** AND `+` CATCHES A SECOND, INDEPENDENTLY-FOUND ESCAPE BY A DIFFERENT
+ *  MECHANISM -- which is the strongest argument for it. ***  A later seat
+ *  proposed aliasing the ENUMERATOR rather than the mask:
+ *
+ *      GDROM_W_CMD_B = GDROM_W_FMT_B,
+ *
+ *  Measured: COMPILES under `|`, REFUSED under `+`.  The reason `|` cannot see
+ *  it is worth stating, because it is not the multi-bit case again -- aliasing
+ *  an enumerator collapses GDROM_W_NBITS from 9 to 8, so the RIGHT-HAND SIDE
+ *  SHRINKS IN STEP WITH THE OR and the two stay equal at 0xff.  **An OR-based
+ *  test proves coverage relative to a count derived from the possibly-aliased
+ *  enum, so it cannot count masks independently.**  The SUM can: the duplicated
+ *  bit carries, 1+2+4+8+16+32+64+128+128 = 383 against 255.
+ *
+ *  HONEST LIMIT, so this is not read as more than it is: `sum == all-ones` is
+ *  exact for DISJOINTNESS-AND-COVERAGE of the masks as written.  It is not a
+ *  general one-hot proof of each mask in isolation, and two seats correctly
+ *  described the `|` form as an exhaustiveness check rather than a pairwise
+ *  disjointness proof.  A future boundary also exists and is loud rather than
+ *  silent: at GDROM_W_NBITS == 32 the `1u << GDROM_W_NBITS` here is undefined,
+ *  and gcc emits `left shift count >= width of type` -- a warning, not an
+ *  error, so a build that suppresses warnings would not stop.  Nine bits today;
+ *  the carriers assert above is what bounds the growth.
+ */
+typedef char gdrom_w_masks_disjoint[
+    ((GDROM_W_LEN + GDROM_W_NODATA + GDROM_W_NOTWAIT + GDROM_W_OVERREAD +
+      GDROM_W_DMANODATA + GDROM_W_DMAARM + GDROM_W_TOCLEN + GDROM_W_FMT +
+      GDROM_W_CMD) == ((1u << GDROM_W_NBITS) - 1u)) ? 1 : -1];
 
 /*
  *  *** THIS TRIGGER HAS FIRED AND IS DISCHARGED -- see the enum ABOVE.  EVERYTHING IN
@@ -586,9 +735,38 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		if (d->cmd[1] == 0x24) {
 			fatal("GDROM unimplemented data format 0x%02x. Continuing anway.\n", d->cmd[1]);
 		} else if (d->cmd[1] != 0x20) {
-			fatal("GDROM unimplemented data format 0x%02x\n",
-			    d->cmd[1]);
-			exit(1);
+			/*
+			 *  #490: a guest-chosen data format ended the host
+			 *  process.  Decline instead, announced ONCE per
+			 *  device instance behind its own latch bit -- the
+			 *  house idiom, and the same shape #489 shipped for
+			 *  the TOC length guard in this file.
+			 *
+			 *  *** THE `break` IS INSIDE THIS ARM AND OUTSIDE THE
+			 *  LATCH `if`, AND BOTH PLACEMENTS ARE MEASURED. ***
+			 *  Inside the arm: the 0x24 branch above stays
+			 *  byte-identical (it is verbatim pristine-2021
+			 *  upstream, typo included, and unsettleable here),
+			 *  and the 0x20 path never enters this arm at all.
+			 *  Outside the latch `if`: a `break` INSIDE it makes
+			 *  the FIRST bad format decline and every LATER one
+			 *  fall through into `sector_nr` -- `M_braceA`,
+			 *  measured escaping a 13-row detector because
+			 *  "announces once" reads the same either way.
+			 *
+			 *  It must be `break` and not `return`: the common
+			 *  tail below zeroes d->cnt, clears COND_DATA_AVAIL
+			 *  and fires the completion event.  `M_retA` measured
+			 *  a `return` leaving cnt at 0x98, which hands the
+			 *  guest a count for a command that produced nothing.
+			 */
+			if (!(d->warned & GDROM_W_FMT)) {
+				d->warned |= GDROM_W_FMT;
+				fatal("[ dreamcast_gdrom: unimplemented data"
+				    " format 0x%02x -- declined.  (once) ]\n",
+				    d->cmd[1]);
+			}
+			break;
 		}
 		sector_nr = d->cmd[2] * 65536 + d->cmd[3] * 256 + d->cmd[4];
 		sector_count = d->cmd[8] * 65536 + d->cmd[9] * 256 + d->cmd[10];
@@ -663,9 +841,31 @@ static void handle_command(struct cpu *cpu, struct dreamcast_gdrom_data *d)
 		// Note/TODO: This is ignored for now.
 		break;
 
-	default:fatal("GDROM handle_command: unimplemented command 0x%02x"
-		    "\n", d->cmd[0]);
-		exit(1);
+	default:/*
+		 *  #490: an unimplemented command byte ended the host process.
+		 *  Decline, announced ONCE behind its own latch bit.
+		 *
+		 *  A SEPARATE bit from Site A's, measured: `M3shared` folded
+		 *  both onto one bit and ESCAPED -- a session declining at both
+		 *  sites saw the second fall silent because the first had
+		 *  latched.
+		 *
+		 *  `break` and not `return`, and here the reason is subtler
+		 *  than at Site A: this is the LAST arm, so deleting exit(1)
+		 *  with no break would fall out of the switch into the tail
+		 *  anyway.  The `break` is house idiom rather than load-bearing
+		 *  -- but a `return` is NOT equivalent, because the tail below
+		 *  zeroes d->cnt, clears COND_DATA_AVAIL and fires the
+		 *  completion event.  An early return skips that event and
+		 *  leaves a guest waiting for a completion that never comes.
+		 */
+		if (!(d->warned & GDROM_W_CMD)) {
+			d->warned |= GDROM_W_CMD;
+			fatal("[ dreamcast_gdrom: handle_command:"
+			    " unimplemented command 0x%02x -- declined."
+			    "  (once) ]\n", d->cmd[0]);
+		}
+		break;
 	}
 
 	// Any resulting data? Then set COND_DATA_AVAIL. Otherwise, clear
@@ -742,8 +942,19 @@ DEVICE_ACCESS(dreamcast_gdrom)
 		 *  exactly why the measurement that produced the earlier claim did
 		 *  not see it.  Command 0x30 needs cmd[1] in {0x20,0x24} and a
 		 *  byte-store packet can never satisfy it, so it reaches
-		 *  handle_command's own exit(1).  MEASURED: this build dies there
-		 *  and a DECLINING build survives.
+		 *  handle_command's data-format arm.
+		 *
+		 *  *** THIS SENTENCE READ "so it reaches handle_command's own
+		 *  exit(1).  MEASURED: this build dies there and a DECLINING
+		 *  build survives."  #490 MADE ITS OWN ANTECEDENT FALSE and the
+		 *  claim with it: there is no longer ANY exit(1) in
+		 *  handle_command, so a byte-store packet now reaches the
+		 *  LATCHED DECLINE and the build survives.  The comment even
+		 *  named the outcome -- "a DECLINING build survives" -- which is
+		 *  exactly what this build now is.  Caught by a pass-2 seat;
+		 *  corrected in-round because a WRONG RECORD is one of the two
+		 *  things the stopping rule fixes rather than files, and a claim
+		 *  labelled MEASURED is the worst kind to leave stale. ***
 		 *
 		 *  That is a RELOCATION, not a regression -- before this fix the
 		 *  same byte store died at the width guard, one step earlier -- but
