@@ -1379,7 +1379,13 @@ static size_t fread_helper(off_t offset, unsigned char *buf,
 		    unaligned offset (#164); this path never had that guard.  */
 		inblock = curofs & (OVERLAY_BLOCK_SIZE - 1);
 		remain = OVERLAY_BLOCK_SIZE - inblock;
-		lentoread = len > remain? remain : len;
+		/*  #491: both casts are provably safe -- inblock is curofs masked
+		    to [0, OVERLAY_BLOCK_SIZE-1], so remain is in [1, 512] and can
+		    never be negative; and the len arm is reached only when
+		    len <= remain <= 512.  Without them gcc warns twice here
+		    (-Wsign-compare, size_t vs off_t), and the battery's build
+		    gate wants ZERO warnings.  */
+		lentoread = len > (size_t) remain? remain : (off_t) len;
 
 		if (overlay_nr >= 0) {
 			/*  Read from overlay:  */

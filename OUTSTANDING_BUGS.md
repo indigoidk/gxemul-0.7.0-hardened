@@ -18,6 +18,59 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: the battery's pre-flight is a ~15-minute BLIND WINDOW
+>
+> **`batteryblindstart`** -- `nightly_battery.sh` computes `HEADSHA` and `DIRTY` BEFORE
+> it opens either output (`} > "$SUM"`, then `./run.sh > "$LOG"`), and a shell creates
+> a redirect target only when it reaches the redirect.  **MEASURED 2026-08-29: the task
+> fired at 16:06:12 and the verdict's own START line reads 16:21:09** -- about fifteen
+> minutes in which `git status --porcelain` runs over `/mnt/c` and NOTHING is observable.
+>
+> **The carrier's own redirect-target rule gives the WRONG ANSWER here**: it says *log
+> MISSING -> the command NEVER STARTED*, and during this window the log is missing while
+> the command is running fine.  It compounds a hazard the script's header already
+> records -- a battery launched from a Claude Code shell is ORPHANED and *"the only tell
+> was a log mtime 4.4 h stale"* -- because during the blind window there is no mtime to
+> read, so an orphaned start and a healthy one are indistinguishable by every documented
+> check.  Only `ps -eo pid,ppid,etime,args` separated them, by naming the git child.
+>
+> **Remedy is one line: write a STARTING stamp to `$SUM` (or touch `$LOG`) BEFORE the
+> git calls**, so the rule works on this script.  The real verdict block overwrites it
+> moments later, so nothing is lost.  *Not done in the same pass because the battery was
+> RUNNING, and editing a shell script mid-execution is a documented defect class here.*
+>
+> ### OPEN -- filed 2026-08-29: what the re-run battery found behind a five-day-old red
+>
+> **`diskimagesign`** -- IN WORK as `#491`.  `#472`'s clamp introduced two
+> `-Wsign-compare` warnings at `diskimage.c:1382`.  **Not a live bug** (`remain` is in
+> `[1,512]` by construction) but `gate_build` wants ZERO warnings, so it FAILED --
+> and because it withdraws `$RIG/gxsec-gxemul` at start and republishes only on
+> success, **`gate_mips` then SKIPPED**.  A whole gate lost, scored as SKIP not FAIL.
+> *That is the second time this mechanism has cost two gates, by a different route*
+> *from the stale allowlist line `gatebuildallow` records.*  Fixed and measured:
+> pre-fix 2 warnings / post-fix 0, then gate_build PASS -> binary republished ->
+> gate_mips PASS (was SKIP).
+>
+> **`propagatecpsilent`** -- the build-tree propagate script prints `propagated`
+> after a **failed** `cp`.  Measured on my own tooling: the log read *cp: cannot
+> stat ... No such file or directory* immediately followed by *propagated*.  **A
+> claim of ACTION printed at the moment of failure**, the same shape as `panel.sh`
+> announcing *re-firing once* while re-firing nothing.  The two-part clearance
+> CONTAINED it -- `part 1 ... NO`, sentinel KEPT -- so the tree was marked
+> untrustworthy rather than silently wrong.  Fixed in the rewrite; the original
+> still carries it and any copy inherits it.  *Root cause: the bad script was
+> GENERATED FROM ANOTHER SCRIPT BY CHAINED `sed`, which is the same class as
+> substituting a grep for a parser -- it produces something that runs and is wrong.*
+>
+> **The other five reds are harness bookkeeping and go to their own round**, because
+> two are NOT simple re-pins: `readiness: whole-buffer full-prompt` is a
+> **fail-closed allowlist over a pattern #392 measured at 0/80** and must not be
+> raised (its two new sites are a deliberately preserved negative control and a
+> simulated stream, neither driving a guest); and `wdcflood: six warned_ guards`
+> needs an equality->floor change plus an L4 correction, because its own comment
+> claims immunity to the growth that just broke it.  Full dispositions in
+> `regress/artifacts/diskimagesign/note_ratchets_20260829.md`.
+>
 > ### OPEN -- filed 2026-08-29: the harness's own hooks are untested and half-untracked
 >
 > Both surfaced while REPAIRING the wsl-dollar guard, and neither is about the emulator.

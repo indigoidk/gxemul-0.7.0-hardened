@@ -1,3 +1,84 @@
+## Round 491 (#491) -- two compiler warnings were costing an entire GATE, and the battery that would have said so had been red and unread for five days
+
+`#472` replaced `len > OVERLAY_BLOCK_SIZE? OVERLAY_BLOCK_SIZE : len` with
+`len > remain? remain : len`.  `len` is a `size_t` parameter; `remain` is `off_t`.
+gcc warns twice at `diskimage.c:1382` under the tree's own `CWARNINGS`.
+
+### *** IT IS NOT A LIVE BUG, AND THIS ROUND WILL NOT IMPLY OTHERWISE. ***
+
+`inblock = curofs & (OVERLAY_BLOCK_SIZE - 1)` gives `[0, 511]`, so `remain` is in
+`[1, 512]` and is positive by construction.  The implicit conversion is
+value-preserving at every reachable value.  **Both casts are provable rather than
+plausible**, and the comment says which fact makes each safe:
+
+```c
+lentoread = len > (size_t) remain? remain : (off_t) len;
+```
+
+`(size_t) remain` -- remain is never negative.  `(off_t) len` -- that arm is reached
+only when `len <= remain <= 512`.
+
+### THE REASON IT IS A ROUND AND NOT A TIDY-UP: IT WAS COSTING A GATE
+
+`gate_build` wants ZERO warnings, so it FAILED.  It withdraws
+`$RIG/gxsec-gxemul` at start and republishes **only on success**.  `gate_mips`
+then `need_exec`s that binary and reported:
+
+    mips-rigs: SKIP -- missing or non-executable binary: .../gxsec-gxemul
+
+**A whole gate's coverage lost, and scored as SKIP rather than FAIL.**  That is
+byte-identical in shape to what ONE stale allowlist line cost on 2026-08-23 --
+the defect `gatebuildallow` records, whose own summary reads *"one line of text
+cost two gates."*  It has now happened twice, by two different routes, through
+the same withdraw-and-republish mechanism.
+
+### MEASURED -- control first, and the FIRST attempt was vacuous
+
+| | rc | object | sign-compare |
+|---|---|---|---|
+| reconstructed pre-fix line | 0 | 44072 b | **2** |
+| shipped `#491` | 0 | 44112 b | **0** |
+
+Then the cascade itself, which is the claim that actually matters:
+
+    BEFORE       arc rig binary ABSENT -- withdrawn by the failed battery run
+    gate_build   ok pmax: warnings 0 / ok arc: warnings 0 / PASS (18 checks)
+    republished  gxsec-gxemul  6155864 b
+    gate_mips    mips-rigs: PASS (6 checks)        <- was SKIP
+
+*The ABSENT row is the control: it shows the binary really had been withdrawn, so
+the republication is attributable to this fix rather than assumed.*
+
+> *** MY FIRST VERIFICATION WAS VACUOUS AND ITS OWN NEGATIVE CONTROL CAUGHT IT.
+> ***  It reported **0** warnings for the PRE-FIX form, which must be 2.  The
+> compile was failing on a missing include and the script read its empty output as
+> a result -- the phantom-absence class, inside a script written to prove a fix.
+> Take 2 prints compile `rc` and object size BEFORE the warning count and refuses
+> to read the count without them.  **Had the control been omitted, 'post-fix = 0'
+> would have shipped as proof.**
+
+### HOW IT SURVIVED TWO DAYS, stated as exposure rather than blame
+
+Warnings need a BUILD; builds are too slow for `precommit_check.sh`; so warnings
+are checked **only by the weekly battery**.  A warning-introducing commit is
+therefore invisible for up to seven days -- and only surfaces then if someone
+READS the result.  The battery had been RED since 2026-08-23 on an unrelated
+stale allowlist entry, and `nightly_check.sh` cannot distinguish *fixed* from
+*never looked at*.  **So this sat behind a red everyone already had an
+explanation for.**
+
+*#472's own round is not at fault: the per-commit targeted gate is narrow by
+design, and that is the documented two-tier structure working as written.*
+
+### FILED, not fixed here
+
+The same battery run surfaced five more reds, all harness bookkeeping and none
+product defects.  They go to their own round because two are NOT simple re-pins:
+`readiness: whole-buffer full-prompt` is a **fail-closed allowlist over a pattern
+#392 measured at 0/80** and must not be raised, and `wdcflood: six warned_ guards`
+needs an equality->floor change plus an L4 correction to its own comment, which
+claims immunity to the growth that just broke it.
+
 ## Round 490 (#490) -- two guest-reachable host kills in the GD-ROM command handler, and a detector that a capped ask-again then escaped three times
 
 `handle_command()` ended the host process on two ordinary guest writes.  `case 0x30` killed on any data format outside {0x20, 0x24}; the `default:` arm killed on any unimplemented command byte.  Both are reached by a guest assembling a 12-byte packet through the data port -- no harness, no direct call.
