@@ -1308,6 +1308,34 @@ two sites. Detector **127 rows** (was 103), gate **PASS (333 checks)**, kill tab
 > > here constrains the primitive.  A future caller that pushes without a clamp reproduces
 > > the same overrun and these rows will not see it.*
 >
+> > ### *** THAT QUOTATION WAS ALREADY OBSOLETE WHEN THIS BLOCK QUOTED IT.  Corrected
+> > ### 2026-08-30 (L4).  The CONCLUSION below survives; this evidence does not. ***
+> >
+> > The sentence is **`#473`'s**, written 2026-08-27 at 04:59:34, and scoped by its own
+> > heading to *the six `#473` rows*.  **`#484` bounded the primitive at 17:59:02 the
+> > same day** -- `git log -L` on those lines returns exactly two commits, the upstream
+> > import and `cf300c0` -- adding a refuse-before-the-store guard with a sacrificed slot
+> > and a latched diagnostic, plus four detector rows that call the primitive DIRECTLY.
+> >
+> > So at HEAD all three clauses are false: the primitive IS bounded, rows DO constrain
+> > it, and an over-pushing caller now gets a silent byte-drop plus one latched `fatal()`
+> > rather than a silent overwrite of unread data.  **The `#473` contract block was never
+> > revisited when `#484` landed** -- a frozen record inside the artifact that exists to
+> > prevent frozen records.
+> >
+> > **The row is still live, and the surviving warrant is the contract's SECOND bullet:**
+> > the data-port WRITE arm pushes with no phase guard, and the one diagnostic that could
+> > announce a stray write is suppressed precisely in the dangerous state -- its condition
+> > requires `!d->atapi_cmd_in_progress`, which is 1 for the whole of DATAIN.  **That
+> > makes it a DESYNCHRONISATION defect, not a capacity one**, and the two want different
+> > fixes, different oracles and different severity language.  The row's title has been
+> > corrected accordingly.
+> >
+> > *Found by a research agent reading the source rather than the record.  The reopening
+> > was RIGHT and reached its right conclusion through a warrant a later round had
+> > retired -- and a wrong reason gets reused, which this one was, four times in one day:
+> > in the row title, its only ledger entry, this block, and a commit message.*
+>
 > and, two bullets down, that the row is **`Tracked as`** that same id -- naming it as open
 > work in the very commit whose message reports it closed.  A third comment block in the
 > same file puts the reason structurally: *the primitive is unbounded and THE FIX DID NOT

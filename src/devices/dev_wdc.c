@@ -1229,11 +1229,20 @@ DEVICE_ACCESS(wdc)
 					    *** AND THE RESIDUE THAT MAKES IT UNRECOVERABLE IS A PROPERTY OF
 					    THE DEVICE, NOT OF THIS REGRESSION -- an earlier draft of this
 					    comment said otherwise, and the Opus seat MEASURED the
-					    difference. ***  ATAPI_PKT_CMD never flushes the ring, and
-					    neither reset path does either, so an under-drained DATA-IN
-					    leaves occupancy at 32 -> 44 -> 56 -> 68 and every later CDB is
-					    dropped forever.  That entrance is open with no stray read at
-					    all; it is filed as `wdcringnoflush`, and dev_asc.c's
+					    difference. ***
+
+					    *** THE NEXT SENTENCE WAS TRUE WHEN WRITTEN AND IS FALSE AT
+					    HEAD.  Corrected 2026-08-30. ***  It read: `ATAPI_PKT_CMD
+					    never flushes the ring, and neither reset path does either,
+					    so an under-drained DATA-IN leaves occupancy at 32 -> 44 ->
+					    56 -> 68 and every later CDB is dropped forever.  That
+					    entrance is open`.  It is not open: wdc_new_command_reset()
+					    zeroes inbuf_head and inbuf_tail and runs at the TOP of
+					    wdc_command(), BEFORE the ATAPI_PKT_CMD case -- so every
+					    command flushes, and `wdcringnoflush` is CLOSED on exactly
+					    that.  The residue described above is still a property of
+					    the device; what changed is that it cannot survive into the
+					    NEXT command.  dev_asc.c's
 					    dev_asc_fifo_flush() is the in-tree idiom for closing it.
 
 					    In CMDOUT the atapi_len/atapi_received pair describes the

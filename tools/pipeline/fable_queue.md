@@ -1011,7 +1011,17 @@ else entirely. Nothing systematically re-checks a citation after the thing it ci
 
 ## wdcringambig / wdcaddtoinbufbound -- #484 regress stage (queued 2026-08-27)
 
-The fix and its 119-row detector are committed; **pass 2 on the real diff has not run.**
+The fix and its detector are committed, and **pass 2 on the real diff HAS run** --
+kimi, opus5 and fable5 all answered it on 2026-08-27, and fable5's HOLD verdict on
+that pass is what produced the corrections the round then shipped.
+
+> *This paragraph read "its 119-row detector are committed; pass 2 on the real diff
+> has not run" until 2026-08-30.  **Both halves were false.**  The detector shipped
+> at 127 rows (up from 103); 119 was an intermediate count frozen mid-round.  The
+> row count is deliberately not restated as a fresh literal here -- read the #484
+> round block in CHANGELOG.md, which names it beside the gate and kill-table figures
+> that were measured with it.  Found by a research agent checking something else,
+> which is how every records defect in this file has been found.*
 The panel saw the pass-1 brief only.
 
 TWO QUESTIONS, both measurable:

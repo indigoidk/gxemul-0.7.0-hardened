@@ -912,6 +912,25 @@ static void row_rearm_zero(void)
  *    - wdc_addtoinbuf() itself is still UNBOUNDED.  The fix bounds its CALLER, and no
  *      row here constrains the primitive.  A future caller that pushes without a clamp
  *      reproduces the same overrun and these rows will not see it.
+ *
+ *      *** THAT BULLET WAS TRUE OF #473 AND IS FALSE AT HEAD.  Annotated 2026-08-30,
+ *      AND THIS IS THE QUOTATION SOURCE: it has been re-quoted as a live warrant FOUR
+ *      TIMES since it went false -- in a ledger row title, that row's only entry, a
+ *      CHANGELOG block and a commit message. ***
+ *
+ *      This block is scoped by its own heading to the SIX #473 ROWS, and #473 landed
+ *      at 04:59 on 2026-08-27.  #484 landed at 17:59 THE SAME DAY: it added a
+ *      refuse-before-the-store guard to the primitive (drop-newest, latched, one slot
+ *      sacrificed so head == tail means EMPTY only) and the R-rows below, which call
+ *      the primitive DIRECTLY and assert the refusal.  So at HEAD the primitive IS
+ *      bounded, rows DO constrain it, and an over-pushing caller gets a silent
+ *      byte-drop plus one latched fatal() rather than a silent overwrite.
+ *
+ *      The bullet is kept rather than deleted because the text it refutes is what a
+ *      reader will meet elsewhere.  A contract block is scoped to the round that
+ *      wrote it and does NOT re-verify itself when a later round changes the code
+ *      underneath -- which is this file's own frozen-record class, inside the
+ *      artifact that exists to prevent frozen records.
  *    - THE PREMISE ITSELF: the shipped comment once said the ring IS empty at the
  *      re-arm.  It is not -- the data-port WRITE arm pushes with no phase guard, and a
  *      panel seat MEASURED one 2-byte store desynchronising an entire 32768-byte chunk

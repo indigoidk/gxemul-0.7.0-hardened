@@ -10766,9 +10766,18 @@ instead of 0, and refill the next chunk from `data_in[atapi_received + j]`. Kill
 
 ### Residuals -- open
 
-- **`wdcaddtoinbufbound`** — `wdc_addtoinbuf()` **is still unbounded**. #473 bounded its
-  CALLER; the primitive itself has no capacity check, and `head == tail` still means both
-  empty and full. Any future caller that pushes without its own clamp reproduces the same
+- **`wdcaddtoinbufbound`** — ~~`wdc_addtoinbuf()` **is still unbounded**~~ **FALSE SINCE
+  `#484`, corrected 2026-08-30.** The struck text read: *the primitive itself has no
+  capacity check, and `head == tail` still means both empty and full. Any future caller
+  that pushes without its own clamp reproduces the same overrun.* All three clauses are
+  now false — `#484` added a refuse-before-the-store guard with a sacrificed slot (so
+  `head == tail` means EMPTY only) and four detector rows that call the primitive
+  directly. **The row is still LIVE on a different defect**: the data-port WRITE arm
+  pushes with no phase guard, which is a DESYNCHRONISATION defect, not a capacity one.
+  The two want different fixes, different oracles and different severity language.
+  *(This sentence was quoted as the row's warrant four times in one day after it went
+  false. The quotation SOURCE is the detector contract, annotated there too.)*
+  Any future caller that pushes without its own clamp reproduces the same
   overrun, and **no row in the shipped detector would see it** -- written into the
   clause-(e) contract rather than left implicit. Filed, not fixed: the fix that exists is
   correct and complete for every caller in the tree today.

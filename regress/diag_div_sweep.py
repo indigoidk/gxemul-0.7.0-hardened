@@ -13,26 +13,49 @@ import io, os, re, sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 CALLS = ("debug", "fatal", "debugmsg", "debugmsg_cpu")
 
+#  *** EVERY REPLACEMENT HERE MUST PRESERVE THE NEWLINE COUNT OF WHAT IT REPLACES. ***
+#
+#  It need not preserve LENGTH -- columns are not reported -- but it must preserve
+#  newlines, because the caller derives the line number by counting them up to the
+#  match.  The original collapsed a whole `/* ... */` block to a single space, so
+#  every newline inside it vanished and EVERY LATER LINE NUMBER SHIFTED DOWN.
+#
+#  Measured at HEAD before this fix: the sweep reported `dev_ns16550.c:79` for a call
+#  at :180, and `diskimage.c:543` for one at :976 -- off by 100 and 430, and
+#  `gate_hygiene.sh`'s own comment cited two of the wrong numbers.  It also reported a
+#  `fatal` at `dev_dreamcast_gdrom.c:211`, which is PROSE inside a comment block: the
+#  drift was large enough to land the anchor inside the very construct being stripped.
+#
+#  This is the same defect, and the same repair, as `wdc_latch_census.py`'s `_blank()`
+#  earlier the same day.  Two tools, one week, one cause: a stripper written for
+#  content and then used for position.
+def _keepnl(consumed):
+    """One space, plus exactly the newlines the consumed span held."""
+    return ' ' + (chr(10) * consumed.count(chr(10)))
+
+
 def strip_lits(s):
     out, i, n = [], 0, len(s)
     while i < n:
         c = s[i]
         if c == '"' or c == "'":
+            start = i
             q = c; i += 1
             while i < n:
                 if s[i] == '\\': i += 2; continue
                 if s[i] == q: i += 1; break
                 i += 1
-            out.append(' ')
+            out.append(_keepnl(s[start:i]))     # a continued literal spans lines
             continue
         if c == '/' and i + 1 < n and s[i+1] == '/':
             while i < n and s[i] != '\n': i += 1
-            continue
+            continue                            # the newline itself is left in place
         if c == '/' and i + 1 < n and s[i+1] == '*':
+            start = i
             i += 2
             while i + 1 < n and not (s[i] == '*' and s[i+1] == '/'): i += 1
             i += 2
-            out.append(' ')
+            out.append(_keepnl(s[start:i]))     # *** the one that caused the drift ***
             continue
         out.append(c); i += 1
     return ''.join(out)
@@ -64,7 +87,15 @@ for dp, _, fns in os.walk(ROOT):
             #  Only OPERATOR / and %, not a stray token.  Require an identifier or ')'
             #  on the left, which is what an operator has.
             if re.search(r'[\w\)\]]\s*[/%]\s*[\w\(]', args):
-                ln = raw[:m.start()].count('\n') + 1
+                #  *** COUNT IN `src`, NOT `raw`. ***  `m` matched the STRIPPED
+                #  text, so `m.start()` is a src offset; indexing raw with it mixes
+                #  two coordinate systems.  This was the SECOND half of the defect:
+                #  making strip_lits newline-preserving moved a measured case from
+                #  :79 to :80 when the truth was :180, because the offset was still
+                #  being resolved against the wrong string.  Both halves are needed,
+                #  and either alone looks like a partial improvement rather than a
+                #  remaining bug -- which is what makes this shape worth a comment.
+                ln = src[:m.start()].count(chr(10)) + 1
                 frag = ' '.join(args.split())[:150]
                 hits.append((os.path.relpath(p, ROOT).replace('\\','/'), ln, name, frag))
 
