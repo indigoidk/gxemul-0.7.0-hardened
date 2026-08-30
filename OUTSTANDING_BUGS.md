@@ -18,6 +18,29 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: kill drivers score a CRASHED mutant as a table result
+>
+> **`killdrivercrash`** -- `kill479.sh`'s `build_run` checks the COMPILE exit status, then
+> runs the mutant and pipes straight to `grep -c '^  FAIL'`.  **The run's exit status and
+> the `WDC_IDENTIFY_PASS` sentinel the detector already emits are never read**, so a mutant
+> that dies partway is scored `KILLED (n red)` or `ESCAPED (clean sweep)` by how far it got.
+>
+> **Not hypothetical for this device.**  `write_in_progress` and `write_count` are set
+> together in `wdc__write()` but CLEARED AT DIFFERENT SITES, and the drain guard divides:
+> `inbuf_len % (512 * d->write_count) == 0`.  A clause-(d) operand swap leaving the flag
+> standing while zeroing the count is a MODULO BY ZERO.  The `&&` short-circuit saves it
+> today; a driver blind to exit status would report the SIGFPE as a table result.
+>
+> CENSUS: 16 kill/measure drivers; **7 mention no sentinel**, all of them the 2026-08-27
+> wdc-family drivers.  Every GD-ROM driver from 08-28 onward checks one -- the practice
+> improved and the older drivers were never retrofitted.  *The census counts MENTIONS, not
+> checks, so it is a candidate list; confirmed by opening one of each.*
+>
+> **The pattern worth copying is not "check the exit code".**  The GD-ROM drivers score
+> from a STRUCTURED TOKEN the run only emits when it finishes (`TOCLEN_RESULT=` via
+> `tail -1`), so a truncated run yields a MISSING token rather than a plausible number --
+> the completion-sentinel rule applied to the SCORER instead of the log reader.
+>
 > ### OPEN -- filed 2026-08-29: *** A GUEST WRITE TO A READ-ONLY REGISTER ABORTS A LIVE TRANSFER ***
 >
 > **`wdcaltoffset`** -- sev **high**, guest-reachable, no harness needed, and its rung-3

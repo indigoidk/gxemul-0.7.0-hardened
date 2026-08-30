@@ -179,6 +179,15 @@ MANIFEST = {
     #  #492: the wdcflood latch census -- a GATED tool, run by gate_sh_rounding.sh.
     #  It replaced a grep -c equality that counted comment text as a guard.
     "wdc_latch_census.py":         (CLASS_DETECTOR, "wdc warned_ latch SET/READ census"),
+    #  #493: the wdcaltoffset rung-3 witness.  A DURABLE, RE-RUNNABLE artifact for a
+    #  live sev-high defect whose two prior measurements could NOT be re-run -- #481
+    #  preserved 201 bytes of OUTPUT with no driver, and a later /tmp run was deleted
+    #  by its own script.  Preserved as EVIDENCE: it drives a real guest and is not
+    #  wired into a gate, so it is CLASS_RESEARCH rather than a detector owing one.
+    "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
+        (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
+    "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":
+        (CLASS_RESEARCH, "#493 wdcaltoffset fix-leg builder, preserved as evidence"),
 
     #  #471: THE NESTED FILES, now visible for the first time.  Keys are paths RELATIVE
     #  to regress/ -- top-level entries above stay bare basenames and are unaffected.
