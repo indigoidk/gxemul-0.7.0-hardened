@@ -13274,3 +13274,99 @@ neighbour. The row must write two adjacent 8-byte groups and read back the *firs
 **Source-derived, not measured.** The seat said so and this repeats it: no probe has been run
 against TEX. The arithmetic is checkable from the declaration and was re-verified here against
 the three sibling arms, but the behaviour has not been observed on a running guest.
+
+## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
+
+### `sgidewidth` (high) -- a SEVENTH live width kill, one guest `sb` away
+
+The scope question on `#497` was hiding it. `grep -n 'len = %i not implemented'
+src/devices/dev_sgi_re.c`:
+
+```c
+	} else {
+		fatal("sgi_de: len = %i not implemented\n", len);
+		exit(1);
+	}
+```
+
+The `else` of an accept set of `{4, 8}` — so **len ∈ {1,2,3,5,6,7} ends the host process**,
+and a single guest `sb` to the DE window does it.
+
+**It does not join `#497`, and the reason is the joining clause working rather than being
+dodged:** different registered device (`sgi_de`, its own `memory_device_register`), accept set
+`{4,8}` not `{8}`, and — the part that settles it — **its registers are READABLE**, so its
+accept rows read back through `odata` while `sgi_re`'s read back through debug lines. Second
+fix shape, second row species.
+
+> **But it MUST be named in `#497`'s PRETABLE and round record.** A round called
+> `widthkillclass` that fixes six of seven live width kills *in the same file* and does not say
+> so writes the false-unanimity record the late-dissent rule forbids.
+
+The four handlers share one `struct sgi_re_data` from a single malloc, so whatever latch
+infrastructure `#497` lands is already reachable here — the fix is cheap once the witness
+exists, and the witness is one row away using `#497`'s own script.
+
+### `sgimtewidth` (med) -- a one-byte store silently ZEROES the adjacent register
+
+`if (len == 4) {…} else if (len != 4) {…} else {…}`. The second arm is reached by **every**
+width that is not 4, including 1 and 2:
+
+```c
+	d->mte_reg[regnr+1] = idata >> 32;
+	d->mte_reg[regnr]   = idata;
+```
+
+For a one-byte store `idata` is a byte, so `idata >> 32` is **0** — the store clobbers
+`mte_reg[regnr+1]` with zero. No diagnostic, no decline: the device quietly loses a register
+the guest never addressed. A mis-service, not a kill, which is why it is med.
+
+> ### The trap, and it is why this is filed now rather than when someone touches it
+>
+> The dead third arm is `fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]"); exit(1);` —
+> unreachable for every integer `len`, as `sgirekills` records. **It documents an intent to
+> reject unusual widths.** A naive future repair of the unreachable-arm defect — reordering to
+> `len==4 / len==8 / else` — would **resurrect that `exit(1)` as a live width kill.**
+>
+> So when the unreachable arm is worked it must land as a DECLINE, never a revived exit.
+
+*Two defects in one arm structure pointing opposite ways: today it serves widths it should
+refuse, and the obvious tidy-up would make it kill on widths it currently serves.*
+
+### `sgilinearoob` (med) -- the width guard `#497` removes is holding an OOB WRITE shut
+
+Found by the opus5 seat while auditing whether `len != 8` should be declined or *implemented*.
+Every element re-verified by opening the file.
+
+Both LINEAR arms compute `int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;` — so `tlbi` ranges
+**0..31** — then write **both** `[tlbi]` and `[tlbi+1]` into `uint32_t re_linear_a[32]` /
+`re_linear_b[32]`. **At `tlbi == 31` the second store writes index 32, one past the end.**
+
+> **It is unreachable today for exactly one reason: `len == 8` forces 8-byte alignment.**
+> `(0x78 & 0x7f) >> 2` = 30, so the largest reachable `tlbi` is 30 and `tlbi+1` is 31 — the
+> last valid index. Permit `len == 4` and offset `0x7c` gives `(0x7c & 0x7f) >> 2` = **31**,
+> and index 32 is written.
+
+From the declaration order (`re_tlb_a`, `re_tlb_b`, `re_tlb_c`, `re_tex`, `re_linear_a[32]`,
+`re_linear_b[32]`, `de_reg[]`): `re_linear_a[32]` overlays `re_linear_b[0]`, and
+`re_linear_b[32]` overlays the start of `de_reg[]` — **a different engine's registers**. That
+is a layout fact, not a guarantee: a struct reorder changes *which* field is hit, not whether
+the write is out of bounds.
+
+**This is why `#497` must DECLINE rather than IMPLEMENT**, and it converts a stylistic
+preference into a measured-from-source argument. The brief asked whether `len != 8` is
+"secretly an IMPLEMENT case." It is not — implementing narrower widths at the LINEAR arms
+would **make this OOB live**.
+
+**And it is the second such fact in the same audit.** The TLB/TEX store loop reads
+`data[hwi]*256 + data[hwi+1]`, so a `len == 1` access reads `data[1]` — one byte past the
+*caller's* buffer. Two different over-reads, both held shut by the same guard, neither noticed
+until a seat was asked whether the guard could be relaxed.
+
+**The round owes a sentence, not a row.** `#497` does not touch these lines and cannot make
+the OOB live — a latched decline keeps `len == 8` mandatory. What it owes is a comment at the
+site saying *why* the guard is mandatory, so a future round reading "unimplemented width" as
+an invitation to implement one is warned where the decision happens.
+
+*Source-derived, not measured: no probe has driven a 4-byte LINEAR access, because the shipped
+code kills the host before reaching the store. It cannot be witnessed without first
+introducing the defect.*
