@@ -1,0 +1,72 @@
+CENSUS -- how this fork handles a guest WRITE TO A READ-ONLY device register
+Derived 2026-08-30 by grep over GXEMUL-SEC/src/devices/*.c.  NOT transcribed.
+
+WHY IT EXISTS.  The de-fatalisation option set (delete / decline / decline +
+bounded-announce / ACCEPT) carries an obligation to GREP THE FORK FOR THE EXISTING
+IDIOM BEFORE CHOOSING.  The `wdcaltoffset` pass-1 brief invoked that rule and
+reported no census.  The glm seat caught it -- "premise 3's option set is invoked
+outside its settled domain with its own required grep unreported" -- and it was
+right, so the census was run.
+
+DERIVER, so this is re-runnable rather than a frozen list:
+
+    cd GXEMUL-SEC/src/devices
+    grep -n -i "read-only\|read only\|readonly" *.c | grep -i "writ\|ignor"
+
+RESULT: THREE ANNOUNCING SITES, THREE DIFFERENT SHAPES, PLUS TWO MASKING SITES.
+
+1.  dev_mb89352.c  PCTL      UNLATCHED debugmsg_cpu(..., VERBOSITY_WARNING, ...)
+                             *** AND IT IS CONDITIONAL: `if (idata & 0x78)` ***
+                             It warns ONLY when the guest sets bits that do not
+                             exist -- then masks with `d->reg[regnr] &= 0x87`.
+2.  dev_mb89352.c  MBC       UNLATCHED debugmsg_cpu(..., VERBOSITY_WARNING, ...)
+                             Unconditional, but MBC is a register nothing writes.
+3.  dev_pcc2.c     IPL       LATCHED fatal(), `static int w`, tagged
+                             `/* #119: was exit(1) (IPL is read-only) */`
+                             -- the house N=1-per-site latched idiom.
+4.  dev_pcc2.c     CHIPID    UNLATCHED fatal().  The carrier already records this
+                             as a floodclass instance, NOT a model to copy.
+5.  dev_asc.c, dev_sii.c     MASK SILENTLY, announce nothing (write-only/read-only
+                             bit handling, "readonly / writeoncetoclear bits").
+
+*** THE FINDING, AND IT IS NOT THE ONE THE CENSUS WAS RUN TO GET. ***
+
+The census was expected to settle WHICH announce shape to copy.  Instead it shows
+our case falls OUTSIDE the idiom's domain entirely:
+
+  >  ALL THREE ANNOUNCING SITES REPORT A GUEST ANOMALY.  Nothing legitimately
+  >  writes CHIPID or IPL or MBC, and PCTL announces only the anomalous subset --
+  >  bits the guest set that do not exist.  An announce there flags a guest doing
+  >  something no correct driver does.
+
+  >  A WRITE TO 0x3f7 IS NOT AN ANOMALY.  On the PC layout that port is the floppy
+  >  controller's Configuration Control Register, and the tree says so in its own
+  >  words in TWO places:
+  >
+  >    src/include/thirdparty/wdcreg.h:71   #if 0 /* NOT MAPPED; fd uses this
+  >                                                 register on PCs */
+  >    src/devices/dev_fdc.c:49            #define DEV_FDC_LENGTH 6
+  >                                          /* TODO 8, but collision with wdc */
+  >
+  >  So a correct guest with a floppy driver writes there expecting a FLOPPY
+  >  effect.  An announce from the WDC would be a wrong record in product code --
+  >  it would report correct guest behaviour as a fault, and it would be
+  >  guest-floodable.
+
+CONCLUSION: SILENT DECLINE, with the existing debug()-level line kept for
+observability under -v.  Not because announcing is expensive, but because there is
+nothing true to announce -- the WDC's whole responsibility at 0x3f7 is to do
+nothing, and after the fix it does nothing.
+
+TWO SEATS REACHED "SILENT" ON WEAKER REASONS AND BOTH ARE SUPERSEDED BY THIS.
+The fable5 adjudicator said "after the fix, model and hardware agree" -- but on a
+PC the hardware answering 0x3f7 is the floppy controller, not silence, so the
+phrasing does not hold.  The codex seat said a warning "would be misleading as well
+as guest-floodable", which is right and is the reason this census confirms.
+
+LIMITATION, STATED BECAUSE THE CENSUS IS A GREP: it finds sites that SAY
+"read-only".  A site that declines a read-only write without using the phrase is
+invisible to it.  The two masking sites (asc, sii) were found only because their
+comments happen to use "readonly".  This is a candidate list, not a proof of
+completeness -- the same limitation the killdrivercrash census records about
+itself.
