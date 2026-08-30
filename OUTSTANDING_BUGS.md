@@ -13224,3 +13224,53 @@ unchanged — so the switch does not silently become the default.
 
 *The true cap is not established: the warning threshold is 30 KB, the measured failure was at
 38,983 bytes, and no bisection was done. This row claims no boundary.*
+
+### `sgitexindex` -- CRIME_RE_TEX indexes with `>> 3` where its three siblings use `>> 1`
+
+Found by the codex seat under the **standing license**, while answering a scope question
+about a different defect in the same file.
+
+**The evidence is the sibling comparison, and it is as strong as this kind of finding gets:**
+three arms of one handler do it one way and the fourth does it another.
+
+```c
+CRIME_RE_TLB_A / _TLB_B / _TLB_C:  int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+CRIME_RE_TEX:                      int tlbi = ((relative_addr & 0xff)  >> 3) & 0xff;
+```
+
+Both index arrays of the same kind — `re_tex` is `uint16_t[112]`, and the window
+(`>= CRIME_RE_TEX && < CRIME_RE_TEX + 0xe0`) is 224 bytes, which is exactly 112 halfwords. So
+window and array correspond one-to-one, and `>> 1` is the byte→halfword conversion.
+
+**The write loop steps `tlbi++` per halfword, so an 8-byte `sd` writes four entries — but
+`>> 3` advances the start index by only one per 8-byte step:**
+
+    offset 0x00 -> tlbi 0, writes 0,1,2,3
+    offset 0x08 -> tlbi 1, writes 1,2,3,4   <- OVERLAPS THREE
+    offset 0x10 -> tlbi 2, writes 2,3,4,5   <- OVERLAPS THREE
+
+So a guest writing the array sequentially **overwrites three quarters of what it just
+wrote**, and the top of the window (`0xdf >> 3` = 27, reaching index 30) leaves **entries
+31..111 unreachable by any access**.
+
+`>> 1` is right at both ends — `0x00 >> 1` = 0 and `0xdf >> 1` = 111, exactly the last valid
+index — which is what makes this a typo rather than a design.
+
+> **This is NOT the width-kill class and must not be folded into it.** `widthkillclass` is a
+> guest *ending the host* by choosing an access size; this is **silent data corruption inside
+> a legal, correctly-sized access**. Different class, different fix, different detector — the
+> round-scope rule's same-class arm fails, so it files rather than joining `#497`.
+
+Ranked **med**: silent (nothing announces it, and the guest gets wrong texture data rather
+than a dead emulator), but it corrupts only emulated device state, where a host kill ends the
+process.
+
+**A round owes a rung-3 witness first** — the machine and window are already established by
+`widthkillclass`'s witness (`-E sgi -e ip32`, TEX at guest `0xb5001600`) — **and an
+adjacent-offset oracle, because a naive "the `sd` changed something" accept row stays GREEN
+under this defect.** The write does land; it lands in the wrong cells and on top of its
+neighbour. The row must write two adjacent 8-byte groups and read back the *first*.
+
+**Source-derived, not measured.** The seat said so and this repeats it: no probe has been run
+against TEX. The arithmetic is checkable from the declaration and was re-verified here against
+the three sibling arms, but the behaviour has not been observed on a running guest.
