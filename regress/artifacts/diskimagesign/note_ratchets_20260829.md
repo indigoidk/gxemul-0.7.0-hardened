@@ -219,3 +219,200 @@ while surviving legitimate growth.
 *The correct pattern was literally adjacent, passing, in the same gate section.  This
 is the freshly-minted-exemplar problem: a rule was minted, an example attached, and the
 example was asserted to be immune on a dimension nobody had tested.*
+
+## SIBLING SEARCH for the wdcflood class -- done properly, and the answer is ONE
+
+The equality-over-a-growing-set defect invites the question the carrier's mechanical
+rule 2 demands: *"When correcting a claim, grep for its siblings before calling it
+fixed."*  I broke that rule earlier today on the assert L4 and paid for it, so it was
+run here BEFORE the fix rather than after.
+
+**MEASURED, with a positive control and a denominator:**
+
+    checks whose got-expression uses `grep -c`      257     <- DENOMINATOR
+    of those, an EQUALITY over a SOURCE-line count     1     <- wdcflood, the one that broke
+
+**The class population is ONE.**  There is no hidden family, and the battery-reds round
+is bounded to the single row.
+
+### The apparatus note, because the FIRST attempt returned a confident zero
+
+A stricter multi-line regex returned **0 hits** -- including on the instance I already
+knew existed.  `0` with no denominator is the phantom-absence shape this project has
+recorded six times, and it would have licensed the sentence *"no siblings exist"* on the
+strength of a pattern that matched nothing.
+
+**What made it safe was asking the pattern to find the KNOWN instance first.**  It could
+not, so the pattern was rewritten (checks wrap across lines with backslashes, which the
+first form did not join).  The rewritten form finds wdcflood and reports 257 considered.
+
+> *A sibling search that returns zero is only evidence if it can be shown to find the
+> case you already have.  Otherwise it is the same sentence a broken grep prints.*
+
+## 4 (RESOLVED): the class ratchet 24 -> 21, measured with the TOOL not a grep
+
+`python diag_div_sweep.py` at HEAD:
+
+    diagnostic-argument divisions: 21 total, 19 constant-divisor, 2 NON-CONSTANT
+      NONCONST  devices/dev_ns16550.c:79   debug(, d->name, (int)(115200 / d->divisor))
+      NONCONST  disk/diskimage.c:543       debugmsg(... (int)(bytes_left % ct->sector_size))
+    DIAG_DIV_NONCONST=2
+    DIAG_DIV_TOTAL=21
+
+| | 2026-08-16 census | HEAD |
+|---|---|---|
+| total | 24 | **21** |
+| constant-divisor | 22 | **19** |
+| **NON-constant** | **2** | **2** |
+
+*** THE LOAD-BEARING FACT: THE TWO NON-CONSTANT SITES ARE UNCHANGED AND ARE EXACTLY
+THE TWO THE GATE'S OWN COMMENT NAMES. ***  Those are what the ratchet protects -- a
+constant divisor "cannot be zero, so is not the shape."  The numerator is intact; only
+the benign class shrank.
+
+**ATTRIBUTION.**  Of the ten files holding const sites, only TWO were edited since the
+census -- `dev_dreamcast_gdrom.c` (11 commits) and `diskimage.c` (4).  Two of those
+commits removed lines carrying a diagnostic-position division: **`00d546d` (#472)** and
+**`09362f0` (#488)**.  So the drop is accounted for by our own rounds editing
+diagnostics in two files, all in the constant class.
+
+**DISPOSITION: re-pin 24 -> 21 IS SAFE**, and the round should say WHY rather than just
+bumping: the protected quantity (NONCONST) did not move, and the removals are
+attributable and benign.
+
+### AND THE GATE COMMENT OWES A LINE FOR THE *DOWN* DIRECTION
+
+It says *"A THIRD site means someone added a new instance of the class: read it before
+raising this number"* -- written for growth only.  A DECREASE is ambiguous in a way the
+comment never addresses: it can mean the code improved, or that **the sweep stopped
+finding things**, which is the vacuous-green shape the denominator exists to catch.
+
+> **The discriminator is the NUMERATOR: if `DIAG_DIV_NONCONST` still reads 2 and names
+> the same two sites, the sweep is working and a lower total is real.  If the numerator
+> moves too, suspect the tool before the code.**
+
+*Recorded because I first tried to answer this with a grep and got pure noise --
+`% *[a-z_]` matches printf format specifiers, so `0x%02x` read as a modulo and seven
+commits appeared to "remove divisions" when they had removed format strings.*
+
+# *** CORRECTIONS FROM THE PASS-1 PANEL (panel_20260829_190701, 9/9). ***
+# Everything above this line predates them.  Three of my claims are WRONG.
+
+## C1.  IT IS SIX REDS, NOT FIVE.  I dropped one that THIS FILE had already dispositioned.
+
+The brief was titled "THE FIVE" and omitted `asic_badaddr rows run got=14 want=13` --
+**item 5 of this very document.**  fable5 named it and drew the consequence: a round
+fixing five leaves `gate_sh_rounding` red and the battery `REGRESS_FAIL`, so *"get the
+battery green" fails entirely on the dropped row.*
+
+It also observed that this document gives THREE different counts -- "The four ratchet
+reds", "Six FAIL rows", "Five of the seven reds" -- so the round owes ONE derived count
+with its deriver:  `sed -n '/---- FAIL rows ----/,/---- gate_ab/p' verdict_20260829_160646.txt | grep -E '^[0-9]+:[[:space:]]+FAIL' | grep -vE 'FAIL [0-9]+\. gate_' | wc -l`
+
+> *** THE DERIVER FIRST WRITTEN HERE PRODUCED **3**, NOT 8 -- it matched only the
+> three GATE-LEVEL ROLLUP lines.  The counts rule broken inside the correction
+> that was fixing the counts rule.  Caught by fable5 on pass 2. ***.
+
+*This is the counts rule broken by the file that records the counts rule.*
+
+## C2.  THE 24 -> 21 DROP IS A CONSOLIDATION, NOT THREE REMOVALS.
+
+I wrote "3 constant sites removed" and told a round to go NAME them.  **They were never
+removed.**  The pre-#462 tree carried FOUR one-division
+`fatal("  %08x", (int) d->dma_reg[N / sizeof(uint32_t)])` calls; HEAD carries the SAME
+FOUR DIVISIONS as arguments of ONE `fatal()`.
+
+**`DIAG_DIV_TOTAL` counts CALLS carrying at least one division.**  Merging four calls
+into one moves the total while the division census does not change at all.
+
+ATTRIBUTION SETTLED BY MEASUREMENT, because the two Agent seats disagreed -- opus5 said
+`fb0cc78` (#490), fable5 said `7c9dd9e` (#462):
+
+    git show 7c9dd9e -- src/devices/dev_dreamcast_gdrom.c | grep -c dma_reg   ->  9
+    git show fb0cc78 -- src/devices/dev_dreamcast_gdrom.c | grep -c dma_reg   ->  0
+
+**fable5 is right.**  One command, no tally -- the empirical-settlement rule working.
+
+*So the DOWN instruction I proposed for the gate comment is wrong as drafted: a DOWNWARD
+move can mean CONSOLIDATION, not removal, and the check is to diff the sweep's site list
+against the last green tree -- at FILE granularity, since the line numbers are wrong.*
+
+## C3.  THE DISCRIMINATOR I SAID DID NOT EXIST IS TWELVE LINES ABOVE, IN THE SAME GATE.
+
+My Q3b asked for something better than a filename and said I could not find it.  It is
+`pty.fork`, already the census basis at `gate_hygiene.sh:162`.  opus5 MEASURED it:
+
+    whole_full   4 -> 2      (== EXPECT_WHOLE_FULL, unmoved)
+    conv_anchor / conv_echo / conv_mark   23 / 23 / 23   (all unchanged)
+
+**Row 3 goes green with NO pin moved, NO allowlist widened and NO filename exemption**,
+and it subsumes the existing `readiness_predicate_test.py` exemption automatically.
+
+And my bare exclusion was the shape **the gate itself rejects**: `:92-95` and `:347-348`
+require an exemption to travel WITH a content pin on the excluded file -- *"an allowlist
+entry that checks what it exempts."*  I proposed it without one.
+
+## C4.  MY ROW-5 FLOOR IS MEASURED VACUOUS.
+
+Under `>= 12`, deleting ONE latch's two-line guard pair PASSES at raw 13 -- restoring the
+exact unbounded flood `#464` fixed.  Gutting a guard while naming the latch twice in a
+COMMENT also passes at raw 15.  Six per-latch `>= 2` rows are ALSO inadequate: satisfied
+by two reads and no set, while the row's label claims "one set + one read each".
+
+opus5's shape, measured: TWO rows over COMMENT-STRIPPED code, `SET_OK == 6` and
+`READ_OK == 6` -- 6/6 at HEAD, kills both mutants, and scores 0/6 on a null medium
+(floor clause (c)).  The stripper already exists in the tree.
+
+## C5.  A FINDING LARGER THAN ANY RED: `regress/artifacts/` IS IN TWO SCOPES AND OUT OF A THIRD.
+
+Verified independently by me after opus5 raised it:
+
+    recursive find  (py_code / probe_code population)   138
+    flat glob       (_ptylist population)                59
+    recursive MINUS artifacts/                           59      <- exactly equal
+    pty-forking probes under artifacts/                  10      <- INVISIBLE
+
+Two censuses recurse; a third uses a flat glob -- **evasion route #3, which this gate
+condemns ninety lines earlier.**  Ten pty-forking promptless probes are invisible to the
+denominator, to the promptless pin, and to the `comm -13` offender-naming: invisible to
+the entire mechanism built to find promptless pty probes.
+
+**And the hazard is SCHEDULED in the other direction.**  `CLAUDE.md` MANDATES frozen
+probe copies for a comparison run.  Copying one converted probe into `artifacts/` takes
+`conv_anchor` 23 -> 24 and reds the gate -- so **the next round that freezes a probe reds
+this gate FOR DOING THE RIGHT THING**, which is the identical trap that produced today's
+reds.
+
+One decision fixes it: `-not -path '*/artifacts/*'` in all three censuses, KEEPING
+recursion so a genuinely new subdirectory is still scanned.
+
+# *** THE CANONICAL COUNT, WITH ITS DERIVER.  Derived 2026-08-29 after the ***
+# *** adjudicator caught this document giving THREE different counts.      ***
+
+    sed -n '/---- FAIL rows ----/,/---- gate_ab/p' verdict_20260829_160646.txt \
+      | grep -E '^[0-9]+:[[:space:]]+FAIL' | grep -vE 'FAIL [0-9]+\. gate_' | wc -l
+    -> 8
+
+**EIGHT ROW-LEVEL FAILURES = 2 fixed by `#491` + 6 in this round.**
+
+## WHY MY COUNTS DRIFTED, which is the part worth keeping
+
+The verdict's FAIL-rows section holds **ELEVEN** lines, and three of them are
+GATE-LEVEL ROLLUPS rather than row failures:
+
+    FAIL 1. gate_build          FAIL 6. gate_hygiene          FAIL 10. gate_sh_rounding
+
+So a bare `grep -c FAIL` over that section returns 11; over the whole verdict it
+returns something else again; and counting only the rows a human recognises as
+"reds" returns 8.  **Three defensible-looking greps, three different answers, and I
+used a different one each time without noticing** -- "the four ratchet reds", "six
+FAIL rows", "five of the seven".
+
+> **A COUNT OVER A LOG NEEDS ITS EXCLUSIONS IN THE DERIVER, NOT IN THE READER'S
+> HEAD.**  The rollup lines are legitimate output; what made them a hazard is that
+> they match the same pattern as the thing being counted.  This is the
+> denominator rule one level up: it is not enough to state how many the grep
+> selected, when the grep is selecting two different KINDS of thing.
+
+*The adjudicator's instruction was exact and is followed here: ONE derived count,
+with the command that reproduces it, in the round's record.*

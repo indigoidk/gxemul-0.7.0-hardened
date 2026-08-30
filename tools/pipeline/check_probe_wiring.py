@@ -176,6 +176,9 @@ MANIFEST = {
     "selftest_budget.py":          (CLASS_DETECTOR, "wall-clock budget selftest"),
     "selftest_logdir.py":          (CLASS_DETECTOR, "#422 $LOGDIR honouring selftest"),
     "selftest_inactivity.py":      (CLASS_DETECTOR, "#467 inactivity-deadline selftest"),
+    #  #492: the wdcflood latch census -- a GATED tool, run by gate_sh_rounding.sh.
+    #  It replaced a grep -c equality that counted comment text as a guard.
+    "wdc_latch_census.py":         (CLASS_DETECTOR, "wdc warned_ latch SET/READ census"),
 
     #  #471: THE NESTED FILES, now visible for the first time.  Keys are paths RELATIVE
     #  to regress/ -- top-level entries above stay bare basenames and are unaffected.

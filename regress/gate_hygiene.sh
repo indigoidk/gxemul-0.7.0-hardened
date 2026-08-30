@@ -93,7 +93,38 @@ EXPECT_UNKNOWN=0
 #  its own contents are asserted below, so it cannot quietly stop testing what it
 #  claims to test. A loose `grep -v test` would have been the wrong shape -- it
 #  would silently exempt any future file with "test" in its name.
-py_code() { find "$HERE" -name '*.py' -type f \
+#  *** SCOPE, MEASURED 2026-08-29: `regress/artifacts/` IS PRESERVED EVIDENCE, NOT LIVE
+#  HARNESS CODE, and leaving it in scope was a defect in BOTH directions. ***
+#
+#  *** THE NUMBERS THAT WERE HERE WENT STALE INSIDE THIS VERY DIFF, so they are
+#  replaced by their DERIVERS.  An earlier draft froze 138 / 59 / 59; this round then
+#  added wdc_latch_census.py and the true values became 139 / 60 / 60 -- a frozen count
+#  in a comment ABOUT counting, wrong before the commit that wrote it had landed.
+#  Caught by the codex seat. ***
+#
+#      find . -name "*.py" | wc -l                             the OLD recursive scope
+#      find . -name "*.py" -not -path "*/artifacts/*" | wc -l  the NEW one
+#      ls *.py | wc -l                                         the flat glob
+#      grep -l "pty.fork" artifacts/*/*.py artifacts/*/*/*.py  the invisible copies
+#
+#  THE LOAD-BEARING FACT IS THE EQUALITY, NOT THE VALUES: recursive-minus-artifacts
+#  equals the flat glob, which is what makes this the right exclusion -- it ALIGNS the
+#  censuses instead of moving any of them.  Re-derive rather than quote; if the two
+#  ever differ, that difference is the finding.
+#
+#  Two censuses recursed while a third used a flat glob -- which is evasion route #3
+#  that this file condemns ninety lines above.  TEN pty-forking promptless probes sat
+#  under artifacts/, invisible to the denominator, to the promptless pin and to the
+#  comm -13 offender-naming: invisible to the entire mechanism built to find them.
+#
+#  AND THE HAZARD WAS SCHEDULED IN THE OTHER DIRECTION.  CLAUDE.md MANDATES frozen
+#  probe copies for a comparison run; copying one converted probe into artifacts/
+#  takes conv_anchor 23 -> 24 and reds this gate -- so the next round to freeze a
+#  probe would have gone red FOR OBEYING THE CARRIER.
+#
+#  RECURSION IS KEPT so a genuinely new subdirectory is still scanned; only the
+#  evidence archive is excluded.  Measured a NO-OP on every pinned count today.
+py_code() { find "$HERE" -name '*.py' -type f ! -path "$HERE/artifacts/*" \
                  ! -name 'readiness_predicate_test.py' -print0 2>/dev/null | \
             xargs -0 grep -h "endswith(" 2>/dev/null | grep -v '^[[:space:]]*#'; }
 #  -o, so these count OCCURRENCES and not LINES.  With -c a single line holding
@@ -154,12 +185,75 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  already listed are -- they free-run to a breakpoint, and only a breakpoint hit returns a
 #  prompt, as `sh_intprio_probe.py` records in its own comment.  So they belong in the set,
 #  with the reason written down rather than the count quietly raised.
-EXPECT_PTY_PROBES=35
+#
+#  *** THAT STATED REASON WAS WRONG ABOUT ITS OWN SET, AND IT SENT A READER TO THE WRONG
+#  ONE OF THE TWO DISPOSITIONS THIS ROW OFFERS.  Censused member by member 2026-08-29,
+#  independently by three seats (codex, opus5, and the main loop), all agreeing: ***
+#
+#  *** THESE CATEGORIES OVERLAP.  THEY ARE NOT A PARTITION, AND AN EARLIER DRAFT OF
+#  THIS BLOCK PRINTED THEM AS ONE -- 3 + 8 + 1 = 12 over a NINE-member set.  Caught on
+#  pass 2 by the glm and agy seats, on the arithmetic. ***
+#
+#      wall-clock BUDGET-DRAIN readiness .... 11 of 11   a `while ... time.time() ...` loop
+#        of which ALSO free-run to a breakpoint  3       sh_intprio, sh_iprbcd, wdc_flood
+#      NEITHER ............................... 0
+#
+#  *** THIS CENSUS HAS NOW BEEN WRONG THREE TIMES AND EACH ERROR WAS A DIFFERENT
+#  SHAPE.  Recorded because the third one is the instructive one. ***
+#    (1) the ORIGINAL claimed a single universal reason ("they free-run to a
+#        breakpoint") that was true of 3 members.
+#    (2) MY FIRST CORRECTION printed 3 + 8 + 1 = 12 against a NINE-member set --
+#        it read as a PARTITION when the categories overlap.  Caught on the
+#        arithmetic by the glm and agy seats.
+#    (3) MY SECOND CORRECTION said drive_guest.py is NEITHER.  It is not: it
+#        budget-drains at `expect()` and its sibling, spelled
+#        `while time.time() - t < timeout:`.  I had grepped for the literal
+#        `time.time() < end`, which is ONE SPELLING of the mechanism, and
+#        measured the spelling instead of the thing.  Caught by opus5.
+#
+#  *** THAT IS THIS ROUND'S OWN DEFECT, COMMITTED IN THE COMMENT DESCRIBING IT:
+#  counting a TEXTUAL FORM where a PROPERTY was meant. ***  It is why the row-5
+#  replacement counts set/read BALANCE rather than occurrences of a spelling.
+#
+#  drive_guest.py IS in the promptless list, and for a reason that is about the
+#  CENSUS rather than about readiness: its `boot_progress()` matches with
+#  `re.search`, which `grep -L "endswith("` cannot see.  That is why it is
+#  LISTED -- not how it waits.  The two axes were conflated by (3).
+#
+#  Measured per member over the CURRENT eleven: breakpoint is a strict SUBSET of
+#  budget-drain, so the set is covered by budget-drain alone and "neither" is empty.
+#
+#  So the mechanism ALL ELEVEN share is BUDGET-DRAIN --
+#  readiness by elapsed time rather than by prompt -- and the two probes added below share
+#  it BYTE-FOR-BYTE with the already-listed gdrom_default_probe.py.
+#
+#  *** drive_guest.py IS BUDGET-BEARING TOO; what is distinct about it is why it is
+#  LISTED, not how it waits. ***  It is
+#  classified promptless only because `grep -L "endswith("` cannot see REGEX readiness:
+#  its boot_progress() uses `re.search(pat, buf)`.  This gate's own comment already
+#  anticipates that -- "re.search(...) -> not an endswith at all, so `unknown` never
+#  moves" -- so the honest correction states the CENSUS rather than swapping one
+#  universal claim for another.  A per-member reason, not a dominant one.
+#
+#  The grandfather-with-a-reason discipline is UNCHANGED; only the reason is repaired.
+EXPECT_PTY_PROBES=37
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
-asic_badaddr_probe.py wdc_flood_probe.py"
+asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
+gdrom_toclen_probe.py"
 
-_ptylist=$(cd "$HERE" && grep -l "pty.fork" *.py 2>/dev/null | sort)
+#  *** THIS WAS THE THIRD POPULATION AND THE F2 EDIT MISSED IT.  Found by the agy seat
+#  on pass 2. ***  py_code and probe_code were converted to recursive-minus-artifacts
+#  while this line kept a FLAT GLOB -- so two censuses were aligned and a third was not,
+#  which is the exact defect F2 exists to end.
+#
+#  It AGREES today (recursive-minus-artifacts == flat == 59) and that agreement is a
+#  COINCIDENCE, not a property: a .py added in any NEW non-artifacts subdirectory would
+#  be scanned by two censuses and missed by this one.  Equal counts are not an aligned
+#  population, and reading the equality as safety is how the flat glob survived the
+#  first repair.
+_ptylist=$(find "$HERE" -name "*.py" -type f ! -path "$HERE/artifacts/*" 2>/dev/null \
+           | xargs grep -l "pty.fork" 2>/dev/null | sed "s|.*/||" | sort)
 _ptyn=$(printf '%s' "$_ptylist" | grep -c . )
 _promptless=$(cd "$HERE" && printf '%s' "$_ptylist" | tr ' ' '
 ' | xargs grep -L "endswith(" 2>/dev/null | sort)
@@ -285,7 +379,9 @@ EXPECT_CONVERTED=23
 #  meant a comment mentioning the echo guard would have inflated one count and not
 #  the others -- a spurious mismatch with no defect behind it.  A seat caught it
 #  while it was still latent.
-probe_code() { find "$HERE" -name '*.py' -type f \
+#  Same scope as py_code above -- the two must agree, and a past defect came from
+#  their populations diverging.
+probe_code() { find "$HERE" -name '*.py' -type f ! -path "$HERE/artifacts/*" \
                     ! -name 'readiness_predicate_test.py' -print0 2>/dev/null | \
                xargs -0 grep -h "$1" 2>/dev/null | grep -v '^[[:space:]]*#'; }
 conv_anchor=$(probe_code 'resp.rstrip().endswith("GXemul>")' | grep -c .)
@@ -334,7 +430,56 @@ conv_mark=$(probe_code 'return \(self\.\)\?wait(mark=_mark, echo=[a-z][a-z]* if 
 #  tolerated, a third is not, and when they are finally converted this number
 #  goes to 0 in the same commit.
 EXPECT_WHOLE_FULL=2
-whole_full=$(probe_code 'buf.rstrip().endswith("GXemul>")' | grep -c .)
+#  *** ROW 3: SCOPED TO FILES THAT CAN DRIVE A REAL GUEST, rather than exempting a
+#  filename.  Adjudicated 2026-08-29; the name-exclusion form was WITHDRAWN. ***
+#
+#  The allowlist below is FAIL-CLOSED over a pattern #392 MEASURED at 0/80, so the
+#  disposition for a new hit is never to raise the pin.  The two that appeared are
+#  `selftest_inactivity.py:87` -- a deliberately preserved negative control whose own
+#  docstring says DO NOT FIX IT -- and `:102`, #467's correct shape.  NEITHER DRIVES A
+#  GUEST: both read a Stub that pops a python list, so #392's failure mode (a real
+#  guest's own output racing the predicate) cannot arise.  That file is also LIVE
+#  APPARATUS -- gate_offline.sh runs it every battery -- so it must not be edited.
+#
+#  A filename exemption was the wrong shape and this file says so at :92-95 and
+#  :347-348: an exemption must travel WITH a content pin on the excluded file.  Scoping
+#  the POPULATION needs neither an exemption nor a companion pin, and it subsumes the
+#  readiness_predicate_test.py case automatically.
+#
+#  THE POPULATION TERM IS TWO ALTERNATIVES, and the second is not hypothetical:
+#  `selftest_absorb.py`, `selftest_budget.py` and `selftest_logdir.py` import
+#  drive_guest and contain NO pty.fork literal -- measured -- so a pty.fork-only term
+#  would let a guest-driving file out of the census.  None holds a whole-full site
+#  today; the term is widened so that it cannot.
+#
+#  *** THE CLAIM IS SCOPED, NOT GENERAL, AND TWO SEATS SPLIT ON IT. ***  codex named
+#  three files that drive the emulator with NEITHER spelling -- hpcabort_witness.py,
+#  hpcmips_ctor_probe.py and sgi_eaddr_probe.py, through subprocess.run or GDB --args.
+#  So this is NOT a general guest-driving census and must not be read as one.  grok
+#  argued against widening to cover them and that is the disposition taken: they
+#  cannot carry the #392 failure, which is a PTY READINESS RACE, and all three hold
+#  zero `endswith(` in any case (measured).  Widening to processes that cannot exhibit
+#  the defect would make this pin answer a question it is not asking.
+#
+#  DISCLOSED RESIDUALS, all real, none live today: `from pty import fork` with a bare
+#  fork(); `import pty as p`; a statement-local import; `os.forkpty` directly (which is
+#  what pty.fork wraps); `import regress.drive_guest`.  Censused at 0 apiece.  THE
+#  PRESENT VALUE OF 2 IS CORRECT; THAT DOES NOT ESTABLISH POPULATION COMPLETENESS.
+#
+#  `-print0 | xargs -0` matches both neighbours: a bare xargs finds ZERO files when a
+#  path contains a space (measured).  No space in $HERE today; the neighbours' own
+#  comment says the three must agree, so it agrees.
+#
+#  NO FILENAME EXEMPTION HERE.  readiness_predicate_test.py matches neither alternative
+#  and holds zero whole-full sites, so scoping subsumes it -- an earlier draft carried
+#  the exemption anyway, inert and un-companioned by a content pin, which is the shape
+#  :92-95 condemns.  opus5 found it dead and it is gone.
+pty_driving() { find "$HERE" -name '*.py' -type f ! -path "$HERE/artifacts/*" \
+                     -print0 2>/dev/null \
+                | xargs -0 grep -lE 'pty\.fork|forkpty|pty\.spawn|^[[:space:]]*(import|from) drive_guest' 2>/dev/null; }
+pty_code() { pty_driving | tr '\n' '\0' \
+             | xargs -0 grep -h "$1" 2>/dev/null | grep -v '^[[:space:]]*#'; }
+whole_full=$(pty_code 'buf.rstrip().endswith("GXemul>")' | grep -c .)
 check "readiness: whole-buffer full-prompt sites (allowlist)" "$whole_full" "$EXPECT_WHOLE_FULL"
 check "readiness: anchored full-prompt sites (#392)" "$conv_anchor" "$EXPECT_CONVERTED"
 check "readiness: echo guard present (#392)"         "$conv_echo"   "$EXPECT_CONVERTED"
@@ -396,8 +541,44 @@ if [ -f "$DIVSWEEP" ] && command -v python3 > /dev/null 2>&1; then
     #  The denominator too: if the sweep silently stopped finding ANYTHING the
     #  count above would still read 2 only by luck, and a zero total is the
     #  classic vacuous green.
+    #  *** 24 -> 21 ON 2026-08-29, AND IT IS A CONSOLIDATION, NOT THREE REMOVALS. ***
+    #  NOT ONE INSTANCE OF THE CLASS LEFT THE CODE.  `7c9dd9e` (#462) merged FOUR
+    #  one-division fatal() calls -- grep anchor `dma_reg[4 / sizeof(uint32_t)]` --
+    #  into ONE fatal() carrying the SAME FOUR DIVISIONS as its arguments.
+    #  DIAG_DIV_TOTAL counts CALLS carrying at least one division, so merging four
+    #  into one moves the total while the division census is unchanged.  A round
+    #  acting on the first reading would have hunted three removals that never were.
+    #
+    #  Attribution settled BY MEASUREMENT, because two seats disagreed (#490 vs #462):
+    #      git show 7c9dd9e --format= -- <file> | grep -cE '^[+-].*dma_reg'  ->  9
+    #      (the BARE `| grep -c dma_reg` form yields 11 -- it counts context
+    #      lines too.  9 is the CHANGED-LINES count and is the right figure;
+    #      the command printed here was the wrong one.  Caught by fable5.)
+    #      git show fb0cc78 --format= -- <file> | grep -cE '^[+-].*dma_reg'  ->  0
+    #
+    #  *** CITED BY COMMIT AND ANCHOR, NOT BY LINE NUMBER, AND DELIBERATELY. ***  This
+    #  sweep computes its printed line numbers from STRIPPED-text offsets indexed
+    #  against the RAW file, so they run systematically small -- it reports the gdrom
+    #  sites 400+ lines early, landing inside a comment block.  Its COUNTS do not
+    #  depend on that and are sound.  Filed as `divsweeplines`; the remedy (a
+    #  length-preserving strip) is measured to move the citations to their true
+    #  call-start lines with the counts unchanged.  Do not paste its line numbers.
+    #
+    #  THE DOWN DIRECTION NEEDED ITS OWN INSTRUCTION AND NOW HAS ONE.  The rule above
+    #  ("A THIRD site means someone added a new instance") is written for GROWTH.  A
+    #  DECREASE is ambiguous: it can mean the code improved, or that the sweep quietly
+    #  stopped finding things -- the vacuous-green shape this denominator exists to
+    #  catch.  THE DISCRIMINATOR IS THE NUMERATOR: if DIAG_DIV_NONCONST still reads 2
+    #  and names the same two sites, the sweep works and a lower total is real.  If
+    #  the numerator moves too, suspect the TOOL before the code.  Then diff the site
+    #  list against the last green tree AT FILE GRANULARITY, the lines being wrong.
+    #
+    #  FILED, NOT TAKEN HERE: a seat argued this should become a FLOOR, since an
+    #  equality breaks on every legitimate de-fatalisation and de-fatalisation is this
+    #  fork's whole queue.  The argument is good.  Converting it changes what the
+    #  check PROVES, so it is not folded into a re-pin.
     check "class ratchet: the sweep still sees the whole call set" \
-          "$(printf '%s\n' "$dsout" | grep -oE 'DIAG_DIV_TOTAL=[0-9]+' | cut -d= -f2)" "24"
+          "$(printf '%s\n' "$dsout" | grep -oE 'DIAG_DIV_TOTAL=[0-9]+' | cut -d= -f2)" "21"
 else
     note "diag_div_sweep.py or python3 missing -- class ratchet NOT run"
 fi

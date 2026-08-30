@@ -18,6 +18,49 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: a gated tool prints line numbers that are all wrong
+>
+> **`divsweeplines`** -- `diag_div_sweep.py` computes `ln = raw[:m.start()].count(chr(10))`
+> where `m.start()` indexes the **stripped** text, and `strip_lits()` collapses each
+> `/* */` block to one space **destroying its newlines**.  Every printed line number is
+> therefore too small, by more the larger the comment blocks above the site.
+>
+> Measured: it reports `dev_ns16550.c:79` for a call whose real start is **:180**, and
+> `diskimage.c:543` for one at **:976** -- and it places a gdrom site at `:211`, which is
+> prose inside a comment block.  **Two of those wrong numbers were transcribed into
+> `gate_hygiene.sh`'s rationale comment** as the authoritative location of the two sites
+> the class ratchet exists to protect.
+>
+> **The COUNTS are unaffected and the ratchet is sound** -- match counting does not depend
+> on line numbering, and both non-constant sites are correctly *identified*.  This is a
+> records defect, not a coverage one.
+>
+> *Remedy PROVEN IN SCRATCH before this was filed: a length-preserving `strip_lits` moves
+> the citations to 180 and 976 with `DIAG_DIV_TOTAL` and `DIAG_DIV_NONCONST` unchanged --
+> a pure citation repair.  Not taken in #492: it is a tool change owing its own controls,
+> and #492 sidesteps it by citing the consolidation by COMMIT AND GREP ANCHOR instead.*
+>
+> Found by chasing a REFUTED seat claim: agy attributed the ratchet drop to a commit that
+> touched nothing, and the line number its story rested on was the tool's, not the seat's.
+>
+> ### OPEN -- filed 2026-08-29: the class ratchet is an equality; band or ritual?
+>
+> **`divratchetband`** -- filed because `gate_hygiene.sh` SAYS it is filed.  A comment
+> reading *"FILED, not taken here"* with no row behind it is the gap-closes-itself shape.
+>
+> `DIAG_DIV_TOTAL` is pinned by EQUALITY.  A seat argued for a FLOOR, since an equality
+> breaks on every legitimate de-fatalisation and de-fatalisation is this fork's whole
+> queue.  **The adjudicator then refuted BOTH simple directions**, which is why this is a
+> design question and not a chore: a CEILING lets the sweep rot silently (a total
+> drifting DOWN to 0 would pass -- the vacuous-green shape the denominator exists to
+> catch), and a FLOOR `>= 21` reds on every legitimate de-fatalisation exactly as the
+> equality does, purchasing nothing.
+>
+> *The equality's break on each de-fatalisation is a FORCED-ACKNOWLEDGMENT FEATURE,*
+> *now priced correctly by the DOWN-direction instruction #492 added.*  What to weigh
+> when taken: a two-sided BAND, or equality-with-ritual.  Both change what the check
+> proves; neither may ride a re-pin.
+>
 > ### OPEN -- filed 2026-08-29: the battery's pre-flight is a ~15-minute BLIND WINDOW
 >
 > **`batteryblindstart`** -- `nightly_battery.sh` computes `HEADSHA` and `DIRTY` BEFORE

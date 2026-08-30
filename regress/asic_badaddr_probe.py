@@ -53,11 +53,18 @@ CONTRACT (vacuity floor clause (e)) -- this witness is designed to catch:
   * an edit to the INDEXING half of the bound on r.  THE UNIT OF COVERAGE IS
     THE COLLISION PAIR, not "aliasing" in the abstract -- three register words
     admit distinct pairs and one distinctness row pins exactly one pair:
-        `& 3` -> `& 2`  collides words 0 and 1  -> `alias`     (12/13)
-        `& 3` -> `& 1`  collides words 0 and 2  -> `alias2`    (12/13)
-        `/ 4` -> `/ 2`  collides words 0 and 2  -> `alias2`    (12/13)
-        `& 3` -> `& 7`  goes OUT OF BOUNDS       -> `crossarr` (12/13)
-        `+1` TRANSLATION  injective, collides   -> `mask9 rt` (12/13)
+        (Scores below are HISTORICAL and are marked `13-row` because they were
+        measured against the THIRTEEN-row table #463 shipped.  The gate pin is 14
+        as of #492: #474 -- a footbridge round -- added the `asicoffsetkill` sweep
+        row to this probe and did not move the pin, so the drift surfaced only at
+        the weekly battery.  The old scores remain TRUE of the table they were
+        measured against; they are not claims about today's denominator.)
+
+        `& 3` -> `& 2`  collides words 0 and 1  -> `alias`     (12/13, 13-row)
+        `& 3` -> `& 1`  collides words 0 and 2  -> `alias2`    (12/13, 13-row)
+        `/ 4` -> `/ 2`  collides words 0 and 2  -> `alias2`    (12/13, 13-row)
+        `& 3` -> `& 7`  goes OUT OF BOUNDS       -> `crossarr` (12/13, 13-row)
+        `+1` TRANSLATION  injective, collides   -> `mask9 rt` (12/13, 13-row)
                           NOTHING on the probed set -- see below
     All four MEASURED; artifacts under regress/artifacts/asic463/.  The three
     rows are complementary and NONE catches another's mutant.

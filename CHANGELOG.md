@@ -1,3 +1,108 @@
+## Round 492 (#492) -- the six battery reds, and a detector that passed its own kill table while an L2 breach was live in it
+
+The 2026-08-29 battery returned **EIGHT row-level failures**.  Two were fixed by
+`#491`; these are the other six.  One derived count, with its deriver, because this
+round's own notes gave three different ones before it was pinned:
+
+```
+sed -n '/---- FAIL rows ----/,/---- gate_ab/p' verdict_20260829_160646.txt \
+  | grep -E '^[0-9]+:[[:space:]]+FAIL' | grep -vE 'FAIL [0-9]+\. gate_' | wc -l   -> 8
+```
+
+The verdict's FAIL section holds ELEVEN lines; three are gate-level rollups that match
+the same pattern as the rows.  **A count over a log needs its exclusions in the
+deriver, not in the reader's head.**
+
+### What shipped
+
+| row | before | after |
+|---|---|---|
+| pty-probe denominator | 37/35 | re-pinned 37 |
+| promptless probes | 11/9 | grandfathered, census corrected |
+| whole-buffer full-prompt | 4/2 | **ok 2 -- the pin never moved** |
+| class ratchet | 21/24 | re-pinned 21, cited by commit+anchor |
+| wdcflood guards | 15/12 | equality REPLACED by three rows |
+| asic_badaddr rows run | 14/13 | re-pinned 14, with provenance |
+
+`gate_hygiene`: 4 FAIL -> **`log-hygiene: PASS (50 checks)`**.
+
+### The row-3 result is the one worth copying
+
+It went green with **no pin raised, no allowlist widened, no exemption, and the
+`selftest_inactivity.py:87` negative control untouched** -- because the repair was to
+the POPULATION, not the threshold.  `EXPECT_WHOLE_FULL` is a FAIL-CLOSED allowlist over
+a readiness pattern #392 measured at **0/80**; raising it to 4 would have tolerated two
+more real instances.  The two new hits were a deliberately preserved negative control
+and a simulated stream, neither driving a guest.
+
+*The discriminator I told the panel did not exist -- `pty.fork` -- was twelve lines
+above, in the same file.*
+
+### *** THE DETECTOR THIS ROUND SHIPPED WAS AN L2 FLOOR BREACH, AND ITS KILL TABLE WAS CLEAN. ***
+
+The row-5 replacement counted per-latch PRESENCE.  Every mutant in its table happened
+to target a SINGLE-SITE latch, so **the table ran on a population that structurally
+could not exhibit the defect**.  `warned_inbuf_overrun` has two sites:
+
+```
+if (!d->warned_inbuf_overrun) {   ->   if (1) {      at ONE of its TWO sites
+=> set=2 read=1, census says SET=6 READ=6, gate GREEN
+=> the producer flood is unbounded again -- #464's exact defect
+```
+
+Floor clause (b) demands failure on reinstatement at EVERY fixed site, so that is L2,
+fixed in-round.  **Note the inversion, which is the lesson:** the old pin counted
+OCCURRENCES, so a second site moved it -- loud, wrong, but alive.  Presence-only made
+losing one of two INVISIBLE -- quiet, wrong, and silent.
+
+Replaced by per-latch `set_count == read_count` (RELATIONAL, so growth increments both
+sides and it is growth-invariant by construction) plus a latch-population count, which
+restores a tripwire this round would otherwise have DELETED -- the de-escalation clause
+one level up.  Eleven mutants, all killed, base clean, artifact `killtable3.out`.
+
+### The same defect, four generations, the last two mine in the repair
+
+1. the original pin counted **lines** where it meant occurrences -- read 15 against 12;
+2. my replacement counted **presence** -- the L2 above;
+3. my kill table's M1/M2 **never applied** (the guards are multi-line) and my vacuity
+   guard caught only TOTAL no-ops, so a partially-applied mutant scored as something
+   it was not.  *fable5 found this from the published numbers alone: 'a true pair
+   deletion reads 5/5, and the table shows 5/6.'*  It now reads exactly 5/5/5/11;
+4. my replacement pattern-check used `grep -c`, which **counts lines**, so it demanded
+   two lines when the mutant put both mentions on one.
+
+The promptless census was wrong three times on its own account -- a false universal, an
+impossible partition (3+8+1=12 over a nine-member set), and then a claim that
+`drive_guest.py` is neither, when it budget-drains under a different SPELLING.  **I had
+grepped for `time.time() < end` and measured the spelling instead of the mechanism**,
+which is this round's own defect committed in the comment describing it.
+
+### Population alignment (F2)
+
+Two censuses recursed while a third used a flat glob -- evasion route #3, which this
+gate condemns ninety lines earlier.  Ten pty-forking promptless probes under
+`artifacts/` were invisible to the mechanism built to find them, **and the hazard was
+scheduled**: CLAUDE.md mandates frozen probe copies, so the next round to freeze one
+would have redded this gate for obeying the carrier.  All three populations now agree;
+measured a no-op on every pinned count.  *The first repair aligned only two of the
+three, and agy caught that reading equal counts as an aligned population is how the
+flat glob survived it.*
+
+### FILED, not fixed
+
+`divsweeplines` (a gated tool's line numbers are all too small; counts sound, remedy
+proven in scratch), `divratchetband` (equality vs band -- the adjudicator refuted BOTH
+simple directions, so it is a design question).  Contract clause (e) is now in the
+census header: it names what it catches and, explicitly, that a widened predicate whose
+text survives is OUTSIDE it -- no textual census can see governance.
+
+### Seats
+
+Nine on each pass.  Pass 1 refuted five of my claims; pass 2 found the L2 and three
+more defects.  **Both Agent seats were reviewing their own pass-1 designs and both
+disclosed it (badge `A`) and broke them anyway** -- opus5 measured the floor breach in
+the form it had itself proposed; fable5 overturned two of its own dispositions by name.
+
 ## Round 491 (#491) -- two compiler warnings were costing an entire GATE, and the battery that would have said so had been red and unread for five days
 
 `#472` replaced `len > OVERLAY_BLOCK_SIZE? OVERLAY_BLOCK_SIZE : len` with

@@ -643,7 +643,20 @@ else
         check "asic_badaddr result parses" "no" "yes"
     else
         check "asic_badaddr result parses" "yes" "yes"
-        check "asic_badaddr rows run"     "${asres#*/}" 13
+        #  *** 13 -> 14 ON 2026-08-29.  ALL FOURTEEN ROWS PASS; ONLY THE PIN WAS STALE.
+        #  The battery reported `rows run got=14 want=13` while `rows correct` read 14
+        #  in the SAME run -- denominator stale, numerator sound. ***
+        #
+        #  Provenance: pinned at 13 by `f1fa6a0` (#463); `d894e35` (#474) added the
+        #  `asicoffsetkill` sweep row to the probe and did not move the pin.  #474 was a
+        #  footbridge round, so it edited a probe belonging to a gate it did not run --
+        #  which is why nothing surfaced until the weekly battery.
+        #
+        #  *** AN EARLIER DRAFT BUMPED THIS NUMBER WITH NO COMMENT AT ALL, while the
+        #  other three re-pins in this round carried paragraphs.  THREE PASS-2 SEATS
+        #  INDEPENDENTLY CALLED THAT A DEFECT (glm, deepseek, minimax) -- a bare number
+        #  bump is indistinguishable from fitting the pin to the output. ***
+        check "asic_badaddr rows run"     "${asres#*/}" 14
         check "asic_badaddr rows correct" "${asres%/*}" "${asres#*/}"
 
         #  Per-row presence.  A row that silently stops being tested is the
@@ -1267,17 +1280,92 @@ fi
 #  it upward when sites are added; that is the failure mode this replaces.
 check_min "wdcflood: fatal() call sites intact (channel not downgraded)" \
       "$(grep -cE '^[[:space:]]+fatal\("' ../src/devices/dev_wdc.c)" 12
-#  *** AND THIS COMPANION PIN IS CORRECT, WHICH IS THE WHOLE LESSON.  It sits two
-#      lines below the one that was red for two rounds, counts the same kind of thing,
-#      and did not decay -- because it ENUMERATES SIX NAMED LATCHES in its regex
-#      instead of counting an open set.  The device carries ELEVEN warned_ latches
-#      today; this pin still reads 12 because growth cannot reach it.
+#  *** THAT COMPANION PIN CLAIMED IMMUNITY TO GROWTH AND CALLED THAT "THE WHOLE
+#      LESSON".  IT READ 15 AGAINST A PINNED 12.  The claim survived FOUR HOURS. ***
 #
-#      A CENSUS PIN OVER AN OPEN SET BREAKS ON GROWTH.  A PIN OVER A NAMED SET DOES
-#      NOT.  Where the members can be named, name them; where they cannot -- as with
-#      bare fatal(" call sites -- use a floor.  Never an equality over a set the
-#      codebase is expected to add to. ***
-check "wdcflood: six warned_ guards present (one set + one read each)" \
-      "$(grep -cE 'd->warned_(inbuf_overrun|inbuf_overread|unimpl_cmd|nonbyte_write|nonbyte_read|data_unexpected)' ../src/devices/dev_wdc.c)" 12
+#      Its exact words were: "it ENUMERATES SIX NAMED LATCHES in its regex instead
+#      of counting an open set.  The device carries ELEVEN warned_ latches today;
+#      this pin still reads 12 because growth cannot reach it."
+#
+#      Growth reached it by TWO routes the sentence did not consider, and a third
+#      dimension nobody had named at all:
+#
+#        05ec21e  14:00 2026-08-27   the immunity comment lands
+#        cf300c0  17:59 2026-08-27   #484 adds a SECOND guarded site re-using
+#                                    warned_inbuf_overrun               -> +2
+#        d819188  19:29 2026-08-27   #485 adds a COMMENT naming
+#                                    warned_unimpl_cmd                  -> +1
+#
+#      MEMBERS was closed, and correctly so -- a new latch NAME cannot reach it.
+#      OCCURRENCES was open: grep -c counts LINES, so a new SITE re-using a named
+#      latch increments it.  And TEXT-vs-CODE was never considered: a sentence of
+#      prose counted as a guard.
+#
+#      The comment's own closing rule was right and was not followed:
+#      "Never an equality over a set the codebase is expected to add to."
+#      d->warned_X OCCURRENCES are exactly such a set.  The members were named,
+#      and then an equality was used over their occurrences anyway.
+#
+#  *** A BARE FLOOR (>= 12) WAS PROPOSED AND MEASURED VACUOUS, so it is not what
+#      replaced it.  Deleting ONE latch's two-line guard pair scores 13 and PASSES,
+#      restoring the unbounded flood #464 fixed.  Six per-latch ">= 2" rows were
+#      also refuted: >= 2 is satisfied by TWO READS AND NO SET. ***
+#
+#      REPLACED BY TWO EQUALITIES OVER THE NAMED CLOSED SET, per-latch presence,
+#      counted over COMMENT-STRIPPED code.  Equality is right for MEMBERS (that set
+#      does not grow); what broke was an equality over OCCURRENCES, which this does
+#      not count.  Stripping defeats the text-vs-code dimension by CLASS -- an anchor
+#      tuned to today's comment survives only by its missing brace.
+#
+#      MEASURED (artifacts/batteryreds/row5_20260829/killtable.out):
+#        BASE 6/6 ok | M1 delete guard pair 5/6 KILLED | M2 gut+comment 5/6 KILLED
+#        M4 delete SET keep READ 5/6 KILLED | M3 null medium 0/0 KILLED
+#        M5 absent file 0/0 and reports WDC_LATCH_FILE=MISSING, so a missing file
+#        and a file with no latches do not render the same.
+#
+#      Proposed by the opus5 seat; adopted by the fable5 adjudicator over its own
+#      twelve-row alternative, 2026-08-29.
+wdclatch=$(python3 wdc_latch_census.py 2>/dev/null)
+check "wdcflood: census read the file (not MISSING)" \
+      "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_FILE=[A-Z]+' | cut -d= -f2)" "OK"
+check "wdcflood: all six latches have a SET (comment-stripped)" \
+      "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_SET=[0-9]+' | cut -d= -f2)" "6"
+check "wdcflood: all six latches have a READ (comment-stripped)" \
+      "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_READ=[0-9]+' | cut -d= -f2)" "6"
+
+#  *** THE TWO ROWS BELOW CLOSE AN L2 FLOOR BREACH THAT THE FIRST VERSION OF THIS
+#  BLOCK SHIPPED, and its kill table was CLEAN while the breach was live. ***
+#
+#  Presence alone (SET/READ above) is blind to a MULTI-SITE latch losing one site.
+#  Every mutant in the first table happened to target a single-site latch, so the
+#  table ran on a population that structurally could not exhibit the defect:
+#
+#      if (!d->warned_inbuf_overrun) {  ->  if (1) {     at ONE of its TWO sites
+#      => set=2 read=1, SET=6 READ=6, gate GREEN, producer flood unbounded again
+#
+#  Floor clause (b) demands failure on reinstatement at EVERY fixed site, so that is
+#  L2.  Note the inversion: the OLD pin counted OCCURRENCES, so a second site moved
+#  it -- loud and wrong but alive.  Presence-only made losing one of two INVISIBLE.
+#
+#  BALANCED is RELATIONAL (set_count == read_count per latch), so growth increments
+#  both sides and it is growth-invariant BY CONSTRUCTION -- not an equality against a
+#  frozen literal needing hand-bumps, which is what broke here in the first place.
+#  It is the tree's own house idiom: every latch is 1:1 and inbuf_overrun is 2:2.
+#
+#  DECL restores a tripwire this round would otherwise have DELETED -- the carrier's
+#  de-escalation clause one level up.  Replacing a decaying equality with a
+#  growth-immune one removes the accidental signal that latch growth used to send.
+#  A twelfth latch, or a brand-new unguarded fatal(), now reds until someone looks.
+#
+#  MEASURED, artifacts/batteryreds/row5_20260829/killtable2.out -- ELEVEN mutants,
+#  all killed, BASE 6/6/6/11 clean:
+#    E1/E2 neutralise one of two sites 6/6/5/11 | E3 redirect guard 6/6/4/11
+#    E7 twelfth latch 6/6/6/12 | E8 READ redirected to a LONGER name 6/5/5/12
+#    E6 C99 "//" continuation swallowing a SET 6/6/5/11
+#    M1/M2/M4 5/6/5/11 | M3 null medium 0/0/0/0 | M5 absent file reports MISSING
+check "wdcflood: every latch BALANCED (set count == read count)" \
+      "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_BALANCED=[0-9]+' | cut -d= -f2)" "6"
+check "wdcflood: device latch population (bump DELIBERATELY, read it first)" \
+      "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_DECL=[0-9]+' | cut -d= -f2)" "11"
 
 gate_end
