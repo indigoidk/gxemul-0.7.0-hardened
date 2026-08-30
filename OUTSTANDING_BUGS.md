@@ -12921,3 +12921,66 @@ shrinks the cliff from eight to four before it arrives. Each is independently sh
 > compliant ten minutes earlier. **A pattern that selects the wrong set produces a clean,
 > confident, wrong population** — the third instance in one day, after the `outcomegap`
 > recount and the empty-note audit.
+
+## 2026-08-30 -- a host-kill class #337 fixed in ONE device and nobody swept for the rest
+
+### `widthkillclass` -- a guest choosing an ACCESS WIDTH ends the host
+
+`dev_wdc.c`'s own `#337` comment states the class outright: *"a 3- or 8-byte access to the
+data port used to call exit(1) — a GUEST choosing an access width killed the host process."*
+It was fixed there. **The same shape survives untouched in two other devices.**
+
+| device | sites | shape |
+|---|---:|---|
+| `dev_pcc2.c` | 10 | *"TODO: pcc2: non-byte reads and writes of …"* → `exit(1)` |
+| `dev_sgi_re.c` | 6 | `if (len != 8) { fatal("TODO: unimplemented len=%i …"); exit(1); }` |
+
+**Reachability is established for `sgi_re` by construction** — `machine_sgi.c:500` calls
+`dev_sgi_re_init(machine, mem, 0x15000000)` and it registers at `baseaddr + 0x1000`, so a
+guest store of the wrong width to that window ends the host. `pcc2`'s instantiation was not
+checked and is not claimed.
+
+> **Method, stated so the count can be checked rather than trusted.** Comments stripped with
+> a state machine first — 40% of raw `exit(` hits in `src/devices/` are inside comments, and
+> that rate *grows* as the fork de-fatalises, because each fix leaves a comment quoting the
+> exit it removed. Then: a terminating call whose nearest six preceding lines mention `len`
+> with a comparison, or the phrase `non-byte`. **That is a heuristic** — a starting set, not a
+> defect count. Re-derive rather than quoting 16.
+
+**Why one class row and not two device rows:** the fix *shape* is already settled by
+precedent. `#337` chose latched decline with an explicit `(once)` marker — the house idiom
+(N=1 per device instance; `(once)` is the plurality spelling at 9 of 14 sites). So each round
+here is an **application of a decided design**, not a fresh design argument, which is the
+cheapest kind of round this queue has.
+
+**Scope discipline — this must not become one round.** More witnesses create more candidate
+rounds, never bigger ones. Each takes ONE site; a second joins only if witnessed, in the same
+device and semantic class, covered by the same detector with no new oracle. A device's own
+sites may satisfy that; two devices will not. **Next step is a rung-3 witness on one site**,
+not a fix and not a sweep.
+
+### `sgirekills` -- and my own brief's premise was the thing that broke
+
+`dev_sgi_re.c` carries **21** terminating calls inside `DEVICE_ACCESS` — seven times the
+gdrom file, and the top of the census list. Besides the six width guards above, its adjacent
+arm kills on a plain **read** (`fatal("TODO: read from CRIME_RE_TLB_A"); exit(1);`), which is
+a *different* class: direction/offset rather than width.
+
+> ### The finding that matters is about the queue, not the device
+>
+> The `gdromcondlies` brief stated as a premise that those were **the last live
+> guest-reachable host kills**. That is false, and the first file sampled from the census
+> refuted it.
+>
+> It was written **as a question** (*"have I confused 'the queue knows of no others' with
+> 'there are no others'?"*), which is the only reason it was cheap to catch — and it was
+> caught before the panel answered.
+>
+> **A queue-complete claim is not a tree-complete one.** The adjudicating seat had flagged
+> exactly this limit about its *own* answer hours earlier — *"my no-other-live-host-kills
+> claim rests on the queue and this file's grep, not a fresh tree-wide exit census"* — and
+> the brief inherited the gap anyway. The seat named it; I wrote it down as a premise.
+
+**21 is how many live terminating calls sit in that file's `DEVICE_ACCESS` handlers.** It is
+*not* a claim that 21 are individually reachable — `dev_dreamcast_gdrom.c:1055` stands as the
+proof that such a site can be unreachable and take a hand-derived warrant to establish it.

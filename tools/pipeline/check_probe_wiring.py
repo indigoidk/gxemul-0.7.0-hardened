@@ -454,6 +454,40 @@ MANIFEST = {
                                     "Preserved under artifacts/ because this row's previous TWO "
                                     "witnesses lived in a rotated scratchpad and no longer "
                                     "exist, which is why its witness field had to read `none`."),
+    #  gdromcondlies RUNG-3 WITNESS, 2026-08-30.  CLASS_WITNESS on the toclen precedent
+    #  three entries up, and for the identical reason: its two kill rows INVERT the day
+    #  the fix lands, so gating it would manufacture a regression.  The round's standing
+    #  coverage is its own detector, which is a separate deliverable.
+    "artifacts/gdromcondlies/witness_20260830/gdrom_cond_witness.py": (CLASS_WITNESS,
+                                    "gdromcondlies rung-3 on the unmodified -E dreamcast: "
+                                    "one guest mov.w per site ends the host at both live "
+                                    "BADVAL exits (GDROM_UNKNOWN_0x88 != 0xb, GDROM_COND "
+                                    "unmodelled), 15/15 on the committed build before any "
+                                    "edit.  Carries BOTH mandatory controls plus two the "
+                                    "ladder does not require and this result needs: a "
+                                    "DEVICE-SIGNATURE row in the strong form (a "
+                                    "TRANSFORMATION only the device performs -- the write "
+                                    "arm masks to a byte, so 0x1234 to CNTLO reads back "
+                                    "0x34, which RAM would not do), and ACCEPT rows.  The "
+                                    "accept rows are what pin the defect to the VALUE and "
+                                    "therefore to #443 BADVAL, rather than to the offset "
+                                    "being unserviceable, which is the already-fixed #461 "
+                                    "default-arm defect.  *** ITS ACCEPT ROWS MUST NOT BE "
+                                    "CARRIED INTO THE DETECTOR UNCHANGED: they discriminate "
+                                    "on SURVIVAL, and the fix makes survival universally "
+                                    "green -- a survival oracle at a refusal-effect site is "
+                                    "the CHANNEL check's canonical vacuous row.  Named by "
+                                    "the fable5 seat on pass 1, before the detector existed."),
+    "artifacts/gdromcondlies/witness_20260830/gdrom_cond_extras.py": (CLASS_RESEARCH,
+                                    "the flood measurement beside that witness, preserved as "
+                                    "evidence: the two ALREADY-de-fatalised guest-drivable "
+                                    "fatal() sites in the same device (the 0x88 READ arm, "
+                                    "seven lines above site A in the same case, and the "
+                                    "GDROM_STAT write arm) print 3 diagnostics on 3 accesses "
+                                    "-- unlatched and unbounded.  Both Agent seats ruled on "
+                                    "it independently on pass 1 and DISAGREED about scope, "
+                                    "which is why the number is kept re-runnable rather than "
+                                    "quoted: see the floodclass filing."),
     "sh4_sci_witness.py":          (CLASS_WITNESS,  "#451 pre-fix symptom: a clocked-in byte kills"),
     "sh4_sci_probe.py":            (CLASS_DETECTOR, "#451 SCI command byte declined, not fatal"),
     "sh4_tlbda2_witness.py":       (CLASS_WITNESS,  "#452 pre-fix symptom: one TLB da2 access kills"),
