@@ -450,10 +450,26 @@ typedef char gdrom_w_fits_its_carriers[
  *
  *  *** THIS COUNT SAID "Nine bits today" AFTER #496 MADE IT ELEVEN, and it was
  *  caught by a panel seat rather than by anything mechanical.  The count is left
- *  here rather than deleted BECAUSE IT HAS A DERIVER: `grep -c '_B,'` over the
- *  enum above.  A number in a durable record names the command that produces it
- *  or it becomes a wrong record on the next edit -- which is exactly what this
- *  one did. ***
+ *  here rather than deleted BECAUSE IT HAS A DERIVER -- TAB-ANCHORED:
+ *
+ *      grep -c '^<TAB>GDROM_W_.*_B,' src/devices/dev_dreamcast_gdrom.c   ->  11
+ *
+ *  A number in a durable record names the command that produces it, or it becomes
+ *  a wrong record on the next edit -- which is exactly what this one did. ***
+ *
+ *  *** AND THE FIRST DERIVER SHIPPED HERE WAS ITSELF WRONG, IN THE MOST INSTRUCTIVE
+ *  WAY AVAILABLE: it was the bare `_B,` pattern, which returns FIFTEEN -- three
+ *  mutant-table comments, plus THIS COMMENT, whose quotation of the pattern MATCHED
+ *  THE PATTERN. ***  A deriver shipped to repair a wrong count, contaminated by the
+ *  same comment-inclusion the repair was about, and self-matching besides.  Caught
+ *  by a seat re-deriving rather than reading.
+ *
+ *  Two properties make the form above safe and both are load-bearing: the TAB anchor
+ *  cannot match a comment line (which opens with space-star), and the `_B,` suffix
+ *  excludes the GDROM_W_NBITS terminator, which is not a bit.  The pattern is written
+ *  with <TAB> spelled out rather than as a literal tab so that this comment still
+ *  cannot match it -- before quoting any string a tool matches on, ask what that tool
+ *  will do with your copy of it.
  */
 typedef char gdrom_w_masks_disjoint[
     ((GDROM_W_LEN + GDROM_W_NODATA + GDROM_W_NOTWAIT + GDROM_W_OVERREAD +

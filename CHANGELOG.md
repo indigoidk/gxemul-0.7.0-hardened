@@ -1,3 +1,145 @@
+## Round #496 gdromcondlies -- two guest-reachable host kills, and the store that made
+## the obvious fix worse than the defect
+
+Two sites in `src/devices/dev_dreamcast_gdrom.c` ended the host process on **one guest
+store each**, witnessed at rung 3 on an unmodified `-E dreamcast`:
+
+    GDROM_UNKNOWN_0x88   a write of any value but 0x0b
+    GDROM_COND           a write of anything outside {0xa0, 0xef}
+
+Both are the `#443` BADVAL class -- a KNOWN register rejecting a VALUE by ending the host.
+The witness reads **15/15 pre-fix**; re-run against the fixed build with the same
+instrument, unedited, it reads **11/15**, and the four rows that flip are exactly the kill
+rows (`witness_20260830/`, `postfix_20260830/`).  That inversion is why the witness is
+`CLASS_WITNESS` and correctly ungated: gating it would manufacture a regression.
+
+### The half of this fix that is not about `exit()`
+
+`d->cond = idata;` ran **unconditionally, above the dispatch**.  `COND_DATA_AVAIL` (`0x08`)
+is a bit of that byte and it **gates the whole `GDROM_DATA` read path**, so deleting the
+`exit(1)` and nothing else would have handed every unmodelled value a direct write to the
+readiness flag the guest polls -- forging data-available where no command produced any, or
+revoking a genuine one.  Silent, and worse than the kill it replaced.
+
+The store now lives inside the two accepted arms, byte-identically ordered.  **Both Agent
+seats named that relocation independently on pass 1** as the round's clause-(d) mutant, and
+`agy` later MEASURED it: with the store restored above the dispatch the detector's keystone
+row stays green, and the three-pre-state repair reds it (`agy_r5escape_measurement.out`).
+
+### The scope cost, recorded here because a record is what discharges it
+
+*** THIS ROUND SHIPS A `case` WHOSE WRITE ARM ANNOUNCES ONCE AND WHOSE READ ARM, SEVEN
+LINES ABOVE IT, FLOODS WITHOUT BOUND. ***  The `GDROM_UNKNOWN_0x88` READ arm and the
+`GDROM_STAT` write arm are both already-de-fatalised, unlatched `fatal()` sites, measured
+at **3 accesses / 3 diagnostics each** (`witness_20260830/extras_run1.out`).
+
+**They are FILED under `floodclass`, not taken**, and the two Agent seats disagreed about
+that: `opus5` argued TAKE (same `case`, already being edited, and shipping it half-
+disciplined is a wrong record); `fable5` argued FILE (a flood is not the BADVAL class, so
+the round-scope rule's same-semantic-class arm fails, and taking one site alone splits the
+flood FAMILY).  **Ruled FILE, against the rule's own text rather than by vote.**
+
+The adjudication pass upheld it, and `fable5` -- whose position won -- scrutinised it
+harder rather than accepting it, sharpening the reason: `#460`'s joined-on-the-merits
+precedent in this same file is the strongest case for `opus5`, but there both sites were
+one predicate family with the same lethality, whereas here the classes differ in kind (kill
+vs hygiene).  **Three seats then noted that the ruling's discharge was still OWED**, since
+no round block existed and `PRETABLE.out` said *"the cost is recorded"* in the present
+tense.  This block is that discharge, and it names BOTH sites rather than only the read arm.
+
+### The detector, and what pass 2 cost it
+
+`regress/gdrom_cond_probe.py`, **21 rows**, gated in `gate_sh_rounding.sh`.  It began at 16
+and grew under measurement.  Two of the repairs are general and neither is about this
+device:
+
+* *** A CLAUSE-(b) FLOOR BREACH CREATED BY STATING A RULE TOO BROADLY. ***  The probe
+  header banned the SURVIVAL channel outright, on the true observation that post-fix every
+  one of these accesses exits 0.  But reinstating `exit(1)` **prints the diagnostic and
+  then dies** -- count 1, byte correct, row green, defect back.  **Survival is dead on the
+  ACCEPT side and is the ONLY channel that sees clause (b) on the DECLINE side.**  The
+  round's own witness had measured that shape pre-fix (`a88 says` = 1 AND `a88 kill` =
+  exit1 in one session) and nobody read the two rows together.  Found by a PACKET-FED seat
+  from the diff alone.
+* *** ONE ANCHOR PROVES A VALUE, NOT AN IDENTITY. ***  The keystone drove one pre-state, so
+  `d->cond = 0xef;` in the decline arm passed it while forging `COND_DATA_AVAIL` out of a
+  fresh decline.  *"Unchanged" is a claim about a FUNCTION of the prior value, and one
+  sample cannot distinguish a function from a constant.*  Three pre-states now, one of them
+  declining `0x08` itself so the forge subspace is MEASURED rather than inferred.
+
+Also repaired: `R7` FAILED OPEN -- an absent read folded to `"clear"`, which was its want,
+so **the one row whose oracle is an absence was the one an apparatus failure scored green**;
+`R10` was HOLLOW (it read STAT, which `update_stat` recomputes on every read, so it could
+not see site A growing an effect); `R11` was weaker than the `#490` precedent it cited and
+now stages an old bit with a benign DATA read; site A's byte fidelity was untested; and
+**`R12` was named in the adjudication pass as the thing all nine seats had missed** -- no
+row exercised the DATA read path the whole fix exists to protect.  It keys on the
+diagnostic and not on the returned value, because this file's own comment records that the
+no-data path returns `0xffff` and *"this device's TOC is memset(0xff), so 0xffff is
+LEGITIMATE PAYLOAD here and no returned value is self-identifying."*
+
+### Counts, with their deriver, because every carried one in this round was wrong
+
+    grep -c 'd->warned |=' src/devices/dev_dreamcast_gdrom.c   ->  12 RAW
+    ... minus ONE inside a comment block                       ->  11 LIVE writers
+    of which, inside a DEVICE_ACCESS                           ->   8
+
+(Pre-round: 10 raw, 9 live, 6 inside.)  `PRETABLE.out` said *"8 before, 10 after"* -- `#490`'s
+numbers with its own two additions never folded in -- and the probe header said *"ten sites,
+six inside"*.  Three seats reached 9 -> 11 independently.  **The raw grep of 12 is the same
+comment contamination `tools/pipeline/exit_census.py` exists to defeat, and it caught me one
+command after I cited that tool.**  Two L4s in product code were corrected with it: *"Nine
+bits today"* above the disjointness assert (`#496` made it eleven) and a decline comment
+saying *"the guest has sent no packet"*, which is too broad -- nothing stops a bad COND write
+arriving after a `0xa0` or midway through a packet.  The warrant is that THIS write began
+nothing, not that nothing is in flight.
+
+### An apparatus defect, and the sentinel that refuted my own diagnosis of it
+
+The probe seeded its destination register to **0** before each load, so a `step` that did
+not complete left the register at its initialiser -- and *"RAM would read 0"* is exactly what
+every device-signature control here tests for.  `devsig sh4` reported `got=0x0`, which reads
+as *the SH4 register window is dead*.  **I diagnosed host contention and wrote that reason
+into the file.**
+
+It was not contention.  The row was simply WRONG -- I had written it from memory as a 16-bit
+load of `0xa4000150`, where the sibling probes read **32 bits from `0xffd00010` masked to
+16** -- and it had been failing correctly the whole time.  **The seed change settled it on
+the very next run: a step that never executed would have left `0xdead`, and it left `0x0`.**
+
+> *A sentinel earns its keep by making you wrong faster.*  Kept, with its warrant now the
+> measured one rather than the guessed one.  And it reproduced the fail-open defect one
+> level down -- `0xdead` has bit 3 set, so an unexecuted load would have scored `"set"` on
+> the two rows whose want IS `"set"` -- which is why `bit()` returns `SEED-NEVER-RAN`.
+
+### NOT DONE, said plainly rather than implied
+
+**The first CLEAN run came only after the control itself was repaired**, and the earlier
+`GDROMCOND_CONTROL=DEAD` had TWO causes that were conflated -- one real and one imagined.
+The real one was the wrong `devsig sh4` row above.  The imagined one was host contention,
+which I wrote into the previous commit message as the cause and which the seed change then
+refuted: the failure was DETERMINISTIC across four runs, and a contention artifact is
+intermittent.  *Determinism is the discriminator, and stating the wrong cause in a durable
+record is the defect this round corrected twice elsewhere.*  Contention was real and did
+cost measurements -- three probes ran on one machine -- but it was not what killed that
+control.  The 21-row table has **not** run
+clean, and the kill table has not run at all (`kill496_mut.py` does not exist).  **The
+vacuity floor is therefore NOT yet discharged for this detector**, and this round is not
+closable until it is.
+
+*The lesson is one the carrier already states about gates and had not extended to probes:
+a rung-3 probe needs the machine to itself just as much.  Farming a seat wide requires
+isolating its WORKSPACE, not merely giving it a distinct brief -- three `agy` jobs on three
+different briefs all built in one scratch tree before diverging.*
+
+### The panel
+
+**Nine seats on pass 1, nine on pass 2, nine on the adjudication pass.  Nothing down.**
+This is the first round to run the ADJUDICATION PASS (owner directive, 2026-08-30): every
+seat's findings consolidated into one numbered packet with the author's disposition on each,
+disagreements listed with both sides in their own words, and all nine re-fired on it.
+**Eleven findings upheld, none overturned, three refined, and one row nobody had thought of.**
+
 ## Round wdcatapistswap -- the accept side of #495's guard, and a floor breach found
 ## while pinning it
 

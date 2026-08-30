@@ -45,7 +45,25 @@ falsifiable; one claiming completeness is not.  This one is designed to catch:
       sample cannot tell a function from a constant.             (R5, R5b, R5c)
     * emptying either accepted arm                                (R6, R8, R9)
     * firing a completion event on a DECLINED write               (R7)
-    * touching BUSY or STAT on a DECLINED write                   (R7b)
+    * touching BUSY on a DECLINED write                           (R7b)
+    * forging readiness so a later DATA READ finds data            (R12)
+    * emptying the FOURTH statement of the 0xa0 arm, which
+      re-arms cmd_count and is the third leg of another
+      site's unreachability warrant                                (R13)
+
+*** THE STAT LEG IS DECLARED APPARATUS, NOT COVERAGE, AND THIS SENTENCE USED TO CLAIM IT. ***
+An earlier contract read "touching BUSY or STAT".  `dreamcast_gdrom_update_stat()` recomputes
+`d->stat` unconditionally on every read, so before and after are both 6 under EVERY product
+mutant: the STAT half was not merely unmeasured, it was UNMEASURABLE -- by the same fact that
+made R10's STAT leg hollow, sixty lines away and not propagated.  A clause-(e) contract
+overclaiming is precisely the category this round policed, so it is corrected rather than
+quietly narrowed.
+
+NO-ROW SENTENCE, WITH ITS WARRANT NAMED so the absence is falsifiable: a mutant that writes
+`d->stat` on the decline is EQUIVALENT, because `update_stat()` overwrites it unconditionally
+and `d->stat` has no other consumer (its only read is preceded by that recompute; the accept
+arm's own store is the sole remaining touchpoint).  **Any future edit adding a `d->stat`
+consumer, or a condition to `update_stat()`, RE-RUNS this death measurement.**
     * growing an effect on, or declining, site A's 0x0b           (R10)
     * collapsing the two latch bits into one                      (R11)
 
@@ -256,10 +274,20 @@ def store16(reg, val, A):
 #  exists to detect.  So under load, when a `step` does not complete, the row reads back its
 #  own initialiser and reports the precise defect it was written to catch.
 #
-#  MEASURED, on this probe's first run: with agy jobs holding ~10 concurrent gxemul
-#  processes, `devsig sh4` reported got=0x0 want=0xda74 -- which reads as "the SH4 register
-#  window is dead" and is really "the guest never got to execute".  A contention artifact
-#  wearing a product defect's clothes.
+#  *** THE MOTIVATING DIAGNOSIS WAS WRONG AND THE SEED IS WHAT PROVED IT. ***  On this
+#  probe's first run `devsig sh4` reported got=0x0 want=0xda74, with three agy jobs holding
+#  ~10 concurrent gxemul processes, and I wrote it up as a contention artifact -- a step that
+#  did not complete, leaving the register at its 0 initialiser.
+#
+#  It was not.  The row was simply WRONG (wrong address, wrong width -- see its own comment),
+#  and it had been failing correctly the whole time.  **The seed settled it on the very next
+#  run: a step that never executed would have left 0xdead, and it left 0x0, so the guest ran
+#  and the device returned zero.**
+#
+#  The seed is kept, and its warrant is now the measured one rather than the guessed one: it
+#  makes DID-NOT-RUN and READ-ZERO distinguishable, which is what let a wrong diagnosis be
+#  refuted in one run instead of being carried. *A sentinel earns its keep by making you
+#  wrong faster.*
 #
 #  0xdead cannot be produced by an unexecuted load, by RAM, or by any register this probe
 #  reads, so the three states are now distinct: 0xdead = DID NOT RUN, 0x0 = read zero,
@@ -292,10 +320,26 @@ t, alive, how = session(["put w 0x8c001800, 0x%08x" % LIVE] + load32(0x8c001800,
 row("live", printed(t, "r2"), "0x%x" % LIVE,
     "LIVENESS: guest store then guest load, through RAM")
 
+#  *** COPIED VERBATIM FROM THE WITNESS, NOT RE-DERIVED, AND THE FIRST VERSION OF THIS ROW
+#  WAS WRITTEN FROM MEMORY AND WAS WRONG. ***  It read `load16(0xa4000150)`; the real row is
+#  a 32-BIT load from 0xffd00010 masked to 16 bits.  Wrong address AND wrong width, so it
+#  read 0 -- and 0 is exactly what this control's own note says a RAM-backed window would
+#  give, i.e. it reported the precise defect it exists to detect.
+#
+#  I diagnosed that as host contention and wrote that reason into this file.  It was not:
+#  the SEED change (below) is what refuted it, because a step that never ran would have left
+#  0xdead and it left 0x0.  The seed earned its keep on its first run, on a different
+#  question from the one it was added for.
+#
+#  The general rule this file already states for citations applies to APPARATUS too: copy a
+#  sibling's control, do not re-derive it.  `gdrom_decline_probe.py` and the witness both
+#  carry this row; agreeing with them is the point, since the value of a shared control is
+#  that a failure is comparable across probes rather than novel to this one.
 A = Addr(CODE)
-t, alive, how = session(load16(0xa4000150, A))
-row("devsig sh4", printed(t, "r2"), "0x%x" % IPRD_RESET,
-    "DEVSIG: SH4 IPRD reset value; RAM would read 0")
+t, alive, how = session(load32(0xffd00010, A))
+g = printed(t, "r2")
+row("devsig sh4", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g,
+    "0x%x" % IPRD_RESET, "DEVSIG: SH4 IPRD reset value; RAM would read 0")
 
 A = Addr(CODE)
 t, alive, how = session(load16(GDROM_STAT, A))
@@ -425,8 +469,25 @@ row("R5 cond keep", printed(t, "r2"), "0xef",
 #  constant.  Three samples over the model's principal reachable states pin it: any
 #  constant, any zeroing, any OR, and idata itself all differ from the identity on at least
 #  one of them.
+#  *** THE DECLINED BYTE HERE IS 0xaa, NOT 0x55, AND THE CHANGE IS ONE CONSTANT THAT CLOSES
+#  A MEASURED ESCAPE. ***  With 0x55 the three declined values were {0x55, 0x55, 0x08},
+#  whose union is 0x5d -- so BITS 1, 5 AND 7 APPEARED IN NO PROBED VALUE, and R5/R5b/R5c
+#  were blind to any VALUE-CONDITIONAL store keyed on them.  The opus5 seat built one and
+#  measured all 20 rows identical to the fix tree:
+#
+#      +		if (idata >= 0x80)
+#      +			d->cond = idata;
+#
+#  Its plausible dress writes itself -- "0xa0 and 0xef are both >= 0x80, so high bytes are
+#  command codes; let them land" -- and a declined 0x88 then stores 0x88, whose bit 3 FORGES
+#  COND_DATA_AVAIL: the exact defect the store relocation exists to prevent.
+#
+#  {0x55, 0xaa, 0x08} spans all eight bits, so no conditional keyed on any single bit can
+#  pass all three.  The three rows now test the map on a spanning set rather than on an
+#  arbitrary one.  *Zero new rows; the cost of the original hole was that nobody asked which
+#  bits the probed values covered.*
 A = Addr(CODE)
-t, alive, how = session(store16(GDROM_COND, 0x0055, A) + load16(GDROM_COND, A))
+t, alive, how = session(store16(GDROM_COND, 0x00aa, A) + load16(GDROM_COND, A))
 row("R5b cond 00", printed(t, "r2"), "0x0",
     "FRESH pre-state: decline leaves cond at its reset 0")
 
@@ -545,6 +606,75 @@ t, alive, how = session(load16(GDROM_DATA, A, dest=6)
                         + store16(GDROM_COND, 0x0055, A))
 row("R11 crossbit", "%d|%d" % (t.count(A88_TEXT), len(COND_RE.findall(t))), "1|1",
     "both announce AFTER benign traffic armed an old bit")
+
+# ------------------------------------------------ R12  THE END-TO-END CONSEQUENCE
+#  *** EVERY OTHER ROW PINS THE CAUSE; THIS ONE PINS THE EFFECT. ***  Named in the
+#  adjudication pass by a PACKET-FED seat as the thing all nine of us missed: the probe
+#  checked the decline and the COND readback, and never exercised the READ PATH the whole
+#  fix exists to protect.
+#
+#  The declined byte is 0x08 -- COND_DATA_AVAIL itself.  Under the shipped fix d->cond is
+#  untouched, so the DATA read finds readiness clear and announces "no data available".
+#  Under any mutant that lets the declined value reach d->cond, readiness is FORGED, the
+#  read takes the payload branch instead, and the diagnostic never appears.
+#
+#  *** IT KEYS ON THE DIAGNOSTIC, NOT ON THE RETURNED VALUE, AND THE DEVICE FILE SAYS WHY
+#  IN SO MANY WORDS: *** the no-data path returns 0xffff, and "this device's TOC is
+#  memset(0xff), so 0xffff is LEGITIMATE PAYLOAD here and no returned value is
+#  self-identifying.  The DIAGNOSTIC is the truthfulness channel, not the value."  A row
+#  written against the value would be green under a mutant that forges readiness onto a TOC.
+#
+#  This discharges a CLAIM->ROW debt the round had missed: the fix's own comment asserts a
+#  declined write could "forge data-available ... or revoke a genuine one", which is a
+#  consequence claim about the DATA path, and until now no row observed that path at all.
+NODATA_TEXT = "read from GDROM_DATA with no data available"
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x0008, A) + load16(GDROM_DATA, A))
+row("R12 no forge", "%d" % t.count(NODATA_TEXT), "1",
+    "a DECLINED 0x08 does NOT unlock the DATA read path")
+
+# ------------------------------------------ R13  THE FOURTH STATEMENT OF THE ACCEPTED ARM
+#  *** THE 0xa0 ARM HAS FOUR STATEMENTS AND THIS DETECTOR PINNED TWO.  MEASURED ESCAPE,
+#  BUILT AND RUN BY THE opus5 SEAT: deleting `d->cmd_count = 0;` leaves all twenty other
+#  rows BYTE-IDENTICAL while restoring a guest-reachable HOST KILL. ***
+#
+#  R6 reads `d->busy & 0x08` and R8 reads `d->cond`; the mutant touches neither.  The two
+#  rows that ought to have caught it cannot, by construction.
+#
+#  WHY THE LINE IS LOAD-BEARING, and it is not this device's own arm that dies.  The
+#  GDROM_DATA *write* arm still holds a live exit(1) -- `fatal("Too much GDROM_DATA?")` --
+#  and it is documented UNREACHABLE on a three-leg warrant: cmd_count steps by 2, the == 12
+#  equality clears busy at the boundary, and **0xa0 resets it**.  THE THIRD LEG IS THIS
+#  LINE.  Delete it and the attack is `0xa0` -> six DATA words -> `0xa0` -> one DATA word,
+#  which is any guest issuing two GD-ROM commands in a row; the host dies on the first data
+#  write of the second command.  Measured: attack probe 5/5 exit0 on the fix tree, 3/5
+#  exit1 on the mutant, with an attribution control (same traffic, no re-arm) green on both.
+#
+#  *** AND IT IS A CONTRACT BREACH, NOT AN OUT-OF-CONTRACT ESCAPE. ***  Clause (e) claims
+#  "emptying either accepted arm (R6, R8, R9)".  The contract disclaims the GDROM_DATA READ
+#  path; this consequence lands in the WRITE path.
+#
+#  *** AND `PRETABLE.out` ENUMERATED `d->cmd_count` BY NAME AS A SITE-B BODY FIELD, TWICE,
+#  AND THEN NO ROW WAS WRITTEN. ***  That is #490's lost-prescription failure occurring in
+#  the very artifact that exists to prevent it, two sections after it says so.
+#
+#  The oracle is the absence of the kill, on a LATER access whose outcome depends on state
+#  the accepted arm set -- so it does not reach for the accept-side survival channel the
+#  header bans.  It doubles as the carrier for `gdromexitsix`'s absence record, whose
+#  warrant this round's diff edited without re-running the death measurement.
+TOOMUCH_TEXT = "Too much GDROM_DATA?"
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_DATA, 0x1111, A)
+                        + store16(GDROM_DATA, 0x2222, A)
+                        + store16(GDROM_DATA, 0x3333, A)
+                        + store16(GDROM_DATA, 0x4444, A)
+                        + store16(GDROM_DATA, 0x5555, A)
+                        + store16(GDROM_DATA, 0x6666, A)
+                        + store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_DATA, 0x7777, A))
+row("R13 recount", "%d|%s" % (t.count(TOOMUCH_TEXT), how), "0|exit0",
+    "0xa0 RE-ARMS cmd_count: two commands do not kill")
 
 # ------------------------------------------------------------------------------- result
 ok = sum(1 for _, o in rows if o)

@@ -486,6 +486,27 @@ MANIFEST = {
                                     "green -- a survival oracle at a refusal-effect site is "
                                     "the CHANNEL check's canonical vacuous row.  Named by "
                                     "the fable5 seat on pass 1, before the detector existed."),
+    #  widthkillclass RUNG-3 WITNESS, 2026-08-30, built by the agy seat -- a THIRD
+    #  compile-and-measure front end, on a transport independent of the Agent tool.
+    #  CLASS_WITNESS on the toclen/gdromcond precedent: its three kill rows INVERT the day
+    #  that class is fixed, so gating it would manufacture a regression.
+    #
+    #  It matters beyond its own row because it is the FIRST witness this project has for
+    #  the #337 class OUTSIDE dev_wdc.c: a guest choosing an ACCESS WIDTH ends the host, at
+    #  three widths, on an unmodified `-E sgi -e ip32`, with an ACCEPT control (the legal
+    #  8-byte store survives) pinning it to the WIDTH rather than to the offset being
+    #  unserviceable.  `.earlier.py` is the prior draft, kept because two versions existed
+    #  in /tmp and which one ran is a fact worth being able to check rather than recall.
+    "artifacts/widthkillclass/witness_20260830/sgi_re_width_witness.py": (CLASS_WITNESS,
+                                    "widthkillclass rung-3 on unmodified -E sgi -e ip32: a "
+                                    "guest sw/sh/sb to CRIME_RE_TLB_A (0xb5001000) each ends "
+                                    "the host at the len != 8 guard, 10/10, while the legal "
+                                    "8-byte store survives.  Ungated by design -- its kill "
+                                    "rows invert when the class is fixed."),
+    "artifacts/widthkillclass/witness_20260830/sgi_re_width_witness.earlier.py":
+        (CLASS_RESEARCH, "the earlier draft of that witness, preserved so which version ran "
+                         "is checkable rather than remembered"),
+
     "artifacts/gdromcondlies/witness_20260830/gdrom_cond_extras.py": (CLASS_RESEARCH,
                                     "the flood measurement beside that witness, preserved as "
                                     "evidence: the two ALREADY-de-fatalised guest-drivable "

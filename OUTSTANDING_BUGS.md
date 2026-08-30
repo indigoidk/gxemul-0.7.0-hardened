@@ -12984,3 +12984,42 @@ a *different* class: direction/offset rather than width.
 **21 is how many live terminating calls sit in that file's `DEVICE_ACCESS` handlers.** It is
 *not* a claim that 21 are individually reachable — `dev_dreamcast_gdrom.c:1055` stands as the
 proof that such a site can be unreachable and take a hand-derived warrant to establish it.
+
+### `storesidedead` -- a row that tests "the store had NO effect" passes when the store never ran
+
+*** THE SEED SENTINEL PROTECTS LOADS.  STORES HAVE NO EXECUTION WITNESS. ***  Named by the
+fable5 seat in `#496`'s adjudication pass, as a REFINE on that round's own finding.
+
+`#496` added `SEED = 0xdead` so an unexecuted LOAD is distinguishable from a load that
+genuinely read zero, and `bit()` returns `SEED-NEVER-RAN` so the sentinel cannot itself be
+misread as a set bit. Both are right; both are about the READ side.
+
+**A row whose oracle is the CONSEQUENCE OF A STORE has no equivalent.** If the store silently
+fails to execute, the device stays in its fresh state — **and for these rows the fresh state
+IS the want.** Seven of `gdrom_cond_probe.py`'s twenty-two: `R5b`, `R5c`, `R7`, `R7b`, `R10`,
+`R3`, `R4`. Six others (`R1`, `R2`, `R5`, `R6`, `R8`, `R9`) fail safe, because their wants are
+values only a live store produces.
+
+> **Why the controls do not cover it, which is what makes this a class rather than a note.**
+> The four control rows catch a WHOLE-RUN-DEAD rig, and they are per-run. The contention
+> actually measured on `#496` was **per-session intermittent** — the probe forks one gxemul
+> per row, so one row's session can die while every other row and all four controls run fine.
+> A per-run control cannot see a per-session failure.
+
+**NOT a floor breach.** Every enumerated mutant still reds when the apparatus runs, and no run
+has exhibited the false pass. It is a latent apparatus risk, not a measured escape, so it
+files under the stopping rule rather than reopening `#496`.
+
+**The sketch, and it costs nothing for five of the seven:** assert the decline announce —
+already in the transcript, count == 1 — inside the same row's `got` string. That announce is
+the store's own execution proof; it cannot appear unless the guest store reached the device
+handler. `R10` needs a trailing canary decline instead, since silence *is* its oracle.
+
+**`R3`/`R4` are the hard pair and no cheap form is known:** a mid-sequence store death leaves
+count == 1, which is exactly the want, so the announce trick is circular there.
+
+**Generality, with the sweep deliberately NOT proposed:** any pty-driven probe in this tree
+whose oracle is *"the device state did not change"* has the same hole, because not-changing is
+what a dead session produces. The population is unmeasured and a sweep would be `#392`'s
+shape. What is proposed is the write-time question — ***for each row, what does a dead session
+score?*** If the answer is the want, the row needs an execution witness.

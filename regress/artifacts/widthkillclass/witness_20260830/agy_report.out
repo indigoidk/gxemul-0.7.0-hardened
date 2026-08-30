@@ -1,0 +1,46 @@
+# AGY JOB 2 REPORT — Rung-3 Witness for Host-Kill Access Width Defect
+
+VERDICT: YES, RUNG-3 WITNESS ACHIEVED (10/10 PASS).
+
+## 1. Selected Defect Site & Target Machine
+- **Device & Site**: `src/devices/dev_sgi_re.c` `len != 8` guard on `CRIME_RE_TLB_A` (base offset `0x1000`):
+  `fatal("TODO: unimplemented len=%i for CRIME_RE_TLB_A\n", len); exit(1);`
+- **Machine**: `-E sgi -e ip32` (SGI O2, MIPS R10000, 64-bit Big-Endian).
+- **Address Mapping**: `dev_sgi_re_init` registers `sgi_re` at `0x15001000` (length `0x1000`). In MIPS uncached kernel segment (kseg1), guest instructions access `0xb5001000`.
+
+## 2. Mandatory Controls & Defect Oracles
+1. **Liveness Control (`live`)**: Planted `sw $t0, 0($a3)` followed by `lw $v0, 0($at)` to scratch RAM (`0xa0001800`), verifying `0x12345678` round-trips.
+2. **Device Signature Control 1 (`devsig stat`)**: Planted `lw $v0, 0($at)` to `CRIME_DE_STATUS` (`0xb5004000`), verifying device reset state `0x1e000000` (RAM reads 0).
+3. **Device Signature Control 2 (`devsig mode`)**: Planted `sw` then `lw` of `0x34` to `CRIME_DE_MODE_SRC` (`0xb5002000`), verifying non-zero register write/readback.
+4. **Accept Control (`accept sd`)**: Planted legal 64-bit doubleword store (`sd`, `len=8`) to `CRIME_RE_TLB_A` (`0xb5001000`), observing `exit0`.
+5. **Wrong-Width Defect Oracles (`tlb_a sw/sh/sb`)**:
+   - `sw` (4-byte): `exit1`, diagnostic `TODO: unimplemented len=4 for CRIME_RE_TLB_A`
+   - `sh` (2-byte): `exit1`, diagnostic `TODO: unimplemented len=2 for CRIME_RE_TLB_A`
+   - `sb` (1-byte): `exit1`, diagnostic `TODO: unimplemented len=1 for CRIME_RE_TLB_A`
+
+## 3. Measured Row Table on Committed, Unmodified Build
+
+```
+#497 SGI_RE_WIDTH WITNESS -- rung 3, unmodified -E sgi -e ip32.
+binary: /mnt/c/DocumentNoSnc/cc/GXEMUL/build/gxemul
+
+row            got          want         note                                           
+live           0x12345678   0x12345678   LIVENESS: guest store then guest load, through RAM ok
+devsig stat    0x1e000000   0x1e000000   DEVSIG: fresh CRIME_DE_STATUS = 0x1e000000; RAM = 0 ok
+devsig mode    0x34         0x34         DEVSIG: store 0x34 to DE_MODE_SRC reads back 0x34 ok
+accept sd      exit0        exit0        ACCEPT: legal 64-bit store (len=8) survives    ok
+SGIRE_CONTROL=OK
+
+tlb_a sw kill  exit1        exit1        32-bit store (sw, len=4) kills host emulator   ok
+tlb_a sw says  1            1            ATTRIBUTION: diagnostic cites len=4 for CRIME_RE_TLB_A ok
+tlb_a sh kill  exit1        exit1        16-bit store (sh, len=2) kills host emulator   ok
+tlb_a sh says  1            1            ATTRIBUTION: diagnostic cites len=2 for CRIME_RE_TLB_A ok
+tlb_a sb kill  exit1        exit1        8-bit store (sb, len=1) kills host emulator    ok
+tlb_a sb says  1            1            ATTRIBUTION: diagnostic cites len=1 for CRIME_RE_TLB_A ok
+
+SGIRE_WIDTH_WITNESS_RESULT=10/10
+SGIRE_WIDTH_WITNESS_DONE
+```
+
+## 4. Git Cleanliness
+- `git -C /mnt/c/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC status --porcelain`: clean.
