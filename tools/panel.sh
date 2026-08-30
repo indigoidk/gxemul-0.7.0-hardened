@@ -458,6 +458,19 @@ check() {   # name file
         #  seat that answered is NOT retried.
         say "        A WALL IS A MOMENT, NOT A STATE -- RE-FIRE THIS SEAT ONCE"
         say "        BY HAND before closing the round.  NOT done automatically."
+        #  *** SAY WHERE THE COMMAND IS.  The message used to stop at the line
+        #  above, leaving the operator to find one of seven differently-shaped
+        #  launches 200 lines up in this file -- at the exact moment a seat has
+        #  just been lost, which is the worst moment to make someone go looking.
+        #
+        #  IT POINTS RATHER THAN DUPLICATES.  Copying the invocation into this
+        #  message would create a second copy that drifts from the launch above
+        #  it, and this project has already carried a FALSE SEAT ROSTER for days
+        #  for exactly that reason.  The carrier seat table is the canonical one
+        #  and precommit section J holds it byte-identical to its tracked copy,
+        #  so a pointer there cannot go stale in silence.
+        say "        The invocation is in the seat table in tools/CLAUDE.md;"
+        say "        the brief is $BRIEF and the output goes to $f"
         return 2
     fi
 
