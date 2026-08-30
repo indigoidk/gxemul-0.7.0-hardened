@@ -1017,4 +1017,69 @@ else
           "$(grep -c 'DISASSEMBLY MISMATCH' "$FBLOG")" "0"
 fi
 
+#  ---------------------------------------------------------------------------------------
+#  #439/#440 PIT 8253 latch + LSB/MSB selector -- pitlatch / pitclobber.
+#
+#  WIRED HERE, ALONGSIDE footbridge_sites_probe.py, BECAUSE gate_hygiene.sh SAID SO.  Its
+#  own 17 -> 18 bump note reads: "Wiring it into gate_arm.sh alongside
+#  footbridge_sites_probe.py is the follow-up, and it wants an operator who can run that
+#  gate."  The probe execs `-E cats` and hand-assembles ARM, so this is the only gate whose
+#  machine it shares.
+#
+#  *** IT SHIPPED UNWIRED AND THE CARRIER SAID WHY THAT IS DANGEROUS: an unwired probe is
+#  exactly what shipped latent in cf4b083. ***  It has been dated-exempt in
+#  check_probe_wiring.py until 2026-09-20 (`wiringcliff`), and this discharges that debt --
+#  the exemption line comes out in the same edit, which is what stops a stale exemption
+#  outliving its cause.
+#
+#  CONTROLS FIRST AND SEPARATELY.  The probe's own header says it: "CONTROLS (if any is RED
+#  every row below is meaningless)".  C1 is a RAM liveness through the same decode, C2 reads
+#  CP15 c1 back to prove the MMU really went off, A1 is a device signature -- and arm T is
+#  the negative control that runs the same program with the MMU-disable instructions
+#  replaced by nops and requires it CANNOT produce the device's answer.  Under the boot-time
+#  MMU the low 256 MB alone is mapped, so a device row reads 0x0 WITH A LIVENESS ROW STILL
+#  GREEN, which is indistinguishable from an absent device.  That is why C2 and T exist and
+#  why a liveness row cannot stand in for them.
+PITLOG=$LOGDIR/pit8253_latch.log
+python3 pit8253_latch_probe.py "$PMAX" "$STUB" > "$PITLOG" 2>&1 || true
+
+#  A PRESERVED LOG IS VERIFIED BY ITS COMPLETION SENTINEL, NOT BY ITS EXISTENCE.  The probe
+#  gained PIT8253_LATCH_DONE specifically so this row could be written correctly the first
+#  time -- before it, the last line was a bare "PASS", a word that occurs in dozens of other
+#  contexts and cannot distinguish a COMPLETED run from a TRUNCATED one.
+if ! grep -q "PIT8253_LATCH_DONE" "$PITLOG"; then
+    note "pit8253 probe did not reach its completion sentinel; last lines follow"
+    tail -5 "$PITLOG" | sed 's/^/       /'
+    check "pit8253 probe completed" "no" "yes"
+else
+    grep -E "^  (ok|FAIL) " "$PITLOG" | sed 's/^/       /'
+
+    #  THE THREE CONTROLS PLUS THE MMU-ON NEGATIVE CONTROL, each pinned by name.  A count of
+    #  green rows would let a control go red while the total stayed acceptable.
+    for c in "C1 liveness" "C2 MMU state" "A1 device signature" "T  MMU-ON control"; do
+        check "pit8253 control: $c" \
+              "$(grep -c "^  ok   $c" "$PITLOG")" "1"
+    done
+
+    #  Per-row presence.  A row that silently stops being tested is the padded-column class,
+    #  so each is checked individually rather than by a total.  Eighteen rows: 4 controls +
+    #  E/A2 apparatus + R0..R11.
+    for v in "E  encodings" "A2 recompute stream" \
+             "R0 the run produced data" "R1 latch preserves programming" \
+             "R2 latch is not an error" "R3 latched read is not the reload" \
+             "R4 16-bit readback is the reload" "R5 one recompute per write pair" \
+             "R6 no transient count of zero" \
+             "R7 read and write flip-flops are separate" \
+             "R8 the latch is released by reading it" \
+             "R9 a mid-pair latch completes the pair and lets go" \
+             "R10 a Control Word rewinds the write flip-flop" \
+             "R11 ...and it does so PER COUNTER, not just counter 0"; do
+        check "pit8253 row green: $v" \
+              "$(grep -c "^  ok   $v" "$PITLOG")" "1"
+    done
+
+    #  The denominator against a LITERAL: a probe that loses rows cannot pass by shrinking.
+    check "pit8253 rows run" "$(grep -cE '^  (ok|FAIL) ' "$PITLOG")" "18"
+fi
+
 gate_end

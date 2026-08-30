@@ -47,9 +47,11 @@ falsifiable; one claiming completeness is not.  This one is designed to catch:
     * firing a completion event on a DECLINED write               (R7)
     * touching BUSY on a DECLINED write                           (R7b)
     * forging readiness so a later DATA READ finds data            (R12)
-    * emptying the FOURTH statement of the 0xa0 arm, which
-      re-arms cmd_count and is the third leg of another
-      site's unreachability warrant                                (R13)
+    * DELETING the fourth statement of the 0xa0 arm, which re-arms
+      cmd_count and is the third leg of another site's
+      unreachability warrant                                       (R13)
+    * REPLACING that statement's VALUE rather than deleting it --
+      a different edit with a different consequence                (R13)
 
 *** THE STAT LEG IS DECLARED APPARATUS, NOT COVERAGE, AND THIS SENTENCE USED TO CLAIM IT. ***
 An earlier contract read "touching BUSY or STAT".  `dreamcast_gdrom_update_stat()` recomputes
@@ -67,9 +69,25 @@ consumer, or a condition to `update_stat()`, RE-RUNS this death measurement.**
     * growing an effect on, or declining, site A's 0x0b           (R10)
     * collapsing the two latch bits into one                      (R11)
 
-It does NOT claim to observe anything on the GDROM_DATA read path, the DMA arms, or the
-handle_command() decode.  A later escape in those is OUTSIDE this contract, not a breach
-of it.
+It does NOT claim to observe anything on the DMA arms or the handle_command() decode.  A
+later escape in those is OUTSIDE this contract, not a breach of it.
+
+*** AND ONE DISCLOSURE THAT IS THE POINT OF HAVING A CONTRACT AT ALL, because it converts a
+silent hole into a stated one. ***  The cond-readback rows are anchored at a FINITE SET of
+declined inputs -- {0x00, 0x08, 0x09, 0x55, 0xaa, 0xff}.  A VALUE-CONDITIONAL store whose
+predicate is false for every one of them survives every row here.
+
+Two members of that family were found, from opposite directions, and BOTH are closed:
+`idata >= 0x80` (closed by 0xaa) and `idata >= 0xef` (closed by 0xff).  A third, `>= 0xb0`,
+was derived by a seat reviewing the 22-row version -- and the 0xff row added for the SECOND
+finding kills it too, which is worth noticing rather than filing: **two seats reasoning from
+different angles found one family, and one row covers all of it above 0xaa.**
+
+**What survives is a threshold K strictly inside (0xaa, 0xff)** -- less plausible as a
+careless edit than the round-number thresholds, and chasing every K is the unbounded shape
+this project has paid for once.  So it is DISCLOSED here rather than covered: a
+value-conditional forge triggering only on inputs outside the anchored set is
+OUT-OF-CONTRACT, not a breach.
 
 *** WHAT THE CONTRACT COST TO GET RIGHT, recorded because the first version was wrong. ***
 Pass 2 measured three escapes through the 16-row form and all three are now closed above:
@@ -501,6 +519,32 @@ t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
 row("R5c cond a0", printed(t, "r2"), "0xa0",
     "0xa0 pre-state: decline preserves the ACCEPTED value")
 
+#  *** SPANNING THE BITS KILLS SINGLE-BIT PREDICATES AND NOT CONJUNCTIONS.  Named by the
+#  codex seat AFTER the spanning repair had already landed -- which is the useful shape of a
+#  finding: accept the repair, then ask what it does NOT buy. ***
+#
+#  The three declined bytes {0x55, 0xaa, 0x08} union to 0xff, so no SINGLE-bit conditional
+#  can pass all three.  A CONJUNCTION can:
+#
+#      if ((idata & 0x09) == 0x09)
+#              d->cond = idata;
+#
+#  0x55 carries bit 0 and not bit 3; 0xaa and 0x08 carry bit 3 and not bit 0.  **NOT ONE OF
+#  THE THREE HAS BOTH**, so every existing row stays green while a declined 0x09 stores 0x09
+#  and forges COND_DATA_AVAIL.  0x09 is the smallest value carrying the readiness bit
+#  together with a bit no other probed value pairs it with.
+#
+#  HONEST BOUND, because a spanning argument invites exactly this overclaim: this closes
+#  two-bit conjunctions involving bit 3.  It does not close the general k-bit case, and the
+#  contract covers every unmodelled value while four samples do not.  Stated rather than
+#  implied.
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00ef, A)
+                        + store16(GDROM_COND, 0x0009, A)
+                        + load16(GDROM_COND, A))
+row("R5d cond 09", printed(t, "r2"), "0xef",
+    "a decline carrying BOTH bits 0 and 3 is refused too")
+
 # ------------------------------------------------------------------ R6, R8, R9  ACCEPTS
 #  These are the de-escalation ACCEPT rows.  They pin that legal writes still LAND -- which
 #  is the clause's own wording -- and landing means the EFFECT, not the silence.  A quiet
@@ -630,8 +674,53 @@ row("R11 crossbit", "%d|%d" % (t.count(A88_TEXT), len(COND_RE.findall(t))), "1|1
 NODATA_TEXT = "read from GDROM_DATA with no data available"
 A = Addr(CODE)
 t, alive, how = session(store16(GDROM_COND, 0x0008, A) + load16(GDROM_DATA, A))
-row("R12 no forge", "%d" % t.count(NODATA_TEXT), "1",
-    "a DECLINED 0x08 does NOT unlock the DATA read path")
+#  *** THE NODATA TOKEN ALONE IS NOT AN EXECUTION WITNESS, AND TWO SEATS SAID SO AGAINST A
+#  THIRD THAT CALLED THIS ROW SAFE. ***  It IS a positive observable -- but it is produced by
+#  the FRESH STATE as well: cond is 0 on a fresh device, so if the declining store never
+#  executes, the DATA read still finds no data and still announces.  The row would be green
+#  having observed nothing.
+#
+#  So the refined rule is not "wants a positive observable" but **wants an observable ONLY
+#  THE STORE CAN PRODUCE**.  The COND decline announcement is one: it cannot appear unless the
+#  guest store reached the device handler and was refused there.  Asserting both makes the row
+#  say "the store ran, AND it did not unlock the path" -- two claims, one session.
+m = COND_RE.search(t)
+row("R12 no forge", "%d|%s" % (t.count(NODATA_TEXT), m.group(1) if m else "absent"),
+    "1|08", "a DECLINED 0x08 does NOT unlock the DATA read path")
+
+# ------------------------------------------- R12b  THE ACCEPT SET HAS AN UPPER EDGE TOO
+#  *** ONE CHARACTER SWEEPS EVERY OTHER ROW IN THIS FILE, AND IT IS AN EQUALITY BECOMING AN
+#  INEQUALITY -- the shape a careless edit produces most easily. ***  Predicted by the codex
+#  seat from the diff alone:
+#
+#      -   } else if (idata == 0xef) {
+#      +   } else if (idata >= 0xef) {
+#
+#  Every probed value behaves identically: 0xa0 still takes the first arm, 0xef still takes
+#  the second, and every declined value this file drives (0x55, 0xaa, 0x08, 0x09, 0x00) is
+#  BELOW 0xef.  So the accept set silently grows an upper tail -- and 0xff then stores 0xff
+#  into cond, forging COND_DATA_AVAIL, *and* fires a completion event for a command that was
+#  never issued.  Both halves of the defect this round exists to prevent, from one keystroke.
+#
+#  The row drives 0xff and requires the DECLINE: the diagnostic present, cond unchanged from
+#  an anchored 0xa0, and no ASIC event.  **Three channels in one row on purpose** -- the
+#  mutant's two consequences land on different ones, and a row that watched only cond would
+#  miss the forged event while a row that watched only the event would miss the forged
+#  readiness.
+#
+#  This is the ACCEPT SET's boundary rather than the store's identity, so it is not covered
+#  by R5* however many pre-states those grow: they all drive values the mutant still
+#  declines.
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_COND, 0x00ff, A)
+                        + load16(GDROM_COND, A, dest=2)
+                        + load32(SYSASIC_PEND1, A, dest=3))
+m = COND_RE.search(t)
+row("R12b cond ff", "%s|%s|%s" % (m.group(1) if m else "absent",
+                                  printed(t, "r2"),
+                                  bit(t, "r3", GDROM_EVENT_BIT)),
+    "ff|0xa0|clear", "0xff is DECLINED: no store, no event, announced")
 
 # ------------------------------------------ R13  THE FOURTH STATEMENT OF THE ACCEPTED ARM
 #  *** THE 0xa0 ARM HAS FOUR STATEMENTS AND THIS DETECTOR PINNED TWO.  MEASURED ESCAPE,
@@ -673,8 +762,48 @@ t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
                         + store16(GDROM_DATA, 0x6666, A)
                         + store16(GDROM_COND, 0x00a0, A)
                         + store16(GDROM_DATA, 0x7777, A))
-row("R13 recount", "%d|%s" % (t.count(TOOMUCH_TEXT), how), "0|exit0",
-    "0xa0 RE-ARMS cmd_count: two commands do not kill")
+#  *** R13's WANT IS A NULL OUTCOME, AND A NULL OUTCOME IS WHAT A DEAD SESSION PRODUCES. ***
+#  `0|exit0` -- no kill token, host alive -- is BIT-IDENTICAL to a run in which none of these
+#  nine stores executed at all.  That is the `storesidedead` class, and this row drives more
+#  stores than any other, so it has the most ways to die silently: *a row that drives a longer
+#  sequence has MORE ways to die quietly, not fewer*, which inverts the intuition that a
+#  richer row is a stronger row.
+#
+#  THE EXECUTION WITNESS COSTS NOTHING AND WAS FOUND BY A SEAT LOOKING FOR IT.  The sixth
+#  DATA word completes the 12-byte packet and DISPATCHES: `cmd[0]` is 0x11 (the low byte of
+#  0x1111), which no case implements, so `handle_command()`'s latched default arm announces
+#  `[ dreamcast_gdrom: handle_command: unimplemented command 0x11 -- declined.  (once) ]`.
+#
+#  **That token fires on the correct build AND on the mutant** -- it comes from word 6, and
+#  the mutant's kill lands on word 7 -- so folding it in converts R13's want from a NULL
+#  outcome to a POSITIVE OBSERVABLE without weakening the kill.  A session whose stores never
+#  ran cannot produce it.
+#
+#  *THE GENERAL DISCRIMINATOR, which is better than the row enumeration the filed class
+#  carries: a row wanting a POSITIVE observable is store-death-safe; a row wanting a NULL
+#  outcome is not.*  The one refinement is that the positive observable must be one only the
+#  STORE can produce -- R12's no-data diagnostic is positive and is ALSO produced by the fresh
+#  state, which is why R12 remains a member of the class and this row no longer is.
+#  *** AND THE TOKEN CLOSED A SECOND MUTANT NOBODY WAS LOOKING FOR, WHICH IS THE PART WORTH
+#  RECORDING. ***  A different seat, reviewing the version WITHOUT this token, showed that
+#  R13 pinned less than its comment claimed:
+#
+#      d->cmd_count = 1;      /* was = 0 -- a REPLACEMENT, not a deletion */
+#
+#  The six words then step 1, 3, 5, 7, 9, 11 -- **the `== 12` equality NEVER FIRES**, so busy
+#  is never cleared, no command ever dispatches, and the seventh word is safe.  The old
+#  oracle (`0 kills | exit0`) is exactly that mutant's behaviour, so it escaped: R13 pinned
+#  *"the leftover is not still 12"*, NOT *"the fourth statement is `= 0`"*.
+#
+#  **The dispatch token reds it**, because under `= 1` the packet never completes and
+#  `handle_command()` is never reached.  So a witness added for the store-death class also
+#  closed a value-replacement mutant -- two seats reasoning about different defects, one row.
+#
+#  *Which is the argument for execution witnesses generally: a row that proves its own
+#  machinery ran gets, for free, every mutant that works by stopping the machinery.*
+DISPATCH_TEXT = "handle_command: unimplemented command 0x11"
+row("R13 recount", "%d|%s|%d" % (t.count(TOOMUCH_TEXT), how, t.count(DISPATCH_TEXT)),
+    "0|exit0|1", "0xa0 RE-ARMS cmd_count: two commands do not kill")
 
 # ------------------------------------------------------------------------------- result
 ok = sum(1 for _, o in rows if o)

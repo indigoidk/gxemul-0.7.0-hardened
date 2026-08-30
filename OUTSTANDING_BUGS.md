@@ -13023,3 +13023,121 @@ whose oracle is *"the device state did not change"* has the same hole, because n
 what a dead session produces. The population is unmeasured and a sweep would be `#392`'s
 shape. What is proposed is the write-time question — ***for each row, what does a dead session
 score?*** If the answer is the want, the row needs an execution witness.
+
+## 2026-08-30 (later) -- the sgi_re census, and the width class is now WITNESSED
+
+### `widthkillclass` -- RUNG-3 WITNESS, 10/10, and it is the first for this class outside `dev_wdc.c`
+
+Built by the agy seat on an unmodified `-E sgi -e ip32`. Preserved at
+`regress/artifacts/widthkillclass/witness_20260830/`.
+
+| row | result |
+|---|---|
+| `sw` (len=4) to `CRIME_RE_TLB_A` | `exit1` — `TODO: unimplemented len=4 for CRIME_RE_TLB_A` |
+| `sh` (len=2) | `exit1` — len=2 |
+| `sb` (len=1) | `exit1` — len=1 |
+| **`sd` (len=8), the ACCEPT control** | **`exit0` — survives** |
+
+**That accept row is what makes it a WIDTH defect rather than an unserviceable offset**, which
+is a different and already-fixed class. Plus both mandatory controls: liveness through RAM,
+and device-signature twice (`CRIME_DE_STATUS` reads its reset `0x1e000000` where RAM reads 0).
+
+The guest address `0xb5001000` was **verified against `machine_sgi.c` and the device's own
+`memory_device_register`**, not taken from the report.
+
+`CLASS_WITNESS`, deliberately ungated: its kill rows invert the day the class is fixed.
+
+### `sgirekills` -- 20 of 21 reachable, and ONE IS PROVABLY DEAD CODE
+
+Four classes, which means **at least four candidate rounds, not one**:
+
+| class | n | shape |
+|---|---:|---|
+| WIDTH | 7 | `len != 8` on TLB_A/B/C, TEX, LINEAR_A/B; plus `sgi_de: len = %i` |
+| DIRECTION | 6 | `TODO: read from ...` — reached by a **legal-width 8-byte READ** |
+| BADVAL | 6 | one `sgi_de` drawing op, five `sgi_mte` mode/depth/bytemask arms |
+| BADOFFSET | 1 | any access to an unregistered sub-window |
+
+> ### The unreachable one must NOT be "fixed", and I verified this by opening the file
+>
+> `[ sgi_mte: UNIMPLEMENTED read/write len %i ]` sits in the trailing `else` of
+> `if (len == 4) { … } else if (len != 4) { … } else { fatal; exit(1); }`.
+>
+> For every integer `len` one of the first two arms is taken, so the third **can never
+> execute**. A round that de-fatalised it would be editing unreachable code and its detector
+> could carry no row — the vacuous shape in its purest form. The census is what stops that
+> being attempted.
+
+**Honest bound:** reachability is derived from address-decode reading, not measured, *except*
+for the WIDTH class, which now has the witness above. DIRECTION, BADVAL and BADOFFSET have no
+witness, and a round on any of them owes one first.
+
+**The open scope question this does NOT settle:** a WIDTH guard and a DIRECTION guard sit in
+the *same arm* at the same offset and are still different semantic classes. Whether they
+nonetheless share one fix design is exactly what the next research pass should answer rather
+than assume.
+
+## 2026-08-30 (later still) -- two findings from farming codex while agy was quota-walled
+
+### `widthkillclass` -- the pcc2 half is HALF what I filed, and the mechanism is verified
+
+I filed "dev_pcc2.c 10 sites" with the caveat that its instantiation was not checked and not
+claimed. It is now checked: **5 of the 10 width anchors are guest-reachable.**
+
+`cpus/cpu_m88k_instr_loadstore.c`, under `#ifndef LS_1` — i.e. every **non-byte** access:
+
+```c
+	/*  Check alignment:  */
+	if (addr & (LS_SIZE - 1)) {
+		m88k_exception(cpu, M88K_EXCEPTION_MISALIGNED_ACCESS, 0);
+```
+
+**and that precedes `cpu->memory_rw()`.** So a misaligned non-byte access raises a *guest*
+exception and never reaches the device handler.
+
+MVME187 is the only machine that instantiates it (`PCC2_BASE = 0xfff42000`), and the handler
+does `relative_addr %= PCC2_SIZE` with `PCC2_SIZE == 0x40` — **so an odd register offset stays
+odd in all 64 aliases.** Odd-offset width guards are unreachable by construction:
+
+| unreachable | reachable |
+|---|---|
+| VECBASE `0x03`, PSCALEADJ `0x15`, T1CTL `0x17`, T1ICR `0x1b`, SCCICR `0x1d`, SCCRX `0x1f`, SCSIICR `0x2f` | GENCTL `0x02`, T2CTL `0x16`, T2ICR `0x1a`, SCCERR `0x1c`, SCCTX `0x1e` |
+
+**Class total drops 16 → 11** (sgi_re 6 witnessed + pcc2 5 unwitnessed). The 16 *was* a search
+space, exactly as the filing said — and the caveat is why the number could be corrected rather
+than defended.
+
+Two adjacent non-width kills are **not** this class: a BADVAL reachable by a *byte* write of
+`0x04` to GENCTL (which the alignment rule does not touch), and a BADOFFSET. A third is UNKNOWN
+and was reported as UNKNOWN rather than guessed.
+
+### `n6` footbridge -- the design is done, and an ACCEPT round would RED THE GATE by succeeding
+
+**The title says nine; there are eight.** Three numbers are in circulation and each is right
+about something different: a comment-aware census finds **10** live `exit(`, **2** of which sit
+in `DEVINIT` (`unimpl machine type` — construction-time, no guest chooses its machine type),
+leaving **8** guest-reachable. The ninth was fixed by `#432` (`35302f2`), confirmed by
+`git log -S`. The title is left unedited — titles are identity strings other records grep — but
+no future round may quote the nine.
+
+**Two dispositions across three round-groups:**
+
+| group | n | disposition |
+|---|---:|---|
+| `+0x188` IRQEnable READ | 1 | **ACCEPT** — documented read, and the model *already computes* `d->irq_enable` then dies. Delete the kill, keep the value, no latch, no message. |
+| invalid-DIRECTION interrupt accesses (`+0x180`, `+0x184`, `+0x280`, `+0x284`, `+0x18c`) | 5 | decline + bounded announce. **`+0x18c` additionally must not expose `d->irq_enable`.** |
+| SDRAM `+0x100`, `+0x104` reads | 2 | decline + an **accurate** announce: these are legal R/W registers the model does not implement, so the message must say *"unimplemented read"*, not *"invalid access"*. |
+
+> ### The trap, and it is the sharpest part
+>
+> `gate_arm.sh` contains `check "footbridge: the one-instruction kill arm still dies"` keyed on
+> row `K1` — and **K1 is the `+0x188` ENABLE-SET read the ACCEPT round would fix.** The round
+> turns a green gate red *by succeeding*. K1 must be repointed at `+0x18c` in the same commit,
+> or the round reads its own success as a regression.
+
+And once the *last* live kill is repaired, the probe's failability leg — which currently rests
+on a real product defect still being there — must become a mutation leg. That is a planned cost
+of finishing the cluster, not a surprise to discover at the end.
+
+**Use a per-site latch bitmask, not one shared latch**, or the first access kind to fire
+suppresses the first useful report for every other — `#490`'s measured `M3shared` shape.

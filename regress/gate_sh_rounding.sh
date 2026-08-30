@@ -1250,7 +1250,7 @@ else
         else
             check "gdromcond result parses" "yes" "yes"
             #  the denominator against a LITERAL: a probe that loses rows cannot pass
-            check "gdromcond rows run"     "${condres#*/}" 22
+            check "gdromcond rows run"     "${condres#*/}" 24
             check "gdromcond rows correct" "${condres%/*}" "${condres#*/}"
         fi
 
@@ -1261,9 +1261,10 @@ else
         for v in "live" "devsig sh4" "devsig st" "devsig cnt" \
                  "R1 a88 says" "R1b a88 trk" "R3 a88 x3" "R10 a88 nop" \
                  "R2 cond says" "R2b cond trk" "R4 cond x3" \
-                 "R5 cond keep" "R5b cond 00" "R5c cond a0" \
+                 "R5 cond keep" "R5b cond 00" "R5c cond a0" "R5d cond 09" \
                  "R6 a0 busy" "R8 a0 echo" "R9 ef event" \
-                 "R7 no event" "R7b cond st" "R11 crossbit" "R12 no forge" "R13 recount"; do
+                 "R7 no event" "R7b cond st" "R11 crossbit" \
+                 "R12 no forge" "R12b cond ff" "R13 recount"; do
             n=$(count "$CONDLOG" "^$v  .*ok$")
             check "gdromcond row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
         done

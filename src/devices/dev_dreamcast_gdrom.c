@@ -450,26 +450,50 @@ typedef char gdrom_w_fits_its_carriers[
  *
  *  *** THIS COUNT SAID "Nine bits today" AFTER #496 MADE IT ELEVEN, and it was
  *  caught by a panel seat rather than by anything mechanical.  The count is left
- *  here rather than deleted BECAUSE IT HAS A DERIVER -- TAB-ANCHORED:
+ *  here rather than deleted BECAUSE IT HAS A DERIVER, and this is the THIRD
+ *  spelling of it -- the first two were both wrong, in opposite directions:
  *
- *      grep -c '^<TAB>GDROM_W_.*_B,' src/devices/dev_dreamcast_gdrom.c   ->  11
+ *      grep -c '^[[:blank:]]GDROM_W_.*_B,' src/devices/dev_dreamcast_gdrom.c
+ *
+ *  RUN IT: 11.  Verified by running, not by reading, because the previous two
+ *  spellings were verified by reading and both were wrong.
  *
  *  A number in a durable record names the command that produces it, or it becomes
  *  a wrong record on the next edit -- which is exactly what this one did. ***
  *
  *  *** AND THE FIRST DERIVER SHIPPED HERE WAS ITSELF WRONG, IN THE MOST INSTRUCTIVE
- *  WAY AVAILABLE: it was the bare `_B,` pattern, which returns FIFTEEN -- three
- *  mutant-table comments, plus THIS COMMENT, whose quotation of the pattern MATCHED
- *  THE PATTERN. ***  A deriver shipped to repair a wrong count, contaminated by the
+ *  WAY AVAILABLE: it was the bare `_B,` pattern, which matches MORE THAN THE ELEVEN
+ *  -- mutant-table comments, plus THIS COMMENT, whose quotation of the pattern MATCHES
+ *  THE PATTERN. ***
+ *
+ *  *** THE NUMBER IS DELIBERATELY NOT WRITTEN HERE, AND THAT IS THE WHOLE POINT.
+ *  It was "FIFTEEN" when the defect was found.  A seat re-derived it hours later and
+ *  got SEVENTEEN, because the commit repairing the defect had itself added two more
+ *  comment lines quoting `_B,`.  By the next reading it was EIGHTEEN.  **The
+ *  cautionary count decays every time anyone WRITES ABOUT IT** -- it is a
+ *  self-referential quantity, and pinning it in prose is the exact frozen-number
+ *  defect this comment exists to describe, reproduced inside the description. ***  A deriver shipped to repair a wrong count, contaminated by the
  *  same comment-inclusion the repair was about, and self-matching besides.  Caught
  *  by a seat re-deriving rather than reading.
  *
- *  Two properties make the form above safe and both are load-bearing: the TAB anchor
- *  cannot match a comment line (which opens with space-star), and the `_B,` suffix
- *  excludes the GDROM_W_NBITS terminator, which is not a bit.  The pattern is written
- *  with <TAB> spelled out rather than as a literal tab so that this comment still
- *  cannot match it -- before quoting any string a tool matches on, ask what that tool
- *  will do with your copy of it.
+ *  Two properties make the form above safe, and both were CHECKED BY RUNNING IT:
+ *  `^[[:blank:]]` requires the very next character after ONE blank to be `G`, which a
+ *  comment line cannot satisfy because it has `*` there -- so the eleven matches are
+ *  the eleven enumerators and nothing else, zero comment lines among them; and the
+ *  `_B,` suffix excludes the GDROM_W_NBITS terminator, which is not a bit.
+ *
+ *  *** AND THE SECOND SPELLING WAS BROKEN BY THE ATTEMPT TO DEFANG IT. ***  It read
+ *  `grep -c '^<TAB>GDROM_W_.*_B,'` -- with <TAB> spelled out, on the theory that a
+ *  literal tab would make this comment self-match.  **A literal `<TAB>` means nothing
+ *  to grep: as written it matched ZERO lines.**  So the first spelling counted fifteen
+ *  by matching comments including itself, and the "fix" counted zero by being inert.
+ *  Caught by the codex seat, which RAN it.
+ *
+ *  The lesson is not about tabs.  **A DERIVER IS A COMMAND, AND A COMMAND IN A
+ *  DURABLE RECORD IS ONLY WORTH THE RUN THAT PRODUCED ITS NUMBER.**  Both broken
+ *  spellings were verified by READING, and reading is exactly what cannot distinguish
+ *  a pattern that matches too much from one that matches nothing -- the two failures
+ *  this file already records for greps, arriving here in the same comment, twice.
  */
 typedef char gdrom_w_masks_disjoint[
     ((GDROM_W_LEN + GDROM_W_NODATA + GDROM_W_NOTWAIT + GDROM_W_OVERREAD +

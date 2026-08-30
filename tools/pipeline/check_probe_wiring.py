@@ -664,7 +664,12 @@ MANIFEST = {
 #  exempted here rather than wired here: gate_hygiene's own comments record FOUR probes that
 #  shipped latently RED because the commit that added them never fired the gate.
 EXEMPT = {
-    "pit8253_latch_probe.py":   ("2026-09-20", "wants gate 14 (gate_arm; -E cats + STUB)"),
+    #  pit8253_latch_probe.py's exemption is DISCHARGED, 2026-08-30 -- it is now wired into
+    #  gate_arm.sh beside footbridge_sites_probe.py, which is the home gate_hygiene.sh's own
+    #  bump note named for it ("wants an operator who can run that gate").  The entry is
+    #  DELETED rather than dated forward, in the SAME edit that added the wiring, because a
+    #  wired probe that keeps an exemption is a STALE EXEMPTION and this checker reds on it.
+    #  Seven exemptions remain.
     "sh4_bsc_width_probe.py":   ("2026-09-20", "wants gate 10 (gate_sh_rounding; -E landisk)"),
     "fbpending_drain_probe.py": ("2026-09-20",
                                  "REPORT-ONLY by default: EXPECT_CAP must be set before a "
@@ -1003,6 +1008,43 @@ def _exline(key):
     return '    "%s":   ("%s", "%s"),\n' % (key, date, why)
 
 
+def _pick_exempt_detector():
+    """The selftest's exemplar is DERIVED, never hardcoded.
+
+    *** THIS FUNCTION EXISTS BECAUSE THE SELFTEST BROKE THE DAY AN EXEMPTION WAS
+    DISCHARGED, WHICH IS THE ONE EVENT IT SHOULD HAVE BEEN CELEBRATING. ***  Four of its
+    mutants named `pit8253_latch_probe.py` literally.  When that probe was wired into
+    gate_arm.sh and its exemption deleted -- exactly the outcome the EXEMPT table exists
+    to drive toward -- three mutants raised KeyError on the missing entry and the fourth
+    had its premise inverted.  `precommit_check.sh` reported THE PROBE-WIRING CHECKER CAN
+    NO LONGER BE SHOWN TO FAIL, correctly.
+
+    So the harness punished progress: doing the right thing to the tree broke the tool
+    that asks for it.  A hardcoded exemplar is a frozen claim about a table designed to
+    empty, and swapping in another name would only move the tripwire to the next
+    discharge.
+
+    Any exempt DETECTOR serves: exempt means unwired, which is the precondition all four
+    mutants need.  Sorted for determinism, so a failure names the same probe twice.
+
+    *** AND THE PICK IS VERIFIED, NOT MERELY CHOSEN. ***  `_st_apply` mutates by exact
+    string replacement, and `_exline()` reconstructs a ONE-LINE entry from the table.  Some
+    EXEMPT entries are wrapped across two source lines, so their reconstruction matches
+    nothing and the mutant raises MUTANT-DID-NOT-APPLY.  The first derivation shipped without
+    this check and failed on the very next candidate -- a derivation that picks blind just
+    moves the hardcoding from a NAME to a FORMATTING ASSUMPTION.
+    """
+    with open(__file__, encoding="utf-8", newline="") as _f:
+        src = _f.read()
+    for name in sorted(EXEMPT):
+        cls = MANIFEST.get(name, (None,))[0]
+        if cls != CLASS_DETECTOR:
+            continue
+        if src.count(_exline(name)) == 1:
+            return name
+    return None
+
+
 PIT_RUN = '\npython3 pit8253_latch_probe.py "$PMAX" "$STUB" > "$PLOG" 2>&1 || true\n'
 #  Four shapes of MENTION, none of which is an invocation.  The third is the live
 #  gate_hygiene.sh:331 shape: one non-comment line carrying the basename AND `python3`,
@@ -1110,23 +1152,37 @@ def selftest(verbose=False):
     rg, chk = fresh()
     case("M0  unmutated copy is GREEN", 0, "PROBEWIRING_PASS", chk, rg)
 
-    rg, chk = fresh(); _st_apply(chk, _exline("pit8253_latch_probe.py"), "")
-    case("M1  an unwired detector is NAMED", 1,
-         "UNWIRED DETECTOR  pit8253_latch_probe.py", chk, rg)
+    #  THE EXEMPLAR IS DERIVED.  See _pick_exempt_detector(): naming one literally is what
+    #  broke this selftest the day an exemption was discharged.
+    EX = _pick_exempt_detector()
+    if EX is None:
+        print("  SKIP  M1/M2/M2b/M3 -- no exempt DETECTOR remains to mutate.")
+        print("        That is the EXEMPT table doing its job, not a defect.  When the last")
+        print("        exemption is discharged these four mutants have nothing to say, and")
+        print("        the checker's OTHER mutants still pin every rule they cover.")
+    else:
+        _nl = chr(10)
+        EX_RUN = ('%spython3 %s "$PMAX" "$STUB" > "$SELFTEST_LOG" 2>&1 || true%s'
+                  % (_nl, EX, _nl))
+        EX_MENTIONS = PIT_MENTIONS.replace("pit8253_latch_probe.py", EX)
 
-    rg, chk = fresh(); _st_apply(chk, _exline("pit8253_latch_probe.py"), "")
-    _st_append(os.path.join(rg, "gate_arm.sh"), PIT_MENTIONS)
-    case("M2  4 MENTIONS do not count as wiring", 1,
-         "UNWIRED DETECTOR  pit8253_latch_probe.py", chk, rg)
+        rg, chk = fresh(); _st_apply(chk, _exline(EX), "")
+        case("M1  an unwired detector is NAMED", 1,
+             "UNWIRED DETECTOR  %s" % EX, chk, rg)
 
-    rg, chk = fresh(); _st_apply(chk, _exline("pit8253_latch_probe.py"), "")
-    _st_append(os.path.join(rg, "gate_arm.sh"), PIT_RUN)
-    case("M2b SATISFIABLE: a real invocation turns it green", 0, "PROBEWIRING_PASS",
-         chk, rg, forbid="UNWIRED")
+        rg, chk = fresh(); _st_apply(chk, _exline(EX), "")
+        _st_append(os.path.join(rg, "gate_arm.sh"), EX_MENTIONS)
+        case("M2  4 MENTIONS do not count as wiring", 1,
+             "UNWIRED DETECTOR  %s" % EX, chk, rg)
 
-    rg, chk = fresh(); _st_append(os.path.join(rg, "gate_arm.sh"), PIT_RUN)
-    case("M3  wired AND still exempt -> STALE EXEMPTION", 1,
-         "STALE EXEMPTION  pit8253_latch_probe.py", chk, rg)
+        rg, chk = fresh(); _st_apply(chk, _exline(EX), "")
+        _st_append(os.path.join(rg, "gate_arm.sh"), EX_RUN)
+        case("M2b SATISFIABLE: a real invocation turns it green", 0, "PROBEWIRING_PASS",
+             chk, rg, forbid="UNWIRED")
+
+        rg, chk = fresh(); _st_append(os.path.join(rg, "gate_arm.sh"), EX_RUN)
+        case("M3  wired AND still exempt -> STALE EXEMPTION", 1,
+             "STALE EXEMPTION  %s" % EX, chk, rg)
 
     rg, chk = fresh()
     _st_append(os.path.join(rg, "gate_sh_rounding.sh"),
