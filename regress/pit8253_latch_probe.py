@@ -627,6 +627,23 @@ def main():
         % (rL.get(6, -1), rL.get(7, -1), rL.get(2, -1), rL.get(9, -1)))
 
     print("\n  %s" % ("PASS" if ok else "FAIL"))
+
+    #  *** A COMPLETION SENTINEL, ADDED BEFORE THIS PROBE IS GATE-WIRED RATHER
+    #  THAN AFTER. ***  Until now the last thing this printed was a bare "PASS" or
+    #  "FAIL" -- a word that occurs in dozens of other contexts and is therefore not
+    #  uniquely greppable, so nothing downstream could tell a COMPLETED run from a
+    #  TRUNCATED one.
+    #
+    #  This project's rule is that a preserved log is verified by its completion
+    #  sentinel and not by its existence, and its measured cost is real: kill drivers
+    #  that read neither exit status nor sentinel scored a CRASHED mutant purely by
+    #  how far it got (`killdrivercrash`), and a probe that printed a score and then
+    #  died would have been scored normally.
+    #
+    #  This probe is scheduled for gate 14 by 2026-09-20 (`wiringcliff`).  Adding the
+    #  sentinel now means the gate row that wires it can be written correctly the
+    #  first time, instead of shipping a check that cannot see a truncation.
+    print("PIT8253_LATCH_DONE")
     sys.exit(0 if ok else 1)
 
 

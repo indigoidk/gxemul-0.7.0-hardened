@@ -12874,3 +12874,50 @@ bounded drain, then a descriptive failure.
 *Found by auditing rows with empty ledger notes. Of 87 such open rows, **85 are documented
 here** and only two were undocumented anywhere — the empty field was schema redundancy, and
 the stale STATE was the real defect. Only opening the source found it.*
+
+## 2026-08-30 -- eight probe-wiring exemptions expire on one day
+
+### `wiringcliff` -- measured, and the shape is better than the count
+
+    check_probe_wiring.py --today 2026-09-19   ->  PROBEWIRING_PASS  (46/54 gated, 8 exempt)
+    check_probe_wiring.py --today 2026-09-21   ->  PROBEWIRING_FAIL  8 problem(s)
+
+**Every commit after 2026-09-20 is blocked** until all eight are wired or the dates move.
+The checker is right to do that — a dated exemption that never comes due is not an
+exemption — but eight coming due together is a scheduling hazard rather than a deadline.
+
+**The regress review named four; the expiry is shared by eight**, with four distinct
+remedies. It was right about the *single-leg-mode* cluster specifically:
+
+| probe | what it needs |
+|---|---|
+| `wdc_altoffset_probe` / `_sig_` / `_4bit_` / `wdc_addtoinbuf` | single-leg mode — a design round |
+| `pit8253_latch_probe` | gate 14 (`-E cats`) — mechanical |
+| `sh4_bsc_width_probe` | gate 10 (`-E landisk`) — mechanical |
+| `hpcmips_ctor_probe` | a construction gate — one decision |
+| `fbpending_drain_probe` | `--expect-cap N` — one measurement |
+
+**Three of the four cheap ones can ship before the wdc design round even starts**, which
+shrinks the cliff from eight to four before it arrives. Each is independently shippable.
+
+> ### One of the eight was about to be wired with no way to detect a truncation
+>
+> `pit8253_latch_probe.py`'s last output was a bare `PASS`/`FAIL` — not uniquely greppable —
+> and its only screaming token was `print("MEASURED")`, a **mid-run section header a
+> truncated log still contains**. A gate row written against it could not have told a
+> completed run from a killed one: the `killdrivercrash` class arriving in new work rather
+> than old. **Fixed pre-emptively** — it now emits `PIT8253_LATCH_DONE` on both the pass and
+> fail paths, because a completed failure is not a truncation.
+
+> ### And a methodological correction worth more than the fix
+>
+> A sweep for probes lacking a `_DONE`/`_PASS` token returned **34 of 46**. That number is
+> meaningless: gate 10 verifies its probe by grepping `SH_ROUND_RESULT=`, a perfectly good
+> completion marker in a different shape. The convention is per-probe and per-gate, so
+> **there is no 34-probe defect and the question is not sweepable** — it is *"does this
+> probe's consumer verify completion, and by what?"*, one probe at a time.
+>
+> It was caught because the pattern flagged `sh4_bsc_width_probe.py`, which I had confirmed
+> compliant ten minutes earlier. **A pattern that selects the wrong set produces a clean,
+> confident, wrong population** — the third instance in one day, after the `outcomegap`
+> recount and the empty-note audit.
