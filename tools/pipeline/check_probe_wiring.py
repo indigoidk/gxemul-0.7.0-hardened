@@ -486,6 +486,32 @@ MANIFEST = {
                                     "green -- a survival oracle at a refusal-effect site is "
                                     "the CHANNEL check's canonical vacuous row.  Named by "
                                     "the fable5 seat on pass 1, before the detector existed."),
+    #  #497 PASS 1, the opus5 seat, 2026-08-30.  CLASS_RESEARCH: these are EVIDENCE preserved
+    #  so two measured escapes can be re-run rather than believed, not tests owed a gate.
+    #
+    #  They matter more than a usual artifacts drop because the seat DISCHARGED THE WITNESS
+    #  OBLIGATION with them -- 26/26 across all six sites in both directions, where the round's
+    #  original witness covered one site and stores only.  That settled a live scope
+    #  disagreement between two seats by measurement instead of by argument.
+    #
+    #  `opus497_read_probe.py` is the re-aimed witness (its `lw` rows are the ones that expose
+    #  the writeflag-conjunct escape); `latch_probe.py` drives two sites in ONE session, which
+    #  is the only shape that can see a latch-bit collision; the three `apply_*.py` build the
+    #  fix and the two mutants.
+    "artifacts/widthkillclass/opus_p1_20260830/opus497_read_probe.py":
+        (CLASS_RESEARCH, "#497 pass-1: the witness re-aimed to all six sites and BOTH "
+                         "directions -- 26/26, discharging the per-site witness obligation"),
+    "artifacts/widthkillclass/opus_p1_20260830/latch_probe.py":
+        (CLASS_RESEARCH, "#497 pass-1: two sites in ONE session -- the only shape that can "
+                         "observe a latch-bit collision"),
+    "artifacts/widthkillclass/opus_p1_20260830/apply_fix.py":
+        (CLASS_RESEARCH, "#497 pass-1: applies the candidate else-chained decline at all six "
+                         "sites, preserved as evidence"),
+    "artifacts/widthkillclass/opus_p1_20260830/apply_mutant.py":
+        (CLASS_RESEARCH, "#497 pass-1: builds M1, the writeflag-conjunct escape"),
+    "artifacts/widthkillclass/opus_p1_20260830/apply_m2.py":
+        (CLASS_RESEARCH, "#497 pass-1: builds M2, the latch-bit collision"),
+
     #  widthkillclass RUNG-3 WITNESS, 2026-08-30, built by the agy seat -- a THIRD
     #  compile-and-measure front end, on a transport independent of the Agent tool.
     #  CLASS_WITNESS on the toclen/gdromcond precedent: its three kill rows INVERT the day
