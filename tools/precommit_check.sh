@@ -310,7 +310,11 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  with a literal denominator pin (`check "gdromtoclen rows run" ... 15`).  Raised
 	#  DELIBERATELY, which is what the growth arm below asks for -- the count is the
 	#  point, so it may not be nudged to silence a red.
-	SCORE_CLAIMS_MANIFEST=21
+	#  21 -> 22 on 2026-08-30: `#496` wired gdrom_cond_probe.py into gate_sh_rounding.sh
+	#  with a literal denominator pin (`check "gdromcond rows run" ... 20`).  Same
+	#  deliberate raise, and the growth arm named this file and this line when it fired --
+	#  which is the property that makes the check worth its noise.
+	SCORE_CLAIMS_MANIFEST=22
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

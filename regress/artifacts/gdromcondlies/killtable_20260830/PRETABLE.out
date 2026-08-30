@@ -1,0 +1,224 @@
+PRE-TABLE CHECK -- #496 gdromcondlies
+=====================================
+WRITTEN BEFORE TABLE 1 RUNS.  Its mtime is the proof of that order, which is the same
+order discriminator the oracle-correction rule uses.  Mandatory since 2026-08-28 for any
+round shipping or extending a kill-table-backed detector.
+
+THE ROUND:  two live BADVAL host kills in src/devices/dev_dreamcast_gdrom.c.
+  SITE A  GDROM_UNKNOWN_0x88 write, any value != 0x0b
+  SITE B  GDROM_COND write, any value not in {0xa0, 0xef}
+FIX SHAPE: latched decline at both (the house idiom, N=1 per device instance, "(once)"),
+plus -- at site B only -- RELOCATING `d->cond = idata;` from above the dispatch into the
+two accepted arms.
+
+WITNESS: rung 3, regress/artifacts/gdromcondlies/witness_20260830/, 15/15 on the committed
+build before any edit.  Both kills reproduce on an unmodified -E dreamcast, one guest
+mov.w each.
+
+
+-------------------------------------------------------------------------------
+1.  SIBLING PARITY
+-------------------------------------------------------------------------------
+(i) SITE A's write arm vs SITE A's OWN READ ARM.  ASYMMETRY, AND IT IS REAL.
+    The read arm seven lines above (`fatal("Read from GDROM_UNKNOWN_0x88?")`, exit
+    commented out) is UNLATCHED and floods -- measured 3 accesses / 3 diagnostics in
+    extras_run1.out.  This round ships a `case` whose write arm announces once and whose
+    read arm one line away announces without bound.
+    DISPOSITION: FILED, not taken.  The round-scope rule's third arm fails -- a flood is
+    not the BADVAL class -- and taking :1089 alone would split the flood FAMILY, which is
+    already carried as `floodclass`.  The two Agent seats DISAGREED here (opus5: take it;
+    fable5: file it) and the disagreement is settled against the rule's own text, not by
+    vote.  The cost is recorded in the round block, which is where a scope cost belongs.
+    OWED SENTENCE: yes, in the round block.  Not a row.
+
+(ii) SITE B's decline vs handle_command()'s decline.  ASYMMETRY, AND THE TWO IN-FILE
+    PRECEDENTS CONTRADICT EACH OTHER.
+      #490's default arm FIRES a completion event on decline -- its comment says an early
+        return "leaves a guest waiting for a completion that never comes".
+      The DMA arm REFUSES one -- its comment says "a completion on a DECLINED transfer
+        would be a FALSE SUCCESS".
+    They disagree because the WAIT STATES differ.  At GDROM_COND the guest has sent no
+    packet and is polling BUSY, so an event would announce a command that never began.
+    RULING: no event on the decline, with BOTH citations in the comment.
+    OWED ROW: yes -- R7 below.  This is a semantic would-consequence claim and the
+    verb-list form of CLAIM->ROW walks straight past it.
+
+(iii) SITE A's decline message vs SITE B's.  #461's measured rule in this same file is
+    that the write line is "the only one carrying idata, which is the value needed to
+    model the register later".  BOTH new messages print the value.  No asymmetry.
+
+
+-------------------------------------------------------------------------------
+2.  CLAIM -> ROW   (every added comment sentence asserting an OBSERVABLE CONSEQUENCE)
+-------------------------------------------------------------------------------
+The trigger is SEMANTIC, not the five-verb grep: does this sentence assert something a
+row could observe?  A "would <consequence>" clause qualifies.
+
+ C1  "an unmodelled value is declined, not fatal"        (site A)   -> R1
+ C2  "an unmodelled value is declined"                   (site B)   -> R2
+ C3  "ignored.  (once)" / "(once)"                       (both)     -> R3, R4
+ C4  "d->cond left unchanged"                            (site B)   -> R5  *** keystone
+ C5  "Accepted values keep their old semantics byte for
+      byte, store included and in the same order"        (site B)   -> R6, R8, R9
+ C6  "NO COMPLETION EVENT ON THE DECLINE ... an event
+      would announce a command that never began"         (site B)   -> R7
+ C7  "0x0b is accepted and is a no-op, touching no
+      device state"                                      (site A)   -> R10
+ C8  the two latches are SEPARATE bits                   (both)     -> R11
+
+NO CLAIM IS LEFT WITHOUT A ROW.  If the row list is later rewritten from pass-2 findings,
+it is DIFFED AGAINST THIS LIST, not merely extended with the new rows -- #490 lost two
+prescribed rows exactly that way, three hours after its own PRETABLE named them.
+
+
+-------------------------------------------------------------------------------
+3.  GUARD FIELD vs BODY FIELD
+-------------------------------------------------------------------------------
+SITE A   guard reads: idata.            body reads/writes: d->warned only.
+SITE B   guard reads: idata.            body reads/writes: d->cond, d->stat, d->busy,
+                                        d->cmd_count, d->warned, and fires SYSASIC.
+
+The guard operand (idata) is a call parameter with no second writer, so the classic
+"swap the guard's operand for a body field" form has no candidate here.
+
+*** THE CHECK THEREFORE DEGENERATES TO THE SHARED-BITFIELD QUESTION, which is the form
+#490 measured and which the guard/body grep CANNOT see: who else writes d->warned, and
+can they set MY bit? ***
+    d->warned |= ...   -- 8 sites before this round, 10 after.
+    SIX of the eight are inside DEVICE_ACCESS, i.e. set by ORDINARY GUEST REGISTER READS.
+    So a bit collision is silenced by benign traffic and looks like a working latch.
+OWED ROW: R11 -- both sites decline in ONE session and BOTH announce.  #490's `crossbit`
+is the precedent; its `M3shared` escape is this file's recorded cost of skipping it.
+
+STRUCTURAL GUARD, and it is why no row is owed for the enum itself: the disjointness
+assert is a TYPEDEF'd negative-array-size check that does not extend itself.  Adding an
+enumerator without extending the sum is a COMPILE ERROR, not a silent pass.  Verified by
+construction this round -- the tree built, therefore the extension is correct.
+
+
+-------------------------------------------------------------------------------
+4.  CHANNEL  -- per row: the mutant it kills, and the observable that DIFFERS under it
+-------------------------------------------------------------------------------
+*** THE ONE CHANNEL THIS ROUND MAY NOT USE: SURVIVAL. ***  Post-fix everything exits 0,
+so a survival oracle at a refusal-effect site is vacuous BY CONSTRUCTION.  The witness's
+own accept rows discriminate on `how == exit0` and therefore MUST NOT be carried into the
+detector unchanged.  (fable5, pass 1, before any table ran.)
+
+ row  channel observed                          kills
+ ---  ----------------------------------------  --------------------------------------
+ R1   site-A decline diagnostic PRESENT         M1  reinstate exit(1) at A        (b)
+ R2   site-B decline diagnostic PRESENT         M2  reinstate exit(1) at B        (b)
+ R3   site-A diagnostic count == 1 over 3       M3  latch dropped at A
+ R4   site-B diagnostic count == 1 over 3       M4  latch dropped at B
+ R5   COND READBACK after a DECLINED write      M5  d->cond = idata restored to
+      *** ANCHORED: drive an ACCEPTED 0xef          the top of the else            (d)
+      FIRST, then the declined write, then      M5b d->cond = 0 on decline
+      require 0xef back.  A fresh device has
+      cond == 0, so "expect 0" is satisfied
+      by the fix AND by a zeroing mutant --
+      the anchor is what separates them. ***
+ R6   BUSY bit 0x08 SET after accepting 0xa0    M6  the 0xa0 arm emptied
+ R7   NO ASIC event pending after a DECLINED    M7  an event fired on the decline
+      COND write
+ R8   COND readback == 0xa0 after accepting     M8  the accepted-path store dropped
+ R9   ASIC event pending after accepting 0xef   M9  the 0xef arm emptied
+ R10  no device state changes when A accepts    M10 site A grew an effect
+      0x0b (stat/busy/cond unchanged)
+ R11  BOTH sites announce in ONE session        M11 the two latch bits collapsed
+                                                    into one
+
+EVERY ROW'S NAMED CHANNEL CAN VARY UNDER ITS NAMED MUTANT.  Checked one by one; none is
+a survival row; none is green-under-every-candidate.
+
+CLAUSE (d) ENUMERATION -- "DEPENDS ON", walked up only to the enclosing function:
+  predicates DOMINATING the edited lines: `idata != 0xb` (A), `idata == 0xa0` and
+  `idata == 0xef` (B), and the two `!(d->warned & ...)` latch guards.
+  operand-swap candidates drawn ONLY from body-read fields: d->cond, d->busy,
+  d->cmd_count, d->warned.
+  -> M5 (the store relocation nulled) is the canonical member and is the round's most
+  load-bearing mutant.  BOTH Agent seats named it INDEPENDENTLY on pass 1, and both said
+  every row in the brief's then-current plan stayed green under it.  R5 exists because
+  of that.
+
+CLAUSE (f) ANCHOR: R5 is the anchored row.  R6/R8/R9 are anchored by side effect
+(a bit the device itself sets; an event the device itself fires).
+
+CLAUSE (e) CONTRACT: to be written into the probe header before the table runs.  It
+claims the eleven mutants above and DISCLAIMS everything else -- notably any edit to the
+GDROM_DATA read path, which this detector does not observe.
+
+PRETABLE_DONE
+
+===============================================================================
+PASS-2 AMENDMENT -- written after the pass-2 panel, BEFORE table 1 still runs.
+===============================================================================
+
+*** THE ROW LIST GREW FROM 16 TO 20, AND PER #490 IT IS DIFFED AGAINST THE PRESCRIBED
+ROWS ABOVE RATHER THAN MERELY EXTENDED. ***
+
+#490 wrote a PRETABLE naming two mutants at 16:05, had a panel find a different defect at
+18:45, rewrote the addition list to carry the panel's findings -- and BOTH earlier
+prescribed rows silently vanished.  A measuring seat then built both and both escaped the
+committed detector: two clause-(d) floor breaches the round's own artifact had predicted.
+
+THE DIFF, explicitly:
+
+    prescribed above and STILL PRESENT:  R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11   (11 of 11)
+    dropped:                             NONE
+    added by pass 2:                     R1b  R5b  R5c  R7b                   (4)
+
+    total 20 rows = 4 controls + 16 detector rows.
+
+WHY EACH ADDITION EXISTS -- each closes a MEASURED-or-DERIVED escape through the 16-row
+form, named by the codex seat on pass 2:
+
+  R1b  Site A's oracle counted a PLAIN SUBSTRING, so `0x%02x` -> `0x%02d` in its format
+       string escaped: guest byte 0x55 reports as "85" while every presence, latch and
+       cross-bit row stays green.  A PRESENCE ORACLE CANNOT SEE A FIDELITY DEFECT.  R1 now
+       captures the byte and R1b writes a SECOND, different value so a constant cannot
+       masquerade as the datum.  (Site B already had this shape -- the asymmetry was the
+       defect, and SIBLING PARITY should have caught it above.  It did not.)
+
+  R5b  } R5 alone pins "cond == 0xef after this sequence", which the correct fix satisfies
+  R5c  } and so does `d->cond = 0xef;` in the decline arm -- a mutant that fabricates
+       } COND_DATA_AVAIL out of a FRESH decline and unlocks the GDROM_DATA read path.
+       } *** ONE ANCHOR PROVES A VALUE, NOT AN IDENTITY. ***  "Unchanged" is a claim about
+       } a FUNCTION of the prior value and one sample cannot distinguish a function from a
+       } constant.  Three pre-states (fresh 0x00, accepted 0xa0, accepted 0xef) separate
+       } the identity from any constant, any zeroing, any OR, and idata itself.
+
+  R7b  R5* pin `cond` and R7 pins the event; a one-line busy/stat mutation in the decline
+       arm passed BOTH.  R7b is a BEFORE/AFTER comparison rather than an absolute, because
+       writing the fresh values as literals would mean reading them off the binary and
+       pinning them -- observationally identical to fitting the test to the answer.
+       Guarded so an apparatus failure cannot make it self-compare to green.
+
+CORRECTED COUNTS -- the GUARD FIELD section above was wrong and this records the deriver:
+
+    grep -c 'd->warned |=' src/devices/dev_dreamcast_gdrom.c        ->  12 RAW
+    ... of which ONE is inside a comment block (the `* d->warned |= 0x40` example)
+    LIVE writers                                                    ->  11  (9 + these 2)
+    inside DEVICE_ACCESS                                            ->   8
+
+The block above said "8 sites before, 10 after" and "SIX of the eight inside
+DEVICE_ACCESS".  Both wrong.  *** AND THE RAW GREP THAT PRODUCED 12 IS THE SAME
+COMMENT-CONTAMINATION THIS PROJECT BUILT `exit_census.py` TO DEFEAT -- 40% of raw exit(
+hits in src/devices/ are inside comments, and the same hazard applies to any grep over
+this tree.  The count was corrected by a seat, then re-derived here by listing the sites
+and reading the one that was a comment. ***
+
+REFINEMENT, also from the seat, and it narrows a claim rather than overturning it: the six
+pre-existing DEVICE_ACCESS writers are NOT all guest register READS -- GDROM_W_NOTWAIT,
+GDROM_W_DMANODATA and GDROM_W_DMAARM are write-triggered.  The collision premise is
+unaffected (benign guest traffic can still pre-set a colliding bit, which is what makes a
+latch-bit collision silent), but the wording "set by ordinary guest register reads" was too
+narrow and is corrected here rather than left to be reused.
+
+TWO PRODUCT-CODE RECORDS CORRECTED IN THE SAME PASS (L4, wrong record):
+  * "Nine bits today" above the disjointness assert -- #496 made it ELEVEN.  Now carries
+    its deriver (`grep -c '_B,'` over the enum) so the next edit cannot silently stale it.
+  * The decline comment said "the guest has sent no packet", which is too broad: nothing
+    stops a bad COND write arriving after a 0xa0 or midway through a packet.  The warrant
+    is that THIS WRITE began nothing, not that nothing is in flight.
+
+PRETABLE_AMENDED_DONE

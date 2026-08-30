@@ -230,6 +230,8 @@ enum {
 	GDROM_W_TOCLEN_B,	/*  #489: the SEVENTH, and the bit the trigger was set for  */
 	GDROM_W_FMT_B,		/*  #490: case 0x30's data-format decline  */
 	GDROM_W_CMD_B,		/*  #490: the default: unimplemented-command decline  */
+	GDROM_W_88VAL_B,	/*  #496: GDROM_UNKNOWN_0x88's bad-value decline  */
+	GDROM_W_CONDVAL_B,	/*  #496: GDROM_COND's bad-value decline  */
 	GDROM_W_NBITS
 };
 
@@ -242,6 +244,8 @@ enum {
 #define	GDROM_W_TOCLEN	(1u << GDROM_W_TOCLEN_B)
 #define	GDROM_W_FMT	(1u << GDROM_W_FMT_B)
 #define	GDROM_W_CMD	(1u << GDROM_W_CMD_B)
+#define	GDROM_W_88VAL	(1u << GDROM_W_88VAL_B)
+#define	GDROM_W_CONDVAL	(1u << GDROM_W_CONDVAL_B)
 
 /*
  *  *** #490: TWO BITS, NOT ONE, AND THAT IS MEASURED RATHER THAN TIDY. ***
@@ -440,13 +444,22 @@ typedef char gdrom_w_fits_its_carriers[
  *  disjointness proof.  A future boundary also exists and is loud rather than
  *  silent: at GDROM_W_NBITS == 32 the `1u << GDROM_W_NBITS` here is undefined,
  *  and gcc emits `left shift count >= width of type` -- a warning, not an
- *  error, so a build that suppresses warnings would not stop.  Nine bits today;
- *  the carriers assert above is what bounds the growth.
+ *  error, so a build that suppresses warnings would not stop.  ELEVEN bits today
+ *  (#496 added GDROM_W_88VAL_B and GDROM_W_CONDVAL_B); the carriers assert above
+ *  is what bounds the growth.
+ *
+ *  *** THIS COUNT SAID "Nine bits today" AFTER #496 MADE IT ELEVEN, and it was
+ *  caught by a panel seat rather than by anything mechanical.  The count is left
+ *  here rather than deleted BECAUSE IT HAS A DERIVER: `grep -c '_B,'` over the
+ *  enum above.  A number in a durable record names the command that produces it
+ *  or it becomes a wrong record on the next edit -- which is exactly what this
+ *  one did. ***
  */
 typedef char gdrom_w_masks_disjoint[
     ((GDROM_W_LEN + GDROM_W_NODATA + GDROM_W_NOTWAIT + GDROM_W_OVERREAD +
       GDROM_W_DMANODATA + GDROM_W_DMAARM + GDROM_W_TOCLEN + GDROM_W_FMT +
-      GDROM_W_CMD) == ((1u << GDROM_W_NBITS) - 1u)) ? 1 : -1];
+      GDROM_W_CMD + GDROM_W_88VAL + GDROM_W_CONDVAL) ==
+     ((1u << GDROM_W_NBITS) - 1u)) ? 1 : -1];
 
 /*
  *  *** THIS TRIGGER HAS FIRED AND IS DISCHARGED -- see the enum ABOVE.  EVERYTHING IN
@@ -1090,8 +1103,36 @@ DEVICE_ACCESS(dreamcast_gdrom)
 			// exit(1);
 		} else {
 			if (idata != 0xb) {
-				fatal("[ Write to GDROM_UNKNOWN_0x88: TODO ]\n");
-				exit(1);
+				/*
+				 *  #496: a guest write of any value but
+				 *  0x0b ENDED THE HOST PROCESS here.  One
+				 *  store, from an ordinary driver, on an
+				 *  unmodified -E dreamcast.
+				 *
+				 *  The model implements NO behaviour for
+				 *  this register: 0x0b is accepted and is
+				 *  a no-op, touching no device state.  So
+				 *  an unmodelled value is declined, not
+				 *  fatal.  The announce is kept because
+				 *  the accepted set is what ONE boot ROM
+				 *  happens to write, not a documented
+				 *  register contract -- so an unmodelled
+				 *  value is a fact about the guest worth
+				 *  reporting, and the decline itself is
+				 *  the only channel that ever reports it.
+				 *
+				 *  The message carries idata: this is the
+				 *  only line that has the value a later
+				 *  round would need to model the register.
+				 */
+				if (!(d->warned & GDROM_W_88VAL)) {
+					d->warned |= GDROM_W_88VAL;
+					fatal("[ dreamcast_gdrom: write of"
+					    " 0x%02x to GDROM_UNKNOWN_0x88;"
+					    " only 0x0b is modelled --"
+					    " ignored.  (once) ]\n",
+					    (int)idata);
+				}
 			}
 		}
 		break;
@@ -1126,8 +1167,6 @@ DEVICE_ACCESS(dreamcast_gdrom)
 		if (writeflag == MEM_READ) {
 			odata = d->cond;
 		} else {
-			d->cond = idata;
-
 			/*
 			 *  NetBSD/dreamcast writes 0xa0 to GDROM_COND to
 			 *  start a command. See gdrom_do_command() in NetBSD's
@@ -1141,17 +1180,78 @@ DEVICE_ACCESS(dreamcast_gdrom)
 			 *
 			 *  NetBSD then sends 6 16-bit data words to GDROM_DATA.
 			 */
+			/*
+			 *  #496: an unmodelled value ENDED THE HOST
+			 *  PROCESS here -- one guest store, through
+			 *  real decode, on an unmodified machine.
+			 *
+			 *  *** THE STORE OF idata MOVED IN HERE, INTO
+			 *  THE ACCEPTED ARMS, AND THAT IS THE HALF OF
+			 *  THIS FIX THAT IS NOT ABOUT exit(). ***  It
+			 *  used to run UNCONDITIONALLY above this
+			 *  dispatch, so merely de-fatalising the else
+			 *  arm would leave every unmodelled value a
+			 *  direct write to d->cond -- and COND_DATA_AVAIL
+			 *  (0x08) is a bit of that same byte, which
+			 *  GATES THE ENTIRE GDROM_DATA READ PATH.
+			 *  A declined write could therefore FORGE
+			 *  data-available when no command produced any,
+			 *  or REVOKE a genuine one -- a worse defect
+			 *  than the kill it replaced, because it is
+			 *  silent.
+			 *
+			 *  Stated as readiness rather than as a NULL
+			 *  deref on purpose: with d->data NULL the read
+			 *  path does not fault today, because
+			 *  `cur_data_offset < data_len` is 0 < 0 and
+			 *  falls into the OVERREAD arm.  The harm is a
+			 *  guest told to read a buffer that never
+			 *  existed, and a genuine transfer silently
+			 *  cancelled -- not a crash.
+			 *
+			 *  Accepted values keep their old semantics
+			 *  byte for byte, store included and in the
+			 *  same order.
+			 *
+			 *  NO COMPLETION EVENT ON THE DECLINE, and the
+			 *  two precedents in this file disagree, so the
+			 *  choice is stated rather than assumed: the
+			 *  handle_command() default arm FIRES one
+			 *  because a guest that has SENT a packet is
+			 *  waiting on it, while the DMA arm refuses one
+			 *  because a completion on a declined transfer
+			 *  is a false success.
+			 *
+			 *  This declined write ACCEPTED NO NEW COMMAND
+			 *  OR PACKET, so it must not synthesize a
+			 *  completion; any pre-existing command state
+			 *  is left untouched.  Stated that way on
+			 *  purpose -- an earlier draft said "the guest
+			 *  has sent no packet", which is too broad:
+			 *  nothing stops a bad COND write arriving
+			 *  AFTER a 0xa0, or midway through a partially
+			 *  assembled packet.  The warrant is that THIS
+			 *  write began nothing, not that nothing is in
+			 *  flight.
+			 */
 			if (idata == 0xa0) {
+				d->cond = idata;
 				d->stat = 0;	/*  TODO  */
 				d->busy |= 0x08;
 				d->cmd_count = 0;
 			} else if (idata == 0xef) {
+				d->cond = idata;
 				debug("dreamcast_gdrom: ROM: TODO\n");
 				SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_GDROM);
 			} else {
-				fatal("dreamcast_gdrom: unimplemented "
-				    "GDROM_COND = 0x%02x\n", (int)idata);
-				exit(1);
+				if (!(d->warned & GDROM_W_CONDVAL)) {
+					d->warned |= GDROM_W_CONDVAL;
+					fatal("[ dreamcast_gdrom:"
+					    " unimplemented GDROM_COND ="
+					    " 0x%02x -- declined, and"
+					    " d->cond left unchanged."
+					    "  (once) ]\n", (int)idata);
+				}
 			}
 		}
 		break;

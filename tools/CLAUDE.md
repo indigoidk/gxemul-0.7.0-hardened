@@ -2215,6 +2215,27 @@ pre-existing terms still pass unchanged.
    > skeleton — **never into `panel_ollama.py`, whose preamble stays semantic-free.**
 4. Implement (byte-identical in both trees for shared files); propagate to build trees.
 5. **Panel pass 2** on the real diff.
+5b. **THE ADJUDICATION PASS — the panel SHARES its findings.** *** STANDING OWNER DIRECTIVE,
+   2026-08-30: "always adjudicate findings and make sure the full panel shares findings." ***
+   Consolidate every seat's pass-2 findings into ONE numbered packet with YOUR DISPOSITION on
+   each, list the DISAGREEMENTS separately with both sides in their own words, and re-fire all
+   nine. **Template section `§F2` carries the shape; do not write it from memory.**
+
+   **Why it is a pass and not a tidy-up:** until this directive every seat answered blind to
+   the other eight and the main loop silently arbitrated — so a seat could not correct another
+   seat's error, and *a disagreement was resolved by whoever wrote it up*. That is the
+   seat-failure-counted-as-agreement shape moved into the arbitration step, where nothing in
+   the harness looks for it.
+
+   **Ask the parties to adjudicate their OWN disputes, and ask a seat reviewing its own
+   finding to be HARDER on it** — including whether the FIX is right, not merely whether the
+   finding was. Those are different claims and the second does not imply the first. Same for a
+   ruling that ADOPTS a seat's position: that seat scrutinises it MORE, because a ruling in
+   your favour is the one you are least likely to test.
+
+   **The load-bearing question is "WHICH OF MY ACCEPTED DISPOSITIONS IS WRONG?"**, asked with
+   the count named. A round that accepted everything has either had a very good panel or has
+   stopped arguing, and only a seat can tell you which.
 6. `GXEMUL-SEC/regress/run.sh` → `REGRESS_PASS`. **Never run two harness/gate invocations
    concurrently** — but *** THE REASON GIVEN HERE FOR FOUR MONTHS WAS WRONG, corrected by
    measurement 2026-08-14: `selftest_mutation.sh` does NOT `rm -rf` the shared workdir. It is

@@ -1197,6 +1197,79 @@ else
     fi
 fi
 
+#  ---------------------------------------------------------------------------------------
+#  #496 gdromcondlies -- GDROM_UNKNOWN_0x88 and GDROM_COND bad-value declines.
+#
+#  Two guest-reachable host kills de-fatalised, plus -- at GDROM_COND only -- the
+#  `d->cond = idata;` store MOVED from above the dispatch into the two accepted arms.
+#  That relocation is the half of the fix that is not about exit(): COND_DATA_AVAIL
+#  (0x08) is a bit of d->cond and the GDROM_DATA read path is gated on it, so leaving
+#  the store where it was would let any declined value forge or revoke data-available.
+#
+#  *** NO ROW HERE MAY READ SURVIVAL. ***  Post-fix every one of these accesses exits 0,
+#  so a survival oracle at a refusal-effect site answers the same whether or not the
+#  guard is right.  The round's WITNESS does use survival -- correctly, it ran BEFORE
+#  the fix -- and its accept rows are deliberately NOT carried into this detector.
+#
+#  `R5 cond keep` is the KEYSTONE and it is ANCHORED: a fresh device has cond == 0, so
+#  the naive "write 0x55, read back 0" is satisfied by the correct fix AND by a mutant
+#  that zeroes cond on decline.  The row drives an ACCEPTED 0xef first, so the value it
+#  requires back is one only the accept arm can have placed there.
+CONDPROBE=gdrom_cond_probe.py
+if [ ! -f "$CONDPROBE" ]; then
+    gate_skip "gdromcond: $CONDPROBE absent"
+else
+    CONDLOG=$LOGDIR/gate_gdrom_cond.log
+    python3 -u "$CONDPROBE" "$PMAX" "$KERNEL" > "$CONDLOG" 2>&1 || true
+
+    if ! grep -q "GDROMCOND_PROBE_RESULT=" "$CONDLOG"; then
+        note "gdromcond probe produced no result line; last lines follow"
+        tail -5 "$CONDLOG" | sed 's/^/       /'
+        check "gdromcond probe completed" "no" "yes"
+    else
+        grep -E " ok$| FAIL$" "$CONDLOG" | sed 's/^/       /'
+
+        #  CONTROLS FIRST AND SEPARATELY -- a run whose controls died is an APPARATUS
+        #  failure and must not be read as a wall of product failures.
+        if grep -q "GDROMCOND_CONTROL=OK" "$CONDLOG"; then
+            check "gdromcond controls live" "yes" "yes"
+        else
+            note "gdromcond CONTROLS DEAD -- the probe never reached the device."
+            note "Do not read the row scores below as product failures."
+            check "gdromcond controls live" "no" "yes"
+        fi
+
+        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+        #  leaving condres empty so both halves expand to "" and the score row compares
+        #  "" with "" -- green on nothing.
+        condres=$(grep -o "GDROMCOND_PROBE_RESULT=[0-9]*/[0-9]*" "$CONDLOG" | tail -1 | cut -d= -f2)
+        if [ -z "$condres" ]; then
+            note "gdromcond result line present but unparseable; last lines follow"
+            tail -5 "$CONDLOG" | sed 's/^/       /'
+            check "gdromcond result parses" "no" "yes"
+        else
+            check "gdromcond result parses" "yes" "yes"
+            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+            check "gdromcond rows run"     "${condres#*/}" 20
+            check "gdromcond rows correct" "${condres%/*}" "${condres#*/}"
+        fi
+
+        #  Per-row presence.  A row that silently stops being tested is the padded-column
+        #  class; these names are checked individually so a vanished row reds.  Every name
+        #  is <= 12 chars against a %-14s column, so the two-space anchor below is always
+        #  satisfiable -- a name AS LONG AS its column makes the check impossible instead.
+        for v in "live" "devsig sh4" "devsig st" "devsig cnt" \
+                 "R1 a88 says" "R1b a88 trk" "R3 a88 x3" "R10 a88 nop" \
+                 "R2 cond says" "R2b cond trk" "R4 cond x3" \
+                 "R5 cond keep" "R5b cond 00" "R5c cond a0" \
+                 "R6 a0 busy" "R8 a0 echo" "R9 ef event" \
+                 "R7 no event" "R7b cond st" "R11 crossbit"; do
+            n=$(count "$CONDLOG" "^$v  .*ok$")
+            check "gdromcond row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+        done
+    fi
+fi
+
 WDCIMG=$IMAGES/wdc-scratch-64m.img
 if [ ! -f "$WDCIMG" ]; then
     gate_skip "wdcflood: $WDCIMG absent (see regress/images.md -- it is a dd recipe, not a download)"

@@ -210,6 +210,70 @@ directed question.  A template that is 100% directed questions removes the slack
 in.  The template guarantees the high-yield questions are ASKED; it must not imply they are
 the only way to answer.*
 
+## §F2 — *** THE ADJUDICATION PASS: THE PANEL SHARES ITS FINDINGS. ***
+## Standing owner directive, 2026-08-30. This is a THIRD pass, not an optional extra.
+
+> **"Make sure to always adjudicate findings and make sure the full panel shares findings."**
+
+Until this directive, every seat answered the same brief **blind to the other eight**, and
+the main loop silently arbitrated between them. That hid two things, and both are this
+project's oldest failure shapes wearing new clothes:
+
+* **A seat could not correct another seat's error.** The panel's own record shows seats
+  refuting each other constantly *when given the chance* — but they were never given it, so
+  the only cross-checking that happened was whatever the main loop chose to do.
+* **A disagreement was resolved by whoever wrote it up.** That is the
+  seat-failure-counted-as-agreement shape moved into the arbitration step: the loop's ruling
+  and the loop's summary of the dispute are the same document, written by the same party.
+
+### THE SHAPE OF THE PACKET
+
+After pass 2, consolidate **every seat's findings** into one document and re-fire all nine:
+
+1. **Number every finding** `F1..Fn`, attributing each to the seat(s) that raised it —
+   including seats that reached it independently, because independent convergence is the one
+   kind of agreement that IS evidence.
+2. **State YOUR DISPOSITION on each** — accepted / rejected / refined — **and what you
+   changed as a result.** A finding listed without a disposition is a finding nobody has to
+   answer for.
+3. **List DISAGREEMENTS separately as `D1..Dn`**, giving each side's argument in its own
+   words, naming your ruling and its warrant. **Ask the parties to adjudicate their own
+   dispute** — a seat that reconsiders and reverses is worth more than one that repeats.
+4. **Say what is still OWED and where you might be fooling yourself.** The measured value of
+   this section is high: it is where "the table has not run clean yet" and "this record is
+   promissory" get written down instead of quietly aging.
+
+### THE THREE QUESTIONS THE ADJUDICATION PASS ASKS
+
+    1. Adjudicate F1..Fn and D1..Dn -- UPHOLD / OVERTURN / REFINE / CANNOT SETTLE, one
+       line each with a reason.
+    2. WHICH OF MY ACCEPTED DISPOSITIONS IS WRONG?  Name the count: "I have accepted ten
+       findings in a row; that is a suspicious number and agreement is not evidence."
+    3. WHAT DID ALL NINE OF US MISS?  You now have the whole panel's output.
+
+**Question 2 is the load-bearing one** and it is why the disposition list must be honest
+rather than tidy. A round that accepted everything has either had a very good panel or has
+stopped arguing, and the packet cannot tell you which — a seat can.
+
+### SELF-REVIEW IS DISCLOSED, AND ASKED TO BE HARDER
+
+A seat adjudicating its own finding is doing self-review. **Say so in that seat's
+invocation, and ask it to be harder on its own findings rather than softer** — and to check
+that your FIX is right, not merely that its finding was. Those are different claims and the
+second does not imply the first. The same applies to a ruling that ADOPTS a seat's position:
+that seat should scrutinise the ruling more, not less, because a ruling in your favour is
+the one you are least likely to test.
+
+*This is the `A` conflict-of-interest badge the pipeline doctrine already mandates on
+closures, applied one step earlier — to the adjudication rather than to the record.*
+
+### WHAT IT COSTS, STATED PLAINLY
+
+One extra nine-seat firing per round. That is real, and the honest counter-argument is that
+pass 2 already produces the findings. **The answer is that pass 2 produces them in nine
+separate documents that only one party ever reads together** — and this project's most
+expensive recorded class, three times over, is a review that was written and never read.
+
 ## §F — BEFORE SENDING
 
 * [ ] §C present, or an explicit "none carried"

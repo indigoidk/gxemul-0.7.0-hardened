@@ -454,6 +454,14 @@ MANIFEST = {
                                     "Preserved under artifacts/ because this row's previous TWO "
                                     "witnesses lived in a rotated scratchpad and no longer "
                                     "exist, which is why its witness field had to read `none`."),
+    #  #496's DETECTOR, gated in gate_sh_rounding.sh.  It is the WITNESS's opposite number
+    #  and the pair is worth reading together: the witness reads SURVIVAL and the detector is
+    #  FORBIDDEN from reading it, because post-fix every one of these accesses exits 0.  Two
+    #  files, opposite oracles, same defect -- which is why one is gated and one must not be.
+    "gdrom_cond_probe.py":
+        (CLASS_DETECTOR, "#496 GDROM_UNKNOWN_0x88 + GDROM_COND bad-value declines and the "
+                         "d->cond store relocation -- 16 rows, keystone `R5 cond keep`"),
+
     #  gdromcondlies RUNG-3 WITNESS, 2026-08-30.  CLASS_WITNESS on the toclen precedent
     #  three entries up, and for the identical reason: its two kill rows INVERT the day
     #  the fix lands, so gating it would manufacture a regression.  The round's standing
