@@ -1,0 +1,67 @@
+diff --git a/src/devices/dev_wdc.c b/src/devices/dev_wdc.c
+index 232d8f3..8d30dea 100644
+--- a/src/devices/dev_wdc.c
++++ b/src/devices/dev_wdc.c
+@@ -1399,7 +1399,61 @@ DEVICE_ACCESS(wdc)
+ 				    (int)len, (long)idata);
+ 			}
+ 
+-			if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
++			/*  #495: A HOST STORE TO THE DATA PORT DURING A DATA-IN
++			    TRANSFER IS OUT OF PROTOCOL, AND UNTIL NOW IT WAS PUSHED
++			    INTO THE RING ANYWAY.
++
++			    Real ATAPI hardware never accepts host data-register
++			    stores while the direction is device-to-host.  This model
++			    accepted them, and the injected bytes grew inbuf_head
++			    WITHOUT growing atapi_len -- which counts only what the
++			    DATA-IN arms pushed.  They then sat ahead of the next
++			    chunk, and the re-arm refilled on top of them, so the
++			    guest's whole next chunk arrived shifted.
++
++			    Measured at rung 3 on unmodified evbmips -e malta, 20 of
++			    20 across both legs: one 2-byte store placed while the
++			    tail of chunk 1 is still in the ring makes the guest read
++			    back ITS OWN INJECTED BYTES as disk data.  The witness is
++			    at regress/artifacts/wdcaddtoinbufbound/rung3_20260830/.
++
++			    AND IT WAS SILENT.  The one diagnostic that could have
++			    announced a stray write requires !atapi_cmd_in_progress,
++			    and that flag is 1 for the whole of DATA-IN -- so the
++			    single guard that might have caught this was disabled
++			    exactly when it was needed.
++
++			    THE TEST IS THE PHASE, NOT THE FLAG, AND THE DIFFERENCE
++			    IS NOT COSMETIC.  #477 measured that guarding these
++			    pushes could CREATE a use-after-free: a suppressed push
++			    leaves occupancy at 12 and the CDB dispatch fires anyway.
++			    That hazard lives at occupancy 12, which is CMDOUT -- so
++			    a guard keyed on the PHASE never suppresses there and
++			    cannot reach it.  A guard keyed on the FLAG alone matches
++			    CDB collection too and re-arms #477's objection in full.
++
++			    THIS GUARD IS NOT SELF-CONTAINED, and that is recorded
++			    rather than left for someone to rediscover: it is safe
++			    only because #477's READ-arm phase test stops a stray
++			    read moving atapi_phase off CMDOUT mid-CDB.  Remove that
++			    and this starts refusing legitimate CDB bytes.
++
++			    ONLY THE PUSH IS REFUSED.  The access stays HANDLED and
++			    falls through to the common tail, which returns 1.  A 0
++			    would not reach unassigned-address handling -- this
++			    device is registered -- it would raise EXCEPTION_DBE and
++			    leave the guest re-executing the faulting store forever,
++			    silently at default verbosity.  Measured last round at
++			    19793 device-failed diagnostics and zero non-existant
++			    ones.  Worse than a flood, not better.
++
++			    The shipped 128-row offline detector scores ZERO failures
++			    with this defect live, so it cannot see it at all; the
++			    rung-3 witness ships as the detector for that reason.  */
++			if (d->atapi_cmd_in_progress &&
++			    d->atapi_phase != PHASE_CMDOUT) {
++				/*  out of protocol: refuse the push  */
++			} else if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+ 				switch (len) {
+ 				case 4:	wdc_addtoinbuf(d, idata & 0xff);
+ 					wdc_addtoinbuf(d, (idata >> 8) & 0xff);

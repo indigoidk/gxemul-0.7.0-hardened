@@ -1,0 +1,137 @@
+PRE-TABLE BLOCK -- #495 wdcaddtoinbufbound
+Written 2026-08-30 BEFORE the product edit and BEFORE table 1, so this file's own
+mtime proves the order.  Recorded OUTPUT, not assertion.
+
+SCOPE: this round SHIPS a kill-table-backed detector, so the block is MANDATORY.
+
+*** IT OPENS WITH A FLOOR FINDING THAT IS ALREADY MEASURED, BECAUSE IT DECIDES WHAT
+THE ROUND MAY SHIP. ***
+
+    base (defect LIVE)   128 rows,  0 failures
+    fixA (write-arm)     128 rows,  0 failures
+    fixB (re-arm)        128 rows,  1 failure
+    mutA1               128 rows, 14 failures
+    mutA2, mutA3        128 rows,  0 failures
+
+**THE SHIPPED 128-ROW DETECTOR DOES NOT OBSERVE THIS DEFECT AT ALL** -- `base` is clean
+with the defect live.  Vacuity-floor clause (a) is therefore NOT satisfiable from any
+existing row, so **the rung-3 witness must ship AS the detector** or the round ships
+below the floor.  That is not a preference; it is the only way clause (a) can be met.
+
+====================================================================================
+1.  SIBLING PARITY
+====================================================================================
+
+The diff guards the data-port WRITE arm.  Its nearest sibling is the data-port READ
+arm in the same `wd_data` case.
+
+ASYMMETRY FOUND, and it is deliberate rather than an omission:
+
+  WRITE arm (guarded)   pushes into the ring; observable through ring occupancy, the
+                        bytes the guest reads back, and the re-arm's contents
+  READ  arm (untouched) pops from the ring; observable through the same channels
+
+  >  The fix touches ONE side of a FIFO.  A reader might expect the read arm to need
+  >  a matching guard -- it does not, and the reason is worth recording: a read
+  >  cannot INTRODUCE foreign bytes.  It can only return what is there.  The defect
+  >  is injection, and injection has exactly one door.
+
+  >  BUT THE SIBLING RELATIONSHIP IS LOAD-BEARING IN THE OTHER DIRECTION, and this is
+  >  the round's non-obvious dependency: fixA is safe ONLY because `#477`'s READ-arm
+  >  phase test stops a stray read from moving `atapi_phase` off CMDOUT mid-CDB.
+  >  Remove that and this guard starts refusing legitimate CDB bytes.  **fixA's
+  >  correctness is not self-contained.**  Measured and named by the pass-1 measuring
+  >  seat; recorded in the shipped comment, not only here.
+
+ROW OWED: an accept row proving CDB collection still lands -- the `pkt_cdb_case` row
+already in the shipped detector covers it (dispatch == 1 from six CMDOUT writes) and
+reds if the guard over-refuses into CMDOUT.  Verified present; no new row owed.
+
+====================================================================================
+2.  CLAIM -> ROW  (semantic trigger: does the sentence assert something a row could
+    observe?  Counterfactual "would <consequence>" clauses qualify.)
+====================================================================================
+
+  C1  "a packet command is active but we are not collecting a CDB, so these bytes
+       belong to no transfer"
+        -> ROW: the witness's G/H/I rows -- first three bytes after the re-arm.
+           MEASURED: base a5/5a/c2 (injected, injected, shifted) vs fix c2/c3/c4 (disk)
+  C2  "refuse the PUSH ONLY -- the access is still handled and falls through to the
+       common tail"
+        -> ROW: *** OWED AND NOT YET BUILT.  No row asserts the RETURN VALUE. ***  The
+           carrier's own sketch rule says a handler's return value is a contract and
+           that nobody checked it in the round where that rule was minted.  A `0` here
+           would raise EXCEPTION_DBE and spin the guest silently -- measured last round
+           at 19,793 diagnostics and ZERO `non-existant`.  **The round owes either a row
+           or an explicit no-row sentence with its reason.**
+  C3  "fixA is safe only because #477's read-arm phase test holds"
+        -> NO ROW, reason recorded: the dependency is on ANOTHER round's guard, and a
+           row that deletes #477's test to observe this one is a mutant of #477, not of
+           this fix.  It belongs in #477's contract, not here.  **Stated rather than
+           left blank** -- an unrun check and an inapplicable one must not render the
+           same.
+
+====================================================================================
+3.  GUARD FIELD vs BODY FIELD
+====================================================================================
+
+PREDICATE reads:   d->atapi_cmd_in_progress     (set at packet dispatch, cleared only
+                                                 by wdc_new_command_reset())
+                   d->atapi_phase               (PHASE_CMDOUT / PHASE_DATAIN / ...)
+
+GUARDED BODY reads/writes:
+                   idata, len                   (the access itself)
+                   wdc_addtoinbuf() -> d->inbuf, d->inbuf_head, d->inbuf_tail
+
+WHERE THEY DIFFER -- and this is the disagreeing state the check exists to find:
+
+  >  `atapi_cmd_in_progress` and `atapi_phase` are written at DIFFERENT SITES.  The
+  >  flag is set once at dispatch and cleared only by the reset helper; the phase is
+  >  assigned at several points during a transfer.  **So a state exists where the flag
+  >  is set and the phase is stale** -- which is exactly the family `#479` closed
+  >  (`wdcwipclear`, `wdcringnoflush`) and `#477` guarded against on the read arm.
+  >
+  >  ROW OWED: a stale-phase state.  The shipped detector already carries
+  >  `row_stale_phase_write` and the three `midxfer_case` rows, whose fixtures were
+  >  re-pinned specifically so a phase-keying fix does not false-fail.  Verified
+  >  present.  **No new row owed, and that is a finding rather than an absence: the
+  >  disagreeing state is already covered because an earlier round paid for it.**
+
+====================================================================================
+4.  CHANNEL -- per row, the mutant it kills and the observable that differs
+====================================================================================
+
+  ROW                        KILLS                    OBSERVABLE THAT DIFFERS
+  ---------------------------------------------------------------------------------
+  witness G/H/I              the defect itself        first bytes after the re-arm:
+  (post-re-arm readback)     (base vs fix)            injected a5/5a vs disk c2/c3
+  witness signature control  mutA1 (drop the flag     the FIFO's push order goes ff
+                             conjunct -- over-        because the pre-command pushes
+                             refuses)                 are suppressed too
+  witness G/H/I              mutA2 (`!= PHASE_CMDOUT` the guard never fires, so the
+                             -> `== PHASE_COMPLETED`) injected bytes return: 17/20
+  witness G/H/I              mutA3 (`&& len == 1`)    a 2-byte store slips through:
+                                                      17/20
+  detector pkt_cdb_case      an over-reaching guard   dispatch count 1 -> 0
+  (ACCEPT, already shipped)  that refuses in CMDOUT
+  detector, 14 rows          mutA1                    MEASURED: base 0 -> mutA1 14
+
+VACUOUS-BY-CONSTRUCTION CHECK: every row above names a channel that CAN vary under its
+named mutant.
+
+*** AND THE CHANNEL LINE'S OWN CLAIM, CHECKED A SECOND TIME. ***  Last round it held.
+Here it holds again and pays more: **it is knowable at writing time that the shipped
+detector cannot kill mutA2 or mutA3**, because their named channel is the post-re-arm
+readback and no shipped row reads it -- which is the same fact as the floor finding,
+reached from the row side instead of from the table side.  The two agree, which is the
+first time this block has had an independent cross-check on its own conclusion.
+
+====================================================================================
+CARRY-FORWARD OBLIGATION
+====================================================================================
+This block PRESCRIBES: (i) the witness ships AS the detector -- forced by the floor;
+(ii) a row or an explicit no-row sentence for C2, the return value.  If the row list is
+later rewritten from a pass-2 panel's findings, it must be DIFFED against these two,
+not merely extended -- `#490` lost both of its prescribed rows exactly that way, three
+hours after prescribing them.
+PRETABLE_DONE

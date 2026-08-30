@@ -1,3 +1,205 @@
+## Round 495 (#495) -- a host store during an ATAPI DATA-IN transfer was pushed into the ring, and the guest read its own bytes back as disk data
+
+Real ATAPI hardware never accepts host data-register stores while the direction is
+device-to-host.  This model accepted them.  The injected bytes grew `inbuf_head`
+**without growing `atapi_len`** -- which counts only what the DATA-IN arms pushed -- so
+they sat ahead of the next chunk, the re-arm refilled on top of them, and the guest's
+whole next chunk arrived shifted.
+
+**AND IT WAS SILENT.**  The one diagnostic that could have announced a stray write
+requires `!atapi_cmd_in_progress`, and that flag is 1 for the whole of DATA-IN.  The
+single guard that might have caught this was disabled exactly when it was needed.
+
+### The witness -- rung 3, and it had to be asked for
+
+Unmodified `evbmips -e malta`, wdc via the machine's own committed `bus_pci`/`piix4_ide`
+path with no `device_add`, free-running, 1.52 s.  **20 of 20 predictions across both
+legs** (`wdcaddtoinbufbound/killtable_20260830/RESULTS_shipped.txt`, sentinel `ADDTOINBUF_RUNG3_DONE`):
+
+    G  *** DEFECT ***  1st byte after the re-arm   base a5  fix c2
+    H  *** DEFECT ***  2nd byte after the re-arm   base 5a  fix c3
+    I  *** DEFECT ***  3rd byte after the re-arm   base c2  fix c4
+
+`a5`/`5a` are **the guest's own injected bytes handed back as disk data**.  `c2`/`c3`/
+`c4` are the poisoned image's content at the chunk-2 boundary -- an ABSOLUTE oracle,
+tied to disk content through a channel outside the ring.
+
+Controls green on both legs: RAM liveness; a DEVICE SIGNATURE (two reads of the same
+address returning `5a` then `a5`, which a memory cell cannot do); encodings 46/46 words
+AND mnemonics against the emulator's own disassembler; and row D returning the image
+byte at offset 0, so the ring demonstrably holds real disk data rather than scratch.
+
+*** THE SKETCH THIS ROUND BRIEFED COULD NOT HAVE EXHIBITED THE DEFECT AT ALL. ***  It
+asked for 32 blocks on a CD-ROM, assuming 2048-byte blocks.  In this tree a CD-ROM's
+`logical_block_size` is **512** -- the 2048 branch sits inside `#if 0` -- so 32 blocks
+is 16384 bytes, under the 32768 chunk clamp: no second chunk, no re-arm, nothing to
+measure.  It needs 128.  **A seat that had merely followed the brief would have produced
+a clean run and reported the defect absent.**
+
+### The floor determined the deliverable's shape, rather than auditing it
+
+    base (defect LIVE)   128 rows,  0 failures
+    fixA (shipped)       128 rows,  0 failures
+    fixB (re-arm)        128 rows,  1 failure
+
+**The shipped 128-row offline detector scores ZERO failures with this defect live.  It
+cannot see the defect at all**, so vacuity-floor clause (a) -- fails on the pre-fix
+build -- was **unsatisfiable from any existing row**.  That is why the rung-3 witness
+ships AS a detector (`regress/wdc_addtoinbuf_probe.py`) rather than as evidence: not a
+preference, the only way clause (a) could be met.  Its ROWS block is byte-identical to
+the instrument that produced the 20/20.
+
+The two are COMPLEMENTARY and neither subsumes the other, which was measured rather than
+assumed: a guard-dropping mutant moves 14 rows in the offline detector and 2 in the
+witness; the two clause-(d) mutants move 0 offline and 3 in the witness.
+
+### The kill table -- four mutants, all killed
+
+    M1  drop the FLAG conjunct        18/20   2 red
+    M2  clause (d): null the repair   17/20   3 red   `!= CMDOUT` -> `== COMPLETED`
+    M3  clause (d): width-qualify     17/20   3 red   `&& len == 1`
+    M4  clause (b): REINSTATE         17/20   3 red   the guard deleted entirely
+
+M1-M3 reproduce the pass-1 seat's figures **exactly** (18, 17, 17) on a different tree
+and a different build -- an independent cross-check nobody asked for.  Scored from the
+probe's own prediction count, never by grepping for `FAIL`: last round a
+`grep -c ' FAIL '` matched the probe's own verdict line and inflated every nonzero
+figure by one, and the only correct number was the zero.
+
+### The test is the PHASE, not the flag, and that is not cosmetic
+
+`#477` measured that guarding these pushes could CREATE a use-after-free: a suppressed
+push leaves occupancy at 12 and the CDB dispatch fires anyway.  **That hazard lives at
+occupancy 12, which is CMDOUT** -- so a guard keyed on the PHASE never suppresses there
+and cannot reach it.  A guard keyed on the FLAG ALONE matches CDB collection too and
+re-arms the objection in full.  Derived by a packet-fed seat from the packet's own
+internal consistency, and it is the difference between this fix and a wrong one.
+
+**THE GUARD IS NOT SELF-CONTAINED, and the diff says so rather than leaving it to be
+rediscovered:** it is safe only because `#477`'s READ-arm phase test stops a stray read
+moving `atapi_phase` off CMDOUT mid-CDB.  Remove that and this starts refusing
+legitimate CDB bytes.
+
+### What this round does NOT do
+
+* **`len` is not consulted** and the write arm still reads `data[0]` only.  Unchanged by
+  this fix and not claimed.
+* **The silence is not fixed.**  A pass-1 seat argued it is a separate defect from the
+  push -- a guest can inject into a live transfer and nothing anywhere says so -- and
+  proposed decline plus a latched `(once)` announce, the house idiom of which this very
+  file is the reference implementation.  **The owner chose the guard without an
+  announce.**  Recorded so a future reader sees a decision rather than an oversight.
+* **The root cause is untouched.**  `#477`'s own comment names it: `atapi_cmd_in_progress`
+  conflates *a packet command is active* with *I am collecting a CDB*.  A separate flag
+  would make this guard trivially correct and remove the dependency above.  Bigger round.
+* **The re-arm option was not taken.**  It is the only one that reds the shipped
+  dirty-ring row, so it alone triggers the oracle-correction protocol -- and it is a
+  PARTIAL fix by construction: an injection during the last chunk has no following
+  re-arm and it never sees those bytes.
+
+### Pass 2 found TWO clause-(d) floor breaches, both repaired in-round
+
+Seven mutants now, all killed.  Two of them escaped the detector as first shipped:
+
+    M1  drop the FLAG conjunct        20/22   2 red
+    M2  clause (d): null the repair   18/22   4 red
+    M3  clause (d): `&& len == 1`     18/22   4 red
+    M4  clause (b): REINSTATE         18/22   4 red
+    M5  `== PHASE_DATAIN`             21/22   1 red   <- ESCAPED at 20/20; repaired
+    M6  `&& len == 2`                 21/22   1 red   <- ESCAPED at 22/22; repaired
+    M7  `return 0;` in the refusal    mutant leg never parks -- and the probe says so
+
+**M5 was predicted by a packet-fed seat that said plainly it could not check its own
+claim from the packet.**  It was checkable here, and it was right: every row injected
+during DATA-IN, where the narrowed guard still refuses, so a phase-narrowing edit swept
+clean.  **A detector built entirely from one scenario is blind along the axis that
+scenario holds fixed.**  Repaired by draining the whole transfer, injecting again in
+PHASE_COMPLETED, and reading the status byte -- and a control a pass-1 seat had
+correctly called WEAK becomes SHARP because the phase changed under it: `status_byte()`
+ORs DRQ from three conditions during DATA-IN, but `PHASE_COMPLETED` is
+`(WDCI_IN | WDCI_CMD)` and carries no `WDCS_DRQ`, so there DRQ reflects ring occupancy
+alone.
+
+**M6 is the mirror of M3, and M3 was the round's own mutant.**  Both injections were
+2-byte stores, so `&& len == 2` refused both and passed everything -- *the table had
+measured the inert member of the family and concluded the family was covered.*  Closed
+by ONE INSTRUCTION: the second injection is now a single-byte store, so `len == 1` lets
+the 2-byte one through and `len == 2` lets the 1-byte one through.  No single width
+qualifier can refuse both.
+
+### *** AND THE DEEPEST FINDING WAS ABOUT THE INSTRUMENTS, NOT THE FIX ***
+
+**Four committed detectors reported `parked: yes` for a guest that never parked.**  Each
+tested `if "BREAKPOINT" in <tail>.upper():` -- and the transcript contains the probe's
+OWN echoed setup command, `breakpoint add 0x...`.  **The check matched its own input and
+could never return False.**  It was right by accident in every run where the guest
+parked, and silently wrong in the first run where it did not.  The emulator prints
+`BREAKPOINT: pc = 0x...` on a real hit; that is now the pattern.  Controlled both ways:
+the old check says parked on an echo-only transcript AND on a real hit; the new one
+separates them.
+
+**And the kill scorer would have scored such a run as a kill.**  A measuring seat
+triggered exactly that three times in one table -- runs with `words 0 of 46`, pc already
+at HALT and elapsed 0.00 s, on BOTH legs including the unmutated base, scored
+`KILLED (20 red)`.  Re-run quietly, two ESCAPED.
+
+*** EVERY ONE OF THOSE RUNS CARRIED THE COMPLETION SENTINEL.  The sentinel proves the
+probe finished WRITING; it says nothing about whether it MEASURED.  Those are different
+questions and only the first was being asked. ***  A false kill is worse than a false
+escape: it certifies coverage that was never taken, and nothing downstream can tell.
+
+`kill495.sh` now refuses to score a run whose BASE leg's controls failed.  **The
+discriminator is the base leg, not a threshold** -- the base binary is known-good and
+runs in the same invocation, so a control failure there is environmental while one
+confined to the mutant leg is a result.  A threshold would have rejected M7, whose
+mutant leg legitimately kills the guest.
+
+The cause was this round's own concurrency: a second table ran during the first.  The
+`#489` precedent licenses concurrent tables in scratch clones -- **but that precedent is
+about TREE SAFETY, not MEASUREMENT VALIDITY**, and a pty-driven wall-clock instrument
+corrupts silently under load.
+
+### Two escapes FILED rather than fixed, and the distinction is the DEPENDS-ON bound
+
+* **`wdcatapistswap`** -- swap the guard's flag operand for `atapi_st != NULL` and it
+  escapes all 22 rows.  The seat measured the damage rather than reasoning it: after ONE
+  packet command the swapped guard refuses every ordinary data-port write for the life
+  of the device, because `atapi_st` is allocated at first dispatch and never set back to
+  NULL.  **Not a clause-(d) breach by the letter** -- `atapi_st` is not read by the
+  guarded body, so the operand-swap enumeration does not reach it -- but it shows the
+  detector's accept side is unpinned for ordinary writes.  Owes one accept row.
+* **`wdcprobeendian`** -- the write arm branches on `cpu->byte_order` and every rung-3
+  probe here runs little-endian only, so a guard applied on one path and omitted on the
+  other escapes by construction.  Structural, and it applies to every guard in that
+  switch, not just this round's.
+
+### Records repairs this round owes
+
+**`shipped.diff` was rewritten IN PLACE after the table consumed it** -- the
+immutable-artifact rule's exact shape, committed by this round.  The as-run bytes
+survived only as a staged git blob and were recovered from it; both versions now sit in
+`wdcaddtoinbufbound/killtable_20260830/` with `PROVENANCE.txt` naming which run consumed which, and the
+comment-only claim was CHECKED rather than asserted (three code lines each, identical).
+
+**Two files in that directory were written by a SEAT, not by this loop** -- an
+independent replication of the M5 kill with clean apparatus, kept for that reason.  The
+seat's report states it wrote nothing to the repo; the timestamps are consistent with a
+cleanup pass after the report, so it is recorded as a timing gap rather than a false
+statement.  **The general point is that an agent's account of what it touched is a
+CLAIM, and `git status` is the check.**
+### A live hazard on the machine, found by a seat rather than by a check
+
+`/tmp/gxsec-build` -- the WSL arc tree -- held a **pre-`#494`** `dev_wdc.c` while
+`build/`, `build-asan/` and `est/` all carried the fix.  A scratch clone taken from it
+would have measured `#494`-less code in the very file under review **and `cmp`-ed clean
+against its own donor**, so the two-part clearance would have passed on it.
+
+Filed as `novpadfourth`: the no-VPATH rule names FOUR trees and precommit section B
+enforces THREE, because the fourth lives in the WSL filesystem where the Windows-side
+checker cannot walk.  `tools/propagate_all_trees.sh` now does all four in one
+invocation with the two-part clearance run per tree -- the gap was never that nobody
+knew about the fourth tree, it was that the two existing scripts each covered part of it.
+
 ## Round 494 (#494) -- the alt-ctrl handler never decoded its own offset, so a store to a read-only register aborted a live transfer
 
 `DEVICE_ACCESS(wdc_altstatus)` read `relative_addr` **zero times** across its 91 lines while
@@ -23,7 +225,7 @@ clearance was RUN per leg rather than asserted.
 `0x58 -> 0x50` is DRQ clearing (the write aborted); `0xff -> 0x71` is `wdc_get_inbuf`
 returning `-1` on a purged ring.  **On the committed build the two adjacent addresses are
 byte-identical.**  Eighteen rows, both legs, **36 of 36 row predictions**
-(`killtable_20260830/RESULTS_detector18.txt`, sentinel `ALTOFF_DET_DONE`).
+(`wdcaltoffset/killtable_20260830/RESULTS_detector18.txt`, sentinel `ALTOFF_DET_DONE`).
 
 ### The fix declines the WHOLE action, and that is the round's main finding
 
@@ -68,19 +270,19 @@ measured this round as one unbounded `non-existant paddr` warning per access, a 
     m3  partial guard  helper-only           0 red, 36/36   KILLED ONLY BY THE SIGNATURE
     m4  value guard    `&& idata == 0x06`    2 red, 34/36   killed by the PHASE 4 rows
 
-**Two of the four are killed only by a row `killtable_20260830/PRETABLE.out` prescribed before the product edit**,
+**Two of the four are killed only by a row `wdcaltoffset/killtable_20260830/PRETABLE.out` prescribed before the product edit**,
 and both survived the row-list rewrite -- no `#490` recurrence.  `m4` is the shape a well-meaning
 hand makes: `0x06` is both the witness's value and the one `#481`'s comment documents as real
 OpenBSD traffic, so *tighten the decline to known traffic* re-opens the defect for `0x04`,
 `0x0c` and `0x0e` while every earlier row stays green.
 
-*** THE COUNTS ABOVE ARE CORRECTED.  `killtable_20260830/TABLE.txt` AS RUN REPORTS EACH NONZERO FIGURE ONE
+*** THE COUNTS ABOVE ARE CORRECTED.  `wdcaltoffset/killtable_20260830/TABLE.txt` AS RUN REPORTS EACH NONZERO FIGURE ONE
 TOO HIGH. ***  `grep -c ' FAIL '` also matched the probe's own verdict line -- *SOMETHING DID
 NOT HOLD -- read the FAIL line*.  Found by the fable5 seat and cross-checked against the
 probe's independent `N of 36` figure.  **The only count that was right was the zero**: with
 nothing failing there is no verdict line to miscount, so the anomalous-looking row was the
 correct one.  Every KILLED verdict is unchanged -- the counter was wrong about magnitude, never
-about sign.  `killtable_20260830/TABLE.txt` is corrected IN PLACE rather than re-run, because silently restating
+about sign.  `wdcaltoffset/killtable_20260830/TABLE.txt` is corrected IN PLACE rather than re-run, because silently restating
 history is indistinguishable from fitting the record to the answer.
 
 ### What this round does NOT do -- and the width qualifier is load-bearing
@@ -209,7 +411,7 @@ Corrected in both twin trees, and rewritten to name its artifact rather than any
 that sentence has now been wrong once already.
 
 **And the round's headline number cited a log that says something else.**  The pass-2 brief
-attached 36/36 to `RESULTS_shipped.txt`, which holds the 15-row witness at 30/30; the 18-row run
+attached 36/36 to `wdcaltoffset/killtable_20260830/RESULTS_shipped.txt`, which holds the 15-row witness at 30/30; the 18-row run
 existed only in `/tmp`.  The grok seat caught it mid-answer from the log itself -- *the claim did
 not become unverifiable, it became contradicted by its own evidence*.  Nine measurements are now
 preserved durably, each verified by its completion sentinel before copying.

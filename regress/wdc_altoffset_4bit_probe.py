@@ -138,7 +138,18 @@ def run_leg(binary, tag):
     parked = False
     while time.time() < deadline:
         emu.drain(0.5)
-        if "BREAKPOINT" in bytes(emu.buf[-4000:]).decode("latin1", "replace").upper():
+        #  *** MATCH THE HIT LINE, NOT THE BARE WORD. ***  This read
+        #  `if "BREAKPOINT" in <tail>.upper():` until 2026-08-30, and the
+        #  transcript contains the probe's OWN echoed setup command,
+        #  `breakpoint add 0x...`.  The check matched its own input and could
+        #  never return False.  It was right by accident in every run where the
+        #  guest parked, and silently wrong in the first run where it did not:
+        #  a mutant returning 0 from the device handler raises EXCEPTION_DBE, the
+        #  guest re-executes the faulting store forever, and the probe still
+        #  reported `breakpoint reached: True` with every register reading ??.
+        #  That was scored as a KILL -- a failed run counted as a table result.
+        #  The emulator prints `BREAKPOINT: pc = 0x...` on a real hit.
+        if "BREAKPOINT: PC" in bytes(emu.buf[-4000:]).decode("latin1", "replace").upper():
             parked = True
             break
     out("  parked at the halt breakpoint: %s" % ("yes" if parked else "*** NO ***"))

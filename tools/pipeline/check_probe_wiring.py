@@ -204,6 +204,14 @@ MANIFEST = {
     #  the values the commonest driver writes.
     "wdc_altoffset_4bit_probe.py":
         (CLASS_DETECTOR, "#494 wdc alt-ctrl -- the WDCTL_4BIT mask-guard escape"),
+    #  #495.  THE FLOOR FORCED THIS ONE TO BE A DETECTOR RATHER THAN EVIDENCE: the
+    #  shipped 128-row offline detector scores ZERO failures with the defect LIVE,
+    #  so vacuity-floor clause (a) is unsatisfiable from any existing row.  This is
+    #  the only instrument that observes the defect at all, and it is COMPLEMENTARY
+    #  to diff_wdc_identify.c rather than a replacement -- each catches mutants the
+    #  other misses, measured.
+    "wdc_addtoinbuf_probe.py":
+        (CLASS_DETECTOR, "#495 wdc ATAPI data-port write during DATA-IN -- rung-3"),
 
     "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
@@ -613,6 +621,9 @@ EXEMPT = {
     "wdc_altoffset_4bit_probe.py": ("2026-09-20",
                                     "two-leg differential; shares the single-leg-mode "
                                     "debt with its two siblings"),
+    "wdc_addtoinbuf_probe.py":     ("2026-09-20",
+                                    "two-leg differential AND needs a poisoned CD "
+                                    "image the battery does not build"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

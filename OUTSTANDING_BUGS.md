@@ -12573,3 +12573,46 @@ two-part clearance — structure where the decision happens, rather than a check
 cannot see the thing it checks. A script exists and ran clean
 (`regress/artifacts/wdcaltoffset/killtable_20260830/wslpropagate.sh`, sentinel
 `WSLPROP_DONE`); what is missing is the **obligation** to run it.
+
+
+## 2026-08-30 -- `#495` pass 2: two escapes that are coverage debt, not floor breaches
+
+### `wdcatapistswap` -- the guard's flag operand can be swapped, and no row sees it
+
+Replace `d->atapi_cmd_in_progress` in `#495`'s write-arm guard with `d->atapi_st != NULL`
+and it **escapes all 22 rows**. The measuring seat measured the damage rather than
+reasoning it: a push/pop pair reads `5a,a5` on both legs before a packet command, and
+`5a,a5` shipped versus **`ff,ff` under the swap** after one — refused, empty-ring
+over-read.
+
+**The mechanism, read from source:** `atapi_st` is allocated at the first dispatch and
+**never set back to NULL**. `wdc_new_command_reset()` zeroes the flag, the phase,
+`write_in_progress` and the ring pointers, and does not touch it. So after one ATAPI
+command the swapped guard refuses **every ordinary data-port write for the life of the
+device**.
+
+**Not a clause-(d) breach by the letter of the DEPENDS-ON bound** — `atapi_st` is not
+read by the guarded body, so the operand-swap enumeration does not reach it, which is why
+this files rather than being repaired in-round. What it shows is that the detector's
+ACCEPT side is unpinned: no row asserts that an ordinary data-port write still lands
+after a packet command has completed.
+
+**It is not a contrived mutant.** `dev_wdc.c`'s own comment files exactly this refactor,
+recording that `atapi_cmd_in_progress` *conflates two roles* — so a future round
+separating them could write this swap believing it a simplification.
+
+**Remedy:** one accept row — an ordinary data-port write after a completed packet
+command, asserted to land.
+
+### `wdcprobeendian` -- every wdc rung-3 probe has only a little-endian leg
+
+The write arm branches on `cpu->byte_order`, and every rung-3 probe in this family runs
+`evbmips -e malta` little-endian only. A mutant applying `#495`'s guard on the LE path and
+omitting it on the BE path **escapes all 22 rows** — measured — because no row ever
+executes the other branch.
+
+**The same hole exists for every guard in that switch**, not just this round's: the BE arm
+mirrors the LE arm and nothing walks it. Closing it needs a big-endian rig for this
+device, which is a rig question rather than a row question. Ranked low because the mutant
+is a copy-paste asymmetry rather than a shape a plausible edit produces — but recorded,
+because *unpinned by construction* is exactly the class this project keeps finding late.
