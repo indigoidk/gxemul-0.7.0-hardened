@@ -1078,6 +1078,48 @@ holding 262656 staged bytes, and the next push silently overwrote an unread one.
 Closes `wdcringambig` and `wdcaddtoinbufbound` as one round: one invariant, one predicate,
 two sites. Detector **127 rows** (was 103), gate **PASS (333 checks)**, kill table **9 of 9**.
 
+> ### *** THAT CLOSURE LINE IS HALF FALSE, AND THE SHIPPED DETECTOR SAYS SO IN ITS
+> ### OWN CONTRACT SECTION.  Corrected in place 2026-08-30 (L4). ***
+>
+> The line above claims this round closes TWO rows.  It closed ONE.  The second id --
+> spelled out here rather than beside the verb, so the grep that found this does not
+> re-match its own quotation -- is `wdcaddtoinbufbound`, **and it is still live.**
+>
+> `regress/diff_wdc_identify.c`, under the heading `OUT OF CONTRACT, stated rather than
+> hidden`, says it verbatim:
+>
+> > *`wdc_addtoinbuf()` itself is still UNBOUNDED.  The fix bounds its CALLER, and no row
+> > here constrains the primitive.  A future caller that pushes without a clamp reproduces
+> > the same overrun and these rows will not see it.*
+>
+> and, two bullets down, that the row is **`Tracked as`** that same id -- naming it as open
+> work in the very commit whose message reports it closed.  A third comment block in the
+> same file puts the reason structurally: *the primitive is unbounded and THE FIX DID NOT
+> BOUND IT.  The repair is in the caller, so the row pinned something still true afterwards
+> and could never go green.  A detector aimed at a primitive cannot verify a fix made in
+> its caller: right defect, wrong instrument.*
+>
+> **THE HARM IS THE QUEUE-ID-COVERING-TWO-DEFECTS SHAPE, REACHED THROUGH THE COMMIT
+> MESSAGE RATHER THAN THROUGH THE ROW.**  The carrier already warns that closing a
+> two-defect id on one defect buries the other.  Here the id was never merged -- two
+> separate rows existed and both were correct.  What merged them was one sentence of
+> PROSE in a commit message and a round block, and prose is what a future reader trusts
+> when deciding whether to re-open something.
+>
+> **The ledger was RIGHT and the prose was WRONG**, which is the reverse of the usual
+> direction here and is why this survived two days: every check that compares the ledger
+> against what shipped reads the ledger as the thing needing correction.  `wdcringambig`
+> genuinely closed and its row had gone stale in the other direction (`in work`, no
+> commits); fixing that row is what surfaced this one.
+>
+> The measured content that would have been buried is not hypothetical: a panel seat
+> measured **one 2-byte store desynchronising an entire 32768-byte chunk that walks clean
+> pre-fix**, through the data-port WRITE arm, which pushes with no phase guard.
+>
+> *Found while closing `wdcringambig`, by reading the detector instead of trusting the
+> commit message that named it.  The deriver is one grep and is recorded on the
+> `wdcaddtoinbufbound` row so it can be re-run rather than remembered.*
+
 ### The invariant is OCCUPANCY IS SOUND, deliberately not "full is distinguishable from empty"
 
 **Six** sites read the emptiness predicate; only the producer implements it. Naming the weak

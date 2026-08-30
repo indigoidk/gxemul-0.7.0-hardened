@@ -1,0 +1,125 @@
+==============================================================================================
+wdcaltoffset -- PASS 1, opus5 seat.  Four mutants built and scored; the read side witnessed.
+==============================================================================================
+date        2026-08-30
+baseline    HEAD = 3521a225010952bcbe160dfe3c997692f739d2ee   (build inputs differing: 0)
+tree        GXEMUL-SEC/src/  -- built in /tmp from `git archive HEAD`; NO project build tree
+            was written or mutated, so no .MUTANT sentinel is owed.
+
+*** CONFLICT OF INTEREST, BADGE A.  I built the witness this round rests on
+(witness_20260829/).  Everything below is a SELF-REVIEW of my own artifact.  It is
+recorded because a self-review that does not say so is the weakest evidence in this
+project's ladder, and two of the four results here are AGAINST that artifact. ***
+
+PROVENANCE, so the table is not measuring a fix of its own invention:
+  * mkmutants.py's fix leg was checked BYTE-IDENTICAL against witness_20260829/mkfixleg.py's
+    output AND against the preserved witness_20260829/fixleg.diff.
+  * table_a.py IMPORTS wdcaltoff_rung3_probe.py and calls its own run_one() against its own
+    ROWS.  The instrument is the shipped file, not a re-implementation.
+  * per leg: marker read back OFF DISK after writing; [ binary -nt source ]; binary differs
+    from base's; and no two of the six binaries are identical.
+  * 122/122 words and 122/122 mnemonics agree with the emulator's own disassembler on every
+    leg, and every leg parked at the halt breakpoint.
+
+----------------------------------------------------------------------------------------------
+TABLE A -- the SHIPPED 15-row witness, unmodified, against six legs        (TABLE_A.txt)
+----------------------------------------------------------------------------------------------
+  base   KILLED as-defect     the two P2 rows show the committed value           (correct)
+  fix    green 15/15                                                             (correct)
+  m1     KILLED on-accept     `!= 0` -> `!= 2`, always true on a 2-byte region,
+                              so BOTH offsets are declined.  P1's two ACCEPT rows
+                              went red (s1 50->58, s2 ff->71).
+  m2     KILLED as-defect     `!= 0` -> `> 1`, always false, guard kept and repair
+                              nulled -- the vacuity floor's clause (d) shape.
+                              Behaviourally identical to the committed build.
+  m3     *** ESCAPED 15/15 ***  guard only the destructive call; leaves
+                              `d->cur_command = COMMAND_RESET` reachable from 0x3f7.
+  m4     ESCAPED 15/15        register the region ONE byte wide.  NOT a defect --
+                              this is the ALTERNATIVE FIX, and the detector cannot
+                              tell the two candidate fixes apart.
+
+  => THE BRIEF'S TWO UNBUILT MUTANTS BOTH DIE.  The over-reaching fix dies on the accept
+     rows and the nulled decode dies on the defect rows, so the de-escalation accept-row
+     obligation and floor clause (d) are both DISCHARGED BY MEASUREMENT rather than by
+     reasoning.  The witness is stronger than its own author claimed.
+
+----------------------------------------------------------------------------------------------
+TABLE C -- m3's escape is NOT an equivalent mutant                        (TABLE_C.txt)
+----------------------------------------------------------------------------------------------
+Same image attached with the 'c' prefix, which makes diskimage_is_a_cdrom() true and the
+ATAPI-signature channel live.  cur_command == COMMAND_RESET is read at exactly two sites,
+the wd_cyl_lo and wd_cyl_hi read arms.
+
+  cyl_lo/cyl_hi after a guest store to the READ-ONLY 0x3f7:
+      base  14 / eb   signature latched -- DEFECT PRESENT
+      fix   55 / 66   declined
+      m3    14 / eb   signature latched -- DEFECT PRESENT
+
+  L1 (round-trip 55/66 before any poke) and L2 (the LEGAL 0x3f6 poke latches 14/eb on ALL
+  THREE legs) are green, so the fix leg's quiet row is a REFUSAL and not a dead channel.
+
+  => m3 is a real escape of a real, guest-observable consequence.  The shipped witness is
+     blind to it BY CONSTRUCTION: its only two defect rows read DRQ and the input ring,
+     both cleared by wdc_new_command_reset(), and cur_command is set by the CALLER and is
+     not touched by that helper at all.
+
+----------------------------------------------------------------------------------------------
+TABLE B -- the READ side IS cheaply witnessable                           (TABLE_B.txt)
+----------------------------------------------------------------------------------------------
+No datasheet is required.  status_byte() in dev_wdc.c reads d->drive, the ring pointers,
+write_in_progress, d->error and the atapi fields -- IT NEVER READS d->head.  A Drive
+Address Register is by definition a function of the head select.  So the two registers are
+separated by an INVARIANCE, with no numeric expectation anywhere:
+
+      read 0x3f6 head=0    51        read 0x3f7 head=0     51     D1  byte-identical
+      read 0x3f7 head=15   51        SDH readback  af             D2  invariant under head
+      read 0x3f7 DRQ set   58        read 0x3f6 DRQ set    58     D3  tracks the status reg
+
+  L1 (SDH reads back 0xaf) proves the head write LANDED, so D2's invariance is not a store
+  that never happened; L2 (0x3f6 unchanged by the head write) proves it is not merely that
+  nothing in the device moved.
+
+  => "the read side is unwitnessed" was true; "unwitnessable without hardware documentation"
+     is FALSE.  Three rows, one rig, no manual.
+
+----------------------------------------------------------------------------------------------
+Q3 -- WHAT AN UNMAPPED ACCESS ACTUALLY DOES HERE, MEASURED (m4)
+----------------------------------------------------------------------------------------------
+  * NO guest exception, NO halt, the write is DROPPED and the guest parks normally.
+  * every access emits `[ memory WRITE: to non-existant paddr=0x00000000180003f7 len=1
+    pc=... ]` -- measured 2 writes -> 2 messages (Table A) and 3 reads -> 3 messages
+    (Table B), so there is NO latch and NO counter.  memory_warn_about_unimplemented_addr
+    (src/core/memory.c) has only a `paddr < physical_max + 0x40000` early-out.
+  * a READ of 0x3f7 then returns 0x00, not the alt status -- a different wrong answer,
+    silently.
+  * under `-T` (halt_on_nonexistant_memaccess, src/core/main.c:466) the SAME access takes
+    the verbosity to ERROR, sets running = 0 on EVERY cpu and returns MEMORY_ACCESS_FAILED.
+
+  => narrowing is safe for the guest and NOT free: it trades a silent corruption for an
+     UNBOUNDED, UNLATCHED, guest-drivable WARNING flood at default verbosity, plus a hard
+     emulator stop under -T.  That is the floodclass shape, and it argues for decoding the
+     offset rather than narrowing the region.
+
+----------------------------------------------------------------------------------------------
+PREMISE AUDIT -- one brief premise is overstated, verified against git
+----------------------------------------------------------------------------------------------
+The brief says #481 "widened the consequence from harmless to destructive".  The pre-#481
+arm (867c697^, dev_wdc.c:497-498) is:
+
+        if (idata & WDCTL_4BIT)
+                d->cur_command = COMMAND_RESET;
+
+so a store to 0x3f7 with bit 3 set ALREADY clobbered cur_command -- and #481's own comment
+records that WDCTL_4BIT is libata's STEADY-STATE ap->ctl.  The alias was never harmless; it
+latched a bogus ATAPI signature on the common case.  #481 changed WHICH bit triggers it and
+ADDED the ring purge.  Severity did rise; "harmless -> destructive" overstates the before.
+Note this is the SAME channel m3 escapes on, which is why Table C could measure it.
+
+Also verified: relative_addr appears 0 times in DEVICE_ACCESS(wdc_altstatus) (it occurs only
+in dev_wdc_access); the region is registered 2 bytes UNCONDITIONALLY while the main region is
+`DEV_WDC_LENGTH * addr_mult` -- an asymmetry that is latent only because no wdc call site in
+the tree passes addr_mult (device.c defaults it to 1).  And dev_fdc.c:49 reads
+`#define DEV_FDC_LENGTH 6 /* TODO 8, but collision with wdc */` -- the tree's own record that
+0x3f6/0x3f7 are contested with the floppy controller, resolved by truncating the FDC.
+
+FINDINGS_DONE

@@ -189,6 +189,24 @@ MANIFEST = {
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset fix-leg builder, preserved as evidence"),
 
+    #  wdcaltoffset PASS 1, 2026-08-30.  Four instruments from the measuring seat's
+    #  six-binary table.  CLASS_RESEARCH on the precedent two entries down: they are
+    #  EVIDENCE preserved so the numbers can be re-run rather than believed.
+    #
+    #  `table_a.py` is worth a note because it is the reason the table is credible:
+    #  it IMPORTS witness_20260829/wdcaltoff_rung3_probe.py rather than
+    #  re-implementing the encoder, so it cannot measure a fix of its own invention.
+    #  Its fix leg was checked byte-identical to mkfixleg.py's output AND to the
+    #  preserved fixleg.diff before any mutant was built.
+    "artifacts/wdcaltoffset/mutants_20260830/mkmutants.py":
+        (CLASS_RESEARCH, "wdcaltoffset pass-1 mutant applier, preserved as evidence"),
+    "artifacts/wdcaltoffset/mutants_20260830/table_a.py":
+        (CLASS_RESEARCH, "wdcaltoffset pass-1 kill table (imports the witness probe)"),
+    "artifacts/wdcaltoffset/mutants_20260830/table_b.py":
+        (CLASS_RESEARCH, "wdcaltoffset read-side invariance table, preserved as evidence"),
+    "artifacts/wdcaltoffset/mutants_20260830/table_c.py":
+        (CLASS_RESEARCH, "wdcaltoffset ATAPI-signature table -- the only instrument that sees the m3 escape"),
+
     #  #471: THE NESTED FILES, now visible for the first time.  Keys are paths RELATIVE
     #  to regress/ -- top-level entries above stay bare basenames and are unaffected.
     #
