@@ -18,6 +18,58 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-29: *** A GUEST WRITE TO A READ-ONLY REGISTER ABORTS A LIVE TRANSFER ***
+>
+> **`wdcaltoffset`** -- sev **high**, guest-reachable, no harness needed, and its rung-3
+> witness was ALREADY COMMITTED by the round that made it worse.
+>
+> `DEVICE_ACCESS(wdc_altstatus)` **reads `relative_addr` ZERO times** while its region is
+> registered TWO BYTES WIDE.  Offset 0 is Device Control (`0x3f6`); **offset 1 is the Drive
+> Address Register (`0x3f7`), READ-ONLY on real ATA hardware** and on many platforms shared
+> with the floppy controller.  The handler cannot tell them apart.
+>
+> **`#481` widened the consequence from harmless to destructive.**  Before it the arm tested
+> `WDCTL_4BIT`, so a `0x06` write did nothing at either offset.  #481 corrected the bit to
+> `WDCTL_RST` -- RIGHT for offset 0 -- and turned offset 1 into a full soft reset.  Measured,
+> same scenario both builds, a live `WDCC_WRITE` with 40 bytes queued then a one-byte write:
+>
+> | build | offset 1 (`0x3f7`, read-only) |
+> |---|---|
+> | pre-#481 | `cur_command 0x30  wip 0x30  occ 40` -- untouched |
+> | **HEAD** | **`cur_command 0x100  wip 0x0  occ 0`** -- transfer aborted, 40 bytes purged |
+>
+> **The witness is already in the tree**, committed by #481 itself:
+> `regress/artifacts/wdcaltctrl/killtable_20260827/rung3_witness/rung3_offset.txt` shows a
+> guest write to `0x180003f7` leaving `cyl=0x6655` pre-fix and `cyl=0xeb14` after.
+> *A rung-3 measurement, preserved at a durable path, carried by no row -- the
+> unread-review class one level down, on a LIVE defect.*
+>
+> **`wdcaltwidth` CANNOT ABSORB THIS.**  It is about access WIDTH and is unmeasured.  Width
+> and offset DECODE are different claims; merging them is the id-covering-two-defects shape
+> where closing one buries the other.
+>
+> *The fix is NOT to revert #481 -- it corrected a real bit error.  It is to make the
+> handler decode its offset.*
+>
+> ### OPEN -- filed 2026-08-29: a round can ship without writing back, and no gate sees it
+>
+> **`ghostround`** -- a complete pass-1 brief was written and **NINE SEATS FIRED** to redo
+> work that had shipped two days earlier as #479/#480/#481/#482.  Three rows carried a full
+> 9/9 RESEARCH stage; the work shipped under four commit numbers; **zero entries landed back
+> on the rows**; the ledger froze at `in work`; and the loop, correctly treating the ledger
+> as the queue, drafted a fresh brief.  The brief's own "mandatory" mutant was already in
+> the preserved kill table, KILLED.
+>
+> > **The CHANGELOG knew.  The ledger did not.**
+>
+> **The existing gates are blind to it BY CONSTRUCTION**: precommit section H reads ledger
+> entries and *skips stages that never started* -- and the implement and review stages never
+> started.  Detection would have cost two commands: `git log -- <file>` and
+> `grep <rowid> CHANGELOG.md`.
+>
+> TAKEN: a `§C0` block in `BRIEF_TEMPLATE.md` requiring both commands in every brief's
+> settled premises.  FILED, not built: a checker for a CHANGELOG-named row still `in work`.
+>
 > ### OPEN -- filed 2026-08-29: a gated tool prints line numbers that are all wrong
 >
 > **`divsweeplines`** -- `diag_div_sweep.py` computes `ln = raw[:m.start()].count(chr(10))`

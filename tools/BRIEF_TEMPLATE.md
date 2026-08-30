@@ -66,6 +66,44 @@ anchor.**  Give the anchor, not the number:
 drift on that one file, whose own probe header says in capitals **"DO NOT RE-NUMBER THEM —
 GREP FOR THEM."**  A grep anchor that matches nothing is LOUD; a wrong number is silent.*
 
+## §C0 — *** HAS THIS ROUND ALREADY SHIPPED?  TWO COMMANDS, BEFORE YOU WRITE ANYTHING. ***
+
+**Adopted 2026-08-29, after a complete pass-1 brief was written and NINE SEATS WERE
+FIRED to redo work that had shipped two days earlier under four commit numbers.**
+
+```
+git log -1 -- <each file the round would touch>
+grep <each row id> CHANGELOG.md
+```
+
+Paste both outputs into §C as settled premises.  If the CHANGELOG names the row id,
+**THE ROUND HAS ALREADY RUN** -- what remains is records work, not implementation.
+
+### The incident, because the cost was a whole panel
+
+Three `dev_wdc.c` rows carried a full **9/9 research stage**.  The work then shipped as
+`#479`/`#480`/`#481`/`#482`.  **Zero entries landed back on the rows.**  The ledger froze
+at `in work`, and the main loop -- correctly treating the ledger as the queue -- drafted
+a fresh PASS-1 brief and convened nine seats on it.
+
+The brief's own "mandatory" mutant (END-flush) was already in the preserved kill table
+as `MdEndRing`, KILLED with 5 reds.  Its headline question -- *what is the smallest edit
+that resets some state and not the rest?* -- was already answered by `MdNoPhase`,
+`MdNoWip` and `MdNoRing`, each with a named SOLE carrier row.
+
+> **THE CHANGELOG KNEW.  THE LEDGER DID NOT.**
+
+### Why the existing gates cannot catch it
+
+`precommit_check.sh` section **H** reads LEDGER ENTRIES and **skips stages that never
+started** -- and the implement and review stages never started on those rows.  A round
+that ships without writing back is invisible to it BY CONSTRUCTION, not by oversight.
+This is the unread-review class one step worse: **an unrecorded ROUND**.
+
+*A checker -- warn when a row id named in a CHANGELOG round block is still `in work`
+with no post-ship entry -- is FILED, not built: it changes what every commit must pass
+and owes two negative controls, which is an owner decision rather than a round's.*
+
 ## §C — SETTLED PREMISES  *** MANDATORY.  COPY FORWARD.  THIS IS THE ONE THAT GETS DROPPED. ***
 
 ```
