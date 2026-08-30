@@ -526,11 +526,25 @@ check "readiness: truth table keeps its good arms + leftover demo" \
 #
 #  MEASURED 2026-08-16: 24 sites, 22 constant, 2 non-constant -- so kimi's
 #  hypothesis is REFUTED, and the ratchet is what keeps the refutation true.
-#    * dev_ns16550.c:79   115200 / d->divisor  -- the live one, filed `ns16550`
-#    * diskimage.c:543    bytes_left % ct->sector_size -- NOT drivable: every
-#      unrecognised TRACK mode does `goto fail` (:819) and nr_of_pt is
-#      incremented only after (:823), so a counted track always carries
-#      2048/2336/2352.  The plain division at :974 would fault first regardless.
+#    * dev_ns16550.c, anchor `115200 / d->divisor` -- the live one, filed `ns16550`.
+#      The other 115200 in that file is `115200 / 9600`, a CONSTANT divisor and not
+#      the shape, so anchor on the `d->divisor` form rather than on the number.
+#    * diskimage.c, anchor `(int) (bytes_left % ct->sector_size)` -- NOT drivable:
+#      every unsupported TRACK mode reaches a `goto fail` immediately following the
+#      diagnostic anchored at `unsupported TRACK mode`, and `nr_of_pt ++` runs only
+#      after that, so a counted track always carries 2048/2336/2352.  The plain
+#      division -- anchor `nr_sectors = bytes_left / ct->sector_size` -- would fault
+#      first regardless.
+#
+#  *** THESE WERE LINE NUMBERS UNTIL 2026-08-30 AND THREE OF THE FIVE HAD DRIFTED. ***
+#  `dev_ns16550.c:79` had become a comment line (the division is at :181);
+#  `diskimage.c:543` was wrong by 440 lines (:983); and `:819` named the LAST ARGUMENT
+#  LINE of the diagnostic rather than the `goto fail` below it -- the
+#  read-the-line-before-citing-it trap, inside a citation whose only job is to be
+#  re-checked.  `:823` and `:974` were still correct, so this is drift and not a bad
+#  transcription.  Every anchor above was verified to match EXACTLY ONCE when written;
+#  the bare form `bytes_left % ct->sector_size` matches TWICE and is deliberately not
+#  used.  An anchor that stops matching is LOUD; a drifted number is silent.
 #  A THIRD site means someone added a new instance of the class: read it before
 #  raising this number.
 DIVSWEEP=$HERE/diag_div_sweep.py
