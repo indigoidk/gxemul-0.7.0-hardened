@@ -99,4 +99,40 @@ for f in sorted(per, key=lambda k: -len(per[k])):
     for ln, txt in per[f][:4]:
         print("        %5d  %s" % (ln, txt.strip()[:64]))
 print()
+#  ------------------------------------------------------------------------------
+#  CLASSIFY BY ENCLOSING CONSTRUCT.  174 SITES IS NOT 174 DEFECTS -- that is this
+#  row's second half, and no census can answer it.  But part of the split IS
+#  mechanical: a call inside DEVICE_ACCESS is on a guest access path BY
+#  CONSTRUCTION, while one inside DEVINIT runs at machine construction where no
+#  guest can reach it.
+#
+#  *** THIS IS A NARROWING, NOT A VERDICT, and the tool proves that on itself:
+#  the first DEVICE_ACCESS site it reports for dev_dreamcast_gdrom.c is :1055,
+#  which is UNREACHABLE -- cmd_count steps by 2 and the ==12 equality clears the
+#  busy bit at the boundary.  Establishing that took a hand-derived warrant.
+#  DEVICE_ACCESS means WHERE TO LOOK; reachability stays a per-site question. ***
+MARK = re.compile(r"^(DEVICE_ACCESS|DEVINIT|DEVICE_TICK|static\s)", re.M)
+kinds, da_files = {}, {}
+for f in files:
+    s2 = strip_comments(io.open(_os.path.join(D, f), encoding="utf-8",
+                                errors="replace").read())
+    marks = [(m.start(), m.group(1).strip()) for m in MARK.finditer(s2)]
+    for m in PAT.finditer(s2):
+        prev = [k for pos, k in marks if pos < m.start()]
+        k = prev[-1] if prev else "(file scope)"
+        kinds[k] = kinds.get(k, 0) + 1
+        if k == "DEVICE_ACCESS":
+            da_files.setdefault(f, s2[:m.start()].count(NL) + 1)
+tot = sum(kinds.values())
+print()
+print("BY ENCLOSING CONSTRUCT (same %d calls):" % tot)
+TAG = {"DEVICE_ACCESS": "  <-- on a guest access path BY CONSTRUCTION",
+       "DEVINIT": "  <-- construction-time; no guest reaches it",
+       "DEVICE_TICK": "  <-- timer/tick path"}
+for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]):
+    print("  %-14s %4d  %5.1f%%%s" % (k, n, 100.0 * n / tot, TAG.get(k, "")))
+print()
+print("DEVICE_ACCESS sites appear in %d of %d files." % (len(da_files), len(files)))
+print("*** WHERE TO LOOK, NOT WHAT IS BROKEN. ***")
+print()
 print("EXITCENSUS_DONE")
