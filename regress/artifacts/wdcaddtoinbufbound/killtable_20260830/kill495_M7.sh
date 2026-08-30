@@ -6,12 +6,28 @@
 #      MSYS_NO_PATHCONV=1 wsl -d Gentoo -- bash \
 #        /mnt/c/.../wdcaddtoinbufbound/killtable_20260830/kill495_M7.sh
 #
-#  THE MUTANT:  `atapi_phase != PHASE_CMDOUT`  ->  `atapi_phase == PHASE_DATAIN`
+#  THE MUTANT:  the guarded body's comment  ->  `return 0;`
+#               (the PREDICATE is untouched; what changes is what the refusal DOES)
 #
-#  It reads like the same check and is strictly narrower.  The witness injects during
-#  DATA-IN, so the guard still refuses there and every one of the 20 rows should stay
-#  green -- while stores during PHASE_COMPLETED, which the shipped guard refuses, now
-#  get through.
+#  *** THE FIVE LINES THAT USED TO SIT HERE DESCRIBED M5, NOT M7. ***  They read
+#  "THE MUTANT: `atapi_phase != PHASE_CMDOUT` -> `atapi_phase == PHASE_DATAIN`",
+#  followed by M5's PHASE_COMPLETED rationale -- copied wholesale when this script was
+#  cloned from kill495_M5.sh.  This script's OWN Python applies `return 0;`, and its own
+#  `say` line reports "the guarded body now does return 0;", so the file contradicted
+#  itself twice over.
+#
+#  Found by the opus5 seat during `wdcatapistswap` pass 1, in a DURABLE ARTIFACT that
+#  had already shipped.  Its report said kill495_M6.sh carried the same defect; checked,
+#  and it does NOT -- M6's mutant line reads `&& len == 2` and matches both its Python
+#  and its `say`.  What M6 does share is M5's RATIONALE paragraph, which is merely
+#  ill-fitting rather than false.  **Verified rather than accepted: seat rank does not
+#  settle fact, and the correction is narrower than the finding that prompted it.**
+#
+#  WHAT M7 ACTUALLY TESTS: the refusal stops falling through to the handler's common
+#  tail.  An early `return 0;` skips `memory_writemax64()` and the `return 1`, so the
+#  guest gets an untouched read buffer and the access reports unhandled.  This is the
+#  SKETCH RULE's own worked example -- four readers proposed exactly this line for a
+#  different device without noticing the tail nine lines below.
 #
 #  THAT STATE IS REACHABLE, which is what makes the mutant worth building rather than
 #  arguing about: atapi_phase is set to PHASE_COMPLETED at the end of a transfer, and

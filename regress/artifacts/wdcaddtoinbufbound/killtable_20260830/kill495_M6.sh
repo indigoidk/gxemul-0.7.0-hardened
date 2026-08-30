@@ -8,15 +8,29 @@
 #
 #  THE MUTANT:  `atapi_phase != PHASE_CMDOUT`  ->  `atapi_phase != PHASE_CMDOUT && len == 2`
 #
-#  It reads like the same check and is strictly narrower.  The witness injects during
-#  DATA-IN, so the guard still refuses there and every one of the 20 rows should stay
-#  green -- while stores during PHASE_COMPLETED, which the shipped guard refuses, now
-#  get through.
+#  *** THE NINE LINES THAT SAT HERE WERE M5's RATIONALE, COPIED WHOLESALE WHEN THIS
+#  SCRIPT WAS CLONED -- a PHASE-narrowing argument inside a WIDTH-narrowing mutant.
+#  Byte-identical to kill495_M5.sh lines 11-19, verified by diff. ***
 #
-#  THAT STATE IS REACHABLE, which is what makes the mutant worth building rather than
-#  arguing about: atapi_phase is set to PHASE_COMPLETED at the end of a transfer, and
-#  atapi_cmd_in_progress is cleared ONLY by wdc_new_command_reset() at the NEXT
-#  command.  So the flag is still 1 while the phase is COMPLETED.
+#  They argued that PHASE_COMPLETED is reachable while the flag is still 1, which is
+#  true and is M5's point, and says nothing whatever about access WIDTH.
+#
+#  WHAT M6 ACTUALLY TESTS.  The guard gains `&& len == 2`, so it refuses only 2-byte
+#  stores.  At the time this ran, BOTH of the probe's injections were 2-byte, so the
+#  mutant refused both and every row stayed green -- it ESCAPED at 22/22, and that is
+#  why the round made the second injection a SINGLE byte.  The table had measured the
+#  inert member of a family and concluded the family was covered.
+#
+#  *** AND THE FAMILY WAS STILL NOT CLOSED, WHICH THIS SCRIPT COULD NOT HAVE KNOWN.
+#  Making the widths {1,2} closes the EQUALITY qualifiers and leaves the INEQUALITY
+#  `&& len != 4` open -- a floor breach found and repaired by wdcatapistswap, which
+#  injects a third width. ***
+#
+#  Corrected 2026-08-30.  A seat reported this file AND kill495_M7.sh as carrying M5's
+#  header; the first check answered on the `THE MUTANT:` line, found it correct here,
+#  and called the report over-broad.  **The check was aimed at the wrong lines.**  The
+#  seat was right about both files, and a correction is not safer than the thing it
+#  corrects.
 #
 #  IF IT ESCAPES, IT IS A CLAUSE-(d) FLOOR BREACH -- L2, repaired in-round however late
 #  it is found -- because the guard is present and its repair is nulled for a state the

@@ -1,3 +1,262 @@
+## Round wdcatapistswap -- the accept side of #495's guard, and a floor breach found
+## while pinning it
+
+**A HARNESS round: no product code changed.**  It adds two accept arms to the rung-3
+detector `#495` shipped, closing a measured hole in its accept side.  What arrived as
+*"one accept row"* left as **two vehicles, three access widths and a repaired floor**,
+every step of that growth forced by a seat.
+
+### The hole
+
+Swap the guard's flag operand for `d->atapi_st != NULL` and it escapes every row.  It is
+not a contrived edit: `dev_wdc.c`'s own comment records that `atapi_cmd_in_progress`
+*conflates two roles* and files exactly this refactor.  `atapi_st` has ONE write site and
+**no clear site anywhere**, so after a single packet command the swapped guard refuses
+every ordinary data-port write for the life of the device.
+
+### *** THE BRIEF'S OWN MECHANISM WAS WRONG, AND A PACKET-FED SEAT REFUTED IT FROM THE
+### INLINED FACTS ALONE ***
+
+The brief said the differential runs *post-packet, with no command in between*.  The glm
+seat objected that this needs some completion path to clear `atapi_cmd_in_progress`, and
+named the absence of one as a hole in the narrative.  Checked: the flag has exactly two
+write sites, and **no completion path clears it**.
+
+> So the naive form of this row -- push and pop straight after the transfer -- is
+> **VACUOUS**: the flag is still 1, the SHIPPED guard refuses too, both legs read `ff`.
+> It would have shipped green on both legs, looking like coverage.
+>
+> **The clearing command is load-bearing, not scene-setting.**  The states where the two
+> builds differ are exactly `flag == 0 && atapi_st != NULL`, and only a command produces
+> them.  A correction that strengthened the design rather than weakening it.
+
+A second seat then argued the row is too weak, because RECAL leaves `phase == 0` where
+*the real hole* leaves `PHASE_COMPLETED`.  **That state does not exist**: the reset zeroes
+flag and phase in the same three lines, and all SEVEN nonzero-phase writes lie on paths
+where the flag is 1 -- so `flag == 0` implies `phase == 0`.  Refuted twice over, because
+the mutant it proposed is #495's own M2, already measured KILLED at 18/22.
+
+### Two vehicles, because one conjunct exempts one opcode
+
+With only a RECAL arm, the grok seat found `&& d->cur_command != WDCC_RECAL` re-opens the
+hole and sweeps every row: after RECAL `cur_command` is 0x10, during DATA-IN it is still
+`ATAPI_PKT_CMD`, so the defect rows match the fix and the accept row stays green -- while
+every OTHER no-fill command refuses again.
+
+**A detector built from one scenario is blind along the axis that scenario holds fixed.**
+#495 learned this twice in one round -- M5 on the PHASE axis, M6 on the WIDTH axis -- and
+the axis here is *which no-fill opcode cleared the flag*.  Closed by a second arm through
+`ATAPI_SOFT_RESET`: one conjunct cannot exempt two opcodes.  **Measured: E3 reds the N
+rows and leaves the M rows green**, which is the design working rather than an argument
+that it should.
+
+### *** A CLAUSE-(d) FLOOR BREACH, MEASURED, REPAIRED IN-ROUND ***
+
+The opus5 seat ran nine mutants on real binaries and found `&& len != 4` sweeping the
+whole detector while restoring the defect **byte-for-byte**:
+
+    leg                    G     H     I
+    base (pre-#495)        a5    5a    00
+    shipped fix            c2    c3    c4     <- refused; real chunk-2 disk content
+    E4, WITH THE DATA-IN
+    INJECTION WIDENED      a5    5a    00     <- identical to the PRE-FIX build
+
+The guest is handed its own injected bytes as disk data and the table scores clean.
+
+> ### *** THAT TABLE'S THIRD ROW WAS MISATTRIBUTED IN THE FIRST DRAFT OF THIS BLOCK, AND
+> ### A SEAT CAUGHT IT BY OPENING `kill_E4.out`. ***
+>
+> As first written it read *"E4 `&& len != 4`"*, presenting those bytes as this round's E4
+> measurement. **They are not.** The seat that found E4 produced them by WIDENING the
+> DATA-IN injection from a 2-byte `sh` to a 4-byte `sw` — a modified probe, built to
+> demonstrate what E4 would admit. That is a demonstration of the hazard, and it is
+> legitimate; presenting it as a measurement of the shipped instrument is not.
+>
+> **What E4 actually scores against the repaired probe, from `kill_E4.out`:** G, H and I
+> are **ok** — `a5/5a/00` on the base leg and `c2/c3/c4` on the mutant leg, because the
+> 2-byte DATA-IN injection is still refused under `len != 4`. **The kill lands on row L**:
+> `want 50 got 58`. The 4-byte K2 store IS admitted, the ring gains bytes, and DRQ reads
+> set where the fix leaves it clear. 29/30, 1 red.
+>
+> So the repair works and the mutant dies — **by a different row than this block first
+> claimed.** A citation that names the wrong evidence is not saved by the conclusion being
+> right, and the log was in the same directory the whole time.
+
+The probe's K arm claimed *"No single width qualifier can refuse both"* -- true of
+EQUALITY qualifiers, **false of the inequality**, and the sentence sat two lines below its
+own refutation.  The closure condition, derived rather than guessed: `&& P(len)` escapes
+iff P is true on every INJECTED width and false on some IMPLEMENTED width, so **only
+{1,2,4} closes the family**.
+
+Repaired with **one instruction and no new row** -- a 4-byte `sw` beside the 1-byte
+injection.  It kills E4, M3 and M6 together.
+
+> **AND THE PROBE HAD NO 4-BYTE EMITTER AT ALL** -- no `sw`, no `lw` -- so the device's
+> `case 4:` arm and its whole `consumed` accounting had never been executed on any leg of
+> any run this detector had ever made.  Not an uncovered mutant: an uncovered ARM.
+
+Filed as coverage debt by one seat and re-dispositioned by another that measured it.
+`if (X)` -> `if (X && Y)` on the predicate #495 ADDED, which DOMINATES the edited lines,
+is clause (d)'s canonical form; #488's adjudication names that exact shape a floor breach.
+#495 is closed, so the late-dissent rule applies -- disposition 2, repaired in a follow-up
+commit, and this round already was one.
+
+### The table
+
+Twelve legs, 15 rows / 30 predictions.  **Every score below is read out of `TABLE.txt` by
+a generator, not transcribed** -- the frozen-number class has bitten this project four
+times, once inside the sentence memorialising the third.
+
+    LEG 0  22 / 22   ESCAPED
+    M1     24 / 30   KILLED (6 red)
+    M2     26 / 30   KILLED (4 red)
+    M3     26 / 30   KILLED (4 red)
+    M4     26 / 30   KILLED (4 red)
+    M5     29 / 30   KILLED (1 red)
+    M6     29 / 30   KILLED (1 red)
+    M7     15 / 30   KILLED (15 red)
+    E2     26 / 30   KILLED (4 red)
+    E3     28 / 30   KILLED (2 red)
+    E4     29 / 30   KILLED (1 red)
+    E5     30 / 30   ESCAPED
+
+**LEG 0 is the round's whole harness proof, and it exists because a seat found the old
+number unciteable.**  The escape figure this round inherited came from a scratch run whose
+artifact no longer exists, and the row disagreed with itself -- witness field `20/20`, note
+`all 22 rows`.  So the escape is re-measured here against the COMMITTED probe.  Both halves
+are now results of this round: **the committed detector cannot see the swap (22/22), the
+extended one kills it (26/30)**.
+
+`E5` escapes by design and is filed as `wdcflagswap2`: it REPLACES the flag operand rather
+than exempting an opcode, so the two-vehicle argument does not touch it.  Its harm is
+over-refusal and transient, where the swap this round closes is permanent.
+
+**Twelve of twelve predictions, written into `PRETABLE.out` before the table ran, were
+confirmed** -- including one that had to be corrected first: M7 was predicted green on the
+accept rows, and grok refuted it before any build, because M7's guard fires at the DATA-IN
+injection and the guest never parks.  *The arms are unreached, not inert.*  Measured 15/30
+with every register `??`.  **A prediction about a row's VALUE presumes the row RUNS.**
+
+### *** E6: THE ROUND'S LAST PREDICTION BECAME A MEASUREMENT ***
+
+`PRETABLE.out` claimed the SECOND row of each accept pair is not redundant, on the strength
+of a mutant nobody had built -- and unlike E2 and E5 that one sits **inside** clause (d)'s
+enumeration, being drawn from fields the guarded body reads.  A pass-2 seat named it as the
+round's only load-bearing unmeasured claim.  Built and run alone, on a quiet machine:
+
+    E6  refuse unless the ring is EMPTY   26 / 30   KILLED (4 red)   kill_E6.out
+
+    M / t7   1st byte after RECAL         5a   GREEN   <- ring empty, the push lands
+    M / v0   2nd byte after RECAL         ff   RED     <- ring occupied, refused
+    N / v1   1st byte after SOFT_RESET    5a   GREEN
+    N / a0   2nd byte after SOFT_RESET    ff   RED
+
+**Exactly the predicted asymmetry.**  The first row of each pair is blind to this family by
+construction, because at that push the ring genuinely is empty; only the second sees it.
+The pairs are not belt-and-braces, and that is now measured rather than argued.  (Row B's
+second read reds for the same reason, and row L on ring occupancy.)
+
+### What the arms actually buy, stated narrowly
+
+Rows B and M differ in exactly one dimension a mutant can read -- whether a packet command
+has ever run.  So the flag-conjunct deletion reds four rows redundantly, and **the operand
+swap is these arms' only UNIQUE kill**: at row B `atapi_st` is still NULL, so the swapped
+guard is false there and B stays green.  *"The accept side is pinned" is measurably false*,
+and the contract says the narrower thing.  **One** further accept-side mutant sweeps every
+row -- `E5`, the second operand replacement -- and it is named in the CONTRACT block, not
+BLIND-TO.
+
+> *That sentence read "Two further accept-side mutants ... are named in BLIND-TO" until the
+> pass-2 seat checked the referents.  Neither half survived: the width inequality was
+> repaired in this same round and is not accept-side anyway, and `wdcringresetblind` is not
+> accept-side either.  **The probe's identical dangling pointer was fixed five lines before
+> this one was written, and the sibling was not** -- the grep-for-siblings rule broken in
+> the paragraph that states it.*
+
+> ### *** AND E5 FILES BY RULE, NOT BY SEVERITY -- a stronger warrant than this round
+> ### first gave it, proved from source by the measuring seat. ***
+>
+> Two invariants, both from `dev_wdc.c` alone: `cur_command` has exactly two write sites and
+> **each is immediately followed by `wdc_new_command_reset()`**, whose only flag SET is
+> inside `case ATAPI_PKT_CMD:` -- so `flag == 1` implies `cur_command == ATAPI_PKT_CMD`.
+> Therefore **E5's guard is TRUE wherever the shipped guard is TRUE: it is a strictly WIDER
+> refusal and cannot restore the defect at all.**  The same holds for E2.
+>
+> So neither is a clause-(d) mutant, neither can ever be a floor breach, and filing E5 is
+> **required by the rule** rather than chosen on severity.  That forecloses re-argument;
+> "over-refusal and transient" is a severity comparison and invites it.
+>
+> It also settles the third-vehicle question by construction: every no-fill command leaves
+> `cur_command != 0xa0`, so **no opcode vehicle can ever catch E5** and a third would be
+> row growth with a provably zero kill.  What could catch it is an arm, not a vehicle -- a
+> drive-selection arm, since `wdc_command(0xa0)` against an absent image returns after the
+> reset leaving `cur_command == 0xa0` with the flag clear.
+
+### Records repaired, and one of them was mine about counting
+
+* The probe's header swore *"THE PROGRAM AND THE ROWS BELOW ARE UNTOUCHED ... measured 20
+  of 20"* -- **already false when it was committed**, because #495 added the J/K/L arm in
+  the same round.  Replaced with the instrument's revision history.
+* The wrong post-packet narrative had an uncorrected SIBLING in `OUTSTANDING_BUGS.md`
+  whose REMEDY line prescribed the VACUOUS form of this very row.  Corrected in both
+  places: a claim gets fixed everywhere it lives, not only where it was first found.
+* `kill495_M7.sh` described M5's mutant.  Its own Python and its own `say` line say
+  `return 0;`.  The seat reporting it also named `kill495_M6.sh`; **checked, and M6 is
+  correct** -- the correction is narrower than the finding that prompted it.
+* `kill495.sh` computes `WORDS_OK` and references it nowhere while printing *"its
+  encodings agree"*.  The new driver derives the count from the probe's own CONTROL 0 line
+  and **actually gates on it** -- measured `71 of 71` on every leg.
+* **`outcomegap`: I re-derived a carried count of 10, got 1993, filed a row saying the
+  carried figure was wrong -- and the gate then printed 10.**  It counts closed rows
+  carrying panel entries, excluding a grandfather cutoff; I counted raw empty fields over
+  every entry.  *A textual form counted where a property was meant, inside a row about
+  counting.*  And the cheapest check was the one I skipped: ask whether a tool already
+  counts this.
+
+### Errata the pass-2 panel raised, recorded here rather than edited into the artifacts
+
+* ***`PRETABLE.out`'s anti-`#490` clause carries a stale count of its own.***  It closes
+  *"must be DIFFED against these four"* and then lists **six** carry-forward items.  **It
+  is deliberately NOT corrected in place**: that file's mtime is the order proof for the
+  whole round, and re-writing it to fix a word would trade the proof for tidiness.  The
+  erratum lives here.  *A clause written to stop a lost obligation, miscounting its own
+  obligations, is this file's recurring shape and is worth the sentence.*
+* **Item (iii) did not carry.**  The block prescribed an explicit no-row sentence for the
+  self-normalising claim; neither the claim nor the sentence reached any shipped artifact.
+  Harmless — the claim never entered the probe, so CLAIM→ROW never fires — but the
+  prescription reads as an obligation and this is where it is discharged.
+* **"`#495` is closed" should read "committed."**  The late-dissent invocation stands on
+  the ROUND having shipped (`67120fd`); its ledger row `wdcaddtoinbufbound` is still
+  `in work`.  Different facts, and only one of them licenses the repair.
+* **The mutant namespaces of two rounds collide.**  `E4` means the little-endian blindness
+  in `#495`'s pass-2 receipt and `&& len != 4` in this round's table -- adjacent artifacts
+  about the same probe.  Cite them as `#495/E4` and `wdcatapistswap/E4`.
+* The pass-2 brief's disclosure said `matrix.html +2/-2`; the real figure is `5/5`.
+* ***`PRETABLE.out` says FIVE nonzero-phase write sites.  There are SEVEN, and my grep
+  was the broken thing.***  The pattern `atapi_phase *=[^=]` requires a non-`=` character
+  AFTER the `=`, so it silently skipped the two assignments SPLIT ACROSS LINES (the value
+  sits on the following line).  Eight assignments, one of them the zeroing, seven nonzero.
+  **The invariant is untouched** -- both missed sites sit behind `atapi_cmd_in_progress`
+  like the others, so `flag == 0` still implies `phase == 0`, and neither yields the
+  `flag==0 && phase==COMPLETED` state a dissenting seat needed.  Corrected above; NOT
+  edited into `PRETABLE.out`, for the mtime reason.
+  *A census pattern that cannot match a wrapped line reports a confident wrong number,
+  and this one was written while the round was documenting exactly that class.*
+
+### `#495`'s own record now points at the breach
+
+The late-dissent rule's purpose is *"so a future reader never sees false unanimity."*  A
+repair recorded only in the repairing round leaves `#495`'s block reading as a clean
+table, so one sentence was added there naming `&& len != 4` and where it was closed.
+
+### Round shape
+
+No `src/` change, so no propagation and no `.MUTANT` is owed.  The unrelated
+`gate_hygiene.sh` citation repair was split into its own commit (`e3cf79f`) on the fable5
+seat's advice, so this round's message is not wrong about its own diff.
+
+**Nine seats, all answered, nothing down.**  Panel `panel_20260830_124335`.
+
 ## Round 495 (#495) -- a host store during an ATAPI DATA-IN transfer was pushed into the ring, and the guest read its own bytes back as disk data
 
 Real ATAPI hardware never accepts host data-register stores while the direction is
@@ -108,6 +367,25 @@ Seven mutants now, all killed.  Two of them escaped the detector as first shippe
     M5  `== PHASE_DATAIN`             21/22   1 red   <- ESCAPED at 20/20; repaired
     M6  `&& len == 2`                 21/22   1 red   <- ESCAPED at 22/22; repaired
     M7  `return 0;` in the refusal    mutant leg never parks -- and the probe says so
+
+> ### *** THIS TABLE WAS NOT COMPLETE, AND THE MISSING MUTANT IS A FLOOR BREACH.
+> ### Added here 2026-08-30 by the round that repaired it, so this block does not read
+> ### as a clean sweep it was not. ***
+>
+> **`&& len != 4` escaped this detector entirely.**  Both injections above are an
+> EQUALITY-closed pair -- one 2-byte store, one 1-byte -- which is what M3 and M6 test.
+> The INEQUALITY was never built.  It refuses both injected widths, so every row stays
+> green, while 4-byte stores reach the ring during DATA-IN: the defect this round
+> removed, restored, invisible.
+>
+> **The width family was closed on one side only, and the K arm's comment claimed it was
+> closed outright** -- *"No single width qualifier can refuse both"* -- true of equality
+> qualifiers and false of the inequality.
+>
+> Repaired in `wdcatapistswap` by injecting a THIRD width (a 4-byte `sw`), under the
+> late-dissent rule: a measured false pass against a shipped detector's floor, fixed in
+> a follow-up commit rather than amended under this round's number.  Measured after the
+> repair: 29/30, the kill on row L.  See that round's block and `wdcwidth4`.
 
 **M5 was predicted by a packet-fed seat that said plainly it could not check its own
 claim from the packet.**  It was checkable here, and it was right: every row injected

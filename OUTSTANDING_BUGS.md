@@ -12574,6 +12574,42 @@ cannot see the thing it checks. A script exists and ran clean
 (`regress/artifacts/wdcaltoffset/killtable_20260830/wslpropagate.sh`, sentinel
 `WSLPROP_DONE`); what is missing is the **obligation** to run it.
 
+> ### *** CLOSED 2026-08-30. THE ASSUMPTION ABOVE IS FALSE, AND ONE COMMAND SETTLED IT. ***
+>
+> This entry reasoned that a checker here would be *"a checker that cannot see the thing it
+> checks"*, and preferred a round-boundary habit instead. **The WSL tree is visible.**
+> `//wsl.localhost/Gentoo/tmp/gxsec-build` reads fine from git-bash, and a `cmp` across
+> that boundary completes in **83 ms**. The check was never written; nothing was ever
+> preventing it — and the argument for a habit over a checker was resting on a technical
+> claim nobody had run.
+>
+> `precommit_check.sh` now carries a fourth section mirroring the `build-asan` one: a
+> `.MUTANT` sentinel row, then a `cmp` per changed `src/` file, keyed on `${GXWSLTREE}` so
+> it is testable without touching the real tree.
+>
+> **Absence skips for two reasons rather than one**, and the second is new: the tree may
+> never have been built, *or the distro may simply not be running*, in which case the path
+> is unreadable and nothing is wrong. A gate that hard-fails because a VM is asleep is a
+> gate that gets switched off.
+>
+> **Controlled in three states, on the shipped lines rather than a retyped copy** — the
+> control extracts the block from `precommit_check.sh` by grep anchor and drives it with a
+> synthetic file list, because this round edits no `src/` file and the real list would leave
+> the loop empty:
+>
+> 1. real tree, in sync → **GREEN**
+> 2. a copy whose `dev_wdc.c` differs by ONE line → **RED** ← the control that matters;
+>    without it the section is a claim, not a check
+> 3. absent tree → **SKIP**, not fail
+>
+> Preserved at `regress/artifacts/wdcatapistswap/killtable_20260830/CONTROL_novpadfourth.out`.
+>
+> *And the control's own first draft failed in the class this project keeps recording: its
+> `awk` range ended on the block's last **message** and stopped one line short of the
+> closing `fi`, so `eval` died with "unexpected end of file". Re-anchored on `^fi$`. **A
+> range that ends on prose ends wherever the prose happens to sit** — and the extraction now
+> prints its own line count, so a range selecting almost nothing is refused rather than run.*
+
 
 ## 2026-08-30 -- `#495` pass 2: two escapes that are coverage debt, not floor breaches
 
@@ -12604,6 +12640,39 @@ separating them could write this swap believing it a simplification.
 **Remedy:** one accept row — an ordinary data-port write after a completed packet
 command, asserted to land.
 
+> ### *** CORRECTED IN PLACE 2026-08-30 BY THE ROUND THAT CLOSES THIS ROW. TWO SENTENCES
+> ### ABOVE DESCRIBE A STATE THAT CANNOT EXIST, AND THE REMEDY LINE INHERITS THE ERROR. ***
+>
+> **The narrative:** *"a push/pop pair reads `5a,a5` on both legs before a packet command,
+> and `5a,a5` shipped versus `ff,ff` under the swap after one"* — with no command in
+> between. A packet-fed panel seat challenged that from the inlined facts alone, and the
+> tree agrees: `atapi_cmd_in_progress` has exactly **two write sites**, cleared in
+> `wdc_new_command_reset()` and set at the packet dispatch. **No completion path clears
+> it** — the completion arm sets `PHASE_COMPLETED` and leaves the flag; the only
+> `memset(d, 0, ...)` is devinit. So straight after a transfer the flag is still 1, **the
+> SHIPPED guard refuses too**, both legs read `ff`, and the differential as described
+> shows no difference at all.
+>
+> **The remedy line above is wrong in the same way**, and it is the more dangerous half
+> because it is an instruction: *"an ordinary data-port write after a completed packet
+> command"* names a state the shipped probe's row L already measures as **REFUSED on both
+> product legs**. A row built to that sentence would have been VACUOUS — green on both
+> legs, shipped looking like coverage.
+>
+> **THE CORRECT REMEDY, and it is what shipped:** the write must follow a **non-packet
+> command**, which is the only thing that produces `flag == 0 && atapi_st != NULL`. The
+> reset is the sole writer of `flag = 0`; `atapi_st` has one write site and no clear site,
+> so once allocated the disagreement is permanent. The clearing command is **load-bearing,
+> not scene-setting.**
+>
+> **The measurement is not disputed — the recorded STATE is.** The seat's run almost
+> certainly carried an intervening command this summary dropped. *And the cited artifact
+> (`opus495/wave2/run_q3.out`) no longer exists*, while this entry says "all 22 rows" and
+> the ledger's witness field says "20/20" — so the escape figure is re-measured on the
+> committed probe rather than carried forward. Found by the fable5 seat; the same sentence
+> was corrected in the ledger row, and it is corrected here because a claim gets fixed in
+> every place it lives, not only the first one found.
+
 ### `wdcprobeendian` -- every wdc rung-3 probe has only a little-endian leg
 
 The write arm branches on `cpu->byte_order`, and every rung-3 probe in this family runs
@@ -12616,3 +12685,138 @@ mirrors the LE arm and nothing walks it. Closing it needs a big-endian rig for t
 device, which is a rig question rather than a row question. Ranked low because the mutant
 is a copy-paste asymmetry rather than a shape a plausible edit produces — but recorded,
 because *unpinned by construction* is exactly the class this project keeps finding late.
+
+## 2026-08-30 -- `wdcatapistswap` pass 1: two escapes a seat derived, and a miscount of mine
+
+### `wdcwidth4` -- the width family WAS closed on one side only; CLOSED 2026-08-30
+
+*(The heading read "the width family is closed on one side only" -- present tense, on a row whose body re-dispositions it as closed and whose repair shipped in the same diff.  The `es438` state-vs-substance shape: a reader who trusts headings reads it as live.  Corrected after a pass-2 seat found the heading still asserting the old state.)*
+
+The rung-3 probe's K arm claims *"No single width qualifier can refuse both"*, having made
+one injection 2-byte and the other 1-byte so that neither `len == 1` nor `len == 2` can
+refuse the pair. **That is true of EQUALITY qualifiers and false of the inequality.**
+
+Append `&& len <= 2` -- equivalently `&& len != 4` -- to the `#495` guard and it still
+refuses both committed injections, so every defect row stays green; the accept rows stay
+green because the flag is 0 after a non-packet command; and **4-byte stores to the data
+port land in the ring during DATA-IN**, which is the defect `#495` removed. The write arm
+implements `case 4:` explicitly, so this is a width the device supports and no row
+exercises.
+
+> ### *** THE PARAGRAPH BELOW WAS THE FIRST DISPOSITION AND IT IS WRONG. A MEASURING SEAT
+> ### RE-RAN IT HOURS LATER AND THIS IS A CLAUSE-(d) FLOOR BREACH -- L2, REPAIRED IN-ROUND. ***
+>
+> **It was filed on a derivation and then MEASURED**, and the measurement is worse than the
+> derivation said:
+>
+> | leg | G | H | I |
+> |---|---|---|---|
+> | base (pre-`#495`) | a5 | 5a | 00 |
+> | shipped `#495` fix | **c2** | **c3** | **c4** |
+> | **E4** `&& len != 4` | **a5** | **5a** | **00** |
+>
+> The guest is handed its own injected bytes **as disk data**, byte-for-byte identical to
+> the pre-fix build, and the detector scores a clean 30/30 sweep. That is not a hypothetical
+> edit in an uncovered cell; it is the exact defect `#495` removed, restored and invisible.
+>
+> `if (X)` → `if (X && Y)` on the predicate `#495` **added**, which **dominates** the edited
+> lines, is clause (d)'s canonical form -- and `#488`'s adjudication says so in terms.
+> `#495` is closed, so the late-dissent rule applies: disposition 2, a measured false pass
+> against a shipped detector's floor, repaired in a follow-up commit. **`wdcatapistswap` is
+> that commit** and was already rewriting the row list, so the repair cost nothing extra.
+>
+> **Repaired with ONE instruction and NO new row:** a 4-byte `sw` beside the existing 1-byte
+> injection. Refused like its neighbours on the fixed leg (row L still `ST_IDLE`), lands like
+> them on the base leg (still `ST_DATAIN`). It kills E4, M3 and M6 together.
+>
+> **And the probe had no 4-byte emitter at all** -- no `sw`, no `lw` -- so the device's
+> `case 4:` arm and its whole `consumed` accounting had never been executed on any leg of any
+> run this detector ever made. That is the real finding: not an uncovered mutant, an
+> uncovered ARM.
+
+*The original disposition, kept so the correction can be checked against it:*
+
+Above-floor coverage debt: the detector sits above the vacuity floor and this is a
+hypothetical edit in an uncovered cell, not a live defect. **Remedy:** a 4-byte injection
+variant, the natural sibling of `wdcrearmwalk`.
+
+*Derived by the fable5 seat from the probe's own closure claim -- it asked what the claim
+was quantified over, and found the quantifier narrower than the sentence.*
+
+### `wdcringresetblind` -- the probe cannot see half of `#479`
+
+`wdc_new_command_reset()` does three things: clears the ATAPI flag and phase, clears
+`write_in_progress`, and empties the ring. **Delete the ring-emptying line and the probe
+scores a clean sweep**, because on the fixed leg the `#495` guard already keeps the ring
+empty at every command boundary this probe crosses, so nothing is left for the reset to
+discard.
+
+This is a property of the INSTRUMENT, not of the fix: the ring reset is live and
+load-bearing on paths the probe does not walk. Low, because it needs a deliberate deletion
+to expose and the offline detector covers ring occupancy from the other side -- the two are
+complementary, and this is one of the seams between them. Recorded in the probe's BLIND-TO
+list in the same round: a contract that does not name its blind spots is the overclaim
+clause (e) exists to prevent.
+
+### `outcomegap` -- and the recount that called a carried number wrong WAS the miscount
+
+A checkpoint line read *"10 closed rows carry panel entries with no seat outcome"*. I
+re-derived it, got **1993 entries across 83 closed rows**, and filed a row saying the
+carried figure was wrong by two orders of magnitude. `precommit_check.sh` then printed:
+**`closed rows with panel entries but NO seat outcomes: 10 total`**, followed by *`(51 more
+are GRANDFATHERED pre-2026-08-23 and not counted above)`*.
+
+**The two numbers count different things and only one of them is the claim.** The checker
+counts CLOSED ROWS carrying PANEL entries, excluding a deliberate grandfather cutoff. I
+counted RAW EMPTY FIELDS over every entry of every closed row, grandfathered and non-panel
+entries included. My denominator was never the claim's denominator.
+
+> **This is the session's own recurring defect, committed inside a row about counting: a
+> TEXTUAL FORM counted where a PROPERTY was meant.** `outcome` being an empty string is a
+> textual form; *a closed row whose panel work is ungraded* is the property, and the checker
+> already encodes it, cutoff and all. A count that names neither its unit nor its method
+> cannot be checked -- and I wrote one while correcting one.
+
+**And the cheapest check was the one I skipped: ask whether a tool already counts this.**
+`seat_scorecard.py` had the definition, the cutoff and the population the whole time.
+Re-deriving by hand what a checker already derives does not verify the checker; it produces
+a second unrelated number and an argument.
+
+**The live work is small and was correctly stated from the start:** ten rows --
+`exitsweep`, `xfamscope`, `m8sarseq`, `wdcnoirq`, `verdictbold`, `gdromdefault`,
+`asicbadaddr`, `lethalonly` and two the gate truncates -- need an `outcome` plus
+`outcome_note`. The 51 grandfathered rows are deliberately out of scope and are NOT work.
+
+**One genuine defect survives the correction.** Row `r421` carries a codex `review` entry
+with **no date and an empty `ev` field**, whose entire note is *"A review of the final diff
+is possible here."* That is a note saying a review COULD happen, sitting in the slot where
+evidence goes -- so a reader, and section G, see a review phase with a seat attached and
+nothing behind it. An unrun check and a completed one must not render the same. It is the
+only undated entry in the ledger, and the finding is independent of the miscount.
+
+### `wdcflagswap2` -- a SECOND operand replacement, and the two-vehicle arm does not stop it
+
+Replace `d->atapi_cmd_in_progress` in the `#495` guard with
+`d->cur_command == ATAPI_PKT_CMD`. **30/30, clean sweep**, measured on the extended probe.
+
+**This is not the escape the N arm was built for, and the distinction is the whole row.**
+`E3` is `&& cur_command != WDCC_RECAL` -- an *exemption* of one opcode, which the second
+vehicle (`ATAPI_SOFT_RESET`) defeats, because one conjunct cannot exempt two opcodes.
+**E5 is a *replacement* of the flag operand -- E2's own family -- and the two-vehicle
+argument does not touch it**: after both RECAL (0x10) and SOFT_RESET (0x08),
+`cur_command != 0xa0`, so the guard is false and *both* accept arms stay green.
+
+**Divergence, derived rather than measured:** `wdc_command()`'s no-disk-image early return
+sits *after* `wdc_new_command_reset()`, so selecting a nonexistent drive and then writing
+`ATAPI_PKT_CMD` leaves `cur_command == 0xa0` with the flag clear -- shipped accepts there,
+E5 refuses. Two stores, and probing a nonexistent slave is what a bus scan does.
+
+Ranked below `wdcwidth4` and filed rather than fixed: its harm class is **over-refusal**
+and **transient**, where E2's is permanent for the life of the device, and its divergence is
+reasoned rather than run.
+
+> **The honest statement of what the accept arm buys, from the seat that measured it:** rows
+> B and M differ in exactly one dimension a mutant can read -- whether a packet command has
+> ever run. E2 is the arm's only *unique* kill, because at row B `atapi_st` is NULL, so E2's
+> guard is false and B stays green. ***"The accept side is pinned" is measurably false***, and
+> the probe's contract now says the narrower thing.

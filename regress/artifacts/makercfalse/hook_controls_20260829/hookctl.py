@@ -17,7 +17,28 @@ import json
 import subprocess
 import sys
 
-HOOK = r"C:\DocumentNoSnc\CC\GXEMUL\.claude\hooks\wsl_dollar_guard.py"
+#  *** THE HOOK PATH IS DERIVED, NOT HARDCODED.  It read
+#  `C:\DocumentNoSnc\CC\GXEMUL\.claude\hooks\wsl_dollar_guard.py` until 2026-08-30 --
+#  ONE MACHINE'S ABSOLUTE PATH, in a tracked file. ***  That is the defect the whole
+#  harness migration fixed in 2026-08-17 ("scripts now DERIVE the project root from
+#  their own location; they used to hardcode one machine's absolute path, which is only
+#  half-tracked"), and this suite was written twelve days later carrying it anyway.
+#
+#  This file lives at  <root>/GXEMUL-SEC/regress/artifacts/makercfalse/
+#  hook_controls_20260829/, so the project root is five levels up.  $GXHOOK overrides.
+#
+#  IT DELIBERATELY TESTS THE `.claude/` PATH RATHER THAN THE TRACKED ONE: that is what
+#  Claude Code actually invokes, so testing it exercises the shim AND the real hook
+#  behind it.  Pointing this at the tracked file directly would stop testing the
+#  delegation, which is the part that can silently break.
+import os as _os
+_here = _os.path.dirname(_os.path.abspath(__file__))
+_root = _os.path.abspath(_os.path.join(_here, *([_os.pardir] * 5)))
+HOOK = _os.environ.get(
+    "GXHOOK", _os.path.join(_root, ".claude", "hooks", "wsl_dollar_guard.py"))
+if not _os.path.isfile(HOOK):
+    raise SystemExit("HOOKCTL_SETUP: no hook at %s -- refusing to report 18 of 18 "
+                     "against a file that is not there" % HOOK)
 NL = chr(10)
 Q = chr(39)
 D = chr(36)

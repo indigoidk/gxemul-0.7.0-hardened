@@ -1,0 +1,422 @@
+PRE-TABLE CHECK -- `wdcatapistswap`, the ACCEPT row for the #495 guard.
+Written 2026-08-30 BEFORE any table ran; this file's mtime is the order proof.
+
+ROUND SHAPE: a HARNESS round.  No product code changes.  It EXTENDS a kill-table-backed
+detector (regress/wdc_addtoinbuf_probe.py, shipped by #495 at 67120fd), which is exactly
+the population this block binds.
+
+DENOMINATOR: the probe scores `npass of npass+nfail` across BOTH legs, so the count is
+2 x len(ROWS).  Today len(ROWS) == 11, hence 22.  This round adds TWO rows -> 13 -> 26.
+Derived by `awk '/^ROWS = \[/,/^\]/' | grep -c '^    ('`, not transcribed.
+
+====================================================================================
+1.  SIBLING PARITY -- the arm's nearest sibling, and the asymmetry
+====================================================================================
+
+The #495 guard sits on the WRITE half of `case wd_data:`.  Its sibling is the READ half,
+eleven lines above it in the same case.
+
+  MEASURED ASYMMETRY: the READ arm carries NO phase guard at all.  It calls
+  `wdc_get_inbuf()` unconditionally, on every width, in both byte orders.
+
+That asymmetry is DELIBERATE and already defended, so no row is owed -- but the reason is
+worth stating because this round's oracle DEPENDS ON IT:
+
+  * out-of-protocol POPS are defended by the empty-ring check inside `wdc_get_inbuf()`,
+    which latches `warned_inbuf_overread`, prints once, and returns `(uint64_t) -1`;
+  * **the `return` is OUTSIDE the latch**, which is #464's finding and is pinned by the
+    existing `overread -1` row.  The function's own comment says so verbatim:
+    *"the guard wraps the fatal() ONLY.  *** THE `return` MUST STAY OUTSIDE IT. ***"*
+
+  >  SO THIS ROUND'S ACCEPT ROW HAS A CROSS-DEPENDENCY AND IT IS NAMED HERE RATHER THAN
+  >  DISCOVERED LATER: under the E2 mutant the row's two reads ARE out-of-protocol pops,
+  >  and the oracle value `ff` is exactly that `-1`.  If a future edit moved the `return`
+  >  inside the latch -- the #464 defect, reinstated -- the SECOND read would fall through
+  >  to the tail advance and this row's second oracle would change meaning.
+  >  **The `overread -1` row is therefore load-bearing for THIS row, in a different
+  >  probe.**  Neither file says so today; this block is where it gets said.
+
+  A latch already burned by an earlier row does NOT weaken the oracle, because the latch
+  gates the MESSAGE and not the return value.  Checked, not assumed.
+
+====================================================================================
+2.  CLAIM -> ROW -- every added comment sentence asserting an observable consequence
+====================================================================================
+
+The trigger is SEMANTIC, not a verb list: does this sentence assert something a row could
+observe?  A "would <consequence>" clause qualifies.
+
+  CLAIM (added to the probe, M arm):
+    "A NON-PACKET command clears atapi_cmd_in_progress (and empties the ring); an
+     ordinary data-port write must still LAND afterwards."
+  -> ROW: BOTH new rows.  M/t7 and M/v0 are the assertion, stated as values.
+
+  CLAIM: "the arm is self-normalising -- wdc_new_command_reset() empties the ring, so
+     this arm's starting state does not depend on what the preceding K injection left."
+  -> OBSERVABLE, and NOT pinned by a row of its own.  EXPLICIT NO-ROW SENTENCE:
+     a row distinguishing "ring emptied by the reset" from "ring already empty because
+     K was refused" would have to run with K's push ACCEPTED, which is a mutant state
+     (M6), not a state the shipped build can reach.  Under M6 the ring holds one byte at
+     the reset and the reset discards it; row M stays green either way.  **So the claim
+     is TRUE and UNOBSERVABLE by construction on the shipped build, and it is recorded
+     as a robustness note rather than as coverage.**
+
+  CLAIM (brief §6.4): "no re-run of the other mutants' KILLS is owed, only a re-citation
+     of their denominators."
+  -> NOT a probe comment; it is a records claim about this round.  It is DISCHARGED BY
+     MEASUREMENT, not by argument: the table re-run below scores every mutant at /26.
+
+====================================================================================
+3.  GUARD FIELD vs BODY FIELD
+====================================================================================
+
+  GUARD (predicate) reads:  d->atapi_cmd_in_progress , d->atapi_phase
+  BODY  (guarded) reads:    cpu->byte_order , len , idata ,
+                            and via wdc_addtoinbuf(): d->inbuf_head , d->inbuf_tail ,
+                            d->inbuf , d->warned_inbuf_overrun
+
+WRITE-SITE CENSUS (grep, this tree, today -- `<field> *=[^=]`):
+
+    atapi_cmd_in_progress    2 sites   :824 reset->0    :953 dispatch->1
+    atapi_phase              6 sites   :825 :954 :1256 :1669 :1679 :1713
+    inbuf_head / inbuf_tail  5 sites   :256 :305 :535 :830 :1756
+    atapi_st                 1 site    :1630 alloc.  *** NO CLEAR SITE ANYWHERE. ***
+
+DISAGREEING STATES, and whether a row is owed:
+
+  (a) phase moves WITHOUT the ring resetting -- :1256/:1669/:1679/:1713 all write the
+      phase mid-transfer while the ring persists.  ALREADY COVERED: rows G/H/I sit in
+      DATA-IN and J/K/L sit in PHASE_COMPLETED, which is that disagreement exercised in
+      both directions.  No new row owed.
+  (b) flag CLEARED while atapi_st stays set -- :824 clears the flag; :1630 is the only
+      write to atapi_st and nothing clears it.  **This disagreement is PERMANENT once
+      established: one write site, no clear site.**  NOT COVERED TODAY.  *** THIS IS THE
+      ROW THIS ROUND ADDS. ***
+
+  >  *** AND THE HONEST LIMIT OF THIS CHECK, WHICH IS WHY E2 ESCAPED THE IN-ROUND
+  >  ENUMERATION IN THE FIRST PLACE. ***  Clause (d)'s DEPENDS-ON bound draws operand
+  >  swaps ONLY from fields the guarded BODY reads.  `atapi_st` is NOT read by the body,
+  >  so the swap that produced E2 is OUTSIDE the enumeration -- correctly, by the letter,
+  >  which is why #495 filed it rather than repairing it in-round.
+  >
+  >  **So this check as specified does not reach `atapi_st`, and running it honestly here
+  >  does not change that.**  What found E2 was the ask-again, not this block.  Recorded
+  >  because a future reader could otherwise conclude the guard-field check would have
+  >  caught it; it would not, and the bound that excludes it is the same bound that keeps
+  >  clause (d) from becoming #392.
+
+====================================================================================
+4.  CHANNEL -- per row, the mutant it kills and the observable that differs
+====================================================================================
+
+  ROW                        KILLS                    OBSERVABLE THAT DIFFERS
+  ---------------------------------------------------------------------------------
+  M / t7  (1st byte back)    E2: swap the flag        the push is refused, so the ring
+                             operand for              is empty and the pop returns the
+                             `d->atapi_st != NULL`    -1 sentinel:  5a  ->  ff
+  M / v0  (2nd byte back)    E2, same mechanism       a5  ->  ff.  The SECOND read also
+                                                      pins that the -1 return survives
+                                                      the burned latch (see block 1)
+  M / t7 + M / v0            M1: drop the flag        after the reset atapi_phase == 0
+                             conjunct, leaving        and PHASE_CMDOUT is nonzero, so
+                             `phase != PHASE_CMDOUT`  the residual term still refuses:
+                                                      5a,a5 -> ff,ff
+  N / v1  +  N / a0          E3: `&& d->cur_command    after SOFT_RESET cur_command is
+  (the SECOND no-fill        != WDCC_RECAL` bolted    0x08, the exemption does not
+   vehicle)                  onto the swapped guard   apply, the writes are refused:
+                                                      5a,a5 -> ff,ff.  **The M rows
+                                                      stay GREEN under E3** -- that is
+                                                      the point of a second vehicle
+  N / v1  +  N / a0          E2 and M1 also           same mechanism as the M rows; the
+                                                      N arm is not vehicle-specific
+
+  *** THE SECOND ROW HAS A KILL OF ITS OWN, NAMED BY THE fable5 SEAT AND MISSING FROM
+  THE FIRST DRAFT OF THIS BLOCK. ***  Written as above, M/v0 looked like belt-and-braces
+  on M/t7.  It is not.  A mutant admitting a push only into an EMPTY ring -- an
+  `inbuf_head == inbuf_tail` gate, drawn from BODY-read fields and therefore squarely
+  inside the DEPENDS-ON enumeration -- PASSES the first row (ring empty, push lands,
+  t7 = 5a) and fails ONLY the second (ring now holds one byte, push refused, v0 = ff).
+  **The first row is structurally blind to that whole family.**  So the two rows kill
+  different things and neither is redundant.
+
+VACUOUS-BY-CONSTRUCTION CHECK: both rows name a channel that CAN vary under their named
+mutants.
+
+*** THE ESCAPE FIGURE IS RE-MEASURED, NOT CARRIED. ***  The `22/22 ESCAPED` above came
+from the pass-2 seat's scratch run, and the fable5 seat established that its cited
+artifact (`opus495/wave2/run_q3.out`) NO LONGER EXISTS, while the ledger's witness field
+says `20/20` and its own note says `all 22 rows` -- a number disagreeing with itself and
+with its evidence.  **This table therefore runs E2 against the COMMITTED (pre-extension)
+probe as its own leg**, so the escape is a measurement of this round rather than a
+transcription of a vanished one.  That is the frozen-number class caught one generation
+earlier than usual: before the number entered the record, not after.  The channel is the data port's own readback, which is the same channel rows B
+and G/H/I already prove is device-served and FIFO-ordered rather than RAM.
+
+PREDICTED SCORES, WRITTEN BEFORE THE TABLE RUNS so a fitted number is detectable:
+
+FOUR accept rows now, not two -- the N arm was added on pass 1 (see the amendment).
+Each row contributes TWO predictions, one per leg, so the detector is 15 rows / 30.
+
+    base (no mutant)   30 / 30,  0 red
+    E2                 26 / 30,  4 red   was 22/22 ESCAPED  <- the round's whole purpose
+    E3  (cur_command   28 / 30,  2 red   the M rows stay GREEN; only N reds.  A mutant
+         exemption)                      NOTHING in the detector could see before today
+    M1                 24 / 30,  6 red   was 20/22 (2 red), plus 4 new
+    M2 M3 M4 M5 M6      old numerator + 8, out of 30   (all four accept rows green)
+    M7                 15 / 30, 15 red -- THE ACCEPT ARMS NEVER RUN.  See below.
+
+  A row GREEN under a mutant scores on BOTH legs (+2); a row RED scores on the shipped
+  leg only (+1, 1 red).  That is where the 4-red and 2-red figures come from, and it is
+  the same arithmetic TABLE.txt's 20/22 for M1 already follows.
+
+  Reasoning for the five, stated so it can be refuted: after the reset the flag is 0, and
+  each either still requires the flag (M3 and M6 keep it as a conjunct), or is inert once
+  the guard is not taken (M2 needs PHASE_COMPLETED, M4 removes the guard), or keys on a
+  phase the reset has left at 0 (M5 tests `== PHASE_DATAIN`).
+
+  *** AND THE SIXTH PREDICTION WAS REFUTED BY A SEAT BEFORE THE TABLE RAN, WHICH IS
+  EXACTLY WHAT WRITING PREDICTIONS DOWN IS FOR. ***  The first draft of this block put M7
+  with the greens on the same reasoning -- "it keeps the flag as a conjunct, so after
+  RECAL the guard is not taken."  **That reasoning is sound and the conclusion is still
+  wrong, because it assumes the M arm executes at all.**  M7 replaces the refusal body
+  with `return 0;`, and the guard DOES fire on the DATA-IN injection at row E -- flag 1,
+  phase DATAIN.  The handler returns 0 there, the mutant guest takes EXCEPTION_DBE and
+  never parks, which is #495's own recorded result for M7.  So the guest is dead long
+  before the M arm is reached: `t7` and `v0` come back `??`, both new rows red on the
+  mutant leg, and the score is 13 of 26 with 13 red rather than a green-M control.
+
+  >  **M7 IS ALREADY KILLED AND MUST NOT BE CITED AS EVIDENCE THAT ROW M IS INERT UNDER
+  >  IT.**  The row is not inert; it is unreached.  Those are different facts and only
+  >  one of them is a control.  Found by the grok seat, reading #495's own M7 record.
+  >
+  >  The general shape is worth keeping: a prediction about a row's VALUE presumes the
+  >  row RUNS, and on a mutant that kills the guest that presumption is the whole error.
+
+*** THE CHANNEL LINE'S OWN CLAIM, CHECKED A THIRD TIME. ***  Its claim is that a row's
+channel-under-its-mutant is knowable at WRITING time, before any table runs.  Here it
+held AND it did work the other three checks could not: block 3 proves a disagreeing state
+EXISTS, but only the channel line forces the question *what would a read return there?* --
+and answering it surfaced the `-1`-outside-the-latch dependency in block 1, which is a
+cross-probe coupling nothing else in this round would have named.
+
+====================================================================================
+PASS-1 AMENDMENT -- written after the panel answered and STILL BEFORE table 1 ran.
+====================================================================================
+
+Four seats changed this design.  Recorded here rather than only in the round block,
+because two of them change what the CHANNEL block above claims.
+
+*** 1.  THE ROUND'S OWN §3 NARRATIVE WAS WRONG, AND SO IS THE LEDGER ROW IT CAME FROM.
+A PACKET-FED SEAT FOUND IT FROM THE INLINED FACTS ALONE. ***
+
+  The brief said the measured hole is a post-packet push/pop reading `5a,a5` shipped
+  versus `ff,ff` swapped, WITH NO COMMAND IN BETWEEN.  The glm seat objected that this
+  requires some completion path to clear `atapi_cmd_in_progress`, and named the absence
+  of one as a hole in the narrative.
+
+  CHECKED AGAINST THE TREE, and it is right: the flag has exactly two write sites, the
+  reset and the packet dispatch.  The completion path sets PHASE_COMPLETED and does not
+  touch it.  `memset(d, 0, ...)` exists only in devinit.
+
+  >  SO THE NAIVE FORM OF THIS ROW -- push and pop straight after the transfer -- IS
+  >  VACUOUS.  The flag is still 1, the SHIPPED guard refuses too, both legs read ff.
+  >
+  >  **The RECAL is not scene-setting; it is the only thing that creates a state where
+  >  the two builds differ.**  That is a strengthening of the design and a correction to
+  >  its stated warrant, which are different things and both are recorded.
+
+  The `wdcatapistswap` ledger row carries the same wrong sentence, inherited from the
+  pass-2 seat note that filed it.  It is corrected in place, not silently superseded.
+
+*** 2.  AN OBJECTION THAT WOULD HAVE MADE THE ROW VACUOUS, REFUTED BY AN INVARIANT. ***
+
+  The deepseek seat argued the row is too weak: RECAL leaves `phase == 0`, whereas "the
+  real hole state" leaves PHASE_COMPLETED, so a mutant keying on the phase would refuse
+  in one and not the other -- and it named `atapi_phase == PHASE_COMPLETED` as a
+  one-token escape of all 26 rows.
+
+  MEASURED BY CENSUS, and the state it needs does not exist:
+
+    * `wdc_new_command_reset()` is the ONLY writer of `flag = 0`, and it writes
+      `phase = 0` in the same three lines;
+    * all five sites writing a nonzero phase (:954 :1256 :1669 :1679 :1713) lie on paths
+      where the flag is 1 -- :954 is the line after `flag = 1`, the rest are inside
+      ATAPI transfer handling.
+
+  >  **`atapi_cmd_in_progress == 0` IMPLIES `atapi_phase == 0`.**  There is no state with
+  >  the flag clear and the phase COMPLETED, so no mutant can use the phase to tell the
+  >  post-RECAL state from "the real hole".  RECAL reaches the hole itself.
+  >
+  >  This invariant is now the NON-VACUITY WARRANT for both M rows and belongs to block 4
+  >  above: it is the reason the named channel can vary under E2 and M1 but cannot be
+  >  dodged by a phase-keyed edit.
+
+  Its companion claim -- that `atapi_st` might not be set by the time M runs -- is wrong
+  on the tree: `atapi_st` is allocated by the PACKET COMMAND dispatch at rows C-I, long
+  before the M arm.  The seat is packet-fed and marked the claim REASONED, not READ.
+
+*** 3.  THE CLEARING COMMAND WAS NEARLY THE WRONG ONE. ***
+
+  The minimax seat challenged the brief for inlining the switch without the rest of
+  `wdc_command()`.  It has TWO early returns before the switch: a no-disk-image ABRT, and
+  a CDROM + WDCC_IDENTIFY ABRT.  This probe attaches a CD image, so IDENTIFY -- the
+  natural choice -- would never have reached its case.  RECAL is unaffected, and both
+  returns sit AFTER the reset so the flag clears on every path; but the brief had inlined
+  an incomplete function, which is the failure the full-enclosing-function rule names.
+
+*** 4.  TWO MECHANICAL CATCHES, BOTH ADOPTED. ***
+
+  * agy: the arm needs `WDCC_RECAL`, the `t7`/`v0` register numbers, AND `REGS` extended
+    -- a row naming a register absent from REGS reads `??` and fails.  Verified after
+    editing: REGS holds 15 names and every row register is present.  (It said 13 until
+    the N arm landed and a measuring seat caught the stale figure -- a count written
+    into a durable record two hours before the thing it counts changed under it.)
+  * glm: the first draft used `t3` as scratch, and the seat could not tell from the packet
+    whether `t3` was read back.  It is not in REGS, so the draft was safe -- but the
+    sidestep (do the stores through `t7` and `v0`, the arm's own output registers) costs
+    the same eight instructions and removes the question.  Adopted.  The arm now touches
+    no register any other arm uses.
+
+  >  NOTE THE ASYMMETRY WORTH KEEPING: glm's concrete claim was FALSE for this probe and
+  >  its recommendation was right anyway.  The brief said `t0`-`t6` were "live", using the
+  >  word to mean "used by the program" where a reader takes it to mean "read back as a
+  >  row".  A seat cannot check REGS from a packet, and the fix was free.
+
+*** 5.  A SECOND VEHICLE WAS ADDED IN-ROUND, AND IT IS THE M5/M6 LESSON ON A NEW AXIS. ***
+
+  The grok seat asked the smallest-edit question of the DESIGN rather than of the shipped
+  guard, and found that with only the M arm the hole re-opens under ONE conjunct:
+
+      if (d->atapi_st != NULL && d->atapi_phase != PHASE_CMDOUT &&
+          d->cur_command != WDCC_RECAL) {
+
+  After RECAL `cur_command` is 0x10, so the M pushes land and the M rows stay GREEN.
+  During DATA-IN and PHASE_COMPLETED `cur_command` is still ATAPI_PKT_CMD, so G/H/I and L
+  match the fix.  **After every other no-fill command the writes are refused again** --
+  the hole fully re-opened, invisible to a detector with one vehicle.
+
+  >  **A DETECTOR BUILT FROM ONE SCENARIO IS BLIND ALONG THE AXIS THAT SCENARIO HOLDS
+  >  FIXED.**  #495 learned this twice in one round -- M5 on the PHASE axis, M6 on the
+  >  WIDTH axis -- and the axis here is WHICH NO-FILL OPCODE cleared the flag.  Nobody
+  >  looked for a third instance of a lesson two days old until a seat was asked to break
+  >  the design rather than to check it.
+
+  FIXED IN-ROUND under L1, not filed: the arm is pre-ship construction, and the repair is
+  the same shape as #495's own M6 repair -- add a SECOND no-fill opcode (ATAPI_SOFT_RESET,
+  0x08) and read back after each.  One conjunct cannot exempt two opcodes.  Cost: eight
+  instructions and two rows.  Both opcodes reach their case bodies on this CD-backed drive
+  because neither is IDENTIFY, so neither takes the CDROM early return.
+
+*** 6.  AND THE M7 PREDICTION WAS REFUTED BEFORE THE TABLE RAN -- see the CHANNEL block. ***
+
+  Filed here too because it is a seat finding: a prediction about a row's VALUE presumes
+  the row RUNS, and M7 kills the guest at row E.  The accept arms are unreached, not inert.
+
+*** 7.  WHAT THE fable5 SEAT FOUND, BEYOND THE E2 EVIDENCE HOLE ALREADY RECORDED ABOVE. ***
+
+  * The probe's clause-(e) CONTRACT did not name this family.  A CATCHES line was owed and
+    is added, plus two BLIND-TO entries for escapes the seat derived (`wdcwidth4` --
+    an INEQUALITY width qualifier `&& len <= 2` sweeps everything because no row injects
+    at len == 4; and `wdcringresetblind` -- deleting the ring reset escapes every row).
+    Both FILED as above-floor coverage debt.
+  * The probe header swore "THE PROGRAM AND THE ROWS BELOW ARE UNTOUCHED ... measured 20
+    of 20" -- **already false when committed**, because #495 added J/K/L in the same round.
+    L4, corrected in place with the instrument's revision history.
+  * The wrong post-packet narrative had an uncorrected SIBLING in `OUTSTANDING_BUGS.md`,
+    including a REMEDY sentence prescribing the vacuous form of this very row.  Corrected;
+    a claim gets fixed everywhere it lives, not only where it was first found.
+  * `kill495.sh` computes `WORDS_OK` and **references it nowhere**, while printing "its
+    encodings agree -- the run is scoreable".  A check that cannot fail, in the scorer,
+    one day after the checkpoint documented that class.  The new driver must wire it in
+    or drop the claim; it must not be copied forward as it stands.
+  * ACCEPT-ROW FAILABILITY, not floor clause (a), is the rule that governs these rows.
+    An accept row is green on both product legs BY DEFINITION, so clause (a) cannot bind
+    it; the round's record must say "accept-row failability discharged by a MEASURED
+    kill under E2/E3", never "clause (a) satisfied".  As a floor claim it would be
+    unfalsifiable, and floor claims are L2-enforceable.
+
+*** 8.  A MEASURING SEAT RAN THE WHOLE TABLE ON REAL BINARIES AND CONFIRMED ALL EIGHT
+PREDICTIONS -- THEN FOUND TWO ESCAPES OF THE 15-ROW PROBE, ONE OF THEM A FLOOR BREACH. ***
+
+  Nine mutants, scratch clones only, base-leg apparatus check on all fourteen runs.  Its
+  red-counts match this block's predicted arithmetic at EVERY mutant (its 13-row figures
+  differ from the ones above by exactly the N rows, which is the arithmetic working).  The
+  M7 correction is confirmed the hard way: every register including t7/v0 reads `??`.
+
+  **E4 -- `&& len != 4` SWEEPS 30/30 AND RE-OPENS #495 BYTE-FOR-BYTE.**
+
+      leg                    G     H     I
+      base (pre-#495)        a5    5a    00
+      shipped fix            c2    c3    c4     <- refused; real chunk-2 disk content
+      E4                     a5    5a    00     <- identical to the PRE-FIX build
+
+  The guest is handed its own injected bytes as disk data and the detector scores clean.
+
+  >  **DISPOSITION: L2 FLOOR BREACH, REPAIRED IN-ROUND -- NOT the coverage debt it was
+  >  first filed as.**  `if (X)` -> `if (X && Y)` on the predicate #495 ADDED, which
+  >  DOMINATES the edited lines, is clause (d)'s canonical form; `#488`'s adjudication
+  >  names that exact shape a floor breach.  #495 is closed, so the LATE-DISSENT rule
+  >  applies -- disposition 2, measured false pass against a shipped detector's floor,
+  >  repaired in a follow-up commit.  **This round is that commit**, and it is already
+  >  rewriting the row list, so the repair costs nothing extra.
+
+  THE CLOSURE CONDITION, derived by the seat rather than guessed: `&& P(len)` escapes iff
+  P is TRUE on every injected width and FALSE on some IMPLEMENTED width.  {1,2} leaves
+  `!= 4`; {2,4} leaves `!= 1`; {1,4} leaves `!= 2`.  **Only {1,2,4} closes it.**
+
+  REPAIRED WITH ONE INSTRUCTION and NO new row: a 4-byte `sw` beside the existing 1-byte
+  K injection.  On the fixed leg it is refused like its neighbours (ring empty, row L
+  still ST_IDLE); on the base leg it lands like them (DRQ set, still ST_DATAIN).  **It
+  kills E4, M3 and M6 together.**  The probe had NO 4-byte emitter at all -- no `sw`, no
+  `lw` -- so the device's `case 4:` arm and its `consumed` accounting had never been
+  executed on any leg of any run this detector ever made.
+
+  **E5 -- `cur_command == ATAPI_PKT_CMD` SWEEPS 30/30, and the N arm does NOT defeat it.**
+  This is a REPLACEMENT of the flag operand, E2's own family, not E3's exemption: after
+  both RECAL (0x10) and SOFT_RESET (0x08) `cur_command != 0xa0`, so the guard is false and
+  BOTH accept arms stay green.  "One conjunct cannot exempt two opcodes" does not touch it.
+  FILED (`wdcflagswap2`), not fixed: its harm class is over-refusal and TRANSIENT, where
+  E2's is permanent, and its divergence is derived rather than measured.
+
+  >  **AND THE SEAT NAMED WHAT THE ARM ACTUALLY BUYS, WHICH IS NARROWER THAN THE ROUND
+  >  WAS ABOUT TO CLAIM.**  Rows B and M differ in exactly one dimension a mutant can
+  >  read -- whether a packet command has ever run.  That is why M1 reds four rows (B and
+  >  M, redundantly), and why **E2 is the arm's only UNIQUE kill**: at row B `atapi_st` is
+  >  NULL, so E2's guard is false and B stays green.  *"The accept side is pinned" is
+  >  measurably false* -- E4 and E5 are both accept-side-relevant and both swept.  The
+  >  contract says the narrower thing.
+
+  TWO MORE WRONG RECORDS IT FOUND, both in durable artifacts: `kill495_M6.sh` and
+  `kill495_M7.sh` carry M5's header VERBATIM, each claiming the mutant is
+  `!= PHASE_CMDOUT -> == PHASE_DATAIN` while their titles and their own Python say
+  width-`len==2` and `return 0`.  And it confirmed the `WORDS_OK` dead check independently.
+
+  *It also confirmed the contention hazard from the other side: it saw `killswap.sh`
+  appear at 13:09 while its own table was building, and said so.  Holding that table was
+  the right call and is now measured rather than assumed.*
+
+====================================================================================
+CARRY-FORWARD OBLIGATION
+====================================================================================
+This block PRESCRIBES:
+  (i)   TWO rows on the data-port readback after a non-packet command, values 5a and a5;
+  (ii)  a MEASURED score out of 26 for every mutant cited in THIS round's record.
+        *** SCOPED, after the fable5 seat caught the first wording licensing a records
+        crime. ***  It read "the old `x/22` figures become wrong records the moment the
+        rows land."  They do not: #495's `x/22` numbers are TRUE measurements of the
+        11-row instrument and stay true forever.  What would be wrong is citing them as
+        scores of the CURRENT detector.  As first written this clause authorised editing
+        another round's correct records, which is the opposite of what it is for;
+  (iii) an explicit no-row sentence for the self-normalising claim (block 2), which is
+        true and unobservable on the shipped build;
+  (iv)  a sentence in the probe naming the `overread -1` cross-dependency (block 1);
+  (v)   an IN-PLACE correction of the `wdcatapistswap` ledger row, whose filed note
+        carries the same wrong post-packet sentence the amendment refutes -- a wrong
+        record survives being superseded, so it is corrected where it sits;
+  (vi)  the flag-implies-phase invariant carried into the probe as the M rows'
+        non-vacuity warrant, since it is what makes them undodgeable by a phase edit.
+
+If the row list is later rewritten from the pass-2 panel's findings, it must be DIFFED
+against these four, not merely extended -- #490 lost both of its prescribed rows exactly
+that way, three hours after prescribing them.
+PRETABLE_DONE

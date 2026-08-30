@@ -996,6 +996,96 @@ else
 	say "      --    build-asan/ absent -- rows skipped, not failed"
 fi
 
+#  *** THE FOURTH TREE.  As of 2026-08-30 the no-VPATH rule names FOUR build trees --
+#  est/, build/, build-asan/ and WSL /tmp/gxsec-build -- and this gate enforced THREE.
+#  Filed as `novpadfourth` and left open on the assumption that a WSL tree is
+#  unreachable from the Windows side. ***
+#
+#  *** THIS COMMENT SAID "HAS ALWAYS NAMED FOUR", AND THAT WAS BOTH UNDATED AND FALSE.
+#  A panel seat caught it on the diff, under the standing license. ***  `build-asan/`
+#  joined the propagation set BY OWNER RULING ON 2026-08-27 -- the section thirty lines
+#  above says so in its own first line -- so the set has been four for three days, not
+#  always.  An empirical claim about a RULE'S HISTORY, sitting undated in a tool
+#  comment, is the same defect this round repaired in a probe's header: a sentence that
+#  is wrong on the day it is committed and that nothing re-reads.
+#
+#  THE HYGIENE RULE GENERALISES, and the seat stated it better than this comment can:
+#  **claims about prior state either cite the rule's text and date, or are DATED.**
+#  That applies to TOOL comments exactly as it does to probe comments.
+#
+#  MEASURED 2026-08-30, and the assumption is false: `//wsl.localhost/<distro>/tmp/...`
+#  is readable from git-bash, and a `cmp` across that boundary completes in 83 ms.  The
+#  obstacle was never technical; the check simply was never written.
+#
+#  THE HAZARD IT CLOSES IS THE SAME ONE build-asan/ CLOSES, and this tree is the one
+#  the arc rig actually runs: a stale source here means a measurement attributed to a
+#  commit that the binary never contained.
+#
+#  ABSENCE IS NOT A FAILURE, for two reasons rather than one: the tree may never have
+#  been built, AND the WSL distro may simply not be running, in which case the UNC path
+#  is unreadable and nothing is wrong.  Both skip.  A gate that hard-fails because a VM
+#  is asleep is a gate that gets switched off.
+WSLT=${GXWSLTREE:-//wsl.localhost/Gentoo/tmp/gxsec-build}
+if [ -d "$WSLT/src" ]; then
+	if [ -f "$WSLT/.MUTANT" ]; then
+		bad ".MUTANT sentinel present in the WSL tree -- restore from SEC and REBUILD:"
+		sed 's/^/          /' "$WSLT/.MUTANT"
+	else
+		good "no .MUTANT sentinel in the WSL tree"
+	fi
+	for f in $CHANGED; do
+		case "$f" in src/*) ;; *) continue ;; esac
+		[ -f "$WSLT/$f" ] || continue
+		if cmp -s "$SEC/$f" "$WSLT/$f"; then good "$f == WSL /tmp/gxsec-build"
+		else bad "$f DIFFERS from the WSL tree -- the arc rig's source is not this source"; fi
+	done
+else
+	say "      --    WSL /tmp/gxsec-build unreachable (tree absent, or the distro is"
+	say "            not running) -- rows skipped, not failed"
+fi
+
+#  *** THE PreToolUse HOOK'S 18 CONTROLS ARE NOW RUN BY SOMETHING.  Until 2026-08-30
+#  they were run by nothing -- filed as `hookctlgate`. ***
+#
+#  THE CASE IS MEASURED, NOT HYPOTHETICAL: that hook shipped on 2026-08-29 with FOUR
+#  defects and nobody noticed for hours -- two false negatives (including the multi-line
+#  `bash -c` shape that actually bites) and two false positives that line-scoping was
+#  adopted to fix and did not.  A guard that fires on every Bash call had no regression
+#  test that anything executed.
+#
+#  CONDITIONAL ON PURPOSE.  The suite takes ~28 s, which is too slow for every commit
+#  and is exactly how a gate earns being switched off.  It runs only when the hook, its
+#  shim, or the suite itself is in the changed set -- which is when it can regress.
+#
+#  NOT a regress gate: it tests a Claude-Code hook, not the emulator, so no battery gate
+#  can host it.  This is the harness gate, which is where harness properties belong.
+HOOKCTL="$SEC/regress/artifacts/makercfalse/hook_controls_20260829/hookctl.py"
+hookctl_wanted=no
+for f in $CHANGED; do
+	case "$f" in
+	tools/hooks/wsl_dollar_guard.py|regress/artifacts/makercfalse/hook_controls_20260829/hookctl.py)
+		hookctl_wanted=yes ;;
+	esac
+done
+if [ "$hookctl_wanted" = yes ] && [ -f "$HOOKCTL" ] && command -v python > /dev/null 2>&1; then
+	hcout=$(python "$HOOKCTL" 2>&1)
+	if printf '%s' "$hcout" | grep -q HOOKCTL_DONE; then
+		hcn=$(printf '%s' "$hcout" | grep -oE '[0-9]+ of [0-9]+ controls pass' | head -1)
+		hcw=$(printf '%s' "$hcout" | grep -oE '[0-9]+ wrong' | head -1)
+		case "$hcw" in
+		"0 wrong") good "wsl-dollar hook controls: $hcn" ;;
+		*)         bad  "wsl-dollar hook controls: $hcn, $hcw -- the guard regressed" ;;
+		esac
+	else
+		#  No sentinel is NOT a pass.  The suite refuses outright if the hook is
+		#  missing, and that refusal must read as a failure rather than a skip.
+		bad "wsl-dollar hook controls did not reach HOOKCTL_DONE:"
+		printf '%s\n' "$hcout" | tail -3 | sed 's/^/          /'
+	fi
+elif [ "$hookctl_wanted" = yes ]; then
+	soft "the hook changed but its control suite could not be run -- NOT passed"
+fi
+
 # ---------------------------------------------------------------- C
 #  A MESSAGE THAT OUTRUNS ITS DIFF.  A commit message once claimed a citation
 #  fix that no hunk made.  Write messages FROM THE DIFF.  Decidable half: a
