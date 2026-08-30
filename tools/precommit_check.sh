@@ -1068,7 +1068,14 @@ for f in $CHANGED; do
 	esac
 done
 if [ "$hookctl_wanted" = yes ] && [ -f "$HOOKCTL" ] && command -v python > /dev/null 2>&1; then
-	hcout=$(python "$HOOKCTL" 2>&1)
+	#  *** PASS AN EXPLICIT OUTPUT PATH.  The suite defaults to `hookctl.out` in the
+	#  CURRENT DIRECTORY, so the first run of this section dropped a stray file in
+	#  the repo root -- caught by `git status` one minute after the commit that
+	#  introduced the section.  A gate that litters the tree it guards is a gate
+	#  people delete. ***
+	hctmp=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/hookctl.$$.out")
+	hcout=$(python "$HOOKCTL" "$hctmp" 2>&1)
+	rm -f "$hctmp"
 	if printf '%s' "$hcout" | grep -q HOOKCTL_DONE; then
 		hcn=$(printf '%s' "$hcout" | grep -oE '[0-9]+ of [0-9]+ controls pass' | head -1)
 		hcw=$(printf '%s' "$hcout" | grep -oE '[0-9]+ wrong' | head -1)

@@ -437,6 +437,18 @@ emit(NOP, "nop")
 #  of them lets a byte reach the ring -- and no row can or should kill them.  Two
 #  seats disagreed about this and BOTH were partly right: one showed the survivors
 #  exist, the other that they are inert.  The sentence, not the substance, was wrong.
+#
+#  *** AND THE INERTNESS IS MEASURED, NOT READ.  This is the argument's weakest link
+#  and a seat named it as such: `case 3` and `case 8` pushing nothing is a claim ABOUT
+#  CODE, and the closure rests entirely on it. ***  A measuring seat then built
+#  `&& len != 3` as a deliberate NEGATIVE control and scored it **30/30 ESCAPED** --
+#  which is the CORRECT result, not a hole.  An equivalent mutant must escape; if it
+#  had been killed, some row would be reading a channel it has no business reading.
+#
+#  So the two halves of the closure are now evidenced differently and deliberately:
+#  the HARMFUL family is closed by a measured KILL (E4, 29/30), and the INERT family
+#  is confirmed by a measured ESCAPE (`len != 3`, 30/30).  A detector that could not
+#  produce the second measurement would be over-fitted rather than complete.
 emit(ori(t6, zero, INJECT), "ori t6,zr,0x5aa5")
 emit(sb(t6, 0, t0), "sb t6,0(t0)")
 
@@ -779,7 +791,18 @@ def main():
     print()
 
     print("-" * 94)
-    print("LEG 1 -- SHIPPED build (source-identical to GXEMUL-SEC at HEAD c125450)")
+    #  *** PRINT THE BINARY YOU WERE HANDED, NOT A FROZEN CLAIM ABOUT WHICH REVISION
+    #  IT CAME FROM.  This line read "source-identical to GXEMUL-SEC at HEAD c125450"
+    #  -- an assertion about an INPUT the probe cannot see, and FALSE in all thirteen
+    #  of wdcatapistswap's own preserved logs, whose base leg was pinned to a
+    #  different revision entirely. ***
+    #
+    #  Behaviourally immaterial there -- the difference was comment-only, and the
+    #  driver `cmp`-pins its source honestly -- but it is this file's own header
+    #  lesson, one screen below the paragraph that teaches it: a frozen claim goes
+    #  false the first time anyone touches the thing it names, and nothing re-reads a
+    #  print statement.  Found by the fable5 regress review.
+    print("LEG 1 -- SHIPPED build: %s" % SHIPPED_BIN)
     print("-" * 94)
     ship, t_ship, hit_s, dg_s = run_one(SHIPPED_BIN, "shipped")
     print("  elapsed %.2f s   breakpoint reached: %s" % (t_ship, hit_s))

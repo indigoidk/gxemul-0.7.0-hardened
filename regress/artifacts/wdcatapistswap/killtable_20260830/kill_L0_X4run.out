@@ -1,0 +1,64 @@
+==============================================================================================
+wdcaddtoinbufbound -- RUNG-3 WITNESS on unmodified `evbmips -e malta`
+==============================================================================================
+machine   evbmips -e malta  5Kc, little endian, 128 MB (machine desc UNMODIFIED)
+wdc       physical 0x180001f0 via bus_pci piix4_ide; KSEG1 0xffffffffb80001f0
+media     -d ciR:/tmp/gxswap/cd.iso  (CD-ROM, IDE, read-only)
+program   54 guest instructions at 0xffffffff80100000, parks at 0xffffffff801000d0
+transfer  READ(10) LBA 0 x 128 blocks of 512 = 65536 B; chunk 1 = 32768
+inject    ONE 2-byte store of 0x5aa5 while atapi_phase == PHASE_DATAIN
+
+----------------------------------------------------------------------------------------------
+LEG 1 -- SHIPPED build (source-identical to GXEMUL-SEC at HEAD c125450)
+----------------------------------------------------------------------------------------------
+  command   /tmp/gxswap/base/gxemul -V -E evbmips -e malta -d ciR:/tmp/gxswap/cd.iso 0xffffffff80100000:/tmp/gxkswapx4/run_L0/addtoinbuf.bin
+  CONTROL 0  words 54 of 54 ; mnemonics 54 of 54 agree with the emulator's disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  elapsed 1.53 s   breakpoint reached: True
+  diagnostics seen: {'wdc inbuf overrun': 0, 'write to DATA, but not': 1, 'reading too much': 0, 'ATAPI command rejected': 0, 'DATA OUT': 0}
+
+----------------------------------------------------------------------------------------------
+LEG 2 -- fixA build, SAME guest program, SAME image
+----------------------------------------------------------------------------------------------
+  command   /tmp/gxkswapx4/E2/gxemul -V -E evbmips -e malta -d ciR:/tmp/gxswap/cd.iso 0xffffffff80100000:/tmp/gxkswapx4/run_L0/addtoinbuf.bin
+  CONTROL 0  words 54 of 54 ; mnemonics 54 of 54 agree with the emulator's disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  elapsed 1.52 s   breakpoint reached: True
+  diagnostics seen: {'wdc inbuf overrun': 0, 'write to DATA, but not': 1, 'reading too much': 0, 'ATAPI command rejected': 0, 'DATA OUT': 0}
+
+----------------------------------------------------------------------------------------------
+RESULTS -- every value below was produced by a GUEST LOAD through real decode
+----------------------------------------------------------------------------------------------
+                                                       reg  SHIPPED          FIXA            
+  A  RAM LIVENESS     RAM readback, same sb/lbu shapes t8   want 55 got 55   want 55 got 55    ok
+  B  DEVICE SIGNATURE 1st read of the data port        s0   want 5a got 5a   want 5a got 5a    ok
+  B  DEVICE SIGNATURE 2nd read -- a FIFO, not a cell   s1   want a5 got a5   want a5 got a5    ok
+  C  LIVENESS         status with chunk 1 queued       s2   want 58 got 58   want 58 got 58    ok
+  D  DISK CONTENT     chunk 1 byte 0 (image[0])        s3   want c0 got c0   want c0 got c0    ok
+  F  DISK CONTENT     chunk 1 LAST byte (image[32767]) s4   want c1 got c1   want c1 got c1    ok
+  G  *** DEFECT ***   1st byte after re-arm            s5   want a5 got a5   want c2 got c2    ok
+  H  *** DEFECT ***   2nd byte after re-arm            s6   want 5a got 5a   want c3 got c3    ok
+  I  *** DEFECT ***   3rd byte after re-arm            s7   want c2 got c2   want c4 got c4    ok
+     drain loop counter reached zero                   t9   want 00 got 00   want 00 got 00    ok
+  L  *** DEFECT ***   status after a store in PHASE_COMPLETED t1   want 58 got 58   want 50 got 50    ok
+
+  22 of 22 predictions correct across both legs
+
+----------------------------------------------------------------------------------------------
+THE DIFFERENTIAL -- the rows the defect owns, same script, opposite colour
+----------------------------------------------------------------------------------------------
+  G  *** DEFECT ***   1st byte after re-arm            s5    a5 -> c2   AS PREDICTED
+  H  *** DEFECT ***   2nd byte after re-arm            s6    5a -> c3   AS PREDICTED
+  I  *** DEFECT ***   3rd byte after re-arm            s7    c2 -> c4   AS PREDICTED
+  L  *** DEFECT ***   status after a store in PHASE_COMPLETED t1    58 -> 50   AS PREDICTED
+
+----------------------------------------------------------------------------------------------
+WHY THIS IS THE DEVICE AND NOT RAM  (device-signature control)
+----------------------------------------------------------------------------------------------
+  s0/s1 read the SAME address twice and returned 0x5a then 0xa5.
+  A memory cell returns the last value written to BOTH reads (a5,a5).
+  Push order (5a,a5) can only come from a FIFO -- the wdc inbuf ring.
+  And row D returned 0xc0, the poisoned CD image byte at offset 0,
+  so the ring demonstrably holds real DISK data, not device scratch.
+
+ADDTOINBUF_RUNG3_DONE

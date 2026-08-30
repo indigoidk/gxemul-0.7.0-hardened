@@ -63,13 +63,24 @@ say ""
 FR="$O/frozen_extended.py"
 FRC="$O/frozen_committed.py"
 cp "$SEC/regress/wdc_addtoinbuf_probe.py" "$FR"
-git show HEAD:regress/wdc_addtoinbuf_probe.py > "$FRC" || exit 9
+#  *** THE PRE-EXTENSION PROBE IS PINNED BY SHA, AND THIS IS THE SECOND TIME TODAY
+#  A RELATIVE REF IN THIS DIRECTORY WENT STALE THE MOMENT A COMMIT LANDED. ***  It
+#  read `git show HEAD:`, which was right WHILE the round was in flight -- HEAD held
+#  the 11-row probe and the working tree held 15.  The round then SHIPPED, HEAD
+#  became the 15-row probe, and the guard below correctly refused a run in which
+#  there was no longer any extension to measure.
+#
+#  The guard was right; the reference was wrong.  LEG 0 wants the probe as it stood
+#  BEFORE this round extended it, which is a fixed revision, not a moving one.
+#  `runswap.sh` learned the identical lesson about FIXREV this morning.
+PROBEREV=${PROBEREV:-e61ccd8^}      # the parent of the round that added the arms
+git show "$PROBEREV:regress/wdc_addtoinbuf_probe.py" > "$FRC" || exit 9
 
 EXT_ROWS=$(awk '/^ROWS = \[/,/^\]/' "$FR"  | grep -c '^    (')
 CMT_ROWS=$(awk '/^ROWS = \[/,/^\]/' "$FRC" | grep -c '^    (')
 say "instruments frozen:"
 say "  extended (working tree)  $EXT_ROWS rows -> $((EXT_ROWS * 2)) predictions"
-say "  committed (git HEAD)     $CMT_ROWS rows -> $((CMT_ROWS * 2)) predictions"
+say "  pre-extension ($PROBEREV) $CMT_ROWS rows -> $((CMT_ROWS * 2)) predictions"
 if [ "$EXT_ROWS" -le "$CMT_ROWS" ]; then
 	say "*** THE EXTENDED PROBE IS NOT LARGER THAN THE COMMITTED ONE.  There is no"
 	say "*** extension to measure.  Refusing."
@@ -139,6 +150,17 @@ elif m == "E3":
     new = (TAB + "if (d->atapi_st != NULL &&" + NL +
            TAB + "    d->atapi_phase != PHASE_CMDOUT &&" + NL +
            TAB + "    d->cur_command != WDCC_RECAL) {" + NL)
+elif m == "X4":
+    #  `wdcringresetblind`: delete the RING RESET from wdc_new_command_reset(), leaving
+    #  the flag/phase clears intact.  Two seats predicted opposite results -- one said
+    #  29/30 (reasoning from the base leg), the other a clean escape (reasoning that the
+    #  mutant lands only on the FIX tree, where the intact guard keeps the ring empty so
+    #  the reset is dead code).  Measured rather than argued.
+    RING = chr(9) + "d->inbuf_head = d->inbuf_tail = 0;" + NL
+    if t.count(RING) != 1:
+        sys.exit("ring-reset anchor %d -- refusing" % t.count(RING))
+    io.open(p, "w", encoding="utf-8", newline="").write(t.replace(RING, "", 1))
+    sys.exit(0)
 elif m == "M4":
     #  clause (b): remove the guard ENTIRELY, restoring the pre-fix control flow.
     if t.count(PRED + BODY + CLOSE) != 1:
@@ -193,6 +215,29 @@ score () {   #  $1 = run dir, $2 = label
 		exit 8
 	fi
 	say "  apparatus: base leg parked, and $WG of $WT encodings agree -- scoreable"
+
+	#  *** THE RUN MUST HAVE FINISHED, NOT MERELY GOT FAR ENOUGH TO PRINT A COUNT.
+	#  Filed as `killdrivercrash`: a kill driver that reads neither the run exit
+	#  status nor the completion sentinel scores a CRASHED mutant purely by HOW FAR
+	#  IT GOT -- a partial run reads as KILLED, a very partial one as ESCAPED. ***
+	#
+	#  This driver was PARTLY protected already: a missing prediction count refuses
+	#  below.  But the probe prints that count BEFORE its differential section and
+	#  its sentinel, so a crash in between scored normally.  Narrower window, same
+	#  class, and the census behind that row found SEVEN drivers with no sentinel
+	#  check at all.
+	#
+	#  NOT hypothetical for this device: `write_in_progress` and `write_count` are
+	#  set together and CLEARED AT DIFFERENT SITES, and the drain guard divides by
+	#  `512 * d->write_count`.  An operand swap leaving the flag set while the count
+	#  is zero is a MODULO BY ZERO -- exactly the clause-(d) shape this table builds.
+	if ! grep -q ADDTOINBUF_RUNG3_DONE "$R/out.txt"; then
+		say "  *** THE PROBE DID NOT REACH ITS COMPLETION SENTINEL.  It may have"
+		say "  *** crashed after printing a score.  Refusing to score a partial run;"
+		say "  *** a mutant that dies is a RESULT, but not this one."
+		tail -4 "$R/out.txt" | sed 's/^/          /' | tee -a "$OUTF"
+		exit 8
+	fi
 
 	#  Score from the probe's OWN prediction count, never by grepping prose -- a
 	#  `grep -c ' FAIL '` matched a probe's own verdict line last round and inflated
@@ -271,8 +316,20 @@ if [ "$MUTANTS" != "M1 M2 M3 M4 M5 M6 M7 E2 E3 E4 E5" ] && [ -z "$TABLETAG" ]; t
 	exit 8
 fi
 cp "$OUTF" "$ART/TABLE${TABLETAG}.txt"
-cp "$O/run_L0/out.txt" "$ART/kill_L0_committed_probe.out" 2>/dev/null
+#  *** THE KILL LOGS ARE TAGGED TOO, AND THIS WAS THE ROUND'S OWN LESSON APPLIED
+#  TO ONLY HALF ITS OWN MECHANISM. ***  The TABLE was tagged; the per-mutant logs
+#  and LEG 0 were not.  So the follow-up E6 run overwrote the twelve-leg table's
+#  `kill_L0_committed_probe.out`, and the X4 run overwrote it AGAIN -- **twice, and
+#  a regress-review seat's report about it went stale within the hour.**  The
+#  original survived only because it had been COMMITTED and could be recovered from
+#  the git blob, exactly as `shipped.diff` was earlier in this same round.
+#
+#  This is the immutability discipline applied to its own newest mechanism and
+#  stopping halfway.  A tagged run now writes tagged logs, and LEG 0 -- which runs
+#  unconditionally -- writes a tagged name so a follow-up cannot claim the main
+#  table's slot.
+cp "$O/run_L0/out.txt" "$ART/kill_L0${TABLETAG}_committed_probe.out" 2>/dev/null
 for MUT in $MUTANTS; do
-	[ -f "$O/run_$MUT/out.txt" ] && cp "$O/run_$MUT/out.txt" "$ART/kill_$MUT.out"
+	[ -f "$O/run_$MUT/out.txt" ] && cp "$O/run_$MUT/out.txt" "$ART/kill${TABLETAG}_$MUT.out"
 done
 echo "preserved: wdcatapistswap/killtable_20260830/TABLE.txt + kill_<mutant>.out"

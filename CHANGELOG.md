@@ -156,6 +156,31 @@ construction, because at that push the ring genuinely is empty; only the second 
 The pairs are not belt-and-braces, and that is now measured rather than argued.  (Row B's
 second read reds for the same reason, and row L on ring occupancy.)
 
+### *** X4: A SECOND SEAT DISAGREEMENT, SETTLED BY MEASUREMENT THE OTHER WAY ***
+
+`wdcringresetblind` says deleting the ring reset from `wdc_new_command_reset()` escapes the
+detector.  Its figure -- *"escapes all 26"* -- was the **13-row** instrument this round then
+grew past, so the round had invalidated its own filed number and nobody re-ran it.
+
+Two seats predicted opposite results:
+
+* **opus5: `29/30`.**  On the base leg the K and K2 injections LAND, so the ring holds bytes
+  at the RECAL boundary and row M/t7 pops a stale `0xa5` where it wants `0x5a`.
+* **kimi: a clean escape.**  The mutant is applied to the **FIX** tree; the base leg is
+  UNMUTATED.  On the fix leg the intact guard refuses every injection, so the ring is empty
+  at every command boundary this probe crosses and **the reset is dead code there**.
+
+    X4  delete the ring reset   30 / 30   ESCAPED   kill_X4.out
+
+**Kimi is right.**  Both seats reasoned carefully; the difference is that one tracked *which
+leg the mutation reaches*, and that is not a difference of care.
+
+> **The blind spot is real and now confirmed at the SHIPPED instrument: this probe
+> structurally cannot see `#479`'s ring-reset half, because the `#495` guard it exists to
+> pin makes that half unreachable on the only leg a mutant can alter.**  Two fixes of one
+> round can be mutually masking, and no row count closes that — it needs a leg where the
+> guard does not hold.
+
 ### What the arms actually buy, stated narrowly
 
 Rows B and M differ in exactly one dimension a mutant can read -- whether a packet command
@@ -201,8 +226,18 @@ BLIND-TO.
   whose REMEDY line prescribed the VACUOUS form of this very row.  Corrected in both
   places: a claim gets fixed everywhere it lives, not only where it was first found.
 * `kill495_M7.sh` described M5's mutant.  Its own Python and its own `say` line say
-  `return 0;`.  The seat reporting it also named `kill495_M6.sh`; **checked, and M6 is
-  correct** -- the correction is narrower than the finding that prompted it.
+  `return 0;`.  **The seat reporting it also named `kill495_M6.sh`, AND IT WAS RIGHT ABOUT
+  BOTH FILES.**  M6's `THE MUTANT:` line is correct (`&& len == 2`, matching its Python and
+  its `say`), but its RATIONALE PARAGRAPH -- nine lines -- is byte-identical to M5's, a
+  phase-narrowing argument sitting in a width-narrowing script.  Both corrected in place.
+
+  > *An earlier draft of this bullet read "**checked, and M6 is correct** -- the correction
+  > is narrower than the finding that prompted it," and that sentence CONTRADICTED ITS OWN
+  > COMMIT, which edits `kill495_M6.sh` by thirty lines.  My check answered on the mutant
+  > line, found it right, and declared the report over-broad; **it was aimed at the wrong
+  > lines**, and a `diff` of lines 11-19 settles it in one command.  This project's own rule
+  > -- when two checks disagree, find out which is broken rather than keeping the one that
+  > agrees with you -- applied to a correction I had written to demonstrate that rule.*
 * `kill495.sh` computes `WORDS_OK` and references it nowhere while printing *"its
   encodings agree"*.  The new driver derives the count from the probe's own CONTROL 0 line
   and **actually gates on it** -- measured `71 of 71` on every leg.
@@ -232,6 +267,14 @@ BLIND-TO.
   in `#495`'s pass-2 receipt and `&& len != 4` in this round's table -- adjacent artifacts
   about the same probe.  Cite them as `#495/E4` and `wdcatapistswap/E4`.
 * The pass-2 brief's disclosure said `matrix.html +2/-2`; the real figure is `5/5`.
+* ***A THIRD `PRETABLE.out` ERROR, and this errata list did not cover it.***  Its block 8
+  repeats a seat's original over-broad phrasing -- that `kill495_M6.sh` and `kill495_M7.sh`
+  "carry M5's header VERBATIM, each claiming the mutant is `!= PHASE_CMDOUT -> ==
+  PHASE_DATAIN`."  That is true of M7 and **false of M6**, whose mutant line is correct and
+  whose copied text is the rationale paragraph instead.  Not edited into the file, for the
+  mtime reason; recorded here, which is what this section is for.
+  *Found by the regress review, which noticed the errata section covered two of PRETABLE's
+  errors and not the third -- an errata list with its own gap.*
 * ***`PRETABLE.out` says FIVE nonzero-phase write sites.  There are SEVEN, and my grep
   was the broken thing.***  The pattern `atapi_phase *=[^=]` requires a non-`=` character
   AFTER the `=`, so it silently skipped the two assignments SPLIT ACROSS LINES (the value

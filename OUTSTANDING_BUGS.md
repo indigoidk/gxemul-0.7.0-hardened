@@ -12820,3 +12820,57 @@ reasoned rather than run.
 > ever run. E2 is the arm's only *unique* kill, because at row B `atapi_st` is NULL, so E2's
 > guard is false and B stays green. ***"The accept side is pinned" is measurably false***, and
 > the probe's contract now says the narrower thing.
+
+## 2026-08-30 -- two harness findings from the `wdcatapistswap` pass-2 panel
+
+### `relrefstale` -- a relative git ref in a round's artifacts goes stale when the round ships
+
+**Twice in one day, in two files of the same artifacts directory**, which is this project's
+own trigger for preferring structure over memory.
+
+* **`runswap.sh`** built its base leg from `git show HEAD~1:`. True when written. An
+  unrelated commit then landed on top, pushing `#495` down to `HEAD~1` itself — so **both
+  legs would have been built from code containing the fix.** Pinned to `67120fd^`.
+* **`killswap.sh`** took LEG 0's pre-extension probe from `git show HEAD:`. True *while the
+  round was in flight* — HEAD held the 11-row probe, the working tree held 15. **The round
+  then shipped**, HEAD became the 15-row probe, and the script refused a run in which there
+  was no extension left to measure. Pinned to `e61ccd8^`.
+
+> **The shape is specific and worth naming: a round's artifacts are written while the round
+> is UNCOMMITTED, so every relative ref in them is written from a vantage point the round
+> itself destroys by shipping.** The artifact is durable; the reference frame is not.
+
+**Both were caught by the scripts' own guards, not by a reader** — each refused to measure
+rather than measuring the wrong thing (*"the two legs would be identical"*, *"there is no
+extension to measure"*). A reproduction months from now would fail loudly rather than
+produce a confident wrong table.
+
+**Proposed structural fix, filed rather than built:** a precommit check warning when a file
+under `regress/artifacts/` contains `HEAD~`, `HEAD^` or `git show HEAD:`. Existence-only,
+forward-only from a cutoff. Not built in the round that found it — it owes two negative
+controls (fire on a relative ref, do NOT fire on a pinned SHA), so it ships as its own
+harness round.
+
+*The population is probably larger. Only two files were exercised today; other rounds'
+artifacts have never been re-run, so a stale ref there has not yet announced itself. The
+count is unknown and is deliberately not guessed.*
+
+### `smhang` -- CLOSED as already fixed
+
+The row says *"selfmutant.py has NO TIMEOUT: a hanging mutant wedges gate 2"*. It has two,
+and they are enforced: `BUILD_TIMEOUT` (120 s) and `RUN_TIMEOUT` (60 s), both
+environment-overridable, both passed to a `run_bounded()` helper.
+
+**Verified as enforced rather than merely present**, because this project's recurring defect
+is a value that exists and is never used — `kill495.sh` computes `WORDS_OK` and references
+it nowhere; `panel.sh` printed *"re-firing once"* and re-fired nothing. Here the chain is
+complete: `communicate(timeout=)`, then `os.killpg(os.getpgid(p.pid), SIGKILL)`, then a
+bounded drain, then a descriptive failure.
+
+> **And the `killpg` is the load-bearing part, not the timeout value.** The file's own
+> comment records why: a bare `subprocess.run(timeout=)` kills only the *direct* child, so on
+> the `gcc → cc1` shape the grandchild survives and the gate still wedges.
+
+*Found by auditing rows with empty ledger notes. Of 87 such open rows, **85 are documented
+here** and only two were undocumented anywhere — the empty field was schema redundancy, and
+the stale STATE was the real defect. Only opening the source found it.*
