@@ -60,7 +60,22 @@ BARE_DOLLAR = re.compile(r'(?<!\\)\$(?!\()[A-Za-z_?{]')
 
 #  Match a wsl invocation that carries a -c (or --command) string.
 WSL_CALL = re.compile(r'(?:^|[|;&]|\s)wsl(?:\.exe)?\b')
-DASH_C = re.compile(r'\s-c\b|\s--command\b')
+#  *** THE THIRD ALTERNATIVE WAS ADDED 2026-08-30 AFTER THIS GUARD FAILED TO FIRE
+#  ON A REAL, COSTLY INSTANCE: `wsl -d Gentoo -- bash -lc '...'`. ***
+#
+#  `\s-c\b` requires a BARE -c.  `-lc` is a COMBINED SHORT-FLAG CLUSTER and is
+#  perfectly idiomatic bash, so the guard walked straight past it.  The command ran
+#  with every $VAR stripped: $O emptied, so a probe was handed /base/gxemul and
+#  /fix/gxemul, measured NOTHING, and printed a table of `??` under a VERDICT line
+#  reading 'declined' for BOTH legs.  A false PASS -- the shape this guard exists
+#  to prevent -- and the controls in the table were the only thing that said so.
+#
+#  The cluster form is anchored to a SHELL NAME on purpose.  A bare `-[a-z]*c` would
+#  also match `find ... -exec`, and a guard that BLOCKS a legitimate command is one
+#  that gets switched off -- worse than a guard with a gap.  Requiring bash/sh/zsh/
+#  dash immediately before the cluster admits the dangerous shape and nothing else.
+DASH_C = re.compile(r'\s-c\b|\s--command\b'
+                    r'|(?:bash|sh|zsh|dash)\s+-[a-zA-Z]*c\b')
 
 #  A heredoc body and a comment line are PROSE.  The carrier records the general
 #  class: a quoted marker re-arms the tool that reads it, and a guard that blocks

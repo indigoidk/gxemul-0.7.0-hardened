@@ -12477,3 +12477,59 @@ floor, measured escapes are COVERAGE DEBT: FILE them" clause directs.*
 checked that this keeps `latch once` = 1, M3 = 2 and M4 = 0, so it does not disturb the three
 rows that depend on it.  **Deliberately NOT done in-round**, because changing the regex changes
 what two shipped rows measure and would have invalidated a kill table that was running.
+
+
+## 2026-08-30 -- `#494` pass 1: the two halves the alt-ctrl round deliberately did NOT ship
+
+### `wdcaltdigin` -- a READ of the Drive Address register returns the alt-status byte
+
+`#494` decoded the offset and declined the offset-1 **store**. It left the **read** path
+byte-identical, deliberately: the rung-3 witness holds reads constant so the aliased store is
+the only variable, and shipping a read fix under that number would have claimed coverage the
+witness was designed not to provide.
+
+*** THE DEFECT IS WITNESSED, AND CHEAPLY, WHICH REFUTES THE RULING THAT IT HAS NO ORACLE. ***
+Two adjudications held the read half unfixable for want of a bit layout -- bit 7 high
+impedance, write-gate representation, active-low drive/head select. The measuring seat refuted
+that by measuring, and the reason is that **the test is an INVARIANCE, not a value**:
+`status_byte()` never reads `d->head`, and a Drive Address register is by definition a function
+of head select. On the committed build a read of `0x3f7` gives `51` at head 0 **and** `51` at
+head 15, while the SDH readback of `0xaf` proves the head write landed and `0x3f6` is unchanged
+by it -- so the invariance is not "nothing moved". That refutes every candidate model of
+`0x3f7` without naming a single expected bit.
+
+**What is missing is the FIX's oracle, not the DEFECT's.** An invariance proves today's value
+wrong without saying what is right, and none of the fifteen PDFs under `_scratchpad/` is an ATA
+or ISA document (`ls _scratchpad/*.pdf` is the authority, not this sentence). Pinning the bits
+from model memory is exactly the `#357`/`#362`/`#365` failure already paid for once.
+
+**Blocked on `wdcaltownership` below:** if the byte belongs to the floppy controller, the right
+answer is not a wdc value at all. Note ACCEPT *is* structurally available here, unlike the store
+half -- `case wd_sdh` latches `d->sectorsize`, `d->lba`, `d->drive` and `d->head`, so the device
+holds the raw material a correct read would need.
+
+### `wdcaltownership` -- `0x3f6`/`0x3f7` are contested, and the tree documents it from both sides
+
+`#494` rejected narrowing the alt region to one byte and owes the reader the reason.
+
+**The tree says twice that these bytes are contested, and the two statements disagree about who
+is being displaced.** `src/include/thirdparty/wdcreg.h` compiles the aux-region offset-1 define
+out under `#if 0`, annotated *NOT MAPPED; fd uses this register on PCs* -- the wdc does not own
+it. `src/devices/dev_fdc.c` carries `#define DEV_FDC_LENGTH 6` with *TODO 8, but collision with
+wdc*, registered at `isa_portbase + 0x3f0` -- the floppy is the one truncated.
+
+*** THE ARITHMETIC IS WHY NARROWING WAS REJECTED. *** fdc's stated end-state of 8 ports is
+`0x3f0..0x3f7`; the alt region is `0x3f6..0x3f7`; **the overlap is TWO bytes, not one.**
+Narrowing wdc to 1 byte frees `0x3f7` and still blocks fdc at `0x3f6`, which wdc must keep. So
+the end-state is a two-device **arbitration** design, and narrowing as proposed would have
+fixed half a collision and called it done.
+
+A second reason it is not free, measured rather than argued: an unmapped access faults nothing
+and the guest parks normally, but it emits one `non-existant paddr` warning **per access** with
+no latch and no counter -- the `floodclass` shape, guest-drivable at default verbosity -- a read
+then returns `0x00` silently, and under `-T` it sets `running = 0` on **every** CPU.
+
+**Honest bound:** generic ATA *does* define a read-only Drive Address register at that port, so
+the `#if 0` annotation is a PC-mapping decision by its own wording and is unsettled on the three
+non-PC layouts this device serves (macppc `+0x160`, hpcmips `0x14000386`, iq80321 `+0x402`).
+Whatever is decided must claim only what it covers.

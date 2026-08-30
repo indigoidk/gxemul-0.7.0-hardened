@@ -1,0 +1,123 @@
+PRE-TABLE BLOCK -- #494 wdcaltoffset
+Written 2026-08-30 BEFORE the product edit and BEFORE table 1, so this file's own
+mtime proves the order.  Recorded OUTPUT, not assertion.
+
+SCOPE: this round extends a kill-table-backed detector, so the block is MANDATORY.
+
+====================================================================================
+1.  SIBLING PARITY
+====================================================================================
+
+The diff does not de-fatalise; it adds an OFFSET DECODE to a handler that had none.
+The sibling arms are therefore the two offsets of one region, and the parity question
+is whether the ACCEPT arm (offset 0) and the DECLINE arm (offset 1) are observable
+through the same channels.
+
+ASYMMETRY FOUND, and it is the round's main finding:
+
+  offset 0 (accept)   observable through DRQ, the input ring, AND the ATAPI
+                      signature (cyl_lo/cyl_hi), because all three are touched
+  offset 1 (decline)  observable through the SAME three -- but the shipped 15-row
+                      witness reads only the FIRST TWO
+
+  >  The reset action has TWO effects and the rows observe ONE of them.
+  >  `d->cur_command = COMMAND_RESET;` is assigned by the CALLER; the ring and DRQ
+  >  are cleared by `wdc_new_command_reset()`.  A fix guarding only the helper call
+  >  leaves the signature latch standing and every existing row stays green.
+
+ROW OWED: the ATAPI-signature row.  MEASURED ALREADY as escaping -- see CHANNEL/M3.
+
+====================================================================================
+2.  CLAIM -> ROW  (semantic trigger: does the sentence assert something a row could
+    observe?  Claim VERBS are examples, not the test -- a "would <consequence>"
+    counterfactual qualifies.)
+====================================================================================
+
+Added comment sentences that assert an observable consequence:
+
+  C1  "offset 1 is the Drive Address register and is READ-ONLY"
+        -> ROW: `defect 0x3f7 store must not abort the write` (exists, P2)
+  C2  "declining it leaves a live transfer untouched"
+        -> ROW: `defect 0x3f7 store must not purge staged bytes` (exists, P2)
+  C3  "a legal 0x3f6 store must still reset"
+        -> ROW: P1 accept (exists), and MEASURED failing under m1 over-reach
+  C4  "the decline covers the signature latch, not only the helper"
+        -> ROW: *** OWED -- the ATAPI-signature row.  This is the sentence that had
+           no implementation, and m3 is the mutant that proves it. ***
+  C5  "the decline returns 1 (handled), so the access never reaches unassigned-
+       address handling"
+        -> NO ROW, and the reason is recorded rather than left blank: the round
+           MEASURED the alternative (m4, width 1) and found it green on every row,
+           i.e. the rows cannot distinguish handled-and-declined from unmapped.
+           A row here would be vacuous by construction.  The claim is pinned by
+           READING (`return 1` is on the common tail, not an early return) and by
+           m4's measured warning flood, not by an oracle.
+
+====================================================================================
+3.  GUARD FIELD vs BODY FIELD
+====================================================================================
+
+PREDICATE reads:   relative_addr   (an access parameter, not device state)
+                   idata           (the stored byte, via `idata & WDCTL_RST`)
+
+GUARDED BODY touches:
+                   d->cur_command                 <- WRITTEN by the caller
+                   wdc_new_command_reset(d) ->    d->inbuf_head, d->inbuf_tail,
+                                                  d->write_in_progress,
+                                                  d->write_count,
+                                                  d->atapi_cmd_in_progress, ...
+
+WHERE THEY DIFFER: the predicate reads NO device field that the body writes, so the
+classic disagreeing-state form does not arise -- `relative_addr` cannot be desynced
+from anything because it is recomputed per access.
+
+  >  BUT THE CHECK STILL PAYS, BY ITS OTHER HALF: the body's writes SPLIT across two
+  >  sites with different owners (caller vs helper), and the rows cover only the
+  >  helper's.  That is the same shape as a guard field and a body field written at
+  >  different sites, one level up -- effects rather than fields.
+
+N/A discharged with reason: no third-state row is owed for a field pair, because
+there is no field pair.  The row owed is the split-effect row (C4).
+
+====================================================================================
+4.  CHANNEL -- per row, the mutant it kills and the observable that differs
+====================================================================================
+
+  ROW                            KILLS                OBSERVABLE THAT DIFFERS
+  ---------------------------------------------------------------------------------
+  P1 accept 0x3f6 SRST           m1 over-reach        DRQ 50 vs 58 on the ACCEPT side
+                                 (!= 0 -> != 2)       MEASURED: killed on-accept
+  P2 defect 0x3f7 abort          m2 nulled decode     DRQ 58 vs 50
+                                 (!= 0 -> > 1)        MEASURED: killed as-defect
+  P2 defect 0x3f7 purge          m2                   inbuf 71 vs ff
+  P3 control 0x3f7 no-RST        (control, not a      DRQ unchanged 58 on BOTH legs
+                                 kill row)            -- GREEN ON BOTH, so it kills
+                                                      nothing.  Recorded as a
+                                                      CONTROL, not counted as
+                                                      coverage.
+  NEW  0x04 bare RST at off 1    value-guard          DRQ/ring, same channels as P2
+                                 (idata == 0x06)      but at a value the guard
+                                                      excludes.  NOT YET MEASURED.
+  NEW  ATAPI signature           *** m3 partial       cyl_lo/cyl_hi 14/eb vs 55/66,
+       (ciR: rig, cyl_lo/hi      guard ***            on a CD-ROM rig.  MEASURED
+       after the 0x3f7 poke)                          escaping 15/15 today.
+
+VACUOUS-BY-CONSTRUCTION CHECK: every row above names a channel that CAN vary under
+its named mutant.  P3 is the exception and is labelled a control rather than a kill
+row, because its observable is identical on both legs by design.
+
+*** THE CHANNEL LINE'S OWN CLAIM, CHECKED ON ITS FIRST MANDATED APPLICATION. ***
+The rule is one day old and claims a row's channel-under-its-mutant is knowable at
+WRITING time, before any table runs.  HELD, and sharply: m3's escape follows
+mechanically from "the defect rows observe DRQ and the ring; m3 changes neither" --
+no table needed.  The measuring seat reached the same conclusion by building six
+binaries.  **The cheap derivation and the expensive measurement agreed.**
+
+====================================================================================
+CARRY-FORWARD OBLIGATION
+====================================================================================
+This block PRESCRIBES two rows: the 0x04 value row and the ATAPI-signature row.  If
+the addition list is later rewritten from a pass-2 panel's findings, it must be
+DIFFED against these two, not merely extended -- #490 lost both of its prescribed
+rows exactly that way, three hours after prescribing them.
+PRETABLE_DONE

@@ -1,0 +1,107 @@
+==============================================================================================
+wdcaltoffset -- RUNG-3 WITNESS + DETECTOR on unmodified `evbmips -e malta`
+==============================================================================================
+date      2026-08-30 01:39:29
+machine   evbmips -e malta   5Kc, LITTLE endian   (machine desc UNMODIFIED)
+wdc       physical 0x180001f0 via bus_pci piix4_ide; KSEG1 0xffffffffb80001f0
+altstat   physical 0x180003f6 len 2; offset 1 = 0x180003f7 = the READ-ONLY
+          Drive Address Register, KSEG1 0xffffffffb80003f7
+program   155 guest instructions at 0xffffffff80100000, parks at 0xffffffff80100264
+staged    8 bytes per phase (71 72 73 74 75 76 77 78) -- NOT a multiple of 512, so the sector
+          drain never fires and nothing reaches the disk image
+base bin  /tmp/gx494/base/gxemul
+fix bin   /tmp/gxk494/m4/gxemul
+
+----------------------------------------------------------------------------------------------
+LEG 1 -- COMMITTED build (source-identical to GXEMUL-SEC at the named baseline)
+----------------------------------------------------------------------------------------------
+  command   /tmp/gx494/base/gxemul -V -E evbmips -e malta -d iR:/tmp/gx494/altoff-scratch.img 0xffffffff80100000:/tmp/gxk494/run_m4/wdcaltoff.bin
+  CONTROL 0 encodings: 155 of 155 WORDS and 155 of 155 mnemonics agree with the emulator's own disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  parked at the halt breakpoint: yes   (1.52 s)
+
+----------------------------------------------------------------------------------------------
+LEG 2 -- FIX LEG (the handler decodes relative_addr; 0x3f7 declines the write)
+----------------------------------------------------------------------------------------------
+  command   /tmp/gxk494/m4/gxemul -V -E evbmips -e malta -d iR:/tmp/gx494/altoff-scratch.img 0xffffffff80100000:/tmp/gxk494/run_m4/wdcaltoff.bin
+  CONTROL 0 encodings: 155 of 155 WORDS and 155 of 155 mnemonics agree with the emulator's own disassembler
+  pc at entry = 0xffffffff80100000 (want 0xffffffff80100000)
+  parked at the halt breakpoint: yes   (1.52 s)
+
+----------------------------------------------------------------------------------------------
+RESULTS -- every value below was produced by a GUEST LOAD through real decode
+----------------------------------------------------------------------------------------------
+                                                           reg  COMMITTED      FIX LEG       
+  A   liveness   RAM round-trip, same sb/lbu shapes        v0   want 55 got 55    want 55 got 55     ok
+  B   liveness   cyl_lo readback (0x6655 low byte)         v1   want 55 got 55    want 55 got 55     ok
+  B   liveness   cyl_hi readback (0x6655 high byte)        a0   want 66 got 66    want 66 got 66     ok
+  C   devsig     data port 1st read -- a FIFO              a1   want 5a got 5a    want 5a got 5a     ok
+  C   devsig     data port 2nd read -- not a cell          a2   want a5 got a5    want a5 got a5     ok
+  D   devsig     status byte computed by the device        a3   want 51 got 51    want 51 got 51     ok
+  P1  liveness   armed for the 0x3f6 phase: DRQ SET        s0   want 58 got 58    want 58 got 58     ok
+  P1  accept     0x3f6 SRST aborts the write: DRQ CLEAR    s1   want 50 got 50    want 50 got 50     ok
+  P1  accept     0x3f6 SRST purged the ring: 0xff          s2   want ff got ff    want ff got ff     ok
+  P2  liveness   armed for the 0x3f7 phase: DRQ SET        s3   want 58 got 58    want 58 got 58     ok
+  P2  *DEFECT*   0x3f7 store aborts the live write         s4   want 50 got 50    want 58 got 58     ok
+  P2  *DEFECT*   0x3f7 store purged the staged bytes       s5   want ff got ff    want 71 got 71     ok
+  P3  liveness   armed for the nIEN phase: DRQ SET         s6   want 58 got 58    want 58 got 58     ok
+  P3  control    0x3f7 without WDCTL_RST: DRQ still SET    s7   want 58 got 58    want 58 got 58     ok
+  P3  control    0x3f7 without WDCTL_RST: bytes intact     t9   want 71 got 71    want 71 got 71     ok
+  P4  liveness   armed for the bare-RST phase: DRQ SET     t4   want 58 got 58    want 58 got 58     ok
+  P4  *DEFECT*   0x3f7 bare RST 0x04 aborts the write      t5   want 50 got 50    want 58 got 50     FAIL
+  P4  *DEFECT*   0x3f7 bare RST 0x04 purged the bytes      t6   want ff got ff    want 71 got ff     FAIL
+
+  34 of 36 predictions correct across both legs
+  FAIL  P4  *DEFECT*   0x3f7 bare RST 0x04 aborts the write
+  FAIL  P4  *DEFECT*   0x3f7 bare RST 0x04 purged the bytes
+
+----------------------------------------------------------------------------------------------
+THE DIFFERENTIAL -- the rows the defect owns.  Same script, opposite colour.
+----------------------------------------------------------------------------------------------
+  P2  *DEFECT*   0x3f7 store aborts the live write         s4    50 -> 58   AS PREDICTED
+  P2  *DEFECT*   0x3f7 store purged the staged bytes       s5    ff -> 71   AS PREDICTED
+  P4  *DEFECT*   0x3f7 bare RST 0x04 aborts the write      t5    50 -> 50   MISMATCH
+  P4  *DEFECT*   0x3f7 bare RST 0x04 purged the bytes      t6    ff -> ff   MISMATCH
+
+  On the COMMITTED build phase 1 and phase 2 are BYTE-IDENTICAL:
+    0x3f6 -> status 50, data ff   (the Device Control register)
+    0x3f7 -> status 50, data ff   <-- a register the guest may not write
+  On the FIX LEG they separate:
+    0x3f6 -> status 50, data ff   (UNCHANGED -- the accept row)
+    0x3f7 -> status 58, data 71   (the write is declined)
+
+----------------------------------------------------------------------------------------------
+WHY THIS IS THE DEVICE AND NOT RAM  (device-signature controls)
+----------------------------------------------------------------------------------------------
+  The data port was read TWICE at the SAME address and returned 0x5a then 0xa5.
+  A memory cell returns the last value written (0xa5) both times; only a FIFO
+  returns them in push order.  This is the wdc input ring, not a memory word.
+  The status byte at +7 read 0x51 at power-on and 0x58 armed.  DRDY|DSC = 0x50
+  is computed by status_byte() out of diskimage_exist(), the ERR bit out of the
+  d->error that dev_wdc_init sets, and DRQ out of d->write_in_progress.  The
+  guest wrote none of those three, and RAM would return what was stored.
+  RAM liveness (0x55) and register liveness (0x6655 -- #481's 0x6655 idiom)
+  prove the sb/lbu shapes and the wdc decode both work, so a device row
+  reading 0x00 could not have been blamed on a bad encoding.
+
+----------------------------------------------------------------------------------------------
+EMULATOR DIAGNOSTICS DURING EACH RUN -- INFORMATIONAL, NOT EVIDENCE
+----------------------------------------------------------------------------------------------
+  debug() RETURNS SILENTLY WHEN FREE-RUNNING at default verbosity (it subtracts
+  1 from verbose while emul_executing and returns on v < 0), and this probe
+  breakpoints and continues rather than stepping.  So every debug()-only line
+  below reads 0 on BOTH legs and a zero here means nothing; only fatal() lines
+  can appear.  The rows above are the measurement.
+  DRIVE ADDRESS                committed x0   fix x0
+  reading too much             committed x1   fix x1
+  wdc inbuf full               committed x0   fix x0
+  wdc inbuf overrun            committed x0   fix x0
+  write to ALT. CTRL           committed x0   fix x0
+  write to DATA, but not       committed x1   fix x1
+
+  transcripts: /tmp/gxk494/run_m4/transcript_base.log , transcript_fix.log
+  raw guest program: /tmp/gxk494/run_m4/wdcaltoff.bin (620 bytes)
+
+VERDICT   *** SOMETHING DID NOT HOLD -- read the FAIL lines above ***
+          34 of 36 row predictions; encodings 155/155 and 155/155; both legs parked: True
+ALTOFF_DET_DONE

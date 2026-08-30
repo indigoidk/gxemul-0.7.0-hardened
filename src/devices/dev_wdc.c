@@ -618,7 +618,58 @@ DEVICE_ACCESS(wdc_altstatus)
 	if (writeflag==MEM_READ)
 		debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
 		    (int)odata);
-	else {
+	else if (relative_addr != 0) {
+		/*  #494: THE HANDLER NEVER DECODED ITS OWN OFFSET.  The region is
+		    registered TWO BYTES wide, so offset 1 -- the Drive Address
+		    register, 0x3f7 on the PC layout -- arrived here and was treated
+		    as a Device Control write.  Since #481 corrected the reset bit,
+		    that meant a guest store to a READ-ONLY register aborted a live
+		    ATA write and purged the queued ring.  Measured at rung 3 on an
+		    unmodified evbmips -e malta; the witness is preserved under
+		    regress/artifacts/wdcaltoffset/witness_20260829/.
+
+		    THE WHOLE ACTION IS DECLINED, NOT JUST THE HELPER CALL, AND THAT
+		    IS THE POINT.  The reset has two effects with two owners: the
+		    cur_command assignment below, and the ring/DRQ clearing inside
+		    wdc_new_command_reset().  A fix that guards only the helper leaves
+		    the ATAPI signature latched.  That was MEASURED, not reasoned: it
+		    escapes the witness AND the detector that replaced it with a clean
+		    sweep, because every row in both observes DRQ or the ring and
+		    neither varies under it.  The kill table and its scores are under
+		    regress/artifacts/wdcaltoffset/killtable_20260830/ -- read TABLE.txt
+		    for the counts rather than trusting a number written here, which is
+		    how this sentence was wrong once already.
+
+		    SILENT BY DESIGN, at debug() level and with no latch.  The house
+		    idiom announces a guest ANOMALY, and this is not one: the tree
+		    records in two places that this byte belongs to the floppy
+		    controller on PCs -- wdcreg.h compiles wd_digin out under
+		    an `#if 0` whose own note reads "NOT MAPPED; fd uses this
+		    register on PCs" (the delimiters are dropped here on purpose:
+		    a comment terminator quoted inside a comment ends it), and
+		    dev_fdc.c's DEV_FDC_LENGTH carries `TODO 8, but collision with
+		    wdc`.  A correct guest writes here expecting a floppy effect, so
+		    a wdc diagnostic would report correct behaviour as a fault.
+
+		    THE ACCESS STAYS HANDLED (return 1), AND THE REASON IS NOT THE ONE
+		    THIS COMMENT FIRST GAVE.  It said a 0 would fall through to
+		    unassigned-address handling and warn per access.  That is false: this
+		    device is REGISTERED, so a 0 never reaches that path.  memory_rw sets
+		    res = -1, takes its res <= 0 branch, and raises EXCEPTION_DBE --
+		    measured, 19793 `device 'wdc_altstatus' ... failed` lines and ZERO
+		    `non-existant` ones under -v.  The guest then loops forever
+		    re-executing the faulting store, and at DEFAULT verbosity it does so
+		    in SILENCE.  That is worse than a warning flood, not better, which is
+		    why the wrong reason was worth correcting rather than dropping: a
+		    maintainer who reads `only noisy warnings` may decide a 0 is fine.
+
+		    The arm falls through to the common tail, which is a no-op for it --
+		    the tail only assigns on the READ path.  (An earlier draft justified
+		    that by the untouched-buffer hazard; #95 already zeroes the caller's
+		    buffer, so that hazard cannot arise here either.)  */
+		debug("[ wdc: write to DRIVE ADDRESS (read-only): 0x%02x,"
+		    " ignored ]\n", (int)idata);
+	} else {
 		debug("[ wdc: write to ALT. CTRL: 0x%02x ]\n",
 		    (int)idata);
 		/*  #481: THE RESET BIT IS WDCTL_RST (0x04), NOT WDCTL_4BIT (0x08).

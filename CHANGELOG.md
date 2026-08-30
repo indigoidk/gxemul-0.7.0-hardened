@@ -1,3 +1,219 @@
+## Round 494 (#494) -- the alt-ctrl handler never decoded its own offset, so a store to a read-only register aborted a live transfer
+
+`DEVICE_ACCESS(wdc_altstatus)` read `relative_addr` **zero times** across its 91 lines while
+`dev_wdc_init` registered the region **two bytes wide**.  Offset 0 is Device Control (`0x3f6`);
+offset 1 is the Drive Address register (`0x3f7`).  The handler could not tell them apart.
+
+`#481` corrected the reset bit from `WDCTL_4BIT` to `WDCTL_RST` -- right for offset 0 -- and
+wired in `wdc_new_command_reset()`.  From then on a guest store to a register it may not write
+**aborted a live ATA write and purged the queued ring**.
+
+Measured at rung 3 on unmodified `evbmips -e malta`, reached through the machine's own
+committed `piix4_ide` path with no `device_add`, free-running.  Both legs from
+`git archive HEAD` (the fix leg patched with the round's own working diff), built in `/tmp`;
+**no project build tree was touched and no `.MUTANT` sentinel is owed.**  The two-part
+clearance was RUN per leg rather than asserted.
+
+    P1  accept    0x3f6 SRST aborts the write        50 on both legs   unchanged
+    P2  DEFECT    0x3f7 store aborts the live write  base 50   fix 58
+    P2  DEFECT    0x3f7 store purged staged bytes    base ff   fix 71
+    P4  DEFECT    0x3f7 bare RST 0x04, same two      base 50/ff   fix 58/71
+    P3  control   0x3f7 without WDCTL_RST: DRQ set   58 on both legs   unchanged
+
+`0x58 -> 0x50` is DRQ clearing (the write aborted); `0xff -> 0x71` is `wdc_get_inbuf`
+returning `-1` on a purged ring.  **On the committed build the two adjacent addresses are
+byte-identical.**  Eighteen rows, both legs, **36 of 36 row predictions**
+(`killtable_20260830/RESULTS_detector18.txt`, sentinel `ALTOFF_DET_DONE`).
+
+### The fix declines the WHOLE action, and that is the round's main finding
+
+The reset has **two effects with two owners**: `d->cur_command = COMMAND_RESET;` is assigned
+by the caller, and the ring and DRQ are cleared inside `wdc_new_command_reset()`.  A fix that
+guards only the helper call leaves the ATAPI signature latched.
+
+That is not hypothetical.  The measuring seat built it (`m3`) and it **passed all 18 rows, 36
+of 36 predictions**, because every defect row observes DRQ or the input ring -- both cleared by
+the helper -- and nothing observed `cur_command`.  It proved non-equivalence rather than
+asserting it: the signature is keyed on `cur_command == COMMAND_RESET` AND a CD-ROM image, so
+the channel is **dead on the `iR:` rig the witness uses**.  Re-run with `ciR:`:
+
+    L1  cyl_lo/cyl_hi round-trip BEFORE any poke   55/66 on every leg
+    D   cyl_lo/cyl_hi after the 0x3f7 poke         base 14/eb   fix 55/66   m3 14/eb
+    L2  cyl_lo/cyl_hi after the LEGAL 0x3f6 poke   14/eb on every leg
+
+Both control pairs green on all three legs, so the fix leg's quiet D row is a **refusal and not
+a dead path** (`RESULTS_signature.txt`, sentinel `ALTOFF_SIG_DONE`).
+
+### The decline is silent, and the census that was owed changed the reason
+
+The de-fatalisation option set carries an obligation to grep the fork for the existing idiom
+before choosing.  The pass-1 brief invoked the rule and reported no census; the glm seat caught
+that, and the census was run (`readonly_write_census_20260830.txt`, with its deriver recorded).
+
+It answers a different question than it was run for.  **All three announcing sites in the tree
+report a guest ANOMALY** -- nothing legitimately writes `CHIPID`, `IPL` or `MBC`, and PCTL warns
+only `if (idata & 0x78)`, the anomalous subset.  A store to `0x3f7` is **correct guest
+behaviour on a PC**: the tree says so twice, in `wdcreg.h` (`#if 0` -- NOT MAPPED, fd uses this
+register on PCs) and in `dev_fdc.c` (`DEV_FDC_LENGTH 6`, TODO 8 but collision with wdc).
+
+So the decline stays at `debug()` level with no latch, and returns through the common tail with
+**`return 1` (handled), never 0** -- a `0` routes the access to unassigned-address handling,
+measured this round as one unbounded `non-existant paddr` warning per access, a read returning
+`0x00`, and `running = 0` on every CPU under `-T`.
+
+### The kill table, with its counts corrected
+
+    m1  over-reach     `!= 0` -> `!= 2`      2 red, 34/36   killed by the ACCEPT rows
+    m2  nulled decode  `!= 0` -> `>  1`      4 red, 32/36   killed by the defect rows + sig
+    m3  partial guard  helper-only           0 red, 36/36   KILLED ONLY BY THE SIGNATURE
+    m4  value guard    `&& idata == 0x06`    2 red, 34/36   killed by the PHASE 4 rows
+
+**Two of the four are killed only by a row `killtable_20260830/PRETABLE.out` prescribed before the product edit**,
+and both survived the row-list rewrite -- no `#490` recurrence.  `m4` is the shape a well-meaning
+hand makes: `0x06` is both the witness's value and the one `#481`'s comment documents as real
+OpenBSD traffic, so *tighten the decline to known traffic* re-opens the defect for `0x04`,
+`0x0c` and `0x0e` while every earlier row stays green.
+
+*** THE COUNTS ABOVE ARE CORRECTED.  `killtable_20260830/TABLE.txt` AS RUN REPORTS EACH NONZERO FIGURE ONE
+TOO HIGH. ***  `grep -c ' FAIL '` also matched the probe's own verdict line -- *SOMETHING DID
+NOT HOLD -- read the FAIL line*.  Found by the fable5 seat and cross-checked against the
+probe's independent `N of 36` figure.  **The only count that was right was the zero**: with
+nothing failing there is no verdict line to miscount, so the anomalous-looking row was the
+correct one.  Every KILLED verdict is unchanged -- the counter was wrong about magnitude, never
+about sign.  `killtable_20260830/TABLE.txt` is corrected IN PLACE rather than re-run, because silently restating
+history is indistinguishable from fitting the record to the answer.
+
+### What this round does NOT do -- and the width qualifier is load-bearing
+
+It **decodes the offset of a byte store and declines stores addressed at offset 1.  A `len == 2`
+store at offset 0 still passes the decode with its `0x3f7` byte silently consumed** -- the
+handler reads `data[0]` only and never examines `len`.  Width is `wdcaltwidth`, open, and must
+not be read as closed by this.  *(This round already paid for the dropped-qualifier class once:
+see the L4 below.)*
+
+* **The read side is unfixed and deliberately unshipped.**  Offset 1 reads still return
+  alt-status on all four platform layouts, which matches no hardware anywhere.  Filed as
+  `wdcaltdigin`.  A seat refuted the earlier ruling that it has no oracle: the test is an
+  INVARIANCE, not a value -- `status_byte()` never reads `d->head`, so `0x3f7` reads `51` at
+  head 0 and `51` at head 15 while the SDH readback of `0xaf` proves the head write landed.  A
+  second, independent refutation: the read returns `58` with DRQ raised, and a real Drive
+  Address register never carries DRQ.  That says today's value is wrong without saying what is
+  right, which is why it files rather than ships.
+* **The region was NOT narrowed.**  The fdc TODO of 8 ports is `0x3f0..0x3f7` and the alt region
+  is `0x3f6..0x3f7`, so the overlap is two bytes: freeing `0x3f7` still blocks fdc at `0x3f6`.
+  Filed as `wdcaltownership`.  *The glm seat noted that this warrant assumes contiguous
+  registration, which the packet never stated; the conclusion survives on the measured return-0
+  cost instead, and the stated warrant is not what carries it.*
+* **Two mutants pass BOTH detectors** and are recorded as coverage debt, not a floor breach:
+  guarding the inner `if` with `relative_addr == 0`, and conditioning the decline on the reset
+  bit.  Both still refuse the destructive action; what they revert is the corrected diagnostic
+  text.  Named by the minimax seat, which drew the distinction itself.
+
+### Disclosure: the battery defends none of this today
+
+Both detectors are `CLASS_DETECTOR` and **dated-exempt from gate wiring until 2026-09-20**.
+They are two-leg differentials -- they take a pre-fix binary and a post-fix one -- and no gate
+builds a second leg; the signature probe additionally needs a `ciR:` CD-ROM rig the battery does
+not build.  Wiring them needs a single-leg mode, which is a change to the instrument and owes
+its own red-on-pre-fix order proof.  **Until then the kill table is the evidence, not the gate.**
+
+Both probes now carry a clause-(e) CONTRACT naming what they catch and what they are blind to
+by construction.  A label collision to note: `killtable_20260830/PRETABLE.out`'s C5 uses `m4` for the width-1
+registration experiment while `killtable_20260830/TABLE.txt`'s `m4` is the value guard -- same label, two mutants,
+one round.  `killtable_20260830/PRETABLE.out` is left unedited because it is an order-proof artifact.
+
+### Pass 2 refused to ratify, and it was right: one L2 floor breach, repaired in-round
+
+The measuring seat built six mutants and found **a one-conjunct edit that escapes BOTH
+shipped detectors**:
+
+```c
+else if (relative_addr != 0 && !(idata & WDCTL_4BIT)) {
+```
+
+36 of 36 on the main detector, declined on the signature.  **The reason is structural, not
+bad luck.**  The detectors' only three offset-1 values were `0x06`, `0x02` and `0x04` --
+**all three with bit 3 clear** -- so every offset-1 row sat in one `WDCTL_4BIT` equivalence
+class.  The round defended the value axis against EQUALITY guards (that is what `m4` and the
+PHASE 4 rows are) and never against MASK guards.
+
+And it is not an exotic bit.  `dev_wdc.c`'s own `#481` comment records that `WDCTL_4BIT` is
+what libata holds as its **steady-state `ap->ctl`**, and that comment's own level-vs-edge
+measurement asserts SRST with `0x0e`.  **A mask guard re-opens the defect at exactly the
+values the commonest driver actually writes.**  Measured at `0x0e` on offset 1: base `50/ff`
+(reset), fix `58/71` (declined), mutant `50/ff` -- the defect fully restored.
+
+**Repaired in-round** (clause (d) is a floor clause, so L2 however late it is found) by a
+third detector, `regress/wdc_altoffset_4bit_probe.py`: a P5/P6 phase pair at `0x0e`, 47 of 49
+predicted cells, **and the two so-called misses ARE the predicted P6 red under an
+over-reaching decline** -- so the accept row is discharged by a measured kill rather than by
+existing.  It ships as a separate probe rather than as extra phases on the main one, because
+adding rows perturbs every mutant's score and forces a full re-table; that is the cost `#462`
+paid and there was no reason to pay it twice.
+
+The seat shipped a **positive control** with the finding -- a nulled decode reds at 32/36 --
+which is what makes three escapes evidence rather than proof that the harness is inert.
+
+### And it refuted this round's own reason for `return 1`
+
+The shipped comment said a `0` would fall through to unassigned-address handling and warn per
+access.  **False on the path and false on the symptom.**  This device is REGISTERED, so a `0`
+never reaches that path: `memory_rw` sets `res = -1`, raises `EXCEPTION_DBE` and returns
+MEMORY_ACCESS_FAILED, and `memory_warn_about_unimplemented_addr` has exactly one caller,
+*after* the device loop.  Measured under `-v`: the return-0 mutant produced **19,793**
+`device 'wdc_altstatus' ... failed` lines and **zero** `non-existant` ones.
+
+At default verbosity it is **silent**, while the guest loops forever re-executing the faulting
+store.  That is worse than a warning flood, not better -- which is precisely why the wrong
+reason had to be corrected rather than quietly dropped: *a maintainer who reads "only noisy
+warnings" may well decide a 0 is acceptable.*  The decision is unchanged; its warrant is now
+the true mechanism, which is the stronger one.
+
+Two lesser warrants in the same comment were also weak and are gone: `#95` already zeroes the
+caller's buffer, so the untouched-buffer hazard cannot arise, and this arm is write-side, so
+the common tail is a no-op for it either way.
+
+### Three things the pass found that this round does NOT fix
+
+* **`killtable_20260830/PRETABLE.out`'s GUARD-FIELD `N/A` is refuted.**  It recorded that the predicate reads no
+  device field the body writes.  One escaping mutant is precisely a predicate reading
+  `d->atapi_cmd_in_progress` -- a field the block's own body list names.  Two of the six
+  mutants live in the space that `N/A` declared empty.  The block is left unedited (it is an
+  order-proof artifact) and the refutation is recorded here and on the row.
+* **No probe in this family READS the alt region.**  Every access in all three is a store, so
+  the handler's read path -- the register's primary function -- is pinned by zero rows.  That
+  is `wdcaltdigin`'s territory and is now stated in all three contracts.
+* **One flat claim of mine was wrong about three platforms.**  Offset 1 is the Drive Address
+  register at `addr_mult == 1`; on landisk (2) and macppc (0x10) it is a byte lane, because
+  the alt region is hardcoded two bytes wide and never divides by `addr_mult` the way the main
+  handler does.  The behaviour is still correct there; the claim was not.
+
+### Records corrections this round owes
+
+The pass-1 adjudication rejected narrowing on the warrant that *the tree's own bundled header
+defines TWO registers in the aux region*, citing `wd_digin`.  **That define sits inside**
+**`#if 0 /* NOT MAPPED; fd uses this register on PCs */`** -- the header defines one aux
+register and disables the other with an annotation saying the opposite of the reading taken.
+The grok and codex seats found it independently.  **I had already reported that warrant
+"verified exactly"** after grepping the line: I verified it EXISTS and never checked it
+COMPILES.  The disposition survives on a different warrant; the dead one is corrected in place.
+
+The row's own note called the pre-`#481` aliasing *a harmless signature latch*.  True of the
+witness's `0x06` and false of the arm: `WDCTL_4BIT` is libata's steady-state `ap->ctl`, so the
+common case already clobbered `cur_command`.  Corrected -- a property measured on one value,
+restated as a property of the arm.
+
+The shipped comment said `m3` escaped *a fifteen-row table*; the detector is 18 rows and `m3`
+passes all 18.  Fifteen was true when the seat FOUND it and stale by the time it shipped.
+Corrected in both twin trees, and rewritten to name its artifact rather than any literal --
+that sentence has now been wrong once already.
+
+**And the round's headline number cited a log that says something else.**  The pass-2 brief
+attached 36/36 to `RESULTS_shipped.txt`, which holds the 15-row witness at 30/30; the 18-row run
+existed only in `/tmp`.  The grok seat caught it mid-answer from the log itself -- *the claim did
+not become unverifiable, it became contradicted by its own evidence*.  Nine measurements are now
+preserved durably, each verified by its completion sentinel before copying.
+
 ## Round 492 (#492) -- the six battery reds, and a detector that passed its own kill table while an L2 breach was live in it
 
 The 2026-08-29 battery returned **EIGHT row-level failures**.  Two were fixed by

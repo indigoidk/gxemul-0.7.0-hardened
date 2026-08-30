@@ -184,6 +184,27 @@ MANIFEST = {
     #  preserved 201 bytes of OUTPUT with no driver, and a later /tmp run was deleted
     #  by its own script.  Preserved as EVIDENCE: it drives a real guest and is not
     #  wired into a gate, so it is CLASS_RESEARCH rather than a detector owing one.
+    #  #494 ships TWO committed detectors.  The second is not a duplicate of the
+    #  first: the main probe observes DRQ and the input ring, and a mutant that
+    #  guards only the destructive call -- leaving `cur_command` clobbered --
+    #  passes all 18 of its rows.  The SIGNATURE probe reads the ATAPI signature
+    #  through cyl_lo/cyl_hi on a CD-ROM rig and is the ONLY instrument that sees
+    #  it.  Measured: m3 scored 0 red on the main detector and DEFECT PRESENT on
+    #  the signature one.
+    "wdc_altoffset_probe.py":
+        (CLASS_DETECTOR, "#494 wdc alt-ctrl offset decode -- DRQ/ring channels"),
+    "wdc_altoffset_sig_probe.py":
+        (CLASS_DETECTOR, "#494 wdc alt-ctrl offset decode -- ATAPI signature channel"),
+    #  The THIRD is not redundant either, and it was added to repair a MEASURED
+    #  floor breach found on pass 2.  The other two use only 0x06, 0x02 and 0x04 at
+    #  offset 1 -- all three with WDCTL_4BIT clear -- so every offset-1 row they
+    #  carry sits in ONE bit-3 equivalence class, and a guard reading
+    #  `!(idata & WDCTL_4BIT)` escaped BOTH at 36/36 and declined.  That bit is
+    #  libata's steady-state ap->ctl, so a mask guard re-opens the defect at exactly
+    #  the values the commonest driver writes.
+    "wdc_altoffset_4bit_probe.py":
+        (CLASS_DETECTOR, "#494 wdc alt-ctrl -- the WDCTL_4BIT mask-guard escape"),
+
     "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":
@@ -198,6 +219,17 @@ MANIFEST = {
     #  re-implementing the encoder, so it cannot measure a fix of its own invention.
     #  Its fix leg was checked byte-identical to mkfixleg.py's output AND to the
     #  preserved fixleg.diff before any mutant was built.
+    #  #494 PASS 2, the opus5 seat.  Instruments preserved so its measured floor
+    #  breach can be re-run rather than believed.  `PROPOSED_...` is kept as the
+    #  PROVENANCE of what the seat proposed: the shipped detector differs from it
+    #  only by an added clause-(e) contract, and keeping both makes that checkable.
+    "artifacts/wdcaltoffset/opus_p2_20260830/mut494p2.py":
+        (CLASS_RESEARCH, "#494 pass-2 mutant applier, preserved as evidence"),
+    "artifacts/wdcaltoffset/opus_p2_20260830/q2_mechanism.py":
+        (CLASS_RESEARCH, "#494 pass-2 return-0 mechanism measurement, evidence"),
+    "artifacts/wdcaltoffset/opus_p2_20260830/PROPOSED_wdc_altoffset_4bit_probe.py":
+        (CLASS_RESEARCH, "#494 pass-2 proposal for the shipped 4BIT detector"),
+
     "artifacts/wdcaltoffset/mutants_20260830/mkmutants.py":
         (CLASS_RESEARCH, "wdcaltoffset pass-1 mutant applier, preserved as evidence"),
     "artifacts/wdcaltoffset/mutants_20260830/table_a.py":
@@ -247,6 +279,8 @@ MANIFEST = {
     #  hook controls is FILED (`hookctlgate`), not answered here.
     "artifacts/makercfalse/hook_controls_20260829/hookctl.py":
         (CLASS_RESEARCH, "wsl-dollar hook control suite, 18 rows, evidence"),
+    "artifacts/makercfalse/hook_controls_20260830/clusterctl.py":
+        (CLASS_RESEARCH, "wsl-dollar hook CLUSTER controls, 11 rows -- 5 must fire, 6 must pass"),
     "artifacts/wdcdataoutdrain/killtable_20260827/addpkt.py":
         (CLASS_RESEARCH, "#478 detector row generator, preserved as evidence"),
     "artifacts/wdcdataoutdrain/killtable_20260827/addaccept.py":
@@ -552,6 +586,19 @@ EXEMPT = {
                                  "gate row can mean anything, so wiring is a design step first"),
     "hpcmips_ctor_probe.py":    ("2026-09-20",
                                  "rung 2, ~8 s, no rig image -- wants a construction gate"),
+    #  Both #494 probes are TWO-LEG DIFFERENTIALS: they take a PRE-FIX binary and
+    #  a post-fix one and compare.  No gate builds a second leg, so wiring them is
+    #  a change to the instrument -- a single-leg mode asserting only the fix-side
+    #  wants against the gate's own binary -- not a line in a gate script.
+    "wdc_altoffset_probe.py":     ("2026-09-20",
+                                   "two-leg differential; wants a single-leg mode "
+                                   "before gate 10 can assert anything"),
+    "wdc_altoffset_sig_probe.py": ("2026-09-20",
+                                   "two-leg differential AND needs a ciR: CD-ROM rig "
+                                   "the battery does not build today"),
+    "wdc_altoffset_4bit_probe.py": ("2026-09-20",
+                                    "two-leg differential; shares the single-leg-mode "
+                                    "debt with its two siblings"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
