@@ -223,6 +223,20 @@ MANIFEST = {
     #  breach can be re-run rather than believed.  `PROPOSED_...` is kept as the
     #  PROVENANCE of what the seat proposed: the shipped detector differs from it
     #  only by an added clause-(e) contract, and keeping both makes that checkable.
+    #  wdcaddtoinbufbound RUNG-3 WITNESS, 2026-08-30.  The probe is the INSTRUMENT of
+    #  a 20/20 two-leg measurement and is preserved so the numbers can be re-run
+    #  rather than believed.  `frozen_wave_*` is the FROZEN COPY the run actually
+    #  executed -- kept beside the live probe on purpose, because a comparison run
+    #  owes ONE instrument and the frozen copy is the proof of which one it was.
+    "artifacts/wdcaddtoinbufbound/rung3_20260830/addtoinbuf_rung3_probe.py":
+        (CLASS_RESEARCH, "wdcaddtoinbufbound rung-3 witness probe, preserved as evidence"),
+    "artifacts/wdcaddtoinbufbound/rung3_20260830/frozen_wave_20260830_102209.py":
+        (CLASS_RESEARCH, "the FROZEN copy that run executed -- one instrument, provable"),
+    "artifacts/wdcaddtoinbufbound/rung3_20260830/mkcd.py":
+        (CLASS_RESEARCH, "builds the poisoned CD image the witness reads back"),
+    "artifacts/wdcaddtoinbufbound/rung3_20260830/mkfix.py":
+        (CLASS_RESEARCH, "applies the candidate fixes and clause-(d) mutants"),
+
     "artifacts/wdcaltoffset/opus_p2_20260830/mut494p2.py":
         (CLASS_RESEARCH, "#494 pass-2 mutant applier, preserved as evidence"),
     "artifacts/wdcaltoffset/opus_p2_20260830/q2_mechanism.py":

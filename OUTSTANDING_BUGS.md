@@ -12542,3 +12542,34 @@ then returns `0x00` silently, and under `-T` it sets `running = 0` on **every** 
 the `#if 0` annotation is a PC-mapping decision by its own wording and is unsettled on the three
 non-PC layouts this device serves (macppc `+0x160`, hpcmips `0x14000386`, iq80321 `+0x402`).
 Whatever is decided must claim only what it covers.
+
+
+## 2026-08-30 -- the no-VPATH rule names four build trees and the gate enforces three
+
+### `novpadfourth` -- the WSL arc tree is invisible to precommit section B
+
+**Found by a measuring seat, not by a check, and that is the whole finding.** On
+2026-08-30 `/tmp/gxsec-build` held a **pre-`#494`** `dev_wdc.c` while `build/`,
+`build-asan/` and `est/` all carried the fix. The seat caught it by `cmp`-ing its clone's
+donor against `GXEMUL-SEC` before measuring — which is a discipline, not a gate.
+
+`precommit_check.sh` section B compares `build/` and `build-asan/` against SEC because
+they sit under the Windows project root and it can walk them. **`/tmp/gxsec-build` lives
+in the WSL filesystem and the Windows-side checker never sees it.** So the carrier's own
+rule — *propagate every edit into them or you measure a stale binary* — names four trees
+while the gate enforces three.
+
+*** WHY IT IS WORSE THAN SIMPLY BEING UNCHECKED. *** Scratch clones are made **from**
+these trees. A clone of a stale donor `cmp`s CLEAN against its donor and carries no
+sentinel, so the two-part clearance **passes on it** — the stale-binary trap reached from
+a direction the sentinel discipline cannot cover, which the carrier already records for a
+different route. Here it would have measured `#494`-less code in the very file `#494`
+edited, in a round reviewing that file.
+
+**REMEDY, and it is not obviously a checker.** Section B would have to reach across the
+WSL boundary, which is a different kind of check from every other one it does. The
+cheaper form is probably an invocation in the round-boundary step beside the existing
+two-part clearance — structure where the decision happens, rather than a checker that
+cannot see the thing it checks. A script exists and ran clean
+(`regress/artifacts/wdcaltoffset/killtable_20260830/wslpropagate.sh`, sentinel
+`WSLPROP_DONE`); what is missing is the **obligation** to run it.
