@@ -551,10 +551,10 @@ else
 			_stden=$(printf '%s' "$stout" \
 			         | sed -n 's/.*PROBEWIRING_SELFTEST_PASS *[0-9]*\/\([0-9]*\).*/\1/p' \
 			         | tail -1)
-			if [ "${_stden:-0}" -eq 21 ] 2>/dev/null; then
-				good "selftest mutant count is 21, the pinned value"
+			if [ "${_stden:-0}" -eq 22 ] 2>/dev/null; then
+				good "selftest mutant count is 22, the pinned value"
 			else
-				bad "THE PROBE-WIRING SELFTEST HAS LOST MUTANTS: ${_stden:-unparseable}, pinned 21."
+				bad "THE PROBE-WIRING SELFTEST HAS LOST MUTANTS: ${_stden:-unparseable}, pinned 22."
 				bad "  Every REMAINING mutant can behave correctly while DELETED ones say"
 				bad "  nothing at all.  Raise the pin DELIBERATELY when mutants are added;"
 				bad "  never nudge it down to silence a red -- the count is the point."

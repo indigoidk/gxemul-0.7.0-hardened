@@ -13370,3 +13370,73 @@ an invitation to implement one is warned where the decision happens.
 *Source-derived, not measured: no probe has driven a 4-byte LINEAR access, because the shipped
 code kills the host before reaching the store. It cannot be witnessed without first
 introducing the defect.*
+
+## 2026-08-30 -- the pass-2 seat measured a row I had just shipped to be VACUOUS, and
+## found a ONE-LINE edit that disables the probe-wiring checker while scoring 21/21
+
+Three findings from one pass-2 review of `105c15c`, two repaired here and one FILED.
+
+**1. `R5d` was STORE-DEATH VACUOUS in the shipped 24-row detector.**  Delete the store
+the row exists to test and the detector still reports **24/24**, byte-comparable to the
+round's own preserved `baseline_24of24.out`.  Its want was placed entirely by the ANCHOR
+store; the decline it named contributed no channel at all.
+
+> *The part that outlives the row:* the same commit **states the governing rule** in
+> `R12`'s own comment -- *"wants an observable ONLY THE STORE CAN PRODUCE"* -- and
+> violates it 130 lines earlier, in a row added by the same diff.  R12's repair and R5d's
+> introduction shipped together.  That is the pre-table block's CHANNEL check failing at
+> row-writing time **with its own sentence already in the file**.
+
+The repair was already in the worktree and is now measured GOOD both directions: the same
+cut against the repaired row gives `0xef|absent` vs `0xef|09`, the only FAIL in 28 rows.
+The 31-row detector's citable baseline is `regress/artifacts/gdromcondlies/
+baseline31_20260830/run31_full.out` -- **31/31, `GDROMCOND_CONTROL=OK` AND
+`GDROMCOND_CONTROL_END=OK`**, with the two-part clearance recorded in the log's own header
+rather than asserted beside it.
+
+**2. A ONE-LINE edit makes every dated exemption immortal and passes everything.**
+
+```
+today = datetime.date.today().isoformat()   ->   today = "2020-01-01"
+```
+
+Production `PROBEWIRING_PASS` rc=0; selftest `SELFTEST_PASS 21/21` rc=0.  It is
+vacuity-floor clause (d) in its purest form -- the guard kept, its repair nulled.
+
+> **The blindness was STRUCTURAL.**  `M5a`-`M5e` each pass `--today` *explicitly*, so
+> between them they test the COMPARISON exhaustively and **the clock it reads not at
+> all**.  The only mutant on the default path was `M0`, whose want is PASS -- which a
+> frozen clock satisfies.  *A parameter added to make a test deterministic removed the
+> last coverage of the value it replaces.*
+
+`M5f` closes it: real clock, one exemption dated **yesterday -- computed**, never a
+literal, or the row rots into a permanent red the day it is written.  Controlled both
+ways: clean **22/22**; frozen-clock mutant **`SELFTEST_FAIL 21/22` with M5f the only
+red**, that same mutant still printing `PROBEWIRING_PASS` in production.  Pin raised
+21 -> 22 at three sites, each anchor verified unique before the edit.
+
+`probewiring` is a **closed** row, so this is disposed under the late-dissent rule and
+ships as a **follow-up commit, never an amendment under that row's number**: (1) the
+stale `_pick_exempt_detector` docstring is L4, corrected in place -- the `count == 1`
+guard is KEPT with its warrant *moved* rather than deleted, because extraction cannot
+have a formatting mismatch but a doc comment quoting an EXEMPT line still sends the
+mutant to `x2`; (2) the frozen clock is L2; (3) the rest is filed.
+
+**3. FILED as `selftestaddition` (med) -- the designed end state still blocks the commit.**
+With the EXEMPT table EMPTY, which is the outcome the table exists to drive toward, the
+selftest reports `SELFTEST_FAIL 12/22`: seven mutants are built by SUBTRACTING from live
+input data.  Two repairs have now moved this tripwire without removing it -- from the
+FIRST discharge to the LAST one.  **The remedy is measured, not theorised:** an
+ADDITION-built `M3x` (insert an exemption for the already-wired `arm_flags_probe.py`)
+scores `ok` on that same empty table.  Not done here -- it rewrites seven mutants owing
+two negative controls each, so it is its own harness round.
+
+**Also: a THIRD instance of propagate-and-forget-to-rebuild**, caught by the same seat
+running the two-part clearance it had been told to run.  `build/gxemul` **fifteen minutes
+OLDER** than the source it was built from, `cmp` clean, no `.MUTANT`, and `CHECKPOINT.md`
+asserting the clearance held.  Severity NIL here and the seat said so rather than
+inflating it -- the delta was comment-only, verified as zero non-comment diff lines -- so
+a wrong RECORD, not a wrong measurement.  Rebuilt; clearance re-measured YES/YES.
+
+*The recurrence rate is the finding: the rule is written down, it fires when someone runs
+it, and three times now nobody ran it at the round boundary where it is owed.*

@@ -1101,12 +1101,24 @@ def _pick_exempt_detector():
     Any exempt DETECTOR serves: exempt means unwired, which is the precondition all four
     mutants need.  Sorted for determinism, so a failure names the same probe twice.
 
-    *** AND THE PICK IS VERIFIED, NOT MERELY CHOSEN. ***  `_st_apply` mutates by exact
-    string replacement, and `_exline()` reconstructs a ONE-LINE entry from the table.  Some
-    EXEMPT entries are wrapped across two source lines, so their reconstruction matches
-    nothing and the mutant raises MUTANT-DID-NOT-APPLY.  The first derivation shipped without
-    this check and failed on the very next candidate -- a derivation that picks blind just
-    moves the hardcoding from a NAME to a FORMATTING ASSUMPTION.
+    *** AND THE PICK IS VERIFIED, NOT MERELY CHOSEN -- BUT NOT FOR THE REASON THIS
+    PARAGRAPH GAVE UNTIL 2026-08-30. ***  It said `_exline()` "reconstructs a ONE-LINE
+    entry from the table", so entries wrapped across two source lines matched nothing.
+    `_exline()` EXTRACTS the real source text now, however many lines it spans, and its
+    own docstring says so -- so the two halves of one file contradicted each other, the
+    stale half sitting in the function that consumes the fresh one.  Found by the pass-2
+    seat reviewing the commit that made the change.
+
+    **The `count == 1` guard is still load-bearing and its warrant has MOVED.**  It no
+    longer defends against a formatting mismatch -- extraction cannot have one.  It
+    defends the SELF-MATCH case: a doc comment in this file quoting an EXEMPT line makes
+    the extracted text appear twice, and `_st_apply`'s exact-string replacement would
+    then edit the comment instead of the table.  Measured by that same seat: a comment
+    quoting one EXEMPT entry sends the mutant to `x2`, i.e. it applies in two places and
+    the rule under test is not the one exercised.
+
+    *A guard whose stated reason expires but whose behaviour is still needed is the
+    hardest kind to audit: deleting it looks safe, because the case it cites is gone.*
     """
     src = src_of_self()
     for name in sorted(EXEMPT):
@@ -1305,6 +1317,36 @@ def selftest(verbose=False):
         case("%-44s is RED, not unexpired" % tag, 1,
              "MALFORMED EXEMPTION  %s" % EX, chk, rg,
              extra=("--today", "2026-08-21"))
+
+    #  ---------------------------------------------------------------- M5f
+    #  *** THE DEFAULT CLOCK WAS COVERED BY NOTHING.  Measured 2026-08-30 by the pass-2
+    #  seat, which asked the standing question -- what is the smallest edit that breaks
+    #  this and still passes? -- and answered it in ONE LINE: ***
+    #
+    #      today = datetime.date.today().isoformat()   ->   today = "2020-01-01"
+    #
+    #  Production: PROBEWIRING_PASS, rc=0.  Selftest: SELFTEST_PASS 21/21, rc=0.  And it
+    #  makes EVERY DATED EXEMPTION IMMORTAL -- the one thing the table exists to prevent.
+    #
+    #  **The blindness was structural, not an oversight about one line.**  M5a-M5e each
+    #  pass `--today` EXPLICITLY, so between them they test the COMPARISON exhaustively
+    #  and the CLOCK IT READS not at all.  The only mutant on the default path was M0,
+    #  whose want is PASS -- so a frozen clock satisfies it.  *A parameter added to make
+    #  a test deterministic removed the last coverage of the value it replaces.*
+    #
+    #  This row runs on the REAL clock, with one exemption dated YESTERDAY -- computed,
+    #  never a literal, or the row rots into a permanent red the day it is written.
+    #  Clean checker: rc=1, EXPIRED EXEMPTION.  Frozen clock: rc=0, PROBEWIRING_PASS.
+    if EX is None:
+        results.append(False)
+        print("  FAIL  M5f -- no exempt DETECTOR (see above).")
+    else:
+        import datetime as _dt
+        _yest = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+        rg, chk = fresh()
+        _st_apply(chk, _exline(EX), '    "%s":   ("%s", "x"),%s' % (EX, _yest, chr(10)))
+        case("M5f the DEFAULT clock is live (no --today)", 1,
+             "EXPIRED EXEMPTION  %s" % EX, chk, rg)
 
     rg, chk = fresh()
     with open(os.path.join(rg, "zz_new_probe.py"), "w", encoding="utf-8",
