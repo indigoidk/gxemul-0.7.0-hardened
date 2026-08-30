@@ -404,4 +404,18 @@ for name, ok, got, want in rows:
 print()
 print("SH4_BSC_WIDTH_RESULT=%d/%d" % (len(rows) - fails, len(rows)))
 print("SH4_BSC_WIDTH_PASS" if fails == 0 else "SH4_BSC_WIDTH_FAIL")
+
+#  *** AN UNCONDITIONAL COMPLETION SENTINEL, ADDED BEFORE THIS PROBE IS GATE-WIRED RATHER
+#  THAN AFTER -- the same order `pit8253_latch_probe.py` used, and for the same reason. ***
+#
+#  `SH4_BSC_WIDTH_PASS` and `_FAIL` are mutually exclusive, so a gate keyed on either one
+#  cannot distinguish A RUN THAT FAILED from A RUN THAT DIED BEFORE PRINTING.  Those are
+#  different facts and must not render the same: the first is a product result, the second is
+#  an apparatus failure, and scoring the second as the first is how a kill driver once graded
+#  a CRASHED mutant purely by how far it got.
+#
+#  This project's rule is that a preserved log is verified by its COMPLETION SENTINEL and not
+#  by its existence.  Adding it now means the gate row that wires this probe can be written
+#  correctly the first time instead of shipping a check that cannot see a truncation.
+print("SH4_BSC_WIDTH_DONE")
 sys.exit(1 if fails else 0)

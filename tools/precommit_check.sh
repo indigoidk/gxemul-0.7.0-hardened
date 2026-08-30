@@ -310,11 +310,17 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  with a literal denominator pin (`check "gdromtoclen rows run" ... 15`).  Raised
 	#  DELIBERATELY, which is what the growth arm below asks for -- the count is the
 	#  point, so it may not be nudged to silence a red.
+	#  22 -> 23 on 2026-08-30: `sh4_bsc_width_probe.py` wired into gate_sh_rounding.sh with a
+	#  literal denominator pin (`check "sh4bscwidth rows run" ... 13`), discharging the SECOND
+	#  exemption of the day.  Raised DELIBERATELY -- and worth noting that discharging the
+	#  FIRST one broke the wiring checker's own selftest, which had hardcoded the probe it was
+	#  driving toward.  Progress is not supposed to red the harness; that was repaired in the
+	#  same session and its mutant count is now pinned here too.
 	#  21 -> 22 on 2026-08-30: `#496` wired gdrom_cond_probe.py into gate_sh_rounding.sh
 	#  with a literal denominator pin (`check "gdromcond rows run" ... 20`).  Same
 	#  deliberate raise, and the growth arm named this file and this line when it fired --
 	#  which is the property that makes the check worth its noise.
-	SCORE_CLAIMS_MANIFEST=22
+	SCORE_CLAIMS_MANIFEST=23
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
@@ -527,6 +533,32 @@ else
 	if [ "$_pwtouched" -gt 0 ]; then
 		if stout=$(python "$PWCHK" --selftest 2>&1); then
 			good "$(printf '%s' "$stout" | grep -E 'PROBEWIRING_SELFTEST_PASS')"
+			#  *** THE EXIT CODE IS NOT ENOUGH, AND A SEAT NAMED THE GAP:
+			#  "precommit checks the exit code, not the mutant census -- the
+			#  suite goes green with MALFORMED-EXEMPTION coverage gone." ***
+			#
+			#  Every mutant that REMAINS can behave correctly while mutants
+			#  that were DELETED say nothing at all.  The selftest itself now
+			#  holds its denominator when a case cannot run (it appends a
+			#  failure rather than skipping), but that only covers the SKIP
+			#  path -- an edit that removes a case outright still exits 0.
+			#
+			#  So the count is pinned to a LITERAL here, which is the same
+			#  discipline every gate row in this tree already uses for its own
+			#  denominator: a suite that loses cases cannot pass by shrinking.
+			#  Raise it DELIBERATELY when mutants are added, and never nudge it
+			#  down to silence a red -- the count is the point.
+			_stden=$(printf '%s' "$stout" \
+			         | sed -n 's/.*PROBEWIRING_SELFTEST_PASS *[0-9]*\/\([0-9]*\).*/\1/p' \
+			         | tail -1)
+			if [ "${_stden:-0}" -eq 21 ] 2>/dev/null; then
+				good "selftest mutant count is 21, the pinned value"
+			else
+				bad "THE PROBE-WIRING SELFTEST HAS LOST MUTANTS: ${_stden:-unparseable}, pinned 21."
+				bad "  Every REMAINING mutant can behave correctly while DELETED ones say"
+				bad "  nothing at all.  Raise the pin DELIBERATELY when mutants are added;"
+				bad "  never nudge it down to silence a red -- the count is the point."
+			fi
 		else
 			bad "THE PROBE-WIRING CHECKER CAN NO LONGER BE SHOWN TO FAIL:"
 			printf '%s\n' "$stout" | grep -E 'SELFTEST_FAIL|^  FAIL ' | sed 's/^/          /'

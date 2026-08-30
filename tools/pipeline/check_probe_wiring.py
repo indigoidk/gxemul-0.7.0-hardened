@@ -670,7 +670,10 @@ EXEMPT = {
     #  DELETED rather than dated forward, in the SAME edit that added the wiring, because a
     #  wired probe that keeps an exemption is a STALE EXEMPTION and this checker reds on it.
     #  Seven exemptions remain.
-    "sh4_bsc_width_probe.py":   ("2026-09-20", "wants gate 10 (gate_sh_rounding; -E landisk)"),
+    #  sh4_bsc_width_probe.py's exemption is DISCHARGED, 2026-08-30 -- wired into
+    #  gate_sh_rounding.sh, whose `-E landisk` machine it already used.  Deleted in the
+    #  SAME edit as the wiring, because a wired probe that keeps an exemption is a
+    #  STALE EXEMPTION.  Six exemptions remain.
     "fbpending_drain_probe.py": ("2026-09-20",
                                  "REPORT-ONLY by default: EXPECT_CAP must be set before a "
                                  "gate row can mean anything, so wiring is a design step first"),
@@ -1003,9 +1006,54 @@ def _lit(*parts):
 
 
 def _exline(key):
-    """Rebuild an EXEMPT source line from the table itself, for the same reason."""
-    date, why = EXEMPT[key]
-    return '    "%s":   ("%s", "%s"),\n' % (key, date, why)
+    """The EXEMPT entry for `key` AS IT APPEARS IN THE SOURCE, whole, however many lines.
+
+    *** THIS USED TO REBUILD A ONE-LINE ENTRY FROM THE TABLE, AND THAT WAS WRONG FOR EVERY
+    ENTRY THAT WRAPS. ***  Measured 2026-08-30, the day the second exemption was discharged:
+    of the six then remaining, the reconstruction matched **zero** -- all six are written
+    across two or more lines.  So the selftest's four exemption mutants had nothing to bite
+    on and its SKIP arm fired, dropping 4 of 21 mutants.
+
+    **That is the worse failure of the two, because the SKIP arm reads as "the EXEMPT table
+    is empty, nothing to test" when the truth was "the reconstruction is too narrow".**  A
+    check quietly getting weaker while reporting PASS is the shape this project names first,
+    and here it would have arrived wearing the clothes of progress.
+
+    Extracting the REAL text instead of rebuilding an idealised one removes the whole class:
+    it cannot disagree with the source, because it IS the source.  Scans from the key to the
+    line that closes the tuple, so single-line and wrapped entries are handled identically.
+    *** AND THE SEARCH IS ANCHORED INSIDE THE EXEMPT BLOCK, WHICH IS NOT A DETAIL. ***
+    `    "<name>":` appears in BOTH tables -- MANIFEST first, EXEMPT second -- so a bare
+    `find()` returns the MANIFEST entry and the mutant deletes the wrong one.  Measured: M1
+    and M2 then reported `UNCLASSIFIED ... is not in the MANIFEST` and `ORPHAN EXEMPTION`
+    instead of the `UNWIRED DETECTOR` they exist to prove, i.e. the mutant reddened for a
+    reason unrelated to the rule under test -- which would have looked like a working check.
+
+    This is the wrong-section trap this project already records for gate row lists: anchor on
+    something that identifies the SECTION, never on a pattern several sections share.
+    """
+    src = src_of_self()
+    block = src.find("EXEMPT = {")
+    if block < 0:
+        raise RuntimeError("_exline: no EXEMPT block")
+    start = src.find('    "%s":' % key, block)
+    if start < 0:
+        raise RuntimeError("_exline: %r not in EXEMPT" % key)
+    i = start
+    while i < len(src):
+        nl = src.find("\n", i)
+        if nl < 0:
+            return ""
+        line = src[i:nl + 1]
+        if line.rstrip().endswith("),"):
+            return src[start:nl + 1]
+        i = nl + 1
+    raise RuntimeError("_exline: unterminated entry for %r" % key)
+
+
+def src_of_self():
+    with open(__file__, encoding="utf-8", newline="") as _f:
+        return _f.read()
 
 
 def _pick_exempt_detector():
@@ -1034,8 +1082,7 @@ def _pick_exempt_detector():
     this check and failed on the very next candidate -- a derivation that picks blind just
     moves the hardcoding from a NAME to a FORMATTING ASSUMPTION.
     """
-    with open(__file__, encoding="utf-8", newline="") as _f:
-        src = _f.read()
+    src = src_of_self()
     for name in sorted(EXEMPT):
         cls = MANIFEST.get(name, (None,))[0]
         if cls != CLASS_DETECTOR:
@@ -1156,10 +1203,26 @@ def selftest(verbose=False):
     #  broke this selftest the day an exemption was discharged.
     EX = _pick_exempt_detector()
     if EX is None:
-        print("  SKIP  M1/M2/M2b/M3 -- no exempt DETECTOR remains to mutate.")
-        print("        That is the EXEMPT table doing its job, not a defect.  When the last")
-        print("        exemption is discharged these four mutants have nothing to say, and")
-        print("        the checker's OTHER mutants still pin every rule they cover.")
+        #  *** A SKIPPED MUTATION IS A FAILURE.  The first version of this arm PRINTED
+        #  A SKIP AND LET THE SELFTEST PASS, and a seat refuted it with a
+        #  one-character proof: change the `== 1` in _pick_exempt_detector to `== 2`
+        #  and no candidate matches, four cases vanish, and the run reports
+        #  PROBEWIRING_SELFTEST_PASS 17/17.  **A check getting quietly weaker while
+        #  still reporting PASS** -- the exact shape this project names first, and it
+        #  was introduced BY the repair for a different instance of it. ***
+        #
+        #  The denominator is what makes the weakening visible, so the denominator is
+        #  not allowed to move: a missing exemplar reds and says why.
+        #  FOUR False results, so the DENOMINATOR STAYS 21 and the run FAILS.  Keeping
+        #  the denominator is the whole point: it is what makes a shrinking check
+        #  visible.  A skip that reduced 21 to 17 and still said PASS is the defect
+        #  this arm now refuses to have.
+        results.extend([False, False, False, False])
+        print("  FAIL  M1/M2/M2b/M3 -- no exempt DETECTOR could be extracted.")
+        print("        NOT the EXEMPT table doing its job.  Either _exline() cannot")
+        print("        extract any entry, or every exemption is discharged -- and in")
+        print("        both cases the checker is no longer shown to fail on these four")
+        print("        rules.  Supply a synthetic fixture; do not let the count shrink.")
     else:
         _nl = chr(10)
         EX_RUN = ('%spython3 %s "$PMAX" "$STUB" > "$SELFTEST_LOG" 2>&1 || true%s'
@@ -1199,11 +1262,22 @@ def selftest(verbose=False):
     for tag, bad in (("M5c unpadded (the ieee_store shape)", '"2026-9-20"'),
                      ("M5d empty", '""'),
                      ("M5e not a date at all", '"soon"')):
+        if EX is None:
+            #  NOT `continue`.  A bare continue drops the case from `results` and the
+            #  DENOMINATOR SHRINKS -- which is the very defect this arm exists to
+            #  refuse, surviving one level down from where it was first repaired.
+            #  Measured: with the four M1-M3 cases fixed and this one still using
+            #  `continue`, the run reported 13/18 rather than 13/21.
+            results.append(False)
+            print("  FAIL  %-44s -- no exempt DETECTOR (see above)." % tag)
+            continue
         rg, chk = fresh()
-        k = "sh4_bsc_width_probe.py"
-        _st_apply(chk, _exline(k), '    "%s":   (%s, "x"),\n' % (k, bad))
+        #  DERIVED, for the same reason M1-M3 are: this named a probe literally and
+        #  broke the day that probe's exemption was discharged -- the SECOND time in
+        #  one session, in a mutant group the first repair had not looked at.
+        _st_apply(chk, _exline(EX), '    "%s":   (%s, "x"),\n' % (EX, bad))
         case("%-44s is RED, not unexpired" % tag, 1,
-             "MALFORMED EXEMPTION  sh4_bsc_width_probe.py", chk, rg,
+             "MALFORMED EXEMPTION  %s" % EX, chk, rg,
              extra=("--today", "2026-08-21"))
 
     rg, chk = fresh()
@@ -1236,10 +1310,21 @@ def selftest(verbose=False):
     case("M11 an unparseable GATES array reddens", 1, "no GATES=( ... ) array", chk, rg)
 
     rg, chk = fresh()
-    _st_apply(chk, _lit('"hpcmips_ctor_probe.py"', ':    ("2026-09-20"'),
-              _lit('"hpcabort_witness.py"', ':    ("2026-09-20"'))
-    case("M12 exempting a WITNESS reddens", 1,
-         "ORPHAN EXEMPTION  hpcabort_witness.py", chk, rg)
+    #  GUARDED, because a missing exemplar is ALREADY recorded as four failures above
+    #  and a traceback here would bury that legible report under a stack trace.  The
+    #  denominator is held the same way: one False, not one fewer case.
+    if EX is None:
+        results.append(False)
+        print("  FAIL  M12 -- no exempt DETECTOR could be extracted (see above).")
+    else:
+        #  DERIVED.  This named `hpcmips_ctor_probe.py` literally and was the THIRD
+        #  such literal in this selftest -- found by a seat AFTER two earlier repairs
+        #  had each believed they were the last.  The tripwire was moved twice before
+        #  it was removed, which is the argument for deriving rather than renaming.
+        _st_apply(chk, _exline(EX),
+                  _exline(EX).replace('"%s"' % EX, '"hpcabort_witness.py"', 1))
+        case("M12 exempting a WITNESS reddens", 1,
+             "ORPHAN EXEMPTION  hpcabort_witness.py", chk, rg)
 
     #  ---------------------------------------------------------------- #471
     #  THE RECURSIVE SCAN NEEDS ITS OWN MUTANTS, or a future edit reverts it and every

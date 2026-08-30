@@ -39,33 +39,23 @@ falsifiable; one claiming completeness is not.  This one is designed to catch:
     * a decline that stops carrying the guest's byte, INCLUDING
       a format-only change such as 0x%02x -> 0x%02d               (R1, R1b, R2, R2b)
     * dropping either latch, so a decline floods                  (R3, R4)
-    * ANY non-identity treatment of d->cond on a decline --
-      restoring `= idata` above the dispatch, zeroing it, or
-      assigning a CONSTANT.  Three pre-states, because one
-      sample cannot tell a function from a constant.             (R5, R5b, R5c)
+    * non-identity treatment of d->cond on a DECLINE -- restoring
+      `= idata` above the dispatch, zeroing it, assigning a
+      CONSTANT, or a value-conditional store.  Four pre-states,
+      because one sample cannot tell a function from a constant
+      and a spanning set cannot see a conjunction  (R5, R5b, R5c, R5d)
     * emptying either accepted arm                                (R6, R8, R9)
     * firing a completion event on a DECLINED write               (R7)
     * touching BUSY on a DECLINED write                           (R7b)
-    * forging readiness so a later DATA READ finds data            (R12)
+    * forging readiness so a later DATA READ finds data           (R12)
+    * widening the accept set at its upper edge, including a
+      value ABOVE the register's own width that TRUNCATES into
+      it                                                          (R12b, R12c)
     * DELETING the fourth statement of the 0xa0 arm, which re-arms
       cmd_count and is the third leg of another site's
-      unreachability warrant                                       (R13)
+      unreachability warrant                                      (R13)
     * REPLACING that statement's VALUE rather than deleting it --
-      a different edit with a different consequence                (R13)
-
-*** THE STAT LEG IS DECLARED APPARATUS, NOT COVERAGE, AND THIS SENTENCE USED TO CLAIM IT. ***
-An earlier contract read "touching BUSY or STAT".  `dreamcast_gdrom_update_stat()` recomputes
-`d->stat` unconditionally on every read, so before and after are both 6 under EVERY product
-mutant: the STAT half was not merely unmeasured, it was UNMEASURABLE -- by the same fact that
-made R10's STAT leg hollow, sixty lines away and not propagated.  A clause-(e) contract
-overclaiming is precisely the category this round policed, so it is corrected rather than
-quietly narrowed.
-
-NO-ROW SENTENCE, WITH ITS WARRANT NAMED so the absence is falsifiable: a mutant that writes
-`d->stat` on the decline is EQUIVALENT, because `update_stat()` overwrites it unconditionally
-and `d->stat` has no other consumer (its only read is preceded by that recompute; the accept
-arm's own store is the sole remaining touchpoint).  **Any future edit adding a `d->stat`
-consumer, or a condition to `update_stat()`, RE-RUNS this death measurement.**
+      a different edit with a different consequence               (R13)
     * growing an effect on, or declining, site A's 0x0b           (R10)
     * collapsing the two latch bits into one                      (R11)
 
@@ -83,11 +73,17 @@ was derived by a seat reviewing the 22-row version -- and the 0xff row added for
 finding kills it too, which is worth noticing rather than filing: **two seats reasoning from
 different angles found one family, and one row covers all of it above 0xaa.**
 
-**What survives is a threshold K strictly inside (0xaa, 0xff)** -- less plausible as a
-careless edit than the round-number thresholds, and chasing every K is the unbounded shape
-this project has paid for once.  So it is DISCLOSED here rather than covered: a
-value-conditional forge triggering only on inputs outside the anchored set is
-OUT-OF-CONTRACT, not a breach.
+*** THE THRESHOLD ACCOUNTING HERE WAS WRONG AND IS CORRECTED IN PLACE. ***  It claimed the
+survivors were thresholds K strictly inside (0xaa, 0xff).  **They are not: R12b drives
+0xff, which satisfies `idata >= K` for every such K, so that whole interval is covered.**
+What survives is K ABOVE 0xff -- reachable because `idata` is the 64-bit datum from
+memory_readmax64() while `d->cond` is a uint8_t, so a wide value passes the predicate and
+TRUNCATES into the field.  R12c drives 0x0108 for exactly that.
+
+What is left after R12c is a K above 0xffff (beyond a 16-bit store's reach here) or a
+predicate keyed on something other than magnitude.  Those are DISCLOSED, not covered:
+chasing every K is the unbounded shape this project has paid for once, and a
+value-conditional forge triggering only outside the anchored set is OUT-OF-CONTRACT.
 
 *** WHAT THE CONTRACT COST TO GET RIGHT, recorded because the first version was wrong. ***
 Pass 2 measured three escapes through the 16-row form and all three are now closed above:
@@ -154,7 +150,10 @@ NOP = 0x0009
 #  under the very mutant it exists to catch.
 A88_TEXT = "only 0x0b is modelled"
 A88_RE = re.compile(r"write of 0x([0-9a-f]{2}) to GDROM_UNKNOWN_0x88")
-COND_RE = re.compile(r"unimplemented GDROM_COND = 0x([0-9a-f]{2})")
+#  *** `+` NOT `{2}`, AND A SEAT HAD TO SAY SO. ***  The diagnostic prints with %02x, so a
+#  value ABOVE the byte renders as `0x1ef` -- and `{2}` would capture "1e", silently
+#  comparing the wrong thing on exactly the rows added to probe the high byte.
+COND_RE = re.compile(r"unimplemented GDROM_COND = 0x([0-9a-f]+)")
 
 rows = []
 
@@ -436,6 +435,43 @@ t, alive, how = session(store16(GDROM_UNK88, 0x000b, A)
 row("R10 a88 nop", "%s|%s|%d" % (printed(t, "r2"), printed(t, "r3"), t.count(A88_TEXT)),
     "0x0|0x0|0", "accepting 0x0b touches no state and says nothing")
 
+# --------------------------------- R10b/R10c  SITE A HAS A STATE CHANNEL TOO
+#  *** SIBLING PARITY FAILED THREE TIMES IN ONE ROUND, AND THE THIRD FAILURE IS INSIDE
+#  THE REPAIR FOR THE SECOND. ***  The first was byte fidelity (site B captured its byte,
+#  site A did not).  The second was the end-to-end consequence, and R12 was written for
+#  it AT SITE B ONLY.  The third is this: **every repair this round made to close a
+#  site-B gap was made at site B alone**, so until now NO ROW READ ANY DEVICE REGISTER
+#  AFTER A SITE-A ACCESS.  Site A was observed by nothing but its own message.
+#
+#  Three mutants were MEASURED sweeping the whole detector through that hole, each a
+#  one-line edit in site A:
+#      d->cond |=  0x08;   in the DECLINE arm  -- forges readiness      (21/21 clean)
+#      d->cond &= ~0x08;   in the DECLINE arm  -- revokes a genuine one (21/21 clean)
+#      SYSASIC_TRIGGER_EVENT on the ACCEPTED 0x0b -- a phantom completion
+#
+#  R10 could not see any of them: it reads COND and BUSY after ACCEPTING 0x0b, and all
+#  three act on the DECLINE path or on a channel it does not read.
+#
+#  *** THE REVIEWER CHECK THIS EARNS, and it costs two seconds: when a repair closes a
+#  gap at one site of a pair, ASK WHAT THE SAME EDIT WOULD DO AT THE OTHER. ***  Three
+#  times the answer here was "nothing would notice".
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_UNK88, 0x0055, A)
+                        + load16(GDROM_COND, A, dest=2)
+                        + load32(SYSASIC_PEND1, A, dest=3))
+row("R10b a88 decl", "%s|%s|%d" % (printed(t, "r2"),
+                                   bit(t, "r3", GDROM_EVENT_BIT),
+                                   t.count(A88_TEXT)),
+    "0x0|clear|1", "a DECLINED site-A write touches COND and the event NOT AT ALL")
+
+#  and the ACCEPTED value must not grow an event either -- the third mutant acts on the
+#  0x0b path, which R10 reads but only through COND and BUSY.
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_UNK88, 0x000b, A)
+                        + load32(SYSASIC_PEND1, A, dest=2))
+row("R10c a88 evt", bit(t, "r2", GDROM_EVENT_BIT), "clear",
+    "and ACCEPTING 0x0b fires no completion event")
+
 # ------------------------------------------------------------------ R2, R4  SITE B
 #  R2 -- announced, and the echoed byte TRACKS the guest's datum.  A constant would prove
 #  far less: it would survive a mutant that stopped reading idata at all.
@@ -542,8 +578,14 @@ A = Addr(CODE)
 t, alive, how = session(store16(GDROM_COND, 0x00ef, A)
                         + store16(GDROM_COND, 0x0009, A)
                         + load16(GDROM_COND, A))
-row("R5d cond 09", printed(t, "r2"), "0xef",
-    "a decline carrying BOTH bits 0 and 3 is refused too")
+#  THE 09 ANNOUNCEMENT IS IN THE ORACLE because without it this row is store-death-unsafe:
+#  if the 0x09 store is missed while the ANCHOR and the LOAD both run, the read still
+#  returns 0xef and the row passes having observed nothing.  Named by a seat as an eighth
+#  `storesidedead` member -- the class applies to a row that drives TWO stores whenever
+#  only one of them is load-bearing.
+m = COND_RE.search(t)
+row("R5d cond 09", "%s|%s" % (printed(t, "r2"), m.group(1) if m else "absent"),
+    "0xef|09", "a decline carrying BOTH bits 0 and 3 is refused too")
 
 # ------------------------------------------------------------------ R6, R8, R9  ACCEPTS
 #  These are the de-escalation ACCEPT rows.  They pin that legal writes still LAND -- which
@@ -722,6 +764,68 @@ row("R12b cond ff", "%s|%s|%s" % (m.group(1) if m else "absent",
                                   bit(t, "r3", GDROM_EVENT_BIT)),
     "ff|0xa0|clear", "0xff is DECLINED: no store, no event, announced")
 
+# ------------------------------------------------- R12c  ABOVE THE BYTE, AND IT TRUNCATES
+#  *** MY CONTRACT'S THRESHOLD ACCOUNTING WAS WRONG AND A SEAT REFUTED IT WITH ARITHMETIC. ***
+#  It claimed the surviving thresholds are those strictly inside (0xaa, 0xff).  They are not:
+#  R12b drives 0xff, which satisfies `idata >= K` for EVERY K in that range, so the whole
+#  interval is already covered.
+#
+#  What survives is ABOVE 0xff -- and it survives for a reason no row was watching:
+#
+#      `idata` comes from memory_readmax64() and is 64-BIT.
+#      `d->cond` is uint8_t.
+#
+#  So `if (idata >= 0x100) d->cond = idata;` is declined for every value this file drove --
+#  all of them fit in a byte -- while a guest 16-bit store of 0x0108 gives idata = 0x108,
+#  passes the guard, and **TRUNCATES INTO cond AS 0x08, forging COND_DATA_AVAIL.**  The
+#  forging value never appears in the store; it is manufactured by the assignment's width.
+#
+#  This row drives exactly that: a 16-bit store of 0x0108, anchored over an accepted 0xa0.
+#  *A value-conditional forge does not have to be reachable within the register's own width
+#  -- the predicate sees the WIDE datum and the field keeps the narrow one.*
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_COND, 0x0108, A)
+                        + load16(GDROM_COND, A))
+row("R12c cond 108", printed(t, "r2"), "0xa0",
+    "a decline ABOVE the byte cannot truncate into cond")
+
+# ------------------------------------- R12d  THE AXIS NOBODY SAMPLED: THE HIGH BYTE
+#  *** MEASURED L2 FLOOR BREACH.  `if ((idata & 0xff) == 0xa0)` -- and the same on the
+#  0xef arm -- SCORED 24/24 WITH ZERO FAILING ROWS, while a guest store of 0x01ef fired a
+#  COMPLETION EVENT FOR A COMMAND NEVER ISSUED and 0x01a0 armed BUSY, both SILENTLY. ***
+#
+#  Why nothing saw it, derived rather than guessed:
+#
+#      grep -o 'GDROM_COND, 0x[0-9a-f]*' gdrom_cond_probe.py | sort -u
+#      -> 0001 0008 0009 0055 0056 0057 00a0 00aa 00ef 00ff
+#
+#  **Ten distinct values and EVERY ONE IS 0x00xx.**  The samples span all eight bits of
+#  the LOW byte -- three separate repairs saw to that -- and the entire high byte was
+#  never varied.  So a predicate that moves into the unsampled dimension is invisible to
+#  all of them, however many low-byte values are added.
+#
+#  *** THE GENERAL LESSON, WHICH IS WHY THIS ROW EXISTS RATHER THAN A FOURTH LOW-BYTE
+#  SAMPLE: THREE POINT SAMPLES CANNOT DISCHARGE A FAMILY. ***  For any finite declined set
+#  S, a predicate keyed on a DIMENSION S does not vary escapes it.  Each earlier repair
+#  added samples along the axis the previous escape used; this one changes axis.
+#
+#  The mutant is plausibly dressed -- `d->cond` IS a uint8_t, so "mask to the register
+#  width" reads like a robustness fix, which is exactly the shape clause (d) asks for.
+#
+#  Three channels in one session, because the mutant has two distinct harms: the value
+#  must not land, the event must not fire, and the decline must still be announced.
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_COND, 0x01ef, A)
+                        + load16(GDROM_COND, A, dest=2)
+                        + load32(SYSASIC_PEND1, A, dest=3))
+m = COND_RE.search(t)
+row("R12d hi byte", "%s|%s|%s" % (m.group(1) if m else "absent",
+                                  printed(t, "r2"),
+                                  bit(t, "r3", GDROM_EVENT_BIT)),
+    "1ef|0xa0|clear", "0x01ef is DECLINED: the HIGH byte is not ignored")
+
 # ------------------------------------------ R13  THE FOURTH STATEMENT OF THE ACCEPTED ARM
 #  *** THE 0xa0 ARM HAS FOUR STATEMENTS AND THIS DETECTOR PINNED TWO.  MEASURED ESCAPE,
 #  BUILT AND RUN BY THE opus5 SEAT: deleting `d->cmd_count = 0;` leaves all twenty other
@@ -804,6 +908,68 @@ t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
 DISPATCH_TEXT = "handle_command: unimplemented command 0x11"
 row("R13 recount", "%d|%s|%d" % (t.count(TOOMUCH_TEXT), how, t.count(DISPATCH_TEXT)),
     "0|exit0|1", "0xa0 RE-ARMS cmd_count: two commands do not kill")
+
+# ------------------------------ R13b  A DECLINE MUST NOT DISTURB A PACKET IN FLIGHT
+#  *** MEASURED SWEEPING 21/21: add `d->cmd_count = 0;` to site B's DECLINE arm. ***  It
+#  is the mirror of R13's mutant -- same statement, other arm -- and it is the more
+#  plausible edit of the two, because a decline that "resets state to be safe" reads like
+#  defensive hygiene.
+#
+#  The harm is not a kill: it CORRUPTS AN IN-FLIGHT COMMAND.  A guest assembling a packet
+#  that happens to write a bad COND value mid-sequence has its byte counter silently
+#  rewound, so the twelve-byte packet never completes and the command never dispatches.
+#
+#  The session interleaves the decline INTO the packet, which no other row does: arm with
+#  0xa0, three data words, a DECLINED COND write, three more.  On the correct build the
+#  count reaches 12 and dispatches; under the mutant it is rewound to 0 at the decline,
+#  reaches only 6, and the dispatch token never appears.
+#
+#  *** AND IT IS ANOTHER SIBLING-PARITY MISS: R13 was written for the ACCEPT arm and the
+#  identical statement in the DECLINE arm went unwatched. ***  Same field, same file, two
+#  lines apart in intent.
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_COND, 0x00a0, A)
+                        + store16(GDROM_DATA, 0x1111, A)
+                        + store16(GDROM_DATA, 0x2222, A)
+                        + store16(GDROM_DATA, 0x3333, A)
+                        + store16(GDROM_COND, 0x0055, A)
+                        + store16(GDROM_DATA, 0x4444, A)
+                        + store16(GDROM_DATA, 0x5555, A)
+                        + store16(GDROM_DATA, 0x6666, A))
+m = COND_RE.search(t)
+row("R13b mid pkt", "%d|%s" % (t.count(DISPATCH_TEXT), m.group(1) if m else "absent"),
+    "1|55", "a DECLINE mid-packet does not rewind cmd_count")
+
+# ------------------------------------------------ THE TRAILING CONTROL, AND WHY IT EXISTS
+#  *** THE OPENING CONTROLS BRACKET THE START OF THE RUN AND NOTHING BRACKETS THE END.
+#  MEASURED: a contended run scored 18/25 with GDROMCOND_CONTROL=OK -- seven late rows
+#  reading `absent` or `ABSENT-READ-FAILED`, and one session dying outright -- while the
+#  four control rows, all of which ran FIRST, were green. ***
+#
+#  A reader seeing CONTROL=OK is entitled to read the row scores as product results.  On
+#  that run they were apparatus failures, and the header said so nowhere.  The controls
+#  were not wrong; they were EARLY, and a per-run control cannot see a per-session
+#  degradation that begins after it.
+#
+#  Re-running ONE liveness and ONE device-signature row at the END costs two sessions and
+#  converts "the rig was alive when we started" into "the rig was alive throughout".
+#  A run whose trailing control is dead has measured nothing after the point it died,
+#  and the score must not be read as a product result.
+A = Addr(CODE)
+t, alive, how = session(["put w 0x8c001800, 0x%x" % LIVE] + load32(0x8c001800, A))
+row("Zlive end", printed(t, "r2"), "0x%x" % LIVE,
+    "TRAILING LIVENESS: the rig was alive at the END too")
+
+A = Addr(CODE)
+t, alive, how = session(store16(GDROM_CNTLO, 0x1234, A) + load16(GDROM_CNTLO, A))
+row("Zdevsig end", printed(t, "r2"), "0x34",
+    "TRAILING DEVSIG: the device still answered at the END")
+
+#  The END control is reported SEPARATELY from the opening one, because "died partway"
+#  and "never started" are different facts and must not render the same.
+print("")
+print("GDROMCOND_CONTROL_END=%s"
+      % ("OK" if rows[-1][1] and rows[-2][1] else "DEAD"))
 
 # ------------------------------------------------------------------------------- result
 ok = sum(1 for _, o in rows if o)

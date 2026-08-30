@@ -13141,3 +13141,86 @@ of finishing the cluster, not a surprise to discover at the end.
 
 **Use a per-site latch bitmask, not one shared latch**, or the first access kind to fire
 suppresses the first useful report for every other — `#490`'s measured `M3shared` shape.
+
+### `n6` -- two farmed runs of one seat on one brief AGREED on the facts and SPLIT on a design call
+
+Both ran because a `${j}` in my launch command did not expand, so each job read all three
+briefs. The accident bought an unplanned replication, which is worth more than the tidy
+version would have been.
+
+**Agreed, and these are the checkable facts:** eight guest-access kills not nine (the ninth
+removed by `#432`); `+0x188` is ACCEPT; the four writes to read-only status registers are
+decline + announce; and WIDTH vs DIRECTION at the `sgi_re` sites are **two rounds, not one** —
+they share an address and a probe but not a semantic class.
+
+**Split 1 — how many round-groups.** Run A said three; Run B said four, splitting `+0x18c`
+(a READ of the write-only IRQEnableClear) into its own group because it carries an obligation
+the others do not: **the code must also stop exposing `d->irq_enable`**, which a plain decline
+does not accomplish. Run A recorded the obligation but kept the site grouped. *Run B's split
+is better on the round-scope rule's own text — a site needing a state-suppression the others
+do not is not covered by the same fix design — but it is a judgement call and is recorded as
+one.*
+
+> ### Split 2 proposes a FIFTH option-set member: `IMPLEMENT`
+>
+> For the two SDRAM Base Address registers (`+0x100` mask, `+0x104` offset), Run A said
+> decline + an *accurate* announce. Run B said flatly **"none of the four offered options
+> fits"** and proposed implementing them — reset-zero state, masked write/readback.
+>
+> **The disagreement is real because these registers are legal and R/W.** The four existing
+> members all presume the access is either unserviceable (delete / decline / decline+announce)
+> or already correctly computed (ACCEPT). A legal R/W register the model never implemented is
+> neither: declining announces truthfully and *still returns a wrong answer* to a guest that
+> writes then reads back.
+>
+> **The addition licence puts the burden on `IMPLEMENT`, and that is the right way round.**
+> Additions here are licensed by a measured delta or a transferred warrant, never by "it
+> cannot hurt" — so implementing two registers owes one of those: a guest that actually reads
+> them back, or an in-tree precedent for modelling an SDRAM sizing register. **Until one
+> exists, decline+accurate-announce is the licensed choice and IMPLEMENT is the filed
+> alternative.**
+
+A round taking these two sites must answer this explicitly rather than inheriting whichever
+note it reads first. Recorded now because the four-member option set is carrier doctrine, and
+a proposed fifth member is a **rule question** — which goes to the adjudicating seat at a round
+boundary rather than being settled in passing.
+
+### `panelargvcap` -- panel.sh warns about the argv cap, then does the thing it warned about
+
+Measured 2026-08-30 on a 38,983-byte brief. `panel.sh` printed:
+
+> `WARNING: brief is 38983 bytes (>30KB). Codex/Kimi take it on argv and may fail with
+> 'Argument list too long'. Trim, or point those seats at the file path instead of piping its
+> contents.`
+
+…and then launched all seven seats. Two died instantly:
+
+    codex.txt  ->  ".../codex: Argument list too long"   (123 b)
+    kimi.txt   ->  ".../kimi: Argument list too long"    (97 b)
+
+**grok survived because it uses `--prompt-file`** — the carrier already names it the one CLI
+seat immune to this — and the three Ollama seats POST, so they have no argv at all. The loss is
+exactly the two seats that take the brief on the command line.
+
+> **The defect is that the warning is ADVISORY.** It diagnoses the problem correctly, names the
+> remedy correctly, and then does the thing it just warned about. That is one step milder than
+> the check-that-cannot-fail: it **informs** and does not **act** — and the operator it informs
+> is the same person who just wrote the brief and is about to walk away while nine seats run.
+> The failure then surfaces as two ~100-byte seat files, which the seat check reports as a
+> *seat* failure rather than a *launcher* failure.
+
+**The remedy is in the warning's own text and costs nothing:** when the brief exceeds the cap,
+give codex and kimi a short prompt naming the **file path** instead of the contents. Both accept
+it — recovered by hand here, one command each, and both then answered. The file-reading seats
+can read the brief; only the packet-fed seats need it inlined, and those have no argv limit.
+
+**Not fixed in the moment, deliberately:** a panel was running, and editing a running shell
+script corrupts it mid-execution — bash reads incrementally by byte offset. That is a documented
+class here, which is why this is a filed row and not an in-passing edit.
+
+**What the fix owes**, since it changes the script every panel runs: prove an oversized brief
+now reaches both seats and they *answer*, and prove a normal-sized brief still goes on argv
+unchanged — so the switch does not silently become the default.
+
+*The true cap is not established: the warning threshold is 30 KB, the measured failure was at
+38,983 bytes, and no bisection was done. This row claims no boundary.*

@@ -1239,6 +1239,19 @@ else
             check "gdromcond controls live" "no" "yes"
         fi
 
+        #  *** AND THE TRAILING CONTROL, WHICH IS A DIFFERENT QUESTION. ***  The opening
+        #  controls run FIRST, so they cannot see a rig that degrades partway.  MEASURED: a
+        #  contended run scored 18/25 with CONTROL=OK -- seven late rows reading `absent` and
+        #  one session dying -- and nothing in the log said the scores were uncitable.
+        #  "Alive at the start" and "alive throughout" are different facts.
+        if grep -q "GDROMCOND_CONTROL_END=OK" "$CONDLOG"; then
+            check "gdromcond controls live at END" "yes" "yes"
+        else
+            note "gdromcond TRAILING CONTROL DEAD -- the rig degraded DURING the run."
+            note "Everything after the failure point measured nothing.  Re-run alone."
+            check "gdromcond controls live at END" "no" "yes"
+        fi
+
         #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
         #  leaving condres empty so both halves expand to "" and the score row compares
         #  "" with "" -- green on nothing.
@@ -1250,7 +1263,7 @@ else
         else
             check "gdromcond result parses" "yes" "yes"
             #  the denominator against a LITERAL: a probe that loses rows cannot pass
-            check "gdromcond rows run"     "${condres#*/}" 24
+            check "gdromcond rows run"     "${condres#*/}" 31
             check "gdromcond rows correct" "${condres%/*}" "${condres#*/}"
         fi
 
@@ -1259,14 +1272,94 @@ else
         #  is <= 12 chars against a %-14s column, so the two-space anchor below is always
         #  satisfiable -- a name AS LONG AS its column makes the check impossible instead.
         for v in "live" "devsig sh4" "devsig st" "devsig cnt" \
-                 "R1 a88 says" "R1b a88 trk" "R3 a88 x3" "R10 a88 nop" \
+                 "R1 a88 says" "R1b a88 trk" "R3 a88 x3" \
+                 "R10 a88 nop" "R10b a88 decl" "R10c a88 evt" \
                  "R2 cond says" "R2b cond trk" "R4 cond x3" \
                  "R5 cond keep" "R5b cond 00" "R5c cond a0" "R5d cond 09" \
                  "R6 a0 busy" "R8 a0 echo" "R9 ef event" \
                  "R7 no event" "R7b cond st" "R11 crossbit" \
-                 "R12 no forge" "R12b cond ff" "R13 recount"; do
+                 "R12 no forge" "R12b cond ff" "R12c cond 108" \
+                 "R12d hi byte" "R13 recount" "R13b mid pkt" \
+                 "Zlive end" "Zdevsig end"; do
             n=$(count "$CONDLOG" "^$v  .*ok$")
             check "gdromcond row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+        done
+    fi
+fi
+
+#  ---------------------------------------------------------------------------------------
+#  #441 SH4 BSC non-16-bit access -- sh4bcr.  A guest choosing an access WIDTH used to end
+#  the host at BCR2/BCR3; the fix services the access and diagnoses it once per site.
+#
+#  WIRED HERE because the probe execs `-E landisk`, which is this gate's machine, and its
+#  exemption in check_probe_wiring.py is DELETED in the same edit -- a wired probe that
+#  keeps an exemption is a STALE EXEMPTION and the checker reds on it.
+#
+#  *** THE PROBE GAINED `SH4_BSC_WIDTH_DONE` IN THIS SAME COMMIT, BEFORE BEING WIRED. ***
+#  It already printed `SH4_BSC_WIDTH_PASS` or `_FAIL`, but those are MUTUALLY EXCLUSIVE, so a
+#  gate keyed on either cannot tell A RUN THAT FAILED from A RUN THAT DIED BEFORE PRINTING.
+#  The sentinel is unconditional, so completion and outcome are separate questions here --
+#  which is what lets the two rows below say different things.
+#
+#  NOTE THE ROW NAMES ARE LONGER THAN THEIR COLUMN.  The probe prints `"  %-4s %-58s"` and
+#  several names exceed 58 characters, so those lines carry NO trailing padding.  The anchors
+#  below therefore must NOT require trailing whitespace -- `^  ok   <name>` and nothing more.
+#  This is the padded-column trap approached from the other side: the usual failure is a name
+#  as long as its column making a check unsatisfiable, and here the check is written to be
+#  insensitive to it.
+BSCPROBE=sh4_bsc_width_probe.py
+if [ ! -f "$BSCPROBE" ]; then
+    gate_skip "sh4bscwidth: $BSCPROBE absent"
+else
+    BSCLOG=$LOGDIR/gate_sh4_bsc_width.log
+    python3 -u "$BSCPROBE" "$PMAX" "$KERNEL" > "$BSCLOG" 2>&1 || true
+
+    if ! grep -q "SH4_BSC_WIDTH_DONE" "$BSCLOG"; then
+        note "sh4bscwidth probe did not reach its completion sentinel; last lines follow"
+        tail -5 "$BSCLOG" | sed 's/^/       /'
+        check "sh4bscwidth probe completed" "no" "yes"
+    else
+        grep -E "^  (ok|FAIL) " "$BSCLOG" | sed 's/^/       /'
+
+        #  PARSE BEFORE SCORE.  A malformed result line still satisfies an outer grep,
+        #  leaving the variable empty so both halves expand to "" and the row compares ""
+        #  with "" -- green on nothing.
+        bscres=$(grep -o "SH4_BSC_WIDTH_RESULT=[0-9]*/[0-9]*" "$BSCLOG" | tail -1 | cut -d= -f2)
+        if [ -z "$bscres" ]; then
+            note "sh4bscwidth result line present but unparseable; last lines follow"
+            tail -5 "$BSCLOG" | sed 's/^/       /'
+            check "sh4bscwidth result parses" "no" "yes"
+        else
+            check "sh4bscwidth result parses" "yes" "yes"
+            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+            check "sh4bscwidth rows run"     "${bscres#*/}" 13
+            check "sh4bscwidth rows correct" "${bscres%/*}" "${bscres#*/}"
+        fi
+
+        #  D0 and D7a are this probe's OWN controls and are checked BY NAME rather than
+        #  folded into the score -- a control that goes red while the total stays acceptable
+        #  is an apparatus failure being read as a product result.
+        for c in "D0 every arm produced data" "D7a CONTROL: the CPU really is big-endian"; do
+            check "sh4bscwidth control: $c" \
+                  "$(grep -c "^  ok   $c" "$BSCLOG")" "1"
+        done
+
+        #  Per-row presence.  A row that silently stops being tested is the padded-column
+        #  class, so each is pinned individually rather than by a total.
+        for v in "D1 4-byte write reaches BCR2 AND IS MASKED; host survives" \
+                 "D2 4-byte read returns the register in its own lane" \
+                 "D3 a 1-byte write is not promoted to 16 bits" \
+                 "D4 BOTH sites latch SEPARATELY, in one process (count the suffix, NOT the name)" \
+                 "D5 a second non-16-bit access in one process survives" \
+                 "D6 the 4-byte access is diagnosed AND says it was serviced" \
+                 "D6b a 4-byte READ is diagnosed too, not only a write" \
+                 "D7b a 4-byte write takes the FIRST two bytes on big-endian" \
+                 "D8 BCR3's write reaches its register UNMASKED" \
+                 "D9 a 1-byte READ does not kill the host" \
+                 "D10 a legal 16-bit access is NOT diagnosed"; do
+            n=$(count "$BSCLOG" "^  ok   $v")
+            check "sh4bscwidth row green: $v" \
+                  "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
         done
     fi
 fi
