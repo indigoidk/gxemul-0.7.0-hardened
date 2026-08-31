@@ -1216,3 +1216,34 @@ for LINEAR_A/B it is additionally the only thing preventing the OOB. Does that a
 demand asymmetric ROWS, or is one decline row per window enough? Rows are owed per enumerated
 mutant, never per site that "feels riskier" — a row added on feel is the addition licence's
 "cannot hurt" wearing detector clothes.
+
+---
+
+### `sgirekills` — assess stage HELD at 2/9, awaiting `#497`'s table
+
+**Held for: opus5, codex, grok, kimi, glm, deepseek, minimax.**
+
+**TEX is ACCEPT only in the MIRRORED form — the read using the same `>> 3` expression as the
+store — which round-trips per frame while shipping hardware-wrong reads at overlapping
+offsets. Is a knowingly-wrong-but-self-consistent readback better than DECLINING that one arm
+until `sgitexindex` lands? And is the round-trip row genuinely sufficient coupling
+enforcement, or does a mirrored TEX read make the wrong index HARDER to fix by giving it a
+green row?**
+
+The rest of the design is settled and is on the row: five arms clean ACCEPT (TLB A/B/C
+round-trip byte-exactly on this big-endian machine; LINEAR A/B are byte-order symmetric by
+construction), TEX refuted as clean-ACCEPT because **`re_tex` has zero consumers** — it
+appears three times in the file: declaration, store, and a `debug()` printing back what was
+just stored — five named ACCEPT obligations, and an ordering dependency on `#497` for
+**witness quality**, not merely for latch infrastructure: a faithful round-trip through a
+device is value-indistinguishable from RAM, and the device-signature control is that
+post-`#497` a 4-byte read *declines and returns 0* while RAM would serve it.
+
+**Held rather than fired because a measurement is in flight.** `#497`'s table 2 is running
+with wall-clock-sensitive oracles and the carrier serialises panel seats against it. Firing
+seven CPU-bound seats now would risk a false FAIL in the round's most expensive measurement,
+to save an hour on a round that cannot start until that table finishes anyway.
+
+**Release condition:** `#497`'s table completes. The two existing entries are **not** re-fired
+and do **not** count toward the nine.
+
