@@ -13883,7 +13883,7 @@ concluded the shipped tool did not have it -- because I checked the number peopl
 > | 1 | `9f666a8` | two mutants sweeping the 28-row detector CLEAN |
 > | 2 | `938b328` | the repair reproduced the SAME GAP one level down |
 > | 3 | `4daa506` | **two MEASURED clean sweeps** (`M1` direction, `M2` position) and a **RED GATE ON A GREEN PROBE** |
-> | 4 | pending | the CLASS closure -- 48 rows, the state space enumerated once |
+> | 4 | `de1a0de` | the CLASS closure -- **50** rows, the state space enumerated once, plus an L2 repair of pass 4's OWN floor breach |
 >
 > **THREE BREACHES, ONE CLASS, THREE TIMES.**  Each was a cell of the catch-all's state space
 > left empty, repaired at exactly the address the mutant had used, leaving the symmetric cell
@@ -13896,6 +13896,12 @@ concluded the shipped tool did not have it -- because I checked the number peopl
 > cell in one diff, and writes into the probe's CONTRACT which cells are covered and which are
 > **deliberately not**, so a later escape is *"outside the contract, as stated"* rather than a
 > fourth breach.
+>
+> **GATE, at 50 rows, run ALONE and IN FULL: PASS -- 506 checks, 0 FAIL, rc=0, with
+> `sgi_re unmapped rows emitted/green/red` at 50/50/0 and both L2 repair rows green.**  Log at
+> `regress/artifacts/sgireunmapped/killtable_20260831/pass4/gate_arm_pass4_50rows.log`.  That was
+> the round's one KNOWN GAP -- the gate had passed at 48 rows and had not been re-run after the L2
+> repair -- and it is now closed.  Pass 4 owes only its pass 5.
 >
 > **`M2` is this project's own newest rule un-transferred by one hop**, and that is the part
 > worth carrying: the carrier says an accept row at a window's BASE tests the near bound twice
