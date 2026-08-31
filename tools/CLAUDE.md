@@ -688,6 +688,31 @@ written around two dead seats outlived both of them by a week.
 Every code round runs the panel **twice**: pass 1 on the design brief BEFORE any edit,
 pass 2 on the actual diff AFTER.
 
+> ### *** `git show <sha> -- <file> | head -N` INLINES THE COMMIT MESSAGE, NOT THE DIFF.
+> ### Three panels were blinded by this in one session before the cause was found. ***
+>
+> `git show` prints the FULL COMMIT MESSAGE first.  A 50-line message and `head -60` yields
+> **zero diff lines** -- measured: `git show 938b328 -- src/devices/dev_sgi_re.c | head -60`
+> gives 0 hunks, while the whole diff has 20.  An earlier brief in the same session got 34
+> hunks from the identical command with `sed -n '1,200p'` instead, which cleared the message.
+> **Same command, different cut, opposite outcome** -- which is why it read as intermittent
+> rather than as a bug.
+>
+> **USE `git show --format= <sha> -- <file>`** (suppresses the message entirely) or
+> `git diff <sha>^ <sha> -- <file>`.  Never a line-count cut on `git show`, because the cut
+> has to be larger than a message whose length you do not control -- and this project writes
+> long messages by policy.
+>
+> *** THE WORSE HALF, AND IT IS A DISCIPLINE FAILURE NOT A TOOL ONE: THE CHECK FIRED AND I
+> IGNORED IT. ***  The brief-building step printed `diff hunks inlined: 0` in its own output,
+> immediately above the line that launched six seats.  I read past it.  Two seats then said
+> plainly they could not settle the questions from the packet -- and found the defect anyway.
+>
+> **A count printed beside an action is not a check unless something refuses to proceed on
+> it.**  The denominator rule already says a number makes a search checkable; this adds that
+> a checkable number nobody gates on is decoration.  When a brief claims to inline a diff,
+> the launcher should REFUSE at zero hunks rather than report it.
+
 > ### *** AND A REPAIR MADE IN RESPONSE TO A PASS 2 OWES ITS OWN PASS 2.  Adjudicated
 > ### 2026-08-31 with a named stop condition, and SETTLED EMPIRICALLY IN THE SAME HOUR. ***
 >
