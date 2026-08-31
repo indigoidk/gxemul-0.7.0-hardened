@@ -1,3 +1,111 @@
+## Round #497 widthkillclass -- six guest-reachable host kills, and a detector that escaped
+## its own mutant until the round measured it
+
+A guest choosing an unusual ACCESS WIDTH ended the host process at six address windows of
+the SGI CRIME rendering engine (`src/devices/dev_sgi_re.c`). One `sb`, `sh` or `lw` to
+`CRIME_RE_TLB_A/B/C`, `_TEX`, `_LINEAR_A` or `_LINEAR_B` and the emulator died. `#337` fixed
+this class in `dev_wdc.c`; these six are the same shape, witnessed at rung 3 on unmodified
+`-E sgi -e ip32` -- **26/26 across all six sites and both directions.**
+
+    live exit(1) in dev_sgi_re.c        21 -> 15
+    DEVICE_ACCESS bucket, whole tree    83 -> 77
+
+Both by `exit_census.py`, not by grep -- which counts commented-out code as live and
+mis-attributes plain functions to the preceding handler. That tool was corrected the same day
+for exactly those two defects.
+
+### The bytes shipped are the bytes measured
+
+The artifact's md5 is `5821e801...`, and `table2_master.log:17` records that md5 for the
+source under test. Verified at every hop before the copy -- artifact = measured, SEC = base,
+est = base -- and re-verified across all five trees afterwards. Two of those five were missed
+on the first pass and caught by the gate, which is the no-VPATH propagation rule doing its job.
+
+### The fix is an `else if` splice, and both alternatives were refuted before it was written
+
+**`break` is not legal C at these sites** -- they are `if`/`else if` arms, not `switch` cases.
+Eight of eight answering seats said so on pass 1, which is unanimity against the brief's own
+sketch and the premise-audit instruction working as designed.
+
+**`return 0` is not a decline either**: `memory_rw` coerces it to -1 and raises
+`EXCEPTION_DBE` on MIPS. So control must reach the common tail, which ends `return 1`. A
+declined read now runs that tail for the **first time in the fork's history**, handing the
+guest a defined zero -- `odata` is explicitly initialised, read rather than assumed.
+
+Six per-site latch bits in one new `uint32_t` with the `(once)` marker. Per-site rather than
+shared because `dev_wdc.c`'s own comment adjudicates the discriminator -- *SIX FLAGS, NOT
+FOUR* -- sharing being licensed only across sites mutually exclusive at runtime, and these six
+windows are walked in one session by any driver bringing up the RE.
+
+### The LINEAR sites carry a different comment, and the wording is what `offsetof` measured
+
+For `TLB_A/B/C` and `TEX` the width guard protects correctness only. For `LINEAR_A/B` it is
+additionally the only thing preventing an out-of-bounds array write. **The brief called that
+"load-bearing HOST memory safety" and the measuring seat refused to ship it**, compiling
+`offsetof` instead: the over-run lands INSIDE the struct, so it is UB plus silent cross-array
+corruption, **invisible to plain ASAN**. Not a wild write, not a host crash.
+
+> **And the fix nearly re-introduced that defect.** Placing the new latch between
+> `re_linear_b` and `de_reg` made `re_linear_b[32]` alias the latch itself -- falsifying the
+> comment above it and creating a worse mode where an over-run **silences the device's own
+> diagnostics**. The field sits last, and `ADJACENCY_AS_DOCUMENTED=YES` is a hard gate in
+> table 2.
+
+### The escape, and why there are two tables
+
+`d_returnzero` -- the declined path returning 0 instead of falling to the tail -- **escaped
+all 35 v1 rows.** The evidence is one line:
+
+    tlb_a lw surv    got exit0/0xdeadbeef    want exit0/0x0
+
+**The exit status is identical on both sides.** Only the untouched sentinel shows the guest
+load never completed. The v1 rows were **survival-only oracles at a refusal-effect site** --
+vacuous by construction, because a guest bus error leaves the *host* alive. That is a
+clause-(d) null-repair, so **L2, repaired in-round**: the v2 rows read a *value* and kill it
+at 29/35.
+
+It was disclosed as an explicit no-row in `PRETABLE.out` **before table 1 ran**, and predicted
+in advance. That is the CHANNEL line's claim -- that a row's channel-under-its-mutant is
+knowable at writing time -- holding on its first mandated application. Its one measured limit
+is worth more than the ratification: **it validates the channel a row NAMES, not whether that
+observable matches the CLAIM the row carries.**
+
+`d_lessthan` scored 35/35 and is a **result, not an escape** -- measured equivalent by
+construction over the reachable domain `len in {1,2,4,8}`.
+
+Floor (a)-(f) all discharged by measurement. Clause (c) got *stronger* as a side effect: the
+null medium fell **12/35 to 6/35**, because the v2 rows demand a value and no longer pass
+trivially against a binary that merely exits 0.
+
+### The residual is pinned by rows, not claimed by a sentence
+
+The width guard is evaluated FIRST, so an ordinary 8-byte `ld` **still ends the host** at all
+six windows. That is `sgirekills`, filed separately -- and the round ships **six measured `ld
+kill` rows** pinning it. Consequence, recorded now rather than rediscovered: **fixing
+`sgirekills` will turn a green gate RED by succeeding**, six rows' worth, so it inherits the
+oracle-correction ordering -- re-pin first, measure the committed build red, then edit.
+
+`sgidewidth` (a seventh width kill in the same file, different handler) and `sgireunmapped`
+(the unmatched-address arm, no width predicate at all, 2080 bytes) are filed and named, so
+nobody reads this round as "the file is safe".
+
+### What pass 2 found, which was mostly about the record
+
+Both Anthropic seats ratified the code and tables. The packet-fed seats found **three defects
+in the brief** -- a pre-fix census presented as current state inside a SETTLED PREMISES block,
+a section claiming the round had not shipped while the header called it shipped, and a **null
+pattern** (`grep -i 'sgi|width'` without `-E` is a literal). The measuring seat found a
+**measured escape**: `other kill` is a death-only oracle and a text change scores 35/35.
+Filed as coverage debt with its reasoning, not claimed as a floor breach.
+
+It also discharged an obligation the two tables never did: **seven rows were red under no
+mutant in either table**, so for those the CHANNEL line was satisfied on paper. Six of the
+seven are now measured failable; one remains blind and is filed.
+
+*The honest summary, in the measuring seat's own framing: the diff is right, the tables are
+real, the bytes shipped are the bytes measured -- and the round's own record was the weakest
+part of it.*
+
 ## Round panelargvcap -- `panel.sh` warned about the argv cap and then launched anyway
 
 A 38 KB brief killed **both** argv-fed seats with `Argument list too long`. Codex and Kimi

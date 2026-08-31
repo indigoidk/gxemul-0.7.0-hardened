@@ -13277,6 +13277,63 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `holdmarkermulti` (med) -- the hold-marker check cannot fire on its largest cases
+
+`gen_codex_wall.py` exists because section I requires that every `[HELD AWAITING SEAT: ...]`
+marker is also named in the queue — its own docstring: *holding a stage and queueing it are ONE
+action, not two*. **Its regex accepts a single `[a-z0-9_]+` seat name.** A marker naming two or
+more seats contains commas, fails the match, and is neither counted nor required to appear.
+
+> **So the enforcement is strongest on the smallest holds and absent on the biggest.** A stage
+> awaiting one seat is policed; one awaiting all seven is not — and a seven-seat hold is, by
+> construction, the one carrying the most owed work.
+
+**Measured, not argued:** `sgirekills` is held awaiting `opus5, codex, grok, kimi, glm,
+deepseek, minimax` and is reported in no count.
+
+**The fix is the character class** — admit `[a-z0-9_,\s]+` and split on commas. It must stay
+*restricted*: `ledgerstatelies` quotes the literal inside prose containing `*` and `-`, and a
+permissive `[^\]]+` would match that quotation and manufacture a phantom hold — the
+quoted-marker hazard arriving from the other direction. That prose is a built-in negative control.
+
+*Found while defanging stale markers: the count did not move for the multi-seat ones, and a count
+that does not move is not thereby correct — the same tell the carrier records from the stuck 27.*
+
+### `otherkilldeath` (med) -- a DEATH-ONLY oracle, and the round fixed its mirror image
+### while shipping this one
+
+`sgi_re_width_probe.py`'s catch-all row captures the transcript and **throws it away** --
+`row("other kill", how, "exit1", ...)` uses only how-it-died -- while its six `ld kill`
+siblings twelve lines above compute a text membership test and report `exit1+txt`.
+
+> **So the row's note claims IDENTITY — *the catch-all is untouched* — on an oracle that
+> observes only DEATH.** Any edit keeping the arm fatal while changing what it *is* passes.
+
+**Measured**, with the prediction filed before building: altering the catch-all's message text
+while leaving `exit(1)` untouched scores **35/35 — zero red rows.** The matched control
+(altering one *read* arm's text) scores **34/35**, reddening `tlb_a ld kill`. The pair is the
+point: it proves the six siblings are failable and this one is not.
+
+**It is the `d_returnzero` lesson mirrored onto the death side.** That was a survival-only
+oracle where survival is the shared answer; this is a death-only oracle where death is. Same
+shape, opposite polarity — and the round repaired the first while shipping the second.
+
+**Finding it discharged an obligation the two tables never did.** Across all 41 preserved probe
+outputs, **seven rows were red under no mutant in either table**. `PRETABLE.out` names their
+channel, but no mutant exercising it was ever built — so for those seven the CHANNEL line was
+satisfied **on paper**. Six are now measured failable; **one remains blind, and it is this row.**
+
+**Coverage debt, not a floor breach**, and the reasoning is recorded so nobody re-argues it:
+(a), (b), (c) pass and the row does red on a null medium; the catch-all is not a predicate the
+fix *depends on*, so the bounded (d) closure does not reach it; and clause (e)'s contract says
+*silent **removal***, which this mutant is not — **the contract is precise even though the
+row's inline note overclaimed.**
+
+*Fix is one line — the text membership test its siblings already carry. Deliberately not done
+in-round: editing a shipped detector row means re-measuring, and the stopping rule fixes only
+measured false passes and wrong records. This is a row weaker than its note claimed, and the
+note has been corrected to say so.*
+
 ### `gatedevicesplit` (low) -- filed because a comment already claimed it was
 
 The `#497` gate comment ended *"the right answer is a `gate_devices.sh` split ... **Filed,

@@ -286,7 +286,9 @@ DEVICE_ACCESS(sgi_re)
 	 *     the note at those two sites.
 	 *
 	 *  Only the WIDTH kills change here.  The six `TODO: read from ...' kills
-	 *  and the final catch-all are deliberately untouched (sgirekills), as is
+	 *  and the final catch-all are deliberately untouched -- the READ arms are
+	 *  `sgirekills`, the CATCH-ALL is `sgireunmapped` (two different rows: one is a
+	 *  direction, the other an unmatched address with no width predicate at all), as is
 	 *  DEVICE_ACCESS(sgi_de)'s own width kill, whose accept set is {4,8}
 	 *  rather than {8} (sgidewidth).
 	 */

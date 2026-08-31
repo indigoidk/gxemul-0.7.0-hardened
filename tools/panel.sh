@@ -118,6 +118,20 @@ GROK_EFFORT="xhigh"         # grok-4.6 is both it and the default. Re-check afte
                             # reports as a non-answer.
 CODEX_EFFORT="xhigh"        # the user's intent is "ultra"; xhigh is the highest
                             # value the CLI reliably accepts (proven this repo).
+#  *** OWNER RULING 2026-08-30: agy IS RESERVED FOR MEASUREMENT AND HELD OUT OF ROUTINE
+#  PANELS.  It is the only compile-and-measure seat NOT behind the Agent-tool transport, so
+#  it is the roster's insurance against the outage that once cost a round ALL its measuring
+#  capacity at once -- and its quota is real (~6 substantial calls per window, first wall
+#  recorded 2026-08-30).  Spending that budget on reading spends the insurance on a job seven
+#  other seats already do. ***
+#
+#  THE RULING WAS RECORDED IN THE CARRIER AND THIS FILE WAS NOT TOUCHED, so the very next
+#  panel fired agy anyway -- the carrier's own structure-first finding, measured against
+#  itself in under two hours.  Filed as `agyreservation`; this is the fix.
+#
+#  Set PANEL_FIRE_AGY=1 to fire it deliberately (a measurement round, or a panel where the
+#  Anthropic seats are down and agy is the only measuring capacity left).
+AGY_FIRE="${PANEL_FIRE_AGY:-}"
 AGY_MODEL="gemini-3.7-flash-high"   # user directive 2026-08-13: agy 3.7, high effort.
 AGY_EFFORT="high"           # BOTH are passed on purpose. `agy models` lists the
                             # effort tier baked into the model name (-high/-medium/
@@ -270,7 +284,9 @@ fi
 #  because a seat that CAN run a gate eventually will.
 O4_BANNER="ollama($OLLAMA4)"
 [ -z "$OLLAMA4" ] && O4_BANNER="kimi-substitute:WITHDRAWN (CLI is the seat)"
-echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) $O4_BANNER | + Opus/Fable via Agent tool"
+AGY_BANNER="agy($AGY_MODEL/$AGY_EFFORT)"
+[ -z "$AGY_FIRE" ] && AGY_BANNER="agy:RESERVED-FOR-MEASUREMENT (owner ruling; PANEL_FIRE_AGY=1 to fire)"
+echo "seats: codex($CODEX_EFFORT) $AGY_BANNER kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) $O4_BANNER | + Opus/Fable via Agent tool"
 
 # --- launch the five scriptable seats concurrently ---------------------------
 #  Above the cap the two argv-fed seats get a POINTER instead of the contents.  Both
@@ -283,7 +299,15 @@ if [ "$BRIEF_MODE" = pointer ]; then
 else
     CODEX_ARG="$(cat "$BRIEF")"; KIMI_ARG="$(cat "$BRIEF")"
 fi
-say "  brief ${BSZ}b, cap ${ARGV_CAP} -- codex/kimi fed by ${BRIEF_MODE}"
+#  *** echo, NOT say().  say() is defined ~260 lines BELOW this point AND appends to
+#  $SEATFILE, which is not assigned until the seat check.  This line shipped as a say()
+#  call in the argv-cap fix and has printed `panel.sh: line 286: say: command not found`
+#  on EVERY panel since -- losing the one diagnostic that says how each seat was fed,
+#  which is exactly what you want when a seat dies on argv size.
+#
+#  Moving say() to the top does NOT fix it -- it makes it worse: the call would then
+#  abort every panel on `SEATFILE: unbound variable` under set -u.  Checked before edit.
+echo "  brief ${BSZ}b, cap ${ARGV_CAP} -- codex/kimi fed by ${BRIEF_MODE}"
 
 AGY_PROMPT="Read $BRIEF_ABS and review it adversarially exactly as its own \
 Questions/Review-asks section directs. Verify every cited claim against the \
@@ -295,10 +319,15 @@ GO-WITH-CHANGES."
     </dev/null > "$OUT/codex.txt" 2>&1 &
 P_CODEX=$!
 
-"$AGY" --dangerously-skip-permissions --add-dir "$PROJ" --print-timeout 30m \
-    --model "$AGY_MODEL" --effort "$AGY_EFFORT" \
-    --print "$AGY_PROMPT" > "$OUT/agy.txt" 2>&1 &
-P_AGY=$!
+#  CONDITIONAL, and the condition is the owner ruling above.  Note what is NOT done here:
+#  the seat is not silently skipped.  An absent agy.txt must be reported as DELIBERATELY NOT
+#  FIRED, never as a seat failure -- see the seat check.
+if [ -n "$AGY_FIRE" ]; then
+    "$AGY" --dangerously-skip-permissions --add-dir "$PROJ" --print-timeout 30m \
+        --model "$AGY_MODEL" --effort "$AGY_EFFORT" \
+        --print "$AGY_PROMPT" > "$OUT/agy.txt" 2>&1 &
+    P_AGY=$!
+fi
 
 "$KIMI" -p "$KIMI_ARG" -m kimi-code/k3 > "$OUT/kimi.txt" 2>&1 &
 P_KIMI=$!
@@ -372,7 +401,7 @@ if [ -n "$OLLAMA4" ]; then
     P_O4=$!
 fi
 
-echo "launched: codex=$P_CODEX agy=$P_AGY kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=${P_O4:-withdrawn}"
+echo "launched: codex=$P_CODEX agy=${P_AGY:-reserved} kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=${P_O4:-withdrawn}"
 NSEATS=8; [ -z "$P_O4" ] && NSEATS=7
 echo "waiting for the $NSEATS scriptable seats..."
 wait $P_CODEX $P_AGY $P_KIMI $P_GROK $P_O1 $P_O2 $P_O3 $P_O4
@@ -546,7 +575,18 @@ say() { printf '%s
 ' "$*" >> "$SEATFILE"; }
 say "---- seat check ($OUT) ----"
 check "codex    " "$OUT/codex.txt"
-check "agy      " "$OUT/agy.txt"
+#  *** A SEAT DELIBERATELY NOT FIRED IS A DIFFERENT THING FROM A SEAT FAILURE, AND A
+#  DIFFERENT THING AGAIN FROM AGREEMENT.  Conflating them is precisely what the seat ledger
+#  exists to refuse, and it is the ruling's own cost clause. ***  So this prints by NAME
+#  every panel rather than omitting the row -- an omitted row is indistinguishable from a
+#  roster that forgot the seat.
+if [ -n "$AGY_FIRE" ]; then
+    check "agy      " "$OUT/agy.txt"
+else
+    say "  agy      : DELIBERATELY NOT FIRED -- reserved for measurement (owner ruling"
+    say "             2026-08-30).  NOT a seat failure and NOT agreement.  Panels run at"
+    say "             EIGHT seats by design; PANEL_FIRE_AGY=1 fires it."
+fi
 check "kimi     " "$OUT/kimi.txt"
 check "grok     " "$OUT/grok.txt"
 check "glm      " "$OUT/ollama_glm.txt"

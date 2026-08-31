@@ -271,8 +271,15 @@ for nm, base, sym, _a in SITES:
 
 A = Addr(CODE)
 t, alive, how = session(store(A, OUTSIDE))
+# *** DEATH-ONLY.  This row observes THAT the catch-all kills, never WHICH kill it is --
+# it discards the transcript its six `ld kill` siblings above test for membership.  So a
+# change to the catch-all message that leaves exit(1) in place passes: MEASURED 35/35 with
+# zero red rows, against a matched control (a read arm's text) at 34/35.  It is the
+# `d_returnzero` shape mirrored onto the death side -- a death-only oracle at a site where
+# death is the shared answer.  Filed as `otherkilldeath`; the fix is the ok_txt test the
+# siblings already carry.  Do NOT read this row as pinning the catch-all's identity. ***
 row("other kill", how, "exit1",
-    "the :372 catch-all outside all six windows is untouched")
+    "the :372 catch-all still ends the host -- DEATH ONLY, not its identity")
 
 ok = sum(1 for _, o in rows if o)
 print("")
