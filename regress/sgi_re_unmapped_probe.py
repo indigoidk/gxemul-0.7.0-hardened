@@ -334,6 +334,47 @@ t, alive, how = session(load(A, RE + UNMAP_R) + ["print v0"])
 row("rd nodbe", ("exception" in t.lower()) or ("DBE" in t), False,
     "a decline is not a guest bus error -- kills `return 0'")
 
+# ----------------------------------- L2 REPAIR: the WIDTH axis, and the FIRST component
+#  *** ADDED 2026-08-31 AFTER THE PASS-2 SEAT MEASURED TWO MUTANTS SWEEPING ALL 28 ROWS
+#  CLEAN, ONE OF THEM A VERBATIM REINSTATEMENT OF THE REMOVED KILL. ***
+#
+#  The 28 rows above pin the DIRECTION axis exhaustively -- write, read, per-direction
+#  latches, the sentinel, the DBE -- and never touch the WIDTH axis at the catch-all,
+#  because store() defaults to OP_SD and load() to OP_LD.  Every catch-all row was len 8.
+#  The round's HEADLINE is `no width predicate at all' and its WITNESS is a `lb', so the
+#  one axis the fix is about was the one axis the detector could not see.  Mutant `W' --
+#  re-adding the pre-#499 `len != 8' kill, lifted verbatim from 9f666a8^ -- scored 28/28
+#  while `sb' and `lb' at 0xb5001800 died with the pre-fix text.  Floor clause (b).
+#
+#  Second blindness, same cause one level up: the catch-all has TWO disjoint components,
+#  0x16e0-0x16ff (32 bytes, and it is CRIME_RE_CLIP_IDS -- a NAMED register block the
+#  model has not implemented, not anonymous space) and 0x1800-0x1fff (2048).  All four
+#  UNMAP_* offsets are 0x800/0x8c0/0x900/0x9c0 -- the second component.  THE 32-BYTE
+#  COMPONENT HAD ZERO ROWS, so `T' (CRIME_RE_TEX + 0xe0 -> + 0x100, one hex digit) handed
+#  it back to exit(1) and scored 28/28.  Clause (d): a bound relaxed on a dominating
+#  predicate.
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + UNMAP_W, op=OP_SB_T0_A3, val="0x5a"))
+row("wr narrow surv", how, "exit0",
+    "a BYTE write to the catch-all survives -- kills a re-added len guard")
+row("wr narrow decl", t.count("unimplemented write to address"), 1,
+    "...and is announced: the decline is width-agnostic, as the fix claims")
+
+A = Addr(CODE)
+t, alive, how = session(load(A, RE + UNMAP_R, op=OP_LW_V0_AT) + ["print v0"])
+row("rd narrow surv", how, "exit0",
+    "a 4-byte READ of the catch-all survives -- the witness width, not just len 8")
+row("rd narrow sent", printed(t, "v0") if alive else "died", "0x0",
+    "...and still lands a DEFINED 0 rather than the sentinel")
+
+#  CLIP_IDS: the FIRST component.  0x6e0 + the handler's own +0x1000 = 0x16e0.
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + 0x6e0))
+row("clip surv", how, "exit0",
+    "the 32-byte first component survives too -- kills a grown TEX far bound")
+row("clip decl", t.count("unimplemented write to address"), 1,
+    "...and is announced, so the component is covered rather than merely alive")
+
 # ------------------------------------------------- the two latches
 A = Addr(CODE)
 t, alive, how = session(store(A, RE + UNMAP_W) + store(A, RE + UNMAP_W2))

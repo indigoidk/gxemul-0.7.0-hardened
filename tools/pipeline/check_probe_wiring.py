@@ -284,6 +284,20 @@ MANIFEST = {
     "artifacts/sgireunmapped/killtable_20260831/repin2/sgi_re_width_probe.repinned.py":
         (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- the FROZEN re-pinned copy of #497's shipped probe, kept as the artifact the order proof was measured against.  The live file is regress/sgi_re_width_probe.py; this is evidence, not a second detector"),
 
+    #  sgireunmapped #499 L2 REPAIR, 2026-08-31.  The mutator that rebuilt the two escapes
+    #  the pass-2 seat found -- a verbatim reinstatement of the removed kill (floor clause
+    #  (b)) and a one-hex-digit bound relaxation (clause (d)) -- against the REPAIRED
+    #  34-row detector, which now scores them 30/34 and 33/34 where the 28-row version
+    #  scored both 28/28.  CLASS_RESEARCH: evidence, not a detector the battery owes a run.
+    #
+    #  *** IT USES chr(92) FOR THE BACKSLASH ON PURPOSE AND SAYS SO IN ITS OWN HEADER. ***
+    #  The first attempt hand-typed the escape and the C string literal was split by a REAL
+    #  newline cooked in through the Bash -> heredoc -> Python path -- `error: missing
+    #  terminating " character'.  Keeping this file is what stops the next round
+    #  rediscovering that.
+    "artifacts/sgireunmapped/killtable_20260831/l2repair/mkw.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 L2 -- rebuilds mutant W (the verbatim reinstatement) with chr(92) for the backslash, and asserts the emitted literal landed on ONE line rather than trusting that it did"),
+
     #  sgireunmapped #499 PORT + REPIN2, 2026-08-31.  CLASS_RESEARCH: the tooling that
     #  ported the detector and then measured the re-pin.  Kept because the round's two
     #  load-bearing negative results live in their output -- the proposed exit0+txt oracle

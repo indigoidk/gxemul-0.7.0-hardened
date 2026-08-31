@@ -307,8 +307,14 @@ DEVICE_ACCESS(sgi_re)
 	 *     guest -- turning a declined access into a guest bus error.
 	 *
 	 *  2. Control therefore reaches the tail, which answers a declined READ
-	 *     with odata (0).  That tail is dead code before this change: every
-	 *     read arm below still exit(1)s, so odata is never assigned today.
+	 *     with odata (0).
+	 *
+	 *     *** THIS PARAGRAPH ONCE CALLED THAT TAIL DEAD CODE -- "every read arm
+	 *     below still exit(1)s, so odata is never assigned today".  #499 MADE IT
+	 *     LIVE: the unmatched-address catch-all no longer exits, so a declined
+	 *     read now runs the tail and lands a defined 0, and the shipped detector's
+	 *     `rd sent' row exists to pin exactly that.  The six `TODO: read from'
+	 *     arms below DO still exit(1) -- that half is unchanged and is sgirekills. ***
 	 *
 	 *  3. The guards are NOT redundant.  For TLB_A/B/C and TEX the store is a
 	 *     `for (hwi = 0; hwi < len; ...)' loop, so a narrower access simply
@@ -316,8 +322,14 @@ DEVICE_ACCESS(sgi_re)
 	 *     modelling fidelity only.  For LINEAR_A and LINEAR_B it is not; see
 	 *     the note at those two sites.
 	 *
-	 *  Only the WIDTH kills change here.  The six `TODO: read from ...' kills
-	 *  and the final catch-all are deliberately untouched -- the READ arms are
+	 *  Only the WIDTH kills change HERE, IN #497.  The six `TODO: read from ...'
+	 *  kills are still untouched.
+	 *
+	 *  *** THE CATCH-ALL IS NO LONGER UNTOUCHED: #499 DE-FATALISED IT and that row
+	 *  is CLOSED.  The sentence is #497's and was true when written; it is left
+	 *  standing with its correction rather than rewritten, because a reader
+	 *  arriving from #497's records needs to see which half moved. ***  The READ
+	 *  arms are
 	 *  `sgirekills`, the CATCH-ALL is `sgireunmapped` (two different rows: one is a
 	 *  direction, the other an unmatched address with no width predicate at all), as is
 	 *  DEVICE_ACCESS(sgi_de)'s own width kill, whose accept set is {4,8}
