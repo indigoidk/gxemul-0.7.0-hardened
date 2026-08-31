@@ -1167,3 +1167,52 @@ on an empty control set.
 And a granularity constraint the panel should test rather than accept: selection must gate
 SESSIONS, because 36 of 39 are module-level — a `row()`-level filter passes all five guards
 and saves nothing.
+
+---
+
+### `widthkillclass` — review stage HELD at 2/9, awaiting the FINAL diff
+
+**Held for: fable5, codex, grok, kimi, glm, deepseek, minimax.**
+
+**Does the shipped `#497` diff — the FINAL one, after the kill table and after three
+in-flight corrections — carry the residual-lethality sentence, the corrected memory-safety
+characterisation, and rows that match its own sibling-parity verdict that the six arms are
+NOT symmetric?**
+
+This is not a scheduling hold, it is a **one-instrument** hold. Two seats have already
+reviewed this diff (opus5's PRETABLE + implementation, agy's read-only review), and firing
+the other seven right now would panel a **moving target**: the kill table is still running
+against it, and three corrections are in flight to the implementing seat —
+
+1. the **residual-lethality sentence** `#497` owes: the width guard is evaluated first, so
+   after the fix a 4-byte read declines safely while **an ordinary 8-byte `ld` still ends
+   the host at all six fixed windows**, because `len == 8` falls straight through to the
+   read arm's `exit(1)`. The 1:1 width/read pairing makes that residual exact rather than
+   vague — six width kills fixed leaves six read kills at the same six offsets;
+2. the **corrected memory-safety characterisation** — `offsetof`, compiled and run, showed
+   `re_linear_a[32]` IS `re_linear_b[0]` and `re_linear_b[32]` IS `de_reg[0]`, both at +0,
+   so the over-run is UB plus silent intra-struct cross-array corruption, **not** a wild
+   write, **not** a host crash, and **not** something plain ASAN can see. My brief told the
+   seat to call it "load-bearing HOST memory safety", which would have shipped an L4 wrong
+   record in product code;
+3. the **alignment clause** — the invariant holds on every guest path (`ld`/`sd` raise
+   ADES/ADEL before `memory_rw` is called; `ldl`/`ldr`/`sdl`/`sdr` coerce with
+   `aligned_addr = addr & ~(wlen-1)`), but the host debugger's `put d` prints a warning and
+   **proceeds**. Guest-only is true and incomplete; the comment should say which.
+
+A panel convened on a diff that changes underneath it reviews code nobody will ship. That is
+the one-instrument rule the comparison-run discipline already states, applied to a panel
+instead of a probe.
+
+**RELEASE CONDITION, stated so this hold cannot quietly become forgotten:** the kill table
+reports and the diff stops changing. Then pass 2 fires on the FINAL diff with all seven
+missing seats, in one panel. The two existing entries are **not** re-fired and do **not**
+count toward the nine — a stage held for seven seats that closes with two is the
+seat-failure-counted-as-agreement shape.
+
+**The specific thing I want the panel hardest on:** the sibling-parity verdict says the six
+arms are **not** symmetric — for TLB_A/B/C and TEX the width guard protects correctness only,
+for LINEAR_A/B it is additionally the only thing preventing the OOB. Does that asymmetry
+demand asymmetric ROWS, or is one decline row per window enough? Rows are owed per enumerated
+mutant, never per site that "feels riskier" — a row added on feel is the addition licence's
+"cannot hurt" wearing detector clothes.
