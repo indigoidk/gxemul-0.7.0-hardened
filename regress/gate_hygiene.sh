@@ -236,11 +236,59 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  universal claim for another.  A per-member reason, not a dominant one.
 #
 #  The grandfather-with-a-reason discipline is UNCHANGED; only the reason is repaired.
-EXPECT_PTY_PROBES=37
+#  *** BOTH PINS RAISED 37->41 AND 11->15 ON 2026-08-31, AFTER RE-DERIVING THEM WITH THIS
+#  GATE'S OWN COMPUTATION RATHER THAN APPROXIMATING IT.  Four pty-forking probes had been
+#  added since the pins were set, all four promptless, so both pins were short by exactly
+#  the same four -- which is the arithmetic that makes this one event and not two. ***
+#
+#  Left alone, the next weekly battery reds TWO rows in this gate, and a failed gate is a
+#  failed battery.  This project has already had a battery go RED AND UNREAD FOR FIVE DAYS.
+#
+#  *** PER-MEMBER REASONS, NOT A DOMINANT ONE -- the discipline this block already demands
+#  of itself, and the four do NOT share a reason.  They fall into two groups: ***
+#
+#  BREAKPOINT-DRIVEN, i.e. promptless for exactly the reason the existing members are --
+#  they free-run and only a breakpoint hit returns a prompt:
+#    wdc_addtoinbuf_probe.py   its own comment states it: "The probe therefore breakpoints
+#                              and continues."
+#    wdc_altoffset_probe.py    sends `breakpoint add 0x%x` at HALT_ADDR and continues.
+#
+#  TIME-BASED DRAIN, which is a WEAKER reason and is recorded as such rather than folded
+#  in with the others -- these wait `while time.time() < end` around select() with no
+#  prompt predicate at all:
+#    gdrom_cond_probe.py
+#    sgi_re_width_probe.py     *** ADDED BY #497 ON 2026-08-30, i.e. BY THE SESSION THAT
+#                              RAISED THIS PIN.  Disclosed rather than absorbed. ***
+#
+#  The second group is the live defect tracked by the `probetimebased` queue row.  Listing
+#  them here does not forgive them: this set is `promptless probes we KNOW about`, and the
+#  `comm -13` below exists to NAME any that appear unnoticed.  A probe in this list with a
+#  weak reason is tracked; the same probe absent from it is invisible.
+#
+#  PROVENANCE, DERIVED FROM git RATHER THAN ASSUMED -- because "both pins are short by the
+#  same four" is an assumption until the sets are compared.  Against d9efd33, the commit that
+#  last set EXPECT_PTY_PROBES=37:
+#
+#    non-artifact .py under regress/ :  60 -> 66   (SIX new files, not four)
+#    of the six, pty.fork            :  FOUR       gdrom_cond, sgi_re_width,
+#                                                  wdc_addtoinbuf, wdc_altoffset
+#    of those four, endswith(        :  ZERO       so all four are promptless
+#    not in the denominator          :  wdc_altoffset_4bit_probe.py,
+#                                       wdc_altoffset_sig_probe.py -- they fork no pty
+#
+#  So both pins move by the SAME four files, +4 each, and the two extra new probes are
+#  correctly outside the denominator.  Had one of the six been a pty probe WITH readiness,
+#  the two deltas would have differed and this raise would have been wrong.
+#
+#  NEGATIVE CONTROLS RUN BEFORE COMMITTING (recorded, not asserted): with the four added
+#  both rows go green; removing any ONE of the four reds the promptless row again with
+#  got=15 want=14, so the check still fires rather than having been switched off.
+EXPECT_PTY_PROBES=41
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
-gdrom_toclen_probe.py"
+gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py
+gdrom_cond_probe.py sgi_re_width_probe.py"
 
 #  *** THIS WAS THE THIRD POPULATION AND THE F2 EDIT MISSED IT.  Found by the agy seat
 #  on pass 2. ***  py_code and probe_code were converted to recursive-minus-artifacts

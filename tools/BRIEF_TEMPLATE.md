@@ -41,6 +41,11 @@ premise you cannot settle from this packet rather than guessing at it.
 reachable addresses — ENUMERATE it rather than reasoning about it.**  Walk the values.
 A derivation that skips one masking line reads exactly like a correct one.
 
+**And ENUMERATE THE RIGHT DOMAIN — a domain is itself a premise.**  Ask what the PRODUCER of
+these values can actually emit before you walk them.  Walking every member of a set you have
+not audited is not enumeration; it is a derivation with more steps, and it reads exactly like
+a correct one.
+
 **VERDICT LINE FIRST**, so your answer survives truncation.
 ```
 
@@ -66,6 +71,19 @@ exists because answers get truncated and the verdict is what survives.
 >   each **confirmed by walking every reachable address**, after the false one was withdrawn.
 >
 > **The failure mode is specific and it is why a general "check the premises" does not catch
+> *** A THIRD INSTANCE LANDED 2026-08-31, AND IT IS THE FIRST WHERE THE AUTHOR DID ENUMERATE.
+> *** A brief walked every (access width, offset) pair against a device window -- 8201 declined
+> accesses, severity escalated -- **omitting the CPU's alignment gate.**  Misaligned accesses
+> raise ADEL/ADES before `memory_rw` is reached, so a width-w access arrives w-ALIGNED, and on
+> a page-aligned page-length window the boundary truncation can then never fire at all.  True
+> answer 6144, and the queue row's original modest claim was right before the brief
+> "strengthened" it.
+>
+> **BOTH FILE-READING SEATS REFUTED IT; BOTH PACKET-FED SEATS THAT ENGAGED REPORTED
+> RE-WALKING IT AND RECONCILING.**  They were re-walking the BRIEF's premise, having no way to
+> open the CPU source.  The split fell precisely along the transport line -- so score a
+> packet-fed agreement on a repo fact as zero, always.
+>
 > it: a derivation that omits ONE masking line reads exactly like a correct one.** There is no
 > tell in the prose. Both wrong claims were confidently stated, internally consistent, and
 > filed by an author who had just correctly diagnosed the same class elsewhere.
