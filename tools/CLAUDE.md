@@ -1734,6 +1734,29 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > > *(Superseded literals, kept only as the demoted record of what was measured on
 > > 2026-08-26: 9 / 3 / 2 = 14.  Never a current claim.)*
 > >
+> > #### *** AND ON 2026-08-31 A BRIEF OF MINE INLINED **THOSE VERY DEMOTED LITERALS** AS A
+> > #### SETTLED PREMISE.  Caught by the kimi seat, which measured the tree instead. ***
+> >
+> > The brief's settled-premises block gave `(once)` 9, `(further occurrences suppressed)` 3,
+> > `(reported once)` 2 -- the crossed-out row above, copied verbatim into a nine-seat panel
+> > packet.  Re-running the deriver the same day: **25 / 4 / 5**.
+> >
+> > **DEMOTING A NUMBER IN PLACE DOES NOT STOP IT BEING REUSED, BECAUSE THE REUSER IS
+> > SEARCHING FOR THE SUBJECT, NOT READING THE PARAGRAPH.**  A `grep` for the marker text
+> > lands on the demoted line as readily as on the live one -- and the demoted line is the one
+> > that still LOOKS like a tidy censused fact.  The live entry is a shell command, which does
+> > not.
+> >
+> > *So the demotion worked as a record and failed as a guard.*  The cheap defence is the one
+> > this file already mandates and I skipped: **a brief inlines the DERIVER'S OUTPUT, run at
+> > brief-writing time, never a literal from here.**  It costs one command, and it would also
+> > have caught the drift that makes the point -- 24 on 08-30, 25 on 08-31, because `#498`
+> > added a `(once)` site.  **The rounds that consult the number are the rounds that change
+> > it**, which is why no literal here survives contact with the week it is quoted in.
+> >
+> > *The seat's conclusion was also stronger than the brief's: `(once)` is not the plurality,
+> > it is the overwhelming majority.  Correcting the count strengthened the advice.*
+> >
 > > **A CAUTION FROM DERIVING IT: one of my four counting methods returned ZERO.**  A regex
 > > requiring `fatal(` and `(once)` on the SAME line finds nothing, because the marker sits on
 > > a continuation line of a wrapped string.  A single method would have produced a confident

@@ -18,6 +18,40 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-31: THIRTEEN shipped rows pin survival as an `"exit0"` want
+>
+> **`exit0oracle`** -- a survival oracle that a wrong `exit(0)` satisfies is not a survival
+> oracle.  Found by the codex seat in shipped material it was not asked about, while answering
+> a `sgideprimop` design brief.  The oracle reads the process's exit status AFTER the harness
+> sends `quit`, so it cannot distinguish *the host survived and was then asked to quit* from
+> *the host died quietly at exactly the moment the row exists to observe*.
+>
+> **DERIVER, not a literal** -- `grep -rn '"exit0"' regress/*.py`, counting `row(...)`
+> want-sites: **13 across 5 files** (`gdrom_toclen_probe.py` 5, `sgi_de_width_probe.py` 4,
+> `gdrom_decline_probe.py` 2, `gdrom_default_probe.py` 1, `sgi_re_width_probe.py` 1, that last
+> inside a loop so its runtime rows exceed its textual site).  *Filed first as 9, because my
+> grep anchored on the variable name `how` and `gdrom_toclen_probe.py` uses `how1`..`how4` --
+> a row adjudicating oracle blindness shipped with a count from a blind pattern.*
+>
+> **RANKED COVERAGE DEBT, not L2, on a measurement rather than on the stopping rule.**  The
+> adjudicating seat built a decline-then-`exit(0)` mutant of `#498` and found `lo_sent`
+> (`printed(t,"v0") if alive else "died"`) KILLS it via the read-side sentinel even though
+> all four `*_alive` rows pass.  **So the blindness is per-ROW, not per-detector**: no shipped
+> detector is floor-breached as a whole, and no record is false where a session-mate positive
+> row exists.
+>
+> **The fixing round's first job is a NARROWER census: which of the 13 lack a death-proof
+> session-mate?**  Those are the live ones; the rest are belt-and-braces.  The repair uses a
+> value the probe ALREADY captures -- assert `alive` from before the `quit`, ideally with a
+> post-trigger command proving the emulator still answered.
+>
+> *** AND IT IS NOT ONLY HISTORICAL: THE OBVIOUS RE-PIN IN THE `sgideprimop` ROUND WOULD MINT
+> A FOURTEENTH INSTANCE AT THE SITE BEING FIXED. ***  Re-pinning `tail_acc_x` from `exit1` to
+> `exit0` reads GREEN under a future `exit(0)` at the default arm -- announce once, die, exit
+> 0 -- while `tail_acc` still counts 1 and no other session reaches `draw_primitive()`:
+> **total escape, 29/29**.  Recorded in `regress/gate_arm.sh` beside the rows, where that
+> round will read it.
+
 > ### OPEN -- filed 2026-08-29: kill drivers score a CRASHED mutant as a table result
 >
 > **`killdrivercrash`** -- `kill479.sh`'s `build_run` checks the COMPILE exit status, then

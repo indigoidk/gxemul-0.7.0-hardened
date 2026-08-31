@@ -1088,11 +1088,54 @@ else
     #  PER-ROW PASS, one line, checked individually.  A row that silently stops being
     #  tested is the padded-column class -- a name as long as its column makes the check
     #  unsatisfiable and the row quietly stops being tested.
-    #  *** `tail_acc_x' AND `tail_acc' PIN A HOST DEATH ON PURPOSE, AND THEY WILL GO RED
-    #  BY SUCCEEDING. ***  Both observe `sgideprimop' -- an accepted-width access with
-    #  startFlag reaches draw_primitive(), whose default arm is fatal on 254 of 256 ops.
-    #  The round that fixes sgideprimop turns BOTH rows red: tail_acc_x wants exit1, and
-    #  tail_acc counts the DRAW message text, which a de-fatalisation will latch or reword.
+    #  *** `tail_acc_x' PINS A HOST DEATH ON PURPOSE AND WILL GO RED BY SUCCEEDING. ***
+    #  It observes `sgideprimop' -- an accepted-width access with startFlag reaches
+    #  draw_primitive(), whose default arm is fatal on 254 of 256 top-byte op classes,
+    #  two of which (POINT 0x00, TRIANGLE 0x02) are DOCUMENTED primitives.
+    #
+    #  *** THE BLAST RADIUS HAS THREE TIERS, NOT ONE, AND THIS NOTE SAID `BOTH ROWS' UNTIL
+    #  2026-08-31.  Corrected after the grok seat read the oracles against the code paths
+    #  they exercise and found the overstatement. ***
+    #
+    #    tail_acc_x            CERTAIN red -- wants exit1, and the fix removes the death.
+    #    tail_acc              CONDITIONAL -- it counts the DRAW message SUBSTRING and
+    #                          wants 1.  A fix that LATCHES the text without REWORDING it
+    #                          still prints the first occurrence, so the row stays GREEN.
+    #                          It reds only if the message is reworded.
+    #    hi_draw, hi_rd_draw   NEITHER red NOR safe.  Both want count(DRAW) == 0, so a
+    #                          REWORD leaves them green because the string no longer
+    #                          exists -- GREEN FOR THE WRONG REASON, i.e. VACUOUS BY
+    #                          CONSTRUCTION.  A reword silently blinds them; it does not
+    #                          fail them, and nothing would say so.
+    #
+    #  *** SO THE DESIGN CONSTRAINT IS: KEEP THE MESSAGE TEXT AND ADD `(once)'. ***  That
+    #  costs ONE oracle re-pin (tail_acc_x).  Rewording costs two re-pins AND silently
+    #  blinds two further rows -- which is the worse half and is invisible to any gate.
+    #  *** AND THE OBVIOUS RE-PIN IS A TRAP.  DO NOT RE-PIN `tail_acc_x' ONTO `"exit0"'. ***
+    #  Adjudicated 2026-08-31 by the flagship seat, which traced the channel rather than the
+    #  intent.  The row wants `exit1' today; the natural correction is `exit0' ("the host now
+    #  survives").  Trace what that oracle can see:
+    #
+    #    a future one-token death reinstatement -- `exit(0)' at the default arm instead of
+    #    `exit(1)' -- prints the announce once and then DIES.  `how' is then "exit0", so a
+    #    re-pinned tail_acc_x reads GREEN; `tail_acc' still counts its one message, GREEN;
+    #    and no other session reaches draw_primitive() at all.  TOTAL ESCAPE, 29/29.
+    #
+    #  So the re-pin would MINT, at the exact site being fixed, the exact blindness the queue
+    #  row `exit0oracle' was filed to describe: EXIT STATUS CANNOT VARY between `declined and
+    #  then quit' and `died with status 0'.  That is knowable at WRITING time from the CHANNEL
+    #  check -- name the mutant a row kills and the observable that differs under it -- and it
+    #  is why that check is run before the table, not after.
+    #
+    #  RE-PIN ONTO A POSITIVE POST-DRAW OBSERVABLE INSTEAD: extend the session with a load
+    #  through the device and assert the VALUE (`printed()' already exists in the probe and
+    #  reads "died" when the host is gone).  An exit-status row may stay as a SECOND channel;
+    #  the value row is the load-bearing one.  This is L1 -- a row under construction -- so
+    #  there is no stopping-rule tension in fixing it in-round.
+    #
+    #  The fixing round therefore owes a FOURTH mutant beside the three already enumerated:
+    #  death-by-`exit(0)' at the default arm, which the re-pinned row must kill.
+    #
     #  Oracle-correction ordering applies -- re-pin FIRST, measure the committed build red,
     #  THEN edit.  Without this note the red reads as a regression in THIS device.
     for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "lo_kill2" "lo_decl2" "lo_alive2" "lo_sent2" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do

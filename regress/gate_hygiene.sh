@@ -283,12 +283,36 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  NEGATIVE CONTROLS RUN BEFORE COMMITTING (recorded, not asserted): with the four added
 #  both rows go green; removing any ONE of the four reds the promptless row again with
 #  got=15 want=14, so the check still fires rather than having been switched off.
-EXPECT_PTY_PROBES=41
+#  *** RAISED 41 -> 42 ON 2026-08-31, AND IT IS THE SECOND TIME IN ONE SESSION THAT A ROUND
+#  OF MINE ADDED A PROBE AND LEFT THIS PIN SHORT. ***  The 42nd is
+#  `sgi_de_width_probe.py', shipped by #498 hours after the same session raised this pin
+#  37 -> 41 for exactly this reason.  The weekly battery of 2026-08-30 18:00 had ALREADY
+#  red on the earlier instance (got=40 want=37, got=14 want=11) and that verdict sat unread
+#  for ten hours; this one was caught by running the dead-man switch rather than by waiting
+#  for Sunday.
+#
+#  *** THE LESSON IS NOT `BE MORE CAREFUL'.  A ROUND THAT ADDS A pty-FORKING PROBE MUST
+#  RAISE THIS PIN IN THE SAME COMMIT ***, because the gate cannot fire until the weekly
+#  battery runs -- so the feedback arrives up to seven days after the mistake, by which time
+#  the round that made it is closed.  Re-derive, never transcribe:
+#    find regress -name '*.py' ! -path '*/artifacts/*' | xargs grep -l pty.fork | wc -l
+#
+#  *** BOTH HALVES WERE STALE, NOT ONE.  An earlier draft of this very comment asserted that
+#  the promptless half `needed no change' because #498 had added the probe to the list below.
+#  IT HAD NOT.  Checked before committing: the list held 15 members and the measured
+#  promptless set held 16, the extra being sgi_de_width_probe.py -- so that check would have
+#  red too, at got=16 want=15. ***
+#
+#  The retraction is kept because the near-miss is the point: I wrote a confident claim about
+#  a list, in a comment, WITHOUT OPENING THE LIST -- one line after correcting a stale pin
+#  caused by the same habit.  The check that caught it cost one `grep -c`.
+EXPECT_PTY_PROBES=42
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
 gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py
-gdrom_cond_probe.py sgi_re_width_probe.py"
+gdrom_cond_probe.py sgi_re_width_probe.py
+sgi_de_width_probe.py"
 
 #  *** THIS WAS THE THIRD POPULATION AND THE F2 EDIT MISSED IT.  Found by the agy seat
 #  on pass 2. ***  py_code and probe_code were converted to recursive-minus-artifacts
