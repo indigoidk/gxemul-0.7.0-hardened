@@ -18,7 +18,7 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
-> ### OPEN -- filed 2026-08-31: TEN warn-once latches are FUNCTION-STATIC, so one instance
+> ### OPEN -- filed 2026-08-31: the warn-once latches that are FUNCTION-STATIC, so one instance
 > ### silences every other
 >
 > **`staticlatchscope`** -- a `static` inside a function is process-global, not per-instance.
@@ -26,12 +26,32 @@
 > access to one device instance permanently silences that diagnostic for every other instance
 > of the same device in the machine, and for every later machine in the same process.
 >
-> **DERIVER, because two separate censuses of this class have already come back short:**
+> **DERIVER -- BY SCOPE, NOT BY NAME.  Three name-based censuses of this class have now come
+> back wrong, in both directions, and the third was the author's own using the deriver he had
+> just written telling other people not to transcribe numbers:**
 >
->     grep -rn 'static int w = 0;|static int first = 1;|static char .*_used\[' src/devices/*.c
+>     # every function-scope static int in a device file (indented, or inline after a brace)
+>     grep -rc -e '^[[:space:]]\+static int ' -e '{[[:space:]]*static int ' src/devices/*.c \
+>         | grep -v ':0$'
 >
-> **10 sites across 3 files** on 2026-08-31: `dev_jazz.c` 2 (`#179`), `dev_pcc2.c` 4
-> (`#119`), `dev_sgi_re.c` 4 (upstream `rop_used`).
+> **On 2026-08-31 that gives 30 sites across 13 files, of which 28 across 11 files are
+> warn-once latches.**  The two exclusions are counters rather than latches and must stay
+> excluded: `dev_algor.c` (`static int x; if (((++x) & 0xffff) == 0)`, a periodic RTC-bit
+> hack) and `dev_mc146818.c` (`static int x; if (++x == 1)`).  Largest populations:
+> `dev_osiop.c` 8, `dev_pcc2.c` 5, `dev_dec21143.c`/`dev_disk.c`/`dev_jazz.c`/`dev_pvr.c`/
+> `dev_sgi_re.c`/`dev_vga.c` 2 each.
+>
+> **WHY THE NAME PATTERNS ALL FAILED, since this is the reusable part:** they keyed on the
+> variable being called `w`/`warned`/`first`, and the population's names are
+> `warned` 13, `w` 6, `first` 2, plus singletons `warned2`, `warn_fs`, `warn`, `w_warned`,
+> `scc_oob_warned`, `r_warned`.  **A latch is defined by its SCOPE and its use, not by its
+> spelling**, so a name pattern cannot enumerate this class and every attempt undercounted.
+>
+> *(Demoted literals, kept only as the record of what was measured and never as a current
+> claim: `10 sites / 3 files` as filed at `cae3dc8`; `23 / 7` in a checkpoint correction the
+> same day, which wrongly gave `dev_sgi_re.c` 4 -- it was 2 before `#499` and 2 after, so that
+> figure was never right and was not this project's own edits moving it; `26 / 10` from a
+> widened name pattern hours later.  All three are superseded by the scope deriver above.)*
 >
 > **THE INTENT IS RIGHT EVERYWHERE AND ONLY THE SCOPE IS WRONG.**  `#179`'s own comment says
 > *"guest-reachable; ignore the write instead of `fatal()`-flooding host stdout"*; `#119`'s
