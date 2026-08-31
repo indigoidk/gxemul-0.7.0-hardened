@@ -274,16 +274,51 @@ for nm, base, sym, _a in SITES:
         "len=8 READ STILL KILLS THE HOST here -- untouched (sgirekills)")
 
 A = Addr(CODE)
-t, alive, how = session(store(A, OUTSIDE))
-# *** DEATH-ONLY.  This row observes THAT the catch-all kills, never WHICH kill it is --
-# it discards the transcript its six `ld kill` siblings above test for membership.  So a
-# change to the catch-all message that leaves exit(1) in place passes: MEASURED 35/35 with
-# zero red rows, against a matched control (a read arm's text) at 34/35.  It is the
-# `d_returnzero` shape mirrored onto the death side -- a death-only oracle at a site where
-# death is the shared answer.  Filed as `otherkilldeath`; the fix is the ok_txt test the
-# siblings already carry.  Do NOT read this row as pinning the catch-all's identity. ***
-row("other kill", how, "exit1",
-    "the :372 catch-all still ends the host -- DEATH ONLY, not its identity")
+#  *** RE-PINNED BY #499, WHICH REMOVED THIS KILL.  Three channels replace one, and
+#  BOTH of the obvious oracles were measured VACUOUS before this one was chosen. ***
+#
+#  THE OLD ROW was `row("other kill", how, "exit1")' -- DEATH-ONLY.  It observed THAT
+#  the catch-all killed, never WHICH kill it was, so a change to the message that left
+#  exit(1) standing passed: MEASURED 35/35 against a matched control at 34/35.  Filed
+#  as `otherkilldeath', and its own note prescribed the repair used here.
+#
+#  THE OBVIOUS RE-PIN, `how == "exit0"', IS WORSE, and this is the part that had to be
+#  built rather than argued.  A one-token reinstatement of the death as exit(0) prints
+#  the announce and then dies; exit status CANNOT distinguish "declined, then quit"
+#  from "died with status 0".  MEASURED, variant `mexit0': the exit0+txt oracle scores
+#  GREEN (how=exit0, txt=True) while alive=False.  Filed as `exit0oracle'.
+#
+#  SO THE ROW PINS THREE THINGS:
+#    how    the host survives the declined WRITE;
+#    txt    ONE CONTIGUOUS literal, address and data field included.  Two independent
+#           substring tests are a weaker claim: "-- declined." is emitted by the six
+#           #497 width declines and by #498's sgi_de decline as well, and this probe's
+#           own decl() helper exists because a bare substring cross-matches;
+#    v0     a declined READ REACHES THE COMMON TAIL and lands a DEFINED 0.  v0 is
+#           preset to SENTINEL by load(), so "wrote odata (0)" and "never landed" are
+#           distinguishable -- the same reason the `lw surv' rows carry it.  This is
+#           what kills `mret0' (return 0 -> memory_rw.c coerces to -1 -> EXCEPTION_DBE)
+#           and `mrdexit0' (exit(0) in the READ branch only), neither of which any
+#           write-only oracle can see.
+#
+#  ORDER PROOF: the new oracle was measured RED on the COMMITTED pre-#499 build BEFORE
+#  the code changed -- table500b.out, variant `base', got=exit1/notxt/died against
+#  want=exit0/txt/0x0.  And it is not fitted to the fix either: it was PRE-REGISTERED
+#  by #497 in commit 112867a (2026-08-30 22:41), six hours before #499's baseline
+#  3ded1e8, in the very note this comment replaces.
+#
+#  CONTRACT -- so a later escape is a breach or an exclusion, not an argument.  This
+#  row covers the catch-all's WRITE announce and the READ tail-return.  It does NOT
+#  pin the LATCH (one access per direction here, so first == only) nor the READ
+#  announce text.  Those live in sgi_re_unmapped_probe.py (`wr lat1', `rd lat1',
+#  `rd decl'), WHICH MUST BE GATE-WIRED -- unwired, that coverage exists nowhere. ***
+DECL_W = ("unimplemented write to address 0x1800, "
+          "data=0x0000000012345678 -- declined.  (once) ]")
+t, alive, how = session(store(A, OUTSIDE) + load(A, OUTSIDE) + ["print v0"])
+got = "%s/%s/%s" % (how, "txt" if t.count(DECL_W) == 1 else "notxt",
+                   printed(t, "v0") if alive else "died")
+row("other decl", got, "exit0/txt/0x0",
+    "#499: declines, announces once, declined read lands a defined 0")
 
 ok = sum(1 for _, o in rows if o)
 print("")

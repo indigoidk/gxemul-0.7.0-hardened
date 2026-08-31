@@ -1178,7 +1178,7 @@ else
     #  makes a check UNSATISFIABLE and the row quietly stops being tested.
     #  The list is ONE LINE on purpose -- a backslash-continued list assembled through
     #  nested quoting once gained a bogus word `n` and shipped a RED gate.
-    for v in "live" "devsig stat" "tlb_a sw surv" "tlb_a sw lat1" "tlb_a lw surv" "tlb_a accept" "tlb_b sw surv" "tlb_b sw lat1" "tlb_b lw surv" "tlb_b accept" "tlb_c sw surv" "tlb_c sw lat1" "tlb_c lw surv" "tlb_c accept" "tex sw surv" "tex sw lat1" "tex lw surv" "tex accept" "linear_a sw surv" "linear_a sw lat1" "linear_a lw surv" "linear_a accept" "linear_b sw surv" "linear_b sw lat1" "linear_b lw surv" "linear_b accept" "xsite 6msg" "xsite order" "tlb_a ld kill" "tlb_b ld kill" "tlb_c ld kill" "tex ld kill" "linear_a ld kill" "linear_b ld kill" "other kill"; do
+    for v in "live" "devsig stat" "tlb_a sw surv" "tlb_a sw lat1" "tlb_a lw surv" "tlb_a accept" "tlb_b sw surv" "tlb_b sw lat1" "tlb_b lw surv" "tlb_b accept" "tlb_c sw surv" "tlb_c sw lat1" "tlb_c lw surv" "tlb_c accept" "tex sw surv" "tex sw lat1" "tex lw surv" "tex accept" "linear_a sw surv" "linear_a sw lat1" "linear_a lw surv" "linear_a accept" "linear_b sw surv" "linear_b sw lat1" "linear_b lw surv" "linear_b accept" "xsite 6msg" "xsite order" "tlb_a ld kill" "tlb_b ld kill" "tlb_c ld kill" "tex ld kill" "linear_a ld kill" "linear_b ld kill" "other decl"; do
         check "sgi_re row: $v" "$(count "$SGILOG" "^$v  .*ok$")" "1"
     done
 
@@ -1207,6 +1207,33 @@ else
           "$(( $(count "$SGILOG" " ok$") + $(count "$SGILOG" " FAIL$") ))" "35"
     check "sgi_re rows green"   "$(count "$SGILOG" " ok$")"   "35"
     check "sgi_re rows red"     "$(count "$SGILOG" " FAIL$")" "0"
+
+#  ---- #499's detector for the unmatched-address catch-all.  Wired IN THE SAME COMMIT as
+#  ---- the fix: a committed detector that no gate runs is a wrong record under the vacuity
+#  ---- floor's contract clause, and this one measured 18/28 on the pre-fix build and 28/28
+#  ---- on the fix, so it carries its own test-first evidence.
+#  ---- the coordinator's file.  Modelled on the sgi_re_width_probe block at :1131.
+UNMLOG=$LOGDIR/sgi_re_unmapped.log
+python3 sgi_re_unmapped_probe.py "$PMAX" gate > "$UNMLOG" 2>&1 || true
+
+#  SENTINEL FIRST.  A preserved log is verified by its completion sentinel, never by its
+#  existence: a killed run loses every row and looks exactly like a run that produced none.
+if ! grep -q "OPUS499T_DONE" "$UNMLOG"; then
+    check "sgi_re unmapped probe completed" "no" "yes"
+else
+    check "sgi_re unmapped probe completed" "yes" "yes"
+    check "sgi_re unmapped controls" "$(count "$UNMLOG" '^OPUS499T_CONTROL=OK$')" "1"
+    for v in "live" "devsig" "wr surv" "wr kill" "wr decl" "rd surv" "rd kill" "rd decl" "rd sent" "rd nodbe" "wr lat1" "rd lat1" "wr rd 2msg" "xwin7 pre" "xwin wr" "xwin rd" "tlba acc lo" "tlba acc hi" "tlbb acc lo" "tlbb acc hi" "tlbc acc lo" "tlbc acc hi" "tex acc lo" "tex acc hi" "lina acc lo" "lina acc hi" "linb acc lo" "linb acc hi"; do
+        check "sgi_re unmapped row: $v" "$(count "$UNMLOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED ARITHMETICALLY -- two rows, not one: a single "28 ok" check
+    #  cannot tell a LOST row from a FAILING one, and those need different responses.
+    check "sgi_re unmapped rows emitted" \
+          "$(( $(count "$UNMLOG" " ok$") + $(count "$UNMLOG" " FAIL$") ))" "28"
+    check "sgi_re unmapped rows green" "$(count "$UNMLOG" " ok$")"   "28"
+    check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
+fi
 fi
 
 

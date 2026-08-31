@@ -275,6 +275,36 @@ MANIFEST = {
     "sgi_de_width_probe.py":
         (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
 
+    #  sgireunmapped #499: the SHIPPED detector.  Gate-run by gate_arm.sh -- invocation,
+    #  OPUS499T_DONE sentinel check, controls by name, all 28 rows named individually, and
+    #  a SUMMED denominator that separates a LOST row from a FAILING one.  Test-first
+    #  evidence in its own artifacts: 18/28 on the pre-fix build, 28/28 on the fix.
+    "sgi_re_unmapped_probe.py":
+        (CLASS_DETECTOR, "#499 sgireunmapped -- the unmatched-address catch-all is a latched per-direction decline; 28 rows, wired into gate_arm.sh in the same commit as the fix"),
+    "artifacts/sgireunmapped/killtable_20260831/repin2/sgi_re_width_probe.repinned.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- the FROZEN re-pinned copy of #497's shipped probe, kept as the artifact the order proof was measured against.  The live file is regress/sgi_re_width_probe.py; this is evidence, not a second detector"),
+
+    #  sgireunmapped #499 PORT + REPIN2, 2026-08-31.  CLASS_RESEARCH: the tooling that
+    #  ported the detector and then measured the re-pin.  Kept because the round's two
+    #  load-bearing negative results live in their output -- the proposed exit0+txt oracle
+    #  ESCAPING an exit(0) mutant, and the measuring seat's own first-choice replacement
+    #  escaping two more.  Neither is reconstructible from the shipped probe alone.
+
+    "artifacts/sgireunmapped/killtable_20260831/port/mkvariant499.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 PORT -- the mutant generator for the ported detector's re-verification; supersedes the 08-30 one whose 1<<6 bit collided with #498"),
+    "artifacts/sgireunmapped/killtable_20260831/port/patch_mk.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 PORT -- patch helper used to build the port's variants"),
+    "artifacts/sgireunmapped/killtable_20260831/port/patch_mk2.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 PORT -- second patch helper, same run"),
+    "artifacts/sgireunmapped/killtable_20260831/port/repin.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 PORT -- implements the CANDIDATE re-pin oracle ONLY and never edits the shipped probe, which is what let the order proof be measured without changing the artifact under test"),
+    "artifacts/sgireunmapped/killtable_20260831/repin2/mk500.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- generator for the five variants that measured the exit0+txt ESCAPE; hard-fails on a duplicate enum bit and asserts the last enumerator is the highest, which is why the enum ordering defect cannot recur silently"),
+    "artifacts/sgireunmapped/killtable_20260831/repin2/score500.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- scores four candidate oracles against five variants.  It EXTRACTS lines 66-197 of the shipped probe rather than reimplementing them, so session()/printed()/Addr/store/load are the shipped ones BY CONSTRUCTION and fidelity is diff-checkable"),
+    "artifacts/sgireunmapped/killtable_20260831/repin2/score500b.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- the in-situ scorer that produced the 35-emitted / 35-green / 0-red denominators, i.e. the evidence that the repair FOLDS INTO the existing row rather than adding one"),
+
     #  sgireunmapped #499 KILL TABLE, 2026-08-31.  The table that discharged the three
     #  undischarged accept rows (accept tlba/tlbb/tlbc) by MEASURED KILL -- M1/M2/M3 each
     #  reddening exactly its own row -- and that found an L2 floor breach (M5) plus a

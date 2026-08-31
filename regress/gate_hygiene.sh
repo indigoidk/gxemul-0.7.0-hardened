@@ -306,13 +306,21 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  The retraction is kept because the near-miss is the point: I wrote a confident claim about
 #  a list, in a comment, WITHOUT OPENING THE LIST -- one line after correcting a stale pin
 #  caused by the same habit.  The check that caught it cost one `grep -c`.
-EXPECT_PTY_PROBES=42
+#  *** RAISED 42 -> 43 BY #499, IN THE SAME COMMIT THAT ADDS THE PROBE. ***  The 43rd is
+#  `sgi_re_unmapped_probe.py'.  This is the THIRD raise in one session and the FIRST that
+#  did not arrive as a surprise: the two before it were found by the weekly battery and by
+#  a re-derivation hours after the fact, because this check cannot fire until the battery
+#  runs, so the feedback lands up to seven days late -- after the round that caused it has
+#  closed.  The obligation was written into
+#  regress/artifacts/sgireunmapped/killtable_20260831/port/WIRING_OBLIGATIONS.md at wiring
+#  time and predicted BOTH pins correctly.
+EXPECT_PTY_PROBES=43
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
 gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py
 gdrom_cond_probe.py sgi_re_width_probe.py
-sgi_de_width_probe.py"
+sgi_de_width_probe.py sgi_re_unmapped_probe.py"
 
 #  *** THIS WAS THE THIRD POPULATION AND THE F2 EDIT MISSED IT.  Found by the agy seat
 #  on pass 2. ***  py_code and probe_code were converted to recursive-minus-artifacts
