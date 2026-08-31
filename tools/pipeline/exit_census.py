@@ -112,11 +112,40 @@ print()
 #  busy bit at the boundary.  Establishing that took a hand-derived warrant.
 #  DEVICE_ACCESS means WHERE TO LOOK; reachability stays a per-site question. ***
 MARK = re.compile(r"^(DEVICE_ACCESS|DEVINIT|DEVICE_TICK|static\s)", re.M)
+#  *** AND A PLAIN, NON-STATIC FUNCTION DEFINITION IS ALSO A BOUNDARY.  Without this the
+#  split was wrong in the ONE direction that matters: every call inside a plain function was
+#  attributed to the preceding DEVICE_ACCESS, inflating the bucket this tool uses to say "on
+#  a guest access path BY CONSTRUCTION". ***
+#
+#  MEASURED on src/devices/dev_sgi_re.c, whose true split was hand-derived and then
+#  independently reproduced by two seats:
+#      DEVICE_ACCESS(sgi_re) 13 + (sgi_de) 1 + (sgi_mte) 1  = 15
+#      draw_primitive 1 + do_mte_transfer 5                 =  6   <-- NEITHER is static
+#  Before this line the tool reported all 21 as DEVICE_ACCESS.  The FILE total was right the
+#  whole time; only the reachability split was wrong, which is why nobody noticed -- the
+#  number people quote is the per-file one.
+#
+#  The pattern requires a return type, an identifier, an open paren, and NO semicolon on the
+#  line -- so it takes definitions and rejects declarations and prototypes.  It is not
+#  general C parsing and does not pretend to be: a K&R definition or a return type on its own
+#  line would be missed, and both would fail SAFE, back to the old behaviour.
+#  The negative lookahead excludes the four kinds MARK already names.  Without it a
+#  `DEVICE_ACCESS(foo)` line matches BOTH patterns and yields two marks at ONE offset --
+#  measured as 4 duplicate offsets in dev_sgi_re.c alone.  Harmless today, because at an
+#  equal offset the DEVICE_ACCESS label sorts last and therefore wins the attribution.
+#  But that is a SILENT DEPENDENCE ON SORT ORDER inside a tool whose output ranks
+#  defects, and it would flip if the label text ever changed.
+PLAIN = re.compile(
+    r"^(?!static\b|DEVICE_ACCESS\b|DEVINIT\b|DEVICE_TICK\b)"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*\s*\*?\s*"
+    r"[A-Za-z_][A-Za-z0-9_]*\s*\([^;]*$", re.M)
 kinds, da_files = {}, {}
 for f in files:
     s2 = strip_comments(io.open(_os.path.join(D, f), encoding="utf-8",
                                 errors="replace").read())
     marks = [(m.start(), m.group(1).strip()) for m in MARK.finditer(s2)]
+    marks += [(m.start(), "(plain function)") for m in PLAIN.finditer(s2)]
+    marks.sort()
     for m in PAT.finditer(s2):
         prev = [k for pos, k in marks if pos < m.start()]
         k = prev[-1] if prev else "(file scope)"

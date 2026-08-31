@@ -13277,6 +13277,47 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `exitcensus` (med) -- the reachability bucket over-counted by 14.4%, and I had just
+### declared this tool free of exactly this defect
+
+`exit_census.py`'s **per-file totals are correct**. Its **BY-ENCLOSING-CONSTRUCT split was
+not**, and that is the half that ranks.
+
+`MARK` is `^(DEVICE_ACCESS|DEVINIT|DEVICE_TICK|static\s)`. A plain **non-static** function
+definition -- `void draw_primitive(...)`, `void do_mte_transfer(...)` -- is therefore not a
+boundary, so every terminating call inside one was attributed to the preceding
+`DEVICE_ACCESS`.
+
+> **That bucket is a REACHABILITY CLAIM used to rank defects** -- the tool tags it, in its own
+> words, *"on a guest access path BY CONSTRUCTION"*. Over-counting it over-states how many
+> host kills a guest can actually reach.
+
+Measured tree-wide over `src/devices` (118 files, 172 live calls):
+
+```
+DEVICE_ACCESS    97 -> 83     a 14-call, 14.4% over-count
+static           51 -> 13     the same defect from the other side: a plain function
+                              FOLLOWING a static one was inheriting `static`
+```
+
+**Controlled against a hand-derived fixture.** `dev_sgi_re.c`'s true split was derived by hand
+and independently reproduced by two seats: `DEVICE_ACCESS` **15** (sgi_re 13 + sgi_de 1 +
+sgi_mte 1), plain functions **6** (draw_primitive 1 + do_mte_transfer 5). Before the fix the
+tool put all 21 in `DEVICE_ACCESS`; after it, exactly 15/6.
+
+**The first draft of the fix had a defect of its own, caught before shipping**: the new
+pattern also matched `DEVICE_ACCESS(foo)` lines, giving two marks at one offset. Harmless
+*today* -- at equal offset the `DEVICE_ACCESS` label sorts last and wins -- but that is a
+silent dependence on sort order inside a tool whose output ranks defects. Excluded; duplicates
+measured 0 across five files.
+
+**Consequence already in the tree:** `sgirekills`' title read *"21 terminating calls inside
+DEVICE_ACCESS"*, taken faithfully from the wrong figure. Corrected.
+
+*The honest shape: I diagnosed this defect correctly by hand this evening, then wrongly
+concluded the shipped tool did not have it -- because I checked the number people quote
+(per-file) rather than the number that ranks (per-construct).*
+
 ### `sgireunmapped` (high) -- the widest door in the device, and no row covered it
 
 `DEVICE_ACCESS(sgi_re)`'s final `else` -- the unmatched-address arm -- prints a `fatal()`
