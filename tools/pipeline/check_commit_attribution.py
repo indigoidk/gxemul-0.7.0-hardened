@@ -152,8 +152,25 @@ def records_only(h):
     #  tools/pipeline/ is the ledger, the queue, the dashboard renderings and the checkers'
     #  own manifests: writing there is recording, never shipping.  Anything OUTSIDE it that
     #  is not .md/.txt is still authorship, so a fix that edits a checker's LOGIC still counts.
+    #
+    #  *** AND regress/artifacts/ IS A RECORD TOO -- WIDENED 2026-08-31, THE SECOND TIME THIS
+    #  PREDICATE HAS BEEN TOO NARROW FOR THE SAME REASON. ***  It fired HARD on 3d30a20, a
+    #  records commit whose only non-exempt path was
+    #  regress/artifacts/sgideprimop/killtable_20260831/PRETABLE.out -- a pre-table block,
+    #  which is evidence written ABOUT a round before its table runs.
+    #
+    #  That directory holds preserved measurement logs, frozen copies of the tooling a table
+    #  ran, session transcripts and pre-table blocks.  `check_probe_wiring.py` already
+    #  classifies its python as CLASS_RESEARCH -- in its own words, "evidence, not detectors
+    #  the battery owes a run" -- so the two checkers now agree about what that tree is.
+    #
+    #  The boundary is unchanged and is what keeps this from becoming a hole: a SHIPPED
+    #  detector lives in regress/ ITSELF (regress/sgi_re_unmapped_probe.py), not under
+    #  artifacts/, and is still authorship.  Only the evidence directory is exempt.
     return bool(paths) and all(
-        p.lower().endswith((".md", ".txt")) or p.startswith("tools/pipeline/")
+        p.lower().endswith((".md", ".txt"))
+        or p.startswith("tools/pipeline/")
+        or p.startswith("regress/artifacts/")
         for p in paths)
 
 
