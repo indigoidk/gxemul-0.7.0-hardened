@@ -196,12 +196,32 @@ OLLAMA3="minimax-m3:cloud"        # all FOUR are THINKING models; send no
 #  another is live -- and the whole point is that it is one line away.
 OLLAMA4=""
 
-# argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
+#  argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
+#
+#  *** THIS BLOCK USED TO WARN AND THEN LAUNCH ANYWAY.  Measured 2026-08-30: a 38 KB
+#  brief killed BOTH argv-fed seats with "Argument list too long" while this printed
+#  advice nobody could act on -- the launch is sixty lines below, in this same script.
+#  Both seats had to be recovered BY HAND.
+#
+#  It is the shape this file already warns about one screen up: a message reporting an
+#  ACTION the code does not take.  The re-firing message had exactly this defect, and
+#  the lesson there was that telling the operator it was handled is WORSE than silence,
+#  because the one person who could fix it by hand is told not to. ***
+#
+#  Codex and Kimi are FILE-READING seats, so the remedy the old text RECOMMENDED is one
+#  the script can simply TAKE.  Grok already does it (--prompt-file, which is why it is
+#  the seat to trust with a large inlined diff); agy already does it (--add-dir plus a
+#  pointer prompt).  These two were the only seats still fed the brief on argv.
+#
+#  The cap is overridable ONLY so the branch is testable in both directions without
+#  keeping a 38 KB fixture: PANEL_ARGV_CAP=1 forces pointer, PANEL_ARGV_CAP=99999999
+#  forces inline.  It is not a tuning knob and no caller should set it.
+ARGV_CAP="${PANEL_ARGV_CAP:-30000}"
 BSZ=$(wc -c < "$BRIEF")
-if [ "$BSZ" -gt 30000 ]; then
-    echo "WARNING: brief is ${BSZ} bytes (>30KB). Codex/Kimi take it on argv and"
-    echo "         may fail with 'Argument list too long'. Trim, or point those"
-    echo "         seats at the file path instead of piping its contents."
+if [ "$BSZ" -gt "$ARGV_CAP" ]; then
+    BRIEF_MODE=pointer
+else
+    BRIEF_MODE=inline
 fi
 
 echo "panel: brief=$BRIEF  out=$OUT"
@@ -253,13 +273,25 @@ O4_BANNER="ollama($OLLAMA4)"
 echo "seats: codex($CODEX_EFFORT) agy($AGY_MODEL/$AGY_EFFORT) kimi3 grok($GROK_MODEL/$GROK_EFFORT) ollama($OLLAMA1) ollama($OLLAMA2) ollama($OLLAMA3) $O4_BANNER | + Opus/Fable via Agent tool"
 
 # --- launch the five scriptable seats concurrently ---------------------------
+#  Above the cap the two argv-fed seats get a POINTER instead of the contents.  Both
+#  read files, so this costs nothing; below the cap the inline form is byte-unchanged.
+PTR_PROMPT="Read $BRIEF_ABS in full and review it adversarially exactly as its own \
+Questions/Review-asks section directs.  Do not summarise it back to me.  End with \
+GO / NO-GO / GO-WITH-CHANGES."
+if [ "$BRIEF_MODE" = pointer ]; then
+    CODEX_ARG="$PTR_PROMPT"; KIMI_ARG="$PTR_PROMPT"
+else
+    CODEX_ARG="$(cat "$BRIEF")"; KIMI_ARG="$(cat "$BRIEF")"
+fi
+say "  brief ${BSZ}b, cap ${ARGV_CAP} -- codex/kimi fed by ${BRIEF_MODE}"
+
 AGY_PROMPT="Read $BRIEF_ABS and review it adversarially exactly as its own \
 Questions/Review-asks section directs. Verify every cited claim against the \
 source under $PROJ/GXEMUL-SEC with file:line evidence. End with GO / NO-GO / \
 GO-WITH-CHANGES."
 
 "$CODEX" exec --sandbox read-only --skip-git-repo-check -m gpt-5.6-sol \
-    -c model_reasoning_effort="$CODEX_EFFORT" "$(cat "$BRIEF")" \
+    -c model_reasoning_effort="$CODEX_EFFORT" "$CODEX_ARG" \
     </dev/null > "$OUT/codex.txt" 2>&1 &
 P_CODEX=$!
 
@@ -268,7 +300,7 @@ P_CODEX=$!
     --print "$AGY_PROMPT" > "$OUT/agy.txt" 2>&1 &
 P_AGY=$!
 
-"$KIMI" -p "$(cat "$BRIEF")" -m kimi-code/k3 > "$OUT/kimi.txt" 2>&1 &
+"$KIMI" -p "$KIMI_ARG" -m kimi-code/k3 > "$OUT/kimi.txt" 2>&1 &
 P_KIMI=$!
 
 #  GROK 4.6 -- added 2026-08-13 by user directive. Note what it does DIFFERENTLY
