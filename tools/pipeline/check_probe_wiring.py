@@ -267,6 +267,14 @@ MANIFEST = {
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
 
+    #  #498's SHIPPING detector -- gate-wired in gate_arm.sh, 25 rows, sentinel
+    #  OPUS498T_DONE.  CLASS_DETECTOR rather than research: the battery owes it a run.
+    #  Self-contained by deliberate choice -- every committed probe in this tree rolls its
+    #  own pty rather than importing the untracked _scratchpad/gxprobe.py, and following
+    #  that precedent avoids making a committed file depend on one outside the repo.
+    "sgi_de_width_probe.py":
+        (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
+
     #  sgidewidth, 2026-08-31.  The measuring seat's rung-3 witness, attribution probe and
     #  25-row / nine-build kill table, preserved because the seat reported them VOLATILE.
     #  CLASS_RESEARCH on the #497 precedent: EVIDENCE, not detectors the battery owes a run.

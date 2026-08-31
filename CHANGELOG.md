@@ -1,3 +1,84 @@
+## Round #498 sgidewidth -- a guest `sb` ended the host, and the OBVIOUS fix scores 24/25
+
+`DEVICE_ACCESS(sgi_de)` in `src/devices/dev_sgi_re.c` insisted on a 4- or 8-byte access and
+ended the host process otherwise. One guest `sb` anywhere in a 4 KB window did it. Witnessed
+at rung 3 on an unmodified `-E sgi -e ip32`: `sb`, `sh`, `lbu` and `lhu` each gave exactly one
+`len = N not implemented` and `exit(1)` -- 4/4, with a liveness control and a device-signature
+control that echoes our own value back in the device's diagnostic.
+
+    live exit(1) in dev_sgi_re.c    15 -> 14
+
+### The fix is NOT #497's splice, and the difference is measured rather than stylistic
+
+`#497`'s tail only answered a read. **This function's tail also calls `draw_primitive()`** when
+the guest set `CRIME_DE_START`, so falling through runs a rendering primitive for an access the
+model just refused. Nine builds, 25 rows:
+
+    mR   latched decline + goto to the common exit    25/25   <- shipped
+    mB   latched decline + early return 1             25/25   (not shipped: diverges the day
+                                                               the tail grows)
+    fix  decline + startFlag = 0, switch still runs   24/25   <- the shape the design implied
+    mC   shared latch, reusing #497's bit             23/25
+    mE   repair hoisted to every access               22/25
+    mF   repair qualified to writes only              21/25
+    mA   the naive #497 splice                        19/25
+    mD   brace slip into the len == 4 arm             17/25
+
+**`fix` reds `dec_switch`**: a declined 1-byte write still reaches the register switch, which
+announces `TODO: non-zero CRIME_DE_SCISSOR` about **a write that never happened**, from an
+`idata` the arm discarded. Product code shipping a wrong record inside a diagnostic -- the same
+class the ACCEPT member of the option set was discovered through.
+
+`goto <label>` to a common exit is house idiom, derived rather than asserted: **10 device files
+use `goto` and 8 use it inside a `DEVICE_ACCESS` body.** (A first grep said 6 because it pinned
+three label names; `dev_sgi_mec.c` uses `goto skip`.)
+
+### One latch bit, and it must be its own
+
+Per-message-site gives ONE bit here: one guard, one text. `#497` took six because six windows
+with six texts are walked in a single session. **But `mC` measured 23/25** -- the four handlers
+share one `malloc`'d struct, so reusing `SGIRE_W_TLBA_LEN` lets any odd-width access to
+`sgi_re`'s TLB_A window silence `sgi_de`'s decline entirely. `1<<6` is free.
+
+### Accept rows sit at +0x7fc / +0x7f8, and that is a fact about the device
+
+The nominal last slots `+0xffc`/`+0xff8` have bit 0x800 set, so they reach `draw_primitive` and
+die there. **The last legal slots with `startFlag` CLEAR are the real anchors** -- the
+last-slot rule from `#497`'s sibling round, constrained by a second defect.
+
+### What this round does NOT fix, stated so no reader concludes the window is safe
+
+*** EVERY access to `+0x800..+0xfff`, AT ANY WIDTH INCLUDING ACCEPTED ONES, STILL ENDS THE HOST
+-- inside `draw_primitive()`, whose `default:` arm is fatal on 254 of 256 drawing ops, and whose
+reset value is one of them. *** That is `sgideprimop`, filed HIGH, witnessed by a 24/24
+attribution probe on offsets differing only in bit 0x800. Half this window is still lethal and
+the second kill is not this round's to fix.
+
+### The detector, and two instrument defects caught before it shipped
+
+22 rows, self-contained (no `gxprobe` dependency -- every committed probe in this tree rolls its
+own pty, and that precedent settled the question without asking). **Every row is one the
+nine-build table measured killing a specific mutant**, and the contract names what it does not
+catch.
+
+**`lw` SIGN-EXTENDS.** `acc4_last` read `0xffffffffcafebabe` against a wanted `0xcafebabe` --
+failing on MIPS semantics while the device was entirely correct. The two neighbouring accept
+rows passed only because their fixtures happen to have bit 31 clear. Masked rather than given a
+friendlier constant, so the row is correct *by construction* for any value.
+
+**And the first attempt to fix that silently did nothing.** The anchor carried regex backslashes
+through a heredoc, matched ZERO, and the re-run scored the unchanged file at the same 21/22 --
+indistinguishable from a real result. Only the `AssertionError: 0` gave it away.
+
+### A pre-specified trigger fired and was honoured
+
+`#497` filed `gatedevicesplit` with a criterion in the gate's own words: *"the NEXT device probe
+wired into this gate converts it from filed to OWED."* This is that probe. The row moved
+**filed -> OWED, low -> med**, in this commit. The detector is still wired into `gate_arm.sh`,
+deliberately -- the split is a harness round owing its own controls, and holding a HIGH device
+fix hostage to a gate refactor would be the tail wagging the dog. **A trigger that fires and is
+ignored is worse than one never written, because the next reader trusts it.**
+
 ## Round #497b -- the pass-2 panel on my own records commit found FIVE defects, all mine
 
 `112867a` closed `#497`'s record and fixed two harness bugs. Its pass-2 panel found five

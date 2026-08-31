@@ -1058,6 +1058,50 @@ fi
 #  which is a harness round of its own and owes its own controls.  FILED as
 #  `gatedevicesplit`, with a forcing criterion: the NEXT device probe wired into
 #  this gate converts it from filed to OWED.
+#  *** #498 sgidewidth.  WIRING THIS PROBE FIRES A PRE-SPECIFIED TRIGGER, AND THE TRIGGER
+#  IS HONOURED RATHER THAN QUIETLY PASSED. ***  The #497 block below filed `gatedevicesplit`
+#  with a forcing criterion in its own words: "the NEXT device probe wired into this gate
+#  converts it from filed to OWED."  This is that probe.  The row is moved to OWED in the
+#  same commit -- a criterion that fires and is ignored is worse than one never written,
+#  because the next reader trusts it.
+#
+#  It is wired HERE anyway, and deliberately: the split is a harness round owing its own
+#  controls, and holding a HIGH device fix hostage to a gate refactor would be the tail
+#  wagging the dog.  What is NOT acceptable is compounding it silently.
+DEWLOG=$LOGDIR/sgi_de_width.log
+python3 sgi_de_width_probe.py "$PMAX" gate > "$DEWLOG" 2>&1 || true
+
+#  SENTINEL FIRST -- a preserved log is verified by its completion sentinel, never by its
+#  existence.  A killed run loses every row and looks exactly like one that produced none.
+if ! grep -q "OPUS498T_DONE" "$DEWLOG"; then
+    note "sgi_de width probe did not reach its completion sentinel; last lines follow"
+    tail -5 "$DEWLOG" | sed 's/^/       /'
+    check "sgi_de width probe completed" "no" "yes"
+else
+    check "sgi_de width probe completed" "yes" "yes"
+
+    #  CONTROLS BY NAME.  A detector whose liveness and device-signature rows are dead
+    #  scores well on a corpse: every access row would read "no message" and pass.
+    check "sgi_de controls live+devsig" \
+          "$(grep -q 'OPUS498T_CONTROL=OK' "$DEWLOG" && echo yes || echo no)" "yes"
+
+    #  PER-ROW PASS, one line, checked individually.  A row that silently stops being
+    #  tested is the padded-column class -- a name as long as its column makes the check
+    #  unsatisfiable and the row quietly stops being tested.
+    for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do
+        check "sgi_de row: $v" "$(count "$DEWLOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED ARITHMETICALLY.  Two rows, not one: a single "22 ok" check
+    #  cannot tell a LOST row from a FAILING one, and those need different responses.
+    #  The sum is arithmetic rather than a string join -- concatenating two counts and
+    #  comparing to "220" is satisfied by (22 ok, 0 FAIL) AND by (2 ok, 20 FAIL), which
+    #  is a defect this gate has already shipped once.
+    check "sgi_de rows emitted" \
+          "$(( $(count "$DEWLOG" " ok$") + $(count "$DEWLOG" " FAIL$") ))" "25"
+    check "sgi_de rows green" "$(count "$DEWLOG" " ok$")" "25"
+fi
+
 SGILOG=$LOGDIR/sgi_re_width.log
 python3 sgi_re_width_probe.py "$PMAX" gate > "$SGILOG" 2>&1 || true
 

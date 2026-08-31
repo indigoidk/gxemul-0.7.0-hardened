@@ -72,6 +72,19 @@ enum {
 	SGIRE_W_TEX_LEN   = 1 << 3,
 	SGIRE_W_LINA_LEN  = 1 << 4,
 	SGIRE_W_LINB_LEN  = 1 << 5,
+
+	/*  #498: sgi_de's width decline.  ONE bit, not six: the six above are one
+	    per SITE because six windows with six distinct message texts are walked
+	    in a single bring-up session, and one latch would report the first and
+	    silence five.  sgi_de has ONE guard and ONE message text, so the house
+	    per-message-site rule gives one bit.  Measured cost: `sb' then `sh' at
+	    one offset announces len=1 and never len=2 -- accepted, and small,
+	    because the message already prints the width.
+
+	    It must be its OWN bit.  Reusing SGIRE_W_TLBA_LEN scored 23/25: the
+	    four handlers share one malloc'd struct, so any odd-width access to
+	    sgi_re's TLB_A window would silence sgi_de's decline entirely.  */
+	SGIRE_W_DE_LEN    = 1 << 6,
 };
 
 struct sgi_re_data {
@@ -847,8 +860,44 @@ DEVICE_ACCESS(sgi_de)
 		else
 			odata = d->de_reg[regnr];
 	} else {
-		fatal("sgi_de: len = %i not implemented\n", len);
-		exit(1);
+		/*
+		 *  #498: THIS USED TO END THE HOST PROCESS.  A guest choosing an
+		 *  access width is not an emulator error -- one `sb' anywhere in
+		 *  this 4 KB window did it.  Witnessed at rung 3 on an unmodified
+		 *  -E sgi -e ip32: sb, sh, lbu and lhu each gave exactly one
+		 *  "len = N not implemented" and exit(1), 4/4.
+		 *
+		 *  *** THE SHAPE IS NOT #497's SPLICE, AND THE DIFFERENCE IS
+		 *  MEASURED, NOT STYLISTIC. ***  #497's tail only answered a read.
+		 *  THIS function's tail also calls draw_primitive() when the guest
+		 *  set CRIME_DE_START, so falling through would run a rendering
+		 *  primitive for an access we just refused.
+		 *
+		 *  Clearing startFlag and falling through -- the obvious repair --
+		 *  scores 24/25: the declined access still reaches the switch
+		 *  below, which announces e.g. "TODO: non-zero CRIME_DE_SCISSOR"
+		 *  about a write THAT NEVER HAPPENED, from an idata this arm
+		 *  discarded.  Shipping a wrong record inside a diagnostic is the
+		 *  same class the ACCEPT member of the option set was found
+		 *  through.  The goto form scores 25/25.
+		 *
+		 *  `goto <label>' to a common exit is house idiom, not an
+		 *  invention: 10 device files use goto and 8 of those use it
+		 *  inside a DEVICE_ACCESS body (dc7085, i80321, le, mk48txx,
+		 *  ne2000, pvr, vr41xx, wdc).
+		 *
+		 *  It is not an early `return' either.  Control still reaches the
+		 *  common exit, so a declined READ is answered with odata (0) via
+		 *  memory_writemax64 and the function still returns 1.  `return 0'
+		 *  would be coerced to -1 by cpus/memory_rw.c and raise
+		 *  EXCEPTION_DBE -- turning a refusal into a guest bus error.
+		 */
+		if (!(d->warned & SGIRE_W_DE_LEN)) {
+			d->warned |= SGIRE_W_DE_LEN;
+			fatal("[ sgi_de: unimplemented len=%i -- declined."
+			    "  (once) ]\n", (int) len);
+		}
+		goto de_declined;
 	}
 
 	switch (relative_addr) {
@@ -1067,6 +1116,9 @@ DEVICE_ACCESS(sgi_de)
 	if (startFlag)
 		draw_primitive(cpu, d);
 
+ de_declined:
+	/*  #498: a declined access jumps here, skipping BOTH the register
+	    switch and draw_primitive(), and is still answered.  */
 	if (writeflag == MEM_READ)
 		memory_writemax64(cpu, data, len, odata);
 
