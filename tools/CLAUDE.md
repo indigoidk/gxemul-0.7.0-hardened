@@ -1519,9 +1519,38 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > verbosity flag"* was standing rule before that round, and the two-membered framing never
 > consulted it.
 >
-> > **A DE-FATALISATION'S OPTION SET HAS THREE MEMBERS: delete / decline / decline +
-> > bounded-announce. Before choosing, GREP THE FORK FOR AN EXISTING BOUNDED-DIAGNOSTIC IDIOM --
-> > the tree's own precedents are part of the design space.**
+> > *** THE SET HAS SIX MEMBERS, NOT THREE.  Grown twice, and BOTH TIMES BY A SEAT THAT WENT
+> > LOOKING IN THE TREE RATHER THAN REASONING -- which is the instruction below working. ***
+> >
+> > **1 DELETE  ·  2 DECLINE (silent)  ·  3 DECLINE + BOUNDED (LATCHED) ANNOUNCE  ·
+> > 4 ACCEPT  ·  5 FAULT  ·  6 BACKED ACCEPT**
+> >
+> > * **4 ACCEPT** -- the model ALREADY computes the right value and then discards it.  Delete
+> >   the kill, keep the value, NO latch: there is no event to announce, and a bounded announce
+> >   would ship a wrong record in product code (*"unimplemented; ignored"* about a read that
+> >   is implemented and is not ignored).  Found 2026-08-27 when the DC21285 datasheet showed
+> >   `+0x188` is IRQEnable, a documented read-only register the model answers correctly.
+> > * **5 FAULT** -- deliver the architectural bus error, by MODELLING THE SPACE AS UNMAPPED.
+> >   `src/devices/dev_unreadable.c` is a device whose entire access function is `return 0;`
+> >   ("returns an error for all reads/writes"), and `machine_sgi.c` installs it TEN times so
+> >   absent hardware faults, because the PROM and NetBSD probe those regions and RELY on the
+> >   failure.  **This is why *`return 0` is not a decline* and *FAULT is a member* are both
+> >   true: it is not a refusal, it is a positive statement that nothing is there.**
+> > * **6 BACKED ACCEPT** -- invent storage and accept, the `mte_reg[]`/`de_reg[]` idiom.
+> >   Distinct from 4: nothing computes a value, so this FABRICATES one.  Governed by the
+> >   ADDITION LICENCE -- a measured delta or a transferred warrant, never "cannot hurt".
+> >
+> > *(A seventh, ALIAS/mirror -- partial address decode folding a high window onto a low one,
+> > which real hardware often does -- was named and dismissed for want of evidence.  An
+> > unmapped-space arm's option set generically contains it; name it before dismissing it.)*
+> >
+> > **Before choosing, GREP THE FORK FOR AN EXISTING IDIOM -- the tree's own precedents are
+> > part of the design space.**  Members 4, 5 and 6 were ALL found that way and none of them
+> > by argument.  **And grep for the SIBLING HANDLERS' disposition in the same file**: on
+> > `sgireunmapped` that showed the three siblings already declined without `exit(1)` and
+> > pristine upstream did too, making the arm under review the file's own outlier -- upstream
+> > residue rather than a policy.  *That is a far stronger warrant than "it is a host kill",
+> > and it is one `grep` away.*
 >
 > This is the premise-audit discipline aimed at **option-space completeness** instead of at
 > factual premises. A brief that lists two options gets a panel arguing about two options;
@@ -1599,11 +1628,37 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > > `(further occurrences suppressed)`, which is the MINORITY form. Censused 2026-08-26 across
 > > `src/devices/*.c`, by message text: ***
 > >
-> >     (once)                            9
-> >     (further occurrences suppressed)  3
-> >     (reported once)                   2
-> >                                      --
-> >                                      14
+> > *** ALL THREE NUMBERS WENT STALE AND WERE RE-DERIVED 2026-08-30, after the kimi seat
+> > challenged the `(once)` figure in a brief that quoted this block.  It counted 24 where
+> > this said 9, and it was right.  The fable5 seat independently confirmed 24 and supplied
+> > the reason: *the count has grown past 9 because `#497` itself added six sites.* ***
+> >
+> > **THE DERIVER, so the next reader re-runs it instead of trusting a literal:**
+> >
+> >     for m in '(once)' 'further occurrences suppressed' 'reported once'; do
+> >         printf '%-34s %3s occ %3s files' "$m" \
+> >             "$(grep -o "$m" src/devices/*.c | wc -l)" \
+> >             "$(grep -l "$m" src/devices/*.c | wc -l)"; echo; done
+> >
+> > On 2026-08-30 that printed:
+> >
+> >     (once)                            24 occ   4 files
+> >     (further occurrences suppressed)   4 occ   2 files
+> >     (reported once)                    5 occ   3 files
+> >
+> > **THE ADVICE IS UNCHANGED AND STRENGTHENED: `(once)` is the plurality by a WIDER margin
+> > than this block claimed.**  Only the literals were wrong.  The growth is this project's
+> > own doing, which is exactly why a transcribed count in an auto-loaded file decays: the
+> > rounds that consult it are the rounds that change it.
+> >
+> > *(Superseded literals, kept only as the demoted record of what was measured on
+> > 2026-08-26: 9 / 3 / 2 = 14.  Never a current claim.)*
+> >
+> > **A CAUTION FROM DERIVING IT: one of my four counting methods returned ZERO.**  A regex
+> > requiring `fatal(` and `(once)` on the SAME line finds nothing, because the marker sits on
+> > a continuation line of a wrapped string.  A single method would have produced a confident
+> > wrong answer in either direction; four methods disagreeing is what made the right one
+> > obvious.
 > >
 > > **`(once)` is the plurality and is what a new site should use.** The N=1 per-instance SHAPE
 > > is unaffected and unchanged -- only the words. Note the two quantities are different and the

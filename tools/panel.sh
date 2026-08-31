@@ -650,7 +650,16 @@ echo
 ok=0; miss=""; total=0; rated=""
 #  The substitute joins the roster only when it was actually fired, so a withdrawal
 #  does not inflate `total` or land in `$miss`.
-SEATLIST="codex:codex agy:agy kimi:kimi grok:grok glm:ollama_glm"
+#  *** agy JOINS THE TALLY ONLY WHEN FIRED, EXACTLY AS THE SUBSTITUTE DOES. ***  It was in
+#  this list unconditionally while the reservation kept it from launching, so every panel
+#  printed "SEATS: 6/7 ... no answer from: agy" followed by "(a non-answering seat is a SEAT
+#  FAILURE, never counted as agreement)" -- CONTRADICTING the detail row four lines above it,
+#  which correctly said DELIBERATELY NOT FIRED, not a failure and not agreement.  Conflating
+#  those two states is the precise thing the seat ledger exists to refuse, and the summary
+#  line was doing it to the operator every run.  The fix is the idiom already sitting two
+#  lines below for OLLAMA4.
+SEATLIST="codex:codex kimi:kimi grok:grok glm:ollama_glm"
+[ -n "$AGY_FIRE" ] && SEATLIST="$SEATLIST agy:agy"
 SEATLIST="$SEATLIST deepseek:ollama_deepseek minimax:ollama_minimax"
 [ -n "$OLLAMA4" ] && SEATLIST="$SEATLIST kimi_sub:ollama_kimi"
 for s in $SEATLIST; do
