@@ -13277,6 +13277,26 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `fbfiqsilent` (med) -- the FIQ column lies quietly where the IRQ column kills
+
+`n6` is about to ACCEPT the `+0x188` IRQEnable read on the warrant that the DC21285 prose
+makes it a documented read-only register. **That same prose covers `188h` and `288h`
+jointly** — and `case FIQ_ENABLE_SET:` has a write arm and then `break;`, with **no read arm
+at all**. Verified by opening the file. A guest that sets FIQ bits and reads them back gets
+**zero: wrong value, no kill, no announce.**
+
+> **It is not in the eight-kill census, and that is the point.** Same semantic class, same
+> one-line fix shape, same row shape — differing only in that the IRQ column *kills* where
+> the FIQ column *lies quietly*. Shipping the IRQ accept while leaving its FIQ twin silently
+> wrong and unnamed is exactly the asymmetry the sibling-parity line exists to catch.
+
+**And it is a COLUMN, not a site:** `FIQ_ENABLE_CLEAR`'s read side is also a silent constant
+zero while its IRQ twin kills. Worth **one sentence** in the decline round's `PRETABLE.out`
+rather than five separate discoveries later.
+
+*Found by the sibling-parity check firing at DESIGN time, which is where it is supposed to
+fire — while adjudicating a different question about round ordering.*
+
 ### `sgideoob` (med) -- a third member of one shape, and it was kept OUT of the round that
 ### found it
 
