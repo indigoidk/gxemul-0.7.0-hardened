@@ -2880,10 +2880,10 @@ is not in A2.8 at all — it is in **LDR's own Alignment note, p. A4-44**.
 
   Until it is measured, KEEP the `rm`: an unnecessary rebuild costs minutes, while a
   stale object costs a wrong measurement, and this project has already paid that once.
-- est/ and GXEMUL-SEC differ by **SEVEN declared paths**, not "5 named files +
+- est/ and GXEMUL-SEC differ by the paths declared in `tools/est_divergence.txt` -- *** COUNT DELIBERATELY NOT RESTATED HERE, and the reason is that this line has now been wrong TWICE. ***  It said **SEVEN**; the file holds **six** non-comment entries (`grep -vcE '^\s*(#|$)'`).  The paragraph diagnoses the failure, prescribes the right remedy -- *derive the allowlist rather than quoting a count* -- and then commits the failure in its own headline number.  **Run the deriver.**  *(For the record, this line was ALREADY a correction of an even earlier one, which said not "5 named files +
   `dev_ne2000.c`" -- the omitted one is `src/devices/.index`. The list is
   `tools/est_divergence.txt` and `precommit_check.sh` reads it, so **derive the
-  allowlist rather than quoting a count**; that is what this line got wrong.
+  allowlist rather than quoting a count**.  So the instruction has been right all along and the number beside it has been wrong twice.)*
   Any other shared file must land byte-identical in both. Commit only GXEMUL-SEC files.
 - Debugger `dump` reads device state through `memory_rw`, so **read SH4 device state with
   guest loads via `step`** -- but the REASON given here was a blanket claim and it is false.

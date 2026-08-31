@@ -236,6 +236,35 @@ MANIFEST = {
     #  rather than believed.  `frozen_wave_*` is the FROZEN COPY the run actually
     #  executed -- kept beside the live probe on purpose, because a comparison run
     #  owes ONE instrument and the frozen copy is the proof of which one it was.
+    #  #497 widthkillclass, 2026-08-30.  The measuring seat's TWO-TABLE instrument set,
+    #  preserved so a 22-mutant result can be RE-RUN rather than believed.  CLASS_RESEARCH
+    #  on the precedent immediately below: these are EVIDENCE, not detectors the battery
+    #  owes a run.
+    #
+    #  `sgi_re_width_probe.py` is the 35-row detector ITSELF, and it is filed here as
+    #  research on purpose: the round's shipping copy will live in regress/ and be gated or
+    #  dated-exempt.  Two copies with two classes is correct rather than untidy -- the
+    #  artifacts one is the instrument that produced THESE numbers and must never change,
+    #  while the regress/ one is live and will.
+    #
+    #  `mutate497.py` and `mutate497_v2.py` are BOTH kept, and the pair is the point: v1
+    #  was re-read from the live scratchpad per mutant, which is the frozen-copy hole the
+    #  seat caught before it bit.  v2 freezes the mutator and hard-exits if it is missing.
+    #  Keeping only v2 would erase the evidence that table 1 and table 2 ran different
+    #  drivers -- which is exactly what a reader comparing the two tables needs to know.
+    "artifacts/widthkillclass/opus_impl_20260830/apply_fix497.py":
+        (CLASS_RESEARCH, "#497 applies the six-site fix to a clone, preserved as evidence"),
+    "artifacts/widthkillclass/opus_impl_20260830/move_warned.py":
+        (CLASS_RESEARCH, "#497 moves the latch field last -- the edit that stopped the over-run aliasing the latch"),
+    "artifacts/widthkillclass/opus_impl_20260830/mutate497.py":
+        (CLASS_RESEARCH, "#497 table-1 mutator, kept to show v1 re-read itself per mutant"),
+    "artifacts/widthkillclass/opus_impl_20260830/mutate497_v2.py":
+        (CLASS_RESEARCH, "#497 table-2 mutator, frozen and hard-exiting if absent"),
+    "artifacts/widthkillclass/opus_impl_20260830/sgi_re_width_probe.py":
+        (CLASS_RESEARCH, "#497 the 35-row detector AS MEASURED -- the shipping copy is separate and gated"),
+    "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
+        (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
+
     "artifacts/wdcaddtoinbufbound/rung3_20260830/addtoinbuf_rung3_probe.py":
         (CLASS_RESEARCH, "wdcaddtoinbufbound rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaddtoinbufbound/rung3_20260830/frozen_wave_20260830_102209.py":

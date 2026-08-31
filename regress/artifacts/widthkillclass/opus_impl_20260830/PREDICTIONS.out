@@ -1,0 +1,308 @@
+#497 -- PREDICTED kill-table scores, written BEFORE the definitive table finished.
+seat: opus5.  Instrument: 35-row detector, md5 d04d6bc42baf0600e65c4417a535cb41.
+
+Written for the same reason PRETABLE.out is written first: a prediction recorded
+after the result is not a prediction.  Its own mtime is the order proof, and the
+table's logs are timestamped after it.  Where measurement disagrees, THE TABLE
+WINS and the disagreement is the interesting part -- it is reported, not quietly
+reconciled.
+
+ mutant        pred   predicted RED rows and why
+ ------------- -----  -------------------------------------------------------
+ FIX           35/35  clean by construction
+ a_prefix      15/35  18 per-site (sw surv, sw lat1, lw surv x6) + 2 xsite.
+                      The 6 `ld kill' rows stay GREEN: pre-fix, a len=8 read
+                      already dies at the read arm, which this round never
+                      touches -- so they are green on BOTH sides by design.
+ c_null        CONTROL=DEAD.  Score is NOT the discriminator (rows wanting
+                      `exit0' pass against /bin/true).  Clause (c) is satisfied
+                      by the identity rows failing, not by the fraction.
+
+ b_all         15/35  same 20 rows as a_prefix.  Distinct from it because the
+                      enum/field/comments REMAIN -- so it is the defect without
+                      the infrastructure change, a purer clause-(b) test than
+                      the pre-fix binary.  Verified verbatim: b_all differs from
+                      the pre-fix source ONLY in comments, enum and field.
+ b_<site> x6   30/35  3 rows for that site (sw surv, sw lat1, lw surv) + BOTH
+                      xsite rows, because the reinstated exit(1) kills the
+                      shared cross-site session at whichever point it is hit.
+                      That site's `accept' and `ld kill' stay GREEN: both use
+                      len=8, which passes the width guard either way.
+
+ d_andwrite    29/35  the 6 `lw surv'.  if(X) -> if(X && Y) on the dominating
+                      predicate: a len=4 READ stops being declined and falls
+                      through to the still-live read kill.   [MEASURED 24/30 on
+                      the superseded 30-row instrument, same 6 rows.]
+ d_growth      29/35  the 6 `accept'.  Guard-only growth swallowing legal
+                      8-byte writes at offsets with bit 3 set.  This is the
+                      de-escalation accept-row FAILABILITY proof: if these rows
+                      do not red here, they are vacuous.
+ d_ifnotelse   29/35  the 6 `lw surv'.  Decline kept, its REPAIR nulled: a
+                      declined access falls through into the arms again, so a
+                      len=4 read reaches the read kill.  NOTE the len=4 WRITE
+                      still survives (it just performs a short store), so
+                      `sw surv' does NOT catch this -- only the read side does.
+ d_nolatch     29/35  the 6 `sw lat1' (count 2, not 1).  `xsite 6msg' stays
+                      GREEN -- it touches each site once, so an unlatched build
+                      still emits exactly six.  Complementary rows, by design.
+ d_noset       29/35  the 6 `sw lat1', same reason.
+ d_sharedbit   33/35  BOTH xsite rows only.  Every per-site row runs in its own
+                      session where the shared bit is still clear, so all 24
+                      stay green.  This is precisely why a cross-site row is
+                      needed at all.
+ d_bitcollide  33/35  BOTH xsite rows (`6msg' = 5).  The subtle form: one
+                      duplicated enumerator.  Same blindness as above.
+ e_wrongsite   33/35  BOTH xsite rows: TLB_B's literal count goes to 0, so
+                      6msg = 5 and order sees a -1 position.  `tlb_b sw lat1'
+                      in ITS OWN session also counts 0 -> so possibly 32/35.
+                      *** I am genuinely unsure between 32 and 33 here and am
+                      recording the uncertainty rather than picking. ***
+
+ d_returnzero  35/35  *** PREDICTED TO ESCAPE THE WHOLE TABLE. ***  It declines
+                      by `return 0', which memory_rw coerces to -1 and turns
+                      into a guest EXCEPTION_DBE.  The host process still
+                      SURVIVES, so `sw surv'/`lw surv' -- which observe only the
+                      exit status -- cannot see it.
+                      This is NOT a surprise: PRETABLE.out section 2 recorded
+                      claim C2's DBE half as an EXPLICIT NO-ROW before the table
+                      ran.  If it escapes, that is a PREDICTED, DISCLOSED hole,
+                      and it points at a real weakness in my own row set:
+                      claim C1 says the tail "answers a READ with odata (0)" and
+                      my `lw surv' row observes survival ONLY, not the 0.
+                      IF IT ESCAPES I INTEND TO CLOSE IT IN-ROUND UNDER L1
+                      (pre-ship construction) by strengthening the read rows to
+                      check the returned VALUE, not merely the exit status.
+
+
+--------------------------------------------------------------------------------
+TABLE 2 ADDITIONS -- predicted BEFORE table 2 runs, same discipline.
+Table 2 measures the SHIPPED source (warned moved to the end of the struct, and
+the LINEAR alignment comment strengthened) with the SHIPPED instrument (v2:
+sentinel-preset read rows).  Row count is unchanged at 35 -- these are MUTANTS,
+not rows, and mutant demand is not row demand.
+--------------------------------------------------------------------------------
+
+ mutant        pred   predicted RED rows and why
+ ------------- -----  -------------------------------------------------------
+ d_returnzero  29/35  *** THE PREDICTION THAT CHANGES BETWEEN TABLES. ***  On the
+                      v1 instrument I predicted 35/35 (a full escape), because
+                      `lw surv' observed only the exit status and a guest DBE
+                      leaves the host alive.  On v2 the read rows preset v0 to
+                      0xdeadbeef and require 0x0 back, so a read that never
+                      completes is now visible: the 6 `lw surv' rows should red.
+                      If table 1 shows the escape and table 2 shows the kill,
+                      that pair is the evidence that the strengthening was
+                      necessary rather than decorative.
+
+ d_accept4     29/35  `len != 8' -> `len != 8 && len != 4'.  The de-escalation
+                      growth in the ACCEPT direction, and the one mutant that
+                      REOPENS the LINEAR over-run (a len=4 write falls into the
+                      fixed-arity store).  Predicted RED: the 6 `sw lat1' (no
+                      message emitted at all, count 0) and the 6 `lw surv' (a
+                      len=4 read reaches the read kill).  That is 12 rows, so
+                      23/35, NOT 29 -- correcting my own arithmetic before the
+                      run rather than after.  PREDICTION: 23/35.
+                      Predicted GREEN and worth noting: `sw surv', because a
+                      short store still survives.  A survival-only row cannot
+                      see this either -- the same lesson as d_returnzero.
+
+ d_lessthan    35/35  EXPECTED NOT TO DIE, and that is the point.  Over the
+                      reachable guest domain len is one of {1,2,4,8}, so
+                      `len < 8' and `len != 8' select the same set.  A mutant
+                      that will not die is a RESULT: it records that the guard's
+                      FORM is immaterial and only its ACCEPT SET matters, which
+                      is what d_accept4 attacks.  If it DOES die, my domain claim
+                      is wrong and I want to know.
+
+ e_swapsite    34/35  ONLY `xsite order'.  All six literals survive exactly once
+                      (verified by dry run: declines=1 for each), so `xsite 6msg'
+                      stays GREEN and only the ORDER row can see it.  This is the
+                      mutant that proves `xsite order' is not vacuous; without it
+                      every mutant that reds the order row also reds 6msg.
+
+PREDICTIONS_DONE
+
+================================================================================
+TABLE 1 -- PREDICTED vs MEASURED.  Written after table 1 completed, from
+scratchpad/gx497/master497.log (preserved here as table1_master.log).
+Instrument: 35-row v1, md5 d04d6bc42baf0600e65c4417a535cb41.
+================================================================================
+
+ run            pred    measured   verdict
+ -------------  ------  ---------  ---------------------------------------------
+ FIX            35/35   35/35      MATCH
+ PREFIX  (a)    15/35   15/35      MATCH
+ NULLMEDIUM (c) DEAD    12/35 DEAD MATCH (CONTROL is the discriminator, not 12)
+ b_all          15/35   15/35      MATCH
+ b_tlba         30/35   30/35      MATCH
+ b_tlbb         30/35   30/35      MATCH
+ b_tlbc         30/35   30/35      MATCH
+ b_tex          30/35   30/35      MATCH
+ b_lina         30/35   30/35      MATCH
+ b_linb         30/35   30/35      MATCH
+ d_andwrite     29/35   29/35      MATCH
+ d_growth       29/35   29/35      MATCH
+ d_ifnotelse    29/35   29/35      MATCH
+ d_returnzero   35/35   35/35      MATCH -- A PREDICTED FULL ESCAPE.  See below.
+ d_nolatch      29/35   29/35      MATCH
+ d_noset        29/35   29/35      MATCH
+ d_sharedbit    33/35   33/35      MATCH
+ d_bitcollide   33/35   33/35      MATCH
+ e_wrongsite    32 or 33 -> 32/35  MATCH, and the UNCERTAINTY WAS RECORDED first.
+                        I wrote that I could not decide between 32 and 33 rather
+                        than picking one.  32 is right: `tlb_b sw lat1' also reds,
+                        because in its own single-site session the TLB_B literal
+                        never appears at all.
+
+ 18 of 19 predicted EXACTLY.  The 19th was recorded as an explicit uncertainty
+ with both candidates named, and resolved to one of them.
+
+ RESTORE=VERIFIED (cmp clean AND binary newer); .MUTANT sentinel cleared.
+
+--------------------------------------------------------------------------------
+THE ONE ESCAPE, AND WHY IT IS THE ROUND'S MOST USEFUL MEASUREMENT
+--------------------------------------------------------------------------------
+`d_returnzero' scored 35/35: it escaped EVERY row.  It keeps the width guard and
+keeps the decline, and changes only what happens next -- `return 0' instead of
+falling through to the function's common tail.  memory_rw coerces that to -1 and
+raises EXCEPTION_DBE in the GUEST, so the HOST process still exits 0 and every
+survival-based row stays green.
+
+That is a clause-(d) NULL-REPAIR: the guard is kept and its repair -- reaching
+the tail so a declined read returns a defined 0 -- is nulled.  By the floor that
+is L2, repaired IN-ROUND however late it is found.
+
+IT WAS DISCLOSED BEFORE IT WAS MEASURED.  PRETABLE.out section 2 recorded claim
+C2's DBE half as an EXPLICIT NO-ROW, with its reason, before table 1 ran; this
+file predicted the full escape before it happened.  So the sequence is
+disclose -> predict -> measure -> repair, not discover-and-quietly-patch.
+
+THE REPAIR, measured in table 2: the read rows preset the destination register to
+0xdeadbeef instead of 0, so "the tail ran and wrote odata (0)" and "the load never
+completed" stop being the same observation.  Predicted d_returnzero 29/35 there.
+
+*** THE GENERAL LESSON, which is the carrier's own #489 finding reproduced from a
+new direction: A SURVIVAL ORACLE AT A REFUSAL-EFFECT SITE IS VACUOUS BY
+CONSTRUCTION.  Both the correct fix and this mutant leave the host alive, so
+`process exited 0' cannot discriminate them.  The CHANNEL check is supposed to
+catch exactly this at WRITING time by asking what observable differs under the
+named mutant -- and it half-worked: it made me flag the DBE claim as a no-row,
+but it did not make me notice that the row for the OTHER claim (C1, "the tail
+answers a READ with odata (0)") was observing survival rather than the 0 that
+claim actually asserts.  A row must observe the CLAIM, not the aftermath. ***
+
+TABLE1_RESULTS_DONE
+
+================================================================================
+TABLE 2 -- PREDICTED vs MEASURED.  The SHIPPED artifacts.
+Source: dev_sgi_re.c.shipped (warned moved to struct end, LINEAR comment
+strengthened), md5 5821e801499c63bcd225d075118d2e27.
+Instrument: 35-row v2 (sentinel-preset read rows), md5 7b74ee697e0f34b9927635d59cb8b288.
+Mutator frozen: 337d22dab17638ce136b964a0e695e91.  Logs: table2/.
+================================================================================
+
+ run            pred    measured   verdict
+ -------------  ------  ---------  ---------------------------------------------
+ FIX            35/35   35/35      MATCH
+ PREFIX  (a)    15/35   15/35      MATCH
+ NULLMEDIUM (c) DEAD    6/35 DEAD  MATCH, and STRICTLY STRONGER than table 1's
+                                   12/35: the value-checking read rows no longer
+                                   pass trivially against a binary that exits 0.
+ b_all          15/35   15/35      MATCH
+ b_tlba/b/c     30/35   30/35      MATCH (each)
+ b_tex          30/35   30/35      MATCH
+ b_lina/b_linb  30/35   30/35      MATCH (each)
+ d_andwrite     29/35   29/35      MATCH
+ d_growth       29/35   29/35      MATCH  (accept-row failability holds on the
+                                   shipped artifact)
+ d_accept4      23/35   21/35      *** MISS BY 2 -- see below ***
+ d_lessthan     35/35   35/35      MATCH -- EQUIVALENT MUTANT, as predicted.
+                                   Recorded as a RESULT, not a gap: over the
+                                   reachable guest domain len is one of {1,2,4,8},
+                                   so `len < 8' and `len != 8' select the same
+                                   set.  The guard's FORM is immaterial; only its
+                                   ACCEPT SET matters, which is what d_accept4
+                                   attacks and the rows do catch.
+ d_ifnotelse    29/35   29/35      MATCH
+ d_returnzero   29/35   29/35      MATCH -- *** THE REPAIR IS PROVEN ***
+ d_nolatch      29/35   29/35      MATCH
+ d_noset        29/35   29/35      MATCH
+ d_sharedbit    33/35   33/35      MATCH
+ d_bitcollide   33/35   33/35      MATCH
+ e_wrongsite    32/35   32/35      MATCH
+ e_swapsite     34/35   32/35      *** MISS BY 2 -- see below ***
+
+ 20 of 22 exact.  Two misses, BOTH IN THE SAME DIRECTION AND FROM THE SAME
+ MISTAKE.
+
+--------------------------------------------------------------------------------
+THE REPAIR, MEASURED END TO END -- the point of running two tables
+--------------------------------------------------------------------------------
+   d_returnzero on v1 (survival-only rows) : 35/35  FULL ESCAPE
+   d_returnzero on v2 (value-checking rows): 29/35  KILLED, the six `lw surv'
+
+The v2 evidence line is the cleanest artifact this round produced:
+
+   tlb_a lw surv    got exit0/0xdeadbeef    want exit0/0x0
+
+*** THE EXIT STATUS IS IDENTICAL ON BOTH SIDES. *** Correct code and mutant both
+leave the host alive; only the untouched sentinel shows the guest load never
+completed.  That is what "a survival oracle at a refusal-effect site is vacuous
+by construction" looks like when you actually measure it, and it is why the
+strengthening was a floor repair (L2) rather than polish.
+
+--------------------------------------------------------------------------------
+MY TWO PREDICTION MISSES, and they share one signature
+--------------------------------------------------------------------------------
+ d_accept4  predicted 23/35 (12 rows red), measured 21/35 (14 rows red).
+            The 12 I named -- 6 `sw lat1', 6 `lw surv' -- all red exactly as
+            reasoned.  I FORGOT the two cross-site rows: with the decline never
+            firing, NO message is emitted anywhere, so `xsite 6msg' reads 0 and
+            `xsite order' finds nothing to order.
+            This was my SECOND arithmetic slip on this one mutant; I had already
+            corrected 29 -> 23 before the run, and the answer was 21.
+
+ e_swapsite predicted 34/35 (only `xsite order'), measured 32/35.
+            `xsite order' RED and `xsite 6msg' GREEN -- SO THE MUTANT ACHIEVED
+            ITS PURPOSE: it isolates the anchor row, proving `xsite order' is not
+            vacuous.  But `tlb_b sw lat1' and `tlb_c sw lat1' also red, because
+            each per-site row counts its OWN literal and the swap makes TLB_B's
+            single-site session emit TLB_C's text.
+
+ THE COMMON SIGNATURE: in both cases I reasoned correctly about the row I was
+ TARGETING and forgot the other rows that read the SAME transcript.  The
+ mechanism was right both times; the blast radius was under-counted both times.
+ A mutant's kill set is not the row it was designed for -- it is every row whose
+ channel that edit perturbs, and cross-site rows perturb easily because they
+ observe an aggregate.
+
+ Neither miss changes a disposition: both mutants are killed, nothing escaped
+ that was predicted to die, and no row was found vacuous.
+
+--------------------------------------------------------------------------------
+FLOOR CLAUSES, ALL DISCHARGED BY MEASUREMENT ON THE SHIPPED ARTIFACT
+--------------------------------------------------------------------------------
+ (a) fails pre-fix                    PREFIX 15/35, CONTROL=OK
+ (b) verbatim reinstatement, EVERY    b_all 15/35, plus b_<site> 30/35 x6 so the
+     fixed site                       per-site sensitivity is measured, not assumed.
+                                      Verbatim verified: b_all differs from the
+                                      pre-fix source ONLY in comments/enum/field.
+ (c) null medium                      CONTROL=DEAD (6/35).  The CONTROL line is
+                                      the discriminator, never the fraction.
+ (d) null-repair, DEPENDS-ON closure  d_andwrite, d_ifnotelse, d_returnzero,
+                                      d_nolatch, d_noset, d_sharedbit,
+                                      d_bitcollide, d_accept4 -- all KILLED.
+ (e) contract                         in the probe header, and it names what the
+                                      detector does NOT catch as well as what it does.
+ (f) anchor                           `xsite order' proven non-vacuous by
+                                      e_swapsite (6msg green, order red).
+
+ ONE ESCAPE IN THE WHOLE OF TABLE 2, and it is an EQUIVALENT mutant by
+ construction (d_lessthan), recorded as a result rather than as debt.
+
+ THE CAPPED ASK-AGAIN IS UNSPENT.  d_accept4, d_lessthan and e_swapsite were my
+ own additions beyond the brief's M1/M2/M3, derived from the pre-table CHANNEL
+ and SIBLING-PARITY checks rather than from an adversarial query.  The one
+ ask-again per detector per round remains available to the panel.
+
+TABLE2_RESULTS_DONE

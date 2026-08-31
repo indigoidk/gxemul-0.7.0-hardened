@@ -1,0 +1,521 @@
+#497 widthkillclass -- PRE-TABLE CHECK BLOCK
+seat: opus5 (compile-and-measure).  Tree under review:
+      GXEMUL-SEC/src/devices/dev_sgi_re.c
+baseline: HEAD 1d2e828, dev_sgi_re.c md5 01f5a74064b9f96127d9fcca01bdd03a, 1342 lines
+build:    /tmp/gx497impl (cp -a of GXEMUL-SEC), MAKE_RC=0, [binary -nt source]=YES
+
+WRITTEN BEFORE TABLE 1 RUNS.  Its own mtime is the order proof.
+
+================================================================================
+0.  CENSUS -- the deriver, because two of them disagreed
+================================================================================
+DERIVER:  grep -n 'exit(1)' dev_sgi_re.c                       -> 25 TEXT matches
+          minus 4 COMMENTED (143, 152, 473, 965)               -> 21 LIVE
+          function heads: grep -n '^[A-Za-z_].*(' plus grep -n '^}'
+
+Real boundaries (the brief's "221-660" is refuted; three PLAIN functions sit
+between the DEVICE_ACCESS heads):
+
+   90-214   horrible_getputpixel      2 text, 0 live
+  221-379   DEVICE_ACCESS(sgi_re)    13 text, 13 live   <-- this round
+  385-398   dev_sgi_re_init           0
+  408-659   draw_primitive            2 text, 1 live
+  661-917   DEVICE_ACCESS(sgi_de)     1 text, 1 live
+  923-927   dev_sgi_de_init           0
+  940-1139  do_mte_transfer           6 text, 5 live
+ 1141-1271  DEVICE_ACCESS(sgi_mte)    1 text, 1 live (BUT SEE 1.4 -- UNREACHABLE)
+ 1277-1340  inits / de_status         0
+                                     -----------------
+                                      25 text, 21 live
+
+THE INVARIANT (stronger than the enumeration; state it so a future edit knows
+the shape it must keep):
+
+  *** EXACTLY ONE WIDTH KILL AND EXACTLY ONE READ KILL PER WINDOW, SIX WINDOWS,
+      PLUS ONE STRAGGLER.  6 + 6 + 1 = 13. ***
+
+  6 WIDTH kills  233 250 267 284 301 351   (len != 8)          <-- this round
+  6 READ  kills  245 262 279 296 346 362   (else{TODO: read})  <-- filed sgirekills
+  1 straggler    372                       (final else, both directions)
+
+After the fix: sgi_re 13 -> 7 live, file 21 -> 15 live.
+
+================================================================================
+1.  SIBLING PARITY
+================================================================================
+1.1  THE SIX ARMS AGAINST EACH OTHER -- one real asymmetry, and it changes what
+     the guard is FOR.
+
+     Four arms write through a len-BOUNDED LOOP:
+        TLB_A/B/C:  tlbi = ((ra & 0x1ff) >> 1) & 0xff ; for(hwi=0; hwi<len; hwi+=2)
+        TEX:        tlbi = ((ra & 0xff)  >> 3) & 0xff ; for(hwi=0; hwi<len; hwi+=2)
+     A SHORTER len runs FEWER iterations, so a narrow access cannot over-run these.
+     Max index: TLB 252+3=255 into [256]; TEX 27+3=30 into [112].  Safe.
+
+     Two arms write FIXED ARITY, ignoring len entirely:
+        LINEAR_A/B: tlbi = ((ra & 0x7f) >> 2) & 0x1f
+                    d->re_linear_x[tlbi]   = idata >> 32
+                    d->re_linear_x[tlbi+1] = idata
+     len is not consulted.  A len=1/2/4 access at +0x7c gives tlbi=31 and writes
+     index 32 into a [32] array.  8-byte alignment is what keeps tlbi EVEN and
+     therefore <= 30 -- and MIPS supplies that alignment, not this code:
+     cpu_mips_instr_loadstore.c raises EXCEPTION_ADES/ADEL before the device is
+     reached, so len==8 IMPLIES 8-byte aligned on the guest path.
+
+     ==> SIBLING PARITY VERDICT: the six arms are NOT symmetric in what the width
+         guard protects.  For TLB_A/B/C and TEX it is correctness only.  For
+         LINEAR_A/B it is additionally the only thing preventing an out-of-bounds
+         array write.  The fix must NOT paper over this: the LINEAR sites get an
+         extra comment, the other four do not.
+
+1.2  *** THE BRIEF'S PREMISE "load-bearing HOST MEMORY SAFETY" IS AN OVERCLAIM,
+     AND I MEASURED IT RATHER THAN RATIFYING IT. ***
+
+     Deriver: offsetof on the real struct, compiled and run (offs.c / offs.out,
+     preserved in this dir):
+        off re_linear_a = 1760 ; re_linear_b = 1888 ; de_reg = 2016
+        re_linear_a[32] IS re_linear_b[0]  : YES   (+0 bytes)
+        re_linear_b[32] IS de_reg[0]       : YES   (+0 bytes)
+
+     The over-run lands INSIDE the same struct, on the adjacent register array.
+     So the true characterisation is:
+        - UB by the C standard (a write past the end of an array object), AND
+        - a SILENT cross-array corruption: re_linear_a[32] clobbers
+          re_linear_b[0]; re_linear_b[32] clobbers de_reg[0], i.e. a
+          RENDERING-engine write reaching a DRAWING-engine register.
+     It is NOT a wild write outside the allocation, NOT a host crash, and plain
+     ASAN would not flag it (intra-object).  The comment I ship says exactly this.
+     Shipping the brief's wording would have been an L4 wrong record in PRODUCT
+     CODE, which is the worst place to put one.
+
+1.3  AGAINST sgi_de's DIFFERENT ACCEPT SET -- deliberately excluded, said out loud.
+     dev_sgi_re.c:692-694 is a SEVENTH live width kill:
+        } else { fatal("sgi_de: len = %i not implemented\n", len); exit(1); }
+     Its accept set is {8, 4}, not {8}.  Same class, different arm, NOT touched by
+     this round; filed as `sgidewidth`.  A round named widthkillclass that repairs
+     six of seven in one file and does not say so writes false unanimity.
+
+1.4  *** AND A NEW FINDING THE PARITY CHECK TURNED UP: sgi_mte's WIDTH KILL IS
+     DEAD CODE. ***  dev_sgi_re.c:1162-1178 reads
+
+        if (len == 4) { ... } else if (len != 4) { ... } else { fatal(); exit(1); }
+
+     The second arm's condition is the NEGATION of the first, so the final `else`
+     is UNREACHABLE and the exit(1) at :1177 can never execute.  Two consequences:
+       (a) the file has 8 width-guard SITES by text but only 7 LIVE ones;
+       (b) sgi_mte therefore accepts len=1 and len=2 into its 8-byte path, writing
+           mte_reg[regnr+1] AND mte_reg[regnr] from a one-byte access.
+     Out of scope here.  FILED as `sgimtedeadwidth` -- reported, not fixed.
+
+================================================================================
+2.  CLAIM -> ROW   (trigger is SEMANTIC: any sentence asserting an observable
+                    consequence, "would <consequence>" included; not a verb list)
+================================================================================
+Every sentence I add to product code, and what observes it:
+
+C1 "Decline instead; the common tail still answers a READ with odata (0)."
+   OBSERVABLE -> ROW `<site> lw surv` (len=4 read survives, exit0) x6.
+   The tail is dead code today (every read path exits); a declined read is the
+   first execution of memory_writemax64 in this handler.
+
+C2 "else-if, NOT an early return: a return here would skip that tail, and
+    `return 0` would raise EXCEPTION_DBE in the guest."
+   COUNTERFACTUAL-CONSEQUENCE claim -> ROW `<site> lw surv` observes that the tail
+   ran (process alive, no DBE).  NOTE: the "return 0 -> DBE" half is observed by
+   NO row -- it describes an edit I did not make.  Recorded here as an EXPLICIT
+   NO-ROW: it is design rationale citing memory_rw.c, and building the DBE mutant
+   would test a fix nobody proposed.
+
+C3 "SIX FLAGS, NOT FOUR: these six windows are walked in ONE session by any driver
+    bringing up the RE, so they are not mutually exclusive at runtime."
+   OBSERVABLE -> ROW `xsite 6msg` (all six windows in one session yield exactly six
+   messages) and ROW `xsite order`.
+
+C4 "(once)" -- asserts the message is emitted AT MOST ONCE per site per instance.
+   OBSERVABLE -> ROW `<site> sw lat1` (two accesses, count == 1) x6.  COUNT, not
+   substring presence: presence passes with the latch deleted, which is M3.
+
+C5 (LINEAR sites only) "len==8 is what keeps tlbi <= 30; a narrower access at
+    +0x7c would write index 32, which IS re_linear_b[0] / de_reg[0]."
+   OBSERVABLE -> PARTIALLY.  The DECLINE is observed by `linear_a/b sw surv` and
+   `sw lat1`.  The ALIASING itself is pinned by the offsetof measurement in 1.2,
+   preserved in this dir as offs.c / offs.out -- NOT by a probe row, because
+   observing the corruption requires reading re_linear_b back and every read path
+   in this handler still exits(1) (sgirekills, a separate round).
+   EXPLICIT NO-ROW, with its reason, and it is OWED to `sgirekills` when that round
+   makes reads observable.
+
+================================================================================
+3.  GUARD FIELD vs BODY FIELD
+================================================================================
+PREDICATE reads : len ; d->warned  (the latch test !(d->warned & BIT))
+BODY reads      : len (printed) ; d->warned (written |= BIT)
+                  -- and NOTHING else.  The decline body touches no other state.
+
+Where do they differ?  They do not: the guard's fields are a SUBSET of the body's.
+There is no third state to build, because the decline body reads no field the
+predicate does not.  Discharged N/A, WITH ITS REASON -- not unrun.
+
+But `d->warned` is a SHARED BITFIELD, which is the question this check should be
+asked instead (the #490 lesson: for a shared bitfield the real question is "who
+else writes this field, and can they set my bit?"):
+   DERIVER: grep -c 'd->warned' after the fix -> 12 (6 tests + 6 sets), ALL SIX
+   pairs inside DEVICE_ACCESS(sgi_re), one per window, with no other writer in the
+   file.  The field is NEW in this round, so there is no pre-existing writer to
+   collide with.  Collision is therefore possible only by two sites SHARING a bit
+   value -- which is M2, and `xsite 6msg` is its row.
+
+================================================================================
+4.  CHANNEL -- per row, the mutant it kills and the observable that differs
+================================================================================
+A row whose named channel cannot vary under its named mutant is VACUOUS BY
+CONSTRUCTION, and that is knowable here, before any table runs.
+
+ row                | kills                          | observable that differs
+--------------------+--------------------------------+--------------------------
+ live               | null medium (wrong/absent bin) | guest value 0x12345678
+ devsig stat        | null medium; wrong device      | 0x1e000000 vs RAM 0
+ <s> sw surv   x6   | (a) pre-fix; (b) verbatim      | process exit status,
+                    |     reinstatement at THIS site |   exit1 -> exit0
+ <s> sw lat1   x6   | M3 latch deleted; d2 "|= BIT"  | COUNT of this site's
+                    |     removed                    |   message: 1 vs 2 vs 0
+ <s> lw surv   x6   | M1 (len!=8 && writeflag ==     | process exit status; a
+                    |     MEM_WRITE) -- the clause-  |   len=4 READ falls to the
+                    |     (d) canonical if(X)->      |   still-live READ kill
+                    |     if(X && Y)                 |
+ <s> accept    x6   | guard-growth (the de-escalation| the arm's own debug() line
+                    |     accept side); guard-only   |   for a LEGAL len=8 write,
+                    |     form -- see note below     |   present vs absent
+ xsite 6msg         | M2 latch-bit collision /       | COUNT of DISTINCT site
+                    |     shared latch               |   messages: 6 vs fewer
+ xsite order        | ANCHOR (clause f): attribution | the SEQUENCE of messages
+                    |     to a SPECIFIC window       |   vs the issue order
+ ld readkill        | CONTRACT: a round that silently| exit1 plus "TODO: read
+                    |     removed the READ kills     |   from" text still present
+ other kill         | CONTRACT: the :372 straggler   | exit1 outside all six
+                    |     still fatal                |   windows
+
+ GROWTH-MUTANT FORM for the accept rows: the latch operand is a per-site
+ COMPILE-TIME CONSTANT the guard cannot feed, so guard-only widening is
+ NON-EQUIVALENT and quieter than joint -- by the discriminator, guard-only is the
+ form to build.  Mutant: `len != 8` -> `len != 8 || (relative_addr & 8)`, a
+ plausible "tighten to 16-byte alignment" edit.
+
+ *** ACCEPT ROWS ARE THEREFORE PROBED AT AN OFFSET WITH BIT 3 SET, or the growth
+     mutant cannot redden them.  That is a row-DESIGN consequence derived HERE,
+     before the table: an accept row at +0x00 would be green under its own growth
+     mutant, i.e. vacuous by construction. ***
+
+ ANCHOR CHECK (clause f), in its own words: "if every window's message were
+ attributed to the WRONG window, which row reds?"  -> `xsite order`, and only it.
+ Without it the six per-site rows run in six SEPARATE sessions, and each would pass
+ if the code emitted ANY site's message, because only one site is touched per
+ session.
+
+================================================================================
+5.  THE ROW SET PRESCRIBED BY THIS BLOCK  (diff the final list against this)
+================================================================================
+  2  controls        live, devsig stat
+ 24  per site x6     sw surv, sw lat1, lw surv, accept
+  2  cross-site      xsite 6msg, xsite order
+  2  contract        ld readkill, other kill
+ --
+ 30  rows
+
+ *** A LATER ROW LIST REWRITTEN FROM A PANEL'S FINDINGS IS DIFFED AGAINST THIS
+     LIST, NOT MERELY EXTENDED WITH THE NEW ONES.  #490 lost two prescribed rows
+     in exactly that way. ***
+
+PRETABLE_DONE
+
+================================================================================
+ADDENDUM -- added 19:22, AFTER a timing mutant and floor (a)/(c), and BEFORE the
+definitive 35-row table.  Recorded as an addendum rather than folded into the
+text above, because the order property is the whole value of this file and
+silently rewriting it would destroy exactly what it exists to prove.
+
+WHAT RAN BEFORE THIS ADDENDUM (30-row instrument, superseded):
+   d_andwrite  24/30 ; floor (a) 10/30 ; floor (c) CONTROL=DEAD
+WHAT RUNS AFTER IT: everything, re-run from scratch on the 35-row instrument.
+
+--------------------------------------------------------------------------------
+A1.  THE LEFTOVER, PROMOTED FROM A SENTENCE TO SIX MEASURED ROWS
+--------------------------------------------------------------------------------
+The main loop and two review seats independently reached a disclosure this round
+owes, and it follows directly from the 6-width/6-read pairing in section 0:
+
+  *** THE WIDTH GUARD IS EVALUATED FIRST.  So after #497 a 4-byte read DECLINES
+      safely -- but an ordinary 8-byte `ld' to each of the six fixed windows
+      STILL ENDS THE HOST, because len == 8 passes the width guard and falls
+      straight into the read arm's exit(1) (lines 245 262 279 296 346 362). ***
+
+The pairing does not merge the two classes; it makes the LEFTOVER EXACT: fixing
+six width kills leaves exactly six read kills at the same six offsets.  Without
+this, a reader of #497 reasonably concludes reads were made safe -- the same
+false-unanimity obligation as naming sgidewidth in 1.3.
+
+I am NOT taking it as a sentence.  ROW LIST DIFF against section 5, stated
+explicitly because #490 lost two prescribed rows to an undiffed rewrite:
+
+   REMOVED : `ld readkill'      1 row , TLB_A only
+   ADDED   : `<s> ld kill'      6 rows, one per window
+   NET     : 30 -> 35 rows.  Every other row in section 5 is unchanged and
+             none of its prescribed rows was dropped.
+
+CHANNEL for the new rows (the section 4 obligation, discharged for them):
+   kills      -- a silent removal of the READ kills, at any single window;
+                 and any future merge of sgirekills into this round's scope
+   observable -- process exit status AND the read arm's own text
+                 "TODO: read from <SYM>", per window: exit1+txt vs exit0
+
+A2.  WHY THE SPLIT FROM sgirekills IS CORRECT, recorded so it is not re-argued
+   1. the fix designs genuinely fork: decline-return-0 vs implement-readback;
+   2. DISPOSITIVE -- sgirekills has NO WITNESS, so the round-scope rule's joiner
+      clause makes combining not merely undesirable but impossible today;
+   3. merging on "the window still kills the host" proves too much: by that
+      logic every unimplemented arm is one giant round, which is the #392 shape.
+
+A3.  ADDRESS DERIVATION -- INDEPENDENTLY AGREED, NOT ASSUMED
+   machine_sgi.c:500 passes base 0x15000000; dev_sgi_re_init registers sgi_re at
+   baseaddr + 0x1000 for DEV_SGI_RE_LENGTH (0x1000); the handler restores the
+   full offset with relative_addr += 0x1000.  crmfbreg.h gives the six window
+   constants 0x1000/0x1200/0x1400/0x1600/0x1700/0x1780.
+   KSEG1: 0xb5001000 / 0xb5001200 / 0xb5001400 / 0xb5001600 / 0xb5001700 /
+          0xb5001780 -- all inside 0x15001000-0x150017ff, cascade disjoint.
+   The main loop derived these independently and they match the probe's SITES
+   table BYTE FOR BYTE.  Agreement between two derivations, not a shared guess.
+   The straggler row `other kill' uses 0xb5001800, the first address past
+   LINEAR_B and still inside the device's 0x1000-byte registration.
+
+A4.  ONE HONEST READING OF FLOOR CLAUSE (c), so nobody reports it wrongly
+   The null medium (/bin/true) scores 12/35-equivalent, NOT 0.  Rows whose want
+   is `exit0' pass trivially against a binary that exits 0.  THE DISCRIMINATOR
+   IS THE `OPUS497T_CONTROL=DEAD' LINE, not the score: the identity rows (live,
+   devsig stat) fail, which is what clause (c) actually requires.  A reader
+   quoting only the fraction would report a null medium as partial success.
+--------------------------------------------------------------------------------
+PRETABLE_ADDENDUM_DONE
+
+================================================================================
+ADDENDUM 2 -- written while the definitive table was RUNNING.  It changes NO
+rows and NO instrument; it is analysis and two record corrections.  The frozen
+probe md5 d04d6bc42baf0600e65c4417a535cb41 is untouched by it.
+================================================================================
+
+B1.  CORRECTION TO SECTION 1.4 -- THE ID IS `sgimtewidth`, NOT `sgimtedeadwidth`
+     I proposed filing a new id.  It is ALREADY FILED as `sgimtewidth`, opened
+     the same morning from a pass-1 reading, which records that the dead third
+     arm is unreachable for every integer len.  I reached the same arm from the
+     opposite direction -- a sibling-parity check on a different round -- so this
+     is CORROBORATION, not a second defect.  A duplicate id would split one
+     defect's evidence across two rows and let a future round close one while the
+     other stayed open.  Section 1.4's finding stands; only its disposition
+     changes.  What the re-discovery added to the existing row: the precise
+     extent (:1162-1178, unreachable exit(1) at :1177) and the count -- EIGHT
+     width-guard sites by text, SEVEN live.
+
+B2.  DO THE ROWS NEED TO BE ASYMMETRIC, GIVEN THE ARMS ARE?   ANSWER: NO.
+     Asked because section 1.1 found the six arms genuinely asymmetric -- for
+     LINEAR_A/B the guard is the only bounds check, for TLB/TEX it is fidelity
+     only.  The tempting inference is that the LINEAR sites need an extra row
+     observing the cross-array write.  They do not, on two INDEPENDENT grounds,
+     and the first is the one that generalises:
+
+     (i) ROW DEMAND IS BOUNDED PER ENUMERATED MUTANT, NEVER PER PERCEIVED RISK.
+         So the test is: is there an ENUMERATED mutant that reopens the LINEAR
+         over-run and that no existing row kills?  Walking the closure:
+            b_lina / b_linb    -> killed by `linear_x sw surv'
+            d_ifnotelse        -> killed by `linear_x lw surv' (the declined READ
+                                  falls through to the read kill).  This is the
+                                  mutant that actually restores the over-run, and
+                                  it is ALREADY caught -- by a symmetric row.
+            d_andwrite         -> killed by `linear_x lw surv'
+            d_growth           -> killed by `linear_x accept'
+         Every enumerated mutant that reopens it is already killed.  And the edit
+         that would widen the over-run directly -- `& 0x1f' -> `& 0x3f' -- is
+         NOT in the clause-(d) closure at all: that closure covers predicates
+         DOMINATING the edited lines plus guard-operand swaps, and `& 0x1f' is
+         neither.  It is in the guarded BODY, untouched by this diff.
+         A row added here would be owed by no mutant.  That is the addition
+         licence's "cannot hurt" wearing detector clothes, and it is refused.
+
+     (ii) AND IT IS NOT CONSTRUCTIBLE TODAY ANYWAY.  Observing the clobber means
+         reading re_linear_b[0] or de_reg[0] back, and every read arm in this
+         handler still exit(1)s.  This is section 2's claim-C5 EXPLICIT NO-ROW,
+         restated: the aliasing is pinned by offsetof (section 1.2), not by a
+         row, and the row is OWED TO sgirekills when that round makes reads
+         observable.
+
+     *** SO THE ASYMMETRY IS IN WHAT THE GUARD PROTECTS -- a fact about the
+         SEVERITY of a regression -- NOT in what can reopen it.  Severity ranks
+         the queue; it does not demand rows.  Conflating the two is how a row set
+         grows without bound. ***
+
+B3.  THE BRIEF'S WORDING, DISPOSED OF AS MEASURED
+     Section 1.2's refutation is accepted by the main loop in full.  The shipped
+     comment carries the MEASURED characterisation (UB + silent intra-struct
+     cross-array corruption, invisible to plain ASAN) and appears at the TWO
+     LINEAR SITES ONLY; the four non-LINEAR sites carry no memory-safety claim,
+     because for them there is none to make.  Verified in the built source at
+     lines 356-374 (LINEAR_A) and its LINEAR_B twin.
+
+PRETABLE_ADDENDUM2_DONE
+
+================================================================================
+ADDENDUM 3 -- two PROCESS findings from running the table, recorded while
+table 1 was still going.  Neither changes a row.  Both are about the apparatus.
+================================================================================
+
+C1.  *** MY OWN FROZEN-COPY DISCIPLINE HAD A HOLE, AND I FOUND IT BY ALMOST
+     FALLING IN. ***
+     The frozen-copy rule says run a long job from a copy so the original is free
+     to edit.  I froze the DRIVER (table497.sh) and the PROBE
+     (sgi_re_width_probe.py) -- and pointed the driver's MUT variable at the LIVE
+     scratchpad mutator, which it re-invokes ONCE PER MUTANT.
+
+        MUT=/mnt/c/.../scratchpad/gx497/mutate497.py     <- not frozen
+
+     So editing the mutator mid-table would have changed the instrument BETWEEN
+     ROWS of one comparison, silently.  I was about to do exactly that -- to add
+     the e_swapsite mutant described below -- and stopped only because I checked
+     where MUT pointed before typing.
+
+     This is the carrier's Python re-read hazard one level out: the rule protects
+     the file you are thinking about, and the failure lands on the file you are
+     not.  A driver freezes EVERY artifact it reads, not just itself.
+     Fixed in table497_v2.sh, which runs /tmp/gx497_mutator_frozen.py, and which
+     hard-exits if that file is missing rather than falling back to a live path.
+
+C2.  A MUTANT ADDED BECAUSE THE CHANNEL CHECK SAID A ROW MIGHT BE VACUOUS
+     -- and note this adds NO ROW, so section 5's row list is UNCHANGED at 35.
+     Row demand is bounded per enumerated mutant; MUTANT demand is not row demand,
+     and adding an adversarial mutant to test an existing row is free of the
+     growth hazard the addition licence guards against.
+
+     `xsite order' was prescribed as the ANCHOR row.  Re-reading section 4's
+     CHANNEL obligation against the actual mutant list, every mutant that reds it
+     -- e_wrongsite, d_sharedbit, d_bitcollide, every b_<site> -- ALSO reds
+     `xsite 6msg', because each makes a symbol VANISH from the transcript.
+     A row with no kill of its own is vacuous by construction, which is precisely
+     what the CHANNEL line exists to catch at writing time.
+
+     `e_swapsite' fixes that: it SWAPS TLB_B's and TLB_C's symbols, so all six
+     literals remain present exactly once (verified in a dry run: declines=1 for
+     each of the six) and only their POSITIONS are wrong.
+        predicted:  xsite 6msg GREEN, xsite order RED  -> 34/35
+     If instead both go red, my reading of the swap is wrong and I will say so.
+     If `xsite order' stays GREEN, the row is vacuous and comes out or is
+     re-cut -- an L1 pre-ship construction call, not a reopening.
+
+PRETABLE_ADDENDUM3_DONE
+
+================================================================================
+ADDENDUM 4 -- *** I ALMOST SHIPPED THE EXACT DEFECT I CAUGHT IN THE BRIEF, AND
+THE CAUSE WAS MY OWN FIX. ***  Found while table 1 was running; corrected in the
+source that table 2 measures.
+================================================================================
+
+WHAT HAPPENED.  Section 1.2 refuted the brief's "host memory safety" wording by
+measuring the struct with offsetof, and the shipped LINEAR comments assert:
+
+      re_linear_a[32] IS re_linear_b[0]   and   re_linear_b[32] IS de_reg[0]
+
+Both were measured TRUE -- of the PRE-FIX struct.  My fix then inserted the new
+latch field BETWEEN re_linear_b and de_reg:
+
+      uint32_t re_linear_b[32];
+      uint32_t warned;          <-- inserted here
+      uint32_t de_reg[...];
+
+Measured on the POST-FIX struct as first drafted (offs2.c / offs2.out):
+
+      re_linear_b[32] IS de_reg[0] : NO   <-- THE COMMENT WAS FALSE
+      re_linear_b[32] IS warned    : YES
+
+TWO PROBLEMS, and the second is worse than the record defect:
+  1. L4 WRONG RECORD IN PRODUCT CODE -- the same failure I had just refused to
+     commit on the brief's behalf, reintroduced by my own hand, in the same
+     comment block, within the same hour.
+  2. WORSE ENGINEERING.  With `warned' in that slot, a LINEAR_B over-run sets
+     WARNING LATCH BITS -- so the device's response to being corrupted is to go
+     QUIET about being corrupted.  That is a strictly nastier failure mode than
+     clobbering a DE register, and it was self-inflicted.
+
+THE FIX: `warned' moves to the END of the struct, after mte_reg, with a comment
+recording that the placement is load-bearing and why.  Re-measured (offs3.c):
+
+      re_linear_a[32] IS re_linear_b[0] : YES
+      re_linear_b[32] IS de_reg[0]      : YES
+      re_linear_b[32] IS warned         : no
+      ADJACENCY_AS_DOCUMENTED=YES
+
+Verified additionally: syntax clean, and the ONLY non-comment difference from
+table 1's source is the field's own line moving -- no guard-region code changed.
+
+*** THE GENERAL LESSON, which is not about this struct. ***  An offsetof
+measurement is a claim about a STRUCT AT A MOMENT, and a diff that adds a FIELD
+invalidates it -- including the diff that cites it.  This is the carrier's
+"an exemplar is a DATED MEASUREMENT wearing the clothes of an illustration",
+reached from a new direction: here the measurement was invalidated not by drift
+over weeks but BY THE VERY CHANGE THAT QUOTED IT, seconds later.
+
+      A COMMENT ASSERTING FIELD ADJACENCY MUST BE RE-MEASURED AGAINST THE
+      POST-DIFF STRUCT, NOT THE PRE-DIFF ONE, WHENEVER THE DIFF ADDS A MEMBER.
+
+Cheap, mechanical, and it would have caught this in one command.  It is now a
+step in table 2 (B3) that FAILS the run if the adjacency does not hold, so the
+claim cannot silently go false again.
+
+*** AND NOTE WHAT DID NOT CATCH IT: not the 35-row detector, not the floor
+clauses, not the panel.  No row observes struct layout, and none should -- the
+over-run is not guest-reachable while the guard stands, which is the whole point
+of the round.  It was caught by asking what my own diff did to a number I had
+measured 40 minutes earlier. ***
+
+PRETABLE_ADDENDUM4_DONE
+
+================================================================================
+ADDENDUM 5 -- HANDOFF FACTS for whoever commits this.  Independent of the table.
+================================================================================
+
+D1.  THE PROBE MUST BE WIRED INTO A GATE, OR CARRY A DATED EXEMPTION.
+     tools/pipeline/check_probe_wiring.py enforces that every committed detector
+     under regress/ is RUN by a gate.  Its header records the failure it was
+     built after: SIXTY-SIX detector rows across four rounds defended nothing
+     between batteries because no gate ran them, and no gate, check or ledger
+     field could say so.  Committing sgi_re_width_probe.py to regress/ WITHOUT a
+     gate call reproduces exactly that.
+     The naming convention already matches the tree (asic_badaddr_probe.py,
+     gdrom_cond_probe.py), and the invocation shape gates use is
+        python3 <name>_probe.py "$BIN" > "$LOG" 2>&1 || true
+     followed by count/check rows against $LOG.
+
+D2.  *** THE ROW COUNT HAS TWO DIFFERENT RIGHT ANSWERS, AND THEY MUST NOT BE
+     CONFLATED -- this is the counts rule applied before anyone writes one down. ***
+        10  row() CALL SITES     -- what check_probe_wiring.py counts, via ast
+        35  EMITTED rows         -- what the probe prints and what OPUS497T_RESULT
+                                    denominates
+     They differ because four call sites sit inside a `for' loop over the six
+     SITES, and one more loops for the ld-kill rows.  Deriver for the first:
+        python -c "import ast,io;t=ast.parse(io.open(F).read());print(sum(1 for n
+        in ast.walk(t) if isinstance(n,ast.Call) and getattr(n.func,'id','')=='row'))"
+     Deriver for the second: the OPUS497T_RESULT denominator in any preserved log.
+     check_probe_wiring.py's own header warns about precisely this shape -- its
+     first census used a grep and silently dropped every control row that was not
+     R-prefixed.  A round record saying "35 rows" next to a checker reporting 10
+     is not a contradiction; it is two units, and each must name its deriver.
+
+D3.  est/ PROPAGATION IS OWED.  dev_sgi_re.c is NOT in tools/est_divergence.txt
+     (re-derived: that file lists SIX paths, and CLAUDE.md's prose says SEVEN --
+     flagged, not resolved, since it is not this round's file to correct).  est/'s
+     copy is byte-identical to SEC's today (both md5 01f5a74064b9f96127d9fcca01bdd03a),
+     so precommit_check.sh section A will require the fix to land in BOTH trees
+     byte-identically.
+     *** A METHOD WARNING FROM MY OWN SESSION: I first "checked" this with
+     `grep -c ... && ... cmp -s ... && echo IDENTICAL || echo differs' and it
+     printed "est differs or absent" -- because grep -c returning 0 EXITS 1 and
+     short-circuited the whole chain, so THE cmp NEVER RAN.  The md5s settled it.
+     A && chain reports the first failure as though it were the last test's
+     answer; do not put a test after a counter in one chain. ***
+
+PRETABLE_ADDENDUM5_DONE
