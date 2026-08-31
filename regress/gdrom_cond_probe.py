@@ -584,6 +584,26 @@ t, alive, how = session(store16(GDROM_COND, 0x00ef, A)
 #  `storesidedead` member -- the class applies to a row that drives TWO stores whenever
 #  only one of them is load-bearing.
 m = COND_RE.search(t)
+#  *** AND THE MUTANT THIS ROW USED TO NAME IS ONE R12b ALREADY SUBSUMES.  Corrected
+#  2026-08-30 by the adjudicating seat, which checked rather than agreed. ***
+#
+#  The stated mutant was a conjunction `(idata & 0x09) == 0x09`.  R12b drives 0xff, and
+#  0xff passes EVERY `(idata & M) == M` -- so R12b kills that form on its own and this
+#  row adds nothing against it.  A row is justified by a mutant no OTHER row catches,
+#  and citing a subsumed one overstates the suite while looking like coverage.
+#
+#  THE DISCRIMINATING FORM IS AN EXACT LOW-NIBBLE MATCH, `(idata & 0x0f) == 0x09`:
+#      0xff -> 0x0f != 0x09   R12b stays GREEN and misses it
+#      0x09 -> forges cond=0x09, and this row reds on field 1 (0x9 != 0xef)
+#  So R5d earns its place -- on that mutant, not on the one it used to claim.
+#
+#  LATENT FRAGILITY, worth stating because it is invisible from the row: field 2 works
+#  ONLY while 0xef stays an ACCEPTED value.  The device announces nothing for 0xef, so
+#  the sole COND_RE match is the 0x09 decline.  If a future round moved 0xef to the
+#  declined side, the ANCHOR store would consume the `(once)` latch, the 0x09 decline
+#  would print nothing, and field 2 would read "absent" for a reason unrelated to the
+#  rule under test.  The row would red -- loudly, which is the safe direction -- but for
+#  the wrong reason, and whoever sees it should read this note before re-pinning.
 row("R5d cond 09", "%s|%s" % (printed(t, "r2"), m.group(1) if m else "absent"),
     "0xef|09", "a decline carrying BOTH bits 0 and 3 is refused too")
 

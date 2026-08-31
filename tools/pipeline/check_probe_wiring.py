@@ -1112,10 +1112,18 @@ def _pick_exempt_detector():
     **The `count == 1` guard is still load-bearing and its warrant has MOVED.**  It no
     longer defends against a formatting mismatch -- extraction cannot have one.  It
     defends the SELF-MATCH case: a doc comment in this file quoting an EXEMPT line makes
-    the extracted text appear twice, and `_st_apply`'s exact-string replacement would
-    then edit the comment instead of the table.  Measured by that same seat: a comment
-    quoting one EXEMPT entry sends the mutant to `x2`, i.e. it applies in two places and
-    the rule under test is not the one exercised.
+    the extracted text appear twice.  **The MECHANISM stated here was wrong until the
+    adjudicating seat built the case: `_st_apply` does NOT silently edit the comment
+    instead of the table -- it COUNTS and RAISES**, `MUTANT DID NOT APPLY: '...' x2
+    (want 1)`.  So the guard prevents a selftest CRASH, not a silent wrong-edit, and
+    `_st_apply`'s own raise is a second line of defence behind it.
+
+    Two facts the seat measured that belong here: injecting a verbatim copy of one
+    EXEMPT entry makes `src.count()` return 2, the guard skips that name and returns
+    the next candidate -- so it is genuinely load-bearing.  And **it never fires
+    today**: all six counts are 1.  It is a LATENT defence, which is worth saying
+    plainly, because a guard that has never fired is the one most likely to be
+    deleted as dead by someone who does not know what it is for.
 
     *A guard whose stated reason expires but whose behaviour is still needed is the
     hardest kind to audit: deleting it looks safe, because the case it cites is gone.*

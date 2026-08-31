@@ -140,6 +140,58 @@ seat's findings consolidated into one numbered packet with the author's disposit
 disagreements listed with both sides in their own words, and all nine re-fired on it.
 **Eleven findings upheld, none overturned, three refined, and one row nobody had thought of.**
 
+### *** THE ADDENDUM: A PASS-2 SEAT MEASURED ONE OF THIS ROUND'S OWN ROWS TO BE VACUOUS,
+### AND THE ROUND HAD ALREADY WRITTEN DOWN THE RULE IT BROKE. ***
+
+`R5d` was **STORE-DEATH VACUOUS** in the 24-row detector this round shipped.  Cut the one
+store the row exists to test and the detector still reports **24/24** -- byte-comparable to
+the round's own preserved `baseline_24of24.out`.  Its want (`printed(t,"r2") == "0xef"`)
+was placed entirely by the ANCHOR store; the `0x09` decline it names contributed no channel
+at all.
+
+> **The part that outlives the row: this same commit STATES the governing rule, in `R12`'s
+> own comment -- *"wants an observable ONLY THE STORE CAN PRODUCE"* -- and violates it 130
+> lines earlier, in a row added by the same diff.  R12's repair and R5d's introduction
+> shipped together.**
+
+That is the pre-table block's CHANNEL check failing at row-writing time **with its own
+sentence already in the file** -- this project's trigger-versus-memory finding arriving
+inside the artifact built to fix it.  Knowing a rule and having it fire on the right object
+are different problems, and only the second is solved by writing more.
+
+The repair is measured in BOTH directions: the same cut against the repaired row gives
+`0xef|absent` against `0xef|09`, **the only FAIL in 28 rows**.  The detector is now 31 rows.
+
+**THE CITABLE BASELINE**, which the shipped oracles owed and did not have:
+
+    regress/artifacts/gdromcondlies/baseline31_20260830/run31_full.out
+    31/31, 0 FAIL, GDROMCOND_CONTROL=OK *and* GDROMCOND_CONTROL_END=OK
+
+The trailing control pair is not decoration.  A contended run once scored **18/25 with
+`CONTROL=OK`** -- seven phantom failures -- because the controls all run in the first third
+of the log, so a run that degrades afterwards reports healthy apparatus beside a wall of
+product FAILs.  The pass-2 seat reached that same hazard independently, from the other side,
+after its own three-store cut cascaded and it **retracted its first result rather than
+filing it**: the unmodified probe scores 25/25 on an idle machine, so the cascade was the
+seat's, not the probe's.  *A structural observation with no measured instance, recorded as
+exactly that.*
+
+The run's log also carries the **two-part clearance in its own header** --
+`PART1_cmp_vs_SEC=CLEAN`, `PART2_binary_newer=YES` -- rather than asserting it beside the
+record.  That is deliberate: this round's `build/` tree was found with the binary **fifteen
+minutes OLDER than the source it was built from**, `cmp` clean, no `.MUTANT` sentinel, and
+`CHECKPOINT.md` asserting the clearance held.  Third recorded instance of
+propagate-and-forget-to-rebuild.  Severity was NIL here and the seat said so rather than
+inflating it -- the delta was comment-only, verified as zero non-comment diff lines -- so a
+wrong RECORD, not a wrong measurement.  **Run it; do not assert it.**
+
+One honest narrowing, because the seat bounded its own finding: `R12b` **subsumes R5d's
+stated mutant** (`0xff` carries bits 0 and 3 both).  R5d still earns its place -- a
+conjunction ANDed with `idata < 0x80` escapes R12b -- but *"R5d is needed for the conjunction
+family"* is a stronger claim than the evidence supports, and the row comment should say the
+narrower thing.
+
+
 ## Round wdcatapistswap -- the accept side of #495's guard, and a floor breach found
 ## while pinning it
 
