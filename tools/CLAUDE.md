@@ -3111,10 +3111,48 @@ NORMAL mid-run state, and the size rule would have declared a healthy seat dead.
 inside a Bash call dies silently. What failed is the DISCRIMINATOR it offered, which is
 the exemplar problem again -- the incident's own shape taken for the class.*
 
-**Use `run_in_background: true`** (the harness tracks it and notifies on exit) or
-`nohup ... &` if it must be inline — a `nohup`'d `panel.sh` in the same session
-survived fine, which is what isolates the cause to process teardown rather than to
-WSL.
+**Use `run_in_background: true`** (the harness tracks it and notifies on exit).
+
+> ### *** THE PROCESS CHECK THIS FILE PRESCRIBES IS **ARGUMENT-BLIND ON THIS MACHINE**, SO IT
+> ### RETURNS "DEAD" FOR EVERY SCRIPT, ALWAYS.  Measured 2026-08-31 -- and I believed it, wrote
+> ### a false correction into this file on the strength of it, and had to take the rule back. ***
+>
+> git-bash `ps -ef` prints the **executable path and no arguments**:
+>
+>     User00    7854       1 ?  03:32:47 /c/Users/.../Python312/python
+>
+> So `ps -ef | grep -c 'panel_ollama'` returns **0** and `grep -c 'python'` returns **2**, on the
+> same processes, in the same second.  **Any pattern naming a SCRIPT -- `panel_ollama`,
+> `gate_arm.sh`, `make -j4` -- can never match, so the check answers "not running" whether or
+> not anything is running.**  That is this file's own check-that-cannot-fail shape, sitting
+> inside the remedy it recommends for the previous one: the bracket trick
+> (`ps -eo pid,args | grep -E "[m]ake"`) presumes an `args` column that MSYS `ps` does not have.
+>
+> **WHAT IT COST, because the damage was not the wasted check.**  Three cloud seats were
+> launched `nohup ... &`; the blind check said 0 alive; I concluded nohup had failed, relaunched
+> all three, and **ran two writers against the same three output files** -- `ollama_deepseek.txt`
+> was measurably truncated and rewritten, 3475 -> 2928 bytes, between two reads.  Then I wrote a
+> rule into this file saying *nohup is not a reliable fallback*.  **It is; the check was blind.**
+>
+> **THE DISCRIMINATOR THAT SETTLED IT, and it is available in the same command:** a python with
+> **PPID 1** and a start time matching the FIRST launch is an orphaned `nohup` survivor -- which
+> is exactly what `ps -ef` showed once I read the PPID column instead of grepping for a name.
+>
+> **SO, ON THIS MACHINE:**
+>
+>     ps -ef | grep <script-name>    -> ALWAYS 0.  Never use it.  It cannot fail.
+>     ps -ef, read PPID + START      -> works; PPID 1 means orphaned/nohup'd
+>     tasklist | grep -i '^python'   -> works (Windows-native; image name, still not args)
+>     the redirect target's SIZE     -> works, and is the cheapest of the three
+>
+> **And the standing advice is unchanged and is what avoids all of this: long jobs go to
+> `run_in_background`, which the harness tracks and which notifies on exit** -- no process check
+> needed, and no chance of a second launch racing the first.
+>
+> *Recorded in this shape because the near-miss is the instructive part: I ran a check, got a
+> confident answer, acted on it, and the action created a real defect (duplicate writers) that
+> nothing would have reported.  The file changing size between two of my own `ls` calls is what
+> gave it away -- a contradiction, which this file already names as the cheapest signal there is.*
 
 *Note this is the MIRROR of the hazard below, and the two want opposite reflexes: a
 TIMED-OUT foreground run keeps going invisibly, while a plain-`&` run dies
