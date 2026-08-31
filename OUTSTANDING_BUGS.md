@@ -13277,6 +13277,88 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `lcabadval` (HIGH) -- four registers accept exactly one value each and kill on the rest
+
+```c
+if (idata != 0x700000ULL) {
+        fatal("... (0x%" PRIx64") from the only implemented value
+", idata);
+        exit(1);
+}
+```
+
+Four of these — `idata != 0ULL && idata != 0x300800000ULL`, `!= 0x700000ULL`,
+`!= 0x240000000ULL`, `!= 0x3ff00000ULL` — plus two single-bit masks (`idata & ~1`,
+`idata & ~IOC_TB_ENA_TEN`). Eleven live terminating calls in the file.
+
+**The #443 BADVAL class**, the same shape as `gdromcondlies` (rated HIGH, since fixed) and
+`sgideprimop` (filed HIGH tonight). The author documented the decision rather than hiding it —
+each diagnostic says *"from the only implemented value"*. An honest TODO expressed as a host kill.
+
+> **A guest here is FIRMWARE** — SRM or NetBSD bringing up the chipset — so the reaching value is
+> whatever that firmware writes, not an attacker's choice. A model implementing one value and
+> dying on the rest converts every unmodelled firmware revision into a host death.
+
+**Scope, stated so it is not over-claimed:** the two *range* guards (`dev >= 21`, `ofs > len`)
+are a different question and are **not** analysed here. A bounds guard that kills may be
+protecting a real array, and deciding that needs the geometry — the exact check that withdrew
+`sgideoob` as a false OOB. Named, not judged.
+
+**Single consumer: `machine_alpha.c:61`**, `device_add(machine, "lca")`. No alpha rig here —
+the same reason `dev_pcc2.c` escaped notice. No rig means no coverage, not no bug.
+
+*Companion to `pcc2widthkills`, deliberately examined separately. Both surfaced from one question
+— is `dev_sgi_re.c` uniquely bad or uniquely looked at? — but they are different classes: pcc2 is
+WIDTH kills, this is VALUE kills. Filing them as one row would merge two fix designs, and a
+census that finds two files at once is exactly where over-claiming starts.*
+
+### `pcc2widthkills` (HIGH) -- twelve width kills, twice `#497`'s six, in a file nobody looked at
+
+Every one is the same shape:
+
+```c
+case PCCTWO_GENCTL:
+        if (len != 1) {
+                fatal("TODO: pcc2: non-byte reads and writes of PCCTWO_GENCTL
+");
+                exit(1);
+        }
+```
+
+Twelve of them — lines 359, 371, 394, 407, 429, 467, 477, 492, 507, 528, 543, 563 — **all
+`len != 1`, all ending the host**, verified by walking each guard's block rather than grepping
+adjacency. Seventeen terminating calls in the file overall.
+
+**The same class `#337` fixed in `dev_wdc.c` and `#497` fixed in `dev_sgi_re.c`, at twice the
+site count.** The message says it plainly: *TODO: non-byte reads and writes*. The author knew
+the width was unimplemented and chose to kill rather than decline.
+
+> **Reachability is STRONGER than `sgidewidth`'s, and the domain was checked first this time.**
+> `sgidewidth`'s exotic widths turned out unreachable because the MIPS core raises ADEL/ADES.
+> No such filter helps here: the killing widths are **2, 4 and 8 — all ordinary, all naturally
+> alignable.** A plain aligned 4-byte read of `PCCTWO_GENCTL` needs no misalignment, no
+> truncation, no unusual instruction.
+
+**No out-of-bounds** — checked specifically, because a false OOB was withdrawn on this exact
+shape days ago: `relative_addr %= PCC2_SIZE` caps the index and an explicit end-span guard
+(`OB-11`) covers the memcpy path.
+
+**How it was found, because the method transfers.** All four HIGH rows tonight were in
+`dev_sgi_re.c` — which invites the question of whether that file is uniquely *bad* or uniquely
+*looked at*. Kill density against ledger attention answers it:
+
+    dev_sgi_re.c   15 exits  11 rows  4 HIGH    heavily examined
+    dev_pcc2.c     13 exits   2 rows  0 HIGH    barely examined
+    dev_lca.c      11 exits   2 rows  0 HIGH    barely examined
+
+**Comparable density, incomparable attention.** `dev_lca.c` is deliberately *not* examined in
+the same breath — a second file's worth of claims made on momentum is how a census gets
+over-claimed.
+
+*Only consumer is `machine_mvme88k.c`, and there is no mvme88k rig here — which is why it
+escaped notice, and why a witness is harder than for the sgi rows. No rig means no coverage,
+not no bug: it ranks on the defect, not on the ease of proving it.*
+
 ### `sgideprimop` (HIGH) -- a correct driver drawing a point or a triangle ends the host
 
 `draw_primitive()` reads its op straight from a guest-written register:

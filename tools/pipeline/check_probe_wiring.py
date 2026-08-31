@@ -267,6 +267,37 @@ MANIFEST = {
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
 
+    #  sgidewidth, 2026-08-31.  The measuring seat's rung-3 witness, attribution probe and
+    #  25-row / nine-build kill table, preserved because the seat reported them VOLATILE.
+    #  CLASS_RESEARCH on the #497 precedent: EVIDENCE, not detectors the battery owes a run.
+    #
+    #  *** EVERY DRIVER HERE IS A `_frozen` COPY, AND THE NAMING IS THE POINT. ***  The
+    #  carrier mandates a frozen copy for a comparison run -- editing a script a job is
+    #  reading corrupts that run in bash, and re-reads it between runs in python.  These
+    #  filenames make the obedience auditable rather than asserted.
+    #
+    #  `gxdew_mz_frozen.py` and `gxdew_mzp_frozen.py` are kept as a PAIR and must not be
+    #  pruned to one: they differ only in the byte `#95` fills (0x00 vs 0xa5), and the pair
+    #  is the control that showed a declined read returns a DETERMINISTIC value tracking
+    #  that byte.  That is what retracted my claim that the early-return mutant's observable
+    #  is nondeterministic -- keeping only one erases the attribution.
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_probe_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth rung-3 WITNESS as measured -- 4/4 kills, liveness + device-signature controls"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_probe2_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth attribution probe -- 24/24, offsets differing ONLY in bit 0x800"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_kill_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth table-1 driver, frozen for the duration of the run"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_kill2_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth table-2 driver (25 rows, 9 builds), frozen"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_mutate2_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth mutator, frozen so a re-run cannot silently differ"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_mr_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth mR variant builder -- the goto-to-common-exit shape, 25/25"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_mz_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth #95 attribution builder -- fill 0x00, the control that refuted my retraction"),
+    "artifacts/sgidewidth/opus_witness_20260831/gxdew_mzp_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth #95 attribution builder -- fill 0xa5, the paired control"),
+
     #  sgireunmapped, 2026-08-31.  The measuring seat's RUNG-3 WITNESS set, preserved
     #  because the seat reported its artifacts were in VOLATILE SCRATCH and would be lost.
     #  CLASS_RESEARCH on the #497 precedent above: EVIDENCE, not detectors the battery owes

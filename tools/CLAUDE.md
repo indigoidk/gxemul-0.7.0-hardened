@@ -678,6 +678,25 @@ Measured 2026-08-22. ***
 hardened fork. The four fork trees are `GXEMUL-SEC/`, `est/`, `build/`, `build-asan/` (plus
 WSL `/tmp/gxsec-build`).
 
+> #### *** AND ON 2026-08-31 IT CAUGHT THE MAIN LOOP, NOT A SEAT.  THIS WHOLE SECTION IS
+> #### WRITTEN AS A WARNING ABOUT SEATS WITH `--add-dir`; THE PERSON IT ACTUALLY BIT WAS ME. ***
+> 
+> I "refuted" a flagship seat's claim that `memory_rw.c` pre-zeroes a device read buffer, by
+> grepping `src/cpus/memory_rw.c` while the cwd had drifted to the PROJECT ROOT.  That resolved
+> to the pristine 2021 copy -- **530 lines against the fork's 794** -- which genuinely does not
+> have the `#95` pre-zero.  The fork does, at `if (writeflag == MEM_READ) memset(data, 0, len);`
+> immediately above `paddr -= mem->devices[i].baseaddr;`.  The seat was right, I shipped the
+> refutation in a commit, and reported it to the owner as a finding.
+> 
+> > **THE TELL WAS IN MY OWN OUTPUT AND I DID NOT READ IT.  Every line number I quoted -- 161,
+> > 222, 425, 437, 486 -- is below 530.  The fork's are 215, 267, 492, 671, 683, 732.  The
+> > section three paragraphs down already says a seat reading another copy "reports line numbers
+> > off by hundreds"; that is exactly what I did, to myself.**
+> 
+> **The cheap defence is not vigilance, it is the PATH.**  `grep -n ... GXEMUL-SEC/src/...` from
+> the project root, or an absolute path, cannot resolve to the wrong tree.  A bare `src/...`
+> depends on a cwd that this file elsewhere records as DRIFTING for whole rounds.
+
 > #### *** AND IT IS NOT THE ONLY ONE. `./src/` IS THE ONE THIS PARAGRAPH NAMES; THERE ARE
 > #### **THREE** PRISTINE-UPSTREAM COPIES UNDER THE PROJECT ROOT. Derived 2026-08-27 by
 > #### running the command below, not transcribed -- and two of them were undocumented. ***
