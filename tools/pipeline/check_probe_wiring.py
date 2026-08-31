@@ -210,6 +210,8 @@ MANIFEST = {
     #  the only instrument that observes the defect at all, and it is COMPLEMENTARY
     #  to diff_wdc_identify.c rather than a replacement -- each catches mutants the
     #  other misses, measured.
+    "sgi_re_width_probe.py":
+        (CLASS_DETECTOR, "#497 sgi_re six-site width decline -- 35 rows, wired into gate_arm.sh"),
     "wdc_addtoinbuf_probe.py":
         (CLASS_DETECTOR, "#495 wdc ATAPI data-port write during DATA-IN -- rung-3"),
 

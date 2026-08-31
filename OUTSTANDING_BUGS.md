@@ -13277,6 +13277,65 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `gatedevicesplit` (low) -- filed because a comment already claimed it was
+
+The `#497` gate comment ended *"the right answer is a `gate_devices.sh` split ... **Filed,
+not done**"* -- **and it was not filed.** No ledger row, no queue entry, under any
+phrasing. Caught by the pass-2 seat while that comment was still **staged**.
+
+> *That is the gap-closes-itself shape: a claim that a process step is complete, shipping
+> in the same commit as the thing it excuses. A future reader greps for the row, finds
+> nothing, and cannot tell whether the split was considered and rejected or forgotten.*
+
+**And the precedent claim was one step short**, which the same seat measured. I wrote that
+`gate_arm.sh` already runs footbridge and PIT probes, *"neither an ARM instruction test"*
+-- true, **but both run `-E cats`, this gate's own ARM machine**, and the PIT wiring
+comment says outright that it was placed there *because* "this is the only gate whose
+machine it shares." So `#497`'s probe is **not** the third instance of an existing
+accretion -- it is the **first probe in this gate on a foreign machine AND CPU family.**
+My words were true; my implication was generous to my own decision.
+
+**Forcing criterion, so this cannot sit forever:** *the next device probe wired into
+`gate_arm.sh` converts this from FILED to OWED.* The accretion story guarantees each
+addition makes the next cheaper, which is how a least-bad accommodation becomes permanent.
+
+**Operational cost, named rather than left to be discovered:** a red row in `gate_arm` can
+now mean an SGI/MIPS device regression -- an attribution trap for whoever reads the
+battery output.
+
+### `agyreservation` (med) -- the owner's ruling lives in the carrier as PROSE, and
+### `panel.sh` fired the seat anyway within two hours
+
+The owner ruled on 2026-08-30 that **agy is RESERVED FOR MEASUREMENT and held out of routine
+panels** — it is the only compile-and-measure seat *not* behind the Agent-tool transport, and
+therefore the roster's insurance against the outage that once cost a round all its measuring
+capacity at once.
+
+**The ruling was written into the carrier. `panel.sh` was not touched.**
+`grep -ci 'reserved for measurement' panel.sh` returns **0**, its AGY block is unconditional,
+and `panel_20260830_214531/agy.txt` is an 11 KB answer from a routine panel fired *after* the
+ruling.
+
+> *This is the carrier's own structure-first finding, measured against itself: knowing a rule
+> and having it fire on the right object are different problems, and only the second is solved
+> by writing more. A rule that earns its second instance while sitting in that file has proven
+> it was mis-filed as prose. **This one earned its first in under two hours.***
+
+**The fix follows the `OLLAMA4` precedent, and that precedent's warning is the load-bearing
+part:** a variable, plus a conditional **banner, launch, seat check and verdict roster**. The
+carrier records why all four — blanking the variable alone once left a *phantom seat that
+answered the seat check*. The agy hazard inverts: a missing seat would read as a **failure**
+where the truth is a deliberate omission.
+
+**And that distinction is the ruling's whole cost clause:** a seat *deliberately not fired* is
+a different thing from a seat *failure*, and a different thing again from *agreement*.
+Conflating them is what the seat ledger exists to refuse — so the check must print
+**DELIBERATELY NOT FIRED** by name, every panel.
+
+*Deferred, not forgotten: a panel was running when this was found, and bash reads scripts
+incrementally by byte offset, so editing `panel.sh` mid-run corrupts that run. The urge to
+edit arrives exactly when you are watching it run, which is why the rule exists.*
+
 ### `witnesssilent` (low) -- 13 witnesses are ungated by design, so a rotted one looks
 ### exactly like a working one
 

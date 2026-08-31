@@ -1040,6 +1040,82 @@ fi
 #  MMU the low 256 MB alone is mapped, so a device row reads 0x0 WITH A LIVENESS ROW STILL
 #  GREEN, which is indistinguishable from an absent device.  That is why C2 and T exist and
 #  why a liveness row cannot stand in for them.
+#  ---------------------------------------------------------------- #497 widthkillclass
+#  *** THIS PROBE IS FOR AN SGI/MIPS MACHINE AND IT IS WIRED INTO THE GATE NAMED `arm`.
+#  That is following a precedent, not endorsing it. ***  This gate already runs
+#  footbridge_sites_probe.py and pit8253_latch_probe.py -- neither of which is an ARM
+#  instruction test either -- so it has become the tree's general DEVICE-probe gate by
+#  accretion.  *** BUT THOSE TWO AT LEAST RUN THIS GATE'S OWN `-E cats` MACHINE, AND
+#  THIS ONE DOES NOT: it is the FIRST probe here on a foreign machine AND CPU family.
+#  The PIT wiring comment says outright that it was placed here BECAUSE this is the only
+#  gate whose machine it shares. ***  So this is not a third instance of an existing
+#  accretion; it is a new kind of one, and the sentence above is true while its
+#  implication was generous to the decision it defends.  The architecture-named alternative, gate_mips.sh, is an 82-line RIG-BOOT
+#  gate with no probe infrastructure at all; putting a 35-row detector there would change
+#  what that gate is for.
+#
+#  Recorded rather than silently compounded: the right answer is a gate_devices.sh split,
+#  which is a harness round of its own and owes its own controls.  FILED as
+#  `gatedevicesplit`, with a forcing criterion: the NEXT device probe wired into
+#  this gate converts it from filed to OWED.
+SGILOG=$LOGDIR/sgi_re_width.log
+python3 sgi_re_width_probe.py "$PMAX" gate > "$SGILOG" 2>&1 || true
+
+#  SENTINEL FIRST.  A preserved log is verified by its completion sentinel, never by its
+#  existence: a killed run loses every row and looks exactly like a run that produced none.
+if ! grep -q "OPUS497T_DONE" "$SGILOG"; then
+    note "sgi_re width probe did not reach its completion sentinel; last lines follow"
+    tail -5 "$SGILOG" | sed 's/^/       /'
+    check "sgi_re width probe completed" "no" "yes"
+else
+    grep -E " ok$| FAIL$" "$SGILOG" | sed 's/^/       /'
+
+    #  CONTROLS BY NAME, not by count.  A green-row total lets a control go red while the
+    #  sum stays acceptable -- and a run whose controls died is an APPARATUS failure, which
+    #  must not be read as a wall of product failures.
+    for c in "live" "devsig stat"; do
+        check "sgi_re control: $c" "$(count "$SGILOG" "^$c  .*ok$")" "1"
+    done
+    check "sgi_re controls live" \
+          "$(grep -q 'OPUS497T_CONTROL=OK' "$SGILOG" && echo yes || echo no)" "yes"
+
+    #  PER-ROW PASS.  Checked individually rather than by a total, because a row that
+    #  silently stops being tested is the padded-column class: a name as long as its column
+    #  makes a check UNSATISFIABLE and the row quietly stops being tested.
+    #  The list is ONE LINE on purpose -- a backslash-continued list assembled through
+    #  nested quoting once gained a bogus word `n` and shipped a RED gate.
+    for v in "live" "devsig stat" "tlb_a sw surv" "tlb_a sw lat1" "tlb_a lw surv" "tlb_a accept" "tlb_b sw surv" "tlb_b sw lat1" "tlb_b lw surv" "tlb_b accept" "tlb_c sw surv" "tlb_c sw lat1" "tlb_c lw surv" "tlb_c accept" "tex sw surv" "tex sw lat1" "tex lw surv" "tex accept" "linear_a sw surv" "linear_a sw lat1" "linear_a lw surv" "linear_a accept" "linear_b sw surv" "linear_b sw lat1" "linear_b lw surv" "linear_b accept" "xsite 6msg" "xsite order" "tlb_a ld kill" "tlb_b ld kill" "tlb_c ld kill" "tex ld kill" "linear_a ld kill" "linear_b ld kill" "other kill"; do
+        check "sgi_re row: $v" "$(count "$SGILOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR PINNED TO A LITERAL.  A detector that loses rows must not be able to pass
+    #  by shrinking, and the count is the only thing that says so.  Raise it DELIBERATELY.
+    #  Both halves pinned: 35 rows emitted AND all 35 green.  Two rows rather than one,
+    #  because a single "35 ok" check cannot tell a LOST row from a FAILING one -- and
+    #  those need different responses.
+    #  *** THE FIRST DRAFT OF THIS BLOCK HAD TWO DEFECTS, BOTH FOUND BY THE PASS-2 SEAT.
+    #  (1) It ended in `|| true`, which is INERT: check() in lib.sh has no `return`, so
+    #  it exits 0 on BOTH branches and the row counts into _fails regardless.  The
+    #  suppression never existed -- but a reader would conclude that row was advisory,
+    #  which is worse than either behaviour on its own.
+    #  (2) The denominator concatenated two counts and compared to "350" -- satisfied by
+    #  (35 ok, 0 FAIL) AND by (3 ok, 50 FAIL).  A string join is not an arithmetic
+    #  identity, and it was redundant with the two rows below it anyway. ***
+    #  *** AND THE FIRST REPAIR OF (2) REPRODUCED THE VERY DEFECT THE PANEL HAD JUST FOUND
+    #  IN THIS ROUND'S BRIEF.  I wrote `count "$SGILOG" " ok$| FAIL$"` -- but count() is
+    #  `grep -ac`, PLAIN grep, so `|` is a LITERAL and the pattern matches NOTHING.
+    #  Measured: 0 against a log holding 35 rows.  The seats had flagged `grep -i
+    #  'sgi|width'` in the brief for exactly this, one hour earlier. ***
+    #
+    #  Summed ARITHMETICALLY instead, which needs no regex dialect at all -- and unlike the
+    #  string-concatenation form it replaces, it cannot be satisfied by (3 ok, 50 FAIL).
+    check "sgi_re rows emitted" \
+          "$(( $(count "$SGILOG" " ok$") + $(count "$SGILOG" " FAIL$") ))" "35"
+    check "sgi_re rows green"   "$(count "$SGILOG" " ok$")"   "35"
+    check "sgi_re rows red"     "$(count "$SGILOG" " FAIL$")" "0"
+fi
+
+
 PITLOG=$LOGDIR/pit8253_latch.log
 python3 pit8253_latch_probe.py "$PMAX" "$STUB" > "$PITLOG" 2>&1 || true
 
