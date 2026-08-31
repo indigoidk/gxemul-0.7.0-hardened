@@ -74,6 +74,7 @@ FIRED to redo work that had shipped two days earlier under four commit numbers.*
 ```
 git log -1 -- <each file the round would touch>
 grep <each row id> CHANGELOG.md
+ls <the directory any NEW TOOL would live in>          # added 2026-08-30
 ```
 
 Paste both outputs into §C as settled premises.  If the CHANGELOG names the row id,
@@ -92,6 +93,34 @@ that resets some state and not the rest?* -- was already answered by `MdNoPhase`
 `MdNoWip` and `MdNoRing`, each with a named SOLE carrier row.
 
 > **THE CHANGELOG KNEW.  THE LEDGER DID NOT.**
+
+### *** THE THIRD COMMAND, ADDED 2026-08-30, BECAUSE THE SAME QUESTION HAS A TOOL-SHAPED
+### FORM AND I ANSWERED IT WRONG THE SAME DAY THIS SECTION WAS SITTING HERE. ***
+
+The two commands above ask *has this ROUND already shipped?* The third asks the same thing
+one level down: **does this TOOL already exist?**
+
+The incident: `grep -c 'exit(1)'` gave a wrong census, I spent an hour deriving the right
+answer by hand, and then wrote a comment-aware census tool to stop it recurring. **The tool
+already existed** — `tools/pipeline/exit_census.py`, in the same directory as the ledger I
+had been editing all evening. It reports the correct figure. One `ls` would have settled the
+whole thing before the grep.
+
+> **And it was worse than duplication: I OVERWROTE it.** The `Write` result said *has been
+> updated successfully*, not *created*, and I did not read it. Caught only by a
+> `416 insertions(+), 126 deletions(-)` line on a file I believed I had just created.
+> Restored from HEAD; nothing lost, by luck rather than by process.
+
+The existing tool was also **better than the replacement**: it strips comments with a state
+machine that respects string literals, prints the denominator beside the numerator, tags every
+site by enclosing construct — and **its docstring already carried the exact lesson I thought I
+had discovered**, that a naive grep gets steadily MORE wrong as this fork gets more honest,
+because every de-fatalisation leaves a comment quoting the `exit(1)` it removed.
+
+*This is the carrier's `ls _scratchpad/*.pdf` rule generalised. That rule exists because an
+absent-source note was load-bearing and wrong for twelve days. **A hand-maintained mental
+inventory of TOOLS is the same wrong record waiting for someone to add a tool** — and the
+remedy is the same one command.*
 
 ### Why the existing gates cannot catch it
 
