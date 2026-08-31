@@ -132,6 +132,13 @@ CODEX_EFFORT="xhigh"        # the user's intent is "ultra"; xhigh is the highest
 #  Set PANEL_FIRE_AGY=1 to fire it deliberately (a measurement round, or a panel where the
 #  Anthropic seats are down and agy is the only measuring capacity left).
 AGY_FIRE="${PANEL_FIRE_AGY:-}"
+#  *** INITIALISE THE PID TOO, EXACTLY AS P_O4 IS. ***  The launch is conditional, so
+#  `wait $P_CODEX $P_AGY ...` hit `P_AGY: unbound variable` under set -u and killed the
+#  script AT THE WAIT -- after the seats were launched, so they ran on as orphans and the
+#  SEAT CHECK never ran.  That is the OLLAMA4 precedent's own recorded lesson (blanking the
+#  variable alone leaves something dangling) and I copied four of its five sites.
+#  An empty expansion simply drops out of the wait list.
+P_AGY=""
 AGY_MODEL="gemini-3.7-flash-high"   # user directive 2026-08-13: agy 3.7, high effort.
 AGY_EFFORT="high"           # BOTH are passed on purpose. `agy models` lists the
                             # effort tier baked into the model name (-high/-medium/
@@ -402,7 +409,15 @@ if [ -n "$OLLAMA4" ]; then
 fi
 
 echo "launched: codex=$P_CODEX agy=${P_AGY:-reserved} kimi=$P_KIMI grok=$P_GROK ollama1=$P_O1 ollama2=$P_O2 ollama3=$P_O3 ollama4=${P_O4:-withdrawn}"
-NSEATS=8; [ -z "$P_O4" ] && NSEATS=7
+#  *** DERIVED, NOT HARDCODED.  This read `NSEATS=8; [ -z "$P_O4" ] && NSEATS=7`, which knew
+#  about ONE conditional seat.  With agy reserved AND OLLAMA4 withdrawn, SIX seats launch and
+#  it announced SEVEN -- an operator-facing count that disagrees with the machine, which is
+#  the family of the re-firing message that reported an action it never took.  Counting the
+#  non-empty pids cannot go stale when a seat is added, reserved or withdrawn. ***
+NSEATS=0
+for _p in "$P_CODEX" "$P_AGY" "$P_KIMI" "$P_GROK" "$P_O1" "$P_O2" "$P_O3" "$P_O4"; do
+    [ -n "$_p" ] && NSEATS=$((NSEATS+1))
+done
 echo "waiting for the $NSEATS scriptable seats..."
 wait $P_CODEX $P_AGY $P_KIMI $P_GROK $P_O1 $P_O2 $P_O3 $P_O4
 

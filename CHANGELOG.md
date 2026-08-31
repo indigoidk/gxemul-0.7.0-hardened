@@ -1,3 +1,98 @@
+## Round #497b -- the pass-2 panel on my own records commit found FIVE defects, all mine
+
+`112867a` closed `#497`'s record and fixed two harness bugs. Its pass-2 panel found five
+more, every one measured rather than argued, and one of them a REGRESSION that commit
+shipped. They are recorded here in the order they cost something.
+
+### 1. SIX HOLD MARKERS WERE CLEARED ON CROSS-PHASE EVIDENCE (a regression, now reverted)
+
+The carrier's discriminator asks whether a marker *"names a seat that has SINCE ANSWERED
+ANYWHERE ON THIS ROW"*. Applied literally, it cleared six holds whose **held phase never
+received an answer** -- five `regress`-phase holds on fable5, discharged by `assess` and
+`review` answers, plus one `research` hold on opus5 discharged at `review`.
+
+> **AND THE CAUSE IS NOT WHAT THIS ROUND FIRST WROTE DOWN.** I recorded it as the carrier's
+> rule being too loose. **Measured: the rule is right and my implementation was wrong.**
+
+The carrier says a marker may be cleared when the seat has *a **LATER** entry on the same row*.
+My code compared `>=`. **All six cleared markers have NO strictly-later answer at all** — they
+were discharged by *same-date sibling entries written by the very batch that created the marker
+to record that the stage had not been done.*
+
+    row                marker      strictly-later?   same-date siblings
+    ns16550            2026-08-22        no                 1
+    carrier            2026-08-22        no                 1
+    es438              2026-08-22        no                 1
+    sh4sci             2026-08-22        no                 2
+    wdcdataoutdrain    2026-08-27        no                 1
+    wdccdbmidxfer      2026-08-27        no                 1
+
+**A strictly-later test keeps all six.** One character of slack, six obligations made
+invisible — and `es438` and `ns16550` left `fable_queue.md` entirely, so the owed work was
+recorded nowhere mechanical.
+
+Found by the codex seat as a cross-phase pattern and by the opus5 seat as the date bug
+underneath it; verified here row by row before reverting. Six restored. `widthkillclass` stays
+defanged: held at `review`, all seven named seats answered at `review`.
+
+> **THE ROUND ASKED ITS PANEL A QUESTION AND GOT THE OPPOSITE ANSWER, WHICH IS WHY IT ASKED.**
+> I had restored `wdccdbmidxfer`/opus5 against my own tool's verdict, on the strength of a
+> carrier note, and asked whether overriding a measurement with prose was defensible.
+> **The premise was false in my favour: a correct discriminator never cleared it.** There was
+> no override — the tool was simply wrong, and the prose note and the correct measurement
+> agree. One root cause, two symptoms.
+
+**FILED as `holdphase`**, reframed: the date comparison is a plain bug, now understood; whether
+the rule ALSO needs a same-phase qualifier is a genuine but separate question affecting none of
+these six, and it is a RULE QUESTION for the flagship seat rather than for whoever noticed.
+
+### 2. "EIGHT DEFANGED, TWO KEPT" DESCRIBES A STATE THAT NEVER SHIPPED
+
+`112867a`'s message says eight defanged and two kept live. **The tree it shipped holds SEVEN
+removed and THREE kept** -- I restored one marker between the count and the commit and did not
+re-derive the number. The count named no artifact, which is exactly what the
+a-score-claim-names-its-log rule exists to prevent, arriving in a marker tally instead of a
+kill-table score.
+
+### 3. A COUNT THAT WAS SIMPLY WRONG
+
+The same message says `say()` was called *"263 lines above its definition"*. In the parent
+the call is at 286 and the definition at 544: **258**. No consequence beyond the record, which
+is the point -- it was transcribed rather than derived.
+
+### 4. `NSEATS` ANNOUNCED SEVEN SEATS WHILE SIX LAUNCHED
+
+`NSEATS=8; [ -z "$P_O4" ] && NSEATS=7` knew about ONE conditional seat. With agy reserved AND
+the kimi substitute withdrawn, six launch. Now **derived** by counting non-empty pids, so it
+cannot go stale when a seat is added, reserved or withdrawn. Controlled both ways: 6 with agy
+reserved, 8 with everything fired.
+
+### 5. THE PROBE DENIED BEING THE WITNESS IT HAD BECOME
+
+`sgi_re_width_probe.py` said `sgirekills` *"has no witness yet"* while the ledger's witness
+field names **that same file** -- its six `ld kill` rows are the rung-3 demonstration. The
+comment was written before those rows existed and left standing after they shipped.
+
+### 6. A CONTROL DESCRIBED AS REPRODUCING AN ERROR "VERBATIM" DID NOT
+
+`112867a` says its negative control reproduces the logged failure *verbatim*. The panel logged
+`panel.sh: line 286: say: command not found`; the control produced `bash: line 1: say: command
+not found`. **The diagnostic is identical and the location prefix is not**, so *verbatim* is an
+overclaim about the strongest evidence in that commit. Found by the glm seat, which is
+packet-fed and had only the two strings the brief inlined — the whole finding is that they
+differ and I called them the same.
+
+### And the uncommitted change the panel stopped
+
+`gen_codex_wall.py`'s widened marker regex was **not committed as first written**, because four
+seats independently refused it. Its negative control lived in `state_note`, a field
+`held_rows()` never reads -- so it **could not fail**. Rebuilt where the regex actually looks;
+the widened class then MEASURED as spanning newlines, which in a ledger full of quoted markers
+manufactures phantom holds. Narrowed to space/tab, seven controls, all pass.
+
+*Three packet-fed seats reached that finding from the packet alone, and a file-reading seat
+reached it mid-answer. The convergence is the evidence: they cannot see each other.*
+
 ## Round #497 widthkillclass -- six guest-reachable host kills, and a detector that escaped
 ## its own mutant until the round measured it
 

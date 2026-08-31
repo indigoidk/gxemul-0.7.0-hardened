@@ -2527,9 +2527,37 @@ session, 2026-08-24, in OPPOSITE directions -- and both looked like results. ***
   > > the entry HOLDING the marker was answered.  That finds one.  The question that finds
   > > twenty is different and is the one that matters to the tools:
   > >
-  > > > **does the marker name a seat that has SINCE ANSWERED ANYWHERE ON THIS ROW?**
-  > > > Mechanically: marker names seat S at date D, and S has a LATER entry on the same row
-  > > > of real length that is not itself a marker.
+  > > > *** SUPERSEDED THE DAY AFTER IT WAS WRITTEN, AND THE CARRIER KEPT THE OLD WORDING
+  > > > FOR ONE MORE DAY AND SIX MORE MIS-CLEARS.  Corrected 2026-08-30. ***
+  > > >
+  > > > **THE RULE: does the marker name a seat that has answered in THE SAME STAGE, at a
+  > > > STRICTLY LATER date?**  Mechanically: marker names seat S in phase P at date D, and S
+  > > > has an entry on the same row IN PHASE P, dated STRICTLY AFTER D, of real length, that
+  > > > is not itself a marker.
+  > > >
+  > > > **BOTH QUALIFIERS WERE PAID FOR IN BLOOD, AND NEITHER WAS IN THE ORIGINAL WORDING:**
+  > > >
+  > > > * *ANYWHERE ON THIS ROW* let a RESEARCH answer discharge a REGRESS hold.  `regress` is
+  > > >   FABLE-ONLY by standing directive, so cross-phase credit is wrong there by
+  > > >   construction.  **This was diagnosed and corrected on 2026-08-29 IN THE LEDGER** --
+  > > >   `wdccdbmidxfer` entry [28] says in its own words *"My second sweep used same-stage
+  > > >   matching and did not repeat it"* -- and THIS FILE was never updated, so the next
+  > > >   round read the superseded wording here and repeated the documented failure at SIX
+  > > >   TIMES the scale.
+  > > > * *a LATER entry* was implemented as `>=`.  All six 2026-08-30 mis-clears were
+  > > >   discharged by SAME-DATE siblings written by the very batch that created the marker
+  > > >   to record the stage as NOT done.  A strictly-later test keeps all six.
+  > > >
+  > > > **AND THE FAILURE IS WORSE THAN INVISIBILITY.**  `check_stage_panels.py` keys on the
+  > > > live literal, so a wrongly-defanged `seat=fable5, phase=regress` entry stops being a
+  > > > marker and falls through into the SEAT TALLY as a regress ANSWER.  Defanging does not
+  > > > merely hide an obligation; it MANUFACTURES a seat answer that never happened -- the
+  > > > seat-failure-counted-as-agreement shape, inverted.
+  > > >
+  > > > *This is this file's own structure-first thesis, demonstrated against itself: the
+  > > > correction lived in the LEDGER, where it was written by the person who found it, and
+  > > > the auto-loaded carrier kept the superseded verdict.  The file already says "when a
+  > > > rule is superseded, delete its conclusion" -- and then did not.*
   > >
   > > **MEASURED COST, and it is not cosmetic: `gen_codex_wall.py` reported 27 HELD STAGES
   > > and 15 of them were PHANTOM.**  Defanging the twenty took it to 12.  `check_stage_panels`

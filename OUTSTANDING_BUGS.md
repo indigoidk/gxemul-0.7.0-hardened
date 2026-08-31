@@ -13277,6 +13277,40 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `holdphase` (med) -- `>=` where the carrier says LATER: six holds discharged by same-date
+### siblings written by the batch that created the marker
+
+**The first diagnosis was wrong and the correction is the useful part.** I recorded this as the
+carrier's rule being too loose. Measured: **the rule is right as stated and my implementation
+was wrong.** The carrier says the seat must have *a **LATER** entry on the same row*; my code
+compared `>=`.
+
+    row                marker      strictly-later?   same-date siblings
+    ns16550            2026-08-22        no                 1
+    carrier            2026-08-22        no                 1
+    es438              2026-08-22        no                 1
+    sh4sci             2026-08-22        no                 2
+    wdcdataoutdrain    2026-08-27        no                 1
+    wdccdbmidxfer      2026-08-27        no                 1
+
+**A strictly-later test keeps all six.** They were discharged by same-date siblings written by
+the very batch that created the marker *to record that the stage had not been done*.
+
+**Measured cost before the revert: 9 held rows → 3**, with `es438` and `ns16550` leaving
+`fable_queue.md` entirely; their regress stage carries no non-marker seats, so it was invisible
+to section H too. The owed work was recorded nowhere mechanical.
+
+**In fairness, and it matters for ranking: no gate changed colour.** `check_fable_queue.py`
+passes against both ledgers. The loss was to the derived human-readable record — which is what
+this machinery exists to produce, so it is real, but it is not a broken gate.
+
+*Open question, narrowed:* should the rule **also** require a same-phase answer? It affects none
+of these six. `regress` is fable-only by standing directive, which arguably makes a regress hold
+a specific obligation. A rule question, held for the flagship seat.
+
+*Found by codex as a cross-phase pattern, by opus5 as the date bug underneath it, confirmed row
+by row here. Two seats, two framings, one cause.*
+
 ### `holdmarkermulti` (med) -- the hold-marker check cannot fire on its largest cases
 
 `gen_codex_wall.py` exists because section I requires that every `[HELD AWAITING SEAT: ...]`
@@ -13291,10 +13325,24 @@ more seats contains commas, fails the match, and is neither counted nor required
 **Measured, not argued:** `sgirekills` is held awaiting `opus5, codex, grok, kimi, glm,
 deepseek, minimax` and is reported in no count.
 
-**The fix is the character class** — admit `[a-z0-9_,\s]+` and split on commas. It must stay
-*restricted*: `ledgerstatelies` quotes the literal inside prose containing `*` and `-`, and a
-permissive `[^\]]+` would match that quotation and manufacture a phantom hold — the
-quoted-marker hazard arriving from the other direction. That prose is a built-in negative control.
+**The fix is a strict token grammar, and the character class this entry first prescribed was
+refuted by the panel.** `[a-z0-9_]+(?:[ \t]*,[ \t]*[a-z0-9_]+)*` — not
+`[a-z0-9_,\s]+`, which was **measured to span newlines** and, in a ledger holding quoted
+markers, manufactures phantom holds. The grammar also kills a `split(", ")` separator mutant
+that survived the character class.
+
+> **This entry also called a quotation in `ledgerstatelies` a "built-in negative control". That
+> control is VACUOUS** — the row has zero entries and its quotation sits in a row-level field
+> `held_rows()` never reads, so the permissive class this entry forbade passes every control and
+> renders byte-identically. *A row filed to document a check-that-cannot-fail shipped with a
+> check that could not fail.* Caught pre-ship by four seats independently.
+
+**Known limits, stated rather than discovered later:** a marker wrapped across lines stays
+invisible (deliberate — admitting newlines re-opens the phantom surface), and a hyphenated
+transport id (`kimi-k3`) would be invisible. No ledger seat id needs one today — checked.
+
+**And the real detector is `--check`, not the controls.** Of nine mutants a seat built, only
+reverting the comma is killed by the controls; section I2 kills three more.
 
 *Found while defanging stale markers: the count did not move for the multi-seat ones, and a count
 that does not move is not thereby correct — the same tell the carrier records from the stuck 27.*

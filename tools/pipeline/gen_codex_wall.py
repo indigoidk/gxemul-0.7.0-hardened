@@ -35,7 +35,41 @@ QUEUE = os.path.join(HERE, "fable_queue.md")
 
 BEGIN = "<!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->"
 END = "<!-- END GENERATED: codex-wall -->"
-MARKER = re.compile(r"\[HELD AWAITING SEAT:\s*([a-z0-9_]+)\s*\]", re.I)
+#  *** THE CLASS CARRIES A COMMA, AND THAT IS THE WHOLE FIX (`holdmarkermulti`). ***
+#  It was `[a-z0-9_]+` -- ONE seat name -- so a marker naming several seats failed to
+#  match and the stage was neither counted here nor required by section I to appear in
+#  the queue.  The enforcement was strongest on the SMALLEST holds and absent on the
+#  biggest: `sgirekills` is held awaiting all seven scriptable seats and was reported
+#  nowhere.  A seven-seat hold is by construction the one carrying the most owed work.
+#
+#  IT MUST STAY RESTRICTED.  `ledgerstatelies` QUOTES this literal inside prose holding
+#  `*` and `-`; a permissive `[^]]+` would match the quotation and manufacture a PHANTOM
+#  hold -- the quoted-marker hazard from the other direction.  That prose is a built-in
+#  negative control and is checked in controls.out beside this commit.
+#  *** THE CLASS IS A STRICT COMMA-SEPARATED ID LIST, AND THE TWO WARRANTS THIS COMMENT
+#  ORIGINALLY GAVE WERE BOTH MEASURED FALSE BY THE opus5 SEAT. ***
+#
+#  It said the restricted class was proven safe by a "built-in negative control" -- the
+#  quoted marker in `ledgerstatelies`.  That control is VACUOUS: the row has ZERO entries
+#  and its quotation lives in a row-level `state_note`, which held_rows() never reads.
+#  Measured: swapping in the permissive `([^]]+?)` the comment forbade, or even `(.+?)`
+#  with DOTALL, passes every control and renders sgirekills BYTE-IDENTICALLY.
+#
+#  It also said "every defang note quotes the literal it refutes".  Counted in
+#  entries[].note: NINE live literals, all of them REAL MARKERS, and ZERO quotations,
+#  against 31 defanged spellings.  The convention REWRITES the marker; it does not quote it.
+#
+#  THE REAL HAZARD IS A PROSE TOKEN LIST.  A sentence naming the marker and then listing
+#  words separated by commas matched a loose class and manufactured a hold whose "seats"
+#  were `and`, `not`, `a`, `panel`.  A strict `id(,id)*` shape cannot express prose, which
+#  is why it is written this way rather than as a character class.
+#
+#  KNOWN AND ACCEPTED LIMIT: a real marker WRAPPED ACROSS LINES stays invisible.  Newlines
+#  are excluded deliberately -- admitting them re-opens the phantom surface -- so the
+#  generator requires markers to be written on one line, which is how they are generated.
+MARKER = re.compile(
+    r"\[HELD AWAITING SEAT:[ \t]*([a-z0-9_]+(?:[ \t]*,[ \t]*[a-z0-9_]+)*)[ \t]*\]",
+    re.I)
 
 PROSE = """
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
@@ -110,10 +144,13 @@ def held_rows(seat=None):
             m = MARKER.search(e.get("note", "") or "")
             if not m:
                 continue
-            s = m.group(1).lower()
-            if seat and s != seat:
-                continue
-            stages.setdefault(e.get("phase", "?"), set()).add(s)
+            #  split: one marker may name several seats
+            for s in (x.strip().lower() for x in m.group(1).split(",")):
+                if not s:
+                    continue
+                if seat and s != seat:
+                    continue
+                stages.setdefault(e.get("phase", "?"), set()).add(s)
         if stages:
             out.append((row["id"],
                         "; ".join("%s:%s" % (ph, ",".join(sorted(v)))

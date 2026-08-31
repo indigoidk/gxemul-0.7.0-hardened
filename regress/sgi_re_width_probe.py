@@ -36,7 +36,11 @@
 #        362).  Fixing six width kills leaves EXACTLY six read kills at the same
 #        six offsets.  The `<s> ld kill' rows measure that at every window, so a
 #        future reader cannot conclude from `lw surv' that reads were made safe.
-#        Filed as sgirekills, which has no witness yet. ***
+#        Filed as sgirekills.  *** ITS WITNESS IS THIS FILE: the six `<site> ld kill`
+#        rows below ARE rung-3 symptom demonstrations of that defect, and the ledger's
+#        witness field names them.  This comment used to say the row `has no witness
+#        yet' -- written before those rows existed and left standing after they shipped,
+#        so the file denied being the witness it had become.  Found by the codex seat. ***
 #
 #    DOES NOT CATCH
 #      * anything in DEVICE_ACCESS(sgi_de) or (sgi_mte), including sgi_de's own
