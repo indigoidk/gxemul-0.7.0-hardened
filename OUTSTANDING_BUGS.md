@@ -13277,6 +13277,29 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `sgideoob` (med) -- a third member of one shape, and it was kept OUT of the round that
+### found it
+
+`DEVICE_ACCESS(sgi_de)`'s `len==8` arm writes **both** `de_reg[regnr]` and `de_reg[regnr+1]`
+into `uint32_t de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)]`. At the top of the window,
+`regnr+1` indexes one past the end.
+
+**Same shield and same trap as `sgilinearoob`.** Guest paths cannot reach it — an 8-byte
+access must be 8-aligned and the top offset is only 4-aligned — but the debugger's `put d`
+prints a warning and **proceeds**. That does **not** give this row a witness; **it takes one
+away.** A `put d` reproduction bypasses the guest instruction path entirely and would be
+laundering rather than witnessing.
+
+> **The shape is now a class, not a coincidence.** `sgilinearoob` (`re_linear_[ab][tlbi+1]`
+> into a `[32]`), the TLB arms' unmasked loop increment, and now `de_reg[regnr+1]`: three
+> sites, one form — **a store whose arity is fixed by the ACCESS WIDTH while its index is
+> bounded only by the OFFSET MASK.** A future round should ask whether the bound belongs at
+> the index computation rather than at each store.
+
+*Surfaced by the adjudicating seat while designing `sgidewidth`, and explicitly kept out of
+it: that round's decline does not touch the `len==8` arm, so folding it in would be scope
+creep rather than adjacency.*
+
 ### `exitcensus` (med) -- the reachability bucket over-counted by 14.4%, and I had just
 ### declared this tool free of exactly this defect
 
