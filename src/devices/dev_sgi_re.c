@@ -55,6 +55,25 @@
 #include "thirdparty/sgi_gl.h"
 
 
+/*
+ *  #497: one latch bit per WIDTH-guard site in DEVICE_ACCESS(sgi_re).
+ *
+ *  SIX FLAGS, NOT ONE.  dev_wdc.c's own comment adjudicates this: sharing a
+ *  latch is licensed only across sites that are MUTUALLY EXCLUSIVE at
+ *  runtime.  These six are six different address windows, and any driver
+ *  bringing up the rendering engine walks all of them in ONE session, so a
+ *  shared latch would report the first odd-width access and silence the
+ *  other five.
+ */
+enum {
+	SGIRE_W_TLBA_LEN  = 1 << 0,
+	SGIRE_W_TLBB_LEN  = 1 << 1,
+	SGIRE_W_TLBC_LEN  = 1 << 2,
+	SGIRE_W_TEX_LEN   = 1 << 3,
+	SGIRE_W_LINA_LEN  = 1 << 4,
+	SGIRE_W_LINB_LEN  = 1 << 5,
+};
+
 struct sgi_re_data {
 	// Rendering engine registers:
 	uint16_t	re_tlb_a[256];
@@ -70,6 +89,23 @@ struct sgi_re_data {
 
 	// Memory transfer engine registers:
 	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+
+	/*
+	 *  #497: width-guard decline latches; see the enum above.
+	 *
+	 *  PLACED LAST, DELIBERATELY, AND THE ORDER IS LOAD-BEARING.
+	 *  re_linear_a/b are written at [tlbi] AND [tlbi+1] with tlbi able to
+	 *  reach 31, so index 32 of either array lands on whichever field
+	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+	 *  re_linear_b and de_reg; measured with offsetof, that made
+	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+	 *  falsified the adjacency the two LINEAR site comments cite, and made
+	 *  an over-run SET WARNING LATCH BITS and silence this device's own
+	 *  diagnostics.  Keeping the latch after mte_reg restores the
+	 *  documented adjacency: re_linear_a[32] is re_linear_b[0] and
+	 *  re_linear_b[32] is de_reg[0].
+	 */
+	uint32_t	warned;
 };
 
 
@@ -227,13 +263,42 @@ DEVICE_ACCESS(sgi_re)
 
 	relative_addr += 0x1000;
 
+	/*
+	 *  #497: THE SIX WIDTH GUARDS BELOW USED TO END THE HOST PROCESS.
+	 *
+	 *  A guest choosing an access width is not an emulator error, so each
+	 *  `len != 8' arm now DECLINES the access and announces itself once.
+	 *  Three properties of the shape are load-bearing:
+	 *
+	 *  1. It is an `else if' SPLICE, not an early return.  A `return' here
+	 *     would skip this function's common tail, and `return 0' would be
+	 *     coerced to -1 by cpus/memory_rw.c and raise EXCEPTION_DBE in the
+	 *     guest -- turning a declined access into a guest bus error.
+	 *
+	 *  2. Control therefore reaches the tail, which answers a declined READ
+	 *     with odata (0).  That tail is dead code before this change: every
+	 *     read arm below still exit(1)s, so odata is never assigned today.
+	 *
+	 *  3. The guards are NOT redundant.  For TLB_A/B/C and TEX the store is a
+	 *     `for (hwi = 0; hwi < len; ...)' loop, so a narrower access simply
+	 *     runs fewer iterations and stays in bounds -- there the guard is
+	 *     modelling fidelity only.  For LINEAR_A and LINEAR_B it is not; see
+	 *     the note at those two sites.
+	 *
+	 *  Only the WIDTH kills change here.  The six `TODO: read from ...' kills
+	 *  and the final catch-all are deliberately untouched (sgirekills), as is
+	 *  DEVICE_ACCESS(sgi_de)'s own width kill, whose accept set is {4,8}
+	 *  rather than {8} (sgidewidth).
+	 */
 	if (relative_addr >= CRIME_RE_TLB_A && relative_addr < CRIME_RE_TLB_B) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_TLB_A\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+				d->warned |= SGIRE_W_TLBA_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_A -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
 				d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
@@ -246,11 +311,13 @@ DEVICE_ACCESS(sgi_re)
 		}
 	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_TLB_B\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+				d->warned |= SGIRE_W_TLBB_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_B -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
 				d->re_tlb_b[tlbi] = data[hwi]*256 + data[hwi+1];
@@ -263,11 +330,13 @@ DEVICE_ACCESS(sgi_re)
 		}
 	} else if (relative_addr >= CRIME_RE_TLB_C && relative_addr < CRIME_RE_TLB_C + 0x200) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_TLB_C\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+				d->warned |= SGIRE_W_TLBC_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_C -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
 				d->re_tlb_c[tlbi] = data[hwi]*256 + data[hwi+1];
@@ -280,11 +349,13 @@ DEVICE_ACCESS(sgi_re)
 		}
 	} else if (relative_addr >= CRIME_RE_TEX && relative_addr < CRIME_RE_TEX + 0xe0) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_TEX\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+				d->warned |= SGIRE_W_TEX_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TEX -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			int tlbi = ((relative_addr & 0xff) >> 3) & 0xff;
 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
 				d->re_tex[tlbi] = data[hwi]*256 + data[hwi+1];
@@ -297,11 +368,53 @@ DEVICE_ACCESS(sgi_re)
 		}
 	} else if (relative_addr >= CRIME_RE_LINEAR_A && relative_addr < CRIME_RE_LINEAR_A + 0x80) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_LINEAR_A\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			/*
+			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+			 *  ((relative_addr & 0x7f) >> 2) & 0x1f, so it reaches 31 and
+			 *  [tlbi+1] indexes 32 of a [32] array.  Only 8-byte ALIGNMENT
+			 *  keeps tlbi even and thus <= 30.  On the GUEST paths that
+			 *  alignment is supplied by two independent mechanisms, and both
+			 *  were checked rather than assumed:
+			 *    - an ordinary ld/sd tests addr & (LS_SIZE-1) and raises
+			 *      ADES/ADEL WITHOUT calling memory_rw at all
+			 *      (cpus/cpu_mips_instr_loadstore.c);
+			 *    - the unaligned ldl/ldr/sdl/sdr helper masks the address
+			 *      itself -- cpus/cpu_mips_instr_unaligned.c computes
+			 *      aligned_addr = addr & ~(wlen-1) and passes THAT to all
+			 *      three of its memory_rw calls, so it cannot deliver an
+			 *      unaligned len == 8 either.
+			 *  Narrower accesses carry len != 8 and are declined above, and
+			 *  dev_sgi_re_init is called only from machines/machine_sgi.c,
+			 *  so no other CPU family reaches this handler.
+			 *
+			 *  ONE EXCEPTION, AND IT IS NOT A GUEST PATH: the host debugger's
+			 *  `put d' prints "WARNING: address isn't aligned" and then
+			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+			 *  the invariant above is stated for GUEST paths only.  It also
+			 *  means `put d' must NOT be used to "witness" the over-run:
+			 *  it bypasses the guest instruction path, so a reproduction
+			 *  built on it would be laundering rather than witnessing.
+			 *  The over-run itself stays filed as sgilinearoob, and it is
+			 *  NOT guest-reachable while this guard stands.
+			 *
+			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+			 *  behaviour and a SILENT clobber of the adjacent register array,
+			 *  reaching a DRAWING-engine register from a rendering-engine
+			 *  write -- not a wild write outside the allocation, and not
+			 *  something plain ASAN would flag.  Declining keeps it shut.
+			 */
+			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+				d->warned |= SGIRE_W_LINA_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_LINEAR_A -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			/*
 			 *  Very interesting. NetBSD writes stuff such as:
 			 *
@@ -347,11 +460,53 @@ DEVICE_ACCESS(sgi_re)
 		}
 	} else if (relative_addr >= CRIME_RE_LINEAR_B && relative_addr < CRIME_RE_LINEAR_B + 0x80) {
 		if (len != 8) {
-			fatal("TODO: unimplemented len=%i for CRIME_RE_LINEAR_B\n", len);
-			exit(1);
-		}
-
-		if (writeflag == MEM_WRITE) {
+			/*
+			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+			 *  ((relative_addr & 0x7f) >> 2) & 0x1f, so it reaches 31 and
+			 *  [tlbi+1] indexes 32 of a [32] array.  Only 8-byte ALIGNMENT
+			 *  keeps tlbi even and thus <= 30.  On the GUEST paths that
+			 *  alignment is supplied by two independent mechanisms, and both
+			 *  were checked rather than assumed:
+			 *    - an ordinary ld/sd tests addr & (LS_SIZE-1) and raises
+			 *      ADES/ADEL WITHOUT calling memory_rw at all
+			 *      (cpus/cpu_mips_instr_loadstore.c);
+			 *    - the unaligned ldl/ldr/sdl/sdr helper masks the address
+			 *      itself -- cpus/cpu_mips_instr_unaligned.c computes
+			 *      aligned_addr = addr & ~(wlen-1) and passes THAT to all
+			 *      three of its memory_rw calls, so it cannot deliver an
+			 *      unaligned len == 8 either.
+			 *  Narrower accesses carry len != 8 and are declined above, and
+			 *  dev_sgi_re_init is called only from machines/machine_sgi.c,
+			 *  so no other CPU family reaches this handler.
+			 *
+			 *  ONE EXCEPTION, AND IT IS NOT A GUEST PATH: the host debugger's
+			 *  `put d' prints "WARNING: address isn't aligned" and then
+			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+			 *  the invariant above is stated for GUEST paths only.  It also
+			 *  means `put d' must NOT be used to "witness" the over-run:
+			 *  it bypasses the guest instruction path, so a reproduction
+			 *  built on it would be laundering rather than witnessing.
+			 *  The over-run itself stays filed as sgilinearoob, and it is
+			 *  NOT guest-reachable while this guard stands.
+			 *
+			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+			 *  behaviour and a SILENT clobber of the adjacent register array,
+			 *  reaching a DRAWING-engine register from a rendering-engine
+			 *  write -- not a wild write outside the allocation, and not
+			 *  something plain ASAN would flag.  Declining keeps it shut.
+			 */
+			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+				d->warned |= SGIRE_W_LINB_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_LINEAR_B -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
 			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
 			d->re_linear_b[tlbi] = idata >> 32ULL;
 			d->re_linear_b[tlbi+1] = idata;
