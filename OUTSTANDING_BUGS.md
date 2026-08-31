@@ -13277,6 +13277,36 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `witnesssilent` (low) -- 13 witnesses are ungated by design, so a rotted one looks
+### exactly like a working one
+
+`check_probe_wiring.py` reports **13 witnesses correctly ungated** -- and *correctly* is
+the right word. Gating a witness would **manufacture** a regression, because a witness is
+built to INVERT after its fix: `#496`'s reads 15/15 pre-fix and 11/15 post-fix, and its
+record says so.
+
+> **But ungated means unrun, and unrun means a witness whose arms rot is indistinguishable
+> from one that works.**
+
+`n6` supplies the concrete instance: `fbpending_witness.py` scores a row on a death at the
+very site `n6`'s ACCEPT round removes, and **no gate runs it** -- so when that round ships,
+the witness breaks on disk and nothing anywhere says so.
+
+**The remedy is not an invention.** `fbpending_drain_probe.py` already carries `EXPECT_CAP`
+defaulting to `-1 = report only`, its scoring gated on `EXPECT_CAP >= 0`. Run-but-do-not-
+score exists, is understood, and supplies the transferred warrant the addition licence
+requires -- that plus a measured instance, never *it cannot hurt*.
+
+**And it is harder than it looks, which is why this is filed rather than built.** A witness
+is *supposed* to change score after its fix lands, so report-only output is **noisy by
+construction**: a flipped row is the expected inversion, or a real break, and the raw
+output cannot tell them apart. Making it useful means each witness recording its
+**expected post-fix score** -- a change to what every witness in the tree must carry, which
+is an owner decision rather than a round's.
+
+*Ranked LOW deliberately: apparatus about apparatus, competing with four open HIGH rows
+that are live host kills. Filed so `n6` can name it rather than discover it.*
+
 ### `fbfiqsilent` (med) -- the FIQ column lies quietly where the IRQ column kills
 
 `n6` is about to ACCEPT the `+0x188` IRQEnable read on the warrant that the DC21285 prose
