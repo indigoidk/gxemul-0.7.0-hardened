@@ -51,6 +51,35 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    > >     cmp -s build/src/devices/<edited>.c GXEMUL-SEC/src/devices/<edited>.c
    > >     [ build/gxemul -nt build/src/devices/<edited>.c ]
    >
+   > ### *** AND "ALL FOUR TREES" IS A CATEGORY ERROR: ONLY THREE ARE BUILD TREES, AND ONE
+   > ### OF THOSE WAS FIVE HOURS STALE WHILE A COMMIT MESSAGE SAID OTHERWISE.  Measured
+   > ### 2026-08-31 by the `#499` pass-2 seat. ***
+   >
+   > The propagation rule names four trees, and a reader takes that to mean four two-part
+   > clearances.  Measured:
+   >
+   >     build/              BUILD tree  -- owes both parts
+   >     /tmp/gxsec-build    BUILD tree  -- owes both parts  (the arc rig)
+   >     build-asan/         BUILD tree  -- owes both parts  (configured, 224 objects)
+   >     est/                SOURCE tree -- NO BINARY EXISTS.  Part 2 is INAPPLICABLE,
+   >                                        not merely unchecked.
+   >
+   > `#499`'s commit message asserted *"All four trees now satisfy BOTH parts"*.  **False in
+   > two different ways**: `build-asan`'s binary was from `02:20` under a source from `07:34`
+   > -- a five-hour stale trap for the next ASAN sweep -- and `est/` has no binary at all, so
+   > the claim was category-wrong there rather than merely untrue.
+   >
+   > **The sharp part is that the CORRECT sentence exists one commit later.**  `a481d8b` says
+   > "BOTH build trees" and is right; `9f666a8`'s stood uncorrected, and `build-asan` stayed
+   > stale for the ~5 hours between them.  A propagation that copies a source into every tree
+   > and rebuilds only the ones you happen to measure leaves the rest holding new source over
+   > old objects -- which is the two-part rule's own failure mode, reached by obeying half of
+   > it.
+   >
+   > *Propagate to all four.  Run part 1 on all four.  Run part 2 on the THREE that have a
+   > binary, and say `est/: source tree, part 2 N/A` rather than leaving a blank -- an unrun
+   > check and an inapplicable one must not render the same.*
+   >
    > ### *** THAT `cmp` CANNOT BE RUN ON THE SIX DECLARED DIVERGENCE PATHS, AND NOTHING SAID
    > ### SO UNTIL 2026-08-31.  Measured, not reasoned. ***
    >
@@ -657,7 +686,40 @@ written around two dead seats outlived both of them by a week.
 ## The multi-LLM panel — EVERY task, research and review (standing user directive)
 
 Every code round runs the panel **twice**: pass 1 on the design brief BEFORE any edit,
-pass 2 on the actual diff AFTER. Research/triage tasks get at least one pass. Launch all
+pass 2 on the actual diff AFTER.
+
+> ### *** AND A REPAIR MADE IN RESPONSE TO A PASS 2 OWES ITS OWN PASS 2.  Adjudicated
+> ### 2026-08-31 with a named stop condition, and SETTLED EMPIRICALLY IN THE SAME HOUR. ***
+>
+> The question is real, because this project's `#392` chain ran SIX follow-up passes without
+> converging and the stopping rule exists to end exactly that.  Two seats ruled opposite ways:
+>
+> * **NO** -- *the pass 2 that produced the repair IS the pass 2 on the repair*, stopping
+>   unless the repair changes product code or adds a detector axis the pass did not cover.
+> * **YES** -- **the obligation follows the MATERIAL, not the narrative.**  An exemption keyed
+>   to provenance (*it is only a repair*) is the same scope-rot that let a PRETABLE block go
+>   stale by binding to vintage rather than to what shipped.
+>
+> **THE STOP CONDITION THAT MAKES *YES* TERMINATE, and it is the whole answer:** one pass per
+> floor-bound DIFF, scoped to that diff; **the chain closes on the first pass that finds zero
+> floor breaches** -- no clean-sweep mutant, no vacuous row, no non-varying channel.  Pass N+1
+> targets only `diff(repair N)`, so the chain is infinite only if EVERY repair is defective --
+> in which case the alternative ships every one of those defects.
+>
+> **`#392` is not evidence against passing repairs; it is evidence the repairs kept being
+> bad.**  A *first clean pass closes* rule would have ended it at the first good fix.
+>
+> *** THE MEASURED CASE, and it is why the NO ruling is rejected rather than merely
+> outvoted: `#499`'s L2 repair WAS DEFECTIVE, and the pass the NO rule would have skipped is
+> the one that found it. ***  The repair closed a width-axis gap at the address the mutants
+> used and left the identical gap at the other component -- three cells of a two-by-two.  A
+> guard re-added at the catch-all would have been caught; one re-added and CONDITIONED on the
+> first component would not.  **The original breach, reproduced inside its own repair, by
+> someone who had just spent an hour understanding it.**
+>
+> *The gate already enforced this -- it refused the next commit with NO PASS-2 RECEIPT on the
+> repair.  What was missing was the warrant and the stop condition, so a future round meeting
+> that red would know whether to satisfy it or argue with it.* Research/triage tasks get at least one pass. Launch all
 seats **concurrently** (independent processes / one Agent batch), then collect.
 
 | seat | invocation |

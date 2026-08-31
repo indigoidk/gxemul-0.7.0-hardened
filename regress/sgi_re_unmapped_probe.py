@@ -375,6 +375,24 @@ row("clip surv", how, "exit0",
 row("clip decl", t.count("unimplemented write to address"), 1,
     "...and is announced, so the component is covered rather than merely alive")
 
+#  *** AND THE SAME AXIS AGAIN, ONE LEVEL DOWN.  Added 2026-08-31 after two packet-fed
+#  seats read the repair above and pointed out that its own claim -- `the WIDTH axis is
+#  pinned' -- covers only TWO CELLS of a two-by-two.  The rows above pin
+#  component2-x-narrow and component2-x-len8 and component1-x-len8; component1 was left
+#  at store()'s default OP_SD, so COMPONENT-1-x-NARROW had nothing.
+#
+#  That is the ORIGINAL breach reproduced inside its own repair: I diagnosed `one axis
+#  pinned exhaustively, the other not at all', fixed it at the address the mutants used,
+#  and left the identical hole at the other component.  A guard re-added at the catch-all
+#  would be caught here; a guard re-added and CONDITIONED on the first component would
+#  not have been.
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + 0x6e0, op=OP_SB_T0_A3, val="0x5a"))
+row("clip narrow surv", how, "exit0",
+    "a BYTE write to the FIRST component survives -- closes the width x component matrix")
+row("clip narrow decl", t.count("unimplemented write to address"), 1,
+    "...and is announced: neither component nor width is a special case")
+
 # ------------------------------------------------- the two latches
 A = Addr(CODE)
 t, alive, how = session(store(A, RE + UNMAP_W) + store(A, RE + UNMAP_W2))
