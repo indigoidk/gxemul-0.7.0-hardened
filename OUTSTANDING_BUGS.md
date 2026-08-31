@@ -13327,8 +13327,22 @@ rather than five separate discoveries later.
 *Found by the sibling-parity check firing at DESIGN time, which is where it is supposed to
 fire — while adjudicating a different question about round ordering.*
 
-### `sgideoob` (med) -- a third member of one shape, and it was kept OUT of the round that
+### `sgideoob` -- ~~WITHDRAWN~~: a FALSE out-of-bounds, filed and refuted the same evening
 ### found it
+
+> *** WITHDRAWN. The arithmetic below skips one line and that line refutes it. ***
+> `relative_addr &= ~CRIME_DE_START` (`0x0800`) runs **immediately before** the index
+> computation, so `relative_addr` is capped at `0x7ff`, `regnr` at **511**, and
+> `regnr+1` at **512** -- in a `[DEV_SGI_DE_LENGTH / sizeof(uint32_t)]` = `[1024]`
+> array. **512 slots of headroom.** The `mte_reg` twin is identical.
+>
+> **The real class is narrower and better stated:** *is the array sized to the INDEX
+> RANGE or to the FULL WINDOW?* Sized to the index range and the `+1` overflows
+> (`re_linear_a[32]`, `re_tlb_x[256]`); sized to the full window and the over-sizing is
+> what prevents it. Kept rather than deleted so the next reader finds the refutation
+> instead of re-filing the row.
+
+The original text follows.
 
 `DEVICE_ACCESS(sgi_de)`'s `len==8` arm writes **both** `de_reg[regnr]` and `de_reg[regnr+1]`
 into `uint32_t de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)]`. At the top of the window,
