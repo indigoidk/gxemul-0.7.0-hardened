@@ -37,6 +37,10 @@ reconciling.
 **If you cannot read files that is expected** — every fact you need is inlined.  Name any
 premise you cannot settle from this packet rather than guessing at it.
 
+**Where this brief states an ARITHMETIC claim — an index range, an offset, a count of
+reachable addresses — ENUMERATE it rather than reasoning about it.**  Walk the values.
+A derivation that skips one masking line reads exactly like a correct one.
+
 **VERDICT LINE FIRST**, so your answer survives truncation.
 ```
 
@@ -46,6 +50,30 @@ because a seat once returned 80 KB of internally-consistent review of the WRONG 
 cannot-read-files line exists because a stalled packet-fed seat is indistinguishable from a
 quota wall in the output, and this project misdiagnosed that for days.  Verdict-line-first
 exists because answers get truncated and the verdict is what survives.
+
+> ### *** THE ENUMERATE-DO-NOT-REASON LINE, ADDED 2026-08-30 ON FIVE MEASURED INSTANCES IN
+> ### ONE EVENING -- TWO OF THEM REFUTATIONS OF THIS PROJECT'S OWN FILINGS. ***
+>
+> Source-derived arithmetic about *device index expressions* was wrong twice and right three
+> times that night, and **the discriminator every time was enumeration rather than argument**:
+>
+> * `sgilinearoob`'s *"load-bearing HOST memory safety"* was reduced to intra-struct
+>   corruption by a seat that compiled `offsetof` instead of trusting the derivation;
+> * **`sgideoob` was WITHDRAWN as a FALSE out-of-bounds** — its analysis skipped the
+>   `relative_addr &= ~CRIME_DE_START` line sitting immediately above the index computation,
+>   which halves the range into an array with 512 slots of headroom;
+> * the TLB-loop OOB, `sgitexindex`'s 81 unreachable cells, and its 3-entry overlap were then
+>   each **confirmed by walking every reachable address**, after the false one was withdrawn.
+>
+> **The failure mode is specific and it is why a general "check the premises" does not catch
+> it: a derivation that omits ONE masking line reads exactly like a correct one.** There is no
+> tell in the prose. Both wrong claims were confidently stated, internally consistent, and
+> filed by an author who had just correctly diagnosed the same class elsewhere.
+>
+> *It goes in §A rather than the carrier because §A is the one piece of prose in this project
+> that demonstrably fires — it lives in the artifact present at the moment of decision. A
+> carrier paragraph saying "remember to enumerate" is precisely the shape the carrier records
+> as failing.*
 
 > **AND THE WRONG-TREE HEURISTIC HAS A KNOWN HOLE:** it says *disagree by hundreds*.  A brief
 > written against a stale checkout can be off by ~170, which is neither "hundreds" nor zero,
