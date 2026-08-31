@@ -79,10 +79,23 @@ exists because answers get truncated and the verdict is what survives.
 > answer 6144, and the queue row's original modest claim was right before the brief
 > "strengthened" it.
 >
-> **BOTH FILE-READING SEATS REFUTED IT; BOTH PACKET-FED SEATS THAT ENGAGED REPORTED
-> RE-WALKING IT AND RECONCILING.**  They were re-walking the BRIEF's premise, having no way to
-> open the CPU source.  The split fell precisely along the transport line -- so score a
-> packet-fed agreement on a repo fact as zero, always.
+> **THREE FILE-READING SEATS REFUTED IT OUTRIGHT.  A FOURTH SEAT -- PACKET-FED -- IDENTIFIED
+> THE ASSUMPTION, DERIVED BOTH BRANCHES, AND CORRECTLY REFUSED TO SETTLE IT:** *"widths
+> 3/5/6/7 are guest-reachable only if this fork's MIPS core does not raise AdEL/AdES first.
+> Under alignment enforcement the counts drop to 6144 declined / 3072 startFlag-set and the
+> truncation chapter closes entirely."*  That is the correct answer, from the packet alone,
+> with the undecidable half flagged rather than guessed -- exactly what the packet preamble
+> asks for.  Two other packet-fed seats reconciled the wrong figure without flagging it.
+>
+> > **SO THE RULE IS NOT "SCORE A PACKET-FED AGREEMENT AS ZERO" -- an earlier draft of this
+> > paragraph said that, and this panel refutes it.  The rule is: a packet-fed seat cannot
+> > SETTLE a repo fact, so score an UNCONDITIONED agreement as zero -- while a CONDITIONED
+> > answer, one that names the premise it cannot check, is worth more than an unconditioned
+> > answer from a seat that could have checked and did not.**
+>
+> *The transport determines what a seat can VERIFY, never how well it reasons.  Writing the
+> split as falling "precisely along the transport line" was a cleaner story than the evidence,
+> and it under-credited the seat that got there first.*
 >
 > it: a derivation that omits ONE masking line reads exactly like a correct one.** There is no
 > tell in the prose. Both wrong claims were confidently stated, internally consistent, and

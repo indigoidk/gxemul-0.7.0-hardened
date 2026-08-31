@@ -13277,6 +13277,59 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `sgideprimop` (HIGH) -- a correct driver drawing a point or a triangle ends the host
+
+`draw_primitive()` reads its op straight from a guest-written register:
+
+```c
+uint32_t op = d->de_reg[(CRIME_DE_PRIMITIVE - 0x2000) / sizeof(uint32_t)];
+...
+switch (op & 0xff000000) {
+case DE_PRIM_LINE:       ...
+case DE_PRIM_RECTANGLE:  ...
+default: fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x, ... ]"); exit(1);
+}
+```
+
+The switch discriminates on the **top byte only**, so the domain is 256 values, two are
+implemented, and **254 of 256 end the host process.**
+
+**Reached by two ordinary stores:** write the op into `CRIME_DE_PRIMITIVE` — nothing filters it,
+the `case` in the register switch only `debug()`s — then write any DE register with bit `0x800`
+set, which makes the handler's tail run `if (startFlag) draw_primitive(cpu, d);`.
+
+> **AND IT IS NOT 254 GARBAGE VALUES.** `crmfbreg.h` defines FOUR primitive types —
+> `DE_PRIM_POINT` 0x00000000, `DE_PRIM_LINE` 0x01000000, `DE_PRIM_TRIANGLE` 0x02000000,
+> `DE_PRIM_RECTANGLE` 0x03000000. The model implements **two**. So a **correct driver drawing a
+> POINT or a TRIANGLE — documented hardware, well-formed value — kills the host.** That needs no
+> malformed input at all.
+
+**`DE_PRIM_POINT` is `0x00000000`, which is also the reset value** (`memset(d, 0, sizeof ...)` at
+construction). The register's power-on state names a documented primitive the model dies on.
+
+**That coincidence settles a detector disagreement between two seats.** fable5 held a survival
+oracle cannot see a spurious `draw_primitive` (the host stays alive); kimi held that against a
+pristine register file it dies in `default:` and *is* catchable. **Both are right, conditioned on
+register state** — at reset the top byte is POINT, so the draw kills and a startFlagged survival
+row catches it; with LINE or RECTANGLE programmed it draws silently and survival sees nothing. A
+detector must pin the state it relies on, or the row's channel varies with what the guest did
+before it.
+
+**It also raises the stakes on `sgidewidth`.** That round must not copy `#497`'s splice because
+this tail draws — and the thing it would draw with is lethal on 254 of 256 ops. A naive splice
+does not merely cause a spurious primitive; it gives a *declined* access a near-certain host kill.
+
+**Not covered by `sgirekills`**, which scopes itself to terminating calls *inside a
+`DEVICE_ACCESS`*; this one is in a plain function and sits in the census's other bucket.
+
+*Found by reading the kimi seat's 133 KB answer, whose verdict line was the literal words
+"verdict line first." — a format miss `seat_verdicts.py` files as "answered, no verdict line",
+and which I nearly recorded as a non-answer. No other seat engaged with `draw_primitive`'s default
+arm. Third instance this session where the body carried what the verdict line did not.*
+
+*No rung-3 witness yet: the reachability above is **read**, not booted. The lifecycle ruling wants
+the attempt before this is recorded as unwitnessed.*
+
 ### `gxprobepccache` (med) -- a detector row that could not fail, in the shared probe harness
 
 `gxprobe` skips a redundant register assignment when `cache_regs` is on. `_exec_at()` pops
