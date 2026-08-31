@@ -1387,7 +1387,31 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > while every `+0x?8` register moved one past a `[3]` array and a documented register's store
 > landed on `int asserted_13`, making the device drop a legitimately pending interrupt.
 >
-> > **A DETECTOR CLAIMING TO PIN *WHERE* AN ACCESS LANDS MUST CARRY AT LEAST ONE ANCHORED ROW:
+> > ### *** THE SAME RULE ON THE ACCEPT SIDE: AN ACCEPT ROW MUST USE THE WINDOW'S **LAST**
+> ### SLOT. Measured 2026-08-31, where a one-hex-digit edit scored a TOTAL ESCAPE. ***
+>
+> A detector for `sgireunmapped` carried an accept row per window, each writing to the
+> window's **BASE**. Shrinking a window bound -- `+ 0x80` -> `+ 0x40`, one hex digit --
+> **swept that 9-row detector CLEAN**, because moving the FAR bound is invisible from the
+> base by construction. The accept rows proved the window still *starts* where it did and
+> said nothing about where it *ends*.
+>
+> > **AN ACCEPT ROW WRITTEN AT A WINDOW'S BASE TESTS THE NEAR BOUND TWICE AND THE FAR BOUND
+> > NEVER. Put it at the LAST legal slot, where both bounds are load-bearing.**
+>
+> It is clause (f) arriving from the other direction: (f) says a distinctness suite cannot
+> tell you WHERE an access lands, and this says an accept suite cannot tell you HOW FAR a
+> window reaches. Same blindness, opposite polarity -- and the same one-row repair.
+>
+> *Cheap reviewer check, beside the existing one:* ***"if this window got smaller, which row
+> reds?"*** If the answer is none, the far bound is unpinned however many accept rows exist.
+>
+> **AND WATCH FOR MIXED IDIOMS IN ONE CASCADE, which decide how an edit fails:** the same
+> file bounds TLB_A and TLB_B by *the next window's constant* and the other four by
+> *base + size*. A shrink edit to the first kind moves a boundary two windows share; to the
+> second it opens a gap. One reviewer question, two different blast radii.
+
+> **A DETECTOR CLAIMING TO PIN *WHERE* AN ACCESS LANDS MUST CARRY AT LEAST ONE ANCHORED ROW:
 > > an oracle tied to a SPECIFIC CELL by a channel OUTSIDE the decode under test** -- a side
 > > effect (a tick that zeroes the cell), an architectural reset value, or a second access path
 > > to the same cell. **One anchored row converts a whole distinctness suite from relative to

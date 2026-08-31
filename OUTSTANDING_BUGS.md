@@ -13277,6 +13277,44 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `gxprobepccache` (med) -- a detector row that could not fail, in the shared probe harness
+
+`gxprobe` skips a redundant register assignment when `cache_regs` is on. `_exec_at()` pops
+the cached `pc` after stepping — but a driver calling `send("step")` **directly** did not, so
+its next `set_reg("pc", a)` was dropped as redundant and the guest executed **nops at the
+addresses the row believed it was probing**.
+
+> A clause-(d) latch mutant swept **14/14** against the row written to catch it. The row
+> performed one device access and two nops, so it **could not count to two, and therefore
+> could not fail.**
+
+**All three explanations were checked rather than one being picked**, as the
+mutant-that-will-not-die rule requires: mis-built? no — the diff removes exactly the two
+`d->warned |=` lines and all nine variant binaries have distinct md5s. Target dead? no —
+measured directly, three unmapped writes give the fix **1** message and the mutant **3**.
+Row mis-cut? **yes**, and the cause was in the instrument.
+
+**It bit only rows reusing one instruction word.** A driver alternating two different words
+gets a cache miss on `pc` and works by accident — which is why eight of nine variants scored
+plausibly and nothing looked wrong. *A vacuous row reads exactly like a passing row.*
+
+**Blast radius, measured — and my first measurement was wrong.** I grepped for probes calling
+`send("step")` and found **fourteen**; then checked whether they use gxprobe at all, and
+**none does** — every one rolls its own pty plumbing. A grep for the symptom found the wrong
+population; the discriminator was whether the file imports the harness.
+
+**Fixed at source rather than documented.** The seat proposed a rule (*any driver stepping
+without `_exec_at()` must pop the pc cache*). Removing the footgun is better: the
+invalidation now lives in `send()`, so any command that advances the guest invalidates `pc`
+wherever it is sent from. Controlled — `step`, `step 3`, `continue`, `c`, `s` fire it;
+`print pc`, `reg`, `put w` and the empty string do not.
+
+*And a separate finding fell out: **`gxprobe.py` is not in version control.** `git ls-files`
+matches zero; it lives only in `_scratchpad/`. The carrier tells every round to use it rather
+than hand-roll pty plumbing — so the tree's recommended instrument is untracked, covered by no
+gate, one accident away from being lost, and this defect would have been invisible to
+`git log` forever.*
+
 ### `holdphase` (med) -- `>=` where the carrier says LATER: six holds discharged by same-date
 ### siblings written by the batch that created the marker
 

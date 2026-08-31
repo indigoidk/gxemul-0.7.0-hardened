@@ -267,6 +267,37 @@ MANIFEST = {
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
 
+    #  sgireunmapped, 2026-08-31.  The measuring seat's RUNG-3 WITNESS set, preserved
+    #  because the seat reported its artifacts were in VOLATILE SCRATCH and would be lost.
+    #  CLASS_RESEARCH on the #497 precedent above: EVIDENCE, not detectors the battery owes
+    #  a run.
+    #
+    #  `sgi_re_unmapped_probe.py` is the WITNESS that licensed the fix -- 32/32 on an
+    #  unmodified `-E sgi -e ip32`, with liveness, device-signature, neighbour-device and
+    #  negative controls.  A witness exists BEFORE the edit and is graded by the witness
+    #  clauses; a detector defends the fix afterwards and is graded by the vacuity floor.
+    #  Filing this as research keeps that distinction rather than asking a gate to run a
+    #  reproduction of a defect the round is about to remove.
+    #
+    #  `detector.py` is the seat's 14-row instrument AS MEASURED, and it is deliberately
+    #  NOT the shipping detector: the round's own copy will live in regress/ and be gated.
+    #  It is kept because a 9-variant table is worth nothing if the instrument that
+    #  produced it can change underneath the numbers.
+    #
+    #  *** AND IT IS KEPT FOR A SECOND REASON THAT IS THE ROUND'S MOST TRANSFERABLE
+    #  FINDING: this instrument contained a row that COULD NOT FAIL. ***  A latch mutant
+    #  swept 14/14 against the row written to catch it, because gxprobe cached `pc` across
+    #  `step` and the row's second access executed a nop.  The file as preserved is the
+    #  BEFORE state, and `INSTRUMENT_FINDING.md` beside it is the diagnosis.  Deleting it
+    #  would erase the only evidence of a vacuous row that eight of nine variants scored
+    #  plausibly around.
+    "artifacts/sgireunmapped/opus_witness_20260830/sgi_re_unmapped_probe.py":
+        (CLASS_RESEARCH, "sgireunmapped RUNG-3 WITNESS as measured, 32/32 -- reproduction, not detector"),
+    "artifacts/sgireunmapped/opus_witness_20260830/detector.py":
+        (CLASS_RESEARCH, "sgireunmapped 14-row instrument AS MEASURED, incl. the row that could not fail"),
+    "artifacts/sgireunmapped/opus_witness_20260830/mkvariant.py":
+        (CLASS_RESEARCH, "sgireunmapped 9-variant mutator, preserved so the table can be re-run"),
+
     "artifacts/wdcaddtoinbufbound/rung3_20260830/addtoinbuf_rung3_probe.py":
         (CLASS_RESEARCH, "wdcaddtoinbufbound rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaddtoinbufbound/rung3_20260830/frozen_wave_20260830_102209.py":
