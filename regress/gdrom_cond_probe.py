@@ -600,10 +600,20 @@ m = COND_RE.search(t)
 #  LATENT FRAGILITY, worth stating because it is invisible from the row: field 2 works
 #  ONLY while 0xef stays an ACCEPTED value.  The device announces nothing for 0xef, so
 #  the sole COND_RE match is the 0x09 decline.  If a future round moved 0xef to the
-#  declined side, the ANCHOR store would consume the `(once)` latch, the 0x09 decline
-#  would print nothing, and field 2 would read "absent" for a reason unrelated to the
-#  rule under test.  The row would red -- loudly, which is the safe direction -- but for
-#  the wrong reason, and whoever sees it should read this note before re-pinning.
+#  declined side, field 2 STOPS OBSERVING THE 0x09 DECLINE and starts observing
+#  whatever the anchor's own decline printed instead.  The row reds -- loudly, which is
+#  the safe direction -- but for a reason unrelated to the rule under test, so whoever
+#  sees it should read this note before re-pinning.
+#
+#  *** AN EARLIER DRAFT OF THIS NOTE PREDICTED THE OBSERVABLE AND GOT IT WRONG, WHICH
+#  IS WHY IT NO LONGER PREDICTS ONE. ***  It said field 2 would read "absent".  It
+#  would not: the anchor's decline goes through the SAME else arm and prints
+#  `unimplemented GDROM_COND = 0xef ... (once)`, and COND_RE.search returns the FIRST
+#  match -- so field 2 reads "ef".  (And if a future decline used different text, the
+#  0x09 latch would be unconsumed and field 2 would read "09" with field 1 red
+#  instead.)  Caught by the adjudicating seat.  The DIRECTION was right and the
+#  mechanism was wrong -- which is `read the line before citing it`, inside a
+#  correction written to fix an overclaim.
 row("R5d cond 09", "%s|%s" % (printed(t, "r2"), m.group(1) if m else "absent"),
     "0xef|09", "a decline carrying BOTH bits 0 and 3 is refused too")
 

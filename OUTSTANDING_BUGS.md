@@ -13277,6 +13277,50 @@ the three sibling arms, but the behaviour has not been observed on a running gue
 
 ## 2026-08-30 -- `#497`'s pass-1 panel found TWO more live defects in the same file
 
+### `sgireunmapped` (high) -- the widest door in the device, and no row covered it
+
+`DEVICE_ACCESS(sgi_re)`'s final `else` -- the unmatched-address arm -- prints a `fatal()`
+per direction and then `exit(1)`, **with no width predicate at all.** Every other kill in
+that handler needs the guest to choose an unusual access WIDTH (the six `len != 8` arms) or
+a DIRECTION (the six read arms). This one needs neither: **any width, either direction, any
+unmatched address.**
+
+**The door, derived rather than asserted.** `memory_device_register` covers
+`baseaddr + 0x1000` for `DEV_SGI_RE_LENGTH` = `0x1000`, and the handler restores the full
+offset with `relative_addr += 0x1000`, so the dispatched range is `0x1000-0x1fff`. The six
+windows occupy `0x1000-0x17ff` with one internal gap:
+
+```
+  TLB_A     0x1000-0x11ff        TEX       0x1600-0x16df
+  TLB_B     0x1200-0x13ff        LINEAR_A  0x1700-0x177f
+  TLB_C     0x1400-0x15ff        LINEAR_B  0x1780-0x17ff
+
+  UNCOVERED 0x16e0-0x16ff   (32 bytes)
+            0x1800-0x1fff   (2048 bytes)   = 2080 bytes -> exit(1)
+```
+
+Guest KSEG1: a single `lb` at **`0xb5001800`** ends the host process.
+
+> *** IT SURVIVES BOTH ROUNDS THAT LOOK LIKE THEY WOULD FIX IT, WHICH IS WHY IT IS FILED
+> BEFORE THE NEXT COMPLETENESS SENTENCE SHIPS. *** `#497` repairs the six WIDTH guards and
+> never reaches this arm. `sgirekills` as scoped repairs the six READ arms *inside* the
+> windows and never reaches it either. A reader of either round record could reasonably
+> conclude the device no longer kills on a stray access. **It does.**
+
+**Its fix cannot be ACCEPT**, and that is what keeps it out of `sgirekills`' round rather
+than a scheduling preference: nothing backs an unmapped address, so there is no stored value
+to return. DECLINE plus a latched `(once)` announce -- a different fix design, so the
+round-scope rule's same-fix-design arm fails.
+
+**Witness: none yet, and it is ONE ROW on an existing script.** The machine, window and
+harness all exist from `widthkillclass`'s witness (`-E sgi -e ip32`); add one `lb` at
+`0xb5001800` and expect `exit1` with `[ sgi_re: unimplemented read from address 0x1800 ]`.
+
+*Found by the adjudicating seat while RANKING the other four `sgi_re` rows -- not by looking
+for it. An earlier audit had listed this arm as "1 unhandled offset fallback" and never
+asked whether it was reachable. **A census that enumerates a site without ranking it is how
+the widest door stays open.***
+
 ### `sgidewidth` (high) -- a SEVENTH live width kill, one guest `sb` away
 
 The scope question on `#497` was hiding it. `grep -n 'len = %i not implemented'
