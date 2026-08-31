@@ -1,3 +1,64 @@
+## Round panelargvcap -- `panel.sh` warned about the argv cap and then launched anyway
+
+A 38 KB brief killed **both** argv-fed seats with `Argument list too long`. Codex and Kimi
+had to be recovered by hand -- while this block printed advice sixty lines above the launch
+that ignored it:
+
+```
+WARNING: brief is ${BSZ} bytes (>30KB). Codex/Kimi take it on argv and
+         may fail with 'Argument list too long'. Trim, or point those
+         seats at the file path instead of piping its contents.
+```
+
+> *** IT IS THE CHECK-THAT-CANNOT-FAIL FAMILY'S SIBLING: **a message reporting an ACTION the
+> code does not take.** ***
+
+The `re-firing once (a wall can be minutes long) ...` message -- followed by a `return 2`
+every caller discards -- is the same defect, and its recorded lesson applies here unchanged:
+**telling the operator it was handled is WORSE than silence**, because the one person who
+could fix it by hand is told not to.
+
+### The fix is that both seats already read files
+
+So the remedy the message *recommended* is one the script can simply **take**. Grok has been
+immune all along (`--prompt-file`) and agy too (`--add-dir` plus a pointer prompt); Codex and
+Kimi were the only two still fed the brief on argv. Above `ARGV_CAP` they now get a POINTER
+-- read `$BRIEF_ABS` and review it as its own Questions section directs -- and below it the
+inline form is **byte-unchanged**.
+
+### Controlled in both directions, and the control reads the REAL file
+
+`sed` extracts the decision block and the prompt-build out of `panel.sh` and `eval`s them,
+rather than re-typing them into the test. That is deliberate: **a verification that shares
+the defect of the thing it verifies always passes**, which this project has measured -- a
+cross-check once reported `VERDICT: MATCH` because it used the same first-match regex as the
+edit it was checking.
+
+```
+POST-FIX   6/6 rc=0     incl. BOTH boundary rows (exactly 30000 -> inline,
+                        30001 -> pointer) and a both-seats-agree column
+PRE-FIX    EXTRACT FAILED rc=9    "this form has no cap branch at all"
+```
+
+**The pre-fix run is the load-bearing half.** Without it this is a green test nobody has
+shown can fail. Artifacts: `regress/artifacts/panelargvcap/controls_20260830/`, including
+the control script itself so the measurement can be re-run rather than trusted.
+
+`PANEL_ARGV_CAP` overrides the cap **only** so the branch is testable without keeping a 38 KB
+fixture, and the comment says so. It is not a tuning knob and no caller should set it.
+
+### The carrier's Codex row is corrected in the same commit, and it gained the BOUND
+
+It still told a human to hand-trim briefs. It now also carries the limit, which matters more
+than the fix: **the pointer form only helps seats that can open the file.** This is not
+licence to grow briefs without limit -- the packet-fed Ollama seats still get the whole thing
+POSTed, and brief complexity is the measured driver of thinking-burn, where a seat spends its
+entire output budget on hidden reasoning and emits nothing.
+
+*Filed as a known defect and left unapplied for a day before this round, because a change to
+the script every panel runs owes two negative controls. That was the right call and the delay
+cost nothing -- but note the failure it was waiting on had already happened once.*
+
 ## Round #496 gdromcondlies -- two guest-reachable host kills, and the store that made
 ## the obvious fix worse than the defect
 
