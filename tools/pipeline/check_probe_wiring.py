@@ -275,6 +275,29 @@ MANIFEST = {
     "sgi_de_width_probe.py":
         (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
 
+    #  sgireunmapped #499 KILL TABLE, 2026-08-31.  The table that discharged the three
+    #  undischarged accept rows (accept tlba/tlbb/tlbc) by MEASURED KILL -- M1/M2/M3 each
+    #  reddening exactly its own row -- and that found an L2 floor breach (M5) plus a
+    #  duplicate latch-bit defect #498 had silently introduced into the 08-30 generator.
+    #  CLASS_RESEARCH: evidence for a round, not detectors the battery owes a run.
+    #
+    #  *** `mkvariant499.py' REPLACES `opus_witness_20260830/mkvariant.py' AND THE REASON
+    #  MUST NOT BE PRUNED. ***  The older generator inserts `SGIRE_W_UNMAP_WR = 1 << 6',
+    #  and #498/cb28a6f added `SGIRE_W_DE_LEN = 1 << 6' to that same enum.  A duplicate
+    #  enumerator is legal C and silent, and DEVICE_ACCESS(sgi_de) casts the same struct,
+    #  so d->warned is SHARED -- measured as a 14/14 total escape.  This one uses 1<<7/1<<8
+    #  and hard-fails on duplicates.
+    #
+    #  `base_slot_probe.py' is the CONTROL for M5 and is what makes it a result rather than
+    #  a claim: it stores at the window BASE, reds on the mutant, and is serviced normally
+    #  on the fix.  Without it, `accept lina' staying green is merely a green row.
+    "artifacts/sgireunmapped/killtable_20260831/extra_rows.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 -- the four rows the shipped detector lacks: the M4 latch-collision kill (two NARROW accesses in one emu) and the fix6 duplicate-bit kill, each with its own green control"),
+    "artifacts/sgireunmapped/killtable_20260831/base_slot_probe.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 -- the window-BASE control that proves M5's near-bound blindness is real and not an artifact of the oracle"),
+    "artifacts/sgireunmapped/killtable_20260831/mkvariant499.py":
+        (CLASS_RESEARCH, "sgireunmapped #499 mutant generator -- replaces the 08-30 one, whose 1<<6 latch bit collided with #498's SGIRE_W_DE_LEN"),
+
     #  sgidewidth PASS 2, 2026-08-31.  The measuring seat's nine-build re-measurement of a
     #  SHIPPED detector, which found two 25/25 escapes the round had missed.  CLASS_RESEARCH:
     #  evidence, not detectors the battery owes a run.

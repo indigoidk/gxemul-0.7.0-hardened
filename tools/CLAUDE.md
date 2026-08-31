@@ -1416,7 +1416,31 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > said nothing about where it *ends*.
 >
 > > **AN ACCEPT ROW WRITTEN AT A WINDOW'S BASE TESTS THE NEAR BOUND TWICE AND THE FAR BOUND
-> > NEVER. Put it at the LAST legal slot, where both bounds are load-bearing.**
+> > NEVER.**
+>
+> > #### *** THE SECOND HALF OF THAT SENTENCE -- "put it at the LAST legal slot, WHERE BOTH
+> > #### BOUNDS ARE LOAD-BEARING" -- IS MEASURED **FALSE**, and it was falsified the same day
+> > #### it was written, by the measuring seat working on the very row it was minted from. ***
+> >
+> > **`M5`: move the NEAR bound instead.**  `>= CRIME_RE_LINEAR_A` -> `>= CRIME_RE_LINEAR_A +
+> > 0x40`, **one token**, against the 14-row detector whose accept rows all sit at their
+> > window's TOP slot: **14/14, a total escape** -- while a control row storing at the window
+> > BASE reds on that mutant and is serviced normally on the fix.
+> >
+> > **SO MOVING THE ROWS FROM BASE TO TOP SWAPPED THE BLINDNESS RATHER THAN REMOVING IT.**  A
+> > single accept row pins exactly ONE bound -- the one it is near.  There is no slot from
+> > which both bounds are observable, because an accept row's oracle is *this access was
+> > serviced*, and servicing is a single bit that one bound can explain on its own.
+> >
+> > **THE REPAIR THAT ACTUALLY WORKS, and it costs no extra sessions: ANCHOR THE ORACLE
+> > INSTEAD OF MOVING THE ROW.**  The store's own `debug()` already prints the destination --
+> > `[ d->re_linear_b[30] = 0x... ]`.  Assert **the array NAME and the INDEX**, not merely
+> > that the catch-all was missed.  That converts each relative row into an ANCHORED one in
+> > clause (f)'s sense, pins BOTH bounds from one access, and additionally catches
+> > TRANSLATIONS, which no base-or-top accept row can see at all.
+> >
+> > *Two rows (base AND top) is the fallback where no such channel exists.  It is strictly
+> > weaker: it pins the two bounds and still cannot see a re-map that keeps both.*
 >
 > It is clause (f) arriving from the other direction: (f) says a distinctness suite cannot
 > tell you WHERE an access lands, and this says an accept suite cannot tell you HOW FAR a
@@ -1425,10 +1449,23 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > *Cheap reviewer check, beside the existing one:* ***"if this window got smaller, which row
 > reds?"*** If the answer is none, the far bound is unpinned however many accept rows exist.
 >
-> **AND WATCH FOR MIXED IDIOMS IN ONE CASCADE, which decide how an edit fails:** the same
-> file bounds TLB_A and TLB_B by *the next window's constant* and the other four by
-> *base + size*. A shrink edit to the first kind moves a boundary two windows share; to the
-> second it opens a gap. One reviewer question, two different blast radii.
+> **AND WATCH FOR MIXED IDIOMS IN ONE CASCADE:** the same file bounds TLB_A and TLB_B by *the
+> next window's constant* and the other four by *base + size*.
+>
+> > #### *** THIS CLAUSE ONCE ADDED "a shrink edit to the first kind moves a boundary two
+> > #### windows share; to the second it opens a gap -- two different blast radii".  ALSO
+> > #### MEASURED FALSE, in the same table. ***
+> >
+> > **Editing the `<` EXPRESSION in the TLB_A arm opens a gap and does not touch TLB_B's arm
+> > at all.**  `M1`, `M2` and `M3` each reddened EXACTLY their own accept row -- 13/14 apiece,
+> > the same one-row signature as the three base+size siblings already discharged.  No shrink
+> > perturbed a neighbour.
+> >
+> > The shared-boundary hazard is real only for editing **`CRIME_RE_TLB_B` in `crmfbreg.h`**,
+> > which is a different edit on a different file.  *The idiom governs which EDITS are
+> > available, not how a given edit propagates -- and the original wording conflated them,
+> > which is what left three accept rows filed as needing "a different mutant shape" when they
+> > needed the ordinary one.*
 
 > **A DETECTOR CLAIMING TO PIN *WHERE* AN ACCESS LANDS MUST CARRY AT LEAST ONE ANCHORED ROW:
 > > an oracle tied to a SPECIFIC CELL by a channel OUTSIDE the decode under test** -- a side
