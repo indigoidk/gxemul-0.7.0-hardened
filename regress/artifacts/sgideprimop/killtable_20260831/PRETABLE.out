@@ -1,0 +1,118 @@
+PRE-TABLE CHECK -- sgideprimop (#500), the draw_primitive() default arm
+Written 2026-08-31 BEFORE any table runs; this file's mtime is the order proof.
+Baseline: HEAD 3ded1e8, src/devices/dev_sgi_re.c unmodified (catch-all still exit(1)).
+Fix under test: decline + latched announce, KEEPING the message text and appending "(once)".
+
+Nine seats answered pass 1 and the flagship adjudicated; this block is written from that
+panel, not from memory.  #498 skipped this block and its own pass-2 panel then measured two
+escapes that #490's block had prescribed BY NAME.
+
+--------------------------------------------------------------------- 1. SIBLING PARITY
+The nearest sibling is in the SAME struct and one function away: the #498 width decline in
+the sgi_de access function.  Shape:
+
+    if (!(d->warned & SGIRE_W_DE_LEN)) { d->warned |= SGIRE_W_DE_LEN;
+        fatal("[ sgi_de: unimplemented len=%i -- declined.  (once) ]\n", (int) len); }
+    goto de_declined;
+
+ASYMMETRY FOUND, and it is a row we owe rather than a defect: the sibling JUMPS to a common
+tail (goto de_declined) because its enclosing function HAS one.  draw_primitive() has NO
+tail -- verified: one-tab brace closes the switch, column-0 brace closes the function, next
+line is DEVICE_ACCESS(sgi_de).  So break here is equivalent to falling off the end, and the
+per-case-return idiom that broke four readers on a sibling round is NOT a hazard here.
+Three seats refused to grant that premise from the packet; it was settled by reading.
+
+SECOND ASYMMETRY, and this one is the round's: the sibling's guard field and its announce
+are BOTH about width.  Here the guard field is a latch bit while the guarded body reads
+register state -- see check 3.
+
+--------------------------------------------------------------------- 2. CLAIM -> ROW
+Added-comment claims this round will make, each owing a row or an explicit no-row sentence:
+
+  "POINT (0x00) and TRIANGLE (0x02) are documented primitives that reach this arm"
+        -> ROW: two sessions, one per encoding, each expecting the decline and survival.
+  "op reads the RESET value, so a START access before any PRIMITIVE write draws POINT"
+        -> ROW: a session that writes ONLY the START-aliased address and never
+           CRIME_DE_PRIMITIVE.  This is the reachability headline and it must be pinned.
+  "the decline is announced once per device instance"
+        -> ROW: two DISTINCT defaulted primitives in one session, expecting exactly ONE
+           message.  This is also mutant M1's killer -- see check 4.
+  "a START-aliased READ also draws, because if (startFlag) is not conditioned on MEM_WRITE"
+        -> ROW: the read direction, separately.  Named by a seat; no existing row covers it.
+
+NO-ROW SENTENCE OWED, recorded rather than left blank: the [31:26] stray-bit finding -- a
+legal LINE with a high bit set also dies -- is NOT pinned by this round.  Whether a guest
+ever sets those bits is not established, so a row would assert a reachability nobody has
+shown.  A deliberate no-row with its reason, which must not render the same as an unrun one.
+
+------------------------------------------------- 3. GUARD FIELD vs BODY FIELD
+  guard reads: d->warned  (one bit)
+  body  reads: op, x1, y1, x2, y2, fg, bg, pattern, drawmode, stipple_mode -- all out of
+               d->de_reg[], none of them the guard field
+
+The fields DISAGREE completely: the guard is a latch, the body is register state.  The
+question the rule asks -- are they written at the same sites? -- answers NO, and that is
+exactly what makes M3 below possible.
+
+  d->warned write sites: 7 today (grep -c 'd->warned |=' src/devices/dev_sgi_re.c), rising
+  to 9 after #499 (bits 7, 8) and this round (bit 9).
+
+  *** BIT ALLOCATION IS DECONFLICTED IN ADVANCE: #499 takes 1<<7 and 1<<8; THIS ROUND TAKES
+  1<<9.  Both rounds were designed for 1<<7 and the collision was caught by listing the enum
+  before writing either fix.  A duplicate enumerator is legal C and silent, and both devices
+  cast the same struct, so d->warned is shared. ***
+
+--------------------------------------------------------------------------- 4. CHANNEL
+Per mutant: the row that kills it, and the observable that differs under it.
+
+  M1 dropbang    if (!(d->warned & BIT))  ->  if ((d->warned & BIT))
+                 The latch never sets from the zeroed initial state, so the announce never
+                 fires -- while the guard still READS correct and the host still survives.
+                 CHANNEL: the message count.  KILLED BY the two-distinct-primitives row
+                 (wants 1, gets 0).
+
+  M2 bitalias    1 << 9  ->  1 << 6, aliasing SGIRE_W_DE_LEN.
+                 CHANNEL: the message, suppressed by prior UNRELATED traffic.  KILLED BY a
+                 session that fires the existing latch sites FIRST, then triggers POINT.
+                 A fresh-device primitive-only test CANNOT see this -- that is the whole
+                 point, and it is why the row needs the pre-arm.
+
+  M3 assign      d->warned |= BIT  ->  d->warned = BIT.  One character.  Clears every OTHER
+                 latch.  CHANNEL: a PREVIOUSLY-fired sibling message firing AGAIN.  KILLED
+                 BY an A -> primitive -> A session requiring A's message exactly once.
+                 This is check 3's field disagreement made concrete.
+
+  M4 exitzero    exit(1) reinstated as exit(0) at the default arm.
+                 *** THIS IS THE ONE THAT MAKES THE OBVIOUS ORACLE VACUOUS, AND IT IS
+                 KNOWABLE HERE RATHER THAN AFTER A CLEAN TABLE. ***  The natural re-pin of
+                 tail_acc_x is exit1 -> exit0.  Under M4 the session announces once and then
+                 DIES: how is "exit0", the re-pinned row reads GREEN, tail_acc still counts
+                 1, and no other session reaches draw_primitive().  TOTAL ESCAPE.
+                 EXIT STATUS CANNOT VARY between "declined and quit" and "died with status
+                 0", so that oracle is VACUOUS BY CONSTRUCTION at this site.
+                 KILLED BY re-pinning onto a POSITIVE POST-DRAW OBSERVABLE: extend the
+                 session with a load through the device and assert the VALUE (printed()
+                 already reads "died" when the host is gone).  An exit-status row may remain
+                 as a SECOND channel; the value row is the load-bearing one.
+
+ROWS THAT WILL RED BY SUCCEEDING, with their tiers.  The oracle-correction re-pin lands
+FIRST and the committed build is measured RED under the new expectations BEFORE any edit:
+
+  tail_acc_x    CERTAIN   wants exit1.  See M4 for what it must NOT be re-pinned to.
+  tail_acc      NO        counts the DRAW substring and wants 1.  DRAW is a PREFIX of the
+                          fatal and "(once)" appends AFTER it, and the session is a fresh
+                          process issuing exactly one draw -- so first = only = 1.  Green,
+                          no re-pin, PROVIDED the text is kept.
+  hi_draw,      NO but    both want count(DRAW) == 0, and their declined-width paths bypass
+  hi_rd_draw    FRAGILE   draw_primitive() anyway.  A REWORD would leave them counting a
+                          dead string -- green for the wrong reason, unfailable, invisible
+                          to every gate.  This is the strongest argument for keeping the text.
+  sgi_de rows   CERTAIN   gate_arm.sh checks a literal 29.  When tail_acc_x reds, that count
+  green (29)              falls to 28 and the denominator check reds too.  Bump it in the
+                          SAME edit, or the round meets two reds and misattributes one.
+
+CHECKS: 4 run, 0 skipped.  Findings: one mutant (M4) whose obvious oracle is vacuous by
+construction, caught at writing time; one deliberate no-row recorded with its reason; one
+latch-bit collision deconflicted in advance; one third gate observer that two file-reading
+seats missed.
+PRETABLE_DONE
