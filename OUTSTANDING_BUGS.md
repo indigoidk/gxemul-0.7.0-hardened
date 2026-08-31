@@ -18,6 +18,39 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-31: `SGIRE_W_*` spells its bits as literal `1 << N`
+>
+> **`sgirelatchenum`** -- a duplicate enumerator is legal C and silent, and `dev_sgi_re.c`'s
+> two devices cast the same `struct sgi_re_data *`, so `d->warned` is SHARED.  A collision
+> makes one arm's decline permanently suppressible by unrelated traffic to the other.
+>
+> **Three instances in three days:**
+>
+> 1. **MEASURED.**  `#498` added `SGIRE_W_DE_LEN = 1 << 6`; `#499`'s witness generator
+>    independently inserted `SGIRE_W_UNMAP_WR = 1 << 6`.  **14/14 total escape**, with a
+>    transcript showing one guest `sb` to `sgi_de` permanently silencing `sgi_re`'s catch-all.
+> 2. The codex seat independently proposed `1 << 7` -> `1 << 6` as the canonical clause-(d)
+>    mutant for the `#500` fix -- an adversary reaches for this collision unprompted.
+> 3. **PREVENTED.**  `#499` and `#500` were both designed for `1 << 7` while in flight
+>    together.  Caught by listing the enum before writing either fix; `#500` moves to `1 << 9`.
+>
+> *Two of three were found by measurement AFTER the fact; the third by one `grep` BEFORE it.*
+>
+> **THE FIX is the idiom this project already blesses.**  `SH4_VAL_*` was converted to a C99
+> enum ending in `_NCLASS` precisely so duplicates are impossible by construction, and the
+> carrier marks that work DISCHARGED.  Same shape here with one extra step, since these are
+> MASKS not ids -- enumerate the BIT POSITIONS and derive the masks:
+> `enum { SGIRE_WB_TLBA, ..., SGIRE_WB_NBITS };` then
+> `#define SGIRE_W_TLBA_LEN (1 << SGIRE_WB_TLBA)`.  The enumerator auto-increments, so two
+> bits cannot collide however many rounds add one, and `SGIRE_WB_NBITS` gives a compile-time
+> check that the set still fits `uint32_t warned`.
+>
+> **Not a rider on either round in flight** -- it touches every latch site (seven today, nine
+> after `#499` and `#500`).  A pure refactor with no behavioural delta needs a warrant under
+> the ADDITION LICENCE, and it has one: a MEASURED instance, not "cannot hurt".  Its control
+> is obvious -- the pre- and post-refactor binaries must be byte-identical, or it was not a
+> refactor.
+
 > ### OPEN -- filed 2026-08-31: THIRTEEN shipped rows pin survival as an `"exit0"` want
 >
 > **`exit0oracle`** -- a survival oracle that a wrong `exit(0)` satisfies is not a survival
