@@ -1,3 +1,75 @@
+## Round #499 sgireunmapped -- a 2080-byte door, and the obvious oracle escapes
+
+`DEVICE_ACCESS(sgi_re)` in `src/devices/dev_sgi_re.c` ended the host on any unmatched address,
+at ANY width, in EITHER direction, with no width predicate at all.  The handler dispatches guest
+offsets `0x1000-0x1fff`; the six windows cover `0x1000-0x17ff` with one internal gap, leaving
+`0x16e0-0x16ff` (32 bytes) plus `0x1800-0x1fff` (2048) = **2080 bytes** falling through to
+`exit(1)`.  A single guest `lb` at `0xb5001800` was enough.  Every other kill in that handler
+needs an unusual WIDTH or a DIRECTION; this one needed neither.
+
+Now a per-direction latched decline falling through to the function's common tail.  Live
+`exit(1)` in that file: 14 -> 13.  Two bits, `SGIRE_W_UNMAP_WR = 1 << 7` and
+`SGIRE_W_UNMAP_RD = 1 << 8`, because a driver probing an unmapped window commonly reads and
+writes it in one pass and one bit would announce the first and silence the other -- measured, as
+`M3shared`, which escaped.
+
+**The enum placement is load-bearing.**  An earlier draft inserted both after `1 << 5`, leaving
+the enum ending at `1 << 6`, so a maintainer scanning to the LAST enumerator for the next free
+bit would take `1 << 7` -- already used, legal C, silent, and the four handlers share one
+`malloc`'d struct.  That collision is not hypothetical: it happened between `#498` and this
+round's own generator and measured a 14/14 total escape.  Both bits now sit after
+`SGIRE_W_DE_LEN` in numeric order.
+
+### The obvious oracle escapes, and so did the first replacement
+
+The sibling probe's `other kill` row asserted `how == "exit1"` and would have gone red by
+succeeding.  Its own comment had already filed it as `otherkilldeath` and prescribed the fix.
+The natural re-pin is `exit0+txt`.  **Measured: it ESCAPES an `exit(0)` mutant** -- the message
+prints, the process exits 0, `got == want`, GREEN.  Exit status cannot vary between *declined
+and then quit* and *died with status 0*.
+
+The measuring seat's own first-choice replacement -- a `DE_STATUS` device-signature read --
+**escaped two further mutants**, because that read goes to a DIFFERENT device registration: it
+proves the emulator is alive and proves nothing about the catch-all's return path.  What shipped
+is a sentinel-preset read of the unmapped address itself, which fails all three.
+
+*Correcting an overclaim made in this round's own justification: the three failures carry TWO
+distinct values, not three -- `mexit0` and `mrdexit0` both give `exit0/txt/died`, `mret0` gives
+`exit0/txt/0xdeadbeef`.  The argument that matters survives (the channel varies where the
+alternatives do not); the stronger framing does not.  Caught by a packet-fed seat reading the
+parenthetical against the claim it was offered to support.*
+
+### Measurements
+
+```
+committed build, NEW oracle    34/35   other decl RED (got=exit1/notxt/died)
+fixed build,     SAME oracle   35/35
+#499 detector,   committed     18/28
+#499 detector,   fixed         28/28
+```
+
+Re-pin applied BEFORE the code changed; all four runs sentinel-verified and re-run locally
+rather than inherited, because the seat's existing order proof scored a different oracle.  Nine
+mutants built and killed.  The 28-row detector is wired into `gate_arm.sh` in this commit with a
+SUMMED denominator (`rows emitted` = ok + FAIL) that separates a LOST row from a FAILING one.
+Both `gate_hygiene.sh` pins raised in the same commit, as `port/WIRING_OBLIGATIONS.md` predicted
+at wiring time.
+
+### What this round got wrong
+
+**It shipped without a pass 2 on its own diff.**  The gate refused the NEXT commit with
+`NO PASS-2 RECEIPT` and noted it was the third such omission.  The pass was then run late, on
+shipped code, and found three defects no green gate can see: this block's absence, the
+distinctness overclaim above, and a death oracle that could not fail in a witness artifact
+committed alongside (`${PIPESTATUS[0]}` is `printf`, not the emulator -- corrected to index 1,
+which now reports the actual kill).
+
+Adjudicated as an undischarged obligation rather than a floor breach or a wrong record: nothing
+anywhere CLAIMED a pass 2 had happened, and an absence is not a false assertion.  The honest
+assessment of the late pass is that it is worth about half a timely one, and the discount scales
+with how much of a round's risk was DESIGN rather than EXECUTION -- so this round is the best
+case for lateness, and "it worked out this time" must not become the precedent.
+
 ## Round #498 sgidewidth -- a guest `sb` ended the host, and the OBVIOUS fix scores 24/25
 
 `DEVICE_ACCESS(sgi_de)` in `src/devices/dev_sgi_re.c` insisted on a 4- or 8-byte access and

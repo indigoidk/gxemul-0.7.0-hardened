@@ -93,8 +93,14 @@ enum {
 	    PLACED AFTER SGIRE_W_DE_LEN ON PURPOSE.  An earlier draft inserted
 	    these two after SGIRE_W_LINB_LEN (1 << 5), which left the enum ending
 	    at 1 << 6 -- so a maintainer scanning to the LAST enumerator for the
-	    next free bit would take 1 << 7, which is already used.  A duplicate
-	    enumerator is legal C and silent, and both devices share this word.  */
+	    next free bit would take 1 << 7, WHICH THESE TWO LINES BELOW ALREADY
+	    USE.  A duplicate enumerator is legal C and silent, and all four
+	    handlers share one malloc'd struct, so the collision crosses devices.
+
+	    (Wording sharpened after a pass-2 seat read "which is already used"
+	    as a standalone claim about 1 << 7 and reported the comment as
+	    self-contradictory against the code three lines down.  The claim was
+	    right and the sentence did not say BY WHAT.)  */
 	SGIRE_W_UNMAP_WR  = 1 << 7,
 	SGIRE_W_UNMAP_RD  = 1 << 8,
 };
