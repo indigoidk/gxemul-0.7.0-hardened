@@ -14144,6 +14144,38 @@ status (see that row's confound), so any row written against this arm inherits t
 *Found by the `lcabadval` rung-3 seat as an aside while answering a different question, and
 re-verified by reading the arm.*
 
+> ### *** CENSUSED THE SAME DAY: THIS IS A CLASS, NOT A SITE.  Widened low -> med. ***
+>
+> **The derivers, because the two numbers answer different questions and only one of them is a
+> defect count:**
+>
+>     grep -rc '(int)idata\|(int) idata' src/devices/*.c | grep -v ':0$'
+>
+> plus a window scan for those casts that sit in a diagnostic at a site which then `exit(1)`s.
+> On 2026-08-31 the first gave **309 casts across 70 device files** and the second **45 host-kill
+> sites**, about twenty carrying an explicit full-width guard.
+>
+> **MOST OF THE 309 ARE NOT DEFECTS AND SAYING SO IS THE POINT** — an 8- or 16-bit register loses
+> nothing through `(int)`. The defect needs BOTH halves: a guard testing the FULL 64-bit value
+> (`idata & ~MASK`, `idata != CONST`) AND a diagnostic printing the truncated one. Then a write
+> whose only distinguishing bits are above bit 31 dies while the message reports a value that
+> would have been accepted.
+>
+> *** THE SHARPEST INSTANCE, verified by computation and by reading the arm: `dev_pvr.c`'s
+> `if (writeflag == MEM_WRITE && idata != 0x0cff0000)` paired with `(int) idata`. *** A guest
+> writing `0x1_0cff0000` fails the 64-bit compare and the host dies — and the message prints
+> `0x0cff0000`, **exactly the value the code says is acceptable**. The diagnostic tells a
+> maintainer the guest wrote the correct value and died for it.
+>
+> **Severity, reasoned rather than assumed:** none of this changes *whether* the host dies — the
+> guards are unchanged. It changes what the log says about *why*, at the one moment the log is all
+> that survives. A records-correctness defect in product code, not a control-flow one.
+>
+> **NOT a one-line sweep.** Which sites are genuinely reachable with a >32-bit datum depends on
+> register width and the guest paths that reach them, and a blanket edit to 45 diagnostics is the
+> unlicensed addition this project refuses. The honest first round is the ~20 full-width-guard
+> sites, ordered by whether a guest can deliver a >32-bit write at all.
+
 ### `mtetlbflood` (low) -- filed 2026-08-31: an unlatched guest-drivable `fatal()` in the MTE
 
 `dev_sgi_re.c`'s MTE `switch (dst_tlb)` implements TLB A/B/C and LINEAR_A/LINEAR_B. `dst_tlb` is
