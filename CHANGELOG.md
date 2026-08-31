@@ -70,6 +70,133 @@ assessment of the late pass is that it is worth about half a timely one, and the
 with how much of a round's risk was DESIGN rather than EXECUTION -- so this round is the best
 case for lateness, and "it worked out this time" must not become the precedent.
 
+### Pass 3 (`4daa506`): three more breaches, two of them MEASURED clean sweeps
+
+The 36-row detector was reviewed by eight seats.  **agy was DELIBERATELY NOT FIRED** -- it is
+reserved for measurement by owner ruling, and that is neither a seat failure nor agreement.
+
+| seat | verdict | what it contributed |
+|---|---|---|
+| opus5 | DO NOT CLOSE | **MEASURED** `M1` and `M2`, both **36/36 TOTAL ESCAPE** |
+| fable5 | DO NOT CLOSE | the gate defect below, + the adjudication of the chain rule |
+| kimi | DO NOT CLOSE | found the gate defect INDEPENDENTLY, by a different route |
+| codex | DO NOT CLOSE | named the direction axis and the fact that would defeat it |
+| glm | DOES NOT CLOSE | the standard argument that settled it |
+| deepseek | NOT CLEAN | named the direction axis |
+| minimax | CLEAN | minority |
+| grok | CLEAN | **and its own body names `M2`** -- see below |
+
+**THE FRAME WAS FITTED TO THE MUTANTS IT WAS BUILT FROM.**  Pass 2's repair added a
+*component x width* two-by-two.  The catch-all's behaviour is a function of FIVE inputs, and the
+two-by-two spans `relative_addr` collapsed to two values, times `len` -- dropping `writeflag`
+at one of those values and POSITION at both:
+
+* **`M1`, direction.**  `} else if (relative_addr < CRIME_RE_LINEAR_A) { fatal; exit(1); }` on
+  the READ arm.  Component 1 was touched by exactly two sessions and **both were stores**, so
+  every row stayed green: **36/36**.
+* **`M2`, position within a component.**  `>= CRIME_RE_LINEAR_A` to `- 0x10`.  All four
+  component-1 rows sat at the component's BASE; component 1 is a 32-byte RANGE, not a point.
+  **36/36**, and a write at `0x16f0` was then silently accepted into `re_linear_a[]` with no
+  message at all.
+
+**`M2` IS THIS PROJECT'S OWN NEWEST RULE, UN-TRANSFERRED BY ONE HOP.**  The carrier says an
+accept row written at a window's BASE tests the near bound twice and the far bound never, so it
+must sit at the last legal slot.  That was applied to the six named windows in this very file
+and NOT to the catch-all's first component.
+
+### A RED gate on a GREEN detector -- and the harness could not see it
+
+Found by **two seats independently**.  Both new row names -- `clip narrow surv`, `clip narrow
+decl` -- are **exactly 16 characters**, and the probe prints names through `%-16s`.  A 16-char
+name gets zero padding plus the format's single separator space, while the gate's per-row
+pattern needs **two**.  Measured against this round's own preserved 36/36 log, both checks
+scored `got=0` against `want=1`.
+
+**The probe was green and the gate was red, on the same build.**  It is the padded-column trap
+this project has a standing note about, and the reason it survived is that the gate SCRIPT was
+never run after the rows were added -- only the probe.  The kimi seat put the shape best:
+*"the layer the diff edited (the gate list) is the layer the harness bypassed."*
+
+Repaired structurally rather than by renaming alone: `row()` now carries
+`assert len(name) <= 15`, so the trap cannot be reintroduced silently.  Both names are now 13
+characters.
+
+**The assert is negative-controlled in BOTH directions**, because a guard against a
+check-that-cannot-fail must not itself be one: re-injecting the exact 16-character name that
+shipped fires it (`row name 'clip narrow surv' is 16 chars; the gate pattern needs <= 15`), and
+the 13-character replacement is accepted.  The bound is derived, not guessed -- `%-16s` pads a
+name of length L to 16, the format contributes one more space, so L <= 15 is exactly the
+condition for the gate's two-space pattern to match.
+
+### A verdict line that closed a chain its own body had broken
+
+**The grok seat's verdict reads `CLEAN -- zero floor breaches; the chain closes`.**  Item 3 of
+its own body reads: *"CLIP is probed only at `0x16e0`.  `LINEAR_A`'s near bound sliding down by
+`0x10` eats `0x16f0-0x16ff` and leaves `clip *` green."*
+
+That is `M2`, described exactly, in the answer that ratified closure -- and the opus seat
+measured it as a total escape in the same panel.  The carrier already states the rule this
+instance confirms: **a verdict line is a summary written against the brief's own framing, so it
+is the LEAST likely part of an answer to carry the correction.  Read the body of any seat whose
+verdict merely agrees.**  Recorded because the tally would otherwise have read 6-2 rather than
+7-1, and because a seat that finds a breach and then closes is worse for a reader than one that
+finds nothing.
+
+### Pass 4: the CLASS closed rather than the cells -- 36 -> 48 rows
+
+Both seats that reached the class level said the same thing, from opposite ends.  The measuring
+seat: *"adding two more rows at the corner I just named will produce a fourth."*  The
+adjudicator, ruling on the chain rule and asked to be harder on it because it favours finishing:
+**when two consecutive passes find breaches of ONE class, the next repair owes the CLASS
+CLOSURE -- enumerate the full space, close every cell in one diff, and the closing pass verifies
+the enumeration rather than hunting cells.**
+
+So pass 4 does not add two rows at the corner.  It enumerates the catch-all's **five inputs**
+-- `relative_addr` (component AND position within it), `writeflag`, `len`, `idata`, `d->warned`
+-- closes every cell, and writes into the probe's CONTRACT which cells are covered and which are
+**deliberately not**, so a later escape is *"outside the contract, as stated"* rather than a
+fourth breach.
+
+**MEASURED, all logs preserved at `regress/artifacts/sgireunmapped/killtable_20260831/pass4/`
+and each verified by its `OPUS499T_DONE` sentinel rather than by existing:**
+
+| mutant | what it edits | vs 36 rows | vs 48 rows |
+|---|---|---|---|
+| base (the fix) | -- | 36/36 | **48/48** (`base.out`) |
+| `M1` direction | read arm qualified to component 2 | **36/36 ESCAPE** | **41/48**, 7 red (`M1.out`) |
+| `M2` position | `>= CRIME_RE_LINEAR_A` -> `- 0x10` | **36/36 ESCAPE** | **45/48**, 3 red (`M2.out`) |
+| `V` value | `writeflag == MEM_WRITE` -> `&& idata` | never built | **47/48**, 1 red (`V.out`) |
+
+The red rows are exactly the cells built for each, which is the enumeration verifying itself:
+`M1` reds the five component-1 read rows plus the two `cliphi` reads; `M2` reds only the three
+far-slot rows; `V` reds `wr zero decl` alone -- **and NOT `wr zero surv`, correctly**, since
+under `&& idata` the host still survives and only the message is wrong.  A survival-only oracle
+would have scored `V` a clean sweep, which is the refusal-effect-site lesson recurring.
+
+**`V` is the guard-field/body-field check paying for itself.**  The predicate reads `writeflag`;
+the guarded body reads `relative_addr` AND `idata`.  Every write in the detector carried a
+nonzero datum, so the two fields could never be seen to disagree.  The measuring seat derived
+that axis from the field lists without building it; the row and the mutant were both built here.
+
+**FLOOR CLAUSE (a), MEASURED AGAINST THE 48-ROW VERSION** (`PREFIX.out`, `PREFIX48_DONE`):
+the pre-fix committed file (`9f666a8^`, 18 `exit(1);` against the fix's 17) scores **18/48 with
+30 rows red.**  Every one of the twelve new rows is among them, so each carries a clause (a)
+kill in addition to whatever mutant it was built for.
+
+*** AND IT SETTLED A ROW WHOSE NOTE I HAD JUST CORRECTED ON A PREDICTION. ***  `clip surv` was
+found by two seats to be **vacuous by construction** -- green under the fix, under `T` and under
+`W`, while its note claimed it killed a grown TEX far bound (under which the len-8 write is
+serviced by the TEX arm and survives).  The note was rewritten to name the pre-fix build as its
+killer -- **but that was a prediction, and the row did not exist when the only pre-fix runs on
+record were taken**, so nothing measured it.  It is measured now: `clip surv` reads
+`got=exit1 want=exit0 FAIL` on the pre-fix build.  The corrected note is true, and it is true
+because it was checked rather than because it was reasoned.
+
+**What the closure does NOT cover, stated rather than left silent:** component 1's last slot at
+narrow width; component 2's far edge (bounded by `DEV_SGI_RE_LENGTH`, not by a constant in this
+file, so the one-token shrink has no analogue); and a zero datum on the read side or at
+component 1.
+
 ## Round #498 sgidewidth -- a guest `sb` ended the host, and the OBVIOUS fix scores 24/25
 
 `DEVICE_ACCESS(sgi_de)` in `src/devices/dev_sgi_re.c` insisted on a 4- or 8-byte access and

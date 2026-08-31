@@ -207,3 +207,100 @@ CHECKS: 6 run, 0 skipped.  AMENDED FINDINGS: one FLOOR-CLAUSE obligation missing
 from the original block (the accept side), with its mutant and its arm-unique
 kill channel; one latch-scope hazard in the very precedent that licenses the fix.
 PRETABLE_AMENDED_DONE
+
+================================================================================
+5. THE OP-VALUE STATE SPACE -- amended 2026-08-31, BEFORE any table for this row
+   has run (the dir held only this block and a witness), applying the lesson
+   #499's chain cost four passes to learn.
+================================================================================
+
+#499 spent three passes finding ONE class of breach three times: a cell of the
+guarded function's input space left empty, repaired at exactly the address the
+mutant had used, leaving the symmetric cell open for the next pass.  Two of those
+repairs were MEASURED CLEAN SWEEPS of a detector that had just come back green.
+The fix was to enumerate the space ONCE from the function's own inputs.  Doing
+that here, before the rows are written rather than after:
+
+  THE SELECTOR IS `op & 0xff000000`, AND THE DEFAULTED SET IS **INTERLEAVED WITH
+  THE IMPLEMENTED ONE, NOT ADJACENT TO IT.**  From crmfbreg.h:
+
+      0x00000000  DE_PRIM_POINT       -> default:  exit(1)
+      0x01000000  DE_PRIM_LINE        -> IMPLEMENTED
+      0x02000000  DE_PRIM_TRIANGLE    -> default:  exit(1)
+      0x03000000  DE_PRIM_RECTANGLE   -> IMPLEMENTED
+      0x04..0xff  unnamed             -> default:  exit(1)
+
+  *** SO "254 of 256 values kill the host" UNDERSTATES IT IN THE WAY THAT MATTERS.
+  TWO OF THE FOUR NAMED, DOCUMENTED PRIMITIVES ARE AMONG THE KILLERS, and one of
+  them is POINT -- the single most ordinary thing a 2D engine is asked to draw. ***
+  A row set that probes only "exotic" values above 0x03 tests the least likely
+  traffic and pins the most likely nothing.
+
+  THREE POSITIONS, and a row is owed at each because an edit is invisible from
+  the interior of a run -- this is the anchor rule's near/far-bound argument
+  transposed from ADDRESSES to a VALUE SPACE:
+
+    BELOW the implemented pair      POINT      0x00000000
+    BETWEEN the implemented pair    TRIANGLE   0x02000000
+    ABOVE  the implemented pair     unnamed    e.g. 0x7f000000
+
+  WHAT EACH POSITION CATCHES that the others do not:
+    * BELOW  -- a `case DE_PRIM_POINT:` added, or the switch re-based so 0x00
+      folds into LINE.  Invisible to any row probing 0x02 or above.
+    * BETWEEN -- `case DE_PRIM_TRIANGLE:` folded into either implemented arm, and
+      any widening of LINE's or RECTANGLE's case to a RANGE.  This is the cell a
+      two-arbitrary-values row set is most likely to miss, because both arbitrary
+      values usually land above 0x03.
+    * ABOVE  -- a mask edit (`0xff000000` -> `0x03000000`, one hex digit) that
+      makes every high value alias onto an implemented arm.  Note this one is
+      INVISIBLE from BELOW and BETWEEN, so it is not redundant with them.
+
+  THE EXISTING "two DISTINCT defaulted primitives in one session" ROW (check 2)
+  IS NOT DISCHARGED BY ANY TWO VALUES.  It must use two values from DIFFERENT
+  positions above -- otherwise it satisfies the latch claim while leaving the
+  value axis pinned at one point, which is precisely #499's `clip surv` shape.
+
+  NOT COVERED, stated so a later escape is outside the contract rather than a
+  fourth breach: the LOW 24 BITS of `op`.  The switch does not read them, but
+  DE_PRIM_LINE_SKIP_END, _RL, _TB and _LINE_WIDTH_MASK all live there, so a
+  future edit CAN make the default arm depend on them.  No row is owed today --
+  no enumerated mutant distinguishes those states -- and the moment one does,
+  this is where it gets written down.
+
+  --- VERIFIED AGAINST THE WITNESS AND THE SOURCE, same session, before any table ---
+
+  The three positions above are not a speculative partition.  `witness_20260831.out`
+  already drives TWO of them and records the device's own message for each:
+
+      [ sgi_de: UNIMPLEMENTED drawing op = 0x00000000, ... ]   BELOW   (POINT)
+      [ sgi_de: UNIMPLEMENTED drawing op = 0x02000000, ... ]   BETWEEN (TRIANGLE)
+
+  with a `D2: CONTROL -- a LEGAL primitive (RECTANGLE 0x03000000) must NOT die` arm.  So
+  the witness is already position-aware and the accept side is already controlled.  **The
+  ABOVE position (e.g. 0x7f000000) is driven by NOTHING on record** -- that is the one
+  cell the row set must add rather than inherit.
+
+  *** AND THE BELOW POSITION IS THE RESET STATE.  THE QUEUE ROW ALREADY SAYS SO, AND AN
+  EARLIER DRAFT OF THIS PARAGRAPH CLAIMED IT DID NOT -- corrected here before it shipped. ***
+
+  What I actually did was RE-DERIVE a fact the row already carries: `sgideprimop`'s entry
+  reads *"`DE_PRIM_POINT` is `0x00000000`, which is also the reset value (`memset(d, 0,
+  sizeof ...)`)"*, and its TITLE is already *"a correct driver drawing a point or a triangle
+  ends the host"* -- not the "254 of 256" framing I was about to accuse it of.  The
+  independent re-derivation is worth keeping (it is the discipline this project asks for);
+  the accusation was not, and would have been a wrong record about our own records.  `dev_sgi_re.c` zeroes the whole device struct at
+  attach (`memset(d, 0, sizeof(struct sgi_re_data))`, immediately after the
+  CHECK_ALLOCATION), so `CRIME_DE_PRIMITIVE` reads 0 until a guest writes it -- and
+  0 IS `DE_PRIM_POINT`, which falls to the killing `default:`.
+
+  **So the host dies on a guest that sets the START bit having never written the
+  primitive register at all.**  No unusual value, no exotic op: the DEFAULT STATE of the
+  device is one of the killers.  Verified here at `dev_sgi_re.c`'s `memset(d, 0,
+  sizeof(struct sgi_re_data))` immediately after CHECK_ALLOCATION, and consistent with what
+  the queue row already recorded.
+
+  CONSEQUENCE FOR THE ROW SET, and it is why this was worth checking before writing rows:
+  the BELOW row should trigger START **without writing CRIME_DE_PRIMITIVE first**, so it
+  pins the reset path rather than an explicitly-written zero.  Those are the same op value
+  and DIFFERENT reachability claims, and only the first is the one a driver hits by
+  omission.

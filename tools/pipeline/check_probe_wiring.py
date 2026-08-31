@@ -276,11 +276,43 @@ MANIFEST = {
         (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
 
     #  sgireunmapped #499: the SHIPPED detector.  Gate-run by gate_arm.sh -- invocation,
-    #  OPUS499T_DONE sentinel check, controls by name, all 28 rows named individually, and
-    #  a SUMMED denominator that separates a LOST row from a FAILING one.  Test-first
-    #  evidence in its own artifacts: 18/28 on the pre-fix build, 28/28 on the fix.
+    #  OPUS499T_DONE sentinel check, controls by name, EVERY row named individually, and
+    #  a SUMMED denominator that separates a LOST row from a FAILING one.
+    #
+    #  *** THE ROW COUNT IS NOT WRITTEN HERE.  It went 28 -> 34 -> 36 -> 48 across four
+    #  passes in one day and this comment said 28 for all of them.  Derive it: ***
+    #
+    #      awk '/for v in "live"/{l=$0; getline n;
+    #           if (n ~ /UNMLOG/) {print gsub(/"[^"]*"/,"",l)}}' regress/gate_arm.sh
+    #
+    #  The `getline'/UNMLOG pair is load-bearing and is not defensive clutter: several
+    #  sections of gate_arm.sh open with the same `for v in "live" "devsig"' names, so
+    #  the FIRST match is a different probe's list.  The log variable on the NEXT line
+    #  is the only thing that identifies which section a row list belongs to.  (A first
+    #  attempt here counted `check "sgi_re unmapped row:"' lines and returned 1 -- the
+    #  rows are named in a LOOP, so there is one such line however many rows exist.
+    #  It was caught by running it, which is the whole reason a deriver is written down
+    #  instead of a number.)
+    #
+    #  (Demoted literals, kept as the record of what was measured and never as current
+    #  claims: 18/28 pre-fix and 28/28 on the fix, the test-first evidence in this row's
+    #  own artifacts dir; 30/34 and 33/34 for the two pass-2 mutants against the 34-row
+    #  repair, where the 28-row version had scored both 28/28.)
     "sgi_re_unmapped_probe.py":
-        (CLASS_DETECTOR, "#499 sgireunmapped -- the unmatched-address catch-all is a latched per-direction decline; 28 rows, wired into gate_arm.sh in the same commit as the fix"),
+        (CLASS_DETECTOR, "#499 sgireunmapped -- the unmatched-address catch-all is a latched per-direction decline; wired into gate_arm.sh in the same commit as the fix, row count derived from the gate rather than restated here"),
+    #  #499 pass 4's FROZEN MUTATOR, preserved because the E0/E0W measurement is cited in
+    #  the round record and a citation into a session temp dir is not a citation.  It builds
+    #  the announce-then-exit(0) mutants; it is EVIDENCE, not a detector the battery owes a
+    #  run -- same disposition as the repin2 frozen copy below.
+    #
+    #  It also carries a lesson worth keeping next to the code: its FIRST version anchored on
+    #  the handler's common tail, and `memory_writemax64(cpu, data, len, odata);' occurs FIVE
+    #  times across FOUR handlers in dev_sgi_re.c.  The anchor matched twice and the run
+    #  aborted.  This version anchors on SGIRE_W_UNMAP_* text and REFUSES unless the match
+    #  count is exactly 1, so a wrong-handler mutation is impossible rather than unlikely.
+    "artifacts/sgireunmapped/killtable_20260831/pass4/e0_mut.py":
+        (CLASS_RESEARCH, "#499 pass 4 -- the frozen mutator for E0/E0W, the announce-then-exit(0) pair that measured the write-side floor breach.  Evidence, not a detector"),
+
     "artifacts/sgireunmapped/killtable_20260831/repin2/sgi_re_width_probe.repinned.py":
         (CLASS_RESEARCH, "sgireunmapped #499 REPIN2 -- the FROZEN re-pinned copy of #497's shipped probe, kept as the artifact the order proof was measured against.  The live file is regress/sgi_re_width_probe.py; this is evidence, not a second detector"),
 

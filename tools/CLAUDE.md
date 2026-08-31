@@ -2195,6 +2195,78 @@ each finding defects in the previous pass's fixes, and the chain did not converg
 > RECORD. Everything else gets FILED.
 That rule alone would have ended #392 at pass-2c instead of 2f.
 
+> ### *** THE REPAIR CHAIN -- a repair made in response to a pass 2 OWES ITS OWN PASS 2.
+> ### Adjudicated 2026-08-31, then CORRECTED TWICE by the adjudicating seat in the same day,
+> ### and both corrections came from the chain that minted it. ***
+>
+> **THE OBLIGATION FOLLOWS THE MATERIAL, NOT THE NARRATIVE.** A round that repairs a detector
+> in response to a panel has produced NEW floor-bound material, and "the round already had its
+> pass 2" is a fact about the narrative. `#499` ran four passes and **the first three each
+> found a real defect, two of them MEASURED CLEAN SWEEPS of a detector that had just come back
+> green.**
+>
+> **THE STOP CONDITION: one pass per floor-bound diff, closing on the FIRST PASS THAT FINDS
+> ZERO BREACHES** -- subject to the two corrections below, without which it closes early on a
+> live escape.
+>
+> #### CORRECTION 1 -- A ZERO NEEDS A VALIDITY CONDITION ON THE PASS, AND A DENOMINATOR
+>
+> As first written, "zero breaches" counted a pass's OUTPUT with no condition on the pass
+> itself. **Three briefs that day went out with the diff missing** -- a `git show | head -N`
+> inlined the commit message instead -- and a panel answering "no breaches" against an empty
+> packet would have CLOSED THE CHAIN.
+>
+> > **A closing pass must be a VALID pass: the diff actually delivered; the roster complete or
+> > its misses named per the seat ledger; and the zero carried WITH ITS DENOMINATOR -- which
+> > cells, which mutant shapes, were swept.** *"Zero found"* and *"zero looked for"* must not
+> > render the same, which is this project's oldest rule about blanks turned on its own stop
+> > condition.
+>
+> That also converts the rule's finishing incentive into a checkable artifact: **a bare zero
+> does not close; a zero with an enumeration does.**
+>
+> #### CORRECTION 2 -- SCOPE: EFFORT ON THE DIFF, THE FLOOR QUESTION ON THE COMPOSITE
+>
+> *"Scoped to that diff"* is ambiguous and **the dangerous reading would have closed `#499`
+> over a live total escape.** The breach that pass 3 found was not in that pass's two hunks --
+> the hunks were fine. It lived in the SHIPPED COMPOSITE detector's coverage of the ORIGINAL
+> fix's mutant space.
+>
+> > **Review EFFORT is scoped to the repair diff, so settled design is not re-litigated. The
+> > FLOOR QUESTION -- does a clean-sweep mutant exist in the (d) enumeration -- is asked of the
+> > SHIPPED COMPOSITE on every pass.**
+>
+> #### THE BOUND IS IMPORTED, NOT INTRINSIC -- state the dependency or the rule overclaims
+>
+> The stop condition does not bound the chain and must not pretend to. The bound comes from
+> **the (d) DEPENDS-ON enumeration being diff-closed and finite**, and from *zero breaches*
+> meaning **zero SURVIVING ADJUDICATION** rather than zero raised -- otherwise one stubborn
+> seat blocks closure forever, against the count-arguments-not-seats rule. With those imports
+> the chain is infinite only if every repair is defective, in which case every pass is buying a
+> real defect off the ship.
+>
+> #### *** THE AMENDMENT THAT ACTUALLY ENDS CHAINS, and it is the part worth carrying. ***
+>
+> `#499`'s three breaches were **THE SAME CLASS THREE TIMES** -- a cell of one state space left
+> empty, repaired at exactly the address the mutant had used, leaving the symmetric cell open
+> for the next pass. Pass 1 found *width* unpinned; pass 2 found *component*; pass 3 found
+> *direction* AND *position*. **Pass-per-instance converges LINEARLY IN CELLS**, and 28 -> 34
+> -> 36 rows bought one cell each.
+>
+> > **WHEN TWO CONSECUTIVE PASSES FIND BREACHES OF ONE CLASS, THE NEXT REPAIR OWES THE CLASS
+> > CLOSURE: enumerate the full space from the function's own inputs, close every cell in ONE
+> > diff, and write into the CONTRACT which cells are covered and which are deliberately not.
+> > The closing pass then VERIFIES THE ENUMERATION rather than hunting cells.**
+>
+> That is the reading-seat-buys-the-class lesson wearing the repair hat. It also converts a
+> future escape from *"another breach"* into *"outside the contract, as stated"* -- which is
+> exactly what clause (e) is for, and which a cell-by-cell chain can never reach.
+>
+> *Provenance: proposed by the main loop, adjudicated by the flagship seat AGAINST ITSELF --
+> it was asked to be harder on a rule that favours finishing, and returned two defects and an
+> amendment. The measuring seat independently reached the same amendment from the other end:
+> "adding two more rows at the corner I just named will produce a fourth pass."*
+
 **TWO TIERS OF GATE — "green gate" was ambiguous and cost a day.** 24 commits shipped on
 2026-08-13 with the full battery never run once; a red battery could not have been attributed
 to any of them.
@@ -3017,6 +3089,33 @@ audit of this whole file found the transcribed count to be its single largest de
 > it builds NO checker; and the ~70 legacy counts stay governed by the existing read-side rule
 > -- re-derive an exemplar before leaning on it, and FILE anything found decayed rather than
 > sweeping it.
+>
+> #### *** AND THE DERIVER MUST KEY ON WHAT DEFINES THE CLASS, NOT ON A CORRELATE OF IT.
+> #### Measured 2026-08-31 after THREE name-based censuses of one class all came back wrong,
+> #### in both directions -- and the third was mine, using the deriver I had just written
+> #### telling other people not to transcribe numbers. ***
+>
+> `staticlatchscope` counts function-static warn-once latches. Every census pattern keyed on
+> the VARIABLE BEING CALLED `w`/`warned`/`first`, and the population's names run **`warned` 13,
+> `w` 6, `first` 2, plus six singletons** (`warned2`, `warn_fs`, `warn`, `w_warned`,
+> `scc_oob_warned`, `r_warned`). Counts came back 10/3, then 23/7, then 26/10.
+>
+> **A latch is defined by its SCOPE and its USE, not by its spelling**, so a name pattern cannot
+> enumerate that class at all -- and every attempt undercounted while looking authoritative.
+> Keyed on scope (`grep -rc -e '^[[:space:]]\+static int ' -e '{[[:space:]]*static int '`) it is
+> **30 sites across 13 files, of which 28 across 11 are latches** -- the two exclusions being
+> periodic counters that the name patterns had also silently swept in.
+>
+> > **BEFORE WRITING A DERIVER, ASK WHAT MAKES A MEMBER A MEMBER.** If the answer is a property
+> > the regex does not test -- scope, position, use, type -- the deriver is measuring a
+> > correlate, and a correlate's error is invisible because the output is still a plausible
+> > number. **This is the check-that-cannot-fail family's counting cousin: it returns the same
+> > shape of answer whether or not it is enumerating the right set.**
+>
+> *Cheap tell, and it is the one that broke this open: when two derivers disagree, neither is
+> trustworthy until you look at what each MATCHED. Four methods gave four answers here, and
+> printing the per-file breakdown -- not the total -- was what showed three files missing
+> entirely and one file counted at double its real population.*
 
 **THE HONEST SEVERITY, because the ruling turned on it: NO STALE COUNT HAS EVER CHANGED A
 DECISION.** The adjudicator hunted for one and came back negative, checking every candidate

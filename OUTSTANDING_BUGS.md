@@ -13871,6 +13871,46 @@ concluded the shipped tool did not have it -- because I checked the number peopl
 
 ### `sgireunmapped` (high) -- the widest door in the device, and no row covered it
 
+> ### *** STATUS 2026-08-31: THE FIX IS SHIPPED AND CLOSED (`a643e18 9f666a8`).  WHAT IS OPEN
+> ### IS ITS DETECTOR, AND THE CHAIN IS ON ITS FOURTH PASS. ***
+>
+> **The product fix is not in question and is not reopened.** The catch-all is a per-direction
+> latched decline falling through to the function's common tail; live `exit(1)` in that file
+> went 14 -> 13.  Every pass since has been about the DETECTOR that ships with it.
+>
+> | pass | on | what it found |
+> |---|---|---|
+> | 1 | `9f666a8` | two mutants sweeping the 28-row detector CLEAN |
+> | 2 | `938b328` | the repair reproduced the SAME GAP one level down |
+> | 3 | `4daa506` | **two MEASURED clean sweeps** (`M1` direction, `M2` position) and a **RED GATE ON A GREEN PROBE** |
+> | 4 | pending | the CLASS closure -- 48 rows, the state space enumerated once |
+>
+> **THREE BREACHES, ONE CLASS, THREE TIMES.**  Each was a cell of the catch-all's state space
+> left empty, repaired at exactly the address the mutant had used, leaving the symmetric cell
+> open for the next pass.  Pass 1 found *width* unpinned, pass 2 *component*, pass 3 *direction*
+> AND *position*.  The measuring seat's warning is the reason pass 4 is shaped differently:
+> *"adding two more rows at the corner I just named will produce a fourth."*
+>
+> So pass 4 does not patch cells.  It enumerates the catch-all's FIVE INPUTS -- `relative_addr`
+> (component AND position within it), `writeflag`, `len`, `idata`, `d->warned` -- closes every
+> cell in one diff, and writes into the probe's CONTRACT which cells are covered and which are
+> **deliberately not**, so a later escape is *"outside the contract, as stated"* rather than a
+> fourth breach.
+>
+> **`M2` is this project's own newest rule un-transferred by one hop**, and that is the part
+> worth carrying: the carrier says an accept row at a window's BASE tests the near bound twice
+> and the far bound never.  That was applied to the six named windows IN THIS VERY FILE and not
+> to the catch-all's first component, whose four rows all sat at the base.  One hex digit --
+> `>= CRIME_RE_LINEAR_A` to `- 0x10` -- swept 36 rows clean.
+>
+> **And the gate defect is the one a green probe could never show.**  Both rows added by pass 2
+> were named exactly 16 characters; the probe prints names through `%-16s` and the gate's
+> per-row pattern needs two spaces.  `got=0` against `want=1` **on a fully green build** --
+> found by two seats independently, and shipped because the gate SCRIPT was never run after the
+> rows were added, only the probe.  Repaired structurally: `row()` now asserts
+> `len(name) <= 15`.
+
+
 `DEVICE_ACCESS(sgi_re)`'s final `else` -- the unmatched-address arm -- prints a `fatal()`
 per direction and then `exit(1)`, **with no width predicate at all.** Every other kill in
 that handler needs the guest to choose an unusual access WIDTH (the six `len != 8` arms) or
@@ -14076,3 +14116,49 @@ a wrong RECORD, not a wrong measurement.  Rebuilt; clearance re-measured YES/YES
 
 *The recurrence rate is the finding: the rule is written down, it fires when someone runs
 it, and three times now nobody ran it at the round boundary where it is owed.*
+
+### `lcaconfwidth` (low) -- filed 2026-08-31: the kill diagnostic can name a value that would not have killed
+
+`dev_lca.c`'s `LCA_IOC_CONF` guard is:
+
+```c
+if (idata & ~1) {
+        fatal("TODO: Write to unimplemented bit of IOC_CONF: 0x%x\n", (int)idata);
+        exit(1);
+}
+```
+
+`idata` is 64-bit. A write of `0x100000000` has `idata & ~1` TRUE, so the host dies — while
+`(int)idata` truncates to zero and the diagnostic prints `0x0`. **The message names a value that
+would not have triggered it**, so a future reader debugging the death is told the wrong cause.
+
+That is a WRONG RECORD emitted by product code at the exact moment of the kill, which is the one
+place a wrong record is hardest to recover from: the process is gone and the log is all that is
+left. The fix is the printf specifier (`0x%llx` with a `(long long)` cast, the file's own idiom
+elsewhere), not the guard.
+
+**Deliberately NOT folded into `lcabadval`**, which is about the guards themselves. They interact
+and the ordering matters: `lcabadval`'s rows must match the `fatal()` TEXT rather than the exit
+status (see that row's confound), so any row written against this arm inherits this bug's output.
+
+*Found by the `lcabadval` rung-3 seat as an aside while answering a different question, and
+re-verified by reading the arm.*
+
+### `mtetlbflood` (low) -- filed 2026-08-31: an unlatched guest-drivable `fatal()` in the MTE
+
+`dev_sgi_re.c`'s MTE `switch (dst_tlb)` implements TLB A/B/C and LINEAR_A/LINEAR_B. `dst_tlb` is
+a **3-bit guest-controlled field** — `(mode & 0x1c) >> 2` — so values 3 (`MTE_TLB_TEX`), 6
+(`MTE_TLB_CLIP`) and 7 reach `default:`.
+
+That arm is a bare `fatal()` with **no `exit(1)`**, so it is *not* a host kill — but it carries
+**no latch either**, so a guest looping over MTE operations floods host stdout without bound.
+`floodclass` family. The house idiom is `N = 1` per device instance with the suppression marker
+in the message text; **derive the marker's spelling and count rather than quoting one** — that
+figure has been wrong in this file twice.
+
+**Distinct from `sgideprimop`**, which is the drawing-op switch in the same file and *does*
+`exit(1)`. Both are guest-driven `switch` defaults in `dev_sgi_re.c` and a round touching one
+should say explicitly that it is not touching the other.
+
+*Found by the `sgitexindex` seat as a residual while checking an unrelated question, and
+re-verified by reading.*

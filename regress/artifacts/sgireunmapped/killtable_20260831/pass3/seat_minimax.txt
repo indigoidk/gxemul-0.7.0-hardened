@@ -1,0 +1,43 @@
+**VERDICT: No floor breach in this diff. Chain closes on this pass.**
+
+The two new rows (`clip narrow surv`, `clip narrow decl`) correctly close the {component, width} 2×2 by filling the missing {component 1, narrow} cell. The Python addition mirrors the existing clip/clip‑decl pair; the shell updates (count thresholds 34→36, two new entries in the `for v` list) match. No syntactic defect.
+
+---
+
+**Q1 — third dimension. [REASONED]**
+
+The 2×2 does NOT span the space. Two real gaps the diff inherits:
+
+1. **Address within component.** The new probe is `RE + 0x6e0` = `0xb50016e0`, the START of component 1. A guard re‑added at the END of component 1 (e.g. `0x16f8`–`0x16ff`) is not caught. The existing component‑2 narrow rows have the same asymmetry (they use `0xb5001800`, the START of component 2). The TEX side gets the lo/hi boundary treatment via `tex acc lo` / `tex acc hi`; clip and the rd/wr catch‑all do not.
+
+2. **Width sub‑class.** The matrix is `{sb, sd/ld}` — 1‑byte and 8‑byte. A guard conditioned on `sw` (2‑byte) or `lw` (4‑byte) only is not caught by either surv row. The brief's own candidate "alignment" collapses into width for this device, so it is not a free axis.
+
+"Access ordering" and "latch state at entry" are NOT gaps — `wr lat1`, `rd lat1`, `wr rd 2msg` cover them.
+
+So the 2×2 is right for T and W, but the matrix the diff sits inside is incomplete. This is the same shape of incompleteness the 34‑row had one level down; the 36‑row does not introduce a new instance of it.
+
+---
+
+**Q2 — channel variation. [MIXED READ + REASONED]**
+
+The six new rows split into three pairs on the same access each:
+- `(wr narrow surv, wr narrow decl)`
+- `(rd narrow surv, rd narrow sent)`
+- `(clip narrow surv, clip narrow decl)`
+
+Brief states T makes two decl rows flip `1→0` while their surv rows hold [READ]. Under W all six new rows go red (30 green + 6 red = 36) [READ]. So:
+
+- The two decl channels vary independently of their surv counterparts (silent‑drop mutant → decl red, surv green).
+- The four "other" rows (the three surv rows plus `rd narrow sent`) all vary with W.
+
+No row is satisfiable for the wrong reason on the shapes I can see — surv is `exit0`, decl/sent is a count of an `unimplemented … to/from address` message in the log, and these fail independently for silent‑drop vs kill mutants. [REASONED]
+
+One thing I cannot settle from the packet: the exact expected count and message string of `rd narrow sent`. The shape suggests "one `unimplemented load from address` message logged, process survives" — which is the read‑side mirror of `decl` — but the precise expected value is in code I cannot see. **Fact that would settle it:** the four `row(...)` calls for `wr narrow surv/decl`, `rd narrow surv/sent` in the 34‑row portion of `sgi_re_unmapped_probe.py`.
+
+---
+
+**Q3 — chain close. [REASONED]**
+
+No floor breach. Diff is internally consistent, new rows close the 2×2 it's working with, paired oracles are independent. The 36‑row finds zero breaches against the 2×2 frame.
+
+**The chain closes here.**

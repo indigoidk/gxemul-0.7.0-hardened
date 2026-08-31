@@ -55,6 +55,41 @@
 #        CELL by a channel outside the decode under test, which is clause
 #        (f)'s requirement.  A "did not reach the catch-all" oracle cannot do
 #        this: it is satisfied by ANY arm servicing the access.
+#      * *** THE CATCH-ALL'S OWN STATE SPACE, ENUMERATED RATHER THAN PATCHED.
+#        Added by #499 pass 4 after THREE consecutive passes each found a breach
+#        of ONE class -- a cell of this space left empty, repaired at exactly the
+#        address the mutant had used, leaving the symmetric cell open for the
+#        next pass.  Two of the three were MEASURED CLEAN SWEEPS of a detector
+#        that had just come back green. ***
+#
+#        The catch-all's behaviour is a function of FIVE inputs, so they are
+#        listed and each is given a row that varies under a named mutant:
+#
+#          relative_addr  component 1 (0x16e0-0x16ff) and component 2 (0x1800+),
+#                         AND POSITION WITHIN a component.  Component 1 is a
+#                         32-byte RANGE, not a point: `>= CRIME_RE_LINEAR_A'
+#                         changed to `- 0x10' swept 36 rows CLEAN because all
+#                         four component-1 rows sat at the BASE.  `cliphi rd/wr'
+#                         sit at its LAST 8-byte slot (0x16f8);
+#          writeflag      `else if (relative_addr < CRIME_RE_LINEAR_A)' on the
+#                         READ arm also swept 36 rows clean -- component 1 was
+#                         probed by two sessions and BOTH were stores.
+#                         `clip rd *' and `cliphi rd *' close it;
+#          len            8 vs narrow, now at both components (`clip rdn *');
+#          idata          every write carried a NONZERO datum, so
+#                         `writeflag == MEM_WRITE && idata' had no disagreeing
+#                         row.  `wr zero surv'/`wr zero decl' supply one;
+#          d->warned      latch state at entry -- the `lat1' rows.
+#
+#        NOT COVERED IN THIS SPACE, deliberately and stated so a later escape is
+#        "outside the contract" rather than an argument about overclaiming:
+#          - component 1's LAST slot at NARROW width (the len axis is pinned at
+#            the base of both components and at neither far edge);
+#          - component 2's FAR edge.  It is bounded by DEV_SGI_RE_LENGTH rather
+#            than by a constant in this file, so the one-token shrink that works
+#            on component 1 has no analogue here;
+#          - a zero datum on the READ side (a read carries none) or at
+#            component 1.
 #
 #    DOES NOT CATCH
 #      * a collision among the SIX #497 window bits.  That is
@@ -119,9 +154,20 @@ SENTINEL = 0xdeadbeef
 #  The kill literal is NOT a substring of the decline literal -- the character
 #  after the datum is ' ]' in one and ' -' in the other -- so the two are
 #  mutually exclusive rather than merely different.
-def wr_decl(off):
+def wr_decl(off, val=ACC_VAL):
+    #  #499 pass 4: `val' was hardcoded to ACC_VAL, so every row whose store used
+    #  a different datum -- the narrow rows, the zero-datum row -- had to fall back
+    #  to the bare substring "unimplemented write to address", which is ALSO a
+    #  prefix of the KILL text.  That abandons the mutual exclusivity the comment
+    #  above goes to trouble to establish.  Parameterised, those rows get the full
+    #  literal for free.
     return ("unimplemented write to address 0x1%03x, data=%s -- declined."
-            "  (once) ]" % (off, ACC_VAL))
+            "  (once) ]" % (off, val))
+
+
+def datum(val):
+    """the 16-hex-digit form the device prints for a t0 value of `val'"""
+    return "0x%016x" % int(val, 16)
 
 
 def wr_kill(off):
@@ -179,6 +225,20 @@ rows = []
 
 
 def row(name, got, want, note=""):
+    #  THE NAME COLUMN IS %-16s AND THE GATE'S PER-ROW PATTERN IS "^<name>  .*ok$"
+    #  -- TWO literal spaces.  A name of length L is followed by (16 - L) pad
+    #  characters plus the format's own space, so L must be <= 15 or the row emits
+    #  ONE space, the gate's check becomes UNSATISFIABLE (got=0 against want=1),
+    #  and the gate goes RED on a GREEN probe.
+    #
+    #  #499's pass 3 shipped exactly two 16-char rows and the failure was found by
+    #  a review seat rather than by the gate -- because the gate SCRIPT was never
+    #  run after they were added, only the probe.  Both were renamed to 13 chars.
+    #  This assert designs the trap out instead of asking the next author to
+    #  remember it.  Note the trap has an opposite form too: a name that is a
+    #  PREFIX of another matches two rows.
+    assert len(name) <= 15, (
+        "row name %r is %d chars; the gate pattern needs <= 15" % (name, len(name)))
     ok = (got == want)
     rows.append((name, ok))
     print("%-16s %-14s %-14s %-48s %s" % (name, str(got), str(want), note,
@@ -357,7 +417,7 @@ A = Addr(CODE)
 t, alive, how = session(store(A, RE + UNMAP_W, op=OP_SB_T0_A3, val="0x5a"))
 row("wr narrow surv", how, "exit0",
     "a BYTE write to the catch-all survives -- kills a re-added len guard")
-row("wr narrow decl", t.count("unimplemented write to address"), 1,
+row("wr narrow decl", t.count(wr_decl(UNMAP_W, datum("0x5a"))), 1,
     "...and is announced: the decline is width-agnostic, as the fix claims")
 
 A = Addr(CODE)
@@ -371,8 +431,8 @@ row("rd narrow sent", printed(t, "v0") if alive else "died", "0x0",
 A = Addr(CODE)
 t, alive, how = session(store(A, RE + 0x6e0))
 row("clip surv", how, "exit0",
-    "the 32-byte first component survives too -- kills a grown TEX far bound")
-row("clip decl", t.count("unimplemented write to address"), 1,
+    "comp1 base, len8, WRITE survives (killed by the pre-fix build)")
+row("clip decl", t.count(wr_decl(0x6e0)), 1,
     "...and is announced, so the component is covered rather than merely alive")
 
 #  *** AND THE SAME AXIS AGAIN, ONE LEVEL DOWN.  Added 2026-08-31 after two packet-fed
@@ -388,10 +448,143 @@ row("clip decl", t.count("unimplemented write to address"), 1,
 #  not have been.
 A = Addr(CODE)
 t, alive, how = session(store(A, RE + 0x6e0, op=OP_SB_T0_A3, val="0x5a"))
-row("clip narrow surv", how, "exit0",
+row("clip nar surv", how, "exit0",
     "a BYTE write to the FIRST component survives -- closes the width x component matrix")
-row("clip narrow decl", t.count("unimplemented write to address"), 1,
+row("clip nar decl", t.count(wr_decl(0x6e0, datum("0x5a"))), 1,
     "...and is announced: neither component nor width is a special case")
+
+#  ==================================================================== #499 pass 4
+#  THE STATE-SPACE ENUMERATION.  Written because THREE CONSECUTIVE PASSES found a
+#  breach of the SAME CLASS -- a cell of this space left empty, repaired at exactly
+#  the address the mutant used, leaving the symmetric cell open for the next pass:
+#
+#      pass 1  "width unpinned"                 -> repaired at component 2 only
+#      pass 2  "component unpinned"             -> repaired on the WRITE side only
+#      pass 3  "direction AND position unpinned"
+#
+#  A fourth patch at the corner pass 3 named would have produced a fifth pass.  So
+#  the catch-all's inputs are enumerated ONCE, from the function signature, and the
+#  cells are closed together.  The CONTRACT below states which are covered and which
+#  are deliberately not -- a later escape is then "outside the contract, as stated"
+#  or "a breach of it", which are different dispositions.
+#
+#  THE FIVE INPUTS the catch-all's behaviour is a function of:
+#
+#      relative_addr  which component (1 = 0x16e0-0x16ff, 2 = 0x1800-0x1fff)
+#                     AND where within it -- BASE vs LAST 8-byte slot.  Position is
+#                     a real axis: component 1 is a 32-byte RANGE, not a point, and
+#                     `>= CRIME_RE_LINEAR_A - 0x10' swept a 36-row detector CLEAN
+#                     because all four comp1 rows sat at the base.  That is the
+#                     carrier's own accept-row rule -- an accept row at a window's
+#                     BASE tests the near bound twice and the far bound never --
+#                     applied to the six named windows and NOT to this one.
+#      writeflag      read vs write.  `else if (relative_addr < CRIME_RE_LINEAR_A)'
+#                     on the READ arm also swept 36 rows clean: comp1 was probed by
+#                     two sessions and BOTH were stores.
+#      len            8 vs narrow.
+#      idata          the datum.  Every comp1/comp2 write here carried a NONZERO
+#                     value, so `writeflag == MEM_WRITE && idata' had no disagreeing
+#                     row -- the guard-field/body-field check's own shape.
+#      d->warned      latch state at entry (the `lat1' rows).
+#
+#  COVERED, and each row names the mutant it kills and the channel that differs:
+A = Addr(CODE)
+t, alive, how = session(load(A, RE + 0x6e0) + ["print v0"])
+row("clip rd surv", how, "exit0",
+    "comp1 base, len8, READ survives -- kills a read-arm kill qualified to comp2")
+row("clip rd decl", t.count(rd_decl(0x6e0)), 1,
+    "...and is announced with the FULL literal, so a kill cannot satisfy it")
+row("clip rd sent", printed(t, "v0") if alive else "died", "0x0",
+    "...and lands a DEFINED 0, so the common tail ran")
+
+A = Addr(CODE)
+t, alive, how = session(load(A, RE + 0x6e0, op=OP_LW_V0_AT) + ["print v0"])
+row("clip rdn surv", how, "exit0",
+    "comp1 base, NARROW read: the last empty cell of component 1")
+row("clip rdn decl", t.count(rd_decl(0x6e0)), 1,
+    "...and is announced")
+
+#  THE FAR EDGE.  0x6f8 is component 1's LAST 8-byte slot (0x16f8; the component
+#  ends at CRIME_RE_LINEAR_A = 0x1700).  A read here kills BOTH measured sweeps at
+#  once: under a comp2-qualified read kill it reaches CLIP_IDS, and under a widened
+#  LINEAR_A near bound it reaches LINEAR_A.
+A = Addr(CODE)
+t, alive, how = session(load(A, RE + 0x6f8) + ["print v0"])
+row("cliphi rd surv", how, "exit0",
+    "comp1 LAST slot, READ survives -- the far bound, which no base row can see")
+row("cliphi rd decl", t.count(rd_decl(0x6f8)), 1,
+    "...and is announced from the far slot, not merely from the base")
+
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + 0x6f8))
+row("cliphi wr surv", how, "exit0",
+    "comp1 LAST slot, WRITE survives")
+row("cliphi wr decl", t.count(wr_decl(0x6f8)), 1,
+    "...and is announced: a window swallowing the top half goes SILENT here")
+
+#  SIBLING PARITY: comp2's narrow WRITE has an announce channel and its narrow READ
+#  had only surv+sent, so a len-conditioned suppression of the read announce alone
+#  escaped every row.
+A = Addr(CODE)
+t, alive, how = session(load(A, RE + UNMAP_R, op=OP_LW_V0_AT) + ["print v0"])
+row("rd narrow decl", t.count(rd_decl(UNMAP_R)), 1,
+    "comp2 narrow READ is announced, not merely survived")
+
+#  THE VALUE AXIS.  The guard reads writeflag; the guarded body reads relative_addr
+#  AND idata.  With every other write carrying a nonzero datum, `&& idata' would
+#  reroute a zero-datum write into the READ arm and no row would disagree.
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + UNMAP_W, val="0x0"))
+row("wr zero surv", how, "exit0",
+    "a ZERO-datum write survives")
+row("wr zero decl", t.count(wr_decl(UNMAP_W, datum("0x0"))), 1,
+    "...and is announced AS A WRITE -- kills `writeflag == MEM_WRITE && idata'")
+
+#  ==================================================== #499 pass 4, L2 REPAIR
+#  *** MEASURED FLOOR BREACH, clause (d): the guard kept, its repair removed. ***
+#
+#  Mutant E0W -- the catch-all's WRITE arm announces and then `exit(0)' -- scored
+#  a CLEAN SWEEP of the 48-row detector.  Measured, not reasoned:
+#
+#      E0   exit(0) after the whole catch-all, BOTH directions   47/48
+#      E0W  exit(0) in the WRITE arm only                        48/48  TOTAL ESCAPE
+#
+#  WHY EVERY EXISTING WRITE ROW IS BLIND TO IT, and it is by construction:
+#    * a `surv' row wants "exit0", and a clean `exit(0)' IS exit status 0, so the
+#      oracle is SATISFIED by the very thing it should catch;
+#    * a `decl' row counts the message, which was already printed before the exit.
+#  The two together therefore pass.  That is the `exit0oracle' class, and this is
+#  its first MEASURED instance rather than a predicted one -- #500's own pre-table
+#  block had named the shape (`EXIT STATUS CANNOT VARY between declined-and-quit
+#  and died-with-status-0') at a different site, without building it.
+#
+#  E0 is caught by exactly ONE row, `wr rd 2msg', and only INCIDENTALLY: that row
+#  performs two accesses, so it notices the second one never happening.  A single-
+#  access write row cannot see this at all.
+#
+#  THE REPAIR IS A POST-STORE POSITIVE OBSERVABLE, which is what the READ side
+#  already had (`rd sent' reads "absent" when the host is gone) and the WRITE side
+#  had nowhere.  Each row below seeds RAM, performs the declined device write, then
+#  reads the seed back: if the host quit at the write, the load never runs and
+#  printed() returns "absent", which is not the datum.
+#
+#  BOTH COMPONENTS, deliberately.  E0W as built edits the shared write arm, so one
+#  row would kill it -- but a write-side exit(0) CONDITIONED on one component is the
+#  same asymmetry this round has now been bitten by three times, and the second row
+#  costs one session.
+A = Addr(CODE)
+t, alive, how = session(store(A, SCRATCH_RAM)
+                        + store(A, RE + UNMAP_W)
+                        + load(A, SCRATCH_RAM) + ["print v0"])
+row("wr then live", printed(t, "v0") if alive else "died", ACC_VAL,
+    "comp2: the guest RUNS ON after a declined write -- kills announce-then-exit(0)")
+
+A = Addr(CODE)
+t, alive, how = session(store(A, SCRATCH_RAM)
+                        + store(A, RE + 0x6e0)
+                        + load(A, SCRATCH_RAM) + ["print v0"])
+row("clip wr live", printed(t, "v0") if alive else "died", ACC_VAL,
+    "comp1: same, so a component-conditioned exit(0) cannot hide either")
 
 # ------------------------------------------------- the two latches
 A = Addr(CODE)

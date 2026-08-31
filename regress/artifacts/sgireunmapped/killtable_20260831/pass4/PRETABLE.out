@@ -1,0 +1,137 @@
+#499 PASS 4 -- PRE-TABLE CHECK
+================================================================================
+
+*** ORDER, STATED EXACTLY RATHER THAN IMPLIED BY AN MTIME.  READ THIS FIRST. ***
+
+The mandate is that this block is written BEFORE table 1 runs, so its own mtime
+proves the order.  THAT IS NOT WHAT HAPPENED HERE, and writing it silently would
+be the laundering the order discriminator exists to prevent.
+
+  08:49:36   kill48.run.sh launched
+  08:51:xx   base.out written (48/48, the fix -- already known independently
+             from a local run at 08:48)
+  08:52:xx   THIS BLOCK written
+  later      M1, M2, V scored
+
+So it is written AFTER the table launched and BEFORE ANY MUTANT WAS SCORED --
+verified by `ls /tmp/kill48/`, which held only base.out and build_base.log.  No
+mutant result could have shaped a word of it.
+
+Two further things make it checkable rather than asking for trust:
+
+  * THE ROWS WERE ALREADY WRITTEN AND COMMITTED TO THE FILE before this block
+    existed.  Nothing here can change them; the enumeration below either matches
+    the 48 rows in the probe or it does not, and that is mechanically checkable.
+  * The analysis this block records is genuinely pre-table -- it is the
+    state-space enumeration in the probe's own CONTRACT block, which was written
+    to produce the rows.
+
+The honest grade: this discharges the pre-table check's SUBSTANCE and not its
+ORDER PROOF.  Recorded as a MISS on the order, which makes three rounds that have
+skipped this block since it was made mandatory on 2026-08-28.  The 34-row and
+36-row extensions had no block at all.
+
+================================================================================
+1. SIBLING PARITY
+================================================================================
+
+The catch-all has two arms, WRITE and READ, and they are each other's sibling.
+
+  ASYMMETRY FOUND, and it was a live hole:
+    comp2 narrow WRITE had surv + decl.
+    comp2 narrow READ had surv + sent and NO ANNOUNCE CHANNEL.
+  So a len-conditioned suppression of the read announce alone escaped all 36
+  rows.  Row owed and added: `rd narrow decl`.
+
+  ASYMMETRY FOUND, larger:
+    component 1 had WRITE rows at two widths.
+    component 1 had NO READ ROWS AT ALL, at either width.
+  Rows owed and added: `clip rd surv/decl/sent`, `clip rdn surv/decl`.
+
+  ASYMMETRY FOUND, on position rather than direction:
+    the six NAMED windows each carry a base-slot AND a last-slot accept row.
+    the catch-all's component 1 carried BASE ROWS ONLY.
+  Rows owed and added: `cliphi rd surv/decl`, `cliphi wr surv/decl`.
+
+================================================================================
+2. CLAIM -> ROW
+================================================================================
+
+Every added comment sentence asserting an observable consequence owes a row or an
+explicit no-row sentence.  The test is SEMANTIC, not a verb list.
+
+  CLAIM  "component 1 is a 32-byte RANGE, not a point"
+    -> `cliphi rd surv`, `cliphi wr surv` at 0x16f8, its last 8-byte slot.
+
+  CLAIM  "both directions are pinned at both components"
+    -> `clip rd *` and `cliphi rd *`.
+
+  CLAIM  "a zero datum would be rerouted by `&& idata' with no row disagreeing"
+    -> `wr zero surv`, `wr zero decl`.
+
+  CLAIM  "the decline is announced with the FULL literal, so a kill cannot
+          satisfy it"
+    -> the three strengthened rows now call wr_decl(off, val) rather than
+       counting the bare substring, which is a PREFIX of the kill text.
+
+  NO-ROW SENTENCE, explicit: component 2's FAR edge is bounded by
+  DEV_SGI_RE_LENGTH rather than by a constant in this file, so the one-token
+  shrink that works on component 1 has no analogue.  Stated in the contract as
+  NOT COVERED rather than left as a silent gap.
+
+  NO-ROW SENTENCE, explicit: component 1's LAST slot at NARROW width.  The len
+  axis is pinned at the base of both components and at neither far edge.  Stated
+  in the contract.
+
+================================================================================
+3. GUARD FIELD vs BODY FIELD
+================================================================================
+
+  PREDICATE reads:  writeflag
+  BODY reads:       relative_addr, idata, d->warned
+
+  They differ on `idata`, so the detector owes a state where they DISAGREE: a
+  write whose datum is ZERO.  Before this pass every write in the detector
+  carried a nonzero datum (ACC_VAL or 0x5a), so `writeflag == MEM_WRITE && idata'
+  had no disagreeing row -- the operand-swap shape clause (d) names.
+
+  Row owed and added: `wr zero surv` + `wr zero decl`, and the V mutant in this
+  table is exactly that edit.
+
+  They differ on `relative_addr` too, which is what M1 and M2 exploit: the guard
+  does not read the address at all, while the body echoes it.
+
+================================================================================
+4. CHANNEL -- per row, the mutant it kills and the observable that differs
+================================================================================
+
+  clip rd surv    M1        host lives vs exit1 at a comp1 READ
+  clip rd decl    M1        rd_decl(0x6e0) count 1 -> 0
+  clip rd sent    decline-  v0 = 0x0 vs the preset SENTINEL (a `return 0'
+                  returns   coerced to -1 raises EXCEPTION_DBE and the tail
+                            never writes odata)
+  clip rdn surv   M1        as clip rd surv, at len 4
+  clip rdn decl   M1        as clip rd decl, at len 4
+  cliphi rd surv  M1, M2    under M1 the slot reaches CLIP_IDS; under M2 it
+                            reaches LINEAR_A -- one cell, both mutants
+  cliphi rd decl  M1, M2    rd_decl(0x6f8) count 1 -> 0
+  cliphi wr surv  M2        write half of the far-edge absorb
+  cliphi wr decl  M2        under M2 the write at 0x16f0 is SILENTLY accepted
+                            into re_linear_a[] and emits NO message: 1 -> 0
+  rd narrow decl  read-     rd_decl(UNMAP_R) count 1 -> 0 under a
+                  announce  len-conditioned suppression of the read announce
+                  suppress
+  wr zero surv    V         host lives
+  wr zero decl    V         under `&& idata' a zero-datum WRITE falls into the
+                            READ arm, so the WRITE literal count goes 1 -> 0
+
+  NO ROW HERE IS VACUOUS BY CONSTRUCTION: every channel above can vary under its
+  named mutant, and three of the mutants (M1, M2, V) are built in this table so
+  the claim is measured rather than asserted.
+
+  *** AND THE CHECK CAUGHT ONE OF THIS ROUND'S OWN EXISTING ROWS. ***  `clip surv`
+  claimed in its note to kill "a grown TEX far bound".  Measured green under fix,
+  T and W in every preserved run -- under T the len-8 write is serviced by the TEX
+  arm and SURVIVES, so the channel cannot vary under the named mutant.  That is
+  the CHANNEL line's definition of vacuous, and it was knowable at writing time.
+  Note corrected to name its real killer (the pre-fix build).

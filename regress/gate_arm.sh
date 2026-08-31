@@ -1238,15 +1238,15 @@ if ! grep -q "OPUS499T_DONE" "$UNMLOG"; then
 else
     check "sgi_re unmapped probe completed" "yes" "yes"
     check "sgi_re unmapped controls" "$(count "$UNMLOG" '^OPUS499T_CONTROL=OK$')" "1"
-    for v in "live" "devsig" "wr surv" "wr kill" "wr decl" "rd surv" "rd kill" "rd decl" "rd sent" "rd nodbe" "wr lat1" "rd lat1" "wr rd 2msg" "xwin7 pre" "xwin wr" "xwin rd" "tlba acc lo" "tlba acc hi" "tlbb acc lo" "tlbb acc hi" "tlbc acc lo" "tlbc acc hi" "tex acc lo" "tex acc hi" "lina acc lo" "lina acc hi" "linb acc lo" "linb acc hi" "wr narrow surv" "wr narrow decl" "rd narrow surv" "rd narrow sent" "clip surv" "clip decl" "clip narrow surv" "clip narrow decl"; do
+    for v in "live" "devsig" "wr surv" "wr kill" "wr decl" "rd surv" "rd kill" "rd decl" "rd sent" "rd nodbe" "wr lat1" "rd lat1" "wr rd 2msg" "xwin7 pre" "xwin wr" "xwin rd" "tlba acc lo" "tlba acc hi" "tlbb acc lo" "tlbb acc hi" "tlbc acc lo" "tlbc acc hi" "tex acc lo" "tex acc hi" "lina acc lo" "lina acc hi" "linb acc lo" "linb acc hi" "wr narrow surv" "wr narrow decl" "rd narrow surv" "rd narrow sent" "clip surv" "clip decl" "clip nar surv" "clip nar decl" "clip rd surv" "clip rd decl" "clip rd sent" "clip rdn surv" "clip rdn decl" "cliphi rd surv" "cliphi rd decl" "cliphi wr surv" "cliphi wr decl" "rd narrow decl" "wr zero surv" "wr zero decl" "wr then live" "clip wr live"; do
         check "sgi_re unmapped row: $v" "$(count "$UNMLOG" "^$v  .*ok$")" "1"
     done
 
     #  DENOMINATOR, SUMMED ARITHMETICALLY -- two rows, not one: a single "28 ok" check
     #  cannot tell a LOST row from a FAILING one, and those need different responses.
     check "sgi_re unmapped rows emitted" \
-          "$(( $(count "$UNMLOG" " ok$") + $(count "$UNMLOG" " FAIL$") ))" "36"
-    check "sgi_re unmapped rows green" "$(count "$UNMLOG" " ok$")"   "36"
+          "$(( $(count "$UNMLOG" " ok$") + $(count "$UNMLOG" " FAIL$") ))" "50"
+    check "sgi_re unmapped rows green" "$(count "$UNMLOG" " ok$")"   "50"
     check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
 fi
 
