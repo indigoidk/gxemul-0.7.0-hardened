@@ -18,6 +18,46 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-08-31: TEN warn-once latches are FUNCTION-STATIC, so one instance
+> ### silences every other
+>
+> **`staticlatchscope`** -- a `static` inside a function is process-global, not per-instance.
+> Every one of these is a warn-once latch on a **guest-drivable** diagnostic, so one guest
+> access to one device instance permanently silences that diagnostic for every other instance
+> of the same device in the machine, and for every later machine in the same process.
+>
+> **DERIVER, because two separate censuses of this class have already come back short:**
+>
+>     grep -rn 'static int w = 0;|static int first = 1;|static char .*_used\[' src/devices/*.c
+>
+> **10 sites across 3 files** on 2026-08-31: `dev_jazz.c` 2 (`#179`), `dev_pcc2.c` 4
+> (`#119`), `dev_sgi_re.c` 4 (upstream `rop_used`).
+>
+> **THE INTENT IS RIGHT EVERYWHERE AND ONLY THE SCOPE IS WRONG.**  `#179`'s own comment says
+> *"guest-reachable; ignore the write instead of `fatal()`-flooding host stdout"*; `#119`'s
+> says *"was `exit(1)` -> warn-once + continue"*.  Both are correct de-fatalisations this
+> project would make again.  **This row is about SCOPE and must not be read as reopening
+> either round.**  The house form is a per-instance bit in the device's own struct
+> (`d->warned` plus `(once)` in the text), which `#337`, `#460`, `#461`, `#497` and `#498`
+> all use.
+>
+> **HOW IT WAS FOUND, and it is the transferable part: TWO CENSUSES WERE BOTH SHORT, IN
+> OPPOSITE WAYS.**  A measuring seat censused it while answering an unrelated question and
+> reported *"4 lines, all in this file, the tree's only such sites"* -- true of its pattern
+> (`static int first` / `_used[`) and false of the class, because two rounds spell the latch
+> `static int w = 0`.  Then a packet-fed seat on a DIFFERENT row challenged an `exit(` regex
+> of mine as too narrow; **the count it challenged did not move, but chasing the four extra
+> hits surfaced `#119`'s comments and hence the second file.**  Neither seat was looking for
+> this class.  *A pattern-based census is only ever a census of its pattern, and the way out
+> was two independent narrow greps disagreeing.*
+>
+> **SCOPE NOTE:** `dev_jazz.c` is one of the six paths in `tools/est_divergence.txt`, so a
+> change there is SEC-only and owes no `est/` counterpart -- unlike the other two files.
+>
+> **CONTROL a fix owes:** a machine with TWO instances of the device, expecting two messages
+> where the current code emits one.  That is what distinguishes the repair from a no-op
+> rename.
+
 > ### OPEN -- filed 2026-08-31: `SGIRE_W_*` spells its bits as literal `1 << N`
 >
 > **`sgirelatchenum`** -- a duplicate enumerator is legal C and silent, and `dev_sgi_re.c`'s
