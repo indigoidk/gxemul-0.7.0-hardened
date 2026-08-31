@@ -137,6 +137,8 @@ def held_rows(seat=None):
     went held by owner allocation, section I went red naming 54 rows, and the generator that
     exists to keep that list current could not see any of them."""
     led = json.load(io.open(LEDGER, encoding="utf-8"))
+    #  DERIVED, never hand-kept: the roster is whatever the ledger says it is.
+    KNOWN_SEATS = {x["id"].lower() for x in led.get("seats", []) if x.get("id")}
     out = []
     for row in led["rows"]:
         stages = {}
@@ -144,10 +146,24 @@ def held_rows(seat=None):
             m = MARKER.search(e.get("note", "") or "")
             if not m:
                 continue
-            #  split: one marker may name several seats
+            #  split: one marker may name several seats.
+            #
+            #  *** AND EVERY TOKEN IS VALIDATED AGAINST THE LEDGER'S OWN SEAT ROSTER. ***
+            #  The kimi seat proposed this as the DURABLE close, and it is right: tuning the
+            #  character class is an arms race against prose, while an id that is not a seat
+            #  is wrong no matter what shape it arrived in.  An unknown token is rendered
+            #  `?token` and announced on stderr rather than dropped -- a malformed marker and
+            #  a well-formed one must not look alike, and a SILENT skip would hide exactly the
+            #  phantom this validation exists to catch.
             for s in (x.strip().lower() for x in m.group(1).split(",")):
                 if not s:
                     continue
+                if s not in KNOWN_SEATS:
+                    sys.stderr.write(
+                        "gen_codex_wall: row %s phase %s: marker names UNKNOWN seat %r"
+                        " -- malformed marker or a phantom match\n"
+                        % (row["id"], e.get("phase", "?"), s))
+                    s = "?" + s
                 if seat and s != seat:
                     continue
                 stages.setdefault(e.get("phase", "?"), set()).add(s)
