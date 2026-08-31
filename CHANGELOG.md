@@ -56,7 +56,8 @@ the second kill is not this round's to fix.
 
 ### The detector, and two instrument defects caught before it shipped
 
-22 rows, self-contained (no `gxprobe` dependency -- every committed probe in this tree rolls its
+**29 rows** (22 at first draft, 25 after three measured rows were found missing, 29 after pass 2
+found a hole), self-contained (no `gxprobe` dependency -- every committed probe in this tree rolls its
 own pty, and that precedent settled the question without asking). **Every row is one the
 nine-build table measured killing a specific mutant**, and the contract names what it does not
 catch.
@@ -65,6 +66,33 @@ catch.
 failing on MIPS semantics while the device was entirely correct. The two neighbouring accept
 rows passed only because their fixtures happen to have bit 31 clear. Masked rather than given a
 friendlier constant, so the row is correct *by construction* for any value.
+
+### Pass 2 found a hole two seats reached independently, and a process breach
+
+**`len == 2` was not pinned as a live decline anywhere.** The witness killed on `sb`, `sh`, `lbu`
+and `lhu`; the detector's survival and answer rows used `sb` and `lbu` only. `sh` appeared solely
+as the SECOND access in `two_widths_*`, whose oracle is *"len=2 is never announced"* -- and that
+row stays green whether `len==2` is **accepted**, **still killed**, or **correctly declined**.
+Three machines behind one green row, and the single latch bit is why: after `sb`, a later `sh` is
+*supposed* to be silent, so silence proves nothing.
+
+fable5 predicted the escaping edit as `else if (len == 4 || len == 2)` at a full 25/25, walked it
+row by row rather than building it during a live panel; grok reached the same hole from the
+witness side. Four rows added, each in its own session so the fresh latch makes the len=2
+announcement observable. **25 -> 29, all green.**
+
+**And `#498` is the FIRST post-mandate kill-table round with no `PRETABLE.out`** -- five sibling
+rounds carry one, including this round's own parent. Both of its costs showed up here: the
+CLAIM->ROW check is exactly what polices *a contract naming a row that is not in the file*, and
+the de-escalation enumeration is where the `len==2` hole would have surfaced at writing time.
+Back-writing the block now would violate its own mtime-order rule, so the record is *skipped,
+costs enumerated*.
+
+**One disposition was wrong: deleting the 22-row artifact.** The house remedy for a misleading
+record is freeze-with-banner, not destruction. The deletion was pre-commit and is unrecoverable,
+and it strips evidence from prose that cites it -- including a "sweeps clean" claim which the
+surviving neighbour log shows is itself imprecise: without the tail rows the draft scores that
+mutant 21/22, caught rather than clean.
 
 **And the first attempt to fix that silently did nothing.** The anchor carried regex backslashes
 through a heredoc, matched ZERO, and the re-run scored the unchanged file at the same 21/22 --

@@ -1088,7 +1088,14 @@ else
     #  PER-ROW PASS, one line, checked individually.  A row that silently stops being
     #  tested is the padded-column class -- a name as long as its column makes the check
     #  unsatisfiable and the row quietly stops being tested.
-    for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do
+    #  *** `tail_acc_x' AND `tail_acc' PIN A HOST DEATH ON PURPOSE, AND THEY WILL GO RED
+    #  BY SUCCEEDING. ***  Both observe `sgideprimop' -- an accepted-width access with
+    #  startFlag reaches draw_primitive(), whose default arm is fatal on 254 of 256 ops.
+    #  The round that fixes sgideprimop turns BOTH rows red: tail_acc_x wants exit1, and
+    #  tail_acc counts the DRAW message text, which a de-fatalisation will latch or reword.
+    #  Oracle-correction ordering applies -- re-pin FIRST, measure the committed build red,
+    #  THEN edit.  Without this note the red reads as a regression in THIS device.
+    for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "lo_kill2" "lo_decl2" "lo_alive2" "lo_sent2" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do
         check "sgi_de row: $v" "$(count "$DEWLOG" "^$v  .*ok$")" "1"
     done
 
@@ -1098,8 +1105,8 @@ else
     #  comparing to "220" is satisfied by (22 ok, 0 FAIL) AND by (2 ok, 20 FAIL), which
     #  is a defect this gate has already shipped once.
     check "sgi_de rows emitted" \
-          "$(( $(count "$DEWLOG" " ok$") + $(count "$DEWLOG" " FAIL$") ))" "25"
-    check "sgi_de rows green" "$(count "$DEWLOG" " ok$")" "25"
+          "$(( $(count "$DEWLOG" " ok$") + $(count "$DEWLOG" " FAIL$") ))" "29"
+    check "sgi_de rows green" "$(count "$DEWLOG" " ok$")" "29"
 fi
 
 SGILOG=$LOGDIR/sgi_re_width.log

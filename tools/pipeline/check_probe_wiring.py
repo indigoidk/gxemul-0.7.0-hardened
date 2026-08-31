@@ -275,6 +275,31 @@ MANIFEST = {
     "sgi_de_width_probe.py":
         (CLASS_DETECTOR, "#498 sgidewidth -- 25 rows, gate_arm.sh, every row from a measured mutant kill"),
 
+    #  sgidewidth PASS 2, 2026-08-31.  The measuring seat's nine-build re-measurement of a
+    #  SHIPPED detector, which found two 25/25 escapes the round had missed.  CLASS_RESEARCH:
+    #  evidence, not detectors the battery owes a run.
+    #
+    #  *** `probe_frozen.py` IS THE POINT OF THIS SET AND MUST NOT BE PRUNED. ***  The seat
+    #  froze the shipped cb28a6f probe before mutant 1 -- and the repo copy WAS EDITED LIVE
+    #  UNDER ITS RUN by the main loop (22 -> 25 -> 29 rows).  Without the frozen copy every
+    #  score in that table would be against a moving instrument, which is exactly the hazard
+    #  the frozen-copy rule exists for, observed rather than hypothesised.
+    #
+    #  `mutate4.py` builds the VERBATIM pre-fix arm -- floor clauses (a) and (b) -- and is
+    #  kept because no earlier artifact showed that measurement: 14/25, eleven rows red.
+    "artifacts/sgidewidth/opus_p2_20260831/probe_frozen.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 FROZEN detector -- the shipped cb28a6f probe, held still while the worktree copy moved under the run"),
+    "artifacts/sgidewidth/opus_p2_20260831/disc.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 DISCRIMINATING rows -- how bracegoto and bit5collide were proven real, not merely predicted"),
+    "artifacts/sgidewidth/opus_p2_20260831/mutate.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 mutator (bit5collide)"),
+    "artifacts/sgidewidth/opus_p2_20260831/mutate2.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 mutator (bracegoto)"),
+    "artifacts/sgidewidth/opus_p2_20260831/mutate3.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 mutator (accept2 / skipans)"),
+    "artifacts/sgidewidth/opus_p2_20260831/mutate4.py":
+        (CLASS_RESEARCH, "sgidewidth pass-2 mutator (prefix -- the verbatim reinstatement, floor a+b, 14/25)"),
+
     #  sgidewidth, 2026-08-31.  The measuring seat's rung-3 witness, attribution probe and
     #  25-row / nine-build kill table, preserved because the seat reported them VOLATILE.
     #  CLASS_RESEARCH on the #497 precedent: EVIDENCE, not detectors the battery owes a run.

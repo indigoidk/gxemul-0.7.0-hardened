@@ -8,12 +8,24 @@
 #    CATCHES
 #      * reinstatement of the width kill, in either direction (`lo_decl',
 #        `lo_alive', and the read-side `hi_rd_*' rows);
-#      * a decline that does not answer the read -- an early `return', or
-#        `return 0' which cpus/memory_rw.c coerces to -1 and turns into a guest
+#      * a decline that returns `return 0', which cpus/memory_rw.c coerces to -1
+#        and turns into a guest
 #        EXCEPTION_DBE.  `lo_sent' and `hi_rd_sent' preset the destination
 #        register to a SENTINEL, so "the tail ran and wrote odata (0)" and "the
 #        load never completed" are distinguishable.  A survival-only oracle at
-#        a refusal site is vacuous by construction;
+#        a refusal site is vacuous by construction.
+#
+#        *** THIS BULLET ONCE ALSO CLAIMED an early `return' AND THAT IS FALSE,
+#        refuted by this round's own preserved log.  `gxdew_t2_mB.txt' scores the
+#        early-`return 1' variant 25/25 with ZERO failing rows -- a clean escape.
+#        The reason is `#95' in cpus/memory_rw.c, which memsets the caller's buffer
+#        to 0 on a device READ before dispatch: so the value channel CANNOT
+#        distinguish "the tail ran and wrote odata (0)" from "the handler skipped
+#        the answer and the pre-zero supplied 0".  These rows kill `return 0' (a DBE
+#        leaves the sentinel standing) and the pre-fix death; they are BLIND to an
+#        early `return 1', which is disclosed as the unshipped mB variant.  A reader
+#        trusting the old wording would skip building exactly the mutant that
+#        escapes. ***
 #      * a decline that FALLS THROUGH to the tail, which would run
 #        draw_primitive() for an access we just refused (`hi_draw',
 #        `hi_rd_draw').  MEASURED: the naive splice scores 19/25 here;
@@ -24,7 +36,13 @@
 #      * a repair qualified to writes only -- the read-direction rows are not
 #        redundant with the write ones (`hi_rd_*' kill that mutant at 21/25);
 #      * a repair hoisted so it applies to EVERY access, which would silently
-#        disable all drawing (`tail_acc' is the only row that catches it);
+#        disable all drawing.  *** THIS ONCE READ "`tail_acc' is the only row that
+#        catches it" AND THAT WAS FALSE: the measured mE variant reds THREE rows --
+#        tail_acc, tail_acc_x and dec_switch (22/25).  Coverage was never the
+#        problem; the uniqueness claim was.  Corrected after a pass-2 seat checked it
+#        against gxdew_t2_mE.txt rather than against this comment. ***
+#      * accept-set GROWTH at len 2 (`len == 4 || len == 2'), which the `lo_*2' rows
+#        below pin and which nothing else could see;
 #      * reuse of #497's latch bit instead of a new one (`sharedlatch'):
 #        the four handlers share one malloc'd struct, so sharing a bit lets an
 #        sgi_re access silence sgi_de's decline entirely.  MEASURED 23/25;
@@ -78,6 +96,7 @@ OP_SH_T0_A3 = 0xa4e80000             # sh   $t0, 0($a3)   101001 00111 01000
 OP_SW_T0_A3 = 0xace80000             # sw   $t0, 0($a3)   101011 00111 01000
 OP_SD_T0_A3 = 0xfce80000             # sd   $t0, 0($a3)   111111 00111 01000
 OP_LBU_V0_AT = 0x90220000            # lbu  $v0, 0($at)   100100 00001 00010
+OP_LHU_V0_AT = 0x94220000            # lhu  $v0, 0($at)   100101 00001 00010
 OP_LW_V0_AT = 0x8c220000             # lw   $v0, 0($at)   100011 00001 00010
 OP_LD_V0_AT = 0xdc220000             # ld   $v0, 0($at)   110111 00001 00010
 
@@ -244,14 +263,49 @@ t, alive, how = session(store(A, DE + 0x0d0, op=OP_SB_T0_A3, val="0x01")
                         + store(A, DE + 0x0e4, op=OP_SB_T0_A3, val="0x02"))
 row("lo_latch", t.count(DECL), 1, "N=1 per device instance, two offsets")
 
-# ------------------------------------------------- the tail: a decline must not draw
+# ------------------------------------------------- len == 2, THE OTHER REACHABLE WIDTH
+#  *** ADDED AFTER PASS 2 MEASURED A HOLE: `len == 2' WAS NOT PINNED AS A LIVE DECLINE. ***
+#  The witness was 4/4 across sb, sh, lbu and lhu; the rows above use sb and lbu ONLY, and
+#  `sh' appeared solely as the SECOND access in `two_widths_*', whose oracle is "len=2 is
+#  never announced".
+#
+#  That row stays GREEN whether len==2 is ACCEPTED, still KILLED with the old text, or
+#  correctly DECLINED -- three different machines behind one green row -- and the ONE latch
+#  bit is WHY: after `sb', a later `sh' is SUPPOSED to be silent, so silence proves nothing.
+#  Two seats reached this independently on pass 2, one predicting the escaping edit as
+#  `else if (len == 4 || len == 2)' at a full 25/25.
+#
+#  Each row runs in its OWN session, where the latch is fresh and len==2 is the FIRST
+#  decline -- the only state in which its announcement is observable at all.
 A = Addr(CODE)
-t, alive, how = session(store(A, DE + 0x8d0, op=OP_SB_T0_A3, val="0x5a"), spin=1.6)
-row("hi_draw", t.count(DRAW), 0, "DECLINED write must not reach draw_primitive")
+t, alive, how = session(store(A, DE + 0x0d0, op=OP_SH_T0_A3, val="0x5a5a"))
+row("lo_kill2", t.count(KILL + "2 not implemented"), 0, "len=2 host kill is gone too")
+row("lo_decl2", t.count(DECL + "2 -- declined"), 1, "len=2 announces on a FRESH latch")
+row("lo_alive2", how, "exit0", "host survives a 2-byte access")
+
+A = Addr(CODE)
+t, alive, how = session(load(A, DE + 0x0d0, op=OP_LHU_V0_AT) + ["print v0"])
+row("lo_sent2", printed(t, "v0") if alive else "died", "0x0",
+    "declined 2-byte READ answers 0 -- kills silent acceptance")
+
+# ------------------------------------------------- the tail: a decline must not draw
+#  *** THE LOWER-HALF STORE IN FRONT IS LOAD-BEARING, NOT SCENERY.  Without it every row
+#  in this file exercised the FIRST decline of a fresh session, and a one-BRACE edit --
+#  moving `goto de_declined;' inside the latch braces -- escaped all 25 rows: only the
+#  first decline jumps, and every later one falls through to the switch AND
+#  draw_primitive(), measured `exit1'.  That is the exact host death this round exists to
+#  remove, re-opened by one character of indentation. ***
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + 0x0d0, op=OP_SB_T0_A3, val="0x01")
+                        + store(A, DE + 0x8d0, op=OP_SB_T0_A3, val="0x5a"), spin=1.6)
+row("hi_kill", t.count(KILL + "1 not implemented"), 0,
+    "len=1 kill gone up here too -- was pinned on an ACCEPTED width and could not vary")
+row("hi_draw", t.count(DRAW), 0, "a SECOND declined write must not reach draw_primitive")
 row("hi_alive", how, "exit0", "and must not die there either")
 
 A = Addr(CODE)
-t, alive, how = session(load(A, DE + 0x8d0, op=OP_LBU_V0_AT) + ["print v0"], spin=1.6)
+t, alive, how = session(store(A, DE + 0x0d0, op=OP_SB_T0_A3, val="0x01")
+                        + load(A, DE + 0x8d0, op=OP_LBU_V0_AT) + ["print v0"], spin=1.6)
 row("hi_rd_draw", t.count(DRAW), 0, "declined READ must not draw -- kills a write-only repair")
 row("hi_rd_alive", how, "exit0", "read direction is not redundant with write")
 row("hi_rd_sent", printed(t, "v0") if alive else "died", "0x0",
@@ -283,9 +337,14 @@ row("dec_switch", t.count(SCIS), 0,
 #  `sgideprimop', a separate filed row -- so `tail_acc_x' pins a host DEATH on purpose,
 #  and will need re-pinning when that row is fixed.  The oracle-correction ordering
 #  applies: re-pin first, measure red, then edit.
+#  *** `hi_kill' USED TO LIVE HERE, ON len=4, AND WAS VACUOUS BY CONSTRUCTION: len 4 is an
+#  ACCEPTED width on every build in the story, so a row counting width-kill text there can
+#  never vary.  MEASURED identical on the pre-fix build, on all eight of this round's
+#  mutants, post-fix, and on all five of the pass-2 seat's.  Even a verbatim reinstatement
+#  left it green.  It is re-pinned above onto the measured form (len=1, upper half), which
+#  is a channel that moves.  Knowable at writing time by the CHANNEL check. ***
 A = Addr(CODE)
 t, alive, how = session(store(A, DE + 0xfd0, val="0x11223344"), spin=1.6)
-row("hi_kill", t.count(KILL), 0, "no width kill: len=4 is an ACCEPTED width")
 row("tail_acc", t.count(DRAW), 1,
     "accepted width + startFlag STILL reaches draw_primitive")
 row("tail_acc_x", how, "exit1",
@@ -325,8 +384,18 @@ row("acc8_read", printed(t, "v0") if alive else "died", "0x1122334455667788",
 
 # ------------------------------------------------- the latch must be its OWN bit
 A = Addr(CODE)
+#  *** SIX PARTNERS, NOT ONE.  This row used to trip only TLB_A (bit 1<<0), which made it a
+#  POINT TEST against a six-member set: `1 << 6' -> `1 << 5' collides with LINEAR_B and
+#  escaped all 25 rows, one character.  FIVE of the six partners escaped.  The offsets below
+#  are CRIME_RE_TLB_A/B/C, TEX, LINEAR_A and LINEAR_B minus the handler's own
+#  `relative_addr += 0x1000', so one row now pins every bit sgi_de could collide with. ***
 t, alive, how = session(store(A, RE + 0x000, op=OP_SB_T0_A3, val="0x5a")
-                        + store(A, DE + 0x0d0, op=OP_SB_T0_A3, val="0x5a"))
+                        + store(A, RE + 0x200, op=OP_SB_T0_A3, val="0x5a")
+                        + store(A, RE + 0x400, op=OP_SB_T0_A3, val="0x5a")
+                        + store(A, RE + 0x600, op=OP_SB_T0_A3, val="0x5a")
+                        + store(A, RE + 0x700, op=OP_SB_T0_A3, val="0x5a")
+                        + store(A, RE + 0x780, op=OP_SB_T0_A3, val="0x5a")
+                        + store(A, DE + 0x0d0, op=OP_SB_T0_A3, val="0x5a"), spin=1.8)
 row("re_first", t.count(RE_DECL), 1, "#497's own latch fires first")
 row("sharedlatch", t.count(DECL), 1,
     "sgi_de keeps its OWN bit -- sharing #497's silences this entirely")

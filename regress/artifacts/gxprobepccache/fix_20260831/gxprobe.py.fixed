@@ -1,0 +1,752 @@
+#!/usr/bin/env python3
+"""
+gxprobe.py -- a reusable, stdlib-only harness for probing GXemul device/CPU
+behaviour through the emulator's own -V interactive debugger.
+
+WHY THIS EXISTS
+    Every one-off probe in this project (probe_s1_flood.py, probe_263_full.py,
+    probe_267_full.py, probe_269_*.py, probe_r2_bpoverride.py, ...) re-implemented
+    the same ~60 lines of pty plumbing, and the small differences between those
+    copies have already produced misleading results twice.  One tested library +
+    thin drivers removes that whole class of error.
+
+    Run with:  MSYS_NO_PATHCONV=1 wsl -d Gentoo -- python3 /mnt/c/.../<driver>.py
+
+
+=============================================================================
+HARD-WON FACTS ENCODED HERE (all verified in this project; do not re-derive)
+=============================================================================
+ 1. The emulator is driven over a pty (pty.fork + exec).  There is no reliable
+    prompt-sync, so every command is "write, then drain for a short interval".
+
+ 2. `step` executes GENUINE guest instructions and routes through the device
+    handlers.  It is the ONLY reliable way to touch device registers.
+
+ 3. The debugger's `dump`/`examine` READS do NOT route through DM_DEFAULT device
+    handlers -- they return zero-fill, because memory_rw.c gates the handler on
+    !no_exceptions.  Device state MUST therefore be read with a guest load.
+    `put w` (word write) DID route to the jazz device, but `put b` (byte write)
+    did NOT route to the asc device -- so device WRITES must also be genuine
+    guest stores.  `put w` IS fine (and is used here) for writing scratch RAM.
+
+ 4. Register assignment works: `v0=0x..`, `at=0x..`, `pc=0x..`; read back with
+    `print v0`, whose reply is a bare `0x...` line.  COP0 registers are exposed
+    under their names too (`status`, `cause`, ...) because cpu_mips.c registers
+    them with CPU_SETTINGS_ADD_REGISTER64(cop0_names[i], ...).
+
+ 5. Scratch/exec RAM, safe to overwrite and executable via `step`:
+    KSEG0 0xffffffff80010000.
+
+ 6. Devices on arc/PICA live at PHYSICAL 0x80000000 (jazz/R4030) and 0x80002000
+    (asc); reach them from the cold debugger via XKPHYS 0x9000000000000000|phys
+    (kernel mode, no TLB needed).
+
+ 7. `fatal()` output is UNGATED and shows up in the transcript even in
+    single-step.  `debugmsg` at DEBUG/WARNING may not: the default verbosity
+    settles at WARNING(1), and under -q at ERROR(0) because
+    debugmsg_add_verbosity_level() floors at 0.
+
+ 8. COUNTING GOTCHA: "FIFO overrun on write!" does NOT contain the substring
+    "FIFO overrun!" (the write message has " on write" where the read message
+    has "!").  Count the two independently with count(); NEVER subtract one
+    count from the other.  That exact mistake already produced one false
+    failure in this project, so count() is deliberately a plain substring
+    counter with no cleverness in it.
+
+ 9. Byte order on both rigs is LITTLE-endian (verified here: `put w` 0x11223344
+    then a guest lbu of byte 0 returns 0x44).  detect_endian() re-checks it at
+    run time rather than trusting the constant.
+
+10. SELF-MODIFYING-CODE HAZARD: rather than re-patching one instruction slot
+    with different words (which would race the dyntrans translation cache),
+    this library gives every DISTINCT instruction word its own address from a
+    bump allocator, written exactly once.  The hazard is designed out.
+
+
+=============================================================================
+API
+=============================================================================
+    open_preset(name, log_path, ...) -> Emu       # name in MACHINES ("arc","pmax")
+
+    class Emu:
+        # session
+        __init__(binary, args, log_path=None, boot_wait=4.0, preset=None)
+        send(cmd, wait=0.25) -> str               # write a command, drain, return the NEW text
+        mark(tag)                                 # emit a __MARK_tag__ line into the transcript
+        close()                                   # quit + kill + flush transcript to log_path
+        wait_exit(timeout=2.0) -> (kind, value)   # reap the child, KEEPING its status
+        exit_status                               # ("exit",code) | ("signal",sig) | None
+        text                                      # property: full cleaned transcript
+        raw_text                                  # property: undecorated transcript
+        seg(tag_a, tag_b=None) -> str             # transcript slice between two marks
+        count(needle, seg=None) -> int            # occurrences (NOT lines) of an exact string
+
+        # memory / registers
+        poke_word(addr, word)                     # `put w addr, word`   (scratch RAM only!)
+        set_reg(name, value) / read_reg(name)     # `v0=..` / `print v0` -> int
+        guest_store8(addr, val)  / guest_store32(addr, val)
+        guest_load8(addr) -> int / guest_load32(addr) -> int
+        run_guest_words(words, at=None, steps=None) -> str
+        disasm(addr, endaddr=None) -> [(addr, word, text)]
+        disasm_word(addr) -> (word, text)         # single instruction
+        verify_stubs() -> [(name, word, disasm_text)]     # VERIFY encodings
+        detect_endian() -> "little"|"big"
+
+        # floating point (correction-B support)
+        fp_op(in_bits, instr_word, width_in, width_out) -> out_bits
+        ensure_cu1()                              # make COP1 usable (STATUS.CU1)
+
+11. MIPS-I CPUs (R3000 / pmax) have no LDC1/SDC1 -- they raise a Reserved
+    Instruction exception.  MACHINES["pmax"]["fp_pair_load"] makes fp_op load a
+    double as the $f0/$f1 pair with two MIPS-I lwc1's instead.  fp_op's callers
+    should always run an in-range self-check (e.g. cvt.w.d(3.0) == 3) so a
+    broken load path cannot be mistaken for a conversion finding.
+
+Everything is stdlib only.  Machine presets (paths, scratch address, device
+addresses) live in MACHINES so drivers stay one-liners.
+"""
+
+import os
+import pty
+import re
+import select
+import time
+
+__all__ = ["Emu", "MACHINES", "open_preset", "INSTR", "ASC", "SCRATCHDIR"]
+
+
+# ---------------------------------------------------------------------------
+# Paths and machine presets
+# ---------------------------------------------------------------------------
+
+ROOT = "/mnt/c/DocumentNoSnc/CC/gxemul-0.7.0"
+SCRATCHDIR = ("/mnt/c/Users/user00a/AppData/Local/Temp/claude/"
+              "C--DocumentNoSnc-CC-gxemul-0-7-0/"
+              "8b90d295-17da-4b3d-8ec7-ac40cdc4fd23/scratchpad")
+
+#  ASC (NCR53C94) register offsets, PICA mode: regnr == byte offset.
+#  Offsets >= 0x10 fall off the end of the register file (see dev_asc.c).
+ASC = {
+    "TCL": 0x00, "TCM": 0x01, "FIFO": 0x02, "CMD": 0x03,
+    "STAT": 0x04, "SELID": 0x04,          # 0x04 reads STAT, writes SELID
+    "INTR": 0x05, "STEP": 0x06, "FFLAG": 0x07,
+    "CFG1": 0x08, "CCF": 0x09, "TEST": 0x0a, "CFG2": 0x0b,
+}
+
+MACHINES = {
+    # ---- arc / PICA (R4000, ARCBIOS).  Devices reachable from the cold
+    #      debugger through XKPHYS; this is the rig used for all device work.
+    "arc": {
+        "binary":  ROOT + "/gxemul_arc_rig/gxsec-gxemul",
+        "args":    ["-V", "-e", "pica"],
+        "kernel":  ROOT + "/gxemul_arc_rig/bsd",
+        "disk":    ROOT + "/gxemul_arc_rig/disk_comp.img",
+        "scratch": 0xffffffff80010000,     # KSEG0 RAM: safe to overwrite + execute
+        "xkphys":  0x9000000000000000,
+        "dev": {
+            "asc":  0x9000000080002000,    # XKPHYS | 0x80002000
+            "jazz": 0x9000000080000000,    # XKPHYS | 0x80000000  (R4030)
+        },
+        "cpu": "R4000",
+    },
+    # ---- pmax / DECstation 5000/200 (R3000A + R3010 FPU).
+    "pmax": {
+        "binary":  ROOT + "/build/gxemul",
+        "args":    ["-V", "-q", "-e", "3max"],
+        "kernel":  ROOT + "/gxemul_pmax_rig/bsd",
+        "disk":    ROOT + "/gxemul_pmax_rig/disk_comp.img",
+        "scratch": 0xffffffff80010000,
+        "xkphys":  None,                   # 32-bit CPU: no XKPHYS, use KSEG1
+        "kseg1":   0xffffffffa0000000,
+        "dev": {
+            # PMAD-AA LANCE on TURBOchannel slot 6 (KN02_PHYS_TC_6_START),
+            # reached through KSEG1.  SRAM at the base, registers at +0x100000.
+            "le_sram": 0xffffffffbf800000,
+            "le_reg":  0xffffffffbf900000,   # +0 = CSR data, +4 = register select
+        },
+        "cpu": "R3000A",
+        "fp_pair_load": True,      # MIPS I: no LDC1/SDC1 (they raise RI)
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Instruction encodings.  Every one of these has been checked against the
+# debugger's own `unassemble` (Emu.verify_stubs() re-checks at run time).
+# ---------------------------------------------------------------------------
+INSTR = {
+    "nop":     0x00000000,                 # nop
+    "sb":      0xa0220000,                 # sb    v0,0(at)
+    "lbu":     0x90220000,                 # lbu   v0,0(at)
+    "sw":      0xac220000,                 # sw    v0,0(at)
+    "lw":      0x8c220000,                 # lw    v0,0(at)
+    "lwc1":    0xc4200000,                 # lwc1  $f0,0(at)
+    "ldc1":    0xd4200000,                 # ldc1  $f0,0(at)
+    "lwc1_f1": 0xc4210004,                 # lwc1  $f1,4(at)  -- MIPS-I double load
+    "swc1":    0xe4220000,                 # swc1  $f2,0(at)
+    "sdc1":    0xf4220000,                 # sdc1  $f2,0(at)
+    "cvt.w.s": 0x460000a4,                 # cvt.w.s $f2,$f0
+    "cvt.w.d": 0x462000a4,                 # cvt.w.d $f2,$f0
+    "jr_ra":   0x03e00008,                 # jr    ra
+}
+#  COP1 layout: 010001 | fmt(5) | ft(5) | fs(5) | fd(5) | func(6)
+#  fmt: S=16(0x10) D=17(0x11) W=20 L=21 ;  cvt.w func = 0x24
+def cop1(fmt, ft, fs, fd, func):
+    """Encode a COP1 instruction (helper for building new FP tests)."""
+    return (0x11 << 26) | ((fmt & 31) << 21) | ((ft & 31) << 16) | \
+           ((fs & 31) << 11) | ((fd & 31) << 6) | (func & 63)
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _clean(s):
+    """Strip ANSI escapes and normalise CR to LF, so counting/segmenting is stable."""
+    return _ANSI.sub("", s).replace("\r", "\n")
+
+
+class EmuDied(RuntimeError):
+    """The emulator process exited or the pty closed unexpectedly."""
+
+
+class Emu(object):
+    """A single GXemul -V debugger session driven over a pty."""
+
+    # ---- scratch layout, all relative to preset["scratch"] -----------------
+    #   +0x00 .. +0x3c   fixed instruction stubs (installed once)
+    #   +0x40 .. +0xfc   bump allocator for caller-supplied instruction words
+    #   +0x100           FP input operand   (8 bytes)
+    #   +0x108           FP output operand  (8 bytes)
+    #   +0x110 ..        free data scratch for drivers
+    OFF_STUB = 0x00
+    OFF_POOL = 0x40
+    POOL_END = 0x100
+    OFF_FPIN = 0x100
+    OFF_FPOUT = 0x108
+    OFF_DATA = 0x110
+
+    STUBS = ["sb", "lbu", "sw", "lw", "lwc1", "ldc1", "swc1", "sdc1", "lwc1_f1"]
+
+    def __init__(self, binary, args, log_path=None, boot_wait=4.0,
+                 preset=None, cache_regs=True, default_wait=0.25):
+        """Fork a pty, exec `binary` with `args`, and drain the startup banner.
+
+        binary      full path to the gxemul executable
+        args        argv[1:] -- must contain -V so we land in the debugger
+        log_path    where close() writes the raw transcript (optional)
+        boot_wait   seconds to drain before the first command (banner + probe)
+        preset      the MACHINES[...] dict this session came from (optional)
+        cache_regs  skip redundant `at=`/`v0=` assignments in tight loops.
+                    Safe because the fixed stubs never write $at, and the
+                    cache is invalidated by every load and by run_guest_words.
+        """
+        self.binary = binary
+        self.args = list(args)
+        self.log_path = log_path
+        self.m = preset or {}
+        self.default_wait = default_wait
+        self.cache_regs = cache_regs
+        self.scratch = self.m.get("scratch", 0xffffffff80010000)
+        self._buf = bytearray()
+        self._closed = False
+        self.exit_status = None             # set by wait_exit(); see close()
+        self._pool_next = self.scratch + self.OFF_POOL
+        self._word_addr = {}                # instruction word -> address
+        self._reg_cache = {}
+        self.little_endian = True           # refined by detect_endian()
+        self.last_trace = ""                # step output of the last fp_op
+        #  MIPS-I CPUs (R3000/pmax) have no LDC1/SDC1: load doubles as a
+        #  $f0/$f1 pair instead.  See fp_op().
+        self.fp_pair_load = bool(self.m.get("fp_pair_load", False))
+
+        argv = [binary] + self.args
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:                   # child
+            try:
+                os.execvp(argv[0], argv)
+            finally:
+                os._exit(127)
+        self.drain(boot_wait)
+        self.install_stubs()
+
+    # ------------------------------------------------------------------ I/O
+    def drain(self, seconds):
+        """Read whatever the emulator has produced for `seconds`."""
+        end = time.time() + seconds
+        while time.time() < end:
+            r, _, _ = select.select([self.fd], [], [], 0.05)
+            if self.fd in r:
+                try:
+                    d = os.read(self.fd, 65536)
+                except OSError:
+                    return
+                if not d:
+                    return
+                self._buf.extend(d)
+
+    def _write_all(self, data):
+        """Write every byte to the pty.
+
+        os.write() on a pty may do a PARTIAL write when the emulator is busy
+        printing (it reads its input only between commands, and device debug
+        output is emitted a character at a time).  Ignoring the return value
+        silently DROPS the tail of a command -- observed as a missing `pc=`,
+        after which the next `step` executes whatever instruction the pc
+        happened to be sitting on.  Always drain-and-retry until it is all in.
+        """
+        view = memoryview(data)
+        while len(view):
+            try:
+                n = os.write(self.fd, view)
+            except OSError as e:
+                raise EmuDied("write to emulator failed: %s" % e)
+            if n <= 0:
+                raise EmuDied("pty write returned %d" % n)
+            view = view[n:]
+            if len(view):
+                self.drain(0.05)
+
+    def _since(self, start):
+        return _clean(bytes(self._buf[start:]).decode("latin1", "replace"))
+
+    def send(self, cmd, wait=None):
+        """Write one debugger command and return the NEW transcript text."""
+        if self._closed:
+            raise EmuDied("session already closed")
+        start = len(self._buf)
+        self._write_all((cmd + "\n").encode())
+        self.drain(self.default_wait if wait is None else wait)
+        #  *** ANY COMMAND THAT ADVANCES THE GUEST INVALIDATES THE CACHED pc, WHEREVER
+        #  IT IS SENT FROM.  This lived only in _exec_at(), and a driver that called
+        #  send("step") directly therefore had its NEXT set_reg("pc", ...) skipped as
+        #  redundant -- so the row executed one device access and then NOPs at the
+        #  addresses it believed it was probing.
+        #
+        #  A row like that CANNOT FAIL, and a vacuous row reads exactly like a passing
+        #  one: eight of nine mutants scored plausibly and nothing looked wrong.  It was
+        #  surfaced only by a mutant that REFUSED TO DIE (a clause-(d) latch mutant
+        #  sweeping 14/14 against the row written to catch it), which is the
+        #  "a mutant that will not die is a RESULT, not noise" rule paying for itself.
+        #
+        #  It bit only rows reusing ONE instruction word: a driver alternating two
+        #  different words gets a cache MISS on pc and works by luck.  That is why the
+        #  fix belongs HERE and not in a rule telling drivers to remember -- the
+        #  failure is silent, load-bearing, and depends on an accident of the caller.
+        #  *** MATCH BY PREFIX, THE WAY THE DEBUGGER ITSELF DOES.  An exact-name test was the
+        #  first version of this fix and it had the defect one keystroke away: `debugger.c`
+        #  computes `matchlen` as the LEADING ALPHABETIC RUN of the typed command and then
+        #  `strncasecmp(cmds[i].name, cmd, matchlen)`, so `st`, `ste`, `co` and `cont` all
+        #  advance the guest -- and none of them would have invalidated the cached pc.
+        #  Found by the measuring seat auditing the repair rather than trusting it. ***
+        _w = ""
+        for _ch in cmd:
+            if _ch.isalpha():
+                _w += _ch
+            else:
+                break
+        _w = _w.lower()
+        if _w and ("step".startswith(_w) or "continue".startswith(_w)):
+            self._reg_cache.pop("pc", None)
+        return self._since(start)
+
+    def mark(self, tag):
+        """Emit a __MARK_tag__ line into the transcript (a quiet 'No match.').
+
+        `print <unknown>` is used rather than a bare unknown command because the
+        latter makes the debugger dump its whole command list into the log.
+        """
+        return self.send("print __MARK_%s__" % tag, wait=0.12)
+
+    def wait_exit(self, timeout=2.0):
+        """Reap the child and KEEP how it died, in self.exit_status.
+
+        Returns a (kind, value) pair:
+            ("exit", code)    exited on its own with that status
+            ("signal", sig)   killed by that signal -- 6 is SIGABRT, i.e. the
+                              emulator called abort()/assert(); 9 is close()'s
+                              own SIGKILL, so a test that cares must call
+                              wait_exit() BEFORE close() signals anything
+            ("gone", None)    already reaped, or not our child
+            ("running", None) still alive after `timeout` -- NOT cached, so a
+                              later call can still reap it
+
+        Added because close() used to assume a live child and discard the
+        status, which made every abort-class test (the #271 VGA probe, for one)
+        re-implement os.waitpid(WNOHANG) in the driver.  close() now calls this
+        FIRST, before it signals: a child that died on its own reports its real
+        status instead of the SIGKILL close() would otherwise deliver.
+        """
+        if self.exit_status is not None:
+            return self.exit_status
+        end = time.time() + timeout
+        while True:
+            try:
+                pid, st = os.waitpid(self.pid, os.WNOHANG)
+            except OSError:
+                self.exit_status = ("gone", None)
+                return self.exit_status
+            if pid:
+                if os.WIFSIGNALED(st):
+                    self.exit_status = ("signal", os.WTERMSIG(st))
+                elif os.WIFEXITED(st):
+                    self.exit_status = ("exit", os.WEXITSTATUS(st))
+                else:
+                    self.exit_status = ("status", st)
+                return self.exit_status
+            if time.time() >= end:
+                return ("running", None)
+            time.sleep(0.05)
+
+    def close(self):
+        """Quit the debugger, reap the child, flush the transcript to log_path.
+
+        self.exit_status is left holding how the child actually died.
+        """
+        if self._closed:
+            return self.text
+        try:
+            os.write(self.fd, b"quit\n")
+            self.drain(0.8)
+        except OSError:
+            pass
+        #  Reap on the child's own terms FIRST: if it already died -- an abort,
+        #  an exit(1), or a clean `quit` -- signalling now would replace its
+        #  real status with our SIGTERM/SIGKILL.
+        self.wait_exit(0.6)
+        if self.exit_status is None:
+            for sig in (15, 9):
+                try:
+                    os.kill(self.pid, sig)
+                except OSError:
+                    break
+                self.wait_exit(0.4)
+                if self.exit_status is not None:
+                    break
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self._closed = True
+        if self.log_path:
+            with open(self.log_path, "w") as f:
+                f.write(self.raw_text)
+        return self.text
+
+    # ------------------------------------------------------- transcript API
+    @property
+    def raw_text(self):
+        """The transcript exactly as received (latin1-decoded)."""
+        return bytes(self._buf).decode("latin1", "replace")
+
+    @property
+    def text(self):
+        """The transcript with ANSI escapes removed and CR normalised to LF."""
+        return _clean(self.raw_text)
+
+    def seg(self, tag_a, tag_b=None):
+        """Transcript slice between mark `tag_a` and mark `tag_b` (or to the end)."""
+        t = self.text
+        i = t.find("__MARK_%s__" % tag_a)
+        if i < 0:
+            return ""
+        if tag_b is None:
+            return t[i:]
+        j = t.find("__MARK_%s__" % tag_b, i + 1)
+        return t[i:j] if j > i else t[i:]
+
+    def count(self, needle, seg=None):
+        """Occurrences (NOT lines) of the exact string `needle`.
+
+        Deliberately dumb.  See fact 8 in the module docstring: never subtract
+        one message's count from another's -- count each independently.
+        """
+        return (self.text if seg is None else seg).count(needle)
+
+    # -------------------------------------------------------- registers/mem
+    def set_reg(self, name, value):
+        """`name=0xvalue`.  Returns the debugger's echo."""
+        s = "0x%x" % (value & 0xffffffffffffffff)
+        if self.cache_regs and self._reg_cache.get(name) == s:
+            return ""
+        out = self.send("%s=%s" % (name, s))
+        self._reg_cache[name] = s
+        return out
+
+    def read_reg(self, name, retries=4):
+        """`print name` -> int (None if the debugger produced no value).
+
+        Retries the DRAIN (not the command): under heavy device-debug output
+        the reply can land after the default window, and a missed value used to
+        show up as a bogus 'None' comparison in a driver.
+        """
+        start = len(self._buf)
+        self.send("print %s" % name)
+        for _ in range(retries):
+            v = self._parse_value(self._since(start), name)
+            if v is not None:
+                return v
+            self.drain(0.3)
+        return self._parse_value(self._since(start), name)
+
+    @staticmethod
+    def _parse_value(out, name):
+        m = re.search(re.escape(name) + r"\s*=\s*0x([0-9a-fA-F]+)", out)
+        if m:
+            return int(m.group(1), 16)
+        # The observed reply to `print v0` is a bare value line.  Take the first
+        # 0x... that appears AFTER the echoed command, so a hex-bearing echo
+        # cannot be mistaken for the answer.
+        idx = out.find(name)
+        tail = out[idx + len(name):] if idx >= 0 else out
+        m = re.search(r"0x([0-9a-fA-F]+)", tail)
+        return int(m.group(1), 16) if m else None
+
+    def poke_word(self, addr, word):
+        """`put w addr, word` -- SCRATCH RAM ONLY.
+
+        Debugger writes do not reach DM_DEFAULT device handlers reliably
+        (`put b` does not reach the asc device), so never use this for device
+        registers; use guest_store8/32.
+        """
+        return self.send("put w 0x%x, 0x%08x" % (addr & 0xffffffffffffffff,
+                                                 word & 0xffffffff))
+
+    def install_stubs(self):
+        """Write the fixed one-instruction stubs into scratch RAM."""
+        self.stub = {}
+        for i, name in enumerate(self.STUBS):
+            a = self.scratch + self.OFF_STUB + 4 * i
+            self.stub[name] = a
+            self.poke_word(a, INSTR[name])
+
+    def word_at(self, word):
+        """Address holding `word`, installing it once (never re-patched).
+
+        Giving every distinct instruction word its own address removes any
+        chance of executing a stale dyntrans translation of a slot we rewrote.
+        """
+        word &= 0xffffffff
+        if word not in self._word_addr:
+            a = self._pool_next
+            if a >= self.scratch + self.POOL_END:
+                raise RuntimeError("gxprobe: instruction pool exhausted")
+            self._pool_next += 4
+            self.poke_word(a, word)
+            self._word_addr[word] = a
+        return self._word_addr[word]
+
+    # ------------------------------------------------------- guest accesses
+    def _exec_at(self, addr, wait=None):
+        self.set_reg("pc", addr)
+        out = self.send("step", wait)
+        self._reg_cache.pop("pc", None)     # step advanced/changed pc
+        return out
+
+    def guest_store8(self, addr, val):
+        """Genuine guest `sb` -- the only write that reaches a device handler."""
+        self.set_reg("v0", val & 0xff)
+        self.set_reg("at", addr)
+        return self._exec_at(self.stub["sb"])
+
+    def guest_store32(self, addr, val):
+        """Genuine guest `sw`."""
+        self.set_reg("v0", val & 0xffffffff)
+        self.set_reg("at", addr)
+        return self._exec_at(self.stub["sw"])
+
+    def guest_load8(self, addr):
+        """Genuine guest `lbu` -> int (0..255).  Device reads MUST use this."""
+        self.set_reg("v0", 0)
+        self.set_reg("at", addr)
+        out = self._exec_at(self.stub["lbu"])
+        self._reg_cache.pop("v0", None)
+        v = self.read_reg("v0")
+        return None if v is None else (v & 0xff)
+
+    def guest_load32(self, addr):
+        """Genuine guest `lw` -> int (0..2^32-1)."""
+        self.set_reg("v0", 0)
+        self.set_reg("at", addr)
+        out = self._exec_at(self.stub["lw"])
+        self._reg_cache.pop("v0", None)
+        v = self.read_reg("v0")
+        return None if v is None else (v & 0xffffffff)
+
+    def run_guest_words(self, words, at=None, steps=None):
+        """Install a short instruction sequence and step through it.
+
+        words   iterable of 32-bit instruction words
+        at      address to install at (default: a fresh block from the pool, so
+                the same address is never rewritten with different code)
+        steps   number of `step` commands to issue (default: len(words))
+
+        Returns the concatenated step output.  Invalidates the register cache,
+        because caller-supplied code may clobber anything.
+        """
+        words = list(words)
+        if at is None:
+            at = self._pool_next
+            if at + 4 * len(words) > self.scratch + self.POOL_END:
+                raise RuntimeError("gxprobe: instruction pool exhausted")
+            self._pool_next += 4 * len(words)
+            for i, w in enumerate(words):
+                self.poke_word(at + 4 * i, w)
+        else:
+            for i, w in enumerate(words):
+                self.poke_word(at + 4 * i, w)
+        self.set_reg("pc", at)
+        out = []
+        for _ in range(len(words) if steps is None else steps):
+            out.append(self.send("step"))
+        self._reg_cache.clear()
+        return "".join(out)
+
+    def disasm(self, addr, endaddr=None):
+        """`unassemble` -> [(addr, word, text)].  Used to VERIFY encodings."""
+        cmd = "unassemble 0x%x" % addr
+        if endaddr is not None:
+            cmd += " 0x%x" % endaddr
+        out = self.send(cmd, wait=0.6)
+        res = []
+        for m in re.finditer(r"^\s*([0-9a-f]{8,16}):\s+([0-9a-f]{8})\s+(.*)$",
+                             out, re.M):
+            res.append((int(m.group(1), 16), int(m.group(2), 16),
+                        m.group(3).strip()))
+        return res
+
+    def disasm_word(self, addr):
+        """Disassemble the single instruction at `addr` -> (word, text).
+
+        Addresses are compared on their low 32 bits: a 32-bit CPU (R3000/pmax)
+        prints `80010000:` where a 64-bit one prints `ffffffff80010000:`.
+        """
+        for a, w, t in self.disasm(addr, addr + 4):
+            if (a & 0xffffffff) == (addr & 0xffffffff):
+                return (w, t)
+        return (None, "<not disassembled>")
+
+    def verify_stubs(self):
+        """Disassemble the fixed stubs; return [(name, word, disasm_text)]."""
+        lo = self.scratch + self.OFF_STUB
+        hi = lo + 4 * len(self.STUBS)
+        d = {}
+        for a, w, t in self.disasm(lo, hi):
+            d[a & 0xffffffff] = (w, t)
+        out = []
+        for i, name in enumerate(self.STUBS):
+            a = lo + 4 * i
+            w, t = d.get(a & 0xffffffff, (None, "<not disassembled>"))
+            out.append((name, w, t))
+        return out
+
+    def detect_endian(self):
+        """Determine guest byte order with proven primitives only.
+
+        `put w` a known word into scratch RAM, then read byte 0 with a guest
+        lbu: 0x44 => little-endian, 0x11 => big-endian.
+        """
+        a = self.scratch + self.OFF_DATA
+        self.poke_word(a, 0x11223344)
+        b = self.guest_load8(a)
+        self.little_endian = (b == 0x44)
+        return "little" if self.little_endian else ("big" if b == 0x11
+                                                    else "unknown(0x%02x)" % (b or 0))
+
+    # ------------------------------------------------------------------ FPU
+    def ensure_cu1(self):
+        """Make COP1 usable: set STATUS.CU1 (bit 29) if it is clear.
+
+        cop1_slow / the load-store COP1 paths run COPROC_AVAILABILITY_CHECK(1),
+        which reads coproc[0]->reg[COP0_STATUS] at EXECUTE time -- so writing
+        `status` from the debugger is enough; no mtc0 dance is needed.
+        Returns (status_before, status_after).
+        """
+        st = self.read_reg("status")
+        if st is None:
+            return (None, None)
+        if not (st & 0x20000000):
+            self.send("status=0x%x" % (st | 0x20000000))
+            st2 = self.read_reg("status")
+        else:
+            st2 = st
+        return (st, st2)
+
+    def fp_op(self, in_bits, instr_word, width_in, width_out):
+        """Execute one hand-encoded FP instruction on a supplied bit pattern.
+
+        in_bits     the raw operand bits (32- or 64-bit) loaded into $f0
+        instr_word  the FP instruction to execute; it must read $f0 and write $f2
+        width_in    32 -> lwc1 $f0,0(at) ; 64 -> ldc1 $f0,0(at)
+        width_out   32 -> swc1 $f2,0(at) ; 64 -> sdc1 $f2,0(at)
+
+        Returns the RAW RESULT BITS as an int (or None if the result could not
+        be read back).  self.last_trace holds the step transcript, so a caller
+        can see any exception the instruction raised.
+        """
+        fpin = self.scratch + self.OFF_FPIN
+        fpout = self.scratch + self.OFF_FPOUT
+        trace = []
+
+        # 1. operand into scratch RAM (little-endian: low word first)
+        if width_in == 64:
+            lo, hi = in_bits & 0xffffffff, (in_bits >> 32) & 0xffffffff
+            if not self.little_endian:
+                lo, hi = hi, lo
+            self.poke_word(fpin, lo)
+            self.poke_word(fpin + 4, hi)
+        else:
+            self.poke_word(fpin, in_bits & 0xffffffff)
+
+        # 2. sentinel in the result slot, so "nothing was stored" is visible
+        self.poke_word(fpout, 0xdeadbeef)
+        self.poke_word(fpout + 4, 0xdeadbeef)
+
+        # 3. load $f0 (and $f1 for a double on a MIPS-I CPU).
+        #    LDC1/SDC1 are MIPS II: on an R3000 they raise a Reserved
+        #    Instruction exception, so a double must be loaded as the $f0/$f1
+        #    pair with two MIPS-I lwc1's.  With FR=0 that is exactly how
+        #    fpu_store_float_value() lays a double out (low word in reg[fd]).
+        self.set_reg("at", fpin)
+        if width_in == 64 and self.fp_pair_load:
+            trace.append(self._exec_at(self.stub["lwc1"]))
+            trace.append(self._exec_at(self.stub["lwc1_f1"]))
+        else:
+            trace.append(self._exec_at(self.stub["ldc1" if width_in == 64 else "lwc1"]))
+
+        # 4. the instruction under test (own address, written once)
+        trace.append(self._exec_at(self.word_at(instr_word)))
+
+        # 5. store $f2
+        self.set_reg("at", fpout)
+        trace.append(self._exec_at(self.stub["sdc1" if width_out == 64 else "swc1"]))
+
+        self.last_trace = "".join(trace)
+
+        # 6. read the result back with genuine guest loads
+        lo = self.guest_load32(fpout)
+        if width_out == 64:
+            hi = self.guest_load32(fpout + 4)
+            if lo is None or hi is None:
+                return None
+            if not self.little_endian:
+                lo, hi = hi, lo
+            return (hi << 32) | lo
+        return lo
+
+
+def open_preset(name, log_path=None, with_disk=False, extra=(), boot_wait=4.0,
+                kernel=None, **kw):
+    """Start a session on a named machine from MACHINES.
+
+    open_preset("arc", log_path=".../x.log")               # plain
+    open_preset("arc", with_disk=True)                     # adds -d 0:<disk>
+    open_preset("pmax", extra=["-c", "breakpoint ..."])    # extra argv
+    """
+    p = MACHINES[name]
+    args = list(p["args"])
+    if with_disk:
+        args += ["-d", "0:" + p["disk"]]
+    args += list(extra)
+    args += [kernel or p["kernel"]]
+    return Emu(p["binary"], args, log_path=log_path, boot_wait=boot_wait,
+               preset=p, **kw)

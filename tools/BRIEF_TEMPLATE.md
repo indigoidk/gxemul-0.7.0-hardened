@@ -273,6 +273,30 @@ run against real control flow: four independent readers once proposed the same `
 function whose common tail none of them had read, which would have handed a guest an untouched
 buffer.  When every reader makes the same mistake, suspect the brief.*
 
+> ### *** A DECLINE NAMES ITS SCOPE.  Adopted 2026-08-31, adjudicated by the flagship seat
+> ### after a round measured the gap at exactly one row. ***
+>
+> **Default: skip EVERY remaining side effect and still answer through the common exit.**
+> Falling through any shared side-effect code needs a MEASURED warrant, and a
+> `dec_switch`-class row is how the scope gets pinned.
+>
+> The de-fatalisation option set answers *what disposition the refused access gets*.  This
+> answers *what code the refused access still executes*, and the two are independent -- a bare
+> silent decline that falls through a register switch lies to the guest exactly as a latched
+> one does.  **It is therefore the SCOPE AXIS of members 2, 3, 5 and 6 alike, not a seventh
+> member**; promoting it would double the set combinatorially, which is the wrong
+> factorization.
+>
+> It lands HERE rather than in the option set because the question is DERIVED FROM THE
+> ENCLOSING FUNCTION -- does the tail have side effects? -- which is exactly the sketch rule's
+> jurisdiction.
+>
+> *Measured cost of getting it wrong, from `#498`: the fall-through form scored 24/25 and the
+> skip form 25/25.  The single red row was a declined 1-byte write still reaching the register
+> switch, which then announced a TODO about **a write that never happened**.  One row, one
+> `goto`, and the difference between a decline and a decline that lies.*
+
+
 ## §E — THE FIXED QUESTION SET (ask all three; add round-specific ones after)
 
 Adopted on their PRIOR record, not on any single day's sample:

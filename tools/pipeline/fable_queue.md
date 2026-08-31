@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `ns16550` (regress:fable5) · `proberowsubset` (assess:codex) · `sgidewidth` (assess:opus5) · `sgirekills` (assess:codex,deepseek,glm,grok,kimi,minimax,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `ns16550` (regress:fable5) · `proberowsubset` (assess:codex) · `sgidewidth` (regress:fable5) · `sgirekills` (assess:codex,deepseek,glm,grok,kimi,minimax,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
