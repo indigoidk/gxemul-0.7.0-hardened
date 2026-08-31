@@ -1,0 +1,115 @@
+VERDICT: DO NOT SHIP the proposed TEX-only patch. The shift correction is arithmetically right, but its guard is untested, its current diagnostic would become false, and the same debugger-only tail overrun already exists in all five sibling windows. Harden that six-window class first; otherwise leave `sgitexindex` filed.
+
+I checked the hardened tree and `HEAD`, not an upstream copy. The TEX arm is at [dev_sgi_re.c:395](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:395), and the two committed pins are real:
+
+- Width probe: `+0x08 → re_tex[1]`.
+- Unmapped probe: `+0xd8 → re_tex[27]`.
+
+`re_tex` also has exactly the three stated occurrences under `src/`.
+
+### Q1 — Guard versus alternatives
+
+For TEX in isolation, atomic rejection before indexing is the right mechanism. Clamp and resizing are both worse:
+
+- `tlbi < 112` silently performs a partial 8-byte transaction.
+- Enlarging `re_tex` legitimizes invalid indices, changes the struct layout, and conceals rather than fixes the addressing error.
+- Flooring the address to an 8-byte boundary silently redirects a malformed store.
+- Leaving `>>3` is a valid disposition—“do not fix now”—but not a correctness repair.
+
+I would express the condition relative to the window:
+
+```c
+size_t off = relative_addr - CRIME_RE_TEX;
+
+if (len != 8 || (off & 7) != 0) {
+        /* decline */
+} else if (writeflag == MEM_WRITE) {
+        size_t tlbi = off / sizeof d->re_tex[0];
+        ...
+}
+```
+
+With `off < 0xe0` already established, alignment restricts `off` to `0..0xd8`, so `tlbi` is at most 108 and the four writes end at 111.
+
+However, a TEX-only guard is not the best repair. The same debugger path already overruns every correctly decoded sibling:
+
+| Windows | Unaligned tail | Writes |
+|---|---:|---:|
+| TLB_A/B/C, `uint16_t[256]` | `+0x1ff` | 255, 256, 257, 258 |
+| LINEAR_A/B, `uint32_t[32]` | `+0x7f` | 31, 32 |
+| TEX after `>>1` | `+0xdf` | 111, 112, 113, 114 |
+
+The LINEAR case and debugger exception are already documented beside [dev_sgi_re.c:414](/C:/DocumentNoSnc/cc/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:414). The three TLB instances follow directly from their loops at lines 338–390. Unlike TEX, the TLB and LINEAR arrays have current consumers.
+
+So the stronger engineering repair is a per-window alignment/span precondition across all six array-backed windows. A global debugger prohibition is broader than necessary and could remove intentional unaligned RAM inspection.
+
+One more defect in the literal proposal: combining misalignment with the existing condition would print:
+
+```text
+unimplemented len=8 for CRIME_RE_TEX
+```
+
+That is false. Either use one generic per-site “unsupported access, len/address” diagnostic under the existing latch, or introduce a distinct alignment diagnostic/latch. The former is smaller but requires the relevant text oracles to be updated.
+
+### Q2 — Addition licence
+
+For the proposed TEX-only change: **no, I would not ship it now**.
+
+The three sibling decoders and exact 224-byte/112-halfword geometry establish what the correct mapping would be. They do not establish a current functional benefit when TEX has no consumer. The guard then pays real complexity and debugger-visible behavior solely to make that otherwise-inert correction safe.
+
+A licensed sequence does exist:
+
+1. Treat the five existing sibling overruns as an alignment-hardening round and measure them through the debugger interface.
+2. Add local guards there.
+3. Then apply the same established guard shape to TEX together with `>>1`.
+
+At that point the shift has a strong transferred mapping warrant, and the guard has both a measured family instance and an in-tree precedent. Without that sequence—or an owner ruling that debug-index correctness itself is sufficient warrant—I would file, not ship.
+
+### Q3 — Smallest escaping edit
+
+The assumed new `+0x08` row is already present: the committed width probe performs exactly that store. Adding another would be duplicate coverage.
+
+The smallest escape is a one-character mutation:
+
+```c
+(relative_addr & 7)
+                 ^
+                 0
+```
+
+`& 0` disables the guard while leaving every aligned decode oracle green:
+
+- `+0x08 → [4]`
+- `+0xd8 → [108]`
+
+The debugger’s `+0xdf` access then writes 111–114.
+
+A single `+0xdf` guard test is also insufficient against weakened masks. For example, `7 → 1` still rejects odd `+0xdf` but accepts `+0xdc`, which writes 110–113. The detector should exercise all seven nonzero alignment residues—conveniently `+0xd9` through `+0xdf`—and require:
+
+- survival;
+- the bounded decline;
+- zero `d->re_tex[...]` store lines.
+
+The existing aligned `+0xd8` row is the positive control preventing wholesale disabling of the arm.
+
+### Q4 — Re-pin obligation
+
+Re-pin-first and committed-build-RED is necessary, but not sufficient for the complete fix.
+
+For the decode correction:
+
+- Re-pin the existing `+0x08` expectation from `[1]` to `[4]`.
+- Re-pin the existing last-slot expectation from `[27]` to `[108]`.
+- Record the derivation—byte offset divided by `sizeof(uint16_t)`—rather than merely copying fixed-binary output.
+- Measure those specific rows red on committed `HEAD`, not merely the overall gate; a denominator failure is not evidence.
+- Correct the old defect-pinning explanation in place.
+
+For the new safety precondition, add the misalignment-residue oracle before changing product code. Afterward, measure at least these independent mutants:
+
+- restore `>>3`;
+- neutralize the guard with `7 → 0`;
+- weaken it with `7 → 1` or `7 → 3`;
+- replace rejection with clamping or alignment-down;
+- over-decline the legal `+0xd8` store.
+
+That preserves the useful historical pin while proving the newly added guard rather than letting the shift rows stand in for it.
