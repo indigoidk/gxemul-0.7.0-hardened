@@ -51,6 +51,36 @@ work + **build-tree dirtiness** — see below), then `GXEMUL-SEC/OUTSTANDING_BUG
    > >     cmp -s build/src/devices/<edited>.c GXEMUL-SEC/src/devices/<edited>.c
    > >     [ build/gxemul -nt build/src/devices/<edited>.c ]
    >
+   > ### *** THAT `cmp` CANNOT BE RUN ON THE SIX DECLARED DIVERGENCE PATHS, AND NOTHING SAID
+   > ### SO UNTIL 2026-08-31.  Measured, not reasoned. ***
+   >
+   > `build/` matches **`est/`**, not `GXEMUL-SEC/`, for every path in
+   > `tools/est_divergence.txt`.  Measured by running the recipe against all six:
+   >
+   >     src/devices/.index          DIVERGENT      src/devices/dev_jazz.c      DIVERGENT
+   >     src/devices/Makefile.skel   DIVERGENT      src/devices/dev_ne2000.c    ABSENT in build/
+   >     src/devices/autodev.c       DIVERGENT      src/machines/machine_arc.c  DIVERGENT
+   >
+   > and confirming the direction on one of them: `cmp build/src/devices/dev_jazz.c
+   > est/src/devices/dev_jazz.c` is CLEAN while the same file against SEC differs.  `build/`
+   > is the **pmax** tree and the ARC/Jazz layer is the SEC-only addition, so a pmax build has
+   > no use for it -- but **whether that is by design or by history is NOT established here**,
+   > and this note claims only what was measured.
+   >
+   > **THE TRAP, and it is the dangerous direction:** a round editing one of those six in SEC
+   > runs the clearance, reads `DIVERGENT`, and concludes the tree is MUTANT -- then "restores"
+   > `build/` from SEC and silently converts the pmax build tree into something neither tree
+   > was.  *The recipe's own failure mode is to prescribe the corruption it exists to prevent.*
+   >
+   > **SO: the clearance applies to SHARED files only.  For a divergence-set path there is no
+   > two-part clearance -- compare against `est/`, or do not compare.**  Derive the set, never
+   > quote it: `grep -vE '^\s*(#|$)' GXEMUL-SEC/tools/est_divergence.txt`.
+   >
+   > *Latent rather than live: every file this session touched (`dev_sgi_re.c`, `dev_wdc.c`) is
+   > shared, so the recipe was correct every time it was run. It was found by reading a
+   > measuring seat's `BASELINE.out`, which listed the clone's divergences from SEC and made
+   > the pattern visible -- the seat had already noticed and named it, and I checked it.*
+   >
    > Found by a rung-3 witness seat that noticed the impossible timestamp pair and
    > measured against its own `/tmp` tree instead, saying so plainly. **Nothing in the
    > harness would have reported it** -- and a `build/` measurement taken in that window
