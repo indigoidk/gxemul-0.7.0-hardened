@@ -1138,7 +1138,7 @@ else
     #
     #  Oracle-correction ordering applies -- re-pin FIRST, measure the committed build red,
     #  THEN edit.  Without this note the red reads as a regression in THIS device.
-    for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "lo_kill2" "lo_decl2" "lo_alive2" "lo_sent2" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do
+    for v in "live" "devsig" "lo_kill" "lo_decl" "lo_alive" "lo_sent" "lo_latch" "lo_kill2" "lo_decl2" "lo_alive2" "lo_sent2" "hi_draw" "hi_alive" "hi_rd_draw" "hi_rd_alive" "hi_rd_sent" "two_widths_n" "two_widths_1" "two_widths_2" "dec_switch" "hi_kill" "tail_acc" "tail_acc_x" "tail_acc_h" "acc4_last" "acc8_hi32" "acc8_lo32" "acc8_read" "re_first" "sharedlatch"; do
         check "sgi_de row: $v" "$(count "$DEWLOG" "^$v  .*ok$")" "1"
     done
 
@@ -1148,8 +1148,8 @@ else
     #  comparing to "220" is satisfied by (22 ok, 0 FAIL) AND by (2 ok, 20 FAIL), which
     #  is a defect this gate has already shipped once.
     check "sgi_de rows emitted" \
-          "$(( $(count "$DEWLOG" " ok$") + $(count "$DEWLOG" " FAIL$") ))" "29"
-    check "sgi_de rows green" "$(count "$DEWLOG" " ok$")" "29"
+          "$(( $(count "$DEWLOG" " ok$") + $(count "$DEWLOG" " FAIL$") ))" "30"
+    check "sgi_de rows green" "$(count "$DEWLOG" " ok$")" "30"
 fi
 
 SGILOG=$LOGDIR/sgi_re_width.log
@@ -1249,6 +1249,32 @@ else
     check "sgi_re unmapped rows green" "$(count "$UNMLOG" " ok$")"   "50"
     check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
 fi
+
+#  ------------------------------------------------------------ #500 sgideprimop
+#  draw_primitive()'s default arm ended the host on a guest-written drawing op.
+#  Now a latched decline.  The detector is its OWN probe rather than rows bolted
+#  onto sgi_de_width_probe.py, because that one is about WIDTH and owns the
+#  `tail_acc*' rows that pin draw_primitive's REACHABILITY -- a different claim.
+PRIMLOG=$LOGDIR/sgi_de_primop.log
+python3 sgi_de_primop_probe.py "$PMAX" gate > "$PRIMLOG" 2>&1 || true
+
+#  SENTINEL FIRST, for the reason the sibling block states: a preserved log is
+#  verified by its completion sentinel, never by its existence.
+if ! grep -q "OPUS500_DONE" "$PRIMLOG"; then
+    check "sgi_de primop probe completed" "no" "yes"
+else
+    check "sgi_de primop probe completed" "yes" "yes"
+    for v in "live" "devsig" "pt surv" "pt live" "pt decl" "tri surv" "tri live" "tri decl" "reset surv" "reset live" "reset decl" "two once" "two live" "rd surv" "rd decl" "xlatch decl" "xlatch live" "acc rect" "acc live" "acc rect rl" "acc line se"; do
+        check "sgi_de primop row: $v" "$(count "$PRIMLOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED -- a single "19 ok" check cannot tell a LOST row from a
+    #  FAILING one, and those need different responses.
+    check "sgi_de primop rows emitted"           "$(( $(count "$PRIMLOG" " ok$") + $(count "$PRIMLOG" " FAIL$") ))" "21"
+    check "sgi_de primop rows green" "$(count "$PRIMLOG" " ok$")"   "21"
+    check "sgi_de primop rows red"   "$(count "$PRIMLOG" " FAIL$")" "0"
+fi
+
 
 
 PITLOG=$LOGDIR/pit8253_latch.log

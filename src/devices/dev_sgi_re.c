@@ -103,6 +103,14 @@ enum {
 	    right and the sentence did not say BY WHAT.)  */
 	SGIRE_W_UNMAP_WR  = 1 << 7,
 	SGIRE_W_UNMAP_RD  = 1 << 8,
+
+	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
+	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
+	    another site is silenced by that site's ordinary traffic, so the
+	    announce this fix exists to make would never fire.  The next free
+	    bit is 1 << 10; the enum ends HERE on purpose so that a maintainer
+	    scanning to the last enumerator finds it.  */
+	SGIRE_W_PRIM_OP   = 1 << 9,
 };
 
 struct sgi_re_data {
@@ -859,10 +867,41 @@ void draw_primitive(struct cpu* cpu, struct sgi_re_data *d)
 		}
 		break;
 
-	default:fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x,"
-		    " x1=%i y1=%i x2=%i y2=%i fg=0x%x bg=0x%x pattern=0x%08x ]\n",
-		    op, x1, y1, x2, y2, fg, bg, pattern);
-		exit(1);
+	default:
+		/*  #500: a GUEST-WRITTEN drawing op ended the host process.
+		    The switch discriminates on the TOP BYTE only, so the domain
+		    is 256 values and only two are implemented -- DE_PRIM_LINE
+		    (0x01) and DE_PRIM_RECTANGLE (0x03).
+
+		    *** THE TWO KILLERS THAT MATTER ARE NOT EXOTIC VALUES: THEY
+		    ARE NAMED PRIMITIVES, AND ONE OF THEM IS THE RESET STATE. ***
+		    crmfbreg.h defines them as FULL 32-BIT VALUES, not top-byte
+		    indices: DE_PRIM_POINT 0x00000000, LINE 0x01000000,
+		    TRIANGLE 0x02000000, RECTANGLE 0x03000000.  Writing them
+		    as "0x01" invites a `case 0x02:' that can NEVER match,
+		    since the switch compares `op & 0xff000000'.  POINT and
+		    TRIANGLE land
+		    here.  And dev_sgi_re_init memsets the whole device struct,
+		    so CRIME_DE_PRIMITIVE reads 0 -- which IS POINT -- until a
+		    guest writes it.  A guest that sets the START bit having
+		    never written the primitive register at all therefore died
+		    here.  It need not choose a bad value; it need only omit a
+		    good one.
+
+		    Now a LATCHED DECLINE that falls out of the switch and
+		    returns.  The diagnostic is kept in full -- it names the op
+		    and the vertices, which is what a maintainer implementing
+		    the primitive would want -- and gains `-- declined.  (once)'
+		    so it cannot be mistaken for the old host kill and cannot
+		    flood a guest loop.  */
+		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+			d->warned |= SGIRE_W_PRIM_OP;
+			fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x,"
+			    " x1=%i y1=%i x2=%i y2=%i fg=0x%x bg=0x%x"
+			    " pattern=0x%08x -- declined.  (once) ]\n",
+			    op, x1, y1, x2, y2, fg, bg, pattern);
+		}
+		break;
 	}
 }
 

@@ -267,7 +267,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #
 #  PROVENANCE, DERIVED FROM git RATHER THAN ASSUMED -- because "both pins are short by the
 #  same four" is an assumption until the sets are compared.  Against d9efd33, the commit that
-#  last set EXPECT_PTY_PROBES=37:
+#  last set EXPECT_PTY_PROBES=38:
 #
 #    non-artifact .py under regress/ :  60 -> 66   (SIX new files, not four)
 #    of the six, pty.fork            :  FOUR       gdrom_cond, sgi_re_width,
@@ -307,7 +307,7 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  a list, in a comment, WITHOUT OPENING THE LIST -- one line after correcting a stale pin
 #  caused by the same habit.  The check that caught it cost one `grep -c`.
 #  *** RAISED 42 -> 43 BY #499, IN THE SAME COMMIT THAT ADDS THE PROBE. ***  The 43rd is
-#  `sgi_re_unmapped_probe.py'.  This is the THIRD raise in one session and the FIRST that
+#  `sgi_re_unmapped_probe.py sgi_de_primop_probe.py'.  This is the THIRD raise in one session and the FIRST that
 #  did not arrive as a surprise: the two before it were found by the weekly battery and by
 #  a re-derivation hours after the fact, because this check cannot fire until the battery
 #  runs, so the feedback lands up to seven days late -- after the round that caused it has

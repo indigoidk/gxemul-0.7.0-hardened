@@ -1,3 +1,194 @@
+## Round #500 sgideprimop -- a drawing op a guest never chose, and the reset value was one of them
+
+`draw_primitive()` in `src/devices/dev_sgi_re.c` ended with
+
+```c
+default:fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x, ... ]\n", op, ...);
+	exit(1);
+```
+
+and `op` comes straight from a guest-written register (`CRIME_DE_PRIMITIVE`). The switch
+discriminates on the **top byte only**, so the domain is 256 values and two are implemented.
+**A guest-written drawing op ended the host process.**
+
+Now a latched decline that falls out of the switch and returns. Live `exit(1)` in that file:
+**13 -> 12**. The latch is `SGIRE_W_PRIM_OP = 1 << 9`, **its own bit** -- `#498` measured what a
+shared one costs (23/25: the other site's ordinary traffic silences the announce this fix exists
+to make). The enum ends there on purpose, so a maintainer scanning to the last enumerator finds
+`1 << 10`.
+
+### The severity is not "254 of 256 exotic values"
+
+`crmfbreg.h` names four primitives -- `DE_PRIM_POINT` **0x00000000**, `LINE` **0x01000000**,
+`TRIANGLE` **0x02000000**, `RECTANGLE` **0x03000000** -- and the model implements **LINE and
+RECTANGLE only**.
+
+> *These are FULL 32-BIT VALUES, and writing them as "0x01" is a trap this round fell into three
+> separate times -- in the product-code comment, in the detector's docstring, and then again in
+> the first draft of this very paragraph, which is the one recording the correction. The switch
+> compares `op & 0xff000000`, so a maintainer trusting "LINE 0x01" and writing `case 0x02:` for
+> TRIANGLE gets a label that CAN NEVER MATCH. Found by the opus5 seat.* So POINT and TRIANGLE,
+two *documented* primitives, land in the killing `default:`, **interleaved with** the implemented
+pair rather than off in exotic territory.
+
+*** AND POINT IS `0x00000000`, WHICH IS ALSO THE RESET VALUE. ***  `dev_sgi_re_init` memsets the
+device struct, so `CRIME_DE_PRIMITIVE` reads 0 until a guest writes it. **A guest that set the
+START bit having never written the primitive register at all died here. It need not choose a bad
+value; it need only omit a good one.**
+
+### Witness, both directions
+
+`regress/artifacts/sgideprimop/witness_20260831.sh`, run against the committed build and then the
+fixed one; both logs end `WIT500B_DONE`:
+
+```
+                        pre-fix              post-fix
+  B2  TRIANGLE 0x02     exit 1  (KILL)       exit 0, "-- declined.  (once)"
+  C2  POINT    0x00     exit 1  (KILL)       exit 0, "-- declined.  (once)"
+  D2  RECTANGLE ctrl    exit 0, 0 msgs       exit 0, 0 msgs
+```
+
+> *** ITS A2 CASE IS INERT, AND TWO SEATS FOUND THAT INDEPENDENTLY. ***  A2 was meant to be the
+> true reset-value test. It used **`x`, which is not a debugger command** -- the run prints
+> `Unknown command`, which the witness's own grep silently filtered, so A2 never touched memory
+> **in either build**. The reset-value claim had zero witness coverage and rested entirely on
+> reading. grok found it by tracing the access path; kimi found it by running the binary. The
+> detector's `reset` rows supersede it: they assert the DRAW message, which appears only if
+> `draw_primitive` actually ran, where A2 asserted an exit status that reads 0 whether or not
+> anything happened.
+
+### The oracle re-pin, and why the obvious one is a trap
+
+The fix makes `tail_acc_x` in `sgi_de_width_probe.py` **certain-red** -- that row pinned a host
+DEATH on purpose. `#499` had already predicted this blast radius in three tiers and derived the
+design constraint, **KEEP THE MESSAGE TEXT AND ADD `(once)`**, which this fix obeys: `tail_acc`
+stays green and `hi_draw`/`hi_rd_draw` are not silently blinded.
+
+**The natural correction, `exit1` -> `exit0`, was NOT taken.** It would read GREEN under a future
+`exit(0)` reinstatement, because **exit status cannot vary between "declined and then quit" and
+"died with status 0"** -- the `exit0oracle` class, which a sibling round MEASURED the same day as a
+48/48 clean sweep. Re-pinned instead onto a **positive post-draw observable**: the guest performs a
+further load after the drawing access and the row asserts the value, so it reds on a death however
+the death is spelled. The exit check is kept as a labelled second channel (`tail_acc_h`).
+
+**ORDER PROVEN**, one frozen instrument, same script both ways:
+`committed build 28/30` (both re-pinned rows RED) -> `working tree 30/30`.
+
+### The detector -- `regress/sgi_de_primop_probe.py`, 21 rows (19 + the L2 repair below)
+
+Its own probe rather than rows bolted onto the width probe, which is about WIDTH and owns the
+`tail_acc*` rows that pin draw_primitive's *reachability* -- a different claim.
+
+**Every survival row is PAIRED with a positive post-draw observable**, for the reason above.
+
+MEASURED (`killtable_20260831/table2/`, each log verified by its `OPUS500_DONE` sentinel):
+
+```
+  BASE       19/19
+  PREFIX      5/19   floor clause (a) -- 14 red
+  M_EXIT0    14/19   RED = the five `live' rows ONLY; every `surv' row GREEN
+  M_BANG     13/19   RED = the six `decl'/`once' rows      (latch: `!' dropped, SILENT)
+  M_ASSIGN   18/19   RED = `two once' ALONE                (latch: `|=' dropped, FLOOD)
+  M_BITALIAS 18/19   RED = `xlatch decl' ALONE             (bit aliased onto #498's 1 << 6)
+```
+
+*** TWO MUTANTS ARE EACH KILLED BY EXACTLY ONE ROW, AND NEITHER ROW IS MINE. ***
+
+`M_ASSIGN` dies only to `two once`. My own pass-2 brief asked the panel about the **wrong** latch
+mutant -- I named the `!` drop, which is SILENT and which any "at least one message" row catches.
+**glm corrected it**: the escaping mutant is the `|=` drop, which FLOODS, and only an
+exactly-one-message row can see it.
+
+`M_BITALIAS` dies only to `xlatch decl`. **kimi pointed out that every row ran in a FRESH session
+with no prior device traffic**, so a bit-value mutant onto an already-used bit leaves that latch
+clear and the announce still fires. The collision is visible only once something else has already
+set the colliding bit -- so the row pre-fires `#498`'s width latch and then requires the prim-op
+decline anyway.
+
+**Without those two seats, both mutants would have escaped a 17-row detector that looked
+complete.** That is the panel earning its keep in the most literal form available: two
+single-carrier rows, neither of which this author would have written.
+
+kimi found a third gap in the same answer: the `decl` rows counted `DRAW`, a substring the decline
+**shares with the pre-fix kill text**, so a mutant reverting the message would pass. A `DECLINED`
+constant was defined in the file and never used -- the constant existed and the rows did not reach
+for it. Now a `declined(op)` helper matching the full literal including the op value.
+
+### What this round got wrong
+
+**The pass-2 brief omitted a load-bearing premise.** glm: *"the fix rests on one unstated premise
+the packet never establishes -- that `fatal()` RETURNS."* If it exited, de-fatalising the arm would
+still kill the host. It returns (`va_debug`, no exit), verified afterwards -- but a packet-fed seat
+could not settle it, and the brief template carries a SETTLED PREMISES section that was not used.
+
+**And the first detector shipped two vacuities that a seat had to find**, both above. They were
+caught pre-ship (L1) and repaired in-round, which is what that licence is for -- but the CHANNEL
+check exists to catch exactly this at *writing* time, and it did not.
+
+### Seats
+
+Seven fired: codex, grok, kimi, glm, deepseek, minimax, opus5. **agy DELIBERATELY NOT FIRED**
+(reserved for measurement, owner ruling). **fable5 DELIBERATELY NOT FIRED** (adjudication held by
+owner directive until 2026-09-02). Neither is a seat failure and neither is agreement.
+
+### Not covered, stated rather than left blank
+
+The `[31:26]` stray-bit case -- a legal LINE with a high bit set also lands in `default:`. **No
+row, deliberately**: whether a guest ever sets those bits is not established, so a row would
+assert a reachability nobody has shown. A deliberate no-row must not render the same as an unrun
+one.
+
+### The L2 breach that arrived after the round had stopped
+
+The opus5 seat returned late, having measured eight mutants in its own clone, and found a
+**19/19 TOTAL ESCAPE** of this round's detector from **one hex digit**:
+`switch (op & 0xff000000)` -> `& 0xffff0000`.
+
+Both accept rows stored `0x03000000` -- low 16 bits ZERO -- so they pinned the predicate's VALUE
+at two points on one axis and said nothing about the mask's **WIDTH**. `crmfbreg.h` puts three
+real modifier bits down there, and `dev_sgi_re.c` reads all three:
+
+```
+  DE_PRIM_RL             0x00010000   right to left    read at :703
+  DE_PRIM_TB             0x00020000   top to bottom    read at :704
+  DE_PRIM_LINE_SKIP_END  0x00040000   line bound       read at :735
+```
+
+So `RECTANGLE|RL` and `LINE|SKIP_END` are legal, implemented primitives that the widened mask
+**silently declines instead of drawing**. That is the de-escalation clause exactly: before this
+round the mutant `exit(1)`s on the first right-to-left rectangle, unmissable; after it, the
+refusal is silent and the accidental tripwire is gone. It is also clause (f)'s accept-side lesson
+wearing a mask -- an accept row at the BASE tests one bound twice and the other never.
+
+**REPAIRED IN-ROUND (L2) AND DISCHARGED BY A MEASURED KILL, NOT BY EXISTING.** Two rows,
+`acc rect rl` (0x03010000) and `acc line se` (0x01040000), 19 -> 21. Measured against THIS file
+rather than inheriting the seat's numbers from its own clone -- a different claim:
+
+```
+  BASE          21/21
+  M8_maskwide   19/21   RED = `acc rect rl', `acc line se' -- and nothing else
+```
+
+Prediction written into the driver before the run; it matched exactly.
+Logs: `killtable_20260831/table3_l2/`, both ending `OPUS500_DONE`.
+
+### Two records corrected, and one script
+
+**`sgi_de_width_probe.py`'s contract was forbidding the row this diff adds.** It said *"Every
+access to +0x800..+0xfff already ends the host ... A row that wanted survival up there would be
+testing the wrong defect."* This round removes that kill and re-pins `tail_acc_x` into exactly
+such a survival row. Corrected in place with the superseded text quoted.
+
+**The primitive constants were wrong in my own comment, in product code and in the detector.**
+I wrote *"POINT 0x00, LINE 0x01, TRIANGLE 0x02, RECTANGLE 0x03"*; `crmfbreg.h` defines them as
+full 32-bit values. Only POINT coincides. Since the switch compares `op & 0xff000000`, a
+maintainer trusting *"LINE 0x01"* and writing `case 0x02:` gets a label that can never match.
+
+**And the propagation script was fixed rather than the tree.** `build-asan` came back
+`binary STALE` twice, because the script enumerated two trees from memory instead of deriving
+which have a binary. The first time it was patched by hand -- which fixed the tree and left the
+script wrong, so it recurred within the hour. It now derives the set.
+
 ## Round #499 sgireunmapped -- a 2080-byte door, and the obvious oracle escapes
 
 `DEVICE_ACCESS(sgi_re)` in `src/devices/dev_sgi_re.c` ended the host on any unmatched address,

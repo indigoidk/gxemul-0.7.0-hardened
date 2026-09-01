@@ -48,14 +48,23 @@
 #        sgi_re access silence sgi_de's decline entirely.  MEASURED 23/25;
 #      * loss of the latch, so the decline floods (`lo_latch' COUNTS).
 #
+#    CATCHES (added by #500)
+#      * reinstatement of draw_primitive()'s host kill, via `tail_acc_x' -- see the
+#        re-pin note at that row.  It is a SURVIVAL row at +0xfd0, which the
+#        paragraph below used to forbid.
+#
 #    DOES NOT CATCH
-#      * anything in the UPPER HALF that depends on the host surviving.  Every
-#        access to +0x800..+0xfff already ends the host inside draw_primitive()
-#        -- 254 of 256 drawing ops are unimplemented and the reset value is one
-#        of them.  That is `sgideprimop', a separate row, and it is why the
-#        accept rows below sit at +0x7fc/+0x7f8 rather than at the nominal last
-#        slots.  A row that wanted survival up there would be testing the wrong
-#        defect;
+#      * *** THIS CLAUSE WAS TRUE UNTIL #500 AND IS CORRECTED IN PLACE RATHER THAN
+#        SILENTLY SUPERSEDED.  It read: "Every access to +0x800..+0xfff already
+#        ends the host inside draw_primitive() ... A row that wanted survival up
+#        there would be testing the wrong defect."  #500 DE-FATALISED that arm, so
+#        the premise is gone -- and this file's own re-pinned `tail_acc_x' IS now a
+#        survival row at +0xfd0.  The DOES-NOT-CATCH list was forbidding the row
+#        the same diff adds.  Found by a measuring seat, not by a gate. ***
+#
+#        What remains true: the accept rows below sit at +0x7fc/+0x7f8 rather than
+#        at the nominal last slots, and that placement is still deliberate -- it
+#        keeps them off the START alias so they test WIDTH and not drawing;
 #      * an edit that changes only the message TEXT.  The rows count the
 #        decline, they do not pin its wording beyond the `len=' prefix;
 #      * anything in sgi_re, sgi_mte or sgi_de_status.
@@ -343,12 +352,38 @@ row("dec_switch", t.count(SCIS), 0,
 #  mutants, post-fix, and on all five of the pass-2 seat's.  Even a verbatim reinstatement
 #  left it green.  It is re-pinned above onto the measured form (len=1, upper half), which
 #  is a channel that moves.  Knowable at writing time by the CHANNEL check. ***
+#  *** RE-PINNED FOR #500, AND NOT ONTO THE OBVIOUS ORACLE. ***
+#
+#  `tail_acc_x' pinned a host DEATH on purpose: an accepted width with startFlag
+#  reached draw_primitive(), whose default arm killed on 254 of 256 op classes.
+#  #500 de-fatalises that arm, so the row is CERTAIN red and owes a re-pin.
+#
+#  THE NATURAL CORRECTION IS `exit1' -> `exit0' AND IT IS A TRAP.  Trace the
+#  channel rather than the intent: a future one-token reinstatement -- `exit(0)'
+#  at the default arm instead of `exit(1)' -- announces once and then DIES.  `how'
+#  is then "exit0", so the re-pinned row would read GREEN; `tail_acc' still counts
+#  its one message, GREEN; and no other session reaches draw_primitive() at all.
+#  TOTAL ESCAPE.  *** EXIT STATUS CANNOT VARY BETWEEN "DECLINED AND THEN QUIT" AND
+#  "DIED WITH STATUS 0". ***  That is the `exit0oracle' class, and a sibling round
+#  MEASURED exactly this shape as a 48/48 clean sweep on the same day.
+#
+#  So the re-pin is onto a POSITIVE POST-DRAW OBSERVABLE: after the drawing access,
+#  the guest performs a further load through the device and the row asserts the
+#  VALUE.  If the host quit at the draw, that load never runs and printed() returns
+#  "absent", which is not the value -- so the row reds on a death however the death
+#  is spelled.  The exit-status check is KEPT as a second channel (`tail_acc_h'),
+#  because two channels that fail differently are worth more than one that fails
+#  twice.
 A = Addr(CODE)
-t, alive, how = session(store(A, DE + 0xfd0, val="0x11223344"), spin=1.6)
+t, alive, how = session(store(A, DE + 0xfd0, val="0x11223344")
+                        + load(A, DE + 0x0d0, op=OP_LBU_V0_AT) + ["print v0"],
+                        spin=1.6)
 row("tail_acc", t.count(DRAW), 1,
     "accepted width + startFlag STILL reaches draw_primitive")
-row("tail_acc_x", how, "exit1",
-    "...and dies there -- that kill is sgideprimop, not this row's")
+row("tail_acc_x", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON -- kills a death however it is spelled")
+row("tail_acc_h", how, "exit0",
+    "...second channel: the process exits cleanly (weak alone -- see the note)")
 
 # ------------------------------------------------- accept rows, LAST legal slot
 #  +0x7fc / +0x7f8 and NOT +0xffc / +0xff8: the nominal last slots have bit

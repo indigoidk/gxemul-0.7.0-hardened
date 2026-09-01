@@ -13488,6 +13488,31 @@ not no bug: it ranks on the defect, not on the ease of proving it.*
 
 ### `sgideprimop` (HIGH) -- a correct driver drawing a point or a triangle ends the host
 
+> ### *** FIXED -- `#500`, this session.  The row text below is kept as the record of what was
+> ### found; nothing in it is retracted. ***
+>
+> `draw_primitive()`'s `default:` arm is now a LATCHED DECLINE with its own bit
+> (`SGIRE_W_PRIM_OP = 1 << 9`).  Live `exit(1)` in `dev_sgi_re.c`: **13 -> 12**.
+>
+> **Witnessed both directions** (`witness_20260831.out` / `..._POSTFIX.out`): TRIANGLE and POINT
+> go `exit 1` -> `exit 0` with `-- declined.  (once)`; the RECTANGLE control is unchanged.
+>
+> **Detector `regress/sgi_de_primop_probe.py`, 21 rows, gate-wired**, every survival row PAIRED
+> with a positive post-draw observable because exit status cannot distinguish declined-and-quit
+> from died-with-status-0.  Six mutants measured: floor clause (a) 5/21; the `exit(0)`
+> reinstatement 14/21 (red on the `live` rows only); the two latch mutants 13/21 and 18/21; a
+> bit-alias onto `#498`'s bit 18/21; and a widened op mask 19/21.
+>
+> **THREE OF THOSE MUTANTS ARE EACH KILLED BY A SINGLE ROW, AND NONE OF THOSE THREE ROWS WAS
+> WRITTEN BY THE AUTHOR** -- they exist because glm corrected which latch mutant escapes, kimi
+> pointed out every row ran in a fresh session, and opus5 measured a one-hex-digit mask widening
+> that swept the detector clean.
+>
+> **A2's inertness is the correction to carry forward**: the witness's reset-value case used `x`,
+> which is not a debugger command, so it never touched memory in EITHER build and its own grep
+> filtered the error.  The detector's `reset` rows supersede it by asserting the DRAW message.
+
+
 `draw_primitive()` reads its op straight from a guest-written register:
 
 ```c

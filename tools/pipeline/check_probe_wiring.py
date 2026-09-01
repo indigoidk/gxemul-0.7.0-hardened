@@ -298,6 +298,18 @@ MANIFEST = {
     #  claims: 18/28 pre-fix and 28/28 on the fix, the test-first evidence in this row's
     #  own artifacts dir; 30/34 and 33/34 for the two pass-2 mutants against the 34-row
     #  repair, where the 28-row version had scored both 28/28.)
+    #  #500 sgideprimop: the SHIPPED detector.  Gate-run by gate_arm.sh -- invocation,
+    #  OPUS500_DONE sentinel check, every row named individually, and a SUMMED denominator
+    #  that separates a LOST row from a FAILING one.
+    #
+    #  ROW COUNT NOT WRITTEN HERE.  The sibling entry below said "28 rows" through four
+    #  passes that took it to 50.  Derive it:
+    #
+    #      awk '/for v in "live"/{l=$0; getline n;
+    #           if (n ~ /PRIMLOG/) {print gsub(/"[^"]*"/,"",l)}}' regress/gate_arm.sh
+    "sgi_de_primop_probe.py":
+        (CLASS_DETECTOR, "#500 sgideprimop -- draw_primitive's default arm is a latched decline; every survival row is PAIRED with a positive post-draw observable, because exit status cannot distinguish declined-and-quit from died-with-status-0"),
+
     "sgi_re_unmapped_probe.py":
         (CLASS_DETECTOR, "#499 sgireunmapped -- the unmatched-address catch-all is a latched per-direction decline; wired into gate_arm.sh in the same commit as the fix, row count derived from the gate rather than restated here"),
     #  #499 pass 4's FROZEN MUTATOR, preserved because the E0/E0W measurement is cited in
