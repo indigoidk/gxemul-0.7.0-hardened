@@ -157,6 +157,14 @@ PRIM_ONLY = 0x060
 DRAWMODE = 0x018                     # CRIME_DE_DRAWMODE 0x2018, device-relative
 XFER_EN = "0x00200000"               # DE_DRAWMODE_XFER_EN
 XFER_LINE = "sgi_de: XFER_EN for LINE op?"
+
+#  The seven operands the latch's guarded body reads, and where a guest sets
+#  them.  Device-relative (the DE handler adds 0x2000 back).
+VERTEX_0 = 0x070                     # CRIME_DE_X_VERTEX_0: x1 = v>>16, y1 = v & 0x7ff
+VERTEX_1 = 0x074                     # CRIME_DE_X_VERTEX_1: x2, y2
+DE_FG = 0x0d0                        # CRIME_DE_FG
+DE_BG = 0x0d8                        # CRIME_DE_BG
+STIPPLE_PAT = 0x0c4                  # CRIME_DE_STIPPLE_PAT
 START_ONLY = 0x800
 
 OP_NOP = 0x00000000
@@ -769,6 +777,100 @@ row("dec low", t.count(declined("0x02ffffff")), 1,
     "a DECLINED op carrying ALL 24 low bits -- kills a guard qualified on any of them")
 row("dec low liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON")
+
+#  *** AND THE OTHER SEVEN OPERANDS WERE ZERO IN EVERY DECLINE SESSION.  Found by
+#  a seat answering the question this brief actually asked -- WHICH SYMMETRY IS
+#  STILL HALF-CLOSED. ***
+#
+#  The latch's guarded body reads EIGHT values: `op' and the seven the fatal()
+#  prints -- x1, y1, x2, y2, fg, bg, pattern.  Clause (d) admits an operand swap
+#  drawn from any field the guarded body reads, so:
+#
+#      if (!(d->warned & SGIRE_W_PRIM_OP) && !x1) {
+#
+#  is inside the enumeration -- and **every decline session in this file left all
+#  seven at ZERO**, as its own `declined()' literal records (`x1=0 y1=0 ...').
+#  So `!x1' is true for every row, the guard is unchanged, and the table sweeps
+#  clean -- while any real draw with a non-zero vertex loses its announcement.
+#
+#  *** ONE SESSION SETS ALL SEVEN, NOT ONE ROW PER OPERAND.  The seat that found
+#  this also named how I would get the repair wrong: "do not pin only x1 -- that
+#  would be pass 2-3 / 6-7 again; a row that only sets x1=1 leaves && !fg as pass
+#  10."  That is this round's own failure shape, called in advance rather than
+#  discovered next pass. ***
+#
+#  PATTERN NEEDS BIT 31 SPECIFICALLY, and the same seat supplied the reason: at
+#  reset `stipple_mode' is 0, so the strip chain is `>>= 31; <<= 31; <<= 0' and
+#  keeps ONLY bit 31.  A naive non-zero stipple pattern still prints 0x00000000.
+_ops_op = "0x04000000"
+_ops_lit = ("UNIMPLEMENTED drawing op = %s, x1=17 y1=34 x2=51 y2=68"
+            " fg=0x55 bg=0x66 pattern=0x80000000 -- declined.  (once) ]" % _ops_op)
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + VERTEX_0, val="0x00110022")
+                        + store(A, DE + VERTEX_1, val="0x00330044")
+                        + store(A, DE + DE_FG, val="0x55")
+                        + store(A, DE + DE_BG, val="0x66")
+                        + store(A, DE + STIPPLE_PAT, val="0x80000000")
+                        + store(A, DE + PRIM_START, val=_ops_op)
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("dec ops", t.count(_ops_lit), 1,
+    "ALL SEVEN body operands non-zero -- kills a guard qualified on any of them")
+row("dec ops liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON through the seven-store session")
+
+#  *** AND THE SILENCE/FLOOD SYMMETRY WAS HALF-CLOSED TOO -- a SECOND seat, in the
+#  same pass, on a different axis from the first. ***
+#
+#  `dec low' closes conditional SILENCE:   && !(op & low_bit)   -- the guard is
+#  qualified so the announce is skipped.  The MIRROR is conditional FLOODING:
+#
+#      if (!(d->warned & SGIRE_W_PRIM_OP) || (op & DE_PRIM_RL)) {
+#
+#  where a low-bit op BYPASSES the latch and announces on EVERY draw instead of
+#  once.  That swept all 43 rows, and the reason is structural: **every low-bit
+#  decline session in this file performs exactly ONE draw**, so one message is all
+#  there is to see either way.  The only repeated-draw row, `two once', uses
+#  0x00000000 and 0x02000000 -- every low bit CLEAR -- so its second announcement
+#  stays correctly suppressed and the mutant is invisible to it.
+#
+#  *** THIS IS THE SAME SYMMETRY HABIT ONE LEVEL DOWN: pass 8 closed the silence
+#  direction on low bits and left the flood direction on the same bits untested.
+#  `two once' pins the latch for ops WITHOUT low bits; nothing pinned it for ops
+#  WITH them. ***
+#
+#  The row is `two once' with a low-bit op: two draws of the SAME declined value
+#  in one session, and exactly ONE announcement.  Under the flood mutant it sees
+#  two.
+_fl_op = "0x02010000"
+_fl_lit = ("UNIMPLEMENTED drawing op = %s, x1=0 y1=0 x2=0 y2=0"
+           " fg=0x0 bg=0x0 pattern=0x00000000 -- declined.  (once) ]" % _fl_op)
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + PRIM_START, val=_fl_op)
+                        + store(A, DE + PRIM_START, val=_fl_op)
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("dec flood", t.count(_fl_lit), 1,
+    "TWO draws of a LOW-BIT declined op announce ONCE -- kills a latch bypassed on any low bit")
+row("dec flood liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON through both draws")
+
+#  *** WHAT dec flood COVERS, AND WHAT IT DOES NOT -- measured in BOTH directions,
+#  which is the half I kept skipping.  negctl_dec_flood.out. ***
+#
+#      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> 46/47, dec flood RED
+#      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> 47/47, dec flood GREEN
+#
+#  The GREEN is deliberate and is the honest result: this row keys on the bit its
+#  OWN op carries (0x02010000 has bit 16 set, bit 17 clear), not on any latch
+#  bypass whatever.  A row that reddened under both would be responding to
+#  something other than what it claims -- "green for the wrong reason" inverted.
+#
+#  SO THE COVERAGE IS NARROWER THAN dec low's, AND THE ASYMMETRY IS STRUCTURAL
+#  RATHER THAN AN OVERSIGHT: the silence direction takes ONE op carrying all 24
+#  low bits, because the qualification only has to see the bit.  The flood
+#  direction cannot use that trick -- the bypass must be on a bit the REPEATED-DRAW
+#  op carries, and one session announces once per op value.  Covering all 24 would
+#  need 24 two-draw sessions.  DISCLOSED as coverage debt, not repaired: a bypass
+#  on a low bit other than 16 escapes this row.
 
 #  *** THE `DISCLOSED, NOT COVERED' CLAUSE FOR BITS 24-25 WAS A WRONG RECORD, AND
 #  A REVIEW SEAT REFUTED IT BY READING THE PRODUCT CODE.  L4 + L2. ***

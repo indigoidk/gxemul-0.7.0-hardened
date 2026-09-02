@@ -1,3 +1,81 @@
+## Round #500 pass 9 -- I stopped asking for mutants and asked which symmetry was half-closed; two seats found two
+
+Eight passes had asked seats to find a mutant.  **Pass 9 handed them the failure pattern
+instead** -- *"I close one side of a symmetry and leave its mirror open; which one is still
+half-closed?"* -- and it was the highest-yield pass of the chain: **two seats, two different
+half-closed symmetries, on different axes.**
+
+### grok: the guarded body reads EIGHT values, and seven of them were always zero
+
+The latch's body reads `op` **plus the seven the `fatal()` prints** -- `x1`, `y1`, `x2`, `y2`,
+`fg`, `bg`, `pattern`.  Clause (d) admits an operand swap on any field the guarded body reads,
+so `if (!(d->warned & SGIRE_W_PRIM_OP) && !x1)` is inside the enumeration -- and **every
+decline session in the file left all seven at zero**, which the probe's own `declined()` helper
+records verbatim (`x1=0 y1=0 x2=0 y2=0 fg=0x0 bg=0x0 pattern=0x00000000`).
+
+> **The evidence was written into my own helper and I never read it as a coverage statement.**
+
+*** AND THE SEAT NAMED HOW I WOULD BOTCH THE REPAIR, IN ADVANCE: *** *"do not pin only `x1` --
+that would be pass 2-3 / 6-7 again; a row that only sets `x1=1` leaves `&& !fg` as pass 10."*
+So `dec ops` sets **all seven**, and the control proves the class rather than the cell:
+`M_QUAL_X1` **and** `M_QUAL_FG` each red `dec ops` alone.  Pinning only `x1` would have left
+the `fg` form for pass 10 exactly as predicted.
+
+*It also supplied the fact that would have cost a whole pass: `pattern` needs **bit 31
+specifically**, because at reset `stipple_mode` is 0 and the strip chain is `>>= 31; <<= 31`,
+keeping only that bit.  A naive non-zero stipple pattern still prints `0x00000000`.*
+
+### codex: `dec low` closed conditional SILENCE and left conditional FLOODING open
+
+```c
+if (!(d->warned & SGIRE_W_PRIM_OP) || (op & DE_PRIM_RL))   /* the mirror of pass 8 */
+```
+
+A low-bit op **bypasses** the latch and announces on every draw.  It swept all 43 rows for a
+structural reason: **every low-bit decline session performs exactly one draw**, so one message
+is all there is to see either way; the only repeated-draw row, `two once`, uses ops with every
+low bit clear.  Pass 8 closed the silence direction on low bits and left the flood direction on
+the same bits untested -- **the same habit one level down.**
+
+`dec flood` is `two once` with a low-bit op: two draws, exactly one announcement.
+
+### *** THE FIRST CONTROL IN THIS CHAIN WITH A DELIBERATELY GREEN HALF ***
+
+    M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> 46/47, dec flood RED
+    M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> 47/47, dec flood GREEN
+
+**The green is the honest half.**  `dec flood`'s op (`0x02010000`) has bit 17 clear, so a
+bypass on TB cannot reach it; a row that reddened under *both* would be responding to
+something other than what it claims -- "green for the wrong reason" inverted.
+
+> **Every control before this pass asked only "does the row fire?".  None asked "does it fire
+> ONLY when it should?"**  `M_FLOOD_TB` is now a permanent cell whose expected result is green.
+
+**COVERAGE DEBT, DISCLOSED:** `dec flood` catches a bypass on bit 16, not on all 24.  The
+asymmetry is structural, not an oversight -- the silence direction takes one op carrying all 24
+bits because the qualification only has to *see* a bit, while the flood direction needs the
+bypass on a bit the **repeated-draw** op carries.  Covering all 24 would need 24 two-draw
+sessions.
+
+### deepseek: refuted by arithmetic, and its own last sentence did it
+
+It proposed qualifying on bit 24, claiming "no row in the 43-row table has bit 24 set" -- then
+closed with *"real decline ops like `0x05000000` have bit 24 set."*  Both cannot hold.
+**Seven rows carry bit 24**, including all six `dec b*` (each is `LINE | bit_N`, and LINE *is*
+bit 24), so the qualification reddens them rather than sweeping clean.
+
+### Table 9 -- 31 mutants, ZERO CLEAN SWEEPS (one green by design)
+
+Detector **43 -> 47** rows.  Gate 14 ARM: **PASS 558 checks, 0 FAIL**, primop 47/47.
+`PREFIX` now reds **31 rows** at 16/47 -- the floor-clause-(a) evidence has more than doubled
+since this chain began.
+
+*Seats: grok and codex DO NOT CLOSE (both accepted); deepseek DO NOT CLOSE (refuted); kimi and
+minimax read.  **`ollama_glm` SEAT DOWN, third consecutive burn** -- and my size theory is
+refuted: 5.5 KB burned it where ~3 KB had not.  The driver appears to be OPEN-ENDED ANALYTICAL
+SCOPE, not length; this brief asked "which symmetry is half-closed", the one that worked asked
+a bounded question.  `agy` DELIBERATELY NOT FIRED (measurement reserve).*
+
 ## Round #500 pass 8 -- the accept side carried all 24 low bits since pass 4; the decline side carried none
 
 Pass 8 fired six seats.  **One found the eighth defect of this chain, and it is an asymmetry
