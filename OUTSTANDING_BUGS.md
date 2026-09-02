@@ -14225,3 +14225,51 @@ should say explicitly that it is not touching the other.
 
 *Found by the `sgitexindex` seat as a residual while checking an unrelated question, and
 re-verified by reading.*
+
+---
+
+### OPEN -- filed 2026-09-01 from `#500`'s pass-4 panel: three residuals the panel raised and
+### DECLINED to reopen in-round, plus one cell disclosed as uncoverable
+
+Filed under the stopping rule: none is a MEASURED FALSE PASS against the shipped detector's
+floor, and none is a WRONG RECORD.  The grok seat named the first three and said plainly it
+was not asking for them to be reopened; recording them so a future round does not rediscover
+them as findings.
+
+**`sgideprimopdraw`** -- *** THE DETECTOR HAS NO DRAWING ORACLE, AND ONE MASK CELL IS
+THEREFORE UNCOVERABLE RATHER THAN UNCOVERED. ***  Narrowing the `draw_primitive()` selector
+mask at bit 24 or 25 -- `op & 0xff000000` -> `& 0xfd000000` -- collapses the two IMPLEMENTED
+cases onto each other (LINE `0x01000000`, RECTANGLE `0x03000000`) instead of restoring a host
+kill.  Every row stays green, **correctly**: both values are still accepted and the guest still
+runs.
+
+Seeing it needs an oracle for what was DRAWN, and there is none to build at reset.  Verified
+by reading rather than taken from the seat that raised it: `horrible_getputpixel` returns
+early at `if (!(tileptr & 0x80000000))` in `dev_sgi_re.c`, and for `tlb_mode` 0-2 the pointer
+is `d->re_tlb_a[tile_nr] << 16`, which is zero on a reset machine.  **So even a *successful*
+draw writes nothing any row could watch.**
+
+> *This is a MISSING CHANNEL, not a missing row, and the distinction decides the disposition:
+> adding rows cannot close it, so it is DISCLOSED in the probe contract and in the pass-5 kill
+> table -- which builds the mutant anyway and PREDICTS ITS ESCAPE IN WRITING, before the run.
+> A predicted escape is a measurement; an unpredicted one is a breach.*
+
+A round that gives this device a drawing oracle -- a guest that programs a TLB entry with the
+valid bit set, then reads back the tile memory -- closes this cell and the two below at once.
+That is the round to file, not more rows.
+
+**`sgideprimrdpair`** -- `rd surv` is the file's one survival row with no positive companion.
+The `print v0` in that session IS the START-aliased read, and no row consumes it, so
+`draw_primitive(); if (writeflag == MEM_READ) exit(0);` keeps both `rd` rows green.  That is
+the `exit0oracle` class -- exit status cannot distinguish *declined and quit* from *died with
+status 0* -- applied to the one arm this detector left unpaired.  Settled design rather than
+this diff, but it is true of the shipped composite and should be said out loud.
+
+**`sgideprimemptybody`** -- `case DE_PRIM_RECTANGLE: break;` with an emptied body scores
+`count(DRAW) == 0` and the guest runs on, so every accept row passes.  The `* liv` companions
+catch DEATH, not a silent NO-OP.  Same drawing-oracle gap as `sgideprimopdraw`; it is the
+accept side of the same missing channel.
+
+*Provenance: `_scratchpad/panel_20260901_192203_500p4` (grok, codex, kimi).  All three were
+raised by seats that explicitly declined to reopen them in-round, which is the disposition the
+stopping rule asks for and is recorded here as such.*

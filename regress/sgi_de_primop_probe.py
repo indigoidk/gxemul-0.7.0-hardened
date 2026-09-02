@@ -46,22 +46,51 @@ catch, and which it is NOT:
       *** THE FLOOD MUTANT IS THE ONE THAT ESCAPES A NAIVE ROW SET, and this
       file's own author had it backwards in a pass-2 brief until the glm seat
       corrected him. ***
-    * *** A WIDENED SWITCH MASK.  `op & 0xff000000' -> `& 0xffff0000' swept an
-      earlier 19-row version of this file CLEAN, because both accept rows stored
-      0x03000000 and said nothing about the mask's WIDTH.  `acc rect rl' and
-      `acc line se' now carry real bits in 16-19 (DE_PRIM_RL, LINE_SKIP_END),
-      which the code READS, so a widened mask declines a legal primitive and the
-      rows red. ***
+    * *** ANY WIDENING OF THE SWITCH MASK INTO THE LIVE MODIFIER BITS.  This took
+      THREE passes and the first two repairs were both cell-shaped: `& 0xffff0000'
+      swept the 19-row version clean, so two rows were added carrying bits 16 and
+      18 -- and then `& 0xff020000' swept the 21-row version clean, because bit 17
+      was still unpinned.  The rows now carry ALL THREE live modifier bits
+      (RL 16, TB 17, SKIP_END 18, derived by grepping every read of `op'), so the
+      WIDENING half of the class is closed rather than sampled. ***
+    * *** AND A NARROWED SWITCH MASK AT ANY OF THE SIX HIGH BITS.  The first
+      attempt pinned bit 26 ALONE and a seat swept it with a bit-27 narrowing;
+      the space is bits 26-31, which must be zero for an implemented op, so all
+      six are now enumerated (`dec b26'..`dec b31').  ***
+    * *** the older, narrower form of that clause, kept for its reasoning:
+      The implemented values are 0x01 and 0x03, so only bits 24-25 carry
+      information and every other row's op has bits 26-31 CLEAR.  `& 0x03000000'
+      would therefore leave every one of them green while making an unimplemented
+      op ALIAS ONTO an implemented case -- 0x05000000 would be DRAWN AS LINE
+      instead of declined, which silently draws rather than wrongly refusing.
+      `dec hi bit' is the only row with a bit above 25 and is the only thing that
+      can see it. ***
     * a repair applied to the WRITE direction only (`rd surv', `rd decl') --
       `if (startFlag)' is not conditioned on MEM_WRITE, so a START-aliased READ
       draws too.  Named by a seat; no row covered it before.
 
   DOES NOT CATCH
-    * the [31:26] stray-bit case -- a legal LINE with a high bit set also lands
-      in `default:'.  *** DELIBERATELY NO ROW, WITH ITS REASON: whether a guest
-      ever sets those bits is not established, so a row would assert a
-      reachability nobody has shown.  A deliberate no-row must not render the
-      same as an unrun one. ***
+    * *** BOTH NO-ROW CLAUSES THAT USED TO SIT HERE ARE GONE, AND ONE OF THEM WAS
+      A WRONG RECORD THE DIFF ITSELF FALSIFIED.  A seat caught it: the [31:26]
+      clause declared "a legal LINE with a high bit set ... DELIBERATELY NO ROW"
+      while `dec hi bit' -- added ONE CLAUSE ABOVE IT, in the same diff -- stores
+      0x05000000, which is exactly that.  The stale clause is what let an earlier
+      pass call a shrink-escape "consistent, deliberately disclaimed".  Both
+      ranges are now COVERED: bits 0-23 by the widened accept ops, bits 26-31 by
+      `dec b26'..`dec b31'.  Recorded rather than deleted, because a no-row
+      clause that outlives its own refutation is how a hole gets blessed. ***
+
+    * *** NARROWING AT BIT 24 OR 25 -- the one mask cell that is genuinely out of
+      reach, and it is out of reach for a reason no row count can fix.  Those two
+      bits are the only ones carrying information (LINE 0x01, RECTANGLE 0x03), so
+      dropping one COLLAPSES THE TWO IMPLEMENTED CASES ONTO EACH OTHER rather
+      than restoring a host kill.  Every row here would stay green, correctly:
+      both values are still accepted and the guest still runs.  Seeing it needs a
+      DRAWING oracle, and there is none to build at reset -- a seat traced that
+      `horrible_getputpixel' returns immediately on a TLB pointer with bit 31
+      clear, so even a "successful" draw writes nothing observable.  DISCLOSED,
+      NOT COVERED, and it is the same drawing-oracle gap as the last clause
+      below rather than a new species. ***
     * anything about WIDTH -- that is sgi_de_width_probe.py, which also owns the
       `tail_acc*' rows that pin draw_primitive's REACHABILITY;
     * the drawing itself.  A declined op draws nothing, and nothing here asserts
@@ -84,7 +113,12 @@ DUMMY = "dummy_kernel.bin" if os.path.exists("dummy_kernel.bin") else "/dev/null
 
 CODE = 0xffffffff80001000
 DE = 0xffffffffb5002000              # sgi_de        @ phys 0x15002000
-DE_STATUS = 0xffffffffb5003000       # sgi_de_status, for the device signature
+#  *** DE_STATUS IS GONE.  It was UNUSED after devsig attempt 3, and it was
+#  MISLABELLED throughout: phys 0x15003000 is the sgi_mte window; sgi_de_status
+#  is at 0x15004000 (dev_sgi_re.c:36-37).  A seat found both in one sentence. ***
+RE = 0xffffffffb5001000              # sgi_re        @ phys 0x15001000
+UNMAP_W = 0x800                      # #499's unmapped-WRITE window -> UNMAP_WR
+UNMAP_R = 0x900                      # #499's unmapped-READ  window -> UNMAP_RD
 
 #  0x060 is CRIME_DE_PRIMITIVE; 0x800 is the START alias.  A single access to
 #  0x860 therefore SETS the op and TRIGGERS the draw -- which is why the round's
@@ -132,6 +166,14 @@ def row(name, got, want, note=""):
     #  TWO spaces after the name.  A 16-char name emits ONE and the gate check
     #  becomes unsatisfiable -- a RED gate on a GREEN probe.  A sibling round
     #  shipped exactly that and it was found by a review seat, not by the gate.
+    #  *** A DUPLICATE ROW NAME IS A CORRUPT INSTRUMENT, AND IT ONCE REPORTED
+    #  38/38 GREEN.  A bad splice duplicated seven rows; every one of them passed
+    #  twice and the run looked like the best table in the file's history.  The
+    #  gate would have caught it -- its per-row check wants exactly 1 -- but only
+    #  after a 15-minute run and only as an unexplained got=2.  One line here
+    #  fails at the point of construction instead. ***
+    assert name not in [n for n, _ in rows], (
+        "DUPLICATE ROW NAME %r -- the probe is corrupt, not merely wrong" % name)
     assert len(name) <= 15, (
         "row name %r is %d chars; the gate pattern needs <= 15" % (name, len(name)))
     ok = (got == want)
@@ -253,10 +295,43 @@ t, alive, how = session(store(A, 0xffffffff80002000, val="0x5a5a5a5a")
 row("live", printed(t, "v0") if alive else "died", "0x5a5a5a5a",
     "RAM round-trips through the same decode -- the probe can see anything at all")
 
+#  *** THIS CONTROL TOOK THREE ATTEMPTS AND THE FIRST TWO ARE WORTH RECORDING,
+#  because both failed in ways the carrier already warns about. ***
+#
+#  ATTEMPT 1 asserted only `printed(...) != "absent"' -- that SOMETHING answered --
+#  while its note claimed "a DEVICE answers, not RAM".  RAM answers too, so the row
+#  could not distinguish them and the note asserted a test that was not being made:
+#  a vacuous row carrying a false record.  A review seat caught it.
+#
+#  ATTEMPT 2 tried a write-that-does-not-stick at DE_STATUS+0, on the assumption
+#  that a device register would not return what was written to it.  MEASURED: it
+#  returns 0x5a, exactly what was written.  That address round-trips like RAM, so
+#  the premise was false and the row correctly went RED on a good build.
+#
+#  ATTEMPT 3, and this one is measured rather than assumed: use a channel RAM
+#  CANNOT PRODUCE AT ALL -- a device DIAGNOSTIC.  A byte store to sgi_de trips
+#  #498's width guard and emits "[ sgi_de: unimplemented len=1 -- declined.
+#  (once) ]".  No memory location emits text.  It is also INDEPENDENT of
+#  draw_primitive, so it controls for "a device is there" without borrowing the
+#  channel the rows under test use.
+#
+#  *** AND THE FORK ALREADY HAD ONE.  I INVENTED THREE TIMES WITHOUT LOOKING. ***
+#  sgi_re_width_probe.py carries `devsig stat': CRIME_DE_STATUS reads the fixed
+#  architectural value 0x1e000000, and RAM would read 0.  That is a cleaner
+#  signature than this one -- a constant the hardware defines, needing no
+#  diagnostic text -- and it was sitting in a sibling file the whole time.
+#  Attempt 2 failed at DE_STATUS+0 for exactly the reason that row would have
+#  taught me: the discriminating offset is not the base.
+#
+#  This row is KEPT rather than replaced, because two independent channels are
+#  worth more than one: a fixed-value read and a device-only diagnostic fail for
+#  different reasons.  But the lesson is the project's own standing rule --
+#  GREP THE FORK FOR THE EXISTING IDIOM BEFORE INVENTING -- and it cost three
+#  attempts here on the same day it was applied successfully twice elsewhere.
 A = Addr(CODE)
-t, alive, how = session(load(A, DE_STATUS + 0x0, op=OP_LBU_V0_AT) + ["print v0"])
-row("devsig", "yes" if alive and printed(t, "v0") != "absent" else "no", "yes",
-    "a DEVICE answers, not RAM -- the address really reaches sgi_de_status")
+t, alive, how = session(store(A, DE + 0x0, val="0x5a", op=OP_SB_T0_A3))
+row("devsig", t.count("sgi_de: unimplemented len=1 -- declined.  (once) ]"), 1,
+    "a byte access makes the DEVICE speak -- RAM emits no text, ever")
 
 # ------------------------------------------------------- the two named killers
 #  POINT and TRIANGLE are DOCUMENTED primitives that the model does not
@@ -339,6 +414,117 @@ row("xlatch decl", t.count(declined("0x02000000")), 1,
 row("xlatch live", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest survives the composed session")
 
+#  *** AND ONE PRE-SET LATCH IS ONE CELL, NOT THE CLASS -- SAME MISTAKE, SAME
+#  ROUND, ONE ROW OVER.  Two seats found it independently. ***
+#
+#  `xlatch decl' above pre-fires exactly ONE colliding bit, #498's 1 << 6.  The
+#  enum's OTHER already-used bits are #499's 1 << 7 (UNMAP_WR) and 1 << 8
+#  (UNMAP_RD), and NO row in this file raises either before drawing -- so
+#  aliasing SGIRE_W_PRIM_OP onto 1 << 7 or 1 << 8 left all 30 rows green while
+#  making the decline go silent after ordinary unmapped traffic.  A one-token
+#  edit to the very constant this round ADDED: floor clause (d), not coverage
+#  debt.
+#
+#  The four handlers share one `d->warned', so the unmapped windows on sgi_re
+#  set latches that the sgi_de draw path then tests.  Raising BOTH in one
+#  session closes the remaining pair; with 1 << 6 above, every already-used bit
+#  in the enum is now pre-set by some row.
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + UNMAP_W, val="0x5a")
+                        + load(A, RE + UNMAP_R)
+                        + store(A, DE + PRIM_START, val="0x02000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("xlatch unm", t.count(declined("0x02000000")), 1,
+    "decline fires after BOTH #499 unmapped latches -- kills an alias onto 1<<7 or 1<<8")
+row("xlatch unliv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON through the four-access session")
+
+#  *** AND THREE PRE-SET BITS IS THREE CELLS, NOT THE CLASS.  FOUND BY THE
+#  PRE-TABLE BLOCK -- the mandatory check I had SKIPPED, run late, which located
+#  in one grep what four panels had left. ***
+#
+#  The block asks: WHO ELSE WRITES THIS FIELD, AND CAN THEY SET MY BIT?  The
+#  answer is `grep -c "d->warned |=" dev_sgi_re.c` -> TEN sites, bits 0..9.
+#  The rows above pre-set THREE of them (1<<6 via a byte access, 1<<7 and 1<<8
+#  via the unmapped windows).  Aliasing SGIRE_W_PRIM_OP onto any of 1<<0..1<<5
+#  -- the six *_LEN latches -- escaped every row, for exactly the reason 1<<7
+#  did: nothing raised those latches before drawing.
+#
+#  ONE ROW CLOSES THE WHOLE SPACE, and that is the point.  Every *_LEN latch
+#  fires on a wrong length at its own window, so a WORD store to each of the six
+#  windows raises bits 0-5; the byte access raises 6; the unmapped write and
+#  read raise 7 and 8.  With bits 0-8 all set, an alias onto ANY of them goes
+#  silent and this row reds.  Nine cells, one row -- because the closure is over
+#  the FIELD, not over the individual bits.
+#
+#  The narrower rows above are KEPT: they are already measured, they cost
+#  nothing, and they say WHICH bit collided, which this row cannot.
+#  *** THE FIRST VERSION OF THIS ROW WAS MIS-BUILT, AND THE ENUMERATION SWEEP IS
+#  WHAT CAUGHT IT.  M_ALIAS0..M_ALIAS5 each scored a CLEAN 34/34 -- the row was
+#  green because NOTHING HAD SET THOSE BITS, which is the vacuous-by-construction
+#  shape exactly: a row whose channel cannot vary under its named mutant. ***
+#
+#  The cause is one line of the device.  DEVICE_ACCESS(sgi_re) does
+#  `relative_addr += 0x1000;' at dev_sgi_re.c:303, because the device is
+#  REGISTERED at `baseaddr + 0x1000' with length 0x1000 -- so memory_rw hands the
+#  handler an offset in [0, 0xfff] and the handler adds the window base back.
+#
+#  CRIME_RE_TLB_A is therefore at DEVICE OFFSET 0x000, not 0x1000:
+#
+#      window            constant   relative_addr   offset from RE
+#      CRIME_RE_TLB_A    0x1000     0x1000          0x000
+#      CRIME_RE_TLB_B    0x1200     0x1200          0x200
+#      CRIME_RE_TLB_C    0x1400     0x1400          0x400
+#      CRIME_RE_TEX      0x1600     0x1600          0x600
+#      CRIME_RE_LINEAR_A 0x1700     0x1700          0x700
+#      CRIME_RE_LINEAR_B 0x1780     0x1780          0x780
+#
+#  The first version used the CONSTANTS as offsets, so every one of the six
+#  accesses landed at 0x2000..0x2780 -- past the end of a 0x1000-long device, so
+#  they reached this device not at all.  `#499's UNMAP_W/UNMAP_R (0x800/0x900)
+#  were right for the same reason the others were wrong: they are already
+#  device-relative.
+#
+#  *** THE GENERAL LESSON, AND IT IS THE ONE THIS FILE KEEPS RE-LEARNING: A ROW
+#  THAT PASSES PROVES NOTHING UNTIL A MUTANT MAKES IT FAIL.  This row was green
+#  on the fixed build, green on every mask mutant, and green on the six alias
+#  mutants it was written to kill -- and only the last of those was a defect. ***
+A = Addr(CODE)
+t, alive, how = session(store(A, RE + 0x000, val="0x5a")       # TLBA_LEN  1<<0
+                        + store(A, RE + 0x200, val="0x5a")     # TLBB_LEN  1<<1
+                        + store(A, RE + 0x400, val="0x5a")     # TLBC_LEN  1<<2
+                        + store(A, RE + 0x600, val="0x5a")     # TEX_LEN   1<<3
+                        + store(A, RE + 0x700, val="0x5a")     # LINA_LEN  1<<4
+                        + store(A, RE + 0x780, val="0x5a")     # LINB_LEN  1<<5
+                        + store(A, DE + 0x0, val="0x5a", op=OP_SB_T0_A3)   # DE_LEN 1<<6
+                        + store(A, RE + UNMAP_W, val="0x5a")   # UNMAP_WR  1<<7
+                        + load(A, RE + UNMAP_R)                # UNMAP_RD  1<<8
+                        + store(A, DE + PRIM_START, val="0x02000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("xlatch all", t.count(declined("0x02000000")), 1,
+    "decline fires with ALL NINE other latch bits set -- closes the alias space")
+row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON through the eleven-access session")
+
+#  *** AND THE ROW ABOVE ASSERTS A PRECONDITION THAT NOTHING VERIFIED.  That is
+#  how its first version shipped green while touching none of the bits it named. ***
+#
+#  "decline fires with ALL NINE other latch bits set" is only true if the six
+#  window stores actually LAND on their windows.  When they did not, the row was
+#  green for the wrong reason -- and stayed green under every mask mutant and
+#  under the six alias mutants it existed to kill.  Only M_ALIAS0..5 could see it,
+#  and only because the enumeration sweep built them.
+#
+#  THIS ROW MAKES THE PRECONDITION AN OBSERVABLE.  Each of the six *_LEN guards
+#  prints one latched decline, so the session must contain exactly six.  If an
+#  offset is ever wrong again, THIS row reds on the FIXED BUILD -- no mutant
+#  required, and the failure names itself instead of hiding inside a green row.
+#
+#  *** THE GENERAL FORM, and it is the cheap half of the vacuity floor: A ROW
+#  THAT DEPENDS ON A SET-UP STEP OWES A ROW THAT THE SET-UP STEP HAPPENED. ***
+row("xlatch pre", t.count("sgi_re: unimplemented len="), 6,
+    "the six window stores really landed -- pins the precondition xlatch all needs")
+
 # ------------------------------------------------------------- ACCEPT control
 #  The de-escalation clause: a fix that removes a host-fatal guard destroys the
 #  accidental tripwire that made over-broad declining self-announcing.  So the
@@ -372,19 +558,122 @@ row("acc live", printed(t, "v0") if alive else "died", "0x0",
 #  a silent refusal to draw, and the accidental tripwire that announced it is gone.
 #  It is also clause (f)'s accept-side lesson wearing a mask: an accept row at the
 #  BASE tests one bound twice and the other never.
+#  *** CLASS CLOSURE, NOT ANOTHER CELL.  THIRD PASS, THIRD BREACH OF ONE CLASS. ***
+#
+#  Pass 2 found the mask width unpinned and I added two rows carrying bit 16 and
+#  bit 18.  Pass 3 found that bit 17 was STILL unpinned, so `& 0xff000000' ->
+#  `& 0xff020000' -- one hex digit again -- swept the repaired 21 rows CLEAN.
+#  Patching the demonstrated cell and leaving the symmetric one is the exact
+#  pattern a sibling round spent four passes on, and the rule it minted says:
+#  when two consecutive passes find breaches of ONE class, the next repair owes
+#  the CLASS CLOSURE -- enumerate the full space from the function's own inputs
+#  and close every cell in one diff.
+#
+#  THE ENUMERATION, DERIVED by grepping every read of `op' in draw_primitive()
+#  rather than by listing the bits I happened to know:
+#
+#      bit 16      DE_PRIM_RL              read at dev_sgi_re.c:703  (dx)
+#      bit 17      DE_PRIM_TB              read at             :704  (dy)
+#      bit 18      DE_PRIM_LINE_SKIP_END   read at             :735  (loop bound)
+#      bits 24-31  the primitive selector  read at             :723  (the switch)
+#
+#      bits 0-15   DE_PRIM_LINE_WIDTH_MASK -- READ BY NOTHING TODAY.  The only
+#                  use is COMMENTED OUT at :729-730.  No row, deliberately: a row
+#                  there would assert a reachability the code does not have.
+#      bits 19-23  read by nothing at all.  No row, same reason.
+#
+#  So the LIVE modifier set is exactly bits 16, 17, 18, and each accept row now
+#  carries ALL THREE.  Any widening of the switch mask that reaches ANY of them
+#  reddens both rows -- the class is closed, not sampled.
+#
+#  AND THEY NOW HAVE POSITIVE COMPANIONS.  A review seat pointed out that
+#  `count(DRAW) == 0' is NEGATIVE-ONLY: it is satisfied when the access never
+#  happened at all, so a session that silently did nothing would pass.  Every
+#  other survival row in this file is paired; these two were not.  The `* live'
+#  rows read "absent" if the guest never got that far.
 A = Addr(CODE)
-t, alive, how = session(store(A, DE + PRIM_START, val="0x03010000")
+#  *** AND `ALL THREE MODIFIER BITS' WAS STILL SAMPLING.  Three seats, reading
+#  independently, found the same hole: bits 16-18 are the three the CODE reads,
+#  but the mask can be widened to ANY of bits 0-23, and `& 0xff0000ff' or
+#  `& 0xfff00000' left every row green while DECLINING the PROM's own LINE|width.
+#
+#  The fix is not twenty-four rows.  An accept op with ALL 24 low bits SET is
+#  declined under a mask widened at ANY of them, so ONE value closes the whole
+#  widening direction:  0x03ffffff & 0xff000000 == RECTANGLE (accepted today),
+#  while 0x03ffffff & <any wider mask> is not a case value and reds this row. ***
+t, alive, how = session(store(A, DE + PRIM_START, val="0x03ffffff")
                         + load(A, 0xffffffff80002000) + ["print v0"])
-row("acc rect rl", t.count(DRAW), 0,
-    "RECTANGLE|RL is implemented too -- kills a WIDENED op mask")
+row("acc rect mod", t.count(DRAW), 0,
+    "RECTANGLE|ALL 24 maskable low bits -- ANY mask widening reds this row")
+row("acc rect liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON -- the row above is not satisfied by nothing happening")
 
 A = Addr(CODE)
-t, alive, how = session(store(A, DE + PRIM_START, val="0x01040000")
+t, alive, how = session(store(A, DE + PRIM_START, val="0x01ffffff")
                         + load(A, 0xffffffff80002000) + ["print v0"])
-row("acc line se", t.count(DRAW), 0,
-    "LINE|SKIP_END likewise -- the mask's WIDTH is now pinned, not just its value")
+row("acc line mod", t.count(DRAW), 0,
+    "LINE|ALL 24 maskable low bits likewise -- both implemented primitives")
+row("acc line liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON")
+
+#  *** AND THE MASK HAS TWO FAILURE DIRECTIONS, NOT ONE -- AND MY FIRST ATTEMPT AT
+#  THE SECOND ONE SAMPLED IT INSTEAD OF CLOSING IT.  FOURTH BREACH, SAME CLASS. ***
+#
+#  The switch reads bits 24-31.  The implemented values are 0x01 and 0x03, so bits
+#  26-31 must be ZERO for an op to be implemented.  A mask NARROWED by clearing any
+#  one of those bits makes an unimplemented op ALIAS ONTO an implemented case and be
+#  SILENTLY DRAWN instead of declined -- which is worse than wrongly refusing.
+#
+#  ATTEMPT 1 used ONE op, 0x05000000, which carries bit 26 alone.  A review seat
+#  found the hole immediately: `& 0xff000000' -> `& 0xf7000000' clears bit 27, that
+#  op still declines, the row stays GREEN, and 0x09000000 gets drawn as LINE with
+#  nothing to see it.  I had written "the mask has two failure directions" in this
+#  very file, closed the widening one with ALL THREE modifier bits, and then pinned
+#  the narrowing one at a SINGLE bit.
+#
+#  *** THE SPACE IS FINITE AND SMALL, SO IT IS ENUMERATED, NOT SAMPLED. ***  Six
+#  bits must be zero for an implemented op, so six ops discriminate them -- each is
+#  LINE with exactly one high bit added, so clearing THAT bit from the mask aliases
+#  it onto LINE and clearing any other bit does not:
+#
+#      bit 26  0x05000000     bit 29  0x21000000
+#      bit 27  0x09000000     bit 30  0x41000000
+#      bit 28  0x11000000     bit 31  0x81000000
+#
+#  Six rows is not cell-by-cell repair: it is the COMPLETE enumeration of a
+#  six-element space, which is what closure means when the space is finite.
+for _bit, _op in ((26, "0x05000000"), (27, "0x09000000"), (28, "0x11000000"),
+                  (29, "0x21000000"), (30, "0x41000000"), (31, "0x81000000")):
+    A = Addr(CODE)
+    t, alive, how = session(store(A, DE + PRIM_START, val=_op)
+                            + load(A, 0xffffffff80002000) + ["print v0"])
+    row("dec b%d" % _bit, t.count(declined(_op)), 1,
+        "%s = LINE|bit%d MUST decline -- kills a mask narrowed at bit %d"
+        % (_op, _bit, _bit))
+
+#  ONE liveness companion for the family rather than six: the six rows above differ
+#  only in which bit they carry, and a host death in any of them would show as a
+#  missing message in that row.  This proves the shape of session they all use does
+#  reach the tail and run on.
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + PRIM_START, val="0x81000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("dec hi liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON after the highest-bit decline")
+
 
 # ------------------------------------------------------------------ summary
+#  *** A DELIBERATE NO-ROW MUST NOT RENDER THE SAME AS AN UNRUN ONE, and a review
+#  seat pointed out that a CONTRACT COMMENT does exactly that: nothing appears in
+#  the OUTPUT either way.  So the exclusions are PRINTED -- as notes, not as rows.
+#  They are deliberately NOT rows: a row that can never fail is the vacuity this
+#  file exists to refuse, and printing a note keeps the record visible in every run
+#  without pretending a test happened. ***
+print("NOROW  mask narrowing at bit 24 or 25           -- collapses LINE onto RECTANGLE"
+      " rather than killing the host; needs a drawing oracle, and none exists at reset")
+print("NOROW  the drawing itself                       -- a declined op draws nothing"
+      " and no row asserts what a correct POINT or TRIANGLE would render")
+
 bad = [n for n, ok in rows if not ok]
 print("OPUS500_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
 print("OPUS500_LABEL=%s" % LABEL)

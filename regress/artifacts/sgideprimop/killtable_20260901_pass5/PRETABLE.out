@@ -1,0 +1,136 @@
+PRE-TABLE BLOCK -- #500 pass-5 / pass-6, sgi_de_primop_probe.py
+================================================================================
+
+*** SECTION 0 -- THE HONEST PART: THIS BLOCK WAS SKIPPED FOR TABLE 1, AND RUNNING
+*** IT LATE FOUND A FLOOR BREACH THAT FOUR PANELS HAD MISSED.
+--------------------------------------------------------------------------------
+
+The block is MANDATORY for any round shipping or EXTENDING a kill-table-backed
+detector.  I did not run it before the 16-mutant table of 2026-09-01 (the .out
+files beside this one).  That table is therefore recorded as HAVING NO PRE-TABLE
+BLOCK -- not as having passed one.
+
+**Its own mtime cannot prove order for table 1, and no claim is made that it
+does.**  Sections 1-4 below were run AFTER table 1 and BEFORE table 2, and only
+the table-2 claim rests on order.
+
+WHAT RUNNING IT LATE FOUND, in one grep, is the argument for the mandate:
+
+    grep -c 'd->warned |=' src/devices/dev_sgi_re.c   ->   10
+
+Ten writers of the guard field, bits 0..9.  The detector pre-set THREE of them.
+Aliasing SGIRE_W_PRIM_OP onto any of 1<<0 .. 1<<5 escaped all 32 rows -- a
+one-token edit to the constant this round ADDED, i.e. floor clause (d), which is
+L2 and repaired in-round however late it is found.
+
+*Four panels, sixteen mutants and three repairs did not find this.  One grep
+did.  That is the whole case for the block being a step rather than a habit.*
+
+
+SECTION 1 -- GUARD FIELD vs BODY FIELD
+--------------------------------------------------------------------------------
+GUARD reads:  d->warned            (the predicate  !(d->warned & SGIRE_W_PRIM_OP))
+BODY  reads:  op, x1, y1, x2, y2, fg, bg, pattern   (the fatal() arguments)
+BODY  writes: d->warned |= SGIRE_W_PRIM_OP
+
+Where they differ: the body reads eight LOCALS the guard never sees.  Those are
+covered by the accept/decline rows, which vary op and observe the decline text.
+
+*** THE SHARED-BITFIELD QUESTION, which is the one that matters here and which
+    #490 named: who else writes this field, and can they set my bit? ***
+
+    10 sites, bits 0..9:
+      1<<0 SGIRE_W_TLBA_LEN   :349     1<<5 SGIRE_W_LINB_LEN   :557
+      1<<1 SGIRE_W_TLBB_LEN   :368     1<<6 SGIRE_W_DE_LEN     :973
+      1<<2 SGIRE_W_TLBC_LEN   :387     1<<7 SGIRE_W_UNMAP_WR   :575
+      1<<3 SGIRE_W_TEX_LEN    :406     1<<8 SGIRE_W_UNMAP_RD   :583
+      1<<4 SGIRE_W_LINA_LEN   :465     1<<9 SGIRE_W_PRIM_OP    :898  (this round)
+
+    ROW OWED: a state in which EVERY other bit is already set.  Before this
+    block, rows existed for bits 6, 7 and 8 only.  `xlatch all' is that row, and
+    it closes the space over the FIELD rather than over nine individual bits --
+    every *_LEN latch fires on a wrong access length at its own window, so one
+    session raises 0-8 and any alias then goes silent.
+
+
+SECTION 2 -- SIBLING PARITY
+--------------------------------------------------------------------------------
+draw_primitive's switch has three arms: DE_PRIM_LINE, DE_PRIM_RECTANGLE, and
+default (the de-fatalised one).
+
+ASYMMETRY, and it is the round's central disclosure: the two implemented arms
+have NO OBSERVABLE COMPLETION EVENT at reset.  horrible_getputpixel returns
+early at  !(tileptr & 0x80000000)  and for tlb_mode 0-2 the pointer is
+d->re_tlb_a[tile_nr] << 16, which is zero on a reset machine -- so a successful
+draw writes nothing.
+
+    -> the default arm is observable (it prints a decline);
+    -> the implemented arms are observable only NEGATIVELY (absence of decline)
+       plus a liveness companion.
+
+SENTENCE OWED, not a row: no row can distinguish LINE from RECTANGLE, so mask
+narrowing at bit 24 or 25 is DISCLOSED-NOT-COVERED in the probe contract, and
+M_NARROW_25 is built to demonstrate the escape rather than to catch it.
+
+
+SECTION 3 -- CLAIM -> ROW
+--------------------------------------------------------------------------------
+Every added comment sentence asserting an observable consequence, mapped:
+
+  "a GUEST-WRITTEN drawing op ended the host process"       -> PREFIX (9/32)
+  "its own bit ... a shared one costs 23/25"                -> xlatch decl,
+                                                               xlatch unm,
+                                                               xlatch all
+  "any mask widening reds this row"                         -> acc rect/line mod
+  "MUST decline -- kills a mask narrowed at bit N"          -> dec b26..b31
+  "the guest RUNS ON"                                       -> every * liv row
+  "a declined op draws nothing"                             -> NO ROW, and the
+                                                               reason is printed
+                                                               as a NOROW note
+
+No claim sentence is left without either a row or a printed no-row note.
+
+
+SECTION 4 -- CHANNEL: per row, the mutant it kills and the observable that differs
+--------------------------------------------------------------------------------
+A row whose named channel cannot vary under its named mutant is vacuous BY
+CONSTRUCTION, and that is knowable now, before the table runs.
+
+  row              kills                     channel that differs
+  ---------------  ------------------------  --------------------------------
+  live             (control)                 RAM round-trip through the decode
+  devsig           (control)                 device TEXT that RAM cannot emit
+  * surv           M_EXIT0 partner           process survival
+  * live / * liv   M_EXIT0                   v0 after the access (sentinel-preset)
+  * decl           M_BANG                    presence of the decline text
+  two once         M_ASSIGN                  decline text COUNT (exactly one)
+  xlatch decl      M_ALIAS6                  decline after 1<<6 pre-set
+  xlatch unm       M_ALIAS7, M_ALIAS8        decline after 1<<7 and 1<<8 pre-set
+  xlatch all       M_ALIAS0 .. M_ALIAS8      decline after ALL of 0-8 pre-set
+                   *** MEASURED FALSE ON TABLE 2, AND THIS BLOCK ASSERTED IT. ***
+                   As first built the row killed only M_ALIAS6/7/8; M_ALIAS0..5 each
+                   scored a CLEAN 34/34.  DEVICE_ACCESS(sgi_re) does
+                   relative_addr += 0x1000 (dev_sgi_re.c:303) because the device is
+                   registered at baseaddr+0x1000 with length 0x1000, so CRIME_RE_TLB_A
+                   sits at device offset 0x000, not 0x1000.  The row used the
+                   CONSTANTS as offsets and all six accesses landed past the end of
+                   the device.  Row corrected (offsets -0x1000); table 3 re-measures.
+                   *** The CHANNEL check is only as good as the row's ADDRESSES, and
+                   nothing in the block verifies those -- it was the ENUMERATION SWEEP
+                   that caught it.  Had only M_ALIAS6/7/8 been built, as the first
+                   three cells suggested, this would have shipped believing it
+                   worked. ***
+  acc rect/line mod  M_WIDE_*                ABSENCE of decline on a legal op
+  dec b26..b31     M_NARROW_26..31           presence of decline on LINE|bit N
+
+  NON-VARYING CHANNEL, declared in advance: no row's channel varies under
+  M_NARROW_25.  Both implemented values stay accepted and the guest stays alive,
+  so the predicted score is a CLEAN SWEEP.  Measured on table 1: 32/32, as
+  predicted.  This is the contract's DOES-NOT-CATCH clause, measured.
+
+
+ORDER CLAIM
+--------------------------------------------------------------------------------
+Sections 1-4 were written BEFORE the 34-row table (table 2) and AFTER the 32-row
+table (table 1).  The mtime of this file proves the former and not the latter,
+and Section 0 says so rather than leaving it to be inferred.

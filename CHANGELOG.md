@@ -1,3 +1,172 @@
+## Round #500 follow-up -- the CLASS CLOSURE, three tables, and a repair of mine that a table falsified
+
+`#500` shipped a detector with its fix.  That detector then failed **four consecutive
+panels**, every time on one class: **a cell of a state space left empty, repaired at
+exactly the address the mutant had used, leaving the symmetric cell open for the next
+pass.**
+
+| pass | what escaped | what I did |
+|---|---|---|
+| 2 | mask width unpinned | added rows for bits 16 and 18 -- **cell-shaped** |
+| 3 | bit 17 unpinned | enumerated all three modifier bits -- closed |
+| 3 | narrowing unpinned | added bit 26 -- **cell-shaped again** |
+| 4 | bits 27-31; widening into 0-23; a latch-bit alias | **enumerated the whole space** |
+
+Twice I repaired by patching the cell a mutant had just demonstrated -- the second time
+within the hour of writing *"the mask has two failure directions, not one"* into the very
+file, closing the widening direction with all three modifier bits and then pinning the
+narrowing direction **at a single bit**.
+
+> **This round is the first application of the repair-chain rule's amendment: when two
+> consecutive passes find breaches of ONE class, the next repair owes the CLASS CLOSURE**
+> -- enumerate the full space from the function's own inputs, close every cell in one
+> diff, and write into the contract which cells are covered and which are deliberately
+> not.  Pass-per-instance converges linearly in cells; three passes bought one cell each.
+
+### The mask space, enumerated from the function's own inputs
+
+The selector is `op & 0xff000000`.  `op` is a function-**local** `uint32_t` loaded from
+`d->de_reg[]` and **passed to no callee** -- `horrible_getputpixel` takes no `op` argument
+-- so the enumeration is closed over `draw_primitive`'s body.  *That answers a seat's
+pass-4 challenge; the earlier brief asserted a function-scoped grep was sufficient without
+saying why.*
+
+| mask bits | direction | disposition |
+|---|---|---|
+| **0-23** (outside the mask) | WIDENING declines a legal op | both accept ops carry **all 24 bits** -- one row each closes 24 cells |
+| **26-31** (must be zero in any implemented value) | NARROWING aliases an unimplemented op onto an implemented case and **silently draws** | six rows, `dec b26`..`dec b31` |
+| **24-25** (information-carrying: LINE `0x01`, RECTANGLE `0x03`) | NARROWING collapses the two implemented cases onto each other | **DISCLOSED, NOT COVERED** |
+
+**Why 24-25 is uncoverable rather than uncovered, and why that is a measurement rather
+than an excuse.**  Collapsing LINE onto RECTANGLE restores no host kill: both values stay
+accepted and the guest stays alive, so every row stays green *correctly*.  Seeing it needs
+an oracle for what was DRAWN, and there is none at reset -- `horrible_getputpixel` returns
+early at `if (!(tileptr & 0x80000000))`, and for `tlb_mode` 0-2 the pointer is
+`d->re_tlb_a[tile_nr] << 16`, zero on a reset machine.  **A successful draw writes
+nothing.**  A missing CHANNEL, not a missing row, so adding rows cannot close it.
+
+> The table therefore **builds that mutant and predicts its escape in writing, before each
+> run** -- `M_NARROW_25`, a clean sweep on all three tables.  *A predicted escape is a
+> measurement; an unpredicted one is a breach.*  Filed as `sgideprimopdraw` with the round
+> that would close it: a drawing oracle, which closes two other filed residuals at once.
+
+### *** THEN THE CHECK I HAD SKIPPED FOUND A FIFTH BREACH IN ONE GREP. ***
+
+The ARM gate passed at 543 checks and this was about to be committed.  Then the
+**mandatory pre-table block, which this round had skipped**, was run:
+
+    grep -c 'd->warned |=' src/devices/dev_sgi_re.c   ->   10
+
+**Ten writers of the guard field, bits 0..9.  The detector pre-set THREE of them.**
+Aliasing this round's own `SGIRE_W_PRIM_OP` onto any of bits 0-5 -- the six `*_LEN`
+latches -- escaped every row.  A one-token edit to the constant this round ADDED: floor
+clause (d), L2, repaired in-round however late it is found.
+
+*Four panels, sixteen mutants and three repairs did not find this.  One grep did.*
+
+`PRETABLE.out` records it, and its Section 0 states plainly that table 1 had **no** block
+and that the file's mtime proves order only for later tables.  **An unrun check and an
+on-time one must not render the same**, and backdating it would be laundering.
+
+### *** AND MY REPAIR FOR IT WAS ITSELF WRONG -- THE SWEEP THAT EXISTED TO VERIFY IT FALSIFIED IT. ***
+
+The repair was **one row, not nine**: every `*_LEN` latch fires on a wrong access length
+at its own window, so one session raises bits 0-8 and any alias then goes silent.  The
+closure is over the FIELD, not the individual bits.
+
+**Table 2 measured `M_ALIAS0`..`M_ALIAS5` at a CLEAN 34/34 apiece.**  The row was green
+because **nothing had set those bits** -- vacuous by construction, a row whose channel
+cannot vary under its named mutant.
+
+The cause is one line of the device.  `DEVICE_ACCESS(sgi_re)` does
+`relative_addr += 0x1000` (`dev_sgi_re.c:303`) because the device is registered at
+`baseaddr + 0x1000` with length `0x1000`, so `CRIME_RE_TLB_A` sits at device offset
+`0x000`.  **The row used the CONSTANTS as offsets, and all six accesses landed past the
+end of the device.**  `#499`'s `UNMAP_W`/`UNMAP_R` were right for the same reason these
+were wrong: those are already device-relative.
+
+> **THE ROW PASSED ON THE FIXED BUILD, ON EVERY MASK MUTANT, AND ON THE SIX ALIAS MUTANTS
+> IT WAS WRITTEN TO KILL.  Only the last of those was a defect -- and a sampling approach
+> builds exactly the three cells (`M_ALIAS6/7/8`) that pass.**  The nine-mutant sweep
+> existed only because the amendment says a closing pass verifies the enumeration rather
+> than hunting cells; it is what turned a confident repair into a measured falsification.
+
+### The durable fix is a precondition row, and it is the cheap half
+
+`xlatch all` asserted "with ALL NINE other latch bits set" and **nothing verified that
+precondition**.  It now does: `xlatch pre` counts the six `*_LEN` declines the set-up must
+produce and requires exactly six.
+
+> **A ROW THAT DEPENDS ON A SET-UP STEP OWES A ROW THAT THE SET-UP STEP HAPPENED.**
+
+**Negative-controlled in both directions** (`negctl_xlatch_pre.out`): reverting the six
+offsets to their broken values leaves `xlatch all` **green** -- exactly as it was -- while
+`xlatch pre` reads **0 against 6 and goes RED**.  So the class that cost four panels, three
+repairs and a nine-mutant sweep to surface is now caught **on a clean build, in four
+minutes, with no mutant at all.**
+
+### The kill table -- 22 mutants, 22 predictions, zero surprises
+
+Predictions were written into the driver before each run, so order is provable by mtime.
+**Three tables were run; only this one is cited, because tables 1 and 2 describe detectors
+that no longer exist.**  Logs: `regress/artifacts/sgideprimop/killtable_20260901_table3_SHIPPED/`
+(table 2 is kept beside it as `..._table2_FALSIFIED`, named for what it did).
+
+| mutant | score | rows red |
+|---|---|---|
+| `BASE` | **35/35** | -- |
+| `PREFIX` (the named commit `840f3d0^`) | **10/35** | 25 rows -- floor clause (a) |
+| `M_EXIT0` | **27/35** | the eight `* live`/`* liv` rows; **no `surv` row** |
+| `M_BANG` (latch test inverted: silent) | 21/35 | every `decl` row |
+| `M_ASSIGN` (latch never set: flood) | 34/35 | `two once` |
+| **`M_ALIAS0` .. `M_ALIAS5`** | **34/35 each** | **`xlatch all` ALONE -- the six that swept table 2 clean** |
+| `M_ALIAS6` / `_7` / `_8` | 33/35 | `xlatch decl` or `xlatch unm`, **plus** `xlatch all` |
+| `M_WIDE_FF` / `_17` / `_LO` / `_1923` | 33/35 | both `acc * mod` |
+| `M_NARROW_26` / `_27` / `_31` | 34/35 | `dec b26` / `dec b27` / `dec b31` |
+| `M_NARROW_25` | **35/35 -- PREDICTED ESCAPE** | -- |
+
+**`M_EXIT0` is the row-design argument in one line:** eight red, every one a paired
+positive observable, and **not one survival row noticed**.  Exit status cannot distinguish
+*declined and quit* from *died with status 0*.
+
+**`M_NARROW_27` is the one that mattered:** `& 0xff000000` becomes `& 0xf7000000` -- one
+hex digit -- and it **swept the 25-row detector clean** on pass 4 while silently drawing an
+unimplemented op.  It now dies to exactly one row.
+
+### Also repaired, and only one of these was mine to find
+
+* **A wrong record the diff itself falsified -- L4.**  The `[31:26]` DOES-NOT-CATCH clause
+  declared *"a legal LINE with a high bit set ... DELIBERATELY NO ROW"* while `dec hi bit`,
+  added **one clause above it in the same diff**, stored exactly that.  That stale clause
+  is what let pass 3 call a shrink-escape "consistent, deliberately disclaimed".  Corrected
+  in place with the refutation quoted.  A second L4 was corrected the same way inside
+  `PRETABLE.out`, whose CHANNEL table had asserted the closure that table 2 refuted.
+* **Deliberate no-rows rendered identically to unrun rows.**  They now print as `NOROW`
+  notes -- deliberately not rows, because a row that cannot fail is the vacuity this file
+  exists to refuse.
+* **`DE_STATUS` removed** -- unused after the third `devsig` attempt, and mislabelled:
+  phys `0x15003000` is the MTE window; `sgi_de_status` is `0x15004000`.
+
+### *** AND A SELF-INFLICTED DEFECT WORTH MORE THAN THE ROUND: A CORRUPT PROBE REPORTED A PERFECT SCORE. ***
+
+The first narrowing repair spliced the file with `s[:start] + new + s[end:]` where **`end`
+sat EARLIER in the file than `start`**.  That duplicated a whole block -- seven row names
+emitted twice -- and **every duplicate passed, so the run reported `38/38` and looked like
+the best table in the file's history.**
+
+Nothing in the instrument objected.  The gate would have caught it (its per-row check
+wants exactly 1) but only after a fifteen-minute run, and only as an unexplained `got=2`.
+
+> **`row()` now carries a DUPLICATE-NAME ASSERT** and fails at the point of construction.
+> That is the structural fix; excising the splice was only the cleanup.  **A detector that
+> cannot notice its own corruption is not a detector** -- and the number it printed was not
+> merely wrong, it was *reassuring*.
+
+*Seats: six answered pass 4 -- codex, grok, kimi, glm, deepseek, minimax.  `agy` was
+DELIBERATELY NOT FIRED (reserved for measurement by owner ruling) and `fable5` likewise
+(adjudication held by owner directive until 2026-09-02).  Neither is a seat failure and
+neither is agreement.  Panel: `_scratchpad/panel_20260901_192203_500p4`.*
+
 ## Round #500 sgideprimop -- a drawing op a guest never chose, and the reset value was one of them
 
 `draw_primitive()` in `src/devices/dev_sgi_re.c` ended with
