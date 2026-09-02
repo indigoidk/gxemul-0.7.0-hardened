@@ -552,6 +552,15 @@ row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
 #
 #  *** THE GENERAL FORM, and it is the cheap half of the vacuity floor: A ROW
 #  THAT DEPENDS ON A SET-UP STEP OWES A ROW THAT THE SET-UP STEP HAPPENED. ***
+#  *** THIS ORACLE IS AN UNANCHORED PREFIX AND THAT IS DELIBERATE, BUT ITS
+#  WARRANT IS NOT IN THE STRING.  Audited after two anchored-substring defects
+#  were found in this same file. ***  A count of exactly SIX means six DISTINCT
+#  windows only because each *_LEN latch fires ONCE: a session hitting one window
+#  twice scores 5, not 6.  So the guarantee rests on the LATCH-ONCE semantics of
+#  the device, not on the text -- and under M_ASSIGN (the |= dropped) the latch
+#  never sets, every access re-emits, and this row reds on a count above 6.
+#  Do not "anchor" it by appending a window name: that would pin ONE window and
+#  lose the distinctness the six is carrying.
 row("xlatch pre", t.count("sgi_re: unimplemented len="), 6,
     "the six window stores really landed -- pins the precondition xlatch all needs")
 
@@ -669,6 +678,18 @@ row("acc line liv", printed(t, "v0") if alive else "died", "0x0",
 #  channel that observes which primitive ran.
 row("n25 nox", t.count(XFER_LINE), 0,
     "a LINE draw with drawmode CLEAR must stay silent -- kills a dropped guard")
+
+#  *** AND `n25 nox' HAD THE SAME DEFECT AS THE ROW ABOVE, ONE SESSION OVER --
+#  found by a second seat in the same pass.  Its claim is "a LINE draw with
+#  drawmode CLEAR"; nothing pinned that the op WAS a line or that drawmode WAS
+#  clear.  Swap this session's op to RECT and the row still counts zero -- not
+#  because the guard holds, but because there is no LINE to diagnose. ***
+#
+#  Chosen by DUMPING this session rather than reasoning: it announces
+#  `op = 0x01ffffff, drawmode=0x0 src_mode=', which pins BOTH facts in one
+#  anchored string that cannot extend.
+row("n25 noxset", t.count("op = 0x01ffffff, drawmode=0x0 src_mode="), 1,
+    "...and THIS session really was a LINE with drawmode CLEAR -- pins n25 nox")
 
 #  *** AND THE MASK HAS TWO FAILURE DIRECTIONS, NOT ONE -- AND MY FIRST ATTEMPT AT
 #  THE SECOND ONE SAMPLED IT INSTEAD OF CLOSING IT.  FOURTH BREACH, SAME CLASS. ***
@@ -789,8 +810,24 @@ row("n25 rectliv", printed(t, "v0") if alive else "died", "0x0",
 #  swap the operand reads 0x3000000 and this row reds.  Under M_NARROW_25 the line
 #  is UNCHANGED -- the mask governs the switch, not the announcement -- so the
 #  witness does not mask the kill it exists to protect.
-row("n25 rectset", t.count("op = 0x03000000, drawmode=0x200000"), 1,
-    "BOTH stores of THIS session landed -- the in-session witness n25 rect needs")
+#  *** AND THIS WITNESS WAS ITSELF GREEN FOR THE WRONG REASON.  Seventh pass,
+#  same class, and this time INSIDE THE REPAIR FOR ITS OWN PREVIOUS INSTANCE. ***
+#
+#  The oracle was `drawmode=0x200000' with nothing after it, and the device
+#  prints `drawmode=0x%x' -- so it matches INSIDE `drawmode=0x2000000'.  Swapping
+#  XFER_EN for the TRIANGLE constant 0x02000000 (a value this probe already
+#  stores in the pt/tri loop) leaves the witness SATISFIED while XFER is never
+#  enabled.  It only ever worked because the earlier seat's mutant used
+#  0x03000000, which happens not to prefix-match.
+#
+#  *** THIS IS A RE-RUN OF A FINDING I WAS GIVEN IN PASS 4 -- decl rows counting a
+#  substring shared with another string -- WHICH I FIXED THERE AND THEN
+#  REINTRODUCED HERE IN NEW CODE. ***
+#
+#  THE ANCHOR: the format is `drawmode=0x%x src_mode=0x%x', so a trailing
+#  ` src_mode=' TERMINATES the match and no wider value can satisfy it.
+row("n25 rectset", t.count("op = 0x03000000, drawmode=0x200000 src_mode="), 1,
+    "BOTH stores landed -- anchored so a WIDER drawmode cannot satisfy it")
 
 #  *** MEASURED, NOT ASSERTED: negctl_n25_rectset.out in this round's artifacts.
 #  Under the seat's own swap the three older rows all stay GREEN and ONLY this

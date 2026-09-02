@@ -1,3 +1,103 @@
+## Round #500 pass 7 -- the repair for "green for the wrong reason" was itself green for the wrong reason, twice
+
+Pass 7 fired six seats on a one-question brief.  **Three said DO NOT CLOSE, and two of them
+were right in ways that hit the two rows pass 6 had just added to fix this exact class.**
+
+### grok: `n25 rectset` matched an UNANCHORED SUBSTRING
+
+Its oracle was `drawmode=0x200000` with nothing after it, and the device prints
+`drawmode=0x%x` -- so it matches **inside** `drawmode=0x2000000`.  Swapping `XFER_EN` for the
+TRIANGLE constant `0x02000000`, a value this probe already stores in its own `pt`/`tri` loop,
+leaves the witness **satisfied while XFER is never enabled**.
+
+Verified by computation before touching code:
+
+    drawmode=0x200000   -> witness matches   (correct)
+    drawmode=0x2000000  -> witness MATCHES   (the escape)
+    drawmode=0x3000000  -> no match
+
+> **It only ever worked because the pass-6 seat's mutant used `0x03000000`, which happens not
+> to prefix-match.**  The row was one constant away from being vacuous the day it shipped.
+
+**And this is a RE-RUN of a finding I was given in pass 4** -- decl rows counting a substring
+shared with another string -- **which I fixed there and reintroduced here in new code.**
+Anchored with a trailing ` src_mode=`, which the format string guarantees cannot extend.
+
+### codex and glm, independently: the LINE session's op was unpinned
+
+Same hole, found by two seats with no access to each other's answers -- the one form of
+agreement that is evidence.  `n25 nox` claims *"a LINE draw with drawmode CLEAR stays
+silent"*, and nothing pinned that the op was a LINE or the drawmode clear.  Swap that
+session's op to RECT (`0x01ffffff` -> `0x03ffffff`) and the row still counts zero -- **not
+because the guard holds, but because there is no LINE to diagnose.**
+
+Closed by `n25 noxset`, whose oracle was chosen by DUMPING the session rather than reasoning:
+it announces `op = 0x01ffffff, drawmode=0x0 src_mode=`, pinning both facts in one anchored
+string.  **Negative-controlled against codex's own mutant: 40/41, that row alone, while
+`n25 nox` stays green -- which is precisely the point.**
+
+### deepseek: REJECTED ON MEASUREMENT, the second rejection of the round
+
+It proposed swapping the `n25 line` session's op to RECT, reasoning that the guard *"fires for
+any op when drawmode is set"*.  **The guard is INSIDE `case DE_PRIM_LINE:`**, so a RECT op
+never reaches it.  Predicted `n25 line` reds; **measured 40/41, `n25 line` alone**
+(`refuted_deepseek_opswap.out`).
+
+> Three seats proposed the same SHAPE -- an operand swap on a session's stores -- and they do
+> not all escape.  grok's lands where an unanchored oracle absorbs it; glm's and codex's land
+> where no diagnostic fires either way; deepseek's lands where the diagnostic IS the row's
+> oracle.  **Same class, three sessions, two escapes and one kill.**  I have had a confident
+> reading overturned twice tonight and have not once been wrong when I measured.
+
+### An audit the seats did not ask for
+
+Two unanchored oracles were found by seats, so **all four `count()` oracles in the file were
+audited**.  The other two hold -- but `xlatch pre`'s correctness turned out to rest on
+something that existed nowhere in writing: a count of exactly six means six DISTINCT windows
+**only because each `*_LEN` latch fires once**.  Documented in place, with the warning not to
+"anchor" it by appending a window name, which would pin one window and lose the distinctness
+the six is carrying.
+
+### Table 7 -- 26 mutants, ZERO CLEAN SWEEPS, three of them instrument-side
+
+Detector **40 -> 41** rows.  Gate 14 ARM: **PASS 552 checks, 0 FAIL**, primop 41/41.
+Logs: `regress/artifacts/sgideprimop/killtable_20260902_table7/`.
+
+| shape | cells | outcome |
+|---|---|---|
+| latch alias | 9 | `xlatch all`, plus the narrow row where one exists |
+| mask widening | 4 | both `acc * mod` |
+| mask narrowing | 5 | one to four rows each |
+| latch semantics | 2 | `decl` rows / `two once` |
+| exit status | 1 | eight paired observables, **no survival row** |
+| **instrument** | **3** | `n25 rectset` ×2, `n25 noxset` ×1 |
+| floor (a) | PREFIX vs `840f3d0^` | 16/41, 25 rows red |
+
+**`M_SWAP_TRI` and `M_SWAP_NOX` are now permanent cells** -- neither should ever need a seat
+to invent it again.  `M_NARROW_24` reddens `acc rect`, `acc rect mod`, `acc line mod` and
+`n25 line` at 37/41, confirming the corrected bit-24/25 arithmetic a second time.
+
+### THE DRIVER ABORTED, AND THE ABORT WAS THE SYSTEM WORKING
+
+`M_SWAP_TRI`'s from-string occurs **twice** -- the rectangle session and the line session --
+and the generic `probe_mut` helper asserts exactly one occurrence.  **It refused the edit
+instead of mutating both**, which would have produced a score that looked like a result and
+meant nothing.
+
+> The helper now takes an expected occurrence count and edits the first.  *The design error
+> was mine and it is the round's shape again: a one-size assert that was right for the mutant
+> in front of me and wrong for the family, in a helper written BECAUSE a silent no-op mutator
+> had nearly made me dismiss a correct seat finding hours earlier.*
+
+The abort left the clone mid-mutation with a live sentinel; the restore was done first --
+`cmp` against SEC, **rebuild**, and `[ binary -nt source ]` -- before any measurement, because
+a restore is not finished until the binary is rebuilt.
+
+*Seats: grok, kimi and glm DO NOT CLOSE; codex DO NOT CLOSE (no verdict line, read in full);
+deepseek DO NOT CLOSE (rejected on measurement); minimax CLOSE.  **No seat down this pass** --
+`ollama_glm` answered after burning on passes 5 and 6, confirming the working size: 36 KB
+burns, 12 KB burns, ~3 KB does not.  `agy` DELIBERATELY NOT FIRED (measurement reserve).*
+
 ## Round #500 pass 6 -- two seats, two floor breaches, and a record that did not match its own artifact
 
 Pass 6 was fired on a deliberately short brief (12 KB, three questions) after pass 5's 36 KB
