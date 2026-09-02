@@ -1264,14 +1264,14 @@ if ! grep -q "OPUS500_DONE" "$PRIMLOG"; then
     check "sgi_de primop probe completed" "no" "yes"
 else
     check "sgi_de primop probe completed" "yes" "yes"
-    for v in "live" "devsig" "pt surv" "pt live" "pt decl" "tri surv" "tri live" "tri decl" "reset surv" "reset live" "reset decl" "two once" "two live" "rd surv" "rd decl" "xlatch decl" "xlatch live" "xlatch unm" "xlatch unliv" "xlatch all" "xlatch alliv" "xlatch pre" "acc rect" "acc live" "acc rect mod" "acc rect liv" "acc line mod" "acc line liv" "dec b26" "dec b27" "dec b28" "dec b29" "dec b30" "dec b31" "dec hi liv"; do
+    for v in "live" "devsig" "pt surv" "pt live" "pt decl" "tri surv" "tri live" "tri decl" "reset surv" "reset live" "reset decl" "two once" "two live" "rd surv" "rd decl" "xlatch decl" "xlatch live" "xlatch unm" "xlatch unliv" "xlatch all" "xlatch alliv" "xlatch pre" "acc rect" "acc live" "acc rect mod" "acc rect liv" "acc line mod" "acc line liv" "dec b26" "dec b27" "dec b28" "dec b29" "dec b30" "dec b31" "dec hi liv" "n25 rect" "n25 rectliv" "n25 line"; do
         check "sgi_de primop row: $v" "$(count "$PRIMLOG" "^$v  .*ok$")" "1"
     done
 
     #  DENOMINATOR, SUMMED -- a single "19 ok" check cannot tell a LOST row from a
     #  FAILING one, and those need different responses.
-    check "sgi_de primop rows emitted"           "$(( $(count "$PRIMLOG" " ok$") + $(count "$PRIMLOG" " FAIL$") ))" "35"
-    check "sgi_de primop rows green" "$(count "$PRIMLOG" " ok$")"   "35"
+    check "sgi_de primop rows emitted"           "$(( $(count "$PRIMLOG" " ok$") + $(count "$PRIMLOG" " FAIL$") ))" "38"
+    check "sgi_de primop rows green" "$(count "$PRIMLOG" " ok$")"   "38"
     check "sgi_de primop rows red"   "$(count "$PRIMLOG" " FAIL$")" "0"
 fi
 

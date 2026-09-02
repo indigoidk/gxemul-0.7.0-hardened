@@ -1,3 +1,148 @@
+## Round #500 pass 5 -- the disposition I had ACCEPTED was wrong, and a seat overturned it by reading
+
+`80cab9e` shipped a 35-row detector and closed with a disclosure: a mask narrowing at bits
+24-25 collapses the two IMPLEMENTED primitives onto each other, and I recorded that as
+**uncoverable** -- no host kill restored, and no pixel oracle at reset.  `M_NARROW_25` was
+built anyway and its escape PREDICTED IN WRITING, three tables running.
+
+**Pass 5 refused the round.  Four of five answering seats said the chain does not close.**
+
+### The finding, and how it was found
+
+`case DE_PRIM_LINE:` opens with a diagnostic present in **that arm and nowhere else**:
+
+```c
+	if (drawmode & DE_DRAWMODE_XFER_EN)
+		fatal("[ sgi_de: XFER_EN for LINE op? ]\n");
+```
+
+So the two primitives ARE distinguishable, with no pixel oracle at all: set `XFER_EN`, draw
+a RECTANGLE, and the message must not appear.  Under `& 0xfd000000` the rectangle folds onto
+LINE and it does.
+
+> **EVERY FACT IN MY DISCLOSURE WAS TRUE AND THE CONCLUSION DID NOT FOLLOW.**  A collapse
+> really does restore no host kill; a pixel oracle really does not exist at reset.  But *"no
+> pixel oracle"* is not *"no oracle"* -- and **I had grepped that `XFER_EN` line myself
+> earlier in the same round without connecting it.**
+
+*Found by the grok seat, which I had asked to be HARDER on its own earlier "the chain of this
+class ends here" call.  It reversed itself and then found the hole in mine:* **"I was wrong
+then; I am not going to make the same call on a leftover I have not finished enumerating."**
+
+### The repair: THREE rows, because one would have been vacuous
+
+| row | asserts |
+|---|---|
+| `n25 rect` | `count("XFER_EN for LINE op?") == 0` -- RECTANGLE must not reach the LINE-only arm |
+| `n25 rectliv` | the guest runs on -- so the row above is not satisfied by nothing happening |
+| `n25 line` | `count(...) == 1` -- the SAME channel DOES fire for LINE |
+
+**`n25 rect` alone is negative-only**: satisfied if the channel is dead for any unrelated
+reason -- a wrong register offset, a guard misread, a drawmode that never lands.  `n25 line`
+proves it is live.  *That is this round's own `xlatch all` lesson applied three hours late,
+and this time the companion went in BEFORE the table rather than after a nine-mutant sweep
+found the hole.*
+
+### What the pair does NOT catch -- named, not left unknown
+
+The glm seat, asked for the smallest edit defeating the pair, found one: **a single added
+conjunct**, `(drawmode & XFER_EN) && !(op & 0x02000000)`, silences the diagnostic for a
+folded RECTANGLE while keeping it firing for a genuine LINE.  Both rows stay green.  It
+reached that by elimination and said why nothing smaller works -- the two rows differ in
+exactly ONE input, so any edit leaving both green must consult `op` itself.
+
+**DISCLOSED, not repaired, on a SCOPE rule rather than difficulty:** that guard is product
+code this round does not touch, and clause (d)'s enumeration is closed over the diff's own
+hunks.  A conjunct on an unrelated guard is coverage debt to state, not a floor breach to
+repair.  Also recorded: `n25 line` depends on there being exactly ONE emission site for that
+string (`grep -c` = 1 today) -- **a layout fact, not an invariant.**
+
+### Table 4 -- 22 mutants, 22 predictions, zero surprises, and NO clean sweep but BASE
+
+Detector **35 -> 38** rows; gate repinned and verified against the probe's own emission.
+Gate 14 ARM: **PASS 549 checks, 0 FAIL**, primop 38 emitted / 38 green / 0 red.
+Logs: `regress/artifacts/sgideprimop/killtable_20260902_table4/`.
+
+| mutant | score | rows red |
+|---|---|---|
+| `BASE` | **38/38** | -- |
+| `PREFIX` (named commit `840f3d0^`) | **13/38** | 25 rows -- floor (a) |
+| `M_EXIT0` | 30/38 | the eight `* live`/`* liv` rows; **no `surv` row** |
+| `M_BANG` / `M_ASSIGN` | 24/38 / 37/38 | every `decl` row / `two once` |
+| `M_ALIAS0` .. `M_ALIAS5` | 37/38 each | `xlatch all` ALONE |
+| `M_ALIAS6` / `_7` / `_8` | 36/38 | narrow row **plus** `xlatch all` |
+| `M_WIDE_FF` / `_17` / `_LO` / `_1923` | 36/38 | both `acc * mod` |
+| `M_NARROW_26` / `_27` / `_31` | 37/38 | one `dec` row each |
+| **`M_NARROW_25`** | **37/38** | **`n25 rect` ALONE** |
+
+**The last line is the round.**  That cell swept clean on tables 1, 2 and 3 while the records
+called it uncoverable.  The driver's prediction for it was **inverted before the run**, with
+the stop condition attached: if it swept clean again the rows were to be REPLACED, not
+re-aimed a third time.
+
+### Seats
+
+Five answered the full packet: codex **NO-GO**, grok **DO NOT CLOSE**, deepseek **NO**, kimi
+GO-WITH-CHANGES, minimax conditional.  **`ollama_glm` was a SEAT DOWN -- a thinking burn,
+130 KB of hidden reasoning and no answer.**  Recorded as an operational failure, never as
+agreement.
+
+> **THE BURN WAS THE BRIEF, NOT THE SEAT, exactly as the carrier's fifth-class note
+> predicts.**  I sent 36 KB with seven questions and eleven findings.  A **3 KB
+> single-question re-fire** got a 6 KB answer that found the one edit defeating my repair --
+> the sharpest answer in the panel, from the seat that had "failed".
+
+`agy` DELIBERATELY NOT FIRED (measurement reserve, owner ruling).  `fable5` DELIBERATELY NOT
+FIRED during the table -- an Agent seat is a subagent, and subagent load has previously
+pushed a gate past its wall-clock budget and produced a FAIL indistinguishable from a real
+regression.  It was fired the moment the table cleared; see the adjudication below.
+
+### One finding REJECTED, which is worth recording because it is the first tonight
+
+deepseek argued the latch-alias sweep was one cell short: ten writers of `d->warned`, nine
+raised by `xlatch all`.  **Refuted by reading** -- bit 9 IS `SGIRE_W_PRIM_OP`, the latch
+under test, and raising it before the draw would suppress the decline on the FIXED build.
+An `M_ALIAS9` mutant is the identity.  Nine of ten is exactly right; the tenth is the
+subject, not a cell.
+
+---
+
+## The `fable5` adjudication (hold expired 2026-09-02) -- and it corrected a WRONG RECORD of mine
+
+Full text preserved at `regress/artifacts/pcc2widthkills/fable_adjudication_20260902.md` -- a DURABLE path, not the volatile `_scratchpad/` panel dir, because this adjudication changes queue dispositions and a record that cites a buffer is not a citation.  It declared its own
+model version (`claude-fable-5`) and proved file access by quoting the checkpoint.
+
+**`pcc2widthkills`: DO NOW, FIRST.**  Direction split YES -- reads ACCEPT (delete the kill,
+keep the value, no latch), writes decline + latched announce.  Addition licence SATISFIED,
+but citing `#497`'s per-instance `d->warned` bitfield rather than `#119`'s function statics.
+Minimax's single-instance objection is real and **inverted**: single-instance means
+field-vs-static has zero measurable delta, so the licence cannot prefer the static.
+
+*** AND IT FOUND THE WRONG PREMISE IT WAS ASKED TO LOOK FOR, IN THIS PROJECT'S OWN RECORDS. ***
+My brief and that row both said **TEN** live width kills, "evidenced end to end".
+`OUTSTANDING_BUGS.md` § `widthkillclass` (2026-08-30) says: *"It is now checked: 5 of the 10
+width anchors are guest-reachable."*  An aligned non-byte m88k access can never carry an odd
+`relative_addr`, and `%= PCC2_SIZE` keeps odd offsets odd -- so seven of the twelve guarded
+registers are unreachable by construction.  **Verified here by opening the file.**
+
+> **The refutation was filed two days before I wrote the brief, in the file I appended to
+> that same night.**  The carrier's rule -- *grep the round's own findings against each
+> warrant element before transferring a precedent* -- exists for exactly this, and knowing it
+> did nothing.  The row stays HIGH; the framing was false.
+
+**`sgitexindex`: neither code nor drop -- close DOCUMENTED-ONLY, `witness: none`.**  `re_tex`
+has no consumer (checked: three references, all declaration/write/debug), so there is no
+observable and no witness above rung 1.  But dropping goes too far: the decode inconsistency
+is a true record, and the proposed `>> 1` fix would IMPORT the siblings' overrun.  Reopen
+condition named -- the first round that gives `re_tex` a consumer settles the scale against
+that consumer, not by sibling analogy.  **Six-window single round REFUSED**: it bundles three
+semantic classes across five named rows, and the class closure the `#500` chain mandates is
+about one detector's repair chain, not about bundling distinct defects.
+
+**A queue gap on NO open row:** `dev_pcc2.c`'s `default:` arm `exit(1)`s on any unimplemented
+offset, killing reads the `memcpy` had already served -- prose-deferred since the nineteenth
+round and carried by nothing.  Filed.
+
 ## Round #500 follow-up -- the CLASS CLOSURE, three tables, and a repair of mine that a table falsified
 
 `#500` shipped a detector with its fix.  That detector then failed **four consecutive

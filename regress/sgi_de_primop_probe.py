@@ -80,8 +80,20 @@ catch, and which it is NOT:
       `dec b26'..`dec b31'.  Recorded rather than deleted, because a no-row
       clause that outlives its own refutation is how a hole gets blessed. ***
 
-    * *** NARROWING AT BIT 24 OR 25 -- the one mask cell that is genuinely out of
-      reach, and it is out of reach for a reason no row count can fix.  Those two
+    * *** THIS CLAUSE SAID BITS 24-25 WERE UNCOVERABLE.  MEASURED FALSE -- a
+      review seat refuted it by reading the product code, and the rows `n25 rect'
+      / `n25 line' now cover it.  The refuted text is kept below rather than
+      deleted, because a no-row clause that outlives its own refutation is how a
+      hole gets blessed -- an earlier clause in this same file did exactly that.
+      WHAT WAS WRONG: every FACT in it held (a collapse restores no host kill; a
+      pixel oracle does not exist at reset) and the CONCLUSION did not follow,
+      because `case DE_PRIM_LINE:' opens with an XFER_EN diagnostic that exists
+      in that arm and nowhere else.  I had read that line earlier in the round
+      and did not connect it. ***
+
+    * *** (REFUTED, kept for its reasoning) NARROWING AT BIT 24 OR 25 -- the one
+      mask cell that is genuinely out of reach, and it is out of reach for a
+      reason no row count can fix.  Those two
       bits are the only ones carrying information (LINE 0x01, RECTANGLE 0x03), so
       dropping one COLLAPSES THE TWO IMPLEMENTED CASES ONTO EACH OTHER rather
       than restoring a host kill.  Every row here would stay green, correctly:
@@ -127,6 +139,9 @@ UNMAP_R = 0x900                      # #499's unmapped-READ  window -> UNMAP_RD
 #  exactly how a guest reaches draw_primitive in one instruction.
 PRIM_START = 0x860
 PRIM_ONLY = 0x060
+DRAWMODE = 0x018                     # CRIME_DE_DRAWMODE 0x2018, device-relative
+XFER_EN = "0x00200000"               # DE_DRAWMODE_XFER_EN
+XFER_LINE = "sgi_de: XFER_EN for LINE op?"
 START_ONLY = 0x800
 
 OP_NOP = 0x00000000
@@ -661,6 +676,84 @@ t, alive, how = session(store(A, DE + PRIM_START, val="0x81000000")
 row("dec hi liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON after the highest-bit decline")
 
+#  *** THE `DISCLOSED, NOT COVERED' CLAUSE FOR BITS 24-25 WAS A WRONG RECORD, AND
+#  A REVIEW SEAT REFUTED IT BY READING THE PRODUCT CODE.  L4 + L2. ***
+#
+#  I had recorded a mask narrowing at bit 24 or 25 as UNCOVERABLE: it collapses
+#  the two IMPLEMENTED cases onto each other rather than restoring a host kill,
+#  and seeing a wrong DRAW needs a pixel oracle, which does not exist at reset
+#  (horrible_getputpixel returns early on a zero TLB pointer).  All of that is
+#  true and NONE of it supports the conclusion.
+#
+#  `case DE_PRIM_LINE:' opens with a diagnostic that exists in THAT ARM AND
+#  NOWHERE ELSE:
+#
+#      case DE_PRIM_LINE:
+#              if (drawmode & DE_DRAWMODE_XFER_EN)
+#                      fatal("[ sgi_de: XFER_EN for LINE op? ]\n");
+#
+#  So the two primitives ARE distinguishable, with no pixel oracle at all: set
+#  XFER_EN, draw a RECTANGLE, and the message must NOT appear.  Under
+#  `& 0xfd000000' the RECTANGLE folds onto LINE and it does.
+#
+#  *** TWO ROWS, NOT ONE, AND THIS IS THE ROUND'S OWN LESSON APPLIED THREE HOURS
+#  LATE.  `n25 rect' asserts a count of ZERO, which is NEGATIVE-ONLY: it is
+#  satisfied if the channel is dead for ANY reason -- a wrong register offset, a
+#  guard I misread, a drawmode that never lands.  `n25 line' proves the SAME
+#  channel does fire.  Earlier in this round `xlatch all' shipped green because
+#  its set-up silently did nothing, and only a nine-mutant sweep caught it. ***
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + DRAWMODE, val=XFER_EN)
+                        + store(A, DE + PRIM_START, val="0x03000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("n25 rect", t.count(XFER_LINE), 0,
+    "RECTANGLE must NOT reach the LINE-only diagnostic -- kills a bit-25 narrowing")
+row("n25 rectliv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON -- the row above is not satisfied by nothing happening")
+
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + DRAWMODE, val=XFER_EN)
+                        + store(A, DE + PRIM_START, val="0x01000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("n25 line", t.count(XFER_LINE), 1,
+    "...and the SAME channel DOES fire for LINE -- so `n25 rect' is not vacuous")
+
+#  *** WHAT THIS PAIR DOES NOT CATCH, NAMED RATHER THAN LEFT UNKNOWN.  A review
+#  seat was asked for the smallest edit that defeats the pair and found one. ***
+#
+#  ONE ADDED CONJUNCT on the product-code guard defeats both rows:
+#
+#      if ((drawmode & DE_DRAWMODE_XFER_EN) && !(op & 0x02000000))
+#
+#  That silences the diagnostic for a FOLDED RECTANGLE while keeping it firing
+#  for a genuine LINE -- `n25 rect' 0, `n25 line' 1, both green, and the
+#  rectangle still drawn as a line.  The seat reached it by elimination and said
+#  why nothing smaller works: the two rows differ in exactly ONE input (the op
+#  value), so any edit leaving both green must make the string fire IFF the op
+#  is LINE-shaped, i.e. it must consult `op'.  It checked the single-token
+#  substitutions (drawmode->op, &->&&, &->|, & ~op, constant swaps) and every
+#  one either kills the channel for both ops or fires for both, reddening a row.
+#
+#  *** DISCLOSED, NOT REPAIRED, AND THE REASON IS A SCOPE RULE RATHER THAN
+#  DIFFICULTY: that guard is PRODUCT CODE THIS ROUND DOES NOT TOUCH.  Clause
+#  (d)'s enumeration is closed over the diff's own hunks -- predicates dominating
+#  the edited lines, plus operand swaps from fields the guarded body reads.  A
+#  conjunct added to an unrelated guard is a hypothetical future edit, which is
+#  COVERAGE DEBT to state, not a floor breach to repair.  Stating it is what
+#  makes a later escape "outside the contract" rather than an argument. ***
+#
+#  The seat's own summary is the honest one: the two-row SHAPE is right and the
+#  ORACLE is the weak point -- no arrangement of string-count rows closes this.
+#  Closing it needs a channel that observes WHICH PRIMITIVE RAN rather than a
+#  diagnostic that happens to sit in one arm.
+#
+#  AND ONE DEPENDENCY, because the same seat asked whether `n25 line' could go
+#  green for a reason other than the one it claims: it could, if a SECOND site
+#  emitted the same string for LINE-shaped ops.  Measured today --
+#  `grep -c "XFER_EN for LINE op"` over the device source returns ONE.  That is a
+#  layout fact, not an invariant: a future duplicate of that diagnostic silently
+#  unpins this row, in the same way a struct reorder can unpin an anchored row.
+
 
 # ------------------------------------------------------------------ summary
 #  *** A DELIBERATE NO-ROW MUST NOT RENDER THE SAME AS AN UNRUN ONE, and a review
@@ -669,8 +762,6 @@ row("dec hi liv", printed(t, "v0") if alive else "died", "0x0",
 #  They are deliberately NOT rows: a row that can never fail is the vacuity this
 #  file exists to refuse, and printing a note keeps the record visible in every run
 #  without pretending a test happened. ***
-print("NOROW  mask narrowing at bit 24 or 25           -- collapses LINE onto RECTANGLE"
-      " rather than killing the host; needs a drawing oracle, and none exists at reset")
 print("NOROW  the drawing itself                       -- a declined op draws nothing"
       " and no row asserts what a correct POINT or TRIANGLE would render")
 

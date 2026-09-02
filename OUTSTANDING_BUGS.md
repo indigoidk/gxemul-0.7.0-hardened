@@ -14273,3 +14273,29 @@ accept side of the same missing channel.
 *Provenance: `_scratchpad/panel_20260901_192203_500p4` (grok, codex, kimi).  All three were
 raised by seats that explicitly declined to reopen them in-round, which is the disposition the
 stopping rule asks for and is recorded here as such.*
+
+---
+
+### OPEN -- filed 2026-09-02 by the fable5 adjudication: a kill on NO LEDGER ROW, prose-deferred
+### since the nineteenth round
+
+**`pcc2defaultkill`** -- `dev_pcc2.c`'s `default:` arm `exit(1)`s on any unimplemented
+offset.  **It kills READS THAT THE TOP-OF-FUNCTION `memcpy` HAS ALREADY SERVED** -- the same
+ACCEPT shape `pcc2widthkills` turns on, arriving at a different predicate.
+
+Found by the adjudicating seat while ranking `pcc2widthkills`, and it is filed rather than
+folded into that round because the predicate class differs: **offset decode, not access
+width.**  The round-scope rule takes one site and admits a second only in the same semantic
+class under one fix design; these are two classes in one file.
+
+> **The reason it matters that it has NO ROW, rather than merely being unfixed:** without one,
+> `pcc2widthkills`'s contract has nothing to point at when it declines to claim that wide pcc2
+> reads are safe.  A round that fixes the width kills and says nothing about the decode kill
+> leaves a reader to infer the file is clean.  *It has been deferred in prose since round
+> nineteen ("the `dev_pcc2.c` remainder") and prose is what let it sit uncounted.*
+
+Not yet witnessed and NOT claimed to be: no reachability analysis has been done on which
+unimplemented offsets a real driver touches.  That is the first thing the round owes, and the
+`widthkillclass` precedent is the warning -- **half the width kills that row filed turned out
+to be guest-unreachable by construction**, which was measured only when someone asked.
+
