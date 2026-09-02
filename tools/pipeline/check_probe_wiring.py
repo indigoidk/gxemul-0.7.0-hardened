@@ -264,6 +264,13 @@ MANIFEST = {
         (CLASS_RESEARCH, "#497 table-2 mutator, frozen and hard-exiting if absent"),
     "artifacts/widthkillclass/opus_impl_20260830/sgi_re_width_probe.py":
         (CLASS_RESEARCH, "#497 the 35-row detector AS MEASURED -- the shipping copy is separate and gated"),
+    #  #500 pass 6: the NEGATIVE CONTROL's mutated probe, frozen as evidence.  It is
+    #  a MUTANT of the shipping detector, deliberately run by no gate -- its whole
+    #  purpose is to reproduce a RED.  A seat built the mutant it carries; the
+    #  control proved both that the hole existed and that the repair closes it.
+    "artifacts/sgideprimop/killtable_20260902_table4/negctl_n25_rectset_probe.py":
+        (CLASS_RESEARCH, "#500 the negative control AS RUN -- drawmode store neutered; reds n25 rectset alone, 38/39"),
+
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),
 

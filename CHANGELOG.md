@@ -1,3 +1,139 @@
+## Round #500 pass 6 -- two seats, two floor breaches, and a record that did not match its own artifact
+
+Pass 6 was fired on a deliberately short brief (12 KB, three questions) after pass 5's 36 KB
+packet burned a seat.  **It still refused the round**, and the two dissents were both right.
+
+### codex: a one-token operand swap CLEAN-SWEEPS the 38-row detector
+
+In the rectangle session, swap the drawmode store's value for a value already present in the
+edited body -- `val=XFER_EN` becomes `val="0x03000000"`.  XFER is then never enabled, so
+`n25 rect` counts zero **for the wrong reason** and stays green; and under `M_NARROW_25` the
+folded rectangle reaches the LINE arm with XFER disabled, emits nothing, **and the intended
+kill is defeated.**  Squarely inside clause (d)'s enumeration -- an operand swap on the edited
+body.  L2, repaired in-round.
+
+> **ITS Q3 IS THE PART THAT MATTERS, and it is a criticism of my whole pairing:** *"The panel
+> treated a positive control in a DIFFERENT SESSION as proof that the rectangle session did
+> something.  It is not."*  `n25 line` proves the LINE setup works in ITS session; `n25
+> rectliv` proves only that the trailing load ran.  My comment claiming otherwise was false
+> and is corrected.
+
+**This is the `xlatch all` failure for the THIRD time in one round** -- a row green because
+its set-up silently did nothing -- and I had built the repair for the second instance INTO A
+DIFFERENT SESSION, where it cannot do the job.
+
+**The repair is `n25 rectset`**, an IN-SESSION witness chosen by DUMPING the session's raw
+output before picking an oracle: `draw_primitive` announces its entry with both operands the
+row needs (`op = 0x03000000, drawmode=0x200000`).  Negative-controlled against the seat's own
+mutant -- the three older rows all stay GREEN and only this one reds, 38/39
+(`negctl_n25_rectset.out`).  **So the hole was real and the repair closes it, from one run.**
+
+### kimi: a SMALLER escape, an empty corner of the two-by-two, and a false record of mine
+
+Its answer was 221 KB with **no verdict line**, so the extractor filed it as a format miss.
+*It contained the sharpest findings of the pass* -- the unread-review class, which this
+project's own record calls its most expensive.
+
+**(1) `if (drawmode & XFER_EN)` -> `if (1)`, one token, smaller than the disclosed conjunct.**
+Nowhere was **(LINE, no-XFER) -> 0** asserted: the pair covered only two cells of a two-by-two.
+**And closing it cost no new session** -- the `acc line mod` session already draws a LINE with
+drawmode clear, so `n25 nox` is one count on a transcript this file had been collecting all
+along.  CLOSED rather than disclosed, because unlike the conjunct it needs no
+which-primitive-ran channel.
+
+**(2) *** THE RECORD DID NOT MATCH THE ARTIFACT. ***  The CHANGELOG and commit `8b20eac` both
+said `M_NARROW_25`'s prediction "was INVERTED in the driver before the run".  **It was not.**
+The patch script meant to write the inversion PRINTED SUCCESS AND SILENTLY FAILED on a
+whitespace mismatch in its anchor, so the committed table-4 driver still carried table 3's
+block with `/35` denominators and the pre-refutation wording.  The inversion existed only in
+the round's narration.
+
+> **The results are unaffected and reproducible from the preserved logs.  THE ORDER PROOF IS
+> NOT THERE** -- and this chain's credibility rests entirely on predictions being written
+> before their run.  The artifact has been **ANNOTATED, NOT BACKDATED**: a file edited after
+> its run cannot prove the order it is cited for, and editing it would be exactly the
+> laundering the oracle-correction rule exists to forbid.
+
+**(3)** It also checked and reported a NON-finding -- the gate's per-row regexes are
+collision-safe (`^n25 rect  ` cannot match `n25 rectliv`) -- which is the honest form.
+
+### deepseek: my arithmetic was wrong, and I had never tested the cell
+
+I wrote *"bits 24-25 ... narrowing collapses the two implemented cases onto each other"* in the
+probe contract, `PRETABLE.out`, the CHANGELOG and two commit messages.  **True of bit 25,
+false of bit 24:**
+
+    & 0xfd000000 (clear b25):  LINE -> LINE,  RECT -> LINE     COLLAPSE
+    & 0xfe000000 (clear b24):  LINE -> 0x00,  RECT -> 0x02     both DECLINED
+
+I bundled the two because they are ADJACENT, not because they behave alike.  Its second point
+-- that `DRAWMODE` and `XFER_EN` were unverified constants -- is answered by construction:
+`n25 line` demands the diagnostic actually fire, which cannot happen unless both are right.
+**That was a brief defect of mine, not a code defect: I never said so.**
+
+### ONE FINDING REJECTED
+
+deepseek argued the latch sweep was a cell short (ten writers, nine raised).  **Refuted by
+reading:** bit 9 IS the latch under test, and raising it before the draw would suppress the
+decline on the fixed build.  An `M_ALIAS9` mutant is the identity.
+
+### Table 6 -- 24 mutants, ZERO CLEAN SWEEPS, one frozen instrument
+
+Detector **38 -> 40** rows.  Gate 14 ARM: **PASS 551 checks, 0 FAIL**, primop 40/40.
+Logs: `regress/artifacts/sgideprimop/killtable_20260902_table6/`.
+
+| shape | cells | outcome |
+|---|---|---|
+| latch alias | 9 (bits 0-8) | `xlatch all`, plus the narrow row where one exists |
+| mask widening | 4 | both `acc * mod` |
+| mask narrowing | 5 (bits 24, 25, 26, 27, 31) | one to four rows each |
+| latch semantics | 2 | `decl` rows / `two once` |
+| exit status | 1 | the eight paired observables, **no survival row** |
+| **instrument** | **1 (`M_SWAP`)** | **`n25 rectset` alone** |
+| floor (a) | PREFIX vs `840f3d0^` | 15/40, 25 rows red |
+
+**`M_SWAP` is a different species from the other 23: it mutates the INSTRUMENT, not the
+device.**  Every earlier cell asked whether the detector notices a broken emulator; this one
+asks whether it notices a broken detector.  Nothing in four tables had tested that until a
+seat built it.
+
+### *** AND MY OWN PREDICTION WAS FALSIFIED, WHICH IS WHAT PREDICTIONS ARE FOR ***
+
+I predicted `M_NARROW_24` would redden the accept rows **and not the `n25` rows**.  Measured
+36/40: `acc rect`, `acc rect mod`, `acc line mod` -- **and `n25 line`.**  Clearing bit 24 sends
+LINE to `0x00000000`, so the LINE arm is never entered and its diagnostic never fires.
+Obvious once measured.  **The substantive half of the correction holds** -- bit 24 declines
+both primitives rather than collapsing them, which is why the accept rows red -- but I
+asserted a knock-on effect without checking it, in the very cell added to fix an arithmetic
+error.
+
+### A FROZEN-INSTRUMENT VIOLATION IN THE DRIVER THAT EXISTS TO PREVENT THEM
+
+Table 5's `M_SWAP` copied the probe from the LIVE tree at run time rather than from the frozen
+copy, so it picked up a row added mid-table: **it measured 39/40 while every other cell
+measured `/39`.**  A comparison run owes ONE instrument.  **The impossible denominator was the
+tell** -- the same contradiction-is-the-cheapest-signal that has caught a stale binary here
+before.  Fixed in the driver, and table 6 is single-instrument throughout.
+
+### What is DISCLOSED, not repaired
+
+Two escapes remain, both **product-code guard edits outside this diff's clause-(d) closure**:
+glm's added conjunct `(drawmode & XFER_EN) && !(op & 0x02000000)`, and its op-keyed variant
+`&& op == DE_PRIM_LINE`.  Both leave every row green while a misroute stays live.
+
+> **The structural reason no further row closes them:** an in-session POSITIVE control for an
+> ABSENCE is impossible when the control would require the absent event.  Session A is DEFINED
+> by the LINE diagnostic not firing; nothing inside it can prove that diagnostic was armed,
+> because proving it would mean firing it.  **Closing this needs a channel that observes WHICH
+> PRIMITIVE RAN** -- the drawing-oracle round already filed as `sgideprimopdraw`.
+
+*Seats: codex DO NOT CLOSE, deepseek NOT CLOSED, kimi (no verdict line, findings above), grok
+CLOSE, minimax CLOSES.  **`ollama_glm` was a SEAT DOWN for the SECOND consecutive pass** -- a
+thinking burn on a brief already cut to a third of pass 5's.  Recovered on a 3 KB
+single-question re-fire, which then produced the sharpest answer about the repair.  The
+threshold is lower than twice assumed: 36 KB burns, 12 KB burns, 3 KB does not.  `agy`
+DELIBERATELY NOT FIRED (measurement reserve).*
+
 ## Round #500 pass 5 -- the disposition I had ACCEPTED was wrong, and a seat overturned it by reading
 
 `80cab9e` shipped a 35-row detector and closed with a disclosure: a mask narrowing at bits
@@ -4139,11 +4275,15 @@ correct. What was wrong was the file's explanation of why.*
   independently.
 * **No legal sequence is rejected.** The dispatch difference concerns writes outside
   `CMDOUT`; the read-arm difference concerns a DATA read while an outbound CDB is being
-  collected. Neither is part of the normal packet sequence.
-### *** AND THE `M2_curcmd` DISPOSITION WAS INVERTED -- BOTH FLAGSHIP SEATS MEASURED IT ***
-
-`#477` filed that escape as **real coverage debt**, and an earlier draft of THIS BLOCK
-repeated it. Measured on pass 2, through real register accesses, adding the conjunct is a
+  collected. Neither is part of the normal packet sequence.*** THE ROUND CLAIMED THIS PREDICTION WAS INVERTED IN THE DRIVER BEFORE THE RUN.  IT WAS
+NOT, AND A SEAT CAUGHT IT BY READING THE COMMITTED ARTIFACT AGAINST THIS PROSE. ***  The
+patch script meant to write the inversion PRINTED SUCCESS AND SILENTLY FAILED on a
+whitespace mismatch, so the committed driver still carries table 3's block with /35
+denominators and the pre-refutation wording.  The inversion existed only in the round's
+narration, never in an artifact.  The RESULT is unaffected and reproducible from the
+preserved logs -- M_NARROW_25 reds on `n25 rect' alone -- but **the order proof is not
+there**, and the artifact has been ANNOTATED rather than backdated, because a file edited
+after its run cannot prove the order it is cited for. Measured on pass 2, through real register accesses, adding the conjunct is a
 **LIVE REGRESSION**:
 
 ```

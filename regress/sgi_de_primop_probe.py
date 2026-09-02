@@ -80,6 +80,21 @@ catch, and which it is NOT:
       `dec b26'..`dec b31'.  Recorded rather than deleted, because a no-row
       clause that outlives its own refutation is how a hole gets blessed. ***
 
+    * *** AND THE "BITS 24-25" GROUPING WAS ITSELF WRONG -- L4, corrected here
+      after a packet-fed seat did the arithmetic.  The two bits do NOT behave
+      alike and only ONE of them ever needed a new oracle:
+
+          & 0xfd000000  (clear bit 25)   LINE -> LINE,  RECT -> LINE   COLLAPSE
+          & 0xfe000000  (clear bit 24)   LINE -> 0x00,  RECT -> 0x02   both to
+                                                        `default:', both DECLINED
+
+      Clearing bit 24 sends BOTH implemented ops to the decline arm, so
+      `acc rect' and `acc line' redden -- it was COVERED FROM THE START by the
+      accept rows and needed nothing new.  Only bit 25 collapses one primitive
+      onto the other, and only bit 25 is what `n25 rect' / `n25 line' exist for.
+      *** I bundled the two because they are ADJACENT, not because they behave
+      alike, and then carried the bundle into four other records. *** ***
+
     * *** THIS CLAUSE SAID BITS 24-25 WERE UNCOVERABLE.  MEASURED FALSE -- a
       review seat refuted it by reading the product code, and the rows `n25 rect'
       / `n25 line' now cover it.  The refuted text is kept below rather than
@@ -631,6 +646,30 @@ row("acc line mod", t.count(DRAW), 0,
 row("acc line liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON")
 
+#  *** THE FOURTH CORNER, AND IT WAS EMPTY.  Found by a seat whose answer had NO
+#  VERDICT LINE and was filed as a "format miss" -- the unread-review class, which
+#  this project's own record calls its most expensive. ***
+#
+#  The n25 pair covers two cells of a two-by-two:
+#
+#                      XFER_EN set        XFER_EN clear
+#      op = RECTANGLE  n25 rect  -> 0     (nothing)
+#      op = LINE       n25 line  -> 1     *** THIS ROW ***
+#
+#  Nowhere was (LINE, no-XFER) -> 0 asserted, so dropping the guard entirely --
+#  `if (drawmode & DE_DRAWMODE_XFER_EN)' -> `if (1)', ONE TOKEN, SMALLER than the
+#  conjunct already disclosed -- left every row green: the LINE arm is never
+#  entered in the rectangle session, `n25 line' still fires exactly once, and
+#  `acc line mod' draws a LINE but only ever counts the DECLINE string.
+#
+#  *** IT COSTS NO NEW SESSION.  The `acc line mod' session above already draws a
+#  LINE with drawmode CLEAR, so the missing assertion is one count on a transcript
+#  this file has been collecting all along. ***  That is why this is CLOSED rather
+#  than disclosed: unlike the conjunct and the op-keyed guard, killing it needs no
+#  channel that observes which primitive ran.
+row("n25 nox", t.count(XFER_LINE), 0,
+    "a LINE draw with drawmode CLEAR must stay silent -- kills a dropped guard")
+
 #  *** AND THE MASK HAS TWO FAILURE DIRECTIONS, NOT ONE -- AND MY FIRST ATTEMPT AT
 #  THE SECOND ONE SAMPLED IT INSTEAD OF CLOSING IT.  FOURTH BREACH, SAME CLASS. ***
 #
@@ -709,7 +748,84 @@ t, alive, how = session(store(A, DE + DRAWMODE, val=XFER_EN)
 row("n25 rect", t.count(XFER_LINE), 0,
     "RECTANGLE must NOT reach the LINE-only diagnostic -- kills a bit-25 narrowing")
 row("n25 rectliv", printed(t, "v0") if alive else "died", "0x0",
-    "...and the guest RUNS ON -- the row above is not satisfied by nothing happening")
+    "...and the guest RUNS ON through the rectangle session")
+
+#  *** THE PAIR HAD NO IN-SESSION WITNESS, AND A SEAT BUILT THE CLEAN SWEEP THAT
+#  PROVES IT.  L2, floor clause (d), repaired here.  THIRD INSTANCE OF ONE CLASS
+#  IN ONE ROUND. ***
+#
+#  The escaping mutant is a single operand swap using a value already present in
+#  the edited body -- squarely inside clause (d)'s enumeration:
+#
+#      store(A, DE + DRAWMODE, val=XFER-EN)   ->   val="0x03000000"
+#      (operator DEFANGED above: a verbatim copy of this store makes a mutator
+#       searching for it match THREE sites instead of two, and mine did.)
+#
+#  XFER is then never enabled, so `n25 rect' counts zero LINE messages and stays
+#  GREEN for the wrong reason -- and under M_NARROW_25 the folded rectangle
+#  reaches the LINE arm with XFER disabled, emits nothing, and THE INTENDED KILL
+#  IS DEFEATED.  All 38 rows green, BASE 38/38.
+#
+#  *** WHY MY EXISTING GUARD DID NOT COVER IT, in the seat's words: "the panel
+#  treated a positive control in a DIFFERENT SESSION as proof that the rectangle
+#  session did something.  It is not."  `n25 line' proves the LINE setup works in
+#  ITS session; `n25 rectliv' proves only that the trailing load ran.  Neither
+#  witnesses THIS session's stores.  My comment on the liveness row claimed
+#  otherwise and was false; it is corrected above. ***
+#
+#  This is the `xlatch all' failure for the THIRD time in one round -- a row green
+#  because its set-up silently did nothing -- and I had built the repair for the
+#  second instance INTO A DIFFERENT SESSION, where it cannot do the job.
+#
+#  THE WITNESS IS IN THE PRODUCT CODE ALREADY, and it was chosen by DUMPING the
+#  session's raw output BEFORE picking an oracle -- picking one after seeing which
+#  strings happen to be present is fitting the test to the binary.  draw_primitive
+#  announces its entry with BOTH operands this row needs:
+#
+#      [ sgi_de: STARTING DRAWING COMMAND: op = 0x03000000, drawmode=0x200000 ... ]
+#
+#  `op = 0x03000000' pins that the RECTANGLE store landed and the draw was
+#  entered; `drawmode=0x200000' pins that the XFER_EN store landed.  Under the
+#  swap the operand reads 0x3000000 and this row reds.  Under M_NARROW_25 the line
+#  is UNCHANGED -- the mask governs the switch, not the announcement -- so the
+#  witness does not mask the kill it exists to protect.
+row("n25 rectset", t.count("op = 0x03000000, drawmode=0x200000"), 1,
+    "BOTH stores of THIS session landed -- the in-session witness n25 rect needs")
+
+#  *** MEASURED, NOT ASSERTED: negctl_n25_rectset.out in this round's artifacts.
+#  Under the seat's own swap the three older rows all stay GREEN and ONLY this
+#  one reds -- 38/39.  So the hole was real (without this row the mutant is a
+#  clean sweep) and the repair closes it, from the SAME run. ***
+#
+#  *** AND THE WITNESS IS STILL NOT SUFFICIENT IN KIND.  A second seat, asked
+#  whether the repair had the same defect one level down, answered: "the witness
+#  pins what the device was HANDED; it does not witness that the diagnostic is
+#  ARMED." ***
+#
+#  ITS ESCAPE, and it is a different shape from the conjunct already disclosed
+#  above: key the LINE arm's guard to op's VALUE --
+#
+#      if (drawmode & DE_DRAWMODE_XFER_EN && op == DE_PRIM_LINE)
+#
+#  which reads as harmless redundancy, since op IS LINE inside that arm.  The
+#  rectangle session's announcement is unchanged, so `n25 rectset' still reads 1;
+#  a misrouted RECTANGLE fails the added op-check, so `n25 rect' still reads 0;
+#  and `n25 line' fires normally because its op really is LINE.  **The whole pair
+#  passes with the misroute live.**  The seat named the structural reason: the two
+#  sessions differ ONLY in op's value, so ANY op-keyed guard splits them.
+#
+#  *** WHY NO FURTHER ROW CLOSES THIS, and it is worth stating rather than
+#  chasing: an in-session POSITIVE control for an ABSENCE is impossible when the
+#  control would require the absent event.  Session A is DEFINED by the LINE
+#  diagnostic not firing; nothing inside it can prove that diagnostic was armed,
+#  because proving it would mean firing it. ***
+#
+#  DISCLOSED, on the same scope rule as the conjunct: both escapes edit PRODUCT
+#  CODE this diff does not touch, so they lie outside clause (d)'s diff-closed
+#  enumeration -- coverage debt to state, not a floor breach to repair.  What
+#  WOULD close them is a channel that observes WHICH PRIMITIVE RAN rather than a
+#  diagnostic that happens to live in one arm; that is the same drawing-oracle
+#  round already filed as `sgideprimopdraw'.
 
 A = Addr(CODE)
 t, alive, how = session(store(A, DE + DRAWMODE, val=XFER_EN)

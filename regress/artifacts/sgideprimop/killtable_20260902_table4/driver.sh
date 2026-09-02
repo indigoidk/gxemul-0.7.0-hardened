@@ -43,6 +43,27 @@
 #    M_ALIAS8        xlatch unm  + xlatch all                           33/35
 #    M_WIDE_FF/_17/_LO/_1923   both acc * mod                           33/35
 #    M_NARROW_26/_27/_31       dec b26 / dec b27 / dec b31 ALONE        34/35
+#  *** THIS PREDICTION BLOCK IS SUPERSEDED AND WAS NEVER UPDATED -- ANNOTATED
+#  2026-09-02, NOT REWRITTEN.  Found by a review seat reading this file against
+#  the round's prose. ***
+#
+#  The block below is TABLE 3's, carried forward by the script that built this
+#  driver: /35 denominators, and an M_NARROW_25 line that still says PREDICTED
+#  CLEAN SWEEP.  By the time this driver RAN, that disposition had been refuted
+#  and the round's expectation was the opposite -- M_NARROW_25 to RED on `n25
+#  rect' alone, which is what it did (37/38, see M_NARROW_25.out beside this
+#  file).
+#
+#  The intended inversion never reached any file: the patch script meant to write
+#  it PRINTED SUCCESS AND SILENTLY FAILED on a whitespace mismatch in its anchor.
+#
+#  *** THE RECORDS CLAIMED OTHERWISE AND HAVE BEEN CORRECTED.  This block is left
+#  as it ran, because an artifact edited after its run cannot prove the order it
+#  is cited for -- and the order proof is the only thing that separates a
+#  prediction from a number fitted to the answer.  What this table can honestly
+#  claim: its RESULTS are reproducible from the preserved logs.  What it CANNOT
+#  claim: that the M_NARROW_25 expectation was recorded here beforehand. ***
+#
 #    M_NARROW_25     *** PREDICTED CLEAN SWEEP 35/35 -- DISCLOSED, NOT A BREACH.
 #                    Collapses RECTANGLE onto LINE; no row's channel can vary,
 #                    because a successful draw writes nothing at reset. ***
