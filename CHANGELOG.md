@@ -1,3 +1,74 @@
+## Round #500 pass 8 -- the accept side carried all 24 low bits since pass 4; the decline side carried none
+
+Pass 8 fired six seats.  **One found the eighth defect of this chain, and it is an asymmetry
+I built in pass 4 and then walked past for four consecutive passes.**
+
+### codex: qualify this round's OWN latch predicate with a bit of `op'
+
+```c
+if (!(d->warned & SGIRE_W_PRIM_OP) &&
+    !(op & DE_PRIM_RL)) {
+```
+
+The canonical clause-(d) form -- `if (X)` becomes `if (X && Y)` on the predicate the fix
+depends on -- and it **swept the 41-row detector clean**.  Every op this file sent to
+`default:` had bit 16 CLEAR, so the guard was unchanged for all of them; the only bit-16-set
+ops (`0x01ffffff`, `0x03ffffff`) enter implemented arms and never evaluate it.  Meanwhile a
+real `DE_PRIM_TRIANGLE | DE_PRIM_RL` reaches `default:` and is **silently declined** -- the
+announcement this round exists to make, gone, for exactly the ops a guest sets modifiers on.
+
+> *** THE FINDING IS THE ASYMMETRY, NOT THE BIT.  `acc rect mod` and `acc line mod` have
+> carried `0x??ffffff` since pass 4, specifically so any mask widening reds them.  The
+> decline ops were `0x05000000`, `0x09000000` ... `0x81000000` and a bare `0x02000000` --
+> **not one low bit set among them.**  I closed that direction on the accept side and left
+> its mirror open on the decline side, in a file I have rewritten seven times since. ***
+
+**Repaired with ONE row, not a row per bit:** `dec low` stores `0x02ffffff` -- still
+`default:`, still declined, every low bit set -- so a qualification on **any** of them nulls
+the announce and the row sees it.
+
+**Negative-controlled in both directions** (`negctl_dec_low.out`): under codex's own mutant
+`dec low` reds **and the six pre-existing `dec b*` rows stay GREEN**, which is what makes the
+characterisation right rather than merely the row working.
+
+### Three dissents refuted, each by reading or measurement
+
+* **glm** proposed swapping `XFER_EN` in the `dec b26` session.  **That session stores only
+  the primitive** -- there is no drawmode store to swap.  *It flagged the premise itself:
+  "one premise in its derivation is not settleable from the packet."*
+* **deepseek** proposed mutating `op == DE_PRIM_LINE` inside the guard.  **No such conjunct
+  exists** -- that is the *hypothetical* escape disclosed in pass 6; the mutant presupposes
+  the disclosure is already applied.
+* **kimi** audited the `n25 nox` family and found it TIGHT, working through the requirement
+  set and concluding the sibling rows pin what is needed.
+
+*glm's audit half was correct on every checkable point, including one subtlety I had not
+noticed: `op = 0x01ffffff` proves the field is zero-padded to eight digits (plain `%x` of
+`0x1ffffff` prints seven), which is what makes the `noxset` anchor sound.*
+
+### Table 8 -- 27 mutants, ZERO CLEAN SWEEPS
+
+Detector **41 -> 43** rows.  Gate 14 ARM: **PASS 554 checks, 0 FAIL**, primop 43/43.
+Logs: `regress/artifacts/sgideprimop/killtable_20260902_table8/`.
+
+| shape | cells | outcome |
+|---|---|---|
+| latch alias | 9 | `xlatch all`, plus the narrow row where one exists |
+| mask widening | 4 | both `acc * mod` |
+| mask narrowing | 5 | one to four rows each |
+| latch semantics | 2 | `decl` rows / `two once` |
+| exit status | 1 | nine paired observables, **no survival row** |
+| instrument | 3 | `n25 rectset` x2, `n25 noxset` |
+| **guard qualification** | **1** | **`dec low`** |
+| floor (a) | PREFIX | 16/43, 27 rows red |
+
+**The new rows earn their keep beyond their own cell:** `dec low` also reds under `M_BANG`
+and `dec low liv` under `M_EXIT0`, strengthening the latch and exit-status shapes.
+
+*Seats: codex DO NOT CLOSE (accepted); glm and deepseek DO NOT CLOSE (both refuted); kimi no
+verdict line (audit, found tight); grok and minimax CLOSE.  **No seat down.**  `agy`
+DELIBERATELY NOT FIRED (measurement reserve).*
+
 ## Round #500 pass 7 -- the repair for "green for the wrong reason" was itself green for the wrong reason, twice
 
 Pass 7 fired six seats on a one-question brief.  **Three said DO NOT CLOSE, and two of them

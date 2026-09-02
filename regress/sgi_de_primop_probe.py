@@ -736,6 +736,40 @@ t, alive, how = session(store(A, DE + PRIM_START, val="0x81000000")
 row("dec hi liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON after the highest-bit decline")
 
+#  *** THE DECLINE SIDE CARRIED NO LOW BITS AT ALL, AND THE ACCEPT SIDE HAS
+#  CARRIED ALL 24 SINCE PASS 4.  A seat found the asymmetry by building the
+#  mutant it admits.  L2, clause (d), repaired here. ***
+#
+#  THE MUTANT: qualify this round's OWN latch predicate with a bit of `op' --
+#
+#      if (!(d->warned & SGIRE_W_PRIM_OP) &&
+#          !(op & DE_PRIM_RL)) {
+#
+#  -- which reads as an innocuous extra condition.  **Every op this file sends to
+#  `default:' has bit 16 CLEAR**, so the guard is unchanged for all of them and
+#  the table scores 41/41.  Meanwhile a real `DE_PRIM_TRIANGLE | DE_PRIM_RL'
+#  (0x02010000) reaches `default:' and is SILENTLY DECLINED -- the announcement
+#  this round exists to make is gone, for exactly the ops a guest sets modifiers
+#  on.
+#
+#  *** THE ASYMMETRY IS THE FINDING, NOT THE BIT.  `acc rect mod' and `acc line
+#  mod' have carried 0x??ffffff since pass 4 precisely so any mask WIDENING reds
+#  them.  The decline ops were 0x05000000, 0x09000000 ... 0x81000000 and bare
+#  0x02000000 -- not one low bit set among them.  I closed that direction on the
+#  accept side and left its mirror open on the decline side for four passes. ***
+#
+#  SO THIS IS ONE ROW, NOT A ROW PER BIT: an op carrying ALL 24 maskable low bits
+#  reds under a qualification on ANY of them.  0x02ffffff & 0xff000000 is
+#  0x02000000, still `default:', still declined -- and every low bit is set, so
+#  `&& !(op & <anything>)' nulls the announce and this row sees it.
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + PRIM_START, val="0x02ffffff")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("dec low", t.count(declined("0x02ffffff")), 1,
+    "a DECLINED op carrying ALL 24 low bits -- kills a guard qualified on any of them")
+row("dec low liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON")
+
 #  *** THE `DISCLOSED, NOT COVERED' CLAUSE FOR BITS 24-25 WAS A WRONG RECORD, AND
 #  A REVIEW SEAT REFUTED IT BY READING THE PRODUCT CODE.  L4 + L2. ***
 #
