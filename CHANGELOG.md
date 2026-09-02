@@ -1,3 +1,93 @@
+## Round #500 pass 10 -- three defects, one shape: the empty cell of a 2x2, on three different axes
+
+Pass 10 produced **three defects**, and the striking thing is that all three are the *same*
+missing cell viewed along different axes.  Row count did not change: every fix made an
+**existing row cover strictly more**, which is what a class closure looks like when it is got
+right the first time.
+
+|  | ONE draw | TWO draws |
+|---|---|---|
+| **op bits** | `dec low` | `dec flood` |
+| **body operands** | `dec ops` *(was)* | **`dec ops` — was EMPTY** |
+| **latch field** | `xlatch all` *(was)* | **`xlatch all` — was EMPTY** |
+
+> **Every one was "I built the SILENCE case and not the FLOOD case."**  Three axes, three
+> identical omissions, found by three different seats.  The failure is not inattention to a
+> detail; it is a systematic blind spot about DIRECTIONALITY -- I build the case where
+> something is wrongly suppressed and never the case where it is wrongly emitted.
+
+### deepseek: my DISCLOSURE was false, which is worse than a hole
+
+Pass 9 disclosed that `dec flood` covered a bypass on bit 16 only, and justified it as
+**structural**: *"the bypass must be on a bit the REPEATED-DRAW op carries, so covering all 24
+would need 24 two-draw sessions."*
+
+**`dec low` already used `0x02ffffff`, which carries all 24 low bits.**  Put that op in the
+two-draw session and a bypass on *any* low bit makes it announce twice.  **One session covers
+all 24.**  It is the identical trick I had used on the silence side two passes earlier and
+then explicitly ruled out here.
+
+> **A disclosure with a false reason is worse than an open hole.**  An open hole invites
+> someone to close it; a disclosure tells the next reader it is unclosable and closes the
+> question.  Mine was one constant away from closed.
+
+Measured in three directions: `M_FLOOD_TB` and `M_FLOOD_SK` (two *different* low bits) each
+red `dec flood`; `M_FLOOD_B26` leaves it green, because bit 26 is clear in `0x02ffffff`.
+**The green control had to MOVE** -- it was TB, and the widened op now legitimately reds on
+TB, so leaving it there would have quietly made the honest half vacuous.
+
+### kimi, codex and grok, independently: the operand 2x2 had an empty corner
+
+`|| x1` -- FLOOD keyed on a **non-zero** body operand -- swept 47/47.  `dec ops` set the
+operands but drew **once**, so a bypass still announced once; `dec flood` drew twice but left
+the operands **zero**, so `|| x1` was false and the latch worked.  Neither could see it.
+
+**Three seats stated the same missing corner and prescribed the same fix**: make `dec ops`
+draw twice.  Then `&& !x1` gives zero announces and `|| x1` gives two -- **both red the row**,
+closing the operand axis in both directions at once.  Controlled: `M_OPS_SILENCE` and
+`M_OPS_FLOOD` each red it; `M_OPS_ROP` leaves it green, because `rop` is read by the
+*enclosing function* and not by the latch body, so it is outside the row's claim.
+
+*Three-way independent convergence is the only agreement that counts as evidence here, and it
+landed on a gap I would have called closed an hour earlier.*
+
+### grok, second axis: the same corner on the LATCH FIELD
+
+No session both **pre-set a foreign `d->warned` bit** and **drew twice**.  `xlatch all`
+pre-set bits 0-8 and drew once; `dec flood` drew twice and pre-set nothing.  So
+`|| (d->warned & SGIRE_W_DE_LEN)` -- a predicate on the guard's own field, squarely inside
+(d) -- bypassed the latch and flooded invisibly.  One extra draw closes it.
+
+Controlled: `M_LF_DELEN` and `M_LF_TLBA` each red `xlatch all`.  **`M_LF_SELF` (the tautology
+`!(w & X) || (w & X)`) reds FOUR rows** -- `two once`, `xlatch all`, `dec ops`, `dec flood` --
+so the four two-draw sessions now form a mutually-reinforcing set.  Twelve defects ago there
+was exactly one two-draw row.
+
+> **This axis has NO green cell and the control says so** rather than inventing one.  Every
+> bit in the enum is either pre-set by the session (so a bypass correctly reds) or is
+> `SGIRE_W_PRIM_OP` itself (a tautology that floods unconditionally).  A green control I had
+> to manufacture would be exactly the reassuring artifact this round has spent twelve defects
+> learning to distrust.
+
+### minimax: REFUTED by reading, and its own caveat named the check
+
+It proposed an accept-side operand mirror (`acc tri mod`) while flagging what it could not
+verify: *"which op value corresponds to which drawing primitive ... a seat that can grep the
+fork should confirm before treating it as a build."*
+
+**There is no TRIANGLE accept arm.**  The switch has three arms -- `DE_PRIM_LINE`,
+`DE_PRIM_RECTANGLE`, `default:` -- and `DE_PRIM_TRIANGLE` (`0x02000000`) and `DE_PRIM_POINT`
+(`0x00000000`) both fall to `default:` and are DECLINED, which is why `pt` and `tri` are
+decline rows.  The mirror it proposed does not exist.
+
+### Gate 14 ARM: PASS 558 checks, 0 FAIL, primop 47/47
+
+*Seats: deepseek, kimi, codex and grok all DO NOT CLOSE (four findings, all accepted);
+minimax refuted.  **No seat down** -- `ollama_glm` answered at 6.4 KB on an open-ended brief,
+which refutes my second theory about what burns it.  I have no working model of that seat's
+failure mode, only that a retry recovers it, and the record says so rather than guessing a
+third time.  `agy` DELIBERATELY NOT FIRED (measurement reserve).*
+
 ## Round #500 pass 9 -- I stopped asking for mutants and asked which symmetry was half-closed; two seats found two
 
 Eight passes had asked seats to find a mutant.  **Pass 9 handed them the failure pattern

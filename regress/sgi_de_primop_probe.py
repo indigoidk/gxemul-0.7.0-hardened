@@ -538,7 +538,19 @@ t, alive, how = session(store(A, RE + 0x000, val="0x5a")       # TLBA_LEN  1<<0
                         + store(A, RE + UNMAP_W, val="0x5a")   # UNMAP_WR  1<<7
                         + load(A, RE + UNMAP_R)                # UNMAP_RD  1<<8
                         + store(A, DE + PRIM_START, val="0x02000000")
+                        + store(A, DE + PRIM_START, val="0x02000000")
                         + load(A, 0xffffffff80002000) + ["print v0"])
+#  *** SECOND DRAW ADDED: the LATCH-FIELD axis had the same empty 2x2 cell as the
+#  operand axis, and a seat flagged it as a softer claim while being right. ***
+#
+#      NO session both PRE-SET a foreign d->warned bit AND drew twice.
+#      xlatch all pre-set bits 0-8 and drew ONCE;  dec flood drew twice and
+#      pre-set NOTHING.  So || (d->warned & SGIRE_W_DE_LEN) -- a predicate on the
+#      guard's OWN field, squarely inside (d) -- bypassed the latch and flooded,
+#      and every row stayed green.
+#
+#  One extra draw closes it: with the latch working this session still announces
+#  ONCE, and under any foreign-bit bypass it announces TWICE.
 row("xlatch all", t.count(declined("0x02000000")), 1,
     "decline fires with ALL NINE other latch bits set -- closes the alias space")
 row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
@@ -802,21 +814,48 @@ row("dec low liv", printed(t, "v0") if alive else "died", "0x0",
 #  PATTERN NEEDS BIT 31 SPECIFICALLY, and the same seat supplied the reason: at
 #  reset `stipple_mode' is 0, so the strip chain is `>>= 31; <<= 31; <<= 0' and
 #  keeps ONLY bit 31.  A naive non-zero stipple pattern still prints 0x00000000.
+#  *** AND THE OPERAND AXIS WAS A 2x2 WITH ONE CELL EMPTY.  Eleventh defect, and
+#  a seat stated it as the grid rather than as a mutant. ***
+#
+#                     ONE draw            TWO draws
+#      zero operands  (older rows)        dec flood
+#      NONZERO        dec ops             *** EMPTY ***
+#
+#  The empty cell is `|| x1' -- FLOOD keyed on a NON-ZERO body operand.  Under it
+#  `dec ops' (x1=17, one draw) bypasses the latch and still announces ONCE, so it
+#  stays green; `dec flood' (x1=0, two draws) has `|| x1' FALSE so the latch works
+#  normally and also stays green.  It swept 47/47.
+#
+#  ONE CHANGE COVERS THE WHOLE AXIS: make this a TWO-DRAW session.  Then
+#  `&& !x1' gives ZERO announces and `|| x1' gives TWO -- both red this row, and
+#  the silence/flood directions of the operand axis are closed together rather
+#  than one now and its mirror in pass 12.
+#
+#  *** THE OPERAND VALUES ALSO EXERCISE THE DECODE MASKS NOW, and that part is
+#  OUTSIDE clause (d) -- the same seat said so and declined to hang L2 on it.
+#  `y1 = v & 0x7ff' with the old 0x0022 could not see a mask widened to 0xfff,
+#  because 0x22 has no high bits.  0xFCBA & 0x7ff = 0x2BA while & 0xfff = 0xCBA,
+#  so the widening now shows.  Taken as a free strengthening, labelled as such,
+#  not as a floor repair. ***
 _ops_op = "0x04000000"
-_ops_lit = ("UNIMPLEMENTED drawing op = %s, x1=17 y1=34 x2=51 y2=68"
+#  *** y1 COMPUTED BY HAND AS 698 AND IT IS 1210.  0xfcba & 0x7ff = 0x4ba.
+#  Caught by running the arithmetic BEFORE applying the edit rather than after --
+#  the literal would have been false and the row would have read 0. ***
+_ops_lit = ("UNIMPLEMENTED drawing op = %s, x1=17 y1=1210 x2=51 y2=1483"
             " fg=0x55 bg=0x66 pattern=0x80000000 -- declined.  (once) ]" % _ops_op)
 A = Addr(CODE)
-t, alive, how = session(store(A, DE + VERTEX_0, val="0x00110022")
-                        + store(A, DE + VERTEX_1, val="0x00330044")
+t, alive, how = session(store(A, DE + VERTEX_0, val="0x0811fcba")
+                        + store(A, DE + VERTEX_1, val="0x0833fdcb")
                         + store(A, DE + DE_FG, val="0x55")
                         + store(A, DE + DE_BG, val="0x66")
                         + store(A, DE + STIPPLE_PAT, val="0x80000000")
                         + store(A, DE + PRIM_START, val=_ops_op)
+                        + store(A, DE + PRIM_START, val=_ops_op)
                         + load(A, 0xffffffff80002000) + ["print v0"])
 row("dec ops", t.count(_ops_lit), 1,
-    "ALL SEVEN body operands non-zero -- kills a guard qualified on any of them")
+    "SEVEN non-zero operands, TWO draws -- kills BOTH && !operand and || operand")
 row("dec ops liv", printed(t, "v0") if alive else "died", "0x0",
-    "...and the guest RUNS ON through the seven-store session")
+    "...and the guest RUNS ON through both draws of the seven-store session")
 
 #  *** AND THE SILENCE/FLOOD SYMMETRY WAS HALF-CLOSED TOO -- a SECOND seat, in the
 #  same pass, on a different axis from the first. ***
@@ -841,7 +880,23 @@ row("dec ops liv", printed(t, "v0") if alive else "died", "0x0",
 #  The row is `two once' with a low-bit op: two draws of the SAME declined value
 #  in one session, and exactly ONE announcement.  Under the flood mutant it sees
 #  two.
-_fl_op = "0x02010000"
+#  *** THE OP WAS 0x02010000 AND THE DISCLOSURE THAT JUSTIFIED IT WAS A
+#  RATIONALISATION.  Tenth defect, tenth pass, and it is mine. ***
+#
+#  I wrote that full flood coverage was structurally impossible in one session --
+#  "the bypass must be on a bit the REPEATED-DRAW op carries, so covering all 24
+#  would need 24 two-draw sessions" -- and disclosed the gap on that basis.
+#
+#  A seat pointed out that `dec low' ALREADY uses 0x02ffffff, which carries ALL
+#  24 low bits.  Put THAT op in the two-draw session and a bypass on ANY low bit
+#  makes it announce twice.  ONE session covers all 24; the 24-session claim is
+#  false.
+#
+#  *** IT IS THE IDENTICAL TRICK I USED ON THE SILENCE SIDE IN PASS 8, AND I
+#  EXPLICITLY WROTE THAT IT COULD NOT BE USED HERE.  A disclosure with a false
+#  reason is worse than an open hole: it tells the next reader the gap is
+#  unclosable when it is one constant away from closed. ***
+_fl_op = "0x02ffffff"
 _fl_lit = ("UNIMPLEMENTED drawing op = %s, x1=0 y1=0 x2=0 y2=0"
            " fg=0x0 bg=0x0 pattern=0x00000000 -- declined.  (once) ]" % _fl_op)
 A = Addr(CODE)
@@ -849,28 +904,35 @@ t, alive, how = session(store(A, DE + PRIM_START, val=_fl_op)
                         + store(A, DE + PRIM_START, val=_fl_op)
                         + load(A, 0xffffffff80002000) + ["print v0"])
 row("dec flood", t.count(_fl_lit), 1,
-    "TWO draws of a LOW-BIT declined op announce ONCE -- kills a latch bypassed on any low bit")
+    "TWO draws of an ALL-LOW-BIT declined op announce ONCE -- kills a bypass on ANY of the 24")
 row("dec flood liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON through both draws")
 
 #  *** WHAT dec flood COVERS, AND WHAT IT DOES NOT -- measured in BOTH directions,
 #  which is the half I kept skipping.  negctl_dec_flood.out. ***
 #
-#      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> 46/47, dec flood RED
-#      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> 47/47, dec flood GREEN
+#      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> RED    (op carries it)
+#      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> RED    (op carries it too, now)
+#      M_FLOOD_B26  (op & 0x04000000)   bit 26 -> GREEN  (op does NOT carry it)
+#
+#  *** THE GREEN CONTROL HAD TO MOVE.  It was TB, and with the op widened to
+#  0x02ffffff the row legitimately reds on TB -- so leaving the control there
+#  would have quietly turned the honest half of it vacuous.  Bit 26 is clear in
+#  0x02ffffff, so it is the bit that still proves this row keys on what its own
+#  op carries rather than on any bypass whatever. ***
 #
 #  The GREEN is deliberate and is the honest result: this row keys on the bit its
 #  OWN op carries (0x02010000 has bit 16 set, bit 17 clear), not on any latch
 #  bypass whatever.  A row that reddened under both would be responding to
 #  something other than what it claims -- "green for the wrong reason" inverted.
 #
-#  SO THE COVERAGE IS NARROWER THAN dec low's, AND THE ASYMMETRY IS STRUCTURAL
-#  RATHER THAN AN OVERSIGHT: the silence direction takes ONE op carrying all 24
-#  low bits, because the qualification only has to see the bit.  The flood
-#  direction cannot use that trick -- the bypass must be on a bit the REPEATED-DRAW
-#  op carries, and one session announces once per op value.  Covering all 24 would
-#  need 24 two-draw sessions.  DISCLOSED as coverage debt, not repaired: a bypass
-#  on a low bit other than 16 escapes this row.
+#  *** THE PARAGRAPH THAT STOOD HERE CLAIMED THIS ASYMMETRY WAS STRUCTURAL AND IT
+#  WAS NOT.  Kept in substance because the correction is the point: it argued the
+#  flood direction "cannot use that trick", that "the bypass must be on a bit the
+#  REPEATED-DRAW op carries", and that covering all 24 "would need 24 two-draw
+#  sessions".  Every clause is true EXCEPT the conclusion -- because the
+#  repeated-draw op can simply BE the all-bits op.  The coverage is now equal to
+#  dec low's, not narrower. ***
 
 #  *** THE `DISCLOSED, NOT COVERED' CLAUSE FOR BITS 24-25 WAS A WRONG RECORD, AND
 #  A REVIEW SEAT REFUTED IT BY READING THE PRODUCT CODE.  L4 + L2. ***
