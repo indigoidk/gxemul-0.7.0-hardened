@@ -577,8 +577,35 @@ row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
 #  were found in this same file. ***  A count of exactly SIX means six DISTINCT
 #  windows only because each *_LEN latch fires ONCE: a session hitting one window
 #  twice scores 5, not 6.  So the guarantee rests on the LATCH-ONCE semantics of
-#  the device, not on the text -- and under M_ASSIGN (the |= dropped) the latch
-#  never sets, every access re-emits, and this row reds on a count above 6.
+#  the device, not on the text.
+#
+#  *** THE SENTENCE THAT STOOD HERE NAMED A MUTANT THAT CANNOT RED THIS ROW, AND IT
+#  IS MEASURED FALSE.  It read: "under M_ASSIGN (the |= dropped) the latch never
+#  sets, every access re-emits, and this row reds on a count above 6." ***
+#
+#  MEASURED across every cell of table 9 -- `got=6 want=6 ok' in ALL 38 logs,
+#  M_ASSIGN included.  Two reasons, and both were knowable at writing time:
+#
+#    * M_ASSIGN's scope is `d->warned |= SGIRE_W_PRIM_OP;' ALONE.  The six *_LEN
+#      latches are untouched, so they still fire once each and the count stays 6.
+#    * Even a mutant dropping a *_LEN `|=' would not move it: THIS SESSION STORES
+#      TO EACH WINDOW EXACTLY ONCE, so one emission per window is all there is to
+#      see whether the latch works or not.
+#
+#  *** SO THIS IS THE CHANNEL CHECK'S OWN FAILURE, FOUND IN THE FILE THAT SHIPPED
+#  THE CHANNEL CHECK: a row whose named channel cannot vary under its named mutant
+#  is VACUOUS BY CONSTRUCTION, and that is knowable BEFORE any table runs. ***
+#
+#  THE ROW ITSELF IS KEPT AND IS NOT VACUOUS -- only its stated warrant was wrong.
+#  It is a PRECONDITION witness, and its real channel is INSTRUMENT-SIDE: if the
+#  six window offsets are ever wrong again the count goes to 0 and this row reds ON
+#  THE FIXED BUILD, no mutant required.  That is exactly the defect it was built
+#  for, and the one that made `xlatch all' green while touching nothing it named.
+#
+#  The DEVICE-side mutant that would red it is an alias between two *_LEN latches
+#  (give TLBB the TLBA bit: TLBA announces, TLBB is silenced, count 5).  Those
+#  latches are #498's and lie OUTSIDE this diff's clause-(d) closure, so that is
+#  coverage debt to state, not a floor breach to repair.
 #  Do not "anchor" it by appending a window name: that would pin ONE window and
 #  lose the distinctness the six is carrying.
 row("xlatch pre", t.count("sgi_re: unimplemented len="), 6,
@@ -911,9 +938,38 @@ row("dec flood liv", printed(t, "v0") if alive else "died", "0x0",
 #  *** WHAT dec flood COVERS, AND WHAT IT DOES NOT -- measured in BOTH directions,
 #  which is the half I kept skipping.  negctl_dec_flood.out. ***
 #
-#      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> RED    (op carries it)
-#      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> RED    (op carries it too, now)
-#      M_FLOOD_B26  (op & 0x04000000)   bit 26 -> GREEN  (op does NOT carry it)
+#      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> RED    dec flood  (op carries it)
+#      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> RED    dec flood  (carries it too, now)
+#      M_FLOOD_SK   (op & SKIP_END)     bit 18 -> RED    dec flood
+#      M_FLOOD_B26  (op & 0x04000000)   bit 26 -> *** REDS `dec ops', NOT green ***
+#
+#  *** THE B26 CELL WAS PREDICTED 47/47 AND MEASURED 46/47.  Table 10,
+#  killtable_20260902_table10/M_FLOOD_B26.out.  The prediction was written by
+#  reasoning about `dec flood' ALONE and applied to the WHOLE TABLE. ***
+#
+#  `dec ops' stores op = 0x04000000, which IS bit 26.  So the bypass fires in THAT
+#  session, and since pass 10 made it a TWO-DRAW session it announces twice and the
+#  row reds.  `dec flood' behaved exactly as claimed and stayed green.
+#
+#  *** SO THE ROW-LEVEL CLAIM SURVIVED AND THE CELL-LEVEL ONE DID NOT, and that
+#  distinction is the finding.  A "deliberately GREEN" control is a claim about
+#  EVERY row in the table, not about the row it was designed for -- it asserts that
+#  NOTHING responds to a bypass on a bit the op lacks.  Checking it against one row
+#  is checking a universal by looking at one case. ***
+#
+#  THIRD GENERATION OF THIS EXACT SLIP, which is why it is written out rather than
+#  just patched: the green control was TB until pass 10 widened `_fl_op' and made TB
+#  legitimately red; it moved to B26; and B26 is not green either, for a DIFFERENT
+#  reason -- a different row's op.  The cheap check that would have caught all three
+#  is one grep: **before calling a bypass-bit control green, test the bit against
+#  EVERY op literal in the file, not against the one row you have in mind.**
+#
+#  Bits 26-31 are carried by the six `dec b*' ops (each is LINE|bit_N) and by
+#  `dec ops' (0x04000000).  There is therefore NO high bit that is absent from every
+#  decline op, so a green control of this shape may not exist at all here -- which is
+#  worth stating rather than hunting for one.  M_OPS_ROP remains a MEASURED green
+#  (47/47): `rop' is read by the enclosing function and not by the latch body, so it
+#  is outside what any row claims.
 #
 #  *** THE GREEN CONTROL HAD TO MOVE.  It was TB, and with the op widened to
 #  0x02ffffff the row legitimately reds on TB -- so leaving the control there
@@ -921,10 +977,26 @@ row("dec flood liv", printed(t, "v0") if alive else "died", "0x0",
 #  0x02ffffff, so it is the bit that still proves this row keys on what its own
 #  op carries rather than on any bypass whatever. ***
 #
-#  The GREEN is deliberate and is the honest result: this row keys on the bit its
-#  OWN op carries (0x02010000 has bit 16 set, bit 17 clear), not on any latch
-#  bypass whatever.  A row that reddened under both would be responding to
-#  something other than what it claims -- "green for the wrong reason" inverted.
+#  *** THE PARAGRAPH THAT STOOD HERE WAS STALE THE MOMENT THE OP WIDENED, AND IT
+#  SAT THREE LINES BELOW ITS OWN CORRECTION READING AS LIVE EXPLANATION.  It said:
+#  "this row keys on the bit its OWN op carries (0x02010000 has bit 16 set, bit 17
+#  clear)".  `_fl_op' is 0x02ffffff and has bit 17 SET -- so the sentence
+#  contradicted the corrected table directly above it, which records TB as RED. ***
+#
+#  This is the carrier's own rule turned on this file: WHEN A CLAIM IS SUPERSEDED,
+#  CORRECT ITS CONCLUSION -- do not leave it standing below the correction, where
+#  it still reads as the verdict.  Pass 10 widened the op and rewrote the table;
+#  the prose UNDER the table was not re-read.
+#
+#  THE CLAIM, RESTATED FOR THE OP THAT IS ACTUALLY THERE, AND THEN CORRECTED AGAIN
+#  BY THE TABLE THAT FOLLOWED IT: `0x02ffffff' carries every one of the 24 low bits
+#  and NOT bit 26, so a bit-26 bypass cannot reach THIS row, and measurement agrees
+#  -- `dec flood' is green under M_FLOOD_B26.
+#
+#  *** BUT THE CELL IS NOT GREEN: M_FLOOD_B26 measured 46/47, redding `dec ops',
+#  whose own op IS 0x04000000.  The restatement above was written in pass 11 and
+#  falsified by table 10 the same evening -- see the corrected table at the
+#  M_FLOOD_* block.  A per-row claim was again dressed as a per-table one. ***
 #
 #  *** THE PARAGRAPH THAT STOOD HERE CLAIMED THIS ASYMMETRY WAS STRUCTURAL AND IT
 #  WAS NOT.  Kept in substance because the correction is the point: it argued the

@@ -267,7 +267,13 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #
 #  PROVENANCE, DERIVED FROM git RATHER THAN ASSUMED -- because "both pins are short by the
 #  same four" is an assumption until the sets are compared.  Against d9efd33, the commit that
-#  last set EXPECT_PTY_PROBES=38:
+#  last set EXPECT_PTY_PROBES=37 (VERIFIED: `git show d9efd33:regress/gate_hygiene.sh'):
+#
+#  *** THIS NUMBER READ 38 UNTIL #500 pass 11, AND THE #500 CHAIN IS WHAT BROKE IT.
+#  It was 37, which was CORRECT, and a comment edit in this chain changed a right
+#  number into a wrong one.  That is the carrier's "a correction is not safer than
+#  the thing it corrects" class, in its worst direction: not a stale number left
+#  standing, but a CORRECT one overwritten. ***
 #
 #    non-artifact .py under regress/ :  60 -> 66   (SIX new files, not four)
 #    of the six, pty.fork            :  FOUR       gdrom_cond, sgi_re_width,
@@ -307,14 +313,35 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  a list, in a comment, WITHOUT OPENING THE LIST -- one line after correcting a stale pin
 #  caused by the same habit.  The check that caught it cost one `grep -c`.
 #  *** RAISED 42 -> 43 BY #499, IN THE SAME COMMIT THAT ADDS THE PROBE. ***  The 43rd is
-#  `sgi_re_unmapped_probe.py sgi_de_primop_probe.py'.  This is the THIRD raise in one session and the FIRST that
+#  `sgi_re_unmapped_probe.py'.  This is the THIRD raise in one session and the FIRST that
 #  did not arrive as a surprise: the two before it were found by the weekly battery and by
 #  a re-derivation hours after the fact, because this check cannot fire until the battery
 #  runs, so the feedback lands up to seven days late -- after the round that caused it has
 #  closed.  The obligation was written into
 #  regress/artifacts/sgireunmapped/killtable_20260831/port/WIRING_OBLIGATIONS.md at wiring
 #  time and predicted BOTH pins correctly.
-EXPECT_PTY_PROBES=43
+#  *** RAISED 43 -> 44 BY #500 pass 11, AND THE RAISE IS THE FINDING: #500 ADDED A
+#  pty.fork PROBE, EDITED THIS COMMENT TO NAME IT, AND NEVER TOUCHED THE PIN.  So
+#  `readiness: pty-probe denominator' HAS BEEN FAILING SINCE 840f3d0. ***
+#
+#  The 44th is `sgi_de_primop_probe.py'.  Measured before the edit, with the gate's
+#  OWN enumerator rather than a flat glob:  _ptyn = 44, pin = 43, check FAILS.
+#
+#  *** WHY NOBODY SAW IT, and this is the part worth carrying: THIS CHECK ONLY RUNS
+#  IN THE FULL WEEKLY BATTERY, AND THE WEEKLY BATTERY IS DISABLED BY OWNER CHOICE.
+#  A disabled battery produces NO RED ROW ANYWHERE -- nothing can observe its own
+#  absence.  The checkpoint has carried that hazard as a standing warning for days;
+#  this is its first MEASURED instance, and it cost a red gate that shipped in nine
+#  consecutive commits without a single signal. ***
+#
+#  DERIVE IT, never transcribe it -- a count in a durable record names its deriver:
+#
+#      find regress -name '*.py' -type f ! -path 'regress/artifacts/*' \
+#          | xargs grep -l 'pty.fork' | wc -l
+#
+#  (The `! -path artifacts' exclusion is load-bearing: the artifacts tree holds
+#  FROZEN probe copies, which are evidence rather than gate material.)
+EXPECT_PTY_PROBES=44
 GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py

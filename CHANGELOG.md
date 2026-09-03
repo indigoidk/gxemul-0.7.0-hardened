@@ -1,3 +1,141 @@
+## Round #500 pass 11 -- the ADJUDICATION pass: a RED GATE that shipped in nine commits, and a correct number this chain overwrote
+
+**Conflict-of-interest badge `A`: AUTHOR SELF-REVIEW.**  I wrote all ten passes under review.
+This is disclosed rather than presented as an independent panel, and it is why every finding
+below is a MEASUREMENT rather than a judgement -- the standing rule that made the degraded
+adjudication work when the seat was walled is *anything checkable in under two minutes gets
+CHECKED, not judged.*  Adjudicated in the MAIN LOOP, which the harness pins to
+`claude-fable-5-1`; that is an independent channel and not a model self-report, which is what
+lifts the block recorded the previous day.
+
+### *** THE HEADLINE: `readiness: pty-probe denominator` HAS BEEN FAILING SINCE `840f3d0`. ***
+
+`#500` added `sgi_de_primop_probe.py`, which uses `pty.fork`.  It edited `gate_hygiene.sh`'s
+comment to name the new probe -- and **never touched the pin.**
+
+    gate's own enumerator (find + grep -l pty.fork, artifacts excluded) :  44
+    EXPECT_PTY_PROBES                                                   :  43
+
+Measured with the gate's own enumerator rather than a flat glob, before any edit.
+
+> **WHY NINE COMMITS SHIPPED OVER IT: this check runs only in the FULL WEEKLY BATTERY, and the
+> weekly battery is DISABLED by owner choice.**  The checkpoint has carried *"a disabled
+> battery produces no red row anywhere -- nothing can observe its own absence"* as a standing
+> warning for days.  **This is its first measured instance.**  Nothing else in the harness
+> looks at that pin, so the defect was not merely unnoticed -- it was unobservable.
+
+Raised to 44 **with its deriver recorded beside it**, per the rule that a count in a durable
+record names the command that produces it.
+
+### A CORRECT number, overwritten by this chain
+
+The same comment carries a provenance line: *"last set `EXPECT_PTY_PROBES=38`"*.
+
+    git show d9efd33:regress/gate_hygiene.sh   ->   EXPECT_PTY_PROBES=37
+
+**It was 37, and 37 was right.**  A comment edit inside this chain changed a correct number
+into a wrong one.  That is the carrier's *"a correction is not safer than the thing it
+corrects"* class in its worst direction -- not a stale number left standing, but an accurate
+one destroyed.  And the same edit left the neighbouring sentence naming **two files as "the
+43rd"**, because `#500`'s probe was jammed into `#499`'s sentence instead of getting its own
+raise.  Both repaired.
+
+### `xlatch pre` named a mutant that CANNOT red it
+
+The row's comment claimed *"under `M_ASSIGN` (the `|=` dropped) the latch never sets, every
+access re-emits, and this row reds on a count above 6."*
+
+**Measured `got=6 want=6 ok` in all 38 logs of table 9, `M_ASSIGN` included.**  Two reasons,
+both knowable before any table ran:
+
+* `M_ASSIGN`'s scope is `d->warned |= SGIRE_W_PRIM_OP;` alone -- the six `*_LEN` latches are
+  untouched and still fire once each;
+* **the session stores to each window exactly once**, so one emission per window is all there
+  is to see whether the latch works or not.
+
+> **This is the CHANNEL check failing inside the file that shipped the CHANNEL check** -- *a
+> row whose named channel cannot vary under its named mutant is vacuous by construction, and
+> that is knowable at writing time.*
+
+**The row is kept and is not vacuous; only its warrant was wrong.**  It is a PRECONDITION
+witness whose real channel is instrument-side: wrong window offsets take the count to 0 and
+red it *on the fixed build, with no mutant at all* -- which is the exact defect it was built
+for.  The device-side mutant that would red it aliases two `*_LEN` latches, and those are
+`#498`'s, outside this diff's clause-(d) closure: coverage debt to state, not a floor breach.
+
+### A stale paragraph sitting three lines below its own correction
+
+`dec flood`'s green-control note still explained the design in terms of the OLD op:
+*"this row keys on the bit its OWN op carries (`0x02010000` has bit 16 set, bit 17 clear)"*.
+Pass 10 widened `_fl_op` to `0x02ffffff`, which **has bit 17 set** -- so the sentence
+contradicted the corrected table directly above it, and nothing marked it as superseded.
+
+Pass 10 rewrote the table and did not re-read the prose under it.  Restated for the op that is
+actually there.  The pass-9 CHANGELOG block's *"structural"* disclosure is annotated in place
+for the same reason: a `grep` landing there found a confident false claim with no marker.
+
+### What was CHECKED and found SOUND
+
+* **Gate/probe row-name set equality is exact** -- 47 names in `gate_arm.sh`, 47 emitted by the
+  probe, zero duplicates, sets identical, both summed denominators pinned at 47.
+* The three surviving `0x02010000` mentions in the probe are each a **quotation by its own
+  correction**, which is the mandated form, not stale text.
+
+### Table 10 -- 39 cells, NO CLEAN SWEEP, and it FALSIFIED TWO OF ITS OWN PREDICTIONS
+
+Completed on its sentinel (`KILL500PE_DONE`), clone restored, rebuilt, verified, sentinel
+cleared, no `.MUTANT` anywhere.  `PREFIX` reds **31 rows at 16/47** against the named baseline
+`840f3d0^`.
+
+**Only two cells scored 47/47: `BASE`, and `M_OPS_ROP` -- a MEASURED deliberate green**, since
+`rop` is read by the enclosing function and not by the latch body, so it sits outside what any
+row claims.
+
+#### *** THE B26 "GREEN CONTROL" IS NOT GREEN, AND THE PREDICTION WAS MINE, WRITTEN THIS PASS ***
+
+`M_FLOOD_B26` was predicted **47/47** and measured **46/47**, redding `dec ops`.
+
+    dec ops   op = 0x04000000   <- that IS bit 26.  The bypass fires; two draws; announces twice.
+    dec flood op = 0x02ffffff   <- bit 26 clear.  Behaved exactly as claimed, stayed green.
+
+> **The ROW-level claim survived and the TABLE-level one did not, and that distinction is the
+> finding.**  A "deliberately GREEN" control asserts that **nothing** in the table responds to a
+> bypass on a bit the op lacks.  I checked it against the one row it was designed for, which is
+> checking a universal by looking at a single case.
+
+**THIRD GENERATION OF THIS EXACT SLIP.**  The green control was `TB` until pass 10 widened
+`_fl_op` and made TB legitimately red; it moved to `B26`; and B26 is not green either, for a
+*different* reason -- another row's op.  The cheap check that catches all three: **test the
+candidate bit against every op literal in the file, not against the row you have in mind.**
+
+And the honest consequence, stated rather than hunted around: bits 26-31 are carried by the six
+`dec b*` ops and by `dec ops`, so **no high bit is absent from every decline op** and a green
+control of this shape may not exist here at all.
+
+#### `M_FLOOD_TB` ran TWICE with CONTRADICTORY PREDICTIONS
+
+    op-bit group : "expect GREEN -- 47/47, see the contract"   <- STALE, pre-pass-10
+    flood2 group : "expect RED on dec flood"                   <- corrected
+
+Both runs measured **46/47, RED on `dec flood`**, so the corrected prediction is the true one.
+Pass 10 widened the op and updated one site and not the other.
+
+> *** AND THE DUPLICATE NAME COST AN ARTIFACT: both cells write `M_FLOOD_TB.out`, so the second
+> run OVERWROTE the first. ***  Nothing substantive was lost -- identical scores -- but a reused
+> log name inside one driver is the immutable-artifact rule's own failure mode, reached from
+> inside a single run rather than across two.
+
+Driver and log preserved at `regress/artifacts/sgideprimop/killtable_20260902_table10/`, with
+both falsified predictions **ANNOTATED, NOT BACKDATED**: the predictions are left exactly as
+they executed, because a file edited after its run cannot prove the order it is cited for.
+
+*No panel this pass -- table 10 was running while the repairs were made, and panel seats are
+CPU-heavy against a table carrying wall-clock oracles.  Findings and this diff go to the full
+panel as pass 11's pass 2, per the repair-chain rule: a repair made in response to a review
+owes its own review.  **Note the chain does NOT close here**: the stop condition is a pass
+finding zero floor breaches, and this pass found seven records defects plus two falsified
+predictions -- none of them a floor breach, but the closing pass has to be a clean one.*
+
 ## Round #500 pass 10 -- three defects, one shape: the empty cell of a 2x2, on three different axes
 
 Pass 10 produced **three defects**, and the striking thing is that all three are the *same*
@@ -146,6 +284,14 @@ asymmetry is structural, not an oversight -- the silence direction takes one op 
 bits because the qualification only has to *see* a bit, while the flood direction needs the
 bypass on a bit the **repeated-draw** op carries.  Covering all 24 would need 24 two-draw
 sessions.
+
+> *** MEASURED FALSE BY PASS 10, ANNOTATED HERE IN PASS 11.  The paragraph above is kept as
+> the dated record of what pass 9 believed, but it must not be read as standing: the
+> repeated-draw op can simply BE the all-bits op, so ONE session covers all 24 and the pin
+> moved to `0x02ffffff`.  A `grep` landing on this block found a confident "structural" claim
+> with nothing marking it as overturned -- and this project's own finding is that a disclosure
+> with a false reason is worse than an open hole, because it tells the next reader the gap is
+> unclosable when it is one constant away from closed. ***
 
 ### deepseek: refuted by arithmetic, and its own last sentence did it
 

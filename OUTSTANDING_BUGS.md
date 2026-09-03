@@ -14299,3 +14299,136 @@ unimplemented offsets a real driver touches.  That is the first thing the round 
 `widthkillclass` precedent is the warning -- **half the width kills that row filed turned out
 to be guest-unreachable by construction**, which was measured only when someone asked.
 
+
+---
+
+### OPEN -- queued 2026-09-02 by owner request: FABLE RE-REVIEW OF THE `#500` PATCH CHAIN
+
+**`sgideprimopfablereview`** -- have the fable seat re-review the shipped `#500` patches as a
+SET, rather than one diff at a time, and convene the full panel if it finds significant change.
+
+**WHY IT IS A DIFFERENT QUESTION FROM THE TEN PASSES ALREADY RUN.**  Every pass so far reviewed
+ONE diff against the pass before it.  Nobody has reviewed the ten commits together, and this
+chain is exactly the shape where that matters: **twelve defects, four of them in repairs made
+for an earlier defect in the same chain.**  A per-diff review cannot see a repair that quietly
+undid an earlier one, because each diff was green on its own.
+
+Commits in scope (all local, unpushed):
+
+    840f3d0  #500 the fix + first detector
+    80cab9e  class closure                      (21 -> 35 rows)
+    8b20eac  pass 5, the F7 overturn            (35 -> 38)
+    560fa6d  pass 6                             (38 -> 40)
+    55e4f53  pass 7                             (40 -> 41)
+    559ebcf  pass 8                             (41 -> 43)
+    41a4b1e  pass 9                             (43 -> 47)
+    f871245  pass 10                            (47, rows strengthened not added)
+    + the straggler artifacts commit
+
+**THE VERSION CANNOT BE PINNED, AND THE TASK SAYS SO RATHER THAN CLAIMING OTHERWISE.**  The
+owner asked for **Fable 5.1**.  The Agent tool takes a FAMILY name (`model: "fable"`) only --
+there is no version selector, `agy models` and `grok models` expose no fable, and no fable CLI
+exists.  On 2026-09-02 the seat self-declared **`claude-fable-5`**.
+
+> So the standing requirement stands: **every fable invocation opens with a liveness token AND
+> its own self-declared model version**, and the record states what actually answered.  If it
+> reports 5.1 that is confirmation; if it reports 5, the record says 5 -- never "5.1 reviewed
+> it" on the strength of having asked for 5.1.
+
+**THE CONVENE CONDITION, stated so it is not a judgement call later:** if the re-review finds
+anything that is a FLOOR BREACH, a WRONG RECORD, or a repair that undid an earlier one, the
+full panel convenes on it as its own pass.  Cosmetic or filing-level findings are recorded and
+do not convene a panel.
+
+*** BLOCKED BY OWNER DIRECTIVE 2026-09-02: "If we can't verify fable 5.1 don't run." ***
+
+**DO NOT FIRE THIS SEAT FOR THIS TASK.**  And the honest statement is stronger than
+"unverifiable": the only evidence available says the seat is **NOT 5.1**.  When it answered the
+`pcc2widthkills` / `sgitexindex` adjudication on 2026-09-02 it self-declared **`claude-fable-5`**
+in its own liveness line.  So this is not an open question awaiting a probe -- the single data
+point points the other way.
+
+**WHY IT CANNOT BE SETTLED FROM THIS SIDE:** the Agent tool accepts a FAMILY name
+(`model: "fable"`) and exposes no version selector; `agy models` and `grok models` list no
+fable; there is no fable CLI.  A self-declared version is a CLAIM BY THE SEAT, not an
+independent verification -- and this project's own rule is that a seat's self-report is
+advisory, because self-labels have been measurably unreliable in both directions.
+
+**WHAT WOULD UNBLOCK IT**, none of which is available to me unilaterally:
+  * a harness/Agent-tool version selector, or a documented mapping from `model: "fable"` to a
+    version, supplied by the owner;
+  * the owner confirming that the `fable` family currently resolves to 5.1 on this account;
+  * an independent channel that reports the served model rather than asking the model.
+
+**UNTIL THEN THE TASK STANDS UNRUN AND SAYS SO.**  An unrun check and an inapplicable one must
+not render the same -- and neither may render as "5.1 reviewed the chain".
+
+*The underlying question stays worth doing whenever a verified seat exists: nobody has reviewed
+the nine commits as a SET, and four of the twelve defects were in repairs for earlier defects,
+which a per-diff review structurally cannot see.*
+
+**ALSO NOT STARTED FOR AN INDEPENDENT REASON:** an Agent seat is a subagent, and subagent load has
+previously pushed a gate past its wall-clock budget and produced a FAIL indistinguishable from
+a real regression.  Table 10 (36 mutants) is running.  This fires at the next clear boundary.
+
+### `dashphasedrop` -- the matrix SILENTLY DROPS 25 entries, including a COMPLETE NINE-SEAT PANEL
+
+**2026-09-02, found by the `#500` pass-11 adjudication while regenerating the dashboard.**
+Severity: **MED-HIGH** -- it is a records/visibility defect, not a product one, but it hides
+exactly the thing the dashboard exists to show.
+
+**MEASURED, with the deriver rather than a transcribed count:**
+
+    python - <<'EOF'
+    import json, io
+    L = json.load(io.open('tools/pipeline/ledger.json', encoding='utf-8'))
+    ph = set(L['phase_labels'])
+    print(sum(1 for r in L['rows'] for e in r.get('entries', [])
+              if e.get('phase') and e.get('phase') not in ph))
+    EOF
+
+On 2026-09-02 that prints **25**, across **17 rows**:
+
+| phase | entries | rows |
+|---|---|---|
+| `adjudicate` | 15 | `n2`, `n4`, `tfreq`, `capgap`, `capN`, `cflood`, `sigunsafe`, `mrwgrind`, `fbextrate`, `m8snprintf`, `m8seg`, `m8invground`, `m8patc`, `es438`, `pitlsb` |
+| `implement` | 10 | `gdromcondlies` (**all nine seats**), `widthkillclass` |
+
+`phase_labels` declares only `assess`, `research`, `review`, `regress`, and
+`gen_dashboard.py`'s `cell()` matches `x.get("phase") == phase` over the declared set -- so an
+entry with any other phase is placed nowhere and vanishes.
+
+> *** `gdromcondlies` HAS A FULL NINE-SEAT PANEL UNDER `implement`, AND THE MATRIX SHOWS
+> NOTHING FOR IT.  A reader sees a row of dots where nine seats actually answered. ***
+
+**THIS IS THE GENERATOR'S OWN STATED FAILURE MODE, WITH THE GUARD BUILT ON THE WRONG AXIS.**
+`gen_dashboard.py` already refuses to render on an ORPHAN SEAT, and its comment gives the
+reason in the project's own words: *"A dashboard that silently drops data it cannot place is
+worse than one that crashes: a missing cell is indistinguishable from a seat failure, and this
+project's whole discipline is that a seat failure is never counted as agreement."*  **That
+guard covers `seat` and has no counterpart for `phase`.**  So the exact hazard it was written
+to refuse is live one field over.
+
+*It is the seat-failure-counted-as-agreement shape moved into the RENDERER: the entries exist,
+were written honestly, and are invisible to every reader of the artifact this project
+publishes.*
+
+**NOT REPAIRED IN THIS PASS, DELIBERATELY, AND THE REASON IS NOT DIFFICULTY:**
+
+* it is a change to the tool that renders every round, so it **owes negative controls in both
+  directions** -- prove it refuses on an undeclared phase, and prove it does NOT refuse on a
+  declared one;
+* the fix is a **JUDGEMENT, not a mechanism**, and the options are not equivalent:
+  1. **DECLARE** `implement` and `adjudicate` in `phase_labels` -- everything renders, but
+     every row in the matrix gains two columns, changing an artifact people read;
+  2. **RE-PHASE** the 25 entries onto declared phases -- no shape change, but it rewrites what
+     past rounds recorded about themselves;
+  3. **REFUSE** like the seat guard does -- most consistent with the file's own philosophy, but
+     it **retro-fails on 25 existing entries and blocks the next regeneration**, which is the
+     "a rule that does that gets switched off" hazard this project has already named;
+* and a fourth question sits under all three: **is `implement` even a panel phase?**  The
+  round lifecycle has an implement STEP, and a nine-seat panel recorded against it may itself
+  be the mis-filing.
+
+**PUT IT TO THE PANEL** rather than picking one in a records pass.  Whichever is chosen, the
+generator should end up unable to drop an entry silently -- that part is not in dispute.
