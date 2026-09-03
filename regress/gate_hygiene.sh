@@ -341,7 +341,12 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #
 #  (The `! -path artifacts' exclusion is load-bearing: the artifacts tree holds
 #  FROZEN probe copies, which are evidence rather than gate material.)
-EXPECT_PTY_PROBES=44
+#  *** RAISED 44 -> 46 BY pcc2widthkills, IN THE SAME COMMIT THAT ADDS THE TWO FILES --
+#  pcc2_width_witness.py and pcc2_width_probe.py, both pty.fork, both promptless (fixed
+#  timeouts, no endswith( predicate).  Written into the checkpoint at the moment the
+#  witness was created, because #500 added a probe and moved NEITHER census, and it took
+#  two passes and three seats to find. ***
+EXPECT_PTY_PROBES=46
 #  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
 #  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
 #
@@ -367,7 +372,7 @@ EXPECT_PTY_PROBES=44
 #  difficulty: changing how that probe decides a command finished perturbs all 47
 #  rows and owes a full re-measured kill table.  That is a round, not a records fix,
 #  and doing it inside a records pass is how a green detector becomes unverified.
-GRANDFATHERED_PROMPTLESS="sgi_de_primop_probe.py drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
+GRANDFATHERED_PROMPTLESS="pcc2_width_witness.py pcc2_width_probe.py sgi_de_primop_probe.py drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
 gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py

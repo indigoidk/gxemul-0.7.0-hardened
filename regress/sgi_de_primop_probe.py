@@ -140,21 +140,36 @@ catch, and which it is NOT:
                             The nine second-reach op literals union to 0xffffffff
                             and `op & MASK != 0' is monotone in MASK.
           op inequality     `|| (op != V)' -- CLOSED (>= 2 distinct second-reach ops).
-          the five pre-switch registers  drawmode, src_mode, dst_mode, rop,
-                            stipple_mode: every nonzero bit-test -- CLOSED by
-                            `dec regs' (all-ones on a POINT double-draw).
+          the ELEVEN registers draw_primitive() reads on a decline path --
+                            drawmode, src_mode, dst_mode, rop, stipple_mode, and the
+                            six XFER-block registers addr_src, strd_src, step_x,
+                            step_y, addr_dst, strd_dst: every nonzero bit-test --
+                            CLOSED by `dec regs' (all-ones on a POINT double-draw).
+                            (Pass 15: the six were added after `|| step_x' MEASURED
+                            50/50 -- the pass-14 all-ones drawmode had enabled the
+                            block that reads them.)
           op == 0x00000000  the reset value -- CLOSED by `dec regs'.
           latch-field bits  0-8 by `xlatch all'; 9 is the latch itself.
           operand zero/nonzero on x1..pattern -- CLOSED by `dec ops'.
       DELIBERATELY NOT COVERED, and unclosable by rows -- an escape here is OUTSIDE
-      THE CONTRACT, not a breach:
-          op == V for V not among the second-reach literals (2^32 - 10 values);
-          mask conjunctions `(op & M) == M' where M lies within no single literal;
-          range comparisons on op;
-          operand SUB-BIT or threshold predicates (`fg & 0x80', `x1 > x2') -- the
-              operands take exactly two tuples, zero and one chosen nonzero;
-          cross-field compounds (an op bit AND a warned bit), because the op closure
-              and the latch-field closure live in different sessions.
+      THE CONTRACT, not a breach.  *** PASS 15 GENERALISED THIS LIST after three seats
+      showed the pass-14 form was a per-class claim dressed as a universal: it named
+      equality/range/conjunction/sub-bit/compound and a seat produced a same-field
+      bit RELATION on op (`(op & 1) != ((op >> 1) & 1)', false on every literal) that
+      it did not name.  The honest general statement: ***
+          THE ONLY CLOSED PREDICATE SHAPES ARE (a) monotone nonzero bit-tests
+          `x & MASK' on op and the eleven registers, (b) op inequality, (c) the one
+          equality `op == 0', and (d) zero/nonzero on the seven operands.  EVERY OTHER
+          predicate on op, a register or an operand is uncovered by construction,
+          because the sessions pin at most TWO values per field: equality to any
+          unpinned value, masked equality, ranges, bit relations, arbitrary Boolean
+          functions of bits, and compounds across fields.  Each is an infinite family
+          and each new two-draw session pins one member.  Measured limits: `op ==
+          0x07000000' and `fg & 0x80' (table 12, both still full-score).
+      AND ONE WORDING FROM A SEAT: the observability criterion assumes the latch is
+      SET on the later reach, i.e. the FIRST reach of that session declined.  Every
+      literal used here reaches `default:'; a future session whose first draw matched
+      an implemented arm would silently not observe.  Stated so nobody re-derives it.
       Each of those families is infinite or combinatorial, and each new two-draw
       session pins one member.  Two of them were MEASURED as 47/47 in pass 13
       (`op == 0x07000000', `fg & 0x80'); they are recorded here as the limit, not
@@ -203,6 +218,15 @@ MODE_SRC = 0x000                     # CRIME_DE_MODE_SRC     0x2000
 MODE_DST = 0x008                     # CRIME_DE_MODE_DST     0x2008
 STIPPLE_MODE = 0x0c0                 # CRIME_DE_STIPPLE_MODE 0x20c0
 DE_ROP = 0x1b0                       # CRIME_DE_ROP          0x21b0
+#  #500 pass 15: the SIX registers the XFER block reads once drawmode has XFER_EN set --
+#  which `dec regs' all-ones drawmode SETS.  The pass-14 closure opened the path to six
+#  more zero registers; `|| step_x' was predicted by two readers and MEASURED 50/50.
+XFER_ADDR_SRC = 0x0a0                # CRIME_DE_XFER_ADDR_SRC 0x20a0
+XFER_STRD_SRC = 0x0a4                # CRIME_DE_XFER_STRD_SRC 0x20a4
+XFER_STEP_X = 0x0a8                  # CRIME_DE_XFER_STEP_X   0x20a8
+XFER_STEP_Y = 0x0ac                  # CRIME_DE_XFER_STEP_Y   0x20ac
+XFER_ADDR_DST = 0x0b0                # CRIME_DE_XFER_ADDR_DST 0x20b0
+XFER_STRD_DST = 0x0b4                # CRIME_DE_XFER_STRD_DST 0x20b4
 XFER_EN = "0x00200000"               # DE_DRAWMODE_XFER_EN
 XFER_LINE = "sgi_de: XFER_EN for LINE op?"
 
@@ -1096,11 +1120,24 @@ t, alive, how = session(store(A, DE + MODE_SRC, val="0xffffffff")
                         + store(A, DE + DRAWMODE, val="0xffffffff")
                         + store(A, DE + STIPPLE_MODE, val="0xffffffff")
                         + store(A, DE + DE_ROP, val="0xffffffff")
+                        + store(A, DE + XFER_ADDR_SRC, val="0xffffffff")
+                        + store(A, DE + XFER_STRD_SRC, val="0xffffffff")
+                        + store(A, DE + XFER_STEP_X, val="0xffffffff")
+                        + store(A, DE + XFER_STEP_Y, val="0xffffffff")
+                        + store(A, DE + XFER_ADDR_DST, val="0xffffffff")
+                        + store(A, DE + XFER_STRD_DST, val="0xffffffff")
                         + store(A, DE + PRIM_START, val="0x00000000")
                         + store(A, DE + PRIM_START, val="0x00000000")
                         + load(A, 0xffffffff80002000) + ["print v0"])
+#  *** PASS 15: THE PASS-14 CLOSURE OPENED SIX MORE ZERO REGISTERS, AND TWO READERS
+#  PREDICTED IT.  MEASURED: `|| step_x' swept 50/50 (artifacts/sgideprimop/gapB_20260903/).
+#  Setting drawmode all-ones sets XFER_EN, and the XFER block above the switch then reads
+#  addr_src, strd_src, step_x, step_y, addr_dst, strd_dst -- all zero in every session
+#  until now.  Third instance of one family; the amendment says close the SPACE: every
+#  register draw_primitive() reads on a decline path is now all-ones here.  ELEVEN
+#  registers.  The XFER block's only exit is commented out, so all-ones is safe. ***
 row("dec regs", t.count(declined("0x00000000")), 1,
-    "five all-ones registers, POINT twice, ONE announce -- kills any register-bit or op==0 bypass")
+    "ELEVEN all-ones registers, POINT twice, ONE announce -- kills any register-bit or op==0 bypass")
 row("dec regs liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON through the seven-store session")
 #  *** AND THE ROW ABOVE OWES A PRECONDITION WITNESS, the lesson `xlatch all' paid
@@ -1112,8 +1149,17 @@ row("dec regs liv", printed(t, "v0") if alive else "died", "0x0",
 #  session -- and BASE measured 49/50 with THIS row red on the fixed build.  That is
 #  the canary working: a precondition witness whose want does not match the session
 #  shape reds on BASE before any mutant is scored.  Pass 14, table 12. ***
-row("dec regs set", t.count("op = 0x00000000, drawmode=0xffffffff src_mode=0xffffffff dst_mode="), 2,
-    "...and the register stores really landed, seen on BOTH draws -- pins dec regs' precondition")
+#  *** PASS 15: the anchor now pins dst_mode's VALUE too (three of the eleven).  Two seats
+#  found the old anchor certified nothing past src_mode while the note said "really landed".
+#  rop and the six XFER registers have NO channel in this line; stipple_mode has its own
+#  (next row).  So the precondition is witnessed at 4 of 11, and the note says so. ***
+row("dec regs set", t.count("op = 0x00000000, drawmode=0xffffffff src_mode=0xffffffff dst_mode=0xffffffff"), 2,
+    "drawmode/src_mode/dst_mode stores landed, both draws -- 3 of 11 pinned here, 1 more below")
+#  stipple_mode all-ones trips the UNLATCHED pre-switch fatal(), which PRINTS THE VALUE --
+#  a channel for the fourth register, once per draw.  (That fatal is a pre-existing
+#  guest-drivable flood, filed; here it is used as a witness, not endorsed.)
+row("dec regs stip", t.count("UNIMPLEMENTED stipple_mode bits: 0xffffffff"), 2,
+    "...and stipple_mode all-ones landed, seen on BOTH draws -- 4 of 11 witnessed")
 
 #  *** WHAT dec flood COVERS, AND WHAT IT DOES NOT -- measured in BOTH directions,
 #  which is the half I kept skipping.  ***
@@ -1371,6 +1417,17 @@ row("n25 line", t.count(XFER_LINE), 1,
 #  without pretending a test happened. ***
 print("NOROW  the drawing itself                       -- a declined op draws nothing"
       " and no row asserts what a correct POINT or TRIANGLE would render")
+#  Pass 15: a seat pointed out the summary printed only the drawing exclusion while the
+#  contract had grown four measured latch-bypass limits.  A deliberate no-row must not
+#  render the same as an unrun one, and that applies to every limit the contract states.
+print("NOROW  latch bypass: equality to an unpinned value -- op == 0x07000000 MEASURED"
+      " full-score (table 12); infinite family, declared, not hunted")
+print("NOROW  latch bypass: operand sub-bit / threshold  -- fg & 0x80 MEASURED full-score"
+      " (table 12); infinite family, declared, not hunted")
+print("NOROW  latch bypass: bit relations / Boolean fns  -- (op&1) != ((op>>1)&1) predicted"
+      " full-score; every session pins <= 2 values per field; declared")
+print("NOROW  latch bypass: cross-field compounds        -- op closure and latch-field"
+      " closure live in different sessions; declared")
 
 bad = [n for n, ok in rows if not ok]
 print("OPUS500_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))

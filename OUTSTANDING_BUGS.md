@@ -13456,6 +13456,14 @@ Twelve of them — lines 359, 371, 394, 407, 429, 467, 477, 492, 507, 528, 543, 
 `len != 1`, all ending the host**, verified by walking each guard's block rather than grepping
 adjacency. Seventeen terminating calls in the file overall.
 
+> *** CORRECTED 2026-09-03: TEN kills, not twelve.  Lines 543 and 563 are the IPL and MASK
+> arms, and both were ALREADY `#119` warn-once latches when this was written -- `if (!w) {
+> fatal(...); w = 1; } break;` -- not `exit(1)`.  "Verified by walking each guard's block"
+> was not true of those two.  The ten kill BLOCKS cover TWELVE register labels (TxCTL and
+> TxICR each carry two), which is probably where twelve came from.  The adjudication's
+> "5 of the 10" used the right number.  And the two `#119` latches are themselves the
+> `staticlatchscope` class and are folded into the fix. ***
+
 **The same class `#337` fixed in `dev_wdc.c` and `#497` fixed in `dev_sgi_re.c`, at twice the
 site count.** The message says it plainly: *TODO: non-byte reads and writes*. The author knew
 the width was unimplemented and chose to kill rather than decline.
@@ -14541,3 +14549,63 @@ form -- announce, continue, annotate -- is what pass 14 did by hand and should b
 
 *** THE FROZEN-INSTRUMENT RULE IS WHY THIS WAS RECOVERABLE: the live probe was corrected while
 the table ran, the table kept scoring its frozen copy, and the two never mixed. ***
+
+### `pcc2c040kill` (HIGH) -- a LEGAL byte write to GENCTL ends the host
+
+**2026-09-03, surfaced by the `pcc2widthkills` pass-1 panel (fable5 and kimi, independently);
+the panel found it while auditing the width fix and noted that "ten kills removed" would read as
+"file clean" unless this one is cited.**
+
+`dev_pcc2.c`, `reassert_interrupts()` (around `:189-195`): if GENCTL has bit `0x04` set
+(C040), the function does `fatal("pcc2: C040 interrupt assertions... TODO"); exit(1);`.  GENCTL
+is written by the guest through its own arm at the LEGAL width (`ld.b`/`st.b`), and that arm
+calls `reassert_interrupts()` on every write.  So **a single byte store of `0x04` to
+`0xfff42002` ends the host** -- no width trick, no misalignment, an ordinary register write.
+
+It was mentioned once in prose under `widthkillclass` as "a BADVAL reachable by a byte write"
+with no row id, which is the same gap `pcc2defaultkill` closed for the offset kill.  Filed now
+with an id so the width round's contract can point at it.
+
+**ROW-DESIGN TRAP for the width round, recorded here because it is where a reader looks:**
+every GENCTL lane value in a width-round row must keep bit `0x04` CLEAR, or a DELETE /
+fall-through mutant trips THIS kill and the row dies for a reason not under test.
+
+Witness owed (rung 3, one session): `st.b 0x04` to `0xfff42002` on the committed build ->
+`exit1`.  Not yet run; the width round's witness is the template.
+
+### `pcc2counter8` (MED) -- the counter/compare arm accepts an 8-byte write and raw-copies through neighbours
+
+**2026-09-03, found by the codex seat on the `pcc2widthkills` pass-1 panel.**
+
+The `T1CMP / T2CMP / T1COUNT / T2COUNT` arm does `memcpy(d->pcctwo_reg + relative_addr, data,
+len)` for any `len` within `PCC2_SIZE`.  The hardware guide lists 8/16/32-bit cycles only.  An
+8-byte write at `T2COUNT (0x10)` raw-copies through `PSCALE (0x14)`, `PSCALEADJ (0x15)`,
+`T1CTL (0x16)` and `T2CTL (0x17)` -- bypassing the per-register write semantics those arms
+implement (masks, read-modify-write, COVF clear, `reassert_interrupts`).  A guest can set timer
+control bits through a path that skips their arm.
+
+Not a host kill; a semantic bypass.  Deliberately NOT folded into the width round -- it is a
+different defect (accepts too much, rather than kills) in a different arm.  Reachability: `st.d`
+to `0x10` is 8-aligned, so it is guest-reachable by construction.
+
+### `checkcunwired` -- check C (commit message vs diff) can never run from the hook that exists
+
+**2026-09-03, found while retrying a blocked commit.**  Severity LOW (harness), but it is the
+enforcer of mechanical rule 1 -- *write commit messages from the diff, never from intent* --
+and it has been reporting `no commit-message file passed -- check C skipped, NOT passed` on
+EVERY commit this session, as a soft WARN that nobody reads.
+
+**The mechanism, verified by reading:** `precommit_check.sh` takes the message file as `$1`
+(`MSGFILE=${1:-}` at :32) and only runs check C when it is present (:1137).  The installed
+`.git/hooks/pre-commit` calls `bash "$ROOT/tools/precommit_check.sh"` with NO argument.  A
+pre-commit hook has no message to pass -- git has not collected it yet -- so from that hook
+the check is unreachable BY CONSTRUCTION, not by omission.
+
+**This is the check-that-cannot-fail shape with a twist: the check CAN fail, but the road to
+it is never taken, and its "skipped" line is soft, so the commit proceeds.**  Passing a
+message via `git commit -F <file>` does not help; the hook still does not forward it.
+
+**What works today:** run `bash tools/precommit_check.sh <msgfile>` BY HAND before committing.
+**The fix is a `commit-msg` hook** (which does receive the file as `$1`) invoking the same
+script -- a harness change owing two negative controls (a message citing an untouched path
+must FAIL; a message citing only touched paths must PASS).  Its own round.

@@ -64,10 +64,69 @@
 
 // #define	debug fatal
 
+/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) ended the host
+    on a guest-chosen access width -- an ordinary aligned halfword load of a documented
+    register.  Same class as #337 (dev_wdc.c) and #497 (dev_sgi_re.c).
+
+    THE TREE ALREADY KNEW THE WIDTH IS LEGAL: mvme_pcctworeg.h says the PCCchip2
+    registers "can be accessed as bytes (8 bits), two-bytes (16 bits), or four-bytes
+    (32 bits)".  So this is not a fault to model; it is an access the model declines
+    to IMPLEMENT on one side and already implements on the other:
+
+      READS   are served BEFORE the switch by memcpy(data, pcctwo_reg + addr, len),
+              raw bytes in address order -- width-correct by construction.  The old
+              guard discarded a correct answer.  Now: ACCEPT (fall through).
+      WRITES  every arm uses `idata', the composed value, which is "the addressed
+              byte" ONLY at len == 1: memory_readmax64 composes big-endian, so
+              (uint8_t) idata is the HIGHEST-address lane.  Deleting the guard would
+              store the neighbour's byte -- st.h 0xAABB to GENCTL would set GENCTL to
+              0xBB, VECBASE's lane.  And seven arms mask, read-modify-write or clear
+              on write, six of them calling reassert_interrupts().  Now: DECLINE +
+              latched announce.  Per-lane composition through each arm (COMPOSE) is
+              the faithful upgrade and is FILED as pcc2widecompose; not taken here
+              because the hardware's lane semantics are not on disk and no measured
+              driver wide-writes these registers.
+
+    ONE BIT PER BLOCK, twelve, per instance: a driver bringing up the chip touches
+    several of these in one pass, and one latch would announce the first and silence
+    the rest (#497's own reasoning).  Auto-incremented rather than `1 << N' literals,
+    which this fork records as collision-prone; PCC2_W_NBITS bounds it.
+
+    REACHABILITY, verified: every non-byte m88k access is alignment-checked BEFORE
+    memory_rw, and `relative_addr %= PCC2_SIZE' keeps parity, so only the five
+    EVEN-offset blocks (GENCTL, TxCTL, TxICR, SCCERR, SCCTX) are GUEST-reachable; the
+    seven odd ones are OPERATOR-reachable -- the debugger's `put h' warns on a
+    misaligned address and stores anyway, MEASURED (artifacts/pcc2widthkills/
+    operator_reach_20260903.out: `put h 0xfff42003' ended the host).  All twelve are
+    converted; the detector reaches the odd ones through that path.
+
+    NOT FIXED HERE, cited so "twelve kills removed" is not read as "file clean":
+    pcc2c040kill (a LEGAL byte write of 0x04 to GENCTL still ends the host in
+    reassert_interrupts) and pcc2defaultkill (an unlisted offset still ends it).  */
+enum {
+	PCC2_W_GENCTL_LEN,
+	PCC2_W_VECBASE_LEN,
+	PCC2_W_PSCALEADJ_LEN,
+	PCC2_W_TXCTL_LEN,	/*  one block serves T1CTL and T2CTL  */
+	PCC2_W_TXICR_LEN,	/*  one block serves T1ICR and T2ICR  */
+	PCC2_W_SCCERR_LEN,
+	PCC2_W_SCCICR_LEN,
+	PCC2_W_SCCTX_LEN,
+	PCC2_W_SCCRX_LEN,
+	PCC2_W_SCSIICR_LEN,
+	PCC2_W_IPL_LEN,		/*  was a #119 function-static: process-global  */
+	PCC2_W_MASK_LEN,	/*  was a #119 function-static: process-global  */
+	PCC2_W_NBITS
+};
+
 struct pcc2_data {
 	struct interrupt	cpu_irq;
 
 	uint8_t			pcctwo_reg[PCC2_SIZE];
+
+	/*  pcc2widthkills: one bit per width-guard block, see the enum.  Zeroed by
+	    the init memset, so every instance starts with every announce armed.  */
+	uint32_t		warned;
 
 	uint8_t			cur_int_vec[8];
 
@@ -319,6 +378,18 @@ DEVICE_TICK(pcc2)
 }
 
 
+/*  pcc2widthkills: decline a wide WRITE to a byte register, announcing once per
+    block per instance.  The caller `break's after this; the read side of the same
+    block never reaches here.  */
+static void pcc2_width_decline(struct pcc2_data *d, int bit, const char *name, int len)
+{
+	if (!(d->warned & (1u << bit))) {
+		d->warned |= (1u << bit);
+		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+		    "  (once) ]\n", len, name);
+	}
+}
+
 DEVICE_ACCESS(pcc2)
 {
 	uint64_t idata = 0;
@@ -356,10 +427,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_GENCTL:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_GENCTL\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata;
@@ -368,10 +438,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_VECBASE:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_VECBASE\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata & 0xf0;
@@ -391,10 +460,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_PSCALEADJ:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_PSCALEADJ\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_PSCALEADJ_LEN, "PCCTWO_PSCALEADJ", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			fatal("[ pcc2: write to PSCALEADJ ignored (value "
@@ -404,10 +472,9 @@ DEVICE_ACCESS(pcc2)
 
 	case PCCTWO_T2CTL:
 	case PCCTWO_T1CTL:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_TxCTL\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_TXCTL_LEN, "PCCTWO_TxCTL", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			/*  PCC2_TCTL_CEN and PCC2_TCTL_COC:  */
@@ -426,10 +493,9 @@ DEVICE_ACCESS(pcc2)
 
 	case PCCTWO_T2ICR:
 	case PCCTWO_T1ICR:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_TxICR\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_TXICR_LEN, "PCCTWO_TxICR", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] &= ~0x17;
@@ -464,20 +530,18 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_SCCERR:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_SCCERR\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCERR_LEN, "PCCTWO_SCCERR", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE)
 			d->pcctwo_reg[relative_addr] = 0;	/*  clear  */
 		break;
 
 	case PCCTWO_SCCICR:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_SCCICR\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCICR_LEN, "PCCTWO_SCCICR", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata & 0x1f;
@@ -489,10 +553,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_SCCTX:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_SCCTX\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCTX_LEN, "PCCTWO_SCCTX", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata & 0x1f;
@@ -504,10 +567,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_SCCRX:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_SCCRX\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCRX_LEN, "PCCTWO_SCCRX", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata & 0xdf;
@@ -525,10 +587,9 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_SCSIICR:
-		if (len != 1) {
-			fatal("TODO: pcc2: non-byte reads and writes of "
-			    "PCCTWO_SCSIICR\n");
-			exit(1);
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCSIICR_LEN, "PCCTWO_SCSIICR", len);
+			break;
 		}
 		if (writeflag == MEM_WRITE) {
 			d->pcctwo_reg[relative_addr] = idata & 0xdf;
@@ -540,10 +601,11 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_IPL:
-		if (len != 1) {
-			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
-			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_IPL; "
-			    "ignored ]\n"); w = 1; }
+		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+		    said "ignored" about a READ the memcpy above had already served.
+		    Now per-instance, write-only, like the ten blocks above.  */
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_IPL_LEN, "PCCTWO_IPL", len);
 			break;
 		}
 		if (writeflag == MEM_WRITE) {
@@ -560,10 +622,11 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	case PCCTWO_MASK:
-		if (len != 1) {
-			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
-			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_MASK; "
-			    "ignored ]\n"); w = 1; }
+		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+		    said "ignored" about a READ the memcpy above had already served.
+		    Now per-instance, write-only, like the ten blocks above.  */
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_MASK_LEN, "PCCTWO_MASK", len);
 			break;
 		}
 		if (writeflag == MEM_WRITE) {

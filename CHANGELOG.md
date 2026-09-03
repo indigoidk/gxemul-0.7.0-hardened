@@ -1,3 +1,153 @@
+## Round pcc2widthkills -- twelve width kills become a direction split, and the tree knew the width was legal all along
+
+`DEVICE_ACCESS(pcc2)` had **twelve** `if (len != 1)` blocks that ended the host on a
+guest-chosen access width: ten `fatal(); exit(1);` kills and two `#119` function-static
+latches.  An ordinary aligned halfword load of a documented register was enough.  Same class as
+`#337` and `#497`, at the largest site count yet.  Only consumer: the MVME187.
+
+### Test-first, and the witness took three runs to be honest
+
+`regress/pcc2_width_witness.py`, rung 3 on the unmodified `-E mvme88k -e mvme187`, real MC88100
+instructions through real decode.  Run 1 was **0/10 for the wrong reason** -- `-e 187` is not a
+subtype alias and the pure-RAM control said so.  Run 2 had a witness-side defect: the liveness
+loads read a scratch word no earlier instruction had stored.  Run 3, preserved: **4/10 on the
+committed build, all four controls green**, three aligned accesses each `exit1`.
+
+### The design pass changed the design, on six of nine seats
+
+Two Opus firings died on API 529 and two grok firings on CLI errors, each retried once; agy was
+spent on the concurrent `#500` panel as its builder.  The six that answered converged, and the
+main loop verified every checkable claim by reading:
+
+* **The tree already knew wide access is LEGAL.**  `mvme_pcctworeg.h` says the registers "can be
+  accessed as bytes, two-bytes, or four-bytes."  Neither my brief nor the 2026-09-02 adjudication
+  cited it.  That refutes FAULT as a model and reframes DECLINE as refusing a hardware-legal
+  access, which the code comment now says plainly.
+* **DELETE is measurably wrong for writes.**  `memory_readmax64` composes big-endian, so
+  `(uint8_t) idata` is the HIGHEST-address lane: `st.h 0xAABB` to GENCTL would store VECBASE's
+  byte.  Mandatory mutant, with a readback row -- and it killed (`M_DELETE`, below).
+* **My premise about the write arms was wrong in both clauses** (glm): seven of the ten mask,
+  read-modify-write or clear, and SIX call `reassert_interrupts()`, not two.  And from that the
+  cleanest justification of the split: *reads copy raw bytes in address order and are
+  width-correct by construction; every write arm uses a composed value that is "the addressed
+  byte" only at length one.*
+* **The seven odd-offset arms are OPERATOR-reachable**, and the split over whether to fix them
+  was settled by measurement rather than argument: the debugger's `put h` at an odd address
+  warns, stores anyway, and the guard ended the host
+  (`artifacts/pcc2widthkills/operator_reach_20260903.out`).  So they have an executable row, the
+  precedent objection dissolves, and all twelve are converted.
+* IPL sits at 0x3e, EVEN -- its `#119` arm was guest-reachable and printed "ignored" about a
+  read the memcpy had already served.  Folded in with MASK: twelve bits, not ten.
+* An unnamed option member, per-lane COMPOSE, is filed as `pcc2widecompose` with its hazard
+  (it must live inside the arms, or it re-kills a legal counter write).
+
+### The fix
+
+`src/devices/dev_pcc2.c`: a twelve-member auto-incremented latch enum with `PCC2_W_NBITS`
+(the fork records the `1 << N` form as collision-prone), a `warned` field on the instance,
+one helper, and every block becomes `if (len != 1 && writeflag == MEM_WRITE) { decline;
+break; }` -- reads fall through to the copy that already served them.  Live `exit(1)`:
+**13 -> 3**, and the three left are cited: `pcc2c040kill` (a LEGAL byte write of 0x04 to
+GENCTL still ends the host -- NEWLY FILED, HIGH), `pcc2defaultkill`, the interrupt-common
+default.
+
+### The detector and its table
+
+`regress/pcc2_width_probe.py`, 60 rows: 4 controls; 24 survival pairs at the five reachable
+blocks, read and write, word at SCCERR; value rows proving a wide read composes lanes in
+address order; readback rows proving a declined write left BOTH lanes untouched; latch rows in
+both directions; 10 accept rows proving the legal width still lands through each arm's own
+mask with no message; 14 operator-path rows for the seven odd arms.  Row trap designed out:
+every GENCTL lane value keeps bit 0x04 clear.  Gate 14 ARM: **626 checks, 0 FAIL, pcc2 60/60
+on its first post-fix run.**
+
+| cell | result |
+|---|---|
+| PREFIX (HEAD's source) | **14/60** -- forty-six rows red; the fourteen green are the controls and byte-width accepts |
+| BASE | **60/60** |
+| `M_DELETE` guard removed | `rb genctl` reads **0xbb**, the neighbour's lane; plus both latch rows |
+| `M_NOBREAK` announce then fall through | `rb genctl` alone |
+| `M_ASSIGN` latch never set | `latch same` alone |
+| `M_SHARED` one bit for all blocks | `latch two` alone |
+| `M_RDKILL` read side killed again | both GENCTL read rows and the value row |
+| `M_OPKILL` VECBASE killed again | both operator rows -- through the debugger |
+| `M_COMPOSE` accidental per-lane store | both lane readbacks and both latch rows |
+
+Zero clean sweeps; every prediction held.  `artifacts/pcc2widthkills/killtable_20260903/`.
+
+### Records and harness, in the same commit rather than two passes later
+
+The OB row's "twelve" corrected to ten blocks / twelve labels in place.  Two new pty probes,
+so BOTH `gate_hygiene` censuses raised in step (44 -> 46, grandfathered 18 -> 20) -- the exact
+omission `#500` pass 11 spent two passes repairing.  `pcc2counter8` (MED) filed from a seat's
+finding: the counter arm raw-copies an 8-byte write through neighbouring registers.
+
+*Seats: fable5 GO-WITH-CHANGES (corrected its own ruling in three places), kimi GO, codex
+reviewed, glm sound-with-two-wrong-premises (mine), deepseek reject-on-wording, minimax
+recovered on re-fire after a 429 from two concurrent panels.  Opus DOWN x2, grok DOWN x2, agy
+reserved.  Witness: `probe:regress/pcc2_width_witness.py`.*
+
+## Round #500 pass 15 -- the closure opened six more zero registers, a reader predicted it, and the contract now says only what rows can prove
+
+Pass 14's pass 2 ran on nine recorded seats.  Both Opus firings died on API 529 while the
+Fable seats on the other model answered, so **agy was fired as the measuring seat** -- the
+reservation's stated purpose -- and it measured five contract-claimed families closed before
+its CLI timed out mid-cell.  Its answer is its six logs, preserved.  One reader burned and
+recovered on a 3 KB re-fire, the fifth time.
+
+### What the readers found, and the measuring seat had not looked for
+
+**Gap B, two seats independently:** `dec regs` sets `drawmode` to all-ones, which sets
+`XFER_EN`, which makes the transfer block above the switch READ SIX MORE REGISTERS -- and every
+session left them at zero.  `|| step_x` was predicted a clean sweep and **MEASURED 50/50**
+(`artifacts/sgideprimop/gapB_20260903/`).  **The pass-14 closure opened it.**
+
+**Gap A, two seats independently:** equality of a register to an unpinned value.  The
+registers take exactly two values across all sessions, zero and all-ones, so `|| (drawmode ==
+0x1234)` is invisible and the uncovered list had not said so.
+
+**And codex named a shape the uncovered list could not absorb by adding a line:** a same-field
+bit RELATION on `op` -- bits 0 and 1 differ -- false on every one of the ten second-reach
+literals.  The union-to-all-ones proof covers MONOTONE bit-tests only.
+
+> **The pass-14 contract was a per-class claim dressed as a universal, the same error the diff
+> itself had diagnosed twice.**  The honest general statement, now in the contract: the ONLY
+> closed shapes are monotone nonzero bit-tests on `op` and the eleven registers, op inequality,
+> the one equality `op == 0`, and zero/nonzero on the seven operands.  Every other predicate is
+> uncovered BY CONSTRUCTION, because the sessions pin at most two values per field.
+
+### The repair, and its table
+
+Six more all-ones stores in `dec regs`, so every register the function reads on a decline path
+is now all-ones: ELEVEN.  The precondition witness pins destination mode too, and the
+stipple register has its own channel (the pre-switch diagnostic prints its value), so the
+witness is 4 of 11 rather than 2 of 5.  The summary now prints the contract's four limits as
+NOROW lines, since a deliberate no-row must not render like an unrun one.  Rows 50 -> 51.
+
+| cell | kind | result |
+|---|---|---|
+| `BASE` | control | **51/51** |
+| six XFER registers | CLOSE | each **50/51**, `dec regs` red (`M_STEPX` was 50/50 before) |
+| `M_OP_PAIRXOR` (bit relation) | **LIMIT** | **51/51 -- escapes, as the contract declares** |
+| `M_DRAWMODE_EQ` (unpinned equality) | **LIMIT** | **51/51 -- escapes, as the contract declares** |
+| `M_FLOOD_B25` | control | same 3 rows red |
+
+`artifacts/sgideprimop/killtable_20260903_table13_xfer/`.  The driver now ANNOUNCES a non-full
+BASE and continues, the `tablebasenotfull` form; BASE was full, so it did not fire.
+
+### Seats, and two transport facts worth carrying
+
+Opus DOWN twice on API 529 (both firings, the second the one permitted retry) -- the fourth
+failure class narrowed to one model.  **Two panels fired three seconds apart 429'd the same
+Ollama seat**: a measured counter-instance to the carrier's note that the spacing hazard was
+gone -- gone for panels minutes apart, not concurrent ones.  grok on the concurrent pcc2 panel
+died twice on CLI internal errors.  Every failure re-fired once; every recovery recorded by
+transport.  `agy` fired for measurement only.
+
+*The pass-15 diff owes its own pass.  If that pass finds zero breaches WITH its denominator --
+which now means: nothing outside the contract's four closed shapes that still sweeps 51 rows --
+the chain closes.*
+
 ## Round #500 pass 14 -- the closing pass found a FAMILY, one session closed it, and the contract now says what rows cannot
 
 Pass 13 was the enumeration-verifying pass the class-closure amendment prescribes.  **Nine

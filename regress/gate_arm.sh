@@ -1264,17 +1264,43 @@ if ! grep -q "OPUS500_DONE" "$PRIMLOG"; then
     check "sgi_de primop probe completed" "no" "yes"
 else
     check "sgi_de primop probe completed" "yes" "yes"
-    for v in "live" "devsig" "pt surv" "pt live" "pt decl" "tri surv" "tri live" "tri decl" "reset surv" "reset live" "reset decl" "two once" "two live" "rd surv" "rd decl" "xlatch decl" "xlatch live" "xlatch unm" "xlatch unliv" "xlatch all" "xlatch alliv" "xlatch pre" "acc rect" "acc live" "acc rect mod" "acc rect liv" "acc line mod" "acc line liv" "n25 nox" "n25 noxset" "dec b26" "dec b27" "dec b28" "dec b29" "dec b30" "dec b31" "dec hi liv" "dec low" "dec low liv" "dec ops" "dec ops liv" "dec flood" "dec flood liv" "dec regs" "dec regs liv" "dec regs set" "n25 rect" "n25 rectliv" "n25 rectset" "n25 line"; do
+    for v in "live" "devsig" "pt surv" "pt live" "pt decl" "tri surv" "tri live" "tri decl" "reset surv" "reset live" "reset decl" "two once" "two live" "rd surv" "rd decl" "xlatch decl" "xlatch live" "xlatch unm" "xlatch unliv" "xlatch all" "xlatch alliv" "xlatch pre" "acc rect" "acc live" "acc rect mod" "acc rect liv" "acc line mod" "acc line liv" "n25 nox" "n25 noxset" "dec b26" "dec b27" "dec b28" "dec b29" "dec b30" "dec b31" "dec hi liv" "dec low" "dec low liv" "dec ops" "dec ops liv" "dec flood" "dec flood liv" "dec regs" "dec regs liv" "dec regs set" "dec regs stip" "n25 rect" "n25 rectliv" "n25 rectset" "n25 line"; do
         check "sgi_de primop row: $v" "$(count "$PRIMLOG" "^$v  .*ok$")" "1"
     done
 
     #  DENOMINATOR, SUMMED -- a single "19 ok" check cannot tell a LOST row from a
     #  FAILING one, and those need different responses.
-    check "sgi_de primop rows emitted"           "$(( $(count "$PRIMLOG" " ok$") + $(count "$PRIMLOG" " FAIL$") ))" "50"
-    check "sgi_de primop rows green" "$(count "$PRIMLOG" " ok$")"   "50"
+    check "sgi_de primop rows emitted"           "$(( $(count "$PRIMLOG" " ok$") + $(count "$PRIMLOG" " FAIL$") ))" "51"
+    check "sgi_de primop rows green" "$(count "$PRIMLOG" " ok$")"   "51"
     check "sgi_de primop rows red"   "$(count "$PRIMLOG" " FAIL$")" "0"
 fi
 
+
+
+#  ------------------------------------------------------------ pcc2widthkills
+#  Twelve width-guard blocks in DEVICE_ACCESS(pcc2) ended the host on a guest-chosen
+#  access width.  Now a DIRECTION SPLIT: reads accept (the memcpy above the switch
+#  already served them), writes decline with a per-instance latch.  The witness
+#  (pcc2_width_witness.py, 4/10 on the committed build) is NOT run here -- its job was
+#  to exist before the edit; this is the detector it grew into.
+PCC2LOG=$LOGDIR/pcc2_width.log
+python3 pcc2_width_probe.py "$PMAX" gate > "$PCC2LOG" 2>&1 || true
+
+#  SENTINEL FIRST: a preserved log is verified by its completion sentinel, never by
+#  its existence.
+if ! grep -q "PCC2W_PROBE_DONE" "$PCC2LOG"; then
+    check "pcc2 width probe completed" "no" "yes"
+else
+    check "pcc2 width probe completed" "yes" "yes"
+    for v in "live" "devsig" "byte rd" "byte rd liv" "hrd genctl" "hrd genctl lv" "hwr genctl" "hwr genctl lv" "hrd t2ctl" "hrd t2ctl lv" "hwr t2ctl" "hwr t2ctl lv" "hrd t2icr" "hrd t2icr lv" "hwr t2icr" "hwr t2icr lv" "hrd sccerr" "hrd sccerr lv" "hwr sccerr" "hwr sccerr lv" "hrd scctx" "hrd scctx lv" "hwr scctx" "hwr scctx lv" "wrd sccerr" "wrd sccerr lv" "wwr sccerr" "wwr sccerr lv" "wwr sccerr dcl" "val h genctl" "val w sccerr" "rb genctl" "rb genctl dcl" "rb vecbase" "latch same" "latch two" "acc genctl" "acc genctl nod" "acc t2ctl" "acc t2ctl nod" "acc t2icr" "acc t2icr nod" "acc scctx" "acc scctx nod" "acc sccerr" "acc sccerr nod" "op vecbase" "op vecbase dcl" "op pscale" "op pscale dcl" "op t1ctl" "op t1ctl dcl" "op t1icr" "op t1icr dcl" "op sccicr" "op sccicr dcl" "op sccrx" "op sccrx dcl" "op scsiicr" "op scsiicr dcl"; do
+        check "pcc2 width row: $v" "$(count "$PCC2LOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED -- a lost row and a failing row need different responses.
+    check "pcc2 width rows emitted"           "$(( $(count "$PCC2LOG" " ok$") + $(count "$PCC2LOG" " FAIL$") ))" "60"
+    check "pcc2 width rows green" "$(count "$PCC2LOG" " ok$")"   "60"
+    check "pcc2 width rows red"   "$(count "$PCC2LOG" " FAIL$")" "0"
+fi
 
 
 PITLOG=$LOGDIR/pit8253_latch.log

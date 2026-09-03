@@ -276,6 +276,10 @@ MANIFEST = {
     #  cells gives run 1 and run 2 different tools, which this project has measured
     #  (a 39/40 against a table of /39).  It is EVIDENCE, deliberately run by no gate;
     #  the shipping copy is regress/sgi_de_primop_probe.py and gate_arm.sh runs that.
+    "artifacts/sgideprimop/killtable_20260903_table13_xfer/frozen_probe.py":
+        (CLASS_RESEARCH, "#500 pass 15 frozen instrument for the eleven-register closure table (51 rows; six XFER cells closed, two declared limits measured)"),
+    "artifacts/sgideprimop/gapB_20260903/frozen_probe.py":
+        (CLASS_RESEARCH, "#500 pass 15 the 50-row instrument AS MEASURED against || step_x -- the gap, 50/50, before the repair"),
     "artifacts/sgideprimop/killtable_20260903_table12_regs/frozen_probe.py":
         (CLASS_RESEARCH, "#500 pass 14 frozen instrument for the register-family closure table (50 rows, dec regs set at want=1 -- the corrected live probe wants 2)"),
     "artifacts/sgideprimop/killtable_20260902_table11_closure/frozen_probe.py":
@@ -324,6 +328,19 @@ MANIFEST = {
     #
     #      awk '/for v in "live"/{l=$0; getline n;
     #           if (n ~ /PRIMLOG/) {print gsub(/"[^"]*"/,"",l)}}' regress/gate_arm.sh
+    #  pcc2widthkills: the WITNESS (rung 3, 4/10 on the committed build, preserved with its
+    #  run under artifacts/pcc2widthkills/) and the DETECTOR it grew into.  The witness is
+    #  deliberately run by no gate: its job was to exist BEFORE the edit.
+    "artifacts/pcc2widthkills/pcc2_width_witness.asrun.py":
+        (CLASS_RESEARCH, "pcc2widthkills the witness AS RUN for its 4/10 pre-fix measurement (before the docstring correction)"),
+    "artifacts/pcc2widthkills/pcc2_operator_reach.asrun.py":
+        (CLASS_RESEARCH, "pcc2widthkills the three-session probe that MEASURED the debugger reaching an odd-offset arm (put h 0xfff42003 -> exit1)"),
+    "artifacts/pcc2widthkills/killtable_20260903/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills frozen instrument for the kill table: PREFIX 14/60, BASE 60/60, seven mutants each killed by its designed rows"),
+    "pcc2_width_witness.py":
+        (CLASS_WITNESS, "pcc2widthkills rung-3 witness -- three aligned accesses (ld.h GENCTL, ld SCCERR, st.h T2CTL) each ended the host; four controls green"),
+    "pcc2_width_probe.py":
+        (CLASS_DETECTOR, "pcc2widthkills -- twelve width-guard blocks are a direction split (reads ACCEPT, writes DECLINE + per-instance latch); gate_arm.sh runs it, row count derived from the gate"),
     "sgi_de_primop_probe.py":
         (CLASS_DETECTOR, "#500 sgideprimop -- draw_primitive's default arm is a latched decline; every survival row is PAIRED with a positive post-draw observable, because exit status cannot distinguish declined-and-quit from died-with-status-0"),
 
