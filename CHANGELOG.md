@@ -1,3 +1,98 @@
+## Round #500 pass 14 -- the closing pass found a FAMILY, one session closed it, and the contract now says what rows cannot
+
+Pass 13 was the enumeration-verifying pass the class-closure amendment prescribes.  **Nine
+of nine seats answered** -- the burned one on a 3 KB re-fire, the fourth measured instance of
+the burn being the brief -- and the enumeration did not survive them.
+
+### What the readers found, six of them independently
+
+`|| (op == 0x00000000)`.  The bit-mask family is genuinely closed, and every seat that walked
+it confirmed the closure with the full denominator of 2^32-1 masks rather than trusting the
+brief.  But the EQUALITY family is open: only nine values ever appear on a second reach of the
+decline, so equality on any other value is invisible -- and the one value a guest reaches with
+**no register write at all** is POINT, the reset value, this round's own headline case.
+
+Two seats also struck a word from my premise.  "A second announcement of the SAME op literal"
+is wrong: `two once` stores two different literals and observes through a prefix.  The correct
+criterion, from the measuring seat, is *observable iff some session reaches `default:` at least
+twice with the predicate true on a later reach* -- and asking about ALL state at the second
+reach is what exposed the next thing.
+
+### What the measuring seat found, and the readers could not
+
+**Four more clean sweeps of the shipped 47-row detector, MEASURED**, two of them a family:
+
+    M_XFER      || (drawmode & DE_DRAWMODE_XFER_EN)   47/47   control measured both ways
+    M_SRCMODE   || (src_mode & 0x00001c00)            47/47
+    M_OPEQ      || (op == 0x07000000)                 47/47   -> contract
+    M_FG        || (fg & 0x80)                        47/47   -> contract
+
+> **`draw_primitive()` reads eleven registers.  Five of them -- `drawmode`, `src_mode`,
+> `dst_mode`, `rop`, `stipple_mode` -- were identically ZERO on every path that reached the
+> decline**, because the only sessions that wrote any of them used implemented ops.  A bypass
+> on any bit of any of the five was invisible to all 47 rows, and the transfer-enable bit is
+> one real blit code sets: a guest-reachable flood on an ordinary path.
+
+**The brief's own scoping hid it.**  It asked for predicates on values "the guarded BODY
+reads".  `drawmode` is read by the enclosing FUNCTION, above the switch.  Whether that is
+inside clause (d)'s DEPENDS-ON bound is filed as a **rule question** rather than decided here:
+the bound says "the guarded body", but the carrier's own exemplar of a qualified condition uses
+`writeflag`, likewise an enclosing-function value.  The detector is repaired regardless.
+
+### THE REPAIR: one session, three rows, and a contract
+
+`dec regs` sets all five registers to all-ones and draws POINT twice.  Every register bit-test
+fires on the second reach, and so does `op == 0x00000000`.  Measured (table 12, with the one
+instrument row subtracted -- see below):
+
+| cell | kind | pre-repair | post-repair |
+|---|---|---|---|
+| `M_XFER` `M_SRCMODE` | CLOSE | 47/47 escape, measured | `dec regs` red |
+| `M_DSTMODE` `M_ROP` `M_STIPPLE` | CLOSE | derived open | `dec regs` red |
+| `M_OPEQ0` (the reset value) | CLOSE | predicted 47/47 by six seats | `dec regs` red |
+| `M_OPEQ07` `M_FG80` | **LIMIT** | 47/47 | **still 50/50 -- as the contract now declares** |
+| `M_FLOOD_B25` | CONTROL | 3 rows red | same 3 rows red |
+
+**The two LIMIT cells are the point of the contract.**  Equality on an arbitrary value and a
+sub-bit of an operand are infinite or combinatorial families; each new two-draw session pins one
+member.  The class-closure amendment's own instruction is to write into the CONTRACT which cells
+are deliberately not covered, so a later escape there is *outside the contract, as stated*
+rather than a breach.  The probe's contract now lists what is closed (every op bit-mask, op
+inequality, the five registers, `op == 0`, latch bits 0-8, operand zero/nonzero) and what is
+deliberately not (other equalities, mask conjunctions within no single literal, range
+comparisons, operand sub-bits, cross-field compounds).  Both limits are MEASURED, not asserted.
+
+### The instrument caught its own defect, and the driver did not
+
+BASE measured **49/50**: `dec regs set`, the new precondition witness, was red on the fixed
+build.  Its want was 1, copied from a one-draw session; the entry announcement prints once per
+draw and this session draws twice.  **That is the canary working** -- a precondition row whose
+want does not match its session shape reds on BASE before any mutant is scored.  Corrected to
+want=2 in the live probe; the table scored its frozen copy, so every cell carries that one row
+red and is read with it subtracted; a single BASE re-run against the corrected instrument is
+preserved beside the table.
+
+> **And the driver proceeded past a BASE that was not full score.**  Pass 13 found that the
+> table-11 driver's control was a comment with no refusal behind it; this is the second
+> instance.  Filed as a driver-practice item: a table whose BASE is not full should say so
+> loudly, and whether it should abort is a judgement (aborting here would have thrown away
+> nine valid cells for one known row).
+
+### Records corrected on the seats' findings
+
+The stale `negctl_dec_flood.out` citation (only a `.sh` exists); the six `dec b*` row notes
+that claimed "narrowing AND bypass" measured where narrowing was measured at three of six; the
+second unmarked `dec hi bit` citation; the table-10 driver's stale "pass-14 / 34 rows" header
+and stray commit capture; the table-11 driver's print-only control.
+
+*Seats: opus5 DO NOT CLOSE (measured); codex, grok, kimi, minimax, fable5, deepseek all DO
+NOT CLOSE / NOT CLOSED on the equality family (deepseek honestly named what it could not check
+from the packet); glm BURNED then ANSWERED on re-fire.  `agy` DELIBERATELY NOT FIRED
+(measurement reserve, owner ruling) -- not a seat failure and not agreement.  The pass-13
+panel dir is `_scratchpad/panel_20260903_072827/`.*
+
+*Detector 47 -> 50 rows.  No product code changed.*
+
 ## Round #500 pass 12 -- the panel refuted my pass-11 answer, MEASURED two clean sweeps, and three seats found the red I had left one line below the one I fixed
 
 Pass 11 adjudicated the chain and reported "no floor breach".  **Its own panel measured two.**

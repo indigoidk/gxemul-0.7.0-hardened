@@ -76,7 +76,8 @@ catch, and which it is NOT:
     * *** BOTH NO-ROW CLAUSES THAT USED TO SIT HERE ARE GONE, AND ONE OF THEM WAS
       A WRONG RECORD THE DIFF ITSELF FALSIFIED.  A seat caught it: the [31:26]
       clause declared "a legal LINE with a high bit set ... DELIBERATELY NO ROW"
-      while `dec hi bit' -- added ONE CLAUSE ABOVE IT, in the same diff -- stores
+      while `dec hi bit' (a row since superseded by `dec b26'..`dec b31') -- added
+      ONE CLAUSE ABOVE IT, in the same diff -- stored
       0x05000000, which is exactly that.  The stale clause is what let an earlier
       pass call a shrink-escape "consistent, deliberately disclaimed".  Both
       ranges are now COVERED: bits 0-23 by the widened accept ops, bits 26-31 by
@@ -130,6 +131,34 @@ catch, and which it is NOT:
       clear, so even a "successful" draw writes nothing observable.  DISCLOSED,
       NOT COVERED, and it is the same drawing-oracle gap as the last clause
       below rather than a new species. ***
+    * *** LATCH-BYPASS COVERAGE, STATED PRECISELY (pass 14), because three passes
+      each found a breach of this one class and the closing pass must verify an
+      ENUMERATION rather than hunt cells.  A bypass `|| <cond>' on the latch is
+      observable iff some session reaches `default:' at least twice with <cond>
+      TRUE on a later reach.  The two-draw sessions and what they pin:
+          op bit-tests      `|| (op & MASK)', EVERY nonzero 32-bit MASK -- CLOSED.
+                            The nine second-reach op literals union to 0xffffffff
+                            and `op & MASK != 0' is monotone in MASK.
+          op inequality     `|| (op != V)' -- CLOSED (>= 2 distinct second-reach ops).
+          the five pre-switch registers  drawmode, src_mode, dst_mode, rop,
+                            stipple_mode: every nonzero bit-test -- CLOSED by
+                            `dec regs' (all-ones on a POINT double-draw).
+          op == 0x00000000  the reset value -- CLOSED by `dec regs'.
+          latch-field bits  0-8 by `xlatch all'; 9 is the latch itself.
+          operand zero/nonzero on x1..pattern -- CLOSED by `dec ops'.
+      DELIBERATELY NOT COVERED, and unclosable by rows -- an escape here is OUTSIDE
+      THE CONTRACT, not a breach:
+          op == V for V not among the second-reach literals (2^32 - 10 values);
+          mask conjunctions `(op & M) == M' where M lies within no single literal;
+          range comparisons on op;
+          operand SUB-BIT or threshold predicates (`fg & 0x80', `x1 > x2') -- the
+              operands take exactly two tuples, zero and one chosen nonzero;
+          cross-field compounds (an op bit AND a warned bit), because the op closure
+              and the latch-field closure live in different sessions.
+      Each of those families is infinite or combinatorial, and each new two-draw
+      session pins one member.  Two of them were MEASURED as 47/47 in pass 13
+      (`op == 0x07000000', `fg & 0x80'); they are recorded here as the limit, not
+      hunted. ***
     * anything about WIDTH -- that is sgi_de_width_probe.py, which also owns the
       `tail_acc*' rows that pin draw_primitive's REACHABILITY;
     * the drawing itself.  A declined op draws nothing, and nothing here asserts
@@ -167,6 +196,13 @@ UNMAP_R = 0x900                      # #499's unmapped-READ  window -> UNMAP_RD
 PRIM_START = 0x860
 PRIM_ONLY = 0x060
 DRAWMODE = 0x018                     # CRIME_DE_DRAWMODE 0x2018, device-relative
+#  The OTHER four registers draw_primitive() reads before the switch, device-relative.
+#  #500 pass 14: every one of the five is ZERO on every path that reaches `default:'
+#  in every session below this line's introduction -- see `dec regs'.
+MODE_SRC = 0x000                     # CRIME_DE_MODE_SRC     0x2000
+MODE_DST = 0x008                     # CRIME_DE_MODE_DST     0x2008
+STIPPLE_MODE = 0x0c0                 # CRIME_DE_STIPPLE_MODE 0x20c0
+DE_ROP = 0x1b0                       # CRIME_DE_ROP          0x21b0
 XFER_EN = "0x00200000"               # DE_DRAWMODE_XFER_EN
 XFER_LINE = "sgi_de: XFER_EN for LINE op?"
 
@@ -804,9 +840,16 @@ row("n25 noxset", t.count("op = 0x01ffffff, drawmode=0x0 src_mode="), 1,
 #  *** MY CRITERION WAS WRONG, AND IT WAS WRONG IN THE ANSWER I HAD JUST WRITTEN
 #  ONE PASS EARLIER. ***  I claimed no green control could exist because every bit
 #  is carried by SOME decline op.  The union claim is TRUE -- and it is not the
-#  criterion.  A latch bypass is only observable on a SECOND announcement of the
-#  SAME op literal, so a row can red only if its session issues TWO declining
-#  stores of one value.  There were exactly three such sessions:
+#  criterion.  A latch bypass is only observable on a SECOND announcement, so a
+#  row can red only if its session reaches `default:' at least twice.  There were
+#  exactly three such sessions:
+#
+#  *** "OF THE SAME OP LITERAL" STOOD HERE AND IS STRUCK.  Pass 13: `two once'
+#  stores 0x00000000 then 0x02000000 -- two DIFFERENT literals -- and observes a
+#  bypass through the DRAW prefix.  The correct criterion, from the measuring seat:
+#  a bypass is observable iff some session reaches `default:' at least twice with
+#  the predicate TRUE on a later reach.  That reformulation asks about ALL state at
+#  the second reach, not just `op', and it is what exposed the register family. ***
 #
 #      two once / xlatch all   op 0x02000000   observes bit 25
 #      dec ops                 op 0x04000000   observes bit 26
@@ -831,6 +874,13 @@ row("n25 noxset", t.count("op = 0x01ffffff, drawmode=0x0 src_mode="), 1,
 #  twice and reds that row.  With `dec flood' covering 0-23 and 25, the 32-bit space
 #  is CLOSED rather than sampled -- and the rows additionally strengthen from "MUST
 #  decline" to "MUST decline EXACTLY ONCE".
+#
+#  *** THE BYPASS HALF IS MEASURED AT ALL SIX BITS (table 11).  THE NARROWING HALF IS
+#  MEASURED AT 26, 27 AND 31 ONLY -- M_NARROW_28/29/30 were never built, in any
+#  table since pass 5.  The mechanism is uniform (one row red, count 0, at each
+#  measured bit) so the derivation is believed; but a row note that said "narrowing
+#  AND bypass" claimed six measurements where there are three.  A seat caught it in
+#  the pass that had just diagnosed a closure "verifying two of six". ***
 for _bit, _op in ((26, "0x05000000"), (27, "0x09000000"), (28, "0x11000000"),
                   (29, "0x21000000"), (30, "0x41000000"), (31, "0x81000000")):
     A = Addr(CODE)
@@ -838,7 +888,7 @@ for _bit, _op in ((26, "0x05000000"), (27, "0x09000000"), (28, "0x11000000"),
                             + store(A, DE + PRIM_START, val=_op)
                             + load(A, 0xffffffff80002000) + ["print v0"])
     row("dec b%d" % _bit, t.count(declined(_op)), 1,
-        "%s = LINE|bit%d declines ONCE in TWO draws -- narrowing AND bypass at bit %d"
+        "%s = LINE|bit%d declines ONCE in TWO draws -- bypass at bit %d (narrowing: see note)"
         % (_op, _bit, _bit))
 
 #  ONE liveness companion for the family rather than six: the six rows above differ
@@ -1003,8 +1053,74 @@ row("dec flood", t.count(_fl_lit), 1,
 row("dec flood liv", printed(t, "v0") if alive else "died", "0x0",
     "...and the guest RUNS ON through both draws")
 
+#  *** PASS 13 MEASURED FOUR MORE CLEAN SWEEPS OF THE SHIPPED DETECTOR, AND TWO OF
+#  THEM ARE A FAMILY THAT ONE SESSION CLOSES.  L2, clause (d), third consecutive
+#  pass -- the class-closure amendment governs. ***
+#
+#      M_XFER      latch || (drawmode & DE_DRAWMODE_XFER_EN)   47/47  TOTAL ESCAPE
+#      M_SRCMODE   latch || (src_mode & 0x00001c00)            47/47  TOTAL ESCAPE
+#      M_OPEQ      latch || (op == 0x07000000)                 47/47  (see contract)
+#      M_FG        latch || (fg & 0x80)                        47/47  (see contract)
+#
+#  THE FAMILY: draw_primitive() reads ELEVEN registers.  On every path that reached
+#  `default:' in this file, FIVE of them were identically ZERO -- drawmode, src_mode,
+#  dst_mode, rop, stipple_mode -- because the only sessions that wrote any of them
+#  (`n25 rect', `n25 line') use IMPLEMENTED ops that never reach `default:'.  So a
+#  bypass on any nonzero bit of any of the five was invisible to all 47 rows, and
+#  XFER_EN is a bit real blit code sets: a guest-reachable flood on an ordinary path,
+#  which is the class the CATCHES contract names.
+#
+#  *** HOW THE BRIEF'S OWN SCOPING HID IT: it asked for predicates on values "the
+#  guarded BODY reads".  drawmode is read by the enclosing FUNCTION, three times,
+#  above the switch.  Whether that is inside clause (d)'s DEPENDS-ON bound is a RULE
+#  question filed for adjudication: the bound says "the guarded body", but the
+#  carrier's own exemplar of a qualified condition uses `writeflag', which is
+#  likewise an enclosing-function value.  The detector is repaired REGARDLESS of how
+#  that resolves, because the repair is cheap and the flood is real. ***
+#
+#  ONE SESSION CLOSES THE FAMILY AND THE RESET-VALUE EQUALITY TOGETHER: set all five
+#  registers to all-ones, then draw POINT twice.  Every register bit-test fires on
+#  the second reach, and so does `|| (op == 0x00000000)' -- the one equality value a
+#  guest reaches with NO register write, and this round's own headline case, which
+#  six seats independently named as a clean sweep.  drawmode=0xffffffff also sets
+#  XFER_EN, whose block above the switch prints an "unimplemented XFER" line with its
+#  exit(1) COMMENTED OUT, and stipple_mode=0xffffffff trips an UNLATCHED fatal() --
+#  both non-fatal, both a different string from the one this row counts.  (Those two
+#  unlatched guest-drivable fatal()s are pre-existing and filed, not this round's.)
+#
+#  The literal is unchanged: x1..pattern come from registers this session leaves at
+#  zero, and stipple_mode all-ones strips pattern to bit 31 of zero, which is zero.
+A = Addr(CODE)
+t, alive, how = session(store(A, DE + MODE_SRC, val="0xffffffff")
+                        + store(A, DE + MODE_DST, val="0xffffffff")
+                        + store(A, DE + DRAWMODE, val="0xffffffff")
+                        + store(A, DE + STIPPLE_MODE, val="0xffffffff")
+                        + store(A, DE + DE_ROP, val="0xffffffff")
+                        + store(A, DE + PRIM_START, val="0x00000000")
+                        + store(A, DE + PRIM_START, val="0x00000000")
+                        + load(A, 0xffffffff80002000) + ["print v0"])
+row("dec regs", t.count(declined("0x00000000")), 1,
+    "five all-ones registers, POINT twice, ONE announce -- kills any register-bit or op==0 bypass")
+row("dec regs liv", printed(t, "v0") if alive else "died", "0x0",
+    "...and the guest RUNS ON through the seven-store session")
+#  *** AND THE ROW ABOVE OWES A PRECONDITION WITNESS, the lesson `xlatch all' paid
+#  for: "five all-ones registers" is only true if the five stores LAND.  The entry
+#  announcement prints drawmode and src_mode verbatim, so pin both, anchored on the
+#  field that follows so a wider value cannot satisfy it. ***
+#  *** want=2, NOT 1: the entry announcement prints ONCE PER DRAW and this session
+#  draws TWICE.  The first version wanted 1 -- copied from `n25 rectset', a one-draw
+#  session -- and BASE measured 49/50 with THIS row red on the fixed build.  That is
+#  the canary working: a precondition witness whose want does not match the session
+#  shape reds on BASE before any mutant is scored.  Pass 14, table 12. ***
+row("dec regs set", t.count("op = 0x00000000, drawmode=0xffffffff src_mode=0xffffffff dst_mode="), 2,
+    "...and the register stores really landed, seen on BOTH draws -- pins dec regs' precondition")
+
 #  *** WHAT dec flood COVERS, AND WHAT IT DOES NOT -- measured in BOTH directions,
-#  which is the half I kept skipping.  negctl_dec_flood.out. ***
+#  which is the half I kept skipping.  ***
+#  (This line cited `negctl_dec_flood.out'.  NO SUCH FILE: the artifact is the
+#  SCRIPT `killtable_20260902_table9/negctl_dec_flood.sh' and its measurements are
+#  `decflood_M_FLOOD_{RL,TB}.out' and `flood2_M_FLOOD_{B26,SK,TB}.out' in that dir.
+#  A bare filename evades the cited-artifact checker.  Found by a seat, pass 13.)
 #
 #      M_FLOOD_RL   (op & DE_PRIM_RL)   bit 16 -> RED    dec flood  (op carries it)
 #      M_FLOOD_TB   (op & DE_PRIM_TB)   bit 17 -> RED    dec flood  (carries it too, now)

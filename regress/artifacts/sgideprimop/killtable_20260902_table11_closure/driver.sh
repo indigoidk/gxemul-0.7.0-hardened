@@ -104,3 +104,16 @@ say "RESTORE from SEC + REBUILD + verify, THEN clear the sentinel"
 restore
 say "  restored + REBUILT + verified, sentinel cleared"
 say "KILL500P12_DONE"
+
+#  =====================================================================
+#  ANNOTATION, 2026-09-03 (pass 13 panel) -- NOT BACKDATED.
+#  The "NEGATIVE CONTROLS ... must keep their OLD scores" line above is a
+#  COMMENT and a `say', with no `die' behind it: a changed control score
+#  PRINTS and PROCEEDS.  B26 in fact went 46/47 -> 45/47 (it GAINED dec b26,
+#  a strengthening, which the CHANGELOG reads correctly) and nothing here
+#  refused.  A control that cannot fail is the check-that-cannot-fail shape;
+#  pass 14's driver labels each cell CLOSE / LIMIT / CONTROL so the reader
+#  knows which expectation applies, but still does not refuse -- that is
+#  filed as a driver-practice item, since a table that aborts mid-run on a
+#  STRENGTHENED control would lose the rest of its cells.
+#  =====================================================================

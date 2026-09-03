@@ -276,6 +276,8 @@ MANIFEST = {
     #  cells gives run 1 and run 2 different tools, which this project has measured
     #  (a 39/40 against a table of /39).  It is EVIDENCE, deliberately run by no gate;
     #  the shipping copy is regress/sgi_de_primop_probe.py and gate_arm.sh runs that.
+    "artifacts/sgideprimop/killtable_20260903_table12_regs/frozen_probe.py":
+        (CLASS_RESEARCH, "#500 pass 14 frozen instrument for the register-family closure table (50 rows, dec regs set at want=1 -- the corrected live probe wants 2)"),
     "artifacts/sgideprimop/killtable_20260902_table11_closure/frozen_probe.py":
         (CLASS_RESEARCH, "#500 pass 12 frozen instrument for the class-closure table -- the 47-row probe AS MEASURED across B24/B27-B31 plus the B25/B26 controls"),
 

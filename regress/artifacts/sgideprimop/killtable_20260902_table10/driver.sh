@@ -411,3 +411,13 @@ say "KILL500PE_DONE"
 #  living inside the driver that annotates findings 8 and 9.  Found by a
 #  seat, not by me, in the artifact I had already annotated once. ***
 #  =====================================================================
+
+#  =====================================================================
+#  THIRD ANNOTATION, 2026-09-03 (pass 13/14 panel) -- NOT BACKDATED.
+#  The header of this file reads "pass-14 KILL TABLE (table 10) -- 34 rows".
+#  It was table 10 of pass TEN, run against a 47-row probe.  The "34 rows"
+#  and the /35 predictions are recycled from an earlier driver; see the
+#  second annotation.  This driver.log also OPENS with a stray
+#  `PRECOMMIT_PASS ... 4995b8e' capture from the commit that preceded the
+#  launch -- harmless, but a reader should not take it as part of the table.
+#  =====================================================================

@@ -14496,3 +14496,48 @@ completeness gate.**
 
 **PUT IT TO THE PANEL** rather than picking one in a records pass.  Whichever is chosen, the
 generator should end up unable to drop an entry silently -- that part is not in dispute.
+
+### `clausedbound` -- RULE QUESTION: does clause (d)'s DEPENDS-ON bound admit enclosing-function values?
+
+**2026-09-03, filed by `#500` pass 14 at the measuring seat's request.**  Not a code defect; a
+question about the carrier's own rule, and one the seat declined to rule on alone.
+
+The bound, as written: *"predicates DOMINATING the diff's edited lines, walked up only to the
+ENCLOSING FUNCTION BOUNDARY; and operand swaps drawn ONLY from fields the guarded BODY reads."*
+
+The case: `|| (drawmode & DE_DRAWMODE_XFER_EN)` on `draw_primitive()`'s latch guard swept the
+shipped 47-row detector clean (MEASURED, with a control both ways).  `drawmode` is read by the
+enclosing FUNCTION, three times above the switch, and not by the guarded body.  **By the
+letter of the bound it is outside clause (d).**
+
+**But the carrier's own exemplar of a qualified condition is `if (X) -> if (X && writeflag ==
+MEM_WRITE)` -- and `writeflag` is likewise an enclosing-function value, neither a dominating
+predicate nor a body-read field.**  So the rule's own illustration falls outside the bound as
+written.  That is the documented exemplar-vs-rule tension, and it decides whether a measured
+clean sweep of this shape is an L2 floor breach (repair in-round) or coverage debt (file).
+
+**The detector was repaired REGARDLESS** (`dec regs`, pass 14): the fix is one session and the
+flood is guest-reachable on an ordinary path.  What is filed is the RULE, not the fix.
+
+**Proposed reading, for adjudication, not adopted:** DEPENDS-ON includes every value the
+enclosing function has computed or read BEFORE the guard executes -- which is what the
+`writeflag` exemplar already assumes -- bounded still by the enclosing function.  The cost is a
+wider (d) enumeration per fix; the benefit is that the bound stops excluding its own example.
+
+### `tablebasenotfull` -- a kill-table driver that proceeds past a BASE below full score
+
+**2026-09-03, second measured instance.**  Severity LOW (harness practice).
+
+Pass 13 found the table-11 driver's negative control was a comment with no refusal behind it.
+Pass 14's driver then measured **BASE 49/50** -- a real instrument defect in the frozen probe --
+and proceeded through all nine remaining cells.  In this instance proceeding was RIGHT (one
+known row, nine valid cells, and the canary had done its job), so the disposition is not
+simply "die on BASE < full".
+
+**What a driver should do, for adjudication:** say LOUDLY that BASE is not full and name the
+rows; continue; and mark every subsequent cell's score as *read with N rows subtracted*.  A
+`die` throws away valid cells; a `say` alone is the check-that-cannot-fail shape.  The middle
+form -- announce, continue, annotate -- is what pass 14 did by hand and should be the driver's.
+
+*** THE FROZEN-INSTRUMENT RULE IS WHY THIS WAS RECOVERABLE: the live probe was corrected while
+the table ran, the table kept scoring its frozen copy, and the two never mixed. ***
