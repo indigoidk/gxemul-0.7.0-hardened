@@ -14384,10 +14384,26 @@ exactly the thing the dashboard exists to show.
     L = json.load(io.open('tools/pipeline/ledger.json', encoding='utf-8'))
     ph = set(L['phase_labels'])
     print(sum(1 for r in L['rows'] for e in r.get('entries', [])
-              if e.get('phase') and e.get('phase') not in ph))
+              if e.get('phase') not in ph))
     EOF
 
-On 2026-09-02 that prints **25**, across **17 rows**:
+On 2026-09-02 that prints **26**, across **18 rows**.
+
+> ### *** THE FIRST VERSION OF THIS DERIVER UNDERCOUNTED BY ONE, AND IT UNDERCOUNTED THE
+> ### SINGLE MOST UNPLACEABLE MEMBER OF THE CLASS IT CLAIMS TO MEASURE.  Found by the fable
+> ### panel seat reviewing the commit that shipped it. ***
+>
+> It guarded with `if e.get('phase') and e.get('phase') not in ph`.  **The `and` short-circuits
+> on a FALSY phase**, so the one entry carrying no `phase` key at all -- `lethalonly` / kimi,
+> 2026-08-24 -- was excluded from the count.  And `cell()` matches `x.get("phase") == phase`,
+> which is False for `None` against every declared phase, **so the dashboard drops that entry
+> too**.  It is squarely in the class; only the measuring code could not see it.
+>
+> *** THAT IS THE PATTERN-THAT-MATCHES-NOTHING CLASS LANDING INSIDE A RECORD WHOSE ENTIRE
+> SUBJECT IS SILENTLY-DROPPED ENTRIES *** -- and it is also "a correction is not safer than the
+> thing it corrects", for the second time in one round.  The fix is deleting three words.
+
+The 26 break down as:
 
 | phase | entries | rows |
 |---|---|---|
@@ -14398,8 +14414,26 @@ On 2026-09-02 that prints **25**, across **17 rows**:
 `gen_dashboard.py`'s `cell()` matches `x.get("phase") == phase` over the declared set -- so an
 entry with any other phase is placed nowhere and vanishes.
 
-> *** `gdromcondlies` HAS A FULL NINE-SEAT PANEL UNDER `implement`, AND THE MATRIX SHOWS
-> NOTHING FOR IT.  A reader sees a row of dots where nine seats actually answered. ***
+> *** `gdromcondlies` HAS A FULL NINE-SEAT PANEL UNDER `implement`, AND THE MATRIX DROPS
+> EVERY ONE OF THOSE NINE ENTRIES. ***
+
+> ### *** TWO L4s IN THE SENTENCE ABOVE, BOTH FOUND BY THE GROK SEAT, BOTH CORRECTED HERE.
+> ### The claim survives; the description of it was wrong twice. ***
+>
+> **(a) "THE MATRIX SHOWS NOTHING FOR IT" IS FALSE.**  Measured: `gdromcondlies` renders
+> `assess` 9, `research` 1, `review` 19 and `regress` 1 perfectly well.  **Only its nine
+> `implement` entries drop.**  So a reader does NOT see a row of dots -- they see a populated
+> row with one whole panel silently missing from it, **which is strictly worse**: an empty row
+> invites the question, a full-looking row does not.
+>
+> **(b) "EVERY ROW GAINS TWO COLUMNS" IS FALSE -- phases are ROWS, seats are COLUMNS.**
+> `gen_dashboard.py` emits `<th scope="row" class="phlabel">` per phase and `<th class="seat">`
+> per seat, under a `bug . phase` row-head.  So DECLARE would add two **rows** per bug, not two
+> columns.  That matters to the disposition, because rows-per-bug is a much larger visual change
+> than columns: it grows the table by two lines for **every** bug, most of which would be empty.
+>
+> *I described a layout I had not opened, in an item whose whole subject is a tool dropping data
+> silently.  Both errors are the same shape as the finding.*
 
 **THIS IS THE GENERATOR'S OWN STATED FAILURE MODE, WITH THE GUARD BUILT ON THE WRONG AXIS.**
 `gen_dashboard.py` already refuses to render on an ORPHAN SEAT, and its comment gives the
@@ -14420,12 +14454,42 @@ publishes.*
   declared one;
 * the fix is a **JUDGEMENT, not a mechanism**, and the options are not equivalent:
   1. **DECLARE** `implement` and `adjudicate` in `phase_labels` -- everything renders, but
-     every row in the matrix gains two columns, changing an artifact people read;
+     **every bug in the matrix gains two ROWS** (phases are rows; see the correction above),
+     most of them empty, which is a large change to an artifact people read;
   2. **RE-PHASE** the 25 entries onto declared phases -- no shape change, but it rewrites what
      past rounds recorded about themselves;
   3. **REFUSE** like the seat guard does -- most consistent with the file's own philosophy, but
-     it **retro-fails on 25 existing entries and blocks the next regeneration**, which is the
-     "a rule that does that gets switched off" hazard this project has already named;
+     it **retro-fails on all 26 existing entries and blocks the next regeneration**, which is
+     the "a rule that does that gets switched off" hazard this project has already named;
+
+  *** THREE MORE MEMBERS, FOUND BY THE FABLE SEAT DOING WHAT THE RULE SAYS -- GREPPING THE
+  FORK FOR THE EXISTING IDIOM RATHER THAN REASONING.  My three-membered set was incomplete,
+  which is the option-set-completeness failure arriving in the very item that asks for an
+  option-set audit. ***
+
+  4. **CATCH-ALL / DEFAULT-BUCKET RENDER, and this is the in-file idiom.**  `gen_dashboard.py`
+     ALREADY defaults on unrecognised categorical values rather than refusing, in two places:
+     `D_CLASS.get(d, "pend")`, and `STATE_ORDER`'s documented fall-through (*"Any state not
+     named here falls to 5 and lands in the in-work bucket"*).  **It reserves REFUSE for
+     `seat`, which is an IDENTITY -- a misplaced seat is misattribution.  A PHASE is a display
+     bucket, not an identity.**  So the file's own idiom says render undeclared phases into an
+     "other" row: nothing dropped, nothing blocked, no history rewritten.
+  5. **WARN-AND-RENDER.**  Emit the orphan report to stderr exactly as the seat guard does, but
+     still render via the catch-all instead of exiting.  Keeps the diagnostic, drops the
+     blocking cost.
+  6. **FORWARD-ONLY REFUSE WITH A DATED CUTOFF -- the fork's own answer to my objection.**
+     `check_stage_panels.py`'s `HOLDQ_CUTOFF` and `check_bugfile_sync.py` both fail only on
+     entries newer than a cutoff and report-but-do-not-fail the older ones.  **That is REFUSE
+     without the retro-fail cost I raised against REFUSE**, and I named the objection without
+     noticing the project had already built the remedy twice.
+
+*** AND IT IS NOT ONE TOOL, IT IS THREE, WHICH MAKES THE ITEM BIGGER THAN FILED. ***  Verified
+by reading: `check_stage_panels.py` has `STAGES = ("assess", "research", "review")`, **so a
+nine-seat panel keyed `implement` is invisible to the checker that ENFORCES nine-seat panels**;
+`gen_codex_wall.py` buckets an undeclared phase as `"?"`.  Three tools, three different
+treatments of the same input -- drop, ignore, bucket.  **Whatever disposition is chosen must be
+applied across all three, or the panel that is invisible on the matrix is also uncounted by the
+completeness gate.**
 * and a fourth question sits under all three: **is `implement` even a panel phase?**  The
   round lifecycle has an implement STEP, and a nine-seat panel recorded against it may itself
   be the mis-filing.

@@ -1,3 +1,116 @@
+## Round #500 pass 12 -- the panel refuted my pass-11 answer, MEASURED two clean sweeps, and three seats found the red I had left one line below the one I fixed
+
+Pass 11 adjudicated the chain and reported "no floor breach".  **Its own panel measured two.**
+
+### *** THE L2: A LATCH BYPASS ON SIX HIGH BITS SWEPT THE SHIPPED DETECTOR CLEAN ***
+
+The measuring seat built the mutants and scored them against the shipped 47-row detector:
+
+| mutant | score | rows red |
+|---|---|---|
+| `M_FLOOD_B25` | 44/47 | `two once`, `xlatch all`, `dec flood` |
+| `M_FLOOD_B26` | 46/47 | `dec ops` |
+| **`M_FLOOD_B27`** | **47/47** | *** TOTAL ESCAPE *** |
+| **`M_FLOOD_B31`** | **47/47** | *** TOTAL ESCAPE *** |
+
+**MY CRITERION WAS WRONG, IN THE ANSWER I HAD WRITTEN ONE PASS EARLIER.**  I said no green
+control could exist because every bit is carried by some declining op.  The union claim is
+true and **it is not the criterion.**  A latch bypass is only observable on a SECOND
+announcement of the SAME op literal, so a row can red only if its session draws twice.  Three
+sessions did.  The six `dec b*` rows I cited as proof are **single-draw and structurally
+cannot red** -- and `dec b26` stores `0x05000000`, which IS bit 26, and stayed green.
+
+> **Carrying a bit is not observing it.  I cited six rows that could not fire as evidence that
+> no control was possible.**
+
+And it is not benign: a bypass on bit 27 makes the device re-announce on every access to
+`0x09000000`, a guest-writable value -- the exact log flood the `(once)` latch exists to
+prevent, and a class this detector's own contract names.
+
+### THE CLASS CLOSURE -- one line, NO new rows, and MEASURED over the whole open set
+
+Third generation of one class (`TB` -> `B26` -> `B27`), so the carrier's amendment governs:
+the repair owes the CLASS, not another cell.  Every `dec b*` op is `LINE|bit_N`, so **making
+that loop two-draw closes bit 24 and bits 26-31 at once**, and the rows strengthen from "MUST
+decline" to "MUST decline EXACTLY ONCE".
+
+**Verified over all six previously-open bits, not the two that were demonstrated** -- the seat
+MEASURED 27 and 31 and DERIVED 24, 28, 29, 30, and a closure that verifies two of six is a
+cell repair in closure clothing:
+
+| mutant | pre-repair | post-repair | rows red |
+|---|---|---|---|
+| `BASE` | 47/47 | **47/47** | -- |
+| `M_FLOOD_B24` | -- | 41/47 | **all six `dec b*`** |
+| `M_FLOOD_B27` | **47/47 escape** | **46/47** | `dec b27` |
+| `M_FLOOD_B28` | derived open | **46/47** | `dec b28` |
+| `M_FLOOD_B29` | derived open | **46/47** | `dec b29` |
+| `M_FLOOD_B30` | derived open | **46/47** | `dec b30` |
+| `M_FLOOD_B31` | **47/47 escape** | **46/47** | `dec b31` |
+| `M_FLOOD_B25` *(control)* | 44/47 | **44/47** | identical -- unperturbed |
+| `M_FLOOD_B26` *(control)* | 46/47 | **45/47** | gains `dec b26` -- strengthened |
+
+Both preserved side by side at `regress/artifacts/sgideprimop/killtable_20260902_table11_closure/`,
+the seat's pre-repair logs under `prerepair_seat_table/`.
+
+### *** AND I FIXED ONE RED AND LEFT ITS SIBLING TWO LINES BELOW IT ***
+
+`#500` added a `pty.fork` probe and broke **two** censuses in `gate_hygiene.sh`.  Pass 11
+raised one and never looked at the other:
+
+    readiness: pty-probe denominator             44 vs 43   <- pass 11 fixed this
+    readiness: promptless probes, grandfathered  18 vs 17   <- AND MISSED THIS
+
+**THREE SEATS FOUND IT INDEPENDENTLY** -- codex, kimi and grok, with no access to each other's
+answers, which is the only form of agreement this project counts as evidence.
+
+> **Pass 11's own headline diagnosis was "I close one side of a symmetry and leave the mirror
+> open."  It then did exactly that, in the same file, in the repair for that diagnosis.**
+
+Grandfathered deliberately -- one of the two dispositions the gate's own message offers -- and
+the statement is true rather than convenient: that probe drives the guest on fixed timeouts and
+has **no prompt predicate at all**.  Real readiness is FILED, because changing how it decides a
+command finished perturbs all 47 rows and owes a full re-table.
+
+### A THIRD FALSIFIED PREDICTION IN TABLE 10, AND ITS CAUSE IS THIS ROUND'S OWN FINDING 2
+
+The kimi seat found what my annotation missed.  The driver's block is headed *"PREDICTIONS,
+written BEFORE the run so the order is provable by mtime"* and says `M_ASSIGN  two once ALONE
+34/35`.  **Measured 43/47, redding FOUR rows.**
+
+**And every denominator in that block is `/35` against a 47-row probe** -- the predictions were
+copied forward from an earlier table and never re-derived.  M_ASSIGN's was written when only
+`two once` drew twice; pass 10 made three more sessions two-draw.
+
+> **The mtime proved the ORDER and the content was RECYCLED.  An mtime shows when a file was
+> written, never that its numbers were derived for the run they precede.**  That is finding 2 --
+> a stale number carried forward -- inside the driver annotated for findings 8 and 9.
+
+### Two L4s in my own filing, and one seat claim REFUTED by reading
+
+* **grok:** `dashphasedrop` said the matrix "shows nothing" for `gdromcondlies` and that
+  DECLARE would add "two columns".  Both false.  It renders `assess` 9, `research` 1, `review`
+  19, `regress` 1 and drops only the nine `implement` entries -- **a populated row with one
+  panel silently missing, which is worse than an empty one**, because a full-looking row invites
+  no question.  And phases are **rows**, seats are columns, so DECLARE adds two rows per bug.
+* **deepseek:** headline was that the deriver counts files containing `pty.fork` while the 44th
+  file "almost certainly does not contain" it.  **It does** -- `sgi_de_primop_probe.py:237` is
+  `pid, fd = pty.fork()`.  Refuted by reading; the seat hedged honestly.  Its Q2 point stands
+  and is filed: the pin can be set back to any wrong value and nothing reds, because the check
+  is battery-only.
+
+*Seats: opus5 DO NOT CLOSE (the L2, measured); codex, kimi, grok DO NOT CLOSE / CHANGES
+REQUESTED (all three found the sibling pin independently); fable5 CLOSE-the-floor-but-not-this-
+diff (found the 26/18 deriver bug and three more option members); minimax sound-with-one-gap,
+and the gap was the real one; deepseek NOT CLOSED, headline refuted.  **`ollama_glm` SEAT DOWN
+-- a THINKING BURN: 0-byte response inside 127 KB of hidden reasoning, `done_reason` stop.  A
+size check scores that the second-best answer in the panel.**  `agy` DELIBERATELY NOT FIRED
+(measurement reserve, owner ruling) -- not a seat failure and not agreement.*
+
+*And my own wall-detection grep was wrong: it flagged 41 markers in the codex file, every one a
+match on "quota" inside "quotation" in quoted repo text.  An unanchored grep, in the check
+written to catch unanchored problems.*
+
 ## Round #500 pass 11 -- the ADJUDICATION pass: a RED GATE that shipped in nine commits, and a correct number this chain overwrote
 
 **Conflict-of-interest badge `A`: AUTHOR SELF-REVIEW.**  I wrote all ten passes under review.

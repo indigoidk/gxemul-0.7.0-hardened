@@ -384,3 +384,30 @@ say "KILL500PE_DONE"
 #  scores, and M_OPS_ROP is a MEASURED deliberate green (rop is read by
 #  the enclosing function, not the latch body).
 #  =====================================================================
+
+#  =====================================================================
+#  SECOND ANNOTATION, ADDED 2026-09-02 AFTER THE PANEL -- NOT BACKDATED.
+#
+#  *** THERE WERE THREE FALSIFIED PREDICTIONS IN THIS TABLE, NOT TWO.  The
+#  kimi seat found the third, and its ROOT CAUSE is the same class as the
+#  finding this driver was annotated for. ***
+#
+#  3. M_ASSIGN.  The PREDICTIONS block above says "two once ALONE, 34/35".
+#     MEASURED 43/47, redding FOUR rows: two once, xlatch all, dec ops,
+#     dec flood.
+#
+#  *** AND LOOK AT THE DENOMINATORS: THE WHOLE BLOCK IS WRITTEN IN /35
+#  AGAINST A 47-ROW PROBE. ***  Those predictions were COPIED FORWARD from
+#  an earlier table and never re-derived, which is why M_ASSIGN's is stale:
+#  when it was written only `two once' was a two-draw session.  Pass 10 made
+#  three more sessions two-draw, so a dropped `|=' now floods four rows.
+#
+#  The block is headed "PREDICTIONS, written BEFORE the run so the order is
+#  provable by mtime".  The ORDER was honest; the CONTENT was recycled.  An
+#  mtime proves when a file was written, never that its numbers were
+#  re-derived for the run they precede.
+#
+#  *** THAT IS THIS ROUND'S FINDING 2 -- a stale number carried forward --
+#  living inside the driver that annotates findings 8 and 9.  Found by a
+#  seat, not by me, in the artifact I had already annotated once. ***
+#  =====================================================================

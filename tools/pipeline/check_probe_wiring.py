@@ -270,6 +270,14 @@ MANIFEST = {
     #  control proved both that the hole existed and that the repair closes it.
     "artifacts/sgideprimop/killtable_20260902_table4/negctl_n25_rectset_probe.py":
         (CLASS_RESEARCH, "#500 the negative control AS RUN -- drawmode store neutered; reds n25 rectset alone, 38/39"),
+    #  #500 pass 12: the FROZEN INSTRUMENT of the class-closure table.  A comparison
+    #  run owes ONE instrument, so the driver copies the probe once and every cell
+    #  scores against that copy -- a driver that re-reads the live probe between
+    #  cells gives run 1 and run 2 different tools, which this project has measured
+    #  (a 39/40 against a table of /39).  It is EVIDENCE, deliberately run by no gate;
+    #  the shipping copy is regress/sgi_de_primop_probe.py and gate_arm.sh runs that.
+    "artifacts/sgideprimop/killtable_20260902_table11_closure/frozen_probe.py":
+        (CLASS_RESEARCH, "#500 pass 12 frozen instrument for the class-closure table -- the 47-row probe AS MEASURED across B24/B27-B31 plus the B25/B26 controls"),
 
     "artifacts/widthkillclass/opus_impl_20260830/strengthen_comment.py":
         (CLASS_RESEARCH, "#497 applies the measured memory-safety wording at the two LINEAR sites only"),

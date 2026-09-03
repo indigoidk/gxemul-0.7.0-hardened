@@ -63,8 +63,11 @@ catch, and which it is NOT:
       would therefore leave every one of them green while making an unimplemented
       op ALIAS ONTO an implemented case -- 0x05000000 would be DRAWN AS LINE
       instead of declined, which silently draws rather than wrongly refusing.
-      `dec hi bit' is the only row with a bit above 25 and is the only thing that
-      can see it. ***
+      `dec hi bit' WAS the only row with a bit above 25.  *** AND IT NO LONGER
+      EXISTS -- it was superseded by `dec b26'..`dec b31' and TWO citations of it
+      were left behind (here and in the DOES NOT CATCH clause below), naming an
+      artifact that is not in this file.  That is precisely the class pass 11 was
+      sweeping for, found in the file doing the sweeping.  A seat caught it. ***
     * a repair applied to the WRITE direction only (`rd surv', `rd decl') --
       `if (startFlag)' is not conditioned on MEM_WRITE, so a START-aliased READ
       draws too.  Named by a seat; no row covered it before.
@@ -79,6 +82,15 @@ catch, and which it is NOT:
       ranges are now COVERED: bits 0-23 by the widened accept ops, bits 26-31 by
       `dec b26'..`dec b31'.  Recorded rather than deleted, because a no-row
       clause that outlives its own refutation is how a hole gets blessed. ***
+
+      *** AND THAT COVERAGE SENTENCE WAS TRUE OF ONE MUTANT CLASS AND FALSE OF
+      ANOTHER, WHICH A MEASURING SEAT PROVED WITH TWO CLEAN SWEEPS.  "bits 26-31
+      by `dec b26'..`dec b31'" is right about a NARROWED SWITCH MASK and was wrong
+      about a LATCH BYPASS, because those six sessions drew only ONCE.  BOTH classes
+      are named in the CATCHES list above, so the claim read as covering both.
+      **A per-CLASS coverage claim dressed as a per-BIT one** -- the same error one
+      altitude up from the per-row/per-table slip recorded further down.  Closed by
+      making those six sessions two-draw; see the loop and its block. ***
 
     * *** AND THE "BITS 24-25" GROUPING WAS ITSELF WRONG -- L4, corrected here
       after a packet-fed seat did the arithmetic.  The two bits do NOT behave
@@ -602,6 +614,20 @@ row("xlatch alliv", printed(t, "v0") if alive else "died", "0x0",
 #  THE FIXED BUILD, no mutant required.  That is exactly the defect it was built
 #  for, and the one that made `xlatch all' green while touching nothing it named.
 #
+#  *** "GOES TO 0" IS ITSELF AN UNMEASURED CHANNEL CLAIM, in a block whose whole
+#  thesis is that unmeasured channel claims are the defect.  A seat caught it. ***
+#  There are SIX distinct emission sites, one per window, so ONE wrong offset gives
+#  5, not 0.  It reaches 0 only under a SYSTEMATIC error hitting all six at once --
+#  which is exactly what the `+= 0x1000' mistake was.  Right about that historical
+#  defect; wrong as a general statement.
+#
+#  AND THE WITNESS IS 6 OF 9, NOT 9.  `xlatch all' claims "ALL NINE other latch bits
+#  set".  This oracle's `sgi_re:' prefix EXCLUDES SGIRE_W_DE_LEN, which prints
+#  `sgi_de: unimplemented len=', and NOTHING here witnesses SGIRE_W_UNMAP_WR or _RD.
+#  So "closes the alias space" is witnessed at six of nine.  RECORDED, NOT REPAIRED:
+#  widening this oracle changes a row that is currently measured and passing, and it
+#  belongs in the round that re-tables rather than in a records correction.
+#
 #  The DEVICE-side mutant that would red it is an alias between two *_LEN latches
 #  (give TLBB the TLBA bit: TLBA announces, TLBB is silenced, count 5).  Those
 #  latches are #498's and lie OUTSIDE this diff's clause-(d) closure, so that is
@@ -764,13 +790,55 @@ row("n25 noxset", t.count("op = 0x01ffffff, drawmode=0x0 src_mode="), 1,
 #
 #  Six rows is not cell-by-cell repair: it is the COMPLETE enumeration of a
 #  six-element space, which is what closure means when the space is finite.
+#  *** AND THESE SIX WERE SINGLE-STORE, WHICH MADE THEM STRUCTURALLY BLIND TO THE
+#  ENTIRE LATCH-BYPASS FAMILY.  MEASURED CLEAN SWEEPS -- floor clause (d), L2. ***
+#
+#  A measuring seat built the mutants and scored them against the SHIPPED 47-row
+#  detector (its logs, all ending OPUS500_DONE, are in this round's artifacts):
+#
+#      M_FLOOD_B25   latch || (op & 0x02000000)   44/47   two once, xlatch all, dec flood
+#      M_FLOOD_B26   latch || (op & 0x04000000)   46/47   dec ops
+#      M_FLOOD_B27   latch || (op & 0x08000000)   *** 47/47 TOTAL ESCAPE ***
+#      M_FLOOD_B31   latch || (op & 0x80000000)   *** 47/47 TOTAL ESCAPE ***
+#
+#  *** MY CRITERION WAS WRONG, AND IT WAS WRONG IN THE ANSWER I HAD JUST WRITTEN
+#  ONE PASS EARLIER. ***  I claimed no green control could exist because every bit
+#  is carried by SOME decline op.  The union claim is TRUE -- and it is not the
+#  criterion.  A latch bypass is only observable on a SECOND announcement of the
+#  SAME op literal, so a row can red only if its session issues TWO declining
+#  stores of one value.  There were exactly three such sessions:
+#
+#      two once / xlatch all   op 0x02000000   observes bit 25
+#      dec ops                 op 0x04000000   observes bit 26
+#      dec flood               op 0x02ffffff   observes bits 0-23 and 25
+#
+#  Observable: 0-23, 25, 26.  OPEN: 24, 27, 28, 29, 30, 31.  **`dec b26' stores
+#  0x05000000 -- which IS bit 26 -- and stayed GREEN under M_FLOOD_B26**, which is
+#  the proof that CARRYING a bit is not OBSERVING it.  I cited these six rows as the
+#  reason no green control exists; they are six rows that cannot red.
+#
+#  *** AND IT IS NOT A HARMLESS BLIND SPOT.  A bypass on bit 27 makes the device
+#  re-announce on EVERY access to op 0x09000000, a guest-writable value -- the exact
+#  log flood the `(once)' latch exists to prevent, and a class the CATCHES contract
+#  above names.  There is no bit position that is both un-observable and harmless. ***
+#
+#  THIRD GENERATION OF ONE CLASS (TB -> B26 -> B27), so the carrier's amendment
+#  governs: the next repair owes the CLASS CLOSURE, not another cell.
+#
+#  *** THE CLOSURE IS ONE LINE AND ADDS NO ROWS: DRAW TWICE. ***  Every op here is
+#  LINE|bit_N, so each carries bit 24 AND its own high bit.  Two stores of the same
+#  literal with `want=1' means a bypass on bit 24 or on ANY of bits 26-31 announces
+#  twice and reds that row.  With `dec flood' covering 0-23 and 25, the 32-bit space
+#  is CLOSED rather than sampled -- and the rows additionally strengthen from "MUST
+#  decline" to "MUST decline EXACTLY ONCE".
 for _bit, _op in ((26, "0x05000000"), (27, "0x09000000"), (28, "0x11000000"),
                   (29, "0x21000000"), (30, "0x41000000"), (31, "0x81000000")):
     A = Addr(CODE)
     t, alive, how = session(store(A, DE + PRIM_START, val=_op)
+                            + store(A, DE + PRIM_START, val=_op)
                             + load(A, 0xffffffff80002000) + ["print v0"])
     row("dec b%d" % _bit, t.count(declined(_op)), 1,
-        "%s = LINE|bit%d MUST decline -- kills a mask narrowed at bit %d"
+        "%s = LINE|bit%d declines ONCE in TWO draws -- narrowing AND bypass at bit %d"
         % (_op, _bit, _bit))
 
 #  ONE liveness companion for the family rather than six: the six rows above differ

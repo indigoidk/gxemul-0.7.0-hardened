@@ -342,7 +342,32 @@ check "readiness: no unrecognised endswith spelling" "$unknown" "$EXPECT_UNKNOWN
 #  (The `! -path artifacts' exclusion is load-bearing: the artifacts tree holds
 #  FROZEN probe copies, which are evidence rather than gate material.)
 EXPECT_PTY_PROBES=44
-GRANDFATHERED_PROMPTLESS="drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
+#  *** AND THE SAME PROBE BROKE A SECOND CENSUS IN THIS FILE, WHICH pass 11's OWN
+#  REPAIR DID NOT FIX.  Found by the codex seat reviewing that repair. ***
+#
+#  `#500' added `sgi_de_primop_probe.py', and it broke BOTH pty censuses here:
+#
+#      readiness: pty-probe denominator            44 vs 43   <- pass 11 fixed this
+#      readiness: promptless probes, grandfathered 18 vs 17   <- AND MISSED THIS
+#
+#  *** THAT IS THIS ROUND'S OWN HEADLINE FAILURE, COMMITTED INSIDE THE REPAIR FOR
+#  IT.  Pass 11 diagnosed "I close one side of a symmetry and leave the mirror
+#  open", raised the pin, and left the sibling census in the SAME FILE untouched --
+#  a second red that shipped in the same nine commits and survived the pass that
+#  was sweeping for exactly this. ***
+#
+#  Grandfathered DELIBERATELY, which is one of the two dispositions this gate's own
+#  message offers ("add prompt detection, or grandfather deliberately").  The
+#  statement is TRUE rather than convenient: the probe's `session()' drives the
+#  guest on fixed `settle'/`spin' timeouts and has no prompt predicate at all --
+#  `grep -c "endswith(" sgi_de_primop_probe.py' is 0.  So it belongs on this list
+#  exactly as the other seventeen do.
+#
+#  ADDING REAL READINESS IS FILED, NOT DONE, and the reason is scope rather than
+#  difficulty: changing how that probe decides a command finished perturbs all 47
+#  rows and owes a full re-measured kill table.  That is a round, not a records fix,
+#  and doing it inside a records pass is how a green detector becomes unverified.
+GRANDFATHERED_PROMPTLESS="sgi_de_primop_probe.py drive_guest.py gdrom_data_probe.py gdrom_default_probe.py
 sh_intprio_probe.py sh_iprbcd_probe.py sh_pclock_probe.py sh_tlbmulti_probe.py
 asic_badaddr_probe.py wdc_flood_probe.py gdrom_decline_probe.py
 gdrom_toclen_probe.py wdc_addtoinbuf_probe.py wdc_altoffset_probe.py
