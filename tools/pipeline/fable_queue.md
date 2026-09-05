@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2defaultkill` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 16 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 17 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -99,6 +99,18 @@ is the same defect this project has now recorded for the `_scratchpad/*.pdf` inv
 seat-status tables.  Name no rows here that the ledger can name for you.*
 
 <!-- END GENERATED: codex-wall -->
+
+### `pcc2defaultkill` (#501, `ecc4d3b`) — regress stage — **QUEUED 2026-09-05, and FIRED the same minute**
+
+Closed on pass 4 of a four-pass repair chain with a 46-row detector (23 -> 36 -> 46), four kill tables and four gate-14
+runs; the review passes were adversarial and measured, and the fix itself was never in question after pass 1.  The
+regress question is the fable-only one: **is the shipped instrument a sound REGRESSION detector** -- would a regression of
+the fix (the `exit(1)` reinstated at the arm, or any of the 21 killed shapes in `killtable4_20260905/`) turn gate 14 red;
+does every row's oracle observe what its note claims; which SURVIVAL rows are killed only by lethal mutants and is the
+lethal-only carve-out correct for them (`lethalonly`'s own rule question, on a new instrument); do the gate's 46 name
+anchors and the probe's rows still agree byte for byte.  Evidence: `regress/pcc2_default_probe.py` (contract in the
+docstring), `regress/gate_arm.sh` (the pcc2defaultkill section), `regress/artifacts/pcc2defaultkill/killtable4_20260905/`
+(driver.log, PRETABLE_501c.out, gate14_501c.log, gate14_501d.log), the CHANGELOG #501 block.
 
 ### `lethalonly` (#462, `7c9dd9e` + `15c4b0a`) — regress stage — **QUEUED 2026-08-24**
 
