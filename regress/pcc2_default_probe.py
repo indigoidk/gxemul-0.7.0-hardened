@@ -73,7 +73,10 @@ pass-3 repair; every pass-3 row was APPENDED to an existing session):
                                                        len 4, where data[0] says 0x5a)
   the announce omitting the access width            -> `wide wr msg' / `wide rd srvd' / `srvd half text' (`(len N)')
   the `relative_addr %= PCC2_SIZE' fold changed      -> `alias msg' (the announce names offset 0x2a, not 0x6a)
-  the fix perturbing a cased arm                    -> `genctl rt', `t1cmp word rt'
+  the fix perturbing a cased arm                    -> `genctl rt', `t1cmp word rt' -- BASE-anchored NEGATIVE CONTROLS: no
+                                                       mutant in any table perturbs a cased arm (the regress review, 2026-09-05)
+  the `%= PCC2_SIZE' fold changed (see below)        -> `alias msg' -- its only kill in any table is LETHAL (M_EXIT): the
+                                                       fold-naming claim is verified at BASE only; a fold mutant is FILED (pcc2anngrid)
 DISCLOSED, not caught: the read announce printing a RELOAD of the array instead of data[0] (Opus M_RELOAD, MEASURED
 36/36 on the pass-3 instrument and 46/46 on this one, table 4 -- expected: the two differ only on the end-span zero-fill path, where every reachable start offset's array
 byte is 0, and inside a running COUNT word, where the SIGALRM-driven tick (timer.c calls the callback from the

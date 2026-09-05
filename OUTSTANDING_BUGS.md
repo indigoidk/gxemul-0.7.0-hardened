@@ -14331,7 +14331,9 @@ value: every aligned uncased word reads zeros (Opus MO1 `data[len>>2]' MEASURED 
 put 0x99 at 0x14 through the counter arm's raw memcpy, but that route IS the filed `pcc2counter8' defect, so rowing
 it couples the detector to a bug: decide with `pcc2counter8'; (3) the announce's OFFSET label is pinned at five
 offsets (Opus MO3 `ra < 0x14 ? ra : 0' MEASURED 46/46) -- one `alias msg'-style count per class closes it; (4) every
-exact value anchor is EVEN, so `& ~1' on an announce operand passes (codex) -- use odd test values.  All four ride
+exact value anchor is EVEN, so `& ~1' on an announce operand passes (codex) -- use odd test values; (5) `alias msg' (the
+fold-naming row) has no non-lethal kill in any table -- one fold mutant (`%= 0x80', or the fold removed) would give it one
+(the #501 regress review, Fable, 2026-09-05).  All five ride
 the NEXT change of this instrument (each owes a table re-run and a gate), which is why they are filed, not rowed.
 
 **`pcc2latchinst` -- per-INSTANCE latch scope has no fixture (LOW, harness).**  Both `warned` (the twelve width

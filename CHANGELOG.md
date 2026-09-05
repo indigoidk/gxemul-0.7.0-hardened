@@ -270,8 +270,10 @@ re-read after its bit was set by a read and by a write); `inword msg`/`inword rd
 (one announce count and one read-back per remaining offset CLASS, the named class already having `latch sameoff` and
 the `rdawr` rows); and `srvd val text` reworded to count `0x5 (len 1) -- served 0x34` so the width label is
 load-bearing at len 1.  Two encoders (`LD_HU`, `ST_H`) borrowed from the width probe.  The product is untouched except
-two comment sentences.  46 rows; every name at most 14 characters (`srvd half text` is exactly 14; the gate's `%-16s`
-plus one space still leaves the two-space anchor -- the first draft said "under 14", codex, pass 4).
+two comment sentences.  46 rows; every name at most 14 characters (`srvd half text` is exactly 14) -- and the anchor's
+REAL bound is 15, not 14: the row printf is `%-16s` plus one separator, so a name of length L leaves 17 - L spaces and
+the gate's `^name  ` anchor needs two (the first draft said "under 14", then "at most 14"; the regress review derived
+the bound -- a longer name would FAIL loudly, not silently stop being counted).
 
 **Dispositions the pass changed or narrowed.**  F2 #7 (codex's tick reason for `data[0]`): grok narrowed it -- the tick
 writes back only T1COUNT/T2COUNT and only while a counter runs, so under this instrument `data[0]` and a reload are the
