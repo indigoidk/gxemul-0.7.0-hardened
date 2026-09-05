@@ -1,0 +1,71 @@
+PRE-TABLE, OPUS 5 SEAT, PASS 7.  Written BEFORE any mutant is built; this file's mtime
+against the mutant logs is the order witness.  Not edited after the table.
+
+BASELINE NAMED: GXEMUL-SEC/src/devices/dev_pcc2.c as it stands uncommitted on b78bb0f
+(md5 294222357ca13dfe632edbcfeb421ad6), cmp-clean into /tmp/gxopus_p7, rebuilt there.
+INSTRUMENT: frozen copy of GXEMUL-SEC/regress/pcc2_width_probe.py, md5 ef3f43b4... --
+which is part 6b's corrected instrument, so scores are comparable with part 6b.
+
+SECTION O1 -- THE CLAIM UNDER TEST.
+The contract says the guard's OPERAND SPACE is "CLOSED AS A CLASS", enumerating fields
+(pcctwo_reg[relative_addr], warned, pending_timer1/2 + the TxICR INT bit) and naming a
+carrying row for each.  The enumeration is PER FIELD.  The class-closure amendment demands
+the full space "from the function's own inputs" -- i.e. per (field, ARM) CELL.  The
+pend1/pend2 rows hold pending_timer* non-initial at exactly ONE of the twelve arms (TxICR).
+Both pass-6 measurements (Opus `&& d->pending_timer1_interrupts == 0', Fable
+`&& !d->pending_timer2_interrupts') were also at TxICR.
+
+MUTANT M1_PENDT2_ALL12: append `&& d->pending_timer2_interrupts == 0' to ALL TWELVE width
+guards (GENCTL, VECBASE, PSCALEADJ, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR,
+IPL, MASK).
+
+PREDICTION  M1_PENDT2_ALL12   157/159   RED = pend2 decl, pend2 rb   (exactly two rows)
+  Reasoning: pending_timer2_interrupts is written ONLY by pcc_timer_tick (SIGALRM), and only
+  the `pend2' session ever holds it non-zero.  That session's ONLY wide write is the guest
+  st.h at T2ICR.  So at the eleven arms other than TxICR the added conjunct is TRUE at every
+  decision point in all 159 rows and the guard behaves exactly as shipped.
+  The TxICR half is the SELF-CONTROL: it must reproduce pass 6's M_PENDT2_TXICR score and
+  red-set byte for byte (157/159, `pend2 decl,pend2 rb'), which proves the edit is live in
+  the binary.
+  IF THE SCORE IS 157/159 WITH THAT RED SET, then eleven of twelve cells for this field are
+  UNCOVERED and "closed as a class" is measured false.  If it is lower, some row I have not
+  identified covers another arm and the closure claim is stronger than I think.
+
+MUTANT M2_IPLZERO_ALL12 (only if time permits): append `&& d->pcctwo_reg[PCCTWO_IPL] == 0'
+to all twelve guards.
+PREDICTION  M2_IPLZERO_ALL12  155/159   RED = pend1 decl, pend1 rb, pend2 decl, pend2 rb
+  Reasoning: reassert_interrupts() sets reg[IPL] = intlevel = (TxICR & PCC2_TTIRQ_IL) = 1 in
+  both pend sessions and leaves it 0 in every other session (no interrupt source is armed).
+  At the ten non-TxICR arms the conjunct is inert.  The contract discloses this shape only
+  "at that guard" (IPL) and only with a "one message" consequence; at GENCTL/MASK/VECBASE the
+  consequence is a LANDED NEIGHBOUR LANE, and at GENCTL with lane 0xdd/0x44 it is a HOST KILL
+  via pcc2c040kill.
+
+SECTION O2 -- STATIC FINDINGS ALREADY DERIVED FROM THE TREE AND THE ROUND'S OWN ARTIFACTS,
+recorded here BEFORE the table so their order is witnessed too:
+ O2a  `rb4 genctl' and `rb8 genctl' kill by HOST DEATH, not by readback value.  The 4-byte
+      pattern's low lane is 0xdd and the 8-byte pattern's is 0x44; BOTH have PCC2_C040 (0x04)
+      SET, and GENCTL's body calls reassert_interrupts(), whose first test is
+      `if (reg[GENCTL] & PCC2_C040) { fatal(); exit(1); }'.  The probe still PRINTS
+      "NOROW  pcc2c040kill -- ... every GENCTL lane here keeps that bit clear".  MEASURED in
+      the round's own logs: part6b/M_W4FALL_ALL.out lines 85-86 read `died' for both rows,
+      while part6/M_W4FALL_ALL.out line 86 reads `0x33' for rb8 genctl (0x33 & 0x04 == 0).
+      The 0x33 -> 0x44 value change made to de-vacuate rb8 t2ctl/t2icr SILENTLY CONVERTED
+      rb8 genctl's channel from a value to a death.
+ O2b  PRETABLE_pass6b Section 13's landed-lane enumeration is wrong at SCCTX: it says
+      "SCCTX 0x44" but SCCTX's arm is `= idata & 0x1f', so the landed lane is 0x04.
+      Section 12's len-4 enumeration says "GENCTL/MASK/SCC*: 0xdd"; SCCICR and SCCTX are
+      `& 0x1f', so their landed lane is 0x1d.  Both harmless (still != preset), both wrong.
+ O2c  The contract's "only VECBASE 0x0f and PSCALEADJ 0xdf are non-zero at init" is FALSE:
+      dev_pcc2_init sets d->pcctwo_reg[PCCTWO_CHIPID] = PCC2_ID = 0x20
+      (mvme_pcctworeg.h:57).  A guard conditioned on reg[CHIPID] being NONZERO is therefore
+      NOT killed by `latch all' -- it is inert and escapes all 159 rows.
+ O2d  The operand enumeration omits `relative_addr', which the TxICR body reads four times.
+      (Covered in fact by `rb t1icr'/`op t1icr dcl'/`pend1 *' and `rb t2icr'/`pend2 *', so a
+      records gap, not a coverage gap.)
+ O2e  reassert_interrupts() is a CALLEE of seven of the twelve guarded bodies (GENCTL, TxICR,
+      SCCICR, SCCTX, SCCRX, SCSIICR, MASK) and reads reg[GENCTL], reg[T1ICR], reg[T2ICR],
+      reg[SCCTX], reg[SCCRX], reg[SCSIICR], reg[IPL], reg[MASK], pending_timer1/2 and
+      cur_int_vec is WRITTEN not read.  The contract's enumeration mentions none of this and
+      does not say whether callee reads are in or out of closure.  (The cur_int_vec claim
+      itself is TRUE: it is only ever written there.)

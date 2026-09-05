@@ -1,0 +1,45 @@
+PRE-TABLE, PASS 8, Opus seat.  Written BEFORE any mutant is built.  Clone /tmp/gxopus_p8
+(cp -a of build/), dev_pcc2.c cmp-CLEAN against SEC (md5 f9168636), frozen instrument
+/tmp/gxopus_p8/p8/frozen_probe.py md5 82c6a7c5 == the SHIPPED regress/pcc2_width_probe.py.
+BASE rebuilt in the clone, FRESH_OK ([ gxemul -nt src/devices/dev_pcc2.c ]).
+
+BASELINE NAMED: the round's post-pass-7 working set at HEAD b78bb0f + uncommitted, i.e. the
+exact bytes of GXEMUL-SEC/src/devices/dev_pcc2.c and regress/pcc2_width_probe.py today.
+
+PREDICTIONS
+    BASE            171/171   control
+
+    M_IPLR          171/171   TOTAL ESCAPE predicted.
+        The IPL arm has TWO function-statics named `w', dev_pcc2.c:629 (write branch) and
+        :634 (READ branch, the "IPL == 0 on read" latch).  The restated enumeration names
+        ONE ("IPL reads the function-static `w' (its #119 print latch): `ipl wset'").
+        Licensed three-part composite, exactly the form the round used for M_IPL_W:
+          (1) `static int w_r = 0;' hoisted to DEVICE_ACCESS scope        (inert: a decl move)
+          (2) the :634 block static deleted and its two uses renamed w_r  (inert: a rename)
+          (3) `&& !w_r' appended to the IPL width guard                   (the live edit)
+        WARRANT for the escape: the read latch is set only by a MEM_READ at 0x3e while
+        reg[IPL]==0 (the init state).  Sessions that READ IPL -- `hrd ipl'/`hrd ipl lv'/
+        `hrd ipl nod', `hrd ipl noro', `brd ipl noro' -- never wide-write IPL.  Sessions
+        that WIDE-WRITE IPL -- `ipl noig2/4/8', `ipl wset', `hwr ipl noig', `hwr ipl'/
+        `hwr ipl dcl', `latch all', `latch all w', `latch all d', `latch all one' -- never
+        read IPL.  No session does both, so w_r is 0 at every decision point.
+
+    M_WARNX         171/171   TOTAL ESCAPE predicted.
+        `&& !(d->warned & (1u << PCC2_W_MASK_LEN))' appended to the GENCTL width guard --
+        the pass-5 canonical `&& !(d->warned & (1u << bit))' form with ONE TOKEN changed,
+        the enum member (the ALIAS slip, which this file's own history has: the MASK arm's
+        comment was copy-pasted from IPL and corrected THIS pass).
+        WARRANT: `rb2 *' holds each arm's OWN latch bit; nothing holds ANOTHER block's bit
+        set at this arm's wide write.  GENCTL is offset 0x02 and is written FIRST in
+        BLOCKS12, so in `latch all'/`latch all w'/`latch all d'/`latch all one' MASK's bit
+        is still clear when GENCTL is written.  `latch aba' sets VECBASE's bit, not MASK's.
+        Every other GENCTL wide-write session (rb genctl, rb genctl dcl, rb vecbase,
+        rb genctl lo, rb2 genctl, rb4/rb8 genctl, hwr genctl, latch same, latch two)
+        touches MASK not at all.  So the conjunct is TRUE at every GENCTL decision point.
+
+    F1 (instrument measurement, no product mutant): the shipped session() resolves
+        `until' to the single character "n" for ("continue", 20.0, "BREAKPOINT"), because
+        line 383 rebinds c to c[0] before line 384 indexes it.  Predicted: until == 'n'
+        and the post-`continue' wait returns in < 0.15 s, not the claimed 20 s ceiling.
+
+IF A PREDICTION FAILS I WILL SAY SO IN THE LOUD DIRECTION AND KEEP THE MEASURED NUMBER.

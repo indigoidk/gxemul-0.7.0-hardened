@@ -1,0 +1,19 @@
+VERDICT: NOT NONE. The smallest escape is ONE CHARACTER: `writeflag == MEM_WRITE` → `writeflag <= MEM_WRITE` in the guard of any ONE operator-only ODD block (VECBASE / PSCALEADJ / SCCICR / SCCRX / SCSIICR / MASK). It breaks READS-ACCEPT (wide reads at that block now decline, announce, consume the latch) and passes all 118 rows, because the packet itself says the odd blocks' read side has no channel.
+
+WHY IT PASSES
+1. REASONED: `<= MEM_WRITE` is true for both writeflag values, so the WRITE side is byte-identical: same announce text, same latch bit, same refusal. Every write row (op dcl, latch all/w/d, rb2, acc) is untouched. Premise writeflag∈{0,1} at dispatch: packet states MEM_READ is 0 (READ) and that `put h` at odd addresses measurably FIRES the guard (READ), which only holds if `== MEM_WRITE` is true on dispatched writes.
+2. READ: the RDDECL shape was measured 82/82 pre-closure at all twelve (MC); it was closed ONLY by `hrd <block> nod` / `wrd sccerr nod` on the seven EVEN-block wide-read sessions.
+3. READ: packet discloses the six odd blocks' read-side cells are "UNREACHABLE by construction ... disclosed, not rowed" — guest wide read at an odd offset alignment-faults before memory_rw; debugger read does not dispatch to a DM_DEFAULT device.
+4. REASONED: therefore no session ever issues a wide read at the mutant block: no spurious DECL text enters any counted transcript (the generic-DECL counts are transcript-wide, but nothing generates it), and the latch bit is never consumed early. Byte traffic is inert (`len != 1` conjunct kept), so acc rows stay green.
+5. REASONED: total output delta over all 118 sessions: zero. This is the RDDECL mutant localized to exactly the blocks the closure left unrowed -- a disclosed hole, not a new shape.
+
+SECOND ESCAPE (write side, 6 chars): FALL at SCCERR -- delete `break;`. The guest wide write LANDS in a live session (WRITES-DECLINE broken on real traffic), but READ: the packet's own E cell warrants it -- the arm stores 0 and nothing in the model ever stores a nonzero SCCERR, so the landing is value-identical, and the announce still fires, keeping every message and cardinality row green. Disclosed, not found by me.
+
+HELPER-ONLY: REASONED: cannot break direction at all. The helper receives no writeflag and touches no control flow other than announce-once state; every TEST/SET one-token edit either changes announce cardinality (rowed: latch all / aba / same2) or is equivalent (`^=`, `+=`, `bit+1`). `fatal(`→`debug(` is disclosed NOT CAUGHT but preserves the decline, so it does not break the split.
+
+PREMISES NOT SETTLEABLE FROM THIS PACKET
+- P1: that `rb *` / `rb2 *` readbacks at odd blocks are byte reads or non-dispatching debugger reads (readback width is never stated). REASONED safe: a wide guest readback at an odd offset would fault in BASE too. Settler: the session scripts' readback ops.
+- P2: that no caller ORs NO_EXCEPTIONS into writeflag at dispatch. Indirectly settled by the op-dcl rows firing (READ), but the dispatch code is not in the packet. Settler: memory_rw's dispatch guard.
+- P3: the SCCERR-always-zero warrant rests on a grep (`grep -F 'pcctwo_reg['`) I cannot re-run; taken as disclosed (READ).
+
+DENOMINATOR (for the record, though the verdict is not NONE): swept the eight tabled shapes x 12 blocks, RDDECL, the helper TEST/SET one-token families, width-subset guards ({2,4,8} via the three cardinality rows), M_QUAL's latch-conjunct, M_RET0, and severity/text edits. Escapes surviving 118/118: exactly the two disclosed cells above -- RDDECL at any one odd block (1 char) and FALL at SCCERR (6 chars).

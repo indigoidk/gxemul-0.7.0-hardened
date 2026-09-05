@@ -1,0 +1,116 @@
+I'll start by reading the full offloaded brief, then verify the enumeration against `GXEMUL-SEC` source rather than ratifying the packet.HEAD is `b78bb0f` with the claimed uncommitted files. Next I’ll re-derive the 12×9 cells from `dev_pcc2.c` and the probe instead of the packet’s table.Arm bodies match the packet. Next I’ll re-derive reachability, row names, SCCERR stores, and whether the 9-shape list actually covers the guard’s inputs.Checking debugger fill flags and whether SCCTX DEL was actually measured, then I’ll write the verdict.**VERDICT: NOT RATIFY as a class-closure.** The filled 12×9 cells are mostly right when re-derived from `GXEMUL-SEC/src/` (SCCERR FALL **E** and odd-block RDDECL **UNREACHABLE** hold). The domain is not closed on two guard inputs this pass named: `idata==0` as an extra conjunct, and `len==8` (`put d`, which the contract itself says reaches the arms). That is not a closing zero. Denominator actually swept: 12 blocks × the 9 named shapes + the two T1 FALL labels, from source; not the `idata==0` qualifier and not `len==8`.
+
+agy was not fired here (reserved for measurement). This is a file-reading pass. The `&& idata` escape is **predicted from the rows, not measured**.
+
+---
+
+## 1. The enumeration
+
+### (a) Domain
+
+Guard inputs named: `len`, `writeflag`, `relative_addr` → block, `idata`, `d->warned`. Re-derived:
+
+- **12** `if (len != 1 && writeflag == MEM_WRITE)` sites in `dev_pcc2.c`. Offsets from `mvme_pcctworeg.h`: even **GENCTL 0x02, T2CTL 0x16, T2ICR 0x1a, SCCERR 0x1c, SCCTX 0x1e, IPL 0x3e**; odd-only **VECBASE 0x03, PSCALEADJ 0x15, SCCICR 0x1d, SCCRX 0x1f, SCSIICR 0x2f, MASK 0x3f**; T1 labels **0x17 / 0x1b** share TxCTL/TxICR. Header legal widths are 1/2/4, not 8.
+- **`len`:** guest 1/2/4 (alignment in `cpu_m88k_instr_loadstore.c` under `#ifndef LS_1`); debugger `put h/w/d` → `store_{16,32,64}bit_word` → `memory_rw` with `CACHE_DATA` (no `NO_EXCEPTIONS`), so **len=8 reaches the same arms**. GROW/LEN/LEN2 cover 1/2/4. Nothing covers “2 and 4 still declined, 8 lands”.
+- **`writeflag`:** `MEM_READ=0`, `MEM_WRITE=1` (`memory.h`). `==` → `<=` is RDDECL and is rowed. `&&` → `||` reds acc all **and** the nod rows.
+- **`d->warned`:** 12 enum members + `PCC2_W_NBITS`; written only in `pcc2_width_decline()`. ALIAS is the collision shape. C via `latch all` is the right channel.
+- **`idata` is the hole.** PRETABLE §1 listed three disagreeing states and treated `(len==2, idata<=0xff)` as one cell, sampled at **0x0022 and 0x0003, both nonzero**. Clause (d)’s own example is `if (X)` → `if (X && Y)` with `Y` a body-read field. `&& idata` is that form. SWAP (`len` → `idata > 0xff`) is a different mutant and is already killed by those two rows.
+
+The heading “Twelve blocks × **six** clause-(d) shapes” is stale: the table has eight write-side columns plus RDDECL.
+
+### (b) S cells — land or die as the measured shape at that arm?
+
+Walked from the arm bodies, not from the packet:
+
+| cell | warrant | holds? |
+|---|---|---|
+| GENCTL LEN S | `len > 2` lets `st.h 0xaabb` store `(uint8_t)idata=0xbb`; `rb genctl` wants `0x82` | **yes** (same value channel as measured DEL) |
+| storing-arm DEL/LEN S with a readback (VECBASE, TxCTL, SCCICR/RX, SCSIICR, MASK) | land `(uint8_t)idata` through that arm’s store | **yes, where a readback exists** |
+| print-only DEL/LEN S (PSCALEADJ, IPL) | body prints; `op pscale noig` / `hwr ipl noig` plus the named `dcl` | **yes** |
+| SCCERR DEL/LEN S | value-identical (`= 0`); `hwr/wwr sccerr dcl` want 1 | **yes** — not survival-only |
+| KILL S | host dies; paired survival+lv | **yes** |
+| TxICR/SCCTX FALL S | readback still moves under announce-then-land | **yes** |
+
+Two **status** errors, not missing channels:
+
+- **TxCTL FALL is M, not S.** `part3b/driver.log`: `M_FALL_TXCTL` 94/96, `rb t2ctl` **and** `rb t1ctl`.
+- **VECBASE DEL is M, not S.** kimi’s `delete@VECBASE` 80/82 (`latch all`, `op vecbase dcl`).
+- **SCCTX DEL is S, not M.** `part1/driver.log` has `M_LENGT2_SCCTX`, not a SCCTX delete. No named log.
+
+### (c) E and UNREACHABLE
+
+**SCCERR FALL E — true.** The write body is `d->pcctwo_reg[relative_addr] = 0`. `grep SCCERR` in `dev_pcc2.c` hits the case, the enum, and comments. Init is `memset` then CHIPID/CHIPREV/GENCTL/VECBASE/PSCALEADJ only. Tick/reassert never write SCCERR. Decline leaves 0; land stores 0.
+
+**Odd-block RDDECL UNREACHABLE — true.** Guest: `#ifndef LS_1` alignment-faults before `memory_rw`; `relative_addr %= 0x40` keeps parity. Debugger reads (`dump` `:716`, fill `:1006`, unasm `:1918`) all pass `NO_EXCEPTIONS`. `put b` is `memory_rw(..., 1, MEM_WRITE, CACHE_NONE | NO_EXCEPTIONS)`. Dispatch is `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))`; pcc2 registers `DM_DEFAULT` (`:726-728`). IPL is even and **is** rowed (`hrd ipl nod`). T1 labels are odd; same UNREACHABLE.
+
+**RDDECL wording overstates.** `memcpy` of the read happens **above** the switch. For 11/12 arms the “read body” is empty; the guest still gets the bytes. The kill is the spurious `DECL`, which is what the nod rows count. Only IPL’s `IPL==0` print is actually skipped.
+
+### (d) C / W / A cardinality
+
+**Not inflatable by a benign session event.** `DECL = "-- declined.  (once) ]"` does not appear in the align warning, the HUH prints, `"PSCALEADJ ignored"`, or `"write to read-only PCCTWO_IPL"`. `d->warned |=` exists only inside `pcc2_width_decline()`. Each `session()` is a fresh `execv`. A flood (dropped `|=`) **reds** `latch same` (want 1); it cannot hide a missing announce.
+
+**W:** `latch all w` is twelve `put w` of `0x00000003`. A `len == 2` guard at any arm lets that word land and drops the count. SCCERR’s own `wwr sccerr dcl` is the stronger S, and is real.
+
+**A/C:** `acc all` is twelve guest `st.b` of `0x10` (C040 bit 0x04 clear). Part 3c measured `M_GROW_PSCALEADJ` 95/96 on `acc all`. The `put b` vacuity is real (`part3b`: 96/96 with `len != 0` proven in the binary).
+
+Caveat, not a floor hole: `BLOCKS12` uses **T2** offsets (`0x16`/`0x1a`) for the shared blocks. A T1-only GROW after splitting the case labels would miss `acc all`. That is a two-edit composite; FALL already has `rb t1ctl`/`rb t1icr` for the one-edit split+land.
+
+---
+
+## 2. Smallest edit that still passes 96
+
+**Predicted, not measured.**
+
+At any **one** non-SCCERR block:
+
+```c
+if (len != 1 && writeflag == MEM_WRITE && idata) {
+```
+
+Zero-valued wide write lands; every existing wide-write row uses a nonzero `idata` (`0xaabb`/`0xaab8`/`0x0022`/`0x0003`/`0x0303`/`0x1234`). The one zero write in the probe is `wwr sccerr` of `0x00000000`, so this edit at SCCERR **reds** `wwr sccerr dcl`. Everywhere else it does not.
+
+Rows expected to stay green: **all 96**, including `rb genctl lo` (0x0022), `latch all` (0x0003), `latch all w` (0x00000003), `acc all` (len=1 never enters the guard).
+
+That re-opens the lane store for `st.h 0x0000` — the original write-side defect, at value 0. `latch all`’s 0x0003 was chosen to kill SWAP; 0x0000 would have killed SWAP **and** this conjunct (on the fix the value never lands, so the want stays 12).
+
+Second, weaker: `&& len != 8` at any arm. `put d` → `store_64bit_word` → `memory_rw(len=8, CACHE_DATA)` does dispatch. No row uses `put d`. Guest cannot: none of the twelve offsets is 8-aligned. Legal 2/4-byte widths stay declined. File, don’t promote over `&& idata`.
+
+No one-token **constant** swap in {1,2,4,8} escapes: `len != 8` as a replacement of `len != 1` declines bytes and reds `acc all`.
+
+Disclosed non-kills (not property breaks): SCCERR FALL (E); name-string-only at a generic-`dcl` odd arm.
+
+---
+
+## 3. Option-set completeness: N/A
+
+Agreed. No new disposition. Product behaviour is the already-shipped direction split. This pass is detector class-closure.
+
+---
+
+## 4. Is the record honest?
+
+**Mostly, with these false or over-strong sentences:**
+
+1. **“Product diff is comments only.”** False. `typedef char pcc2_w_fits_in_warned[PCC2_W_NBITS <= 32 ? 1 : -1];` is a compile-time constraint. `git diff --numstat` is `22 10` on `dev_pcc2.c`.
+2. **“Twelve blocks × six shapes”** in the contract, over an 8+1 table.
+3. **TxCTL FALL = S** and **VECBASE DEL = S** contradict named measurements (part3b; kimi 80/82). **SCCTX DEL = M** has no `M_DELETE_SCCTX` log in `part1/driver.log`.
+4. **“five odd-arm `dcl` rows count the generic decline text.”** `op * dcl` uses `t.count(DECL)` for **seven** names (vecbase, pscale, t1ctl, t1icr, sccicr, sccrx, scsiicr). Five is the odd-only subset excluding T1 labels.
+5. **CATCHES: “read back through each arm’s own mask.”** `acc all` counts `DECL` only. Value readback exists at five `acc *` rows plus the pre-stores of the FALL readbacks, not at every arm.
+6. **PRETABLE §2 still says PSCALEADJ is “plain store, no mask.”** It stores nothing. The pass-3 annotation fixed VECBASE/`rb vecbase` and IPL’s channel and left this.
+7. **PRETABLE split:** honest as stop-the-bleeding. Section 0 says the mtime **no longer proves** order. Restoring 0–4 sets a new mtime; the discriminator is not resurrected. The bracketed §2 annotation is a post-hoc edit to the “as first written” body, and is disclosed.
+
+What **is** honest: part3 BASE 95/96 `rb t1ctl` (string `0x03` vs print `0x3`); 3b BASE 96/96; `M_GROW_PSCALEADJ` 96/96 on the `put b` form then 95/96 after `st.b`; `M_RDDECL_ALL` 88/96 (seven nod + the then-broken `rb t1ctl`); `M_ALIAS_SCCTX` transferred from 78 rows, not re-run; `put b` vs `put h/w/d` dispatch; six even / eight odd; eight mask-RMW-clear arms and seven `reassert_interrupts` callers (re-counted from the switch: GENCTL, TxICR, SCCICR, SCCTX, SCCRX, SCSIICR, MASK).
+
+Gate list: 96 names, matching 96 `row()` calls. `PCC2W_PROBE_DONE` present.
+
+---
+
+## Something else
+
+- **`memcpy` on READ is above the switch.** Opus’s “skipped the arm’s read body” is empty for 11 arms. Nod rows still kill RDDECL; `val h genctl` / `val w sccerr` stay green under it by construction.
+- **IPL still has `#119` `static int w`** for the read-only print and the `IPL==0` print. Width latch is per-instance; those two messages are still process-global. Harmless because every session is a new process; it is not the width latch.
+- **`rb t1ctl` comment “lands 0xb8 & mask”** is wrong for TxCTL. The arm is RMW (`&= 0xfc; |= idata & 3`), so FALL of `0xaab8` stores **0**, which is what part3b measured.
+- **SCCRXIACK** really has no width guard and ignores `idata` (clears `PCC2_IRQ_INT` on SCCRX, reasserts). Excluding it is right. `PCCTWO_SCCTXIACK` is not in the switch (default `exit(1)` / `pcc2defaultkill`).
+- **`PCC2_C040` is 0x04**, not the header’s `PCC2_GENCTL_C040` (0x03). Probe lanes keep bit 0x04 clear. That match is load-bearing.
+
+**Cells re-derived from source, not from this packet:** the 12 guards, header offsets and the “bytes / two-bytes / four-bytes” sentence, all 12 arm bodies, reassert/mask counts, SCCERR stores, `MEM_READ`/`MEM_WRITE`, `memory_readmax64` BE, `put b` vs `store_Nbit_word`, `DM_DEFAULT` + dispatch predicate, m88k `#ifndef LS_1`, every debugger `memory_rw` in `debugger_cmds.c` carrying `NO_EXCEPTIONS`, `warned` writers, `store_64bit_word`, the typedef, and the 96 gate names.

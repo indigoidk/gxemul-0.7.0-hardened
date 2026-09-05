@@ -1,0 +1,43 @@
+#  ---- INSERT after the existing `latch two' row in regress/pcc2_width_probe.py ----
+
+#  CARDINALITY, not pairwise distinctness.  `latch same' and `latch two' pin ONE pair
+#  out of 66: every other session writes at most one BLOCK, so a bit shared by any
+#  other pair announces normally and no row moves.  MEASURED: aliasing SCCTX onto
+#  SCCRX's bit -- a ONE-CHARACTER edit -- left the 60-row detector at 60/60.
+#  ONE OFFSET PER BLOCK: TxCTL serves T1CTL+T2CTL and TxICR serves T1ICR+T2ICR, so
+#  twelve LABELS would give only ten announces.  That collapse is the same units slip
+#  that let "five even blocks + seven odd ones = twelve" read as all twelve blocks.
+#  This is also the only row that reaches PCCTWO_IPL (0x3e) or PCCTWO_MASK (0x3f).
+BLOCKS12 = (("GENCTL", 0x02), ("VECBASE", 0x03), ("PSCALEADJ", 0x15), ("TxCTL", 0x16),
+            ("TxICR", 0x1a), ("SCCERR", 0x1c), ("SCCICR", 0x1d), ("SCCTX", 0x1e),
+            ("SCCRX", 0x1f), ("SCSIICR", 0x2f), ("IPL", 0x3e), ("MASK", 0x3f))
+t, alive, how = session(["put h 0x%x, 0x0303" % (PCC2 + o) for _, o in BLOCKS12])
+row("latch all", t.count(DECL), 12,
+    "one wide write per BLOCK -> TWELVE announces: bit CARDINALITY, not one pair")
+row("latch all lv", how, "exit0", "...and the host survived all twelve blocks")
+
+#  ---- INSERT into / after the guest survival loop ----
+
+#  PCCTWO_IPL is at 0x3e -- EVEN, so an aligned st.h reaches it from the GUEST.  The
+#  product comment's census names only five even blocks and omits it; the CHANGELOG
+#  gets it right.  MEASURED: a verbatim exit(1) reinstated here is invisible to the
+#  shipped 60 rows.
+t, alive, how = session(setup(r6="0x0303")
+                        + program([I_ST_SCR, ST_H(6, IPL), I_LD_SCR]) + ["print r4"])
+row("hwr ipl", how, "exit0", "st.h IPL (0x3e is EVEN -- GUEST-reachable) survives")
+row("hwr ipl lv", printed(t, "r4") if alive else "died", "0x5a5a5a5a", "...and runs on")
+
+#  ---- INSERT after the `rb vecbase' row ----
+
+#  SCCTX's arm masks `& 0x1f', so at THIS arm a declined write and an accepted one
+#  store DIFFERENT values -- unlike SCCERR, where the contract correctly records that
+#  they are value-identical.  Its only wide-write rows were survival-only, and
+#  MEASURED: deleting the guard at SCCTX alone left the detector at 60/60.
+t, alive, how = session(setup(r5="0x1f", r6="0xaabb")
+                        + program([ST_B(5, SCCTX), ST_H(6, SCCTX), LD_BU(4, SCCTX)])
+                        + ["print r4"])
+row("rb scctx", printed(t, "r4") if alive else "died", "0x1f",
+    "SCCTX unchanged after a declined st.h -- decline != accept at this arm")
+
+#  ---- and add IPL to the offsets block near the top ----
+#  IPL, MASK = 0x3e, 0x3f

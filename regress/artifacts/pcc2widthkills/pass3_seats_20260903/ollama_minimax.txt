@@ -1,0 +1,69 @@
+**VERDICT: REPAIR HAS UNACKNOWLEDGED GAPS, INTERNAL ARITHMETIC ERROR, AND TWO PREMISES THAT CANNOT BE SETTLED FROM THE PACKET. The 82-row detector does not close clause (d).**
+
+---
+
+## Defects found, READ or REASONED
+
+**D1. ARITHMETIC ERROR in the product diff comment (READ from the inlined diff).** The hunk that updates the reachability census says:
+
+> "the SIX EVEN-offset blocks (GENCTL, TxCTL, TxICR, SCCERR, SCCTX, IPL) are GUEST-reachable ... the six odd ones -- VECBASE, PSCALEADJ, **the T1 labels**, SCCICR, SCCRX, SCSIICR, MASK -- are OPERATOR-reachable"
+
+"The T1 labels" denotes two offsets (T1CTL 0x17, T1ICR 0x1b). The list therefore enumerates **eight** odd offsets, not six. Premise 3 of the same brief enumerates only six (VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR, MASK) and omits the T1 labels entirely. **One of these two lists is wrong; the brief contradicts itself.** The factually correct count is 6 even / 8 odd OFFSETS, or 12 ARMS if TxCTL/TxICR are counted once for the shared case label. The shipped comment will mislead a future reader.
+
+**D2. S5 (announce-then-fall-through) IS NOT CLOSED at three arms (REASONED from the inlined code + the row table).** The brief added four readback/print-count rows (rb sccicr, rb sccrx, rb scsiicr, op pscale noig) for SCCICR/SCCRX/SCSIICR/PSCALEADJ. But three other arms have the same gap and were not touched:
+
+| arm | S5 channel available? | row that catches it |
+|---|---|---|
+| VECBASE | body presumably writes the byte (not inlined) | NONE -- `op vecbase dcl` cannot vary under S5; `rb vecbase` uses a guest st.h at offset 0x03, which is alignment-checked (premise 4) and never reaches the arm |
+| SCCERR | brief itself says "VALUE-IDENTICAL (always 0): message only" | NONE -- body writes 0 in both fix and S5; decline message still fires |
+| IPL | brief itself shows the write body stores nothing and only prints "read-only; ignored" | NONE -- `hwr ipl dcl` counts the width-decline message, which S5 still emits; the readback row's expectation is value-independent of IPL's byte |
+
+The brief's own Section 5 says "a disclosure cannot discharge a floor clause." By that rule the three gaps above are floor breaches the repair did not close. The "class closure" claim is overstated.
+
+**D3. PREMISE 6 (fatal returns) CANNOT BE SETTLED FROM THE PACKET.** The entire analysis rests on `fatal()` returning so the `break;` after `pcc2_width_decline(...)` is reached. The inlined excerpt from `debugmsg.c` is empty -- there is no inline of `fatal()` at all. The brief asserts this as fact. **A seat that does not see `debugmsg.c` cannot ratify this.** If `fatal()` does not return, the decline arm falls through to the next case label after the missing `break;`, and the rows measure entirely the wrong behavior. The single fact that would settle it: the body of `fatal()` in `GXEMUL-SEC/src/debugmsg.c`.
+
+**D4. PREMISE 5 (seven of twelve arms call reassert_interrupts) CANNOT BE SETTLED FROM THE PACKET.** Eight of the twelve arms are inlined (PSCALEADJ, TxCTL, SCCICR, SCCTX, SCCRX, SCSIICR, IPL, plus SCCRXIACK which has no width guard). Of those, four width-guard arms call reassert (SCCICR, SCCTX, SCCRX, SCSIICR). The other four width-guard arms (GENCTL, VECBASE, SCCERR, TxICR, MASK) are not inlined in this packet. The brief says the count of 7 is "derived by awk over the arms" -- an external derivation. The product diff comment also revises this count ("eight arms mask ... seven of the twelve blocks call reassert_interrupts() (five of those eight; a seat measured the earlier 'six' wrong)") -- if the prior "six" was measured wrong, the current "seven" is not directly checkable either. **Name the awk output, or show the four missing arms.**
+
+**D5. SHAPE NOT IN THE ENUMERATION slips through at every non-SCCERR block (REASONED).** The six shapes are: guard deleted, `len > 2`, exit(1), alias, fall-through, operand swap. A seventh shape -- `len != 1` -> `len > 1 && len < 4` (decline only halfword, allow word) -- is undetected at every block except SCCERR. Reasoning: the probe exercises halfword writes at every block; under this mutant the halfword is still declined, so the readback rows still see the pre-decline byte, the decline rows still count one announce, and the survival rows still see exit0. Only SCCERR has word-write rows (`wwr sccerr`, `wwr sccerr dcl`), which is what makes M_LENGT2_SCCERR killable. The brief's claim that the enumeration is closed therefore depends on the choice of six shapes, not on the shape space.
+
+**D6. QUESTION 1(d) CANNOT BE ANSWERED FROM THE PACKET.** PASS 3c records `M_FALL_SCCICR/RX/SCSIICR` as killing `rb sccicr/sccrx/scsiicr` on the 82-row detector, but does not record whether the failure mode is "died" (reassert_interrupts terminated the host via the pcc2c040kill class) or byte mismatch (0x18/0x98 instead of 0x1f). The brief itself flags this as the question. The single fact that would settle it: re-run the four M_FALL_* mutants with the transcript distinguishing `printed(t,"r4")` from `"died"`.
+
+**D7. INTERNAL INCONSISTENCY between PRETABLE Section 2 and Section 5 (READ).** Section 2 (written before part 2) says: "PSCALEADJ/SCCICR/SCCRX/SCSIICR have no readback row." Section 5 amends this with three new readback rows for SCCICR/RX/SCSIICR. Section 2 is not updated. A reader of the composite document who only reads Section 2 will believe the asymmetry is wider than it now is. Either edit Section 2 in place or note the amendment explicitly in Section 2.
+
+**D8. `rb vecbase` IS LIKELY DEAD (REASONED from premise 4).** The row's program is `ST_B(5, VECBASE), ST_H(6, VECBASE), LD_BU(4, VECBASE)`. Premise 4 says "every non-byte m88k access is alignment-checked before memory_rw," and VECBASE is at 0x03 (odd). A guest `st.h` at 0x03 is misaligned and does not reach `memory_rw` -- so the VECBASE arm's body never runs in this session, regardless of whether the width guard is present, deleted, or fall-through. The row therefore cannot vary under any width-related mutant at VECBASE. PASS 2 table 2 part 1 confirms this empirically: no mutant in the table kills `rb vecbase`. The actual coverage for VECBASE's width guard is `op vecbase dcl` (operator path). The brief does not acknowledge this, and the `rb vecbase` row persists in both the old and new gate lists. **Either rewrite it on the operator path or remove it.**
+
+---
+
+## Question 2 -- the smallest edit that slips through
+
+**Shape:** change `len != 1` to `len > 1 && len < 4` at any non-SCCERR block (e.g., GENCTL).
+
+**Why it slips:** the probe's wide writes are halfword (len=2), which is still declined. `rb genctl` sees 0x11, `rb genctl dcl` sees 1, `hwr genctl` sees exit0, `hwr genctl lv` sees 0x11, `latch all` sees 12 announces (the affected block still declines). Only `wwr sccerr dcl` would catch this shape, and it does so only at SCCERR.
+
+**Row expected to stay green:** `rb genctl` (or any halfword-using row at the affected block).
+
+**Single fact that would settle it:** a mutant with `len > 1 && len < 4` substituted at GENCTL, run against the 82-row detector, with the result printed row-by-row. None of the halfword rows at GENCTL should move; `latch all` should still read 12. The class closure claim fails if this mutant produces all-green.
+
+---
+
+## Other observations
+
+- The product diff is in fact COMMENTS + one typedef (the `pcc2_w_fits_in_warned` array), as the brief states. No behavioural change in the device. **Verified by line count: 21 added, 10 removed, all in comments and the typedef.**
+- The gate diff's row-count delta (60 -> 82) is correct: 22 new entries in the gate list, matching the 22 new rows in the detector diff.
+- `latch all` as a CARDINALITY row is sound (question 1b), **provided each session is a fresh emulator instance.** The diff does not show the `session()` helper, but the existence of `d->warned` as a per-instance field implies it. If `session()` is not per-instance, the row is unsound and the pass-2 measurement is invalid.
+- `op pscale noig` is a real channel (question 1c) **conditional on Premise 6 holding** -- the "PSCALEADJ ignored" print must reach the pty transcript the row counts, which requires `fatal()` to print and return rather than abort.
+- The brief's claim "this round's own pass 2 refuted a reachability census the author had written into product code (five even blocks; it is six)" is consistent with the diff: the comment was updated from "five" to "SIX". The new "six odd ones" claim, however, is the new error (D1).
+
+---
+
+## Premises I name as not checkable from this packet
+
+1. `fatal()` returns (Premise 6). Settling fact: body of `fatal()` in `debugmsg.c`.
+2. "Seven of the twelve blocks call reassert_interrupts()" (Premise 5). Settling fact: the four missing arms (GENCTL, VECBASE, SCCERR, TxICR, MASK -- one of these is extra; TxICR may share the SCCICR/SCCTX pattern).
+3. VECBASE's body behavior (needed to assess whether `rb vecbase` is dead and whether S5 at VECBASE is detectable at all).
+4. SCCERR's body behavior (the brief claims value-identical; needs to confirm no side effect that a fall-through would expose).
+5. GENCTL's body behavior (needed to confirm `rb genctl lo`'s predicted landed value of 0x22 vs 0x02 under big-endian composition).
+6. Whether reassert_interrupts kills the host under SCCICR=0x18 / SCCRX=0x98 / SCSIICR=0x98 (question 1d).
+7. MASK's body being "byte-identical twin" of GENCTL (claimed but neither body inlined).
+
+I have not attempted to read any files. All claims above are READ from the inlined packet or REASONED from it. None are MEASURED.

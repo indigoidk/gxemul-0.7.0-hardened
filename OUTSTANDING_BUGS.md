@@ -14291,6 +14291,33 @@ stopping rule asks for and is recorded here as such.*
 offset.  **It kills READS THAT THE TOP-OF-FUNCTION `memcpy` HAS ALREADY SERVED** -- the same
 ACCEPT shape `pcc2widthkills` turns on, arriving at a different predicate.
 
+**`pcc2w14` -- pcc2widthkills PASS 14 OWED (OPEN, 2026-09-05; L1 construction on uncommitted detector material).**
+The pass-13 panel (nine seats) found, by three file-reading seats independently deriving it from the row source,
+that the pass-13 repair reproduced its own class twice: the generating set is ONE-SIDED at the two new (label,
+INT set, own count 0) cells (only 0x0013 written there, so `&& (idata & ICLR)` / `&& (idata & 0xe0)` /
+`&& !(idata & IEN)` crossed with the cell escape 251/251 by construction), and the INT axis was never crossed
+with the OTHER timer's count ((T2, p2 = 0, INT set, p1 > 0) and its mirror: reachable, unrowed).  The pass-13
+state is committed with this obligation open (thirteen uncommitted passes were the larger exposure).  The
+repair is drafted -- +18 rows (269), the closed product `{label} x {own 0,>0} x {other 0,>0} x {INT clear,set}`
+with the generating set at every cell, eight mutants, a pre-repair breach witness -- and runs after the
+pcc2defaultkill fix ships (owner priority: critical bugs first).  Also carried to that diff: four docstring L4s
+(clock.c warrant, 'beyond IEN' wording, stale 'first of four wide writes' texts, the tick-window setter).
+
+**`pcc2defaultkill` PROMOTED TO HIGH (2026-09-04 fix review; Fable 5.1 adjudicating, GPT-6 Astra concurring).**
+The unimplemented offsets are REAL PCC2 registers the one in-tree guest driver writes: OpenBSD 2.2
+`if_ie.c:609` stores `pcc2_lancirq` (IEICR, 0x2a), `:612` `pcc2_lancerrirq` (0x2b), `:655`
+`pcc2_lancerrstat` (IEERR, 0x28) -- verified by grep in `_guest-src-openbsd22` -- plus GPIO_ICR 0x18,
+SCSIERR 0x2c, the printer block 0x30-0x37, SPEED 0x38 and SCCTXIACK 0x25; none has a `case`, so any
+access, READ included, reaches `default:` and its `exit(1)`.  Ranked FIRST, above `pcc2c040kill`, because
+that one needs a GENCTL write the in-tree guest never makes.  **RE-BASED 2026-09-05 (Fable design seat,
+verified from the tree): `if_ie` NEVER ATTACHES on the emulated mvme187** -- `machine_mvme88k.c:106` installs
+`unreadable` at 0xfff46000, the ie0 address, and `if_ie.c:407-409` fails its match on `badpaddr()` there, so
+the driver's PCC2 writes never run on this model.  The ranking rests on the RUNG-3 WITNESS and severity (one
+guest byte load or store to any of 43 offsets ends the host), not on the driver.  Witness (measured
+2026-09-05, `regress/artifacts/pcc2defaultkill/witness_20260905/`): a GUEST `st.b` or `ld.bu` to IEICR ->
+exit 1 with the arm's own 'unimplemented' line first; the debugger's `put b` does NOT reach the arm.  Option set for pass 1: DECLINE + latched announce / BACKED ACCEPT (the register array
+already backs every offset and the memcpy read path already serves it) / FAULT.
+
 Found by the adjudicating seat while ranking `pcc2widthkills`, and it is filed rather than
 folded into that round because the predicate class differs: **offset decode, not access
 width.**  The round-scope rule takes one site and admits a second only in the same semantic
@@ -14580,7 +14607,7 @@ Witness owed (rung 3, one session): `st.b 0x04` to `0xfff42002` on the committed
 The `T1CMP / T2CMP / T1COUNT / T2COUNT` arm does `memcpy(d->pcctwo_reg + relative_addr, data,
 len)` for any `len` within `PCC2_SIZE`.  The hardware guide lists 8/16/32-bit cycles only.  An
 8-byte write at `T2COUNT (0x10)` raw-copies through `PSCALE (0x14)`, `PSCALEADJ (0x15)`,
-`T1CTL (0x16)` and `T2CTL (0x17)` -- bypassing the per-register write semantics those arms
+`T2CTL (0x16)` and `T1CTL (0x17)` -- bypassing the per-register write semantics those arms
 implement (masks, read-modify-write, COVF clear, `reassert_interrupts`).  A guest can set timer
 control bits through a path that skips their arm.
 
@@ -14588,6 +14615,11 @@ Not a host kill; a semantic bypass.  Deliberately NOT folded into the width roun
 different defect (accepts too much, rather than kills) in a different arm.  Reachability: `st.d`
 to `0x10` is 8-aligned, so it is guest-reachable by construction.
 
+
+*2026-09-04 (Opus seat, pcc2widthkills pass 8): the labels above were swapped (the header says 0x16 = T2CTL,
+0x17 = T1CTL); corrected in place.  And the path is GUEST-reachable: 0xfff42010 is 8-aligned, so a
+guest `st.d` lands raw bytes on both timer-control registers -- the width detector's `rb t*ctl b27'
+rows now use exactly this path to hold TxCTL bits 2-7 set, and say so.*
 ### `checkcunwired` -- check C (commit message vs diff) can never run from the hook that exists
 
 **2026-09-03, found while retrying a blocked commit.**  Severity LOW (harness), but it is the
@@ -14609,3 +14641,135 @@ message via `git commit -F <file>` does not help; the hook still does not forwar
 **The fix is a `commit-msg` hook** (which does receive the file as `$1`) invoking the same
 script -- a harness change owing two negative controls (a message citing an untouched path
 must FAIL; a message citing only touched paths must PASS).  Its own round.
+
+### `pcc2widecompose` (LOW) -- per-lane composition of a wide PCC2 write, the faithful upgrade to DECLINE
+
+**Filed 2026-09-03 -- and the round's own record had said "FILED" for hours before it was.**
+The codex seat on `pcc2widthkills` pass 2 found the claim in the code comment and the
+CHANGELOG with no entry anywhere.  A "filed" that names no row is a wrong record.
+
+`pcc2widthkills` shipped writes as DECLINE + latch because every write arm uses `idata`,
+which is the addressed byte only at `len == 1`, and eight arms have per-register semantics
+(masks, read-modify-write, clears; seven of the twelve blocks call `reassert_interrupts()`).  The faithful
+alternative the pass-1 panel named is COMPOSE: decompose a wide write into `len` byte
+accesses, each dispatched through its own arm with its own semantics and side effects.
+
+**Warrant in the tree:** `mvme_pcctworeg.h` says the registers accept 8/16/32-bit cycles;
+the read side already composes lanes in address order; the counter arms already accept wide
+writes by memcpy.  **Warrant against, measured by a seat:** `_guest-src-openbsd22/sys/arch/
+mvme88k/dev/pcctworeg.h:8` declares these registers `volatile u_char`, and the driver code
+uses byte accesses -- one real OS shows NO demand for wide writes to the byte registers.
+
+**Hazard, named by the seat that proposed it:** COMPOSE must live INSIDE the byte-register
+arms.  Applied before the switch it would route bytes +1..+3 of a legal word write to a
+counter register through `default:`, a NEW kill on a working path.
+
+**Reopen condition:** a measured guest (a driver trace, a PROM disassembly) that wide-writes
+one of the twelve byte registers.  Until then DECLINE is the honest model and this is the
+recorded upgrade path, not a defect.
+
+### `sgideprimopstrengthen` -- three free strengthenings named by the closing pass, filed rather than shipped
+
+**2026-09-03.  `#500` CLOSED at pass 16** (six of eight answering seats: zero breaches, each with a
+denominator; two claimed breaches refuted by reading).  The closing panel named three cheap
+strengthenings.  They are NOT floor breaches, and shipping them would make a new floor-bound
+diff on a chain that has just closed, so they are filed for a strengthening round:
+
+1. **The latch-field closure is derived, not measured.**  The contract says bits 0-8 are
+   closed by `xlatch all`, and in twenty-eight mutants across every table no `|| (d->warned &
+   SGIRE_W_UNMAP_WR)` cell was ever built.  One cell.
+2. **The six XFER registers have a witness channel the probe denies.**  The XFER block's
+   unlatched `fatal()` prints all six by name once per draw and fires under `dec regs`
+   (`step_x = -1 != src_bufdepth 8`).  One `want=2` row takes the standing precondition
+   witness from 4 of 11 to 10 of 11.  Exact literal, derived by the seat: `unimplemented XFER
+   addr_src=0xffffffff src_bufdepth=8 strd_src=0xffffffff step_x=0xffffffff
+   step_y=0xffffffff addr_dst=0xffffffff strd_dst=0xffffffff`.
+3. **`rop` is the least-witnessed of the eleven** -- no entry-line field, no diagnostic.  One
+   `|| (rop & 1)` cell against the shipped probe (it was measured once, table 12, but at
+   `& 0xff`).
+
+And one design note for any future pinning value: **all-ones is the worst choice for
+`addr_src`**, because `(int) 0xffffffff == -1` collides with the XFER-disabled sentinel for
+`src_x`; `0x0a0b0c0d` would discriminate.
+
+### `pcc2pscaleflood` (MED) -- PSCALEADJ's write-side `fatal()` is unlatched and guest-drivable
+
+**Filed 2026-09-03 by the Opus seat on `pcc2widthkills` pass 3, while verifying something
+else.**  `dev_pcc2.c`'s PSCALEADJ write arm prints `[ pcc2: write to PSCALEADJ ignored (value
+0x..) ]` on EVERY byte write.  Byte accesses skip the m88k alignment check, so `st.b` to
+`0xfff42015` in a loop floods the log at any verbosity -- `fatal()` has no early-out, so `-q`
+cannot silence it.  The round converted IPL's and MASK's `#119` latches to per-instance and
+left this one alone.  `floodclass` family; the house idiom is a per-instance latch with an
+explicit `(once)` marker.  Not this diff's business; filed.
+
+### `pcc2assertflood` (LOW, floodclass) -- the interrupt (de)assert trace prints on every tick while a pcc2 interrupt is pending
+
+**Filed 2026-09-03 while hand-verifying the `pend2 *' row shape for `pcc2widthkills` pass 6.**
+`reassert_interrupts()` in `dev_pcc2.c` prints `[ pcc2: IPL = 1, MASK = 0 => ASSERT ]` each time
+it runs with an unmasked interrupt pending -- and it runs from `DEVICE_TICK(pcc2)` every 2^14
+instructions plus on every qualifying register access.  A guest that arms timer 2 (compare 1,
+count 0, IEN, CEN) and spins saw six of these lines in a two-second free-run at quit; a guest
+that leaves an interrupt pending indefinitely floods the log for as long as it runs.  The line
+is printed by `debug()` (`dev_pcc2.c`, the `=> %s` line in `reassert_interrupts()`): verbosity-gated at
+default settings, so it floods under `-v` and while single-stepping, where `debug()` prints -- a
+narrower exposure than a `fatal()` flood, which is why this is LOW.  `floodclass` family; the house idiom is a per-instance latch with an
+explicit `(once)` marker, or printing only on a CHANGE of the asserted state (the ASSERT/DEASSERT
+edge), which is what the message's own wording suggests it was meant to be.  Not the width
+round's business; filed.  Witness available: the `pend2 *' session in `regress/pcc2_width_probe.py`
+reaches the state on unmodified `mvme88k -e mvme187`.
+
+### `pcc2latchwidth48` (LOW, coverage debt) -- the latch-SET decision is pinned at width 2 only
+
+**Filed 2026-09-03 from `pcc2widthkills` pass 6 (codex, from the pass-5 record).**  `rb2 *' proves
+that a wide write arriving with the block's latch already SET is still refused, but only at
+`len == 2` (`st.h` / `put h`).  The qualified-guard shape `&& !(d->warned & bit)' is
+width-agnostic, so the len-2 rows kill it and its 4- and 8-byte repeats are coverage debt rather
+than a floor cell -- a guard that consulted the latch only for len 4 or 8 (`&& !(len > 2 &&
+(d->warned & bit))') would escape.  Eighteen sessions if closed at every storing block; a
+plausible future edit is doubtful, so filed below the live defects in the same file
+(`pcc2c040kill`, `pcc2counter8`, `pcc2pscaleflood`).  The contract in the probe discloses it.
+
+### `pcc2iclrdec` (LOW, coverage debt) -- the TxICR interrupt-clear decrement is exercised by no row in the tree
+
+**Filed 2026-09-04 by the kimi-k3:cloud substitute seat on `pcc2widthkills` pass 7 (packet-fed,
+reasoning from the inlined TxICR arm).**  The arm's clear branch, `if (ICLR && (reg & INT) &&
+pending_timer2_interrupts > 0) pending_timer2_interrupts--;` (and the timer-1 twin), runs only for
+a BYTE write carrying ICLR while an interrupt is pending -- and the width detector's `pend* *`
+rows hold that state only at WIDE writes, which the guard declines before the body runs.  So `>
+0` -> `>= 0`, or `--` -> `++`, inside either branch is unobserved by every row in the tree: the
+count goes to -1 (or 2) while INT is cleared, and nothing reads it afterwards.  Outside the width
+round's clause-(d) closure (the branch does not dominate the diff's edited lines; it is
+pre-existing body logic), so filed rather than repaired there.  A row is cheap now that the
+free-running shape exists: arm timer 2, poll to INT, `st.b` ICLR|IEN|IL1 (0x19) to T2ICR, then
+observe that a second poll never sees INT again (pending consumed) -- and its twin with a
+SECOND fired interrupt to distinguish `--` from `= 0`.  Belongs to a timer-semantics round, not
+to this one.
+
+### `pcc2huhflood` (MED, floodclass) -- eight unlatched, guest-drivable `fatal()` prints in the pcc2 arms, siblings of the one already filed
+
+**Filed 2026-09-04 by the Opus seat on `pcc2widthkills` pass 8 (F14), from a census of every
+print in `DEVICE_ACCESS(pcc2)`.**  `pcc2pscaleflood` filed ONE of nine: PSCALEADJ's "ignored"
+print on every byte write.  The other eight are the same shape -- unlatched, reached by an
+ordinary LEGAL byte write, and `fatal()` so `-q` cannot silence them: CHIPID/CHIPREV "IGNORING
+write to read-only" (every write), and the `HUH?` prints at VECBASE (idata & ~0xf0), TxCTL
+(& ~7), TxICR (& 0xe0), SCCICR and SCCTX (& ~0x1f), SCCRX and SCSIICR (& ~0xdf).  Seven of the
+eight sit inside the twelve arms the width round rewrote.  The carrier's own rule -- grep for
+the siblings before calling a claim fixed -- applies to a filing too.  The width probe itself
+trips two of them (`acc all` stores 0x10 at every block, which is `& ~7` at TxCTL -- 0x10 & ~7 = 0x10 -- and
+PSCALEADJ's unconditional print; it trips NONE of the five HUH? arms, because 0x10 has no bit outside
+~0xf0, ~0x1f or ~0xdf.  This filing said SCCICR/SCCTX until 2026-09-04; the correction then said VECBASE,
+which is arithmetically false too (0x10 & ~0xf0 == 0) and was caught by the Opus pass-13 seat on
+2026-09-05 -- a correction is not safer than the thing it corrects), and its `devsig` oracle counts CHIPID's message at 1 after ONE byte write, so
+latching each site per the house idiom (`(once)`, per instance) would not break the detector.
+One round, one shape, nine sites; not the width round's business.
+
+### `pcc2defaultkill` addendum (2026-09-04, Opus seat, pass 8)
+
+`PCCTWO_SCCTXIACK` (0x25) has NO `case` in `DEVICE_ACCESS(pcc2)`, so any access to it reaches
+`default:` and its `exit(1)` -- inside the filed family, named here so the census is complete.
+`SCCRXIACK` (0x27) is the thirteenth arm (reads neither idata nor len; width-invariant) and runs
+on READS as well as writes -- there is no writeflag test -- so a GUEST read (any load through the
+handler) clears SCCRX's INT bit; the debugger's `dump` does NOT reach it, because pcc2 is registered
+`DM_DEFAULT` (`memory_device_register` in dev_pcc2.c) and inspection under NO_EXCEPTIONS bypasses such a
+device -- this addendum said 'a debugger-visible read' until 2026-09-04 (GPT-6 Astra fix review); true
+of upstream, not a width matter.

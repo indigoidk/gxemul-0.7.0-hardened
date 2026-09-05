@@ -1,0 +1,46 @@
+VERDICT: NOT READY — the enumeration is not closed. The table is internally inconsistent (TxCTL FALL is marked S but Part 3b measured it as M), the contract contradicts itself on KILL S cells, and a len=8 exemption mutant passes all 96 rows while breaking the width guard.
+
+---
+
+**1. VERIFY THE ENUMERATION**
+
+(a) **Domain** — READ from packet. The nine shapes cover many one-token edits, but the domain is not exhaustive.  
+- Missing: changing `&&` to `||` in the guard (`len != 1 || writeflag == MEM_WRITE`) would decline byte writes and wide reads; existing rows would catch it, but it is not named.  
+- Missing: a len=8 exemption (`len != 1` → `len != 1 && len != 8`) is a plausible edit that no row exercises. The header says legal widths are bytes, two-bytes, or four-bytes; len=8 is non-byte and must be declined. No session uses `put d` (len=8), so this mutant passes 96/96.  
+- The contract says “Twelve blocks x six clause-(d) shapes” but then lists nine shapes (DEL, LEN, LEN2, KILL, ALIAS, FALL, SWAP, GROW, RDDECL). That count is wrong.
+
+(b) **S cells** — READ from packet. Most S cells are plausible same-channel as a measured shape at that arm. However:  
+- **TxCTL FALL is marked S, but Part 3b measured M_FALL_TXCTL and it killed `rb t2ctl` and `rb t1ctl`.** That cell should be M, not S.  
+- **KILL S cells are survival-only.** The contract states “no S cell is survival-only,” but a KILL mutant’s only observable is host death (survival row). For GENCTL, PSCALEADJ, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR, KILL is marked S, yet no measured kill at those arms is named. This is a self-contradiction.
+
+(c) **E / UNREACHABLE cells** — READ from packet.  
+- SCCERR FALL = E rests on “nothing in the model stores a nonzero SCCERR.” That premise is not inlined; it is checkable only from source. If SCCERR could be nonzero at reset, fall-through would clear it and the E warrant would fail. Name the single fact: initial value of SCCERR at reset.  
+- Odd-block read-side UNREACHABLE is supported by Premise 3 (alignment check before memory_rw, debugger reads do not dispatch to DM_DEFAULT). That is REASONED from the packet and appears sound.
+
+(d) **C/W/A cells** — READ from packet.  
+- `latch all` (C) and `latch all w` (W) are cardinality rows; they are robust against benign session events because every session is a fresh process (Premise 6).  
+- `acc all` (A/C) uses guest `st.b` at all twelve blocks; it is the correct channel for GROW. The earlier `put b` form was vacuous and was corrected.
+
+---
+
+**2. SMALLEST EDIT THAT BREAKS THIS AND STILL PASSES 96 ROWS**
+
+**Edit:** At any one arm, change `len != 1` to `len != 1 && len != 8`.  
+**Row expected to stay green:** all 96 rows, especially `latch all w` (uses len=4) and `acc all` (uses len=1).  
+**Why it breaks:** len=8 is a non-byte width and must be declined. No session in the probe uses `put d` (len=8), so the mutant is invisible. This is a shape not in the contract.
+
+---
+
+**3. OPTION-SET COMPLETENESS: N/A**
+
+Agreed — no disposition is chosen.
+
+---
+
+**4. IS THE RECORD HONEST?**
+
+- **TxCTL FALL is stale:** table says S, Part 3b measured it as M. The record overclaims by not updating the cell.  
+- **KILL S contradiction:** “no S cell is survival-only” is false for KILL S cells.  
+- **Shape count:** “six clause-(d) shapes” is wrong; the enumeration lists nine.  
+- **PRETABLE split:** The split of PRETABLE.out into Sections 0-4 and amendments is honest as written; the amendments file explicitly states why it was split and what it contains. No measurement refutes it.  
+- **SCCERR E warrant** is not checkable from the packet; it needs the reset value of SCCERR.

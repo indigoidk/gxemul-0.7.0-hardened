@@ -749,7 +749,7 @@ seats **concurrently** (independent processes / one Agent batch), then collect.
 
 | seat | invocation |
 |---|---|
-| Codex 5.6-SOL (xhigh/ultra) | `codex exec --sandbox read-only --skip-git-repo-check -m gpt-5.6-sol -c model_reasoning_effort="xhigh" "$(cat brief)" < /dev/null` — the `< /dev/null` is required. Windows argv caps ~32 KB. *** `panel.sh` NOW HANDLES THIS ITSELF, as of 2026-08-30 -- do NOT hand-trim a brief for it. *** Above `ARGV_CAP` (30000) codex and kimi are fed a POINTER (`PTR_PROMPT`: read `$BRIEF_ABS` and review it as its own Questions section directs) instead of the contents; below it the inline form is byte-unchanged. Both are FILE-READING seats, so this costs nothing -- and grok (`--prompt-file`) and agy (`--add-dir`) were already immune, leaving these two as the only argv-fed seats. **The block previously WARNED and then launched anyway**, which cost both seats on a 38 KB brief and is the check-that-cannot-fail family's sibling: *a message reporting an ACTION the code does not take*, exactly like the re-firing message. `PANEL_ARGV_CAP` overrides the cap **only so the branch is testable in both directions** without keeping a 38 KB fixture; it is not a tuning knob. Controlled by extracting the real decision block out of `panel.sh` and `eval`ing it -- 6/6 rc=0 fixed, EXTRACT FAILED rc=9 pre-fix. **A HAND-WRITTEN BRIEF STILL NEEDS TO BE READABLE**: the pointer form only helps seats that can open the file, so it is not licence to grow briefs without limit -- the packet-fed Ollama seats still get the whole thing POSTed and still burn budget on it. Never the trailing-`-` stdin form (died silently once). |
+| Codex GPT-6 Astra (xhigh) -- *** MIGRATED FROM 5.6-SOL BY OWNER DIRECTIVE 2026-09-04 ("GPT 6 Astra came out; use extra high effort"), VERIFIED LIVE BEFORE THE EDIT: `-m gpt-6-astra -c model_reasoning_effort="xhigh"` returned the liveness token, named itself `GPT-6`, and quoted the first line of CHECKPOINT.md verbatim.  THE MODEL WAS REACHABLE ONLY AFTER A CLI UPGRADE THAT THE CLI COULD NOT DO ITSELF: 0.148.0 answered `The 'gpt-6-astra' model requires a newer version of Codex`, `codex update` failed twice with `Downloaded Codex package archive did not contain the expected package layout` (its staging dir was EMPTY -- the extraction, not the archive: the 0.153.4 tar.gz fetched from GitHub by hand had exactly the 0.148.0 layout), so the archive was unpacked into `~/.codex/packages/standalone/releases/0.153.4-x86_64-pc-windows-msvc/` and `current` re-pointed by junction, with 0.148.0 kept as `current.0.148.0-bak` for a one-command rollback.  `codex --version` now says 0.153.4.  EFFORT RAISED TO `max` BY OWNER DIRECTIVE THE SAME EVENING: accepted by the CLI (header `reasoning effort: max`, token returned) and PROVEN VALIDATED by the grok discriminator -- a bogus value errors with `Supported values are: 'none', 'minimal', 'low', 'med...`, so acceptance proves the tier; `panel.sh` carries `CODEX_EFFORT="max"`.  Re-check the model name after any further CLI upgrade -- a wrong name is a SEAT FAILURE. *** | `codex exec --sandbox read-only --skip-git-repo-check -m gpt-6-astra -c model_reasoning_effort="xhigh" "$(cat brief)" < /dev/null` (the 5.6-SOL form until 2026-09-04) — the `< /dev/null` is required. Windows argv caps ~32 KB. *** `panel.sh` NOW HANDLES THIS ITSELF, as of 2026-08-30 -- do NOT hand-trim a brief for it. *** Above `ARGV_CAP` (30000) codex and kimi are fed a POINTER (`PTR_PROMPT`: read `$BRIEF_ABS` and review it as its own Questions section directs) instead of the contents; below it the inline form is byte-unchanged. Both are FILE-READING seats, so this costs nothing -- and grok (`--prompt-file`) and agy (`--add-dir`) were already immune, leaving these two as the only argv-fed seats. **The block previously WARNED and then launched anyway**, which cost both seats on a 38 KB brief and is the check-that-cannot-fail family's sibling: *a message reporting an ACTION the code does not take*, exactly like the re-firing message. `PANEL_ARGV_CAP` overrides the cap **only so the branch is testable in both directions** without keeping a 38 KB fixture; it is not a tuning knob. Controlled by extracting the real decision block out of `panel.sh` and `eval`ing it -- 6/6 rc=0 fixed, EXTRACT FAILED rc=9 pre-fix. **A HAND-WRITTEN BRIEF STILL NEEDS TO BE READABLE**: the pointer form only helps seats that can open the file, so it is not licence to grow briefs without limit -- the packet-fed Ollama seats still get the whole thing POSTed and still burn budget on it. Never the trailing-`-` stdin form (died silently once). |
 | agy 3.7 (high) | `agy --dangerously-skip-permissions --add-dir <dir> --print-timeout 30m --model gemini-3.7-flash-high --effort high --print "<short prompt pointing at brief file>"` — reads files via `--add-dir`; no stdin prompt mode. **Model set by user directive 2026-08-13.** PASS BOTH `--model` and `--effort`: the effort tier is baked into the model name (`-high`/`-medium`/`-low`) AND there is a separate `--effort` flag, so naming only one leaves the other at its default. Before this, `panel.sh` passed NEITHER while printing "agy(high)" — the banner was an overclaim. **`agy models` is the authority on valid names** (it lists gemini-3.7/3.6/3.5-flash and 3.1-pro tiers, plus claude-sonnet-4-6 and claude-opus-4-6-thinking); a wrong name is a SEAT FAILURE, so re-check after any CLI upgrade.  *** AND IT HAS A QUOTA.  MEASURED 2026-08-30, THE FIRST agy WALL ON RECORD, AND IT ARRIVED WHILE THE SEAT WAS BEING DELIBERATELY PUSHED. ***  `Error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h56m37s.` -- **111 bytes, on stderr, with the process exiting immediately**, so the `.out` file is ZERO BYTES and nothing is written to the panel dir but that one line.  **THE ROSTER ASSUMPTION IT OVERTURNS:** the owner's own read was *"seems like there is limitless agy use"*, and this project had never seen it wall, so it was being farmed 3 jobs at a time.  Six substantial invocations inside about forty minutes reached the limit.  Treat it like Grok's paid cap: **not queryable, not unlimited, and a raised cap has the same failure mode further out.**  *** THE DETECTION IS EASY AND THE MISREADING IS NOT. ***  It states its own reset time, which no other seat here does -- so a walled agy tells you exactly when to re-fire, and the re-fire-a-walled-seat-once rule becomes a scheduled thing rather than a guess.  But **the zero-byte `.out` is the trap**: this file's own rule says a zero-byte agy log is the NORMAL mid-run state because agy does not stream.  Zero bytes plus a live process is mid-run; zero bytes plus 111 bytes on stderr is a WALL.  **Check the `.err`, not the size** -- `panel.sh` writes one per seat and this is what it is for.  *Recorded because a seat that walls with the machine otherwise healthy is the state this project most often misfiles: three jobs failed identically and instantly, which reads like a launcher bug and is not.* |
 *** OWNER RULING 2026-08-30: **agy IS RESERVED FOR MEASUREMENT AND HELD OUT OF ROUTINE
 PANELS.** ***  Asked after its first quota wall proved the cap is real (~6 substantial calls
@@ -1340,6 +1340,133 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > by inspiration. It cannot become `#392` because the enumeration stays closed over the
 > diff's own hunks -- the same closure the INTRODUCED wording had, without the empty-set
 > defect that made INTRODUCED enumerate nothing for a de-fatalisation.
+>
+> #### *** JOINT CELLS -- adjudicated 2026-09-04 on `pcc2widthkills` pass 10 by the flagship seat, after
+> #### a measuring seat's CONJUNCTION of two body-read counts escaped 190/190 AND THE SAME SEAT ARGUED IT
+> #### WAS NOT A BREACH.  Both proposed bounds were rejected; the one adopted came from neither. ***
+>
+> > **DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY
+> > WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM.**  For each lvalue take the PARTITION the
+> > body's own tests induce (`pending > 0` gives {0, >0}; `relative_addr == PCCTWO_T1ICR` gives
+> > {T1, T2}); the enumerated cells are the CROSS-PRODUCT of those partitions -- never arbitrary
+> > boolean functions of the read-set.  A mutant exempting a single cell whose reachability is
+> > MEASURED is a floor breach; close the whole cross-product in ONE diff and write into the
+> > contract which cells are rowed.  A value or combination the body never tests as a case
+> > (`idata == k`; a byte no conditional distinguishes; both counts >= 2 where the body tests `> 0`)
+> > is DISCLOSED under clause (e).
+>
+> **Why this form and not the two that were argued.**  The dissent's discriminator -- *a plausible
+> future edit* -- failed three ways: plausibility is not derivable by reading; the mutant was written
+> and measured, so it is an edit someone writes; and "single-operand is complete" is measurably
+> false, since `&& idata != 2` is single-operand and escapes.  The main loop's own bound -- *pairs of
+> body-read lvalues over a finite reachable space* -- was rejected as SELF-REFUTING: the counts' raw
+> value space is 2^32 apiece, so "finite" does no bounding work on its motivating case (a C `int` is
+> finite -- the first wording here said it was not; codex and glm caught it on pass 11); "reachable
+> guest state" would force rowing
+> `idata == 2` that the same record discloses; and a PAIRS cap misses `#499`'s four axes.  The
+> body-tested-partition form is finite (a product of small partition counts), derivable from the
+> diff by reading the body's own `if`s, and it enumerates `#499`'s width x component x direction x
+> position cells from `len`, `writeflag` and `relative_addr` -- which neither argued bound reached.
+>
+> **The measured case.**  The TxICR body tests both pending counts at `> 0` and the label at
+> `== T1ICR` / `T2ICR`, so the closure is {T2, T1} x {p1 = 0, > 0} x {p2 = 0, > 0} -- eight cells.
+> Pass 9 held one open cell (both counts, T2 label: a 190/190 escape, predicted by the Opus seat
+> before its build); pass 10 found the MIRROR (both counts, T1 label) and the (p2 only, T1 label)
+> cell open -- the `#499` shape reproduced inside the repair for it -- and the label x p1 x p2 x IEN
+> product (sixteen cells) closed in one diff of nine readbacks in existing sessions; the ICLR, INT and
+> 0xe0 partitions were disclosed by count, and pass 11 then found the ICLR x pending cell open and
+> in-rule (this paragraph said "eight cells ... three readbacks" until pass 11).  **The De Morgan form of the gap**, from the kimi
+> substitute: `!(p1 && p2)` is `p1 == 0 || p2 == 0`; neither disjunct is true of all its lvalue's
+> held values, the disjunction is true in every row, so a per-lvalue disclosure test can never fire
+> on it.  That is why the per-lvalue value-domain statement, correct as far as it went, could not
+> see this class at all.
+>
+> **Two corollaries from the same pass, both measured.**  The PRE-TABLE CHECK's SIBLING PARITY row
+> compares BLOCKS; at a block that serves TWO case labels the siblings are the LABELS, and a
+> parity census over the row names is what would have shown `pendboth` as the only T2-only cell
+> before its table ran (Opus, pass 10).  And the measuring seat's own bound -- the cross-product
+> of the value-CLASSES the rows establish, with the dispatch axes as full axes, demand
+> INCREMENTAL -- agrees with the body-tested form on every cell that mattered here and differs on
+> where the classes come from (the rows, or the body's tests); that residual difference is
+> carried to the next pass as a named question rather than settled by the author.
+>
+> #### *** THE LETTER OVER-DEMANDED, AND ITS OWN AUTHOR BOUNDED IT ONE PASS LATER (pass 11, 2026-09-04). ***
+>
+> Read literally, "the cross-product of the body-tested partitions" demanded ALL 128 cells at the TxICR
+> arm -- the body also tests `idata & IEN`, `idata & ICLR`, the register's INT bit and `idata & 0xe0` --
+> and it compounds as 2^k in the `if`-count across twelve arms: the `#392` shape wearing the rule's
+> clothes.  Three seats said the letter demands the remainder; the flagship seat, asked to be harder on
+> its own rule than on anyone, ruled AGAINST the letter:
+>
+> > **The rule ENUMERATES joint cells wherever the body distinguishes them; the FLOOR -- the cells a row
+> > is OWED for -- is the cross-product of the guard's dominating predicates with the device-STATE lvalues
+> > the fix's own repair path reads that are JOINTLY REACHABLE through its own data flow.**  The bits of
+> > the single value being written are single-operand MARGINALS, not floor; joint cells outside the floor
+> > are clause-(e) coverage debt, subject to the one ask-again.  A filter may reject or discharge a cell
+> > but may demand a new row only for a floor cell -- so it cannot grow unbounded.
+>
+> At TxICR the floor is {label} x {p1} x {p2}: one `pcc_timer_tick` callback increments both counts and
+> `reassert_interrupts` reads both, so the pair is a joint input of the model.  Eight cells, all rowed.
+>
+> #### *** THE FLOOR INCLUDES THE SINGLE-AXIS GENERATING SET, AND "DERIVED" STATE IS NOT DISPOSABLE.
+> #### Adjudicated 2026-09-04 by the fix review (Fable 5.1 adjudicating; GPT-6 Astra at max dissenting on the
+> #### bound and supplying the two findings that made the amendment measurable). ***
+>
+> > **At each floor cell, every idata bit the guarded body TESTS is written both clear and set.**  The bare
+> > state floor above does not catch `M_ICLR` -- an idata-bit x state joint -- and would grade the pass-11
+> > escape as debt while the CHANGELOG grades it L2; the generating set is what makes the two consistent.
+> > Multi-axis idata joints stay clause-(e) debt.  **The codex seat adopts the Opus strength-t covering
+> > array instead** (its `t` = the body's longest conjunction) and is RECORDED, not adopted -- for COST (seven
+> > binary axes at TxICR make a strength-4 array tens of pty cells per arm: the 2^k growth by another door) and
+> > because a covering array certifies that a tuple OCCURS, not that an observable differs, so it cannot be the
+> > floor without the CHANNEL obligation doing the work.  *This clause first said "`t` is a judgment input";
+> > the array's own author refuted that on pass 13 -- `t` is read off the body -- and supplied the two grounds.*
+>
+> **The two measured consequences, both found by a seat reading the ENUMERATION against the handler rather
+> than the tables against the enumeration:**
+>
+> * **The enumeration listed five arms as having NO `if` and each has one** -- VECBASE, SCCICR, SCCTX, SCCRX,
+>   SCSIICR test their HUH? bits on the composed idata.  The record then said every wide value the rows drove
+>   at them had those bits SET, so `&& (idata & ~mask)` would sweep the table.  **Measured FALSE the same
+>   evening (part 13, M_HUHV 249/251):** two announce-count rows (`latch all zero`, `latch all one`) already
+>   drove HUH?-clear values (0x0000 alone at VECBASE, whose mask is 0xf0; the six `latch all*` rows at the
+>   0x1f/0xdf arms -- 244/251 there), and their counts drop when the write lands -- the partition was HELD by a channel
+>   the enumeration did not know it had.  *An enumeration is checked against the BODY and against the ROWS
+>   before a breach is declared; "it would sweep the table" is a MEASUREMENT, never an inference -- and the
+>   seat that raised the finding had said so ("existing rows may discharge their partitions; the enumeration
+>   must actually show that") while the main loop wrote the sweep as a fact.*
+> * **The INT bit was dismissed as "derived from the count" and it is not**: `reassert_interrupts()` only SETS
+>   it, the body clears it only on ICLR, and an IEN-clear byte write zeroes the count -- so (INT set, count 0)
+>   is a reachable joint state of two body-read lvalues that no row held.  **Reachability of a joint cell is
+>   derived from the WRITERS of each lvalue, never from a steady-state invariant** -- "INT follows the count"
+>   was true between ticks and false across the one write the guest driver makes to disable a timer.
+>
+> *Both went to pass 13 as floor cells (nine rows, seven mutants).  The fix itself was unchanged by the review,
+> which is the finding worth keeping about the review: eleven passes on the detector and none on the fix, and
+> the first pass on the fix approved it block by block while finding the detector's enumeration wrong.*
+>
+> **What the debt costs when it has a measured warrant, and it is cheap:** the measuring seat built the
+> disclosed `&& !(p2 && (idata & ICLR))` and it escaped the 203-row instrument, as three reading seats
+> had predicted -- so it was repaired in the GENERATING-SET form (grok), and GRADED **L2**, a floor breach
+> repaired in-round, by the pass-11 disposition in the CHANGELOG (the cell was inside the closure by the
+> round's own pass-3 sentence).  *This clause said "L1 construction" until 2026-09-04, when the GPT-6 Astra
+> fix review found the carrier and the CHANGELOG grading ONE finding two ways; the CHANGELOG's is the ruling
+> and this is the correction.*  The form: at every
+> rowed pending cell, write each tested idata bit both clear and set, so any single-axis extra conjunct on
+> one of them lands a write and reds a readback.  Twelve wide writes appended to three existing sessions;
+> no new session, no new load sensitivity.  Multi-axis idata joints stay disclosed; INT-clear-with-a-count-
+> pending is disclosed as UNREACHABLE with its derivation (the tick increments only under IEN and reassert
+> sets INT before any guard runs), which is the honest form of a cell nobody rows.
+>
+> *Two records lessons from the same pass.  A CORRECTION IS NOT SAFER THAN THE THING IT CORRECTS: pass 10
+> accepted "the store mask is a writer of ICLR" and made a true sentence false -- `0x17 & 0x08 == 0`, one
+> AND that nobody ran.  And a PREDICTION COPIED INTO A MEASURED COLUMN is the frozen-number class in a new
+> coat: a table said (0x13) where the log said 0x33; the score matched by coincidence and the value was a
+> wrong record until a seat read the log.*
+>
+> *Count the arguments, not the seats: seven of eight landed seats put the pair inside the closure,
+> and the one that did not (minimax) was reading the CONTRACT's per-lvalue wording rather than the
+> clause -- the wording the discriminator sentence now replaces.*
 
 > ### *** THE PRE-TABLE CHECK -- three greps, ~30 min, and it protects the ASK-AGAIN'S
 > ### CAP rather than the clock. Adopted 2026-08-24; two seats derived it independently. ***
@@ -2700,6 +2827,12 @@ FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
   ppc_vea_book2_v201.pdf
   sh4_programming.pdf
   sh7750_hardware.pdf
+  vmesbcp2.pdf        (ADDED 2026-09-05: Motorola MVME187 board manual, VMESBCP2, 172 pp, fetched from
+                       m88k.com at the GPT-6 Astra seat's citation during the pcc2defaultkill design panel; its
+                       `vmesbcp2.txt:4629` -- Table 6-1, `$FFF42040-$FFF42FFF PCCchip2 Registers  Repeated` --
+                       DOCUMENTS the PCC2 alias the fork's `relative_addr %= PCC2_SIZE` models, which two seats
+                       had rightly called unestablished; `:5430` SCLR is write-1-to-clear.  A round about
+                       PCC2/CD2401/MVME187 opens THIS before reasoning from the source alone.)
 ```
 
 **SIX were undocumented**, and two of them are load-bearing for work in flight the day this was

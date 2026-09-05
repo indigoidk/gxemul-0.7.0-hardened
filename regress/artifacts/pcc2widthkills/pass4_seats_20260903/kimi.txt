@@ -1,0 +1,1310 @@
+kimi version 0.36.0
+• The user wants me to read a specific file in full and review it adversarially as its own Questions/Review-asks section directs. Let me read the file first.The file is 953 lines, 67KB. The Read tool truncated the output at 50000 characters. I need to page through the full output using the output_path. Let me read the rest of the file. The preview showed lines 1-~31. Let me read the full file from the output path, or read the original file in chunks.
+
+  Let me read the file in chunks using line_offset.
+
+• The file is 953 lines; I'll page through it in full.
+
+• Let me continue reading the file.I've read the full brief. Now I need to review it adversarially as its Questions/Review-asks section directs. The Questions section (lines 117-135) asks:
+
+  1. **VERIFY THE ENUMERATION** in the contract (12 blocks x 9 shapes, plus two T1 labels):
+     (a) Is the DOMAIN right — are there guard inputs or plausible one-token shapes the nine do not cover?
+     (b) For each cell marked S (same channel as a measured shape), does the mutant really land the write, or die, exactly as the measured one does at THAT arm?
+     (c) For each cell marked E or UNREACHABLE, is the warrant true?
+     (d) Is any C/W/A cell resting on a cardinality row that a benign session event could inflate or a mutant could preserve? Say which cells you re-derived from the source rather than from this packet.
+
+  2. **THE SMALLEST EDIT THAT BREAKS THIS AND STILL PASSES 96 ROWS.** Name the row you expect to stay green. Shapes NOT in the contract are the interesting ones.
+
+  3. **OPTION-SET COMPLETENESS: N/A** — no disposition is chosen; say so if you disagree.
+
+  4. **IS THE RECORD HONEST?** Name any sentence a measurement refutes, any count without a deriver, any claim of coverage no row carries. PRETABLE.out split — is the split honest as written?
+
+  Also "If, while verifying a claim, you found something ELSE -- say so."
+
+  The brief also says:
+  - VERDICT LINE FIRST.
+  - ENUMERATE arithmetic claims rather than reasoning about them.
+  - Check premises, not just derivations.
+  - The tree under review is GXEMUL-SEC/src/ and GXEMUL-SEC/regress/, uncommitted on top of b78bb0f.
+  - A closing zero must carry its denominator: say which cells and shapes you swept.
+
+  I should verify premises against the actual source where possible. The brief says "If you cannot read files that is expected -- every fact you need is inlined." But I CAN read files. The brief invites re-deriving premises from the source: "A seat that re-derives a premise from something this brief did NOT give it is worth more than a seat that agrees."
+
+  So I should actually look at GXEMUL-SEC/src/devices/dev_pcc2.c and the probe file regress/pcc2_width_probe.py to verify claims. Let me do that.
+
+  Key claims to verify:
+
+  1. **Block offsets and parity**: GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, TxCTL (T2CTL 0x16, T1CTL 0x17), TxICR (T2ICR 0x1a, T1ICR 0x1b), SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f. That's 12 blocks. Even offsets: 0x02, 0x16, 0x1a, 0x1c, 0x1e, 0x3e — six even blocks. Odd: 0x03, 0x15, 0x17, 0x1b, 0x1d, 0x1f, 0x2f, 0x3f — eight odd offsets (six odd-only blocks + two T1 labels). Verify against mvme_pcctworeg.h.
+
+  2. **The enumeration table**: 12 blocks × 9 shapes (DEL, LEN, LEN2, KILL, ALIAS, FALL, SWAP, GROW, and the ninth RDDECL which is handled separately via hrd/wrd nod rows). Wait — the table has 8 shape columns (DEL LEN LEN2 KILL ALIAS FALL SWAP GROW) plus "FALL channel" column. The ninth shape RDDECL is discussed below the table. So "12 blocks x 9 shapes" — but the RDDECL row coverage is only on 7 wide-read sessions (six even blocks by ld.h, SCCERR by ld). The six odd blocks' read-side cells are UNREACHABLE by construction.
+
+  Wait — but there's a subtlety: RDDECL at the odd blocks — unreachable, fine. But what about RDDECL at... hmm, the seven wide-read sessions: hrd genctl nod, hrd t2ctl nod, hrd t2icr nod, hrd sccerr nod, hrd scctx nod, hrd ipl nod, wrd sccerr nod. That's six even blocks (genctl, t2ctl, t2icr, sccerr, scctx, ipl) by ld.h plus SCCERR by ld (word read). OK.
+
+  3. **Cell statuses**: Let me check some.
+
+  The table:
+  ```
+  block      DEL   LEN   LEN2  KILL  ALIAS FALL  SWAP  GROW   FALL channel
+  GENCTL     M     S     W     S     C     M     M     A/C    rb genctl (table 1 M_NOBREAK)
+  VECBASE    S     S     W     M     C     M     C     C      rb vecbase own  (pass-3 repair)
+  PSCALEADJ  S     S     W     S     C     M     C     C      op pscale noig  (message)
+  TxCTL      S     M     W     S     C     S     C     A/C    rb t2ctl
+  TxICR      M     M     W     S     C     S     C     A/C    rb t2icr
+  SCCERR     S     M     S     S     C     E     C     A/C    E: the arm stores 0...
+  SCCICR     S     S     W     S     C     M     C     C      rb sccicr
+  SCCTX      M     M     W     S     C     S     C     A/C    rb scctx
+  SCCRX      S     S     W     S     C     M     C     C      rb sccrx
+  SCSIICR    S     S     W     S     C     M     C     C      rb scsiicr
+  IPL        S     S     W     M     C     M     C     C      hwr ipl noig
+  MASK       M     M     W     M     C     M     C     C      rb mask
+  ```
+
+  Questions to probe:
+
+  (a) DOMAIN: Guard inputs are (len, writeflag, relative_addr -> block, idata, d->warned). Nine shapes: DEL, LEN, LEN2, KILL, ALIAS, FALL, SWAP, GROW, RDDECL. Are there plausible one-token shapes not covered?
+
+  Possible additional one-token shapes:
+  - `writeflag == MEM_WRITE` -> `writeflag != MEM_WRITE` (inverted direction): then byte writes declined, wide writes land. Byte-write decline: `acc all` (twelve byte stores, zero declines) would red at any arm — covered by GROW's channel (A/C). Wide-write land: same as FALL/DEL — covered by arm channels. Actually `!=` is one token... hmm, is it? `==` -> `!=` is a plausible typo-class edit. The acc all row catches the byte side; the arm readback rows catch the wide-land side. So arguably covered by existing channels even though not in the shape list.
+  - `len != 1` -> `len == 1` (inverted): declines byte writes (acc all reds), lets wide writes land (arm readbacks red). Covered similarly.
+  - `len != 1` -> `len != 2`: declines halfword (all the put h / st.h rows red), lets byte and word land. Word landing silently — `latch all w` would drop from 12 to 11 (word lands without announce). Covered.
+  - `len != 1` -> `len < 1` or `len > 1`... `len > 1` declines everything wide including len 2,4,8 — same as `!= 1` for present rows; byte lands. Effectively equivalent for the rows. `len < 1` never declines — same as DEL, covered.
+  - break removed at the LEN2... FALL is covered.
+  - RDDECL is `==` -> `<=`. What about `writeflag == MEM_WRITE` -> `writeflag >= MEM_READ`? Equivalent to `<=` inversion... `>= MEM_READ` is always true (MEM_READ=0, MEM_WRITE=1), so guard always fires on... wait no. Guard is `len != 1 && writeflag == MEM_WRITE`. Changing the second conjunct to `writeflag >= MEM_READ` makes it always true when len != 1 — i.e., declines wide reads AND wide writes. Wide reads declined: hrd/wrd nod rows red. Same channel as RDDECL. Covered.
+  - Changing `len != 1` to `len != 8`? Declines only 8-byte... `put d` — is there a put d row? The premise says `put w` / `put d` give len 4/8. latch all w uses put w (len 4). There's no `put d`/8-byte-wide row in the 96. A `len != 8` guard would decline only len-8 writes; halfword and word writes would LAND silently. That's like DEL for h and w. Arm readbacks (st.h/put h) red; latch all w reds (word lands silently, count drops). So covered by existing channels.
+
+    But wait — what about a guard `len != 1` -> `len != 4`? Declines word writes only; halfword lands silently. Arm readback rows (halfword) red. Covered.
+
+  - The `d->warned` input: ALIAS is one shape (one enum member for two blocks). What about the latch set wrong — `|=` -> `&=` or `=`? `d->warned = (1u << bit)` instead of `|=`: each announce overwrites, so latch all would still show 12 announces (each block's first write announces since its bit is clear... wait: `d->warned = (1u << bit)` sets the field to exactly that bit; the next block's write tests `!(d->warned & (1u << bit'))` — bit' different from bit, and d->warned now only has bit set, so bit' tests clear → announces. So latch all stays 12. latch same: same block twice — after first write d->warned = bit; second write tests the same bit, which is set → no second announce → count 1, still green. latch two: two sites announce twice — green. Hmm! So `|=` -> `=` (one character) is INVISIBLE to all rows? Let's check: is there any row that writes block A, then block B, then block A again? latch all writes each of 12 blocks once. latch same writes GENCTL twice in a row. latch two — two sites. Is there a session that writes A, B, A? Let me look... The brief says "latch same' and `latch two' pin ONE pair out of 66: every other session writes at most one BLOCK". With `=` replacing `|=`: the failure mode is that after writing B, A's bit is forgotten, so a second write to A announces again — a FLOOD/duplicate, not a silence. Which row counts duplicates? latch same counts exactly 1 (== 1 expectation) for GENCTL twice in the SAME session with nothing between. If a session did A, B, A then `=` would give A announcing twice → count 2 ≠ 1. Is there such a session? Looking at the rows: "latch same" = GENCTL, GENCTL. "latch two" = two different blocks once each. No A-B-A session. So `|=` -> `=` passes all 96 rows. That's a candidate smallest-edit answer for Q2! One character (`|=` -> `=`), breaks the "announce once per block" property (a driver touching A, B, A gets two announces for A — a duplicate, arguably benign-ish but it violates the latched-announce-once semantics the contract claims: "loss of the latch in either direction: dropped `|=' floods (same site twice must announce ONCE)").
+
+    Wait, but the contract says "dropped `|=' floods (same site twice must announce ONCE)". Dropping `|=` entirely — `d->warned (1u << bit)` doesn't compile without an operator... actually `d->warned |= (1u << bit)` with the `|` dropped becomes `d->warned = (1u << bit)` — that IS the `=` case. "Floods" — hmm, with `=`, same site twice in a row still announces once (bit still set). The flood only happens when another block intervenes. So "latch same" (GENCTL twice, nothing between) does NOT catch it. The contract's claim "dropped `|=' floods (same site twice must announce ONCE)" — the same-site-twice row catches a dropped latch entirely (`d->warned` never written, or the test removed), but NOT the `|=` -> `=` edit when an intervening block exists. Is that within the contract's claim? The contract says it catches "loss of the latch in either direction: dropped `|=' floods... and one bit shared across blocks silences". The `|=` -> `=` edit with A,B,A ordering produces a duplicate announce for A — that is the flood direction, and NO row has an A,B,A pattern. So this is a genuine hole: smallest edit `|=` → `=` (deleting one character `|`), property broken = announce-exactly-once-per-block-per-instance, all 96 rows green.
+
+    Hold on — check "latch two": it writes two different sites, expects 2 announces total. With `=`: A announces (warned=A), B announces (warned=B). Count 2. Green. latch all: 12 announces. Green. Yes — `|=` -> `=` survives.
+
+    Is this shape in the contract's nine? ALIAS is "one enum member for two blocks". The `|=` -> `=` is a shape on the `d->warned` input (the latch mechanics), not covered by ALIAS (which is about bit assignment collisions). The domain listed includes `d->warned` as a guard input — the nine shapes cover ALIAS for it, but the latch-UPDATE operator is a second `d->warned`-adjacent shape. So Q1(a): the domain is NOT fully closed — the latch update operator (`|=`) is a guard-mechanism input with a one-character mutation (`=`) that no row sees. Also `1u << bit` -> `1u << (bit+1)`? That shifts bits; with twelve bits in 32, shifting each by 1 keeps them distinct → cardinality preserved → invisible. But that's arguably ALIAS-adjacent (still one bit per block, distinct) — no collision, so behavior identical; not a real break. `&=` for the test? `!(d->warned & (1u << bit))` -> `!(d->warned == (1u << bit))`: first write to A: warned=0, 0 == bit? no → announce, warned |= A. Second write to A: warned == A → true → !true → no announce. Green for latch same. A,B: warned = A|B after B... write to A again: warned (A|B) == A? no → announce again — duplicate. latch two: A then B, each announces, count 2 green. latch all green. So `==` for `&` also survives — same A,B,A hole.
+
+    Also: what about the announce text shape — the name string. Disclosed: "five odd-arm `dcl' rows count the generic decline text, so a change of the NAME STRING alone at one of them is invisible". Disclosed, fine.
+
+    Another shape: `break;` -> `return 0;`? In the guard: `pcc2_width_decline(...); break;` — if `break` becomes `return`, the function returns instead of breaking out of the switch — for the device access function, returning skips the rest. Effect: same as break for the arm (the write is declined, function exits). Hmm, actually what comes after the switch? If there's post-switch code (e.g., a return of the value or reassert), `return` might skip it. For a WRITE decline the observable difference... rows check announce count and readback value. If post-switch code matters (like updating something), could differ. This is speculative without reading the actual file. The `FALL` shape covers break removal; `break` -> `return` is a different one-token-ish edit. Would rows catch it? If devaccess_pcc2's post-switch code is just `return 1;` then return 0 vs break-then-return-1 might differ in return value semantics (0 = access failed?). That could cause a guest exception... Actually in gxemul, memory_rw device handlers return 0 or 1 (or -1?). If the decline path returned 0 instead of 1, the access would be treated as failed → maybe a machine exception for the guest rows, or for the operator path... This could break survival rows, so probably caught. Not the cleanest counterexample.
+
+    What about the guard conjunct order: `len != 1 && writeflag == MEM_WRITE` swapped to `writeflag == MEM_WRITE && len != 1`? No semantic change. Fine.
+
+    `len != 1` -> `len <= 1`? For len=1: 1<=1 true → guard fires?? wait guard is "if (len != 1 && writeflag == MEM_WRITE) decline". If it becomes `len <= 1`, byte writes declined → acc all reds. Covered by GROW channel.
+
+    `len != 1` -> `len != 0` is GROW, measured. `len != 1` -> `len > 2` is LEN. `len != 1` -> `len == 2` is LEN2. What about `len != 1` -> `len != 4`? halfword lands → arm readbacks red. Covered by S reasoning.
+
+    RDDECL variants: `writeflag == MEM_WRITE` -> `writeflag <= MEM_WRITE` measured (M_RDDECL_ALL at all twelve; hrd/wrd nod rows at 7 sessions catch it at the six even blocks + SCCERR word). At the ODD blocks RDDECL is unreachable (wide reads don't reach the arm). OK.
+
+    But WAIT — the RDDECL mutant at all twelve: the odd blocks' wide reads are unreachable, but what about the odd blocks' latch bits being consumed by wide reads? Not reachable. Fine.
+
+    What about `writeflag == MEM_WRITE` -> `writeflag != MEM_READ`? MEM_READ=0, MEM_WRITE=1. `!= MEM_READ` means writeflag != 0, i.e., true for writes. So guard fires only for non-reads = writes — IDENTICAL to `== MEM_WRITE` if writeflag only takes 0/1. No-op. Fine.
+
+    `writeflag == MEM_WRITE` -> `writeflag >= MEM_WRITE`: fires only for writeflag >= 1, i.e., writes (if max is 1). No-op. Fine.
+
+    Now the SWAP shape: guard operand `len` -> `idata > 0xff`. Marked M at GENCTL (rb genctl lo kills it: st.h 0x0022 lands 0x22 ≠ 0x11) and C elsewhere: "latch all, its value 0x0003 fits a byte, so a value-test guard at ANY arm lets it land and drops the count". Check: with SWAP at arm X, `put h 0x0003` at X: idata = 0x0003, `idata > 0xff` false → guard doesn't fire → no decline announce → the write lands. latch all count drops from 12 to 11. Caught. Also the write lands — does it matter? For VECBASE: stores 0x03 & 0xf0 = 0x00, prints HUH (idata & ~0xf0 → 0x03 & ~0xf0 = 3 → HUH print). Count of DECL drops → caught. OK.
+
+    But subtle: SWAP as written is `len != 1` -> `idata > 0xff`. The full guard is `len != 1 && writeflag == MEM_WRITE` -> `idata > 0xff && writeflag == MEM_WRITE`. What if the swap is `len != 1` -> `idata != 0`? A wide write of 0x0000 would land silently. latch all uses 0x0003 (nonzero) → guard fires → decline → count stays 12. Arm readbacks use 0xaab8/0xaabb (nonzero) → declined → green. So `idata != 0` survives! Is that in the contract? SWAP is named as one specific shape (`idata > 0xff`), and the C warrant is "its value 0x0003 fits a byte, so a value-test guard at ANY arm lets it land and drops the count" — that reasoning covers value-tests that 0x0003 PASSES (i.e., tests that accept 0x0003: `> 0xff` accepts it... wait no. `idata > 0xff` with idata=0x0003 is FALSE → guard does NOT fire → write lands → count drops. Yes so the C channel works for value tests under which 0x0003 "fits"/is accepted. For `idata != 0`, 0x0003 is nonzero → guard FIRES → declined → count stays 12. So latch all does NOT cover `idata != 0`. Does any other row? The wide values used in readback rows are 0xaab8, 0xaabb, 0x0303, 0x0022, 0x1234 — all nonzero. A wide write of value 0 anywhere? `wwr sccerr` uses r6=0x00000000! That's a word write of 0 to SCCERR: with `idata != 0` guard at SCCERR: guard false → write lands → stores 0 (SCCERR arm stores 0 anyway) → wwr sccerr survives (exit0) and wwr sccerr lv green, and "wwr sccerr dcl" — wait is there a wwr sccerr dcl row? The gate list includes "wwr sccerr dcl" — hmm, looking at the old gate list: "wwr sccerr dcl" is in the list. And the new list also has "wwr sccerr dcl" and separately "hwr sccerr dcl" was added. So wwr sccerr dcl expects DECL count 1 for a word write of 0x00000000 to SCCERR. With `idata != 0` guard at SCCERR: guard doesn't fire → no decline → count 0 ≠ 1 → RED. Caught at SCCERR! But at the other eleven blocks, no row wide-writes a zero value. `idata != 0` at, say, MASK: all wide writes to MASK in the probe are 0xaabb (op mask) and 0x0003 (latch all) and 0x00000003 (latch all w) — all nonzero → all declined → green. acc all stores bytes → guard `idata != 0` — wait, byte writes: len==1, guard is `idata != 0 && writeflag == MEM_WRITE` — the len conjunct is GONE (replaced). So byte writes with nonzero idata would be DECLINED! acc all uses r5=0x10 (nonzero) for all twelve blocks → at a swapped arm, the byte store announces a decline → acc all reds. CAUGHT. Hmm. So `idata != 0` reds acc all at any arm (since the guard no longer excludes len==1). Right — SWAP removes the len conjunct entirely, so ANY byte write with a value failing the test is declined. acc all uses 0x10 everywhere → any value-test that 0x10 passes... for `idata != 0`: 0x10 != 0 → guard fires → decline announced → acc all count becomes ≥1 ≠ 0 → red. OK so caught. Good — so SWAP variants are generally caught via acc all (byte side) or latch all (wide side), as long as either 0x10 passes the test or 0x0003 passes the test. A test where BOTH 0x10 and 0x0003 are accepted... e.g., `idata > 0xff`: 0x10 > 0xff false (byte lands, acc all green), 0x0003 > 0xff false (wide lands, latch all reds). Covered — that's exactly the measured one. A test like `idata == 0x10`? Byte store of 0x10 declined at that arm → acc all reds. `idata < 0x10`? 0x10 < 0x10 false → byte lands; 0x0003 < 0x10 true → declined → latch all green; wide values 0xaab8 → 0xaab8 < 0x10 false → LANDS → arm readback reds (e.g., rb genctl expects 0x50 unchanged... wait GENCTL pre-set 0x50, st.h 0xaabb lands 0xbb → red). Covered. So the SWAP family seems genuinely closed by the combination. Good.
+
+    Now GROW: `len != 1` -> `len != 0` declines bytes too → acc all reds. Variant: `len != 1` -> `len >= 1` (declines everything incl. bytes) → acc all reds. `len != 1` -> `1` (always decline) → acc all reds. Covered.
+
+    LEN variant: `len > 2` declines len 4 and 8, lets len 2 land → halfword readbacks red (the write lands wrong lane). Measured M at TxCTL/TxICR/SCCERR/SCCTX/MASK (M LEN column). S elsewhere. Fine.
+
+    LEN2: `len == 2` declines halfword, lets word land → latch all w drops. W column everywhere. SCCERR: "SCCERR's own word rows (wrd/wwr sccerr) are its S" — wait, SCCERR LEN2 is marked S, and the note says its word rows are its S. Hmm, but wwr sccerr dcl expects a decline for a word write; with LEN2 (`len == 2`) at SCCERR, word write lands (stores 0, value-identical), so wwr sccerr dcl count drops to 0 → red. Yes caught.
+
+    Wait, actually check SCCERR's LEN2 = S: with LEN2, halfword writes are DECLINED (len==2 fires) — hwr sccerr dcl still 1 (green); word writes LAND — wwr sccerr dcl drops to 0 → red. And latch all w would also drop (put w at SCCERR lands silently) → red via W too. OK.
+
+    Now KILL column: GENCTL S, VECBASE M, PSCALEADJ S, TxCTL S, TxICR S, SCCERR S, SCCICR S, SCCTX S, SCCRX S, SCSIICR S, IPL M, MASK M. KILL = exit(1) reinstated. Channels: for guest-reachable blocks, survival rows die (how != exit0). For operator-only blocks, "op <nm>" survival rows: put h at the block → host exits → session dies → row reds. VECBASE M measured, IPL M (hwr ipl? no — IPL KILL measured... "hwr ipl noig" is FALL channel; KILL at IPL measured via...? The M is claimed measured; pass tables mention part 1 nine mutants. Plausible). MASK M. For S cells: e.g., SCCERR KILL: guest st.h to SCCERR → exit(1) → "wwr sccerr" or "hwr sccerr dcl"... wait SCCERR's halfword write row is "hwr sccerr dcl" (announce once) — with KILL the host dies at the put/st → session dies → how != exit0 → but hwr sccerr dcl counts DECL text in output; a dead session's t.count would be 0 ≠ 1 → red. Also is there a survival row for a wide write to SCCERR? "wwr sccerr" expects exit0 → with KILL it dies → red. Fine.
+
+    Hmm wait — one important check on KILL at PSCALEADJ (S): PSCALEADJ wide write rows are "op pscale" (survival) + "op pscale dcl" + "op pscale noig". With KILL reinstated at PSCALEADJ, `put h` at PSCALEADJ → exit(1) → session dies → "op pscale" (how, exit0) reds. OK.
+
+    DEL column: guard deleted → wide write lands. GENCTL M (rb genctl), VECBASE S → rb vecbase own (lands 0xb0 ≠ 0x50 → red). PSCALEADJ S → op pscale noig (lands → prints "ignored" → count 1 ≠ 0 → red). TxCTL S → rb t2ctl (lands 0xb8&3... wait TxCTL body: `&= 0xfc; |= (idata & 3)` → 0xb8 & 3 = 0 → reg was 0x03 → becomes 0x00? Wait pre=0x03, st.b 0x03, then st.h 0xaab8 lands: reg = (0x03 & 0xfc) | (0xb8 & 3) = 0x00 | 0x00 = 0x00. Also idata & PCC2_TCTL_COVF? Need PCC2_TCTL_COVF value. 0xb8 = 1011 1000. If COVF is 0x80, then it also clears OVF|COVF bits. Result likely ≠ 0x3 → red. Expected "0x3". And idata & ~7 → 0xb8 & ~7 ≠ 0 → HUH print (doesn't affect rows). rb t2ctl expects "0x3" → got "0x0" → red. OK.
+    
+    TxICR DEL M. SCCERR DEL S → value-identical arm! DEL at SCCERR: word/halfword write lands, stores 0. wwr sccerr dcl: count of DECL → 0 ≠ 1 → red. Wait but is there "hwr sccerr dcl" (added this pass): st.h 0xaab8 to SCCERR, expects 1 decline. With DEL, lands, count 0 → red. Yes caught via message row. Good.
+
+    SCCICR DEL S → rb sccicr (lands 0xb8 & 0x1f = 0x18 ≠ 0x1f → red). SCCTX M. SCCRX S → rb sccrx (0xb8 & 0xdf = 0x98 ≠ 0x1f → red). SCSIICR S → 0x98 ≠ 0x1f red. IPL DEL S → hwr ipl noig (lands → prints read-only message → count 1 ≠ 0 → red). Wait — with DEL at IPL, the st.h 0x0303 (hwr ipl noig session uses r6=0x0303): writeflag==MEM_WRITE body prints "write to read-only PCCTWO_IPL; ignored" once → count 1 ≠ 0 → red. Also hwr ipl dcl drops to 0 ≠ 1 → red. Good.
+
+    MASK DEL M (rb mask: lands 0xbb ≠ 0x12 → red; measured MD 80/82 with rb genctl, rb genctl lo — that was GENCTL deletion; MASK DEL measured in part tables? "MASK M" for DEL — part 1 had nine mutants; plausible).
+
+    FALL column: GENCTL M (table 1 M_NOBREAK), VECBASE M (pass3), PSCALEADJ M, TxCTL S, TxICR S, SCCERR E, SCCICR M, SCCTX S, SCCRX M, SCSIICR M, IPL M, MASK M.
+
+    FALL S cells: TxCTL → channel rb t2ctl AND rb t1ctl (M_FALL_TXCTL measured 94/96 with rb t2ctl, rb t1ctl red — that's the shared block FALL measured! So TxCTL FALL is arguably M via M_FALL_TXCTL... but the table marks it S. Hmm — M_FALL_TXCTL was measured in part 3/3b: 94/96 red rows "rb t2ctl, rb t1ctl". That IS a measured kill of the FALL shape at the TxCTL block. Why is it marked S in the table? Maybe because M_FALL_TXCTL removed the break at the shared block — that IS the FALL shape at TxCTL. The table says TxCTL FALL = S with channel rb t2ctl. But the measurement exists (94/96, rb t2ctl + rb t1ctl). Understated but not dishonest — actually wait, could be deliberate: maybe M_FALL_TXCTL's break removal was at... the diff for M_FALL_TXCTL isn't shown. The PRETABLE section 6 says "M_FALL_TXCTL (break removed at the shared block) -> rb t2ctl AND rb t1ctl both red". So it WAS measured. The contract table marking it S (same channel) when a measurement exists is a conservatism, not an overclaim. Fine — actually it underclaims; not a honesty problem. Hmm, or is it? Let me not over-index.
+
+    FALL S at TxICR → channel rb t2icr. Is that the same channel as a measured shape? M_FALL_TXCTL measured at TxCTL, not TxICR. TxICR's FALL S rests on "the mutant lands the write exactly as the measured one does at THAT arm" — which measured shape at TxICR? TxICR DEL = M, TxICR LEN = M. DEL at TxICR lands the write via rb t2icr channel — but does FALL land identically to DEL? FALL keeps the guard+announce then falls through to the body; DEL skips guard entirely. Both end up executing the same body with the same idata. So the landed state is identical; the readback can't tell them apart, and DEL was measured red via rb t2icr → FALL red via rb t2icr. Valid S reasoning. But note: FALL also announces (DECL count 1) which keeps dcl rows green — same as DEL? No — DEL has NO announce so "rb t2icr dcl" (expects 1) would ALSO red under DEL. Under FALL the dcl row stays green but rb t2icr reds. Both die. OK valid.
+
+    SCCTX FALL S → rb scctx; SCCTX DEL = M and LEN = M, both land the write, caught by rb scctx. Same argument. Valid.
+
+    Now the E cell: SCCERR FALL = E, warrant "the arm stores 0 and nothing in the model ever stores a nonzero SCCERR". Verify: SCCERR write body is `d->pcctwo_reg[PCCTWO_SCCERR] = 0`? Premise 5 says SCCERR's write body is `= 0`. If the arm stores 0 regardless of idata, then decline vs land → same stored state. But: does the landed write have OTHER observables? The fall-through at SCCERR: guard announces (DECL printed once), then body stores 0. Decline path: announces, breaks, stores nothing — but SCCERR reg is presumably always 0 anyway since nothing stores nonzero. So states identical. One subtlety: is there a print in the SCCERR body (HUH)? Premise 5 says "`= 0' and nothing in the model stores a nonzero SCCERR" — no HUH mentioned. If no HUH, E holds. Should verify in source.
+
+    Also SCCERR LEN2 = S via word rows — checked above.
+
+    Now the UNREACHABLE cells (RDDECL at six odd blocks): warrant = guest wide reads at odd offsets alignment-fault before memory_rw, and debugger reads don't dispatch to DM_DEFAULT devices. Verify: m88k alignment check before memory_rw — `#ifndef LS_1 ... m88k_exception(MISALIGNED)` — plausible for gxemul m88k (LS_1 = load/store single byte?). Actually in gxemul's cpu_m88k.c, memory access macros check alignment unless LS_1 (byte). Need to verify. And debugger `r`/`put` read path: memory_rw with NO_EXCEPTIONS flag → `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))` → pcc2 is DM_DEFAULT → not dispatched → reads return... something (maybe 0 or from memory). Measured in part 3 (`put b` no-dispatch proven). For READS the same dispatch condition applies. OK plausible; the put b measurement substantiates the dispatch claim for writes; reads share the condition. Fine.
+
+    Now Q1(d): C/W/A cells resting on cardinality rows — could a benign session event inflate or a mutant preserve the count?
+
+    `latch all`: 12 put h writes, expects DECL count 12. Benign inflation: could any other text in that session match DECL? DECL is presumably the decline substring "declined." — the session is JUST the 12 put h commands (no program run). Each put h at an odd/even pcc2 offset → one decline each. Could any put h trigger TWO decline prints? Each write hits one block → one guard → one announce. Fine. Could a put h at 0x16 (TxCTL shared T1/T2) print "PCCTWO_TxCTL" once — yes one. Count 12 exactly. Mutant preserving count: ALIAS of two bits → 11. Covered.
+
+    But WAIT — the `latch all` session includes IPL (0x3e) and MASK (0x3f) via `put h`. And GENCTL put h 0x0003 — declined, fine, no reassert (body not reached). OK.
+
+    `latch all w`: 12 put w writes of 0x00000003. put w at odd addresses — does the debugger's put w path warn on misalignment and store anyway? Premise: `put h` warns and stores via store_16bit_word → one memory_rw(len 2). For put w → store_32bit_word → one memory_rw(len 4)? Or two 16-bit stores? Premise 4 says "`put w' / `put d' likewise give len 4 / 8" — one memory_rw call each. If store_32bit_word actually does one memory_rw with len 4, count stays 12. If it did TWO len-2 writes, latch all w would count 24 on the fix — but BASE measured 96/96, so it's 12. Fine — measured.
+
+    `acc all`: 12 guest st.b of 0x10, expects 0 declines. Benign inflation: DECL appears only from decline announces. st.b at GENCTL with 0x10 — GENCTL body: stores byte, reassert. 0x10 & 0x04 = 0 → no c040 kill. VECBASE st.b 0x10: stores 0x10 & 0xf0 = 0x10; idata & ~0xf0 = 0 → no HUH. PSCALEADJ st.b 0x10: body prints "ignored (value...)" — does that print contain DECL? "PSCALEADJ ignored" — no "declined" substring. OK. SCCERR st.b: stores 0. IPL st.b 0x10: writeflag==MEM_WRITE body → prints "write to read-only PCCTWO_IPL; ignored" once — contains "ignored" not DECL. OK. MASK st.b: stores, reassert — GENCTL is... in acc all session, GENCTL got 0x10 (bit 0x04 clear) → reassert from MASK write reads GENCTL 0x10 → no kill. Good. TxCTL st.b 0x10: reg = 0 | (0x10 & 3) = 0; idata & ~7 = 0x10 → HUH print "HUH? write to PCCTWO_TxCTL with value 0x10" — contains "HUH", not DECL. OK. TxICR st.b 0x10: &= ~0x17, |= 0x10 & 0x17 = 0x10; idata & 0xe0 = 0 → no HUH; reassert. SCCICR st.b 0x10: stores 0x10 & 0x1f = 0x10, reassert. SCCTX 0x1f? no — acc all uses r5=0x10 for ALL blocks. SCCTX st.b 0x10: stores byte? SCCTX body — premise doesn't detail; "SCCTX stores byte and reassert"? Premise 5 says GENCTL and MASK store the byte and reassert; SCCTX body not stated. Hmm. SCCTX is "SCC Tx" — whatever; the row measured green on BASE.
+
+    Inflation risk for acc all: if any arm's byte body prints something containing the DECL substring — measured BASE 96/96 says no. OK.
+
+    A mutant preserving the count: GROW at one arm → 1 ≠ 0 red. Could a mutant decline a byte but NOT print? That's not GROW; that's a different shape. Fine.
+
+    Now Q2: smallest edit that breaks the property and passes all 96 rows. My candidates:
+
+    A. `d->warned |= (1u << bit)` → `d->warned = (1u << bit)` (delete one `|`). Property broken: per-block once-announce is lost across interleavings (A, B, A re-announces A). No row has an A-B-A pattern: latch same is A,A; latch two is A,B; latch all is each once; latch all w each once. All green. The contract CLAIMS to catch "loss of the latch in either direction: dropped `|=' floods (same site twice must announce ONCE)" — the claimed channel (latch same) does NOT see it because same-site-twice without interleaving keeps the bit. This is a genuine escape of a contract-CLAIMED property ("CATCHES ... loss of the latch in either direction"). Strong answer.
+
+    Actually wait — double-check `latch two`: "one bit shared across blocks silences (two sites must announce TWICE)". With `=`: site1 announces (warned = bit1), site2: test `!(warned & bit2)` — warned has only bit1 → announces (warned = bit2). Count 2. Green. Yes.
+
+    And also check there's no other session with two different blocks where order repeats... "latch all" = 12 distinct blocks once each — every announce fires since each bit tested when warned holds only other bits. 12 announces. Green. Confirmed escape.
+
+    B. The disclosed name-string gap (disclosed, so not a contract breach).
+
+    C. RDDECL at odd blocks — unreachable, disclosed.
+
+    D. A FALL-through at SCCERR — E, value-identical.
+
+    E. `1u << bit` → `1u << (bit + 1)` — bits shift, still distinct → no observable change at all (behaviorally identical). Not a property break.
+
+    F. Change the announce text "declined." → something else at ONE arm — dcl rows count text. Five odd-arm dcl rows count GENERIC DECL text; the seven named-text rows pin names. DECL is the generic substring — changing the word "declined" itself would red everything. Changing just a NAME string at one of the five odd arms: invisible (disclosed).
+
+    G. What about `break` → `return 1` inside the guard at one arm? Observably = decline (function returns, write doesn't land). For operator put h path and guest path — if devaccess return value matters... In gxemul, device access functions return 1 on success typically, and the return value is mostly ignored except for... Actually memory_rw returns the device's return. For a WRITE, caller usually ignores. If `return 1` == break-then-fall-to-end-of-function-return-1, identical. No break.
+
+    H. In `pcc2_width_decline`, change `fatal(...)` to `debug(...)`? debug is `// #define debug fatal` commented out — debug is likely a no-op macro or actual debug print. If debug prints nothing by default → announce lost → dcl rows red at that arm, latch all reds. Caught.
+
+    I. Reorder the guard conjuncts — no-op.
+
+    J. `len != 1` → `(len & 1) != 1`? For len 1: 1&1=1 → false → no decline (byte lands, correct). len 2: 2&1=0 → 0!=1 true → decline (correct). len 4: 4&1=0 → decline (correct). len 8: decline. Behaviorally IDENTICAL for len ∈ {1,2,4,8}. Not a break.
+
+    K. `len != 1` → `len != 1 && len != 1`? no-op.
+
+    L. `writeflag == MEM_WRITE` → `writeflag != MEM_READ` — equivalent (0/1 domain). No break.
+
+    M. At the TxICR arm, change `idata & 0x17` mask — that's body, not guard; out of scope (guard shapes only). The contract covers guard mutations; body mutations are the arms' own semantics, presumably covered by value rows but not part of this enumeration. Q2 says "Shapes NOT in the contract are the interesting ones" — the enumeration is over guard shapes. The `|=` → `=` is in the HELPER (pcc2_width_decline), which IS part of the guard mechanism (the latch). The contract claims to catch latch loss "in either direction". So answer A is squarely a contract-claimed property with no carrying row.
+
+    Also maybe: N. `!(d->warned & (1u << bit))` → `!(d->warned & (1u << (bit & 7)))`? Collisions → latch all drops. Caught.
+
+    O. What about making pcc2_width_decline announce ALWAYS (remove the latch test: `if (!(...))` → `if (1)`)? Then same-site-twice announces twice → latch same expects exactly 1 → red. Caught.
+
+    P. Remove the `break` AND the body (FALL to nothing)? Weird. Not one-token.
+
+    Q. RDDECL partial: `writeflag == MEM_WRITE` → `writeflag <= MEM_WRITE` at ONE block (not all twelve). M_RDDECL_ALL was all twelve. At ONE even block: hrd <block> nod reds (wide read declined → DECL appears). At one ODD block: unreachable (disclosed). Covered.
+
+    R. What about the GROW variant at the COUNTER arms (T1CMP/T2CMP/T1COUNT/T2COUNT)? They have no width guards (memcpy). Growing a guard THERE isn't part of the twelve-block space. A new decline on the counter arm would... acc all doesn't touch counters. No row writes to counter arms at all? pcc2counter8 is filed as NOT caught. So adding a width DECLINE to the counter arm — no row touches counters except... "byte rd"/"devsig" maybe read CHIPID. If no session accesses counters, a mutant adding `exit(1)` or a decline at the counter arm passes all 96 — but that's OUTSIDE the twelve-block domain (a new guard, not a guard mutation) and counter8 is filed. The contract's DOES-NOT-CATCH lists pcc2counter8 (the counter arm's raw memcpy of an 8-byte write). Adding a kill at the counter arm is arguably a different defect class (pcc2defaultkill-like?). Eh — it's outside the enumeration's domain; mention as a boundary note maybe.
+
+    S. One more: the `hwr ipl noig` row uses st.h 0x0303 to IPL. FALL at IPL: announce (WIDTH latch) + fall through → write body prints read-only message once → count 1 ≠ 0 → red. But subtle: the WIDTH latch announce for IPL consumes PCC2_W_IPL_LEN bit. Fine.
+
+    T. What about FALL at TxCTL reaching only the T1 label — the "block split in two" shape (deepseek's point): break removed only in the T1CTL sub-case? But there's ONE shared guard for both labels — you can't remove break for one label without an if. A "split block" mutant would be a bigger edit (duplicating the case). rb t1ctl/rb t1icr close it. OK.
+
+    Now, Q1(a) domain: guard inputs (len, writeflag, relative_addr → block, idata, d->warned). The nine shapes cover: len (DEL, LEN, LEN2, GROW, SWAP-onto-idata), writeflag (RDDECL), block (ALIAS is about... no wait, ALIAS is about the enum/latch bit assignment, i.e., d->warned), FALL (break removal — control flow), idata (SWAP). d->warned: ALIAS (bit assignment) and... the latch UPDATE operator (`|=`) is NOT covered — my answer A. Also the latch TEST operator (`&` → `==`) — same A-B-A hole. So the domain has a hole on the d->warned axis: only bit-CARDINALITY (ALIAS) is shaped, not latch-state TRANSITION (update operator). Good finding for 1(a).
+
+    Another domain check: relative_addr → block. A shape where the guard fires at the WRONG block (e.g., guard moved to a different case)? Moving the guard from VECBASE to PSCALEADJ: VECBASE wide writes land (rb vecbase own reds), PSCALEADJ wide writes... already guarded. Caught. A shape where TWO guards at one block (duplicate)? `if (len != 1 ...) decline; if (len != 1 ...) decline;` — second never announces (bit already set) → no observable. Fine.
+
+    What about relative_addr parity: `relative_addr %= 0x40` keeps parity — an offset computation bug is outside guard shapes.
+
+    Also: guard present but announce bit WRONG per block (e.g., VECBASE uses PCC2_W_GENCTL_LEN): that's ALIAS → latch all drops to 11 → caught. OK.
+
+    Now Q1(b) deep check on S cells — "does the mutant really land the write, or die, exactly as the measured one does at THAT arm?"
+
+    Critical one: VECBASE DEL = S, channel rb vecbase own, with measured counterpart FALL (M_FALL_VECBASE). DEL vs FALL at VECBASE: DEL deletes guard → body runs: stores idata & 0xf0 = 0xb8 & 0xf0 = 0xb0, prints HUH (0xaab8 & ~0xf0 ≠ 0). FALL: announce + body same → 0xb0 + HUH + DECL. rb vecbase own expects 0x50 → both red. Valid.
+
+    VECBASE KILL = M (part 1? nine mutants at 78 rows — plausibly included VECBASE kill). OK.
+
+    GENCTL LEN = S: LEN = `len > 2` → halfword lands at GENCTL → rb genctl reds (0xbb ≠ 0x50... wait rb genctl expects GENCTL unchanged; lands 0xbb → red) and rb genctl lo (0x22 lands → wait LEN `len > 2` lets ANY halfword land regardless of value → rb genctl lo reds too). Measured counterpart: GENCTL DEL = M lands identically for halfwords. Valid S.
+
+    GENCTL KILL = S: measured kills at other guest-reachable blocks... GENCTL kill → hwr genctl dies (how != exit0) → red. Kill measured at SCCTX/MASK/etc. "dies exactly as the measured one does" — fine.
+
+    PSCALEADJ KILL = S via op pscale survival. Kill measured at VECBASE (M); PSCALEADJ kill: put h → exit(1) → op pscale (exit0 expected) reds. Valid.
+
+    SCCERR DEL = S: value-identical arm — DEL at SCCERR: halfword write lands, stores 0, NO announce → "hwr sccerr dcl" expects 1 → 0 → red. Also wwr sccerr dcl. The S warrant says "the arm's own dcl / survival / readback rows are the channel; no S cell is survival-only". hwr sccerr dcl is a message row — fine, that's the channel.
+
+    SCCERR KILL = S: wide write rows to SCCERR: hwr sccerr dcl (session dies at st.h → count 0 ≠ 1 red), wwr sccerr (how exit0 → dies → red). Valid.
+
+    IPL DEL = S via hwr ipl noig (prints once ≠ 0) AND hwr ipl dcl drops to 0. Valid.
+
+    IPL KILL = M — measured (part tables list M_FALL_IPL; KILL at IPL measured in part 1/2? "IPL M" for KILL — earlier tables "part 1 (nine mutants at 78 rows)" — plausible).
+
+    MASK KILL = M, MASK DEL = M, MASK LEN = M. OK.
+
+    LEN column S cells: GENCTL S (via rb genctl, as LEN lands halfword same as DEL which is M at GENCTL). VECBASE S (rb vecbase own; halfword lands 0xb0 ≠ 0x50). PSCALEADJ S (op pscale noig: halfword lands → prints → 1 ≠ 0). TxCTL M, TxICR M, SCCERR M, SCCICR S (rb sccicr), SCCTX M, SCCRX S, SCSIICR S, IPL S (hwr ipl noig), MASK M. All have landing-channels measured via FALL/DEL at the same arm. Consistent.
+
+    Wait — LEN at SCCERR = M? Table says SCCERR LEN = M. LEN `len > 2` at SCCERR: halfword lands (stores 0), word declined. hwr sccerr dcl drops to 0 → red. Measured. Fine.
+
+    Hmm, SCCERR LEN2 = S: `len == 2` → halfword declined (hwr sccerr dcl stays 1 — green), word LANDS → wwr sccerr dcl drops to 0 → red. Also latch all w drops. Valid.
+
+    Now ALIAS = C everywhere: "any collision drops the count" — latch all. If two blocks share a bit, one of the twelve put h writes announces, the other doesn't → 11. Valid. But: ALIAS at the ENUM level — "one enum member for two blocks" — e.g., PCC2_W_VECBASE_LEN and PCC2_W_PSCALEADJ_LEN... wait they're auto-incremented enum members; aliasing = using the same constant at two sites. latch all catches. What about aliasing a bit ≥ 12 — e.g., using bit 12 (PCC2_W_NBITS=12, bits 0..11)? Using bit 31? Still distinct per block → no collision → no observable change → not a break (typedef bounds ≤ 32). Fine.
+
+    GROW column: A/C at GENCTL, TxCTL, TxICR, SCCERR, SCCTX (blocks with per-arm acc rows: acc genctl, acc t2ctl, acc t2icr, acc scctx, acc sccerr — five) and C at the other seven (VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR, IPL, MASK) via acc all only. acc all = twelve guest st.b, zero declines. GROW at any arm → its st.b announces → count ≥ 1 → red. Measured M_GROW_PSCALEADJ (part 3c: 95/96, red on acc all). Valid. Note the earlier vacuous `put b` form was caught and fixed — honest.
+
+    Now — potential inflation issue for acc all: the row counts DECL in a session that ALSO does other things? No — acc all session = setup + 12 st.b program + run. setup() — does setup print anything matching DECL? Measured BASE green, so no.
+
+    Q4 — record honesty. Things to check:
+
+    - "MD 80/82 rb genctl, rb genctl lo" (pass-3 seats table, 82-row instrument): GENCTL guard deleted → rb genctl red and rb genctl lo red. Consistent with the story (0xbb and 0x22 land). OK.
+
+    - kimi seat: "delete@VECBASE 80/82 (latch all, op vecbase dcl)" — hmm interesting: DELETE at VECBASE measured 80/82 with reds "latch all" and "op vecbase dcl". Why those? Guard deleted at VECBASE → put h at VECBASE lands silently → "op vecbase dcl" expects 1 DECL → 0 → red; latch all expects 12 → 11 → red. And rb vecbase own — WAIT. In the 82-row instrument (pass 3), did "rb vecbase own" exist? No — rb vecbase own was ADDED in pass 4 (this diff, 96 rows). In the 82-row instrument, DEL at VECBASE was caught by latch all + op vecbase dcl (count rows), because there was no readback of VECBASE's own arm. Right — pass 3 found FALL at VECBASE was 82/82 (FALL keeps announcing, so counts stay green). DEL at VECBASE drops the announce → caught by counts. Consistent.
+
+    - "fable5 M_FALL_VECBASE 82/82" and "M_FALL_IPL 82/82" — consistent with the repair story.
+
+    - Part 3 table: BASE 95/96 (rb t1ctl string), M_RDDECL_ALL 88/96 — reds listed: hrd genctl nod, hrd t2ctl nod, hrd t2icr nod, hrd sccerr nod, hrd scctx nod, wrd sccerr nod, rb t1ctl, hrd ipl nod = 8 reds → 88/96. Count: hrd genctl nod, hrd t2ctl nod, hrd t2icr nod, hrd sccerr nod, hrd scctx nod, hrd ipl nod = 6, wrd sccerr nod = 7, rb t1ctl = 8. Yes 8 reds = 88/96. Consistent (rb t1ctl red due to the string bug present in part 3 run).
+
+    Wait — M_RDDECL_ALL declines wide READS: six even blocks' hrd nod + SCCERR's wrd nod = 7 reds, plus rb t1ctl (pre-existing string bug) = 8 → 88/96. But hold on: RDDECL at all twelve — the wide reads are only at even blocks (hrd sessions) + SCCERR word. But RDDECL also affects... the wide read being declined means the arm's read body is skipped — for most arms the read body is just break (memcpy above already served the data) — so hrd <nm> lv still 0x5a5a5a5a (the ld.h still gets data from the pre-switch memcpy). And hrd <nm> survival: declined read → break → survive. So only the nod rows red. Consistent.
+
+    But ALSO: RDDECL consumes latch bits on READS. Does any session mix a wide READ then a wide WRITE at the same block and count exactly 1 DECL? E.g., "hwr <nm> dcl" rows: separate session from hrd (fresh pty per session). Session for hwr genctl: setup + st.h → 1 DECL. No wide read in that session. So RDDECL doesn't inflate write sessions. What about "latch same" (two st.h GENCTL)? No reads. OK — 7 reds exactly as listed. Consistent.
+
+    - Part 3c: M_GROW_PSCALEADJ 95/96 red on "acc all" — with BASE 96/96. The guest st.b form caught it. Consistent with the vacuous-put-b story.
+
+    - The numstat disclosure: probe +250/-4; gate 3/3; dev_pcc2.c 22/10; plus files NOT shown (sgi_de_primop_probe.py 20/6 — "a different round (#500 pass 16, comment-only)", OUTSTANDING_BUGS, CHANGELOG, ledger, matrix). Question 4 asks whether the record is honest — files not shown but disclosed with reasons. The probe diff is inlined in full; I could verify against the actual file (GXEMUL-SEC/regress/pcc2_width_probe.py).
+
+    - The PRETABLE split honesty: "PRETABLE.out was restored to Sections 0-4 and its amendments moved to a second file because appending had destroyed its mtime discriminator". Is the split honest as written? The amendments file says "Split out of PRETABLE.out on pass 3" and contains Sections 5-7. Section 7 is "PART 3 MEASURED ... and what it corrected" — written AFTER part 3, but the file's framing says Section 6 was "Written after pass 3's seats landed and BEFORE part 3 of the table". Hmm — if the split happened on pass 3 (after section 5 was appended... section 5 was written after part 1 and before part 2), and section 6 before part 3, section 7 after part 3 — all in the amendments file. The mtime-discriminator story: PRETABLE.out's mtime was used to prove sections were written before the tables ran; appending sections 5+ changed mtime, destroying that. So they restored PRETABLE.out (Sections 0-4, presumably from a snapshot with original mtime?) and moved 5+ to a second file. Is that honest? The discriminator value of PRETABLE.out's mtime is now only as good as the restore fidelity — a restore can't recreate an mtime unless they preserved it (touch -r or cp -p). And the amendments file's own mtime now covers sections 5-7 — but section 7 was written AFTER part 3 measured, so the file's mtime can't discriminate "6 written before part 3". The written record SAYS section 6 was written before part 3 and section 7 after — but with both in one file, the mtime discriminator for that ordering is lost. Is that "honest as written"? The brief asks exactly this. The answer: the split preserves the 0-4 discriminator (if restored with mtime intact — unverifiable from the packet) but the amendments file itself cannot discriminate section 6 (pre-part-3) from section 7 (post-part-3) — that's disclosed in the text but the file structure no longer proves it. It's honest as a CLAIM, but the evidentiary strength is weaker than the original scheme; the claim "written before part 3" for section 6 rests on the author's word, and section 7's own content ("ESCAPE: M_GROW_PSCALEADJ ... 96/96 (part 3b)") proves it was written after — internally consistent. The predictive sentences in section 6 ("M_LEN2_VECBASE -> 11", "M_GROW_PSCALEADJ -> 1", "M_RDDECL_ALL -> seven reds") matched part 3 outcomes (94/96 → 2 reds?? wait).
+
+    Hmm wait — check section 6 predictions vs part 3 results:
+    - "rb vecbase own ... M_FALL_VECBASE lands 0xb0" → part 3: M_FALL_VECBASE 94/96 reds "rb vecbase own, rb t1ctl" — 2 reds: rb vecbase own (predicted) + rb t1ctl (string bug). 96-2=94. ✓.
+    - "hwr ipl noig ... M_FALL_IPL prints it once" → M_FALL_IPL 94/96 "hwr ipl noig, rb t1ctl". ✓.
+    - "latch all w ... M_LEN2_VECBASE -> 11" → M_LEN2_VECBASE 94/96 "latch all w, rb t1ctl". ✓ (11 = count drops from 12; listed as "latch all w" row red).
+    - "acc all ... M_GROW_PSCALEADJ -> 1" → part 3: M_GROW_PSCALEADJ 95/96 "rb t1ctl" only?! WAIT. Part 3: "M_GROW_PSCALEADJ 95/96 rb t1ctl" — the ONLY red is rb t1ctl (the string bug)! acc all did NOT red — because acc all was still the vacuous `put b` form in part 3! Section 7 confesses: "ESCAPE: M_GROW_PSCALEADJ 95/96 (part 3) and 96/96 (part 3b) -- `acc all' did not move". So section 6's prediction "M_GROW_PSCALEADJ -> 1" was WRONG (measured 0 additional reds; the row was vacuous). Section 7 corrects it. Honest correction, disclosed prominently. But note: section 6's text as inlined in the amendments still says "M_GROW_PSCALEADJ (`len != 1' -> `len != 0' at an arm with no acc row) -> 1" — section 7 then says that prediction failed and why. As a record, the wrong prediction is preserved + corrected — that's honest. Also section 6 says acc all was "Twelve legal `put b' writes" — part 3c changed it to guest st.b; the contract diff shows the updated comment with the *** MEASURED confession. OK.
+
+    - "M_RDDECL_ALL -> seven reds" → 88/96 = 8 reds (7 + rb t1ctl). ✓ as explained with "the artifact row subtracted" — section 7 says "Kills, each on exactly the row Section 6 named (the artifact row subtracted)". OK consistent.
+
+    - M_FALL_TXCTL predicted "rb t2ctl AND rb t1ctl both red" → part 3: "M_FALL_TXCTL 94/96 rb t2ctl, rb t1ctl" — 2 reds ✓ (rb t1ctl red for the RIGHT reason here? or the string bug? In the M_FALL_TXCTL run, rb t1ctl reds because the write LANDS at T1CTL (want 0x3, got 0xb8&3=0x0... wait TxCTL body for 0xaab8: &=0xfc → 0x03&0xfc=0; |= (0xb8&3)=0 → 0; COVF? 0xb8 & PCC2_TCTL_COVF — if COVF is e.g. 0x40: 0xb8&0x40=0? 0xb8=10111000, bit6=0x40 → 0xb8 & 0x40 = 0? 0xb8 = 184, 0x40=64, 184 & 64 = 64≠0 → yes COVF set → clears OVF|COVF from reg 0 → still 0. Printed as "0x0" ≠ "0x3" → red. And in part 3 the string bug also made BASE's rb t1ctl red ("want 0x03 vs printed 0x3"). In part 3b BASE is 96/96 and M_FALL_TXCTL still 94/96 with the same two reds — so in 3b rb t1ctl reds for the real reason. Consistent.)
+
+    Now, the pass-3 seats table header: "Pass-3 seats, on the 82-row instrument (md5 cd22f951)". BASE 82/82. MD 80/82. MA/MB/MC 82/82 — the opus reader's controls: MA = break removed at VECBASE (FALL — 82/82, the escape!), MB = break removed at IPL (82/82 escape), MC = RDDECL all (82/82 escape). Wait — but the top table says "kimi M_FALL_VECBASE 82/82, M_FALL_IPL 82/82, delete@VECBASE 80/82" and "fable5 M_FALL_VECBASE 82/82". So MA/MB/MC are opus's labels for the same three escapes. All three escapes were measured by multiple seats — consistent story. And the 96-row repair kills exactly those three classes (rb vecbase own / hwr ipl noig / *nod rows). Consistent.
+
+    Hmm — one more consistency check: "BASE 82/82" for pass-3 instrument, and pass-3 found three 82/82 escapes + MD 80/82 (control, killed by rb genctl + rb genctl lo). rb genctl lo existed at 82 rows? Yes — it was added in... the diff shows rb genctl lo as part of THIS diff? Let me check: the diff section "+t, alive, how = session(setup(r5="0x11", r6="0x0022") ... row("rb genctl lo"..." is prefixed with + in the diff (lines 586-589 are `+`). So rb genctl lo is NEW in the 96-row instrument. But the pass-3 82-row table says MD's reds were "rb genctl, rb genctl lo"! If rb genctl lo was added at 96, the 82-row instrument couldn't have red it. CONTRADICTION?
+
+    Wait, let me re-read. The diff hunk at lines 579-589: "# PRE-TABLE BLOCK yield (section 1, guard field vs body field)... Written before the repair table ran" with row("rb genctl lo"...). It's prefixed `+` in this diff (60→96). Hmm, but the 82-row instrument (pass 3, md5 cd22f951) already had rb genctl lo per the table "MD 80/82 rb genctl, rb genctl lo". And the brief's earlier history: "part 2 (`M_IDATA_GENCTL' 80/82)" — M_IDATA_GENCTL is the SWAP/operand mutant at GENCTL measured in part 2 at 82 rows with reds rb genctl + rb genctl lo presumably. So rb genctl lo existed at 82 rows. But then why does this diff (60 → 96) ADD it?
+
+    Hold on — the diff header says "60 -> 96 rows". But the gate diff shows the OLD gate list had 60 rows... let me count the old gate list: live, devsig, byte rd, byte rd liv (4) + hrd/hwr genctl/t2ctl/t2icr/sccerr/scctx ×2 each = 20 (24) + wrd sccerr, wrd sccerr lv, wwr sccerr, wwr sccerr lv, wwr sccerr dcl (5 → 29) + val h genctl, val w sccerr (2 → 31) + rb genctl, rb genctl dcl, rb vecbase (3 → 34) + latch same, latch two (2 → 36) + acc ×5 blocks ×2 = 10 (46) + op vecbase, op vecbase dcl, op pscale, op pscale dcl, op t1ctl, op t1ctl dcl, op t1icr, op t1icr dcl, op sccicr, op sccicr dcl, op sccrx, op sccrx dcl, op scsiicr, op scsiicr dcl (14 → 60). Yes 60. And denominator check 60. So the OLD probe (at b78bb0f, before this round) was 60 rows.
+
+    But pass 2/3 history speaks of 78-row and 82-row instruments. So the sequence: 60 (pass 1) → 78 (pass 2 repair) → 82 (pass 3) → 96 (this diff, pass 4). But the DIFF shown is bed9732..61ad4fe "60 -> 96"?? If the current tree's probe is at 82 rows (pass 3 repair), the diff from 60 to 96 would be against the ORIGINAL — unless the diff base is the committed version (60 rows at b78bb0f) and the working tree went 60→78→82→96 uncommitted, and this diff is the full uncommitted delta. That makes sense! "THE TREE UNDER REVIEW ... UNCOMMITTED on top of b78bb0f" — the diff is against the last commit (60 rows), encompassing all the pass repairs. The header "60 -> 96 rows" is the cumulative diff. OK, no contradiction. Fine.
+
+    Let me double check the row count arithmetic: 60 old rows. New rows added: hrd nod ×5 (genctl, t2ctl, t2icr, sccerr, scctx) = 5; wrd sccerr nod = 1 (6); rb t2ctl, rb t2ctl dcl, rb t2icr, rb t2icr dcl, rb scctx, rb scctx dcl = 6 (12); hwr sccerr dcl = 1 (13); rb genctl lo = 1 (14); latch all, latch all lv = 2 (16); rb sccicr, rb sccrx, rb scsiicr = 3 (19); op pscale noig = 1 (20); rb vecbase own = 1 (21); hwr ipl noig = 1 (22); latch all w = 1 (23); acc all, acc all lv = 2 (25); rb t1ctl, rb t1icr = 2 (27); hrd ipl, hrd ipl lv, hrd ipl nod = 3 (30); hwr ipl, hwr ipl lv, hwr ipl dcl = 3 (33); op mask, op mask dcl, rb mask = 3 (36). Total +36 → 96. ✓ Gate new list count: old 60 + "hrd genctl nod"(1)... the new gate list adds: hrd genctl nod, hrd t2ctl nod, hrd t2icr nod, hrd sccerr nod, hrd scctx nod (5), wrd sccerr nod (1), rb t2ctl, rb t2ctl dcl, rb t2icr, rb t2icr dcl, rb scctx, rb scctx dcl (6), hwr sccerr dcl (1), rb genctl lo (1), latch all, latch all lv (2), rb sccicr, rb sccrx, rb scsiicr (3), op pscale noig (1), rb vecbase own (1), hwr ipl noig (1), latch all w (1), acc all, acc all lv (2), rb t1ctl, rb t1icr (2), hrd ipl, hrd ipl lv, hrd ipl nod (3), hwr ipl, hwr ipl lv, hwr ipl dcl (3), op mask, op mask dcl, rb mask (3) = 36 → 96 ✓. And gate denominator updated to 96/96/0 ✓.
+
+    Wait — check the new gate list for missing rows: the probe emits also "hrd genctl lv" etc. (already in old list). What about "rb genctl dcl" (old), "rb vecbase" (old). New rows in probe NOT in gate list? Probe also emits the NOROW summary line (not a row). "hwr ipl noig" ✓ in list. "op pscale noig" ✓. Let me scan probe rows vs gate list:
+    Probe rows (from diff context): live, devsig, byte rd, byte rd liv (old context, not shown but in gate) ✓. The hrd/hwr loops: hrd X, hrd X lv, hrd X nod(new), hwr X, hwr X lv — gate has all ✓. wrd sccerr, wrd sccerr lv, wrd sccerr nod(new) ✓, wwr sccerr, wwr sccerr lv, wwr sccerr dcl ✓. val h genctl, val w sccerr (old) ✓. rb genctl, rb genctl dcl, rb vecbase ✓. rb t2ctl(dcl), rb t2icr(dcl), rb scctx(dcl) ✓. hwr sccerr dcl ✓. rb genctl lo ✓. latch all, latch all lv ✓, latch same, latch two ✓. acc genctl...acc sccerr ×(row+nod) ✓, acc all, acc all lv ✓. op vecbase(dcl), op pscale(dcl), op t1ctl(dcl), op t1icr(dcl), op sccicr(dcl), op sccrx(dcl), op scsiicr(dcl) ✓. rb sccicr, rb sccrx, rb scsiicr ✓. op pscale noig ✓. rb vecbase own ✓. hwr ipl noig ✓. latch all w ✓. rb t1ctl, rb t1icr ✓. hrd ipl, lv, nod ✓. hwr ipl, lv, dcl ✓. op mask, op mask dcl, rb mask ✓.
+    
+    Count check probe side: old 60 + 36 = 96 ✓. Rows green 96, red 0, emitted 96 ✓.
+
+    Hmm, wait: the hwr loop for the five even blocks — old rows "hwr genctl", "hwr genctl lv" etc. And "hwr sccerr dcl" NEW — but SCCERR is one of the five even blocks in the hrd/hwr loop? The loop covers genctl, t2ctl, t2icr, sccerr, scctx (the five pre-IPL even blocks). hwr sccerr (survival) old ✓, hwr sccerr dcl new ✓ — the new one uses a SEPARATE session with st.h 0xaab8 (line 575: setup(r6="0xaab8") + program([ST_H(6, SCCERR)])) while the loop's hwr sccerr used r6=0xaabb? Whatever — counted.
+
+    Now the "96 rows" claim: denominator rows green/emitted — verified arithmetic 60+36=96. ✓
+
+    Next: verify against the actual tree. The brief says the tree is GXEMUL-SEC/src and GXEMUL-SEC/regress, uncommitted on b78bb0f. I should check: dev_pcc2.c arms (VECBASE mask 0xf0, SCCICR 0x1f, SCCRX/SCSIICR 0xdf, SCCERR =0, IPL bodies, PSCALEADJ print, TxCTL/TxICR bodies, SCCRXIACK no guard, counter arms memcpy, twelve guard blocks, enum PCC2_W_NBITS=12, d->warned 32-bit, reassert_interrupts GENCTL&0x04 kill), mvme_pcctworeg.h offsets + "bytes, two-bytes, or four-bytes", m88k alignment check before memory_rw, debugger put path (store_16bit_word, warns on misaligned, NO_EXCEPTIONS for put b), memory_rw dispatch condition, MEM_READ=0.
+
+    Also the offsets: GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, T2CTL 0x16, T1CTL 0x17, T2ICR 0x1a, T1ICR 0x1b, SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f, SCCRXIACK?, CHIPID 0x00. And whether IPL/MASK arm positions match. And whether there are OTHER arms with width guards not in the twelve (e.g., does SCCRXIACK have one? claimed no). And whether there are blocks in the switch NOT accounted: the census: CHIPID(0x00), counter arms (T1CMP/T2CMP/T1COUNT/T2COUNT), the twelve, SCCRXIACK, default (kill). Any others? e.g., PCCTWO_SCC? Let me check the source.
+
+    Also premise 2: memory_readmax64 big-endian compose — check memory_rw.c / memory_readmax64. And that (uint8_t)idata is the highest-address lane: for a halfword at addr A (lanes A, A+1), big-endian compose → idata = (byte[A] << 8) | byte[A+1]; (uint8_t)idata = byte[A+1] = highest-addressed lane = neighbour's byte. For GENCTL at 0x02, st.h 0xaabb → byte[0x02]=0xaa, byte[0x03]=0xbb, idata = 0xaabb, (uint8_t) = 0xbb = VECBASE lane ✓.
+
+    Q1(c) E/UNREACHABLE warrants:
+    - SCCERR FALL E: need to verify SCCERR body stores 0 and has no print; and nothing stores nonzero SCCERR. grep.
+    - RDDECL odd blocks unreachable: verify m88k alignment check and debugger read dispatch.
+
+    Let me now actually read the source files. Key files:
+    - GXEMUL-SEC/src/devices/dev_pcc2.c
+    - GXEMUL-SEC/src/include/mvme_pcctworeg.h (or src/include/)
+    - GXEMUL-SEC/src/cpus/cpu_m88k.c (alignment check) — or memory access macros
+    - GXEMUL-SEC/src/debugger/ (put command path) — debugger.c or misc
+    - GXEMUL-SEC/src/core/memory_rw.c (dispatch condition)
+    - GXEMUL-SEC/regress/pcc2_width_probe.py (to verify the diff matches the working tree)
+
+    Given the scale, I could delegate verification to subagents. But I can also do targeted greps/reads myself. The brief invites re-derivation. Let me do a focused pass myself — a handful of greps and reads. Actually there's a lot; but the core verification targets are small. Let me start.
+
+    Plan:
+    1. Read dev_pcc2.c in GXEMUL-SEC/src/devices/ (the relevant switch + helper + enum + struct warned field + reassert).
+    2. Read mvme_pcctworeg.h offsets + the "bytes, two-bytes, or four-bytes" comment.
+    3. Grep m88k alignment check (LS_1 / MISALIGNED) in cpu_m88k*.c.
+    4. Grep debugger put path: store_16bit_word, misaligned warn, NO_EXCEPTIONS in put b vs put h.
+    5. Grep memory_rw dispatch condition `DM_READS_HAVE_NO_SIDE_EFFECTS` and MEM_READ/MEM_WRITE values.
+    6. Check regress/pcc2_width_probe.py matches the diff (row count 96, md5?).
+    7. git -C GXEMUL-SEC status/diff --stat to verify numstat disclosure and uncommitted-on-b78bb0f.
+
+    Also verify the probe's docstring in the working tree matches the inlined contract verbatim (claimed VERBATIM).
+
+    Then compose the adversarial review answering Q1(a-d), Q2 (smallest edit), Q3, Q4, verdict first, with the denominator of cells/shapes swept.
+
+    My tentative findings:
+    - F1 (Q2 answer / Q1(a) hole): `|=` → `=` in pcc2_width_decline breaks "announce exactly once per block" under A,B,A interleaving; no row carries it; the contract's CATCHES list claims "loss of the latch in either direction: dropped `|=' floods" — the claimed row (latch same) does NOT see it. Also `&` → `==` in the test, same hole. These are guard-mechanism shapes on the d->warned input the nine don't cover (domain gap: latch TRANSITION, not just latch CARDINALITY).
+    
+    Wait, but is "dropped |= floods" claimed caught? The CATCHES bullet says: "loss of the latch in either direction: dropped `|=' floods (same site twice must announce ONCE), and one bit shared across blocks silences (two sites must announce TWICE)". The parenthetical for the flood direction is "same site twice must announce ONCE" — i.e., latch same is the claimed channel. `|=` → `=` keeps latch same green (A,A: after first A, warned == bit_A; second A: bit_A set → no announce → count 1 ✓ green). So the property "dropped |= floods" IS broken by the edit (an A,B,A sequence floods A twice) while the claimed channel stays green. That's a genuine contract-level escape: a CATCHES claim no row carries. Strong. The smallest edit: delete a single `|` character.
+
+    Hmm, but let me steelman the brief: is `|=`→`=` "the latch" loss or a different defect? The contract's own wording names "dropped `|='" — literally this edit. And says its channel is "same site twice must announce ONCE". That channel is insufficient — needs an interleaving. So it's both a Q1(a) domain gap and a Q4 record issue (a claim of coverage no row carries) and the Q2 answer. 
+
+    - F2 (Q1(b)/(d) check): FALL at TxCTL marked S though M_FALL_TXCTL was measured (94/96, rb t2ctl + rb t1ctl). Underclaim, not a violation — actually wait, is it M or S? Table: TxCTL FALL = S. But part 3 measured M_FALL_TXCTL. The preamble says "M = measured kill (log named in CHANGELOG/PRETABLE)". M_FALL_TXCTL's log IS named (part3). So the cell should be M by the table's own legend. Minor record inaccuracy — conservative direction. Note it. Hmm, actually let me double-check: maybe M_FALL_TXCTL removed the break AND something else, or was measured only at... PRETABLE S6: "M_FALL_TXCTL (break removed at the shared block) -> rb t2ctl AND rb t1ctl both red". That is exactly FALL at TxCTL measured. So the cell qualifies as M per the legend. Marking S underclaims. Not fatal; flag as record nit. Actually — hold on. Could it be deliberate because M_FALL_TXCTL's measurement is "at the shared block" covering both T1 and T2 labels, and the legend's M requires the log named "in CHANGELOG/PRETABLE" — it is named in PRETABLE S7. So S is just wrong-ish/conservative. Flag.
+
+    - F3: The RDDECL closure: "hrd <block> nod" on the SEVEN wide-read sessions — but the RDDECL mutant at ONE even block also affects... wait, what about the "hrd <nm> lv" rows: declined read skips the arm's read body. For IPL, the READ body has the "IPL == 0 on read" print (static w #119). Under RDDECL at IPL, the wide read is declined → skips the read body → the "IPL == 0" print never fires. Is there a row counting that print? hrd ipl nod counts DECL==0 → reds under RDDECL. Fine. But ALSO: what does the guest ld.h GET under a declined read? The memcpy above the switch already served the data (premise: "the memcpy above the switch already served them"), so r4 = 0x5a5a5a5a still → lv green. Need to verify the memcpy is BEFORE the switch and serves reads regardless of arm — check dev_pcc2.c.
+
+    - F4: check the claim "Twelve `if (len != 1) { fatal(...); exit(1); }' blocks (ten kills and two #119 function-static latches)" — verify in git show b78bb0f:src/devices/dev_pcc2.c or the pre-fix source. The current comment says TEN kills + two warn-once latches. Could verify via git.
+
+    - F5: "d->warned is a 32-bit field with twelve bits assigned, written ONLY inside pcc2_width_decline()" — grep d->warned / ->warned in dev_pcc2.c.
+
+    - F6: "IPL is EVEN and therefore the SIXTH guest-reachable block" — 0x3e even ✓. But ALSO: is IPL's halfword guest access really aligned at 0x3e? Yes, 0x3e % 2 = 0. And word access at 0x3c? A word at 0x3c spans 0x3c-0x3f — hits which arm? relative_addr of the access START, 0x3c — what's at 0x3c? Need the register map: 0x3c might be... if there's a block at 0x3c? The twelve don't include 0x3c. Word write at 0x3c lands in whatever case 0x3c is — maybe default (kill — pcc2defaultkill, filed). Hmm, or IPL is 0x3e; a word access must be 4-aligned (0x3c), spans into IPL/MASK bytes but the switch keys on relative_addr = 0x3c. If 0x3c is default: → pcc2defaultkill (disclosed). OK.
+
+    - F7: "acc all" — twelve guest st.b — but st.b at SCCRXIACK or counters isn't in BLOCKS12 — fine, twelve blocks only. st.b at IPL 0x3e byte: guest byte at any offset legal ✓.
+
+    - F8: Q1(d) cardinality inflation: could `latch all`'s count of 12 be inflated by a HUH print containing DECL? DECL substring is presumably "declined." — HUH prints say "HUH? write to PCCTWO_X with value" — no "declined". BASE measured 96/96 → 12 exactly on the fix → no inflation in practice. A mutant preserving the count while breaking the property: e.g., guard changed to decline only SOME widths but another block double-announces? Contrived. The `|=`→`=` doesn't change latch all (12 distinct blocks). ✓ (it's the escape).
+
+    - F9: The "put b" NO_EXCEPTIONS claim — measured part 3; also verify in debugger source that put b uses memory_rw with NO_EXCEPTIONS while put h/w/d use store_Nbit_word. Check debugger source.
+
+    - F10: Verify memory_rw dispatch condition `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))` — in memory_rw.c. Note: the condition as written dispatches if EITHER no_exceptions is false OR the device has the flag. pcc2 = DM_DEFAULT → no flag → not dispatched when no_exceptions set. But wait — that means debugger put h with NO_EXCEPTIONS... no, put h goes through store_16bit_word which calls memory_rw WITHOUT NO_EXCEPTIONS (premise 4: warns then stores). Verify.
+
+    - F11: m88k alignment: "every non-byte m88k access is alignment-checked BEFORE memory_rw ... then return". Check cpu_m88k.c for the alignment check (m88k_exception(MISALIGNED)) gating memory_rw calls. In gxemul m88k, there's a macro in cpu_m88k_instr or memory_m88k? Let me grep.
+
+    Also potential issue: the debugger `put h` at an odd address "warns on a misaligned address and stores anyway" — verify the warn-and-store in store_16bit_word / debugger put code.
+
+    - F12: The claim in the probe comment: "`rb mask' stores a byte at 0x3f this way" — rb mask session: setup + ST_B(5, MASK) guest program + put h + LD_BU. ✓ consistent.
+
+    - F13: Q1(a) — other plausible one-token shapes not covered? Beyond |=/=: 
+      * `len != 1` → `len != 1 || writeflag == MEM_WRITE`?? changes to always... `||` for `&&`: guard fires when len!=1 OR write → byte writes decline (writeflag==MEM_WRITE true) → acc all reds. Caught.
+      * `&&` → `||` covered by acc all. ✓ (not in the nine but channel-covered — worth listing in 1(a) as "covered outside the named nine").
+      * `writeflag == MEM_WRITE` → `writeflag == MEM_READ`?? one-token-ish (WRITE→READ): declines wide READS (hrd nod reds), wide writes land (arm readbacks red). Caught.
+      * Deleting the `break` at the END of an arm (not the guard break)? E.g., VECBASE's final break removed → falls into T1CMP case → memcpy(reg + relative_addr, data, len)! For a WRITE: after storing idata&0xf0, ALSO memcpy raw bytes over reg[3], reg[4]... For a halfword write at 0x03: memcpy stores byte[0x03], byte[0x04] — overwrites VECBASE with 0xb8 (the true lane!) and writes PSCALEADJ?? wait 0x15 ≠ 0x04. reg[0x04] is some other register. Observable: rb vecbase own — with guard intact (decline path breaks inside guard, never reaches arm-end break) — no. The arm-end break only matters when the body RUNS (legal byte writes or a landed mutant). On the FIX (all rows green required), byte writes to VECBASE (acc all) would fall through to the counter memcpy: memcpy(reg+0x03, data, 1) → reg[0x03] = 0x10 — same value as idata store (0x10 & 0xf0 = 0x10)! Value-identical for that case? acc all stores 0x10 at VECBASE: body stores 0x10&0xf0=0x10; fallthrough memcpy overwrites reg[3] with data[0]=0x10. Same. Hmm! And it also... len 1 → memcpy 1 byte → only reg[3]. Value identical → acc all green. Does any row byte-write VECBASE and read back? rb vecbase (old row): st.b 0x50 at VECBASE; st.h at GENCTL (declined); ld.bu VECBASE → expects 0x50. With arm-end break removed at VECBASE: st.b 0x50 → stores 0x50&0xf0=0x50, then memcpy reg[3]=data[0]=0x50 → same. rb vecbase own: st.b 0x50 (same), put h declined (guard intact). Green everywhere? Interesting — a fall-through from VECBASE into the counter memcpy is VALUE-IDENTICAL for byte writes because memcpy of the raw byte equals the masked store when the value fits the mask... 0x50 & 0xf0 = 0x50 ✓, 0x10 & 0xf0 = 0x10 ✓. But acc all at VECBASE uses 0x10 — fits. Any byte write to VECBASE with low nibble set? No row does (values 0x50, 0x10 both have low nibble 0). So removing VECBASE's arm-terminal break: also prints HUH? no — HUH is inside the writeflag body before the fall. Wait order: body = store masked; if (idata & ~0xf0) HUH. For 0x50: no HUH. Then (no break) → T1CMP case: memcpy for writeflag==MEM_WRITE && relative_addr+len <= PCC2_SIZE → reg[3] = 0x10/0x50. Value-identical. SO: deleting the final `break;` of the VECBASE arm passes all 96 rows! Property broken: out-of-contract — the arm now ALSO executes the counter memcpy (a raw byte store, and for a len-1 write it's benign-identical, but the property "each arm does exactly its body" is violated; for other values it would corrupt: e.g., st.b 0x5f → stores 0x50 then memcpy overwrites 0x5f — the DECLINE/mask semantics of byte writes broken). Is this "in contract"? The enumeration's shapes are guard-internal (DEL/LEN/LEN2/KILL/ALIAS/FALL/SWAP/GROW/RDDECL). FALL is "guard kept, announce kept, break removed" — the GUARD's break. The arm-TERMINAL break removal is a ninth... tenth shape — control flow at the arm level, not the guard level. For VECBASE it's value-invisible to every row (no row byte-writes an off-mask value to VECBASE). Hmm — but wait, does any row catch it? "acc genctl nod" style rows count DECL==0 for byte writes — fall-through memcpy doesn't print. rb vecbase expects 0x50 ✓. So yes — passes 96/96. Is the broken property inside the contract's CATCHES? The contract catches guard defeats; arm-terminal fall-through corrupting register state on LEGAL byte writes is... "the de-escalation clause: byte writes at the LEGAL width at every reachable arm still land, read back through each arm's own mask" — with VECBASE's break removed, a byte write lands as the RAW byte, not the masked byte — but rows only use mask-fitting values, so "read back through each arm's own mask" is untested for off-mask bytes. Hmm, is writing 0x5f and reading back 0x50 (mask semantics) part of the contract? "read back through each arm's own mask" — the phrase suggests readback expectations respect the mask. acc rows: do per-arm acc rows verify readback values? acc genctl/acc t2ctl/etc. — for VECBASE there's no per-arm acc row (C alone). acc all only counts declines, no readback! So a byte-write CORRUPTION at VECBASE (storing raw instead of masked) is invisible to acc all. And rb vecbase/rb vecbase own use 0x50 (mask-fitting). So: smallest edit #2: remove VECBASE's terminal break → byte writes store raw (mask defeated) AND execute counter memcpy — all 96 green. Hmm, but is mask-on-byte-write the "property"? The fix's documented behavior: VECBASE arm masks to 0xf0 — hardware semantics. The contract's de-escalation clause claims byte writes "land, read back through each arm's own mask" — that CLAIM implies a row reads back an off-mask byte through the mask at... does any acc row do that? The five per-arm acc rows (genctl, t2ctl, t2icr, scctx, sccerr): acc t2ctl etc. might read back through mask. VECBASE has no acc row. So for VECBASE, the mask-on-accept is unobserved. This is a weaker/arguable escape (the corruption requires valuing mask semantics as contract property) — but as a Q2 candidate it's "a shape NOT in the contract" (arm-terminal break removal). Actually wait — simpler: is it even true that no row sees it? Let me check rb vecbase: "st.b VECBASE 0x50; st.h GENCTL 0xaabb; ld.bu VECBASE → 0x50". With break removed: st.b 0x50 → reg[3] = 0x50 & 0xf0 = 0x50, HUH? no (0x50 & ~0xf0 = 0), fallthrough memcpy reg[3] = data[0] = 0x50 ✓ same. Then st.h GENCTL declined ✓. ld.bu → 0x50 ✓ green. rb vecbase own: same 0x50 ✓. latch all (put h 0x0003 at VECBASE): guard declines → break inside guard → arm body never runs → no fallthrough. ✓ green. acc all st.b 0x10 ✓ (0x10 & 0xf0 = 0x10). op vecbase dcl: put h 0xaab8?? wait op vecbase uses put h at VECBASE — declined ✓. So yes, 96/96 with VECBASE's arm-terminal break deleted. Property broken: byte-write mask semantics + spurious counter memcpy. Whether that's "the property" the detector owes — the detector's contract is about the GUARD; the arm-terminal break is outside the guard's inputs. The brief's Q2: "Name the smallest edit that breaks the property and passes all 96 rows. Shapes NOT in the contract are the interesting ones." The property = the enumeration's guarantee. I'd offer the `|=`→`=` as primary (it breaks a CONTRACT-CLAIMED catch) and mention arm-terminal break at VECBASE as a second, plus possibly the PSCALEADJ analogue: PSCALEADJ body stores nothing and prints "ignored (value...)" on writes. Remove PSCALEADJ's terminal break → falls into TxCTL case? PSCALEADJ is 0x15, next case TxCTL 0x16 — fallthrough executes TxCTL's body with relative_addr 0x15: reg[0x15] &= 0xfc; |= idata & 3... For byte writes to PSCALEADJ (acc all 0x10): TxCTL body writes reg[0x15] (was 0) → 0x10&3=0 → 0; HUH (0x10 & ~7 ≠0) → prints "HUH? write to PCCTWO_TxCTL" — does any row count HUH text in acc all session? acc all counts DECL only. HUH print doesn't match DECL. Green?? And "op pscale dcl"/"op pscale noig" — put h declined at guard → body never runs ✓. So PSCALEADJ terminal-break removal also invisible (writes garbage to reg[0x15] = PSCALEADJ itself, stores 0). Same class. But these arm-terminal shapes are arguably outside "the property" (the enumeration is of guard shapes). Still worth naming as the "something else".
+
+      Actually — wait. For VECBASE, fall-through target is T1CMP/T2CMP/T1COUNT/T2COUNT memcpy — that memcpy writes reg[3] AND for the acc-all case len=1. But actually does the counter case come IMMEDIATELY after VECBASE in the switch? The inlined code shows VECBASE then T1CMP... yes (lines 285-305). OK.
+
+      * Another: `idata & 0xf0` → `idata & 0xff`? Body shape, not guard. rb vecbase own uses 0xaab8 wide (declined on fix). No row wide-writes VECBASE lands... body mutations are outside scope.
+
+    - F14: Q4 honesty checks to verify in tree: (i) the probe file's docstring == inlined contract verbatim; (ii) gate_arm.sh diff matches; (iii) dev_pcc2.c diff matches (comment + typedef); (iv) git diff --numstat matches the disclosure; (v) HEAD is b78bb0f and files uncommitted; (vi) probe row count = 96 rows emitted (grep '^row(' count?); (vii) the artifacts referenced exist (regress/artifacts/pcc2widthkills/...).
+
+    Also the md5 "cd22f951" for the 82-row instrument — can't verify without the pass-3 file version; skip (name it).
+
+    Also verify: "the two T1 labels" enumeration claim "12 x 9 plus the two T1 labels": the table has 12 rows (blocks) — T1 labels aren't separate rows in the table; they're covered by rb t1ctl/rb t1icr rows. The phrase "12-block x 9-shape space" — the table shows 8 shape columns; the 9th (RDDECL) is handled in prose below with 7 nod rows + unreachable disclosure. So "12 x 9" = 108 cells: 96 tabulated + 12 RDDECL cells (6 even measured/rowed, 6 odd unreachable-disclosed). Count: table 12×8=96 cells; RDDECL 12 cells (6 rowed + 6 disclosed-unreachable). Total 108. Consistent with "12 x 9". ✓. But note the 8-column table has some cells spanning multiple warrants (C/W/A). Cell status audit: count M/S/E/C/W/A: e.g., SCCERR FALL=E (1 E). UNREACHABLE applies to the 6 odd RDDECL cells (not shown in table). OK.
+
+    Now — a deeper adversarial check on the E cell (SCCERR FALL): warrant "the arm stores 0 and nothing in the model ever stores a nonzero SCCERR". FALL at SCCERR: announce (consumes latch bit!) + fall through + store 0. Decline: announce + break. DIFFERENCE: none in stored state. BUT — the latch bit consumption is identical (both announce). HUH print? If SCCERR body has no HUH, identical. Verify in source. Also: does the SCCERR read body do anything (like clear-on-read)? If reads served by pre-switch memcpy, fine.
+
+    Also RDDECL at SCCERR — wrd sccerr nod: under RDDECL the word read declined → DECL printed → red ✓. And SCCERR hrd nod (halfword at 0x1c — aligned ✓ even) ✓.
+
+    One more: premise 4 says "A debugger READ does not reach the arm" — but what about the debugger's `r` (read) command used in rows? The rows use guest ld.h/ld.bu for readbacks (`print r4`), not debugger reads of the device — except... "op t1ctl dcl" counts DECL after put h — the put h WRITE reaches. OK.
+
+    Now Q1(a) more: guard inputs listed "(len, writeflag, relative_addr -> block, idata, d->warned)". Shapes per input: len: DEL/LEN/LEN2/GROW (+SWAP replaces len-test with idata-test). writeflag: RDDECL. block: (shared-block T1 split — rows; moving guards — covered by arm channels). idata: SWAP. d->warned: ALIAS (cardinality) — GAP: update operator (`|=`) and test operator (`&`). Also `1u << bit` → `1 << bit`? int vs unsigned — bit ≤ 11, no difference. `d->warned` width 32 with 12 bits ✓.
+
+    Also KILL shape at the two former-#119 blocks: KILL for IPL/MASK = "verbatim exit(1) reinstated" — measured M for both ✓ plausible (part 1 mutants).
+
+    What about a shape changing `exit(1)` semantics — n/a post-fix.
+
+    What about the once-announce's FATAL vs non-fatal: pcc2_width_decline uses fatal() which "returns" (premise 6: fatal() returns). Verify: in gxemul, fatal() prints and... does NOT exit (it's debug-ish?) — actually in gxemul fatal() typically exits! Wait — gxemul's `fatal()` in misc.cc: prints and calls exit(1)? Hmm. In GXEMUL, `fatal()` does NOT exit by default? Let me recall: gxemul has `fatal()` which prints "fatal: " and... I believe in gxemul fatal() does NOT exit (it's a warning-style print; `exit` must be explicit). Yes — in gxemul (Anders Gavare's), fatal() prints and continues; many call sites do `fatal(...); exit(1);`. The premise says fatal() returns — consistent with gxemul's convention. The original kills were `fatal(); exit(1);` pairs — consistent. OK, but verify in source (src/core/misc.cc or misc.c).
+
+    Also "the announce is once per block per instance via d->warned, a 32-bit field" — verify struct pcc2_data has uint32_t warned (or int).
+
+    Alright — also verify the probe file in the tree matches the diff (spot check a few added hunks + docstring), and that regress/artifacts/pcc2widthkills/operator_reach_20260903.out exists, killtable2_20260903/part3/driver.log exists.
+
+    Also: the brief's own line 1: "Detector 82 -> 96 rows" while the diff header says "60 -> 96 rows" — as discussed, the diff is vs the committed base (60). The title says 82->96 (pass increment). Both true in context; not dishonest but worth noting the diff is cumulative against b78bb0f. The brief DOES say the tree is uncommitted on b78bb0f, and gate diff old denominator 60 — consistent with cumulative. ✓.
+
+    Also Q3: option-set completeness N/A — no disposition chosen. Do I disagree? The diff is a detector closure + comments; no disposition (like composing wide writes) is taken; pcc2widecompose is FILED not taken. N/A is right. Agree.
+
+    Additional "something else" candidates:
+    - The contract says "`rb vecbase' row is GENCTL's neighbour-lane check and never writes wide to VECBASE's own arm" — verify row: st.b VECBASE 0x50; st.h GENCTL 0xaabb (declined); ld.bu VECBASE → 0x50. It checks GENCTL's decline via VECBASE's lane. ✓ (line 558-560).
+    - Wait, there's something: rb vecbase expects VECBASE UNCHANGED (0x50) after a declined st.h to GENCTL. Under a mutant that ACCEPTS wide writes at GENCTL (DEL@GENCTL), the halfword 0xaabb stores... GENCTL arm with DEL: stores (uint8_t)idata = 0xbb to reg[0x02]. VECBASE reg[0x03] unchanged → rb vecbase stays GREEN under DEL@GENCTL! It's rb genctl that reds (0x50→0xbb). And MD measured reds: "rb genctl, rb genctl lo" — not rb vecbase. ✓ consistent — rb vecbase is the neighbour-lane INTEGRITY check (a compose mutant storing 0xaa to GENCTL AND 0xbb to VECBASE — per-lane compose — would red rb vecbase: VECBASE becomes 0xbb... wait COMPOSE stores both lanes: GENCTL=0xaa, VECBASE=0xbb → rb vecbase expects 0x50 → red. Yes! That's the "accidental per-lane compose" catch (CATCHES bullet). ✓ coherent.
+    - Check "val h genctl" and "val w sccerr" rows (old, wide-read value rows) — the "value a wide READ composes" bullet. Not shown in diff (context). Fine.
+    - The hwr ipl dcl row counts "write to PCCTWO_IPL " + DECL — the width-decline text for IPL is `unimplemented len=%i write to PCCTWO_IPL -- declined.` — matches prefix "write to PCCTWO_IPL " ✓. And the read-only print is "write to read-only PCCTWO_IPL; ignored" — the hwr ipl noig counts "write to read-only PCCTWO_IPL" == 0. But NOTE: "write to PCCTWO_IPL " is NOT a substring of "write to read-only PCCTWO_IPL; ignored" ("write to read-only..." has 'read-only' between) ✓ no cross-contamination. And under FALL at IPL: session prints BOTH the width DECL (once) and the read-only print (once) → hwr ipl noig reds ✓, hwr ipl dcl stays green (1) — as designed.
+    - Subtle: hwr ipl noig session (st.h 0x0303 to IPL) — under the FIX, wide write declined → 0 read-only prints ✓. But does that session ALSO produce the DECL? Yes once — not counted in this row. And hwr ipl dcl is a DIFFERENT session (st.h 0x1234). Both fine.
+    - Now "hrd ipl nod" — guest ld.h at IPL: declined? On fix, reads accepted → DECL 0 ✓. Under RDDECL: declined → red ✓. ALSO: the IPL read body prints "IPL == 0 on read" if reg is 0 — in hrd ipl session, is IPL reg 0? The session: setup() + ld.h IPL... if pcctwo_reg[IPL]==0 → prints once "IPL == 0 on read" (static #119). Does that print contain DECL? No. ✓. But wait — could that print appear in OTHER sessions and inflate counts of "write to read-only PCCTWO_IPL"? "IPL == 0 on read" ≠ "write to read-only". ✓.
+    - rb mask: st.b 0x12 at MASK, put h 0xaabb declined, ld.bu → 0x12. reassert on MASK byte write: GENCTL is 0 in this session (setup doesn't write GENCTL; acc... this session only st.b MASK) → GENCTL 0 → bit 0x04 clear ✓ no kill.
+    - latch all: put h 0x0003 at GENCTL — declined, no body execution → GENCTL stays 0 ✓. All twelve declined → no reassert calls at all (bodies not reached) ✓ no c040 risk.
+    - acc all: st.b GENCTL 0x10 → reassert with GENCTL=0x10 → bit 0x04 clear ✓. MASK st.b 0x10 → reassert GENCTL 0x10 ✓. TxICR/SCCICR reasserts fine.
+
+    Now — the premise-3 claim "SIX even blocks ... are GUEST-reachable" — SCCERR 0x1c: halfword at 0x1c aligned ✓; word at 0x1c aligned (0x1c % 4 = 0) ✓ "the one 4-aligned block" — check others: 0x02 %4=2, 0x16%4=2, 0x1a%4=2, 0x1e%4=2, 0x3e%4=2. So SCCERR is the only 4-aligned even block ✓ word guest access only reaches SCCERR among the twelve. But wait — "latch all w" uses put w at ALL twelve (operator path, misaligned tolerated) ✓ consistent.
+
+    Guest word access at 0x18? spans 0x18-0x1b — 0x18 is... unlisted → default kill (pcc2defaultkill disclosed) ✓. At 0x1c SCCERR ✓ rowed (wrd/wwr sccerr).
+
+    m88k: st.h at odd → MISALIGNED exception before memory_rw ✓ (premise). st (word) at 0x16 (2 mod 4) → misaligned → exception → so guest word writes only reach SCCERR ✓.
+
+    What about m88k `ld.d`/double (len 8)? 8-aligned addresses: 0x00 (CHIPID), 0x18, 0x20, 0x28, 0x30, 0x38 — none in the twelve except none. put d (operator) → len 8 declines at any arm — latch cardinality for put d? No row does put d! A guard `len != 1` → `len != 8` (decline only doubles): halfword+word land → rb rows red (halfword) ✓ covered. A guard `len != 1` → `len < 8`: declines 1? no: len<8 → len 1 true → decline bytes → acc all red ✓. len ∈ {1,2,4,8} exhaustive-ish. LEN/LEN2/GROW + arm channels cover the {2,4,8} landing combos: land {2} → LEN (`len>2` declines 4,8: lands 2) ✓ rb rows; land {4} → `len==2`-ish inverse... land only 4: guard `len != 4`: halfword declined (dcl green), word lands → latch all w drops ✓ W; land {8} → guard `len != 8`: halfword lands → rb rows red ✓; land {2,4} → DEL-ish → rb red; land {4,8} → guard `len==2`... that's LEN2! wait LEN2 declines 2, lands 4,8 ✓ W. land {2,8} → guard `len != 4`?? that declines 4... no: guard fires on len==4 → declines word(4), lands 2 and 8 → halfword lands → rb red ✓. So the {2,4,8} subset lattice is closed by rb rows (any combo containing 2) and latch all w (any combo containing 4). Combo {8} alone → contains... not 2, not 4 — only 8 lands: NO ROW does put d/ld.d at the arms! guard `len != 1 && len != 8`?? hmm: original declines 2,4,8. Mutant declines 2,4 only (`len == 2 || len == 4`)? lands 8 only → invisible (no len-8 row). Is `len != 1` → `len == 2 || len == 4` a one-token edit? No — it's a rewrite. One-token: `len != 1` → `len <= 4`? declines 1(≤4 ✓ wait len 1 ≤ 4 true → decline bytes → acc all red). `len != 1` → `len < 8`: declines 1,2,4 → acc all reds. `len != 1` → `len > 1 && len < 8`? not one token. So a double-only-landing guard isn't reachable by one token — and len-8 writes to these arms are... pcc2counter8-adjacent territory (disclosed for counters only). I'd note it as a named residual: no row exercises len-8 at the twelve (put d / ld.d absent), so the enumeration's landing closure is over {2,4}; a hypothetical `len != 1` → `len != 1 && len != 8`?? that REDUCES declines... declines 2,4 (not 8): lands 8 — invisible. Two tokens-ish. Eh — worth one line in "something else": the width domain is {1,2,4,8} but rows only ever drive {1,2,4}; the 8-lane is closed only by the cardinality reasoning that any guard still containing `len != 1`-equivalent for 8... hmm actually any mutant that lands 8 but keeps declining 2 and 4: e.g., `len != 1` → `len != 8` — declines 1?? no: `len != 8` fires for len 1 → declines bytes → acc all red. `len != 1` → `(len & 3) != 1`? len1: 1≠1... (1&3)=1 → false → no decline (byte lands ✓). len2: 2&3=2 ≠1 → decline ✓. len4: 4&3=0 ≠1 → decline ✓. len8: 8&3=0 ≠1 → decline ✓. IDENTICAL behavior on {1,2,4,8}. Not a break. OK so realistically the len-8 residual requires multi-token edits. Fine — mention briefly.
+
+    Also the writeflag domain: {MEM_READ=0, MEM_WRITE=1} — verify MEM_READ is 0 in the tree (gxemul: MEM_READ 0, MEM_WRITE 1 in memory.h? I recall `#define MEM_READ 0 / #define MEM_WRITE 1`). Verify.
+
+    Right. Now, let me also double check premise 4's dispatch condition direction for the six odd blocks' READ cells: "memory_rw dispatches a device only if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))". Hmm wait — that condition: dispatch if !no_exceptions OR device has flag. With no_exceptions (debugger), dispatch only if DM_READS_HAVE_NO_SIDE_EFFECTS. pcc2 = DM_DEFAULT → no dispatch → debugger reads DON'T reach pcc2 at all. But then how do the probe's readbacks work? They use GUEST loads (ld.bu) ✓, not debugger reads. And "val h genctl" (old row) — how does IT read the composed value? Guest ld.h + print r4 presumably. ✓.
+
+    Hmm wait, actually — if debugger reads don't dispatch, then `r b 0xfff42002` in a debugger returns garbage/0xff — and rows like "byte rd" (old) — probably a guest ld.bu. OK.
+
+    BUT — premise 4 also implies the operator REACH path is put h/w/d only (writes). And the "op *" rows use put h ✓.
+
+    One more possible hole — "put h warns on a misaligned address and stores anyway": the warn print — does it contain DECL? "misaligned" warning text — no. But does the WARN appear in EVERY op session and could it inflate any count? Rows count DECL or specific texts; misalign warn ≠ DECL ✓.
+
+    Now — potential inflation of `latch all` by the HUH prints? declined writes never reach bodies → no HUH ✓.
+
+    And `latch all` put h at 0x16 (TxCTL, even, aligned) and 0x17?? NO — BLOCKS12 uses TxCTL 0x16 and TxICR 0x1a (the T2 offsets) — one offset per block ("ONE OFFSET PER BLOCK" comment) ✓ twelve writes.
+
+    Alright. Also verify BLOCKS12 offsets vs mvme header: (GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, TxCTL 0x16, TxICR 0x1a, SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f) ✓ matches header defines (to verify).
+
+    And SCCRXIACK offset? (0x20-something? or 0x1f is SCCRX... SCCRXIACK maybe 0x21?). Verify it exists in the switch with no guard and body ignores idata.
+
+    Now let me also sanity check the probe's use of `program(..., at=CODE + 0x100)` twice-in-one-session pattern: second program at different address + pc set + step — the sessions with put h in the middle: setup + program1 (st.b) + ["put h ..."] + program2 (ld.bu at CODE+0x100) + print r4. program() emits pc=... and step N — so execution: put w's for program1, pc=CODE, step 1 (st.b), then put h command, then program2's put w's write at CODE+0x100, pc=CODE+0x100, step 1 (ld.bu), print r4. ✓ sound. And the Addr hazard comment (same-address skip) — put w to same address twice would just overwrite; the comment claims assignment skipped — that's about the probe's `program()` helper internals? "finds pc already there and the assignment is skipped" — hmm, that's about some idempotence in their harness; not critical.
+
+    Wait, actually there's a subtle thing in `program()`: cmds include "pc=0x%x" % at and "step %d". For the second program, pc is set to CODE+0x100 explicitly, so no hazard. The comment about "assignment skipped" refers to some `Addr` mechanism in other probes. Fine.
+
+    Now — the "hwr ipl" session uses st.h 0x1234 to IPL and expects survival + dcl 1. And "hwr ipl noig" uses st.h 0x0303. Two separate sessions ✓ (fresh pty each, latch state doesn't leak ✓).
+
+    Let me also check the claim "IPL's write body ... prints ... once per process (#119 static)" — in the inlined code, the IPL write body has `static int w` — yes process-global static, STILL static (the fix kept #119's static for the read-only print but moved the WIDTH latch to d->warned). The comment says "was a #119 static int w -- process-global... Now per-instance, write-only, like the ten blocks above" — referring to the WIDTH decline being per-instance; the read-only print remains `static int w` (line 316: `static int w = 0; /* #119: was exit(1) (IPL is read-only) */`). So the IPL read-only announce is STILL process-global — disclosed? The contract's DOES-NOT-CATCH says "per-instance vs process-global latch state ... The bitfield is per-instance by construction; nothing here measures it" — that's about the WIDTH bitfield. The IPL read-only print's process-global static is visible in the inlined code. hwr ipl noig counts it in a fresh process ✓. Fine — but note: the hwr ipl noig property relies on the print being once-per-process; if a FALL mutant lands the write, print count = 1 → red ✓ robust.
+
+    Also — MASK's comment says "was a #119 static... Now per-instance, write-only" and MASK body has no static ✓ (stores + reassert).
+
+    OK. Now the remaining big-ticket verification requires the actual tree. Let me do it. Files:
+    - GXEMUL-SEC/src/devices/dev_pcc2.c (full read of relevant regions)
+    - GXEMUL-SEC/src/include/mvme_pcctworeg.h
+    - GXEMUL-SEC/regress/pcc2_width_probe.py (spot-check vs diff; count row( calls)
+    - GXEMUL-SEC/regress/gate_arm.sh (the pcc2 block)
+    - git -C GXEMUL-SEC diff --numstat, git log -1 --format=%H (b78bb0f?), git status --short
+    - grep for LS_1/MISALIGNED in GXEMUL-SEC/src/cpus/
+    - grep memory_rw dispatch in GXEMUL-SEC/src/core/memory_rw.c (or src/core/memory.c?)
+    - grep store_16bit_word + put command in GXEMUL-SEC/src/debugger/
+    - grep MEM_READ define
+    - grep fatal( definition (returns?) in src/core/misc.c or include/misc.h
+    - artifacts existence: regress/artifacts/pcc2widthkills/ + killtable2_20260903/part3/driver.log
+
+    That's a lot of tool calls but they're cheap greps/reads. Let me parallelize aggressively. Actually, given the volume, delegating to an explore subagent could be efficient — but I want direct control over exact verification details and the findings feed a verdict; I'll do it myself with parallel calls. The instructions say for multi-step tasks, emit one short sentence then tools.
+
+    Order:
+    1. git checks + locate files (Bash: git -C GXEMUL-SEC log -1, status --short, diff --numstat HEAD).
+    2. Read dev_pcc2.c relevant parts — first grep for the guard/enum/warned/SCCRXIACK/SCCERR.
+    3. etc.
+
+    Let me begin.
+
+• I've read the full brief. Now I'll verify its premises against the actual tree (`GXEMUL-SEC/`), as its own "READ THIS FIRST" section demands.b78bb0f6b2ab7b7bb58323ad2a12a205116100b6 #500 pass 15 + pcc2widthkills: the closure that opened six registers is closed, and twelve width kills become a direction split
+ M CHANGELOG.md
+ M OUTSTANDING_BUGS.md
+ M regress/gate_arm.sh
+ M regress/pcc2_width_probe.py
+ M regress/sgi_de_primop_probe.py
+ M src/devices/dev_pcc2.c
+ M tools/pipeline/ledger.json
+ M tools/pipeline/matrix.html
+?? _scratchpad/
+?? regress/artifacts/pcc2widthkills/killtable2_20260903/
+?? regress/artifacts/pcc2widthkills/opus_pass2_20260903/
+?? regress/artifacts/pcc2widthkills/opus_pass3_20260903/
+?? regress/artifacts/pcc2widthkills/pass3_seats_20260903/
+---NUMSTAT---
+190	0	CHANGELOG.md
+60	0	OUTSTANDING_BUGS.md
+3	3	regress/gate_arm.sh
+250	4	regress/pcc2_width_probe.py
+20	6	regress/sgi_de_primop_probe.py
+22	10	src/devices/dev_pcc2.c
+356	5	tools/pipeline/ledger.json
+3	3	tools/pipeline/matrix.html
+
+
+• The tree matches: HEAD is b78bb0f, the numstat matches the disclosure exactly (CHANGELOG 190 vs disclosed 185 — WAIT. Disclosure says `185 0 CHANGELOG.md`, actual is `190 0 CHANGELOG.md`. Mismatch! Let me double check: brief line 923: "185	0	CHANGELOG.md". Actual: 190. That's a discrepancy of 5 lines. Hmm — but the brief said "git diff --numstat for the round's files". Maybe the brief was written before the final CHANGELOG edit (e.g., the pass-4 block grew by 5 lines after the numstat was captured). This is a Q4 finding: the disclosed numstat for CHANGELOG.md is stale (185 vs 190). Also check others: probe 250/4 ✓ matches. gate 3/3 ✓. dev_pcc2.c 22/10 ✓. sgi 20/6 ✓. OUTSTANDING 60/0 ✓. ledger 356/5 ✓. matrix 3/3 ✓. So only CHANGELOG is off by 5. A small honesty/record nit: the numstat disclosure does not match the working tree as it stands. Worth naming (Q4 asks "any count without a deriver" — here a count that no longer derives).
+
+  Also note `_scratchpad/` untracked inside GXEMUL-SEC — irrelevant.
+
+  Now let me read dev_pcc2.c around the arms to verify the bodies: GENCTL, VECBASE, PSCALEADJ, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR, IPL, MASK, SCCRXIACK, counter arms, CHIPID, default. Also the memcpy above the switch, relative_addr %=, reassert_interrupts GENCTL&0x04.The source matches the inlined arms. Key observations:
+
+  1. All twelve guard blocks present, exactly as inlined. The helper at 396-403 matches.
+  2. SCCERR body: `d->pcctwo_reg[relative_addr] = 0;` — stores 0, NO print. E-cell warrant partially verified; need to grep that nothing else stores nonzero SCCERR.
+  3. SCCRXIACK (595-599): no width guard, body ignores idata ✓.
+  4. Counter arms memcpy ✓.
+  5. CHIPID/CHIPREV arm: prints on write, no width guard — interesting: it's not one of the twelve, and its write body ignores idata (prints only). Width-invariant-ish (the print would say... it prints regardless of width; a wide write to CHIPID prints "IGNORING write..." — value not printed). Not a member; the census: CHIPID, CHIPREV, twelve, counters, SCCRXIACK, default. The contract names SCCRXIACK as the thirteenth arm but does NOT name CHIPID/CHIPREV (also unguarded write arms, but read-only registers whose body ignores idata → width-invariant by the same construction). Minor census gap? The contract says "THE THIRTEENTH ARM. SCCRXIACK has NO width guard and never had one... named here so the census is not read as an omission." But CHIPID/CHIPREV also have no width guard and their write body ignores idata (prints a fixed string). Same warrant as SCCRXIACK. The census names one unguarded arm but not the other two (CHIPID and CHIPREV share one case). Hmm — is that an omission that matters? The claim "TWELVE width-guard blocks" — fine. The "census" sentence: "It is named here so the census is not read as an omission" — the census being the enumeration of arms in the switch. CHIPID/CHIPREV are arms with write-bodies and no width guard; by the contract's own standard (SCCRXIACK named), they should be named too. Minor completeness nit for Q1(a)/Q4. Also the READ side: CHIPID read is served by memcpy — fine.
+
+  Wait — actually, is CHIPID/CHIPREV's write body width-invariant? It prints a fixed string on ANY write (byte or wide). A wide write to CHIPID (0x00, even — guest-reachable!) prints "IGNORING write to read-only..." and stores nothing. On real hardware, a wide write to CHIPID... whatever, it's read-only; the model ignores. No state change → width-invariant ✓. Same class as SCCRXIACK. So the census omits it. Not a detector hole (no property to catch), but the "named so the census is not read as an omission" sentence is incomplete as a census. Minor.
+
+  6. IPL read body: `static int w` #119 still there — matches inlined.
+  7. default: exits(1) ✓ (pcc2defaultkill).
+  8. reassert_interrupts: need to check GENCTL & 0x04 exit. Let me read the top of the file (reassert + struct + includes + the OB-11 note).
+  9. Note line 420: there's ANOTHER `static int warned` in the READ path (OB-11 beyond-reg-space read) — name collision with d->warned conceptually but it's a different variable. The premise "written ONLY inside pcc2_width_decline()" refers to d->warned — true (the static is a local, not d->warned). ✓ but the premise wording "a 32-bit field with twelve bits assigned, written ONLY inside pcc2_width_decline" — verified: struct field warned at line 141, uint32_t ✓, and grep showed writes only at line 399. ✓
+
+  Now check: reassert_interrupts (GENCTL & 0x04 exit), the header offsets, and memory_readmax64 endianness. Also grep SCCERR for any other stores.
+
+• The twelve arms and helper match the inline exactly. Now checking the rest of the device file and the register header.
+
+• The mvme_pcctworeg.h path is wrong. Let me find it. Also read reassert_interrupts at line 256 and check the GENCTL & 0x04 exit at 265. Also check where SCCERR is stored — only line 550 (=0). The grep for SCCERR shows: line 121 enum, 544 case, 546 decline. The store at 550 didn't show because the grep pattern "SCCERR" matches the case label; line 550 has `relative_addr` not SCCERR literal. So stores to pcctwo_reg[PCCTWO_SCCERR]: only the `= 0` at 550. But could anything store to `relative_addr` when relative_addr == SCCERR elsewhere? The counter memcpy (469-471) — only for counter offsets. The read memcpy is into `data` (out). pcctwo_interrupt_common touches SCSIICR/SCCTX/SCCRX. reassert writes IPL (306-315: `d->pcctwo_reg[PCCTWO_IPL] = intlevel` — IPL is written by reassert! Interesting: IPL reg can become nonzero from interrupt levels — that affects the "IPL == 0 on read" print but not rows). So nothing stores nonzero SCCERR ✓ — but let me verify by grepping all writes to pcctwo_reg to be thorough... The generic writes are `d->pcctwo_reg[relative_addr] = ...` at 447 (GENCTL), 458 (VECBASE), 493-494 (TxCTL), 513-514 (TxICR), 550 (SCCERR =0), 559 (SCCICR), 573 (SCCTX), 587 (SCCRX), 607 (SCSIICR), 645 (MASK). Since each case is keyed on relative_addr, a store under case SCCERR with relative_addr==SCCERR stores only to SCCERR. The fall-through risk: cases with missing break would cross-store. All arms have break ✓ (verified visually above — every case ends with break; CHIPID at 433-439 ✓).
+
+  E-cell warrant verified: SCCERR arm stores 0 unconditionally, no print, and no other site stores to SCCERR (the only generic stores are within their own cases). ✓ E holds.
+
+  Now read reassert at 256-265 and find the header./usr/bin/bash: line 1: 25288 Done                    ls GXEMUL-SEC/src/include/
+     25289 Aborted                 (core dumped) | grep -i -e pcctwo -e mvme
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h
+reassert_interrupts: exits host only on GENCTL & PCC2_C040. Need to check PCC2_C040 value = 0x04 presumably. The grep crashed (rg core dump?) — the bash `grep` aborted with core dump, weird, but find worked: header is at GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h.
+
+  Now read the header for offsets + the "bytes, two-bytes, or four-bytes" line + PCC2_C040 + PCC2_TCTL_COVF + PCC2_TTIRQ_* + PCC2_MIEN values.The header confirms:
+  - "accessed as bytes (8 bits), two-bytes (16 bits), or four-bytes (32 bits)" ✓ premise 1.
+  - Offsets: GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, T2CTL 0x16, T1CTL 0x17, T2ICR 0x1a, T1ICR 0x1b, SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f ✓ all as claimed. PCC2_SIZE 0x40 ✓.
+  - PCC2_C040 = 0x04 ✓ (reassert kill bit).
+  - PCC2_TCTL_COVF = 0x04, PCC2_TCTL_OVF = 0xf0.
+
+  IMPORTANT: Check my earlier arithmetic for rb t2ctl under DEL/FALL at TxCTL: pre 0x03, st.h 0xaab8 lands: reg = (0x03 & 0xfc) | (0xb8 & 3) = 0 | 0 = 0x00. Then idata 0xaab8 & PCC2_TCTL_COVF(0x04): 0xb8 & 0x04 = 0? 0xb8 = 10111000; 0x04 = 00000100; AND = 0. So COVF not set → no OVF clear. Result reg = 0x00 ≠ 0x03 → "0x0" vs want "0x3" → red ✓. (I earlier assumed COVF=0x80; actually 0x04. Result still 0x00. ✓)
+
+  And rb t1ctl: same body at 0x17 → same result 0x00 vs want 0x3 ✓.
+
+  rb t2icr: pre 0x13, st.h 0xaab8 lands at TxICR: reg = (0x13 & ~0x17) | (0xb8 & 0x17) = (0x13 & 0xe8) | (0xb8 & 0x17). 0x13 & 0xe8 = 0x00 (0x13 = 0001 0011; 0xe8 = 1110 1000; AND = 0). 0xb8 & 0x17 = 1011 1000 & 0001 0111 = 0001 0000 = 0x10. → reg = 0x10 ≠ 0x13 → red ✓. Also: relative_addr == T2ICR && !(idata & PCC2_TTIRQ_IEN): need PCC2_TTIRQ_IEN value — if IEN is bit in 0x17 range... 0xb8 & IEN — depends. Could decrement pending_timer2_interrupts (0 → stays 0 since >0 check fails... wait first branch sets pending=0 if !IEN — pending already 0). The ICLR branch: idata & PCC2_TTIRQ_ICLR — need values. Let me get remaining header lines (PCC2_TTIRQ_*). Not critical for the verdict — the value mismatch alone reds the row. But the pending-timer side effects could matter for... no rows observe pending_timer. Fine.
+
+  Now — the interesting bit: TxICR body clears pending timers etc. under a landed wide write; no row observes that; but the VALUE row rb t2icr reds anyway. OK.
+
+  Next verifications:
+  1. m88k alignment check before memory_rw (LS_1 / MISALIGNED).
+  2. memory_rw dispatch condition with no_exceptions / DM_READS_HAVE_NO_SIDE_EFFECTS and DM_DEFAULT on pcc2 registration.
+  3. debugger put path: put h warns + stores via store_16bit_word → memory_rw without NO_EXCEPTIONS; put b via memory_rw WITH NO_EXCEPTIONS; put w/d → store_32/64.
+  4. MEM_READ=0, MEM_WRITE=1.
+  5. fatal() returns (misc).
+  6. memory_readmax64 big-endian compose.
+  7. Probe file in tree matches diff; count rows = 96; docstring matches contract.
+  8. Artifacts exist: killtable2_20260903/part3/driver.log etc.
+
+  Let me batch these.
+
+• Header confirms every offset and the "bytes, two-bytes, or four-bytes" premise. Now the CPU/debugger/memory-path premises.
+
+• I'm mid-verification of the brief. Let me set up a quick todo list to track the remaining verification steps, then continue.
+
+  The loadstore alignment check: need to confirm it's BEFORE memory_rw and applies to non-byte (LS_SIZE > 1) accesses — the snippet shows the check `if (addr & (LS_SIZE - 1))` at line 168-172 in cpu_m88k_instr_loadstore.c. Need to see whether memory_rw is called after, and whether LS_1 (byte) skips this. The file is templated with LS_SIZE; for LS_1 the check `addr & 0` is always false → never fires for bytes. Actually if LS_SIZE==1, `addr & 0` = 0 → false → no exception. So the same code serves bytes; the check is trivially false. The brief said `#ifndef LS_1 ...` — close enough in effect; let me look at the exact lines to be precise. Also need to confirm the exception path returns before memory_rw.
+
+  memory_rw.c isn't at that path — find it. Probably src/core/memory.c or src/memory.c? In this gxemul version, memory_rw might be in src/core/memory.c. Let me locate.
+
+  Also still to verify:
+  - memory_readmax64 big-endian compose (src/include/memory.h or misc).
+  - debugger put path (src/debugger/debugger.c? or misc): store_16bit_word, misalignment warn, put b NO_EXCEPTIONS.
+  - fatal() returns (src/core/misc.c or misc.cc).
+  - probe file matches diff, row count 96.
+  - artifacts exist.
+
+  Let me track with TodoList briefly and proceed with parallel calls.Makefile
+Makefile.skel
+debugmsg.c
+debugmsg.o
+emul.c
+emul.o
+emul_parse.c
+emul_parse.o
+float_emul.c
+float_emul.o
+grep.exe.stackdump
+interrupt.c
+interrupt.o
+main.c
+main.o
+memory.c
+memory.o
+misc.c
+misc.o
+settings.c
+settings.o
+timer.c
+timer.o
+Makefile
+Makefile.skel
+debugger.c
+debugger.o
+debugger_cmds.c
+debugger_expr.c
+debugger_expr.o
+grep.exe.stackdump
+The alignment check is confirmed: `#ifndef LS_1` → check `addr & (LS_SIZE-1)` → `m88k_exception(MISALIGNED)` then `return` — BEFORE the `memory_rw` call at line 189. Byte accesses (LS_1) skip the check entirely. ✓ Premise 3's m88k claim verified exactly as stated ("#ifndef LS_1 ... m88k_exception(MISALIGNED)' then return").
+
+  Note line 189: `cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data), ...)` — hmm, `sizeof(data)` where data is presumably `uint8_t data[8]`? For LS_2, sizeof(data)... whatever — it loads into a buffer then composes via memory_readmax64(cpu, data, LS_SIZE). Wait — it passes `sizeof(data)` as len? That would be 8 always?! Hmm, look: `memory_rw(cpu, cpu->mem, addr, data, sizeof(data), MEM_READ, ...)` — if data is a fixed 8-byte buffer, len=8 always?? That can't be right for a halfword load — the device would see len 8 for an ld.h! Let me look more carefully — maybe `data` is declared per-LS_SIZE. Let me read the top of the file / the store path. This MATTERS: the whole premise is that a guest st.h reaches the device with len==2. If the load/store helper always passes sizeof(data) = 8, then len would be 8 and... but the probes MEASURED declines with len=2 semantics (the mutant results are consistent with len==2 for halfword). Let me check the declaration of `data` in this templated file.
+
+• Alignment check confirmed verbatim. One thing to check: what `len` the load/store helper actually passes to `memory_rw` — the whole premise rests on st.h arriving with len==2.
+
+• Important: the store path calls `memory_writemax64(cpu, data, LS_SIZE, x)` then `memory_rw(cpu, cpu->mem, addr, data, sizeof(data), MEM_WRITE, ...)`. `sizeof(data)` — I need the declaration of `data`. If `data` is `uint8_t data[8]`, then sizeof(data)=8 and every store would pass len=8! But that would contradict the measured behavior (halfword writes declined with len=2 — the mutant table results would be inconsistent). Wait — but this is the dyntrans instruction call path (LS_N generic function at 246). Let me look at the declaration of `data` in this function. It's probably declared near the top of LS_N or in an included generic section. Let me read the beginning of the function (lines ~60-100) and check. Actually the `#ifdef LS_INCLUDE_GENERIC` block — the `data` buffer. Let me grep for "data\[" in this file.`uint8_t data[LS_SIZE]` — so `sizeof(data) == LS_SIZE`. A halfword store passes len=2, word len=4, double len=8. ✓ Premise verified: guest st.h reaches the device with len==2, after the alignment check.
+
+  Now:
+  1. memory_rw dispatch condition — file is src/core/memory.c.
+  2. memory_readmax64 endian compose — likely in src/core/memory.c or misc.
+  3. debugger put path — src/debugger/debugger_cmds.c probably has the `put` command; store_16bit_word might be in debugger.c or memory.c.
+  4. fatal() returns — src/core/misc.c.
+
+  Batch these.memory_readmax64 confirmed: big-endian compose `x = (x<<8)|buf[i]` for i ascending → buf[0] (lowest address) ends in the HIGH bits; (uint8_t)x = buf[len-1] = highest-address lane. ✓ Premise 2 verified exactly: for st.h 0xAABB at 0x...02: memory_writemax64 stores buf[0]=0xAA (addr 0x02), buf[1]=0xBB (addr 0x03); idata = 0xAABB; (uint8_t)idata = 0xBB = the byte at +1 = VECBASE's lane. ✓
+
+  The dispatch condition isn't in memory.c under that name — the device dispatch might use `no_exceptions` flag differently. Let me grep memory.c for the device-calling loop and NO_EXCEPTIONS.The dispatch condition with `DM_READS_HAVE_NO_SIDE_EFFECTS` isn't in memory.c of this fork at those greps. Maybe the dispatch filter is expressed differently — e.g., checking `flags & NO_EXCEPTIONS` in the device loop. Let me look at the memory_rw function's device-dispatch section.200:		cpu->memory_rw(cpu, mem, addr+cur_length,
+231:		cpu->memory_rw(cpu, mem, addr+len, &c, sizeof(c), MEM_READ,
+345: *  memory_rw.c still trusts the ORIGINAL (larger) length and installs a
+595: *  Called from memory_rw whenever memory outside of the physical address space
+673:		cpu->memory_rw(cpu, cpu->mem, addr + i, &ch, sizeof(ch),
+694:	cpu->memory_rw(cpu, cpu->mem,
+782:	return cpu->memory_rw(cpu, cpu->mem,
+806:	return cpu->memory_rw(cpu, cpu->mem,
+827:	return cpu->memory_rw(cpu, cpu->mem,
+844:				cpu->memory_rw(cpu, cpu->mem, addr,
+890:	cpu->memory_rw(cpu, cpu->mem,
+917:	cpu->memory_rw(cpu, cpu->mem,
+938:	cpu->memory_rw(cpu, cpu->mem,
+`memory_rw` itself isn't defined in memory.c — it's a function pointer `cpu->memory_rw`, likely defined in the CPU file (cpu.c or cpu_m88k.c) as `memory_rw` in src/cpus/memory_rw.c? The tree has src/cpus/. Let me find the definition.GXEMUL-SEC/src/cpus/memory_rw.c:585:				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+GXEMUL-SEC/src/devices/dev_disk.c:224:	    DM_READS_HAVE_NO_SIDE_EFFECTS, d->buf);
+GXEMUL-SEC/src/devices/dev_ether.c:238:	    DM_READS_HAVE_NO_SIDE_EFFECTS, d->buf);
+GXEMUL-SEC/src/devices/dev_fb.c:958:	flags |= DM_READS_HAVE_NO_SIDE_EFFECTS;
+GXEMUL-SEC/src/devices/dev_le.c:1102:	    | DM_READS_HAVE_NO_SIDE_EFFECTS, d->sram);
+GXEMUL-SEC/src/devices/dev_pvr.c:2689:	    | DM_READS_HAVE_NO_SIDE_EFFECTS, d->vram);
+GXEMUL-SEC/src/devices/dev_ram.c:199:		    | DM_READS_HAVE_NO_SIDE_EFFECTS, (unsigned char*) (void *) &d->offset);
+GXEMUL-SEC/src/devices/dev_ram.c:227:		    | DM_READS_HAVE_NO_SIDE_EFFECTS, d->data);
+GXEMUL-SEC/src/devices/dev_vga.c:1316:	    DM_DYNTRANS_WRITE_OK | DM_READS_HAVE_NO_SIDE_EFFECTS,
+GXEMUL-SEC/src/devices/dev_vga.c:1320:	    DM_READS_HAVE_NO_SIDE_EFFECTS, d->gfx_mem);
+---
+726:	memory_device_register(devinit->machine->memory, "pcc2",
+728:	    DM_DEFAULT, NULL);
+730:	memory_device_register(devinit->machine->memory, "mvme187_iack",
+732:	    DM_DEFAULT, NULL);
+The dispatch condition is verified exactly as the brief quotes: `if (!no_exceptions || (mem->devices[i].flags & DM_READS_HAVE_NO_SIDE_EFFECTS))` at memory_rw.c:584-585, and pcc2 registers with DM_DEFAULT (dev_pcc2.c:728). So a NO_EXCEPTIONS access (debugger read / `put b`) is never dispatched to pcc2. ✓ Premise 4's dispatch half verified.
+
+  Now the debugger put path: find the `put` command implementation in debugger_cmds.c — check that:
+  - `put b` calls memory_rw with NO_EXCEPTIONS (→ not dispatched).
+  - `put h/w/d` go through store_16bit_word/store_32bit_word/store_64bit_word which call memory_rw WITHOUT NO_EXCEPTIONS, and warn on misaligned address but store anyway.GXEMUL-SEC/src/debugger/debugger_cmds.c:717:		    MEM_READ, CACHE_NONE | NO_EXCEPTIONS);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:951:			store_16bit_word_in_host(c, pattern, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:958:			store_32bit_word_in_host(c, pattern, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:966:			store_64bit_word_in_host(c, pattern, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1008:			    CACHE_NONE | NO_EXCEPTIONS);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1461:			    MEM_WRITE, CACHE_NONE | NO_EXCEPTIONS);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1507:		    &a_byte, 1, MEM_WRITE, CACHE_NONE | NO_EXCEPTIONS);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1523:		res = store_16bit_word(m->cpus[0], addr, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1543:		res = store_32bit_word(m->cpus[0], addr, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1558:		res = store_64bit_word(m->cpus[0], addr, data);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1919:			    CACHE_NONE | NO_EXCEPTIONS) == MEMORY_ACCESS_FAILED)
+Line 1507 shows `put b` (a_byte, len 1) with NO_EXCEPTIONS → not dispatched to pcc2 ✓. Lines 1523/1543/1558: put h/w/d go through store_Nbit_word ✓. Now check store_16bit_word (in debugger.c) for the misaligned warn-and-store behavior, and whether it calls memory_rw WITHOUT NO_EXCEPTIONS. Also check fatal() in misc.c.===MISC===
+GXEMUL-SEC/src/core/memory.c:812: *  store_16bit_word():
+GXEMUL-SEC/src/core/memory.c:818:int store_16bit_word(struct cpu *cpu, uint64_t addr, uint64_t data16)
+GXEMUL-SEC/src/core/memory.c:999: *  store_16bit_word_in_host():
+GXEMUL-SEC/src/core/memory.c:1003:void store_16bit_word_in_host(struct cpu *cpu,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:168:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.length,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:174:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.
+GXEMUL-SEC/src/machines/machine_hpcarm.c:176:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_width,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:178:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_height,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:180:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_type,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:182:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.bi_cnuse,
+GXEMUL-SEC/src/machines/machine_hpcmips.c:426:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.length,
+GXEMUL-SEC/src/machines/machine_hpcmips.c:432:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.
+GXEMUL-SEC/src/machines/machine_hpcmips.c:434:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_width,
+GXEMUL-SEC/src/machines/machine_hpcmips.c:436:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_height,
+GXEMUL-SEC/src/machines/machine_hpcmips.c:438:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_type,
+GXEMUL-SEC/src/machines/machine_hpcmips.c:440:	store_16bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.bi_cnuse,
+GXEMUL-SEC/src/machines/machine_macppc.c:114:	store_16bit_word(cpu, a + 0x0000, 1);	/*  revision  */
+GXEMUL-SEC/src/machines/machine_macppc.c:115:	store_16bit_word(cpu, a + 0x0002, 2);	/*  version  */
+GXEMUL-SEC/src/machines/machine_mvmeppc.c:136:	store_16bit_word(cpu, cpu->cd.ppc.gpr[5]+ 76, 0x1600);
+GXEMUL-SEC/src/promemul/arcbios.c:98:	store_16bit_word_in_host(cpu, (unsigned char *)&dspstat->
+GXEMUL-SEC/src/promemul/arcbios.c:100:	store_16bit_word_in_host(cpu, (unsigned char *)&dspstat->
+GXEMUL-SEC/src/promemul/arcbios.c:102:	store_16bit_word_in_host(cpu, (unsigned char *)&dspstat->
+GXEMUL-SEC/src/promemul/arcbios.c:104:	store_16bit_word_in_host(cpu, (unsigned char *)&dspstat->
+GXEMUL-SEC/src/promemul/arcbios.c:3240:		store_16bit_word_in_host(cpu, (unsigned char *) &arcbios_spb_64.Version, 64);
+GXEMUL-SEC/src/promemul/arcbios.c:3241:		store_16bit_word_in_host(cpu, (unsigned char *) &arcbios_spb_64.Revision, 0);
+GXEMUL-SEC/src/promemul/arcbios.c:3250:		store_16bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.Version, 1);
+GXEMUL-SEC/src/promemul/arcbios.c:3251:		store_16bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.Revision, machine->machine_type == MACHINE_SGI? 10 : 2);
+GXEMUL-SEC/src/promemul/dreamcast.c:211:		store_16bit_word(cpu, 0x8c000100 + i, SH_INVALID_INSTR);
+GXEMUL-SEC/src/promemul/dreamcast.c:215:	store_16bit_word(cpu, 0xa0000000, SH_INVALID_INSTR);
+GXEMUL-SEC/src/promemul/mvmeprom.c:76:	store_16bit_word_in_host(cpu, (unsigned char *)
+GXEMUL-SEC/src/promemul/sh_ipl_g.c:56:	store_16bit_word(cpu, 0x8c000100, SH_INVALID_INSTR);
+GXEMUL-SEC/src/promemul/sh_ipl_g.c:57:	store_16bit_word(cpu, 0x8c000102, 0x002b);  	/*  rte  */
+GXEMUL-SEC/src/promemul/sh_ipl_g.c:58:	store_16bit_word(cpu, 0x8c000104, 0x0009);  	/*  nop  */
+===
+GXEMUL-SEC/src/core/debugmsg.c:384:void fatal(const char *fmt, ...)
+GXEMUL-SEC/src/include/misc.h:262:void fatal(const char *fmt, ...);
+Verified:
+  - `fatal()` (debugmsg.c:384-391) just prints and returns — no exit. ✓ Premise 6.
+  - `store_16bit_word` calls `memory_rw(..., MEM_WRITE, CACHE_DATA)` — NO NO_EXCEPTIONS flag → `no_exceptions` false → device dispatched ✓. One memory_rw call with len=2 ✓.
+  - BUT: the brief claims the debugger's `put h` "warns on a misaligned address and stores anyway". Where's the warn? Not in store_16bit_word. It must be in the debugger_cmds.c put command around line 1523. Let me check that region for the misalignment warning. Also check what the put command prints — the probe's `op *` rows rely on the session surviving (exit0) and the DECL print; the misalign warn must not contain DECL. Let me read debugger_cmds.c around 1440-1570.Fully verified:
+  - `put b` → memory_rw with CACHE_NONE | NO_EXCEPTIONS → pcc2 (DM_DEFAULT) NOT dispatched → vacuous byte path confirmed at source level ✓ (matches part-3 measurement).
+  - `put h/w/d` → warn "WARNING: address isn't aligned" then store_Nbit_word → memory_rw WITHOUT NO_EXCEPTIONS → dispatched, len 2/4/8 ✓. Warn text has no "declined" substring ✓.
+  - The warn text "WARNING: address isn't aligned" — contains no DECL. ✓
+
+  Note: `put h` prints the value with `: %04x` — that's why `rb t1ctl` prints "0x3" style... actually that's for put. The readback rows use guest `print r4` which prints... whatever. The string-mismatch story (0x03 vs 0x3) is plausible.
+
+  Now, remaining verifications:
+  1. The probe file in tree: matches the diff's post-image, row count = 96 row() calls emitted, docstring matches the contract verbatim.
+  2. Artifacts exist: regress/artifacts/pcc2widthkills/operator_reach_20260903.out, killtable2_20260903/part3/driver.log, pass3_seats_20260903/fable/probe_mfall_vecbase.out.
+  3. gate_arm.sh block matches the diff.
+  4. The "put h at odd ended the host" artifact (operator_reach_20260903.out).
+  5. Also verify MVME187 has ONE pcc2 (machine file) — "mvme187 instantiates ONE pcc2".
+  6. The old pre-fix source (git show b78bb0f:src/devices/dev_pcc2.c) — verify the "TWELVE blocks, ten kills + two #119 statics" claim and that IPL/MASK had statics. The brief's product comment says "TWELVE width-guard blocks ... TEN of them fatal(); exit(1) kills ... and two (IPL, MASK) #119 warn-once latches". Let me verify against the committed (pre-fix... wait, b78bb0f is the commit the work is on top of — the commit message says "pcc2widthkills: the closure that opened six registers is closed, and twelve width kills become a direction split". Hmm — b78bb0f ALREADY contains the direction split?? The commit message says the twelve width kills became a direction split. So the fix is IN b78bb0f, and the uncommitted work is the detector closure (probe 60→96) + comment updates. Let me check: git diff src/devices/dev_pcc2.c is only 22/10 — comments + typedef. So yes: the fix itself (direction split) is committed in b78bb0f; the uncommitted product diff is comment-only. The brief says "Product diff is comments only" ✓ consistent.
+
+  So to verify "twelve blocks were kills (ten) + two #119 statics", I'd look at b78bb0f^:src/devices/dev_pcc2.c. Let me do that quickly (git show b78bb0f^ -- count of "len != 1" exit(1) blocks and the two statics).
+
+  Let me also verify the probe file. And check the artifacts. Batch:
+
+  1. `git -C GXEMUL-SEC show b78bb0f^:src/devices/dev_pcc2.c | grep -c "len != 1"` and look for exit(1) blocks + statics.
+  2. `grep -c '^row(' GXEMUL-SEC/regress/pcc2_width_probe.py` and diff the tree's probe against the brief's diff post-image — simpler: check `git -C GXEMUL-SEC diff regress/pcc2_width_probe.py | md5`? Can't compare with brief's inline directly; instead verify: row count = 96 in the gate list, the probe's docstring head matches, and `python` count of row( calls... Actually simpler: run a quick consistency: extract row names from probe, compare with gate list (96 names).
+  3. ls artifacts dirs.
+  4. Check machine_mvme187 (or wherever) has one pcc2 init. grep device init for pcc2 in machines.
+
+• The operator/guest path premises all verify. Now the probe file, gate, artifacts, and the pre-fix history claim.36
+literal row() calls: 36
+fable_adjudication_20260902.md
+killtable2_20260903
+killtable_20260903
+operator_reach_20260903.out
+opus_pass2_20260903
+opus_pass3_20260903
+pass3_seats_20260903
+pcc2_operator_reach.asrun.py
+pcc2_width_witness.asrun.py
+witness_20260831.out
+witness_20260831.sh
+witness_20260903_PREFIX.out
+PRETABLE.out
+PRETABLE_amendments.out
+gate14_p3.log
+gate14_p4.log
+part1
+part2
+part3
+part3b
+part3c
+ram_h    how=exit0  aligned-warning=False width-kill-message=False
+even_h   how=exit1  aligned-warning=False width-kill-message=True 
+odd_h    how=exit1  aligned-warning=True  width-kill-message=True 
+PCC2_OPREACH_DONE
+BASE.out
+M_FALL_IPL.out
+M_FALL_TXCTL.out
+M_FALL_VECBASE.out
+M_GROW_PSCALEADJ.out
+M_LEN2_VECBASE.out
+M_RDDECL_ALL.out
+build_BASE.log
+build_M_FALL_IPL.log
+build_M_FALL_TXCTL.log
+build_M_FALL_VECBASE.log
+build_M_GROW_PSCALEADJ.log
+build_M_LEN2_VECBASE.log
+build_M_RDDECL_ALL.log
+build_restore.log
+driver.log
+frozen_probe.py
+killpcc2b_part3.asrun.sh
+
+
+• 36 literal row() calls, but some are in loops. The loop expansion didn't print (my regex didn't match the loop style). Let me count differently: compute the emitted row count. From my earlier arithmetic: 60 old + 36 new = 96. Literal row() calls = 36? But many are inside for-loops. Let me just enumerate the actual emitted row names by parsing the probe structurally — or simpler: the gate list has 96 names (I can count them) and the denominator checks are 96. Let me count gate list entries and cross-check each gate name appears in the probe (as literal or loop-generated).
+
+  Also, PRETABLE.out and PRETABLE_amendments.out both exist in killtable2_20260903/ ✓ (the split exists as described). part3/driver.log exists ✓. operator_reach_20260903.out exists; its head shows `odd_h how=exit1 aligned-warning=True width-kill-message=True` — confirms `put h` at odd killed (pre-fix) with an alignment warning ✓.
+
+  Note "ram_h how=exit0" — interesting: a put h to RAM survives.
+
+  Now: check gate list count = 96 and every name resolvable from the probe; check probe docstring matches the inlined contract (spot-check a few lines); verify frozen_probe.py in part3 == current probe? (frozen at part-3 time — should be the 96-row version; md5?). Also check part3 driver.log content for the measured rows, e.g. confirm the reported red rows. And pass3_seats fable probe_mfall_vecbase.out exists.
+
+  Let me also verify the pre-fix claim (b78bb0f^ had ten kills + two statics) — actually wait. The commit b78bb0f message says the split happened IN that commit. The brief's product diff (uncommitted) is comments+typedef only, consistent with 22/10 numstat. The "twelve kills" claim refers to the pre-split tree. It's history, already settled in earlier passes; I can spot-check quickly.emitted-literal count: 64
+gate rows: 5
+gate rows not found in probe: ['A teq rot C combined', 'A tst rot C combined', 'A teq rot C standalone', 'A tst rot C standalone', 'A teq flat C preserved']
+My gate regex caught the wrong `for v in` loop (there are multiple gates in gate_arm.sh). Let me target the pcc2 one specifically — search for "pcc2 width row". Let me redo: find the line containing "pcc2 width row" and extract the for-list above it.
+
+• My regex caught the wrong gate loop. Targeting the pcc2 block specifically.gate pcc2 rows: 96
+missing from probe emissions: []
+emitted but not gated: ['acc ', 'hrd ', 'hwr ', 'op ', 'rb ']
+emitted total: 101
+
+
+• The gate has exactly 96 pcc2 rows, and every one of them is emitted by the probe (the "emitted but not gated" five are loop-template artifacts of my expansion — e.g. `row("hrd " + nm...` produces template literals "hrd " etc. — my parser artifact, not real rows; actually they come from `row("hrd " + nm, ...)` where the literal regex caught `hrd ` — wait no, those have % removed... they're the concatenation templates `row("hrd " + nm ...)`. Anyway: all 96 gate names are genuinely emitted, and the real emitted count is 96 (101 - 5 template stubs).
+
+  Row count arithmetic: 96 = 60 + 36 ✓ verified against the actual files.
+
+  Now check:
+  1. The probe docstring matches the inlined contract (spot-check the ENUMERATION section exists verbatim in the probe).
+  2. part3/driver.log content — verify the measured results claimed (BASE 95/96 rb t1ctl, etc.).
+  3. part3b/part3c results.
+  4. pass3_seats fable probe_mfall_vecbase.out — 82/82 claim.
+  5. The pre-fix claim: b78bb0f^ had 10 kills + 2 statics (quick check).
+  6. mvme187 single pcc2 instance.
+  7. frozen_probe.py in part3 == current probe (md5) — to verify the "mutation proven in the binary" part-3 story isn't resting on a different probe.
+
+  Let me batch.1
+3dcf73de9b71489ff688e99f863693ca *regress/artifacts/pcc2widthkills/killtable2_20260903/part3/frozen_probe.py
+72759b4f843b75e1489d259a75dcad5b *regress/pcc2_width_probe.py
+===PART3===
+[16:27:46]   clone's src/devices/dev_pcc2.c refreshed from SEC (comment-only change since build/ was built)
+[16:27:46]   instrument frozen: 32868 bytes
+[16:27:46] BASE -- 96/96 owed
+[16:32:56]   BASE [CONTROL]: PCC2W_RESULT=95/96
+      RED: rb t1ctl
+[16:32:56] *** BASE IS NOT FULL (95/96): PCC2W_RED=rb t1ctl -- CONTINUING; read every cell with those rows SUBTRACTED ***
+[16:32:56] RESTORE from SEC + REBUILD + verify, THEN clear the sentinel
+[16:38:04]   M_FALL_VECBASE [rb vecbase own 0xb0]: PCC2W_RESULT=94/96
+      RED: rb vecbase own,rb t1ctl
+[16:43:14]   M_FALL_IPL [hwr ipl noig 1]: PCC2W_RESULT=94/96
+      RED: hwr ipl noig,rb t1ctl
+[16:48:23]   M_LEN2_VECBASE [latch all w 11]: PCC2W_RESULT=94/96
+      RED: latch all w,rb t1ctl
+[16:53:32]   M_GROW_PSCALEADJ [acc all 1]: PCC2W_RESULT=95/96
+      RED: rb t1ctl
+[16:58:42]   M_RDDECL_ALL [seven nod rows]: PCC2W_RESULT=88/96
+      RED: hrd genctl nod,hrd t2ctl nod,hrd t2icr nod,hrd sccerr nod,hrd scctx nod,wrd sccerr nod,rb t1ctl,hrd ipl nod
+[17:03:51]   M_FALL_TXCTL [rb t2ctl 0x0, rb t1ctl 0x0]: PCC2W_RESULT=94/96
+      RED: rb t2ctl,rb t1ctl
+[17:03:52]   restored + REBUILT + verified, sentinel cleared
+[17:03:52] KILLPCC2B_PART3_DONE
+Part 3 driver.log confirms every number in the brief's part-3 table exactly:
+  - BASE 95/96 red rb t1ctl ✓
+  - M_FALL_VECBASE 94/96 (rb vecbase own, rb t1ctl) ✓
+  - M_FALL_IPL 94/96 (hwr ipl noig, rb t1ctl) ✓
+  - M_LEN2_VECBASE 94/96 (latch all w, rb t1ctl) ✓
+  - M_GROW_PSCALEADJ 95/96 (rb t1ctl only — the ESCAPE, acc all didn't move) ✓
+  - M_RDDECL_ALL 88/96 (7 nod rows + rb t1ctl) ✓
+  - M_FALL_TXCTL 94/96 (rb t2ctl, rb t1ctl) ✓
+
+  Note: part3's frozen_probe.py md5 differs from the current probe — expected, since acc all was rewritten (part 3c) and the docstring updated after. The "instrument frozen: 32868 bytes" — fine. But wait: the part3 run expected "BASE -- 96/96 owed" — it KNEW 96 rows. And the brief's part-3 table line "M_GROW_PSCALEADJ 95/96 rb t1ctl" ✓ (the brief lists exactly that).
+
+  Interesting nuance in the log: "M_GROW_PSCALEADJ [acc all 1]: PCC2W_RESULT=95/96" — the bracket "[acc all 1]" is the driver's EXPECTATION (acc all should red with count 1), but the result shows only rb t1ctl red → the escape. The brief reports this honestly as the escape ✓.
+
+  Now part3b and part3c driver.logs, plus the pass3 fable artifact. Then the history check (b78bb0f^ twelve blocks: ten kills + two statics), and mvme187 single pcc2.
+
+• Part 3's log matches the brief's table line-for-line. Checking 3b/3c, the fable artifact, and the pre-fix history claim.[17:15:22] BASE -- 96/96 owed
+[17:20:31]   BASE [CONTROL]: PCC2W_RESULT=96/96
+[17:20:31]     mutant text in source: 1 x len!=0, 11 x len!=1
+[17:20:32]     binary 17:20:32  source 17:20:31
+[17:25:40]   M_GROW_PSCALEADJ [acc all 1]: PCC2W_RESULT=96/96
+[17:25:40]     mutant text in source: 0 x len!=0, 12 x len!=1
+[17:25:43]     binary 17:25:43  source 17:25:40
+[17:30:50]   M_FALL_TXCTL [rb t2ctl 0x0, rb t1ctl 0x0]: PCC2W_RESULT=94/96
+      RED: rb t2ctl,rb t1ctl
+[17:30:50] RESTORE from SEC + REBUILD + verify, THEN clear the sentinel
+[17:30:51]   restored + REBUILT + verified, sentinel cleared
+[17:30:51] KILLPCC2B_PART3B_DONE
+===3C===
+[17:37:13]   BASE [CONTROL]: PCC2W_RESULT=96/96
+[17:37:14]     mutant text in source: 1 x len!=0, 11 x len!=1
+[17:37:15]     binary 17:37:15  source 17:37:14
+[17:42:26]   M_GROW_PSCALEADJ [acc all 1]: PCC2W_RESULT=95/96
+      RED: acc all
+[17:42:26] RESTORE from SEC + REBUILD + verify, THEN clear the sentinel
+[17:42:27]   restored + REBUILT + verified, sentinel cleared
+[17:42:27] KILLPCC2B_PART3C_DONE
+===FABLE===
+NOROW  pcc2c040kill                        -- a LEGAL byte write of 0x04 to GENCTL still ends the host; every GENCTL lane here keeps that bit clear
+NOROW  pcc2defaultkill / pcc2counter8      -- other arms, other rounds
+PCC2W_RESULT=82/82
+PCC2W_LABEL=mfall_vecbase
+PCC2W_PROBE_DONE
+SEATS.txt
+brief_sent.md
+codex.txt
+fable
+grok.txt
+kimi
+kimi.txt
+ollama_deepseek.txt
+ollama_glm.txt
+ollama_minimax.txt
+opus_reader
+12
+12
+337:			static int warned = 0;	/* #119: loud-once (course-correction) */
+544:			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+550:			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+555:				static int w = 0;	/* #119: was exit(1) */
+564:			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+===MVME187===
+machine_mvme88k.c
+machine_mvme88k.o
+machine_mvmeppc.c
+machine_mvmeppc.o
+
+
+• Interesting — the pre-fix check: `git show b78bb0f^` shows 12 "len != 1" and 12 "exit(1)" near them... wait. The second command counted `exit(1)` within 3 lines after `len != 1` = 12. Hmm — that suggests the PRE-split tree (b78bb0f^) had TWELVE `exit(1)` blocks, not "ten kills + two statics". But the statics at 544/550/555/564 in b78bb0f^ say "#119: was exit(1) -> warn-once + continue" — meaning at b78bb0f^ the IPL/MASK arms ALREADY had warn-once statics (an earlier course-correction had converted those two from exit(1) to warn-once statics). But the grep says 12 exit(1) following len != 1... Let me look more carefully. Maybe the statics at 544+ are in IPL/MASK blocks AND the guard still had exit(1)?? Let me actually read the b78bb0f^ version around those lines.
+
+  Wait, the count "12" for exit(1) within 3 lines of "len != 1" — the -A3 window may overlap the `default:` exit(1)... no, default is far. Let me look at the actual pre-fix blocks. Also the claim in the product comment is about what the TWELVE blocks were BEFORE the split: "TWELVE width-guard blocks ... TEN of them fatal(); exit(1) kills ... and two (IPL, MASK) #119 warn-once latches". If b78bb0f^ had 12 exit(1) kills, then "ten kills + two latches" would be wrong for b78bb0f^. But maybe #119 (an earlier round) had already converted IPL/MASK to statics, and the 12 exit(1) count is wrong because my grep -A3 windows overlap. E.g., blocks at lines 544-564 contain BOTH statics and... hmm.
+
+  Let me look at the actual b78bb0f^ blocks directly.359:		if (len != 1) {
+371:		if (len != 1) {
+394:		if (len != 1) {
+407:		if (len != 1) {
+429:		if (len != 1) {
+467:		if (len != 1) {
+477:		if (len != 1) {
+492:		if (len != 1) {
+507:		if (len != 1) {
+528:		if (len != 1) {
+543:		if (len != 1) {
+563:		if (len != 1) {
+===
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_IPL:
+		if (len != 1) {
+			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_IPL; "
+			    "ignored ]\n"); w = 1; }
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
+			    "ignored ]\n"); w = 1; }
+		} else {
+			if (d->pcctwo_reg[PCCTWO_IPL] == 0) {
+				static int w = 0;	/* #119: was exit(1) */
+				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
+				    w = 1; }
+			}
+		}
+		break;
+
+	case PCCTWO_MASK:
+		if (len != 1) {
+			static int w = 0;	/* #119: was exit(1) -> warn-once + continue */
+			if (!w) { fatal("[ pcc2: non-byte access to PCCTWO_MASK; "
+			    "ignored ]\n"); w = 1; }
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata;
+The pre-fix tree (b78bb0f^) confirms: 12 `len != 1` blocks; IPL and MASK had the `#119: was exit(1) -> warn-once + continue` statics (process-global, and they said "ignored" about READs too — since the guard `if (len != 1)` had no writeflag conjunct!). The other ten blocks presumably had fatal+exit(1). My earlier grep -A3 count of "12 exit(1)" was an overlap artifact (windows bleeding into the next block); the sed view shows the IPL/MASK blocks had statics + break, no exit. Let me quickly confirm the ten kills did have exit(1) — check one, e.g. line 359.
+
+  Also notable: the pre-fix IPL/MASK guards fired on len != 1 for READS TOO ("non-byte access ... ignored") — the comment in the fix says "it said 'ignored' about a READ the memcpy above had already served" ✓ verified.
+
+  Let me verify one kill block + confirm ten blocks had exit(1).	case PCCTWO_GENCTL:
+			exit(1);
+	case PCCTWO_VECBASE:
+			exit(1);
+	case PCCTWO_PSCALEADJ:
+			exit(1);
+	case PCCTWO_T1CTL:
+			exit(1);
+	case PCCTWO_T1ICR:
+			exit(1);
+	case PCCTWO_SCCERR:
+			exit(1);
+	case PCCTWO_SCCICR:
+			exit(1);
+	case PCCTWO_SCCTX:
+			exit(1);
+	case PCCTWO_SCCRX:
+			exit(1);
+	case PCCTWO_SCSIICR:
+			exit(1);
+===MVME===
+91:		snprintf(tmpstr, sizeof(tmpstr), "pcc2 addr=0x%x", PCC2_BASE);
+99:		snprintf(tmpstr, sizeof(tmpstr), "clmpcc irq=%s.cpu[%i].pcc2 "
+109:		snprintf(tmpstr, sizeof(tmpstr), "osiop irq=%s.cpu[%i].pcc2.%i "
+Pre-fix: ten blocks with exit(1) kills (GENCTL, VECBASE, PSCALEADJ, T1CTL/T2CTL shared, T1ICR/T2ICR shared, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR = 10 blocks across 12 labels) + IPL/MASK #119 statics. ✓ The "TWELVE blocks, ten kills + two #119 latches" history claim verified.
+
+  mvme88k machine: one pcc2 registration ("pcc2 addr=0x%x") — one instance per machine; mvme187 is an mvme88k machine. The brief's claim "mvme187 instantiates ONE pcc2" — machine_mvme88k.c line 91 shows a single devinit for pcc2. ✓ (one registration call site; per-machine one instance).
+
+  Remaining checks:
+  1. Probe docstring vs the inlined contract (VERBATIM claim) — spot-check the key sections exist; the probe does contain "THE ENUMERATION (pass 3 class closure)" (grep found 1). Good enough? The brief claims the contract is the probe's docstring verbatim. I could do a stronger check: extract the probe's docstring and compare the enumeration table lines. Let me diff the table block.
+
+  2. gate_arm.sh diff matches inline — I already counted 96 names from the actual file; the old list matched 60. The denominator checks: verify they say 96/96/0.
+
+  3. PRETABLE split: check PRETABLE.out ends at Section 4 and amendments has 5-7 (honesty of the split). Check mtimes? The mtime discriminator claim — PRETABLE.out mtime vs amendments. Let me look at the files' section headers and mtimes.
+
+  4. pass3 seats: 8 answered listed (codex, kimi, grok, glm, deepseek, minimax, opus, fable5) — pass3_seats dir has codex.txt, kimi.txt, grok.txt, ollama_* (glm, deepseek, minimax), opus_reader/, fable/ — 8 ✓ plus SEATS.txt. agy not fired ✓ (no agy file).
+
+  5. The MD 80/82 claim (opus reader delete@GENCTL control) — check opus_pass3 or pass3_seats/opus_reader. And kimi's three rows (82/82, 82/82, 80/82). Let me peek at those artifacts quickly.
+
+  6. Also verify the "82-row instrument md5 cd22f951" — is there a frozen copy? Maybe in opus_pass3_20260903 or pass3_seats. Quick md5 check if a frozen probe exists there.
+
+  Then the adversarial analysis proper (I've mostly done it in my head during verification):
+
+  Q1(a) domain — the nine shapes cover len (DEL/LEN/LEN2/GROW/SWAP), writeflag (RDDECL), control-flow (FALL, KILL), latch-bit assignment (ALIAS), idata (SWAP). Gap found: the latch UPDATE/TEST operators in pcc2_width_decline (`|=` and `&`) — a one-character edit `|=` → `=` (or `&` → `==`) breaks announce-exactly-once under interleaving (A,B,A re-announces A) while every row stays green. The contract's CATCHES explicitly claims "dropped `|=' floods (same site twice must announce ONCE)" — the claimed channel (latch same = A,A) does NOT detect `|=`→`=`. So a contract-claimed catch has no carrying row. This is the Q2 answer too.
+
+  Also the arm-TERMINAL break removal (distinct from the guard's break — FALL): e.g., deleting VECBASE arm's final break → falls into counter memcpy; value-invisible for all probed byte values (0x50, 0x10 fit mask 0xf0; memcpy re-stores same byte), so 96/96. The mask-on-accept semantics at VECBASE are unobserved (no acc vecbase row; acc all only counts declines). Weaker but real — the de-escalation clause claims byte writes "land, read back through each arm's own mask" — at VECBASE no row reads back an off-mask byte. Actually wait — is that right? acc rows exist at five blocks (genctl, t2ctl, t2icr, scctx, sccerr) — do they read back values? "acc genctl" presumably stores a byte and reads back. For VECBASE there's no acc row (C alone). rb vecbase/rb vecbase own use 0x50 (mask-fitting). So a mutant storing VECBASE unmasked on byte writes passes all rows. But is that "the property" the detector owes? The detector's contract is about the width guard; the VECBASE mask is arm-body semantics, not guard. Removing the terminal break is a body-affecting edit, not a guard edit. The enumeration's domain is "the guard's own inputs". An arm-terminal break is outside the guard. Still, Q2 says "shapes NOT in the contract are the interesting ones" — so naming it is responsive. But careful: does the terminal-break removal change ANY observable under the probe? VECBASE fall into T1CMP memcpy: `if (writeflag == MEM_WRITE && relative_addr + len <= PCC2_SIZE) memcpy(reg + 3, data, 1)` — for byte writes, re-stores the raw byte. Under acc all (0x10) and rb vecbase (0x50): both fit 0xf0 mask → identical. HUH print already fired or not identically... For 0x50: no HUH. For 0x10: no HUH. So invisible ✓. For PSCALEADJ (no store, print only): terminal-break removal falls into TxCTL body → modifies reg[0x15] (PSCALEADJ's own reg! = (0 & 0xfc) | (idata & 3)) and HUH prints "PCCTWO_TxCTL" — acc all at PSCALEADJ with 0x10: reg[0x15] = 0x10 & 3 = 0; HUH print "HUH? write to PCCTWO_TxCTL with value 0x10" — printed in acc all session! Does any row count HUH in the acc all session? acc all counts DECL only. HUH ≠ DECL. So invisible → 96/96 with PSCALEADJ's arm break removed (and it corrupts reg 0x15 — but nothing reads PSCALEADJ). Hmm, and the COVF branch: idata 0x10 & PCC2_TCTL_COVF(0x04) = 0 → no clear. OK invisible.
+
+  These arm-terminal shapes are real "smallest edits" but arguably outside the enumeration's guard-input domain. The `|=`→`=` is INSIDE the domain (d->warned is a named guard input) and breaks a CATCHES-claimed property. Primary answer: `|=`→`=`. 
+
+  Q1(b) S cells — I re-derived from source: DEL vs FALL land identically at every arm (same body executes with same idata; the only difference is the announce). KILL dies at the access → survival/message rows red. LEN (len>2) lands halfwords exactly like DEL for the rows' halfword writes. All S cells I checked have a measured same-arm landing counterpart: GENCTL(DEL M), VECBASE(FALL/KILL M), PSCALEADJ(FALL M), TxCTL(LEN/FALL M... FALL measured M_FALL_TXCTL!), TxICR(DEL/LEN M), SCCERR(LEN M + value-identical message rows), SCCICR(FALL M), SCCTX(DEL/LEN M), SCCRX(FALL M), SCSIICR(FALL M), IPL(FALL/KILL M), MASK(DEL/LEN/KILL M). Every S cell sits in a row with at least one M in a landing-or-dying shape at the same arm. ✓ 
+
+  One S-cell nuance: TxCTL FALL marked S despite M_FALL_TXCTL being measured (part 3b, RED rb t2ctl + rb t1ctl) — by the table's own legend ("M = measured kill (log named in CHANGELOG/PRETABLE)") that cell qualifies as M; marking S underclaims. Same possibly for others. Conservative direction, but a legend-consistency nit.
+
+  Q1(c) E/UNREACHABLE warrants:
+  - SCCERR FALL = E: verified from source — arm stores 0 unconditionally (line 550), no print, and the only stores to pcctwo_reg are within each keyed case; nothing stores nonzero SCCERR. FALL vs decline differ only in storing 0 to a cell that's always 0. E holds. One caveat: the E warrant says "grep SCCERR dev_pcc2.c" — the store is via `relative_addr`, so the grep alone doesn't prove it; I verified by case-keying. The warrant is TRUE but its stated deriver (grep) is insufficient — a store `d->pcctwo_reg[relative_addr] = X` inside `case PCCTWO_SCCERR` doesn't mention SCCERR literally. Nit: the deriver named is weaker than the actual proof.
+  - RDDECL unreachable at six odd blocks: verified alignment check (cpu_m88k_instr_loadstore.c:167-186, #ifndef LS_1, exception + return BEFORE memory_rw at :189) and dispatch condition (memory_rw.c:584-585, pcc2 DM_DEFAULT at dev_pcc2.c:728). ✓ Both halves re-derived from source.
+
+  Q1(d) cardinality rows:
+  - latch all (12 put h, DECL==12): each write hits one block → one announce. No HUH (bodies not reached). BASE measured 12 ✓ (96/96). Inflation by a benign event: the only other prints would be the misalignment WARNINGs (odd offsets) — "WARNING: address isn't aligned" contains no DECL ✓ (verified text at debugger_cmds.c:1514).
+  - latch all w (put w): BASE measured 12 ✓.
+  - acc all (12 st.b 0x10, DECL==0): bodies run; PSCALEADJ prints "ignored (value 0x10)" — no DECL ✓; IPL byte write prints "write to read-only PCCTWO_IPL; ignored" — no DECL ✓; TxCTL HUH (0x10 & ~7 ≠ 0) prints "HUH? write to PCCTWO_TxCTL" — no DECL ✓; GENCTL 0x10 keeps 0x04 clear (verified PCC2_C040=0x04, 0x10&0x04=0) ✓ no kill; measured BASE 96/96 ✓. Could a benign event inflate? The session is exactly these 12 stores. ✓
+  - A mutant preserving the count while breaking the property: that's the `|=`→`=` case — latch all stays 12 because each block is written once. Confirmed hole.
+
+  Q4 honesty:
+  - numstat: CHANGELOG.md disclosed 185/0, actual 190/0 — stale by 5 lines. All other seven entries match exactly. The disclosed numstat does not describe the tree as it stands. (Maybe the pass-4 CHANGELOG block grew after the numstat was captured.) Record nit, disclosed table is off.
+  - Part 3/3b/3c tables: match driver.logs exactly ✓ (including the escape and the "artifact row subtracted" framing — part3's M-rows each carried rb t1ctl; the brief shows that).
+  - fable probe_mfall_vecbase.out: 82/82 ✓ matches "MEASURED 82/82".
+  - pass-3 roster: eight seats' files present; agy absent ✓.
+  - Pre-fix history: ten kills + two #119 statics ✓ verified from b78bb0f^.
+  - "fatal() returns" ✓ (debugmsg.c:384).
+  - mvme187 one pcc2 ✓ (machine_mvme88k.c single registration).
+  - 96-row denominator: gate has 96 names, all emitted by probe; denominators 96/96/0 — verify the denominator lines in gate_arm.sh quickly.
+  - PRETABLE split: check section boundaries + mtimes.
+
+  Also the probe docstring verbatim claim — spot check the table inside the probe matches the brief's inlined contract (the probe file grep found the ENUMERATION banner once; let me extract and compare a few lines, particularly the SCCERR E warrant line and the RDDECL paragraph).
+
+  Also: does the probe contain the comment "the SIX GUEST-reachable blocks (even offsets; IPL below is the sixth)" etc.? Presumably yes.
+
+  One more adversarial thought on the RDDECL closure: the nod rows pin `writeflag <= MEM_WRITE` (declines reads). But a DIFFERENT direction-split defeat: `writeflag == MEM_WRITE` → `writeflag == MEM_READ`?? That declines wide READS only (writes land). Covered: hrd nod reds (decline printed) + arm rb rows red (wide writes land). What about dropping the conjunct entirely (`len != 1` alone — decline wide reads AND writes)? hrd nod reds ✓. What about moving the writeflag test to the body instead of the guard? Behaviorally identical. OK.
+
+  And a subtler one: RDDECL measured at ALL twelve (M_RDDECL_ALL). At a SINGLE even block, hrd <that> nod reds ✓. Single odd block — unreachable ✓ disclosed.
+
+  What about the READ side's OTHER static — the OB-11 beyond-reg-space read latch (static int warned at line 420, fires when relative_addr + len > PCC2_SIZE)? A word read at 0x3e (IPL) spans 0x3e-0x41 → beyond 0x40 → "zero-filled" print once. Not DECL. Guest word read at 0x3e is 4-misaligned anyway (0x3e%4=2) → exception. put d at 0x38? spans 0x38-0x3f → SPEED/PRTDATA offsets → default kill!! Wait — put d at an address whose relative_addr is in the default set → `default: debug(...); exit(1)` — the host dies. Is there a row doing put d? No (no len-8 rows — as I noted). Fine, disclosed as pcc2defaultkill territory? pcc2defaultkill is about unlisted offsets ending the host — a put d at 0x38 is operator-only. No row touches it. Not the twelve's business. OK.
+
+  One more possible Q2 candidate I should sanity-check: change `PCC2_W_NBITS` or reorder enum members? Auto-incremented — reordering keeps 12 distinct bits → no observable. Changing `1u << bit` to `1u << (bit+4)`? still distinct → invisible, no property break.
+
+  And: `pcc2_width_decline(d, PCC2_W_X_LEN, "PCCTWO_X", len)` — swap the NAME strings of two blocks? Five odd-arm dcl rows count generic DECL → invisible at those five (disclosed). At named-text arms (genctl via "rb genctl dcl"? — wait which rows count NAMED text? "rb t2ctl dcl" counts "write to PCCTWO_TxCTL " + DECL — named. The odd-arm `op X dcl` rows count generic DECL. A name swap between two odd blocks (e.g., SCCICR↔SCCRX strings): op dcl counts generic → both still 1 → latch all still 12 → invisible. Disclosed ("a change of the NAME STRING alone at one of them is invisible"). ✓ consistent.
+
+  Now — the one remaining piece: Q1(a) asks "are there guard inputs or plausible one-token shapes the nine do not cover?" My answer: yes — the latch update operator inside the shared helper (d->warned axis): `|=`→`=` and `&`→`==`. Both one character (well, `&`→`==` adds a char; `|=`→`=` deletes one). Neither is among the nine (ALIAS covers bit ASSIGNMENT collision, not the accumulation operator). And the contract's CATCHES claims exactly this property ("dropped |= floods") with a channel (latch same) that cannot see it. This is THE finding. Severity assessment for the verdict: the broken property is the once-per-block announce under interleaving — a real semantic of the fix (announced "once"); the contract lists it under CATCHES. The detector as shipped would pass a mutant that breaks it. That's a floor-level gap in a claimed catch → but is it a NO-GO? The brief asks the panel to find exactly this kind of thing. The fix for the hole is one row (an A,B,A latch row — e.g., "latch aba": put h GENCTL, put h VECBASE, put h GENCTL → DECL count... hmm, with correct latch: A announces once → count for GENCTL text = 1; with `=`: A announces twice → "write to PCCTWO_GENCTL " + DECL count = 2 ≠ 1 → red). One row closes it.
+
+  Verdict: GO-WITH-CHANGES — the enumeration, measurements, and record are overwhelmingly verified against source and logs, but (1) the CATCHES bullet "loss of the latch in either direction: dropped `|=' floods" names a property no row carries (smallest escape: delete one `|`), so the contract overclaims by one cell-class on the d->warned axis; (2) minor record nits: CHANGELOG numstat stale (185 vs 190), TxCTL FALL marked S though measured M per the legend, SCCERR-E's stated deriver (grep SCCERR) insufficient as written, CHIPID/CHIPREV unguarded write arms absent from the "census" sentence (same width-invariant warrant as SCCRXIACK). The change owed: one A-B-A latch row (and optionally mark TxCTL FALL M, fix the numstat, extend the census sentence). Given the brief's own standard ("a claim of coverage no row carries" is exactly what Q4 asks to name), this is GO-WITH-CHANGES, not GO.
+
+  Hold on — let me steelman the `|=`→`=` once more against EVERY row, because the verdict hinges on it:
+
+  Edit: in pcc2_width_decline, `d->warned |= (1u << bit)` → `d->warned = (1u << bit)`.
+
+  Effect: each first-announce sets warned to exactly the current bit, forgetting prior blocks' bits. Same block re-announces only if a DIFFERENT block announced in between.
+
+  Rows touching multiple wide writes:
+  - latch same: st.h GENCTL ×2 (same session). First: warned 0 → announce, warned = G. Second: warned & G set → silent. DECL("write to PCCTWO_GENCTL ") count = 1 ✓ expected 1. GREEN.
+  - latch two: two sites once each (say A then B): A announces (warned=A), B: warned & B = 0 → announces. Count 2 ✓ GREEN.
+  - latch all: 12 distinct blocks once each: each block's bit test — warned holds only the previous block's bit → all 12 announce ✓ 12 GREEN.
+  - latch all w: same, 12 ✓ GREEN.
+  - Per-arm dcl rows (single wide write per session): 1 ✓.
+  - hwr ipl dcl, op X dcl, rb X dcl: single write ✓ 1.
+  - acc all / nod rows (DECL==0): no wide writes at all... wait acc all is byte writes — no declines either way ✓ 0.
+  - rb readback rows: unaffected (warned doesn't gate the store) ✓.
+  - Survival rows: unaffected ✓.
+
+  So yes: 96/96 under `|=`→`=`. And the broken property is real: a driver session doing GENCTL, VECBASE, GENCTL gets TWO "GENCTL declined" announces — the "(once)" promise broken. The contract CATCHES bullet claims this exact failure ("dropped `|=' floods") is caught via "same site twice must announce ONCE" — false as a channel for THIS edit, because the flood needs an intervening block. CONFIRMED escape.
+
+  Wait — one more consideration: is `|=`→`=` "dropping the latch"? The CATCHES text: "loss of the latch in either direction: dropped `|=' floods (same site twice must announce ONCE), and one bit shared across blocks silences (two sites must announce TWICE)". "Dropped |= " — literally deleting the `|` from `|=`. The parenthetical channel is latch same. latch same does NOT catch it. So the contract's claim is wrong as written. This is squarely "a claim of coverage no row carries" (Q4) and the smallest-edit answer (Q2) and a domain gap (Q1(a): the d->warned input is covered only on its cardinality axis, not its transition axis).
+
+  Hmm, although... let me reconsider whether "latch same" could be argued to cover it under a charitable reading: under `=`, same-site-twice DOES still announce once. So the observed behavior at latch same is identical to the fix. No. Confirmed.
+
+  Second candidate for Q2 (mention): arm-terminal break deletion at VECBASE/PSCALEADJ (value-invisible under all probed values) — outside the guard domain but "shapes not in the contract are the interesting ones". Also the `&`→`==` test-operator variant (same A-B-A hole).
+
+  Third: the len-8 lane — no row ever drives len 8 at the twelve (put d/ld.d absent), so the landing closure is over {2,4}; a multi-token guard landing only 8 would pass. One-token? `len != 1` → `len != 8` declines bytes too (acc all reds). `len != 1` → `len < 8`... declines 1,2,4: acc all reds. So no ONE-token len-8 escape; worth one line as a named residual (denominator honesty).
+
+  Also Q1(a) — "guard inputs the nine do not cover": the helper's `name` argument (disclosed), the `bit` argument (ALIAS ✓), `d->warned` accumulation (HOLE), control-flow at arm level (terminal break — outside guard), and `relative_addr %= PCC2_SIZE` (parity — a mutation there is outside the guard but affects block routing; e.g. `%=` removed → out-of-range... not a guard shape).
+
+  Also should double check one S cell more carefully: "SCCERR KILL = S" — channel: wwr sccerr (survival exit0) and hwr sccerr dcl... wait with KILL at SCCERR, the guest st.h/st.w at SCCERR (aligned, guest-reachable) → exit(1) → the session dies mid-program → how != exit0 → "wwr sccerr" reds and "hwr sccerr dcl" session — does that row's session have a survival check? hwr sccerr dcl expects count 1; dead session → 0 ≠ 1 red. Also which MEASURED kill is the same-arm counterpart? None at SCCERR — KILL measured at VECBASE/IPL/MASK (odd/print blocks). "dies exactly as the measured one does at THAT arm" — KILL at any arm kills at the access; the channel at SCCERR is the survival row (wwr sccerr) + message row. Is the S justified? A kill at SCCERR dies BEFORE any announce; the session dies; exit status non-zero; "wwr sccerr" (how == exit0) reds. Same mechanism as KILL at GENCTL (S via hwr genctl survival)... but wait GENCTL KILL is also S! Which KILL cells are M? VECBASE, IPL, MASK. So the KILL column rests on three measured kills. For guest-reachable arms the channel is survival rows (hwr X how==exit0 / wwr sccerr). Is there any subtlety by which a reinstated exit(1) at, say, TxCTL would NOT die in the hwr t2ctl session? The hwr t2ctl session does st.h at T2CTL → guard block → exit(1) → session dies → "hwr t2ctl" expects exit0 → red. Solid. And operator-only arms: op X (how==exit0) reds. Solid. S for KILL is fine — dying is uniform.
+
+  LEN S cells: LEN lands halfword, declines word. At arms where FALL or DEL measured the halfword landing channel (all twelve have one: rb rows, noig rows, sccerr message rows), LEN's halfword-landing half is the same landing → red. ✓ Also declines words → latch all w stays 12 (word declined → announced → 12 ✓ green) — consistent, doesn't matter, rb rows red.
+
+  Hmm — wait, ONE MORE check on LEN at SCCERR = M: measured. And LEN2 at SCCERR = S via wwr sccerr dcl ✓.
+
+  DEL at SCCERR = S: hwr sccerr dcl (0 ≠ 1) and wwr sccerr dcl (0 ≠ 1) red. But CAREFUL: "no S cell is survival-only" — SCCERR DEL's channels are message rows — fine per legend.
+
+  ALIAS C cells: "any collision drops the count" — latch all. Verified: 12 put h, each block once; alias → the second block's write finds bit set → silent → 11. ✓ But — subtle: aliasing block X's bit onto block Y's: in latch all, the put h order is BLOCKS12 order. Whichever comes second stays silent → 11 ≠ 12 red ✓ regardless of pair.
+
+  SWAP C cells: value 0x0003 fits a byte → `idata > 0xff` guard lets it land silently → count drops ✓. But at TxCTL: landing 0x0003 → body: reg &= 0xfc, |= 3 → reg changes but no print (0x03 & ~7 = 0 → no HUH) → silently landed, count 11 ✓ red. At PSCALEADJ: landing prints "PSCALEADJ ignored" — not DECL → count still drops ✓ (op pscale noig would also red but latch all suffices). ✓
+
+  GROW A/C: measured at PSCALEADJ (3c, acc all red). For per-arm-acc blocks: acc X nod expects 0 declines in the byte session → GROW at that arm announces → red. ✓
+
+  Now — the A/C notation: "A/C = the arm's own acc row, AND acc all". For blocks with per-arm acc rows (genctl, t2ctl, t2icr, scctx, sccerr): BOTH channels. Others: acc all only (C). ✓ consistent with the five acc loops in the probe.
+
+  OK — now the remaining small verifications: (1) gate denominators 96/96/0 in the actual file; (2) PRETABLE split boundaries + mtimes; (3) probe docstring spot-check vs contract (the RDDECL paragraph + table); (4) opus reader MD 80/82 artifact; (5) kimi's three artifact rows. Then write the review.
+
+• History claim verified (ten kills + two #119 statics pre-split). A few last record checks: gate denominators, PRETABLE split, pass-3 seat artifacts.1300:    check "pcc2 width rows emitted"           "$(( $(count "$PCC2LOG" " ok$") + $(count "$PCC2LOG" " FAIL$") ))" "96"
+1301:    check "pcc2 width rows green" "$(count "$PCC2LOG" " ok$")"   "96"
+1302:    check "pcc2 width rows red"   "$(count "$PCC2LOG" " FAIL$")" "0"
+===PRETABLE===
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE.out:19:SECTION 1 -- GUARD FIELD vs BODY FIELD
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE.out:45:SECTION 2 -- SIBLING PARITY, ARM BY ARM (after the repair; every block owes a survival row,
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE.out:71:SECTION 3 -- CLAIM -> ROW (added comment sentences asserting an observable)
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE.out:81:SECTION 4 -- CHANNEL: mutant -> row -> observable that differs.  PREDICTIONS, written
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE_amendments.out:4:SECTION 5 -- AMENDMENT, written after table-2 PART 1 (9 mutants + BASE, all killed) and
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE_amendments.out:27:SECTION 6 -- PASS 3: THE CLASS CLOSURE.  Written after pass 3's seats landed and BEFORE
+regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE_amendments.out:73:SECTION 7 -- PART 3 MEASURED (killtable2_20260903/part3/, part3b/), and what it corrected.
+2026-09-03 16:27:15.314059900 -0500 regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE.out
+2026-09-03 17:32:15.450505700 -0500 regress/artifacts/pcc2widthkills/killtable2_20260903/PRETABLE_amendments.out
+pass3_seats_20260903/fable/:
+FINDINGS.md
+build_base.log
+build_mfall.log
+driver.log
+probe_base.out
+probe_mfall_vecbase.out
+run_mfall_vecbase.sh
+
+pass3_seats_20260903/kimi/:
+driver.log
+driver2.log
+run.sh
+run2.sh
+
+pass3_seats_20260903/opus_reader/:
+ENUMERATION.md
+PREDICTIONS.txt
+RESULTS.md
+clearance.sh
+kill.log
+kill.sh
+mutate.py
+nonequiv.log
+nonequiv.sh
+nonequiv_check.py
+p3_BASE.out
+p3_MA.out
+p3_MB.out
+p3_MC.out
+p3_MD.out
+setup.sh
+pass3_seats_20260903/opus_reader/p3_BASE.out
+pass3_seats_20260903/opus_reader/p3_MA.out
+pass3_seats_20260903/opus_reader/p3_MB.out
+pass3_seats_20260903/opus_reader/p3_MC.out
+pass3_seats_20260903/opus_reader/p3_MD.out
+===
+PCC2W_RESULT=82/82
+PCC2W_LABEL=BASE
+PCC2W_RESULT=82/82
+PCC2W_LABEL=MA
+PCC2W_RESULT=82/82
+PCC2W_LABEL=MB
+PCC2W_RESULT=82/82
+PCC2W_LABEL=MC
+PCC2W_RESULT=80/82
+PCC2W_LABEL=MD
+
+
+• Opus reader's artifacts confirm: BASE 82/82, MA (break removed at VECBASE) 82/82, MB (IPL) 82/82, MC (RDDECL) 82/82, MD (guard deleted at GENCTL, control) 80/82 — exactly as the brief's pass-3 table claims.
+
+  PRETABLE split: PRETABLE.out has Sections 1-4 (the brief said "Sections 0-4" — there's no "SECTION 0" header in the grep! The brief says "PRETABLE.out was restored to Sections 0-4". The file's sections start at SECTION 1. Is there a Section 0 without the "SECTION" header (a preamble)? Lines 1-18 before SECTION 1 could be "section 0" in prose. Minor — let me check the head of PRETABLE.out to see if there's a Section 0. Also: PRETABLE.out mtime 16:27:15 — that's DURING part 3 (part3 driver.log started 16:27:46, one second... actually 16:27:15 is ~31s before part3's log start 16:27:46). Hmm interesting: PRETABLE.out's mtime is 16:27:15, i.e., right before part 3 ran — consistent with "restored" before part 3. But Sections 1-4 were written before table-2 (parts 1-2 ran earlier). The mtime of the restored file is the restore time, NOT the original authoring time. So the "mtime discriminator" is now the restore time (16:27, after parts 1-2 which ran earlier that day). The brief says "appending had destroyed its mtime discriminator: is the split honest as written?" — the honest reading: the restore reset PRETABLE.out's mtime to ~16:27, which is AFTER parts 1 and 2 (those ran before 16:27 presumably — part3 dir log starts 16:27; part1/part2 earlier). So PRETABLE.out's current mtime canNOT discriminate "sections 0-4 written before parts 1-2 ran" — the very property the mtime discriminator was for. What it still discriminates: sections 0-4 existed before PART 3 ran (16:27:46). And the amendments file mtime (17:32:15) is after part 3b (17:30:51) and during/before part 3c (17:37-17:42)... amendments mtime 17:32 is after 3b ended (17:30:51) and before 3c (17:37:13). Section 7 discusses part 3 AND 3b results, and says "part 3c re-measures" (future tense in the inlined text: "and part 3c re-measures BASE + M_GROW_PSCALEADJ") — consistent with being written between 3b and 3c ✓. But Section 6's claim "written BEFORE part 3" cannot be mtime-discriminated within a file last written at 17:32. However — the amendments file contains Section 6's PREDICTIONS ("M_LEN2_VECBASE -> 11", "M_RDDECL_ALL -> seven reds", "M_GROW_PSCALEADJ -> 1") and Section 7 records which matched and which failed (the -> 1 prediction FAILED, honestly reported as the escape). The wrong-then-corrected prediction is actually strong evidence of honest sequencing (a doctored record would have fixed the prediction). 
+
+  So: is the split "honest as written"? Assessment: the split exists as described (0/1-4 vs 5-7 — need to check for Section 0), the mtimes are consistent with the narrative (PRETABLE.out frozen before part 3; amendments finalized between 3b and 3c), and the one prediction that FAILED was preserved and corrected rather than laundered — the honesty signal is good. The residual weakness: the restore destroyed the original authoring mtimes for sections 0-4 relative to parts 1-2, so the discriminator now only separates "before part 3" from "after"; the brief SAYS "restored ... because appending had destroyed its mtime discriminator" — it discloses the destruction but the word "restored" might over-imply the discriminator survives. It survives only for the part-3 boundary. Worth one line.
+
+  Let me check the Section 0 question and glance at PRETABLE.out head.PRE-TABLE BLOCK -- pcc2widthkills pass-2 REPAIR table (killtable2_20260903), pcc2_width_probe.py
+================================================================================
+
+*** SECTION 0 -- THE HONEST PART: THIS ROUND'S TABLE 1 (killtable_20260903, 8 mutants, 60
+*** rows) RAN WITH NO PRE-TABLE BLOCK.  The pass-2 measuring seat named the omission and
+*** measured what the skipped SIBLING-PARITY check would have shown: GENCTL and MASK have
+*** byte-identical write bodies, GENCTL carried five row mentions and MASK zero, and the
+*** MASK null-repair was a 60/60 sweep.  The class -- aliasing a latch constant, one token,
+*** clause (d) -- sat in sgideprimop's own PRETABLE.out 33 hours earlier, and this round
+*** transferred that file's d->warned design without the check that qualified it.
+--------------------------------------------------------------------------------
+This block was written BEFORE table 2 part 1 (13:07:27 by the checkpoint and CHANGELOG
+records; part 1's driver.log starts 13:07:43).  ITS MTIME NO LONGER PROVES THAT: Section 5
+was appended into this file at 13:56, after part 1 had finished, which a pass-3 seat
+caught.  Amendments now live in PRETABLE_amendments.out beside this file; this file
+carries Sections 0-4 as first written, with one bracketed annotation in Section 2.  Table 1 is recorded as HAVING HAD NO
+PRE-TABLE BLOCK, not as having passed one.  (Third recorded skip of the mandate.)
+
+SECTION 1 -- GUARD FIELD vs BODY FIELD
+--------------------------------------------------------------------------------
+===
+PRETABLE.out:4:*** SECTION 0 -- THE HONEST PART: THIS ROUND'S TABLE 1 (killtable_20260903, 8 mutants, 60
+===MTIMES-PARTS===
+2026-09-03 13:48:53.155492600 -0500 part1
+2026-09-03 14:59:23.652204100 -0500 part2
+2026-09-03 17:15:23.627472300 -0500 part3
+2026-09-03 17:31:27.598098900 -0500 part3b
+2026-09-03 17:43:03.314248700 -0500 part3c
+Excellent — PRETABLE.out's own preamble DISCLOSES the mtime destruction itself: "ITS MTIME NO LONGER PROVES THAT: Section 5 was appended into this file at 13:56, after part 1 had finished, which a pass-3 seat caught. Amendments now live in PRETABLE_amendments.out..." So the split is honest as written — the file itself carries the disclosure that its mtime no longer discriminates, and Section 0 exists (grep for "^SECTION" missed it because it's prefixed with `***`). The brief's claim "restored to Sections 0-4 and its amendments moved to a second file because appending had destroyed its mtime discriminator" matches the file's own text. ✓ Honest.
+
+  One inconsistency to note: the brief said "PRETABLE.out was restored to Sections 0-4" — the file's preamble says it "carries Sections 0-4 as first written, with one bracketed annotation in Section 2" — so not perfectly "as first written" (one annotation disclosed). Consistent with the brief? The brief says "restored to Sections 0-4 and its amendments moved to a second file" — the annotation is disclosed in the file itself. Fine.
+
+  Also mtime evidence: PRETABLE.out 16:27:15 — wait, that's ~31s before part3's driver start (16:27:46)... but part3's mtime (directory) says 17:15? The dir mtimes reflect last internal writes. Whatever — the file mtimes are consistent with the narrative: PRETABLE.out last touched just before part 3 ran (the "restore"), amendments at 17:32 (between 3b 17:31:27 and 3c 17:43:03) ✓ consistent with Section 7's "part 3c re-measures" future tense. All coherent.
+
+  Remaining: spot-check the probe docstring against the inlined contract (verbatim claim). Let me extract the probe's docstring and compare the enumeration table + RDDECL paragraph with the brief. A quick way: grep a few distinctive lines in the probe.Twelve blocks x six clause-(d) shapes                                 
+1
+A NINTH SHAPE, on the input the six-shape list named and never walked 
+1
+THE THIRTEENTH ARM                                                    
+1
+Sentinel: PCC2W_PROBE_DONE                                            
+1
+SCCERR (grep SCCERR dev_pcc2.c)                                       
+1
+hrd <block> nod                                                       
+1
+put b': it calls memory_rw with NO_EXCEPTIONS                         
+1
+#!/usr/bin/env python3
+"""pcc2widthkills DETECTOR -- the twelve width-guard blocks in DEVICE_ACCESS(pcc2).
+
+WHAT THE FIX DID.  Twelve `if (len != 1) { fatal(...); exit(1); }' blocks (ten kills and
+two #119 function-static latches) ended the host on a guest-chosen access width.  The
+tree's own header says PCC2 registers "can be accessed as bytes, two-bytes, or
+four-bytes", so the width is LEGAL.  The fix is a DIRECTION SPLIT:
+
+    READS   ACCEPT -- the memcpy above the switch already served them, raw bytes in
+            address order, width-correct by construction.  The guard discarded a
+            correct answer.
+    WRITES  DECLINE + per-instance latched announce -- every write arm uses `idata',
+            the big-endian-composed value, which is "the addressed byte" ONLY at
+            len==1.  Deleting the guard would store the NEIGHBOUR's lane.
+
+CONTRACT (vacuity-floor clause (e)) -- what this detector is designed to catch:
+
+  CATCHES
+    * reinstatement of the kill at any of the SIX GUEST-reachable blocks (survival
+      rows paired with a liveness observable, because exit status cannot tell
+All distinctive contract strings are present in the probe's docstring, matching the inline. Verification is complete. Let me also double-check the one thing I flagged about the "READS ACCEPT — the memcpy above the switch already served them" — verified at dev_pcc2.c:416-429 (memcpy before switch for MEM_READ) ✓.
+
+  One more adversarial item I should nail down before writing: the `|=`→`=` escape — let me triple-check `latch two` in the actual probe to confirm it's two DISTINCT blocks once each (not A,B,A). And confirm there's no other session anywhere with an A-B-A pattern of wide writes. Let me look at the latch rows in the probe.
+
+• One final adversarial check on my candidate escape: confirm no session anywhere writes block A, then B, then A again.387-# ------------------------------------------------------------------ latch rows
+388-t, alive, how = session(setup(r6="0xaabb") + program([ST_H(6, GENCTL), ST_H(6, GENCTL)]))
+389:row("latch same", t.count("write to PCCTWO_GENCTL " + DECL), 1,
+390-    "same block twice -> ONE announce -- kills a dropped |= (flood)")
+391-t, alive, how = session(setup(r6="0x0303") + program([ST_H(6, GENCTL), ST_H(6, T2CTL)]))
+392:row("latch two", t.count(DECL), 2,
+393-    "two blocks -> TWO announces -- kills a bit shared across blocks")
+394-
+395-# --------------------------------------------- de-escalation ACCEPT rows (byte writes)
+396-#  Removing twelve exit(1)s destroys the tripwire that announced guard growth.  So the
+397-#  legal width must still LAND at each reachable arm, through its own mask, with no
+398-#  decline message.  Expected values from the arms' own semantics.
+===
+292:    t, alive, how = session(setup(r6="0xaabb") + program([I_ST_SCR, ST_H(6, off), I_LD_SCR]) + ["print r4"])
+327:                        + program([ST_B(5, GENCTL), ST_H(6, GENCTL), LD_BU(4, GENCTL)]) + ["print r4"])
+333:                        + program([ST_B(5, VECBASE), ST_H(6, GENCTL), LD_BU(4, VECBASE)]) + ["print r4"])
+345:                            + program([ST_B(5, off), ST_H(6, off), LD_BU(4, off)]) + ["print r4"])
+350:t, alive, how = session(setup(r6="0xaab8") + program([ST_H(6, SCCERR)]))
+362:                        + program([ST_B(5, GENCTL), ST_H(6, GENCTL), LD_BU(4, GENCTL)]) + ["print r4"])
+388:t, alive, how = session(setup(r6="0xaabb") + program([ST_H(6, GENCTL), ST_H(6, GENCTL)]))
+391:t, alive, how = session(setup(r6="0x0303") + program([ST_H(6, GENCTL), ST_H(6, T2CTL)]))
+453:t, alive, how = session(setup(r6="0x0303") + program([ST_H(6, IPL)]))
+501:t, alive, how = session(setup(r6="0x1234") + program([I_ST_SCR, ST_H(6, IPL), I_LD_SCR]) + ["print r4"])
+
+
+• Confirmed:
+  - `latch same` = GENCTL, GENCTL (A,A — no intervening block). Its own comment even says "kills a dropped |= (flood)" — the claim I tested. Under `|=`→`=`, A then A: warned = G after first, second test `!(warned & G)` = false → silent → count 1 → GREEN. The comment's claim is FALSE for the `=` mutation: the flood only appears when a different block intervenes. Confirmed escape.
+  - `latch two` = GENCTL, T2CTL (A,B — two distinct, once each). Under `=`: both announce → 2 → GREEN.
+  - Every other session writes at most one block wide, or (line 345) st.b + st.h at the SAME block, or (327/333/362) ST_B + ST_H at GENCTL — byte write doesn't touch the latch. Line 391 is the only two-block wide-write session besides latch all / latch all w (12 distinct each). No A-B-A anywhere. Confirmed: `d->warned |= (1u << bit)` → `d->warned = (1u << bit)` passes all 96 rows while breaking the once-per-block latch under interleaving. One character.
+
+  Also note the probe comment on latch same says "kills a dropped |= (flood)" — so the CLAIM is right there in the row text, and it's wrong for the actual one-character edit. This is squarely a Q4 "claim of coverage no row carries" plus the Q2 answer.
+
+  Now I have everything. Verdict: GO-WITH-CHANGES.
+
+  Let me assemble the review per the brief's format: VERDICT LINE FIRST, then Q1(a-d), Q2, Q3, Q4, "something else", with the denominator stated (which cells/shapes I swept), and which cells I re-derived from source vs packet.
+
+  Structure:
+  - VERDICT: GO-WITH-CHANGES
+  - The one finding that forces the change (the latch-update hole) — Q2 answer and Q4 claim.
+  - Q1(a) domain: hole on d->warned transition axis; also named residuals (len-8 lane never driven; arm-terminal break distinct from guard break).
+  - Q1(b): S cells — re-derived, all hold; TxCTL FALL marked S though measured (legend nit).
+  - Q1(c): E and UNREACHABLE warrants verified from source (with the grep-deriver nit).
+  - Q1(d): cardinality rows — inflation/mutant-preservation analysis; the `|=`→`=` preserves all counts.
+  - Q3: agree N/A.
+  - Q4: numstat stale (185 vs 190 CHANGELOG); everything else matched: part3/3b/3c logs line-for-line, opus reader MA/MB/MC/MD, fable 82/82, pre-fix history (10 kills + 2 statics), header quote, fatal() returns, dispatch condition, DM_DEFAULT, alignment check, store_Nbit_word vs put b NO_EXCEPTIONS, sizeof(data)==LS_SIZE (len==2 for st.h — a load-bearing premise I re-derived), memory_readmax64 BE compose, 96 row names all emitted, denominators 96/96/0, PRETABLE split honest (with the file's own disclosure), roster of 8 + no agy.
+  - Something else: CHIPID/CHIPREV census omission; numstat; the mtime discriminator now only bounds part 3 (PRETABLE.out's own preamble discloses this — honest).
+  - Closing zero carries denominator: I swept all 96 table cells (12×8) + the 12 RDDECL cells (7 rowed + 5... wait 6 odd unreachable + 6 even rowed = 12; the brief said SEVEN wide-read sessions (6 even blocks incl. IPL by ld.h + SCCERR by ld) — that's 7 rows over 6 blocks (SCCERR has both hrd and wrd) — RDDECL cells: 6 even blocks rowed (SCCERR doubly), 6 odd blocks unreachable-disclosed = 12 cells. Plus the two T1 label cells (rb t1ctl/rb t1icr). Total cells swept: 96 + 12 + 2 = 110.
+
+  Wait, one more re-check of the Q1(d) question: "Is any C/W/A cell resting on a cardinality row that a benign session event could inflate or a mutant could preserve?" — For latch all: inflation would need an extra DECL in that session — the session is only the 12 put h's; a mutant that DOUBLE-announces (e.g., latch test removed → announce every time: each block once → still 12! Wait: `if (!(d->warned & bit))` removed → announce unconditionally → 12 announces for latch all (12 writes) ✓ green; but latch same → 2 ≠ 1 → red ✓ covered). OK. For acc all inflation: any benign DECL in that session — none (measured BASE green). A mutant preserving acc all's 0 while growing a guard elsewhere: no. ✓
+
+  Also one more possible Q2 micro-candidate to double-check: the `hwr ipl dcl` row counts "write to PCCTWO_IPL " + DECL == 1. Under a mutant swapping IPL's name string to "PCCTWO_IPL2"? Named-text row → red. Covered (disclosed gap is only for the five odd arms' generic rows; IPL is named). ✓
+
+  And: could a mutant move the width decline AFTER the body (decline-then-store reorder)? That's FALL-with-announce-after: stores then announces... rows: rb rows check value (unchanged — body ran? no wait, if decline is AFTER the body, the body RUNS first → write lands → rb rows red ✓ same as FALL). Covered by FALL channels.
+
+  Alright. Also double-check the "8 mutants, 60 rows" table-1 reference vs brief's "part 1 (nine mutants at 78 rows)" — Section 0 says table 1 = killtable_20260903, 8 mutants, 60 rows; brief's "part 1 (nine mutants at 78 rows)" refers to killtable2 part 1 (9 mutants + BASE at 78 rows). Different tables, consistent labels ✓.
+
+  One more honesty cross-check from the tables: brief says "M_RDDECL_ALL 88/96" and lists 8 reds — I counted ✓ matches driver.log verbatim.
+
+  And the md5 cd22f951 for the 82-row instrument — I did not find a frozen 82-row copy to verify (part3's frozen_probe is the 96-row). Name it as unverified-but-not-load-bearing.
+
+  Word on Q1(b) — "Say which cells you re-derived from the source rather than from this packet": I re-derived from source: all twelve arm bodies + helper (dev_pcc2.c:396-661 read directly), the enum/typedef/warned field, reassert's 0x04 kill, header offsets + legality quote, alignment check, dispatch condition, DM_DEFAULT registration, put paths, store_16bit_word, fatal(), memory_readmax64, sizeof(data)==LS_SIZE. The S/E/C cell logic I re-computed against those bodies. The MEASURED statuses (M cells) I cross-checked against driver.logs and seat artifacts rather than trusting the tables.
+
+  Now write the final answer. Verdict first. Keep it tight but complete; this is a panel review, so it should read like one. Language: English (the user's language).
+
+  Format considerations: the brief wants VERDICT LINE FIRST, denominator carried by closing zero, cells re-derived named. I'll structure with short sections per question. Not too long — but this warrants a thorough reply. Aim for compact but complete.
+
+• All verification is done. Here is the review.
+
+  ---
+
+  **VERDICT: GO-WITH-CHANGES** — one contract-claimed catch has no carrying row (one-character escape, below); everything else I could re-derive from source or logs held. Denominator: I swept all 96 tabulated cells (12 blocks × 8 shapes), the 12 RDDECL cells (6 even rowed — SCCERR twice via `hrd`+`wrd` — 6 odd disclosed-unreachable), and the 2 T1-label cells: 110 cells, one class found open.
+
+  **Q2 first, because it is also Q1(a) and Q4: `d->warned |= (1u << bit)` → `d->warned = (1u << bit)`** (delete one `|`, `dev_pcc2.c:399`). The latch then forgets prior blocks on every announce. Walk every multi-write session against the actual probe (`regress/pcc2_width_probe.py`): `latch same` is A,A (`:388`) — after the first GENCTL the field *is* GENCTL's bit, so the second stays silent, count 1, green. `latch two` is A,B (`:391`) — both announce, count 2, green. `latch all`/`latch all w` write twelve *distinct* blocks once each — 12, green. Every `dcl` row has exactly one wide write in its session. No session anywhere has an A,B,A interleaving — I grepped all `ST_H`/`put h` sequences to confirm. So all 96 rows stay green while the "(once)" promise is broken for any driver that touches A, B, A. The contract's CATCHES claims exactly this catch — "dropped `|=' floods (same site twice must announce ONCE)" — and `latch same`'s own row text says "kills a dropped |= (flood)". That channel cannot see the edit: the flood needs an intervening block. The nine shapes cover the `d->warned` input only on its *cardinality* axis (ALIAS); the *transition* axis (the `|=` update, and equally `&` → `==` in the test, same hole) is uncovered. Smallest repair: one row — `put h GENCTL; put h VECBASE; put h GENCTL`, expect GENCTL-text DECL count 1.
+
+  **Q1(a) domain.** Otherwise the nine shapes are well-founded on the guard's inputs; I checked the landing subsets of {2,4,8}: any one-token `len` edit that lets a halfword land reds an `rb`/readback row; any that lets a word land reds `latch all w`; any that touches bytes reds `acc all`; `&&`→`||` and `==`→`!=` on either conjunct are channel-covered even though unnamed. Two named residuals, not escapes by one token: no row ever drives len 8 at the twelve (`put d`/`ld.d` absent — the {8}-only-landing guard needs two tokens), and an arm-*terminal* break removal (distinct from FALL's guard-break removal) is value-invisible under every probed value — e.g. VECBASE falling into the counter `memcpy` re-stores the same byte for 0x50/0x10 (both fit 0xf0), and PSCALEADJ falling into TxCTL's body prints only HUH text, which no row counts in those sessions. Worth one disclosure sentence each; the second is really the unspoken gap that no `acc` row reads back an *off-mask* byte at VECBASE.
+
+  **Q1(b) S cells.** I re-derived every arm body from `dev_pcc2.c:405-661` directly, not from the packet: DEL/FALL/LEN-halfword all execute the identical body with identical `idata`, differing only in the announce, and each S cell's channel row differs observably under the landing (values recomputed: TxCTL lands 0x00 vs want 0x3 — note `PCC2_TCTL_COVF` is 0x04 and 0xaab8 doesn't set it; TxICR lands 0x10 vs 0x13; SCCICR 0x18, SCCRX/SCSIICR 0x98, VECBASE 0xb0; SCCERR's S rests on its message rows, consistent with the "no survival-only S" rule). KILL's S cells die at the access before any print, so survival/message rows red uniformly. All hold. One legend nit: TxCTL's FALL is marked **S**, but `M_FALL_TXCTL` *was* measured (part 3b driver.log: `RED: rb t2ctl,rb t1ctl`) — by the table's own M definition that cell is an M. Conservative direction, but the record should say so.
+
+  **Q1(c) E / UNREACHABLE warrants — both true, one deriver weaker than stated.** SCCERR-E: verified from source that the arm stores 0 unconditionally (`:550`), prints nothing, and — since all `pcctwo_reg` stores are inside their keyed cases — nothing stores a nonzero SCCERR. But the stated warrant "grep SCCERR dev_pcc2.c" does *not* prove this: the store is `d->pcctwo_reg[relative_addr] = 0`, which no grep for SCCERR finds; the real proof is case-keying. True conclusion, insufficient deriver as written. UNREACHABLE (odd-block read cells): re-derived from source — `#ifndef LS_1` alignment check with `m88k_exception(MISALIGNED)` and `return` *before* `memory_rw` (`cpu_m88k_instr_loadstore.c:167-186` vs `:189`), dispatch condition exactly as quoted (`cpus/memory_rw.c:584-585`), pcc2 registered `DM_DEFAULT` (`dev_pcc2.c:728`). Also verified the load-bearing premise nobody tabulated: `data` is `uint8_t data[LS_SIZE]` (`:74`), so a guest `st.h` really arrives with len 2.
+
+  **Q1(d) cardinality rows.** No benign inflation: the warn text is "WARNING: address isn't aligned" (no DECL substring, `debugger_cmds.c:1514`); declined writes never reach bodies so no HUH in `latch all`; `acc all`'s byte bodies print "ignored"/"HUH"/read-only texts, none containing DECL, and 0x10 keeps `PCC2_C040`(0x04) clear everywhere — consistent with measured BASE 96/96 in part 3b/3c. Mutant-preservation: yes — the Q2 edit above preserves all three counts while breaking the property; that is the hole.
+
+  **Q3.** Agreed N/A — no disposition is taken (compose is filed, not chosen).
+
+  **Q4 record honesty.** Matched against the tree and logs: part 3/3b/3c `driver.log`s reproduce the brief's tables line-for-line including the escape and the rb-t1ctl artifact subtraction; opus_reader artifacts confirm BASE/MA/MB/MC 82/82 and MD 80/82; fable's `probe_mfall_vecbase.out` is 82/82; eight seat dirs present, no agy; pre-fix `b78bb0f^` really was ten `exit(1)` kills + two #119 statics; the header quote, `fatal()`-returns (`debugmsg.c:384`), `put b` NO_EXCEPTIONS vs `store_Nbit_word` paths, and one-pcc2-per-mvme187 all check out; the gate carries exactly 96 names, all probe-emitted, denominators 96/96/0. Three nits: the disclosed numstat says `CHANGELOG.md 185/0` but the working tree measures **190/0** — stale by five lines, the only numstat entry that doesn't derive; SCCERR-E's grep deriver (above); and the "census" sentence names SCCRXIACK but not CHIPID/CHIPREV, which are likewise unguarded write arms whose bodies ignore `idata` — same width-invariant warrant, so the census is incomplete by its own standard. The PRETABLE split is honest as written: PRETABLE.out's own Section-0 preamble discloses the destroyed mtime discriminator, Section 6's one wrong prediction (`M_GROW_PSCALEADJ -> 1`) is preserved and corrected in Section 7 rather than laundered, and the amendments mtime (17:32, between 3b and 3c) matches its future-tense reference to part 3c. Note the discriminator now only bounds *part 3* — the restore re-dated Sections 0-4 relative to parts 1-2 — but the file says as much itself. Unverified (not load-bearing, named per the rules): the 82-row instrument's md5 `cd22f951` — no frozen 82-row copy survives in the artifacts I found.
+
+  **Change required before GO:** add the A,B,A latch row (and optionally flip TxCTL FALL to M, refresh the numstat, extend the census sentence to CHIPID/CHIPREV). Everything else in the enumeration verified clean.
+
+To resume this session: kimi -r session_7175e8fd-1be2-4cf4-ad9b-15153e946c86

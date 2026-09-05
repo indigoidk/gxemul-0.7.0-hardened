@@ -1,0 +1,108 @@
+PRE-TABLE BLOCK -- pcc2widthkills pass-2 REPAIR table (killtable2_20260903), pcc2_width_probe.py
+================================================================================
+
+*** SECTION 0 -- THE HONEST PART: THIS ROUND'S TABLE 1 (killtable_20260903, 8 mutants, 60
+*** rows) RAN WITH NO PRE-TABLE BLOCK.  The pass-2 measuring seat named the omission and
+*** measured what the skipped SIBLING-PARITY check would have shown: GENCTL and MASK have
+*** byte-identical write bodies, GENCTL carried five row mentions and MASK zero, and the
+*** MASK null-repair was a 60/60 sweep.  The class -- aliasing a latch constant, one token,
+*** clause (d) -- sat in sgideprimop's own PRETABLE.out 33 hours earlier, and this round
+*** transferred that file's d->warned design without the check that qualified it.
+--------------------------------------------------------------------------------
+This block was written BEFORE table 2 part 1 (13:07:27 by the checkpoint and CHANGELOG
+records; part 1's driver.log starts 13:07:43).  ITS MTIME NO LONGER PROVES THAT: Section 5
+was appended into this file at 13:56, after part 1 had finished, which a pass-3 seat
+caught.  Amendments now live in PRETABLE_amendments.out beside this file; this file
+carries Sections 0-4 RECONSTRUCTED by splitting the appended file -- the original was
+overwritten and no prior copy exists -- with one bracketed annotation in Section 2.
+The order witness for part 1 is part1/driver.log (13:07:43) against the checkpoint's
+record of this file's first write (13:07:27); this file's mtime is not that witness --
+and the 18:35 restore that split the file re-stamped it AGAIN (a pass-5 seat), so its
+mtime postdates parts 1-3c.  PRETABLE_amendments.out (17:32) postdates parts 1-3b as
+well and is no order witness for Sections 5-6.  Only PRETABLE_pass4.out and
+PRETABLE_pass5.out carry their own order witness, which is why each amendment is its
+own file from pass 4 on.  Table 1 is recorded as HAVING HAD NO
+PRE-TABLE BLOCK, not as having passed one.  (Third recorded skip of the mandate.)
+
+SECTION 1 -- GUARD FIELD vs BODY FIELD
+--------------------------------------------------------------------------------
+GUARD reads (each of 12 blocks):  len, writeflag
+DECLINE body reads:               d->warned (bit test), len (printed)     writes: d->warned |= bit
+FALL-THROUGH body reads:          idata, relative_addr, d->pcctwo_reg[], pending_timer*_interrupts
+
+Where they differ: the guard reads the ACCESS SHAPE, the body reads the VALUE.
+Disagreeing states: (len==1, any idata)      -> acc rows: byte writes land
+                    (len==2, idata > 0xff)   -> every hwr/rb/wwr/latch row
+                    (len==2, idata <= 0xff)  -> NO ROW EXISTED.  All 77 wide-write rows used
+                    values above 0xff, so a guard operand swap `len != 1' -> `idata > 0xff'
+                    (a plausible "fits a byte" reading) was green by construction while a
+                    big-endian st.h 0x0022 stored 0x22 -- the neighbour's lane -- into GENCTL.
+  ==> ADDED before the table: `rb genctl lo' (st.b 0x11; st.h 0x0022; expect 0x11) and the
+      `latch all' value changed 0x0303 -> 0x0003 so the cardinality row reds under the same
+      swap at ANY arm.  Mutant M_IDATA_GENCTL built to measure it.  This is the block's own
+      yield, found by asking the field question rather than the mutant question.
+
+THE SHARED-BITFIELD QUESTION (who else writes d->warned, can they set my bit?):
+    occurrences of 'warned |=' in dev_pcc2.c: 1      lines mentioning 'warned': 7
+  One writer, pcc2_width_decline(), sets exactly the bit its caller names; nothing in
+  DEVICE_ACCESS or a tick writes the field, so benign traffic cannot pre-set a bit.  What
+  CAN collide is the ENUM: two callers naming one member.  That is the M_ALIAS_SCCTX shape,
+  and `latch all' (12 announces, one per block) is the row that sees it -- `latch same' and
+  `latch two' pin one pair of 66 and do not.
+
+SECTION 2 -- SIBLING PARITY, ARM BY ARM (after the repair; every block owes a survival row,
+a decline-announce row, and a readback where decline != accept)
+--------------------------------------------------------------------------------
+  block      even?  survival            announce                  readback (decline != accept?)
+  GENCTL     even   hwr genctl(+lv)     rb genctl dcl             rb genctl, val h genctl, rb genctl lo, acc genctl
+  VECBASE    odd    op vecbase          op vecbase dcl            rb vecbase
+  PSCALEADJ  odd    op pscale           op pscale dcl             plain store, no mask: dcl is the channel
+  TxCTL      even   hwr t2ctl(+lv)      rb t2ctl dcl              rb t2ctl (& 3), acc t2ctl, op t1ctl(+dcl)
+  TxICR      even   hwr t2icr(+lv)      rb t2icr dcl              rb t2icr (& 0x17), acc t2icr, op t1icr(+dcl)
+  SCCERR     even   hrd/hwr/wrd/wwr     hwr sccerr dcl, wwr dcl   VALUE-IDENTICAL (always 0): message only, disclosed
+  SCCICR     odd    op sccicr           op sccicr dcl             dcl is the channel
+  SCCTX      even   hwr scctx(+lv)      rb scctx dcl              rb scctx (& 0x1f), acc scctx
+  SCCRX      odd    op sccrx            op sccrx dcl              dcl is the channel
+  SCSIICR    odd    op scsiicr          op scsiicr dcl            dcl is the channel
+  IPL        even   hrd/hwr ipl(+lv)    hwr ipl dcl               read-side IPL==0 diagnostic (width-independent)
+  MASK       odd    op mask             op mask dcl               rb mask (GENCTL's twin: plain store + reassert)
+  latch all  (all twelve, one offset per BLOCK -> 12 announces)
+Asymmetry left, DISCLOSED: PSCALEADJ/SCCICR/SCCRX/SCSIICR have no readback row.
+  [Pass 3 annotation: this table WRONGLY credits `rb vecbase' as VECBASE's readback; it is
+   GENCTL's neighbour-lane row.  VECBASE belonged in this list, and IPL's 'width-independent'
+   parenthesis was the CHANNEL rule's own failure condition written down and not carried.]  Their `dcl'
+rows red under any guard edit that lets the halfword land silently (len > 2, delete, operand
+swap) -- every shape in this table.  A guard edit that lands the write AND still announces
+(the M_FALL_MASK shape) at one of those four would escape; that is the sentence owed, and
+MASK's own fall-through is the measured instance of the shape.
+
+SECTION 3 -- CLAIM -> ROW (added comment sentences asserting an observable)
+--------------------------------------------------------------------------------
+  "kills a guard edited at THIS arm"            -> rb t2ctl / rb t2icr / rb scctx   (M_LENGT2_TXCTL/TXICR/SCCTX)
+  "TWELVE announces: bit CARDINALITY"           -> latch all                          (M_ALIAS_SCCTX)
+  "0x3e is EVEN -- GUEST-reachable, survives"   -> hwr ipl, hwr ipl lv                (M_KILL_IPL)
+  "value-identical arm, message channel"        -> hwr sccerr dcl                     (M_LENGT2_SCCERR)
+  "guard is on len, not idata"                  -> rb genctl lo                       (M_IDATA_GENCTL)
+  "six guest-reachable" (contract + comment)    -> hwr ipl                            (census row, not a kill)
+  "seven of the twelve blocks call reassert"    -> DERIVED by awk over the arms; no row (not an observable of the fix)
+
+SECTION 4 -- CHANNEL: mutant -> row -> observable that differs.  PREDICTIONS, written
+before any table-2 cell landed.
+--------------------------------------------------------------------------------
+  M_DELETE_MASK    rb mask 0xbb (was 0x0), op mask dcl 0            MASK guard deleted: halfword lands the neighbour lane
+  M_KILL_IPL       hwr ipl exit1, hwr ipl lv died                  verbatim kill at a GUEST-reachable arm
+  M_KILL_MASK      op mask exit1                                    kill at the operator-reachable twin
+  M_DELETE (ctl)   rb genctl 0xbb, rb genctl dcl 0                  the table-1 control still reds
+  M_DELETE_TXICR   rb t2icr 0x10, rb t2icr dcl 0                    0xaab8 & 0x17 lands
+  M_LENGT2_TXICR   same                                             per-arm `len > 2'
+  M_LENGT2_TXCTL   rb t2ctl 0x0, rb t2ctl dcl 0                     0xaab8 & 3 lands
+  M_LENGT2_SCCTX   rb scctx 0x18, rb scctx dcl 0                    0xaab8 & 0x1f lands
+  M_LENGT2_SCCERR  hwr sccerr dcl 0                                 value-identical: the announce is the only channel
+  M_ALIAS_SCCTX    latch all 11 (SCCTX announces on SCCRX's bit)    a collision drops the count; nothing else moves
+  M_LENGT2_MASK    rb mask 0xbb, op mask dcl 0                      halfword lands at MASK
+  M_FALL_MASK      rb mask 0xbb (op mask dcl stays 1)               announce-then-land: readback is the only channel
+  M_IDATA_GENCTL   rb genctl lo 0x22, latch all 11                  operand swap to a value test: a small halfword lands
+  BASE             78/78                                            the repair perturbed nothing
+Every row above names a mutant under which its channel VARIES; no row is survival-only at a
+refusal-effect site.  Rows whose channel cannot vary under any enumerated mutant: none added.
+

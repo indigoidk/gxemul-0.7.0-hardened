@@ -1,0 +1,60 @@
+**VERDICT: NOT CLOSED -- the floor is breached.** The clause-(d) grid has three uncovered cells, all in the announce-then-fall-through column: **IPL** (airtight -- body is inlined, stores nothing, prints an uncounted line; it is PSCALEADJ's isomorph and PSCALEADJ got a `noig` row for exactly this shape), **SCCERR** (no readback row exists; dcl+survival are its only channels and both are invariant under announce-kept), and **VECBASE** (no row reads VECBASE after a wide write to VECBASE's own arm). Deleting one `break;` at any of the three sweeps 82/82. Also found: the census-repair text itself miscounts twice (below). A pass 4 is owed.
+
+## 1(a) The 72-cell enumeration
+
+Domain first (REASONED from the packet's premises): the producer emits len ∈ {1, 2, 4}; guest len-2 reaches even offsets only, guest len-4 only 4-aligned offsets (so among the twelve, only SCCERR 0x1c is guest-word-reachable); the operator path emits any len at any offset. Probe len-4 rows exist **only at SCCERR** (READ, gate list: `wrd/wwr/val w sccerr`), which drives several equivalences below.
+
+By shape column (M = measured kill, READ from a named table; A = argued covered, REASONED; U = uncovered):
+
+- **S4 alias:** CLOSED at all 12 by `latch all`. One measured instance (M1 = SCCTX→SCCRX, 77/78, red `latch all` only), and the generalization is sound: the session makes exactly 12 puts to 12 distinct arms; any duplicated member *use* caps distinct announce events at 11.
+- **S6 `idata > 0xff` swap:** M at GENCTL (part 2: `rb genctl lo`, `latch all`); A at the other 11 via `latch all` (0x0003 ≤ 0xff at every arm, so that arm's announce vanishes; the latch-all channel under S6 is itself measured at GENCTL).
+- **S3 kill:** M at IPL (M_KILL_IPL) and MASK (M_KILL_MASK); A at the other 10 -- every block has a survival row (`hwr X` even / `op X` odd) and the exit(1)→exit1 mechanism is measured at both a guest-reachable and an operator-reachable arm. (Table 1's 8 mutants may cover more, but its results are not inlined -- I cannot cite them.)
+- **S1 delete:** M at GENCTL, MASK, TxICR; TxCTL/SCCTX equivalent to their measured S2 (no len-4 rows there, so delete ≡ len>2 for every probed access); SCCERR covered by `hwr sccerr dcl` under both (S2 measured); A at VECBASE/PSCALEADJ/SCCICR/SCCRX/SCSIICR/IPL via dcl + latch all, a mechanism measured at T1ICR (odd, operator) and MASK.
+- **S2 `len > 2`:** M at TxICR, TxCTL, SCCTX, SCCERR; MASK ambiguous (builder M2 and M9 have *identical* red sets -- one is presumably `M_LENGT2_MASK`, but the log names no shapes); A elsewhere, same channels.
+- **S5 fall-through -- the failing column:** M at PSCALEADJ, SCCICR, SCCRX, SCSIICR (pass 3c, 81/82 each) and MASK (builder M6 vs 78 rows: `rb mask` red, `op mask dcl` stays 1). Covered by measured mechanism (REASONED) at GENCTL/TxCTL/TxICR/SCCTX: for an rb row, fall-through ≡ len>2 minus the announce -- same landed value (0xbb / 0x00 / 0x10 / 0x18, enumerated), and no rb row counts the announce. **U at IPL, SCCERR, VECBASE**, as follows:
+  - **IPL (determined).** Delete the `break` after the decline: the announce fires (`hwr ipl dcl` = 1, green), the body prints "write to read-only PCCTWO_IPL; ignored" once and **stores nothing** (READ -- the arm is inlined). No row counts that string (`hwr ipl dcl` counts "write to PCCTWO_IPL " + DECL; the ignored line says "read-only"). All IPL rows green. PSCALEADJ's body is print-only too, and the panel built `op pscale noig` for precisely this shape -- the repair is asymmetric against its own Section-5 precedent.
+  - **SCCERR (determined given the packet's own warrant).** No `rb sccerr` row exists; its channels are dcl and survival, both invariant when the announce is kept; the landed write is value-identical ("always 0", PRETABLE Section 2, READ). Even `val w sccerr` must expect the unchanged 0 (it is green on BASE, where the wide write is declined). Section 5's own sentence -- "a `dcl` row cannot vary under a mutant that keeps announcing, so it was the WRONG channel" -- applies verbatim.
+  - **VECBASE (conditional).** `rb vecbase`'s halfword goes through GENCTL's arm at 0x02 (READ, its own note: "the second lane of the declined halfword"), so it never exercises VECBASE's guard; `op vecbase` checks survival only; no row reads VECBASE after a wide write to 0x03. Sweeps unless VECBASE's write body kills the host -- and its body is **not inlined**.
+
+So: 69 of 72 cells measured or covered by measured mechanism; 3 uncovered. **The enumeration is not closed, and the floor question answers YES.**
+
+## 1(b) `latch all` -- sound
+
+REASONED, on packet facts: the session is twelve `put h` commands and nothing else -- no guest program runs; the only writer of `d->warned` is `pcc2_width_decline` (PRETABLE field audit, deriver given: one `warned |=` occurrence). (i) No benign traffic exists to pre-set a bit, and nothing else can. (ii) Twelve puts, one per arm; a shared bit yields at most 11 announce events; a repeated put could not announce anyway (latch). Both directions are READ: 12 on BASE, 11 under M1. One scoping caveat: the row detects duplicated member *use*, not permutations (a transposed pair still counts 12) -- but a permutation is behaviorally vacuous, each block still latching once on a distinct bit, so it is not a hole.
+
+## 1(c) `op pscale noig` -- real, and 0 is right
+
+The "ignored" line is a `fatal()` call, the same stream every dcl row already counts (READ: those rows are green at 1 on BASE). The channel is measured in both directions: 0 on BASE, red under M_FALL_PSCALEADJ (pass 3c) -- the red *requires* the print to reach the transcript. On the fix the guard breaks before the body, and the session contains only the one wide put, so 0 is correct (READ: green in both 82/82 BASE runs). Bonus: the row also reds under S1/S2 at PSCALEADJ (the landed write prints "ignored"); S6 there is caught by `latch all` instead (0x0303 > 0xff).
+
+## 1(d) The three readbacks
+
+Correct on the fix, enumerated: st.b 0x1f survives both masks (0x1f & 0x1f = 0x1f; 0x1f & 0xdf = 0x1f); no HUH (0x1f & ~mask = 0 both); the put h is declined; ld.bu reads 0x1f. READ-corroborated: green in both 82/82 BASE runs. Under M_FALL the landed values are 0x18 and 0x98 (enumerated: 0xb8 & 0x1f = 0x18; 0xb8 & 0xdf = 0x98), HUH fires and returns, then reassert. Whether the row then records a wrong value or "died" is **not distinguishable from the packet** -- pass 3c gives counts only. REASONED: alive with a wrong readback, because these sessions never set GENCTL's C040 bit (the same fact the `rb mask` comment leans on). The settling fact: the per-row pass-3c output for the M_FALL runs. Coverage is unaffected either way.
+
+## 2 Smallest edit that breaks the fix and passes 82 rows
+
+**Delete one `break;` -- the one after `pcc2_width_decline` in the IPL arm.** One token; every row stays green (case made in 1(a)). The row I expect to stay green, and that most looks like coverage: **`hwr ipl dcl`** (still 1 -- the announce is kept). The same deletion at SCCERR and VECBASE also sweeps; at VECBASE the landed write puts a real byte into a live register with no row observing it -- there the damning green row is **`rb vecbase`**, which Section 2 credits as VECBASE's readback but which exercises GENCTL's arm. The missing rows are cheap mirrors of existing ones: an "hwr ipl noig" counting "read-only PCCTWO_IPL" == 0 (green on the fix by construction), and an own-arm readback or ruling at SCCERR/VECBASE. Outside the six shapes: **`len != 1` → `len == 2`** accepts len-4 accesses, and len-4 rows exist only at SCCERR (READ), so it sweeps at the other eleven blocks -- guest-unreachable there (alignment), but the operator path the contract claims to cover can emit it.
+
+## 3 Option-set completeness
+
+Agreed, N/A. The product diff is comments plus a compile-time typedef; no disposition is chosen; the only policy-adjacent new row (`op pscale noig` expecting 0) applies the settled split rather than re-litigating it.
+
+## 4 Is the record honest?
+
+Mostly yes -- and specifically: the driver death at the 10th mutant is disclosed with the 9 standing; every table names its denominator; md5 freezes are named; the NOROW line declines a claim; and premise 6 (fatal returns) is corroborated in-packet (`hwr t2ctl` stays green under M_LENGT2_TXCTL despite the HUH fatal). The defects:
+
+1. **The contract now counts 13 blocks.** The diff fixes "five → SIX guest-reachable" but leaves the unchanged context line "reinstatement at any of the **seven** OPERATOR-reachable blocks" (READ). Six guest + seven operator ≠ twelve; "seven" is the stale pre-IPL/MASK figure. The repaired census text still carries the old count it was written to purge.
+2. **The product comment's "the six odd ones -- VECBASE, PSCALEADJ, the T1 labels, SCCICR, SCCRX, SCSIICR, MASK"** names seven list-items (eight registers counting T1CTL and T1ICR). The correct six odd blocks are VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR, MASK; the T1 labels are odd offsets of *even-block* arms and belong in a separate clause. This is the exact "units slip" the probe's own comment warns against, in the sentence that fixes the previous one. Note the premises section states the census correctly -- the shipped comment contradicts it.
+3. **Section 2 vs Section 5:** consistent as an ordered chronology (Section 2 describes the 78-row state; Section 5 the amendment), but the closure is scoped to "those four" arms when Section 5's own ruling condemns the same shape at SCCERR (Section 2's readback column says "message only, disclosed"), at IPL (whose body is print-isomorphic to PSCALEADJ's, the arm that *generated* the noig precedent), and at VECBASE (whose listed readback tests the wrong arm). The header's "CLASS CLOSURE" is the claim no row carries.
+4. **"Eight arms mask, read-modify-write or clear"** has no checkable deriver in the packet (the awk is cited for the *seven*-reassert count); from the inlined arms I can account for six masking arms. Minor, but it is a count riding on an unaudited membership.
+5. **Builder M2 and M9 record identical red sets** with no shape names in the log; which is delete and which is len>2 at MASK is asserted, not recorded.
+
+## Premises not settlable from this packet
+
+- **VECBASE's write body** (settles whether M_FALL@VECBASE sweeps or kills -- the single fact: the body of the PCCTWO_VECBASE arm).
+- **SCCERR's write body** beyond the "always 0" warrant (settles whether any channel could exist at all, e.g. a countable HUH).
+- **Pass-3c per-row fail modes** for the M_FALL runs (value vs "died").
+- **SCCRXIACK's offset** -- see below.
+
+## Something else
+
+**SCCRXIACK appears in the inlined code as a thirteenth arm with no width guard at all** (clears a bit in SCCRX, reasserts, ignores idata). Its effect is width-invariant (idata unused), so it is arguably out of scope -- but the twelve-block census text never says why it is excluded, and its offset/reachability is not in the packet, so whether an unguarded wide write can reach it is exactly the kind of question this panel's own reachability census was built to answer. One line in the census would close it.

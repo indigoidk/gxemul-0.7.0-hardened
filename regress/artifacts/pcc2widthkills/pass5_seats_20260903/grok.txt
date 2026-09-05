@@ -1,0 +1,108 @@
+I'll start by reading the full offloaded brief, then verify the enumeration against the actual source rather than the packet's claims.The brief is loaded. Next I’ll re-derive the helper, the twelve guards, and the probe rows from the tree rather than from the packet.I’ll re-derive the twelve guards, the helper, and every probe row from the tree, then check the enumeration cell by cell.I’ve confirmed the twelve call sites. Next I’ll count rows, check the helper tokens, and verify the reachability claims against `memory_rw` and the m88k core.**VERDICT: NOT A CLEAN CLOSE.** Domain size is now right (twelve guards + helper TEST/SET + widths {1,2,4,8}). Part 4’s five mutants are real kills, matching `part4/driver.log`. Three status sentences in the contract are false as written; none of them is a floor-sweep of the 101 rows. Smallest pass-101 edit that still changes a real property: `fatal(` → `debug(` in the helper (already disclosed). agy was deliberately not fired; this is a reading, not a measurement.
+
+---
+
+## 1. Enumeration
+
+**(a) Domain.** The fix introduced twelve `if (len != 1 && writeflag == MEM_WRITE)` blocks, the helper they all call, and the `warned` bitfield. I counted **12** `len != 1` sites and **12** `pcc2_width_decline(...)` calls in `GXEMUL-SEC/src/devices/dev_pcc2.c` (GENCTL through MASK). SCCRXIACK has no guard; its body ignores `idata` — correctly excluded. The memcpy-before-switch is pre-existing and is pinned by `val h genctl` / `val w sccerr`. That is the whole surface.
+
+Guard inputs walked from the source, not the packet: `len`, `writeflag`, `relative_addr` (arm), `idata` (body only), `d->warned` (helper only — two hits, TEST and SET). `MEM_READ` is 0, `MEM_WRITE` is 1 (`memory.h`). Four widths: guest `LS_1/2/4/8` with alignment before `memory_rw`; debugger `put b/h/w/d` = 1/2/4/8. None of the twelve offsets is 8-aligned, so guest `ld.d`/`st.d` never starts on these arms; `put d` is the only len-8 path. Header lists bytes/two-bytes/four-bytes only (`mvme_pcctworeg.h`); declining 8 on the write side is the same lane-hazard policy, not a header claim.
+
+Helper, token by token (`:396-403`):
+
+| line | one-token edit | 101-row fate |
+|---|---|---|
+| SET `|=` → `=` | A then B clears A | **caught**: `latch aba` wants 2, gets 3. Measured 100/101. |
+| SET `(1u << bit)` → `1` | every SET is bit 0 | **caught**: `latch same2` wants 1, gets 2. Measured 100/101. |
+| SET `|=` → `&=` | first SET is `0 &= bit` → 0; never latches | **caught**: `latch same` wants 1, gets 2. |
+| SET `|=` → `^=` | SET is inside `!(warned & bit)`, so a set bit is never written again; 0→1 xor equals or | **equivalent by construction**, not disclosed. Same warrant family as the measured bit translation. |
+| TEST `&` → `==` | `!(warned == (1u<<bit))` | contract says undistinguishable. **False.** `latch aba`: A sets 1, B sets 3, third A does `!(3==1)` and announces again → 3, want 2. `latch all` still 12 (that half of the sentence is right). |
+| TEST invert / `&` → `\|` | never first-announces | **caught**: `latch all` → 0. |
+| TEST and SET both `1u << (bit+1)` | permutation, no consumer of bit identity | **E**, measured 96/96. `d->warned` is read/written only in this helper. |
+| `fatal(` → `debug(` | same text under `-V` | **not caught**, disclosed. `fatal()` has no early-out; `debug()` does (`debugmsg.c`). Probe is always `-V`. |
+| `break` → `return 0` | guest store faults; host lives | **caught**: measured 96/101. |
+| `break` → `return 1` | function tail is already `return 1` (`:660`) | equivalent. |
+
+Widths: `latch all` / `latch all w` / `latch all d` pin {2,4,8}. `len != 1` → `len & 6` (true on {2,4}, false on 8) is the measured M_LEN8 kill. `len != 1` → `len > 1` or `!(len & 1)` is equivalent on {1,2,4,8}, not a property break.
+
+**(b) S cells.** At storing arms DEL/LEN/FALL all execute the write body; the arm’s own `rb *` (or `hwr sccerr dcl`) is the same channel. Print-only PSCALEADJ/IPL: DEL and FALL both reach the print; `op pscale noig` / `hwr ipl noig` vary. KILL S is the survival pair, not a refusal-site survival-only row — that restatement holds.
+
+Re-derived landing values (BE `memory_readmax64`: first byte is high lane):
+
+- GENCTL `st.h 0xaabb` → `(uint8_t)idata = 0xbb` (VECBASE’s lane). `0xaa`/`0xbb` both have C040 clear (`0xbb & 4 == 0`; I checked after almost getting this wrong).
+- VECBASE own `0xaab8 & 0xf0 = 0xb0`.
+- SCCICR `0xaab8 & 0x1f = 0x18`; SCCRX/SCSIICR `& 0xdf = 0x98`.
+- TxCTL RMW: `0xaab8 & 3 = 0` against pre `0x03` → **0**, which is why `rb t1ctl`’s comment names 0. `want` `"0x3"` vs debugger `"0x3"` is the part-3 string lesson, applied.
+- TxICR: lands `0x10` against pre `0x13`.
+
+**(c) E / UNREACHABLE.**
+
+- SCCERR FALL = E: the only store to that cell in `dev_pcc2.c` is `= 0` in its write arm. Init `memset`s the struct. Timer `write32`s T1/T2 COUNT (0x08/0x10). `reassert` writes IPL/T1ICR/T2ICR. `interrupt_common` writes SCSIICR/SCCTX/SCCRX. An 8-byte counter memcpy from T2COUNT (0x10) covers 0x10–0x17, not 0x1c. Warrant holds; pcc2counter8 is correctly out of contract.
+- Odd READ-side UNREACHABLE: m88k `#ifndef LS_1` alignment-faults before `memory_rw` (`cpu_m88k_instr_loadstore.c`). Debugger `dump` / search / disasm / `put b` all pass `NO_EXCEPTIONS`. Dispatch is `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))`; pcc2 registers `DM_DEFAULT` (`:726-728`). `put h/w/d` go through `store_{16,32,64}bit_word` with `CACHE_DATA` and **no** `NO_EXCEPTIONS`. Re-derived, not taken from the packet.
+- Bit translation E: `d->warned` has no other reader. Holds until someone indexes those bits.
+
+**(d) Cardinality C/W/A.** `DECL = "-- declined.  (once) ]"`. HUH, IPL debug, `PSCALEADJ ignored`, `write to read-only`, unaligned `WARNING` — none match. A mutant can **preserve** `latch all` at 12 (`&`→`==`; bit translation; `^=`) and **cannot** inflate it from a benign event I can name. SWAP drops the count because the helper is never called, not because bits collide — that channel is real.
+
+**Stale status cells (not rationalisations of a hole — the rows are stronger than the table):**
+
+- IPL and PSCALEADJ GROW still marked **C**. They now have `acc ipl ro` / `acc pscale ign`. M_GROW_IPL was 99/101 on **both** `acc all` and `acc ipl ro`. Legend “C alone have no per-arm acc row” is false for those two.
+- Probe comment still says “seven blocks without a per-arm `acc` row”; after the two print-only acc rows it is five (VECBASE, SCCICR, SCCRX, SCSIICR, MASK).
+- SCCERR GROW **A/C**: `acc sccerr` wants `0x0` and a declined byte leaves 0 (init). The value half is vacuous; `acc sccerr nod` + `acc all` carry the cell. The CATCHES bullet already discloses byte-side value-identity; the table letter does not.
+
+**Cells re-derived from source:** the twelve call sites, helper, enum 0..11 + typedef, `MEM_READ/WRITE`, BE compose, m88k align, `put` vs `dump` flags, `DM_DEFAULT`, `d->warned` uniqueness, SCCERR writers, reassert at 7 of 12 (GENCTL, TxICR, SCCICR, SCCTX, SCCRX, SCSIICR, MASK) and 8 masking/RMW/clear arms, function tail `return 1`, `fatal` vs `debug`, C040/MIEN/IEN, 101 gate names vs 101 `row()` names, part 4 red lists.
+
+---
+
+## 2. Smallest edit that still passes 101
+
+**`fatal("[ pcc2: unimplemented len=%i write to %s -- declined."` → `debug(`.** Every text row still sees the line under `-V`. Named in the contract; the `dev_asc.c` warrant for keeping `fatal()` is real and unmeasured here.
+
+Not a property break, so not this question, but should be in the E column next to bit translation: **`d->warned |=` → `d->warned ^=`.** Dominated by the TEST, so 0→1 is the only transition; xor and or agree. `latch aba` stays 2.
+
+TEST `&` → `==` does **not** pass: `latch aba` reds. The contract’s “not distinguishable” sentence is the leftover that would have been true at 96 rows and is false at 101.
+
+I did not find a one-token non-equivalent helper or guard edit that keeps all 101 green, other than the disclosed severity change. That is a reading; I did not build `^=` or TEST-`==`.
+
+---
+
+## 3. Option-set: N/A
+
+Agree. No new disposition. IPL’s write body still has a `#119` process-global `static int w` for the read-only print; the **width** latch is per-instance. That is leftover, not a choice this pass made.
+
+---
+
+## 4. Record honesty
+
+**False as written**
+
+- Helper TEST `&` → `==` “DISCLOSED as not distinguishable by this instrument.” `latch aba` distinguishes it. Pass-4 sentence copied forward after the row that closed it landed.
+- M_RET0: contract/PRETABLE_pass4 predict `hwr genctl` **and** `hwr genctl lv` red. `part4/driver.log` RED list is `hwr genctl lv,rb genctl,rb vecbase,rb genctl lo,latch two` — **not** `hwr genctl`. `return 0` with `!no_exceptions` raises a guest `DATA_ACCESS` (`memory_rw.c`); host still `exit0`. The `hwr`/`lv` **pair** does not both red; liveness does. `latch two` reds because the second `ST_H` never runs.
+- PRETABLE_pass4: “verified by all nine seats.” Pass-4 roster was eight; agy DNF. The brief’s premise 8 is the true one.
+- GROW column / “C alone” / “seven blocks without acc” vs the two print-only acc rows just added.
+
+**Holds**
+
+- Part 4 table vs predictions for the other four mutants (BASE 101/101; LEN8 → `latch all d`; ASSIGN → `latch aba`; BIT0 → `latch same2`; GROW_IPL → `acc all`+`acc ipl ro`). Driver log names those reds.
+- 101 `row()` calls; gate `for v in` list is 101 names, denominator pin 101. I counted both.
+- Lane compose, six even / eight odd offsets, `put b` vs `put h` dispatch, `fatal()` returns, twelve bits, SCCRXIACK excluded.
+- PRETABLE split: `PRETABLE.out` **says** it was reconstructed and its mtime is not the order witness, and points at `part1/driver.log`. That is honest. Putting Section 8 in its own file is the right structure. I could not stat mtimes (plan-mode blocked the command), so I cannot independently confirm “written BEFORE part 4” from the filesystem.
+- `M_ALIAS_SCCTX` transfer is stated as never re-run at 82/96/101; `latch all`’s session is the same 12×`put h 0x0003`.
+- Product diff is comments plus the pass-2 `typedef char pcc2_w_fits_in_warned[...]`. Matches the inlined `dev_pcc2.c` diff.
+
+**Counts with derivers:** 12 guards, 12 helper calls, 101 rows, 7 reassert / 8 mask arms, 6 even + 8 odd offsets — all re-counted from files. “All nine seats” in PRETABLE_pass4 has no deriver and is wrong.
+
+**Coverage claimed without a row:** the TEST-`==` hole is the reverse — a row exists (`latch aba`) and the contract claims none. Cosmetic name-string gap on five `op * dcl` arms is still disclosed and still true.
+
+---
+
+## Something else
+
+- Probe line still saying “the five reachable blocks” (`pcc2_width_probe.py` above the hrd/hwr loop) and “the seven odd blocks” above the `op` loop are leftover comments. The rows cover IPL/MASK. Harmless if you read the rows; misleading if you read the comments.
+- `acc all` stores `0x10` at all twelve. That is `PCC2_IRQ_IEN` / `PCC2_TTIRQ_IEN`, and it fires TxCTL/VECBASE **HUH** (`0x10 & ~7`, `0x10 & ~0xf0`). It does not match `DECL`, so it does not inflate cardinality. A future row that counted HUH or reassert debug lines would be sitting on a polluted session.
+- IPL `== 0` on read is still a process-global `#119` static; not this detector’s subject.
+
+---
+
+**Denominator of this sweep:** 12×9 clause-(d) cells, helper TEST and SET one-token ops, widths {1,2,4,8}, FAULT `return 0`, announce severity. Floor-sweep mutants in that set: **0 found** (part 4 already killed the five that were live at 96). Wrong-record sentences: **3**. That is not a closing zero with a clean contract; it is a detector that holds and a contract that still lies about one helper edit and one FAULT red list.
+
+I did not run `run.sh` or any gate. I did not build a mutant. agy DNF (reserved).

@@ -1,0 +1,44 @@
+PROPOSED REPAIR -- CLASS CLOSURE, not cell-by-cell.  Opus seat, pcc2widthkills pass 2.
+
+THE CLASS (one sentence): the detector asserts latch distinctness PAIRWISE, for exactly
+ONE pair out of 66, and reaches only TEN of the TWELVE converted blocks -- so any
+per-arm regression at PCCTWO_IPL (0x3e) or PCCTWO_MASK (0x3f), and any bit collision
+outside {GENCTL, T2CTL}, is invisible BY CONSTRUCTION.
+
+ROW 1 -- the class closer.  Pins the CARDINALITY of the latch instead of one pair, and
+is simultaneously the only row that touches IPL and MASK at all.  +2 rows.
+
+    BLOCKS12 = (("GENCTL",0x02),("VECBASE",0x03),("PSCALEADJ",0x15),("TxCTL",0x16),
+                ("TxICR",0x1a),("SCCERR",0x1c),("SCCICR",0x1d),("SCCTX",0x1e),
+                ("SCCRX",0x1f),("SCSIICR",0x2f),("IPL",0x3e),("MASK",0x3f))
+    t, alive, how = session(["put h 0x%x, 0x0303" % (PCC2 + o) for _, o in BLOCKS12])
+    row("latch all", t.count(DECL), 12,
+        "one wide write per BLOCK -> TWELVE announces: bit CARDINALITY, not one pair")
+    row("latch all lv", how, "exit0", "...and the host survived all twelve")
+
+  ONE offset per BLOCK: T1CTL/T2CTL share PCC2_W_TXCTL_LEN and T1ICR/T2ICR share
+  PCC2_W_TXICR_LEN, so twelve OFFSETS would give only ten announces.  That collapse is
+  exactly the arithmetic that let 5+7=12 read as "all twelve blocks covered".
+
+ROW 2 -- corrects the reachability census in the same commit.  0x3e is EVEN, so IPL is
+GUEST-reachable by an aligned st.h; the product-code comment names only five even
+blocks and omits it.  +2 rows.
+
+    t, alive, how = session(setup(r6="0x0303")
+        + program([I_ST_SCR, ST_H(6, IPL), I_LD_SCR]) + ["print r4"])
+    row("hwr ipl", how, "exit0", "st.h IPL (0x3e is EVEN -- GUEST-reachable) survives")
+    row("hwr ipl lv", printed(t,"r4") if alive else "died", "0x5a5a5a5a", "...and runs on")
+
+ROW 3 -- SCCTX is the one arm whose wide write is survival-only AND whose accept and
+decline are NOT value-identical (the arm masks & 0x1f).  The contract discloses that
+equivalence for SCCERR and does not for SCCTX.  +1 row.
+
+    t, alive, how = session(setup(r5="0x1f", r6="0xaabb")
+        + program([ST_B(5, SCCTX), ST_H(6, SCCTX), LD_BU(4, SCCTX)]) + ["print r4"])
+    row("rb scctx", printed(t,"r4") if alive else "died", "0x1f",
+        "SCCTX unchanged after a declined st.h -- decline != accept at this arm")
+
+Then: add the five names to gate_arm.sh's row list and raise the three pinned counts
+from 60 to 65.
+
+WHAT ROW 1 ALONE KILLS (measured mutants, this table): M1, M2, M6, M7, M8, M9.

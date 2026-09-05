@@ -1,0 +1,129 @@
+I'll start by reading the full offloaded brief, then verify the inlined claims against the actual tree rather than ratifying them.HEAD matches the brief (`b78bb0f`). Next I’ll re-derive the 12-block × 6-shape table from the current files, not from the packet’s census.The probe header still says five even blocks and seven odd ones. I’ll enumerate the switch arms and offsets against that, then check whether the new readbacks can actually host-kill.Offsets and `reassert_interrupts` are next: I need the exact C040/IRQ bits and whether a landed 0xaab8 can actually `exit(1)` on those three new readbacks.Fall-through at VECBASE and IPL looks uncovered — `rb vecbase` is GENCTL’s other lane, not a VECBASE-arm write. I’ll enumerate every row and every mutant cell next.**VERDICT: DO NOT CLOSE.** The 82-row composite is still below the floor. Four announce-then-land cells were closed and measured; two cells of the **same** class remain unpinned and are predicted 82/82. This pass is valid (diff delivered, scores named with logs). It does not find zero floor breaches.
+
+---
+
+## 1. Premise audit
+
+### (a) The 12 × 6 enumeration is **not** closed
+
+Inputs checked from `GXEMUL-SEC/src/devices/dev_pcc2.c` (worktree on `b78bb0f`, line numbers in the 400s–600s — this is the fork, not the 2021 copy). Twelve enum members; TxCTL/TxICR each serve two labels. Six shapes as the brief named them.
+
+I walked every cell. `dcl` is treated as covering DELETE / `len > 2` / KILL / IDATA (those stop announcing) and **not** FALL (announce kept). That is the distinction pass 2 measured.
+
+| Block | even? | DEL | `len>2` | KILL `exit(1)` | ALIAS | FALL (announce then land) | IDATA `>0xff` |
+|---|---|---|---|---|---|---|---|
+| GENCTL | even | **M** `M_DELETE` 72/78 (`rb genctl`…) | argued = DEL for `st.h` | argued (`hwr genctl`) | **M** via `latch all` | argued (`rb genctl` would move) | **M** `M_IDATA_GENCTL` 80/82 |
+| VECBASE | odd | argued (`op vecbase dcl`) | argued (`op vecbase dcl`) | **M** table1 `M_OPKILL` | **M** via `latch all` | **UNMEASURED — predicted 82/82** | **M** via `latch all` (0x0003) |
+| PSCALEADJ | odd | argued (`op pscale dcl`) | argued | argued (`op pscale`) | **M** via `latch all` | **M** 81/82 `op pscale noig` | **M** via `latch all` |
+| TxCTL | even | argued (`rb t2ctl`) | **M** `M_LENGT2_TXCTL` 73/78 | argued (`hwr t2ctl`) | **M** via `latch all` | argued (`rb t2ctl`) | **M** via `latch all` |
+| TxICR | even | **M** `M_DELETE_TXICR` 74/78 | **M** `M_LENGT2_TXICR` 74/78 | argued (`hwr t2icr`) | **M** via `latch all` | argued (`rb t2icr`) | **M** via `latch all` |
+| SCCERR | even | argued (`hwr sccerr dcl`) | **M** `M_LENGT2_SCCERR` 76/78 | argued (`hwr sccerr`) | **M** via `latch all` | **equivalent** (body always stores 0; init `memset` 0) | **M** via `latch all` |
+| SCCICR | odd | argued (`op sccicr dcl`) | argued | argued (`op sccicr`) | **M** via `latch all` | **M** 81/82 `rb sccicr` got **0x18** | **M** via `latch all` |
+| SCCTX | even | **M** builder M8 75/78 | **M** `M_LENGT2_SCCTX` 75/78 | argued (`hwr scctx`) | **M** M1 77/78 `latch all` | argued (`rb scctx`) | **M** via `latch all` |
+| SCCRX | odd | argued (`op sccrx dcl`) | argued | argued (`op sccrx`) | (the other half of M1) | **M** 81/82 `rb sccrx` | **M** via `latch all` |
+| SCSIICR | odd | argued (`op scsiicr dcl`) | argued | argued (`op scsiicr`) | **M** via `latch all` | **M** 81/82 `rb scsiicr` | **M** via `latch all` |
+| IPL | even | argued (`hwr ipl dcl`) | argued | **M** `M_KILL_IPL` 71/78 | **M** via `latch all` | **UNMEASURED — predicted 82/82** | **M** via `latch all` |
+| MASK | odd | **M** `M_DELETE_MASK` 75/78 | **M** builder M2 75/78 | **M** `M_KILL_MASK` 73/78 | **M** via `latch all` | **M** builder M6 77/78 **`rb mask` alone** | **M** via `latch all` |
+
+**M** = named log. “Argued” = same channel as a measured sibling, not a spare measurement.
+
+FALL was the class this repair claimed to close. Measured: PSCALEADJ, SCCICR, SCCRX, SCSIICR, MASK. Argued killed by a real decline≠accept readback: GENCTL, TxCTL, TxICR, SCCTX. Equivalent: SCCERR. **Open: VECBASE and IPL.**
+
+Why those two are not covered by “every block has a dcl row”:
+
+- **`rb vecbase` is not a VECBASE-arm channel.** It is `st.b VECBASE; st.h GENCTL; ld.bu VECBASE` — the second lane of a **GENCTL** halfword. `M_DELETE`’s own red list does not include it (GENCTL’s body assigns one `uint8_t`; VECBASE never moves). `op vecbase` / `op vecbase dcl` stay green under announce-then-land. PRETABLE §2 files this as VECBASE’s readback. That is the same mis-filing pass 2 already punished at MASK.
+- **IPL’s write body stores nothing** and prints `"write to read-only PCCTWO_IPL; ignored"` — PSCALEADJ’s shape. PSCALEADJ got `op pscale noig`. IPL did not. `hwr ipl dcl` still sees the width announce. Section 2 even says IPL’s extra channel is “read-side IPL==0 (width-independent)”. That sentence is an admission that write-side FALL is unpinned.
+
+The class-closure rule asked for every FALL cell, not the four names §2 happened to list. Cutting the class as “odd arms with no readback” dropped the even store-nothing arm (IPL) and the odd arm whose readback is attached to a neighbour (VECBASE).
+
+I did not rebuild those two mutants. The prediction is from the enclosing arms plus the four measured FALL logs, which already show the signature: survival/`dcl` stay green; only an arm-local decline≠accept channel moves.
+
+### (b) `latch all` is a sound cardinality row — with the session as the warrant
+
+Re-derived, not taken from PRETABLE:
+
+- `d->warned` is written only in `pcc2_width_decline` (`|=` once in the file). Init `memset` zeroes it. `DEVICE_TICK` only calls `reassert_interrupts`.
+- Debugger `put h`: warns if `addr & 1`, then **one** `store_16bit_word` → one `memory_rw(len=2)` (`debugger_cmds.c` ~1512–1523, `memory.c` ~818–828). Not two byte stores.
+- `BLOCKS12` is twelve offsets, one per **block** (T2CTL 0x16 not T1CTL 0x17). Twelve first-time announces ⇒ 12. A shared bit ⇒ 11. Measured: M1 77/78 `latch all` 11; `M_IDATA_GENCTL` 80/82 `latch all` 11.
+- BASE `latch all` = 12 (`M_IDATA_GENCTL.out` on the fix side, and the 82/82 BASE) proves this session contributes **zero** extra `DECL` strings and **zero** pre-set bits. Boot traffic cannot hide an alias: a pre-set bit would already have made BASE 11.
+- Two blocks on one bit cannot still read 12 in this session: twelve puts, each offset once, no second touch, `DECL` is the specific `"-- declined.  (once) ]"` tail. Compensation would need a 13th matching print. There isn’t one.
+
+`latch same` is still required for a dropped `|=` (each block once still counts 12). The pair is the latch axis, as the builder wrote. I agree.
+
+### (c) `op pscale noig` is a real channel; 0 is right on the fix
+
+The body is only:
+
+```c
+fatal("[ pcc2: write to PSCALEADJ ignored (value 0x%02x) ]\n", (int)idata);
+```
+
+`fatal()` returns. The row counts `"PSCALEADJ ignored"`. That substring is **not** in the decline line (`PCCTWO_PSCALEADJ -- declined`). Session is a single `put h 0x0303` — no legal byte write that would print it on the fix. On the fix the `break` runs first ⇒ 0. Measured: BASE green; `M_FALL_PSCALEADJ` 81/82 got **1**. Channel is real.
+
+### (d) The three new readbacks are correct on the fix; they red as a **readback**, not a death
+
+Walked, not estimated:
+
+- `memory_readmax64` / `store_16bit_word` are big-endian: `put h 0xaab8` ⇒ `idata = 0xaab8`, `(uint8_t)idata = 0xb8`.
+- SCCICR: `0xb8 & 0x1f = 0x18`. **Measured** (`p3c_M_FALL_SCCICR.out`: `rb sccicr` got `0x18`, want `0x1f`, **FAIL**, host lived).
+- SCCRX / SCSIICR: `0xb8 & 0xdf = 0x98`.
+- Legal `st.b 0x1f` is in-mask for both `0x1f` and `0xdf`. On the fix the `put h` is declined, byte stays `0x1f`. BASE 82/82 includes all three green.
+
+**Would `reassert_interrupts` kill the host?** Only `GENCTL & PCC2_C040` (`0x04`) does `exit(1)`. Init sets `GENCTL = 0x00`. These sessions never write GENCTL. `PCC2_IRQ_INT` is `0x20`; neither `0x1f` nor `0x18`/`0x98` has it, and SCCRX’s store mask `0xdf` **clears** bit 5. SCCICR is not even read by `reassert_interrupts` (only T1/T2 ICR, SCCTX, SCCRX, SCSIICR). So a landed FALL reds the value, it does not take `pcc2c040kill`. The row already prints `"died"` if `alive` is false; the measured FAIL is `0x18`, not `died`. The record should say that.
+
+---
+
+## 2. Smallest edit that still passes 82 rows
+
+**Delete the `break` after `pcc2_width_decline` in `case PCCTWO_VECBASE` (one token).** Same FALL shape already measured at four other arms.
+
+Rows expected to stay green: **all 82**, including the two that look like they pin VECBASE:
+
+- `op vecbase` / `op vecbase dcl` — announce kept, host lives
+- `rb vecbase` — still a GENCTL `st.h`; VECBASE stays `0x50`
+- `latch all` — still 12 announces
+- `val h genctl` — fresh process
+
+Equally small, same class: the same `break` deleted at **IPL**. `hwr ipl dcl` stays 1; the `"read-only PCCTWO_IPL; ignored"` print has no row (that is the row `op pscale noig` is for PSCALEADJ).
+
+Neither shape is in the tables. The tables’ FALL mutants were the four §5 named.
+
+Outside the 6-shape grid, a read-side `if (len != 1)` restored at IPL (no `writeflag`) is also likely 82/82: memcpy has already served the read; no row counts the `IPL == 0` diagnostic. That is coverage debt, not the floor cell above.
+
+---
+
+## 3. Option-set completeness
+
+**N/A, agreed.** This diff is comments + `typedef char pcc2_w_fits_in_warned[PCC2_W_NBITS <= 32 ? 1 : -1]`. Direction split is not reopened. The typedef bounds field width; it does not catch two call sites naming one enumerator — `latch all` does.
+
+---
+
+## 4. The record is not honest in the place this pass was supposed to have fixed
+
+**The units slip is still in the contract.** CATCHES now says SIX guest-reachable blocks **and** “reinstatement at any of the **seven** OPERATOR-reachable blocks”. 6+7=13. There are twelve blocks. Probe still has:
+
+- line 69: “the five GUEST-reachable … and the seven OPERATOR-reachable”
+- line 204: “survival pairs at the five reachable blocks”
+- line 328: “the seven odd blocks via `put h`”
+
+Product comment: “the **six** odd ones -- VECBASE, PSCALEADJ, **the T1 labels**, SCCICR, SCCRX, SCSIICR, MASK” — seven names / eight odd **offsets**. T1CTL/T1ICR are odd labels of even blocks. Pass 2’s whole finding was this mix of units. It is still in the shipped contract.
+
+**PRETABLE §2 vs §5:** chronological, not a current map. §2 still says four odd arms have no readback; §5 adds three readbacks + `op pscale noig`. A reader of §2 alone is wrong. Worse: §2’s table claims `rb vecbase` as VECBASE’s decline≠accept channel, which is the bug in (a).
+
+**§4 “BASE 78/78”** was a prediction later measured; that part is fine.
+
+**“seven of twelve call `reassert_interrupts`”** — re-counted from the arms: GENCTL, TxICR, SCCICR, SCCTX, SCCRX, SCSIICR, MASK. Seven. The “eight arms mask/RMW/clear” (VECBASE, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR) and “five of those eight” also hold.
+
+**SCCICR “interrupt control register and reassert”** is coarse: the call happens; `reassert_interrupts` does not read SCCICR. Guest-visible corruption is still the 0x18 store.
+
+---
+
+## Something else
+
+The four new rows do what they claim. Arithmetic, `at=CODE+0x100`, and the measured 81/82 signatures are right. `latch all` at `0x0003` really does pin IDATA at every arm (`M_IDATA_GENCTL.out`: `rb genctl lo` 0x22≠0x11 **and** `latch all` 11). I am not asking this pass to re-litigate those.
+
+What I am asking: **do not treat “we added the four §2 named” as class closure.** FALL × {VECBASE, IPL} are still empty. Closing four cells of a 12-block class and leaving two of the same shape is the linear cell-chase the class-closure rule exists to stop.
+
+**Floor question on the 82-row composite: no.** Predicted clean-sweep mutants exist in the clause-(d) FALL column. Chain stays open until those two cells have a channel that can vary (VECBASE: `rb vecbase`-style readback on `put h` at 0x03, not on `st.h` at GENCTL; IPL: count `"read-only PCCTWO_IPL"` at 0, the PSCALEADJ move).
+
+agy was not fired (reserved). This is a reading. The two FALL mutants are the cheap measurement a builder should run before anyone argues they are equivalent.

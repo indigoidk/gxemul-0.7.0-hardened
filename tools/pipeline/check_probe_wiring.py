@@ -219,6 +219,106 @@ MANIFEST = {
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset fix-leg builder, preserved as evidence"),
+    #  pcc2widthkills (passes 3-13, 2026-09-03..05) and the pcc2defaultkill witness: every .py preserved under
+    #  regress/artifacts/ by those rounds is EVIDENCE (#471 class) -- frozen instruments beside their kill
+    #  tables, the measuring seats' drivers and discriminators, one rung-3 witness.  Generated 2026-09-05 from
+    #  the hook's own UNCLASSIFIED list at the pass-13 commit; one line per file, deliberately.
+    "artifacts/pcc2defaultkill/witness_20260905/defaultkill_witness.py":
+        (CLASS_RESEARCH, "pcc2defaultkill rung-3 witness (guest st.b/ld.bu at uncased offsets), preserved as evidence; not a gate"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part10/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part10_aborted/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part11/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part12/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part13/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part13_aborted/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part13_partial/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part2/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part3/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part3b/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part3c/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part4/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part5/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part5b/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part6/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part6b/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part7/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part7b/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part8/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/killtable2_20260903/part9/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/opus_pass3_20260903/pass3/probe.frozen.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/opus_pass3_20260903/pass3c/probe82.frozen.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass10_seats_20260904/opus/cmpnames.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass10_seats_20260904/opus/diffcheck.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass10_seats_20260904/opus/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass11_seats_20260904/opus/control_iclr.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass3_seats_20260903/opus_reader/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass3_seats_20260903/opus_reader/nonequiv_check.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass4_seats_20260903/fable/dump_names.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass4_seats_20260903/fable/probe_copy.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass4_seats_20260903/fable/probe_dry.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass4_seats_20260903/opus_reader/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/fable/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/fable/pty_ret0_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/opus_reader/artifacts/discriminator.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/opus_reader/artifacts/gxopus_p5_disc.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/opus_reader/discriminator.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/opus_reader/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass5_seats_20260903/opus_reader/xcheck.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass6_seats_20260903/opus/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass7_seats_20260904/opus/gatecheck.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass8_seats_20260904/opus/mk_f1.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass8_seats_20260904/opus/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass9_seats_20260904/opus/audit_gate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass9_seats_20260904/opus/cmp_names.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
+    "artifacts/pcc2widthkills/pass9_seats_20260904/opus/frozen_probe.py":
+        (CLASS_RESEARCH, "pcc2widthkills: the frozen instrument a kill table measured, preserved beside its logs"),
+    "artifacts/pcc2widthkills/pass9_seats_20260904/opus/mutate.py":
+        (CLASS_RESEARCH, "pcc2widthkills: a measuring seat's own script (mutant driver / discriminator / check), preserved as evidence"),
 
     #  wdcaltoffset PASS 1, 2026-08-30.  Four instruments from the measuring seat's
     #  six-binary table.  CLASS_RESEARCH on the precedent two entries down: they are

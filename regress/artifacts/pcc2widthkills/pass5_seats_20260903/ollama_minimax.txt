@@ -1,0 +1,79 @@
+VERDICT: Brief is sound; arithmetic checks out, pass-4 measurements consistent with analysis, enumeration is comprehensive with disclosed gaps. Two real defects: (1) the diff shown is cumulative (+41 rows from 60→101), but the brief's "this diff adds five rows" refers only to the pass-5 delta (96→101) — presentation issue; (2) PSCALEADJ and IPL GROW cells marked C in the table, but both blocks now have per-arm channels (`acc pscale ign`, `acc ipl ro` respectively) — those cells should be A/C. No undisclosed gap I can name.
+
+---
+
+## Question 1 — verify the enumeration
+
+### Domain (READ from packet)
+
+- **12 blocks, offsets verified**: GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, TxCTL/T2CTL 0x16 (+T1CTL 0x17 label), TxICR/T2ICR 0x1a (+T1ICR 0x1b label), SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f. Six EVEN + six odd-only + two odd T1 labels = 14 labels, 12 blocks. ✓
+- **8 table shapes + RDDECL** (READ).
+- **Helper lines**: TEST `!(d->warned & (1u << bit))`, SET `d->warned |= (1u << bit)` (READ from inline).
+- **Widths {1, 2, 4, 8}** (READ).
+
+### Helper — token by token (REASONED)
+
+- **TEST `&` → `==`**: disclosed not-distinguishable; under `==`, `d->warned == (1<<bit)` is false from block 2 on, so every block announces once. Total 12, same as correct (D).
+- **TEST `&` → `|`**: OR is always truthy when bit is set; first call sees 0, then every subsequent call sees bit 0 set → never announces. `latch all`=0, RED.
+- **TEST `!` removed**: always sets, always announces. `latch same`=2, RED.
+- **SET `|=` → `=`**: measured M_LATCH_ASSIGN, `latch aba`=3, RED (READ/REASONED).
+- **SET `(1u<<bit)` → `1`**: measured M_LATCH_BIT0, TEST still checks the correct bit, SET latches bit 0; `latch same2`=2, RED (READ/REASONED).
+- **SET `|=` → `&=`**: clears the field on every call; `latch aba` (A, B, A) gets 3 announces, RED.
+- **SET `|=` → `^=`**: toggle is bit-equivalent to OR for the test (bit X never re-set after first clear-then-set pair flips it back), disclosed.
+- **Bit translation `(1u<<bit)` → `(1u<<bit+1)`**: M_BITSHIFT, equivalent by construction (no external readers of d->warned bits), disclosed as the clause-(f) control (READ).
+
+### Cell spot-checks (mix READ/REASONED)
+
+- **GENCTL FALL=M**: M_NOBREAK in part 1; `rb genctl` reads VECBASE's lane (0xBB under M_DELETE), RED. (READ)
+- **VECBASE FALL=M**: pass-3 fable5 82/82; `rb vecbase own` expects 0x50, gets 0xb0 (0xaab8 & 0xf0). (READ/REASONED — arithmetic on `idata & 0xf0` of big-endian 0xaab8 yields 0xb0 ✓)
+- **SCCERR FALL=E**: warrant relies on "the arm stores 0 and nothing in the model ever stores a nonzero SCCERR" — SCCERR arm code is NOT in the inlined diff, only asserted (READ). Settle: grep the source for `pcctwo_reg[PCCTWO_SCCERR] =` writers — not checkable from the packet.
+- **PSCALEADJ GROW=C** (table): the new `acc pscale ign` row counts `PSCALEADJ ignored`; under GROW the guard declines first, body never runs, count=0, RED. Per-arm channel exists. Should be A/C. **Defect.**
+- **IPL GROW=C** (table): same problem with `acc ipl ro`. Should be A/C. **Defect.**
+
+### Defects named above are the only enumeration issues I see. The 96 → 101 deltas I can identify in the table cells:
+
+- `latch all d` (width 8) — catches M_LEN8_VECBASE.
+- `latch aba` — catches M_LATCH_ASSIGN.
+- `latch same2` — catches M_LATCH_BIT0.
+- `acc all` (+ lv) — catches M_GROW at all 12 blocks.
+- `acc pscale ign`, `acc ipl ro` — body-proof per-arm.
+
+Six rows. The brief says "+5"; this is a presentation issue.
+
+## Question 2 — smallest edit that breaks and passes 101 rows
+
+**Nothing undisclosed I can name.** Disclosed gaps (READ):
+
+- `fatal` → `debug` — text rows under -V miss it; affects log severity (D).
+- Name parameter change at VECBASE/PSCALEADJ/SCCICR/SCCRX/SCSIICR — no per-arm `* dcl` row pins those names (D).
+- `&` → `==` in helper test — `latch all` can't distinguish (D).
+- Bit translation in helper — equivalent by construction (D).
+- `pcc2c040kill`, `pcc2defaultkill`, `pcc2counter8`, lane semantics on real hardware — explicitly out of contract (D).
+
+The smallest undisclosed gap I'm asked to name does not exist in the table I've verified. The contract is honest about what slips through.
+
+## Question 3 — option-set completeness
+
+N/A — no disposition is offered; agree.
+
+## Question 4 — is the record honest?
+
+Mostly yes, with the two defects above and the following honest corrections the brief itself notes (READ):
+
+- "five even + seven odd" → six + six (IPL folded in).
+- "twelve exit(1) blocks" → ten kills + two latches.
+- "product diff is comments only" → comments + pass-2 typedef.
+- "96/96 part 3" for M_GROW_PSCALEADJ → 95/96 part 3, 96/96 part 3b.
+- The `acc all` vacuous-`put b` failure (caught by measurement, not at writing time).
+- The PRETABLE_amendments.out split for mtime discriminator.
+
+One thing not flagged by the brief but visible: the diff shown is the cumulative 60→101 (+41) not the +5 pass-5 delta. A reader running `git diff` on the listed index will see the +41. This is the source of the "+5 vs +41" mismatch.
+
+## Things I cannot settle from the packet
+
+1. The exact SCCERR arm body — relied on for FALL=E. (Single grep of source for writers of `pcctwo_reg[PCCTWO_SCCERR]` would settle.)
+2. The actual M_LATCHASSIGN and M_BITSHIFT measurements on the 96-row frozen clone — relied on for the "clause-(f) control" framing.
+3. The exact `memory_rw` dispatch with DM_DEFAULT — relied on for the `put b` doesn't-reach claim.
+4. The exact body of `pcc2_width_decline` — relied on for helper analysis (the inlined snippet shows two lines, sufficient for my analysis, but I have not grep-confirmed no other path mutates `d->warned`).
+
+These are not checkable from the packet.

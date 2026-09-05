@@ -1,0 +1,236 @@
+kimi version 0.36.0
+• Let me read the file.The file is large. I need to read the original file in chunks. Let me read the actual file directly with pagination.Let me read the last line (1373) if any remains.
+
+  Line 1372-1373: "If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth..." Let me check line 1373.Now I need to review this adversarially as its Questions/Review-asks section directs. The questions are:
+
+  1. VERIFY THE ENUMERATION (12 blocks x 9 shapes, T1 labels, helper TEST/SET lines, widths {1,2,4,8}, FAULT member at all twelve, guard reading fix's own state at all twelve, each arm's second predicate). Check guard inputs / plausible one-token shapes not covered. Check S cells, E/UNREACHABLE warrants, C/W/A cells.
+  2. THE SMALLEST EDIT THAT BREAKS THIS AND STILL PASSES 118 ROWS.
+  3. OPTION-SET COMPLETENESS: N/A.
+  4. IS THE RECORD HONEST? The contract, PRETABLE amendments and diff inlined. Name sentences a measurement refutes, counts without deriver, claims of coverage no row carries. Also: is the PRETABLE split honest?
+
+  I can read files — the brief says "If you cannot read files that is expected" but I can read files in the actual tree. The tree under review is GXEMUL-SEC/src/ and GXEMUL-SEC/regress/, uncommitted on top of b78bb0f. I should verify key premises from the actual source: dev_pcc2.c, the probe, memory_rw dispatch, m88k alignment check, etc.
+
+  Let me do adversarial verification. Key claims to check:
+
+  A. The guard domain: guard inputs = (len, writeflag, relative_addr -> block, idata, d->warned). The question asks: what OTHER state does the device hold at a decision point that no row observes in a non-initial value? d->pcctwo_reg[], pending_timer*, cur_int_vec[].
+
+  B. Enumeration claims in the table. For example:
+  - `latch all` — twelve wide writes via `put h`, twelve announces. Wait: `latch all` uses `put h` for all 12 blocks including the even guest-reachable ones. That's operator path for all twelve. But wait — does `put h` at an even address reach the arm? Yes, `put h` goes through store_16bit_word and does reach. OK.
+  - However, `latch all` writes at IPL with put h. IPL's write body... the width guard declines. OK, 12 announces.
+  - `latch all fail` counts "failed ]" at zero over the same session — pins the FAULT member (break->return 0) at all twelve. But does the "failed ]" line also fire for a guard returning 0 at a guest-reachable block under `put h`? memory_rw returns 0 when the device access function returns 0... For `put h` via store_16bit_word, a return of 0 from the device would cause memory_rw to print "failed ]"? Presumably. But also — would `latch all fail` catch a FAULT mutant at an odd block? M_RET0_VECBASE measured 116/118 with `latch all fail` and `rb2 vecbase` red. Wait, the table says M_RET0_VECBASE 116/118 with reds `latch all fail,rb2 vecbase`. Hmm, why would `rb2 vecbase` red under M_RET0_VECBASE? rb2 vecbase does: set byte 0x50, put h twice, read back. Under return 0 at guard, the put h fails — the write is not stored, so readback still 0x50... but the row expects 0x50 — that should stay green. Unless... under return 0, the second `put h` at VECBASE... hmm. Wait, actually why would rb2 vecbase go red under M_RET0_VECBASE? Let me think. rb2 vecbase: set VECBASE=0x50 via guest st.b (byte write, guard passes since len==1, body stores 0x50 & 0xf0 = 0x50). Then two put h 0xaab8. Under M_RET0, each put h: guard announces (first time) and returns 0 — memory_rw fails. Read back 0x50. Expected 0x50 → green. So why red?
+
+  Hmm, maybe because "failed ]" ... no wait, rb2 vecbase row is `printed(t, "r4")`. Under return 0... Actually maybe the debugger's put h when the store fails — does the emulator abort the session? Possibly `put` failing... store_16bit_word might... Hmm. Or the row could go "died" if the emulator exits. Actually, maybe under return 0, memory_rw's failure path causes... For the debugger put path, memory_rw returns 0 → store_16bit_word → ... maybe fatal? That could kill the session → "died" → red. But the contract says "a failed debugger put does not threaten the host". Hmm, but rb2 vecbase uses a guest program: ST_B, then put h x2, then program at CODE+0x100 (LD_BU) + print. If put fails but host survives, r4 = 0x50 → green.
+
+  Actually wait — the measured result: M_RET0_VECBASE 116/118, reds `latch all fail` and `rb2 vecbase`. 118-116 = 2 reds. So rb2 vecbase did red. Maybe because the row expects... hmm, wait rb2 rows for odd blocks use `setup(r5=pre) + program([ST_B(5, off)])` — with setup(r5=pre), the ST_B stores 0x50. Then put h twice. Then LD_BU. Expect "0x50".
+
+  Under M_RET0_VECBASE, why would this red? Possibly: the `put h` when it fails, the debugger might print an error and... the memory_rw failure line "failed ]" — no, that's latch all fail's channel. Hmm, could it be that under return 0, the emulator's debugger `put` command errors out and terminates the session? Actually in gxemul, when memory_rw returns 0 during debugger access... Let me check the actual code. I can read the source tree GXEMUL-SEC.
+
+  Actually, I have file access. The brief invites re-deriving premises from source. I should verify against GXEMUL-SEC/src/devices/dev_pcc2.c, src/cpus/cpu_m88k.c (alignment check), src/memory_rw.c (dispatch), debugger put path, and regress/pcc2_width_probe.py.
+
+  This is a big adversarial review. Given the size, I could do it myself with targeted greps. Let me be systematic and check the highest-value claims:
+
+  1. dev_pcc2.c actual current state — the guards, the helper, the typedef, relative_addr %= PCC2_SIZE, the memcpy for reads, SCCRXIACK no guard, etc.
+  2. memory_rw.c dispatch: `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))`.
+  3. m88k alignment check before memory_rw.
+  4. The probe file: does the diff's claims about rows match? The diff is inlined in full, but I can check the actual probe file.
+  5. gate_arm.sh row list vs probe row names — count mismatch? The gate diff lists rows; the probe must emit exactly 118 rows and the gate list must cover... The gate checks each named row appears once with ok. If the probe emits a row not in the gate list, the gate's "rows emitted 118 / rows green 118" would still catch counts but not per-row. Let me count rows in the probe vs the gate list.
+
+  Let me count rows in the diff/probe. Actually easier: read the actual probe file in GXEMUL-SEC/regress/ and count row( calls, and compare names with the gate list.
+
+  Also check the enumeration claims:
+  - Table row for TxICR FALL is S (not M) — measured? Part 3 measured M_FALL_TXCTL (rb t2ctl, rb t1ctl). TxICR fall S via rb t2icr.
+  - SCCERR FALL E: arm stores 0 always. Wait — SCCERR's write body is `= 0`? The brief says "SCCERR's write body is `= 0' and nothing in the model stores a nonzero SCCERR". A fall-through would store idata... no wait — the arm stores 0 regardless of idata? Let me check the source. If SCCERR body does `d->pcctwo_reg[PCCTWO_SCCERR] = 0;` then fall-through stores 0 = same as decline (decline leaves it unchanged — but it was already 0 since nothing stores nonzero). So E is justified... but careful: decline leaves register UNCHANGED; if the register could hold a nonzero from elsewhere... they claim nothing stores nonzero. But wait — the counter memcpy (TxCMP/TxCOUNT arms) copies an 8-byte span; does that span cover SCCERR? The claim says "the counter memcpy's 8-byte span is pcc2counter8, disclosed". Counter regs at 0x10-0x13 (T1COUNT 0x10?) Actually PCCTWO_T1CMP 0x0c? Let me check the offsets. SCCERR at 0x1c. The counter memcpy `memcpy(d->pcctwo_reg + relative_addr, data, len)` at TxCMP/TxCOUNT offsets with relative_addr+len <= PCC2_SIZE. If a counter write at 0x18 with len 8 would write 0x18-0x1f, covering SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f! Then SCCERR could become nonzero! The claim "nothing in the model ever stores a nonzero SCCERR" — the counter memcpy CAN store arbitrary guest bytes into pcctwo_reg[0x1c] if relative_addr=0x18, len=8. relative_addr %= 0x40 keeps... 0x18 is T2CMP? Offsets: T1CMP 0x0c, T2CMP 0x10? or similar. Let me check the actual register map. If T2CMP = 0x18, then an 8-byte write at 0x18 covers 0x18..0x1f including SCCERR. The end-span guard allows it (0x18+8=0x20 <= 0x40). So a guest CAN write nonzero to SCCERR's byte via the counter memcpy. That would break the "E" warrant for SCCERR... but is it reachable? The counter arms accept wide writes (memcpy with len). So yes, guest can store nonzero at 0x1c via st.d at 0x18 (0x18 is 8-aligned? yes). Then SCCERR holds nonzero. Then a declined vs landed wide write to SCCERR differ: decline leaves the nonzero, fall-through stores 0... wait the SCCERR body — does it store 0 unconditionally? If so, fall-through stores 0 (erasing the nonzero), decline preserves nonzero. Different outcomes! So the E warrant ("value-identical") fails in a state the rows never create but the model permits. Hmm — but the disclosed "pcc2counter8" mentions the counter memcpy's 8-byte span. They disclose the counter8 issue as separate class. The E warrant says "nothing in the model ever stores a nonzero SCCERR (deriver: grep)" — that's falsifiable; the counter memcpy does store into pcctwo_reg[relative_addr..+len], which can reach SCCERR's index. Unless the counter register offsets are below 0x1c minus 8. Need to check actual offsets: typical MVME187 PCC2 map: 0x00 CHIPID, 0x04 CHIPREV?, ... Actually let me just read the source.
+
+  Also potential issues to check:
+
+  - The `latch all w` row: put w at odd addresses — does put w at odd address reach? put w warns misaligned, stores anyway (measured for put h). Presumably same path store_32bit_word. OK.
+
+  - `latch all d`: put d at all twelve including... put d at 0x02 etc. Fine.
+
+  - Width claim: "guest drives 1, 2 and 4" — m88k ld/st.d? m88k has ld.d/st.d (double). Actually the guest could drive 8-byte accesses via ld.d/st.d on m88k! The claim "the guest drives 1, 2 and 4" — m88k does have double load/store (ld.d). But alignment check requires 8-aligned for ld.d. Guest st.d at 0x02 would alignment-fault; at 0x00 (CHIPID, no guard)... blocks at 8-aligned offsets: 0x00 (CHIPID — not a member), 0x08?, 0x10?, 0x18 (counter arms), 0x20?, 0x28, 0x30, 0x38... The twelve guarded blocks: which are 8-aligned? 0x16? no. Looking at offsets: GENCTL 0x02, VECBASE 0x03, PSCALEADJ 0x15, TxCTL 0x16, TxICR 0x1a, SCCERR 0x1c, SCCICR 0x1d, SCCTX 0x1e, SCCRX 0x1f, SCSIICR 0x2f, IPL 0x3e, MASK 0x3f. 8-aligned: none except... 0x1c is 4-aligned not 8; 0x3e no. None of the twelve is 8-aligned! 0x1c % 8 = 4. So guest st.d to any of the twelve alignment-faults. So guest width 8 unreachable at the twelve — the claim "guest drives 1, 2, 4" holds for the guarded blocks. But wait — word (4-byte) guest access at odd offsets alignment-faults too; the odd blocks are operator-only, consistent. OK.
+
+  - The domain question: guard inputs. The guard is `if (len != 1 && writeflag == MEM_WRITE)`. Inputs: len, writeflag, plus the block identity (relative_addr -> case label), idata (consumed by bodies), d->warned (helper). Question 1 asks about other state: pcctwo_reg[], pending_timer*, cur_int_vec[] as guard operands. Could a one-token edit make the guard depend on pcctwo_reg? e.g. `len != 1` -> `d->pcctwo_reg[relative_addr] != 1`? That's not one-token. The enumeration is about plausible one-token shapes. 
+
+  - Helper TEST line: `!(d->warned & (1u << bit))`. One-token edits: `&` -> `==` (measured, caught by latch aba). `!` removal: `if (d->warned & (1u << bit))` — announces only when ALREADY set: first write announces nothing, sets nothing... wait: if bit clear, condition false → skip body → no announce, no set. So NEVER announces. latch all → 0. Caught. `1u << bit` -> `1` in TEST line: TEST reads bit 0 only; SET sets bit 0 only... hmm that's covered by latch same2? If TEST reads bit 0 and SET writes bit 0: all blocks share bit 0 → latch all = 1? Wait: GENCTL announces (bit0 clear→ announce, set bit0), then all others see bit0 set → silent. latch all → 1 ≠ 12. Caught. And `latch same2` (MASK twice → 1): under bit0-always, MASK first write announces, second silent → 1 = green. But latch all catches. OK.
+
+  - SET line `|=` -> `&=`: `d->warned &= (1u << bit)` — clears all other bits, sets... `warned & (1<<bit)` — under TEST, bit is clear, so result = 0 → bit never set → every write announces: latch same → 2 ≠ 1. Caught. `|=` -> `^=`: equivalent (bit clear). Covered as E. `|=` -> `+=`: bit clear so += sets it; but wait `warned += (1u << bit)` when bit clear == |=. E, fine. `|=` -> `-=`: bit clear, `warned - (1<<bit)` borrows — underflows into other bits! E claim says only ^= and += are E. -= would corrupt. Is -= caught? latch same: GENCTL first write: announce, warned = 0 - 1 = 0xffffffff. Second write: TEST: warned & 1 = 1 → silent → latch same = 1 green. latch all: block 0: warned=0xfffffff.. wait after GENCTL, warned = 0 - 1 = 0xffffffff. VECBASE: TEST bit1: 0xffffffff & 2 ≠ 0 → silent! latch all = 1 ≠ 12. Caught. OK.
+
+  - `(1u << bit)` -> `(1u << bit - 1)`? translation, E by construction (bit identity). Claimed.
+
+  - What about `bit` shadowing or the enum: ALIAS — one enum member for two blocks: cardinality row catches. C.
+
+  - The "second predicate" claim: each arm's `if (writeflag == MEM_WRITE)` now load-bearing for wide reads. hrd * rb rows at four storing even blocks + hrd ipl noro. But SCCERR E. Odd blocks' read side unreachable. What about the EVEN block... the even storing blocks are GENCTL, TxCTL, TxICR, SCCTX = 4. SCCERR stores 0 — E. IPL prints — noro. That's 6 even blocks covered. OK.
+
+    But wait — what about the second predicate's OTHER edits, e.g. `writeflag == MEM_WRITE` -> `writeflag != MEM_WRITE` in the body guard? That inverts: writes don't land, reads store idata... at GENCTL: acc genctl (byte write reads back) would red since byte write no longer stores. Caught. At SCCERR, still E. OK.
+
+  - Now the FAULT member: `break -> return 0`. Covered by `latch all fail` (count "failed ]" == 0 over twelve put h). But what does memory_rw do when the device returns 0? Does it print "failed ]"? Need to check memory_rw.c. And for guest stores at even blocks, return 0 → guest fault (data access exception). M_RET0_GENCTL measured: hwr genctl lv died, hwr genctl exit0. Hmm — hwr genctl lv "died" — the guest program faulted, so print r4 never happens → "died"? printed() returns "died" if not alive... The row: `printed(t, "r4") if alive else "died"`. alive means host alive. If host survives (exit0) but the guest program faults and halts... how does "lv" die? The guest store faults → m88k exception → emulator prints exception → continues? In gxemul, an unhandled data fault in the guest... the CPU aborts the instruction stream? With no OS, the exception vector at 0xfff00000-ish... the emulator would try to run the exception handler — probably garbage → could hang → timeout → "how" = timeout → alive false? Possibly. Measured, anyway.
+
+    What about `return 1` -> ... no. What about `break -> return -1`? DEVICE_ACCESS return type int; -1? memory_rw treats non-zero as success probably. Equivalent to break? Hmm, return 1 = "access succeeded". Actually DEVICE_ACCESS blocks end with `return 1` at the end of the function typically. A guard's break falls to the switch end then returns 1. So break == return 1. Fine.
+
+    FAULT member at the SIX operator-only blocks measured 101/101 at VECBASE (M_RET0_VECBASE) — closed by latch all fail + rb2 vecbase... wait part 5: M_RET0_VECBASE 116/118, reds latch all fail + rb2 vecbase. Why rb2 vecbase? Hmm! Interesting. Under return 0 at VECBASE's guard: rb2 vecbase session: st.b 0x50, put h 0xaab8 twice (both fail — return 0), then LD_BU reads 0x50. Expect "0x50" → should be GREEN. But measured RED. So my model is wrong somewhere. Possibilities: when `put h` fails (memory_rw returns 0), the debugger's put command... prints error and maybe the emulator exits? Or store_16bit_word failure → the debugger prints something and the row's later program... Actually maybe: put failing causes the emulator to print "[ writing to device 'pcc2' ... failed ]" and then... hmm that wouldn't red rb2 vecbase whose expected count is printed r4.
+
+    OR: under M_RET0_VECBASE, the first put h: guard announces, returns 0. But wait — maybe rb2 vecbase's expectation isn't just the readback. Let me re-read: `row("rb2 " + nm, printed(t, "r4") if alive else "died", want, ...)`. If the session's host DIED, alive=false → "died" ≠ "0x50" → red. Does a failed put kill the host? The contract says "a failed debugger put does not threaten the host" — for M_RET0 the latch all fail session survived (measured, 12 puts). Hmm, but that session is pure puts. rb2 vecbase session has guest programs interleaved. After failed puts, program at CODE+0x100: LD_BU(4, VECBASE) — a guest byte load from VECBASE — fine, reads 0x50.
+
+    Hmm wait, maybe the issue: under return 0, the debugger's `put h` via store_16bit_word → memory_rw fails → the debugger prints an error message... and possibly the SECOND program's `put w` commands to write the program ALSO fail? No — CODE+0x100 is RAM, not pcc2.
+
+    Actually, maybe the red is because the count... no, rb2 vecbase checks printed r4 only.
+
+    Alternatively the measured red of rb2 vecbase under M_RET0_VECBASE could be a HARMLESS artifact — but the brief presents it as expected? The contract says the FAULT member at operator blocks is pinned by `latch all fail`. It doesn't explain rb2 vecbase reddening. Hmm, actually wait — maybe under M_RET0_VECBASE the announce still happens (return 0 after announce), so... rb2 vecbase: two puts, announce once. readback 0x50 → green expected. The measured red is unexplained by the contract. Possibly the host exits? "a failed debugger put does not threaten the host" — claim. But measured rb2 vecbase red — if host died, that claim is false! Actually hold on — maybe when put fails, the debugger... in gxemul's debugger, `debugger_cmd_put` → if store fails, it prints "Write failed" or similar, no exit. Hmm.
+
+    Actually! Maybe it's this: under `return 0`, the first `put h` fails — but rb2 vecbase's row ALSO depends on... no. Or "died": session() returns alive based on exit status; if the emulator exits with... Actually maybe the emulator's memory_rw failure during debugger access triggers an exit? Let me check the source. This is checkable: GXEMUL-SEC/src/memory_rw.c and the debugger put command.
+
+    Actually, wait — maybe I misread. Part 5: M_RET0_VECBASE 116/118 `latch all fail,rb2 vecbase`. Hmm, and the prediction in Section 9: "M_RET0_VECBASE -> `latch all fail' 1 (and `op vecbase dcl' stays 1, `latch all' stays 12)". The measured result also reddened rb2 vecbase — which was NOT predicted. The Section 10/brief table reports it without explaining. Is that a record-honesty issue? It's reported honestly in the table (the reds are listed). But WHY it reddens is unexplained. Under return 0, rb2 vecbase's first put h: announce + return 0. Hmm — could the "failed" write cause the debugger's put to... print r4 gives 0x50 — green. Unless printed() fails because the transcript contains... no.
+
+    Hold on, maybe I should reconsider: maybe `put h` on failure causes the emulator's debugger to abort the whole session? If so, latch all fail session (12 failed puts) would die too — and `latch all` count would be... latch all expects 12 DECL — under mutant, announces happen before return, so 12 regardless. latch all lv expects exit0 — if host died, latch all lv would red too. Measured reds were only latch all fail + rb2 vecbase. So host survived latch all. So in rb2 vecbase, the host also survived the failed puts (same mechanism). So r4 should read 0x50 → green. Contradiction with measurement. UNLESS: the readback LD_BU(4, VECBASE)... reads the byte — under mutant nothing stored, 0x50. Green. Hmm.
+
+    Wait — maybe the SECOND program at CODE+0x100: `program([LD_BU(4, off)], at=CODE + 0x100)` — program() does `pc=0x10100; step 1`. But before that, the FIRST program already ran `step 1` (one ST_B). Actually program([ST_B(5, off)]) → pc=CODE, step 1. Fine.
+
+    Hmm, actually maybe under the mutant the put h failure message goes to the pty and the session() transcript t contains "failed" — but rb2 vecbase doesn't count that.
+
+    I genuinely can't derive why rb2 vecbase reddens under M_RET0_VECBASE from the packet. That's a question to name. OR maybe I can: `return 0` at the guard — the guard runs BEFORE... wait, actually in the fixed code the guard is `if (len != 1 && writeflag == MEM_WRITE) { pcc2_width_decline(...); break; }`. break → return 0? No — M_RET0 changes `break` to `return 0`. memory_rw gets 0 → prints "failed ]". Fine.
+
+    Hmm, could rb2 vecbase's guest LD_BU at VECBASE... on the READ side, is there anything that could return 0? The read memcpy serves it, returns 1.
+
+    OK here's another thought: the put h fails → debugger prints an error → the row's transcript... `printed(t, "r4")` greps r4=... fine.
+
+    Maybe the explanation: store_16bit_word failure makes the debugger's `put` command print and ALSO the failed memory_rw triggers a `debug` line AND — no.
+
+    Honestly, this anomaly (rb2 vecbase reddening under M_RET0_VECBASE, unpredicted, unexplained) is worth flagging as a question — the record lists it but no mechanism is given, and if the mechanism is "the host died", then the claim "a failed debugger put does not threaten the host" is false. Let me check the actual source to try to resolve it. In gxemul, `store_16bit_word` → memory_rw fails → returns... then debugger_cmd_put checks the return? Actually in gxemul's debugger_commands.c, cmd_put: `if (!memory_rw(...))` prints something? There's `debugger_put` maybe. Hmm. Actually there's a subtlety: put h at an ODD address — the debugger warns "WARNING: not aligned" and stores anyway. store_16bit_word does two byte stores? or one 16-bit memory_rw? If store_16bit_word calls memory_rw with len 2 → device returns 0 → memory_rw prints "[ writing to device 'pcc2' addr 0x... failed ]" (under -v?) and returns 0 → store_16bit_word... may call exit? I recall gxemul's debugger put failing prints "put failed". Not exit.
+
+    Alternatively — the rb2 session for odd blocks includes `setup(r5=pre) + program([ST_B(5, off)])` — a GUEST byte store to VECBASE (odd). Byte stores skip alignment check. Guard len==1 → passes → body stores 0x50 & 0xf0. Fine under both.
+
+    I'll flag it as an unexplained measured red — needs the log. Actually the brief says "M_RET0_VECBASE 116/118 latch all fail,rb2 vecbase" — maybe the author would explain: under return 0, the SECOND put h also announces? No — latch was set by first announce, second silent. Hmm, unless return 0 skips the SET? No, pcc2_width_decline runs fully before return 0.
+
+    Hmm wait, actually — maybe I have the mutant wrong: `break` -> `return 0` AT THE GUARD means: `if (len != 1 && writeflag == MEM_WRITE) { pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len); return 0; }`. Yes.
+
+    So rb2 vecbase red is genuinely anomalous. Let me actually check the source tree to see if maybe the probe row rb2 also counts DECL... No — the inlined diff shows the full new probe sections; rb2 row is readback only. Unless there are companion rows like "rb2 ... dcl" — no, the gate list has rb2 * rows only (9), no dcl companions.
+
+    Hmm OK wait, maybe: printed(t, "r4") — under the mutant, does "print r4" output collide with the failure text? printed() probably extracts `r4 = 0x...`. Fine.
+
+    Let me look at the actual probe to see session()'s alive determination and printed(). I'll read GXEMUL-SEC/regress/pcc2_width_probe.py.
+
+  Actually — the tree under review is GXEMUL-SEC, uncommitted on top of b78bb0f. Let me verify the actual files exist and match.
+
+  Also gate check: the gate's row list must include every row the probe emits; if probe emits 118 and gate checks each named row ok==1 plus totals 118/118/0, a missing name in the list would still be caught by totals? If a row fails, totals catch it (red != 0). The per-row list is for granularity. But if the probe emits a row NOT in the gate list and it goes red, "rows red 0" catches it. OK.
+
+  Count check: gate list — let me count the names in the new for-loop and compare with the probe's emitted row names. I'll do this against the actual files.
+
+  Also the claim "Detector 101 -> 118": 60 -> 96 (pass 3: +36), 96 -> 101 (pass 4: +5: latch aba, latch same2, latch all d, acc pscale ign, acc ipl ro = 5), 101 -> 118 (pass 5: +17: rb2 x9, pscale noig2, ipl noig2, hrd genctl rb, hrd t2ctl rb, hrd t2icr rb, hrd scctx rb, hrd ipl noro, latch all fail = 9+2+5+1 = 17). 101+17=118. ✓.
+
+  Wait, but part 5 predictions in Section 9 said "BASE 102/102" — predicting 101+1 (latch all fail) = 102. Then Section 10 added 16 more rows (rb2 x9 + pscale noig2 + ipl noig2 + hrd*rb x4 + hrd ipl noro = 16) → 102+16 = 118. ✓ consistent.
+
+  Part 5 measured: BASE 118/118, M_RET0_VECBASE 116/118 (2 reds), M_TEST_EQ 117/118 (latch aba), M_QUAL_GENCTL 117/118 (rb2 genctl), M_QUAL_ALL 107/118 (11 reds: 9 rb2 + pscale noig2 + ipl noig2), M_NOWRITECHK_GENCTL 117/118 (hrd genctl rb). 118-107=11 ✓.
+
+  M_QUAL_ALL reds listed: rb2 genctl, rb2 t2ctl, rb2 t2icr, rb2 scctx, rb2 vecbase, rb2 sccicr, rb2 sccrx, rb2 scsiicr, rb2 mask, pscale noig2, ipl noig2 = 11 ✓. SCCERR is E (value-identical) — no rb2 sccerr row exists. IPL covered by ipl noig2. PSCALEADJ by pscale noig2. That's 9 readbacks + 2 prints = 11 channels; SCCERR E. 12 blocks ✓.
+
+  Now adversarial points to check against source:
+
+  1. Does the actual probe in the tree match the inlined diff? (The diff is from bed9732 to 695a0c0.)
+
+  2. The enumeration's S-cell claims: e.g., GENCTL DEL=M, LEN=S. LEN `len != 1 -> len > 2` at GENCTL: halfword lands. Measured at which arm? The table says GENCTL LEN is S — same channel as measured shape at that arm. Which measured shape lands the write at GENCTL? DEL (M, rb genctl). LEN at GENCTL lets st.h 0xaabb land → rb genctl reds same as DEL. OK. TxCTL LEN = M (measured). TxICR LEN = M? Table: TxICR DEL M, LEN M. Hmm.
+
+  3. KILL cells: GENCTL S, VECBASE M, PSCALEADJ S, TxCTL S, TxICR S, SCCERR S, SCCICR S, SCCTX S, SCCRX S, SCSIICR S, IPL M, MASK M. KILL = exit(1) reinstated → host dies → survival rows red. For odd operator blocks, KILL via put h: does the survival pair exist for each? `op <nm>` rows (exit0) — a kill at the block → host exits on put h → op <nm> reds. VECBASE: op vecbase. Measured M at VECBASE (operator_reach artifact: put h 0xfff42003 ended the host). OK. But IPL is guest-reachable even — hwr ipl / hrd ipl survival. KILL=M at IPL. MASK M. SCCICR/SCCRX/SCSIICR/PSCALEADJ: op <nm> survival pairs exist. S justified.
+
+  4. SWAP cells: `len` -> `idata > 0xff` — value-test guard. C = latch all's value 0x0003 fits a byte → lands silently → count drops. Also GENCTL SWAP=M (rb genctl lo measured? M_NOBREAK... hmm "rb genctl (table 1 M_NOBREAK)" is FALL channel). GENCTL SWAP M — measured. VECBASE SWAP = C. OK.
+
+     But wait — SWAP at an odd block with value 0x0003 via put h: guard `idata > 0xff` false → guard skipped → write lands. latch all expects 12 announces, gets 11 → red. ✓. But also: does the landed 0x0003 halfword at odd address... put h stores 16-bit at odd addr — memory_rw len 2 at offset 0x03 → relative_addr %= 0x40 = 0x03, idata composed big-endian = 0x0003, (uint8_t)idata = 0x03 → stores 0x03 at... VECBASE arm stores idata & 0xf0 = 0. Whatever — the count drops. ✓
+
+  5. GROW cells: `len != 1` -> `len != 0` — declines bytes too. Channel: acc rows / acc all. acc all = 12 guest st.b, zero declines. A guard grown at any arm → its st.b announces → acc all = 1 ≠ 0 ✓. A/C = arm's own acc row AND acc all. Blocks with C alone for GROW: VECBASE, SCCICR, SCCRX, SCSIICR, MASK — no per-arm acc row; acc all is channel. But acc all only counts DECL — a grown guard at VECBASE announces on st.b → count 1 ✓. OK.
+
+     But note: acc all stores byte 0x10 at all twelve. At IPL (read-only print arm): st.b 0x10 at IPL → body prints "write to read-only PCCTWO_IPL; ignored" once. Fine, not DECL. At PSCALEADJ prints "ignored". Fine.
+
+  6. RDDECL (the ninth shape): `writeflag == MEM_WRITE` -> `<= MEM_WRITE` at guard. Caught by hrd * nod rows at six even blocks + wrd sccerr nod = 7 rows. At odd blocks: read-side unreachable by construction — debugger reads don't dispatch to DM_DEFAULT devices. Is that true? memory_rw dispatch: `if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))`. Debugger reads use NO_EXCEPTIONS? The brief premise 4 says debugger READ does not reach the arm. And guest wide read at odd offset alignment-faults. OK — but what about guest BYTE reads at odd offsets with the RDDECL mutant? Byte reads: guard requires len != 1 — len==1 byte read → guard false → no decline. So RDDECL at odd block only affects wide reads, which are unreachable. ✓. And even-block narrow reads (len 1)? Guard false. So hrd nod rows at six even + wrd sccerr (SCCERR word read — SCCERR is 4-aligned, 0x1c) ✓.
+
+     Wait — but RDDECL at one even block vs all twelve: M_RDDECL_ALL measured 88/96 with 8 reds listed: hrd genctl nod, hrd t2ctl nod, hrd t2icr nod, hrd sccerr nod, hrd scctx nod, wrd sccerr nod, rb t1ctl, hrd ipl nod. Hmm, rb t1ctl red under M_RDDECL_ALL? rb t1ctl: st.b 0x03 at T1CTL, put h 0xaab8, read back. Under RDDECL_ALL (all twelve guards `<= MEM_WRITE`): the st.b byte... write, len 1 → guard false. put h: write, len 2 → writeflag==MEM_WRITE=1, `1 <= 1` true → declined, announced. Same as fix? Then readback LD_BU reads 0x03 → green. Why red? Hmm! Unless... the readback LD_BU at T1CTL (odd) — byte read fine. Hmm, why would rb t1ctl red under M_RDDECL_ALL?
+
+     OH WAIT. Maybe: `rb t1ctl` expects "0x3" (the debugger print format) — and this was the part-3 string artifact ("rb t1ctl" red on the fix by string mismatch, fixed in 3b). The part-3 M_RDDECL_ALL 88/96 listing includes `rb t1ctl` — that's the artifact row! Section 7 says "Kills, each on exactly the row Section 6 named (the artifact row subtracted)". And the brief's part-3 table lists M_RDDECL_ALL 88/96 with 8 reds including rb t1ctl — 96-88=8 ✓, and the artifact (rb t1ctl string) accounts for one, leaving 7 nod rows. Consistent.
+
+  7. Now question 2: smallest edit that breaks this and passes all 118. Candidates:
+     - The NAME string change at the five arms (disclosed as invisible).
+     - `len=%i` value (disclosed unpinned).
+     - fatal( -> debug( in helper (disclosed NOT CAUGHT).
+     - Bit translation (E, disclosed).
+     - Something NOT disclosed? E.g., reorder the announce text "declined." -> "declined!"? Rows count DECL — what is DECL string? Probably "declined." — need to check. If rows match on DECL = " declined." then punctuation edits are caught. Name string: disclosed.
+     - `1u` -> `1` in `(1u << bit)`: `1 << bit` — signed int shift; bit 11 max — fine, equivalent. Not disclosed but equivalent (bit ≤ 11 < 31). Would pass. It's a one-token edit that's equivalent-by-construction — arguably the contract's BIT IDENTITY covers translations but not signedness. `1 << bit` vs `1u << bit` identical for bit ≤ 30. So passes all 118 — a smallest edit. But it's equivalent, not a "break" of the property. Question 2 asks for an edit that BREAKS the property and passes rows — i.e., an escape. If none exists, the zero is valid. A NAME change breaks observability-of-name but disclosed. Severity change disclosed. Hmm.
+     - What about the guard's `break` -> `goto`-style? Not one-token.
+     - `!=` -> `<` in `len != 1`? `len < 1` — len is size_t/int, never < 1 for a real access (len ≥ 1 always). So guard never fires → wide writes land silently → that's DEL-equivalent... wait, `len < 1` means guard false always → all wide writes land → DEL shape at all twelve → rb rows red. Caught.
+     - `len != 1` -> `len != 2`? LEN2 mirror variant — declines halfwords (still), lands words AND... `len != 2` fires for len 1! Byte writes declined → acc all reds. Caught.
+     - `len != 1` -> `len > 1`? fires for 2,4,8 — same as != 1 for real lens (len never 0, and len could be... 3? memory_rw len is 1,2,4,8 only). Equivalent for the actual domain. Hmm — len 3? Not possible from m88k or debugger. E-ish. Not disclosed explicitly but "WIDTHS" says guard true on subset of {2,4,8} drops a count. `len > 1` is true on all of {2,4,8} = same behavior. Equivalent.
+     - `(1u << bit)` in TEST -> `(1u << bit) - 1`? = mask of lower bits: TEST `warned & ((1<<bit)-1)` — checks if ANY lower bit set. GENCTL bit 0: mask 0 → never announces → latch all = 11. Caught.
+     - Reordering blocks' enum values — ALIAS-like, cardinality catches collisions; a PERMUTATION with no collision passes (E, bit identity).
+     - Helper: `fatal(...)` message text "declined." → rows count DECL. If DECL is defined as "declined" substring... changing "declined." to "declined," keeps substring. Cosmetic.
+     - What about the SECOND predicate at the COUNTER arms (TxCMP/TxCOUNT memcpy)? Not part of the twelve; pcc2counter8 disclosed.
+     - The `relative_addr + len <= PCC2_SIZE` guard on counters — OB-11, different class.
+     - What about `idata & 0xf0` -> `idata & 0xf` at VECBASE (mask flip)? A guard-shape mutation? No — body edit, not guard. The detector's scope is the guards/latch. A body mask edit: acc rows read back through the arm's own mask... VECBASE body `idata & 0xf0` -> `idata & 0x0f`: rb2 vecbase sets 0x50 → stored 0x50 & 0xf0 = 0x50; under mask-flip stores 0x00 → rb2 vecbase reads 0 ≠ 0x50 → red. Caught incidentally. Not the question.
+
+     So for question 2, the honest answer: no undisclosed breaking edit found from the packet; the disclosed escapes (NAME at five arms, len=%i, severity, bit translation) stand. If I can find one not disclosed, that's the contribution. Let me think harder...
+
+     - `!(d->warned & (1u << bit))` -> `(d->warned & (1u << bit)) == 0`? Equivalent. 
+     - Helper TEST using bit before SET... fine.
+     - The QUAL mutant `&& !(d->warned & (1u << bit))` is now caught by rb2 rows (second write lands). What about `&& (d->warned & (1u << bit))`? First write NOT declined (guard false since bit clear), lands immediately → rb (single wide write) rows red. Caught.
+     - `||` instead of `&&`: `len != 1 || writeflag == MEM_WRITE` — fires for byte writes too (writeflag==MEM_WRITE) → acc all reds. Caught.
+     - `writeflag == MEM_WRITE` -> `writeflag >= MEM_READ`? Always true (0/1) → guard fires on wide READS too → RDDECL shape → hrd nod rows red. Caught.
+     - Helper's `fatal(...)` -> `fatal(...)` with different bit order... bit translation E.
+     - SET line `d->warned |= (1u << bit)` -> `d->warned = (d->warned | (1u << bit)) & ~(1u << bit)`? Not one-token.
+     - What about making the latch bit WIDTH wrong: PCC2_W_NBITS off-by-one? The typedef bound catches >32. If enum has 12 members 0..11, NBITS=12. Edits to enum order = permutation E.
+     - **A subtle one**: the `1u << bit` where bit is the enum... if two enum members were SWAPPED (ALIAS-adjacent): cardinality fine (12 distinct bits), bit identity E. Passes. Disclosed as E.
+     - **The `break` in the guard -> fall-through BUT with the body skipped via the second predicate**? e.g. guard `if (len != 1 && writeflag == MEM_WRITE) { decline; }` without break, and body `if (writeflag == MEM_WRITE)` — falls through and stores. That's FALL — measured/caught by rb rows.
+     - Hmm, what about the guard's decline call arguments: `pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len)` — swap `d` and... type error. `"PCCTWO_VECBASE"` name — disclosed gap at five arms. BUT at the other seven arms the name IS pinned: rb t2ctl dcl counts "write to PCCTWO_TxCTL " + DECL. Which arms have named dcl rows? rb genctl dcl, rb t2ctl dcl, rb t2icr dcl, rb scctx dcl, hwr sccerr dcl, hwr ipl dcl, op mask dcl — 7 named. The 5 without: VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR — disclosed. ✓ honest.
+
+     - What about the `(once)` in the message or the trailing `]\n`? DECL substring presumably " declined." — check probe DECL constant.
+
+     - **The guard at TxCTL/TxICR serves TWO labels**: a mutant splitting the block so T1 gets a different guard... covered by rb t1ctl/rb t1icr. What about the shared block's LEN2 W-cell: `latch all w` uses put w at 0x16 and 0x1a (T2 offsets) — one announce per BLOCK. A `len == 2` guard at only the T1 label of a split block? Splitting the block is not one token.
+
+  8. Honesty questions:
+     - "Detector 101 -> 118" ✓ arithmetic.
+     - M3 control 92/101: probe_M1 101/101, M2 101/101, M3 control (guard deleted at GENCTL) 92/101. Section 10 says negative control 92/101. ✓ consistent.
+     - "M_TEST_EQ 100/101" in table (pass-5 seats on 101-row) vs part 5 (118-row) M_TEST_EQ 117/118. Consistent — different instruments. The pass-5 seat table header says "pass-5 seats on the shipped 101-row instrument" listing opus M_QUAL 101/101 and fable M_RET0_VECBASE 101/101 — those were the BREACHES on 101. Then part 5 measures on 118. OK.
+     - numstat: pcc2_width_probe.py 407 additions 8 deletions; gate 3/3; dev_pcc2.c 31/12. The inlined diff for dev_pcc2.c: let me count: comment block changes + typedef (2 lines) + two comment expansions (2x ~3 lines). 31/12 plausible.
+     - **PRETABLE split honesty**: Q4 asks specifically: "PRETABLE.out was restored to Sections 0-4 and its amendments moved to a second file because appending had destroyed its mtime discriminator: is the split honest as written?" From the packet: amendments file holds Sections 5-7, pass4 file Section 8, pass5 file Sections 9-10. Section 7's header says "Part 3 MEASURED" and notes a pass-4 seat caught the mtime re-creation. The pass-4 file says "its own file so its mtime is its own order witness". Checkable against actual files: mtimes and git status. I can look at regress/artifacts/pcc2widthkills/ maybe. The files are under regress/... let me check the tree.
+
+  9. Bigger premise checks against source (GXEMUL-SEC):
+     - dev_pcc2.c: does the fix match the inlined code? Are there really 12 guards + helper? relative_addr %= PCC2_SIZE? The memcpy above the switch for reads?
+     - memory_rw.c dispatch condition and the "failed ]" message text.
+     - m88k alignment check before memory_rw.
+     - debugger put path: store_16bit_word etc. reach memory_rw; put b uses NO_EXCEPTIONS; debugger reads use NO_EXCEPTIONS.
+     - PCC2 offsets: IPL 0x3e, MASK 0x3f, etc.
+     - mvme_pcctworeg.h quote.
+     - DM_DEFAULT flag for pcc2.
+     - `fatal()` returns — in this fork fatal returns? GXEMUL-SEC fork may have modified fatal to return. Premise 6 says fatal() returns. Check src/misc.c or wherever.
+
+  Given the brief invites file reading and says "If you cannot read files that is expected", but I CAN read. I should verify key premises from the source. This is a lot; let me delegate heavy verification? The instructions say for substantial tasks, delegation saves context. But adversarial review needs my judgment on the whole packet. I could spawn explore agents to verify specific premises in GXEMUL-SEC/src. Let me do targeted verification myself with Grep/Read — focused checks:
+
+  A. dev_pcc2.c in GXEMUL-SEC: guards, helper, typedef, offsets, memcpy, SCCRXIACK, SCCERR body, GENCTL body, counter arms end-span.
+  B. memory_rw.c: dispatch condition, "failed" message, and whether a device returning 0 on debugger write threatens host (for the rb2 vecbase anomaly).
+  C. m88k alignment check.
+  D. debugger put/read paths (NO_EXCEPTIONS flags).
+  E. The probe file: row count = 118, DECL constant, gate list match.
+  F. fatal() returns.
+  G. PCC2_W_ enum / warned field 32-bit.
+  H. The counter memcpy span vs SCCERR (E warrant) — can a counter write reach offset 0x1c? Offsets: T1CMP/0x10? Need the actual PCCTWO_ defines. If T1COUNT = 0x14 and T2COUNT = 0x18, then a write at 0x18 len 8 covers 0x18-0x1f including SCCERR 0x1c! That would falsify "nothing in the model ever stores a nonzero SCCERR". The brief says "the counter memcpy's 8-byte span is pcc2counter8, disclosed" — acknowledging the span issue as a separate filing. But the E warrant's deriver is "every writer of pcctwo_reg[], grep -F" — the counter memcpy writes pcctwo_reg + relative_addr — it IS a writer. If its span can cover 0x1c, the warrant "nothing ever stores a nonzero SCCERR" is FALSE as stated (it can store nonzero via counter write). The disclosure of pcc2counter8 may cover this, but then SCCERR's E-cell warrant is wrong — the E depends on the state being 0, which a counter write can violate. However — does any ROW create that state? No row writes counters. So the cell is E only in the states rows visit. The warrant as stated ("nothing in the model ever stores a nonzero SCCERR") would be refuted by construction — a guest CAN. This is a real find if offsets line up. Let me check.
+
+  Actually wait — for the counter memcpy to write 0x1c, need relative_addr in (0x15..0x1c] with relative_addr+len covering 0x1c, and the case label must match: cases are PCCTWO_T1CMP, T2CMP, T1COUNT, T2COUNT. The memcpy triggers only for those case labels, i.e. relative_addr EXACTLY equal to one of those four offsets (switch on relative_addr). So the write starts exactly at a counter offset. If T2COUNT = 0x18, len 8 → covers 0x18-0x1f ⊃ SCCERR 0x1c. Also T1COUNT/T1CMP with len 8 could cover up to +8. Need actual offsets. Common MVME187 PCC2 map: 0x00 chip id, 0x04 ?, 0x08 ?, 0x0c T1CMP, 0x10 T1COUNT, 0x14 T2CMP, 0x18 T2COUNT, 0x1c SCCERR... If T2COUNT=0x18 then len-8 write at 0x18 → 0x18..0x1f. Guest st.d at 0xfff42018 (8-aligned ✓, alignment check passes for 8-byte). So yes plausible. This would make the SCCERR E-warrant false in a reachable-but-unrowed state. The brief does disclose pcc2counter8 ("the counter arm's raw memcpy of an 8-byte write") as DOES-NOT-CATCH. But the E warrant's deriver claims "nothing in the model ever stores a nonzero SCCERR" — the counter memcpy is precisely a model component that CAN. So the warrant sentence is false as written; the E cell survives only via the pcc2counter8 disclosure. That is exactly the kind of "premise stated as fact that isn't true" the brief asks to catch. Flag it.
+
+  Let me now verify with actual files. Plan:
+  1. Read GXEMUL-SEC/src/devices/dev_pcc2.c relevant sections (offsets enum, struct, helper, arms, counter case).
+  2. Check memory_rw.c dispatch + failed message.
+  3. Check m88k alignment.
+  4. Check debugger put b / read paths.
+  5. Probe: count rows, DECL const, session mechanics; compare gate list.
+  6. Check PRETABLE files exist with stated sections; mtimes.
+
+  Let me start. First locate files.
+
+• VERDICT LINE (preview): GO-WITH-CHANGES — details after verification.
+
+  I'll verify the brief's premises against the actual tree (`GXEMUL-SEC/src/`, `GXEMUL-SEC/regress/`) rather than ratify them.GXEMUL-SEC/regress/gate_arm.sh
+GXEMUL-SEC/regress/pcc2_width_probe.py
+GXEMUL-SEC/src/devices/dev_pcc2.c
+b78bb0f #500 pass 15 + pcc2widthkills: the closure that opened six registers is closed, and twelve width kills become a direction split
+ M regress/gate_arm.sh
+ M regress/pcc2_width_probe.py
+ M src/devices/dev_pcc2.c
+
+
+error: failed to run prompt: provider.auth_error: 403 You've reached your weekly (7-day) usage limit. Your quota will reset when the current 7-day window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota
+See log: C:/Users/User00/.kimi-code/logs/kimi-code.log

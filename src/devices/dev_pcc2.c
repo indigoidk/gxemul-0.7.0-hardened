@@ -64,8 +64,9 @@
 
 // #define	debug fatal
 
-/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) ended the host
-    on a guest-chosen access width -- an ordinary aligned halfword load of a documented
+/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) -- TEN of them
+    `fatal(); exit(1)' kills that ended the host on a guest-chosen access width, and
+    two (IPL, MASK) #119 warn-once latches that declined it process-globally -- an ordinary aligned halfword load of a documented
     register.  Same class as #337 (dev_wdc.c) and #497 (dev_sgi_re.c).
 
     THE TREE ALREADY KNEW THE WIDTH IS LEGAL: mvme_pcctworeg.h says the PCCchip2
@@ -76,26 +77,36 @@
       READS   are served BEFORE the switch by memcpy(data, pcctwo_reg + addr, len),
               raw bytes in address order -- width-correct by construction.  The old
               guard discarded a correct answer.  Now: ACCEPT (fall through).
-      WRITES  every arm uses `idata', the composed value, which is "the addressed
+      WRITES  ten of the twelve arms use `idata', the composed value (SCCERR stores a
+              constant and IPL ignores it; both decline too -- a wide write's other
+              lanes have no home), and `idata' is "the addressed
               byte" ONLY at len == 1: memory_readmax64 composes big-endian, so
               (uint8_t) idata is the HIGHEST-address lane.  Deleting the guard would
               store the neighbour's byte -- st.h 0xAABB to GENCTL would set GENCTL to
-              0xBB, VECBASE's lane.  And seven arms mask, read-modify-write or clear
-              on write, six of them calling reassert_interrupts().  Now: DECLINE +
+              0xBB, VECBASE's lane.  And eight arms mask, read-modify-write or clear
+              on write, and seven of the twelve blocks call reassert_interrupts()
+              (five of those eight; a seat measured the earlier "six" wrong).  Now: DECLINE +
               latched announce.  Per-lane composition through each arm (COMPOSE) is
               the faithful upgrade and is FILED as pcc2widecompose; not taken here
-              because the hardware's lane semantics are not on disk and no measured
-              driver wide-writes these registers.
+              because the hardware's lane semantics are not on disk and no driver
+              MEASUREMENT exists either way: the only consumer is mvme187, no mvme187
+              boot runs in this harness, and the one OS source in the tree (OpenBSD
+              2.2) declares these registers `volatile u_char' and byte-accesses them
+              -- a reading, not a measurement.
 
     ONE BIT PER BLOCK, twelve, per instance: a driver bringing up the chip touches
     several of these in one pass, and one latch would announce the first and silence
     the rest (#497's own reasoning).  Auto-incremented rather than `1 << N' literals,
-    which this fork records as collision-prone; PCC2_W_NBITS bounds it.
+    which this fork records as collision-prone; PCC2_W_NBITS names the count, and the
+    typedef after the enum makes the build fail if it ever exceeds the 32-bit field.
 
     REACHABILITY, verified: every non-byte m88k access is alignment-checked BEFORE
-    memory_rw, and `relative_addr %= PCC2_SIZE' keeps parity, so only the five
-    EVEN-offset blocks (GENCTL, TxCTL, TxICR, SCCERR, SCCTX) are GUEST-reachable; the
-    seven odd ones are OPERATOR-reachable -- the debugger's `put h' warns on a
+    memory_rw, and `relative_addr %= PCC2_SIZE' keeps parity, so only the SIX
+    EVEN-offset blocks (GENCTL, TxCTL, TxICR, SCCERR, SCCTX, IPL) are GUEST-reachable
+    (this said "five" until pass 2; IPL at 0x3e is even, and a seat counted); the
+    eight odd OFFSETS -- the six odd-only blocks VECBASE, PSCALEADJ, SCCICR, SCCRX,
+    SCSIICR, MASK, plus the T1CTL/T1ICR labels of the shared TxCTL/TxICR blocks --
+    are OPERATOR-reachable -- the debugger's `put h' warns on a
     misaligned address and stores anyway, MEASURED (artifacts/pcc2widthkills/
     operator_reach_20260903.out: `put h 0xfff42003' ended the host).  All twelve are
     converted; the detector reaches the odd ones through that path.
@@ -135,6 +146,12 @@ struct pcc2_data {
 	int			pending_timer1_interrupts;
 	int			pending_timer2_interrupts;
 };
+/*  pcc2widthkills: the enum must fit the field.  A seat pointed out that a bare
+    `<= 32' tested a literal, not the field, so narrowing `warned' would compile
+    silently; this is dev_dreamcast_gdrom.c's own form.  Negative array size is a
+    compile-time error, C99, no assert.h.  */
+typedef char pcc2_w_fits_in_warned[(PCC2_W_NBITS <= 8 * sizeof(((struct pcc2_data *)0)->warned)
+    && PCC2_W_NBITS <= 8 * sizeof(1u)) ? 1 : -1];
 
 
 static uint32_t read32(unsigned char *p)
@@ -603,7 +620,9 @@ DEVICE_ACCESS(pcc2)
 	case PCCTWO_IPL:
 		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
 		    said "ignored" about a READ the memcpy above had already served.
-		    Now per-instance, write-only, like the ten blocks above.  */
+		    Now per-instance, write-only, like the ten blocks above -- that is
+		    the WIDTH latch; the body's own #119 `static int w' below stays
+		    process-global (pcc2pscaleflood's family; not this round's).  */
 		if (len != 1 && writeflag == MEM_WRITE) {
 			pcc2_width_decline(d, PCC2_W_IPL_LEN, "PCCTWO_IPL", len);
 			break;
@@ -624,7 +643,10 @@ DEVICE_ACCESS(pcc2)
 	case PCCTWO_MASK:
 		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
 		    said "ignored" about a READ the memcpy above had already served.
-		    Now per-instance, write-only, like the ten blocks above.  */
+		    Now per-instance, write-only, like the ten blocks above -- that is
+		    the WIDTH latch.  (pcc2widthkills pass 7: this comment once claimed a
+		    #119 static of MASK's own "below" -- there is none; the body stores
+		    the byte and reasserts.  The static belongs to IPL's arm above.)  */
 		if (len != 1 && writeflag == MEM_WRITE) {
 			pcc2_width_decline(d, PCC2_W_MASK_LEN, "PCCTWO_MASK", len);
 			break;

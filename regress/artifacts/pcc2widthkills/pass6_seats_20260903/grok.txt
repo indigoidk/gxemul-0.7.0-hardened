@@ -1,0 +1,136 @@
+I'll start by reading the full offloaded brief and the in-tree sources it names, then verify the enumeration against the actual code rather than the packet.HEAD is `b78bb0f` with the uncommitted pcc2widthkills working tree. Next I’ll read the rest of the brief and the actual helper, arms, and probe.I’ll re-derive the twelve guards, helper, probe rows, and PRETABLE from the tree rather than the packet.I’ll re-derive the probe rows, helper tokens, device state, and PRETABLE claims from the tree rather than the packet.**VERDICT: DO NOT CLOSE.** The 12×9 table, the helper TEST/SET, widths {1,2,4,8}, FAULT, and `d->warned` as a guard input are closed on the named logs. The second-predicate construction is not: “odd read side UNREACHABLE” is false for guest `ld.bu`, and `writeflag == MEM_WRITE` → `len == 1` at a storing arm’s second `if` is a 118/118 shape the new `hrd * rb` rows cannot see. Same class as passes 4–5 (domain one width too small), one predicate down.
+
+Roster for this seat: grok, file-reading, `GXEMUL-SEC/` (helper at `dev_pcc2.c:399`, not a 2021 copy). agy deliberately not fired. Mutants below are derived, not run; a measuring seat should score A/B in a scratch clone.
+
+---
+
+## 1. Enumeration
+
+Re-derived from `GXEMUL-SEC/src/devices/dev_pcc2.c`, `memory.h`, `debugger_cmds.c`, `memory.c`, `cpu_m88k_instr_loadstore.c`, not from the packet’s tables.
+
+**Domain of the fix (the twelve `if (len != 1 && writeflag == MEM_WRITE)` blocks + `pcc2_width_decline`):** right. Nothing else in DEVICE_ACCESS was introduced by this round. SCCRXIACK still has no width guard (body ignores `idata`, named as the thirteenth). `default: exit(1)` is `pcc2defaultkill`. Counter `memcpy` is `pcc2counter8`. IACK is a different `DEVICE_ACCESS`.
+
+**Guard operands at the decision point** (`len`, `writeflag`, `relative_addr` via `switch`, helper `d->warned`):
+
+| State | Read by the twelve `if`s / helper? | Observed non-initial by a row? |
+|---|---|---|
+| `d->warned` | helper TEST/SET; QUAL copies it onto the caller `if` | **Yes, now.** `rb2 *`, `pscale noig2`, `ipl noig2`. Closed. |
+| `d->pcctwo_reg[relative_addr]` | no (body only) | After writes, yes (`rb`/`acc`). As a **guard** conjunct `== 0`, `rb genctl` ST_B’s first and would red. As `CHIPID == PCC2_ID` (0x20, never written): tautological, E even in production. |
+| `pending_timer1/2` | no on the `if`; **yes in TxICR’s body** (and tick) | **Never non-zero on this instrument.** Tick needs `CEN` and `IEN` in one session before a wide write; `timer_stop` during `step`; no row sets both then writes wide. `&& pending_timer1_interrupts == 0` on TxICR’s guard is E **here**, a real landing for a timer-using guest. Disclose like bit translation; it is not a 118-row colour change. |
+| `cur_int_vec[]` | no (written in `reassert`, read in IACK) | Never. Not a guard operand of the twelve. |
+
+**12×9 cells.** Spot-checked from the bodies, not the table:
+
+- **S landing is real** at the storing arms: VECBASE FALL/DEL stores `0xaab8 & 0xf0 = 0xb0` vs want `0x50`; SCCICR `0x18`; SCCRX/SCSIICR `0x98`; TxCTL RMW of `0xaab8` with pre `0x03` → `0`; GENCTL DEL → `0xbb`. Print-only DEL/FALL/`QUAL` share the print channel (`op pscale noig` / `hwr ipl noig` / `* noig2`). Honest.
+- **E SCCERR FALL/QUAL:** only `DEVICE_ACCESS` writer of that cell is `= 0`. Counter `memcpy` spans `T1CMP`/`T2CMP`/`T1COUNT`/`T2COUNT`; `T2COUNT+8` ends at `0x18`, not `SCCERR` `0x1c`. Init `memset` 0. Warrant holds.
+- **C/W/A cardinality:** `latch all` / `w` / `d` / `fail` / `acc all`. BASE 118/118 (`part5` and `part5b` driver logs), so nothing inflates them on the fix. Mutants that **preserve** 12: bit translation (disclosed E, measured 96/96); TEST `&`→`==` preserves `latch all` and is killed by `latch aba` (measured 117/118). Generic `DECL` suffix: gdrom/sh4/sgi_re emit it, none instantiated on mvme187. `failed ]` is only `memory_rw.c`’s line; `put h` is `store_16bit_word` → `memory_rw(..., CACHE_DATA)` **without** `NO_EXCEPTIONS`, so FAULT does print it (measured `M_RET0_VECBASE`).
+- **UNREACHABLE (first guard, odd, wide READ):** true. Guest non-byte is alignment-checked under `#ifndef LS_1` in `cpu_m88k_instr_loadstore.c`; debugger reads do not dispatch to `DM_DEFAULT`. Byte accesses define `LS_1` and skip that check. **The first guard is `len != 1`, so byte reads never hit it.** That warrant must not be copied onto the second predicate.
+
+**Helper, token by token** (`:401-402`):
+
+```c
+if (!(d->warned & (1u << bit))) {
+    d->warned |= (1u << bit);
+```
+
+| Edit | Row | Status |
+|---|---|---|
+| SET `|=` → `=` | `latch aba` | M (100/101 then 117/118) |
+| SET `(1u << bit)` → `1` | `latch same2` | M |
+| TEST `&` → `==` | `latch aba` (not `latch all`) | M; contract was wrong, corrected |
+| SET `|=` → `^=` / `+=` | — | E: SET runs only when the bit is clear |
+| both TEST and SET `bit` → `bit+1` | — | E, measured 96/96; no consumer outside the helper |
+| drop `!`; `&` → `|`; drop SET; TEST-only or SET-only shift | `latch all` / `latch same` | caught (flood or silence) |
+| `fatal` → `debug`; name string at five arms; `len=%i` | — | disclosed, unpinned |
+
+**Widths {1,2,4,8}:** `acc all`, `latch all`, `latch all w`, `latch all d`. `put b` still does not reach the arms (`NO_EXCEPTIONS` + `DM_DEFAULT`); `put h/w/d` do (`CACHE_DATA`). Guest `st.b` is the byte path. Closed.
+
+**FAULT:** `latch all fail` at all twelve; guest `hwr * lv` at the six even. `M_RET0_VECBASE` 116/118 also reddened `rb2 vecbase` (exception after `return 0` aborts the later `ld.bu`). Extra kill, fail-safe.
+
+**warned-QUAL:** `M_QUAL_GENCTL` 117/118 `rb2 genctl`; `M_QUAL_ALL` 107/118 = nine `rb2` + `pscale noig2` + `ipl noig2`. SCCERR E not in the red list. T1 shares TxCTL/TxICR. Closed at every block.
+
+**Second predicate — this is the hole.**
+
+Every arm is:
+
+```c
+if (len != 1 && writeflag == MEM_WRITE) { decline; break; }
+if (writeflag == MEM_WRITE) { body }
+```
+
+`MEM_READ` is 0, `MEM_WRITE` is 1 (`memory.h:117-118`). So `==` → `<=` on **either** `if` is “always true” for both directions.
+
+They pinned **deletion** of the second `if` on **wide** reads at four even storing arms (`hrd * rb`) and IPL (`hrd ipl noro`). That is M_NOWRITECHK 117/118. SCCERR E. Odd **wide** reads really are unreachable.
+
+They then wrote: “the odd blocks’ read side is unreachable.” That sentence is true of the **first** guard (wide). It is **false of the second** `if`:
+
+- Guest `ld.bu` at an odd offset is legal (byte, `LS_1`, no alignment check).
+- memcpy of the read happens **above** the `switch` (`:419-421`). The load’s `r4` is the pre-clobber value.
+- `idata` is 0 on a read (`memory_readmax64` only on `MEM_WRITE`). The body then stores 0 (or `0 & mask`).
+- No row does `ld.bu` of an odd register **twice**. `rb vecbase own` / `rb2 vecbase` / `rb sccicr` end on a single `LD_BU`. `val h genctl`’s `LD_HU` enters the **GENCTL** case, not VECBASE.
+
+So deletion / `==` → `<=` of the second `if` at VECBASE, SCCICR, SCCRX, SCSIICR, or MASK is invisible to all 118 rows. PSCALEADJ would print on a byte read; no row byte-reads it.
+
+Worse, the even-arm rows do not pin “body must not run on a **read**”. They pin “body must not run on a **wide** read”. That is mutant B below.
+
+**(a)** Nine shapes + helper + four widths + FAULT + warned-QUAL: no missing one-token width-guard shape that lands a halfword against these rows. The missing shape is on the **second** `if`, which this pass put in the enumeration and then under-walked.
+
+**(b)** S cells at storing and print-only arms match the bodies.
+
+**(c)** SCCERR E holds. First-guard odd-wide-READ UNREACHABLE holds. Second-predicate odd UNREACHABLE **does not**.
+
+**(d)** Cardinality rows are fail-safe on inflation; the one preserve-the-count helper edit they named is `latch aba`’s.
+
+---
+
+## 2. Smallest edit that still passes 118
+
+Not measured here. Two shapes, both outside the 12×9:
+
+**A (one character, convicts the UNREACHABLE cell).** At VECBASE (or MASK / SCCICR / SCCRX / SCSIICR):
+
+`if (writeflag == MEM_WRITE)` → `if (writeflag <= MEM_WRITE)`
+
+Same character as RDDECL, one `if` down. Wide writes still decline. Byte writes still store. Guest `ld.bu` stores 0 after memcpy. **Row expected green: `rb vecbase own` (still `0x50`), and the other 117.** Even-arm `hrd * rb` never enter that case.
+
+**B (escapes the rows they added).** At GENCTL (or any storing arm):
+
+`if (writeflag == MEM_WRITE)` → `if (len == 1)`
+
+Wide write: first guard still declines. Byte write: body still runs. Wide read: `len==1` is false, body skipped — **`hrd genctl rb` stays `0x82`**. Byte read: body runs, clobber after memcpy, `r4` still the old byte. **Expected 118/118; `hrd genctl rb` and `acc genctl` stay green.**
+
+Deletion of the second `if` at GENCTL is **not** this: that is M_NOWRITECHK (wide read stores 0, `hrd genctl rb` reds). B is the operand swap they did not build.
+
+Tautologies (`len != 1 && len <= 8`, `CHIPID == 0x20`, `break` → `return 1`, `len != 1` → `len > 1` on {1,2,4,8}) are E, not property breaks.
+
+---
+
+## 3. Option-set
+
+**N/A, agreed.** No new disposition. FAULT is pinned and rejected. Direction split already shipped.
+
+---
+
+## 4. Record honesty
+
+**False UNREACHABLE** (load-bearing): contract and PRETABLE_pass5 treat the odd blocks’ read side as unreachable for the second predicate. That is the first-guard fact, misapplied.
+
+**Wrong product comment** (`dev_pcc2.c` MASK block): “the body’s own #119 `static int w` below stays process-global”. IPL has that static (`:629`, and a second on the read path). MASK’s body is store + `reassert_interrupts`. No `static int w`. Copied from IPL.
+
+**Stale “shipped probe”:** contract INSTRUMENTS still names md5 `72759b4f` as “the last is the shipped probe”. That freeze is the 96-row part-3c instrument. Current probe is 118 rows.
+
+**Brief leftovers (already noted in PRETABLE, still in this packet):** “this diff adds five rows”; class-closure paragraph still says “passes all 96 rows”. Q2 correctly says 118.
+
+**PRETABLE split:** honest as written. Sections 0–4 were reconstructed after an append destroyed the mtime discriminator; the header says the 18:35 restore re-stamped them again and that only `PRETABLE_pass4.out` / `PRETABLE_pass5.out` carry their own order witness. Do not read `PRETABLE.out`’s mtime as “before part 1”.
+
+**Counts with derivers:** 118 gate names match 118 `row()` calls (counted). `M_QUAL_ALL` 107/118 = 11 reds = 9 `rb2` + 2 `noig2`. `PCC2_W_NBITS` is 12; `warned` is `uint32_t`; typedef is gdrom’s `sizeof` form. “Eight arms mask/RMW/clear” and “seven `reassert` (five of those eight)” re-derived and hold. Section 9’s `BASE 102/102` is contemporaneous and superseded by section 10’s 118; not a lie if read in order.
+
+**Part 5 vs predictions:** BASE 118/118, `M_TEST_EQ` `latch aba`, `M_QUAL_GENCTL` `rb2 genctl`, `M_NOWRITECHK` `hrd genctl rb` match. `M_RET0_VECBASE` was predicted as `latch all fail` alone; measured 116/118 with `rb2 vecbase` too. Fail-safe extra, not an overclaim of green.
+
+**What I did not settle from the packet and did settle from the tree:** `MEM_READ`/`MEM_WRITE` values; `put h` vs `put b` flags; memcpy-before-switch; MASK’s missing static; SCCERR vs counter span; m88k `LS_1` vs alignment; `PCC2_SIZE` 0x40; `PCC2_ID` 0x20, `CEN` 0x01, `IEN` 0x10, `MIEN` 0x02, `C040` 0x04.
+
+---
+
+**Denominator of this pass:** swept the 12×9 cells, helper TEST/SET (including E disclosures), {1,2,4,8}, FAULT at 12, warned-QUAL at 12, second predicate at 12 (even-wide vs odd-byte vs `len == 1`). Zero **width-guard (d)** breaches on that set. Not a valid closing zero, because the second-predicate cells this pass put in the contract are misclassified.
+
+If the measuring seat scores A or B at 118/118, that is L1 construction (they already placed the second `if` outside (d)) plus L4 on the UNREACHABLE sentence — not a (d) floor breach of the twelve width guards. Either row a second `ld.bu` after a byte read (even and odd storing arms) or disclose byte-read clobber as unpinned, the way `len=%i` is. Do not close on a warrant that `ld.bu` of `0x03` refutes.

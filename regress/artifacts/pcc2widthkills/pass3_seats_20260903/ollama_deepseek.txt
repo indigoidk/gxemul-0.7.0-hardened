@@ -1,0 +1,61 @@
+NOT RATIFIED — the clause-(d) enumeration is not closed; a fall-through at T1CTL or T1ICR passes all 82 rows; latch-all soundness and reassert survival are uncheckable from the packet.
+
+**1(a) Enumeration of 12 blocks × 6 shapes**
+
+Measured kills, from the inlined tables:
+
+- guard deleted: GENCTL, TxICR, MASK  
+- `len != 1` → `len > 2`: TxICR, TxCTL, SCCTX, SCCERR  
+- verbatim `exit(1)`: IPL, MASK  
+- latch-bit alias: one pair only — SCCTX aliased onto SCCRX’s bit per pass-2 text  
+- announce-then-fall-through: SCCICR, SCCRX, SCSIICR, PSCALEADJ  
+- operand swap `len != 1` → `idata > 0xff`: GENCTL  
+
+Unmeasured, and not argued equivalent anywhere in the packet:
+
+- guard deleted: VECBASE, PSCALEADJ, TxCTL, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR, IPL  
+- `len > 2`: GENCTL, VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR, IPL, MASK  
+- `exit(1)`: all except IPL and MASK  
+- alias: all other 65 pairs  
+- fall-through: GENCTL, VECBASE, TxCTL, TxICR, SCCERR, SCCTX, IPL, MASK  
+- `idata > 0xff`: all except GENCTL  
+
+The packet contains no explicit equivalence argument covering those unmeasured cells. “MASK is GENCTL’s twin” and “TxCTL/TxICR share an arm” are suggestive, but they are not a measured or argued closure. The enumeration is therefore **not closed**.
+
+**1(b) `latch all` soundness**
+
+REASONED. The row is sound for detecting a bit collision only if:
+
+- the session starts with `d->warned == 0`, and  
+- each block is touched exactly once.
+
+The packet does not show that `session()` resets device state between rows. If state persists, earlier rows set bits and `latch all` would undercount even on the fix. Two blocks sharing a bit cannot still count 12, because the second announce is suppressed; the row touches each block once, so no double-touch. The cardinality claim is therefore conditional on an unshown session-reset premise.
+
+**1(c) `op pscale noig`**
+
+READ/REASONED. The print is in PSCALEADJ’s write body and `fatal()` returns, so it reaches the transcript. On the fix the decline `break`s before the print, so 0 is the correct expectation. Under fall-through the print occurs once. The channel is real.
+
+**1(d) New readbacks**
+
+REASONED. The expected `0x1f` on the fix is correct. Under fall-through the landed value is `0x18` or `0x98`, and `reassert_interrupts()` is called. Whether that call ends the host is **not established from the packet**. `pcc2c040kill` shows `reassert_interrupts()` can be fatal for GENCTL, but the interrupt-control bits for SCCICR/SCCRX/SCSIICR may differ. The row description does not say whether it expects “died” or a readback; the record is incomplete on this point.
+
+**2. Smallest edit that still passes 82 rows**
+
+A fall-through at **T1CTL** or **T1ICR** — announce the decline, then let the halfword land — passes all 82 rows.
+
+Expected green rows: `op t1ctl dcl` and `op t1ctl` (or `op t1icr dcl` / `op t1icr`).  
+The decline count remains 1, and the host survives because the body only prints `HUH?` and does not exit. There is no readback row for T1CTL or T1ICR, so the landed write is invisible.
+
+**3. Option-set completeness**
+
+Agree: N/A this pass. No disposition is chosen; the direction split was settled in pass 1 and is not re-litigated.
+
+**4. Record honesty**
+
+Not fully honest.
+
+- PRETABLE Section 2 still says PSCALEADJ/SCCICR/SCCRX/SCSIICR have no readback and that fall-through would escape. Section 5 then adds channels for all four. The composite document is internally inconsistent unless Section 2 is explicitly marked as superseded.
+- The claim of “class closure” is refuted by the unmeasured cells in 1(a) and by the T1CTL/T1ICR fall-through gap.
+- The sentence “Rows whose channel cannot vary under any enumerated mutant: none added” is false for `op t1ctl dcl` under a T1CTL fall-through.
+- `latch all`’s soundness depends on session reset, which is not shown.
+- The new readbacks’ survival after `reassert_interrupts()` is asserted but not established.

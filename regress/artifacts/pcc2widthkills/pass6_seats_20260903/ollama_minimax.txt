@@ -1,0 +1,50 @@
+VERDICT: ENUMERATION SOUND; RECORD HONEST; NO UNDISCLOSED ESCAPES FOUND.**
+
+---
+
+**1. ENUMERATION VERIFICATION**
+
+The 12 × 9 table covers the clause-(d) space at each block. I verified the arithmetic:
+
+- **Reachability**: 6 even blocks (GENCTL 0x02, T2CTL 0x16, T2ICR 0x1a, SCCERR 0x1c, SCCTX 0x1e, IPL 0x3e) + 6 odd-only blocks (VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR, MASK) = 12 blocks. T1CTL/T1ICR are odd labels sharing TxCTL/TxICR blocks. Correct.
+- **Shapes**: DEL, LEN, LEN2, KILL, ALIAS, FALL, SWAP, GROW, RDDECL = 9 shapes. Correct.
+- **d->warned**: 32-bit field, 12 bits assigned. The typedef `pcc2_w_fits_in_warned` checks `PCC2_W_NBITS <= 8 * sizeof(warned)` AND `<= 8 * sizeof(1u)`. This is the gdrom sizeof idiom — correct.
+
+**Specific cells I checked:**
+
+- **VECBASE FALL=M**: Measured 82/82 by fable5 (pass3_seats_20260903/fable/probe_mfall_vecbase.out) and 94/96 in part 3. Consistent.
+- **SCCERR FALL=E**: Warrant is "the arm stores 0 and nothing in the model ever stores a nonzero SCCERR." This is a construction claim I cannot verify from the packet, but it's named as equivalent, not measured — acceptable.
+- **FAULT member**: `break` → `return 0`. At guest-reachable blocks, the guest faults; at operator-only blocks, `latch all fail` counts memory_rw's "failed ]" line at zero. The correction (only `hwr genctl lv` reddens, not the pair) is acknowledged and matches the part-4 measurement.
+- **Fix's own state**: `&& !(d->warned & (1u << bit))` — measured 101/101 by Opus. Closed by `rb2 *` rows (set, two wide writes, read back) + `pscale noig2` + `ipl noig2`. SCCERR is E (value-identical).
+- **Second predicate**: `if (writeflag == MEM_WRITE)` — the claim that deleting it stores `idata == 0` on a read is non-obvious from the code shown (GENCTL's body is not inlined), but the measurement M_NOWRITECHK_GENCTL → `hrd genctl rb` 0x0 confirms it. Accepted on measurement.
+
+**One wording defect in the contract**: The sentence "The TEST line's operand swap (`&' → `==') is caught by `latch all'" is poorly phrased — `latch all` does NOT distinguish it (12 announces either way); `latch aba` does (3 vs 2). The correction is made in the same sentence ("`latch aba' DOES distinguish it"), so the meaning is recoverable, but the first clause is misleading.
+
+**2. SMALLEST EDIT THAT BREAKS THE PROPERTY AND PASSES 118 ROWS**
+
+The smallest edit is **`fatal(` → `debug(` in `pcc2_width_decline()`**. This changes announce severity (a real semantic change — `-q` suppresses debug lines) but the rows run under `-V` and grep for the DECL text pattern, which both produce. All 118 rows stay green. This is explicitly disclosed in the contract under "ANNOUNCE SEVERITY."
+
+Other disclosed escapes that also pass all rows: process-global latch (mvme187 has one instance), bit translation (`1u << (bit + 1)`), adding a guard to SCCRXIACK (outside the twelve), counter memcpy (pcc2counter8).
+
+I found no undisclosed escape.
+
+**3. OPTION-SET COMPLETENESS**
+
+N/A is correct. The brief asks for verification of the enumeration, not a ship/reject disposition.
+
+**4. RECORD HONESTY**
+
+The record is honest. Corrections I noted:
+- "five even blocks" → "six even blocks" (IPL at 0x3e is even)
+- "adding rows cannot un-kill" → "`acc all' was REWRITTEN" (the warrant was wrong)
+- M_RET0_GENCTL prediction (pair reds) corrected to `hwr genctl lv` alone (host survives)
+- `acc all` vacuity by construction (`put b` doesn't dispatch to DM_DEFAULT) acknowledged and rewritten as guest `st.b`
+- "all nine seats" → "eight answering, agy deliberately not fired"
+- "this diff adds five rows" brief defect noted (pass-4 delta over cumulative)
+- The poorly-worded `latch all`/`latch aba` sentence (above)
+
+The PRETABLE split (Sections 0-4 in PRETABLE.out, Sections 5-7 in PRETABLE_amendments.out, Section 8 in PRETABLE_pass4.out, Sections 9-10 in PRETABLE_pass5.out) is honest — appending had re-created the mtime defect the split was designed to avoid, and a pass-4 seat caught it.
+
+**5. OTHER FINDINGS**
+
+None. The enumeration is complete, the cells' statuses are warranted, and the disclosed escapes are the only ones.

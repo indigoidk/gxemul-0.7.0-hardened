@@ -1,0 +1,82 @@
+PRE-TABLE AMENDMENT, PASS 7 -- its own file (mtime against part7/driver.log is the order witness).
+
+SECTION 14 -- what pass 7 corrected in the pass-6 record, and the repair it prescribes.
+--------------------------------------------------------------------------------
+Pass 7 found the SAME class a THIRD time -- state no row holds non-initial at a wide write --
+because the pass-6 enumeration was by `d->' FIELD and by BYTE.  Rule (2) enumerates LVALUES the
+guarded body reads, each with its full bit-domain.  Restated per arm in the contract.
+* grok: the IPL write body reads a FUNCTION-STATIC `w' (dev_pcc2.c:629-631); no row held it SET
+  at a wide write (`acc ipl ro' sets it on a byte and never wide-writes; `ipl noig2' wide-writes
+  with it 0).  `&& !w' on the IPL width guard is equivalent on all 159 rows.  L2.  Row `ipl wset'.
+  (opus F-F independently.)
+* codex: the TxCTL body is an RMW preserving the byte's upper nibble -- the overflow count,
+  set ONLY by pcc_timer_tick when the counter crosses 2^31 (PCC2_TCTL_OVF 0xf0, :496-501); every
+  TxCTL preset had it zero.  `&& !(reg & PCC2_TCTL_OVF)' predicted 159/159.  L2.  Rows `ovf1 *',
+  `ovf2 *' (count 0x7fffff00, CEN, free-run polling bit 4 = the count's LSB, then the wide write).
+* codex, opus F-L: no rb4/rb8 rows at the T1CTL / T1ICR labels: `if (len < 4 || relative_addr ==
+  PCCTWO_T2CTL) break;' lands 4-/8-byte writes at T1CTL alone.  L1 (a landing cell the
+  enumeration missed; the round paid for the same block-vs-label slip at width 2).  Rows
+  `rb4|rb8 t1ctl', `rb4|rb8 t1icr'.
+* opus F-C, MEASURED in part6b/M_W4FALL_ALL.out:85-86: `rb4 genctl' / `rb8 genctl' read `died'
+  -- the lanes 0xdd and 0x44 carry bit 0x04 = PCC2_C040, GENCTL's body calls
+  reassert_interrupts(), and its first act is exit(1) on that bit (pcc2c040kill).  The rows
+  killed by HOST DEATH, not by value; the NOROW line "every GENCTL lane here keeps that bit
+  clear" was FALSE for two rows; Section 13 checked "lane != preset" and not "lane trips C040".
+  GENCTL now gets per-arm lanes 0xd9 / 0x40 (bit 2 clear, != 0x82).  L1 + L4.
+* opus F-K: the SWAP cell's C warrant was form-specific.  `len != 1' -> `idata != 1' is a
+  one-token operand swap from a body-read field and no row wide-wrote the VALUE 1.  Row `latch
+  all one' (twelve 2-byte writes of 0x0001, DECL 12).  Value-test guards are caught for the
+  values rows drive -- 3, 0, 1 -- and disclosed for other constants.  L2 (in closure).
+* opus F-H: the driver's proof-of-mutation line grepped seven pass-3..5 literals and printed
+  ZEROS for all six pass-6 mutants -- a check that cannot fail, inside the kill-table driver.
+  Replaced by a diff against SEC that REFUSES a mutant whose source is unchanged.
+* opus F-I: part6/ and part6b/ carried no driver script; the frozen `.run.sh' copies are now
+  preserved beside them as `killpcc2b_part6*.asrun.sh'.
+* opus F-E: "only VECBASE 0x0f and PSCALEADJ 0xdf are non-zero at init" -- of the twelve GUARDED
+  registers; CHIPID (PCC2_ID 0x20) is non-zero and is not one of them.  Reworded.
+* codex, grok, fable5, opus F-G: rd(8.0) after `continue' was a fixed drain, not a prompt wait
+  -- under load the next command reaches a running guest, `pend* arm' printed `died' falsely,
+  and the final waitpid() could hang the gate.  session() now stops waiting when the BREAKPOINT
+  text arrives (20 s ceiling), the arm rows print `no-breakpoint (FAILED FOR SOME OTHER
+  REASON)' when it never does (the loop exits only on the device bit, so a timer that never
+  fires never reaches the breakpoint -- the distinct CONTROL-INVALID token fable5 asked for),
+  and the child is reaped with a bounded wait and a SIGKILL fallback.  Gate 14 is now
+  LOAD-SENSITIVE and the contract says so; the loops rely on GENCTL.MIEN clear (stated).
+* grok, opus F-D: PRETABLE_pass6b Section 13 listed SCCTX's len-8 lane as 0x44; SCCTX is
+  `& 0x1f' like SCCICR, so 0x04.  Section 12 gave SCCICR/SCCTX's len-4 lane as 0xdd; it is 0x1d.
+  Both kills hold.  Corrected HERE, not there.
+* grok: "pending_timer* is written ONLY by pcc_timer_tick" (premise 7, the contract, the
+  CHANGELOG) -- the TxICR body clears and decrements them; the tick is the only producer of > 0.
+* grok, codex: the MASK arm comment claimed a #119 static of its own; there is none (copy-paste
+  from IPL, pass 5).  Product comment corrected; propagated with rebuilds.
+* codex: "nine of nine answered" for pass 6 -- eight answering seats of nine, agy deliberately
+  not fired.  The CHANGELOG part-6b RED line was truncated by a `cut -c1-200' in the fill (opus
+  F-J too); completed from the log.  PRETABLE_pass6b's mtime equals the part6/driver.log COPY's
+  second: it witnesses precedence over 6b (its content quotes the measured 139), not strict
+  order after 6.
+* fable5: a guard swap to a register no body reads (`&& !(reg[GENCTL] & PCC2_C040)' at TxICR)
+  escapes by category, because the probe keeps C040 clear to avoid pcc2c040kill -- out of
+  closure, disclosed by example.  "Safe direction" for an over-predicted kill: reworded.
+* opus F-A/F-B, glm (packet): fields reached only through the callee reassert_interrupts()
+  (pending counts, reg[IPL], the SCC*/TxICR bits, GENCTL, MASK) at arms whose own bodies do not
+  read them are OUTSIDE the closure by the rule's own bound (callees excluded; a transitive
+  closure reaches the whole interrupt subsystem and is unbounded).  The contract states the
+  definition.  The Opus seat measures the same conjunct at the other arms on the 159-row
+  instrument (its M1/M2); recorded in the round block when it lands.
+* kimi substitute (packet): the ICLR-decrement branch never executes -> filed pcc2iclrdec.
+PREDICTIONS for part 7 (five mutants plus BASE, 171-row instrument):
+    BASE               171/171
+    M_IPL_W            170/171   ipl wset (DECL 0)
+    M_TXCTL_OVF        167/171   ovf2 decl, ovf2 rb (0x10), ovf1 decl, ovf1 rb (0x10)
+    M_T1_W4FALL_CTL    169/171   rb4 t1ctl (0x1), rb8 t1ctl (0x0); every T2 row green
+    M_T1_W4FALL_ICR    169/171   rb4 t1icr (0x15), rb8 t1icr (0x4)
+    M_IDATA_NE1_ALL    170/171   latch all one (DECL 0); every other wide-write row green
+Landed lanes for the T1 rows: T1CTL (0x03 & 0xfc) | (0xdd & 3) = 0x01, | (0x44 & 3) = 0x00;
+T1ICR (0x13 & ~0x17) | (0xdd & 0x17) = 0x15, | (0x44 & 0x17) = 0x04.  GENCTL's new lanes under a
+fall-through would be 0xd9 / 0x40 (not exercised by these five mutants; the M_W4FALL_ALL kill at
+GENCTL now rests on value rather than death -- re-measured only if that mutant is rebuilt).
+The IPL mutant is a licensed three-part composite (declaration hoisted to function scope, body
+renamed to it, the guard reads it); parts 1 and 2 are inert by construction (a declaration
+move and a rename).  The proof-of-mutation line is now a diff count against SEC.
+TRANSFER: every part-6/6b score stands -- the twelve new rows are additions, and adding a row
+cannot un-kill a mutant; the GENCTL lane change affects only rows those mutants decline.

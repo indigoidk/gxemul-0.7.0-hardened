@@ -1,0 +1,164 @@
+l
+[19:12:13]     [M_COVF] mutant diff vs SEC: 2 lines; first added: > 		if (len != 1 && writeflag == MEM_WRITE && !(idata & PCC2_TCTL_COVF)) {
+[19:12:20]     [M_COVF] binary 19:12:20  source 19:12:13
+[19:28:46]   M_COVF [ovf2 rbv 0x0, ovf2 rb1v 0x0, ovf1 rbv 0x0, ovf1 rb2v 0x0, ovfhi2 rbv 0x0, ovfhi2 rb1v 0x0, ovfhi1 rbv 0x0, ovfhi1 rb2v 0x0 -- COVF-set writes land everywhere]: PCC2W_RESULT=222/242
+      RED: rb4 t2ctl,rb8 t2ctl,ovf2 rbv,ovf2 rbx,ovf2 rb1v,ovf2 rb1x,ovf1 rbv,ovf1 rbx,ovf1 rb2v,ovf1 rb2x,ovfhi2 rbv,ovfhi2 rbx,ovfhi2 rb1v,ovfhi2 rb1x,ovfhi1 rbv,ovfhi1 rbx,ovfhi1 rb2v,ovfhi1 rb2x,rb4 t1ctl,rb8 t1ctl
+[19:28:47]     [M_COVFOVF] mutant diff vs SEC: 2 lines; first added: > 		if (len != 1 && writeflag == MEM_WRITE && !((idata & PCC2_TCTL_COVF) && (d->pcctwo_reg[relative_
+[19:28:53]     [M_COVFOVF] binary 19:28:53  source 19:28:46
+[19:45:18]   M_COVFOVF [ovf2 rbv 0x0, ovf1 rbv 0x0, ovfhi2 rbv 0x0, ovfhi1 rbv 0x0 -- the overflow-acknowledge path: COVF written while a count is held (the TxCTL analogue of the ICLR x pending cell)]: PCC2W_RESULT=234/242
+      RED: ovf2 rbv,ovf2 rbx,ovf1 rbv,ovf1 rbx,ovfhi2 rbv,ovfhi2 rbx,ovfhi1 rbv,ovfhi1 rbx
+[19:45:18]     [M_TXHIOVF] mutant diff vs SEC: 2 lines; first added: > 		if (len != 1 && writeflag == MEM_WRITE && !((idata & ~7) && (d->pcctwo_reg[relative_addr] & PCC2
+[19:45:19]     [M_TXHIOVF] binary 19:45:19  source 19:45:18
+
+CHANGELOG.md:138:<<PART12_OWED>>
+CHANGELOG.md:168:<<GATE14_P12_OWED>>
+astra_fixreview
+brief_astra_fixreview.md
+
+
+
+codex
+ASTRA_FIXREVIEW_20260904 — gpt-6-astra — VERDICT: APPROVE the committed containment fix; DO NOT CLOSE or commit the present review bundle.
+
+I read the full 1,688-line brief and reviewed the actual fork, committed diff, subsequent changes, and accessible evidence. No builds, probe executions, or edits. The launcher reports reasoning effort `max`.
+
+**1. The committed fix is right for its stated containment policy.**
+
+My conclusion here comes from the handler and its callers, independently of the kill tables. The twelve dispositions in [dev_pcc2.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:434) should remain:
+
+| Block | Wide WRITE | Reason |
+|---|---|---|
+| GENCTL | DECLINE | Storing one byte and recalculating interrupts does not implement the addressed multi-byte transaction. |
+| VECBASE | DECLINE | Masking the assembled integer to `0xf0` does not implement neighboring byte lanes. |
+| PSCALEADJ | DECLINE | Its byte operation only reports an ignored write; no implemented wide operation follows from that. |
+| TxCTL | DECLINE | The byte RMW and overflow-clear command cannot represent a wide transaction across controls. |
+| TxICR | DECLINE | The body changes control bits, pending counts, and interrupt state. Accepting the assembled value would apply the wrong operation. |
+| SCCERR | DECLINE | The constant-zero byte assignment does not establish correct semantics for the neighboring lanes. |
+| SCCICR | DECLINE | Its `0x1f` mask implements one byte. |
+| SCCTX | DECLINE | Same issue: one masked byte plus interrupt recalculation. |
+| SCCRX | DECLINE | Its `0xdf` mask and interrupt recalculation do not compose lanes. |
+| SCSIICR | DECLINE | Same byte-operation limitation. |
+| IPL | DECLINE | Ignoring a write to this read-only byte does not define the entire wide transaction. |
+| MASK | DECLINE | One byte assignment plus interrupt recalculation is insufficient. |
+
+`memory_readmax64()` assembles an integer; it does not supply register-by-register transaction semantics. The product comment’s claim that **every** arm uses `idata` is nevertheless false: SCCERR assigns a constant, and IPL does not use the incoming value.
+
+I would not substitute FAULT indiscriminately. The supplied hardware header describes 8-, 16-, and 32-bit cycles, while returning zero actually produces a guest access exception through [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603). The current successful, announced no-op is a defensible hardening policy. It is not proof of hardware-faithful wide writes; neither 64-bit semantics nor full lane composition is established by the supplied sources.
+
+The read side is sound within the same scope:
+
+- None of the twelve guarded bodies contains a skipped device-state read effect. IPL has an existing read-side diagnostic that can now execute on a wide read.
+- The exact-address [SCCRXIACK branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:598) still clears SCCRX INT and recalculates interrupts on reads. It is outside the twelve guards.
+- The separately registered [MVME187 IACK handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:672) still computes and returns its vector.
+- The guest-aligned wide reads starting at these twelve blocks do not span an acknowledge register. Arbitrary operator spans are not thereby certified as hardware-faithful.
+- End-of-array zero filling is an existing bounded fallback, not accurate read-wrap emulation.
+
+The latch is genuinely per instance: `warned` belongs to `struct pcc2_data`, and initialization clears the allocated instance. Its twelve distinct bits correspond to twelve blocks; T1/T2 intentionally share their block’s bit. One announcement per block across widths is appropriate for a bounded diagnostic. That statement applies to the new decline diagnostics, not every older PCC2 diagnostic.
+
+Every guard’s `break` reaches the same common `return 1`; there is no skipped common update or cleanup. The later typedef correctly checks both the destination field’s capacity and the `1u` shift operand’s capacity.
+
+The historical description should say **ten newly removed exits plus the two previously repaired #119 guards**, rather than twelve exits newly removed by this commit.
+
+For the real guest, I found no newly refused operation in the inspected OpenBSD paths. The actual guest source exists under `_guest-src-openbsd22`: its [register structure](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/pcctworeg.h:1) uses byte fields for these controls and word fields for counters/compares. Its [clock initialization](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/clock.c:236) uses those fields and enables COC on **both** timers. This settles the source-reading dispute, but does not establish that ordinary operation produces “both thousands” of pending interrupts. I did not run a guest boot.
+
+**2. Several earlier repairs corrected real weaknesses, but the current record still contains false claims.**
+
+My disposition of the repair chain is:
+
+| Repair stage | Review |
+|---|---|
+| Earlier direction, block, label, width, and latch coverage | Retain. These address distinct dispatch and observation gaps. |
+| Pass 5: repeated-write readbacks, read predicate, fault channel, typedef | Retain. The state readbacks make silent acceptance observable; the typedef is sound. |
+| Pass 6: width-4/8 readbacks and free-running pending sessions | Retain the repaired values. The earlier masked-value collision was a real oracle defect. |
+| Pass 7: overflow and sibling coverage | Retain. Its attempted long-wait repair contained a tuple-handling error; that repair was ineffective until pass 8. |
+| Pass 8: wait handling, bounded reap, failure labels, additional states | Retain. The counter-derived `0xfc` fixture remains explicitly dependent on the filed counter-copy defect. |
+| Pass 9: high-overflow mask and joint pending coverage | Retain. Mask `0x81` preserves CEN as a landing discriminator while tolerating overflow variation. It does not prove exact overflow counts. |
+| Pass 10: label parity and IEN combinations | Retain the rows. The accepted assertion that the store mask writes ICLR was wrong and made the record worse. |
+| Pass 11: ICLR correction, pending generating set, TxCTL additions | Retain the implementation repairs and discriminating readbacks. Correct the enumeration, reachability claims, and predictions discussed below. |
+
+The current `cval()` handling correctly distinguishes death and a missed breakpoint from an ordinary value mismatch. The final short-transcript labels are also an improvement. The SGI changes concern documentation and diagnostic wording; the panel and record changes do not alter PCC2 runtime behavior.
+
+The following findings remain actionable.
+
+**The arm enumeration is false.** [Probe lines 284–286](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:284) describe nine arms as having no `if` on state or `idata`. Five of those arms have conditional HUH diagnostics: **VECBASE, SCCICR, SCCTX, SCCRX, and SCSIICR**. Under the declared decisive-axis rule, these conditions count. Existing rows may discharge their partitions; the enumeration must actually show that.
+
+**The COVF census is false, and the supporting arithmetic was wrong.**
+
+- `0xb8 & 0x04 == 0`: the earlier Opus derivation misclassified that value.
+- `0xdd & 0x04 != 0` and `0x44 & 0x04 != 0`: existing width-4/8 TxCTL readbacks already carry COVF, with the plain `0x03` preset.
+- Consequently, “COVF-set held at NO cell” and the current disclosure that COVF at the plain `0x03` cell is absent are false.
+
+The new overflow-state writes still add useful coverage. Their justification needs correction; the rows need not be removed.
+
+**“INT clear with a count pending is UNREACHABLE” is unsupported and its stated ordering argument is false.** [The timer callback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:247) increments pending counts without calling `reassert_interrupts()`. [timer.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/timer.c:284) invokes that callback from SIGALRM; device ticks perform reassertion separately. The access handler has no intervening reassertion guarantee before its guard. The interleaving is unmeasured here, not discharged as unreachable.
+
+There is also a stable converse: pending can become zero while INT remains set, because disabling IEN clears the count and reassertion only sets INT—it does not generally clear it. Treating INT as disposable derived state loses a real distinction.
+
+**The generating-set explanation overclaims.** The assertion that every held pending write sets at most one of IEN, ICLR, and HUH is false: `0x18` sets IEN and ICLR. The actual set/clear marginal coverage remains useful. It does not establish arbitrary combinations, or independent coverage of every bit within the aggregate HUH mask.
+
+**The carrier and changelog disagree about the same finding.** [CLAUDE.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1411) calls the measured ICLR escape L1 construction/debt; [CHANGELOG.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:72) explicitly calls it L2, a floor breach. Record the historical breach under the rule then in force and separately identify any prospective floor amendment. Changing the floor cannot silently rewrite the earlier result.
+
+**Part 12 refutes two predictions.** The accessible [driver log](C:/Users/User00/AppData/Local/Temp/claude/C--DocumentNoSnc-CC-GXEMUL/8e474f41-4d47-4c99-bf11-3406a84c4fcd/scratchpad/killpcc2b_part12.log) contains:
+
+| Run | Frozen prediction | Observed result |
+|---|---:|---:|
+| BASE | 242/242 | 242/242 |
+| M_COVF | 234/242 | **222/242** |
+| M_COVFOVF | 238/242 | **234/242** |
+| M_TXHIOVF | 234/242 | Result not present at my last read |
+
+For M_COVF, the additional failures comprise four older width-4/8 rows and eight later readbacks retaining the earlier corruption. For M_COVFOVF, four later readbacks similarly retain the corrupted state.
+
+These are effective regression detections, but **a later red readback does not independently prove that its immediately preceding write landed**. The same distinction was correctly understood in part 11 and lost in the part-12 predictions. Preserve the predictions unchanged; correct the measured columns and explanations.
+
+Finally, SCCERR’s constant-zero readback remains non-discriminating for execution of its byte assignment. Its disclosed equivalence classification is appropriate; do not promote it into proof that the byte body ran. Likewise, the borrowed counter-copy rows need to be revised when that product defect is fixed.
+
+**3. My ordered queue disposition, as input to Fable’s adjudication, is below.**
+
+I agree that `pcc2c040kill` is HIGH. I disagree that it should be the **only** HIGH: `pcc2defaultkill` also permits a guest access to terminate the host.
+
+| Order | Item | Disposition, consequence, and cheapest useful witness |
+|---:|---|---|
+| 1 | **pcc2c040kill — HIGH** | **Fix next.** Unsupported interrupt mode reaches host termination. Validate or implement the mode before committing inconsistent state. Cheapest safe regression: an isolated handler test covering unsupported-mode refusal and a supported-mode positive control, checking continued execution and coherent state. |
+| 2 | **pcc2defaultkill — promote to HIGH** | **Same first hardening batch.** An unimplemented register access reaches host termination, including named register locations. Classify reserved, absent, and unimplemented registers and give each a guest-visible disposition. Use isolated negative-access tests plus implemented-register controls, preserving acknowledge side effects. |
+| 3 | **pcc2counter8 — MED** | **Fix next after host termination paths.** Raw copying reaches neighboring controls without their semantics. Reuse the existing `b27` evidence; verify neighboring state remains protected while legitimate counter word writes still work. Revise the two borrowed width-probe rows in the same change. |
+| 4 | **pcc2huhflood — MED** | **One logging round covering all nine sites.** Repeated legal byte operations can produce unbounded unconditional diagnostics. Reuse existing byte-access fixtures, repeat the operation, and check bounded messages alongside preserved device behavior and independent instance/site state. |
+| 5 | **pcc2pscaleflood — MED** | **Fold into item 4.** Retain its provenance, then close the standalone entry as a duplicate once the nine-site repair is complete. Its witness is repeated ignored PSCALEADJ writes with bounded reporting. |
+| 6 | **pcc2iclrdec — LOW coverage debt** | **Schedule a timer-semantics round.** Cover pending counts 0, 1, and at least 2 for both labels, with controlled timer delivery and bounded observation of remaining interrupts. A one-pending case cannot distinguish `> 0` from `>= 0`; the filed proposed witness does not prove that mutation. Include the zero boundary with the required INT state. |
+| 7 | **pcc2assertflood — LOW** | **Defer, or include if cheap in the logging round.** Check message counts during a steady interrupt and across actual edges. Log the final effective state: today’s message precedes the MIEN gate and can say ASSERT while the output is deasserted. An edge trace should not become a lifetime latch that hides later edges. |
+| 8 | **pcc2latchwidth48 — LOW coverage debt** | **Fold into the next relevant probe maintenance.** A subsequent width-4/8 write could improperly depend on the already-set latch. Append a second write/readback to existing `rb4`/`rb8` sessions; eighteen fresh sessions are unnecessary. |
+| 9 | **pcc2widecompose — LOW compatibility work** | **File and leave.** Establish the hardware transaction contract or a real guest requirement first. Future checks must cover lane order, masks, read-only neighbors, interrupt effects, and legal counter-word controls. Blindly splitting every access into byte-handler calls is not established as faithful. |
+
+Two filing corrections accompany that disposition. `acc all`’s `0x10` does not trigger the SCCICR/SCCTX HUH conditions; it triggers TxCTL’s. Also, ordinary debugger inspection and a guest device read are different: NO_EXCEPTIONS inspection skips this DM_DEFAULT callback, whereas a guest SCCRXIACK read executes its side effect.
+
+No distinct live defect should be dropped. The PSCALE entry is the duplicate to fold.
+
+**4. I would adopt Opus’s frozen, reachability-constrained strength‑t floor over body-tested and selector axes, retaining existing scalar/RMW obligations and requiring a non-vacuous observable for every claimed kill.**
+
+Fable’s formulation excludes input bits as “single-operand MARGINALS.” That distinction depends too much on representation: storing an input bit in a persistent field should not alone determine whether its interaction matters. The state-only cross-product can also grow exponentially. Excluding INT because it is derived is particularly unsound here.
+
+Opus’s formulation supplies a clearer stopping rule, but its claim that tuple coverage means “every such mutant is killed” needs qualification. A covering array establishes that a tuple occurs. It does not establish that the changed body executes, changes an observable, or is correctly graded.
+
+Applied literally:
+
+- **TxCTL: no additional row is currently demanded by Opus’s stated rule.** His proposal explicitly assigns this body `t = 1`. The current probe actually contains all combinations of `{label, COVF, HUH}`: the new simple-bit writes and the older width-4/8 values supply them. Missing overflow/input combinations must not be invented from the erroneous COVF census. Requiring additional overflow-state interactions would need an explicit stronger obligation.
+- **TxICR: the proposal assigns `t = 4`, and the current probe does not satisfy it.** At pending states, the declared generating set lacks simultaneous ICLR and HUH, and lacks ICLR with IEN clear. These are already interactions of three axes when the pending condition is included. The constrained array must also account for sticky INT with zero pending count, and must classify the asynchronous pending/INT-clear case honestly.
+
+Those are source-derived coverage omissions, not newly measured full-score mutants. Freeze the axis list, reachability constraints, strength, and observation requirements once; do not demand all 128 syntactic cells or raise strength after each later escape.
+
+**5. Do not close the bundle as delivered. Keep the committed product fix.**
+
+The premise that part 12 is complete is not fully verifiable from the accessible artifacts. At my last read, its log ended after building M_TXHIOVF. The repository had no preserved part-12 directory, and [CHANGELOG.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:138) still contained both `PART12_OWED` and `GATE14_P12_OWED`. The remaining WSL artifacts were inaccessible with `E_ACCESSDENIED`.
+
+The preserved [gate result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/pcc2widthkills/killtable2_20260903/gate14_p11.log:1193) is **203 emitted, 203 green**, with 769 checks passing. It does not validate the current 242-row instrument. I verified 242 unique gate names and live probe MD5 `16378e8f52d7d8b8fb5dea91ef047679`; those are source/identity checks, not a fresh gate result.
+
+A closeable delivery needs:
+
+- The factual corrections above, with predictions preserved and actual results recorded.
+- A single adopted floor and consistent grading. Under my recommended floor, complete the finite TxICR coverage obligation; under Fable’s existing floor, identify the additional combinations explicitly as debt.
+- Complete part-12 evidence, frozen instrument identity, final restoration evidence, and the gate for the delivered 242-row probe.
+- The exact final diff and current roster. This is **one delivered reading seat of the two requested fix-review seats**. I have not seen Fable’s current fix-review answer. Pass 11’s eight landed seats, with agy deliberately absent, cannot be counted as fresh review of this repair.
+
+My scoped zero is **zero newly identified implementation defects in the twelve guarded blocks and their shared helper, initialization, read dispatch, and common return**. It is not zero defects in PCC2, zero outstanding coverage obligations, or a completed panel verdict.
+tokens used
+365,836

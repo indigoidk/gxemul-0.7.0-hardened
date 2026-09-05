@@ -24,6 +24,8 @@ of this state when the check was written.
 WHAT IT CHECKS, and the three grades are deliberately different failures:
 
   HARD   a commit subject names row R with a CLOSURE word, and R.state != "closed".
+         EXCEPT when R.reopened names that commit: a closure a later pass of the same round
+         superseded, with the board saying so (2026-09-05, pcc2widthkills at b78bb0f).
          The commit says the work is done; the board says it is not.  One of the two is
          wrong and neither can be believed until someone looks.
 
@@ -233,7 +235,16 @@ def main(argv):
             #  attributed.  The injected break went undetected and the run stayed green.
             #  Being listed is not the same as agreeing.
             if CLOSURE.search(subj) and state != "closed":
-                hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
+                #  *** A THIRD CASE, MEASURED 2026-09-05: BOTH WERE RIGHT AT THEIR TIMES. ***  b78bb0f
+                #  closed `pcc2widthkills`; its own pass 2 reopened it the same day and thirteen
+                #  detector passes followed with the fix unchanged.  The board must SAY SO: a row
+                #  whose `reopened` field names the commit is a known reopening and is reported,
+                #  not graded.  Any other closure/state contradiction stays HARD.
+                if h in (row.get("reopened") or ""):
+                    print("  REOPENED %s %-14s %-8s row names this commit as the closure its later passes superseded" % (h, rid, state))
+                    ok += 1
+                else:
+                    hard.append((h, rid, state, "commit says CLOSED; row is %r" % state, subj))
             elif h in commits:
                 ok += 1
             elif records_only(h):

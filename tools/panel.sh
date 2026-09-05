@@ -116,7 +116,7 @@ GROK_EFFORT="xhigh"         # grok-4.6 is both it and the default. Re-check afte
                             # error, so it cannot be caught by exit status -- it
                             # shows up as a tiny file, which the seat check below
                             # reports as a non-answer.
-CODEX_EFFORT="xhigh"        # the user's intent is "ultra"; xhigh is the highest
+CODEX_EFFORT="max"          # OWNER DIRECTIVE 2026-09-04: max for gpt-6-astra -- ACCEPTED by the CLI (header "reasoning effort: max") and PROVEN VALIDATED: a bogus value errors with the supported list, so acceptance proves the tier
                             # value the CLI reliably accepts (proven this repo).
 #  *** OWNER RULING 2026-08-30: agy IS RESERVED FOR MEASUREMENT AND HELD OUT OF ROUTINE
 #  PANELS.  It is the only compile-and-measure seat NOT behind the Agent-tool transport, so
@@ -215,7 +215,9 @@ OLLAMA3="minimax-m3:cloud"        # all FOUR are THINKING models; send no
 #  CLI walls again, set OLLAMA4 back to kimi-k3:cloud and the seat is COVERED rather
 #  than lost.  That is the sixth seat-failure class -- one transport walled while
 #  another is live -- and the whole point is that it is one line away.
-OLLAMA4=""
+OLLAMA4=""   # OWNER DIRECTIVE 2026-09-04: the kimi CLI is on its WEEKLY wall; the
+                          # Ollama substitute covers the seat UNTIL 2026-09-05, then restore
+                          # OLLAMA4="" (the CLI is the seat again once the window resets).
 
 #  argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
 #
@@ -321,7 +323,7 @@ Questions/Review-asks section directs. Verify every cited claim against the \
 source under $PROJ/GXEMUL-SEC with file:line evidence. End with GO / NO-GO / \
 GO-WITH-CHANGES."
 
-"$CODEX" exec --sandbox read-only --skip-git-repo-check -m gpt-5.6-sol \
+"$CODEX" exec --sandbox read-only --skip-git-repo-check -m gpt-6-astra \
     -c model_reasoning_effort="$CODEX_EFFORT" "$CODEX_ARG" \
     </dev/null > "$OUT/codex.txt" 2>&1 &
 P_CODEX=$!

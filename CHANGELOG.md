@@ -1,3 +1,1553 @@
+# Round pcc2widthkills, pass 13 -- the FIX REVIEW: eleven passes on the detector and none on the fix; the first pass on the fix approved it block by block and found the detector's enumeration wrong for five arms
+
+**2026-09-04.  Owner directive: "GPT 6 Astra came out, use extra high effort; have it review any previous fixes
+and adjudicate with Fable 5.1" -- then "change gpt-6-astra effort to max".  The codex seat migrated to
+`gpt-6-astra` (a CLI upgrade the CLI could not do itself; carrier row records the path) and ran the review at
+`max`; the Fable 5 seat adjudicated on the same brief.  Detector 242 -> 251 rows; three contract L4s; one
+product-comment L4 (`dev_pcc2.c`, comment only -- no product logic changed); carrier: the floor includes the
+single-axis generating set; `pcc2defaultkill` promoted to HIGH and ranked first.**
+
+## The two seats (`_scratchpad/panel_20260904_192830/`; durable copies in `regress/artifacts/pcc2widthkills/fixreview_20260904/`)
+
+The brief (`brief_fixreview.md`, 102 KB) inlined the committed fix diff (`b78bb0f`), the working-tree change,
+the whole handler, the contract, clause (d), the chain's round titles with the pass-11 block, and the nine filed
+pcc2 items, and asked five questions: is the FIX right, is any repair wrong, the ordered queue disposition, the
+floor bound, and whether the chain may close.
+
+| seat | verdict | what it settled |
+|---|---|---|
+| **codex / GPT-6 Astra (max)** -- 18.4 KB, 1 MB reasoning stream, token returned | **APPROVE the fix; DO NOT CLOSE** | seven findings, every one CHECKED against the tree by the main loop before it was credited (below); dissents on the floor bound (adopts the Opus strength-t array) |
+| **fable5** -- the adjudicator's hat; its file write was blocked by the harness and the answer captured verbatim | **GO-WITH-CHANGES** | the fix refuses NOTHING the in-tree guest does: OpenBSD 2.2's clock.c/cl.c/if_ie.c access every declined register as a byte and its only wide accesses are the counter/compare words the memcpy arm ACCEPTS -- "had the fix declined that arm it would have broken the clock"; adjudicates the queue and the floor |
+| agy | DELIBERATELY NOT FIRED | reserved for measurement (owner ruling 2026-08-30) |
+| grok, kimi, glm, deepseek, minimax, opus5 | not fired on the fix review | the owner named two seats; the pass-13 panel below is the nine-seat pass on this repair |
+
+**The fix (`b78bb0f`) is approved by both seats and is unchanged by this round.**  Both read every block: twelve
+DECLINE dispositions right (`memory_readmax64` composes an integer, not per-register transaction semantics;
+FAULT would deliver a guest access exception through `memory_rw.c` for a documented 8/16/32-bit-capable part);
+reads ACCEPT by fall-through with no skipped side effect (SCCRXIACK is the thirteenth arm, outside the twelve;
+the IACK handler is separately registered); the latch is per instance and per block (T1/T2 share their block's
+bit by design); every `break` reaches the bare `return 1`; the typedef checks the real field.
+
+## The findings, each checked from the tree before it was credited
+
+1. **The enumeration was false for five arms** (Astra).  The contract listed GENCTL, VECBASE, SCCICR, SCCTX, SCCRX,
+   SCSIICR, SCCERR, PSCALEADJ, MASK as arms with "NO `if' on state or idata".  **Five of them test their HUH?
+   bits**: `dev_pcc2.c:464` VECBASE `idata & ~0xf0`, `:565` SCCICR and `:579` SCCTX `& ~0x1f`, `:593` SCCRX
+   and `:613` SCSIICR `& ~0xdf` -- on the COMPOSED idata (the `if' lines, MEASURED by grep at the time of this
+   sentence; the block first cited the pre-edit `fatal()' lines, and a first correction subtracted one from stale
+   numbers -- the fable5 pass-13 seat had the right ones).  Every wide value the rows drove at them (0x0303,
+   0xaab8, the rb4/rb8 lanes) has bits outside the mask -- and this block first said `&& (idata & ~mask)` at any
+   of the five would SWEEP the 242-row table clean, five open cells, L2.  **MEASURED FALSE in part 13 (M_HUHV
+   249/251, `latch all zero` red):** the six `latch all*` rows write 0x0000 / 0x0001 / 0x0003 (as h, w, d, forward
+   and reversed) at every block and count twelve announces; 0x0000 is HUH?-clear at VECBASE (0x0001 and 0x0003 have
+   bit 0 set, outside 0xf0 -- this paragraph first said 'two rows, 0x0000 and 0x0001, at these arms', which the
+   kimi-k3 and deepseek seats caught), and all three are HUH?-clear at the 0x1f/0xdf arms -- so the partition WAS
+   HELD, by
+   announce-count channels the enumeration did not know it had.  Astra had said exactly this ("existing rows
+   may discharge their partitions; the enumeration must actually show that") and the main loop wrote the
+   sweep as a fact anyway.  The enumeration L4 stands (five arms called "no `if'"); the five `rbq` rows add the
+   LANDING channel (the readback of the stored masked value) -- a strengthening, not a floor repair -- and the
+   grading is corrected from L2 to L4 + coverage.  *An enumeration is checked against the BODY and against the
+   ROWS before a breach is declared; a clean sweep is a MEASUREMENT, never an inference.*
+2. **"INT clear with a count pending -- UNREACHABLE" was unsupported, and its converse is a real state** (Astra).
+   `pcc_timer_tick()` (`:180`) increments the counts from the host timer WITHOUT calling `reassert_interrupts()`;
+   INT is set at the next `DEVICE_TICK` (`:389`), so the cell exists in that window -- not constructible by a
+   probe, DISCLOSED, not "unreachable" (grok's pass-11 "reassert sets INT before any guard runs" was wrong).
+   **And INT SET with count ZERO is constructible**: the TxICR body zeroes the count on an IEN-clear write and
+   clears INT only on ICLR; reassert only SETS it.  The pass-11 enumeration dismissed INT as derived from the
+   count.  (label, INT set, own count 0) is a reachable joint state of two body-read lvalues -- a floor cell under
+   BOTH argued bounds -- and no row held it.  -> `pend2 zctl/rbz`, `pend1 zctl/rbz` (below), contract corrected.
+3. **"Every held write sets at most one of the three" was false** (Astra): 0x0018 sets IEN and ICLR.  Contract
+   reworded; the kill logic was unaffected (a single-axis conjunct on any one bit still lands one write).
+4. **The product comment "every arm uses `idata'" was false** (Astra): SCCERR stores a constant, IPL ignores the
+   value.  Comment corrected (ten of twelve; both decline too -- the neighbouring lanes have no home).
+5. **The carrier and the CHANGELOG graded ONE finding two ways** (Astra): clause (d) said the pass-11 ICLR escape
+   was "L1 construction", the pass-11 block says L2.  The CHANGELOG's is the ruling; the carrier corrected in
+   place, root and tools copy.
+6. **`pcc2huhflood`'s "`acc all` trips SCCICR/SCCTX" was false** (Astra): `0x10 & ~0x1f == 0`.  The correction
+   written here first said "0x10 trips VECBASE (`& ~0xf0`) and TxCTL" -- ALSO FALSE: `0x10 & ~0xf0 == 0` (bit 4 is
+   inside 0xf0).  0x10 trips TxCTL's `& ~7` and PSCALEADJ's unconditional print, and none of the five HUH? arms.
+   Caught by the Opus pass-13 seat by arithmetic; the third "a correction is not safer than the thing it
+   corrects" of this chain.  Filing corrected twice.
+7. **"A debugger-visible read clears SCCRX INT" conflated two paths** (Astra): pcc2 is registered `DM_DEFAULT`,
+   so the debugger's `dump` bypasses it; a GUEST read runs the side effect.  Addendum corrected.
+
+Checked and NOT credited: Astra's "0xb8 & 0x04 == 0 -- the Opus derivation misclassified it" is true of the
+seat's answer file and appears in no record (the fills already name lanes 0xdd and 0x44) -- but the VALID half of
+the same finding, that the rb4/rb8 lanes 0xdd/0x44 DO carry COVF so "held at NO cell" was false, drove the
+pass-12 contract correction and IS credited as an L4 (the fable5 pass-13 seat caught the packet under-crediting it); its doubt that part 12
+was complete was correct at the moment it read (it read the live driver log mid-run) and moot by 20:01, when the
+part was preserved.  Fable's "nothing at TxICR/TxCTL is unheld under my floor" is superseded by findings 1 and
+2, which it did not raise -- under its OWN adopted floor the five HUH?-clear cells are generating-set obligations
+and the (INT set, count 0) cell is a state floor cell.
+
+## The queue, adjudicated (Fable, with Astra's list as input; the main loop settled the one order dispute by grep)
+
+1. **`pcc2defaultkill` -- PROMOTED med -> HIGH, ranked FIRST.**  Both seats: any access to an unimplemented offset
+   reaches `default: exit(1)`, READS included.  Fable: the unimplemented offsets are REAL PCC2 registers the
+   in-tree guest driver writes -- **verified by grep: `_guest-src-openbsd22/sys/arch/mvme88k/dev/if_ie.c:609`
+   stores `pcc2_lancirq` (IEICR 0x2a), `:612` `pcc2_lancerrirq` (0x2b), `:655` `pcc2_lancerrstat` (IEERR
+   0x28)** -- plus GPIO_ICR 0x18, SCSIERR 0x2c, the printer block, SPEED 0x38, SCCTXIACK 0x25.  Astra ranked
+   `pcc2c040kill` first; Fable ranked this first because the in-tree guest never writes GENCTL and C040 is a
+   68040-companion mode an 88100 never enables -- the grep settles it for Fable's order.  *Re-based 2026-09-05:
+   the Fable DESIGN seat then found, and the main loop verified, that `if_ie` never attaches on this model
+   (`machine_mvme88k.c:106` installs `unreadable` at the ie0 address 0xfff46000; `if_ie.c:407-409` fails its
+   match there), so the driver's writes never run; the rank rests on the measured rung-3 witness -- a GUEST
+   byte load or store to any uncased offset ends the host -- and on severity.*  Witness measured: a guest
+   `st.b`/`ld.bu` to IEICR -> exit 1 (the debugger's `put b` does not reach the arm).  Option set for its pass 1: DECLINE + latched announce / BACKED ACCEPT
+   (the register array already backs every offset and the memcpy read path already serves it) / FAULT.
+2. **`pcc2c040kill` -- HIGH, second.**  Separate round: a value-in-callee predicate, not a decode.
+3. **`pcc2counter8` -- MED, third**, with the coupling flag: the `rb t*ctl b27` rows lean on the defect.
+4. **One floodclass round**: `pcc2huhflood` carries it, `pcc2pscaleflood` folds in (duplicate), `pcc2assertflood`
+   is the lowest member (`debug()`, not `fatal()`; Astra: log the final effective state, the message precedes the
+   MIEN gate).
+5. **File-and-leave**: `pcc2widecompose` (no defect; needs the hardware transaction contract), `pcc2iclrdec` (a
+   timer-semantics round; Astra: counts 0, 1, >= 2 at both labels), `pcc2latchwidth48` (the drop candidate).
+
+## The floor, adjudicated
+
+**Adopted: Fable's data-flow-state floor AUGMENTED BY grok's single-axis generating set** -- at each floor cell
+every idata bit the body tests is written both clear and set -- because the bare state floor does not catch
+`M_ICLR` (an idata-bit x state joint) and would grade it debt while the record grades it L2.  Multi-axis idata
+joints stay clause-(e) debt.  **Astra dissents** for the Opus strength-t covering array and is recorded, not
+adopted -- on two grounds the pass-13 Opus seat (the array's author) supplied in place of the one first written
+here ("`t` is a judgment input": FALSE, `t` is the body's longest conjunction and is read off the code):
+(i) COST -- TxICR has seven binary axes and a strength-4 array over them is tens of cells per arm, each a pty
+write+readback, so the 2^k objection arrives by another door; (ii) a covering array certifies that a tuple
+OCCURS, not that an observable differs -- it cannot be the floor without the CHANNEL obligation doing the work.  Under
+the adopted floor, finding 2 is a floor cell no row held (M_ZINT2/M_ZINT1 red ONLY their new rows: an L2
+repair in-round), while finding 1's cells were HELD by the announce-count rows (measured; its rows are a
+channel strengthening under L4, as corrected above).  Carrier amended (root + tools copy).
+
+## The repair (`regress/pcc2_width_probe.py` 242 -> 251 rows; `regress/gate_arm.sh` +9 names, denominators 251)
+
+* **`rbq vecbase / sccicr / scctx / sccrx / scsiicr`** -- a HUH?-CLEAR halfword appended to each arm's rb4 session
+  (0x00f0 / 0x0010 / 0x0010 / 0x0001 / 0x0001: nothing outside the mask; each lands to a value the preset is
+  not -- 0xf0 vs 0x50, 0x10 vs 0x1f, 0x01 vs 0x1f), readback wants the preset.  Killed by `&& (idata & ~mask)`
+  at its arm.  No new session; the rb4 row keeps its first readback (`printed()` takes the first match).
+* **`pend2 zctl` / `pend2 rbz`, `pend1 zctl` / `pend1 rbz`** -- appended to the two pending sessions: a guest BYTE
+  write of 0x03 (r13, new in PEND_REGS) clears IEN and the count and leaves INT (control readback 0x23 -- the
+  cell's signature), then an IEN-set wide write (guest `st.h` at T2, operator `put h` at the odd T1) and a
+  readback wanting 0x23.  Killed by `&& !((reg & INT) && p == 0 && label)`: a landed 0x0013 reads 0x33.
+* Contract: the enumeration corrected for the five arms; the INT axis added to the TxICR floor (TEN cells); the
+  "unreachable" and "at most one" sentences replaced with the derivations above.
+
+## Part 13, measured (`killtable2_20260903/part13/driver.log`; predictions in `PRETABLE_pass13.out`, mtime 20:38:22; first table launched 20:41, the counted runs 20:49 and 21:58)
+
+Two attempts before the table that counts, both recorded: the FIRST aborted at BASE after seven minutes -- the new
+`rbq` row called `cval()` 44 lines before its `def`, a NameError `py_compile` cannot see; the driver's BASE abort
+caught it (85 rows had passed), it was fixed as L1 in the rb4 rows' own alive/else-died form, and `probe_static.py`
+(an AST check for module-level calls before their definition) joined the dry run and reports NONE.  Preserved as
+`part13_aborted/`.  The SECOND ran BASE, M_HUHV and M_HUHSI and was then KILLED mid-M_HUHST by a harness restart
+(`wsl.exe` dies with the Claude Code process; the clone was left MUTANT with its `.MUTANT` sentinel in place --
+the discipline working -- and was removed only after its three complete `.out` files were preserved as
+`part13_partial/`).  The THIRD (part 13b) re-ran BASE in a fresh clone and the five unmeasured mutants.  All three
+froze the SAME instrument: md5 `0b79eae2`, equal to the live probe at preservation time.
+
+| run | predicted | measured | red rows |
+|---|---|---|---|
+| BASE (run 2, fresh clone) | 251/251 | **251/251** | -- |
+| BASE (run 3, fresh clone) | 251/251 | **251/251** | -- |
+| `M_HUHV` -- `&& (idata & ~0xf0)` at VECBASE | 250/251 | **249/251** | `rbq vecbase` (0xf0 vs 0x50) AND `latch all zero` (11 announces, not 12) |
+| `M_HUHSI` -- `&& (idata & ~0x1f)` at SCCICR | 250/251 | **244/251** | `rbq sccicr` (0x10 vs 0x1f) AND `latch all`, `latch all one`, `latch all zero`, `latch all rev`, `latch all w`, `latch all d` (each 11 announces) |
+| `M_HUHST` -- at SCCTX | 250/251 | **244/251** | `rbq scctx` and the same six announce-count rows |
+| `M_HUHSR` -- `&& (idata & ~0xdf)` at SCCRX | 250/251 | **244/251** | `rbq sccrx` and the same six |
+| `M_HUHSS` -- at SCSIICR | 250/251 | **244/251** | `rbq scsiicr` and the same six |
+| `M_ZINT2` -- `&& !((reg & INT) && p2 == 0 && T2)` | 250/251 | **250/251** | `pend2 rbz` (0x33 vs 0x23) -- exactly the row built for it |
+| `M_ZINT1` -- the T1 mirror | 250/251 | **250/251** | `pend1 rbz` (0x33 vs 0x23) |
+
+Every mutant string gcc-syntax-checked before the table by `mut_syntax2.py` (the old checker's anchor was
+HARDCODED to the TxICR head, so it applied all seven full-block mutants at the wrong anchor and reported seven false
+syntax errors at one line -- a check that answers the same way for every input; the new one derives each anchor from
+the driver's `mut` line and FAILS the known-broken pass-10 `M_T1JOINT`, kept as its negative control).  Each mutant
+proven by a two-line diff against SEC; the clone restored from SEC, rebuilt, cmp-clean, sentinel cleared.
+
+**The five HUH? mutants missed their predictions in the SAFE direction, and the miss refutes a sentence this block
+first carried.**  The `latch all*` family -- six announce-count rows that write 0x0003 / 0x0001 / 0x0000 (as
+halfword, word and dword, forward and reversed) at EVERY block and want twelve announces -- drives HUH?-CLEAR values
+at these arms: 0x0000 alone at VECBASE (0x0001 and 0x0003 have bit 0 set, outside 0xf0), all three at the 0x1f and
+0xdf arms.  Under the mutant those writes LAND silently (no HUH? print: the bits are clear) and the count reads 11.
+So the HUH?-clear partition WAS HELD at all five arms before this pass, by an announce-count channel the enumeration
+did not know it had; on the 242-row instrument `M_HUHV` would have scored 241/242 and the other four 236/242
+(DERIVED from these logs -- the red rows other than `rbq` all pre-exist -- not measured).  The `rbq` rows add the
+LANDING channel: the stored masked value read back, a stronger oracle than an announce count, and the only one that
+says WHERE the write went.  The enumeration L4 stands (five arms called "no `if'"); the grading of finding 1 is
+corrected from L2 to L4 plus a channel strengthening; the claim of a clean sweep is withdrawn as an inference
+written as a fact -- the codex seat had said "existing rows may discharge their partitions; the enumeration must
+actually show that", and the main loop did not show it.
+
+**The two INT mutants hit their predictions exactly, and that is the measured floor breach of this pass.**  Each
+reds ONLY the row built for it; every pre-existing row stays green.  So on the 242-row instrument neither would have
+reddened anything (DERIVED: removing the one red row leaves a full table) -- the (label, INT set, own count 0) cell
+was genuinely unheld, a state floor cell under both argued bounds, found by a seat reading the ENUMERATION against
+the body's WRITERS of INT.  The control rows (`pend* zctl`, 0x23 after the IEN-clear byte write) held in every run:
+IEN clear, count zero, INT still set -- the register array's own signature of the cell.
+
+## Gate 14 at 251 (`killtable2_20260903/gate14_p13.log`; the live probe, md5 `a080e2bc` -- the part-13 frozen instrument `0b79eae2` plus the docstring correction that withdrew the clean-sweep claim; run alone 01:39-02:11)
+
+`gate 14: ARM/Thumb flags: PASS (817 checks)`, `pcc2 width rows emitted 251`, `pcc2 width rows green 251`, GATE_RC=0.
+The gate pins the delivered instrument: every row the seven mutants killed is green on the fix, including the nine
+this pass added.
+
+## The pass-13 panel (`_scratchpad/panel_20260905_021741/`, fired 02:17 alongside the pcc2defaultkill design panel; nine seats, agy deliberately not fired)
+
+| seat | transport | verdict | what it settled |
+|---|---|---|---|
+| **opus5** | Agent, reading (chose not to build: two panels' seats were on the machine) | **DO NOT CLOSE -- one more diff, the CLASS CLOSURE** | re-derived all eight part-13 scores from source, name for name; the repair reproduces its own class twice: **L2-a** the generating set is ONE-SIDED at the two new INT cells (only 0x0013 written -- IEN set only, ICLR clear only, 0xe0 clear only: six single-axis conjuncts escape 251/251 by construction); **L2-b** the INT axis was not crossed with the OTHER count ((T2, p2=0, INT set, p1>0) and mirror: reachable pure-state cells no row builds); **L4** F2 item 6's correction was itself false (`0x10 & ~0xf0 == 0`); the item-15 rejection reason was false (`t` is mechanical); the pre-table's "nothing reads after it" is true of readbacks only |
+| **fable5** | Agent, reading | **GO / CLOSE with two L4s** | fix right, enumeration matches all twelve bodies, nine rows failable, eight measurements reproduce; L4s: the acc-all arithmetic; the contract's "clock.c not in this tree" (it is: clock.c:172/177/241/242 arm COC on both timers); the five HUH-arm cites one line off; credit Astra's COVF half.  Its "no partition held on one side only" checked partitions per ARM, not per CELL -- superseded by the three seats below |
+| **codex / GPT-6 Astra (max)** | file-reading, pointer-fed (448 KB stream) | **NO-GO** | zero runtime defects in the twelve blocks and the helper; coverage: the two missing stable TxICR cells, the generating set completed consistently, the record corrected (stale "first of four wide writes" texts; "not constructible" overstates -- any of the seven reasserting arms sets INT, not only DEVICE_TICK; the working diff is comment + typedef, not comment-only; appended execution can change `alive`, which the rb4 rows also consult) |
+| **grok** | file-reading (--prompt-file) | **not closed -- L1** | found the same two gaps independently ("a zero that does not list those is 'zero looked for'"), graded L1 on uncommitted detector material; the cheap repair named |
+| **kimi (CLI)** | file-reading, 490 KB | **GO-WITH-CHANGES** | verified the tree, logs, guest source, md5s and mtimes; requires before commit: row or disclose the two other-count INT cells (found independently by the joint-reachability argument), refresh the stale row descriptions, fix the cites and the "beyond IEN" wording |
+| **glm** | packet-fed | **pass 14 owed** (third firing) | the first two firings were THINKING BURNS (response empty, done_reason `stop`, 118-124 KB of thinking -- kept as `ollama_glm.burn.txt`/`.burn2.txt`); a 2 KB ONE-question packet then answered: (a) is inside the floor (clause 2 is per cell), (b) not settleable from the packet |
+| **deepseek** | packet-fed | do not close | objects that the M_ZINT guard "is false so it cannot land" -- a POLARITY misread (the guard's `!(...)` being false is exactly the case where the decline is skipped and the write LANDS; the measured 0x33 says so) -- REJECTED with the derivation; its "disposition 1 names two of seven red rows" was right (L4 applied) |
+| **minimax** | packet-fed | close | no disposition wrong from the packet; one wording defect in premise 3 |
+| **kimi-k3:cloud** | packet-fed substitute (the CLI also answered; two transports, one seat) | close | derivations reproduce; caught that "0x0001 is HUH?-clear at these arms" is false at VECBASE (0x0001 & ~0xf0 = 0x01) -- L4 applied |
+
+**The adjudication.**  Count the arguments, not the seats: the two gaps are DERIVED from the row source by three
+file-reading seats with the derivation closed -- `grep ST_B(13` finds exactly two sessions, each followed by ONE
+wide write (0x0013); `pendboth` has no byte write at all -- and by the adopted floor's own letter (the generating set
+at EVERY floor cell; the INT axis crossed with the body-tested count partitions) both are inside it.  The three
+seats for CLOSE checked partitions per arm (fable5) or from the packet (minimax, kimi-k3).  **RULING: PASS 14 IS
+OWED -- the class closure, not another cell.**  Grading: **L1** (grok) -- pre-ship construction, since no detector
+material has shipped since `b78bb0f`; the floor's L2 wording governs shipped material.  The three-seat convergence on
+the SAME two cells, reached by reading rather than by a table, is the class-closure amendment doing what it was
+written for: pass 9, 10, 11 and 13 each found one cell of one class; the repair for pass 14 enumerates the product.
+
+**Dispositions of the F2 packet after this pass:** item 6 REVERSED twice -- the original claim and its correction
+were both false; `acc all` (0x10) trips TxCTL's `& ~7` and PSCALEADJ's unconditional print and NONE of the five HUH?
+arms (0x10 has no bit outside ~0xf0, ~0x1f or ~0xdf); item 15's stated reason replaced (cost; occurs-vs-observed);
+item 17's valid half credited; item 1's row census corrected (0x0000 alone at VECBASE; six latch rows at the
+0x1f/0xdf arms).  Items 2-5, 7-14 stand.  Fable's "nothing unheld" (item 16) is now wrong twice in one round,
+recorded as a pattern.
+
+**Records corrected in place this pass** (each named above): the acc-all arithmetic in OUTSTANDING_BUGS, the CHANGELOG
+and the ledger; the finding-1 row census (CHANGELOG, carrier); the five HUH-arm cites (the first correction subtracted
+one from stale numbers -- measured now); the item-15 reason (CHANGELOG, carrier); item 17's credit.  Carried to the
+pass-14 diff (probe docstring, applied with the repair so the instrument is edited once): the clock.c warrant, the
+"one bit beyond IEN" wording, the stale "first of four wide writes" texts, the tick-window setter sentence.
+
+**A seat-ledger note, because two of the day's failures were new shapes:** the design panel fired ten seconds after
+this one and its three Ollama seats returned HTTP 429 -- eight concurrent cloud POSTs; sequential panels five
+minutes apart had never 429'd -- so CONCURRENT panels ARE the constraint the retired ~20-minute rule was reaching
+for; each was re-fired once and answered.  And glm's two thinking burns on a 17 KB three-question packet, then an
+answer on a 2 KB one-question packet, is the fifth seat-failure class measured a third time with the same cure.
+
+## Records corrected in place (L4), every one from a seat
+
+The seven findings above are the list; each names its file.  Plus the checker: `mut_syntax.py` had its anchor
+HARDCODED to the TxICR two-line head, so on this pass it applied seven full-block mutants at the wrong anchor and
+reported all seven as syntax errors at one line -- a check answering the same way for every input.
+`mut_syntax2.py` derives each anchor from the driver's own `mut` line; it passes the seven and FAILS the known-
+broken pass-10 `M_T1JOINT` (negative control kept in the scratchpad log).
+
+# Round pcc2widthkills, pass 11 -- the adjudication pass: one accepted disposition reversed (a correction had made a true sentence false), the rule's own author bounded its letter, and the disclosed ICLR cell was measured open -- taken as construction, twelve writes in existing sessions; the repair owes pass 12
+
+**2026-09-04.  Detector 203 -> 218 rows (twelve readbacks and three HUH? rows appended to the three
+timer sessions); clause (d) bounded in the carrier; the contract states its floor, what it holds beyond
+it, and what it discloses with the derivation; product code unchanged.**
+
+## The verdicts (the nine-seat roster: seven reading seats answering plus the measuring seat; agy deliberately not fired)
+
+Pass 11 was the section-F2 adjudication pass -- every seat saw every other seat's pass-10 findings with
+the main loop's disposition on each (sixteen accepted, three rejected, one held) -- and the pass on the
+pass-10 repair.  Every landed seat answered question 1 by number.
+
+**Which accepted disposition was wrong: #9, named by grok (its own pass-10 finding), codex and fable5,
+and confirmed against the header.**  Pass 10 had accepted "the store mask IS a writer of ICLR" and
+rewritten the contract to say so.  `PCC2_TTIRQ_ICLR` is 0x08; the store mask 0x17 is bits 0, 1, 2 and
+4; `0x17 & 0x08 == 0`.  ICLR is a write STROBE the body tests and never stores -- which is exactly why
+register bit 3 is dead, the same class as bits 6-7.  The original sentence had been right and the
+accepted correction made it false: *a correction is not safer than the thing it corrects*, and one AND
+would have kept it.  Reverted in the contract, the pass-10 block and the carrier.  The other fifteen
+held (fable5: all defensible; grok: all check; codex: #2 carried a false premise -- a C `int` is finite
+-- which the carrier now says differently; deepseek: #13's wording contradicted #5 -- the VALUE
+both-thousands is unheld, the CELL is rowed -- taken as wording; minimax: F5 should name which table).
+The packet-fed challenges to #1 (glm) and #12 (kimi substitute) were adjudicated against with the
+reason in the ledger.  **The three rejections stood with every seat, grok recanting its own R1**: this
+detector rows operator-only blocks throughout, so a guest-state clause would have to unrow `pend1`.
+
+## H1 -- the rule's own author ruled against its letter
+
+The held question: does the adopted rule -- the cross-product of the body-tested partitions -- demand
+rows for the ICLR, INT and 0xe0 partitions the pass-10 repair disclosed by count (112 of 128 cells)?
+
+* **Read literally, yes** (codex, glm, minimax, deepseek): "governs what a landed write DOES, not
+  whether it lands" is no exclusion -- an extra conjunct on ICLR or 0xe0 at the GUARD changes whether
+  the write lands exactly as IEN does, and IEN was rowed.  codex's constructive census: 96 reachable
+  cells at guard entry (two labels, two opposite-timer states, eight idata classes, three stable target
+  states), the 32 "count pending, INT clear" cells reachable only through an unmeasured interleaving.
+* **The flagship seat, asked to be harder on its own rule than on anyone, bounded it:** the rule
+  ENUMERATES joint cells wherever the body distinguishes them; the FLOOR -- the cells a row is OWED for
+  -- is the cross-product of the guard's dominating predicates with the device-STATE lvalues the fix's
+  own repair path reads that are jointly reachable through its own data flow.  The bits of the single
+  value being written are single-operand MARGINALS, not floor.  At TxICR: {label} x {p1} x {p2}, eight
+  cells, all rowed by pass 10; the idata joints are clause-(e) debt.  The letter, it said, is 2^k in the
+  `if`-count and compounds across twelve arms -- `#392` in the rule's clothes.  Adopted, and written
+  into the carrier as the correction of its own one-day-old paragraph.
+* **grok's generating set is what the debt costs when it has a warrant:** per idata axis, a set/clear
+  pair at every rowed pending cell, so any single-axis extra conjunct reds; unreachable partitions
+  disclosed with the derivation (INT clear with a count pending: the tick increments only under IEN and
+  `reassert_interrupts` sets INT before any guard runs).
+* **The measuring seat's bound, put beside Fable's for pass 12 (the remaining split):** axes = the
+  lvalues the body's code makes DECISIVE -- tested in an `if` OR used as an index or selector (which puts
+  the T1/T2 axis in at TxCTL, where `relative_addr` is an RMW index no `if` tests); demand = a COVERING
+  ARRAY of strength t, t = the longest conjunction the body itself writes (four here), cost O(2^t log k)
+  rather than 2^k; disclose BY STRENGTH -- "kills every conjunction of at most t of the N axes" -- which is
+  falsifiable and would have made the pass-11 escape unwritable; t and the axis list are read off the diff
+  once and no pass may raise t.  It withdrew its own pass-10 "demand INCREMENTAL" as having no stopping
+  rule.  Three consecutive passes found ONE class of breach -- an unvaried axis crossed with a varied one,
+  190 -> 194 -> 203 -- so the class-closure amendment says the next repair owes THE ENUMERATION across the
+  arms, not another cell; the seat derived (not measured) that at TxCTL the rule enumerates {COVF} x
+  {idata & ~7} with two of four cells unheld.
+* **The measuring seat built the disclosed cell:** `&& !(pending_timer2 && (idata & PCC2_TTIRQ_ICLR))` at the TxICR guard scored **203/203, a TOTAL
+  ESCAPE**, on its own clone (`pass11_seats_20260904/opus/M_ICLR.out`; predicted at 16:56 before the
+  16:59 mutate script), with a POSITIVE CONTROL proving the write LANDS rather than the mutant never
+  reaching the binary -- mutant `CONTROL_RB=0x13, DECL=0` against baseline `0x31, DECL=1`: the store
+  gives 0x33, the strobe clears INT and decrements the pending count to 0, reassert leaves INT clear.
+  *Entering the cell corrupts the register and silently consumes a pending timer interrupt, with all
+  203 rows green.*  A `BASE2` run on the post-edit instrument (md5 12c7a97b) also read 203/203, closing
+  a one-instrument straddle the seat reported on itself: its runner re-copied the live probe between
+  BASE and the mutant while the main loop applied docstring-only corrections at 17:12 -- seven text
+  lines, 203 identical (name, want) pairs, but a class worth naming: **a driver that re-copies its
+  instrument straddles any edit, and the main loop should not edit a probe while a seat measures it.**
+
+**Disposition.**  The floor is Fable's; the generating set is cheap (twelve wide writes appended to
+three existing sessions, no new session).  **The GRADING is the Opus seat's: L2, a floor breach repaired
+in-round, not debt-with-a-warrant** -- by the round's own pass-3 sentence, written into the probe by that
+seat, that *a disclosure cannot discharge a floor clause, or every breach becomes a sentence*, and
+because the cell sits inside the closure on every bound anyone proposed (the adopted product, Fable's
+data-flow floor once the ack path is read as state the fix's own repair touches, Opus's strength-4 or
+strength-2 array).  The repair is identical under either grading; the record has to say which holds,
+and it is the stricter one.  The contract now says, by name, what is floor, what is held beyond it,
+and what is disclosed and why.  The pass-9 Opus dissent and minimax's R3 "correctly sensed
+the exponentiality H1 had to fix" (fable5); the fix is the bound, not the dissent's arity cut.
+
+## The repair
+
+At every rowed pending cell -- `pend2` and `pend1` at both labels, `pendboth` at both -- the tested
+bits of idata are now written both clear and set: IEN already (0x0000 / 0x0013), now ICLR (0x0018 =
+IEN|ICLR: a landed write keeps IEN, and the strobe clears INT and decrements the count, so it reads
+0x10) and the HUH? bits (0x0020: a landed write reads 0x20 at an armed ICR and 0x00 at an idle one,
+zeroes the count, and PRINTS the HUH? line -- counted by a `huh` row per session as a second channel).
+Twelve readbacks (`*c`, `*h` at each label) and three `huh` rows; the new writes are appended so the
+existing readback indices do not move.  A landed 0x0020 reads the same 0x20 as a landed 0x0000 at an
+armed ICR, which is why the `huh` rows exist: the readback alone would not separate `M_HI` from
+`M_PENDBOTH`.  Under a count-conditioned mutant the order matters -- a landed 0x0018 decrements the count
+and a landed 0x0000 or 0x0020 zeroes it, so the guard re-arms for the later writes -- and every
+prediction in `PRETABLE_pass11.out` (Section 19, with the four mandated checks) derives the readbacks in
+session order.  Rows with no mutant in the part-11 table are named there rather than left to be found.
+
+## Part 11, measured (`killtable2_20260903/part11/driver.log`; predictions in `PRETABLE_pass11.out`, mtime 17:34:38; table launched 17:49:20 -- a first launch at 17:35 was REFUSED by the wrapper because the Opus seat's post-restore control was still running, which is the refusal working as designed)
+
+| run | predicted | measured | red rows |
+|---|---|---|---|
+| BASE (clone of build/, rebuilt, CLEAN + FRESH) | 218/218 | **218/218** | -- |
+| `M_ICLR` -- `&& !(p2 && (idata & PCC2_TTIRQ_ICLR))` at TxICR | 214/218 | **214/218** | `pend2 rbc` (0x10), `pend2 rbh` (0x10: declined after the strobe zeroed the count), `pendboth rbc` (0x10), `pendboth rbh` (0x10) |
+| `M_HI` -- `&& !(p2 && (idata & 0xe0))` | 214/218 | **214/218** | `pend2 rbh` (0x20), `pend2 huh` (1), `pendboth rbh` (0x20), `pendboth huh` (1) |
+| `M_P1IEN` -- `&& !(p1 && (idata & PCC2_TTIRQ_IEN))` | 206/218 | **206/218** | `pend1 rbi` (0x33), `rb2i` (0x13), `rbc` (0x10), `rbh` (0x10), `rb2c` (0x13), `rb2h` (0x13); `pendboth rbi` (0x33), `rb1i` (0x33), `rbc` (0x10), `rbh` (0x10), `rb1c` (0x10), `rb1h` (0x10) |
+
+Frozen instrument md5 `f3cc2095` == the live probe at launch; each mutant string gcc-syntax-checked before
+the table and proven by a two-line diff against SEC; the clone restored from SEC, rebuilt, cmp-clean,
+sentinel cleared.  **All four predictions exact, red set and value** -- the first table in this chain
+where every derivation held, and the derivations were all order-dependent: a landed 0x0018 decrements
+the count and clears INT, so the write after it is declined and reads the same 0x10; a landed 0x0020
+prints HUH? and zeroes the count; under `M_P1IEN` the landed 0x0013 raises T2ICR to 0x13 and the later
+declined writes leave it there.  The cell the Opus seat measured open on the 203-row instrument
+(`M_ICLR`, 203/203) is killed at four rows here; the previously unkilled `pend1 rbi` is killed by
+`M_P1IEN`.
+
+## Batch two -- the enumeration, not another cell
+
+The class-closure amendment's own trigger fired: three consecutive passes found ONE class -- an unvaried
+axis crossed with a varied one (190 -> 194 -> 203 -> 218) -- and the Opus seat said the next repair owes
+the enumeration across the arms, deriving (not measuring) that TxCTL has two unheld cells of its own
+{COVF} x {idata & ~7}.  Batch two, applied after part 11 and before the gate so the gate pins the final
+probe: the contract now carries THE ENUMERATION -- per arm, the axes the body's code makes decisive (an
+`if`, or an index) and what the rows hold: nine arms are stores, masks or a print with no `if` on state or
+idata and are held by the plain rows; IPL has one static latch, held both ways; TxICR is passes 9 to 11;
+TxCTL has the label as an RMW index, the count class, and two tested idata bits, COVF (0x04) and the
+HUH? bits (`~7`), with COVF-set held at NO cell.  Its generating set: in the four overflow sessions
+(count 1 and count >= 8, each timer) write 0x0004 and 0x0008 at the armed label, then preset the idle
+label's CTL to 0x02 (COC without CEN -- CEN would start the idle timer) and write 0x0000 / 0x0004 /
+0x0008 there; a `huh` row per session counts the TxCTL HUH? print.  Twenty-four rows -> 242.  Landed
+values never equal a preset: count 1 (0x11): 0x0004 -> 0x00 (COVF clears the count and itself), 0x0008
+-> 0x10 + HUH?; count >= 8 (0x81): 0x00 / 0x80 masked; idle 0x02: 0x00.  Also in the batch (Opus, pass
+11): `cval()`'s value branch on a LIVE guest with a short transcript now says `short-transcript (FAILED
+FOR SOME OTHER REASON)` instead of a bare `died`, and the (T1, 0, 0, IEN clear) cell is attributed to
+`op t1icr dcl` (0x0303), not to `latch all`, which iterates BLOCKS12 at 0x1a and never writes T1ICR.
+Predictions in `PRETABLE_pass11b.out` (Section 20, with the four mandated checks) before the table.
+
+## Part 12, measured (`killtable2_20260903/part12/driver.log`; predictions in `PRETABLE_pass11b.out`, mtime 18:55:21; table launched 18:55:39)
+
+| run | predicted | measured | red rows |
+|---|---|---|---|
+| BASE (clone of build/, rebuilt, CLEAN + FRESH) | 242/242 | **242/242** | -- |
+| `M_COVF` -- `&& !(idata & PCC2_TCTL_COVF)` at TxCTL | 234/242 | **222/242** | the eight `*v` readbacks (0x00) AND the eight `*x` readbacks after them (0x00: they read the count the landed COVF write had cleared) AND `rb4 t2ctl`, `rb8 t2ctl`, `rb4 t1ctl`, `rb8 t1ctl` (0x1 / 0x0: their driven lanes 0xdd and 0x44 carry the COVF bit) |
+| `M_COVFOVF` -- `&& !((idata & COVF) && (reg & OVF))` | 238/242 | **234/242** | `ovf2/ovf1/ovfhi2/ovfhi1 rbv` (0x00) and the four `*x` readbacks after them (0x00, the same order effect); the idle labels hold no count and stayed declined |
+| `M_TXHIOVF` -- `&& !((idata & ~7) && (reg & OVF))` | 234/242 | **232/242** | `ovf2 rbx` (0x10), `ovf1 rbx` (0x10), `ovfhi2 rbx` (0x80), `ovfhi1 rbx` (0x80) and the four `huh` rows (1) -- as predicted -- plus `rb t2ctl b27` and `rb t1ctl b27` (0xff vs 0xfc) |
+
+Frozen instrument md5 `16378e8f` == the live probe at launch; each mutant string gcc-syntax-checked before
+the table and proven by a two-line diff against SEC; the clone restored from SEC, rebuilt, cmp-clean,
+sentinel cleared.  **Every prediction missed, every miss in the safe direction, and every extra red is
+derivable -- which is the record's lesson, not the table's.**  Three causes, each named:
+
+* **The plain cell already held COVF-set.**  The contract's batch-two sentence said COVF-set was held at
+  NO cell; the pre-existing `rb4 t*ctl` / `rb8 t*ctl` rows drive 0xaab8ccdd and 0xaab8ccdd00112244, whose
+  T2CTL/T1CTL lanes (0xdd, 0x44) have bit 2 set.  The generating writes were still owed at the COUNT cells
+  -- that was the gap -- but the sentence overstated it.  Corrected in the contract.
+* **The order effect, a second time.**  A landed COVF write clears the count and itself, so the 0x0008 write
+  after it is declined against a register that now reads 0x00, and its readback reds for the earlier
+  landing.  The pass-11 fill had derived exactly this effect for IEN-clear writes at TxICR and the pass-11b
+  predictions did not carry it across to TxCTL.
+* **`idata & ~7` tests the COMPOSED value, not the lane.**  The `rb t*ctl b27` rows write `0x0303` at a
+  0xfc-cell (count bits set through the filed memcpy path); its lane is 0x03 but the halfword is 0x0303, so
+  the body's HUH? test is true and `M_TXHIOVF` lands the write (0xff).  A fact about the body the contract
+  did not state: the HUH? partition is on the composed idata.  Stated now.
+
+The cells batch two set out to hold are held: COVF-set and a HUH? bit at every count cell, both labels,
+killed by `M_COVF` / `M_COVFOVF` (eight and four readbacks) and `M_TXHIOVF` (four readbacks and four
+HUH? counts).  The TxCTL derivation the pass-11 Opus seat made without measuring -- two of the {COVF} x
+{idata & ~7} cells unheld -- is measured true and closed.
+
+## Records corrected in place (L4), every one from a seat
+
+* The #9 reversal above (grok, codex, fable5) -- contract, pass-10 block, carrier.
+* The pass-10 table carried the PREDICTION's value in the measured column for one readback: `pendboth
+  rb1i` under `M_P2IEN` read 0x33 in the log (T1ICR held 0x31 in that session), not the 0x13 written
+  (opus5 by reading before its build; grok; fable5 confirmed from the log).  The score matched by
+  coincidence.  Corrected in the pass-10 block with its provenance; the pre-table file keeps its
+  misprediction, as pre-table files do.
+* "The three decl rows expect 4" in the pass-10 block -- the rows want 1 (the announce is latched once
+  per block on the first DECLINE), as the probe, the pre-table file and BASE all said (opus5, grok,
+  codex, fable5).
+* The landed-value account omitted 0x20 -- a landed 0x0000 at an armed ICR (codex).
+* The carrier's JOINT CELLS paragraph said "the counts are `int`, so finite fails" -- a C `int` is
+  finite; the raw value space does no bounding work (codex, glm).  And it said the measured case closed
+  "eight cells in three readbacks" where the contract closed sixteen in nine (grok).
+* "Predictions written at 13:14" -- the order witness is the PREDICTIONS.md mtime, 13:19:27, before the
+  first mutant build at 13:24:15 (codex).
+* The `pendboth arm1` note said the proof is `M_PENDBOTH` reddening "decl/rb"; on the 203-row
+  instrument it reds `rb`/`rbi` and decl stays green (grok).
+* The pass-10 brief's ENCLOSING CODE was empty (pass 10) and pass 11's builder ASSERTS a body -- the
+  first form of that assertion stopped at the guard's own `}` and fired on the fix, which is what an
+  assertion is for.
+* The pass-11 packet did not flag the `M_PENDBOTH` misprediction as a finding and said "three existing
+  sessions row all sixteen cells" without saying the (0, 0) cells are the plain rows (glm).  Both true
+  of the block, not of the packet -- packet defects, recorded.
+
+## Gate
+
+## Gate 14 at 242 (`killtable2_20260903/gate14_p12.log`; the live probe, md5 `c53f9c21` -- the part-12 frozen instrument plus the two post-table docstring corrections; run alone at 20:07-20:37 while the two fix-review seats read)
+
+`gate 14: ARM/Thumb flags: PASS (808 checks)`, `pcc2 width rows emitted 242`, `pcc2 width rows green 242`, GATE_RC=0.
+The pcc2 probe took twelve minutes under the gate against about five in the kill-table clone -- another session's
+codex CLI processes were live on the machine -- and every row stayed green, which is what the survival oracles
+are for.  This pins the pass-12 instrument; pass 13 (below) changes it again and owes its own gate.
+
+## What stays open
+
+Pass 12: the pass on this repair diff (the twelve writes, the `huh` rows, the contract's floor / held /
+disclosed statement, the carrier's bound).  The chain closes on the first VALID pass that finds zero
+floor breaches surviving adjudication, with the floor now bounded -- and the ask-again on the pass-10
+table has been spent (this pass was it; what it found is rowed above).  Filed, not fixed: `pcc2c040kill`
+(HIGH), `pcc2counter8`, `pcc2pscaleflood`, `pcc2huhflood` (the HUH? print this repair now counts is the
+unlatched flood that item names), `pcc2widecompose`, `pcc2assertflood`, `pcc2iclrdec`,
+`pcc2latchwidth48`, and the two rows that rest on `pcc2counter8`.
+
+# Round pcc2widthkills, pass 10 -- the rule question adjudicated: a joint cell is in the closure when the guarded body's own code distinguishes it; two more cells measured open by the seat that predicted them; the class closed in one diff of sixteen cells; the repair owes pass 11
+
+**2026-09-04.  Detector 194 -> 203 rows (nine readbacks in three existing sessions: every cell of
+{label} x {pending1} x {pending2} x {idata & IEN} held at a wide write); the contract states the
+discriminator and the seven-partition denominator; clause (d) of the carrier amended; product code
+unchanged.**
+
+## The verdicts (the nine-seat roster: seven reading seats answering plus the measuring seat; agy deliberately not fired)
+
+The pass carried a RULE QUESTION by name -- does the clause-(d) closure include joint states of two
+body-read lvalues -- with the pass-9 Opus dissent quoted verbatim.  Counting arguments, not seats:
+seven of eight landed seats put the pair INSIDE the closure (fable5, codex, grok, glm, deepseek, the
+kimi-k3:cloud substitute for the weekly-walled CLI; opus5 measured); minimax put it OUTSIDE the floor
+"under the contract's letter" while calling the shipped row right anyway.  **The dissent's
+discriminator failed three ways** (fable5, glm, the kimi substitute): plausibility is not derivable by
+reading; the mutant was written and measured, so it is an edit someone writes; and "single-operand is
+complete" is measurably false, since `&& idata != 2` is single-operand and escapes (disclosed, not
+killed).  **And the main loop's own proposed bound -- pairs of body-read lvalues over a finite
+reachable space -- was REJECTED by the flagship seat as self-refuting:** the counts are `int`, so
+"finite" fails on its motivating case; "reachable guest state" would force rowing `idata == 2` that
+the same record discloses; a PAIRS cap misses `#499`'s four axes.  grok reached the same three
+objections independently.
+
+**The rule adopted, from neither argued side** (fable5's sentence, codex's equivalence-class form):
+a joint cell is in clause (d) exactly when the guarded body's OWN CODE distinguishes it -- each
+lvalue at the partition the body's own tests induce; the enumerated cells are the CROSS-PRODUCT of
+those partitions, never arbitrary boolean functions of the read-set; a value the body never tests as
+a case is disclosed under clause (e).  Finite, derivable from the diff by reading the body's `if`s,
+and it enumerates `#499`'s width x component x direction x position cells from `len`, `writeflag`
+and `relative_addr`.  The De Morgan form of the gap it closes, from the kimi substitute: `!(p1 &&
+p2)` is `p1 == 0 || p2 == 0` -- neither disjunct true of all its lvalue's held values, the
+disjunction true in every row, so a per-lvalue disclosure test could never fire on it.  Written into
+`CLAUDE.md` clause (d) (and the tracked copy) with this provenance.
+
+## Measured (opus5, its own clone of build/, PREDICTIONS.md mtime 13:19:27, before its first mutant build at 13:24:15)
+
+| run | score | log |
+|---|---|---|
+| BASE | 194/194 | `pass10_seats_20260904/opus/BASE.out` |
+| `M_P2T1` -- `&& !(pending_timer2 && relative_addr == PCCTWO_T1ICR)` at TxICR | **194/194, a TOTAL ESCAPE** (predicted; codex predicted it too, by reading) | `M_P2T1.out` |
+| `M_T1JOINT` -- `&& !(pending1 && pending2 && relative_addr == PCCTWO_T1ICR)` | **194/194, a TOTAL ESCAPE** (predicted at 13:19 before its build -- the T1-label form of the pass-9 mutant; `M_T1JOINT.out`) | `M_T1JOINT.out` |
+
+Both are the `#499` shape reproduced inside the repair for it: the pass-9 `pendboth` session armed
+both timers and wide-wrote at T2ICR only, closing one cell of a symmetric space and leaving its
+mirror open.  Under the adopted rule they are floor breaches -- the label is a body-tested partition
+(`relative_addr == PCCTWO_T1ICR` at :519, :522, :526, :531) -- so the repair below is new
+floor-bound material and owes pass 11.
+
+## The repair -- the class, not the cell
+
+**The denominator, read off the TxICR write body (`dev_pcc2.c:515-543`):** seven body-tested
+partitions -- the label, `idata & IEN`, `idata & ICLR`, the register's INT bit, `pending1 > 0`,
+`pending2 > 0`, `idata & 0xe0` -- 128 cells.  **Rowed, all sixteen cells of {label} x {p1} x {p2} x
+{IEN}:** each of the three timer sessions (`pend1`, `pend2`, `pendboth`) now wide-writes at BOTH
+labels with idata `0x0000` and `0x0013` (IEN|IL3, so a landed write reads 0x20 or 0x33 at an armed ICR
+and 0x00 or 0x13 at an idle one -- never the preset), the idle timer's ICR preset to `0x11` first; nine readbacks (`pend2 rbi/rb1/rb1i`, `pend1
+rbi/rb2/rb2i`, `pendboth rbi/rb1/rb1i`); the decl rows stay at 1 -- the announce is latched once per
+block on the first DECLINE, so the readbacks are the per-write channel (this sentence said "expect 4"
+until the pass-11 Opus seat read it against the probe); the two (0, 0) cells are the plain rows.  No new session, so no new load sensitivity.  **Not rowed, disclosed with the count:**
+the ICLR, INT and 0xe0 partitions (112 cells) -- they govern what a landed write DOES to the counts,
+not whether it lands.  (This block first said "rowing them costs about thirty more wide writes" --
+a count with no deriver, and wrong: one wide write realises one cell, so the syntactic remainder costs
+112, of which at most 96 are reachable and 80 were open -- Opus, pass 11.)  Pass 11 is asked, by
+name, whether the adopted rule demands them; stating the question beats a pass-12 finding of that
+exact shape.
+
+## Part 10, measured (`killtable2_20260903/part10/driver.log`; predictions in `PRETABLE_pass10.out`, mtime 14:10:15; the table that counts launched 14:43:02 as part 10b)
+
+**The first launch (14:10) ABORTED at its third run and is preserved as `part10_aborted/`:** the four new
+mutant strings lacked one closing parenthesis, `M_T1JOINT` did not compile, and the driver refused the
+stale binary -- the binary-newer-than-source check working as designed.  Its BASE (203/203) and
+`M_PENDBOTH` (201/203) are valid and were repeated below.  The fix is structural: `mut_syntax.py`
+now applies every mutant string of a driver to a scratch copy of the source and compiles it before any
+table -- seconds against the thirty minutes the abort cost.
+
+| run | predicted | measured | red rows |
+|---|---|---|---|
+| BASE (clone of build/, rebuilt, CLEAN + FRESH) | 203/203 | **203/203** | -- |
+| `M_PENDBOTH` -- `&& !(p1 && p2)` at TxICR | 200/203 | **201/203** | `pendboth rb` (0x20), `pendboth rbi` (0x20) |
+| `M_T1JOINT` -- `&& !(p1 && p2 && relative_addr == T1ICR)` | 201/203 | **201/203** | `pendboth rb1` (0x20), `pendboth rb1i` (0x20) |
+| `M_P2T1` -- `&& !(p2 && relative_addr == T1ICR)` | 199/203 | **199/203** | `pend2 rb1` (0x00), `pend2 rb1i` (0x13), `pendboth rb1` (0x20), `pendboth rb1i` (0x33) |
+| `M_P1XT2` -- `&& !(p1 && !p2 && relative_addr == T2ICR)` | 201/203 | **201/203** | `pend1 rb2` (0x00), `pend1 rb2i` (0x13) |
+| `M_P2IEN` -- `&& !(p2 && (idata & IEN))` | 199/203 | **199/203** | `pend2 rbi` (0x33), `pend2 rb1i` (0x13), `pendboth rbi` (0x33), `pendboth rb1i` (0x33 -- T1ICR held 0x31 there; this cell first read (0x13) in this table, the prediction's value copied into the measured column, caught by the pass-11 Opus seat from the log) |
+
+Frozen instrument md5 `6676c58d` == the live probe; each mutant proven by a two-line diff against SEC
+with its first added line quoted; the clone restored from SEC, rebuilt, cmp-clean, sentinel cleared.
+Every red value is the one the body derives: a landed `0x0000` reads `(reg & ~0x17)`, a landed
+`0x0013` reads that `| 0x13`, and a landed IEN-clear write ZEROES the timer's count so a
+count-conditioned guard re-arms for the session's later writes -- which is why `M_PENDBOTH` and
+`M_T1JOINT` red exactly two readbacks each rather than four.
+
+**One misprediction, in the safe direction, and it is the hand-verification's own finding turned on
+the predictor:** `M_PENDBOTH` was predicted at 200 with the `pendboth decl` row red, on the reasoning
+that the first wide write lands silently.  It does -- and the SECOND write, declined after that landed
+write zeroed the count, is still announced once, so the decline count is 1 and the row is green.  The
+announce is latched once per block on the first DECLINE, not the first write.  The two Opus-predicted
+escapes of pass 10 are now killed at 2 and 4 rows respectively; the three cells nobody had named are
+killed by the two mutants built for them.
+
+## Records corrected in place (L4), every one from a seat
+
+* The contract's enumeration said the overflow count is held "at 8 (bit 7)" and the BIT COVERAGE set
+  listed a bare 0x81, while the pass-9 rows mask to bits 7 and 0 and may observe 0x91 (grok, codex);
+  the `ovfhi* decl` notes said "at 8" (grok).  Now `>= 8` and `0x81 (masked)`.
+* "Bit 3 ... set by no writer at all (body `idata & 0x17`)" was called internally tense -- "that mask
+  IS a writer of ICLR" (grok) -- and the block ACCEPTED it.  **That acceptance was wrong**: ICLR is
+  0x08 and the store mask 0x17 is bits 0, 1, 2, 4, so the mask cannot set bit 3; ICLR is a write strobe
+  the body tests and never stores.  grok recanted on pass 11, codex confirmed, and the contract now
+  says so.  The original sentence had been right; a one-AND check (0x17 & 0x08) would have kept it.
+* The pass-9 heading said "nine seats fired, eight answering plus the measuring seat" -- seven
+  reading seats plus the measuring one, with agy not fired, is eight (codex).
+* "load-STABLE" overclaimed: the value is stable once the callback lands; the session stays
+  starvation-sensitive like every free-running row (codex, grok).
+* `pendboth arm1` claimed "both counts non-zero at the wide write"; what it observes is timer 1's
+  INT bit, which is STICKY (set with `|=` in `reassert_interrupts`, cleared only by an ICLR write).
+  The joint fact holds -- one callback services both timers and nothing decrements the count in the
+  session -- and the note now says what the row observes (opus5).
+* The guest-ordinary-state warrant was STRONGER than the session that cited it: OpenBSD's `clock.c`
+  arms COC on both timers, so the steady state is both-thousands, which `pendboth` does not hold
+  (grok).  Disclosed by name -- the body tests `> 0` only.
+* The pass-10 brief's "enclosing code" section held two bare `case` labels and no body: the
+  generator stopped at the second label because the T2/T1 labels are adjacent (opus5, grok, codex).
+  Fixed in the generator; the file-reading seats read the tree and said so.
+* `PRETABLE_pass9.out`'s control prediction (190) stands refuted by its table (188), as the pass-9
+  block already records; a pre-table file is never edited after its table.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`) run ALONE through WSL after part 10b, on the shipped instrument
+(probe md5 `6676c58d`, last edited 14:10; log `killtable2_20260903/gate14_p11.log`, 16:45:20):
+**PASS, rc 0, 769 checks green, 0 red** -- pcc2 width rows emitted 203, green 203, red 0 (was 760
+checks and 194 rows at pass 10).  The gate pins the 203 names and both denominators.
+
+## What stays open
+
+Pass 11: the pass on this repair diff, carrying the §F2 adjudication packet (every pass-10 finding
+numbered with its disposition; the disagreements with both sides in their own words) and the
+denominator question above.  Filed, not fixed: `pcc2c040kill` (HIGH), `pcc2counter8`,
+`pcc2pscaleflood`, `pcc2huhflood`, `pcc2widecompose`, `pcc2assertflood`, `pcc2iclrdec`,
+`pcc2latchwidth48`, and the two rows that rest on `pcc2counter8`.  The `pcc2pendbothT1` residual
+fable5 named is not filed: it is the (T1, >0, >0) cell, closed here.
+
+# Round pcc2widthkills, pass 9 -- NOT the closing pass: the measuring seat's predicted mutant escaped 190 of 190 (both timers pending, a state no session held); the record corrected in place; the repair owes pass 10
+
+**2026-09-04.  Detector 190 -> 194 rows (`pendboth arm/arm1/decl/rb`); four `ovfhi` rows masked
+against host load and their kill re-measured as a control; two instrument-hygiene edits; the
+contract brought into agreement with its own rows; product code unchanged.**
+
+## The verdicts (the nine-seat roster: seven reading seats answering plus the measuring seat; agy deliberately not fired)
+
+No reading seat found a clean-sweep mutant.  fable5: GO, zero floor breaches, one L4.  grok: DO
+NOT CLOSE on record grounds only -- "the residuals are the stop condition working, not a reason
+to grow the table again".  codex: NO-GO on the record and on two combined interior values (TxICR
+0x37, TxCTL 0xff) the stop condition discloses.  The packet-fed seats (deepseek, glm, minimax,
+the kimi-k3:cloud substitute for the weekly-walled CLI): the two safe-direction mispredictions,
+one packet misreading each of a held value and of the third writer, and kimi's interior value
+(bits 0-1 = 2) -- all reconciled below.
+
+**opus5 MEASURED, and its prediction was written before its build** (`PREDICTIONS.md` 11:06,
+first mutant binary 11:15): `&& !(d->pending_timer1_interrupts && d->pending_timer2_interrupts)`
+at the TxICR guard scored **190/190, a TOTAL ESCAPE**
+(`regress/artifacts/pcc2widthkills/pass9_seats_20260904/opus/M_OPUS_PENDBOTH.out`).  Every one
+of the twenty-four timer rows kept its exact value and its decline count, because each session
+arms ONE timer: the joint state (both counts non-zero) is body-read at TxICR -- inside the
+clause-(d) rule-(2) operand set -- reachable (both CEN, both IEN, both compares low), and held
+by no row.  Its final report (`pass9_seats_20260904/opus/`): CLOSE from its seat, zero floor breaches by its own
+reading, four L4s -- three already found by reading seats and corrected above, the fourth the
+`cval()` death half -- and `&& idata != 2` at all twelve guards measured 190/190 as the contract
+discloses by name.  Denominator stated in full (seven lvalues, forty-eight single-operand
+predicates, 132 ordered latch pairs, 96 width-by-arm-by-direction cells, every readback checked for
+preset collision, the gate's name set equal to the probe's).  Clone restored from SEC, rebuilt,
+cmp-clean; nothing written to any project tree, verified afterwards by the main loop.
+
+## The adjudication -- the chain does not close here, and the seat that measured the escape dissents from that
+
+The stop condition closes the chain on the first VALID pass that finds zero floor breaches
+surviving adjudication.  The diff was delivered in full, the roster is complete with its one miss
+named, every seat stated its denominator -- and one in-closure predicate swept the table.  So
+pass 9 is a pass that FOUND a breach, the repair below is new floor-bound material, and it owes
+pass 10.
+
+**The Opus seat argues AGAINST calling this a floor breach, and its argument is carried here
+verbatim so the pass-10 panel adjudicates it rather than inherits my ruling:**
+
+> the (d) rule's own test is "could a PLAUSIBLE future edit produce it"; `&& !(p1 && p2)' is not
+> an edit anyone writes.  Every SINGLE-operand form is killed: `== 0' and `!x' by pend*, `< 2' by
+> pendn*, `> 0' by `latch all' (pending is 0 there), and the T1/T2 cross forms by the opposite
+> label's rows.
+>
+> admitting arbitrary BOOLEAN COMBINATIONS of the read-set makes the (d) space exponential in the
+> number of body-read fields, which is exactly what the DEPENDS-ON bound ("finite, derivable from
+> the diff by reading") exists to prevent.  Read as single-operand, the closure is complete; read
+> as multi-operand, it is #392.
+>
+> row demand is PER ENUMERATED MUTANT, never per reachable state, so NO ROW IS OWED.
+> => L4: one sentence in the enumeration -- "pending_timer1/2 are held SEPARATELY; no session arms
+> both timers, so a predicate over the PAIR is outside the sample" -- and no new row.
+
+**My disposition, provisional on the pass-10 roster: SHIP THE ROW, and put the RULE QUESTION to
+the panel by name.**  Four reasons, none of them a vote.  (1) The joint cell is one of FOUR in a
+finite two-by-two the class-closure amendment says to close in ONE diff -- "a cell of one state
+space left empty ... leaving the symmetric cell open" is the exact shape `#499` paid three passes
+for.  (2) It is the guest's ORDINARY state, not an exotic one: OpenBSD/mvme88k runs timer 1 as the
+clock and timer 2 as the statclock, so a detector that never holds both pending never holds the
+device in its steady state, whatever the mutant's plausibility.  (3) One pend-type session costs
+about twenty-five seconds and is VALUE-stable once its callback lands (0x31 is fixed once INT sets),
+though starvation-sensitive like every free-running row; the load hazard in the VALUE was the
+ovfhi shape, repaired below).  (4) The asymmetry: a surplus row costs four lines; a missing one
+makes "shipped a detector with the fix" false about the fix's own repair.  **The bound I propose
+for the rule -- PAIRS of body-read lvalues, only where their joint space is finite and a cell is
+a reachable guest state; arbitrary boolean combinations beyond that DISCLOSED -- is a question
+for the flagship seat at the next boundary, not a ruling.**
+
+## The repair (the part-9 table is its measurement; predictions in `PRETABLE_pass9.out`, Section 17, written before it)
+
+* **`pendboth arm` / `pendboth arm1` / `pendboth decl` / `pendboth rb`** -- both timers armed
+  (compare 1, count 0, IEN|IL1, CEN), free-running until timer 2's INT, timer 1's ICR read in the
+  same session (0x31: the proof that BOTH counts are non-zero at the wide write), then a guest
+  `st.h` to T2ICR: declined, readback 0x31.  Shape hand-verified on the restored part-8 clone
+  before the rows were written.  Mutant `M_PENDBOTH` in the driver predicts 192/194.
+* **`ovfhi* arm/rb` masked to bits 7 and 0** (Opus, interim finding 2B): the overflow count
+  advances one per DELIVERED callback, so a descheduled emulator can leave the two-instruction
+  poll at count 9 and the row reds at 0x91 for a reason no label names.  Masked (count >= 8 AND
+  CEN), the mutant's 0x80 still reds -- **re-measured as `M_TXCTL_OVFHI` in part 9 (predicted
+  190/194) rather than derived from part 8**, because an accept row is discharged by a measured
+  kill.
+
+## Part 9, measured (`killtable2_20260903/part9/driver.log`; predictions in `PRETABLE_pass9.out`, mtime 11:46:40; table launched 11:47:03)
+
+| run | predicted | measured | red rows |
+|---|---|---|---|
+| BASE (clone of build/, rebuilt, CLEAN + FRESH) | 194/194 | **194/194** | -- |
+| `M_PENDBOTH` -- `&& !(d->pending_timer1_interrupts && d->pending_timer2_interrupts)` at TxICR | 192/194 | **192/194** | `pendboth decl` (0), `pendboth rb` (0x20) |
+| `M_TXCTL_OVFHI` -- `&& !(reg & 0xe0)` at TxCTL, the CONTROL for the masked rows | 190/194 | **188/194** | `ovfhi2/1 decl` (0), `ovfhi2/1 rb` (0x80), `rb t2ctl b27` and `rb t1ctl b27` (0xff) |
+
+Frozen instrument md5 `43471ae2` == the live probe; each mutant proven by a two-line diff against
+SEC with its first added line quoted; the clone restored from SEC, rebuilt, cmp-clean, sentinel
+cleared.
+
+**The control's prediction was wrong by two rows, in the safe direction, and the miss is a
+records lesson.**  Part 8 had already measured this mutant at 184/190 -- SIX reds, the two `rb
+t*ctl b27` rows among them, because 0xfc & 0xe0 is non-zero there too, so the guard is off and the
+landed write reads 0xff.  The prediction was written from the INTENT ("the four masked rows keep
+their kill") instead of from part 8's red set, which was one `grep RED` away.  Measured, the
+control's red set is part 8's exactly: the mask changed nothing except the rows' tolerance of a
+descheduled host, which is what it was for.  The joint-pending mutant was killed by exactly the
+two rows built for it and by nothing else: every single-timer row stayed green, as the Opus seat
+predicted of the unrepaired instrument and as the repair requires.
+
+## Records corrected in place (L4)
+
+* The contract's TxCTL paragraph still called bits 2-3 E, said no row was built on the memcpy
+  path, and called that path operator-only -- beside the `rb t*ctl b27` rows shipped on it and
+  killed with it in part 8, and beside the premise that a guest `st.d` reaches the 8-aligned
+  T2COUNT (grok, codex).  Rewritten to say what the rows do and that they rest on a filed defect.
+* TxICR bit 3 (the ICLR position) had dropped out of the shipped dead-bit list (grok).
+* The pass-8 header said "171 -> 186 rows" -- 190 (grok, codex, fable5, opus5: the mispredicted
+  SCORE mis-copied as the row count; the block contradicted itself at its own table); "nine seats
+  fired" beside agy not fired, repeating in its own heading the error it corrected in pass 6's;
+  "four in-closure cells"; "six part-8 measurements" (codex, opus5).  Corrected in that block.
+* "Nothing more is sent to the running guest" -- the quit still is (codex).
+* "every companion row reports the apparatus reason through `cval()`" claimed both halves;
+  `cval()` covered the missed-token half only, and the death half was labelled by the rb rows
+  alone (opus5, 2A).  Corrected in that block; `cval()` now takes `alive`.
+* The brief's enclosing C pasted the TxICR arm twice: the generator's arm() stops at the second
+  `break` and T2CTL's arm has only one before the next case (grok, codex).  A brief defect; the
+  seats read the tree.
+* The stop condition's remainder is now DISCLOSED BY NAME rather than by class: bits 0-1 = 2,
+  the overflow count at 2-7 and 9-15, TxCTL 0xff, TxICR 0x37 and bit 3, the pending counts
+  between 2 and 9999 and above, `idata` = 2 or any constant no row drives.  And the vague
+  "reachable extremes are held" gives way to what the rows achieve (opus5): every live bit of
+  each in-closure register held both SET and CLEAR at a wide write -- TxCTL by {0x00, 0x03,
+  0x11, 0x81, 0xfc}, TxICR by {0x00, 0x13, 0x17, 0x31}; bits 3, 6, 7 dead with a census.  That
+  is falsifiable by one grep of the presets; "extremes" was not.
+
+## Instrument hygiene (no row changed by these)
+
+`rd()` checks for the token once more after its loop -- the token could land in the final read
+and the wait return "timeout" falsely (codex).  `cval(alive, how, val)` -- a decl row graded after
+the guest died says so instead of printing a count (codex, grok, opus5).  The `if False:` relic
+around the old blocking `waitpid` is deleted (opus5, 2C); `os.write`, the one unbounded call left,
+carries its sentence (blocks only if the pty input buffer fills while the guest free-runs).  The
+`assert len(name) <= 15` in `row()` says why it is load-bearing for the gate's two-space pattern
+(opus5).
+
+## Found outside the questions, and acted on
+
+* **A stale `panel.sh` at the PROJECT ROOT** (2026-08-17, the migration day; 453 lines behind
+  `tools/panel.sh`, no `OLLAMA4`, no argv-cap pointer form, no daemon pre-flight).  A session
+  typing `./panel.sh` from the root would fire the PRE-MIGRATION roster and it would look like a
+  completed panel -- the carrier's `./panel.sh` warning covers the LOUD failure (cwd drift), not
+  this quiet one (opus5).  Each root harness copy that is tracked under `tools/` and untouched
+  since the migration is now an `exec` shim onto the tracked file; the originals are kept in the
+  session scratchpad.  The root is outside git, so this is recorded here and in the checkpoint.
+* `build/.STALE`, a 2026-08-27 stale-binary note, sat on a tree that passes both clearance parts
+  today (binary 04:13:30 over source 04:13:21, no `.c` newer).  Removed: an expired refusal note
+  is a wrong record a seat would obey.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`) run ALONE through WSL after part 9, on the shipped instrument
+(probe md5 `43471ae2`, last edited 11:46:40; log `killtable2_20260903/gate14_p10.log`, 13:06:39):
+**PASS, rc 0, 760 checks green, 0 red** -- pcc2 width rows emitted 194, green 194, red 0 (was 756
+checks and 190 rows at pass 9).  The gate pins the 194 names and both denominators.
+
+## What stays open
+
+Pass 10 on this repair diff (the pendboth rows, the masked ovfhi rows, the records) -- and it
+carries the rule question above to the flagship seat.  Filed by this round, not fixed:
+`pcc2c040kill` (HIGH), `pcc2counter8`, `pcc2pscaleflood`, `pcc2huhflood`, `pcc2widecompose`,
+`pcc2assertflood`, `pcc2iclrdec`, `pcc2latchwidth48`, and the two rows that rest on
+`pcc2counter8` and must be re-cut when it is fixed.
+
+# Round pcc2widthkills, pass 8 -- not the closing pass: the pass-7 breakpoint wait was inert, and one non-initial value per lvalue is not a domain
+
+**2026-09-04.  Detector 171 -> 190 rows (this header said 186 until pass 9 caught it); the instrument's free-running wait now works and a
+missed breakpoint invalidates its whole session; product code unchanged this pass.**
+
+## What pass 8 found (eight answering seats of nine, agy deliberately not fired)
+
+* **The pass-7 repair to `session()` did not do what its record said** (grok, codex; confirmed
+  from the source).  The `(cmd, wait, until)` tuple was unpacked -- `c, w = c[0], c[1]` -- BEFORE
+  its third element was read, so `until` became the command's third character, present in the
+  buffer at once, and the wait after `continue` returned immediately; the 20 s ceiling was dead
+  code.  The pass-7 sentences claiming it were FALSE as implemented (L4).  Parts 7 and 7b passed
+  because the queued commands are consumed after the breakpoint anyway -- a no-op wait that
+  happened to be long enough on an idle host.  Fixed by reading the tuple before unpacking it.
+  And codex measured the companion-row consequence in this round's own artifacts: under the
+  bare-swap mutant the arming byte writes were declined, the loop never exited, `pend2 arm` said
+  `no-breakpoint` -- and `pend2 decl` stayed GREEN beside it, graded from a phase never reached.
+  So a missed token now INVALIDATES the session (no further probe command is sent to the running guest; only the quit) and
+  every companion row reports the apparatus reason through `cval()` -- for the missed-token
+  half; the DEATH half was labelled only by the rb rows until pass 9 gave `cval()` `alive`
+  (Opus, pass 9) -- ; the residual unbounded
+  `waitpid` after a failed kill is bounded too.
+* **One non-initial value per lvalue is not its domain** (the kimi-k3:cloud substitute, glm,
+  codex).  The overflow count was held at 1 (bit 4 only): `&& !(reg & 0xe0)` on the TxCTL guard
+  passes every row.  A guest that re-arms the count each loop iteration overflows once per host
+  callback and reaches count 8 in ~80 ms (hand-verified: 0x81) -> `ovfhi1 *` / `ovfhi2 *`.  The
+  pending counts were held at 1: `&& pending < 2` passes every row; COC with compare 1 makes one
+  callback add thousands (`pcc_timer_tick:231-236`; hand-verified) -> `pendn1 *` / `pendn2 *`.
+  The value 0 was driven at SCCERR and T1ICR only -> `latch all zero`.
+* **TxICR bit 2, an interrupt-level bit, was clear in every preset** (codex): a legal byte
+  write 0x14 sets it and `&& !(reg & 0x04)` on the TxICR guard was predicted 171/171 -> `rb
+  t2icr il4` / `rb t1icr il4` (preset 0x17).  "Bits 0-4 by presets" was false (kimi: bit 3 is
+  never written; the mask is 0x17).
+* **Dead bits are dead, not "full bit-domain"** (deepseek, minimax, grok): TxCTL bits 2-3 and
+  TxICR bits 3, 6-7 are set by no model writer -- TxCTL 2-3 only through the filed pcc2counter8
+  raw copy -- so a guard conditioned on them is E; the listing now names them with the writer
+  census, and says why no row is built on a filed defect's path.
+* **The GENCTL rows were modified after the fall-through's last measurement** (glm): under
+  `M_W4FALL_ALL` the GENCTL rb4/rb8 rows are that mutant's killing rows, so "additions cannot
+  un-kill" did not reach them.  Re-measured in part 8, now killing by value (0xd9 / 0x40).
+
+The contract now states each lvalue's VALUE DOMAIN as the values rows hold, with the stop
+condition written in: a predicate true of all of them is disclosed, not owed; the reachable
+extremes are held, and nothing enumerates every integer.  The two Agent seats: **fable5** (claude-fable-5-1) NO-GO with zero floor breaches -- proved the
+inert wait by running the block, found the mislabelled kill and the silent companion rows, verified
+the width closure by label and called the enumeration complete (overruled on the value-domain
+extremes the other seats found); **opus5** NO-GO -- two mutants built and measured on the shipped
+171-row instrument, both predicted and both total escapes (`M_IPLR`, the read-branch static; `M_WARNX`,
+GENCTL's guard naming MASK's bit), the inert wait measured at 0.000 s, the kill label, the companion
+rows, the third writer of the TxCTL byte, and a census of the file's prints that filed `pcc2huhflood`.
+Both are closed in this diff and measured in part 8.
+
+## Records corrected (L4)
+
+The pass-7 claims about the breakpoint wait (above).  The contract said "helper reads
+`d->warned`: `rb2 *` (latch SET)" flatly while the sibling round in the same working set (#500,
+`sgi_de_primop_probe.py`) had found the FOREIGN-latch-bit cell, called it "squarely inside (d)",
+and downgraded its own closure to derived-not-measured (Opus F17): pcc2 now says which form
+each row closes, and with `latch all rev` the foreign-bit form is measured here.  `panel.sh`'s
+seat check recorded the kimi seat as LOST while `ollama_kimi.txt` sat in the panel dir (the
+substitute was fired by hand outside the script; the ledger records it covered -- Opus F18).
+The TxCTL byte's third writer, the counter arm's raw memcpy, is named in the enumeration
+(Opus F20; the round filed it on pass 1 as `pcc2counter8`).  "Full bit-domain" -> the bits a row can
+hold, dead bits named.  TxCTL reads `relative_addr` as its RMW index (listed).  The pass-6
+heading's "nine of nine" -> eight answering seats of nine (codex, grok).  The pass-8 brief's
+premise 8 said "two seats measured" where the Fable seat had verified artifacts without
+rebuilding -- the CHANGELOG had it right.  Every correction lives in `PRETABLE_pass8.out`
+Section 16; no earlier pre-table file was touched.
+
+## Part 8
+
+`killtable2_20260903/part8/driver.log` -- the 190-row instrument (md5 36aabf39, frozen; == the shipped
+probe), a fresh scratch clone `/tmp/gxpcc2b8` of build/ (CLEAN + FRESH at launch), BASE rebuilt in
+the clone, each mutant proven by a diff count against SEC, restore cmp-clean, REBUILT and verified,
+sentinel cleared.  Predictions in `PRETABLE_pass8.out` Section 16, written before the table.  A first
+launch had scored BASE 188/190 (two rows built without the register setup; the driver only warned) and
+was stopped at its first mutant: preserved as `part8_aborted/`, the rows and the driver fixed, the
+pre-table carries the addendum, and this is the relaunch.
+    [08:17:10]   BASE [CONTROL]: PCC2W_RESULT=190/190
+    [08:31:19]   M_TXCTL_OVFHI [ovfhi2 decl 0, ovfhi2 rb 0x80, ovfhi1 decl 0, ovfhi1 rb 0x80]: PCC2W_RESULT=184/190
+    [08:45:34]   M_PEND2_LT2 [pendn2 decl 0, pendn2 rb 0x20]: PCC2W_RESULT=188/190
+    [08:59:40]   M_IDATA_NE0_QUAL [latch all zero 0, wwr sccerr dcl 0, pend1 decl 0, pend1 rb 0x20]: PCC2W_RESULT=170/190
+    [09:13:54]   M_W4FALL_ALL [26 red: rb4 x11, rb8 x11 (genctl BY VALUE 0xd9/0x40), noig4/8 x4]: PCC2W_RESULT=164/190
+    [09:28:00]   M_TXICR_IL4 [rb t2icr il4 0x10, rb t1icr il4 0x10]: PCC2W_RESULT=188/190
+    [09:42:09]   M_WARNX_GENCTL [latch all rev 11]: PCC2W_RESULT=189/190
+    [09:56:22]   M_IPLR [ipl rset 0]: PCC2W_RESULT=189/190
+    [10:10:28]   M_TXCTL_COVF [rb t2ctl b27 0xff, rb t1ctl b27 0xff]: PCC2W_RESULT=188/190
+          RED: ovfhi2 decl,ovfhi2 rb,ovfhi1 decl,ovfhi1 rb,rb t2ctl b27,rb t1ctl b27
+          RED: pendn2 decl,pendn2 rb
+          RED: wwr sccerr dcl,pend2 decl,pend2 rb,pend1 decl,pend1 rb,ovf2 decl,ovf2 rb,ovf1 decl,ovf1 rb,ipl wset,ovfhi2 decl,ovfhi2 rb,ovfhi1 decl,ovfhi1 rb,pendn2 decl,pendn2 rb,pendn1 decl,pendn1 rb,latch all zero,ipl rset
+          RED: rb4 genctl,rb8 genctl,rb4 vecbase,rb8 vecbase,rb4 t2ctl,rb8 t2ctl,rb4 t2icr,rb8 t2icr,rb4 sccicr,rb8 sccicr,rb4 scctx,rb8 scctx,rb4 sccrx,rb8 sccrx,rb4 scsiicr,rb8 scsiicr,rb4 mask,rb8 mask,pscale noig4,pscale noig8,ipl noig4,ipl noig8,rb4 t1ctl,rb8 t1ctl,rb4 t1icr,rb8 t1icr
+          RED: rb t2icr il4,rb t1icr il4
+          RED: latch all rev
+          RED: ipl rset
+          RED: rb t2ctl b27,rb t1ctl b27
+
+Six of eight predictions held exactly.  Two missed in the SAFE direction (more red than predicted):
+`M_TXCTL_OVFHI` 184 against 186 -- the two raw-copy rows hold bits 5-7 SET, which makes the
+qualifier `!(reg & 0xe0)` FALSE and lands the write there too; the pre-table note had that polarity
+backwards.  `M_IDATA_NE0_QUAL` 170 against 186 -- every free-running row and `ipl wset` wide-write
+the VALUE 0, so the qualifier lands all of them; the pre-table counted only the four rows built for
+it.  Both are records defects in the prediction, not in the rows; the measurements stand.
+
+## Gate
+
+`killtable2_20260903/gate14_p9.log` -- gate 14 (`regress/gate_arm.sh`) run ALONE through WSL after part 8,
+against the live tree and the shipped 190-row instrument (md5 36aabf39, the same bytes part 8 froze):
+gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (756 checks).
+
+    ok   pcc2 width rows emitted                              190
+    ok   pcc2 width rows green                                190
+    ok   pcc2 width rows red                                  0
+
+## Seats
+
+Pass 8 (`panel_20260904_063019`): deepseek (the unlisted bits; asked the right question),
+the kimi-k3:cloud substitute for the weekly-walled kimi CLI (three cells from the packet:
+count >= 2, pending >> 1, value 0 per arm), glm and minimax (both answered the 8.2 KB packet
+without burning), grok (the inert wait, from the diff), codex (the IL bit; the companion-row
+measurement), opus5 and fable5 (below).  agy DELIBERATELY NOT FIRED -- not a seat failure and
+not agreement.
+
+## Why the chain does not close here
+
+Pass 8 found an instrument claim false as implemented and seven cells (six in closure, one held past it), so its repair
+is new floor-bound material and owes pass 9.  What pass 9 verifies is narrower than any pass
+before it: the value-domain statement per lvalue, the invalidation path in `session()`, and
+the eight part-8 measurements against their predictions.
+
+# Round pcc2widthkills, pass 7 -- not the closing pass: the same class a third time, and this time the enumeration is restated by the rule that bounds it
+
+**2026-09-04.  Detector 159 -> 171 rows; the instrument waits for its breakpoint and reaps
+its guest; product code changes by ONE COMMENT (the MASK arm's, which claimed a static it does
+not have).**
+
+## What pass 7 found (eight answering seats of nine, agy deliberately not fired; one measured)
+
+The three pass-6 cells are closed -- every seat that checked them said so, and the Fable seat
+confirmed the four-score transfer by reading the part6/part6b `.out` files directly.  But the
+operand-space sentence was not, because the pass-6 enumeration walked `d->` FIELDS and BYTES:
+
+* **IPL's write body reads a FUNCTION-STATIC `w`** (grok; Opus F-F) -- its #119 print latch,
+  not a `d->` field -- and no row held it SET at a wide write.  `&& !w` on the IPL width guard
+  is equivalent on all 159 rows.  L2 by the same rule as passes 5 and 6.  Row `ipl wset`.
+* **TxCTL's body is an RMW that PRESERVES the byte's overflow nibble** (codex) -- `PCC2_TCTL_OVF`
+  0xf0, set only by `pcc_timer_tick` when the counter crosses 2^31 -- and every TxCTL preset had
+  it zero, so `&& !(reg & PCC2_TCTL_OVF)` was invisible.  L2.  Rows `ovf1 *` / `ovf2 *`: count
+  near 2^31, CEN, free-run polling bit 4, then the wide write.  Shape hand-verified first.
+* **No 4-/8-byte rows at the T1CTL / T1ICR labels** (codex; Opus F-L) -- a `len < 4 ||
+  relative_addr == PCCTWO_T2CTL` fall-through lands at T1CTL alone.  The block-vs-label slip
+  the round had already paid for at width 2.  L1.  Rows `rb4|rb8 t1ctl`, `rb4|rb8 t1icr`.
+* **`rb4 genctl` / `rb8 genctl` killed by HOST DEATH, not by value** (Opus F-C, MEASURED in
+  `part6b/M_W4FALL_ALL.out:85-86`): the lanes 0xdd and 0x44 carry `PCC2_C040`, and GENCTL's body
+  reasserts, whose first act is `exit(1)` on that bit.  The NOROW line that said every GENCTL
+  lane keeps the bit clear was false for two rows.  GENCTL now gets lanes 0xd9 / 0x40.  L1 + L4.
+* **A value-test qualifier `&& idata != 1` had no row** (Opus F-K, as corrected by part 7): no
+  row wide-wrote the value 1, so a guard exempting that value was invisible -- the SWAP cell's
+  "any value-test guard drops the count" warrant was true of 0x0003 only.  Row `latch all
+  one`.  L2.  The seat had named the BARE swap `len != 1` -> `idata != 1`; part 7 measured that
+  form at **95/171** (it drops the length test and every byte preset kills it), so the escape
+  is the qualifier form, measured in part 7b.
+* **The free-running rows' wait was a fixed drain** (codex, grok, fable5, Opus F-G): `rd(8.0)`
+  after `continue` never looked for the prompt, so under load the next command reached a running
+  guest, `pend* arm` printed `died` falsely, and the final `waitpid()` could hang the gate.
+  `session()` now stops waiting when the BREAKPOINT text arrives (20 s ceiling), the arm rows say
+  `no-breakpoint (FAILED FOR SOME OTHER REASON)` when it never does, and the child is reaped with
+  a bounded wait and a SIGKILL fallback.  **Gate 14 is load-sensitive since pass 6**, and the
+  contract now says so.
+* **The kill-table driver's proof-of-mutation line was inert** (Opus F-H): seven greps for
+  pass-3..5 literals, printing zeros for all six pass-6 mutants -- a check that cannot fail
+  inside the driver.  Now a diff count against SEC that REFUSES an unchanged source.
+
+The enumeration is restated in the contract BY CLAUSE (d) RULE (2): per arm, the LVALUES the
+guarded body reads, each with its full bit-domain and the row holding it non-initial -- TxCTL
+(byte incl. the overflow nibble), TxICR (byte incl. INT; the pending counts), IPL (`w`), the
+helper (`d->warned`); the seven pure-store arms read nothing.  The closure is NON-TRANSITIVE by
+definition (callees excluded: `reassert_interrupts()` reaches the whole interrupt subsystem), so
+guards conditioned on callee-read or unrelated state -- the pending counts at the other eleven
+arms, `reg[IPL]`, `reg[GENCTL] & C040` (fable5), cross-arm SCC bits (glm) -- are outside it and
+disclosed.  **The Opus seat measured the disclosure's other half** (`pass7_seats_20260904/opus/`, own clone
+of build/, frozen part-6b instrument md5 ef3f43b4, predictions written 03:44 before the first
+build at 03:49, restore cmp-clean and rebuilt): `&& d->pending_timer2_interrupts == 0` at ALL
+TWELVE guards scores **157/159** with exactly the TxICR-only red pair -- eleven more arms
+carrying the identical conjunct changed not one row -- and `&& d->pcctwo_reg[PCCTWO_IPL] == 0`
+at all twelve scores **155/159**, KILLED by the four pend rows because `reassert_interrupts()`
+has raised IPL to the pending level at TxICR.  So the contract now says, per arm: pending and
+INT are in closure at TxICR only and closed there; at the other eleven arms they are reached
+only through the callee and the same conjunct escapes -- disclosed with its measurement; and
+`reg[IPL] == 0` escapes at the IPL guard (one message) and at any arm no row wide-writes with
+an interrupt pending, but not at TxICR.  The seat also noted, correctly, that "a declined
+write's readback is the preset whatever the value" is an incomplete transfer warrant -- the
+value change at GENCTL altered SURVIVAL, not the readback, and the transfer is safe only
+because the one mutant where that mattered was re-run in part 6b; and that its own driver's
+proof line printed zero for a bracketed pattern (a BRE character class), the same class as the
+inert line it had just reported.  Its "another kill table is running in build/" observation
+at 04:13 was this round's propagation of the comment fix (sentinel dropped, three trees rebuilt,
+two-part clearance recorded), not a table.
+
+## Records corrected (L4)
+
+`pending_timer*` is INCREMENTED only by the tick; the TxICR body clears and decrements it (grok:
+"written ONLY by" was false in the contract, premise 7 and the pass-6 block).  SCCTX is `& 0x1f`
+like SCCICR: Section 13's len-8 lane 0x44 is 0x04, Section 12's len-4 lane 0xdd is 0x1d (grok,
+Opus F-D); the kills hold.  Of the twelve GUARDED registers only VECBASE and PSCALEADJ are
+non-zero at init -- CHIPID 0x20 is not one of them (Opus F-E).  "Nine of nine answered" for
+pass 6 was eight answering seats of nine (codex).  The part-6b RED line in the pass-6 block was
+cut at 200 characters by the fill; completed from the log (grok, codex, Opus F-J).  The MASK arm's
+comment claimed a #119 static of its own -- there is none; corrected in `dev_pcc2.c` and
+propagated (grok, codex).  `PRETABLE_pass6b.out` shares its mtime second with the `part6/driver.log`
+COPY, so it witnesses precedence over 6b only; its content quotes the measured 139.  part6/ and
+part6b/ carried no driver script; the frozen `.run.sh` copies are now preserved beside them
+(Opus F-I).  Every correction lives in `PRETABLE_pass7.out` Section 14; no earlier pre-table file
+was touched.
+
+## Part 7
+
+`killtable2_20260903/part7/driver.log` -- the 171-row instrument (md5 6bee13ba, frozen; the
+shipped probe differs from it by docstring text added afterwards), a fresh scratch clone
+`/tmp/gxpcc2b7` of build/ (CLEAN + FRESH at launch, checked by the launcher), BASE rebuilt in
+the clone, each mutant proven by a diff count against SEC, restore cmp-clean, REBUILT and
+verified, sentinel cleared.  Predictions in `PRETABLE_pass7.out`, written before the table.
+    [04:26:56]   BASE [CONTROL]: PCC2W_RESULT=171/171
+    [04:39:36]   M_IPL_W [ipl wset 0]: PCC2W_RESULT=170/171
+    [04:52:12]   M_TXCTL_OVF [ovf2 decl 0, ovf2 rb 0x10, ovf1 decl 0, ovf1 rb 0x10]: PCC2W_RESULT=167/171
+    [05:04:52]   M_T1_W4FALL_CTL [rb4 t1ctl 0x1, rb8 t1ctl 0x0]: PCC2W_RESULT=169/171
+    [05:17:32]   M_T1_W4FALL_ICR [rb4 t1icr 0x15, rb8 t1icr 0x4]: PCC2W_RESULT=169/171
+    [05:30:07]   M_IDATA_NE1_ALL [latch all one 0]: PCC2W_RESULT=95/171
+          RED: ipl wset
+          RED: ovf2 decl,ovf2 rb,ovf1 decl,ovf1 rb
+          RED: rb4 t1ctl,rb8 t1ctl
+          RED: rb4 t1icr,rb8 t1icr
+          RED: val h genctl,val w sccerr,rb genctl,rb vecbase,rb t2ctl,rb t2icr,rb scctx,rb genctl lo,rb2 genctl,rb2 t2ctl,rb2 t2icr,rb2 scctx,rb2 vecbase,rb2 sccicr,rb2 sccrx,rb2 scsiicr,rb2 mask,hrd genctl rb,hrd t2ctl rb,hrd t2icr rb,hrd scctx rb,brd2 genctl,brd2 vecbase,brd2 t2ctl,brd2 t2icr,brd2 sccicr,brd2 scctx,brd2 sccrx,brd2 scsiicr,brd2 mask,rb4 genctl,rb8 genctl,rb4 vecbase,rb8 vecbase,rb4 t2ctl,rb8 t2ctl,rb4 t2icr,rb8 t2icr,rb4 sccicr,rb8 sccicr,rb4 scctx,rb8 scctx,rb4 sccrx,rb8 sccrx,rb4 scsiicr,rb8 scsiicr,rb4 mask,rb8 mask,latch all one,pend2 arm,pend2 rb,pend1 arm,pend1 rb,rb4 t1ctl,rb8 t1ctl,rb4 t1icr,rb8 t1icr,acc genctl,acc genctl nod,acc t2ctl,acc t2ctl nod,acc t2icr,acc t2icr nod,acc scctx,acc scctx nod,acc sccerr nod,rb sccicr,rb sccrx,rb scsiicr,rb vecbase own,acc all,acc pscale ign,acc ipl ro,rb t1ctl,rb t1icr,rb mask
+
+Five of six predictions held exactly.  The sixth, `M_IDATA_NE1_ALL` (`len != 1` -> `idata != 1` at all
+twelve), measured **95/171** against a predicted 170: the bare swap drops the LENGTH test, so every
+byte write whose value is not 1 is declined and the presets never land -- a loud misprediction, and
+the mutant the finding MEANT is the value-test QUALIFIER.  Part 7b measured it on the shipped
+instrument (`killtable2_20260903/part7b/driver.log`, frozen probe md5 82c6a7c5, `PRETABLE_pass7b.out`
+Section 15 written before it):
+
+    [06:16:22]   BASE [CONTROL]: PCC2W_RESULT=171/171
+    [06:29:02]   M_IDATA_NE1_QUAL [latch all one 0]: PCC2W_RESULT=170/171
+    RED: latch all one
+
+as predicted: the twelve value-1 writes land under the qualifier and only `latch all one` sees it.
+
+## Gate
+
+`killtable2_20260903/gate14_p8.log` -- gate 14 (`regress/gate_arm.sh`) run ALONE through WSL after part 7,
+against the live tree and the shipped 171-row instrument (md5 e43bde87; the probe now runs under
+`-u`): gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (737 checks).
+
+    ok   pcc2 width rows emitted                              171
+    ok   pcc2 width rows green                                171
+    ok   pcc2 width rows red                                  0
+
+## Seats
+
+Pass 7 (`panel_20260904_033322`): codex NO-GO (pointer-fed; the OVF nibble, the T1 width rows,
+the fixed drain), grok NO-GO (the IPL static, four record defects, agrees L2 on the pending
+qualifier), fable5 RATIFY (overruled on completeness by the source for `w` and OVF; transfer
+confirmed against the `.out` files; the pend oracle's load-sensitivity, now a named token),
+opus5 (running notes F-A..F-M; its own two-mutant table on the 159-row instrument, below),
+deepseek (consistent), glm and minimax (both BURNED on the 8.7 KB packet, answered on a 3 KB
+re-fire: callee reads are outside the closure by the rule), the kimi CLI WALLED on its weekly
+quota -> the `kimi-k3:cloud` substitute answered (packet-fed: the ICLR-decrement branch never
+executes, filed `pcc2iclrdec`).  agy DELIBERATELY NOT FIRED (reserved for measurement) -- not a
+seat failure and not agreement.
+
+## Why the chain does not close here
+
+Pass 7 found measured and in-closure cells, so its repair is new floor-bound material and owes
+pass 8.  The denominator pass 8 must verify is the per-arm lvalue enumeration above, at every
+width, with every bit-domain -- and the class-closure amendment's own test: a third pass
+finding the same class means the enumeration METHOD was wrong twice, and the restated one is a
+claim to be verified, not hunted.
+
+# Round pcc2widthkills, pass 6 -- not the closing pass: three cells, two of them measured by the seats that then lost their transport, all three closed as classes
+
+**2026-09-03.  Detector 118 -> 159 rows; the instrument's session() learned to wait for a
+breakpoint; product code UNCHANGED this pass (no propagation owed).**
+
+## What pass 6 found (eight answering seats of nine, agy deliberately not fired; three measured escapes)
+
+**The two Anthropic seats each saved their findings and completed a measurement in their own
+clone, and THEN the Agent transport hit its five-hour session limit** (HTTP 429, reset 22:20 CDT)
+-- so both ANSWERED, and the rate limit ended the agents rather than the work.  Their orphaned
+drivers ran to completion with sentinels and cmp-clean restores; the artifacts are preserved
+under `regress/artifacts/pcc2widthkills/pass6_seats_20260903/{fable,opus}/`.
+
+* **The LANDING channel at len 4 and len 8 was never read** (Opus seat, `M1_W4FALL_ALL`).
+  `break;' -> `if (len < 4) break;' at all twelve guards announces every wide write and then
+  LANDS the 4- and 8-byte ones: **118/118**.  `latch all w' and `latch all d' count the
+  announce; every readback row in the detector was `st.h` / `put h`, len 2.  The contract
+  sentence "pin the REFUSAL at every block for each non-byte width" was false (L4) and the
+  repair was nulled at two widths (L2).  Negative control `M3_DELGUARD_GENCTL`: 108/118.
+* **The fix's guard qualified by a TIMER PENDING COUNT** -- `&& !d->pending_timer2_interrupts'
+  (Fable seat) and `&& d->pending_timer1_interrupts == 0' (Opus seat), independently, at the
+  TxICR guard: **118/118 each**.  `pending_timer*' is a DIRECT read of the guarded TxICR body,
+  so clause (d) rule (2) puts the qualifier in closure at that arm -- the standard that made
+  pass 5's `warned' qualifier L2.  Its only writer is `pcc_timer_tick`, a `timer_add`/SIGALRM
+  callback that `debugger.c` stops for the whole of every `step`: **five passes of stepping
+  rows could never have held it non-zero.**  The Fable seat leaned FILE (it does not read like
+  a width check); adjudicated L2 by the closure rule, with the reason recorded either way.
+* **Byte reads reach every arm** (grok) -- the six odd blocks included, because a byte access
+  skips the m88k alignment check -- and fall through the width guard to the arm's second
+  predicate.  Delete it at a storing block and a byte READ stores idata == 0; the readback in
+  the same stream is served by the memcpy before the switch and prints the OLD value, so only
+  a second read sees it.  "The odd blocks' read side is unreachable" was true of WIDE reads
+  only (L4, narrowed).  Outside the clause-(d) closure: L1 construction.
+
+Records corrected (codex, from the artifacts): the pass-5 pre-table predicted `rb2 genctl
+0xbb` where the artifact reads 0xb8 (the other row's lane); "six mutants" counted BASE;
+`PRETABLE_pass4.out` was re-stamped at 20:23 by a wording fix AFTER its table, so its own
+"order witness" sentence is false as stored -- the order witness for part 4 is the checkpoint's
+record of the first write (18:35:51) against part 4's start (18:35:57), and **from this pass on
+no pre-table file is edited after its table; corrections go into the newest pass's file.**
+"Every write arm uses idata" -> every STORING arm (SCCERR stores a constant 0; PSCALEADJ and
+IPL store nothing).  The pass-6 brief inherited pass-5 text ("this diff adds five rows").
+Also disclosed: `latch all fail' rests on memory_rw's `debug()` line, which prints because the
+probe single-steps (Opus F7); the pre-table's shared-bitfield deriver keyed on the NAME
+`warned' and swept in an unrelated function-static (F9); `&& reg[IPL] == 0' at the IPL guard
+escapes with a message-only consequence and is out of closure (F4); `cur_int_vec[]` is read by
+no guarded body (F5, N/A).
+
+## The repair -- forty-one rows, three classes closed at every block
+
+The class-closure amendment applied: passes 5 and 6 both found "device state no row held
+non-initial at a wide write", so the guard's operand space is ENUMERATED from the twelve bodies
+and written into the contract -- `pcctwo_reg[relative_addr]' (`rb *', `rb4 *', `rb8 *'),
+`d->warned' (`rb2 *'), `pending_timer1/2' and the TxICR INT bit (`pend1 *', `pend2 *'); out of
+closure and disclosed: `reg[IPL]', `cur_int_vec[]'.
+
+* `brd2 *' x9, `brd pscale noig', `brd ipl noro' -- set a byte, read it, read it AGAIN, at
+  every storing block (guest path, odd blocks included).
+* `rb4 *' x9, `rb8 *' x9 -- byte preset, `put w' / `put d', readback (operator rows: only
+  SCCERR is 4-aligned, so a guest word store reaches no other block); `pscale noig4|8',
+  `ipl noig4|8' (the print-only bodies at zero); `latch samew', `latch samed' (announce-once
+  per width).
+* `pend1 arm|decl|rb', `pend2 arm|decl|rb' -- ARM a timer (compare 1, count 0, IEN|IL1, CEN)
+  and FREE-RUN to a breakpoint while the guest polls TxICR with `bb0 5, r4, -1' until
+  `reassert_interrupts()` sets INT; the 0x31 read after the loop is both the liveness control
+  and the device signature (a mis-encoded bb0 reads 0x11); then the wide write with the count
+  non-zero (guest `st.h` at T2ICR; `put h` at odd T1ICR).  session() now accepts a
+  `(cmd, wait)` tuple so `continue` waits for its breakpoint.  Shape verified once by hand on
+  the restored `/tmp/gxopus_p6` fix binary before the rows were written.
+
+Every prediction is in `PRETABLE_pass6.out` Section 12, written before part 6 ran.
+
+## Part 6
+
+`killtable2_20260903/part6/driver.log` -- the 159-row instrument (md5 ee45731d, frozen), a fresh
+scratch clone `/tmp/gxpcc2b6` of build/, BASE rebuilt in the clone, proof lines per mutant,
+restore cmp-clean, REBUILT and verified, sentinel cleared.  Predictions in `PRETABLE_pass6.out`
+Section 12, written 22:49:56; the table started 22:50:24.
+
+    BASE                   159/159   (control)
+    M_NOWRITECHK_VECBASE   158/159   brd2 vecbase                        as predicted
+    M_NOWRITECHK_GENCTL    157/159   hrd genctl rb, brd2 genctl          as predicted
+    M_W4FALL_ALL           139/159   rb4 x9, rb8 x7, noig4/8 x4          PREDICTED 137: see below
+    M_PENDT1_TXICR         157/159   pend1 decl, pend1 rb                as predicted; every pend2 row green
+    M_PENDT2_TXICR         157/159   pend2 decl, pend2 rb                as predicted; every pend1 row green
+
+The free-running rows work in the table: BASE reached the pending state in both sessions
+(`pend* arm' 0x31) and the two qualifier forms are discriminated -- each kills exactly its own
+timer's two rows.
+
+**One prediction failed, in the safe direction, and it exposed two vacuous rows.**  `rb8 t2ctl'
+and `rb8 t2icr' stayed GREEN under the fall-through: the 8-byte pattern's low lane 0x33 EQUALS
+the preset through each arm's mask -- TxCTL `(0x03 & 0xfc) | (0x33 & 3)' = 0x03, TxICR
+`(0x13 & ~0x17) | (0x33 & 0x17)' = 0x13.  Section 12 had enumerated the landed lanes for len 4
+only.  A readback row whose landed lane equals its preset cannot see the write land -- the
+encoding-trap's cousin, by value choice.  L1, pre-ship construction: the value is changed to
+0x..44, which the enumeration (all nine arms, both widths, `PRETABLE_pass6b.out` Section 13)
+shows differs from every preset under every mask; the rows are unchanged.  Part 6b re-measures
+BASE and `M_W4FALL_ALL' on the corrected instrument (md5 ef3f43b4):
+
+`killtable2_20260903/part6b/driver.log` -- the corrected 159-row instrument (md5 ef3f43b4,
+frozen), fresh clone `/tmp/gxpcc2b6b`, BASE rebuilt in the clone; predictions in
+`PRETABLE_pass6b.out` Section 13, written before the run:
+    [00:14:10]   BASE [CONTROL]: PCC2W_RESULT=159/159
+    [00:25:56]   M_W4FALL_ALL [nine rb4 + nine rb8 + noig4/8 x4 (22 red)]: PCC2W_RESULT=137/159
+    RED: rb4 genctl,rb8 genctl,rb4 vecbase,rb8 vecbase,rb4 t2ctl,rb8 t2ctl,rb4 t2icr,rb8 t2icr,rb4 sccicr,rb8 sccicr,rb4 scctx,rb8 scctx,rb4 sccrx,rb8 sccrx,rb4 scsiicr,rb8 scsiicr,rb4 mask,rb8 mask,pscale noig4,pscale noig8,ipl noig4,ipl noig8
+    (all 22 named; an earlier fill cut this line at 200 characters -- pass 7, grok/codex/opus)
+
+The other four scores transfer: the only rows changed carry a different DECLINED value, and a
+declined write's readback is the preset whatever the value -- and, the Opus seat added, a declined
+write's SURVIVAL too; the value change altered survival only where a write LANDS (GENCTL under
+the fall-through), and that one mutant was re-run in part 6b.
+
+## Gate
+
+`killtable2_20260903/gate14_p7.log` -- gate 14 (`regress/gate_arm.sh`) run ALONE after part 6b,
+through WSL, against the live tree and the 159-row instrument: gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (725 checks).
+
+    ok   pcc2 width rows emitted                              159
+    ok   pcc2 width rows green                                159
+    ok   pcc2 width rows red                                  0
+
+A first launch of the same wrapper through git-bash aborted on `cd /mnt/c/...` (exit 9, a
+235-byte log) and its blank output was briefly filled in here; this is the real run.
+## Seats
+
+Pass 6: codex (NO-GO on the record, no behavioural escape), grok (zero clause-(d) breaches;
+named the byte-read cell), minimax (sound), deepseek (BURNED on the 96 KB brief; re-fired on a
+one-question 20 KB brief: NONE), glm (BURNED, empty response with done_reason stop; re-fired:
+the contract's own disclosed unreachable wide-read cell), kimi (**the CLI WALLED on its weekly
+quota mid-answer** -- 44 KB of reasoning, no verdict, then the 403; the `kimi-k3:cloud`
+substitute was fired on the one-question brief and named the same disclosed cell -- recorded by
+transport, packet-fed), opus5 and fable5 (above: answered, then rate-limited).  agy
+DELIBERATELY NOT FIRED (reserved for measurement) -- not a seat failure and not agreement.
+
+## Why the chain does not close here
+
+Pass 6 found two measured floor breaches and one construction cell, so it is not a valid
+closing pass; the repair is new floor-bound material and owes pass 7 on THIS diff.  Its
+denominator: twelve guards x the nine shapes, the helper's two lines, widths {1,2,4,8} on
+both the announce and the LANDING channel, the FAULT member at all twelve, and every field the
+twelve guarded bodies read, each held non-initial at a wide write by a named row.
+
+# Round pcc2widthkills, pass 5 -- not the closing pass: the guard qualified by its own latch bit swept the shipped 101 rows, because every row watched the device only while its latch was still armed
+
+**2026-09-03.  Detector 101 -> 118 rows; product code changes are comments and the typedef
+bound restated in the fork's own sizeof idiom.**
+
+## What pass 5 found (eight answering seats, agy deliberately not fired; two measured)
+
+**The Opus reader built the canonical clause-(d) conjunct addition** -- `if (len != 1 &&
+writeflag == MEM_WRITE && !(d->warned & (1u << bit)))', the guard qualified by the one field the
+fix itself introduced -- and it scored **101/101 at GENCTL alone and 101/101 at all twelve**
+(own clone, the shipped instrument md5 06594f0e, negative control guard-deleted 92/101).  The
+first wide write is declined and announced exactly as the fix does; the second lands the
+neighbour's lane.  Non-equivalence on the saved binaries: two wide writes then a readback
+gives 0xbb against 0x82 at GENCTL and 0xbb against 0x12 at MASK, while one wide write reads
+the same on both -- and one wide write is the shape of every shipped row.  `latch same' does
+the offending traffic and reads only the message count; every `rb' row reads back after
+exactly one write.  **No row had ever observed the device at a decision point with its latch
+already set.**  This round's own PRETABLE Section 1 listed `d->warned' as a body-read field
+and then dropped it from the disagreeing-state enumeration.  L2, repaired in-round; and since
+passes 4 and 5 both found the fix's own state as an input nobody walked, the repair closes
+that class at every block rather than at the address the mutant used.
+
+No scriptable seat found a one-token edit to the twelve guards or the helper's TEST and SET
+lines that breaks the split and keeps 101 green -- glm and codex swept the space with their
+denominators; grok and kimi re-derived the helper, the guards and the rows from the tree.
+Two more things were MEASURED by the fable5 seat on the same instrument:
+
+* **The contract's disclosure was false in the safe direction.**  It said the TEST line's
+  operand swap (`&' -> `==') was "not distinguishable by this instrument".  `M_TEST_EQ' scored
+  100/101: `latch aba' distinguishes it (A sets bit 1, B makes the field 3, and 3 == 1 is
+  false, so A re-announces).  The detector was stronger than its contract said; corrected in
+  place, with the reason.  Every other seat named the same sentence.
+* **The FAULT member escapes at the six operator-only blocks.**  `break' -> `return 0' at
+  VECBASE scored 101/101 with the mutation proven: the announce precedes the return, the body
+  is skipped either way, and a failed debugger put does not threaten the host.  Part 4 had
+  measured that shape only at GENCTL, where a GUEST store faults.  deepseek reasoned the same
+  cell from the packet.  It is above the floor -- the write is still refused; only the
+  DISPOSITION changed, from DECLINE to the rejected FAULT member -- so it is closed under L1
+  pre-ship construction rather than as a breach: the pty carries memory_rw's own line,
+  "[ writing to device 'pcc2' addr ... failed ]", and `latch all fail' counts it at zero over
+  the twelve-block session that already existed.  Zero new sessions.
+
+Three consecutive passes found a shape with no channel at an operator-only block (fall-through
+x4; fall-through at VECBASE and IPL; FAULT x6).  The contract now says why -- every guest-side
+channel at an odd block is absent by construction -- and that a new shape is checked against
+the six operator-only blocks first.
+
+## Records corrected (L4)
+
+The FAULT paragraph claimed the `hwr' / `lv' PAIR reds under `M_RET0_GENCTL'; the measurement
+reddened `hwr genctl lv' (died) and not `hwr genctl' (the host survives a guest fault) -- codex,
+from `part4/driver.log'.  "All nine seats" where eight answered and agy was not fired (codex).
+The PSCALEADJ and IPL GROW cells read C while their own accept rows exist -> A/C (deepseek).  The
+brief called a cumulative 60 -> 101 diff "this diff adds five rows" (minimax).  The IPL and
+MASK arm comments said "now per-instance" above bodies whose #119 statics stay process-global --
+true of the width latch, misleading about the body's; they now say which (kimi).  `|=' -> `^='
+or `+=' in the SET line is equivalent because the SET runs only under the TEST (fable5) --
+disclosed.  A docstring escape that warned under `-W error' -- fixed.
+
+## Part 5
+
+Part 5 (`killtable2_20260903/part5/driver.log`, the 118-row instrument md5 as shipped, fresh scratch clone, proof lines per mutant): BASE 118/118; `M_RET0_VECBASE` 116/118 by `latch all fail` and `rb2 vecbase`; `M_TEST_EQ` 117/118 by `latch aba` alone; `M_QUAL_GENCTL` 117/118 by `rb2 genctl` alone.  The driver then died at the all-twelve mutant on "binary not newer than source": my mutant had written `bit` -- the helper's parameter -- into the guards, the build failed, and the freshness check refused it as designed.  Part 5b (`part5b/driver.log`, fresh clone, the mutant rebuilt per block from each decline call's own enum member): BASE 118/118; `M_QUAL_ALL` 107/118 by exactly the eleven rows written for it (`rb2` at nine blocks, `pscale noig2`, `ipl noig2`) and nothing else; `M_NOWRITECHK_GENCTL` 117/118 by `hrd genctl rb` alone.  Every prediction in `PRETABLE_pass5.out` Sections 9-10 landed.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`), run ALONE after the propagation, log
+`regress/artifacts/pcc2widthkills/killtable2_20260903/gate14_p6.log`: **PASS (684 checks)**,
+`GATE_RC=0`; `pcc2 width rows emitted 118 / green 118 / red 0`; `sgi_de primop rows 51 / 51 / 0`;
+0 FAIL.  Two-part clearance after the typedef propagation (propagate3_p6.log, OUTPUT): build
+CLEAN/FRESH 21:17:43, build-asan CLEAN/FRESH 21:17:59, gxsec-build CLEAN/FRESH 21:18:00, est
+part 1 CLEAN, part 2 N/A (source tree).
+
+## Seats
+
+Pass 5: codex (NO-GO on the record, no behavioural escape), kimi (GO-WITH-CHANGES, every table
+checked row for row), grok (verified), glm (closes with one false sentence), deepseek (not
+ready: three findings, all adopted), minimax (sound with two record defects), opus5 (below),
+fable5 (RATIFY the product and the harmful-shape coverage, NOT the record as written; two
+measurements; self-declared claude-fable-5-1, the main loop's model).  agy DELIBERATELY NOT
+FIRED (reserved for measurement) -- not a seat failure and not agreement.
+
+## The repair, and why the chain does not close here
+
+Sixteen rows close the latch-set state at every block: `rb2 *' at the nine storing blocks (set
+a byte, write wide TWICE, read back), `pscale noig2' and `ipl noig2' (the print-only bodies,
+counted at zero after two writes), SCCERR value-identical (E).  Five more pin the wide-READ
+fall-through to each arm's second predicate that the Opus reader flagged (`hrd * rb' x4,
+`hrd ipl noro'); one (`latch all fail') pins the FAULT member at all twelve over the existing
+twelve-block session.  The typedef bound now tests the field's width in `dev_dreamcast_gdrom.c`'s
+own sizeof form, after the struct.  Every prediction was written into `PRETABLE_pass5.out`
+before part 5 ran.
+
+The stop condition is one pass per floor-bound diff, closing on the first VALID pass finding
+zero floor breaches.  Pass 5 found one -- measured, non-equivalent, at every block -- so the
+chain continues to pass 6 on THIS diff.  Its own denominator is stated in the contract: twelve
+guards x nine shapes, the helper's two lines token by token, widths {1,2,4,8}, the FAULT member
+at all twelve, the fix's own state as a guard input at all twelve, and each arm's second
+predicate at the even blocks.
+
+# Round pcc2widthkills, pass 4 -- the enumeration's derivations held, its domain was one function too small, and a one-character edit to the latch swept the shipped 96 rows
+
+**2026-09-03.  Detector 96 -> 101 rows; no product code change.**
+
+## What pass 4 found (eight answering seats, agy deliberately not fired; two measured)
+
+Every seat re-derived the 12 x 9 enumeration's landing values, cardinality drops and red
+counts from source and they held.  The DOMAIN did not: the grid enumerated twelve CALL SITES
+and never the helper they all call, whose two lines every block depends on.  The Opus reader
+BUILT it: `d->warned |= (1u << bit)' -> `d->warned = (1u << bit)', ONE CHARACTER, **96/96 --
+a total sweep of the shipped instrument** (md5 72759b4f) with the mutation proven in the
+source and the binary newer.  A then B clears A's bit and nothing ever wrote A again: `latch
+same' sees only consecutive repeats, `latch all' only distinct blocks.  glm, kimi and codex
+had derived the same escape; minimax derived its sibling, `(1u << bit)' -> `1' (bit 0
+always, so every block but GENCTL announces every time and the bit-0 row stays green).  glm,
+deepseek and codex named the 8-byte width: rows drove {1,2,4} while `put d' reaches every arm
+with len 8 -- a hole the pass-3 codex seat had already named and pass 4 had silently dropped,
+the rewritten-row-list class.  codex found the accept-side claim carried by five rows.  The
+Opus reader also measured the bit-translation control (`1u << (bit + 1)': 96/96 and
+EQUIVALENT -- bit identity has no consumer) and named the FAULT member (`break' -> `return
+0') as unmeasured.  fable5 RATIFIED on an analytic sweep that omitted the helper edits and
+said so; its verdict is overturned by the measurement and recorded as such.
+
+## The repair: 96 -> 101 rows
+
+| row | closes | predicted kill |
+|---|---|---|
+| `latch aba` (GENCTL, VECBASE, GENCTL -> TWO announces) | the SET line assigned instead of accumulated | `M_LATCH_ASSIGN` -> 3 |
+| `latch same2` (MASK twice -> ONE) | the SET line's bit constant collapsed to bit 0 | `M_LATCH_BIT0` -> 2 |
+| `latch all d` (twelve `put d`, twelve announces) | an 8-byte exemption at any block | `M_LEN8_VECBASE` (`len & 6`) -> 11 |
+| `acc pscale ign`, `acc ipl ro` (the print-only arms' own prints, once) | the accept side reaching the BODY | `M_GROW_IPL` -> `acc ipl ro` 0 |
+| (existing `hwr genctl` / `lv`) | the FAULT member | `M_RET0_GENCTL` -> died |
+
+The contract's domain now names the helper's two operations and the four widths, discloses
+the bit-translation equivalence and the announce-severity limit (`fatal(' -> `debug(' changes
+no text these rows read), states that three frozen instruments were used across parts 3, 3b
+and 3c and why the kills transfer, and gives `acc all' the right warrant for a REWRITTEN row.
+
+## Records corrected (L4)
+
+TxCTL's FALL cell was S while part 3b had measured it (deepseek); "no S cell is survival-only"
+restated for KILL cells, whose channel is the survival pair (deepseek); "six shapes" -> nine
+(codex, deepseek); the contract's opening "twelve exit(1) blocks" -> ten kills and two latches
+(codex); the A/C note's "96/96 part 3" -> 95/96 part 3, 96/96 part 3b (glm); the `rb t1ctl'
+comment for the RMW arm (grok); "five dcl rows count generic text" -> seven rows, five arms
+(fable5); the SCCERR equivalence's deriver keyed on a correlate -> every writer of
+`pcctwo_reg[]' (Opus); "product diff is comments only" -> plus the pass-2 typedef (codex);
+`PRETABLE_amendments.out' had re-created the mtime defect by holding three sections, so
+pass 4's block is its own file and PRETABLE.out says "reconstructed" (Opus); the drivers'
+proof lines now carry the mutant's name (Opus read them as the previous mutant's).
+
+## Part 4
+
+Part 4 (`killtable2_20260903/part4/driver.log`, the 101-row instrument md5 as shipped, fresh scratch clone, proof lines per mutant): BASE 101/101; `M_LEN8_VECBASE` 100/101 by `latch all d` alone; `M_LATCH_ASSIGN` 100/101 by `latch aba` alone; `M_LATCH_BIT0` 100/101 by `latch same2` alone; `M_GROW_IPL` 99/101 by `acc all` and `acc ipl ro`; `M_RET0_GENCTL` 96/101 by `hwr genctl lv` (died), `rb genctl`, `rb vecbase`, `rb genctl lo`, `latch two`.  Every prediction in PRETABLE_pass4.out landed.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`), run ALONE, log
+`regress/artifacts/pcc2widthkills/killtable2_20260903/gate14_p5.log`: **PASS (667 checks)**,
+`GATE_RC=0`; `pcc2 width rows emitted 101 / green 101 / red 0`; `sgi_de primop rows 51 / 51 / 0`;
+685 ok rows, 0 FAIL.  No product file changed in this repair; `build/` was cmp-clean and fresh
+(17:42 propagation) before the launch.
+
+## Seats
+
+Pass 4: codex (NO-GO), kimi (change required, measured against the artifacts), grok
+(verified with corrections), glm (two holes), deepseek (not ready), minimax (gaps), opus5
+(DO NOT CLOSE, two binaries measured), fable5 (RATIFY on an analytic sweep -- overturned by
+measurement; self-declared claude-fable-5-1, the main loop's model).  agy DELIBERATELY NOT
+FIRED (reserved for measurement) -- not a seat failure and not agreement.  Pass 5 on this
+repair: OWED to all nine; the chain closes on the first valid pass finding zero breaches.
+
+# Round pcc2widthkills, pass 3 -- the same class a third time, three shapes the enumeration never named, and a closure written cell by cell into the contract
+
+**2026-09-03.  Detector 82 -> 96 rows (101 after pass 4); product code changes are comments -- the one compile-time typedef bound dates from pass 2.**
+
+## What pass 3 found (nine seats; three of them measured)
+
+The 82-row repair had killed the ten sweeps of passes 2 and 3b.  Pass 3 on that repair
+found the announce-then-fall-through class a THIRD time -- at VECBASE, measured 82/82 by the
+fable5 seat, then by the Opus reader and by kimi, and at IPL, measured 82/82 by the Opus
+reader and kimi -- because PRETABLE Section 2 had credited `rb vecbase' as VECBASE's readback
+when it is GENCTL's neighbour-lane row (its wide write goes to GENCTL), and because IPL's
+print-only write body had been called a no-op when it prints "write to read-only PCCTWO_IPL;
+ignored" once per process.  Three shapes outside the six-shape list were named and one was
+measured: the direction split's own conjunct nulled, `writeflag == MEM_WRITE' -> `<= MEM_WRITE'
+(ONE character; Opus reader, 82/82: wide READS declined, announced as writes, latch bit
+consumed, and no session holding a wide read carried a decline-count row); `len != 1' ->
+`len == 2' (codex, kimi: every halfword row green while a WORD lands); and the contract's
+"byte writes land at every reachable arm" carried by accept rows at five blocks (codex).
+deepseek added the T1 labels of the shared timer blocks (readbacks sat at the T2 offsets);
+glm asked why SCCRXIACK, a thirteenth arm with no width guard, is outside the twelve; minimax
+caught the corrected product comment counting "the T1 labels" among six odd BLOCKS -- eight
+odd OFFSETS, the same units slip that caused pass 2.
+
+Records defects, all corrected in place: the Section-2 mis-credit (annotated, not rewritten);
+the probe's stale "five guest / seven operator" comment; "6 + 7 = 13" in the contract; the
+T1-labels sentence; `d->warned' called a 12-bit field; the brief's inlined helper missing
+its closing brace (the generator's awk range; now brace-counted); and PRETABLE.out's own
+mtime discriminator destroyed by appending Section 5 into it -- the file is restored to
+Sections 0-4 and every amendment lives in `PRETABLE_amendments.out'.
+
+## Two consecutive passes on one class: the repair owes the CLASS
+
+The enumeration is written into the probe's contract: twelve blocks by nine shapes (guard
+deleted; `len > 2'; `len == 2'; the kill reinstated; latch-bit alias; announce-then-fall-
+through; operand swap to `idata > 0xff'; guard grown to refuse bytes; the direction conjunct
+nulled), plus the two T1 labels, each cell MEASURED, same-channel-as-measured, cardinality-
+covered, EQUIVALENT with its warrant (SCCERR: the arm stores 0 and the model never stores a
+nonzero SCCERR), or UNREACHABLE by construction (the six odd blocks' read side: a guest wide
+read at an odd offset alignment-faults before memory_rw, and a debugger read is not
+dispatched to a DM_DEFAULT device).  Fourteen rows close it:
+
+| rows | shape closed | measured by |
+|---|---|---|
+| `rb vecbase own` | VECBASE fall-through | part 3: killed by that row alone |
+| `hwr ipl noig` | IPL fall-through (the print is the channel) | part 3: killed by that row alone |
+| `latch all w` | `len == 2` at all twelve (twelve `put w`, twelve announces) | part 3: `M_LEN2_VECBASE` killed by that row alone |
+| `acc all` (+lv) | a guard grown to refuse bytes, at all twelve | part 3c (`killtable2_20260903/part3c/driver.log`): BASE 96/96; `M_GROW_PSCALEADJ` 95/96, killed by `acc all` ALONE, with the mutation proven in the source (1 x `len != 0`) and the binary newer than the source |
+| seven `hrd/wrd * nod` | the direction conjunct nulled, at the six even blocks | part 3: `M_RDDECL_ALL` reddens all seven (88/96) |
+| `rb t1ctl`, `rb t1icr` | the T1 labels of the shared blocks | part 3b: `M_FALL_TXCTL` reddens `rb t2ctl` AND `rb t1ctl` |
+
+Logs: `killtable2_20260903/part3/driver.log` (BASE 95/96 -- see below; six mutants),
+`part3b/driver.log` (BASE 96/96; two), `part3c/driver.log`; the pass-3 seats' own
+measurements at `pass3_seats_20260903/` (fable, opus_reader, kimi).  `M_ALIAS_SCCTX' was
+measured at 78 rows (the builder's M1) and transfers because `latch all' is byte-identical
+across the instruments; it was not re-run at 82 or 96.
+
+## Two instrument defects the table caught, both mine
+
+* **`rb t1ctl' reddened on the fix** (BASE 95/96): the row wanted the input string "0x03"
+  and the debugger prints "0x3".  The value was right.  Fixed; part 3b BASE 96/96.
+* **`acc all' could not see the arm it was written for.**  Its first form used the debugger's
+  `put b'; a guard grown to refuse bytes at PSCALEADJ escaped it TWICE with the mutation
+  PROVEN in the source and the binary newer than the source (3b's proof lines).  `put b'
+  calls memory_rw with NO_EXCEPTIONS, and memory_rw.c dispatches a device only under
+  `!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS)'; pcc2 registers DM_DEFAULT.
+  So twelve byte writes reached no arm and the row was VACUOUS BY CONSTRUCTION -- the CHANNEL
+  rule's failure condition, caught by the table.  `put h/w/d' go through store_Nbit_word and
+  do reach the arms, which is why every other cardinality row worked.  The row is now twelve
+  GUEST `st.b' stores, legal at every offset, and the contract states the `put b' fact.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`), run ALONE after the propagation, log
+`regress/artifacts/pcc2widthkills/killtable2_20260903/gate14_p4.log`: **PASS (662 checks)**,
+`GATE_RC=0`; `pcc2 width rows emitted 96 / green 96 / red 0`; `sgi_de primop rows 51 / 51 / 0`;
+680 ok rows, 0 FAIL.  Two-part clearance after the comment-only propagation (propagate3_p4.log,
+OUTPUT): build CLEAN/FRESH 17:42:56, build-asan CLEAN/FRESH 17:43:13, gxsec-build CLEAN/FRESH
+17:43:15, est part 1 CLEAN, part 2 N/A (source tree).
+
+## Seats
+
+Pass 3: codex (NO-GO), kimi (GO-WITH-CHANGES, measured), grok (chain open), glm (NOT CLOSED),
+deepseek (NOT CLOSED), minimax (gaps), opus5 (DO NOT CLOSE, measured five binaries), fable5
+(DO NOT CLOSE, measured; self-declared claude-fable-5-1, the main loop's model).  agy
+DELIBERATELY NOT FIRED (reserved for measurement) -- not a seat failure and not agreement.
+Every seat answer and measurement artifact is preserved under `pass3_seats_20260903/`.
+Pass 4 on the class closure: OWED to all nine.
+
+## Filed
+
+`pcc2pscaleflood` (MED): PSCALEADJ's write-side `fatal()' is unlatched and guest-drivable.
+
+# Round pcc2widthkills, passes 2 and 3 -- the 60-row detector had six clean sweeps, the smallest one character; the repair is 82 rows and every cell of it is measured
+
+**2026-09-03.  Detector repair only; product code changes are comments and one compile-time
+bound.**  The direction split shipped in `b78bb0f` is untouched.
+
+## What pass 2 found (nine seats, one of them the builder)
+
+The Opus seat built eleven cells against the shipped 60-row `regress/pcc2_width_probe.py` in a
+scratch clone of `build/` at `b78bb0f` and found **SIX CLEAN SWEEPS**: a ONE-CHARACTER latch-bit
+alias (`PCC2_W_SCCTX_LEN` -> `SCCRX`), MASK `len != 1` -> `len > 2`, MASK announce-then-fall-
+through, a verbatim `exit(1)` at IPL (guest-reachable: 0x3e is EVEN), and the guard deleted at
+SCCTX and at MASK.  Root cause was a units slip in the census -- *five even BLOCKS plus seven
+odd LABELS* read as all twelve blocks -- so IPL and MASK had no row at all, `latch two` pinned
+one pair of 66, and table 1 had run with no pre-table block while the class sat in
+`sgideprimop`'s own `PRETABLE.out` 33 hours earlier.  Three seats (fable5, kimi, the builder)
+reached the IPL/MASK gap independently; grok found that only GENCTL had a readback, so a
+per-arm guard edit at T2CTL/T2ICR/SCCTX/SCCERR was survival-only; codex found five records
+defects, including a `pcc2widecompose` CLAIMED FILED and not filed (filed now), and the
+OpenBSD 2.2 source in the tree declaring these registers `volatile u_char`.
+
+## The repair: 60 -> 82 rows, in four steps, each measured
+
+| step | rows | what | measured by |
+|---|---|---|---|
+| IPL/MASK | +8 | `hrd/hwr ipl(+lv,+dcl)`, `op mask(+dcl)`, `rb mask` | part 1: `M_DELETE_MASK` 75/78, `M_KILL_IPL` 71/78, `M_KILL_MASK` 73/78 |
+| per-arm channels | +7 | `rb t2ctl/t2icr/scctx(+dcl)`, `hwr sccerr dcl` | part 1: `M_DELETE_TXICR` 74, `M_LENGT2_TXICR` 74, `M_LENGT2_TXCTL` 73, `M_LENGT2_SCCTX` 75, `M_LENGT2_SCCERR` 76 |
+| latch CARDINALITY | +2 | `latch all` (one wide write per BLOCK, twelve announces), `latch all lv` | builder pass 3: the alias 77/78 by `latch all` alone |
+| pre-table yield | +1 | `rb genctl lo` (a halfword whose value FITS a byte is still declined) | part 2: `M_IDATA_GENCTL` 80/82 (`rb genctl lo`, `latch all`) |
+| fall-through channels | +4 | `rb sccicr/sccrx/scsiicr`, `op pscale noig` | builder 3b: four x 78/78 SWEEPS at 78; 3c: four x 81/82, each its own row |
+
+Logs: `regress/artifacts/pcc2widthkills/killtable2_20260903/part1/driver.log` (9 mutants + BASE
+78/78), `.../part2/driver.log` (BASE 82/82 + `M_IDATA_GENCTL`), and the builder's
+`regress/artifacts/pcc2widthkills/opus_pass3_20260903/` (pass 3 on the 78-row instrument md5
+`d9239db6`: BASE2 78/78, M1 77, M2 75, M6 77, M7 71, M8 75, M9 75; pass 3b and 3c as above,
+3c on the 82-row instrument md5 `cd22f951`, which is the shipped probe).  Two independent rigs
+-- different clone, driver and binary -- agree on every shared cell (M2 = `M_DELETE_MASK` 75,
+M7 = `M_KILL_IPL` 71, M8 = `M_LENGT2_SCCTX` 75, same red rows).  Every prediction the builder
+recorded before each run landed, including which single row would move and the exact byte.
+
+## The pre-table block, run this time, and what it yielded
+
+`killtable2_20260903/PRETABLE.out` was written at 13:07 BEFORE table 2 (Section 0 records
+honestly that table 1 had none -- the third recorded skip of the mandate).  Its guard-field /
+body-field question yielded a row nothing else would have: the guard reads `len`, the body
+reads `idata`, and every wide-write row used a value above 0xff, so a guard operand swap to
+`idata > 0xff` -- a plausible "fits a byte" reading -- was green under all 77 rows BY
+CONSTRUCTION while a big-endian `st.h 0x0022` stored 0x22, the neighbour's lane, into GENCTL.
+`rb genctl lo` was written before the table and `latch all`'s value changed to 0x0003 so the
+cardinality row also reds under that swap at ANY arm.  Measured: 80/82, both rows.
+
+## The ruling, and its measurement
+
+Section 2 of that block disclosed that PSCALEADJ/SCCICR/SCCRX/SCSIICR had no readback, so a
+guard that ANNOUNCES and then lets the halfword land would escape -- and called it "the
+sentence owed".  The builder asked whether a disclosure can discharge a floor clause.  **Ruling:
+it cannot.**  Clause (d) is a floor ("the guard kept, its effect removed"); clause (e) governs
+claims ABOVE it, or every breach becomes dischargeable by a paragraph.  Four rows were added
+before any measurement (Section 5), and the builder then measured both halves: the four
+fall-throughs are **four total sweeps of the 78-row detector** and **four one-row kills on the
+82-row repair** -- `rb sccicr` 0x18 (0xb8 & 0x1f), `rb sccrx` 0x98 (0xb8 & 0xdf), `rb scsiicr`
+0x98, and for PSCALEADJ, whose write body stores nothing and only prints, `op pscale noig`
+counting the "ignored" line at zero.  The channel is matched to what each arm's body does;
+a count-based row cannot see this shape because the announce survives by construction.
+
+## Records corrected (L4), each from a measurement
+
+* the reachability census in the product comment said FIVE even-offset blocks; IPL at 0x3e is
+  even, so SIX -- corrected in place with the correction recorded;
+* "six of them calling `reassert_interrupts()`" -- derived by awk over the arms: SEVEN of the
+  twelve blocks, five of the eight masking arms;
+* "no measured driver wide-writes these registers" -- there is no driver MEASUREMENT either
+  way (no mvme187 boot runs here); restated as a reading of OpenBSD 2.2's `volatile u_char`;
+* `PCC2_W_NBITS` "bounds" nothing -- now a compile-time typedef bound;
+* `pcc2widecompose` claimed filed and was not -- filed, with the OpenBSD warrant on both sides.
+
+## Gate
+
+Gate 14 (`regress/gate_arm.sh`), run ALONE after the propagation, log
+`regress/artifacts/pcc2widthkills/killtable2_20260903/gate14_p3.log`: **PASS (648 checks)**,
+`GATE_RC=0`; `pcc2 width rows emitted 82 / green 82 / red 0`; `sgi_de primop rows 51 / 51 / 0`;
+666 ok rows, 0 FAIL.  Two-part clearance after propagation (propagate3.log, OUTPUT): build
+CLEAN/FRESH 15:01:15, build-asan CLEAN/FRESH 15:01:30, gxsec-build CLEAN/FRESH 15:01:32,
+est part 1 CLEAN, part 2 N/A (source tree).
+
+## Seats
+
+Pass 2: codex, kimi, grok, glm, deepseek (thinking-burn, answered on re-fire), minimax (429
+from a concurrent panel, answered on re-fire), fable5 (self-declared claude-fable-5-1, the main
+loop's model), opus5 (the sole BUILDER, then its own pass 3, 3b and 3c unprompted).  agy
+DELIBERATELY NOT FIRED (reserved for measurement by owner ruling) -- not a seat failure and not
+agreement.  Pass 3 on the repair diff: OWED to the eight non-builder seats; the builder's pass
+3 is one seat of it.
+
+## Still open, filed
+
+`pcc2c040kill` (HIGH: a legal byte write of 0x04 to GENCTL still ends the host in
+`reassert_interrupts`), `pcc2defaultkill`, `pcc2counter8`, `pcc2widecompose` (LOW).
+
 ## Round pcc2widthkills -- twelve width kills become a direction split, and the tree knew the width was legal all along
 
 `DEVICE_ACCESS(pcc2)` had **twelve** `if (len != 1)` blocks that ended the host on a

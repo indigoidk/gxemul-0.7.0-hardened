@@ -1,0 +1,86 @@
+**VERDICT: ENUMERATION IS LARGELY CORRECT BUT HAS UNDISCLOSED GAPS; the smallest edit that breaks a stated property and passes all 96 rows is `d->warned |= (1u << bit)` → `d->warned |= 1` (or `|= (1u << 0)`), which silently disables the latch for sites 1-11. The row that stays green is `latch all` (count 12). Option-set completeness: agree, N/A. Record is honest on the inlined material, but several premises rest on claims I cannot re-derive from the packet.**
+
+---
+
+## 1. THE ENUMERATION
+
+### (a) Domain
+
+The nine shapes (DEL, LEN, LEN2, KILL, ALIAS, FALL, SWAP, GROW, RDDECL) cover the *guard condition* mutations and one *latch collision* shape (ALIAS). **REASONED:** They do NOT cover:
+
+- **Latch-mechanism mutations** other than ALIAS. `|= (1u << bit)` → `|= 1` (or `|= (1u << 0)`) is a shape not in the contract.
+- **Value conditions added to the shape guard.** `len != 1` → `len != 1 && idata != 0` (or `len != 1 && idata`) is a shape not in the contract; wide writes of 0 bypass the guard at any arm where the probe never writes zero (and `wwr sccerr` uses 0x00000000 but its row only checks survival and r4 readback, not the decline count — see `gate_arm.sh` diff which still has `wwr sccerr dcl` in the *old* list but the new probe code inlined here does not emit `wwr sccerr dcl`; I count seven named-text dcl rows in the new gate list: rb t2ctl dcl, rb t2icr dcl, rb scctx dcl, wwr sccerr dcl, hwr sccerr dcl, hwr ipl dcl, op mask dcl — consistent with the brief).
+- **Name-string changes** at the five odd-only blocks (VECBASE, PSCALEADJ, SCCICR, SCCRX, SCSIICR) — disclosed as cosmetic, not a functional break.
+
+### (b) S cells
+
+**REASONED (cannot verify per-arm):** The logic is consistent — an S cell is "same channel as a measured shape at that arm" — but I cannot re-derive the per-arm warrant without the inlined arm bodies for GENCTL, PSCALEADJ, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR. The arms I can see (VECBASE, IPL, MASK, TxCTL/T1CTL, TxICR/T1ICR, plus the counter arms) are consistent with the table.
+
+### (c) E / UNREACHABLE cells
+
+- **SCCERR FALL = E.** Warrant: "the arm stores 0 and nothing in the model ever stores a nonzero SCCERR (grep SCCERR dev_pcc2.c)." **READ from packet, not independently checkable:** the SCCERR arm code is not inlined. If the grep is true, FALL is equivalent because the landed write executes `= 0`, same as the guarded behavior leaves the register at 0. But I cannot confirm the grep.
+- **Six odd blocks' RDDECL cells = UNREACHABLE.** Warrant: guest wide read at odd offset alignment-faults before memory_rw; debugger read does not dispatch to DM_DEFAULT. **READ:** the mechanism is stated (`!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS)`, pcc2 DM_DEFAULT). The `put b` row's vacuity is similarly explained (memory_rw NO_EXCEPTIONS does not dispatch to DM_DEFAULT; `put h/w/d` go through store_Nbit_word).
+
+### (d) Cardinality rows
+
+- **`latch all` = 12:** robust against ALIAS (any collision drops count) and SWAP (value 0x0003 fits a byte, so a value-test guard at any arm lets it land). **REASONED:** but as shown below, NOT robust against `|= 1`.
+- **`latch all w` = 12:** robust against LEN2 (`len == 2` guard lets word land at every arm). **REASONED.**
+- **`acc all` = 0:** robust against GROW at any of the 7 C-only blocks. **READ:** the part-3c rewrite to guest `st.b` (legal at every offset, byte accesses skip alignment) closes the `put b` vacuity.
+
+---
+
+## 2. THE SMALLEST EDIT THAT BREAKS THIS AND PASSES 96 ROWS
+
+**Edit:** `d->warned |= (1u << bit);` → `d->warned |= 1;` (remove `<< bit`, 7 characters; or equivalently `|= (1u << 0)`, 3 characters changed).
+
+**What it breaks:** The latch for sites 1-11 (VECBASE, PSCALEADJ, TxCTL/TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR, IPL, MASK, plus T1CTL/T1ICR labels). With `|= 1`, only bit 0 is ever set. Sites 1-11 check bits 1-11 which are never set, so their `!(d->warned & (1u << bit))` is always true — they announce on every wide write, not just the first. The stated property "dropped `|=` floods (same site twice must announce ONCE)" is violated for 11 of 12 sites.
+
+**Why it passes 96 rows:**
+
+- **`latch all` (12 `put h 0x0003`):** site 0 announces once (bit 0 set after first write); sites 1-11 each announce once (one write per site in this row). Count: 12. **Stays green.** This is the row the brief asks me to name.
+- **`latch same` (2 × st.h to GENCTL):** first write announces (bit 0 set); second write checks bit 0 (set), doesn't announce. Count: 1. Passes.
+- **`latch two` (st.h to GENCTL then T2CTL):** GENCTL announces (bit 0 set); T2CTL checks bit 1 (still 0 with `|= 1`), announces. Count: 2. Passes. (Order-dependent — if T2CTL were first, GENCTL's second write would not announce; but the probe fixes the order.)
+- **All `dcl` rows:** each does one write per site; each announces once. Pass.
+- **All readback / survival rows:** unaffected.
+
+**REASONED.** No row tests *repeated* writes at the same non-GENCTL site, so the latch break is invisible.
+
+---
+
+## 3. OPTION-SET COMPLETENESS
+
+**Agree: N/A.** No disposition is being chosen. The brief verifies the enumeration and asks for gap-finding, not a decision.
+
+---
+
+## 4. RECORD HONESTY
+
+**Mostly honest.** Specific notes:
+
+- **SCCERR FALL = E** rests on a grep claim ("nothing in the model ever stores a nonzero SCCERR"). The SCCERR arm body is not inlined; I cannot re-derive. **READ, not independently checkable.**
+- **GENCTL, PSCALEADJ, SCCTX, SCCICR, SCCRX, SCSIICR arm bodies** are not inlined. The brief states behaviors (e.g., "SCCICR `& 0x1f`; SCCRX and SCSIICR `& 0xdf`; each calls reassert_interrupts()") and a reassert count ("seven of the twelve blocks call reassert_interrupts() (five of those eight)"). **READ, not independently checkable.** My cross-check: 8 masking/RMW/clear arms (VECBASE, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR — with GENCTL being non-masking "store the byte") of which 5 reassert (TxCTL, TxICR, SCCICR, SCCRX, SCSIICR) + 2 non-masking reassert (GENCTL, MASK) = 7. Counts are internally consistent.
+- **`fatal()` returns:** stated. Consistent with the helper inlined (`pcc2_width_decline` calls `fatal` then returns; the caller's `break` then exits the switch).
+- **`d->warned` is 32-bit with 12 bits, written ONLY inside `pcc2_width_decline`:** stated. The typedef `pcc2_w_fits_in_warned[PCC2_W_NBITS <= 32 ? 1 : -1]` is a compile-time guard. **READ, consistent.**
+- **`reassert_interrupts()` exits only on `GENCTL & 0x04`:** stated. Every probe GENCTL value keeps that bit clear. **READ, not independently checkable.**
+- **PRETABLE split:** honest as written. PRETABLE_amendments.out holds Sections 5-7; PRETABLE.out retains Sections 0-4. The mtime discriminator is preserved (appending had made the two indistinguishable by mtime). Content is preserved, just split. **REASONED: honest.**
+
+**Claims I could not re-derive from the packet (would need the source):**
+- SCCERR arm body and the "nothing stores nonzero SCCERR" grep
+- GENCTL arm body
+- SCCTX arm body
+- The exact auto-incremented enum values (PCC2_W_GENCTL_LEN = 0, ..., PCC2_W_MASK_LEN = 11) — the typedef confirms NBITS ≤ 32 but not the start value
+- `relative_addr %= PCC2_SIZE` vs `%= 0x40` — PCC2_SIZE is not given but the alignment parity claim is consistent
+
+---
+
+## OTHER FINDINGS
+
+1. **A second gap (larger, but same class):** `len != 1` → `len != 1 && idata` (or `&& idata != 0`) at SCCERR specifically. `wwr sccerr` writes 0x00000000; the row checks survival and r4 readback only, not the decline count. The word lands, the arm stores 0, state unchanged. All 96 rows pass. This is a width-guard break (non-byte write of 0 bypasses) at 14 characters added vs. 7 removed for `|= 1`.
+
+2. **`hwr ipl noig` and `op pscale noig` as message-channel rows** are elegant but rest on the premise that the print is the only side effect of the arm body for IPL and PSCALEADJ. **READ from packet; consistent with the inlined PSCALEADJ description and IPL arm body.**
+
+3. **The `acc all` rewrite from `put b` to guest `st.b`** is the right fix — the brief explains why `put b` is vacuous (NO_EXCEPTIONS does not dispatch to DM_DEFAULT). Part 3c confirms 96/96 BASE and 95/96 M_GROW_PSCALEADJ. **READ.**
+
+4. **The `rb t1ctl` string mismatch** (expected "0x03", debugger prints "0x3") is a real probe bug, disclosed and fixed in part 3b. **READ, consistent.**
+
+5. **The thirteenth arm (SCCRXIACK)** is explicitly excluded with warrant (body ignores idata, width-invariant by construction). **READ, not independently checkable.**
