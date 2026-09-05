@@ -1,0 +1,357 @@
+OPUS_501P2_20260905
+
+Verbatim, the three lines of
+`GXEMUL-SEC/regress/artifacts/pcc2defaultkill/killtable_20260905/driver.log` containing `M_BACKED`
+(lines 18-20):
+
+```
+[05:13:05]     [M_BACKED] mutant diff vs SEC: 2 lines; first added: > 		if (writeflag == MEM_WRITE && relative_addr + len <= PCC2_SIZE)
+[05:13:07]     [M_BACKED] binary 05:13:07  source 05:13:05
+[05:14:55]   M_BACKED [ieicr rdawr 0x5a, ieerr rdawr 0x5a; sccerr rdawr stays 0x0 (the control) -- member 6 substituted for member 3]: PCC2D_RESULT=21/23
+```
+
+---
+
+# VERDICT
+
+**DO NOT CLOSE THIS PASS. The FIX is right and should ship unchanged. The DETECTOR has a
+MEASURED clause-(d) breach — a ONE-TOKEN edit sweeps all 23 rows CLEAN (23/23, measured, my
+own scratch clone) while making the product comment's own claim false — and the CHANGELOG
+carries THREE arithmetic/citation wrong records plus a `## Records` paragraph describing two
+files that are UNMODIFIED in the working set. Repair cost: ONE new probe session, THREE rows,
+FOUR sentence corrections. Then one pass on that diff, per the repair-chain rule.**
+
+Grading: **L2** (floor breach, in-round) for the escape; **L4** for the three record defects;
+the records-files gap is a Q6 closure blocker, not a code defect.
+
+---
+
+# WHAT I MEASURED (scratch clone `/tmp/gxopus501`, a `cp -a` of `build/` with
+# `GXEMUL-SEC/src/devices/dev_pcc2.c` copied in; `cmp`-clean against SEC before mutant 1;
+# instruments md5 `a96b8bcf` / `a080e2bc` == the live pair; sentinel discipline observed,
+# restore + rebuild + `cmp` + `[binary -nt source]` after each mutant)
+
+| run | shipped 23-row detector | my 7 extra rows |
+|---|---|---|
+| BASE (SEC working set) | **23/23** (reproduces the round's BASE) | 7/7 |
+| `M_O1` — one token: the read announce's `d->pcctwo_reg[relative_addr]` -> `0` | **23/23 — TOTAL ESCAPE** | 5/7 (`srvd val text`, `srvd val zerotext`) |
+| `M_O2` — one `else if`: a member-6 backed accept that exempts the FIRST write per offset | **23/23 — TOTAL ESCAPE** | 6/7 (`latch sameoff val` reads 0x5a, not 0x0) |
+
+My extra rows, on BASE:
+
+```
+latch sameoff val    0x0   0x0   2nd write to an ALREADY-ANNOUNCED offset is still DECLINED
+latch sameoff msg2   1     1     ...and still announces once
+srvd val guest       0x34  0x34  cased word write to T1CMP, then ld.bu of the in-word byte 0x05
+srvd val text        1     1     the announce must name the byte the memcpy ACTUALLY served
+srvd val zerotext    0     0     ...and must NOT report a constant 0x00
+wr word declined     1     1     PRETABLE SIBLING PARITY: says 'declined', never 'ignored'
+wr word ignored      0     0     the word the width round removed from this file
+```
+
+**`srvd val guest = 0x34` is the load-bearing measurement.** A guest word store of `0x12345678`
+to the CASED `T1CMP` (0x04) puts `0x34` in `pcctwo_reg[0x05]`; a byte load of 0x05 is UNCASED,
+the memcpy serves `0x34`, and the shipped announce correctly says `served 0x34`. So the read
+announce's value channel is REAL, VARIES, IS REACHED IN ONE SESSION BY A GUEST — and **no row
+in the shipped 23 observes it**. `named rd srvd` counts the literal `"served 0x"`, never the
+value (`pcc2_default_probe.py:101`).
+
+It is reachable without any guest write at all: `dev_pcc2.c` line 260-261,
+`write32(&d->pcctwo_reg[PCCTWO_T1COUNT], count1)` — the timer tick writes the whole 32-bit
+COUNT word, so the in-word bytes 0x09-0x0b and 0x11-0x13 go nonzero on their own.
+
+---
+
+# Q1 — IS THE FIX RIGHT?  **YES.  Ship it unchanged.**  Every sub-question checked.
+
+* **`break` reaches the single `return 1`.** `grep -n "return\|exit(" ` over the whole
+  `DEVICE_ACCESS(pcc2)` body: exactly one `return 1;`, zero `exit(`. The `default:` arm is the
+  LAST arm, so `break` and fall-through are identical here — which is why "delete the `break`"
+  is an equivalent mutant and correctly absent from the table.
+* **`1ULL << relative_addr` is always defined.** `PCC2_SIZE` is `0x0040`
+  (`src/include/thirdparty/mvme_pcctworeg.h:14`) and `relative_addr %= PCC2_SIZE` is the
+  function's FIRST statement, on every path, before every `return`. Range 0..63; `uint64_t`
+  has 64 value bits. No UB, no truncation. `1U` or a `uint32_t` field would have been UB —
+  the type choice is load-bearing and correct.
+* **The latch word does NOT collide with the width latch.** `warned` is `uint32_t` (width
+  blocks, indexed by the `PCC2_W_*` enum); `warned_unimpl` is a separate `uint64_t` indexed by
+  byte offset. Different fields. Both zeroed by the ONE `memset(d, 0, sizeof(struct
+  pcc2_data))` at `dev_pcc2.c:731`, which is what the comment claims and it is true.
+* **Nothing the memcpy served is different.** `git diff` has exactly TWO hunks (`@@ -138,6`
+  struct field, `@@ -658,13` default arm). The read-service block above the switch is
+  byte-untouched.
+* **The read announce CAN print a wrong value — but only under a mutant, not as shipped.**
+  Measured above: shipped prints `served 0x34`, correctly. Two latent wrinkles worth one line
+  each, neither a defect today:
+  - *end-span*: a 4-byte read at 0x3d is zero-filled by the `#119` guard, not served, yet the
+    default arm then says `served 0x%02x`. Today `pcctwo_reg[0x3d]` is 0 (nothing writes
+    uncased offsets under the fix), so the announce coincidentally tells the truth. It becomes
+    a wrong record the moment anything backs an uncased offset — i.e. exactly under `M_O2`.
+  - *width-blind*: the announce names ONE byte for an access of `len` bytes and never prints
+    `len`, while its cased sibling `pcc2_width_decline()` prints `len=%i` AND the register
+    NAME. A pure SIBLING-PARITY observation the pre-table block did not make.
+* **What the one in-tree guest sees: nothing new, and this is provable rather than hopeful.**
+  The fix only adds output on paths that PREVIOUSLY CALLED `exit(1)`. Therefore no boot that
+  succeeds today can gain a line, and boot-log hygiene cannot regress. Worth stating in the
+  round because it is the strongest safety argument available and the record does not make it.
+  Separately: **there is no mvme88k boot rig** — `grep -l mvme regress/*.sh` is EMPTY; the only
+  coverage of `dev_pcc2.c` anywhere in the harness is the two cold-debugger probes in gate 14.
+  So "what the guest sees" is not observable in this harness at all, and the record should say
+  so rather than leave it implicit.
+
+**Premises 1-5, 7 re-derived independently and all hold:**
+
+| premise | how I checked | result |
+|---|---|---|
+| 43 uncased byte offsets | 21 `case` labels counted in the file vs 0x40 | 64-21 = **43** ✓ |
+| 18 named / 12 in-word / 13 unnamed | header defines vs the case list | 18+12+13 = **43** ✓, and `NAMED18` in the probe is EXACTLY the 18 header-named uncased offsets ✓ |
+| reads served before the switch | read the block | ✓ (incl. the `#119` end-span zero-fill) |
+| `if_ie` never attaches | `machine_mvme88k.c:106` = `unreadable addr=0xfff46000`; `if_ie.c:409` `if (badpaddr(base,1) == -1) return 0;`; `:561-564` early return; the PCC2 store at `:609` | ✓ all four line numbers correct |
+| the alias is documented | `_scratchpad/vmesbcp2.txt` — `$FFF42040-$FFF42FFF PCCchip2 Registers  Repeated` | ✓ at the cited line |
+| IACKs out of scope; two `exit(1)` remain | `grep -n "exit(" src/devices/dev_pcc2.c` -> `:274` (C040 assert) and `:378` (interrupt-line `default:`) | ✓ correctly `pcc2c040kill`'s, untouched |
+
+---
+
+# Q2 — DOES THE DETECTOR PIN THE DISPOSITION?  **Yes for the ONE cell it tests; no for the other.**
+
+**Row -> mutant -> channel, all 23, derived from the six `*.out` files rather than from the
+contract.** Sixteen rows carry at least one MEASURED kill; the seven that carry none are
+exactly the seven declared CONTROLS — and those seven are precisely `M_EXIT`'s green set. That
+is a strong property and the record does not state it.
+
+| row | mutants it kills (measured) | channel |
+|---|---|---|
+| live | — (control) | scratch RAM value |
+| devsig chipid | — (control) | CHIPID value through decode |
+| named wr | EXIT | process fate |
+| named wr msg | EXIT, ONELATCH | announce COUNT = 18 |
+| named rd | EXIT, RDKILL | process fate |
+| named rd msg | EXIT, RDKILL, ONELATCH | announce COUNT = 18 |
+| named rd srvd | EXIT, RDKILL, ONELATCH, DIRSWAP | `"served 0x"` TEXT count |
+| inword wr | EXIT | fate |
+| unnamed wr | EXIT | fate |
+| ieicr rdawr | EXIT, **BACKED**, RDKILL | read-back VALUE |
+| ieerr rdawr | EXIT, **BACKED**, RDKILL | read-back VALUE |
+| sccerr rdawr | — (control: 0x0 under both dispositions) | read-back VALUE |
+| latch sameoff | EXIT, UNLATCH | announce COUNT = 1 |
+| latch twooff | EXIT, ONELATCH | announce COUNT = 2 |
+| latch rw one | EXIT, UNLATCH, RDKILL | announce COUNT = 1 |
+| alias 0x6a | EXIT | fate |
+| alias msg | EXIT | `"offset 0x2a"` TEXT |
+| dir wr text | EXIT, DIRSWAP | announce TEXT |
+| dir rd text | EXIT, RDKILL, DIRSWAP | announce TEXT |
+| genctl rt | — (control) | value |
+| t1cmp word rt | — (control) | value |
+| put b ctl | — (control) | fate |
+| put b ctl msg | — (control) | announce count = 0 |
+
+**Every prediction against every measurement, and the interesting case is NOT the one the
+CHANGELOG names.** I counted the pre-table's own lists with `awk` rather than by eye:
+
+| mutant | predicted headline | predicted ROW SET | measured | verdict |
+|---|---|---|---|---|
+| BASE | 23/23 | — | 23/23 | exact |
+| M_EXIT | 8/23 | **16 rows listed, 7 green listed, sum 23** | 7/23, **the same 16 rows, in the same order** | **row set EXACT; only the parenthetical numeral "fifteen" and the derived headline are wrong** |
+| M_UNLATCH | 21/23 | 2 | 21/23, same 2 | exact |
+| M_ONELATCH | 19/23 | 4 | 19/23, same 4 | exact |
+| M_BACKED | 21/23 | 2 | 21/23, same 2 | exact |
+| M_RDKILL | 18/23 | 5 | 16/23, **7** | genuine SAFE-direction channel miss: the two `rdawr` sessions contain a LOAD |
+| M_DIRSWAP | 20/23 | 3 | 20/23, same 3 | exact |
+
+So: **FOUR predictions exact, ONE arithmetic slip on a perfect row set, ONE real channel
+miss.** The CHANGELOG says "three predictions exact, two missed" (3+2=5 against six mutants)
+and diagnoses M_EXIT as having "listed fifteen red rows ... and so summed to 22 of 23". It
+listed SIXTEEN and summed to 23. See Q5.
+
+---
+
+# Q3 — THE CLAUSE-(d) ENUMERATION.  **The (writeflag x latch) product is held on the
+# ANNOUNCE channel and held on ONE OF TWO write cells on the DISPOSITION channel.  MEASURED.**
+
+Predicates the fix ADDS or DEPENDS ON, walked up only to the enclosing function (the
+DEPENDS-ON bound), plus the lvalues the guarded body reads:
+
+| axis | partition | held? |
+|---|---|---|
+| the switch's no-case outcome | {cased, uncased} | **both** — uncased by every survival row; cased by `genctl rt`, `t1cmp word rt`, `sccerr rdawr` |
+| the latch bit `warned_unimpl & (1ULL << relative_addr)` | {clear, set} | **both** — clear by every first-access row; set by `latch sameoff` (2nd write) and `latch rw one` (the read) |
+| `writeflag == MEM_WRITE` in the announce | {write, read} | **both** — `dir wr text` / `dir rd text` |
+| body-read lvalue `d->pcctwo_reg[relative_addr]` (READ announce) | {zero, nonzero} | **ZERO SIDE ONLY** |
+
+**The (writeflag x latch) 2x2 — four cells — asked of each CHANNEL separately, which is the
+distinction the pre-table block missed:**
+
+| cell | ANNOUNCE-COUNT channel | DISPOSITION (read-back) channel |
+|---|---|---|
+| write, latch clear | `named wr msg`, `dir wr text`, `latch sameoff` | **`ieicr rdawr`, `ieerr rdawr`** |
+| write, latch SET | `latch sameoff` = 1 (2nd write silent) | **EMPTY — no row reads back after a 2nd write** |
+| read, latch clear | `named rd msg`, `dir rd text`, `named rd srvd` | (n/a: a read has no disposition) |
+| read, latch SET | `latch rw one` = 1 | (n/a) |
+
+**The pre-table block RAN its GUARD-FIELD-vs-BODY-FIELD check and reached the right cell on
+the wrong channel.** Verbatim: *"They disagree only in the latch's own state, which the
+sameoff/twooff/rw-one rows build."* Those three rows DO build the latch-set state — and all
+three observe only `t.count(MSG)`. **The state was built and then measured on the one channel
+the mutant does not touch.** That is a sharper failure than not running the check, and it is
+exactly the shape `#489` recorded (knowledge present, on the wrong observable at row-writing
+time).
+
+`M_O2` occupies that empty cell: keep the guard, condition its repair on the guard's own
+state. Measured **23/23**, and my `latch sameoff val` row reds it (0x5a where the fix gives
+0x0). Under the pass-11 bound the cell is FLOOR, not clause-(e) debt: `pcctwo_reg[relative_addr]`
+is a device-state lvalue the fix's own repair path reads, and it is jointly reachable with the
+latch axis through the arm's own data flow — one session, two stores, one load.
+
+`M_O1` occupies the unheld side of the fourth axis. Whether that one is floor or clause-(e)
+debt is arguable (the body PRINTS `pcctwo_reg[relative_addr]` and does not TEST it, so a
+strict body-tested-partition reading makes it a marginal); **I do not think the round should
+spend the argument, because the repair is the same size either way.**
+
+---
+
+# Q4 — THE SMALLEST EDIT THAT BREAKS THE PROPERTY AND PASSES 23 ROWS.  **THREE, two measured.**
+
+### 1. `M_O1` — ONE TOKEN.  MEASURED **23/23**.
+
+```c
+-		    d->pcctwo_reg[relative_addr]);
++		    0);
+```
+
+**The row I expect to stay green, and why: `named rd srvd`.** It is the row written to observe
+this exact claim, and it counts the literal `"served 0x"` — a string the mutant still prints,
+eighteen times. `ieicr rdawr` also stays green because `pcctwo_reg[0x2a]` is 0 under the fix,
+so the constant coincides with the truth at the only offset any row reads back.
+
+Broken property, in the product comment's own words: *"a READ keeps the served byte (the
+array's default, said so ...)"*. Under `M_O1` the guest receives `0x34` and the announce says
+`served 0x00` — a wrong record emitted by product code, which is the class `pcc2widthkills`
+spent thirteen passes removing from this very file.
+
+### 2. `M_O2` — one `else if`.  MEASURED **23/23**.
+
+```c
+ 		}
++		} else if (writeflag == MEM_WRITE)
++			d->pcctwo_reg[relative_addr] = idata;
+ 		break;
+```
+
+**The rows I expect to stay green, and why: `ieicr rdawr` and `ieerr rdawr` — the two
+DISPOSITION-pinning rows.** Each performs exactly ONE store, to a fresh offset, in a fresh
+process; the latch is therefore clear, the announce fires, and the mutant's store never runs.
+**The rows built specifically to separate member 3 from member 6 are blind to a member 6 that
+waits one write.** `sccerr rdawr`, the control, is likewise untouched.
+
+This is a real member-6 substitution — a guest byte lands in `pcctwo_reg[]` at any uncased
+offset from the second write onward, including the interior bytes of the LIVE counter words
+(0x09-0x0b, 0x11-0x13), where it corrupts `T1COUNT`/`T2COUNT` mid-tick. That is precisely the
+bounded-write surface the round rejected member 6 to avoid.
+
+### 3. `-- declined.` -> `-- ignored.` — ONE WORD.  Proven green by GREP, no build needed.
+
+`grep -n "declined" regress/pcc2_default_probe.py` returns four hits: three in the docstring
+and `:108`, a NOTE string. **No row greps the transcript for `declined`.** The pre-table's
+SIBLING PARITY line asserts *"the announce says 'declined' / 'served 0x%02x' -- never
+'ignored'"* — an explicit CLAIM with no ROW. My `wr word declined` / `wr word ignored` rows
+pin it; both are green on BASE.
+
+### The repair: ONE new session, THREE rows.  Cost ~15 s of gate 14.
+
+1. **`latch sameoff val`** — append `LD_BU(4, IEICR)` + `print r4` to the EXISTING `latch
+   sameoff` session; want `0x0`. Kills `M_O2`. **Zero new sessions** (the added load is
+   latched, so `latch sameoff` stays at 1 — verified: my `latch sameoff msg2` reads 1 on BASE).
+2. **`srvd val` / `srvd val text`** — ONE new session: `r5=0x12345678`, `ST_W(5, T1CMP)`,
+   `LD_BU(4, 0x05)`, `print r4`; want `r4 == 0x34` and `t.count("served 0x34") == 1`. Kills
+   `M_O1`. (Also the only row in the detector that would exercise a nonzero served byte at all.)
+3. **`wr word declined`** — `t.count("-- declined")` on the EXISTING `dir wr text` transcript;
+   want 1. Kills the one-word mutant. **Zero new sessions.**
+
+All three are already written and measured in
+`panel_501p2_agents/opus/extra_probe.py`; lift them verbatim if useful.
+
+---
+
+# Q5 — IS THE RECORD HONEST?  **Substantially yes, and it contains FOUR checkable defects, three of them counts, all four in the CHANGELOG.  L4, correct in place.**
+
+The witness, the contract, the pre-table file and the gate section are honest, well-hedged and verified line by line. What follows is what a measurement refutes.
+
+### R1 — the kill-table header cites the WRONG RUN and asserts an equality that is FALSE.
+
+```
+## The kill table (`.../killtable_20260905/driver.log`; predictions in `PRETABLE_501.out`,
+mtime 04:12:20; table launched 04:12:43; frozen instrument pair md5 c76e053a / a080e2bc == live)
+```
+
+Measured: `killtable_20260905/driver.log` line 1 says **`launching the #501 table (05:05:55)`** — it is RUN 2. `md5sum` of the live and frozen probes:
+
+```
+a96b8bcfe3b9ffc38c959f231d7b534a  killtable_20260905/frozen_probe.py   <- run 2
+a96b8bcfe3b9ffc38c959f231d7b534a  regress/pcc2_default_probe.py        <- live
+c76e053a0218d70586ea8801cf63f242  run1_oldrowformat/frozen_probe.py    <- run 1
+```
+
+So `c76e053a ... == live` is **false**, and `04:12:43` belongs to a log that now lives one directory down. **The block contradicts itself 26 lines later** — *"Run 2 (05:05-05:18, frozen `a96b8bcf`)"* — and **the CORRECT form of the same sentence is 34 lines below the wrong one**, in the Gate 14 header: *"the live probes -- default md5 a96b8bcf, width a080e2bc, both equal to the frozen run-2 pair"*, which I verified and which is right. This is a header written for run 1 and never re-derived when run 2 replaced the table under it.
+
+### R2 — "three predictions exact, two missed" is arithmetically impossible and undercounts.
+
+Six mutants. The table immediately above the sentence marks **FOUR** rows "exact" (M_UNLATCH, M_ONELATCH, M_BACKED, M_DIRSWAP). 3 + 2 = 5. The honest sentence is *four exact, one arithmetic slip on an exact row set, one channel miss*.
+
+### R3 — the M_EXIT diagnosis is wrong, in the direction that makes the round look WORSE than it was.
+
+*"M_EXIT's prediction listed fifteen red rows against a green set of seven and so summed to 22 of 23 -- an arithmetic slip in the pre-table."*
+
+Counted mechanically off `PRETABLE_501.out`: the red list has **SIXTEEN** entries, the green list SEVEN, **sum 23 — a complete partition** — and the sixteen are the same rows, in the same order, as `M_EXIT.out`'s measured `PCC2D_RED`. The prediction's CHANNEL ENUMERATION was PERFECT. What is wrong is the parenthetical word *"fifteen rows"* and the headline `8/23` derived from it. As written the CHANGELOG says the prediction was incomplete, which implies a channel the author had not thought of; the truth is the opposite. *A correction is not safer than the thing it corrects* — this is the third count in one block written from memory of an artifact rather than derived from it, in a round whose own carrier rule says a count names its deriver.
+
+### R4 — the `## Records` paragraph describes work the working set does not contain.
+
+It reads *"OUTSTANDING_BUGS: `pcc2defaultkill` FIXED; filed from this round: `pcc2iackmodel` ..., `pcc2latchinst` ... Ledger: witness ..., detector ..., every seat of both passes by name."*
+
+`git status --porcelain` lists **four** modified files: `CHANGELOG.md`, `regress/gate_arm.sh`, `regress/sgi_de_primop_probe.py`, `src/devices/dev_pcc2.c`. **`OUTSTANDING_BUGS.md` and `tools/pipeline/ledger.json` are UNMODIFIED**, and `grep` finds neither `pcc2iackmodel` nor `pcc2latchinst` anywhere in `OUTSTANDING_BUGS.md`. The author plainly knows how to mark an obligation — `<<PANEL501_OWED>>` sits eight lines above — so the fix is either to do the filings or to mark this paragraph owed the same way. **An unrun step and a done one must not render the same.**
+
+*(The one clause of that paragraph that IS true: the MVME187 manual is in the carrier — two occurrences in both `CLAUDE.md` and the tracked `tools/CLAUDE.md`, and `vmesbcp2.pdf`/`.txt` are on disk. Note the carrier's transcribed "COMPLETE LIST ... FIFTEEN PDFs" block is now stale by one — sixteen by `ls _scratchpad/*.pdf`. The carrier's own ls-is-the-authority rule covers it; mentioned only so nobody re-derives it as a surprise.)*
+
+### Counts WITH a deriver, checked and correct
+
+43 = 64 - 21 case labels; 18 named + 12 in-word + 13 unnamed = 43; `NAMED18` in the probe is exactly the eighteen header-named uncased offsets; 23 rows in the probe = 23 names in the gate's `for v in` list = 23 counted by gate 14; 25 red of 844 in the FAIL log = 23 row checks + emitted + green. All verified.
+
+### One artifact-durability note (not a defect today)
+
+`witness_20260905/defaultkill_witness.py` reads its pty helper from the ABSOLUTE live path `/mnt/c/.../GXEMUL-SEC/regress/pcc2_width_probe.py`. The kill table froze its instrument PAIR and the witness did not, so a future re-run of the witness silently picks up whatever the width probe says then. One `cp` beside the witness closes it.
+
+---
+
+# Q6 — CLOSE?  **NO.  The zero is not available, and here is the denominator that says why.**
+
+A closing pass must find zero floor breaches. **This pass found one certain (`M_O2`, the empty (write x latch-SET) disposition cell) and one arguable (`M_O1`), both MEASURED at 23/23 against the shipped instrument** — so the chain does not close here.
+
+Validity of THIS pass, stated so a later reader can weigh it:
+
+* **Diff delivered:** yes — the product diff, the whole handler, the detector, the gate section and both witness runs were inlined, and I re-checked each against the tree. No `git show | head` truncation in this packet.
+* **Denominator — what I actually swept.** Not a full re-table. I enumerated the (writeflag x latch) product on each CHANNEL separately (8 cells; 7 held, 1 empty) plus the four DEPENDS-ON axes above, and built **two** mutants against the empty/one-sided cells plus one grep-proven text mutant. **Shapes NOT swept by me:** fold arithmetic beyond `%=` (`alias msg` covers one translation only — clause (f)'s `+2` caveat applies here too and is not disclosed in the contract); any `len`-axis mutant on the announce; anything in the two remaining `exit(1)` sites (`pcc2c040kill`'s, correctly out of scope).
+* **Roster:** I am one seat. The design under review is the Opus seat's own pass-1 fix A, and the read-after-write rows I asked for on pass 1 are real and they work — and they are ALSO blind in the one direction I did not think to ask about, which is the finding. Being harder on my own accepted disposition is what produced `M_O2`.
+
+### What closing looks like from here
+
+1. Add the three rows (one new session). The escape is against a detector that has not shipped yet, so `M_O2` is **L1 construction** at the mildest reading and **L2 floor** at the strictest; either licenses the in-round fix, so the round need not spend the argument.
+2. Correct R1, R2, R3 in place, quoting what they refute (defang `<<PANEL501_OWED>>`-style markers if any correction quotes one).
+3. Do the R4 filings, or mark that paragraph owed the same way the panel line is.
+4. Re-run the 23+3 detector and gate 14; one pass on THAT diff, scoped to it, with the floor question asked of the composite.
+
+**The FIX itself needs no further pass.** Nothing I measured touches it: two hunks, one `return`, no UB, no latch collision, no perturbation of the served bytes or of any cased arm, and a safety argument — it can only add output where the old code called `exit(1)` — that no existing green boot can break.
+
+---
+
+# ALSO FOUND, while checking something else
+
+1. **Every non-control row carries a measured kill, and the seven rows that do not ARE the seven declared controls.** `M_EXIT`'s green set is exactly `{live, devsig chipid, sccerr rdawr, genctl rt, t1cmp word rt, put b ctl, put b ctl msg}`. That is a stronger statement about row validity than anything the record makes, it is free (the run is already on disk), and the CHANGELOG should say it.
+2. **There is no mvme88k boot rig.** `grep -l "mvme" regress/*.sh` is EMPTY; `dev_pcc2.c`'s only coverage in the entire harness is the two gate-14 probes. Worth one sentence: it is why `probe:` is the right ladder term here and why a boot witness was never on the table.
+3. **An announce/sibling asymmetry the pre-table's SIBLING PARITY line did not name.** `pcc2_width_decline()` prints `len=%i` and the register NAME; the default arm prints a bare numeric offset and no `len`, though 18 of the 43 offsets have header names. Not a defect — but that line audited latch SCOPE and not message CONTENT, and message content is where three of this round's escapes live.
+4. **The end-span read tells the truth only by accident.** A 4-byte read at 0x3d is zero-filled by the `#119` guard while the default arm then says `served 0x%02x`. It agrees today only because nothing writes uncased offsets — i.e. it is correct *because* member 3 was chosen. A nice unstated corollary of the disposition, and a live wrong record the instant anything backs those offsets (which is what `M_O2` does).
+5. **`M_RDKILL`'s "miss" is a property of row SHAPE, not a channel surprise, and it generalises.** Any row whose session contains a LOAD at an uncased offset is a hostage to read-side mutants; five of the 23 have that shape. One line in the contract saves a future round the re-derivation.
+
+---
+
+# HYGIENE
+
+Scratch clone `/tmp/gxopus501` only. Nothing written to `GXEMUL-SEC`, `build`, `est` or `build-asan` (verified: SEC's `git status --porcelain` is unchanged from what I found). `.MUTANT` written before each mutation; after each, restored from `GXEMUL-SEC/src/devices/dev_pcc2.c`, **rebuilt**, `cmp`-verified, `[ binary -nt source ]` checked, then cleared. Final state: `FINAL: clone src == SEC`, `FINAL: binary fresher than source`, no sentinel. Every probe log carries its completion sentinel (`PCC2D_PROBE_DONE` / `OPUS501_EXTRA_DONE`) — checked, not assumed. Logs preserved out of `/tmp` at `panel_501p2_agents/opus/logs/` (`dk_*.out`, `ex_*.out`, `mutdiff_*.txt`); copy them under `regress/artifacts/pcc2defaultkill/` if the round cites them.

@@ -1,0 +1,77 @@
+SEAT_501P3_20260905 (Fable 5 seat + adjudicator)  -- preserved by the main loop from the Agent seat's final message
+(the harness blocked the seat's own findings-file write; a pointer sits at scratchpad/panel_501p3_agents/fable/FINDINGS.md).
+
+Liveness quote -- first line of killtable3_20260905/PRETABLE_501b.out:
+"PRE-TABLE BLOCK, #501 pcc2defaultkill PASS-2 REPAIR (table 3) -- written BEFORE the table (mtime against"
+
+# VERDICT: GO-WITH-CHANGES. #501 MAY close and commit AFTER two L4 records fixes (no code-behaviour change).
+
+Verified the diff against the tree (HEAD 7076134; live probe md5 10737375 == the frozen table-3 instrument, so the shipped
+detector IS the measured one) and read the twelve mutants' preserved .out files rather than trusting the inlined table.  The
+fix is correct on every exit path; the detector is above the vacuity floor; all six pass-2 breaches are MEASURED real (23/23
+on the shipped-at-pass-2 instrument) and each is repaired on exactly its built row; all twelve table-3 mutants die for the
+reason claimed.  The residuals are records honesty and one coverage-debt width hole -- none floor, none blocking on correctness.
+
+REQUIRED before commit (both L4 wrong-record, one line each, zero behaviour change):
+- R1 -- CHANGELOG header.  CHANGELOG.md:6 says "Detector: regress/pcc2_default_probe.py, 23 rows, run by gate 14" and :59
+  repeats "23 rows; gate 14 pins them".  The shipped probe is 36 rows and the live gate pins 36 (gate14_501b.log emitted/green
+  36).  Update to 36 (or mark :59's section explicitly as the pass-2 state).
+- R2 -- product comment.  dev_pcc2.c ~688-690: "a reload of the array here could differ (the tick rewrites the counter
+  interiors)".  The cited mechanism -- a tick rewriting the array BETWEEN the memcpy (:427) and the announce (~:695), i.e.
+  mid-handler -- is not reachable: GXemul dispatches device ticks between guest instructions, not inside a memory_rw call, so
+  a reload equals data[0] on the memcpy path.  The genuine, architecture-independent reason data[0] is right is the END-SPAN
+  path: memset(data,0,len) serves 0x00 while the array byte may be nonzero, so a reload would announce a value the guest did
+  NOT receive.  Correct the comment to the end-span/definitional reason.  (A seat that shows a mid-handler tick path
+  downgrades this to already-correct.)
+  [MAIN LOOP, settled by reading: src/core/timer.c:219 `static void timer_tick(int signal_nr)` IS the SIGALRM handler and
+   :284 calls `timer->timer_tick(timer, timer->extra)` DIRECTLY from it; dev_pcc2.c:778 registers pcc_timer_tick with
+   timer_add.  So the pcc2 tick is SIGNAL-DRIVEN and CAN land between the memcpy and the announce.  The R2 premise is
+   refuted; the end-span reason is ADDED to the comment as the deterministic one, and the tick reason is NARROWED (grok):
+   only the two COUNT words, observable only while a counter runs.]
+
+RECOMMENDED (not blocking; within-rule as-is):
+- Q3 clarification -- the contract discloses len 2 but is silent on len 8 (ld.d/st.d), the same axis.  Generalise to
+  "widths other than the rowed len 1 and len 4 (len 2, and len 8 if the m88k core issues it) are not rowed", so a future
+  len-8 escape is OUTSIDE the contract rather than a breach of it (clause (e)).  Optionally close the axis with one
+  ld.hu/st.h row.
+
+## Q1 -- IS THE REPAIR RIGHT?  YES on all paths (one comment blemish, R2).
+dev_pcc2.c:414-705 read in full.  idata=0 at :416, set only on the write path (:422-423).  Reads are served by memcpy
+(:427) or memset (:436, end-span).  No bottom memory_writemax64 in this handler -- it returns the read through data itself
+(:704); the odata/writemax pattern is the separate mvme187_iack fn (:708).  So data[0] at the default arm IS the byte the
+guest receives on both read paths; the write announce prints idata.  (int) len fits.  relative_addr %= PCC2_SIZE (0x40) is
+the first statement (:420) so 1ULL << ra is 0..63 on a uint64_t.  No text anchor breaks under (len %d): BASE.old23 = 23/23
+proves it.  srvd val is sound big-endian: st.w 0x12345678 to cased T1CMP (:475) puts 0x34 at array[0x05].
+
+## Q2 -- DOES EACH MUTANT DIE FOR THE REASON CLAIMED?  YES (verified from the preserved .out RESULT/RED lines).
+BASE 36/36; every pass-2 escape 23/23 on old23 (the breach is real) and red on the repaired instrument on its built row;
+M_EXIT 7/36 with 29 red.  No accidental-only kills: M_SRVD0 reds srvd val text alone while srvd val stays green -> the
+value/text split is real; M_BACKED2 reds sameoff val alone; M_WRLATCH reds latch rd rd + latch rd wr; M_ABA reds latch aba
+alone; M_OFFKILL reds inword wr + rd; M_WIDEKILL reds all four width rows.  Multiply-sensitive rows are honest signals.
+
+## Q3 -- THE CLOSURE.  Setter x tester (4) / accumulation / latched-disposition / served-value / every-offset-both-directions:
+CLOSED and verified.  WIDTH: closed at len 4 only.  The 43-offset set is exactly the complement of the 21 cased byte offsets
+(enumerated).  Nothing DISCLOSED is floor: the arm tests warned_unimpl & (1<<ra) and writeflag, not len; the full-width
+reinstatement (M_EXIT) is caught (clause (b)); width was never a death-gate predicate.  Open cell: len==2 / len==8 re-kills --
+len-2 disclosed, len-8 not.  Within rule this round.
+
+## Q4 -- SMALLEST EDIT THAT PASSES 36 ROWS.  `if (len == 2) exit(1);` (or len == 8) at the top of the default arm: the probe
+drives only len 1 and len 4, so 36/36 -- derived-certain.  Coverage debt (not floor).  Minor second escape (diagnostic-only):
+`&& relative_addr != 0x21` on the guard suppresses one unnamed offset's announce and passes 36 (no per-unnamed MSG-count row)
+while the write stays declined and the read served -- note, do not act.
+
+## Q5 -- RECORD HONESTY.  CHANGELOG:6/:59 "23 rows" refuted by the live gate (R1); the comment tick-race (R2); the width
+disclosure omits len-8 (Q3).  Counts are measured with derivers: 20 preserved .out files read; gate name list derived from
+the probe's row() calls (36 names, longest 13 chars); driver.log ends KILLDK501B_DONE with restore+rebuild+verify.
+
+## Q6 -- CLOSING ZERO VALID?  Almost -- one incomplete exclusion (len-8).  Complete it and the zero is valid.
+
+## ADJUDICATOR RULINGS
+Harder on my own pass-2 reading: four method errors -- (1) read a 2x2 and missed the SETTER's direction as a third axis;
+(2) confirmed the latch state was BUILT but observed it on the COUNT channel only (a state owes a row per channel);
+(3) accepted `named rd srvd' as pinning "served" -- it counts the phrase, not the value; (4) passed the pass-1 "byte-and-wide"
+claim with no wide row.  The repaired contract names the four cells with a per-row CHANNEL line, so a future pass verifies
+rather than re-derives -- except the width axis, which Q3 completes.
+F2 -- which accepted disposition is wrong, by number: none in its ACTION; #7 rests on a refuted warrant (R2 -- see the main
+loop's settlement above: the warrant is NARROWED, not refuted); #4 and #8 incomplete, not wrong (len 8 undisclosed).
+May #501 close and commit?  YES, after R1 and R2.

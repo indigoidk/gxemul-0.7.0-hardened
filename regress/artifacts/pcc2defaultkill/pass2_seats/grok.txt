@@ -1,0 +1,196 @@
+I'll start by reading the full pass-2 brief and the repo's live state so the review is against the actual uncommitted tree, not the truncated packet.HEAD matches `7076134` and the uncommitted set is the round’s. Next I’ll verify the product arm, the 43-offset census, and the detector against the tree rather than the brief.The arm matches the inlined diff. I’ll re-derive the 43-offset census, the guest-attach claim, and the latch/`len` mutants the 23-row detector may not pin.**VERDICT: NOT CLOSE.** The product fix is right and should ship; the 23-row detector pins member 3 versus member 6 and kills the six tabled mutants; it does **not** close the (d) floor. Two one-line mutants are 23/23 by construction of the row list. This pass is not a closing zero. I am the grok seat (file-reading). agy was deliberately not fired. I did not run a gate or a probe; every claim below is from `GXEMUL-SEC/` (HEAD `7076134`, uncommitted) plus the inlined logs.
+
+Tree check: line numbers match the fork (`dev_pcc2.c` default arm at 664–698, `return 1` at 701), not a 2021 copy.
+
+---
+
+## 1. The fix is right
+
+The whole arm plus tail:
+
+```664:701:GXEMUL-SEC/src/devices/dev_pcc2.c
+	default:
+		/*  #501 ... */
+		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+			d->warned_unimpl |= 1ULL << relative_addr;
+			if (writeflag == MEM_WRITE)
+				fatal("[ pcc2: unimplemented write to offset "
+				    "0x%x: 0x%x -- declined.  (once) ]\n",
+				    (int) relative_addr, (int) idata);
+			else
+				fatal("[ pcc2: unimplemented read from offset "
+				    "0x%x -- served 0x%02x.  (once) ]\n",
+				    (int) relative_addr,
+				    d->pcctwo_reg[relative_addr]);
+		}
+		break;
+	}
+
+	return 1;
+```
+
+| Question | Answer |
+|---|---|
+| Does `break` reach the single `return 1`? | **Yes.** This handler has no `memory_writemax64` tail. Reads were already written into `data` by the memcpy at 425–437. Early `return 1` and `break` are equivalent here; `return 0` would still be a failed transaction (codex's member-5 correction). |
+| Is `1ULL << relative_addr` always defined? | **Yes, after the fold.** `relative_addr` is `uint64_t` (`memory.h` `DEVICE_ACCESS`). Line 420 does `relative_addr %= PCC2_SIZE` with `PCC2_SIZE == 0x40`, so the shift count is 0..63. `1ULL << 63` is defined. Bit 0 is wasted (offset 0 is CHIPID, cased). There is no sibling of the width field's compile-time fit typedef; residual, not a ship-blocker. |
+| Does the read announce print a wrong value? | **Not on any byte the detector uses.** After an in-range memcpy, `pcctwo_reg[relative_addr]` is what was served. On an **end-spanning wide read** (`relative_addr + len > 0x40`) the memcpy is skipped, `data` is zero-filled, and the announce still prints the array byte. At reset those bytes are 0, so it matches by accident. Byte offsets cannot end-span (`0x3f+1 == 0x40`). |
+| Latch collision with `warned`? | **No.** Width uses `uint32_t warned`; this uses `uint64_t warned_unimpl`. Separate fields, separate `memset` at `DEVINIT` 731. `pcc2_width_decline` messages do not contain `pcc2: unimplemented`. |
+| Is memcpy served content different? | **The copy is unchanged.** What changed is observability: the old arm memcpy'd then `exit(1)`, so the guest never saw the buffer. A wide uncased read (e.g. len=4 at `0x14`) now returns adjacent cased bytes the memcpy already packed (PSCALEADJ is initialised to `256-33`). Pre-existing copy, newly visible. Not a reason to back the write. |
+| OpenBSD 2.2? | **The success path does not touch this arm.** `clock.c` / `cl.c` / `pcctwo.c` use cased offsets only (`psclkadj` 0x15, timers, SCCERR/SCCICR/SCCTX/SCCRX, SCCRXIACK 0x27, IPL/MASK). `if_ie.c:609/612/655` would hit IEICR/IEBERR/IEERR; match fails at `if_ie.c:409` because `machine_mvme88k.c:106` installed `unreadable` at `0xfff46000`. `ie0` **is** in `conf/M187:99` and `conf/NFS:100`. The guest boot does not change; a probe still would have killed the host. |
+
+Member 3 for writes, keep-served for reads, is the right option. I was on that side at pass 1; scrutinising it: GPIO_ICR and IEICR **are** writable on the part, so “read-only” is not a warrant for those two. The warrant that holds is the one the brief actually leans on: **one store from this arm cannot be correct for all 43** (SCCERR/IEERR are write-to-clear — SCLR at `vmesbcp2.txt:5430`; ICRs mask and `reassert_interrupts`; PSCALECNT/SPEED/IACKs are not stores). A split-by-class predicate was rightly rejected for this round. IACK 0x23/0x25 declined, `pcc2c040kill` first: also right; modelling them on the SCCRXIACK shape (no `writeflag` test, and `cl.c` reads 0x27) would open two new entries into that kill.
+
+---
+
+## 2. The detector pins disposition, not mere survival — for the six tabled mutants
+
+Per-row channel (pre-table CHANNEL line, checked against `killtable_20260905/driver.log`):
+
+| Row | Mutant it is for | Channel |
+|---|---|---|
+| live, devsig chipid | controls | value |
+| named wr / rd, inword wr, unnamed wr, alias 0x6a | M_EXIT (b) | fate |
+| named wr/rd msg, named rd srvd | M_ONELATCH / M_DIRSWAP | announce count / `"served 0x"` |
+| ieicr rdawr, ieerr rdawr | **M_BACKED (disposition)** | load value 0x0 vs 0x5a |
+| sccerr rdawr | control for those two | 0x0 under either |
+| latch sameoff | M_UNLATCH | count 1 vs 2 |
+| latch twooff | M_ONELATCH | count 2 vs 1 |
+| latch rw one | M_UNLATCH + M_RDKILL | count 1; dies if the load is re-killed |
+| alias msg | fold | `"offset 0x2a"` |
+| dir wr/rd text | M_DIRSWAP | direction substring |
+| genctl rt, t1cmp word rt | cased arms untouched | round-trip value |
+| put b ctl (+ msg) | control, not a witness | fate + count 0 |
+
+Table vs predictions (run 2, frozen `a96b8bcf`; scores match the inlined driver.log):
+
+| Mutant | Predicted | Measured | Miss |
+|---|---|---|---|
+| BASE | 23/23 | 23/23 | — |
+| M_EXIT | 8/23 | **7/23** | SAFE. Listed **16** red names, wrote “fifteen”, predicted 8. Green set is 7, so 7/23. Arithmetic, not a channel surprise. |
+| M_UNLATCH | 21/23 | 21/23 | exact |
+| M_ONELATCH | 19/23 | 19/23 | exact |
+| M_BACKED | 21/23 | 21/23 | exact; sccerr stayed 0x0 |
+| M_RDKILL | 18/23 | **16/23** | SAFE. rdawr sessions contain a LOAD. |
+| M_DIRSWAP | 20/23 | 20/23 | exact |
+
+M_BACKED is the disposition pin: it is a `memcpy` of `len` into `pcctwo_reg[]` (not a single-byte `=`), then still prints “declined”. The **value** rows catch it. That is the job Opus’s witness could not do. It works.
+
+What the 23 rows do **not** pin is below.
+
+---
+
+## 3. Clause (d): three of four writeflag×latch cells; no width cell at all
+
+Predicates the new code depends on, enclosing-function only:
+
+1. Landed in `default:` (no case).
+2. `!(warned_unimpl & (1ULL << relative_addr))`.
+3. `writeflag == MEM_WRITE` in the announce (body-tested).
+4. No value or range predicate — true, and stated.
+
+Body-tested partition of (3) × latch bit is four cells:
+
+| | bit clear | bit set |
+|---|---|---|
+| WRITE | named wr / named wr msg | latch sameoff (2nd store) |
+| READ | named rd / named rd msg | **only via a prior WRITE** (`latch rw one`) |
+
+The fourth cell — **READ with the bit already set by a prior READ** — is empty. `named rd` is 18 *different* offsets. No session does two `ld.bu` to one offset.
+
+The pre-table GUARD-vs-BODY line (“they disagree only in the latch’s own state, which sameoff/twooff/rw-one build”) is the miss: `writeflag` is a body-read the guard does not read, and the SET is unconditional. `latch rw one`’s own comment (“per offset, **not per direction**”) claims a biconditional the session cannot establish.
+
+Width: the pre-table SIBLING PARITY sentence says the default arm “DECLINES **byte-and-wide** writes”. Every default-path row is `ST_B`/`LD_BU`. `t1cmp word rt` is a word to a **cased** base; it cannot stand in. The old kill was width-agnostic. De-escalation accept-side of “any default access now survives” is only rowed for `len==1`.
+
+---
+
+## 4. Smallest edits that break the property and pass 23 rows
+
+**A. Latch SET conditioned on writes** (the (d) joint; one conjunct):
+
+```c
+if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+    if (writeflag == MEM_WRITE)
+        d->warned_unimpl |= 1ULL << relative_addr;
+    /* announce as now */
+}
+```
+
+- `latch sameoff`: two writes, still 1 (green).
+- `latch rw one`: write sets the bit, read is silent (green).
+- `named rd msg`: 18 different offsets, still 18 (green).
+- Two reads of IEICR would print 2. **No such row.**
+
+Predicted **23/23**. This is the `#499` “close one side of a symmetry” shape on direction×latch. Uncommitted ⇒ **L1**; under the floor ⇒ **L2**. Repair is one session: two `ld.bu` to IEICR, want announce count 1.
+
+**B. Partial reinstatement of the old kill on width** (de-escalation / the pre-table’s own wide claim):
+
+```c
+if (len != 1)
+    exit(1);
+```
+
+at the top of `default:`. Predicted **23/23**. Repair is one `ST_W` (and one `LD_W`) at IEICR, want survived + declined / served.
+
+I did not build either mutant (no gate, no project-tree build). The scores follow from the row list; a measuring seat can refute them in one scratch clone.
+
+Weaker escapes, not floor: replace `"declined"` with `"ignored"` (no row counts that word; rdawr still pins the store); `debug()` instead of `fatal()` (the probe `step`s, so both print). Probe-shape limits, file them.
+
+---
+
+## 5. The record is mostly honest; four sentences are not
+
+Checked, held:
+
+- 43 = 64 − 21 case labels. Re-derived from `mvme_pcctworeg.h` against the switch. 18 named (NAMED18 matches the header), 12 counter interiors, 13 unnamed (UNNAMED samples 5 of 13).
+- Alias: `vmesbcp2.txt:4629` is `$FFF42040-$FFF42FFF PCCchip2 Registers Repeated`. Fork `PCC2_SIZE` 0x40 vs guest `pcctworeg.h` 0x1000 — different objects, correctly named.
+- if_ie: `unreadable` at 0xfff46000; match `badpaddr` at 409. The `ie_setupram:561` cite is in attach, which never runs — a second dead line, not a false one.
+- Witness 7/13 / 13/13, table scores, gate 14 `pcc2 default rows emitted/green 23` in `gate14_501.log:1268-1269`, row-format L1 and the second table — all match their named logs.
+- M_EXIT / M_RDKILL misses are in the SAFE direction and derived.
+
+Refuted:
+
+1. **CHANGELOG kill-table header** (`CHANGELOG.md` around the table): `frozen instrument pair md5 c76e053a / a080e2bc == live`. Live default probe is `a96b8bcf` (the status-last instrument, run 2). `c76e053a` is run 1, the format the gate could not count. The next paragraphs tell the truth; the header still asserts the false identity. **L4.**
+2. **Same-file contradiction on the alias.** Docstring (lines 32–36): the fold **is** Table 6-1. Row `alias 0x6a` (line 122): “the MODEL's fold, **not proven of the real part**.” One file, both present-tense. **L4.**
+3. **CHANGELOG Records** claims `pcc2defaultkill` FIXED and `pcc2iackmodel` / `pcc2latchinst` filed. `OUTSTANDING_BUGS.md` still has `pcc2defaultkill` OPEN; a search of the repo for those two new ids hits **only** CHANGELOG. **L4** (or the filings are still owed before this sentence ships).
+4. **Product comment “four arms up”** (`dev_pcc2.c:680`): PSCALEADJ is ten case-blocks above `default:`, not four. Contrast with the unlatched print is real; the count is not.
+
+`<<PANEL501_OWED>>` in the CHANGELOG is an honest blank.
+
+Counts with derivers: 43 (header vs cases), 18/12/13 (same), 23 (probe `rows`), 7/13 and 13/13 (named witness logs), table scores (named `driver.log`). The M_EXIT “fifteen” was a deriver that disagreed with its own list; the CHANGELOG already says so.
+
+---
+
+## 6. Close?
+
+A closing zero needs a valid pass, a complete roster or named misses, and a denominator.
+
+- Diff delivered (inlined; matches `GXEMUL-SEC/src/devices/dev_pcc2.c`).
+- Roster: this is one seat of pass 2; agy deliberately not fired. I cannot close for nine.
+- Denominator of what was swept: (b) verbatim `exit(1)`; (d) unlatch, whole-arm bit, read-rekill, direction-text swap; member 6 memcpy-store. **Not swept:** writeflag×latch cell “READ after READ”; wide (`len!=1`) default accesses; per-instance latch (disclosed as debt, then claimed filed and not filed).
+
+**Do not close.** Add the two L1 rows, retarget the table (A and B plus the original six), fix the four L4s, actually file `pcc2iackmodel` and `pcc2latchinst`, then this pass’s repair owes its own pass 2. The product arm does not need a design change.
+
+---
+
+## Accepted dispositions, pushed
+
+| # | Disposition | After this pass |
+|---|---|---|
+| 1–2, 11 | De-fatalise; member 3; per-offset latch | **Hold.** Fix A is still the right arm. Per-offset is only half-pinned (writes, and read-after-write). |
+| 3 | Witness blind → rdawr | **Hold.** M_BACKED is the measurement that makes it true. |
+| 4 | if_ie never attaches; rank on witness | **Hold.** Re-verified. |
+| 5 | Alias documented | **Hold as a fact; L4 in the probe row.** |
+| 8 | IACKs declined | **Hold.** Filing named in CHANGELOG is missing from the bug file. |
+| 12 | Two-instance not claimed | **Hold as detector honesty; the Records sentence that says it was filed is false.** |
+| 13–15 | Reject 6 / 5 / split | **Hold.** Do not reopen. |
+
+---
+
+## Something else
+
+- `NAMED18` includes SPEED 0x38 (a `u_short`); 0x39 is its interior and is bucketed as unnamed, not as “in-word”. The 12 in-word bytes are only the four 32-bit counters. Total 43 is still right.
+- `unnamed wr`’s note about a len-4 overrun at 0x3d describes a mutant M_BACKED is **not** (M_BACKED has the end-span guard, so 0x3d+4 does not store). Overclaim in a row comment, not a miss in the table.
+- Ledger `pcc2defaultkill` `state_note` still contains the pass-1 sentence “the real fold unresolved (no MVME manual on disk at the time)” in the same paragraph that records Table 6-1. Chronology, but a skimmer reads a live contradiction.
+- I did not verify the two-part build-tree clearance (`cmp` + binary-newer-than-source) on `build/` / `build-asan` / `/tmp/gxsec-build`. `est/` is a source tree, part 2 N/A.
+
+**DO-NOT-SHIP as a closed round. SHIP the arm once the detector has the two missing cells and the records match the tree.**

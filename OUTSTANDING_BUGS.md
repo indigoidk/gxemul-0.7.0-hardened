@@ -14303,6 +14303,42 @@ with the generating set at every cell, eight mutants, a pre-repair breach witnes
 pcc2defaultkill fix ships (owner priority: critical bugs first).  Also carried to that diff: four docstring L4s
 (clock.c warrant, 'beyond IEN' wording, stale 'first of four wide writes' texts, the tick-window setter).
 
+**`pcc2defaultkill` FIXED -- #501, 2026-09-05.**  READ side keeps the byte the memcpy served and announces it as
+served (once per offset per instance); WRITE side DECLINED with the same latched announce; `break` to the handler's
+single `return 1`.  Witness (rung 3): 7/13 on the committed build, 13/13 after -- `regress/artifacts/pcc2defaultkill/
+witness_20260905/`.  Detector: `regress/pcc2_default_probe.py` (36 rows, gate 14 -- 23 at pass 2, +13 by the
+pass-2 repair), kill tables `regress/artifacts/pcc2defaultkill/killtable_20260905/` (six mutants on the 23-row
+instrument) and `killtable3_20260905/` (twelve, on the 36-row one; the six pass-2 escapes -- two MEASURED clean
+sweeps by the Opus seat, four predicted by codex/grok/Fable -- also measured at 23/23 on the pass-2 instrument).
+Pass 1 `_scratchpad/panel_20260905_021751`, pass 2 `_scratchpad/panel_20260905_055656`, pass 3 `_scratchpad/panel_20260905_112529`.
+The ranking's driver warrant was RE-BASED (if_ie never attaches here) and the fold is documented (Motorola
+VMESBCP2 Table 6-1).  Filed from the round: `pcc2iackmodel`, `pcc2latchinst` (below).
+
+**`pcc2iackmodel` -- SCCTXIACK (0x25) and SCCMOIACK (0x23) have no acknowledge semantics (LOW; AFTER `pcc2c040kill`).**
+#501 declines writes there and serves 0 on reads like every other uncased offset; on the real part an IACK read
+returns the interrupt vector and acknowledges.  The in-tree model for the shape is the cased `SCCRXIACK` arm
+(clears the INT bit, calls `reassert_interrupts()`), which is exactly why this waits: that path enters the
+C040 kill, so `pcc2c040kill` ships first.  Also note the SCCRXIACK arm has NO writeflag test (a guest WRITE
+acknowledges too) -- do not copy that.  The board manual says a mapped IACK with no interrupt pending can time
+out with a transfer error (`vmesbcp2.txt`, 6-33..6-34) -- `return 0` would be a defensible model of THAT.
+
+**`pcc2anngrid` -- the default arm's announce grid (channel x arm x width) has four disclosed open cells (LOW, harness;
+clause-(e) coverage debt, every one measured or derived at #501 pass 4 and DISCLOSED in the detector's contract).**
+(1) the len-2 WRITE announce is never emitted -- the probe's one `st.h' is latch-silenced -- so a write-value or
+width-label mutant scoped to len 2 passes 46 rows (Opus MO2/MO4 MEASURED 46/46): closure is ONE instruction and one
+row, `ST_H(7, 0x2c)' in the `dir wr text' session counting `0x2c (len 2): 0xaabb -- declined'; (2) the len-4 READ
+value: every aligned uncased word reads zeros (Opus MO1 `data[len>>2]' MEASURED 46/46) -- an `st.d' at T2COUNT would
+put 0x99 at 0x14 through the counter arm's raw memcpy, but that route IS the filed `pcc2counter8' defect, so rowing
+it couples the detector to a bug: decide with `pcc2counter8'; (3) the announce's OFFSET label is pinned at five
+offsets (Opus MO3 `ra < 0x14 ? ra : 0' MEASURED 46/46) -- one `alias msg'-style count per class closes it; (4) every
+exact value anchor is EVEN, so `& ~1' on an announce operand passes (codex) -- use odd test values.  All four ride
+the NEXT change of this instrument (each owes a table re-run and a gate), which is why they are filed, not rowed.
+
+**`pcc2latchinst` -- per-INSTANCE latch scope has no fixture (LOW, harness).**  Both `warned` (the twelve width
+blocks) and `warned_unimpl` (#501) are per-instance fields, but every probe session is a fresh process, so no
+row can distinguish a per-instance field from a function-static (codex, pass 1).  A fixture that constructs two
+pcc2 instances in one process and announces from each once would.  Shared with the width chain; filed, not owed.
+
 **`pcc2defaultkill` PROMOTED TO HIGH (2026-09-04 fix review; Fable 5.1 adjudicating, GPT-6 Astra concurring).**
 The unimplemented offsets are REAL PCC2 registers the one in-tree guest driver writes: OpenBSD 2.2
 `if_ie.c:609` stores `pcc2_lancirq` (IEICR, 0x2a), `:612` `pcc2_lancerrirq` (0x2b), `:655`

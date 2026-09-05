@@ -1,0 +1,90 @@
+I'll start by reading the full offloaded brief, then check the tree, the repair diff, and the measurements before answering the floor questions.The checkpoint matches HEAD `7076134`. Next I’ll read the rest of the brief and inspect the actual arm, probe, and table-3 artifacts rather than ratify the packet.The memcpy-vs-decline order is the load-bearing product question. I'll read the handler from the top, then the table-3 logs and the offset census.The served-byte row uses a T1CMP interior; I need to confirm whether the tick actually rewrites that cell, and I’ll check the offset census and table-3 logs against the claims.The gate log is the authority on the check count: it says 857, not 875. I’ll finish against the arm, the 43-offset census, and the table-3 red sets, then give the verdict.**CLOSE the repair chain — zero in-rule floor breaches on the 36-row composite.** Correct two L4s before commit (`875` → `857`; opening still says the detector is 23 rows). Denominator below.
+
+agy DELIBERATELY NOT FIRED. I derived the Q4 edits from `GXEMUL-SEC/src/devices/dev_pcc2.c` (handler at 414–704, tick at 187–262) and the table-3 logs; I did not rebuild a mutant. Line numbers match the fork, not a 2021 copy.
+
+---
+
+### 1. The repair is right
+
+`data` is `unsigned char *`; `len` is `size_t`. Guest widths here are 1/2/4, so `(int) len` is exact.
+
+On `MEM_READ`, the memcpy (or the `#119` `memset`) runs **before** the switch (`dev_pcc2.c` 425–437). `default:` then prints `data[0]`, which is the first byte already copied into the guest buffer — memcpy path and end-span zero-fill path both. On `MEM_WRITE` the announce prints `idata`, not `data`; `data[0]` is unused. `break` still hits the one `return 1` at 704 (no early return, common tail kept).
+
+Writes are not memcpy’d into `pcctwo_reg[]` before the switch, so member 3 is real: a declined store does not land. Member 6 is still contradicted by the cased siblings.
+
+BASE 36/36 and BASE.old23 23/23 (`killtable3_20260905/BASE.out`, `BASE.old23.out`) are the measurement that `offset 0x2a`, `served 0x`, the direction phrases, and `MSG` survive `(len N)`.
+
+**Harder on accepted #7 (codex reload).** Printing `data[0]` is still the right product choice — it is definitionally what was served. The stated reason is too big. `pcc_timer_tick` writebacks **only** `T1COUNT`/`T2COUNT` (260–261). It **reads** the compare words and never writes them. `srvd val` stores through cased `T1CMP` (0x04) and reads interior **0x05**, which the tick does not rewrite. CEN is off at init (`memset` + no `T1CTL` store in `DEVINIT`). Under this instrument, `data[0]` and a reload of `pcctwo_reg[relative_addr]` are the same byte. The twelve interiors are six compare + six count; the tick does not “rewrite the twelve.”
+
+---
+
+### 2. Each of the twelve dies for the claimed reason
+
+I re-read the `PCC2D_RED=` lines in `killtable3_20260905/*.out` against `PRETABLE_501b.out` and `driver.log`. Score and red set match the predictions on all twelve; the six pass-2 shapes are 23/23 on `a96b8bcf` and red on `10737375`, each on the row built for it.
+
+| mutant | claimed channel | what the log actually shows |
+|---|---|---|
+| **M_WRLATCH** (grok A) | count 2 on R,R and R,W | `latch rd rd` got=2 want=1; `latch rd wr` got=2 want=1; `latch sameoff`/`rw one` stay 1 (`M_WRLATCH.out`) |
+| **M_WIDEKILL** (grok B) | host exit on len=4 | `wide wr`/`wide rd` = `host exit1`; msg rows `n/a`; `t1cmp word rt` still 0x12345678 — the kill is in `default:`, not a global `len != 1` |
+| **M_OFFKILL** | fate at 0x06 | `inword wr`/`inword rd` only; 0x06 is in `INWORD` and not in `NAMED18`/`UNNAMED` |
+| **M_SRVD0** | announce text, not guest r4 | `srvd val` stays 0x34; `srvd val text` 0; `wide rd srvd` stays (it **is** 0x00 there) |
+| **M_BACKED2** | latched-path value | `sameoff val` only; `ieicr rdawr` still 0x0 (first write still declined) |
+| **M_ABA** | count 3 not 2 | `latch aba` only |
+| M_EXIT / M_UNLATCH / M_ONELATCH / M_BACKED / M_RDKILL / M_DIRSWAP | as predicted | exact; extra reds are the SAFE direction (a session that now contains a load, a substring that appears in both announces, etc.) |
+
+**Harder on my own rows.** Grok A is not an accident: the W,W and W,R cells stay green, which is why `latch rw one` could not see the SET-on-writes edit. Grok B is host death, not a text mismatch; the cased word round-trip staying green is the scope control.
+
+43 offsets re-derived from `mvme_pcctworeg.h` against the 21 `case` labels: 0x40 − 21 = 43; `NAMED18` 18 + `INWORD` 12 + `UNNAMED` 13, disjoint, `assert` in the probe. Premise 1 holds. `SCCRXIACK` 0x27 is cased and correctly absent from `NAMED18`.
+
+---
+
+### 3. Closure
+
+In-rule cells closed: setter × tester four-way (W,W / W,R / R,R / R,W), accumulation, latched-path disposition, served **announce** value against a constant-0, len-4 both directions, all 43 offsets driven **for fate** both ways.
+
+`len` is printed, not tested (`if` on `len` does not exist in the arm). Width is CLAIM, not generating-set floor. Nothing in the disclosed list is a predicate the arm tests.
+
+Residual, not floor (clause (e) / disclosed-adjacent):
+
+- **Announce-count at inword/unnamed.** `named wr msg` is an aggregate over 18 named offsets, so a silent skip of one **named** offset reds. A silent skip of `relative_addr == 0x06` (keep the guard, add `&& relative_addr != 0x06`) does not: fate still survives, no inword msg row. Fable’s in-round take was the **kill** form, which `inword wr`/`rd` catch.
+- **Write-announce `idata`.** Symmetric to M_O1 on the write side: no row counts the stored value in the write text. `idata -> 0` there is 36/36. The repair did not introduce that operand; M_O1 was the read side.
+
+---
+
+### 4. Smallest edit that breaks the property and still passes 36
+
+**`if (len == 2) exit(1);` at the top of `default:`.** Every default-path row is `st.b`/`ld.bu` or `st.w`/`ld.w`. The header says 8/16/32 are all legal (`mvme_pcctworeg.h` lines 9–10). This is a partial reinstatement of the width-agnostic kill, and it is already in the contract’s DISCLOSED list. Derived, not measured this pass — the disclosure is the round’s own.
+
+Second, **not** a property break under this instrument: revert `data[0]` → `d->pcctwo_reg[relative_addr]` (keep `(len %d)`). Observationally equivalent here because `srvd val` uses a compare interior and CEN is off. That is why `srvd val text` pins M_O1 (constant 0) and does **not** pin the reload. PRETABLE sibling-parity overclaims when it lists `srvd val text` as the row for “not a reload.”
+
+---
+
+### 5. The record is mostly honest; two sentences are false
+
+Refuted by an artifact the record itself names:
+
+- **`875 checks ok`** (`CHANGELOG.md` table-3 gate paragraph, and this brief). `killtable3_20260905/gate14_501b.log` line 1322: `PASS (857 checks)`, `GATE_RC=0`. Width 251/251 and default 36/36 are true in the same log (1241–1243, 1281–1283). 844 + 13 new default-row checks = **857**. 875 is a 5/7 transposition. L4, correct in place; the score claim named a log that contradicts it.
+
+- **Opening summary still says the detector is 23 rows** (`CHANGELOG.md` lines 5–6 and the “The detector … 23 rows” heading). Present tense about what gate 14 runs. Gate 14 now pins 36. The table-3 section corrects it ~150 lines later; the summary did not. L4.
+
+Rationale overstated, not a score:
+
+- F2 #7 / product comment / docstring: “the tick rewrites the (twelve) counter interiors.” False of T1CMP (where `srvd val` lives) and of COUNT while CEN is 0. Print `data[0]` anyway.
+
+Table 3 “all twelve predictions EXACT” holds for the kill table itself (`driver.log` + the `.out` RED lines). PRETABLE mtime 06:25:42 vs run 2 at 06:37:48 is the order discriminator.
+
+---
+
+### 6. Close?
+
+**Yes**, as a floor closing pass, with this denominator:
+
+**Looked at (and killed):** the twelve named shapes in table 3 — M_WRLATCH, M_WIDEKILL, M_OFFKILL, M_SRVD0, M_BACKED2, M_ABA, M_EXIT, M_UNLATCH, M_ONELATCH, M_BACKED, M_RDKILL, M_DIRSWAP — plus BASE on both instruments.
+
+**Cells closed:** setter × tester 2×2, `|=` accumulation, latched-path member-6, served announce value against a wrong/constant byte, len-4 default accesses both ways, all 43 uncased offsets written once and read once (fate).
+
+**Excluded, not claimed:** len-2-only re-kills; end-spanning wide read (`0x3d+4`); per-instance latch (`pcc2latchinst`); reload vs `data[0]` without CEN; write-announce `idata` value; announce **count** at inword/unnamed offsets.
+
+Roster: nine seats by design; agy reserved. Diff delivered (product + detector inlined). Zero **in-rule** (d) sweep. The L4s are records, not a floor reopening — fix them in the same commit.
+
+**Do not treat “875” or “23-row detector” as live facts after this pass.**

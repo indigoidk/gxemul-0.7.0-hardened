@@ -1,0 +1,1054 @@
+kimi version 0.36.0
+• The user wants me to read a brief file in full and review it adversarially as its own Questions/Review-asks section directs. Let me read the file first.The file is large (84678 chars, 928 lines). The Read tool said 928 lines read but output exceeded 50000 chars so it gave a preview. I need to read the full file via the output_path. Let me page through it using Read with the output_path.
+
+  Actually the tool says "Use Read with output_path to page through the full output." Let me read that file.The Read tool keeps giving a preview because the file exceeds 50000 chars. The preview says 928 lines total. I need to page through it with line_offset and n_lines. Since the file lines might be long, let me read in chunks of ~200 lines each. The output_path file is the line-prefixed version (with "1\t1\t" double prefix since it re-read the tool result). Actually simpler: read the original file with pagination.
+
+  Let me read the original brief_sent.md in pages. 928 lines. Read returns up to 1000 lines or 100KB per call, but lines longer than 2000 chars truncated. The issue is the 50000 char tool output cap. Let me read ~150-line chunks. Actually I could read multiple chunks in parallel with different line_offsets.
+
+• The file is large; I'll page through it fully.
+
+• I've now read the entire brief. It's a "pass 3" review brief for a panel, asking seats to adversarially review a repair diff (product + detector) for the gxemul pcc2 default arm fix (#501). The brief's QUESTIONS section (lines 172-191) directs the review:
+
+  1. IS THE REPAIR RIGHT? Check the arm: is `data[0]` always the byte the guest received — on the memcpy path AND the end-span zero-fill path; for a WRITE is `data` unused by the announce (it prints idata); does `(int) len` fit; does any row's text anchor break (`offset 0x2a`, `served 0x`, the direction phrases, MSG)?
+  2. DOES EACH OF THE TWELVE MUTANTS DIE FOR THE REASON CLAIMED? Table 3 and predictions inlined; six pass-2 mutants carry a second score on pass-2 instrument. A prediction that missed is interesting; a mutant killed by a row other than the one built for it is a row killing by accident.
+  3. THE CLOSURE: setter x tester (four cells), accumulation, latched-path disposition, served value, width both directions, every offset both directions. Is any cell still open? Name the mutant. Is anything in the DISCLOSED list actually floor (a predicate the arm tests)?
+  4. THE SMALLEST EDIT THAT BREAKS THE PROPERTY AND PASSES 36 ROWS. Name the row expected to stay green and why.
+  5. IS THE RECORD HONEST? The CHANGELOG block, the contract (docstring), the pass-3 PRETABLE. Name any sentence a measurement refutes, any count without a deriver.
+  6. CLOSE? A closing zero must be VALID: the diff delivered, roster complete or misses named, the zero carried WITH its denominator — which mutant shapes (twelve, named), which cells. If close, say what the denominator EXCLUDES.
+
+  The brief explicitly says: "build (or derive) the edit, do not vote. Check the premises, not the derivations; be harder on the ACCEPTED dispositions; a seat whose escape was adopted scrutinises its own repair row MORE (does the row kill the mutant for the reason claimed, or by accident?). VERDICT LINE FIRST."
+
+  The user asks me to review adversarially exactly as the Questions section directs, not to summarize, and end with GO / NO-GO / GO-WITH-CHANGES.
+
+  So I should act as a pass-3 seat: verify against the actual tree. The tree under review is `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/`, uncommitted on top of `7076134`. I have filesystem access. The operational rule says: do not run gates; building and running a single detector or mutant in my own temp directory is fine and encouraged.
+
+  Given the environment (Windows with Git Bash), actually building gxemul may or may not be feasible — there are build/ and build-asan/ dirs at the project root, and GXEMUL-SEC has its own tree. The brief says the tree under review is GXEMUL-SEC/src and GXEMUL-SEC/regress.
+
+  Key adversarial checks I can do by reading actual files:
+
+  1. Verify the product repair diff matches reality: read GXEMUL-SEC/src/devices/dev_pcc2.c around the default arm. Check:
+     - The `%= PCC2_SIZE` fold is the handler's first statement (so shift is 0..63).
+     - `data[0]` on the memcpy path and the end-span zero-fill path (#119 end-span path — data zero-filled there?). Actually need to check: for a READ at 0x3d with len 4 spanning past 0x40, what does data[0] contain? The brief says "zero-filled on the #119 end-span path, where data[0] is then truthfully 0x00". Wait — is it? If the read is end-spanning, does the memcpy serve partial bytes? Need to check the actual handler code: `memcpy(data, d->pcctwo_reg + relative_addr, len)` presumably happens before the switch, guarded by relative_addr + len <= PCC2_SIZE? The "#119 end-span path" refers to some end-span guard. Let me look at the actual file.
+     - For WRITE, is `data` unused by the announce? The write announce prints idata. Yes in the diff.
+     - Does `(int) len` fit? len is size_t probably, values 1..8; fine. But is `len` possibly 0? device access len 1,2,4,8? Actually for m88k, len could be 1,2,4. (int) cast fine.
+     - Text anchors: `offset 0x2a` still produced (announce "offset 0x%x (len %d)" — so "offset 0x2a (len 1)" — the anchor `offset 0x2a` survives as substring). `served 0x` survives. "unimplemented write to" survives. MSG "pcc2: unimplemented" survives. OK.
+
+  2. Check the detector: GXEMUL-SEC/regress/pcc2_default_probe.py — verify the 36 rows match the gate list, verify row names ≤14 chars (gate anchor %-16s + two spaces... row name up to 16 chars? The gate pattern is `^$v  .*ok$` — name followed by two spaces. If name is 16 chars, printf %-16s pads to 16 and then a space before next field... wait the format is "%-16s %-14s %-14s %-60s %s". With a 16-char name, %-16s produces exactly 16 chars, then a literal space, then got. So "name " + ... The gate greps `^$v  .*ok$` — name followed by TWO spaces. For a 16-char name there's only ONE space after it. So names must be ≤14 chars to have ≥2 spaces. Let me count the longest names: "put b ctl msg" = 13 chars. "t1cmp word rt" = 13. "named rd srvd" = 13. "wide rd srvd" = 12. "srvd val text" = 13. "latch sameoff" = 13. OK all ≤14. But wait — the check in gate is `count "$PCC2DLOG" "^$v  .*ok$"` — the row line ends with "ok". The `.*` between. Also `pcc2 default rows emitted` counts ` ok$` and ` FAIL$` — but the header line "row got want note" ends with... the header prints `%-16s %-14s %-14s %-60s %s` with ("row","got","want","note","") — trailing empty string, line ends with spaces? Actually the last %s is empty so the line is "row              got             want            note...                                                        " — ends with spaces, not " ok". Fine. But the earlier note (line 553-554) says a first draft printed status before note and gate counted zero — status-last now.
+
+     Hmm wait, there's a subtlety: `wide rd srvd` row counts `(len 4) -- served 0x00` — the PRTICR read at 0x30 with len 4 reads bytes 0x30..0x33, all uncased. The announce prints data[0] = pcctwo_reg[0x30] = 0 (default). So "served 0x00" — and the count of the substring "(len 4) -- served 0x00" should be 1. OK.
+
+     Another subtlety: `wide wr msg` counts "offset 0x28 (len 4)" — the st.w at IEERR (0x28). The announce is "[ pcc2: unimplemented write to offset 0x28 (len 4): 0x5a5a5a5a -- declined. (once) ]". Then the ld.w at 0x28 — same offset, bit already set (fold is by byte offset 0x28), so silenced. Good — count 1.
+
+     But wait — the write announce prints idata as `(int) idata` with %x — for the wide write 0x5a5a5a5a. The substring "offset 0x28 (len 4)" matches. Good.
+
+  3. Question 3 closure: Is any cell still open? Let me think adversarially about mutants that sweep 36 rows clean (the floor question: "does a clause-(d) mutant exist that sweeps the 36-row detector clean?").
+
+  Let me think hard about the arm:
+
+  ```c
+  default:
+      if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+          d->warned_unimpl |= 1ULL << relative_addr;
+          if (writeflag == MEM_WRITE)
+              fatal("[ pcc2: unimplemented write to offset "
+                  "0x%x (len %d): 0x%x -- declined.  (once) ]\n",
+                  (int) relative_addr, (int) len, (int) idata);
+          else
+              /* comment */
+              fatal("[ pcc2: unimplemented read from offset "
+                  "0x%x (len %d) -- served 0x%02x.  (once) ]\n",
+                  (int) relative_addr, (int) len, data[0]);
+      }
+      break;
+  ```
+
+  Candidate mutants:
+
+  a) Announce text mutants that evade anchors: e.g., change "declined" to "Declined"? That would break `wr declined` row (counts "declined"). Change "(once)" text — not pinned by any row! The `(once)` token: no row counts "(once)". A mutant changing "(once)" to something else passes 36/36. Is that clause-(d)? Clause (d) seems to be "mutants of the new arm". Does the property require the literal "(once)"? The contract doesn't mention pinning "(once)". Hmm — is the "(once)" text part of the property? The property is: reads keep served byte, writes declined, one latched announce per offset. The "(once)" house idiom text is cosmetic. But it's a "smallest edit that breaks the property and passes 36 rows"? Changing "(once)" doesn't break the property. Question 4 asks for the smallest edit that BREAKS THE PROPERTY and passes 36 rows. So text tweaks that don't break the property don't answer Q4. But they do demonstrate the detector is "below the floor" if the floor is "every clause-(d) mutant dies". Actually the FLOOR QUESTION per the header: "does a clause-(d) mutant exist that sweeps the 36-row detector clean?" — a sweep = 36/36. Clause (d) = presumably "mutant of the repair" (need to know the taxonomy: (b) reinstate exit(1) verbatim; (d) mutate the new arm's logic). A text-only change like `%02x` → `%x`? Let's see: "served 0x%02x" → "served 0x%x": for srvd val text, served byte 0x34 prints "served 0x34" either way (0x34 has two digits). named rd srvd counts "served 0x" — survives. wide rd srvd counts "(len 4) -- served 0x00" — with %x, 0 prints as "0", so "served 0x0" — the row would FAIL (count 0). So that one dies. What about write announce `0x%x` idata → not pinned by value anywhere? dir wr text counts "unimplemented write to" only. wr declined counts "declined". The idata value printed is never checked! A mutant printing `idata` as 0 in the write announce: which row catches it? `wide wr msg` counts "offset 0x28 (len 4)" — substring before the value. No row counts the idata value in the write announce. So M: replace `(int) idata` with `0` in the write announce — sweeps 36/36. Does it "break the property"? The property per the fix: writes declined + announce. The announce says what was written ("0x%x" idata). A wrong value in the decline announce is a record defect — the write announce would lie about the value. By analogy with M_O1 (read announce printing wrong value was a MEASURED escape and was repaired), the write announce printing a wrong value is the SAME defect class — and no row pins it! Wait — does any row? Let me scan the 36 rows: "dir wr text" counts phrase; "wr declined" counts "declined"; "wide wr msg" counts "offset 0x28 (len 4)". `srvd val`/`srvd val text` are read-side. The idata VALUE in the write announce is unpinned. That's a genuine M_O1-shaped hole on the write side: `srvd val text` repaired the read side; the write side got no corresponding `wd val text` row (e.g., counting "0x34" in the write announce or ": 0x5a " text). Hmm, but does the brief's contract claim to cover this? The contract line: "the read announce printing a wrong or constant byte ... -> + `srvd val text'". It only mentions the read announce. The write announce's value is not covered by any contract line. So there IS an open cell: the write announce value channel. A mutant `idata -> 0` (or printing relative_addr twice, etc.) passes 36/36. That's a clause-(d)-shaped edit (one token) that sweeps clean — the very shape pass 2 was punished for missing (Opus M_O1 on the read side). This is a strong NO-GO/GO-WITH-CHANGES finding.
+
+  Wait, let me double check `dir wr text` — counts "unimplemented write to" — a value change doesn't affect it. `alias msg` — counts "offset 0x2a" — from a WRITE to 0x6a! Look: row("alias msg", t.count("offset 0x2a")...) in the session that does ST_B(5, 0x6a). The write announce prints "offset 0x2a (len 1): 0x5a -- declined". So "offset 0x2a" appears once. Doesn't pin idata. `named wr msg` counts MSG only. So yes — no row pins the write-announce value. CONFIRMED hole (subject to verifying the actual probe file matches the inlined copy — must check regress/pcc2_default_probe.py).
+
+  Also: does the value matter for the property? The fix's announce is a record of a declined write; printing the wrong value is a wrong record — exactly what M_O1 was on the read side. The pass-2 disposition #1 repaired the read side; the symmetric write side wasn't rowed. Asymmetric repair. That's a real finding.
+
+  b) Another candidate: latch bit keyed by folded offset — mutant: use a DIFFERENT bit for write vs read announce? E.g., test bit for reads against `relative_addr` but set writes at `relative_addr`... that's the setter/tester axis — covered by four cells? The four cells are built on ONE offset (IEICR 0x2a) and announcements counted. A mutant like "set bit always, but test bit only on writes" (i.e., reads always announce): `latch rd rd` (R,R) wants 1, mutant prints 2 → dies. "test only on reads": latch sameoff (W,W) prints 2 → dies.
+
+  c) `data[0]` vs served byte: For a WRITE, the memcpy above the switch — does it copy INTO data for writes? Typically gxemul device access: on write, data contains the value to write (copied from idata?). Actually in gxemul, DEVICE_ACCESS handlers receive `idata` (uint64_t) for writes and fill `data` for reads. The memcpy above the switch: for reads it memcpy's the register array into data; for writes... let me check the actual file. The announce for writes prints idata, so data is unused on the write path. Question 1 asks: "is data[0] always the byte the guest received — on the memcpy path AND the end-span zero-fill path". Need to read the actual handler to verify the zero-fill path: #119 end-span — line 495: "an END-SPANNING wide read (0x3d + 4 > 0x40) takes the zero-fill path and is announced `served 0x00' truthfully (data[0] is what was served) but no row drives it". Hmm — wait. If a read at 0x3d with len 4 end-spans, what did the guest RECEIVE? The claim: zero-fill path → data zero-filled → served 0x00, and the guest received... zeros? Need to check the handler: if relative_addr + len > PCC2_SIZE, presumably memset(data, 0, len) and no memcpy. But actually is data[0] zero, or does the guest receive the byte at 0x3d (pcctwo_reg[0x3d])? If the end-span path serves ALL zeros (including byte 0), then data[0]=0 is what was served. The claim says truthfully 0x00. Need to verify in source.
+
+  d) `wide wr` row: ST_W at IEERR 0x28..0x2b — all uncased. Wait — 0x2a is IEICR, which IS in NAMED18... no wait, "cased" vs "uncased": NAMED18 are named-but-unimplemented (uncased). IEERR=0x28, 0x29 unnamed, IEICR=0x2a, IEBERR=0x2b — all in the default arm (uncased = no case label). Yes: "0x28..0x2b, all uncased". The write to 0x28 len 4 — the memcpy above the switch: for a WRITE, does the memcpy copy data INTO pcctwo_reg[] (backed store)? NO — that would be a backed store; the fix DECLINES. But wait — is there a memcpy for writes above the switch that already stored?! The M_BACKED mutant "member 6, every write (end-span guarded)" reads back 0x5a5a5a5a at `wide wr` — meaning under M_BACKED, the wide write IS stored (memcpy-backed). In gxemul's pattern, the typical shape is:
+
+  ```c
+  if (writeflag == MEM_WRITE) {
+      // idata → pcctwo_reg? 
+  } else {
+      memcpy(data, d->pcctwo_reg + relative_addr, len);
+  }
+  switch (relative_addr) { ... }
+  ```
+
+  Hmm, need to read the actual code. The default arm in pass-2 state had no store (declined). M_BACKED adds `pcctwo_reg[relative_addr] = idata` for writes... for wide writes that would be a 4-byte store? The `wide wr` red under M_BACKED reads 0x5a5a5a5a — so M_BACKED did a wide store (memcpy of idata into reg array, end-span guarded). Under the real fix, no store, read back 0x0. Fine.
+
+  Critical for Q1: in the ACTUAL handler, for a WRITE, is `data` used? And is there any path where the write's memcpy (if the handler has a generic write memcpy above the switch) already stored into pcctwo_reg[] before the switch? If so, "declined" would be false — the store would have already happened. But the rdawr rows measure 0x0 after write, so no. OK.
+
+  e) The BIG one to verify: the fold. `relative_addr %= PCC2_SIZE` as the handler's first statement — brief premise 1 says so. The arm comment says "The %= fold above IS the real part's". Need to check actual dev_pcc2.c: is the fold BEFORE the switch, so relative_addr in the arm is 0..0x3f, shift on 64-bit type is 0..63 — no UB. Check.
+
+  f) `warned_unimpl` zeroed at DEVINIT — brief line 796 says "the latch words are separate fields both zeroed at DEVINIT". Check DEVINIT(pcc2) zeroes the struct (memset) or explicitly.
+
+  g) Does `fatal()` flush/print to the same stream the probe counts? fatal() prints to stderr? The probe redirects both (gate: `> "$PCC2DLOG" 2>&1`). The killtable driver presumably too. OK.
+
+  h) Row counting correctness: `t.count(MSG)` counts occurrences in the transcript. The announce contains "pcc2: unimplemented" once per announce. `named wr msg` wants 18 for 18 writes — each announces once (first access per offset). OK.
+
+  i) `srvd val` row: setup r5=0x12345678, ST_W(5, T1CMP) — T1CMP = 0x04, a cased 32-bit arm. Guest stores word 0x12345678; byte at 0x05 (second byte, little-endian? m88k is BIG-endian). 0x12345678 big-endian: byte at 0x04=0x12, 0x05=0x34, 0x06=0x56, 0x07=0x78. So pcctwo_reg[0x05]=0x34. Then LD_BU(4, 0x05) reads 0x34. val = "0x34". The row wants "0x34". OK — endianness handled (they chose 0x34 at offset 0x05, correct for big-endian). The announce for the read at 0x05: "served 0x34" — `srvd val text` counts it. Under M_SRVD0 (announce prints 0), the text row fails but `srvd val` stays green (the SERVED byte is still 0x34) — consistent with table: M_SRVD0 35/36, red = srvd val text only. Good — the row kills for the reason claimed.
+
+  BUT: adversarial — the SIGALRM tick "rewrites the counter interiors". T1CMP is timer 1 compare — does the tick rewrite T1CMP bytes? T1CNT is the counter; T1CMP is compare — compare registers are guest-set, not tick-rewritten. The probe runs with the emulator stepping via debugger `step N` — SIGALRM tick fires on wall-clock timer? In gxemul, the timer tick is emulated per-instruction-count or SIGALRM? The claim "the SIGALRM tick rewrites the counter interiors between the memcpy and the announce" — for T1CNT interiors. For the srvd val row, T1CMP is used — stable. Fine.
+
+  j) The `sameoff val` row under M_BACKED2: member 6 on the latched path — "} else if (writeflag == MEM_WRITE) pcctwo_reg[ra] = idata;" — hmm, M_O2 shape: a store that happens when the latch is ALREADY set (exempting the first write). Session: ST_B IEICR (first write: announces, latch set, declined), ST_B IEICR (second: latch set → under mutant, stored!), LD_BU IEICR → reads 0x5a under mutant, 0x0 under fix. Row wants 0x0. Under fix: both writes declined, read back 0x0... wait — reads back the array's current byte at 0x2a, which is 0 (default). Good. And `latch sameoff` in the same session counts MSG=1. Good — zero new sessions, one row added to existing session. Matches.
+
+  k) Q3: "Is anything in the DISCLOSED list actually floor?" DISCLOSED: len-2 accesses; end-spanning wide read; per-instance latch scope; announce names FIRST served byte of a wide read. Is the len-2 disclosure sound? Claim: "the mutant that kills len 4 also kills len 2" — a `len != 1` re-kill kills both len 2 and len 4 → caught by wide rows (len 4). A mutant killing ONLY len 2 (`if (len == 2) exit(1)`) is not rowed — disclosed. Fine as disclosure. End-span wide read not rowed — disclosed. Per-instance — filed pcc2latchinst. These are honestly disclosed, not floor (the arm doesn't test len==2 specially... well the arm doesn't test len at all — the property "width-agnostic survival" for len 2 is arguably floor but disclosed. The question asks whether anything DISCLOSED is "actually floor (a predicate the arm tests)". The arm tests: latch bit, writeflag. len is not tested. So width cells are claim rows. Disclosed items: len-2 (not tested by arm — not floor), end-span (data zero-fill path — hmm, the end-span path IS product behavior, but no row drives it; is it "a predicate the arm tests"? The arm doesn't test end-span; the zero-fill happens above the switch. Not the arm's predicate). OK.
+
+  l) Q4 smallest edit breaking the property passing 36 rows: my write-announce-value mutant (idata→0 or print wrong value) is the strongest: it breaks the "announce says what happened" property (same property as M_O1) and no row sees it. Also: `(int) relative_addr` → e.g. announce the UNFOLDED offset? No — `alias msg` pins folded 0x2a. What about printing len wrong (`(int) len` → `1`)? `wide wr msg` counts "(len 4)" → dies. Printing data[0] wrong → srvd val text dies. Printing idata wrong → NOTHING dies. Confirmed open cell.
+
+  Another candidate: announce on SECOND+ access suppressed but value stored? That's M_BACKED2 — caught by sameoff val. What about a store on the UNLATCHED path only for READS? Reads are never stores. What about "decline only the first write per offset, backed store on subsequent, AND don't announce" — caught by sameoff val + latch sameoff.
+
+  What about a mutant that stores on writes ONLY at offsets ≥ 0x20 (unnamed)? `unnamed wr`/`unnamed rd` rows only check survival and counts, not values! A backed store at unnamed offsets: is there a read-back-value row at an unnamed offset? `unnamed rd` is fate only (survived). No rdawr at an unnamed offset. So M: `if (writeflag == MEM_WRITE && relative_addr >= 0x20 && relative_addr < 0x28) pcctwo_reg[relative_addr] = idata;` — sweeps clean? Check rows: unnamed wr survives (yes), unnamed rd survives, MSG counts: each announce still prints (latch set before/after — order: if (!(bit)) { set; announce } — announce happens regardless of store). dir texts fine. Hmm — but does any row read back a value at an unnamed offset? No. The rdawr rows are at IEICR/IEERR (0x2a/0x28, named). So a backed store limited to the 13 unnamed offsets passes 36/36. Is that clause-(d)? It's a member-6 variant scoped to offsets the value rows don't sample. Fable's M_OFFKILL repair drove all offsets for FATE but not for VALUE. The "43 offsets each written and read once" closure claim covers survival, not disposition-per-offset. The disposition rows (rdawr) sample only 2 named offsets + wide at IEERR + T1CMP interior. So a backed-store mutant at an unsampled offset (e.g., only 0x39) sweeps clean. Hmm — but is that "the property"? The property is "writes declined" — a per-offset-scoped backed store breaks it at that offset, and no row sees the value there. HOWEVER — the pass-1 compression argument: "valid because the fix has no per-offset branch". A mutant CAN introduce a per-offset branch (that's what M_OFFKILL did — but M_OFFKILL was caught by FATE because it KILLED at 0x06; a STORE at 0x06... wait, is there a value row at 0x06? inword rd is fate-only. srvd val is at 0x05 (T1CMP interior — cased word arm at 0x04-0x07? T1CMP=0x04, so bytes 0x04..0x07 are the word; 0x05 read in srvd val session). M_BACKED (store everywhere) is caught at ieicr/ieerr/sameoff/wide. But M_BACKED_AT_ONE_UNNAMED_OFFSET: no value row. So the "every offset both directions" closure closes the FATE axis, not the DISPOSITION axis per offset. The table's own logic: M_BACKED is caught by 4 rows none of which is at an unnamed offset. So yes — second open cell: per-offset-scoped member 6 at an unnamed (or inword-other) offset sweeps clean. This is exactly the Fable-shaped escape (re-kill at unsampled offset) lifted to the VALUE channel — the same shape pass 2 was burned by, one channel over.
+
+  Wait — but careful: a store at one offset only, mutant: `if (writeflag == MEM_WRITE && relative_addr == 0x39) pcctwo_reg[0x39] = idata;` — which row goes red? None: unnamed wr survived (store doesn't kill), unnamed rd survived, no value check at 0x39, counts unchanged. 36/36 sweep. CONFIRMED second hole (assuming probe matches inline).
+
+  Hmm, but is this within the intended threat model? The detector contract's member-6 line says: "member 6 (BACKED ACCEPT) substituted for member 3 -> `ieicr rdawr' / `ieerr rdawr'". So the contract claims member-6 detection via two offsets. A member-6-at-one-other-offset is a member-6-shaped mutant the named rows can't see. Whether the panel considers per-offset-scoped mutants "in class" — M_OFFKILL was exactly such a per-offset-scoped re-kill and was ACCEPTED as an escape, repaired by driving all offsets for fate. The value-channel analog was not closed. So the closure claim "Is any cell still open? Name the mutant" — I can name two:
+    - M_WVAL0: write announce prints constant 0 instead of idata (announce-value channel, write side).
+    - M_STORE1: backed store at exactly one unnamed offset (disposition channel, per-offset axis).
+
+  Both sweep 36/36 by derivation. The brief says "a derived escape is a prediction until measured" — Opus's note. The operational rule allows me to build and run a single detector/mutant in my own temp dir. Should I measure? The environment: Windows + Git Bash; GXEMUL-SEC presumably has a build. Building gxemul on Windows Git Bash... there's a build/ dir at root and GXEMUL-SEC probably has build system. Let me check what's in GXEMUL-SEC. The probes run `build/gxemul` — path relative to GXEMUL-SEC? The probe default BIN is "build/gxemul". Gate runs with $PMAX. Given the operational rule encourages building/running a single mutant in a temp dir, and I have Bash — but on Windows, can gxemul build? There's `build/` and `build-asan/` at the ROOT (which are copies of the whole tree? "build/demos, doc, experiments, man, src, test" — looks like a full tree copy used for building). GXEMUL-SEC has src/, regress/, etc. Is there a built gxemul binary for the SEC tree? The brief says measurements were run with "scratch clone of build/, BASE rebuilt in the clone" — on the operator's machine (timestamps -0500, so a Unix-like environment, maybe WSL — the dir `_wsl_tmp_preserved` and `_wsl-gentoo` suggest WSL use). My Bash is Git Bash on Windows; python3 availability? Let me check. Building might take a long time. The brief explicitly says: "If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth far more to this panel than a timeout." So deriving + naming the measurement is an acceptable seat answer. But measuring would be stronger. Let me first verify the actual files (dev_pcc2.c arm, probe, gate section) match the inlined copies — that's cheap and is itself one of the review asks ("THE TREE UNDER REVIEW is GXEMUL-SEC/src and regress, uncommitted on top of 7076134" — check line numbers, check the diff is real).
+
+  Plan:
+  1. Read GXEMUL-SEC/src/devices/dev_pcc2.c around the handler (find DEVICE_ACCESS(pcc2), the fold, the memcpy, the end-span path, the default arm, DEVINIT zeroing).
+  2. Read GXEMUL-SEC/regress/pcc2_default_probe.py and diff against the inlined detector (mentally verify the 36 rows, the anchors, the exec of the width probe helper).
+  3. Read GXEMUL-SEC/regress/gate_arm.sh #501 section; check row-name list matches the probe's 36 (the brief says derived by script — verify).
+  4. Check the artifacts exist: killtable3_20260905/driver.log, PRETABLE_501b.out, gate14_501b.log — spot-check the numbers (36/36, the mutant scores, 23/23 on old23) — "every number names its log"; I can grep the logs.
+  5. Check the pass-2 preserved files (dev_pcc2.pass2.c, frozen_probe.py md5 a96b8bcf, old23/).
+  6. Check PRETABLE mtime vs driver.log mtime (written before the table) — file mtimes.
+  7. Check CHANGELOG block as it stands in GXEMUL-SEC/CHANGELOG.md — the brief quotes it; the quoted block says "Detector: regress/pcc2_default_probe.py, 23 rows" — wait, the CHANGELOG header (line 685) says "Detector: `regress/pcc2_default_probe.py`, 23 rows, run by gate 14." — but the detector is now 36 rows! Is the CHANGELOG updated? Line 679-685 shows the header with "23 rows". Then later sections describe pass 2 and table 3 (36 rows). Hmm — the CHANGELOG block inlined includes both the pass-2 records AND the pass-3 table 3 section, ending with Records. But the bold header still says "23 rows, run by gate 14". Is that an honest-record problem? The header describes the FIX and detector at the time... it says "Detector: regress/pcc2_default_probe.py, 23 rows, run by gate 14" — after the repair the detector has 36 rows. If the header isn't updated, Q5 (is the record honest) has a nit: the summary line's "23 rows" is stale. Also line 708: "it is the register array's default, not a computed value" — the design section of the CHANGELOG still says the OLD wrong sentence ("it is the register array's default, not a computed value, so this is not the option set's member 4")! The repair corrected that sentence in the PRODUCT comment and the DOCSTRING, but the CHANGELOG's "The design" section (line 708-709) still reads "READ: keep the byte the memcpy served and SAY it is served -- it is the register array's default, not a computed value". Wait — the brief said pass-2 records corrected it "in comment and docstring" — and the CHANGELOG design section is a historical record of pass 1... The CHANGELOG does later (pass-2 section, line 816-817) acknowledge: `"the array's default, NOT a computed value" was therefore also wrong for those twelve.` So the record acknowledges it. But the earlier section's sentence stands as historical pass-1 text. Acceptable as a dated record, arguably. But the header bold line "23 rows" — after repair, gate 14 runs the 36-row probe. Hmm, the header is dated 2026-09-05 and describes the round. The table-3 section and gate-14-on-repaired-instrument section are in the block. The header saying "23 rows" while the round's final detector is 36 rows is at least a documentation inconsistency worth naming. Let me check the actual CHANGELOG.md in GXEMUL-SEC to see if it matches the inlined block (the brief says "THE CHANGELOG BLOCK (as it stands)").
+
+  Also line 754: M_EXIT pass-2 table "predicted 8/23, measured 7/23, red rows: sixteen" — "the prediction listed fifteen and miscounted its own green set". And premise 3 line 71: M_EXIT 7/36 with 29 red rows listed — count them: the inline table at line 71 lists: named wr,named wr msg,named rd,named rd msg,named rd srvd,inword wr,inword rd,unnamed wr,unnamed rd,ieicr rdawr,ieerr rdawr,latch sameoff,sameoff val,latch twooff,latch rw one,latch rd rd,latch rd wr,latch aba,alias 0x6a,alias msg,dir wr text,wr declined,dir rd text,srvd val,srvd val text,wide wr,wide wr msg,wide rd,wide rd srvd = let me count: named wr(1), named wr msg(2), named rd(3), named rd msg(4), named rd srvd(5), inword wr(6), inword rd(7), unnamed wr(8), unnamed rd(9), ieicr rdawr(10), ieerr rdawr(11), latch sameoff(12), sameoff val(13), latch twooff(14), latch rw one(15), latch rd rd(16), latch rd wr(17), latch aba(18), alias 0x6a(19), alias msg(20), dir wr text(21), wr declined(22), dir rd text(23), srvd val(24), srvd val text(25), wide wr(26), wide wr msg(27), wide rd(28), wide rd srvd(29). 29 red. 36-29=7 green: live, devsig chipid, sccerr rdawr, genctl rt, t1cmp word rt, put b ctl, put b ctl msg = 7. ✓ consistent.
+
+  Check M_UNLATCH 30/36: red = latch sameoff(2), latch rw one(2), latch rd rd(2), latch rd wr(2), latch aba(3), wide wr msg(2) = 6 red → 30 green ✓. Wait wide wr msg: under M_UNLATCH (if(1) for latch test — every access announces), the wide session: ST_W at 0x28 announces, LD_W at 0x28 announces again → "offset 0x28 (len 4)" count = 2, want 1 → red ✓. And `named wr msg` under M_UNLATCH: 18 writes each announce → 18 = want 18 → GREEN (as the row note says, an unlatched arm prints 18 too — by design). OK.
+
+  M_ONELATCH 31/36: red = named wr msg 1, named rd msg 1, named rd srvd 1, latch twooff 1, latch aba 1. Under one whole-arm bit: first announce sets bit; everything after silent. named wr session: 18 writes, only first announces → msg count 1 (want 18) red; named rd session: separate process, first read announces → named rd msg 1 (red), named rd srvd counts "served 0x" → 1 (red); latch twooff: ST IEICR announces (1), ST IEBERR silent → 1, want 2, red; latch aba: A announces, B silent, A silent → 1, want 2, red. But wait — latch sameoff session: ST, ST, LD — first announces once, count 1 = want 1 GREEN; sameoff val: read back 0x0 GREEN. latch rw one: ST announces, LD silent → 1 GREEN. latch rd rd: first read announces → 1 GREEN. latch rd wr: read announces, write silent → 1 GREEN. wide wr msg: ST_W announces "offset 0x28 (len 4)" once, LD_W silent → 1 GREEN. OK consistent with 5 red → 31/36 ✓.
+
+  M_BACKED 32/36: red = ieicr rdawr 0x5a, ieerr rdawr 0x5a, sameoff val (0x5a), wide wr (0x5a5a5a5a). ✓ 4 red. Note `sccerr rdawr` stays 0x0 ✓ (cased arm, write-to-clear). And inword rd etc. survive. But hold on — M_BACKED "member 6, every write (end-span guarded)": stores into pcctwo_reg for every default write. `srvd val` session: ST_W T1CMP (cased arm, stores 0x12345678 normally), LD_BU 0x05 → 0x34 GREEN ✓.
+
+  M_RDKILL 17/36: red = 19 listed. 36-19=17 ✓. The seven of pass 2 + 12 more listed ✓ (latch sameoff — its session now ends in a read → exits → fate row "survived" fails... wait latch sameoff counts MSG; if alive... the session dies at the read → t.count(MSG) would be... the row uses `t.count(MSG) if alive else "n/a"` → "n/a" ≠ 1 → red ✓. sameoff val: val() if alive else fate → "host ..." red ✓.
+
+  M_DIRSWAP 30/36: direction test inverted: writes announce as reads ("unimplemented read from ... served"), reads announce as writes ("unimplemented write to ... declined"). Red: dir wr text (counts "unimplemented write to" from the write session → 0), dir rd text (0), named rd srvd (counts "served 0x" in read session → reads now print the write text → 0), srvd val text (0), wide rd srvd (0), wr declined (the write session prints "served" not "declined" → 0). 6 red → 30 ✓. But ALSO: `srvd val` — the value row at T1CMP: the read at 0x05 still SERVES 0x34 (announce text wrong, but served byte right) → GREEN ✓ consistent (srvd val not in red list). And `alias msg`: write at 0x6a announces "read from offset 0x2a" — count "offset 0x2a" still 1 GREEN ✓. `wide wr msg`: ST_W announces as read: "offset 0x28 (len 4) -- served 0x00"... wait under dirswap the write announce is the read text: "[ pcc2: unimplemented read from offset 0x28 (len 4) -- served 0x%02x ]" with data[0]. For a WRITE, was data filled? For writes, data typically contains the written value in gxemul? Hmm — in gxemul, on MEM_WRITE, idata holds the value; data[] may hold the value too? Actually in gxemul's memory system, `data` is a buffer: for reads the device fills it; for writes, data CONTAINS the value written (and idata is derived from it for LE/BE). Let me check dev_pcc2.c: typical pattern `uint64_t idata = 0; ... if (writeflag == MEM_WRITE) idata = memory_writemax64(cpu, data, len);` So data on the write path contains the written bytes. Under M_DIRSWAP the write at 0x28 announces "offset 0x28 (len 4)" — substring present → count 1 → GREEN ✓ consistent with the table (wide wr msg not red under M_DIRSWAP).
+
+  OK. Now Q2 asks: does each mutant die for the reason claimed? From the consistency checks above, the inlined table is internally consistent with the rows. One more: M_WIDEKILL `if (len != 1) exit(1)` — red: wide wr, wide wr msg, wide rd, wide rd srvd (4). But ALSO: `srvd val` session has ST_W (T1CMP cased — the len!=1 check is in the DEFAULT arm only, so cased word store unaffected) ✓. `t1cmp word rt` cased ✓. `genctl rt` byte ✓. OK 32/36 ✓.
+
+  M_OFFKILL at 0x06: red = inword wr (the 12 writes include 0x06 → exit → fate fails), inword rd ✓. 34/36 ✓. And named wr (18 offsets, no 0x06) GREEN ✓.
+
+  M_WRLATCH (latch SET only on writes): red = latch rd rd (two reads: no bit set → 2 announces, want 1) ✓, latch rd wr (read doesn't set → write announces → 2) ✓. latch sameoff (W,W: first write sets, second silent → 1) GREEN ✓. 34/36 ✓.
+
+  M_ABA (`|=`→`=`): latch aba session: A write: bit was 0 → announce, set warned = bit(A). B write: warn = bit(B) — test `!(warned & bitB)` → warned has A only → announce, warned = bit(B). A again: warned & bitA = 0 → announce → total 3, want 2, red ✓. But ALSO `named wr msg`: 18 different offsets — each tests its bit: warned=0 initially; offset1: announce, warned=bit1; offset2: bit2 not in warned → announce... each announces → 18 GREEN ✓. `latch twooff`: A,B → 2 GREEN ✓. `sameoff val`: A,A: first announce set=A; second: bit A present → silent; read silent; value 0x0 GREEN ✓. OK 35/36 ✓.
+
+  M_SRVD0 (read announce prints 0): red srvd val text only. But `wide rd srvd` counts "(len 4) -- served 0x00" — under M_SRVD0 the announce prints 0 anyway → "served 0x00" present → GREEN ✓ (matches prediction note "wide rd srvd stays: it IS 0x00 there"). `named rd srvd` counts "served 0x" → present GREEN ✓. 35/36 ✓.
+
+  M_BACKED2 (member 6 on latched path only): red = sameoff val only ✓. ieicr rdawr: ST (first, declined even under mutant — mutant stores on LATCHED path), LD → 0x0 GREEN ✓.
+
+  Great — internally consistent. Now the two derived escapes I found need verification against the actual probe + product. Also verify Q1 items in the source. Also check gate list vs probe rows (transcription).
+
+  Another check: the gate's name list — 36 names listed in the diff (lines 657-662): live, devsig chipid, named wr, named wr msg, named rd, named rd msg, named rd srvd, inword wr, inword rd, unnamed wr, unnamed rd, ieicr rdawr, ieerr rdawr, sccerr rdawr, latch sameoff, sameoff val, latch twooff, latch rw one, latch rd rd, latch rd wr, latch aba, alias 0x6a, alias msg, dir wr text, wr declined, dir rd text, srvd val, srvd val text, wide wr, wide wr msg, wide rd, wide rd srvd, genctl rt, t1cmp word rt, put b ctl, put b ctl msg — count: 36 ✓ matches probe rows in order.
+
+  Now, the "rows emitted 36" gate check counts ` ok$` + ` FAIL$` — note the probe's header line ends with spaces (last %s empty → line "...note " — actually "%-60s %s" with note padded to 60 then a space then empty → trailing space, line ends "note<pad> " — doesn't end with " ok" ✓. Also PCC2D_RESULT line ends with "36/36" ✓ no clash. Hmm wait — could any WHY text end with " ok"? why[:60] — e.g., "...see `latch sameoff' (an aggregate count, not a locator)" no. OK.
+
+  One more potential issue: `row()` truncation `why[:60]` — fine.
+
+  The `session()` extraction: `exec(_w[_w.index("def session("):_w.index("\ndef printed")])` — extracts from pcc2_width_probe.py. The width probe must exist in regress/. Check.
+
+  Now Q5 honesty checks I can run: 
+  - mtime of PRETABLE_501b.out vs killtable3 driver.log (prediction before table).
+  - md5 of frozen instrument vs live probe.
+  - The CHANGELOG "23 rows" header staleness (line 685) vs 36-row reality — also line 738: "## The detector (`regress/pcc2_default_probe.py`, 23 rows; gate 14 pins them)" — a whole SECTION header saying 23 rows, and its paragraph describes only the 23 pass-2 rows. The pass-2 section (line 785) and Table 3 section (842) describe the repair. But is there a section documenting the 36-row detector's new rows? The contract docstring covers it. The CHANGELOG section "The detector" remains pass-2's. Hmm — as a historical record with later sections appended, acceptable-ish; but the bold header line 685 "Detector: regress/pcc2_default_probe.py, 23 rows, run by gate 14" now misdescribes what gate 14 runs. Worth naming in Q5. Also check actual CHANGELOG.md on disk matches.
+
+  - The brief's premise 2 says "both announces gain (len %d)". ✓ seen in diff.
+  - Premise: "43 of the 0x40 offsets reach the arm: 18 named-unimplemented, 12 counter interiors, 13 unnamed" — assert in probe: 18+12+13=43 and all distinct ✓. Verify against dev_pcc2.c case labels: offsets 0x00-0x3f minus cased = 43 uncased. The cased ones: CHIPID 0x00? Wait CHIPID=0x00 is cased (devsig reads 0x20). GENCTL 0x02 cased. T1CMP 0x04 (word arm covering 0x04? or 0x04 only with len?). Hmm — how does the switch case word registers? In gxemul dev_pcc2, cases might be `case 0x04:` handling len 4. The in-word bytes 0x05,0x06,0x07 have no case → default. The four counter/compare words: T1CMP 0x04-0x07, T2CMP 0x08-0x0b, T1CNT? 0x0c-0x0f? T2CNT 0x10-0x13? INWORD lists interiors 0x05,0x06,0x07, 0x09,0x0a,0x0b, 0x0d,0x0e,0x0f, 0x11,0x12,0x13 → word bases 0x04,0x08,0x0c,0x10 cased. And 0x00 CHIPID, 0x02 GENCTL cased (0x01, 0x03? — hmm 0x01 and 0x03 are in-word bytes of CHIPID/GENCTL words? CHIPID 0x00 len 1? GENCTL 0x02 len 1? But 0x01, 0x03 are NOT in NAMED18/INWORD/UNNAMED lists! 43 = 64 - 21 cased. Cased offsets: 0x00,0x01?,0x02,0x03?,0x04,0x08,0x0c,0x10 + SCCERR 0x1c + ... let me count from the lists: NAMED18+INWORD12+UNNAMED13 = 43. 64-43 = 21 cased offsets. The cased 21: 0x00,0x01,0x02,0x03 (chipid/genctl bytes? maybe case 0x00 handles len up to 4? In gxemul, the switch is on relative_addr (byte offset); a word read at 0x00 hits case 0x00. A byte read at 0x01 would hit... if no case 0x01 → default. But 0x01 is not in the 43! So there must be cases at 0x01 and 0x03 too, or... hmm. Wait — maybe the switch has cases for each byte of CHIPID/GENCTL? Let me just read dev_pcc2.c. The pass-2 CHANGELOG says "derived from mvme_pcctworeg.h against the 21 labels". So 21 case labels. The probe asserts 43 distinct. Which offsets are cased? 64-43=21: 0x00..0x03 (CHIPID word? or CHIPID+GENCTL+?), 0x04,0x08,0x0c,0x10 (word bases), 0x1c (SCCERR), 0x1d? 0x1e? 0x1f? (SCCERR word?), 0x25? no — 0x25 SCCTXIACK is in NAMED18. Let me enumerate non-listed offsets 0x00-0x3f: listed: NAMED18 = 14,18,19,23,25,28,2a,2b,2c,30,31,32,33,34,36,37,38,3a; INWORD = 05,06,07,09,0a,0b,0d,0e,0f,11,12,13; UNNAMED = 20,21,22,24,26,29,2d,2e,35,39,3b,3c,3d. Total 43. Not listed (cased, 21): 00,01,02,03,04,08,0c,10,14? no 14 is named... 14 is in NAMED18. Not listed: 00,01,02,03,04,08,0c,10,15,16,17,1a,1b,1c,1d,1e,1f,27,2f,3e,3f = count: 00,01,02,03 (4), 04,08,0c,10 (4→8), 15,16,17 (11), 1a,1b (13), 1c,1d,1e,1f (17), 27 (18), 2f (19), 3e,3f (21) ✓ 21 cased. Good arithmetic — matches "21 labels".
+
+  So Q1 verification requires reading dev_pcc2.c. Let me also check the witness dir, the panel dirs for honesty (roster), but that's the record — Q5 asks about CHANGELOG/contract/PRETABLE.
+
+  Also there's `<<PANEL501P3_OWED>>` placeholder at line 885 — the brief has a placeholder token; that's where seats' answers go presumably. Fine.
+
+  Also the DISCLOSURE working set (lines 902-915): "218 0 CHANGELOG.md, 25 0 regress/gate_arm.sh, 20 6 sgi_de_primop_probe.py (pre-existing unrelated), 41 7 dev_pcc2.c, 100 1 ledger.json" — I can verify with git diff --stat in GXEMUL-SEC against 7076134. git diff on uncommitted: `git -C GXEMUL-SEC diff --stat` (working tree vs index/HEAD). HEAD should be 7076134. Can verify. (Read-only git commands are fine — no mutations.)
+
+  Now — the floor question demands: build or derive the edit. My two derived mutants:
+
+  M_WVAL0: in the write announce, replace `(int) idata` with `0`. Sweep analysis over 36 rows:
+  - Any row counting the write announce's VALUE? Rows touching write sessions: named wr (fate), named wr msg (MSG count), inword/unnamed wr (fate), ieicr/ieerr rdawr (value via read-back, not text), latch rows (MSG counts), alias 0x6a (fate), alias msg ("offset 0x2a"), dir wr text ("unimplemented write to"), wr declined ("declined"), wide wr (read-back), wide wr msg ("offset 0x28 (len 4)"), sameoff val (read-back). None anchors the idata value. The string ": 0x5a" appears in no row's counted substring. CONFIRMED 36/36 by derivation. It breaks the property: the announce lies about the value offered (the write side of exactly what M_O1 did on the read side — and M_O1 was MEASURED a 23/23 breach and repaired asymmetrically).
+
+  Actually wait — is it clause-(d)? Clause (d) per the contract seems to be "mutants of the new arm's logic/text" (the repair diff). Yes — one-token edit of the announce. Clause (d) shaped.
+
+  M_STORE1: `if (writeflag == MEM_WRITE && relative_addr == 0x39) d->pcctwo_reg[0x39] = idata;` (byte store at one unnamed offset). Rows: unnamed wr survived ✓; unnamed rd survived ✓; no value row at 0x39; counts unchanged (announce still fires once). 36/36 by derivation. Breaks "writes are DECLINED" at 0x39. Fable-shaped per-offset scoping on the value channel — the repair closed per-offset for FATE (all 43 driven both ways) but not for DISPOSITION (only 0x2a/0x28 named rdawr + wide at 0x28 + 0x05 interior are value-pinned).
+
+  Hmm wait — one more check on M_STORE1: does the store at 0x39 affect any cased behavior? 0x39 unnamed → no. And no row reads 0x39's value. ✓.
+
+  Also a third candidate, weaker: mutant conditioning the latch SET on reads ONLY (set on read, not on write)? latch sameoff (W,W): first write announces (no set), second write announces → 2, want 1 → red. Dies. Fine.
+
+  Fourth: announce "(len %d)" with wrong len (`(int) len` → `(int) (len == 4 ? 1 : len)`)? wide wr msg counts "(len 4)" → 0 → red. Dies.
+
+  Fifth: remove the `(once)` token → no row counts "(once)" → 36/36 sweep, but does it break THE property? The "(once)" house idiom is part of the announce's meaning (signals latch). Borderline — I'd mention it as a trivial text-anchor gap but the property breach is weak. The brief's Q4 wants property-breaking. M_WVAL0 is the strongest (exactly M_O1's shape on the write side — the panel ALREADY judged that shape a breach worth repairing).
+
+  Sixth candidate — the `data[0]` on the END-SPAN path: disclosed no row. Disclosed, skip.
+
+  Seventh: `warned_unimpl` per-instance: filed pcc2latchinst, disclosed.
+
+  Eighth: mutant clearing the latch bit after announcing (announce once, then re-arm... i.e., `d->warned_unimpl &= ~bit` after)? latch sameoff: ST announces, clear; ST announces again → 2 red. Dies.
+
+  Ninth: announce BEFORE setting... order irrelevant.
+
+  Tenth: `1ULL << relative_addr` → `1U << relative_addr` (32-bit): offsets ≥ 32 shift UB/wrap — at 0x20..0x3f, 1U<<32+ is UB (on x86 shifts mod 32 → bit 0..31). Affects offsets ≥0x20: unnamed offsets 0x20..0x3d and named 0x30..0x3a... Rows: unnamed wr (fate — still announces? with 1U<<0x20 → UB, typically bit0 → warned bit0 for offset 0x20; offset 0x21 → bit1... actually mod-32 gives distinct bits per offset 0x20-0x3f → same behavior as 64-bit for the announce counts! All counts same, fate same. Hmm — 1U << (0x20) on x86-64 gcc: undefined but in practice shl mod 32. offset 0x21→bit1? No wait 0x21 mod 32 = 1 → bit 1. So offsets 0x20-0x3f map to bits 0-31 distinctly — counts identical, values identical. Only collision: offset 0x00 (CHIPID, cased) vs 0x20 — different arms. So the UB mutant likely sweeps 36/36 in practice — but it's UB, platform-dependent, and doesn't break the observable property on the test platform. Weak; mention only in passing if at all. Not worth it.
+
+  Eleventh: change the fold `%= PCC2_SIZE` to `%= 0x40`? Same value. `%=` something else → alias rows die. OK.
+
+  Twelfth — the announce for a wide read prints data[0] "first served byte": mutant printing data[len-1]? srvd val text: read at 0x05 len 1 → data[0]=data[len-1] same. wide rd srvd at 0x30 len 4: data[3]=0x00 same as data[0]=0x00 → GREEN. named rd srvd len1 fine. So data[len-1] mutant sweeps?? Breaks "announce names the FIRST served byte"? At len 4 the bytes differ only if the 4 bytes differ — at 0x30 all zero. So data[len-1] passes 36/36. But does it break the property? The announce would name the LAST served byte — a record inaccuracy only observable when bytes differ, disclosed-ish ("the announce names the FIRST served byte of a wide read" — disclosed as the semantics). Mutant violates it silently. Weaker than M_WVAL0 but same family: text/value anchors underspecified for wide. Could name it as a secondary.
+
+  Let me also double-check `srvd val text`'s want: count("served 0x34")==1. Under BASE: the session does ST_W T1CMP then LD_BU 0x05 → one read announce "served 0x34" ✓. Also — does the ST_W at T1CMP announce? T1CMP is CASED → no default announce ✓. But wait — does the cased T1CMP arm have its OWN fatal/announce? No.
+
+  And `wide rd srvd` counts "(len 4) -- served 0x00" — under BASE the read at PRTICR 0x30 len 4: announce "read from offset 0x30 (len 4) -- served 0x00" ✓ count 1.
+
+  And `wide wr msg` counts "offset 0x28 (len 4)": the ST_W announces "write to offset 0x28 (len 4): 0x5a5a5a5a -- declined" → contains "offset 0x28 (len 4)" ✓; the LD_W same offset silenced ✓ count 1.
+
+  Hmm — one more subtle thing on `wide wr`: ST_W at 0x28 — under the fix, does the write announce print idata=0x5a5a5a5a? idata for a 4-byte write BE... memory_writemax64 gives host-order value 0x5a5a5a5a ✓ (not that any row pins it — my point).
+
+  Also check: `(int) len` — len is size_t; on the end-span path for writes? Whatever, values small ✓.
+
+  Q1 sub-question: "for a WRITE is `data` unused by the announce (it prints idata)" ✓ in the diff. "does `(int) len` fit" ✓. "does any row's text anchor break (`offset 0x2a`, `served 0x`, the direction phrases, MSG)" — the new text preserves all: "unimplemented write to offset 0x2a (len 1): 0x5a -- declined. (once)" contains "offset 0x2a" ✓, "unimplemented read from offset 0x30 (len 4) -- served 0x00" contains "served 0x" ✓, MSG "pcc2: unimplemented" ✓.
+
+  Now the memcpy/zero-fill verification — must read dev_pcc2.c. Also DEVINIT zeroing of warned_unimpl. Let me read the file.
+
+  Also should verify the md5 claims with md5sum on the frozen vs live probe, mtimes for PRETABLE vs driver.log, and grep driver.log for the PCC2D_RESULT lines per mutant (12 mutants + BASE × 2 instruments). And gate14_501b.log for "875 checks" / GATE_RC=0. Cheap greps.
+
+  Also verify the tree: GXEMUL-SEC git status/HEAD = 7076134, diff --stat matches disclosure (218/25/41-7/100-1 + sgi unrelated 20/6).
+
+  Also: the probe exec-extracts session() from pcc2_width_probe.py — confirm that file exists in GXEMUL-SEC/regress/ and its md5 a080e2bc claim.
+
+  Given the operational rule (don't run gates; single-mutant builds in own temp dir are encouraged), should I attempt to MEASURE M_WVAL0 and M_STORE1? Building gxemul (SEC tree) on this Windows box — is there a prebuilt binary? The table-3 used "scratch clone of build/" — there is GXEMUL-SEC/build? Let me check what's in GXEMUL-SEC (the listing shows battery/, demos/, doc/, experiments/, man/, regress/, src/, test/ and "18 more"). There may be a build/ inside GXEMUL-SEC. If a configured build tree exists, rebuilding one file + running the probe twice is feasible IF the toolchain exists on this machine (gcc in Git Bash? unlikely; the earlier work was via WSL presumably). I can check `which gcc python3` and whether WSL is available (`wsl -l`). Actually the Bash tool here is Git Bash; WSL might be invocable via `wsl.exe`. Hmm — but do I want to go there? The brief says naming a measurement is worth more than a timeout. Timebox: quick check for toolchain; if not trivially available, derive + name.
+
+  Actually wait — am I even a seat? The user (operator) asked me to review it adversarially exactly as the Questions/Review-asks section directs, end with GO/NO-GO/GO-WITH-CHANGES. So my deliverable: a pass-3 seat answer, verdict line first (the brief demands VERDICT LINE FIRST; the user says end with the verdict — user instruction wins on placement: end with it; I can still lead with findings. Actually the user said "End with GO / NO-GO / GO-WITH-CHANGES" — so the verdict goes at the END. The brief says verdict line first. Conflict → user instruction is explicit: end with it. I'll do findings then verdict at end.)
+
+  Plan of action:
+  1. Read GXEMUL-SEC/src/devices/dev_pcc2.c — the handler region (find the DEVICE_ACCESS(pcc2), fold, memcpy, zero-fill/end-span, default arm) + DEVINIT.
+  2. Read GXEMUL-SEC/regress/pcc2_default_probe.py fully (compare to inline; check row names/anchors; check exec extraction).
+  3. Check artifacts: killtable3 driver.log greps, PRETABLE_501b.out mtime vs driver.log mtime, md5s, gate14_501b.log.
+  4. git -C GXEMUL-SEC status/diff --stat vs 7076134 (read-only).
+  5. Check CHANGELOG.md block as it stands (the 23-rows header staleness).
+  6. Derive the two escapes rigorously; check toolchain availability for a possible measurement; if cheap, measure in a temp dir (only if a built gxemul exists or build is fast — else name the measurement).
+
+  Given the volume, I could delegate, but I need the details myself for the verdict; the key file reads are targeted. Let me do it directly but efficiently — parallel greps/reads.
+
+  First round of parallel calls:
+  - Grep for "warned_unimpl" in GXEMUL-SEC/src/devices/dev_pcc2.c (with context) → finds arm + DEVINIT.
+  - Read the default arm region: need line numbers — grep will give them.
+  - Grep for "%= PCC2_SIZE" or "PCC2_SIZE" in dev_pcc2.c.
+  - Read GXEMUL-SEC/regress/pcc2_default_probe.py (full ~200 lines).
+  - Bash: ls GXEMUL-SEC/regress/artifacts/pcc2defaultkill/killtable3_20260905/ and md5sum probes, stat mtimes.
+  - Bash: git -C GXEMUL-SEC log --oneline -1; git -C GXEMUL-SEC diff --stat.
+  - Grep CHANGELOG.md for "23 rows".
+
+  Let me fire these.
+
+• I've read the full brief. Now I'll verify its premises against the actual tree under review (`GXEMUL-SEC/`), as its QUESTIONS section directs.
+
+• Now read the handler region 414-500 and the default arm 660-730, plus the header comment 60-150, to verify Q1 (data[0] on memcpy path and zero-fill path, write path data usage).The product arm matches the inlined diff exactly. Key Q1 findings:
+
+  - Fold `relative_addr %= PCC2_SIZE` at line 420, first statement ✓ (shift 0..63 on uint64_t ✓).
+  - READ path: if `relative_addr + len <= PCC2_SIZE`: memcpy fills data; else memset(data, 0, len) — so on the end-span path data[0] is 0x00, and that IS what the guest receives (the response buffer data is zero-filled → guest gets zeros) ✓ "truthfully 0x00" confirmed: the announce prints data[0] which equals the served byte in both paths ✓.
+  - WRITE path: `idata = memory_readmax64(cpu, data, len)` — data holds the written bytes; the announce prints idata, data[0] unused ✓.
+  - `(int) len` — len is size_t, ≤ 8 presumably ✓.
+  - DEVINIT memsets the struct → warned_unimpl zeroed ✓.
+  - Text anchors: "offset 0x%x (len %d)" preserves "offset 0x2a" substring ✓; "served 0x%02x" preserves "served 0x" ✓; "unimplemented write to" / "unimplemented read from" ✓; MSG "pcc2: unimplemented" ✓.
+
+  Now the end-span READ nuance: the announce in the default arm prints data[0] = 0x00 on the end-span path — but there is ALSO a separate #119 fatal ("read 0x%x+%i beyond reg space... zero-filled") printed once (static int warned, process-wide). No row drives an end-span read — disclosed ✓ (matches DISCLOSED line).
+
+  Wait — one more consideration for Q1: "is data[0] always the byte the guest received". On the memcpy path yes (memcpy filled data before the switch; between the memcpy and the announce, can the tick fire and rewrite? The announce prints data[0], not the array → immune to the tick ✓ that was the codex fix).
+
+  Note: for a WRITE at an end-span offset (0x3d len 4): the default arm write announce prints idata = memory_readmax64(data, len=4) — the value the guest tried to write. Fine. Write side has no end-span memset — data is the input buffer, filled by the memory subsystem with the guest's bytes ✓.
+
+  Now the detector: read the actual probe file to confirm it matches the inlined version (36 rows, anchors).
+
+• The product arm matches the inlined diff. Now the detector, gate section, artifacts, and the record claims.7076134 pcc2widthkills passes 5-13 + the 2026-09-04 fix review: the fix approved block by block, the detector 190 -> 251 rows, pass 14 OWED (row stays open)
+ M CHANGELOG.md
+ M regress/gate_arm.sh
+ M regress/sgi_de_primop_probe.py
+ M src/devices/dev_pcc2.c
+ M tools/pipeline/ledger.json
+?? _scratchpad/
+?? regress/artifacts/pcc2defaultkill/killtable3_20260905/
+?? regress/artifacts/pcc2defaultkill/killtable_20260905/
+?? regress/artifacts/pcc2defaultkill/pass2_seats/
+?? regress/artifacts/pcc2defaultkill/witness_20260905/detector_fixed_501.out
+?? regress/artifacts/pcc2defaultkill/witness_20260905/witness_fixed_501.out
+?? regress/pcc2_default_probe.py
+---DIFFSTAT---
+ CHANGELOG.md                   | 218 +++++++++++++++++++++++++++++++++++++++++
+ regress/gate_arm.sh            |  25 +++++
+ regress/sgi_de_primop_probe.py |  26 +++--
+ src/devices/dev_pcc2.c         |  48 +++++++--
+ tools/pipeline/ledger.json     | 101 ++++++++++++++++++-
+ 5 files changed, 404 insertions(+), 14 deletions(-)
+
+
+• Tree confirmed: HEAD = 7076134, uncommitted changes match the DISCLOSURE list (218 CHANGELOG, 25 gate_arm, sgi_de pre-existing, dev_pcc2.c, ledger.json, plus untracked artifacts + probe). Diffstat dev_pcc2.c shows 48 changed lines vs disclosure's "41 7" (41+7=48 ✓). sgi_de 26 vs "20 6" (26 ✓). gate 25 ✓. CHANGELOG 218 ✓. ledger 101 vs "100 1" ✓.
+
+  The probe matches the inlined detector (spot-checked rows 100-182 all match: sameoff val, latch rows, srvd val rows, wide rows, put b ctl). I read lines 100-182; the inlined brief showed lines up to ~178 equivalent. Row names: longest is "t1cmp word rt" (13), "put b ctl msg" (13), "devsig chipid" (13), "srvd val text" (13), "named rd srvd" (13), "latch sameoff" (13), "wide rd srvd" (12), "sccerr rdawr" (12) — all ≤ 14 ✓.
+
+  Critical confirmation for my escape #1 (M_WVAL0): scanning all 36 rows — the write-announce VALUE (idata) is indeed anchored by NO row:
+  - dir wr text counts "unimplemented write to" ✓ (phrase only)
+  - wr declined counts "declined" ✓
+  - wide wr msg counts "offset 0x28 (len 4)" — stops before ": 0x..." ✓
+  - alias msg counts "offset 0x2a" ✓
+  - named wr msg counts MSG ✓
+  So `idata → 0` in the write announce prints ": 0x0 -- declined" everywhere; every count unchanged. 36/36. CONFIRMED by reading the actual probe.
+
+  And escape #2 (M_STORE1, backed store at one unnamed offset, e.g. 0x39): rows at unnamed offsets are fate-only (unnamed wr, unnamed rd). The only VALUE rows are at 0x2a (ieicr rdawr, sameoff val), 0x28 (ieerr rdawr, wide wr), 0x1c (sccerr control — cased), 0x05 (srvd val — T1CMP interior), 0x00/0x02/0x04 (cased controls). A store at 0x39 (SPEED's second byte, unnamed) changes no row. 36/36. CONFIRMED by the row list.
+
+  Hmm wait — one wrinkle for escape #2: is a store at 0x39 a "clause-(d) mutant"? It's a member-6-shaped edit scoped per offset. Fable's M_OFFKILL (re-kill at one unsampled offset) was accepted as exactly this shape — per-offset scoping. The repair drove all 43 offsets for FATE but disposition/value is pinned at only 5 offsets (0x2a, 0x28, 0x05 via srvd val, plus... wide wr at 0x28). So the disposition channel has per-offset holes. Also note: even at INWORD offsets — a store at 0x06 (T1CMP byte 2)? srvd val only checks 0x05. A store at 0x06: no value row → sweep. But careful: storing at 0x06 changes pcctwo_reg[0x06]; does any row read 0x06? srvd val reads 0x05 only. inword rd is fate-only. ✓ sweep.
+
+  Actually — wait. For the store at 0x06 case: `srvd val`'s session does ST_W T1CMP (writes 0x12345678 into 0x04..0x07 via the cased arm), then LD_BU 0x05. A mutant storing at 0x06 on the default arm doesn't affect 0x05. ✓.
+
+  Now, also check `named rd srvd` — 18 counts of "served 0x". Under M_WRLATCH (set-on-write only): the named rd session is reads-only at fresh offsets → each announces → 18 ✓ green (consistent with table: M_WRLATCH red = only latch rd rd, latch rd wr ✓).
+
+  Now verify the artifacts/logs: killtable3 driver.log scores, PRETABLE mtime vs driver.log, md5s of frozen vs live instruments, gate14_501b.log, old23 instrument. Let me grep the driver.log for PCC2D_RESULT and check the directory listing + md5 + mtimes.
+
+• Tree, diffstat, and probe all match the brief. Now checking the measurement logs and the record-honesty claims (md5s, mtimes, gate output).BASE.old23.out
+BASE.out
+M_ABA.old23.out
+M_ABA.out
+M_BACKED.out
+M_BACKED2.old23.out
+M_BACKED2.out
+M_DIRSWAP.out
+M_EXIT.out
+M_OFFKILL.old23.out
+M_OFFKILL.out
+M_ONELATCH.out
+M_RDKILL.out
+M_SRVD0.old23.out
+M_SRVD0.out
+M_UNLATCH.out
+M_WIDEKILL.old23.out
+M_WIDEKILL.out
+M_WRLATCH.old23.out
+M_WRLATCH.out
+PRETABLE_501b.out
+build_BASE.log
+build_M_ABA.log
+build_M_BACKED.log
+build_M_BACKED2.log
+build_M_DIRSWAP.log
+build_M_EXIT.log
+build_M_OFFKILL.log
+build_M_ONELATCH.log
+build_M_RDKILL.log
+build_M_SRVD0.log
+build_M_UNLATCH.log
+build_M_WIDEKILL.log
+build_M_WRLATCH.log
+build_restore.log
+driver.log
+frozen_probe.py
+gate14_501b.log
+killdk501b.asrun.sh
+old23
+pcc2_width_probe.py
+run1_partial_quoting
+---MD5---
+10737375f192f22c7bae8d1efb9d54c1 *killtable3_20260905/frozen_probe.py
+a96b8bcfe3b9ffc38c959f231d7b534a *killtable3_20260905/old23/frozen_probe.py
+a96b8bcfe3b9ffc38c959f231d7b534a *killtable_20260905/frozen_probe.py
+      1 [07:26:10]   M_DIRSWAP [dir wr text 0, dir rd text 0, named rd srvd 0, srvd val text 0, wide rd srvd 0, wr declined 0]: PCC2D_RESULT=30/36
+      1 [07:23:17]   M_RDKILL [the seven of pass 2 + latch sameoff (its session now reads), sameoff val, latch rd rd, latch rd wr, srvd val x2, wide wr x2, wide rd x2, inword rd, unnamed rd -- nineteen]: PCC2D_RESULT=17/36
+      1 [07:20:42]   M_BACKED [ieicr rdawr 0x5a, ieerr rdawr 0x5a, sameoff val 0x5a, wide wr 0x5a5a5a5a; sccerr rdawr stays 0x0]: PCC2D_RESULT=32/36
+      1 [07:17:54]   M_ONELATCH [named wr msg 1, named rd msg 1, named rd srvd 1, latch twooff 1, latch aba 1]: PCC2D_RESULT=31/36
+      1 [07:15:08]   M_UNLATCH [latch sameoff 2, latch rw one 2, latch rd rd 2, latch rd wr 2, latch aba 3, wide wr msg 2]: PCC2D_RESULT=30/36
+      1 [07:12:22]   M_EXIT [29 red: the 16 of pass 2 + the 13 new rows -- every survival/count/value row; live, devsig, sccerr rdawr, genctl, t1cmp, put b x2 stay]: PCC2D_RESULT=7/36
+      1 [07:10:01]   M_ABA.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [07:08:13]   M_ABA [latch aba 3 -- the or-assign made a plain assign forgets earlier bits (codex)]: PCC2D_RESULT=35/36
+      1 [07:05:26]   M_BACKED2.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [07:03:38]   M_BACKED2 [sameoff val 0x5a -- member 6 exempting the first write per offset (Opus M_O2)]: PCC2D_RESULT=35/36
+      1 [07:00:52]   M_SRVD0.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [06:59:03]   M_SRVD0 [srvd val text 0 -- the read announce prints 0 (Opus M_O1)]: PCC2D_RESULT=35/36
+      1 [06:56:16]   M_OFFKILL.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [06:54:28]   M_OFFKILL [inword wr, inword rd: host exit1 at 0x06 -- a re-kill at an offset the 23 rows never drove (Fable)]: PCC2D_RESULT=34/36
+      1 [06:51:43]   M_WIDEKILL.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [06:49:55]   M_WIDEKILL [wide wr, wide wr msg (n/a), wide rd, wide rd srvd (n/a): host exit1 -- the len-not-1 re-kill (grok B)]: PCC2D_RESULT=32/36
+      1 [06:47:08]   M_WRLATCH.old23 [pass-2 instrument: 23/23 owed = the measured breach]: PCC2D_RESULT=23/23
+      1 [06:45:19]   M_WRLATCH [latch rd rd 2, latch rd wr 2 -- the latch SET conditioned on writes (grok A)]: PCC2D_RESULT=34/36
+      1 [06:42:32]   BASE.old23 [CONTROL, pass-2 instrument]: PCC2D_RESULT=23/23
+      1 [06:40:44]   BASE [CONTROL]: PCC2D_RESULT=36/36
+---MTIMES---
+2026-09-05 06:25:42.978522000 -0500 killtable3_20260905/PRETABLE_501b.out
+2026-09-05 07:26:33.709097100 -0500 killtable3_20260905/driver.log
+
+
+• Good — measurements verified so far:
+
+  - md5: live probe = frozen repaired instrument (10737375...) ✓ — wait, the md5sum output shows killtable3 frozen_probe.py = 10737375f192f22c7bae8d1efb9d54c1 and old23 = a96b8bcfe3b9ffc38c959f231d7b534a = killtable_20260905/frozen_probe.py ✓. But my md5sum of ../../regress/pcc2_default_probe.py didn't print! The command was `md5sum killtable3_20260905/frozen_probe.py ../../regress/pcc2_default_probe.py killtable3_20260905/old23/frozen_probe.py` — from `regress/artifacts/pcc2defaultkill`, `../../regress/pcc2_default_probe.py` resolves to `regress/artifacts/pcc2defaultkill/../../regress/pcc2_default_probe.py` = `regress/regress/pcc2_default_probe.py` — wrong path! I was already inside regress/artifacts/pcc2defaultkill, so ../../regress is wrong. It should be ../../pcc2_default_probe.py. The 2>/dev/null swallowed the error. Need to re-check that the LIVE probe md5 == frozen 10737375.
+
+  - driver.log scores all match Table 3 exactly: BASE 36/36, M_WRLATCH 34/36, M_WIDEKILL 32/36, M_OFFKILL 34/36, M_SRVD0 35/36, M_BACKED2 35/36, M_ABA 35/36, M_EXIT 7/36, M_UNLATCH 30/36, M_ONELATCH 31/36, M_BACKED 32/36, M_RDKILL 17/36, M_DIRSWAP 30/36; old23 mutants all 23/23 ✓. Timestamps 06:40-07:26 (run 2 = 06:37-07:26 per brief ✓ — first result 06:40, last 07:26 ✓). PRETABLE mtime 06:25:42 < driver run ✓ (predictions before the table).
+
+  Still to check:
+  1. Live probe md5 (fix path).
+  2. gate14_501b.log: 875 checks, GATE_RC=0, 36 emitted/green, 251 width rows.
+  3. The per-mutant red rows in driver.log vs the table's claimed red sets — spot check a couple (the bracketed text after each mutant name seems to list them; e.g. M_BACKED2 "sameoff val 0x5a", M_ABA "latch aba 3"). Those brackets are the driver's own annotations, presumably from the actual PCC2D_RED lines. Let me grep PCC2D_RED lines from the .out files to verify red SETS match, not just scores. Q2 demands "does each die for the reason claimed" — I derived consistency above; the .out files contain the actual PCC2D_RED sets. Cheap to check.
+  4. The gate_arm.sh section on disk matches the inline diff (already saw the diff; git diff shows 25 lines added — inline shows the section; fine, maybe quick grep for the name list).
+  5. CHANGELOG.md on disk: the "23 rows" header sentence and the stale "the register array's default, not a computed value" in the design section — verify presence, and check whether a later section corrects it (the brief's inlined CHANGELOG block shows the pass-2 section does acknowledge it). Q5.
+  6. The width probe md5 a080e2bc (helper the probe exec-extracts).
+  7. Whether there's a build available to measure my derived mutants — check for a built gxemul binary in GXEMUL-SEC (build/?) and toolchain. The operational rule says building/running a single detector or mutant in my own temp dir is fine and encouraged. If a build tree exists with the binary, measuring M_WRLATCH-style is straightforward: copy build tree? Actually the probe just needs a gxemul binary. If GXEMUL-SEC has build/gxemul built from the current (repaired) source, I could: (a) run the probe on it to sanity-check 36/36; (b) apply my M_WVAL0 one-token edit to a COPY... but building requires a configured tree + compiler. The operator ran things in WSL probably. My Bash is Git Bash — check `which gcc python3` and if `wsl` exists. Actually — careful: the operational rule in the brief is addressed to panel seats and warns against running gates because of a concurrent operator run. Running a probe against an existing binary in my own temp dir is explicitly "fine and encouraged". But do I have a binary? Let me check GXEMUL-SEC for a built gxemul. Also this is Windows; the binary would be a Linux ELF built under WSL — Git Bash can't run it; I'd need wsl.exe. Let me check quickly, but don't sink time: derivation stands on its own; measurement would strengthen. Time-box it.
+
+  Let me fire the next batch:
+  - md5sum of the live probe (correct path) + width probe.
+  - grep PCC2D_RED from each .out in killtable3.
+  - tail of gate14_501b.log + grep for the emitted/green lines and GATE_RC.
+  - grep CHANGELOG.md for "23 rows" and "default, not a computed value".
+  - ls GXEMUL-SEC for build dir / binary; which wsl gcc python3.10737375f192f22c7bae8d1efb9d54c1 *pcc2_default_probe.py
+a080e2bcdc6b4990d42786da17344f95 *pcc2_width_probe.py
+a080e2bcdc6b4990d42786da17344f95 *artifacts/pcc2defaultkill/killtable3_20260905/pcc2_width_probe.py
+---REDSETS---
+BASE: PCC2D_RESULT=36/36 RED=[]
+M_WRLATCH: PCC2D_RESULT=34/36 RED=[latch rd rd,latch rd wr]
+M_WIDEKILL: PCC2D_RESULT=32/36 RED=[wide wr,wide wr msg,wide rd,wide rd srvd]
+M_OFFKILL: PCC2D_RESULT=34/36 RED=[inword wr,inword rd]
+M_SRVD0: PCC2D_RESULT=35/36 RED=[srvd val text]
+M_BACKED2: PCC2D_RESULT=35/36 RED=[sameoff val]
+M_ABA: PCC2D_RESULT=35/36 RED=[latch aba]
+M_EXIT: PCC2D_RESULT=7/36 RED=[named wr,named wr msg,named rd,named rd msg,named rd srvd,inword wr,inword rd,unnamed wr,unnamed rd,ieicr rdawr,ieerr rdawr,latch sameoff,sameoff val,latch twooff,latch rw one,latch rd rd,latch rd wr,latch aba,alias 0x6a,alias msg,dir wr text,wr declined,dir rd text,srvd val,srvd val text,wide wr,wide wr msg,wide rd,wide rd srvd]
+M_UNLATCH: PCC2D_RESULT=30/36 RED=[latch sameoff,latch rw one,latch rd rd,latch rd wr,latch aba,wide wr msg]
+M_ONELATCH: PCC2D_RESULT=31/36 RED=[named wr msg,named rd msg,named rd srvd,latch twooff,latch aba]
+M_BACKED: PCC2D_RESULT=32/36 RED=[ieicr rdawr,ieerr rdawr,sameoff val,wide wr]
+M_RDKILL: PCC2D_RESULT=17/36 RED=[named rd,named rd msg,named rd srvd,inword rd,unnamed rd,ieicr rdawr,ieerr rdawr,latch sameoff,sameoff val,latch rw one,latch rd rd,latch rd wr,dir rd text,srvd val,srvd val text,wide wr,wide wr msg,wide rd,wide rd srvd]
+M_DIRSWAP: PCC2D_RESULT=30/36 RED=[named rd srvd,dir wr text,wr declined,dir rd text,srvd val text,wide rd srvd]
+  ok   pcc2 width rows emitted                              251
+  ok   pcc2 width rows green                                251
+  ok   pcc2 width rows red                                  0
+  ok   pcc2 default rows emitted                            36
+  ok   pcc2 default rows green                              36
+  ok   pcc2 default rows red                                0
+gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (857 checks)
+GATE_RC=0
+---CHANGELOG-CHECK---
+6:`regress/pcc2_default_probe.py`, 23 rows, run by gate 14.  Witness: rung 3, measured before the edit.**
+59:## The detector (`regress/pcc2_default_probe.py`, 23 rows; gate 14 pins them)
+92:ZERO of 23 rows while the probe said DONE (`killtable_20260905/gate14_501_FAIL_rowformat.log`, 25 of 844 checks
+123:| seat | mutant | why 23 rows could not see it |
+169:| mutant | shape | repaired instrument (36 rows) | red rows | pass-2 instrument (23 rows) |
+7717:**MEASURED: 23 rows, 0 failures. A clean sweep**, because every other row leaves the ring empty
+17311:  survived all 23 rows, because every flush-scope row drove a SUPER command except one, and that
+17638:**Verified:** differential **23 rows / 0 failures**; against the pre-change file
+138:from the served one.  `"the array's default, NOT a computed value"` was therefore also wrong for those twelve.
+/c/Users/User00/AppData/Local/Microsoft/WindowsApps/python3
+/c/WINDOWS/system32/wsl.exe
+---
+regress/gate_arm.sh
+regress/pcc2_width_probe.py
+Excellent findings:
+
+  1. Live probe md5 = 10737375... == frozen repaired instrument ✓. Width probe a080e2bc ✓ both live and frozen.
+
+  2. All 12 red sets match Table 3 EXACTLY — including M_EXIT's 29 reds, M_RDKILL's 19, M_DIRSWAP's 6. ✓ Q2 measurement-backed.
+
+  3. gate14_501b.log: "pcc2 default rows emitted 36 / green 36 / red 0", width 251/251, GATE_RC=0. BUT — the brief says "875 checks ok, 0 FAIL" (line 880) and the pass-3 header says gate14 run had... wait the log says "PASS (857 checks)". The brief line 880 says "875 checks ok, 0 FAIL, GATE_RC=0". 857 ≠ 875! Line 880: "`pcc2 default rows emitted 36 / green 36 / red 0`; `pcc2 width rows emitted 251 / green 251 / red 0`; 875 checks ok, 0 FAIL, `GATE_RC=0`." The actual log says "PASS (857 checks)". Discrepancy: 875 vs 857. Hmm — is that a transcription error in the brief/CHANGELOG? Let me grep the actual gate log more carefully — maybe there's a "875 checks ok" line elsewhere in the log (the gate may print a total differently). The line I got is "gate 14: ARM/Thumb flags ... PASS (857 checks)". The brief also quotes for the pass-2 gate: "gate 14: ARM/Thumb flags: PASS (844 checks)" (line 781) and the FAIL log had "25 of 844 checks red". Now with +13 rows and 3 aggregate checks (emitted/green/red = 3 more checks than pass 2's section which had... pass-2 section had "rows emitted 23, rows green 23" = 2 aggregate checks + 23 row checks + 1 completion = 26; pass-3 has 36 row checks + 3 aggregates + 1 completion = 40; 844 - 26 + 40 = 858? Hmm: 844 + 14 = 858, not 857. Or maybe "pcc2 default probe completed" was already counted... 844 included 23 row checks + 2 aggregates + 1 completion = 26 checks; new section = 36 + 3 + 1 = 40; 844 - 26 + 40 = 858. But actual is 857. Hmm, maybe pass-2 section had 27 checks (also "rows red"?). The pass-2 gate diff isn't shown. Whatever — the headline: the brief says 875, the log says 857. Both the brief's Gate-14 section (line 880) and possibly the CHANGELOG repeat 875. Let me check the CHANGELOG on disk and the gate log for "875" vs "857". That's a concrete record-honesty item for Q5: a count without a deriver, or a transcription slip. Actually wait — maybe the 875 refers to something else: "875 checks ok, 0 FAIL" — maybe the gate log has a final tally "checks ok: 875"? Let me grep the log for 875 and 857.
+
+  Also the header of the brief (line 136-137) says "Gate 14 (`killtable3_20260905/gate14_501b.log`, run alone): pcc2 default rows emitted 36, green 36; pcc2 width rows emitted 251, green 251; GATE_RC=0" — no check count there ✓. The 875 appears only at line 880. And the pass-2 quote was 844. Need to verify what the log actually says.
+
+  4. CHANGELOG on disk line 6: "23 rows, run by gate 14" — stale header (the detector is now 36 rows). Line 59: "## The detector (regress/pcc2_default_probe.py, 23 rows; gate 14 pins them)" — stale section header. These are real Q5 items: the CHANGELOG's summary block and detector section still describe the pass-2 instrument. Now — is that dishonest or historical? The CHANGELOG block includes later sections (Pass 2, Table 3, Gate 14 on repaired instrument) that describe the 36-row instrument. But the bold header at line 6 — which is the round's summary — says "Detector: regress/pcc2_default_probe.py, 23 rows, run by gate 14" as the CURRENT state. After the repair, gate 14 runs the 36-row probe. A reader of the summary gets the wrong denominator. Worth naming under Q5 (minor record nit, fixable in one token... well, "23" → "36").
+
+  Also the design section still says "it is the register array's default, not a computed value" — let me check if that sentence is still in CHANGELOG on disk (grep found only line 138's correction "wrong for those twelve"; my grep for "default, not a computed value" returned... wait the grep output: lines listed are for the patterns in order: first grep "23 rows" → lines 6, 59, 92, 123, 169, 7717, 17311, 17638; second grep "default, not a computed value" → line 138?? No — the output shows "138:from the served one. `"the array's default, NOT a computed value"` was therefore also wrong for those twelve." under... hmm, the greps ran sequentially: `grep -n "23 rows"` (8 hits), then `grep -n "default, not a computed value"` — output shows only one line starting with 138 which contains "default, NOT a computed value" — but that was the third grep pattern "wrong for those twelve"! The second grep found NOTHING (no output), and the third found line 138. Wait, but line 138 contains `"the array's default, NOT a computed value"` — the second pattern was "default, not a computed value" (lowercase "not"). Line 138 has "NOT" uppercase → no match for pattern 2; line 138 matches pattern 3 "wrong for those twelve" ✓. So the CHANGELOG on disk does NOT contain the stale "default, not a computed value" sentence?! But the brief's inlined CHANGELOG block (line 708-709 of the brief) shows: "READ: keep the byte the memcpy served and SAY it is served -- it is the register array's default, not a computed value, so this is not the option set's member 4..." Hmm wait — let me re-read the brief line 708: "READ: keep the byte the memcpy served and SAY it is served -- it is the register array's default, not a computed value, so this is not the option set's member 4 and a bounded announce about it is not a wrong record." That was in the inlined CHANGELOG block "## The design (pass 1...)". But grep on disk found no "default, not a computed value". So the disk CHANGELOG differs from the brief's inlined "as it stands" block! Either the brief inlined an older version, or the disk was changed after the brief was written. Let me look at the actual CHANGELOG section around the design paragraph to see what it says now. If the disk version already corrected the design sentence, then the brief's inline is stale (minor; the brief is a snapshot). Actually the brief said "THE CHANGELOG BLOCK (as it stands)" — if disk differs, that's a small record discrepancy worth noting but the direction matters: if disk is BETTER (corrected), fine.
+
+  Wait, actually — maybe the sentence was edited. Let me read the CHANGELOG top ~200 lines to see the current block, verify the "23 rows" staleness, the 875 claim, and the design sentence.
+
+  5. Toolchain: python3 exists (Windows Store python), wsl.exe exists. No gcc in Git Bash. There is NO build/ dir inside GXEMUL-SEC (ls -d build* returned nothing). So no prebuilt binary in the SEC tree, and no native compiler here. Measuring would require WSL + a full build of the SEC tree. Is WSL functional and does it have the tree mounted? The past operator runs were on a Linux-ish env (timestamps -0500 with GNU stat). `wsl.exe` exists. I could try `wsl ls /mnt/c/...`. Time-box: one quick probe. Actually — the brief says: "Building and running a single detector or mutant in your own temp directory is fine and encouraged". If WSL works and has gcc, building gxemul is a `./configure && make` — could take several minutes but feasible. However the operational rule also warns a gate takes "minutes -- longer than your response budget". A build is similar. Hmm. Let me do a quick WSL sanity check; if it's instant, consider a build of just the mutant. But honestly — building gxemul from scratch in WSL could take 5-15 min; the probe then takes ~1 min per mutant (36 sessions... actually the probe spawns many gxemul sessions; table-3 ran ~49 min for 20 invocations ≈ 2.5 min each). Two mutants × (build + probe) — feasible but long. The brief explicitly says naming a measurement is worth more than a timeout. My two derived escapes are airtight by row-list reading (I read every row's anchor). I'll state them as DERIVED, name the exact measurement, and note the derivation is checkable. Let me still do a 5-second WSL check to see if measurement is even reachable — if yes and cheap (existing built binary somewhere from table 3?) — wait, table 3 used a "scratch clone of build/" — where is build/? The gate runs probes against "$PMAX" — some binary path. Let me check gate_arm.sh for PMAX definition... Actually the probe default BIN is "build/gxemul". The operator must have a build somewhere — maybe in WSL's filesystem, not visible here. Quick check: does `wsl -e ls` work? Let me try. If WSL is there with the tree, a mutant build is one `make` in a copied tree... still minutes. I'll check but lean toward deriving.
+
+  Also remaining verifications:
+  - gate log 875 vs 857 discrepancy → grep the gate log.
+  - The CHANGELOG disk vs inline (design sentence, 23-rows staleness, 875).
+  - The `alias 0x6a` row text on disk probe says "the real part's fold too" ✓ (corrected per disposition 9).
+  - Check the width-probe helper exec extraction: probe line ~71: `exec(_w[_w.index("def session("):_w.index("\ndef printed")])` — wait the live probe I read from line 100; lines 1-99 I saw in the brief inline (they matched the diff). Fine.
+  - Roster claims (pass2_seats dir exists ✓ untracked). The brief says kimi stalled and was re-fired — record; can't verify cheaply, but pass2_seats/ exists. OK.
+  - "the two-part clearance" (line 878) — build/ had passed; not checkable here, skip.
+  - One more Q2 nuance: the brief's table 3 claim "Every one of the twelve predictions was EXACT -- score and red set". PRETABLE predicted M_RDKILL 17/36 with nineteen named ✓ (measured red set has 19 entries: count them in RED= above: named rd, named rd msg, named rd srvd, inword rd, unnamed rd, ieicr rdawr, ieerr rdawr, latch sameoff, sameoff val, latch rw one, latch rd rd, latch rd wr, dir rd text, srvd val, srvd val text, wide wr, wide wr msg, wide rd, wide rd srvd = 19 ✓ and PRETABLE's list matches? PRETABLE listed: "the seven of pass 2 (named rd, named rd msg, named rd srvd, dir rd text, latch rw one, ieicr rdawr, ieerr rdawr) + latch sameoff, sameoff val, latch rd rd, latch rd wr, srvd val, srvd val text, wide wr, wide wr msg, wide rd, wide rd srvd, inword rd, unnamed rd -- nineteen" ✓ exact. M_EXIT: PRETABLE said 29 red ✓ measured 29 ✓. M_DIRSWAP: PRETABLE: dir wr text 0, dir rd text 0, named rd srvd 0, srvd val text 0, wide rd srvd 0, wr declined 0 ✓ measured exactly ✓. M_BACKED: ieicr rdawr 0x5a, ieerr rdawr 0x5a, sameoff val 0x5a, wide wr 0x5a5a5a5a ✓. M_UNLATCH: 6 ✓. M_ONELATCH: 5 ✓. M_WIDEKILL: 4 ✓. M_OFFKILL: 2 ✓. M_WRLATCH: 2 ✓. M_SRVD0: 1 ✓. M_BACKED2: 1 ✓. M_ABA: 1 ✓. All twelve exact ✓ — claim verified against the .out files.
+
+  So Q2's "die for the reason claimed" is measurement-backed for the twelve. My job now: Q3/Q4 escapes. Let me also double-check my M_WVAL0 against M_DIRSWAP's behavior: under dirswap, write announces become read text — "served 0x..." — wait under M_DIRSWAP the write session prints "read from offset ... -- served 0x%02x" with data[0]! For the write at PRTICR (dir wr text session), data contains the written bytes (0x5a) — served 0x5a?? Doesn't matter for counts.
+
+  For M_WVAL0 (`(int) idata` → `0` in the write announce): every row's anchor verified above — none counts the value after ": 0x". One more paranoid check: does any row count ": 0x" or "-- declined." with the value? "wr declined" counts "declined" — present ✓. Nothing else. And `wide wr msg` anchor "offset 0x28 (len 4)" — present before the value ✓. So 36/36. AIRTIGHT by derivation. And this is precisely M_O1's shape (announce prints wrong/constant value) on the write side — the class the repair claimed to close ("the read announce printing a wrong or constant byte") — closed for reads, left open for writes. The contract's own wording only covers the read announce. Strong finding.
+
+  M_STORE1 (per-offset member 6 at an unnamed/interior offset not value-pinned): rows at 0x39: unnamed wr (fate), unnamed rd (fate). No rdawr at any unnamed offset. 36/36. AIRTIGHT by derivation. Same shape as Fable's accepted escape (per-offset scoping), on the disposition channel.
+
+  Actually, hold on. Let me reconsider whether M_STORE1 would be caught by `srvd val`-style cross-checks... no. And would it be caught because the announce would... no, announce still fires once (latch set regardless of store). What about the guest-visible effect — unnamed rd reads back... fate-only, value unchecked. Right.
+
+  Also third candidate worth naming (weaker, text-only): the `(once)` token is unpinned — no row counts "(once)". A mutant dropping "(once)" sweeps 36/36, but it doesn't break the safety property (reads served, writes declined, latched once-per-offset announce still happens — just unlabeled). It's a record-fidelity gap, not a property breach. The house idiom is "(once)" as the latch signal; whether that's "the property" is debatable. I'll name it as a minor text-anchor disclosure candidate, not a floor breach.
+
+  Fourth: len printed wrong only for len==2 (e.g. `(int)(len == 2 ? 4 : len)`)? No len-2 row exists (disclosed). Sweeps, but disclosed axis. Skip.
+
+  Now, also Q3: "Is any cell still open?" — Yes: (a) the write-announce VALUE cell (M_O1's write-side twin); (b) the disposition channel sampled at only 5 of 43 offsets (per-offset member-6). Both nameable mutants, both 36/36 by derivation. "Is anything in the DISCLOSED list actually floor?" — the disclosed items (len-2, end-span wide read, per-instance) are not predicates the arm tests... except: the END-SPAN wide read announce goes through the arm's read announce (data[0]=0x00) — the arm does announce it; but no row drives it; it's disclosed; the arm doesn't test end-span (that's above the switch). Fine as disclosed. One could argue "every offset both directions" being claim-complete for fate but not value is the real story — the closure claim in the brief (premise 3/4, Q3's list) doesn't claim per-offset values, but it also doesn't DISCLOSE that the disposition channel is sampled at 5/43 offsets. The DISCLOSED list doesn't mention it. That's the gap: pass 2's Fable escape was "unsampled offset" on the fate channel; the repair drove all offsets for fate but left the value channel sampled sparsely, and the record doesn't say so.
+
+  Let me also double check the "srvd val" row under M_STORE1-at-0x39: unaffected ✓.
+
+  Now the remaining checks: gate log 875 vs 857; CHANGELOG disk state (top 200 lines); quick WSL feasibility check. Then write the review.
+
+  Also — one more possible Q1 edge: `fatal()` — does fatal() exit? In gxemul, fatal() prints and... continues? Actually in gxemul, `fatal()` prints the message (and with debug verbosity) but does NOT exit; `exit(1)` exits. Right — fatal is just a loud print. So "one latched fatal() per offset" = announce. ✓ consistent with the design.
+
+  And the #119 static int warned is process-wide (not per-instance) — pre-existing, not this round's. The arm's own latch is per-instance (in pcc2_data) ✓.
+
+  One more Q1 check: the write announce uses `(int) idata` with "%x" — idata for len<4 contains just the byte(s), fine; no anchor on it anyway (which is the finding).
+
+  Also potential UB: `1ULL << relative_addr` — relative_addr is uint64_t folded to 0..0x3f ✓ defined.
+
+  Also: does `len` ever exceed 8 or come as 0? gxemul device accesses are 1/2/4/8. The end-span read with memset fills len bytes — fine.
+
+  What about the probe's exec extraction from pcc2_width_probe.py: `exec(_w[_w.index("def session("):_w.index("\ndef printed")])` — the width probe file on disk (md5 a080e2bc both live and frozen ✓).
+
+  Now the CHANGELOG/gate checks.1322:gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (857 checks)
+---TAIL---
+  ok   pit8253 row green: R11 ...and it does so PER COUNTER, not just counter 0 1
+  ok   pit8253 rows run                                     18
+
+gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (857 checks)
+GATE_RC=0
+Confirmed Q5 items:
+
+  1. **875 vs 857**: The brief (line 880, and presumably the CHANGELOG's pass-3 gate section) says "875 checks ok, 0 FAIL". The actual gate14_501b.log says "PASS (857 checks)". No "875" appears anywhere in the log. The brief's line 880 "875 checks ok, 0 FAIL, GATE_RC=0" is a count without a deriver — the log's own total is 857. This is a concrete record-honesty miss. (Interesting: pass-2's gate was 844; 844 − 26 old-section checks + 40 new-section checks = 858, not 857 — so even the arithmetic doesn't obviously reconcile; but regardless, the log says 857 and the record says 875. Possibly digits transposed? 857 vs 875 — a transposition of 5 and 7! "875" is "857" with the last two digits swapped. Classic transcription slip.)
+
+  Let me check what the CHANGELOG on disk says for the pass-3 gate section — grep for 875/857 in CHANGELOG.md.
+
+  2. **Stale "23 rows"**: CHANGELOG line 6 (the bold summary) and line 59 (detector section header) still say 23 rows. The detector on disk is 36 rows (182 lines, matches inline). The later pass-2/table-3 sections make the history clear, but the summary line — the sentence most readers will quote — misdescribes the shipped detector. One-token fix each.
+
+  3. **The design section (line 29)**: "it is the register array's default, not a computed value, so this is not the option set's member 4" — still present on disk. My earlier grep for "default, not a computed value" failed because... wait, line 29-30 says "it is the register array's default, not a computed" — my grep pattern was "default, not a computed value". Line 29-30 wraps: "default, not a computed\nvalue" — the line break splits it! That's why grep missed it. So the stale, admittedly-false sentence IS still in the design section (the pass-2 section at line 138 corrects it: "was therefore also wrong for those twelve"). Since the CHANGELOG explicitly keeps the correction later, this is a historical record with an inline correction — defensible but the design section sentence stands unmarked as wrong at its location. Combined with the "23 rows" staleness, this is the same class: the record's early sections weren't re-touched after the repair. The brief itself (premise 2) claims comment sentences corrected in product + docstring — those WERE corrected (verified in dev_pcc2.c and the probe docstring). The CHANGELOG design section is the historical narrative; the correction appears at line 138. I'd call this acceptable-as-history but flag the summary "23 rows" as needing the token fix.
+
+  Let me verify the CHANGELOG's pass-3 gate line (875 or 857?) and check whether the brief's "875" came from the CHANGELOG.
+
+  Also I should double check the pass-3 PRETABLE file content matches the inline (spot-check) — the inline PRETABLE says "Written 2026-09-05 06:25:42" and mtime is 06:25:42.978 ✓ close enough (written by script, mtime after write).
+
+  And whether the gate name-list in gate_arm.sh on disk matches the probe's 36 names — brief says script-derived. Quick check: extract the gate's quoted names and the probe's row("...") names, diff.
+
+  Then decide on measurement attempt. Check WSL quickly.
+
+  Also one more Q4 sanity: is there any row that would catch M_WVAL0 that I overlooked — `wide wr` row: `val(t, alive, how)` = printed r4 = read-back VALUE from the guest register, not the announce text ✓ unaffected. Confirmed.
+
+  And M_STORE1: any row reading back at an unnamed offset — none. Also confirm the mutant wouldn't trip `unnamed wr msg`-style aggregate... there's no such row. ✓.
+
+  Both mutants are one-edit, clause-(d)-shaped, property-breaking, derived 36/36.
+
+  Measurement feasibility: check `wsl.exe -e bash -lc "which gcc python3"` and whether there's an existing built gxemul anywhere (the operator's scratch clone). The killtable3 driver ran in some environment — likely WSL. Let me check quickly. If WSL responds fast, I could clone-build-measure. But building gxemul takes minutes and the probe run is ~2.5 min per mutant... The operational rule says don't run gates (shared log dir corruption) but single mutant builds in own temp dir are fine. It also says naming beats a timeout. Decision: try WSL once; if a configured tree/compiler exists, do a targeted measure of at least M_WVAL0 (the cheapest, strongest). Actually building: copy GXEMUL-SEC/src + configure... gxemul's configure is a shell script; build of the full emulator maybe 3-10 min on this machine. Then probe run 2-3 min. That's within a background task's budget (600s default, can extend). Hmm, but two mutants → two builds? No — one build tree; edit dev_pcc2.c, rebuild (incremental, only one file recompiles + relink, fast), run probe per mutant. BASE first to sanity check 36/36. Actually the live binary... there's no prebuilt binary in GXEMUL-SEC. The gate used "$PMAX" — defined in gate_arm.sh presumably as build/gxemul or similar. Wait — the gate runs from GXEMUL-SEC/regress presumably with PMAX pointing at a binary. Let me grep gate_arm.sh for PMAX= to find where the operator's binary lives.
+
+  If there IS a built binary of the repaired tree somewhere (e.g. GXEMUL-SEC/build/gxemul created during the gate run at 07:39-08:16), measuring is cheap: copy the tree? No — for the mutant I need a REBUILD with the edit. So I need the build tree + compiler. Let me look for it.201:`pcc2 default rows emitted 36 / green 36 / red 0`; `pcc2 width rows emitted 251 / green 251 / red 0`; 875 checks ok, 0 FAIL, `GATE_RC=0`.
+10903:answers `ram_mb * 1048576` on the same device the witness pokes: a value RAM at that
+---PMAX---
+77:PMAX=${PMAX:-$ROOT/build/gxemul}
+---WSL---
+/usr/bin/gcc
+/usr/bin/python3
+b50b19b459.patch
+c.log
+cmp284.json
+cmp285.json
+commitmsg_mb87030.txt
+emerge_sdl2.log
+fg.log
+m.log
+mame0229
+mame0285
+mamebuild.log
+mb87030_0229.cpp
+mb87030_h_post.h
+mb87030_post.cpp
+mb87030_pre.cpp
+patch_fix1.py
+patch_fix_final.py
+patch_probes.py
+Findings:
+  - CHANGELOG.md line 201 repeats "875 checks ok" — the log says 857. Confirmed record discrepancy (both in brief and CHANGELOG).
+  - PMAX defaults to $ROOT/build/gxemul — so there IS a build tree expected at GXEMUL-SEC/build/. But `ls build/gxemul` returned nothing earlier (ls -d build* found nothing!). Wait — earlier `ls -d build*` in GXEMUL-SEC returned nothing, and `ls build/gxemul` nothing. So GXEMUL-SEC/build doesn't exist (on the Windows-visible filesystem)? But the gate ran at 07:39... in WSL? Maybe the WSL filesystem has its own copy of the tree. The WSL home listing shows a different workspace (mame stuff). Let me check if WSL sees /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC — the `ls /mnt/c/.../build/gxemul` printed nothing → no build dir there. Hmm, but the gate14_501b.log exists with 857 checks — it ran SOMEWHERE with a build. Maybe the operator builds in a scratch clone elsewhere (e.g. /tmp or another path in WSL, or the build/ at project root?). The project root has build/ and build-asan/ — but those are "pristine-2021 copies"? The brief said "Three pristine-2021 copies of src/ under the project root are NOT this fork" — so build/ at root is one of the pristine copies (it has src/). Wait, actually maybe the operator's flow: "scratch clone of build/" — clone of the ROOT build/ tree, then overwrite src with SEC's? Unclear. Let me check if there's a gxemul binary anywhere recent: check build/gxemul at root.
+
+  Actually — does the measurement matter enough? My two escapes are derived from reading every row anchor. The brief explicitly values naming over timeout. But the brief ALSO says "a derived escape is a prediction until measured" (Opus, quoted in Q4) — and the round's whole ethos (pass 2's lesson) is that measured beats derived. Two of pass-2's "predicted" escapes WERE later measured in table 3. So the strongest seat answer measures. WSL has gcc and python3. The SEC tree is visible at /mnt/c. Building gxemul: `./configure` (it's a custom configure script) then make. On /mnt/c (DrvFs) builds are slow but workable. Time: configure ~1-2 min, make ~5-15 min single-threaded... make -j$(nproc). Then each probe run ~2.5 min. Two mutants + base = 3 runs ≈ 8 min + build ≈ maybe 20 min total. That's within a background task budget (can set timeout up to 86400). 
+
+  Plan: run in background via WSL:
+  1. Copy GXEMUL-SEC to a WSL-native temp dir (native fs is much faster than /mnt/c) — e.g. ~/p3_measure/gxsec. Actually copying the whole tree incl. artifacts might be heavy; src + regress probes suffice. The probe needs: gxemul binary + pcc2_default_probe.py + pcc2_width_probe.py. Build needs the full source tree (src/, maybe config). Copy GXEMUL-SEC minus artifacts/_scratchpad/.git — or simpler: copy src/ + the two probes + doc? gxemul configure typically runs from the source root. Let me copy the whole GXEMUL-SEC excluding .git, _scratchpad, regress/artifacts (check sizes first — the dir could be big).
+
+  Actually wait — is there a simpler path? The killtable3 driver.log exists; the operator's "scratch clone of build/" was somewhere. If I can find a prebuilt repaired-binary... The gate ran at 07:39-08:16 today; the binary it used ($ROOT/build/gxemul) doesn't exist NOW in GXEMUL-SEC — maybe it was built and removed, or ROOT was elsewhere. Check gate_arm.sh line ~70 for ROOT. Meh — faster to just build.
+
+  Let me check size of GXEMUL-SEC and whether configure exists, then kick off the build in background.
+
+  Actually, let me reconsider scope. My verdict is already determined by derivation: the two escapes are airtight from the row anchors — measuring changes "derived" to "measured", which given THIS panel's history (pass-2 seats burned for not measuring) is materially stronger. The brief says: "build (or derive) the edit, do not vote" — derive is explicitly allowed. And "If you want a measurement that is not inlined, NAME IT and say why." So derivation + naming is an accepted seat product. But if I can measure cheaply, I should. Let me try — background task, and while it runs I can finish the remaining record checks (PRETABLE content spot-check, gate name-list derivation check). If the build fails or is too slow, I fall back to derived + named measurement.
+
+  Steps for the measurement:
+  1. `du -sh GXEMUL-SEC` and check configure presence.
+  2. Copy to WSL native: `cp -a` (exclude .git, _scratchpad, regress/artifacts to keep it light).
+  3. `./configure` — check what options the operator used... unknown; default configure should suffice for a pmax/mvme88k build. gxemul configure defaults build all archs. Fine.
+  4. `make -j`. 
+  5. Run probe on BASE (the unedited tree) → expect 36/36. Sanity.
+  6. Apply M_WVAL0 edit (one token: `(int) idata` → `0` in the write announce) → rebuild (incremental) → run probe → expect 36/36 = the breach.
+  7. Revert; apply M_STORE1 (`if (writeflag == MEM_WRITE && relative_addr == 0x39) d->pcctwo_reg[0x39] = idata;` — hmm, careful: place it so the announce still fires exactly once. Shape: inside the latch block after setting the bit, or before? M_BACKED2's shape was "} else if (writeflag == MEM_WRITE) pcctwo_reg[ra] = idata;" — i.e., store on the latched path. For M_STORE1 (store EVERY write at 0x39, announce still latched): add before the latch `if`: `if (writeflag == MEM_WRITE && relative_addr == 0x39) d->pcctwo_reg[0x39] = idata;`. Announce counts unchanged. Rebuild, run → expect 36/36.
+  8. Also could measure the `(once)` text-drop mutant — cheap third run, but it doesn't break the property; skip. Maybe measure it anyway as a third data point? It demonstrates a text-anchor gap but is not property-breaking; time cost ~3 min. Decide later based on time.
+
+  Where do I run the probe from? The probe uses pty — WSL python3 fine. Probe args: `python3 pcc2_default_probe.py <gxemul> <label>`. It writes /tmp/pcc2_dummy.bin — fine in WSL.
+
+  The probe exec-extracts session() from pcc2_width_probe.py via HERE = dirname(abspath(__file__)) — so put both probes in the same dir in the temp area.
+
+  One concern: the emulator needs a machine config for mvme88k — how does session() start gxemul? It presumably invokes something like `gxemul -E ... -e mvme88k`? The width probe's session() has the details; it worked in the operator env, WSL should behave the same. Let me peek at session()'s gxemul invocation to know requirements (it may need a disk image or just bare metal with debugger commands — likely bare `gxemul -e` with pty debugger). Quick grep in the width probe.
+
+  Let me proceed: first size/configure checks + read session() invocation, then launch background build.507M	.
+Makefile
+configure
+473:def session(cmds, settle=1.5, spin=1.2):
+474-    pid, fd = pty.fork()
+475-    if pid == 0:
+476-        os.execv(BIN, [BIN, "-V", "-x", "-E", "mvme88k", "-e", "mvme187", "-M", "64",
+477-                       "0x10000:" + DUMMY])
+478-        os._exit(127)
+479-    buf = ""
+480-
+481-    def rd(t, until=None):
+482-        #  drain the pty for t seconds; with `until', return as soon as that text has
+483-        #  arrived (pass 7: a fixed drain after `continue' could send the next command to a
+484-        #  guest that had not reached its breakpoint yet).
+485-        nonlocal buf
+486-        end = time.time() + t
+487-        while time.time() < end:
+488-            if until is not None and until in buf:
+489-                return True
+490-            r, _, _ = select.select([fd], [], [], 0.1)
+491-            if not r:
+492-                continue
+493-            try:
+494-                d = os.read(fd, 65536)
+495-                if not d:
+496-                    return False
+497-                buf += d.decode("latin-1", "replace")
+498-            except OSError:
+499-                return False
+500-        if until is not None and until in buf:    # pass 9 (codex): the token may land in the last read
+501-            return True
+502-        return "timeout" if until is not None else True
+503-
+The probe spawns `gxemul -V -x -E mvme88k -The session helper execs `gxemul -V -x -E mvme88k -e mvme187 -M 64 0x10000:/tmp/pcc2_dummy.bin` on a pty — bare metal, no disk image needed. 
+
+  GXEMUL-SEC is 507M (includes .git, _scratchpad, artifacts). For the build I need: configure, Makefile?, src/, and the probes. Actually gxemul's build: `./configure` generates Makefile? There's already a Makefile — is it the generated one or a static one? In gxemul 0.4.x, configure generates config.h and Makefiles? Actually gxemul's configure creates `config.h` and `_Makefile.`... let me not overthink: copy configure + src/ + the two probes into a WSL-native dir, run ./configure && make -j.
+
+  Check the Makefile at top level — maybe it's the original distribution Makefile (gxemul has src/Makefile plus configure generates config.h). The 0.6/0.4-style: `./configure` then `make` at top level uses a generated `Makefile`? The existing Makefile might be checked in (the fork keeps it). I'll copy configure, Makefile, src/, regress/pcc2_default_probe.py, regress/pcc2_width_probe.py.
+
+  Wait — BIN in session() is `sys.argv[1]`, and the probe passes BIN to session via exec'd helper — the helper uses BIN global from the probe module ✓ (exec shares globals).
+
+  Build time estimate: gxemul full build ~ 2-6 min with -j on modern CPU in WSL native fs. Let's go.
+
+  Background task plan (single bash script via wsl.exe):
+  ```
+  set -e
+  rm -rf ~/p3m && mkdir -p ~/p3m
+  cd /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+  cp -a configure Makefile src ~/p3m/
+  cp regress/pcc2_default_probe.py regress/pcc2_width_probe.py ~/p3m/
+  cd ~/p3m
+  ./configure > configure.log 2>&1   (check success)
+  make -j$(nproc) > make.log 2>&1
+  ls -la gxemul
+  python3 pcc2_default_probe.py ./gxemul base > BASE.out 2>&1; grep PCC2D_RESULT BASE.out
+  # M_WVAL0
+  sed -i 's/(int) relative_addr, (int) len, (int) idata);/(int) relative_addr, (int) len, 0);/' src/devices/dev_pcc2.c
+  make -j$(nproc) >> make.log 2>&1
+  python3 pcc2_default_probe.py ./gxemul M_WVAL0 > M_WVAL0.out 2>&1; grep PCC2D_RESULT M_WVAL0.out; grep PCC2D_RED M_WVAL0.out || true
+  # revert, M_STORE1
+  sed -i 's/(int) relative_addr, (int) len, 0);/(int) relative_addr, (int) len, (int) idata);/' src/devices/dev_pcc2.c
+  # insert store before the latch if:
+  perl or sed insert: at line with 'if (!(d->warned_unimpl' insert before: '\t\tif (writeflag == MEM_WRITE \&\& relative_addr == 0x39)\n\t\t\td->pcctwo_reg[0x39] = idata;'
+  make, run probe → M_STORE1.out
+  ```
+
+  Concerns:
+  - configure may require specific options the operator used; default should be fine for correctness of this device.
+  - The binary name: gxemul's build produces `gxemul` at top.
+  - The probe writes DUMMY=/tmp/pcc2_dummy.bin ✓ WSL /tmp fine.
+  - Time: configure+make ~5-10 min; each probe run: 36 rows ≈ 25 sessions × (settle 1.5s + spin...) — table-3 did 20 probe invocations in 49 min → ~2.5 min each. 3 runs ≈ 8 min. Total ≈ 20 min worst case. Set background timeout 3600s.
+  - `-V` flag: gxemul -V? Probably "-V" = ... whatever, it worked for the operator.
+  - WSL distro default: the earlier wsl.exe call worked (gave gcc/python3) ✓.
+
+  One important check: does `./configure` need to run with any args to enable m88k? gxemul configure defaults enable all CPUs (unless --delays etc.). Fine.
+
+  Also: the working tree's src/ IS the repaired tree (uncommitted on 7076134) — exactly the tree under review ✓. cp from /mnt/c preserves it.
+
+  While the build runs in background, I'll do the remaining record checks:
+  - gate_arm.sh name list vs probe row names (derivation claim).
+  - PRETABLE_501b.out content spot-check vs inline (already saw inline; verify file matches — diff the inline? Just check it contains the predictions block and the "Written" stamp; mtime already verified).
+  - The run1_partial_quoting dir exists ✓ (saw in ls).
+  - pass2_seats dir — roster record exists.
+  - Also verify the witness claim 7/13→13/13? witness_20260905 dir has witness logs; the untracked detector_fixed_501.out/witness_fixed_501.out exist ✓ (saw in git status). Spot-check 13/13 in witness_fixed_501.out.
+
+  Launch the background build now./mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/configure
+WSL_OK
+WSL sees the tree. The script is written to Windows /tmp — which in Git Bash maps to something like C:\Users\User00\AppData\Local\Temp. For WSL to execute it, better to write it into the GXEMUL-SEC-accessible path or copy via wsl. Let me copy the script into the WSL home and launch it in background.
+
+• WSL sees the tree. Launching the measurement in the background.ls: cannot access '/root/p3_measure.sh': No such file or directory
+
+
+• The /tmp in Git Bash is not the same as WSL /tmp. Let me write the script to a path both can see — the working directory, e.g. `/c/DocumentNoSnc/CC/GXEMUL/_tmpnone/p3_measure.sh` or GXEMUL-SEC-adjacent scratch. Better: write into `/c/DocumentNoSnc/CC/GXEMUL/_scratchpad/` — actually simplest is the working dir root `_tmpnone/`. Then WSL can read it at /mnt/c/...-rwxr-xr-x 1 root root 1361 Sep  5 08:33 /root/p3_measure.sh
+While the measurement runs, finish the remaining record checks:
+
+  1. Gate name list vs probe row names — verify the claim "the gate's name list is DERIVED from the probe's row() calls... 36 names, none longer than 14 characters".
+  2. PRETABLE_501b.out content spot check.
+  3. Witness fixed 13/13 spot check.
+  4. run1_partial_quoting preserved ✓ (saw in ls).
+
+• While that builds, the remaining record checks: gate name list vs probe rows, PRETABLE content, witness outputs.GATE_COVERS_ALL_36
+NAME_LEN_OK
+36 /tmp/probe_rows.txt
+54
+39:    M_SRVD0     35/36  srvd val text 0  (wide rd srvd stays: it IS 0x00 there)   old23: 23/23 (Opus measured)
+40:    M_BACKED2   35/36  sameoff val 0x5a                                          old23: 23/23 (Opus measured)
+54:  Written 2026-09-05 06:25:42.
+---WITNESS---
+DEFAULTKILL_RESULT=13/13 label=fixed-501 binary=/mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul
+PCC2D_RESULT=23/23
+BASE.old23.out
+BASE.out
+M_WRLATCH.old23.out
+M_WRLATCH.out
+driver_partial.log
+
+
+• The background task completed suspiciously fast (17 bytes output). That's probably just "started pid N". The nohup'd process detaches — the wsl.exe foreground call returned immediately, so "completed" means the launcher returned, not that the measurement finished. I need to check ~/p3_measure.log in WSL. The build takes minutes. Let me check its progress now (non-blocking), and if still running, continue with other checks... Actually the record checks are done. Let me peek at the WSL log.
+
+• The launcher returned immediately (nohup detached); checking the actual WSL job's progress.---
+STILL_RUNNING
+
+
+• The log is empty (set -x output buffered or the cp is still running — copying src/ over /mnt/c is slow). The job is still running. While it runs, let me set up a todo list to track the review, and use the waiting time to do the deeper adversarial thinking/verification I haven't finished:
+
+  Remaining adversarial work:
+  1. Q1 fully answered (verified in source). ✓
+  2. Q2 verified against .out files ✓ (all 12 red sets match table exactly; internal consistency derived).
+  3. Q3: closure — found two open cells (write-announce value; per-offset disposition). Also re-examine: is "every one of the 43 uncased offsets is written once and read once" TRUE of the probe? named wr covers NAMED18 (18 writes), inword wr 12, unnamed wr 13 → 43 writes ✓. named rd 18 + inword rd 12 + unnamed rd 13 → 43 reads ✓. Plus alias 0x6a write (folds to 0x2a). ✓.
+  4. Q4: smallest edit — M_WVAL0 (one token). Also the `(once)` text mutant (trivially passes; arguably not property-breaking). And data[len-1] variant. I'm presenting M_WVAL0 as primary, M_STORE1 as second.
+  5. Q5: 875 vs 857 (transcription slip in brief AND CHANGELOG line 201); stale "23 rows" at CHANGELOG:6 and :59; design-section sentence at CHANGELOG:29-30 still asserts "the register array's default, not a computed value" (corrected only later at line 138 — historical, but the design section stands unmarked); everything else checked out (md5s, mtimes, red sets, gate list derivation, diffstat, roster artifacts).
+  6. Q6: CLOSE? — with two derived/soon-measured escapes, the floor question "does a clause-(d) mutant exist that sweeps the 36-row detector clean?" answers YES. So NOT close — the repair diff itself is right (Q1), the twelve mutants die as claimed (Q2), but the detector remains below the floor for the announce-value (write side) and per-offset disposition cells.
+
+  Wait — before finalizing, let me reconsider M_WVAL0 once more against the FULL row list, being extra careful about `wide wr msg`: `t.count("offset 0x28 (len 4)")` — the mutant changes only the value field after ":", so the anchor still matches ✓. And `alias msg`: `t.count("offset 0x2a")` ✓. `named wr msg`: MSG ✓. No row greps for `: 0x5a` or `0x5a5a5a5a` in a write announce... `wide wr` checks the guest read-back r4 value = 0x0 (declined) ✓ unaffected. Airtight.
+
+  One more possible escape to double-check: the mutant "announce prints data[0] for READS but the served byte for end-span wide reads"... disclosed, no row, skip.
+
+  Also the reverse direction of grok A: latch set only on READS — latch sameoff (W,W) prints 2 → dies ✓ covered.
+
+  And `1ULL` → `1U`: UB shift for offsets ≥ 0x20; on x86-64/gcc in practice bits mod 32; counts still work per offset; would sweep on the measured platform but is UB — mention as a curiosity? It's C UB, a real defect class, but the detector is behavioral; not a property breach observably. Skip or one line.
+
+  Another: mutant swapping which of sameoff's two writes... no.
+
+  What about a mutant that announces on EVERY access but suppresses only... M_UNLATCH covered ✓.
+
+  What about mutating `%02x` → `%04x` (served 0x0034)? `srvd val text` counts "served 0x34" — "served 0x0034" does NOT contain "served 0x34" → red ✓ dies. `%x` → dies via wide rd srvd (served 0x0 vs 0x00) ✓.
+
+  What about write announce format change ": 0x%x -- declined" → ": 0x%02x"? For idata 0x5a prints 0x5a either way; wide 0x5a5a5a5a with %02x prints full → no anchor → sweeps. Same family as M_WVAL0 (write value formatting unpinned). Confirms the cell: the write announce's VALUE FIELD (format AND value) is wholly unpinned. One cell.
+
+  OK. Also — should I double-check that the guest `st.b` at NAMED18 sessions etc. actually exercise... measured BASE 36/36 already in table 3 ✓.
+
+  Todo list update and then wait for the measurement (check back in a couple of minutes). Actually I shouldn't just poll; the background bash task already "completed" (the launcher). The real job runs detached in WSL — I won't get a notification. I'll need to poll ~/p3_measure.log periodically. Let me do a productive wait: sleep ~120s then check. Copy of src/ from /mnt/c took... still in cp probably.
+
+• The job runs detached in WSL, so I'll poll its log between other checks. Tracking the review state meanwhile:
+
+tail: cannot open '/root/p3_measure.log' for reading: No such file or directory
+STILL_RUNNING
+• Odd: ~/p3_measure.log doesn't exist but the script is running. The nohup redirect was `> ~/p3_measure.log` — but the backgrounded process... wait, I ran `wsl.exe -e bash -lc "nohup bash ~/p3_measure.sh > ~/p3_measure.log 2>&1 & echo started pid \$!"`. The Bash tool reported the task completed with 17 bytes (that's "started pid N\n"). But now the log doesn't exist while pgrep finds p3_measure.sh running?
+
+  Ah — I bet the shell that nohup'd was killed when wsl.exe exited, and the redirect file never got created... but pgrep finds it running. If the process is running, the redirect should have created the file at start. Unless... `~` expansion: the outer bash -lc ran as root (ls showed /root). nohup bash ~/p3_measure.sh > ~/p3_measure.log — should create /root/p3_measure.log immediately. `tail: cannot open` — file not there. Yet pgrep -f p3_measure.sh matches. Maybe pgrep matches the pattern in its own invocation? No — pgrep -f matches full cmdline of OTHER processes; `pgrep -f p3_measure.sh` inside a new bash would match... hmm, could it match the bash -lc process itself whose cmdline contains "p3_measure.sh"? Yes! `bash -lc "tail ...; pgrep -f p3_measure.sh ..."` — that bash's own cmdline contains the string. pgrep excludes itself (the pgrep process) but NOT the parent bash. Classic false positive.
+
+  So the original run: `wsl.exe -e bash -lc "nohup bash ~/p3_measure.sh ... &"` — when wsl.exe exited, the WSL session/VM may have torn down the process group... but with nohup and background, it usually survives as long as the WSL VM stays up. However the redirect file not existing suggests the process died instantly — OR the file was created and then... `rm -rf ~/p3m` is the first command — no. Wait: set -x writes to stderr → redirected to the log. File should exist from second 0.
+
+  Unless the first `wsl.exe` backgrounded call: the Bash tool captured "started pid 16812" (17 bytes ✓ "started pid 16812\n" = 17 chars ✓). Then wsl.exe exited; WSL may kill the session leader's children if no other session keeps the VM alive... but nohup + & usually survives. The missing log file says the process never started or died before creating it. And current pgrep is matching the checking shell itself.
+
+  Let me check: does ~/p3m exist? The ls printed nothing → ~/p3m doesn't exist → the script never ran or died at once. So the detached approach failed (WSL kills the process tree when the last client disconnects, depending on config).
+
+  Fix: run it via the Bash tool's OWN background mechanism (run_in_background=true with a long timeout) so the Bash tool keeps wsl.exe — and thus the WSL session — alive for the whole build. The tool supports background timeout up to 86400 with disable_timeout. Set timeout 3600. The wsl.exe process stays a child of the tool's shell for the duration.Now the build runs under the tool's background task, which will notify me on completion. Meanwhile, remaining productive work:
+
+  1. Double-check the second part of the probe's docstring on disk matches the brief's inline (lines 1-99 of the probe — I read 100-182 on disk; the brief inlined the whole thing and the diff hunks showed the docstring; md5 equality with the frozen instrument already proves the file is the measured one ✓ — no need to re-read).
+
+  2. One more adversarial angle on Q2 I should nail down: "a mutant killed by a row OTHER than the one built for it is a row killing by accident". Scan table 3 for accidents:
+     - M_WRLATCH built for latch rd rd / latch rd wr — died on exactly those ✓.
+     - M_WIDEKILL built for wide rows ✓ exactly those.
+     - M_OFFKILL built for inword coverage — died on inword wr + inword rd. The rd row was "built for it"? Fable's mutant was a re-KILL (host exit); the new read rows were built for the coverage axis generally. inword rd is a fate row — a host exit at 0x06 during the read sweep fails it. Fine — die by the coverage rows, as claimed.
+     - M_SRVD0 → srvd val text only ✓ (not srvd val — the served byte is still right).
+     - M_BACKED2 → sameoff val only ✓.
+     - M_ABA → latch aba only ✓.
+     No accidental kills among the six. For the six carryover mutants, red sets match pass-2 logic extended to new rows — verified row by row above.
+
+  3. The `sameoff val` row note: "a store exempting the first write reads 0x5a" — wait, M_BACKED2 exempts the FIRST write (stores only on latched path). The session: W (first, declined, announce, latch set), W (second — latched → mutant stores 0x5a), R → reads 0x5a under mutant ✓ want 0x0 under fix ✓.
+
+  4. One more Q3 sweep of my own — let me enumerate every predicate the arm tests and every observable:
+     Predicates: latch bit (per folded offset), writeflag. Constants in text: "pcc2: unimplemented", "write to"/"read from", "offset 0x%x", "(len %d)", ": 0x%x" (idata), "-- declined.", "-- served 0x%02x", "(once)".
+     Observables pinned: MSG count (many rows), offset value (alias msg, wide wr msg — two offsets only: 0x2a folded, 0x28 wide), direction phrases ✓, "declined" ✓, "served 0x" ✓, served VALUE (0x34 len 1; 0x00 len 4) ✓ read side, width label at len 4 ✓, idata value ✗ (THE HOLE), "(once)" ✗ (cosmetic).
+     Offset-value pinning: a mutant announcing a WRONG offset only for writes at offsets other than 0x28/0x2a? e.g. print relative_addr+1 for writes: alias msg (0x2a write) → "offset 0x2b" → red ✓ dies. Print wrong offset only for READS at offsets ≠ 0x30... `alias msg` is a write. Read-offset anchors: `wide rd srvd` counts "(len 4) -- served 0x00" — not the offset! A read announce printing offset+1: dir rd text counts phrase ✓ green; named rd msg counts MSG ✓; wide rd srvd: "(len 4) -- served 0x00" — offset not in anchor ✓ green. So a mutant printing the WRONG OFFSET in the READ announce sweeps 36/36?! Wait — does anything count "offset 0x30"? No. "offset 0x" appears... no row counts the read-announce offset at all! Let me triple check: `alias msg` = write at 0x6a → write announce offset 0x2a ✓ write side. Read announce offset: no anchor. So M_ROFF: read announce prints `(int) (relative_addr + 1)` — every read row still counts (phrase, served value, len label) → 36/36. Property breach: the announce names the wrong register — a wrong record of exactly the kind the detector exists to pin (the contract pins the WRITE side's folded offset via alias msg but never the read side's). Same family as M_WVAL0: the read announce's OFFSET field unpinned. Hmm! And symmetric: write announce's offset IS pinned at 0x2a (alias msg) and 0x28 (wide wr msg) but a mutant printing wrong offset only at OTHER write offsets (e.g. +1 when relative_addr not in {0x28,0x2a})... named wr msg counts MSG only. dir wr text phrase only. So M_WOFF2: write announce offset wrong except at 0x28/0x2a → sweeps. OK — the general statement: the announce's per-field correctness is pinned only at sampled offsets/fields. My two headline mutants suffice; I'll fold the offset-field observation into the same "announce field x offset sampling" finding.
+
+  Let me not over-multiply: the crisp report is TWO named mutants (M_WVAL0, M_STORE1), plus a note that the field-pinning is sample-based on other fields too (offset in the read announce; "(once)" token) — one sentence.
+
+  5. Q6 answer: NOT CLOSE as shipped — the zero's denominator excludes (a) the write announce's value field, (b) per-offset disposition beyond the 5 sampled offsets, (c) disclosed len-2/end-span/per-instance. Recommend: add rows pinning the write-announce value (e.g. count ": 0x5a " in named wr session — actually a `wd val text` row counting "0x2a (len 1): 0x5a" and wide ": 0x5a5a5a5a") and either per-offset rdawr coverage or a disclosure sentence that disposition is sampled at 5/43. Minimal repair: 1-2 rows + record tokens (875→857, 23→36).
+
+  Wait — actually, for the write value: simplest row: in `named wr` session, add `row("named wr val", t.count(": 0x5a "), ...)`? The write text is "...0x2a (len 1): 0x5a -- declined." — substring ": 0x5a " appears 18 times (all writes use r5=0x5a) → count 18. Or wide wr session: ": 0x5a5a5a5a --" count 1. That closes M_WVAL0 and its format variants. 
+
+  For M_STORE1: rdawr at one unnamed offset (e.g. SPEED 0x39) + maybe one interior other than 0x05 — or disclose. The repair-chain amendment says close the class in one diff: the class is "member 6 scoped to offsets the value rows don't sample" — closing it fully = rdawr at all 43 offsets (43 sessions? no — can be ONE session: write all 43 with distinct-ish values then read all 43 back, count mismatches... simpler: one session writing 0x5a to all 43 then reading all 43, expecting all-zero read-back; one row). That's a cheap single row: "declined everywhere" aggregate. A mutant storing at ANY one offset breaks it (the read-back at that offset returns 0x5a). But — the row must distinguish... aggregate count of zero-readbacks = 43. A per-offset store mutant would fail the aggregate. That closes the class in one session. But careful: inword offsets 0x05 etc. are inside cased words — writing 0x5a at 0x05 is a default-arm write (byte access at 0x05 → default), declined ✓; reading back 0x05 gives pcctwo_reg[0x05] which the session... in a fresh process it's 0 unless the tick wrote it — T1CNT/T2CNT interiors! The tick may rewrite counter bytes → read-back could be NONZERO under the CORRECT build → false red. That's presumably why the repair sampled IEICR/IEERR (named, tick-free). A 43-offset decline-check would need to restrict to tick-free offsets or mask the counters' bytes (0x0d-0x13 interiors of T1CNT/T2CNT — T1CMP/T2CMP interiors are tick-free; T1COUNT/T2COUNT interiors are tick-rewritten). Detail for the repair, not for my review — I'll name the requirement, not design the row.
+
+  6. Also should I verify the witness 7/13 claim on the committed build? The witness dir has witness_fixed_501.out = 13/13 (verified above). The 7/13 (pre-fix) witness logs — witness_20260905/ has earlier .out files (committed, tracked?). Not critical: spot-checked the fixed side; the 7/13 was pass-1's evidence, already adjudicated.
+
+  7. Check the run1_partial_quoting claim: driver_partial.log exists ✓ consistent with the brief's honesty about run 1 dying.
+
+  Now let me also look at the probe's first 99 lines on disk? md5 already proves identity with frozen. Skip.
+
+  While waiting for the build, let me also verify the gate log's default-probe sublog had 36 rows green with the ACTUAL probe output (pcc2_default.log in the gate's logdir)... the gate log dir — logs are under GXEMUL-SEC/regress/logs? Not necessary: gate14_501b.log contains the check lines ✓ verified.
+
+  Let me wait for the measurement. I'll poll after a longer sleep (build ~5-10 min). Sleep 240 then check.no-logs-yet
+The background task failed quickly (63 bytes). Let me read the output file to see why. Also the previous check said ~/p3m/make.log and configure.log don't exist yet — but the task "failed". Let me look.`bash -l ~/p3_measure.sh` — the Bash tool or WSL translated `~` oddly: it tried `C:/Users/User00/p3_measure.sh` — Git Bash expanded `~` on the WINDOWS side before passing to wsl.exe (since the command line is parsed by Git Bash first). I need to quote it so WSL expands it: use single quotes: `wsl.exe -e bash -l '$HOME/p3_measure.sh'`? Git Bash doesn't expand inside single quotes but wsl.exe receives `$HOME/...` literally and bash -l would expand it... Actually simpler: use the absolute path /root/p3_measure.sh.
+
+• Git Bash expanded `~` on the Windows side. Retrying with the absolute WSL path.
+
+• Running now. The script does `set -x` so output goes to the task's output.log. cp of src/ from /mnt/c will take a bit. While waiting, let me do the last verification bits I haven't done:
+
+  1. Verify the probe's `srvd val` semantics vs the tick — actually one thing to check: in `srvd val` session, ST_W to T1CMP — T1CMP is cased (line 474-481: `case PCCTWO_T1CMP: ... if (writeflag == MEM_WRITE && relative_addr + len <= PCC2_SIZE) memcpy(d->pcctwo_reg + relative_addr, data, len);`). r5=0x12345678, big-endian: pcctwo_reg[0x04]=0x12, [0x05]=0x34 ✓. Then LD_BU at 0x05 → default arm → data[0]=0x34, announce "served 0x34" ✓, r4=0x34 ✓.
+
+  2. While waiting — double check the `wide rd` want: LD_W at PRTICR (0x30): memcpy serves pcctwo_reg[0x30..0x33] = zeros (fresh process; PRTICR never written) → r4=0x0 ✓. Announce: "read from offset 0x30 (len 4) -- served 0x00" ✓ anchor "(len 4) -- served 0x00" ✓.
+
+  3. `wide wr` session: ST_W 0x5a5a5a5a at IEERR → announce once; LD_W at IEERR — bit 0x28 already set → silent; read-back serves 4 zero bytes → r4 = 0x0 ✓ want "0x0". Note val() returns printed() which formats "0x%x" → "0x0" ✓.
+
+  Also — one consideration I should double check for M_STORE1's expected result: the store is at 0x39, an UNNAMED offset. In `unnamed wr` session: st.b at 0x39 stores (mutant) + announces; fate survived ✓. `unnamed rd`: ld.bu at 0x39 → serves pcctwo_reg[0x39]... in a FRESH process (each session is a fresh gxemul), so 0x00 → fate survived ✓. No row checks the value ✓. 36/36 expected.
+
+  For M_WVAL0: all write announces print ": 0x0 -- declined" — no anchor on the value ✓ 36/36 expected. If the probe surprises me (a red row), that's even more interesting (means some row pins it that I misread).
+
+  Also, I realize I should double-check the sed pattern for M_WVAL0 actually matched (the script greps for "len, 0);" after). The task output will show it.
+
+  While waiting, prepare the review document structure. The user asked: review adversarially as the Questions/Review-asks section directs, do NOT summarize the brief back, end with GO/NO-GO/GO-WITH-CHANGES. So the reply should be structured as answers to Q1-Q6 + the escapes, terse, verdict last. The brief demanded "VERDICT LINE FIRST" but the user explicitly said end with the verdict — user wins.
+
+  Let me wait for the build. Sleep ~5 min then check the task output.
+
+• Build is running under the task's own session now. Waiting, then checking progress.
+
+• Git Bash path mangling again: `/root/p3_measure.sh` was converted by Git Bash's MSYS path translation to `C:/Program Files/Git/root/p3_measure.sh`. I need to prevent path translation: use double slashes `//root/p3_measure.sh` or set MSYS_NO_PATHCONV=1.
+
+• MSYS path mangling again. Disabling path conversion for this call.
+
+creating Makefiles...
+cat: ./Makefile.skel: No such file or directory
+Configured. You may now run  make  to build gxemul.
+---
+Makefile
+config.h
+configure
+configure.log
+make.log
+pcc2_default_probe.py
+pcc2_width_probe.py
+src
+• The configure created Makefiles but complained `./Makefile.skel: No such file or directory` — because I only copied `configure Makefile src` and gxemul's configure needs more files (Makefile.skel, and possibly the top-level Makefile I copied conflicts). The make then failed. Let me read the task output to confirm, then fix the copy set: copy everything needed. gxemul 0.4.x configure uses Makefile.skel in each dir. Which files does the source root have? Let me list GXEMUL-SEC root files and copy the minimal full set — simplest: copy the whole tree except .git, _scratchpad, regress/artifacts (507M total; the artifacts are the bulk? src is small). Let me check what subdirs exist and sizes, then copy configure's needed skeletons: probably every dir has Makefile.skel (src/Makefile.skel etc.). I copied src/ wholesale, so src/Makefile.skel exists; the failing one was ./Makefile.skel at the top level. The root Makefile I copied over might be the checked-in one... Actually configure said "creating Makefiles..." then cat: ./Makefile.skel missing — it still said "Configured". Then make used the top Makefile I copied (the repo one) which probably recurses into src... Let me see the make.log tail via the task output."make: *** No targets. Stop." — the top-level Makefile got clobbered: configure creates Makefile from Makefile.skel, which I didn't copy, so it produced an empty/broken Makefile (the `cat: ./Makefile.skel: No such file` means the resulting Makefile is empty). Fix: copy Makefile.skel files too. What else does configure/build need at root? Let me check the root listing of GXEMUL-SEC for skeleton files (Makefile.skel at root and in src/). I copied src/ recursively so src/Makefile.skel should exist. Just add root Makefile.skel. Also maybe other root files the Makefile references (doc/, man/? only for install targets). Let me check what the root Makefile.skel builds — probably recurses src only.
+
+  Fix the script: cp Makefile.skel as well. Don't copy the repo Makefile (configure generates it). Remove `Makefile` from the copy list.
+
+• `configure` needs `Makefile.skel` at the root; my copy clobbered nothing but produced an empty Makefile. Fixing the copy set and rerunning.Makefile.skel
+src/Makefile.skel
+28:all: build
+30:build: do_src
+31:	$(CC) $(COPTIM) src/console/*.o src/cpus/*.o src/debugger/*.o src/devices/*.o src/disk/*.o src/file/*.o src/machines/*.o src/net/*.o src/core/*.o src/promemul/*.o src/symbol/*.o $(LIBS) -o $(BIN)
+33:do_src:
+34:	cd src; $(MAKE)
+36:install:
+45:uninstall:
+53:	cd src; $(MAKE) clean
+
+
+copied
+• Build is running. While waiting (gxemul full build ~5-10 min on 8 cores, then 3 probe runs ~2.5 min each), let me finish the remaining verification:
+
+  1. Check the `pass2_seats/` roster record exists with the named files (opus5.txt, fable5.txt, kimi stall record, ollama burns) — the brief's roster claims.
+  2. Verify the ledger.json diff mentions the round (spot check).
+  3. Re-examine one more possible hole while I wait: the `named rd srvd` row counts "served 0x" = 18. Under a mutant where the read announce is suppressed but the bit still set (announce never on reads, yes on writes): latch rd rd wants 1 → prints 0 → red ✓ dies.
+
+  Also potential subtle defect in the REPAIR itself (Q1, be harder on accepted dispositions): disposition #1 adopted "the product now prints data[0]". Is there a case where data[0] is NOT the served byte? MEM_READ with len≥1: memcpy filled data[0..len-1] from the array (or zero-filled). The guest receives data[0..len-1]. data[0] is always the first served byte ✓. For WRITE: announce prints idata ✓. `(int) len`: len is size_t; values 1,2,4(,8?) — m88k has no 8-byte... ld.d? m88k has no 64-bit loads. Safe. `return 1` reached via break ✓.
+
+  One more: the announce prints `(int) relative_addr` — folded offset. `alias msg` pins 0x2a for a write at 0x6a ✓. Read announce offset unpinned (my secondary finding).
+
+  Also verify: does `fatal()` output go to stdout or stderr? The probe captures both via pty (terminal merges) ✓ — pty.fork means stdout+stderr both land on the pty ✓.
+
+  Also Q5's "any count without a deriver": the "857 vs 875" is the count whose deriver (the log) contradicts it. Also check the brief's line 781 claim "PASS (844 checks)" for the pass-2 gate: grep killtable_20260905/gate14_501.log for the checks number — verify 844 is real (if the pass-2 one says 844 and the pass-3 one 857, then 875 is isolated sloppiness; 857-844=13... interesting: exactly +13 rows?? No wait — 13 new rows + 1 new aggregate check ("rows red") = +14 checks → 844+14=858≠857. Hmm. Unless pass-2's section had one more check than I assumed. Let me verify 844 from the pass-2 log and count the section checks: pass-2 section: "probe completed" + 23 row checks + "emitted" + "green" = 26 checks. Pass-3 section: 1 + 36 + 3 = 40 checks. Δ=14 → 844+14 = 858. But log says 857. So either pass-2's 844 is wrong too, or a check was dropped (maybe "probe completed" count... whatever — one of the two gate totals in the record doesn't reconcile with the section arithmetic. Let me grep the pass-2 gate log for its total, then count exactly. If pass-2 log says 844, then 858 vs 857 = the new section has 39 checks?? The gate section I read has: 1 (completed) + 36 (rows) + 3 (emitted/green/red) = 40 checks. Hmm wait — but the section only runs the 36-row loop if PROBE_DONE found, else one check. 40 total. 844 − 26 + 40 = 858. Log: 857. So ONE of the prior checks changed... OR the pass-2 run's 844 included something not in the pass-3 run. Actually maybe the pass-2 section also had "rows red" — no wait, look at the pass-2 gate section — I only have the NEW diff; the old section may have had emitted/green/red too: if old had 1+23+3=27, then 844−27+40 = 857 ✓✓. Yes! The pass-2 section likely also had a "rows red" check (3 aggregates). 27→40, Δ=13 → 844+13=857 ✓ exactly. So 857 reconciles perfectly; 875 is the lone wrong numeral (transposed digits of 857).
+
+  Let me verify the pass-2 gate log total = 844 from killtable_20260905/gate14_501.log.
+
+• While the build runs, reconciling the gate totals (857 vs the record's 875) against the pass-2 log, and checking the roster artifacts.gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): PASS (844 checks)
+---PASS2FAILLOG---
+gate 14: ARM/Thumb flags (#311/#312/#319-#322/#328/#329): FAIL (25 of 844 checks)
+---SEATS---
+brief_sent.md
+brief_sent.packet.md
+codex.txt
+fable5.txt
+grok.txt
+kimi.stall_pointerform.txt
+kimi.txt
+ollama_deepseek.burn.txt
+ollama_deepseek.txt
+ollama_glm.burn.txt
+ollama_glm.txt
+ollama_minimax.txt
+opus5.txt
+
+
+• Verified:
+  - Pass-2 gate log: PASS (844 checks) ✓ matches the record.
+  - The FAIL log: "FAIL (25 of 844 checks)" ✓ matches the record's "25/844".
+  - Pass-3 gate: 857 checks; the record (brief line 880 AND CHANGELOG:201) says "875 checks ok" — the deriver contradicts it; and 857 = 844 + 13 reconciles exactly with the section growing by 13 checks (36−23 rows; aggregates unchanged at 3). So "875" is a digit transposition of 857, present in two places (brief + CHANGELOG).
+  - Roster artifacts all present, including kimi.stall_pointerform.txt and the two ollama burn logs ✓ roster claims check out.
+
+  Now wait for the build+probe. Let me poll in a few minutes.make[1]: Leaving directory '/root/p3m/src'
+make: *** [Makefile:34: do_src] Error 2
+Build failed at do_src with Error 2. Need the actual compile error from make.log. Let me grep the make.log for the error.116:make[3]: *** [Makefile:30: all] Error 127
+118:make[2]: *** [Makefile:50: do_file] Error 2
+178:make[3]: *** [Makefile:31: all] Error 127
+180:make[2]: *** [Makefile:62: do_promemul] Error 2
+315:make[1]: *** [Makefile:26: all] Error 2
+317:make: *** [Makefile:34: do_src] Error 2
+---
+make autodev.o
+make[5]: Entering directory '/root/p3m/src/devices'
+./makeautodev.sh
+Generating autodev.c... 54cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I../include/   -c -o cpu_ppc.o cpu_ppc.c
+321 done
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o autodev.o autodev.c
+make[5]: Leaving directory '/root/p3m/src/devices'
+make[4]: Leaving directory '/root/p3m/src/devices'
+make[3]: Leaving directory '/root/p3m/src/devices'
+make[4]: Leaving directory '/root/p3m/src/cpus'
+make[3]: Leaving directory '/root/p3m/src/cpus'
+make[2]: Leaving directory '/root/p3m/src'
+make[1]: *** [Makefile:26: all] Error 2
+make[1]: Leaving directory '/root/p3m/src'
+make: *** [Makefile:34: do_src] Error 2
+Error 127 = command not found, in src/file and src/promemul sub-makes. Let me find what's missing — likely a tool used by those Makefiles (e.g. `flex`/`lex`, or a shell script that's not executable after copy, or `cc` vs `gcc`...). Error 127 at Makefile:30 'all' in a subdir. Let me look at lines around 110-118 of make.log to see the command that failed.cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o machine_mvmeppc.o machine_mvmeppc.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_bt431.o dev_bt431.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o float_emul.o float_emul.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_bt455.o dev_bt455.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o machine_netwinder.o machine_netwinder.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_bt459.o dev_bt459.c
+../../experiments/make_index.sh
+make[3]: ../../experiments/make_index.sh: No such file or directory
+make[3]: *** [Makefile:30: all] Error 127
+make[3]: Leaving directory '/root/p3m/src/file'
+make[2]: *** [Makefile:50: do_file] Error 2
+./generate_arm_loadstore 1 1 0 > tmp_arm_loadstore_p1_u1_w0.c
+./generate_arm_loadstore 1 1 1 > tmp_arm_loadstore_p1_u1_w1.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_dreamcast_gdrom.o dev_dreamcast_gdrom.c
+1cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_dreamcast_maple.o dev_dreamcast_maple.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I../include/   -c -o tmp_arm_dpi.o tmp_arm_dpi.c
+cc -Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  -I/usr/X11R6/include -I../include/   -c -o dev_dreamcast_rtc.o dev_dreamcast_rtc.c
+../../experiments/make_index.sh
+make[3]: ../../experiments/make_index.sh: No such file or directory
+make[3]: *** [Makefile:31: all] Error 127
+make[3]: Leaving directory '/root/p3m/src/promemul'
+make[2]: *** [Makefile:62: do_promemul] Error 2
+Missing `experiments/make_index.sh` (used by src/file and src/promemul). Add `experiments/make_index.sh` to the copy set. Rather than piecemeal, copy `experiments/` (small? experiments has ~18 files, small). Let me patch the script to also copy experiments/make_index.sh (just that file to keep it light) — but other scripts might be referenced too. Let me just copy the experiments dir. Then rerun. The build is otherwise progressing (it got deep into devices/cpus). Rerun whole script (fresh copy, rebuild). Rebuild from scratch costs ~5 min. Fine.
+
+• Missing `experiments/make_index.sh`. Patching the copy set and rerunning.4:cp -a configure Makefile.skel src experiments /root/p3m/ && cp regress/pcc2_default_probe.py regress/pcc2_width_probe.py /root/p3m/
+
+
+• While the build runs (expect ~5-8 min build + ~8 min probes), let me draft the review. Also one more verification I can do: the witness's pre-fix 7/13 claim — witness_20260905 dir contains the original witness logs (tracked, committed earlier?). git status showed only detector_fixed_501.out and witness_fixed_501.out as untracked new; the rest of witness_20260905/ is committed. Quick check of the original witness output for 7/13.defaultkill_witness.py
+detector_fixed_501.out
+witness_committed.out
+witness_fixed_501.out
+DEFAULTKILL_RESULT=7/13 label=committed-b78bb0f-plus-width-chain binary=/mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul
+DEFAULTKILL_RESULT=13/13 label=fixed-501 binary=/mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul
+Witness verified: 7/13 committed, 13/13 fixed ✓ (both logs on disk, binary was /mnt/c/.../build/gxemul — so the operator DID build in the root build/ tree via WSL. Interesting — the root build/ tree is the working build; the brief says the pristine copies are NOT the fork. Anyway.)
+
+  Note: the witness binary path `/mnt/c/DocumentNoSnc/CC/GXEMUL/build/gxemul` — the ROOT build/ dir has a built gxemul! But that's the build of... the SEC source? The killtable used a "scratch clone of build/". The root build/ might currently contain the repaired binary. Doesn't matter — my own build is running.
+
+  Now wait for the background task. Poll in ~4 min.
+
+• Witness logs verified (7/13 committed, 13/13 fixed). Waiting on the build.-rwxr-xr-x 1 root root 6155808 Sep  5 08:59 /root/p3m/gxemul
+cc -fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG  src/console/*.o src/cpus/*.o src/debugger/*.o src/devices/*.o src/disk/*.o src/file/*.o src/machines/*.o src/net/*.o src/core/*.o src/promemul/*.o src/symbol/*.o -L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib -lm  -o gxemul
+PCC2D_RESULT=36/36
+
+
+• The build succeeded and BASE measured 36/36 on my own fresh build of the repaired tree — an independent reproduction of the table-3 BASE control. Now the script proceeds to M_WVAL0 (sed edit, incremental rebuild, probe). Each probe ~2.5 min. Let me wait for the task to complete (notification will arrive) — or poll again in ~5 min. The task is still running (M_WVAL0 rebuild + probe, then M_STORE1). Wait for the completion notification rather than polling too aggressively; but I want intermediate certainty. One more poll in ~5 min.
+
+• BASE independently reproduced at 36/36 on my own build. The two mutant runs are next; waiting for completion.PCC2D_RESULT=36/36
+PCC2D_RESULT=36/36
+PCC2D_RESULT=36/36
+688:			d->pcctwo_reg[0x39] = idata;
+
+
+• Three PCC2D_RESULT=36/36 — but wait, I need to attribute them: BASE.out, M_WVAL0.out, M_STORE1.out. The grep -h over *.out doesn't show filenames. The dev_pcc2.c currently has the M_STORE1 edit (line 688: `d->pcctwo_reg[0x39] = idata;`) — consistent with the script's final state. Let me read the task output log for the full trace with labels, to confirm each .out's attribution and that M_WVAL0's sed matched ("len, 0);" grep printed during the run).MEASURED, both of them, on my own fresh build of the exact tree under review:
+
+  - BASE: 36/36 (independent reproduction of the table-3 control).
+  - M_WVAL0 (write announce prints constant `0` instead of `idata`, one token at dev_pcc2.c:692): **36/36 — clean sweep**. No row red.
+  - M_STORE1 (backed store `d->pcctwo_reg[0x39] = idata` on every write at one unnamed offset, inserted before the latch test): **36/36 — clean sweep**. No row red.
+
+  Both are clause-(d)-shaped edits of the new arm, both break the shipped property (the write announce lies about the declined value in the first; a write is NOT actually declined at 0x39 in the second), and both pass the full 36-row repaired detector. That answers the brief's floor question affirmatively: yes, a clause-(d) mutant exists that sweeps the 36-row detector clean — at least two do, measured.
+
+  One caveat on M_STORE1: the probe's `unnamed rd` session is a fresh process where pcctwo_reg[0x39] is 0 — fate-only, value unchecked; and no session writes-then-reads 0x39. The store changes no counted observable. Verified.
+
+  Also worth noting: my BASE 36/36 replicates the instrument, and my build is of the uncommitted working tree exactly as reviewed.
+
+  Now — verdict. The brief's header says the floor question is asked of the shipped composite: "does a clause-(d) mutant exist that sweeps the 36-row detector clean?" Measured: YES, twice. By the round's own rules (a predicted red that stays green stops the round; a measured clean sweep is a breach), the detector remains below the floor. The product repair itself checks out (Q1), and the twelve named mutants die for the reasons claimed (Q2 verified against artifacts). So: not NO-GO on the product; the detector and record need another repair round. That's GO-WITH-CHANGES? Hmm. The question the brief poses is CLOSE? (Q6) and the floor question. A measured clean sweep of the shipped detector = the closure fails. In this panel's idiom, the verdict options GO/NO-GO/GO-WITH-CHANGES map onto: NO-GO = the repair is wrong/rejected; GO-WITH-CHANGES = the repair stands but the round cannot close without changes (add the missing rows, fix the record numerals). Given pass-2's precedent (PASS verdicts on a 23-row instrument were overturned by measured sweeps, and the round's own rule treats a sweep as a breach requiring repair), the honest verdict is GO-WITH-CHANGES — the product diff is right and stays, but the detector must grow rows for the two measured escapes before the zero can close, plus the record fixes (875→857; stale "23 rows" header/section).
+
+  Wait — should it be NO-GO? Let me think about what GO would mean here: "GO" presumably = close the round, ship as-is. NO-GO = reject the repair diff. GO-WITH-CHANGES = accept the repair, require changes before close. The repair diff (product) is verified right. The detector is the thing that's below floor. The pass-3 brief asks "the pass on the REPAIR DIFF" with the floor question on the composite. Two measured sweeps → the composite detector fails the floor → the zero cannot close as "valid". But this doesn't invalidate the product fix. In pass 2, seats that said PASS/GO on the instrument were overturned → the round went to repair. Here, my pass-3 answer must be: the repair diff stands, the detector needs one more amendment (rows for the write-announce value and per-offset disposition, or explicit disclosure of the sampling), and the record needs three token fixes. That's precisely GO-WITH-CHANGES.
+
+  Hmm, but one could argue NO-GO because the brief's own standard — "A miss in the UNSAFE direction (a predicted red that stays green) stops the round" and the floor question — means the round must not close, and "GO-WITH-CHANGES" is for when you approve with modifications. The panel's verdict vocabulary (from pass 2: "Five seats said PASS or GO... Fable GO-WITH-CHANGES, provisional; three said NOT CLOSE") suggests GO/GO-WITH-CHANGES are close-ish verdicts and NOT CLOSE is the negative. Mapping to my options: GO = close, NO-GO = do not close / repair insufficient, GO-WITH-CHANGES = close after named changes. My measured sweeps mean the instrument as shipped cannot support a closing zero WITHOUT changes; but the changes are small and named (two row additions + disclosures + record tokens). The product repair is right. I'll go GO-WITH-CHANGES with the explicit statement that without the changes the answer to the floor question is YES (mutants exist, measured), so an unamended close would repeat the pass-2 error.
+
+  Now write the review. Structure per the Questions section, verdict last (user instruction overrides the brief's "verdict first"). Keep it tight, cite evidence: file:line, measured outputs. Mention the measurement environment: own WSL build of the exact uncommitted tree, probe = the live instrument md5 10737375.
+
+  Content outline:
+
+  Q1 — IS THE REPAIR RIGHT? Verified in tree (dev_pcc2.c:420 fold first statement; 425-437 memcpy/zero-fill; 687-700 arm; 734 memset). data[0] is the served byte on both read paths (memcpy-filled or memset-zero — and zero-fill is what the guest receives on end-span); write announce prints idata, data unused; (int) len fine; all four text anchors survive the (len %d) insertion. One real defect class remains — see Q3/Q4.
+
+  Q2 — Twelve mutants: every score and red SET matches the artifacts (I read every .out's PCC2D_RED, not just the driver.log summary); all twelve predictions exact, verified. No accidental kills among the six pass-2 mutants — each died on its built row(s) and I checked the off-target rows stay green for the right reason (e.g. M_SRVD0 leaves srvd val green because the served byte is still 0x34; M_BACKED leaves sccerr rdawr 0x0 because the cased arm is untouched). M_RDKILL/M_EXIT red-set arithmetic reconciles (19 and 29).
+
+  Q3 — closure: NOT closed. Two cells open, both measured 36/36:
+  - write-announce VALUE channel (M_O1's write-side twin; the repair closed the read announce only).
+  - per-offset DISPOSITION sampling: fate rows drive all 43 offsets both directions, but the decline is value-pinned at only 4 uncased offsets (0x2a, 0x28 x2 rows, plus 0x05 served-value and 0x30 wide-read serving zeros); a member-6 store at any other offset (I used 0x39) is invisible. Fable's accepted escape was per-offset scoping on the fate channel; the same scoping on the value channel was not closed and is not disclosed.
+  DISCLOSED list: len-2 / end-span / per-instance are honestly disclosed and are not predicates the arm tests — fine. But the per-offset disposition sampling is NOT in the DISCLOSED list — it should be added if not rowed.
+
+  Q4 — smallest edit: M_WVAL0, one token (`(int) idata` → `0` at dev_pcc2.c:692), MEASURED 36/36 on my own build of the tree under review (WSL scratch build, live probe md5 10737375). Expected-green rows: all — specifically named wr msg, dir wr text, wr declined, wide wr msg, alias msg all anchor phrases/offsets, none anchors the value field. M_STORE1 also measured 36/36. (Also derived but not measured: read-announce OFFSET field is unpinned — `relative_addr+1` in the read announce only; and the "(once)" token is unpinned — cosmetic, not property-breaking.)
+
+  Q5 — record honesty:
+  - "875 checks ok" (brief §Gate 14 and CHANGELOG:201) is refuted by gate14_501b.log: "PASS (857 checks)". 857 reconciles exactly with 844 + 13 (section grew by 13 checks); 875 is a digit transposition. A count whose named deriver contradicts it.
+  - CHANGELOG:6 summary still says "23 rows, run by gate 14"; CHANGELOG:59 section header too. The shipped detector is 36 rows.
+  - CHANGELOG:29-30 design section still asserts "it is the register array's default, not a computed value" — corrected only later at :138; acceptable as dated history but the early sentence stands unmarked where a skimmer will read it.
+  - Everything else checked out: probe md5 10737375 == frozen (live == measured); old23 a96b8bcf == pass-2 frozen; width helper a080e2bc both; PRETABLE_501b.out mtime 06:25:42 precedes the table run (06:37-07:26); run1_partial_quoting/ preserved; diffstat matches the disclosure (incl. the unrelated sgi_de edit flagged); roster artifacts all present (kimi stall log, ollama burns, opus5/fable5); witness 7/13 and 13/13 logs on disk; gate name list covers all 36 probe row() names and none exceeds 14 chars.
+
+  Q6 — CLOSE? No. The closing zero's denominator as shipped excludes: the write-announce value field, per-offset disposition beyond 4 sampled offsets, and (disclosed) len-2/end-span/per-instance. With two MEASURED 36/36 sweeps on the composite, an unamended close repeats the exact pass-2 error (PASS on an instrument with a measured clean sweep outstanding).
+
+  Named changes to close:
+  1. Pin the write-announce value: e.g. a row counting ": 0x5a " in the named-wr session (want 18) and/or the wide write's ": 0x5a5a5a5a" — kills M_WVAL0 and its format variants.
+  2. Either row the decline on all tick-free offsets (one aggregate read-back session; mask/exclude the T1CNT/T2CNT interiors the tick rewrites) or add an explicit DISCLOSED sentence that disposition is value-sampled at 4/43 offsets.
+  3. Record tokens: 875 → 857 (brief gate section + CHANGELOG:201); "23 rows" → "36 rows" at CHANGELOG:6 and :59.
+
+  Also: "if you found something ELSE" — the witness/ probe measurement environment: my independent rebuild reproduced BASE 36/36, so the instrument is portable across builds (good). And note the process lesson: pass-2's two measured escapes were the same SHAPE as my two (announce-value field; per-offset scoping) — the repair closed the named instances, not the field-x-offset grid. The class isn't "the six edits"; it's "every text field and every offset".
+
+  Verdict: GO-WITH-CHANGES (product repair verified right; detector needs the two rows/disclosures above before the zero is valid; record needs the three token fixes). NOT a NO-GO: the fix itself passed every check including my rebuild. NOT GO: two measured clause-(d) sweeps outstanding.
+
+  Cleanup: remove the _tmpnone/p3_measure.sh? It's in the user's scratch dir _tmpnone which already has other scratch files; leave it (it's evidence of the measurement). Actually the script + WSL build are reproducible evidence; mention paths. The WSL side /root/p3m holds the build — mention it.
+
+  Update todos, then write the final review. The user said "do not summarise it back to me" — so keep the review as findings/answers, not a recap. End with the verdict line.
+
+• Both derived escapes are now **measured**. Marking tracking complete and writing the review.
+
+• Pass-3 seat answer, per the QUESTIONS section. I verified against the tree under review (`GXEMUL-SEC/`, uncommitted on `7076134` — line numbers match the fork, not the 2021 copies), and I did not run any gate; I built the exact working tree in a WSL scratch dir (`/root/p3m`) and ran only the live detector (`pcc2_default_probe.py`, md5 `10737375` == the frozen table-3 instrument, verified).
+
+  **Q1 — is the repair right?** Yes, as far as the arm goes. `dev_pcc2.c:420` the fold is the handler's first statement, so the shift is 0..63 on a 64-bit field; `:425-437` a READ's `data` is memcpy-filled, or memset-zeroed on the #119 end-span path — and zero-fill is exactly what the guest receives there, so `data[0]` is the served byte on both paths; the WRITE announce prints `idata`, `data` unused; `(int) len` fits (len ∈ 1,2,4); DEVINIT memsets the struct (`:734`); all four text anchors (`offset 0x2a`, `served 0x`, the direction phrases, MSG) survive the `(len %d)` insertion. But see Q3/Q4 — the announce's other fields are not all pinned.
+
+  **Q2 — do the twelve die for the reason claimed?** Yes, and I checked the artifacts, not the summary: every mutant's `.out` `PCC2D_RED` set matches Table 3 exactly (M_EXIT 29, M_RDKILL 19, the rest 1-6), all twelve predictions exact, and the `.old23` files carry the six 23/23 breach scores on the same binary. No accidental kills among the six pass-2 mutants; I also checked the near-miss rows stay green for the right reason (M_SRVD0 leaves `srvd val` green because the served byte is still 0x34; M_BACKED leaves `sccerr rdawr` at 0x0 because the cased arm is untouched).
+
+  **Q3/Q4 — closure / smallest edit. The floor question answers YES, measured, twice.** I built both edits and ran the full repaired instrument on my own build of the reviewed tree (BASE independently reproduced at 36/36 first):
+
+  - **M_WVAL0** — write announce prints a constant instead of the value: `(int) idata` → `0` (`dev_pcc2.c:692`). **MEASURED 36/36, zero rows red.** Every write-side row anchors a phrase or the offset — `named wr msg`, `dir wr text`, `wr declined`, `alias msg`, `wide wr msg` ("offset 0x28 (len 4)" stops before the value) — and no row anchors the idata field. This is Opus's M_O1 shape on the write side: disposition #1 repaired the read announce's value and left its write-side twin open. The contract's own wording covers only "the read announce".
+  - **M_STORE1** — member 6 scoped to one unsampled offset: `if (writeflag == MEM_WRITE && relative_addr == 0x39) d->pcctwo_reg[0x39] = idata;` before the latch test. **MEASURED 36/36, zero rows red.** The repair drove all 43 offsets for FATE, but the decline is value-pinned at only 4 uncased offsets (0x2a, 0x28, plus the 0x05 served-value and the 0x30 zero-read). Fable's accepted escape was per-offset scoping on the fate channel; the same scoping on the disposition channel was neither rowed nor disclosed. (`unnamed rd` is fate-only, fresh process, value unchecked.)
+
+  Derived, not measured: the read announce's OFFSET field is unpinned (`relative_addr+1` on reads only — no row counts a read-side offset), and the `(once)` token is unpinned (cosmetic, not property-breaking). DISCLOSED items (len-2, end-span read, per-instance) are honestly disclosed and are not predicates the arm tests — but the 4/43 disposition sampling belongs in that list if it isn't rowed.
+
+  **Q5 — is the record honest?** Mostly, and verifiably so: probe md5 == frozen, old23 == pass-2 frozen, width helper `a080e2bc` both sides; PRETABLE_501b.out mtime 06:25:42 precedes the table (06:37-07:26); `run1_partial_quoting/` preserved; diffstat matches the disclosure (including the flagged unrelated `sgi_de` edit); roster artifacts all present (kimi stall log, both ollama burns, opus5/fable5); witness logs carry 7/13 and 13/13; the gate's name list covers all 36 `row()` names, none > 14 chars. Three exceptions:
+  - **"875 checks ok" is refuted by its named deriver**: `gate14_501b.log` says `PASS (857 checks)` — no "875" appears in the log. 857 reconciles exactly (844 + 13 new section checks); "875" is a digit transposition, present in both the brief's Gate-14 section and `CHANGELOG.md:201`.
+  - `CHANGELOG.md:6` (summary) and `:59` (section header) still say "23 rows" for what gate 14 runs; the shipped detector is 36.
+  - `CHANGELOG.md:29-30` still asserts "it is the register array's default, not a computed value" — corrected only 109 lines later at `:138`; defensible as dated history, but the sentence stands unmarked where a skimmer reads it.
+
+  **Q6 — close?** No. The closing zero's denominator, as shipped, excludes: the write-announce value field, per-offset disposition beyond 4 sampled offsets, and the three disclosed axes. With two MEASURED 36/36 sweeps outstanding, an unamended close repeats the exact error pass 2 was convened to punish — PASSing an instrument with a clean sweep on the table. Named changes that would make a close valid: (1) pin the write value (e.g. count `: 0x5a ` in the named-wr session, want 18, or the wide write's `: 0x5a5a5a5a`); (2) row the decline on all tick-free offsets in one aggregate read-back session (masking the T1CNT/T2CNT interiors the tick rewrites) or disclose the 4/43 sampling; (3) the three record tokens above. Something else I found while verifying: the instrument reproduces cleanly on an independent build (BASE 36/36 here), so portability is not a concern; and the process lesson worth writing down is that pass-2's two measured escapes and pass-3's two are the same two shapes — announce-field and per-offset scoping — so the repair unit should be the field × offset grid, not the named edits.
+
+  The product repair diff itself is right and should stay — everything in it checked out, including on my rebuild. What fails is the composite's floor and two record numerals.
+
+  GO-WITH-CHANGES
+
+To resume this session: kimi -r session_90f6910a-aeeb-435e-82a6-a543a27bf841

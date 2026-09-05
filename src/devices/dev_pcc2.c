@@ -113,7 +113,9 @@
 
     NOT FIXED HERE, cited so "twelve kills removed" is not read as "file clean":
     pcc2c040kill (a LEGAL byte write of 0x04 to GENCTL still ends the host in
-    reassert_interrupts) and pcc2defaultkill (an unlisted offset still ends it).  */
+    reassert_interrupts).  pcc2defaultkill -- an unlisted offset ended it -- was
+    fixed by #501 (the default: arm below); this sentence said "still ends it"
+    until #501's pass 4 (Opus).  */
 enum {
 	PCC2_W_GENCTL_LEN,
 	PCC2_W_VECBASE_LEN,
@@ -138,6 +140,10 @@ struct pcc2_data {
 	/*  pcc2widthkills: one bit per width-guard block, see the enum.  Zeroed by
 	    the init memset, so every instance starts with every announce armed.  */
 	uint32_t		warned;
+	/*  #501: one bit per BYTE OFFSET (0..0x3f) for the default: arm's announce;
+	    relative_addr is folded to PCC2_SIZE above the switch, so the shift is
+	    always defined.  Zeroed by the same memset.  */
+	uint64_t		warned_unimpl;
 
 	uint8_t			cur_int_vec[8];
 
@@ -658,13 +664,45 @@ DEVICE_ACCESS(pcc2)
 		break;
 
 	default:
-		debug("[ pcc2: unimplemented %s offset 0x%x",
-		    writeflag == MEM_WRITE? "write to" : "read from",
-		    (int) relative_addr);
-		if (writeflag == MEM_WRITE)
-			debug(": 0x%x", (int)idata);
-		debug(" ]\n");
-		exit(1);
+		/*  #501 (pcc2defaultkill): this arm ended the host with exit(1) on ANY
+		    access to an offset with no case -- 43 of the 0x40 byte offsets:
+		    eighteen documented registers the model does not implement (IEICR,
+		    IEERR, IEBERR, GPIO, SCSIERR, the printer block, SPEED, the *IACKs),
+		    the bytes inside the four counter/compare words, and the unnamed
+		    ones -- READS included, though the memcpy above the switch had
+		    already served them.  A guest ld.bu or st.b at any of them was a host
+		    kill (rung-3 witness).  Now: a READ keeps the served byte (the array's
+		    current byte, said so -- inside a running COUNT word that is the
+		    tick's value, not a default); a WRITE is DECLINED.  Not a
+		    backed store: the cased siblings contradict one (SCCERR clears on
+		    write, the ICRs mask and reassert, PSCALECNT/SPEED/the IACKs are
+		    read-only), no inspected OpenBSD driver path reaches them (if_ie never
+		    attaches: unreadable sits at its 82596 address), and a store from the
+		    one arm 43 offsets reach would add a bounded-write surface.  One
+		    latched fatal() per offset per instance, the house `(once)' shape --
+		    unlike PSCALEADJ's UNLATCHED print above (pcc2pscaleflood).  The
+		    IACK offsets 0x23/0x25 are declined like the rest: modelling them (on
+		    the SCCRXIACK shape) would open two new entries into the C040 path,
+		    so pcc2c040kill goes first.  The %= fold above IS the real part's:
+		    Motorola VMESBCP2 Table 6-1 lists $FFF42040-$FFF42FFF as repeated
+		    PCCchip2 registers.  */
+		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+			d->warned_unimpl |= 1ULL << relative_addr;
+			if (writeflag == MEM_WRITE)
+				fatal("[ pcc2: unimplemented write to offset "
+				    "0x%x (len %d): 0x%x -- declined.  (once) ]\n",
+				    (int) relative_addr, (int) len, (int) idata);
+			else
+				/*  data[0] is the byte actually SERVED; a reload of the
+				    array could differ: on the end-span path (zero-filled,
+				    the array byte kept) and inside a running COUNT word,
+				    whose SIGALRM-driven tick (timer.c) can land between
+				    the copy and this line.  A wide read is labelled.  */
+				fatal("[ pcc2: unimplemented read from offset "
+				    "0x%x (len %d) -- served 0x%02x.  (once) ]\n",
+				    (int) relative_addr, (int) len, data[0]);
+		}
+		break;
 	}
 
 	return 1;

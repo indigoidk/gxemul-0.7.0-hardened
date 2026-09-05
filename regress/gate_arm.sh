@@ -1303,6 +1303,33 @@ else
 fi
 
 
+#  ------------------------------------------------------------ pcc2defaultkill (#501)
+#  The default: arm of DEVICE_ACCESS(pcc2) ended the host on any access to an uncased
+#  offset, reads included.  Now: reads keep the served byte, writes are declined, one
+#  latched announce per offset per instance.  The witness (regress/artifacts/pcc2defaultkill/
+#  witness_20260905/, 7/13 on the committed build) is NOT run here; this is its detector.
+PCC2DLOG=$LOGDIR/pcc2_default.log
+python3 -u pcc2_default_probe.py "$PMAX" gate > "$PCC2DLOG" 2>&1 || true
+if ! grep -q "PCC2D_PROBE_DONE" "$PCC2DLOG"; then
+    check "pcc2 default probe completed" "no" "yes"
+else
+    check "pcc2 default probe completed" "yes" "yes"
+    for v in "live" "devsig chipid" "named wr" "named wr msg" "named rd" "named rd msg" \
+        "named rd srvd" "inword wr" "inword msg" "inword rdawr" "inword rd" "unnamed wr" \
+        "unnamed msg" "unnamed rdawr" "unnamed rd" "ieicr rdawr" "ieerr rdawr" "sccerr rdawr" \
+        "latch sameoff" "sameoff val" "latch twooff" "latch rw one" "latch rd rd" "latch rd wr" \
+        "latch aba" "alias 0x6a" "alias msg" "dir wr text" "wr declined" "wr val text" \
+        "dir rd text" "srvd val" "srvd val text" "srvd half text" "half wr rdawr" "srvd rd latch" \
+        "srvd wr latch" "wide wr" "wide wr msg" "wide wr val" "wide rd" "wide rd srvd" \
+        "genctl rt" "t1cmp word rt" "put b ctl" "put b ctl msg"; do
+        check "pcc2 default row: $v" "$(count "$PCC2DLOG" "^$v  .*ok$")" "1"
+    done
+    check "pcc2 default rows emitted" "$(( $(count "$PCC2DLOG" " ok$") + $(count "$PCC2DLOG" " FAIL$") ))" "46"
+    check "pcc2 default rows green"   "$(count "$PCC2DLOG" " ok$")"   "46"
+    check "pcc2 default rows red"     "$(count "$PCC2DLOG" " FAIL$")" "0"
+fi
+
+
 PITLOG=$LOGDIR/pit8253_latch.log
 python3 pit8253_latch_probe.py "$PMAX" "$STUB" > "$PITLOG" 2>&1 || true
 

@@ -1,0 +1,38 @@
+**VERDICT: PASS with one material prediction defect (M_RDKILL unsafe miss). Fix correct; detector works; no accepted disposition is wrong. Recommend close #501 with prediction corrected in record.**
+
+Denominator carried: **BASE 23/23, M_EXIT 7/23, M_UNLATCH 21/23, M_ONELATCH 19/23, M_BACKED 21/23, M_RDKILL 16/23, M_DIRSWAP 20/23.**
+
+---
+
+## Question 1 — Is the fix right, which accepted disposition is wrong?
+
+**Fix: RIGHT (READ from diff + comment + kill table).** The diff replaces `exit(1)` with a per-offset latch (uint64_t bit per byte offset), fires `fatal()` once per offset per instance, keeps the served byte on reads (`d->pcctwo_reg[relative_addr]`), and breaks to the single `return 1`. The fold `%= PCC2_SIZE` above the switch (asserted in the brief and the new comment) makes the shift defined for all offsets reaching `default:`. The cased arms are untouched — `genctl rt` and `t1cmp word rt` are green under BASE and every mutant, confirming no regression. The read-announce value is the array's default byte (zeroed by the init memset), not a computed value, consistent with the "not member 4" exclusion.
+
+**No accepted disposition is wrong (REASONED).** I checked all 12 against the packet:
+- 1,2,11: design matches the diff and the convergence (per-offset latch, member 3 decline, both bounded).
+- 3: detector carries rdawr in one session with sccerr control — confirmed by M_BACKED red on ieicr/ieerr rdawr only.
+- 4: if_ie chain (unreadable at 0xfff46000 → badpaddr fail → ie_setupram early return) is REASONED consistent; the witness still works because the probe is not if_ie.
+- 5: Table 6-1 cited; the 0x40 vs 0x1000 distinction is REASONED consistent (emulator fold vs guest header window).
+- 6: `put b` row in witness shows msg=0, confirming the arm is not reached — REASONED from the inline table.
+- 7: `ieberr/ieerr` row measures IEBERR only; IEERR's kill follows from source (codex) — disclosed.
+- 8: IACK 0x23/0x25 declined; c040kill cross-round — REASONED from the SCCRXIACK shape concern.
+- 9,10: wording corrections, applied.
+- 12: detector makes no cross-instance claim; two-instance fixture filed as debt — REASONED consistent.
+
+## Question 2 — Prediction contradictions; non-survival channel for DECLINE vs BACKED?
+
+**M_RDKILL: UNSAFE MISS (READ).** Prediction: `18/23` with 5 red rows (`named rd`, `named rd msg`, `named rd srvd`, `dir rd text`, `latch rw one`). Actual: `16/23` with **7** red rows — the listed five **plus `ieicr rdawr` and `ieerr rdawr`**. The prediction even notes "latch rw one (the read in that session exits: n/a)" but failed to extend the same logic to the rdawr rows, which also do a read after a write in one session. Under M_RDKILL the read kills the host before the value can be checked, so both rdawr rows must be red. This is predicted-green-actually-red → unsafe direction → per the round rule, should stop the round.
+
+**M_EXIT: header typo (READ).** Prediction header says `8/23` but the 16 listed reds imply `7/23`, which matches the actual. Listed rows match actual reds exactly. Minor documentation error, not material.
+
+**Other mutants (READ):** M_UNLATCH 21/23, M_ONELATCH 19/23, M_BACKED 21/23, M_DIRSWAP 20/23 — all match predictions exactly.
+
+**DECLINE vs BACKED ACCEPT pinned by read-back VALUE channel (READ).** M_BACKED's two red rows are `ieicr rdawr` and `ieerr rdawr`; the prediction specifies the value: `0x5a` (the stored byte reads back) under BACKED, vs `0x0` (the array's default) under DECLINE. The cased control `sccerr rdawr` reads back `0x0` under both — its write-to-clear semantics (manual SCLR bits) make the delta attributable to the default arm's disposition, not to test-harness noise. Both candidates survive (13/13 in the witness), so survival alone does not distinguish them; the value channel does.
+
+## Question 3 — Close and commit?
+
+**Recommend: YES, close and commit, with the M_RDKILL prediction miss acknowledged and corrected in the record.** The fix is correct, the detector passes BASE 23/23, and every mutant is distinguished from production. The M_RDKILL miss is a prediction-oversight (the rdawr rows were forgotten in the red list), not a detector or fix defect — the detector still correctly identifies M_RDKILL as different from production (16/23 vs 23/23). If the panel wishes to satisfy the round rule literally, re-run the table with `ieicr rdawr` and `ieerr rdawr` added to M_RDKILL's red list; the outcome will not change.
+
+## Premise not checkable from packet
+
+**The fold `%= PCC2_SIZE` above the switch** is asserted in both the brief (premise 1, comment in the diff) but is in unchanged code not shown in the diff. If the fold is absent, `1ULL << relative_addr` is undefined behavior for any relative_addr ≥ 64. The inline alias test uses 0x6a (< 64 either way), so it does not distinguish "fold present" from "fold absent but offset < 64." **The single fact that would settle it:** a witness or detector row exercising a relative_addr ≥ 64 (e.g., 0x40, 0x6a already aliases, but a raw 0x40 or 0x1000 access would). None is inlined; I cannot settle this from the packet.

@@ -1,0 +1,86 @@
+# #501 pcc2defaultkill -- PASS 2 (Fable 5 seat, adjudicator hat)
+
+VERDICT: GO-WITH-CHANGES. Fix correct; detector pins the DISPOSITION, not mere survival; kill
+table valid with denominator (23 rows / 6 mutants / 4 (writeflag x latch) cells); clause-(d)
+product fully held; no floor breach; no live defect. CLOSE IS NOT YET VALID -- three cheap
+obligations: (a) <<PANEL501_OWED>> pass-2 panel section is unwritten, roster incomplete -> my
+ruling is PROVISIONAL; (b) L4 record defect: CHANGELOG says "three predictions exact", it is
+FOUR; (c) confirm the shared file dev_pcc2.c propagated to /tmp/gxsec-build and est/ (est part-2
+N/A). Fix these three and commit.
+
+## Q1 IS THE FIX RIGHT? -- YES
+- break reaches the single return 1 (handler line 550). default: arm now ends in break, not exit(1). VERIFIED.
+- 1ULL << relative_addr always defined: relative_addr is uint64_t (DEVICE_ACCESS macro, memory.h:149),
+  folded `%= PCC2_SIZE` (0x0040, mvme_pcctworeg.h:14) at the top -> domain 0..63 -> max shift 63 on a
+  64-bit type. DEFINED. VERIFIED.
+- read announce prints d->pcctwo_reg[relative_addr] = the exact byte the memcpy above the switch served;
+  same value the guest received. Not a wrong value. VERIFIED.
+- latch collision warned vs warned_unimpl: SEPARATE fields (uint32_t warned :140 width-latch;
+  uint64_t warned_unimpl :144, #501). No collision. VERIFIED.
+- warned_unimpl zeroed: memset(d,0,sizeof(struct pcc2_data)) at :731. VERIFIED.
+- nothing the memcpy served is now different; the diff touches ONLY the struct field + the default: arm;
+  no cased arm changed (genctl rt / t1cmp word rt confirm). VERIFIED.
+- The one in-tree guest (OpenBSD 2.2): sees NO change. The committed exit(1) build boots to uid=0, which
+  proves the running guest never reaches an uncased offset (else it would already die). Census of
+  _guest-src-openbsd22/sys/arch/mvme88k: clock.c/pcctwo.c hit only CASED offsets (T*, IPL/MASK); if_ie.c
+  hits IEICR/IEERR/IEBERR (uncased) but NEVER ATTACHES (unreadable at 0xfff46000; ie_setupram early return).
+  The fix can only make an uncased access SAFER (survive instead of kill). No regression path. VERIFIED.
+
+## Q2 DOES THE DETECTOR PIN THE DISPOSITION? -- YES
+M_BACKED (member 6: a store into pcctwo_reg[]) is KILLED 21/23 by `ieicr rdawr` and `ieerr rdawr` reading
+back 0x5a while member 3 reads 0x0, with `sccerr rdawr` (cased write-to-clear sibling) at 0x0 as the
+attributing control. That is disposition, not survival. All six mutants killed. Predicted vs measured:
+  BASE 23=23; M_UNLATCH 21=21; M_ONELATCH 19=19; M_BACKED 21=21; M_DIRSWAP 20=20  -> FOUR EXACT
+  M_EXIT 8->7 (safe, more reds: pretable arithmetic slip, red LIST was right at 16); M_RDKILL 18->16
+    (safe: the store-then-LOAD rdawr sessions die at the load). TWO safe-direction misses, ZERO unsafe.
+RED sets are byte-identical between run-1 (c76e053a) and run-2 (a96b8bcf) -- "identical row for row" TRUE.
+Shipped probe md5 a96b8bcf == run-2 frozen == gate live probe: the kill table measured the EXACT shipped
+instrument. VERIFIED.
+
+## Q3 CLAUSE-(d) ENUMERATION -- COMPLETE, no partition one-sided
+Predicates the fix adds/depends on: (1) reaching default: (no-case outcome) -> survival rows
+named/inword/unnamed/alias + M_EXIT; (2) latch bit 1ULL<<relative_addr -> latch sameoff/twooff/rw one +
+M_UNLATCH/M_ONELATCH; (3) writeflag in the announce -> dir wr/rd text + M_DIRSWAP + named rd (M_RDKILL).
+NO value/range predicate added (GUARD FIELD vs BODY FIELD line; confirmed in source). (writeflag x latch)
+4-cell product ALL HELD: (wr,first)=named wr msg/ieicr rdawr/dir wr text; (rd,first)=named rd msg/named rd
+srvd/dir rd text; (wr,latched)=latch sameoff; (rd,latched)=latch rw one. Note the latch guards ONLY the
+announce; decline (do-nothing) and serve (memcpy above) are unconditional, so latched cells still preserve
+the disposition -- no disposition-in-latch bug. VERIFIED.
+
+## Q4 SMALLEST EDIT THAT BREAKS AND PASSES 23 ROWS
+`if (relative_addr == 0x06) exit(1);` (or ==0x21) -- a re-kill at any uncased offset the detector does not
+SAMPLE. It tests all 18 named + 4 of 12 interior (0x05,0x09,0x0d,0x11) + 5 of 13 unnamed
+(0x20,0x24,0x29,0x35,0x3d). A kill at an unsampled offset (interior 0x06/0x07/0x0a.., unnamed 0x21/0x22/..)
+stays green on EVERY row. This is ABOVE the floor: clause (b) = verbatim reinstatement at EVERY site, which
+M_EXIT does and dies (7/23); a selective single-offset kill is coverage debt, consistent with the contract's
+sampling disclosure -> FILE, not stop. (Weaker cosmetic candidate: swap the read announce arg
+d->pcctwo_reg[relative_addr]->idata; invisible because uncased bytes are always 0 and idata=0 on reads --
+no guest-visible effect, not worth a row.)
+
+## Q5 IS THE RECORD HONEST? -- ONE fresh defect
+DEFECT (L4, correct in place): CHANGELOG "Six of six killed; three predictions exact, two missed" -- it is
+FOUR exact (UNLATCH, ONELATCH, BACKED, DIRSWAP), two missed (EXIT, RDKILL). "three + two" names only 5 of 6
+mutants. This is itself a count stated without deriving it -- the class the brief warned about.
+CHECKED-AND-SOUND: the 43/18/12/13 census reconciles ONLY via the BOARD MANUAL, not the fork header --
+0x18/0x19 are unnamed in mvme_pcctworeg.h but the manual names them GPIO Input Interrupt Control / IO Pin
+Control (vmesbcp2.txt:669-670), so "18 named" counts them; 43 = 64 - 21 cased (arithmetic checked). The
+alias premise holds: vmesbcp2.txt:4629 "$FFF42040-$FFF42FFF PCCchip2 Registers Repeated". The IEERR (0x28)
+witness kill is INFERRED from source (the exiting build dies at IEBERR 0x2b first) -- disclosed in prose,
+correctly caveated. The row-format defect (run-1 status-first) was GATE-CAUGHT (gate14_501_FAIL_rowformat.log,
+25/844 red, 0 default rows counted) and fixed to status-last; the shipped/gate/run-2 instrument all a96b8bcf.
+
+## Q6 CLOSE? -- NOT YET VALID (provisional GO)
+- diff delivered: YES (git diff matches inlined; dev_pcc2.c +38/-7, gate_arm.sh +20/-0, CHANGELOG +118/-0;
+  sgi_de_primop_probe.py 20/6 is a pre-existing unrelated edit -- confirmed, not this round).
+- roster: pass-1 9/9; pass-2 (THIS pass) has <<PANEL501_OWED>> UNFILLED -> incomplete. Ruling PROVISIONAL
+  per the provisional-adjudication rule; commit holds until the pass-2 panel completes or owner exempts.
+- zero + denominator: valid -- 6/6 mutants killed, 4 (writeflag x latch) cells held, clause-(d) closed over
+  the diff, disposition pinned by M_BACKED with control; the only misses are safe-direction. Denominator =
+  23 rows / 6 mutants / 4 cells, stated.
+- build trees: build/ carries #501 (cmp-clean vs SEC, binary -nt source: two-part clearance PASSES),
+  build-asan/ carries it. OWED: confirm /tmp/gxsec-build (arc, shared file) and est/ (source tree, part-2 N/A).
+- gate 14 green alone (844 checks, default 23/23, width 251/251, GATE_RC=0).
+
+CHANGES BEFORE COMMIT: (1) correct "three predictions exact" -> "four"; (2) complete the pass-2 panel and
+fill <<PANEL501_OWED>>; (3) confirm dev_pcc2.c propagated to /tmp/gxsec-build + est/. All cheap; none is a
+floor breach or live defect.

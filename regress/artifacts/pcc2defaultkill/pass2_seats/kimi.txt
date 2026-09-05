@@ -1,0 +1,26 @@
+• I'll verify the premises against the tree before ruling.
+
+• VERDICT: PASS — #501 closes and commits. The built fix matches the packet verbatim, every checkable premise held against the tree, the kill table matches the logs on disk with two SAFE-direction prediction misses (recorded, neither stops the round), and DECLINE-vs-BACKED is pinned by value, not survival. Denominator: 23/23.
+
+  **Q1 — the fix is right; no accepted disposition falsified.** Verified against `GXEMUL-SEC` @ `7076134` + uncommitted diff:
+
+  - Tree matches the diff exactly (`src/devices/dev_pcc2.c:664-698`), single `return 1` at `:701`. Every RETURN path is `return 1` (deepseek's L4 wording holds).
+  - `fatal()` in this fork is print-only — `src/core/debugmsg.c:384-391`, `va_debug`, no exit. The `(once)` shape cannot kill the host; consistent with 13/13.
+  - Fold at `:420` precedes the read-serving memcpy (`:425-427`) and the switch, so served data, announce, and shift share the folded offset; `1ULL << relative_addr` on `[0,0x3f]` is defined. `warned_unimpl` is `uint64_t`, zeroed by the init `memset` at `:731` (per-instance armed).
+  - Premise 1 re-derived a third way: 21 `case` labels, 1 `default:` in `DEVICE_ACCESS(pcc2)` → 43 of 64 offsets reach the arm.
+  - Premise 4 verified end-to-end: `machine_mvme88k.c:106` installs `unreadable` at `0xfff46000`; `dev_unreadable.c:43` returns 0 for all accesses; guest `if_ie.c:409-411` fails the match on `badpaddr`, and the `ie_setupram` early return at `:561-565` precedes the PCC2 store at `:609-610`. (Minor wording: the driver dies at *match*, one stage before the `:561` return the premise cites — both true, claim stands.) `ie0` is in `conf/M187:99` and `conf/NFS:100` — the pass-1 conf grep was indeed wrong.
+  - Premise 5 exact: `_scratchpad/vmesbcp2.txt:4629` reads `$FFF42040-$FFF42FFF PCCchip2 Registers Repeated`.
+
+  Sharpest edge on the adopted disposition (#11, scrutinised hardest): the latch is per-offset and **direction-agnostic** — a read consumes the bit, so a later *write* at that offset (the heavier event, a declined store) announces nothing. This is deliberate and pinned by `latch rw one` (`pcc2_default_probe.py:118-119`); codex's writes-only alternative is recorded. Bounded and disclosed; I don't reverse it. One cosmetic niggle, new this pass: an end-spanning read at an uncased offset is zero-filled by the OB-11 guard (`:436`) then falls into the switch, so the announce would print the array byte as "served" while zeros went out — unreachable from the m88k guest (alignment checked before `memory_rw`; 0x40 is a multiple of every width), debugger-only. Disclose, don't block.
+
+  **Q2 — two safe-direction misses, zero unsafe.** Driver log on disk matches the packet verbatim, and `PRETABLE_501.out` (mtime 04:12:20, matching its own stamp) predates `driver.log` (05:18:54).
+
+  - M_EXIT: the prediction's headline "8/23 … fifteen rows" contradicts its own 16-name enumeration; actual 7/23 with exactly those 16 red. The *set* was right; the score arithmetic was off by one.
+  - M_RDKILL: predicted 18/23 (5 red), actual 16/23 (7 red). The two unpredicted reds — `ieicr rdawr`, `ieerr rdawr` — are explained by the detector source I read: each rdawr session contains an `LD_BU` after the store (`:107-110`), so a read-killing mutant kills the session at the load. The prediction caught the same shape at `latch rw one` and missed these two.
+  - M_UNLATCH, M_ONELATCH, M_BACKED, M_DIRSWAP: exact matches. **No predicted red stayed green** — by the round's stated rule, no stop.
+  - Disposition pin: yes, by value. M_BACKED reds *only* the two rdawr read-back rows (0x5a vs 0x0) with survival identical to BASE and the `sccerr rdawr` control green — and per `driver.log` the tested member 6 was its strong form (the mutant carries its own end-span guard). DECLINE is pinned by the value channel alone.
+
+  **Q3 — close and commit.** 23/23 default rows green (gate log on disk: emitted 23, green 23, plus 251/251 width parity, `GATE_RC=0`); witness 13/13 vs 7/13; BASE 23/23 with all six mutants red in their named channels. Carry into the record: the M_EXIT score-arithmetic miss, the M_RDKILL rdawr miss, the two-instance latch fixture debt (#12), and the end-span announce nuance above.
+
+  Could not settle from packet+tree: nothing material — the witness raw transcripts were not re-derived, only checked for consistency with the detector source (they agree).
+

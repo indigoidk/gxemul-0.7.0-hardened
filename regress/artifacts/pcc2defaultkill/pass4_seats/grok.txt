@@ -1,0 +1,124 @@
+I'll start from the full offloaded brief, then check the live tree against the pass-3 artifacts so the review is of the actual repair diff, not the packet's summary.The brief is loaded. Next I’ll read the rest of the questions and the live product/detector so the verdict is against the files, not the packet.The rest of the brief is still unread. I’ll pull that, then the live detector and arm, so the floor question is asked of the composite rather than the packet.I’ll verify the load/store encodings, the handler’s memcpy/decline path, and the table-4 logs against the packet so the mirrors and any remaining sweep are derived, not assumed.**VERDICT: CLOSE the pass-3 repair.** No clause-(d) DEPENDS-ON mutant of the 46-row composite sweeps clean. Two L4s to correct in this commit (not a fifth floor pass). I am a reading seat: table 4’s logs were opened, the ten pass-3 mutants were not rebuilt.
+
+agy DELIBERATELY NOT FIRED (measurement reserve). Tree is `GXEMUL-SEC/` (`dev_pcc2.c` default: at 664–703, not a 2021 copy).
+
+---
+
+## 1. The repair is right
+
+**Encoders.** `LD_HU = enc(0x02,…)` and `ST_H = enc(0x0a,…)` match `cpu_m88k_instr.c` (`case 0x02: ld.hu`, `case 0x0a: st.h`) and the width probe. Decode is `op26<<26 | d<<21 | s1<<16 | imm16` with `d=(iword>>21)&0x1f`, `s1=(iword>>16)&0x1f`. `rs1=2` is the PCC2 base. Same layout the width rows already run.
+
+**Register plan / endian / 0x78.** T1CMP write is `memcpy` of guest bytes (`dev_pcc2.c` T1CMP arm). m88k is big-endian (`memory_readmax64` shifts `buf[0]` first), so `st.w 0x12345678` at 0x04 lays `12 34 56 78`. Then:
+
+| insn | what |
+|---|---|
+| `ld.bu r4, 0x05` | 0x34 — `srvd val` / first latch bit (0x05 only) |
+| `ld.hu r6, 0x06` | 0x5678 — aligned (even); announces; sets bit **0x06 only** |
+| `st.h r7=0xaabb, 0x06` | silent (bit already set), **declined** — handler memcpy is READ-only, so the array is untouched |
+| `ld.hu r6, 0x06` | still 0x5678 — `half wr rdawr` |
+| `ld.bu r8, 0x05` | 0x34 — `srvd rd latch` |
+| `st.b r7, 0x07` | **first** access at 0x07 (len-2 at 0x06 does not set bit 0x07); announces; declined; idata = 0xbb |
+| `ld.bu r9, 0x07` | **0x78** — the T1CMP byte the word store left |
+
+`srvd wr latch` want 0x78 is not a guess: BASE.out is 46/46 with that value, and M_BACKEDLOW.out shows the discriminator (`srvd wr latch` 0xbb, `half wr rdawr` 0xbb78) when a low-offset store actually lands. `uint8_t` assignment of idata 0xaabb stores 0xbb at 0x06 only, so the halfword becomes 0xbb78 — that is why M_BACKEDLOW and full memcpy-M_BACKED (0xaabb) part ways.
+
+**Alignment.** 0x06 is 2-aligned; 0x07 and 0x21 are bytes. A guest `ld.w` at 0x05 never reaches this arm (alignment is checked before `memory_rw`).
+
+**Text anchors do not collide.** Read format is `-- served 0x%02x`; write format is `: 0x%x -- declined`. `srvd half text` keys on `0x6 (len 2) -- served 0x56`. The len-2 write in that session is silent, so no `0x6 (len 2): 0xaabb -- declined` line exists to steal the count. `wr val text` (`0x30 (len 1): 0x5a -- declined`) and `wide wr val` (`(len 4): 0x5a5a5a5a -- declined`) live in other sessions.
+
+**Product.** Two comment sentences, no code. Tick write-back is T1COUNT/T2COUNT only (`pcc_timer_tick` `write32` at those two labels), under CEN, which is off at init. `timer_tick` *is* the SIGALRM handler and calls `timer->timer_tick` directly (`timer.c`). Fable’s “ticks run between instructions” premise stays refuted; the COUNT-word / end-span comment is the right reason `data[0]` stays the operand.
+
+---
+
+## 2. The twenty-two die for the claimed reason (with one honest accident)
+
+Opened: `BASE`, `M_WRVAL0`, `M_WRDATA0`, `M_LASTBYTE`, `M_RELOAD`, `M_BACKEDLOW`, `M_LATCHOFF`, `M_LATCHRD0`, `M_HALFKILL` plus the packet’s red lists.
+
+| mutant | dedicated row(s) | claimed reason holds? |
+|---|---|---|
+| M_WRVAL0 44/46 | `wr val text`, `wide wr val` | yes — substring `0x5a` / `0x5a5a5a5a` gone |
+| M_WRDATA0 45/46 | `wide wr val` only | yes — byte write has `idata == data[0]`, so `wr val text` *must* stay; that is the point of the wide row |
+| M_LASTBYTE 45/46 | `srvd half text` | yes — `served 0x78` vs 0x56; `srvd val text` stays because len 1 |
+| M_RELOAD 46/46 | none | disclosed, measured; `.old36` 36/36 is the breach |
+| M_BACKEDLOW 43/46 | `inword rdawr` 0x5a, `half wr rdawr` 0xbb78 | yes; **`unnamed rdawr` stays 0x0** (0x21 ≥ 0x14) — not a blanket store |
+| M_LATCHOFF 42/46 | `inword msg` 14, `unnamed msg` 15 | yes; latch rows at IEICR/IEERR stay 1/2 |
+| M_HALFKILL 40/46 | session dies at `ld.hu` | see below |
+| M_LATCHRD0 43/46 | `srvd rd latch` 0x0, `srvd wr latch` 0x0 | yes |
+| M_LEN4R / M_LEN4W | `srvd val text`+`srvd half text` / `wr val text` | yes; `wide *` stay because they *are* len 4 |
+
+**Safe misses** are the class CHANGELOG names: a second `0x5 (len 1) -- served 0x34` when bit 0x05 is left clear (M_LATCHOFF/M_UNLATCH/M_WRLATCH/M_ABA). M_LATCHOFF.out: `srvd val text` 2, `srvd half text` 2, `half wr rdawr` still 0x5678 (SET skipped ≠ store). Predicted reds all went red.
+
+**M_LATCHRD0 extra `half wr rdawr` 0x78:** not a disposition failure of `st.h`. The second `ld.hu` is a latched-path *read*; `data[0]=0` after memcpy yields 0x0078, printed `0x78`. The dedicated rows still fire. Same family as the unlatch extras.
+
+**My adopted row (len==2 re-kill), scrutinised harder.** `program()` is one `step 8`. M_HALFKILL dies at the **first** `ld.hu`. `srvd val` (the len-1 load *before* that) reds as `host exit1` because `print r4` never runs — session-level alive, not because the byte read hit `len==2`. PRETABLE already said “the session dies at its ld.hu”. `half wr rdawr` never executes `st.h`.
+
+So a `len==2 && MEM_WRITE` re-kill and a `len==2 && MEM_READ` re-kill are **indistinguishable** on this session (both 40/46, same six names). They cannot *sweep*. The FATE pin for len 2 is the batch, not a per-instruction oracle. That is CHANNEL coarseness, not a floor hole. I would not split the session for it.
+
+M_WRVAL0/M_WRDATA0 kill on the text they were built for, not via a neighbour. M_BACKEDLOW’s extra `srvd wr latch` 0xbb was predicted (0x07 < 0x14) and is the same store, not an accident.
+
+---
+
+## 3. Mirrors of the ten new rows
+
+| new row | other arm | other width | other setter / class | status |
+|---|---|---|---|---|
+| `wr val text` | `srvd val text` | `wide wr val` (len 4) | write-announce **value at len 2** | arm/width 1+4 **ROWED**; len-2 write announce **NEITHER** (`st.h` is silent) |
+| `wide wr val` | `wide rd srvd` (width yes; value CHANNEL-dead — four zeros) | `wr val text` | named 0x28 | ROWED; this is the row that separates `idata` from `data[0]` |
+| `srvd half text` | write announce at len 2 | `srvd val text` / `wide rd srvd` | in-word 0x06 | write-announce **NEITHER**; len-4 byte-selection **unrowable** (below) |
+| `half wr rdawr` | `srvd half text` | `inword rdawr` / `wide wr` | latched-path len-2 write | first-access len-2 write **NEITHER** (no leading `st.h`) — equivalent to identity today |
+| `srvd rd latch` | write-after-read value = `half wr rdawr` | — | `srvd wr latch` | ROWED; named/unnamed latched *reads* are CHANNEL-dead (those cells are 0 at init) |
+| `srvd wr latch` | — | — | `srvd rd latch` | ROWED; must live in T1CMP interiors to have a nonzero served byte |
+| `inword msg` | no `inword rd msg` | — | `unnamed msg`, named = `latch sameoff`/`named wr msg` | write-count **ROWED**; in-word *read* count **NEITHER** — covered at 0x05 by `srvd val text` when unlatched |
+| `unnamed msg` | no `unnamed rd msg` | — | `inword msg` | same shape; unnamed read-count extra is equivalent on `unnamed rd` (one access per offset) |
+| `inword rdawr` | — | `half wr rdawr` | `unnamed rdawr`, `ieicr`/`ieerr rdawr`, `sameoff val` | ROWED per class |
+| `unnamed rdawr` | — | — | named + in-word rdawr | ROWED |
+
+**Mirror of M_BACKEDLOW (`ra < 0x14`)** is member 6 for `ra >= 0x14`. That already reds `ieicr rdawr` / `ieerr rdawr` / `sameoff val` / `unnamed rdawr` / `wide wr` — pass-2 rows. The in-word pair was the missing class, not a missing polarity.
+
+**Len-4 `data[len-1]` is not a missing row.** Word-aligned uncased windows (IEERR 0x28, PRTICR 0x30, …) are zeros: no cased store feeds them. The T1CMP interiors *do* differ, but `ld.w` at 0x04 is CASED and `ld.w` at 0x05 is rejected before `memory_rw`. Unconditional LASTBYTE is killed at len 2, which is the only reachable place the two bytes differ. A `len==4 ? data[len-1] : data[0]` mutant is observationally the identity. Same family as M_RELOAD, not #499 left open.
+
+No **NEITHER** in the table is a floor cell. The write-announce-value-at-len-2 gap is a **claim-row** gap (`len` is not an `if` in the arm).
+
+---
+
+## 4. Smallest edit that still passes 46
+
+**Measured:** M_RELOAD, 46/46 (`M_RELOAD.out`, no `PCC2D_RED`). Disclosed.
+
+**Derived, in the contract’s exclusions:**
+
+1. `if (len == 8) exit(1)` — `ld.d`/`st.d` are op26 0x04/0x08; no row issues them.
+2. Member 6 at one offset the rdawr rows do not read back (e.g. 0x20). `#392` if 43 value rows.
+3. Latch SET skipped at an offset that never sees a second access (e.g. 0x09, 0x30). Write-side *count* still 12/13/18 because the first access still announces.
+
+**Derived, claim-row (not floor):** write announce prints 0 only when `len==2`. No announcing len-2 write exists, so `wr val text` and `wide wr val` stay. Filter must not demand a row for it.
+
+I did not find a DEPENDS-ON operand-swap or guard-weaken that is green on all 46. Guard is the per-offset bit; body reads `writeflag`, `idata`, `len`, `data[0]`. The (d) forms already in table 4 (unlatch, one bit, write-only SET, class SET, `|=`→`=`, read re-kill, width re-kill, member 6, value→0 both arms, `data[len-1]`, `len`→4, latched-path zero) all red.
+
+---
+
+## 5. The record is honest except two L4s
+
+**L4a — contract cites a run that does not exist.** `pcc2_default_probe.py` DISCLOSED block: “Opus M_RELOAD, MEASURED **44/44**”. Table 4 is 36/36 on the pass-3 instrument (the breach) and **46/46** on the repaired one (`M_RELOAD.out`). There was never a 44-row default probe. CHANGELOG table 4 has 46/46 and is right; the contract (and the frozen copy of it) is not. Correct in place to “36/36 on the 36-row instrument; 46/46 on this one, as disclosed”.
+
+**L4b — “announce COUNT likewise (a silent skip of one unsampled offset passes)” is stale.** `inword wr`/`unnamed wr`/`named wr` now drive **every** offset of the class and the count rows want 12/13/18. A silent skip of any **write** announce drops that count and reds. The sentence is still true of (i) member-6 **value** at an offset the one-per-class rdawr does not sample, and (ii) **read** count at in-word/unnamed offsets the srvd session does not revisit. It is false of write-side count. Rewrite it to those two, or drop “COUNT likewise”.
+
+Everything else I checked holds: table 4 scores match the logs opened; the five safe misses are one class and named with values; M_BACKED2’s `srvd wr latch` staying 0x78 is right (first write at 0x07); gate list is 46 names, longest 13 (`srvd half text`, `half wr rdawr`, …), under the `%-16s` + two-space gate anchor; 18+12+13=43 against the header vs the case list (21 cased byte offsets, 21+43=0x40); `warned_unimpl` is `uint64_t`, fold is `relative_addr %= PCC2_SIZE` before the switch.
+
+Denominator phrase “five channels on BOTH arms” is slightly loose for write **value** and write **width-label** at len 2 (no announcing `st.h`). Fate at len 2 both ways is real (`M_HALFKILL`). Not a lie if “rowed both ways” means an access of that width exists. Do not inflate it into “every announce channel at every width”.
+
+---
+
+## 6. Close?
+
+**Yes.** Valid pass: repair diff inlined (ten rows, two encoders, two comments); roster named (agy reserved; glm’s pass-3 burns are history); zero floor breaches with a denominator.
+
+**Denominator (cells closed):** announce fate/count/direction/width/value on both arms at the widths actually announced (write value at 1 and 4; read value at 1 and 2; width label at 1, 2, 4 on reads and at 1, 4 on writes); setter × tester direction product (four); accumulation (`latch aba`); latched-path disposition **and** read response; every one of 43 uncased offsets written and read once; one count and one read-back per offset **class**.
+
+**Excluded, disclosed:** M_RELOAD (measured 46/46); len 8; end-span wide read; member 6 or latch-SET scoped to a single offset the class samples do not revisit; per-instance latch; `debug()` for `fatal()` under stepping; write-announce value at len 2 (claim, no `if (len)` in the arm); len-4 byte-selection (unrowable: reachable wide default reads are all-zero).
+
+A closing zero with that list is not “zero looked for”. Consecutive passes found the same class (announce value, one arm then the other); this diff closed the class. Stop.
+
+**F2 1–9:** accept, with the two L4s above as in-commit records work. F2 10–13: still rejected / not credited.
+
+**If something else:** the len-2 write is silent, so `half wr rdawr` pins **disposition** of a latched `st.h`, not the write-announce text. That is a feature of appending to the srvd session (zero new sessions) and should stay named, not quietly counted as a write-value row.

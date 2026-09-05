@@ -1,0 +1,63 @@
+**VERDICT: PASS — with three premises I cannot settle from the packet and no accepted disposition I can call wrong by number.**
+
+---
+
+**Question 1 — Is the repair right? Is `data[0]` always the served byte?**
+
+READ from the packet: the memcpy sits above the switch and fills `data[]` from the array; the switch dispatches to the default arm; the read fatal prints `data[0]`. For a read, the guest received `data[]` at memcpy time, so `data[0]` is what was served. For the #119 end-span path, `data[]` is zero-filled and `data[0]` = 0x00, which the brief asserts is what the guest received there too. The write fatal prints `idata`, not `data[0]`, so the write path is unaffected. The original code reloaded the array, which (per codex, inlined) could differ from the served byte when the SIGALRM tick fires between memcpy and fatal — that is a non-determinism in the announce, not a correctness bug in what was served. The repair pins the announce to the served byte. Logically correct on the two paths named.
+
+**NOT CHECKABLE from the packet:**
+- The structural claim "data was filled by the memcpy above the switch" — I cannot see that the memcpy is unconditional, or that it precedes the switch on every code path. One fact would settle it: the line number and guard of the memcpy in `dev_pcc2.c`.
+- The "#119 end-span path" — named, not described. One fact would settle it: what `#119` refers to (a case? a line? a bug id?) and the exact code path that zero-fills `data[]`.
+- Whether the tick can fire *during* the memcpy (vs. between memcpy and fatal). If during, `data[0]` could be a torn read. The brief only addresses "between memcpy and announce."
+
+**Which accepted disposition is wrong, by number?** None that I can call wrong from the inlined text. Every numbered disposition (1–14) is consistent with its inlined evidence: the predictions match the measurements row-for-row (see Q2); the six pass-2 escapes have rows that go RED under the named mutant; the three comment corrections are textual and visible in the diff; the gate result is inlined as GATE_RC=0. Disposition 11 (minimax's "unsafe" label on M_RDKILL) is a meta-adjudication I cannot audit because minimax's actual prediction is not inlined — only the panel's prediction (19 red, exact) is. If minimax's prediction differed and was mislabelled, the rejection stands; if minimax's prediction agreed, the disposition is a no-op. Either way, I cannot affirm or overturn it from the packet.
+
+---
+
+**Question 2 — Predictions vs. measurements, pass-2 mutants on the old instrument, open cells.**
+
+**Predictions match measurements exactly** (counts and named red cells), verified row-by-row against the table:
+
+| Mutant | Predicted | Measured | Red cells match? |
+|---|---|---|---|
+| BASE | 36/36 | 36/36 | anchors survive (inlined) |
+| M_WRLATCH | 34/36 | 34/36 | latch rd rd, latch rd wr ✓ |
+| M_WIDEKILL | 32/36 | 32/36 | wide wr, wide wr msg, wide rd, wide rd srvd ✓ |
+| M_OFFKILL | 34/36 | 34/36 | inword wr, inword rd ✓ |
+| M_SRVD0 | 35/36 | 35/36 | srvd val text ✓ |
+| M_BACKED2 | 35/36 | 35/36 | sameoff val ✓ |
+| M_ABA | 35/36 | 35/36 | latch aba ✓ |
+| M_EXIT | 7/36 (29 red) | 7/36 | the 29 named cells match ✓ |
+| M_UNLATCH | 30/36 (6 red) | 30/36 | 6 cells match ✓ |
+| M_ONELATCH | 31/36 (5 red) | 31/36 | 5 cells match ✓ |
+| M_BACKED | 32/36 (4 red) | 32/36 | 4 cells match ✓ |
+| M_RDKILL | 17/36 (19 red) | 17/36 | 19 cells match ✓ |
+| M_DIRSWAP | 30/36 (6 red) | 30/36 | 6 cells match ✓ |
+
+No contradiction. No predicted-red-stayed-green. No predicted-green-went-red in the UNSAFE direction.
+
+**All six pass-2 mutants are 23/23 on the pass-2 instrument** (M_WRLATCH.old23, M_WIDEKILL.old23, M_OFFKILL.old23, M_SRVD0.old23, M_BACKED2.old23, M_ABA.old23 — all 23/23). The two MEASURED Opus sweeps (M_O1, M_O2) correspond to M_SRVD0 and M_BACKED2. Breach claims are correct.
+
+**No cell of the closure is open on the tested mutants.** The lowest-scoring tested mutant is M_EXIT at 7/36 (29 red). No mutant reaches 36/36.
+
+**NOT CHECKABLE from the packet:**
+- Whether the 36 rows form an *exhaustive* closure. The axes enumerated (guard × body × direction, accumulation, disposition-at-latch, width-as-claim, named/counter-interior/unnamed coverage) are plausible, but the space of possible mutants is far larger than the 13 tested. The floor question — "does a clause-(d) mutant exist that sweeps clean?" — is answered *empirically* (no, among the 13) but not *structurally*. One fact would settle it: a proof that the 36 rows are a partition of the mutant space along the named axes, which would require code I cannot read.
+- The definition of "clause-(d) mutant." The term is used but not defined in the packet. If it denotes a specific class (e.g., mutants that alter a single clause), then the 13 tested may or may not cover that class exhaustively.
+
+---
+
+**Question 3 — Should #501 close and commit?**
+
+**READ:** measurements match predictions; the six pass-2 escapes are closed by named rows that go RED under the named mutant; gate 14 returns GATE_RC=0 with 36/36 green on pcc2 default and 251/251 green on pcc2 width; the repair diff is minimal (two announce-format changes, one value-source change, three comment corrections); the product comment now correctly states the served byte, the tick-rewrite caveat, and "no inspected OpenBSD driver path reaches" (downgraded from "no guest reaches").
+
+**REASONED:** the closure is supported by 13 mutants spanning latch logic (WRLATCH, UNLATCH, ONELATCH, ABA), width (WIDEKILL), offset coverage (OFFKILL), value reporting (SRVD0, BACKED2, BACKED), read-path (RDKILL), and direction labelling (DIRSWAP). The pass-2 instrument's two MEASURED 23/23 sweeps (M_SRVD0, M_BACKED2) are now caught on the 36-row instrument (35/36 each). The floor holds empirically.
+
+**Carry the denominator:**
+- **36 rows** in the shipped detector: anchors (offset 0x2a, served 0x, direction phrases, MSG); named (5); inword (2); unnamed (2); ieicr/ieerr rdawr (2); latch (6: sameoff, rw one, rd rd, rd wr, twooff, aba); sameoff val (1); alias (2); dir text (3); srvd (2); wide (4).
+- **13 mutants** tested; **6 of them** are the pass-2 escapes; **2 of those 6** (M_SRVD0, M_BACKED2) were MEASURED at 23/23 on the pass-2 instrument.
+- **Excluded:** any mutant shape not among the 13 (the mutant space is open-ended); the "clause-(d)" definition is not provided so I cannot affirm class coverage; the #119 end-span path mechanics are asserted, not verified.
+
+**One line on what I cannot settle:** the structural claim that the memcpy is unconditional and precedes the switch on every path that reaches the default arm, and the definition of "clause-(d) mutant" — both would be settled by reading `dev_pcc2.c` and the project's mutant taxonomy, neither of which I can see.
+
+**Recommendation:** close and commit, with the record carrying the explicit caveat that exhaustiveness of the 36-row closure is empirical (13 mutants, no sweep) rather than proven.

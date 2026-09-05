@@ -223,6 +223,54 @@ MANIFEST = {
     #  regress/artifacts/ by those rounds is EVIDENCE (#471 class) -- frozen instruments beside their kill
     #  tables, the measuring seats' drivers and discriminators, one rung-3 witness.  Generated 2026-09-05 from
     #  the hook's own UNCLASSIFIED list at the pass-13 commit; one line per file, deliberately.
+    "pcc2_default_probe.py":
+        (CLASS_DETECTOR, "pcc2defaultkill detector (#501): the default arm of DEVICE_ACCESS(pcc2), 46 rows, run by gate_arm.sh beside the width probe"),
+    "artifacts/pcc2defaultkill/killtable_20260905/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table 1/2: the frozen 23-row instrument, preserved beside its logs"),
+    "artifacts/pcc2defaultkill/killtable_20260905/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table 1/2: the frozen session helper the instrument borrows, preserved beside it"),
+    "artifacts/pcc2defaultkill/killtable_20260905/run1_oldrowformat/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table run 1: the status-first instrument the gate could not count, preserved as the L1 record"),
+    "artifacts/pcc2defaultkill/killtable_20260905/run1_oldrowformat/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table run 1: its frozen session helper"),
+    "artifacts/pcc2defaultkill/killtable3_20260905/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table 3: the frozen 36-row instrument, preserved beside its logs"),
+    "artifacts/pcc2defaultkill/killtable3_20260905/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table 3: its frozen session helper"),
+    "artifacts/pcc2defaultkill/killtable3_20260905/old23/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table 3: the pass-2 (23-row) instrument the six escapes were re-measured on"),
+    "artifacts/pcc2defaultkill/killtable3_20260905/old23/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table 3: the pass-2 instrument's session helper"),
+    "artifacts/pcc2defaultkill/killtable4_20260905/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table 4: the frozen 46-row instrument, preserved beside its logs"),
+    "artifacts/pcc2defaultkill/killtable4_20260905/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table 4: its frozen session helper"),
+    "artifacts/pcc2defaultkill/killtable4_20260905/old36/frozen_probe.py":
+        (CLASS_RESEARCH, "#501 table 4: the pass-3 (36-row) instrument the ten escapes were re-measured on"),
+    "artifacts/pcc2defaultkill/killtable4_20260905/old36/pcc2_width_probe.py":
+        (CLASS_RESEARCH, "#501 table 4: the pass-3 instrument's session helper"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_BACKEDLOW.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: the mutant edit script behind a measured 36/36 sweep, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_LASTBYTE.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: mutant edit script, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_LATCHOFF.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: mutant edit script, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_RELOAD.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: mutant edit script, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_WRDATA0.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: mutant edit script, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass3_seats/opus_logs/edit_M_WRVAL0.py":
+        (CLASS_RESEARCH, "#501 pass 3, Opus seat: mutant edit script, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass4_seats/opus_logs/gatecheck.py":
+        (CLASS_RESEARCH, "#501 pass 4, Opus seat: its gate-list vs probe-rows cross-check, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass4_seats/opus_logs/len4_witness.py":
+        (CLASS_RESEARCH, "#501 pass 4, Opus seat: the st.d-at-T2COUNT route to a nonzero len-4 read (the pcc2counter8 coupling), preserved"),
+    "artifacts/pcc2defaultkill/pass4_seats/opus_logs/logs/len4_witness.py":
+        (CLASS_RESEARCH, "#501 pass 4, Opus seat: a copy of the same witness beside its log"),
+    "artifacts/pcc2defaultkill/pass4_seats/opus_logs/mutate.py":
+        (CLASS_RESEARCH, "#501 pass 4, Opus seat: its mutant applier, preserved as evidence"),
+    "artifacts/pcc2defaultkill/pass4_seats/opus_logs/offsets.py":
+        (CLASS_RESEARCH, "#501 pass 4, Opus seat: its 43-offset census re-derivation, preserved as evidence"),
     "artifacts/pcc2defaultkill/witness_20260905/defaultkill_witness.py":
         (CLASS_RESEARCH, "pcc2defaultkill rung-3 witness (guest st.b/ld.bu at uncased offsets), preserved as evidence; not a gate"),
     "artifacts/pcc2widthkills/killtable2_20260903/part10/frozen_probe.py":

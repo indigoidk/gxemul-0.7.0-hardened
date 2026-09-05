@@ -399,8 +399,9 @@ CONTRACT (vacuity-floor clause (e)) -- what this detector is designed to catch:
     * pcc2c040kill -- a LEGAL byte write of 0x04 to GENCTL still ends the host in
       reassert_interrupts().  Every GENCTL lane value here keeps bit 0x04 CLEAR so no
       row dies for that reason;
-    * pcc2defaultkill -- an unlisted offset (0x06, 0x14, 0x18, 0x2c ...) still ends the
-      host in `default:';
+    * pcc2defaultkill -- FIXED by #501: an unlisted offset (0x06, 0x14, 0x18, 0x2c ...) no
+      longer ends the host in `default:'; regress/pcc2_default_probe.py (46 rows) pins it, and
+      nothing HERE measures that arm (this line said "still ends" until #501's pass 4);
     * pcc2counter8 -- the counter arm's raw memcpy of an 8-byte write;
     * what real hardware does with the LANES of a wide write (not on disk);
     * the SCCERR word-write's stored value: the arm always stores 0, so a decline and
