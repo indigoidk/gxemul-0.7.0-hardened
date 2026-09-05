@@ -93,7 +93,8 @@ WHAT THIS DETECTS, AND WHAT IT DOES NOT (floor clause (e), the CONTRACT).
       that edit needs (it corrupts the FIRST access, not the second); the other
       four sites are count-only.
     * *** A CHANNEL DOWNGRADE. `fatal(` -> `debug(` at any site scores a CLEAN
-      SWEEP HERE AND IS A REAL ESCAPE. ***  Every row single-steps, and `debug()`
+      SWEEP HERE AND IS A REAL ESCAPE. ***  Every row single-steps (true until #486:
+      `runloop` free-runs, and its docstring narrows this sentence), and `debug()`
       always prints under stepping (`core/debugmsg.c:375` early-outs on `v < 0`,
       which free-running at verbose 0 gives and stepping does not).  So a
       production guest would get SILENCE while every row stays green -- quietly
@@ -359,7 +360,8 @@ def runloop(body, count, at=CODE):
     `runloop_fast` beside it would leave a dead helper -- and this fork licenses
     additions by measured deltas or a transferred warrant, never by "it cannot hurt".
 
-    *** THE `print r3` IS A COMPLETION CONTROL AND IS NOT OPTIONAL. ***  `session()`'s
+    *** THE `print r3` IS A COMPLETION CONTROL AND IS NOT OPTIONAL. ***  (STATED, NOT
+    ENFORCED: no row parses the printed r3 -- filed as wdcfloodprobe, 2026-09-05.)  `session()`'s
     reader returns True on a plain timeout, so a `continue` that never reaches the
     breakpoint would leave the guest spinning in `bra .` with the process alive, and
     the row would score whatever happened to be in the buffer.  Pinning r3 to 0 is
@@ -461,7 +463,9 @@ row("datawr x2", n(P_DATA, t, alive), "1",
 #  A seat proposed `d->warned_X = !d->warned_X;` so that fires 1 and 3 announce while a
 #  two-fire row stays green.  Reading says that particular edit cannot work -- the
 #  assignment sits INSIDE the guard, so fire 2 never reaches it -- but the CLASS is real
-#  and this row closes all of it at once, for any period N > 1.
+#  and this row closes periods 2 and 3: three fires expose a latch that re-arms every 2nd or
+#  3rd fire; a period-4 latch fires at 1 and 5 and shows ONE line (this comment said "any
+#  period N > 1" until the 2026-09-05 retrospective review -- wdcfloodprobe).
 t, alive = session(st(WD_CMD, 0xaa)
                    + run([MOV_B_R8_AT_R7, MOV_B_R8_AT_R7, MOV_B_R8_AT_R7]))
 row("fire3", n(P_UNIMPL, t, alive), "1",

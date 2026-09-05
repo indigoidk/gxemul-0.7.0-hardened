@@ -57,7 +57,9 @@
  *  cylinders -- at ZERO failures, because this driver reads identify_struct
  *  DIRECTLY rather than through the path the guest uses. Closing it needs a
  *  different harness (drive wdc_command(WDCC_IDENTIFY) then dev_wdc_access on
- *  wd_data), which is new machinery rather than another row, so it is filed. ***
+ *  wd_data), which is new machinery rather than another row -- filed as
+ *  wdcidentorder on 2026-09-05 (this line said "so it is filed" from #405 on
+ *  with no row behind it). ***
  *
  *  #408: THAT CITATION USED TO BE A LINE NUMBER AND IT WENT STALE TWICE.
  *  #405's references were +31 off (the length of its own inserted comment);
@@ -5548,7 +5550,11 @@ static void row_wide_geometry(void)
 
 /*
  *  #407: WORD 49 MUST STAY ZERO, and this row is worth one character of mutant.
- *  Setting dev_wdc.c:236 to 2 advertises LBA and passed all ten original rows.
+ *  Setting the LOW byte of word 49 (`identify_struct[2 * 49 + 1]`, dev_wdc.c:236 at
+ *  085766a) to 2 gives word 0x0002 -- a reserved bit, NOT LBA (LBA is 0x0200, the
+ *  high byte); that mutant passed all ten original rows, and this row pins both
+ *  bytes so either mutant reds.  (This comment said "advertises LBA" until the
+ *  2026-09-05 retrospective review.)
  *  It is not cosmetic: the LBA offset arms in wdc__read/wdc__write are `#if 0`
  *  (:315-321, :361-367), the live offsets at :311-313/:358-360 are pure CHS, and
  *  d->lba is parsed at :970 and never reaches an offset computation. A guest
@@ -5586,7 +5592,8 @@ static void row_no_lba_claim(void)
  *  SURVIVED all ten rows because its first self-contradiction is at c=2048 --
  *  the loop stopped 48 short of catching it. 65535 is the last count word 1 can
  *  represent, so it is the right bound; c=65536 cannot be represented at all and
- *  is a separate defect (the missing clamp) with its own round.
+ *  is a separate defect (the missing clamp) -- filed as wdccylwrap on 2026-09-05
+ *  (this line promised "its own round" with no row behind it).
  */
 static void row_selfconsistent(void)
 {

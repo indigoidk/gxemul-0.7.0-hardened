@@ -18,6 +18,27 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-09-05: two guest-visible ATAPI defects in dev_wdc.c that the wdc rounds left
+> ### standing (retrospective batch 3a), plus seven LOW harness/coverage rows
+>
+> **`wdcbeoddtail`** (MEDIUM) -- on a BIG-ENDIAN machine (`evbmips -e maltabe` has the wdc via piix4_ide) a 16-bit
+> data-port read that pops the last valid byte plus the empty-ring sentinel computes `(v << 8) + 0xffff...ff` = `(v << 8)
+> - 1`: the guest reads `v - 1` (0x00 becomes 0xff).  The LE arm only pollutes the padding byte.  Odd lengths come from
+> INQUIRY; the model reports the odd count unpadded.  Re-rank HIGH if a real driver is measured popping the tail.
+>
+> **`wdcpktstatus`** (MEDIUM) -- a rejected or CHECK-CONDITION packet command completes with the ERR bit clear (status
+> 0x50): `atapi_st->status` is never read, and the #416 CHECK CONDITION repair never reached the IDE path -- an
+> out-of-range READ(10) is delivered as zeros with success.  The in-tree OpenBSD 2.2 driver reads the error register
+> only when ERR is set, so it treats the command as a success.
+>
+> **LOW:** `wdccylwrap` (IDENTIFY word 1 truncates cylinders to 16 bits; the 'own round' the detector comment promised was
+> never filed), `wdcidentorder` (an IDENTIFY transmit-order swap is invisible to the differential), `wdcstubtype`,
+> `wdcgeomparse`, `lbsmask` (diskimage.c power-of-two block-size assumption, reachable only via SCSI controllers that
+> complete MODE SELECT), `wdcfloodprobe` (#464 probe: unenforced r3 control, fire3 period overclaim, stale single-step
+> header, a fatal-call floor that tolerates one downgrade), `wdcdiagerr` (status ERR set after DIAGNOSE with error
+> register 01h; OpenBSD 2.2 tolerates it).  Merges into `wdcflagindep` (latch-CLEAR census pin) and `wdcwidthmatrix`
+> (widths 3 and 8 pop 2).  Details in the dated tail and the ledger.
+>
 > ### OPEN -- filed 2026-09-05: the m88k exception core STOPS THE MACHINE for five trap-like exception
 > ### classes -- a guest `divu` by zero, in user mode, ends the emulation (retrospective batch 2)
 >
@@ -2442,7 +2463,8 @@ corruption without a clear host-OOB path.
 > ## 2026-08-03 — #341: dev_wdc's ATAPI read accounted for bytes it never delivered
 > Found by #337's review sweep, and it is the READ-side twin of #338. The data-register
 > read consumes one byte, two if `len >= 2`, four only if `len == 4` — so a 3- or 8-byte
-> access consumes 1 or 2 — but the accounting used the REQUESTED `len`:
+> access consumes 2 (widths 1..8 pop 1, 2, 2, 4, 2, 2, 2, 2; this said "1 or 2" until the 2026-09-05
+> retrospective review) — but the accounting used the REQUESTED `len`:
 > `d->atapi_len -= len; d->atapi_received += len;`. For `len == 8` that subtracts 8 for 2
 > bytes delivered, which lets `atapi_len` step PAST zero; its `== 0` test then never
 > matches, `PHASE_COMPLETED` never fires, and the guest is told a transfer is further along
@@ -14865,3 +14887,41 @@ qualifier (the shipped idempotent slot).  The legacy numbers in the #323/#380 re
 129.7 s, eight halts) are left untouched by ruling: the score-claim rule is forward-only, and their conclusions were
 re-derived or are gate-pinned.  Brief defect recorded: the batch-2 brief carried batch 1's PowerPC parenthetical; Astra
 flagged and ignored it.  Artifacts: `regress/artifacts/retro_20260905/batch2_m88k/`.
+
+### `wdcbeoddtail`, `wdcpktstatus`, `wdccylwrap`, `wdcidentorder`, `wdcstubtype`, `wdcgeomparse`, `lbsmask`, `wdcfloodprobe`, `wdcdiagerr` -- filed 2026-09-05 from the retrospective re-check, batch 3a (dev_wdc.c #337..#464)
+
+GPT-6 Astra (codex, max effort, read-only) re-read the seven older wdc commits; Fable 5.1 adjudicated (artifacts under
+`regress/artifacts/retro_20260905/batch3a_wdc/`).  Verdicts: #337 DEFECT, #341 DEFECT, #405 RECORD, #407 RECORD, #408
+RECORD, #414 DEFECT (known, never filed), #464 RECORD.  Every fix HOLDS as shipped; what the rounds left standing:
+
+**`wdcbeoddtail` (MEDIUM).**  `wdc_get_inbuf()` returns `(uint64_t) -1` on an empty ring, and the data-port read's
+big-endian assembly is `odata = (odata << 8) + wdc_get_inbuf(d)`, so the last valid byte v becomes `(v << 8) - 1` -- the
+guest reads v-1, and a 4-byte read can alter two valid bytes through the borrow.  Fable enumerated both arms; Astra's
+0x23ff and the main loop's 0x22ff were the same arithmetic on different inputs (0x24 and 0x23).  Reachable on MALTA BE;
+witness owed at rung 3 (INQUIRY-37 through six stores and nineteen 16-bit loads).  Options: mask each pop `& 0xff`; return
+0 (reds the shipped `overread -1` row, so the oracle-correction order rule applies); pad odd transfers to an even count
+(BELIEVED -- no standard on disk).  Severity MEDIUM, not the HIGH the main loop proposed: whether a real driver pops the
+odd tail is unmeasured (the over-read latch line in a maltabe boot log is the tell).
+
+**`wdcpktstatus` (MEDIUM).**  The PACKET path never consults `atapi_st->status`; `diskimage_scsicommand` returns 1 for
+CHECK CONDITION (and for unknown opcodes), so a refused READ(10) enters DATA-IN with zeros and ERR clear.  CONFIRMED against
+the in-tree OpenBSD 2.2 `isa/wdc.c` (`case PHASE_COMPLETED:` reads wd_error only when ERR is set) and `atapiconf.c`
+(`atapi_sense(acp, error >> 4, flags)`).  Witness owed at rung 3; options: ABRT on failure; mirror the sense key into bits
+7:4; no DATA-IN phase on CHECK CONDITION.  The #337 block's "how a real drive reports a failed packet command" and
+"res == 0 -- any packet command the SCSI layer rejects" are corrected in place.
+
+**LOW rows.**  `wdccylwrap`: word 1 = cylinders & 0xffff, no clamp; H=S=1 on 32 MiB -> 0.  `wdcidentorder`: two prior
+'filed' claims, zero rows.  `wdcstubtype`, `wdcgeomparse`: differential stub/row gaps.  `lbsmask`: not a wdc row (diskimage.c;
+held behind `GEOM_ROW_LBS257`).  `wdcfloodprobe`: the #464 probe's four overclaims, two corrected in place today, two owed
+(score r3; re-key the fatal-call floor -- 13 executable `fatal(` at HEAD against a floor of 12, so one downgrade escapes).
+`wdcdiagerr`: `d->error = 1` after DIAGNOSE is the right error-register code but `status_byte()` turns it into a set ERR
+bit; OpenBSD 2.2's `wait_for_unbusy` returns WDCS_ERR as a positive and the probe tests `< 0`, so it tolerates it.  Merged:
+`wdcflagindep` gains the latch-CLEAR census pin; `wdcwidthmatrix` gains widths 3 and 8 (both pop 2).
+
+**Records corrected in place (L4)** in CHANGELOG (#405 operand/word-53/'cannot occur' sentences; #407's 133 vs 123
+annotated; #408's MODE SELECT reachability and 'every citation'; #414's overflow clause; #408's five-level check dated;
+#337's two res == 0 sentences), `gate_offline.sh` ('three rows added'), `diff_wdc_identify.c` (word-49 comment; the two
+unmade filings now name their rows), `diff_diskimage_geom.c` ('never resizes'), `wdc_flood_probe.py` (fire3 period;
+r3 control stated-not-enforced; single-step header), `dev_wdc.c` (the full/empty comment stale since #484; '1 or 2'), and
+this file's #341 entry ('1 or 2').  Legacy numbers (#407's 133) left as written and annotated: the score-claim rule is
+forward-only from 2026-08-23.  Brief defect recorded: the adjudication brief's '0x23ff differs' premise was a misreading.

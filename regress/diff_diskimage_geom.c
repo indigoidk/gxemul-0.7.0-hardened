@@ -510,7 +510,11 @@ int main(void)
 	 *  row whose cylinder count is not 80, so a mutant that hardcodes
 	 *  cylinders = 80 in the floppy arm dies here.  Note the capacity is
 	 *  unchanged at 2880 blocks: honouring the override redescribes the
-	 *  disk, it never resizes it.
+	 *  disk and leaves the capacity unchanged HERE because 2*9*512 = 9,216
+	 *  divides 1,474,560 exactly; an override whose H*S*512 does NOT divide
+	 *  the image rounds the capacity UP (g3;7 on this image gives 138
+	 *  cylinders = 2,898 blocks).  This comment said "it never resizes it"
+	 *  until the 2026-09-05 retrospective review.
 	 */
 	geom("floppy + override 2;9 -> 160/2/9", 1474560, DISKIMAGE_FLOPPY,
 	    1, 2, 9, 512, 160, 2, 9, 2880);

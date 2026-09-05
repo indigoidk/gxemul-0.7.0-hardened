@@ -1746,7 +1746,9 @@ else
               "$(grep -c 'last chunk: length is the REMAINDER' "$WDCLOG")" "1"
     check     "wdc IDENTIFY: the refill-bound row is present" \
               "$(grep -c 'last chunk: refill is BOUNDED by it' "$WDCLOG")" "1"
-    #  #407: three rows added after a measure seat found three mutants that passed
+    #  #407: two rows added (slave drive, word 49) and row_selfconsistent() widened, after a
+    #  measure seat found three mutants that passed (this comment said "three rows added"
+    #  until the 2026-09-05 retrospective review; the commit message carries the same error)
     #  the original ten. Each is named because each is the ONLY row that kills its
     #  mutant -- verified by asserting the row NAME in the kill, not just that
     #  something failed.

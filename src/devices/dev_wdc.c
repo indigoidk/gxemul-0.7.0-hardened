@@ -291,9 +291,10 @@ static uint64_t wdc_get_inbuf(struct wdc_data *d)
 		    the SECOND over-read falls through to the tail advance
 		    below and corrupts the ring pointer -- a fix strictly worse
 		    than the flood it removes.  Row `overread -1` pins it.
-		    See `wdcringambig`: after an overrun this predicate is
-		    unsound, because a FULL ring is indistinguishable from an
-		    empty one.  */
+		    See `wdcringambig`: BEFORE #484 this predicate was unsound
+		    after an overrun, because a FULL ring was indistinguishable
+		    from an empty one; #484 sacrifices one slot, so head == tail
+		    now means EMPTY (stale wording corrected 2026-09-05).  */
 		if (!d->warned_inbuf_overread) {
 			d->warned_inbuf_overread = 1;
 			fatal("[ wdc: WARNING! someone is reading too much "
@@ -1137,7 +1138,8 @@ DEVICE_ACCESS(wdc)
 				    from the buffer, not for what the guest
 				    asked for. The reads above take one byte,
 				    two if len >= 2, four only if len == 4 --
-				    so a 3- or 8-byte access consumes 1 or 2
+				    so a 3- or 8-byte access consumes 2 (widths
+				    1..8 pop 1, 2, 2, 4, 2, 2, 2, 2; "1 or 2" until 2026-09-05)
 				    while `len` says 3 or 8. Subtracting the
 				    requested length let atapi_len step PAST
 				    zero, which its `== 0` test then never

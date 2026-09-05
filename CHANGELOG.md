@@ -1,3 +1,45 @@
+# Retrospective re-check, batch 3a (dev_wdc.c #337..#464) -- seven wdc commits re-read by GPT-6 Astra at max effort and adjudicated by Fable 5.1: every fix HOLDS; two guest-visible defects the rounds left standing (MEDIUM), one known-unfiled defect and six harness rows filed, two merges, twenty in-place record corrections
+
+**2026-09-05.  Records only; comment-only source corrections (`dev_wdc.c`).**  Batch 3a = `052982a` (#337), `c941fe3` (#341),
+`2e709cd` (#405), `085766a` (#407), `e86e293` (#408), `154d21c` (#414), `baacf9b` (#464).  Artifacts:
+`regress/artifacts/retro_20260905/batch3a_wdc/` (brief, `astra_batch3a.txt`, adjudication brief, `fable_adj_batch3a.md`).
+
+## Seats
+
+**GPT-6 Astra** (file-reading, read-only; 351,627 tokens; it also consulted an ONLINE T13 ATA-6 draft, which this project
+grades BELIEVED -- no ATA document is on disk) and **Fable 5.1** (Agent, read-only; enumerated every arithmetic claim and
+CONFIRMED the guest's expectation against the in-tree OpenBSD 2.2 source).  The other SEVEN panel seats DELIBERATELY NOT
+FIRED (owner scope); agy not fired (reserved for measurement).  No build, no run: every DEFECT below still owes its rung-3
+witness before any edit.
+
+## Verdicts
+
+| commit | Astra | Fable | outcome |
+|---|---|---|---|
+| `052982a` #337 | DEFECT | DEFECT | exits gone; a refused/CHECK-CONDITION packet completes with ERR clear -> `wdcpktstatus` MEDIUM; two L4s |
+| `c941fe3` #341 | DEFECT | DEFECT | accounting holds; BE odd-tail reads corrupt the valid byte -> `wdcbeoddtail` MEDIUM; one L4 |
+| `2e709cd` #405 | RECORD | RECORD | packing holds; three sentences corrected in place |
+| `085766a` #407 | RECORD | RECORD | detector holds; 133 vs 123 annotated; gate comment and word-49 comment corrected |
+| `e86e293` #408 | RECORD | RECORD | fixture repair holds; MODE SELECT via wdc is unreachable; 'every citation' too strong |
+| `154d21c` #414 | DEFECT | DEFECT (known, never filed) | geometry holds; the 16-bit cylinder wrap -> `wdccylwrap` LOW |
+| `baacf9b` #464 | RECORD | RECORD | latches hold; four overclaims in the flood probe -> `wdcfloodprobe` LOW |
+
+## Dispositions (Fable's numbered list, filed verbatim)
+
+1. `wdcbeoddtail` DEFECT MEDIUM (HIGH if the over-read latch fires under a real driver on maltabe).  2. `wdcpktstatus` DEFECT
+MEDIUM.  3. `wdccylwrap` FILE LOW.  4. the records commit (this one).  5. `wdcidentorder` FILE LOW.  6. `wdcstubtype` FILE LOW.
+7. `wdcgeomparse` FILE LOW.  8. `lbsmask` FILE LOW (diskimage.c, not wdc).  9. MERGE into `wdcflagindep` (latch-CLEAR pin).
+10. MERGE into `wdcwidthmatrix` (widths 3 and 8).  11. `wdcfloodprobe` FILE LOW.  12. observation `wdcdiagerr` -- reachability
+CHECKED by the main loop against the in-tree OpenBSD 2.2 driver (tolerated: `wait_for_unbusy` returns WDCS_ERR as a positive)
+and filed LOW.
+
+## What the main loop got wrong, by the adjudicator's count
+
+Four of the proposed dispositions: HIGH for the BE odd tail (MEDIUM until a real driver is measured popping it); 'pointer or
+LOW file' for the cylinder wrap (there was no pointer -- FILE); two ids that had to MERGE (`wdcwidth38` -> `wdcwidthmatrix`,
+`wdclatchclear` -> `wdcflagindep`) and one to split out (`lbsmask`); and a records list short by four sentences.  The brief
+also mis-read Astra's 0x23ff as a wrong value -- it was the fixture's 0x24 input.  All corrected before filing.
+
 # Retrospective re-check, batch 2 (m88k) -- the two shipped m88k CPU fixes re-read by GPT-6 Astra at max effort and adjudicated by Fable 5.1: both fixes HOLD; a pre-existing exception-core halt surfaced (HIGH), two coverage-debt rows filed, four records corrected in place
 
 **2026-09-05.  Records only; comment-only source corrections.**  Owner directive 2026-09-04: previously shipped work is
@@ -19053,7 +19095,9 @@ companion byte 10 is hardwired to 0, and page 5 byte 5) are **the only unmasked 
 blocks** — every neighbouring field is written `& 255`. Those four bare stores *are* the codebase's
 own assertion that H and S fit in a byte; nothing enforced it, and an unclamped 256 truncated to 0.
 255 also caps `H·S·512` at 33,292,800, which makes the cylinder multiplication overflow unreachable
-by construction.
+by construction — more precisely, the cap bounds `bytespercyl`, and the final product is bounded because
+`cylinders = size / bytespercyl` (+1 on a remainder), so `H·S·C·512 < st_size + 33,292,800`, unreachable
+for any file `stat()` can return (refined 2026-09-05, retrospective review).
 
 **Measured, and it decides the scope question:** the shipped tree reports **0** UBSan errors here,
 the fix reports 0, and the variant with the arms fixed but *without* the bound reports **2** signed
@@ -19456,8 +19500,10 @@ re-reading citations.**
 
 **So writing the lesson down did nothing, and the fix is not better line numbers — it is
 fewer of them.** A line reference inside a file the same commit edits is measured against the
-file it was written in, not the one that ships. Every citation in both files and in the
-CHANGELOG now **names the construct** (`wdc_command()`'s `WDCC_IDENTIFY` case, the `wd_data`
+file it was written in, not the one that ships. The citations #407 had re-derived, in both files and
+in the CHANGELOG, now **name the construct** (earlier numeric citations remain in the #405/#407 blocks
+and in the detector, dated to their rounds' trees — "every citation" was too strong; retrospective
+review 2026-09-05) (`wdc_command()`'s `WDCC_IDENTIFY` case, the `wd_data`
 read in `dev_wdc_access()`, the capacity assignments for words 57-58/60-61), which survives
 every future edit instead of resetting the cycle.
 
@@ -19471,7 +19517,9 @@ That is not a latent nicety. It meant the gate's *optimisation flags were load-b
 correctness*, so a future "let's build the regress tools at `-O0` to debug this" would have
 turned the gate red in a way indistinguishable from a real capability regression. The driver
 now builds a real zeroed `struct cpu` pointing at a zeroed `struct machine`, and is verified
-across **`-O0`, `-O1`, `-O2`, `-O3` and `-Os`** — 13 rows, 0 failures at every level. The
+across **`-O0`, `-O1`, `-O2`, `-O3` and `-Os`** — 13 rows, 0 failures at every level (a dated measurement
+of 2026-08-14; the gate builds at `-O2` only, so it is not a standing property — retrospective review
+2026-09-05). The
 link-flag requirement (`-ffunction-sections -fdata-sections -Wl,--gc-sections`, without which
 it does not link at all) is now recorded in the file as load-bearing rather than cosmetic.
 
@@ -19511,7 +19559,9 @@ correctly for an input under test is not a stub; it is a second implementation.
 
 ## One-hundred-and-forty-seventh round (#407) — the detector two rounds ago shipped with four holes and a note that was wrong in the flattering direction
 
-A pass-2 measure seat built and ran **133 mutants** against #405's `diff_wdc_identify.c`,
+A pass-2 measure seat built and ran **133 mutants** against #405's `diff_wdc_identify.c` (133 vs the
+result line's 90 + 17 + 15 + 1 = 123: ten unaccounted for, and the artifact was not located --
+retrospective review 2026-09-05; the numbers are left as written),
 classifying each under **two independent oracles** — the shipped detector, and a 64-bit
 behavioural signature over all 65,535 reachable whole-cylinder sizes plus 4,096 random counts
 to 2⁴⁰, edge counts, non-512 multiples, slave drive and CD-ROM — so that no-ops could not be
@@ -19577,9 +19627,11 @@ guest memory, so the device layer is byte-stream-preserving. No ATA document was
 there is none in this tree. Two apparent survivors (`(total_size + 511)/512` and `+256`) were
 **discarded as artifacts of the seat's own probe**: `diskimage_getsize()` returns
 `nr_of_logical_blocks * logical_block_size`, a multiple of 512 for every non-ATAPI disk.
-(*#408: "always" was too strong — a guest MODE SELECT can set `logical_block_size` to any
-value in [256, 8192], and `dev_wdc.c` reaches that path for ATAPI. The dismissal holds for
-ordinary disks; the word "always" did not.*)
+(*#408: "always" was too strong in principle — a guest MODE SELECT can set `logical_block_size` to any
+value in [256, 8192] — but NOT through `dev_wdc.c`: the backend's `case SCSICMD_MODE_SELECT:` needs a
+completed 12-byte DATA OUT, which the wdc model never supplies (one `diskimage_scsicommand` call, no
+`data_out`, and #495 declines DATA OUT writes). The dismissal holds for every IDE/ATAPI image; this
+note said the wdc path reaches it until the 2026-09-05 retrospective review.*)
 
 **The real blind spot is recorded and deliberately not closed here.** The transmit loop
 (the `for (i=0; ...; i+=2)` in `wdc_command()`'s `WDCC_IDENTIFY` case) is entirely ungated: swapping its two pushes byte-swaps every IDENTIFY word a
@@ -19684,8 +19736,10 @@ today.
 `wdc_initialize_identify_struct()` packs the ATA IDENTIFY capacity into eight byte
 assignments. **Six used `% 255` where `& 255` is meant** — the eight capacity assignments for
 words 57-58 and 60-61 in `wdc_initialize_identify_struct()`.
-The two that were already correct are the bottom line of each group — the only two whose
-operand is a single byte to begin with. That asymmetry is the sole evidence of intent
+The two that were already correct are the bottom line of each group — the only two that
+already masked the RESULT with `& 255` (their operand, `total_size / 512`, is the same multi-byte
+quotient; this sentence said "whose operand is a single byte to begin with" until the 2026-09-05
+retrospective review). That asymmetry is the sole evidence of intent
 available, because **there is no ATA specification in this repository**, and the fix is
 scoped to exactly what that evidence supports.
 
@@ -19701,7 +19755,9 @@ Worst case a real disk announces **zero sectors**.
 
 **Smallest divergence, reachable rather than theoretical.** The raw threshold is 65,280
 sectors, but `diskimage_recalc_size()` (`diskimage.c:254-268`) rounds every image up to
-whole cylinders, so that exact count cannot occur. The smallest count an actual image can
+whole cylinders, so that exact count could not occur AT THIS ROUND'S TREE — since #414 an override
+`-d g1;1:` on a 33,423,360-byte image gives exactly 65,280 sectors, so the sentence is time-indexed
+(retrospective review 2026-09-05); with the DEFAULT 16/63 geometry the smallest count an actual image can
 have is **33,546,240 bytes / 65 cylinders — a 32 MB disk that announces itself as 120 KB.**
 
 **The byte order was examined and deliberately left alone**, and saying so matters because
@@ -19745,7 +19801,9 @@ checked against **itself**, needing no specification whatsoever. On the shipped 
 **Known survivor, recorded rather than papered over.** A compensating pair that swaps `+0`/`+1`
 across all eight capacity lines *and* swaps the two pushes in the transmit loop is invisible to
 this driver, which reads `identify_struct` directly rather than through the transmit path. The
-word-53 anchor catches the packing half alone; word 47 is `0x8080`, a byte-swap palindrome, and
+word-53 anchor does NOT catch the packing half alone — a capacity-only `+0`/`+1` swap leaves word 53
+untouched and is caught by the CAPACITY rows, as #407 measured at eight failures (this sentence said
+the opposite until the 2026-09-05 retrospective review); word 47 is `0x8080`, a byte-swap palindrome, and
 would have been useless for that.
 
 **Not touched, deliberately: word 49 (LBA support) stays zero.** The LBA offset arms in
@@ -24158,9 +24216,12 @@ nothing more than choosing an access width; two by issuing an ordinary ATAPI pac
   and warn once instead of aborting. Not reachable from SH-4, which has no 3- or 8-byte
   access — `fmov.d` is two 4-byte accesses — but reachable from a 64-bit MIPS machine
   carrying `wdc` over `bus_isa`/`bus_pci`.
-- **`res == 0`** — any packet command the SCSI layer rejects. Now completes with no data and
-  still asserts the interrupt, which is how a real drive reports a failed packet command,
-  rather than taking the emulator down.
+- **`res == 0`** — the SCSI layer's STRUCTURAL rejections (no machine, NULL or short CDB, disk not
+  connected; unknown opcodes and CHECK CONDITION return 1, not 0). Now completes with no data and
+  still asserts the interrupt rather than taking the emulator down — but with the ERR bit CLEAR,
+  which is NOT how a real drive reports a failed packet command (a real drive sets ERR and a sense
+  key). Filed as `wdcpktstatus`, 2026-09-05; this bullet said "any packet command the SCSI layer
+  rejects" and "how a real drive reports" until then.
 - **`res == 2`** — any ATAPI command wanting a DATA OUT phase, `MODE SELECT` among them.
   That arm **already set the correct phase and then called `exit(1)` anyway**, so deleting
   the abort is the entire fix; the transfer itself remains unimplemented and now says so.
