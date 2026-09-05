@@ -1,3 +1,62 @@
+# Retrospective re-check, batch 2 (m88k) -- the two shipped m88k CPU fixes re-read by GPT-6 Astra at max effort and adjudicated by Fable 5.1: both fixes HOLD; a pre-existing exception-core halt surfaced (HIGH), two coverage-debt rows filed, four records corrected in place
+
+**2026-09-05.  Records only; comment-only source corrections.**  Owner directive 2026-09-04: previously shipped work is
+re-checked by GPT-6 Astra (codex, `model_reasoning_effort=max`, read-only sandbox) and each batch's findings are
+adjudicated by Fable 5.1.  Batch 2 = `d12114d` (#323, bcnd M5 mask decode) and `ed242c0` (#380, idle-fold delay slot).
+Artifacts: `regress/artifacts/retro_20260905/batch2_m88k/` (the brief, Astra's answer `astra_batch2.txt`, the
+adjudication brief and Fable's ruling `fable_adj_batch2.md`).
+
+## Seats
+
+Two seats by owner scope: **GPT-6 Astra** (file-reading, read-only; 158,820 tokens) and **Fable 5.1** (Agent, file-reading,
+read-only; re-enumerated every arithmetic claim).  The other SEVEN panel seats were **DELIBERATELY NOT FIRED** on the
+retrospective -- this is a re-read, not a round; the fix round for what it found runs the full nine-seat panel.  agy not
+fired (reserved for measurement).
+
+## Verdicts
+
+| commit | Astra | Fable | outcome |
+|---|---|---|---|
+| `d12114d` #323 | RECORD | RECORD | fix HOLDS (all 32 mask values re-enumerated against `mc88100.txt` and the generator); one L4 comment; one coverage-debt row |
+| `ed242c0` #380 | DEFECT | fix HOLDS; RECORD x3; surfaces a PRE-EXISTING defect | the slot-dispatch repair is right and its detector is above the floor; three record errors corrected; the exception-core halt below |
+| batch | DEFECT | DEFECT | the live defect is upstream code neither round touched |
+
+## Dispositions (Fable's numbered list, filed verbatim)
+
+1. **`m88kexcdeliver` -- DEFECT, HIGH.**  `cpu_m88k.c`, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`:
+   five trap-like exception classes (PRIVILEGE_VIOLATION, ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW, MISALIGNED_ACCESS,
+   UNIMPLEMENTED_OPCODE) stop every guest CPU instead of being delivered at VBR + 8*vector; a user-mode `divu` by zero ends
+   the emulation.  Pre-existing upstream (`git log -L` on the fallback: the import only).  Astra had scoped it to the tb1
+   privilege path; Fable widened it to the class and corrected the main loop's "nine vectors" to "nine switch cases halt,
+   six reachable via a raise site today".  Disposition DELIVER; witness owed at rung 3 before any edit.
+2. **`m88kexcsfu1` -- DEFECT, MEDIUM** (split: SFU1 delivery needs FP exception registers the fork never writes).
+3. **`m88kbcndm6` -- FILE, LOW** (no mask-6 bcnd row; source-predicted escape; above the floor).
+4. **`m88kidledup` -- FILE, LOW** (exactly-once slot execution unpinned; not a clause-(d) breach).
+5. **L4 in place**: the XIP_E claim in the #380 source comment (and #381's misattribution of it to the commit message,
+   which never carried it -- `grep -c` = 0); "dead always" -> #381's softened wording; the generator's "legal encodings"
+   split into legal (bit 4 clear) and tolerated (bit 4 set); the #380 block's "no post-loop witness" qualified to the
+   shipped idempotent slot.
+6. **Campaign records note**: the batch-2 brief's questions carried batch 1's PowerPC parenthetical ("twenty-four
+   encodings / FPSCR / straddle"); Astra flagged it and enumerated the right domain instead; no answer content was
+   distorted.  A brief-authoring defect of the main loop's.
+7. **No action** on the legacy numbers (1.9 M comparisons, 6,172 entries, 129.7 s, eight halts): the score-claim rule is
+   forward-only and audits nothing retroactively; their conclusions were re-derived (all 32 masks) or are gate-pinned
+   (`slot == ntn`).  The main loop had proposed annotating them; Fable ruled that annotation IS the retroactive sweep the
+   rule declines.
+
+## What the main loop got wrong, by the adjudicator's count
+
+Two of four proposed dispositions: one row over nine vectors (should be split, and six are reachable), and the annotation
+of legacy numbers (leave them alone).  Both corrected before filing.
+
+## Campaign status at this commit
+
+Batch 1 (PowerPC, nine commits) and batch 3a (wdc #337..#464) have Astra answers awaiting Fable adjudication; batches 3b
+and 3c (wdc #473..#495) each hit the codex seat's content filter once (`flagged for possible cybersecurity risk`, zero-byte
+answer) -- a SEAT FAILURE of the benign-framing class, first seen on this seat; both re-fired with neutral-vocabulary briefs
+that also forbid dumping the project's own vividly-worded queue/ledger into the transcript, which is what preceded the
+second refusal.  Briefs for the remaining files are written.
+
 # Round #501 pcc2defaultkill -- the `default:` arm of DEVICE_ACCESS(pcc2) ended the host on any access to an uncased offset, reads included; now reads keep the served byte and writes are declined, one latched announce per offset
 
 **2026-09-05.  HIGH, ranked first by the 2026-09-04 fix-review adjudication.  Product change: `src/devices/dev_pcc2.c`
@@ -21472,7 +21531,7 @@ authoritative, a #381-recorded caveat so no future reader "corrects" a
 correct cite — and p. 3-35),
 therefore ran **zero** times per taken iteration for as long as the guest
 idled. On loop exit it ran once — by accident (`next_ic = &ic[3]` happens to
-be the slot) — which is exactly why no post-loop witness can see the defect:
+be the slot) — which is exactly why, for the shipped idempotent slot, no post-loop witness can see the defect:
 every boot marker and exit register reads identical on buggy and fixed
 builds. In the shipped image the slot is `or r2,rX,imm`, so the guest-visible
 blast radius is a stale `r2` during every idle sleep (visible to trapframes
@@ -21495,10 +21554,13 @@ fold accepts a store, an MMIO access, or a faulting instruction.
   INSTRUCTION_ACCESS's zeroing, and left `delay_target` stale-from-the-last-
   branch — consequence-bearing only jointly with the cleared flag, since no
   exception arm reads `delay_target` when `delay_slot` is `NOT_DELAYED`
-  [#381 tightened]. (The commit message additionally listed XIP_E among the
-  wrongly-filed state; that was wrong — XIP_E filing is unconditional on
-  `delay_slot` and identical old and new. The message is immutable; this
-  line is its correction, #381.)
+  [#381 tightened]. (The #380 SOURCE COMMENT above `X(idle_with_tb1_n)` additionally
+  listed XIP_E among the wrongly-filed state; that was wrong — XIP_E filing is
+  unconditional on `delay_slot` and identical old and new. #381 wrote this correction
+  attributing the claim to the commit message and calling the message immutable; the
+  message never carried it (`git show -s --format=%B ed242c0 | grep -c XIP_E` = 0), the
+  mutable comment did, and it stood uncorrected until the 2026-09-05 retrospective
+  review found it. Corrected in the comment, #381 + retro batch 2.)
 - **#380 (matcher)** — arm 3 requires the slot to be a *real same-page ic*
   (`n_back <= ENTRIES-2`: at the page's last slot the "delay slot" would be
   the `end_of_page` sentinel, which repoints `cur_ic_page` when invoked. The

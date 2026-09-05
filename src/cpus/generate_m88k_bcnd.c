@@ -51,10 +51,15 @@ void print_function_name(int samepage, int n_bit, int m5)
 	case 0xe: printf("le0"); break;
 
 	/*
-	 *  #323: every other mask value. These are legal encodings that the
-	 *  assembler has no mnemonic for, and until now they had no handler
-	 *  either -- the table entry stayed NULL and the decoder answered
-	 *  `goto bad`, which stops the emulator.
+	 *  #323: every other mask value.  With bit 4 clear (0, 4, 6, 9, a, b, f)
+	 *  these are legal encodings the assembler has no mnemonic for (MC88100
+	 *  UM: the M5 field "may also be indicated explicitly by a literal
+	 *  value"); with bit 4 set (0x10..0x1f) they are TOLERATED rather than
+	 *  legal -- bit 25 is reserved and "must be zero for future
+	 *  compatibility" -- and the handler ignores that bit.  (This comment
+	 *  called all of them legal until the 2026-09-05 retrospective review.)
+	 *  Until #323 none had a handler -- the table entry stayed NULL and the
+	 *  decoder answered `goto bad`, which stops the emulator.
 	 */
 	default:  printf("m%02x", m5); break;
 	}

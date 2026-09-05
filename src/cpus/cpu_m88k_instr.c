@@ -2680,8 +2680,12 @@ X(idle_with_tb1)
  *  (MC88100 UM p. 1-4 sec 1.2.5, p. 3-26 sec 3.3.2, p. 3-35), never ran for
  *  as long as the guest idled; on loop exit it ran once, but OUTSIDE
  *  delay-slot context, so a faulting exit slot would have filed its
- *  delay-slot state wrong (delay_slot flag, XIP_E, and the vector-dependent
- *  SFIP arm -- for DATA_ACCESS the plain-path SNIP/SFIP coincide with the
+ *  delay-slot state wrong (the delay_slot flag and the vector-dependent
+ *  SFIP arm; NOT XIP_E, whose filing is unconditional on delay_slot and
+ *  identical old and new -- this comment listed it until the 2026-09-05
+ *  retrospective review, and #381's correction had been aimed at the commit
+ *  message, which never carried the claim; for DATA_ACCESS the plain-path
+ *  SNIP/SFIP coincide with the
  *  protocol's, so the divergence is the narrower non-DATA set). This handler
  *  keeps the generated bcnd_n_eq0 protocol bit-for-bit around the slot call.
  *
@@ -2694,7 +2698,9 @@ X(idle_with_tb1)
  *  identity is impossible, not merely undesirable: combination_check runs in
  *  the tail of the BCND's own translation and read-ahead walks FORWARD, so
  *  ic[3] is TO_BE_TRANSLATED at matcher time in BOTH modes -- an identity
- *  test would be dead always (the #360/#361 fold-shipped-dead shape).
+ *  test would be dead on every first-touch path and unreliable in general
+ *  (#381's wording; this line said "dead always" until the 2026-09-05
+ *  retrospective review -- the #360/#361 fold-shipped-dead shape).
  */
 X(idle_with_tb1_n)
 {

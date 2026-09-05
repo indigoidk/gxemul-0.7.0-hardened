@@ -28732,6 +28732,58 @@
    "note": "Filed by #501 pass 1 (codex), 2026-09-05.  A two-instance-in-one-process fixture announcing once from each would.  Shared with the pcc2widthkills latch word.",
    "state_note": "",
    "entries": []
+  },
+  {
+   "id": "m88kexcdeliver",
+   "title": "m88kexcdeliver  the m88k exception core stops EVERY guest CPU for five trap-like exception classes (PRIVILEGE_VIOLATION, ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW, MISALIGNED_ACCESS, UNIMPLEMENTED_OPCODE) instead of delivering VBR + 8*vector -- one guest `divu rX,rY,r0' ends the emulation, from user mode",
+   "sev": "high",
+   "state": "open",
+   "opened": "2026-09-05",
+   "commits": "",
+   "witness": "none",
+   "hold_question": null,
+   "note": "DEFECT, HIGH.  cpu_m88k.c, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented': only RESET/INTERRUPT/INSTRUCTION_ACCESS/DATA_ACCESS set `implemented = true'; nine other switch cases print a VERBOSITY_ERROR and break, so the fallback sets running=false on every CPU and returns (emul.c then breaks the main loop: a GRACEFUL guest-drivable machine halt, not an abort).  Pre-existing upstream (`git log -L' on the fallback returns only the 0.7.0 import); exposed by the #380 review, NOT introduced by #323/#380.  Reachable classes by raise site (deriver: grep -o 'm88k_exception(cpu, *M88K_EXCEPTION_[A-Z0-9_]+' src/cpus/cpu_m88k*.c | sort | uniq -c): PRIVILEGE_VIOLATION 10 (ldcr/stcr/xcr/rte/ld.usr/st.usr/tb0/tb1/tcnd in user mode), ILLEGAL_INTEGER_DIVIDE 4 (divu/div by zero, any mode), INTEGER_OVERFLOW 3 (add/sub, any mode), MISALIGNED_ACCESS 1, UNIMPLEMENTED_OPCODE 1 (prom_call in user mode); BOUNDS_CHECK and ERROR have NO raise site today (latent).  Vector offsets verified against Table 6-1 (mc88100.txt:8524-8538): PRIVILEGE 0x30, ILLEGAL_DIVIDE 0x40, OVERFLOW 0x48, MISALIGNED 0x20.  DISPOSITION: DELIVER (not a device-style decline -- the guest OS has handlers for these): `implemented = true' for the five, flowing through the existing common path (SFRZ, EPSR, SXIP/SNIP/SFIP shadow, supervisor switch, pc = VBR + 8*vector); MISALIGNED already fills DMT in the load/store template.  WITNESS OWED AT RUNG 3 BEFORE ANY EDIT: cold-debugger probe on committed testm88k or luna-88k (exemplars regress/m88k_idle_probe.py, m88k_rounding_probe.py): supervisor `divu r2,r3,r0', VBR into RAM, breakpoint at VBR+0x40, free-run -- pre-fix `unimplemented vector=0x008' and the machine stops; post-fix PC == VBR+0x40, SXIP = faulting instruction | XIP_V, PSR shadow frozen, machine running; plus a LIVENESS control (an already-delivered vector) and an ATTRIBUTION control (the same instruction on a non-faulting operand does not vector).  Split from m88kexcsfu1 (one fix design per round).  Ranked at the top of the live-defect tier, just below the exit(1)-abort class (this one stops gracefully).  Provenance: retrospective re-check (owner directive 2026-09-04) batch 2 -- GPT-6 Astra (codex, max effort) read-only review, adjudicated by Fable 5.1; artifacts regress/artifacts/retro_20260905/batch2_m88k/ (astra_batch2.txt, fable_adj_batch2.md).  The other seven panel seats were DELIBERATELY NOT FIRED on the retrospective (owner scope); the fix round runs the full nine-seat panel.",
+   "state_note": "",
+   "entries": []
+  },
+  {
+   "id": "m88kexcsfu1",
+   "title": "m88kexcsfu1  the m88k exception core stops every guest CPU on SFU1_PRECISE (vector 114, 58 raise sites: any FP/mul/div with SFD1 set, or an FP divide by zero) and the latent SFU1_IMPRECISE, instead of delivering VBR+0x390/0x398",
+   "sev": "medium",
+   "state": "open",
+   "opened": "2026-09-05",
+   "commits": "",
+   "witness": "none",
+   "hold_question": null,
+   "note": "DEFECT, MEDIUM -- split from m88kexcdeliver because faithful delivery needs the FP exception registers FPHS1/FPLS1/FPHS2/FPLS2/FPPT/FPRH/FPRL/FPIT (MC88100 UM Fig 6-1, mc88100.txt:8486-8514, sec 6.8.1), which the fork never writes (grep -c 'FPHS1\\|FPLS1\\|FPPT' src/cpus/*.c = 0); the FPU-disabled case (sec 6.8.4.1, :10324) needs only EPSR.SFD1.  FPECR is already set at the raise sites (X(fdiv_sss) sets FDVZ).  Witness: rung-3 FP-divide-by-zero or FP-with-SFD1-set probe on testm88k; pre-fix `unimplemented vector=0x072' and the machine stops.  Same fallback as m88kexcdeliver (cpu_m88k.c, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented'), pre-existing upstream.  Rank below m88kexcdeliver.  Provenance: retrospective re-check (owner directive 2026-09-04) batch 2 -- GPT-6 Astra (codex, max effort) read-only review, adjudicated by Fable 5.1; artifacts regress/artifacts/retro_20260905/batch2_m88k/ (astra_batch2.txt, fable_adj_batch2.md).  The other seven panel seats were DELIBERATELY NOT FIRED on the retrospective (owner scope); the fix round runs the full nine-seat panel.",
+   "state_note": "",
+   "entries": []
+  },
+  {
+   "id": "m88kbcndm6",
+   "title": "m88kbcndm6  harness: the #323 bcnd detector (gate 11, BCND_ROWS in m88k_rounding_probe.py) has no row for mask 6, so `|| m5 == 6' on the generator's NULL-emission predicate returns a conforming encoding to `goto bad' and passes all seven rows",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-05",
+   "commits": "",
+   "witness": "none",
+   "hold_question": null,
+   "note": "FILE, LOW (coverage debt, above the floor: the seven rows red on the pre-fix NULL table for masks 0/4/f and use independent expected PCs).  Source-predicted by Astra, not measured; X(bcnd_m06) in tmp_m88k_bcnd.c is correct (Z|N).  One row at the next gate-11 instrument change: mask 6 with an operand in each of the Z and N classes.  Provenance: retrospective re-check (owner directive 2026-09-04) batch 2 -- GPT-6 Astra (codex, max effort) read-only review, adjudicated by Fable 5.1; artifacts regress/artifacts/retro_20260905/batch2_m88k/ (astra_batch2.txt, fable_adj_batch2.md).  The other seven panel seats were DELIBERATELY NOT FIRED on the retrospective (owner scope); the fix round runs the full nine-seat panel.",
+   "state_note": "",
+   "entries": []
+  },
+  {
+   "id": "m88kidledup",
+   "title": "m88kidledup  harness: the #380 idle-fold detector (m88k_idle_probe.py, gate anchor `idle counters: arm3 fired, slot==ntn, ntp=0, guard quiet') cannot prove exactly-once slot execution -- duplicating `ic[3].f(cpu, &ic[3]);' without duplicating `slot_runs++' keeps slot == ntn and the idempotent store, so it escapes",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-05",
+   "commits": "",
+   "witness": "none",
+   "hold_question": null,
+   "note": "FILE, LOW (coverage debt; not a clause-(d) breach -- exactly-once is encoded by no predicate the fix depends on).  #381's `slot == ntn && ntp == 0' already catches the counter-doubling variant.  Source-predicted by Astra, not measured.  A non-idempotent witness slot (one that changes the polled word) would distinguish it; the round's own residual already names that shape.  Provenance: retrospective re-check (owner directive 2026-09-04) batch 2 -- GPT-6 Astra (codex, max effort) read-only review, adjudicated by Fable 5.1; artifacts regress/artifacts/retro_20260905/batch2_m88k/ (astra_batch2.txt, fable_adj_batch2.md).  The other seven panel seats were DELIBERATELY NOT FIRED on the retrospective (owner scope); the fix round runs the full nine-seat panel.",
+   "state_note": "",
+   "entries": []
   }
  ],
  "state_semantics": {

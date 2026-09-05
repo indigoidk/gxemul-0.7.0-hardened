@@ -1,0 +1,84 @@
+d12114d (#323): **RECORD** — mask repair is correct; stale legality claims remain, and the detector covers only part of the repaired domain.  
+ed242c0 (#380): **DEFECT** — the repaired fallback exposes a pre-existing privilege-exception path that stops guest CPUs; detector and record gaps also remain.  
+BATCH: **DEFECT** — reviewed HEAD `2bb9cb4`; native builds, gate reruns, and mutation measurements remain unverified in this read-only workspace.
+
+I reviewed only `GXEMUL-SEC/`. The four product files are unchanged since `ed242c0`; later `ee4b69b` (#381) changed the idle gate and records. Source anchors below were verified unique with literal matching (`rg -n -F`).
+
+**For d12114d, the mask repair is correct at HEAD.** The producer extracts five bits, giving exactly 32 field values. The manual derives the condition from the sign bit and NOR of the lower 31 bits. Its `eq0 = 0x02` row calibrates the ordering; bit 4 is unused but must be zero for future compatibility. See [MC88100 manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mc88100.txt), extracted lines **4105, 4106, 4123, 4156, 4160, 4162, 4164, 4166**.
+
+Here is the complete enumeration. `P` = positive; `Z` = zero; `N` = negative excluding `0x80000000`; `M` = `0x80000000`.
+
+| M5, reserved bit clear | M5, reserved bit set | HEAD selects |
+|---|---|---|
+| 00 | 10 | Nothing |
+| 01 | 11 | P |
+| 02 | 12 | Z |
+| 03 | 13 | P, Z |
+| 04 | 14 | N |
+| 05 | 15 | P, N |
+| 06 | 16 | Z, N |
+| 07 | 17 | P, Z, N |
+| 08 | 18 | M |
+| 09 | 19 | P, M |
+| 0a | 1a | Z, M |
+| 0b | 1b | P, Z, M |
+| 0c | 1c | N, M |
+| 0d | 1d | P, N, M |
+| 0e | 1e | Z, N, M |
+| 0f | 1f | P, Z, N, M |
+
+The right column agrees with the manual’s selection logic throughout. The reserved-bit-set forms are accepted tolerantly, with the manual’s compatibility restriction still applying.
+
+The generator and tracked output agree structurally: function names, predicates, table entries, and all three execution protocols. I checked all 128 table entries and evaluated the 96 emitted predicates at six class/boundary representatives—**576 comparisons, zero mismatches**. The nine old predicates also agree across all four classes.
+
+The enumerated counts are **27 → 96 handlers** and **101 → 32 NULL entries**. The remaining NULLs are exclusively the same-page-plus-delay-slot optimization entries; the decoder retains the generic delayed handler. References:
+
+- [generate_m88k_bcnd.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/generate_m88k_bcnd.c), anchor `void print_condition(int m5)`.
+- [tmp_m88k_bcnd.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_m88k_bcnd.c), anchor `X(bcnd_n_eq0)`.
+- [cpu_m88k_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c), anchor `ic->f = m88k_bcnd[d + 32 * (op26 & 1)];`.
+
+**Its detector pins the original failure only partially.** Gate 11’s seven rows are anchored by `for v in "bcnd m5=4 -1 taken"` in [gate_m88k_rounding.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_m88k_rounding.sh). Their producer is `BCND_ROWS = [` in [m88k_rounding_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_rounding_probe.py).
+
+All seven encode plain `bcnd`, displacement `+16`, and a same-page target. They cover six masks: `0,1,2,4,c,f`. The `m5=4 MIN fall` row correctly distinguishes ordinary negatives from MIN.
+
+A small surviving regression is to extend the generator’s **table-emission** NULL predicate with `|| m5 == 6`, then regenerate. That restores rejection of a conforming encoding while leaving every existing bcnd row’s mask untouched. This is a source-predicted survivor, not a measured mutation. The rows use independent expected PCs; their weakness is coverage, not self-round-tripping.
+
+**The RECORD verdict has concrete grounds.** In [CHANGELOG.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md), anchor `## Seventy-sixth round (#323)`, the later paragraph correctly distinguishes accepted reserved-bit forms from legal encodings. Nevertheless, the generator still says `every other mask value. These are legal encodings`. That mutable sentence needs correction in place.
+
+Also distinguish **nine pre-existing GXemul cases** from the manual’s **six listed assembler mnemonics**. The newly implemented compatibility-compliant masks are seven values: `0,4,6,9,a,b,f`; the other sixteen newly accepted values set the reserved bit.
+
+The counts of handlers, NULLs, seven detector rows, and fifty tracked generated C files check out. I did not locate a retained deriver supporting the claimed roughly **1.9 million comparisons**, or an original artifact establishing all eight historical halts. Those historical measurements remain unverified. I found no live defect in the repaired mask decisions.
+
+**For ed242c0, the intended slot-dispatch repair is present.** At `X(idle_with_tb1_n)` in `cpu_m88k_instr.c`, the handler snapshots the branch decision, establishes the branch PC and delay target, dispatches the slot once, and preserves exception ownership when `EXCEPTION_IN_DELAY_SLOT` is set. Both taken and untaken paths dispatch the slot. The architectural requirement is supported by manual extracted lines **851, 852, 3714, 3715, 3716, 4113, 4114**.
+
+I enumerated the matcher’s actual domains at anchor `void COMBINE(idle)`:
+
+- The arming expression produces 32 source-register fields; the matcher excludes `r0`.
+- The delayed pattern fixes displacement at **−8 bytes**.
+- Of 1,024 branch indices, the bounds admit **2 through 1022**, exactly **1,021 positions**. Their slots remain real page entries.
+- The nine-bit vector predicate admits **128 through 511**, exactly **384 values**.
+
+The documented once-per-idle-break approximation remains; this is not a proof of arbitrary delay-slot equivalence across collapsed iterations.
+
+**The detector kills the original omission but still cannot prove exactly-once execution.** Its rows are `taken`, `takenj`, and `untaken`, defined beneath `PROG = (` in [m88k_idle_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_idle_probe.py). The HEAD gate’s unique counter anchor is:
+
+`idle counters: arm3 fired, slot==ntn, ntp=0, guard quiet`
+
+#381 correctly strengthened the predicate to require `slot == ntn` and `ntp == 0`.
+
+However, **duplicating the single slot-call statement while leaving the adjacent counter increment unchanged** survives those assertions by inspection. Both calls store the same value; all three value rows remain unchanged, and the counters still compare equal. The unique product anchor is `ic[3].f(cpu, &ic[3]);`. Thus counter equality does not independently establish execution multiplicity. The probe also lacks fault-context, boundary, and low-vector privilege rows.
+
+**The smallest live residual I found is the privilege-exception fallback.** The new vector restriction correctly declines low-vector folds. The native `tb1` handler then performs its user-mode privilege check, but [cpu_m88k.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c), anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`, treats privilege violation as unimplemented and sets **every guest CPU’s `running` to false**, returning before exception delivery.
+
+The required result is a privilege exception at **VBR + 0x30**, including when the trap condition is false: manual extracted lines **6195, 6196, 9257, 9264**. This is a pre-existing exception-core defect exposed while checking #380’s fallback, not a defect introduced by the new matcher. The current idle probe uses vector `0xff` and cannot detect it.
+
+**The #380 record needs further correction in place.**
+
+- At CHANGELOG anchor `The commit message additionally listed XIP_E`, #381 attributes the error to an immutable message. **`ed242c0`’s message contains no `XIP_E`.** The erroneous claim remains in the mutable source comment anchored by `delay-slot state wrong (delay_slot flag, XIP_E`. Actual XIP_E filing does not depend on delay-slot state.
+- The source still says `test would be dead always`, although #381 corrected the CHANGELOG to acknowledge an already-translated slot.
+- The claim anchored by `exactly why no post-loop witness can see the defect` is too broad. An accepted slot that changes the polled word can make loop exit itself distinguish the implementations.
+- The shipped **68 → 74 checks**, **+6**, and **34,415 + 3,648 = 38,063** arithmetic checks out. Original artifacts for the quoted **6,172 entries**, mutation run, and **129.7-second boot** were not located.
+
+For the batch, the committed [August 29 battery log](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/batteryreds/battery_20260829_160646.log) supplies later passing evidence, including the unique anchor `M380_COUNTERS=installs:0/0/1,ntp:0,ntn:6551,slot:6551,ds:0`. It does not establish a run against today’s HEAD or substantiate the earlier exact measurements.
+
+A measuring seat should build a fresh writable Linux checkout of **GXEMUL-SEC at `2bb9cb4`**, regenerate and compare `tmp_m88k_bcnd.c`, run gate 11, measure the two detector-surviving mutations above, and verify privilege-exception delivery. The brief’s “twenty-four encodings / FPSCR / straddle” parenthesis does not describe either shipped fix.

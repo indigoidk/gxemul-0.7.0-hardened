@@ -18,6 +18,25 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-09-05: the m88k exception core STOPS THE MACHINE for five trap-like exception
+> ### classes -- a guest `divu` by zero, in user mode, ends the emulation (retrospective batch 2)
+>
+> **`m88kexcdeliver`** (HIGH) -- `cpu_m88k.c`, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`:
+> only RESET / INTERRUPT / INSTRUCTION_ACCESS / DATA_ACCESS set `implemented = true`; PRIVILEGE_VIOLATION,
+> ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW, MISALIGNED_ACCESS and UNIMPLEMENTED_OPCODE (plus BOUNDS_CHECK and ERROR, which
+> have no raise site today) print a VERBOSITY_ERROR and fall to a fallback that sets `running = false` on EVERY guest CPU
+> -- a graceful machine halt, where real hardware delivers VBR + 8*vector and OpenBSD turns it into a signal.
+> Pre-existing upstream (the fallback's `git log -L` is the 0.7.0 import only); surfaced by the GPT-6 Astra retrospective
+> review of #380 and adjudicated by Fable 5.1.  Disposition DELIVER (`implemented = true`, through the existing common
+> path).  Witness owed at rung 3 before any edit: supervisor `divu r2,r3,r0`, VBR into RAM, breakpoint at VBR+0x40.
+>
+> **`m88kexcsfu1`** (MEDIUM) -- the same fallback for SFU1_PRECISE (58 raise sites: FP with SFD1 set, FP divide by
+> zero) and the latent SFU1_IMPRECISE; split off because faithful delivery needs the FP exception registers the fork
+> never writes (FPHS1/FPLS1/FPHS2/FPLS2/FPPT/FPRH/FPRL/FPIT).
+>
+> **`m88kbcndm6`**, **`m88kidledup`** (LOW, harness) -- two source-predicted detector escapes from the same batch (no
+> mask-6 bcnd row; exactly-once slot execution unpinned).  Details in the dated tail and the ledger.
+>
 > ### OPEN -- filed 2026-08-31: the warn-once latches that are FUNCTION-STATIC, so one instance
 > ### silences every other
 >
@@ -14811,3 +14830,38 @@ handler) clears SCCRX's INT bit; the debugger's `dump` does NOT reach it, becaus
 `DM_DEFAULT` (`memory_device_register` in dev_pcc2.c) and inspection under NO_EXCEPTIONS bypasses such a
 device -- this addendum said 'a debugger-visible read' until 2026-09-04 (GPT-6 Astra fix review); true
 of upstream, not a width matter.
+
+### `m88kexcdeliver`, `m88kexcsfu1`, `m88kbcndm6`, `m88kidledup` -- filed 2026-09-05 from the retrospective re-check, batch 2 (m88k)
+
+The owner asked (2026-09-04) that previously shipped fixes be re-read by GPT-6 Astra at max effort and adjudicated by
+Fable 5.1.  Batch 2 covered `d12114d` (#323, the bcnd M5 mask decode) and `ed242c0` (#380, the idle-fold delay slot).
+Both FIXES HOLD -- Fable re-enumerated all 32 bcnd mask values against the MC88100 manual and the generator, and read the
+slot-dispatch repair against the manual's delay-slot rules.  The review surfaced one live defect the fork never touched:
+
+**`m88kexcdeliver` (HIGH).**  `cpu_m88k.c`'s exception switch marks only four vectors `implemented`; for PRIVILEGE_VIOLATION,
+ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW, MISALIGNED_ACCESS and UNIMPLEMENTED_OPCODE the fallback at
+`vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented` prints `unimplemented vector=...` and sets `running = false` on
+every guest CPU.  Raise sites (deriver `grep -o 'm88k_exception(cpu, *M88K_EXCEPTION_[A-Z0-9_]+' src/cpus/cpu_m88k*.c | sort |
+uniq -c`, run 2026-09-05): PRIVILEGE_VIOLATION 10, ILLEGAL_INTEGER_DIVIDE 4, INTEGER_OVERFLOW 3, MISALIGNED_ACCESS 1,
+UNIMPLEMENTED_OPCODE 1 -- and 58 for SFU1_PRECISE, filed separately as **`m88kexcsfu1` (MEDIUM)** because SFU1 delivery
+needs FP exception registers the fork never writes.  BOUNDS_CHECK, ERROR and SFU1_IMPRECISE have no raise site today.  The
+main loop first framed this as ONE row over nine vectors; Fable split it and corrected the count (nine switch cases halt,
+six are reachable).  Disposition is DELIVER, not a device-style decline: `implemented = true` and the common path already
+does SFRZ, the shadow registers and the vector jump.  Witness owed at rung 3 before any edit (supervisor divide by zero,
+breakpoint at VBR+0x40; liveness and attribution controls).  Astra had scoped the finding to the tb1 privilege path; the
+class is broader, and it is the decoder-layer "deliver instead of halt" fix (#302/#314/#323) one layer up.
+
+**`m88kbcndm6`, `m88kidledup` (LOW, harness).**  Two detector escapes predicted from source, both above the floor: the
+gate-11 bcnd rows use masks {0,1,2,4,c,f} so a `|| m5 == 6` NULL-emission survives; the #380 idle detector's `slot == ntn`
+cannot see a duplicated slot call whose counter is not duplicated.  Rows owed at the next instrument change of each.
+
+**Records corrected in place (L4)** from the same adjudication: the #380 source comment above `X(idle_with_tb1_n)` listed
+XIP_E among the wrongly-filed delay-slot state (XIP_E filing is unconditional; #381 had corrected the claim in the
+CHANGELOG while attributing it to the commit message, which never carried it -- `git show -s --format=%B ed242c0 | grep -c
+XIP_E` is 0), and said an identity test "would be dead always" where #381's wording is "dead on every first-touch path and
+unreliable in general"; `generate_m88k_bcnd.c` called every unnamed mask value a legal encoding (the bit-4-set half is
+TOLERATED -- bit 25 is reserved); the #380 CHANGELOG's "no post-loop witness can see the defect" now carries its
+qualifier (the shipped idempotent slot).  The legacy numbers in the #323/#380 records (1.9 M comparisons, 6,172 entries,
+129.7 s, eight halts) are left untouched by ruling: the score-claim rule is forward-only, and their conclusions were
+re-derived or are gate-pinned.  Brief defect recorded: the batch-2 brief carried batch 1's PowerPC parenthetical; Astra
+flagged and ignored it.  Artifacts: `regress/artifacts/retro_20260905/batch2_m88k/`.
